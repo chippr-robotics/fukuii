@@ -3,15 +3,15 @@
 **Branch:** `alpha` (derived from `main` at v0.1.240)
 **Author:** Christopher Mercer (chris-mercer) + Claude Opus 4.6
 **Date:** 2026-03-04
-**Commits:** 21 (6 bug fixes + 1 multi-fix + 2 chores + 2 features + 2 test suites + 1 cleanup + 1 config fix + 6 docs)
+**Commits:** 23 (6 bug fixes + 1 multi-fix + 2 chores + 2 features + 2 test suites + 1 cleanup + 1 config fix + 1 dep bump + 6 docs + 1 consensus fix)
 
 ---
 
 ## Summary
 
-The `alpha` branch is a systematic stabilization pass over Fukuii v0.1.240. Over 16 phases of testing, every major subsystem was exercised on both Mordor testnet and ETC mainnet using the assembly JAR. **9 bugs were found and fixed**, then the branch was extended with ECBP-1100 (MESS) wiring, comprehensive consensus test suites, and gas limit convergence logic.
+The `alpha` branch is a systematic stabilization pass over Fukuii v0.1.240. Over 16 phases of testing, every major subsystem was exercised on both Mordor testnet and ETC mainnet using the assembly JAR. **9 bugs were found and fixed**, then the branch was extended with ECBP-1100 (MESS) wiring (later rewritten to match the ECIP-1100 polynomial spec), comprehensive consensus test suites, gas limit convergence logic, and dependency updates.
 
-**Test results:** 2,189 unit tests passing, clean compile, assembly JAR verified on Mordor.
+**Test results:** 2,192 unit tests passing, clean compile, assembly JAR verified on Mordor.
 
 ---
 
@@ -190,26 +190,42 @@ The alpha stabilization was validated through 16 phases of systematic testing ("
 
 ---
 
-## Feature: ECBP-1100 (MESS) Wiring
+## Feature: ECBP-1100 (MESS) — ECIP-1100 Polynomial Anti-Reorg Protection
 
-**Commit:** `609a09e77` — feat: wire ECBP-1100 (MESS) into block processing pipeline
+**Initial commit:** `609a09e77` — feat: wire ECBP-1100 (MESS) into block processing pipeline
+**Rewrite commit:** `e22db0013` — consensus: rewrite MESS to ECIP-1100 cubic polynomial (align with core-geth/Besu)
 
-Modified Exponential Subjective Scoring (MESS) is ETC's anti-reorg protection mechanism defined in ECBP-1100. This commit wires the existing MESS scoring implementation into the block processing pipeline so it actively participates in branch resolution decisions.
+Modified Exponential Subjective Scoring (MESS) is ETC's anti-reorg protection mechanism defined in ECIP-1100. Despite "exponential" in the name, the specification uses a **capped cubic polynomial** antigravity curve applied at the fork-choice level.
 
-**Architecture:** `BlockQueue` → `MESSScorer` → `BranchResolution`
+The initial implementation used exponential decay (wrong algorithm). The rewrite aligns Fukuii with the ECIP-1100 spec and the other two ETC clients (core-geth, Besu).
 
-**Key changes:**
-- `MESSConfig.scala` — Configuration parsing for activation/deactivation block windows
-- `MESSScorer.scala` — Scoring implementation (exponential decay, first-seen recording)
-- `BlockQueue.scala` — Integration point: MESS scores applied during block import
-- `BranchResolution.scala` — Scoring influences chain selection
-- `SyncController.scala` — Passes MESS config to sync subsystem
-- `NodeBuilder.scala` — Wires MESS into the node dependency graph
+**Architecture:** `BranchResolution` → `ArtificialFinality.shouldRejectReorg()` (stateless, at fork choice)
+
+**Polynomial formula:**
+```
+polynomialV(x) = DENOMINATOR + (3x² − 2x³/xcap) × HEIGHT / xcap²
+where DENOMINATOR=128, xcap=25132, HEIGHT=3840
+```
+
+**Reorg rejection condition:**
+```
+reject if: proposed_subchain_td × 128 < polynomialV(timeDelta) × local_subchain_td
+```
+
+**Key changes (rewrite):**
+- `ArtificialFinality.scala` — NEW: stateless polynomial + reorg rejection logic
+- `MESSConfig.scala` — Simplified: only `enabled`, `activationBlock`, `deactivationBlock`
+- `BranchResolution.scala` — REWRITTEN: single subchain TD check at reorg decision point
+- `ChainWeight.scala` — Simplified: removed `messScore` field (pure TD comparison)
+- `BlockQueue.scala` — Removed per-block MESS scoring and first-seen tracking
+- `MESSScorer.scala` — DELETED (replaced by stateless `ArtificialFinality`)
+- `NodeBuilder.scala`, `SyncController.scala` — `MESSScorer` → `MESSConfig`
+- `ChainWeightStorage.scala` — Updated legacy deserialization
 - Chain configs (`etc-chain.conf`, `mordor-chain.conf`) — Activation windows:
-  - ETC mainnet: block 11,380,000 → 19,250,000
+  - ETC mainnet: block 11,380,000 → 19,250,000 (deactivated at Spiral)
   - Mordor: block 2,380,000 → 10,400,000
 
-**Tests:** 22 unit tests (`MESSConfigSpec` + `MESScorerSpec`) covering config validation, activation windows, scoring, decay, and first-seen recording.
+**Tests:** 25 unit tests (`MESSConfigSpec`: 10 activation window tests, `ArtificialFinalitySpec`: 15 polynomial + reorg rejection tests) covering spec reference values, cross-client vectors, and boundary conditions.
 
 ---
 
@@ -355,22 +371,26 @@ These were discovered during testing but are tuning/architecture issues, not cod
 
 ## What Was NOT Changed
 
-- No dependency version updates
 - No architecture changes (except adding sync-dispatcher isolation)
 - No modifications to consensus-critical validation code (EVM execution, Ethash mining, state trie operations, block validation logic remain identical). Gas limit convergence is miner policy, not consensus validation.
 - No changes to submodules (bytes, crypto, rlp, scalanet)
 - No changes to CI/CD workflows or Docker configs
 
+**What WAS updated:**
+- Bouncy Castle 1.82 → 1.83 (security library, Nov 2025 release)
+- Netty 4.1.115.Final → 4.1.131.Final (networking, Feb 2026 release)
+
 **What WAS removed:**
 - 3 WITHDRAWN IOHK/Mantis ECIPs (ECIP-1098 proto-treasury, ECIP-1049 Keccak256 PoW, ECIP-1097 checkpointing) — 129 files, ~5,286 lines deleted. These are not part of any canonical ECIP-1066 implementation.
 - 57 stale Mantis-era bootstrap nodes replaced with current core-geth entries (4 total)
+- `MESSScorer.scala` — replaced by stateless `ArtificialFinality` (ECIP-1100 polynomial rewrite)
 
 **What WAS added beyond bug fixes:**
-- ECBP-1100 (MESS) wiring into block processing pipeline (feature, commit 9)
+- ECBP-1100 (MESS) wiring into block processing pipeline, then rewritten to match ECIP-1100 cubic polynomial spec (aligns with core-geth/Besu)
 - Gas limit convergence toward configurable target (feature, commit 13) — prerequisite for Olympia
-- 70 new consensus tests across 4 test suites (commits 10-11, 13)
+- 73 new consensus tests across 4 test suites (commits 10-11, 13, 23)
 - Injectable Miner pattern for reliable PoW test infrastructure
-- Test count: 2,189 (down from 2,229 baseline due to removal of ~130 ECIP-specific tests, offset by 70 new consensus tests)
+- Test count: 2,192 (down from 2,229 baseline due to removal of ~130 ECIP-specific tests, offset by 73 new consensus tests)
 
 ---
 
