@@ -64,13 +64,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install sbt
       
-      - name: Compile all modules
-        run: sbt compile-all
+      - name: Check formatting
+        run: sbt scalafmtCheckAll
         env:
           FUKUII_DEV: true
-      
-      - name: Auto-format code
-        run: sbt scalafmtAll
+
+      - name: Compile all modules
+        run: sbt compile-all
         env:
           FUKUII_DEV: true
       
@@ -90,7 +90,6 @@ jobs:
         timeout-minutes: 10
       
       - name: Run Standard Tests with Coverage (Tier 2)
-        if: github.event_name == 'push'
         run: |
           echo "=========================================="
           echo "Running Standard Tests with Coverage (< 30 minutes)"
@@ -129,7 +128,7 @@ jobs:
       - name: Run Ethereum/Tests Integration Tests
         run: |
           echo "Running ethereum/tests integration test suite..."
-          sbt "IntegrationTest / testOnly *SimpleEthereumTest *BlockchainTestsSpec" || true
+          sbt "IntegrationTest / testOnly *SimpleEthereumTest *BlockchainTestsSpec"
           
           echo ""
           echo "=== Ethereum/Tests Integration Results ==="
@@ -140,7 +139,7 @@ jobs:
         timeout-minutes: 10
       
       - name: Upload coverage reports to Codecov
-        if: always() && github.event_name == 'push'
+        if: always()
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -153,7 +152,7 @@ jobs:
           verbose: true
       
       - name: Upload coverage artifacts
-        if: always() && github.event_name == 'push'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-reports-jdk21-scala-3.3.4
