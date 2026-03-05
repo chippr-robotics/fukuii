@@ -2,12 +2,10 @@ package com.chipprbots.ethereum.jsonrpc
 
 import org.apache.pekko.util.ByteString
 
-import org.bouncycastle.util.encoders.Hex
 import org.json4s.JsonAST._
 import org.json4s.JsonDSL._
 import org.json4s._
 
-import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.jsonrpc.EthInfoService._
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InvalidParams
 import com.chipprbots.ethereum.jsonrpc.PersonalService.SendTransactionRequest
@@ -36,27 +34,6 @@ object EthJsonMethodsImplicits extends JsonMethodsImplicits {
         case Some(syncStatus) => Extraction.decompose(syncStatus)
         case None             => false
       }
-    }
-
-  implicit val eth_config: NoParamsMethodDecoder[ConfigRequest] with JsonEncoder[ConfigResponse] =
-    new NoParamsMethodDecoder(ConfigRequest()) with JsonEncoder[ConfigResponse] {
-      private def encodeAddress(addr: Address): JString =
-        JString(s"0x${Hex.toHexString(addr.bytes.toArray[Byte])}")
-
-      private def encodeForkConfig(fc: ForkConfig): JObject =
-        ("activationBlock" -> encodeAsHex(fc.activationBlock)) ~
-        ("chainId" -> encodeAsHex(fc.chainId)) ~
-        ("precompiles" -> JObject(fc.precompiles.toList.map { case (name, addr) =>
-          JField(name, encodeAddress(addr))
-        })) ~
-        ("systemContracts" -> JObject(fc.systemContracts.toList.map { case (name, addr) =>
-          JField(name, encodeAddress(addr))
-        }))
-
-      def encodeJson(t: ConfigResponse): JValue =
-        ("current" -> t.current.map(encodeForkConfig).getOrElse(JNull: JValue)) ~
-        ("next" -> t.next.map(encodeForkConfig).getOrElse(JNull: JValue)) ~
-        ("last" -> t.last.map(encodeForkConfig).getOrElse(JNull: JValue))
     }
 
   implicit val eth_sendTransaction: JsonMethodCodec[SendTransactionRequest, SendTransactionResponse] =
