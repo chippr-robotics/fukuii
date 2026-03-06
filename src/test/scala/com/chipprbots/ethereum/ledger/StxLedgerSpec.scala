@@ -162,8 +162,7 @@ trait ScenarioSetup extends EphemBlockchainTestSetup {
     daoForkConfig = None,
     gasTieBreaker = false,
     ethCompatibleStorage = true,
-    bootstrapNodes = Set(),
-    treasuryAddress = Address(0)
+    bootstrapNodes = Set()
   )
 
   override lazy val stxLedger =

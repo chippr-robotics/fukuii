@@ -47,8 +47,7 @@ class McpServiceSpec
     daoForkConfig = None,
     bootstrapNodes = Set(),
     gasTieBreaker = false,
-    ethCompatibleStorage = true,
-    treasuryAddress = Address(0)
+    ethCompatibleStorage = true
   )
 
   // Use null for dependencies not exercised in basic tests

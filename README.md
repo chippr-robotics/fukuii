@@ -240,7 +240,7 @@ The distribution’s bin/ directory contains a launcher script named fukuii. To 
 ./bin/fukuii etc
 
 
-The launcher accepts the same network names that Mantis did (etc, eth, mordor, testnet-internal). See the configuration files under src/universal/conf for more details.
+The launcher accepts the following network names: `etc`, `mordor`, `gorgoroth`, `test`. See the configuration files under src/main/resources/conf for more details.
 
 #### Console UI
 

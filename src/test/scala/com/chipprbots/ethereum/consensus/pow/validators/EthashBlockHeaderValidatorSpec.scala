@@ -443,8 +443,7 @@ class EthashBlockHeaderValidatorSpec
       accountStartNonce = UInt256.Zero,
       bootstrapNodes = Set(),
       gasTieBreaker = false,
-      ethCompatibleStorage = true,
-      treasuryAddress = Address(0)
+      ethCompatibleStorage = true
     )
   }
 

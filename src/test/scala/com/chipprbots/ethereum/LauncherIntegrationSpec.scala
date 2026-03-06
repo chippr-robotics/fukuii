@@ -354,7 +354,7 @@ class LauncherIntegrationSpec extends AnyFlatSpec with Matchers {
     noException should be thrownBy {
       setNetworkConfig("etc")
       setNetworkConfig("mordor")
-      setNetworkConfig("pottery")
+      setNetworkConfig("gorgoroth")
     }
   }
 
@@ -363,14 +363,14 @@ class LauncherIntegrationSpec extends AnyFlatSpec with Matchers {
     withTempDirectory { dir =>
       val launcherConfig = new File(dir, "app.conf")
       writeConfig(launcherConfig, "include \"base.conf\"\n")
-      val potteryConfig = new File(dir, "pottery.conf")
-      writeConfig(potteryConfig)
+      val mordorConfig = new File(dir, "mordor.conf")
+      writeConfig(mordorConfig)
 
       System.setProperty("config.file", launcherConfig.getAbsolutePath)
 
-      setNetworkConfig("pottery")
+      setNetworkConfig("mordor")
 
-      System.getProperty("config.file") shouldBe potteryConfig.getAbsolutePath
+      System.getProperty("config.file") shouldBe mordorConfig.getAbsolutePath
       Option(System.getProperty("config.resource")) shouldBe None
     }
     clearConfigOverrides()

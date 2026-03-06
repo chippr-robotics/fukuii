@@ -69,7 +69,6 @@ class EthashDifficultyCalculatorSpec extends AnyFlatSpec with Matchers with Scal
 
   private implicit val blockchainConfig: BlockchainConfig = BlockchainConfig(
     forkBlockNumbers = etcForkNumbers,
-    treasuryAddress = com.chipprbots.ethereum.domain.Address(0),
     maxCodeSize = Some(24576),
     customGenesisFileOpt = None,
     customGenesisJsonOpt = None,

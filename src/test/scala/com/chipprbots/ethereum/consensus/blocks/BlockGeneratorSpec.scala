@@ -238,7 +238,6 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with Logger {
       bootstrapNodes = Set(),
       gasTieBreaker = false,
       ethCompatibleStorage = true,
-      treasuryAddress = Address(0),
       forkBlockNumbers = ForkBlockNumbers.Empty.copy(
         frontierBlockNumber = 0,
         homesteadBlockNumber = 1150000,
@@ -316,8 +315,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with Logger {
       daoForkConfig = None,
       bootstrapNodes = Set(),
       gasTieBreaker = false,
-      ethCompatibleStorage = true,
-      treasuryAddress = Address(0)
+      ethCompatibleStorage = true
     )
 
     override lazy val blockExecution =
@@ -585,8 +583,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with Logger {
       daoForkConfig = None,
       bootstrapNodes = Set(),
       gasTieBreaker = false,
-      ethCompatibleStorage = true,
-      treasuryAddress = Address(0)
+      ethCompatibleStorage = true
     )
     implicit override lazy val blockchainConfig: BlockchainConfig = baseBlockchainConfig
 

@@ -9,14 +9,12 @@ import com.typesafe.config.ConfigRenderOptions
 import com.typesafe.config.{Config => TypesafeConfig}
 
 import com.chipprbots.ethereum.consensus.mess.MESSConfig
-import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.utils.NumericUtils._
 
 case class BlockchainConfig(
     powTargetTime: Option[Long] = None,
     forkBlockNumbers: ForkBlockNumbers,
-    treasuryAddress: Address,
     maxCodeSize: Option[BigInt],
     customGenesisFileOpt: Option[String],
     customGenesisJsonOpt: Option[String],
@@ -116,8 +114,6 @@ object BlockchainConfig {
     val aghartaBlockNumber: BigInt = BigInt(blockchainConfig.getString("agharta-block-number"))
     val phoenixBlockNumber: BigInt = BigInt(blockchainConfig.getString("phoenix-block-number"))
     val petersburgBlockNumber: BigInt = BigInt(blockchainConfig.getString("petersburg-block-number"))
-    val treasuryAddress = Address(blockchainConfig.getString("treasury-address"))
-
     val maxCodeSize: Option[BigInt] = Try(BigInt(blockchainConfig.getString("max-code-size"))).toOption
     val difficultyBombPauseBlockNumber: BigInt = BigInt(
       blockchainConfig.getString("difficulty-bomb-pause-block-number")
@@ -195,7 +191,6 @@ object BlockchainConfig {
         mystiqueBlockNumber = mystiqueBlockNumber,
         spiralBlockNumber = spiralBlockNumber
       ),
-      treasuryAddress = treasuryAddress,
       maxCodeSize = maxCodeSize,
       customGenesisFileOpt = customGenesisFileOpt,
       customGenesisJsonOpt = customGenesisJsonOpt,

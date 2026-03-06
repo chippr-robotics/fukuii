@@ -44,9 +44,9 @@ src/main/resources/conf/
 ├── metrics.conf           # Metrics configuration
 └── chains/
     ├── etc-chain.conf     # ETC chain parameters
-    ├── eth-chain.conf     # ETH chain parameters
     ├── mordor-chain.conf  # Mordor chain parameters
-    └── ...
+    ├── gorgoroth-chain.conf # Gorgoroth (Olympia test) parameters
+    └── test-chain.conf    # Test/dev chain parameters
 ```
 
 **Runtime Configurations**:
@@ -97,9 +97,8 @@ Chain configuration files define blockchain-specific parameters such as fork blo
 | Chain File | Network | Network ID | Chain ID |
 |------------|---------|------------|----------|
 | `etc-chain.conf` | Ethereum Classic | 1 | 0x3d (61) |
-| `eth-chain.conf` | Ethereum | 1 | 0x01 (1) |
 | `mordor-chain.conf` | Mordor Testnet | 7 | 0x3f (63) |
-| `pottery-chain.conf` | Pottery Testnet | 10 | 0xa (10) |
+| `gorgoroth-chain.conf` | Gorgoroth (Olympia) | 7 | 0x3f (63) |
 | `test-chain.conf` | Test/Dev | Varies | Varies |
 
 ### Chain Configuration Parameters

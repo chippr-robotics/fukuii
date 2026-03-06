@@ -63,7 +63,7 @@ class ChainWeightStorageSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
   }
 
   test("ChainWeightStorage handles legacy format without messScore", UnitTest, DatabaseTest) {
-    // This test simulates data that was serialized before ECIP-1097 removal
+    // This test simulates data that was serialized before checkpointing removal
     // Legacy format had (lastCheckpointNumber, totalDifficulty) - checkpoint number is discarded on migration
     val blockHash = byteStringOfLengthNGen(32).sample.get
     val lastCheckpointNumber = BigInt(100)

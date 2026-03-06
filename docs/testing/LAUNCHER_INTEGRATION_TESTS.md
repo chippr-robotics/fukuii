@@ -90,12 +90,9 @@ See `.github/workflows/ci.yml` for the complete CI configuration.
 The following networks are supported and validated:
 
 - `etc` - Ethereum Classic mainnet (default)
-- `eth` - Ethereum mainnet
 - `mordor` - Mordor testnet
-- `pottery` - Pottery testnet
-- `sagano` - Sagano testnet
+- `gorgoroth` - Gorgoroth testnet (Olympia fork testing)
 - `bootnode` - Bootnode configuration (advanced)
-- `testnet-internal-nomad` - Internal Nomad testnet (advanced)
 
 ### Modifiers
 
@@ -143,8 +140,8 @@ fukuii public etc --tui
 # Enterprise mode on default ETC
 fukuii enterprise
 
-# Enterprise mode on pottery network
-fukuii enterprise pottery
+# Enterprise mode on Mordor testnet
+fukuii enterprise mordor
 
 # Enterprise mode with custom config
 fukuii enterprise -Dconfig.file=/custom.conf

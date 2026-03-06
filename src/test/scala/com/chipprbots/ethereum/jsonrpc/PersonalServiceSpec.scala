@@ -544,8 +544,7 @@ class PersonalServiceSpec
             daoForkConfig = None,
             bootstrapNodes = Set(),
             gasTieBreaker = false,
-            ethCompatibleStorage = true,
-            treasuryAddress = Address(0)
+            ethCompatibleStorage = true
           )
         }
       )

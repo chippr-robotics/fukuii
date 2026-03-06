@@ -152,8 +152,8 @@ class AppLauncherIntegrationSpec extends AnyFlatSpec with Matchers with BeforeAn
     System.getProperty("fukuii.network.rpc.http.interface") shouldBe "localhost"
   }
 
-  it should "configure enterprise settings when 'fukuii enterprise pottery' is used" taggedAs (IntegrationTest) in {
-    val args = Array("enterprise", "pottery")
+  it should "configure enterprise settings when 'fukuii enterprise mordor' is used" taggedAs (IntegrationTest) in {
+    val args = Array("enterprise", "mordor")
 
     // Clear properties
     System.clearProperty("fukuii.network.discovery.discovery-enabled")
@@ -171,7 +171,7 @@ class AppLauncherIntegrationSpec extends AnyFlatSpec with Matchers with BeforeAn
 
     // Verify network argument is still present after filtering
     val argsWithoutModifiers = filterOutModifiers(args)
-    argsWithoutModifiers should contain("pottery")
+    argsWithoutModifiers should contain("mordor")
   }
 
   it should "preserve options when 'fukuii enterprise --tui' is used" taggedAs (IntegrationTest) in {

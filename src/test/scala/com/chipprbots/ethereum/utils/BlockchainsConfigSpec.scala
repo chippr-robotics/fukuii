@@ -63,7 +63,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         difficulty-bomb-removal-block-number = "5900000"
         max-code-size = "24576"
         account-start-nonce = "0"
-        treasury-address = "0011223344556677889900112233445566778899"
         gas-tie-breaker = false
         eth-compatible-storage = true
         bootstrap-nodes = []
@@ -117,7 +116,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         difficulty-bomb-removal-block-number = "0"
         max-code-size = "24576"
         account-start-nonce = "0"
-        treasury-address = "0011223344556677889900112233445566778899"
         gas-tie-breaker = false
         eth-compatible-storage = true
         bootstrap-nodes = []
@@ -183,7 +181,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         difficulty-bomb-removal-block-number = "5900000"
         max-code-size = "24576"
         account-start-nonce = "0"
-        treasury-address = "0011223344556677889900112233445566778899"
         gas-tie-breaker = false
         eth-compatible-storage = true
         bootstrap-nodes = []
@@ -231,7 +228,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         difficulty-bomb-removal-block-number = "5900000"
         max-code-size = "24576"
         account-start-nonce = "0"
-        treasury-address = "0011223344556677889900112233445566778899"
         gas-tie-breaker = false
         eth-compatible-storage = true
         bootstrap-nodes = []
@@ -282,7 +278,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         difficulty-bomb-removal-block-number = "5900000"
         max-code-size = "24576"
         account-start-nonce = "0"
-        treasury-address = "0011223344556677889900112233445566778899"
         gas-tie-breaker = false
         eth-compatible-storage = true
         bootstrap-nodes = []
@@ -332,7 +327,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         difficulty-bomb-removal-block-number = "5900000"
         max-code-size = "24576"
         account-start-nonce = "0"
-        treasury-address = "0011223344556677889900112233445566778899"
         gas-tie-breaker = false
         eth-compatible-storage = true
         bootstrap-nodes = []

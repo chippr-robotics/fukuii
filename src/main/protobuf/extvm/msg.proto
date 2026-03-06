@@ -1,5 +1,5 @@
 syntax = "proto3";
-package io.iohk.ethereum.extvm;
+package com.chipprbots.ethereum.extvm;
 
 message Hello {
   string version = 1;

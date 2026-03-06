@@ -45,8 +45,7 @@ class ECIP1017Test extends AnyFlatSpec with Matchers {
       bootstrapNodes = Set(),
       accountStartNonce = UInt256.Zero,
       ethCompatibleStorage = true,
-      gasTieBreaker = false,
-      treasuryAddress = Address(0)
+      gasTieBreaker = false
     )
     val noErrors: ResultOfATypeInvocation[Right[_, Seq[Receipt]]] = a[Right[_, Seq[Receipt]]]
   }

@@ -70,7 +70,6 @@ object NodeConfigResource {
       |  "network": "${if (cfg.chainId == BigInt(61)) "etc" else if (cfg.chainId == BigInt(63)) "mordor" else s"chain-${cfg.chainId}"}",
       |  "accountStartNonce": ${cfg.accountStartNonce},
       |  "maxCodeSize": ${cfg.maxCodeSize.map(_.toString).getOrElse("null")},
-      |  "treasuryAddress": "0x${org.bouncycastle.util.encoders.Hex.toHexString(cfg.treasuryAddress.bytes.toArray)}",
       |  "monetaryPolicy": {
       |    "eraDuration": ${cfg.monetaryPolicyConfig.eraDuration},
       |    "rewardReductionRate": ${cfg.monetaryPolicyConfig.rewardReductionRate},

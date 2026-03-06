@@ -431,36 +431,6 @@ object GetEtcForksTool {
   }
 }
 
-object GetTreasuryStatusTool {
-  val name = "get_treasury_status"
-  val description = Some("Get the treasury account balance at the current best block")
-
-  def execute(deps: McpDependencies): IO[String] = IO {
-    val treasuryAddr = deps.blockchainConfig.treasuryAddress
-    val blockNum = deps.blockchainReader.getBestBlockNumber()
-    Try {
-      val accountOpt = deps.blockchainReader.getAccount(deps.blockchainReader.getBestBranch(), treasuryAddr, blockNum)
-      accountOpt match {
-        case Some(account) =>
-          val balanceEtc = BigDecimal(account.balance.toBigInt) / BigDecimal("1000000000000000000")
-          s"""Treasury Status:
-            |  Address: 0x${org.bouncycastle.util.encoders.Hex.toHexString(treasuryAddr.bytes.toArray)}
-            |  Block: $blockNum
-            |  Balance: ${account.balance} wei ($balanceEtc ETC)
-            |  Nonce: ${account.nonce}""".stripMargin
-        case None =>
-          s"""Treasury Status:
-            |  Address: 0x${org.bouncycastle.util.encoders.Hex.toHexString(treasuryAddr.bytes.toArray)}
-            |  Block: $blockNum
-            |  Status: Empty (no balance)""".stripMargin
-      }
-    }.recover {
-      case _: MissingNodeException => s"Treasury state unavailable (node is syncing)"
-      case e: Exception => s"Error querying treasury: ${e.getMessage}"
-    }.get
-  }
-}
-
 object GetChainConfigTool {
   val name = "get_chain_config"
   val description = Some("Get the blockchain configuration as structured output including chain ID, network ID, and monetary policy")
@@ -474,7 +444,6 @@ object GetChainConfigTool {
       |  Gas Tie Breaker: ${cfg.gasTieBreaker}
       |  ETH Compatible Storage: ${cfg.ethCompatibleStorage}
       |  Max Code Size: ${cfg.maxCodeSize.getOrElse("unlimited")}
-      |  Treasury Address: 0x${org.bouncycastle.util.encoders.Hex.toHexString(cfg.treasuryAddress.bytes.toArray)}
       |  Monetary Policy:
       |    Era Duration: ${cfg.monetaryPolicyConfig.eraDuration} blocks
       |    Reward Reduction Rate: ${cfg.monetaryPolicyConfig.rewardReductionRate}
@@ -524,8 +493,6 @@ object McpToolRegistry {
       annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))),
     McpToolDefinition(GetEtcForksTool.name, GetEtcForksTool.description,
       annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))),
-    McpToolDefinition(GetTreasuryStatusTool.name, GetTreasuryStatusTool.description,
-      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))),
     McpToolDefinition(GetChainConfigTool.name, GetChainConfigTool.description,
       annotations = Some(McpToolAnnotations(readOnlyHint = Some(true))))
   )
@@ -550,7 +517,6 @@ object McpToolRegistry {
       case ConvertUnitsTool.name => ConvertUnitsTool.execute(arguments)
       case GetEtcEmissionTool.name => GetEtcEmissionTool.execute(deps)
       case GetEtcForksTool.name => GetEtcForksTool.execute(deps)
-      case GetTreasuryStatusTool.name => GetTreasuryStatusTool.execute(deps)
       case GetChainConfigTool.name => GetChainConfigTool.execute(deps)
       case _ => IO.pure(s"Unknown tool: $toolName")
     }

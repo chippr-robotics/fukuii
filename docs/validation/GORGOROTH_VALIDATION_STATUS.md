@@ -5,7 +5,7 @@
 
 ## Executive Summary
 
-The Gorgoroth test network infrastructure has been successfully established and initial core functionality has been validated. A critical block header encoding issue related to ECIP-1097 was discovered during Phase 2 validation on December 11, 2025, which prevented node synchronization. This issue has been identified, fixed in code, and configuration has been updated to disable ECIP-1097 (aligning with production ETC where it was withdrawn). The fix is pending deployment and re-validation.
+The Gorgoroth test network infrastructure has been successfully established and initial core functionality has been validated. A critical block header encoding issue related to legacy checkpointing configuration was discovered during Phase 2 validation on December 11, 2025, which prevented node synchronization. This issue has been identified, fixed in code, and all legacy checkpointing configuration has been removed. The fix is pending deployment and re-validation.
 
 **Current Focus**: Deploy fixes and complete Phase 2 mining validation.
 
@@ -68,18 +68,18 @@ A critical block header encoding issue was discovered during Phase 2 validation 
 
 **Issue Discovered**:
 - **Symptom**: Follower nodes (node2/node3) rejected headers from miner (node1) as "unrequested" with error "Given headers should form a sequence without gaps"
-- **Root Cause**: ECIP-1097 header encoding normalization was removing the extra RLP field in decoded headers, causing hash recomputation mismatches
+- **Root Cause**: Legacy checkpointing header encoding normalization was removing the extra RLP field in decoded headers, causing hash recomputation mismatches
 - **Impact**: Nodes could not synchronize, preventing Phase 2 validation completion
 
 **Fix Implemented**:
 - Updated `BlockHeader.scala` to preserve `HefPostEcip1097` structure even with empty checkpoints
 - Extended property tests to cover edge cases with `HefPostEcip1097(None)`
 - Added regression test in `BlockHeaderSpec` for empty checkpoint headers
-- Disabled ECIP-1097 in all PoW test configs (Gorgoroth, Pottery, Nomad) by setting activation block to `1000000000000000000`
+- Removed all legacy checkpointing configuration from Gorgoroth test config
 
-**Rationale for ECIP-1097 Disable**:
-- ECIP-1097 was withdrawn and will never be implemented in production ETC
-- Disabling aligns test networks with production configuration
+**Rationale for Checkpointing Removal**:
+- Checkpointing was withdrawn and will never be implemented in production ETC
+- Removing aligns test networks with production configuration
 - Prevents false positives from testing features that won't be deployed
 - Maintains test clarity and relevance
 
@@ -95,7 +95,7 @@ A critical block header encoding issue was discovered during Phase 2 validation 
 - Follower nodes reported `eth_syncing` but could not accept headers
 - Issue root cause identified: RLP field normalization breaking hash chain
 - Code fix implemented and validated with unit tests
-- Configuration updated to disable ECIP-1097
+- Legacy checkpointing configuration removed
 
 **Multi-client status**:
 - ⚠️ Fukuii mining: Fix implemented, deployment pending
@@ -295,7 +295,7 @@ cd test-scripts
 - ❌ Failed: Test executed but failed
 - ⏸️ Blocked: Cannot test due to dependency or limitation
 
-**Note**: Block Propagation and Mining Consensus are marked "Fix pending" due to ECIP-1097 header encoding issue discovered on 2025-12-11. Fix has been implemented in code and is awaiting deployment and validation.
+**Note**: Block Propagation and Mining Consensus are marked "Fix pending" due to a header encoding issue caused by legacy checkpointing configuration (discovered 2025-12-11). Fix has been implemented in code and checkpointing has been fully removed. Awaiting deployment and validation.
 
 ### Expected Timeline for Full Validation
 
@@ -309,7 +309,7 @@ cd test-scripts
 | Phase 6 | Snap sync testing | 3 days | ⚠️ Ready |
 | **Total** | **Full validation** | **~2 weeks** | **~35% Complete** |
 
-**Current Blocker**: ECIP-1097 header encoding fix needs deployment and validation before proceeding with Phase 2 completion and subsequent phases.
+**Current Blocker**: Header encoding fix (caused by legacy checkpointing configuration) needs deployment and validation before proceeding with Phase 2 completion and subsequent phases.
 
 ## Completed Work
 
@@ -328,9 +328,9 @@ cd test-scripts
 - ✅ Mining confirmed working (node1 reached block 0xe7)
 - ✅ Protocol compatibility verified
 - ⚠️ Block propagation issue identified and fixed (pending deployment)
-- ✅ ECIP-1097 header encoding issue root cause identified
+- ✅ Header encoding issue (caused by legacy checkpointing configuration) root cause identified
 - ✅ Code fix implemented and unit tested
-- ✅ Configuration aligned with production ETC (ECIP-1097 disabled)
+- ✅ Legacy checkpointing fully removed, configuration aligned with production ETC
 
 ### Documentation
 - ✅ Quick start guide for community testers
@@ -479,14 +479,14 @@ When you complete testing, please report results by:
 
 ### Critical Issues (2025-12-11)
 
-#### ECIP-1097 Header Encoding Issue - ✅ FIXED, PENDING DEPLOYMENT
+#### Header Encoding Issue (Legacy Checkpointing) - ✅ FIXED, PENDING DEPLOYMENT
 
 **Discovered**: 2025-12-11 during Phase 2 validation  
 **Status**: Code fix implemented, awaiting deployment and re-validation  
 **Severity**: Critical - blocked node synchronization
 
 **Description**:
-When ECIP-1097 checkpointing is enabled (even with empty checkpoints), the block header codec was normalizing the extra RLP field from `HefPostEcip1097` back to `HefEmpty` during decode. This caused the locally recomputed block hash to differ from the original, breaking the parent-child hash chain and causing follower nodes to reject headers as "unrequested."
+When the legacy checkpointing feature was enabled (even with empty checkpoints), the block header codec was normalizing the extra RLP field back to empty during decode. This caused the locally recomputed block hash to differ from the original, breaking the parent-child hash chain and causing follower nodes to reject headers as "unrequested."
 
 **Impact**:
 - Follower nodes could not synchronize with mining nodes
@@ -495,15 +495,14 @@ When ECIP-1097 checkpointing is enabled (even with empty checkpoints), the block
 - Phase 2 validation blocked
 
 **Fix Applied**:
-- Modified `BlockHeader.scala` to preserve `HefPostEcip1097` structure in decoded headers
-- Extended property tests to cover `HefPostEcip1097(None)` edge case
+- Modified `BlockHeader.scala` to preserve header extra fields structure in decoded headers
+- Extended property tests to cover empty checkpoint header edge case
 - Added regression test for empty checkpoint header encoding/decoding
 - Unit tests validate hash stability across encode/decode cycles
 
 **Configuration Change**:
-- ECIP-1097 disabled in all PoW test configs (Gorgoroth, Pottery, Nomad)
-- Activation block set to `1000000000000000000` (effectively never)
-- Aligns with production ETC where ECIP-1097 was withdrawn
+- Legacy checkpointing configuration fully removed from Gorgoroth test config
+- Aligns with production ETC where checkpointing was withdrawn
 - Prevents testing of features that won't be deployed
 
 **Validation Required**:
@@ -515,7 +514,7 @@ When ECIP-1097 checkpointing is enabled (even with empty checkpoints), the block
 
 ### Open Issues
 
-**None currently blocking validation** (pending deployment of ECIP-1097 fix)
+**None currently blocking validation** (pending deployment of header encoding fix)
 
 ## Known Limitations
 
@@ -523,7 +522,7 @@ When ECIP-1097 checkpointing is enabled (even with empty checkpoints), the block
 2. **Limited peer count**: Test network has small number of nodes
 3. **Controlled environment**: Docker networking may behave differently than real internet
 4. **Genesis configuration**: Custom genesis may not match mainnet exactly
-5. **ECIP-1097 Disabled**: Test networks do not test checkpointing functionality (intentional, matches production)
+5. **Checkpointing Removed**: Legacy checkpointing has been fully removed (matches production ETC)
 
 ## Success Criteria
 
@@ -538,7 +537,7 @@ The validation will be considered complete when:
 - ✅ Results are documented and reviewed
 - ⚠️ Community testers have validated the findings
 
-**Current Progress**: ~35% complete. Phase 2 mining and synchronization validation blocked pending deployment of ECIP-1097 header encoding fix.
+**Current Progress**: ~35% complete. Phase 2 mining and synchronization validation blocked pending deployment of header encoding fix.
 
 ## References
 

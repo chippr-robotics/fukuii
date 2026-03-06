@@ -331,10 +331,6 @@ lazy val node = {
       (Compile / PB.targets) := Seq(
         scalapb.gen() -> (Compile / sourceManaged).value / "protobuf"
       ),
-      // Use local protobuf override directory with corrected package namespace
-      (Compile / PB.protoSources) := Seq(
-        baseDirectory.value / "src" / "main" / "protobuf_override"
-      ),
       // protobuf API version file is now provided in src/main/resources/extvm/VERSION
       // Packaging
       maintainer := "chippr-robotics@github.com",

@@ -60,8 +60,7 @@ class GasLimitValidationSpec extends AnyFlatSpec with Matchers {
     accountStartNonce = UInt256.Zero,
     bootstrapNodes = Set(),
     gasTieBreaker = false,
-    ethCompatibleStorage = true,
-    treasuryAddress = Address(0)
+    ethCompatibleStorage = true
   )
 
   // Minimal valid parent/child pair — only fields relevant to gas limit validation
