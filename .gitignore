@@ -97,4 +97,6 @@ mnemonic.txt
 # Local run configs
 run-*.conf
 run-*.sh
+!run-classic.sh
+!run-mordor.sh
 
