@@ -2,8 +2,8 @@
 
 **Branch:** `alpha` (derived from `main` at v0.1.240)
 **Author:** Christopher Mercer (chris-mercer) + Claude Opus 4.6
-**Date:** 2026-03-05
-**Commits:** 25 (8 bug fixes + 1 multi-fix + 2 chores + 2 features + 2 test suites + 1 cleanup + 1 config fix + 1 dep bump + 6 docs + 1 consensus fix)
+**Date:** 2026-03-06
+**Commits:** 30 (9 bug fixes + 1 multi-fix + 2 chores + 3 features + 2 test suites + 1 cleanup + 1 config fix + 1 dep bump + 7 docs + 1 consensus fix + 2 sync fixes)
 
 ---
 
@@ -11,7 +11,7 @@
 
 The `alpha` branch is a systematic stabilization pass over Fukuii v0.1.240. Over 16 phases of testing, every major subsystem was exercised on both Mordor testnet and ETC mainnet using the assembly JAR. **11 bugs were found and fixed**, then the branch was extended with ECBP-1100 (MESS) wiring (later rewritten to match the ECIP-1100 polynomial spec), comprehensive consensus test suites, gas limit convergence logic, and dependency updates.
 
-**Test results:** 2,194 unit tests passing, clean compile, assembly JAR verified on Mordor.
+**Test results:** 2,195 unit tests passing, clean compile, assembly JAR verified on Mordor.
 
 ---
 
@@ -237,6 +237,84 @@ The alpha stabilization was validated through 16 phases of systematic testing ("
 
 ---
 
+### Bug 12: `personal_sendTransaction` MissingNodeException During Sync (Medium)
+**Commit:** (this session) — fix(rpc): handle MissingNodeException in personal_sendTransaction during sync
+
+**Problem:** `personal_sendTransaction` throws generic `-32603 Internal Error` when state is unavailable during sync.
+
+**Root cause:** `getCurrentAccount()` calls `blockchainReader.getAccount()` which throws `MissingNodeException` when the state trie hasn't been downloaded yet. Unlike `eth_getBalance` and other state-dependent RPCs (fixed in Bug 9), `personal_sendTransaction` was missing the recovery handler.
+
+**Fix:** Added `.recover { case _: MissingNodeException => Left(JsonRpcError.NodeNotFound) }` to both public `sendTransaction` overloads in `PersonalService.scala`, matching the pattern established in Bug 9.
+
+**Files changed:**
+- `src/main/scala/.../jsonrpc/PersonalService.scala` (+3 lines)
+- `src/test/scala/.../jsonrpc/PersonalServiceSpec.scala` (+2 new tests)
+
+**Tests:** 2 new tests covering both `SendTransactionWithPassphraseRequest` and `SendTransactionRequest` paths when state is unavailable.
+
+---
+
+## Feature: Live MCP Tools & Resources
+
+**Commits:** (this session) — feat(mcp): expand MCP infrastructure + replace stubs with live tools/resources
+
+Replaced all stub MCP tools and resources with live blockchain query implementations, making Fukuii the first ETC client with a functional MCP server.
+
+**Protocol version:** Updated from `2024-11-05` to `2025-11-25` (latest stable MCP spec).
+
+### Tools (16 live, replacing 7 stubs)
+
+| Tool | Type | Description |
+|------|------|-------------|
+| `mcp_node_info` | Status | Live node version, network, build info |
+| `mcp_node_status` | Status | Sync state, peer count, block numbers (actor queries) |
+| `mcp_blockchain_info` | Status | Best block, total difficulty, genesis hash |
+| `mcp_sync_status` | Status | Detailed sync progress with state node tracking |
+| `mcp_peer_list` | Status | Connected peers with addresses, direction, status |
+| `mcp_etherbase_info` | Info | Etherbase configuration documentation |
+| `mcp_mining_rpc_summary` | Info | Mining RPC endpoint documentation |
+| `get_block` | Query | Block by number/hash/"latest" with full header |
+| `get_transaction` | Query | Transaction location by hash |
+| `get_account` | Query | Account state (nonce, balance) at best block |
+| `detect_reorg` | ETC | Parent hash consistency check for reorgs |
+| `convert_units` | ETC | Wei/Gwei/ETC conversion |
+| `get_etc_emission` | ETC | Emission schedule and current era (ECIP-1017) |
+| `get_etc_forks` | ETC | ECIP fork history with activation status |
+| `get_treasury_status` | ETC | Treasury account balance query |
+| `get_chain_config` | ETC | Full blockchain config as structured output |
+
+All tools annotated with `readOnlyHint`, parameterized tools with JSON Schema `inputSchema` and `idempotentHint`.
+
+### Resources (9 live, replacing 6 stubs)
+
+| Resource URI | Type | Description |
+|-------------|------|-------------|
+| `fukuii://node/status` | Static | Live node status JSON |
+| `fukuii://node/config` | Static | Blockchain config values |
+| `fukuii://sync/status` | Static | Live sync progress |
+| `fukuii://peers/connected` | Static | Connected peer list |
+| `fukuii://mining/rpc` | Static | Mining RPC method documentation |
+| `fukuii://blockchain/latest` | Static | Latest block header |
+| `fukuii://block/{number}` | Templated | Block by number |
+| `fukuii://tx/{hash}` | Templated | Transaction by hash |
+| `fukuii://account/{address}` | Templated | Account state by address |
+
+### Infrastructure Changes
+
+- `McpService` expanded with `blockchainReader`, `blockchainConfig`, `nodeStatusHolder`, `transactionMappingStorage` dependencies
+- `McpDependencies` bundle case class for passing deps to tool/resource registries
+- `McpToolAnnotations` case class for MCP 2025-11-25 tool annotations
+- `NodeBuilder.McpServiceBuilder` expanded with `BlockchainBuilder`, `BlockchainConfigBuilder`, `NodeStatusBuilder`, `StorageBuilder` mixins
+
+**Files changed:**
+- `src/main/scala/.../jsonrpc/McpService.scala` — Expanded constructor, protocol version, annotations
+- `src/main/scala/.../jsonrpc/mcp/McpTools.scala` — 16 live tools (complete rewrite)
+- `src/main/scala/.../jsonrpc/mcp/McpResources.scala` — 9 live resources (complete rewrite)
+- `src/main/scala/.../nodebuilder/NodeBuilder.scala` — McpServiceBuilder expanded
+- Test files updated for new McpService constructor
+
+---
+
 ## Feature: ECBP-1100 (MESS) — ECIP-1100 Polynomial Anti-Reorg Protection
 
 **Initial commit:** `609a09e77` — feat: wire ECBP-1100 (MESS) into block processing pipeline
@@ -389,19 +467,6 @@ Removed three WITHDRAWN Mantis-era ECIPs that do not belong in a canonical ECIP-
 
 ---
 
-## Known Issues (Not Fixed)
-
-### MCP Tools Return Stubs
-- All 7 MCP tools return hardcoded placeholder text, not live data
-- The MCP framework and routing work correctly — stubs are the original implementation
-- **Resolved:** PR #999 (`enterprise` branch) replaces all stubs with 20 live MCP tools + 9 resources
-
-### `personal_sendTransaction` During Sync
-- Returns generic error when state isn't available
-- Consistent with other state-dependent RPCs — they now all return proper errors after Bug 9 fix
-
----
-
 ## What Was NOT Changed
 
 - No architecture changes (except adding sync-dispatcher isolation)
@@ -423,7 +488,9 @@ Removed three WITHDRAWN Mantis-era ECIPs that do not belong in a canonical ECIP-
 - Gas limit convergence toward configurable target (feature, commit 13) — prerequisite for Olympia
 - 73 new consensus tests across 4 test suites (commits 10-11, 13, 23)
 - Injectable Miner pattern for reliable PoW test infrastructure
-- Test count: 2,194 (down from 2,229 baseline due to removal of ~130 ECIP-specific tests, offset by 83 new tests: 73 consensus + 10 sync)
+- Live MCP tools (16 tools, 9 resources) replacing stub implementations — Fukuii is the first ETC client with a functional MCP server
+- Bug 12: `personal_sendTransaction` MissingNodeException handling during sync
+- Test count: 2,195 (down from 2,229 baseline due to removal of ~130 ECIP-specific tests, offset by 85 new tests: 73 consensus + 10 sync + 2 personal_sendTransaction)
 
 ---
 
@@ -433,7 +500,7 @@ Removed three WITHDRAWN Mantis-era ECIPs that do not belong in a canonical ECIP-
 ```bash
 git checkout alpha
 sbt compile          # Should complete cleanly
-sbt test             # 2,194 tests, 0 failures
+sbt test             # 2,195 tests, 0 failures
 sbt assembly          # Produces target/scala-3.3.4/fukuii-assembly-0.1.240.jar
 ```
 
@@ -474,15 +541,10 @@ curl -X POST http://localhost:8553 -H "Content-Type: application/json" \
 
 ## Next Steps
 
-The `alpha` branch establishes a stable pre-Olympia baseline. Two independent branches build on it:
-
-### `enterprise` branch (PR #999) — MCP Live Tools
-Replaces all stub MCP tools with 20 live blockchain query tools and 9 resources. Makes Fukuii the first ETC client with a live MCP server. Further enterprise sprints planned: WebSocket subscriptions, TLS/JWT auth, structured logging, trace/debug APIs.
+The `alpha` branch establishes a stable pre-Olympia baseline with live MCP tooling.
 
 ### `olympia` branch (PR #1001) — Olympia Hard Fork
-Implements ECIP-1111/1112/1121: EIP-1559 fee market with treasury redirect, EVM modernization (TLOAD/TSTORE, MCOPY, BASEFEE), new precompiles (P256VERIFY), and Type-4 transactions (EIP-7702). Targets Mordor block 15,800,850 (~March 28, 2026). **Rebased on alpha HEAD** — inherits gas limit convergence; the olympia branch overrides the default target to 60M.
-
-Both branches fan out independently from `alpha` HEAD and can be merged separately.
+Implements ECIP-1111/1112/1121: EIP-1559 fee market with treasury redirect, EVM modernization (TLOAD/TSTORE, MCOPY, BASEFEE), new precompiles (P256VERIFY), and Type-4 transactions (EIP-7702). Targets Mordor block 15,800,850 (~March 28, 2026). **Rebased on alpha HEAD** — inherits gas limit convergence and live MCP tools; the olympia branch overrides the default target to 60M.
 
 ### Configuration Note: Gas Limit Target
 The `gas-limit-target` config defaults to 8M (ETC mainnet pre-Olympia). On the `olympia` branch, this should be updated to 60M (60,000,000) to match core-geth's `DefaultConfig.GasCeil` and Besu's `NetworkDefinition.CLASSIC.targetGasLimit`. Operators upgrading to Olympia should set:

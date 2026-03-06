@@ -1,4 +1,4 @@
-## <i>Gorgoroth Status</i>: 🟡 [eth/68, snap/1] - [View Status & Walkthroughs](docs/validation/GORGOROTH_STATUS.md) 
+## <i>Alpha Status</i>: 🟢 2,195 tests passing — [View ETC Handoff](ETC-HANDOFF.md)
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/chippr-robotics/fukuii/HEAD/docs/images/fukuii-hex-logo.png" alt="Fukuii Logo" width="400"/>
@@ -89,13 +89,14 @@ See [CON-002: Bootstrap Checkpoints](docs/adr/consensus/CON-002-bootstrap-checkp
 
 ### 🤖 Agentic Control via MCP
 
-**New**: Fukuii is built with agentic AI integration as a first principle:
+**New**: Fukuii is built with agentic AI integration as a first principle — the first ETC client with a functional MCP server:
 
-- **Model Context Protocol (MCP)**: Integrated into the JSON-RPC API on port 8545
+- **Model Context Protocol (MCP 2025-11-25)**: Integrated into the JSON-RPC API on port 8545
 - **AI Assistant Integration**: Works with Claude, GPT, and other AI assistants via HTTP/WebSocket
-- **Rich Tool Set**: Tools for node status, peer management, blockchain queries, and diagnostics
-- **Resource Access**: Read node state, configuration, and blockchain data via standard URIs
+- **16 Live Tools**: Node status, sync status, peer list, block/transaction/account queries, reorg detection, ETC emission, fork history, treasury status, unit conversion, chain config
+- **9 Live Resources**: Node status, config, sync status, peer list, latest block, plus URI-templated block/tx/account access (`fukuii://block/123`, `fukuii://tx/0x...`, `fukuii://account/0x...`)
 - **Guided Prompts**: Pre-built templates for health checks, troubleshooting, and management tasks
+- **Tool Annotations**: All tools annotated with `readOnlyHint`, parameterized tools include JSON Schema `inputSchema` and `idempotentHint`
 
 Enable MCP by adding `"mcp"` to `fukuii.network.rpc.apis` in your configuration.
 
