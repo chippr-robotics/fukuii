@@ -175,7 +175,9 @@ object Config {
       pivotBlockReScheduleInterval: FiniteDuration,
       maxPivotBlockAge: Int,
       fastSyncMaxBatchRetries: Int,
-      maxPivotBlockFailuresCount: Int
+      maxPivotBlockFailuresCount: Int,
+      maxRetryDelay: FiniteDuration,
+      maxBodyFetchRetries: Int
   )
 
   object SyncConfig {
@@ -234,7 +236,15 @@ object Config {
         pivotBlockReScheduleInterval = syncConfig.getDuration("pivot-block-reschedule-interval").toMillis.millis,
         maxPivotBlockAge = syncConfig.getInt("max-pivot-block-age"),
         fastSyncMaxBatchRetries = syncConfig.getInt("fast-sync-max-batch-retries"),
-        maxPivotBlockFailuresCount = syncConfig.getInt("max-pivot-block-failures-count")
+        maxPivotBlockFailuresCount = syncConfig.getInt("max-pivot-block-failures-count"),
+        maxRetryDelay =
+          if (syncConfig.hasPath("max-retry-delay"))
+            syncConfig.getDuration("max-retry-delay").toMillis.millis
+          else 30.seconds,
+        maxBodyFetchRetries =
+          if (syncConfig.hasPath("max-body-fetch-retries"))
+            syncConfig.getInt("max-body-fetch-retries")
+          else 10
       )
     }
   }
