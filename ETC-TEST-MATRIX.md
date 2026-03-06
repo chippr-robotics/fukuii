@@ -1,6 +1,6 @@
 # Ethereum Classic Cross-Client Test Matrix
 
-**Last Updated:** 2026-03-05
+**Last Updated:** 2026-03-06
 **Companion to:** `ETC-HANDOFF.md`
 **Specification Source:** [ECIP-1066 — Ethereum Classic Network Description](https://ecips.ethereumclassic.org/ECIPs/ecip-1066)
 **Clients:** core-geth (Go), Besu (Java), Fukuii (Scala)
@@ -245,7 +245,9 @@ sbt "testOnly *PrecompiledContractsSpec"                  # Precompiles
 sbt "testOnly *EthashDifficultyCalculatorSpec"            # Difficulty
 sbt "testOnly *MESScorerSpec"                             # ECBP-1100
 sbt "testOnly *FetchRequestSpec"                          # Sync retry/backoff
-sbt test                                                  # Full suite (~2,194 tests)
+sbt "testOnly *PersonalServiceSpec"                        # personal_sendTransaction + sync error handling
+sbt "testOnly *McpServiceSpec"                             # MCP service (tools, resources, prompts)
+sbt test                                                  # Full suite (~2,195 tests)
 ```
 
 ---
@@ -254,5 +256,6 @@ sbt test                                                  # Full suite (~2,194 t
 
 | Date | Change |
 |------|--------|
+| 2026-03-06 | Add PersonalServiceSpec and McpServiceSpec to test commands, update count to 2,195 |
 | 2026-03-05 | Add FetchRequestSpec to test commands |
 | 2026-03-05 | Initial creation — pre-Olympia matrix covering ECIP-1066 (Frontier through Spiral) |
