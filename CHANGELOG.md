@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Production release checklist in ETC-HANDOFF.md
+- Shared test helper library for Gorgoroth test scripts (`ops/gorgoroth/test-scripts/lib/test-helpers.sh`)
 - Static nodes configuration support via `static-nodes.json` file in datadir
   - Nodes can now load peer configuration from `<datadir>/static-nodes.json`
   - **Public mode**: Static nodes are merged with bootstrap nodes from chain config for better sync experience
@@ -27,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Comprehensive test suite with 11 tests covering gas cost changes and edge cases
 
 ### Changed
+- Renamed GHCR image path from `chordodes_fukuii` to `fukuii` across all CI/CD, docs, and scripts
+- Modernized CI apt-key pattern to use `signed-by` keyring (replaces deprecated `apt-key add`)
+- Renamed `logback-node2-sync-trace.xml` → `logback-sync-trace.xml` (not node-specific)
+- Deduplicated `CONTRIBUTING.md` — root and `docs/` copies now redirect to canonical `docs/development/contributing.md`
+- Fixed confused rebrand text in contributing docs (was "Fukuii to Fukuii", now "Mantis to Fukuii")
 - Enhanced release workflow to include all artifacts
 - Updated documentation for release process
 - Modified `ProgramState` initialization to conditionally include COINBASE in warm addresses set

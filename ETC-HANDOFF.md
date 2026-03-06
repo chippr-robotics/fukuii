@@ -3,7 +3,7 @@
 **Branch:** `alpha` (derived from `main` at v0.1.240)
 **Author:** Christopher Mercer (chris-mercer) + Claude Opus 4.6
 **Date:** 2026-03-06
-**Commits:** 46 (9 bug fixes + 1 multi-fix + 3 chores + 3 features + 2 test suites + 1 cleanup + 1 config fix + 1 dep bump + 9 docs + 1 consensus fix + 2 sync fixes + 1 MCP + 12 alpha stabilization)
+**Commits:** 53 (12 bug fixes + 7 chores + 3 features + 2 test suites + 1 cleanup + 1 config fix + 1 dep bump + 10 docs + 1 consensus fix + 2 sync fixes + 1 MCP + 12 alpha stabilization)
 
 ---
 
@@ -471,7 +471,7 @@ Removed three WITHDRAWN Mantis-era ECIPs that do not belong in a canonical ECIP-
 - No architecture changes (except adding sync-dispatcher isolation)
 - No modifications to consensus-critical validation code (EVM execution, Ethash mining, state trie operations, block validation logic remain identical). Gas limit convergence is miner policy, not consensus validation.
 - No changes to submodules (bytes, crypto, rlp, scalanet)
-- No changes to CI/CD workflows or Docker configs
+- No changes to CI/CD functionality (apt-key modernization and GHCR path fix are non-functional)
 
 **What WAS updated:**
 - Bouncy Castle 1.82 → 1.83 (security library, Nov 2025 release)
@@ -490,6 +490,7 @@ Removed three WITHDRAWN Mantis-era ECIPs that do not belong in a canonical ECIP-
 - Live MCP tools (15 tools, 9 resources) replacing stub implementations — Fukuii is the first ETC client with a functional MCP server
 - Bug 12: `personal_sendTransaction` MissingNodeException handling during sync
 - README accuracy pass: fixed CI badge URL, MCP tool count (16→15), network names, broken doc links, ECIP-1066 compliance reference, markdown heading structure
+- Production readiness sweep: renamed 62 stale `chordodes_fukuii` → `fukuii` references, modernized CI apt-key to signed-by keyring (6 workflows), renamed misleading logback config, deduplicated 3 CONTRIBUTING.md copies, fixed confused rebrand text ("Fukuii to Fukuii" → "Mantis to Fukuii"), hardened ~20 shell scripts (shared helper library, docker compose detection, JAR validation, subshell scoping fix)
 - Test count: 2,195 (down from 2,229 baseline due to removal of ~130 ECIP-specific tests, offset by 85 new tests: 73 consensus + 10 sync + 2 personal_sendTransaction)
 
 ---

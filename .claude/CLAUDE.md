@@ -14,7 +14,7 @@
 
 ```bash
 sbt compile          # Compile (~27s)
-sbt test             # Unit tests (2,189 tests, ~5 min)
+sbt test             # Unit tests (2,195 tests, ~5 min)
 sbt it:test          # Integration tests
 sbt assembly         # Build fat JAR (~176MB)
 sbt scalafmtAll      # Format all code
