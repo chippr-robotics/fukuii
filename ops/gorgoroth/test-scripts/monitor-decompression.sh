@@ -4,14 +4,11 @@
 
 CONTAINER_NAME="${1:-fukuii-node6}"
 
-# Color output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/test-helpers.sh"
+require_tools docker
+
 MAGENTA='\033[0;35m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
 
 # Statistics
 DECOMPRESS_COUNT=0
@@ -52,7 +49,7 @@ if ! docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
 fi
 
 # Start monitoring
-docker logs -f "$CONTAINER_NAME" 2>&1 | while IFS= read -r line; do
+while IFS= read -r line; do
   TIMESTAMP=$(echo "$line" | grep -oE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}' || echo "")
   
   # Highlight decompression-related messages
@@ -105,4 +102,4 @@ docker logs -f "$CONTAINER_NAME" 2>&1 | while IFS= read -r line; do
     echo -e "${RED}[MESSAGE-ERROR]${NC} $line"
     ERROR_COUNT=$((ERROR_COUNT + 1))
   fi
-done
+done < <(docker logs -f "$CONTAINER_NAME" 2>&1)

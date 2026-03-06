@@ -6,6 +6,19 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GORGOROTH_DIR="$(dirname "$SCRIPT_DIR")"
+source "$SCRIPT_DIR/lib/test-helpers.sh"
+require_tools curl jq docker
+detect_docker_compose
+
+# Local rpc_call wrapper (port-based, params without brackets)
+rpc_call() {
+  local port=$1
+  local method=$2
+  local params=$3
+  curl -s -X POST -H "Content-Type: application/json" \
+    --data "{\"jsonrpc\":\"2.0\",\"method\":\"$method\",\"params\":[$params],\"id\":1}" \
+    "http://localhost:$port" 2>/dev/null
+}
 
 echo "=== Fukuii SNAP Sync Test Suite ==="
 echo "Starting at: $(date)"
@@ -18,37 +31,7 @@ SEED_NODE_PORT=8546     # Node 1 HTTP RPC (host port)
 TEST_NODE_PORT=8549     # Node 3 HTTP RPC (host port)
 COMPOSE_FILE="docker-compose-3nodes.yml"
 
-# Color output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
 
-# Helper functions
-log_info() {
-  echo -e "${GREEN}i${NC} $1"
-}
-
-log_warn() {
-  echo -e "${YELLOW}!${NC} $1"
-}
-
-log_error() {
-  echo -e "${RED}x${NC} $1"
-}
-
-log_success() {
-  echo -e "${GREEN}+${NC} $1"
-}
-
-rpc_call() {
-  local port=$1
-  local method=$2
-  local params=$3
-  curl -s -X POST -H "Content-Type: application/json" \
-    --data "{\"jsonrpc\":\"2.0\",\"method\":\"$method\",\"params\":[$params],\"id\":1}" \
-    "http://localhost:$port" 2>/dev/null
-}
 
 cd "$GORGOROTH_DIR"
 
@@ -57,10 +40,10 @@ echo "---"
 log_info "Step 1: Checking seed nodes (node1 + node2)..."
 echo "---"
 
-RUNNING=$(docker compose -f "$COMPOSE_FILE" ps -q fukuii-node1 fukuii-node2 | wc -l)
+RUNNING=$($DOCKER_COMPOSE -f "$COMPOSE_FILE" ps -q fukuii-node1 fukuii-node2 | wc -l)
 if [ "$RUNNING" -lt 2 ]; then
   log_info "Starting seed nodes..."
-  docker compose -f "$COMPOSE_FILE" up -d fukuii-node1 fukuii-node2
+  $DOCKER_COMPOSE -f "$COMPOSE_FILE" up -d fukuii-node1 fukuii-node2
   log_info "Waiting for nodes to initialize (45s)..."
   sleep 45
 else
@@ -105,15 +88,15 @@ log_info "Step 2: Preparing node3 for fresh SNAP sync..."
 echo "---"
 
 # Stop and remove node3 data for a clean SNAP sync start
-docker compose -f "$COMPOSE_FILE" stop fukuii-node3 2>/dev/null || true
+$DOCKER_COMPOSE -f "$COMPOSE_FILE" stop fukuii-node3 2>/dev/null || true
 sleep 5
-docker compose -f "$COMPOSE_FILE" rm -f fukuii-node3 2>/dev/null || true
+$DOCKER_COMPOSE -f "$COMPOSE_FILE" rm -f fukuii-node3 2>/dev/null || true
 
 # Remove data volume to force fresh sync
 docker volume rm "gorgoroth_fukuii-node3-data" 2>/dev/null || true
 
 log_info "Starting node3 with SNAP sync enabled..."
-docker compose -f "$COMPOSE_FILE" up -d fukuii-node3
+$DOCKER_COMPOSE -f "$COMPOSE_FILE" up -d fukuii-node3
 log_info "Waiting for node3 to initialize (30s)..."
 sleep 30
 
@@ -192,7 +175,7 @@ else
   log_error "Final block: $NODE_BLOCK/$BLOCK_NUM"
   echo
   log_info "Last 30 lines of node3 logs:"
-  docker compose -f "$COMPOSE_FILE" logs --tail=30 fukuii-node3
+  $DOCKER_COMPOSE -f "$COMPOSE_FILE" logs --tail=30 fukuii-node3
   exit 1
 fi
 
@@ -241,14 +224,14 @@ echo "---"
 log_info "Step 5: Checking for SNAP sync errors..."
 echo "---"
 
-SNAP_ERRORS=$(docker compose -f "$COMPOSE_FILE" logs fukuii-node3 2>&1 | \
+SNAP_ERRORS=$($DOCKER_COMPOSE -f "$COMPOSE_FILE" logs fukuii-node3 2>&1 | \
   grep -i "SNAP sync failed\|fallback.*fast sync\|circuit breaker" | wc -l)
 
 if [ "$SNAP_ERRORS" -eq 0 ]; then
   log_success "No SNAP sync error patterns found in logs"
 else
   log_warn "Found $SNAP_ERRORS SNAP sync error/fallback messages"
-  docker compose -f "$COMPOSE_FILE" logs fukuii-node3 2>&1 | \
+  $DOCKER_COMPOSE -f "$COMPOSE_FILE" logs fukuii-node3 2>&1 | \
     grep -i "SNAP sync failed\|fallback.*fast sync\|circuit breaker" | head -5
 fi
 

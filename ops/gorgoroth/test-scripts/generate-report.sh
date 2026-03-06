@@ -1,6 +1,12 @@
 #!/bin/bash
 # Generate summary report from test results
 
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/test-helpers.sh"
+require_tools sed
+
 RESULTS_DIR=${1:-.}
 
 cat > "$RESULTS_DIR/SUMMARY.md" << 'EOF'

@@ -29,11 +29,13 @@ if ! command -v docker &> /dev/null; then
     exit 1
 fi
 
-if ! command -v docker-compose &> /dev/null; then
-    if ! docker compose version &> /dev/null; then
-        echo -e "${RED}Error: Docker Compose is not installed${NC}"
-        exit 1
-    fi
+if docker compose version &> /dev/null; then
+    DOCKER_COMPOSE="docker compose"
+elif command -v docker-compose &> /dev/null; then
+    DOCKER_COMPOSE="docker-compose"
+else
+    echo -e "${RED}Error: Docker Compose is not installed${NC}"
+    exit 1
 fi
 
 echo -e "${GREEN}✓ Docker is installed${NC}"
@@ -104,24 +106,24 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     
     # Pull images first
     echo -e "${YELLOW}Pulling Docker images...${NC}"
-    docker-compose pull
+    $DOCKER_COMPOSE pull
     
     # Start services
     echo -e "${YELLOW}Starting services...${NC}"
-    docker-compose up -d
-    
+    $DOCKER_COMPOSE up -d
+
     echo ""
     echo -e "${GREEN}✓ Services started successfully!${NC}"
     echo ""
-    
+
     # Wait for services to be healthy
     echo -e "${YELLOW}Waiting for services to be healthy (this may take a few minutes)...${NC}"
     sleep 10
-    
+
     # Display service status
     echo ""
     echo -e "${GREEN}Service Status:${NC}"
-    docker-compose ps
+    $DOCKER_COMPOSE ps
     
     echo ""
     echo -e "${GREEN}========================================${NC}"
@@ -139,13 +141,13 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     echo -e "${YELLOW}Next Steps:${NC}"
     echo -e "  1. Update passwords in .env and kong.yml"
     echo -e "  2. Test the API: curl -u admin:fukuii_admin_password http://localhost:8000/health"
-    echo -e "  3. Check logs: docker-compose logs -f"
+    echo -e "  3. Check logs: $DOCKER_COMPOSE logs -f"
     echo -e "  4. Read the README.md for more information"
     echo ""
 else
     echo -e "${YELLOW}Setup complete. To start the stack later, run:${NC}"
     echo -e "  cd $SCRIPT_DIR"
-    echo -e "  docker-compose up -d"
+    echo -e "  $DOCKER_COMPOSE up -d"
     echo ""
 fi
 
