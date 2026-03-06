@@ -2,16 +2,16 @@
 
 **Branch:** `alpha` (derived from `main` at v0.1.240)
 **Author:** Christopher Mercer (chris-mercer) + Claude Opus 4.6
-**Date:** 2026-03-04
-**Commits:** 23 (6 bug fixes + 1 multi-fix + 2 chores + 2 features + 2 test suites + 1 cleanup + 1 config fix + 1 dep bump + 6 docs + 1 consensus fix)
+**Date:** 2026-03-05
+**Commits:** 25 (8 bug fixes + 1 multi-fix + 2 chores + 2 features + 2 test suites + 1 cleanup + 1 config fix + 1 dep bump + 6 docs + 1 consensus fix)
 
 ---
 
 ## Summary
 
-The `alpha` branch is a systematic stabilization pass over Fukuii v0.1.240. Over 16 phases of testing, every major subsystem was exercised on both Mordor testnet and ETC mainnet using the assembly JAR. **9 bugs were found and fixed**, then the branch was extended with ECBP-1100 (MESS) wiring (later rewritten to match the ECIP-1100 polynomial spec), comprehensive consensus test suites, gas limit convergence logic, and dependency updates.
+The `alpha` branch is a systematic stabilization pass over Fukuii v0.1.240. Over 16 phases of testing, every major subsystem was exercised on both Mordor testnet and ETC mainnet using the assembly JAR. **11 bugs were found and fixed**, then the branch was extended with ECBP-1100 (MESS) wiring (later rewritten to match the ECIP-1100 polynomial spec), comprehensive consensus test suites, gas limit convergence logic, and dependency updates.
 
-**Test results:** 2,192 unit tests passing, clean compile, assembly JAR verified on Mordor.
+**Test results:** 2,194 unit tests passing, clean compile, assembly JAR verified on Mordor.
 
 ---
 
@@ -29,7 +29,7 @@ The `alpha` branch implements a canonical [ECIP-1066](https://ecips.ethereumclas
 
 ### Gorgoroth Trials (Local Network Testing)
 
-The alpha stabilization was validated through 16 phases of systematic testing ("Gorgoroth trials"), exercising every major subsystem on both Mordor testnet and ETC mainnet using the assembly JAR. Local devnet testing uses the multi-client stack from the maintained forks above (core-geth `etc`, Besu `etc`, Fukuii `alpha`) — not the deprecated upstream core-geth (last updated 2024) or upstream Besu. 9 bugs were found and fixed, with 2,189 unit tests passing.
+The alpha stabilization was validated through 16 phases of systematic testing ("Gorgoroth trials"), exercising every major subsystem on both Mordor testnet and ETC mainnet using the assembly JAR. Local devnet testing uses the multi-client stack from the maintained forks above (core-geth `etc`, Besu `etc`, Fukuii `alpha`) — not the deprecated upstream core-geth (last updated 2024) or upstream Besu. 11 bugs were found and fixed, with 2,194 unit tests passing.
 
 ---
 
@@ -190,6 +190,53 @@ The alpha stabilization was validated through 16 phases of systematic testing ("
 
 ---
 
+### Bug 10: Block Body Download Stall (High)
+**Commit:** `8dfa845e8` — fix(sync): add peer switching and backoff for block body downloads
+
+**Problem:** Fast sync stalls when peers timeout on `GetBlockBodies`. The retry loop re-queues the same hashes to the same (now blacklisted) peer without delay, causing a tight loop that never recovers.
+
+**Root cause:** `BodiesFetcher.requestBodies()` uses `BestPeer` selector on every retry. When a peer times out, it gets blacklisted, but the next retry still selects the same "best" peer. With all peers blacklisted, `NoSuitablePeer` is returned with only a 0.5s fixed delay, creating a tight retry loop.
+
+**Fix (aligned with go-ethereum/Besu patterns):**
+- `PeersClient`: Added `ExcludingPeers(exclude: Set[PeerId])` peer selector to skip failed peers on retry (Besu's `AbstractRetryingSwitchingPeerTask` pattern)
+- `FetchRequest`: Track `triedPeers` and `retryCount`, apply exponential backoff `min(syncRetryInterval × 2^retryCount, maxRetryDelay)` on failure
+- `BodiesFetcher`: Carry retry state (`triedPeers`, `retryCount`) through the fetch cycle
+- `BlockFetcher`: Enforce `maxBodyFetchRetries` limit (default 10), then reset tried peers (allows re-trying after blacklist expiry)
+- `Config`: Added `maxRetryDelay` (30s) and `maxBodyFetchRetries` (10) to `SyncConfig`
+
+**Files changed:**
+- `src/main/scala/.../blockchain/sync/PeersClient.scala` (+11 lines)
+- `src/main/scala/.../blockchain/sync/regular/FetchRequest.scala` (+44/-9)
+- `src/main/scala/.../blockchain/sync/regular/BodiesFetcher.scala` (+40/-12)
+- `src/main/scala/.../blockchain/sync/regular/BlockFetcher.scala` (+45/-8)
+- `src/main/scala/.../utils/Config.scala` (+14/-1)
+- `src/main/resources/conf/base/sync.conf` (+9 lines)
+- `src/test/.../sync/TestSyncConfig.scala` (+4/-1)
+- `src/test/.../sync/regular/FetchRequestSpec.scala` (NEW — 10 tests)
+
+**Tests:** 10 new tests covering exponential backoff math, `maxRetryDelay` cap, config defaults, `ExcludingPeers` selector, and retry state data carriers.
+
+---
+
+### Bug 11: `net_listPeers` Timeout Under Load (Medium)
+**Commit:** `e7b4e9281` — fix(rpc): cache peer status to prevent net_listPeers timeout
+
+**Problem:** With 30+ peers, `net_listPeers` times out after 20s.
+
+**Root cause:** `PeerManagerActor.GetPeers` used `parTraverse` to query each peer actor individually (2s timeout per peer). 30 peers × 2s / dispatcher parallelism exceeded the 20s RPC timeout.
+
+**Fix (aligned with go-ethereum/Besu/Nethermind — all store status in-process):**
+- Added `peerStatusCache: Map[PeerId, PeerActor.Status]` maintained in-process
+- Cache updated reactively: set to `Connecting` on peer creation, `Handshaked` on successful handshake, removed on disconnect/termination
+- Background refresh via `parTraverse` every 10s (reuses existing `getPeerStatus` pattern)
+- `GetPeers` returns cached data immediately (<1ms) regardless of peer count
+
+**Files changed:**
+- `src/main/scala/.../network/PeerManagerActor.scala` (+45/-5)
+- `src/test/.../network/PeerManagerSpec.scala` (+2/-3)
+
+---
+
 ## Feature: ECBP-1100 (MESS) — ECIP-1100 Polynomial Anti-Reorg Protection
 
 **Initial commit:** `609a09e77` — feat: wire ECBP-1100 (MESS) into block processing pipeline
@@ -344,20 +391,6 @@ Removed three WITHDRAWN Mantis-era ECIPs that do not belong in a canonical ECIP-
 
 ## Known Issues (Not Fixed)
 
-These were discovered during testing but are tuning/architecture issues, not code bugs:
-
-### Block Body Download Stall
-- **Symptom:** Fast sync stalls at a specific block when peers timeout on `GetBlockBodies`
-- **Cause:** Retry loop re-queues same hashes to same (blacklisted) peers without exponential backoff
-- **Workaround:** Restart the node; it resumes from last checkpoint
-- **Proper fix:** Add exponential backoff for repeated timeouts, differentiate timeout vs protocol blacklisting, add peer rotation
-
-### `net_listPeers` Timeout Under Load
-- **Symptom:** With 30+ peers, `net_listPeers` times out after 20s
-- **Cause:** `PeerManagerActor.GetPeers` uses `parTraverse` to query each peer actor status (2s timeout per peer). With 30 peers, worst case is 30×2s = 60s > 20s ask timeout.
-- **Workaround:** Use `net_peerCount` instead (counts handshaked peers without individual status queries)
-- **Proper fix:** Cache peer status locally instead of querying each actor on every request
-
 ### MCP Tools Return Stubs
 - All 7 MCP tools return hardcoded placeholder text, not live data
 - The MCP framework and routing work correctly — stubs are the original implementation
@@ -390,7 +423,7 @@ These were discovered during testing but are tuning/architecture issues, not cod
 - Gas limit convergence toward configurable target (feature, commit 13) — prerequisite for Olympia
 - 73 new consensus tests across 4 test suites (commits 10-11, 13, 23)
 - Injectable Miner pattern for reliable PoW test infrastructure
-- Test count: 2,192 (down from 2,229 baseline due to removal of ~130 ECIP-specific tests, offset by 73 new consensus tests)
+- Test count: 2,194 (down from 2,229 baseline due to removal of ~130 ECIP-specific tests, offset by 83 new tests: 73 consensus + 10 sync)
 
 ---
 
@@ -400,7 +433,7 @@ These were discovered during testing but are tuning/architecture issues, not cod
 ```bash
 git checkout alpha
 sbt compile          # Should complete cleanly
-sbt test             # 2,189 tests, 0 failures
+sbt test             # 2,194 tests, 0 failures
 sbt assembly          # Produces target/scala-3.3.4/fukuii-assembly-0.1.240.jar
 ```
 

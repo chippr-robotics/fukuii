@@ -244,7 +244,8 @@ sbt "testOnly *ForkIdSpec"                               # Fork ID (EIP-2124)
 sbt "testOnly *PrecompiledContractsSpec"                  # Precompiles
 sbt "testOnly *EthashDifficultyCalculatorSpec"            # Difficulty
 sbt "testOnly *MESScorerSpec"                             # ECBP-1100
-sbt test                                                  # Full suite (~2,192 tests)
+sbt "testOnly *FetchRequestSpec"                          # Sync retry/backoff
+sbt test                                                  # Full suite (~2,194 tests)
 ```
 
 ---
@@ -253,4 +254,5 @@ sbt test                                                  # Full suite (~2,192 t
 
 | Date | Change |
 |------|--------|
+| 2026-03-05 | Add FetchRequestSpec to test commands |
 | 2026-03-05 | Initial creation — pre-Olympia matrix covering ECIP-1066 (Frontier through Spiral) |
