@@ -122,7 +122,15 @@ class QaJRCSpec
     val ethUserService: EthUserService = mock[EthUserService]
     val ethFilterService: EthFilterService = mock[EthFilterService]
     val fukuiiService: FukuiiService = mock[FukuiiService]
-    val mcpService: McpService = mock[McpService]
+    val mcpService: McpService = {
+      implicit val testSystem: org.apache.pekko.actor.ActorSystem =
+        org.apache.pekko.actor.ActorSystem("QaJRCSpec-mcp")
+      new McpService(
+        org.apache.pekko.testkit.TestProbe().ref, org.apache.pekko.testkit.TestProbe().ref, null, null,
+        new java.util.concurrent.atomic.AtomicReference[com.chipprbots.ethereum.utils.NodeStatus](),
+        null
+      )(scala.concurrent.ExecutionContext.global)
+    }
     val qaService: QAService = mock[QAService]
 
     val jsonRpcController =

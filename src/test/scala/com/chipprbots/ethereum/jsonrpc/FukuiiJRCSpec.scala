@@ -54,7 +54,11 @@ class FukuiiJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory
     val ethFilterService: EthFilterService = mock[EthFilterService]
     val qaService: QAService = mock[QAService]
     val fukuiiService: FukuiiService = mock[FukuiiService]
-    val mcpService: McpService = mock[McpService]
+    val mcpService: McpService = new McpService(
+      org.apache.pekko.testkit.TestProbe().ref, org.apache.pekko.testkit.TestProbe().ref, null, null,
+      new java.util.concurrent.atomic.AtomicReference[com.chipprbots.ethereum.utils.NodeStatus](),
+      null
+    )(scala.concurrent.ExecutionContext.global)
 
     val jsonRpcController =
       new JsonRpcController(
