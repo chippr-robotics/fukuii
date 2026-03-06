@@ -33,7 +33,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: chippr-robotics/chordodes_fukuii
+  IMAGE_NAME: chippr-robotics/fukuii
   DOCKERHUB_IMAGE: chipprbots/fukuii
 
 jobs:
@@ -186,8 +186,8 @@ jobs:
 
           **Docker**:
           \`\`\`bash
-          docker pull ghcr.io/chippr-robotics/chordodes_fukuii:${VERSION}
-          docker run -p 8545:8545 -p 30303:30303 ghcr.io/chippr-robotics/chordodes_fukuii:${VERSION}
+          docker pull ghcr.io/chippr-robotics/fukuii:${VERSION}
+          docker run -p 8545:8545 -p 30303:30303 ghcr.io/chippr-robotics/fukuii:${VERSION}
           \`\`\`
           DOCKER
           fi
@@ -379,7 +379,7 @@ jobs:
       contents: write
     uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@5a775b367a56d5bd118a224a811bba288150a563 # v1.10.0
     with:
-      image: ghcr.io/chippr-robotics/chordodes_fukuii
+      image: ghcr.io/chippr-robotics/fukuii
       digest: ${{ needs.build-and-push-image.outputs.image-digest }}
       registry-username: ${{ github.actor }}
     secrets:

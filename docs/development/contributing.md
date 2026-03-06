@@ -505,7 +505,7 @@ When a release is created (via git tag `vX.Y.Z`), the release workflow automatic
 - ✅ Generates CHANGELOG from commits since last release
 - ✅ Creates Software Bill of Materials (SBOM) in CycloneDX format
 - ✅ Attaches all artifacts to GitHub release
-- ✅ Builds and publishes container images to `ghcr.io/chippr-robotics/chordodes_fukuii`
+- ✅ Builds and publishes container images to `ghcr.io/chippr-robotics/fukuii`
 - ✅ Signs images with [Cosign](https://docs.sigstore.dev/cosign/overview/) (keyless, GitHub OIDC)
 - ✅ Generates SLSA Level 3 provenance attestations
 - ✅ Outputs immutable digest references for tamper-proof deployments
@@ -531,7 +531,7 @@ git push origin v1.0.0
 cosign verify \
   --certificate-identity-regexp=https://github.com/chippr-robotics/fukuii \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
-  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+  ghcr.io/chippr-robotics/fukuii:v1.0.0
 ```
 
 **Release Drafter:**
