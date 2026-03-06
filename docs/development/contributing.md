@@ -590,8 +590,8 @@ See [Agent Labels](https://github.com/chippr-robotics/fukuii/blob/develop/.githu
 
 4. **Package Structure**
    - All code uses package prefix `com.chipprbots.ethereum`
-   - Previously used `io.iohk.ethereum` (from Fukuii project) - update if found
-   - Configuration paths use `.fukuii/` not `.fukuii/`
+   - Previously used `io.iohk.ethereum` (from Mantis/IOHK) — update if found
+   - Configuration paths use `fukuii` namespace (not `mantis`)
 
 5. **Dependencies**
    - Don't add dependencies without justification
@@ -604,7 +604,7 @@ See [Agent Labels](https://github.com/chippr-robotics/fukuii/blob/develop/.githu
 - **Scala Version**: Code must compile on Scala 3.3.4 (LTS)
 - **Logging**: Use structured logging with appropriate levels (DEBUG, INFO, WARN, ERROR)
 - **Logger Configuration**: Update logback configurations when adding new packages
-- **Rebranding**: This is a rebrand from "Fukuii" to "Fukuii" - update any remaining "fukuii" or "io.iohk" references
+- **Rebranding**: This is a rebrand from "Mantis" (IOHK) to "Fukuii" (Chippr Robotics) — update any remaining "mantis" or "io.iohk" references
 - **Commit Messages**: Use clear, descriptive commit messages in imperative mood
 - **Git Hygiene**: Don't commit build artifacts, IDE files, or temporary files
 
@@ -622,7 +622,7 @@ See [Agent Labels](https://github.com/chippr-robotics/fukuii/blob/develop/.githu
 **When fixing tests:**
 ```
 1. Identify the root cause of the failure
-2. Check if it's related to rebranding (fukuii→fukuii, io.iohk→com.chipprbots)
+2. Check if it's related to rebranding (mantis→fukuii, io.iohk→com.chipprbots)
 3. Check logger configurations in src/test/resources/ and src/it/resources/
 4. Run the specific test to verify the fix
 5. Run full test suite to ensure no regressions

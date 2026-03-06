@@ -64,7 +64,7 @@ services:
       - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node2/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
-      - ./conf/logback-node2-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
+      - ./conf/logback-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
       - ./conf/mordor-genesis.json:/app/fukuii/conf/mordor-genesis.json:ro
       - ./conf/node2/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node2-data:/app/data
@@ -98,7 +98,7 @@ services:
       - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node3/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
-      - ./conf/logback-node2-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
+      - ./conf/logback-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
       - ./conf/mordor-genesis.json:/app/fukuii/conf/mordor-genesis.json:ro
       - ./conf/node3/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node3-data:/app/data
