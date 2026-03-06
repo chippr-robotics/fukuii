@@ -3,7 +3,7 @@
 **Branch:** `alpha` (derived from `main` at v0.1.240)
 **Author:** Christopher Mercer (chris-mercer) + Claude Opus 4.6
 **Date:** 2026-03-06
-**Commits:** 30 (9 bug fixes + 1 multi-fix + 2 chores + 3 features + 2 test suites + 1 cleanup + 1 config fix + 1 dep bump + 7 docs + 1 consensus fix + 2 sync fixes)
+**Commits:** 46 (9 bug fixes + 1 multi-fix + 3 chores + 3 features + 2 test suites + 1 cleanup + 1 config fix + 1 dep bump + 9 docs + 1 consensus fix + 2 sync fixes + 1 MCP + 12 alpha stabilization)
 
 ---
 
@@ -262,7 +262,7 @@ Replaced all stub MCP tools and resources with live blockchain query implementat
 
 **Protocol version:** Updated from `2024-11-05` to `2025-11-25` (latest stable MCP spec).
 
-### Tools (16 live, replacing 7 stubs)
+### Tools (15 live, replacing 7 stubs)
 
 | Tool | Type | Description |
 |------|------|-------------|
@@ -280,7 +280,6 @@ Replaced all stub MCP tools and resources with live blockchain query implementat
 | `convert_units` | ETC | Wei/Gwei/ETC conversion |
 | `get_etc_emission` | ETC | Emission schedule and current era (ECIP-1017) |
 | `get_etc_forks` | ETC | ECIP fork history with activation status |
-| `get_treasury_status` | ETC | Treasury account balance query |
 | `get_chain_config` | ETC | Full blockchain config as structured output |
 
 All tools annotated with `readOnlyHint`, parameterized tools with JSON Schema `inputSchema` and `idempotentHint`.
@@ -308,7 +307,7 @@ All tools annotated with `readOnlyHint`, parameterized tools with JSON Schema `i
 
 **Files changed:**
 - `src/main/scala/.../jsonrpc/McpService.scala` — Expanded constructor, protocol version, annotations
-- `src/main/scala/.../jsonrpc/mcp/McpTools.scala` — 16 live tools (complete rewrite)
+- `src/main/scala/.../jsonrpc/mcp/McpTools.scala` — 15 live tools (complete rewrite)
 - `src/main/scala/.../jsonrpc/mcp/McpResources.scala` — 9 live resources (complete rewrite)
 - `src/main/scala/.../nodebuilder/NodeBuilder.scala` — McpServiceBuilder expanded
 - Test files updated for new McpService constructor
@@ -488,8 +487,9 @@ Removed three WITHDRAWN Mantis-era ECIPs that do not belong in a canonical ECIP-
 - Gas limit convergence toward configurable target (feature, commit 13) — prerequisite for Olympia
 - 73 new consensus tests across 4 test suites (commits 10-11, 13, 23)
 - Injectable Miner pattern for reliable PoW test infrastructure
-- Live MCP tools (16 tools, 9 resources) replacing stub implementations — Fukuii is the first ETC client with a functional MCP server
+- Live MCP tools (15 tools, 9 resources) replacing stub implementations — Fukuii is the first ETC client with a functional MCP server
 - Bug 12: `personal_sendTransaction` MissingNodeException handling during sync
+- README accuracy pass: fixed CI badge URL, MCP tool count (16→15), network names, broken doc links, ECIP-1066 compliance reference, markdown heading structure
 - Test count: 2,195 (down from 2,229 baseline due to removal of ~130 ECIP-specific tests, offset by 85 new tests: 73 consensus + 10 sync + 2 personal_sendTransaction)
 
 ---

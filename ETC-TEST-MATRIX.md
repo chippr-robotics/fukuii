@@ -256,6 +256,7 @@ sbt test                                                  # Full suite (~2,195 t
 
 | Date | Change |
 |------|--------|
+| 2026-03-06 | README accuracy pass: ECIP-1066 compliance ref, MCP 16→15, CI badge fix, handoff refresh |
 | 2026-03-06 | Add PersonalServiceSpec and McpServiceSpec to test commands, update count to 2,195 |
 | 2026-03-05 | Add FetchRequestSpec to test commands |
 | 2026-03-05 | Initial creation — pre-Olympia matrix covering ECIP-1066 (Frontier through Spiral) |
