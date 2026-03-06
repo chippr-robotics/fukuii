@@ -616,22 +616,6 @@ class BlockExecutionSpec
       }
     }
 
-    // SCALA 3 MIGRATION: These tests require mocking methods on InMemoryWorldStateProxy which is a case class.
-    // ScalaMock cannot mock methods on case class instances. These tests need refactoring to use
-    // a mock WorldStateProxy trait instead. DAO fork is also not relevant to ETC (only ETH mainnet).
-    "drain DAO accounts and send the funds to refund address if Pro DAO Fork was configured" taggedAs (
-      UnitTest,
-      StateTest
-    ) ignore {
-      // Test disabled - needs WorldStateProxy mocking refactor
-    }
-
-    "neither drain DAO accounts nor send the funds to refund address if Pro DAO Fork was not configured" taggedAs (
-      UnitTest,
-      StateTest
-    ) ignore {
-      // Test disabled - needs WorldStateProxy mocking refactor
-    }
   }
 
   trait BlockExecutionTestSetup extends BlockchainSetup {

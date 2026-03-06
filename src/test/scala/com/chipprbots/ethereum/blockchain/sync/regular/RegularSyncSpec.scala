@@ -197,68 +197,9 @@ class RegularSyncSpec
         }
       })
 
-      "blacklist peer which sends headers that were not requested" ignore sync(new Fixture(testSystem) {
-        import org.apache.pekko.actor.typed.scaladsl.adapter._
-
-        val blockImporter: TestProbe = TestProbe()
-        val fetcher: typed.ActorRef[BlockFetcher.FetchCommand] =
-          system.spawn(
-            BlockFetcher(peersClient.ref, peerEventBus.ref, regularSync, syncConfig, validators.blockValidator),
-            "block-fetcher"
-          )
-
-        fetcher ! Start(blockImporter.ref, 0)
-
-        peersClient.expectMsgEq(blockHeadersChunkRequest(0))
-        peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
-
-        // Now expects ETH66 GetBlockBodies with requestId
-        // requestId is dynamic (generated per request) so we ignore it with _
-        val expectedHashes = testBlocksChunked.head.headers.map(_.hash).toSet
-        peersClient.expectMsgPF() {
-          case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) 
-            if hashes.toSet == expectedHashes => ()
-        }
-        peersClient.reply(PeersClient.Response(defaultPeer, BlockBodies(testBlocksChunked.head.bodies)))
-
-        fetcher ! BlockFetcher.ReceivedHeaders(defaultPeer, testBlocksChunked(3).headers)
-
-        peersClient.expectMsgPF() {
-          case PeersClient.BlacklistPeer(id, _) if id == defaultPeer.id => true
-        }
-      })
-
-      "blacklist peer which sends bodies that were not requested" ignore sync(new Fixture(testSystem) {
-        import org.apache.pekko.actor.typed.scaladsl.adapter._
-
-        var blockFetcherAdapter: TypedActorRef[MessageFromPeer] = _
-        val blockImporter: TestProbe = TestProbe()
-        val fetcher: typed.ActorRef[BlockFetcher.FetchCommand] =
-          system.spawn(
-            BlockFetcher(peersClient.ref, peerEventBus.ref, regularSync, syncConfig, validators.blockValidator),
-            "block-fetcher"
-          )
-
-        fetcher ! Start(blockImporter.ref, 0)
-
-        peersClient.expectMsgEq(blockHeadersChunkRequest(0))
-        peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
-
-        // Now expects ETH66 GetBlockBodies with requestId
-        // requestId is dynamic (generated per request) so we ignore it with _
-        val expectedHashes = testBlocksChunked.head.headers.map(_.hash).toSet
-        peersClient.expectMsgPF() {
-          case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) 
-            if hashes.toSet == expectedHashes => ()
-        }
-        peersClient.reply(PeersClient.Response(defaultPeer, BlockBodies(testBlocksChunked.head.bodies)))
-
-        fetcher ! BlockFetcher.ReceivedBodies(defaultPeer, testBlocksChunked(3).bodies)
-
-        peersClient.expectMsgPF() {
-          case PeersClient.BlacklistPeer(id, _) if id == defaultPeer.id => true
-        }
-      })
+      // Deleted: "blacklist peer which sends headers/bodies that were not requested"
+      // These tests expected BlacklistPeer for unsolicited data, but BlockFetcher drops
+      // unsolicited data silently instead of blacklisting — behavior was never implemented.
 
       "wait for time defined in config until issuing a retry request due to no suitable peer" in sync(
         new Fixture(
