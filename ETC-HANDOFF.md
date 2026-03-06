@@ -553,3 +553,25 @@ mining {
   gas-limit-target = 60000000
 }
 ```
+
+---
+
+## Production Release Checklist
+
+Items to address before the first tagged production release:
+
+### Configuration
+- [ ] Change `pekko.loglevel` from `"DEBUG"` to `"INFO"` in `src/main/resources/conf/base/pekko.conf` (DEBUG generates excessive actor lifecycle noise in production; `PEKKO_LOGLEVEL` env var still allows override)
+- [ ] Review `TODO(production)` comments in config files (`grep -rn 'TODO(production)' src/main/resources/`)
+
+### Documentation
+- [ ] Update version number across all docs if bumped from 0.1.240
+- [ ] Verify CHANGELOG.md covers all changes since last release
+
+### CI/CD
+- [ ] Verify GHCR image builds succeed with new `chippr-robotics/fukuii` path (renamed from `chordodes_fukuii`)
+- [ ] Test release workflow end-to-end with a pre-release tag
+
+### Security
+- [ ] Run `sbt dependencyCheck` for CVE scan
+- [ ] Verify no secrets in git history (`git log --all -p | grep -i 'password\|secret\|private.key'`)
