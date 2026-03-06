@@ -131,6 +131,8 @@ class SNAPSyncController(
   private var pivotBootstrapRetryTask: Option[Cancellable] = None
 
   private case object RetryPivotRefresh
+  private case object CheckSnapCapability
+  private var snapCapabilityCheckTask: Option[Cancellable] = None
 
   // Storage stagnation watchdog: if storage stops advancing while tasks remain, repivot/restart.
   // This addresses the common case where peers no longer serve the chosen pivot/state window.
@@ -142,7 +144,7 @@ class SNAPSyncController(
   // AccountRange stagnation watchdog: if tasks stop completing, repivot/restart (and possibly fallback).
   // Threshold must be generous enough to allow large chains to complete within the SNAP serve window
   // (~128 blocks * ~13s = ~28 min on ETC). Too aggressive causes infinite restart loops.
-  private val AccountStagnationThreshold: FiniteDuration = 15.minutes
+  private val AccountStagnationThreshold: FiniteDuration = snapSyncConfig.accountStagnationTimeout
   private val AccountStagnationCheckInterval: FiniteDuration = 30.seconds
   private var lastAccountProgressMs: Long = System.currentTimeMillis()
   private var lastAccountTasksCompleted: Int = 0
@@ -162,6 +164,7 @@ class SNAPSyncController(
     healingRequestTask.foreach(_.cancel())
     bootstrapCheckTask.foreach(_.cancel())
     pivotBootstrapRetryTask.foreach(_.cancel())
+    snapCapabilityCheckTask.foreach(_.cancel())
     progressMonitor.stopPeriodicLogging()
 
     // Log final error handler statistics
@@ -189,6 +192,19 @@ class SNAPSyncController(
   }
 
   def syncing: Receive = handlePeerListMessages.orElse {
+    // Snap capability grace period check: if still no snap/1 peers, fall back to fast sync
+    case CheckSnapCapability =>
+      val snapPeerCount = peersToDownloadFrom.count { case (_, p) =>
+        p.peerInfo.remoteStatus.supportsSnap
+      }
+      if (snapPeerCount > 0) {
+        log.info(s"Found $snapPeerCount snap-capable peer(s) during grace period, starting account range sync")
+        stateRoot.foreach(launchAccountRangeWorkers)
+      } else {
+        log.warning("No snap-capable peers found after grace period. Falling back to fast sync.")
+        fallbackToFastSync()
+      }
+
     // Periodic request triggers
     case RequestAccountRanges =>
       requestAccountRanges()
@@ -1027,6 +1043,7 @@ class SNAPSyncController(
     bytecodeRequestTask.foreach(_.cancel())
     storageRangeRequestTask.foreach(_.cancel())
     healingRequestTask.foreach(_.cancel())
+    snapCapabilityCheckTask.foreach(_.cancel())
 
     // Stop progress monitoring
     progressMonitor.stopPeriodicLogging()
@@ -1037,13 +1054,34 @@ class SNAPSyncController(
   }
 
   private def startAccountRangeSync(rootHash: ByteString): Unit = {
-    log.info(s"Starting account range sync with concurrency ${snapSyncConfig.accountConcurrency}")
-    log.info("Using actor-based concurrency for account range sync")
+    // Before starting workers, check if any connected peer supports the snap/1 protocol.
+    // If no peers support snap, the workers will send requests that are silently ignored,
+    // stalling sync until the 3-minute stagnation watchdog fires. Instead, check upfront
+    // and schedule a grace period for peers to connect before falling back to fast sync.
+    val snapPeerCount = peersToDownloadFrom.count { case (_, p) =>
+      p.peerInfo.remoteStatus.supportsSnap
+    }
 
+    if (snapPeerCount == 0) {
+      val gracePeriod = snapSyncConfig.snapCapabilityGracePeriod
+      log.warning(s"No peers with snap/1 capability found ($peersToDownloadFrom.size peers connected)")
+      log.warning(s"Scheduling snap capability check in ${gracePeriod.toSeconds}s before falling back to fast sync")
+      snapCapabilityCheckTask = Some(
+        scheduler.scheduleOnce(gracePeriod, self, CheckSnapCapability)(ec)
+      )
+      return
+    }
+
+    log.info(s"Starting account range sync with concurrency ${snapSyncConfig.accountConcurrency} ($snapPeerCount snap-capable peers)")
+    log.info("Using actor-based concurrency for account range sync")
+    launchAccountRangeWorkers(rootHash)
+  }
+
+  private def launchAccountRangeWorkers(rootHash: ByteString): Unit = {
     // Reset stagnation tracking for this phase.
     lastAccountProgressMs = System.currentTimeMillis()
     lastAccountTasksCompleted = 0
-    
+
     val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
 
     accountRangeCoordinator = Some(
@@ -1059,10 +1097,10 @@ class SNAPSyncController(
         s"account-range-coordinator-$coordinatorGeneration"
       )
     )
-    
+
     // Start the coordinator
     accountRangeCoordinator.foreach(_ ! actors.Messages.StartAccountRangeSync(rootHash))
-    
+
     // Periodically send peer availability notifications
     accountRangeRequestTask = Some(
       scheduler.scheduleWithFixedDelay(
@@ -1946,7 +1984,14 @@ case class SNAPSyncConfig(
     stateValidationEnabled: Boolean = true,
     maxRetries: Int = 3,
     timeout: FiniteDuration = 30.seconds,
-    maxSnapSyncFailures: Int = 5 // Max failures before fallback to fast sync
+    maxSnapSyncFailures: Int = 5, // Max failures before fallback to fast sync
+    // Grace period after bootstrap to wait for snap/1-capable peers before falling back.
+    // If no connected peer advertises snap/1 within this window, fall back to fast sync.
+    snapCapabilityGracePeriod: FiniteDuration = 30.seconds,
+    // Account stagnation timeout: if no account range tasks complete within this window,
+    // record a critical failure (may trigger fallback). Reduced from 15 minutes to catch
+    // non-snap peers faster.
+    accountStagnationTimeout: FiniteDuration = 3.minutes
 )
 
 object SNAPSyncConfig {
@@ -1974,7 +2019,15 @@ object SNAPSyncConfig {
       maxSnapSyncFailures =
         if (snapConfig.hasPath("max-snap-sync-failures"))
           snapConfig.getInt("max-snap-sync-failures")
-        else 5
+        else 5,
+      snapCapabilityGracePeriod =
+        if (snapConfig.hasPath("snap-capability-grace-period"))
+          snapConfig.getDuration("snap-capability-grace-period").toMillis.millis
+        else 30.seconds,
+      accountStagnationTimeout =
+        if (snapConfig.hasPath("account-stagnation-timeout"))
+          snapConfig.getDuration("account-stagnation-timeout").toMillis.millis
+        else 3.minutes
     )
   }
 }
