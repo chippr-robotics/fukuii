@@ -620,9 +620,20 @@ class AccountRangeCoordinator(
 
   private def handleTaskFailed(requestId: BigInt, reason: String): Unit = {
     activeTasks.remove(requestId).foreach { case (task, worker, peer) =>
-      markPeerStateless(peer, reason)
+      // Only mark peer stateless if the task was using the CURRENT root.
+      // After pivot refresh, in-flight requests with the OLD root will fail
+      // with "Missing proof" — but this doesn't mean the peer can't serve the NEW root.
+      if (task.rootHash == stateRoot) {
+        markPeerStateless(peer, reason)
+      } else {
+        log.info(
+          s"Ignoring failure from stale-root request " +
+            s"(task root ${task.rootHash.take(4).toHex} != current ${stateRoot.take(4).toHex})"
+        )
+      }
       log.warning(s"Task failed: $reason")
       task.pending = false
+      task.rootHash = stateRoot
       pendingTasks.enqueue(task)
 
       // Apply cooldown and reduce byte budget for failing peers (unless stateless-marked,

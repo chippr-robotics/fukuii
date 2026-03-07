@@ -129,6 +129,7 @@ bytes/, crypto/, rlp/, scalanet/  # Submodules
 12. **SNAP dynamic concurrency** — Cap workers to `min(accountConcurrency, snapPeerCount)` — 1:1 worker-to-snap-peer mapping prevents peer flooding
 13. **SNAP in-place pivot refresh** — `PivotRefreshed` message updates coordinator's state root without stop/restart, preserving progress seamlessly
 14. **SNAP stale peer accumulation** — Deduplicate `knownAvailablePeers` by `remoteAddress` on peer reconnection. Prevents inflated `activePeerCount` from stale entries across all 3 coordinators.
+15. **SNAP false stateless after pivot refresh** — `handleTaskFailed` unconditionally marked peers stateless, even when failures came from stale-root in-flight requests after pivot refresh. Added `task.rootHash == stateRoot` guard. Eliminates ~2min wasted thrashing per pivot refresh cycle.
 
 ---
 
