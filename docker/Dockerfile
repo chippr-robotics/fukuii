@@ -68,8 +68,9 @@ LABEL org.opencontainers.image.source="https://github.com/chippr-robotics/fukuii
 LABEL org.opencontainers.image.documentation="https://github.com/chippr-robotics/fukuii/blob/main/docs/deployment/docker.md"
 
 # Create non-root user (Ubuntu 24.04 base has 'ubuntu' at uid/gid 1000)
-RUN userdel ubuntu 2>/dev/null || true && rm -rf /home/ubuntu && \
-    groupdel "$(getent group 1000 | cut -d: -f1)" 2>/dev/null || true && \
+RUN userdel ubuntu 2>/dev/null || true && \
+    groupdel ubuntu 2>/dev/null || true && \
+    rm -rf /home/ubuntu && \
     groupadd -r fukuii --gid=1000 && \
     useradd -r -g fukuii --uid=1000 --home-dir=/home/fukuii --shell=/bin/bash fukuii && \
     mkdir -p /home/fukuii /app/data /app/conf && \

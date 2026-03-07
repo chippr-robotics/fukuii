@@ -4,7 +4,7 @@ This page provides an interactive, browsable reference for all Fukuii JSON-RPC A
 
 ## About This Reference
 
-This interactive API documentation is generated from the Insomnia workspace and covers all **97 JSON-RPC endpoints** across **11 namespaces**:
+This interactive API documentation is generated from the Insomnia workspace and covers all **97 JSON-RPC endpoints** across **10 namespaces**:
 
 - **ETH**: Core Ethereum blockchain operations
 - **WEB3**: Utility methods

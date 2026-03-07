@@ -4,7 +4,7 @@ This guide explains how to use the Fukuii Insomnia workspace to test and interac
 
 ## Overview
 
-The `insomnia_workspace.json` file contains a complete collection of all 77 JSON-RPC endpoints implemented in Fukuii, organized into 11 namespaces for easy navigation and testing. See the [RPC Endpoint Inventory](./RPC_ENDPOINT_INVENTORY.md) for the complete 97-endpoint catalog including the MCP namespace.
+The `insomnia_workspace.json` file contains a complete collection of all 77 JSON-RPC endpoints implemented in Fukuii, organized into 10 namespaces for easy navigation and testing. See the [RPC Endpoint Inventory](./RPC_ENDPOINT_INVENTORY.md) for the complete 97-endpoint catalog including the MCP namespace.
 
 ## Installation
 

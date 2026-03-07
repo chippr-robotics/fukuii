@@ -10,7 +10,7 @@ This document provides a comprehensive analysis of the Fukuii JSON-RPC API imple
 
 Fukuii implements a comprehensive set of JSON-RPC APIs that align with the Ethereum execution-apis specification while also providing Ethereum Classic (ETC) specific extensions and additional utility APIs for testing and debugging.
 
-**Total Implemented Methods:** 77 methods across 11 namespaces
+**Total Implemented Methods:** 77 methods across 10 namespaces
 
 ## Implemented API Namespaces
 
