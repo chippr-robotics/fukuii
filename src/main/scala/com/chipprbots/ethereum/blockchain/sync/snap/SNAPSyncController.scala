@@ -75,6 +75,15 @@ class SNAPSyncController(
   private var pivotBlock: Option[BigInt] = None
   private var stateRoot: Option[ByteString] = None
 
+  // Preserved account range progress across SNAP sync restarts (core-geth parity).
+  // Maps range `last` hash → current `next` position for ALL ranges (not just completed ones).
+  // Content-addressed MPT storage survives pivot changes (accounts keyed by keccak256 hash),
+  // so already-traversed keyspace doesn't need re-downloading if the pivot
+  // hasn't drifted too far (within MaxPreservedPivotDistance blocks).
+  private var preservedRangeProgress: Map[ByteString, ByteString] = Map.empty
+  private var preservedAtPivotBlock: Option[BigInt] = None
+  private val MaxPreservedPivotDistance: BigInt = 256
+
   // Guards to prevent duplicate phase-starts when upstream coordinators emit duplicate completion signals.
   private var bytecodeSyncStarting: Boolean = false
   private var storageRangeSyncStarting: Boolean = false
@@ -141,13 +150,16 @@ class SNAPSyncController(
   private val StorageStagnationCheckInterval: FiniteDuration = 30.seconds
   private var lastStorageProgressMs: Long = System.currentTimeMillis()
 
-  // AccountRange stagnation watchdog: if tasks stop completing, repivot/restart (and possibly fallback).
-  // Threshold must be generous enough to allow large chains to complete within the SNAP serve window
-  // (~128 blocks * ~13s = ~28 min on ETC). Too aggressive causes infinite restart loops.
+  // AccountRange stagnation watchdog: if no download progress occurs, repivot/restart (and possibly fallback).
+  // Tracks both task completions AND accountsDownloaded as liveness signals. The sync is only
+  // stalled if neither metric advances within the threshold window. This prevents false stagnation
+  // triggers when accounts are being downloaded steadily but no single 1/16th chunk has finished yet
+  // (common with many concurrent workers and few peers).
   private val AccountStagnationThreshold: FiniteDuration = snapSyncConfig.accountStagnationTimeout
   private val AccountStagnationCheckInterval: FiniteDuration = 30.seconds
   private var lastAccountProgressMs: Long = System.currentTimeMillis()
   private var lastAccountTasksCompleted: Int = 0
+  private var lastAccountsDownloaded: Long = 0
 
   override def preStart(): Unit = {
     log.info("SNAP Sync Controller initialized")
@@ -198,8 +210,9 @@ class SNAPSyncController(
         p.peerInfo.remoteStatus.supportsSnap
       }
       if (snapPeerCount > 0) {
-        log.info(s"Found $snapPeerCount snap-capable peer(s) during grace period, starting account range sync")
-        stateRoot.foreach(launchAccountRangeWorkers)
+        val effectiveConcurrency = math.min(snapSyncConfig.accountConcurrency, snapPeerCount).max(1)
+        log.info(s"Found $snapPeerCount snap-capable peer(s) during grace period, starting account range sync (concurrency=$effectiveConcurrency)")
+        stateRoot.foreach(launchAccountRangeWorkers(_, effectiveConcurrency))
       } else {
         log.warning("No snap-capable peers found after grace period. Falling back to fast sync.")
         fallbackToFastSync()
@@ -248,6 +261,19 @@ class SNAPSyncController(
       progressMonitor.incrementAccountsSynced(count)
       // Real account downloads mean SNAP is making progress — reset the pivot refresh counter.
       if (count > 0) consecutivePivotRefreshes = 0
+
+    case actors.Messages.AccountRangeProgress(progress) =>
+      preservedRangeProgress = progress
+      if (preservedAtPivotBlock.isEmpty) {
+        preservedAtPivotBlock = pivotBlock
+      }
+      val completedCount = progress.count { case (last, next) =>
+        // A range is "complete" when next >= last (entire keyspace traversed)
+        next == last || BigInt(1, next.toArray.padTo(32, 0.toByte)) >= BigInt(1, last.toArray.padTo(32, 0.toByte))
+      }
+      log.info(
+        s"Preserved account range progress: ${progress.size} ranges ($completedCount fully complete)"
+      )
 
     case ProgressAccountsFinalizingTrie =>
       progressMonitor.setFinalizingTrie(true)
@@ -530,7 +556,7 @@ class SNAPSyncController(
   // Internal message for periodic account stagnation checks
   private case object CheckAccountStagnation
 
-  private case class AccountCoordinatorProgress(progress: actors.AccountRangeProgress)
+  private case class AccountCoordinatorProgress(progress: actors.AccountRangeStats)
 
   private def scheduleAccountStagnationChecks(): Unit = {
     accountStagnationCheckTask.foreach(_.cancel())
@@ -1072,17 +1098,48 @@ class SNAPSyncController(
       return
     }
 
-    log.info(s"Starting account range sync with concurrency ${snapSyncConfig.accountConcurrency} ($snapPeerCount snap-capable peers)")
+    // Dynamic concurrency: use min(configured, peerCount) so each worker maps 1:1 to a peer.
+    // With 16 ranges but only 4 peers, ranges never complete before stagnation.
+    // With 4 ranges and 4 peers, each range gets dedicated throughput and finishes faster.
+    val effectiveConcurrency = math.min(snapSyncConfig.accountConcurrency, snapPeerCount).max(1)
+    log.info(s"Starting account range sync with concurrency $effectiveConcurrency ($snapPeerCount snap-capable peers, configured max ${snapSyncConfig.accountConcurrency})")
     log.info("Using actor-based concurrency for account range sync")
-    launchAccountRangeWorkers(rootHash)
+    launchAccountRangeWorkers(rootHash, effectiveConcurrency)
   }
 
-  private def launchAccountRangeWorkers(rootHash: ByteString): Unit = {
+  private def launchAccountRangeWorkers(rootHash: ByteString, concurrency: Int = -1): Unit = {
+    val effectiveConcurrency = if (concurrency > 0) concurrency else snapSyncConfig.accountConcurrency
     // Reset stagnation tracking for this phase.
     lastAccountProgressMs = System.currentTimeMillis()
     lastAccountTasksCompleted = 0
+    lastAccountsDownloaded = 0
 
-    val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
+    // Safety valve: only preserve range progress if pivot hasn't drifted too far.
+    // Content-addressed MPT data is valid across adjacent pivots (~256 blocks apart),
+    // but large drift means the state may have changed significantly.
+    val currentPivot = pivotBlock.getOrElse(BigInt(0))
+    val resumeProgress: Map[ByteString, ByteString] = preservedAtPivotBlock match {
+      case Some(prevPivot) if (currentPivot - prevPivot).abs <= MaxPreservedPivotDistance =>
+        if (preservedRangeProgress.nonEmpty) {
+          log.info(
+            s"Resuming ${preservedRangeProgress.size} account ranges from pivot $prevPivot " +
+              s"(current pivot=$currentPivot, drift=${(currentPivot - prevPivot).abs} blocks)"
+          )
+        }
+        preservedRangeProgress
+      case Some(prevPivot) =>
+        log.info(
+          s"Pivot drifted ${(currentPivot - prevPivot).abs} blocks (>${MaxPreservedPivotDistance}), " +
+            s"clearing ${preservedRangeProgress.size} preserved ranges"
+        )
+        preservedRangeProgress = Map.empty
+        preservedAtPivotBlock = None
+        Map.empty
+      case None =>
+        Map.empty
+    }
+
+    val storage = getOrCreateMptStorage(currentPivot)
 
     accountRangeCoordinator = Some(
       context.actorOf(
@@ -1091,8 +1148,9 @@ class SNAPSyncController(
           networkPeerManager = networkPeerManager,
           requestTracker = requestTracker,
           mptStorage = storage,
-          concurrency = snapSyncConfig.accountConcurrency,
-          snapSyncController = self
+          concurrency = effectiveConcurrency,
+          snapSyncController = self,
+          resumeProgress = resumeProgress
         ).withDispatcher("sync-dispatcher"),
         s"account-range-coordinator-$coordinatorGeneration"
       )
@@ -1319,12 +1377,12 @@ class SNAPSyncController(
           implicit val timeout: Timeout = Timeout(2.seconds)
 
           (coordinator ? actors.Messages.GetProgress)
-            .mapTo[actors.AccountRangeProgress]
+            .mapTo[actors.AccountRangeStats]
             .map(AccountCoordinatorProgress.apply)
             .recover { case ex =>
               log.debug(s"Account stagnation check failed to query coordinator: ${ex.getMessage}")
               AccountCoordinatorProgress(
-                actors.AccountRangeProgress(
+                actors.AccountRangeStats(
                   accountsDownloaded = 0L,
                   bytesDownloaded = 0L,
                   tasksCompleted = 0,
@@ -1802,16 +1860,23 @@ class SNAPSyncController(
     )
   }
 
-  private def maybeRestartIfAccountStagnant(progress: actors.AccountRangeProgress): Unit = {
+  private def maybeRestartIfAccountStagnant(progress: actors.AccountRangeStats): Unit = {
     if (currentPhase != AccountRangeSync) return
 
     // Only consider it a stall if there is still work to do.
     val workRemaining = progress.tasksPending > 0 || progress.tasksActive > 0
     if (!workRemaining) return
 
-    // Update liveness based on task completions (even if accountsDownloaded stays flat).
-    if (progress.tasksCompleted > lastAccountTasksCompleted) {
+    // Update liveness based on task completions OR account download progress.
+    // The sync is making progress if EITHER metric advances. This prevents false
+    // stagnation when accounts are downloading steadily across all 16 chunks but
+    // no single chunk has finished its full 1/16th range yet.
+    val taskProgress = progress.tasksCompleted > lastAccountTasksCompleted
+    val downloadProgress = progress.accountsDownloaded > lastAccountsDownloaded
+
+    if (taskProgress || downloadProgress) {
       lastAccountTasksCompleted = progress.tasksCompleted
+      lastAccountsDownloaded = progress.accountsDownloaded
       lastAccountProgressMs = System.currentTimeMillis()
       return
     }
@@ -1825,7 +1890,7 @@ class SNAPSyncController(
     lastPivotRestartMs = now
 
     val context =
-      s"account range sync stalled: no task completions for ${stalledForMs / 1000}s " +
+      s"account range sync stalled: no download progress for ${stalledForMs / 1000}s " +
         s"(threshold=${AccountStagnationThreshold.toSeconds}s), accountsDownloaded=${progress.accountsDownloaded}, " +
         s"tasksPending=${progress.tasksPending}, tasksActive=${progress.tasksActive}"
 

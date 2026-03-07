@@ -28,6 +28,11 @@ object Messages {
   case class ContractStorageAccountsResponse(accounts: Seq[(ByteString, ByteString)]) extends AccountRangeCoordinatorMessage
   case object CheckCompletion extends AccountRangeCoordinatorMessage
 
+  /** Sent by AccountRangeCoordinator to SNAPSyncController with progress for ALL ranges.
+    * Maps range `last` hash → current `next` position. Used to resume partial ranges
+    * across SNAP sync restarts (core-geth parity: preserves task.Next across pivot changes). */
+  case class AccountRangeProgress(progress: Map[ByteString, ByteString]) extends AccountRangeCoordinatorMessage
+
   /** Sent by SNAPSyncController when a fresher pivot has been selected.
     * Coordinator updates pending tasks with the new root and resumes downloading. */
   case class PivotRefreshed(newStateRoot: ByteString) extends AccountRangeCoordinatorMessage

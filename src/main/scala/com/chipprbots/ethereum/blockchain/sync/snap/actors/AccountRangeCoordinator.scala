@@ -50,7 +50,8 @@ class AccountRangeCoordinator(
     requestTracker: SNAPRequestTracker,
     mptStorage: MptStorage,
     concurrency: Int,
-    snapSyncController: ActorRef
+    snapSyncController: ActorRef,
+    resumeProgress: Map[ByteString, ByteString] = Map.empty
 ) extends Actor
     with ActorLogging {
 
@@ -142,8 +143,38 @@ class AccountRangeCoordinator(
     )
   }
 
-  // Task management
-  private val pendingTasks = mutable.Queue[AccountTask](AccountTask.createInitialTasks(stateRoot, concurrency): _*)
+  // Task management — resume ranges from saved positions (core-geth parity).
+  // On restart, each range resumes from its saved `next` position instead of starting from 0x00.
+  private val allInitialTasks = AccountTask.createInitialTasks(stateRoot, concurrency)
+  private val (skippedTasks, remainingTasks) = if (resumeProgress.nonEmpty) {
+    val resumed = allInitialTasks.map { task =>
+      resumeProgress.get(task.last) match {
+        case Some(savedNext) if BigInt(1, savedNext.toArray.padTo(32, 0.toByte)) >=
+            BigInt(1, task.last.toArray.padTo(32, 0.toByte)) =>
+          // Range fully traversed — mark as done
+          task.next = task.last
+          task.done = true
+          task
+        case Some(savedNext) if savedNext != task.next =>
+          log.info(
+            s"Resuming range ${task.rangeString} from saved position ${savedNext.take(4).toArray.map("%02x".format(_)).mkString}"
+          )
+          task.next = savedNext
+          task
+        case _ => task
+      }
+    }
+    val (done, todo) = resumed.partition(_.done)
+    (done, todo)
+  } else {
+    (Seq.empty, allInitialTasks)
+  }
+  // Priority queue: dequeue the task with the SMALLEST remaining keyspace first.
+  // This focuses workers on nearly-complete ranges, ensuring at least some ranges
+  // finish before peers stop responding (instead of spreading work evenly across all 16).
+  private val pendingTasks = mutable.PriorityQueue[AccountTask](remainingTasks: _*)(
+    Ordering.by[AccountTask, BigInt](_.remainingKeyspace).reverse
+  )
   private val activeTasks = mutable.Map[BigInt, (AccountTask, ActorRef, Peer)]() // requestId -> (task, worker, peer)
   private val completedTasks = mutable.ArrayBuffer[AccountTask]()
 
@@ -154,6 +185,12 @@ class AccountRangeCoordinator(
   private var accountsDownloaded: Long = 0
   private var bytesDownloaded: Long = 0
   private val startTime = System.currentTimeMillis()
+  private var lastProgressLogAt: Long = 0 // accounts count at last periodic log
+  private val ProgressLogInterval: Long = 100_000 // log every 100K accounts
+  private val totalKeyspace: BigInt = BigInt(2).pow(256)
+  // Cumulative keyspace consumed: incremented each time a task's `next` advances.
+  // This avoids the jitter from snapshotting in-flight task positions.
+  private var consumedKeyspace: BigInt = BigInt(0)
 
   // Contract accounts collected for bytecode download
   private val contractAccounts = mutable.ArrayBuffer[(ByteString, ByteString)]()
@@ -165,12 +202,18 @@ class AccountRangeCoordinator(
   // without waiting for the next PeerAvailable message.
   private val knownAvailablePeers = mutable.Set[Peer]()
 
+  /** Number of active (non-stateless, non-cooling-down) snap-capable peers.
+    * Used to cap worker count — one worker per peer avoids peer flooding.
+    */
+  private def activePeerCount: Int =
+    knownAvailablePeers.count(p => !isPeerStateless(p) && !isPeerCoolingDown(p)).max(1)
+
   // Per-peer adaptive byte budgeting (ported from StorageRangeCoordinator).
   // Geth's snap handler supports up to 2MB responses. Starting at 512KB and probing upward
   // on responsive peers, scaling down on failures.
   private val minResponseBytes: BigInt = 50 * 1024 // 50KB floor
   private val maxResponseBytes: BigInt = 2 * 1024 * 1024 // 2MB ceiling (Geth handler limit)
-  private val initialResponseBytes: BigInt = 512 * 1024 // 512KB starting point
+  private val initialResponseBytes: BigInt = 2 * 1024 * 1024 // Start at max — peers return what they can, adaptive logic adjusts down if needed
   private val increaseFactor: Double = 1.25 // Scale up when 90%+ fill
   private val decreaseFactor: Double = 0.5 // Scale down on failure/empty
 
@@ -241,11 +284,32 @@ class AccountRangeCoordinator(
   }
 
   override def preStart(): Unit = {
-    log.info(s"AccountRangeCoordinator starting with $concurrency workers")
+    if (skippedTasks.nonEmpty) {
+      log.info(
+        s"AccountRangeCoordinator starting with $concurrency workers — " +
+          s"skipping ${skippedTasks.size}/${allInitialTasks.size} ranges (already completed in previous attempt)"
+      )
+    } else {
+      log.info(s"AccountRangeCoordinator starting with $concurrency workers")
+    }
+    // If all tasks were already completed, report completion immediately
+    if (pendingTasks.isEmpty && activeTasks.isEmpty) {
+      import context.dispatcher
+      context.system.scheduler.scheduleOnce(100.millis, self, CheckCompletion)
+    }
   }
 
   override def postStop(): Unit = {
+    // Send final progress snapshot so controller can resume from saved positions on restart
+    sendProgressSnapshot()
     log.info(s"AccountRangeCoordinator stopped. Downloaded $accountsDownloaded accounts")
+  }
+
+  /** Collect current task positions and send to controller for resume across restarts. */
+  private def sendProgressSnapshot(): Unit = {
+    val allTasks = pendingTasks.iterator ++ activeTasks.values.map(_._1) ++ completedTasks
+    val progress: Map[ByteString, ByteString] = allTasks.map(t => t.last -> t.next).toMap
+    snapSyncController ! AccountRangeProgress(progress)
   }
 
   // Supervision strategy: Restart worker on failure
@@ -305,21 +369,16 @@ class AccountRangeCoordinator(
       } else if (pendingTasks.isEmpty) {
         log.debug("No pending tasks")
       } else {
-        // Fill as many idle workers as possible for this peer.
-        var keepDispatching = true
-        while (keepDispatching && pendingTasks.nonEmpty) {
-          val maybeIdleWorker = workers.find(w => !activeTasks.values.exists(_._2 == w))
-          val worker = maybeIdleWorker.orElse {
-            if (workers.size < concurrency) Some(createWorker()) else None
-          }
-
-          worker match {
-            case Some(w) =>
-              dispatchNextTaskToWorker(w, peer)
-            case None =>
-              keepDispatching = false
-              log.debug("No idle workers available")
-          }
+        // Dispatch ONE task per peer to avoid flooding a single peer with concurrent requests.
+        // Cap total workers to active peer count — each peer handles one request at a time.
+        val maxWorkers = math.min(concurrency, activePeerCount)
+        val maybeIdleWorker = workers.find(w => !activeTasks.values.exists(_._2 == w))
+        val worker = maybeIdleWorker.orElse {
+          if (workers.size < maxWorkers) Some(createWorker()) else None
+        }
+        worker match {
+          case Some(w) => dispatchNextTaskToWorker(w, peer)
+          case None => log.debug("No idle workers available")
         }
       }
 
@@ -493,16 +552,23 @@ class AccountRangeCoordinator(
   private def updateTaskProgress(task: AccountTask, accounts: Seq[(ByteString, Account)]): Boolean = {
     // If the peer returns no accounts for this segment, we assume the remainder of the interval is empty.
     if (accounts.isEmpty) {
+      consumedKeyspace += task.remainingKeyspace
       return true
     }
 
     val lastHash = accounts.last._1
     if (isMaxHash(lastHash)) {
       // Cannot advance beyond 0xFF..; this must be the end.
+      consumedKeyspace += task.remainingKeyspace
       return true
     }
 
     val nextStart = incrementHash32(lastHash)
+    // Track keyspace consumed: distance from old next to new next
+    val oldNext = BigInt(1, task.next.toArray.padTo(32, 0.toByte))
+    val newNext = BigInt(1, nextStart.toArray.padTo(32, 0.toByte))
+    val advanced = (newNext - oldNext).max(BigInt(0))
+    consumedKeyspace += advanced
     task.next = nextStart
 
     // If this task has no upper bound, keep going until peer returns empty.
@@ -575,10 +641,11 @@ class AccountRangeCoordinator(
       .toList
     if (eligiblePeers.isEmpty) return
 
+    val maxWorkers = math.min(concurrency, activePeerCount)
     for (peer <- eligiblePeers if pendingTasks.nonEmpty) {
       val maybeIdleWorker = workers.find(w => !activeTasks.values.exists(_._2 == w))
       val worker = maybeIdleWorker.orElse {
-        if (workers.size < concurrency) Some(createWorker()) else None
+        if (workers.size < maxWorkers) Some(createWorker()) else None
       }
       worker.foreach(w => dispatchNextTaskToWorker(w, peer))
     }
@@ -611,18 +678,39 @@ class AccountRangeCoordinator(
       accountsDownloaded += chunk.size
       snapSyncController ! SNAPSyncController.ProgressAccountsSynced(chunk.size.toLong)
 
+      // Periodic progress log (every 100K accounts) to show download rate without per-chunk noise
+      if (accountsDownloaded - lastProgressLogAt >= ProgressLogInterval) {
+        val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
+        val rate = if (elapsed > 0) (accountsDownloaded / elapsed).toLong else 0L
+        val pct = (consumedKeyspace * 10000 / totalKeyspace).toDouble / 100.0
+        log.info(
+          s"Account download progress: $accountsDownloaded accounts (${"%.1f".format(pct)}% keyspace) " +
+            s"(${completedTasks.size}/$concurrency ranges done, " +
+            s"${pendingTasks.size} pending, ${activeTasks.size} active, " +
+            s"${workers.size} workers/${activePeerCount} peers, " +
+            s"${rate} accounts/sec)"
+        )
+        lastProgressLogAt = accountsDownloaded
+      }
+
       if (rest.nonEmpty) {
-        log.info(s"Stored chunk: $newStored/$totalCount accounts (${rest.size} remaining)")
+        log.debug(s"Stored chunk: $newStored/$totalCount accounts (${rest.size} remaining)")
         // Yield to actor mailbox - other messages (PeerAvailable, responses) process before next chunk
         self ! StoreAccountChunk(task, rest, totalCount, newStored, isTaskRangeComplete)
       } else {
         // All chunks for this response stored in-memory. No flush here — the entire trie
         // stays in memory and is flushed once at the end in finalizeTrie().
-        log.info(s"Stored all $totalCount accounts in-memory ($accountsDownloaded total)")
+        log.debug(s"Stored all $totalCount accounts in-memory ($accountsDownloaded total)")
 
         if (isTaskRangeComplete) {
           task.done = true
           completedTasks += task
+          log.info(
+            s"Account range COMPLETE: ${task.rangeString} " +
+              s"(${completedTasks.size}/$concurrency ranges done, $accountsDownloaded accounts total)"
+          )
+          // Send progress snapshot so controller can resume from saved positions
+          sendProgressSnapshot()
         } else {
           // Need more requests for the same interval; re-queue with updated `next`.
           pendingTasks.enqueue(task)
@@ -733,12 +821,12 @@ class AccountRangeCoordinator(
   }
 
 
-  private def calculateProgress(): AccountRangeProgress = {
+  private def calculateProgress(): AccountRangeStats = {
     val total = completedTasks.size + activeTasks.size + pendingTasks.size
     val progress = if (total == 0) 1.0 else completedTasks.size.toDouble / total
     val elapsedMs = System.currentTimeMillis() - startTime
 
-    AccountRangeProgress(
+    AccountRangeStats(
       accountsDownloaded = accountsDownloaded,
       bytesDownloaded = bytesDownloaded,
       tasksCompleted = completedTasks.size,
@@ -794,7 +882,8 @@ object AccountRangeCoordinator {
       requestTracker: SNAPRequestTracker,
       mptStorage: MptStorage,
       concurrency: Int,
-      snapSyncController: ActorRef
+      snapSyncController: ActorRef,
+      resumeProgress: Map[ByteString, ByteString] = Map.empty
   ): Props =
     Props(
       new AccountRangeCoordinator(
@@ -803,12 +892,13 @@ object AccountRangeCoordinator {
         requestTracker,
         mptStorage,
         concurrency,
-        snapSyncController
+        snapSyncController,
+        resumeProgress
       )
     )
 }
 
-case class AccountRangeProgress(
+case class AccountRangeStats(
     accountsDownloaded: Long,
     bytesDownloaded: Long,
     tasksCompleted: Int,

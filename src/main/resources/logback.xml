@@ -210,6 +210,8 @@
     
     <!-- SNAP sync internals -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap" level="ERROR" />
+    <!-- SNAP sync actors (AccountRangeCoordinator, workers) — INFO for optimization visibility -->
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.actors" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.AccountRangeDownloader" level="ERROR" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.StorageRangeDownloader" level="ERROR" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.TrieNodeHealer" level="ERROR" />

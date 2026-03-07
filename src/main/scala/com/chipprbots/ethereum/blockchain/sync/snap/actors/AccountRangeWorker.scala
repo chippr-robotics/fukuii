@@ -89,7 +89,7 @@ class AccountRangeWorker(
     case AccountRangeResponseMsg(response) =>
       currentTask match {
         case Some((task, peer, reqId)) if response.requestId == reqId =>
-          log.info(
+          log.debug(
             s"Received AccountRange: reqId=$reqId range=${task.rangeString} " +
               s"start=${task.next.take(4).toHex} limit=${task.last.take(4).toHex} " +
               s"accounts=${response.accounts.size} proofNodes=${response.proof.size}"
@@ -121,7 +121,7 @@ class AccountRangeWorker(
               coordinator ! TaskFailed(reqId, error)
 
             case Right(_) =>
-              log.info(s"Successfully received $accountCount accounts")
+              log.debug(s"Successfully received $accountCount accounts")
               coordinator ! TaskComplete(reqId, Right((accountCount, response.accounts, response.proof)))
           }
           
