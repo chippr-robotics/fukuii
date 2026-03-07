@@ -361,6 +361,10 @@ class AccountRangeCoordinator(
       tryRedispatchPendingTasks()
 
     case PeerAvailable(peer) =>
+      // Evict stale entry for same physical node (reconnection creates new PeerId)
+      val evicted = knownAvailablePeers.filter(_.remoteAddress == peer.remoteAddress)
+      knownAvailablePeers --= evicted
+      evicted.foreach(p => statelessPeers -= p.id)
       knownAvailablePeers += peer
       if (isPeerStateless(peer)) {
         log.debug(s"Ignoring PeerAvailable(${peer.id.value}) - peer is stateless for current root")

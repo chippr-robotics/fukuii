@@ -133,6 +133,8 @@ class TrieNodeHealingCoordinator(
       tryRedispatchPendingTasks()
 
     case HealingPeerAvailable(peer) =>
+      // Evict stale entry for same physical node (reconnection creates new PeerId)
+      knownAvailablePeers.filterInPlace(_.remoteAddress != peer.remoteAddress)
       knownAvailablePeers += peer
       if (isPeerCoolingDown(peer)) {
         log.debug(s"Peer ${peer.id.value} is cooling down, skipping dispatch")

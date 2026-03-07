@@ -201,7 +201,7 @@ Each table maps EIP/ECIP specifications from a fork era to test coverage across 
 | Feature | Status | Details |
 |---------|--------|---------|
 | Mordor genesis hash cross-validation | VERIFIED | All 3 clients produce identical genesis hash on Mordor (chain ID 63) |
-| Mordor block sync | PARTIAL | core-geth: synced to head; Besu: synced to 175K; Fukuii: SNAP sync started |
+| Mordor block sync | PARTIAL | core-geth: synced to head; Besu: synced to 175K; Fukuii: SNAP sync functional on ETC mainnet (11.2% keyspace, 9.6M accounts, 7 seamless pivot refreshes) |
 | Live network tests (Mordor) | Besu only | `MordorLiveTest.java` — 9 tests (chain ID, genesis hash, PoW structure, difficulty, gas limit, ECIP-1099, ECIP-1017) |
 | Live network tests (ETC mainnet) | Besu only | `EtcMainnetLiveTest.java` — 9+ tests (chain ID, genesis hash, Spiral activation, era rewards) |
 

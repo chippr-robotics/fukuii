@@ -2,16 +2,16 @@
 
 **Branch:** `alpha` (derived from `main` at v0.1.240)
 **Author:** Christopher Mercer (chris-mercer) + Claude Opus 4.6
-**Date:** 2026-03-06
-**Commits:** 53 (12 bug fixes + 7 chores + 3 features + 2 test suites + 1 cleanup + 1 config fix + 1 dep bump + 10 docs + 1 consensus fix + 2 sync fixes + 1 MCP + 12 alpha stabilization)
+**Date:** 2026-03-07
+**Commits:** 55 (14 bug fixes + 7 chores + 3 features + 2 test suites + 1 cleanup + 1 config fix + 1 dep bump + 10 docs + 1 consensus fix + 2 sync fixes + 1 MCP + 12 alpha stabilization)
 
 ---
 
 ## Summary
 
-The `alpha` branch is a systematic stabilization pass over Fukuii v0.1.240. Over 16 phases of testing, every major subsystem was exercised on both Mordor testnet and ETC mainnet using the assembly JAR. **11 bugs were found and fixed**, then the branch was extended with ECBP-1100 (MESS) wiring (later rewritten to match the ECIP-1100 polynomial spec), comprehensive consensus test suites, gas limit convergence logic, and dependency updates.
+The `alpha` branch is a systematic stabilization pass over Fukuii v0.1.240. Over 16 phases of testing, every major subsystem was exercised on both Mordor testnet and ETC mainnet using the assembly JAR. **14 bugs were found and fixed**, then the branch was extended with ECBP-1100 (MESS) wiring (later rewritten to match the ECIP-1100 polynomial spec), comprehensive consensus test suites, gas limit convergence logic, dependency updates, and SNAP sync optimizations (partial range resume, dynamic concurrency, in-place pivot refresh).
 
-**Test results:** 2,195 unit tests passing, clean compile, assembly JAR verified on Mordor.
+**Test results:** 2,195 unit tests passing, clean compile, assembly JAR verified on Mordor and ETC mainnet.
 
 ---
 
@@ -251,6 +251,46 @@ The alpha stabilization was validated through 16 phases of systematic testing ("
 - `src/test/scala/.../jsonrpc/PersonalServiceSpec.scala` (+2 new tests)
 
 **Tests:** 2 new tests covering both `SendTransactionWithPassphraseRequest` and `SendTransactionRequest` paths when state is unavailable.
+
+### Bug 13: SNAP Sync Optimization Suite (High)
+**Commit:** `eeb814779` — feat: SNAP sync partial range resume, dynamic concurrency, and keyspace tracking
+
+**Problem:** SNAP sync on ETC mainnet was functionally broken — core-geth's snap serve window (~128 blocks ≈ 10-16 min) expired before any range completed. Progress was lost on every pivot refresh. Additionally, workers flooded single peers with concurrent requests.
+
+**Root cause:** Multiple interrelated issues:
+1. Only fully-completed ranges were preserved across restarts — with ~5% keyspace per window, no range ever completed
+2. No snap capability check — sync started without verifying snap/1 peer availability
+3. Stagnation watchdog tracked only task completions as liveness, but each 1/16th range takes ~200s vs 180s threshold
+4. Fixed concurrency regardless of snap peer count led to peer flooding
+
+**Fix (5 optimizations in 1 commit):**
+1. **Partial range resume:** `AccountRangeProgress` message + `postStop()` snapshot preserves `task.next` positions across pivot changes (core-geth parity). 256-block safety valve.
+2. **Dynamic concurrency:** `min(accountConcurrency, snapPeerCount)` — 1:1 worker-to-snap-peer mapping
+3. **In-place pivot refresh:** `PivotRefreshed` message updates coordinator's state root without stop/restart, preserving progress seamlessly
+4. **Snap capability check:** Grace period before falling back to fast sync if no snap/1 peers
+5. **Cumulative keyspace tracking:** `consumedKeyspace: BigInt` provides monotonic progress percentage
+
+**Files changed:**
+- `src/main/scala/.../snap/SNAPSyncController.scala` (dynamic concurrency, preservedRangeProgress, pivot refresh forwarding)
+- `src/main/scala/.../snap/actors/AccountRangeCoordinator.scala` (resume logic, priority queue, postStop, PivotRefreshed handler)
+- `src/main/scala/.../snap/actors/Messages.scala` (AccountRangeProgress, PivotRefreshed messages)
+- `src/main/scala/.../snap/AccountTask.scala` (remainingKeyspace method)
+
+**Live verification:** 7 seamless pivot refreshes over ~110 minutes on ETC mainnet, zero progress lost. 11.2% keyspace covered (~9.6M accounts) with 1 snap peer. Monotonic progress 0.2% → 11.2%.
+
+### Bug 14: SNAP Stale Peer Accumulation (Medium)
+**Commit:** (this session) — fix: deduplicate stale peers in SNAP coordinators
+
+**Problem:** Progress logs showed "1 workers/4 peers" when only 1 physical snap peer existed, and `activePeerCount` was inflated, defeating the dynamic concurrency cap.
+
+**Root cause:** `knownAvailablePeers: mutable.Set[Peer]` in Account, Storage, and Healing coordinators only grew — peers were never removed on disconnect. Since `Peer` is a case class with `PeerId` derived from `ActorRef.path.name`, each reconnection of the same physical node created a new `Peer` entry. The controller's `PeerListSupportNg` handles `PeerDisconnected` internally (`removePeerById` is private), but never forwards disconnect signals to coordinators.
+
+**Fix:** Deduplicate by `remoteAddress` on `PeerAvailable` insertion — evict stale entries for the same physical node before adding the new one. Also clean `statelessPeers` for evicted `PeerId`s. 1-line addition per coordinator, no new messages or trait changes.
+
+**Files changed:**
+- `src/main/scala/.../snap/actors/AccountRangeCoordinator.scala` (+3 lines)
+- `src/main/scala/.../snap/actors/StorageRangeCoordinator.scala` (+3 lines)
+- `src/main/scala/.../snap/actors/TrieNodeHealingCoordinator.scala` (+2 lines)
 
 ---
 

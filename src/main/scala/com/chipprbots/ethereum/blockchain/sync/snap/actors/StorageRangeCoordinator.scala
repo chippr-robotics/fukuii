@@ -276,6 +276,10 @@ class StorageRangeCoordinator(
       log.debug(s"Added storage task for account ${task.accountString} to queue")
 
     case StoragePeerAvailable(peer) =>
+      // Evict stale entry for same physical node (reconnection creates new PeerId)
+      val evicted = knownAvailablePeers.filter(_.remoteAddress == peer.remoteAddress)
+      knownAvailablePeers --= evicted
+      evicted.foreach(p => statelessPeers -= p.id.value)
       knownAvailablePeers += peer
       if (isPeerStateless(peer)) {
         log.debug(s"Ignoring StoragePeerAvailable(${peer.id.value}) - peer is stateless for current root")

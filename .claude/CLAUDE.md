@@ -123,6 +123,12 @@ bytes/, crypto/, rlp/, scalanet/  # Submodules
 6. **JSON-RPC error format** — Proper error responses for malformed requests
 7. **Null id coercion** — `getOrElse(JNull)` instead of `getOrElse(0)`
 8. **RPC starvation (CRITICAL)** — Sync actors on dedicated `sync-dispatcher`, freeing default dispatcher for HTTP/TCP I/O
+9. **SNAP capability check** — Verify snap/1 peer availability before starting account sync, with grace period fallback to fast sync
+10. **SNAP stagnation watchdog** — Track `accountsDownloaded` as liveness signal (not just task completions), preventing false stagnation on slow ranges
+11. **SNAP partial range resume** — Preserve `task.next` positions across pivot refreshes via `AccountRangeProgress` message + `postStop()` snapshot. 256-block safety valve.
+12. **SNAP dynamic concurrency** — Cap workers to `min(accountConcurrency, snapPeerCount)` — 1:1 worker-to-snap-peer mapping prevents peer flooding
+13. **SNAP in-place pivot refresh** — `PivotRefreshed` message updates coordinator's state root without stop/restart, preserving progress seamlessly
+14. **SNAP stale peer accumulation** — Deduplicate `knownAvailablePeers` by `remoteAddress` on peer reconnection. Prevents inflated `activePeerCount` from stale entries across all 3 coordinators.
 
 ---
 
