@@ -130,18 +130,22 @@ bytes/, crypto/, rlp/, scalanet/  # Submodules
 1. **Config cache poisoning** — `ConfigFactory.invalidateCaches()` + fixed HOCON include paths
 2. **SNAP fallback resilience** — Two code paths to `fallbackToFastSync()`: (a) consecutive pivot refresh counter (6min vs 75min, don't reset in `restartSnapSync()`), (b) bootstrap retry with exponential backoff (2s→60s cap) and 5-minute timeout when no peers found — the `LocalPivot` retry loop was a separate path with no fallback escape.
 3. **FastSync best block hash** — Track correct best block during sync
-4. **Actor name collision** — Generation counter for unique actor names on sync restart
-5. **JSON-RPC error format** — Proper error responses for malformed requests; null id coercion via `getOrElse(JNull)`
+4. **JSON-RPC error format** — Proper error responses for malformed requests; null id coercion via `getOrElse(JNull)`
+5. **Actor name collision** — Generation counter for unique actor names on sync restart
 6. **RPC starvation (CRITICAL)** — Sync actors on dedicated `sync-dispatcher`, freeing default dispatcher for HTTP/TCP I/O
-7. **SNAP capability check** — Verify snap/1 peer availability before starting account sync, with grace period fallback to fast sync
-8. **SNAP stagnation watchdog** — Track `accountsDownloaded` as liveness signal (not just task completions), preventing false stagnation on slow ranges
-9. **SNAP partial range resume** — Preserve `task.next` positions across pivot refreshes via `AccountRangeProgress` message + `postStop()` snapshot. 256-block safety valve.
-10. **SNAP dynamic concurrency** — Cap workers to `min(accountConcurrency, snapPeerCount)` — 1:1 worker-to-snap-peer mapping prevents peer flooding
-11. **SNAP in-place pivot refresh** — `PivotRefreshed` message updates coordinator's state root without stop/restart, preserving progress seamlessly
-12. **SNAP stale peer accumulation** — Deduplicate `knownAvailablePeers` by `remoteAddress` on peer reconnection. Prevents inflated `activePeerCount` from stale entries across all 3 coordinators.
-13. **SNAP false stateless after pivot refresh** — `handleTaskFailed` unconditionally marked peers stateless, even when failures came from stale-root in-flight requests after pivot refresh. Added `task.rootHash == stateRoot` guard.
-14. **SNAP OOM** — Three unbounded memory sources during account download: (a) `DeferredWriteMptStorage` held all trie nodes (~420 bytes/account, OOM at 9.5M). Fix: periodic flush after each response batch. (b) `contractAccounts`/`contractStorageAccounts` ArrayBuffers (~45M entries on ETC). Fix: file-backed storage with 64-byte entries, temp files cleaned up on stop. (c) Progress persistence via `AppStateStorage.putSnapSyncProgress` for crash recovery (256-block safety valve).
-15. **Log file resilience** — `ResilientRollingFileAppender` recreates log file if deleted while running. Standard `RollingFileAppender` writes to dangling inode after deletion — logs silently lost.
+7. **MissingNodeException in State RPCs** — `eth_call`, `eth_estimateGas`, `eth_getCode` threw unhandled `MissingNodeException` during sync. Added `.recover` matching the `eth_getBalance` pattern.
+8. **Block body download stall** — Peers timeout on `GetBlockBodies`, retry loop re-queues to same blacklisted peer. Fix: `ExcludingPeers` selector, exponential backoff, `maxBodyFetchRetries` limit.
+9. **net_listPeers timeout** — With 30+ peers, `parTraverse` exceeded 20s RPC timeout. Fix: in-process `peerStatusCache` updated reactively, `GetPeers` returns cached data (<1ms).
+10. **personal_sendTransaction MissingNodeException** — Same pattern as Bug 7, missing in `PersonalService.scala`.
+11. **SNAP capability check** — Verify snap/1 peer availability before starting account sync, with grace period fallback to fast sync
+12. **SNAP stagnation watchdog** — Track `accountsDownloaded` as liveness signal (not just task completions), preventing false stagnation on slow ranges
+13. **SNAP partial range resume** — Preserve `task.next` positions across pivot refreshes via `AccountRangeProgress` message + `postStop()` snapshot. 256-block safety valve.
+14. **SNAP dynamic concurrency** — Cap workers to `min(accountConcurrency, snapPeerCount)` — 1:1 worker-to-snap-peer mapping prevents peer flooding
+15. **SNAP in-place pivot refresh** — `PivotRefreshed` message updates coordinator's state root without stop/restart, preserving progress seamlessly
+16. **SNAP stale peer accumulation** — Deduplicate `knownAvailablePeers` by `remoteAddress` on peer reconnection. Prevents inflated `activePeerCount` from stale entries across all 3 coordinators.
+17. **SNAP false stateless after pivot refresh** — `handleTaskFailed` unconditionally marked peers stateless, even when failures came from stale-root in-flight requests after pivot refresh. Added `task.rootHash == stateRoot` guard.
+18. **SNAP OOM** — Three unbounded memory sources during account download: (a) `DeferredWriteMptStorage` held all trie nodes (~420 bytes/account, OOM at 9.5M). Fix: periodic flush after each response batch. (b) `contractAccounts`/`contractStorageAccounts` ArrayBuffers (~45M entries on ETC). Fix: file-backed storage with 64-byte entries, temp files cleaned up on stop. (c) Progress persistence via `AppStateStorage.putSnapSyncProgress` for crash recovery (256-block safety valve).
+19. **Log file resilience** — `ResilientRollingFileAppender` recreates log file if deleted while running. Standard `RollingFileAppender` writes to dangling inode after deletion — logs silently lost.
 
 ---
 

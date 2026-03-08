@@ -51,7 +51,7 @@ When we began testing on ETC mainnet with a local core-geth peer serving snap/1,
 
 ---
 
-## Fix 0: SNAP→Fast Sync Fallback Acceleration (Bugs 2-3)
+## Fix 0: SNAP→Fast Sync Fallback Acceleration (Bug 2)
 
 ### Problem
 
@@ -85,7 +85,7 @@ if (consecutivePivotRefreshes >= maxConsecutivePivotRefreshes) {
 
 ---
 
-## Fix 1: SNAP Capability Check (Bug 9)
+## Fix 1: SNAP Capability Check (Bug 11)
 
 ### Problem
 
@@ -113,7 +113,7 @@ If `snapPeerCount == 0`, schedule a grace period check (`snapCapabilityGracePeri
 
 ---
 
-## Fix 2: Stagnation Watchdog (Bug 10)
+## Fix 2: Stagnation Watchdog (Bug 12)
 
 ### Problem
 
@@ -145,7 +145,7 @@ On the previous run, the watchdog had falsely triggered at ~5M accounts because 
 
 ---
 
-## Fix 3: Partial Range Resume (Bug 11)
+## Fix 3: Partial Range Resume (Bug 13)
 
 ### Problem
 
@@ -201,7 +201,7 @@ private def sendProgressSnapshot(): Unit = {
 
 ---
 
-## Fix 4: Dynamic Concurrency (Bug 12)
+## Fix 4: Dynamic Concurrency (Bug 14)
 
 ### Problem
 
@@ -239,7 +239,7 @@ This ensures nearly-complete ranges finish first, freeing workers for other work
 
 ---
 
-## Fix 5: In-Place Pivot Refresh (Bug 13)
+## Fix 5: In-Place Pivot Refresh (Bug 15)
 
 ### Problem
 
@@ -285,7 +285,7 @@ On live ETC mainnet testing, we observed 7 seamless pivot refreshes over ~110 mi
 
 ---
 
-## Fix 6: Stale Peer Accumulation (Bug 14)
+## Fix 6: Stale Peer Accumulation (Bug 16)
 
 ### Problem
 
@@ -324,7 +324,7 @@ This is a 3-line addition per coordinator. No new messages, no trait modificatio
 
 ---
 
-## Fix 7: False Stateless Marking After Pivot Refresh (Bug 15)
+## Fix 7: False Stateless Marking After Pivot Refresh (Bug 17)
 
 ### Problem
 
@@ -401,7 +401,7 @@ Moved high-frequency chunk/response logs to DEBUG level (94% noise reduction). A
 
 ---
 
-## Fix 8: SNAP OOM + Periodic Trie Flushing (Bug 14)
+## Fix 8: SNAP OOM + Periodic Trie Flushing (Bug 18)
 
 **Root cause:** `DeferredWriteMptStorage` kept ALL trie nodes in memory, only flushing once at finalization. At ~420 bytes/account, OOM at 9.5M accounts (4GB heap) or 19.3M (8GB heap).
 
@@ -412,11 +412,25 @@ Moved high-frequency chunk/response logs to DEBUG level (94% noise reduction). A
 - `DeferredWriteMptStorage.scala` — flush method, batch tracking
 - `AppStateStorage.scala` — putSnapSyncProgress, getSnapSyncProgress
 
-**Verification:** 303K accounts downloaded, 7 flushes, stable 833MB RSS, zero OOMs. Progress persists across restarts.
+**Verification (trie flush):** 303K accounts downloaded, 7 flushes, stable 833MB RSS, zero OOMs. Progress persists across restarts.
+
+### Contract Accounts OOM (second memory source)
+
+**Root cause:** `contractAccounts` and `contractStorageAccounts` in `AccountRangeCoordinator` were `mutable.ArrayBuffer[(ByteString, ByteString)]` that grew unbounded. On ETC mainnet, ~85% of accounts are contracts (GasToken-style state bloat from pre-Mystique era), producing ~45M entries consuming ~5-6GB on a 4GB heap.
+
+**Fix:** Replaced in-memory ArrayBuffers with file-backed storage:
+- Two temp files: `fukuii-contract-accounts-*.bin` and `fukuii-contract-storage-*.bin`
+- Fixed 64-byte entries (32-byte hash + 32-byte codeHash/storageRoot)
+- `BufferedOutputStream` (64KB buffer) for writes during `identifyContractAccounts()`
+- `RandomAccessFile` for reads when `GetContractAccounts`/`GetContractStorageAccounts` queried
+- Files cleaned up in `postStop()`
+- Only count kept in memory for logging
+
+**Verification (contract accounts):** At 62% keyspace: temp files 2.8GB each on disk, JVM RSS 1.9GB, zero OOM. Previous crash at 30%.
 
 ---
 
-## Fix 9: Bootstrap Retry Resilience (Bug 15)
+## Fix 9: Bootstrap Retry Resilience (Bug 2) + Log File Resilience (Bug 19)
 
 **Root cause:** The bootstrap retry loop (`LocalPivot` branch in `startSnapSync()`) ran at a fixed 2s interval indefinitely when no peers were available. This code path is completely separate from the `PivotStateUnservable` → `consecutivePivotRefreshes` → `fallbackToFastSync()` chain — it has no timeout, no backoff, and no connection to `recordCriticalFailure()`. Result: 5,260+ retries over 3+ hours with no escalation to fast sync, despite core-geth running on localhost.
 

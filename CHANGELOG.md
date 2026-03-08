@@ -44,19 +44,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Resolves issue where peers would disconnect immediately after handshake with "Cannot decode Disconnect" error
   - Fixes "Unknown eth/68 message type: 1" debug messages
   - Node can now maintain stable peer connections and sync properly with ETH68-capable peers
-- **Critical**: Fixed SNAP sync OOM from unbounded in-memory trie (Bug 14)
+- **Critical**: Fixed SNAP sync OOM from unbounded in-memory trie and contract account buffers (Bug 18)
   - `DeferredWriteMptStorage` now flushes periodically (~32K accounts per batch) instead of once at finalization
+  - `contractAccounts`/`contractStorageAccounts` ArrayBuffers replaced with file-backed storage (~45M entries on ETC)
   - Added disk persistence for account range progress with crash recovery
-- **High**: Fixed SNAP bootstrap retry loop running indefinitely without fallback (Bug 15)
+- **Critical**: Fixed RPC starvation under SNAP sync — all RPCs timeout when sync workers saturate default dispatcher (Bug 6)
+- **High**: Fixed SNAP fallback resilience — two separate code paths to fast sync fallback (Bug 2)
+  - Consecutive pivot refresh counter no longer resets in `restartSnapSync()`
   - Bootstrap retry now uses exponential backoff (2s → 60s cap) instead of fixed 2s
   - 5-minute timeout triggers fallback to fast sync when no peers are found
   - Fixed stale retry code in `Some(header)` match case that prevented SNAP start from local pivot
-- **High**: Fixed SNAP→fast sync fallback never triggering (Bugs 2-3 consolidated)
-  - Consecutive pivot refresh counter no longer resets in `restartSnapSync()`
-- **Low**: Fixed JSON-RPC null id coercion and malformed request error format (Bugs 5-6 consolidated)
-- Added `ResilientRollingFileAppender` to recreate log file if deleted while running
-- SNAP stale peer accumulation fix — deduplicate peers by remote address on reconnection
-- SNAP false stateless marking after pivot refresh — added stale-root guard
+- **High**: Fixed block body download stall — peer switching + exponential backoff for body fetches (Bug 8)
+- **Medium**: Fixed FastSync best block hash tracking during sync (Bug 3)
+- **Medium**: Fixed `net_listPeers` timeout with 30+ peers — added peer status cache (Bug 9)
+- **Medium**: Fixed `MissingNodeException` in `eth_call`/`eth_estimateGas`/`eth_getCode` during sync (Bug 7)
+- **Medium**: Fixed `personal_sendTransaction` `MissingNodeException` during sync (Bug 10)
+- **Low**: Fixed JSON-RPC null id coercion and malformed request error format (Bug 4)
+- Fixed actor name collision on sync restart — generation counter for unique names (Bug 5)
+- Added `ResilientRollingFileAppender` to recreate log file if deleted while running (Bug 19)
+- SNAP capability check — verify snap/1 peers before starting account sync (Bug 11)
+- SNAP stagnation watchdog — track `accountsDownloaded` as liveness signal (Bug 12)
+- SNAP partial range resume — preserve progress across pivot refreshes (Bug 13)
+- SNAP dynamic concurrency — cap workers to snap peer count (Bug 14)
+- SNAP in-place pivot refresh — update state root without stop/restart (Bug 15)
+- SNAP stale peer accumulation — deduplicate peers by remote address on reconnection (Bug 16)
+- SNAP false stateless marking after pivot refresh — added stale-root guard (Bug 17)
 
 ## [0.1.0] - Initial Version
 

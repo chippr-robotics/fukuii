@@ -9,7 +9,7 @@
 
 ## Summary
 
-The `alpha` branch is a systematic stabilization pass over Fukuii v0.1.240. Over 16 phases of testing, every major subsystem was exercised on both Mordor testnet and ETC mainnet using the assembly JAR. **16 bugs were found and fixed** (consolidated from 17 individual fixes — some pairs share a root cause), then the branch was extended with ECBP-1100 (MESS) wiring (later rewritten to match the ECIP-1100 polynomial spec), comprehensive consensus test suites, gas limit convergence logic, dependency updates, and SNAP sync optimizations (partial range resume, dynamic concurrency, in-place pivot refresh, OOM fix, bootstrap retry resilience).
+The `alpha` branch is a systematic stabilization pass over Fukuii v0.1.240. Over 16 phases of testing, every major subsystem was exercised on both Mordor testnet and ETC mainnet using the assembly JAR. **19 bugs were found and fixed**, then the branch was extended with ECBP-1100 (MESS) wiring (later rewritten to match the ECIP-1100 polynomial spec), comprehensive consensus test suites, gas limit convergence logic, dependency updates, and SNAP sync optimizations (partial range resume, dynamic concurrency, in-place pivot refresh, OOM fix, bootstrap retry resilience).
 
 **Test results:** 2,193 unit tests passing, clean compile, assembly JAR verified on Mordor and ETC mainnet.
 
@@ -29,7 +29,7 @@ The `alpha` branch implements a canonical [ECIP-1066](https://ecips.ethereumclas
 
 ### Gorgoroth Trials (Local Network Testing)
 
-The alpha stabilization was validated through 16 phases of systematic testing ("Gorgoroth trials"), exercising every major subsystem on both Mordor testnet and ETC mainnet using the assembly JAR. Local devnet testing uses the multi-client stack from the maintained forks above (core-geth `etc`, Besu `etc`, Fukuii `alpha`) — not the deprecated upstream core-geth (last updated 2024) or upstream Besu. 16 bugs were found and fixed, with 2,193 unit tests passing.
+The alpha stabilization was validated through 16 phases of systematic testing ("Gorgoroth trials"), exercising every major subsystem on both Mordor testnet and ETC mainnet using the assembly JAR. Local devnet testing uses the multi-client stack from the maintained forks above (core-geth `etc`, Besu `etc`, Fukuii `alpha`) — not the deprecated upstream core-geth (last updated 2024) or upstream Besu. 19 bugs were found and fixed, with 2,193 unit tests passing.
 
 ---
 
@@ -61,26 +61,34 @@ The alpha stabilization was validated through 16 phases of systematic testing ("
 
 ---
 
-### Bug 2: SNAP→Fast Sync Fallback Too Slow (High)
-**Commits:** `b28a3a754` — fix: accelerate SNAP→fast sync fallback when peers lack snapshots; `35515e752` — fix: prevent pivot refresh counter from resetting on restart
+### Bug 2: SNAP Fallback Resilience (High)
+**Commits:** `b28a3a754` — fix: accelerate SNAP→fast sync fallback when peers lack snapshots; `35515e752` — fix: prevent pivot refresh counter from resetting on restart; (later) — fix: bootstrap retry backoff and timeout
 
-**Problem:** When no peer serves SNAP protocol snapshots (common on Mordor), fallback to fast sync takes up to 75 minutes. Each cycle: start SNAP → all peers stateless → refresh pivot → stagnation timer resets → repeat × 5. Additionally, the counter never accumulated because `restartSnapSync()` reset it to 0 on every failed cycle.
+**Problem:** Two separate code paths to `fallbackToFastSync()` both had critical gaps:
 
-**Root cause:** Two interacting issues:
+**(a) Pivot refresh path:** When no peer serves SNAP protocol snapshots (common on Mordor), fallback to fast sync takes up to 75 minutes. Each cycle: start SNAP → all peers stateless → refresh pivot → stagnation timer resets → repeat × 5. Additionally, the counter never accumulated because `restartSnapSync()` reset it to 0 on every failed cycle.
+
+**(b) Bootstrap retry path:** After all peers were marked stateless and a pivot refresh triggered, the bootstrap retry loop (`LocalPivot` branch in `startSnapSync()`) entered a tight 2-second cycle ("No peers available") for 5,260+ attempts (3+ hours) with no escalation to fast sync. This path is completely separate from the pivot counter — it had no timeout, no backoff, and no connection to `recordCriticalFailure()`.
+
+**Root cause:** Two interacting issues in path (a):
 1. The 15-minute stagnation timer resets on every pivot refresh, even when zero accounts are downloaded.
 2. `restartSnapSync()` reset `consecutiveEmptyPivotRefreshes` to 0, but `refreshPivotInPlace` calls `restartSnapSync` when no new pivot is available — creating a loop: counter → 1 → refresh fails → restart resets to 0 → repeat.
 
-**Fix:** Track consecutive `PivotStateUnservable` events that produce no account downloads. After 3 consecutive stateless pivots, record a critical failure immediately instead of waiting for the stagnation timer. Don't reset the counter in `restartSnapSync()` — counter resets only on successful account download or full restart from `startSync()`. Reduces worst-case fallback from ~75 minutes to ~5 minutes.
+Path (b) was written assuming peers would eventually appear, with no escape hatch.
+
+**Fix (path a):** Track consecutive `PivotStateUnservable` events that produce no account downloads. After 3 consecutive stateless pivots, record a critical failure immediately instead of waiting for the stagnation timer. Don't reset the counter in `restartSnapSync()` — counter resets only on successful account download or full restart from `startSync()`. Reduces worst-case fallback from ~75 minutes to ~5 minutes.
+
+**Fix (path b):** Exponential backoff on bootstrap retry (2s → 4s → 8s → 16s → 32s → 60s cap). 5-minute timeout triggers `fallbackToFastSync()`. Periodic diagnostic logging every ~5 retries. Reset timer on successful peer acquisition.
 
 **Files changed:**
-- `src/main/scala/.../blockchain/sync/snap/SNAPSyncController.scala` (+35/-3)
+- `src/main/scala/.../blockchain/sync/snap/SNAPSyncController.scala` (+35/-3, +45/-8)
 
-**Reproduce before:** Start on Mordor with SNAP sync → wait 75 minutes for fallback; on ETC mainnet, counter never accumulates
-**Verify after:** Fallback to fast sync within 5 minutes; counter correctly accumulates when no accounts arrive
+**Reproduce before:** Start on Mordor with SNAP sync → wait 75 minutes for fallback; on ETC mainnet, counter never accumulates; kill all peers → observe 2s retry loop indefinitely
+**Verify after:** Fallback to fast sync within 5 minutes; counter correctly accumulates when no accounts arrive; retry backs off 2s→60s; after 5 minutes falls back to fast sync
 
 ---
 
-### Bug 4: FastSync Best Block Hash Stale (Medium)
+### Bug 3: FastSync Best Block Hash Stale (Medium)
 **Commit:** `9a529b09b` — fix: correct best block hash tracking in fast sync and JSON-RPC error handling
 
 **Problem:** During fast sync, `eth_blockNumber` returned sync progress but `eth_getBlockByNumber("latest")` returned genesis block.
@@ -94,8 +102,8 @@ The alpha stabilization was validated through 16 phases of systematic testing ("
 
 ---
 
-### Bug 5: JSON-RPC Error Format + Null ID Coercion (Low)
-**Commit:** `9a529b09b` (same commit as Bug 4)
+### Bug 4: JSON-RPC Error Format + Null ID Coercion (Low)
+**Commit:** `9a529b09b` (same commit as Bug 3)
 
 **Problem:** Two JSON-RPC spec violations: (1) Malformed requests returned plain text errors instead of proper JSON-RPC error format. (2) Requests with `"id": null` returned `"id": 0` instead of `"id": null`.
 
@@ -109,7 +117,7 @@ The alpha stabilization was validated through 16 phases of systematic testing ("
 
 ---
 
-### Bug 7: Actor Name Collision on Sync Restart (High)
+### Bug 5: Actor Name Collision on Sync Restart (High)
 **Commit:** `23b068dc8` — fix: prevent actor name collisions on sync restart RPCs
 
 **Problem:** `fukuii_restartFastSync` RPC crashed with `InvalidActorNameException: actor name [fast-sync] is not unique`.
@@ -124,7 +132,7 @@ The alpha stabilization was validated through 16 phases of systematic testing ("
 
 ---
 
-### Bug 8: RPC Starvation Under SNAP Sync (Critical)
+### Bug 6: RPC Starvation Under SNAP Sync (Critical)
 **Commit:** `836a1f5d6` — fix: isolate sync actors on dedicated dispatcher to prevent RPC starvation
 
 **Problem:** During SNAP sync with 16+ concurrent workers, ALL JSON-RPC calls time out indefinitely — even trivial ones like `eth_chainId`.
@@ -147,7 +155,7 @@ The alpha stabilization was validated through 16 phases of systematic testing ("
 
 ---
 
-### Bug 9: Unhandled MissingNodeException in State RPCs (Medium)
+### Bug 7: Unhandled MissingNodeException in State RPCs (Medium)
 **Commit:** `a107ae1a9` — fix: return proper error for eth_call/estimateGas/getCode when state unavailable
 
 **Problem:** During fast sync, `eth_call`, `eth_estimateGas`, and `eth_getCode` throw unhandled `MissingNodeException`, resulting in generic "Internal JSON-RPC error" (-32603).
@@ -162,7 +170,7 @@ The alpha stabilization was validated through 16 phases of systematic testing ("
 
 ---
 
-### Bug 10: Block Body Download Stall (High)
+### Bug 8: Block Body Download Stall (High)
 **Commit:** `8dfa845e8` — fix(sync): add peer switching and backoff for block body downloads
 
 **Problem:** Fast sync stalls when peers timeout on `GetBlockBodies`. The retry loop re-queues the same hashes to the same (now blacklisted) peer without delay, causing a tight loop that never recovers.
@@ -190,7 +198,7 @@ The alpha stabilization was validated through 16 phases of systematic testing ("
 
 ---
 
-### Bug 11: `net_listPeers` Timeout Under Load (Medium)
+### Bug 9: `net_listPeers` Timeout Under Load (Medium)
 **Commit:** `e7b4e9281` — fix(rpc): cache peer status to prevent net_listPeers timeout
 
 **Problem:** With 30+ peers, `net_listPeers` times out after 20s.
@@ -209,14 +217,14 @@ The alpha stabilization was validated through 16 phases of systematic testing ("
 
 ---
 
-### Bug 12: `personal_sendTransaction` MissingNodeException During Sync (Medium)
+### Bug 10: `personal_sendTransaction` MissingNodeException During Sync (Medium)
 **Commit:** (this session) — fix(rpc): handle MissingNodeException in personal_sendTransaction during sync
 
 **Problem:** `personal_sendTransaction` throws generic `-32603 Internal Error` when state is unavailable during sync.
 
-**Root cause:** `getCurrentAccount()` calls `blockchainReader.getAccount()` which throws `MissingNodeException` when the state trie hasn't been downloaded yet. Unlike `eth_getBalance` and other state-dependent RPCs (fixed in Bug 9), `personal_sendTransaction` was missing the recovery handler.
+**Root cause:** `getCurrentAccount()` calls `blockchainReader.getAccount()` which throws `MissingNodeException` when the state trie hasn't been downloaded yet. Unlike `eth_getBalance` and other state-dependent RPCs (fixed in Bug 7), `personal_sendTransaction` was missing the recovery handler.
 
-**Fix:** Added `.recover { case _: MissingNodeException => Left(JsonRpcError.NodeNotFound) }` to both public `sendTransaction` overloads in `PersonalService.scala`, matching the pattern established in Bug 9.
+**Fix:** Added `.recover { case _: MissingNodeException => Left(JsonRpcError.NodeNotFound) }` to both public `sendTransaction` overloads in `PersonalService.scala`, matching the pattern established in Bug 7.
 
 **Files changed:**
 - `src/main/scala/.../jsonrpc/PersonalService.scala` (+3 lines)
@@ -224,33 +232,79 @@ The alpha stabilization was validated through 16 phases of systematic testing ("
 
 **Tests:** 2 new tests covering both `SendTransactionWithPassphraseRequest` and `SendTransactionRequest` paths when state is unavailable.
 
-### Bug 13: SNAP Sync Optimization Suite (High)
+### Bug 11: SNAP Capability Check (Medium)
 **Commit:** `eeb814779` — feat: SNAP sync partial range resume, dynamic concurrency, and keyspace tracking
 
-**Problem:** SNAP sync on ETC mainnet was functionally broken — core-geth's snap serve window (~128 blocks ≈ 10-16 min) expired before any range completed. Progress was lost on every pivot refresh. Additionally, workers flooded single peers with concurrent requests.
+**Problem:** Sync started account range workers without verifying any peer supported snap/1. Workers timed out trying to send `GetAccountRange` to peers that couldn't handle them.
 
-**Root cause:** Multiple interrelated issues:
-1. Only fully-completed ranges were preserved across restarts — with ~5% keyspace per window, no range ever completed
-2. No snap capability check — sync started without verifying snap/1 peer availability
-3. Stagnation watchdog tracked only task completions as liveness, but each 1/16th range takes ~200s vs 180s threshold
-4. Fixed concurrency regardless of snap peer count led to peer flooding
+**Root cause:** `launchAccountRangeWorkers()` counted all `peersToDownloadFrom` without filtering for snap capability.
 
-**Fix (5 optimizations in 1 commit):**
-1. **Partial range resume:** `AccountRangeProgress` message + `postStop()` snapshot preserves `task.next` positions across pivot changes (core-geth parity). 256-block safety valve.
-2. **Dynamic concurrency:** `min(accountConcurrency, snapPeerCount)` — 1:1 worker-to-snap-peer mapping
-3. **In-place pivot refresh:** `PivotRefreshed` message updates coordinator's state root without stop/restart, preserving progress seamlessly
-4. **Snap capability check:** Grace period before falling back to fast sync if no snap/1 peers
-5. **Cumulative keyspace tracking:** `consumedKeyspace: BigInt` provides monotonic progress percentage
+**Fix:** Added snap peer count check at sync start. If `snapPeerCount == 0`, schedule a grace period check (`snapCapabilityGracePeriod`, default 30s) before falling back to fast sync.
 
 **Files changed:**
-- `src/main/scala/.../snap/SNAPSyncController.scala` (dynamic concurrency, preservedRangeProgress, pivot refresh forwarding)
-- `src/main/scala/.../snap/actors/AccountRangeCoordinator.scala` (resume logic, priority queue, postStop, PivotRefreshed handler)
-- `src/main/scala/.../snap/actors/Messages.scala` (AccountRangeProgress, PivotRefreshed messages)
-- `src/main/scala/.../snap/AccountTask.scala` (remainingKeyspace method)
+- `src/main/scala/.../snap/SNAPSyncController.scala` — snap peer filtering + `CheckSnapCapability` message
+
+---
+
+### Bug 12: SNAP Stagnation Watchdog (Medium)
+**Commit:** `eeb814779` (same commit as Bug 11)
+
+**Problem:** Stagnation watchdog (180s timer) triggered false stagnation detection even when accounts were actively downloading. Each 1/16th range takes ~200s to complete, exceeding the 180s threshold.
+
+**Root cause:** `lastCompletedTaskCount` was the sole liveness metric — it only incremented on full task completion, not intermediate progress.
+
+**Fix:** Changed liveness signal to track `accountsDownloaded` (total account count) instead of task completions. Each response downloads ~32K accounts, advancing the counter well within the 180s window.
+
+**Files changed:**
+- `src/main/scala/.../snap/actors/AccountRangeCoordinator.scala` — `CheckAccountStagnation` handler
+
+---
+
+### Bug 13: SNAP Partial Range Resume (Critical)
+**Commit:** `eeb814779` (same commit as Bug 11)
+
+**Problem:** The most critical SNAP issue. Core-geth's snap serve window is ~128 blocks (~10-16 min). After window expiry, peers stop serving the old state root. The original code only preserved fully-completed ranges (`preservedCompletedRanges: Set[ByteString]`). With 16 ranges and ~5% keyspace per window, no range ever fully completed — every restart re-downloaded everything from scratch.
+
+**Fix:** Replaced `preservedCompletedRanges` with `preservedRangeProgress: Map[ByteString, ByteString]` (map of `task.last → task.next` for ALL ranges). On coordinator stop, `postStop()` sends progress snapshot. On restart, coordinator resumes from saved positions. 256-block safety valve clears progress if pivot drifts too far.
+
+**Files changed:**
+- `src/main/scala/.../snap/SNAPSyncController.scala` — `preservedRangeProgress`, `AccountRangeProgress` handler
+- `src/main/scala/.../snap/actors/AccountRangeCoordinator.scala` — `resumeProgress` param, `postStop()`, `sendProgressSnapshot()`
+- `src/main/scala/.../snap/actors/Messages.scala` — `AccountRangeProgress` message
+- `src/main/scala/.../snap/AccountTask.scala` — `remainingKeyspace` method
+
+---
+
+### Bug 14: SNAP Dynamic Concurrency (Medium)
+**Commit:** `eeb814779` (same commit as Bug 11)
+
+**Problem:** Fixed worker count (default 16) regardless of snap peer count. With 1-4 actual snap-capable peers, multiple workers sent requests to the same peer simultaneously, causing queue-up and apparent stagnation.
+
+**Fix:** Cap workers to actual snap peer count: `min(accountConcurrency, snapPeerCount).max(1)`. Added priority queue ordered by remaining keyspace (smallest-remaining-first) so nearly-complete ranges finish first.
+
+**Files changed:**
+- `src/main/scala/.../snap/SNAPSyncController.scala` — `effectiveConcurrency` calculation
+- `src/main/scala/.../snap/actors/AccountRangeCoordinator.scala` — `PriorityQueue`, `activePeerCount`, worker cap
+
+---
+
+### Bug 15: SNAP In-Place Pivot Refresh (High)
+**Commit:** `eeb814779` (same commit as Bug 11)
+
+**Problem:** When all peers became stateless (serve window expired), the original code stopped and restarted the coordinator actor, destroying all in-memory state (worker pool, adaptive byte budgets, cooling-down peer tracking). Race condition between `postStop()` progress snapshot and new coordinator creation.
+
+**Fix:** Added `PivotRefreshed(newStateRoot)` message that updates the coordinator's state root in place without stopping the actor. Clears stateless tracking, re-enqueues active tasks, and continues downloading. The stop/restart path is preserved as a safety net for full restarts.
 
 **Live verification:** 7 seamless pivot refreshes over ~110 minutes on ETC mainnet, zero progress lost. 11.2% keyspace covered (~9.6M accounts) with 1 snap peer. Monotonic progress 0.2% → 11.2%.
 
-### Bug 14: SNAP Stale Peer Accumulation (Medium)
+**Files changed:**
+- `src/main/scala/.../snap/actors/AccountRangeCoordinator.scala` — `PivotRefreshed` handler
+- `src/main/scala/.../snap/SNAPSyncController.scala` — in-place refresh vs restart decision
+- `src/main/scala/.../snap/actors/Messages.scala` — `PivotRefreshed` message
+
+---
+
+### Bug 16: SNAP Stale Peer Accumulation (Medium)
 **Commit:** (this session) — fix: deduplicate stale peers in SNAP coordinators
 
 **Problem:** Progress logs showed "1 workers/4 peers" when only 1 physical snap peer existed, and `activePeerCount` was inflated, defeating the dynamic concurrency cap.
@@ -266,49 +320,58 @@ The alpha stabilization was validated through 16 phases of systematic testing ("
 
 ---
 
-### Bug 15: SNAP OOM + Progress Persistence (Critical)
-**Commits:** (this session) — fix: periodic trie flush to prevent OOM; fix: wire SNAP progress persistence to disk
+### Bug 17: SNAP False Stateless After Pivot Refresh (Medium)
+**Commit:** (this session) — fix: add stale-root guard to prevent false stateless marking after pivot refresh
 
-**Problem:** SNAP sync crashed with OutOfMemoryError after downloading ~9.5M accounts (4GB heap) or ~19.3M (8GB). After OOM crash, all downloaded account progress was lost (40+ min re-download).
+**Problem:** After an in-place pivot refresh, all peers were immediately re-marked as stateless for the new root — within milliseconds. This caused ~2 minutes of wasted thrashing per pivot refresh cycle.
 
-**Root cause:** Two interacting issues:
-1. `DeferredWriteMptStorage` kept ALL trie nodes in memory, only flushing once at finalization via `flushTrieToStorage()` in `finalizeTrie()`. At ~420 bytes/account, memory grew unbounded.
-2. Progress persistence infrastructure existed (`AppStateStorage.putSnapSyncProgress`, `AccountRangeProgress` messages) but was never wired to disk — only held in-memory.
+**Root cause:** `handleTaskFailed()` unconditionally called `markPeerStateless()` without checking whether the failed request used the current state root or a stale one. After `PivotRefreshed` updates `stateRoot` and clears `statelessPeers`, in-flight workers still have requests dispatched with the old root. These requests fail quickly, and the coordinator marks peers stateless for the new root — even though they can serve it fine.
 
-**Fix:**
-1. Added periodic flush after each response batch (~32K accounts), bounding peak memory to ~13MB per batch instead of unbounded growth.
-2. Wired `AppStateStorage.putSnapSyncProgress` for disk persistence with serialize/deserialize, crash recovery on restart with 256-block pivot safety valve, and clear on phase completion/fallback.
+**Fix:** Added stale-root guard: only mark peers stateless when `task.rootHash == stateRoot`. Stale-root failures re-enqueue the task with the current root instead.
 
 **Files changed:**
-- `src/main/scala/.../snap/actors/AccountRangeCoordinator.scala` (periodic flush trigger)
-- `src/main/scala/.../mpt/DeferredWriteMptStorage.scala` (flush method, batch tracking)
-- `src/main/scala/.../db/storage/AppStateStorage.scala` (putSnapSyncProgress, getSnapSyncProgress)
-
-**Live verification:** 303K accounts downloaded, 7 flushes, stable 833MB RSS, zero OOMs. Progress survives restart.
+- `src/main/scala/.../snap/actors/AccountRangeCoordinator.scala` — `handleTaskFailed()` method
 
 ---
 
-### Bug 16: SNAP Bootstrap Retry + Log File Resilience (High)
-**Commits:** (this session) — fix: bootstrap retry backoff and timeout; feat: ResilientRollingFileAppender
+### Bug 18: SNAP OOM (Critical)
+**Commits:** (this session) — fix: periodic trie flush to prevent OOM; fix: wire SNAP progress persistence to disk; fix: file-backed contract accounts storage
 
-**Problem:** After all peers were marked stateless and a pivot refresh triggered, the bootstrap retry loop entered a tight 2-second cycle ("No peers available") for 5,260+ attempts (3+ hours) with no escalation to fast sync. Separately, deleting the log file while running caused silent log loss.
+**Problem:** SNAP sync crashed with OutOfMemoryError after downloading ~9.5M accounts (4GB heap) or ~19.3M (8GB). After OOM crash, all downloaded account progress was lost (40+ min re-download).
 
-**Root cause:** Two independent issues:
-1. The bootstrap retry loop (`LocalPivot` branch in `startSnapSync()`) is a completely separate code path from the `PivotStateUnservable` → `consecutivePivotRefreshes` → `fallbackToFastSync()` chain. It had no timeout, no backoff, and no connection to `recordCriticalFailure()`. It was written assuming peers would eventually appear.
-2. Logback's `RollingFileAppender` holds an open file descriptor. If the file is deleted, it writes to a dangling inode — logs are silently lost. `prudent=true` mode (auto-recreate) is incompatible with `FixedWindowRollingPolicy`.
+**Root cause:** Three unbounded memory sources:
+1. `DeferredWriteMptStorage` kept ALL trie nodes in memory, only flushing once at finalization via `flushTrieToStorage()` in `finalizeTrie()`. At ~420 bytes/account, memory grew unbounded.
+2. `contractAccounts`/`contractStorageAccounts` `ArrayBuffer[(ByteString, ByteString)]` grew to ~45M entries on ETC mainnet (~85% of accounts are contracts due to pre-Mystique GasToken state bloat). ~5-6GB on a 4GB heap.
+3. Progress persistence infrastructure existed (`AppStateStorage.putSnapSyncProgress`, `AccountRangeProgress` messages) but was never wired to disk — only held in-memory.
 
 **Fix:**
-1. Exponential backoff on bootstrap retry (2s → 4s → 8s → 16s → 32s → 60s cap). 5-minute timeout triggers `fallbackToFastSync()`. Periodic diagnostic logging every ~5 retries. Reset timer on successful peer acquisition.
-2. Custom `ResilientRollingFileAppender` that checks file existence every 100 log events and reopens if deleted.
+1. Added periodic flush after each response batch (~32K accounts), bounding peak memory to ~13MB per batch instead of unbounded growth.
+2. Replaced in-memory ArrayBuffers with file-backed storage: two temp files with fixed 64-byte entries (32-byte hash + 32-byte value), `BufferedOutputStream` for writes, `RandomAccessFile` for reads, files cleaned up in `postStop()`.
+3. Wired `AppStateStorage.putSnapSyncProgress` for disk persistence with serialize/deserialize, crash recovery on restart with 256-block pivot safety valve, and clear on phase completion/fallback.
 
 **Files changed:**
-- `src/main/scala/.../blockchain/sync/snap/SNAPSyncController.scala` (backoff, timeout, diagnostics)
+- `src/main/scala/.../snap/actors/AccountRangeCoordinator.scala` (periodic flush trigger, file-backed storage)
+- `src/main/scala/.../mpt/DeferredWriteMptStorage.scala` (flush method, batch tracking)
+- `src/main/scala/.../db/storage/AppStateStorage.scala` (putSnapSyncProgress, getSnapSyncProgress)
+
+**Live verification:** 53M+ accounts / 62% keyspace with stable 1.6-1.9GB RSS on 4GB heap. Previous crash at 22M / 30%. Contract temp files 2.8GB each on disk. Progress survives restart.
+
+---
+
+### Bug 19: Log File Resilience (Low)
+**Commit:** (this session) — feat: ResilientRollingFileAppender
+
+**Problem:** Deleting the log file while Fukuii was running caused silent log loss. Standard `RollingFileAppender` holds an open file descriptor — if the file is deleted, it writes to a dangling inode. `prudent=true` mode (auto-recreate) is incompatible with `FixedWindowRollingPolicy`.
+
+**Fix:** Custom `ResilientRollingFileAppender` extends `RollingFileAppender`, checks file existence every 100 log events, and reopens if deleted.
+
+**Files changed:**
 - `src/main/scala/.../utils/ResilientRollingFileAppender.scala` (NEW)
 - `src/main/resources/logback.xml` (appender class change)
 - 6 additional logback configs (ops, test)
 
-**Reproduce before:** Start SNAP sync → kill all peers → observe 2s retry loop indefinitely; delete log file → logs silently lost
-**Verify after:** Retry backs off 2s→60s; after 5 minutes falls back to fast sync; deleted log file recreated within seconds
+**Reproduce before:** Delete log file → logs silently lost
+**Verify after:** Deleted log file recreated within seconds
 
 ---
 
@@ -546,7 +609,7 @@ Removed three WITHDRAWN Mantis-era ECIPs that do not belong in a canonical ECIP-
 - 73 new consensus tests across 4 test suites (commits 10-11, 13, 23)
 - Injectable Miner pattern for reliable PoW test infrastructure
 - Live MCP tools (15 tools, 9 resources) replacing stub implementations — Fukuii is the first ETC client with a functional MCP server
-- Bug 12: `personal_sendTransaction` MissingNodeException handling during sync
+- Bug 10: `personal_sendTransaction` MissingNodeException handling during sync
 - README accuracy pass: fixed CI badge URL, MCP tool count (16→15), network names, broken doc links, ECIP-1066 compliance reference, markdown heading structure
 - Production readiness sweep: renamed 62 stale `chordodes_fukuii` → `fukuii` references, modernized CI apt-key to signed-by keyring (6 workflows), renamed misleading logback config, deduplicated 3 CONTRIBUTING.md copies, fixed confused rebrand text ("Fukuii to Fukuii" → "Mantis to Fukuii"), hardened ~20 shell scripts (shared helper library, docker compose detection, JAR validation, subshell scoping fix)
 - Test count: 2,195 (down from 2,229 baseline due to removal of ~130 ECIP-specific tests, offset by 85 new tests: 73 consensus + 10 sync + 2 personal_sendTransaction)
@@ -577,20 +640,20 @@ java -Xmx4g \
 **Verify:**
 - Logs show "Using network mordor" (not "etc") — Bug 1 fixed
 - `curl -X POST http://localhost:8553 -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'` → `"result":"0x3f"` (63 = Mordor)
-- RPC responds during sync — Bug 8 fixed
-- `eth_blockNumber` matches sync progress — Bug 4 fixed
+- RPC responds during sync — Bug 6 fixed
+- `eth_blockNumber` matches sync progress — Bug 3 fixed
 
 ### 3. Key Bug Verifications
 ```bash
-# Bug 5: Malformed request → proper JSON-RPC error (not plain text)
+# Bug 4: Malformed request → proper JSON-RPC error (not plain text)
 curl -X POST http://localhost:8553 -H "Content-Type: application/json" -d 'not json'
 
-# Bug 6: Null id preserved
+# Bug 4: Null id preserved
 curl -X POST http://localhost:8553 -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":null}'
 # Should return "id": null, not "id": 0
 
-# Bug 9: State methods during sync return proper error
+# Bug 7: State methods during sync return proper error
 curl -X POST http://localhost:8553 -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"eth_call","params":[{"to":"0x0000000000000000000000000000000000000000"},"latest"],"id":1}'
 # Should return -32016 "State node doesn't exist" (not -32603 internal error)
