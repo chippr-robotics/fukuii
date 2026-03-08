@@ -401,6 +401,37 @@ Moved high-frequency chunk/response logs to DEBUG level (94% noise reduction). A
 
 ---
 
+## Fix 8: SNAP OOM + Periodic Trie Flushing (Bug 14)
+
+**Root cause:** `DeferredWriteMptStorage` kept ALL trie nodes in memory, only flushing once at finalization. At ~420 bytes/account, OOM at 9.5M accounts (4GB heap) or 19.3M (8GB heap).
+
+**Fix:** Added periodic flush after each response batch (~32K accounts), bounding peak memory to ~13MB per batch. Also wired disk persistence for account range progress via `AppStateStorage.putSnapSyncProgress` with serialize/deserialize, crash recovery on restart (256-block pivot safety valve), and clear on phase completion/fallback.
+
+**Files changed:**
+- `AccountRangeCoordinator.scala` — periodic flush trigger after each batch
+- `DeferredWriteMptStorage.scala` — flush method, batch tracking
+- `AppStateStorage.scala` — putSnapSyncProgress, getSnapSyncProgress
+
+**Verification:** 303K accounts downloaded, 7 flushes, stable 833MB RSS, zero OOMs. Progress persists across restarts.
+
+---
+
+## Fix 9: Bootstrap Retry Resilience (Bug 15)
+
+**Root cause:** The bootstrap retry loop (`LocalPivot` branch in `startSnapSync()`) ran at a fixed 2s interval indefinitely when no peers were available. This code path is completely separate from the `PivotStateUnservable` → `consecutivePivotRefreshes` → `fallbackToFastSync()` chain — it has no timeout, no backoff, and no connection to `recordCriticalFailure()`. Result: 5,260+ retries over 3+ hours with no escalation to fast sync, despite core-geth running on localhost.
+
+**Fix (4 changes):**
+1. **Exponential backoff:** 2s → 4s → 8s → 16s → 32s → 60s cap. Reduces log spam from 5,260 entries to ~250.
+2. **5-minute timeout:** After `MaxBootstrapRetryDuration`, calls `fallbackToFastSync()`.
+3. **Periodic diagnostics:** Every ~5 retries, logs handshaked peer count, snap-capable count, and elapsed time.
+4. **Timer reset:** `bootstrapRetryCount` and `bootstrapRetryStartMs` reset when peers are found (`NetworkPivot` selected).
+
+Also fixed a pre-existing bug: stale retry code inside the `Some(header)` match case (header IS available but code was scheduling a retry instead of proceeding).
+
+**Also: Log file resilience.** Custom `ResilientRollingFileAppender` extends `RollingFileAppender`, checks file existence every 100 log events, and reopens if deleted. Solves silent log loss when log files are deleted while running (logback's default holds a dangling file descriptor). Applied to all 7 logback configs.
+
+---
+
 ## Live Test Results
 
 ### Test 1: Single Snap Peer (2026-03-06, pre-fix baseline)
@@ -455,6 +486,5 @@ SNAPSyncController
 
 1. **Full SNAP sync completion** — Run to 100% keyspace on ETC mainnet (estimated ~2.5 hours with 4 peers)
 2. **Bytecode/storage/healing phases** — Not yet exercised on live network
-3. **Persistence** — Range progress is in-memory only; core-geth persists to DB via `saveSyncStatus()`. Consider adding disk persistence for crash recovery.
-4. **Multi-peer load balancing** — Currently round-robin; could benefit from latency-aware peer selection
-5. **Metrics** — No Prometheus/metrics integration for monitoring SNAP sync progress in production
+3. **Multi-peer load balancing** — Currently round-robin; could benefit from latency-aware peer selection
+4. **Metrics** — No Prometheus/metrics integration for monitoring SNAP sync progress in production

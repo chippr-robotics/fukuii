@@ -51,7 +51,7 @@
         </encoder>
     </appender>
 
-    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <appender name="FILE" class="com.chipprbots.ethereum.utils.ResilientRollingFileAppender">
         <file>${LOGSDIR}/${LOGSFILENAME}.log</file>
         <append>true</append>
         <rollingPolicy class="ch.qos.logback.core.rolling.FixedWindowRollingPolicy">

@@ -29,7 +29,7 @@ sbt pp               # Pre-PR: format + style + tests
 # Build JAR first
 sbt assembly
 
-# Mordor testnet
+# Mordor testnet (fast sync)
 java -Xmx4g \
   -Dfukuii.datadir=/media/dev/2tb/data/blockchain/fukuii/mordor \
   -Dfukuii.network=mordor \
@@ -39,7 +39,7 @@ java -Xmx4g \
   -Dfukuii.network.discovery.port=30305 \
   -jar target/scala-3.3.4/fukuii-assembly-0.1.240.jar mordor
 
-# ETC mainnet
+# ETC mainnet (fast sync only)
 java -Xmx4g \
   -Dfukuii.datadir=/media/dev/2tb/data/blockchain/fukuii/etc \
   -Dfukuii.network=etc \
@@ -49,6 +49,18 @@ java -Xmx4g \
   -Dfukuii.network.discovery.port=30305 \
   -Dfukuii.sync.do-fast-sync=true \
   -Dfukuii.sync.do-snap-sync=false \
+  -jar target/scala-3.3.4/fukuii-assembly-0.1.240.jar etc
+
+# ETC mainnet (SNAP sync)
+java -Xmx4g \
+  -Dfukuii.datadir=/media/dev/2tb/data/blockchain/fukuii/etc \
+  -Dfukuii.network=etc \
+  -Dfukuii.network.rpc.http.interface=0.0.0.0 \
+  -Dfukuii.network.rpc.http.port=8553 \
+  -Dfukuii.network.server-address.port=30305 \
+  -Dfukuii.network.discovery.port=30305 \
+  -Dfukuii.sync.do-fast-sync=true \
+  -Dfukuii.sync.do-snap-sync=true \
   -jar target/scala-3.3.4/fukuii-assembly-0.1.240.jar etc
 ```
 
@@ -116,20 +128,20 @@ bytes/, crypto/, rlp/, scalanet/  # Submodules
 ## Alpha Bugs Fixed (committed on `alpha` branch)
 
 1. **Config cache poisoning** — `ConfigFactory.invalidateCaches()` + fixed HOCON include paths
-2. **SNAP fallback acceleration** — Consecutive pivot refresh counter (6min vs 75min)
-3. **Counter reset in `restartSnapSync()`** — Don't reset consecutive counter on restart
-4. **FastSync best block hash** — Track correct best block during sync
-5. **Actor name collision** — Generation counter for unique actor names on sync restart
-6. **JSON-RPC error format** — Proper error responses for malformed requests
-7. **Null id coercion** — `getOrElse(JNull)` instead of `getOrElse(0)`
-8. **RPC starvation (CRITICAL)** — Sync actors on dedicated `sync-dispatcher`, freeing default dispatcher for HTTP/TCP I/O
-9. **SNAP capability check** — Verify snap/1 peer availability before starting account sync, with grace period fallback to fast sync
-10. **SNAP stagnation watchdog** — Track `accountsDownloaded` as liveness signal (not just task completions), preventing false stagnation on slow ranges
-11. **SNAP partial range resume** — Preserve `task.next` positions across pivot refreshes via `AccountRangeProgress` message + `postStop()` snapshot. 256-block safety valve.
-12. **SNAP dynamic concurrency** — Cap workers to `min(accountConcurrency, snapPeerCount)` — 1:1 worker-to-snap-peer mapping prevents peer flooding
-13. **SNAP in-place pivot refresh** — `PivotRefreshed` message updates coordinator's state root without stop/restart, preserving progress seamlessly
-14. **SNAP stale peer accumulation** — Deduplicate `knownAvailablePeers` by `remoteAddress` on peer reconnection. Prevents inflated `activePeerCount` from stale entries across all 3 coordinators.
-15. **SNAP false stateless after pivot refresh** — `handleTaskFailed` unconditionally marked peers stateless, even when failures came from stale-root in-flight requests after pivot refresh. Added `task.rootHash == stateRoot` guard. Eliminates ~2min wasted thrashing per pivot refresh cycle.
+2. **SNAP fallback acceleration** — Consecutive pivot refresh counter (6min vs 75min). Don't reset counter in `restartSnapSync()` so it accumulates properly.
+3. **FastSync best block hash** — Track correct best block during sync
+4. **Actor name collision** — Generation counter for unique actor names on sync restart
+5. **JSON-RPC error format** — Proper error responses for malformed requests; null id coercion via `getOrElse(JNull)`
+6. **RPC starvation (CRITICAL)** — Sync actors on dedicated `sync-dispatcher`, freeing default dispatcher for HTTP/TCP I/O
+7. **SNAP capability check** — Verify snap/1 peer availability before starting account sync, with grace period fallback to fast sync
+8. **SNAP stagnation watchdog** — Track `accountsDownloaded` as liveness signal (not just task completions), preventing false stagnation on slow ranges
+9. **SNAP partial range resume** — Preserve `task.next` positions across pivot refreshes via `AccountRangeProgress` message + `postStop()` snapshot. 256-block safety valve.
+10. **SNAP dynamic concurrency** — Cap workers to `min(accountConcurrency, snapPeerCount)` — 1:1 worker-to-snap-peer mapping prevents peer flooding
+11. **SNAP in-place pivot refresh** — `PivotRefreshed` message updates coordinator's state root without stop/restart, preserving progress seamlessly
+12. **SNAP stale peer accumulation** — Deduplicate `knownAvailablePeers` by `remoteAddress` on peer reconnection. Prevents inflated `activePeerCount` from stale entries across all 3 coordinators.
+13. **SNAP false stateless after pivot refresh** — `handleTaskFailed` unconditionally marked peers stateless, even when failures came from stale-root in-flight requests after pivot refresh. Added `task.rootHash == stateRoot` guard.
+14. **SNAP OOM + progress persistence** — `DeferredWriteMptStorage` kept ALL trie nodes in memory, only flushing once at finalization. ~420 bytes/account caused OOM at 9.5M (4GB) and 19.3M (8GB). Fix: periodic flush after each response batch (~32K accounts), bounding peak memory to ~13MB. Also wired `AppStateStorage.putSnapSyncProgress` for disk persistence with crash recovery (256-block pivot safety valve).
+15. **SNAP bootstrap retry + log file resilience** — Bootstrap retry loop (the `LocalPivot` branch in `startSnapSync()`) ran at fixed 2s interval indefinitely with no peers — separate code path from the `PivotStateUnservable` fallback logic, so existing fast sync fallback never triggered. Added exponential backoff (2s->60s cap), 5-minute timeout to fast sync fallback, and periodic diagnostic logging. Also added `ResilientRollingFileAppender` to recreate log file if deleted while running.
 
 ---
 

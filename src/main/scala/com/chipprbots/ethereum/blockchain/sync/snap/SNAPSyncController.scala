@@ -13,7 +13,7 @@ import com.chipprbots.ethereum.domain.{Block, BlockBody, BlockHeader, Blockchain
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
-import com.chipprbots.ethereum.utils.{Config, Logger}
+import com.chipprbots.ethereum.utils.{Config, Hex, Logger}
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
@@ -110,7 +110,10 @@ class SNAPSyncController(
 
   // Retry counter for bootstrap-to-SNAP transition
   private var bootstrapRetryCount: Int = 0
-  private val BootstrapRetryDelay = 2.seconds
+  private val BootstrapRetryBaseDelay = 2.seconds
+  private val BootstrapRetryMaxDelay = 60.seconds
+  private val MaxBootstrapRetryDuration = 5.minutes
+  private var bootstrapRetryStartMs: Long = 0L
 
   // Pivot restart guard (prevents noisy rapid restarts if peer head fluctuates)
   private var lastPivotRestartMs: Long = 0L
@@ -274,6 +277,9 @@ class SNAPSyncController(
       log.info(
         s"Preserved account range progress: ${progress.size} ranges ($completedCount fully complete)"
       )
+      // Persist to disk for crash recovery
+      val effectivePivot = preservedAtPivotBlock.getOrElse(BigInt(0))
+      appStateStorage.putSnapSyncProgress(serializeSnapProgress(progress, effectivePivot)).commit()
 
     case ProgressAccountsFinalizingTrie =>
       progressMonitor.setFinalizingTrie(true)
@@ -385,6 +391,10 @@ class SNAPSyncController(
       } else {
         storageRangeSyncStarting = true
         log.info("Account range sync complete. Starting storage range sync...")
+        // Clear persisted progress — account phase is done, no need to resume it
+        appStateStorage.putSnapSyncProgress("").commit()
+        preservedRangeProgress = Map.empty
+        preservedAtPivotBlock = None
 
         import org.apache.pekko.pattern.{ ask, pipe }
         import org.apache.pekko.util.Timeout
@@ -830,6 +840,9 @@ class SNAPSyncController(
         }
         // Always use network block when available, regardless of gap size
         // This ensures we sync to the actual chain tip, not just our local view
+        // Reset bootstrap retry state since we have peers
+        bootstrapRetryCount = 0
+        bootstrapRetryStartMs = 0L
         (networkBestBlock, NetworkPivot)
       case None =>
         // No peers available yet - fall back to local best block
@@ -856,12 +869,13 @@ class SNAPSyncController(
       pivotSelectionSource match {
         case LocalPivot =>
           bootstrapRetryCount += 1
-          log.warning("No peers available yet; network height is unknown. Deferring SNAP start until peers are available")
-          log.warning(s"Retrying SNAP start in $BootstrapRetryDelay... (attempt $bootstrapRetryCount)")
+          if (checkBootstrapRetryTimeout("no peers, network height unknown")) return
+          val delay = bootstrapRetryDelay
+          log.warning(s"No peers available yet; network height is unknown. Retrying in $delay (attempt $bootstrapRetryCount)")
 
           bootstrapCheckTask.foreach(_.cancel())
           bootstrapCheckTask = Some(
-            scheduler.scheduleOnce(BootstrapRetryDelay) {
+            scheduler.scheduleOnce(delay) {
               self ! RetrySnapSyncStart
             }(ec)
           )
@@ -891,8 +905,9 @@ class SNAPSyncController(
           
           SNAPSyncMetrics.setPivotBlockNumber(0)
           
-          // Reset bootstrap retry counter
+          // Reset bootstrap retry state
           bootstrapRetryCount = 0
+          bootstrapRetryStartMs = 0L
           
           // Start account range sync with genesis state root
           currentPhase = AccountRangeSync
@@ -922,13 +937,15 @@ class SNAPSyncController(
       // This check determines whether to retry for peers or transition to regular sync
       pivotSelectionSource match {
         case LocalPivot =>
-          // No peers available - schedule retry
+          // No peers available - schedule retry with backoff
           bootstrapRetryCount += 1
-          log.warning(s"No peers available for pivot selection. Retrying in $BootstrapRetryDelay... (attempt $bootstrapRetryCount)")
+          if (checkBootstrapRetryTimeout("no peers for pivot selection")) return
+          val delay = bootstrapRetryDelay
+          log.warning(s"No peers available for pivot selection. Retrying in $delay (attempt $bootstrapRetryCount)")
 
           bootstrapCheckTask.foreach(_.cancel())
           bootstrapCheckTask = Some(
-            scheduler.scheduleOnce(BootstrapRetryDelay) {
+            scheduler.scheduleOnce(delay) {
               self ! RetrySnapSyncStart
             }(ec)
           )
@@ -965,24 +982,23 @@ class SNAPSyncController(
         case Some(header) =>
           // Pivot header is available - proceed with SNAP sync
           pivotBlock = Some(pivotBlockNumber)
+          stateRoot = Some(header.stateRoot)
+          appStateStorage.putSnapSyncPivotBlock(pivotBlockNumber).commit()
+          appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
 
           // Update metrics - pivot block
           SNAPSyncMetrics.setPivotBlockNumber(pivotBlockNumber)
-              log.info(s"   Pivot block $pivotBlockNumber not ready yet (attempt ${bootstrapRetryCount + 1})")
 
-              bootstrapRetryCount += 1
-              log.info(s"   Retrying in $BootstrapRetryDelay...")
+          // Reset bootstrap retry state
+          bootstrapRetryCount = 0
+          bootstrapRetryStartMs = 0L
 
-              // Schedule a retry and store the cancellable for proper cleanup
-              bootstrapCheckTask.foreach(_.cancel())
-              bootstrapCheckTask = Some(
-                scheduler.scheduleOnce(BootstrapRetryDelay) {
-                  self ! RetrySnapSyncStart
-                }(ec)
-              )
+          log.info(s"Local pivot header available for block $pivotBlockNumber, starting SNAP sync")
 
-              // Transition to bootstrapping state to handle the retry
-              context.become(bootstrapping)
+          // Start account range sync
+          currentPhase = AccountRangeSync
+          startAccountRangeSync(header.stateRoot)
+          context.become(syncing)
 
         case None =>
           // Pivot block header not available locally
@@ -1015,19 +1031,18 @@ class SNAPSyncController(
             
             case LocalPivot =>
               // Local pivot selected but header still not available
-              // This is the original race condition case - retry
-              if (bootstrapRetryCount == 0) {
-                log.info("⏳ Waiting for pivot block header to become available...")
-              }
-              log.info(s"   Pivot block $pivotBlockNumber not ready yet (attempt ${bootstrapRetryCount + 1})")
-
               bootstrapRetryCount += 1
-              log.info(s"   Retrying in $BootstrapRetryDelay...")
+              if (checkBootstrapRetryTimeout("pivot header not available")) return
+              val delay = bootstrapRetryDelay
+              if (bootstrapRetryCount == 1) {
+                log.info("Waiting for pivot block header to become available...")
+              }
+              log.info(s"   Pivot block $pivotBlockNumber not ready yet (attempt $bootstrapRetryCount), retrying in $delay")
 
               // Schedule a retry and store the cancellable for proper cleanup
               bootstrapCheckTask.foreach(_.cancel())
               bootstrapCheckTask = Some(
-                scheduler.scheduleOnce(BootstrapRetryDelay) {
+                scheduler.scheduleOnce(delay) {
                   self ! RetrySnapSyncStart
                 }(ec)
               )
@@ -1036,6 +1051,40 @@ class SNAPSyncController(
               context.become(bootstrapping)
           }
       }
+    }
+  }
+
+  /** Calculate exponential backoff delay for bootstrap retries.
+    * Backoff: 2s → 4s → 8s → 16s → 32s → 60s cap.
+    */
+  private def bootstrapRetryDelay: FiniteDuration = {
+    val exponent = math.min(bootstrapRetryCount, 5)
+    val delaySeconds = BootstrapRetryBaseDelay.toSeconds * math.pow(2, exponent).toLong
+    math.min(delaySeconds, BootstrapRetryMaxDelay.toSeconds).seconds
+  }
+
+  /** Check if bootstrap retry has exceeded the maximum duration.
+    * If so, falls back to fast sync. Returns true if fallback was triggered.
+    */
+  private def checkBootstrapRetryTimeout(context: String): Boolean = {
+    if (bootstrapRetryStartMs == 0L) bootstrapRetryStartMs = System.currentTimeMillis()
+    val elapsed = System.currentTimeMillis() - bootstrapRetryStartMs
+    if (elapsed > MaxBootstrapRetryDuration.toMillis) {
+      log.warning(s"No peers found after ${elapsed / 1000}s of bootstrap retries ($context). Falling back to fast sync.")
+      fallbackToFastSync()
+      true
+    } else {
+      // Periodic diagnostic logging (~every 30s based on accumulated delay)
+      if (bootstrapRetryCount > 0 && bootstrapRetryCount % 5 == 0) {
+        log.info(
+          s"Bootstrap retry diagnostics ($context): " +
+            s"attempt=$bootstrapRetryCount, " +
+            s"handshakedPeers=${handshakedPeers.size}, " +
+            s"snapCapable=${handshakedPeers.values.count(_.peerInfo.remoteStatus.supportsSnap)}, " +
+            s"elapsed=${elapsed / 1000}s"
+        )
+      }
+      false
     }
   }
 
@@ -1073,6 +1122,11 @@ class SNAPSyncController(
 
     // Stop progress monitoring
     progressMonitor.stopPeriodicLogging()
+
+    // Clear persisted SNAP progress — fast sync will start fresh
+    appStateStorage.putSnapSyncProgress("").commit()
+    preservedRangeProgress = Map.empty
+    preservedAtPivotBlock = None
 
     // Notify parent controller to switch to fast sync
     context.parent ! FallbackToFastSync
@@ -1118,6 +1172,28 @@ class SNAPSyncController(
     // Content-addressed MPT data is valid across adjacent pivots (~256 blocks apart),
     // but large drift means the state may have changed significantly.
     val currentPivot = pivotBlock.getOrElse(BigInt(0))
+
+    // Try disk recovery first (cross-process restart), then fall back to in-memory
+    if (preservedRangeProgress.isEmpty) {
+      appStateStorage.getSnapSyncProgress().foreach { saved =>
+        deserializeSnapProgress(saved).foreach { case (savedPivot, savedRanges) =>
+          if (savedRanges.nonEmpty && (currentPivot - savedPivot).abs <= MaxPreservedPivotDistance) {
+            log.info(
+              s"Recovered ${savedRanges.size} account ranges from disk " +
+                s"(saved pivot=$savedPivot, current=$currentPivot, drift=${(currentPivot - savedPivot).abs})"
+            )
+            preservedRangeProgress = savedRanges
+            preservedAtPivotBlock = Some(savedPivot)
+          } else if (savedRanges.nonEmpty) {
+            log.info(
+              s"Discarding stale disk progress: pivot drifted ${(currentPivot - savedPivot).abs} blocks " +
+                s"(>${MaxPreservedPivotDistance})"
+            )
+          }
+        }
+      }
+    }
+
     val resumeProgress: Map[ByteString, ByteString] = preservedAtPivotBlock match {
       case Some(prevPivot) if (currentPivot - prevPivot).abs <= MaxPreservedPivotDistance =>
         if (preservedRangeProgress.nonEmpty) {
@@ -1134,6 +1210,7 @@ class SNAPSyncController(
         )
         preservedRangeProgress = Map.empty
         preservedAtPivotBlock = None
+        appStateStorage.putSnapSyncProgress("").commit()
         Map.empty
       case None =>
         Map.empty
@@ -1949,6 +2026,54 @@ class SNAPSyncController(
       context.become(completed)
       context.parent ! Done
     }
+
+  // --- SNAP progress persistence helpers ---
+
+  /** Serialize range progress + pivot block to a simple key=value format for AppStateStorage.
+    * Format: "pivotBlock=<N>\n<hexLast>=<hexNext>\n..."
+    * Deliberately simple — no JSON library dependency needed for 4-16 entries.
+    */
+  private def serializeSnapProgress(
+      progress: Map[ByteString, ByteString],
+      pivot: BigInt
+  ): String = {
+    val sb = new StringBuilder
+    sb.append("pivotBlock=").append(pivot.toString).append('\n')
+    progress.foreach { case (last, next) =>
+      sb.append(last.toHex).append('=').append(next.toHex).append('\n')
+    }
+    sb.toString
+  }
+
+  /** Deserialize range progress from AppStateStorage format.
+    * @return (pivotBlock, rangeProgress) or None if parsing fails
+    */
+  private def deserializeSnapProgress(data: String): Option[(BigInt, Map[ByteString, ByteString])] = {
+    try {
+      val lines = data.split('\n').filter(_.nonEmpty)
+      if (lines.isEmpty) return None
+
+      var pivot: Option[BigInt] = None
+      val ranges = scala.collection.mutable.Map.empty[ByteString, ByteString]
+
+      lines.foreach { line =>
+        val idx = line.indexOf('=')
+        if (idx > 0) {
+          val key = line.substring(0, idx)
+          val value = line.substring(idx + 1)
+          if (key == "pivotBlock") {
+            pivot = Some(BigInt(value))
+          } else {
+            ranges += (ByteString(Hex.decode(key)) -> ByteString(Hex.decode(value)))
+          }
+        }
+      }
+
+      pivot.map(p => (p, ranges.toMap))
+    } catch {
+      case _: Exception => None
+    }
+  }
 }
 
 object SNAPSyncController {

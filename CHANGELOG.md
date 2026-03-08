@@ -44,6 +44,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Resolves issue where peers would disconnect immediately after handshake with "Cannot decode Disconnect" error
   - Fixes "Unknown eth/68 message type: 1" debug messages
   - Node can now maintain stable peer connections and sync properly with ETH68-capable peers
+- **Critical**: Fixed SNAP sync OOM from unbounded in-memory trie (Bug 14)
+  - `DeferredWriteMptStorage` now flushes periodically (~32K accounts per batch) instead of once at finalization
+  - Added disk persistence for account range progress with crash recovery
+- **High**: Fixed SNAP bootstrap retry loop running indefinitely without fallback (Bug 15)
+  - Bootstrap retry now uses exponential backoff (2s → 60s cap) instead of fixed 2s
+  - 5-minute timeout triggers fallback to fast sync when no peers are found
+  - Fixed stale retry code in `Some(header)` match case that prevented SNAP start from local pivot
+- **High**: Fixed SNAP→fast sync fallback never triggering (Bugs 2-3 consolidated)
+  - Consecutive pivot refresh counter no longer resets in `restartSnapSync()`
+- **Low**: Fixed JSON-RPC null id coercion and malformed request error format (Bugs 5-6 consolidated)
+- Added `ResilientRollingFileAppender` to recreate log file if deleted while running
+- SNAP stale peer accumulation fix — deduplicate peers by remote address on reconnection
+- SNAP false stateless marking after pivot refresh — added stale-root guard
 
 ## [0.1.0] - Initial Version
 

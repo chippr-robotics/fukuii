@@ -273,7 +273,7 @@ class AccountRangeCoordinator(
   // Deferred-write storage wrapper: makes updateNodesInStorage() a no-op during bulk insertion,
   // keeping all trie nodes in memory. This avoids the per-put collapse (RLP encode + Keccak-256 hash)
   // and database write that was causing insertion to degrade from ~300/s to ~20/s.
-  // Nodes are flushed to RocksDB in a single batch at response boundaries via flushTrieToStorage().
+  // Nodes are flushed to RocksDB after each response batch via flushTrieToStorage().
   private val deferredStorage = new DeferredWriteMptStorage(mptStorage)
 
   // State trie for storing accounts.
@@ -499,11 +499,10 @@ class AccountRangeCoordinator(
   // process much larger chunks. 2000 accounts takes ~2-20ms in-memory.
   private val storeChunkSize = 2000
 
-  // No intermediate flushing during account download.
-  // DeferredWriteMptStorage.flush() collapses the ENTIRE in-memory trie (O(n*log(n))) which
-  // blocks the actor for minutes (72s+ at 200K accounts, worse as trie grows). With 4GB heap,
-  // the full ETC state (~2.3M accounts, ~1-2GB) fits in memory. All accounts are inserted
-  // purely in-memory, and the single flush happens at finalization in finalizeTrie().
+  // Accounts are inserted in-memory via DeferredWriteMptStorage, then flushed to RocksDB
+  // after each response batch (~32K accounts). This bounds memory to ~one batch (~13MB)
+  // instead of accumulating all accounts in the trie (~420 bytes/account, OOM at ~9.5M/4GB).
+  // Each flush collapses the current in-memory nodes and rebuilds from persisted root.
 
   private def handleTaskComplete(
       requestId: BigInt,
@@ -713,8 +712,11 @@ class AccountRangeCoordinator(
         // Yield to actor mailbox - other messages (PeerAvailable, responses) process before next chunk
         self ! StoreAccountChunk(task, rest, totalCount, newStored, isTaskRangeComplete)
       } else {
-        // All chunks for this response stored in-memory. No flush here — the entire trie
-        // stays in memory and is flushed once at the end in finalizeTrie().
+        // All chunks for this response stored. Flush to RocksDB to bound memory usage.
+        // Without periodic flushing, the in-memory trie grows ~420 bytes/account and OOMs
+        // at ~9.5M accounts (4GB) or ~19.3M accounts (8GB). Flushing after each batch
+        // keeps peak memory at ~one batch (~32K accounts = ~13MB).
+        flushTrieToStorage()
         log.debug(s"Stored all $totalCount accounts in-memory ($accountsDownloaded total)")
 
         if (isTaskRangeComplete) {
