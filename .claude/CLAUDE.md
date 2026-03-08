@@ -142,6 +142,7 @@ bytes/, crypto/, rlp/, scalanet/  # Submodules
 13. **SNAP false stateless after pivot refresh** — `handleTaskFailed` unconditionally marked peers stateless, even when failures came from stale-root in-flight requests after pivot refresh. Added `task.rootHash == stateRoot` guard.
 14. **SNAP OOM + progress persistence** — `DeferredWriteMptStorage` kept ALL trie nodes in memory, only flushing once at finalization. ~420 bytes/account caused OOM at 9.5M (4GB) and 19.3M (8GB). Fix: periodic flush after each response batch (~32K accounts), bounding peak memory to ~13MB. Also wired `AppStateStorage.putSnapSyncProgress` for disk persistence with crash recovery (256-block pivot safety valve).
 15. **SNAP bootstrap retry + log file resilience** — Bootstrap retry loop (the `LocalPivot` branch in `startSnapSync()`) ran at fixed 2s interval indefinitely with no peers — separate code path from the `PivotStateUnservable` fallback logic, so existing fast sync fallback never triggered. Added exponential backoff (2s->60s cap), 5-minute timeout to fast sync fallback, and periodic diagnostic logging. Also added `ResilientRollingFileAppender` to recreate log file if deleted while running.
+16. **SNAP contract accounts OOM** — `contractAccounts` and `contractStorageAccounts` ArrayBuffers grew unbounded (~45M entries on ETC due to GasToken state bloat pre-Mystique/EIP-3529). Fix: file-backed storage with 64-byte fixed-width entries, temp files cleaned up on stop. Live-verified: 53M accounts / 62% keyspace with stable 1.6GB RSS.
 
 ---
 
