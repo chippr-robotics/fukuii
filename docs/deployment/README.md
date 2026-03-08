@@ -14,9 +14,9 @@ This directory contains documentation for deploying and running Fukuii nodes usi
 - **[Kong Quickstart](kong-quickstart.md)** - Quick start guide for Barad-dûr
 - **[Kong Security](kong-security.md)** - Security considerations for Barad-dûr
 
-### Client Comparisons
-- **[Besu Comparison](besu-comparison.md)** - Besu client setup for comparison testing
-- **[Geth Comparison](geth-comparison.md)** - Geth client setup for comparison testing
+### Multi-Client Testing
+- **[Gorgoroth Test Network](../../ops/gorgoroth/)** — Internal test network with Fukuii, core-geth, and Besu
+- **[Cirith Ungol](../../ops/cirith-ungol/)** — Mining validation testbed
 
 ## Related Documentation
 

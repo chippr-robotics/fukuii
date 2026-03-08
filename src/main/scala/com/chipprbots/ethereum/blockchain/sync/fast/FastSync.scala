@@ -488,7 +488,7 @@ class FastSync(
       assignedHandlers -= handler
     }
 
-    // TODO [ETCM-676]: Move to blockchain and make sure it's atomic
+    // TODO: Move to blockchain and make sure it's atomic
     private def discardLastBlocks(startBlock: BigInt, blocksToDiscard: Int): Unit =
       (startBlock to ((startBlock - blocksToDiscard).max(1)) by -1).foreach { n =>
         blockchainReader.getBlockHeaderByNumber(n).foreach { headerToRemove =>

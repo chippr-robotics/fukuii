@@ -20,7 +20,7 @@ import com.chipprbots.ethereum.jsonrpc.EthMiningService
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 
 object PoWMiningCoordinator {
-  // TODO in ETCM-773 make trait sealed
+  // TODO: make trait sealed
   trait CoordinatorProtocol
 
   final case class SetMiningMode(mode: MiningMode) extends CoordinatorProtocol
@@ -113,7 +113,7 @@ class PoWMiningCoordinator private (
       Behaviors.stopped
   }
 
-  // TODO To be used for testing and finished on ETCM-773
+  // TODO: finish for testing
   private def handleMiningOnDemand(): Behavior[CoordinatorProtocol] = Behaviors.receiveMessage {
     case SetMiningMode(mode) =>
       log.info("Received message {}", SetMiningMode(mode))

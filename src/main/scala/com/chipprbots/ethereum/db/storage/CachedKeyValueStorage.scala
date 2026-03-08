@@ -30,7 +30,7 @@ trait CachedKeyValueStorage[K, V, T <: CachedKeyValueStorage[K, V, T]] extends S
     cache.clear()
   }
 
-  // TODO EC-491 Consider other persist strategy like sliding window (save and clear only old stuff which survived long enough)
+  // TODO: Consider other persist strategy like sliding window (save and clear only old stuff which survived long enough)
   def persist(): Boolean =
     if (cache.shouldPersist) {
       forcePersist()

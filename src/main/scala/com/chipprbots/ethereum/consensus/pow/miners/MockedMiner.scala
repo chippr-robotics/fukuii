@@ -163,7 +163,7 @@ object MockedMiner {
         wrongMiningArgument[PoWMining](mining)
     }
 
-  // TODO to be removed in ETCM-773
+  // TODO: remove when no longer needed for testing
   sealed trait MockedMinerProtocol extends MinerProtocol
   case object StartMining extends MockedMinerProtocol
   case object StopMining extends MockedMinerProtocol

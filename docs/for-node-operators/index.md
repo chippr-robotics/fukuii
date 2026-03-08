@@ -1,111 +1,76 @@
 # For Node Operators
 
-This section contains guides for running and maintaining Fukuii nodes in production.
+## Quick Start
 
-## Start Here
+**Important:** Always use the assembly JAR, not `sbt run`.
 
-If you're new to Fukuii, begin with these guides:
+```bash
+# Build the assembly JAR
+sbt assembly
 
-1. **[First Start](../runbooks/first-start.md)** — Get your node running for the first time
-2. **[Node Configuration](../runbooks/node-configuration.md)** — Understand and customize configuration
-3. **[Security](../runbooks/security.md)** — Secure your node properly
+# Run on Mordor testnet
+java -Xmx4g \
+  -Dfukuii.datadir=~/.fukuii/mordor \
+  -Dfukuii.network=mordor \
+  -jar target/scala-3.3.4/fukuii-assembly-0.1.240.jar mordor
 
-## Quick Reference
-
-### Common Tasks
-
-| Task | Guide |
-|------|-------|
-| Start a new node | [First Start](../runbooks/first-start.md) |
-| Configure RPC | [Node Configuration](../runbooks/node-configuration.md#rpc-configuration) |
-| Set up TLS/HTTPS | [TLS Operations](../runbooks/tls-operations.md) |
-| Optimize peering | [Peering](../runbooks/peering.md) |
-| Manage disk space | [Disk Management](../runbooks/disk-management.md) |
-| Create backups | [Backup & Restore](../runbooks/backup-restore.md) |
-| Debug issues | [Known Issues](../runbooks/known-issues.md) |
-
-### Essential Ports
-
-| Port | Protocol | Purpose | Exposure |
-|------|----------|---------|----------|
-| 30303 | UDP | Discovery | Public |
-| 9076 | TCP | P2P | Public |
-| 8546 | TCP | RPC | **Private** |
-
-### Default Paths
-
-| Path | Description |
-|------|-------------|
-| `~/.fukuii/<network>/` | Data directory |
-| `~/.fukuii/<network>/node.key` | Node identity key |
-| `~/.fukuii/<network>/keystore/` | Account keystores |
+# Run on ETC mainnet
+java -Xmx4g \
+  -Dfukuii.datadir=~/.fukuii/etc \
+  -Dfukuii.network=etc \
+  -Dfukuii.sync.do-fast-sync=true \
+  -jar target/scala-3.3.4/fukuii-assembly-0.1.240.jar etc
+```
 
 ## Runbooks
 
-### Setup & Configuration
-
-- **[First Start](../runbooks/first-start.md)** — Initial node setup and first synchronization
-- **[Node Configuration](../runbooks/node-configuration.md)** — Complete configuration reference
-- **[Operating Modes](../runbooks/operating-modes.md)** — Full node, archive node, light client
-
-### Security
-
-- **[Security](../runbooks/security.md)** — Firewall, access control, key management
-- **[TLS Operations](../runbooks/tls-operations.md)** — HTTPS/TLS for RPC endpoints
-
-### Networking
-
-- **[Peering](../runbooks/peering.md)** — Peer discovery and connectivity troubleshooting
-
-### Maintenance
-
-- **[Disk Management](../runbooks/disk-management.md)** — Managing blockchain data growth
-- **[Backup & Restore](../runbooks/backup-restore.md)** — Protecting your data
-
-### Troubleshooting
-
-- **[Log Triage](../runbooks/log-triage.md)** — Understanding and analyzing logs
-- **[Known Issues](../runbooks/known-issues.md)** — Common problems and solutions
-
-## Health Checks
-
-### Check Sync Status
-
-```bash
-curl -X POST --data '{"jsonrpc":"2.0","method":"eth_syncing","params":[],"id":1}' \
-  http://localhost:8546
-```
-
-### Check Peer Count
-
-```bash
-curl -X POST --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
-  http://localhost:8546
-```
-
-### Check Client Version
-
-```bash
-curl -X POST --data '{"jsonrpc":"2.0","method":"web3_clientVersion","params":[],"id":1}' \
-  http://localhost:8546
-```
+| Guide | Description |
+|-------|-------------|
+| [First Start](../runbooks/first-start.md) | Initial node setup and first sync |
+| [Node Configuration](../runbooks/node-configuration.md) | Complete configuration reference |
+| [Operating Modes](../runbooks/operating-modes.md) | Full node, archive node, light client |
+| [Static Nodes](../for-operators/static-nodes-configuration.md) | Peer configuration via static-nodes.json |
+| [Security](../runbooks/security.md) | Firewall, access control, key management |
+| [TLS Operations](../runbooks/tls-operations.md) | HTTPS/TLS for RPC endpoints |
+| [Peering](../runbooks/peering.md) | Peer discovery and connectivity |
+| [Disk Management](../runbooks/disk-management.md) | Managing blockchain data growth |
+| [Backup & Restore](../runbooks/backup-restore.md) | Protecting your data |
+| [Log Triage](../runbooks/log-triage.md) | Understanding and analyzing logs |
+| [Known Issues](../runbooks/known-issues.md) | Common problems and solutions |
 
 ## Network Information
 
-### Ethereum Classic (Mainnet)
+| Network | Chain ID | Network ID | Default Data Dir |
+|---------|----------|------------|------------------|
+| ETC Mainnet | 61 (0x3d) | 1 | `~/.fukuii/etc/` |
+| Mordor Testnet | 63 (0x3f) | 7 | `~/.fukuii/mordor/` |
 
-- **Network ID**: 1
-- **Chain ID**: 61 (0x3d)
-- **Default Data Dir**: `~/.fukuii/etc/`
+## Essential Ports
 
-### Mordor (Testnet)
+| Port | Protocol | Purpose | Exposure |
+|------|----------|---------|----------|
+| 30303 | TCP+UDP | P2P + Discovery | Public |
+| 8546 | TCP | JSON-RPC | **Private** |
 
-- **Network ID**: 7
-- **Chain ID**: 63 (0x3f)
-- **Default Data Dir**: `~/.fukuii/mordor/`
+## Health Checks
 
-## Related Resources
+```bash
+# Sync status
+curl -s -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_syncing","params":[],"id":1}'
 
-- [Docker Deployment](../deployment/docker.md)
-- [Metrics & Monitoring](../operations/metrics-and-monitoring.md)
-- [API Reference](../api/JSON_RPC_API_REFERENCE.md)
+# Peer count
+curl -s -X POST http://localhost:8546 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}'
+```
+
+## Deployment
+
+| Guide | Description |
+|-------|-------------|
+| [Docker Guide](../deployment/docker.md) | Container deployment, signing, Kubernetes |
+| [Kong API Gateway](../deployment/kong.md) | Barad-dur API gateway integration |
+| [Monitoring](../operations/metrics-and-monitoring.md) | Prometheus + Grafana |
+| [API Reference](../api/JSON_RPC_API_REFERENCE.md) | JSON-RPC endpoint documentation |

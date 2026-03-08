@@ -22,7 +22,7 @@ class ReceiptStorage(val dataSource: DataSource) extends TransactionalKeyValueSt
 
   override def keySerializer: BlockHash => IndexedSeq[Byte] = _.toIndexedSeq
 
-  // FIXME: perhaps we should just operate on ByteString to avoid such strange conversions: ETCM-322
+  // FIXME: perhaps we should just operate on ByteString to avoid such strange conversions
   override def keyDeserializer: IndexedSeq[Byte] => BlockHash = k => ByteString.fromArrayUnsafe(k.toArray)
 
   override def valueSerializer: ReceiptSeq => IndexedSeq[Byte] = receipts =>

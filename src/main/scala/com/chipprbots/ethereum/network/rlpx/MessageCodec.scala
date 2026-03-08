@@ -124,7 +124,7 @@ class MessageCodec(
       )
     }
 
-  // TODO: ETCM-402 - messageDecoder should use negotiated protocol version
+  // TODO: messageDecoder should use negotiated protocol version
   def readMessages(data: ByteString): Seq[Either[DecodingError, Message]] = {
     log.debug("readMessages: Received {} bytes of data, p2pVersion: {}", data.length, remotePeer2PeerVersion)
     val frames = frameCodec.readFrames(data)

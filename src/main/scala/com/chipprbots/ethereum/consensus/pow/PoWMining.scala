@@ -68,7 +68,7 @@ class PoWMining private (
   )
 
   @volatile private[pow] var minerCoordinatorRef: Option[ActorRef[CoordinatorProtocol]] = None
-  // TODO in ETCM-773 remove MockedMiner
+  // TODO: remove MockedMiner when no longer needed for testing
   @volatile private[pow] var mockedMinerRef: Option[org.apache.pekko.actor.ActorRef] = None
 
   final val BlockForgerDispatcherId = "fukuii.async.dispatchers.block-forger"

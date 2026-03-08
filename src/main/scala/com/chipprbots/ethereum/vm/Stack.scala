@@ -12,7 +12,7 @@ object Stack {
     new Stack(Vector(), maxSize)
 }
 
-//TODO: consider a List with head being top of the stack (DUP,SWAP go at most the depth of 16) [EC-251]
+//TODO: consider a List with head being top of the stack (DUP,SWAP go at most the depth of 16)
 /** Stack for the EVM. Instruction pop their arguments from it and push their results to it. The Stack doesn't handle
   * overflow and underflow errors. Any operations that trascend given stack bounds will return the stack unchanged. Pop
   * will always return zeroes in such case.

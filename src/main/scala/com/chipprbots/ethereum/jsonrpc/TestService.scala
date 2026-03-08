@@ -423,7 +423,7 @@ class TestService(
     * @see
     *   https://github.com/ethereum/retesteth/wiki/RPC-Methods#debug_storagerangeat
     */
-  // TODO ETCM-784, ETCM-758: see how we can get a state after an arbitrary transation
+  // TODO: see how we can get a state after an arbitrary transaction
   def storageRangeAt(request: StorageRangeRequest): ServiceResponse[StorageRangeResponse] = {
 
     val blockOpt = request.parameters.blockHashOrNumber
