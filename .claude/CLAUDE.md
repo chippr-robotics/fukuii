@@ -128,7 +128,7 @@ bytes/, crypto/, rlp/, scalanet/  # Submodules
 ## Alpha Bugs Fixed (committed on `alpha` branch)
 
 1. **Config cache poisoning** — `ConfigFactory.invalidateCaches()` + fixed HOCON include paths
-2. **SNAP fallback acceleration** — Consecutive pivot refresh counter (6min vs 75min). Don't reset counter in `restartSnapSync()` so it accumulates properly.
+2. **SNAP fallback resilience** — Two code paths to `fallbackToFastSync()`: (a) consecutive pivot refresh counter (6min vs 75min, don't reset in `restartSnapSync()`), (b) bootstrap retry with exponential backoff (2s→60s cap) and 5-minute timeout when no peers found — the `LocalPivot` retry loop was a separate path with no fallback escape.
 3. **FastSync best block hash** — Track correct best block during sync
 4. **Actor name collision** — Generation counter for unique actor names on sync restart
 5. **JSON-RPC error format** — Proper error responses for malformed requests; null id coercion via `getOrElse(JNull)`
@@ -140,9 +140,8 @@ bytes/, crypto/, rlp/, scalanet/  # Submodules
 11. **SNAP in-place pivot refresh** — `PivotRefreshed` message updates coordinator's state root without stop/restart, preserving progress seamlessly
 12. **SNAP stale peer accumulation** — Deduplicate `knownAvailablePeers` by `remoteAddress` on peer reconnection. Prevents inflated `activePeerCount` from stale entries across all 3 coordinators.
 13. **SNAP false stateless after pivot refresh** — `handleTaskFailed` unconditionally marked peers stateless, even when failures came from stale-root in-flight requests after pivot refresh. Added `task.rootHash == stateRoot` guard.
-14. **SNAP OOM + progress persistence** — `DeferredWriteMptStorage` kept ALL trie nodes in memory, only flushing once at finalization. ~420 bytes/account caused OOM at 9.5M (4GB) and 19.3M (8GB). Fix: periodic flush after each response batch (~32K accounts), bounding peak memory to ~13MB. Also wired `AppStateStorage.putSnapSyncProgress` for disk persistence with crash recovery (256-block pivot safety valve).
-15. **SNAP bootstrap retry + log file resilience** — Bootstrap retry loop (the `LocalPivot` branch in `startSnapSync()`) ran at fixed 2s interval indefinitely with no peers — separate code path from the `PivotStateUnservable` fallback logic, so existing fast sync fallback never triggered. Added exponential backoff (2s->60s cap), 5-minute timeout to fast sync fallback, and periodic diagnostic logging. Also added `ResilientRollingFileAppender` to recreate log file if deleted while running.
-16. **SNAP contract accounts OOM** — `contractAccounts` and `contractStorageAccounts` ArrayBuffers grew unbounded (~45M entries on ETC due to GasToken state bloat pre-Mystique/EIP-3529). Fix: file-backed storage with 64-byte fixed-width entries, temp files cleaned up on stop. Live-verified: 53M accounts / 62% keyspace with stable 1.6GB RSS.
+14. **SNAP OOM** — Three unbounded memory sources during account download: (a) `DeferredWriteMptStorage` held all trie nodes (~420 bytes/account, OOM at 9.5M). Fix: periodic flush after each response batch. (b) `contractAccounts`/`contractStorageAccounts` ArrayBuffers (~45M entries on ETC). Fix: file-backed storage with 64-byte entries, temp files cleaned up on stop. (c) Progress persistence via `AppStateStorage.putSnapSyncProgress` for crash recovery (256-block safety valve).
+15. **Log file resilience** — `ResilientRollingFileAppender` recreates log file if deleted while running. Standard `RollingFileAppender` writes to dangling inode after deletion — logs silently lost.
 
 ---
 
