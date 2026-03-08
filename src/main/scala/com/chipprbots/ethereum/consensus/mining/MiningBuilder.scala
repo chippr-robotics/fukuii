@@ -41,8 +41,6 @@ trait StdMiningBuilder extends MiningBuilder {
   private def newConfig[C <: AnyRef](c: C): FullMiningConfig[C] =
     FullMiningConfig(miningConfig, c)
 
-  // TODO: refactor configs to avoid possibility of running mocked or
-  // restricted-pow mining on real network like ETC or Mordor
   protected def buildPoWMining(): PoWMining = {
     val specificConfig = EthashConfig(fukuiiConfig)
 

@@ -20,7 +20,6 @@ import com.chipprbots.ethereum.network.p2p.messages.WireProtocol._
 
 class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyChecks with Matchers {
 
-  // TODO: add tests for messages from ETH63
   "Wire Protocol" when {
 
     "encoding and decoding Hello" should {

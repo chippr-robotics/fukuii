@@ -132,7 +132,6 @@ class BlockFetcher(
         state.pickBlocks(amount) |> handlePickedBlocks(state, replyTo) |> fetchBlocks
 
       case StrictPickBlocks(from, atLeastWith, replyTo) =>
-        // FIXME: Consider having StrictPickBlocks calls guaranteeing this
         // from parameter could be negative or 0 so we should cap it to 1 if that's the case
         val fromCapped = from.max(1)
         val minBlock = fromCapped.min(atLeastWith).max(1)

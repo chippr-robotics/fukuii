@@ -277,7 +277,6 @@ case class JsonRpcController(
       handle[GetLogHashRequest, GetLogHashResponse](testService.getLogHash, req)
     case req @ JsonRpcRequest(_, "miner_setEtherbase", _, _) =>
       handle[TestService.SetEtherbaseRequest, TestService.SetEtherbaseResponse](testService.setEtherbase, req)
-    // FIXME: 'debug_' has it's own 'handle' method, should be aligned
     case req @ JsonRpcRequest(_, "debug_accountRange", _, _) =>
       handle[AccountsInRangeRequest, AccountsInRangeResponse](testService.getAccountsInRange, req)
     case req @ JsonRpcRequest(_, "debug_storageRangeAt", _, _) =>

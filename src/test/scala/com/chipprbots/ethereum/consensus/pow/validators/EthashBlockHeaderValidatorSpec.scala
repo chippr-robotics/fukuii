@@ -285,7 +285,6 @@ class EthashBlockHeaderValidatorSpec
     difficulty shouldBe blockDifficultyWihtoutBomb
   }
 
-  // FIXME: Replace with mocked miner validators once we have them
   object BlockValidatorWithPowMocked extends BlockHeaderValidatorSkeleton() {
 
     override def validateEvenMore(blockHeader: BlockHeader)(implicit

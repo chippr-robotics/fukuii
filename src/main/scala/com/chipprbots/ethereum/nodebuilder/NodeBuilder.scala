@@ -158,7 +158,7 @@ trait PeerDiscoveryManagerBuilder {
 }
 
 trait BlacklistBuilder {
-  private val blacklistSize: Int = 1000 // TODO ETCM-642 move to config
+  private val blacklistSize: Int = 1000
   lazy val blacklist: Blacklist = CacheBasedBlacklist.empty(blacklistSize)
 }
 
@@ -271,7 +271,6 @@ trait PeerEventBusBuilder {
 trait PeerStatisticsBuilder {
   self: ActorSystemBuilder with PeerEventBusBuilder =>
 
-  // TODO: a candidate to move upwards in trait hierarchy?
   implicit val clock: Clock = Clock.systemUTC()
 
   lazy val peerStatistics: ActorRef = system.actorOf(
@@ -698,7 +697,7 @@ trait JSONRpcIpcServerBuilder {
 trait OmmersPoolBuilder {
   self: ActorSystemBuilder with BlockchainBuilder with MiningConfigBuilder =>
 
-  lazy val ommersPoolSize: Int = 30 // FIXME For this we need EthashConfig, which means Ethash consensus
+  lazy val ommersPoolSize: Int = 30
   lazy val ommersPool: ActorRef = system.actorOf(OmmersPool.props(blockchainReader, ommersPoolSize))
 }
 

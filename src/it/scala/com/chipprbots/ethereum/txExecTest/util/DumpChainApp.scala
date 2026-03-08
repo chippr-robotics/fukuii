@@ -109,9 +109,7 @@ object DumpChainApp extends App with NodeKeyBuilder with SecureRandomBuilder wit
       override val forkResolverOpt: Option[ForkResolver] = DumpChainApp.forkResolverOpt
       override val nodeStatusHolder: AtomicReference[NodeStatus] = DumpChainApp.nodeStatusHolder
       override val peerConfiguration: PeerConfiguration = peerConfig
-      // FIXME: Selecting value blockchain from object DumpChainApp, which extends scala.DelayedInit, is likely to yield an uninitialized value
       override val blockchain: Blockchain = DumpChainApp.blockchain
-      // FIXME: Selecting value blockchainReader from object DumpChainApp, which extends scala.DelayedInit, is likely to yield an uninitialized value
       override val blockchainReader: BlockchainReader = DumpChainApp.blockchainReader
       override val appStateStorage: AppStateStorage = storagesInstance.storages.appStateStorage
       override val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
@@ -128,11 +126,11 @@ object DumpChainApp extends App with NodeKeyBuilder with SecureRandomBuilder wit
 
   val peerManager: ActorRef = actorSystem.actorOf(
     PeerManagerActor.props(
-      peerDiscoveryManager = actorSystem.deadLetters, // TODO: fixme
+      peerDiscoveryManager = actorSystem.deadLetters,
       peerConfiguration = peerConfig,
       peerMessageBus = peerMessageBus,
       peerStatistics = peerStatistics,
-      knownNodesManager = actorSystem.deadLetters, // TODO: fixme
+      knownNodesManager = actorSystem.deadLetters,
       handshaker = handshaker,
       authHandshaker = authHandshaker,
       discoveryConfig = discoveryConfig,

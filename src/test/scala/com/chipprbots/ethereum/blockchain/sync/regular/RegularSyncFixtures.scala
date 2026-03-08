@@ -289,7 +289,6 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
         }
     }
 
-    // TODO: consider extracting it somewhere closer to domain
     implicit class BlocksListOps(blocks: List[Block]) {
       def headNumberUnsafe: BigInt = blocks.head.number
       def headNumber: Option[BigInt] = blocks.headOption.map(_.number)
@@ -303,7 +302,6 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
       def byHashUnsafe(hash: ByteString): Block = byHash(hash).get
     }
 
-    // TODO: consider extracting it into common test environment
     implicit class TestProbeOps(probe: TestProbe) {
 
       def expectMsgEq[T: Eq](msg: T): T = expectMsgEq(remainingOrDefault, msg)

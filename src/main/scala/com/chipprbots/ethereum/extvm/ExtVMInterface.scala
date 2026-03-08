@@ -47,7 +47,6 @@ class ExtVMInterface(externaVmConfig: VmConfig.ExternalConfig, blockchainConfig:
 
     val client = new VMClient(externaVmConfig, new MessageHandler(connIn, connOut), testMode)
     client.sendHello(ApiVersionProvider.version, blockchainConfig)
-    // TODO: await hello response, check version
 
     vmClient = Some(client)
   }

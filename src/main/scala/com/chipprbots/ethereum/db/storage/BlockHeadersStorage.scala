@@ -30,7 +30,6 @@ class BlockHeadersStorage(val dataSource: DataSource)
     blockHeader => compactPickledBytes(Pickle.intoBytes(blockHeader))
 
   override def valueDeserializer: IndexedSeq[Byte] => BlockHeader =
-    // TODO: consider reusing this formula in other storages
     (byteSequenceToBuffer _).andThen(Unpickle[BlockHeader].fromBytes)
 }
 

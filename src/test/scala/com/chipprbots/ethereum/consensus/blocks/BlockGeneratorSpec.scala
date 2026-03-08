@@ -622,9 +622,6 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with Logger {
         blockValidation
       )
 
-    // FIXME: the change in gas limit voting strategy caused the hardcoded nonce and mixHash in this file to be invalid
-    //        The gas limit of all the generated blocks has to be set to the old strategy of increasing as much as possible
-    //        the gas limit, if not PoW validations will fail
     val generatedBlockGasLimit = 16733003
   }
 }

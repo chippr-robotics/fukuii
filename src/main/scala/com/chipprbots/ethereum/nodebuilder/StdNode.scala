@@ -180,8 +180,6 @@ abstract class BaseNode extends Node {
   }
 
   def fixDatabase(): Unit = {
-    // FIXME this is a temporary solution to avoid an incompatibility due to the introduction of the best block hash
-    // We can remove this fix when we release an incompatible version.
     val bestBlockInfo = storagesInstance.storages.appStateStorage.getBestBlockInfo()
     if (bestBlockInfo.hash == ByteString.empty && bestBlockInfo.number > 0) {
       log.warn("Fixing best block hash into database for block {}", bestBlockInfo.number)

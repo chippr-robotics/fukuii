@@ -30,7 +30,7 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     getBigInt(Keys.BestBlockNumber)
 
   def getBestBlockInfo(): BlockInfo =
-    BlockInfo( // TODO ETCM-1090 provide the genesis hash as default
+    BlockInfo(
       get(Keys.BestBlockHash).map(v => ByteString(Hex.decode(v))).getOrElse(ByteString.empty),
       getBigInt(Keys.BestBlockNumber)
     )

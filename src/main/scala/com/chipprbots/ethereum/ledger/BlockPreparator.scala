@@ -21,7 +21,7 @@ import com.chipprbots.ethereum.vm.{PC => _, _}
 class BlockPreparator(
     vm: VMImpl,
     signedTxValidator: SignedTransactionValidator,
-    blockchain: BlockchainImpl, // FIXME Depend on the interface
+    blockchain: BlockchainImpl,
     blockchainReader: BlockchainReader
 ) extends Logger {
 

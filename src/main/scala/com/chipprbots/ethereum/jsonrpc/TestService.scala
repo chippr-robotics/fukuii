@@ -189,9 +189,6 @@ class TestService(
 
     // remove current genesis (Try because it may not exist)
     Try(blockchain.removeBlock(blockchainReader.genesisHeader.hash))
-    // TODO clear the storage ? When relaunching some tests on the same running test fukuii client,
-    // we end up with duplicate blocks because they are still present in the storage layer
-    // for example: bcMultiChainTest/ChainAtoChainB_BlockHash_Istanbul
 
     // load the new genesis
     val genesisDataLoader = new GenesisDataLoader(blockchainReader, blockchainWriter, stateStorage)
@@ -423,7 +420,6 @@ class TestService(
     * @see
     *   https://github.com/ethereum/retesteth/wiki/RPC-Methods#debug_storagerangeat
     */
-  // TODO: see how we can get a state after an arbitrary transaction
   def storageRangeAt(request: StorageRangeRequest): ServiceResponse[StorageRangeResponse] = {
 
     val blockOpt = request.parameters.blockHashOrNumber

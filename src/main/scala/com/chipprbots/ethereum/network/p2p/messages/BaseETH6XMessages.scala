@@ -369,7 +369,6 @@ object BaseETH6XMessages {
         val first = bytes(0)
         (first match {
           case Transaction.Type01 => PrefixedRLPEncodable(Transaction.Type01, rawDecode(bytes.tail))
-          // TODO enforce legacy boundaries
           case _ => rawDecode(bytes)
         }).toSignedTransaction
       }
