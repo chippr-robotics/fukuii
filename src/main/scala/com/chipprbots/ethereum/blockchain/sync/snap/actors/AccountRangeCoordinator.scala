@@ -4,6 +4,9 @@ import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props, SupervisorS
 import org.apache.pekko.actor.SupervisorStrategy._
 import org.apache.pekko.util.ByteString
 
+import java.io.{BufferedOutputStream, FileOutputStream, RandomAccessFile}
+import java.nio.file.{Files, Path}
+
 import scala.collection.mutable
 import scala.concurrent.{Future, blocking}
 import scala.concurrent.duration._
@@ -192,11 +195,17 @@ class AccountRangeCoordinator(
   // This avoids the jitter from snapshotting in-flight task positions.
   private var consumedKeyspace: BigInt = BigInt(0)
 
-  // Contract accounts collected for bytecode download
-  private val contractAccounts = mutable.ArrayBuffer[(ByteString, ByteString)]()
-
-  // Contract accounts collected for storage download (accountHash -> storageRoot)
-  private val contractStorageAccounts = mutable.ArrayBuffer[(ByteString, ByteString)]()
+  // Contract accounts persisted to temp files to avoid unbounded memory growth.
+  // On ETC mainnet ~20% of ~67M accounts are contracts — ~13M entries × 64 bytes each
+  // would consume ~1.6GB in memory. Writing to disk keeps memory usage near zero.
+  // Each entry is 64 bytes: 32-byte accountHash + 32-byte codeHash (or storageRoot).
+  private val contractAccountsFile: Path = Files.createTempFile("fukuii-contract-accounts-", ".bin")
+  private val contractStorageFile: Path = Files.createTempFile("fukuii-contract-storage-", ".bin")
+  private val contractAccountsOut = new BufferedOutputStream(new FileOutputStream(contractAccountsFile.toFile), 65536)
+  private val contractStorageOut = new BufferedOutputStream(new FileOutputStream(contractStorageFile.toFile), 65536)
+  private var contractAccountsCount: Long = 0
+  private var contractStorageCount: Long = 0
+  private val ContractEntrySize = 64 // 32 bytes hash + 32 bytes codeHash/storageRoot
 
   // Track last known available peers so we can re-dispatch after task failures
   // without waiting for the next PeerAvailable message.
@@ -302,7 +311,12 @@ class AccountRangeCoordinator(
   override def postStop(): Unit = {
     // Send final progress snapshot so controller can resume from saved positions on restart
     sendProgressSnapshot()
-    log.info(s"AccountRangeCoordinator stopped. Downloaded $accountsDownloaded accounts")
+    // Close and delete temporary contract account files
+    try { contractAccountsOut.close() } catch { case _: Exception => }
+    try { contractStorageOut.close() } catch { case _: Exception => }
+    try { Files.deleteIfExists(contractAccountsFile) } catch { case _: Exception => }
+    try { Files.deleteIfExists(contractStorageFile) } catch { case _: Exception => }
+    log.info(s"AccountRangeCoordinator stopped. Downloaded $accountsDownloaded accounts, identified $contractAccountsCount contracts")
   }
 
   /** Collect current task positions and send to controller for resume across restarts. */
@@ -397,10 +411,10 @@ class AccountRangeCoordinator(
       sender() ! progress
 
     case GetContractAccounts =>
-      sender() ! ContractAccountsResponse(contractAccounts.toSeq)
+      sender() ! ContractAccountsResponse(readContractFile(contractAccountsFile, contractAccountsOut, contractAccountsCount))
 
     case GetContractStorageAccounts =>
-      sender() ! ContractStorageAccountsResponse(contractStorageAccounts.toSeq)
+      sender() ! ContractStorageAccountsResponse(readContractFile(contractStorageFile, contractStorageOut, contractStorageCount))
 
     case StoreAccountChunk(task, remaining, totalCount, storedSoFar, isTaskRangeComplete) =>
       handleStoreAccountChunk(task, remaining, totalCount, storedSoFar, isTaskRangeComplete)
@@ -457,10 +471,10 @@ class AccountRangeCoordinator(
       sender() ! calculateProgress()
 
     case GetContractAccounts =>
-      sender() ! ContractAccountsResponse(contractAccounts.toSeq)
+      sender() ! ContractAccountsResponse(readContractFile(contractAccountsFile, contractAccountsOut, contractAccountsCount))
 
     case GetContractStorageAccounts =>
-      sender() ! ContractStorageAccountsResponse(contractStorageAccounts.toSeq)
+      sender() ! ContractStorageAccountsResponse(readContractFile(contractStorageFile, contractStorageOut, contractStorageCount))
 
     case CheckCompletion =>
       // Already finalizing, ignore
@@ -765,20 +779,22 @@ class AccountRangeCoordinator(
     *   Accounts to scan for contracts
     */
   private def identifyContractAccounts(accounts: Seq[(ByteString, Account)]): Unit = {
-    val contracts = accounts.collect {
-      case (accountHash, account) if account.codeHash != Account.EmptyCodeHash =>
-        (accountHash, account.codeHash)
+    var count = 0
+    accounts.foreach { case (accountHash, account) =>
+      if (account.codeHash != Account.EmptyCodeHash) {
+        // Write 32-byte accountHash + 32-byte codeHash to bytecode file
+        contractAccountsOut.write(accountHash.toArray.padTo(32, 0.toByte), 0, 32)
+        contractAccountsOut.write(account.codeHash.toArray.padTo(32, 0.toByte), 0, 32)
+        // Write 32-byte accountHash + 32-byte storageRoot to storage file
+        contractStorageOut.write(accountHash.toArray.padTo(32, 0.toByte), 0, 32)
+        contractStorageOut.write(account.storageRoot.toArray.padTo(32, 0.toByte), 0, 32)
+        count += 1
+      }
     }
-
-    val storageContracts = accounts.collect {
-      case (accountHash, account) if account.codeHash != Account.EmptyCodeHash =>
-        (accountHash, account.storageRoot)
-    }
-
-    if (contracts.nonEmpty) {
-      contractAccounts.appendAll(contracts)
-      contractStorageAccounts.appendAll(storageContracts)
-      log.info(s"Identified ${contracts.size} contract accounts (total: ${contractAccounts.size})")
+    if (count > 0) {
+      contractAccountsCount += count
+      contractStorageCount += count
+      log.info(s"Identified $count contract accounts (total: $contractAccountsCount)")
     }
   }
 
@@ -828,13 +844,29 @@ class AccountRangeCoordinator(
     ByteString(stateTrie.getRootHash)
   }
 
-  /** Get all collected contract accounts for bytecode download
-    *
-    * @return
-    *   Sequence of (accountHash, codeHash) for contract accounts
+  /** Read all contract account entries from a temporary file.
+    * Each entry is 64 bytes: 32-byte key + 32-byte value.
+    * Flushes the output stream first to ensure all data is written.
     */
-  def getContractAccounts: Seq[(ByteString, ByteString)] = {
-    contractAccounts.toSeq
+  private def readContractFile(filePath: Path, out: BufferedOutputStream, count: Long): Seq[(ByteString, ByteString)] = {
+    out.flush()
+    if (count == 0) return Seq.empty
+    val raf = new RandomAccessFile(filePath.toFile, "r")
+    try {
+      val result = new mutable.ArrayBuffer[(ByteString, ByteString)](count.toInt)
+      val buf = new Array[Byte](ContractEntrySize)
+      var i = 0L
+      while (i < count) {
+        raf.readFully(buf)
+        val key = ByteString(java.util.Arrays.copyOfRange(buf, 0, 32))
+        val value = ByteString(java.util.Arrays.copyOfRange(buf, 32, 64))
+        result += ((key, value))
+        i += 1
+      }
+      result.toSeq
+    } finally {
+      raf.close()
+    }
   }
 
 
@@ -851,7 +883,7 @@ class AccountRangeCoordinator(
       tasksPending = pendingTasks.size,
       progress = progress,
       elapsedTimeMs = elapsedMs,
-      contractAccountsFound = contractAccounts.size
+      contractAccountsFound = contractAccountsCount
     )
   }
 
@@ -923,5 +955,5 @@ case class AccountRangeStats(
     tasksPending: Int,
     progress: Double,
     elapsedTimeMs: Long,
-    contractAccountsFound: Int
+    contractAccountsFound: Long
 )
