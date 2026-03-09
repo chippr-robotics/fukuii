@@ -202,8 +202,14 @@ class SyncController(
     
     case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Done =>
       snapSync ! PoisonPill
-      log.info("SNAP sync completed, transitioning to regular sync")
-      startRegularSync()
+      log.info("SNAP sync completed, checking recovery flags before regular sync")
+      val needBytecode = !appStateStorage.isBytecodeRecoveryDone()
+      val needStorage = !appStateStorage.isStorageRecoveryDone()
+      if (needBytecode || needStorage) {
+        startRecovery(needBytecode, needStorage)
+      } else {
+        startRegularSync()
+      }
 
     case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.FallbackToFastSync =>
       snapSync ! PoisonPill
@@ -335,6 +341,9 @@ class SyncController(
         // SNAP sync requested - just start it
         // It will fall back to fast sync if needed
         startSnapSync()
+      case (true, _, true, _) if syncConfig.forceStateRehealing =>
+        log.warning("force-state-rehealing is enabled — re-entering state healing/validation with existing DB")
+        startSnapSyncHealOnly()
       case (true, _, true, _) =>
         log.warning("do-snap-sync is true but SNAP sync already completed")
         val needBytecode = !appStateStorage.isBytecodeRecoveryDone()
@@ -414,6 +423,56 @@ class SyncController(
 
     snapSync ! SNAPSyncController.Start
     context.become(runningSnapSync(snapSync))
+  }
+
+  /** Re-enter SNAP sync's healing/validation phases using the saved stateRoot and pivotBlock.
+    * Skips account/bytecode/storage download — only heals missing intermediate trie nodes
+    * and re-validates state completeness. Used after Bug 23 fix to recover an existing DB
+    * without a full 20-hour re-sync.
+    */
+  def startSnapSyncHealOnly(): Unit = {
+    val stateRootOpt = appStateStorage.getSnapSyncStateRoot()
+    val pivotBlockOpt = appStateStorage.getSnapSyncPivotBlock()
+
+    (stateRootOpt, pivotBlockOpt) match {
+      case (Some(stateRoot), Some(pivotBlock)) =>
+        log.info(
+          s"Starting heal-only SNAP sync (stateRoot=${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}..., " +
+            s"pivotBlock=$pivotBlock)"
+        )
+        syncGeneration += 1
+
+        // Clear SnapSyncDone so completeSnapSync() can re-set it after healing
+        appStateStorage.clearSnapSyncDone().commit()
+
+        val snapSyncConfig = loadSnapSyncConfig()
+
+        val snapSync = context.actorOf(
+          SNAPSyncController.props(
+            blockchainReader,
+            blockchainWriter,
+            appStateStorage,
+            stateStorage,
+            evmCodeStorage,
+            networkPeerManager,
+            peerEventBus,
+            syncConfig,
+            snapSyncConfig,
+            scheduler
+          ).withDispatcher("sync-dispatcher"),
+          s"snap-sync-heal-$syncGeneration"
+        )
+
+        // Register for SNAP message routing (healing needs to download trie nodes via SNAP)
+        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(snapSync)
+
+        snapSync ! SNAPSyncController.StartHealOnly(stateRoot, pivotBlock)
+        context.become(runningSnapSync(snapSync))
+
+      case _ =>
+        log.warning("Cannot start heal-only mode: missing stateRoot or pivotBlock in AppStateStorage. Proceeding to regular sync.")
+        startRegularSync()
+    }
   }
 
   def startRegularSync(): Unit = {
