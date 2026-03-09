@@ -26,6 +26,15 @@ object Messages {
   case class ContractAccountsResponse(accounts: Seq[(ByteString, ByteString)]) extends AccountRangeCoordinatorMessage
   case object GetContractStorageAccounts extends AccountRangeCoordinatorMessage
   case class ContractStorageAccountsResponse(accounts: Seq[(ByteString, ByteString)]) extends AccountRangeCoordinatorMessage
+
+  /** Request unique codeHashes collected during account download (Bloom-filtered, file-backed).
+    * Returns ~2M entries (~64MB) instead of 73.5M raw entries (4.7GB). Bug 20 fix. */
+  case object GetUniqueCodeHashes extends AccountRangeCoordinatorMessage
+  case class UniqueCodeHashesResponse(codeHashes: Seq[ByteString])
+
+  /** Request storage file metadata for async streaming. Returns instantly (no file read). */
+  case object GetStorageFileInfo extends AccountRangeCoordinatorMessage
+  case class StorageFileInfoResponse(filePath: java.nio.file.Path, count: Long)
   case object CheckCompletion extends AccountRangeCoordinatorMessage
 
   /** Sent by AccountRangeCoordinator to SNAPSyncController with progress for ALL ranges.
@@ -57,7 +66,7 @@ object Messages {
 
   sealed trait ByteCodeCoordinatorMessage
 
-  case class StartByteCodeSync(contractAccounts: Seq[(ByteString, ByteString)]) extends ByteCodeCoordinatorMessage
+  case class StartByteCodeSync(codeHashes: Seq[ByteString]) extends ByteCodeCoordinatorMessage
   case class ByteCodePeerAvailable(peer: Peer) extends ByteCodeCoordinatorMessage
   case class ByteCodeTaskComplete(requestId: BigInt, result: Either[String, Int]) extends ByteCodeCoordinatorMessage
   case class ByteCodeTaskFailed(requestId: BigInt, reason: String) extends ByteCodeCoordinatorMessage

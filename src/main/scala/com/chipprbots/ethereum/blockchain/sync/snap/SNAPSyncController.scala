@@ -88,14 +88,21 @@ class SNAPSyncController(
   private var bytecodeSyncStarting: Boolean = false
   private var storageRangeSyncStarting: Boolean = false
 
-  // Contract accounts collected for bytecode download
-  private var contractAccounts = Seq.empty[(ByteString, ByteString)]
-  private var contractStorageAccounts = Seq.empty[(ByteString, ByteString)]
+  // Unique codeHashes for bytecode download (deduplicated via Bloom filter in coordinator)
+  private var uniqueCodeHashes = Seq.empty[ByteString]
+  // Storage file path + count for async streaming (Bug 20 fix: avoids loading 73.5M entries into memory)
+  private var storageFilePath: java.nio.file.Path = _
+  private var storageFileCount: Long = 0L
 
-  // Internal message used to deliver contract-account query results back through the actor mailbox.
-  private case class ContractAccountsReady(
-      bytecodeAccounts: Seq[(ByteString, ByteString)],
-      storageAccounts: Seq[(ByteString, ByteString)]
+  // Concurrent phase completion tracking (bytecode + storage run in parallel)
+  private var bytecodePhaseComplete: Boolean = false
+  private var storagePhaseComplete: Boolean = false
+
+  // Internal message used to deliver phase transition data back through the actor mailbox.
+  private case class PhaseTransitionReady(
+      codeHashes: Seq[ByteString],
+      storageFile: java.nio.file.Path,
+      storageCount: Long
   )
 
   private val progressMonitor = new SyncProgressMonitor(scheduler)
@@ -318,7 +325,7 @@ class SNAPSyncController(
           s"Ignoring PivotStateUnservable due to restart guard " +
             s"(phase=$currentPhase, emptyResponses=$emptyResponses, reason=$reason)"
         )
-      } else if (currentPhase == AccountRangeSync || currentPhase == StorageRangeSync) {
+      } else if (currentPhase == AccountRangeSync || currentPhase == StorageRangeSync || currentPhase == ByteCodeAndStorageSync) {
         lastPivotRestartMs = now
         consecutivePivotRefreshes += 1
         log.info(s"Consecutive stateless pivot refreshes: $consecutivePivotRefreshes/$MaxConsecutivePivotRefreshes")
@@ -373,7 +380,7 @@ class SNAPSyncController(
 
     case RetryPivotRefresh =>
       pivotBootstrapRetryTask = None
-      if (currentPhase == AccountRangeSync || currentPhase == StorageRangeSync) {
+      if (currentPhase == AccountRangeSync || currentPhase == StorageRangeSync || currentPhase == ByteCodeAndStorageSync) {
         log.info("Retrying pivot refresh after bootstrap failure...")
         refreshPivotInPlace("retry after bootstrap failure")
       } else {
@@ -390,7 +397,7 @@ class SNAPSyncController(
         )
       } else {
         storageRangeSyncStarting = true
-        log.info("Account range sync complete. Starting storage range sync...")
+        log.info("Account range sync complete. Querying coordinator for phase transition data...")
         // Clear persisted progress — account phase is done, no need to resume it
         appStateStorage.putSnapSyncProgress("").commit()
         preservedRangeProgress = Map.empty
@@ -399,61 +406,91 @@ class SNAPSyncController(
         import org.apache.pekko.pattern.{ ask, pipe }
         import org.apache.pekko.util.Timeout
         import scala.concurrent.duration._
-        implicit val timeout: Timeout = Timeout(5.seconds)
+        // Bug 20 fix: increased from 5s. GetUniqueCodeHashes reads ~64MB (fast),
+        // GetStorageFileInfo returns metadata only (instant).
+        implicit val timeout: Timeout = Timeout(30.seconds)
 
         accountRangeCoordinator match {
           case Some(coordinator) =>
-            val bytecodeAccountsF = (coordinator ? actors.Messages.GetContractAccounts)
-              .mapTo[actors.Messages.ContractAccountsResponse]
-              .map(_.accounts)
+            // Ask for unique codeHashes (~2M entries, ~64MB) — much smaller than the
+            // 73.5M raw entries (4.7GB) that caused the original 5s timeout + OOM.
+            val codeHashesF = (coordinator ? actors.Messages.GetUniqueCodeHashes)
+              .mapTo[actors.Messages.UniqueCodeHashesResponse]
+              .map(_.codeHashes)
 
-            val storageAccountsF = (coordinator ? actors.Messages.GetContractStorageAccounts)
-              .mapTo[actors.Messages.ContractStorageAccountsResponse]
-              .map(_.accounts)
+            // Ask for storage file metadata (path + count) — instant response, no file read.
+            val storageInfoF = (coordinator ? actors.Messages.GetStorageFileInfo)
+              .mapTo[actors.Messages.StorageFileInfoResponse]
 
             (for {
-              bytecodeAccounts <- bytecodeAccountsF
-              storageAccounts <- storageAccountsF
-            } yield ContractAccountsReady(bytecodeAccounts, storageAccounts))
+              codeHashes <- codeHashesF
+              storageInfo <- storageInfoF
+            } yield PhaseTransitionReady(codeHashes, storageInfo.filePath, storageInfo.count))
               .recover { case ex =>
-                log.warning(s"Failed to query contract accounts for bytecode/storage sync: ${ex.getMessage}")
-                ContractAccountsReady(Seq.empty, Seq.empty)
+                log.warning(s"Failed to query contract data for bytecode/storage sync: ${ex.getMessage}")
+                PhaseTransitionReady(Seq.empty, null, 0L)
               }
               .pipeTo(self)
           case None =>
-            self ! ContractAccountsReady(Seq.empty, Seq.empty)
+            self ! PhaseTransitionReady(Seq.empty, null, 0L)
         }
       }
 
-    case ContractAccountsReady(bytecodeAccounts, storageAccounts) =>
+    case PhaseTransitionReady(codeHashes, storageFile, storageCount) =>
       if (currentPhase != AccountRangeSync) {
-        log.info(s"Ignoring ContractAccountsReady in phase=$currentPhase")
+        log.info(s"Ignoring PhaseTransitionReady in phase=$currentPhase")
       } else {
-        contractAccounts = bytecodeAccounts
-        contractStorageAccounts = storageAccounts
+        uniqueCodeHashes = codeHashes
+        storageFilePath = storageFile
+        storageFileCount = storageCount
+        bytecodePhaseComplete = false
+        storagePhaseComplete = false
         log.info(
-          s"Collected ${contractAccounts.size} contract accounts for bytecode sync and ${contractStorageAccounts.size} for storage sync from coordinator"
+          s"Collected ${uniqueCodeHashes.size} unique codeHashes for bytecode sync, $storageFileCount contract accounts for storage sync"
         )
-        currentPhase = ByteCodeSync
+        // Start both bytecode and storage phases concurrently — they write to
+        // different storage backends (EvmCodeStorage vs MptStorage) and use
+        // different SNAP subprotocols (GetByteCodes vs GetStorageRanges).
+        currentPhase = ByteCodeAndStorageSync
         startBytecodeSync()
-      }
-
-    case ByteCodeSyncComplete =>
-      if (currentPhase != ByteCodeSync) {
-        log.info(s"Ignoring ByteCodeSyncComplete in phase=$currentPhase")
-      } else {
-        log.info("ByteCode sync complete. Starting storage range sync...")
-        currentPhase = StorageRangeSync
         startStorageRangeSync()
       }
 
+    case ByteCodeSyncComplete =>
+      if (currentPhase != ByteCodeAndStorageSync) {
+        log.info(s"Ignoring ByteCodeSyncComplete in phase=$currentPhase")
+      } else {
+        // Bug 20 hardening: verify bytecodes were actually downloaded
+        val downloaded = progressMonitor.currentProgress.bytecodesDownloaded
+        if (downloaded == 0 && uniqueCodeHashes.nonEmpty) {
+          log.error(
+            s"INTEGRITY CHECK FAILED: 0 bytecodes downloaded but ${uniqueCodeHashes.size} unique codeHashes expected. " +
+              s"Retrying bytecode phase."
+          )
+          bytecodeCoordinator = None
+          startBytecodeSync()
+        } else {
+          bytecodePhaseComplete = true
+          log.info(s"ByteCode sync complete ($downloaded bytecodes). Storage phase complete: $storagePhaseComplete")
+          if (storagePhaseComplete) {
+            log.info("Both bytecode and storage phases complete. Starting state healing...")
+            currentPhase = StateHealing
+            startStateHealing()
+          }
+        }
+      }
+
     case StorageRangeSyncComplete =>
-      if (currentPhase != StorageRangeSync) {
+      if (currentPhase != ByteCodeAndStorageSync) {
         log.info(s"Ignoring StorageRangeSyncComplete in phase=$currentPhase")
       } else {
-        log.info("Storage range sync complete. Starting state healing...")
-        currentPhase = StateHealing
-        startStateHealing()
+        storagePhaseComplete = true
+        log.info(s"Storage range sync complete. Bytecode phase complete: $bytecodePhaseComplete")
+        if (bytecodePhaseComplete) {
+          log.info("Both bytecode and storage phases complete. Starting state healing...")
+          currentPhase = StateHealing
+          startStateHealing()
+        }
       }
 
     case StateHealingComplete =>
@@ -531,7 +568,7 @@ class SNAPSyncController(
   }
 
   private def maybeRestartIfStorageStagnant(stats: actors.StorageRangeCoordinator.SyncStatistics): Unit = {
-    if (currentPhase != StorageRangeSync) return
+    if (currentPhase != StorageRangeSync && currentPhase != ByteCodeAndStorageSync) return
 
     // Only consider it a stall if there is still work to do.
     val workRemaining = stats.tasksPending > 0 || stats.tasksActive > 0
@@ -1286,15 +1323,15 @@ class SNAPSyncController(
       return
     }
 
-    if (contractAccounts.isEmpty) {
-      log.info("No contract accounts found, skipping bytecode sync")
+    if (uniqueCodeHashes.isEmpty) {
+      log.info("No unique codeHashes found, skipping bytecode sync")
       self ! ByteCodeSyncComplete
       return
     }
 
-    log.info(s"Found ${contractAccounts.size} contract accounts for bytecode download")
+    log.info(s"Found ${uniqueCodeHashes.size} unique codeHashes for bytecode download")
     log.info("Using actor-based concurrency for bytecode sync")
-    
+
     bytecodeCoordinator = Some(
       context.actorOf(
         actors.ByteCodeCoordinator.props(
@@ -1307,10 +1344,10 @@ class SNAPSyncController(
         s"bytecode-coordinator-$coordinatorGeneration"
       )
     )
-    
-    // Start the coordinator with contract accounts
-    bytecodeCoordinator.foreach(_ ! actors.Messages.StartByteCodeSync(contractAccounts))
-    
+
+    // Start the coordinator with deduplicated codeHashes
+    bytecodeCoordinator.foreach(_ ! actors.Messages.StartByteCodeSync(uniqueCodeHashes))
+
     // Periodically send peer availability notifications
     bytecodeRequestTask = Some(
       scheduler.scheduleWithFixedDelay(
@@ -1321,8 +1358,8 @@ class SNAPSyncController(
       )(ec)
     )
 
-    progressMonitor.startPhase(ByteCodeSync)
-    progressMonitor.updateEstimates(bytecodes = contractAccounts.size.toLong)
+    progressMonitor.startPhase(currentPhase)
+    progressMonitor.updateEstimates(bytecodes = uniqueCodeHashes.size.toLong)
   }
 
   // Internal message for periodic bytecode requests
@@ -1379,24 +1416,61 @@ class SNAPSyncController(
       // Start the coordinator
       storageRangeCoordinator.foreach(_ ! actors.Messages.StartStorageRangeSync(root))
 
-      // Enqueue initial storage tasks derived from contract accounts found during AccountRangeSync.
-      val emptyRoot = ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)
-      val (nonEmptyStorage, emptyStorage) = contractStorageAccounts.partition { case (_, storageRoot) =>
-        storageRoot.nonEmpty && storageRoot != emptyRoot
-      }
-      if (emptyStorage.nonEmpty) {
-        log.info(s"Skipping ${emptyStorage.size} contract accounts with empty storageRoot")
-      }
-
-      val storageTasks = StorageTask.createStorageTasks(nonEmptyStorage)
-      if (storageTasks.isEmpty) {
-        log.warning(
-          "No contract accounts with non-empty storageRoot; completing StorageRangeSync immediately"
-        )
-        self ! StorageRangeSyncComplete
+      // Bug 20 fix: Stream storage tasks from file in 10K-entry batches instead of
+      // loading all 73.5M entries into memory (which would OOM at ~14.7GB vs 4GB heap).
+      if (storageFilePath != null && storageFileCount > 0) {
+        val coordinator = storageRangeCoordinator.get
+        val filePath = storageFilePath
+        val fileCount = storageFileCount
+        val controllerRef = self
+        import context.dispatcher
+        scala.concurrent.Future {
+          val emptyRoot = ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)
+          val raf = new java.io.RandomAccessFile(filePath.toFile, "r")
+          val buf = new Array[Byte](64)
+          val batch = new scala.collection.mutable.ArrayBuffer[StorageTask](10000)
+          var totalTasks = 0
+          var emptyCount = 0L
+          var i = 0L
+          try {
+            while (i < fileCount) {
+              raf.readFully(buf)
+              val accountHash = ByteString(java.util.Arrays.copyOfRange(buf, 0, 32))
+              val storageRoot = ByteString(java.util.Arrays.copyOfRange(buf, 32, 64))
+              if (storageRoot.nonEmpty && storageRoot != emptyRoot) {
+                batch += StorageTask.createStorageTask(accountHash, storageRoot)
+              } else {
+                emptyCount += 1
+              }
+              if (batch.size >= 10000) {
+                coordinator ! actors.Messages.AddStorageTasks(batch.toSeq)
+                totalTasks += batch.size
+                batch.clear()
+              }
+              i += 1
+            }
+            if (batch.nonEmpty) {
+              coordinator ! actors.Messages.AddStorageTasks(batch.toSeq)
+              totalTasks += batch.size
+            }
+          } finally {
+            raf.close()
+            // Clean up the temp file now that streaming is complete
+            try { java.nio.file.Files.deleteIfExists(filePath) }
+            catch { case _: Exception => }
+          }
+          (totalTasks, emptyCount)
+        }.onComplete {
+          case scala.util.Success((count, emptyCount)) =>
+            log.info(s"Streamed $count storage tasks from file ($fileCount entries, $emptyCount empty storageRoot skipped)")
+            if (count == 0) controllerRef ! StorageRangeSyncComplete
+          case scala.util.Failure(ex) =>
+            log.error(ex, "Failed to stream storage tasks from file")
+            controllerRef ! StorageRangeSyncComplete
+        }
       } else {
-        log.info(s"Enqueuing ${storageTasks.size} storage tasks (non-empty storageRoot only)")
-        storageRangeCoordinator.foreach(_ ! actors.Messages.AddStorageTasks(storageTasks))
+        log.warning("No storage file available; completing StorageRangeSync immediately")
+        self ! StorageRangeSyncComplete
       }
       
       // Periodically send peer availability notifications
@@ -1413,7 +1487,7 @@ class SNAPSyncController(
       lastStorageProgressMs = System.currentTimeMillis()
       scheduleStorageStagnationChecks()
 
-      progressMonitor.startPhase(StorageRangeSync)
+      progressMonitor.startPhase(currentPhase)
     }
   }
 
@@ -1483,7 +1557,7 @@ class SNAPSyncController(
         maybeRestartIfAccountStagnant(progress)
       super.aroundReceive(receive, msg)
 
-    case CheckStorageStagnation if currentPhase == StorageRangeSync =>
+    case CheckStorageStagnation if currentPhase == StorageRangeSync || currentPhase == ByteCodeAndStorageSync =>
       storageRangeCoordinator match {
         case Some(coordinator) =>
           import org.apache.pekko.pattern.{ ask, pipe }
@@ -1506,7 +1580,7 @@ class SNAPSyncController(
       }
       super.aroundReceive(receive, msg)
 
-    case StorageCoordinatorProgress(stats) if currentPhase == StorageRangeSync =>
+    case StorageCoordinatorProgress(stats) if (currentPhase == StorageRangeSync || currentPhase == ByteCodeAndStorageSync) =>
       // Ignore the dummy stats used on recover.
       if (stats.elapsedTimeMs > 0 || stats.tasksPending > 0 || stats.tasksActive > 0 || stats.tasksCompleted > 0)
         maybeRestartIfStorageStagnant(stats)
@@ -1787,7 +1861,7 @@ class SNAPSyncController(
     // Send refresh signal to active coordinator
     if (currentPhase == AccountRangeSync) {
       accountRangeCoordinator.foreach(_ ! actors.Messages.PivotRefreshed(newStateRoot))
-    } else if (currentPhase == StorageRangeSync) {
+    } else if (currentPhase == StorageRangeSync || currentPhase == ByteCodeAndStorageSync) {
       storageRangeCoordinator.foreach(_ ! actors.Messages.StoragePivotRefreshed(newStateRoot))
     }
 
@@ -1829,11 +1903,14 @@ class SNAPSyncController(
     // Clear inflight request timeouts and internal phase state
     requestTracker.clear()
 
-    // Clear phase start guards and cached contract accounts
+    // Clear phase start guards and cached phase transition data
     bytecodeSyncStarting = false
     storageRangeSyncStarting = false
-    contractAccounts = Seq.empty
-    contractStorageAccounts = Seq.empty
+    uniqueCodeHashes = Seq.empty
+    storageFilePath = null
+    storageFileCount = 0L
+    bytecodePhaseComplete = false
+    storagePhaseComplete = false
 
     // Reset pivot/state root and storage so a new selection is committed
     pivotBlock = None
@@ -1901,10 +1978,17 @@ class SNAPSyncController(
         val known = progress.estimatedTotalAccounts + estimateOrActual(progress.estimatedTotalBytecodes, progress.bytecodesDownloaded)
         (pulled, known)
       
+      case ByteCodeAndStorageSync =>
+        // Concurrent bytecode + storage sync
+        val pulled = progress.accountsSynced + progress.bytecodesDownloaded + progress.storageSlotsSynced
+        val known = progress.estimatedTotalAccounts + estimateOrActual(progress.estimatedTotalBytecodes, progress.bytecodesDownloaded) +
+                   estimateOrActual(progress.estimatedTotalSlots, progress.storageSlotsSynced)
+        (pulled, known)
+
       case StorageRangeSync =>
         // In storage sync, we add accounts + bytecodes + storage slots
         val pulled = progress.accountsSynced + progress.bytecodesDownloaded + progress.storageSlotsSynced
-        val known = progress.estimatedTotalAccounts + progress.estimatedTotalBytecodes + 
+        val known = progress.estimatedTotalAccounts + progress.estimatedTotalBytecodes +
                    estimateOrActual(progress.estimatedTotalSlots, progress.storageSlotsSynced)
         (pulled, known)
       
@@ -2082,6 +2166,7 @@ object SNAPSyncController {
   case object Idle extends SyncPhase
   case object AccountRangeSync extends SyncPhase
   case object ByteCodeSync extends SyncPhase
+  case object ByteCodeAndStorageSync extends SyncPhase
   case object StorageRangeSync extends SyncPhase
   case object StateHealing extends SyncPhase
   case object StateValidation extends SyncPhase
@@ -2796,6 +2881,14 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
           Some((remaining / throughput).toLong)
         } else None
 
+      case ByteCodeAndStorageSync if estimatedTotalSlots > 0 =>
+        // ETA based on storage (the longer phase)
+        val remaining = estimatedTotalSlots - storageSlotsSynced
+        val throughput = calculateRecentThroughput(slotsHistory)
+        if (throughput > 0 && remaining > 0) {
+          Some((remaining / throughput).toLong)
+        } else None
+
       case StorageRangeSync if estimatedTotalSlots > 0 =>
         val remaining = estimatedTotalSlots - storageSlotsSynced
         val throughput = calculateRecentThroughput(slotsHistory)
@@ -2850,6 +2943,9 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
         (accountsSynced.toDouble / estimatedTotalAccounts * 100).toInt
       case ByteCodeSync if estimatedTotalBytecodes > 0 =>
         (bytecodesDownloaded.toDouble / estimatedTotalBytecodes * 100).toInt
+      case ByteCodeAndStorageSync if estimatedTotalSlots > 0 =>
+        // Use storage progress as the overall indicator (it's the longer phase)
+        (storageSlotsSynced.toDouble / estimatedTotalSlots * 100).toInt
       case StorageRangeSync if estimatedTotalSlots > 0 =>
         (storageSlotsSynced.toDouble / estimatedTotalSlots * 100).toInt
       case _ => 0
@@ -2921,8 +3017,7 @@ case class SyncProgress(
     // Global “stage” progress across phases; within-stage progress uses `phaseProgress` when available.
     val stages = Vector[SyncPhase](
       AccountRangeSync,
-      ByteCodeSync,
-      StorageRangeSync,
+      ByteCodeAndStorageSync,
       StateHealing,
       StateValidation,
       Completed
@@ -2973,6 +3068,12 @@ case class SyncProgress(
         val progressStr = if (estimatedTotalBytecodes > 0) s" (${phaseProgress}%)" else ""
         val totalStr = if (estimatedTotalBytecodes > 0) s"/${formatCount(estimatedTotalBytecodes)}" else ""
         s"phase=ByteCode$progressStr, codes=${formatCount(bytecodesDownloaded)}$totalStr@${recentBytecodesPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
+
+      case SNAPSyncController.ByteCodeAndStorageSync =>
+        val codeStr = s"codes=${formatCount(bytecodesDownloaded)}@${recentBytecodesPerSec.toInt}/s"
+        val slotStr = s"slots=${formatCount(storageSlotsSynced)}@${recentSlotsPerSec.toInt}/s"
+        val contractsStr = if (storageContractsTotal > 0) s", contracts=$storageContractsCompleted/$storageContractsTotal" else ""
+        s"phase=ByteCode+Storage, $codeStr, $slotStr$contractsStr, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
 
       case SNAPSyncController.StorageRangeSync =>
         val progressStr = if (estimatedTotalSlots > 0) s" (${phaseProgress}%)" else ""

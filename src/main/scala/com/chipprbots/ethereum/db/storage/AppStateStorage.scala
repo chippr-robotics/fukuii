@@ -113,6 +113,22 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def snapSyncDone(): DataSourceBatchUpdate =
     put(Keys.SnapSyncDone, true.toString)
 
+  /** Check if bytecode recovery scan has completed (Bug 20 hardening) */
+  def isBytecodeRecoveryDone(): Boolean =
+    get(Keys.BytecodeRecoveryDone).exists(_.toBoolean)
+
+  /** Mark bytecode recovery as completed */
+  def bytecodeRecoveryDone(): DataSourceBatchUpdate =
+    put(Keys.BytecodeRecoveryDone, true.toString)
+
+  /** Check if storage recovery scan has completed (Bug 20 hardening) */
+  def isStorageRecoveryDone(): Boolean =
+    get(Keys.StorageRecoveryDone).exists(_.toBoolean)
+
+  /** Mark storage recovery as completed */
+  def storageRecoveryDone(): DataSourceBatchUpdate =
+    put(Keys.StorageRecoveryDone, true.toString)
+
   /** Get the SNAP sync pivot block number
     * @return
     *   SNAP sync pivot block number, or None if not set
@@ -232,6 +248,8 @@ object AppStateStorage {
     val SnapSyncStateRoot = "SnapSyncStateRoot"
     val SnapSyncProgress = "SnapSyncProgress"
     val SnapSyncBootstrapTarget = "SnapSyncBootstrapTarget"
+    val BytecodeRecoveryDone = "BytecodeRecoveryDone"
+    val StorageRecoveryDone = "StorageRecoveryDone"
   }
 
 }

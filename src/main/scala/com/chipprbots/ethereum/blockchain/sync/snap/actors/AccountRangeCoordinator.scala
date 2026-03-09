@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.google.common.hash.{BloomFilter, Funnel, PrimitiveSink}
 
 /** AccountRangeCoordinator manages account range download workers.
   *
@@ -207,6 +208,20 @@ class AccountRangeCoordinator(
   private var contractStorageCount: Long = 0
   private val ContractEntrySize = 64 // 32 bytes hash + 32 bytes codeHash/storageRoot
 
+  // Unique codeHashes for bytecode download — Bloom filter (~4MB) for dedup + temp file for storage.
+  // At handoff, reads ~64MB (2M × 32 bytes) instead of the 4.7GB contractAccountsFile (73.5M × 64 bytes).
+  // Bug 20 fix: the original ask-based handoff timed out (5s) and OOMed when reading the full file.
+  private implicit object ByteStringFunnel extends Funnel[ByteString] {
+    override def funnel(from: ByteString, into: PrimitiveSink): Unit =
+      into.putBytes(from.toArray)
+  }
+  private val codeHashBloom: BloomFilter[ByteString] = BloomFilter.create[ByteString](
+    ByteStringFunnel, 3_000_000, 0.0001 // ~4MB for 3M expected entries at 0.01% FPR
+  )
+  private val uniqueCodeHashesFile: Path = Files.createTempFile("fukuii-unique-codehashes-", ".bin")
+  private val uniqueCodeHashesOut = new BufferedOutputStream(new FileOutputStream(uniqueCodeHashesFile.toFile), 65536)
+  private var uniqueCodeHashesCount: Long = 0
+
   // Track last known available peers so we can re-dispatch after task failures
   // without waiting for the next PeerAvailable message.
   private val knownAvailablePeers = mutable.Set[Peer]()
@@ -311,12 +326,17 @@ class AccountRangeCoordinator(
   override def postStop(): Unit = {
     // Send final progress snapshot so controller can resume from saved positions on restart
     sendProgressSnapshot()
-    // Close and delete temporary contract account files
+    // Close and delete temporary files.
+    // Note: contractStorageFile is NOT deleted here — the controller reads it asynchronously
+    // during storage sync (Bug 20 fix: streaming from file to avoid OOM). The controller
+    // deletes it after streaming completes.
     try { contractAccountsOut.close() } catch { case _: Exception => }
     try { contractStorageOut.close() } catch { case _: Exception => }
+    try { uniqueCodeHashesOut.close() } catch { case _: Exception => }
     try { Files.deleteIfExists(contractAccountsFile) } catch { case _: Exception => }
-    try { Files.deleteIfExists(contractStorageFile) } catch { case _: Exception => }
-    log.info(s"AccountRangeCoordinator stopped. Downloaded $accountsDownloaded accounts, identified $contractAccountsCount contracts")
+    // contractStorageFile intentionally NOT deleted — controller manages its lifecycle
+    try { Files.deleteIfExists(uniqueCodeHashesFile) } catch { case _: Exception => }
+    log.info(s"AccountRangeCoordinator stopped. Downloaded $accountsDownloaded accounts, identified $contractAccountsCount contracts ($uniqueCodeHashesCount unique codeHashes)")
   }
 
   /** Collect current task positions and send to controller for resume across restarts. */
@@ -416,6 +436,13 @@ class AccountRangeCoordinator(
     case GetContractStorageAccounts =>
       sender() ! ContractStorageAccountsResponse(readContractFile(contractStorageFile, contractStorageOut, contractStorageCount))
 
+    case GetUniqueCodeHashes =>
+      sender() ! UniqueCodeHashesResponse(readUniqueCodeHashes())
+
+    case GetStorageFileInfo =>
+      contractStorageOut.flush()
+      sender() ! StorageFileInfoResponse(contractStorageFile, contractStorageCount)
+
     case StoreAccountChunk(task, remaining, totalCount, storedSoFar, isTaskRangeComplete) =>
       handleStoreAccountChunk(task, remaining, totalCount, storedSoFar, isTaskRangeComplete)
 
@@ -475,6 +502,13 @@ class AccountRangeCoordinator(
 
     case GetContractStorageAccounts =>
       sender() ! ContractStorageAccountsResponse(readContractFile(contractStorageFile, contractStorageOut, contractStorageCount))
+
+    case GetUniqueCodeHashes =>
+      sender() ! UniqueCodeHashesResponse(readUniqueCodeHashes())
+
+    case GetStorageFileInfo =>
+      contractStorageOut.flush()
+      sender() ! StorageFileInfoResponse(contractStorageFile, contractStorageCount)
 
     case CheckCompletion =>
       // Already finalizing, ignore
@@ -789,12 +823,21 @@ class AccountRangeCoordinator(
         contractStorageOut.write(accountHash.toArray.padTo(32, 0.toByte), 0, 32)
         contractStorageOut.write(account.storageRoot.toArray.padTo(32, 0.toByte), 0, 32)
         count += 1
+
+        // Track unique codeHashes via Bloom filter + temp file (~4MB RAM vs 200MB HashSet).
+        // The Bloom filter has 0.01% FPR — ~200 of 2M hashes may be missed but the
+        // recovery scan (Bug 20 hardening) catches any gaps.
+        if (!codeHashBloom.mightContain(account.codeHash)) {
+          codeHashBloom.put(account.codeHash)
+          uniqueCodeHashesOut.write(account.codeHash.toArray.padTo(32, 0.toByte), 0, 32)
+          uniqueCodeHashesCount += 1
+        }
       }
     }
     if (count > 0) {
       contractAccountsCount += count
       contractStorageCount += count
-      log.info(s"Identified $count contract accounts (total: $contractAccountsCount)")
+      log.info(s"Identified $count contract accounts (total: $contractAccountsCount, unique codeHashes: $uniqueCodeHashesCount)")
     }
   }
 
@@ -869,6 +912,27 @@ class AccountRangeCoordinator(
     }
   }
 
+  /** Read unique codeHashes from the Bloom-filtered temp file.
+    * Each entry is 32 bytes. File size is ~64MB for ~2M unique hashes (vs 4.7GB for 73.5M raw entries).
+    */
+  private def readUniqueCodeHashes(): Seq[ByteString] = {
+    uniqueCodeHashesOut.flush()
+    if (uniqueCodeHashesCount == 0) return Seq.empty
+    val raf = new RandomAccessFile(uniqueCodeHashesFile.toFile, "r")
+    try {
+      val result = new mutable.ArrayBuffer[ByteString](uniqueCodeHashesCount.toInt)
+      val buf = new Array[Byte](32)
+      var i = 0L
+      while (i < uniqueCodeHashesCount) {
+        raf.readFully(buf)
+        result += ByteString(buf.clone())
+        i += 1
+      }
+      result.toSeq
+    } finally {
+      raf.close()
+    }
+  }
 
   private def calculateProgress(): AccountRangeStats = {
     val total = completedTasks.size + activeTasks.size + pendingTasks.size

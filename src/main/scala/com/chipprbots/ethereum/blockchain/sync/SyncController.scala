@@ -336,7 +336,13 @@ class SyncController(
         startSnapSync()
       case (true, _, true, _) =>
         log.warning("do-snap-sync is true but SNAP sync already completed")
-        startRegularSync()
+        val needBytecode = !appStateStorage.isBytecodeRecoveryDone()
+        val needStorage = !appStateStorage.isStorageRecoveryDone()
+        if (needBytecode || needStorage) {
+          startRecovery(needBytecode, needStorage)
+        } else {
+          startRegularSync()
+        }
       case (_, false, false, true) =>
         startFastSync()
       case (_, true, false, true) =>
@@ -438,6 +444,98 @@ class SyncController(
     )
     regularSync ! SyncProtocol.Start
     context.become(runningRegularSync(regularSync))
+  }
+
+  def startRecovery(needBytecode: Boolean, needStorage: Boolean): Unit = {
+    syncGeneration += 1
+    val stateRootOpt = appStateStorage.getSnapSyncStateRoot()
+    val pivotBlockOpt = appStateStorage.getSnapSyncPivotBlock()
+
+    (stateRootOpt, pivotBlockOpt) match {
+      case (Some(stateRoot), Some(pivotBlock)) =>
+        log.info(
+          s"Starting SNAP recovery (bytecode=$needBytecode, storage=$needStorage, " +
+            s"stateRoot=${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}..., pivotBlock=$pivotBlock)"
+        )
+
+        val bytecodeActor = if (needBytecode) {
+          Some(context.actorOf(
+            BytecodeRecoveryActor
+              .props(
+                stateRoot = stateRoot,
+                stateStorage = stateStorage,
+                evmCodeStorage = evmCodeStorage,
+                appStateStorage = appStateStorage,
+                networkPeerManager = networkPeerManager,
+                syncController = self,
+                pivotBlockNumber = pivotBlock
+              )
+              .withDispatcher("sync-dispatcher"),
+            s"bytecode-recovery-$syncGeneration"
+          ))
+        } else None
+
+        val storageActor = if (needStorage) {
+          val snapSyncConfig = loadSnapSyncConfig()
+          Some(context.actorOf(
+            StorageRecoveryActor
+              .props(
+                stateRoot = stateRoot,
+                stateStorage = stateStorage,
+                appStateStorage = appStateStorage,
+                networkPeerManager = networkPeerManager,
+                syncController = self,
+                pivotBlockNumber = pivotBlock,
+                snapSyncConfig = snapSyncConfig
+              )
+              .withDispatcher("sync-dispatcher"),
+            s"storage-recovery-$syncGeneration"
+          ))
+        } else None
+
+        context.become(runningRecovery(
+          bytecodeActor = bytecodeActor,
+          storageActor = storageActor,
+          bytecodeComplete = !needBytecode,
+          storageComplete = !needStorage
+        ))
+
+      case _ =>
+        log.warning("Cannot run recovery: missing stateRoot or pivotBlock. Marking done and proceeding.")
+        if (needBytecode) appStateStorage.bytecodeRecoveryDone().commit()
+        if (needStorage) appStateStorage.storageRecoveryDone().commit()
+        startRegularSync()
+    }
+  }
+
+  def runningRecovery(
+      bytecodeActor: Option[ActorRef],
+      storageActor: Option[ActorRef],
+      bytecodeComplete: Boolean,
+      storageComplete: Boolean
+  ): Receive = {
+    case BytecodeRecoveryActor.RecoveryComplete =>
+      log.info(s"Bytecode recovery complete. Storage complete: $storageComplete")
+      if (storageComplete) {
+        log.info("All recovery complete. Transitioning to regular sync.")
+        startRegularSync()
+      } else {
+        context.become(runningRecovery(bytecodeActor = None, storageActor, bytecodeComplete = true, storageComplete))
+      }
+
+    case StorageRecoveryActor.RecoveryComplete =>
+      log.info(s"Storage recovery complete. Bytecode complete: $bytecodeComplete")
+      if (bytecodeComplete) {
+        log.info("All recovery complete. Transitioning to regular sync.")
+        startRegularSync()
+      } else {
+        context.become(runningRecovery(bytecodeActor, storageActor = None, bytecodeComplete, storageComplete = true))
+      }
+
+    case msg =>
+      // Forward peer messages to both active recovery actors
+      bytecodeActor.foreach(_.forward(msg))
+      storageActor.foreach(_.forward(msg))
   }
 
   def startRegularSyncForBootstrap(): ActorRef = {
