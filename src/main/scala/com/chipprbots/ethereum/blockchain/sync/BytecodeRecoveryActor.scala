@@ -97,7 +97,7 @@ class BytecodeRecoveryActor(
     case snap.SNAPSyncController.ProgressBytecodesDownloaded(_) =>
       // Ignore progress updates
 
-    case _ => // Ignore other messages
+    case msg => coordinator.forward(msg) // Forward SNAP protocol responses to coordinator
   }
 
   /** Walk the state trie and collect codeHashes of contracts missing from evmCodeStorage. */

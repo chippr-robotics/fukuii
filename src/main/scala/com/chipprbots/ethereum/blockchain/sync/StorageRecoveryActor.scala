@@ -120,7 +120,7 @@ class StorageRecoveryActor(
     case SNAPSyncController.ProgressStorageSlotsSynced(_) =>
       // Ignore progress updates
 
-    case _ => // Ignore other messages
+    case msg => coordinator.forward(msg) // Forward SNAP protocol responses to coordinator
   }
 
   /** Walk the state trie and collect (accountHash, storageRoot) for contracts

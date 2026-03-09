@@ -56,6 +56,7 @@ class SyncController(
     with ActorLogging {
 
   private case object RestartFastSyncNow
+  private case object PollRecoveryPeers
 
   // Generation counters for actor names to prevent Pekko name collisions
   // (context.stop is async — new actors can race with still-stopping ones).
@@ -493,11 +494,20 @@ class SyncController(
           ))
         } else None
 
+        // Register self for SNAP message routing so responses reach coordinators
+        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(self)
+
+        // Poll for snap-capable peers every 5 seconds to feed coordinators
+        val peerPoller = context.system.scheduler.scheduleWithFixedDelay(
+          2.seconds, 5.seconds, self, PollRecoveryPeers
+        )
+
         context.become(runningRecovery(
           bytecodeActor = bytecodeActor,
           storageActor = storageActor,
           bytecodeComplete = !needBytecode,
-          storageComplete = !needStorage
+          storageComplete = !needStorage,
+          peerPoller = peerPoller
         ))
 
       case _ =>
@@ -512,28 +522,49 @@ class SyncController(
       bytecodeActor: Option[ActorRef],
       storageActor: Option[ActorRef],
       bytecodeComplete: Boolean,
-      storageComplete: Boolean
+      storageComplete: Boolean,
+      peerPoller: org.apache.pekko.actor.Cancellable = org.apache.pekko.actor.Cancellable.alreadyCancelled
   ): Receive = {
     case BytecodeRecoveryActor.RecoveryComplete =>
       log.info(s"Bytecode recovery complete. Storage complete: $storageComplete")
       if (storageComplete) {
+        peerPoller.cancel()
+        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
+          context.system.deadLetters
+        )
         log.info("All recovery complete. Transitioning to regular sync.")
         startRegularSync()
       } else {
-        context.become(runningRecovery(bytecodeActor = None, storageActor, bytecodeComplete = true, storageComplete))
+        context.become(runningRecovery(bytecodeActor = None, storageActor, bytecodeComplete = true, storageComplete, peerPoller))
       }
 
     case StorageRecoveryActor.RecoveryComplete =>
       log.info(s"Storage recovery complete. Bytecode complete: $bytecodeComplete")
       if (bytecodeComplete) {
+        peerPoller.cancel()
+        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
+          context.system.deadLetters
+        )
         log.info("All recovery complete. Transitioning to regular sync.")
         startRegularSync()
       } else {
-        context.become(runningRecovery(bytecodeActor, storageActor = None, bytecodeComplete, storageComplete = true))
+        context.become(runningRecovery(bytecodeActor, storageActor = None, bytecodeComplete, storageComplete = true, peerPoller))
+      }
+
+    case PollRecoveryPeers =>
+      networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeers
+
+    case com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers(peers) =>
+      val snapPeers = peers.filter { case (_, peerInfo) => peerInfo.remoteStatus.supportsSnap }
+      if (snapPeers.nonEmpty) {
+        snapPeers.foreach { case (peer, _) =>
+          bytecodeActor.foreach(_ ! snap.actors.Messages.ByteCodePeerAvailable(peer))
+          storageActor.foreach(_ ! snap.actors.Messages.StoragePeerAvailable(peer))
+        }
       }
 
     case msg =>
-      // Forward peer messages to both active recovery actors
+      // Forward SNAP protocol responses to both active recovery actors
       bytecodeActor.foreach(_.forward(msg))
       storageActor.foreach(_.forward(msg))
   }
