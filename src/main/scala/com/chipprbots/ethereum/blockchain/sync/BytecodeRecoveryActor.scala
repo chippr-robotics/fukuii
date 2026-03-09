@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
 import scala.concurrent.Future
+import scala.concurrent.duration._
 import scala.util.{Success, Failure}
 
 import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage, StateStorage}
@@ -51,13 +52,17 @@ class BytecodeRecoveryActor(
       Future {
         scanForMissingBytecodes()
       }.onComplete {
-        case Success(result) => self ! ScanResult(result)
+        case Success(result) => self ! ScanResult(Right(result))
         case Failure(ex) =>
-          log.error(ex, "Bytecode recovery scan failed")
-          self ! ScanResult(Seq.empty)
+          log.error(ex, "Bytecode recovery scan failed — will retry in 10s")
+          self ! ScanResult(Left(ex.getMessage))
       }
 
-    case ScanResult(missing) =>
+    case ScanResult(Left(error)) =>
+      log.warning(s"Bytecode scan failed ($error), retrying in 10 seconds...")
+      context.system.scheduler.scheduleOnce(10.seconds, self, StartScan)
+
+    case ScanResult(Right(missing)) =>
       if (missing.isEmpty) {
         log.info("Bytecode recovery: all contract bytecodes present. Marking recovery complete.")
         appStateStorage.bytecodeRecoveryDone().commit()
@@ -151,7 +156,7 @@ class BytecodeRecoveryActor(
 
 object BytecodeRecoveryActor {
   private case object StartScan
-  private case class ScanResult(missingCodeHashes: Seq[ByteString])
+  private case class ScanResult(result: Either[String, Seq[ByteString]])
 
   /** Sent to SyncController when recovery is complete (or skipped) */
   case object RecoveryComplete

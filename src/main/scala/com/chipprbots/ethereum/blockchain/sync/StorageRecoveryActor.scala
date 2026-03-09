@@ -5,7 +5,7 @@ import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
 import scala.concurrent.Future
-
+import scala.concurrent.duration._
 import scala.util.{Success, Failure}
 
 import com.chipprbots.ethereum.db.storage.{AppStateStorage, StateStorage}
@@ -57,13 +57,17 @@ class StorageRecoveryActor(
       Future {
         scanForMissingStorage()
       }.onComplete {
-        case Success(result) => self ! ScanResult(result)
+        case Success(result) => self ! ScanResult(Right(result))
         case Failure(ex) =>
-          log.error(ex, "Storage recovery scan failed")
-          self ! ScanResult(Seq.empty)
+          log.error(ex, "Storage recovery scan failed — will retry in 10s")
+          self ! ScanResult(Left(ex.getMessage))
       }
 
-    case ScanResult(missing) =>
+    case ScanResult(Left(error)) =>
+      log.warning(s"Storage scan failed ($error), retrying in 10 seconds...")
+      context.system.scheduler.scheduleOnce(10.seconds, self, StartScan)
+
+    case ScanResult(Right(missing)) =>
       if (missing.isEmpty) {
         log.info("Storage recovery: all contract storage tries present. Marking recovery complete.")
         appStateStorage.storageRecoveryDone().commit()
@@ -187,7 +191,7 @@ class StorageRecoveryActor(
 
 object StorageRecoveryActor {
   private case object StartScan
-  private case class ScanResult(missingStorage: Seq[(ByteString, ByteString)])
+  private case class ScanResult(result: Either[String, Seq[(ByteString, ByteString)]])
 
   /** Sent to SyncController when recovery is complete (or skipped) */
   case object RecoveryComplete
