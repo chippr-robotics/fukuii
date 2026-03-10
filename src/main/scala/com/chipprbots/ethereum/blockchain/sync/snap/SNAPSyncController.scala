@@ -91,7 +91,7 @@ class SNAPSyncController(
   // Unique codeHashes for bytecode download (deduplicated via Bloom filter in coordinator)
   private var uniqueCodeHashes = Seq.empty[ByteString]
   // Storage file path + count for async streaming (Bug 20 fix: avoids loading 73.5M entries into memory)
-  private var storageFilePath: Option[java.nio.file.Path] = None
+  private var storageFilePath: java.nio.file.Path = _
   private var storageFileCount: Long = 0L
 
   // Concurrent phase completion tracking (bytecode + storage run in parallel)
@@ -451,7 +451,7 @@ class SNAPSyncController(
         log.info(s"Ignoring PhaseTransitionReady in phase=$currentPhase")
       } else {
         uniqueCodeHashes = codeHashes
-        storageFilePath = Some(storageFile)
+        storageFilePath = storageFile
         storageFileCount = storageCount
         bytecodePhaseComplete = false
         storagePhaseComplete = false
@@ -1428,9 +1428,9 @@ class SNAPSyncController(
 
       // Bug 20 fix: Stream storage tasks from file in 10K-entry batches instead of
       // loading all 73.5M entries into memory (which would OOM at ~14.7GB vs 4GB heap).
-      if (storageFilePath.isDefined && storageFileCount > 0) {
+      if (storageFilePath != null && storageFileCount > 0) {
         val coordinator = storageRangeCoordinator.get
-        val filePath = storageFilePath.get
+        val filePath = storageFilePath
         val fileCount = storageFileCount
         val controllerRef = self
         import context.dispatcher
@@ -1921,7 +1921,7 @@ class SNAPSyncController(
     bytecodeSyncStarting = false
     storageRangeSyncStarting = false
     uniqueCodeHashes = Seq.empty
-    storageFilePath = None
+    storageFilePath = null
     storageFileCount = 0L
     bytecodePhaseComplete = false
     storagePhaseComplete = false
@@ -2537,12 +2537,8 @@ class StateValidator(mptStorage: MptStorage) {
             val resolvedNode = storage.get(hash.hash)
             collectAccounts(resolvedNode, storage, accounts, visited)
           } catch {
-            case _: MerklePatriciaTrie.MissingNodeException =>
-              // Missing node — skip this subtree (expected during recovery)
-              ()
-            case _: Exception =>
-              // Unreachable node — skip this subtree
-              ()
+            case _: MerklePatriciaTrie.MissingNodeException => ()
+            case _: Exception => ()
           }
         }
 

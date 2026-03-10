@@ -342,10 +342,7 @@ class SyncController(
         // It will fall back to fast sync if needed
         startSnapSync()
       case (true, _, true, _) if syncConfig.forceStateRehealing =>
-        log.warning(
-          "FORCE-STATE-REHEALING: Re-entering SNAP healing phase to repair missing trie nodes. " +
-            "Set fukuii.sync.force-state-rehealing=false after successful healing to resume normal sync."
-        )
+        log.warning("force-state-rehealing is enabled — re-entering state healing/validation with existing DB")
         startSnapSyncHealOnly()
       case (true, _, true, _) =>
         log.warning("do-snap-sync is true but SNAP sync already completed")
@@ -399,9 +396,10 @@ class SyncController(
     context.become(runningFastSync(fastSync))
   }
 
-  /** Create and register a SNAPSyncController actor. */
-  private def createSnapSyncActor(nameSuffix: String): ActorRef = {
+  def startSnapSync(): Unit = {
+    log.info("Starting SNAP sync mode")
     syncGeneration += 1
+
     val snapSyncConfig = loadSnapSyncConfig()
 
     val snapSync = context.actorOf(
@@ -417,16 +415,12 @@ class SyncController(
         snapSyncConfig,
         scheduler
       ).withDispatcher("sync-dispatcher"),
-      s"snap-sync-$nameSuffix-$syncGeneration"
+      s"snap-sync-$syncGeneration"
     )
 
+    // Register SNAPSyncController with NetworkPeerManagerActor for message routing
     networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(snapSync)
-    snapSync
-  }
 
-  def startSnapSync(): Unit = {
-    log.info("Starting SNAP sync mode")
-    val snapSync = createSnapSyncActor("full")
     snapSync ! SNAPSyncController.Start
     context.become(runningSnapSync(snapSync))
   }
@@ -446,11 +440,32 @@ class SyncController(
           s"Starting heal-only SNAP sync (stateRoot=${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}..., " +
             s"pivotBlock=$pivotBlock)"
         )
+        syncGeneration += 1
 
         // Clear SnapSyncDone so completeSnapSync() can re-set it after healing
         appStateStorage.clearSnapSyncDone().commit()
 
-        val snapSync = createSnapSyncActor("heal")
+        val snapSyncConfig = loadSnapSyncConfig()
+
+        val snapSync = context.actorOf(
+          SNAPSyncController.props(
+            blockchainReader,
+            blockchainWriter,
+            appStateStorage,
+            stateStorage,
+            evmCodeStorage,
+            networkPeerManager,
+            peerEventBus,
+            syncConfig,
+            snapSyncConfig,
+            scheduler
+          ).withDispatcher("sync-dispatcher"),
+          s"snap-sync-heal-$syncGeneration"
+        )
+
+        // Register for SNAP message routing (healing needs to download trie nodes via SNAP)
+        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(snapSync)
+
         snapSync ! SNAPSyncController.StartHealOnly(stateRoot, pivotBlock)
         context.become(runningSnapSync(snapSync))
 
