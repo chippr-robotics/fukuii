@@ -209,16 +209,6 @@ class SNAPSyncController(
       log.info("Starting SNAP sync...")
       startSnapSync()
 
-    case StartHealOnly(root, pivot) =>
-      log.info(s"Starting heal-only mode (stateRoot=${root.take(8).toHex}, pivotBlock=$pivot)")
-      stateRoot = Some(root)
-      pivotBlock = Some(pivot)
-      // Ensure MptStorage is created for this pivot
-      getOrCreateMptStorage(pivot)
-      currentPhase = StateHealing
-      startStateHealing()
-      context.become(syncing)
-
     case SyncProtocol.GetStatus =>
       sender() ! SyncProtocol.Status.NotSyncing
   }
@@ -2198,10 +2188,6 @@ object SNAPSyncController {
   }
 
   case object Start
-  /** Skip account/bytecode/storage download and jump directly to state healing + validation.
-    * Used to re-heal an existing DB (e.g. after Bug 23 fix) without a full re-sync.
-    */
-  final case class StartHealOnly(stateRoot: ByteString, pivotBlock: BigInt)
   case object Done
   case object FallbackToFastSync // Signal to fallback to fast sync due to repeated failures
   case class StartRegularSyncBootstrap(targetBlock: BigInt) // Request bootstrap from SyncController

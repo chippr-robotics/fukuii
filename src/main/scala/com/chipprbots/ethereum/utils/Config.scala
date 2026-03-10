@@ -177,8 +177,7 @@ object Config {
       fastSyncMaxBatchRetries: Int,
       maxPivotBlockFailuresCount: Int,
       maxRetryDelay: FiniteDuration,
-      maxBodyFetchRetries: Int,
-      forceStateRehealing: Boolean
+      maxBodyFetchRetries: Int
   )
 
   object SyncConfig {
@@ -245,11 +244,7 @@ object Config {
         maxBodyFetchRetries =
           if (syncConfig.hasPath("max-body-fetch-retries"))
             syncConfig.getInt("max-body-fetch-retries")
-          else 10,
-        forceStateRehealing =
-          if (syncConfig.hasPath("force-state-rehealing"))
-            syncConfig.getBoolean("force-state-rehealing")
-          else false
+          else 10
       )
     }
   }

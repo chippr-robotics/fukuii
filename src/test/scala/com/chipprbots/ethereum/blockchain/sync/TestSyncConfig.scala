@@ -52,8 +52,7 @@ trait TestSyncConfig extends SyncConfigBuilder {
     fastSyncMaxBatchRetries = 3,
     maxPivotBlockFailuresCount = 3,
     maxRetryDelay = 30.seconds,
-    maxBodyFetchRetries = 10,
-    forceStateRehealing = false
+    maxBodyFetchRetries = 10
   )
 
   override lazy val syncConfig: SyncConfig = defaultSyncConfig
