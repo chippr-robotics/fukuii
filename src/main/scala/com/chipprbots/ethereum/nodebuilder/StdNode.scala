@@ -93,21 +93,13 @@ abstract class BaseNode extends Node {
       genesisDataLoader.loadGenesisData()
     }
 
-  private[this] def runDBConsistencyCheck(): Unit = {
-    // Skip consistency check after SNAP sync — block headers 0..pivot don't exist yet.
-    // SNAP sync only stores the pivot block header; earlier headers are downloaded
-    // incrementally during regular sync's block-by-block import.
-    if (storagesInstance.storages.appStateStorage.isSnapSyncDone()) {
-      log.info("Skipping DB consistency check: SNAP sync stores only pivot block header, not full header chain")
-      return
-    }
+  private[this] def runDBConsistencyCheck(): Unit =
     StorageConsistencyChecker.checkStorageConsistency(
       storagesInstance.storages.appStateStorage.getBestBlockNumber(),
       storagesInstance.storages.blockNumberMappingStorage,
       storagesInstance.storages.blockHeadersStorage,
       shutdown
     )(log)
-  }
 
   private[this] def startPeerManager(): Unit = peerManager ! PeerManagerActor.StartConnecting
 

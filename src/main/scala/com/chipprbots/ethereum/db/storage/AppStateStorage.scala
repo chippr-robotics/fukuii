@@ -113,22 +113,6 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def snapSyncDone(): DataSourceBatchUpdate =
     put(Keys.SnapSyncDone, true.toString)
 
-  /** Check if bytecode recovery scan has completed (Bug 20 hardening) */
-  def isBytecodeRecoveryDone(): Boolean =
-    get(Keys.BytecodeRecoveryDone).exists(_.toBoolean)
-
-  /** Mark bytecode recovery as completed */
-  def bytecodeRecoveryDone(): DataSourceBatchUpdate =
-    put(Keys.BytecodeRecoveryDone, true.toString)
-
-  /** Check if storage recovery scan has completed (Bug 20 hardening) */
-  def isStorageRecoveryDone(): Boolean =
-    get(Keys.StorageRecoveryDone).exists(_.toBoolean)
-
-  /** Mark storage recovery as completed */
-  def storageRecoveryDone(): DataSourceBatchUpdate =
-    put(Keys.StorageRecoveryDone, true.toString)
-
   /** Get the SNAP sync pivot block number
     * @return
     *   SNAP sync pivot block number, or None if not set
@@ -228,32 +212,6 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     */
   def clearSnapSyncBootstrapTarget(): DataSourceBatchUpdate =
     update(toRemove = Seq(Keys.SnapSyncBootstrapTarget), toUpsert = Nil)
-
-  /** Check if SNAP sync account download phase has completed.
-    * Used to skip account re-download on process restart during bytecode/storage phase.
-    */
-  def isSnapSyncAccountsComplete(): Boolean =
-    get(Keys.SnapSyncAccountsComplete).exists(_.toBoolean)
-
-  /** Mark SNAP sync account download as complete (or incomplete on full restart). */
-  def putSnapSyncAccountsComplete(complete: Boolean): DataSourceBatchUpdate =
-    put(Keys.SnapSyncAccountsComplete, complete.toString)
-
-  /** Get the persisted path to the unique codeHashes file for bytecode sync recovery. */
-  def getSnapSyncCodeHashesPath(): Option[String] =
-    get(Keys.SnapSyncCodeHashesPath)
-
-  /** Persist the path to the unique codeHashes file so bytecode sync can resume after restart. */
-  def putSnapSyncCodeHashesPath(path: String): DataSourceBatchUpdate =
-    put(Keys.SnapSyncCodeHashesPath, path)
-
-  /** Get the persisted path to the contract storage file for storage sync recovery. */
-  def getSnapSyncStorageFilePath(): Option[String] =
-    get(Keys.SnapSyncStorageFilePath)
-
-  /** Persist the path to the contract storage file so storage sync can resume after restart. */
-  def putSnapSyncStorageFilePath(path: String): DataSourceBatchUpdate =
-    put(Keys.SnapSyncStorageFilePath, path)
 }
 
 object AppStateStorage {
@@ -274,11 +232,6 @@ object AppStateStorage {
     val SnapSyncStateRoot = "SnapSyncStateRoot"
     val SnapSyncProgress = "SnapSyncProgress"
     val SnapSyncBootstrapTarget = "SnapSyncBootstrapTarget"
-    val BytecodeRecoveryDone = "BytecodeRecoveryDone"
-    val StorageRecoveryDone = "StorageRecoveryDone"
-    val SnapSyncAccountsComplete = "SnapSyncAccountsComplete"
-    val SnapSyncCodeHashesPath = "SnapSyncCodeHashesPath"
-    val SnapSyncStorageFilePath = "SnapSyncStorageFilePath"
   }
 
 }

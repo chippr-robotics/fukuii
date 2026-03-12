@@ -218,6 +218,8 @@ object ETH63 {
         receipt match {
           case _: LegacyReceipt      => legacyRLPReceipt
           case _: Type01Receipt      => PrefixedRLPEncodable(Transaction.Type01, legacyRLPReceipt)
+          case _: Type02Receipt      => PrefixedRLPEncodable(Transaction.Type02, legacyRLPReceipt)
+          case _: Type04Receipt      => PrefixedRLPEncodable(Transaction.Type04, legacyRLPReceipt)
           case _: TypedLegacyReceipt => legacyRLPReceipt // Handle typed legacy receipts
         }
       }
@@ -236,6 +238,8 @@ object ETH63 {
         }
         val first = bytes(0)
         (first match {
+          case Transaction.Type04 => PrefixedRLPEncodable(Transaction.Type04, rawDecode(bytes.tail))
+          case Transaction.Type02 => PrefixedRLPEncodable(Transaction.Type02, rawDecode(bytes.tail))
           case Transaction.Type01 => PrefixedRLPEncodable(Transaction.Type01, rawDecode(bytes.tail))
           case _                  => rawDecode(bytes)
         }).toReceipt
@@ -275,6 +279,8 @@ object ETH63 {
       }
 
       def toReceipt: Receipt = rlpEncodeable match {
+        case PrefixedRLPEncodable(Transaction.Type04, legacyReceipt) => Type04Receipt(legacyReceipt.toLegacyReceipt)
+        case PrefixedRLPEncodable(Transaction.Type02, legacyReceipt) => Type02Receipt(legacyReceipt.toLegacyReceipt)
         case PrefixedRLPEncodable(Transaction.Type01, legacyReceipt) => Type01Receipt(legacyReceipt.toLegacyReceipt)
         case other                                                   => other.toLegacyReceipt
       }

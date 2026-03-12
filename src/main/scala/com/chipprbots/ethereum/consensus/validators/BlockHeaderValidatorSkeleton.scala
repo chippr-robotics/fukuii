@@ -1,9 +1,12 @@
 package com.chipprbots.ethereum.consensus.validators
 
 import com.chipprbots.ethereum.consensus.difficulty.DifficultyCalculator
+import com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator
 import com.chipprbots.ethereum.consensus.mining.GetBlockHeaderByHash
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError._
 import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty
+import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostOlympia
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.DaoForkConfig
 
@@ -50,6 +53,8 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
       _ <- validateGasUsed(blockHeader)
       _ <- validateGasLimit(blockHeader, parentHeader)
       _ <- validateNumber(blockHeader, parentHeader)
+      _ <- validateExtraFields(blockHeader)
+      _ <- validateBaseFee(blockHeader, parentHeader)
       _ <- validateEvenMore(blockHeader)
     } yield BlockHeaderValid
 
@@ -196,6 +201,49 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
   ): Either[BlockHeaderError, BlockHeaderValid] =
     if (blockHeader.number == parentHeader.number + 1) Right(BlockHeaderValid)
     else Left(HeaderNumberError)
+
+  /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.extraFields]] match the Olympia fork activation.
+    */
+  private def validateExtraFields(
+      blockHeader: BlockHeader
+  )(implicit blockchainConfig: BlockchainConfig): Either[BlockHeaderError, BlockHeaderValid] = {
+    val isOlympiaActivated = blockHeader.number >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+
+    blockHeader.extraFields match {
+      case HefPostOlympia(_) if isOlympiaActivated  => Right(BlockHeaderValid)
+      case HefEmpty if !isOlympiaActivated           => Right(BlockHeaderValid)
+      case _ =>
+        Left(HeaderExtraFieldsError(blockHeader.extraFields))
+    }
+  }
+
+  /** Validates that the baseFee in the block header matches the expected value calculated from the parent header using
+    * the EIP-1559 algorithm.
+    */
+  private def validateBaseFee(
+      blockHeader: BlockHeader,
+      parentHeader: BlockHeader
+  )(implicit blockchainConfig: BlockchainConfig): Either[BlockHeaderError, BlockHeaderValid] = {
+    val isOlympiaActivated = blockHeader.number >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+    if (!isOlympiaActivated) {
+      Right(BlockHeaderValid)
+    } else {
+      blockHeader.baseFee match {
+        case None =>
+          Left(HeaderBaseFeeError("missing baseFee after Olympia activation"))
+        case Some(actualBaseFee) =>
+          val expectedBaseFee = BaseFeeCalculator.calcBaseFee(parentHeader, blockchainConfig)
+          if (actualBaseFee == expectedBaseFee) Right(BlockHeaderValid)
+          else
+            Left(
+              HeaderBaseFeeError(
+                s"invalid baseFee: have $actualBaseFee, want $expectedBaseFee, " +
+                  s"parentBaseFee ${parentHeader.baseFee}, parentGasUsed ${parentHeader.gasUsed}"
+              )
+            )
+      }
+    }
+  }
 
   override def validateHeaderOnly(
       blockHeader: BlockHeader
