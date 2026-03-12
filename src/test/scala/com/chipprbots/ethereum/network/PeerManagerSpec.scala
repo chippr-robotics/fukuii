@@ -257,8 +257,7 @@ class PeerManagerSpec
     val requestSender: TestProbe = TestProbe()
 
     requestSender.send(peerManager, GetPeers)
-    // Advance scheduler to allow peer status requests to timeout (getPeerStatus uses 2s timeout)
-    testScheduler.timePasses((2.seconds + 1.second).toMillis.millis)
+    // With peer status caching, GetPeers returns immediately from cache — no actor asks needed
     requestSender.expectMsgClass(classOf[Peers])
   }
 

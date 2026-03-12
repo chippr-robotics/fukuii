@@ -9,7 +9,7 @@
         </encoder>
     </appender>
 
-    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <appender name="FILE" class="com.chipprbots.ethereum.utils.ResilientRollingFileAppender">
         <file>${java.io.tmpdir}/fukuii-it-test/fukuii.log</file>
         <append>true</append>
         <rollingPolicy class="ch.qos.logback.core.rolling.FixedWindowRollingPolicy">

@@ -20,7 +20,7 @@ class BlockchainReaderSpec extends AnyFlatSpec with Matchers with ScalaCheckProp
     StateTest
   ) in new EphemBlockchainTestSetup {
     forAll(ObjectGenerators.newBlockGen(secureRandom, chainId)) { case NewBlock(block, weight) =>
-      blockchainWriter.save(block, Nil, ChainWeight(0, weight), true)
+      blockchainWriter.save(block, Nil, ChainWeight(weight), true)
 
       blockchainReader.getBestBlock() shouldBe Some(block)
     }

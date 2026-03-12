@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.crypto
 
-import org.apache.pekko.util.ByteString
-
 object ECDSASignatureImplicits {
 
   import com.chipprbots.ethereum.rlp.RLPImplicitConversions._

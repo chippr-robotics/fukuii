@@ -8,13 +8,10 @@ import org.apache.pekko.util.ByteString
 import cats.effect.IO
 
 import com.softwaremill.diffx.scalatest.DiffMatcher
-import mouse.all._
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
-import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.crypto.generateKeyPair
-import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostEcip1097
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.transactions.TransactionHistoryService.ExtendedTransactionData
 import com.chipprbots.ethereum.transactions.TransactionHistoryService.MinedTransactionData
@@ -66,17 +63,17 @@ class LegacyTransactionHistoryServiceSpec
       ExtendedTransactionData(
         tx3,
         isOutgoing = false,
-        Some(MinedTransactionData(blockWithTxs2and3.header, 1, 44, isCheckpointed = false))
+        Some(MinedTransactionData(blockWithTxs2and3.header, 1, 44))
       ),
       ExtendedTransactionData(
         tx2,
         isOutgoing = false,
-        Some(MinedTransactionData(blockWithTxs2and3.header, 0, 43, isCheckpointed = false))
+        Some(MinedTransactionData(blockWithTxs2and3.header, 0, 43))
       ),
       ExtendedTransactionData(
         tx1,
         isOutgoing = false,
-        Some(MinedTransactionData(blockWithTx1.header, 0, 42, isCheckpointed = false))
+        Some(MinedTransactionData(blockWithTx1.header, 0, 42))
       )
     )
 
@@ -119,70 +116,4 @@ class LegacyTransactionHistoryServiceSpec
       } yield assert(response === expectedSent)
   }
 
-  "marks transactions as checkpointed if there's checkpoint block following block containing transaction" in testCaseM {
-    (fixture: Fixture) =>
-      import fixture._
-
-      val keyPair = generateKeyPair(secureRandom)
-      val senderAddress = Address(keyPair)
-      val checkpointKey = generateKeyPair(secureRandom)
-
-      val txToBeCheckpointed = LegacyTransaction(0, 123, 456, None, 99, ByteString())
-      val signedTxToBeCheckpointed = SignedTransaction.sign(txToBeCheckpointed, keyPair, None)
-
-      val txNotToBeCheckpointed =
-        LegacyTransaction(1, 123, 456, Address("ee4439beb5c71513b080bbf9393441697a29f478"), 99, ByteString())
-      val signedTxNotToBeCheckpointed = SignedTransaction.sign(txNotToBeCheckpointed, keyPair, None)
-
-      val block1 = BlockHelpers
-        .generateBlock(BlockHelpers.genesis) |> (BlockHelpers.withTransactions(_, List(signedTxToBeCheckpointed)))
-      val block2 = BlockHelpers.generateBlock(block1) |> (
-        BlockHelpers.updateHeader(
-          _,
-          header => {
-            val checkpoint =
-              Checkpoint(List(ECDSASignature.sign(crypto.kec256(ByteString("foo")).toArray, checkpointKey)))
-            header.copy(extraFields = HefPostEcip1097(Some(checkpoint)))
-          }
-        )
-      )
-      val block3 =
-        BlockHelpers.generateBlock(block2) |> (BlockHelpers.withTransactions(_, List(signedTxNotToBeCheckpointed)))
-
-      val expectedCheckpointedTxData = ExtendedTransactionData(
-        signedTxToBeCheckpointed,
-        isOutgoing = true,
-        Some(MinedTransactionData(block1.header, 0, 21000, isCheckpointed = true))
-      )
-      val expectedNonCheckpointedTxData = ExtendedTransactionData(
-        signedTxNotToBeCheckpointed,
-        isOutgoing = true,
-        Some(MinedTransactionData(block3.header, 0, 21000, isCheckpointed = false))
-      )
-
-      def makeReceipts(block: Block): Seq[Receipt] =
-        block.body.transactionList.map(_ =>
-          LegacyReceipt(HashOutcome(block.hash), BigInt(21000), ByteString("foo"), Nil)
-        )
-
-      for {
-        _ <- IO {
-          blockchainWriter.save(block1, makeReceipts(block1), ChainWeight(0, block1.header.difficulty), true)
-        }
-        _ <- IO(blockchainWriter.save(block2, Nil, ChainWeight(2, block1.header.difficulty), true))
-        _ <- IO {
-          blockchainWriter.save(block3, makeReceipts(block3), ChainWeight(2, block1.header.difficulty * 2), true)
-        }
-        lastCheckpoint <- IO(blockchainReader.getLatestCheckpointBlockNumber())
-        response <- transactionHistoryService.getAccountTransactions(
-          senderAddress,
-          BigInt.apply(0) to BigInt(10)
-        )
-      } yield {
-        assert(!block3.hasCheckpoint)
-        assert(lastCheckpoint === block2.number)
-        assert(block2.hasCheckpoint)
-        response shouldBe List(expectedNonCheckpointedTxData, expectedCheckpointedTxData)
-      }
-  }
 }

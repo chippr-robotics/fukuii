@@ -7,6 +7,14 @@
 
 set -euo pipefail
 
+# Prerequisite check
+for cmd in curl jq xxd; do
+    if ! command -v "$cmd" &>/dev/null; then
+        echo "ERROR: $cmd is required but not installed" >&2
+        exit 1
+    fi
+done
+
 FUKUII_RPC="http://localhost:8545"
 COREGETH_RPC="http://localhost:18545"
 EXPECTED_COINBASE="0x33d8f73570a229917cfd5e8c20ad057d1c19b38e"

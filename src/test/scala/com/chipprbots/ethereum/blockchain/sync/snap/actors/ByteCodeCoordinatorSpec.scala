@@ -75,13 +75,13 @@ class ByteCodeCoordinatorSpec
       )
     )
 
-    val contractAccounts = Seq(
-      (ByteString("account1"), kec256(ByteString("code1"))),
-      (ByteString("account2"), kec256(ByteString("code2")))
+    val codeHashes = Seq(
+      kec256(ByteString("code1")),
+      kec256(ByteString("code2"))
     )
 
-    coordinator ! Messages.StartByteCodeSync(contractAccounts)
-    
+    coordinator ! Messages.StartByteCodeSync(codeHashes)
+
     // Coordinator should queue the contracts
     coordinator ! Messages.ByteCodeGetProgress
     expectMsgType[Any](3.seconds)
@@ -106,11 +106,9 @@ class ByteCodeCoordinatorSpec
       )
     )
 
-    val contractAccounts = Seq(
-      (ByteString("account1"), kec256(ByteString("code1")))
-    )
+    val codeHashes = Seq(kec256(ByteString("code1")))
 
-    coordinator ! Messages.StartByteCodeSync(contractAccounts)
+    coordinator ! Messages.StartByteCodeSync(codeHashes)
     coordinator ! Messages.ByteCodePeerAvailable(peer)
 
     // Should send request to network peer manager
@@ -158,8 +156,11 @@ class ByteCodeCoordinatorSpec
 
     // Start with empty contract list
     coordinator ! Messages.StartByteCodeSync(Seq.empty)
-    
-    // Should complete immediately
+
+    // Signal that no more tasks will arrive (sentinel pattern)
+    coordinator ! Messages.NoMoreByteCodeTasks
+
+    // Should complete immediately since no tasks and sentinel received
     coordinator ! Messages.ByteCodeCheckCompletion
     snapSyncController.expectMsg(3.seconds, SNAPSyncController.ByteCodeSyncComplete)
   }
@@ -213,13 +214,9 @@ class ByteCodeCoordinatorSpec
     val h2 = kec256(code2)
     val h3 = kec256(code3)
 
-    val contractAccounts = Seq(
-      (ByteString("account1"), h1),
-      (ByteString("account2"), h2),
-      (ByteString("account3"), h3)
-    )
+    val codeHashes = Seq(h1, h2, h3)
 
-    coordinator ! Messages.StartByteCodeSync(contractAccounts)
+    coordinator ! Messages.StartByteCodeSync(codeHashes)
     coordinator ! Messages.ByteCodePeerAvailable(peer)
 
     val send1 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
@@ -266,12 +263,9 @@ class ByteCodeCoordinatorSpec
     val h1 = kec256(code1)
     val h2 = kec256(code2)
 
-    val contractAccounts = Seq(
-      (ByteString("account1"), h1),
-      (ByteString("account2"), h2)
-    )
+    val codeHashes = Seq(h1, h2)
 
-    coordinator ! Messages.StartByteCodeSync(contractAccounts)
+    coordinator ! Messages.StartByteCodeSync(codeHashes)
     coordinator ! Messages.ByteCodePeerAvailable(peer)
 
     val send1 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
@@ -323,11 +317,9 @@ class ByteCodeCoordinatorSpec
     val code1 = ByteString("code1")
     val h1 = kec256(code1)
 
-    val contractAccounts = Seq(
-      (ByteString("account1"), h1)
-    )
+    val codeHashes = Seq(h1)
 
-    coordinator ! Messages.StartByteCodeSync(contractAccounts)
+    coordinator ! Messages.StartByteCodeSync(codeHashes)
     coordinator ! Messages.ByteCodePeerAvailable(peer)
 
     val send1 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
@@ -374,9 +366,9 @@ class ByteCodeCoordinatorSpec
 
     val code1 = ByteString("code1")
     val h1 = kec256(code1)
-    val contractAccounts = Seq((ByteString("account1"), h1))
+    val codeHashes = Seq(h1)
 
-    coordinator ! Messages.StartByteCodeSync(contractAccounts)
+    coordinator ! Messages.StartByteCodeSync(codeHashes)
     coordinator ! Messages.ByteCodePeerAvailable(peer)
 
     val send1 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)

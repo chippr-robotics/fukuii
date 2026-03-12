@@ -1,12 +1,8 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import org.apache.pekko.util.ByteString
-
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
-import org.bouncycastle.crypto.AsymmetricCipherKeyPair
-import org.json4s.Extraction
 import org.json4s.JsonAST._
 import org.json4s.JsonDSL._
 import org.scalamock.handlers.CallHandler1
@@ -20,17 +16,13 @@ import com.chipprbots.ethereum.NormalPatience
 import com.chipprbots.ethereum.consensus.pow.miners.MockedMiner.MineBlocks
 import com.chipprbots.ethereum.consensus.pow.miners.MockedMiner.MockedMinerResponse
 import com.chipprbots.ethereum.consensus.pow.miners.MockedMiner.MockedMinerResponses
-import com.chipprbots.ethereum.crypto
-import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.db.storage.AppStateStorage
-import com.chipprbots.ethereum.domain.Checkpoint
 import com.chipprbots.ethereum.jsonrpc.QAService.MineBlocksResponse.MinerResponseType._
 import com.chipprbots.ethereum.jsonrpc.QAService._
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
 import com.chipprbots.ethereum.nodebuilder.ApisBuilder
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.testing.Tags._
-import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config
 
 class QaJRCSpec
@@ -98,150 +90,6 @@ class QaJRCSpec
       }
     }
 
-    "request generating checkpoint and return valid response" when {
-      "given block to be checkpointed exists and checkpoint is generated correctly" in new TestSetup {
-        (qaService.generateCheckpoint _)
-          .expects(generateCheckpointReq)
-          .returning(IO.pure(Right(GenerateCheckpointResponse(checkpoint))))
-
-        val response: JsonRpcResponse =
-          jsonRpcController.handleRequest(generateCheckpointRpcRequest).unsafeRunSync()
-
-        response should haveResult(Extraction.decompose(checkpoint))
-      }
-    }
-
-    "request generating block with checkpoint and return valid response" when {
-      "requested best block to be checkpointed and block with checkpoint is generated correctly" in new TestSetup {
-        val req = generateCheckpointRpcRequest.copy(
-          params = Some(
-            JArray(
-              List(
-                JArray(
-                  privateKeysAsJson
-                )
-              )
-            )
-          )
-        )
-        val expectedServiceReq = generateCheckpointReq.copy(blockHash = None)
-        (qaService.generateCheckpoint _)
-          .expects(expectedServiceReq)
-          .returning(IO.pure(Right(GenerateCheckpointResponse(checkpoint))))
-
-        val response: JsonRpcResponse =
-          jsonRpcController.handleRequest(req).unsafeRunSync()
-
-        response should haveResult(Extraction.decompose(checkpoint))
-      }
-    }
-
-    "request generating block with checkpoint and return InvalidParams" when {
-      "block hash is not valid" in new TestSetup {
-        val req = generateCheckpointRpcRequest.copy(
-          params = Some(
-            JArray(
-              List(
-                JArray(
-                  privateKeysAsJson
-                ),
-                JInt(1)
-              )
-            )
-          )
-        )
-        val response: JsonRpcResponse =
-          jsonRpcController.handleRequest(req).unsafeRunSync()
-
-        response should haveError(JsonRpcError.InvalidParams())
-      }
-
-      "private keys are not valid" in new TestSetup {
-        val req = generateCheckpointRpcRequest.copy(
-          params = Some(
-            JArray(
-              List(
-                JArray(
-                  privateKeysAsJson :+ JInt(1)
-                ),
-                JString(blockHashAsString)
-              )
-            )
-          )
-        )
-        val response: JsonRpcResponse =
-          jsonRpcController.handleRequest(req).unsafeRunSync()
-
-        response should haveError(
-          JsonRpcError.InvalidParams("Unable to parse private key, expected byte data but got: JInt(1)")
-        )
-      }
-
-      "bad params structure" in new TestSetup {
-        val req = generateCheckpointRpcRequest.copy(
-          params = Some(
-            JArray(
-              List(
-                JString(blockHashAsString),
-                JArray(
-                  privateKeysAsJson
-                )
-              )
-            )
-          )
-        )
-        val response: JsonRpcResponse =
-          jsonRpcController.handleRequest(req).unsafeRunSync()
-
-        response should haveError(JsonRpcError.InvalidParams())
-      }
-    }
-
-    "request generating block with checkpoint and return InternalError" when {
-      "generating failed" in new TestSetup {
-        (qaService.generateCheckpoint _)
-          .expects(generateCheckpointReq)
-          .returning(IO.raiseError(new RuntimeException("error")))
-
-        val response: JsonRpcResponse =
-          jsonRpcController.handleRequest(generateCheckpointRpcRequest).unsafeRunSync()
-
-        response should haveError(JsonRpcError.InternalError)
-      }
-    }
-
-    "request federation members info and return valid response" when {
-      "getting federation public keys is successful" in new TestSetup {
-        val checkpointPubKeys: Seq[ByteString] = blockchainConfig.checkpointPubKeys.toList
-        (qaService.getFederationMembersInfo _)
-          .expects(GetFederationMembersInfoRequest())
-          .returning(IO.pure(Right(GetFederationMembersInfoResponse(checkpointPubKeys))))
-
-        val response: JsonRpcResponse =
-          jsonRpcController.handleRequest(getFederationMembersInfoRpcRequest).unsafeRunSync()
-
-        val result = JObject(
-          "membersPublicKeys" -> JArray(
-            checkpointPubKeys.map(encodeAsHex).toList
-          )
-        )
-
-        response should haveResult(result)
-      }
-    }
-
-    "request federation members info and return InternalError" when {
-      "getting federation members info failed" in new TestSetup {
-        (qaService.getFederationMembersInfo _)
-          .expects(GetFederationMembersInfoRequest())
-          .returning(IO.raiseError(new RuntimeException("error")))
-
-        val response: JsonRpcResponse =
-          jsonRpcController.handleRequest(getFederationMembersInfoRpcRequest).unsafeRunSync()
-
-        response should haveError(JsonRpcError.InternalError)
-      }
-    }
   }
 
   // SCALA 3 MIGRATION: Changed TestSetup from trait with self-type to class
@@ -273,9 +121,16 @@ class QaJRCSpec
     val ethTxService: EthTxService = mock[EthTxService]
     val ethUserService: EthUserService = mock[EthUserService]
     val ethFilterService: EthFilterService = mock[EthFilterService]
-    val checkpointingService: CheckpointingService = mock[CheckpointingService]
     val fukuiiService: FukuiiService = mock[FukuiiService]
-    val mcpService: McpService = mock[McpService]
+    val mcpService: McpService = {
+      implicit val testSystem: org.apache.pekko.actor.ActorSystem =
+        org.apache.pekko.actor.ActorSystem("QaJRCSpec-mcp")
+      new McpService(
+        org.apache.pekko.testkit.TestProbe().ref, org.apache.pekko.testkit.TestProbe().ref, null, null,
+        new java.util.concurrent.atomic.AtomicReference[com.chipprbots.ethereum.utils.NodeStatus](),
+        null
+      )(scala.concurrent.ExecutionContext.global)
+    }
     val qaService: QAService = mock[QAService]
 
     val jsonRpcController =
@@ -292,7 +147,6 @@ class QaJRCSpec
         None,
         debugService,
         qaService,
-        checkpointingService,
         fukuiiService,
         mcpService,
         ProofServiceDummy,
@@ -313,47 +167,6 @@ class QaJRCSpec
         )
       ),
       Some(JInt(1))
-    )
-
-    val blockHash: ByteString = byteStringOfLengthNGen(32).sample.get
-    val blockHashAsString: String = ByteStringUtils.hash2string(blockHash)
-    val privateKeys: List[ByteString] = seqByteStringOfNItemsOfLengthMGen(3, 32).sample.get.toList
-    val keyPairs: List[AsymmetricCipherKeyPair] = privateKeys.map { key =>
-      crypto.keyPairFromPrvKey(key.toArray)
-    }
-    val signatures: List[ECDSASignature] = keyPairs.map(ECDSASignature.sign(blockHash.toArray, _))
-    val checkpoint: Checkpoint = Checkpoint(signatures)
-    val privateKeysAsJson: List[JString] = privateKeys.map { key =>
-      JString(ByteStringUtils.hash2string(key))
-    }
-
-    val generateCheckpointReq: GenerateCheckpointRequest = GenerateCheckpointRequest(privateKeys, Some(blockHash))
-
-    val generateCheckpointRpcRequest: JsonRpcRequest = JsonRpcRequest(
-      "2.0",
-      "qa_generateCheckpoint",
-      Some(
-        JArray(
-          List(
-            JArray(
-              privateKeysAsJson
-            ),
-            JString(blockHashAsString)
-          )
-        )
-      ),
-      Some(1)
-    )
-
-    val getFederationMembersInfoRpcRequest: JsonRpcRequest = JsonRpcRequest(
-      "2.0",
-      "qa_getFederationMembersInfo",
-      Some(
-        JArray(
-          List()
-        )
-      ),
-      Some(1)
     )
 
     def msg(str: String): JField = "message" -> JString(str)

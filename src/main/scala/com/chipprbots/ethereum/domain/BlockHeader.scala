@@ -4,10 +4,7 @@ import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.crypto.kec256
-import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields
-import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields._
 import com.chipprbots.ethereum.rlp
-import com.chipprbots.ethereum.rlp.RLPDecoder
 import com.chipprbots.ethereum.rlp.RLPEncodeable
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
@@ -18,12 +15,6 @@ import com.chipprbots.ethereum.utils.ByteStringUtils
 
 import BlockHeaderImplicits._
 
-/** @param extraFields
-  *   contains the new fields added in ECIPs 1097 and 1098 and can contain values:
-  *   - HefPreECIP1098: represents the ETC blocks without checkpointing nor treasury enabled
-  *   - HefPostECIP1098: represents the ETC blocks with treasury enabled but not checkpointing
-  *   - HefPostECIP1097: represents the ETC blocks with both checkpointing and treasury enabled
-  */
 case class BlockHeader(
     parentHash: ByteString,
     ommersHash: ByteString,
@@ -39,8 +30,7 @@ case class BlockHeader(
     unixTimestamp: Long,
     extraData: ByteString,
     mixHash: ByteString,
-    nonce: ByteString,
-    extraFields: HeaderExtraFields = HefEmpty
+    nonce: ByteString
 ) {
 
   def withAdditionalExtraData(additionalBytes: ByteString): BlockHeader =
@@ -49,24 +39,9 @@ case class BlockHeader(
   def dropRightNExtraDataBytes(n: Int): BlockHeader =
     copy(extraData = extraData.dropRight(n))
 
-  val checkpoint: Option[Checkpoint] = extraFields match {
-    case HefPostEcip1097(maybeCheckpoint) => maybeCheckpoint
-    case _                                => None
-  }
-
-  val hasCheckpoint: Boolean = checkpoint.isDefined
-
   def isParentOf(child: BlockHeader): Boolean = number + 1 == child.number && child.parentHash == hash
 
-  override def toString: String = {
-    val checkpointString: String = extraFields match {
-      case HefPostEcip1097(maybeCheckpoint) =>
-        maybeCheckpoint.isDefined.toString
-
-      case HefEmpty =>
-        "Pre-ECIP1097 block"
-    }
-
+  override def toString: String =
     s"BlockHeader { " +
       s"hash: $hashAsHexString, " +
       s"parentHash: ${ByteStringUtils.hash2string(parentHash)}, " +
@@ -83,10 +58,8 @@ case class BlockHeader(
       s"unixTimestamp: $unixTimestamp, " +
       s"extraData: ${ByteStringUtils.hash2string(extraData)} " +
       s"mixHash: ${ByteStringUtils.hash2string(mixHash)} " +
-      s"nonce: ${ByteStringUtils.hash2string(nonce)}, " +
-      s"isCheckpointing: $checkpointString" +
+      s"nonce: ${ByteStringUtils.hash2string(nonce)}" +
       s"}"
-  }
 
   /** calculates blockHash for given block header
     * @return
@@ -116,29 +89,16 @@ object BlockHeader {
     * @param blockHeader
     *   to be encoded without PoW fields
     * @return
-    *   rlp.encode( [blockHeader.parentHash, ..., blockHeader.extraData] + extra fields )
+    *   rlp.encode( [blockHeader.parentHash, ..., blockHeader.extraData] )
     */
   def getEncodedWithoutNonce(blockHeader: BlockHeader): Array[Byte] = {
     // toRLPEncodeable is guaranteed to return a RLPList
     val rlpList: RLPList = blockHeader.toRLPEncodable.asInstanceOf[RLPList]
 
     val numberOfPowFields = 2
-    val numberOfExtraFields = blockHeader.extraFields match {
-      case HefPostEcip1097(_) => 1
-      case HefEmpty           => 0
-    }
+    val baseFields = rlpList.items.dropRight(numberOfPowFields)
 
-    val preECIP1098Fields = rlpList.items.dropRight(numberOfPowFields + numberOfExtraFields)
-    val extraFieldsEncoded = rlpList.items.takeRight(numberOfExtraFields)
-
-    val rlpItemsWithoutNonce = preECIP1098Fields ++ extraFieldsEncoded
-    rlpEncode(RLPList(rlpItemsWithoutNonce: _*))
-  }
-
-  sealed trait HeaderExtraFields
-  object HeaderExtraFields {
-    case object HefEmpty extends HeaderExtraFields
-    case class HefPostEcip1097(checkpoint: Option[Checkpoint]) extends HeaderExtraFields
+    rlpEncode(RLPList(baseFields: _*))
   }
 }
 
@@ -150,49 +110,25 @@ object BlockHeaderImplicits {
   import com.chipprbots.ethereum.utils.ByteUtils
 
   implicit class BlockHeaderEnc(blockHeader: BlockHeader) extends RLPSerializable {
-    // scalastyle:off method.length
     override def toRLPEncodable: RLPEncodeable = {
       import blockHeader._
-      extraFields match {
-        case HefPostEcip1097(maybeCheckpoint) =>
-          RLPList(
-            parentHash.toArray,
-            ommersHash.toArray,
-            beneficiary.toArray,
-            stateRoot.toArray,
-            transactionsRoot.toArray,
-            receiptsRoot.toArray,
-            logsBloom.toArray,
-            RLPValue(ByteUtils.bigIntToUnsignedByteArray(difficulty)),
-            RLPValue(ByteUtils.bigIntToUnsignedByteArray(number)),
-            RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasLimit)),
-            RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasUsed)),
-            RLPValue(ByteUtils.bigIntToUnsignedByteArray(unixTimestamp)),
-            extraData.toArray,
-            mixHash.toArray,
-            nonce.toArray,
-            maybeCheckpoint
-          )
-
-        case HefEmpty =>
-          RLPList(
-            parentHash.toArray,
-            ommersHash.toArray,
-            beneficiary.toArray,
-            stateRoot.toArray,
-            transactionsRoot.toArray,
-            receiptsRoot.toArray,
-            logsBloom.toArray,
-            RLPValue(ByteUtils.bigIntToUnsignedByteArray(difficulty)),
-            RLPValue(ByteUtils.bigIntToUnsignedByteArray(number)),
-            RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasLimit)),
-            RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasUsed)),
-            RLPValue(ByteUtils.bigIntToUnsignedByteArray(unixTimestamp)),
-            extraData.toArray,
-            mixHash.toArray,
-            nonce.toArray
-          )
-      }
+      RLPList(
+        parentHash.toArray,
+        ommersHash.toArray,
+        beneficiary.toArray,
+        stateRoot.toArray,
+        transactionsRoot.toArray,
+        receiptsRoot.toArray,
+        logsBloom.toArray,
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(difficulty)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(number)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasLimit)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasUsed)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(unixTimestamp)),
+        extraData.toArray,
+        mixHash.toArray,
+        nonce.toArray
+      )
     }
   }
 
@@ -201,50 +137,8 @@ object BlockHeaderImplicits {
   }
 
   implicit class BlockHeaderDec(val rlpEncodeable: RLPEncodeable) extends AnyVal {
-    // scalastyle:off method.length
     def toBlockHeader: BlockHeader = {
-      val checkpointOptionDecoder = implicitly[RLPDecoder[Option[Checkpoint]]]
-
       rlpEncodeable match {
-        case RLPList(
-              parentHash,
-              ommersHash,
-              beneficiary,
-              stateRoot,
-              transactionsRoot,
-              receiptsRoot,
-              logsBloom,
-              difficulty,
-              number,
-              gasLimit,
-              gasUsed,
-              unixTimestamp,
-              extraData,
-              mixHash,
-              nonce,
-              encodedCheckpoint
-            ) =>
-          val decodedCheckpoint = checkpointOptionDecoder.decode(encodedCheckpoint)
-          val extraFields = HefPostEcip1097(decodedCheckpoint)
-          BlockHeader(
-            byteStringFromEncodeable(parentHash),
-            byteStringFromEncodeable(ommersHash),
-            byteStringFromEncodeable(beneficiary),
-            byteStringFromEncodeable(stateRoot),
-            byteStringFromEncodeable(transactionsRoot),
-            byteStringFromEncodeable(receiptsRoot),
-            byteStringFromEncodeable(logsBloom),
-            bigIntFromEncodeable(difficulty),
-            bigIntFromEncodeable(number),
-            bigIntFromEncodeable(gasLimit),
-            bigIntFromEncodeable(gasUsed),
-            longFromEncodeable(unixTimestamp),
-            byteStringFromEncodeable(extraData),
-            byteStringFromEncodeable(mixHash),
-            byteStringFromEncodeable(nonce),
-            extraFields
-          )
-
         case RLPList(
               parentHash,
               ommersHash,

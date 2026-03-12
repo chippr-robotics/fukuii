@@ -1,5 +1,9 @@
 # Gorgoroth Internal Test Network - 3 Fukuii + 3 Besu Nodes
 # This configuration creates a private test network with mixed client implementations
+#
+# ETC client images — build locally from chris-mercer forks:
+#   FUKUII_IMAGE:    docker build -t fukuii-etc:local -f docker/Dockerfile .
+#   BESU_ETC_IMAGE:  docker build -t besu-etc:local -f docker/Dockerfile .  (from chris-mercer/besu etc branch)
 
 networks:
   gorgoroth:
@@ -11,7 +15,7 @@ networks:
 services:
   # Fukuii Nodes
   fukuii-node1:
-    image: ghcr.io/chippr-robotics/fukuii:latest
+    image: ${FUKUII_IMAGE:-fukuii-etc:local}
     container_name: gorgoroth-fukuii-node1
     hostname: fukuii-node1
     restart: unless-stopped
@@ -45,7 +49,7 @@ services:
     command: ["fukuii", "enterprise", "gorgoroth"]
 
   fukuii-node2:
-    image: ghcr.io/chippr-robotics/fukuii:latest
+    image: ${FUKUII_IMAGE:-fukuii-etc:local}
     container_name: gorgoroth-fukuii-node2
     hostname: fukuii-node2
     restart: unless-stopped
@@ -62,7 +66,7 @@ services:
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node2/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
       - ./conf/node2/static-nodes.json:/app/data/static-nodes.json:ro
-      - ./conf/logback-node2-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
+      - ./conf/logback-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
       - ./conf/mordor-genesis.json:/app/fukuii/conf/mordor-genesis.json:ro
       - fukuii-node2-data:/app/data
       - fukuii-node2-logs:/app/logs
@@ -79,7 +83,7 @@ services:
     command: ["fukuii", "enterprise", "gorgoroth"]
 
   fukuii-node3:
-    image: ghcr.io/chippr-robotics/fukuii:latest
+    image: ${FUKUII_IMAGE:-fukuii-etc:local}
     container_name: gorgoroth-fukuii-node3
     hostname: fukuii-node3
     restart: unless-stopped
@@ -96,7 +100,7 @@ services:
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node3/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
       - ./conf/node3/static-nodes.json:/app/data/static-nodes.json:ro
-      - ./conf/logback-node2-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
+      - ./conf/logback-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
       - ./conf/mordor-genesis.json:/app/fukuii/conf/mordor-genesis.json:ro
       - fukuii-node3-data:/app/data
       - fukuii-node3-logs:/app/logs
@@ -114,7 +118,7 @@ services:
 
   # Besu Nodes
   besu-node1:
-    image: hyperledger/besu:latest
+    image: ${BESU_ETC_IMAGE:-besu-etc:local}
     container_name: gorgoroth-besu-node1
     hostname: besu-node1
     restart: unless-stopped
@@ -148,7 +152,7 @@ services:
       - "--max-peers=25"
 
   besu-node2:
-    image: hyperledger/besu:latest
+    image: ${BESU_ETC_IMAGE:-besu-etc:local}
     container_name: gorgoroth-besu-node2
     hostname: besu-node2
     restart: unless-stopped
@@ -182,7 +186,7 @@ services:
       - "--max-peers=25"
 
   besu-node3:
-    image: hyperledger/besu:latest
+    image: ${BESU_ETC_IMAGE:-besu-etc:local}
     container_name: gorgoroth-besu-node3
     hostname: besu-node3
     restart: unless-stopped

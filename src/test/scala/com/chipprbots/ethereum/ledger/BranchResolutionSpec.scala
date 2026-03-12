@@ -153,57 +153,6 @@ class BranchResolutionSpec
       )
     }
 
-    "report a new better branch with a checkpoint" in
-      new BranchResolutionTestSetupImpl with CheckpointHelpers {
-
-        val checkpointBranchLength = 5
-        // test checkpoint at random position in the chain
-        forAll(Gen.choose(2, checkpointBranchLength)) { checkpointPos =>
-          val commonParent = getBlock(1, parent = genesisHeader.hash)
-          val parentWeight = ChainWeight.zero.increase(commonParent.header)
-          val checkpointBranch = NonEmptyList.fromListUnsafe {
-            val beforeCheckpoint = commonParent :: getChain(2, checkpointPos - 1, commonParent.hash)
-            val checkpoint = getCheckpointBlock(beforeCheckpoint.last)
-            val afterCheckpoint = getChain(checkpointPos + 1, checkpointBranchLength, checkpoint.hash)
-            beforeCheckpoint.tail ::: checkpoint :: afterCheckpoint
-          }
-
-          val noCheckpointBranch = getChain(2, checkpointBranchLength + 2, commonParent.hash)
-
-          setHeaderInChain(commonParent.hash)
-          setChainWeightForBlock(commonParent, parentWeight)
-          setBestBlockNumber(noCheckpointBranch.last.number)
-          noCheckpointBranch.foreach(b => setBlockByNumber(b.number, Some(b)))
-
-          branchResolution.resolveBranch(checkpointBranch.map(_.header)) shouldEqual NewBetterBranch(noCheckpointBranch)
-        }
-      }
-
-    "report no chain switch when the old branch has a checkpoint and the new one does not" in
-      new BranchResolutionTestSetupImpl with CheckpointHelpers {
-
-        val checkpointBranchLength = 5
-        // test checkpoint at random position in the chain
-        forAll(Gen.choose(2, checkpointBranchLength)) { checkpointPos =>
-          val commonParent = getBlock(1, parent = genesisHeader.hash)
-          val parentWeight = ChainWeight.zero.increase(commonParent.header)
-          val checkpointBranch = NonEmptyList.fromListUnsafe {
-            val beforeCheckpoint = commonParent :: getChain(2, checkpointPos - 1, commonParent.hash)
-            val checkpoint = getCheckpointBlock(beforeCheckpoint.last)
-            val afterCheckpoint = getChain(checkpointPos + 1, checkpointBranchLength, checkpoint.hash)
-            beforeCheckpoint.tail ::: checkpoint :: afterCheckpoint
-          }
-
-          val noCheckpointBranch = getChainNel(2, checkpointBranchLength + 2, commonParent.hash)
-
-          setHeaderInChain(commonParent.hash)
-          setChainWeightForBlock(commonParent, parentWeight)
-          setBestBlockNumber(checkpointBranch.last.number)
-          checkpointBranch.map(b => setBlockByNumber(b.number, Some(b)))
-
-          branchResolution.resolveBranch(noCheckpointBranch.map(_.header)) shouldEqual NoChainSwitch
-        }
-      }
   }
 
   class BranchResolutionTestSetupImpl extends TestSetupWithVmAndValidators with MockBlockchain {

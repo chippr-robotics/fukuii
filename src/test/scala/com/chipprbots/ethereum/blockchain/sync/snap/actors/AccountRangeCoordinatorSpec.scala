@@ -101,7 +101,7 @@ class AccountRangeCoordinatorSpec
     
     // Query progress
     coordinator ! Messages.GetProgress
-    val progress = expectMsgType[AccountRangeProgress](3.seconds)
+    val progress = expectMsgType[AccountRangeStats](3.seconds)
     
     progress.accountsDownloaded shouldBe 0
     progress.tasksPending should be > 0
@@ -159,7 +159,7 @@ class AccountRangeCoordinatorSpec
     
     // Coordinator should still be operational
     coordinator ! Messages.GetProgress
-    expectMsgType[AccountRangeProgress](3.seconds)
+    expectMsgType[AccountRangeStats](3.seconds)
   }
 
   it should "collect contract accounts for bytecode download" taggedAs UnitTest in {
@@ -211,7 +211,7 @@ class AccountRangeCoordinatorSpec
     coordinator ! Messages.StartAccountRangeSync(stateRoot)
     coordinator ! Messages.GetProgress
     
-    val progress = expectMsgType[AccountRangeProgress](3.seconds)
+    val progress = expectMsgType[AccountRangeStats](3.seconds)
     progress.progress should be >= 0.0
     progress.progress should be <= 1.0
     progress.elapsedTimeMs should be >= 0L

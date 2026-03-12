@@ -32,7 +32,6 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.blockchain.sync._
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
-import com.chipprbots.ethereum.consensus.blocks.CheckpointBlockGenerator
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits._
 import com.chipprbots.ethereum.domain._
@@ -78,7 +77,6 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
     val peerEventBus: TestProbe = TestProbe()
     val ommersPool: TestProbe = TestProbe()
     val pendingTransactionsManager: TestProbe = TestProbe()
-    val checkpointBlockGenerator: CheckpointBlockGenerator = new CheckpointBlockGenerator()
     val peersClient: TestProbe = TestProbe()
     val blacklist: CacheBasedBlacklist = CacheBasedBlacklist.empty(100)
     lazy val branchResolution = new BranchResolution(blockchainReader)
@@ -291,7 +289,6 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
         }
     }
 
-    // TODO: consider extracting it somewhere closer to domain
     implicit class BlocksListOps(blocks: List[Block]) {
       def headNumberUnsafe: BigInt = blocks.head.number
       def headNumber: Option[BigInt] = blocks.headOption.map(_.number)
@@ -305,7 +302,6 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
       def byHashUnsafe(hash: ByteString): Block = byHash(hash).get
     }
 
-    // TODO: consider extracting it into common test environment
     implicit class TestProbeOps(probe: TestProbe) {
 
       def expectMsgEq[T: Eq](msg: T): T = expectMsgEq(remainingOrDefault, msg)
@@ -431,7 +427,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
         if (block == newBlock) {
           importedNewBlock = true
           IO.pure(
-            BlockImportedToTop(List(BlockData(newBlock, Nil, ChainWeight(0, newBlock.number))))
+            BlockImportedToTop(List(BlockData(newBlock, Nil, ChainWeight(newBlock.number))))
           )
         } else {
           if (block == testBlocks.last) {

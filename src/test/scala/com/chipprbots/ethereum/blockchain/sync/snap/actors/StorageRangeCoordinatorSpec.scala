@@ -127,9 +127,13 @@ class StorageRangeCoordinatorSpec
     )
 
     coordinator ! Messages.StartStorageRangeSync(stateRoot)
+
+    // Signal that no more tasks will arrive (sentinel pattern)
+    coordinator ! Messages.NoMoreStorageTasks
+
     coordinator ! Messages.StorageCheckCompletion
-    
-    // Should complete immediately if no tasks
+
+    // Should complete immediately since no tasks and sentinel received
     snapSyncController.expectMsg(3.seconds, SNAPSyncController.StorageRangeSyncComplete)
   }
 

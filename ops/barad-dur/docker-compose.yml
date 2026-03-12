@@ -101,7 +101,7 @@ services:
 
   # Fukuii Ethereum Client - Primary Instance
   fukuii-primary:
-    image: chipprbots/fukuii:latest
+    image: ${FUKUII_IMAGE:-fukuii-etc:local}
     container_name: fukuii-primary
     restart: unless-stopped
     ports:
@@ -131,7 +131,7 @@ services:
   # Two nodes on the same external IP confuse Kademlia DHT enrollment and compete
   # for the same limited ETC mainnet peer pool.
   # fukuii-secondary:
-  #   image: chipprbots/fukuii:latest
+  #   image: ${FUKUII_IMAGE:-fukuii-etc:local}
   #   container_name: fukuii-secondary
   #   restart: unless-stopped
   #   ports:

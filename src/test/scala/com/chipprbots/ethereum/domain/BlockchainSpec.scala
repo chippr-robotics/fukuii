@@ -12,11 +12,9 @@ import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.ObjectGenerators._
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
-import com.chipprbots.ethereum.consensus.blocks.CheckpointBlockGenerator
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Account.accountSerializer
-import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostEcip1097
 import com.chipprbots.ethereum.mpt.HashNode
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.proof.MptProofVerifier
@@ -31,9 +29,6 @@ class BlockchainSpec
     with Matchers
     with ScalaCheckPropertyChecks
     with org.scalamock.scalatest.MockFactory {
-
-  val checkpoint: Checkpoint = ObjectGenerators.fakeCheckpointGen(2, 5).sample.get
-  val checkpointBlockGenerator = new CheckpointBlockGenerator
 
   "Blockchain" should "be able to store a block and return it if queried by hash" taggedAs (
     UnitTest,
@@ -70,10 +65,10 @@ class BlockchainSpec
     blockchainWriter.save(
       validBlock.copy(header = validBlock.header.copy(number = validBlock.number - 1)),
       Seq.empty,
-      ChainWeight(100, 100),
+      ChainWeight(BigInt(100)),
       saveAsBestBlock = true
     )
-    blockchainWriter.save(validBlock, Seq.empty, ChainWeight(100, 100), saveAsBestBlock = true)
+    blockchainWriter.save(validBlock, Seq.empty, ChainWeight(BigInt(100)), saveAsBestBlock = true)
     blockchainReader.isInChain(blockchainReader.getBestBranch(), validBlock.hash) should ===(true)
     // simulation of node restart
     blockchainWriter.saveBestKnownBlocks(validBlock.header.parentHash, validBlock.header.number - 1)
@@ -95,70 +90,6 @@ class BlockchainSpec
     blockchainReader
       .getBlockByNumber(blockchainReader.getBestBranch(), Fixtures.Blocks.ValidBlock.header.number) shouldBe None
     blockchainReader.getBlockByHash(Fixtures.Blocks.ValidBlock.header.hash) shouldBe None
-  }
-
-  it should "be able to store a block with checkpoint and retrieve it and checkpoint" taggedAs (
-    UnitTest,
-    StateTest
-  ) in new EphemBlockchainTestSetup {
-    val parent = Fixtures.Blocks.Genesis.block
-    blockchainWriter.storeBlock(parent)
-
-    val validBlock: Block = new CheckpointBlockGenerator().generate(parent, checkpoint)
-
-    blockchainWriter.save(validBlock, Seq.empty, ChainWeight(0, 0), saveAsBestBlock = true)
-
-    val retrievedBlock: Option[Block] = blockchainReader.getBlockByHash(validBlock.header.hash)
-    retrievedBlock.isDefined should ===(true)
-    validBlock should ===(retrievedBlock.get)
-
-    blockchainReader.getLatestCheckpointBlockNumber() should ===(validBlock.number)
-    blockchainReader.getBestBlockNumber() should ===(validBlock.number)
-  }
-
-  it should "be able to rollback block with checkpoint and store the previous existed checkpoint" taggedAs (
-    UnitTest,
-    StateTest
-  ) in new EphemBlockchainTestSetup {
-    val genesis = Fixtures.Blocks.Genesis.block
-    blockchainWriter.storeBlock(genesis)
-
-    def nextBlock(parent: Block, body: BlockBody = BlockBody.empty): Block =
-      Block(
-        header = parent.header.copy(
-          number = parent.number + 1,
-          parentHash = parent.hash,
-          extraFields = HefPostEcip1097(None)
-        ),
-        body = body
-      )
-
-    val firstBlock: Block = checkpointBlockGenerator.generate(genesis, checkpoint) // Older checkpoint
-    val secondBlock: Block = nextBlock(firstBlock)
-    val thirdBlock: Block = checkpointBlockGenerator.generate(secondBlock, checkpoint)
-
-    blockchainWriter.save(firstBlock, Seq.empty, ChainWeight(0, 0), saveAsBestBlock = true)
-    blockchainWriter.save(secondBlock, Seq.empty, ChainWeight(0, 0), saveAsBestBlock = true)
-    blockchainWriter.save(thirdBlock, Seq.empty, ChainWeight(0, 0), saveAsBestBlock = true)
-
-    blockchain.removeBlock(thirdBlock.hash)
-
-    blockchainReader.getLatestCheckpointBlockNumber() should ===(firstBlock.number)
-    blockchainReader.getBestBlockNumber() should ===(secondBlock.number)
-  }
-
-  it should "be able to rollback block with last checkpoint taggedAs (UnitTest, StateTest) in the chain" in new EphemBlockchainTestSetup {
-    val genesis = Fixtures.Blocks.Genesis.block
-    blockchainWriter.storeBlock(genesis)
-
-    val validBlock: Block = checkpointBlockGenerator.generate(genesis, checkpoint)
-
-    blockchainWriter.save(validBlock, Seq.empty, ChainWeight(0, 0), saveAsBestBlock = true)
-
-    blockchain.removeBlock(validBlock.hash)
-
-    blockchainReader.getLatestCheckpointBlockNumber() should ===(genesis.number)
-    blockchainReader.getBestBlockNumber() should ===(genesis.number)
   }
 
   it should "return an account given an address and a block number" taggedAs (

@@ -69,9 +69,7 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   scalaVersion := `scala-3`,
   // Override Scala library version to prevent SIP-51 errors with mixed Scala patch versions
   scalaModuleInfo ~= (_.map(_.withOverrideScalaVersion(true))),
-  ThisBuild / scalafixDependencies ++= List(
-    "com.github.liancheng" %% "organize-imports" % "0.6.0"
-  ),
+  // organize-imports removed — built-in to Scalafix 0.11.0+
   // Scalanet snapshots are published to Sonatype after each build (now defined in inThisBuild resolvers).
   (Test / testOptions) += Tests
     .Argument(TestFrameworks.ScalaTest, "-l", "EthashMinerSpec"), // miner tests disabled by default,
@@ -332,10 +330,6 @@ lazy val node = {
       // Into a subdirectory of src_managed to avoid it deleting other generated files; see https://github.com/sbt/sbt-buildinfo/issues/149
       (Compile / PB.targets) := Seq(
         scalapb.gen() -> (Compile / sourceManaged).value / "protobuf"
-      ),
-      // Use local protobuf override directory with corrected package namespace
-      (Compile / PB.protoSources) := Seq(
-        baseDirectory.value / "src" / "main" / "protobuf_override"
       ),
       // protobuf API version file is now provided in src/main/resources/extvm/VERSION
       // Packaging
