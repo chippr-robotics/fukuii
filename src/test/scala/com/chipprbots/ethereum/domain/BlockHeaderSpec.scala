@@ -9,6 +9,7 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.ObjectGenerators
+import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields._
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits._
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
@@ -67,6 +68,61 @@ class BlockHeaderSpec extends AnyFreeSpec with Matchers with ScalaCheckPropertyC
       )
 
       rlp.encode(expectedRLPEncoded) shouldBe (standardHeader.toBytes: Array[Byte])
+    }
+
+    "should generate the expected RLP object for post Olympia headers with baseFee" taggedAs (
+      OlympiaTest,
+      RLPTest
+    ) in {
+      import com.chipprbots.ethereum.rlp.RLPValue
+      import com.chipprbots.ethereum.utils.ByteUtils
+
+      val baseFee = BigInt(1000000000) // 1 gwei
+      val olympiaHeader = Fixtures.Blocks.ValidBlock.header.copy(
+        extraFields = HefPostOlympia(baseFee)
+      )
+
+      val expectedRLPEncoded = RLPList(
+        olympiaHeader.parentHash.toArray,
+        olympiaHeader.ommersHash.toArray,
+        olympiaHeader.beneficiary.toArray,
+        olympiaHeader.stateRoot.toArray,
+        olympiaHeader.transactionsRoot.toArray,
+        olympiaHeader.receiptsRoot.toArray,
+        olympiaHeader.logsBloom.toArray,
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(olympiaHeader.difficulty)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(olympiaHeader.number)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(olympiaHeader.gasLimit)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(olympiaHeader.gasUsed)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(olympiaHeader.unixTimestamp)),
+        olympiaHeader.extraData.toArray,
+        olympiaHeader.mixHash.toArray,
+        olympiaHeader.nonce.toArray,
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(baseFee))
+      )
+
+      rlp.encode(expectedRLPEncoded) shouldBe (olympiaHeader.toBytes: Array[Byte])
+    }
+
+    "should decode post Olympia headers preserving baseFee" taggedAs (OlympiaTest, RLPTest) in {
+      val baseFee = BigInt(1500000000)
+      val originalHeader = Fixtures.Blocks.ValidBlock.header.copy(
+        extraFields = HefPostOlympia(baseFee)
+      )
+
+      val decoded = originalHeader.toBytes.toBlockHeader
+
+      decoded.extraFields shouldBe HefPostOlympia(baseFee)
+      decoded.baseFee shouldBe Some(baseFee)
+      decoded.hash shouldBe originalHeader.hash
+    }
+
+    "should decode pre-Olympia headers as HefEmpty" taggedAs (OlympiaTest, RLPTest) in {
+      val emptyHeader = Fixtures.Blocks.ValidBlock.header.copy(extraFields = HefEmpty)
+
+      val decodedEmpty = emptyHeader.toBytes.toBlockHeader
+      decodedEmpty.extraFields shouldBe HefEmpty
+      decodedEmpty.baseFee shouldBe None
     }
   }
 

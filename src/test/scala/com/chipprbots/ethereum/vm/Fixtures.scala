@@ -10,6 +10,7 @@ object Fixtures {
   val BerlinBlockNumber = 700
   val MystiqueBlockNumber = 800
   val SpiralBlockNumber = 900
+  val OlympiaBlockNumber = 1000
 
   val blockchainConfig: BlockchainConfigForEvm = BlockchainConfigForEvm(
     // block numbers are irrelevant
@@ -31,6 +32,7 @@ object Fixtures {
     berlinBlockNumber = BerlinBlockNumber,
     mystiqueBlockNumber = MystiqueBlockNumber,
     spiralBlockNumber = SpiralBlockNumber,
+    olympiaBlockNumber = OlympiaBlockNumber,
     chainId = 0x3d
   )
 

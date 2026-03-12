@@ -64,7 +64,8 @@ class EthashDifficultyCalculatorSpec extends AnyFlatSpec with Matchers with Scal
     magnetoBlockNumber = 13189133,
     berlinBlockNumber = 13189133,
     mystiqueBlockNumber = 14525000,
-    spiralBlockNumber = 19250000
+    spiralBlockNumber = 19250000,
+    olympiaBlockNumber = Long.MaxValue
   )
 
   private implicit val blockchainConfig: BlockchainConfig = BlockchainConfig(

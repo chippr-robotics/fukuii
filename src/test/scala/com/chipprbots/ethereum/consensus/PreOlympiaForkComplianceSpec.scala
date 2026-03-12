@@ -44,6 +44,7 @@ class PreOlympiaForkComplianceSpec extends AnyFlatSpec with Matchers {
         berlinBlockNumber = Long.MaxValue,
         mystiqueBlockNumber = Long.MaxValue,
         spiralBlockNumber = Long.MaxValue,
+        olympiaBlockNumber = Long.MaxValue,
         chainId = 0x3d
       )
     )
