@@ -39,8 +39,6 @@ object EthTxService {
   case class EthPendingTransactionsResponse(pendingTransactions: Seq[PendingTransaction])
   case class GetTransactionReceiptRequest(txHash: ByteString)
   case class GetTransactionReceiptResponse(txResponse: Option[TransactionReceiptResponse])
-  case class GetBlockReceiptsRequest(block: BlockParam)
-  case class GetBlockReceiptsResponse(receipts: Option[Seq[TransactionReceiptResponse]])
   case class RawTransactionResponse(transactionResponse: Option[SignedTransaction])
 }
 
@@ -142,34 +140,6 @@ class EthTxService(
       }
 
       Right(GetTransactionReceiptResponse(result))
-    }
-
-  def getBlockReceipts(req: GetBlockReceiptsRequest): ServiceResponse[GetBlockReceiptsResponse] =
-    IO {
-      val result: Option[Seq[TransactionReceiptResponse]] = for {
-        resolved <- resolveBlock(req.block).toOption
-        block = resolved.block
-        receipts <- blockchainReader.getReceiptsByHash(block.header.hash)
-      } yield {
-        block.body.transactionList.zipWithIndex.zip(receipts).flatMap { case ((stx, txIndex), receipt) =>
-          val gasUsed =
-            if (txIndex == 0) receipt.cumulativeGasUsed
-            else receipt.cumulativeGasUsed - receipts(txIndex - 1).cumulativeGasUsed
-
-          SignedTransaction.getSender(stx).map { sender =>
-            TransactionReceiptResponse(
-              receipt = receipt,
-              stx = stx,
-              signedTransactionSender = sender,
-              transactionIndex = txIndex,
-              blockHeader = block.header,
-              gasUsedByTransaction = gasUsed
-            )
-          }
-        }
-      }
-
-      Right(GetBlockReceiptsResponse(result))
     }
 
   /** eth_getTransactionByBlockHashAndIndex that returns information about a transaction by block hash and transaction

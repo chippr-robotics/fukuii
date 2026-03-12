@@ -2,10 +2,12 @@ package com.chipprbots.ethereum.jsonrpc
 
 import org.apache.pekko.util.ByteString
 
+import org.bouncycastle.util.encoders.Hex
 import org.json4s.JsonAST._
 import org.json4s.JsonDSL._
 import org.json4s._
 
+import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.jsonrpc.EthInfoService._
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InvalidParams
 import com.chipprbots.ethereum.jsonrpc.PersonalService.SendTransactionRequest
@@ -34,6 +36,27 @@ object EthJsonMethodsImplicits extends JsonMethodsImplicits {
         case Some(syncStatus) => Extraction.decompose(syncStatus)
         case None             => false
       }
+    }
+
+  implicit val eth_config: NoParamsMethodDecoder[ConfigRequest] with JsonEncoder[ConfigResponse] =
+    new NoParamsMethodDecoder(ConfigRequest()) with JsonEncoder[ConfigResponse] {
+      private def encodeAddress(addr: Address): JString =
+        JString(s"0x${Hex.toHexString(addr.bytes.toArray[Byte])}")
+
+      private def encodeForkConfig(fc: ForkConfig): JObject =
+        ("activationBlock" -> encodeAsHex(fc.activationBlock)) ~
+        ("chainId" -> encodeAsHex(fc.chainId)) ~
+        ("precompiles" -> JObject(fc.precompiles.toList.sortBy(_._1).map { case (name, addr) =>
+          JField(name, encodeAddress(addr))
+        })) ~
+        ("systemContracts" -> JObject(fc.systemContracts.toList.sortBy(_._1).map { case (name, addr) =>
+          JField(name, encodeAddress(addr))
+        }))
+
+      def encodeJson(t: ConfigResponse): JValue =
+        ("current" -> t.current.map(encodeForkConfig).getOrElse(JNull: JValue)) ~
+        ("next" -> t.next.map(encodeForkConfig).getOrElse(JNull: JValue)) ~
+        ("last" -> t.last.map(encodeForkConfig).getOrElse(JNull: JValue))
     }
 
   implicit val eth_sendTransaction: JsonMethodCodec[SendTransactionRequest, SendTransactionResponse] =
@@ -91,36 +114,6 @@ object EthJsonMethodsImplicits extends JsonMethodsImplicits {
           Left(InvalidParams())
       }
   }
-
-  implicit val eth_createAccessList
-      : JsonMethodDecoder[CreateAccessListRequest] with JsonEncoder[CreateAccessListResponse] =
-    new JsonMethodDecoder[CreateAccessListRequest] with JsonEncoder[CreateAccessListResponse] {
-      override def decodeJson(params: Option[JArray]): Either[JsonRpcError, CreateAccessListRequest] =
-        params match {
-          case Some(JArray((txObj: JObject) :: (blockValue: JValue) :: Nil)) =>
-            for {
-              blockParam <- extractBlockParam(blockValue)
-              tx <- extractCall(txObj)
-            } yield CreateAccessListRequest(tx, blockParam)
-          case Some(JArray((txObj: JObject) :: Nil)) =>
-            extractCall(txObj).map(CreateAccessListRequest(_, BlockParam.Latest))
-          case _ => Left(InvalidParams())
-        }
-
-      override def encodeJson(t: CreateAccessListResponse): JValue =
-        JObject(
-          "accessList" -> JArray(
-            t.accessList.toList.map { item =>
-              JObject(
-                "address" -> encodeAsHex(item.address.bytes),
-                "storageKeys" -> JArray(item.storageKeys.toList.map(key => encodeAsHex(key)))
-              )
-            }
-          ),
-          "gasUsed" -> encodeAsHex(t.gasUsed),
-          "error" -> t.error.map(JString.apply).getOrElse(JString(""))
-        )
-    }
 
   def extractCall(obj: JObject): Either[JsonRpcError, CallTx] = {
     def toEitherOpt[A, B](opt: Option[Either[A, B]]): Either[A, Option[B]] =

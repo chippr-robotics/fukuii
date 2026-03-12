@@ -123,6 +123,8 @@ case class JsonRpcController(
       handle[ChainIdRequest, ChainIdResponse](ethInfoService.chainId, req)
     case req @ JsonRpcRequest(_, "eth_syncing", _, _) =>
       handle[SyncingRequest, SyncingResponse](ethInfoService.syncing, req)
+    case req @ JsonRpcRequest(_, "eth_config", _, _) =>
+      handle[ConfigRequest, ConfigResponse](ethInfoService.config, req)
     case req @ JsonRpcRequest(_, "eth_submitHashrate", _, _) =>
       handle[SubmitHashRateRequest, SubmitHashRateResponse](ethMiningService.submitHashRate, req)
     case req @ JsonRpcRequest(_, "eth_hashrate", _, _) =>
@@ -186,8 +188,6 @@ case class JsonRpcController(
       handle[CallRequest, CallResponse](ethInfoService.call, req)(eth_call, eth_call)
     case req @ JsonRpcRequest(_, "eth_estimateGas", _, _) =>
       handle[CallRequest, EstimateGasResponse](ethInfoService.estimateGas, req)(eth_estimateGas, eth_estimateGas)
-    case req @ JsonRpcRequest(_, "eth_createAccessList", _, _) =>
-      handle[CreateAccessListRequest, CreateAccessListResponse](ethInfoService.createAccessList, req)
     case req @ JsonRpcRequest(_, "eth_getCode", _, _) =>
       handle[GetCodeRequest, GetCodeResponse](ethUserService.getCode, req)
     case req @ JsonRpcRequest(_, "eth_getUncleCountByBlockNumber", _, _) =>
@@ -229,8 +229,6 @@ case class JsonRpcController(
       handle[GetTransactionByHashRequest, GetTransactionByHashResponse](ethTxService.getTransactionByHash, req)
     case req @ JsonRpcRequest(_, "eth_getTransactionReceipt", _, _) =>
       handle[GetTransactionReceiptRequest, GetTransactionReceiptResponse](ethTxService.getTransactionReceipt, req)
-    case req @ JsonRpcRequest(_, "eth_getBlockReceipts", _, _) =>
-      handle[GetBlockReceiptsRequest, GetBlockReceiptsResponse](ethTxService.getBlockReceipts, req)
     case req @ JsonRpcRequest(_, "eth_sign", _, _) =>
       // Even if it's under eth_xxx this method actually does the same as personal_sign but needs the account
       // to be unlocked before calling

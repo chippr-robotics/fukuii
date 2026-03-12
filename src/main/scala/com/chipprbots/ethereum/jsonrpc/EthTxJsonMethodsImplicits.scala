@@ -123,24 +123,6 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
         JsonEncoder.encode(t.txResponse)
     }
 
-  implicit val eth_getBlockReceipts
-      : JsonMethodDecoder[GetBlockReceiptsRequest] with JsonEncoder[GetBlockReceiptsResponse] =
-    new JsonMethodDecoder[GetBlockReceiptsRequest] with JsonEncoder[GetBlockReceiptsResponse] {
-      override def decodeJson(params: Option[JArray]): Either[JsonRpcError, GetBlockReceiptsRequest] =
-        params match {
-          case Some(JArray(blockValue :: Nil)) =>
-            for {
-              blockParam <- extractBlockParam(blockValue)
-            } yield GetBlockReceiptsRequest(blockParam)
-          case _ => Left(InvalidParams())
-        }
-
-      override def encodeJson(t: GetBlockReceiptsResponse): JValue =
-        t.receipts
-          .map(receipts => JArray(receipts.toList.map(transactionReceiptResponseJsonEncoder.encodeJson)))
-          .getOrElse(JNull)
-    }
-
   implicit val eth_getTransactionReceipt
       : JsonMethodDecoder[GetTransactionReceiptRequest] with JsonEncoder[GetTransactionReceiptResponse] =
     new JsonMethodDecoder[GetTransactionReceiptRequest] with JsonEncoder[GetTransactionReceiptResponse] {
