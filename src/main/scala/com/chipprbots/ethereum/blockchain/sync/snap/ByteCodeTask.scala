@@ -56,12 +56,12 @@ object ByteCodeTask {
 
   /** Default batch size for bytecode requests.
     *
-    * We send many code hashes per request and rely on the peer-side `responseBytes` soft limit to truncate the
-    * response as needed.
-    *
-    * Besu defaults to ~84 bytecodes/request; Nethermind commonly batches up to ~1000 and uses a dynamic byte-budget.
+    * Core-geth server accepts up to 1,024 hashes but caps responses at 2MB (softResponseLimit).
+    * Geth client sends 85 hashes per request (512KB / 24KB max contract size * 4 = 85).
+    * Besu defaults to 84-168. Sending 1,000 wastes overhead since most go unserved.
+    * Aligned with geth client-side norm for complete responses per request.
     */
-  val DEFAULT_BATCH_SIZE = 1000
+  val DEFAULT_BATCH_SIZE = 85
 
   /** Create bytecode tasks from a list of contract accounts
     *

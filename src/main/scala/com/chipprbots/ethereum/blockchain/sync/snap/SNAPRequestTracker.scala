@@ -6,7 +6,6 @@ import org.apache.pekko.util.ByteString
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
-import scala.math.Ordered.orderingToOrdered
 
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
@@ -19,7 +18,7 @@ import com.chipprbots.ethereum.utils.Logger
   *
   * Features:
   *   - Request ID generation and tracking
-  *   - Timeout handling for pending requests
+  *   - Adaptive timeout via PeerRateTracker (port of geth's msgrate)
   *   - Response validation and matching
   *   - Peer management for SNAP requests
   */
@@ -29,6 +28,9 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
 
   /** Pending requests tracked by request ID */
   private val pendingRequests = mutable.Map[BigInt, PendingRequest]()
+
+  /** Per-peer adaptive rate tracker (geth msgrate port) */
+  val rateTracker: PeerRateTracker = new PeerRateTracker()
 
   private def compareUnsignedLexicographically(a: ByteString, b: ByteString): Int = {
     val minLen = math.min(a.length, b.length)
@@ -45,9 +47,6 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
   /** Request ID counter */
   private var nextRequestId: BigInt = 1
 
-  /** Default timeout for SNAP requests */
-  private val defaultTimeout: FiniteDuration = 30.seconds
-
   /** Generate next request ID
     *
     * @return
@@ -59,7 +58,10 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
     id
   }
 
-  /** Track a pending request
+  /** Track a pending request with adaptive timeout.
+    *
+    * Uses PeerRateTracker's adaptive timeout (geth msgrate algorithm) unless an explicit timeout is given.
+    * Timeout formula: min(60s, 3 × medianRTT / confidence), starting at ~12s and converging as peers respond.
     *
     * @param requestId
     *   the request ID
@@ -68,7 +70,7 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
     * @param requestType
     *   the type of request
     * @param timeout
-    *   timeout duration (default 30 seconds)
+    *   explicit timeout override (None = use adaptive timeout from PeerRateTracker)
     * @param onTimeout
     *   callback when request times out
     * @return
@@ -78,8 +80,9 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
       requestId: BigInt,
       peer: Peer,
       requestType: RequestType,
-      timeout: FiniteDuration = defaultTimeout
+      timeout: FiniteDuration = Duration.Zero // Zero = use adaptive
   )(onTimeout: => Unit): PendingRequest = synchronized {
+    val effectiveTimeout = if (timeout == Duration.Zero) rateTracker.targetTimeout() else timeout
     val request = PendingRequest(
       requestId = requestId,
       peer = peer,
@@ -88,10 +91,17 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
     )
 
     // Schedule timeout
-    val timeoutTask = scheduler.scheduleOnce(timeout) {
+    val timeoutTask = scheduler.scheduleOnce(effectiveTimeout) {
       synchronized {
         pendingRequests.get(requestId).foreach { req =>
-          log.warn(s"SNAP request ${req.requestType} timeout for request ID $requestId from peer ${peer.id}")
+          val elapsed = System.currentTimeMillis() - req.timestamp
+          log.warn(
+            s"SNAP request ${req.requestType} timeout for request ID $requestId from peer ${peer.id} " +
+              s"(timeout=${effectiveTimeout.toSeconds}s, elapsed=${elapsed}ms)"
+          )
+          // Record timeout in rate tracker (items=0 slashes capacity to zero)
+          val msgType = requestTypeToMsgType(req.requestType)
+          rateTracker.update(peer.id.value, msgType, elapsed, items = 0)
           pendingRequests.remove(requestId)
           onTimeout
         }
@@ -124,19 +134,28 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
     pendingRequests.get(requestId)
   }
 
-  /** Complete a pending request
+  /** Complete a pending request and record response metrics in the rate tracker.
     *
     * @param requestId
     *   the request ID
+    * @param responseItems
+    *   number of items in the response (for rate tracker — default 1 if unknown)
     * @return
     *   the completed request if it was pending
     */
-  def completeRequest(requestId: BigInt): Option[PendingRequest] = synchronized {
+  def completeRequest(requestId: BigInt, responseItems: Int = 1): Option[PendingRequest] = synchronized {
     pendingRequests.remove(requestId).map { request =>
       // Cancel timeout
       request.timeoutTask.foreach(_.cancel())
+      val elapsed = System.currentTimeMillis() - request.timestamp
+
+      // Record measurement in rate tracker
+      val msgType = requestTypeToMsgType(request.requestType)
+      rateTracker.update(request.peer.id.value, msgType, elapsed, responseItems)
+
       log.debug(
-        s"SNAP request ${request.requestType} completed for request ID $requestId (took ${System.currentTimeMillis() - request.timestamp}ms)"
+        s"SNAP request ${request.requestType} completed for request ID $requestId " +
+          s"(took ${elapsed}ms, items=$responseItems, timeout=${rateTracker.targetTimeout().toSeconds}s)"
       )
       request
     }
@@ -256,6 +275,14 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
   def clear(): Unit = synchronized {
     pendingRequests.values.foreach(_.timeoutTask.foreach(_.cancel()))
     pendingRequests.clear()
+  }
+
+  /** Map RequestType to PeerRateTracker message type ordinal */
+  private def requestTypeToMsgType(rt: RequestType): Int = rt match {
+    case RequestType.GetAccountRange  => PeerRateTracker.MsgGetAccountRange
+    case RequestType.GetStorageRanges => PeerRateTracker.MsgGetStorageRanges
+    case RequestType.GetByteCodes     => PeerRateTracker.MsgGetByteCodes
+    case RequestType.GetTrieNodes     => PeerRateTracker.MsgGetTrieNodes
   }
 }
 
