@@ -7,13 +7,13 @@ import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.consensus.difficulty.DifficultyCalculator
 import com.chipprbots.ethereum.consensus.mining.MiningConfig
 import com.chipprbots.ethereum.consensus.pow.blocks.Ommers
+import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator
 import com.chipprbots.ethereum.consensus.pow.blocks.OmmersSeqEnc
 import com.chipprbots.ethereum.consensus.validators.std.MptListValidator.intByteArraySerializable
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
-import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields._
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.ledger.BlockPreparator
 import com.chipprbots.ethereum.ledger.BlockResult
@@ -47,13 +47,7 @@ abstract class BlockGeneratorSkeleton(
       beneficiary: Address,
       blockTimestamp: Long,
       x: Ommers
-  )(implicit blockchainConfig: BlockchainConfig): BlockHeader = {
-    val extraFields =
-      if (blockNumber >= blockchainConfig.forkBlockNumbers.ecip1097BlockNumber)
-        HefPostEcip1097(None)
-      else
-        HefEmpty
-
+  )(implicit blockchainConfig: BlockchainConfig): BlockHeader =
     BlockHeader(
       parentHash = parent.header.hash,
       ommersHash = ByteString(kec256(x.toBytes: Array[Byte])),
@@ -72,10 +66,8 @@ abstract class BlockGeneratorSkeleton(
         .flatMap(daoForkConfig => daoForkConfig.getExtraData(blockNumber))
         .getOrElse(headerExtraData),
       mixHash = ByteString.empty,
-      nonce = ByteString.empty,
-      extraFields = extraFields
+      nonce = ByteString.empty
     )
-  }
 
   protected def prepareHeader(
       blockNumber: BigInt,
@@ -170,13 +162,24 @@ abstract class BlockGeneratorSkeleton(
     transactionsForBlock
   }
 
-  /*
-        Returns the same gas limit as the parent block
-
-        In Fukuii only testnets (and without this changed), this means that all blocks will have the same gasLimit as
-        the genesis block
-   */
-  protected def calculateGasLimit(parentGas: BigInt): BigInt = parentGas
+  /** Calculates the gas limit for the next block, converging toward the configured target at ±1/1024 per block. This
+    * mirrors the consensus-enforced bound: each block's gas limit may change by at most parent/GasLimitBoundDivisor - 1
+    * relative to the parent. The algorithm matches core-geth's CalcGasLimit() and besu's
+    * OlympiaTargetingGasLimitCalculator.
+    */
+  protected def calculateGasLimit(parentGas: BigInt): BigInt = {
+    val target = miningConfig.gasLimitTarget
+    val delta = parentGas / BlockHeaderValidator.GasLimitBoundDivisor - 1
+    if (parentGas < target) {
+      val next = parentGas + delta
+      if (next > target) target else next
+    } else if (parentGas > target) {
+      val next = parentGas - delta
+      if (next < target) target else next
+    } else {
+      parentGas
+    }
+  }
 
   protected def buildMpt[K](entities: Seq[K], vSerializable: ByteArraySerializable[K]): ByteString = {
     val stateStorage = StateStorage.getReadOnlyStorage(EphemDataSource())

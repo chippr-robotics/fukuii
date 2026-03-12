@@ -13,12 +13,5 @@ object PoWBlockHeaderValidator extends BlockHeaderValidatorSkeleton {
   override protected[validators] def validateEvenMore(
       blockHeader: BlockHeader
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockHeaderError, BlockHeaderValid] =
-    if (isKeccak(blockHeader.number)) KeccakBlockHeaderValidator.validateHeader(blockHeader)
-    else EthashBlockHeaderValidator.validateHeader(blockHeader)
-
-  private def isKeccak(currentBlockNumber: BigInt)(implicit blockchainConfig: BlockchainConfig): Boolean =
-    blockchainConfig.forkBlockNumbers.ecip1049BlockNumber match {
-      case Some(keccakBlock) => currentBlockNumber >= keccakBlock
-      case None              => false
-    }
+    EthashBlockHeaderValidator.validateHeader(blockHeader)
 }
