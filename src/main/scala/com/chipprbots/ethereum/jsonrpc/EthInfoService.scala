@@ -25,6 +25,7 @@ import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
 object EthInfoService {
@@ -69,6 +70,10 @@ object EthInfoService {
   case class IeleCallRequest(tx: IeleCallTx, block: BlockParam)
   case class IeleCallResponse(returnData: Seq[ByteString])
   case class EstimateGasResponse(gas: BigInt)
+
+  case class CreateAccessListRequest(tx: CallTx, block: BlockParam)
+  case class AccessListResultItem(address: Address, storageKeys: Seq[BigInt])
+  case class CreateAccessListResponse(accessList: Seq[AccessListResultItem], gasUsed: BigInt, error: Option[String])
 }
 
 class EthInfoService(
@@ -121,6 +126,8 @@ class EthInfoService(
   def call(req: CallRequest): ServiceResponse[CallResponse] =
     IO {
       doCall(req)(stxLedger.simulateTransaction).map(r => CallResponse(r.vmReturnData))
+    }.recover { case _: MissingNodeException =>
+      Left(JsonRpcError.NodeNotFound)
     }
 
   def ieleCall(req: IeleCallRequest): ServiceResponse[IeleCallResponse] = {
@@ -148,6 +155,38 @@ class EthInfoService(
   def estimateGas(req: CallRequest): ServiceResponse[EstimateGasResponse] =
     IO {
       doCall(req)(stxLedger.binarySearchGasEstimation).map(gasUsed => EstimateGasResponse(gasUsed))
+    }.recover { case _: MissingNodeException =>
+      Left(JsonRpcError.NodeNotFound)
+    }
+
+  def createAccessList(req: CreateAccessListRequest): ServiceResponse[CreateAccessListResponse] =
+    IO {
+      doCall(CallRequest(req.tx, req.block))(stxLedger.simulateTransaction).map { result =>
+        // Group accessed storage keys by address
+        val storageByAddress = result.accessedStorageKeys.groupMap(_._1)(_._2)
+
+        // Build access list from all accessed addresses, excluding sender and to
+        val senderAddr = req.tx.from.map(Address.apply)
+        val toAddr = req.tx.to.map(Address.apply)
+        val excludeAddrs = Set(senderAddr, toAddr).flatten
+
+        val accessList = result.accessedAddresses
+          .filterNot(excludeAddrs.contains)
+          .filterNot(addr => isPrecompileAddress(addr))
+          .toSeq
+          .sortBy(_.bytes.toArray.toSeq)(Ordering.Implicits.seqOrdering)
+          .map { addr =>
+            AccessListResultItem(addr, storageByAddress.getOrElse(addr, Set.empty).toSeq.sorted)
+          }
+
+        CreateAccessListResponse(
+          accessList = accessList,
+          gasUsed = result.gasUsed,
+          error = result.vmError.map(_.toString)
+        )
+      }
+    }.recover { case _: MissingNodeException =>
+      Left(JsonRpcError.NodeNotFound)
     }
 
   private def doCall[A](req: CallRequest)(
@@ -156,6 +195,15 @@ class EthInfoService(
     stx <- prepareTransaction(req)
     block <- resolveBlock(req.block)
   } yield f(stx, block.block.header, block.pendingState)
+
+  // Precompile addresses are 1-9 (ecrecover, sha256, ripemd160, identity, modexp, ecadd, ecmul, ecpairing, blake2f)
+  private def isPrecompileAddress(addr: Address): Boolean = {
+    val bytes = addr.bytes
+    bytes.length <= 20 && bytes.dropWhile(_ == 0).length <= 1 && {
+      val last = if (bytes.isEmpty) 0 else bytes.last & 0xff
+      last >= 1 && last <= 9
+    }
+  }
 
   private def getGasLimit(req: CallRequest): Either[JsonRpcError, BigInt] =
     req.tx.gas.map(Right.apply).getOrElse(resolveBlock(BlockParam.Latest).map(r => r.block.header.gasLimit))

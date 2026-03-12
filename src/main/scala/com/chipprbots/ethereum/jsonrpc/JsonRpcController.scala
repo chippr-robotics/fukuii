@@ -4,7 +4,6 @@ import cats.effect.IO
 
 import org.json4s.JsonDSL._
 
-import com.chipprbots.ethereum.jsonrpc.CheckpointingService._
 import com.chipprbots.ethereum.jsonrpc.DebugService.ListPeersInfoRequest
 import com.chipprbots.ethereum.jsonrpc.DebugService.ListPeersInfoResponse
 import com.chipprbots.ethereum.jsonrpc.EthBlocksService._
@@ -24,10 +23,6 @@ import com.chipprbots.ethereum.jsonrpc.NetService._
 import com.chipprbots.ethereum.jsonrpc.PersonalService._
 import com.chipprbots.ethereum.jsonrpc.ProofService.GetProofRequest
 import com.chipprbots.ethereum.jsonrpc.ProofService.GetProofResponse
-import com.chipprbots.ethereum.jsonrpc.QAService.GenerateCheckpointRequest
-import com.chipprbots.ethereum.jsonrpc.QAService.GenerateCheckpointResponse
-import com.chipprbots.ethereum.jsonrpc.QAService.GetFederationMembersInfoRequest
-import com.chipprbots.ethereum.jsonrpc.QAService.GetFederationMembersInfoResponse
 import com.chipprbots.ethereum.jsonrpc.TestService._
 import com.chipprbots.ethereum.jsonrpc.Web3Service._
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
@@ -48,7 +43,6 @@ case class JsonRpcController(
     testServiceOpt: Option[TestService],
     debugService: DebugService,
     qaService: QAService,
-    checkpointingService: CheckpointingService,
     fukuiiService: FukuiiService,
     mcpService: McpService,
     proofService: ProofService,
@@ -57,7 +51,6 @@ case class JsonRpcController(
     with Logger
     with JsonRpcBaseController {
 
-  import CheckpointingJsonMethodsImplicits._
   import DebugJsonMethodsImplicits._
   import EthJsonMethodsImplicits._
   import EthBlocksJsonMethodsImplicits._
@@ -84,8 +77,7 @@ case class JsonRpcController(
     Apis.Debug -> handleDebugRequest,
     Apis.Test -> handleTestRequest,
     Apis.Iele -> handleIeleRequest,
-    Apis.Qa -> handleQARequest,
-    Apis.Checkpointing -> handleCheckpointingRequest
+    Apis.Qa -> handleQARequest
   )
 
   override def enabledApis: Seq[String] = config.apis :+ Apis.Rpc // RPC enabled by default
@@ -194,6 +186,8 @@ case class JsonRpcController(
       handle[CallRequest, CallResponse](ethInfoService.call, req)(eth_call, eth_call)
     case req @ JsonRpcRequest(_, "eth_estimateGas", _, _) =>
       handle[CallRequest, EstimateGasResponse](ethInfoService.estimateGas, req)(eth_estimateGas, eth_estimateGas)
+    case req @ JsonRpcRequest(_, "eth_createAccessList", _, _) =>
+      handle[CreateAccessListRequest, CreateAccessListResponse](ethInfoService.createAccessList, req)
     case req @ JsonRpcRequest(_, "eth_getCode", _, _) =>
       handle[GetCodeRequest, GetCodeResponse](ethUserService.getCode, req)
     case req @ JsonRpcRequest(_, "eth_getUncleCountByBlockNumber", _, _) =>
@@ -235,6 +229,8 @@ case class JsonRpcController(
       handle[GetTransactionByHashRequest, GetTransactionByHashResponse](ethTxService.getTransactionByHash, req)
     case req @ JsonRpcRequest(_, "eth_getTransactionReceipt", _, _) =>
       handle[GetTransactionReceiptRequest, GetTransactionReceiptResponse](ethTxService.getTransactionReceipt, req)
+    case req @ JsonRpcRequest(_, "eth_getBlockReceipts", _, _) =>
+      handle[GetBlockReceiptsRequest, GetBlockReceiptsResponse](ethTxService.getBlockReceipts, req)
     case req @ JsonRpcRequest(_, "eth_sign", _, _) =>
       // Even if it's under eth_xxx this method actually does the same as personal_sign but needs the account
       // to be unlocked before calling
@@ -285,7 +281,6 @@ case class JsonRpcController(
       handle[GetLogHashRequest, GetLogHashResponse](testService.getLogHash, req)
     case req @ JsonRpcRequest(_, "miner_setEtherbase", _, _) =>
       handle[TestService.SetEtherbaseRequest, TestService.SetEtherbaseResponse](testService.setEtherbase, req)
-    // FIXME: 'debug_' has it's own 'handle' method, should be aligned (ETCM-806)
     case req @ JsonRpcRequest(_, "debug_accountRange", _, _) =>
       handle[AccountsInRangeRequest, AccountsInRangeResponse](testService.getAccountsInRange, req)
     case req @ JsonRpcRequest(_, "debug_storageRangeAt", _, _) =>
@@ -359,20 +354,6 @@ case class JsonRpcController(
   private def handleQARequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "qa_mineBlocks", _, _) =>
       handle[QAService.MineBlocksRequest, QAService.MineBlocksResponse](qaService.mineBlocks, req)
-
-    case req @ JsonRpcRequest(_, "qa_generateCheckpoint", _, _) =>
-      handle[GenerateCheckpointRequest, GenerateCheckpointResponse](qaService.generateCheckpoint, req)
-
-    case req @ JsonRpcRequest(_, "qa_getFederationMembersInfo", _, _) =>
-      handle[GetFederationMembersInfoRequest, GetFederationMembersInfoResponse](qaService.getFederationMembersInfo, req)
-  }
-
-  private def handleCheckpointingRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
-    case req @ JsonRpcRequest(_, "checkpointing_getLatestBlock", _, _) =>
-      handle[GetLatestBlockRequest, GetLatestBlockResponse](checkpointingService.getLatestBlock, req)
-
-    case req @ JsonRpcRequest(_, "checkpointing_pushCheckpoint", _, _) =>
-      handle[PushCheckpointRequest, PushCheckpointResponse](checkpointingService.pushCheckpoint, req)
   }
 
   private def handleRpcRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {

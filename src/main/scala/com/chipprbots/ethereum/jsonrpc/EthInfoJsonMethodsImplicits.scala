@@ -92,6 +92,36 @@ object EthJsonMethodsImplicits extends JsonMethodsImplicits {
       }
   }
 
+  implicit val eth_createAccessList
+      : JsonMethodDecoder[CreateAccessListRequest] with JsonEncoder[CreateAccessListResponse] =
+    new JsonMethodDecoder[CreateAccessListRequest] with JsonEncoder[CreateAccessListResponse] {
+      override def decodeJson(params: Option[JArray]): Either[JsonRpcError, CreateAccessListRequest] =
+        params match {
+          case Some(JArray((txObj: JObject) :: (blockValue: JValue) :: Nil)) =>
+            for {
+              blockParam <- extractBlockParam(blockValue)
+              tx <- extractCall(txObj)
+            } yield CreateAccessListRequest(tx, blockParam)
+          case Some(JArray((txObj: JObject) :: Nil)) =>
+            extractCall(txObj).map(CreateAccessListRequest(_, BlockParam.Latest))
+          case _ => Left(InvalidParams())
+        }
+
+      override def encodeJson(t: CreateAccessListResponse): JValue =
+        JObject(
+          "accessList" -> JArray(
+            t.accessList.toList.map { item =>
+              JObject(
+                "address" -> encodeAsHex(item.address.bytes),
+                "storageKeys" -> JArray(item.storageKeys.toList.map(key => encodeAsHex(key)))
+              )
+            }
+          ),
+          "gasUsed" -> encodeAsHex(t.gasUsed),
+          "error" -> t.error.map(JString.apply).getOrElse(JString(""))
+        )
+    }
+
   def extractCall(obj: JObject): Either[JsonRpcError, CallTx] = {
     def toEitherOpt[A, B](opt: Option[Either[A, B]]): Either[A, Option[B]] =
       opt match {

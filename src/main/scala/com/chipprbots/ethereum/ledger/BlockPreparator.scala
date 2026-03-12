@@ -9,7 +9,7 @@ import com.chipprbots.ethereum.domain.UInt256._
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.ledger.BlockExecutionError.StateBeforeFailure
 import com.chipprbots.ethereum.ledger.BlockExecutionError.TxsExecutionError
-import com.chipprbots.ethereum.ledger.BlockPreparator._
+
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 import com.chipprbots.ethereum.utils.DebugTrace
@@ -21,7 +21,7 @@ import com.chipprbots.ethereum.vm.{PC => _, _}
 class BlockPreparator(
     vm: VMImpl,
     signedTxValidator: SignedTransactionValidator,
-    blockchain: BlockchainImpl, // FIXME Depend on the interface
+    blockchain: BlockchainImpl,
     blockchainReader: BlockchainReader
 ) extends Logger {
 
@@ -33,12 +33,10 @@ class BlockPreparator(
     blockchainConfig.forkBlockNumbers.constantinopleBlockNumber
   )
 
-  /** This function updates the state in order to pay rewards based on YP section 11.3 and with the required
-    * modifications due to ECIP1097:
-    *   1. Reward for block is distributed as:
-    *      a. If treasury is disabled or it's has been selfdestructed: Pay 100% of it to the miner b. If a. isn't true:
-    *         Pay 80% of it to the miner Pay 20% of it to the treasury contract 2. Miner is payed a reward for the
-    *         inclusion of ommers 3. Ommers's miners are payed a reward for their inclusion in this block
+  /** This function updates the state in order to pay rewards based on YP section 11.3:
+    *   1. Miner receives 100% of the block reward
+    *   2. Miner receives a reward for the inclusion of ommers
+    *   3. Ommer miners receive a reward for their inclusion in this block
     *
     * @param block
     *   the block being processed
@@ -56,31 +54,11 @@ class BlockPreparator(
     val minerRewardForOmmers =
       blockRewardCalculator.calculateMiningRewardForOmmers(blockNumber, block.body.uncleNodesList.size)
     val minerAddress = Address(block.header.beneficiary)
-    val treasuryAddress = blockchainConfig.treasuryAddress
-    val existsTreasuryContract = worldStateProxy.getAccount(treasuryAddress).isDefined
 
-    val worldAfterPayingBlockReward =
-      if (!treasuryEnabled(blockNumber) || !existsTreasuryContract) {
-        val minerReward = minerRewardForOmmers + minerRewardForBlock
-        val worldAfterMinerReward = increaseAccountBalance(minerAddress, UInt256(minerReward))(worldStateProxy)
-        log.debug("Paying block {} reward of {} to miner with address {}", blockNumber, minerReward, minerAddress)
-        worldAfterMinerReward
-      } else {
-        val minerReward = minerRewardForOmmers + minerRewardForBlock * MinerRewardPercentageAfterECIP1098 / 100
-        val worldAfterMinerReward = increaseAccountBalance(minerAddress, UInt256(minerReward))(worldStateProxy)
-        val treasuryReward = minerRewardForBlock * TreasuryRewardPercentageAfterECIP1098 / 100
-        val worldAfterTreasuryReward =
-          increaseAccountBalance(treasuryAddress, UInt256(treasuryReward))(worldAfterMinerReward)
-        log.debug(
-          "Paying block {} reward of {} to miner with address {} paying treasury reward of {} to treasury with address {}",
-          blockNumber,
-          minerReward,
-          minerAddress,
-          treasuryReward,
-          treasuryAddress
-        )
-        worldAfterTreasuryReward
-      }
+    val minerReward = minerRewardForOmmers + minerRewardForBlock
+    val worldAfterPayingBlockReward = increaseAccountBalance(minerAddress, UInt256(minerReward))(worldStateProxy)
+    log.debug("Paying block {} reward of {} to miner with address {}", blockNumber, minerReward, minerAddress)
+
     block.body.uncleNodesList.foldLeft(worldAfterPayingBlockReward) { (ws, ommer) =>
       val ommerAddress = Address(ommer.beneficiary)
       val ommerReward = blockRewardCalculator.calculateOmmerRewardForInclusion(blockNumber, ommer.number)
@@ -89,9 +67,6 @@ class BlockPreparator(
       increaseAccountBalance(ommerAddress, UInt256(ommerReward))(ws)
     }
   }
-
-  private def treasuryEnabled(blockNo: BigInt)(implicit blockchainConfig: BlockchainConfig): Boolean =
-    blockNo >= blockchainConfig.forkBlockNumbers.ecip1098BlockNumber
 
   /** v0 ≡ Tg (Tx gas limit) * Tp (Tx gas price). See YP equation number (68)
     *
@@ -339,7 +314,7 @@ class BlockPreparator(
 
         validatedStx match {
           case Right((account, address)) =>
-            val TxResult(newWorld, gasUsed, logs, _, vmError) =
+            val TxResult(newWorld, gasUsed, logs, _, vmError, _, _) =
               executeTransaction(stx, address, blockHeader, world.saveAccount(address, account))
 
             // spec: https://github.com/ethereum/EIPs/blob/master/EIPS/eip-658.md
@@ -445,7 +420,4 @@ class BlockPreparator(
   }
 }
 
-object BlockPreparator {
-  val TreasuryRewardPercentageAfterECIP1098 = 20
-  val MinerRewardPercentageAfterECIP1098: Int = 100 - TreasuryRewardPercentageAfterECIP1098
-}
+object BlockPreparator
