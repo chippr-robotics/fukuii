@@ -1,4 +1,4 @@
-## <i>Gorgoroth Status</i>: 🟡 [eth/68, snap/1] - [View Status & Walkthroughs](docs/validation/GORGOROTH_STATUS.md) 
+## <i>Alpha Status</i>: 🟢 2,195 tests passing — [View ETC Handoff](ETC-HANDOFF.md)
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/chippr-robotics/fukuii/HEAD/docs/images/fukuii-hex-logo.png" alt="Fukuii Logo" width="400"/>
@@ -6,7 +6,7 @@
 
 # 🧠🪱 Fukuii Ethereum Client
 # ALPHA TEST PHASE - DO NOT USE IN PRODUCTION 
-[![CI](https://github.com/chippr-robotics/chordodes_fukuii/actions/workflows/ci.yml/badge.svg)](https://github.com/chippr-robotics/chordodes_fukuii/actions/workflows/ci.yml)
+[![CI](https://github.com/chippr-robotics/fukuii/actions/workflows/ci.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/ci.yml)
 [![Docker Build](https://github.com/chippr-robotics/fukuii/actions/workflows/docker.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/docker.yml)
 [![Nightly Build](https://github.com/chippr-robotics/fukuii/actions/workflows/nightly.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/nightly.yml)
 [![codecov](https://codecov.io/gh/chippr-robotics/fukuii/graph/badge.svg)](https://codecov.io/gh/chippr-robotics/fukuii)
@@ -16,7 +16,7 @@ Fukuii is a continuation and re‑branding of the Ethereum Classic client previo
 Fukuii retains the robust architecture and ETC compatibility of Mantis while introducing new features, updated dependencies and a streamlined build. This fork has been renamed throughout the code and documentation:
 - Executable scripts are renamed from mantis to fukuii.
 - Java/Scala packages under io.iohk have been moved to com.chipprbots.
-- Environment variables and configuration keys prefixed with fukuii have been changed to fukuii.
+- Environment variables and configuration keys prefixed with mantis have been changed to fukuii.
 
 #### Important Notes
 
@@ -25,7 +25,7 @@ Fukuii retains the robust architecture and ETC compatibility of Mantis while int
 <b>Origin:</b> Fukuii is derived from the Mantis
  client. Mantis is a trademark of IOHK; we use the name here only to describe the origin of this fork. 
 
-<b>Chordoes Fukuii is a worm which controls a zombie mantis.</b>
+<b>Chordodes Fukuii is a worm which controls a zombie mantis.</b>
 
 ## CI/CD and Project Hygiene
 
@@ -47,7 +47,7 @@ This project uses GitHub Actions for continuous integration and delivery:
 
 **Quick Links:**
 - [🌐 Documentation Site](https://chippr-robotics.github.io/fukuii/) - Hosted documentation (GitHub Pages)
-- [📚 Documentation Index](docs/README.md) - Complete documentation guide
+- [📚 Documentation Index](docs/index.md) - Complete documentation guide
 - [Repository Structure](docs/development/REPOSITORY_STRUCTURE.md) - Understand the codebase layout
 - [Workflow Documentation](.github/workflows/README.md)
 - [Quick Start Guide](.github/QUICKSTART.md)
@@ -61,7 +61,7 @@ This project uses GitHub Actions for continuous integration and delivery:
 
 ### 🚀 Fast Initial Sync with Bootstrap Checkpoints
 
-**New in v1.1.0**: Fukuii now includes bootstrap checkpoints that significantly improve initial sync times:
+Fukuii includes bootstrap checkpoints that significantly improve initial sync times:
 
 - **No Peer Wait**: Begin syncing immediately without waiting for peer consensus
 - **Trusted Reference Points**: Uses well-known fork activation blocks as starting points
@@ -75,7 +75,7 @@ See [CON-002: Bootstrap Checkpoints](docs/adr/consensus/CON-002-bootstrap-checkp
 
 - **Scala 3.3.4 (LTS)** and **JDK 21 (LTS)** for long-term stability
 - **Apache Pekko** actor system for reliable concurrency
-- **Full EIP Support**: Includes Spiral (ECIP-1109), Mystique (ECIP-1104), Magneto (ECIP-1103), and more
+- **Full ECIP-1066 Compliance**: Implements all 14 ETC hard forks from Frontier through Spiral (block 19,250,000), including Magneto (ECIP-1103), Mystique (ECIP-1104), and Spiral (ECIP-1109)
 - **Comprehensive Testing**: Unit, integration, and blockchain tests
 - **Security-First**: Signed Docker images, CodeQL scanning, dependency monitoring
 
@@ -89,21 +89,22 @@ See [CON-002: Bootstrap Checkpoints](docs/adr/consensus/CON-002-bootstrap-checkp
 
 ### 🤖 Agentic Control via MCP
 
-**New**: Fukuii is built with agentic AI integration as a first principle:
+**New**: Fukuii is built with agentic AI integration as a first principle — the first ETC client with a functional MCP server:
 
-- **Model Context Protocol (MCP)**: Integrated into the JSON-RPC API on port 8545
+- **Model Context Protocol (MCP 2025-11-25)**: Integrated into the JSON-RPC API on port 8545
 - **AI Assistant Integration**: Works with Claude, GPT, and other AI assistants via HTTP/WebSocket
-- **Rich Tool Set**: Tools for node status, peer management, blockchain queries, and diagnostics
-- **Resource Access**: Read node state, configuration, and blockchain data via standard URIs
+- **15 Live Tools**: Node status, sync status, peer list, block/transaction/account queries, reorg detection, ETC emission, fork history, unit conversion, chain config
+- **9 Live Resources**: Node status, config, sync status, peer list, latest block, plus URI-templated block/tx/account access (`fukuii://block/123`, `fukuii://tx/0x...`, `fukuii://account/0x...`)
 - **Guided Prompts**: Pre-built templates for health checks, troubleshooting, and management tasks
+- **Tool Annotations**: All tools annotated with `readOnlyHint`, parameterized tools include JSON Schema `inputSchema` and `idempotentHint`
 
 Enable MCP by adding `"mcp"` to `fukuii.network.rpc.apis` in your configuration.
 
 See [MCP Documentation](docs/MCP.md) for detailed integration instructions with AI assistants.
 
-Getting started
+## Getting started
 
-## Option 1: Pre-built Distributions (Quick Start)
+### Option 1: Pre-built Distributions (Quick Start)
 
 Pre-built distribution archives are available for each release, allowing you to download and run Fukuii without building from source.
 
@@ -129,9 +130,9 @@ Visit the [Releases page](https://github.com/chippr-robotics/fukuii/releases) to
 - `fukuii-sbom-<version>.json` - Software Bill of Materials in CycloneDX format
 - `CHANGELOG.md` - Release notes and changelog
 
-**Supported Networks:** `etc` (Ethereum Classic mainnet), `mordor` (ETC testnet), `testnet-internal` (private network)
+**Supported Networks:** `etc` (Ethereum Classic mainnet), `mordor` (ETC testnet), `gorgoroth` (private testnet), `test` (local test)
 
-## Option 2: Docker (Recommended for Production)
+### Option 2: Docker (Recommended for Production)
 
 The easiest way to run Fukuii is using Docker. Images are available on both GitHub Container Registry and Docker Hub:
 
@@ -141,8 +142,8 @@ The easiest way to run Fukuii is using Docker. Images are available on both GitH
 # Pull the latest release
 docker pull chipprbots/fukuii:latest
 
-# Or pull a specific version
-docker pull chipprbots/fukuii:v1.0.0
+# Or pull a specific version (replace with actual release tag)
+docker pull chipprbots/fukuii:<version>
 
 # Run Fukuii
 docker run -d \
@@ -161,13 +162,13 @@ docker run -d \
 
 ```bash
 # Pull a specific version (recommended - official releases are signed)
-docker pull ghcr.io/chippr-robotics/fukuii:v1.0.0
+docker pull ghcr.io/chippr-robotics/fukuii:<version>
 
 # Verify the image signature (requires cosign)
 cosign verify \
   --certificate-identity-regexp=https://github.com/chippr-robotics/fukuii \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
-  ghcr.io/chippr-robotics/fukuii:v1.0.0
+  ghcr.io/chippr-robotics/fukuii:<version>
 
 # Or pull the latest development version
 docker pull ghcr.io/chippr-robotics/fukuii:develop
@@ -180,7 +181,7 @@ docker run -d \
   -p 30303:30303 \
   -v fukuii-data:/app/data \
   -v fukuii-conf:/app/conf \
-  ghcr.io/chippr-robotics/fukuii:v1.0.0
+  ghcr.io/chippr-robotics/fukuii:<version>
 ```
 
 **Security Note:** Release images published to `ghcr.io/chippr-robotics/fukuii` are:
@@ -194,7 +195,7 @@ See [Docker Documentation](docs/deployment/docker.md) for detailed Docker docume
 - Security considerations and signature verification
 - Docker Compose examples
 
-## Option 3: GitHub Codespaces (Recommended for Development)
+### Option 3: GitHub Codespaces (Recommended for Development)
 
 The fastest way to start developing is using GitHub Codespaces, which provides a pre-configured development environment:
 
@@ -204,7 +205,7 @@ The fastest way to start developing is using GitHub Codespaces, which provides a
 
 See [.devcontainer/README.md](.devcontainer/README.md) for more details.
 
-## Option 4: Build from Source (For Development)
+### Option 4: Build from Source (For Development)
 
 To build Fukuii from source locally you will need:
 
@@ -239,7 +240,7 @@ The distribution’s bin/ directory contains a launcher script named fukuii. To 
 ./bin/fukuii etc
 
 
-The launcher accepts the same network names that Fukuii did (etc, eth, mordor, testnet-internal). See the configuration files under src/universal/conf for more details.
+The launcher accepts the following network names: `etc`, `mordor`, `gorgoroth`, `test`. See the configuration files under src/main/resources/conf for more details.
 
 #### Console UI
 
@@ -265,7 +266,7 @@ The console UI provides:
 See [Console UI Documentation](docs/architecture/console-ui.md) for detailed information.
 
 
-Command line interface (CLI)
+## Command line interface (CLI)
 
 Fukuii's CLI tool provides utilities for key generation and other cryptographic functions. To see all available commands and options:
 
@@ -328,11 +329,11 @@ For detailed network management documentation, see:
 - [Gorgoroth Test Network](ops/gorgoroth/README.md) - Private test network
 - [Cirith-Ungol Mainnet Testing](ops/cirith-ungol/README.md) - ETC mainnet environment
 
-Configuration and Environment
+## Configuration and Environment
 
 Many configuration properties begin with the prefix fukuii instead of mantis. For example, the RPC settings are controlled by keys like fukuii.network.rpc.http.mode. Similarly, the environment variable FUKUII_DEV=true enables developer‑friendly settings during the build.
 
-Contributing
+## Contributing
 
 We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for detailed information on:
 
@@ -354,7 +355,7 @@ When modifying code derived from Mantis, include a notice in the header of chang
 
 For the rationale behind these decisions, see [INF-001: Scala 3 Migration](docs/adr/infrastructure/INF-001-scala-3-migration.md). For historical information about the migration, see [Migration History](docs/historical/MIGRATION_HISTORY.md).
 
-**Static Analysis**: We maintain a comprehensive static analysis toolchain including Scalafmt, Scalafix, Scapegoat, and Scoverage. See [Static Analysis Inventory](STATIC_ANALYSIS_INVENTORY.md) for details on our code quality tools.
+**Static Analysis**: We maintain a comprehensive static analysis toolchain including Scalafmt, Scalafix, Scapegoat, and Scoverage. See [Static Analysis Inventory](docs/reports/STATIC_ANALYSIS_INVENTORY.md) for details on our code quality tools.
 
 ## Operations and Maintenance
 
@@ -475,7 +476,7 @@ metadata:
 spec:
   containers:
   - name: fukuii
-    image: ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+    image: ghcr.io/chippr-robotics/fukuii:latest
     ports:
     - containerPort: 8546
       name: rpc
@@ -503,7 +504,7 @@ spec:
 version: '3.8'
 services:
   fukuii:
-    image: ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+    image: ghcr.io/chippr-robotics/fukuii:latest
     ports:
       - "8546:8546"
       - "30303:30303"

@@ -48,11 +48,9 @@ Yes! SNAP sync is fully supported on Ethereum Classic (ETC) mainnet, Mordor test
 Yes, SNAP sync works with:
 - ✅ Ethereum Classic (ETC) mainnet
 - ✅ Mordor testnet (ETC)
-- ✅ Ethereum (ETH) mainnet (if configured)
-- ✅ Ropsten, Goerli, Sepolia (ETH testnets)
-- ✅ Any Ethereum-compatible network
+- ✅ Any ETC-compatible network (via custom chain configs)
 
-The same SNAP sync implementation works across all networks.
+The same SNAP sync implementation works across all ETC networks.
 
 ### Can SNAP sync start from genesis (block 0)?
 

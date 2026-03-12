@@ -81,8 +81,6 @@ TLS certificates and scripts for secure RPC testing:
 #### `docker/`
 Docker and Docker Compose configurations:
 - `docker/fukuii/` - Fukuii-specific Docker Compose setup with Prometheus/Grafana
-- `docker/besu/` - Besu client setup (for comparison testing)
-- `docker/geth/` - Geth client setup (for comparison testing)
 - `ops/barad-dur/` - Barad-dûr (Kong) API gateway integration
 - `docker/scripts/` - Helper scripts
 - `Dockerfile*` - Various Dockerfile variants (prod, dev, distroless, etc.)

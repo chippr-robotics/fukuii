@@ -26,7 +26,6 @@ object ExecEnv {
   }
 }
 
-//TODO: delete me
 /** Execution environment constants of an EVM program. See section 9.3 in Yellow Paper for more detail.
   * @param ownerAddr
   *   I_a: address of the account that owns the code

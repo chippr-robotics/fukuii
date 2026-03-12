@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document summarizes the implementation of MESS (Modified Exponential Subjective Scoring) in Fukuii, as described in ECIP-1097/ECBP-1100 (https://github.com/ethereumclassic/ECIPs/pull/373).
+This document summarizes the implementation of MESS (Modified Exponential Subjective Scoring) in Fukuii, as described in ECBP-1100 (https://github.com/ethereumclassic/ECIPs/pull/373).
 
 ## What Was Implemented
 
@@ -284,7 +284,7 @@ To complete the MESS implementation:
 
 ## References
 
-- **ECIP-1097/ECBP-1100**: https://github.com/ethereumclassic/ECIPs/pull/373
+- **ECBP-1100**: https://github.com/ethereumclassic/ECIPs/pull/373
 - **core-geth**: https://github.com/etclabscore/core-geth
 - **CON-004**: docs/adr/consensus/CON-004-mess-implementation.md
 - **Configuration Guide**: docs/guides/mess-configuration.md

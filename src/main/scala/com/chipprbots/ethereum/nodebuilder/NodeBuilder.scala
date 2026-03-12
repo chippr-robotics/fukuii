@@ -29,7 +29,7 @@ import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.consensus.Consensus
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.ConsensusImpl
-import com.chipprbots.ethereum.consensus.blocks.CheckpointBlockGenerator
+import com.chipprbots.ethereum.consensus.mess.MESSConfig
 import com.chipprbots.ethereum.consensus.mining.MiningBuilder
 import com.chipprbots.ethereum.consensus.mining.MiningConfigBuilder
 import com.chipprbots.ethereum.db.components.Storages.PruningModeComponent
@@ -158,7 +158,7 @@ trait PeerDiscoveryManagerBuilder {
 }
 
 trait BlacklistBuilder {
-  private val blacklistSize: Int = 1000 // TODO ETCM-642 move to config
+  private val blacklistSize: Int = 1000
   lazy val blacklist: Blacklist = CacheBasedBlacklist.empty(blacklistSize)
 }
 
@@ -178,6 +178,15 @@ trait BlockchainBuilder {
   lazy val blockchainReader: BlockchainReader = BlockchainReader(storagesInstance.storages)
   lazy val blockchainWriter: BlockchainWriter = BlockchainWriter(storagesInstance.storages)
   lazy val blockchain: BlockchainImpl = BlockchainImpl(storagesInstance.storages, blockchainReader)
+}
+
+trait MESSBuilder {
+  self: BlockchainConfigBuilder =>
+
+  lazy val messConfigOpt: Option[MESSConfig] = {
+    val config = blockchainConfig.messConfig
+    if (config.activationBlock.isDefined) Some(config) else None
+  }
 }
 
 trait BlockQueueBuilder {
@@ -262,7 +271,6 @@ trait PeerEventBusBuilder {
 trait PeerStatisticsBuilder {
   self: ActorSystemBuilder with PeerEventBusBuilder =>
 
-  // TODO: a candidate to move upwards in trait hierarchy?
   implicit val clock: Clock = Clock.systemUTC()
 
   lazy val peerStatistics: ActorRef = system.actorOf(
@@ -547,35 +555,11 @@ trait PersonalServiceBuilder {
 }
 
 trait QaServiceBuilder {
-  self: MiningBuilder
-    with SyncControllerBuilder
-    with BlockchainBuilder
-    with BlockchainConfigBuilder
-    with CheckpointBlockGeneratorBuilder =>
+  self: MiningBuilder =>
 
   lazy val qaService =
     new QAService(
-      mining,
-      blockchainReader,
-      checkpointBlockGenerator,
-      blockchainConfig,
-      syncController
-    )
-}
-
-trait CheckpointingServiceBuilder {
-  self: BlockchainBuilder
-    with SyncControllerBuilder
-    with StxLedgerBuilder
-    with CheckpointBlockGeneratorBuilder
-    with BlockQueueBuilder =>
-
-  lazy val checkpointingService =
-    new CheckpointingService(
-      blockchainReader,
-      blockQueue,
-      checkpointBlockGenerator,
-      syncController
+      mining
     )
 }
 
@@ -590,9 +574,13 @@ trait FukuiiServiceBuilder {
 }
 
 trait McpServiceBuilder {
-  self: PeerManagerActorBuilder with SyncControllerBuilder with ActorSystemBuilder =>
+  self: PeerManagerActorBuilder with SyncControllerBuilder with ActorSystemBuilder
+    with BlockchainBuilder with BlockchainConfigBuilder with NodeStatusBuilder with StorageBuilder =>
 
-  lazy val mcpService = new McpService(peerManager, syncController)(system.dispatcher)
+  lazy val mcpService = new McpService(
+    peerManager, syncController, blockchainReader, blockchainConfig,
+    nodeStatusHolder, storagesInstance.storages.transactionMappingStorage
+  )(system.dispatcher)
 }
 
 trait KeyStoreBuilder {
@@ -613,11 +601,10 @@ trait ApisBuilder extends ApisBase {
     val Test = "test"
     val Iele = "iele"
     val Qa = "qa"
-    val Checkpointing = "checkpointing"
   }
 
   import Apis._
-  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa, Checkpointing)
+  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa)
 }
 
 trait JSONRpcConfigBuilder {
@@ -641,7 +628,6 @@ trait JSONRpcControllerBuilder {
     with DebugServiceBuilder
     with JSONRpcConfigBuilder
     with QaServiceBuilder
-    with CheckpointingServiceBuilder
     with FukuiiServiceBuilder
     with McpServiceBuilder =>
 
@@ -661,7 +647,6 @@ trait JSONRpcControllerBuilder {
       testService,
       debugService,
       qaService,
-      checkpointingService,
       fukuiiService,
       mcpService,
       ethProofService,
@@ -712,7 +697,7 @@ trait JSONRpcIpcServerBuilder {
 trait OmmersPoolBuilder {
   self: ActorSystemBuilder with BlockchainBuilder with MiningConfigBuilder =>
 
-  lazy val ommersPoolSize: Int = 30 // FIXME For this we need EthashConfig, which means Ethash consensus
+  lazy val ommersPoolSize: Int = 30
   lazy val ommersPool: ActorRef = system.actorOf(OmmersPool.props(blockchainReader, ommersPoolSize))
 }
 
@@ -740,10 +725,6 @@ trait StxLedgerBuilder {
     )
 }
 
-trait CheckpointBlockGeneratorBuilder {
-  lazy val checkpointBlockGenerator = new CheckpointBlockGenerator()
-}
-
 trait SyncControllerBuilder extends SyncControllerRefBuilder {
 
   self: ActorSystemBuilder
@@ -761,7 +742,8 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder {
     with SyncConfigBuilder
     with ShutdownHookBuilder
     with MiningBuilder
-    with BlacklistBuilder =>
+    with BlacklistBuilder
+    with MESSBuilder =>
 
   lazy val syncController: ActorRef = system.actorOf(
     SyncController.props(
@@ -782,7 +764,8 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder {
       networkPeerManager,
       blacklist,
       syncConfig,
-      this
+      this,
+      messConfigOpt
     ),
     "sync-controller"
   )
@@ -869,16 +852,6 @@ trait GenesisDataLoaderBuilder {
 
 }
 
-trait BootstrapCheckpointLoaderBuilder {
-  self: BlockchainBuilder with StorageBuilder =>
-
-  lazy val bootstrapCheckpointLoader =
-    new com.chipprbots.ethereum.blockchain.data.BootstrapCheckpointLoader(
-      blockchainReader,
-      storagesInstance.storages.appStateStorage
-    )
-}
-
 /** Provides the basic functionality of a Node, except the mining algorithm. The latter is loaded dynamically based on
   * configuration.
   *
@@ -892,6 +865,7 @@ trait Node
     with ActorSystemBuilder
     with StorageBuilder
     with BlockchainBuilder
+    with MESSBuilder
     with BlockQueueBuilder
     with ConsensusBuilder
     with NodeStatusBuilder
@@ -913,7 +887,6 @@ trait Node
     with PersonalServiceBuilder
     with DebugServiceBuilder
     with QaServiceBuilder
-    with CheckpointingServiceBuilder
     with FukuiiServiceBuilder
     with McpServiceBuilder
     with KeyStoreBuilder
@@ -927,7 +900,6 @@ trait Node
     with ShutdownHookBuilder
     with Logger
     with GenesisDataLoaderBuilder
-    with BootstrapCheckpointLoaderBuilder
     with BlockchainConfigBuilder
     with VmConfigBuilder
     with PeerEventBusBuilder
@@ -951,7 +923,6 @@ trait Node
     with StxLedgerBuilder
     with KeyStoreConfigBuilder
     with AsyncConfigBuilder
-    with CheckpointBlockGeneratorBuilder
     with TransactionHistoryServiceBuilder.Default
     with PortForwardingBuilder
     with BlacklistBuilder {

@@ -50,7 +50,7 @@ This review evaluates the SNAP sync implementation against the documented plan a
 - ✅ SNAP protocol family defined in `Capability.scala`
 - ✅ SNAP1 capability with request ID support
 - ✅ Capability negotiation integrated into handshake
-- ✅ All chain configs updated (etc-chain.conf, mordor-chain.conf, eth-chain.conf, test-chain.conf, ropsten-chain.conf)
+- ✅ All chain configs updated (etc-chain.conf, mordor-chain.conf, test-chain.conf)
 
 **Evidence:**
 - Chain configs have `"snap/1"` in capabilities list

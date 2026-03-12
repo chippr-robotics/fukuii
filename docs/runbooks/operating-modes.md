@@ -122,7 +122,7 @@ docker run -d \
   -p 9076:9076 \
   -p 30303:30303/udp \
   -v fukuii-data:/app/data \
-  ghcr.io/chippr-robotics/chordodes_fukuii:latest
+  ghcr.io/chippr-robotics/fukuii:latest
 ```
 
 **From Distribution:**
@@ -253,7 +253,7 @@ docker run -d \
   -v fukuii-archive-data:/app/data \
   -v fukuii-archive-conf:/app/conf \
   -e JAVA_OPTS="-Xms8g -Xmx16g" \
-  ghcr.io/chippr-robotics/chordodes_fukuii:latest \
+  ghcr.io/chippr-robotics/fukuii:latest \
   -Dfukuii.sync.do-fast-sync=false \
   -Dfukuii.pruning.mode=archive
 ```
@@ -434,7 +434,7 @@ docker run -d \
   -p 9076:9076 \
   -v fukuii-bootnode-data:/app/data \
   -v $(pwd)/conf:/app/conf:ro \
-  ghcr.io/chippr-robotics/chordodes_fukuii:latest \
+  ghcr.io/chippr-robotics/fukuii:latest \
   -Dconfig.file=/app/conf/bootnode.conf etc
 ```
 
@@ -447,7 +447,7 @@ docker run -d \
   -p 9076:9076 \
   -v fukuii-bootnode-data:/app/data \
   -e JAVA_OPTS="-Xms2g -Xmx4g" \
-  ghcr.io/chippr-robotics/chordodes_fukuii:latest \
+  ghcr.io/chippr-robotics/fukuii:latest \
   -Dfukuii.sync.do-fast-sync=false \
   -Dfukuii.network.rpc.http.enabled=false \
   -Dfukuii.network.peer.max-outgoing-peers=500 \
@@ -1135,7 +1135,7 @@ version: '3.8'
 services:
   # Full node for general use
   fukuii-full:
-    image: ghcr.io/chippr-robotics/chordodes_fukuii:latest
+    image: ghcr.io/chippr-robotics/fukuii:latest
     container_name: fukuii-full
     restart: unless-stopped
     ports:
@@ -1150,7 +1150,7 @@ services:
     
   # Archive node for historical queries
   fukuii-archive:
-    image: ghcr.io/chippr-robotics/chordodes_fukuii:latest
+    image: ghcr.io/chippr-robotics/fukuii:latest
     container_name: fukuii-archive
     restart: unless-stopped
     ports:
@@ -1170,7 +1170,7 @@ services:
     
   # Boot node for peer discovery
   fukuii-boot:
-    image: ghcr.io/chippr-robotics/chordodes_fukuii:latest
+    image: ghcr.io/chippr-robotics/fukuii:latest
     container_name: fukuii-boot
     restart: unless-stopped
     ports:

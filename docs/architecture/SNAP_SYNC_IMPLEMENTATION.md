@@ -62,9 +62,7 @@ This document describes the initial implementation of SNAP/1 protocol support in
    - Added "snap/1" to capabilities list in all chain configurations:
      - `etc-chain.conf` (Ethereum Classic mainnet)
      - `mordor-chain.conf` (Ethereum Classic testnet)
-     - `eth-chain.conf` (Ethereum mainnet)
      - `test-chain.conf` (test network)
-     - `ropsten-chain.conf` (Ropsten testnet)
 
 7. **Documentation** (Phase 1)
    - Updated ETH68.scala documentation to reference SNAP/1 for state sync

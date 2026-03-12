@@ -71,7 +71,7 @@ Get up and running with Fukuii quickly. Choose the installation method that best
 
 ```bash
 # Pull the latest signed release
-docker pull ghcr.io/chippr-robotics/chordodes_fukuii:latest
+docker pull ghcr.io/chippr-robotics/fukuii:latest
 
 # Create data volumes
 docker volume create fukuii-data
@@ -85,7 +85,7 @@ docker run -d \
   -p 30303:30303/udp \
   -v fukuii-data:/app/data \
   -v fukuii-conf:/app/conf \
-  ghcr.io/chippr-robotics/chordodes_fukuii:latest
+  ghcr.io/chippr-robotics/fukuii:latest
 ```
 
 ## Verify Installation

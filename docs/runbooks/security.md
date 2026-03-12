@@ -255,7 +255,7 @@ docker run -d \
   --name fukuii \
   -p 30303:30303/udp \
   -p 9076:9076/tcp \
-  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+  ghcr.io/chippr-robotics/fukuii:v1.0.0
 
 # INSECURE: Do NOT do this
 # -p 8546:8546  # Exposes RPC to public internet!

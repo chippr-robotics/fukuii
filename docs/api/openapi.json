@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Fukuii JSON-RPC API",
-    "description": "\n# Fukuii JSON-RPC API Reference\n\nComplete reference for all JSON-RPC endpoints in the Fukuii Ethereum Classic client.\n\n## Quick Start\n\nAll JSON-RPC methods are called via HTTP POST to the RPC endpoint (default: http://localhost:8546).\n\nExample request:\n```bash\ncurl -X POST http://localhost:8546 \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"jsonrpc\": \"2.0\",\n    \"id\": 1,\n    \"method\": \"eth_blockNumber\",\n    \"params\": []\n  }'\n```\n\n## Namespaces\n\nFukuii organizes methods into namespaces:\n\n- **ETH**: Core blockchain operations (blocks, transactions, state)\n- **WEB3**: Utility methods (hashing, version)\n- **NET**: Network and peer information\n- **PERSONAL**: Account management (dev/test only)\n- **DEBUG**: Debugging and diagnostics\n- **QA**: Testing utilities (test networks only)\n- **CHECKPOINTING**: ETC checkpointing system\n- **FUKUII**: Custom Fukuii extensions\n- **TEST**: Test harness methods (test networks only)\n- **IELE**: IELE VM support (if enabled)\n- **RPC**: RPC metadata\n\n## Security\n\n\u26a0\ufe0f **Important**: Only expose `eth`, `web3`, and `net` namespaces in production.\nNever expose `personal`, `debug`, `test`, or `qa` namespaces on public networks.\n\n## Configuration\n\nEnable/disable namespaces in your configuration:\n```hocon\nfukuii.network.rpc {\n  http {\n    enabled = true\n    interface = \"127.0.0.1\"\n    port = 8546\n    apis = \"eth,web3,net\"  # Comma-separated list\n  }\n}\n```\n",
+    "description": "\n# Fukuii JSON-RPC API Reference\n\nComplete reference for all JSON-RPC endpoints in the Fukuii Ethereum Classic client.\n\n## Quick Start\n\nAll JSON-RPC methods are called via HTTP POST to the RPC endpoint (default: http://localhost:8546).\n\nExample request:\n```bash\ncurl -X POST http://localhost:8546 \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"jsonrpc\": \"2.0\",\n    \"id\": 1,\n    \"method\": \"eth_blockNumber\",\n    \"params\": []\n  }'\n```\n\n## Namespaces\n\nFukuii organizes methods into namespaces:\n\n- **ETH**: Core blockchain operations (blocks, transactions, state)\n- **WEB3**: Utility methods (hashing, version)\n- **NET**: Network and peer information\n- **PERSONAL**: Account management (dev/test only)\n- **DEBUG**: Debugging and diagnostics\n- **QA**: Testing utilities (test networks only)\n- **FUKUII**: Custom Fukuii extensions\n- **TEST**: Test harness methods (test networks only)\n- **IELE**: IELE VM support (if enabled)\n- **RPC**: RPC metadata\n\n## Security\n\n\u26a0\ufe0f **Important**: Only expose `eth`, `web3`, and `net` namespaces in production.\nNever expose `personal`, `debug`, `test`, or `qa` namespaces on public networks.\n\n## Configuration\n\nEnable/disable namespaces in your configuration:\n```hocon\nfukuii.network.rpc {\n  http {\n    enabled = true\n    interface = \"127.0.0.1\"\n    port = 8546\n    apis = \"eth,web3,net\"  # Comma-separated list\n  }\n}\n```\n",
     "version": "1.0.0",
     "contact": {
       "name": "Chippr Robotics LLC",
@@ -24,186 +24,6 @@
     }
   ],
   "paths": {
-    "/checkpointing_getLatestBlock": {
-      "post": {
-        "tags": [
-          "CHECKPOINTING"
-        ],
-        "summary": "checkpointing_getLatestBlock",
-        "description": "Get latest checkpoint block",
-        "operationId": "checkpointing_getLatestBlock",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "jsonrpc",
-                  "method",
-                  "params",
-                  "id"
-                ],
-                "properties": {
-                  "jsonrpc": {
-                    "type": "string",
-                    "enum": [
-                      "2.0"
-                    ],
-                    "example": "2.0"
-                  },
-                  "method": {
-                    "type": "string",
-                    "enum": [
-                      "checkpointing_getLatestBlock"
-                    ],
-                    "example": "checkpointing_getLatestBlock"
-                  },
-                  "params": {
-                    "type": "array",
-                    "items": {},
-                    "example": [
-                      5
-                    ]
-                  },
-                  "id": {
-                    "oneOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "integer"
-                      }
-                    ],
-                    "example": 1
-                  }
-                }
-              },
-              "example": {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "checkpointing_getLatestBlock",
-                "params": [
-                  5
-                ]
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JSONRPCResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad request - Invalid JSON-RPC request"
-          },
-          "500": {
-            "description": "Internal server error"
-          }
-        }
-      }
-    },
-    "/checkpointing_pushCheckpoint": {
-      "post": {
-        "tags": [
-          "CHECKPOINTING"
-        ],
-        "summary": "checkpointing_pushCheckpoint",
-        "description": "Push checkpoint with signatures",
-        "operationId": "checkpointing_pushCheckpoint",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "jsonrpc",
-                  "method",
-                  "params",
-                  "id"
-                ],
-                "properties": {
-                  "jsonrpc": {
-                    "type": "string",
-                    "enum": [
-                      "2.0"
-                    ],
-                    "example": "2.0"
-                  },
-                  "method": {
-                    "type": "string",
-                    "enum": [
-                      "checkpointing_pushCheckpoint"
-                    ],
-                    "example": "checkpointing_pushCheckpoint"
-                  },
-                  "params": {
-                    "type": "array",
-                    "items": {},
-                    "example": [
-                      "0x...blockHash...",
-                      [
-                        "0x...signature1...",
-                        "0x...signature2..."
-                      ]
-                    ]
-                  },
-                  "id": {
-                    "oneOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "integer"
-                      }
-                    ],
-                    "example": 1
-                  }
-                }
-              },
-              "example": {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "checkpointing_pushCheckpoint",
-                "params": [
-                  "0x...blockHash...",
-                  [
-                    "0x...signature1...",
-                    "0x...signature2..."
-                  ]
-                ]
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JSONRPCResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad request - Invalid JSON-RPC request"
-          },
-          "500": {
-            "description": "Internal server error"
-          }
-        }
-      }
-    },
     "/debug_accountRange": {
       "post": {
         "tags": [
@@ -7363,10 +7183,6 @@
     {
       "name": "QA",
       "description": "Quality assurance and testing utilities (\u274c Test networks only)"
-    },
-    {
-      "name": "CHECKPOINTING",
-      "description": "ETC checkpointing system for finality"
     },
     {
       "name": "FUKUII",

@@ -63,13 +63,13 @@ Docker is the recommended deployment method as it provides isolation, easier upd
 
 ```bash
 # Pull a specific version (recommended - official releases are signed)
-docker pull ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+docker pull ghcr.io/chippr-robotics/fukuii:v1.0.0
 
 # Verify the image signature (requires cosign)
 cosign verify \
   --certificate-identity-regexp=https://github.com/chippr-robotics/fukuii \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
-  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+  ghcr.io/chippr-robotics/fukuii:v1.0.0
 ```
 
 #### Step 2: Create Data Directories
@@ -90,7 +90,7 @@ docker run -d \
   -p 30303:30303/udp \
   -v fukuii-data:/app/data \
   -v fukuii-conf:/app/conf \
-  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+  ghcr.io/chippr-robotics/fukuii:v1.0.0
   # ⚠️ SECURITY WARNING: Do NOT expose RPC port 8546 to public internet
   # For internal RPC access, use: -p 127.0.0.1:8546:8546
   # See docs/runbooks/security.md for details

@@ -1184,7 +1184,7 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
 
     val memCost = calcMemCost(state, inOffset, inSize, outOffset, outSize)
 
-    // FIXME: these are calculated twice (for gas and exec), especially account existence. Can we do better? [EC-243]
+    // FIXME: these are calculated twice (for gas and exec), especially account existence. Can we do better?
     val gExtra: BigInt = gasExtra(state, endowment, Address(to))
     val gCap: BigInt = gasCap(state, gas, gExtra + memCost)
     memCost + gCap + gExtra
