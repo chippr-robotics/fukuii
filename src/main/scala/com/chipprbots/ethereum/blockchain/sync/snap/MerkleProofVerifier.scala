@@ -314,19 +314,6 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
       }
       .map(_.toInt)
 
-  /** Convert bytes to nibbles
-    *
-    * @param bytes
-    *   Byte string
-    * @return
-    *   Sequence of nibbles (0-15)
-    */
-  private def bytesToNibbles(bytes: ByteString): Seq[Int] =
-    bytes
-      .flatMap { byte =>
-        Seq((byte >> 4) & 0x0f, byte & 0x0f)
-      }
-      .map(_.toInt)
 
   /** Verify a storage range response with Merkle proof
     *

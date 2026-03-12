@@ -87,7 +87,7 @@ object MptTraversals {
     case _ => throw new MPTException("Invalid Node")
   }
 
-  private def dispatch[T](input: MptNode, visitor: MptVisitor[T]): T =
+  def dispatch[T](input: MptNode, visitor: MptVisitor[T]): T =
     input match {
       case leaf: LeafNode =>
         visitor.visitLeaf(leaf)

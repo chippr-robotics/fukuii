@@ -21,8 +21,8 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP._
   */
 class StorageRangeWorker(
     coordinator: ActorRef,
-    networkPeerManager: ActorRef,
-    requestTracker: SNAPRequestTracker
+    _networkPeerManager: ActorRef,
+    _requestTracker: SNAPRequestTracker
 ) extends Actor
     with ActorLogging {
 

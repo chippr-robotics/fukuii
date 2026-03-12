@@ -98,6 +98,11 @@ class ByteCodeCoordinator(
   private val maxWorkers = 32
   private val idleWorkers = mutable.LinkedHashSet.empty[ActorRef]
 
+  // Sentinel: when true, no more AddByteCodeTasks will arrive (all accounts downloaded).
+  // Completion is only reported after this is set AND pending+active tasks drain.
+  // Geth-aligned: coordinators run from start, tasks arrive inline during account download.
+  private var noMoreTasksExpected: Boolean = false
+
   // Statistics
   private var bytecodesDownloaded: Long = 0
   private var bytesDownloaded: Long = 0
@@ -150,13 +155,32 @@ class ByteCodeCoordinator(
     }
 
   override def receive: Receive = {
-    case StartByteCodeSync(contractAccounts) =>
-      log.info(s"Starting bytecode sync for ${contractAccounts.size} contracts")
+    case StartByteCodeSync(codeHashes) =>
+      log.info(s"Starting bytecode sync for ${codeHashes.size} unique codeHashes")
 
-      val filteredAccounts = filterAndDedupeContractAccounts(contractAccounts)
-      val newTasks = ByteCodeTask.createBytecodeTasksFromAccounts(filteredAccounts, batchSize)
+      val filteredHashes = filterAndDedupeCodeHashes(codeHashes)
+      val newTasks = ByteCodeTask.createBatchedTasks(filteredHashes, batchSize)
       pendingTasks.enqueueAll(newTasks)
-      log.info(s"Queued ${newTasks.size} bytecode tasks")
+      log.info(s"Queued ${newTasks.size} bytecode tasks from ${filteredHashes.size} unique hashes")
+
+    case AddByteCodeTasks(codeHashes) =>
+      val filtered = filterAndDedupeCodeHashes(codeHashes)
+      if (filtered.nonEmpty) {
+        val newTasks = ByteCodeTask.createBatchedTasks(filtered, batchSize)
+        pendingTasks.enqueueAll(newTasks)
+        log.debug(s"Added ${newTasks.size} bytecode tasks from ${filtered.size} incremental hashes (pending: ${pendingTasks.size})")
+      }
+
+    case NoMoreByteCodeTasks =>
+      noMoreTasksExpected = true
+      log.info(s"No more bytecode tasks expected. Pending: ${pendingTasks.size}, active: ${activeTasks.size}")
+      checkCompletion()
+
+    case ByteCodePivotRefreshed =>
+      log.info("Pivot refreshed — clearing bytecode peer cooldowns")
+      peerFailureCounts.clear()
+      peerCooldownUntilMillis.clear()
+      peerResponseBytesTarget.clear()
 
     case PeerAvailable(peer) =>
       if (isPeerCoolingDown(peer)) {
@@ -344,13 +368,11 @@ class ByteCodeCoordinator(
                     exhausted.foreach(hashFailureCounts.remove)
                   }
                   if (retryable.nonEmpty) {
-                    val accountByCodeHash = task.codeHashes.zip(task.accountHashes).toMap
-                    val retryableAccounts = retryable.flatMap(accountByCodeHash.get)
                     log.info(
                       s"ByteCodes response contained ${validated.matchedHashes.size}/${task.codeHashes.size} requested codes; " +
                         s"re-queuing remaining ${retryable.size} hashes"
                     )
-                    pendingTasks.enqueue(ByteCodeTask(retryable, retryableAccounts))
+                    pendingTasks.enqueue(ByteCodeTask(retryable))
                   }
                 }
 
@@ -445,7 +467,7 @@ class ByteCodeCoordinator(
     }
 
   private def checkCompletion(): Unit = {
-    if (pendingTasks.isEmpty && activeTasks.isEmpty) {
+    if (noMoreTasksExpected && pendingTasks.isEmpty && activeTasks.isEmpty) {
       log.info("Bytecode sync complete!")
       snapSyncController ! SNAPSyncController.ByteCodeSyncComplete
     }
@@ -457,7 +479,7 @@ class ByteCodeCoordinator(
         coordinator = self,
         networkPeerManager = networkPeerManager,
         requestTracker = requestTracker
-      )
+      ).withDispatcher("sync-dispatcher")
     )
     workers += worker
     idleWorkers += worker
@@ -472,34 +494,37 @@ class ByteCodeCoordinator(
     }
   }
 
-  private def filterAndDedupeContractAccounts(
-      contractAccounts: Seq[(ByteString, ByteString)]
-  ): Seq[(ByteString, ByteString)] = {
-    // Filter invalid hashes strictly; do not fabricate/pad/truncate.
-    // Dedupe by codeHash (storage is keyed by codeHash; requesting duplicates is redundant).
+  /** Filter and deduplicate codeHashes.
+    * Input is already Bloom-filtered by AccountRangeCoordinator (~0.01% FPR),
+    * so this is a final dedup pass over ~2M entries (not 73.5M). Bug 20 fix.
+    */
+  private def filterAndDedupeCodeHashes(
+      codeHashes: Seq[ByteString]
+  ): Seq[ByteString] = {
     val seen = mutable.HashSet.empty[ByteString]
-    val invalidSamples = mutable.ArrayBuffer.empty[String]
+    var invalidCount = 0
+    var dupeCount = 0
 
-    val filtered = contractAccounts.flatMap { case (accountHash, codeHash) =>
+    val filtered = codeHashes.filter { codeHash =>
       if (codeHash.length != 32) {
-        invalidSamples += s"len=${codeHash.length} (account=${accountHash.take(4).toArray.map("%02x".format(_)).mkString})"
-        None
+        invalidCount += 1
+        false
       } else if (codeHash == Account.EmptyCodeHash) {
-        // Defensive: caller should already have filtered these out.
-        None
+        false
       } else if (seen.contains(codeHash)) {
-        None
+        dupeCount += 1
+        false
       } else {
         seen += codeHash
-        Some((accountHash, codeHash))
+        true
       }
     }
 
-    if (invalidSamples.nonEmpty) {
-      log.warning(
-        s"Dropping ${invalidSamples.size} contract accounts with non-32-byte codeHash. " +
-          s"Sample: ${invalidSamples.take(10).mkString(", ")}" 
-      )
+    if (invalidCount > 0) {
+      log.warning(s"Dropped $invalidCount codeHashes with non-32-byte length")
+    }
+    if (dupeCount > 0) {
+      log.info(s"Deduplicated $dupeCount codeHashes (Bloom filter false positives)")
     }
 
     filtered

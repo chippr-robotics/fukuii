@@ -49,6 +49,16 @@ case class AccountTask(
       // Typical ranges contain hundreds to thousands of accounts
       math.min(0.9, accounts.size.toDouble / AccountTask.ESTIMATED_ACCOUNTS_FOR_NEAR_COMPLETE)
     }
+
+  /** Remaining keyspace as BigInt. Used by priority dispatching to focus workers
+    * on the most-complete range first, ensuring at least some ranges finish
+    * before peers stop responding.
+    */
+  def remainingKeyspace: BigInt = {
+    val nextBig = BigInt(1, next.toArray.padTo(32, 0.toByte))
+    val lastBig = BigInt(1, last.toArray.padTo(32, 0.toByte))
+    (lastBig - nextBig).max(BigInt(0))
+  }
 }
 
 object AccountTask {

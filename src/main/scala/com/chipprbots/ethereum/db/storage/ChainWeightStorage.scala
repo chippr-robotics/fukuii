@@ -22,17 +22,16 @@ class ChainWeightStorage(val dataSource: DataSource) extends TransactionalKeyVal
   val valueDeserializer: IndexedSeq[Byte] => ChainWeight = { bytes =>
     val buffer = byteSequenceToBuffer(bytes)
     try
-      // Try to deserialize as current format (with messScore field)
+      // Try to deserialize as current format (totalDifficulty only)
       Unpickle[ChainWeight].fromBytes(buffer)
     catch {
       case _: BufferUnderflowException =>
-        // Handle legacy format (before messScore was added)
-        // Rewind buffer to try deserializing as legacy format
         buffer.rewind()
         try {
+          // Handle legacy format with (totalDifficulty, Option[messScore]) or
+          // older format with (lastCheckpointNumber, totalDifficulty)
           val legacy = Unpickle[LegacyChainWeight].fromBytes(buffer)
-          // Convert legacy format to current format with messScore = None
-          ChainWeight(legacy.lastCheckpointNumber, legacy.totalDifficulty, None)
+          ChainWeight(legacy.totalDifficulty)
         } catch {
           case e: Exception =>
             throw new IllegalStateException(
@@ -41,7 +40,6 @@ class ChainWeightStorage(val dataSource: DataSource) extends TransactionalKeyVal
             )
         }
       case e: Exception =>
-        // Handle other deserialization errors (corrupted data, etc.)
         throw new IllegalStateException(
           s"Failed to deserialize ChainWeight data. Data may be corrupted.",
           e
@@ -53,8 +51,8 @@ class ChainWeightStorage(val dataSource: DataSource) extends TransactionalKeyVal
 object ChainWeightStorage {
   type BlockHash = ByteString
 
-  /** Legacy ChainWeight format before messScore was added (MESS implementation). Used for backward-compatible
-    * deserialization of old database entries.
+  /** Legacy ChainWeight format that included lastCheckpointNumber (legacy checkpointing, now removed).
+    * Used for backward-compatible deserialization of old database entries.
     */
   private[storage] case class LegacyChainWeight(
       lastCheckpointNumber: BigInt,

@@ -8,7 +8,7 @@ import scala.concurrent.duration.FiniteDuration
 
 import com.chipprbots.ethereum.utils.Config.NodeCacheConfig
 
-//TODO EC-492 Investigate more carefully possibility of having read cache in front of db
+//TODO: Investigate more carefully possibility of having read cache in front of db
 // class is not entirely thread safe
 // All updates need to be atomic and visible in respect to get, as get may be called from other threads.
 // Other methods are only called from actor context, and all updates are always visible to them

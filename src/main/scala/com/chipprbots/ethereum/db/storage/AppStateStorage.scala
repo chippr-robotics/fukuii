@@ -30,7 +30,7 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     getBigInt(Keys.BestBlockNumber)
 
   def getBestBlockInfo(): BlockInfo =
-    BlockInfo( // TODO ETCM-1090 provide the genesis hash as default
+    BlockInfo(
       get(Keys.BestBlockHash).map(v => ByteString(Hex.decode(v))).getOrElse(ByteString.empty),
       getBigInt(Keys.BestBlockNumber)
     )
@@ -75,21 +75,6 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   private def getBigInt(key: Key): BigInt =
     get(key).map(BigInt(_)).getOrElse(BigInt(BigInteger.ZERO))
 
-  /** It is safe to return zero in case of not having any checkpoint block, because we assume that genesis block is a
-    * kinda stable checkpoint block (without real checkpoint)
-    *
-    * @return
-    *   Latest CheckpointBlock Number
-    */
-  def getLatestCheckpointBlockNumber(): BigInt =
-    getBigInt(Keys.LatestCheckpointBlockNumber)
-
-  def removeLatestCheckpointBlockNumber(): DataSourceBatchUpdate =
-    update(toRemove = Seq(Keys.LatestCheckpointBlockNumber), toUpsert = Nil)
-
-  def putLatestCheckpointBlockNumber(latestCheckpointBlockNumber: BigInt): DataSourceBatchUpdate =
-    update(Nil, Seq(Keys.LatestCheckpointBlockNumber -> latestCheckpointBlockNumber.toString))
-
   /** Get the bootstrap pivot block number (highest bootstrap checkpoint)
     * @return
     *   Bootstrap pivot block number, or 0 if not set
@@ -127,6 +112,22 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     */
   def snapSyncDone(): DataSourceBatchUpdate =
     put(Keys.SnapSyncDone, true.toString)
+
+  /** Check if bytecode recovery scan has completed (Bug 20 hardening) */
+  def isBytecodeRecoveryDone(): Boolean =
+    get(Keys.BytecodeRecoveryDone).exists(_.toBoolean)
+
+  /** Mark bytecode recovery as completed */
+  def bytecodeRecoveryDone(): DataSourceBatchUpdate =
+    put(Keys.BytecodeRecoveryDone, true.toString)
+
+  /** Check if storage recovery scan has completed (Bug 20 hardening) */
+  def isStorageRecoveryDone(): Boolean =
+    get(Keys.StorageRecoveryDone).exists(_.toBoolean)
+
+  /** Mark storage recovery as completed */
+  def storageRecoveryDone(): DataSourceBatchUpdate =
+    put(Keys.StorageRecoveryDone, true.toString)
 
   /** Get the SNAP sync pivot block number
     * @return
@@ -227,6 +228,32 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     */
   def clearSnapSyncBootstrapTarget(): DataSourceBatchUpdate =
     update(toRemove = Seq(Keys.SnapSyncBootstrapTarget), toUpsert = Nil)
+
+  /** Check if SNAP sync account download phase has completed.
+    * Used to skip account re-download on process restart during bytecode/storage phase.
+    */
+  def isSnapSyncAccountsComplete(): Boolean =
+    get(Keys.SnapSyncAccountsComplete).exists(_.toBoolean)
+
+  /** Mark SNAP sync account download as complete (or incomplete on full restart). */
+  def putSnapSyncAccountsComplete(complete: Boolean): DataSourceBatchUpdate =
+    put(Keys.SnapSyncAccountsComplete, complete.toString)
+
+  /** Get the persisted path to the unique codeHashes file for bytecode sync recovery. */
+  def getSnapSyncCodeHashesPath(): Option[String] =
+    get(Keys.SnapSyncCodeHashesPath)
+
+  /** Persist the path to the unique codeHashes file so bytecode sync can resume after restart. */
+  def putSnapSyncCodeHashesPath(path: String): DataSourceBatchUpdate =
+    put(Keys.SnapSyncCodeHashesPath, path)
+
+  /** Get the persisted path to the contract storage file for storage sync recovery. */
+  def getSnapSyncStorageFilePath(): Option[String] =
+    get(Keys.SnapSyncStorageFilePath)
+
+  /** Persist the path to the contract storage file so storage sync can resume after restart. */
+  def putSnapSyncStorageFilePath(path: String): DataSourceBatchUpdate =
+    put(Keys.SnapSyncStorageFilePath, path)
 }
 
 object AppStateStorage {
@@ -240,7 +267,6 @@ object AppStateStorage {
     val FastSyncCooldownUntilMillis = "FastSyncCooldownUntilMillis"
     val EstimatedHighestBlock = "EstimatedHighestBlock"
     val SyncStartingBlock = "SyncStartingBlock"
-    val LatestCheckpointBlockNumber = "LatestCheckpointBlockNumber"
     val BootstrapPivotBlock = "BootstrapPivotBlock"
     val BootstrapPivotBlockHash = "BootstrapPivotBlockHash"
     val SnapSyncDone = "SnapSyncDone"
@@ -248,6 +274,11 @@ object AppStateStorage {
     val SnapSyncStateRoot = "SnapSyncStateRoot"
     val SnapSyncProgress = "SnapSyncProgress"
     val SnapSyncBootstrapTarget = "SnapSyncBootstrapTarget"
+    val BytecodeRecoveryDone = "BytecodeRecoveryDone"
+    val StorageRecoveryDone = "StorageRecoveryDone"
+    val SnapSyncAccountsComplete = "SnapSyncAccountsComplete"
+    val SnapSyncCodeHashesPath = "SnapSyncCodeHashesPath"
+    val SnapSyncStorageFilePath = "SnapSyncStorageFilePath"
   }
 
 }
