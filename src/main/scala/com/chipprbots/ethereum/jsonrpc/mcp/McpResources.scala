@@ -1,231 +1,369 @@
 package com.chipprbots.ethereum.jsonrpc.mcp
 
-import org.apache.pekko.actor.ActorRef
-import org.apache.pekko.pattern.ask
 import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 
 import scala.concurrent.ExecutionContext
+import scala.util.Try
 
-/**
- * Node status resource for MCP.
- * Provides current node status as JSON.
- */
+import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
+import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.jsonrpc.{AkkaTaskOps, McpDependencies}
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
+import com.chipprbots.ethereum.network.PeerManagerActor
+import com.chipprbots.ethereum.utils.BuildInfo
+import com.chipprbots.ethereum.utils.ByteStringUtils
+
+import AkkaTaskOps._
+
+// --- Static Resources ---
+
 object NodeStatusResource {
   val uri = "fukuii://node/status"
   val name = "Node Status"
-  val description = Some("Current status of the Fukuii node")
+  val description = Some("Current status of the Fukuii node including sync state and peer count")
   val mimeType = Some("application/json")
-  
-  def read(
-      peerManager: ActorRef,
-      syncController: ActorRef
-  )(implicit timeout: Timeout, ec: ExecutionContext): IO[String] = {
-    // TODO: Query actual node state
-    IO.pure("""{
-      |  "running": true,
-      |  "syncing": "querying",
-      |  "peerCount": "querying",
-      |  "blockNumber": "querying",
-      |  "bestKnownBlock": "querying",
-      |  "networkId": 61,
-      |  "chainId": 61
-      |}""".stripMargin)
+
+  def read(deps: McpDependencies)(implicit timeout: Timeout, ec: ExecutionContext): IO[String] = {
+    val syncStatusIO = deps.syncController.askFor[SyncProtocol.Status](SyncProtocol.GetStatus)
+    val peersIO = deps.peerManager.askFor[PeerManagerActor.Peers](PeerManagerActor.GetPeers)
+
+    for {
+      syncStatus <- syncStatusIO.recover { case _ => SyncProtocol.Status.NotSyncing }
+      peers <- peersIO.recover { case _ => PeerManagerActor.Peers(Map.empty) }
+    } yield {
+      val bestBlock = deps.blockchainReader.getBestBlockNumber()
+      val peerCount = peers.peers.size
+      val handshakedCount = peers.handshaked.size
+      val (syncing, syncState) = syncStatus match {
+        case SyncProtocol.Status.Syncing(start, blocks, _) =>
+          (true, s""""syncing", "startBlock": $start, "currentBlock": ${blocks.current}, "targetBlock": ${blocks.target}""")
+        case SyncProtocol.Status.SyncDone => (false, """"synced"""")
+        case SyncProtocol.Status.NotSyncing => (false, """"not_syncing"""")
+      }
+      s"""{
+        |  "running": true,
+        |  "syncing": $syncing,
+        |  "syncState": $syncState,
+        |  "bestBlock": $bestBlock,
+        |  "peerCount": $peerCount,
+        |  "handshakedPeers": $handshakedCount,
+        |  "networkId": ${deps.blockchainConfig.networkId},
+        |  "chainId": ${deps.blockchainConfig.chainId}
+        |}""".stripMargin
+    }
   }
 }
 
-/**
- * Node configuration resource for MCP.
- * Provides current node configuration as JSON.
- */
 object NodeConfigResource {
   val uri = "fukuii://node/config"
   val name = "Node Configuration"
-  val description = Some("Current node configuration")
+  val description = Some("Current node configuration including chain ID, network, and monetary policy")
   val mimeType = Some("application/json")
-  
-  def read(): IO[String] = {
-    IO.pure("""{
-      |  "network": "etc",
-      |  "datadir": "~/.fukuii/datadir",
-      |  "rpc": {
-      |    "enabled": true,
-      |    "port": 8545,
-      |    "interface": "localhost"
+
+  def read(deps: McpDependencies): IO[String] = IO {
+    val cfg = deps.blockchainConfig
+    s"""{
+      |  "chainId": ${cfg.chainId},
+      |  "networkId": ${cfg.networkId},
+      |  "network": "${if (cfg.chainId == BigInt(61)) "etc" else if (cfg.chainId == BigInt(63)) "mordor" else s"chain-${cfg.chainId}"}",
+      |  "accountStartNonce": ${cfg.accountStartNonce},
+      |  "maxCodeSize": ${cfg.maxCodeSize.map(_.toString).getOrElse("null")},
+      |  "monetaryPolicy": {
+      |    "eraDuration": ${cfg.monetaryPolicyConfig.eraDuration},
+      |    "rewardReductionRate": ${cfg.monetaryPolicyConfig.rewardReductionRate},
+      |    "firstEraBlockReward": "${cfg.monetaryPolicyConfig.firstEraBlockReward}"
       |  },
-      |  "discovery": {
-      |    "enabled": true,
-      |    "port": 30303
-      |  }
-      |}""".stripMargin)
+      |  "version": "${BuildInfo.version}",
+      |  "scalaVersion": "${BuildInfo.scalaVersion}"
+      |}""".stripMargin
   }
 }
 
-/**
- * Latest block resource for MCP.
- * Provides information about the latest block.
- */
-object LatestBlockResource {
-  val uri = "fukuii://blockchain/latest"
-  val name = "Latest Block"
-  val description = Some("Information about the latest block")
+object SyncStatusResource {
+  val uri = "fukuii://sync/status"
+  val name = "Sync Status"
+  val description = Some("Current blockchain synchronization status and progress")
   val mimeType = Some("application/json")
-  
-  def read(
-      syncController: ActorRef
-  )(implicit timeout: Timeout, ec: ExecutionContext): IO[String] = {
-    // TODO: Query actual blockchain state
-    IO.pure("""{
-      |  "number": "querying",
-      |  "hash": "querying",
-      |  "timestamp": 1700000000,
-      |  "difficulty": "querying",
-      |  "gasLimit": 8000000,
-      |  "gasUsed": "querying",
-      |  "transactionCount": "querying"
-      |}""".stripMargin)
+
+  def read(deps: McpDependencies)(implicit timeout: Timeout, ec: ExecutionContext): IO[String] = {
+    deps.syncController.askFor[SyncProtocol.Status](SyncProtocol.GetStatus).recover {
+      case _ => SyncProtocol.Status.NotSyncing
+    }.map { status =>
+      val bestBlock = deps.blockchainReader.getBestBlockNumber()
+      status match {
+        case SyncProtocol.Status.Syncing(start, blocks, stateNodes) =>
+          val pct = if (blocks.target > 0) f"${(blocks.current.toDouble / blocks.target.toDouble * 100)}%.2f" else "0"
+          val stateJson = stateNodes.filter(_.nonEmpty).map(s =>
+            s""", "stateNodes": {"current": ${s.current}, "target": ${s.target}}"""
+          ).getOrElse("")
+          s"""{
+            |  "syncing": true,
+            |  "mode": "fast",
+            |  "startingBlock": $start,
+            |  "currentBlock": ${blocks.current},
+            |  "targetBlock": ${blocks.target},
+            |  "remainingBlocks": ${blocks.target - blocks.current},
+            |  "progressPercent": $pct$stateJson
+            |}""".stripMargin
+        case SyncProtocol.Status.SyncDone =>
+          s"""{
+            |  "syncing": false,
+            |  "mode": "regular",
+            |  "bestBlock": $bestBlock,
+            |  "status": "synced"
+            |}""".stripMargin
+        case SyncProtocol.Status.NotSyncing =>
+          s"""{
+            |  "syncing": false,
+            |  "mode": "idle",
+            |  "bestBlock": $bestBlock,
+            |  "status": "not_syncing"
+            |}""".stripMargin
+      }
+    }
   }
 }
 
-/**
- * Connected peers resource for MCP.
- * Lists currently connected peers.
- */
 object ConnectedPeersResource {
   val uri = "fukuii://peers/connected"
   val name = "Connected Peers"
-  val description = Some("List of currently connected peers")
+  val description = Some("List of currently connected peers with addresses and status")
   val mimeType = Some("application/json")
-  
-  def read(
-      peerManager: ActorRef
-  )(implicit timeout: Timeout, ec: ExecutionContext): IO[String] = {
-    // TODO: Query PeerManagerActor for actual peers
-    IO.pure("""{
-      |  "count": "querying",
-      |  "peers": []
-      |}""".stripMargin)
+
+  def read(deps: McpDependencies)(implicit timeout: Timeout, ec: ExecutionContext): IO[String] = {
+    deps.peerManager.askFor[PeerManagerActor.Peers](PeerManagerActor.GetPeers).recover {
+      case _ => PeerManagerActor.Peers(Map.empty)
+    }.map { peers =>
+      val peerEntries = peers.peers.toList.sortBy(_._1.id.value).map { case (peer, status) =>
+        val direction = if (peer.incomingConnection) "inbound" else "outbound"
+        val addr = peer.remoteAddress.toString
+        val statusStr = status match {
+          case com.chipprbots.ethereum.network.PeerActor.Status.Handshaked => "handshaked"
+          case com.chipprbots.ethereum.network.PeerActor.Status.Connecting => "connecting"
+          case com.chipprbots.ethereum.network.PeerActor.Status.Disconnected => "disconnected"
+          case s: com.chipprbots.ethereum.network.PeerActor.Status.Handshaking => s"handshaking"
+          case _ => "idle"
+        }
+        s"""    {"id": "${peer.id.value}", "address": "$addr", "direction": "$direction", "status": "$statusStr"}"""
+      }
+      s"""{
+        |  "count": ${peers.peers.size},
+        |  "handshakedCount": ${peers.handshaked.size},
+        |  "peers": [
+        |${peerEntries.mkString(",\n")}
+        |  ]
+        |}""".stripMargin
+    }
   }
 }
 
-/**
- * Mining RPC endpoints resource for MCP.
- * Publishes the exact mining JSON-RPC methods along with the latest observed results from Node1.
- */
 object MiningRpcResource {
   val uri = "fukuii://mining/rpc"
   val name = "Mining RPC Endpoints"
-  val description = Some("Mining JSON-RPC coverage with latest Node1 responses")
+  val description = Some("Mining JSON-RPC method coverage and usage information")
   val mimeType = Some("application/json")
 
   def read(): IO[String] = {
     IO.pure("""{
-      |  "nodeUrl": "http://127.0.0.1:8545",
-      |  "verifiedAt": "2025-12-13T00:00:00Z",
       |  "endpoints": [
-      |    {"method": "eth_mining", "lastResult": false},
-      |    {"method": "eth_hashrate", "lastResult": "0x0"},
-      |    {"method": "eth_getWork", "lastResult": [
-      |      "0xff69bb2fce4542288b4616d50c220997b527da3f180043283b93e23b5bff2107",
-      |      "0x0000000000000000000000000000000000000000000000000000000000000000",
-      |      "0x4e8c16f1dc13d691ab85bd62a93a79ff1cf30dacdfd6a7c2ec31688eced2"
-      |    ]},
-      |    {"method": "eth_coinbase", "lastResult": "0x1000000000000000000000000000000000000001"},
-      |    {"method": "eth_submitWork", "params": [
-      |      "0x0000000000000001",
-      |      "0xff69bb2fce4542288b4616d50c220997b527da3f180043283b93e23b5bff2107",
-      |      "0x0000000000000000000000000000000000000000000000000000000000000000"
-      |    ], "lastResult": false},
-      |    {"method": "eth_submitHashrate", "params": [
-      |      "0x1",
-      |      "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
-      |    ], "lastResult": true},
-      |    {"method": "miner_start", "lastResult": true},
-      |    {"method": "miner_stop", "lastResult": true},
-      |    {"method": "miner_getStatus", "lastResult": {
-      |      "isMining": true,
-      |      "coinbase": "0x1000000000000000000000000000000000000001",
-      |      "hashRate": "0x1"
-      |    }}
+      |    {"method": "eth_mining", "description": "Check if the node is mining", "params": []},
+      |    {"method": "eth_hashrate", "description": "Get the current hash rate", "params": []},
+      |    {"method": "eth_getWork", "description": "Get current work package (powHash, dagSeed, target)", "params": []},
+      |    {"method": "eth_coinbase", "description": "Get the coinbase (etherbase) address", "params": []},
+      |    {"method": "eth_submitWork", "description": "Submit a proof-of-work solution", "params": ["nonce", "powHash", "mixDigest"]},
+      |    {"method": "eth_submitHashrate", "description": "Submit external hashrate for monitoring", "params": ["hashrate", "id"]},
+      |    {"method": "miner_start", "description": "Start mining", "params": ["threadCount (optional)"]},
+      |    {"method": "miner_stop", "description": "Stop mining", "params": []},
+      |    {"method": "miner_getStatus", "description": "Get mining status", "params": []}
       |  ]
       |}""".stripMargin)
   }
 }
 
-/**
- * Sync status resource for MCP.
- * Provides detailed synchronization status.
- */
-object SyncStatusResource {
-  val uri = "fukuii://sync/status"
-  val name = "Sync Status"
-  val description = Some("Current blockchain synchronization status")
+object LatestBlockResource {
+  val uri = "fukuii://blockchain/latest"
+  val name = "Latest Block"
+  val description = Some("Information about the latest block on the chain")
   val mimeType = Some("application/json")
-  
-  def read(
-      syncController: ActorRef
-  )(implicit timeout: Timeout, ec: ExecutionContext): IO[String] = {
-    // TODO: Query SyncController for actual status
-    IO.pure("""{
-      |  "syncing": "querying",
-      |  "mode": "regular",
-      |  "currentBlock": "querying",
-      |  "targetBlock": "querying",
-      |  "remainingBlocks": "calculating",
-      |  "progress": "calculating"
-      |}""".stripMargin)
+
+  def read(deps: McpDependencies): IO[String] = IO {
+    val bestBlock = deps.blockchainReader.getBestBlock()
+    bestBlock match {
+      case Some(block) =>
+        val h = block.header
+        val td = deps.blockchainReader.getChainWeightByHash(h.hash)
+          .map(_.totalDifficulty.toString).getOrElse("unknown")
+        val txCount = block.body.transactionList.size
+        s"""{
+          |  "number": ${h.number},
+          |  "hash": "${ByteStringUtils.hash2string(h.hash)}",
+          |  "parentHash": "${ByteStringUtils.hash2string(h.parentHash)}",
+          |  "miner": "0x${org.bouncycastle.util.encoders.Hex.toHexString(h.beneficiary.toArray)}",
+          |  "difficulty": "${h.difficulty}",
+          |  "totalDifficulty": "$td",
+          |  "gasLimit": ${h.gasLimit},
+          |  "gasUsed": ${h.gasUsed},
+          |  "timestamp": ${h.unixTimestamp},
+          |  "transactionCount": $txCount,
+          |  "stateRoot": "${ByteStringUtils.hash2string(h.stateRoot)}",
+          |  "extraData": "0x${org.bouncycastle.util.encoders.Hex.toHexString(h.extraData.toArray)}"
+          |}""".stripMargin
+      case None =>
+        """{"error": "No blocks available"}"""
+    }
   }
 }
 
-/**
- * Registry of all available MCP resources.
- * This makes it easy to add/remove resources and track changes.
- */
+// --- URI-Templated Resources ---
+
+object BlockByNumberResource {
+  val uri = "fukuii://block/{number}"
+  val name = "Block by Number"
+  val description = Some("Get a specific block by its number")
+  val mimeType = Some("application/json")
+
+  def read(number: BigInt, deps: McpDependencies): IO[String] = IO {
+    deps.blockchainReader.getBlockHeaderByNumber(number) match {
+      case Some(h) =>
+        val td = deps.blockchainReader.getChainWeightByHash(h.hash)
+          .map(_.totalDifficulty.toString).getOrElse("unknown")
+        s"""{
+          |  "number": ${h.number},
+          |  "hash": "${ByteStringUtils.hash2string(h.hash)}",
+          |  "parentHash": "${ByteStringUtils.hash2string(h.parentHash)}",
+          |  "miner": "0x${org.bouncycastle.util.encoders.Hex.toHexString(h.beneficiary.toArray)}",
+          |  "difficulty": "${h.difficulty}",
+          |  "totalDifficulty": "$td",
+          |  "gasLimit": ${h.gasLimit},
+          |  "gasUsed": ${h.gasUsed},
+          |  "timestamp": ${h.unixTimestamp},
+          |  "stateRoot": "${ByteStringUtils.hash2string(h.stateRoot)}",
+          |  "extraData": "0x${org.bouncycastle.util.encoders.Hex.toHexString(h.extraData.toArray)}"
+          |}""".stripMargin
+      case None =>
+        s"""{"error": "Block $number not found"}"""
+    }
+  }
+}
+
+object TransactionByHashResource {
+  val uri = "fukuii://tx/{hash}"
+  val name = "Transaction by Hash"
+  val description = Some("Get transaction location by its hash")
+  val mimeType = Some("application/json")
+
+  def read(hashStr: String, deps: McpDependencies): IO[String] = IO {
+    val hashBytes = Try(org.bouncycastle.util.encoders.Hex.decode(hashStr.stripPrefix("0x"))).getOrElse(Array.empty[Byte])
+    if (hashBytes.length != 32) {
+      s"""{"error": "Invalid transaction hash: $hashStr"}"""
+    } else {
+      deps.transactionMappingStorage.get(hashBytes.toIndexedSeq) match {
+        case Some(loc) =>
+          s"""{
+            |  "hash": "$hashStr",
+            |  "blockHash": "${ByteStringUtils.hash2string(loc.blockHash)}",
+            |  "transactionIndex": ${loc.txIndex}
+            |}""".stripMargin
+        case None =>
+          s"""{"error": "Transaction not found: $hashStr"}"""
+      }
+    }
+  }
+}
+
+object AccountByAddressResource {
+  val uri = "fukuii://account/{address}"
+  val name = "Account by Address"
+  val description = Some("Get account state (nonce, balance) by address at the latest block")
+  val mimeType = Some("application/json")
+
+  def read(addrStr: String, deps: McpDependencies): IO[String] = IO {
+    Try {
+      val addrBytes = org.bouncycastle.util.encoders.Hex.decode(addrStr.stripPrefix("0x"))
+      val address = Address(org.apache.pekko.util.ByteString(addrBytes))
+      val blockNum = deps.blockchainReader.getBestBlockNumber()
+      val accountOpt = deps.blockchainReader.getAccount(deps.blockchainReader.getBestBranch(), address, blockNum)
+      accountOpt match {
+        case Some(account) =>
+          val balanceEtc = BigDecimal(account.balance.toBigInt) / BigDecimal("1000000000000000000")
+          s"""{
+            |  "address": "$addrStr",
+            |  "block": $blockNum,
+            |  "nonce": ${account.nonce},
+            |  "balance": "${account.balance}",
+            |  "balanceETC": "$balanceEtc",
+            |  "storageRoot": "${ByteStringUtils.hash2string(account.storageRoot)}",
+            |  "codeHash": "${ByteStringUtils.hash2string(account.codeHash)}"
+            |}""".stripMargin
+        case None =>
+          s"""{
+            |  "address": "$addrStr",
+            |  "block": $blockNum,
+            |  "status": "empty"
+            |}""".stripMargin
+      }
+    }.recover {
+      case _: MissingNodeException => s"""{"error": "Account state unavailable (node is syncing)"}"""
+      case e: Exception => s"""{"error": "Error querying account: ${e.getMessage}"}"""
+    }.get
+  }
+}
+
+// --- Resource Registry ---
+
 object McpResourceRegistry {
-  
-  /**
-   * Get all available resource definitions.
-   * Each resource is defined in its own object for modularity.
-   */
+
   def getAllResources(): List[McpResourceDefinition] = List(
-    McpResourceDefinition(NodeStatusResource.uri, NodeStatusResource.name, 
+    McpResourceDefinition(NodeStatusResource.uri, NodeStatusResource.name,
       NodeStatusResource.description, NodeStatusResource.mimeType),
     McpResourceDefinition(NodeConfigResource.uri, NodeConfigResource.name,
       NodeConfigResource.description, NodeConfigResource.mimeType),
-    McpResourceDefinition(LatestBlockResource.uri, LatestBlockResource.name,
-      LatestBlockResource.description, LatestBlockResource.mimeType),
+    McpResourceDefinition(SyncStatusResource.uri, SyncStatusResource.name,
+      SyncStatusResource.description, SyncStatusResource.mimeType),
     McpResourceDefinition(ConnectedPeersResource.uri, ConnectedPeersResource.name,
       ConnectedPeersResource.description, ConnectedPeersResource.mimeType),
     McpResourceDefinition(MiningRpcResource.uri, MiningRpcResource.name,
       MiningRpcResource.description, MiningRpcResource.mimeType),
-    McpResourceDefinition(SyncStatusResource.uri, SyncStatusResource.name,
-      SyncStatusResource.description, SyncStatusResource.mimeType)
+    McpResourceDefinition(LatestBlockResource.uri, LatestBlockResource.name,
+      LatestBlockResource.description, LatestBlockResource.mimeType),
+    McpResourceDefinition(BlockByNumberResource.uri, BlockByNumberResource.name,
+      BlockByNumberResource.description, BlockByNumberResource.mimeType),
+    McpResourceDefinition(TransactionByHashResource.uri, TransactionByHashResource.name,
+      TransactionByHashResource.description, TransactionByHashResource.mimeType),
+    McpResourceDefinition(AccountByAddressResource.uri, AccountByAddressResource.name,
+      AccountByAddressResource.description, AccountByAddressResource.mimeType)
   )
-  
-  /**
-   * Read a resource by URI.
-   */
+
   def readResource(
       uri: String,
-      peerManager: ActorRef,
-      syncController: ActorRef
+      deps: McpDependencies
   )(implicit timeout: Timeout, ec: ExecutionContext): Either[String, IO[String]] = {
     uri match {
-      case NodeStatusResource.uri => Right(NodeStatusResource.read(peerManager, syncController))
-      case NodeConfigResource.uri => Right(NodeConfigResource.read())
-      case LatestBlockResource.uri => Right(LatestBlockResource.read(syncController))
-      case ConnectedPeersResource.uri => Right(ConnectedPeersResource.read(peerManager))
+      case NodeStatusResource.uri => Right(NodeStatusResource.read(deps))
+      case NodeConfigResource.uri => Right(NodeConfigResource.read(deps))
+      case SyncStatusResource.uri => Right(SyncStatusResource.read(deps))
+      case ConnectedPeersResource.uri => Right(ConnectedPeersResource.read(deps))
       case MiningRpcResource.uri => Right(MiningRpcResource.read())
-      case SyncStatusResource.uri => Right(SyncStatusResource.read(syncController))
+      case LatestBlockResource.uri => Right(LatestBlockResource.read(deps))
+      case s if s.startsWith("fukuii://block/") =>
+        val numStr = s.stripPrefix("fukuii://block/")
+        Try(BigInt(numStr)).toOption match {
+          case Some(n) => Right(BlockByNumberResource.read(n, deps))
+          case None => Left(s"Invalid block number: $numStr")
+        }
+      case s if s.startsWith("fukuii://tx/") =>
+        val hash = s.stripPrefix("fukuii://tx/")
+        Right(TransactionByHashResource.read(hash, deps))
+      case s if s.startsWith("fukuii://account/") =>
+        val addr = s.stripPrefix("fukuii://account/")
+        Right(AccountByAddressResource.read(addr, deps))
       case _ => Left(s"Unknown resource: $uri")
     }
   }
 }
 
-/**
- * Simple resource definition for registration.
- */
 case class McpResourceDefinition(
     uri: String,
     name: String,
