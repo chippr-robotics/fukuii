@@ -41,8 +41,8 @@ class TrieNodeHealingCoordinator(
   private var pendingTasks: Seq[HealingEntry] = Seq.empty
   private var completedTaskCount: Int = 0
 
-  // Active request tracking: maps requestId -> (tasks, peer, requestedBytes)
-  private case class ActiveRequest(tasks: Seq[HealingEntry], peer: Peer, requestedBytes: BigInt)
+  // Active request tracking: maps requestId -> (tasks, peer, requestedBytes, sentAtMs)
+  private case class ActiveRequest(tasks: Seq[HealingEntry], peer: Peer, requestedBytes: BigInt, sentAtMs: Long = System.currentTimeMillis())
   private val activeRequests = mutable.Map[BigInt, ActiveRequest]()
 
   // Worker management (unused for direct dispatch but kept for concurrency tracking)
@@ -52,6 +52,20 @@ class TrieNodeHealingCoordinator(
   private var totalNodesHealed: Int = 0
   private var totalBytesReceived: Long = 0
   private val startTime = System.currentTimeMillis()
+
+  // Adaptive healing throttle (geth p2p/msgrate alignment)
+  // When pending nodes exceed 2× the processing rate, throttle increases (slow down requests).
+  // When below, throttle decreases (speed up). Prevents pending queue overflow / OOM.
+  private var healRate: Double = 0.0           // items/sec EMA
+  private var healThrottle: Double = 1.0       // divisor (1 = full speed, 4096 = one node at a time)
+  private var healPending: Long = 0            // nodes queued for DB write (rawNodeBuffer.size)
+  private var lastThrottleAdjustMs: Long = System.currentTimeMillis()
+
+  private val ThrottleIncrease = 1.33
+  private val ThrottleDecrease = 1.25
+  private val MaxThrottle = 4096.0
+  private val MinThrottle = 1.0
+  private val RateMeasurementImpact = 0.005    // geometric EMA weight per node
 
   // Track last known available peers for re-dispatch after failures
   private val knownAvailablePeers = mutable.Set[Peer]()
@@ -100,7 +114,7 @@ class TrieNodeHealingCoordinator(
   }
 
   // Batched raw node storage: accumulate nodes and persist periodically
-  private var rawNodeBuffer = mutable.ArrayBuffer[(ByteString, Array[Byte])]()
+  private val rawNodeBuffer = mutable.ArrayBuffer[(ByteString, Array[Byte])]()
   private val rawFlushThreshold = 1000
 
   private def flushRawNodes(): Unit =
@@ -133,6 +147,8 @@ class TrieNodeHealingCoordinator(
       tryRedispatchPendingTasks()
 
     case HealingPeerAvailable(peer) =>
+      // Evict stale entry for same physical node (reconnection creates new PeerId)
+      knownAvailablePeers.filterInPlace(_.remoteAddress != peer.remoteAddress)
       knownAvailablePeers += peer
       if (isPeerCoolingDown(peer)) {
         log.debug(s"Peer ${peer.id.value} is cooling down, skipping dispatch")
@@ -183,14 +199,58 @@ class TrieNodeHealingCoordinator(
     log.info(s"Queued ${entries.size} nodes for healing. Total pending: ${pendingTasks.size}")
   }
 
+  /** Update healing rate EMA and adjust throttle (geth p2p/msgrate alignment).
+    *
+    * Called after each healing response. Uses geometric EMA (0.5% weight per node)
+    * and adjusts throttle every 1 second: increase if pending > 2×rate, decrease otherwise.
+    *
+    * @param delivered number of nodes received in this response
+    * @param elapsedMs time from request send to response receive
+    */
+  private def updateHealThrottle(delivered: Int, elapsedMs: Long): Unit = {
+    // Update rate (geometric EMA — geth trienodeHealRateMeasurementImpact = 0.005)
+    val elapsedSec = elapsedMs.max(1).toDouble / 1000.0
+    val measured = delivered.toDouble / elapsedSec
+    healRate = math.pow(1 - RateMeasurementImpact, delivered) * (healRate - measured) + measured
+    healRate = healRate.max(0.0)
+
+    // Update pending count
+    healPending = rawNodeBuffer.size + pendingTasks.size
+
+    // Adjust throttle every 1 second
+    val now = System.currentTimeMillis()
+    if (now - lastThrottleAdjustMs > 1000) {
+      val oldThrottle = healThrottle
+      if (healPending > 2 * healRate) {
+        healThrottle = (healThrottle * ThrottleIncrease).min(MaxThrottle)
+      } else {
+        healThrottle = (healThrottle / ThrottleDecrease).max(MinThrottle)
+      }
+      if (oldThrottle != healThrottle) {
+        log.debug(
+          f"Healing throttle adjusted: $oldThrottle%.1f -> $healThrottle%.1f " +
+            f"(rate=$healRate%.1f nodes/s, pending=$healPending)"
+        )
+      }
+      lastThrottleAdjustMs = now
+    }
+  }
+
+  /** Calculate effective batch size after applying throttle divisor.
+    * Returns at least 1 node per request.
+    */
+  private def effectiveBatchSize: Int =
+    (batchSize.toDouble / healThrottle).toInt.max(1)
+
   private def requestNextBatch(peer: Peer): Option[BigInt] = {
     if (pendingTasks.isEmpty) {
       log.debug("No pending healing tasks")
       return None
     }
 
-    val batch = pendingTasks.take(batchSize)
-    pendingTasks = pendingTasks.drop(batchSize)
+    val effectiveBatch = effectiveBatchSize
+    val batch = pendingTasks.take(effectiveBatch)
+    pendingTasks = pendingTasks.drop(effectiveBatch)
 
     val requestId = requestTracker.generateRequestId()
     val responseBytes = responseBytesTargetFor(peer)
@@ -271,7 +331,11 @@ class TrieNodeHealingCoordinator(
 
     completedTaskCount += healedCount
     activeRequests.remove(requestId)
-    requestTracker.completeRequest(requestId)
+    requestTracker.completeRequest(requestId, nodes.size.max(1))
+
+    // Update healing throttle (geth msgrate alignment)
+    val elapsedMs = System.currentTimeMillis() - activeReq.sentAtMs
+    updateHealThrottle(healedCount, elapsedMs)
 
     // Adaptive byte budget
     if (healedCount > 0) {

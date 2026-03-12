@@ -70,7 +70,7 @@ class ByteCodeWorker(
       currentTask match {
         case Some((_, _, requestId)) if response.requestId == requestId =>
           // IMPORTANT: mark the request complete so SNAPRequestTracker doesn't fire a timeout.
-          requestTracker.completeRequest(requestId)
+          requestTracker.completeRequest(requestId, response.codes.size.max(1))
           log.debug(s"Received bytecodes response for request $requestId")
           coordinator ! ByteCodesResponseMsg(response)
 

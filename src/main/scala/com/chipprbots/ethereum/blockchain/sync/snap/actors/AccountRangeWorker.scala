@@ -1,7 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
 import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props}
-import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
 
@@ -66,7 +65,6 @@ class AccountRangeWorker(
       )
       
       // Track the request with timeout
-      import context.dispatcher
       requestTracker.trackRequest(
         requestId,
         peer,
@@ -91,7 +89,7 @@ class AccountRangeWorker(
     case AccountRangeResponseMsg(response) =>
       currentTask match {
         case Some((task, peer, reqId)) if response.requestId == reqId =>
-          log.info(
+          log.debug(
             s"Received AccountRange: reqId=$reqId range=${task.rangeString} " +
               s"start=${task.next.take(4).toHex} limit=${task.last.take(4).toHex} " +
               s"accounts=${response.accounts.size} proofNodes=${response.proof.size}"
@@ -104,7 +102,8 @@ class AccountRangeWorker(
           val validated = requestTracker.validateAccountRange(response)
 
           // Complete the request in tracker (cancel timeout) regardless of validation outcome.
-          requestTracker.completeRequest(reqId)
+          // Pass account count for adaptive rate tracking (geth msgrate alignment).
+          requestTracker.completeRequest(reqId, accountCount)
 
           // Verify Merkle proof against the expected pivot state root for this task.
           val proofVerifier = MerkleProofVerifier(task.rootHash)
@@ -123,7 +122,7 @@ class AccountRangeWorker(
               coordinator ! TaskFailed(reqId, error)
 
             case Right(_) =>
-              log.info(s"Successfully received $accountCount accounts")
+              log.debug(s"Successfully received $accountCount accounts")
               coordinator ! TaskComplete(reqId, Right((accountCount, response.accounts, response.proof)))
           }
           

@@ -205,6 +205,11 @@ class StorageRangeCoordinator(
   private val emptyResponsesByTask = mutable.HashMap.empty[StorageTaskKey, Int]
   private val maxEmptyResponsesPerTask: Int = 5
 
+  // Sentinel: when true, no more AddStorageTasks will arrive (all accounts downloaded).
+  // Completion is only reported after this is set AND pending+active tasks drain.
+  // Geth-aligned: coordinators run from start, tasks arrive inline during account download.
+  private var noMoreTasksExpected: Boolean = false
+
   // Statistics
   private var slotsDownloaded: Long = 0
   private var bytesDownloaded: Long = 0
@@ -276,6 +281,10 @@ class StorageRangeCoordinator(
       log.debug(s"Added storage task for account ${task.accountString} to queue")
 
     case StoragePeerAvailable(peer) =>
+      // Evict stale entry for same physical node (reconnection creates new PeerId)
+      val evicted = knownAvailablePeers.filter(_.remoteAddress == peer.remoteAddress)
+      knownAvailablePeers --= evicted
+      evicted.foreach(p => statelessPeers -= p.id.value)
       knownAvailablePeers += peer
       if (isPeerStateless(peer)) {
         log.debug(s"Ignoring StoragePeerAvailable(${peer.id.value}) - peer is stateless for current root")
@@ -318,6 +327,15 @@ class StorageRangeCoordinator(
         // This handles the case where the backoff timer fires and we need to re-evaluate.
         maybeRequestPivotRefresh()
         tryRedispatchPendingTasks()
+      }
+
+    case NoMoreStorageTasks =>
+      noMoreTasksExpected = true
+      log.info(s"No more storage tasks expected. Pending: ${tasks.size}, active: ${activeTasks.size}")
+      if (isComplete) {
+        deferredStorage.flush()
+        log.info("Storage range sync complete!")
+        snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
       }
 
     case ForceCompleteStorage =>
@@ -446,7 +464,8 @@ class StorageRangeCoordinator(
         log.warning(s"Invalid StorageRanges response: $error")
 
       case Right(validResponse) =>
-        requestTracker.completeRequest(response.requestId) match {
+        val slotCount = validResponse.slots.map(_.size).sum
+        requestTracker.completeRequest(response.requestId, slotCount.max(1)) match {
           case None =>
             log.warning(s"Received response for unknown request ID ${response.requestId}")
 
@@ -744,7 +763,7 @@ class StorageRangeCoordinator(
   }
 
   private def isComplete: Boolean = {
-    tasks.isEmpty && activeTasks.isEmpty
+    noMoreTasksExpected && tasks.isEmpty && activeTasks.isEmpty
   }
 
   /** Update contract completion counts and send progress to controller. */
