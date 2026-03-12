@@ -68,7 +68,8 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
 
   protected val rateLimit = new RateLimit(config.rateLimit)
 
-  val route: Route = cors(corsSettings) {
+  val route: Route = handleRejections(myRejectionHandler) {
+    cors(corsSettings) {
     (path("health") & pathEndOrSingleSlash & get) {
       handleHealth()
     } ~ (path("readiness") & pathEndOrSingleSlash & get) {
@@ -99,7 +100,7 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
           }
       }
     }
-  }
+  }}
 
   def handleRequest(request: JsonRpcRequest): StandardRoute =
     complete(handleResponse(jsonRpcController.handleRequest(request)).unsafeToFuture())
@@ -199,15 +200,12 @@ object JsonRpcHttpServer extends Logger {
     }
 
   trait RateLimitConfig {
-    // TODO: Move the rateLimit.enabled setting upwards:
-    // TODO: If we don't need to limit the request rate at all - we don't have to define the other settings
     val enabled: Boolean
     val minRequestInterval: FiniteDuration
     val latestTimestampCacheSize: Int
   }
 
   object RateLimitConfig {
-    // TODO: Use pureconfig
     def apply(rateLimitConfig: TypesafeConfig): RateLimitConfig =
       new RateLimitConfig {
         override val enabled: Boolean = rateLimitConfig.getBoolean("enabled")

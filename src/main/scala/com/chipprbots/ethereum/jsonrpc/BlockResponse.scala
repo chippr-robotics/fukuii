@@ -12,8 +12,6 @@ import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.utils.ByteStringUtils
 
-case class CheckpointResponse(signatures: Seq[ECDSASignature], signers: Seq[ByteString])
-
 /*
  * this trait has been introduced to deal with ETS requirements and discrepancies between fukuii and the spec
  * it should be considered a band-aid solution and replaced with something robust and non-intrusive
@@ -55,24 +53,17 @@ case class BlockResponse(
     miner: Option[ByteString],
     difficulty: BigInt,
     totalDifficulty: Option[BigInt],
-    lastCheckpointNumber: Option[BigInt],
     extraData: ByteString,
     size: BigInt,
     gasLimit: BigInt,
     gasUsed: BigInt,
     timestamp: BigInt,
     mixHash: ByteString,
-    checkpoint: Option[CheckpointResponse],
     transactions: Either[Seq[ByteString], Seq[TransactionResponse]],
     uncles: Seq[ByteString],
     signature: String,
     signer: String
-) extends BaseBlockResponse {
-  val chainWeight: Option[ChainWeight] = for {
-    lcn <- lastCheckpointNumber
-    td <- totalDifficulty
-  } yield ChainWeight(lcn, td)
-}
+) extends BaseBlockResponse
 
 object BlockResponse {
 
@@ -93,13 +84,7 @@ object BlockResponse {
       else
         Left(block.body.transactionList.map(_.hash))
 
-    val checkpoint = block.header.checkpoint.map { checkpoint =>
-      val signers = checkpoint.signatures.flatMap(_.publicKey(block.header.parentHash))
-
-      CheckpointResponse(checkpoint.signatures, signers)
-    }
-
-    val (lcn, td) = weight.map(_.asTuple).separate
+    val td = weight.map(_.totalDifficulty)
 
     val signature =
       if (block.header.extraData.length >= ECDSASignature.EncodedLength)
@@ -125,14 +110,12 @@ object BlockResponse {
       miner = if (pendingBlock) None else Some(block.header.beneficiary),
       difficulty = block.header.difficulty,
       totalDifficulty = td,
-      lastCheckpointNumber = lcn,
       extraData = block.header.extraData,
       size = Block.size(block),
       gasLimit = block.header.gasLimit,
       gasUsed = block.header.gasUsed,
       timestamp = block.header.unixTimestamp,
       mixHash = block.header.mixHash,
-      checkpoint = checkpoint,
       transactions = transactions,
       uncles = block.body.uncleNodesList.map(_.hash),
       signature = signatureStr,

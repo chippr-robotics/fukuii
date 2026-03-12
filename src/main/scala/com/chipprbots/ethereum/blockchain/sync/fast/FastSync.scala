@@ -17,6 +17,7 @@ import scala.util.Random
 
 import org.bouncycastle.util.encoders.Hex
 
+import com.chipprbots.ethereum.domain.appstate.BlockInfo
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason._
 import com.chipprbots.ethereum.blockchain.sync.Blacklist._
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg.PeerWithInfo
@@ -487,9 +488,8 @@ class FastSync(
       assignedHandlers -= handler
     }
 
-    // TODO [ETCM-676]: Move to blockchain and make sure it's atomic
+    // TODO: Move to blockchain and make sure it's atomic
     private def discardLastBlocks(startBlock: BigInt, blocksToDiscard: Int): Unit =
-      // TODO (maybe ETCM-77): Manage last checkpoint number too
       (startBlock to ((startBlock - blocksToDiscard).max(1)) by -1).foreach { n =>
         blockchainReader.getBlockHeaderByNumber(n).foreach { headerToRemove =>
           blockchain.removeBlock(headerToRemove.hash)
@@ -1135,9 +1135,10 @@ class FastSync(
         val bestReceivedBlock = fullBlocks.maxBy(_.number)
         val lastStoredBestBlockNumber = blockchainReader.getBestBlockNumber()
         if (lastStoredBestBlockNumber < bestReceivedBlock.number) {
-          // TODO ETCM-1089 move direct calls to storages to blockchain or blockchain writer
+          // Set best block info with BOTH hash and number (putBestBlockNumber only
+          // sets the number, leaving getBestBlockInfo().hash stale/empty).
           appStateStorage
-            .putBestBlockNumber(bestReceivedBlock.number)
+            .putBestBlockInfo(BlockInfo(bestReceivedBlock.hash, bestReceivedBlock.number))
             .and(blockNumberMappingStorage.put(bestReceivedBlock.number, bestReceivedBlock.hash))
             .commit()
         }
