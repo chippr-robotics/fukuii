@@ -2,7 +2,7 @@
 # Base image for Fukuii Docker builds
 # This provides a minimal Ubuntu base with essential tools
 
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 # OCI labels for container metadata
 LABEL org.opencontainers.image.title="Fukuii Base Image"

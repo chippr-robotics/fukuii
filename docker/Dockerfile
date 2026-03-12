@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.4
 # Multi-stage Dockerfile for Fukuii Ethereum Client
 # Stage 1: Build stage using full JDK
-FROM eclipse-temurin:21-jdk-jammy AS builder
+FROM eclipse-temurin:21-jdk-noble AS builder
 
 # Install required build tools including SBT
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -57,7 +57,7 @@ RUN cd target/universal && \
     mv "$DIST_DIR" /fukuii-dist
 
 # Stage 2: Runtime stage using slim JRE
-FROM eclipse-temurin:21-jre-jammy
+FROM eclipse-temurin:21-jre-noble
 
 # OCI labels for container metadata
 LABEL org.opencontainers.image.title="Fukuii Ethereum Client"
@@ -67,8 +67,11 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.source="https://github.com/chippr-robotics/fukuii"
 LABEL org.opencontainers.image.documentation="https://github.com/chippr-robotics/fukuii/blob/main/docs/deployment/docker.md"
 
-# Create non-root user
-RUN groupadd -r fukuii --gid=1000 && \
+# Create non-root user (Ubuntu 24.04 base has 'ubuntu' at uid/gid 1000)
+RUN userdel ubuntu 2>/dev/null || true && \
+    groupdel ubuntu 2>/dev/null || true && \
+    rm -rf /home/ubuntu && \
+    groupadd -r fukuii --gid=1000 && \
     useradd -r -g fukuii --uid=1000 --home-dir=/home/fukuii --shell=/bin/bash fukuii && \
     mkdir -p /home/fukuii /app/data /app/conf && \
     chown -R fukuii:fukuii /home/fukuii /app
