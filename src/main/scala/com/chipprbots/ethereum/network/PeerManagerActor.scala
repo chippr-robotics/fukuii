@@ -25,9 +25,9 @@ import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.TaskActorOps
 import com.chipprbots.ethereum.network.PeerActor.PeerClosedConnection
 import com.chipprbots.ethereum.network.PeerActor.Status.Handshaked
 import com.chipprbots.ethereum.network.PeerEventBusActor._
+import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
 import com.chipprbots.ethereum.network.discovery.Node
-import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
 
 import com.chipprbots.ethereum.network.handshaker.Handshaker
@@ -66,6 +66,11 @@ class PeerManagerActor(
 
   val triedNodes: mutable.Set[ByteString] = lruSet[ByteString](maxBlacklistedNodes)
 
+  /** In-process cache of peer statuses, updated reactively and via scheduled refresh.
+    * This allows GetPeers to return immediately without querying individual peer actors.
+    */
+  private var peerStatusCache: Map[PeerId, PeerActor.Status] = Map.empty
+
   implicit class ConnectedPeersOps(connectedPeers: ConnectedPeers) {
 
     /** Number of new connections the node should try to open at any given time. */
@@ -97,6 +102,7 @@ class PeerManagerActor(
   override def receive: Receive = {
     case StartConnecting =>
       scheduleNodesUpdate()
+      schedulePeerStatusRefresh()
       knownNodesManager ! KnownNodesManager.GetKnownNodes
       context.become(listening(ConnectedPeers.empty))
       unstashAll()
@@ -111,6 +117,16 @@ class PeerManagerActor(
       peerConfiguration.updateNodesInterval,
       peerDiscoveryManager,
       PeerDiscoveryManager.GetDiscoveredNodesInfo
+    )
+  }
+
+  private def schedulePeerStatusRefresh(): Unit = {
+    implicit val ec = context.dispatcher
+    scheduler.scheduleWithFixedDelay(
+      10.seconds,
+      10.seconds,
+      self,
+      RefreshPeerStatuses
     )
   }
 
@@ -302,7 +318,19 @@ class PeerManagerActor(
 
   private def handleCommonMessages(connectedPeers: ConnectedPeers): Receive = {
     case GetPeers =>
-      pipeToRecipient(sender())(getPeers(connectedPeers.peers.values.toSet))
+      // Return cached statuses immediately — no actor asks needed.
+      // Cache is updated reactively on connect/disconnect/handshake and via scheduled refresh.
+      val cachedPeers = connectedPeers.peers.values.map { peer =>
+        val status = peerStatusCache.getOrElse(peer.id, PeerActor.Status.Connecting)
+        peer -> status
+      }.toMap
+      sender() ! Peers(cachedPeers)
+
+    case RefreshPeerStatuses =>
+      refreshPeerStatusCache(connectedPeers)
+
+    case PeerStatusCacheUpdated(statuses) =>
+      peerStatusCache = statuses.map { case (peer, status) => peer.id -> status }
 
     case SendMessage(message, peerId) if connectedPeers.getPeer(peerId).isDefined =>
       connectedPeers.getPeer(peerId).foreach(peer => peer.ref ! PeerActor.SendMessage(message))
@@ -344,6 +372,7 @@ class PeerManagerActor(
     case Terminated(ref) =>
       val (terminatedPeersIds, newConnectedPeers) = connectedPeers.removeTerminatedPeer(ref)
       terminatedPeersIds.foreach { peerId =>
+        peerStatusCache = peerStatusCache - peerId
         peerEventBus ! Publish(PeerEvent.PeerDisconnected(peerId))
       }
       // Try to replace a lost connection with another one.
@@ -372,6 +401,7 @@ class PeerManagerActor(
         // Keep the current connectedPeers state; the Terminated message will clean up the peer
         context.become(listening(connectedPeers))
       } else {
+        peerStatusCache = peerStatusCache + (handshakedPeer.id -> PeerActor.Status.Handshaked)
         context.become(listening(connectedPeers.promotePeerToHandshaked(handshakedPeer)))
       }
   }
@@ -395,6 +425,7 @@ class PeerManagerActor(
         incomingConnection
       )
 
+    peerStatusCache = peerStatusCache + (pendingPeer.id -> PeerActor.Status.Connecting)
     val newConnectedPeers = connectedPeers.addNewPendingPeer(pendingPeer)
 
     (pendingPeer, newConnectedPeers)
@@ -461,11 +492,17 @@ class PeerManagerActor(
     mappedF.pipeTo(recipient)
   }
 
-  private def getPeers(peers: Set[Peer]): IO[Peers] =
-    peers.toList
+  /** Background refresh of peer status cache using the existing parTraverse pattern.
+    * Results are piped back to self and applied to the cache.
+    */
+  private def refreshPeerStatusCache(connectedPeers: ConnectedPeers): Unit = {
+    val peers = connectedPeers.peers.values.toSet
+    val task = peers.toList
       .parTraverse(getPeerStatus)
       .map(_.flatten.toMap)
-      .map(Peers.apply)
+      .map(PeerStatusCacheUpdated.apply)
+    pipeToRecipient(self)(task)
+  }
 
   private def getPeerStatus(peer: Peer): IO[Option[(Peer, PeerActor.Status)]] = {
     implicit val timeout: Timeout = Timeout(2.seconds)
@@ -644,6 +681,9 @@ object PeerManagerActor {
 
   case object SchedulePruneIncomingPeers
   case class PruneIncomingPeers(stats: PeerStatisticsActor.StatsForAll)
+
+  case object RefreshPeerStatuses
+  private case class PeerStatusCacheUpdated(statuses: Map[Peer, PeerActor.Status])
 
   /** Number of new connections the node should try to open at any given time. */
   def outgoingConnectionDemand(

@@ -16,17 +16,14 @@ import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.InternalLastBlockImport
-import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync.NewCheckpoint
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync.ProgressProtocol
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync.ProgressState
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.validators.BlockValidator
 import com.chipprbots.ethereum.db.storage.StateStorage
-import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.ledger.BranchResolution
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
-import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 class RegularSync(
@@ -105,10 +102,6 @@ class RegularSync(
       log.info(s"Block mined [number = {}, hash = {}]", block.number, block.header.hashAsHexString)
       importer ! BlockImporter.MinedBlock(block)
 
-    case NewCheckpoint(block) =>
-      log.debug(s"Received new checkpoint for block ${ByteStringUtils.hash2string(block.header.parentHash)}")
-      importer ! BlockImporter.NewCheckpoint(block)
-
     case SyncProtocol.GetStatus =>
       sender() ! progressState.toStatus
 
@@ -174,8 +167,6 @@ object RegularSync {
         configBuilder
       )
     )
-
-  case class NewCheckpoint(block: Block)
 
   case class ProgressState(
       startedFetching: Boolean,

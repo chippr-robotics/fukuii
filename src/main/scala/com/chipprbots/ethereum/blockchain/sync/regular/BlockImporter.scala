@@ -88,20 +88,6 @@ class BlockImporter(
         internally = true
       )(state)
 
-    // We don't want to lose a checkpoint
-    case nc @ NewCheckpoint(_) if state.importing =>
-      implicit val ec = context.dispatcher
-      context.system.scheduler.scheduleOnce(1.second, self, nc)
-
-    case NewCheckpoint(block) if !state.importing =>
-      importBlock(
-        block,
-        new CheckpointBlockImportMessages(block),
-        CheckpointBlockImport,
-        informFetcherOnFail = false,
-        internally = true
-      )(state)
-
     case ImportNewBlock(block, peerId) if !state.importing =>
       importBlock(
         block,
@@ -427,7 +413,7 @@ class BlockImporter(
                 val failedBlock = notImportedBlocks.head
                 val parentStateRoot = try {
                   Option(blockchainReader.getBlockHeaderByHash(failedBlock.header.parentHash)).flatten.map(_.stateRoot)
-                } catch { case _: Exception => None }
+                } catch { case ex: Exception => log.warning("Failed to get parent state root during node recovery: {}", ex.getMessage); None }
                 val accountHash = kec256(e.accountAddress)
                 val pathset = parentStateRoot.flatMap { root =>
                   walkAccountPath(root, accountHash, e.hash)
@@ -446,7 +432,7 @@ class BlockImporter(
                 val failedBlock = notImportedBlocks.head
                 val parentStateRoot = try {
                   Option(blockchainReader.getBlockHeaderByHash(failedBlock.header.parentHash)).flatten.map(_.stateRoot)
-                } catch { case _: Exception => None }
+                } catch { case ex: Exception => log.warning("Failed to get parent state root during node recovery: {}", ex.getMessage); None }
                 val accountHash = kec256(e.accountAddress)
                 val emptyPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
                 val pathset = Some(Seq(accountHash, emptyPath))
@@ -463,7 +449,7 @@ class BlockImporter(
                 val failedBlock = notImportedBlocks.head
                 val parentStateRoot = try {
                   Option(blockchainReader.getBlockHeaderByHash(failedBlock.header.parentHash)).flatten.map(_.stateRoot)
-                } catch { case _: Exception => None }
+                } catch { case ex: Exception => log.warning("Failed to get parent state root during node recovery: {}", ex.getMessage); None }
                 val pathset = parentStateRoot.flatMap { root =>
                   findPathForMissingNode(root, e.hash)
                 }
@@ -667,7 +653,6 @@ object BlockImporter {
   sealed trait ImporterMsg
   case object Start extends ImporterMsg
   case class MinedBlock(block: Block) extends ImporterMsg
-  case class NewCheckpoint(block: Block) extends ImporterMsg
   case class ImportNewBlock(block: Block, peerId: PeerId) extends ImporterMsg
   case class ImportDone(newBehavior: NewBehavior, blockImportType: BlockImportType) extends ImporterMsg
   case object PickBlocks extends ImporterMsg
@@ -684,10 +669,6 @@ object BlockImporter {
 
   case object MinedBlockImport extends BlockImportType {
     override def recordMetric(nanos: Long): Unit = RegularSyncMetrics.recordMinedBlockPropagationTimer(nanos)
-  }
-
-  case object CheckpointBlockImport extends BlockImportType {
-    override def recordMetric(nanos: Long): Unit = RegularSyncMetrics.recordImportCheckpointPropagationTimer(nanos)
   }
 
   case object NewBlockImport extends BlockImportType {

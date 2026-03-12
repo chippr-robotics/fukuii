@@ -35,21 +35,16 @@ class BlockExecution(
       if (alreadyValidated) Right(block) else blockValidation.validateBlockBeforeExecution(block)
 
     val blockExecResult =
-      if (block.hasCheckpoint) {
-        // block with checkpoint is not executed normally - it's not need to do after execution validation
-        preExecValidationResult.map(_ => Seq.empty[Receipt])
-      } else {
-        for {
-          _ <- preExecValidationResult
-          result <- executeBlock(block)
-          _ <- blockValidation.validateBlockAfterExecution(
-            block,
-            result.worldState.stateRootHash,
-            result.receipts,
-            result.gasUsed
-          )
-        } yield result.receipts
-      }
+      for {
+        _ <- preExecValidationResult
+        result <- executeBlock(block)
+        _ <- blockValidation.validateBlockAfterExecution(
+          block,
+          result.worldState.stateRootHash,
+          result.receipts,
+          result.gasUsed
+        )
+      } yield result.receipts
 
     if (blockExecResult.isRight) {
       log.debug(s"Block ${block.header.number} (with hash: ${block.header.hashAsHexString}) executed correctly")
