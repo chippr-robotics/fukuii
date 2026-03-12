@@ -152,6 +152,9 @@ Chain configs define when specific protocol upgrades activate:
   
   # Spiral (ETC-specific, EIP-3855, EIP-3651, EIP-3860)
   spiral-block-number = "19250000"
+
+  # Olympia (ECIP-1111/1112/1121: EIP-1559, EVM modernization, EIP-7702)
+  # olympia-block-number = "TBD"  # ~mid-June 2026
 }
 ```
 

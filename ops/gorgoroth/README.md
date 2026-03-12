@@ -563,12 +563,18 @@ cd ops/gorgoroth/test-scripts
 ./run-test-suite.sh fukuii-geth
 ```
 
-The test suite includes:
+The test suite includes 11 tests:
 - Network connectivity validation
 - Block propagation testing
 - Mining compatibility checks
 - Consensus maintenance monitoring
 - Fast sync functionality validation
+- EIP-1559 baseFee validation (Olympia)
+- ECIP-1111 treasury baseFee accumulation (Olympia)
+- Gas limit convergence 8M to 60M (Olympia)
+- Olympia EVM opcode validation (Olympia)
+- ECIP-1111 baseFee redirect verification (Olympia) — verifies baseFee goes to ECIP-1112 Treasury Address, not burned
+- ECIP-1112 Treasury Address verification (Olympia) — cross-client parity, address correctness, nonce zero
 
 ### Individual Tests
 

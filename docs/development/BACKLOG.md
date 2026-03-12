@@ -24,14 +24,6 @@ Post-Olympia engineering work items. Each item has a source location, priority, 
 - **Priority:** Low | **Risk:** Low
 - **Description:** Separate routing paths for single vs. batched JSON-RPC requests. Cache parsed request body to prevent repeated JSON deserialization. Would improve throughput under RPC load.
 
-### P-004: SNAP work-stealing for idle workers
-- **File:** `src/main/scala/.../sync/snap/actors/AccountRangeCoordinator.scala`
-- **Priority:** Medium | **Risk:** Medium (sync-critical)
-- **Description:** When a worker's range completes, it idles while other ranges continue. On ETC mainnet with 4 peers/ranges, Range 1 took 21h 32m but Range 2 finished 26 min later — uneven account density across keyspace means some ranges finish much earlier. Idle workers should steal work from in-progress ranges.
-- **Observed:** 2/4 ranges done at 92.7% keyspace — 2 workers idle while 1-2 ranges still active.
-- **Approach:** When a range completes and `pendingTasks` is empty, split the largest remaining active task at its current `next` midpoint. Create a new `AccountTask` for the upper half, update original task's `last` to midpoint, enqueue the new task. ~30-40 lines in `handleStoreAccountChunk` after the `isTaskRangeComplete` branch.
-- **Constraint:** Must handle the case where the active task has an in-flight request — split at the `next` position (not the in-flight boundary) and let the original task's response naturally stop at the new `last`.
-
 ---
 
 ## Architecture

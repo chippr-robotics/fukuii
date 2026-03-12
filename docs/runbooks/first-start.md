@@ -312,7 +312,7 @@ Bootstrap checkpoints are trusted block references at known heights (typically m
 #### Configuration
 
 Bootstrap checkpoints are **enabled by default** and configured in the network chain configuration files:
-- **ETC Mainnet**: Uses major fork blocks (Spiral, Mystique, Magneto, Phoenix)
+- **ETC Mainnet**: Uses major fork blocks (Olympia, Spiral, Mystique, Magneto, Phoenix)
 - **Mordor Testnet**: Uses testnet fork blocks
 
 To disable bootstrap checkpoints and force traditional pivot sync:
