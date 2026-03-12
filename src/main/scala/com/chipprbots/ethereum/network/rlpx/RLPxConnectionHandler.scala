@@ -436,7 +436,6 @@ class RLPxConnectionHandler(
         seqNumber: Int = 0
     ): Receive =
       handleConnectionTerminated.orElse(handleWriteFailed).orElse(handleConnectionClosed).orElse {
-        // TODO when cancellableAckTimeout is Some
         case SendMessage(h: HelloEnc) =>
           val out = extractor.writeHello(h)
           connection ! Write(out, Ack)
@@ -905,7 +904,7 @@ object RLPxConnectionHandler {
       val frameData = frame.payload.toArray
       if (frame.`type` == Hello.code) {
         NetworkMessageDecoder.fromBytes(frame.`type`, frameData) match {
-          case Left(err)  => throw err // TODO: rethink throwing here
+          case Left(err)  => throw err
           case Right(msg) => Some(msg.asInstanceOf[Hello])
         }
       } else {
