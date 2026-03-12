@@ -239,6 +239,7 @@ class VMServer(messageHandler: MessageHandler) extends Logger {
       berlinBlockNumber = BigInt("1000000000000000000"),
       mystiqueBlockNumber = BigInt("1000000000000000000"),
       spiralBlockNumber = BigInt("1000000000000000000"),
+      olympiaBlockNumber = BigInt("1000000000000000000"),
       chainId = bigintFromGByteString(conf.chainId)
     )
 }
