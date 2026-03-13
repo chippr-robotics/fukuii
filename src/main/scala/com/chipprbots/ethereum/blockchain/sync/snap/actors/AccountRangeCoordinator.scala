@@ -55,7 +55,11 @@ class AccountRangeCoordinator(
     mptStorage: MptStorage,
     concurrency: Int,
     snapSyncController: ActorRef,
-    resumeProgress: Map[ByteString, ByteString] = Map.empty
+    resumeProgress: Map[ByteString, ByteString] = Map.empty,
+    maxInFlightPerPeer: Int = 5,
+    trieFlushThreshold: Int = 50000,
+    initialResponseBytesConfig: Int = 524288,
+    minResponseBytesConfig: Int = 102400
 ) extends Actor
     with ActorLogging {
 
@@ -185,6 +189,11 @@ class AccountRangeCoordinator(
 
   // Worker pool
   private val workers = mutable.ArrayBuffer[ActorRef]()
+  private val idleWorkers = mutable.LinkedHashSet.empty[ActorRef]
+
+  /** Count in-flight requests for a given peer (pipelining support). */
+  private def inFlightForPeer(peer: Peer): Int =
+    activeTasks.values.count(_._3.id == peer.id)
 
   // Statistics
   private var accountsDownloaded: Long = 0
@@ -238,10 +247,9 @@ class AccountRangeCoordinator(
   // Per-peer adaptive byte budgeting (ported from StorageRangeCoordinator).
   // Geth's snap handler supports up to 2MB responses. Starting at 512KB and probing upward
   // on responsive peers, scaling down on failures.
-  private val minResponseBytes: BigInt = 50 * 1024 // 50KB floor
+  private val minResponseBytes: BigInt = BigInt(minResponseBytesConfig)
   private val maxResponseBytes: BigInt = 2 * 1024 * 1024 // 2MB ceiling (Geth handler limit)
-  private val initialResponseBytes: BigInt =
-    2 * 1024 * 1024 // Start at max — peers return what they can, adaptive logic adjusts down if needed
+  private val initialResponseBytes: BigInt = BigInt(initialResponseBytesConfig)
   private val increaseFactor: Double = 1.25 // Scale up when 90%+ fill
   private val decreaseFactor: Double = 0.5 // Scale down on failure/empty
 
@@ -293,6 +301,11 @@ class AccountRangeCoordinator(
   private var lastPivotRefreshTimeMs: Long = 0L
   private val minRefreshIntervalMs: Long = 60000L // 60s minimum between refreshes
   private val maxRefreshIntervalMs: Long = 300000L // 5min ceiling
+
+  // Threshold-based trie flush: accumulate nodes in memory and only flush to RocksDB
+  // when the threshold is reached. With pipelining, per-response flushing becomes a
+  // bottleneck (50-200ms per flush × 5 concurrent responses = constant blocking).
+  private var accountsSinceLastFlush: Long = 0
 
   // Internal message for async trie finalization result
   private case class TrieFlushComplete(result: Either[String, Unit])
@@ -416,17 +429,9 @@ class AccountRangeCoordinator(
       } else if (pendingTasks.isEmpty) {
         log.debug("No pending tasks")
       } else {
-        // Dispatch ONE task per peer to avoid flooding a single peer with concurrent requests.
-        // Cap total workers to active peer count — each peer handles one request at a time.
-        val maxWorkers = math.min(concurrency, activePeerCount)
-        val maybeIdleWorker = workers.find(w => !activeTasks.values.exists(_._2 == w))
-        val worker = maybeIdleWorker.orElse {
-          if (workers.size < maxWorkers) Some(createWorker()) else None
-        }
-        worker match {
-          case Some(w) => dispatchNextTaskToWorker(w, peer)
-          case None    => log.debug("No idle workers available")
-        }
+        // Pipeline multiple requests per peer (core-geth parity).
+        // ByteCodeCoordinator already uses this pattern with maxInFlightPerPeer = 5.
+        dispatchIfPossible(peer)
       }
 
     case TaskComplete(requestId, result) =>
@@ -465,6 +470,12 @@ class AccountRangeCoordinator(
       }
       if (isComplete) {
         log.info("Account range sync complete!")
+
+        // Signal controller IMMEDIATELY so storage+bytecode phases can start in parallel
+        // with trie finalization. These phases don't need the finalized account trie —
+        // they operate on their own state roots. This saves 50s-25min of serial blocking.
+        snapSyncController ! SNAPSyncController.AccountRangeSyncComplete
+
         log.info(s"Starting async trie finalization for $accountsDownloaded accounts...")
         // Notify controller so progress monitor shows finalization status
         snapSyncController ! SNAPSyncController.ProgressAccountsFinalizingTrie
@@ -490,15 +501,15 @@ class AccountRangeCoordinator(
   private def finalizing: Receive = {
     case TrieFlushComplete(Right(_)) =>
       log.info("State trie finalized successfully")
-      snapSyncController ! SNAPSyncController.AccountRangeSyncComplete
+      // AccountRangeSyncComplete already sent before finalization started
 
     case TrieFlushComplete(Left(error)) =>
       log.error(s"Failed to finalize trie: $error")
-      snapSyncController ! SNAPSyncController.AccountRangeSyncComplete // Still proceed
+      // AccountRangeSyncComplete already sent — finalize failure doesn't block sync
 
     case Status.Failure(ex) =>
       log.error(ex, s"Trie finalization failed with exception: ${ex.getMessage}")
-      snapSyncController ! SNAPSyncController.AccountRangeSyncComplete // Still proceed
+      // AccountRangeSyncComplete already sent — finalize failure doesn't block sync
 
     case _: PeerAvailable =>
     // Ignore — no more tasks to dispatch during finalization
@@ -530,6 +541,9 @@ class AccountRangeCoordinator(
     // Already finalizing, ignore
   }
 
+  // Cap total workers to activePeerCount * maxInFlightPerPeer — enough to saturate all peers.
+  private val maxWorkers: Int = concurrency * maxInFlightPerPeer
+
   private def createWorker(): ActorRef = {
     val worker = context.actorOf(
       AccountRangeWorker
@@ -541,14 +555,46 @@ class AccountRangeCoordinator(
         .withDispatcher("sync-dispatcher")
     )
     workers += worker
+    idleWorkers += worker
     log.debug(s"Created worker ${worker.path.name}, total workers: ${workers.size}")
     worker
+  }
+
+  private def markWorkerIdle(worker: ActorRef): Unit =
+    if (workers.contains(worker)) {
+      idleWorkers += worker
+    }
+
+  /** Dispatch up to maxInFlightPerPeer tasks to the given peer (pipelining).
+    * Mirrors ByteCodeCoordinator.dispatchIfPossible — the proven pattern for SNAP sync.
+    */
+  private def dispatchIfPossible(peer: Peer): Unit = {
+    if (pendingTasks.isEmpty) return
+
+    var inflight = inFlightForPeer(peer)
+    while (pendingTasks.nonEmpty && inflight < maxInFlightPerPeer) {
+      val workerOpt: Option[ActorRef] =
+        idleWorkers.headOption.orElse {
+          if (workers.size < maxWorkers) Some(createWorker()) else None
+        }
+
+      workerOpt match {
+        case Some(worker) =>
+          dispatchNextTaskToWorker(worker, peer)
+          inflight += 1
+        case None =>
+          return
+      }
+    }
   }
 
   private def dispatchNextTaskToWorker(worker: ActorRef, peer: Peer): Unit = {
     if (pendingTasks.isEmpty) {
       return
     }
+
+    // Mark worker busy
+    idleWorkers -= worker
 
     val task = pendingTasks.dequeue()
     task.pending = true
@@ -575,6 +621,7 @@ class AccountRangeCoordinator(
       result: Either[String, (Int, Seq[(ByteString, Account)], Seq[ByteString])]
   ): Unit =
     activeTasks.remove(requestId).foreach { case (task, worker, peer) =>
+      markWorkerIdle(worker)
       result match {
         case Right((accountCount, accounts, _)) =>
           log.info(
@@ -686,6 +733,7 @@ class AccountRangeCoordinator(
 
   private def handleTaskFailed(requestId: BigInt, reason: String): Unit = {
     activeTasks.remove(requestId).foreach { case (task, worker, peer) =>
+      markWorkerIdle(worker)
       // Only mark peer stateless if the task was using the CURRENT root.
       // After pivot refresh, in-flight requests with the OLD root will fail
       // with "Missing proof" — but this doesn't mean the peer can't serve the NEW root.
@@ -722,14 +770,8 @@ class AccountRangeCoordinator(
       .toList
     if (eligiblePeers.isEmpty) return
 
-    val maxWorkers = math.min(concurrency, activePeerCount)
-    for (peer <- eligiblePeers if pendingTasks.nonEmpty) {
-      val maybeIdleWorker = workers.find(w => !activeTasks.values.exists(_._2 == w))
-      val worker = maybeIdleWorker.orElse {
-        if (workers.size < maxWorkers) Some(createWorker()) else None
-      }
-      worker.foreach(w => dispatchNextTaskToWorker(w, peer))
-    }
+    for (peer <- eligiblePeers if pendingTasks.nonEmpty)
+      dispatchIfPossible(peer)
   }
 
   /** Handle a chunk of account storage, inserting a batch into the in-memory trie and yielding back to the actor
@@ -778,12 +820,15 @@ class AccountRangeCoordinator(
         // Yield to actor mailbox - other messages (PeerAvailable, responses) process before next chunk
         self ! StoreAccountChunk(task, rest, totalCount, newStored, isTaskRangeComplete)
       } else {
-        // All chunks for this response stored. Flush to RocksDB to bound memory usage.
-        // Without periodic flushing, the in-memory trie grows ~420 bytes/account and OOMs
-        // at ~9.5M accounts (4GB) or ~19.3M accounts (8GB). Flushing after each batch
-        // keeps peak memory at ~one batch (~32K accounts = ~13MB).
-        flushTrieToStorage()
-        log.debug(s"Stored all $totalCount accounts in-memory ($accountsDownloaded total)")
+        // Threshold-based flush: only flush to RocksDB when accumulated nodes exceed threshold.
+        // With pipelining, per-response flushing (50-200ms each) blocks the coordinator
+        // and becomes the throughput bottleneck. Threshold-based flushing amortizes the cost.
+        accountsSinceLastFlush += totalCount
+        if (accountsSinceLastFlush >= trieFlushThreshold) {
+          flushTrieToStorage()
+          accountsSinceLastFlush = 0
+        }
+        log.debug(s"Stored all $totalCount accounts in-memory ($accountsDownloaded total, ${accountsSinceLastFlush} since last flush)")
 
         if (isTaskRangeComplete) {
           task.done = true
@@ -1036,7 +1081,11 @@ object AccountRangeCoordinator {
       mptStorage: MptStorage,
       concurrency: Int,
       snapSyncController: ActorRef,
-      resumeProgress: Map[ByteString, ByteString] = Map.empty
+      resumeProgress: Map[ByteString, ByteString] = Map.empty,
+      maxInFlightPerPeer: Int = 5,
+      trieFlushThreshold: Int = 50000,
+      initialResponseBytes: Int = 524288,
+      minResponseBytes: Int = 102400
   ): Props =
     Props(
       new AccountRangeCoordinator(
@@ -1046,7 +1095,11 @@ object AccountRangeCoordinator {
         mptStorage,
         concurrency,
         snapSyncController,
-        resumeProgress
+        resumeProgress,
+        maxInFlightPerPeer,
+        trieFlushThreshold,
+        initialResponseBytes,
+        minResponseBytes
       )
     )
 }

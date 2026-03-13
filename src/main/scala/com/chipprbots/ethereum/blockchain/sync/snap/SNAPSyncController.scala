@@ -894,7 +894,8 @@ class SNAPSyncController(
                     maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
                     maxInFlightRequests = snapSyncConfig.storageConcurrency,
                     requestTimeout = snapSyncConfig.timeout,
-                    snapSyncController = self
+                    snapSyncController = self,
+                    maxInFlightPerPeer = snapSyncConfig.maxInFlightPerPeer
                   )
                   .withDispatcher("sync-dispatcher"),
                 s"storage-range-coordinator-$coordinatorGeneration"
@@ -1445,7 +1446,11 @@ class SNAPSyncController(
             mptStorage = storage,
             concurrency = effectiveConcurrency,
             snapSyncController = self,
-            resumeProgress = resumeProgress
+            resumeProgress = resumeProgress,
+            maxInFlightPerPeer = snapSyncConfig.maxInFlightPerPeer,
+            trieFlushThreshold = snapSyncConfig.accountTrieFlushThreshold,
+            initialResponseBytes = snapSyncConfig.accountInitialResponseBytes,
+            minResponseBytes = snapSyncConfig.accountMinResponseBytes
           )
           .withDispatcher("sync-dispatcher"),
         s"account-range-coordinator-$coordinatorGeneration"
@@ -1513,7 +1518,8 @@ class SNAPSyncController(
               maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
               maxInFlightRequests = snapSyncConfig.storageConcurrency,
               requestTimeout = snapSyncConfig.timeout,
-              snapSyncController = self
+              snapSyncController = self,
+              maxInFlightPerPeer = snapSyncConfig.maxInFlightPerPeer
             )
             .withDispatcher("sync-dispatcher"),
           s"storage-range-coordinator-$coordinatorGeneration"
@@ -2395,7 +2401,11 @@ case class SNAPSyncConfig(
     // Account stagnation timeout: if no account range tasks complete within this window,
     // record a critical failure (may trigger fallback). Reduced from 15 minutes to catch
     // non-snap peers faster.
-    accountStagnationTimeout: FiniteDuration = 3.minutes
+    accountStagnationTimeout: FiniteDuration = 3.minutes,
+    maxInFlightPerPeer: Int = 5,
+    accountTrieFlushThreshold: Int = 50000,
+    accountInitialResponseBytes: Int = 524288,
+    accountMinResponseBytes: Int = 102400
 )
 
 object SNAPSyncConfig {
@@ -2431,7 +2441,23 @@ object SNAPSyncConfig {
       accountStagnationTimeout =
         if (snapConfig.hasPath("account-stagnation-timeout"))
           snapConfig.getDuration("account-stagnation-timeout").toMillis.millis
-        else 3.minutes
+        else 3.minutes,
+      maxInFlightPerPeer =
+        if (snapConfig.hasPath("max-inflight-per-peer"))
+          snapConfig.getInt("max-inflight-per-peer")
+        else 5,
+      accountTrieFlushThreshold =
+        if (snapConfig.hasPath("account-trie-flush-threshold"))
+          snapConfig.getInt("account-trie-flush-threshold")
+        else 50000,
+      accountInitialResponseBytes =
+        if (snapConfig.hasPath("account-initial-response-bytes"))
+          snapConfig.getInt("account-initial-response-bytes")
+        else 524288,
+      accountMinResponseBytes =
+        if (snapConfig.hasPath("account-min-response-bytes"))
+          snapConfig.getInt("account-min-response-bytes")
+        else 102400
     )
   }
 }

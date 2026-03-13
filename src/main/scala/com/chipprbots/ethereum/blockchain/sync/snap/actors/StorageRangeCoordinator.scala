@@ -85,7 +85,8 @@ class StorageRangeCoordinator(
     maxAccountsPerBatch: Int,
     maxInFlightRequests: Int,
     requestTimeout: FiniteDuration,
-    snapSyncController: ActorRef
+    snapSyncController: ActorRef,
+    maxInFlightPerPeer: Int = 5
 ) extends Actor
     with ActorLogging {
 
@@ -198,6 +199,10 @@ class StorageRangeCoordinator(
   // without waiting for the next StoragePeerAvailable message.
   private val knownAvailablePeers = mutable.Set[Peer]()
 
+  /** Count in-flight requests for a given peer (pipelining support). */
+  private def inFlightForPeer(peer: Peer): Int =
+    activeTasks.values.count(_._1.id == peer.id)
+
   // Per-task empty-response tracking.
   // Some peers legitimately return empty slotSets+proofs in cases we can't easily distinguish
   // from "can't serve this state". If we keep re-queuing forever, sync can livelock.
@@ -219,7 +224,7 @@ class StorageRangeCoordinator(
   // Per-peer adaptive byte budgeting (ported from ByteCodeCoordinator).
   // Geth's snap handler supports up to 2MB responses. Starting at 512KB and probing upward
   // on responsive peers, scaling down on failures.
-  private val minResponseBytes: BigInt = 50 * 1024 // 50KB floor
+  private val minResponseBytes: BigInt = 100 * 1024 // 100KB floor (avoid excessive small requests)
   private val maxResponseBytes: BigInt = 2 * 1024 * 1024 // 2MB ceiling (Geth handler limit)
   private val initialResponseBytes: BigInt = 512 * 1024 // 512KB starting point
   private val increaseFactor: Double = 1.25 // Scale up when 90%+ fill
@@ -295,14 +300,8 @@ class StorageRangeCoordinator(
       } else if (isPeerCoolingDown(peer)) {
         log.debug(s"Ignoring StoragePeerAvailable(${peer.id.value}) due to cooldown")
       } else if (!isComplete && tasks.nonEmpty) {
-        if (activeTasks.size >= maxInFlightRequests) {
-          log.debug(
-            s"Storage in-flight limit reached (inFlight=${activeTasks.size}, limit=$maxInFlightRequests); " +
-              s"ignoring StoragePeerAvailable(${peer.id.value})"
-          )
-        } else {
-          requestNextRanges(peer)
-        }
+        // Pipeline multiple requests per peer (core-geth parity).
+        dispatchIfPossible(peer)
       }
 
     case StorageRangesResponseMsg(response) =>
@@ -768,6 +767,17 @@ class StorageRangeCoordinator(
     tryRedispatchPendingTasks()
   }
 
+  /** Dispatch up to maxInFlightPerPeer requests to a single peer (pipelining). */
+  private def dispatchIfPossible(peer: Peer): Unit = {
+    var inflight = inFlightForPeer(peer)
+    while (tasks.nonEmpty && inflight < maxInFlightPerPeer && activeTasks.size < maxInFlightRequests) {
+      requestNextRanges(peer) match {
+        case Some(_) => inflight += 1
+        case None    => return
+      }
+    }
+  }
+
   private def tryRedispatchPendingTasks(): Unit = {
     if (tasks.isEmpty) return
     val eligiblePeers = knownAvailablePeers
@@ -775,8 +785,8 @@ class StorageRangeCoordinator(
       .toList
     if (eligiblePeers.isEmpty) return
 
-    for (peer <- eligiblePeers if tasks.nonEmpty && activeTasks.size < maxInFlightRequests)
-      requestNextRanges(peer)
+    for (peer <- eligiblePeers if tasks.nonEmpty)
+      dispatchIfPossible(peer)
   }
 
   private def progress: Double = {
@@ -823,7 +833,8 @@ object StorageRangeCoordinator {
       maxAccountsPerBatch: Int,
       maxInFlightRequests: Int,
       requestTimeout: FiniteDuration,
-      snapSyncController: ActorRef
+      snapSyncController: ActorRef,
+      maxInFlightPerPeer: Int = 5
   ): Props =
     Props(
       new StorageRangeCoordinator(
@@ -834,7 +845,8 @@ object StorageRangeCoordinator {
         maxAccountsPerBatch,
         maxInFlightRequests,
         requestTimeout,
-        snapSyncController
+        snapSyncController,
+        maxInFlightPerPeer
       )
     )
 
