@@ -142,7 +142,9 @@ class SNAPSyncController(
   private case object RetryPivotRefresh
   private case object CheckSnapCapability
   private case object TuneRateTracker
+  private case object EvictNonSnapPeers
   private var snapCapabilityCheckTask: Option[Cancellable] = None
+  private var snapPeerEvictionTask: Option[Cancellable] = None
 
   /** Like handlePeerListMessagesWithRateTracking, but also reactively triggers a bootstrap retry
     * when new SNAP-capable peers arrive during the bootstrapping state. Without this, the node
@@ -235,6 +237,7 @@ class SNAPSyncController(
     bootstrapCheckTask.foreach(_.cancel())
     pivotBootstrapRetryTask.foreach(_.cancel())
     snapCapabilityCheckTask.foreach(_.cancel())
+    snapPeerEvictionTask.foreach(_.cancel())
     rateTrackerTuneTask.foreach(_.cancel())
     progressMonitor.stopPeriodicLogging()
 
@@ -266,6 +269,10 @@ class SNAPSyncController(
     // Periodic rate tracker tuning (geth msgrate alignment)
     case TuneRateTracker =>
       requestTracker.rateTracker.tune()
+
+    // Periodic SNAP peer eviction: disconnect non-SNAP outgoing peers to free slots
+    case EvictNonSnapPeers =>
+      evictNonSnapPeers()
 
     // Snap capability grace period check: if still no snap/1 peers, fall back to fast sync
     case CheckSnapCapability =>
@@ -1375,6 +1382,7 @@ class SNAPSyncController(
     storageRangeRequestTask.foreach(_.cancel())
     healingRequestTask.foreach(_.cancel())
     snapCapabilityCheckTask.foreach(_.cancel())
+    snapPeerEvictionTask.foreach(_.cancel())
 
     // Stop progress monitoring
     progressMonitor.stopPeriodicLogging()
@@ -1394,6 +1402,67 @@ class SNAPSyncController(
     context.parent ! FallbackToFastSync
     context.become(completed)
   }
+
+  /** Evict non-SNAP outgoing peers when SNAP peer count is below threshold.
+    *
+    * Core-Geth completes full SNAP sync in ~5 minutes because it connects to SNAP-capable peers
+    * rapidly. Fukuii's peer slots can fill with non-SNAP peers (ETH-only), leaving no room for
+    * SNAP-capable peers to connect. This method actively disconnects the oldest non-SNAP outgoing
+    * peers to free connection slots, allowing discovery to fill them with SNAP-capable peers.
+    */
+  private def evictNonSnapPeers(): Unit = {
+    val allPeers = handshakedPeers.values.toSeq
+    val snapPeerCount = allPeers.count(_.peerInfo.remoteStatus.supportsSnap)
+    val nonSnapOutgoing = allPeers
+      .filter(p => !p.peerInfo.remoteStatus.supportsSnap && !p.peer.incomingConnection)
+      .sortBy(_.peer.createTimeMillis) // oldest first
+
+    if (snapPeerCount >= snapSyncConfig.minSnapPeers || nonSnapOutgoing.isEmpty) {
+      log.debug(
+        s"SNAP peer eviction: $snapPeerCount snap peers (need ${snapSyncConfig.minSnapPeers}), " +
+          s"${nonSnapOutgoing.size} non-snap outgoing — no eviction needed"
+      )
+      return
+    }
+
+    val numToEvict = math.min(
+      snapSyncConfig.maxEvictionsPerCycle,
+      math.min(nonSnapOutgoing.size, snapSyncConfig.minSnapPeers - snapPeerCount)
+    )
+
+    if (numToEvict > 0) {
+      log.info(
+        s"SNAP peer eviction: only $snapPeerCount snap peers (need ${snapSyncConfig.minSnapPeers}), " +
+          s"evicting $numToEvict of ${nonSnapOutgoing.size} non-snap outgoing peers to free slots for discovery"
+      )
+      nonSnapOutgoing.take(numToEvict).foreach { peerWithInfo =>
+        log.info(
+          s"Evicting non-SNAP peer ${peerWithInfo.peer.id} (${peerWithInfo.peer.remoteAddress}, " +
+            s"cap=${peerWithInfo.peerInfo.remoteStatus.capability})"
+        )
+        peerWithInfo.peer.ref ! com.chipprbots.ethereum.network.PeerActor.DisconnectPeer(
+          com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.Reasons.TooManyPeers
+        )
+      }
+    }
+  }
+
+  /** Start the periodic SNAP peer eviction task if not already running. */
+  private def startSnapPeerEviction(): Unit =
+    if (snapPeerEvictionTask.isEmpty) {
+      snapPeerEvictionTask = Some(
+        scheduler.scheduleWithFixedDelay(
+          snapSyncConfig.snapPeerEvictionInterval, // initial delay — give discovery time to connect
+          snapSyncConfig.snapPeerEvictionInterval,
+          self,
+          EvictNonSnapPeers
+        )(ec)
+      )
+      log.info(
+        s"SNAP peer eviction started: checking every ${snapSyncConfig.snapPeerEvictionInterval.toSeconds}s, " +
+          s"min ${snapSyncConfig.minSnapPeers} snap peers, max ${snapSyncConfig.maxEvictionsPerCycle} evictions/cycle"
+      )
+    }
 
   private def startAccountRangeSync(rootHash: ByteString): Unit = {
     // Before starting workers, check if any connected peer supports the snap/1 protocol.
@@ -1423,6 +1492,10 @@ class SNAPSyncController(
     )
     log.info("Using actor-based concurrency for account range sync")
     launchAccountRangeWorkers(rootHash, effectiveConcurrency)
+
+    // Start periodic SNAP peer eviction to ensure we maintain enough SNAP-capable peers.
+    // Non-SNAP peers filling all slots is the #1 cause of SNAP sync starvation.
+    startSnapPeerEviction()
 
     // Start parallel chain download (headers, bodies, receipts from genesis to pivot)
     // Follows the Geth/Nethermind pattern of overlapping chain + state download.
@@ -2532,7 +2605,10 @@ case class SNAPSyncConfig(
     accountMinResponseBytes: Int = 102400,
     chainDownloadEnabled: Boolean = true,
     chainDownloadMaxConcurrentRequests: Int = 2,
-    chainDownloadTimeout: FiniteDuration = 10.seconds
+    chainDownloadTimeout: FiniteDuration = 10.seconds,
+    minSnapPeers: Int = 3,
+    snapPeerEvictionInterval: FiniteDuration = 15.seconds,
+    maxEvictionsPerCycle: Int = 3
 )
 
 object SNAPSyncConfig {
@@ -2596,7 +2672,19 @@ object SNAPSyncConfig {
       chainDownloadTimeout =
         if (snapConfig.hasPath("chain-download-timeout"))
           snapConfig.getDuration("chain-download-timeout").toMillis.millis
-        else 10.seconds
+        else 10.seconds,
+      minSnapPeers =
+        if (snapConfig.hasPath("min-snap-peers"))
+          snapConfig.getInt("min-snap-peers")
+        else 3,
+      snapPeerEvictionInterval =
+        if (snapConfig.hasPath("snap-peer-eviction-interval"))
+          snapConfig.getDuration("snap-peer-eviction-interval").toMillis.millis
+        else 15.seconds,
+      maxEvictionsPerCycle =
+        if (snapConfig.hasPath("max-evictions-per-cycle"))
+          snapConfig.getInt("max-evictions-per-cycle")
+        else 3
     )
   }
 }
