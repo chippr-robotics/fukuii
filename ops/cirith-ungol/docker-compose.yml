@@ -30,8 +30,8 @@ services:
       - "--datadir=/root/.ethereum/mordor"
       # Keep historical state so debug tracing and old-block state queries work.
       # Note: switching an existing datadir from pruned->archive requires a resync.
-      - "--gcmode=archive"
-      - "--syncmode=full"
+      - "--gcmode=full"
+      - "--syncmode=snap"
       # Increase logging to capture detailed RLPx/devp2p handshake behavior.
       # verbosity: 0=silent, 1=error, 2=warn, 3=info, 4=debug, 5=detail
       - "--verbosity=5"

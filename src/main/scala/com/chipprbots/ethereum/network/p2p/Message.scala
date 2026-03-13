@@ -23,8 +23,9 @@ trait MessageDecoder extends Logger { self =>
   def orElse(otherMessageDecoder: MessageDecoder): MessageDecoder = new MessageDecoder {
     override def fromBytes(`type`: Int, payload: Array[Byte]): Either[DecodingError, Message] =
       self.fromBytes(`type`, payload).leftFlatMap {
-        case err: UnknownMessageTypeError =>
-          log.debug(err.getLocalizedMessage())
+        case _: UnknownMessageTypeError =>
+          // Expected during capability multiplexing (e.g. SNAP message tried as ETH first).
+          // Don't log — this is normal fallthrough, not an error.
           otherMessageDecoder.fromBytes(`type`, payload)
         case err =>
           Left(err)

@@ -420,16 +420,11 @@ object StaticUDPPeerGroup extends StrictLogging {
       peerGroupResource.flatMap { peerGroup =>
         // Create the server channel as a Resource
         peerGroup.createServerChannel.flatMap { channel =>
-          // CRITICAL: Use a Semaphore to keep the Resource from completing
-          // This prevents the event loop from shutting down prematurely
-          Resource.eval(Semaphore[IO](0)).flatMap { keepAlive =>
-            Resource.make {
-              IO(logger.debug("UDP server channel Resource is now active and will remain so until shutdown"))
-                .as(peerGroup)
-            } { _ =>
-              // Shutdown will be called when the Resource is released
-              peerGroup.shutdown
-            } <* Resource.eval(keepAlive.acquire) // This blocks until the Resource is explicitly released
+          Resource.make {
+            IO(logger.debug("UDP server channel Resource is now active and will remain so until shutdown"))
+              .as(peerGroup)
+          } { _ =>
+            peerGroup.shutdown
           }
         }
       }
