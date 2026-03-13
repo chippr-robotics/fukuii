@@ -146,7 +146,7 @@ class StorageRangeCoordinator(
         log.info(
           s"All peers stateless but backing off pivot refresh " +
             s"(${elapsed / 1000}s / ${backoffMs / 1000}s, attempt ${consecutiveUnproductiveRefreshes + 1}). " +
-            s"Retrying in ${remainingMs / 1000}s."
+            s"Retrying in ${(remainingMs + 999) / 1000}s."
         )
         // Schedule a retry after the backoff period
         import context.dispatcher
