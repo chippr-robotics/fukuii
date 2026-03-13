@@ -1978,6 +1978,8 @@ class SNAPSyncController(
       // The coordinator stays alive (all peers are stateless, so no dispatch will happen).
       // When BootstrapComplete arrives in the syncing state, the refresh is completed.
       log.info(s"Pivot header for block $newPivotBlock not available locally. Requesting header bootstrap...")
+      // Pause chain download to free up peers for the pivot header bootstrap
+      chainDownloader.foreach(_ ! ChainDownloader.Pause)
       pendingPivotRefresh = Some((newPivotBlock, reason))
       context.parent ! StartRegularSyncBootstrap(newPivotBlock)
       // Reset account stagnation timer while we wait for the header.
@@ -2030,6 +2032,8 @@ class SNAPSyncController(
     // Chain download target extends to the new pivot (chain data is canonical, never invalidated)
     if (chainDownloader.isDefined) {
       chainDownloader.foreach(_ ! ChainDownloader.UpdateTarget(newPivotBlock))
+      // Resume chain download if it was paused during pivot header bootstrap
+      chainDownloader.foreach(_ ! ChainDownloader.Resume)
     } else {
       // Start chain downloader if not yet started (e.g. pivot was 0 at initial bootstrap)
       startChainDownloader()
@@ -2340,7 +2344,8 @@ class SNAPSyncController(
               peerEventBus,
               syncConfig,
               scheduler,
-              snapSyncConfig.chainDownloadMaxConcurrentRequests
+              snapSyncConfig.chainDownloadMaxConcurrentRequests,
+              snapSyncConfig.chainDownloadTimeout
             )
             .withDispatcher("sync-dispatcher"),
           s"chain-downloader-$coordinatorGeneration"
@@ -2526,7 +2531,8 @@ case class SNAPSyncConfig(
     accountInitialResponseBytes: Int = 524288,
     accountMinResponseBytes: Int = 102400,
     chainDownloadEnabled: Boolean = true,
-    chainDownloadMaxConcurrentRequests: Int = 4
+    chainDownloadMaxConcurrentRequests: Int = 2,
+    chainDownloadTimeout: FiniteDuration = 10.seconds
 )
 
 object SNAPSyncConfig {
@@ -2586,7 +2592,11 @@ object SNAPSyncConfig {
       chainDownloadMaxConcurrentRequests =
         if (snapConfig.hasPath("chain-download-max-concurrent-requests"))
           snapConfig.getInt("chain-download-max-concurrent-requests")
-        else 4
+        else 2,
+      chainDownloadTimeout =
+        if (snapConfig.hasPath("chain-download-timeout"))
+          snapConfig.getDuration("chain-download-timeout").toMillis.millis
+        else 10.seconds
     )
   }
 }

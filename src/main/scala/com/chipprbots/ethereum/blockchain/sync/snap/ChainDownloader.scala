@@ -55,7 +55,8 @@ class ChainDownloader(
     val blacklist: Blacklist,
     val syncConfig: SyncConfig,
     val scheduler: Scheduler,
-    maxConcurrentRequests: Int
+    maxConcurrentRequests: Int,
+    requestTimeout: FiniteDuration = 10.seconds
 )(implicit ec: ExecutionContext)
     extends Actor
     with ActorLogging
@@ -69,6 +70,7 @@ class ChainDownloader(
   private var targetBlock: BigInt = 0
   private var bestHeaderNumber: BigInt = 0
   private var started = false
+  private var paused = false
 
   // Queues of block hashes needing bodies/receipts
   private var bodiesQueue: Vector[ByteString] = Vector.empty
@@ -123,7 +125,20 @@ class ChainDownloader(
 
   def downloading: Receive = handlePeerListMessages.orElse {
     case Dispatch =>
-      dispatchRequests()
+      if (!paused) dispatchRequests()
+
+    case Pause =>
+      if (!paused) {
+        paused = true
+        log.info("Chain download paused (yielding peers for pivot bootstrap)")
+      }
+
+    case Resume =>
+      if (paused) {
+        paused = false
+        log.info("Chain download resumed")
+        dispatchRequests()
+      }
 
     case UpdateTarget(newTarget) =>
       if (newTarget > targetBlock) {
@@ -276,7 +291,7 @@ class ChainDownloader(
       PeerRequestHandler
         .props[ETH66.GetBlockHeaders, ETH66.BlockHeaders](
           peer,
-          syncConfig.peerResponseTimeout,
+          requestTimeout,
           networkPeerManager,
           peerEventBus,
           requestMsg,
@@ -298,7 +313,7 @@ class ChainDownloader(
       PeerRequestHandler
         .props[ETH66.GetBlockBodies, ETH66.BlockBodies](
           peer,
-          syncConfig.peerResponseTimeout,
+          requestTimeout,
           networkPeerManager,
           peerEventBus,
           requestMsg,
@@ -322,7 +337,7 @@ class ChainDownloader(
       PeerRequestHandler
         .props[ETH66.GetReceipts, ETH66.Receipts](
           peer,
-          syncConfig.peerResponseTimeout,
+          requestTimeout,
           networkPeerManager,
           peerEventBus,
           requestMsg,
@@ -537,6 +552,8 @@ class ChainDownloader(
 object ChainDownloader {
   case class Start(targetBlock: BigInt)
   case class UpdateTarget(newTarget: BigInt)
+  case object Pause
+  case object Resume
   case object Stop
   case object Done
   case object GetProgress
@@ -555,7 +572,8 @@ object ChainDownloader {
       peerEventBus: ActorRef,
       syncConfig: SyncConfig,
       scheduler: Scheduler,
-      maxConcurrentRequests: Int = 4
+      maxConcurrentRequests: Int = 4,
+      requestTimeout: FiniteDuration = 10.seconds
   )(implicit ec: ExecutionContext): Props =
     Props(
       new ChainDownloader(
@@ -566,7 +584,8 @@ object ChainDownloader {
         CacheBasedBlacklist.empty(1000),
         syncConfig,
         scheduler,
-        maxConcurrentRequests
+        maxConcurrentRequests,
+        requestTimeout
       )
     )
 }
