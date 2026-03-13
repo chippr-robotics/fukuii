@@ -228,6 +228,16 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     */
   def clearSnapSyncBootstrapTarget(): DataSourceBatchUpdate =
     update(toRemove = Seq(Keys.SnapSyncBootstrapTarget), toUpsert = Nil)
+
+  /** Get the SNAP/Fast sync bounce cycle count. */
+  def getSnapFastCycleCount(): Int =
+    get(Keys.SnapFastCycleCount).flatMap(v => scala.util.Try(v.toInt).toOption).getOrElse(0)
+
+  def putSnapFastCycleCount(count: Int): DataSourceBatchUpdate =
+    put(Keys.SnapFastCycleCount, count.toString)
+
+  def clearSnapFastCycleCount(): DataSourceBatchUpdate =
+    remove(Keys.SnapFastCycleCount)
 }
 
 object AppStateStorage {
@@ -248,6 +258,7 @@ object AppStateStorage {
     val SnapSyncStateRoot = "SnapSyncStateRoot"
     val SnapSyncProgress = "SnapSyncProgress"
     val SnapSyncBootstrapTarget = "SnapSyncBootstrapTarget"
+    val SnapFastCycleCount = "SnapFastCycleCount"
     val BytecodeRecoveryDone = "BytecodeRecoveryDone"
     val StorageRecoveryDone = "StorageRecoveryDone"
   }

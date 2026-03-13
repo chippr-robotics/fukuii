@@ -60,17 +60,17 @@ services:
     restart: unless-stopped
     networks:
       - fukuii-cirith-ungol
-    depends_on:
-      - coregeth
+    # depends_on:
+    #   - coregeth
     ports:
-      # JSON-RPC HTTP
-      - "8545:8545"
-      # JSON-RPC WebSocket  
-      - "8546:8546"
-      # P2P networking
-      - "30303:30303/tcp"
-      - "30303:30303/udp"
-      - "9076:9076"
+      # JSON-RPC HTTP (offset to avoid Barad-dûr conflict on 8545)
+      - "8553:8545"
+      # JSON-RPC WebSocket (offset to avoid Barad-dûr conflict on 8546)
+      - "8552:8546"
+      # P2P networking (offset to avoid Barad-dûr conflict on 30303)
+      - "30305:30303/tcp"
+      - "30305:30303/udp"
+      - "9077:9076"
     volumes:
       # Configuration files
       - ./conf/etc.conf:/app/conf/etc.conf:ro
@@ -97,13 +97,22 @@ services:
       - FUKUII_TRACE_BLOCK=${FUKUII_TRACE_BLOCK:-}
       - FUKUII_TRACE_TX=${FUKUII_TRACE_TX:-}
     # Configuration files are loaded from /app/conf/
-    command: 
+    # Note: assembly JAR uses java entrypoint, not dist launcher (application.ini is ignored)
+    command:
+      - "-Xmx3g"
+      - "-Xms1g"
+      - "-Xss10M"
+      - "-XX:+UseG1GC"
+      - "-XX:MaxGCPauseMillis=200"
       - "-Dconfig.file=/app/conf/etc.conf"
       - "-Dlogback.configurationFile=/app/conf/logback.xml"
       - "-Dfukuii.trace.block=${FUKUII_TRACE_BLOCK:-}"
       - "-Dfukuii.trace.tx=${FUKUII_TRACE_TX:-}"
+      - "-jar"
+      - "/app/fukuii/lib/fukuii-assembly-0.1.240.jar"
+      - "mordor"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8545/health"]
       interval: 30s
       timeout: 10s
       retries: 3

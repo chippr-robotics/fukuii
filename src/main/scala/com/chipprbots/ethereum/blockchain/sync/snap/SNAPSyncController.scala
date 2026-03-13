@@ -1148,6 +1148,10 @@ class SNAPSyncController(
 
   /** Trigger fallback to fast sync due to repeated SNAP sync failures */
   private def fallbackToFastSync(): Unit = {
+    // Set phase to Completed FIRST to prevent aroundReceive guards (which check currentPhase)
+    // from re-triggering stagnation checks while we're tearing down.
+    currentPhase = Completed
+
     log.warning("Triggering fallback to fast sync due to repeated SNAP sync failures")
 
     // Cancel all scheduled tasks
@@ -1809,8 +1813,10 @@ class SNAPSyncController(
     }.filter(_ > 0)
 
     if (newPivotOpt.isEmpty) {
-      log.warning("Cannot refresh pivot: no suitable SNAP peers available. Falling back to full restart.")
-      restartSnapSync(s"pivot refresh failed (no new pivot): $reason")
+      log.warning("Cannot refresh pivot: no suitable SNAP peers available. " +
+        "Will retry when peers reconnect (coordinator backoff will handle retry).")
+      // Don't restart — restarting can't help with no peers, and it destroys all in-memory trie data.
+      // The coordinator's exponential backoff will retry, and when peers reconnect, dispatch resumes.
       return
     }
 

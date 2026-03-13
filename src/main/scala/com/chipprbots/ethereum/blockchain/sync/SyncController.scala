@@ -63,6 +63,9 @@ class SyncController(
   private var bootstrapGeneration: Long = 0
   private var syncGeneration: Long = 0
 
+  // SNAP<->Fast sync bounce cycle counter, persisted across restarts.
+  private var snapFastCycleCount: Int = appStateStorage.getSnapFastCycleCount()
+
   private def stopSyncChildren(): Unit = {
     // Stop all sync-related child actors. Names may have generation suffixes
     // (e.g. "fast-sync-3") because PoisonPill is async and a new actor can
@@ -169,7 +172,18 @@ class SyncController(
       val cooldownUntil = System.currentTimeMillis() + syncConfig.fastSyncRestartCooloff.toMillis
       appStateStorage.putFastSyncCooldownUntilMillis(cooldownUntil).commit()
 
+      resetSnapFastCycleCount()
       startRegularSync()
+
+    case FastSync.FallbackToSnapSync =>
+      fastSync ! PoisonPill
+      log.warning("Fast sync detected ETH68-only network (no GetNodeData support), falling back to SNAP sync")
+      snapFastCycleCount += 1
+      appStateStorage.putSnapFastCycleCount(snapFastCycleCount).commit()
+      log.info("SNAP<->Fast cycle count: {}", snapFastCycleCount)
+      if (!checkSnapFastEscapeHatch()) {
+        startSnapSync()
+      }
 
     case other => fastSync.forward(other)
   }
@@ -203,12 +217,18 @@ class SyncController(
     case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Done =>
       snapSync ! PoisonPill
       log.info("SNAP sync completed, transitioning to regular sync")
+      resetSnapFastCycleCount()
       startRegularSync()
 
     case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.FallbackToFastSync =>
       snapSync ! PoisonPill
       log.warning("SNAP sync failed repeatedly, falling back to fast sync")
-      startFastSync()
+      snapFastCycleCount += 1
+      appStateStorage.putSnapFastCycleCount(snapFastCycleCount).commit()
+      log.info("SNAP<->Fast cycle count: {}", snapFastCycleCount)
+      if (!checkSnapFastEscapeHatch()) {
+        startFastSync()
+      }
 
     case SyncProtocol.Status.Progress(_, _) =>
       log.debug("SNAP sync in progress")
@@ -302,10 +322,80 @@ class SyncController(
         stateNodesProgress = None
       )
 
+    case StartRegularSyncBootstrap(newTargetBlock) =>
+      // A new bootstrap request arrived while one is already in progress.
+      // Stop stale bootstrap actors and start fresh ones.
+      log.info(s"New pivot header bootstrap requested for block $newTargetBlock (was $targetBlock). Restarting bootstrap.")
+      headerBootstrap ! PoisonPill
+      peersClient ! PoisonPill
+      bootstrapGeneration += 1
+      val gen = bootstrapGeneration
+      val newPeersClient =
+        context.actorOf(
+          PeersClient.props(networkPeerManager, peerEventBus, blacklist, syncConfig, scheduler),
+          s"peers-client-bootstrap-$gen"
+        )
+      val newHeaderBootstrap =
+        context.actorOf(
+          PivotHeaderBootstrap.props(newPeersClient, blockchainWriter, newTargetBlock, syncConfig, scheduler),
+          s"pivot-header-bootstrap-$gen"
+        )
+      context.become(runningPivotHeaderBootstrap(newPeersClient, newHeaderBootstrap, newTargetBlock, originalSnapSyncRef))
+
+    case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.FallbackToFastSync =>
+      log.warning("Received FallbackToFastSync during pivot header bootstrap. Stopping bootstrap and falling back.")
+      headerBootstrap ! PoisonPill
+      peersClient ! PoisonPill
+      originalSnapSyncRef ! PoisonPill
+      snapFastCycleCount += 1
+      appStateStorage.putSnapFastCycleCount(snapFastCycleCount).commit()
+      log.info("SNAP<->Fast cycle count: {}", snapFastCycleCount)
+      if (!checkSnapFastEscapeHatch()) {
+        startFastSync()
+      }
+
+    case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Done =>
+      log.info("Received Done from SNAP sync during pivot header bootstrap. Stopping bootstrap and transitioning to regular sync.")
+      headerBootstrap ! PoisonPill
+      peersClient ! PoisonPill
+      originalSnapSyncRef ! PoisonPill
+      resetSnapFastCycleCount()
+      startRegularSync()
+
     case msg =>
       // Forward coordinator and protocol messages to SNAP sync during the brief bootstrap.
       // This keeps coordinators functional while we fetch the pivot header (~1-5 seconds).
       originalSnapSyncRef.forward(msg)
+  }
+
+  /** Check if the SNAP<->Fast bounce cycle count has exceeded the configured threshold.
+    * If so, mark both sync modes as done and escape to regular sync.
+    * @return true if the escape hatch fired (caller should NOT start another sync), false otherwise
+    */
+  private def checkSnapFastEscapeHatch(): Boolean = {
+    val threshold = syncConfig.maxSnapFastCycleTransitions
+    if (threshold > 0 && snapFastCycleCount >= threshold) {
+      log.warning(
+        "SNAP<->Fast sync bounce cycle count ({}) reached threshold ({}). " +
+          "Escaping to regular sync — missing state will be fetched on-demand via GetTrieNodes.",
+        snapFastCycleCount,
+        threshold
+      )
+      // Mark both sync modes as done so they won't restart
+      appStateStorage.snapSyncDone().commit()
+      appStateStorage.fastSyncDone().commit()
+      // Purge persisted fast sync state to prevent stale state on next restart
+      fastSyncStateStorage.purge()
+      // Reset cycle count
+      resetSnapFastCycleCount()
+      startRegularSync()
+      true
+    } else false
+  }
+
+  private def resetSnapFastCycleCount(): Unit = {
+    snapFastCycleCount = 0
+    appStateStorage.clearSnapFastCycleCount().commit()
   }
 
   def start(): Unit = {

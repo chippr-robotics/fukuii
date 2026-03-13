@@ -110,14 +110,18 @@ class RegularSync(
       context.become(running(newState))
     case ProgressProtocol.StartingFrom(blockNumber) =>
       val newState = progressState.copy(initialBlock = blockNumber, currentBlock = blockNumber)
+      RegularSyncMetrics.setCurrentBlock(blockNumber)
       context.become(running(newState))
     case ProgressProtocol.GotNewBlock(blockNumber) =>
       log.debug(s"Got information about new block [number = $blockNumber]")
       val newState = progressState.copy(bestKnownNetworkBlock = blockNumber)
+      RegularSyncMetrics.setBestKnownNetworkBlock(blockNumber)
       context.become(running(newState))
     case ProgressProtocol.ImportedBlock(blockNumber, internally) =>
       log.debug(s"Imported new block [number = $blockNumber, internally = $internally]")
       val newState = progressState.copy(currentBlock = blockNumber)
+      RegularSyncMetrics.setCurrentBlock(blockNumber)
+      RegularSyncMetrics.incrementBlocksImported()
       if (internally) {
         fetcher ! InternalLastBlockImport(blockNumber)
       }

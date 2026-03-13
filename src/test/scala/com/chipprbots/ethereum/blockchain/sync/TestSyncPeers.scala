@@ -23,9 +23,11 @@ trait TestSyncPeers { self: TestSyncConfig =>
   val peer2: Peer = Peer(PeerId("peer2"), new InetSocketAddress("127.0.0.2", 0), peer2TestProbe.ref, false)
   val peer3: Peer = Peer(PeerId("peer3"), new InetSocketAddress("127.0.0.3", 0), peer3TestProbe.ref, false)
 
+  // Use ETH66 (not ETH68) because fast sync tests require GetNodeData-compatible peers.
+  // GetNodeData was removed in ETH68 per EIP-4938.
   val peer1Status: RemoteStatus =
     RemoteStatus(
-      Capability.ETH68,
+      Capability.ETH66,
       1,
       ChainWeight.totalDifficultyOnly(20),
       ByteString("peer1_bestHash"),

@@ -228,6 +228,12 @@ class FastSync(
       case StateSyncFinished =>
         syncState = syncState.copy(stateSyncFinished = true)
         processSyncing()
+      case SyncStateSchedulerActor.NetworkIncompatible =>
+        log.warning("State scheduler reports no ETH63-67 peers available (ETH68-only network). " +
+          "Fast sync cannot use GetNodeData. Requesting fallback to SNAP sync.")
+        cleanup()
+        context.become(idle)
+        syncController ! FallbackToSnapSync
     }
 
     def handleRequestFailure: Receive = {
@@ -383,6 +389,12 @@ class FastSync(
             "Pivot block selection failed after maximum attempts during update. Continuing with current pivot."
           )
           syncState = syncState.copy(updatingPivotBlock = false)
+          // On SyncRestart, the state scheduler is in idle state waiting for StartSyncingTo.
+          // Send it the existing pivot's state root so it doesn't deadlock.
+          if (updateReason.isSyncRestart) {
+            log.info("SyncRestart: sending existing pivot state root to state scheduler (block {})", syncState.pivotBlock.number)
+            syncStateScheduler ! StartSyncingTo(syncState.pivotBlock.stateRoot, syncState.pivotBlock.number)
+          }
           context.become(this.receive)
           processSyncing()
 
@@ -1258,6 +1270,7 @@ object FastSync {
   case class StorageRootHash(v: ByteString) extends HashType
 
   case object Done
+  case object FallbackToSnapSync
 
   sealed abstract class HeaderProcessingResult
   case object HeadersProcessingFinished extends HeaderProcessingResult

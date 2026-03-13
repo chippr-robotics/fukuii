@@ -177,7 +177,8 @@ object Config {
       fastSyncMaxBatchRetries: Int,
       maxPivotBlockFailuresCount: Int,
       maxRetryDelay: FiniteDuration,
-      maxBodyFetchRetries: Int
+      maxBodyFetchRetries: Int,
+      maxSnapFastCycleTransitions: Int
   )
 
   object SyncConfig {
@@ -244,7 +245,11 @@ object Config {
         maxBodyFetchRetries =
           if (syncConfig.hasPath("max-body-fetch-retries"))
             syncConfig.getInt("max-body-fetch-retries")
-          else 10
+          else 10,
+        maxSnapFastCycleTransitions =
+          if (syncConfig.hasPath("max-snap-fast-cycle-transitions"))
+            syncConfig.getInt("max-snap-fast-cycle-transitions")
+          else 3
       )
     }
   }

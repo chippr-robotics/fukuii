@@ -51,6 +51,10 @@ class SyncStateSchedulerActor(
   implicit private val monixScheduler: IORuntime = IORuntime.global
   implicit private val ec: scala.concurrent.ExecutionContext = context.dispatcher
 
+  /** Track consecutive sync cycles with zero ETH63-67 peers (all ETH68/SNAP only). */
+  private var noCompatiblePeersCount: Int = 0
+  private val NoCompatiblePeersThreshold: Int = 5
+
   /** Check if a capability supports GetNodeData message.
     * GetNodeData is available in ETH63-67 but removed in ETH68 per EIP-4938.
     * SNAP protocol uses different messages (GetAccountRange, etc.) and doesn't support GetNodeData.
@@ -85,15 +89,29 @@ class SyncStateSchedulerActor(
       )
     }
     
-    // If no compatible peers available but we have incompatible peers, fall back to using them
-    // This ensures backward compatibility and allows tests to work
+    // Track consecutive cycles with no compatible peers
     if (compatiblePeers.isEmpty && incompatiblePeers.nonEmpty) {
+      noCompatiblePeersCount += 1
       log.warning(
-        "No ETH63-67 peers available for GetNodeData. Attempting to use {} incompatible peers as fallback.",
+        "No ETH63-67 peers available for GetNodeData ({} consecutive cycles). {} incompatible (ETH68/SNAP) peers present.",
+        noCompatiblePeersCount,
         incompatiblePeers.size
       )
-      incompatiblePeers
+      if (noCompatiblePeersCount >= NoCompatiblePeersThreshold) {
+        log.warning(
+          "No compatible peers for {} consecutive cycles (threshold: {}). Network appears ETH68-only. Signaling NetworkIncompatible.",
+          noCompatiblePeersCount,
+          NoCompatiblePeersThreshold
+        )
+        noCompatiblePeersCount = 0
+        context.parent ! NetworkIncompatible
+      }
+      // Return empty list — don't fall back to incompatible peers that can't serve GetNodeData
+      List.empty
     } else {
+      if (compatiblePeers.nonEmpty) {
+        noCompatiblePeersCount = 0
+      }
       compatiblePeers
     }
   }
@@ -197,6 +215,9 @@ class SyncStateSchedulerActor(
   def idle(processingStatistics: ProcessingStatistics): Receive = handlePeerListMessages.orElse {
     case StartSyncingTo(root, bn) =>
       startSyncing(root, bn, processingStatistics, sender())
+    case RestartRequested =>
+      log.debug("Received RestartRequested while idle. Responding with WaitingForNewTargetBlock.")
+      sender() ! WaitingForNewTargetBlock
     case PrintInfo =>
       log.info("Waiting for target block to start the state sync")
   }
@@ -436,6 +457,7 @@ object SyncStateSchedulerActor {
   sealed trait SyncStateSchedulerActorResponse
   case object StateSyncFinished extends SyncStateSchedulerActorResponse
   case object WaitingForNewTargetBlock extends SyncStateSchedulerActorResponse
+  case object NetworkIncompatible extends SyncStateSchedulerActorResponse
 
   final case class GetMissingNodes(nodesToGet: List[ByteString])
   final case class MissingNodes(missingNodes: List[SyncResponse], downloaderCapacity: Int)
