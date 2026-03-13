@@ -64,6 +64,8 @@ class SNAPSyncController(
   private var bytecodeCoordinator: Option[ActorRef] = None
   private var storageRangeCoordinator: Option[ActorRef] = None
   private var trieNodeHealingCoordinator: Option[ActorRef] = None
+  private var chainDownloader: Option[ActorRef] = None
+  private var chainDownloadComplete: Boolean = false
 
   // Monotonic counter appended to coordinator actor names so restarts don't collide
   // with still-stopping actors from the previous cycle.
@@ -582,6 +584,11 @@ class SNAPSyncController(
     case StateValidationComplete =>
       log.info("State validation complete. SNAP sync finished!")
       completeSnapSync()
+
+    // Chain download runs in parallel — track its completion
+    case ChainDownloader.Done =>
+      log.info("Parallel chain download completed during SNAP state sync.")
+      chainDownloadComplete = true
 
     case SyncProtocol.GetStatus =>
       sender() ! currentSyncStatus
@@ -1379,6 +1386,10 @@ class SNAPSyncController(
     preservedRangeProgress = Map.empty
     preservedAtPivotBlock = None
 
+    // Stop chain downloader
+    chainDownloader.foreach(context.stop)
+    chainDownloader = None
+
     // Notify parent controller to switch to fast sync
     context.parent ! FallbackToFastSync
     context.become(completed)
@@ -1412,6 +1423,10 @@ class SNAPSyncController(
     )
     log.info("Using actor-based concurrency for account range sync")
     launchAccountRangeWorkers(rootHash, effectiveConcurrency)
+
+    // Start parallel chain download (headers, bodies, receipts from genesis to pivot)
+    // Follows the Geth/Nethermind pattern of overlapping chain + state download.
+    startChainDownloader()
   }
 
   private def launchAccountRangeWorkers(rootHash: ByteString, concurrency: Int = -1): Unit = {
@@ -2012,6 +2027,8 @@ class SNAPSyncController(
     // Bytecodes are content-addressed (hash-keyed) so pivot changes don't invalidate them,
     // but the coordinator should clear stale peer tracking.
     bytecodeCoordinator.foreach(_ ! actors.Messages.ByteCodePivotRefreshed)
+    // Chain download target extends to the new pivot (chain data is canonical, never invalidated)
+    chainDownloader.foreach(_ ! ChainDownloader.UpdateTarget(newPivotBlock))
 
     // Reset account stagnation timer during pivot refresh recovery.
     // Note: do NOT reset lastStorageProgressMs — only actual slot downloads (via
@@ -2218,56 +2235,117 @@ class SNAPSyncController(
 
   private def completeSnapSync(): Unit =
     pivotBlock.foreach { pivot =>
-      appStateStorage.snapSyncDone().commit()
-
-      // Look up the pivot header so we can store a complete "best block" anchor.
-      // RegularSync's BranchResolution needs: header, body, number→hash mapping,
-      // ChainWeight, and BestBlockInfo (hash + number) to accept blocks that chain
-      // from the pivot.
-      blockchainReader.getBlockHeaderByNumber(pivot) match {
-        case Some(pivotHeader) =>
-          val pivotHash = pivotHeader.hash
-
-          // Store the full block (header + empty body) so getBlockByHash(pivotHash) returns
-          // a Block AND the number→hash mapping is written. PivotHeaderBootstrap already stored
-          // the header, but storeBlock ensures the mapping is present even if the header was
-          // stored by a different code path during pivot refresh.
-          blockchainWriter.storeBlock(Block(pivotHeader, BlockBody.empty)).commit()
-
-          // Store a ChainWeight so compareBranch() can evaluate new blocks.
-          // We estimate totalDifficulty ≈ difficulty × blockNumber. This doesn't need
-          // to be exact — it just needs to exist so branch resolution doesn't error,
-          // and subsequent blocks will accumulate from this baseline.
-          val estimatedTotalDifficulty = pivotHeader.difficulty * pivot
-          blockchainWriter
-            .storeChainWeight(
-              pivotHash,
-              ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty)
-            )
-            .commit()
-
-          // Set best block info with BOTH hash and number (putBestBlockNumber only
-          // sets the number, leaving getBestBlockInfo().hash empty).
-          appStateStorage
-            .putBestBlockInfo(
-              com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash, pivot)
-            )
-            .commit()
-
-          log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.take(8).toHex})")
-
-        case None =>
-          // Fallback: shouldn't happen since PivotHeaderBootstrap stored the header
-          log.warning(s"Pivot header for block $pivot not found in storage — setting best block number only")
-          appStateStorage.putBestBlockNumber(pivot).commit()
+      // If chain download is still running, wait for it before signalling Done
+      if (!chainDownloadComplete && chainDownloader.isDefined) {
+        log.info("SNAP state sync complete, waiting for parallel chain download to finish...")
+        currentPhase = ChainDownloadCompletion
+        context.become(waitingForChainDownload)
+        return
       }
 
-      progressMonitor.complete()
-      log.info(progressMonitor.currentProgress.toString)
-
-      context.become(completed)
-      context.parent ! Done
+      finalizeSnapSync(pivot)
     }
+
+  /** Final SNAP sync completion — called when both state sync and chain download are done. */
+  private def finalizeSnapSync(pivot: BigInt): Unit = {
+    appStateStorage.snapSyncDone().commit()
+
+    // Look up the pivot header so we can store a complete "best block" anchor.
+    // RegularSync's BranchResolution needs: header, body, number→hash mapping,
+    // ChainWeight, and BestBlockInfo (hash + number) to accept blocks that chain
+    // from the pivot.
+    blockchainReader.getBlockHeaderByNumber(pivot) match {
+      case Some(pivotHeader) =>
+        val pivotHash = pivotHeader.hash
+
+        // Store the full block (header + empty body) so getBlockByHash(pivotHash) returns
+        // a Block AND the number→hash mapping is written. PivotHeaderBootstrap already stored
+        // the header, but storeBlock ensures the mapping is present even if the header was
+        // stored by a different code path during pivot refresh.
+        blockchainWriter.storeBlock(Block(pivotHeader, BlockBody.empty)).commit()
+
+        // Store a ChainWeight so compareBranch() can evaluate new blocks.
+        // We estimate totalDifficulty ≈ difficulty × blockNumber. This doesn't need
+        // to be exact — it just needs to exist so branch resolution doesn't error,
+        // and subsequent blocks will accumulate from this baseline.
+        val estimatedTotalDifficulty = pivotHeader.difficulty * pivot
+        blockchainWriter
+          .storeChainWeight(
+            pivotHash,
+            ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty)
+          )
+          .commit()
+
+        // Set best block info with BOTH hash and number (putBestBlockNumber only
+        // sets the number, leaving getBestBlockInfo().hash empty).
+        appStateStorage
+          .putBestBlockInfo(
+            com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash, pivot)
+          )
+          .commit()
+
+        log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.take(8).toHex})")
+
+      case None =>
+        // Fallback: shouldn't happen since PivotHeaderBootstrap stored the header
+        log.warning(s"Pivot header for block $pivot not found in storage — setting best block number only")
+        appStateStorage.putBestBlockNumber(pivot).commit()
+    }
+
+    // Stop chain downloader if still running
+    chainDownloader.foreach(context.stop)
+    chainDownloader = None
+
+    progressMonitor.complete()
+    log.info(progressMonitor.currentProgress.toString)
+
+    context.become(completed)
+    context.parent ! Done
+  }
+
+  /** Waiting for parallel chain download to finish after SNAP state sync completed. */
+  def waitingForChainDownload: Receive = handlePeerListMessagesWithRateTracking.orElse {
+    case ChainDownloader.Done =>
+      log.info("Parallel chain download complete. Finalizing SNAP sync.")
+      chainDownloadComplete = true
+      pivotBlock.foreach(finalizeSnapSync)
+
+    case ChainDownloader.Progress(h, b, r, t) =>
+      log.info("Chain download progress while waiting: headers={}/{}, bodies={}, receipts={}", h, t, b, r)
+
+    case SyncProtocol.GetStatus =>
+      sender() ! currentSyncStatus
+
+    case GetProgress =>
+      sender() ! progressMonitor.currentProgress
+  }
+
+  private def startChainDownloader(): Unit = {
+    if (!snapSyncConfig.chainDownloadEnabled) return
+    pivotBlock.foreach { pivot =>
+      if (chainDownloader.isEmpty) {
+        log.info("Starting parallel chain download from genesis to pivot block {}", pivot)
+        coordinatorGeneration += 1
+        val downloader = context.actorOf(
+          ChainDownloader
+            .props(
+              blockchainReader,
+              blockchainWriter,
+              networkPeerManager,
+              peerEventBus,
+              syncConfig,
+              scheduler,
+              snapSyncConfig.chainDownloadMaxConcurrentRequests
+            )
+            .withDispatcher("sync-dispatcher"),
+          s"chain-downloader-$coordinatorGeneration"
+        )
+        downloader ! ChainDownloader.Start(pivot)
+        chainDownloader = Some(downloader)
+        chainDownloadComplete = false
+      }
+    }
+  }
 
   // --- SNAP progress persistence helpers ---
 
@@ -2328,6 +2406,7 @@ object SNAPSyncController {
   case object StorageRangeSync extends SyncPhase
   case object StateHealing extends SyncPhase
   case object StateValidation extends SyncPhase
+  case object ChainDownloadCompletion extends SyncPhase
   case object Completed extends SyncPhase
 
   /** Source of pivot block selection */
@@ -2440,7 +2519,9 @@ case class SNAPSyncConfig(
     maxInFlightPerPeer: Int = 5,
     accountTrieFlushThreshold: Int = 50000,
     accountInitialResponseBytes: Int = 524288,
-    accountMinResponseBytes: Int = 102400
+    accountMinResponseBytes: Int = 102400,
+    chainDownloadEnabled: Boolean = true,
+    chainDownloadMaxConcurrentRequests: Int = 4
 )
 
 object SNAPSyncConfig {
@@ -2492,7 +2573,15 @@ object SNAPSyncConfig {
       accountMinResponseBytes =
         if (snapConfig.hasPath("account-min-response-bytes"))
           snapConfig.getInt("account-min-response-bytes")
-        else 102400
+        else 102400,
+      chainDownloadEnabled =
+        if (snapConfig.hasPath("chain-download-enabled"))
+          snapConfig.getBoolean("chain-download-enabled")
+        else true,
+      chainDownloadMaxConcurrentRequests =
+        if (snapConfig.hasPath("chain-download-max-concurrent-requests"))
+          snapConfig.getInt("chain-download-max-concurrent-requests")
+        else 4
     )
   }
 }
