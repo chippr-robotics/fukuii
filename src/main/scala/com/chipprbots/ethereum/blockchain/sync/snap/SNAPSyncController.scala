@@ -2028,7 +2028,12 @@ class SNAPSyncController(
     // but the coordinator should clear stale peer tracking.
     bytecodeCoordinator.foreach(_ ! actors.Messages.ByteCodePivotRefreshed)
     // Chain download target extends to the new pivot (chain data is canonical, never invalidated)
-    chainDownloader.foreach(_ ! ChainDownloader.UpdateTarget(newPivotBlock))
+    if (chainDownloader.isDefined) {
+      chainDownloader.foreach(_ ! ChainDownloader.UpdateTarget(newPivotBlock))
+    } else {
+      // Start chain downloader if not yet started (e.g. pivot was 0 at initial bootstrap)
+      startChainDownloader()
+    }
 
     // Reset account stagnation timer during pivot refresh recovery.
     // Note: do NOT reset lastStorageProgressMs — only actual slot downloads (via
@@ -2322,7 +2327,7 @@ class SNAPSyncController(
 
   private def startChainDownloader(): Unit = {
     if (!snapSyncConfig.chainDownloadEnabled) return
-    pivotBlock.foreach { pivot =>
+    pivotBlock.filter(_ > 0).foreach { pivot =>
       if (chainDownloader.isEmpty) {
         log.info("Starting parallel chain download from genesis to pivot block {}", pivot)
         coordinatorGeneration += 1

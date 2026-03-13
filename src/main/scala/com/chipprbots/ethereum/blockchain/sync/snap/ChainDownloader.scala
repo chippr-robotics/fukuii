@@ -106,8 +106,19 @@ class ChainDownloader(
       scheduleDispatch()
       context.become(downloading)
 
+    case UpdateTarget(newTarget) =>
+      // Re-start downloading if target was updated after completion (e.g. pivot refreshed from 0 to real block)
+      if (newTarget > targetBlock && newTarget > bestHeaderNumber) {
+        targetBlock = newTarget
+        started = true
+        bestHeaderNumber = findBestStoredHeader()
+        log.info("Chain download restarted with new target: {}, resuming from header {}", newTarget, bestHeaderNumber)
+        scheduleDispatch()
+        context.become(downloading)
+      }
+
     case GetProgress =>
-      sender() ! Progress(0, 0, 0, 0)
+      sender() ! Progress(headersDownloaded, bodiesDownloaded, receiptsDownloaded, targetBlock)
   }
 
   def downloading: Receive = handlePeerListMessages.orElse {
