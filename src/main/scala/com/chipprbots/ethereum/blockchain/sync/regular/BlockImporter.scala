@@ -123,7 +123,11 @@ class BlockImporter(
     case BlockFetcher.FetchedStateNode(nodeData) =>
       val node = nodeData.values.head
       val hash = kec256(node)
-      log.info("Received missing state node {}, saving and retrying block {}", ByteStringUtils.hash2string(hash), blocksToRetry.head.number)
+      log.info(
+        "Received missing state node {}, saving and retrying block {}",
+        ByteStringUtils.hash2string(hash),
+        blocksToRetry.head.number
+      )
       stateStorage.saveNode(hash, node.toArray, blocksToRetry.head.number)
       importBlocks(blocksToRetry, blockImportType)(state)
 
@@ -138,18 +142,20 @@ class BlockImporter(
   private def resolvingBranch(from: BigInt)(state: ImporterState): Receive =
     running(state.resolvingBranch(from))
 
-  /** Walk the local trie from stateRoot to find the HP-encoded path to a missing node.
-    * Returns the pathset suitable for SNAP GetTrieNodes: single-element for account trie nodes,
-    * two-element [accountHash, storagePath] for storage trie nodes.
-    * Limited to MaxTrieVisits node reads to avoid multi-minute DFS on large tries.
+  /** Walk the local trie from stateRoot to find the HP-encoded path to a missing node. Returns the pathset suitable for
+    * SNAP GetTrieNodes: single-element for account trie nodes, two-element [accountHash, storagePath] for storage trie
+    * nodes. Limited to MaxTrieVisits node reads to avoid multi-minute DFS on large tries.
     */
   private val MaxTrieVisits = 50000
 
-  /** Walk the specific path through the account trie for the given account hash.
-    * Instead of DFS over millions of nodes, this follows the exact key path — O(depth) = ~12 hops.
-    * Returns the HP-encoded SNAP pathset for the missing node.
+  /** Walk the specific path through the account trie for the given account hash. Instead of DFS over millions of nodes,
+    * this follows the exact key path — O(depth) = ~12 hops. Returns the HP-encoded SNAP pathset for the missing node.
     */
-  private def walkAccountPath(stateRoot: ByteString, accountHash: ByteString, targetHash: ByteString): Option[Seq[ByteString]] =
+  private def walkAccountPath(
+      stateRoot: ByteString,
+      accountHash: ByteString,
+      targetHash: ByteString
+  ): Option[Seq[ByteString]] =
     try {
       val mptStorage = stateStorage.getReadOnlyStorage
       if (mptStorage == null) return None
@@ -208,7 +214,7 @@ class BlockImporter(
         } else None
 
       case _: LeafNode => None // Reached the leaf without finding the missing node
-      case NullNode     => None
+      case NullNode    => None
       case hash: HashNode =>
         walkPath(storage, ByteString(hash.hash), keyNibbles, offset, targetHash)
     }
@@ -297,7 +303,14 @@ class BlockImporter(
             val accountHashBytes = HexPrefix.nibblesToBytes(fullNibblePath)
             try {
               val storageRoot = storage.get(account.storageRoot.toArray)
-              findInStorageTrie(storageRoot, storage, Array.empty[Byte], ByteString(accountHashBytes), targetHash, visits)
+              findInStorageTrie(
+                storageRoot,
+                storage,
+                Array.empty[Byte],
+                ByteString(accountHashBytes),
+                targetHash,
+                visits
+              )
             } catch {
               case e: MissingNodeException if ByteString(e.hash) == targetHash =>
                 val compactPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
@@ -355,7 +368,7 @@ class BlockImporter(
         }
 
       case _: LeafNode => None
-      case NullNode     => None
+      case NullNode    => None
     }
   }
 
@@ -411,9 +424,14 @@ class BlockImporter(
               case e: MissingAccountNodeException =>
                 // Account trie node missing — walk the specific account path to find the node (O(12) hops)
                 val failedBlock = notImportedBlocks.head
-                val parentStateRoot = try {
-                  Option(blockchainReader.getBlockHeaderByHash(failedBlock.header.parentHash)).flatten.map(_.stateRoot)
-                } catch { case ex: Exception => log.warning("Failed to get parent state root during node recovery: {}", ex.getMessage); None }
+                val parentStateRoot =
+                  try
+                    Option(blockchainReader.getBlockHeaderByHash(failedBlock.header.parentHash)).flatten
+                      .map(_.stateRoot)
+                  catch {
+                    case ex: Exception =>
+                      log.warning("Failed to get parent state root during node recovery: {}", ex.getMessage); None
+                  }
                 val accountHash = kec256(e.accountAddress)
                 val pathset = parentStateRoot.flatMap { root =>
                   walkAccountPath(root, accountHash, e.hash)
@@ -430,9 +448,14 @@ class BlockImporter(
               case e: MissingStorageNodeException =>
                 // Storage trie node missing — we know the account address, construct SNAP pathset directly
                 val failedBlock = notImportedBlocks.head
-                val parentStateRoot = try {
-                  Option(blockchainReader.getBlockHeaderByHash(failedBlock.header.parentHash)).flatten.map(_.stateRoot)
-                } catch { case ex: Exception => log.warning("Failed to get parent state root during node recovery: {}", ex.getMessage); None }
+                val parentStateRoot =
+                  try
+                    Option(blockchainReader.getBlockHeaderByHash(failedBlock.header.parentHash)).flatten
+                      .map(_.stateRoot)
+                  catch {
+                    case ex: Exception =>
+                      log.warning("Failed to get parent state root during node recovery: {}", ex.getMessage); None
+                  }
                 val accountHash = kec256(e.accountAddress)
                 val emptyPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
                 val pathset = Some(Seq(accountHash, emptyPath))
@@ -447,9 +470,14 @@ class BlockImporter(
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
               case e: MissingNodeException =>
                 val failedBlock = notImportedBlocks.head
-                val parentStateRoot = try {
-                  Option(blockchainReader.getBlockHeaderByHash(failedBlock.header.parentHash)).flatten.map(_.stateRoot)
-                } catch { case ex: Exception => log.warning("Failed to get parent state root during node recovery: {}", ex.getMessage); None }
+                val parentStateRoot =
+                  try
+                    Option(blockchainReader.getBlockHeaderByHash(failedBlock.header.parentHash)).flatten
+                      .map(_.stateRoot)
+                  catch {
+                    case ex: Exception =>
+                      log.warning("Failed to get parent state root during node recovery: {}", ex.getMessage); None
+                  }
                 val pathset = parentStateRoot.flatMap { root =>
                   findPathForMissingNode(root, e.hash)
                 }

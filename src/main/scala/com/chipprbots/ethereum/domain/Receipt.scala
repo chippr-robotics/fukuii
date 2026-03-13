@@ -91,3 +91,23 @@ case class LegacyReceipt(
 case class Type01Receipt(legacyReceipt: LegacyReceipt) extends TypedLegacyReceipt(Transaction.Type01, legacyReceipt) {
   override def toString: String = legacyReceipt.toPrettyString("Type01Receipt")
 }
+
+object Type02Receipt {
+  def withHashOutcome(
+      postTransactionStateHash: ByteString,
+      cumulativeGasUsed: BigInt,
+      logsBloomFilter: ByteString,
+      logs: Seq[TxLogEntry]
+  ): Type02Receipt =
+    Type02Receipt(LegacyReceipt.withHashOutcome(postTransactionStateHash, cumulativeGasUsed, logsBloomFilter, logs))
+}
+
+/** EIP-1559 receipt for Transaction type 2 */
+case class Type02Receipt(legacyReceipt: LegacyReceipt) extends TypedLegacyReceipt(Transaction.Type02, legacyReceipt) {
+  override def toString: String = legacyReceipt.toPrettyString("Type02Receipt")
+}
+
+/** EIP-7702 receipt for Transaction type 4 */
+case class Type04Receipt(legacyReceipt: LegacyReceipt) extends TypedLegacyReceipt(Transaction.Type04, legacyReceipt) {
+  override def toString: String = legacyReceipt.toPrettyString("Type04Receipt")
+}

@@ -30,7 +30,7 @@ class MESSConfigSpec extends AnyFlatSpec with Matchers {
 
   it should "report active when enabled=true and within activation window" taggedAs (UnitTest, ConsensusTest) in {
     val config = MESSConfig(enabled = true, activationBlock = Some(100), deactivationBlock = Some(200))
-    config.isActiveAtBlock(100) shouldBe true  // activation is inclusive
+    config.isActiveAtBlock(100) shouldBe true // activation is inclusive
     config.isActiveAtBlock(150) shouldBe true
     config.isActiveAtBlock(199) shouldBe true
   }
@@ -43,7 +43,7 @@ class MESSConfigSpec extends AnyFlatSpec with Matchers {
 
   it should "report inactive at and after deactivation block" taggedAs (UnitTest, ConsensusTest) in {
     val config = MESSConfig(enabled = true, activationBlock = Some(100), deactivationBlock = Some(200))
-    config.isActiveAtBlock(200) shouldBe false  // deactivation is exclusive
+    config.isActiveAtBlock(200) shouldBe false // deactivation is exclusive
     config.isActiveAtBlock(201) shouldBe false
   }
 
@@ -81,8 +81,8 @@ class MESSConfigSpec extends AnyFlatSpec with Matchers {
 
 /** Tests for ArtificialFinality (ECIP-1100 cubic polynomial).
   *
-  * Verifies the polynomial curve and reorg rejection logic against the ECIP-1100 specification
-  * and cross-client reference implementations (core-geth, Besu).
+  * Verifies the polynomial curve and reorg rejection logic against the ECIP-1100 specification and cross-client
+  * reference implementations (core-geth, Besu).
   */
 class ArtificialFinalitySpec extends AnyFlatSpec with Matchers {
 
@@ -90,7 +90,10 @@ class ArtificialFinalitySpec extends AnyFlatSpec with Matchers {
   private val Denominator = BigInt(128)
   private val Xcap = BigInt(25132) // floor(8000 * pi)
 
-  "ArtificialFinality.polynomialV" should "return DENOMINATOR (128) for timeDelta=0" taggedAs (UnitTest, ConsensusTest) in {
+  "ArtificialFinality.polynomialV" should "return DENOMINATOR (128) for timeDelta=0" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
     ArtificialFinality.polynomialV(BigInt(0)) shouldBe Denominator
   }
 
@@ -141,7 +144,10 @@ class ArtificialFinalitySpec extends AnyFlatSpec with Matchers {
     at200 should be <= BigInt(135)
   }
 
-  "ArtificialFinality.shouldRejectReorg" should "not reject when proposed TD equals local TD (timeDelta=0)" taggedAs (UnitTest, ConsensusTest) in {
+  "ArtificialFinality.shouldRejectReorg" should "not reject when proposed TD equals local TD (timeDelta=0)" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
     val result = ArtificialFinality.shouldRejectReorg(
       timeDeltaSeconds = 0,
       localSubchainTD = BigInt(1000),

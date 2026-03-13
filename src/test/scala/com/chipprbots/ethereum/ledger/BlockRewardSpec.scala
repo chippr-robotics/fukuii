@@ -160,7 +160,7 @@ class BlockRewardSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
         minerAddress: Address,
         ommerMiners: Seq[Address] = Nil,
         blockNumber: BigInt = sampleBlockNumber
-    ): Block = {
+    ): Block =
       Block(
         header = Fixtures.Blocks.Genesis.header.copy(
           beneficiary = minerAddress.bytes,
@@ -172,7 +172,6 @@ class BlockRewardSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
           }
         )
       )
-    }
 
     def sampleBlockAfterByzantium(minerAddress: Address, ommerMiners: Seq[Address] = Nil): Block = {
       val baseBlockNumber = forkBlockNumbers.byzantiumBlockNumber

@@ -252,6 +252,96 @@ sbt test                                                  # Full suite (~2,195 t
 
 ---
 
+
+---
+
+## Olympia Hard Fork Test Matrix
+
+**Specification Sources:**
+- [ECIP-1111 — Olympia EVM and Protocol Upgrades](https://ecips.ethereumclassic.org/ECIPs/ecip-1111) (EIP-1559 + treasury redirect)
+- [ECIP-1112 — Olympia Treasury Contract](https://ecips.ethereumclassic.org/ECIPs/ecip-1112) (immutable vault)
+- [ECIP-1121 — Execution Client Specification Alignment](https://ecips.ethereumclassic.org/ECIPs/ecip-1121) (13 execution-layer EIPs)
+
+**Activation:** Mordor block 15,800,850 (~March 28, 2026) | ETC mainnet block 24,751,337 (~mid-June 2026)
+**Treasury:** `0xd6165F3aF4281037bce810621F62B43077Fb0e37`
+
+### Fee Market & Treasury (ECIP-1111, ECIP-1112)
+
+| EIP/ECIP | Feature | core-geth | Besu | Fukuii |
+|----------|---------|-----------|------|--------|
+| EIP-1559 | Dynamic basefee mechanism | DIRECT: `consensus/misc/eip1559/eip1559_test.go` | DIRECT: `OlympiaProtocolSpecsTest` `olympiaHasEip1559BaseFeeMarket()`, `allPreOlympiaForksUseLegacyFeeMarket()` | DIRECT: `BaseFeeCalculatorSpec` (7 tests: initial basefee, equilibrium, increase, decrease, minimum increment, floor) |
+| EIP-3198 | BASEFEE opcode (0x48) | IMPLICIT: EIP-1559 tests | IMPLICIT: Olympia protocol spec tests | DIRECT: `OlympiaBaseFeeOpcodeSpec`, `OlympiaEipEnablementSpec` |
+| ECIP-1111 | Treasury basefee redirect (basefee x gasUsed) | DIRECT: `core/treasury_test.go` `TestTreasuryCumulativeAccumulation` | DIRECT: `OlympiaBlockProcessorTest` (14 tests: credit calculation, zero gas, separate accounts, era+treasury, multi-block accumulation, known values) | DIRECT: `TreasuryBaseFeeSpec` (4 tests: post-Olympia credit, pre-Olympia no credit, zero gas, zero treasury) |
+| ECIP-1112 | ECIP-1112 Treasury Address hardcoded | IMPLICIT: Treasury test uses config address | DIRECT: `GenesisConfigOlympiaTest` `mordorOlympiaTreasuryAddress()`, `classicOlympiaTreasuryAddress()` | IMPLICIT: mordor-chain.conf `treasury-address` |
+| — | Pre-Olympia has NO basefee | DIRECT: `etc_fork_compliance_test.go` | DIRECT: `ClassicProtocolSpecsTest` `allPreOlympiaClassicForksUseLegacyFeeMarket()` | DIRECT: `TreasuryBaseFeeSpec` `not credit baseFee to treasury pre-Olympia` |
+
+### Gas Accounting & Safety (ECIP-1121)
+
+| EIP | Feature | core-geth | Besu | Fukuii |
+|-----|---------|-----------|------|--------|
+| EIP-7702 | Set EOA account code (new tx type) | DIRECT: `core/eip7702_test.go` | IMPLICIT: Olympia protocol spec (Osaka gas calculator) | DIRECT: `EIP7702AuthGasSpec`, `OlympiaEipEnablementSpec` |
+| EIP-7623 | Increase calldata cost | IMPLICIT: Gas calculator tests | IMPLICIT: Osaka gas calculator | DIRECT: `EIP7623FloorDataGasSpec` |
+| EIP-7825 | TX gas limit cap (2^24 = 16,777,216) | IMPLICIT: Block processing tests | DIRECT: `OlympiaDeferredEipsTest` `olympiaHasTransactionGasLimitCap()`, `spiralHasNoTransactionGasLimitCap()`, `olympiaGasLimitCapConstant()` | DIRECT: `EIP7825GasCapSpec` |
+| EIP-7883 | MODEXP gas cost increase | IMPLICIT: Precompile gas tests | IMPLICIT: Osaka gas calculator | DIRECT: `ModExpEIP7883GasSpec` |
+| EIP-7935 | Default gas limit 60M (miner policy) | DIRECT: `core/eip7935_test.go`, `core/eip7935_adversarial_test.go` | DIRECT: `OlympiaGasLimitSecurityTest` (8 tests: 8M->60M convergence in 2,055 blocks, stable at 60M, bounds enforcement, adversarial splits), `OlympiaDeferredEipsTest` `eip7935IsMinerPolicyOnly()` | DIRECT: `OlympiaGasLimitSpec` (5 tests: convergence, stability, bounds, decrease, adversarial 70/30 split) |
+| EIP-7934 | RLP block size limit (10 MiB) | DIRECT: `core/eip7934_test.go` | DIRECT: `OlympiaDeferredEipsTest` `olympiaBlockSizeLimitConstant()` | DIRECT: `BlockRLPSizeCapSpec` |
+| EIP-6780 | SELFDESTRUCT only in same tx | IMPLICIT: EVM tests | IMPLICIT: Olympia EVM spec | DIRECT: `OlympiaSelfDestructSpec` |
+| EIP-7910 | eth_config JSON-RPC method | NONE | NONE | NONE |
+
+### Cryptographic & Precompile Enhancements (ECIP-1121)
+
+| EIP | Feature | core-geth | Besu | Fukuii |
+|-----|---------|-----------|------|--------|
+| EIP-2537 | BLS12-381 precompiles (0x0b-0x11) | IMPLICIT: Precompile registry tests | INHERITED: Besu BLS precompile tests | DIRECT: `OlympiaEipEnablementSpec` BLS12-381 enablement |
+| EIP-7951 | secp256r1 (P256) precompile | IMPLICIT: Precompile registry tests | INHERITED: Besu precompile tests | DIRECT: `P256VerifyGasSpec`, `OlympiaEipEnablementSpec` |
+
+### Execution Context Optimizations (ECIP-1121)
+
+| EIP | Feature | core-geth | Besu | Fukuii |
+|-----|---------|-----------|------|--------|
+| EIP-5656 | MCOPY memory copy opcode | IMPLICIT: EVM opcode tests | IMPLICIT: Olympia EVM spec | DIRECT: `OlympiaMcopySpec` |
+| EIP-2935 | Historical block hashes in state | DIRECT: `core/eip2935_test.go` `TestEIP2935HistoryStorage` | DIRECT: `GenesisConfigOlympiaTest` `mordorAllocContainsEip2935Contract()`, `classicAllocContainsEip2935Contract()`; `OlympiaProtocolSpecsTest` `olympiaUsesOlympiaPreExecutionProcessor()`; `OlympiaDeferredEipsTest` `olympiaHasHistoryContract()`, `olympiaBlockHashLookupFromContract()` | DIRECT: `OlympiaEipEnablementSpec` (contract address, 8191 block window, contract code validation) |
+| EIP-1153 | Transient storage (TLOAD/TSTORE) | IMPLICIT: EVM opcode tests | IMPLICIT: Olympia EVM spec | DIRECT: `OlympiaTransientStorageSpec` |
+
+### Olympia Fork Transition
+
+| Feature | core-geth | Besu | Fukuii |
+|---------|-----------|------|--------|
+| Fork identification | IMPLICIT: Fork ID tests | DIRECT: `OlympiaProtocolSpecsTest` `olympiaFork()`, `olympiaHardforkIdName()` | IMPLICIT: Fork ID spec |
+| Olympia block number (Mordor) | IMPLICIT: Chain config | DIRECT: `GenesisConfigOlympiaTest` `mordorOlympiaBlockNumber()` (15,800,850) | IMPLICIT: mordor-chain.conf `olympia-block-number` |
+| Olympia block number (ETC) | IMPLICIT: Chain config | DIRECT: `GenesisConfigOlympiaTest` `classicOlympiaBlockNumber()` (24,751,337) | IMPLICIT: etc-chain.conf (far-future placeholder) |
+| Spiral->Olympia boundary | IMPLICIT: Fork compliance | DIRECT: `OlympiaProtocolSpecsTest` `spiralStillIdentifiedBeforeOlympia()`, `spiralStillActiveJustBeforeOlympia()` | IMPLICIT: `PreOlympiaForkComplianceSpec` |
+| No withdrawals (PoW) | IMPLICIT: No PoS code | DIRECT: `OlympiaProtocolSpecsTest` `olympiaHasNoWithdrawalsProcessor()` | IMPLICIT: No PoS code |
+| Block processor type | IMPLICIT: Block processing | DIRECT: `OlympiaProtocolSpecsTest` `olympiaUsesOlympiaBlockProcessor()`, `olympiaBlockProcessorIsAlsoClassicBlockProcessor()` | IMPLICIT: Block processing |
+| ECIP-1017 + Treasury combined | IMPLICIT: Treasury tests | DIRECT: `OlympiaBlockProcessorTest` `era0RewardPlusTreasuryCredit()`, `era1RewardPlusTreasuryCredit()` | IMPLICIT: TreasuryBaseFeeSpec + era config |
+| EIP enablement summary | IMPLICIT: Individual EIP tests | IMPLICIT: Protocol spec tests | DIRECT: `OlympiaEipEnablementSpec` (comprehensive: all 14 EIPs, opcode sets, fee schedule validation) |
+
+### Multi-Client Integration (Olympia)
+
+| Feature | Status | Details |
+|---------|--------|---------|
+| Gorgoroth private testnet scripts | READY | `fukuii/ops/gorgoroth/test-scripts/` — 9 scripts (5 pre-fork + 4 post-fork) |
+| Gorgoroth: EIP-1559 baseFee test | PENDING | Verify basefee calculation across all 3 clients against anvil |
+| Gorgoroth: Treasury accumulation | PENDING | Verify treasury balance matches basefee x gasUsed across clients |
+| Gorgoroth: Gas convergence 8M->60M | PENDING | Verify all 3 clients converge identically |
+| Gorgoroth: Opcode availability | PENDING | Verify PUSH0, MCOPY, TLOAD/TSTORE, BASEFEE across clients |
+| Mordor Olympia activation | PENDING | Block 15,800,850 (~March 28) — test all 3 through fork boundary |
+| Fork ID cross-validation | PENDING | Confirm all 3 compute identical fork IDs at Olympia activation |
+| Docker compose multi-client | READY | `${COREGETH_IMAGE:-coregeth-etc:local}`, `${BESU_ETC_IMAGE:-besu-etc:local}`, `${FUKUII_IMAGE:-fukuii-etc:local}` |
+
+### Olympia Coverage Gaps
+
+| Gap | core-geth | Besu | Fukuii | Priority |
+|-----|-----------|------|--------|----------|
+| EIP-7910 (eth_config RPC) | NONE | NONE | NONE | LOW (informational RPC, not consensus) |
+| EIP-2537 dedicated BLS tests | IMPLICIT | INHERITED | DIRECT | MEDIUM (only Fukuii has explicit enablement test) |
+| EIP-7951 dedicated P256 tests | IMPLICIT | INHERITED | DIRECT | MEDIUM (only Fukuii has gas spec) |
+| Gorgoroth cross-client tests | PENDING | PENDING | PENDING | HIGH (must complete before Mordor activation) |
+| ECIP-1017 era + treasury combined | IMPLICIT | DIRECT | IMPLICIT | LOW (Besu has best coverage) |
+
+---
+
+
 ## Document History
 
 | Date | Change |
@@ -260,3 +350,4 @@ sbt test                                                  # Full suite (~2,195 t
 | 2026-03-06 | Add PersonalServiceSpec and McpServiceSpec to test commands, update count to 2,195 |
 | 2026-03-05 | Add FetchRequestSpec to test commands |
 | 2026-03-05 | Initial creation — pre-Olympia matrix covering ECIP-1066 (Frontier through Spiral) |
+| 2026-03-05 | Extended with Olympia hard fork matrix (ECIP-1111, ECIP-1112, ECIP-1121) |

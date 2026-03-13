@@ -9,6 +9,7 @@ import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks.EtcFork
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks.Magneto
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks.Mystique
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks.Phoenix
+import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks.Olympia
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks.Spiral
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EthForks.BeforeByzantium
 import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EthForks.Berlin
@@ -42,6 +43,7 @@ case class BlockchainConfigForEvm(
     berlinBlockNumber: BigInt,
     mystiqueBlockNumber: BigInt,
     spiralBlockNumber: BigInt,
+    olympiaBlockNumber: BigInt,
     chainId: BigInt
 ) {
   def etcForkForBlockNumber(blockNumber: BigInt): EtcFork = blockNumber match {
@@ -51,7 +53,8 @@ case class BlockchainConfigForEvm(
     case _ if blockNumber < magnetoBlockNumber  => Phoenix
     case _ if blockNumber < mystiqueBlockNumber => Magneto
     case _ if blockNumber < spiralBlockNumber   => Mystique
-    case _ if blockNumber >= spiralBlockNumber  => Spiral
+    case _ if blockNumber < olympiaBlockNumber  => Spiral
+    case _ if blockNumber >= olympiaBlockNumber => Olympia
   }
 
   def ethForkForBlockNumber(blockNumber: BigInt): BlockchainConfigForEvm.EthForks.Value = blockNumber match {
@@ -68,7 +71,7 @@ object BlockchainConfigForEvm {
 
   object EtcForks extends Enumeration {
     type EtcFork = Value
-    val BeforeAtlantis, Atlantis, Agharta, Phoenix, Magneto, Mystique, Spiral = Value
+    val BeforeAtlantis, Atlantis, Agharta, Phoenix, Magneto, Mystique, Spiral, Olympia = Value
   }
 
   object EthForks extends Enumeration {
@@ -97,6 +100,31 @@ object BlockchainConfigForEvm {
   def isEip6049DeprecationEnabled(etcFork: EtcFork): Boolean =
     etcFork >= EtcForks.Spiral
 
+  // Olympia fork EIP enablement (ECIP-1111/1112/1121)
+  def isEip1559Enabled(etcFork: EtcFork): Boolean =
+    etcFork >= EtcForks.Olympia
+
+  def isEip1153Enabled(etcFork: EtcFork): Boolean =
+    etcFork >= EtcForks.Olympia
+
+  def isEip5656Enabled(etcFork: EtcFork): Boolean =
+    etcFork >= EtcForks.Olympia
+
+  def isEip6780Enabled(etcFork: EtcFork): Boolean =
+    etcFork >= EtcForks.Olympia
+
+  def isEip7702Enabled(etcFork: EtcFork): Boolean =
+    etcFork >= EtcForks.Olympia
+
+  def isEip2935Enabled(etcFork: EtcFork): Boolean =
+    etcFork >= EtcForks.Olympia
+
+  def isEip2537Enabled(etcFork: EtcFork): Boolean =
+    etcFork >= EtcForks.Olympia
+
+  def isEip7951Enabled(etcFork: EtcFork): Boolean =
+    etcFork >= EtcForks.Olympia
+
   def apply(blockchainConfig: BlockchainConfig): BlockchainConfigForEvm = {
     import blockchainConfig._
     BlockchainConfigForEvm(
@@ -118,6 +146,7 @@ object BlockchainConfigForEvm {
       berlinBlockNumber = forkBlockNumbers.berlinBlockNumber,
       mystiqueBlockNumber = forkBlockNumbers.mystiqueBlockNumber,
       spiralBlockNumber = forkBlockNumbers.spiralBlockNumber,
+      olympiaBlockNumber = forkBlockNumbers.olympiaBlockNumber,
       chainId = chainId
     )
   }

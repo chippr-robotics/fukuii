@@ -18,8 +18,8 @@ import com.chipprbots.ethereum.utils.Logger
   *   implementation.
   */
 /** @param gasLimitTarget
-  *   Target gas limit for mined blocks. The miner will gradually adjust the gas limit toward this target at ±1/1024
-  *   per block, matching the consensus-enforced bound divisor. ETC mainnet default: 8,000,000.
+  *   Target gas limit for mined blocks. The miner will gradually adjust the gas limit toward this target at ±1/1024 per
+  *   block, matching the consensus-enforced bound divisor. ETC mainnet default: 8,000,000.
   */
 final case class MiningConfig(
     protocol: Protocol,

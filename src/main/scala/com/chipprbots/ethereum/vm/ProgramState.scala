@@ -31,7 +31,8 @@ object ProgramState {
         context.originAddr,
         context.recipientAddr.getOrElse(context.callerAddr)
       ) ++ context.warmAddresses ++ coinbaseAddress,
-      accessedStorageKeys = context.warmStorage
+      accessedStorageKeys = context.warmStorage,
+      transientStorage = context.transientStorage
     )
   }
 }
@@ -92,7 +93,8 @@ case class ProgramState[W <: WorldStateProxy[W, S], S <: Storage[S]](
     error: Option[ProgramError] = None,
     originalWorld: W,
     accessedAddresses: Set[Address],
-    accessedStorageKeys: Set[(Address, BigInt)]
+    accessedStorageKeys: Set[(Address, BigInt)],
+    transientStorage: Map[(Address, BigInt), BigInt] = Map.empty
 ) {
 
   def config: EvmConfig = env.evmConfig
@@ -183,6 +185,7 @@ case class ProgramState[W <: WorldStateProxy[W, S], S <: Storage[S]](
       gasRefund,
       error,
       accessedAddresses,
-      accessedStorageKeys
+      accessedStorageKeys,
+      transientStorage
     )
 }

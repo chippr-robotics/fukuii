@@ -11,8 +11,8 @@ import com.chipprbots.ethereum.vm.PUSH0
 import com.chipprbots.ethereum.testing.Tags._
 
 // scalastyle:off magic.number
-/** Verifies that each pre-Olympia ETC fork selects the correct EVM configuration
-  * (fee schedule, opcode list, and EIP feature flags) via EvmConfig.forBlock().
+/** Verifies that each pre-Olympia ETC fork selects the correct EVM configuration (fee schedule, opcode list, and EIP
+  * feature flags) via EvmConfig.forBlock().
   *
   * Extends the 1-test EvmConfigEtcForkSelectionSpec to cover all forks.
   *
@@ -20,8 +20,8 @@ import com.chipprbots.ethereum.testing.Tags._
   */
 class PreOlympiaForkComplianceSpec extends AnyFlatSpec with Matchers {
 
-  /** Helper: create a BlockchainConfigForEvm with all forks at Long.MaxValue (inactive),
-    * then selectively activate specific forks.
+  /** Helper: create a BlockchainConfigForEvm with all forks at Long.MaxValue (inactive), then selectively activate
+    * specific forks.
     */
   private def cfgWith(overrides: BlockchainConfigForEvm => BlockchainConfigForEvm): BlockchainConfigForEvm =
     overrides(
@@ -44,6 +44,7 @@ class PreOlympiaForkComplianceSpec extends AnyFlatSpec with Matchers {
         berlinBlockNumber = Long.MaxValue,
         mystiqueBlockNumber = Long.MaxValue,
         spiralBlockNumber = Long.MaxValue,
+        olympiaBlockNumber = Long.MaxValue,
         chainId = 0x3d
       )
     )
@@ -75,13 +76,15 @@ class PreOlympiaForkComplianceSpec extends AnyFlatSpec with Matchers {
   // ===== Atlantis Fork (ETC-specific) =====
 
   it should "select AtlantisFeeSchedule for Atlantis blocks" taggedAs (UnitTest, ConsensusTest) in {
-    val cfg = cfgWith(_.copy(
-      frontierBlockNumber = 0,
-      homesteadBlockNumber = 10,
-      eip150BlockNumber = 20,
-      eip160BlockNumber = 30,
-      atlantisBlockNumber = 100
-    ))
+    val cfg = cfgWith(
+      _.copy(
+        frontierBlockNumber = 0,
+        homesteadBlockNumber = 10,
+        eip150BlockNumber = 20,
+        eip160BlockNumber = 30,
+        atlantisBlockNumber = 100
+      )
+    )
     val evm = EvmConfig.forBlock(100, cfg)
 
     evm.feeSchedule shouldBe a[FeeSchedule.AtlantisFeeSchedule]
@@ -95,11 +98,13 @@ class PreOlympiaForkComplianceSpec extends AnyFlatSpec with Matchers {
     UnitTest,
     ConsensusTest
   ) in {
-    val cfg = cfgWith(_.copy(
-      frontierBlockNumber = 0,
-      byzantiumBlockNumber = 0,
-      atlantisBlockNumber = 0
-    ))
+    val cfg = cfgWith(
+      _.copy(
+        frontierBlockNumber = 0,
+        byzantiumBlockNumber = 0,
+        atlantisBlockNumber = 0
+      )
+    )
     val evm = EvmConfig.forBlock(0, cfg)
 
     evm.feeSchedule shouldBe a[FeeSchedule.AtlantisFeeSchedule]
@@ -109,11 +114,13 @@ class PreOlympiaForkComplianceSpec extends AnyFlatSpec with Matchers {
   // ===== Agharta Fork =====
 
   it should "select ConstantionopleFeeSchedule for Agharta blocks" taggedAs (UnitTest, ConsensusTest) in {
-    val cfg = cfgWith(_.copy(
-      frontierBlockNumber = 0,
-      atlantisBlockNumber = 10,
-      aghartaBlockNumber = 100
-    ))
+    val cfg = cfgWith(
+      _.copy(
+        frontierBlockNumber = 0,
+        atlantisBlockNumber = 10,
+        aghartaBlockNumber = 100
+      )
+    )
     val evm = EvmConfig.forBlock(100, cfg)
 
     evm.feeSchedule shouldBe a[FeeSchedule.ConstantionopleFeeSchedule]
@@ -123,12 +130,14 @@ class PreOlympiaForkComplianceSpec extends AnyFlatSpec with Matchers {
   // ===== Phoenix Fork =====
 
   it should "select PhoenixFeeSchedule for Phoenix blocks" taggedAs (UnitTest, ConsensusTest) in {
-    val cfg = cfgWith(_.copy(
-      frontierBlockNumber = 0,
-      atlantisBlockNumber = 10,
-      aghartaBlockNumber = 20,
-      phoenixBlockNumber = 100
-    ))
+    val cfg = cfgWith(
+      _.copy(
+        frontierBlockNumber = 0,
+        atlantisBlockNumber = 10,
+        aghartaBlockNumber = 20,
+        phoenixBlockNumber = 100
+      )
+    )
     val evm = EvmConfig.forBlock(100, cfg)
 
     evm.feeSchedule shouldBe a[FeeSchedule.PhoenixFeeSchedule]
@@ -138,13 +147,15 @@ class PreOlympiaForkComplianceSpec extends AnyFlatSpec with Matchers {
   // ===== Magneto Fork =====
 
   it should "select MagnetoFeeSchedule for Magneto blocks" taggedAs (UnitTest, ConsensusTest) in {
-    val cfg = cfgWith(_.copy(
-      frontierBlockNumber = 0,
-      atlantisBlockNumber = 10,
-      aghartaBlockNumber = 20,
-      phoenixBlockNumber = 30,
-      magnetoBlockNumber = 100
-    ))
+    val cfg = cfgWith(
+      _.copy(
+        frontierBlockNumber = 0,
+        atlantisBlockNumber = 10,
+        aghartaBlockNumber = 20,
+        phoenixBlockNumber = 30,
+        magnetoBlockNumber = 100
+      )
+    )
     val evm = EvmConfig.forBlock(100, cfg)
 
     evm.feeSchedule shouldBe a[FeeSchedule.MagnetoFeeSchedule]
@@ -154,14 +165,16 @@ class PreOlympiaForkComplianceSpec extends AnyFlatSpec with Matchers {
   // ===== Mystique Fork =====
 
   it should "select MystiqueFeeSchedule for Mystique blocks" taggedAs (UnitTest, ConsensusTest) in {
-    val cfg = cfgWith(_.copy(
-      frontierBlockNumber = 0,
-      atlantisBlockNumber = 10,
-      aghartaBlockNumber = 20,
-      phoenixBlockNumber = 30,
-      magnetoBlockNumber = 40,
-      mystiqueBlockNumber = 100
-    ))
+    val cfg = cfgWith(
+      _.copy(
+        frontierBlockNumber = 0,
+        atlantisBlockNumber = 10,
+        aghartaBlockNumber = 20,
+        phoenixBlockNumber = 30,
+        magnetoBlockNumber = 40,
+        mystiqueBlockNumber = 100
+      )
+    )
     val evm = EvmConfig.forBlock(100, cfg)
 
     evm.feeSchedule shouldBe a[FeeSchedule.MystiqueFeeSchedule]
@@ -174,15 +187,17 @@ class PreOlympiaForkComplianceSpec extends AnyFlatSpec with Matchers {
     UnitTest,
     ConsensusTest
   ) in {
-    val cfg = cfgWith(_.copy(
-      frontierBlockNumber = 0,
-      atlantisBlockNumber = 10,
-      aghartaBlockNumber = 20,
-      phoenixBlockNumber = 30,
-      magnetoBlockNumber = 40,
-      mystiqueBlockNumber = 50,
-      spiralBlockNumber = 100
-    ))
+    val cfg = cfgWith(
+      _.copy(
+        frontierBlockNumber = 0,
+        atlantisBlockNumber = 10,
+        aghartaBlockNumber = 20,
+        phoenixBlockNumber = 30,
+        magnetoBlockNumber = 40,
+        mystiqueBlockNumber = 50,
+        spiralBlockNumber = 100
+      )
+    )
     val evm = EvmConfig.forBlock(100, cfg)
 
     // Spiral uses MystiqueFeeSchedule (no new fee schedule class)
@@ -196,30 +211,34 @@ class PreOlympiaForkComplianceSpec extends AnyFlatSpec with Matchers {
   // ===== PUSH0 Gating at Spiral =====
 
   it should "not include PUSH0 opcode before Spiral" taggedAs (UnitTest, ConsensusTest) in {
-    val cfg = cfgWith(_.copy(
-      frontierBlockNumber = 0,
-      atlantisBlockNumber = 10,
-      aghartaBlockNumber = 20,
-      phoenixBlockNumber = 30,
-      magnetoBlockNumber = 40,
-      mystiqueBlockNumber = 50,
-      spiralBlockNumber = Long.MaxValue // Spiral not yet active
-    ))
+    val cfg = cfgWith(
+      _.copy(
+        frontierBlockNumber = 0,
+        atlantisBlockNumber = 10,
+        aghartaBlockNumber = 20,
+        phoenixBlockNumber = 30,
+        magnetoBlockNumber = 40,
+        mystiqueBlockNumber = 50,
+        spiralBlockNumber = Long.MaxValue // Spiral not yet active
+      )
+    )
     val evm = EvmConfig.forBlock(50, cfg)
 
     evm.opCodeList.byteToOpCode.get(PUSH0.code) shouldBe None
   }
 
   it should "include PUSH0 opcode at and after Spiral" taggedAs (UnitTest, ConsensusTest) in {
-    val cfg = cfgWith(_.copy(
-      frontierBlockNumber = 0,
-      atlantisBlockNumber = 10,
-      aghartaBlockNumber = 20,
-      phoenixBlockNumber = 30,
-      magnetoBlockNumber = 40,
-      mystiqueBlockNumber = 50,
-      spiralBlockNumber = 100
-    ))
+    val cfg = cfgWith(
+      _.copy(
+        frontierBlockNumber = 0,
+        atlantisBlockNumber = 10,
+        aghartaBlockNumber = 20,
+        phoenixBlockNumber = 30,
+        magnetoBlockNumber = 40,
+        mystiqueBlockNumber = 50,
+        spiralBlockNumber = 100
+      )
+    )
     val evm = EvmConfig.forBlock(100, cfg)
 
     evm.opCodeList.byteToOpCode.get(PUSH0.code) shouldBe Some(PUSH0)

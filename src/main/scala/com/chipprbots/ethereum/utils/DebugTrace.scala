@@ -4,9 +4,7 @@ import scala.util.Try
 
 /** Lightweight debug tracing toggles wired via JVM system properties.
   *
-  * Usage:
-  *   -Dfukuii.trace.block=35554
-  *   -Dfukuii.trace.tx=0xdeadbeef...
+  * Usage: -Dfukuii.trace.block=35554 -Dfukuii.trace.tx=0xdeadbeef...
   */
 object DebugTrace {
 
@@ -34,8 +32,7 @@ object DebugTrace {
   def enabledForBlock(blockNumber: BigInt): Boolean =
     traceBlockNumber.contains(blockNumber)
 
-  def enabledForTx(blockNumber: BigInt, txHashHex: String): Boolean = {
+  def enabledForTx(blockNumber: BigInt, txHashHex: String): Boolean =
     if (!enabledForBlock(blockNumber)) false
     else traceTxHashLower.forall(_ == txHashHex.stripPrefix("0x").toLowerCase)
-  }
 }

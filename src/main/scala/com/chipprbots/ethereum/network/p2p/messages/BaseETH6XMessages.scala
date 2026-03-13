@@ -81,6 +81,30 @@ object BaseETH6XMessages {
       }
     )
 
+  implicit val setCodeAuthorizationCodec: RLPCodec[SetCodeAuthorization] =
+    RLPCodec.instance[SetCodeAuthorization](
+      { case SetCodeAuthorization(chainId, address, nonce, v, r, s) =>
+        RLPList(
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(chainId)),
+          address,
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(nonce)),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(v)),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(r)),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(s))
+        )
+      },
+      { case RLPList(rlpChainId, rlpAddress, rlpNonce, rlpV, rlpR, rlpS) =>
+        SetCodeAuthorization(
+          rlpChainId.decodeAs[BigInt]("chainId"),
+          rlpAddress.decodeAs[Address]("address"),
+          rlpNonce.decodeAs[BigInt]("nonce"),
+          rlpV.decodeAs[BigInt]("v"),
+          rlpR.decodeAs[BigInt]("r"),
+          rlpS.decodeAs[BigInt]("s")
+        )
+      }
+    )
+
   /** used by eth61, eth62, eth63
     */
   case class Status(
@@ -209,12 +233,12 @@ object BaseETH6XMessages {
             // When such bytes appear as an element inside an outer RLP list, the decoder yields an RLPValue(bytes)
             // rather than a split (RLPValue(typeByte), RLPList(payload)). Normalize it here so all callers that use
             // toTypedRLPEncodables (BlockBody, SignedTransactions, PooledTransactions, etc.) can decode typed txs.
-            try {
+            try
               rawDecode(v.tail) match {
                 case rlpList: RLPList => PrefixedRLPEncodable(v.head, rlpList) +: tail.toTypedRLPEncodables
                 case _                => RLPValue(v) +: tail.toTypedRLPEncodables
               }
-            } catch {
+            catch {
               case _: Throwable => RLPValue(v) +: tail.toTypedRLPEncodables
             }
           case Seq(head, tail @ _*) => head +: tail.toTypedRLPEncodables
@@ -231,6 +255,35 @@ object BaseETH6XMessages {
           .map(_.toArray)
           .getOrElse(Array.empty[Byte])
         signedTx.tx match {
+          case TransactionWithDynamicFee(
+                chainId,
+                nonce,
+                maxPriorityFeePerGas,
+                maxFeePerGas,
+                gasLimit,
+                _,
+                value,
+                payload,
+                accessList
+              ) =>
+            PrefixedRLPEncodable(
+              Transaction.Type02,
+              RLPList(
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(chainId)),
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(nonce)),
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(maxPriorityFeePerGas)),
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(maxFeePerGas)),
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasLimit)),
+                receivingAddressBytes,
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(value)),
+                RLPValue(payload.toArray),
+                toRlpList(accessList),
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(signedTx.signature.v)),
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(signedTx.signature.r)),
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(signedTx.signature.s))
+              )
+            )
+
           case TransactionWithAccessList(chainId, nonce, gasPrice, gasLimit, _, value, payload, accessList) =>
             PrefixedRLPEncodable(
               Transaction.Type01,
@@ -243,6 +296,37 @@ object BaseETH6XMessages {
                 RLPValue(ByteUtils.bigIntToUnsignedByteArray(value)),
                 RLPValue(payload.toArray),
                 toRlpList(accessList),
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(signedTx.signature.v)),
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(signedTx.signature.r)),
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(signedTx.signature.s))
+              )
+            )
+
+          case SetCodeTransaction(
+                chainId,
+                nonce,
+                maxPriorityFeePerGas,
+                maxFeePerGas,
+                gasLimit,
+                _,
+                value,
+                payload,
+                accessList,
+                authorizationList
+              ) =>
+            PrefixedRLPEncodable(
+              Transaction.Type04,
+              RLPList(
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(chainId)),
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(nonce)),
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(maxPriorityFeePerGas)),
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(maxFeePerGas)),
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasLimit)),
+                receivingAddressBytes,
+                RLPValue(ByteUtils.bigIntToUnsignedByteArray(value)),
+                RLPValue(payload.toArray),
+                toRlpList(accessList),
+                toRlpList(authorizationList),
                 RLPValue(ByteUtils.bigIntToUnsignedByteArray(signedTx.signature.v)),
                 RLPValue(ByteUtils.bigIntToUnsignedByteArray(signedTx.signature.r)),
                 RLPValue(ByteUtils.bigIntToUnsignedByteArray(signedTx.signature.s))
@@ -296,6 +380,82 @@ object BaseETH6XMessages {
         *   a SignedTransaction
         */
       def toSignedTransaction: SignedTransaction = rlpEncodeable match {
+        case PrefixedRLPEncodable(
+              Transaction.Type04,
+              RLPList(
+                RLPValue(chainIdBytes),
+                RLPValue(nonceBytes),
+                RLPValue(maxPriorityFeePerGasBytes),
+                RLPValue(maxFeePerGasBytes),
+                RLPValue(gasLimitBytes),
+                (receivingAddress: RLPValue),
+                RLPValue(valueBytes),
+                RLPValue(payloadBytes),
+                (accessList: RLPList),
+                (authorizationList: RLPList),
+                RLPValue(pointSignBytes),
+                RLPValue(signatureRandomBytes),
+                RLPValue(signatureBytes)
+              )
+            ) =>
+          val receivingAddressOpt = if (receivingAddress.bytes.isEmpty) None else Some(Address(receivingAddress.bytes))
+          SignedTransaction(
+            SetCodeTransaction(
+              ByteUtils.bytesToBigInt(chainIdBytes),
+              ByteUtils.bytesToBigInt(nonceBytes),
+              ByteUtils.bytesToBigInt(maxPriorityFeePerGasBytes),
+              ByteUtils.bytesToBigInt(maxFeePerGasBytes),
+              ByteUtils.bytesToBigInt(gasLimitBytes),
+              receivingAddressOpt,
+              ByteUtils.bytesToBigInt(valueBytes),
+              ByteString(payloadBytes),
+              fromRlpList[AccessListItem](accessList).toList,
+              fromRlpList[SetCodeAuthorization](authorizationList).toList
+            ),
+            ECDSASignature(
+              ByteUtils.bytesToBigInt(signatureRandomBytes),
+              ByteUtils.bytesToBigInt(signatureBytes),
+              ByteUtils.bytesToBigInt(pointSignBytes)
+            )
+          )
+
+        case PrefixedRLPEncodable(
+              Transaction.Type02,
+              RLPList(
+                RLPValue(chainIdBytes),
+                RLPValue(nonceBytes),
+                RLPValue(maxPriorityFeePerGasBytes),
+                RLPValue(maxFeePerGasBytes),
+                RLPValue(gasLimitBytes),
+                (receivingAddress: RLPValue),
+                RLPValue(valueBytes),
+                RLPValue(payloadBytes),
+                (accessList: RLPList),
+                RLPValue(pointSignBytes),
+                RLPValue(signatureRandomBytes),
+                RLPValue(signatureBytes)
+              )
+            ) =>
+          val receivingAddressOpt = if (receivingAddress.bytes.isEmpty) None else Some(Address(receivingAddress.bytes))
+          SignedTransaction(
+            TransactionWithDynamicFee(
+              ByteUtils.bytesToBigInt(chainIdBytes),
+              ByteUtils.bytesToBigInt(nonceBytes),
+              ByteUtils.bytesToBigInt(maxPriorityFeePerGasBytes),
+              ByteUtils.bytesToBigInt(maxFeePerGasBytes),
+              ByteUtils.bytesToBigInt(gasLimitBytes),
+              receivingAddressOpt,
+              ByteUtils.bytesToBigInt(valueBytes),
+              ByteString(payloadBytes),
+              fromRlpList[AccessListItem](accessList).toList
+            ),
+            ECDSASignature(
+              ByteUtils.bytesToBigInt(signatureRandomBytes),
+              ByteUtils.bytesToBigInt(signatureBytes),
+              ByteUtils.bytesToBigInt(pointSignBytes)
+            )
+          )
+
         case PrefixedRLPEncodable(
               Transaction.Type01,
               RLPList(
@@ -368,8 +528,10 @@ object BaseETH6XMessages {
       def toSignedTransaction: SignedTransaction = {
         val first = bytes(0)
         (first match {
+          case Transaction.Type04 => PrefixedRLPEncodable(Transaction.Type04, rawDecode(bytes.tail))
+          case Transaction.Type02 => PrefixedRLPEncodable(Transaction.Type02, rawDecode(bytes.tail))
           case Transaction.Type01 => PrefixedRLPEncodable(Transaction.Type01, rawDecode(bytes.tail))
-          case _ => rawDecode(bytes)
+          case _                  => rawDecode(bytes)
         }).toSignedTransaction
       }
     }

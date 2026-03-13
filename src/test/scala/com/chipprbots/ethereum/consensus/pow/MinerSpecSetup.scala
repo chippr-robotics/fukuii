@@ -191,9 +191,17 @@ trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
 
   private def calculateGasLimit(parentGas: UInt256): UInt256 = {
     val GasLimitBoundDivisor: Int = 1024
-
-    val gasLimitDifference = parentGas / GasLimitBoundDivisor
-    parentGas + gasLimitDifference - 1
+    val target = UInt256(miningConfig.gasLimitTarget)
+    val delta = parentGas / GasLimitBoundDivisor - 1
+    if (parentGas < target) {
+      val next = parentGas + delta
+      if (next > target) target else next
+    } else if (parentGas > target) {
+      val next = parentGas - delta
+      if (next < target) target else next
+    } else {
+      parentGas
+    }
   }
 
   // Abstract method for block creator behavior expectations

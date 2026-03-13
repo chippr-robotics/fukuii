@@ -236,7 +236,7 @@ class E2EFastSyncSpec extends FlatSpecBase with Matchers with BeforeAndAfterAll 
           prevBlock shouldBe defined
           // Use getOrElse with meaningful error message instead of .get
           val currentBlock = block.getOrElse(fail(s"Block at height $i should be defined"))
-          val previousBlock = prevBlock.getOrElse(fail(s"Block at height ${i-1} should be defined"))
+          val previousBlock = prevBlock.getOrElse(fail(s"Block at height ${i - 1} should be defined"))
           currentBlock.header.parentHash shouldBe previousBlock.hash
         }
       }
@@ -262,12 +262,16 @@ class E2EFastSyncSpec extends FlatSpecBase with Matchers with BeforeAndAfterAll 
       _ <- peer1.waitForFastSyncFinish()
     } yield {
       // Use getOrElse with meaningful error messages instead of .get
-      val peer1BestBlock = peer1.blockchainReader.getBestBlock().getOrElse(
-        fail("Peer 1 should have a best block after fast sync")
-      )
-      val peer2BestBlock = peer2.blockchainReader.getBestBlock().getOrElse(
-        fail("Peer 2 should have a best block")
-      )
+      val peer1BestBlock = peer1.blockchainReader
+        .getBestBlock()
+        .getOrElse(
+          fail("Peer 1 should have a best block after fast sync")
+        )
+      val peer2BestBlock = peer2.blockchainReader
+        .getBestBlock()
+        .getOrElse(
+          fail("Peer 2 should have a best block")
+        )
 
       val peer1Difficulty = peer1.blockchainReader.getChainWeightByHash(peer1BestBlock.hash)
       val peer2DifficultyAtSameBlock = peer2.blockchainReader.getChainWeightByHash(peer1BestBlock.hash)
@@ -398,9 +402,11 @@ class E2EFastSyncSpec extends FlatSpecBase with Matchers with BeforeAndAfterAll 
       _ <- peer1.waitForFastSyncFinish()
     } yield {
       // Use getOrElse with meaningful error messages instead of .get
-      val peer1BestBlock = peer1.blockchainReader.getBestBlock().getOrElse(
-        fail("Peer 1 should have a best block after fast sync")
-      )
+      val peer1BestBlock = peer1.blockchainReader
+        .getBestBlock()
+        .getOrElse(
+          fail("Peer 1 should have a best block after fast sync")
+        )
       val peer2SameBlock = peer2.blockchainReader
         .getBlockByNumber(peer2.blockchainReader.getBestBranch(), peer1BestBlock.number)
         .getOrElse(

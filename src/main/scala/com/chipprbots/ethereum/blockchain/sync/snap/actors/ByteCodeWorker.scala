@@ -12,8 +12,7 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 
 /** ByteCodeWorker fetches bytecodes from a peer.
   *
-  * Simplified worker that just handles network communication.
-  * All business logic is in ByteCodeCoordinator.
+  * Simplified worker that just handles network communication. All business logic is in ByteCodeCoordinator.
   *
   * @param coordinator
   *   Parent coordinator
@@ -27,8 +26,8 @@ class ByteCodeWorker(
     networkPeerManager: ActorRef,
     requestTracker: SNAPRequestTracker
 ) extends Actor
-  with ActorLogging
-  with Stash {
+    with ActorLogging
+    with Stash {
 
   import Messages._
 
@@ -36,33 +35,32 @@ class ByteCodeWorker(
 
   override def receive: Receive = idle
 
-  private def idle: Receive = {
-    case ByteCodeWorkerFetchTask(task, peer, requestId, maxResponseSize) =>
-      val request = GetByteCodes(
-        requestId = requestId,
-        hashes = task.codeHashes,
-        responseBytes = maxResponseSize
-      )
+  private def idle: Receive = { case ByteCodeWorkerFetchTask(task, peer, requestId, maxResponseSize) =>
+    val request = GetByteCodes(
+      requestId = requestId,
+      hashes = task.codeHashes,
+      responseBytes = maxResponseSize
+    )
 
-      // Track request with timeout
-      requestTracker.trackRequest(
-        requestId,
-        peer,
-        SNAPRequestTracker.RequestType.GetByteCodes,
-        timeout = 30.seconds
-      ) {
-        self ! ByteCodeRequestTimeout(requestId)
-      }
+    // Track request with timeout
+    requestTracker.trackRequest(
+      requestId,
+      peer,
+      SNAPRequestTracker.RequestType.GetByteCodes,
+      timeout = 30.seconds
+    ) {
+      self ! ByteCodeRequestTimeout(requestId)
+    }
 
-      log.debug(s"Requesting ${task.codeHashes.size} bytecodes from peer ${peer.id} (request ID: $requestId)")
+    log.debug(s"Requesting ${task.codeHashes.size} bytecodes from peer ${peer.id} (request ID: $requestId)")
 
-      // Send request via NetworkPeerManager
-      import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes.GetByteCodesEnc
-      val messageSerializable: MessageSerializable = new GetByteCodesEnc(request)
-      networkPeerManager ! NetworkPeerManagerActor.SendMessage(messageSerializable, peer.id)
+    // Send request via NetworkPeerManager
+    import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes.GetByteCodesEnc
+    val messageSerializable: MessageSerializable = new GetByteCodesEnc(request)
+    networkPeerManager ! NetworkPeerManagerActor.SendMessage(messageSerializable, peer.id)
 
-      currentTask = Some((task, peer, requestId))
-      context.become(working)
+    currentTask = Some((task, peer, requestId))
+    context.become(working)
   }
 
   private def working: Receive = {
@@ -70,7 +68,7 @@ class ByteCodeWorker(
       currentTask match {
         case Some((_, _, requestId)) if response.requestId == requestId =>
           // IMPORTANT: mark the request complete so SNAPRequestTracker doesn't fire a timeout.
-          requestTracker.completeRequest(requestId)
+          requestTracker.completeRequest(requestId, response.codes.size.max(1))
           log.debug(s"Received bytecodes response for request $requestId")
           coordinator ! ByteCodesResponseMsg(response)
 

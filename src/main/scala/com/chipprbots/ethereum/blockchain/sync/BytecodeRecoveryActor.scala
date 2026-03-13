@@ -14,15 +14,13 @@ import com.chipprbots.ethereum.mpt.MptVisitors._
 
 /** Bytecode recovery actor for Bug 20 hardening.
   *
-  * On startup after SNAP sync, walks the state trie to find contract accounts
-  * whose bytecodes are missing from evmCodeStorage (due to the Bug 20 phase
-  * handoff timeout). Collects missing codeHashes and downloads them via SNAP
+  * On startup after SNAP sync, walks the state trie to find contract accounts whose bytecodes are missing from
+  * evmCodeStorage (due to the Bug 20 phase handoff timeout). Collects missing codeHashes and downloads them via SNAP
   * protocol using ByteCodeCoordinator.
   *
   * Lifecycle:
-  *   1. Walk state trie, collect missing codeHashes (deduplicated)
-  *   2. If none missing → mark recovery done, report to SyncController
-  *   3. If missing → download via ByteCodeCoordinator, then mark done
+  *   1. Walk state trie, collect missing codeHashes (deduplicated) 2. If none missing → mark recovery done, report to
+  *      SyncController 3. If missing → download via ByteCodeCoordinator, then mark done
   */
 class BytecodeRecoveryActor(
     stateRoot: ByteString,
@@ -95,7 +93,7 @@ class BytecodeRecoveryActor(
       context.stop(self)
 
     case snap.SNAPSyncController.ProgressBytecodesDownloaded(_) =>
-      // Ignore progress updates
+    // Ignore progress updates
 
     case msg => coordinator.forward(msg) // Forward SNAP protocol responses to coordinator
   }
@@ -167,8 +165,13 @@ object BytecodeRecoveryActor {
   ): Props =
     Props(
       new BytecodeRecoveryActor(
-        stateRoot, stateStorage, evmCodeStorage,
-        appStateStorage, networkPeerManager, syncController, pivotBlockNumber
+        stateRoot,
+        stateStorage,
+        evmCodeStorage,
+        appStateStorage,
+        networkPeerManager,
+        syncController,
+        pivotBlockNumber
       )
     )
 }

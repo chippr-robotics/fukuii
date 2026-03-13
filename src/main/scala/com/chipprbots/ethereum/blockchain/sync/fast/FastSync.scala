@@ -229,8 +229,10 @@ class FastSync(
         syncState = syncState.copy(stateSyncFinished = true)
         processSyncing()
       case SyncStateSchedulerActor.NetworkIncompatible =>
-        log.warning("State scheduler reports no ETH63-67 peers available (ETH68-only network). " +
-          "Fast sync cannot use GetNodeData. Requesting fallback to SNAP sync.")
+        log.warning(
+          "State scheduler reports no ETH63-67 peers available (ETH68-only network). " +
+            "Fast sync cannot use GetNodeData. Requesting fallback to SNAP sync."
+        )
         cleanup()
         context.become(idle)
         syncController ! FallbackToSnapSync
@@ -329,9 +331,9 @@ class FastSync(
                 // Typed receipt in wire format: RLPValue(typeByte || rlp(payload))
                 // Expand it to Seq(RLPValue(typeByte), RLPList(payload)) for toTypedRLPEncodables.
                 if ((first & 0xff) < 0x7f && receiptBytes.length > 1) {
-                  try {
+                  try
                     Seq(RLPValue(Array(first)), rawDecode(receiptBytes.tail))
-                  } catch {
+                  catch {
                     case _: RuntimeException | _: RLPException => Seq(v)
                   }
                 } else {
@@ -392,7 +394,10 @@ class FastSync(
           // On SyncRestart, the state scheduler is in idle state waiting for StartSyncingTo.
           // Send it the existing pivot's state root so it doesn't deadlock.
           if (updateReason.isSyncRestart) {
-            log.info("SyncRestart: sending existing pivot state root to state scheduler (block {})", syncState.pivotBlock.number)
+            log.info(
+              "SyncRestart: sending existing pivot state root to state scheduler (block {})",
+              syncState.pivotBlock.number
+            )
             syncStateScheduler ! StartSyncingTo(syncState.pivotBlock.stateRoot, syncState.pivotBlock.number)
           }
           context.become(this.receive)
@@ -790,7 +795,9 @@ class FastSync(
       val blacklistedIds = blacklist.keys
       log.info(
         s"""|🧠🪱 FastSync Progress: phase=$phase, blocks=$lastFull/$blockTarget (${blockPercent}%), state=$savedNodes/$totalNodes (${nodePercent}%),
-        |to_brain=$blocksToBrain, rates=${formatRate(blocksPerSec)} blocks, ${formatRate(nodesPerSec)} nodes, queues=bodies=${syncState.blockBodiesQueue.size}, receipts=${syncState.receiptsQueue.size},
+        |to_brain=$blocksToBrain, rates=${formatRate(blocksPerSec)} blocks, ${formatRate(
+             nodesPerSec
+           )} nodes, queues=bodies=${syncState.blockBodiesQueue.size}, receipts=${syncState.receiptsQueue.size},
             |peers=waiting=${assignedHandlers.size}, connected=${handshakedPeers.size}, blacklisted=${blacklistedIds.size}, elapsed=${totalMinutesTaken()}m
             |""".stripMargin.replace("\n", " ")
       )

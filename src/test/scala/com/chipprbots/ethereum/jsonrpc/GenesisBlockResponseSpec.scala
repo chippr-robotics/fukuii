@@ -14,7 +14,7 @@ import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.jsonrpc.EthBlocksJsonMethodsImplicits._
 
 /** Test to verify that genesis block is serialized correctly:
-  * 1. mixHash field should be present
+  *   1. mixHash field should be present
   */
 class GenesisBlockResponseSpec extends AnyFlatSpec with Matchers {
 

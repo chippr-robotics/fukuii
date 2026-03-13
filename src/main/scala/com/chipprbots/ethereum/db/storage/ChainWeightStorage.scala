@@ -51,8 +51,8 @@ class ChainWeightStorage(val dataSource: DataSource) extends TransactionalKeyVal
 object ChainWeightStorage {
   type BlockHash = ByteString
 
-  /** Legacy ChainWeight format that included lastCheckpointNumber (legacy checkpointing, now removed).
-    * Used for backward-compatible deserialization of old database entries.
+  /** Legacy ChainWeight format that included lastCheckpointNumber (legacy checkpointing, now removed). Used for
+    * backward-compatible deserialization of old database entries.
     */
   private[storage] case class LegacyChainWeight(
       lastCheckpointNumber: BigInt,

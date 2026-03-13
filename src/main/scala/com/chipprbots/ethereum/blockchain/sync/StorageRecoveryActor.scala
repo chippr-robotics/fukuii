@@ -17,18 +17,16 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors
 
 /** Storage recovery actor for Bug 20 hardening.
   *
-  * On startup after SNAP sync, walks the state trie to find contract accounts
-  * whose storage tries are missing from MptStorage (due to the Bug 20 phase
-  * handoff timeout). Collects missing (accountHash, storageRoot) pairs and
+  * On startup after SNAP sync, walks the state trie to find contract accounts whose storage tries are missing from
+  * MptStorage (due to the Bug 20 phase handoff timeout). Collects missing (accountHash, storageRoot) pairs and
   * downloads them via SNAP protocol using StorageRangeCoordinator.
   *
-  * Runs concurrently with BytecodeRecoveryActor — they target different
-  * storage backends (MptStorage vs EvmCodeStorage) with no data dependency.
+  * Runs concurrently with BytecodeRecoveryActor — they target different storage backends (MptStorage vs EvmCodeStorage)
+  * with no data dependency.
   *
   * Lifecycle:
-  *   1. Walk state trie, find contracts with missing storage tries
-  *   2. If none missing → mark recovery done, report to SyncController
-  *   3. If missing → download via StorageRangeCoordinator, then mark done
+  *   1. Walk state trie, find contracts with missing storage tries 2. If none missing → mark recovery done, report to
+  *      SyncController 3. If missing → download via StorageRangeCoordinator, then mark done
   */
 class StorageRecoveryActor(
     stateRoot: ByteString,
@@ -118,13 +116,13 @@ class StorageRecoveryActor(
       context.stop(self)
 
     case SNAPSyncController.ProgressStorageSlotsSynced(_) =>
-      // Ignore progress updates
+    // Ignore progress updates
 
     case msg => coordinator.forward(msg) // Forward SNAP protocol responses to coordinator
   }
 
-  /** Walk the state trie and collect (accountHash, storageRoot) for contracts
-    * whose storage tries are missing from MptStorage.
+  /** Walk the state trie and collect (accountHash, storageRoot) for contracts whose storage tries are missing from
+    * MptStorage.
     */
   private def scanForMissingStorage(): Seq[(ByteString, ByteString)] = {
     val mptStorage = stateStorage.getBackingStorage(pivotBlockNumber)
@@ -153,10 +151,10 @@ class StorageRecoveryActor(
               seenRoots += account.storageRoot
               checkedCount += 1
               // Check if the storage root node exists in MptStorage
-              try {
+              try
                 mptStorage.get(account.storageRoot.toArray)
                 // Storage root exists — may be incomplete deeper, but the root is present
-              } catch {
+              catch {
                 case _: MerklePatriciaTrie.MPTException =>
                   missing += ((accountHash, account.storageRoot))
               }
@@ -203,8 +201,13 @@ object StorageRecoveryActor {
   ): Props =
     Props(
       new StorageRecoveryActor(
-        stateRoot, stateStorage, appStateStorage,
-        networkPeerManager, syncController, pivotBlockNumber, snapSyncConfig
+        stateRoot,
+        stateStorage,
+        appStateStorage,
+        networkPeerManager,
+        syncController,
+        pivotBlockNumber,
+        snapSyncConfig
       )
     )
 }

@@ -17,7 +17,7 @@ import com.chipprbots.ethereum.domain.Account
   *   State root hash for verification
   */
 case class AccountTask(
-  var next: ByteString,
+    var next: ByteString,
     last: ByteString,
     var rootHash: ByteString,
     // Runtime fields
@@ -50,9 +50,8 @@ case class AccountTask(
       math.min(0.9, accounts.size.toDouble / AccountTask.ESTIMATED_ACCOUNTS_FOR_NEAR_COMPLETE)
     }
 
-  /** Remaining keyspace as BigInt. Used by priority dispatching to focus workers
-    * on the most-complete range first, ensuring at least some ranges finish
-    * before peers stop responding.
+  /** Remaining keyspace as BigInt. Used by priority dispatching to focus workers on the most-complete range first,
+    * ensuring at least some ranges finish before peers stop responding.
     */
   def remainingKeyspace: BigInt = {
     val nextBig = BigInt(1, next.toArray.padTo(32, 0.toByte))

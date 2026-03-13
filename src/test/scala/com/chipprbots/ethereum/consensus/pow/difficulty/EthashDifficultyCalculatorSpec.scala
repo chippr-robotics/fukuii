@@ -64,10 +64,11 @@ class EthashDifficultyCalculatorSpec extends AnyFlatSpec with Matchers with Scal
     magnetoBlockNumber = 13189133,
     berlinBlockNumber = 13189133,
     mystiqueBlockNumber = 14525000,
-    spiralBlockNumber = 19250000
+    spiralBlockNumber = 19250000,
+    olympiaBlockNumber = Long.MaxValue
   )
 
-  private implicit val blockchainConfig: BlockchainConfig = BlockchainConfig(
+  implicit private val blockchainConfig: BlockchainConfig = BlockchainConfig(
     forkBlockNumbers = etcForkNumbers,
     maxCodeSize = Some(24576),
     customGenesisFileOpt = None,
@@ -160,8 +161,10 @@ class EthashDifficultyCalculatorSpec extends AnyFlatSpec with Matchers with Scal
 
   it should "account for uncles in difficulty adjustment post-Atlantis" taggedAs (UnitTest, ConsensusTest) in {
     // Post-Atlantis (8,772,000), uncle factor affects c coefficient
-    val parentNoUncles = header(number = 10000000, difficulty = BigInt("1000000000000"), timestamp = 1000, hasUncles = false)
-    val parentWithUncles = header(number = 10000000, difficulty = BigInt("1000000000000"), timestamp = 1000, hasUncles = true)
+    val parentNoUncles =
+      header(number = 10000000, difficulty = BigInt("1000000000000"), timestamp = 1000, hasUncles = false)
+    val parentWithUncles =
+      header(number = 10000000, difficulty = BigInt("1000000000000"), timestamp = 1000, hasUncles = true)
     val childTimestamp = 1013L
 
     val diffNoUncles = EthashDifficultyCalculator.calculateDifficulty(10000001, childTimestamp, parentNoUncles)
@@ -173,7 +176,10 @@ class EthashDifficultyCalculatorSpec extends AnyFlatSpec with Matchers with Scal
 
   // ===== DifficultyCalculator Dispatch =====
 
-  "DifficultyCalculator" should "use EthashDifficultyCalculator when no powTargetTime" taggedAs (UnitTest, ConsensusTest) in {
+  "DifficultyCalculator" should "use EthashDifficultyCalculator when no powTargetTime" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
     val parent = header(number = 10000000, difficulty = BigInt("1000000000000"), timestamp = 1000)
     val childTimestamp = 1013L
 

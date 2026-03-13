@@ -16,16 +16,16 @@ import com.chipprbots.ethereum.domain.Account
 
 /** ByteCodeCoordinator manages bytecode download workers.
   *
-  * Now contains ALL business logic previously in ByteCodeDownloader.
-  * This is the sole implementation - no synchronized fallback.
+  * Now contains ALL business logic previously in ByteCodeDownloader. This is the sole implementation - no synchronized
+  * fallback.
   *
   * Responsibilities:
-  * - Maintain queue of pending bytecode download tasks
-  * - Distribute tasks to worker actors
-  * - Verify bytecode hashes match requested hashes
-  * - Store bytecodes to EvmCodeStorage
-  * - Report progress to SNAPSyncController
-  * - Handle worker failures with supervision
+  *   - Maintain queue of pending bytecode download tasks
+  *   - Distribute tasks to worker actors
+  *   - Verify bytecode hashes match requested hashes
+  *   - Store bytecodes to EvmCodeStorage
+  *   - Report progress to SNAPSyncController
+  *   - Handle worker failures with supervision
   *
   * @param evmCodeStorage
   *   Storage for contract bytecodes
@@ -43,7 +43,7 @@ class ByteCodeCoordinator(
     networkPeerManager: ActorRef,
     requestTracker: SNAPRequestTracker,
     batchSize: Int,
-  cooldownConfig: ByteCodeCoordinator.ByteCodePeerCooldownConfig,
+    cooldownConfig: ByteCodeCoordinator.ByteCodePeerCooldownConfig,
     snapSyncController: ActorRef
 ) extends Actor
     with ActorLogging {
@@ -82,7 +82,7 @@ class ByteCodeCoordinator(
 
   // Task management
   private val pendingTasks = mutable.Queue[ByteCodeTask]()
-  private final case class ActiveByteCodeRequest(
+  final private case class ActiveByteCodeRequest(
       task: ByteCodeTask,
       worker: ActorRef,
       peer: Peer,
@@ -97,6 +97,11 @@ class ByteCodeCoordinator(
   private val workers = mutable.ArrayBuffer[ActorRef]()
   private val maxWorkers = 32
   private val idleWorkers = mutable.LinkedHashSet.empty[ActorRef]
+
+  // Sentinel: when true, no more AddByteCodeTasks will arrive (all accounts downloaded).
+  // Completion is only reported after this is set AND pending+active tasks drain.
+  // Geth-aligned: coordinators run from start, tasks arrive inline during account download.
+  private var noMoreTasksExpected: Boolean = false
 
   // Statistics
   private var bytecodesDownloaded: Long = 0
@@ -115,38 +120,36 @@ class ByteCodeCoordinator(
   private def responseBytesTargetFor(peer: Peer): BigInt =
     peerResponseBytesTarget.getOrElseUpdate(peer.id, initialResponseBytes).max(minResponseBytes).min(maxResponseBytes)
 
-  private def adjustResponseBytesTargetOnSuccess(peer: Peer, requested: BigInt, received: BigInt): Unit = {
+  private def adjustResponseBytesTargetOnSuccess(peer: Peer, requested: BigInt, received: BigInt): Unit =
     // If we appear to be filling the current budget, try increasing (up to clamp).
     // This mimics Nethermind's approach of probing larger budgets on responsive peers.
     if (requested > 0 && received * 10 >= requested * 9 && requested < maxResponseBytes) {
       val next = (requested.toDouble * increaseFactor).toLong
       peerResponseBytesTarget.update(peer.id, BigInt(next).min(maxResponseBytes).max(minResponseBytes))
     }
-  }
 
   private def adjustResponseBytesTargetOnFailure(peer: Peer, reason: String): Unit = {
     val cur = responseBytesTargetFor(peer)
     val next = (cur.toDouble * decreaseFactor).toLong
     peerResponseBytesTarget.update(peer.id, BigInt(next).max(minResponseBytes))
-    log.debug(s"Reducing ByteCodes responseBytes target for peer ${peer.id.value}: $cur -> ${peerResponseBytesTarget(peer.id)} ($reason)")
+    log.debug(
+      s"Reducing ByteCodes responseBytes target for peer ${peer.id.value}: $cur -> ${peerResponseBytesTarget(peer.id)} ($reason)"
+    )
   }
 
   private def inFlightForPeer(peer: Peer): Int =
     activeTasks.values.count(_.peer.id == peer.id)
 
-  override def preStart(): Unit = {
+  override def preStart(): Unit =
     log.info("ByteCodeCoordinator starting")
-  }
 
-  override def postStop(): Unit = {
+  override def postStop(): Unit =
     log.info(s"ByteCodeCoordinator stopped. Downloaded $bytecodesDownloaded bytecodes")
-  }
 
   override val supervisorStrategy: SupervisorStrategy =
-    OneForOneStrategy(maxNrOfRetries = 3, withinTimeRange = 1.minute) {
-      case _: Exception =>
-        log.warning("ByteCode worker failed, restarting")
-        Restart
+    OneForOneStrategy(maxNrOfRetries = 3, withinTimeRange = 1.minute) { case _: Exception =>
+      log.warning("ByteCode worker failed, restarting")
+      Restart
     }
 
   override def receive: Receive = {
@@ -157,6 +160,27 @@ class ByteCodeCoordinator(
       val newTasks = ByteCodeTask.createBatchedTasks(filteredHashes, batchSize)
       pendingTasks.enqueueAll(newTasks)
       log.info(s"Queued ${newTasks.size} bytecode tasks from ${filteredHashes.size} unique hashes")
+
+    case AddByteCodeTasks(codeHashes) =>
+      val filtered = filterAndDedupeCodeHashes(codeHashes)
+      if (filtered.nonEmpty) {
+        val newTasks = ByteCodeTask.createBatchedTasks(filtered, batchSize)
+        pendingTasks.enqueueAll(newTasks)
+        log.debug(
+          s"Added ${newTasks.size} bytecode tasks from ${filtered.size} incremental hashes (pending: ${pendingTasks.size})"
+        )
+      }
+
+    case NoMoreByteCodeTasks =>
+      noMoreTasksExpected = true
+      log.info(s"No more bytecode tasks expected. Pending: ${pendingTasks.size}, active: ${activeTasks.size}")
+      checkCompletion()
+
+    case ByteCodePivotRefreshed =>
+      log.info("Pivot refreshed — clearing bytecode peer cooldowns")
+      peerFailureCounts.clear()
+      peerCooldownUntilMillis.clear()
+      peerResponseBytesTarget.clear()
 
     case PeerAvailable(peer) =>
       if (isPeerCoolingDown(peer)) {
@@ -377,7 +401,7 @@ class ByteCodeCoordinator(
     }
   }
 
-  private final case class ValidatedByteCodes(
+  final private case class ValidatedByteCodes(
       matchedHashes: Set[ByteString],
       codesByHashInOrder: Vector[(ByteString, ByteString)]
   )
@@ -385,7 +409,7 @@ class ByteCodeCoordinator(
   private def validateReturnedCodes(
       requestedHashes: Seq[ByteString],
       returnedCodes: Seq[ByteString]
-  ): Either[String, ValidatedByteCodes] = {
+  ): Either[String, ValidatedByteCodes] =
     if (returnedCodes.isEmpty) {
       Right(ValidatedByteCodes(Set.empty, Vector.empty))
     } else {
@@ -408,9 +432,8 @@ class ByteCodeCoordinator(
           seenReturned += rh
 
           // Verify returned hashes form a subsequence of the requested hashes, preserving order.
-          while (reqIdx < requestedHashes.size && requestedHashes(reqIdx) != rh) {
+          while (reqIdx < requestedHashes.size && requestedHashes(reqIdx) != rh)
             reqIdx += 1
-          }
           if (reqIdx >= requestedHashes.size) {
             val sample = rh.take(4).toArray.map("%02x".format(_)).mkString
             error = s"Received bytecode hash not present in requested list or out of order (sample=$sample)"
@@ -425,7 +448,6 @@ class ByteCodeCoordinator(
       if (error != null) Left(error)
       else Right(ValidatedByteCodes(matched.toSet, pairs.result()))
     }
-  }
 
   private def storeBytecodesWithHashes(codesByHash: Seq[(ByteString, ByteString)]): Either[String, Unit] =
     try {
@@ -442,20 +464,21 @@ class ByteCodeCoordinator(
         Left(s"Storage error: ${e.getMessage}")
     }
 
-  private def checkCompletion(): Unit = {
-    if (pendingTasks.isEmpty && activeTasks.isEmpty) {
+  private def checkCompletion(): Unit =
+    if (noMoreTasksExpected && pendingTasks.isEmpty && activeTasks.isEmpty) {
       log.info("Bytecode sync complete!")
       snapSyncController ! SNAPSyncController.ByteCodeSyncComplete
     }
-  }
 
   private def createWorker(): ActorRef = {
     val worker = context.actorOf(
-      ByteCodeWorker.props(
-        coordinator = self,
-        networkPeerManager = networkPeerManager,
-        requestTracker = requestTracker
-      ).withDispatcher("sync-dispatcher")
+      ByteCodeWorker
+        .props(
+          coordinator = self,
+          networkPeerManager = networkPeerManager,
+          requestTracker = requestTracker
+        )
+        .withDispatcher("sync-dispatcher")
     )
     workers += worker
     idleWorkers += worker
@@ -463,16 +486,14 @@ class ByteCodeCoordinator(
     worker
   }
 
-  private def markWorkerIdle(worker: ActorRef): Unit = {
+  private def markWorkerIdle(worker: ActorRef): Unit =
     // Only track workers we created.
     if (workers.contains(worker)) {
       idleWorkers += worker
     }
-  }
 
-  /** Filter and deduplicate codeHashes.
-    * Input is already Bloom-filtered by AccountRangeCoordinator (~0.01% FPR),
-    * so this is a final dedup pass over ~2M entries (not 73.5M). Bug 20 fix.
+  /** Filter and deduplicate codeHashes. Input is already Bloom-filtered by AccountRangeCoordinator (~0.01% FPR), so
+    * this is a final dedup pass over ~2M entries (not 73.5M). Bug 20 fix.
     */
   private def filterAndDedupeCodeHashes(
       codeHashes: Seq[ByteString]

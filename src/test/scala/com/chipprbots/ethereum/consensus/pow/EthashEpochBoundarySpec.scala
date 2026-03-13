@@ -56,7 +56,10 @@ class EthashEpochBoundarySpec extends AnyFlatSpec with Matchers with ScalaCheckP
 
   // ===== Seed Consistency Across Fork =====
 
-  "EthashUtils seed" should "produce consistent seeds within a post-ECIP-1099 epoch" taggedAs (UnitTest, ConsensusTest) in {
+  "EthashUtils seed" should "produce consistent seeds within a post-ECIP-1099 epoch" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
     // All blocks in the same post-fork epoch should share the same seed
     val seedAtFork = seed(ecip1099ForkBlock, ecip1099ForkBlock)
     val seedMidEpoch = seed(ecip1099ForkBlock + 30000, ecip1099ForkBlock)
@@ -93,7 +96,10 @@ class EthashEpochBoundarySpec extends AnyFlatSpec with Matchers with ScalaCheckP
     size0 shouldBe 1073739904L
   }
 
-  it should "produce same DAG size for pre/post fork blocks in equivalent epochs" taggedAs (UnitTest, ConsensusTest) in {
+  it should "produce same DAG size for pre/post fork blocks in equivalent epochs" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
     // Pre-fork epoch 191 and post-fork epoch 191 should use the same DAG
     val preForkEpoch191Block = 191L * 30000 // Block 5,730,000 (pre-fork)
     val postForkEpoch191Block = ecip1099ForkBlock // Block 11,460,000 (post-fork)

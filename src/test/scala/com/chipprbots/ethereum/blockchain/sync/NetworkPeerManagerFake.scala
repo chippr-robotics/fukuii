@@ -64,7 +64,7 @@ class NetworkPeerManagerFake(
   val onPeersConnected: IO[Unit] = peersConnectedDeferred.get
   val pivotBlockSelected: Stream[IO, BlockHeader] = responses
     .collect {
-      case MessageFromPeer(BlockHeaders(Seq(header)), peer) => (header, peer)
+      case MessageFromPeer(BlockHeaders(Seq(header)), peer)          => (header, peer)
       case MessageFromPeer(ETH66.BlockHeaders(_, Seq(header)), peer) => (header, peer)
     }
     .chunkN(peers.size)
@@ -80,23 +80,21 @@ class NetworkPeerManagerFake(
     }
 
   val fetchedHeaders: Stream[IO, Seq[BlockHeader]] = responses.collect {
-    case MessageFromPeer(BlockHeaders(headers), _)
-        if headers.size == syncConfig.blockHeadersPerRequest =>
+    case MessageFromPeer(BlockHeaders(headers), _) if headers.size == syncConfig.blockHeadersPerRequest =>
       headers
-    case MessageFromPeer(ETH66.BlockHeaders(_, headers), _)
-        if headers.size == syncConfig.blockHeadersPerRequest =>
+    case MessageFromPeer(ETH66.BlockHeaders(_, headers), _) if headers.size == syncConfig.blockHeadersPerRequest =>
       headers
   }
   val fetchedBodies: Stream[IO, Seq[BlockBody]] = responses.collect {
-    case MessageFromPeer(BlockBodies(bodies), _)         => bodies
+    case MessageFromPeer(BlockBodies(bodies), _)          => bodies
     case MessageFromPeer(ETH66.BlockBodies(_, bodies), _) => bodies
   }
   val requestedReceipts: Stream[IO, Seq[ByteString]] = requests.collect(
     Function.unlift(msg =>
       msg.message.underlyingMsg match {
-        case GetReceipts(hashes)         => Some(hashes)
+        case GetReceipts(hashes)          => Some(hashes)
         case ETH66.GetReceipts(_, hashes) => Some(hashes)
-        case _                           => None
+        case _                            => None
       }
     )
   )
@@ -112,7 +110,7 @@ class NetworkPeerManagerFake(
     list.items.collect { case RLPValue(bytes) => ByteString(bytes) }
 
   val fetchedState: Stream[IO, Seq[ByteString]] = responses.collect {
-    case MessageFromPeer(NodeData(values), _)             => values
+    case MessageFromPeer(NodeData(values), _)          => values
     case MessageFromPeer(ETH66.NodeData(_, values), _) => rlpListToByteStrings(values)
   }
 
@@ -177,8 +175,7 @@ object NetworkPeerManagerFake {
       else {
         val orderedBlocks = if (reverse) blocks.take(startIndex + 1).reverse else blocks.drop(startIndex)
         val step = (skip + 1).toInt
-        orderedBlocks
-          .zipWithIndex
+        orderedBlocks.zipWithIndex
           .collect { case (block, index) if index % step == 0 => block }
           .take(maxHeaders.toInt)
           .map(_.header)

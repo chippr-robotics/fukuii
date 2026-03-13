@@ -16,7 +16,7 @@ class TestNode extends BaseNode {
 
   override lazy val ioRuntime: IORuntime = IORuntime.global
 
-  override lazy val coinbaseProvider: CoinbaseProvider = 
+  override lazy val coinbaseProvider: CoinbaseProvider =
     new CoinbaseProvider(miningConfig.coinbase)
 
   lazy val testModeComponentsProvider: TestModeComponentsProvider =

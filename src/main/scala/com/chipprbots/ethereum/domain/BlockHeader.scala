@@ -13,6 +13,8 @@ import com.chipprbots.ethereum.rlp.rawDecode
 import com.chipprbots.ethereum.rlp.{encode => rlpEncode}
 import com.chipprbots.ethereum.utils.ByteStringUtils
 
+import BlockHeader.HeaderExtraFields
+import BlockHeader.HeaderExtraFields._
 import BlockHeaderImplicits._
 
 case class BlockHeader(
@@ -30,7 +32,8 @@ case class BlockHeader(
     unixTimestamp: Long,
     extraData: ByteString,
     mixHash: ByteString,
-    nonce: ByteString
+    nonce: ByteString,
+    extraFields: HeaderExtraFields = HeaderExtraFields.HefEmpty
 ) {
 
   def withAdditionalExtraData(additionalBytes: ByteString): BlockHeader =
@@ -38,6 +41,11 @@ case class BlockHeader(
 
   def dropRightNExtraDataBytes(n: Int): BlockHeader =
     copy(extraData = extraData.dropRight(n))
+
+  val baseFee: Option[BigInt] = extraFields match {
+    case HefPostOlympia(fee) => Some(fee)
+    case _                   => None
+  }
 
   def isParentOf(child: BlockHeader): Boolean = number + 1 == child.number && child.parentHash == hash
 
@@ -96,9 +104,22 @@ object BlockHeader {
     val rlpList: RLPList = blockHeader.toRLPEncodable.asInstanceOf[RLPList]
 
     val numberOfPowFields = 2
-    val baseFields = rlpList.items.dropRight(numberOfPowFields)
+    val numberOfExtraFields = blockHeader.extraFields match {
+      case HefPostOlympia(_) => 1 // baseFee
+      case HefEmpty          => 0
+    }
 
-    rlpEncode(RLPList(baseFields: _*))
+    val baseFields = rlpList.items.dropRight(numberOfPowFields + numberOfExtraFields)
+    val extraFieldsEncoded = rlpList.items.takeRight(numberOfExtraFields)
+
+    val rlpItemsWithoutNonce = baseFields ++ extraFieldsEncoded
+    rlpEncode(RLPList(rlpItemsWithoutNonce: _*))
+  }
+
+  sealed trait HeaderExtraFields
+  object HeaderExtraFields {
+    case object HefEmpty extends HeaderExtraFields
+    case class HefPostOlympia(baseFee: BigInt) extends HeaderExtraFields
   }
 }
 
@@ -109,26 +130,51 @@ object BlockHeaderImplicits {
   import com.chipprbots.ethereum.rlp.RLPValue
   import com.chipprbots.ethereum.utils.ByteUtils
 
+  import BlockHeader.HeaderExtraFields._
+
   implicit class BlockHeaderEnc(blockHeader: BlockHeader) extends RLPSerializable {
     override def toRLPEncodable: RLPEncodeable = {
       import blockHeader._
-      RLPList(
-        parentHash.toArray,
-        ommersHash.toArray,
-        beneficiary.toArray,
-        stateRoot.toArray,
-        transactionsRoot.toArray,
-        receiptsRoot.toArray,
-        logsBloom.toArray,
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(difficulty)),
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(number)),
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasLimit)),
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasUsed)),
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(unixTimestamp)),
-        extraData.toArray,
-        mixHash.toArray,
-        nonce.toArray
-      )
+      extraFields match {
+        case HefPostOlympia(bf) =>
+          RLPList(
+            parentHash.toArray,
+            ommersHash.toArray,
+            beneficiary.toArray,
+            stateRoot.toArray,
+            transactionsRoot.toArray,
+            receiptsRoot.toArray,
+            logsBloom.toArray,
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(difficulty)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(number)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasLimit)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasUsed)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(unixTimestamp)),
+            extraData.toArray,
+            mixHash.toArray,
+            nonce.toArray,
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(bf))
+          )
+
+        case HefEmpty =>
+          RLPList(
+            parentHash.toArray,
+            ommersHash.toArray,
+            beneficiary.toArray,
+            stateRoot.toArray,
+            transactionsRoot.toArray,
+            receiptsRoot.toArray,
+            logsBloom.toArray,
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(difficulty)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(number)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasLimit)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasUsed)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(unixTimestamp)),
+            extraData.toArray,
+            mixHash.toArray,
+            nonce.toArray
+          )
+      }
     }
   }
 
@@ -137,8 +183,46 @@ object BlockHeaderImplicits {
   }
 
   implicit class BlockHeaderDec(val rlpEncodeable: RLPEncodeable) extends AnyVal {
-    def toBlockHeader: BlockHeader = {
+    def toBlockHeader: BlockHeader =
       rlpEncodeable match {
+        case RLPList(
+              parentHash,
+              ommersHash,
+              beneficiary,
+              stateRoot,
+              transactionsRoot,
+              receiptsRoot,
+              logsBloom,
+              difficulty,
+              number,
+              gasLimit,
+              gasUsed,
+              unixTimestamp,
+              extraData,
+              mixHash,
+              nonce,
+              encodedBaseFee
+            ) =>
+          val extraFields = HefPostOlympia(bigIntFromEncodeable(encodedBaseFee))
+          BlockHeader(
+            byteStringFromEncodeable(parentHash),
+            byteStringFromEncodeable(ommersHash),
+            byteStringFromEncodeable(beneficiary),
+            byteStringFromEncodeable(stateRoot),
+            byteStringFromEncodeable(transactionsRoot),
+            byteStringFromEncodeable(receiptsRoot),
+            byteStringFromEncodeable(logsBloom),
+            bigIntFromEncodeable(difficulty),
+            bigIntFromEncodeable(number),
+            bigIntFromEncodeable(gasLimit),
+            bigIntFromEncodeable(gasUsed),
+            longFromEncodeable(unixTimestamp),
+            byteStringFromEncodeable(extraData),
+            byteStringFromEncodeable(mixHash),
+            byteStringFromEncodeable(nonce),
+            extraFields
+          )
+
         case RLPList(
               parentHash,
               ommersHash,
@@ -177,6 +261,5 @@ object BlockHeaderImplicits {
         case _ =>
           throw new Exception("BlockHeader cannot be decoded")
       }
-    }
   }
 }

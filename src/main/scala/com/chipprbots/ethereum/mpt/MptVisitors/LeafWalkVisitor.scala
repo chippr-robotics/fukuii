@@ -5,9 +5,8 @@ import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.mpt._
 
-/** Visitor that walks an MPT and invokes a callback for each leaf node.
-  * Does not accumulate results in memory — suitable for walking large tries
-  * (e.g. 85M+ accounts in Ethereum state trie).
+/** Visitor that walks an MPT and invokes a callback for each leaf node. Does not accumulate results in memory —
+  * suitable for walking large tries (e.g. 85M+ accounts in Ethereum state trie).
   *
   * Used by BytecodeRecoveryActor (Bug 20 hardening) to scan for missing bytecodes.
   */
@@ -35,8 +34,7 @@ private class LeafWalkBranchVisitor(storage: MptStorage, onLeaf: LeafNode => Uni
   override def done(): Unit = ()
 }
 
-private class LeafWalkExtensionVisitor(storage: MptStorage, onLeaf: LeafNode => Unit)
-    extends ExtensionVisitor[Unit] {
+private class LeafWalkExtensionVisitor(storage: MptStorage, onLeaf: LeafNode => Unit) extends ExtensionVisitor[Unit] {
   override def visitNext(): MptVisitor[Unit] = new LeafWalkVisitor(storage, onLeaf)
   override def visitNext(value: => Unit): Unit = value // force evaluation
   override def done(): Unit = ()

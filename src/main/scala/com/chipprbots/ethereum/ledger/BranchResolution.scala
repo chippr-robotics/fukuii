@@ -101,7 +101,7 @@ class BranchResolution(blockchainReader: BlockchainReader) extends Logger {
   private def shouldMessReject(
       oldBlocks: List[Block],
       newHeaders: List[BlockHeader]
-  ): Boolean = {
+  ): Boolean =
     messConfig match {
       case Some(config) if oldBlocks.nonEmpty =>
         // Check if MESS is active at the current head block number
@@ -128,7 +128,6 @@ class BranchResolution(blockchainReader: BlockchainReader) extends Logger {
 
       case _ => false
     }
-  }
 
   private def getTopBlocksFromNumber(from: BigInt): List[Block] = {
     val bestBranch = blockchainReader.getBestBranch()

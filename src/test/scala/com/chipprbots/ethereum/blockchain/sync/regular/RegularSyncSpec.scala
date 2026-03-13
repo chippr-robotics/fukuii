@@ -235,13 +235,12 @@ class RegularSyncSpec
 
         peersClient.expectMsgEq(blockHeadersChunkRequest(0))
         peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
-        
+
         // Now expects ETH66 GetBlockBodies with requestId
         // requestId is dynamic (generated per request) so we ignore it with _
         val expectedHashes = testBlocksChunked.head.hashes.toSet
         peersClient.expectMsgPF() {
-          case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) 
-            if hashes.toSet == expectedHashes => ()
+          case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) if hashes.toSet == expectedHashes => ()
         }
         peersClient.reply(PeersClient.Response(defaultPeer, BlockBodies(testBlocksChunked.head.bodies)))
 
@@ -362,7 +361,7 @@ class RegularSyncSpec
             case req @ PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) =>
               handleForkLogic(hashes, req, sender)
           }
-          
+
           private def handleForkLogic(hashes: Seq[ByteString], req: Any, sender: ActorRef): Option[AutoPilot] = {
             val defaultResult = defaultHandlers(sender)(req)
             if (forkedBlocks.nonEmpty && hashes.contains(blocksToRespond.last.hash)) {

@@ -140,7 +140,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     // Test bootstrap message
     val targetBlock = BigInt(1025)
     val bootstrap = StartRegularSyncBootstrap(targetBlock)
-    
+
     bootstrap.targetBlock shouldBe targetBlock
     bootstrap shouldBe a[StartRegularSyncBootstrap]
   }
@@ -174,7 +174,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     // Verify that SNAP sync phases can be converted to state node progress
     // This is tested indirectly through the currentSyncStatus method
     // but we can verify the data structures are compatible
-    
+
     val accountProgress = SyncProgress(
       phase = AccountRangeSync,
       accountsSynced = 1000,
@@ -198,40 +198,40 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
       startTime = System.currentTimeMillis(),
       phaseStartTime = System.currentTimeMillis()
     )
-    
+
     // Verify progress tracking for different phases
     accountProgress.accountsSynced shouldBe 1000
     accountProgress.estimatedTotalAccounts shouldBe 2000
     accountProgress.phase shouldBe AccountRangeSync
-    
+
     // Verify that we can represent state node progress
     // In SNAP sync, state nodes = accounts + bytecodes + storage slots + healed nodes
-    val totalStateNodes = accountProgress.accountsSynced + 
-                         accountProgress.bytecodesDownloaded + 
-                         accountProgress.storageSlotsSynced + 
-                         accountProgress.nodesHealed
-    
+    val totalStateNodes = accountProgress.accountsSynced +
+      accountProgress.bytecodesDownloaded +
+      accountProgress.storageSlotsSynced +
+      accountProgress.nodesHealed
+
     totalStateNodes shouldBe 1000 // Only accounts at this phase
-    
+
     // Test bytecode phase accumulation
     val bytecodeProgress = accountProgress.copy(
       phase = ByteCodeSync,
       bytecodesDownloaded = 500
     )
-    
-    val totalWithBytecodes = bytecodeProgress.accountsSynced + 
-                            bytecodeProgress.bytecodesDownloaded
+
+    val totalWithBytecodes = bytecodeProgress.accountsSynced +
+      bytecodeProgress.bytecodesDownloaded
     totalWithBytecodes shouldBe 1500
-    
+
     // Test storage phase accumulation
     val storageProgress = bytecodeProgress.copy(
       phase = StorageRangeSync,
       storageSlotsSynced = 3000
     )
-    
-    val totalWithStorage = storageProgress.accountsSynced + 
-                          storageProgress.bytecodesDownloaded + 
-                          storageProgress.storageSlotsSynced
+
+    val totalWithStorage = storageProgress.accountsSynced +
+      storageProgress.bytecodesDownloaded +
+      storageProgress.storageSlotsSynced
     totalWithStorage shouldBe 4500
   }
 

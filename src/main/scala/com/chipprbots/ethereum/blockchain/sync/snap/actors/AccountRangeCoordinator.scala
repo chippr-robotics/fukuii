@@ -22,18 +22,18 @@ import com.google.common.hash.{BloomFilter, Funnel, PrimitiveSink}
 
 /** AccountRangeCoordinator manages account range download workers.
   *
-  * Now contains ALL business logic previously in AccountRangeDownloader.
-  * This is the sole implementation - no synchronized fallback.
+  * Now contains ALL business logic previously in AccountRangeDownloader. This is the sole implementation - no
+  * synchronized fallback.
   *
   * Responsibilities:
-  * - Maintain queue of pending account range tasks
-  * - Distribute tasks to worker actors
-  * - Verify Merkle proofs for downloaded accounts
-  * - Store accounts to MPT storage
-  * - Identify contract accounts for bytecode download
-  * - Finalize state trie after completion
-  * - Report progress to SNAPSyncController
-  * - Handle worker failures with supervision
+  *   - Maintain queue of pending account range tasks
+  *   - Distribute tasks to worker actors
+  *   - Verify Merkle proofs for downloaded accounts
+  *   - Store accounts to MPT storage
+  *   - Identify contract accounts for bytecode download
+  *   - Finalize state trie after completion
+  *   - Report progress to SNAPSyncController
+  *   - Handle worker failures with supervision
   *
   * @param stateRoot
   *   State root hash for account sync
@@ -153,8 +153,9 @@ class AccountRangeCoordinator(
   private val (skippedTasks, remainingTasks) = if (resumeProgress.nonEmpty) {
     val resumed = allInitialTasks.map { task =>
       resumeProgress.get(task.last) match {
-        case Some(savedNext) if BigInt(1, savedNext.toArray.padTo(32, 0.toByte)) >=
-            BigInt(1, task.last.toArray.padTo(32, 0.toByte)) =>
+        case Some(savedNext)
+            if BigInt(1, savedNext.toArray.padTo(32, 0.toByte)) >=
+              BigInt(1, task.last.toArray.padTo(32, 0.toByte)) =>
           // Range fully traversed — mark as done
           task.next = task.last
           task.done = true
@@ -211,12 +212,14 @@ class AccountRangeCoordinator(
   // Unique codeHashes for bytecode download — Bloom filter (~4MB) for dedup + temp file for storage.
   // At handoff, reads ~64MB (2M × 32 bytes) instead of the 4.7GB contractAccountsFile (73.5M × 64 bytes).
   // Bug 20 fix: the original ask-based handoff timed out (5s) and OOMed when reading the full file.
-  private implicit object ByteStringFunnel extends Funnel[ByteString] {
+  implicit private object ByteStringFunnel extends Funnel[ByteString] {
     override def funnel(from: ByteString, into: PrimitiveSink): Unit =
       into.putBytes(from.toArray)
   }
   private val codeHashBloom: BloomFilter[ByteString] = BloomFilter.create[ByteString](
-    ByteStringFunnel, 3_000_000, 0.0001 // ~4MB for 3M expected entries at 0.01% FPR
+    ByteStringFunnel,
+    3_000_000,
+    0.0001 // ~4MB for 3M expected entries at 0.01% FPR
   )
   private val uniqueCodeHashesFile: Path = Files.createTempFile("fukuii-unique-codehashes-", ".bin")
   private val uniqueCodeHashesOut = new BufferedOutputStream(new FileOutputStream(uniqueCodeHashesFile.toFile), 65536)
@@ -226,8 +229,8 @@ class AccountRangeCoordinator(
   // without waiting for the next PeerAvailable message.
   private val knownAvailablePeers = mutable.Set[Peer]()
 
-  /** Number of active (non-stateless, non-cooling-down) snap-capable peers.
-    * Used to cap worker count — one worker per peer avoids peer flooding.
+  /** Number of active (non-stateless, non-cooling-down) snap-capable peers. Used to cap worker count — one worker per
+    * peer avoids peer flooding.
     */
   private def activePeerCount: Int =
     knownAvailablePeers.count(p => !isPeerStateless(p) && !isPeerCoolingDown(p)).max(1)
@@ -237,7 +240,8 @@ class AccountRangeCoordinator(
   // on responsive peers, scaling down on failures.
   private val minResponseBytes: BigInt = 50 * 1024 // 50KB floor
   private val maxResponseBytes: BigInt = 2 * 1024 * 1024 // 2MB ceiling (Geth handler limit)
-  private val initialResponseBytes: BigInt = 2 * 1024 * 1024 // Start at max — peers return what they can, adaptive logic adjusts down if needed
+  private val initialResponseBytes: BigInt =
+    2 * 1024 * 1024 // Start at max — peers return what they can, adaptive logic adjusts down if needed
   private val increaseFactor: Double = 1.25 // Scale up when 90%+ fill
   private val decreaseFactor: Double = 0.5 // Scale down on failure/empty
 
@@ -293,7 +297,6 @@ class AccountRangeCoordinator(
   // Internal message for async trie finalization result
   private case class TrieFlushComplete(result: Either[String, Unit])
 
-
   // Deferred-write storage wrapper: makes updateNodesInStorage() a no-op during bulk insertion,
   // keeping all trie nodes in memory. This avoids the per-put collapse (RLP encode + Keccak-256 hash)
   // and database write that was causing insertion to degrade from ~300/s to ~20/s.
@@ -330,13 +333,20 @@ class AccountRangeCoordinator(
     // Note: contractStorageFile is NOT deleted here — the controller reads it asynchronously
     // during storage sync (Bug 20 fix: streaming from file to avoid OOM). The controller
     // deletes it after streaming completes.
-    try { contractAccountsOut.close() } catch { case _: Exception => }
-    try { contractStorageOut.close() } catch { case _: Exception => }
-    try { uniqueCodeHashesOut.close() } catch { case _: Exception => }
-    try { Files.deleteIfExists(contractAccountsFile) } catch { case _: Exception => }
+    try contractAccountsOut.close()
+    catch { case _: Exception => }
+    try contractStorageOut.close()
+    catch { case _: Exception => }
+    try uniqueCodeHashesOut.close()
+    catch { case _: Exception => }
+    try Files.deleteIfExists(contractAccountsFile)
+    catch { case _: Exception => }
     // contractStorageFile intentionally NOT deleted — controller manages its lifecycle
-    try { Files.deleteIfExists(uniqueCodeHashesFile) } catch { case _: Exception => }
-    log.info(s"AccountRangeCoordinator stopped. Downloaded $accountsDownloaded accounts, identified $contractAccountsCount contracts ($uniqueCodeHashesCount unique codeHashes)")
+    // uniqueCodeHashesFile intentionally NOT deleted — controller manages its lifecycle
+    // (needed for accounts-complete recovery across process restarts)
+    log.info(
+      s"AccountRangeCoordinator stopped. Downloaded $accountsDownloaded accounts, identified $contractAccountsCount contracts ($uniqueCodeHashesCount unique codeHashes)"
+    )
   }
 
   /** Collect current task positions and send to controller for resume across restarts. */
@@ -348,16 +358,15 @@ class AccountRangeCoordinator(
 
   // Supervision strategy: Restart worker on failure
   override val supervisorStrategy: SupervisorStrategy =
-    OneForOneStrategy(maxNrOfRetries = 3, withinTimeRange = 1.minute) {
-      case _: Exception =>
-        log.warning("Worker failed, restarting")
-        Restart
+    OneForOneStrategy(maxNrOfRetries = 3, withinTimeRange = 1.minute) { case _: Exception =>
+      log.warning("Worker failed, restarting")
+      Restart
     }
 
   override def receive: Receive = {
     case StartAccountRangeSync(root) =>
       log.info(s"Starting account range sync for state root ${root.take(8).toHex}")
-      // Tasks already initialized in constructor
+    // Tasks already initialized in constructor
 
     case AccountRangeResponseMsg(response) =>
       activeTasks.get(response.requestId) match {
@@ -416,7 +425,7 @@ class AccountRangeCoordinator(
         }
         worker match {
           case Some(w) => dispatchNextTaskToWorker(w, peer)
-          case None => log.debug("No idle workers available")
+          case None    => log.debug("No idle workers available")
         }
       }
 
@@ -431,10 +440,14 @@ class AccountRangeCoordinator(
       sender() ! progress
 
     case GetContractAccounts =>
-      sender() ! ContractAccountsResponse(readContractFile(contractAccountsFile, contractAccountsOut, contractAccountsCount))
+      sender() ! ContractAccountsResponse(
+        readContractFile(contractAccountsFile, contractAccountsOut, contractAccountsCount)
+      )
 
     case GetContractStorageAccounts =>
-      sender() ! ContractStorageAccountsResponse(readContractFile(contractStorageFile, contractStorageOut, contractStorageCount))
+      sender() ! ContractStorageAccountsResponse(
+        readContractFile(contractStorageFile, contractStorageOut, contractStorageCount)
+      )
 
     case GetUniqueCodeHashes =>
       sender() ! UniqueCodeHashesResponse(readUniqueCodeHashes())
@@ -462,7 +475,7 @@ class AccountRangeCoordinator(
         // separate thread to avoid blocking the Pekko dispatcher for 10+ minutes.
         val selfRef = self
         Future {
-          blocking { finalizeTrie() }
+          blocking(finalizeTrie())
         }(scala.concurrent.ExecutionContext.global)
           .onComplete {
             case Success(result) => selfRef ! TrieFlushComplete(result)
@@ -471,9 +484,8 @@ class AccountRangeCoordinator(
       }
   }
 
-  /** Receive state during async trie finalization.
-    * The in-memory trie is being collapsed and written to RocksDB on a background thread.
-    * No message should touch stateTrie or deferredStorage during this phase.
+  /** Receive state during async trie finalization. The in-memory trie is being collapsed and written to RocksDB on a
+    * background thread. No message should touch stateTrie or deferredStorage during this phase.
     */
   private def finalizing: Receive = {
     case TrieFlushComplete(Right(_)) =>
@@ -489,7 +501,7 @@ class AccountRangeCoordinator(
       snapSyncController ! SNAPSyncController.AccountRangeSyncComplete // Still proceed
 
     case _: PeerAvailable =>
-      // Ignore — no more tasks to dispatch during finalization
+    // Ignore — no more tasks to dispatch during finalization
 
     case _: PivotRefreshed =>
       log.info("Ignoring PivotRefreshed during trie finalization")
@@ -498,10 +510,14 @@ class AccountRangeCoordinator(
       sender() ! calculateProgress()
 
     case GetContractAccounts =>
-      sender() ! ContractAccountsResponse(readContractFile(contractAccountsFile, contractAccountsOut, contractAccountsCount))
+      sender() ! ContractAccountsResponse(
+        readContractFile(contractAccountsFile, contractAccountsOut, contractAccountsCount)
+      )
 
     case GetContractStorageAccounts =>
-      sender() ! ContractStorageAccountsResponse(readContractFile(contractStorageFile, contractStorageOut, contractStorageCount))
+      sender() ! ContractStorageAccountsResponse(
+        readContractFile(contractStorageFile, contractStorageOut, contractStorageCount)
+      )
 
     case GetUniqueCodeHashes =>
       sender() ! UniqueCodeHashesResponse(readUniqueCodeHashes())
@@ -511,16 +527,18 @@ class AccountRangeCoordinator(
       sender() ! StorageFileInfoResponse(contractStorageFile, contractStorageCount)
 
     case CheckCompletion =>
-      // Already finalizing, ignore
+    // Already finalizing, ignore
   }
 
   private def createWorker(): ActorRef = {
     val worker = context.actorOf(
-      AccountRangeWorker.props(
-        coordinator = self,
-        networkPeerManager = networkPeerManager,
-        requestTracker = requestTracker
-      ).withDispatcher("sync-dispatcher")
+      AccountRangeWorker
+        .props(
+          coordinator = self,
+          networkPeerManager = networkPeerManager,
+          requestTracker = requestTracker
+        )
+        .withDispatcher("sync-dispatcher")
     )
     workers += worker
     log.debug(s"Created worker ${worker.path.name}, total workers: ${workers.size}")
@@ -555,11 +573,13 @@ class AccountRangeCoordinator(
   private def handleTaskComplete(
       requestId: BigInt,
       result: Either[String, (Int, Seq[(ByteString, Account)], Seq[ByteString])]
-  ): Unit = {
+  ): Unit =
     activeTasks.remove(requestId).foreach { case (task, worker, peer) =>
       result match {
         case Right((accountCount, accounts, _)) =>
-          log.info(s"Task completed successfully: $accountCount accounts (responseBytes=${responseBytesTargetFor(peer)})")
+          log.info(
+            s"Task completed successfully: $accountCount accounts (responseBytes=${responseBytesTargetFor(peer)})"
+          )
 
           // Adjust adaptive byte budget — estimate received bytes from account count
           val estimatedBytes = BigInt(accountCount * 100) // ~100 bytes per account (hash + RLP)
@@ -598,7 +618,6 @@ class AccountRangeCoordinator(
           pendingTasks.enqueue(task)
       }
     }
-  }
 
   private def updateTaskProgress(task: AccountTask, accounts: Seq[(ByteString, Account)]): Boolean = {
     // If the peer returns no accounts for this segment, we assume the remainder of the interval is empty.
@@ -713,10 +732,9 @@ class AccountRangeCoordinator(
     }
   }
 
-  /** Handle a chunk of account storage, inserting a batch into the in-memory trie and yielding
-    * back to the actor mailbox between chunks. With DeferredWriteMptStorage, puts are purely
-    * in-memory (no collapse, no encoding, no hashing, no DB writes). The trie is flushed to
-    * RocksDB in a single batch when all chunks for a response are done.
+  /** Handle a chunk of account storage, inserting a batch into the in-memory trie and yielding back to the actor
+    * mailbox between chunks. With DeferredWriteMptStorage, puts are purely in-memory (no collapse, no encoding, no
+    * hashing, no DB writes). The trie is flushed to RocksDB in a single batch when all chunks for a response are done.
     */
   private def handleStoreAccountChunk(
       task: AccountTask,
@@ -794,18 +812,16 @@ class AccountRangeCoordinator(
     }
   }
 
-  /** Flush all in-memory trie nodes to RocksDB in a single batch.
-    * This collapses the entire in-memory trie (RLP-encode + Keccak-256 hash all nodes),
-    * then writes everything to RocksDB via one WriteBatch. After flush, the trie is rebuilt
-    * from the persisted root hash so old in-memory nodes can be garbage collected.
+  /** Flush all in-memory trie nodes to RocksDB in a single batch. This collapses the entire in-memory trie (RLP-encode
+    * + Keccak-256 hash all nodes), then writes everything to RocksDB via one WriteBatch. After flush, the trie is
+    * rebuilt from the persisted root hash so old in-memory nodes can be garbage collected.
     */
-  private def flushTrieToStorage(): Unit = {
+  private def flushTrieToStorage(): Unit =
     deferredStorage.flush().foreach { rootHash =>
       import com.chipprbots.ethereum.mpt.byteStringSerializer
       stateTrie = MerklePatriciaTrie[ByteString, Account](rootHash, deferredStorage)
       log.info(s"Flushed trie to storage, root=${rootHash.take(8).map("%02x".format(_)).mkString}...")
     }
-  }
 
   /** Identify contract accounts (those with non-empty code hash)
     *
@@ -813,13 +829,17 @@ class AccountRangeCoordinator(
     *   Accounts to scan for contracts
     */
   private def identifyContractAccounts(accounts: Seq[(ByteString, Account)]): Unit = {
+    val emptyRoot = ByteString(MerklePatriciaTrie.EmptyRootHash)
+    val newCodeHashes = mutable.ArrayBuffer.empty[ByteString]
+    val newStorageTasks = mutable.ArrayBuffer.empty[StorageTask]
     var count = 0
+
     accounts.foreach { case (accountHash, account) =>
       if (account.codeHash != Account.EmptyCodeHash) {
-        // Write 32-byte accountHash + 32-byte codeHash to bytecode file
+        // Write 32-byte accountHash + 32-byte codeHash to bytecode file (crash recovery)
         contractAccountsOut.write(accountHash.toArray.padTo(32, 0.toByte), 0, 32)
         contractAccountsOut.write(account.codeHash.toArray.padTo(32, 0.toByte), 0, 32)
-        // Write 32-byte accountHash + 32-byte storageRoot to storage file
+        // Write 32-byte accountHash + 32-byte storageRoot to storage file (crash recovery)
         contractStorageOut.write(accountHash.toArray.padTo(32, 0.toByte), 0, 32)
         contractStorageOut.write(account.storageRoot.toArray.padTo(32, 0.toByte), 0, 32)
         count += 1
@@ -831,13 +851,35 @@ class AccountRangeCoordinator(
           codeHashBloom.put(account.codeHash)
           uniqueCodeHashesOut.write(account.codeHash.toArray.padTo(32, 0.toByte), 0, 32)
           uniqueCodeHashesCount += 1
+          newCodeHashes += account.codeHash
+        }
+
+        // Collect storage task for inline dispatch (skip contracts with empty storage)
+        if (account.storageRoot.nonEmpty && account.storageRoot != emptyRoot) {
+          newStorageTasks += StorageTask.createStorageTask(accountHash, account.storageRoot)
         }
       }
     }
+
     if (count > 0) {
       contractAccountsCount += count
       contractStorageCount += count
-      log.info(s"Identified $count contract accounts (total: $contractAccountsCount, unique codeHashes: $uniqueCodeHashesCount)")
+      // Flush file streams (crash recovery path)
+      contractAccountsOut.flush()
+      contractStorageOut.flush()
+      uniqueCodeHashesOut.flush()
+      log.info(
+        s"Identified $count contract accounts (total: $contractAccountsCount, unique codeHashes: $uniqueCodeHashesCount)"
+      )
+    }
+
+    // Geth-aligned: dispatch contract data inline to controller → bytecode/storage coordinators.
+    // This eliminates the 6+ minute gap between account completion and first storage/bytecode request.
+    if (newCodeHashes.nonEmpty || newStorageTasks.nonEmpty) {
+      snapSyncController ! SNAPSyncController.IncrementalContractData(
+        newCodeHashes.toSeq,
+        newStorageTasks.toSeq
+      )
     }
   }
 
@@ -858,10 +900,12 @@ class AccountRangeCoordinator(
 
       // After pivot refresh(es), root mismatch is expected — the healing phase
       // will reconcile. Only fail on root mismatch if NO pivot refresh occurred.
-      if (!pivotWasRefreshed &&
-          stateRoot.nonEmpty &&
-          stateRoot != ByteString(MerklePatriciaTrie.EmptyRootHash) &&
-          currentRootHash != stateRoot) {
+      if (
+        !pivotWasRefreshed &&
+        stateRoot.nonEmpty &&
+        stateRoot != ByteString(MerklePatriciaTrie.EmptyRootHash) &&
+        currentRootHash != stateRoot
+      ) {
         val expected = stateRoot.take(8).toArray.map("%02x".format(_)).mkString
         val actual = currentRootHash.take(8).toArray.map("%02x".format(_)).mkString
         Left(s"Root mismatch: expected=$expected..., actual=$actual...")
@@ -883,15 +927,17 @@ class AccountRangeCoordinator(
     * @return
     *   Current state root hash
     */
-  def getStateRoot: ByteString = {
+  def getStateRoot: ByteString =
     ByteString(stateTrie.getRootHash)
-  }
 
-  /** Read all contract account entries from a temporary file.
-    * Each entry is 64 bytes: 32-byte key + 32-byte value.
+  /** Read all contract account entries from a temporary file. Each entry is 64 bytes: 32-byte key + 32-byte value.
     * Flushes the output stream first to ensure all data is written.
     */
-  private def readContractFile(filePath: Path, out: BufferedOutputStream, count: Long): Seq[(ByteString, ByteString)] = {
+  private def readContractFile(
+      filePath: Path,
+      out: BufferedOutputStream,
+      count: Long
+  ): Seq[(ByteString, ByteString)] = {
     out.flush()
     if (count == 0) return Seq.empty
     val raf = new RandomAccessFile(filePath.toFile, "r")
@@ -907,13 +953,11 @@ class AccountRangeCoordinator(
         i += 1
       }
       result.toSeq
-    } finally {
-      raf.close()
-    }
+    } finally raf.close()
   }
 
-  /** Read unique codeHashes from the Bloom-filtered temp file.
-    * Each entry is 32 bytes. File size is ~64MB for ~2M unique hashes (vs 4.7GB for 73.5M raw entries).
+  /** Read unique codeHashes from the Bloom-filtered temp file. Each entry is 32 bytes. File size is ~64MB for ~2M
+    * unique hashes (vs 4.7GB for 73.5M raw entries).
     */
   private def readUniqueCodeHashes(): Seq[ByteString] = {
     uniqueCodeHashesOut.flush()
@@ -929,9 +973,7 @@ class AccountRangeCoordinator(
         i += 1
       }
       result.toSeq
-    } finally {
-      raf.close()
-    }
+    } finally raf.close()
   }
 
   private def calculateProgress(): AccountRangeStats = {
@@ -951,13 +993,11 @@ class AccountRangeCoordinator(
     )
   }
 
-  private def isComplete: Boolean = {
+  private def isComplete: Boolean =
     pendingTasks.isEmpty && activeTasks.isEmpty
-  }
 
-  /** Estimate total accounts from keyspace coverage.
-    * Uses completed tasks' ranges to compute keyspace density (accounts per unit of keyspace),
-    * then extrapolates to the full 2^256 space. Only considers tasks that have actually been
+  /** Estimate total accounts from keyspace coverage. Uses completed tasks' ranges to compute keyspace density (accounts
+    * per unit of keyspace), then extrapolates to the full 2^256 space. Only considers tasks that have actually been
     * explored, avoiding inflation from un-dispatched chunks.
     */
   private def computeKeyspaceEstimate(): Option[Long] = {

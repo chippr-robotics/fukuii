@@ -15,6 +15,9 @@ import com.chipprbots.ethereum.utils.ByteUtils.or
 
 object StdBlockValidator extends BlockValidator {
 
+  /** EIP-7934: Max RLP-encoded block size (10 MiB - 2 MiB safety margin). */
+  val BlockRLPSizeCap: Long = 10L * 1024 * 1024 - 2L * 1024 * 1024 // 8,388,608
+
   /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.transactionsRoot]] matches [[BlockBody.transactionList]]
     * based on validations stated in section 4.4.2 of http://paper.gavwood.com/
     *
@@ -81,10 +84,24 @@ object StdBlockValidator extends BlockValidator {
     else Left(BlockLogBloomError)
   }
 
+  /** EIP-7934: Validates that the RLP-encoded block size does not exceed the cap.
+    *
+    * @param block
+    *   Block to validate
+    * @return
+    *   Block if valid, BlockRLPSizeError otherwise
+    */
+  private def validateBlockRLPSize(block: Block): Either[BlockError, BlockValid] = {
+    val size = Block.size(block)
+    if (size <= BlockRLPSizeCap) Right(BlockValid)
+    else Left(BlockRLPSizeError(size, BlockRLPSizeCap))
+  }
+
   /** This method allows validate a Block. It only performs the following validations (stated on section 4.4.2 of
     * http://paper.gavwood.com/):
     *   - BlockValidator.validateTransactionRoot
     *   - BlockValidator.validateOmmersHash
+    *   - BlockValidator.validateBlockRLPSize (EIP-7934)
     *   - BlockValidator.validateReceipts
     *   - BlockValidator.validateLogBloom
     *
@@ -115,6 +132,7 @@ object StdBlockValidator extends BlockValidator {
     for {
       _ <- validateTransactionRoot(block)
       _ <- validateOmmersHash(block)
+      _ <- validateBlockRLPSize(block)
     } yield BlockValid
   }
 
@@ -145,6 +163,8 @@ object StdBlockValidator extends BlockValidator {
   case object BlockReceiptsHashError extends BlockError
 
   case object BlockLogBloomError extends BlockError
+
+  case class BlockRLPSizeError(size: Long, cap: Long) extends BlockError
 
   sealed trait BlockValid
 

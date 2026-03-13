@@ -24,7 +24,10 @@ import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockBodies => Eth62BlockBodies}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockBodies => Eth66BlockBodies, GetBlockBodies => Eth66GetBlockBodies}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{
+  BlockBodies => Eth66BlockBodies,
+  GetBlockBodies => Eth66GetBlockBodies
+}
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 class BodiesFetcher(
@@ -46,7 +49,12 @@ class BodiesFetcher(
   override def onMessage(message: Command): Behavior[Command] =
     message match {
       case FetchBodies(hashes, triedPeers, retryCount) =>
-        log.debug("Start fetching bodies for {} hashes (tried: {}, retry: {})", hashes.size, triedPeers.size, retryCount)
+        log.debug(
+          "Start fetching bodies for {} hashes (tried: {}, retry: {})",
+          hashes.size,
+          triedPeers.size,
+          retryCount
+        )
         if (hashes.isEmpty) {
           log.warn("FetchBodies called with empty hashes list")
         }

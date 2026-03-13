@@ -70,7 +70,8 @@ cat > /opt/fukuii/chains/myenterprise-chain.conf << 'EOF'
   magneto-block-number = "0"
   mystique-block-number = "0"
   spiral-block-number = "0"
-  
+  olympia-block-number = "0"
+
   # Enable ETH-specific forks for maximum compatibility
   muir-glacier-block-number = "0"
   berlin-block-number = "0"

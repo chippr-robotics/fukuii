@@ -159,7 +159,10 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
   val qaService: QAService = mock[QAService]
   val fukuiiService: FukuiiService = mock[FukuiiService]
   val mcpService: McpService = new McpService(
-    TestProbe().ref, TestProbe().ref, null, null,
+    TestProbe().ref,
+    TestProbe().ref,
+    null,
+    null,
     new java.util.concurrent.atomic.AtomicReference[com.chipprbots.ethereum.utils.NodeStatus](),
     null
   )(scala.concurrent.ExecutionContext.global)

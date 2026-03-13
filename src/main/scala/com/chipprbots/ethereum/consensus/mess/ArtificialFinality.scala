@@ -6,15 +6,8 @@ package com.chipprbots.ethereum.consensus.mess
   * polynomial to compute an "antigravity" multiplier (1x-31x) based on time since common ancestor. Reorgs under ~200s
   * are unaffected; peaks at ~7 hours (31x TD required).
   *
-  * Polynomial: {{{
-  * def get_curve_function_numerator(x):
-  *     xcap = 25132
-  *     ampl = 15
-  *     height = 128 * (ampl * 2)
-  *     if x > xcap:
-  *         x = xcap
-  *     return 128 + (3 * x**2 - 2 * x**3 // xcap) * height // xcap ** 2
-  * }}}
+  * Polynomial: {{{ def get_curve_function_numerator(x): xcap = 25132 ampl = 15 height = 128 * (ampl * 2) if x > xcap: x
+  * \= xcap return 128 + (3 * x**2 - 2 * x**3 // xcap) * height // xcap ** 2 }}}
   *
   * Activation/deactivation blocks:
   *   - ETC mainnet: activated 11,380,000, deactivated 19,250,000 (Spiral)

@@ -25,9 +25,8 @@ class McpServiceSpec
     with Matchers
     with BeforeAndAfterAll {
 
-  override def afterAll(): Unit = {
+  override def afterAll(): Unit =
     TestKit.shutdownActorSystem(system)
-  }
 
   implicit val timeout: Timeout = Timeout(3.seconds)
   implicit val ec: scala.concurrent.ExecutionContext = scala.concurrent.ExecutionContext.global
@@ -43,7 +42,8 @@ class McpServiceSpec
     customGenesisFileOpt = None,
     customGenesisJsonOpt = None,
     accountStartNonce = com.chipprbots.ethereum.domain.UInt256.Zero,
-    monetaryPolicyConfig = MonetaryPolicyConfig(5000000, 0.2, BigInt("5000000000000000000"), BigInt("4000000000000000000")),
+    monetaryPolicyConfig =
+      MonetaryPolicyConfig(5000000, 0.2, BigInt("5000000000000000000"), BigInt("4000000000000000000")),
     daoForkConfig = None,
     bootstrapNodes = Set(),
     gasTieBreaker = false,
@@ -82,7 +82,7 @@ class McpServiceSpec
       response.isRight shouldBe true
       val result = response.getOrElse(throw new Exception("Expected Right"))
       result.tools.length should be >= 5
-      result.tools.map(_.name) should contain allOf (
+      (result.tools.map(_.name) should contain).allOf(
         "mcp_node_status",
         "mcp_node_info",
         "mcp_blockchain_info",
@@ -118,7 +118,7 @@ class McpServiceSpec
       response.isRight shouldBe true
       val result = response.getOrElse(throw new Exception("Expected Right"))
       result.resources.length should be >= 5
-      result.resources.map(_.uri) should contain allOf (
+      (result.resources.map(_.uri) should contain).allOf(
         "fukuii://node/status",
         "fukuii://node/config",
         "fukuii://blockchain/latest",
@@ -141,7 +141,7 @@ class McpServiceSpec
       response.isRight shouldBe true
       val result = response.getOrElse(throw new Exception("Expected Right"))
       result.prompts.length should be >= 3
-      result.prompts.map(_.name) should contain allOf (
+      (result.prompts.map(_.name) should contain).allOf(
         "mcp_node_health_check",
         "mcp_sync_troubleshooting",
         "mcp_peer_management"

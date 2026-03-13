@@ -47,9 +47,8 @@ final class PivotHeaderBootstrap(
 
   implicit private val timeout: Timeout = syncConfig.peerResponseTimeout + 2.seconds
 
-  override def preStart(): Unit = {
+  override def preStart(): Unit =
     self ! Fetch
-  }
 
   override def receive: Receive = {
     case Fetch =>
@@ -68,9 +67,7 @@ final class PivotHeaderBootstrap(
       } catch {
         case t: Throwable =>
           context.parent ! Failed(s"failed storing pivot header $targetBlock: ${t.getMessage}")
-      } finally {
-        context.stop(self)
-      }
+      } finally context.stop(self)
 
     case Retry(reason) =>
       log.warning(
@@ -91,27 +88,29 @@ final class PivotHeaderBootstrap(
     // ETH66.GetBlockHeaders is already MessageSerializable, so the serializer is identity.
     val req = Request[ETH66.GetBlockHeaders](msg, BestPeer, (m: ETH66.GetBlockHeaders) => m)
 
-    (peersClient ? req).map {
-      case PeersClient.Response(_, eth66: ETH66BlockHeaders) =>
-        eth66.headers.headOption
-      case PeersClient.Response(_, eth62: ETH62.BlockHeaders) =>
-        eth62.headers.headOption
-      case NoSuitablePeer =>
-        None
-      case RequestFailed(_, reason) =>
-        log.warning("Pivot header request failed: {}", reason)
-        None
-      case other =>
-        log.debug("Unexpected pivot header response: {}", other)
-        None
-    }.foreach {
-      case Some(header) if header.number == targetBlock =>
-        self ! Fetched(header)
-      case Some(header) =>
-        self ! Retry(s"received header number ${header.number} != target $targetBlock")
-      case None =>
-        self ! Retry("no header returned")
-    }
+    (peersClient ? req)
+      .map {
+        case PeersClient.Response(_, eth66: ETH66BlockHeaders) =>
+          eth66.headers.headOption
+        case PeersClient.Response(_, eth62: ETH62.BlockHeaders) =>
+          eth62.headers.headOption
+        case NoSuitablePeer =>
+          None
+        case RequestFailed(_, reason) =>
+          log.warning("Pivot header request failed: {}", reason)
+          None
+        case other =>
+          log.debug("Unexpected pivot header response: {}", other)
+          None
+      }
+      .foreach {
+        case Some(header) if header.number == targetBlock =>
+          self ! Fetched(header)
+        case Some(header) =>
+          self ! Retry(s"received header number ${header.number} != target $targetBlock")
+        case None =>
+          self ! Retry("no header returned")
+      }
   }
 }
 
@@ -126,11 +125,22 @@ object PivotHeaderBootstrap {
       initialRetryDelay: FiniteDuration = 2.seconds,
       maxRetryDelay: FiniteDuration = 15.seconds
   )(implicit ec: ExecutionContext): Props =
-    Props(new PivotHeaderBootstrap(peersClient, blockchainWriter, targetBlock, syncConfig, scheduler, maxAttempts, initialRetryDelay, maxRetryDelay))
+    Props(
+      new PivotHeaderBootstrap(
+        peersClient,
+        blockchainWriter,
+        targetBlock,
+        syncConfig,
+        scheduler,
+        maxAttempts,
+        initialRetryDelay,
+        maxRetryDelay
+      )
+    )
 
   private case object Fetch
-  private final case class Retry(reason: String)
-  private final case class Fetched(header: BlockHeader)
+  final private case class Retry(reason: String)
+  final private case class Fetched(header: BlockHeader)
 
   final case class Completed(targetBlock: BigInt, header: BlockHeader)
   final case class Failed(reason: String)

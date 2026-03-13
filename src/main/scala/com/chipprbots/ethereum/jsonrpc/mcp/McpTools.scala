@@ -24,16 +24,19 @@ import com.chipprbots.ethereum.utils.ByteStringUtils
 
 import AkkaTaskOps._
 
-private implicit val formats: org.json4s.Formats = DefaultFormats
+implicit private val formats: org.json4s.Formats = DefaultFormats
 
 // --- Status Tools (replace stubs) ---
 
 object NodeInfoTool {
   val name = "mcp_node_info"
-  val description = Some("Get detailed information about the Fukuii ETC node including version, network, and build info")
+  val description = Some(
+    "Get detailed information about the Fukuii ETC node including version, network, and build info"
+  )
 
   def execute(deps: McpDependencies): IO[String] = {
-    val networkName = if (deps.blockchainConfig.chainId == BigInt(61)) "ETC Mainnet"
+    val networkName =
+      if (deps.blockchainConfig.chainId == BigInt(61)) "ETC Mainnet"
       else if (deps.blockchainConfig.chainId == BigInt(63)) "Mordor Testnet"
       else s"Chain ${deps.blockchainConfig.chainId}"
     IO.pure(s"""Fukuii Node Information:
@@ -50,7 +53,9 @@ object NodeInfoTool {
 
 object NodeStatusTool {
   val name = "mcp_node_status"
-  val description = Some("Get the current status of the Fukuii node including sync state, peer count, and block numbers")
+  val description = Some(
+    "Get the current status of the Fukuii node including sync state, peer count, and block numbers"
+  )
 
   def execute(deps: McpDependencies)(implicit timeout: Timeout, ec: ExecutionContext): IO[String] = {
     val syncStatusIO = deps.syncController.askFor[SyncProtocol.Status](SyncProtocol.GetStatus)
@@ -65,9 +70,10 @@ object NodeStatusTool {
       val handshakedCount = peers.handshaked.size
       val (syncState, progress) = syncStatus match {
         case SyncProtocol.Status.Syncing(start, blocks, stateNodes) =>
-          val pct = if (blocks.target > 0) f"${(blocks.current.toDouble / blocks.target.toDouble * 100)}%.1f%%" else "N/A"
+          val pct =
+            if (blocks.target > 0) f"${(blocks.current.toDouble / blocks.target.toDouble * 100)}%.1f%%" else "N/A"
           (s"Syncing (from block $start)", s"Block ${blocks.current}/${blocks.target} ($pct)")
-        case SyncProtocol.Status.SyncDone => ("Synced", "Complete")
+        case SyncProtocol.Status.SyncDone   => ("Synced", "Complete")
         case SyncProtocol.Status.NotSyncing => ("Not syncing", "N/A")
       }
       s"""Node Status:
@@ -82,18 +88,27 @@ object NodeStatusTool {
 
 object BlockchainInfoTool {
   val name = "mcp_blockchain_info"
-  val description = Some("Get information about the blockchain state including best block, total difficulty, and genesis hash")
+  val description = Some(
+    "Get information about the blockchain state including best block, total difficulty, and genesis hash"
+  )
 
   def execute(deps: McpDependencies): IO[String] = IO {
     val bestBlockNum = deps.blockchainReader.getBestBlockNumber()
     val bestBlock = deps.blockchainReader.getBestBlock()
     val bestHash = bestBlock.map(b => ByteStringUtils.hash2string(b.header.hash)).getOrElse("unknown")
-    val td = bestBlock.flatMap(b => deps.blockchainReader.getChainWeightByHash(b.header.hash))
-      .map(_.totalDifficulty.toString).getOrElse("unknown")
-    val genesisHash = deps.blockchainReader.getBlockHeaderByNumber(0)
-      .map(h => ByteStringUtils.hash2string(h.hash)).getOrElse("unknown")
+    val td = bestBlock
+      .flatMap(b => deps.blockchainReader.getChainWeightByHash(b.header.hash))
+      .map(_.totalDifficulty.toString)
+      .getOrElse("unknown")
+    val genesisHash = deps.blockchainReader
+      .getBlockHeaderByNumber(0)
+      .map(h => ByteStringUtils.hash2string(h.hash))
+      .getOrElse("unknown")
     s"""Blockchain Information:
-      |  Network: ${if (deps.blockchainConfig.chainId == BigInt(61)) "Ethereum Classic (ETC)" else s"Chain ${deps.blockchainConfig.chainId}"}
+      |  Network: ${
+        if (deps.blockchainConfig.chainId == BigInt(61)) "Ethereum Classic (ETC)"
+        else s"Chain ${deps.blockchainConfig.chainId}"
+      }
       |  Best Block Number: $bestBlockNum
       |  Best Block Hash: $bestHash
       |  Chain ID: ${deps.blockchainConfig.chainId}
@@ -106,19 +121,22 @@ object SyncStatusTool {
   val name = "mcp_sync_status"
   val description = Some("Get detailed synchronization status including mode, progress, and remaining blocks")
 
-  def execute(deps: McpDependencies)(implicit timeout: Timeout, ec: ExecutionContext): IO[String] = {
-    deps.syncController.askFor[SyncProtocol.Status](SyncProtocol.GetStatus).recover {
-      case _ => SyncProtocol.Status.NotSyncing
-    }.map { status =>
-      val bestBlock = deps.blockchainReader.getBestBlockNumber()
-      status match {
-        case SyncProtocol.Status.Syncing(start, blocks, stateNodes) =>
-          val remaining = blocks.target - blocks.current
-          val pct = if (blocks.target > 0) f"${(blocks.current.toDouble / blocks.target.toDouble * 100)}%.1f%%" else "N/A"
-          val stateInfo = stateNodes.filter(_.nonEmpty).map(s =>
-            s"\n  State Nodes: ${s.current}/${s.target}"
-          ).getOrElse("")
-          s"""Sync Status:
+  def execute(deps: McpDependencies)(implicit timeout: Timeout, ec: ExecutionContext): IO[String] =
+    deps.syncController
+      .askFor[SyncProtocol.Status](SyncProtocol.GetStatus)
+      .recover { case _ =>
+        SyncProtocol.Status.NotSyncing
+      }
+      .map { status =>
+        val bestBlock = deps.blockchainReader.getBestBlockNumber()
+        status match {
+          case SyncProtocol.Status.Syncing(start, blocks, stateNodes) =>
+            val remaining = blocks.target - blocks.current
+            val pct =
+              if (blocks.target > 0) f"${(blocks.current.toDouble / blocks.target.toDouble * 100)}%.1f%%" else "N/A"
+            val stateInfo =
+              stateNodes.filter(_.nonEmpty).map(s => s"\n  State Nodes: ${s.current}/${s.target}").getOrElse("")
+            s"""Sync Status:
             |  Mode: Fast/SNAP Sync
             |  Syncing: true
             |  Starting Block: $start
@@ -126,71 +144,74 @@ object SyncStatusTool {
             |  Target Block: ${blocks.target}
             |  Remaining Blocks: $remaining
             |  Progress: $pct$stateInfo""".stripMargin
-        case SyncProtocol.Status.SyncDone =>
-          s"""Sync Status:
+          case SyncProtocol.Status.SyncDone =>
+            s"""Sync Status:
             |  Mode: Regular Sync
             |  Syncing: false
             |  Best Block: $bestBlock
             |  Status: Fully synced""".stripMargin
-        case SyncProtocol.Status.NotSyncing =>
-          s"""Sync Status:
+          case SyncProtocol.Status.NotSyncing =>
+            s"""Sync Status:
             |  Mode: Not syncing
             |  Syncing: false
             |  Best Block: $bestBlock
             |  Status: Idle""".stripMargin
+        }
       }
-    }
-  }
 }
 
 object PeerListTool {
   val name = "mcp_peer_list"
   val description = Some("List all connected peers with their addresses, status, and connection direction")
 
-  def execute(deps: McpDependencies)(implicit timeout: Timeout, ec: ExecutionContext): IO[String] = {
-    deps.peerManager.askFor[PeerManagerActor.Peers](PeerManagerActor.GetPeers).recover {
-      case _ => PeerManagerActor.Peers(Map.empty)
-    }.map { peers =>
-      if (peers.peers.isEmpty) {
-        "Connected Peers: 0\n  No peers connected."
-      } else {
-        val peerLines = peers.peers.toList.sortBy(_._1.id.value).map { case (peer, status) =>
-          val direction = if (peer.incomingConnection) "inbound" else "outbound"
-          val addr = peer.remoteAddress.toString
-          val statusStr = status match {
-            case com.chipprbots.ethereum.network.PeerActor.Status.Handshaked => "handshaked"
-            case com.chipprbots.ethereum.network.PeerActor.Status.Connecting => "connecting"
-            case com.chipprbots.ethereum.network.PeerActor.Status.Disconnected => "disconnected"
-            case s: com.chipprbots.ethereum.network.PeerActor.Status.Handshaking => s"handshaking (retry ${s.numRetries})"
-            case _ => "idle"
-          }
-          s"  ${peer.id.value}: $addr ($direction, $statusStr)"
-        }
-        s"Connected Peers: ${peers.peers.size}\n${peerLines.mkString("\n")}"
+  def execute(deps: McpDependencies)(implicit timeout: Timeout, ec: ExecutionContext): IO[String] =
+    deps.peerManager
+      .askFor[PeerManagerActor.Peers](PeerManagerActor.GetPeers)
+      .recover { case _ =>
+        PeerManagerActor.Peers(Map.empty)
       }
-    }
-  }
+      .map { peers =>
+        if (peers.peers.isEmpty) {
+          "Connected Peers: 0\n  No peers connected."
+        } else {
+          val peerLines = peers.peers.toList.sortBy(_._1.id.value).map { case (peer, status) =>
+            val direction = if (peer.incomingConnection) "inbound" else "outbound"
+            val addr = peer.remoteAddress.toString
+            val statusStr = status match {
+              case com.chipprbots.ethereum.network.PeerActor.Status.Handshaked   => "handshaked"
+              case com.chipprbots.ethereum.network.PeerActor.Status.Connecting   => "connecting"
+              case com.chipprbots.ethereum.network.PeerActor.Status.Disconnected => "disconnected"
+              case s: com.chipprbots.ethereum.network.PeerActor.Status.Handshaking =>
+                s"handshaking (retry ${s.numRetries})"
+              case _ => "idle"
+            }
+            s"  ${peer.id.value}: $addr ($direction, $statusStr)"
+          }
+          s"Connected Peers: ${peers.peers.size}\n${peerLines.mkString("\n")}"
+        }
+      }
 }
 
 object SetEtherbaseTool {
   val name = "mcp_etherbase_info"
-  val description = Some("Get information about setting the etherbase (coinbase) address for mining rewards via JSON-RPC")
+  val description = Some(
+    "Get information about setting the etherbase (coinbase) address for mining rewards via JSON-RPC"
+  )
 
-  def execute(): IO[String] = {
+  def execute(): IO[String] =
     IO.pure(s"""Etherbase (Coinbase) Configuration:
       |  Method: eth_setEtherbase
       |  Description: Sets the coinbase address for mining rewards
       |  Usage: Send JSON-RPC request with method "eth_setEtherbase" and address parameter
       |  Example: {"jsonrpc":"2.0","method":"eth_setEtherbase","params":["0x1234..."],"id":1}
       |  Note: Changes take effect immediately for newly generated blocks""".stripMargin)
-  }
 }
 
 object MiningRpcSummaryTool {
   val name = "mcp_mining_rpc_summary"
   val description = Some("List mining RPC endpoints and their usage")
 
-  def execute(): IO[String] = {
+  def execute(): IO[String] =
     IO.pure("""Mining RPC Endpoints:
       |  eth_mining -> Check if the node is mining
       |  eth_hashrate -> Get the current hash rate
@@ -202,19 +223,20 @@ object MiningRpcSummaryTool {
       |  miner_stop -> Stop mining
       |  miner_getStatus -> Get mining status (isMining, coinbase, hashRate)
       |""".stripMargin)
-  }
 }
 
 // --- Blockchain Query Tools (new) ---
 
 object GetBlockTool {
   val name = "get_block"
-  val description = Some("Get block information by number, hash, or 'latest'. Returns header details including hash, parent, miner, gas, and timestamps.")
+  val description = Some(
+    "Get block information by number, hash, or 'latest'. Returns header details including hash, parent, miner, gas, and timestamps."
+  )
 
   val inputSchema: JValue =
     ("type" -> "object") ~
-    ("properties" -> ("block" -> (("type" -> "string") ~ ("description" -> "Block number, block hash (0x-prefixed), or 'latest'")))) ~
-    ("required" -> List("block"))
+      ("properties" -> ("block" -> (("type" -> "string") ~ ("description" -> "Block number, block hash (0x-prefixed), or 'latest'")))) ~
+      ("required" -> List("block"))
 
   def execute(args: Option[JValue], deps: McpDependencies): IO[String] = IO {
     val blockArg = args.flatMap(a => (a \ "block").extractOpt[String]).getOrElse("latest")
@@ -249,16 +271,19 @@ object GetBlockTool {
 
 object GetTransactionTool {
   val name = "get_transaction"
-  val description = Some("Get transaction location by hash. Returns the block hash and transaction index where the transaction was included.")
+  val description = Some(
+    "Get transaction location by hash. Returns the block hash and transaction index where the transaction was included."
+  )
 
   val inputSchema: JValue =
     ("type" -> "object") ~
-    ("properties" -> ("hash" -> (("type" -> "string") ~ ("description" -> "Transaction hash (0x-prefixed)")))) ~
-    ("required" -> List("hash"))
+      ("properties" -> ("hash" -> (("type" -> "string") ~ ("description" -> "Transaction hash (0x-prefixed)")))) ~
+      ("required" -> List("hash"))
 
   def execute(args: Option[JValue], deps: McpDependencies): IO[String] = IO {
     val hashStr = args.flatMap(a => (a \ "hash").extractOpt[String]).getOrElse("")
-    val hashBytes = Try(org.bouncycastle.util.encoders.Hex.decode(hashStr.stripPrefix("0x"))).getOrElse(Array.empty[Byte])
+    val hashBytes =
+      Try(org.bouncycastle.util.encoders.Hex.decode(hashStr.stripPrefix("0x"))).getOrElse(Array.empty[Byte])
     if (hashBytes.length != 32) {
       s"Invalid transaction hash: $hashStr (expected 32 bytes)"
     } else {
@@ -277,12 +302,14 @@ object GetTransactionTool {
 
 object GetAccountTool {
   val name = "get_account"
-  val description = Some("Get account state (nonce, balance) at the current best block. May fail during sync if state is unavailable.")
+  val description = Some(
+    "Get account state (nonce, balance) at the current best block. May fail during sync if state is unavailable."
+  )
 
   val inputSchema: JValue =
     ("type" -> "object") ~
-    ("properties" -> ("address" -> (("type" -> "string") ~ ("description" -> "Account address (0x-prefixed)")))) ~
-    ("required" -> List("address"))
+      ("properties" -> ("address" -> (("type" -> "string") ~ ("description" -> "Account address (0x-prefixed)")))) ~
+      ("required" -> List("address"))
 
   def execute(args: Option[JValue], deps: McpDependencies): IO[String] = IO {
     val addrStr = args.flatMap(a => (a \ "address").extractOpt[String]).getOrElse("")
@@ -307,7 +334,7 @@ object GetAccountTool {
       }
     }.recover {
       case _: MissingNodeException => s"Account state unavailable (node is syncing): $addrStr"
-      case e: Exception => s"Error querying account $addrStr: ${e.getMessage}"
+      case e: Exception            => s"Error querying account $addrStr: ${e.getMessage}"
     }.get
   }
 }
@@ -320,8 +347,8 @@ object DetectReorgTool {
 
   val inputSchema: JValue =
     ("type" -> "object") ~
-    ("properties" -> ("depth" -> (("type" -> "integer") ~ ("description" -> "Number of recent blocks to check (default: 20)")))) ~
-    ("required" -> List.empty[String])
+      ("properties" -> ("depth" -> (("type" -> "integer") ~ ("description" -> "Number of recent blocks to check (default: 20)")))) ~
+      ("required" -> List.empty[String])
 
   def execute(args: Option[JValue], deps: McpDependencies): IO[String] = IO {
     val depth = args.flatMap(a => (a \ "depth").extractOpt[Int]).getOrElse(20)
@@ -329,11 +356,16 @@ object DetectReorgTool {
     val startNum = (bestNum - depth).max(0)
 
     val headers = (startNum to bestNum).flatMap(n => deps.blockchainReader.getBlockHeaderByNumber(n))
-    val inconsistencies = headers.sliding(2).flatMap {
-      case Seq(parent, child) if child.parentHash != parent.hash =>
-        Some(s"  Reorg detected: block ${child.number} parent ${ByteStringUtils.hash2string(child.parentHash)} != block ${parent.number} hash ${ByteStringUtils.hash2string(parent.hash)}")
-      case _ => None
-    }.toList
+    val inconsistencies = headers
+      .sliding(2)
+      .flatMap {
+        case Seq(parent, child) if child.parentHash != parent.hash =>
+          Some(
+            s"  Reorg detected: block ${child.number} parent ${ByteStringUtils.hash2string(child.parentHash)} != block ${parent.number} hash ${ByteStringUtils.hash2string(parent.hash)}"
+          )
+        case _ => None
+      }
+      .toList
 
     if (inconsistencies.isEmpty) {
       s"No reorgs detected in blocks $startNum to $bestNum ($depth blocks checked)"
@@ -349,12 +381,12 @@ object ConvertUnitsTool {
 
   val inputSchema: JValue =
     ("type" -> "object") ~
-    ("properties" -> (
-      ("value" -> (("type" -> "string") ~ ("description" -> "Numeric value to convert"))) ~
-      ("from_unit" -> (("type" -> "string") ~ ("description" -> "Source unit: wei, gwei, or etc"))) ~
-      ("to_unit" -> (("type" -> "string") ~ ("description" -> "Target unit: wei, gwei, or etc")))
-    )) ~
-    ("required" -> List("value", "from_unit", "to_unit"))
+      ("properties" -> (
+        ("value" -> (("type" -> "string") ~ ("description" -> "Numeric value to convert"))) ~
+          ("from_unit" -> (("type" -> "string") ~ ("description" -> "Source unit: wei, gwei, or etc"))) ~
+          ("to_unit" -> (("type" -> "string") ~ ("description" -> "Target unit: wei, gwei, or etc")))
+      )) ~
+      ("required" -> List("value", "from_unit", "to_unit"))
 
   def execute(args: Option[JValue]): IO[String] = IO {
     val value = args.flatMap(a => (a \ "value").extractOpt[String]).getOrElse("0")
@@ -363,20 +395,20 @@ object ConvertUnitsTool {
 
     Try {
       val weiValue: BigDecimal = fromUnit match {
-        case "wei" => BigDecimal(value)
-        case "gwei" => BigDecimal(value) * BigDecimal("1000000000")
+        case "wei"           => BigDecimal(value)
+        case "gwei"          => BigDecimal(value) * BigDecimal("1000000000")
         case "etc" | "ether" => BigDecimal(value) * BigDecimal("1000000000000000000")
-        case _ => throw new IllegalArgumentException(s"Unknown unit: $fromUnit")
+        case _               => throw new IllegalArgumentException(s"Unknown unit: $fromUnit")
       }
       val result: BigDecimal = toUnit match {
-        case "wei" => weiValue
-        case "gwei" => weiValue / BigDecimal("1000000000")
+        case "wei"           => weiValue
+        case "gwei"          => weiValue / BigDecimal("1000000000")
         case "etc" | "ether" => weiValue / BigDecimal("1000000000000000000")
-        case _ => throw new IllegalArgumentException(s"Unknown unit: $toUnit")
+        case _               => throw new IllegalArgumentException(s"Unknown unit: $toUnit")
       }
       s"$value $fromUnit = ${result.bigDecimal.toPlainString} $toUnit"
-    }.recover {
-      case e: Exception => s"Conversion error: ${e.getMessage}"
+    }.recover { case e: Exception =>
+      s"Conversion error: ${e.getMessage}"
     }.get
   }
 }
@@ -414,7 +446,8 @@ object GetEtcForksTool {
     val forks = deps.blockchainConfig.forkBlockNumbers
     val bestBlock = deps.blockchainReader.getBestBlockNumber()
 
-    def status(block: BigInt): String = if (block <= bestBlock) "ACTIVE" else s"PENDING (in ${block - bestBlock} blocks)"
+    def status(block: BigInt): String =
+      if (block <= bestBlock) "ACTIVE" else s"PENDING (in ${block - bestBlock} blocks)"
 
     s"""ETC Fork History (Chain ID: ${deps.blockchainConfig.chainId}):
       |  Frontier:       block ${forks.frontierBlockNumber} [${status(forks.frontierBlockNumber)}]
@@ -433,7 +466,9 @@ object GetEtcForksTool {
 
 object GetChainConfigTool {
   val name = "get_chain_config"
-  val description = Some("Get the blockchain configuration as structured output including chain ID, network ID, and monetary policy")
+  val description = Some(
+    "Get the blockchain configuration as structured output including chain ID, network ID, and monetary policy"
+  )
 
   def execute(deps: McpDependencies): IO[String] = IO {
     val cfg = deps.blockchainConfig
@@ -458,69 +493,113 @@ object McpToolRegistry {
 
   def getAllTools(): List[McpToolDefinition] = List(
     // Status tools
-    McpToolDefinition(NodeStatusTool.name, NodeStatusTool.description,
-      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))),
-    McpToolDefinition(NodeInfoTool.name, NodeInfoTool.description,
-      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))),
-    McpToolDefinition(BlockchainInfoTool.name, BlockchainInfoTool.description,
-      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))),
-    McpToolDefinition(SyncStatusTool.name, SyncStatusTool.description,
-      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))),
-    McpToolDefinition(PeerListTool.name, PeerListTool.description,
-      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))),
-    McpToolDefinition(SetEtherbaseTool.name, SetEtherbaseTool.description,
-      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))),
-    McpToolDefinition(MiningRpcSummaryTool.name, MiningRpcSummaryTool.description,
-      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))),
+    McpToolDefinition(
+      NodeStatusTool.name,
+      NodeStatusTool.description,
+      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))
+    ),
+    McpToolDefinition(
+      NodeInfoTool.name,
+      NodeInfoTool.description,
+      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))
+    ),
+    McpToolDefinition(
+      BlockchainInfoTool.name,
+      BlockchainInfoTool.description,
+      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))
+    ),
+    McpToolDefinition(
+      SyncStatusTool.name,
+      SyncStatusTool.description,
+      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))
+    ),
+    McpToolDefinition(
+      PeerListTool.name,
+      PeerListTool.description,
+      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))
+    ),
+    McpToolDefinition(
+      SetEtherbaseTool.name,
+      SetEtherbaseTool.description,
+      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))
+    ),
+    McpToolDefinition(
+      MiningRpcSummaryTool.name,
+      MiningRpcSummaryTool.description,
+      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))
+    ),
     // Blockchain query tools
-    McpToolDefinition(GetBlockTool.name, GetBlockTool.description,
+    McpToolDefinition(
+      GetBlockTool.name,
+      GetBlockTool.description,
       inputSchema = Some(GetBlockTool.inputSchema),
-      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true), idempotentHint = Some(true)))),
-    McpToolDefinition(GetTransactionTool.name, GetTransactionTool.description,
+      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true), idempotentHint = Some(true)))
+    ),
+    McpToolDefinition(
+      GetTransactionTool.name,
+      GetTransactionTool.description,
       inputSchema = Some(GetTransactionTool.inputSchema),
-      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true), idempotentHint = Some(true)))),
-    McpToolDefinition(GetAccountTool.name, GetAccountTool.description,
+      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true), idempotentHint = Some(true)))
+    ),
+    McpToolDefinition(
+      GetAccountTool.name,
+      GetAccountTool.description,
       inputSchema = Some(GetAccountTool.inputSchema),
-      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true), idempotentHint = Some(true)))),
+      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true), idempotentHint = Some(true)))
+    ),
     // ETC-specific tools
-    McpToolDefinition(DetectReorgTool.name, DetectReorgTool.description,
+    McpToolDefinition(
+      DetectReorgTool.name,
+      DetectReorgTool.description,
       inputSchema = Some(DetectReorgTool.inputSchema),
-      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))),
-    McpToolDefinition(ConvertUnitsTool.name, ConvertUnitsTool.description,
+      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))
+    ),
+    McpToolDefinition(
+      ConvertUnitsTool.name,
+      ConvertUnitsTool.description,
       inputSchema = Some(ConvertUnitsTool.inputSchema),
-      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true), idempotentHint = Some(true)))),
-    McpToolDefinition(GetEtcEmissionTool.name, GetEtcEmissionTool.description,
-      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))),
-    McpToolDefinition(GetEtcForksTool.name, GetEtcForksTool.description,
-      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))),
-    McpToolDefinition(GetChainConfigTool.name, GetChainConfigTool.description,
-      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true))))
+      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true), idempotentHint = Some(true)))
+    ),
+    McpToolDefinition(
+      GetEtcEmissionTool.name,
+      GetEtcEmissionTool.description,
+      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))
+    ),
+    McpToolDefinition(
+      GetEtcForksTool.name,
+      GetEtcForksTool.description,
+      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))
+    ),
+    McpToolDefinition(
+      GetChainConfigTool.name,
+      GetChainConfigTool.description,
+      annotations = Some(McpToolAnnotations(readOnlyHint = Some(true)))
+    )
   )
 
   def executeTool(
       toolName: String,
       arguments: Option[JValue],
       deps: McpDependencies
-  )(implicit timeout: Timeout, ec: ExecutionContext): IO[String] = {
+  )(implicit timeout: Timeout, ec: ExecutionContext): IO[String] =
     toolName match {
-      case NodeStatusTool.name => NodeStatusTool.execute(deps)
-      case NodeInfoTool.name => NodeInfoTool.execute(deps)
-      case BlockchainInfoTool.name => BlockchainInfoTool.execute(deps)
-      case SyncStatusTool.name => SyncStatusTool.execute(deps)
-      case PeerListTool.name => PeerListTool.execute(deps)
-      case SetEtherbaseTool.name => SetEtherbaseTool.execute()
+      case NodeStatusTool.name       => NodeStatusTool.execute(deps)
+      case NodeInfoTool.name         => NodeInfoTool.execute(deps)
+      case BlockchainInfoTool.name   => BlockchainInfoTool.execute(deps)
+      case SyncStatusTool.name       => SyncStatusTool.execute(deps)
+      case PeerListTool.name         => PeerListTool.execute(deps)
+      case SetEtherbaseTool.name     => SetEtherbaseTool.execute()
       case MiningRpcSummaryTool.name => MiningRpcSummaryTool.execute()
-      case GetBlockTool.name => GetBlockTool.execute(arguments, deps)
-      case GetTransactionTool.name => GetTransactionTool.execute(arguments, deps)
-      case GetAccountTool.name => GetAccountTool.execute(arguments, deps)
-      case DetectReorgTool.name => DetectReorgTool.execute(arguments, deps)
-      case ConvertUnitsTool.name => ConvertUnitsTool.execute(arguments)
-      case GetEtcEmissionTool.name => GetEtcEmissionTool.execute(deps)
-      case GetEtcForksTool.name => GetEtcForksTool.execute(deps)
-      case GetChainConfigTool.name => GetChainConfigTool.execute(deps)
-      case _ => IO.pure(s"Unknown tool: $toolName")
+      case GetBlockTool.name         => GetBlockTool.execute(arguments, deps)
+      case GetTransactionTool.name   => GetTransactionTool.execute(arguments, deps)
+      case GetAccountTool.name       => GetAccountTool.execute(arguments, deps)
+      case DetectReorgTool.name      => DetectReorgTool.execute(arguments, deps)
+      case ConvertUnitsTool.name     => ConvertUnitsTool.execute(arguments)
+      case GetEtcEmissionTool.name   => GetEtcEmissionTool.execute(deps)
+      case GetEtcForksTool.name      => GetEtcForksTool.execute(deps)
+      case GetChainConfigTool.name   => GetChainConfigTool.execute(deps)
+      case _                         => IO.pure(s"Unknown tool: $toolName")
     }
-  }
 }
 
 case class McpToolDefinition(

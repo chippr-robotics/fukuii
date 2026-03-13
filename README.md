@@ -1,11 +1,11 @@
-## <i>Alpha Status</i>: 🟢 2,195 tests passing — [View ETC Handoff](ETC-HANDOFF.md)
+## <i>Alpha/Olympia Status</i>: 🟢 2,309 tests passing — [View ETC Handoff](ETC-HANDOFF.md) | [View Olympia Handoff](OLYMPIA-HANDOFF.md)
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/chippr-robotics/fukuii/HEAD/docs/images/fukuii-hex-logo.png" alt="Fukuii Logo" width="400"/>
 </div>
 
 # 🧠🪱 Fukuii Ethereum Client
-# ALPHA TEST PHASE - DO NOT USE IN PRODUCTION 
+# ALPHA/OLYMPIA TEST PHASE - DO NOT USE IN PRODUCTION
 [![CI](https://github.com/chippr-robotics/fukuii/actions/workflows/ci.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/ci.yml)
 [![Docker Build](https://github.com/chippr-robotics/fukuii/actions/workflows/docker.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/docker.yml)
 [![Nightly Build](https://github.com/chippr-robotics/fukuii/actions/workflows/nightly.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/nightly.yml)
@@ -75,7 +75,7 @@ See [CON-002: Bootstrap Checkpoints](docs/adr/consensus/CON-002-bootstrap-checkp
 
 - **Scala 3.3.4 (LTS)** and **JDK 21 (LTS)** for long-term stability
 - **Apache Pekko** actor system for reliable concurrency
-- **Full ECIP-1066 Compliance**: Implements all 14 ETC hard forks from Frontier through Spiral (block 19,250,000), including Magneto (ECIP-1103), Mystique (ECIP-1104), and Spiral (ECIP-1109)
+- **Full ECIP-1066 Compliance**: Implements all 14 ETC hard forks from Frontier through Spiral (block 19,250,000), including Magneto (ECIP-1103), Mystique (ECIP-1104), and Spiral (ECIP-1109), plus Olympia (ECIP-1111/1112/1121)
 - **Comprehensive Testing**: Unit, integration, and blockchain tests
 - **Security-First**: Signed Docker images, CodeQL scanning, dependency monitoring
 

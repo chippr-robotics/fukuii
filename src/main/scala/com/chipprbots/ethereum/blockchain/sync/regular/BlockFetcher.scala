@@ -289,7 +289,11 @@ class BlockFetcher(
         }
 
       case ReceivedBodies(peer, bodies) if !state.isFetchingBodies =>
-        log.warn("Received late/duplicate block bodies ({} bodies) from peer {} (not fetching). Clearing state.", bodies.size, peer.id)
+        log.warn(
+          "Received late/duplicate block bodies ({} bodies) from peer {} (not fetching). Clearing state.",
+          bodies.size,
+          peer.id
+        )
         // Don't blacklist - this could be a late response from a previous request
         // Just ensure we're not stuck by attempting to fetch if needed
         fetchBlocks(state)
@@ -299,14 +303,20 @@ class BlockFetcher(
         val newRetryCount = retry.retryCount + 1
         val clearedState = state.withBodiesFetchReceived
         if (newRetryCount > syncConfig.maxBodyFetchRetries) {
-          log.warn("Body fetch exceeded max retries ({}), clearing tried peers and resetting",
-            syncConfig.maxBodyFetchRetries)
+          log.warn(
+            "Body fetch exceeded max retries ({}), clearing tried peers and resetting",
+            syncConfig.maxBodyFetchRetries
+          )
           // Reset tried peers — previously failed peers may have recovered after blacklist expiry
           fetchBodiesWithRetryState(clearedState, Set.empty, 0)
           processFetchCommands(clearedState.withNewBodiesFetch)
         } else {
-          log.debug("Retrying bodies request (tried: {}, retry: {}/{})",
-            updatedTriedPeers.size, newRetryCount, syncConfig.maxBodyFetchRetries)
+          log.debug(
+            "Retrying bodies request (tried: {}, retry: {}/{})",
+            updatedTriedPeers.size,
+            newRetryCount,
+            syncConfig.maxBodyFetchRetries
+          )
           fetchBodiesWithRetryState(clearedState, updatedTriedPeers, newRetryCount)
           processFetchCommands(clearedState.withNewBodiesFetch)
         }

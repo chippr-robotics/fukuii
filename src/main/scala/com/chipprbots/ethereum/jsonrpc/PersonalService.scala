@@ -85,7 +85,9 @@ trait PersonalServiceAPI {
   def lockAccount(request: LockAccountRequest): ServiceResponse[LockAccountResponse]
   def sign(request: SignRequest): ServiceResponse[SignResponse]
   def ecRecover(req: EcRecoverRequest): ServiceResponse[EcRecoverResponse]
-  def sendTransaction(request: SendTransactionWithPassphraseRequest): ServiceResponse[SendTransactionWithPassphraseResponse]
+  def sendTransaction(
+      request: SendTransactionWithPassphraseRequest
+  ): ServiceResponse[SendTransactionWithPassphraseResponse]
   def sendTransaction(request: SendTransactionRequest): ServiceResponse[SendTransactionResponse]
   def sendIeleTransaction(request: SendIeleTransactionRequest): ServiceResponse[SendTransactionResponse]
 }

@@ -574,12 +574,21 @@ trait FukuiiServiceBuilder {
 }
 
 trait McpServiceBuilder {
-  self: PeerManagerActorBuilder with SyncControllerBuilder with ActorSystemBuilder
-    with BlockchainBuilder with BlockchainConfigBuilder with NodeStatusBuilder with StorageBuilder =>
+  self: PeerManagerActorBuilder
+    with SyncControllerBuilder
+    with ActorSystemBuilder
+    with BlockchainBuilder
+    with BlockchainConfigBuilder
+    with NodeStatusBuilder
+    with StorageBuilder =>
 
   lazy val mcpService = new McpService(
-    peerManager, syncController, blockchainReader, blockchainConfig,
-    nodeStatusHolder, storagesInstance.storages.transactionMappingStorage
+    peerManager,
+    syncController,
+    blockchainReader,
+    blockchainConfig,
+    nodeStatusHolder,
+    storagesInstance.storages.transactionMappingStorage
   )(system.dispatcher)
 }
 

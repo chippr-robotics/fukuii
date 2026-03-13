@@ -343,7 +343,7 @@ class EthMiningServiceSpec
     response1.unsafeRunSync() shouldEqual Right(GetCoinbaseResponse(miningConfig.coinbase))
 
     // Set new etherbase
-    val setResponse: ServiceResponse[EthMiningService.SetEtherbaseResponse] = 
+    val setResponse: ServiceResponse[EthMiningService.SetEtherbaseResponse] =
       ethMiningService.setEtherbase(EthMiningService.SetEtherbaseRequest(testEtherbaseAddress))
     setResponse.unsafeRunSync() shouldEqual Right(EthMiningService.SetEtherbaseResponse(true))
 
@@ -352,7 +352,8 @@ class EthMiningServiceSpec
     response2.unsafeRunSync() shouldEqual Right(GetCoinbaseResponse(testEtherbaseAddress))
 
     // Verify miner status shows new coinbase
-    val statusResponse: ServiceResponse[GetMinerStatusResponse] = ethMiningService.getMinerStatus(GetMinerStatusRequest())
+    val statusResponse: ServiceResponse[GetMinerStatusResponse] =
+      ethMiningService.getMinerStatus(GetMinerStatusRequest())
     val status = statusResponse.unsafeRunSync()
     status shouldBe Symbol("right")
     status.toOption.get.coinbase shouldEqual testEtherbaseAddress
@@ -373,7 +374,7 @@ class EthMiningServiceSpec
       )(_: BlockchainConfig))
       .expects(parentBlock, Nil, testEtherbaseAddress, *, *, *)
       .returning(PendingBlockAndState(PendingBlock(block, Nil), fakeWorld))
-    
+
     blockchainWriter.save(parentBlock, Nil, ChainWeight.totalDifficultyOnly(parentBlock.header.difficulty), true)
 
     // Start the getWork call asynchronously
@@ -407,7 +408,7 @@ class EthMiningServiceSpec
 
     val minerActiveTimeout: FiniteDuration = 2.seconds // Short timeout for tests
     val getTransactionFromPoolTimeout: FiniteDuration = 20.seconds
-    
+
     // Test constants
     val testEtherbaseAddress: Address = Address("0x1234567890123456789012345678901234567890")
 

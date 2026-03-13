@@ -219,6 +219,8 @@ object ETH63 {
         receipt match {
           case _: LegacyReceipt      => legacyRLPReceipt
           case _: Type01Receipt      => PrefixedRLPEncodable(Transaction.Type01, legacyRLPReceipt)
+          case _: Type02Receipt      => PrefixedRLPEncodable(Transaction.Type02, legacyRLPReceipt)
+          case _: Type04Receipt      => PrefixedRLPEncodable(Transaction.Type04, legacyRLPReceipt)
           case _: TypedLegacyReceipt => legacyRLPReceipt // Handle typed legacy receipts
         }
       }
@@ -291,6 +293,8 @@ object ETH63 {
       }
 
       def toReceipt: Receipt = rlpEncodeable match {
+        case PrefixedRLPEncodable(Transaction.Type04, legacyReceipt) => Type04Receipt(legacyReceipt.toLegacyReceipt)
+        case PrefixedRLPEncodable(Transaction.Type02, legacyReceipt) => Type02Receipt(legacyReceipt.toLegacyReceipt)
         case PrefixedRLPEncodable(Transaction.Type01, legacyReceipt) => Type01Receipt(legacyReceipt.toLegacyReceipt)
         case RLPValue(bytes) if bytes.nonEmpty && bytes.head.isValidTransactionType && bytes.length > 1 =>
           decodeTypedReceiptFromBytes(bytes)
@@ -331,9 +335,9 @@ object ETH63 {
             if ((first & 0xff) < 0x7f && receiptBytes.length > 1) {
               // Typed receipt in wire format: RLPValue(typeByte || rlp(payload))
               // Expand it to Seq(RLPValue(typeByte), RLPList) for toTypedRLPEncodables
-              try {
+              try
                 Seq(RLPValue(Array(first)), rawDecode(receiptBytes.tail))
-              } catch {
+              catch {
                 case _: RuntimeException | _: RLPException =>
                   // If expansion fails, keep as-is (might be legacy receipt)
                   Seq(v)

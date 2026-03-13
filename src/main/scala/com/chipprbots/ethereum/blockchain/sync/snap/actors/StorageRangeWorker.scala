@@ -33,15 +33,14 @@ class StorageRangeWorker(
 
   override def receive: Receive = idle
 
-  def idle: Receive = {
-    case FetchStorageRanges(_, peer) =>
-      currentPeer = Some(peer)
-      // Request work from coordinator by notifying it of peer availability
-      coordinator ! StoragePeerAvailable(peer)
-      context.become(working)
-          
-      import context.dispatcher
-      context.system.scheduler.scheduleOnce(30.seconds, self, StorageCheckIdle)
+  def idle: Receive = { case FetchStorageRanges(_, peer) =>
+    currentPeer = Some(peer)
+    // Request work from coordinator by notifying it of peer availability
+    coordinator ! StoragePeerAvailable(peer)
+    context.become(working)
+
+    import context.dispatcher
+    context.system.scheduler.scheduleOnce(30.seconds, self, StorageCheckIdle)
   }
 
   def working: Receive = {

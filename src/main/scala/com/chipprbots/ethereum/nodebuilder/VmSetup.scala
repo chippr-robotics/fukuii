@@ -7,9 +7,8 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.utils.VmConfig
 
-/** VM setup — only internal VM is supported. External VM features (IELE, KEVM) were experimental
-  * in the original Mantis codebase and have been removed. The configuration key `vm.mode` must be
-  * set to "internal" (the default).
+/** VM setup — only internal VM is supported. External VM features (IELE, KEVM) were experimental in the original Mantis
+  * codebase and have been removed. The configuration key `vm.mode` must be set to "internal" (the default).
   */
 object VmSetup extends Logger {
 

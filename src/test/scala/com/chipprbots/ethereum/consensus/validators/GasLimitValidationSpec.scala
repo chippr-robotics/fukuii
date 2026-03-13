@@ -20,11 +20,10 @@ import com.chipprbots.ethereum.testing.Tags._
 // scalastyle:off magic.number
 /** Validates gas limit boundary enforcement in the block header validator.
   *
-  * Tests cover the ±parent/1024 bound, MinGasLimit (5000), MaxGasLimit (EIP-106),
-  * and ETC-realistic 8M gas limit scenarios.
+  * Tests cover the ±parent/1024 bound, MinGasLimit (5000), MaxGasLimit (EIP-106), and ETC-realistic 8M gas limit
+  * scenarios.
   *
-  * Reference: Besu implicit gas limit tests + fukuii validateGasLimit() at
-  * BlockHeaderValidatorSkeleton.scala:204-217
+  * Reference: Besu implicit gas limit tests + fukuii validateGasLimit() at BlockHeaderValidatorSkeleton.scala:204-217
   */
 class GasLimitValidationSpec extends AnyFlatSpec with Matchers {
 
@@ -43,7 +42,7 @@ class GasLimitValidationSpec extends AnyFlatSpec with Matchers {
       Right(BlockHeaderValid)
   }
 
-  private implicit val blockchainConfig: BlockchainConfig = BlockchainConfig(
+  implicit private val blockchainConfig: BlockchainConfig = BlockchainConfig(
     forkBlockNumbers = ForkBlockNumbers.Empty.copy(
       frontierBlockNumber = 0,
       homesteadBlockNumber = 0,
@@ -82,9 +81,9 @@ class GasLimitValidationSpec extends AnyFlatSpec with Matchers {
     nonce = ByteString(Hex.decode("00" * 8))
   )
 
-  /** Create a child header with the given gas limit. Difficulty is set to match parent
-    * exactly (difficulty calculator returns parent difficulty for small block numbers
-    * with difficulty bomb removed), and timestamp is parent+13 to get a 0 adjustment.
+  /** Create a child header with the given gas limit. Difficulty is set to match parent exactly (difficulty calculator
+    * returns parent difficulty for small block numbers with difficulty bomb removed), and timestamp is parent+13 to get
+    * a 0 adjustment.
     */
   private def childWithGasLimit(gasLimit: BigInt): BlockHeader =
     parentHeader.copy(

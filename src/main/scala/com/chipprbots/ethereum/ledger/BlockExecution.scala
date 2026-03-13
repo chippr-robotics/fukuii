@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.ledger
 
+import org.apache.pekko.util.ByteString
+
 import cats.implicits._
 
 import scala.annotation.tailrec
@@ -9,6 +11,7 @@ import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.ledger.BlockExecutionError.MissingParentError
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.DaoForkConfig
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.vm.EvmConfig
@@ -57,7 +60,7 @@ class BlockExecution(
   private def executeBlock(
       block: Block
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockResult] =
-    try {
+    try
       for {
         parentHeader <- blockchainReader
           .getBlockHeaderByHash(block.header.parentHash)
@@ -70,7 +73,7 @@ class BlockExecution(
         // State root hash needs to be up-to-date for validateBlockAfterExecution
         worldPersisted = InMemoryWorldStateProxy.persistState(worldToPersist)
       } yield execResult.copy(worldState = worldPersisted)
-    } catch {
+    catch {
       case e: MPTException => Left(BlockExecutionError.MPTError(e))
     }
 
@@ -105,11 +108,14 @@ class BlockExecution(
       blockHeaderNumber: BigInt,
       initialWorld: InMemoryWorldStateProxy
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError.TxsExecutionError, BlockResult] = {
-    val inputWorld = blockchainConfig.daoForkConfig match {
+    val worldAfterDao = blockchainConfig.daoForkConfig match {
       case Some(daoForkConfig) if daoForkConfig.isDaoForkBlock(blockHeaderNumber) =>
         drainDaoForkAccounts(initialWorld, daoForkConfig)
       case _ => initialWorld
     }
+
+    // EIP-2935: Store parent block hash in history storage contract
+    val inputWorld = applyEip2935(block, worldAfterDao)
 
     val hashAsHexString = block.header.hashAsHexString
     val transactionList = block.body.transactionList
@@ -123,6 +129,40 @@ class BlockExecution(
         log.debug(s"Not all txs from block $hashAsHexString were executed correctly, due to ${error.reason}")
     }
     blockTxsExecResult
+  }
+
+  /** EIP-2935: Deploy history storage contract at fork block and store parent block hash.
+    *
+    * At the Olympia activation block, deploys the history storage contract (sets nonce=1 and code). At every
+    * post-Olympia block, writes the parent hash to storage slot (blockNumber - 1) % HistoryServeWindow.
+    */
+  private def applyEip2935(
+      block: Block,
+      world: InMemoryWorldStateProxy
+  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy = {
+    import BlockExecution._
+    val blockNumber = block.header.number
+    if (blockNumber < blockchainConfig.forkBlockNumbers.olympiaBlockNumber) return world
+
+    // At the fork block, deploy the history storage contract
+    val w1 = if (blockNumber == blockchainConfig.forkBlockNumbers.olympiaBlockNumber) {
+      val account = world
+        .getAccount(HistoryStorageAddress)
+        .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
+        .copy(nonce = UInt256(1))
+      world
+        .saveAccount(HistoryStorageAddress, account)
+        .saveCode(HistoryStorageAddress, HistoryStorageCode)
+    } else {
+      world
+    }
+
+    // Store parent hash at slot (blockNumber - 1) % HistoryServeWindow
+    val parentHashValue = UInt256(block.header.parentHash)
+    val slot = (blockNumber - 1) % HistoryServeWindow
+    val storage = w1.getStorage(HistoryStorageAddress)
+    val updatedStorage = storage.store(slot, parentHashValue.toBigInt)
+    w1.saveStorage(HistoryStorageAddress, updatedStorage)
   }
 
   /** This function updates worldState transferring balance from drainList accounts to refundContract address
@@ -192,6 +232,20 @@ class BlockExecution(
     go(List.empty[BlockData], blocks, parentChainWeight)
   }
 
+}
+
+object BlockExecution {
+
+  /** EIP-2935: Address of the history storage contract */
+  val HistoryStorageAddress: Address = Address("0x0000F90827F1C53a10cb7A02335B175320002935")
+
+  /** EIP-2935: Number of historical block hashes served */
+  val HistoryServeWindow: BigInt = BigInt(8191)
+
+  /** EIP-2935: Deployed bytecode for the history storage contract */
+  val HistoryStorageCode: ByteString = ByteStringUtils.string2hash(
+    "3373fffffffffffffffffffffffffffffffffffffffe14604657602036036042575f35600143038111604257611fff81430311604257611fff9006545f5260205ff35b5f5ffd5b5f35611fff60014303065500"
+  )
 }
 
 sealed trait BlockExecutionError {

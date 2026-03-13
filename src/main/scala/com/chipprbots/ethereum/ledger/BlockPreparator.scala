@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.ledger
 
 import scala.annotation.tailrec
 
+import org.apache.pekko.util.ByteString
+
 import com.chipprbots.ethereum.consensus.validators.SignedTransactionError.TransactionSignatureError
 import com.chipprbots.ethereum.consensus.validators.SignedTransactionValidator
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
@@ -34,9 +36,8 @@ class BlockPreparator(
   )
 
   /** This function updates the state in order to pay rewards based on YP section 11.3:
-    *   1. Miner receives 100% of the block reward
-    *   2. Miner receives a reward for the inclusion of ommers
-    *   3. Ommer miners receive a reward for their inclusion in this block
+    *   1. Miner receives 100% of the block reward 2. Miner receives a reward for the inclusion of ommers 3. Ommer
+    *      miners receive a reward for their inclusion in this block
     *
     * @param block
     *   the block being processed
@@ -59,12 +60,41 @@ class BlockPreparator(
     val worldAfterPayingBlockReward = increaseAccountBalance(minerAddress, UInt256(minerReward))(worldStateProxy)
     log.debug("Paying block {} reward of {} to miner with address {}", blockNumber, minerReward, minerAddress)
 
-    block.body.uncleNodesList.foldLeft(worldAfterPayingBlockReward) { (ws, ommer) =>
+    val worldAfterOmmers = block.body.uncleNodesList.foldLeft(worldAfterPayingBlockReward) { (ws, ommer) =>
       val ommerAddress = Address(ommer.beneficiary)
       val ommerReward = blockRewardCalculator.calculateOmmerRewardForInclusion(blockNumber, ommer.number)
 
       log.debug("Paying block {} reward of {} to ommer with account address {}", blockNumber, ommerReward, ommerAddress)
       increaseAccountBalance(ommerAddress, UInt256(ommerReward))(ws)
+    }
+
+    // ECIP-1111: After Olympia activation, credit baseFee * gasUsed to treasury
+    creditBaseFeeToTreasury(block.header, blockchainConfig.treasuryAddress, worldAfterOmmers)
+  }
+
+  /** ECIP-1111: Credit baseFee revenue to the treasury address. This runs AFTER block rewards and ommer rewards,
+    * matching core-geth's Finalize() order.
+    */
+  private def creditBaseFeeToTreasury(
+      blockHeader: BlockHeader,
+      treasuryAddress: Address,
+      world: InMemoryWorldStateProxy
+  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy = {
+    val isOlympiaActivated = blockHeader.number >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+    if (!isOlympiaActivated) return world
+
+    blockHeader.baseFee match {
+      case Some(baseFee) if baseFee > 0 && blockHeader.gasUsed > 0 && treasuryAddress != Address(0) =>
+        val treasuryCredit = baseFee * blockHeader.gasUsed
+        log.debug(
+          "Crediting baseFee revenue {} (baseFee={} * gasUsed={}) to treasury {}",
+          treasuryCredit,
+          baseFee,
+          blockHeader.gasUsed,
+          treasuryAddress
+        )
+        increaseAccountBalance(treasuryAddress, UInt256(treasuryCredit))(world)
+      case _ => world
     }
   }
 
@@ -206,11 +236,19 @@ class BlockPreparator(
       world: InMemoryWorldStateProxy
   )(implicit blockchainConfig: BlockchainConfig): TxResult = {
     log.debug(s"Transaction ${stx.hash.toHex} execution start")
-    val gasPrice = UInt256(stx.tx.gasPrice)
+    val gasPrice = UInt256(Transaction.effectiveGasPrice(stx.tx, blockHeader.baseFee))
     val gasLimit = stx.tx.gasLimit
 
     val checkpointWorldState = updateSenderAccountBeforeExecution(stx, senderAddress, world)
-    val result = runVM(stx, senderAddress, blockHeader, checkpointWorldState)
+
+    // EIP-7702: Process authorization list for Type-4 transactions before VM execution
+    val worldAfterAuths = stx.tx match {
+      case sct: SetCodeTransaction =>
+        applyAuthorizations(sct.authorizationList, checkpointWorldState)
+      case _ => checkpointWorldState
+    }
+
+    val result = runVM(stx, senderAddress, blockHeader, worldAfterAuths)
 
     val resultWithErrorHandling: PR =
       if (result.error.isDefined) {
@@ -219,8 +257,17 @@ class BlockPreparator(
       } else
         result
 
-    val totalGasToRefund = calcTotalGasToRefund(stx, resultWithErrorHandling, blockHeader.number)
-    val executionGasToPayToMiner = gasLimit - totalGasToRefund
+    val totalGasToRefundBase = calcTotalGasToRefund(stx, resultWithErrorHandling, blockHeader.number)
+    val executionGasBase = gasLimit - totalGasToRefundBase
+
+    // EIP-7623: Floor calldata gas — ensure gas charged is at least the floor data cost
+    val isOlympiaActivated = blockHeader.number >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+    val executionGasToPayToMiner = if (isOlympiaActivated) {
+      executionGasBase.max(BlockPreparator.calcFloorDataGas(stx.tx.payload))
+    } else {
+      executionGasBase
+    }
+    val totalGasToRefund = gasLimit - executionGasToPayToMiner
 
     val refundGasFn = pay(senderAddress, (totalGasToRefund * gasPrice).toUInt256, withTouch = false) _
     val payMinerForGasFn =
@@ -237,8 +284,12 @@ class BlockPreparator(
     if (DebugTrace.enabledForTx(blockHeader.number, stx.hash.toHex)) {
       val tx = stx.tx
       val accessList = Transaction.accessList(tx)
+      val authListSize = tx match {
+        case sct: SetCodeTransaction => sct.authorizationList.size
+        case _                       => 0
+      }
       val evmConfig = EvmConfig.forBlock(blockHeader.number, blockchainConfig)
-      val intrinsicGas = evmConfig.calcTransactionIntrinsicGas(tx.payload, tx.isContractInit, accessList)
+      val intrinsicGas = evmConfig.calcTransactionIntrinsicGas(tx.payload, tx.isContractInit, accessList, authListSize)
 
       val toOrCreate = tx.receivingAddress.map(_.toString).getOrElse("CREATE")
       val isCreate = tx.isContractInit
@@ -328,24 +379,17 @@ class BlockPreparator(
                 HashOutcome(newWorld.stateRootHash)
               }
 
+            val legacyReceipt = LegacyReceipt(
+              postTransactionStateHash = transactionOutcome,
+              cumulativeGasUsed = acumGas + gasUsed,
+              logsBloomFilter = BloomFilter.create(logs),
+              logs = logs
+            )
             val receipt = stx.tx match {
-              case _: LegacyTransaction =>
-                LegacyReceipt(
-                  postTransactionStateHash = transactionOutcome,
-                  cumulativeGasUsed = acumGas + gasUsed,
-                  logsBloomFilter = BloomFilter.create(logs),
-                  logs = logs
-                )
-
-              case _: TransactionWithAccessList =>
-                Type01Receipt(
-                  LegacyReceipt(
-                    postTransactionStateHash = transactionOutcome,
-                    cumulativeGasUsed = acumGas + gasUsed,
-                    logsBloomFilter = BloomFilter.create(logs),
-                    logs = logs
-                  )
-                )
+              case _: LegacyTransaction         => legacyReceipt
+              case _: TransactionWithAccessList => Type01Receipt(legacyReceipt)
+              case _: TransactionWithDynamicFee => Type02Receipt(legacyReceipt)
+              case _: SetCodeTransaction        => Type04Receipt(legacyReceipt)
             }
 
             log.debug(s"Receipt generated for tx ${stx.hash.toHex}, $receipt")
@@ -418,6 +462,92 @@ class BlockPreparator(
         )
     }
   }
+
+  /** EIP-7702: Process authorization list, setting delegation codes on authorized accounts. Each authorization is
+    * validated and applied independently; failures are silently skipped.
+    */
+  private def applyAuthorizations(
+      authList: List[SetCodeAuthorization],
+      world: InMemoryWorldStateProxy
+  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
+    authList.foldLeft(world) { (w, auth) =>
+      applyAuthorization(auth, w).getOrElse(w)
+    }
+
+  /** Apply a single EIP-7702 authorization. Returns None if the authorization should be skipped. */
+  private def applyAuthorization(
+      auth: SetCodeAuthorization,
+      world: InMemoryWorldStateProxy
+  )(implicit blockchainConfig: BlockchainConfig): Option[InMemoryWorldStateProxy] = {
+    import com.chipprbots.ethereum.crypto.ECDSASignature
+    import com.chipprbots.ethereum.rlp.{encode, PrefixedRLPEncodable, RLPList}
+    import com.chipprbots.ethereum.rlp.RLPImplicitConversions.toEncodeable
+    import com.chipprbots.ethereum.rlp.RLPImplicits.given
+
+    // 1. Verify chain ID: must be 0 (wildcard) or match current chain
+    if (auth.chainId != 0 && auth.chainId != blockchainConfig.chainId) None
+    else {
+      // 2. Recover authority address from authorization signature
+      val sigHash = com.chipprbots.ethereum.crypto.kec256(
+        encode(
+          PrefixedRLPEncodable(
+            0x05,
+            RLPList(
+              toEncodeable(auth.chainId),
+              toEncodeable(auth.address.toArray),
+              toEncodeable(auth.nonce)
+            )
+          )
+        )
+      )
+
+      // Convert y-parity (0/1) to point sign (27/28) for recovery
+      val rawV = if (auth.v == 0) ECDSASignature.negativePointSign else ECDSASignature.positivePointSign
+      val ecdsaSig = ECDSASignature(auth.r, auth.s, BigInt(rawV))
+      val recoveredKey = ecdsaSig.publicKey(sigHash)
+      val authority = recoveredKey.flatMap { key =>
+        val addrBytes = com.chipprbots.ethereum.crypto.kec256(key).slice(12, 32)
+        if (addrBytes.length == Address.Length) Some(Address(addrBytes)) else None
+      }
+      authority.flatMap { authorityAddr =>
+        // 3. Check that authority does not have code (unless it's already a delegation)
+        val code = world.getCode(authorityAddr)
+        if (code.nonEmpty && !SetCodeTransaction.isDelegation(code)) None
+        else {
+          // 4. Verify nonce matches
+          val account = world
+            .getAccount(authorityAddr)
+            .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
+          if (account.nonce != UInt256(auth.nonce)) None
+          else {
+            // 5. Increment nonce
+            val updatedAccount = account.copy(nonce = account.nonce + 1)
+            val w1 = world.saveAccount(authorityAddr, updatedAccount)
+
+            // 6. Set delegation code (or clear if target is zero address)
+            val zeroAddress = Address(0L)
+            val w2 = if (auth.address == zeroAddress) {
+              w1.saveCode(authorityAddr, ByteString.empty)
+            } else {
+              w1.saveCode(authorityAddr, SetCodeTransaction.addressToDelegation(auth.address))
+            }
+            Some(w2)
+          }
+        }
+      }
+    }
+  }
 }
 
-object BlockPreparator
+object BlockPreparator {
+
+  /** EIP-7623: Calculate floor data gas for a transaction. Floor ensures calldata-heavy transactions pay a minimum gas
+    * cost. tokens = nonzero_bytes * 4 + zero_bytes floorDataGas = 21000 + tokens * 10
+    */
+  def calcFloorDataGas(payload: ByteString): BigInt = {
+    val zeroBytes = payload.count(_ == 0)
+    val nonZeroBytes = payload.length - zeroBytes
+    val tokens = nonZeroBytes * 4 + zeroBytes
+    BigInt(21000) + tokens * 10
+  }
+}

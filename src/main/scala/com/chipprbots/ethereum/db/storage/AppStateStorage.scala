@@ -238,6 +238,32 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
 
   def clearSnapFastCycleCount(): DataSourceBatchUpdate =
     remove(Keys.SnapFastCycleCount)
+
+  /** Check if SNAP sync account download phase has completed. Used to skip account re-download on process restart
+    * during bytecode/storage phase.
+    */
+  def isSnapSyncAccountsComplete(): Boolean =
+    get(Keys.SnapSyncAccountsComplete).exists(_.toBoolean)
+
+  /** Mark SNAP sync account download as complete (or incomplete on full restart). */
+  def putSnapSyncAccountsComplete(complete: Boolean): DataSourceBatchUpdate =
+    put(Keys.SnapSyncAccountsComplete, complete.toString)
+
+  /** Get the persisted path to the unique codeHashes file for bytecode sync recovery. */
+  def getSnapSyncCodeHashesPath(): Option[String] =
+    get(Keys.SnapSyncCodeHashesPath)
+
+  /** Persist the path to the unique codeHashes file so bytecode sync can resume after restart. */
+  def putSnapSyncCodeHashesPath(path: String): DataSourceBatchUpdate =
+    put(Keys.SnapSyncCodeHashesPath, path)
+
+  /** Get the persisted path to the contract storage file for storage sync recovery. */
+  def getSnapSyncStorageFilePath(): Option[String] =
+    get(Keys.SnapSyncStorageFilePath)
+
+  /** Persist the path to the contract storage file so storage sync can resume after restart. */
+  def putSnapSyncStorageFilePath(path: String): DataSourceBatchUpdate =
+    put(Keys.SnapSyncStorageFilePath, path)
 }
 
 object AppStateStorage {
@@ -261,6 +287,9 @@ object AppStateStorage {
     val SnapFastCycleCount = "SnapFastCycleCount"
     val BytecodeRecoveryDone = "BytecodeRecoveryDone"
     val StorageRecoveryDone = "StorageRecoveryDone"
+    val SnapSyncAccountsComplete = "SnapSyncAccountsComplete"
+    val SnapSyncCodeHashesPath = "SnapSyncCodeHashesPath"
+    val SnapSyncStorageFilePath = "SnapSyncStorageFilePath"
   }
 
 }

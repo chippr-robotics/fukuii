@@ -118,20 +118,27 @@ class McpService(
 
   /** Dependencies bundle passed to tool/resource registries */
   val deps: McpDependencies = McpDependencies(
-    peerManager, syncController, blockchainReader, blockchainConfig,
-    nodeStatusHolder, transactionMappingStorage
+    peerManager,
+    syncController,
+    blockchainReader,
+    blockchainConfig,
+    nodeStatusHolder,
+    transactionMappingStorage
   )
 
-  def initialize(request: McpInitializeRequest): ServiceResponse[McpInitializeResponse] = {
-    IO.pure(Right(McpInitializeResponse(
-      protocolVersion = "2025-11-25",
-      capabilities = McpCapabilities(),
-      serverInfo = McpServerInfo(
-        name = "Fukuii ETC Node MCP Server",
-        version = BuildInfo.version
+  def initialize(request: McpInitializeRequest): ServiceResponse[McpInitializeResponse] =
+    IO.pure(
+      Right(
+        McpInitializeResponse(
+          protocolVersion = "2025-11-25",
+          capabilities = McpCapabilities(),
+          serverInfo = McpServerInfo(
+            name = "Fukuii ETC Node MCP Server",
+            version = BuildInfo.version
+          )
+        )
       )
-    )))
-  }
+    )
 
   def toolsList(request: McpToolsListRequest): ServiceResponse[McpToolsListResponse] = {
     import org.json4s.JsonDSL._
@@ -150,18 +157,24 @@ class McpService(
     IO.pure(Right(McpToolsListResponse(tools)))
   }
 
-  def toolsCall(request: McpToolsCallRequest): ServiceResponse[McpToolsCallResponse] = {
-    McpToolRegistry.executeTool(request.name, request.arguments, deps).map { text =>
-      Right(McpToolsCallResponse(
-        content = List(McpTextContent(text = text))
-      ))
-    }.recover { case e: Exception =>
-      Right(McpToolsCallResponse(
-        content = List(McpTextContent(text = s"Error: ${e.getMessage}")),
-        isError = Some(true)
-      ))
-    }
-  }
+  def toolsCall(request: McpToolsCallRequest): ServiceResponse[McpToolsCallResponse] =
+    McpToolRegistry
+      .executeTool(request.name, request.arguments, deps)
+      .map { text =>
+        Right(
+          McpToolsCallResponse(
+            content = List(McpTextContent(text = text))
+          )
+        )
+      }
+      .recover { case e: Exception =>
+        Right(
+          McpToolsCallResponse(
+            content = List(McpTextContent(text = s"Error: ${e.getMessage}")),
+            isError = Some(true)
+          )
+        )
+      }
 
   def resourcesList(request: McpResourcesListRequest): ServiceResponse[McpResourcesListResponse] = {
     val resources = McpResourceRegistry.getAllResources().map { resDef =>
@@ -176,22 +189,25 @@ class McpService(
     IO.pure(Right(McpResourcesListResponse(resources)))
   }
 
-  def resourcesRead(request: McpResourcesReadRequest): ServiceResponse[McpResourcesReadResponse] = {
+  def resourcesRead(request: McpResourcesReadRequest): ServiceResponse[McpResourcesReadResponse] =
     McpResourceRegistry.readResource(request.uri, deps) match {
       case Right(contentIO) =>
         contentIO.map { content =>
-          Right(McpResourcesReadResponse(
-            contents = List(McpResourceContents(
-              uri = request.uri,
-              mimeType = Some("application/json"),
-              text = Some(content)
-            ))
-          ))
+          Right(
+            McpResourcesReadResponse(
+              contents = List(
+                McpResourceContents(
+                  uri = request.uri,
+                  mimeType = Some("application/json"),
+                  text = Some(content)
+                )
+              )
+            )
+          )
         }
       case Left(error) =>
         IO.pure(Left(JsonRpcError.InvalidParams(error)))
     }
-  }
 
   def promptsList(request: McpPromptsListRequest): ServiceResponse[McpPromptsListResponse] = {
     val prompts = McpPromptRegistry.getAllPrompts().map { promptDef =>
@@ -208,10 +224,14 @@ class McpService(
   def promptsGet(request: McpPromptsGetRequest): ServiceResponse[McpPromptsGetResponse] = {
     val (description, messages) = McpPromptRegistry.getPrompt(request.name)
 
-    IO.pure(Right(McpPromptsGetResponse(
-      description = Some(description),
-      messages = messages
-    )))
+    IO.pure(
+      Right(
+        McpPromptsGetResponse(
+          description = Some(description),
+          messages = messages
+        )
+      )
+    )
   }
 }
 

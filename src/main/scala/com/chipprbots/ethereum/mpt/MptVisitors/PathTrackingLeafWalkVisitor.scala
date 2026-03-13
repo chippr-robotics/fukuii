@@ -5,15 +5,13 @@ import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.mpt._
 
-/** Visitor that walks an MPT and invokes a callback for each leaf node,
-  * providing the full key path (nibbles concatenated from root to leaf).
+/** Visitor that walks an MPT and invokes a callback for each leaf node, providing the full key path (nibbles
+  * concatenated from root to leaf).
   *
-  * In the Ethereum state trie, the full path equals keccak256(address)
-  * in nibble form. Converting nibbles back to bytes gives the 32-byte
-  * account hash needed by StorageTask.
+  * In the Ethereum state trie, the full path equals keccak256(address) in nibble form. Converting nibbles back to bytes
+  * gives the 32-byte account hash needed by StorageTask.
   *
-  * Used by StorageRecoveryActor (Bug 20 hardening) to recover missing
-  * contract storage tries.
+  * Used by StorageRecoveryActor (Bug 20 hardening) to recover missing contract storage tries.
   */
 class PathTrackingLeafWalkVisitor(
     storage: MptStorage,

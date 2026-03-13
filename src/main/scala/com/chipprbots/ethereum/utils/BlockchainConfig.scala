@@ -9,7 +9,7 @@ import com.typesafe.config.ConfigRenderOptions
 import com.typesafe.config.{Config => TypesafeConfig}
 
 import com.chipprbots.ethereum.consensus.mess.MESSConfig
-import com.chipprbots.ethereum.domain.UInt256
+import com.chipprbots.ethereum.domain.{Address, UInt256}
 import com.chipprbots.ethereum.utils.NumericUtils._
 
 case class BlockchainConfig(
@@ -27,7 +27,8 @@ case class BlockchainConfig(
     ethCompatibleStorage: Boolean,
     bootstrapNodes: Set[String],
     allowedMinersPublicKeys: Set[ByteString] = Set.empty,
-    messConfig: MESSConfig = MESSConfig()
+    messConfig: MESSConfig = MESSConfig(),
+    treasuryAddress: Address = Address(0)
 ) {
   def withUpdatedForkBlocks(update: (ForkBlockNumbers) => ForkBlockNumbers): BlockchainConfig =
     copy(forkBlockNumbers = update(forkBlockNumbers))
@@ -56,10 +57,11 @@ case class ForkBlockNumbers(
     magnetoBlockNumber: BigInt,
     berlinBlockNumber: BigInt,
     mystiqueBlockNumber: BigInt,
-    spiralBlockNumber: BigInt
+    spiralBlockNumber: BigInt,
+    olympiaBlockNumber: BigInt
 ) {
-  def all: List[BigInt] = this.productIterator.toList.collect {
-    case i: BigInt => i
+  def all: List[BigInt] = this.productIterator.toList.collect { case i: BigInt =>
+    i
   }
 }
 
@@ -87,7 +89,8 @@ object ForkBlockNumbers {
     magnetoBlockNumber = Long.MaxValue,
     berlinBlockNumber = Long.MaxValue,
     mystiqueBlockNumber = Long.MaxValue,
-    spiralBlockNumber = Long.MaxValue
+    spiralBlockNumber = Long.MaxValue,
+    olympiaBlockNumber = Long.MaxValue
   )
 }
 
@@ -154,6 +157,11 @@ object BlockchainConfig {
     val berlinBlockNumber: BigInt = BigInt(blockchainConfig.getString("berlin-block-number"))
     val mystiqueBlockNumber: BigInt = BigInt(blockchainConfig.getString("mystique-block-number"))
     val spiralBlockNumber: BigInt = BigInt(blockchainConfig.getString("spiral-block-number"))
+    val olympiaBlockNumber: BigInt =
+      Try(BigInt(blockchainConfig.getString("olympia-block-number"))).getOrElse(BigInt(Long.MaxValue))
+
+    val treasuryAddress: Address =
+      Try(Address(blockchainConfig.getString("treasury-address"))).getOrElse(Address(0))
 
     val messConfig: MESSConfig = Try {
       val messConf = blockchainConfig.getConfig("mess")
@@ -189,7 +197,8 @@ object BlockchainConfig {
         magnetoBlockNumber = magnetoBlockNumber,
         berlinBlockNumber = berlinBlockNumber,
         mystiqueBlockNumber = mystiqueBlockNumber,
-        spiralBlockNumber = spiralBlockNumber
+        spiralBlockNumber = spiralBlockNumber,
+        olympiaBlockNumber = olympiaBlockNumber
       ),
       maxCodeSize = maxCodeSize,
       customGenesisFileOpt = customGenesisFileOpt,
@@ -203,7 +212,8 @@ object BlockchainConfig {
       ethCompatibleStorage = ethCompatibleStorage,
       bootstrapNodes = bootstrapNodes,
       allowedMinersPublicKeys = allowedMinersPublicKeys,
-      messConfig = messConfig
+      messConfig = messConfig,
+      treasuryAddress = treasuryAddress
     )
   }
   // scalastyle:on method.length

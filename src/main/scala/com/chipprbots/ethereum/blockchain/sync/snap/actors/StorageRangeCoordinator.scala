@@ -83,8 +83,8 @@ class StorageRangeCoordinator(
     requestTracker: SNAPRequestTracker,
     mptStorage: MptStorage,
     maxAccountsPerBatch: Int,
-  maxInFlightRequests: Int,
-  requestTimeout: FiniteDuration,
+    maxInFlightRequests: Int,
+    requestTimeout: FiniteDuration,
     snapSyncController: ActorRef
 ) extends Actor
     with ActorLogging {
@@ -96,7 +96,8 @@ class StorageRangeCoordinator(
 
   // Task management
   private val tasks = mutable.Queue[StorageTask]()
-  private val activeTasks = mutable.Map[BigInt, (Peer, Seq[StorageTask], BigInt)]() // requestId -> (peer, tasks, requestedBytes)
+  private val activeTasks =
+    mutable.Map[BigInt, (Peer, Seq[StorageTask], BigInt)]() // requestId -> (peer, tasks, requestedBytes)
   private val completedTasks = mutable.ArrayBuffer[StorageTask]()
 
   // Track consecutive timeouts per peer. When a peer hits the threshold, it's marked stateless.
@@ -127,8 +128,8 @@ class StorageRangeCoordinator(
   // doubles from 60s up to 5 minutes. Resets to 0 when we receive actual storage slots.
   private var consecutiveUnproductiveRefreshes: Int = 0
   private var lastPivotRefreshTimeMs: Long = 0
-  private val minRefreshIntervalMs: Long = 60000L   // 1 minute minimum between refreshes
-  private val maxRefreshIntervalMs: Long = 300000L   // 5 minutes maximum backoff
+  private val minRefreshIntervalMs: Long = 60000L // 1 minute minimum between refreshes
+  private val maxRefreshIntervalMs: Long = 300000L // 5 minutes maximum backoff
 
   private def isPeerStateless(peer: Peer): Boolean =
     statelessPeers.contains(peer.id.value)
@@ -205,6 +206,11 @@ class StorageRangeCoordinator(
   private val emptyResponsesByTask = mutable.HashMap.empty[StorageTaskKey, Int]
   private val maxEmptyResponsesPerTask: Int = 5
 
+  // Sentinel: when true, no more AddStorageTasks will arrive (all accounts downloaded).
+  // Completion is only reported after this is set AND pending+active tasks drain.
+  // Geth-aligned: coordinators run from start, tasks arrive inline during account download.
+  private var noMoreTasksExpected: Boolean = false
+
   // Statistics
   private var slotsDownloaded: Long = 0
   private var bytesDownloaded: Long = 0
@@ -213,30 +219,33 @@ class StorageRangeCoordinator(
   // Per-peer adaptive byte budgeting (ported from ByteCodeCoordinator).
   // Geth's snap handler supports up to 2MB responses. Starting at 512KB and probing upward
   // on responsive peers, scaling down on failures.
-  private val minResponseBytes: BigInt = 50 * 1024        // 50KB floor
-  private val maxResponseBytes: BigInt = 2 * 1024 * 1024   // 2MB ceiling (Geth handler limit)
-  private val initialResponseBytes: BigInt = 512 * 1024     // 512KB starting point
-  private val increaseFactor: Double = 1.25                  // Scale up when 90%+ fill
-  private val decreaseFactor: Double = 0.5                   // Scale down on failure/empty
+  private val minResponseBytes: BigInt = 50 * 1024 // 50KB floor
+  private val maxResponseBytes: BigInt = 2 * 1024 * 1024 // 2MB ceiling (Geth handler limit)
+  private val initialResponseBytes: BigInt = 512 * 1024 // 512KB starting point
+  private val increaseFactor: Double = 1.25 // Scale up when 90%+ fill
+  private val decreaseFactor: Double = 0.5 // Scale down on failure/empty
 
   private val peerResponseBytesTarget = mutable.Map.empty[String, BigInt]
 
   private def responseBytesTargetFor(peer: Peer): BigInt =
-    peerResponseBytesTarget.getOrElseUpdate(peer.id.value, initialResponseBytes)
-      .max(minResponseBytes).min(maxResponseBytes)
+    peerResponseBytesTarget
+      .getOrElseUpdate(peer.id.value, initialResponseBytes)
+      .max(minResponseBytes)
+      .min(maxResponseBytes)
 
-  private def adjustResponseBytesOnSuccess(peer: Peer, requested: BigInt, received: BigInt): Unit = {
+  private def adjustResponseBytesOnSuccess(peer: Peer, requested: BigInt, received: BigInt): Unit =
     if (requested > 0 && received * 10 >= requested * 9 && requested < maxResponseBytes) {
       val next = (requested.toDouble * increaseFactor).toLong
       peerResponseBytesTarget.update(peer.id.value, BigInt(next).min(maxResponseBytes))
     }
-  }
 
   private def adjustResponseBytesOnFailure(peer: Peer, reason: String): Unit = {
     val cur = responseBytesTargetFor(peer)
     val next = (cur.toDouble * decreaseFactor).toLong
     peerResponseBytesTarget.update(peer.id.value, BigInt(next).max(minResponseBytes))
-    log.debug(s"Reducing storage responseBytes target for peer ${peer.id.value}: $cur -> ${peerResponseBytesTarget(peer.id.value)} ($reason)")
+    log.debug(
+      s"Reducing storage responseBytes target for peer ${peer.id.value}: $cur -> ${peerResponseBytesTarget(peer.id.value)} ($reason)"
+    )
   }
 
   // Deferred-write storage wrapper: makes updateNodesInStorage() a no-op during bulk insertion,
@@ -251,15 +260,13 @@ class StorageRangeCoordinator(
   private val proofVerifiers = mutable.Map[ByteString, MerkleProofVerifier]()
   private val storageTrieCache = new StorageTrieCache(10000)
 
-  override def preStart(): Unit = {
+  override def preStart(): Unit =
     log.info(s"StorageRangeCoordinator starting (concurrency=$maxInFlightRequests, batchSize=$maxAccountsPerBatch)")
-  }
 
   override val supervisorStrategy: SupervisorStrategy =
-    OneForOneStrategy(maxNrOfRetries = 3, withinTimeRange = 1.minute) {
-      case _: Exception =>
-        log.warning("Storage worker failed, restarting")
-        Restart
+    OneForOneStrategy(maxNrOfRetries = 3, withinTimeRange = 1.minute) { case _: Exception =>
+      log.warning("Storage worker failed, restarting")
+      Restart
     }
 
   override def receive: Receive = {
@@ -269,7 +276,9 @@ class StorageRangeCoordinator(
     case AddStorageTasks(storageTasks) =>
       tasks.enqueueAll(storageTasks)
       totalStorageContracts += storageTasks.map(_.accountHash).distinct.size
-      log.info(s"Added ${storageTasks.size} storage tasks to queue (total pending: ${tasks.size}, contracts: $totalStorageContracts)")
+      log.info(
+        s"Added ${storageTasks.size} storage tasks to queue (total pending: ${tasks.size}, contracts: $totalStorageContracts)"
+      )
 
     case AddStorageTask(task) =>
       tasks.enqueue(task)
@@ -324,11 +333,20 @@ class StorageRangeCoordinator(
         tryRedispatchPendingTasks()
       }
 
+    case NoMoreStorageTasks =>
+      noMoreTasksExpected = true
+      log.info(s"No more storage tasks expected. Pending: ${tasks.size}, active: ${activeTasks.size}")
+      if (isComplete) {
+        deferredStorage.flush()
+        log.info("Storage range sync complete!")
+        snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
+      }
+
     case ForceCompleteStorage =>
       val abandoned = tasks.size + activeTasks.size
       log.warning(
         s"Force-completing storage sync: flushing $slotsDownloaded downloaded slots to disk, " +
-        s"abandoning $abandoned remaining tasks (healing phase will recover missing data)"
+          s"abandoning $abandoned remaining tasks (healing phase will recover missing data)"
       )
       deferredStorage.flush()
       log.info("Storage range sync force-completed (promoting to healing phase)")
@@ -362,8 +380,26 @@ class StorageRangeCoordinator(
       )
       sender() ! stats
 
-    case StoreStorageSlotChunk(task, remainingSlots, totalCount, storedSoFar, proof, peer, requestedBytes, isLastServedTask) =>
-      handleStoreStorageSlotChunk(task, remainingSlots, totalCount, storedSoFar, proof, peer, requestedBytes, isLastServedTask)
+    case StoreStorageSlotChunk(
+          task,
+          remainingSlots,
+          totalCount,
+          storedSoFar,
+          proof,
+          peer,
+          requestedBytes,
+          isLastServedTask
+        ) =>
+      handleStoreStorageSlotChunk(
+        task,
+        remainingSlots,
+        totalCount,
+        storedSoFar,
+        proof,
+        peer,
+        requestedBytes,
+        isLastServedTask
+      )
   }
 
   private def requestNextRanges(peer: Peer): Option[BigInt] = {
@@ -390,9 +426,8 @@ class StorageRangeCoordinator(
         Seq(first)
       } else {
         val buf = mutable.ArrayBuffer[StorageTask](first)
-        while (buf.size < peerBatch && tasks.nonEmpty && isInitialRange(tasks.front)) {
+        while (buf.size < peerBatch && tasks.nonEmpty && isInitialRange(tasks.front))
           buf += tasks.dequeue()
-        }
         buf.toSeq
       }
 
@@ -444,13 +479,14 @@ class StorageRangeCoordinator(
     Some(requestId)
   }
 
-  private def handleResponse(response: StorageRanges): Unit = {
+  private def handleResponse(response: StorageRanges): Unit =
     requestTracker.validateStorageRanges(response) match {
       case Left(error) =>
         log.warning(s"Invalid StorageRanges response: $error")
 
       case Right(validResponse) =>
-        requestTracker.completeRequest(response.requestId) match {
+        val slotCount = validResponse.slots.map(_.size).sum
+        requestTracker.completeRequest(response.requestId, slotCount.max(1)) match {
           case None =>
             log.warning(s"Received response for unknown request ID ${response.requestId}")
 
@@ -464,9 +500,13 @@ class StorageRangeCoordinator(
             }
         }
     }
-  }
 
-  private def processStorageRanges(peer: Peer, tasks: Seq[StorageTask], requestedBytes: BigInt, response: StorageRanges): Unit = {
+  private def processStorageRanges(
+      peer: Peer,
+      tasks: Seq[StorageTask],
+      requestedBytes: BigInt,
+      response: StorageRanges
+  ): Unit = {
     // Count only responses that actually contain slot data as "served".
     // Proof-only responses (0 slot-sets, non-empty proofs) are NOT counted as served because:
     //  1. After a pivot refresh, peers may return proof-of-absence for stale task roots
@@ -735,9 +775,8 @@ class StorageRangeCoordinator(
       .toList
     if (eligiblePeers.isEmpty) return
 
-    for (peer <- eligiblePeers if tasks.nonEmpty && activeTasks.size < maxInFlightRequests) {
+    for (peer <- eligiblePeers if tasks.nonEmpty && activeTasks.size < maxInFlightRequests)
       requestNextRanges(peer)
-    }
   }
 
   private def progress: Double = {
@@ -747,9 +786,8 @@ class StorageRangeCoordinator(
     else completedTasks.size.toDouble / total
   }
 
-  private def isComplete: Boolean = {
-    tasks.isEmpty && activeTasks.isEmpty
-  }
+  private def isComplete: Boolean =
+    noMoreTasksExpected && tasks.isEmpty && activeTasks.isEmpty
 
   /** Update contract completion counts and send progress to controller. */
   private def updateContractProgress(): Unit = {
@@ -760,7 +798,8 @@ class StorageRangeCoordinator(
       completedAccountHashes.clear()
       completedTasks.foreach(t => completedAccountHashes.add(t.accountHash))
       snapSyncController ! SNAPSyncController.ProgressStorageContracts(
-        completedAccountHashes.size, totalStorageContracts
+        completedAccountHashes.size,
+        totalStorageContracts
       )
     }
   }

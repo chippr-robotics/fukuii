@@ -126,7 +126,10 @@ class QaJRCSpec
       implicit val testSystem: org.apache.pekko.actor.ActorSystem =
         org.apache.pekko.actor.ActorSystem("QaJRCSpec-mcp")
       new McpService(
-        org.apache.pekko.testkit.TestProbe().ref, org.apache.pekko.testkit.TestProbe().ref, null, null,
+        org.apache.pekko.testkit.TestProbe().ref,
+        org.apache.pekko.testkit.TestProbe().ref,
+        null,
+        null,
         new java.util.concurrent.atomic.AtomicReference[com.chipprbots.ethereum.utils.NodeStatus](),
         null
       )(scala.concurrent.ExecutionContext.global)

@@ -94,8 +94,10 @@ class StateNodeFetcher(
             log.debug("State node validation failed with {}", err.description)
             peersClient ! BlacklistPeer(peer.id, err)
             context.self ! StateNodeFetcher.FetchStateNode(
-              stateNodeRequester.hash, stateNodeRequester.replyTo,
-              stateNodeRequester.stateRoot, stateNodeRequester.pathset
+              stateNodeRequester.hash,
+              stateNodeRequester.replyTo,
+              stateNodeRequester.stateRoot,
+              stateNodeRequester.pathset
             )
             Behaviors.same[StateNodeFetcherCommand]
           case Right(node) =>
@@ -113,8 +115,10 @@ class StateNodeFetcher(
           log.debug("SNAP TrieNodes response was empty, retrying")
           peersClient ! BlacklistPeer(peer.id, BlacklistReason.EmptyStateNodeResponse)
           context.self ! StateNodeFetcher.FetchStateNode(
-            stateNodeRequester.hash, stateNodeRequester.replyTo,
-            stateNodeRequester.stateRoot, stateNodeRequester.pathset
+            stateNodeRequester.hash,
+            stateNodeRequester.replyTo,
+            stateNodeRequester.stateRoot,
+            stateNodeRequester.pathset
           )
           Behaviors.same[StateNodeFetcherCommand]
         } else {
@@ -129,8 +133,10 @@ class StateNodeFetcher(
             log.warn("SNAP TrieNodes hash mismatch: expected {}, got {}", stateNodeRequester.hash, nodeHash)
             peersClient ! BlacklistPeer(peer.id, BlacklistReason.WrongStateNodeResponse)
             context.self ! StateNodeFetcher.FetchStateNode(
-              stateNodeRequester.hash, stateNodeRequester.replyTo,
-              stateNodeRequester.stateRoot, stateNodeRequester.pathset
+              stateNodeRequester.hash,
+              stateNodeRequester.replyTo,
+              stateNodeRequester.stateRoot,
+              stateNodeRequester.pathset
             )
             Behaviors.same[StateNodeFetcherCommand]
           }

@@ -8,9 +8,8 @@ import com.typesafe.config.ConfigFactory
 import com.chipprbots.ethereum.testing.Tags._
 
 // scalastyle:off magic.number
-/** Validates that ETC mainnet and Mordor chain configurations load correctly from HOCON
-  * config files and contain the expected fork block numbers, ECBP-1100 (MESS) activation
-  * windows, and monetary policy parameters.
+/** Validates that ETC mainnet and Mordor chain configurations load correctly from HOCON config files and contain the
+  * expected fork block numbers, ECBP-1100 (MESS) activation windows, and monetary policy parameters.
   *
   * Reference: Besu's GenesisConfigClassicTest (18 tests validating config parsing)
   */

@@ -25,10 +25,12 @@ object Messages {
   case object GetContractAccounts extends AccountRangeCoordinatorMessage
   case class ContractAccountsResponse(accounts: Seq[(ByteString, ByteString)]) extends AccountRangeCoordinatorMessage
   case object GetContractStorageAccounts extends AccountRangeCoordinatorMessage
-  case class ContractStorageAccountsResponse(accounts: Seq[(ByteString, ByteString)]) extends AccountRangeCoordinatorMessage
+  case class ContractStorageAccountsResponse(accounts: Seq[(ByteString, ByteString)])
+      extends AccountRangeCoordinatorMessage
 
-  /** Request unique codeHashes collected during account download (Bloom-filtered, file-backed).
-    * Returns ~2M entries (~64MB) instead of 73.5M raw entries (4.7GB). Bug 20 fix. */
+  /** Request unique codeHashes collected during account download (Bloom-filtered, file-backed). Returns ~2M entries
+    * (~64MB) instead of 73.5M raw entries (4.7GB). Bug 20 fix.
+    */
   case object GetUniqueCodeHashes extends AccountRangeCoordinatorMessage
   case class UniqueCodeHashesResponse(codeHashes: Seq[ByteString])
 
@@ -37,13 +39,15 @@ object Messages {
   case class StorageFileInfoResponse(filePath: java.nio.file.Path, count: Long)
   case object CheckCompletion extends AccountRangeCoordinatorMessage
 
-  /** Sent by AccountRangeCoordinator to SNAPSyncController with progress for ALL ranges.
-    * Maps range `last` hash → current `next` position. Used to resume partial ranges
-    * across SNAP sync restarts (core-geth parity: preserves task.Next across pivot changes). */
+  /** Sent by AccountRangeCoordinator to SNAPSyncController with progress for ALL ranges. Maps range `last` hash →
+    * current `next` position. Used to resume partial ranges across SNAP sync restarts (core-geth parity: preserves
+    * task.Next across pivot changes).
+    */
   case class AccountRangeProgress(progress: Map[ByteString, ByteString]) extends AccountRangeCoordinatorMessage
 
-  /** Sent by SNAPSyncController when a fresher pivot has been selected.
-    * Coordinator updates pending tasks with the new root and resumes downloading. */
+  /** Sent by SNAPSyncController when a fresher pivot has been selected. Coordinator updates pending tasks with the new
+    * root and resumes downloading.
+    */
   case class PivotRefreshed(newStateRoot: ByteString) extends AccountRangeCoordinatorMessage
 
   // Internal message for chunked account storage (avoids blocking the actor for minutes)
@@ -56,7 +60,12 @@ object Messages {
   ) extends AccountRangeCoordinatorMessage
 
   sealed trait AccountRangeWorkerMessage
-  case class FetchAccountRange(task: AccountTask, peer: Peer, requestId: BigInt, responseBytes: BigInt = BigInt(512 * 1024)) extends AccountRangeWorkerMessage
+  case class FetchAccountRange(
+      task: AccountTask,
+      peer: Peer,
+      requestId: BigInt,
+      responseBytes: BigInt = BigInt(512 * 1024)
+  ) extends AccountRangeWorkerMessage
   case class AccountRangeResponseMsg(response: AccountRange) extends AccountRangeWorkerMessage
   case class RequestTimeout(requestId: BigInt) extends AccountRangeWorkerMessage
 
@@ -67,6 +76,22 @@ object Messages {
   sealed trait ByteCodeCoordinatorMessage
 
   case class StartByteCodeSync(codeHashes: Seq[ByteString]) extends ByteCodeCoordinatorMessage
+
+  /** Incrementally add bytecode download tasks (geth-aligned: inline dispatch from account responses). Coordinator
+    * deduplicates and batches these into ByteCodeTasks.
+    */
+  case class AddByteCodeTasks(codeHashes: Seq[ByteString]) extends ByteCodeCoordinatorMessage
+
+  /** Signal that no more bytecode tasks will arrive (all accounts downloaded). Coordinator may now report completion
+    * when pending + active tasks drain.
+    */
+  case object NoMoreByteCodeTasks extends ByteCodeCoordinatorMessage
+
+  /** Sent by SNAPSyncController when a fresher pivot has been selected. Bytecodes are content-addressed (hash-keyed) so
+    * pivot changes don't invalidate them, but the coordinator should clear stale peer tracking.
+    */
+  case object ByteCodePivotRefreshed extends ByteCodeCoordinatorMessage
+
   case class ByteCodePeerAvailable(peer: Peer) extends ByteCodeCoordinatorMessage
   case class ByteCodeTaskComplete(requestId: BigInt, result: Either[String, Int]) extends ByteCodeCoordinatorMessage
   case class ByteCodeTaskFailed(requestId: BigInt, reason: String) extends ByteCodeCoordinatorMessage
@@ -75,7 +100,8 @@ object Messages {
 
   sealed trait ByteCodeWorkerMessage
   case class FetchByteCodes(task: ByteCodeTask, peer: Peer) extends ByteCodeWorkerMessage
-  case class ByteCodeWorkerFetchTask(task: ByteCodeTask, peer: Peer, requestId: BigInt, maxResponseSize: BigInt) extends ByteCodeWorkerMessage
+  case class ByteCodeWorkerFetchTask(task: ByteCodeTask, peer: Peer, requestId: BigInt, maxResponseSize: BigInt)
+      extends ByteCodeWorkerMessage
   case class ByteCodesResponseMsg(response: ByteCodes) extends ByteCodeWorkerMessage
   case class ByteCodeRequestTimeout(requestId: BigInt) extends ByteCodeWorkerMessage
   case class ByteCodeProgress(progress: Double, bytecodesDownloaded: Long, bytesDownloaded: Long)
@@ -101,12 +127,19 @@ object Messages {
   case class StorageRequestTimeout(requestId: BigInt) extends StorageRangeWorkerMessage
   case object StorageCheckIdle extends StorageRangeWorkerMessage
 
-  /** Sent by SNAPSyncController when a fresher pivot has been selected during storage sync.
-    * Coordinator updates state root and clears per-peer adaptive state. */
+  /** Sent by SNAPSyncController when a fresher pivot has been selected during storage sync. Coordinator updates state
+    * root and clears per-peer adaptive state.
+    */
   case class StoragePivotRefreshed(newStateRoot: ByteString) extends StorageRangeCoordinatorMessage
 
-  /** Sent by SNAPSyncController when storage sync has stagnated and should promote to healing.
-    * Coordinator flushes deferred writes and reports StorageRangeSyncComplete. */
+  /** Signal that no more storage tasks will arrive (all accounts downloaded). Coordinator may now report completion
+    * when pending + active tasks drain.
+    */
+  case object NoMoreStorageTasks extends StorageRangeCoordinatorMessage
+
+  /** Sent by SNAPSyncController when storage sync has stagnated and should promote to healing. Coordinator flushes
+    * deferred writes and reports StorageRangeSyncComplete.
+    */
   case object ForceCompleteStorage extends StorageRangeCoordinatorMessage
 
   // Internal message for chunked storage slot persistence (avoids blocking the actor)
@@ -128,14 +161,16 @@ object Messages {
   sealed trait TrieNodeHealingCoordinatorMessage
 
   case class StartTrieNodeHealing(stateRoot: ByteString) extends TrieNodeHealingCoordinatorMessage
-  /** Queue missing trie nodes for healing.
-    * Each entry is (pathset, hash) where pathset is the GetTrieNodes path encoding:
+
+  /** Queue missing trie nodes for healing. Each entry is (pathset, hash) where pathset is the GetTrieNodes path
+    * encoding:
     *   - Account trie node: Seq(compact_path)
     *   - Storage trie node: Seq(account_hash, compact_storage_path)
     */
   case class QueueMissingNodes(nodes: Seq[(Seq[ByteString], ByteString)]) extends TrieNodeHealingCoordinatorMessage
   case class HealingPeerAvailable(peer: Peer) extends TrieNodeHealingCoordinatorMessage
-  case class HealingTaskComplete(requestId: BigInt, result: Either[String, Int]) extends TrieNodeHealingCoordinatorMessage
+  case class HealingTaskComplete(requestId: BigInt, result: Either[String, Int])
+      extends TrieNodeHealingCoordinatorMessage
   case class HealingTaskFailed(requestId: BigInt, reason: String) extends TrieNodeHealingCoordinatorMessage
   case object HealingGetProgress extends TrieNodeHealingCoordinatorMessage
   case object HealingCheckCompletion extends TrieNodeHealingCoordinatorMessage

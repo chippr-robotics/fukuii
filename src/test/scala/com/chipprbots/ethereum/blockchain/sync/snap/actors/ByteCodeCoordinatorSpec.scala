@@ -132,7 +132,7 @@ class ByteCodeCoordinatorSpec
     )
 
     coordinator ! Messages.ByteCodeTaskComplete(BigInt(123), Right(5))
-    
+
     // Coordinator should handle completion
     coordinator ! Messages.ByteCodeGetProgress
     expectMsgType[Any](3.seconds)
@@ -156,8 +156,11 @@ class ByteCodeCoordinatorSpec
 
     // Start with empty contract list
     coordinator ! Messages.StartByteCodeSync(Seq.empty)
-    
-    // Should complete immediately
+
+    // Signal that no more tasks will arrive (sentinel pattern)
+    coordinator ! Messages.NoMoreByteCodeTasks
+
+    // Should complete immediately since no tasks and sentinel received
     coordinator ! Messages.ByteCodeCheckCompletion
     snapSyncController.expectMsg(3.seconds, SNAPSyncController.ByteCodeSyncComplete)
   }
@@ -179,7 +182,7 @@ class ByteCodeCoordinatorSpec
     )
 
     coordinator ! Messages.ByteCodeTaskFailed(BigInt(123), "Test failure")
-    
+
     // Coordinator should still be operational
     coordinator ! Messages.ByteCodeGetProgress
     expectMsgType[Any](3.seconds)
@@ -270,7 +273,9 @@ class ByteCodeCoordinatorSpec
     req1.hashes shouldEqual Seq(h1, h2)
 
     // Respond out-of-order (violates snap/1 ordering requirement)
-    system.actorSelection(coordinator.path / "*") ! Messages.ByteCodesResponseMsg(ByteCodes(req1.requestId, Seq(code2, code1)))
+    system.actorSelection(coordinator.path / "*") ! Messages.ByteCodesResponseMsg(
+      ByteCodes(req1.requestId, Seq(code2, code1))
+    )
 
     // Ensure nothing was persisted
     within(3.seconds) {
@@ -324,7 +329,9 @@ class ByteCodeCoordinatorSpec
     req1.hashes shouldEqual Seq(h1)
 
     // Duplicate code for the same hash should be rejected
-    system.actorSelection(coordinator.path / "*") ! Messages.ByteCodesResponseMsg(ByteCodes(req1.requestId, Seq(code1, code1)))
+    system.actorSelection(coordinator.path / "*") ! Messages.ByteCodesResponseMsg(
+      ByteCodes(req1.requestId, Seq(code1, code1))
+    )
 
     within(3.seconds) {
       awaitAssert(evmCodeStorage.get(h1) shouldEqual None)

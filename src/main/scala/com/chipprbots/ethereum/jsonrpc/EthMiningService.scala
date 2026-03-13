@@ -87,7 +87,6 @@ class EthMiningService(
 
   private[this] def fullConsensusConfig = mining.config
 
-
   val hashRate: ConcurrentMap[ByteString, (BigInt, Date)] = new TrieMap[ByteString, (BigInt, Date)]()
   val lastActive = new AtomicReference[Option[Date]](None)
 

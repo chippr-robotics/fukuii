@@ -25,7 +25,10 @@ class StdBlockValidatorSpec extends AnyFlatSpec with Matchers {
     }
   }
 
-  "Invalid block" should "return a failure if created based on invalid transactions header" taggedAs (UnitTest, ConsensusTest) in {
+  "Invalid block" should "return a failure if created based on invalid transactions header" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
     StdBlockValidator.validate(Block(wrongTransactionsRootHeader, validBlockBody), validReceipts) match {
       case Left(BlockTransactionsHashError) => succeed
       case _                                => fail()

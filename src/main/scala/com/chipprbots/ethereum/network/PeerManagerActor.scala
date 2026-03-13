@@ -66,8 +66,8 @@ class PeerManagerActor(
 
   val triedNodes: mutable.Set[ByteString] = lruSet[ByteString](maxBlacklistedNodes)
 
-  /** In-process cache of peer statuses, updated reactively and via scheduled refresh.
-    * This allows GetPeers to return immediately without querying individual peer actors.
+  /** In-process cache of peer statuses, updated reactively and via scheduled refresh. This allows GetPeers to return
+    * immediately without querying individual peer actors.
     */
   private var peerStatusCache: Map[PeerId, PeerActor.Status] = Map.empty
 
@@ -492,8 +492,8 @@ class PeerManagerActor(
     mappedF.pipeTo(recipient)
   }
 
-  /** Background refresh of peer status cache using the existing parTraverse pattern.
-    * Results are piped back to self and applied to the cache.
+  /** Background refresh of peer status cache using the existing parTraverse pattern. Results are piped back to self and
+    * applied to the cache.
     */
   private def refreshPeerStatusCache(connectedPeers: ConnectedPeers): Unit = {
     val peers = connectedPeers.peers.values.toSet

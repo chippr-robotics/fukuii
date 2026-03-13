@@ -205,8 +205,8 @@ class PoWMiningCoordinatorSpec
     }
   }
 
-  /** Miner that bypasses Ethash DAG generation for fast, reliable testing.
-    * Immediately returns a successful mining result without loading the ~1GB DAG file.
+  /** Miner that bypasses Ethash DAG generation for fast, reliable testing. Immediately returns a successful mining
+    * result without loading the ~1GB DAG file.
     */
   private class InstantMiner(
       blockCreator: PoWBlockCreator,

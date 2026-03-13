@@ -33,9 +33,8 @@ trait FetchRequest[A] {
 
   /** Makes a request with peer switching on failure.
     *
-    * When a peer fails, it is added to the triedPeers set and the next request
-    * will exclude it (Besu pattern). When all peers are exhausted, exponential
-    * backoff is applied before retrying (go-ethereum grace period pattern).
+    * When a peer fails, it is added to the triedPeers set and the next request will exclude it (Besu pattern). When all
+    * peers are exhausted, exponential backoff is applied before retrying (go-ethereum grace period pattern).
     */
   def makeRequest(
       request: Request[_],
@@ -43,8 +42,12 @@ trait FetchRequest[A] {
       triedPeers: Set[PeerId] = Set.empty,
       retryCount: Int = 0
   ): IO[A] = {
-    log.debug("Making request to peers client: {} (tried: {}, retry: {})",
-      request.message.getClass.getSimpleName, triedPeers.size, retryCount)
+    log.debug(
+      "Making request to peers client: {} (tried: {}, retry: {})",
+      request.message.getClass.getSimpleName,
+      triedPeers.size,
+      retryCount
+    )
     IO
       .fromFuture(IO(peersClient ? request))
       .tap { result =>
@@ -81,13 +84,20 @@ trait FetchRequest[A] {
     msg match {
       case failed: RequestFailed =>
         val delay = retryBackoffDelay(retryCount)
-        log.debug("Request failed from peer {}, applying {}ms backoff before retry (attempt {})",
-          failed.peer.id, delay.toMillis, retryCount + 1)
+        log.debug(
+          "Request failed from peer {}, applying {}ms backoff before retry (attempt {})",
+          failed.peer.id,
+          delay.toMillis,
+          retryCount + 1
+        )
         IO.pure(fallback).delayBy(delay)
       case NoSuitablePeer =>
         val delay = retryBackoffDelay(retryCount)
-        log.debug("No suitable peer available, applying {}ms backoff before retry (attempt {})",
-          delay.toMillis, retryCount + 1)
+        log.debug(
+          "No suitable peer available, applying {}ms backoff before retry (attempt {})",
+          delay.toMillis,
+          retryCount + 1
+        )
         IO.pure(fallback).delayBy(delay)
       case Failure(cause) =>
         log.debug("Unexpected error on the request result: {}", cause.getMessage, cause)

@@ -12,6 +12,8 @@ import org.scalacheck.Gen
 import com.chipprbots.ethereum.blockchain.sync.StateSyncUtils.MptNodeData
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain._
+import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields
+import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields._
 import com.chipprbots.ethereum.mpt.BranchNode
 import com.chipprbots.ethereum.mpt.ExtensionNode
 import com.chipprbots.ethereum.mpt.HashNode
@@ -89,8 +91,41 @@ trait ObjectGenerators {
     storageKeys <- Gen.listOf(bigIntGen)
   } yield AccessListItem(address, storageKeys)
 
+  def setCodeAuthorizationGen: Gen[SetCodeAuthorization] = for {
+    chainId <- bigIntGen
+    address <- addressGen
+    nonce <- bigIntGen
+    v <- Gen.choose(BigInt(0), BigInt(1))
+    r <- bigIntGen
+    s <- bigIntGen
+  } yield SetCodeAuthorization(chainId, address, nonce, v, r, s)
+
+  def setCodeTransactionGen: Gen[SetCodeTransaction] = for {
+    chainId <- bigIntGen
+    nonce <- bigIntGen
+    maxPriorityFeePerGas <- bigIntGen
+    maxFeePerGas <- bigIntGen
+    gasLimit <- bigIntGen
+    receivingAddress <- addressGen
+    value <- bigIntGen
+    payload <- byteStringOfLengthNGen(256)
+    accessList <- Gen.listOf(accessListItemGen)
+    authorizationList <- Gen.listOfN(2, setCodeAuthorizationGen)
+  } yield SetCodeTransaction(
+    chainId,
+    nonce,
+    maxPriorityFeePerGas,
+    maxFeePerGas,
+    gasLimit,
+    Some(receivingAddress),
+    value,
+    payload,
+    accessList,
+    authorizationList
+  )
+
   def transactionGen: Gen[Transaction] =
-    Gen.oneOf(legacyTransactionGen, typedTransactionGen)
+    Gen.oneOf(legacyTransactionGen, typedTransactionGen, dynamicFeeTransactionGen, setCodeTransactionGen)
 
   def legacyTransactionGen: Gen[LegacyTransaction] = for {
     nonce <- bigIntGen
@@ -121,6 +156,28 @@ trait ObjectGenerators {
     chainId,
     nonce,
     gasPrice,
+    gasLimit,
+    receivingAddress,
+    value,
+    payload,
+    accessList
+  )
+
+  def dynamicFeeTransactionGen: Gen[TransactionWithDynamicFee] = for {
+    chainId <- bigIntGen
+    nonce <- bigIntGen
+    maxPriorityFeePerGas <- bigIntGen
+    maxFeePerGas <- bigIntGen
+    gasLimit <- bigIntGen
+    receivingAddress <- addressGen
+    value <- bigIntGen
+    payload <- byteStringOfLengthNGen(256)
+    accessList <- Gen.listOf(accessListItemGen)
+  } yield TransactionWithDynamicFee(
+    chainId,
+    nonce,
+    maxPriorityFeePerGas,
+    maxFeePerGas,
     gasLimit,
     receivingAddress,
     value,
@@ -195,6 +252,11 @@ trait ObjectGenerators {
     uncles <- seqBlockHeaderGen
     td <- bigIntGen
   } yield NewBlock(Block(blockHeader, BlockBody(stxs, uncles)), td)
+
+  def extraFieldsGen: Gen[HeaderExtraFields] = Gen.oneOf(
+    Gen.const(HefEmpty),
+    bigIntGen.map(baseFee => HefPostOlympia(baseFee))
+  )
 
   def blockHeaderGen: Gen[BlockHeader] = for {
     parentHash <- byteStringOfLengthNGen(32)

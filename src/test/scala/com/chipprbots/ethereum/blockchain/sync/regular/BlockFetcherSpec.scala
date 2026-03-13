@@ -161,8 +161,8 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
 
       // Fetcher should blacklist the peer and retry asking for the same bodies
       peersClient.expectMsgClass(classOf[BlacklistPeer])
-      peersClient.expectMsgPF() { 
-        case PeersClient.Request(msg: ETH66GetBlockBodies, _, _) if msg.hashes == firstBlocksBatch.map(_.hash) => () 
+      peersClient.expectMsgPF() {
+        case PeersClient.Request(msg: ETH66GetBlockBodies, _, _) if msg.hashes == firstBlocksBatch.map(_.hash) => ()
       }
 
       // Fetcher should not enqueue any new block

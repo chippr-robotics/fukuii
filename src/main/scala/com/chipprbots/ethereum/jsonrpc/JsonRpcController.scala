@@ -39,7 +39,7 @@ case class JsonRpcController(
     ethTxService: EthTxService,
     ethUserService: EthUserService,
     ethFilterService: EthFilterService,
-  personalService: PersonalServiceAPI,
+    personalService: PersonalServiceAPI,
     testServiceOpt: Option[TestService],
     debugService: DebugService,
     qaService: QAService,
@@ -123,6 +123,8 @@ case class JsonRpcController(
       handle[ChainIdRequest, ChainIdResponse](ethInfoService.chainId, req)
     case req @ JsonRpcRequest(_, "eth_syncing", _, _) =>
       handle[SyncingRequest, SyncingResponse](ethInfoService.syncing, req)
+    case req @ JsonRpcRequest(_, "eth_config", _, _) =>
+      handle[ConfigRequest, ConfigResponse](ethInfoService.config, req)
     case req @ JsonRpcRequest(_, "eth_submitHashrate", _, _) =>
       handle[SubmitHashRateRequest, SubmitHashRateResponse](ethMiningService.submitHashRate, req)
     case req @ JsonRpcRequest(_, "eth_hashrate", _, _) =>
@@ -147,7 +149,10 @@ case class JsonRpcController(
     case req @ JsonRpcRequest(_, "miner_getStatus", _, _) =>
       handle[GetMinerStatusRequest, GetMinerStatusResponse](ethMiningService.getMinerStatus, req)
     case req @ JsonRpcRequest(_, "eth_setEtherbase", _, _) =>
-      handle[EthMiningService.SetEtherbaseRequest, EthMiningService.SetEtherbaseResponse](ethMiningService.setEtherbase, req)
+      handle[EthMiningService.SetEtherbaseRequest, EthMiningService.SetEtherbaseResponse](
+        ethMiningService.setEtherbase,
+        req
+      )
     case req @ JsonRpcRequest(_, "eth_blockNumber", _, _) =>
       handle[BestBlockNumberRequest, BestBlockNumberResponse](ethBlocksService.bestBlockNumber, req)
     case req @ JsonRpcRequest(_, "eth_coinbase", _, _) =>

@@ -70,37 +70,38 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
 
   val route: Route = handleRejections(myRejectionHandler) {
     cors(corsSettings) {
-    (path("health") & pathEndOrSingleSlash & get) {
-      handleHealth()
-    } ~ (path("readiness") & pathEndOrSingleSlash & get) {
-      handleReadiness()
-    } ~ (path("healthcheck") & pathEndOrSingleSlash & get) {
-      handleHealthcheck()
-    } ~ (path("buildinfo") & pathEndOrSingleSlash & get) {
-      handleBuildInfo()
-    } ~ (pathEndOrSingleSlash & post) {
-      // TODO: maybe rate-limit this one too?
-      entity(as[JsonRpcRequest]) {
-        case statusReq if statusReq.method == FaucetJsonRpcController.Status =>
-          handleRequest(statusReq)
-        case jsonReq =>
-          rateLimit {
-            handleRequest(jsonReq)
-          }
-        // TODO: separate paths for single and multiple requests
-        // TODO: to prevent repeated body and json parsing
-      } ~ entity(as[Seq[JsonRpcRequest]]) {
-        case _ if config.rateLimit.enabled =>
-          complete(StatusCodes.MethodNotAllowed, JsonRpcError.MethodNotFound)
-        case reqSeq =>
-          complete {
-            reqSeq.toList
-              .traverse(request => jsonRpcController.handleRequest(request))
-              .unsafeToFuture()
-          }
+      (path("health") & pathEndOrSingleSlash & get) {
+        handleHealth()
+      } ~ (path("readiness") & pathEndOrSingleSlash & get) {
+        handleReadiness()
+      } ~ (path("healthcheck") & pathEndOrSingleSlash & get) {
+        handleHealthcheck()
+      } ~ (path("buildinfo") & pathEndOrSingleSlash & get) {
+        handleBuildInfo()
+      } ~ (pathEndOrSingleSlash & post) {
+        // TODO: maybe rate-limit this one too?
+        entity(as[JsonRpcRequest]) {
+          case statusReq if statusReq.method == FaucetJsonRpcController.Status =>
+            handleRequest(statusReq)
+          case jsonReq =>
+            rateLimit {
+              handleRequest(jsonReq)
+            }
+          // TODO: separate paths for single and multiple requests
+          // TODO: to prevent repeated body and json parsing
+        } ~ entity(as[Seq[JsonRpcRequest]]) {
+          case _ if config.rateLimit.enabled =>
+            complete(StatusCodes.MethodNotAllowed, JsonRpcError.MethodNotFound)
+          case reqSeq =>
+            complete {
+              reqSeq.toList
+                .traverse(request => jsonRpcController.handleRequest(request))
+                .unsafeToFuture()
+            }
+        }
       }
     }
-  }}
+  }
 
   def handleRequest(request: JsonRpcRequest): StandardRoute =
     complete(handleResponse(jsonRpcController.handleRequest(request)).unsafeToFuture())

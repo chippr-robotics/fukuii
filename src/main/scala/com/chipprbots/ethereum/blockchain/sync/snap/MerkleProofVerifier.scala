@@ -314,7 +314,6 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
       }
       .map(_.toInt)
 
-
   /** Verify a storage range response with Merkle proof
     *
     * This method verifies storage slots against an account's storage root. Similar to account verification but operates

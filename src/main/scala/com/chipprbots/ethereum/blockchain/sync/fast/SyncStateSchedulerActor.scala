@@ -55,12 +55,11 @@ class SyncStateSchedulerActor(
   private var noCompatiblePeersCount: Int = 0
   private val NoCompatiblePeersThreshold: Int = 5
 
-  /** Check if a capability supports GetNodeData message.
-    * GetNodeData is available in ETH63-67 but removed in ETH68 per EIP-4938.
-    * SNAP protocol uses different messages (GetAccountRange, etc.) and doesn't support GetNodeData.
-    * 
-    * Note: Capability is a sealed trait, so this match is exhaustive. If new capabilities are added
-    * in the future, this method will need to be updated accordingly.
+  /** Check if a capability supports GetNodeData message. GetNodeData is available in ETH63-67 but removed in ETH68 per
+    * EIP-4938. SNAP protocol uses different messages (GetAccountRange, etc.) and doesn't support GetNodeData.
+    *
+    * Note: Capability is a sealed trait, so this match is exhaustive. If new capabilities are added in the future, this
+    * method will need to be updated accordingly.
     */
   private def supportsGetNodeData(capability: Capability): Boolean = capability match {
     case Capability.ETH63 | Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 => true
@@ -70,17 +69,18 @@ class SyncStateSchedulerActor(
 
   private def getFreePeers(state: DownloaderState): List[Peer] = {
     // Partition peers into compatible, incompatible, and all free peers
-    val (compatiblePeers, incompatiblePeers, incompatibleCount) = peersToDownloadFrom.foldLeft((List.empty[Peer], List.empty[Peer], 0)) {
-      case ((compat, incompat, count), (_, PeerWithInfo(peer, peerInfo))) =>
-        if (state.activeRequests.contains(peer.id)) {
-          (compat, incompat, count) // Skip peers with active requests
-        } else if (supportsGetNodeData(peerInfo.remoteStatus.capability)) {
-          (peer :: compat, incompat, count) // Compatible peer
-        } else {
-          (compat, peer :: incompat, count + 1) // Incompatible peer, increment count
-        }
-    }
-    
+    val (compatiblePeers, incompatiblePeers, incompatibleCount) =
+      peersToDownloadFrom.foldLeft((List.empty[Peer], List.empty[Peer], 0)) {
+        case ((compat, incompat, count), (_, PeerWithInfo(peer, peerInfo))) =>
+          if (state.activeRequests.contains(peer.id)) {
+            (compat, incompat, count) // Skip peers with active requests
+          } else if (supportsGetNodeData(peerInfo.remoteStatus.capability)) {
+            (peer :: compat, incompat, count) // Compatible peer
+          } else {
+            (compat, peer :: incompat, count + 1) // Incompatible peer, increment count
+          }
+      }
+
     if (incompatibleCount > 0) {
       log.debug(
         "Filtered out {} peers not supporting GetNodeData (ETH68/SNAP peers). {} peers available for state sync.",
@@ -88,7 +88,7 @@ class SyncStateSchedulerActor(
         compatiblePeers.size
       )
     }
-    
+
     // Track consecutive cycles with no compatible peers
     if (compatiblePeers.isEmpty && incompatiblePeers.nonEmpty) {
       noCompatiblePeersCount += 1

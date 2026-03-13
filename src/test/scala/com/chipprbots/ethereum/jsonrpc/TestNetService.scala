@@ -48,9 +48,15 @@ class TestNetService extends NetServiceAPI {
   override def peerCount(req: PeerCountRequest): ServiceResponse[PeerCountResponse] = peerCountFn(req)
   override def nodeInfo(req: NodeInfoRequest): ServiceResponse[NodeInfoResponse] = nodeInfoFn(req)
   override def listPeers(req: ListPeersRequest): ServiceResponse[ListPeersResponse] = listPeersFn(req)
-  override def disconnectPeer(req: DisconnectPeerRequest): ServiceResponse[DisconnectPeerResponse] = disconnectPeerFn(req)
+  override def disconnectPeer(req: DisconnectPeerRequest): ServiceResponse[DisconnectPeerResponse] = disconnectPeerFn(
+    req
+  )
   override def connectToPeer(req: ConnectToPeerRequest): ServiceResponse[ConnectToPeerResponse] = connectToPeerFn(req)
-  override def listBlacklistedPeers(req: ListBlacklistedPeersRequest): ServiceResponse[ListBlacklistedPeersResponse] = listBlacklistedPeersFn(req)
-  override def addToBlacklist(req: AddToBlacklistRequest): ServiceResponse[AddToBlacklistResponse] = addToBlacklistFn(req)
-  override def removeFromBlacklist(req: RemoveFromBlacklistRequest): ServiceResponse[RemoveFromBlacklistResponse] = removeFromBlacklistFn(req)
+  override def listBlacklistedPeers(req: ListBlacklistedPeersRequest): ServiceResponse[ListBlacklistedPeersResponse] =
+    listBlacklistedPeersFn(req)
+  override def addToBlacklist(req: AddToBlacklistRequest): ServiceResponse[AddToBlacklistResponse] = addToBlacklistFn(
+    req
+  )
+  override def removeFromBlacklist(req: RemoveFromBlacklistRequest): ServiceResponse[RemoveFromBlacklistResponse] =
+    removeFromBlacklistFn(req)
 }

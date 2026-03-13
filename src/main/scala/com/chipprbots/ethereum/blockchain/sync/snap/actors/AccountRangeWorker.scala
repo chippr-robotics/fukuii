@@ -12,15 +12,13 @@ import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 /** AccountRangeWorker fetches a single account range from a peer.
   *
   * Responsibilities:
-  * - Request single account range from peer
-  * - Handle response and validate proofs
-  * - Report result to coordinator
+  *   - Request single account range from peer
+  *   - Handle response and validate proofs
+  *   - Report result to coordinator
   *
   * Lifecycle:
-  * 1. Created by coordinator when needed
-  * 2. Fetches one task
-  * 3. Reports result
-  * 4. Can be reused for next task or stopped
+  *   1. Created by coordinator when needed 2. Fetches one task 3. Reports result 4. Can be reused for next task or
+  *      stopped
   *
   * @param coordinator
   *   Parent coordinator actor
@@ -40,49 +38,46 @@ class AccountRangeWorker(
 
   private var currentTask: Option[(AccountTask, Peer, BigInt)] = None // (task, peer, requestId)
 
-  override def preStart(): Unit = {
+  override def preStart(): Unit =
     log.debug(s"AccountRangeWorker ${self.path.name} started")
-  }
 
-  override def postStop(): Unit = {
+  override def postStop(): Unit =
     log.debug(s"AccountRangeWorker ${self.path.name} stopped")
-  }
 
   override def receive: Receive = idle
 
-  def idle: Receive = {
-    case FetchAccountRange(task, peer, requestId, responseBytes) =>
-      log.debug(s"Fetching account range ${task.rangeString} from peer ${peer.id} (responseBytes=$responseBytes)")
+  def idle: Receive = { case FetchAccountRange(task, peer, requestId, responseBytes) =>
+    log.debug(s"Fetching account range ${task.rangeString} from peer ${peer.id} (responseBytes=$responseBytes)")
 
-      // Send request directly via network peer manager
-      // Create GetAccountRange message
-      val request = GetAccountRange(
-        requestId = requestId,
-        rootHash = task.rootHash,
-        startingHash = task.next,
-        limitHash = task.last,
-        responseBytes = responseBytes
-      )
-      
-      // Track the request with timeout
-      requestTracker.trackRequest(
-        requestId,
-        peer,
-        SNAPRequestTracker.RequestType.GetAccountRange,
-        timeout = 30.seconds
-      ) {
-        self ! RequestTimeout(requestId)
-      }
-      
-      // Send message to peer
-      import com.chipprbots.ethereum.network.NetworkPeerManagerActor
-      import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetAccountRange.GetAccountRangeEnc
-      import com.chipprbots.ethereum.network.p2p.MessageSerializable
-      val messageSerializable: MessageSerializable = new GetAccountRangeEnc(request)
-      networkPeerManager ! NetworkPeerManagerActor.SendMessage(messageSerializable, peer.id)
-      
-      currentTask = Some((task, peer, requestId))
-      context.become(working)
+    // Send request directly via network peer manager
+    // Create GetAccountRange message
+    val request = GetAccountRange(
+      requestId = requestId,
+      rootHash = task.rootHash,
+      startingHash = task.next,
+      limitHash = task.last,
+      responseBytes = responseBytes
+    )
+
+    // Track the request with timeout
+    requestTracker.trackRequest(
+      requestId,
+      peer,
+      SNAPRequestTracker.RequestType.GetAccountRange,
+      timeout = 30.seconds
+    ) {
+      self ! RequestTimeout(requestId)
+    }
+
+    // Send message to peer
+    import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+    import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetAccountRange.GetAccountRangeEnc
+    import com.chipprbots.ethereum.network.p2p.MessageSerializable
+    val messageSerializable: MessageSerializable = new GetAccountRangeEnc(request)
+    networkPeerManager ! NetworkPeerManagerActor.SendMessage(messageSerializable, peer.id)
+
+    currentTask = Some((task, peer, requestId))
+    context.become(working)
   }
 
   def working: Receive = {
@@ -94,7 +89,7 @@ class AccountRangeWorker(
               s"start=${task.next.take(4).toHex} limit=${task.last.take(4).toHex} " +
               s"accounts=${response.accounts.size} proofNodes=${response.proof.size}"
           )
-          
+
           val accountCount = response.accounts.size
 
           // Validate basic response invariants (monotonic ordering, correct tracked type)
@@ -102,7 +97,8 @@ class AccountRangeWorker(
           val validated = requestTracker.validateAccountRange(response)
 
           // Complete the request in tracker (cancel timeout) regardless of validation outcome.
-          requestTracker.completeRequest(reqId)
+          // Pass account count for adaptive rate tracking (geth msgrate alignment).
+          requestTracker.completeRequest(reqId, accountCount)
 
           // Verify Merkle proof against the expected pivot state root for this task.
           val proofVerifier = MerkleProofVerifier(task.rootHash)
@@ -124,7 +120,7 @@ class AccountRangeWorker(
               log.debug(s"Successfully received $accountCount accounts")
               coordinator ! TaskComplete(reqId, Right((accountCount, response.accounts, response.proof)))
           }
-          
+
           // Return to idle state for potential reuse
           currentTask = None
           context.become(idle)
@@ -138,7 +134,7 @@ class AccountRangeWorker(
         case Some((task, peer, currentReqId)) if currentReqId == reqId =>
           log.warning(s"Request $reqId timed out")
           coordinator ! TaskFailed(reqId, "Request timeout")
-          
+
           // Return to idle state
           currentTask = None
           context.become(idle)

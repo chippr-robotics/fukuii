@@ -49,7 +49,8 @@ object EvmConfig {
       (blockchainConfig.magnetoBlockNumber, 13, MagnetoConfigBuilder),
       (blockchainConfig.berlinBlockNumber, 14, BerlinConfigBuilder),
       (blockchainConfig.mystiqueBlockNumber, 15, MystiqueConfigBuilder),
-      (blockchainConfig.spiralBlockNumber, 16, SpiralConfigBuilder)
+      (blockchainConfig.spiralBlockNumber, 16, SpiralConfigBuilder),
+      (blockchainConfig.olympiaBlockNumber, 17, OlympiaConfigBuilder)
     )
 
     // highest transition block that is less/equal to `blockNumber`
@@ -70,6 +71,7 @@ object EvmConfig {
   val PhoenixOpCodes: OpCodeList = OpCodeList(OpCodes.PhoenixOpCodes)
   val MagnetoOpCodes: OpCodeList = PhoenixOpCodes
   val SpiralOpCodes: OpCodeList = OpCodeList(OpCodes.SpiralOpCodes)
+  val OlympiaOpCodes: OpCodeList = OpCodeList(OpCodes.OlympiaOpCodes)
 
   val FrontierConfigBuilder: EvmConfigBuilder = config =>
     EvmConfig(
@@ -163,6 +165,13 @@ object EvmConfig {
       eip6049DeprecationEnabled = true
     )
 
+  val OlympiaConfigBuilder: EvmConfigBuilder = config =>
+    SpiralConfigBuilder(config).copy(
+      opCodeList = OlympiaOpCodes,
+      feeSchedule = new FeeSchedule.OlympiaFeeSchedule,
+      eip6780Enabled = true
+    )
+
   case class OpCodeList(opCodes: List[OpCode]) {
     val byteToOpCode: Map[Byte, OpCode] =
       opCodes.map(op => op.code -> op).toMap
@@ -182,7 +191,8 @@ case class EvmConfig(
     eip3541Enabled: Boolean = false,
     eip3651Enabled: Boolean = false,
     eip3860Enabled: Boolean = false,
-    eip6049DeprecationEnabled: Boolean = false
+    eip6049DeprecationEnabled: Boolean = false,
+    eip6780Enabled: Boolean = false
 ) {
 
   import feeSchedule._
@@ -227,7 +237,8 @@ case class EvmConfig(
   def calcTransactionIntrinsicGas(
       txData: ByteString,
       isContractCreation: Boolean,
-      accessList: Seq[AccessListItem]
+      accessList: Seq[AccessListItem],
+      authorizationListSize: Int = 0
   ): BigInt = {
     val txDataZero = txData.count(_ == 0)
     val txDataNonZero = txData.length - txDataZero
@@ -236,10 +247,13 @@ case class EvmConfig(
       accessList.size * G_access_list_address +
         accessList.map(_.storageKeys.size).sum * G_access_list_storage
 
+    // EIP-7702: Per-authorization tuple gas (TxAuthTupleGas = 12,500)
+    val authListPrice: BigInt = BigInt(authorizationListSize) * BigInt(12500)
+
     val initCodeCost: BigInt = if (isContractCreation) calcInitCodeCost(txData) else BigInt(0)
 
     txDataZero * G_txdatazero +
-      txDataNonZero * G_txdatanonzero + accessListPrice +
+      txDataNonZero * G_txdatanonzero + accessListPrice + authListPrice +
       (if (isContractCreation) G_txcreate else 0) +
       G_transaction +
       initCodeCost
@@ -380,6 +394,8 @@ object FeeSchedule {
     // EIP-3860: Initcode metering (activated in Spiral fork)
     override val G_initcode_word: BigInt = 2
   }
+
+  class OlympiaFeeSchedule extends MystiqueFeeSchedule
 }
 
 trait FeeSchedule {

@@ -181,7 +181,7 @@ class MessageRoutingValidationSpec extends AnyFlatSpec with Matchers {
       List(Capability.ETH64, Capability.ETH63),
       List(Capability.ETH64, Capability.ETH65)
     )
-    
+
     eth64Selected shouldBe Some(Capability.ETH64)
 
     // Ensure decoder routing goes through ETH64MessageDecoder for ETH64

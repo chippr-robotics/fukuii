@@ -9,8 +9,8 @@ import com.chipprbots.ethereum.domain.{BlockHeader, ChainWeight}
 
 /** Integration test for MESS (ECIP-1100: Modified Exponential Subjective Scoring).
   *
-  * Tests the polynomial antigravity curve and reorg rejection logic using realistic
-  * blockchain scenarios. Verifies cross-client consistency with core-geth and Besu.
+  * Tests the polynomial antigravity curve and reorg rejection logic using realistic blockchain scenarios. Verifies
+  * cross-client consistency with core-geth and Besu.
   */
 class MESSIntegrationSpec extends AnyFlatSpec with Matchers {
 

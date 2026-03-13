@@ -14,8 +14,12 @@ object ProgramContext {
   ): ProgramContext[W, S] = {
     import stx.tx
     val accessList = Transaction.accessList(tx)
+    val authListSize = tx match {
+      case sct: SetCodeTransaction => sct.authorizationList.size
+      case _                       => 0
+    }
     val gasLimit =
-      tx.gasLimit - evmConfig.calcTransactionIntrinsicGas(tx.payload, tx.isContractInit, accessList)
+      tx.gasLimit - evmConfig.calcTransactionIntrinsicGas(tx.payload, tx.isContractInit, accessList, authListSize)
 
     ProgramContext(
       callerAddr = senderAddress,
@@ -99,5 +103,6 @@ case class ProgramContext[W <: WorldStateProxy[W, S], S <: Storage[S]](
     staticCtx: Boolean = false,
     originalWorld: W,
     warmAddresses: Set[Address],
-    warmStorage: Set[(Address, BigInt)]
+    warmStorage: Set[(Address, BigInt)],
+    transientStorage: Map[(Address, BigInt), BigInt] = Map.empty
 )

@@ -39,7 +39,7 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
       hello.p2pVersion,
       peerCapabilities.mkString(", ")
     )
-    
+
     // Log our advertised capabilities for comparison
     log.debug(
       "OUR_CAPABILITIES: capabilities=[{}]",
