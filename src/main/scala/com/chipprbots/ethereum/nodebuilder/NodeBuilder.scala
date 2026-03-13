@@ -694,6 +694,65 @@ trait JSONRpcIpcServerBuilder {
   lazy val jsonRpcIpcServer = new JsonRpcIpcServer(jsonRpcController, jsonRpcConfig.ipcServerConfig)
 }
 
+trait SubscriptionManagerBuilder {
+  self: ActorSystemBuilder with JSONRpcConfigBuilder =>
+
+  lazy val subscriptionManager: ActorRef =
+    system.actorOf(
+      com.chipprbots.ethereum.jsonrpc.subscription.SubscriptionManager.props(jsonRpcConfig.wsConfig),
+      "subscription-manager"
+    )
+}
+
+trait SubscriptionServicesBuilder {
+  self: ActorSystemBuilder
+    with BlockchainBuilder
+    with SubscriptionManagerBuilder
+    with SyncControllerBuilder =>
+
+  lazy val subscriptionServices: Seq[ActorRef] = Seq(
+    system.actorOf(
+      com.chipprbots.ethereum.jsonrpc.subscription.NewBlockHeadersSubscriptionService.props(
+        subscriptionManager, blockchainReader
+      ),
+      "new-block-headers-subscription-service"
+    ),
+    system.actorOf(
+      com.chipprbots.ethereum.jsonrpc.subscription.LogsSubscriptionService.props(
+        subscriptionManager, blockchainReader
+      ),
+      "logs-subscription-service"
+    ),
+    system.actorOf(
+      com.chipprbots.ethereum.jsonrpc.subscription.PendingTxSubscriptionService.props(subscriptionManager),
+      "pending-tx-subscription-service"
+    ),
+    system.actorOf(
+      com.chipprbots.ethereum.jsonrpc.subscription.SyncingSubscriptionService.props(
+        subscriptionManager, syncController
+      ),
+      "syncing-subscription-service"
+    )
+  )
+}
+
+trait JSONRpcWsServerBuilder {
+  self: ActorSystemBuilder
+    with JSONRpcControllerBuilder
+    with SubscriptionManagerBuilder
+    with SubscriptionServicesBuilder
+    with JSONRpcConfigBuilder =>
+
+  lazy val maybeJsonRpcWsServer: Option[com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer] =
+    if (jsonRpcConfig.wsConfig.enabled) {
+      // Force subscription services initialization (Besu pattern: registered at startup)
+      val _ = subscriptionServices
+      Some(new com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer(
+        jsonRpcController, subscriptionManager, jsonRpcConfig.wsConfig
+      ))
+    } else None
+}
+
 trait OmmersPoolBuilder {
   self: ActorSystemBuilder with BlockchainBuilder with MiningConfigBuilder =>
 
@@ -897,6 +956,9 @@ trait Node
     with SSLContextBuilder
     with JSONRpcHttpServerBuilder
     with JSONRpcIpcServerBuilder
+    with SubscriptionManagerBuilder
+    with SubscriptionServicesBuilder
+    with JSONRpcWsServerBuilder
     with ShutdownHookBuilder
     with Logger
     with GenesisDataLoaderBuilder

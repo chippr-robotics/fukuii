@@ -43,6 +43,7 @@ import com.chipprbots.ethereum.jsonrpc.EthMiningService._
 import com.chipprbots.ethereum.jsonrpc.NodeJsonRpcHealthChecker.JsonRpcHealthConfig
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.JsonRpcHttpServerConfig
+import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer
 import com.chipprbots.ethereum.jsonrpc.server.ipc.JsonRpcIpcServer.JsonRpcIpcServerConfig
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
@@ -433,6 +434,7 @@ class EthMiningServiceSpec
       override def minerActiveTimeout: FiniteDuration = TestSetup.this.minerActiveTimeout
       override def httpServerConfig: JsonRpcHttpServerConfig = baseJsonRpcConfig.httpServerConfig
       override def ipcServerConfig: JsonRpcIpcServerConfig = baseJsonRpcConfig.ipcServerConfig
+      override def wsConfig: JsonRpcWsServer.WsConfig = baseJsonRpcConfig.wsConfig
       override def healthConfig: JsonRpcHealthConfig = baseJsonRpcConfig.healthConfig
     }
 

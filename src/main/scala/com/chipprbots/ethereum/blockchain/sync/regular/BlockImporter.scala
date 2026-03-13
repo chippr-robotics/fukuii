@@ -531,6 +531,10 @@ class BlockImporter(
           case ChainReorganised(oldBranch, newBranch, weights) =>
             updateTxPool(newBranch, oldBranch)
             broadcastBlocks(newBranch, weights)
+            // Publish chain reorg to eventStream for subscription services (newHeads, logs with removed:true)
+            context.system.eventStream.publish(
+              com.chipprbots.ethereum.jsonrpc.subscription.SubscriptionEvents.ChainReorg(oldBranch, newBranch)
+            )
             newBranch.lastOption.foreach(block => supervisor ! ProgressProtocol.ImportedBlock(block.number, internally))
           case BlockImportFailedDueToMissingNode(missingNodeException) if syncConfig.redownloadMissingStateNodes =>
             // state node re-download will be handled when downloading headers

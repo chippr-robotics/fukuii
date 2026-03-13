@@ -126,7 +126,13 @@ class PendingTransactionsManager(
       val transactionsToAdd = signedTransactions.diff(stxs)
       if (transactionsToAdd.nonEmpty) {
         val timestamp = System.currentTimeMillis()
-        transactionsToAdd.foreach(t => pendingTransactions.put(t.tx.hash, PendingTransaction(t, timestamp)))
+        transactionsToAdd.foreach { t =>
+          pendingTransactions.put(t.tx.hash, PendingTransaction(t, timestamp))
+          // Publish to eventStream for subscription services (newPendingTransactions)
+          context.system.eventStream.publish(
+            com.chipprbots.ethereum.jsonrpc.subscription.SubscriptionEvents.TransactionAdded(t)
+          )
+        }
         (peerManager ? PeerManagerActor.GetPeers)
           .mapTo[Peers]
           .map(_.handshaked)
