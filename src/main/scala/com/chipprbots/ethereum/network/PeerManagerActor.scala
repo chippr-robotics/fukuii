@@ -104,6 +104,11 @@ class PeerManagerActor(
       scheduleNodesUpdate()
       schedulePeerStatusRefresh()
       knownNodesManager ! KnownNodesManager.GetKnownNodes
+      // Also request discovered/bootstrap nodes immediately. On a fresh node, KnownNodes is empty
+      // but bootstrap/static nodes are available as alreadyDiscoveredNodes in PeerDiscoveryManager.
+      // Without this, the first connection attempt waits for updateNodesInitialDelay.
+      // Core-geth dials bootstrap nodes at t+0; we should too.
+      peerDiscoveryManager ! PeerDiscoveryManager.GetDiscoveredNodesInfo
       context.become(listening(ConnectedPeers.empty))
       unstashAll()
     case _ =>

@@ -142,6 +142,41 @@ class SNAPSyncController(
   private case object TuneRateTracker
   private var snapCapabilityCheckTask: Option[Cancellable] = None
 
+  /** Like handlePeerListMessagesWithRateTracking, but also reactively triggers a bootstrap retry
+    * when new SNAP-capable peers arrive during the bootstrapping state. Without this, the node
+    * waits for the full exponential backoff timer (up to 60s) even though peers are already available.
+    * Core-geth starts syncing within 200ms of first peer — we should too.
+    */
+  private def handlePeerListMessagesWithBootstrapReactivity: Receive = {
+    case msg @ com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers(peers) =>
+      val hadSnapPeers = handshakedPeers.values.exists(_.peerInfo.remoteStatus.supportsSnap)
+      val oldPeerIds = handshakedPeers.keySet
+      handlePeerListMessages(msg)
+      val newPeerIds = handshakedPeers.keySet
+      (newPeerIds -- oldPeerIds).foreach { peerId =>
+        requestTracker.rateTracker.addPeer(peerId.value)
+      }
+      (oldPeerIds -- newPeerIds).foreach { peerId =>
+        requestTracker.rateTracker.removePeer(peerId.value)
+      }
+      // If we just gained our first SNAP-capable peer(s), cancel the backoff timer and retry immediately.
+      val hasSnapPeers = handshakedPeers.values.exists(_.peerInfo.remoteStatus.supportsSnap)
+      if (!hadSnapPeers && hasSnapPeers) {
+        log.info(
+          s"First SNAP-capable peer(s) detected during bootstrap (${handshakedPeers.size} total, " +
+            s"${handshakedPeers.values.count(_.peerInfo.remoteStatus.supportsSnap)} snap). " +
+            s"Cancelling backoff timer and retrying immediately."
+        )
+        bootstrapCheckTask.foreach(_.cancel())
+        bootstrapCheckTask = None
+        self ! RetrySnapSyncStart
+      }
+
+    case msg @ com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnected(peerId) =>
+      handlePeerListMessages(msg)
+      requestTracker.rateTracker.removePeer(peerId.value)
+  }
+
   /** Wrap handlePeerListMessages to also update the PeerRateTracker when peers connect/disconnect. Tracks previous peer
     * set to detect additions and removals.
     */
@@ -636,7 +671,7 @@ class SNAPSyncController(
       startStateHealing()
     }
 
-  def bootstrapping: Receive = handlePeerListMessagesWithRateTracking.orElse {
+  def bootstrapping: Receive = handlePeerListMessagesWithBootstrapReactivity.orElse {
     case BootstrapComplete(pivotHeaderOpt) =>
       log.info("=" * 80)
       log.info("✅ Bootstrap phase complete - transitioning to SNAP sync")
