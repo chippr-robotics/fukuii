@@ -67,10 +67,9 @@ services:
       - "8553:8545"
       # JSON-RPC WebSocket (offset to avoid Barad-dûr conflict on 8546)
       - "8552:8546"
-      # P2P networking (offset to avoid Barad-dûr conflict on 30303)
+      # P2P networking — TCP + UDP on same port (standard geth convention)
       - "30305:30303/tcp"
       - "30305:30303/udp"
-      - "9077:9076"
     volumes:
       # Configuration files
       - ./conf/etc.conf:/app/conf/etc.conf:ro
