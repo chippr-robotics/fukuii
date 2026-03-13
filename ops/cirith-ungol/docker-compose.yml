@@ -104,6 +104,7 @@ services:
       - "-XX:+UseG1GC"
       - "-XX:MaxGCPauseMillis=200"
       - "-Dconfig.file=/app/conf/etc.conf"
+      - "-Dfukuii.datadir=/app/data"
       - "-Dlogback.configurationFile=/app/conf/logback.xml"
       - "-Dfukuii.trace.block=${FUKUII_TRACE_BLOCK:-}"
       - "-Dfukuii.trace.tx=${FUKUII_TRACE_TX:-}"
