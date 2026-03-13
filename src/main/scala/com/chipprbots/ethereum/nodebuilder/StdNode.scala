@@ -62,6 +62,8 @@ abstract class BaseNode extends Node {
 
     startJsonRpcIpcServer()
 
+    startJsonRpcWsServer()
+
     startPeriodicDBConsistencyCheck()
 
     startTuiUpdater()
@@ -128,6 +130,9 @@ abstract class BaseNode extends Node {
 
   private[this] def startJsonRpcIpcServer(): Unit =
     if (jsonRpcConfig.ipcServerConfig.enabled) jsonRpcIpcServer.run()
+
+  private[this] def startJsonRpcWsServer(): Unit =
+    maybeJsonRpcWsServer.foreach(_.run())
 
   def startPeriodicDBConsistencyCheck(): Unit =
     if (Config.Db.periodicConsistencyCheck)

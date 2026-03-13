@@ -125,6 +125,10 @@ class RegularSync(
       if (internally) {
         fetcher ! InternalLastBlockImport(blockNumber)
       }
+      // Publish to eventStream for subscription services (newHeads, logs)
+      context.system.eventStream.publish(
+        com.chipprbots.ethereum.jsonrpc.subscription.SubscriptionEvents.BlockImported(blockNumber)
+      )
       context.become(running(newState))
   }
 
