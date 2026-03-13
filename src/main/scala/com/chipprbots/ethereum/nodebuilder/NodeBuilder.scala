@@ -116,7 +116,8 @@ trait StorageBuilder {
 }
 
 trait DiscoveryConfigBuilder extends BlockchainConfigBuilder {
-  lazy val discoveryConfig: DiscoveryConfig = DiscoveryConfig(Config.config, blockchainConfig.bootstrapNodes)
+  lazy val discoveryConfig: DiscoveryConfig =
+    DiscoveryConfig(Config.config, blockchainConfig.bootstrapNodes, blockchainConfig.dnsDiscoveryDomains)
 }
 
 trait KnownNodesManagerBuilder {
