@@ -56,7 +56,7 @@ class AccountRangeCoordinator(
     concurrency: Int,
     snapSyncController: ActorRef,
     resumeProgress: Map[ByteString, ByteString] = Map.empty,
-    maxInFlightPerPeer: Int = 5,
+    initialMaxInFlightPerPeer: Int = 5,
     trieFlushThreshold: Int = 50000,
     initialResponseBytesConfig: Int = 524288,
     minResponseBytesConfig: Int = 102400
@@ -68,6 +68,10 @@ class AccountRangeCoordinator(
 
   // Mutable state root — updated in-place when the controller refreshes the pivot.
   private var stateRoot: ByteString = initialStateRoot
+
+  // Per-peer concurrency budget — dynamically adjusted by SNAPSyncController via UpdateMaxInFlightPerPeer.
+  // Part of global per-peer request budgeting (Geth-aligned: total 5 per peer across all coordinators).
+  private var maxInFlightPerPeer: Int = initialMaxInFlightPerPeer
 
   // Stateless peer tracking: peers that return "Missing proof for empty account range"
   // are unable to serve the current state root. Unlike the previous exponential cooldown,
@@ -434,6 +438,11 @@ class AccountRangeCoordinator(
         dispatchIfPossible(peer)
       }
 
+    case UpdateMaxInFlightPerPeer(newLimit) =>
+      log.info(s"AccountRange per-peer budget: $maxInFlightPerPeer -> $newLimit")
+      maxInFlightPerPeer = newLimit
+      if (newLimit > 0) tryRedispatchPendingTasks()
+
     case TaskComplete(requestId, result) =>
       handleTaskComplete(requestId, result)
 
@@ -542,7 +551,7 @@ class AccountRangeCoordinator(
   }
 
   // Cap total workers to activePeerCount * maxInFlightPerPeer — enough to saturate all peers.
-  private val maxWorkers: Int = concurrency * maxInFlightPerPeer
+  private def maxWorkers: Int = concurrency * maxInFlightPerPeer
 
   private def createWorker(): ActorRef = {
     val worker = context.actorOf(
@@ -1082,7 +1091,7 @@ object AccountRangeCoordinator {
       concurrency: Int,
       snapSyncController: ActorRef,
       resumeProgress: Map[ByteString, ByteString] = Map.empty,
-      maxInFlightPerPeer: Int = 5,
+      initialMaxInFlightPerPeer: Int = 5,
       trieFlushThreshold: Int = 50000,
       initialResponseBytes: Int = 524288,
       minResponseBytes: Int = 102400
@@ -1096,7 +1105,7 @@ object AccountRangeCoordinator {
         concurrency,
         snapSyncController,
         resumeProgress,
-        maxInFlightPerPeer,
+        initialMaxInFlightPerPeer,
         trieFlushThreshold,
         initialResponseBytes,
         minResponseBytes

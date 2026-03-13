@@ -86,7 +86,7 @@ class StorageRangeCoordinator(
     maxInFlightRequests: Int,
     requestTimeout: FiniteDuration,
     snapSyncController: ActorRef,
-    maxInFlightPerPeer: Int = 5
+    initialMaxInFlightPerPeer: Int = 5
 ) extends Actor
     with ActorLogging {
 
@@ -94,6 +94,9 @@ class StorageRangeCoordinator(
 
   // Mutable state root — updated in-place when the controller refreshes the pivot.
   private var stateRoot: ByteString = initialStateRoot
+
+  // Per-peer concurrency budget — dynamically adjusted by SNAPSyncController via UpdateMaxInFlightPerPeer.
+  private var maxInFlightPerPeer: Int = initialMaxInFlightPerPeer
 
   // Task management
   private val tasks = mutable.Queue[StorageTask]()
@@ -303,6 +306,11 @@ class StorageRangeCoordinator(
         // Pipeline multiple requests per peer (core-geth parity).
         dispatchIfPossible(peer)
       }
+
+    case UpdateMaxInFlightPerPeer(newLimit) =>
+      log.info(s"Storage per-peer budget: $maxInFlightPerPeer -> $newLimit")
+      maxInFlightPerPeer = newLimit
+      if (newLimit > 0) tryRedispatchPendingTasks()
 
     case StorageRangesResponseMsg(response) =>
       handleResponse(response)
@@ -834,7 +842,7 @@ object StorageRangeCoordinator {
       maxInFlightRequests: Int,
       requestTimeout: FiniteDuration,
       snapSyncController: ActorRef,
-      maxInFlightPerPeer: Int = 5
+      initialMaxInFlightPerPeer: Int = 5
   ): Props =
     Props(
       new StorageRangeCoordinator(
@@ -846,7 +854,7 @@ object StorageRangeCoordinator {
         maxInFlightRequests,
         requestTimeout,
         snapSyncController,
-        maxInFlightPerPeer
+        initialMaxInFlightPerPeer
       )
     )
 

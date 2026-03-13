@@ -239,6 +239,7 @@ class SNAPSyncController(
     snapCapabilityCheckTask.foreach(_.cancel())
     snapPeerEvictionTask.foreach(_.cancel())
     rateTrackerTuneTask.foreach(_.cancel())
+    pivotFreshnessCheckTask.foreach(_.cancel())
     progressMonitor.stopPeriodicLogging()
 
     // Log final error handler statistics
@@ -518,6 +519,11 @@ class SNAPSyncController(
         // Transition to ByteCodeAndStorageSync for status reporting and stagnation checks
         currentPhase = ByteCodeAndStorageSync
 
+        // Redistribute per-peer budget: accounts done, give storage+bytecode more bandwidth.
+        // Global budget remains 5 per peer: storage=3, bytecode=2.
+        storageRangeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(3))
+        bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(2))
+
         // Cancel account stagnation checks (no longer relevant)
         accountStagnationCheckTask.foreach(_.cancel()); accountStagnationCheckTask = None
 
@@ -610,6 +616,15 @@ class SNAPSyncController(
   // Internal message for periodic storage stagnation checks
   private case object CheckStorageStagnation
 
+  // Proactive pivot freshness check (Geth-aligned).
+  // Geth refreshes the pivot when head > pivot + 2*fsMinFullBlocks - 8 = 120 blocks.
+  // This ensures the pivot stays within the 128-block SNAP serve window with an 8-block
+  // safety margin, rather than waiting for peers to start returning empty responses.
+  private case object CheckPivotFreshness
+  private val PivotFreshnessThreshold: Long = 120 // blocks (Geth: 2*64-8)
+  private val PivotFreshnessCheckInterval: FiniteDuration = 30.seconds
+  private var pivotFreshnessCheckTask: Option[Cancellable] = None
+
   private case class StorageCoordinatorProgress(stats: actors.StorageRangeCoordinator.SyncStatistics)
 
   private def scheduleStorageStagnationChecks(): Unit = {
@@ -655,6 +670,51 @@ class SNAPSyncController(
 
     // Tell coordinator to flush downloaded data and report completion
     storageRangeCoordinator.foreach(_ ! actors.Messages.ForceCompleteStorage)
+  }
+
+  /** Proactive pivot freshness check (Geth-aligned).
+    *
+    * Unlike the reactive PivotStateUnservable approach (which waits until peers return empty responses),
+    * this proactively refreshes the pivot when the network head has advanced 120 blocks past it.
+    * This matches Geth's behavior: `head > pivot + 2*fsMinFullBlocks - 8` (120 blocks),
+    * leaving an 8-block safety margin before the 128-block SNAP serve window expires.
+    *
+    * Benefits:
+    *   - No wasted requests on a soon-to-be-stale root
+    *   - No false PivotStateUnservable triggers
+    *   - Predictable refresh cadence (~26 min on ETC at 13s/block)
+    */
+  private def maybeProactivelyRefreshPivot(): Unit = {
+    if (pendingPivotRefresh.isDefined) return // Already refreshing
+
+    val now = System.currentTimeMillis()
+    if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) return
+
+    (pivotBlock, currentNetworkBestFromSnapPeers()) match {
+      case (Some(pivot), Some(networkBest)) if networkBest > pivot =>
+        val drift = networkBest - pivot
+        if (drift > PivotFreshnessThreshold) {
+          log.info(
+            s"Proactive pivot refresh: network head $networkBest is $drift blocks ahead of pivot $pivot " +
+              s"(threshold=$PivotFreshnessThreshold). Refreshing in-place to stay within SNAP serve window."
+          )
+          lastPivotRestartMs = now
+          refreshPivotInPlace(s"proactive: head drifted $drift blocks (>${PivotFreshnessThreshold})")
+        }
+      case _ => // No pivot or no peers — nothing to do
+    }
+  }
+
+  private def schedulePivotFreshnessChecks(): Unit = {
+    pivotFreshnessCheckTask.foreach(_.cancel())
+    pivotFreshnessCheckTask = Some(
+      scheduler.scheduleWithFixedDelay(
+        PivotFreshnessCheckInterval,
+        PivotFreshnessCheckInterval,
+        self,
+        CheckPivotFreshness
+      )(ec)
+    )
   }
 
   // Internal message for periodic account stagnation checks
@@ -944,7 +1004,7 @@ class SNAPSyncController(
                     maxInFlightRequests = snapSyncConfig.storageConcurrency,
                     requestTimeout = snapSyncConfig.timeout,
                     snapSyncController = self,
-                    maxInFlightPerPeer = snapSyncConfig.maxInFlightPerPeer
+                    initialMaxInFlightPerPeer = 3 // Recovery: accounts done, storage gets 3 of 5 per-peer budget
                   )
                   .withDispatcher("sync-dispatcher"),
                 s"storage-range-coordinator-$coordinatorGeneration"
@@ -954,6 +1014,9 @@ class SNAPSyncController(
             storageRangeRequestTask = Some(
               scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestStorageRanges)(ec)
             )
+
+            // Recovery budget: accounts done, bytecode=2, storage=3 (total 5 per peer)
+            bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(2))
 
             // Stream storage tasks from persisted file if available
             savedStoragePath.foreach { pathStr =>
@@ -1012,6 +1075,7 @@ class SNAPSyncController(
             currentPhase = ByteCodeAndStorageSync
             lastStorageProgressMs = System.currentTimeMillis()
             scheduleStorageStagnationChecks()
+            schedulePivotFreshnessChecks()
             progressMonitor.startPhase(ByteCodeAndStorageSync)
 
             context.become(syncing)
@@ -1570,7 +1634,7 @@ class SNAPSyncController(
             concurrency = effectiveConcurrency,
             snapSyncController = self,
             resumeProgress = resumeProgress,
-            maxInFlightPerPeer = snapSyncConfig.maxInFlightPerPeer,
+            initialMaxInFlightPerPeer = 5, // Full per-peer budget during AccountRangeSync (storage+bytecode deferred to 0)
             trieFlushThreshold = snapSyncConfig.accountTrieFlushThreshold,
             initialResponseBytes = snapSyncConfig.accountInitialResponseBytes,
             minResponseBytes = snapSyncConfig.accountMinResponseBytes
@@ -1594,6 +1658,7 @@ class SNAPSyncController(
     )
 
     scheduleAccountStagnationChecks()
+    schedulePivotFreshnessChecks()
 
     // Schedule periodic rate tracker tuning (geth msgrate alignment: recalculate median RTT every 5s)
     if (rateTrackerTuneTask.isEmpty) {
@@ -1642,7 +1707,7 @@ class SNAPSyncController(
               maxInFlightRequests = snapSyncConfig.storageConcurrency,
               requestTimeout = snapSyncConfig.timeout,
               snapSyncController = self,
-              maxInFlightPerPeer = snapSyncConfig.maxInFlightPerPeer
+              initialMaxInFlightPerPeer = 0 // Defer storage dispatch during AccountRangeSync — prevents false pivot refreshes from stale-root timeouts
             )
             .withDispatcher("sync-dispatcher"),
           s"storage-range-coordinator-$coordinatorGeneration"
@@ -1655,6 +1720,12 @@ class SNAPSyncController(
         scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestStorageRanges)(ec)
       )
     }
+
+    // ByteCode and storage start with budget=0 during account phase (tasks accumulate, dispatch deferred).
+    // During AccountRangeSync: accounts=5, storage=0, bytecode=0 — avoids false pivot refreshes
+    // from stale-root storage timeouts and gives accounts full per-peer bandwidth.
+    bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(0))
+    storageRangeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(0))
 
     progressMonitor.startPhase(AccountRangeSync)
   }
@@ -1804,6 +1875,12 @@ class SNAPSyncController(
       // Ignore the dummy stats used on recover.
       if (stats.elapsedTimeMs > 0 || stats.tasksPending > 0 || stats.tasksActive > 0 || stats.tasksCompleted > 0)
         maybeRestartIfStorageStagnant(stats)
+      super.aroundReceive(receive, msg)
+
+    // Proactive pivot freshness (Geth-aligned): refresh before peers start returning empty responses.
+    case CheckPivotFreshness
+        if currentPhase == AccountRangeSync || currentPhase == StorageRangeSync || currentPhase == ByteCodeAndStorageSync =>
+      maybeProactivelyRefreshPivot()
       super.aroundReceive(receive, msg)
 
     case _ =>
@@ -2137,6 +2214,7 @@ class SNAPSyncController(
     storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
     accountStagnationCheckTask.foreach(_.cancel()); accountStagnationCheckTask = None
     storageStagnationCheckTask.foreach(_.cancel()); storageStagnationCheckTask = None
+    pivotFreshnessCheckTask.foreach(_.cancel()); pivotFreshnessCheckTask = None
     healingRequestTask.foreach(_.cancel()); healingRequestTask = None
     bootstrapCheckTask.foreach(_.cancel()); bootstrapCheckTask = None
     pivotBootstrapRetryTask.foreach(_.cancel()); pivotBootstrapRetryTask = None

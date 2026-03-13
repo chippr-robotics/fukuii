@@ -9,6 +9,16 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 object Messages {
 
   // ========================================
+  // Global Coordinator Control Messages
+  // ========================================
+
+  /** Dynamically adjust per-peer concurrency budget for a coordinator.
+    * Sent by SNAPSyncController at phase transitions to implement global per-peer request budgeting
+    * (Geth-aligned: total 5 requests per peer across all coordinators).
+    */
+  case class UpdateMaxInFlightPerPeer(newLimit: Int)
+
+  // ========================================
   // AccountRange Messages
   // ========================================
 

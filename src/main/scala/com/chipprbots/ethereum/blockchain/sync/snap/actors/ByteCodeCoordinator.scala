@@ -50,6 +50,10 @@ class ByteCodeCoordinator(
 
   import Messages._
 
+  // Per-peer concurrency budget — dynamically adjusted by SNAPSyncController via UpdateMaxInFlightPerPeer.
+  // Shadows cooldownConfig.maxInFlightPerPeer so budget updates don't require config mutation.
+  private var maxInFlightPerPeer: Int = cooldownConfig.maxInFlightPerPeer
+
   private val peerFailureCounts = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
   private val peerCooldownUntilMillis = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Long]
 
@@ -198,6 +202,11 @@ class ByteCodeCoordinator(
         dispatchIfPossible(peer)
       }
 
+    case UpdateMaxInFlightPerPeer(newLimit) =>
+      log.info(s"ByteCode per-peer budget: $maxInFlightPerPeer -> $newLimit")
+      maxInFlightPerPeer = newLimit
+      if (newLimit > 0) tryRedispatchPendingTasks()
+
     case ByteCodesResponseMsg(response) =>
       handleByteCodesResponse(response)
 
@@ -268,7 +277,7 @@ class ByteCodeCoordinator(
     // Keep a small bounded number of inflight requests per peer to maximize throughput
     // without overloading any single neighbor.
     var inflight = inFlightForPeer(peer)
-    while (pendingTasks.nonEmpty && inflight < cooldownConfig.maxInFlightPerPeer) {
+    while (pendingTasks.nonEmpty && inflight < maxInFlightPerPeer) {
       val workerOpt: Option[ActorRef] =
         idleWorkers.headOption.orElse {
           if (workers.size < maxWorkers) Some(createWorker()) else None
@@ -283,6 +292,16 @@ class ByteCodeCoordinator(
           return
       }
     }
+  }
+
+  /** Re-dispatch pending tasks to peers known from active requests.
+    * Called after budget increase to avoid waiting for the next 1-second PeerAvailable tick.
+    */
+  private def tryRedispatchPendingTasks(): Unit = {
+    if (pendingTasks.isEmpty) return
+    val knownPeers = activeTasks.values.map(_.peer).toSet
+    for (peer <- knownPeers if pendingTasks.nonEmpty && !isPeerCoolingDown(peer))
+      dispatchIfPossible(peer)
   }
 
   private def handleByteCodesResponse(response: ByteCodes): Unit = {
