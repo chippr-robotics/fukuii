@@ -135,6 +135,7 @@ class SNAPSyncController(
   private var accountStagnationCheckTask: Option[Cancellable] = None
   private var storageStagnationCheckTask: Option[Cancellable] = None
   private var healingRequestTask: Option[Cancellable] = None
+  private var trieWalkInProgress: Boolean = false
   private var bootstrapCheckTask: Option[Cancellable] = None
   private var pivotBootstrapRetryTask: Option[Cancellable] = None
   private var rateTrackerTuneTask: Option[Cancellable] = None
@@ -557,23 +558,17 @@ class SNAPSyncController(
       refreshPivotInPlace("all healing peers stateless")
 
     case StateHealingComplete =>
-      log.info("State healing round complete. Running trie walk to check for more missing nodes...")
-      // Re-walk the trie to find any newly-discoverable missing nodes
-      // (each round of healing exposes deeper missing nodes)
-      stateRoot.foreach { root =>
-        val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
-        scala.concurrent
-          .Future {
-            val validator = new StateValidator(storage)
-            validator.findMissingNodesWithPaths(root)
-          }(ec)
-          .foreach {
-            case Right(missingNodes) => self ! TrieWalkResult(missingNodes)
-            case Left(error)         => self ! TrieWalkFailed(error)
-          }(ec)
+      log.info("Healing coordinator idle (no pending tasks, no active requests).")
+      if (trieWalkInProgress) {
+        // A trie walk is already running — its result will determine next step
+        log.info("Trie walk in progress, waiting for result...")
+      } else {
+        // No walk in progress — start one to check for deeper missing nodes
+        startTrieWalk()
       }
 
     case TrieWalkResult(missingNodes) if currentPhase == StateHealing =>
+      trieWalkInProgress = false
       if (missingNodes.isEmpty) {
         log.info("Trie walk found no missing nodes — healing complete!")
         progressMonitor.startPhase(StateValidation)
@@ -584,23 +579,20 @@ class SNAPSyncController(
         trieNodeHealingCoordinator.foreach { coordinator =>
           coordinator ! actors.Messages.QueueMissingNodes(missingNodes)
         }
+        // Schedule next overlapping trie walk — don't wait for healing to complete
+        scheduler.scheduleOnce(2.minutes) {
+          self ! ScheduledTrieWalk
+        }(ec)
       }
 
+    case ScheduledTrieWalk if currentPhase == StateHealing =>
+      startTrieWalk()
+
     case TrieWalkFailed(error) if currentPhase == StateHealing =>
+      trieWalkInProgress = false
       log.error(s"Trie walk failed: $error. Retrying after delay...")
       scheduler.scheduleOnce(5.seconds) {
-        stateRoot.foreach { root =>
-          val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
-          scala.concurrent
-            .Future {
-              val validator = new StateValidator(storage)
-              validator.findMissingNodesWithPaths(root)
-            }(ec)
-            .foreach {
-              case Right(missingNodes) => self ! TrieWalkResult(missingNodes)
-              case Left(error2)        => self ! TrieWalkFailed(error2)
-            }(ec)
-        }
+        self ! ScheduledTrieWalk
       }(ec)
 
     case StateValidationComplete =>
@@ -1924,8 +1916,31 @@ class SNAPSyncController(
   // Internal message for async trie walk result
   private case class TrieWalkResult(missingNodes: Seq[(Seq[ByteString], ByteString)])
   private case class TrieWalkFailed(error: String)
+  private case object ScheduledTrieWalk
+
+  /** Start an async trie walk to discover missing nodes. Guards against concurrent walks. */
+  private def startTrieWalk(): Unit = {
+    if (trieWalkInProgress) return
+    if (currentPhase != StateHealing) return
+    trieWalkInProgress = true
+    stateRoot.foreach { root =>
+      log.info("Starting trie walk to discover missing nodes for healing...")
+      val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
+      val selfRef = self
+      scala.concurrent
+        .Future {
+          val validator = new StateValidator(storage)
+          validator.findMissingNodesWithPaths(root)
+        }(ec)
+        .foreach {
+          case Right(missingNodes) => selfRef ! TrieWalkResult(missingNodes)
+          case Left(error)         => selfRef ! TrieWalkFailed(error)
+        }(ec)
+    }
+  }
 
   private def startStateHealing(): Unit = {
+    trieWalkInProgress = false // Reset for fresh healing phase
     log.info(s"Starting state healing with batch size ${snapSyncConfig.healingBatchSize}")
 
     stateRoot.foreach { root =>
@@ -1950,8 +1965,11 @@ class SNAPSyncController(
         )
       )
 
-      // Start the coordinator
-      trieNodeHealingCoordinator.foreach(_ ! actors.Messages.StartTrieNodeHealing(root))
+      // Start the coordinator — give healing full per-peer budget (accounts/storage/bytecode done)
+      trieNodeHealingCoordinator.foreach { coordinator =>
+        coordinator ! actors.Messages.StartTrieNodeHealing(root)
+        coordinator ! actors.Messages.UpdateMaxInFlightPerPeer(5)
+      }
 
       // Periodically send peer availability notifications
       healingRequestTask = Some(
@@ -1965,18 +1983,8 @@ class SNAPSyncController(
 
       progressMonitor.startPhase(StateHealing)
 
-      // Run trie walk asynchronously to discover missing nodes
-      log.info("Starting trie walk to discover missing nodes for healing...")
-      val selfRef = self
-      scala.concurrent
-        .Future {
-          val validator = new StateValidator(storage)
-          validator.findMissingNodesWithPaths(root)
-        }(ec)
-        .foreach {
-          case Right(missingNodes) => selfRef ! TrieWalkResult(missingNodes)
-          case Left(error)         => selfRef ! TrieWalkFailed(error)
-        }(ec)
+      // Run initial trie walk asynchronously to discover missing nodes
+      startTrieWalk()
     }
   }
 
@@ -2221,15 +2229,8 @@ class SNAPSyncController(
     trieNodeHealingCoordinator.foreach { coordinator =>
       coordinator ! actors.Messages.HealingPivotRefreshed(newStateRoot)
       // Re-walk trie with new root to populate fresh healing tasks
-      val storage = getOrCreateMptStorage(newPivotBlock)
-      val selfRef = self
-      scala.concurrent.Future {
-        val validator = new StateValidator(storage)
-        validator.findMissingNodesWithPaths(newStateRoot)
-      }(ec).foreach {
-        case Right(missingNodes) => selfRef ! TrieWalkResult(missingNodes)
-        case Left(error)         => selfRef ! TrieWalkFailed(error)
-      }(ec)
+      trieWalkInProgress = false // Reset so startTrieWalk() can proceed
+      startTrieWalk()
     }
     // Chain download target extends to the new pivot (chain data is canonical, never invalidated)
     if (chainDownloader.isDefined) {

@@ -51,8 +51,9 @@ class TrieNodeHealingCoordinator(
   )
   private val activeRequests = mutable.Map[BigInt, ActiveRequest]()
 
-  // Worker management (unused for direct dispatch but kept for concurrency tracking)
+  // Concurrency: per-peer limit (like StorageRangeCoordinator) + global safety cap
   private val maxConcurrentRequests = concurrency
+  private var maxInFlightPerPeer: Int = 5
 
   // Statistics
   private var totalNodesHealed: Int = 0
@@ -69,12 +70,15 @@ class TrieNodeHealingCoordinator(
 
   private val ThrottleIncrease = 1.33
   private val ThrottleDecrease = 1.25
-  private val MaxThrottle = 4096.0
+  private val MaxThrottle = 16.0
   private val MinThrottle = 1.0
   private val RateMeasurementImpact = 0.005 // geometric EMA weight per node
 
   // Track last known available peers for re-dispatch after failures
   private val knownAvailablePeers = mutable.Set[Peer]()
+
+  // Dedup set for pending tasks — prevents the same missing node from being queued multiple times
+  private val pendingHashSet = mutable.Set[ByteString]()
 
   // Stateless peer tracking (geth-aligned: peers that return empty TrieNodes for current root)
   private val statelessPeers = mutable.Set[String]()
@@ -123,17 +127,57 @@ class TrieNodeHealingCoordinator(
     log.debug(s"Cooling down peer ${peer.id.value} for ${peerCooldownDefault.toSeconds}s: $reason")
   }
 
-  // Batched raw node storage: accumulate nodes and persist periodically
+  /** Count in-flight requests for a given peer (pipelining support). */
+  private def inFlightForPeer(peer: Peer): Int =
+    activeRequests.values.count(_.peer.id == peer.id)
+
+  /** Dispatch up to maxInFlightPerPeer requests to a single peer (pipelining). */
+  private def dispatchIfPossible(peer: Peer): Unit = {
+    if (pivotRefreshRequested) return
+    if (statelessPeers.contains(peer.id.value)) return
+    if (isPeerCoolingDown(peer)) return
+    var inflight = inFlightForPeer(peer)
+    while (pendingTasks.nonEmpty && inflight < maxInFlightPerPeer && activeRequests.size < maxConcurrentRequests) {
+      requestNextBatch(peer) match {
+        case Some(_) => inflight += 1
+        case None    => return
+      }
+    }
+  }
+
+  // Batched raw node storage: accumulate nodes and flush asynchronously
   private val rawNodeBuffer = mutable.ArrayBuffer[(ByteString, Array[Byte])]()
   private val rawFlushThreshold = 1000
+  private var flushing: Boolean = false
 
-  private def flushRawNodes(): Unit =
+  // Internal message for async flush completion
+  private case class FlushComplete(count: Int)
+
+  /** Synchronous flush — used only for final completion flush (small buffer, safe to block). */
+  private def flushRawNodesSync(): Unit =
     if (rawNodeBuffer.nonEmpty) {
       mptStorage.storeRawNodes(rawNodeBuffer.toSeq)
       mptStorage.persist()
       val count = rawNodeBuffer.size
       rawNodeBuffer.clear()
       log.info(s"Flushed $count healed nodes to disk (total: $totalNodesHealed)")
+    }
+
+  /** Async flush — copies buffer, clears it, writes on background thread. */
+  private def flushRawNodesAsync(): Unit =
+    if (rawNodeBuffer.nonEmpty && !flushing) {
+      flushing = true
+      val nodes = rawNodeBuffer.toSeq
+      rawNodeBuffer.clear()
+      import scala.concurrent.{Future, blocking}
+      val selfRef = self
+      Future {
+        blocking {
+          mptStorage.storeRawNodes(nodes)
+          mptStorage.persist()
+          nodes.size
+        }
+      }(context.dispatcher).foreach(n => selfRef ! FlushComplete(n))(context.dispatcher)
     }
 
   override def preStart(): Unit =
@@ -159,15 +203,12 @@ class TrieNodeHealingCoordinator(
       // Evict stale entry for same physical node (reconnection creates new PeerId)
       knownAvailablePeers.filterInPlace(_.remoteAddress != peer.remoteAddress)
       knownAvailablePeers += peer
-      if (pivotRefreshRequested) {
-        // Don't dispatch while awaiting pivot refresh
-      } else if (statelessPeers.contains(peer.id.value)) {
-        // Don't dispatch to stateless peer — can't serve current root
-      } else if (isPeerCoolingDown(peer)) {
-        log.debug(s"Peer ${peer.id.value} is cooling down, skipping dispatch")
-      } else if (pendingTasks.nonEmpty && activeRequests.size < maxConcurrentRequests) {
-        requestNextBatch(peer)
-      }
+      dispatchIfPossible(peer)
+
+    case UpdateMaxInFlightPerPeer(newLimit) =>
+      log.info(s"Healing per-peer budget: $maxInFlightPerPeer -> $newLimit")
+      maxInFlightPerPeer = newLimit
+      if (newLimit > 0) tryRedispatchPendingTasks()
 
     case HealingPivotRefreshed(newStateRoot) =>
       val oldRoot = Hex.toHexString(stateRoot.take(4).toArray)
@@ -177,7 +218,9 @@ class TrieNodeHealingCoordinator(
           s"Clearing ${pendingTasks.size} pending tasks, ${statelessPeers.size} stateless peers."
       )
       stateRoot = newStateRoot
+      flushRawNodesSync() // Flush any buffered nodes before clearing state
       pendingTasks = Seq.empty // Will be re-populated by trie walk from controller
+      pendingHashSet.clear()
       statelessPeers.clear()
       peerCooldownUntilMs.clear()
       peerResponseBytesTarget.clear()
@@ -188,6 +231,15 @@ class TrieNodeHealingCoordinator(
 
     case TrieNodesResponseMsg(response) =>
       handleResponse(response)
+
+    case FlushComplete(count) =>
+      flushing = false
+      log.info(s"Async flush complete: $count healed nodes written to disk (total: $totalNodesHealed)")
+      // Check if buffer filled up again during the flush
+      if (rawNodeBuffer.size >= rawFlushThreshold) {
+        flushRawNodesAsync()
+      }
+      self ! HealingCheckCompletion
 
     case HealingTaskComplete(requestId, result) =>
       result match {
@@ -200,8 +252,8 @@ class TrieNodeHealingCoordinator(
       }
 
     case HealingCheckCompletion =>
-      if (isComplete) {
-        flushRawNodes()
+      if (isComplete && !flushing) {
+        flushRawNodesSync()
         log.info(s"Healing round complete: $totalNodesHealed total nodes healed. Notifying controller.")
         snapSyncController ! SNAPSyncController.StateHealingComplete
       }
@@ -222,11 +274,15 @@ class TrieNodeHealingCoordinator(
   }
 
   private def queueNodes(pathsAndHashes: Seq[(Seq[ByteString], ByteString)]): Unit = {
-    val entries = pathsAndHashes.map { case (pathset, hash) =>
-      HealingEntry(pathset = pathset, hash = hash)
+    val entries = pathsAndHashes.collect {
+      case (pathset, hash) if !pendingHashSet.contains(hash) =>
+        pendingHashSet += hash
+        HealingEntry(pathset = pathset, hash = hash)
     }
+    val deduped = pathsAndHashes.size - entries.size
     pendingTasks = pendingTasks ++ entries
-    log.info(s"Queued ${entries.size} nodes for healing. Total pending: ${pendingTasks.size}")
+    val dedupStr = if (deduped > 0) s" ($deduped duplicates filtered)" else ""
+    log.info(s"Queued ${entries.size} nodes for healing$dedupStr. Total pending: ${pendingTasks.size}")
   }
 
   /** Update healing rate EMA and adjust throttle (geth p2p/msgrate alignment).
@@ -246,8 +302,8 @@ class TrieNodeHealingCoordinator(
     healRate = math.pow(1 - RateMeasurementImpact, delivered) * (healRate - measured) + measured
     healRate = healRate.max(0.0)
 
-    // Update pending count
-    healPending = rawNodeBuffer.size + pendingTasks.size
+    // Only backpressure on unflushed buffer — pending queue being large is normal after trie walks
+    healPending = rawNodeBuffer.size
 
     // Adjust throttle every 1 second
     val now = System.currentTimeMillis()
@@ -290,6 +346,8 @@ class TrieNodeHealingCoordinator(
     val effectiveBatch = effectiveBatchSize
     val batch = pendingTasks.take(effectiveBatch)
     pendingTasks = pendingTasks.drop(effectiveBatch)
+    // Remove dispatched hashes from dedup set (they'll be re-added if re-queued on failure)
+    batch.foreach(e => pendingHashSet -= e.hash)
 
     val requestId = requestTracker.generateRequestId()
     val responseBytes = responseBytesTargetFor(peer)
@@ -410,16 +468,14 @@ class TrieNodeHealingCoordinator(
     if (healedCount > 0) {
       snapSyncController ! SNAPSyncController.ProgressNodesHealed(healedCount.toLong)
 
-      // Periodic flush of raw node buffer
+      // Periodic async flush of raw node buffer
       if (rawNodeBuffer.size >= rawFlushThreshold) {
-        flushRawNodes()
+        flushRawNodesAsync()
       }
     }
 
-    // Dispatch more work to this peer if available
-    if (pendingTasks.nonEmpty && !isPeerCoolingDown(peer) && activeRequests.size < maxConcurrentRequests) {
-      requestNextBatch(peer)
-    }
+    // Dispatch more work to this peer if available (pipeline multiple requests)
+    dispatchIfPossible(peer)
 
     self ! HealingCheckCompletion
   }
@@ -435,6 +491,7 @@ class TrieNodeHealingCoordinator(
 
     log.info(s"Re-queued ${tasks.size} timed-out healing tasks (pending: ${pendingTasks.size})")
     tryRedispatchPendingTasks()
+    self ! HealingCheckCompletion
   }
 
   private def tryRedispatchPendingTasks(): Unit = {
@@ -445,8 +502,8 @@ class TrieNodeHealingCoordinator(
       .filterNot(p => statelessPeers.contains(p.id.value))
     if (eligiblePeers.isEmpty) return
 
-    for (peer <- eligiblePeers if pendingTasks.nonEmpty && activeRequests.size < maxConcurrentRequests)
-      requestNextBatch(peer)
+    for (peer <- eligiblePeers if pendingTasks.nonEmpty)
+      dispatchIfPossible(peer)
   }
 
   private def calculateProgress(): Double = {
