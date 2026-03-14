@@ -113,7 +113,7 @@ class StorageRangeCoordinator(
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
   // This is separate from stateless peer detection — cooldowns are short and per-error-type.
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
-  private val peerCooldownDefault = 30.seconds
+  private val peerCooldownDefault = 10.seconds
 
   // Binary stateless peer detection: peers that cannot serve the current state root.
   // When ALL known peers become stateless, request a pivot refresh from the controller.
@@ -274,6 +274,33 @@ class StorageRangeCoordinator(
   private var slotsSinceLastFlush: Long = 0
   private val flushThreshold: Long = 50000
 
+  // Async flush state — avoids blocking the actor during RocksDB writes.
+  // Pattern: takeRoot() snapshots the in-memory trie, clears it, then a Future
+  // collapses + persists the snapshot while new puts accumulate a fresh root.
+  private var isFlushing: Boolean = false
+  private case class DeferredFlushComplete(flushedSlots: Long)
+
+  private def flushDeferredAsync(): Unit =
+    if (!isFlushing) {
+      deferredStorage.takeRoot() match {
+        case Some(root) =>
+          isFlushing = true
+          val flushCount = slotsSinceLastFlush
+          slotsSinceLastFlush = 0
+          val selfRef = self
+          import scala.concurrent.{Future, blocking}
+          Future {
+            blocking {
+              mptStorage.updateNodesInStorage(Some(root), Nil)
+              mptStorage.persist()
+              flushCount
+            }
+          }(context.dispatcher).foreach(n => selfRef ! DeferredFlushComplete(n))(context.dispatcher)
+        case None =>
+          () // Nothing to flush
+      }
+    }
+
   // Storage management
   private val proofVerifiers = mutable.Map[ByteString, MerkleProofVerifier]()
   private val storageTrieCache = new StorageTrieCache(10000)
@@ -351,13 +378,18 @@ class StorageRangeCoordinator(
       // Update contract completion progress for the progress monitor
       updateContractProgress()
       if (isComplete) {
-        // Final flush before reporting completion
-        deferredStorage.flush()
-        log.info("Storage range sync complete!")
-        snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
-      } else if (tasks.nonEmpty && activeTasks.isEmpty) {
-        // All tasks pending but nothing in-flight — try to dispatch or request pivot refresh.
-        // This handles the case where the backoff timer fires and we need to re-evaluate.
+        if (isFlushing) {
+          // Async flush still running — DeferredFlushComplete will re-trigger StorageCheckCompletion
+          log.debug("Waiting for async flush to complete before reporting storage sync done")
+        } else {
+          // Final synchronous flush of any remaining buffered nodes
+          deferredStorage.flush()
+          log.info("Storage range sync complete!")
+          snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
+        }
+      } else if (tasks.nonEmpty) {
+        // Try to dispatch pending tasks — per-peer and global limits enforced in dispatchIfPossible().
+        // Previously guarded by activeTasks.isEmpty which defeated pipelining.
         maybeRequestPivotRefresh()
         tryRedispatchPendingTasks()
       }
@@ -366,9 +398,13 @@ class StorageRangeCoordinator(
       noMoreTasksExpected = true
       log.info(s"No more storage tasks expected. Pending: ${tasks.size}, active: ${activeTasks.size}")
       if (isComplete) {
-        deferredStorage.flush()
-        log.info("Storage range sync complete!")
-        snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
+        if (isFlushing) {
+          log.debug("Waiting for async flush to complete before reporting storage sync done")
+        } else {
+          deferredStorage.flush()
+          log.info("Storage range sync complete!")
+          snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
+        }
       }
 
     case ForceCompleteStorage =>
@@ -452,6 +488,16 @@ class StorageRangeCoordinator(
         requestedBytes,
         isLastServedTask
       )
+
+    case DeferredFlushComplete(count) =>
+      isFlushing = false
+      log.info(s"Async deferred flush complete ($count slots, total: $slotsDownloaded)")
+      // Check if buffer filled up again during the flush
+      if (slotsSinceLastFlush >= flushThreshold) {
+        flushDeferredAsync()
+      }
+      // Re-check completion (flush may have been the last pending operation)
+      self ! StorageCheckCompletion
   }
 
   private def requestNextRanges(peer: Peer): Option[BigInt] = {
@@ -712,6 +758,9 @@ class StorageRangeCoordinator(
 
     // Check completion after processing all served tasks
     self ! StorageCheckCompletion
+
+    // Immediately pipeline more work to this peer — don't wait for StoragePeerAvailable
+    dispatchIfPossible(peer)
   }
 
   // How many storage slots to insert per chunk before yielding to the actor mailbox.
@@ -756,12 +805,10 @@ class StorageRangeCoordinator(
         snapSyncController ! SNAPSyncController.ProgressStorageSlotsSynced(chunk.size.toLong)
       }
 
-      // Periodic deferred flush
+      // Periodic deferred flush — async to avoid blocking the actor
       slotsSinceLastFlush += chunk.size
-      if (slotsSinceLastFlush >= flushThreshold) {
-        deferredStorage.flush()
-        slotsSinceLastFlush = 0
-        log.info(s"Flushed deferred storage writes to disk (${slotsDownloaded} total slots)")
+      if (slotsSinceLastFlush >= flushThreshold && !isFlushing) {
+        flushDeferredAsync()
       }
 
       if (rest.nonEmpty) {
@@ -789,6 +836,8 @@ class StorageRangeCoordinator(
         completedTasks += task
 
         self ! StorageCheckCompletion
+        // Task done — try to pipeline more work to this peer
+        dispatchIfPossible(peer)
       }
     } catch {
       case e: Exception =>

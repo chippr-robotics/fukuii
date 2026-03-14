@@ -42,6 +42,16 @@ class DeferredWriteMptStorage(val backing: MptStorage) extends MptStorage {
     * @return
     *   Root hash if nodes were flushed, None if nothing to flush
     */
+  /** Take the current root for flushing, atomically clearing it.
+    * The caller flushes the returned root on a background thread via the backing storage.
+    * New puts will accumulate a fresh root via updateNodesInStorage().
+    */
+  def takeRoot(): Option[MptNode] = {
+    val root = currentRoot
+    currentRoot = None
+    root
+  }
+
   def flush(): Option[Array[Byte]] =
     currentRoot match {
       case Some(root) =>
