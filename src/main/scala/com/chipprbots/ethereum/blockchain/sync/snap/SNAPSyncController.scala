@@ -522,6 +522,7 @@ class SNAPSyncController(
 
         // Transition to ByteCodeAndStorageSync for status reporting and stagnation checks
         currentPhase = ByteCodeAndStorageSync
+        progressMonitor.startPhase(ByteCodeAndStorageSync)
 
         // Redistribute per-peer budget: accounts done, give storage+bytecode more bandwidth.
         // Global budget remains 5 per peer: storage=3, bytecode=2.
@@ -606,7 +607,10 @@ class SNAPSyncController(
       log.info("State validation complete. SNAP sync finished!")
       completeSnapSync()
 
-    // Chain download runs in parallel — track its completion
+    // Chain download runs in parallel — track progress and completion
+    case ChainDownloader.Progress(h, b, r, t) =>
+      progressMonitor.updateChainProgress(h, b, r, t)
+
     case ChainDownloader.Done =>
       log.info("Parallel chain download completed during SNAP state sync.")
       chainDownloadComplete = true
@@ -2447,6 +2451,7 @@ class SNAPSyncController(
       if (!chainDownloadComplete && chainDownloader.isDefined) {
         log.info("SNAP state sync complete, waiting for parallel chain download to finish...")
         currentPhase = ChainDownloadCompletion
+        progressMonitor.startPhase(ChainDownloadCompletion)
         context.become(waitingForChainDownload)
         return
       }
@@ -2519,7 +2524,7 @@ class SNAPSyncController(
       pivotBlock.foreach(finalizeSnapSync)
 
     case ChainDownloader.Progress(h, b, r, t) =>
-      log.info("Chain download progress while waiting: headers={}/{}, bodies={}, receipts={}", h, t, b, r)
+      progressMonitor.updateChainProgress(h, b, r, t)
 
     case SyncProtocol.GetStatus =>
       sender() ! currentSyncStatus
@@ -3233,6 +3238,12 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
   private var storageContractsCompleted: Int = 0
   private var storageContractsTotal: Int = 0
 
+  // Chain download tracking (parallel header/body/receipt download)
+  private var chainHeaders: BigInt = BigInt(0)
+  private var chainBodies: BigInt = BigInt(0)
+  private var chainReceipts: BigInt = BigInt(0)
+  private var chainTarget: BigInt = BigInt(0)
+
   // Periodic logging
   private var lastLogTime: Long = System.currentTimeMillis()
 
@@ -3276,6 +3287,10 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
     estimatedTotalSlots = 0
     storageContractsCompleted = 0
     storageContractsTotal = 0
+    chainHeaders = BigInt(0)
+    chainBodies = BigInt(0)
+    chainReceipts = BigInt(0)
+    chainTarget = BigInt(0)
 
     phaseStartTime = System.currentTimeMillis()
     lastLogTime = System.currentTimeMillis()
@@ -3349,6 +3364,14 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
   def updateStorageContracts(completed: Int, total: Int): Unit = synchronized {
     storageContractsCompleted = completed
     storageContractsTotal = total
+  }
+
+  /** Update chain download progress (headers/bodies/receipts vs target) */
+  def updateChainProgress(headers: BigInt, bodies: BigInt, receipts: BigInt, target: BigInt): Unit = synchronized {
+    chainHeaders = headers
+    chainBodies = bodies
+    chainReceipts = receipts
+    chainTarget = target
   }
 
   /** Remove old entries from history (keep only last N seconds) */
@@ -3489,7 +3512,11 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
       isFinalizingTrie = finalizingTrie,
       finalizeElapsedSeconds = finalizeElapsedSec,
       storageContractsCompleted = storageContractsCompleted,
-      storageContractsTotal = storageContractsTotal
+      storageContractsTotal = storageContractsTotal,
+      chainHeaders = chainHeaders,
+      chainBodies = chainBodies,
+      chainReceipts = chainReceipts,
+      chainTarget = chainTarget
     )
   }
 }
@@ -3519,18 +3546,23 @@ case class SyncProgress(
     isFinalizingTrie: Boolean = false,
     finalizeElapsedSeconds: Int = 0,
     storageContractsCompleted: Int = 0,
-    storageContractsTotal: Int = 0
+    storageContractsTotal: Int = 0,
+    chainHeaders: BigInt = BigInt(0),
+    chainBodies: BigInt = BigInt(0),
+    chainReceipts: BigInt = BigInt(0),
+    chainTarget: BigInt = BigInt(0)
 ) {
 
   private def wormChasesBrainBar: String = {
     import SNAPSyncController._
 
-    // Global “stage” progress across phases; within-stage progress uses `phaseProgress` when available.
+    // 6-stage pipeline: Accounts → Code+Storage → Healing → Validation → Chain → Done
     val stages = Vector[SyncPhase](
       AccountRangeSync,
       ByteCodeAndStorageSync,
       StateHealing,
       StateValidation,
+      ChainDownloadCompletion,
       Completed
     )
 
@@ -3545,13 +3577,12 @@ case class SyncProgress(
 
     val globalProgress = math.max(0.0, math.min(1.0, stageIndex * stageSize + withinStage))
 
-    val trackLen = 18
+    val trackLen = 20
     val wormPos = math.max(0, math.min(trackLen, math.round(globalProgress * trackLen).toInt))
-    val remaining = trackLen - wormPos
-
-    val headroom = " " * wormPos
-    val distance = "-" * remaining
-    s"[$headroom🪱$distance🧠]"
+    val filled = "=" * math.max(0, wormPos - 1)
+    val head = if (wormPos > 0) ">" else ""
+    val remaining = "." * (trackLen - wormPos)
+    s"[${filled}${head}${remaining}]"
   }
 
   private def formatCount(n: Long): String =
@@ -3565,41 +3596,66 @@ case class SyncProgress(
       s"slots=$storageSlotsSynced (${slotsPerSec.toInt}/s), nodes=$nodesHealed (${nodesPerSec.toInt}/s), " +
       s"elapsed=${elapsedSeconds.toInt}s"
 
-  def formattedString: String =
+  /** Format chain download status as a compact suffix. Shows header/body/receipt progress when active. */
+  private def chainStr: String =
+    if (chainTarget > 0) {
+      val pct = if (chainTarget > 0) (chainHeaders * 100 / chainTarget).toInt else 0
+      s" | chain: h=${formatBigInt(chainHeaders)}/${formatBigInt(chainTarget)}($pct%) b=${formatBigInt(chainBodies)} r=${formatBigInt(chainReceipts)}"
+    } else ""
+
+  private def formatBigInt(n: BigInt): String =
+    if (n >= 1000000) f"${(n.toDouble / 1000000)}%.1fM"
+    else if (n >= 1000) f"${(n.toDouble / 1000)}%.1fK"
+    else n.toString
+
+  private def elapsedStr: String = {
+    val s = elapsedSeconds.toInt
+    if (s >= 3600) f"${s / 3600}h${(s % 3600) / 60}%02dm"
+    else if (s >= 60) s"${s / 60}m${s % 60}s"
+    else s"${s}s"
+  }
+
+  def formattedString: String = {
+    val bar = wormChasesBrainBar
+    val chain = chainStr
+    val elapsed = elapsedStr
+
     phase match {
       case SNAPSyncController.AccountRangeSync if isFinalizingTrie =>
-        s"phase=AccountRange [FINALIZING TRIE - writing ${formatCount(accountsSynced)} accounts to disk, ${finalizeElapsedSeconds}s elapsed], elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
+        s"$bar FINALIZING TRIE: flushing ${formatCount(accountsSynced)} accounts to disk (${finalizeElapsedSeconds}s)$chain | $elapsed"
 
       case SNAPSyncController.AccountRangeSync =>
-        val progressStr = if (estimatedTotalAccounts > 0) s" (${phaseProgress}%)" else ""
+        val progressStr = if (estimatedTotalAccounts > 0) s" ${phaseProgress}%" else ""
         val totalStr = if (estimatedTotalAccounts > 0) s"/~${formatCount(estimatedTotalAccounts)}" else ""
-        s"phase=AccountRange$progressStr, accounts=${formatCount(accountsSynced)}$totalStr@${recentAccountsPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
+        s"$bar Accounts$progressStr: ${formatCount(accountsSynced)}$totalStr @ ${recentAccountsPerSec.toInt}/s$chain | $elapsed"
 
       case SNAPSyncController.ByteCodeSync =>
-        val progressStr = if (estimatedTotalBytecodes > 0) s" (${phaseProgress}%)" else ""
+        val progressStr = if (estimatedTotalBytecodes > 0) s" ${phaseProgress}%" else ""
         val totalStr = if (estimatedTotalBytecodes > 0) s"/${formatCount(estimatedTotalBytecodes)}" else ""
-        s"phase=ByteCode$progressStr, codes=${formatCount(bytecodesDownloaded)}$totalStr@${recentBytecodesPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
+        s"$bar ByteCode$progressStr: ${formatCount(bytecodesDownloaded)}$totalStr @ ${recentBytecodesPerSec.toInt}/s$chain | $elapsed"
 
       case SNAPSyncController.ByteCodeAndStorageSync =>
-        val codeStr = s"codes=${formatCount(bytecodesDownloaded)}@${recentBytecodesPerSec.toInt}/s"
-        val slotStr = s"slots=${formatCount(storageSlotsSynced)}@${recentSlotsPerSec.toInt}/s"
         val contractsStr =
-          if (storageContractsTotal > 0) s", contracts=$storageContractsCompleted/$storageContractsTotal" else ""
-        s"phase=ByteCode+Storage, $codeStr, $slotStr$contractsStr, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
+          if (storageContractsTotal > 0) s" (${storageContractsCompleted}/${storageContractsTotal} contracts)" else ""
+        s"$bar Code+Storage: codes=${formatCount(bytecodesDownloaded)} @ ${recentBytecodesPerSec.toInt}/s, slots=${formatCount(storageSlotsSynced)} @ ${recentSlotsPerSec.toInt}/s$contractsStr$chain | $elapsed"
 
       case SNAPSyncController.StorageRangeSync =>
-        val progressStr = if (estimatedTotalSlots > 0) s" (${phaseProgress}%)" else ""
+        val progressStr = if (estimatedTotalSlots > 0) s" ${phaseProgress}%" else ""
         val contractsStr =
-          if (storageContractsTotal > 0) s", contracts=$storageContractsCompleted/$storageContractsTotal" else ""
-        s"phase=Storage$progressStr, slots=${formatCount(storageSlotsSynced)}@${recentSlotsPerSec.toInt}/s$contractsStr, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
+          if (storageContractsTotal > 0) s" (${storageContractsCompleted}/${storageContractsTotal} contracts)" else ""
+        s"$bar Storage$progressStr: ${formatCount(storageSlotsSynced)} @ ${recentSlotsPerSec.toInt}/s$contractsStr$chain | $elapsed"
 
       case SNAPSyncController.StateHealing =>
-        s"phase=Healing, nodes=${formatCount(nodesHealed)}@${recentNodesPerSec.toInt}/s, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
+        s"$bar Healing: ${formatCount(nodesHealed)} nodes @ ${recentNodesPerSec.toInt}/s$chain | $elapsed"
 
       case SNAPSyncController.StateValidation =>
-        s"phase=Validation, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
+        s"$bar Validating state trie...$chain | $elapsed"
+
+      case SNAPSyncController.ChainDownloadCompletion =>
+        s"$bar State done, finishing chain download:$chain | $elapsed"
 
       case _ =>
-        s"phase=$phase, elapsed=${elapsedSeconds.toInt}s ${wormChasesBrainBar}"
+        s"$bar $phase$chain | $elapsed"
     }
+  }
 }
