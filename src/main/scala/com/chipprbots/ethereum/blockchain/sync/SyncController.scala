@@ -217,7 +217,7 @@ class SyncController(
         )
       val headerBootstrap =
         context.actorOf(
-          PivotHeaderBootstrap.props(peersClient, blockchainWriter, targetBlock, syncConfig, scheduler),
+          PivotHeaderBootstrap.props(peersClient, blockchainWriter, targetBlock, syncConfig, scheduler, preferSnapPeers = true),
           s"pivot-header-bootstrap-$gen"
         )
 
@@ -354,7 +354,7 @@ class SyncController(
         )
       val newHeaderBootstrap =
         context.actorOf(
-          PivotHeaderBootstrap.props(newPeersClient, blockchainWriter, newTargetBlock, syncConfig, scheduler),
+          PivotHeaderBootstrap.props(newPeersClient, blockchainWriter, newTargetBlock, syncConfig, scheduler, preferSnapPeers = true),
           s"pivot-header-bootstrap-$gen"
         )
       context.become(

@@ -510,15 +510,18 @@ class AccountRangeCoordinator(
   private def finalizing: Receive = {
     case TrieFlushComplete(Right(_)) =>
       log.info("State trie finalized successfully")
-      // AccountRangeSyncComplete already sent before finalization started
+      snapSyncController ! SNAPSyncController.ProgressAccountsTrieFinalized
+      context.stop(self)
 
     case TrieFlushComplete(Left(error)) =>
       log.error(s"Failed to finalize trie: $error")
-      // AccountRangeSyncComplete already sent — finalize failure doesn't block sync
+      snapSyncController ! SNAPSyncController.ProgressAccountsTrieFinalized
+      context.stop(self)
 
     case Status.Failure(ex) =>
       log.error(ex, s"Trie finalization failed with exception: ${ex.getMessage}")
-      // AccountRangeSyncComplete already sent — finalize failure doesn't block sync
+      snapSyncController ! SNAPSyncController.ProgressAccountsTrieFinalized
+      context.stop(self)
 
     case _: PeerAvailable =>
     // Ignore — no more tasks to dispatch during finalization

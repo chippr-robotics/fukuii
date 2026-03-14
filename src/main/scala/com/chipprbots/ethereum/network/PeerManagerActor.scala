@@ -593,7 +593,14 @@ object PeerManagerActor {
       authHandshaker: AuthHandshaker,
       capabilities: List[Capability]
   ): (ActorContext, InetSocketAddress, Boolean) => ActorRef = { (ctx, address, incomingConnection) =>
-    val id: String = address.toString.filterNot(_ == '/')
+    // Sanitize address for use as Pekko actor path element.
+    // IPv6 addresses contain brackets (e.g. [2a01:4f8::2]:30303) which are illegal
+    // in actor paths. Replace all non-allowed characters to prevent
+    // InvalidActorNameException from crashing PeerManagerActor.
+    val id: String = address.toString.filterNot(_ == '/').map {
+      case '[' | ']' => '_'
+      case c         => c
+    }
     val props = PeerActor.props(
       address,
       config,

@@ -357,6 +357,10 @@ class SNAPSyncController(
       // Treat any progress update as a liveness signal.
       lastAccountProgressMs = System.currentTimeMillis()
 
+    case ProgressAccountsTrieFinalized =>
+      progressMonitor.setFinalizingTrie(false)
+      log.info("Account range trie finalization complete")
+
     case ProgressBytecodesDownloaded(count) =>
       progressMonitor.incrementBytecodesDownloaded(count)
 
@@ -921,6 +925,24 @@ class SNAPSyncController(
         stateNodesProgress = None
       )
 
+    case PivotBootstrapFailed(reason) =>
+      log.warning(s"Pivot header bootstrap failed during initial startup: $reason")
+      bootstrapRetryCount += 1
+      if (checkBootstrapRetryTimeout(s"bootstrap failed: $reason")) {
+        // checkBootstrapRetryTimeout already called fallbackToFastSync()
+      } else {
+        val delay = bootstrapRetryDelay
+        log.info(s"Retrying SNAP sync start in $delay (attempt $bootstrapRetryCount)")
+        bootstrapCheckTask.foreach(_.cancel())
+        bootstrapCheckTask = Some(
+          scheduler.scheduleOnce(delay) { self ! RetrySnapSyncStart }(ec)
+        )
+      }
+
+    // SNAP peer eviction runs during bootstrap to free slots for SNAP-capable peers
+    case EvictNonSnapPeers =>
+      evictNonSnapPeers()
+
     case msg =>
       log.debug(s"Unhandled message in bootstrapping state: $msg")
   }
@@ -937,6 +959,10 @@ class SNAPSyncController(
   }
 
   private def startSnapSync(): Unit = {
+    // Start evicting non-SNAP peers immediately to make room for SNAP-capable peers.
+    // This runs during pivot selection and bootstrap, not just after account sync starts.
+    startSnapPeerEviction()
+
     // Step 7: Check for accounts-complete recovery (process crash during bytecode/storage phase).
     // If accounts were previously completed and the pivot is still fresh, skip account download
     // and only re-run bytecodes + storage from the persisted storage file.
@@ -2110,11 +2136,14 @@ class SNAPSyncController(
 
     if (newPivotOpt.isEmpty) {
       log.warning(
-        "Cannot refresh pivot: no suitable SNAP peers available. " +
-          "Will retry when peers reconnect (coordinator backoff will handle retry)."
+        "Cannot refresh pivot: no suitable SNAP peers available. Scheduling retry in 30s."
       )
       // Don't restart — restarting can't help with no peers, and it destroys all in-memory trie data.
-      // The coordinator's exponential backoff will retry, and when peers reconnect, dispatch resumes.
+      // Schedule an explicit retry so we don't stall indefinitely waiting for coordinator backoff.
+      pivotBootstrapRetryTask.foreach(_.cancel())
+      pivotBootstrapRetryTask = Some(
+        scheduler.scheduleOnce(30.seconds, self, RetryPivotRefresh)(context.dispatcher)
+      )
       return
     }
 
@@ -2619,6 +2648,7 @@ object SNAPSyncController {
     */
   final case class ProgressAccountsSynced(count: Long)
   case object ProgressAccountsFinalizingTrie
+  case object ProgressAccountsTrieFinalized
   final case class ProgressBytecodesDownloaded(count: Long)
   final case class ProgressStorageSlotsSynced(count: Long)
   final case class ProgressNodesHealed(count: Long)
