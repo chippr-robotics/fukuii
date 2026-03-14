@@ -551,6 +551,10 @@ class SNAPSyncController(
       log.info(s"Storage range sync complete. ByteCode: $bytecodePhaseComplete, Accounts: $accountsComplete")
       checkAllDownloadsComplete()
 
+    case HealingAllPeersStateless if currentPhase == StateHealing =>
+      log.warning("All healing peers stateless — refreshing pivot in-place for healing")
+      refreshPivotInPlace("all healing peers stateless")
+
     case StateHealingComplete =>
       log.info("State healing round complete. Running trie walk to check for more missing nodes...")
       // Re-walk the trie to find any newly-discoverable missing nodes
@@ -2208,6 +2212,21 @@ class SNAPSyncController(
     // Bytecodes are content-addressed (hash-keyed) so pivot changes don't invalidate them,
     // but the coordinator should clear stale peer tracking.
     bytecodeCoordinator.foreach(_ ! actors.Messages.ByteCodePivotRefreshed)
+    // Healing coordinator: update root, clear pending tasks and stateless peers.
+    // Then re-walk the trie with the new root to discover missing nodes.
+    trieNodeHealingCoordinator.foreach { coordinator =>
+      coordinator ! actors.Messages.HealingPivotRefreshed(newStateRoot)
+      // Re-walk trie with new root to populate fresh healing tasks
+      val storage = getOrCreateMptStorage(newPivotBlock)
+      val selfRef = self
+      scala.concurrent.Future {
+        val validator = new StateValidator(storage)
+        validator.findMissingNodesWithPaths(newStateRoot)
+      }(ec).foreach {
+        case Right(missingNodes) => selfRef ! TrieWalkResult(missingNodes)
+        case Left(error)         => selfRef ! TrieWalkFailed(error)
+      }(ec)
+    }
     // Chain download target extends to the new pivot (chain data is canonical, never invalidated)
     if (chainDownloader.isDefined) {
       chainDownloader.foreach(_ ! ChainDownloader.UpdateTarget(newPivotBlock))
@@ -2633,6 +2652,7 @@ object SNAPSyncController {
       storageTasks: Seq[StorageTask]
   )
   case object StateHealingComplete
+  case object HealingAllPeersStateless
   case object StateValidationComplete
   case object GetProgress
 

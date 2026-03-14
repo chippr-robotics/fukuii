@@ -421,10 +421,18 @@ class AccountRangeCoordinator(
       tryRedispatchPendingTasks()
 
     case PeerAvailable(peer) =>
-      // Evict stale entry for same physical node (reconnection creates new PeerId)
+      // Evict stale entry for same physical node (reconnection creates new PeerId).
+      // Only clear stateless marking for peers that actually reconnected with a NEW ID.
+      // If the same peer is re-reported (same id), preserve its stateless marking —
+      // otherwise PeerAvailable from SNAPSyncController clears stateless every ~1s,
+      // bypassing the backoff mechanism entirely (Bug 24).
       val evicted = knownAvailablePeers.filter(_.remoteAddress == peer.remoteAddress)
       knownAvailablePeers --= evicted
-      evicted.foreach(p => statelessPeers -= p.id)
+      evicted.foreach { p =>
+        if (p.id != peer.id) {
+          statelessPeers -= p.id
+        }
+      }
       knownAvailablePeers += peer
       if (isPeerStateless(peer)) {
         log.debug(s"Ignoring PeerAvailable(${peer.id.value}) - peer is stateless for current root")

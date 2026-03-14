@@ -98,8 +98,8 @@ services:
     # Configuration files are loaded from /app/conf/
     # Note: assembly JAR uses java entrypoint, not dist launcher (application.ini is ignored)
     command:
-      - "-Xmx3g"
-      - "-Xms1g"
+      - "-Xmx5g"
+      - "-Xms2g"
       - "-Xss10M"
       - "-XX:+UseG1GC"
       - "-XX:MaxGCPauseMillis=200"

@@ -185,6 +185,12 @@ object Messages {
   case object HealingGetProgress extends TrieNodeHealingCoordinatorMessage
   case object HealingCheckCompletion extends TrieNodeHealingCoordinatorMessage
 
+  /** Sent by SNAPSyncController when a fresher pivot has been selected during healing.
+    * Coordinator updates state root, clears pending tasks and stateless tracking.
+    * A new trie walk will re-populate tasks for the new root.
+    */
+  case class HealingPivotRefreshed(newStateRoot: ByteString) extends TrieNodeHealingCoordinatorMessage
+
   sealed trait TrieNodeHealingWorkerMessage
   case class FetchTrieNodes(task: HealingTask, peer: Peer) extends TrieNodeHealingWorkerMessage
   case class TrieNodesResponseMsg(response: TrieNodes) extends TrieNodeHealingWorkerMessage

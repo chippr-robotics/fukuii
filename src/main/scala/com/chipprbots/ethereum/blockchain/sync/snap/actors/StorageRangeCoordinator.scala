@@ -135,6 +135,16 @@ class StorageRangeCoordinator(
   private val minRefreshIntervalMs: Long = 60000L // 1 minute minimum between refreshes
   private val maxRefreshIntervalMs: Long = 300000L // 5 minutes maximum backoff
 
+  // Post-pivot-refresh cooldown: after a pivot refresh, peers need time to sync to the new root.
+  // Dispatching immediately causes all peers to return empty → marked stateless → another pivot
+  // refresh → infinite tight loop. This cooldown prevents ALL dispatch paths (tryRedispatchPendingTasks,
+  // StoragePeerAvailable, StorageCheckCompletion) from sending requests until peers have had time.
+  private var postRefreshCooldownUntilMs: Long = 0
+  private val postRefreshCooldownMs: Long = 10000L // 10 seconds after pivot refresh
+
+  private def isPostRefreshCooldownActive: Boolean =
+    System.currentTimeMillis() < postRefreshCooldownUntilMs
+
   private def isPeerStateless(peer: Peer): Boolean =
     statelessPeers.contains(peer.id.value)
 
@@ -293,12 +303,24 @@ class StorageRangeCoordinator(
       log.debug(s"Added storage task for account ${task.accountString} to queue")
 
     case StoragePeerAvailable(peer) =>
-      // Evict stale entry for same physical node (reconnection creates new PeerId)
+      // Evict stale entry for same physical node (reconnection creates new PeerId).
+      // Only clear stateless marking for peers that actually reconnected with a NEW ID.
+      // If the same peer is re-reported (same id), preserve its stateless marking —
+      // otherwise StoragePeerAvailable from AccountRangeCoordinator clears stateless
+      // every ~1s, bypassing the backoff mechanism entirely (Bug 24).
       val evicted = knownAvailablePeers.filter(_.remoteAddress == peer.remoteAddress)
       knownAvailablePeers --= evicted
-      evicted.foreach(p => statelessPeers -= p.id.value)
+      evicted.foreach { p =>
+        if (p.id.value != peer.id.value) {
+          statelessPeers -= p.id.value
+        }
+      }
       knownAvailablePeers += peer
-      if (isPeerStateless(peer)) {
+      if (isPostRefreshCooldownActive) {
+        log.debug(s"Ignoring StoragePeerAvailable(${peer.id.value}) - post-refresh cooldown active")
+      } else if (pivotRefreshRequested) {
+        log.debug(s"Ignoring StoragePeerAvailable(${peer.id.value}) - pivot refresh pending")
+      } else if (isPeerStateless(peer)) {
         log.debug(s"Ignoring StoragePeerAvailable(${peer.id.value}) - peer is stateless for current root")
       } else if (isPeerCoolingDown(peer)) {
         log.debug(s"Ignoring StoragePeerAvailable(${peer.id.value}) due to cooldown")
@@ -363,6 +385,20 @@ class StorageRangeCoordinator(
       log.info(s"Storage pivot refreshed: ${stateRoot.take(4).toHex} -> ${newStateRoot.take(4).toHex}")
       stateRoot = newStateRoot
 
+      // Cancel all in-flight requests: their responses are for the old root and will
+      // contaminate stateless detection if processed. Re-queue tasks for the new root.
+      val cancelledCount = activeTasks.size
+      activeTasks.values.foreach { case (_, batchTasks, _) =>
+        batchTasks.foreach { task =>
+          task.pending = false
+          tasks.enqueue(task)
+        }
+      }
+      activeTasks.clear()
+      if (cancelledCount > 0) {
+        log.info(s"Cancelled $cancelledCount in-flight storage requests (stale root)")
+      }
+
       // Clear all per-peer adaptive state — fresh start with new root
       statelessPeers.clear()
       pivotRefreshRequested = false
@@ -372,8 +408,17 @@ class StorageRangeCoordinator(
       peerResponseBytesTarget.clear()
       emptyResponsesByTask.clear()
 
-      // Resume dispatching with the fresh root
-      tryRedispatchPendingTasks()
+      // Set post-refresh cooldown: peers need time to sync to the new root.
+      // Dispatching immediately causes all peers to return empty → marked stateless →
+      // another pivot refresh → infinite tight loop (Bug 24).
+      postRefreshCooldownUntilMs = System.currentTimeMillis() + postRefreshCooldownMs
+      log.info(s"Post-refresh cooldown active for ${postRefreshCooldownMs / 1000}s — waiting for peers to sync to new root")
+
+      // Schedule dispatch after the cooldown period instead of dispatching immediately
+      import context.dispatcher
+      context.system.scheduler.scheduleOnce(postRefreshCooldownMs.millis) {
+        self ! StorageCheckCompletion
+      }
 
     case StorageGetProgress =>
       val stats = StorageRangeCoordinator.SyncStatistics(
@@ -412,6 +457,14 @@ class StorageRangeCoordinator(
   private def requestNextRanges(peer: Peer): Option[BigInt] = {
     if (tasks.isEmpty) {
       log.debug("No more storage tasks available")
+      return None
+    }
+
+    if (isPostRefreshCooldownActive) {
+      return None
+    }
+
+    if (pivotRefreshRequested) {
       return None
     }
 
@@ -521,9 +574,7 @@ class StorageRangeCoordinator(
     //  3. Treating proof-only as served prevents stateless detection, causing indefinite stalls
     // Legitimate empty-storage accounts will be completed via the empty-response skip mechanism
     // after maxEmptyResponsesPerTask attempts.
-    val servedCount: Int =
-      if (response.slots.nonEmpty) response.slots.size
-      else 0
+    val servedCount: Int = response.slots.count(_.nonEmpty)
 
     log.info(
       s"Processing storage ranges for ${tasks.size} accounts from peer ${peer.id.value}, " +
@@ -788,6 +839,8 @@ class StorageRangeCoordinator(
 
   private def tryRedispatchPendingTasks(): Unit = {
     if (tasks.isEmpty) return
+    if (isPostRefreshCooldownActive) return
+    if (pivotRefreshRequested) return
     val eligiblePeers = knownAvailablePeers
       .filterNot(p => isPeerStateless(p) || isPeerCoolingDown(p))
       .toList

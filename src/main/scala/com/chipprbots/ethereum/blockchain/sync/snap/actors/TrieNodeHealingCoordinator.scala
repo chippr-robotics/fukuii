@@ -9,6 +9,7 @@ import scala.collection.mutable
 import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -24,7 +25,7 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP.{GetTrieNodes, TrieNode
   * dispatches GetTrieNodes requests to available peers.
   */
 class TrieNodeHealingCoordinator(
-    stateRoot: ByteString,
+    private var stateRoot: ByteString,
     networkPeerManager: ActorRef,
     requestTracker: SNAPRequestTracker,
     mptStorage: MptStorage,
@@ -74,6 +75,10 @@ class TrieNodeHealingCoordinator(
 
   // Track last known available peers for re-dispatch after failures
   private val knownAvailablePeers = mutable.Set[Peer]()
+
+  // Stateless peer tracking (geth-aligned: peers that return empty TrieNodes for current root)
+  private val statelessPeers = mutable.Set[String]()
+  private var pivotRefreshRequested: Boolean = false
 
   // Per-peer adaptive byte budgeting
   private val minResponseBytes: BigInt = 50 * 1024
@@ -154,11 +159,32 @@ class TrieNodeHealingCoordinator(
       // Evict stale entry for same physical node (reconnection creates new PeerId)
       knownAvailablePeers.filterInPlace(_.remoteAddress != peer.remoteAddress)
       knownAvailablePeers += peer
-      if (isPeerCoolingDown(peer)) {
+      if (pivotRefreshRequested) {
+        // Don't dispatch while awaiting pivot refresh
+      } else if (statelessPeers.contains(peer.id.value)) {
+        // Don't dispatch to stateless peer — can't serve current root
+      } else if (isPeerCoolingDown(peer)) {
         log.debug(s"Peer ${peer.id.value} is cooling down, skipping dispatch")
       } else if (pendingTasks.nonEmpty && activeRequests.size < maxConcurrentRequests) {
         requestNextBatch(peer)
       }
+
+    case HealingPivotRefreshed(newStateRoot) =>
+      val oldRoot = Hex.toHexString(stateRoot.take(4).toArray)
+      val newRootHex = Hex.toHexString(newStateRoot.take(4).toArray)
+      log.info(
+        s"Healing pivot refreshed: $oldRoot -> $newRootHex. " +
+          s"Clearing ${pendingTasks.size} pending tasks, ${statelessPeers.size} stateless peers."
+      )
+      stateRoot = newStateRoot
+      pendingTasks = Seq.empty // Will be re-populated by trie walk from controller
+      statelessPeers.clear()
+      peerCooldownUntilMs.clear()
+      peerResponseBytesTarget.clear()
+      // Cancel active requests (they're for the old root)
+      activeRequests.keys.foreach(requestTracker.completeRequest(_, 0))
+      activeRequests.clear()
+      pivotRefreshRequested = false
 
     case TrieNodesResponseMsg(response) =>
       handleResponse(response)
@@ -253,6 +279,14 @@ class TrieNodeHealingCoordinator(
       return None
     }
 
+    if (pivotRefreshRequested) {
+      return None
+    }
+
+    if (statelessPeers.contains(peer.id.value)) {
+      return None
+    }
+
     val effectiveBatch = effectiveBatchSize
     val batch = pendingTasks.take(effectiveBatch)
     pendingTasks = pendingTasks.drop(effectiveBatch)
@@ -342,12 +376,29 @@ class TrieNodeHealingCoordinator(
     val elapsedMs = System.currentTimeMillis() - activeReq.sentAtMs
     updateHealThrottle(healedCount, elapsedMs)
 
-    // Adaptive byte budget
+    // Adaptive byte budget + stateless tracking
     if (healedCount > 0) {
       adjustResponseBytesOnSuccess(peer, requestedBytes, BigInt(receivedBytes))
+      // Successful response — clear stateless marking if set
+      statelessPeers -= peer.id.value
     } else {
       adjustResponseBytesOnFailure(peer, "empty healing response")
       recordPeerCooldown(peer, "empty healing response")
+      // Mark peer stateless for current root (geth-aligned)
+      statelessPeers += peer.id.value
+      log.info(
+        s"Peer ${peer.id.value} marked stateless for healing root " +
+          s"${Hex.toHexString(stateRoot.take(4).toArray)} (${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
+      )
+      // Check if all known peers are stateless — request pivot refresh
+      if (statelessPeers.size >= knownAvailablePeers.size && knownAvailablePeers.nonEmpty && !pivotRefreshRequested) {
+        pivotRefreshRequested = true
+        log.warning(
+          s"All ${statelessPeers.size} peers stateless for healing root " +
+            s"${Hex.toHexString(stateRoot.take(4).toArray)}. Requesting pivot refresh."
+        )
+        snapSyncController ! SNAPSyncController.HealingAllPeersStateless
+      }
     }
 
     log.info(
@@ -388,7 +439,10 @@ class TrieNodeHealingCoordinator(
 
   private def tryRedispatchPendingTasks(): Unit = {
     if (pendingTasks.isEmpty) return
-    val eligiblePeers = knownAvailablePeers.toList.filterNot(isPeerCoolingDown)
+    if (pivotRefreshRequested) return
+    val eligiblePeers = knownAvailablePeers.toList
+      .filterNot(isPeerCoolingDown)
+      .filterNot(p => statelessPeers.contains(p.id.value))
     if (eligiblePeers.isEmpty) return
 
     for (peer <- eligiblePeers if pendingTasks.nonEmpty && activeRequests.size < maxConcurrentRequests)
