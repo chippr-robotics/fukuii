@@ -2393,6 +2393,12 @@ class SNAPSyncController(
           progress.storageSlotsSynced + progress.nodesHealed
         (total, total)
 
+      case ChainDownloadCompletion =>
+        // State sync done, just waiting for chain download
+        val total = progress.accountsSynced + progress.bytecodesDownloaded +
+          progress.storageSlotsSynced + progress.nodesHealed
+        (total, total)
+
       case Idle | Completed =>
         (0L, 0L)
     }
@@ -3579,10 +3585,11 @@ case class SyncProgress(
 
     val trackLen = 20
     val wormPos = math.max(0, math.min(trackLen, math.round(globalProgress * trackLen).toInt))
-    val filled = "=" * math.max(0, wormPos - 1)
-    val head = if (wormPos > 0) ">" else ""
+    val filled = "=" * math.max(0, wormPos)
     val remaining = "." * (trackLen - wormPos)
-    s"[${filled}${head}${remaining}]"
+    val worm = "\ud83e\udeb1"
+    val brain = "\ud83e\udde0"
+    s"$worm[$filled$remaining]$brain"
   }
 
   private def formatCount(n: Long): String =
