@@ -1034,7 +1034,8 @@ class SNAPSyncController(
                     snapSyncController = self,
                     initialMaxInFlightPerPeer = 3, // Recovery: accounts done, storage gets 3 of 5 per-peer budget
                     initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
-                    minResponseBytes = snapSyncConfig.storageMinResponseBytes
+                    minResponseBytes = snapSyncConfig.storageMinResponseBytes,
+                    deferredMerkleization = snapSyncConfig.deferredMerkleization
                   )
                   .withDispatcher("sync-dispatcher"),
                 s"storage-range-coordinator-$coordinatorGeneration"
@@ -2766,7 +2767,8 @@ case class SNAPSyncConfig(
     chainDownloadTimeout: FiniteDuration = 10.seconds,
     minSnapPeers: Int = 3,
     snapPeerEvictionInterval: FiniteDuration = 15.seconds,
-    maxEvictionsPerCycle: Int = 3
+    maxEvictionsPerCycle: Int = 3,
+    deferredMerkleization: Boolean = true
 )
 
 object SNAPSyncConfig {
@@ -2854,7 +2856,11 @@ object SNAPSyncConfig {
       maxEvictionsPerCycle =
         if (snapConfig.hasPath("max-evictions-per-cycle"))
           snapConfig.getInt("max-evictions-per-cycle")
-        else 3
+        else 3,
+      deferredMerkleization =
+        if (snapConfig.hasPath("deferred-merkleization"))
+          snapConfig.getBoolean("deferred-merkleization")
+        else true
     )
   }
 }

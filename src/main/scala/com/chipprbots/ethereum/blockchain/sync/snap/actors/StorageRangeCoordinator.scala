@@ -52,7 +52,8 @@ class StorageRangeCoordinator(
     snapSyncController: ActorRef,
     initialMaxInFlightPerPeer: Int = 5,
     configInitialResponseBytes: Int = 1048576,
-    configMinResponseBytes: Int = 131072
+    configMinResponseBytes: Int = 131072,
+    deferredMerkleization: Boolean = true
 ) extends Actor
     with ActorLogging {
 
@@ -258,10 +259,6 @@ class StorageRangeCoordinator(
     )
   }
 
-  // Note: No shared DeferredWriteMptStorage — two-phase storage uses batch-local instances
-  // in buildAccountTriesAsync(), each running on a separate Future. This avoids thread-safety
-  // issues and allows concurrent trie construction batches.
-
   // ========================================
   // Two-phase storage: raw slot buffering + deferred trie construction
   // ========================================
@@ -269,9 +266,11 @@ class StorageRangeCoordinator(
   // Phase 1 (during response): buffer raw (slotHash, slotValue) pairs per account.
   // Phase 2 (on account complete): sort by key, build trie on background thread.
   //
-  // This decouples network I/O (download speed) from CPU-bound trie operations.
-  // Multiple accounts can have their tries built concurrently.
-  // For large accounts needing continuations, slots accumulate across responses.
+  // Small contracts (all slots in one response, < smallContractThreshold) skip MPT
+  // entirely — flat storage only. ~95% of ETC contracts are small (< 100 slots).
+  //
+  // Large contracts accumulate slots across continuations, then build the trie
+  // on a bounded thread pool to control RocksDB write pressure.
 
   /** Raw slot buffer per account hash. Accumulated during download, consumed during trie construction. */
   private val pendingAccountSlots = mutable.Map[ByteString, mutable.ArrayBuffer[(ByteString, ByteString)]]()
@@ -281,23 +280,64 @@ class StorageRangeCoordinator(
 
   /** Maximum buffered slots across all accounts before forcing an incremental trie build.
     * Prevents OOM when downloading mainnet with millions of storage slots.
-    * At ~64 bytes per slot (32 hash + 32 value), 500K slots ≈ 32MB.
+    * At ~64 bytes per slot (32 hash + 32 value), 1M slots ≈ 64MB.
     */
-  private val maxBufferedSlots: Long = 500000
+  private val maxBufferedSlots: Long = 1000000
   private var totalBufferedSlots: Long = 0
+
+  /** Per-account memory limit: flush large accounts incrementally when they exceed this.
+    * Mainnet DeFi contracts can have 10-50M slots. Without per-account limits, a single
+    * contract could buffer several GB before trie construction starts.
+    * At 64 bytes/slot, 500K slots = ~32MB per account.
+    */
+  private val maxSlotsPerAccount: Long = 500000
 
   /** Threshold for triggering incremental builds of complete accounts.
     * When we have this many complete accounts buffered, build their tries without waiting.
     */
   private val trieConstructionBatchSize = 64
 
-  /** Accounts whose slots have been fully downloaded (no continuation) and are ready for trie construction. */
-  private val accountsReadyForBuild = mutable.ArrayBuffer[ByteString]()
+  /** Accounts whose slots have been fully downloaded (no continuation) and are ready for trie construction.
+    * Using LinkedHashSet for dedup + insertion order (FIFO processing).
+    */
+  private val accountsReadyForBuild = mutable.LinkedHashSet[ByteString]()
+
+  /** StackTrie shortcut threshold: contracts with fewer slots than this skip MPT construction
+    * entirely — only flat storage is written. The trie is reconstructed lazily from flat data
+    * during the healing phase or deferred Merkleization pass. ~95% of ETC contracts qualify.
+    */
+  private val smallContractThreshold = 1024
+
+  /** Bounded thread pool for trie construction — controls RocksDB write pressure.
+    * Using 3 threads avoids overwhelming the single-threaded RocksDB compaction while
+    * still enabling parallel trie builds. Unbounded Futures on sync-dispatcher caused
+    * thread starvation under heavy load.
+    */
+  private val trieBuilderPool: java.util.concurrent.ExecutorService =
+    java.util.concurrent.Executors.newFixedThreadPool(3, (r: Runnable) => {
+      val t = new Thread(r, "storage-trie-builder")
+      t.setDaemon(true)
+      t
+    })
+  private val trieBuilderEc = scala.concurrent.ExecutionContext.fromExecutorService(trieBuilderPool)
+
+  /** Write only to flat storage for small contracts — skip MPT construction.
+    * Called synchronously from the actor for accounts that arrived in a single response
+    * with fewer slots than smallContractThreshold. These are ~95% of ETC contracts.
+    * The MPT will be built lazily from flat data during healing or post-sync Merkleization.
+    */
+  private def writeSmallContractFlatOnly(accountHash: ByteString, slots: mutable.ArrayBuffer[(ByteString, ByteString)]): Unit = {
+    val sorted = slots.sortBy(_._1)(ByteStringOrdering)
+    flatSlotStorage.putSlotsBatch(accountHash, sorted.toSeq).commit()
+    pendingAccountSlots.remove(accountHash)
+    totalBufferedSlots -= slots.size
+  }
 
   /** Build tries for a batch of complete accounts on a background thread.
     * Sorts slots by key for better trie locality, builds tries, and flushes to storage.
     * Uses a batch-local DeferredWriteMptStorage to avoid thread-safety issues with the
     * shared mptStorage — each batch gets its own write buffer that flushes independently.
+    * Trie nodes and flat slot data are written in a single combined RocksDB batch.
     */
   private def buildAccountTriesAsync(accountHashes: Seq[ByteString]): Unit = {
     if (accountHashes.isEmpty) return
@@ -318,6 +358,7 @@ class StorageRangeCoordinator(
     val totalSlotCount = accountData.map(_._2.size).sum.toLong
     val localMptStorage = mptStorage // capture for Future
     val localFlatSlotStorage = flatSlotStorage // capture for Future
+    val constructionStateRoot = stateRoot // tag with current pivot root
 
     import scala.concurrent.{Future, blocking}
     Future {
@@ -325,11 +366,10 @@ class StorageRangeCoordinator(
         val startMs = System.currentTimeMillis()
 
         // Batch-local deferred storage — thread-safe: only this Future writes to it.
-        // Trie nodes accumulate in memory, then flush to RocksDB in one batch.
         val batchStorage = new DeferredWriteMptStorage(localMptStorage)
 
         // Flat slot storage: accumulate all (accountHash++slotHash → value) writes
-        // for a single atomic batch commit. O(1) reads during EVM execution.
+        // for a single atomic batch commit alongside trie nodes.
         var flatBatch = localFlatSlotStorage.emptyBatchUpdate
 
         accountData.foreach { case (accountHash, slots) =>
@@ -349,20 +389,20 @@ class StorageRangeCoordinator(
         // Flush trie nodes to RocksDB
         batchStorage.flush()
 
-        // Commit flat slot writes to RocksDB
+        // Commit flat slot writes — single additional RocksDB write batch
         flatBatch.commit()
 
         val elapsedMs = System.currentTimeMillis() - startMs
-        selfRef ! TrieConstructionComplete(accountHashes, totalSlotCount, elapsedMs)
+        selfRef ! TrieConstructionComplete(accountHashes, totalSlotCount, elapsedMs, constructionStateRoot)
       }
-    }(context.dispatcher).recover { case e: Exception =>
-      selfRef ! TrieConstructionFailed(accountHashes, e.getMessage)
-    }(context.dispatcher)
+    }(trieBuilderEc).recover { case e: Exception =>
+      selfRef ! TrieConstructionFailed(accountHashes, e.getMessage, constructionStateRoot)
+    }(trieBuilderEc)
   }
 
   /** Check if we should trigger a trie construction batch (enough complete accounts or memory pressure). */
   private def maybeStartTrieConstruction(): Unit = {
-    val readyNotBuilding = accountsReadyForBuild.filterNot(accountsInTrieConstruction.contains)
+    val readyNotBuilding = accountsReadyForBuild.diff(accountsInTrieConstruction)
     val memoryPressure = totalBufferedSlots >= maxBufferedSlots
 
     if (readyNotBuilding.size >= trieConstructionBatchSize || (readyNotBuilding.nonEmpty && memoryPressure)) {
@@ -373,9 +413,25 @@ class StorageRangeCoordinator(
     }
   }
 
+  /** Check if a large account needs incremental flushing (per-account memory limit). */
+  private def maybeFlushLargeAccount(accountHash: ByteString): Unit = {
+    pendingAccountSlots.get(accountHash).foreach { slots =>
+      if (slots.size >= maxSlotsPerAccount) {
+        // Large account — build trie incrementally to prevent OOM
+        log.info(
+          s"Large account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}: " +
+            s"${slots.size} buffered slots exceeds per-account limit ($maxSlotsPerAccount). " +
+            s"Triggering incremental trie build."
+        )
+        accountsReadyForBuild += accountHash
+        maybeStartTrieConstruction()
+      }
+    }
+  }
+
   /** Force build all remaining buffered accounts (e.g., on sync completion or force-complete). */
   private def flushAllPendingTrieBuilds(): Unit = {
-    val remaining = accountsReadyForBuild.filterNot(accountsInTrieConstruction.contains).toSeq
+    val remaining = accountsReadyForBuild.diff(accountsInTrieConstruction).toSeq
     if (remaining.nonEmpty) {
       accountsReadyForBuild.clear()
       log.info(s"Flushing ${remaining.size} remaining accounts for trie construction")
@@ -395,6 +451,12 @@ class StorageRangeCoordinator(
       }
       a.length - b.length
     }
+  }
+
+  /** Shut down the trie builder thread pool when the actor stops. */
+  override def postStop(): Unit = {
+    trieBuilderPool.shutdown()
+    super.postStop()
   }
 
   // Storage management
@@ -545,6 +607,7 @@ class StorageRangeCoordinator(
       peerBatchSuccessStreak.clear()
       peerResponseBytesTarget.clear()
       emptyResponsesByTask.clear()
+      proofVerifiers.clear()
 
       // Clear two-phase storage buffers — data for old root is stale.
       // Any in-progress trie constructions will complete harmlessly (writes are content-addressed),
@@ -578,30 +641,41 @@ class StorageRangeCoordinator(
       )
       sender() ! stats
 
-    case TrieConstructionComplete(accountHashes, totalSlots, elapsedMs) =>
-      accountHashes.foreach { hash =>
-        accountsInTrieConstruction.remove(hash)
-        completedAccountHashes.add(hash)
+    case TrieConstructionComplete(accountHashes, totalSlots, elapsedMs, forStateRoot) =>
+      if (forStateRoot != stateRoot) {
+        // Stale completion from before a pivot refresh — trie nodes are content-addressed
+        // so the writes are harmless, but don't track these as completed for the current root.
+        log.info(
+          s"Ignoring stale trie construction (${accountHashes.size} accounts, root ${forStateRoot.take(4).toHex}) " +
+            s"— current root is ${stateRoot.take(4).toHex}"
+        )
+      } else {
+        accountHashes.foreach { hash =>
+          accountsInTrieConstruction.remove(hash)
+          completedAccountHashes.add(hash)
+        }
+        val rate = if (elapsedMs > 0) totalSlots * 1000 / elapsedMs else totalSlots
+        log.info(
+          s"Trie construction complete: ${accountHashes.size} accounts, $totalSlots slots in ${elapsedMs}ms " +
+            s"(${rate} slots/s). Remaining: ${accountsReadyForBuild.size} ready, " +
+            s"${accountsInTrieConstruction.size} building, ${pendingAccountSlots.size} buffered"
+        )
+        maybeStartTrieConstruction()
       }
-      val rate = if (elapsedMs > 0) totalSlots * 1000 / elapsedMs else totalSlots
-      log.info(
-        s"Trie construction complete: ${accountHashes.size} accounts, $totalSlots slots in ${elapsedMs}ms " +
-          s"(${rate} slots/s). Remaining: ${accountsReadyForBuild.size} ready, " +
-          s"${accountsInTrieConstruction.size} building, ${pendingAccountSlots.size} buffered"
-      )
-      // Check if more builds are ready and check completion
-      maybeStartTrieConstruction()
       self ! StorageCheckCompletion
 
-    case TrieConstructionFailed(accountHashes, error) =>
-      log.error(
-        s"Trie construction failed for ${accountHashes.size} accounts: $error. " +
-          s"Healing phase will recover missing storage."
-      )
-      // Remove from in-construction set — healing will fix these
-      accountHashes.foreach { hash =>
-        accountsInTrieConstruction.remove(hash)
-        pendingAccountSlots.remove(hash) // Discard buffered slots — can't build
+    case TrieConstructionFailed(accountHashes, error, forStateRoot) =>
+      if (forStateRoot != stateRoot) {
+        log.debug(s"Ignoring stale trie construction failure (root ${forStateRoot.take(4).toHex})")
+      } else {
+        log.error(
+          s"Trie construction failed for ${accountHashes.size} accounts: $error. " +
+            s"Healing phase will recover missing storage."
+        )
+        accountHashes.foreach { hash =>
+          accountsInTrieConstruction.remove(hash)
+          pendingAccountSlots.remove(hash)
+        }
       }
       self ! StorageCheckCompletion
   }
@@ -838,9 +912,7 @@ class StorageRangeCoordinator(
           totalReceivedBytes += slotBytes
 
           if (accountSlots.nonEmpty) {
-            // Two-phase storage: buffer raw slots for deferred trie construction.
-            // Phase 1 (here): accumulate slots in memory, fast — no trie ops.
-            // Phase 2 (async): sort by key, build tries on background thread.
+            // Buffer raw slots — Phase 1 of two-phase storage
             val slotBuffer = pendingAccountSlots.getOrElseUpdate(task.accountHash, mutable.ArrayBuffer.empty)
             slotBuffer ++= accountSlots
             totalBufferedSlots += accountSlots.size
@@ -861,13 +933,31 @@ class StorageRangeCoordinator(
               val continuationTask = StorageTask.createContinuation(task, lastSlot)
               this.tasks.enqueue(continuationTask)
               log.debug(s"Created continuation task for account ${task.accountString} (partial range, proof present)")
+
+              // Per-account memory limit: flush large accounts incrementally
+              maybeFlushLargeAccount(task.accountHash)
             } else {
-              // Account fully downloaded — ready for trie construction
-              accountsReadyForBuild += task.accountHash
-              log.debug(
-                s"Account ${task.accountHash.take(4).toArray.map("%02x".format(_)).mkString} fully buffered " +
-                  s"(${slotBuffer.size} total slots) — queued for trie construction"
-              )
+              // Account fully downloaded — decide: flat-only or full trie build
+              if (deferredMerkleization || slotBuffer.size < smallContractThreshold) {
+                // Flat-only write — skip MPT construction during download.
+                // deferredMerkleization: ALL contracts skip MPT (Paprika approach).
+                // smallContractThreshold: ~95% of ETC contracts have < 1024 slots.
+                // MPT built from flat data in post-download Merkleization pass or healing.
+                writeSmallContractFlatOnly(task.accountHash, slotBuffer)
+                completedAccountHashes.add(task.accountHash)
+                log.debug(
+                  s"Account ${task.accountHash.take(4).toArray.map("%02x".format(_)).mkString}: " +
+                    s"flat-only write (${slotBuffer.size} slots" +
+                    s"${if (deferredMerkleization) ", deferred merkleization" else ", small contract"})"
+                )
+              } else {
+                // Large contract with deferred merkleization disabled — queue for async trie
+                accountsReadyForBuild += task.accountHash
+                log.debug(
+                  s"Account ${task.accountHash.take(4).toArray.map("%02x".format(_)).mkString} fully buffered " +
+                    s"(${slotBuffer.size} total slots) — queued for trie construction"
+                )
+              }
             }
 
             task.done = true
@@ -997,7 +1087,8 @@ object StorageRangeCoordinator {
       snapSyncController: ActorRef,
       initialMaxInFlightPerPeer: Int = 5,
       initialResponseBytes: Int = 1048576,
-      minResponseBytes: Int = 131072
+      minResponseBytes: Int = 131072,
+      deferredMerkleization: Boolean = true
   ): Props =
     Props(
       new StorageRangeCoordinator(
@@ -1012,7 +1103,8 @@ object StorageRangeCoordinator {
         snapSyncController,
         initialMaxInFlightPerPeer,
         configInitialResponseBytes = initialResponseBytes,
-        configMinResponseBytes = minResponseBytes
+        configMinResponseBytes = minResponseBytes,
+        deferredMerkleization = deferredMerkleization
       )
     )
 

@@ -154,17 +154,21 @@ object Messages {
 
   /** Two-phase storage: async trie construction completed for a batch of accounts.
     * Background thread built tries from buffered raw slots and flushed to storage.
+    * `forStateRoot` tags the pivot state root this construction was initiated under,
+    * so stale completions (after pivot refresh) can be detected and ignored.
     */
   private[actors] case class TrieConstructionComplete(
       accountHashes: Seq[ByteString],
       totalSlots: Long,
-      elapsedMs: Long
+      elapsedMs: Long,
+      forStateRoot: ByteString
   ) extends StorageRangeCoordinatorMessage
 
   /** Two-phase storage: async trie construction failed for a batch of accounts. */
   private[actors] case class TrieConstructionFailed(
       accountHashes: Seq[ByteString],
-      error: String
+      error: String,
+      forStateRoot: ByteString
   ) extends StorageRangeCoordinatorMessage
 
   // ========================================
