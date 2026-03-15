@@ -1104,6 +1104,9 @@ class SNAPSyncController(
             schedulePivotFreshnessChecks()
             progressMonitor.startPhase(ByteCodeAndStorageSync)
 
+            // Start parallel chain download during recovery too
+            startChainDownloader()
+
             context.become(syncing)
             return
           }
@@ -2454,9 +2457,12 @@ class SNAPSyncController(
 
   private def completeSnapSync(): Unit =
     pivotBlock.foreach { pivot =>
-      // If chain download is still running, wait for it before signalling Done
+      // If chain download is still running, boost its concurrency and wait
       if (!chainDownloadComplete && chainDownloader.isDefined) {
-        log.info("SNAP state sync complete, waiting for parallel chain download to finish...")
+        log.info("SNAP state sync complete, boosting chain download concurrency and waiting for completion...")
+        chainDownloader.foreach(_ ! ChainDownloader.BoostConcurrency(
+          snapSyncConfig.chainDownloadBoostedConcurrentRequests
+        ))
         currentPhase = ChainDownloadCompletion
         progressMonitor.startPhase(ChainDownloadCompletion)
         context.become(waitingForChainDownload)
@@ -2745,6 +2751,7 @@ case class SNAPSyncConfig(
     accountMinResponseBytes: Int = 102400,
     chainDownloadEnabled: Boolean = true,
     chainDownloadMaxConcurrentRequests: Int = 2,
+    chainDownloadBoostedConcurrentRequests: Int = 16,
     chainDownloadTimeout: FiniteDuration = 10.seconds,
     minSnapPeers: Int = 3,
     snapPeerEvictionInterval: FiniteDuration = 15.seconds,
@@ -2809,6 +2816,10 @@ object SNAPSyncConfig {
         if (snapConfig.hasPath("chain-download-max-concurrent-requests"))
           snapConfig.getInt("chain-download-max-concurrent-requests")
         else 2,
+      chainDownloadBoostedConcurrentRequests =
+        if (snapConfig.hasPath("chain-download-boosted-concurrent-requests"))
+          snapConfig.getInt("chain-download-boosted-concurrent-requests")
+        else 16,
       chainDownloadTimeout =
         if (snapConfig.hasPath("chain-download-timeout"))
           snapConfig.getDuration("chain-download-timeout").toMillis.millis
@@ -3660,7 +3671,9 @@ case class SyncProgress(
         s"$bar Validating state trie...$chain | $elapsed"
 
       case SNAPSyncController.ChainDownloadCompletion =>
-        s"$bar State done, finishing chain download:$chain | $elapsed"
+        val bodiesPct = if (chainTarget > 0) (chainBodies * 100 / chainTarget).toInt else 0
+        val receiptsPct = if (chainTarget > 0) (chainReceipts * 100 / chainTarget).toInt else 0
+        s"$bar State done, chain download (boosted): bodies=${formatBigInt(chainBodies)}/$bodiesPct% receipts=${formatBigInt(chainReceipts)}/$receiptsPct% | $elapsed"
 
       case _ =>
         s"$bar $phase$chain | $elapsed"

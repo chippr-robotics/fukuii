@@ -55,7 +55,7 @@ class ChainDownloader(
     val blacklist: Blacklist,
     val syncConfig: SyncConfig,
     val scheduler: Scheduler,
-    maxConcurrentRequests: Int,
+    initialMaxConcurrentRequests: Int,
     requestTimeout: FiniteDuration = 10.seconds
 )(implicit ec: ExecutionContext)
     extends Actor
@@ -86,6 +86,9 @@ class ChainDownloader(
   private var bodiesDownloaded: BigInt = 0
   private var receiptsDownloaded: BigInt = 0
   private var lastLogTime: Long = 0
+
+  // Concurrency — starts conservative during SNAP state sync, boosted after state completes
+  private var maxConcurrentRequests: Int = initialMaxConcurrentRequests
 
   // Dispatch timer
   private var dispatchTask: Option[org.apache.pekko.actor.Cancellable] = None
@@ -118,6 +121,9 @@ class ChainDownloader(
         scheduleDispatch()
         context.become(downloading)
       }
+
+    case BoostConcurrency(n) =>
+      boostConcurrency(n)
 
     case GetProgress =>
       sender() ! Progress(headersDownloaded, bodiesDownloaded, receiptsDownloaded, targetBlock)
@@ -155,6 +161,10 @@ class ChainDownloader(
       )
       dispatchTask.foreach(_.cancel())
       context.become(idle)
+
+    case BoostConcurrency(n) =>
+      boostConcurrency(n)
+      dispatchRequests() // Immediately use the new slots
 
     case GetProgress =>
       sender() ! Progress(headersDownloaded, bodiesDownloaded, receiptsDownloaded, targetBlock)
@@ -536,10 +546,18 @@ class ChainDownloader(
     best
   }
 
-  private def scheduleDispatch(): Unit = {
+  private def boostConcurrency(n: Int): Unit = {
+    val prev = maxConcurrentRequests
+    maxConcurrentRequests = n
+    log.info("Chain download concurrency boosted: {} -> {} (state sync complete, all peers available)", prev, n)
+    // Reschedule dispatch at faster interval — 2s was conservative to avoid SNAP contention
+    scheduleDispatch(200.millis)
+  }
+
+  private def scheduleDispatch(interval: FiniteDuration = 2.seconds): Unit = {
     dispatchTask.foreach(_.cancel())
     dispatchTask = Some(
-      scheduler.scheduleWithFixedDelay(1.second, 2.seconds, self, Dispatch)(ec)
+      scheduler.scheduleWithFixedDelay(1.second, interval, self, Dispatch)(ec)
     )
   }
 
@@ -556,6 +574,7 @@ object ChainDownloader {
   case object Resume
   case object Stop
   case object Done
+  case class BoostConcurrency(maxConcurrent: Int)
   case object GetProgress
   case class Progress(
       headersDownloaded: BigInt,
