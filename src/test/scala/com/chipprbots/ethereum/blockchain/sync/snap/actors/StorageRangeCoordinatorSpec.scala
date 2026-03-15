@@ -12,6 +12,8 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.testing.{PeerTestHelpers, TestMptStorage}
 
@@ -38,6 +40,7 @@ class StorageRangeCoordinatorSpec
         networkPeerManager = networkPeerManager.ref,
         requestTracker = requestTracker,
         mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
         maxAccountsPerBatch = 8,
         maxInFlightRequests = 8,
         requestTimeout = 30.seconds,
@@ -64,6 +67,7 @@ class StorageRangeCoordinatorSpec
         networkPeerManager = networkPeerManager.ref,
         requestTracker = requestTracker,
         mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
         maxAccountsPerBatch = 8,
         maxInFlightRequests = 8,
         requestTimeout = 30.seconds,
@@ -92,6 +96,7 @@ class StorageRangeCoordinatorSpec
         networkPeerManager = networkPeerManager.ref,
         requestTracker = requestTracker,
         mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
         maxAccountsPerBatch = 8,
         maxInFlightRequests = 8,
         requestTimeout = 30.seconds,
@@ -119,6 +124,7 @@ class StorageRangeCoordinatorSpec
         networkPeerManager = networkPeerManager.ref,
         requestTracker = requestTracker,
         mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
         maxAccountsPerBatch = 8,
         maxInFlightRequests = 8,
         requestTimeout = 30.seconds,
@@ -150,6 +156,7 @@ class StorageRangeCoordinatorSpec
         networkPeerManager = networkPeerManager.ref,
         requestTracker = requestTracker,
         mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
         maxAccountsPerBatch = 8,
         maxInFlightRequests = 8,
         requestTimeout = 30.seconds,

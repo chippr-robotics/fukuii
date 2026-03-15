@@ -13,6 +13,7 @@ object Namespaces {
   val FastSyncStateNamespace: IndexedSeq[Byte] = IndexedSeq[Byte]('f'.toByte)
   val TransactionMappingNamespace: IndexedSeq[Byte] = IndexedSeq[Byte]('l'.toByte)
   val BlockFirstSeenNamespace: IndexedSeq[Byte] = IndexedSeq[Byte]('m'.toByte)
+  val FlatSlotNamespace: IndexedSeq[Byte] = IndexedSeq[Byte]('d'.toByte) // Flat storage slot data
 
   val nsSeq: Seq[IndexedSeq[Byte]] = Seq(
     ReceiptsNamespace,
@@ -26,6 +27,7 @@ object Namespaces {
     HeightsNamespace,
     FastSyncStateNamespace,
     TransactionMappingNamespace,
-    BlockFirstSeenNamespace
+    BlockFirstSeenNamespace,
+    FlatSlotNamespace
   )
 }

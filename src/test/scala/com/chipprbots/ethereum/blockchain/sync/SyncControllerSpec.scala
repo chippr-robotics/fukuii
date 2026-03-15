@@ -598,6 +598,7 @@ class SyncControllerSpec
           storagesInstance.storages.evmCodeStorage,
           storagesInstance.storages.stateStorage,
           storagesInstance.storages.nodeStorage,
+          storagesInstance.storages.flatSlotStorage,
           storagesInstance.storages.fastSyncStateStorage,
           consensusAdapter,
           validators,

@@ -47,6 +47,8 @@ object Storages {
       override val blockFirstSeenStorage: BlockFirstSeenRocksDbStorage =
         new BlockFirstSeenRocksDbStorage(dataSource)
 
+      override val flatSlotStorage: FlatSlotStorage = new FlatSlotStorage(dataSource)
+
       override val stateStorage: StateStorage =
         StateStorage(
           pruningMode,

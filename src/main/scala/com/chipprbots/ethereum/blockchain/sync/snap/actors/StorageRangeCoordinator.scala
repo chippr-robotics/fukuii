@@ -9,50 +9,13 @@ import scala.concurrent.duration._
 import scala.math.Ordered.orderingToOrdered
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
-import com.chipprbots.ethereum.db.storage.{DeferredWriteMptStorage, MptStorage}
+import com.chipprbots.ethereum.db.storage.{DeferredWriteMptStorage, FlatSlotStorage, MptStorage}
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
-
-/** LRU cache for storage tries to limit memory usage */
-private class StorageTrieCache(maxSize: Int = 10000) {
-  private val cache = scala.collection.mutable.LinkedHashMap[ByteString, MerklePatriciaTrie[ByteString, ByteString]]()
-
-  def getOrElseUpdate(
-      key: ByteString,
-      default: => MerklePatriciaTrie[ByteString, ByteString]
-  ): MerklePatriciaTrie[ByteString, ByteString] =
-    cache.get(key) match {
-      case Some(trie) =>
-        cache.remove(key)
-        cache.put(key, trie)
-        trie
-      case None =>
-        val trie = default
-        put(key, trie)
-        trie
-    }
-
-  def get(key: ByteString): Option[MerklePatriciaTrie[ByteString, ByteString]] =
-    cache.get(key).map { trie =>
-      cache.remove(key)
-      cache.put(key, trie)
-      trie
-    }
-
-  def put(key: ByteString, trie: MerklePatriciaTrie[ByteString, ByteString]): Unit = {
-    cache.remove(key)
-    if (cache.size >= maxSize) {
-      cache.remove(cache.head._1)
-    }
-    cache.put(key, trie)
-  }
-
-  def size: Int = cache.size
-}
 
 /** StorageRangeCoordinator manages storage range download workers and orchestrates the storage sync phase.
   *
@@ -82,11 +45,14 @@ class StorageRangeCoordinator(
     networkPeerManager: ActorRef,
     requestTracker: SNAPRequestTracker,
     mptStorage: MptStorage,
+    flatSlotStorage: FlatSlotStorage,
     maxAccountsPerBatch: Int,
     maxInFlightRequests: Int,
     requestTimeout: FiniteDuration,
     snapSyncController: ActorRef,
-    initialMaxInFlightPerPeer: Int = 5
+    initialMaxInFlightPerPeer: Int = 5,
+    configInitialResponseBytes: Int = 1048576,
+    configMinResponseBytes: Int = 131072
 ) extends Actor
     with ActorLogging {
 
@@ -199,14 +165,40 @@ class StorageRangeCoordinator(
   }
 
   // Per-peer adaptive batch size: tracks which peers support multi-account batching.
-  // Starts at maxAccountsPerBatch, ratchets to 1 on empty batched response for that specific peer.
+  // Starts at maxAccountsPerBatch, ratchets down on empty batched responses, scales back up
+  // on successful packed responses. This allows recovery from transient issues rather than
+  // permanently degrading to batch=1 for the lifetime of the sync.
   private val peerBatchSize = mutable.Map.empty[String, Int]
+  private val peerBatchSuccessStreak = mutable.Map.empty[String, Int]
+  private val batchRecoveryStreak = 3 // Consecutive successes before scaling up
 
   private def batchSizeFor(peer: Peer): Int =
     peerBatchSize.getOrElseUpdate(peer.id.value, maxAccountsPerBatch)
 
-  private def reduceBatchSize(peer: Peer): Unit =
+  private def reduceBatchSize(peer: Peer): Unit = {
     peerBatchSize.update(peer.id.value, 1)
+    peerBatchSuccessStreak.remove(peer.id.value)
+  }
+
+  /** Scale batch size back up after consecutive successful packed responses.
+    * Doubles the batch size per peer, capped at maxAccountsPerBatch.
+    */
+  private def maybeIncreaseBatchSize(peer: Peer, servedCount: Int, requestedCount: Int): Unit = {
+    // Only count as "packed" if the response served most of the requested accounts
+    if (requestedCount > 1 && servedCount >= requestedCount / 2) {
+      val streak = peerBatchSuccessStreak.getOrElse(peer.id.value, 0) + 1
+      peerBatchSuccessStreak.update(peer.id.value, streak)
+      if (streak >= batchRecoveryStreak) {
+        val current = batchSizeFor(peer)
+        val next = math.min(current * 2, maxAccountsPerBatch)
+        if (next > current) {
+          peerBatchSize.update(peer.id.value, next)
+          peerBatchSuccessStreak.update(peer.id.value, 0)
+          log.info(s"Peer ${peer.id.value} batch size increased: $current -> $next (after $streak consecutive successes)")
+        }
+      }
+    }
+  }
 
   // Track last known available peers so we can re-dispatch after task failures
   // without waiting for the next StoragePeerAvailable message.
@@ -237,9 +229,9 @@ class StorageRangeCoordinator(
   // Per-peer adaptive byte budgeting (ported from ByteCodeCoordinator).
   // Geth's snap handler supports up to 2MB responses. Starting at 512KB and probing upward
   // on responsive peers, scaling down on failures.
-  private val minResponseBytes: BigInt = 100 * 1024 // 100KB floor (avoid excessive small requests)
+  private val minResponseBytes: BigInt = configMinResponseBytes // Configurable floor (avoid excessive small requests)
   private val maxResponseBytes: BigInt = 2 * 1024 * 1024 // 2MB ceiling (Geth handler limit)
-  private val initialResponseBytes: BigInt = 512 * 1024 // 512KB starting point
+  private val initialResponseBytes: BigInt = configInitialResponseBytes // Configurable starting point
   private val increaseFactor: Double = 1.25 // Scale up when 90%+ fill
   private val decreaseFactor: Double = 0.5 // Scale down on failure/empty
 
@@ -266,44 +258,147 @@ class StorageRangeCoordinator(
     )
   }
 
-  // Deferred-write storage wrapper: makes updateNodesInStorage() a no-op during bulk insertion,
-  // keeping all trie nodes in memory. Nodes are flushed to RocksDB in periodic batches.
-  private val deferredStorage = new DeferredWriteMptStorage(mptStorage)
+  // Note: No shared DeferredWriteMptStorage — two-phase storage uses batch-local instances
+  // in buildAccountTriesAsync(), each running on a separate Future. This avoids thread-safety
+  // issues and allows concurrent trie construction batches.
 
-  // Periodic flush tracking — flush once per N slots instead of per-response.
-  private var slotsSinceLastFlush: Long = 0
-  private val flushThreshold: Long = 50000
+  // ========================================
+  // Two-phase storage: raw slot buffering + deferred trie construction
+  // ========================================
+  //
+  // Phase 1 (during response): buffer raw (slotHash, slotValue) pairs per account.
+  // Phase 2 (on account complete): sort by key, build trie on background thread.
+  //
+  // This decouples network I/O (download speed) from CPU-bound trie operations.
+  // Multiple accounts can have their tries built concurrently.
+  // For large accounts needing continuations, slots accumulate across responses.
 
-  // Async flush state — avoids blocking the actor during RocksDB writes.
-  // Pattern: takeRoot() snapshots the in-memory trie, clears it, then a Future
-  // collapses + persists the snapshot while new puts accumulate a fresh root.
-  private var isFlushing: Boolean = false
-  private case class DeferredFlushComplete(flushedSlots: Long)
+  /** Raw slot buffer per account hash. Accumulated during download, consumed during trie construction. */
+  private val pendingAccountSlots = mutable.Map[ByteString, mutable.ArrayBuffer[(ByteString, ByteString)]]()
 
-  private def flushDeferredAsync(): Unit =
-    if (!isFlushing) {
-      deferredStorage.takeRoot() match {
-        case Some(root) =>
-          isFlushing = true
-          val flushCount = slotsSinceLastFlush
-          slotsSinceLastFlush = 0
-          val selfRef = self
-          import scala.concurrent.{Future, blocking}
-          Future {
-            blocking {
-              mptStorage.updateNodesInStorage(Some(root), Nil)
-              mptStorage.persist()
-              flushCount
-            }
-          }(context.dispatcher).foreach(n => selfRef ! DeferredFlushComplete(n))(context.dispatcher)
-        case None =>
-          () // Nothing to flush
+  /** Accounts currently having their tries built asynchronously. Prevents double-building. */
+  private val accountsInTrieConstruction = mutable.Set[ByteString]()
+
+  /** Maximum buffered slots across all accounts before forcing an incremental trie build.
+    * Prevents OOM when downloading mainnet with millions of storage slots.
+    * At ~64 bytes per slot (32 hash + 32 value), 500K slots ≈ 32MB.
+    */
+  private val maxBufferedSlots: Long = 500000
+  private var totalBufferedSlots: Long = 0
+
+  /** Threshold for triggering incremental builds of complete accounts.
+    * When we have this many complete accounts buffered, build their tries without waiting.
+    */
+  private val trieConstructionBatchSize = 64
+
+  /** Accounts whose slots have been fully downloaded (no continuation) and are ready for trie construction. */
+  private val accountsReadyForBuild = mutable.ArrayBuffer[ByteString]()
+
+  /** Build tries for a batch of complete accounts on a background thread.
+    * Sorts slots by key for better trie locality, builds tries, and flushes to storage.
+    * Uses a batch-local DeferredWriteMptStorage to avoid thread-safety issues with the
+    * shared mptStorage — each batch gets its own write buffer that flushes independently.
+    */
+  private def buildAccountTriesAsync(accountHashes: Seq[ByteString]): Unit = {
+    if (accountHashes.isEmpty) return
+
+    // Extract slots from buffer (move, not copy)
+    val accountData = accountHashes.flatMap { hash =>
+      pendingAccountSlots.remove(hash).map { slots =>
+        totalBufferedSlots -= slots.size
+        (hash, slots)
       }
     }
 
+    if (accountData.isEmpty) return
+
+    accountData.foreach { case (hash, _) => accountsInTrieConstruction.add(hash) }
+
+    val selfRef = self
+    val totalSlotCount = accountData.map(_._2.size).sum.toLong
+    val localMptStorage = mptStorage // capture for Future
+    val localFlatSlotStorage = flatSlotStorage // capture for Future
+
+    import scala.concurrent.{Future, blocking}
+    Future {
+      blocking {
+        val startMs = System.currentTimeMillis()
+
+        // Batch-local deferred storage — thread-safe: only this Future writes to it.
+        // Trie nodes accumulate in memory, then flush to RocksDB in one batch.
+        val batchStorage = new DeferredWriteMptStorage(localMptStorage)
+
+        // Flat slot storage: accumulate all (accountHash++slotHash → value) writes
+        // for a single atomic batch commit. O(1) reads during EVM execution.
+        var flatBatch = localFlatSlotStorage.emptyBatchUpdate
+
+        accountData.foreach { case (accountHash, slots) =>
+          // Sort by key for better trie locality — sequential keys share prefixes,
+          // reducing node reconstructions during insertion
+          val sortedSlots = slots.sortBy(_._1)(ByteStringOrdering)
+          import com.chipprbots.ethereum.mpt.byteStringSerializer
+          var trie = MerklePatriciaTrie[ByteString, ByteString](batchStorage)
+          sortedSlots.foreach { case (slotHash, slotValue) =>
+            trie = trie.put(slotHash, slotValue)
+          }
+
+          // Write to flat storage: accountHash ++ slotHash → slotValue
+          flatBatch = flatBatch.and(localFlatSlotStorage.putSlotsBatch(accountHash, sortedSlots.toSeq))
+        }
+
+        // Flush trie nodes to RocksDB
+        batchStorage.flush()
+
+        // Commit flat slot writes to RocksDB
+        flatBatch.commit()
+
+        val elapsedMs = System.currentTimeMillis() - startMs
+        selfRef ! TrieConstructionComplete(accountHashes, totalSlotCount, elapsedMs)
+      }
+    }(context.dispatcher).recover { case e: Exception =>
+      selfRef ! TrieConstructionFailed(accountHashes, e.getMessage)
+    }(context.dispatcher)
+  }
+
+  /** Check if we should trigger a trie construction batch (enough complete accounts or memory pressure). */
+  private def maybeStartTrieConstruction(): Unit = {
+    val readyNotBuilding = accountsReadyForBuild.filterNot(accountsInTrieConstruction.contains)
+    val memoryPressure = totalBufferedSlots >= maxBufferedSlots
+
+    if (readyNotBuilding.size >= trieConstructionBatchSize || (readyNotBuilding.nonEmpty && memoryPressure)) {
+      val batch = readyNotBuilding.take(trieConstructionBatchSize).toSeq
+      accountsReadyForBuild --= batch
+      log.info(s"Starting async trie construction for ${batch.size} accounts ($totalBufferedSlots buffered slots)")
+      buildAccountTriesAsync(batch)
+    }
+  }
+
+  /** Force build all remaining buffered accounts (e.g., on sync completion or force-complete). */
+  private def flushAllPendingTrieBuilds(): Unit = {
+    val remaining = accountsReadyForBuild.filterNot(accountsInTrieConstruction.contains).toSeq
+    if (remaining.nonEmpty) {
+      accountsReadyForBuild.clear()
+      log.info(s"Flushing ${remaining.size} remaining accounts for trie construction")
+      buildAccountTriesAsync(remaining)
+    }
+  }
+
+  /** ByteString ordering for sorted insertion — compares bytes lexicographically. */
+  private object ByteStringOrdering extends Ordering[ByteString] {
+    def compare(a: ByteString, b: ByteString): Int = {
+      val len = math.min(a.length, b.length)
+      var i = 0
+      while (i < len) {
+        val diff = (a(i) & 0xff) - (b(i) & 0xff)
+        if (diff != 0) return diff
+        i += 1
+      }
+      a.length - b.length
+    }
+  }
+
   // Storage management
   private val proofVerifiers = mutable.Map[ByteString, MerkleProofVerifier]()
-  private val storageTrieCache = new StorageTrieCache(10000)
 
   override def preStart(): Unit =
     log.info(s"StorageRangeCoordinator starting (concurrency=$maxInFlightRequests, batchSize=$maxAccountsPerBatch)")
@@ -377,16 +472,14 @@ class StorageRangeCoordinator(
     case StorageCheckCompletion =>
       // Update contract completion progress for the progress monitor
       updateContractProgress()
+      // When all downloads complete, flush remaining buffered accounts for trie construction
+      if (noMoreTasksExpected && tasks.isEmpty && activeTasks.isEmpty &&
+        accountsReadyForBuild.nonEmpty && accountsInTrieConstruction.isEmpty) {
+        flushAllPendingTrieBuilds()
+      }
       if (isComplete) {
-        if (isFlushing) {
-          // Async flush still running — DeferredFlushComplete will re-trigger StorageCheckCompletion
-          log.debug("Waiting for async flush to complete before reporting storage sync done")
-        } else {
-          // Final synchronous flush of any remaining buffered nodes
-          deferredStorage.flush()
-          log.info("Storage range sync complete!")
-          snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
-        }
+        log.info("Storage range sync complete!")
+        snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
       } else if (tasks.nonEmpty) {
         // Try to dispatch pending tasks — per-peer and global limits enforced in dispatchIfPossible().
         // Previously guarded by activeTasks.isEmpty which defeated pipelining.
@@ -396,24 +489,32 @@ class StorageRangeCoordinator(
 
     case NoMoreStorageTasks =>
       noMoreTasksExpected = true
-      log.info(s"No more storage tasks expected. Pending: ${tasks.size}, active: ${activeTasks.size}")
+      log.info(
+        s"No more storage tasks expected. Pending: ${tasks.size}, active: ${activeTasks.size}, " +
+          s"buffered accounts: ${pendingAccountSlots.size}, ready for build: ${accountsReadyForBuild.size}"
+      )
+      // Trigger final trie builds if all downloads are done
+      if (tasks.isEmpty && activeTasks.isEmpty) {
+        flushAllPendingTrieBuilds()
+      }
       if (isComplete) {
-        if (isFlushing) {
-          log.debug("Waiting for async flush to complete before reporting storage sync done")
-        } else {
-          deferredStorage.flush()
-          log.info("Storage range sync complete!")
-          snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
-        }
+        log.info("Storage range sync complete!")
+        snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
       }
 
     case ForceCompleteStorage =>
       val abandoned = tasks.size + activeTasks.size
+      val bufferedAccounts = pendingAccountSlots.size + accountsReadyForBuild.size
       log.warning(
-        s"Force-completing storage sync: flushing $slotsDownloaded downloaded slots to disk, " +
-          s"abandoning $abandoned remaining tasks (healing phase will recover missing data)"
+        s"Force-completing storage sync: $slotsDownloaded slots downloaded, " +
+          s"abandoning $abandoned remaining tasks, $bufferedAccounts buffered accounts " +
+          s"(healing phase will recover missing data)"
       )
-      deferredStorage.flush()
+      // Build tries for any fully-downloaded accounts before force-completing
+      flushAllPendingTrieBuilds()
+      // Discard partially-downloaded accounts (continuations won't arrive)
+      pendingAccountSlots.clear()
+      totalBufferedSlots = 0
       log.info("Storage range sync force-completed (promoting to healing phase)")
       snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
 
@@ -441,8 +542,17 @@ class StorageRangeCoordinator(
       peerCooldownUntilMs.clear()
       peerConsecutiveTimeouts.clear()
       peerBatchSize.clear()
+      peerBatchSuccessStreak.clear()
       peerResponseBytesTarget.clear()
       emptyResponsesByTask.clear()
+
+      // Clear two-phase storage buffers — data for old root is stale.
+      // Any in-progress trie constructions will complete harmlessly (writes are content-addressed),
+      // but we discard the tracking so we don't wait for them.
+      pendingAccountSlots.clear()
+      accountsReadyForBuild.clear()
+      accountsInTrieConstruction.clear()
+      totalBufferedSlots = 0
 
       // Set post-refresh cooldown: peers need time to sync to the new root.
       // Dispatching immediately causes all peers to return empty → marked stateless →
@@ -468,35 +578,31 @@ class StorageRangeCoordinator(
       )
       sender() ! stats
 
-    case StoreStorageSlotChunk(
-          task,
-          remainingSlots,
-          totalCount,
-          storedSoFar,
-          proof,
-          peer,
-          requestedBytes,
-          isLastServedTask
-        ) =>
-      handleStoreStorageSlotChunk(
-        task,
-        remainingSlots,
-        totalCount,
-        storedSoFar,
-        proof,
-        peer,
-        requestedBytes,
-        isLastServedTask
-      )
-
-    case DeferredFlushComplete(count) =>
-      isFlushing = false
-      log.info(s"Async deferred flush complete ($count slots, total: $slotsDownloaded)")
-      // Check if buffer filled up again during the flush
-      if (slotsSinceLastFlush >= flushThreshold) {
-        flushDeferredAsync()
+    case TrieConstructionComplete(accountHashes, totalSlots, elapsedMs) =>
+      accountHashes.foreach { hash =>
+        accountsInTrieConstruction.remove(hash)
+        completedAccountHashes.add(hash)
       }
-      // Re-check completion (flush may have been the last pending operation)
+      val rate = if (elapsedMs > 0) totalSlots * 1000 / elapsedMs else totalSlots
+      log.info(
+        s"Trie construction complete: ${accountHashes.size} accounts, $totalSlots slots in ${elapsedMs}ms " +
+          s"(${rate} slots/s). Remaining: ${accountsReadyForBuild.size} ready, " +
+          s"${accountsInTrieConstruction.size} building, ${pendingAccountSlots.size} buffered"
+      )
+      // Check if more builds are ready and check completion
+      maybeStartTrieConstruction()
+      self ! StorageCheckCompletion
+
+    case TrieConstructionFailed(accountHashes, error) =>
+      log.error(
+        s"Trie construction failed for ${accountHashes.size} accounts: $error. " +
+          s"Healing phase will recover missing storage."
+      )
+      // Remove from in-construction set — healing will fix these
+      accountHashes.foreach { hash =>
+        accountsInTrieConstruction.remove(hash)
+        pendingAccountSlots.remove(hash) // Discard buffered slots — can't build
+      }
       self ! StorageCheckCompletion
   }
 
@@ -685,6 +791,9 @@ class StorageRangeCoordinator(
     peerConsecutiveTimeouts.remove(peer.id.value)
     consecutiveUnproductiveRefreshes = 0
 
+    // Adaptive batch scaling: track successes for this peer, scale up after consecutive packed responses
+    maybeIncreaseBatchSize(peer, servedCount, tasks.size)
+
     // Clear empty-response counters for tasks that are now being served.
     tasks.foreach { task =>
       emptyResponsesByTask.remove(StorageTaskKey(task.accountHash, task.next, task.last))
@@ -728,20 +837,45 @@ class StorageRangeCoordinator(
           val slotBytes = accountSlots.map { case (hash, value) => hash.size + value.size }.sum
           totalReceivedBytes += slotBytes
 
-          val isLastServed = idx == servedCount - 1
-
           if (accountSlots.nonEmpty) {
-            // Start chunked async storage via self-messages
-            self ! StoreStorageSlotChunk(
-              task = task,
-              remainingSlots = accountSlots,
-              totalCount = accountSlots.size,
-              storedSoFar = 0,
-              proof = proofForThisTask,
-              peer = peer,
-              requestedBytes = requestedBytes,
-              isLastServedTask = isLastServed
-            )
+            // Two-phase storage: buffer raw slots for deferred trie construction.
+            // Phase 1 (here): accumulate slots in memory, fast — no trie ops.
+            // Phase 2 (async): sort by key, build tries on background thread.
+            val slotBuffer = pendingAccountSlots.getOrElseUpdate(task.accountHash, mutable.ArrayBuffer.empty)
+            slotBuffer ++= accountSlots
+            totalBufferedSlots += accountSlots.size
+            slotsDownloaded += accountSlots.size
+            bytesDownloaded += accountSlots.map { case (hash, value) => hash.size + value.size }.sum
+
+            snapSyncController ! SNAPSyncController.ProgressStorageSlotsSynced(accountSlots.size.toLong)
+
+            // Handle continuation: only create when proof indicates a partial range.
+            // Per SNAP spec: empty proof = full storage served, no continuation needed.
+            val needsContinuation = if (proofForThisTask.nonEmpty) {
+              val lastSlot = accountSlots.last._1
+              lastSlot.toSeq.compare(task.last.toSeq) < 0
+            } else false
+
+            if (needsContinuation) {
+              val lastSlot = accountSlots.last._1
+              val continuationTask = StorageTask.createContinuation(task, lastSlot)
+              this.tasks.enqueue(continuationTask)
+              log.debug(s"Created continuation task for account ${task.accountString} (partial range, proof present)")
+            } else {
+              // Account fully downloaded — ready for trie construction
+              accountsReadyForBuild += task.accountHash
+              log.debug(
+                s"Account ${task.accountHash.take(4).toArray.map("%02x".format(_)).mkString} fully buffered " +
+                  s"(${slotBuffer.size} total slots) — queued for trie construction"
+              )
+            }
+
+            task.done = true
+            task.pending = false
+            completedTasks += task
+
+            // Check if we should trigger a batch trie build
+            maybeStartTrieConstruction()
           } else {
             // No slots to store — mark task done
             task.done = true
@@ -761,91 +895,6 @@ class StorageRangeCoordinator(
 
     // Immediately pipeline more work to this peer — don't wait for StoragePeerAvailable
     dispatchIfPossible(peer)
-  }
-
-  // How many storage slots to insert per chunk before yielding to the actor mailbox.
-  // With DeferredWriteMptStorage, puts are purely in-memory (~1-10us each).
-  private val storeChunkSize = 2000
-
-  private def handleStoreStorageSlotChunk(
-      task: StorageTask,
-      remainingSlots: Seq[(ByteString, ByteString)],
-      totalCount: Int,
-      storedSoFar: Int,
-      proof: Seq[ByteString],
-      peer: Peer,
-      requestedBytes: BigInt,
-      isLastServedTask: Boolean
-  ): Unit = {
-    val (chunk, rest) = remainingSlots.splitAt(storeChunkSize)
-    try {
-      import com.chipprbots.ethereum.mpt.byteStringSerializer
-
-      val accountHash = task.accountHash
-      val storageTrie = storageTrieCache.getOrElseUpdate(
-        accountHash, {
-          log.debug(
-            s"Creating empty storage trie for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}"
-          )
-          MerklePatriciaTrie[ByteString, ByteString](deferredStorage)
-        }
-      )
-
-      var currentTrie = storageTrie
-      chunk.foreach { case (slotHash, slotValue) =>
-        currentTrie = currentTrie.put(slotHash, slotValue)
-      }
-      storageTrieCache.put(accountHash, currentTrie)
-
-      val newStored = storedSoFar + chunk.size
-      slotsDownloaded += chunk.size
-      bytesDownloaded += chunk.map { case (hash, value) => hash.size + value.size }.sum
-
-      if (chunk.nonEmpty) {
-        snapSyncController ! SNAPSyncController.ProgressStorageSlotsSynced(chunk.size.toLong)
-      }
-
-      // Periodic deferred flush — async to avoid blocking the actor
-      slotsSinceLastFlush += chunk.size
-      if (slotsSinceLastFlush >= flushThreshold && !isFlushing) {
-        flushDeferredAsync()
-      }
-
-      if (rest.nonEmpty) {
-        // More chunks to process — yield to mailbox between chunks
-        self ! StoreStorageSlotChunk(task, rest, totalCount, newStored, proof, peer, requestedBytes, isLastServedTask)
-      } else {
-        // All chunks stored for this task
-        log.debug(
-          s"Stored $totalCount storage slots for account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}"
-        )
-
-        // Handle continuation: if the last slot hash is before the task's end, create continuation
-        val allSlots = task.slots
-        if (allSlots.nonEmpty) {
-          val lastSlot = allSlots.last._1
-          if (lastSlot.toSeq.compare(task.last.toSeq) < 0) {
-            val continuationTask = StorageTask.createContinuation(task, lastSlot)
-            this.tasks.enqueue(continuationTask)
-            log.debug(s"Created continuation task for account ${task.accountString}")
-          }
-        }
-
-        task.done = true
-        task.pending = false
-        completedTasks += task
-
-        self ! StorageCheckCompletion
-        // Task done — try to pipeline more work to this peer
-        dispatchIfPossible(peer)
-      }
-    } catch {
-      case e: Exception =>
-        log.error(e, s"Failed to store storage slots chunk: ${e.getMessage}")
-        // Re-queue the task on failure
-        task.pending = false
-        this.tasks.enqueue(task)
-    }
   }
 
   private def getOrCreateVerifier(storageRoot: ByteString): MerkleProofVerifier =
@@ -907,7 +956,8 @@ class StorageRangeCoordinator(
   }
 
   private def isComplete: Boolean =
-    noMoreTasksExpected && tasks.isEmpty && activeTasks.isEmpty
+    noMoreTasksExpected && tasks.isEmpty && activeTasks.isEmpty &&
+      accountsReadyForBuild.isEmpty && accountsInTrieConstruction.isEmpty && pendingAccountSlots.isEmpty
 
   /** Update contract completion counts and send progress to controller. */
   private def updateContractProgress(): Unit = {
@@ -940,11 +990,14 @@ object StorageRangeCoordinator {
       networkPeerManager: ActorRef,
       requestTracker: SNAPRequestTracker,
       mptStorage: MptStorage,
+      flatSlotStorage: FlatSlotStorage,
       maxAccountsPerBatch: Int,
       maxInFlightRequests: Int,
       requestTimeout: FiniteDuration,
       snapSyncController: ActorRef,
-      initialMaxInFlightPerPeer: Int = 5
+      initialMaxInFlightPerPeer: Int = 5,
+      initialResponseBytes: Int = 1048576,
+      minResponseBytes: Int = 131072
   ): Props =
     Props(
       new StorageRangeCoordinator(
@@ -952,11 +1005,14 @@ object StorageRangeCoordinator {
         networkPeerManager,
         requestTracker,
         mptStorage,
+        flatSlotStorage,
         maxAccountsPerBatch,
         maxInFlightRequests,
         requestTimeout,
         snapSyncController,
-        initialMaxInFlightPerPeer
+        initialMaxInFlightPerPeer,
+        configInitialResponseBytes = initialResponseBytes,
+        configMinResponseBytes = minResponseBytes
       )
     )
 

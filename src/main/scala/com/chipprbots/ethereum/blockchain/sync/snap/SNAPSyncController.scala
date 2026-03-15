@@ -8,7 +8,7 @@ import scala.concurrent.ExecutionContext
 import scala.collection.mutable
 
 import com.chipprbots.ethereum.blockchain.sync.{Blacklist, CacheBasedBlacklist, PeerListSupportNg, SyncProtocol}
-import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage, MptStorage, StateStorage}
+import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage, FlatSlotStorage, MptStorage, StateStorage}
 import com.chipprbots.ethereum.domain.{Block, BlockBody, BlockHeader, BlockchainReader, BlockchainWriter, ChainWeight}
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
@@ -23,6 +23,7 @@ class SNAPSyncController(
     appStateStorage: AppStateStorage,
     stateStorage: StateStorage,
     evmCodeStorage: EvmCodeStorage,
+    flatSlotStorage: FlatSlotStorage,
     val networkPeerManager: ActorRef,
     val peerEventBus: ActorRef,
     val syncConfig: SyncConfig,
@@ -1026,11 +1027,14 @@ class SNAPSyncController(
                     networkPeerManager = networkPeerManager,
                     requestTracker = requestTracker,
                     mptStorage = storage,
+                    flatSlotStorage = flatSlotStorage,
                     maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
                     maxInFlightRequests = snapSyncConfig.storageConcurrency,
                     requestTimeout = snapSyncConfig.timeout,
                     snapSyncController = self,
-                    initialMaxInFlightPerPeer = 3 // Recovery: accounts done, storage gets 3 of 5 per-peer budget
+                    initialMaxInFlightPerPeer = 3, // Recovery: accounts done, storage gets 3 of 5 per-peer budget
+                    initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
+                    minResponseBytes = snapSyncConfig.storageMinResponseBytes
                   )
                   .withDispatcher("sync-dispatcher"),
                 s"storage-range-coordinator-$coordinatorGeneration"
@@ -1732,11 +1736,14 @@ class SNAPSyncController(
               networkPeerManager = networkPeerManager,
               requestTracker = requestTracker,
               mptStorage = storage,
+              flatSlotStorage = flatSlotStorage,
               maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
               maxInFlightRequests = snapSyncConfig.storageConcurrency,
               requestTimeout = snapSyncConfig.timeout,
               snapSyncController = self,
-              initialMaxInFlightPerPeer = 0 // Defer storage dispatch during AccountRangeSync — prevents false pivot refreshes from stale-root timeouts
+              initialMaxInFlightPerPeer = 0, // Defer storage dispatch during AccountRangeSync — prevents false pivot refreshes from stale-root timeouts
+              initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
+              minResponseBytes = snapSyncConfig.storageMinResponseBytes
             )
             .withDispatcher("sync-dispatcher"),
           s"storage-range-coordinator-$coordinatorGeneration"
@@ -2699,6 +2706,7 @@ object SNAPSyncController {
       appStateStorage: AppStateStorage,
       stateStorage: StateStorage,
       evmCodeStorage: EvmCodeStorage,
+      flatSlotStorage: FlatSlotStorage,
       networkPeerManager: ActorRef,
       peerEventBus: ActorRef,
       syncConfig: SyncConfig,
@@ -2712,6 +2720,7 @@ object SNAPSyncController {
         appStateStorage,
         stateStorage,
         evmCodeStorage,
+        flatSlotStorage,
         networkPeerManager,
         peerEventBus,
         syncConfig,
@@ -2731,7 +2740,9 @@ case class SNAPSyncConfig(
     maxPivotStalenessBlocks: Long = 4096,
     accountConcurrency: Int = 16,
     storageConcurrency: Int = 16,
-    storageBatchSize: Int = 8,
+    storageBatchSize: Int = 128,
+    storageInitialResponseBytes: Int = 1048576,
+    storageMinResponseBytes: Int = 131072,
     healingBatchSize: Int = 16,
     healingConcurrency: Int = 16,
     stateValidationEnabled: Boolean = true,
@@ -2772,6 +2783,14 @@ object SNAPSyncConfig {
       accountConcurrency = snapConfig.getInt("account-concurrency"),
       storageConcurrency = snapConfig.getInt("storage-concurrency"),
       storageBatchSize = snapConfig.getInt("storage-batch-size"),
+      storageInitialResponseBytes =
+        if (snapConfig.hasPath("storage-initial-response-bytes"))
+          snapConfig.getInt("storage-initial-response-bytes")
+        else 1048576,
+      storageMinResponseBytes =
+        if (snapConfig.hasPath("storage-min-response-bytes"))
+          snapConfig.getInt("storage-min-response-bytes")
+        else 131072,
       healingBatchSize = snapConfig.getInt("healing-batch-size"),
       healingConcurrency =
         if (snapConfig.hasPath("healing-concurrency"))

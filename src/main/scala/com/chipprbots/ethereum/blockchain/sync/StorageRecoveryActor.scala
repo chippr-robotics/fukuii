@@ -8,7 +8,7 @@ import scala.concurrent.Future
 
 import scala.util.{Success, Failure}
 
-import com.chipprbots.ethereum.db.storage.{AppStateStorage, StateStorage}
+import com.chipprbots.ethereum.db.storage.{AppStateStorage, FlatSlotStorage, StateStorage}
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt._
 import com.chipprbots.ethereum.mpt.MptVisitors._
@@ -32,6 +32,7 @@ class StorageRecoveryActor(
     stateRoot: ByteString,
     stateStorage: StateStorage,
     appStateStorage: AppStateStorage,
+    flatSlotStorage: FlatSlotStorage,
     networkPeerManager: ActorRef,
     syncController: ActorRef,
     pivotBlockNumber: BigInt,
@@ -80,10 +81,13 @@ class StorageRecoveryActor(
               networkPeerManager = networkPeerManager,
               requestTracker = requestTracker,
               mptStorage = mptStorage,
+              flatSlotStorage = flatSlotStorage,
               maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
               maxInFlightRequests = snapSyncConfig.storageConcurrency,
               requestTimeout = snapSyncConfig.timeout,
-              snapSyncController = self
+              snapSyncController = self,
+              initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
+              minResponseBytes = snapSyncConfig.storageMinResponseBytes
             )
             .withDispatcher("sync-dispatcher"),
           "storage-recovery-coordinator"
@@ -194,6 +198,7 @@ object StorageRecoveryActor {
       stateRoot: ByteString,
       stateStorage: StateStorage,
       appStateStorage: AppStateStorage,
+      flatSlotStorage: FlatSlotStorage,
       networkPeerManager: ActorRef,
       syncController: ActorRef,
       pivotBlockNumber: BigInt,
@@ -204,6 +209,7 @@ object StorageRecoveryActor {
         stateRoot,
         stateStorage,
         appStateStorage,
+        flatSlotStorage,
         networkPeerManager,
         syncController,
         pivotBlockNumber,

@@ -152,16 +152,19 @@ object Messages {
     */
   case object ForceCompleteStorage extends StorageRangeCoordinatorMessage
 
-  // Internal message for chunked storage slot persistence (avoids blocking the actor)
-  private[actors] case class StoreStorageSlotChunk(
-      task: StorageTask,
-      remainingSlots: Seq[(ByteString, ByteString)],
-      totalCount: Int,
-      storedSoFar: Int,
-      proof: Seq[ByteString],
-      peer: com.chipprbots.ethereum.network.Peer,
-      requestedBytes: BigInt,
-      isLastServedTask: Boolean
+  /** Two-phase storage: async trie construction completed for a batch of accounts.
+    * Background thread built tries from buffered raw slots and flushed to storage.
+    */
+  private[actors] case class TrieConstructionComplete(
+      accountHashes: Seq[ByteString],
+      totalSlots: Long,
+      elapsedMs: Long
+  ) extends StorageRangeCoordinatorMessage
+
+  /** Two-phase storage: async trie construction failed for a batch of accounts. */
+  private[actors] case class TrieConstructionFailed(
+      accountHashes: Seq[ByteString],
+      error: String
   ) extends StorageRangeCoordinatorMessage
 
   // ========================================
