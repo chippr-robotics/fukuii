@@ -5,6 +5,11 @@
 networks:
   fukuii-network:
     driver: bridge
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
+        - subnet: fd00:ba00:d000::/80
 
 services:
   # PostgreSQL database for Kong (replaces deprecated Cassandra support)
@@ -101,7 +106,7 @@ services:
 
   # Fukuii Ethereum Client - Primary Instance
   fukuii-primary:
-    image: ${FUKUII_IMAGE:-fukuii-etc:local}
+    image: ${FUKUII_IMAGE:-chipprbots/fukuii:latest}
     container_name: fukuii-primary
     restart: unless-stopped
     ports:
@@ -115,8 +120,18 @@ services:
     volumes:
       - ${FUKUII_DATA_DIR:-./data/fukuii}:/app/data
       - ./fukuii-conf-1:/app/conf:ro
-    environment:
-      - JAVA_OPTS=${JAVA_OPTS:--Xmx4g -Xms4g}
+    # Assembly JAR uses java entrypoint directly (not dist launcher)
+    command:
+      - "-Xmx6g"
+      - "-Xms2g"
+      - "-Xss10M"
+      - "-XX:+UseG1GC"
+      - "-XX:MaxGCPauseMillis=200"
+      - "-Dconfig.file=/app/conf/etc.conf"
+      - "-Dfukuii.datadir=/app/data"
+      - "-jar"
+      - "/app/fukuii/lib/fukuii-assembly-0.1.240.jar"
+      - "etc"
     networks:
       - fukuii-network
     healthcheck:

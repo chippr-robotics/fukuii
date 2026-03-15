@@ -10,7 +10,7 @@ networks:
     ipam:
       config:
         - subnet: 172.20.0.0/16
-        - subnet: fd00:c1r1:7h00::/80
+        - subnet: fd00:c101:7000::/80
 
 services:
   coregeth:

@@ -543,10 +543,19 @@ class SNAPSyncController(
 
     case ByteCodeSyncComplete =>
       bytecodePhaseComplete = true
+      progressMonitor.setBytecodeComplete()
       val downloaded = progressMonitor.currentProgress.bytecodesDownloaded
       log.info(
         s"ByteCode sync complete ($downloaded bytecodes). Storage: $storagePhaseComplete, Accounts: $accountsComplete"
       )
+      // Bytecode done — give storage the full per-peer budget (was 3/5, now 5/5).
+      // On peer-limited networks (Mordor: ~10 peers), this nearly doubles storage throughput.
+      if (!storagePhaseComplete) {
+        storageRangeCoordinator.foreach { coord =>
+          coord ! actors.Messages.UpdateMaxInFlightPerPeer(snapSyncConfig.maxInFlightPerPeer)
+          log.info(s"Storage per-peer budget boosted to ${snapSyncConfig.maxInFlightPerPeer} (bytecode complete, full budget)")
+        }
+      }
       checkAllDownloadsComplete()
 
     case StorageRangeSyncComplete =>
@@ -3261,6 +3270,7 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
   import scala.concurrent.ExecutionContext.Implicits.global
 
   private var currentPhaseState: SyncPhase = Idle
+  private var bytecodesDone: Boolean = false
   private var accountsSynced: Long = 0
   private var bytecodesDownloaded: Long = 0
   private var storageSlotsSynced: Long = 0
@@ -3315,6 +3325,8 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
     finalizingTrie = value
     if (value) finalizeStartTimeMs = System.currentTimeMillis()
   }
+
+  def setBytecodeComplete(): Unit = synchronized { bytecodesDone = true }
 
   /** Reset all counters/ETA state for a fresh SNAP attempt */
   def reset(): Unit = synchronized {
@@ -3559,7 +3571,8 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
       chainHeaders = chainHeaders,
       chainBodies = chainBodies,
       chainReceipts = chainReceipts,
-      chainTarget = chainTarget
+      chainTarget = chainTarget,
+      bytecodeComplete = bytecodesDone
     )
   }
 }
@@ -3593,7 +3606,8 @@ case class SyncProgress(
     chainHeaders: BigInt = BigInt(0),
     chainBodies: BigInt = BigInt(0),
     chainReceipts: BigInt = BigInt(0),
-    chainTarget: BigInt = BigInt(0)
+    chainTarget: BigInt = BigInt(0),
+    bytecodeComplete: Boolean = false
 ) {
 
   private def wormChasesBrainBar: String = {
@@ -3681,7 +3695,10 @@ case class SyncProgress(
       case SNAPSyncController.ByteCodeAndStorageSync =>
         val contractsStr =
           if (storageContractsTotal > 0) s" (${storageContractsCompleted}/${storageContractsTotal} contracts)" else ""
-        s"$bar Code+Storage: codes=${formatCount(bytecodesDownloaded)} @ ${recentBytecodesPerSec.toInt}/s, slots=${formatCount(storageSlotsSynced)} @ ${recentSlotsPerSec.toInt}/s$contractsStr$chain | $elapsed"
+        val codeStr =
+          if (bytecodeComplete) s"codes=${formatCount(bytecodesDownloaded)} \u2714"
+          else s"codes=${formatCount(bytecodesDownloaded)} @ ${recentBytecodesPerSec.toInt}/s"
+        s"$bar Code+Storage: $codeStr, slots=${formatCount(storageSlotsSynced)} @ ${recentSlotsPerSec.toInt}/s$contractsStr$chain | $elapsed"
 
       case SNAPSyncController.StorageRangeSync =>
         val progressStr = if (estimatedTotalSlots > 0) s" ${phaseProgress}%" else ""
