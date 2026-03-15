@@ -125,7 +125,7 @@
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.actors" level="WARN" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator" level="WARN" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.MerkleProofVerifier" level="ERROR" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker" level="WARN" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SyncProgressMonitor" level="INFO" />
