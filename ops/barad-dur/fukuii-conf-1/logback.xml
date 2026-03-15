@@ -121,7 +121,7 @@
     <!-- =================================================================== -->
     <!-- SNAP SYNC — INFO for controller + progress, WARN for internals      -->
     <!-- =================================================================== -->
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap" level="WARN" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.actors" level="WARN" />
