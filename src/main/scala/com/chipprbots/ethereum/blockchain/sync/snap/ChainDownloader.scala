@@ -360,16 +360,26 @@ class ChainDownloader(
   }
 
   private def handleHeaders(peer: Peer, headers: Seq[BlockHeader]): Unit = {
-    // Validate sequential ordering from where we left off
     val expectedStart = bestHeaderNumber + 1
-    if (headers.head.number != expectedStart) {
-      log.warning(
-        "Chain download: peer {} sent headers starting at {} but expected {}",
-        peer.id,
-        headers.head.number,
-        expectedStart
+
+    // Find usable headers: skip any before our expected start, use what extends our chain
+    val usable = if (headers.head.number == expectedStart) {
+      headers
+    } else if (headers.head.number < expectedStart && headers.last.number >= expectedStart) {
+      // Response overlaps — trim to the portion we need
+      val trimmed = headers.dropWhile(_.number < expectedStart)
+      log.debug(
+        "Chain download: trimmed overlapping headers {}-{} to start at {} ({} usable)",
+        headers.head.number, headers.last.number, expectedStart, trimmed.size
       )
-      blacklist.add(peer.id, syncConfig.blacklistDuration, WrongBlockHeaders)
+      trimmed
+    } else if (headers.head.number > expectedStart) {
+      // Gap — can't use without the intervening headers
+      log.debug("Chain download: peer {} sent headers starting at {} but we need {} (gap)", peer.id, headers.head.number, expectedStart)
+      return
+    } else {
+      // All stale (before our cursor)
+      log.debug("Chain download: peer {} sent stale headers {}-{}, already past {}", peer.id, headers.head.number, headers.last.number, expectedStart)
       return
     }
 
@@ -377,7 +387,7 @@ class ChainDownloader(
     var prevHash = blockchainReader.getBlockHeaderByNumber(bestHeaderNumber).map(_.hash)
     var validCount = 0
 
-    for (header <- headers) {
+    for (header <- usable) {
       if (prevHash.exists(_ == header.parentHash)) {
         // Store header + chain weight
         val parentWeight = blockchainReader
