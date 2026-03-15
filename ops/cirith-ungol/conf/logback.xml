@@ -89,19 +89,18 @@
     <!-- Discovery — WARN (only problems) -->
     <logger name="com.chipprbots.ethereum.network.discovery" level="WARN" />
 
-    <!-- Handshaking — WARN (only failures) -->
-    <logger name="com.chipprbots.ethereum.network.handshaker" level="WARN" />
+    <!-- Handshaking — ERROR (genesis mismatch warnings are common and non-actionable) -->
+    <logger name="com.chipprbots.ethereum.network.handshaker" level="ERROR" />
 
     <!-- ForkId — WARN (only compatibility failures) -->
     <logger name="com.chipprbots.ethereum.forkid" level="WARN" />
 
     <!-- =================================================================== -->
-    <!-- RLPX — WARN (only connection failures)                              -->
+    <!-- RLPX — OFF (floods console with peer handshake noise: "Did not     -->
+    <!-- find Hello", "Unable to negotiate", "Auth handshake timeout" —     -->
+    <!-- all expected and non-actionable)                                    -->
     <!-- =================================================================== -->
-    <logger name="com.chipprbots.ethereum.network.rlpx" level="WARN" />
-    <logger name="com.chipprbots.ethereum.network.rlpx.FrameCodec" level="WARN" />
-    <logger name="com.chipprbots.ethereum.network.rlpx.MessageCodec" level="WARN" />
-    <logger name="com.chipprbots.ethereum.network.rlpx.AuthHandshaker" level="WARN" />
+    <logger name="com.chipprbots.ethereum.network.rlpx" level="OFF" />
 
     <!-- =================================================================== -->
     <!-- SYNC CORE — INFO for phase transitions and progress                 -->
