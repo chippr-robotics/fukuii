@@ -373,7 +373,7 @@ class BlockImporter(
   }
 
   private def start(): Unit = {
-    log.debug("Starting Regular Sync, current best block is {}", bestKnownBlockNumber)
+    log.info("Starting Regular Sync, current best block is {}", bestKnownBlockNumber)
     fetcher ! BlockFetcher.Start(self, bestKnownBlockNumber)
     supervisor ! ProgressProtocol.StartingFrom(bestKnownBlockNumber)
     context.become(running(ImporterState.initial))
@@ -410,8 +410,8 @@ class BlockImporter(
         val (importedBlocks, errorOpt) = value
         importedBlocks.size match {
           case 0 => log.debug("Imported no blocks")
-          case 1 => log.debug("Imported block {}", importedBlocks.head.number)
-          case _ => log.debug("Imported blocks {} - {}", importedBlocks.head.number, importedBlocks.last.number)
+          case 1 => log.info("Imported block {}", importedBlocks.head.number)
+          case _ => log.info("Imported blocks {} - {}", importedBlocks.head.number, importedBlocks.last.number)
         }
 
         errorOpt match {
