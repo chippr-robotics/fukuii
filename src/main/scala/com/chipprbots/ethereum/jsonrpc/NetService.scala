@@ -140,7 +140,7 @@ class NetService(
     status.serverStatus match {
       case Listening(address) if address != null =>
         val host =
-          Option(address.getAddress).flatMap(addr => Option(addr.getHostAddress)).getOrElse(address.getHostString)
+          Option(address.getAddress).map(com.chipprbots.ethereum.network.getHostName).getOrElse(address.getHostString)
         val port = address.getPort
         val listenAddr = s"$host:$port"
         val enode = s"enode://$nodeId@$listenAddr"

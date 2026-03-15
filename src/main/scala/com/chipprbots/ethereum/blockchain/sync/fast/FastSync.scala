@@ -730,7 +730,7 @@ class FastSync(
     private def printStatus(): Unit = {
       def formatPeerEntry(entry: PeerWithInfo): String = formatPeer(entry.peer)
       def formatPeer(peer: Peer): String =
-        s"${peer.remoteAddress.getAddress.getHostAddress}:${peer.remoteAddress.getPort}"
+        s"${com.chipprbots.ethereum.network.getHostName(peer.remoteAddress.getAddress)}:${peer.remoteAddress.getPort}"
 
       def pct(done: BigInt, total: BigInt): Int =
         if (total <= 0) 0

@@ -166,10 +166,17 @@ object DnsDiscovery extends Logger {
           val kvPairs = list.items.drop(2) // skip signature and seq
           val attrs = parseKVPairs(kvPairs)
 
-          val ipOpt = attrs.get("ip").flatMap(parseIpv4)
-          val tcpOpt = attrs.get("tcp").map(parsePort)
-          val udpOpt = attrs.get("udp").map(parsePort)
+          val ipv4Opt = attrs.get("ip").flatMap(parseIp)
+          val tcpv4Opt = attrs.get("tcp").map(parsePort)
+          val udpv4Opt = attrs.get("udp").map(parsePort)
           val pubkeyOpt = attrs.get("secp256k1")
+
+          // IPv6 fallback (EIP-778: ip6/tcp6/udp6 keys) — prefer IPv4 when both present
+          val (ipOpt, tcpOpt, udpOpt) = ipv4Opt match {
+            case Some(_) => (ipv4Opt, tcpv4Opt, udpv4Opt)
+            case None =>
+              (attrs.get("ip6").flatMap(parseIp), attrs.get("tcp6").map(parsePort), attrs.get("udp6").map(parsePort))
+          }
 
           (ipOpt, tcpOpt, pubkeyOpt) match {
             case (Some(ip), Some(tcpPort), Some(compressedKey)) if tcpPort > 0 =>
@@ -212,7 +219,7 @@ object DnsDiscovery extends Logger {
     pairs.toMap
   }
 
-  private def parseIpv4(bytes: Array[Byte]): Option[InetAddress] = {
+  private def parseIp(bytes: Array[Byte]): Option[InetAddress] = {
     if (bytes.length == 4 || bytes.length == 16)
       Try(InetAddress.getByAddress(bytes)).toOption
     else

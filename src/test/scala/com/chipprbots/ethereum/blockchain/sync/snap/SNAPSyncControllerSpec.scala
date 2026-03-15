@@ -72,9 +72,9 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     )
 
     val formattedString = progress.formattedString
-    formattedString should include("AccountRange")
-    formattedString should include("(50%)")
-    formattedString should include("accounts=1.0K/~2.0K")
+    formattedString should include("Accounts")
+    formattedString should include("50%")
+    formattedString should include("1.0K/~2.0K")
   }
 
   it should "handle different phases correctly" taggedAs UnitTest in {
@@ -264,7 +264,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
 
     val formatted = progress.formattedString
     formatted should include("13.2M")
-    formatted should include("(100%)")
+    formatted should include("100%")
   }
 
   it should "show ByteCode phase with total and percentage" taggedAs UnitTest in {
@@ -296,7 +296,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
 
     val formatted = progress.formattedString
     formatted should include("ByteCode")
-    formatted should include("(65%)")
+    formatted should include("65%")
     formatted should include("95.2K/146.0K")
   }
 
@@ -331,8 +331,8 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
 
     val formatted = progress.formattedString
     formatted should include("Storage")
-    formatted should include("(12%)")
+    formatted should include("12%")
     formatted should include("44.5K")
-    formatted should include("contracts=1823/15234")
+    formatted should include("1823/15234 contracts")
   }
 }

@@ -152,7 +152,11 @@ class PeerManagerSpec
 
     probe.ref ! PoisonPill
 
-    peerDiscoveryManager.expectMsg(PeerDiscoveryManager.GetRandomNodeInfo)
+    // Peer death triggers GetRandomNodeInfo, but timer-fired GetDiscoveredNodesInfo may arrive first
+    peerDiscoveryManager.fishForMessage(3.seconds, "waiting for GetRandomNodeInfo") {
+      case PeerDiscoveryManager.GetRandomNodeInfo => true
+      case _                                      => false
+    }
     peerDiscoveryManager.reply(PeerDiscoveryManager.RandomNodeInfo(bootstrapNodes.head))
   }
 
@@ -387,7 +391,11 @@ class PeerManagerSpec
 
     peerManager ! PeerDiscoveryManager.DiscoveredNodesInfo(discoveredNodes)
 
-    peerDiscoveryManager.expectMsg(PeerDiscoveryManager.GetRandomNodeInfo)
+    // DiscoveredNodesInfo triggers GetRandomNodeInfo (line 228), but eager startup messages may precede it
+    peerDiscoveryManager.fishForMessage(3.seconds, "waiting for GetRandomNodeInfo") {
+      case PeerDiscoveryManager.GetRandomNodeInfo => true
+      case _                                      => false
+    }
 
     val probe: TestProbe = createdPeers(0).probe
     probe.expectMsgClass(classOf[PeerActor.ConnectTo])

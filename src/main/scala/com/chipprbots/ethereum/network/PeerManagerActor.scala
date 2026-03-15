@@ -232,7 +232,7 @@ class PeerManagerActor(
 
   private def formatNodeForLogs(node: Node): String = {
     val id = Hex.toHexString(node.id.take(6).toArray)
-    s"${node.addr.getHostAddress}:${node.tcpPort}/$id"
+    s"${getHostName(node.addr)}:${node.tcpPort}/$id"
   }
 
   private def handleConnections(connectedPeers: ConnectedPeers): Receive = {

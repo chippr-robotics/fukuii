@@ -252,7 +252,7 @@ class PeerDiscoveryManager(
 
   private def formatNodeForLogs(node: Node): String = {
     val id = Hex.toHexString(node.id.take(6).toArray)
-    s"${node.addr.getHostAddress}:${node.tcpPort}/$id"
+    s"${com.chipprbots.ethereum.network.getHostName(node.addr)}:${node.tcpPort}/$id"
   }
 
   def randomNodeId: ENode.Id = {
