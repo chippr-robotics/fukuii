@@ -3309,11 +3309,22 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
   private val slotsHistory = mutable.Queue[(Long, Long)]()
   private val nodesHistory = mutable.Queue[(Long, Long)]()
 
-  /** Start periodic progress logging */
-  def startPeriodicLogging(): Unit =
-    periodicLogTask = Some(_scheduler.scheduleAtFixedRate(30.seconds, 30.seconds) { () =>
-      logProgress()
+  /** Start periodic progress logging.
+    * Uses java.util.Timer instead of Pekko Scheduler for reliability — the Pekko scheduler
+    * silently fails in some configuration environments (observed on Barad-dûr mainnet).
+    */
+  def startPeriodicLogging(): Unit = {
+    val timer = new java.util.Timer("sync-progress-monitor", true)
+    timer.scheduleAtFixedRate(new java.util.TimerTask {
+      def run(): Unit =
+        try logProgress()
+        catch { case e: Exception => log.error(s"Progress monitor error: ${e.getMessage}", e) }
+    }, 30000L, 30000L)
+    periodicLogTask = Some(new org.apache.pekko.actor.Cancellable {
+      def cancel(): Boolean = { timer.cancel(); true }
+      def isCancelled: Boolean = false
     })
+  }
 
   /** Stop periodic progress logging */
   def stopPeriodicLogging(): Unit = {
@@ -3685,29 +3696,29 @@ case class SyncProgress(
       case SNAPSyncController.AccountRangeSync =>
         val progressStr = if (estimatedTotalAccounts > 0) s" ${phaseProgress}%" else ""
         val totalStr = if (estimatedTotalAccounts > 0) s"/~${formatCount(estimatedTotalAccounts)}" else ""
-        s"$bar Accounts$progressStr: ${formatCount(accountsSynced)}$totalStr @ ${recentAccountsPerSec.toInt}/s$chain | $elapsed"
+        s"$bar Accounts$progressStr: ${formatCount(accountsSynced)}$totalStr @ ${accountsPerSec.toInt}/s$chain | $elapsed"
 
       case SNAPSyncController.ByteCodeSync =>
         val progressStr = if (estimatedTotalBytecodes > 0) s" ${phaseProgress}%" else ""
         val totalStr = if (estimatedTotalBytecodes > 0) s"/${formatCount(estimatedTotalBytecodes)}" else ""
-        s"$bar ByteCode$progressStr: ${formatCount(bytecodesDownloaded)}$totalStr @ ${recentBytecodesPerSec.toInt}/s$chain | $elapsed"
+        s"$bar ByteCode$progressStr: ${formatCount(bytecodesDownloaded)}$totalStr @ ${bytecodesPerSec.toInt}/s$chain | $elapsed"
 
       case SNAPSyncController.ByteCodeAndStorageSync =>
         val contractsStr =
           if (storageContractsTotal > 0) s" (${storageContractsCompleted}/${storageContractsTotal} contracts)" else ""
         val codeStr =
           if (bytecodeComplete) s"codes=${formatCount(bytecodesDownloaded)} \u2714"
-          else s"codes=${formatCount(bytecodesDownloaded)} @ ${recentBytecodesPerSec.toInt}/s"
-        s"$bar Code+Storage: $codeStr, slots=${formatCount(storageSlotsSynced)} @ ${recentSlotsPerSec.toInt}/s$contractsStr$chain | $elapsed"
+          else s"codes=${formatCount(bytecodesDownloaded)} @ ${bytecodesPerSec.toInt}/s"
+        s"$bar Code+Storage: $codeStr, slots=${formatCount(storageSlotsSynced)} @ ${slotsPerSec.toInt}/s$contractsStr$chain | $elapsed"
 
       case SNAPSyncController.StorageRangeSync =>
         val progressStr = if (estimatedTotalSlots > 0) s" ${phaseProgress}%" else ""
         val contractsStr =
           if (storageContractsTotal > 0) s" (${storageContractsCompleted}/${storageContractsTotal} contracts)" else ""
-        s"$bar Storage$progressStr: ${formatCount(storageSlotsSynced)} @ ${recentSlotsPerSec.toInt}/s$contractsStr$chain | $elapsed"
+        s"$bar Storage$progressStr: ${formatCount(storageSlotsSynced)} @ ${slotsPerSec.toInt}/s$contractsStr$chain | $elapsed"
 
       case SNAPSyncController.StateHealing =>
-        s"$bar Healing: ${formatCount(nodesHealed)} nodes @ ${recentNodesPerSec.toInt}/s$chain | $elapsed"
+        s"$bar Healing: ${formatCount(nodesHealed)} nodes @ ${nodesPerSec.toInt}/s$chain | $elapsed"
 
       case SNAPSyncController.StateValidation =>
         s"$bar Validating state trie...$chain | $elapsed"

@@ -1064,6 +1064,9 @@ class AccountRangeCoordinator(
   /** Estimate total accounts from keyspace coverage. Uses completed tasks' ranges to compute keyspace density (accounts
     * per unit of keyspace), then extrapolates to the full 2^256 space. Only considers tasks that have actually been
     * explored, avoiding inflation from un-dispatched chunks.
+    *
+    * Uses BigInt arithmetic throughout to avoid precision loss — 2^256 is far beyond Double's
+    * 15-17 significant digits, so `covered.toDouble / keyspaceSize.toDouble` always produces 0.0.
     */
   private def computeKeyspaceEstimate(): Option[Long] = {
     if (accountsDownloaded < 10000) return None // too early for reliable estimate
@@ -1083,13 +1086,14 @@ class AccountRangeCoordinator(
     val covered = keyspaceSize - remaining
     if (covered <= 0) return None
 
-    val fraction = covered.toDouble / keyspaceSize.toDouble
-    // Require at least 1% keyspace coverage for a reliable estimate.
-    // With 16 chunks and 3 peers, this takes ~2 minutes to reach.
-    if (fraction < 0.01) return None
+    // Use BigInt arithmetic: estimated = accountsDownloaded * keyspaceSize / covered
+    // This avoids Double precision loss when dividing by 2^256.
+    val estimatedBig = BigInt(accountsDownloaded) * keyspaceSize / covered
+    // Sanity: reject absurd values (overflow, < downloaded, > 2 billion)
+    // ETC mainnet has ~600M addresses per blockscout; cap at 2B for safety margin
+    if (estimatedBig <= accountsDownloaded || estimatedBig > BigInt(2000000000L)) return None
 
-    val estimated = (accountsDownloaded / fraction).toLong
-    Some(estimated)
+    Some(estimatedBig.toLong)
   }
 }
 
