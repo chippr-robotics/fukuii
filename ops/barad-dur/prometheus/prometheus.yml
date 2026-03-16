@@ -36,21 +36,21 @@ scrape_configs:
         labels:
           instance: 'fukuii-primary'
           role: 'primary'
-          network: 'ethereum-classic'
+          network: 'etc-mainnet'
           environment: 'production'
 
-  # Fukuii secondary instance metrics - DISABLED (single node mode)
-  # - job_name: 'fukuii-secondary'
-  #   scrape_interval: 15s
-  #   scrape_timeout: 10s
-  #   metrics_path: '/metrics'
-  #   static_configs:
-  #     - targets: ['fukuii-secondary:9095']
-  #       labels:
-  #         instance: 'fukuii-secondary'
-  #         role: 'secondary'
-  #         network: 'ethereum-classic'
-  #         environment: 'production'
+  # Fukuii secondary instance metrics (Mordor testnet)
+  - job_name: 'fukuii-secondary'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['fukuii-secondary:9095']
+        labels:
+          instance: 'fukuii-secondary'
+          role: 'secondary'
+          network: 'mordor'
+          environment: 'production'
 
   # Kong API Gateway metrics
   - job_name: 'kong'

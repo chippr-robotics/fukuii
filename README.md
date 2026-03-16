@@ -1,10 +1,15 @@
-## <i>Alpha/Olympia Status</i>: 🟢 2,309 tests passing — [View ETC Handoff](ETC-HANDOFF.md) | [View Olympia Handoff](OLYMPIA-HANDOFF.md)
+## <i>Alpha/Olympia Status</i>: 🟢 2,314 tests passing — [View ETC Handoff](ETC-HANDOFF.md) | [View Olympia Handoff](OLYMPIA-HANDOFF.md)
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/chippr-robotics/fukuii/HEAD/docs/images/fukuii-hex-logo.png" alt="Fukuii Logo" width="400"/>
 </div>
 
 # 🧠🪱 Fukuii Ethereum Client
+
+### The world's first vibe-coded Ethereum client.
+
+> *Chordodes Fukuii is a parasitic worm that hijacks a mantis, rewires its brain, and drives it toward water. Fukuii hijacks Mantis (IOHK's abandoned Scala ETC client), rewires the codebase, and drives it toward Olympia.*
+
 # ALPHA/OLYMPIA TEST PHASE - DO NOT USE IN PRODUCTION
 [![CI](https://github.com/chippr-robotics/fukuii/actions/workflows/ci.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/ci.yml)
 [![Docker Build](https://github.com/chippr-robotics/fukuii/actions/workflows/docker.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/docker.yml)
@@ -76,8 +81,12 @@ See [CON-002: Bootstrap Checkpoints](docs/adr/consensus/CON-002-bootstrap-checkp
 - **Scala 3.3.4 (LTS)** and **JDK 21 (LTS)** for long-term stability
 - **Apache Pekko** actor system for reliable concurrency
 - **Full ECIP-1066 Compliance**: Implements all 14 ETC hard forks from Frontier through Spiral (block 19,250,000), including Magneto (ECIP-1103), Mystique (ECIP-1104), and Spiral (ECIP-1109), plus Olympia (ECIP-1111/1112/1121)
-- **Comprehensive Testing**: Unit, integration, and blockchain tests
+- **2,314 Tests Passing**: Comprehensive unit, integration, and blockchain test suite
 - **Security-First**: Signed Docker images, CodeQL scanning, dependency monitoring
+
+### 🪱 Vibe-Coded
+
+Fukuii is developed with AI-assisted engineering (Claude) as a core methodology — every optimization, bug fix, and architectural decision is a collaboration between human insight and AI capability. The codebase has been through 26+ major bug fixes, each discovered and resolved through this workflow. This is not a toy — it's a production Ethereum client built at the frontier of how software gets made.
 
 ### 🎯 Developer-Friendly
 
@@ -343,6 +352,61 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 - Testing and submitting pull requests
 
 When modifying code derived from Mantis, include a notice in the header of changed files stating that you changed the file and add your own copyright line.
+
+## Sync Architecture: How the Worm Burrows 🪱
+
+Fukuii's SNAP sync implementation draws from the best ideas across geth, nethermind, and besu — adapted for Scala's actor model and the ETC network's unique characteristics.
+
+### The Pipeline
+
+```
+🪱[====..............]🧠
+  ↑                    ↑
+  The Worm             The Brain
+  (sync progress)      (assembled state)
+```
+
+State synchronization flows through six phases:
+
+1. **Account Harvest** — Download ~600M account states from SNAP peers, verified by Merkle proofs
+2. **ByteCode Hunt** — Fetch contract bytecodes in parallel with storage
+3. **Storage Raid** — Download contract storage slots with multi-account batching (128 accounts/request)
+4. **Healing Rites** — Reconcile trie nodes at chunk boundaries after pivot refreshes
+5. **Validation** — Walk the state trie to verify completeness
+6. **Chain Assembly** — Download block headers, bodies, and receipts from genesis to pivot
+
+### Key Optimizations
+
+| Optimization | Inspiration | Impact |
+|---|---|---|
+| **Deferred Merkleization** | Nethermind Paprika | Zero CPU on trie construction during download — flat storage only |
+| **Flat Slot Storage** | geth snapshot layer, besu Bonsai | O(1) SLOAD during EVM execution via `accountHash++slotHash → value` |
+| **StackTrie Shortcut** | geth snap/sync.go | Skip MPT entirely for ~95% of contracts (< 1024 slots) |
+| **Two-Phase Storage** | geth PR #22668 | Buffer raw slots, sort by key, build tries on bounded thread pool |
+| **Adaptive Batching** | Original | 128 accounts/request with bidirectional scaling per peer |
+| **Binary Stateless Detection** | Original | Instant pivot refresh when all peers lose state (vs 2-min backoff) |
+| **Deferred Write MPT** | Original | ~200x speedup for account trie insertion (batch RocksDB writes) |
+
+### Operational Topology
+
+The project uses Tolkien-themed deployment environments:
+
+| Environment | Purpose | Network |
+|---|---|---|
+| **Barad-dûr** 🏰 | Production gateway — Kong API, Prometheus, Grafana, dual-node | ETC Mainnet + Mordor |
+| **Cirith Ungol** 🕷️ | Testing — Fukuii + Core-Geth sidecar, rapid iteration | Mordor / ETC |
+| **Gorgoroth** 🌋 | Private network — 3-node mining cluster, integration tests | Private |
+
+### Monitoring
+
+Real-time sync progress with the signature worm-chases-brain display:
+
+```
+📈 SNAP Sync Progress: 🪱[======..............]🧠 Accounts 23%: 646.2K/~2.7M @ 2720/s | 5m30s, ETA: 12m 39s
+📈 SNAP Sync Progress: 🪱[============........]🧠 Code+Storage: codes=57.3K ✔, slots=652.5K @ 196/s | 58m30s, ETA: 44m 45s
+```
+
+Prometheus metrics + Grafana dashboards provide deep visibility into sync phases, peer health, and system resources. See `ops/barad-dur/grafana/dashboards/` for themed dashboards.
 
 ## Development and Future Plans
 
