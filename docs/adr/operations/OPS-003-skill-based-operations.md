@@ -93,7 +93,7 @@ Partially implemented via Grafana dashboards. Dashboards provide monitoring but 
 
 ## References
 
-- `/home/dontpanic/.claude/skills/fukuii/SKILL.md` — Skill definition
-- `/home/dontpanic/.claude/skills/fukuii/REFERENCE.md` — Metrics, RPC, and configuration reference
+- `~/.claude/skills/fukuii/SKILL.md` — Skill definition
+- `~/.claude/skills/fukuii/REFERENCE.md` — Metrics, RPC, and configuration reference
 - `/chipprbots/blockchain/fukuii/ops/tools/fukuii-cli.sh` — Deprecated CLI tool (preserved for reference)
 - [OPS-001: Console UI](OPS-001-console-ui.md) — Previous decision on TUI approach
