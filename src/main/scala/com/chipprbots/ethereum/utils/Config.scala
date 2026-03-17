@@ -178,7 +178,9 @@ object Config {
       maxPivotBlockFailuresCount: Int,
       maxRetryDelay: FiniteDuration,
       maxBodyFetchRetries: Int,
-      maxSnapFastCycleTransitions: Int
+      maxSnapFastCycleTransitions: Int,
+      useBootstrapCheckpoints: Boolean,
+      bootstrapCheckpoints: Seq[(BigInt, String)] // (blockNumber, blockHash)
   )
 
   object SyncConfig {
@@ -249,7 +251,29 @@ object Config {
         maxSnapFastCycleTransitions =
           if (syncConfig.hasPath("max-snap-fast-cycle-transitions"))
             syncConfig.getInt("max-snap-fast-cycle-transitions")
-          else 3
+          else 3,
+        useBootstrapCheckpoints =
+          if (syncConfig.hasPath("use-bootstrap-checkpoints"))
+            syncConfig.getBoolean("use-bootstrap-checkpoints")
+          else false,
+        bootstrapCheckpoints =
+          if (syncConfig.hasPath("bootstrap-checkpoints")) {
+            import scala.jdk.CollectionConverters._
+            syncConfig.getStringList("bootstrap-checkpoints").asScala.toSeq.flatMap { entry =>
+              // Format: "blockNumber:0xblockHash"
+              entry.split(":") match {
+                case Array(num, hash) =>
+                  try {
+                    val blockNum = BigInt(num.trim)
+                    val blockHash = hash.trim
+                    Some((blockNum, blockHash))
+                  } catch {
+                    case _: NumberFormatException => None
+                  }
+                case _ => None
+              }
+            }
+          } else Seq.empty
       )
     }
   }

@@ -753,7 +753,7 @@ class SNAPSyncController(
     * and storage cannot complete before accounts.
     */
   private def checkAllDownloadsComplete(): Unit =
-    if (accountsComplete && bytecodePhaseComplete && storagePhaseComplete) {
+    if (accountsComplete && bytecodePhaseComplete && storagePhaseComplete && currentPhase != StateHealing) {
       log.info("All state downloads complete (accounts + bytecodes + storage). Starting healing...")
       currentPhase = StateHealing
       startStateHealing()
@@ -1960,6 +1960,14 @@ class SNAPSyncController(
   }
 
   private def startStateHealing(): Unit = {
+    // Guard: prevent duplicate healing coordinator creation (Bug 27).
+    // Can happen when ByteCodeSyncComplete and StorageRangeSyncComplete arrive in quick
+    // succession — both call checkAllDownloadsComplete() which calls startStateHealing().
+    if (trieNodeHealingCoordinator.isDefined) {
+      log.warning("startStateHealing called but healing coordinator already exists — ignoring duplicate")
+      return
+    }
+
     trieWalkInProgress = false // Reset for fresh healing phase
     log.info(s"Starting state healing with batch size ${snapSyncConfig.healingBatchSize}")
 

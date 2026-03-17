@@ -429,6 +429,28 @@ class SyncController(
 
     appStateStorage.putSyncStartingBlock(appStateStorage.getBestBlockNumber()).commit()
 
+    // Load bootstrap checkpoints if enabled and DB is fresh (best block = 0).
+    // The highest checkpoint becomes the bootstrap pivot — SNAPSyncController uses it
+    // for peer filtering and pivot selection, bypassing the peer discovery delay.
+    if (syncConfig.useBootstrapCheckpoints && appStateStorage.getBestBlockNumber() == 0) {
+      val checkpoints = syncConfig.bootstrapCheckpoints
+      if (checkpoints.nonEmpty) {
+        val (highestBlock, highestHash) = checkpoints.maxBy(_._1)
+        val existingPivot = appStateStorage.getBootstrapPivotBlock()
+        if (existingPivot == 0 || highestBlock > existingPivot) {
+          import org.apache.pekko.util.ByteString
+          val hashBytes = ByteString(com.chipprbots.ethereum.utils.Hex.decode(highestHash.stripPrefix("0x")))
+          appStateStorage.putBootstrapPivotBlock(highestBlock, hashBytes).commit()
+          log.info(
+            s"Loaded bootstrap checkpoint: block $highestBlock (${highestHash.take(10)}...) " +
+              s"from ${checkpoints.size} configured checkpoints"
+          )
+        } else {
+          log.info(s"Bootstrap checkpoint already loaded (block $existingPivot), skipping")
+        }
+      }
+    }
+
     // If fast sync is desired but the circuit-breaker is open, start regular sync for now and
     // schedule an in-process restart of fast sync once the cool-off expires.
     if (doFastSync && appStateStorage.isFastSyncCoolingOff(nowMillis)) {

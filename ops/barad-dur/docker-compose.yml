@@ -149,8 +149,8 @@ services:
     ports:
       - "${FUKUII_SECONDARY_RPC_PORT:-8547}:8545"
       - "${FUKUII_SECONDARY_WS_PORT:-8548}:8546"
-      - "${FUKUII_SECONDARY_P2P_PORT:-30304}:9076/tcp"
-      - "${FUKUII_SECONDARY_DISCOVERY_PORT:-30304}:30303/udp"
+      - "${FUKUII_SECONDARY_P2P_PORT:-30304}:30304/tcp"
+      - "${FUKUII_SECONDARY_DISCOVERY_PORT:-30304}:30304/udp"
       - "${FUKUII_SECONDARY_METRICS_PORT:-9096}:9095"
     volumes:
       - ${FUKUII_SECONDARY_DATA_DIR:-./data/fukuii-secondary}:/app/data
