@@ -122,8 +122,8 @@ services:
       - ./fukuii-conf-1:/app/conf:ro
     # Assembly JAR uses java entrypoint directly (not dist launcher)
     command:
-      - "-Xmx5g"
-      - "-Xms1g"
+      - "-Xmx8g"
+      - "-Xms2g"
       - "-Xss10M"
       - "-XX:+UseG1GC"
       - "-XX:MaxGCPauseMillis=200"
