@@ -2463,6 +2463,10 @@ class SNAPSyncController(
     )
   }
 
+  // Track consecutive account stall pivot refreshes to detect truly unrecoverable situations.
+  private var consecutiveAccountStallRefreshes: Int = 0
+  private val maxAccountStallRefreshes: Int = 10 // 10 refreshes × 10min threshold = ~100 min before giving up
+
   private def maybeRestartIfAccountStagnant(progress: actors.AccountRangeStats): Unit = {
     if (currentPhase != AccountRangeSync) return
 
@@ -2481,6 +2485,7 @@ class SNAPSyncController(
       lastAccountTasksCompleted = progress.tasksCompleted
       lastAccountsDownloaded = progress.accountsDownloaded
       lastAccountProgressMs = System.currentTimeMillis()
+      consecutiveAccountStallRefreshes = 0 // Reset on real progress
       return
     }
 
@@ -2488,19 +2493,40 @@ class SNAPSyncController(
     val stalledForMs = now - lastAccountProgressMs
     if (stalledForMs < AccountStagnationThreshold.toMillis) return
 
-    // Avoid noisy rapid restarts.
+    // Avoid noisy rapid refreshes.
     if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) return
     lastPivotRestartMs = now
+
+    consecutiveAccountStallRefreshes += 1
 
     val context =
       s"account range sync stalled: no download progress for ${stalledForMs / 1000}s " +
         s"(threshold=${AccountStagnationThreshold.toSeconds}s), accountsDownloaded=${progress.accountsDownloaded}, " +
         s"tasksPending=${progress.tasksPending}, tasksActive=${progress.tasksActive}"
 
-    if (recordCriticalFailure(context)) {
-      fallbackToFastSync()
+    if (consecutiveAccountStallRefreshes > maxAccountStallRefreshes) {
+      // Truly unrecoverable after many pivot refreshes — fall back
+      log.error(
+        s"Account sync stalled after $consecutiveAccountStallRefreshes consecutive pivot refreshes. " +
+          s"Falling back to fast sync."
+      )
+      if (recordCriticalFailure(context)) {
+        fallbackToFastSync()
+      } else {
+        restartSnapSync(context)
+      }
     } else {
-      restartSnapSync(context)
+      // Bug 29 fix: do an in-place pivot refresh instead of restartSnapSync().
+      // restartSnapSync() destroys all in-memory account trie data (50M+ accounts lost).
+      // In-place refresh updates the state root while preserving downloaded data.
+      // Trie nodes are content-addressed, so ~99.9% remain valid across pivots.
+      log.warning(
+        s"Account stall detected ($context). " +
+          s"Refreshing pivot in-place to recover (attempt $consecutiveAccountStallRefreshes/$maxAccountStallRefreshes). " +
+          s"Account data preserved."
+      )
+      lastAccountProgressMs = System.currentTimeMillis() // Reset stall timer after refresh
+      refreshPivotInPlace(s"account stall: $context")
     }
   }
 
@@ -2797,7 +2823,7 @@ case class SNAPSyncConfig(
     // Account stagnation timeout: if no account range tasks complete within this window,
     // record a critical failure (may trigger fallback). Reduced from 15 minutes to catch
     // non-snap peers faster.
-    accountStagnationTimeout: FiniteDuration = 3.minutes,
+    accountStagnationTimeout: FiniteDuration = 10.minutes,
     maxInFlightPerPeer: Int = 5,
     accountTrieFlushThreshold: Int = 50000,
     accountInitialResponseBytes: Int = 524288,
