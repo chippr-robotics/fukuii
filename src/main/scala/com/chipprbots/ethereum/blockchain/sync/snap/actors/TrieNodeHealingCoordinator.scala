@@ -38,9 +38,20 @@ class TrieNodeHealingCoordinator(
   import Messages._
 
   // Task management — each task has a pathset (for GetTrieNodes) and a hash (for verification)
-  private case class HealingEntry(pathset: Seq[ByteString], hash: ByteString)
+  private case class HealingEntry(pathset: Seq[ByteString], hash: ByteString, retries: Int = 0)
   private var pendingTasks: Seq[HealingEntry] = Seq.empty
   private var completedTaskCount: Int = 0
+  private var abandonedTaskCount: Int = 0
+
+  // Per-task retry limit: after this many timeouts/failures, skip the task.
+  // At ~6s per timeout cycle, 20 retries = ~2 minutes of trying per node.
+  private val maxRetriesPerTask: Int = 20
+
+  // Global stagnation detection: if no nodes healed for this duration, declare
+  // healing complete with a warning. Prevents infinite loops when all peers lack
+  // GetTrieNodes support (ETH68 networks). Regular sync fetches missing nodes on-demand.
+  private var lastHealedAtMs: Long = System.currentTimeMillis()
+  private val healingStagnationTimeoutMs: Long = 5 * 60 * 1000 // 5 minutes
 
   // Active request tracking: maps requestId -> (tasks, peer, requestedBytes, sentAtMs)
   private case class ActiveRequest(
@@ -254,7 +265,8 @@ class TrieNodeHealingCoordinator(
     case HealingCheckCompletion =>
       if (isComplete && !flushing) {
         flushRawNodesSync()
-        log.info(s"Healing round complete: $totalNodesHealed total nodes healed. Notifying controller.")
+        val abandonedStr = if (abandonedTaskCount > 0) s" ($abandonedTaskCount abandoned — regular sync will recover)" else ""
+        log.info(s"Healing round complete: $totalNodesHealed total nodes healed$abandonedStr. Notifying controller.")
         snapSyncController ! SNAPSyncController.StateHealingComplete
       }
 
@@ -437,8 +449,9 @@ class TrieNodeHealingCoordinator(
     // Adaptive byte budget + stateless tracking
     if (healedCount > 0) {
       adjustResponseBytesOnSuccess(peer, requestedBytes, BigInt(receivedBytes))
-      // Successful response — clear stateless marking if set
+      // Successful response — clear stateless marking and reset stagnation timer
       statelessPeers -= peer.id.value
+      lastHealedAtMs = System.currentTimeMillis()
     } else {
       adjustResponseBytesOnFailure(peer, "empty healing response")
       recordPeerCooldown(peer, "empty healing response")
@@ -483,13 +496,48 @@ class TrieNodeHealingCoordinator(
   private def handleTimeout(requestId: BigInt, tasks: Seq[HealingEntry], peer: Peer): Unit = {
     log.warning(s"Healing request timed out: reqId=$requestId, tasks=${tasks.size}, peer=${peer.id.value}")
 
-    pendingTasks = pendingTasks ++ tasks
     activeRequests.remove(requestId)
-
     recordPeerCooldown(peer, "request timeout")
     adjustResponseBytesOnFailure(peer, "request timeout")
 
-    log.info(s"Re-queued ${tasks.size} timed-out healing tasks (pending: ${pendingTasks.size})")
+    // Increment retry count and skip exhausted tasks
+    var requeued = 0
+    var abandoned = 0
+    tasks.foreach { task =>
+      val updated = task.copy(retries = task.retries + 1)
+      if (updated.retries >= maxRetriesPerTask) {
+        abandoned += 1
+        abandonedTaskCount += 1
+        log.warning(
+          s"Abandoning healing task after ${updated.retries} retries: " +
+            s"hash=${Hex.toHexString(task.hash.take(4).toArray)} " +
+            s"(regular sync will fetch on-demand)"
+        )
+      } else {
+        pendingTasks = pendingTasks :+ updated
+        requeued += 1
+      }
+    }
+
+    if (requeued > 0) {
+      log.info(s"Re-queued $requeued timed-out healing tasks (pending: ${pendingTasks.size})" +
+        (if (abandoned > 0) s", abandoned $abandoned" else ""))
+    }
+
+    // Check global stagnation: no nodes healed for healingStagnationTimeoutMs
+    val stagnantMs = System.currentTimeMillis() - lastHealedAtMs
+    if (stagnantMs > healingStagnationTimeoutMs && pendingTasks.nonEmpty) {
+      val pendingCount = pendingTasks.size
+      log.warning(
+        s"Healing stagnation detected: no nodes healed in ${stagnantMs / 1000}s. " +
+          s"Abandoning $pendingCount remaining tasks. " +
+          s"Regular sync will fetch missing nodes on-demand via GetTrieNodes."
+      )
+      abandonedTaskCount += pendingCount
+      pendingTasks = Seq.empty
+      pendingHashSet.clear()
+    }
+
     tryRedispatchPendingTasks()
     self ! HealingCheckCompletion
   }

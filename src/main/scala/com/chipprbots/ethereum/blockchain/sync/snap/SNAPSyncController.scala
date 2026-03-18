@@ -137,6 +137,8 @@ class SNAPSyncController(
   private var storageStagnationCheckTask: Option[Cancellable] = None
   private var healingRequestTask: Option[Cancellable] = None
   private var trieWalkInProgress: Boolean = false
+  private var consecutiveUnproductiveHealingRounds: Int = 0
+  private val maxUnproductiveHealingRounds: Int = 3 // After 3 rounds of finding same missing nodes with 0 healed, skip to validation
   private var bootstrapCheckTask: Option[Cancellable] = None
   private var pivotBootstrapRetryTask: Option[Cancellable] = None
   private var rateTrackerTuneTask: Option[Cancellable] = None
@@ -372,6 +374,7 @@ class SNAPSyncController(
 
     case ProgressNodesHealed(count) =>
       progressMonitor.incrementNodesHealed(count)
+      consecutiveUnproductiveHealingRounds = 0 // Reset — healing made progress
 
     case ProgressAccountEstimate(estimatedTotal) =>
       progressMonitor.updateEstimates(accounts = estimatedTotal)
@@ -581,18 +584,35 @@ class SNAPSyncController(
       trieWalkInProgress = false
       if (missingNodes.isEmpty) {
         log.info("Trie walk found no missing nodes — healing complete!")
+        consecutiveUnproductiveHealingRounds = 0
         progressMonitor.startPhase(StateValidation)
         currentPhase = StateValidation
         validateState()
       } else {
-        log.info(s"Trie walk found ${missingNodes.size} missing nodes — queuing for healing")
-        trieNodeHealingCoordinator.foreach { coordinator =>
-          coordinator ! actors.Messages.QueueMissingNodes(missingNodes)
+        consecutiveUnproductiveHealingRounds += 1
+        if (consecutiveUnproductiveHealingRounds >= maxUnproductiveHealingRounds) {
+          log.warning(
+            s"Healing stagnation: ${missingNodes.size} missing nodes persist after " +
+              s"$consecutiveUnproductiveHealingRounds consecutive rounds with no progress. " +
+              s"Proceeding to validation — regular sync will recover missing nodes on-demand."
+          )
+          consecutiveUnproductiveHealingRounds = 0
+          progressMonitor.startPhase(StateValidation)
+          currentPhase = StateValidation
+          validateState()
+        } else {
+          log.info(
+            s"Trie walk found ${missingNodes.size} missing nodes — queuing for healing " +
+              s"(round $consecutiveUnproductiveHealingRounds/$maxUnproductiveHealingRounds)"
+          )
+          trieNodeHealingCoordinator.foreach { coordinator =>
+            coordinator ! actors.Messages.QueueMissingNodes(missingNodes)
+          }
+          // Schedule next overlapping trie walk — don't wait for healing to complete
+          scheduler.scheduleOnce(2.minutes) {
+            self ! ScheduledTrieWalk
+          }(ec)
         }
-        // Schedule next overlapping trie walk — don't wait for healing to complete
-        scheduler.scheduleOnce(2.minutes) {
-          self ! ScheduledTrieWalk
-        }(ec)
       }
 
     case ScheduledTrieWalk if currentPhase == StateHealing =>
@@ -2101,17 +2121,21 @@ class SNAPSyncController(
               validationRetryCount += 1
 
               if (validationRetryCount > MaxValidationRetries) {
-                log.error(s"Root node missing error persists (failed $validationRetryCount times total)")
-                log.error("Maximum validation retries exceeded - falling back to fast sync")
-                if (recordCriticalFailure("Root node persistence failure after retries")) {
-                  fallbackToFastSync()
-                }
+                log.warning(
+                  s"Root node missing after $validationRetryCount validation attempts. " +
+                    s"Proceeding to regular sync — missing nodes will be fetched on-demand during block execution."
+                )
+                // Skip validation and proceed: mark SNAP done, start regular sync.
+                // With deferred merkleization, the root node was never built from flat data.
+                // Regular sync's StateNodeFetcher will retrieve it via GetTrieNodes when needed.
+                appStateStorage.snapSyncDone().commit()
+                context.parent ! Done
               } else {
                 log.error(s"Root node is missing (retry attempt $validationRetryCount of $MaxValidationRetries)")
                 log.info("Retrying validation after brief delay...")
-                // Retry validation after a short delay
+                // Retry validation after a short delay — direct retry, don't loop through healing
                 scheduler.scheduleOnce(ValidationRetryDelay) {
-                  self ! StateHealingComplete
+                  validateState()
                 }(ec)
               }
             } else {

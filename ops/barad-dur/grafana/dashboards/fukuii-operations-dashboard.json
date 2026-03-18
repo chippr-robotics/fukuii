@@ -1,0 +1,1441 @@
+{
+  "__inputs": [],
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "9.0.0"
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    },
+    {
+      "type": "panel",
+      "id": "stat",
+      "name": "Stat",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "timeseries",
+      "name": "Time series",
+      "version": ""
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Steady-state operations and health dashboard for the Fukuii Ethereum Classic client. Primary home dashboard for day-to-day monitoring after sync is complete.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Olympia Sync Command Center",
+      "tooltip": "SNAP/Fast sync monitoring",
+      "type": "link",
+      "url": "/d/fukuii-olympia-sync/fukuii-olympia-sync-command-center"
+    },
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": true,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Dark Lands Network",
+      "tooltip": "Peer network monitoring",
+      "type": "link",
+      "url": "/d/fukuii-mordor-network/fukuii-mordor-network"
+    }
+  ],
+  "liveNow": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "panels": [],
+      "title": "Node Health",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Sync status as percentage of current block vs best known network block. Green (>99%) = Synced, Yellow (95-99%) = Catching Up, Red (<95%) = Behind.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "options": {
+                "from": 99,
+                "to": 200,
+                "result": {
+                  "color": "#00D395",
+                  "index": 0,
+                  "text": "Synced"
+                }
+              },
+              "type": "range"
+            },
+            {
+              "options": {
+                "from": 95,
+                "to": 99,
+                "result": {
+                  "color": "#FFB357",
+                  "index": 1,
+                  "text": "Catching Up"
+                }
+              },
+              "type": "range"
+            },
+            {
+              "options": {
+                "from": 0,
+                "to": 95,
+                "result": {
+                  "color": "#F2495C",
+                  "index": 2,
+                  "text": "Behind"
+                }
+              },
+              "type": "range"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#F2495C", "value": null },
+              { "color": "#FFB357", "value": 95 },
+              { "color": "#00D395", "value": 99 }
+            ]
+          },
+          "unit": "percent",
+          "decimals": 1,
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "id": 2,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "pluginVersion": "9.5.0",
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "clamp_max(app_sync_block_number_gauge{instance=~\"$node\"} / clamp_min(app_regularsync_block_bestKnown_number_gauge{instance=~\"$node\"}, 1) * 100, 100)",
+          "legendFormat": "Sync %",
+          "refId": "A"
+        }
+      ],
+      "title": "Sync Status",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Current synced block number",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "#00D395",
+            "mode": "fixed"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#00D395", "value": null }
+            ]
+          },
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "pluginVersion": "9.5.0",
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "app_sync_block_number_gauge{instance=~\"$node\"}",
+          "legendFormat": "Block",
+          "refId": "A"
+        }
+      ],
+      "title": "Current Block",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Best known block number on the network",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "#6C9EFF",
+            "mode": "fixed"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#6C9EFF", "value": null }
+            ]
+          },
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "pluginVersion": "9.5.0",
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "app_regularsync_block_bestKnown_number_gauge{instance=~\"$node\"}",
+          "legendFormat": "Network Head",
+          "refId": "A"
+        }
+      ],
+      "title": "Network Head",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Number of blocks behind the network head. Green (0-10), Yellow (10-100), Red (>100).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#00D395", "value": null },
+              { "color": "#FFB357", "value": 10 },
+              { "color": "#F2495C", "value": 100 }
+            ]
+          },
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "id": 5,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "pluginVersion": "9.5.0",
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "app_regularsync_block_bestKnown_number_gauge{instance=~\"$node\"} - app_sync_block_number_gauge{instance=~\"$node\"}",
+          "legendFormat": "Behind",
+          "refId": "A"
+        }
+      ],
+      "title": "Blocks Behind",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Total connected peers (incoming + outgoing handshaked). Green (>10), Yellow (5-10), Red (<5).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#F2495C", "value": null },
+              { "color": "#FFB357", "value": 5 },
+              { "color": "#00D395", "value": 10 }
+            ]
+          },
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "id": 6,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "pluginVersion": "9.5.0",
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "app_network_peers_outgoing_handshaked_gauge{instance=~\"$node\"} + app_network_peers_incoming_handshaked_gauge{instance=~\"$node\"}",
+          "legendFormat": "Peers",
+          "refId": "A"
+        }
+      ],
+      "title": "Peer Count",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Number of pending transactions in the mempool",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "#6C9EFF",
+            "mode": "fixed"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#6C9EFF", "value": null }
+            ]
+          },
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "id": 7,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "pluginVersion": "9.5.0",
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "app_transactions_pool_size_gauge{instance=~\"$node\"}",
+          "legendFormat": "TX Pool",
+          "refId": "A"
+        }
+      ],
+      "title": "TX Pool",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "id": 8,
+      "panels": [],
+      "title": "Block Production",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Block height climbing over time — the primary indicator of a healthy synced node",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "#00D395",
+            "mode": "fixed"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "Block Number",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "scheme",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#00D395", "value": null }
+            ]
+          },
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "id": 9,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull"],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "9.5.0",
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "app_sync_block_number_gauge{instance=~\"$node\"}",
+          "legendFormat": "Block Height — {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Block Height Over Time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Rate of blocks imported per second during regular sync",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "#00D395",
+            "mode": "fixed"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "blocks/sec",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#00D395", "value": null }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 6 },
+      "id": 10,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "lastNotNull"],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "9.5.0",
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "rate(app_regularsync_blocks_imported_total{instance=~\"$node\"}[1m])",
+          "legendFormat": "Import Rate — {{instance}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Block Import Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Block gas usage, transaction count, and uncle count overlaid. Gas on left Y-axis, transactions and uncles on right Y-axis.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Gas Used" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#6C9EFF", "mode": "fixed" } },
+              { "id": "custom.axisPlacement", "value": "left" },
+              { "id": "custom.axisLabel", "value": "Gas Used" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Transactions" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#FFB357", "mode": "fixed" } },
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "custom.axisLabel", "value": "Count" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Uncles" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#F2495C", "mode": "fixed" } },
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } },
+              { "id": "custom.lineWidth", "value": 1 }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 6 },
+      "id": 11,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull"],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "9.5.0",
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "app_sync_block_gasUsed_gauge{instance=~\"$node\"}",
+          "legendFormat": "Gas Used",
+          "refId": "A"
+        },
+        {
+          "datasource": "Prometheus",
+          "expr": "app_sync_block_transactions_gauge{instance=~\"$node\"}",
+          "legendFormat": "Transactions",
+          "refId": "B"
+        },
+        {
+          "datasource": "Prometheus",
+          "expr": "app_sync_block_uncles_gauge{instance=~\"$node\"}",
+          "legendFormat": "Uncles",
+          "refId": "C"
+        }
+      ],
+      "title": "Block Details",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "id": 12,
+      "panels": [],
+      "title": "Network Health",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Peer connection breakdown: outgoing (active), incoming (passive), and pending (handshaking)",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "Peers",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 30,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": { "group": "A", "mode": "normal" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          },
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Outgoing" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#00D395", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Incoming" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#6C9EFF", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Pending" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#FFB357", "mode": "fixed" } },
+              { "id": "custom.stacking", "value": { "group": "A", "mode": "none" } },
+              { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } },
+              { "id": "custom.fillOpacity", "value": 0 }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 15 },
+      "id": 13,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull"],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "9.5.0",
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "app_network_peers_outgoing_handshaked_gauge{instance=~\"$node\"}",
+          "legendFormat": "Outgoing",
+          "refId": "A"
+        },
+        {
+          "datasource": "Prometheus",
+          "expr": "app_network_peers_incoming_handshaked_gauge{instance=~\"$node\"}",
+          "legendFormat": "Incoming",
+          "refId": "B"
+        },
+        {
+          "datasource": "Prometheus",
+          "expr": "app_network_peers_pending_gauge{instance=~\"$node\"}",
+          "legendFormat": "Pending",
+          "refId": "C"
+        }
+      ],
+      "title": "Peer Connections",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Rate of P2P messages sent and received per second",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "messages/sec",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Sent/s" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#FFB357", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Received/s" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#6C9EFF", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 15 },
+      "id": 14,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "lastNotNull"],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "9.5.0",
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "rate(app_network_messages_sent_counter_total{instance=~\"$node\"}[1m])",
+          "legendFormat": "Sent/s",
+          "refId": "A"
+        },
+        {
+          "datasource": "Prometheus",
+          "expr": "rate(app_network_messages_received_counter_total{instance=~\"$node\"}[1m])",
+          "legendFormat": "Received/s",
+          "refId": "B"
+        }
+      ],
+      "title": "Message Throughput",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Rate of peer blacklisting by category (P2P protocol violations vs sync-related issues)",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "blacklists/sec",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "P2P" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#F2495C", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Sync" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#FFB357", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 15 },
+      "id": 15,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "lastNotNull"],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "9.5.0",
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "rate(app_network_peers_blacklisted_p2pGroup_counter_total{instance=~\"$node\"}[5m])",
+          "legendFormat": "P2P",
+          "refId": "A"
+        },
+        {
+          "datasource": "Prometheus",
+          "expr": "rate(app_network_peers_blacklisted_regularSyncGroup_counter_total{instance=~\"$node\"}[5m])",
+          "legendFormat": "Sync",
+          "refId": "B"
+        }
+      ],
+      "title": "Blacklist Rate",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": true,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+      "id": 16,
+      "panels": [
+        {
+          "datasource": "Prometheus",
+          "description": "Block gas limit over time. The gas limit is adjusted by miners/validators and determines the maximum gas allowed per block.",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "fixedColor": "#6C9EFF",
+                "mode": "fixed"
+              },
+              "custom": {
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "Gas Limit",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 15,
+                "gradientMode": "scheme",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": true,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": { "mode": "off" }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "#6C9EFF", "value": null }
+                ]
+              },
+              "unit": "none"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 7, "w": 8, "x": 0, "y": 23 },
+          "id": 17,
+          "options": {
+            "legend": {
+              "calcs": ["lastNotNull"],
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "pluginVersion": "9.5.0",
+          "targets": [
+            {
+              "datasource": "Prometheus",
+              "expr": "app_sync_block_gasLimit_gauge{instance=~\"$node\"}",
+              "legendFormat": "Gas Limit — {{instance}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Gas Limit",
+          "type": "timeseries"
+        },
+        {
+          "datasource": "Prometheus",
+          "description": "Block difficulty over time. On ETC with Ethash proof-of-work, difficulty adjusts to target ~13s block times.",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "fixedColor": "#B877D9",
+                "mode": "fixed"
+              },
+              "custom": {
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "Difficulty",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": true,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": { "mode": "off" }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "#B877D9", "value": null }
+                ]
+              },
+              "unit": "none"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 7, "w": 8, "x": 8, "y": 23 },
+          "id": 18,
+          "options": {
+            "legend": {
+              "calcs": ["lastNotNull"],
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "pluginVersion": "9.5.0",
+          "targets": [
+            {
+              "datasource": "Prometheus",
+              "expr": "app_sync_block_difficulty_gauge{instance=~\"$node\"}",
+              "legendFormat": "Difficulty — {{instance}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Block Difficulty",
+          "type": "timeseries"
+        },
+        {
+          "datasource": "Prometheus",
+          "description": "Time between current block and its parent. Expected ~13s on ETC mainnet, ~7s on Mordor testnet. Red threshold at 30s indicates potential stall.",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "fixedColor": "#00D395",
+                "mode": "fixed"
+              },
+              "custom": {
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "Seconds",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": true,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": {
+                  "mode": "line"
+                }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "#00D395", "value": null },
+                  { "color": "#F2495C", "value": 30 }
+                ]
+              },
+              "unit": "s"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 7, "w": 8, "x": 16, "y": 23 },
+          "id": 19,
+          "options": {
+            "legend": {
+              "calcs": ["mean", "lastNotNull", "max"],
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "pluginVersion": "9.5.0",
+          "targets": [
+            {
+              "datasource": "Prometheus",
+              "expr": "app_sync_block_timeBetweenParent_seconds_gauge{instance=~\"$node\"}",
+              "legendFormat": "Block Interval — {{instance}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Time Between Blocks",
+          "type": "timeseries"
+        }
+      ],
+      "title": "Block Metrics",
+      "type": "row"
+    },
+    {
+      "collapsed": true,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+      "id": 20,
+      "panels": [
+        {
+          "datasource": "Prometheus",
+          "description": "JVM resident set size (physical memory usage). Red dashed line shows 8GB heap limit reference.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "Memory",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "gradientMode": "scheme",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": true,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": {
+                  "mode": "dashed"
+                }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "#B877D9", "value": null },
+                  { "color": "#F2495C", "value": 8589934592 }
+                ]
+              },
+              "unit": "decbytes"
+            },
+            "overrides": [
+              {
+                "matcher": { "id": "byName", "options": "RSS" },
+                "properties": [
+                  { "id": "color", "value": { "fixedColor": "#B877D9", "mode": "fixed" } }
+                ]
+              }
+            ]
+          },
+          "gridPos": { "h": 7, "w": 8, "x": 0, "y": 24 },
+          "id": 21,
+          "options": {
+            "legend": {
+              "calcs": ["mean", "lastNotNull", "max"],
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "pluginVersion": "9.5.0",
+          "targets": [
+            {
+              "datasource": "Prometheus",
+              "expr": "process_resident_memory_bytes{instance=~\"$node\"}",
+              "legendFormat": "RSS",
+              "refId": "A"
+            }
+          ],
+          "title": "JVM Memory",
+          "type": "timeseries"
+        },
+        {
+          "datasource": "Prometheus",
+          "description": "CPU usage as a percentage, derived from process CPU seconds rate",
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "fixedColor": "#00D395",
+                "mode": "fixed"
+              },
+              "custom": {
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "CPU %",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": true,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": { "mode": "off" }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "#00D395", "value": null }
+                ]
+              },
+              "unit": "percent"
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 7, "w": 8, "x": 8, "y": 24 },
+          "id": 22,
+          "options": {
+            "legend": {
+              "calcs": ["mean", "lastNotNull", "max"],
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "pluginVersion": "9.5.0",
+          "targets": [
+            {
+              "datasource": "Prometheus",
+              "expr": "rate(process_cpu_seconds_total{instance=~\"$node\"}[1m]) * 100",
+              "legendFormat": "CPU % — {{instance}}",
+              "refId": "A"
+            }
+          ],
+          "title": "CPU Usage",
+          "type": "timeseries"
+        },
+        {
+          "datasource": "Prometheus",
+          "description": "Open file descriptors vs system maximum. Running out of FDs will cause connection failures.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "File Descriptors",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "lineInterpolation": "smooth",
+                "lineWidth": 2,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": true,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": { "mode": "off" }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null }
+                ]
+              },
+              "unit": "none"
+            },
+            "overrides": [
+              {
+                "matcher": { "id": "byName", "options": "Open" },
+                "properties": [
+                  { "id": "color", "value": { "fixedColor": "#6C9EFF", "mode": "fixed" } }
+                ]
+              },
+              {
+                "matcher": { "id": "byName", "options": "Max" },
+                "properties": [
+                  { "id": "color", "value": { "fixedColor": "#F2495C", "mode": "fixed" } },
+                  { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } },
+                  { "id": "custom.lineWidth", "value": 1 }
+                ]
+              }
+            ]
+          },
+          "gridPos": { "h": 7, "w": 8, "x": 16, "y": 24 },
+          "id": 23,
+          "options": {
+            "legend": {
+              "calcs": ["lastNotNull"],
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "pluginVersion": "9.5.0",
+          "targets": [
+            {
+              "datasource": "Prometheus",
+              "expr": "process_open_fds{instance=~\"$node\"}",
+              "legendFormat": "Open",
+              "refId": "A"
+            },
+            {
+              "datasource": "Prometheus",
+              "expr": "process_max_fds{instance=~\"$node\"}",
+              "legendFormat": "Max",
+              "refId": "B"
+            }
+          ],
+          "title": "File Descriptors",
+          "type": "timeseries"
+        }
+      ],
+      "title": "System Resources",
+      "type": "row"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 36,
+  "style": "dark",
+  "tags": [
+    "fukuii",
+    "operations",
+    "health"
+  ],
+  "templating": {
+    "list": [
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": "Prometheus",
+        "definition": "label_values(app_sync_block_number_gauge, instance)",
+        "description": "Select Fukuii node instance(s) to monitor",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Node",
+        "multi": true,
+        "name": "node",
+        "options": [],
+        "query": {
+          "query": "label_values(app_sync_block_number_gauge, instance)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": ["5s", "10s", "30s", "1m", "5m"],
+    "time_options": ["5m", "15m", "1h", "6h", "12h", "24h", "2d", "7d"]
+  },
+  "timezone": "browser",
+  "title": "Fukuii Operations \u2014 Steady State",
+  "uid": "fukuii-operations",
+  "version": 1
+}
