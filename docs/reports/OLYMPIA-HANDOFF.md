@@ -22,7 +22,12 @@ The `olympia` branch implements the Olympia hard fork (ECIP-1111, ECIP-1112, ECI
 
 ### ECIP-1112 Treasury Address
 
-`0xd6165F3aF4281037bce810621F62B43077Fb0e37`
+> **Demo v0.2** — Pre-Olympia EVM (Shanghai). Pure Solidity, no OpenZeppelin. Deployed on Mordor + ETC mainnet. Not production.
+
+- Treasury: `0x035b2e3c189B772e52F4C3DA6c45c84A3bB871bf` (CREATE, nonce-based)
+- Executor: `0x64624f74F77639CbA268a6c8bEDC2778B707eF9a` (CREATE2, deterministic factory)
+- Governance contracts use OZ 5.1.0 (Shanghai EVM, no `mcopy`)
+- Production: OZ 5.6 post-Olympia, different addresses
 
 ---
 

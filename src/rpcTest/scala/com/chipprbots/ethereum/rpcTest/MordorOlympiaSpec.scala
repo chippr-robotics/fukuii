@@ -17,7 +17,7 @@ import com.chipprbots.ethereum.rpcTest.Tags.MainNet
   * Tests Olympia EIP activation, baseFee behavior, and pre/post-fork chain state.
   *
   * Mordor Olympia activation: block 15,800,850
-  * Treasury: 0xd6165F3aF4281037bce810621F62B43077Fb0e37
+  * Treasury: 0x035b2e3c189B772e52F4C3DA6c45c84A3bB871bf (demo v0.2)
   *
   * Run with: sbt "rpcTest:testOnly *MordorOlympiaSpec"
   */
