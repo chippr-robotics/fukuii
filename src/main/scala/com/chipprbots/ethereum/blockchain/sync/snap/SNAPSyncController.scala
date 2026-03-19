@@ -773,10 +773,27 @@ class SNAPSyncController(
     * and storage cannot complete before accounts.
     */
   private def checkAllDownloadsComplete(): Unit =
-    if (accountsComplete && bytecodePhaseComplete && storagePhaseComplete && currentPhase != StateHealing) {
-      log.info("All state downloads complete (accounts + bytecodes + storage). Starting healing...")
-      currentPhase = StateHealing
-      startStateHealing()
+    if (accountsComplete && bytecodePhaseComplete && storagePhaseComplete &&
+        currentPhase != StateHealing && currentPhase != ChainDownloadCompletion && currentPhase != Completed) {
+      if (snapSyncConfig.deferredMerkleization) {
+        // With deferred merkleization, trie nodes were never constructed during download —
+        // only flat storage was written. A trie walk would find the entire internal trie "missing",
+        // taking hours to scan and failing to heal (peers can't serve the full trie via GetTrieNodes).
+        //
+        // Skip healing/validation entirely. Regular sync's BlockImporter will fetch missing trie
+        // nodes on-demand via GetTrieNodes (SNAP protocol) when block execution encounters them.
+        // This is the "lazy healing" pattern used by geth's path-based storage.
+        log.info(
+          "All state downloads complete (accounts + bytecodes + storage). " +
+            "Deferred merkleization enabled — skipping healing/validation phase. " +
+            "Missing trie nodes will be fetched on-demand during block execution."
+        )
+        completeSnapSync()
+      } else {
+        log.info("All state downloads complete (accounts + bytecodes + storage). Starting healing...")
+        currentPhase = StateHealing
+        startStateHealing()
+      }
     }
 
   def bootstrapping: Receive = handlePeerListMessagesWithBootstrapReactivity.orElse {
