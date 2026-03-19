@@ -263,7 +263,7 @@ sbt test                                                  # Full suite (~2,195 t
 - [ECIP-1121 — Execution Client Specification Alignment](https://ecips.ethereumclassic.org/ECIPs/ecip-1121) (13 execution-layer EIPs)
 
 **Activation:** Mordor block 15,800,850 (~March 28, 2026) | ETC mainnet block 24,751,337 (~mid-June 2026)
-**Treasury:** `0xd6165F3aF4281037bce810621F62B43077Fb0e37`
+**Treasury (demo v0.2):** `0x035b2e3c189B772e52F4C3DA6c45c84A3bB871bf`
 
 ### Fee Market & Treasury (ECIP-1111, ECIP-1112)
 

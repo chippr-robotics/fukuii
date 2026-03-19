@@ -14,15 +14,14 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/test-helpers.sh"
+source "$SCRIPT_DIR/olympia-config.sh"
 require_tools curl jq
 
 echo "=== ECIP-1112 Treasury Address Verification (Olympia) ==="
 echo ""
 
-# The canonical ECIP-1112 Treasury Address
-# Mordor: 0xd6165F3aF4281037bce810621F62B43077Fb0e37
-# ETC mainnet: TBD (will be set when Olympia is scheduled)
-ECIP1112_TREASURY_ADDRESS="${TREASURY_ADDRESS:-0xd6165F3aF4281037bce810621F62B43077Fb0e37}"
+# The canonical ECIP-1112 Treasury Address (from olympia-config.sh)
+ECIP1112_TREASURY_ADDRESS="${TREASURY_ADDRESS:-$OLYMPIA_TREASURY_ADDRESS}"
 
 echo "ECIP-1112 Treasury Address: $ECIP1112_TREASURY_ADDRESS"
 echo ""
