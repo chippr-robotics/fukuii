@@ -264,6 +264,16 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   /** Persist the path to the contract storage file so storage sync can resume after restart. */
   def putSnapSyncStorageFilePath(path: String): DataSourceBatchUpdate =
     put(Keys.SnapSyncStorageFilePath, path)
+
+  /** Get the finalized account trie root hash produced by finalizeTrie().
+    * This may differ from the pivot block header's stateRoot after pivot refreshes.
+    */
+  def getSnapSyncFinalizedRoot(): Option[ByteString] =
+    get(Keys.SnapSyncFinalizedRoot).map(v => ByteString(Hex.decode(v)))
+
+  /** Store the finalized account trie root hash from finalizeTrie(). */
+  def putSnapSyncFinalizedRoot(root: ByteString): DataSourceBatchUpdate =
+    put(Keys.SnapSyncFinalizedRoot, Hex.toHexString(root.toArray))
 }
 
 object AppStateStorage {
@@ -290,6 +300,7 @@ object AppStateStorage {
     val SnapSyncAccountsComplete = "SnapSyncAccountsComplete"
     val SnapSyncCodeHashesPath = "SnapSyncCodeHashesPath"
     val SnapSyncStorageFilePath = "SnapSyncStorageFilePath"
+    val SnapSyncFinalizedRoot = "SnapSyncFinalizedRoot"
   }
 
 }

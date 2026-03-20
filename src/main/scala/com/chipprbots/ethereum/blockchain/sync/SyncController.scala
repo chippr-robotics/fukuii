@@ -485,10 +485,10 @@ class SyncController(
           bestBlockNum,
           snapStateRoot == pivotStateRoot
         )
-        // Check if the pivot block's state root exists in node storage.
         // After SNAP sync with deferred merkleization + pivot refreshes, the finalized trie root
         // may differ from the pivot block header's stateRoot. The trie nodes are stored under
         // the finalized root's hash, but the pivot header references the original (now orphaned) root.
+        // Fix: substitute the finalized root into the pivot block header.
         bestBlockHeader.foreach { header =>
           val mptStorage = stateStorage.getReadOnlyStorage
           val pivotRootExists = try { mptStorage.get(header.stateRoot.toArray); true } catch { case _: Exception => false }
@@ -498,19 +498,31 @@ class SyncController(
             if (pivotRootExists) "EXISTS" else "MISSING"
           )
           if (!pivotRootExists) {
-            // The pivot's state root node doesn't exist. This means finalizeTrie() produced a different root.
-            // We need to find the actual root. Try reading the snap sync pivot block from AppStateStorage
-            // and checking a few alternative roots.
-            val snapPivot = appStateStorage.getSnapSyncPivotBlock()
-            log.warning(
-              "Pivot block state root {} is MISSING from node storage! " +
-                "This is expected after SNAP sync with deferred merkleization + pivot refreshes. " +
-                "The finalized trie root differs from the pivot block header's stateRoot. " +
-                "snapPivot={}, bestBlock={}",
-              header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString,
-              snapPivot,
-              bestBlockNum
-            )
+            val finalizedRoot = appStateStorage.getSnapSyncFinalizedRoot()
+            finalizedRoot match {
+              case Some(fRoot) =>
+                val fRootExists = try { mptStorage.get(fRoot.toArray); true } catch { case _: Exception => false }
+                log.info(
+                  "Finalized trie root {} availability: {}",
+                  fRoot.take(8).toArray.map("%02x".format(_)).mkString,
+                  if (fRootExists) "EXISTS" else "MISSING"
+                )
+                if (fRootExists) {
+                  log.warning(
+                    "Substituting finalized trie root {} into pivot block header (replacing missing root {})",
+                    fRoot.take(8).toArray.map("%02x".format(_)).mkString,
+                    header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString
+                  )
+                  val updatedHeader = header.copy(stateRoot = fRoot)
+                  blockchainWriter.storeBlockHeader(updatedHeader).commit()
+                }
+              case None =>
+                log.error(
+                  "Pivot state root {} MISSING and no finalized root stored! " +
+                    "Database is in an unrecoverable state — clear data and re-sync.",
+                  header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString
+                )
+            }
           }
         }
         val needBytecode = !appStateStorage.isBytecodeRecoveryDone()

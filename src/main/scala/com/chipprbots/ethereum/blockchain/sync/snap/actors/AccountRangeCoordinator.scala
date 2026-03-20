@@ -311,8 +311,8 @@ class AccountRangeCoordinator(
   // bottleneck (50-200ms per flush × 5 concurrent responses = constant blocking).
   private var accountsSinceLastFlush: Long = 0
 
-  // Internal message for async trie finalization result
-  private case class TrieFlushComplete(result: Either[String, Unit])
+  // Internal message for async trie finalization result — carries the finalized root hash
+  private case class TrieFlushComplete(result: Either[String, ByteString])
 
   // Deferred-write storage wrapper: makes updateNodesInStorage() a no-op during bulk insertion,
   // keeping all trie nodes in memory. This avoids the per-put collapse (RLP encode + Keccak-256 hash)
@@ -516,8 +516,9 @@ class AccountRangeCoordinator(
     * background thread. No message should touch stateTrie or deferredStorage during this phase.
     */
   private def finalizing: Receive = {
-    case TrieFlushComplete(Right(_)) =>
-      log.info("State trie finalized successfully")
+    case TrieFlushComplete(Right(finalizedRoot)) =>
+      log.info("State trie finalized successfully with root {}", finalizedRoot.take(8).toArray.map("%02x".format(_)).mkString)
+      snapSyncController ! SNAPSyncController.AccountTrieFinalized(finalizedRoot)
       snapSyncController ! SNAPSyncController.ProgressAccountsTrieFinalized
       context.stop(self)
 
@@ -953,7 +954,7 @@ class AccountRangeCoordinator(
     * @return
     *   Either error message or success
     */
-  private def finalizeTrie(): Either[String, Unit] =
+  private def finalizeTrie(): Either[String, ByteString] =
     try {
       log.info("Finalizing state trie...")
 
@@ -979,7 +980,7 @@ class AccountRangeCoordinator(
           log.info("Root mismatch expected after pivot refresh - healing phase will reconcile")
         }
         log.info("State trie finalization complete")
-        Right(())
+        Right(currentRootHash)
       }
     } catch {
       case e: Exception =>

@@ -361,6 +361,13 @@ class SNAPSyncController(
       // Treat any progress update as a liveness signal.
       lastAccountProgressMs = System.currentTimeMillis()
 
+    case AccountTrieFinalized(finalizedRoot) =>
+      // Persist the finalized trie root hash so we can recover after restart.
+      // With pivot refreshes, the finalized root differs from the pivot block header's stateRoot.
+      // On startup, SyncController substitutes this root into the pivot block header.
+      log.info("Persisting finalized account trie root: {}", finalizedRoot.take(8).toArray.map("%02x".format(_)).mkString)
+      appStateStorage.putSnapSyncFinalizedRoot(finalizedRoot).commit()
+
     case ProgressAccountsTrieFinalized =>
       progressMonitor.setFinalizingTrie(false)
       log.info("Account range trie finalization complete")
@@ -2794,6 +2801,7 @@ object SNAPSyncController {
   final case class ProgressAccountsSynced(count: Long)
   case object ProgressAccountsFinalizingTrie
   case object ProgressAccountsTrieFinalized
+  final case class AccountTrieFinalized(finalizedRoot: ByteString)
   final case class ProgressBytecodesDownloaded(count: Long)
   final case class ProgressStorageSlotsSynced(count: Long)
   final case class ProgressNodesHealed(count: Long)
