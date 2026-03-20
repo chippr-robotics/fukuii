@@ -433,17 +433,28 @@ class BlockImporter(
                       log.warning("Failed to get parent state root during node recovery: {}", ex.getMessage); None
                   }
                 val accountHash = kec256(e.accountAddress)
-                val pathset = parentStateRoot.flatMap { root =>
-                  walkAccountPath(root, accountHash, e.hash)
+                // Try local trie walk first; if that fails (deferred merkleization — no local trie),
+                // construct multi-depth pathsets from the account hash directly.
+                val paths: Option[Seq[Seq[ByteString]]] = parentStateRoot.flatMap { root =>
+                  walkAccountPath(root, accountHash, e.hash).map(p => Seq(p))
+                }.orElse {
+                  // Deferred merkleization fallback: request nodes at nibble prefix depths 1-16.
+                  // Each prefix is a 1-element pathset group (account trie, not storage).
+                  // The SNAP server walks its own trie and returns the node at each depth.
+                  val nibbles = accountHash.toArray.flatMap(b =>
+                    Array(((b >> 4) & 0xf).toByte, (b & 0xf).toByte))
+                  Some((1 to 16).map { depth =>
+                    Seq(ByteString(HexPrefix.encode(nibbles.take(depth), isLeaf = false)))
+                  })
                 }
                 log.info(
                   "Missing account trie node {} for account {} during import of block {}, pathFound={}",
                   ByteStringUtils.hash2string(e.hash),
                   ByteStringUtils.hash2string(e.accountAddress),
                   failedBlock.number,
-                  pathset.isDefined
+                  paths.isDefined
                 )
-                fetcher ! BlockFetcher.FetchStateNode(e.hash, self, parentStateRoot, pathset)
+                fetcher ! BlockFetcher.FetchStateNode(e.hash, self, parentStateRoot, paths)
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
               case e: MissingStorageNodeException =>
                 // Storage trie node missing — we know the account address, construct SNAP pathset directly
@@ -458,7 +469,7 @@ class BlockImporter(
                   }
                 val accountHash = kec256(e.accountAddress)
                 val emptyPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-                val pathset = Some(Seq(accountHash, emptyPath))
+                val paths = Some(Seq(Seq(accountHash, emptyPath)))
                 log.info(
                   "Missing storage node {} for account {} during import of block {}, stateRoot={}",
                   ByteStringUtils.hash2string(e.hash),
@@ -466,7 +477,7 @@ class BlockImporter(
                   failedBlock.number,
                   parentStateRoot.map(ByteStringUtils.hash2string)
                 )
-                fetcher ! BlockFetcher.FetchStateNode(e.hash, self, parentStateRoot, pathset)
+                fetcher ! BlockFetcher.FetchStateNode(e.hash, self, parentStateRoot, paths)
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
               case e: MissingNodeException =>
                 val failedBlock = notImportedBlocks.head
@@ -478,17 +489,17 @@ class BlockImporter(
                     case ex: Exception =>
                       log.warning("Failed to get parent state root during node recovery: {}", ex.getMessage); None
                   }
-                val pathset = parentStateRoot.flatMap { root =>
-                  findPathForMissingNode(root, e.hash)
+                val paths: Option[Seq[Seq[ByteString]]] = parentStateRoot.flatMap { root =>
+                  findPathForMissingNode(root, e.hash).map(p => Seq(p))
                 }
                 log.info(
                   "Missing state node {} during import of block {}, stateRoot={}, pathFound={}",
                   ByteStringUtils.hash2string(e.hash),
                   failedBlock.number,
                   parentStateRoot.map(ByteStringUtils.hash2string),
-                  pathset.isDefined
+                  paths.isDefined
                 )
-                fetcher ! BlockFetcher.FetchStateNode(e.hash, self, parentStateRoot, pathset)
+                fetcher ! BlockFetcher.FetchStateNode(e.hash, self, parentStateRoot, paths)
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
               case _ =>
                 val invalidBlockNr = notImportedBlocks.head.number

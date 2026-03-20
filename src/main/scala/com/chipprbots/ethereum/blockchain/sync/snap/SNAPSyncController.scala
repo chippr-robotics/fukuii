@@ -2549,19 +2549,34 @@ class SNAPSyncController(
 
   private def completeSnapSync(): Unit =
     pivotBlock.foreach { pivot =>
-      // If chain download is still running, boost its concurrency and wait
-      if (!chainDownloadComplete && chainDownloader.isDefined) {
-        log.info("SNAP state sync complete, boosting chain download concurrency and waiting for completion...")
-        chainDownloader.foreach(_ ! ChainDownloader.BoostConcurrency(
-          snapSyncConfig.chainDownloadBoostedConcurrentRequests
-        ))
-        currentPhase = ChainDownloadCompletion
-        progressMonitor.startPhase(ChainDownloadCompletion)
-        context.become(waitingForChainDownload)
-        return
-      }
+      if (snapSyncConfig.deferredMerkleization) {
+        // With deferred merkleization, don't wait for chain download to finish.
+        // Downloading 24M+ block headers/bodies/receipts from genesis takes days and
+        // blocks the node from syncing new blocks. Regular sync will handle chain data
+        // from the pivot forward. Historical chain data can be backfilled later.
+        log.info(
+          "Deferred merkleization enabled — skipping chain download wait. " +
+            "Finalizing SNAP sync immediately to start regular sync from pivot."
+        )
+        // Stop the chain downloader — regular sync handles blocks from pivot onward
+        chainDownloader.foreach(context.stop)
+        chainDownloader = None
+        finalizeSnapSync(pivot)
+      } else {
+        // If chain download is still running, boost its concurrency and wait
+        if (!chainDownloadComplete && chainDownloader.isDefined) {
+          log.info("SNAP state sync complete, boosting chain download concurrency and waiting for completion...")
+          chainDownloader.foreach(_ ! ChainDownloader.BoostConcurrency(
+            snapSyncConfig.chainDownloadBoostedConcurrentRequests
+          ))
+          currentPhase = ChainDownloadCompletion
+          progressMonitor.startPhase(ChainDownloadCompletion)
+          context.become(waitingForChainDownload)
+          return
+        }
 
-      finalizeSnapSync(pivot)
+        finalizeSnapSync(pivot)
+      }
     }
 
   /** Final SNAP sync completion — called when both state sync and chain download are done. */

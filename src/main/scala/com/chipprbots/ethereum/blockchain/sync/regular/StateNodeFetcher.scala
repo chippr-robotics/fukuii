@@ -11,6 +11,7 @@ import org.apache.pekko.util.ByteString
 import cats.effect.unsafe.IORuntime
 import cats.syntax.either._
 
+import scala.concurrent.duration._
 import scala.util.Failure
 import scala.util.Success
 
@@ -50,10 +51,10 @@ class StateNodeFetcher(
 
   override def onMessage(message: StateNodeFetcherCommand): Behavior[StateNodeFetcherCommand] =
     message match {
-      case StateNodeFetcher.FetchStateNode(hash, sender, stateRoot, pathset) =>
-        log.debug("Start fetching state node (snap pathset available: {})", pathset.isDefined)
-        requester = Some(StateNodeRequester(hash, sender, stateRoot, pathset))
-        requestStateNode(hash, stateRoot, pathset)
+      case StateNodeFetcher.FetchStateNode(hash, sender, stateRoot, paths, _) =>
+        log.debug("Start fetching state node (snap paths available: {})", paths.isDefined)
+        requester = Some(StateNodeRequester(hash, sender, stateRoot, paths))
+        requestStateNode(hash, stateRoot, paths)
         Behaviors.same
 
       // ETH63/64/65 NodeData response (no requestId)
@@ -69,17 +70,24 @@ class StateNodeFetcher(
 
       // SNAP TrieNodes response
       case AdaptedMessage(peer, TrieNodes(_, nodes)) if requester.isDefined =>
-        log.debug("Received SNAP TrieNodes response from peer {} with {} nodes", peer, nodes.size)
+        log.info("Received SNAP TrieNodes response from peer {} with {} nodes", peer, nodes.size)
         handleTrieNodesValues(peer, nodes)
 
       case StateNodeFetcher.RetryStateNodeRequest if requester.isDefined =>
-        log.debug("Something failed on a state node request, trying again")
+        // Backoff before retrying to prevent flooding peers with requests.
+        // Without this, each failure immediately spawns a new request while old PeerRequestHandler
+        // actors are still alive waiting for timeout — creating unbounded request multiplication.
         requester.foreach { req =>
-          context.self ! StateNodeFetcher.FetchStateNode(req.hash, req.replyTo, req.stateRoot, req.pathset)
+          context.scheduleOnce(5.seconds, context.self,
+            StateNodeFetcher.FetchStateNode(req.hash, req.replyTo, req.stateRoot, req.paths))
         }
         Behaviors.same
       case _ => Behaviors.unhandled
     }
+
+  private def retryAfterBackoff(req: StateNodeRequester): Unit =
+    context.scheduleOnce(5.seconds, context.self,
+      StateNodeFetcher.FetchStateNode(req.hash, req.replyTo, req.stateRoot, req.paths))
 
   private def handleNodeDataValues(peer: Peer, values: Seq[ByteString]): Behavior[StateNodeFetcherCommand] =
     requester
@@ -93,12 +101,7 @@ class StateNodeFetcher(
           case Left(err) =>
             log.debug("State node validation failed with {}", err.description)
             peersClient ! BlacklistPeer(peer.id, err)
-            context.self ! StateNodeFetcher.FetchStateNode(
-              stateNodeRequester.hash,
-              stateNodeRequester.replyTo,
-              stateNodeRequester.stateRoot,
-              stateNodeRequester.pathset
-            )
+            retryAfterBackoff(stateNodeRequester)
             Behaviors.same[StateNodeFetcherCommand]
           case Right(node) =>
             stateNodeRequester.replyTo ! FetchedStateNode(NodeData(node))
@@ -112,65 +115,45 @@ class StateNodeFetcher(
     requester
       .collect { stateNodeRequester =>
         if (nodes.isEmpty) {
-          log.debug("SNAP TrieNodes response was empty, retrying")
+          log.warn("SNAP TrieNodes response was empty, retrying")
           peersClient ! BlacklistPeer(peer.id, BlacklistReason.EmptyStateNodeResponse)
-          context.self ! StateNodeFetcher.FetchStateNode(
-            stateNodeRequester.hash,
-            stateNodeRequester.replyTo,
-            stateNodeRequester.stateRoot,
-            stateNodeRequester.pathset
-          )
+          retryAfterBackoff(stateNodeRequester)
           Behaviors.same[StateNodeFetcherCommand]
         } else {
-          val nodeData = nodes.head
-          val nodeHash = kec256(nodeData)
-          if (nodeHash == stateNodeRequester.hash) {
-            log.info("Successfully fetched missing state node via SNAP GetTrieNodes")
-            stateNodeRequester.replyTo ! FetchedStateNode(NodeData(Seq(nodeData)))
-            requester = None
-            Behaviors.same[StateNodeFetcherCommand]
-          } else {
-            log.warn("SNAP TrieNodes hash mismatch: expected {}, got {}", stateNodeRequester.hash, nodeHash)
-            peersClient ! BlacklistPeer(peer.id, BlacklistReason.WrongStateNodeResponse)
-            context.self ! StateNodeFetcher.FetchStateNode(
-              stateNodeRequester.hash,
-              stateNodeRequester.replyTo,
-              stateNodeRequester.stateRoot,
-              stateNodeRequester.pathset
-            )
-            Behaviors.same[StateNodeFetcherCommand]
+          // Multi-depth request: scan all returned nodes for one matching the target hash.
+          val matchingNode = nodes.find(n => kec256(n) == stateNodeRequester.hash)
+          matchingNode match {
+            case Some(nodeData) =>
+              log.info("Successfully fetched missing state node via SNAP GetTrieNodes ({} nodes in response)", nodes.size)
+              stateNodeRequester.replyTo ! FetchedStateNode(NodeData(Seq(nodeData)))
+              requester = None
+              Behaviors.same[StateNodeFetcherCommand]
+            case None =>
+              log.warn("SNAP TrieNodes: got {} nodes but none matched target hash, retrying", nodes.size)
+              peersClient ! BlacklistPeer(peer.id, BlacklistReason.WrongStateNodeResponse)
+              retryAfterBackoff(stateNodeRequester)
+              Behaviors.same[StateNodeFetcherCommand]
           }
         }
       }
       .getOrElse(Behaviors.same)
 
+  /** Route the request to either SNAP GetTrieNodes (if paths available) or legacy GetNodeData. */
   private def requestStateNode(
       hash: ByteString,
       stateRoot: Option[ByteString],
-      pathset: Option[Seq[ByteString]]
+      paths: Option[Seq[Seq[ByteString]]]
   ): Unit =
-    (stateRoot, pathset) match {
-      case (Some(root), Some(paths)) =>
-        // Use SNAP GetTrieNodes — works with ETH68 peers
-        log.info("Requesting missing state node via SNAP GetTrieNodes (pathset size: {})", paths.size)
-        val request = GetTrieNodes(
-          requestId = ETH66.nextRequestId,
-          rootHash = root,
-          paths = Seq(paths),
-          responseBytes = BigInt(512 * 1024)
-        )
-        val resp = makeRequest(
-          Request(request, BestSnapPeer, (msg: GetTrieNodes) => new GetTrieNodesEnc(msg)),
-          StateNodeFetcher.RetryStateNodeRequest
-        )
-        context.pipeToSelf(resp.unsafeToFuture()) {
-          case Success(res) => res
-          case Failure(_)   => StateNodeFetcher.RetryStateNodeRequest
-        }
+    (stateRoot, paths) match {
+      case (Some(root), Some(pathGroups)) if pathGroups.nonEmpty =>
+        // Use SNAP GetTrieNodes with the SAME root the paths were computed from.
+        // The paths are HP-encoded nibble prefixes from a trie walk against this root.
+        // Using a different root would make paths invalid — the trie structure differs.
+        sendGetTrieNodes(root, pathGroups)
 
       case _ =>
         // Fallback to GetNodeData (pre-ETH68 peers only)
-        log.debug("Requesting missing state node via GetNodeData (no SNAP pathset available)")
+        log.debug("Requesting missing state node via GetNodeData (no SNAP paths available)")
         val resp = makeRequest(
           Request.create(GetNodeData(List(hash)), BestNodeDataPeer),
           StateNodeFetcher.RetryStateNodeRequest
@@ -180,6 +163,25 @@ class StateNodeFetcher(
           case Failure(_)   => StateNodeFetcher.RetryStateNodeRequest
         }
     }
+
+  private def sendGetTrieNodes(root: ByteString, pathGroups: Seq[Seq[ByteString]]): Unit = {
+    log.info("Requesting missing state node via SNAP GetTrieNodes ({} path groups, root={})",
+      pathGroups.size, root.take(4).toArray.map("%02x".format(_)).mkString)
+    val request = GetTrieNodes(
+      requestId = ETH66.nextRequestId,
+      rootHash = root,
+      paths = pathGroups,
+      responseBytes = BigInt(512 * 1024)
+    )
+    val resp = makeRequest(
+      Request(request, BestSnapPeer, (msg: GetTrieNodes) => new GetTrieNodesEnc(msg)),
+      StateNodeFetcher.RetryStateNodeRequest
+    )
+    context.pipeToSelf(resp.unsafeToFuture()) {
+      case Success(res) => res
+      case Failure(_)   => StateNodeFetcher.RetryStateNodeRequest
+    }
+  }
 }
 
 object StateNodeFetcher {
@@ -196,7 +198,8 @@ object StateNodeFetcher {
       hash: ByteString,
       originalSender: ClassicActorRef,
       stateRoot: Option[ByteString] = None,
-      pathset: Option[Seq[ByteString]] = None
+      paths: Option[Seq[Seq[ByteString]]] = None,
+      networkHead: BigInt = BigInt(0)
   ) extends StateNodeFetcherCommand
   case object RetryStateNodeRequest extends StateNodeFetcherCommand
   final private case class AdaptedMessage[T <: Message](peer: Peer, msg: T) extends StateNodeFetcherCommand
@@ -205,6 +208,6 @@ object StateNodeFetcher {
       hash: ByteString,
       replyTo: ClassicActorRef,
       stateRoot: Option[ByteString] = None,
-      pathset: Option[Seq[ByteString]] = None
+      paths: Option[Seq[Seq[ByteString]]] = None
   )
 }

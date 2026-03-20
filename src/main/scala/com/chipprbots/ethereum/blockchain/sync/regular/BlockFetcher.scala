@@ -325,9 +325,10 @@ class BlockFetcher(
         log.warn("Received late/duplicate RetryBodiesRequest (not fetching). Clearing state and retrying fetch.")
         fetchBlocks(state)
 
-      case FetchStateNode(hash, replyTo, stateRoot, pathset) =>
-        log.debug("Fetching state node for hash {}", ByteStringUtils.hash2string(hash))
-        stateNodeFetcher ! StateNodeFetcher.FetchStateNode(hash, replyTo, stateRoot, pathset)
+      case FetchStateNode(hash, replyTo, stateRoot, paths, networkHead) =>
+        val head = if (networkHead > 0) networkHead else state.knownTop
+        log.debug("Fetching state node for hash {}, networkHead={}", ByteStringUtils.hash2string(hash), head)
+        stateNodeFetcher ! StateNodeFetcher.FetchStateNode(hash, replyTo, stateRoot, paths, head)
         Behaviors.same
 
       case AdaptedMessageFromEventBus(NewBlockHashes(hashes), _) =>
@@ -553,7 +554,8 @@ object BlockFetcher {
       hash: ByteString,
       replyTo: ClassicActorRef,
       stateRoot: Option[ByteString] = None,
-      pathset: Option[Seq[ByteString]] = None
+      paths: Option[Seq[Seq[ByteString]]] = None,
+      networkHead: BigInt = BigInt(0)
   ) extends FetchCommand
   case object RetryFetchStateNode extends FetchCommand
   final case class PickBlocks(amount: Int, replyTo: ClassicActorRef) extends FetchCommand
