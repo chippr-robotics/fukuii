@@ -392,6 +392,13 @@ class RLPxConnectionHandler(
       }
 
       val encryptedPayloadSize = ByteUtils.bigEndianToShort(data.take(2).toArray)
+      // Security: reject oversized handshake packets (CVE-2026-26314)
+      // Matches go-ethereum's baseProtocolMaxMsgSize = 2 * 1024
+      if (encryptedPayloadSize > 2048) {
+        throw new RuntimeException(
+          s"EIP-8 handshake packet too large: sizePrefix=${encryptedPayloadSize} max=2048"
+        )
+      }
       val totalFrameSize = encryptedPayloadSize + 2
       if (encryptedPayloadSize <= 0 || totalFrameSize > data.length) {
         val headHex = Hex.toHexString(data.take(Math.min(32, data.length)).toArray)

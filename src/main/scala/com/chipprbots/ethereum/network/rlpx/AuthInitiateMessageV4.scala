@@ -45,7 +45,7 @@ object AuthInitiateMessageV4 extends AuthInitiateEcdsaCodec {
             case (RLPValue(signatureBytesArr), RLPValue(publicKeyBytesArr), RLPValue(nonceArr), RLPValue(versionArr)) =>
               val signature = decodeECDSA(signatureBytesArr)
               val publicKey =
-                curve.getCurve.decodePoint(ECDSASignature.UncompressedIndicator +: publicKeyBytesArr)
+                decodeAndValidatePoint(ECDSASignature.UncompressedIndicator +: publicKeyBytesArr)
               val version = BigInt(versionArr).toInt
               AuthInitiateMessageV4(signature, publicKey, ByteString(nonceArr), version)
             case _ => throw new RuntimeException("Cannot decode auth initiate message: invalid field types")
