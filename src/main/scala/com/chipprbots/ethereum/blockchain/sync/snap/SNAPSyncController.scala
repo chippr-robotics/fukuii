@@ -451,7 +451,7 @@ class SNAPSyncController(
       pivotHeaderOpt match {
         case Some(header) =>
           log.info(s"Pivot header bootstrap complete for block ${header.number} (requested $pendingPivot)")
-          completePivotRefreshWithStateRoot(pendingPivot, header.stateRoot, reason)
+          completePivotRefreshWithStateRoot(pendingPivot, header, reason)
         case None =>
           log.warning(
             s"Pivot header bootstrap for block $pendingPivot returned no header. Falling back to full restart."
@@ -870,6 +870,7 @@ class SNAPSyncController(
             stateRoot = Some(header.stateRoot)
             appStateStorage.putSnapSyncPivotBlock(targetPivot).commit()
             appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
+            updateBestBlockForPivot(header, targetPivot)
 
             SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
 
@@ -900,6 +901,7 @@ class SNAPSyncController(
                     stateRoot = Some(header.stateRoot)
                     appStateStorage.putSnapSyncPivotBlock(targetPivot).commit()
                     appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
+                    updateBestBlockForPivot(header, targetPivot)
 
                     SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
 
@@ -1308,6 +1310,7 @@ class SNAPSyncController(
           stateRoot = Some(genesisHeader.stateRoot)
           appStateStorage.putSnapSyncPivotBlock(0).commit()
           appStateStorage.putSnapSyncStateRoot(genesisHeader.stateRoot).commit()
+          updateBestBlockForPivot(genesisHeader, BigInt(0))
 
           SNAPSyncMetrics.setPivotBlockNumber(0)
 
@@ -1393,6 +1396,7 @@ class SNAPSyncController(
           stateRoot = Some(header.stateRoot)
           appStateStorage.putSnapSyncPivotBlock(pivotBlockNumber).commit()
           appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
+          updateBestBlockForPivot(header, pivotBlockNumber)
 
           // Update metrics - pivot block
           SNAPSyncMetrics.setPivotBlockNumber(pivotBlockNumber)
@@ -2240,11 +2244,9 @@ class SNAPSyncController(
     }
 
     val newPivotBlock = newPivotOpt.get
-    val newStateRootOpt = blockchainReader
-      .getBlockHeaderByNumber(newPivotBlock)
-      .map(_.stateRoot)
+    val newPivotHeaderOpt = blockchainReader.getBlockHeaderByNumber(newPivotBlock)
 
-    if (newStateRootOpt.isEmpty) {
+    if (newPivotHeaderOpt.isEmpty) {
       // Header not available locally — request it from a peer via the bootstrap mechanism.
       // The coordinator stays alive (all peers are stateless, so no dispatch will happen).
       // When BootstrapComplete arrives in the syncing state, the refresh is completed.
@@ -2261,15 +2263,41 @@ class SNAPSyncController(
       return
     }
 
-    completePivotRefreshWithStateRoot(newPivotBlock, newStateRootOpt.get, reason)
+    completePivotRefreshWithStateRoot(newPivotBlock, newPivotHeaderOpt.get, reason)
   }
 
-  /** Complete the pivot refresh once we have the state root (either from local header or bootstrapped header). */
+  /** Update best block info and chain weight so ETH status handshake advertises the correct forkId.
+    *
+    * Without this, getBestBlockNumber() returns 0 (genesis) during SNAP sync, causing peers to reject us with
+    * incompatible forkId (e.g. Frontier vs Spiral). This stores the pivot header, chain weight, and best block info so
+    * that createStatusMsg() in EthNodeStatus64ExchangeState can build a valid status message referencing the pivot.
+    */
+  private def updateBestBlockForPivot(header: BlockHeader, pivotBlockNumber: BigInt): Unit = {
+    val pivotHash = header.hash
+    val estimatedTotalDifficulty =
+      if (pivotBlockNumber == BigInt(0)) header.difficulty
+      else header.difficulty * pivotBlockNumber
+    // Store header so getBestBlockHeader() -> getBlockHeaderByNumber(pivot) finds it
+    blockchainWriter.storeBlockHeader(header).commit()
+    blockchainWriter
+      .storeChainWeight(pivotHash, ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty))
+      .commit()
+    appStateStorage
+      .putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash, pivotBlockNumber))
+      .commit()
+    log.info(
+      s"Updated best block for ETH status: block=$pivotBlockNumber, hash=${pivotHash.toHex.take(16)}..., " +
+        s"estimatedTD=$estimatedTotalDifficulty"
+    )
+  }
+
+  /** Complete the pivot refresh once we have the header (either from local storage or bootstrapped from peer). */
   private def completePivotRefreshWithStateRoot(
       newPivotBlock: BigInt,
-      newStateRoot: ByteString,
+      newPivotHeader: BlockHeader,
       reason: String
   ): Unit = {
+    val newStateRoot = newPivotHeader.stateRoot
     val oldPivot = pivotBlock.getOrElse(BigInt(0))
     val oldRoot = stateRoot.map(_.take(4).toHex).getOrElse("none")
     val newRoot = newStateRoot.take(4).toHex
@@ -2292,6 +2320,7 @@ class SNAPSyncController(
     // Persist new pivot
     appStateStorage.putSnapSyncPivotBlock(newPivotBlock).commit()
     appStateStorage.putSnapSyncStateRoot(newStateRoot).commit()
+    updateBestBlockForPivot(newPivotHeader, newPivotBlock)
     SNAPSyncMetrics.setPivotBlockNumber(newPivotBlock)
 
     // Geth-aligned: send refresh signal to ALL active coordinators (all 3 run concurrently)
