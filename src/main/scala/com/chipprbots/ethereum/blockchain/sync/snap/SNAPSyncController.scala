@@ -136,6 +136,7 @@ class SNAPSyncController(
   private var accountStagnationCheckTask: Option[Cancellable] = None
   private var storageStagnationCheckTask: Option[Cancellable] = None
   private var healingRequestTask: Option[Cancellable] = None
+  private var storageStagnationRefreshAttempted: Boolean = false
   private var trieWalkInProgress: Boolean = false
   private var consecutiveUnproductiveHealingRounds: Int = 0
   private val maxUnproductiveHealingRounds: Int = 3 // After 3 rounds of finding same missing nodes with 0 healed, skip to validation
@@ -378,6 +379,7 @@ class SNAPSyncController(
     case ProgressStorageSlotsSynced(count) =>
       progressMonitor.incrementStorageSlotsSynced(count)
       lastStorageProgressMs = System.currentTimeMillis()
+      storageStagnationRefreshAttempted = false
 
     case ProgressNodesHealed(count) =>
       progressMonitor.incrementNodesHealed(count)
@@ -695,22 +697,35 @@ class SNAPSyncController(
     if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) return
     lastPivotRestartMs = now
 
-    // Instead of restarting the entire sync from scratch (which discards all downloaded
-    // accounts, bytecodes, and storage), promote to the healing phase. The healing phase
-    // walks the state trie via GetTrieNodes (content-addressed by hash), which works even
-    // when peers can't serve StorageRanges at the current pivot block.
-    log.warning(
-      s"Storage sync stalled: no progress for ${stalledForMs / 1000}s " +
-        s"(threshold=${StorageStagnationThreshold.toSeconds}s), tasksPending=${stats.tasksPending}, " +
-        s"tasksActive=${stats.tasksActive}. Promoting to healing phase (preserving downloaded state)."
-    )
+    if (!storageStagnationRefreshAttempted) {
+      // First stagnation detection: try a pivot refresh (cheaper than force-completing).
+      // A fresh pivot may bring peers back to a serveable root, resuming storage download.
+      storageStagnationRefreshAttempted = true
+      log.warning(
+        s"Storage sync stalled: no progress for ${stalledForMs / 1000}s " +
+          s"(threshold=${StorageStagnationThreshold.toSeconds}s), tasksPending=${stats.tasksPending}, " +
+          s"tasksActive=${stats.tasksActive}. Attempting pivot refresh before force-completing."
+      )
+      // Reset timer to give the pivot refresh time to work (re-fires in another 20 min if refresh doesn't help)
+      lastStorageProgressMs = now
+      refreshPivotInPlace(s"storage stagnation: no progress for ${stalledForMs / 1000}s")
+    } else {
+      // Second stagnation after a refresh attempt already failed — force-complete and promote to healing.
+      // The healing phase walks the state trie via GetTrieNodes (content-addressed by hash), which works
+      // even when peers can't serve StorageRanges at the current pivot block.
+      log.warning(
+        s"Storage sync stalled after pivot refresh attempt: no progress for ${stalledForMs / 1000}s " +
+          s"(threshold=${StorageStagnationThreshold.toSeconds}s), tasksPending=${stats.tasksPending}, " +
+          s"tasksActive=${stats.tasksActive}. Promoting to healing phase (preserving downloaded state)."
+      )
 
-    // Cancel storage-phase timers
-    storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
-    storageStagnationCheckTask.foreach(_.cancel()); storageStagnationCheckTask = None
+      // Cancel storage-phase timers
+      storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
+      storageStagnationCheckTask.foreach(_.cancel()); storageStagnationCheckTask = None
 
-    // Tell coordinator to flush downloaded data and report completion
-    storageRangeCoordinator.foreach(_ ! actors.Messages.ForceCompleteStorage)
+      // Tell coordinator to flush downloaded data and report completion
+      storageRangeCoordinator.foreach(_ ! actors.Messages.ForceCompleteStorage)
+    }
   }
 
   /** Proactive pivot freshness check (Geth-aligned).

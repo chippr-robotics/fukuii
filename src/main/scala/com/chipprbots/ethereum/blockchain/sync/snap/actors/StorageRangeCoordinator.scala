@@ -102,6 +102,13 @@ class StorageRangeCoordinator(
   private val minRefreshIntervalMs: Long = 60000L // 1 minute minimum between refreshes
   private val maxRefreshIntervalMs: Long = 300000L // 5 minutes maximum backoff
 
+  // No-activity timeout: detects stalls caused by "ghost" peers in knownAvailablePeers
+  // that disconnected without being removed and thus never get marked stateless.
+  // When tasks are pending, nothing is in-flight, and no dispatch/response has occurred
+  // for this duration, we treat it as all-stateless and request a pivot refresh.
+  private var lastDispatchOrResponseMs: Long = System.currentTimeMillis()
+  private val noActivityTimeoutMs: Long = 120000L // 2 minutes
+
   // Post-pivot-refresh cooldown: after a pivot refresh, peers need time to sync to the new root.
   // Dispatching immediately causes all peers to return empty → marked stateless → another pivot
   // refresh → infinite tight loop. This cooldown prevents ALL dispatch paths (tryRedispatchPendingTasks,
@@ -128,7 +135,25 @@ class StorageRangeCoordinator(
     if (pivotRefreshRequested) return
     val allStateless = knownAvailablePeers.nonEmpty &&
       knownAvailablePeers.forall(p => statelessPeers.contains(p.id.value))
-    if (allStateless) {
+
+    // Secondary trigger: tasks pending but no dispatch/response activity for 2 minutes.
+    // Catches "ghost" peers that remain in knownAvailablePeers after disconnecting
+    // without being marked stateless (preventing allStateless from ever being true).
+    val now = System.currentTimeMillis()
+    val dispatchStalled = !allStateless && tasks.nonEmpty && activeTasks.isEmpty &&
+      (now - lastDispatchOrResponseMs) > noActivityTimeoutMs
+
+    if (dispatchStalled) {
+      log.warning(
+        s"Storage dispatch stalled: ${tasks.size} pending, 0 active, " +
+          s"no activity for ${(now - lastDispatchOrResponseMs) / 1000}s. " +
+          s"Peers: ${knownAvailablePeers.size} known, ${statelessPeers.size} stateless. " +
+          s"Marking remaining peers as stateless (likely disconnected)."
+      )
+      knownAvailablePeers.foreach(p => statelessPeers.add(p.id.value))
+    }
+
+    if (allStateless || dispatchStalled) {
       val now = System.currentTimeMillis()
       val backoffMs = math.min(
         maxRefreshIntervalMs,
@@ -462,8 +487,13 @@ class StorageRangeCoordinator(
   // Storage management
   private val proofVerifiers = mutable.Map[ByteString, MerkleProofVerifier]()
 
-  override def preStart(): Unit =
+  override def preStart(): Unit = {
     log.info(s"StorageRangeCoordinator starting (concurrency=$maxInFlightRequests, batchSize=$maxAccountsPerBatch)")
+    // Periodic liveness: re-evaluate dispatch and pivot refresh even when no events flow.
+    // Without this, ghost peers cause a silent stall with no incoming messages to trigger re-evaluation.
+    import context.dispatcher
+    context.system.scheduler.scheduleWithFixedDelay(30.seconds, 30.seconds, self, StorageCheckCompletion)
+  }
 
   override val supervisorStrategy: SupervisorStrategy =
     OneForOneStrategy(maxNrOfRetries = 3, withinTimeRange = 1.minute) { case _: Exception =>
@@ -601,6 +631,7 @@ class StorageRangeCoordinator(
       // Clear all per-peer adaptive state — fresh start with new root
       statelessPeers.clear()
       pivotRefreshRequested = false
+      lastDispatchOrResponseMs = System.currentTimeMillis()
       peerCooldownUntilMs.clear()
       peerConsecutiveTimeouts.clear()
       peerBatchSize.clear()
@@ -761,6 +792,7 @@ class StorageRangeCoordinator(
     import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetStorageRanges.GetStorageRangesEnc
     val messageSerializable: MessageSerializable = new GetStorageRangesEnc(request)
     networkPeerManager ! NetworkPeerManagerActor.SendMessage(messageSerializable, peer.id)
+    lastDispatchOrResponseMs = System.currentTimeMillis()
 
     Some(requestId)
   }
@@ -864,6 +896,7 @@ class StorageRangeCoordinator(
     statelessPeers.remove(peer.id.value)
     peerConsecutiveTimeouts.remove(peer.id.value)
     consecutiveUnproductiveRefreshes = 0
+    lastDispatchOrResponseMs = System.currentTimeMillis()
 
     // Adaptive batch scaling: track successes for this peer, scale up after consecutive packed responses
     maybeIncreaseBatchSize(peer, servedCount, tasks.size)

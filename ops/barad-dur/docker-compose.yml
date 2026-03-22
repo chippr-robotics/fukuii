@@ -127,15 +127,15 @@ services:
       - "-Xss10M"
       - "-XX:+UseG1GC"
       - "-XX:MaxGCPauseMillis=200"
-      - "-Dconfig.file=/app/conf/etc.conf"
+      - "-Dconfig.file=/app/conf/mordor.conf"
       - "-Dfukuii.datadir=/app/data"
       - "-jar"
       - "/app/fukuii/lib/fukuii-assembly-0.1.240.jar"
-      - "etc"
+      - "mordor"
     networks:
       - fukuii-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8545/health"]
       interval: 30s
       timeout: 10s
       retries: 3
