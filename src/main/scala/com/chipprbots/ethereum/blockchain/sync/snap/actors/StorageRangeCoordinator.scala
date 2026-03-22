@@ -139,22 +139,36 @@ class StorageRangeCoordinator(
     // Secondary trigger: tasks pending but no dispatch/response activity for 2 minutes.
     // Catches "ghost" peers that remain in knownAvailablePeers after disconnecting
     // without being marked stateless (preventing allStateless from ever being true).
+    // Note: activeTasks may be non-empty if requests to ghost peers never time out
+    // (SNAPRequestTracker timeouts are poll-based, not scheduled), so we check
+    // activity time regardless of in-flight count.
     val now = System.currentTimeMillis()
-    val dispatchStalled = !allStateless && tasks.nonEmpty && activeTasks.isEmpty &&
+    val dispatchStalled = !allStateless && tasks.nonEmpty &&
       (now - lastDispatchOrResponseMs) > noActivityTimeoutMs
 
     if (dispatchStalled) {
       log.warning(
-        s"Storage dispatch stalled: ${tasks.size} pending, 0 active, " +
+        s"Storage dispatch stalled: ${tasks.size} pending, ${activeTasks.size} active, " +
           s"no activity for ${(now - lastDispatchOrResponseMs) / 1000}s. " +
           s"Peers: ${knownAvailablePeers.size} known, ${statelessPeers.size} stateless. " +
           s"Marking remaining peers as stateless (likely disconnected)."
       )
       knownAvailablePeers.foreach(p => statelessPeers.add(p.id.value))
+      // Re-queue any stale in-flight tasks from ghost peers
+      if (activeTasks.nonEmpty) {
+        val staleCount = activeTasks.size
+        activeTasks.values.foreach { case (_, batchTasks, _) =>
+          batchTasks.foreach { task =>
+            task.pending = false
+            tasks.enqueue(task)
+          }
+        }
+        activeTasks.clear()
+        log.info(s"Re-queued $staleCount stale in-flight requests from ghost peers")
+      }
     }
 
     if (allStateless || dispatchStalled) {
-      val now = System.currentTimeMillis()
       val backoffMs = math.min(
         maxRefreshIntervalMs,
         minRefreshIntervalMs * (1L << math.min(consecutiveUnproductiveRefreshes, 3))
