@@ -67,6 +67,7 @@ class SNAPSyncController(
   private var trieNodeHealingCoordinator: Option[ActorRef] = None
   private var chainDownloader: Option[ActorRef] = None
   private var chainDownloadComplete: Boolean = false
+  private var chainDownloadTimeoutTask: Option[Cancellable] = None
 
   // Monotonic counter appended to coordinator actor names so restarts don't collide
   // with still-stopping actors from the previous cycle.
@@ -2189,8 +2190,14 @@ class SNAPSyncController(
         }
 
       case _ =>
-        log.error("Missing state root or pivot block for validation")
-        log.error("Sync cannot complete - missing state root or pivot block")
+        log.error("Missing state root or pivot block for validation — cannot validate state")
+        log.error(s"stateRoot=${stateRoot.map(_.toHex.take(16))}, pivotBlock=$pivotBlock")
+        // Don't leave the controller stuck in StateValidation phase.
+        // Mark SNAP done and hand off to regular sync, which will fetch any
+        // missing state on-demand during block execution.
+        log.warning("Proceeding to regular sync without state validation")
+        appStateStorage.snapSyncDone().commit()
+        context.parent ! Done
     }
   }
 
@@ -2622,6 +2629,13 @@ class SNAPSyncController(
           ))
           currentPhase = ChainDownloadCompletion
           progressMonitor.startPhase(ChainDownloadCompletion)
+          // Safety timeout: if the chain downloader never sends Done (crash, lost message),
+          // finalize anyway after 2 hours rather than hanging indefinitely.
+          chainDownloadTimeoutTask = Some(
+            scheduler.scheduleOnce(2.hours) {
+              self ! ChainDownloadTimeout
+            }(ec)
+          )
           context.become(waitingForChainDownload)
           return
         }
@@ -2632,6 +2646,8 @@ class SNAPSyncController(
 
   /** Final SNAP sync completion — called when both state sync and chain download are done. */
   private def finalizeSnapSync(pivot: BigInt): Unit = {
+    chainDownloadTimeoutTask.foreach(_.cancel())
+    chainDownloadTimeoutTask = None
     appStateStorage.snapSyncDone().commit()
 
     // Look up the pivot header so we can store a complete "best block" anchor.
@@ -2691,6 +2707,16 @@ class SNAPSyncController(
   def waitingForChainDownload: Receive = handlePeerListMessagesWithRateTracking.orElse {
     case ChainDownloader.Done =>
       log.info("Parallel chain download complete. Finalizing SNAP sync.")
+      chainDownloadTimeoutTask.foreach(_.cancel())
+      chainDownloadTimeoutTask = None
+      chainDownloadComplete = true
+      pivotBlock.foreach(finalizeSnapSync)
+
+    case ChainDownloadTimeout =>
+      log.warning(
+        "Chain download did not complete within timeout. " +
+          "Finalizing SNAP sync anyway — regular sync will handle remaining chain data."
+      )
       chainDownloadComplete = true
       pivotBlock.foreach(finalizeSnapSync)
 
@@ -2830,6 +2856,7 @@ object SNAPSyncController {
   case object StateHealingComplete
   case object HealingAllPeersStateless
   case object StateValidationComplete
+  case object ChainDownloadTimeout
   case object GetProgress
 
   /** Signal from coordinators that the current pivot/stateRoot is likely not serveable by peers.
