@@ -6,10 +6,15 @@
 networks:
   fukuii-cirith-ungol:
     driver: bridge
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+        - subnet: fd00:c101:7000::/80
 
 services:
   coregeth:
-    image: etclabscore/core-geth:latest
+    image: ${COREGETH_IMAGE:-coregeth-etc:local}
     container_name: coregeth-cirith-ungol
     restart: unless-stopped
     networks:
@@ -30,8 +35,8 @@ services:
       - "--datadir=/root/.ethereum/mordor"
       # Keep historical state so debug tracing and old-block state queries work.
       # Note: switching an existing datadir from pruned->archive requires a resync.
-      - "--gcmode=archive"
-      - "--syncmode=full"
+      - "--gcmode=full"
+      - "--syncmode=snap"
       # Increase logging to capture detailed RLPx/devp2p handshake behavior.
       # verbosity: 0=silent, 1=error, 2=warn, 3=info, 4=debug, 5=detail
       - "--verbosity=5"
@@ -55,22 +60,21 @@ services:
     entrypoint: ["/bin/sh", "-c", "exec geth $$@", "--"]
 
   fukuii:
-    image: ${FUKUII_IMAGE:-fukuii:latest}
+    image: ${FUKUII_IMAGE:-fukuii-etc:local}
     container_name: fukuii-cirith-ungol
     restart: unless-stopped
     networks:
       - fukuii-cirith-ungol
-    depends_on:
-      - coregeth
+    # depends_on:
+    #   - coregeth
     ports:
-      # JSON-RPC HTTP
-      - "8545:8545"
-      # JSON-RPC WebSocket  
-      - "8546:8546"
-      # P2P networking
-      - "30303:30303/tcp"
-      - "30303:30303/udp"
-      - "9076:9076"
+      # JSON-RPC HTTP (offset to avoid Barad-dûr conflict on 8545)
+      - "8553:8545"
+      # JSON-RPC WebSocket (offset to avoid Barad-dûr conflict on 8546)
+      - "8552:8546"
+      # P2P networking — TCP + UDP on same port (standard geth convention)
+      - "30305:30303/tcp"
+      - "30305:30303/udp"
     volumes:
       # Configuration files
       - ./conf/etc.conf:/app/conf/etc.conf:ro
@@ -97,13 +101,23 @@ services:
       - FUKUII_TRACE_BLOCK=${FUKUII_TRACE_BLOCK:-}
       - FUKUII_TRACE_TX=${FUKUII_TRACE_TX:-}
     # Configuration files are loaded from /app/conf/
-    command: 
+    # Note: assembly JAR uses java entrypoint, not dist launcher (application.ini is ignored)
+    command:
+      - "-Xmx5g"
+      - "-Xms2g"
+      - "-Xss10M"
+      - "-XX:+UseG1GC"
+      - "-XX:MaxGCPauseMillis=200"
       - "-Dconfig.file=/app/conf/etc.conf"
+      - "-Dfukuii.datadir=/app/data"
       - "-Dlogback.configurationFile=/app/conf/logback.xml"
       - "-Dfukuii.trace.block=${FUKUII_TRACE_BLOCK:-}"
       - "-Dfukuii.trace.tx=${FUKUII_TRACE_TX:-}"
+      - "-jar"
+      - "/app/fukuii/lib/fukuii-assembly-0.1.240.jar"
+      - "mordor"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8545/health"]
       interval: 30s
       timeout: 10s
       retries: 3

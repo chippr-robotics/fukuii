@@ -24,21 +24,22 @@ This document provides a comprehensive analysis of the Ethereum Improvement Prop
 
 | Category | Implemented | Partial | Missing |
 |----------|-------------|---------|---------|
-| Pre-Merge EIPs | 25+ | 2 | 8+ |
+| Pre-Merge EIPs | 30+ | 0 | 3+ |
 | Post-Merge EIPs | 0 | 0 | 10+ |
-| Pectra/Fusaka EIPs | 0 | 0 | 9 |
-| Opcodes | 142/145 | 0 | 3 |
-| Precompiled Contracts | 9/19 | 0 | 10 |
+| Pectra/Fusaka EIPs | 4 | 1 | 4 |
+| Opcodes | 146/148 | 0 | 2 |
+| Precompiled Contracts | 10/19 | 9 | 0 |
 
 ### Compatibility Level
 
+- **ETC Olympia (ECIP-1111/1112/1121)**: ✅ Full compatibility — EIP-1559, EVM modernization, new precompiles
 - **ETC Spiral (≈ Shanghai equivalent)**: ✅ Full compatibility
 - **Ethereum Berlin**: ✅ Full compatibility
-- **Ethereum London**: ⚠️ Partial (EIP-1559 not implemented)
-- **Ethereum Paris (The Merge)**: ❌ Not implemented
-- **Ethereum Shanghai**: ⚠️ Partial (beacon chain features missing)
-- **Ethereum Cancun (Dencun)**: ❌ Not implemented
-- **Ethereum Prague (Pectra/Fusaka)**: ❌ Not implemented
+- **Ethereum London**: ✅ EIP-1559 + BASEFEE implemented (via Olympia)
+- **Ethereum Paris (The Merge)**: ❌ Not implemented (PoS not applicable to ETC)
+- **Ethereum Shanghai**: ⚠️ Partial (PUSH0, COINBASE warm — yes; beacon withdrawals — N/A)
+- **Ethereum Cancun (Dencun)**: ⚠️ Partial (TLOAD/TSTORE, MCOPY, EIP-6780 — yes; blobs — no)
+- **Ethereum Prague (Pectra/Fusaka)**: ⚠️ Partial (EIP-7702, EIP-2935, EIP-2537 stubs, EIP-2565 — yes; beacon features — N/A)
 
 ---
 
@@ -105,15 +106,15 @@ This document provides a comprehensive analysis of the Ethereum Improvement Prop
 | EIP | Title | Status | Notes |
 |-----|-------|--------|-------|
 | EIP-2565 | ModExp gas cost | ✅ Implemented | Repriced modular exponentiation |
-| EIP-2718 | Typed Transaction Envelope | ⚠️ Partial | Type 0 legacy only |
+| EIP-2718 | Typed Transaction Envelope | ✅ Implemented | Types 0 (legacy), 1 (access list), 2 (EIP-1559), 4 (EIP-7702) |
 | EIP-2929 | Gas cost increases for state access | ✅ Implemented | Cold/warm access tracking |
-| EIP-2930 | Optional access lists | ⚠️ Partial | Access lists parsed but Type 1 tx incomplete |
+| EIP-2930 | Optional access lists | ✅ Implemented | Type-1 access list transactions |
 
 ### London (Block 12,965,000)
 | EIP | Title | Status | Notes |
 |-----|-------|--------|-------|
-| EIP-1559 | Fee market change | ❌ Missing | Base fee, priority fee |
-| EIP-3198 | BASEFEE opcode | ❌ Missing | Opcode 0x48 |
+| EIP-1559 | Fee market change | ✅ Implemented | Via ETC Olympia (ECIP-1111) — baseFee, Type-2 transactions |
+| EIP-3198 | BASEFEE opcode | ✅ Implemented | Via ETC Olympia (ECIP-1112) — Opcode 0x48 |
 | EIP-3529 | Reduce refunds | ✅ Implemented | SELFDESTRUCT refund = 0 |
 | EIP-3541 | Reject new contracts starting with 0xEF | ✅ Implemented | EOF preparation |
 
@@ -135,12 +136,12 @@ This document provides a comprehensive analysis of the Ethereum Improvement Prop
 ### Cancun (Block 19,426,587)
 | EIP | Title | Status | Notes |
 |-----|-------|--------|-------|
-| EIP-1153 | Transient storage opcodes | ❌ Missing | TLOAD, TSTORE |
-| EIP-4788 | Beacon block root in EVM | ❌ Missing | Parent beacon root |
-| EIP-4844 | Shard Blob Transactions | ❌ Missing | Proto-danksharding |
-| EIP-5656 | MCOPY instruction | ❌ Missing | Memory copy opcode |
-| EIP-6780 | SELFDESTRUCT changes | ❌ Missing | Same-transaction only |
-| EIP-7516 | BLOBBASEFEE opcode | ❌ Missing | Blob gas price |
+| EIP-1153 | Transient storage opcodes | ✅ Implemented | Via ETC Olympia (ECIP-1112) — TLOAD, TSTORE |
+| EIP-4788 | Beacon block root in EVM | ❌ N/A | Beacon chain not applicable to ETC (PoW) |
+| EIP-4844 | Shard Blob Transactions | ❌ N/A | Proto-danksharding not in ETC scope |
+| EIP-5656 | MCOPY instruction | ✅ Implemented | Via ETC Olympia (ECIP-1112) — Opcode 0x5E |
+| EIP-6780 | SELFDESTRUCT changes | ✅ Implemented | Via ETC Olympia (ECIP-1112) — same-transaction only |
+| EIP-7516 | BLOBBASEFEE opcode | ❌ N/A | Blob transactions not in ETC scope |
 
 ### Prague/Pectra (Execution: Prague, Consensus: Fusaka - Activated May 7, 2025)
 
@@ -149,14 +150,14 @@ This document provides a comprehensive analysis of the Ethereum Improvement Prop
 | EIP | Title | Status | Notes |
 |-----|-------|--------|-------|
 | **Execution Layer EIPs** | | | |
-| EIP-2537 | BLS12-381 precompiles | ❌ Missing | BLS curve operations (9 precompiles) |
-| EIP-2935 | Serve historical block hashes from state | ❌ Missing | BLOCKHASH opcode improvement |
-| EIP-6110 | Supply validator deposits on chain | ❌ Missing | Deposit processing in EL |
-| EIP-7002 | Execution layer triggerable exits | ❌ Missing | Validator exits from EL |
-| EIP-7251 | Increase MAX_EFFECTIVE_BALANCE | ❌ Missing | Max 2048 ETH effective balance |
-| EIP-7549 | Move committee index outside Attestation | ❌ Missing | Consensus layer optimization |
-| EIP-7685 | General purpose execution layer requests | ❌ Missing | Request framework |
-| EIP-7702 | Set EOA account code for one transaction | ❌ Missing | Account abstraction precursor |
+| EIP-2537 | BLS12-381 precompiles | ⚠️ Stubs | Via ETC Olympia (ECIP-1112) — gas-consuming stubs, full crypto TBD |
+| EIP-2935 | Serve historical block hashes from state | ✅ Implemented | Via ETC Olympia (ECIP-1112) — system contract, 8191 history window |
+| EIP-6110 | Supply validator deposits on chain | ❌ N/A | Validator deposits not applicable to ETC (PoW) |
+| EIP-7002 | Execution layer triggerable exits | ❌ N/A | Validator exits not applicable to ETC (PoW) |
+| EIP-7251 | Increase MAX_EFFECTIVE_BALANCE | ❌ N/A | Validator economics not applicable to ETC (PoW) |
+| EIP-7549 | Move committee index outside Attestation | ❌ N/A | Consensus layer not applicable to ETC (PoW) |
+| EIP-7685 | General purpose execution layer requests | ❌ N/A | EL request framework not applicable to ETC (PoW) |
+| EIP-7702 | Set EOA account code for one transaction | ✅ Implemented | Via ETC Olympia (ECIP-1121) — Type-4 transactions |
 | **Consensus Layer EIPs (Fusaka)** | | | |
 | EIP-7251 | Max effective balance (Consensus) | ❌ Missing | Validator consolidation support |
 | EIP-7549 | Committee index optimization | ❌ Missing | Attestation efficiency |
@@ -194,34 +195,11 @@ Slot 10388992    │ Prague (Pectra/Fusaka) ← Account abstraction, MaxEB, EL r
 
 ### Critical Path (Required for Basic Compatibility)
 
-#### 1. EIP-1559: Fee Market Change for ETH 1.0 Chain
-**Priority**: 🔴 Critical  
-**Complexity**: High  
-**Impact**: Transaction processing, block validation
+#### ~~1. EIP-1559: Fee Market Change~~ ✅ IMPLEMENTED
+Implemented via ETC Olympia (ECIP-1111). BaseFee header field, Type-2 transactions, base fee adjustment algorithm. On ETC, base fee is redirected to treasury (not burned).
 
-**Requirements**:
-- Add `base_fee_per_gas` to block header
-- Add `max_fee_per_gas` and `max_priority_fee_per_gas` to transactions
-- Implement Type 2 (EIP-1559) transactions
-- Calculate effective gas price
-- Burn base fee portion
-- Implement base fee adjustment algorithm
-
-**Gas Calculation**:
-```
-effective_gas_price = min(max_fee_per_gas, base_fee_per_gas + max_priority_fee_per_gas)
-priority_fee = effective_gas_price - base_fee_per_gas
-```
-
-#### 2. EIP-3198: BASEFEE Opcode
-**Priority**: 🔴 Critical (depends on EIP-1559)  
-**Complexity**: Low  
-**Impact**: EVM opcode
-
-**Implementation**:
-```scala
-case object BASEFEE extends ConstOp(0x48)(s => UInt256(s.env.blockHeader.baseFee.getOrElse(0)))
-```
+#### ~~2. EIP-3198: BASEFEE Opcode~~ ✅ IMPLEMENTED
+Implemented via ETC Olympia (ECIP-1112). Opcode 0x48 returns current block baseFee.
 
 #### 3. EIP-4399: Supplant DIFFICULTY with PREVRANDAO
 **Priority**: 🔴 Critical (post-Merge)  
@@ -257,26 +235,11 @@ case object BASEFEE extends ConstOp(0x48)(s => UInt256(s.env.blockHeader.baseFee
 - Process withdrawals as balance credits
 - Withdrawal index tracking
 
-#### 6. EIP-1153: Transient Storage Opcodes
-**Priority**: 🟠 High  
-**Complexity**: Medium  
-**Impact**: EVM opcodes
+#### ~~6. EIP-1153: Transient Storage Opcodes~~ ✅ IMPLEMENTED
+Implemented via ETC Olympia (ECIP-1112). TLOAD (0x5C) and TSTORE (0x5D) opcodes. Per-transaction, per-address transient storage cleared at end of transaction. 100 gas per operation.
 
-**New Opcodes**:
-| Opcode | Name | Description |
-|--------|------|-------------|
-| 0x5C | TLOAD | Load from transient storage |
-| 0x5D | TSTORE | Store to transient storage |
-
-**Implementation Notes**:
-- Transient storage is cleared at end of transaction
-- Same gas costs as SLOAD/SSTORE warm access (100 gas)
-- Per-transaction, per-address key-value store
-
-#### 7. EIP-5656: MCOPY Instruction
-**Priority**: 🟠 High  
-**Complexity**: Low  
-**Impact**: EVM opcode
+#### ~~7. EIP-5656: MCOPY Instruction~~ ✅ IMPLEMENTED
+Implemented via ETC Olympia (ECIP-1112). MCOPY (0x5E) memory copy opcode.
 
 **New Opcode**:
 | Opcode | Name | Description |
@@ -288,15 +251,8 @@ case object BASEFEE extends ConstOp(0x48)(s => UInt256(s.env.blockHeader.baseFee
 gas = G_verylow + G_copy * ceil(size / 32) + memory_expansion_cost
 ```
 
-#### 8. EIP-6780: SELFDESTRUCT Only in Same Transaction
-**Priority**: 🟠 High  
-**Complexity**: Medium  
-**Impact**: SELFDESTRUCT behavior
-
-**Changes**:
-- SELFDESTRUCT only deletes the account if called in the same transaction as contract creation
-- Otherwise, only transfers ETH, does not delete code or storage
-- Enables future state expiry proposals
+#### ~~8. EIP-6780: SELFDESTRUCT Only in Same Transaction~~ ✅ IMPLEMENTED
+Implemented via ETC Olympia (ECIP-1112). Post-Olympia, SELFDESTRUCT only deletes the account if called in the same transaction as contract creation. Otherwise, only transfers balance.
 
 ### Medium Priority (Required for Complete Compliance)
 
@@ -338,9 +294,10 @@ gas = G_verylow + G_copy * ceil(size / 32) + memory_expansion_cost
 
 ### Lower Priority (Future Enhancements)
 
-#### 12. EIP-2537: BLS12-381 Curve Operations
-**Priority**: 🟠 High (Included in Pectra)  
-**Complexity**: High  
+#### ~~12. EIP-2537: BLS12-381 Curve Operations~~ ⚠️ STUBS ONLY
+Registered as gas-consuming stubs via ETC Olympia (ECIP-1112). Full crypto implementation TBD.
+**Priority**: 🟡 Medium (stubs deployed, full implementation deferred)
+**Complexity**: High
 **Impact**: Precompiled contracts
 
 **New Precompiles**:
@@ -365,26 +322,8 @@ gas = G_verylow + G_copy * ceil(size / 32) + memory_expansion_cost
 
 ### Prague/Pectra (Fusaka) EIPs - Activated May 7, 2025
 
-#### 13. EIP-2935: Serve Historical Block Hashes from State
-**Priority**: 🟡 Medium  
-**Complexity**: Medium  
-**Impact**: State storage, BLOCKHASH opcode
-
-**Requirements**:
-- System contract at address `0x0aae40965e6800cd9b1f4b05ff21581047e3f91e`
-- Stores last 8192 block hashes in a ring buffer
-- BLOCKHASH opcode reads from this contract for blocks beyond 256
-- Improves historical block hash availability
-
-**Implementation Details**:
-```
-HISTORY_STORAGE_ADDRESS = 0x0aae40965e6800cd9b1f4b05ff21581047e3f91e
-HISTORY_SERVE_WINDOW = 8192
-```
-
-**Gas Impact**:
-- BLOCKHASH becomes more expensive for historical queries
-- But provides much longer lookback window
+#### ~~13. EIP-2935: Serve Historical Block Hashes from State~~ ✅ IMPLEMENTED
+Implemented via ETC Olympia (ECIP-1112). System contract at `0x...002935` stores block hashes in a ring buffer (8191 history window). Deployed at fork activation.
 
 #### 14. EIP-6110: Supply Validator Deposits on Chain
 **Priority**: 🔴 Critical (Execution-Consensus Integration)  
@@ -478,44 +417,8 @@ sealed trait Request {
 }
 ```
 
-#### 19. EIP-7702: Set EOA Account Code for One Transaction
-**Priority**: 🔴 Critical  
-**Complexity**: High  
-**Impact**: Transaction types, account abstraction
-
-**Requirements**:
-- Implement Type 4 (EIP-7702) transactions
-- Add `authorization_list` to transactions
-- Temporarily set code for EOA accounts during transaction
-- Revert code after transaction completes
-
-**Authorization Structure**:
-```scala
-case class Authorization(
-  chainId: BigInt,
-  address: Address,
-  nonce: BigInt,
-  yParity: Byte,
-  r: BigInt,
-  s: BigInt
-)
-```
-
-**Transaction Format**:
-- Type: 0x04
-- Fields: chain_id, nonce, max_priority_fee_per_gas, max_fee_per_gas, gas_limit, destination, value, data, access_list, authorization_list, signature_y_parity, signature_r, signature_s
-
-**Use Cases**:
-- Account abstraction without protocol changes
-- Batched transactions from EOAs
-- Sponsored transactions
-- Gas payment by contract
-
-**Implementation Challenges**:
-- Temporary code storage
-- Nonce management
-- Gas accounting
-- Security considerations (reentrancy, etc.)
+#### ~~19. EIP-7702: Set EOA Account Code for One Transaction~~ ✅ IMPLEMENTED
+Implemented via ETC Olympia (ECIP-1121). Type-4 transactions with authorization lists. Enables account abstraction, batched transactions, gas sponsorship.
 
 #### 20. EIP-7594: PeerDAS (Peer Data Availability Sampling)
 **Priority**: 🟢 Lower (Consensus Layer)  
@@ -605,7 +508,7 @@ case class Authorization(
 | 0x45 | GASLIMIT | 2 | ✅ | |
 | 0x46 | CHAINID | 2 | ✅ | |
 | 0x47 | SELFBALANCE | 5 | ✅ | |
-| 0x48 | BASEFEE | 2 | ❌ | EIP-1559 required |
+| 0x48 | BASEFEE | 2 | ✅ | EIP-3198 via Olympia (ECIP-1112) |
 
 #### Stack, Memory, Storage, Flow Operations (0x50-0x5F)
 | Opcode | Name | Gas | Status |
@@ -622,9 +525,9 @@ case class Authorization(
 | 0x59 | MSIZE | 2 | ✅ |
 | 0x5A | GAS | 2 | ✅ |
 | 0x5B | JUMPDEST | 1 | ✅ |
-| 0x5C | TLOAD | 100 | ❌ | EIP-1153 |
-| 0x5D | TSTORE | 100 | ❌ | EIP-1153 |
-| 0x5E | MCOPY | 3* | ❌ | EIP-5656 |
+| 0x5C | TLOAD | 100 | ✅ | EIP-1153 via Olympia (ECIP-1112) |
+| 0x5D | TSTORE | 100 | ✅ | EIP-1153 via Olympia (ECIP-1112) |
+| 0x5E | MCOPY | 3* | ✅ | EIP-5656 via Olympia (ECIP-1112) |
 | 0x5F | PUSH0 | 2 | ✅ | EIP-3855 |
 
 #### Push Operations (0x60-0x7F)
@@ -651,17 +554,13 @@ All LOG0-LOG4 opcodes: ✅ Implemented
 | 0xFA | STATICCALL | 100-2600* | ✅ |
 | 0xFD | REVERT | 0* | ✅ |
 | 0xFE | INVALID | all gas | ✅ |
-| 0xFF | SELFDESTRUCT | 5000* | ⚠️ | Deprecated, but EIP-6780 not implemented |
+| 0xFF | SELFDESTRUCT | 5000* | ✅ | EIP-6780 restrictions via Olympia (ECIP-1112) |
 
 ### Missing Opcodes Summary
 
 | Opcode | Name | EIP | Priority |
 |--------|------|-----|----------|
-| 0x48 | BASEFEE | EIP-3198 | 🔴 Critical |
-| 0x4A | BLOBBASEFEE | EIP-7516 | 🟡 Medium |
-| 0x5C | TLOAD | EIP-1153 | 🟠 High |
-| 0x5D | TSTORE | EIP-1153 | 🟠 High |
-| 0x5E | MCOPY | EIP-5656 | 🟠 High |
+| 0x4A | BLOBBASEFEE | EIP-7516 | ❌ N/A (blob transactions not in ETC scope) |
 
 ---
 
@@ -680,27 +579,35 @@ All LOG0-LOG4 opcodes: ✅ Implemented
 | 0x07 | BN128MUL | EIP-196 | ✅ |
 | 0x08 | BN128PAIRING | EIP-197 | ✅ |
 | 0x09 | BLAKE2F | EIP-152 | ✅ |
+| 0x0100 | P256VERIFY | EIP-7951 | ✅ | Via Olympia (ECIP-1112) |
+
+### BLS12-381 Precompiles (Stubs)
+
+Via ETC Olympia (ECIP-1112). Registered as gas-consuming stubs that return failure. Full cryptographic implementation requires a JVM-compatible BLS library (Milagro or Blst JNI bindings).
+
+| Address | Name | EIP | Status |
+|---------|------|-----|--------|
+| 0x0B | BLS12_G1ADD | EIP-2537 | ⚠️ Stub |
+| 0x0C | BLS12_G1MUL | EIP-2537 | ⚠️ Stub |
+| 0x0D | BLS12_G1MSM | EIP-2537 | ⚠️ Stub |
+| 0x0E | BLS12_G2ADD | EIP-2537 | ⚠️ Stub |
+| 0x0F | BLS12_G2MUL | EIP-2537 | ⚠️ Stub |
+| 0x10 | BLS12_G2MSM | EIP-2537 | ⚠️ Stub |
+| 0x11 | BLS12_PAIRING | EIP-2537 | ⚠️ Stub |
+| 0x12 | BLS12_MAP_FP_TO_G1 | EIP-2537 | ⚠️ Stub |
+| 0x13 | BLS12_MAP_FP2_TO_G2 | EIP-2537 | ⚠️ Stub |
 
 ### Missing Precompiles
 
 | Address | Name | EIP | Priority |
 |---------|------|-----|----------|
-| 0x0A | KZG_POINT_EVALUATION | EIP-4844 | 🟡 Medium |
-| 0x0B | BLS12_G1ADD | EIP-2537 | 🟠 High (Pectra) |
-| 0x0C | BLS12_G1MUL | EIP-2537 | 🟠 High (Pectra) |
-| 0x0D | BLS12_G1MSM | EIP-2537 | 🟠 High (Pectra) |
-| 0x0E | BLS12_G2ADD | EIP-2537 | 🟠 High (Pectra) |
-| 0x0F | BLS12_G2MUL | EIP-2537 | 🟠 High (Pectra) |
-| 0x10 | BLS12_G2MSM | EIP-2537 | 🟠 High (Pectra) |
-| 0x11 | BLS12_PAIRING | EIP-2537 | 🟠 High (Pectra) |
-| 0x12 | BLS12_MAP_FP_TO_G1 | EIP-2537 | 🟠 High (Pectra) |
-| 0x13 | BLS12_MAP_FP2_TO_G2 | EIP-2537 | 🟠 High (Pectra) |
+| 0x0A | KZG_POINT_EVALUATION | EIP-4844 | ❌ N/A (blob transactions not in ETC scope) |
 
 ---
 
 ## Transaction Types
 
-Ethereum has evolved from a single transaction format to multiple typed transactions using the envelope format (EIP-2718). Fukuii currently only supports Type 0 (legacy) transactions.
+Ethereum has evolved from a single transaction format to multiple typed transactions using the envelope format (EIP-2718). Fukuii supports Type 0 (legacy), Type 1 (access list), Type 2 (EIP-1559 dynamic fee), and Type 4 (EIP-7702 Set Code) transactions via the Olympia hard fork.
 
 ### Type 0: Legacy Transactions (Pre-EIP-2718)
 **Status**: ✅ Implemented  
@@ -726,7 +633,7 @@ rlp([nonce, gasPrice, gasLimit, to, value, data, v, r, s])
 - No chain ID protection in pre-EIP-155 transactions
 
 ### Type 1: Access List Transactions (EIP-2930)
-**Status**: ⚠️ Partial (Berlin)  
+**Status**: ✅ Implemented (Berlin + Olympia)
 **EIP**: [EIP-2930](https://eips.ethereum.org/EIPS/eip-2930)
 
 **Structure**:
@@ -743,7 +650,7 @@ rlp([nonce, gasPrice, gasLimit, to, value, data, v, r, s])
 - Mitigates effects of EIP-2929 (cold/warm access costs)
 
 ### Type 2: EIP-1559 Transactions
-**Status**: ❌ Missing (London)  
+**Status**: ✅ Implemented (via ETC Olympia — ECIP-1111)
 **EIP**: [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559)
 
 **Structure**:
@@ -768,7 +675,7 @@ priorityFee = effectiveGasPrice - baseFeePerGas
 - ETH burn mechanism (base fee is burned)
 
 ### Type 3: Blob Transactions (EIP-4844)
-**Status**: ❌ Missing (Cancun/Dencun)  
+**Status**: ❌ N/A (blob transactions not in ETC scope)
 **EIP**: [EIP-4844](https://eips.ethereum.org/EIPS/eip-4844)
 
 **Structure**:
@@ -792,7 +699,7 @@ priorityFee = effectiveGasPrice - baseFeePerGas
 - Temporary storage (blobs pruned after ~18 days)
 
 ### Type 4: Account Abstraction Transactions (EIP-7702)
-**Status**: ❌ Missing (Pectra/Fusaka)  
+**Status**: ✅ Implemented (via ETC Olympia — ECIP-1121)
 **EIP**: [EIP-7702](https://eips.ethereum.org/EIPS/eip-7702)
 
 **Structure**:
@@ -1069,41 +976,39 @@ sbt "IntegrationTest / test"
 
 ## Conclusion
 
-Fukuii provides a solid foundation for EVM compatibility up to the Berlin/Istanbul level. To achieve full Ethereum mainnet compatibility including the recently activated Pectra/Fusaka fork (May 7, 2025), the following priorities should be addressed:
+With the Olympia hard fork (ECIP-1111/1112/1121), Fukuii achieves EVM compatibility well beyond the Berlin/Istanbul level. Olympia implements key EIPs from Ethereum's London, Cancun, and Pectra forks that are applicable to ETC's PoW chain:
 
-1. **Critical**: EIP-1559 and related London fork changes
-2. **Critical**: Post-Merge infrastructure (Engine API, PoS)
-3. **Critical**: Execution layer requests framework (EIP-7685)
-4. **Critical**: Type 4 transactions and account abstraction (EIP-7702)
-5. **High**: Missing Cancun opcodes (TLOAD, TSTORE, MCOPY)
-6. **High**: BLS12-381 precompiles (EIP-2537) - now part of Pectra
-7. **High**: On-chain deposits and execution-triggered exits (EIP-6110, EIP-7002)
-8. **Medium**: Proto-danksharding (EIP-4844)
-9. **Medium**: Historical block hashes (EIP-2935)
+### Implemented via Olympia (ECIP-1111/1112/1121)
 
-The architecture of Fukuii (based on the well-tested Mantis codebase) provides a clean separation between EVM execution and consensus, which should facilitate these additions. The Pectra/Fusaka fork represents a significant evolution of the Ethereum protocol, introducing important features for account abstraction, validator management, and execution-consensus layer integration.
+| EIP | From ETH Fork | Description |
+|-----|--------------|-------------|
+| EIP-1559 | London | Fee market with baseFee (treasury redirect on ETC) |
+| EIP-3198 | London | BASEFEE opcode |
+| EIP-1153 | Cancun | Transient storage (TLOAD/TSTORE) |
+| EIP-5656 | Cancun | MCOPY opcode |
+| EIP-6780 | Cancun | SELFDESTRUCT restriction |
+| EIP-2935 | Pectra | Historical block hashes in state |
+| EIP-2537 | Pectra | BLS12-381 precompiles (stubs) |
+| EIP-7702 | Pectra | Set EOA Account Code (Type-4 tx) |
+| EIP-7951 | — | P256VERIFY precompile |
+| EIP-7623 | — | Floor data gas cost |
+| EIP-7825 | — | Per-tx gas limit cap (30M) |
+| EIP-7934 | — | Block RLP size cap (8 MiB) |
+| EIP-7883 | — | ModExp gas repricing |
 
-### Key Takeaways for Pectra/Fusaka
+### Not Applicable to ETC (PoS/Beacon chain features)
 
-**Execution Layer Changes**:
-- **EIP-7702** brings delegated code execution to EOAs, a major step toward account abstraction
-- **EIP-2537** adds 9 new precompiles for BLS12-381 operations
-- **EIP-2935** improves historical block hash availability
-- **EIP-7685** establishes a general framework for execution-to-consensus requests
+The following Ethereum mainnet features are not applicable to ETC's Proof-of-Work consensus:
+- EIP-3675 (PoS transition), EIP-4399 (PREVRANDAO), EIP-4895 (withdrawals)
+- EIP-4844 (blob transactions), EIP-7516 (BLOBBASEFEE)
+- EIP-6110 (validator deposits), EIP-7002 (validator exits), EIP-7251 (MaxEB)
+- EIP-7685 (EL requests framework), EIP-7549 (committee index), EIP-7594 (PeerDAS)
 
-**Execution-Consensus Integration**:
-- **EIP-6110** moves deposit processing to execution layer
-- **EIP-7002** enables execution layer to trigger validator exits
-- **EIP-7251** supports validator consolidation (minimal execution layer impact)
+### Remaining Gaps
 
-**Development Impact**:
-The Pectra fork significantly increases the complexity of Ethereum execution clients, particularly around:
-1. Transaction type handling (Type 4)
-2. System contract interactions (multiple new system contracts)
-3. Engine API evolution (v4 with request support)
-4. Cryptographic operations (BLS12-381)
-
-**Estimated Total Implementation Time**: 30-44 weeks across 5 major phases, assuming sequential development. Parallel development could reduce this timeline significantly.
+1. **BLS12-381 full crypto** — stubs deployed, full implementation requires JVM BLS library
+2. **EIP-2718 Type-1 access list transactions** — parsed but not fully exercised in ETC
+3. **DIFFICULTY vs PREVRANDAO** — ETC uses DIFFICULTY (PoW), not PREVRANDAO
 
 ---
 
@@ -1144,7 +1049,13 @@ The Pectra fork significantly increases the complexity of Ethereum execution cli
 ## Document History
 
 - **Initial Version**: Pre-Pectra analysis (focusing on London through Cancun)
-- **Current Version (December 2025)**: Updated for Pectra/Fusaka fork activation
+- **December 2025**: Updated for Pectra/Fusaka fork activation
+- **Current Version (March 2026)**: Updated for Olympia hard fork (ECIP-1111/1112/1121)
+  - 14 EIPs moved from Missing/Partial to Implemented
+  - Added BASEFEE, TLOAD, TSTORE, MCOPY opcodes as Implemented
+  - Added P256VERIFY precompile (Implemented), BLS12-381 precompiles (Stubs)
+  - Updated transaction type support: Types 2 and 4 now Implemented
+  - Updated conclusion with Olympia implementation status summary
   - Pectra/Fusaka fork was activated on May 7, 2025
   - Added 9 new Pectra/Fusaka EIPs with detailed analysis
   - Added comprehensive transaction types section (Types 0-4)

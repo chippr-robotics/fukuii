@@ -78,7 +78,7 @@
       "pluginVersion": "7.3.6",
       "targets": [
         {
-          "expr": "app_fastsync_block_bestFullBlock_number_gauge{instance=~\"$node\"}",
+          "expr": "app_regularsync_block_current_number_gauge{instance=~\"$node\"} or app_fastsync_block_bestFullBlock_number_gauge{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Block",
           "refId": "A"
@@ -133,7 +133,7 @@
       "pluginVersion": "7.3.6",
       "targets": [
         {
-          "expr": "app_fastsync_block_pivotBlock_number_gauge{instance=~\"$node\"}",
+          "expr": "app_fastsync_block_pivotBlock_number_gauge{instance=~\"$node\"} or app_snapsync_pivot_block_number_gauge{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Pivot",
           "refId": "A"
@@ -144,7 +144,7 @@
     },
     {
       "datasource": "Prometheus",
-      "description": "FastSync total time",
+      "description": "Total sync time (fast sync or SNAP sync)",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -188,18 +188,18 @@
       "pluginVersion": "7.3.6",
       "targets": [
         {
-          "expr": "app_fastsync_totaltime_minutes_gauge{instance=~\"$node\"}",
+          "expr": "app_fastsync_totaltime_minutes_gauge{instance=~\"$node\"} or app_snapsync_totaltime_minutes_gauge{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Minutes",
           "refId": "A"
         }
       ],
-      "title": "FastSync Total Time",
+      "title": "Sync Total Time",
       "type": "stat"
     },
     {
       "datasource": "Prometheus",
-      "description": "Downloaded MPT Nodes",
+      "description": "Blocks imported (regular sync) or MPT nodes downloaded (fast sync)",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -243,13 +243,13 @@
       "pluginVersion": "7.3.6",
       "targets": [
         {
-          "expr": "app_fastsync_state_downloadedNodes_gauge{instance=~\"$node\"}",
+          "expr": "app_regularsync_blocks_imported_total{instance=~\"$node\"} or app_fastsync_state_downloadedNodes_gauge{instance=~\"$node\"}",
           "interval": "",
           "legendFormat": "Nodes",
           "refId": "A"
         }
       ],
-      "title": "Downloaded MPT Nodes",
+      "title": "Blocks Imported / MPT Nodes",
       "type": "stat"
     },
     {
@@ -299,10 +299,15 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "app_fastsync_block_bestFullBlock_number_gauge{instance=~\"$node\"}",
+          "expr": "app_regularsync_block_current_number_gauge{instance=~\"$node\"} or app_fastsync_block_bestFullBlock_number_gauge{instance=~\"$node\"}",
           "interval": "",
-          "legendFormat": "Block Number",
+          "legendFormat": "Current Block",
           "refId": "A"
+        },
+        {
+          "expr": "app_regularsync_block_bestKnown_number_gauge{instance=~\"$node\"}",
+          "legendFormat": "Network Best Block",
+          "refId": "B"
         }
       ],
       "thresholds": [],

@@ -8,8 +8,8 @@ import mouse.all._
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 
 import com.chipprbots.ethereum.crypto.generateKeyPair
-import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields
 import com.chipprbots.ethereum.domain._
+import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 
 object BlockHelpers extends SecureRandomBuilder {
@@ -46,8 +46,8 @@ object BlockHelpers extends SecureRandomBuilder {
     }
 
   def resetHeaderExtraFields(hef: BlockHeader.HeaderExtraFields): BlockHeader.HeaderExtraFields = hef match {
-    case HeaderExtraFields.HefEmpty           => HeaderExtraFields.HefEmpty
-    case HeaderExtraFields.HefPostEcip1097(_) => HeaderExtraFields.HefPostEcip1097(None)
+    case HeaderExtraFields.HefEmpty                => HeaderExtraFields.HefEmpty
+    case HeaderExtraFields.HefPostOlympia(baseFee) => HeaderExtraFields.HefPostOlympia(baseFee)
   }
 
   def generateBlock(parent: Block): Block = {
@@ -55,8 +55,7 @@ object BlockHelpers extends SecureRandomBuilder {
       extraData = randomHash(),
       number = parent.number + 1,
       parentHash = parent.hash,
-      nonce = ByteString(Random.nextLong()),
-      extraFields = resetHeaderExtraFields(parent.header.extraFields)
+      nonce = ByteString(Random.nextLong())
     )
     val ommer = defaultHeader.copy(extraData = randomHash())
     val tx = defaultTx.copy(payload = randomHash())

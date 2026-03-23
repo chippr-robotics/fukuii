@@ -4100,7 +4100,7 @@
           "thresholds": "",
           "timeFrom": null,
           "timeShift": null,
-          "title": "IOHK mined blocks",
+          "title": "Mined blocks",
           "type": "singlestat",
           "valueFontSize": "80%",
           "valueMaps": [

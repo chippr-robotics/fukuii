@@ -176,6 +176,16 @@ class PeersClient(
           nodeDataPeers.size
         )
         bestPeer(nodeDataPeers, log)
+
+      case ExcludingPeers(exclude) =>
+        val filteredPeers = peersToDownloadFrom.filterNot { case (peerId, _) => exclude.contains(peerId) }
+        log.debug(
+          "Selecting best peer excluding {} peers from {} available ({} remaining)",
+          exclude.size,
+          peersToDownloadFrom.size,
+          filteredPeers.size
+        )
+        bestPeer(filteredPeers, log)
     }
 
   /** Adapts message format based on peer's negotiated capability. ETH66+ peers use RequestId wrapper, earlier versions
@@ -311,6 +321,7 @@ object PeersClient {
   case object BestPeer extends PeerSelector
   case object BestSnapPeer extends PeerSelector
   case object BestNodeDataPeer extends PeerSelector
+  case class ExcludingPeers(exclude: Set[PeerId]) extends PeerSelector
 
   def bestPeer(
       peersToDownloadFrom: Map[PeerId, PeerWithInfo],

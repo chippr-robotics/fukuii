@@ -80,7 +80,7 @@ class FukuiiServiceSpec
           ExtendedTransactionData(
             fakeTransaction.tx,
             isOutgoing = true,
-            Some(MinedTransactionData(block.header, 0, 42, isCheckpointed = false))
+            Some(MinedTransactionData(block.header, 0, 42))
           )
         )
 

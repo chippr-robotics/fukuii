@@ -384,8 +384,8 @@ class RLPxConnectionHandlerSpec
               capability: Capability,
               p2pVersion: Long,
               clientId: String,
-        compressionPolicy: MessageCodec.CompressionPolicy,
-        supportsSnap: Boolean
+              compressionPolicy: MessageCodec.CompressionPolicy,
+              supportsSnap: Boolean
           ) => mockMessageCodec,
           rlpxConfiguration,
           _ => mockHelloExtractor

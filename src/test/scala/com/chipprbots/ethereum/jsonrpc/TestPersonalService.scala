@@ -34,7 +34,8 @@ class TestPersonalService extends PersonalServiceAPI {
   var ecRecoverFn: EcRecoverRequest => ServiceResponse[EcRecoverResponse] =
     _ => IO.raiseError(new NotImplementedError("TestPersonalService.ecRecover not configured"))
 
-  var sendTransactionWithPassphraseFn: SendTransactionWithPassphraseRequest => ServiceResponse[SendTransactionWithPassphraseResponse] =
+  var sendTransactionWithPassphraseFn
+      : SendTransactionWithPassphraseRequest => ServiceResponse[SendTransactionWithPassphraseResponse] =
     _ => IO.raiseError(new NotImplementedError("TestPersonalService.sendTransaction(WithPassphrase) not configured"))
 
   var sendTransactionFn: SendTransactionRequest => ServiceResponse[SendTransactionResponse] =
@@ -45,12 +46,20 @@ class TestPersonalService extends PersonalServiceAPI {
 
   override def importRawKey(req: ImportRawKeyRequest): ServiceResponse[ImportRawKeyResponse] = importRawKeyFn(req)
   override def newAccount(req: NewAccountRequest): ServiceResponse[NewAccountResponse] = newAccountFn(req)
-  override def listAccounts(request: ListAccountsRequest): ServiceResponse[ListAccountsResponse] = listAccountsFn(request)
-  override def unlockAccount(request: UnlockAccountRequest): ServiceResponse[UnlockAccountResponse] = unlockAccountFn(request)
+  override def listAccounts(request: ListAccountsRequest): ServiceResponse[ListAccountsResponse] = listAccountsFn(
+    request
+  )
+  override def unlockAccount(request: UnlockAccountRequest): ServiceResponse[UnlockAccountResponse] = unlockAccountFn(
+    request
+  )
   override def lockAccount(request: LockAccountRequest): ServiceResponse[LockAccountResponse] = lockAccountFn(request)
   override def sign(request: SignRequest): ServiceResponse[SignResponse] = signFn(request)
   override def ecRecover(req: EcRecoverRequest): ServiceResponse[EcRecoverResponse] = ecRecoverFn(req)
-  override def sendTransaction(request: SendTransactionWithPassphraseRequest): ServiceResponse[SendTransactionWithPassphraseResponse] = sendTransactionWithPassphraseFn(request)
-  override def sendTransaction(request: SendTransactionRequest): ServiceResponse[SendTransactionResponse] = sendTransactionFn(request)
-  override def sendIeleTransaction(request: SendIeleTransactionRequest): ServiceResponse[SendTransactionResponse] = sendIeleTransactionFn(request)
+  override def sendTransaction(
+      request: SendTransactionWithPassphraseRequest
+  ): ServiceResponse[SendTransactionWithPassphraseResponse] = sendTransactionWithPassphraseFn(request)
+  override def sendTransaction(request: SendTransactionRequest): ServiceResponse[SendTransactionResponse] =
+    sendTransactionFn(request)
+  override def sendIeleTransaction(request: SendIeleTransactionRequest): ServiceResponse[SendTransactionResponse] =
+    sendIeleTransactionFn(request)
 }

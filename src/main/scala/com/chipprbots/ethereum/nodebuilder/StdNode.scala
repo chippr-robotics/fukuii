@@ -91,16 +91,23 @@ abstract class BaseNode extends Node {
   private[this] def loadGenesisData(): Unit =
     if (!Config.testmode) {
       genesisDataLoader.loadGenesisData()
-      bootstrapCheckpointLoader.loadBootstrapCheckpoints()
     }
 
-  private[this] def runDBConsistencyCheck(): Unit =
+  private[this] def runDBConsistencyCheck(): Unit = {
+    // Skip consistency check after SNAP sync — block headers 0..pivot don't exist yet.
+    // SNAP sync only stores the pivot block header; earlier headers are downloaded
+    // incrementally during regular sync's block-by-block import.
+    if (storagesInstance.storages.appStateStorage.isSnapSyncDone()) {
+      log.info("Skipping DB consistency check: SNAP sync stores only pivot block header, not full header chain")
+      return
+    }
     StorageConsistencyChecker.checkStorageConsistency(
       storagesInstance.storages.appStateStorage.getBestBlockNumber(),
       storagesInstance.storages.blockNumberMappingStorage,
       storagesInstance.storages.blockHeadersStorage,
       shutdown
     )(log)
+  }
 
   private[this] def startPeerManager(): Unit = peerManager ! PeerManagerActor.StartConnecting
 
@@ -181,8 +188,6 @@ abstract class BaseNode extends Node {
   }
 
   def fixDatabase(): Unit = {
-    // FIXME this is a temporary solution to avoid an incompatibility due to the introduction of the best block hash
-    // We can remove this fix when we release an incompatible version.
     val bestBlockInfo = storagesInstance.storages.appStateStorage.getBestBlockInfo()
     if (bestBlockInfo.hash == ByteString.empty && bestBlockInfo.number > 0) {
       log.warn("Fixing best block hash into database for block {}", bestBlockInfo.number)

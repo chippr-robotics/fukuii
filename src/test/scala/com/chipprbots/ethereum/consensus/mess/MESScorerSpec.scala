@@ -1,14 +1,8 @@
 package com.chipprbots.ethereum.consensus.mess
 
-import org.apache.pekko.util.ByteString
-
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-import scala.collection.mutable
-
-import com.chipprbots.ethereum.db.storage.BlockFirstSeenStorage
-import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.testing.Tags._
 
 class MESSConfigSpec extends AnyFlatSpec with Matchers {
@@ -17,256 +11,242 @@ class MESSConfigSpec extends AnyFlatSpec with Matchers {
     val config = MESSConfig()
 
     config.enabled shouldBe false
-    config.decayConstant shouldBe 0.0001
-    config.maxTimeDelta shouldBe 2592000L
-    config.minWeightMultiplier shouldBe 0.0001
+    config.activationBlock shouldBe None
+    config.deactivationBlock shouldBe None
   }
 
-  it should "validate decayConstant is non-negative" taggedAs (UnitTest, ConsensusTest) in {
-    assertThrows[IllegalArgumentException] {
-      MESSConfig(decayConstant = -0.1)
-    }
+  it should "have None activation/deactivation blocks by default" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig()
+    config.activationBlock shouldBe None
+    config.deactivationBlock shouldBe None
   }
 
-  it should "validate maxTimeDelta is positive" taggedAs (UnitTest, ConsensusTest) in {
-    assertThrows[IllegalArgumentException] {
-      MESSConfig(maxTimeDelta = 0)
-    }
+  // ECBP-1100 block-based activation window tests
 
-    assertThrows[IllegalArgumentException] {
-      MESSConfig(maxTimeDelta = -100)
-    }
+  it should "report inactive when enabled=false regardless of block number" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig(enabled = false, activationBlock = Some(100), deactivationBlock = Some(200))
+    config.isActiveAtBlock(150) shouldBe false
   }
 
-  it should "validate minWeightMultiplier is taggedAs (UnitTest, ConsensusTest) in range (0, 1]" in {
-    assertThrows[IllegalArgumentException] {
-      MESSConfig(minWeightMultiplier = 0.0)
-    }
+  it should "report active when enabled=true and within activation window" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig(enabled = true, activationBlock = Some(100), deactivationBlock = Some(200))
+    config.isActiveAtBlock(100) shouldBe true // activation is inclusive
+    config.isActiveAtBlock(150) shouldBe true
+    config.isActiveAtBlock(199) shouldBe true
+  }
 
-    assertThrows[IllegalArgumentException] {
-      MESSConfig(minWeightMultiplier = -0.1)
-    }
+  it should "report inactive before activation block" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig(enabled = true, activationBlock = Some(100), deactivationBlock = Some(200))
+    config.isActiveAtBlock(99) shouldBe false
+    config.isActiveAtBlock(0) shouldBe false
+  }
 
-    assertThrows[IllegalArgumentException] {
-      MESSConfig(minWeightMultiplier = 1.1)
-    }
+  it should "report inactive at and after deactivation block" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig(enabled = true, activationBlock = Some(100), deactivationBlock = Some(200))
+    config.isActiveAtBlock(200) shouldBe false // deactivation is exclusive
+    config.isActiveAtBlock(201) shouldBe false
+  }
 
-    // These should be valid
-    MESSConfig(minWeightMultiplier = 0.0001)
-    MESSConfig(minWeightMultiplier = 1.0)
-    MESSConfig(minWeightMultiplier = 0.5)
+  it should "report active with no deactivation block (never deactivates)" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig(enabled = true, activationBlock = Some(100))
+    config.isActiveAtBlock(100) shouldBe true
+    config.isActiveAtBlock(BigInt("99999999999")) shouldBe true
+  }
+
+  it should "report active with no activation block (always active)" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig(enabled = true, deactivationBlock = Some(200))
+    config.isActiveAtBlock(0) shouldBe true
+    config.isActiveAtBlock(199) shouldBe true
+    config.isActiveAtBlock(200) shouldBe false
+  }
+
+  it should "match Mordor ECBP-1100 activation window" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig(enabled = true, activationBlock = Some(2380000), deactivationBlock = Some(10400000))
+    config.isActiveAtBlock(2379999) shouldBe false
+    config.isActiveAtBlock(2380000) shouldBe true
+    config.isActiveAtBlock(5000000) shouldBe true
+    config.isActiveAtBlock(10399999) shouldBe true
+    config.isActiveAtBlock(10400000) shouldBe false
+  }
+
+  it should "match ETC mainnet ECBP-1100 activation window" taggedAs (UnitTest, ConsensusTest) in {
+    val config = MESSConfig(enabled = true, activationBlock = Some(11380000), deactivationBlock = Some(19250000))
+    config.isActiveAtBlock(11379999) shouldBe false
+    config.isActiveAtBlock(11380000) shouldBe true
+    config.isActiveAtBlock(15000000) shouldBe true
+    config.isActiveAtBlock(19249999) shouldBe true
+    config.isActiveAtBlock(19250000) shouldBe false
   }
 }
 
-class MESScorerSpec extends AnyFlatSpec with Matchers {
+/** Tests for ArtificialFinality (ECIP-1100 cubic polynomial).
+  *
+  * Verifies the polynomial curve and reorg rejection logic against the ECIP-1100 specification and cross-client
+  * reference implementations (core-geth, Besu).
+  */
+class ArtificialFinalitySpec extends AnyFlatSpec with Matchers {
 
-  // Time conversion constants for readability
-  private val OneHourMillis = 3600 * 1000L
-  private val OneDayMillis = 24 * 3600 * 1000L
+  // Constants from ECIP-1100 spec
+  private val Denominator = BigInt(128)
+  private val Xcap = BigInt(25132) // floor(8000 * pi)
 
-  // In-memory storage for testing
-  class InMemoryBlockFirstSeenStorage extends BlockFirstSeenStorage {
-    private val storage = mutable.Map[ByteString, Long]()
-
-    override def put(blockHash: ByteString, timestamp: Long): Unit =
-      storage(blockHash) = timestamp
-
-    override def get(blockHash: ByteString): Option[Long] =
-      storage.get(blockHash)
-
-    override def remove(blockHash: ByteString): Unit =
-      storage.remove(blockHash)
+  "ArtificialFinality.polynomialV" should "return DENOMINATOR (128) for timeDelta=0" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    ArtificialFinality.polynomialV(BigInt(0)) shouldBe Denominator
   }
 
-  def createScorer(
-      config: MESSConfig = MESSConfig(enabled = true),
-      storage: BlockFirstSeenStorage = new InMemoryBlockFirstSeenStorage(),
-      currentTime: Long = 1000000L
-  ): MESSScorer =
-    new MESSScorer(config, storage, () => currentTime)
-
-  "MESSScorer" should "return original difficulty when MESS is disabled" taggedAs (UnitTest, ConsensusTest) in {
-    val config = MESSConfig(enabled = false)
-    val scorer = createScorer(config = config)
-
-    val blockHash = ByteString("test")
-    val difficulty = BigInt(1000000)
-    val blockTimestamp = 900000L
-
-    val result = scorer.calculateMessDifficulty(blockHash, difficulty, blockTimestamp)
-    result shouldBe difficulty
+  it should "return DENOMINATOR (128) for very small timeDelta" taggedAs (UnitTest, ConsensusTest) in {
+    val result = ArtificialFinality.polynomialV(BigInt(1))
+    result shouldBe >=(Denominator)
+    result shouldBe <=(Denominator + 1)
   }
 
-  it should "return original difficulty for blocks seen immediately" taggedAs (UnitTest, ConsensusTest) in {
-    val scorer = createScorer(currentTime = 1000000L)
-    val storage = new InMemoryBlockFirstSeenStorage()
-    val scorerWithStorage = createScorer(storage = storage, currentTime = 1000000L)
+  it should "increase monotonically up to xcap" taggedAs (UnitTest, ConsensusTest) in {
+    val points = Seq(0, 100, 500, 1000, 2000, 5000, 10000, 15000, 20000, 25132)
+    val values = points.map(x => ArtificialFinality.polynomialV(BigInt(x)))
 
-    val blockHash = ByteString("test")
-    val difficulty = BigInt(1000000)
-    val blockTimestamp = 1000000L // Same as current time
-
-    // Record first seen at current time
-    storage.put(blockHash, 1000000L)
-
-    val result = scorerWithStorage.calculateMessDifficulty(blockHash, difficulty, blockTimestamp)
-
-    // Should be very close to original (exp(0) = 1.0)
-    result shouldBe >=(BigInt(999900))
-    result shouldBe <=(BigInt(1000100))
+    // Each value should be >= the previous
+    values.zip(values.tail).foreach { case (a, b) =>
+      b should be >= a
+    }
   }
 
-  it should "apply penalty for blocks seen 1 hour late" taggedAs (UnitTest, ConsensusTest) in {
-    val config = MESSConfig(enabled = true, decayConstant = 0.0001)
-    val storage = new InMemoryBlockFirstSeenStorage()
-    val currentTime = 1000000L
-    val scorer = createScorer(config = config, storage = storage, currentTime = currentTime)
+  it should "cap at xcap=25132 (~7 hours)" taggedAs (UnitTest, ConsensusTest) in {
+    val atXcap = ArtificialFinality.polynomialV(Xcap)
+    val beyondXcap = ArtificialFinality.polynomialV(Xcap + 10000)
 
-    val blockHash = ByteString("test")
-    val difficulty = BigInt(1000000)
-    val firstSeenTime = currentTime - OneHourMillis // 1 hour ago
-
-    storage.put(blockHash, firstSeenTime)
-
-    val result = scorer.calculateMessDifficulty(blockHash, difficulty, 0L)
-
-    // After 1 hour (3600 seconds) with lambda=0.0001:
-    // exp(-0.0001 * 3600) = exp(-0.36) ≈ 0.70
-    // Expected: ~700,000
-    result should be > BigInt(650000)
-    result should be < BigInt(750000)
+    atXcap shouldBe beyondXcap
   }
 
-  it should "apply strong penalty for blocks seen 24 hours late" taggedAs (UnitTest, ConsensusTest) in {
-    val config = MESSConfig(enabled = true, decayConstant = 0.0001)
-    val storage = new InMemoryBlockFirstSeenStorage()
-    val currentTime = 1000000L
-    val scorer = createScorer(config = config, storage = storage, currentTime = currentTime)
-
-    val blockHash = ByteString("test")
-    val difficulty = BigInt(1000000)
-    val firstSeenTime = currentTime - OneDayMillis // 24 hours ago
-
-    storage.put(blockHash, firstSeenTime)
-
-    val result = scorer.calculateMessDifficulty(blockHash, difficulty, 0L)
-
-    // After 24 hours (86400 seconds) with lambda=0.0001:
-    // exp(-0.0001 * 86400) = exp(-8.64) ≈ 0.0002
-    // Expected: very small, close to minWeightMultiplier
-    result should be < BigInt(1000) // Less than 0.1% of original
+  it should "reach approximately 31x multiplier at xcap" taggedAs (UnitTest, ConsensusTest) in {
+    // At xcap: DENOMINATOR + HEIGHT = 128 + 3840 = 3968
+    // 3968 / 128 = 31x multiplier
+    val atXcap = ArtificialFinality.polynomialV(Xcap)
+    atXcap shouldBe BigInt(3968)
   }
 
-  it should "enforce minimum weight multiplier" taggedAs (UnitTest, ConsensusTest) in {
-    val config = MESSConfig(enabled = true, decayConstant = 0.0001, minWeightMultiplier = 0.01)
-    val storage = new InMemoryBlockFirstSeenStorage()
-    val currentTime = 10000000L
-    val scorer = createScorer(config = config, storage = storage, currentTime = currentTime)
+  it should "match Python reference values from ECIP-1100 spec" taggedAs (UnitTest, ConsensusTest) in {
+    // Python: get_curve_function_numerator(0) = 128
+    ArtificialFinality.polynomialV(BigInt(0)) shouldBe BigInt(128)
 
-    val blockHash = ByteString("test")
-    val difficulty = BigInt(1000000)
-    val firstSeenTime = 0L // Very old block
+    // Python: get_curve_function_numerator(25132) = 128 + 3840 = 3968
+    ArtificialFinality.polynomialV(BigInt(25132)) shouldBe BigInt(3968)
 
-    storage.put(blockHash, firstSeenTime)
-
-    val result = scorer.calculateMessDifficulty(blockHash, difficulty, 0L)
-
-    // Should be at least minWeightMultiplier (1%) of original
-    result should be >= BigInt(10000) // At least 1%
+    // Python: get_curve_function_numerator(50000) = 3968 (capped at xcap)
+    ArtificialFinality.polynomialV(BigInt(50000)) shouldBe BigInt(3968)
   }
 
-  it should "cap time delta at maxTimeDelta" taggedAs (UnitTest, ConsensusTest) in {
-    val maxTimeDelta = 1000L // 1000 seconds
-    val config = MESSConfig(
-      enabled = true,
-      decayConstant = 0.0001,
-      maxTimeDelta = maxTimeDelta
+  it should "be near 1x multiplier for timeDelta under ~200s" taggedAs (UnitTest, ConsensusTest) in {
+    val at200 = ArtificialFinality.polynomialV(BigInt(200))
+    at200 should be >= BigInt(128)
+    at200 should be <= BigInt(135)
+  }
+
+  "ArtificialFinality.shouldRejectReorg" should "not reject when proposed TD equals local TD (timeDelta=0)" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val result = ArtificialFinality.shouldRejectReorg(
+      timeDeltaSeconds = 0,
+      localSubchainTD = BigInt(1000),
+      proposedSubchainTD = BigInt(1000)
     )
-    val storage = new InMemoryBlockFirstSeenStorage()
-    val currentTime = 10000000L
-    val scorer = createScorer(config = config, storage = storage, currentTime = currentTime)
-
-    val blockHash1 = ByteString("block1")
-    val blockHash2 = ByteString("block2")
-    val difficulty = BigInt(1000000)
-
-    // Block1: exactly maxTimeDelta old
-    storage.put(blockHash1, currentTime - (maxTimeDelta * 1000))
-
-    // Block2: much older than maxTimeDelta
-    storage.put(blockHash2, currentTime - (maxTimeDelta * 10000))
-
-    val result1 = scorer.calculateMessDifficulty(blockHash1, difficulty, 0L)
-    val result2 = scorer.calculateMessDifficulty(blockHash2, difficulty, 0L)
-
-    // Both should get the same penalty (capped at maxTimeDelta)
-    result1 shouldBe result2
+    result shouldBe false
   }
 
-  it should "use block timestamp when no first-seen time exists" taggedAs (UnitTest, ConsensusTest) in {
-    val storage = new InMemoryBlockFirstSeenStorage()
-    val currentTime = 1000000L
-    val scorer = createScorer(storage = storage, currentTime = currentTime)
-
-    val blockHash = ByteString("unseen")
-    val difficulty = BigInt(1000000)
-    val blockTimestamp = 900000L
-
-    // Don't record first-seen time
-
-    val result = scorer.calculateMessDifficulty(blockHash, difficulty, blockTimestamp)
-
-    // Should use blockTimestamp as first-seen, so 100 second penalty
-    // exp(-0.0001 * 100) = exp(-0.01) ≈ 0.99
-    result should be > BigInt(980000)
-    result should be < BigInt(1000000)
+  it should "not reject when proposed TD exceeds local TD (timeDelta=0)" taggedAs (UnitTest, ConsensusTest) in {
+    val result = ArtificialFinality.shouldRejectReorg(
+      timeDeltaSeconds = 0,
+      localSubchainTD = BigInt(1000),
+      proposedSubchainTD = BigInt(1001)
+    )
+    result shouldBe false
   }
 
-  it should "record first-seen time correctly" taggedAs (UnitTest, ConsensusTest) in {
-    val storage = new InMemoryBlockFirstSeenStorage()
-    val currentTime = 1000000L
-    val scorer = createScorer(storage = storage, currentTime = currentTime)
-
-    val blockHash = ByteString("new")
-
-    storage.contains(blockHash) shouldBe false
-
-    val isFirst = scorer.recordFirstSeen(blockHash)
-    isFirst shouldBe true
-
-    storage.contains(blockHash) shouldBe true
-    storage.get(blockHash) shouldBe Some(currentTime)
-
-    // Recording again should return false
-    val isFirstAgain = scorer.recordFirstSeen(blockHash)
-    isFirstAgain shouldBe false
+  it should "reject when proposed TD is less than local TD (timeDelta=0)" taggedAs (UnitTest, ConsensusTest) in {
+    val result = ArtificialFinality.shouldRejectReorg(
+      timeDeltaSeconds = 0,
+      localSubchainTD = BigInt(1000),
+      proposedSubchainTD = BigInt(999)
+    )
+    result shouldBe true
   }
 
-  it should "calculate multiplier correctly" taggedAs (UnitTest, ConsensusTest) in {
-    val storage = new InMemoryBlockFirstSeenStorage()
-    val currentTime = 1000000L
-    val scorer = createScorer(storage = storage, currentTime = currentTime)
+  it should "require higher TD for longer time deltas" taggedAs (UnitTest, ConsensusTest) in {
+    val localTD = BigInt(1000)
 
-    val blockHash = ByteString("test")
-    val blockTimestamp = 900000L // 100 seconds ago
+    // At 7 hours (~25132 seconds), polynomial reaches ~31x
+    // So proposed needs >31x the local TD to not be rejected
+    val rejectAt7Hours = ArtificialFinality.shouldRejectReorg(
+      timeDeltaSeconds = 25132,
+      localSubchainTD = localTD,
+      proposedSubchainTD = localTD * 30 // 30x is not enough for 31x requirement
+    )
+    rejectAt7Hours shouldBe true
 
-    storage.put(blockHash, blockTimestamp)
-
-    val multiplier = scorer.calculateMultiplier(blockHash, blockTimestamp)
-
-    // exp(-0.0001 * 100) = exp(-0.01) ≈ 0.99
-    multiplier should be > 0.98
-    multiplier should be < 1.0
+    // 31x should be enough
+    val acceptAt7Hours = ArtificialFinality.shouldRejectReorg(
+      timeDeltaSeconds = 25132,
+      localSubchainTD = localTD,
+      proposedSubchainTD = localTD * 31
+    )
+    acceptAt7Hours shouldBe false
   }
 
-  it should "return multiplier of 1.0 when MESS is disabled" taggedAs (UnitTest, ConsensusTest) in {
-    val config = MESSConfig(enabled = false)
-    val scorer = createScorer(config = config)
+  it should "not require extra TD for very short time deltas" taggedAs (UnitTest, ConsensusTest) in {
+    val result = ArtificialFinality.shouldRejectReorg(
+      timeDeltaSeconds = 100,
+      localSubchainTD = BigInt(1000),
+      proposedSubchainTD = BigInt(1001)
+    )
+    result shouldBe false
+  }
 
-    val blockHash = ByteString("test")
-    val blockTimestamp = 0L
+  it should "handle zero local TD" taggedAs (UnitTest, ConsensusTest) in {
+    val result = ArtificialFinality.shouldRejectReorg(
+      timeDeltaSeconds = 10000,
+      localSubchainTD = BigInt(0),
+      proposedSubchainTD = BigInt(1)
+    )
+    result shouldBe false
+  }
 
-    val multiplier = scorer.calculateMultiplier(blockHash, blockTimestamp)
-    multiplier shouldBe 1.0
+  it should "handle large time deltas (capped at xcap)" taggedAs (UnitTest, ConsensusTest) in {
+    val reject1 = ArtificialFinality.shouldRejectReorg(
+      timeDeltaSeconds = 30000,
+      localSubchainTD = BigInt(1000),
+      proposedSubchainTD = BigInt(1000) * 30
+    )
+    val reject2 = ArtificialFinality.shouldRejectReorg(
+      timeDeltaSeconds = 100000,
+      localSubchainTD = BigInt(1000),
+      proposedSubchainTD = BigInt(1000) * 30
+    )
+
+    reject1 shouldBe reject2
+  }
+
+  it should "match core-geth/Besu behavior for 1-hour test vector" taggedAs (UnitTest, ConsensusTest) in {
+    val poly1h = ArtificialFinality.polynomialV(BigInt(3600))
+    poly1h should be >= BigInt(300)
+    poly1h should be <= BigInt(400)
+
+    // At ~2.66x multiplier, 2x proposed should be rejected
+    val rejectUnder3x = ArtificialFinality.shouldRejectReorg(
+      timeDeltaSeconds = 3600,
+      localSubchainTD = BigInt(1000),
+      proposedSubchainTD = BigInt(2000)
+    )
+    rejectUnder3x shouldBe true
+
+    // 3x proposed should be accepted
+    val acceptOver3x = ArtificialFinality.shouldRejectReorg(
+      timeDeltaSeconds = 3600,
+      localSubchainTD = BigInt(1000),
+      proposedSubchainTD = BigInt(3000)
+    )
+    acceptOver3x shouldBe false
   }
 }

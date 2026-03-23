@@ -115,8 +115,6 @@ class RestrictedEthashBlockHeaderValidatorSpec
         bootstrapNodes = Set(),
         gasTieBreaker = false,
         ethCompatibleStorage = true,
-        treasuryAddress = Address(0),
-        checkpointPubKeys = Set.empty,
         allowedMinersPublicKeys = allowedMiners
       )
 

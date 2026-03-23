@@ -24,6 +24,12 @@ import com.chipprbots.ethereum.utils.ByteUtils
   */
 object ETH66 {
 
+  /** Marker trait for ETH66 messages that carry a request ID.
+    * Used by PeerRequestHandler to validate that a response's request ID
+    * matches the outstanding request, preventing stale response consumption.
+    */
+  trait HasRequestId { def requestId: BigInt }
+
   /** Thread-safe counter for generating unique request IDs. Starting from 1 to avoid the special case of encoding 0.
     */
   private val requestIdCounter = new AtomicLong(1L)
@@ -112,7 +118,7 @@ object ETH66 {
       maxHeaders: BigInt,
       skip: BigInt,
       reverse: Boolean
-  ) extends Message {
+  ) extends Message with HasRequestId {
     override def code: Int = Codes.GetBlockHeadersCode
 
     override def toString: String =
@@ -161,7 +167,7 @@ object ETH66 {
     }
   }
 
-  case class BlockHeaders(requestId: BigInt, headers: Seq[BlockHeader]) extends Message {
+  case class BlockHeaders(requestId: BigInt, headers: Seq[BlockHeader]) extends Message with HasRequestId {
     val code: Int = Codes.BlockHeadersCode
     override def toShortString: String =
       s"BlockHeaders { requestId: $requestId, count: ${headers.size} }"
@@ -198,7 +204,7 @@ object ETH66 {
     }
   }
 
-  case class GetBlockBodies(requestId: BigInt, hashes: Seq[ByteString]) extends Message {
+  case class GetBlockBodies(requestId: BigInt, hashes: Seq[ByteString]) extends Message with HasRequestId {
     override def code: Int = Codes.GetBlockBodiesCode
 
     override def toString: String =
@@ -244,7 +250,7 @@ object ETH66 {
     }
   }
 
-  case class BlockBodies(requestId: BigInt, bodies: Seq[BlockBody]) extends Message {
+  case class BlockBodies(requestId: BigInt, bodies: Seq[BlockBody]) extends Message with HasRequestId {
     val code: Int = Codes.BlockBodiesCode
     override def toShortString: String =
       s"BlockBodies { requestId: $requestId, count: ${bodies.size} }"
@@ -270,7 +276,7 @@ object ETH66 {
     }
   }
 
-  case class GetPooledTransactions(requestId: BigInt, txHashes: Seq[ByteString]) extends Message {
+  case class GetPooledTransactions(requestId: BigInt, txHashes: Seq[ByteString]) extends Message with HasRequestId {
     override def code: Int = Codes.GetPooledTransactionsCode
 
     override def toString: String =
@@ -314,7 +320,7 @@ object ETH66 {
     }
   }
 
-  case class PooledTransactions(requestId: BigInt, txs: Seq[SignedTransaction]) extends Message {
+  case class PooledTransactions(requestId: BigInt, txs: Seq[SignedTransaction]) extends Message with HasRequestId {
     override def code: Int = Codes.PooledTransactionsCode
 
     override def toString: String =
@@ -357,7 +363,7 @@ object ETH66 {
     }
   }
 
-  case class GetNodeData(requestId: BigInt, mptElementsHashes: Seq[ByteString]) extends Message {
+  case class GetNodeData(requestId: BigInt, mptElementsHashes: Seq[ByteString]) extends Message with HasRequestId {
     override def code: Int = Codes.GetNodeDataCode
 
     override def toString: String =
@@ -397,7 +403,7 @@ object ETH66 {
     }
   }
 
-  case class NodeData(requestId: BigInt, values: RLPList) extends Message {
+  case class NodeData(requestId: BigInt, values: RLPList) extends Message with HasRequestId {
     override def code: Int = Codes.NodeDataCode
 
     override def toString: String =
@@ -436,7 +442,7 @@ object ETH66 {
     }
   }
 
-  case class GetReceipts(requestId: BigInt, blockHashes: Seq[ByteString]) extends Message {
+  case class GetReceipts(requestId: BigInt, blockHashes: Seq[ByteString]) extends Message with HasRequestId {
     override def code: Int = Codes.GetReceiptsCode
 
     override def toString: String =
@@ -479,7 +485,7 @@ object ETH66 {
     }
   }
 
-  case class Receipts(requestId: BigInt, receiptsForBlocks: RLPList) extends Message {
+  case class Receipts(requestId: BigInt, receiptsForBlocks: RLPList) extends Message with HasRequestId {
     override def code: Int = Codes.ReceiptsCode
 
     override def toShortString: String =

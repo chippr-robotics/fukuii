@@ -13,9 +13,8 @@ import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.jsonrpc.EthBlocksJsonMethodsImplicits._
 
-/** Test to verify that genesis block (without ECIP-1097) is serialized correctly:
-  * 1. mixHash field should be present
-  * 2. checkpoint-related fields should NOT be present when block has no checkpoint
+/** Test to verify that genesis block is serialized correctly:
+  *   1. mixHash field should be present
   */
 class GenesisBlockResponseSpec extends AnyFlatSpec with Matchers {
 
@@ -36,7 +35,6 @@ class GenesisBlockResponseSpec extends AnyFlatSpec with Matchers {
       extraData = ByteString(Hex.decode("00")),
       mixHash = ByteString(Hex.decode("0000000000000000000000000000000000000000000000000000000000000000")),
       nonce = ByteString(Hex.decode("0000000000000042"))
-      // Note: no extraFields parameter, so it defaults to HefEmpty (no checkpoint)
     )
 
     val genesisBlock = Block(genesisHeader, BlockBody(Nil, Nil))
@@ -55,12 +53,6 @@ class GenesisBlockResponseSpec extends AnyFlatSpec with Matchers {
 
     // Verify mixHash field exists
     fields should contain("mixHash")
-
-    // Verify checkpoint-related fields do NOT exist (since no checkpoint)
-    fields should not contain "lastCheckpointNumber"
-    fields should not contain "checkpoint"
-    fields should not contain "signature"
-    fields should not contain "signer"
   }
 
   it should "have correct hash calculation without checkpoint fields" in {
@@ -82,13 +74,7 @@ class GenesisBlockResponseSpec extends AnyFlatSpec with Matchers {
       nonce = ByteString(Hex.decode("0000000000000042"))
     )
 
-    // The header should have HefEmpty extraFields (default)
-    genesisHeader.extraFields shouldBe BlockHeader.HeaderExtraFields.HefEmpty
-
-    // The checkpoint should be None
-    genesisHeader.checkpoint shouldBe None
-
-    // The hash should be calculated from RLP encoding without checkpoint fields
+    // The hash should be calculated from RLP encoding
     // This verifies that the hash calculation is correct
     genesisHeader.hash.length shouldBe 32 // Hash should be 32 bytes
   }

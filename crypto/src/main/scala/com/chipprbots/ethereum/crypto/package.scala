@@ -15,6 +15,7 @@ import org.bouncycastle.crypto.generators.ECKeyPairGenerator
 import org.bouncycastle.crypto.generators.PKCS5S2ParametersGenerator
 import org.bouncycastle.crypto.generators.SCrypt
 import org.bouncycastle.crypto.params._
+import org.bouncycastle.math.ec.ECPoint
 import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.utils.ByteUtils
@@ -90,6 +91,18 @@ package object crypto {
   def keyPairToByteStrings(keyPair: AsymmetricCipherKeyPair): (ByteString, ByteString) = {
     val (prv, pub) = keyPairToByteArrays(keyPair)
     (ByteString(prv), ByteString(pub))
+  }
+
+  /** Decode an EC point from its encoded representation and validate it is on the curve.
+    * Defense-in-depth for CVE-2025-24883 / CVE-2026-26314 / CVE-2026-26315.
+    * BouncyCastle's decodePoint already validates the curve equation, but isValid() additionally
+    * checks point order (not a small subgroup point) and rejects the point at infinity.
+    */
+  def decodeAndValidatePoint(encoded: Array[Byte]): ECPoint = {
+    val point = curve.getCurve.decodePoint(encoded)
+    if (!point.isValid || point.isInfinity)
+      throw new IllegalArgumentException("Invalid EC point: not on curve or point at infinity")
+    point
   }
 
   def keyPairFromPrvKey(prvKeyBytes: Array[Byte]): AsymmetricCipherKeyPair = {

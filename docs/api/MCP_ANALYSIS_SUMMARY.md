@@ -40,7 +40,6 @@ This document summarizes the comprehensive analysis of Fukuii's RPC endpoints an
 - FUKUII: 1 endpoint (custom extensions)
 - MCP: 7 endpoints (agent interface)
 - QA: 3 endpoints (quality assurance)
-- CHECKPOINTING: 2 endpoints (ETC-specific)
 - IELE: 2 endpoints (IELE VM)
 - RPC: 1 endpoint (introspection)
 

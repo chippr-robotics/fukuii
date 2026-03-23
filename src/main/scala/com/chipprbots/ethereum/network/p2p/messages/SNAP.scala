@@ -18,9 +18,8 @@ import com.chipprbots.ethereum.utils.ByteUtils
   *
   * See: https://github.com/ethereum/devp2p/blob/master/caps/snap.md
   *
-  * Message codes (wire protocol):
-  * SNAP is a satellite protocol that follows ETH in capability negotiation.
-  * ETH/68 uses codes 0x10-0x20, so SNAP/1 starts at 0x21.
+  * Message codes (wire protocol): SNAP is a satellite protocol that follows ETH in capability negotiation. ETH/68 uses
+  * codes 0x10-0x20, so SNAP/1 starts at 0x21.
   *
   * Wire codes:
   *   - 0x21: GetAccountRange
@@ -32,8 +31,8 @@ import com.chipprbots.ethereum.utils.ByteUtils
   *   - 0x27: GetTrieNodes
   *   - 0x28: TrieNodes
   *
-  * Note: The SNAP spec defines these as 0x00-0x07, but on the wire they are offset by 0x21
-  * to follow ETH protocol messages. This matches coregeth and besu implementations.
+  * Note: The SNAP spec defines these as 0x00-0x07, but on the wire they are offset by 0x21 to follow ETH protocol
+  * messages. This matches coregeth and besu implementations.
   */
 object SNAP {
 
@@ -42,8 +41,8 @@ object SNAP {
     * SNAP/1 is a satellite protocol that runs alongside ETH/68. According to the devp2p spec, each capability gets its
     * own message ID space. ETH/68 occupies codes 0x10-0x20, so SNAP/1 starts at 0x21.
     *
-    * This matches the behavior in coregeth and besu where SNAP messages are sent with absolute wire codes, not
-    * relative codes.
+    * This matches the behavior in coregeth and besu where SNAP messages are sent with absolute wire codes, not relative
+    * codes.
     */
   val SnapProtocolOffset = 0x21
 

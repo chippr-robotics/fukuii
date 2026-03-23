@@ -10,7 +10,7 @@ This document provides a comprehensive analysis of the Fukuii JSON-RPC API imple
 
 Fukuii implements a comprehensive set of JSON-RPC APIs that align with the Ethereum execution-apis specification while also providing Ethereum Classic (ETC) specific extensions and additional utility APIs for testing and debugging.
 
-**Total Implemented Methods:** 77 methods across 11 namespaces
+**Total Implemented Methods:** 77 methods across 10 namespaces
 
 ## Implemented API Namespaces
 
@@ -116,16 +116,9 @@ Debug and diagnostic methods:
 
 Quality assurance and testing methods (Fukuii-specific):
 - ✅ `qa_mineBlocks` - Mines a specified number of blocks
-- ✅ `qa_generateCheckpoint` - Generates checkpoint signatures
 - ✅ `qa_getFederationMembersInfo` - Returns federation members information
 
-### 7. CHECKPOINTING Namespace (2 methods)
-
-Checkpointing methods (ETC-specific):
-- ✅ `checkpointing_getLatestBlock` - Returns latest checkpoint block
-- ✅ `checkpointing_pushCheckpoint` - Pushes a checkpoint with signatures
-
-### 8. FUKUII Namespace (1 method)
+### 7. FUKUII Namespace (1 method)
 
 Fukuii-specific custom methods:
 - ✅ `fukuii_getAccountTransactions` - Returns transactions for an account in a block range
@@ -177,8 +170,6 @@ Fukuii provides several extensions beyond the standard execution-apis:
 - `eth_getRawTransactionByBlockHashAndIndex` - Raw transaction by block location
 - `eth_getRawTransactionByBlockNumberAndIndex` - Raw transaction by block number
 - `eth_getStorageRoot` - Storage root retrieval
-- Checkpointing namespace - ETC checkpoint functionality
-
 #### Fukuii-Specific Extensions:
 - `fukuii_getAccountTransactions` - Account transaction history
 - QA namespace - Testing and development utilities
@@ -195,7 +186,7 @@ Fukuii provides several extensions beyond the standard execution-apis:
 
 4. **Admin Methods**: Not implemented (admin_* namespace for node administration)
 
-5. **ETC Extensions**: Additional methods for Ethereum Classic specific features like checkpointing
+5. **ETC Extensions**: Additional methods for Ethereum Classic specific features
 
 ### Methods NOT in Standard Execution APIs
 
@@ -205,7 +196,6 @@ The following implemented methods are NOT part of the standard Ethereum executio
 - All `debug_*` methods (partial Geth-compatible extension)
 - All `qa_*` methods (Fukuii-specific)
 - All `test_*` methods (test harness)
-- All `checkpointing_*` methods (ETC-specific)
 - All `fukuii_*` methods (client-specific)
 - All `iele_*` methods (IELE VM support)
 - `eth_getRawTransaction*` methods (non-standard extensions)
@@ -225,7 +215,6 @@ The following implemented methods are NOT part of the standard Ethereum executio
 | Admin (Geth) | ⚠️ Non-standard | ❌ Not implemented | Node admin not available |
 | Trace methods | ⚠️ Non-standard | ❌ Not implemented | Transaction tracing not available |
 | TxPool methods | ⚠️ Non-standard | ❌ Not implemented | TxPool inspection not available |
-| ETC Checkpointing | 🔷 ETC-specific | ✅ Complete | Ethereum Classic feature |
 | IELE VM | 🔷 Fukuii-specific | ✅ Complete | Experimental VM support |
 | QA/Test methods | 🔷 Fukuii-specific | ✅ Complete | Development utilities |
 
@@ -244,8 +233,7 @@ Legend:
 
 ### For Extended Functionality:
 1. Use `personal_*` methods for account management (Geth-compatible)
-2. Use `checkpointing_*` methods for ETC-specific checkpoint features
-3. Use `qa_*` and `test_*` methods for development and testing
+2. Use `qa_*` and `test_*` methods for development and testing
 4. Use `fukuii_*` methods for client-specific features like transaction history
 
 ### Missing Features (vs. Full Geth Parity):

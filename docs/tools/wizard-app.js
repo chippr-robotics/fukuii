@@ -221,7 +221,7 @@ const advancedConfigSections = {
       'fukuii.network.rpc.http.interface': { label: 'RPC Interface', type: 'text', default: 'localhost', description: 'Interface to bind RPC server (localhost for security)' },
       'fukuii.network.rpc.http.port': { label: 'RPC Port', type: 'number', default: 8546, description: 'HTTP JSON-RPC port' },
       'fukuii.network.rpc.http.mode': { label: 'RPC Mode', type: 'select', options: ['http', 'https'], default: 'http', description: 'HTTP or HTTPS mode' },
-      'fukuii.network.rpc.apis': { label: 'Enabled APIs', type: 'text', default: 'eth,web3,net,personal,fukuii,debug,qa,checkpointing', description: 'Comma-separated list of enabled RPC APIs' }
+      'fukuii.network.rpc.apis': { label: 'Enabled APIs', type: 'text', default: 'eth,web3,net,personal,fukuii,debug,qa', description: 'Comma-separated list of enabled RPC APIs' }
     }
   },
   

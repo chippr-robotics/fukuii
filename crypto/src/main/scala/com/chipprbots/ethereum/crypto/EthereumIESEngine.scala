@@ -119,9 +119,12 @@ class EthereumIESEngine(
       fillKDFunction: Int => ByteString
   ): Array[Byte] = {
 
-    // Ensure that the length of the input is greater than the MAC in bytes
-    if (inLen <= (ECIESCoder.KeySize / 8))
-      throw new InvalidCipherTextException("Length of input must be greater than the MAC")
+    // Security: ensure input contains at least MAC + encoded key + 1 byte of ciphertext
+    // CVE-2026-22862: original check (inLen <= KeySize/8 = 16) was too weak; MAC is 32 bytes
+    if (inLen <= mac.getMacSize + encodedPublicKey.length)
+      throw new InvalidCipherTextException(
+        s"Length of input must be greater than MAC (${mac.getMacSize}) + encoded key (${encodedPublicKey.length}), got $inLen"
+      )
 
     val (derivedKeySecondPart, plainText) = cipher match {
       case Some(cphr) =>

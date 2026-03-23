@@ -5,34 +5,14 @@ import org.apache.pekko.util.ByteString
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-import scala.collection.mutable
-
-import com.chipprbots.ethereum.db.storage.BlockFirstSeenStorage
 import com.chipprbots.ethereum.domain.{BlockHeader, ChainWeight}
 
-/** Integration test for MESS (Modified Exponential Subjective Scoring).
+/** Integration test for MESS (ECIP-1100: Modified Exponential Subjective Scoring).
   *
-  * Tests the complete MESS workflow including:
-  *   - Recording block first-seen times
-  *   - Calculating MESS-adjusted difficulties
-  *   - Using MESS scores in chain weight comparisons
-  *   - Protection against late-arriving chains
+  * Tests the polynomial antigravity curve and reorg rejection logic using realistic blockchain scenarios. Verifies
+  * cross-client consistency with core-geth and Besu.
   */
 class MESSIntegrationSpec extends AnyFlatSpec with Matchers {
-
-  // In-memory storage for testing
-  class InMemoryBlockFirstSeenStorage extends BlockFirstSeenStorage {
-    private val storage = mutable.Map[ByteString, Long]()
-
-    override def put(blockHash: ByteString, timestamp: Long): Unit =
-      storage(blockHash) = timestamp
-
-    override def get(blockHash: ByteString): Option[Long] =
-      storage.get(blockHash)
-
-    override def remove(blockHash: ByteString): Unit =
-      storage.remove(blockHash)
-  }
 
   def createHeader(
       number: BigInt,
@@ -58,191 +38,120 @@ class MESSIntegrationSpec extends AnyFlatSpec with Matchers {
       nonce = ByteString.empty
     )
 
-  "MESS Integration" should "prefer recently seen chain over old chain with same difficulty" in {
-    val config = MESSConfig(enabled = true, decayConstant = 0.0001)
-    val storage = new InMemoryBlockFirstSeenStorage()
-    val currentTime = 1000000L
-    val scorer = new MESSScorer(config, storage, () => currentTime)
-
-    // Chain A: Seen immediately
-    val chainA = List(
-      createHeader(1, 1000, currentTime - 1000, ByteString("a1")),
-      createHeader(2, 1000, currentTime - 500, ByteString("a2"))
+  "MESS polynomial" should "not reject short reorgs with equal difficulty" in {
+    // A reorg happening within ~200 seconds with equal TD should not be rejected
+    // because the polynomial is essentially 1x at short time deltas
+    val result = ArtificialFinality.shouldRejectReorg(
+      timeDeltaSeconds = 100,
+      localSubchainTD = BigInt(3000),
+      proposedSubchainTD = BigInt(3000)
     )
-
-    // Chain B: Same difficulty but seen 6 hours late
-    val chainB = List(
-      createHeader(1, 1000, currentTime - 1000, ByteString("b1")),
-      createHeader(2, 1000, currentTime - 500, ByteString("b2"))
-    )
-
-    // Record Chain A as seen immediately
-    chainA.foreach { header =>
-      storage.put(header.hash, currentTime)
-    }
-
-    // Record Chain B as seen 6 hours ago (old chain revealed late)
-    val sixHoursAgo = currentTime - (6 * 3600 * 1000)
-    chainB.foreach { header =>
-      storage.put(header.hash, sixHoursAgo)
-    }
-
-    // Calculate chain weights
-    val weightA = chainA.foldLeft(ChainWeight.zero) { (weight, header) =>
-      val messAdjusted = scorer.calculateMessDifficulty(header)
-      weight.increase(header, Some(messAdjusted))
-    }
-
-    val weightB = chainB.foldLeft(ChainWeight.zero) { (weight, header) =>
-      val messAdjusted = scorer.calculateMessDifficulty(header)
-      weight.increase(header, Some(messAdjusted))
-    }
-
-    // Chain A should be heavier despite same total difficulty
-    weightA should be > weightB
-    weightA.totalDifficulty shouldBe weightB.totalDifficulty
-    weightA.messScore.get should be > weightB.messScore.get
+    result shouldBe false
   }
 
-  it should "allow higher difficulty to overcome time penalty" in {
-    val config = MESSConfig(enabled = true, decayConstant = 0.0001)
-    val storage = new InMemoryBlockFirstSeenStorage()
-    val currentTime = 1000000L
-    val scorer = new MESSScorer(config, storage, () => currentTime)
-
-    // Chain A: Lower difficulty, seen immediately
-    val chainA = createHeader(1, 1000, currentTime, ByteString("a1"))
-    storage.put(chainA.hash, currentTime)
-
-    // Chain B: Much higher difficulty, seen 1 hour late
-    val chainB = createHeader(1, 2000, currentTime, ByteString("b1"))
-    val oneHourAgo = currentTime - (3600 * 1000)
-    storage.put(chainB.hash, oneHourAgo)
-
-    val messA = scorer.calculateMessDifficulty(chainA)
-    val messB = scorer.calculateMessDifficulty(chainB)
-
-    val weightA = ChainWeight.zero.increase(chainA, Some(messA))
-    val weightB = ChainWeight.zero.increase(chainB, Some(messB))
-
-    // Chain B should still be heavier if difficulty advantage overcomes time penalty
-    // With 1 hour delay: exp(-0.0001 * 3600) ≈ 0.70, so 2000 * 0.70 = 1400 > 1000
-    weightB should be > weightA
+  it should "reject long-range reorgs with insufficient TD advantage" in {
+    // A 7-hour-old reorg requires ~31x the local TD
+    // Local has 3000 TD, proposed has 10000 TD (~3.3x) - should be rejected
+    val result = ArtificialFinality.shouldRejectReorg(
+      timeDeltaSeconds = 25132, // xcap = ~7 hours
+      localSubchainTD = BigInt(3000),
+      proposedSubchainTD = BigInt(10000)
+    )
+    result shouldBe true
   }
 
-  it should "apply minimum weight multiplier for very old blocks" in {
+  it should "accept long-range reorgs with sufficient TD advantage" in {
+    // Local has 3000 TD, proposed has 100000 TD (~33x) - should be accepted
+    val result = ArtificialFinality.shouldRejectReorg(
+      timeDeltaSeconds = 25132,
+      localSubchainTD = BigInt(3000),
+      proposedSubchainTD = BigInt(100000)
+    )
+    result shouldBe false
+  }
+
+  it should "correctly model the 51% attack scenario" in {
+    // Attacker with 5% more hashrate builds a private chain for 1 hour
+    // Local chain: 100 blocks * difficulty 1000 = TD 100000
+    // Attack chain: 100 blocks * difficulty 1050 = TD 105000 (5% more)
+    // Time delta: 1 hour = 3600 seconds
+    // Polynomial at 3600s ≈ 341, multiplier ≈ 2.66x
+    // Want: 341 * 100000 = 34,100,000
+    // Got: 105000 * 128 = 13,440,000
+    // 13,440,000 < 34,100,000 → REJECT
+
+    val result = ArtificialFinality.shouldRejectReorg(
+      timeDeltaSeconds = 3600,
+      localSubchainTD = BigInt(100000),
+      proposedSubchainTD = BigInt(105000)
+    )
+    result shouldBe true
+  }
+
+  it should "allow legitimate reorg with much higher TD" in {
+    // Legitimate chain with 3x the difficulty (e.g., major mining pool joins)
+    // Time delta: 1 hour, local TD: 100000, proposed TD: 300000
+    // Polynomial at 3600s ≈ 341, multiplier ≈ 2.66x
+    // Want: 341 * 100000 = 34,100,000
+    // Got: 300000 * 128 = 38,400,000
+    // 38,400,000 >= 34,100,000 → ACCEPT
+
+    val result = ArtificialFinality.shouldRejectReorg(
+      timeDeltaSeconds = 3600,
+      localSubchainTD = BigInt(100000),
+      proposedSubchainTD = BigInt(300000)
+    )
+    result shouldBe false
+  }
+
+  it should "handle the activation window correctly" in {
     val config = MESSConfig(
       enabled = true,
-      decayConstant = 0.0001,
-      minWeightMultiplier = 0.01 // 1% minimum
+      activationBlock = Some(11380000),
+      deactivationBlock = Some(19250000)
     )
-    val storage = new InMemoryBlockFirstSeenStorage()
-    val currentTime = 10000000L
-    val scorer = new MESSScorer(config, storage, () => currentTime)
 
-    val veryOldBlock = createHeader(1, 1000000, 0, ByteString("old"))
-    storage.put(veryOldBlock.hash, 0L) // Extremely old
+    // Before activation
+    config.isActiveAtBlock(11379999) shouldBe false
 
-    val messAdjusted = scorer.calculateMessDifficulty(veryOldBlock)
+    // Within window
+    config.isActiveAtBlock(11380000) shouldBe true
+    config.isActiveAtBlock(15000000) shouldBe true
 
-    // Should be at least 1% of original difficulty
-    messAdjusted should be >= BigInt(10000) // 1% of 1,000,000
-    messAdjusted should be < BigInt(1000000) // But less than full difficulty
+    // After deactivation (Spiral)
+    config.isActiveAtBlock(19250000) shouldBe false
   }
 
-  it should "handle blocks without first-seen time using block timestamp" in {
-    val config = MESSConfig(enabled = true, decayConstant = 0.0001)
-    val storage = new InMemoryBlockFirstSeenStorage()
-    val currentTime = 1000000L
-    val scorer = new MESSScorer(config, storage, () => currentTime)
+  it should "match the polynomial curve shape from ECIP-1100" in {
+    // Verify key points on the polynomial curve
+    // The curve is a smooth S-curve from 128 (1x) to 3968 (31x)
 
-    // Block without recorded first-seen time
-    val block = createHeader(1, 1000, 900000L, ByteString("unknown"))
-    // Don't record first-seen time
+    // Near zero: ~1x multiplier
+    val at0 = ArtificialFinality.polynomialV(BigInt(0))
+    at0 shouldBe BigInt(128)
 
-    val messAdjusted = scorer.calculateMessDifficulty(block)
+    // At midpoint (~12566s ≈ 3.5 hours): should be roughly halfway
+    val atMid = ArtificialFinality.polynomialV(BigInt(12566))
+    // Halfway between 128 and 3968 = 2048
+    atMid should be >= BigInt(1500)
+    atMid should be <= BigInt(2500)
 
-    // Should use block timestamp (900000), resulting in 100 second penalty
-    // exp(-0.0001 * 100) ≈ 0.99
-    messAdjusted should be > BigInt(980)
-    messAdjusted should be < BigInt(1000)
+    // At xcap: 31x
+    val atXcap = ArtificialFinality.polynomialV(BigInt(25132))
+    atXcap shouldBe BigInt(3968)
   }
 
-  it should "work correctly when MESS is disabled" in {
-    val config = MESSConfig(enabled = false)
-    val storage = new InMemoryBlockFirstSeenStorage()
-    val scorer = new MESSScorer(config, storage)
+  it should "produce identical results to core-geth for boundary values" in {
+    // core-geth test: ecbp1100PolynomialV(0) = 128
+    ArtificialFinality.polynomialV(BigInt(0)) shouldBe BigInt(128)
 
-    val header = createHeader(1, 1000, 0, ByteString("test"))
-    storage.put(header.hash, 0L) // Very old
+    // core-geth test: ecbp1100PolynomialV(25132) = 3968
+    ArtificialFinality.polynomialV(BigInt(25132)) shouldBe BigInt(3968)
 
-    val messAdjusted = scorer.calculateMessDifficulty(header)
+    // core-geth test: ecbp1100PolynomialV(99999) = 3968 (capped)
+    ArtificialFinality.polynomialV(BigInt(99999)) shouldBe BigInt(3968)
 
-    // When MESS is disabled, should return original difficulty
-    messAdjusted shouldBe BigInt(1000)
-  }
-
-  it should "correctly handle chain reorganization scenario" in {
-    val config = MESSConfig(enabled = true, decayConstant = 0.0001)
-    val storage = new InMemoryBlockFirstSeenStorage()
-    val currentTime = 1000000L
-    val scorer = new MESSScorer(config, storage, () => currentTime)
-
-    // Canonical chain: blocks 1-3 seen over time
-    val canonical1 = createHeader(1, 1000, currentTime - 3000, ByteString("c1"))
-    val canonical2 = createHeader(2, 1000, currentTime - 2000, ByteString("c2"))
-    val canonical3 = createHeader(3, 1000, currentTime - 1000, ByteString("c3"))
-
-    storage.put(canonical1.hash, currentTime - 3000)
-    storage.put(canonical2.hash, currentTime - 2000)
-    storage.put(canonical3.hash, currentTime - 1000)
-
-    // Attack chain: slightly higher difficulty but revealed all at once (now)
-    val attack1 = createHeader(1, 1050, currentTime - 3000, ByteString("a1"))
-    val attack2 = createHeader(2, 1050, currentTime - 2000, ByteString("a2"))
-    val attack3 = createHeader(3, 1050, currentTime - 1000, ByteString("a3"))
-
-    // Attack blocks all seen now (late)
-    storage.put(attack1.hash, currentTime)
-    storage.put(attack2.hash, currentTime)
-    storage.put(attack3.hash, currentTime)
-
-    // Calculate weights
-    val canonicalWeight = List(canonical1, canonical2, canonical3).foldLeft(ChainWeight.zero) { (weight, header) =>
-      val messAdjusted = scorer.calculateMessDifficulty(header)
-      weight.increase(header, Some(messAdjusted))
-    }
-
-    val attackWeight = List(attack1, attack2, attack3).foldLeft(ChainWeight.zero) { (weight, header) =>
-      val messAdjusted = scorer.calculateMessDifficulty(header)
-      weight.increase(header, Some(messAdjusted))
-    }
-
-    // Canonical chain should win despite lower total difficulty
-    // because its blocks were seen progressively over time
-    canonicalWeight should be > attackWeight
-    canonicalWeight.totalDifficulty should be < attackWeight.totalDifficulty
-  }
-
-  it should "record first-seen time only once" in {
-    val config = MESSConfig(enabled = true)
-    val storage = new InMemoryBlockFirstSeenStorage()
-    val currentTime = 1000000L
-    val scorer = new MESSScorer(config, storage, () => currentTime)
-
-    val blockHash = ByteString("test")
-
-    val isFirst1 = scorer.recordFirstSeen(blockHash)
-    val firstSeenTime = storage.get(blockHash)
-
-    isFirst1 shouldBe true
-    firstSeenTime shouldBe Some(currentTime)
-
-    // Try to record again
-    val isFirst2 = scorer.recordFirstSeen(blockHash)
-    val secondSeenTime = storage.get(blockHash)
-
-    isFirst2 shouldBe false
-    secondSeenTime shouldBe firstSeenTime // Should not change
+    // Negative-equivalent: polynomial should handle zero gracefully
+    ArtificialFinality.polynomialV(BigInt(0)) shouldBe BigInt(128)
   }
 }

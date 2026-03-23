@@ -32,6 +32,10 @@ trait StoragesComponent {
 
     val knownNodesStorage: KnownNodesStorage
 
+    val blockFirstSeenStorage: BlockFirstSeenRocksDbStorage
+
+    val flatSlotStorage: FlatSlotStorage
+
     val pruningMode: PruningMode
 
   }

@@ -438,4 +438,88 @@ class BlockRewardCalculatorSpec extends AnyFlatSpec with Matchers with ScalaChec
       winnerTwoUnclesReward shouldEqual expectedWinnerTwoUnclesReward
     }
   }
+
+  // ===== ETC Mainnet Current & Near-Future Era Tests =====
+  // These verify the exact reward values for eras relevant to ETC mainnet today and
+  // through the Olympia hard fork window (era 4 current, era 5 starts at block 25M).
+
+  it should "calculate correct era 4 rewards (blocks 20M-25M, current ETC mainnet era)" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val standardMP =
+      MonetaryPolicyConfig(5000000, 0.2, 5000000000000000000L, 3000000000000000000L, 2000000000000000000L)
+    val calculator = new BlockRewardCalculator(standardMP, BigInt(Long.MaxValue), BigInt(Long.MaxValue))
+
+    // Era 4: base reward = 5 ETC * 0.8^4 = 5 * 0.4096 = 2.048 ETC
+    val era4Block = BigInt(20000001) // First block of era 4
+    val era4Reward = calculator.calculateMiningRewardForBlock(era4Block)
+    era4Reward shouldEqual BigInt("2048000000000000000")
+
+    // With 1 uncle: base + base/32 = 2.048 + 0.064 = 2.112 ETC
+    val era4With1Uncle = calculator.calculateMiningReward(era4Block, 1)
+    era4With1Uncle shouldEqual BigInt("2112000000000000000")
+
+    // With 2 uncles: base + 2*base/32 = 2.048 + 0.128 = 2.176 ETC
+    val era4With2Uncles = calculator.calculateMiningReward(era4Block, 2)
+    era4With2Uncles shouldEqual BigInt("2176000000000000000")
+
+    // Last block of era 4
+    val era4LastBlock = BigInt(25000000)
+    calculator.calculateMiningRewardForBlock(era4LastBlock) shouldEqual BigInt("2048000000000000000")
+  }
+
+  it should "calculate correct era 5 rewards (blocks 25M-30M, next ETC era, Olympia window)" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val standardMP =
+      MonetaryPolicyConfig(5000000, 0.2, 5000000000000000000L, 3000000000000000000L, 2000000000000000000L)
+    val calculator = new BlockRewardCalculator(standardMP, BigInt(Long.MaxValue), BigInt(Long.MaxValue))
+
+    // Era 5: base reward = 5 ETC * 0.8^5 = 5 * 0.32768 = 1.6384 ETC
+    val era5Block = BigInt(25000001) // First block of era 5
+    val era5Reward = calculator.calculateMiningRewardForBlock(era5Block)
+    era5Reward shouldEqual BigInt("1638400000000000000")
+
+    // With 1 uncle
+    val era5With1Uncle = calculator.calculateMiningReward(era5Block, 1)
+    era5With1Uncle shouldEqual BigInt("1689600000000000000")
+
+    // With 2 uncles
+    val era5With2Uncles = calculator.calculateMiningReward(era5Block, 2)
+    era5With2Uncles shouldEqual BigInt("1740800000000000000")
+  }
+
+  it should "calculate correct ommer rewards in era 4" taggedAs (UnitTest, StateTest) in {
+    val standardMP =
+      MonetaryPolicyConfig(5000000, 0.2, 5000000000000000000L, 3000000000000000000L, 2000000000000000000L)
+    val calculator = new BlockRewardCalculator(standardMP, BigInt(Long.MaxValue), BigInt(Long.MaxValue))
+
+    // Era 2+: ommer reward = minerReward / 32
+    val blockNumber = BigInt(21000000)
+    val ommerNumber = BigInt(20999999) // 1 block behind
+    val ommerReward = calculator.calculateOmmerRewardForInclusion(blockNumber, ommerNumber)
+
+    // 2,048,000,000,000,000,000 / 32 = 64,000,000,000,000,000
+    ommerReward shouldEqual BigInt("64000000000000000")
+  }
+
+  it should "verify era boundary transitions are exact" taggedAs (UnitTest, StateTest) in {
+    val standardMP =
+      MonetaryPolicyConfig(5000000, 0.2, 5000000000000000000L, 3000000000000000000L, 2000000000000000000L)
+    val calculator = new BlockRewardCalculator(standardMP, BigInt(Long.MaxValue), BigInt(Long.MaxValue))
+
+    // Last block of era 3 (block 20,000,000)
+    val era3LastReward = calculator.calculateMiningRewardForBlock(BigInt(20000000))
+    era3LastReward shouldEqual BigInt("2560000000000000000") // 2.56 ETC
+
+    // First block of era 4 (block 20,000,001)
+    val era4FirstReward = calculator.calculateMiningRewardForBlock(BigInt(20000001))
+    era4FirstReward shouldEqual BigInt("2048000000000000000") // 2.048 ETC
+
+    // Reduction is exactly 20%
+    val reductionRatio = era4FirstReward.toDouble / era3LastReward.toDouble
+    reductionRatio shouldBe (0.8 +- 0.001)
+  }
 }

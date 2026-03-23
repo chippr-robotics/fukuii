@@ -17,7 +17,6 @@ This document provides a comprehensive reference for all JSON-RPC endpoints supp
 - [DEBUG Namespace](#debug-namespace)
 - [Custom Namespaces](#custom-namespaces)
   - [FUKUII Namespace](#fukuii-namespace)
-  - [CHECKPOINTING Namespace](#checkpointing-namespace-etc-specific)
   - [QA Namespace](#qa-namespace-testing)
   - [TEST Namespace](#test-namespace-testing)
   - [IELE Namespace](#iele-namespace)
@@ -87,7 +86,6 @@ Methods that should be disabled in production:
 
 ### ETC-Specific
 Ethereum Classic extensions:
-- CHECKPOINTING namespace
 - Custom ETH methods (getRawTransaction*, getStorageRoot)
 
 ### Custom Extensions
@@ -1998,55 +1996,6 @@ curl -X POST http://localhost:8546 \
 
 ---
 
-### CHECKPOINTING Namespace (ETC-specific)
-
-#### checkpointing_getLatestBlock
-
-Returns the latest checkpoint block.
-
-**Parameters**:
-1. `QUANTITY` - Number of confirmations required
-
-**Returns**: `Object` - Checkpoint block information
-
-**Example**:
-```bash
-curl -X POST http://localhost:8546 \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "checkpointing_getLatestBlock",
-    "params": [5]
-  }'
-```
-
----
-
-#### checkpointing_pushCheckpoint
-
-Pushes a checkpoint with signatures.
-
-**Parameters**:
-1. `DATA`, 32 Bytes - Block hash
-2. `Array` - Array of signatures
-
-**Returns**: `Boolean` - Success status
-
-**Example**:
-```bash
-curl -X POST http://localhost:8546 \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "checkpointing_pushCheckpoint",
-    "params": ["0x...", ["0x...signature1...", "0x...signature2..."]]
-  }'
-```
-
----
-
 ### QA Namespace: Testing
 
 **⚠️ Development/Testing Only**: The QA namespace should be **disabled in production**. These methods are for testing and quality assurance purposes only.
@@ -2076,31 +2025,9 @@ curl -X POST http://localhost:8546 \
 
 ---
 
-#### qa_generateCheckpoint
-
-Generates a checkpoint for testing checkpointing functionality.
-
-**Parameters**: None
-
-**Returns**: `Object` - Checkpoint information
-
-**Example**:
-```bash
-curl -X POST http://localhost:8546 \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "qa_generateCheckpoint",
-    "params": []
-  }'
-```
-
----
-
 #### qa_getFederationMembersInfo
 
-Returns information about federation members for checkpoint testing.
+Returns information about federation members.
 
 **Parameters**: None
 

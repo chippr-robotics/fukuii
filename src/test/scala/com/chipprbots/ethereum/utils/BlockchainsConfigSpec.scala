@@ -52,8 +52,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         atlantis-block-number = "8772000"
         agharta-block-number = "9573000"
         phoenix-block-number = "10500839"
-        ecip1098-block-number = "1000000000000000000"
-        ecip1097-block-number = "1000000000000000000"
         ecip1099-block-number = "11700000"
         muir-glacier-block-number = "1000000000000000000"
         magneto-block-number = "13189133"
@@ -65,7 +63,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         difficulty-bomb-removal-block-number = "5900000"
         max-code-size = "24576"
         account-start-nonce = "0"
-        treasury-address = "0011223344556677889900112233445566778899"
         gas-tie-breaker = false
         eth-compatible-storage = true
         bootstrap-nodes = []
@@ -108,8 +105,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         atlantis-block-number = "1000000000000000000"
         agharta-block-number = "1000000000000000000"
         phoenix-block-number = "1000000000000000000"
-        ecip1098-block-number = "1000000000000000000"
-        ecip1097-block-number = "1000000000000000000"
         ecip1099-block-number = "1000000000000000000"
         muir-glacier-block-number = "1000000000000000000"
         magneto-block-number = "1000000000000000000"
@@ -121,7 +116,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         difficulty-bomb-removal-block-number = "0"
         max-code-size = "24576"
         account-start-nonce = "0"
-        treasury-address = "0011223344556677889900112233445566778899"
         gas-tie-breaker = false
         eth-compatible-storage = true
         bootstrap-nodes = []
@@ -176,8 +170,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         atlantis-block-number = "8772000"
         agharta-block-number = "9573000"
         phoenix-block-number = "10500839"
-        ecip1098-block-number = "1000000000000000000"
-        ecip1097-block-number = "1000000000000000000"
         ecip1099-block-number = "11700000"
         muir-glacier-block-number = "1000000000000000000"
         magneto-block-number = "13189133"
@@ -189,7 +181,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         difficulty-bomb-removal-block-number = "5900000"
         max-code-size = "24576"
         account-start-nonce = "0"
-        treasury-address = "0011223344556677889900112233445566778899"
         gas-tie-breaker = false
         eth-compatible-storage = true
         bootstrap-nodes = []
@@ -226,8 +217,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         atlantis-block-number = "8772000"
         agharta-block-number = "9573000"
         phoenix-block-number = "10500839"
-        ecip1098-block-number = "1000000000000000000"
-        ecip1097-block-number = "1000000000000000000"
         ecip1099-block-number = "11700000"
         muir-glacier-block-number = "1000000000000000000"
         magneto-block-number = "13189133"
@@ -239,7 +228,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         difficulty-bomb-removal-block-number = "5900000"
         max-code-size = "24576"
         account-start-nonce = "0"
-        treasury-address = "0011223344556677889900112233445566778899"
         gas-tie-breaker = false
         eth-compatible-storage = true
         bootstrap-nodes = []
@@ -279,8 +267,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         atlantis-block-number = "8772000"
         agharta-block-number = "9573000"
         phoenix-block-number = "10500839"
-        ecip1098-block-number = "1000000000000000000"
-        ecip1097-block-number = "1000000000000000000"
         ecip1099-block-number = "11700000"
         muir-glacier-block-number = "1000000000000000000"
         magneto-block-number = "13189133"
@@ -292,7 +278,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         difficulty-bomb-removal-block-number = "5900000"
         max-code-size = "24576"
         account-start-nonce = "0"
-        treasury-address = "0011223344556677889900112233445566778899"
         gas-tie-breaker = false
         eth-compatible-storage = true
         bootstrap-nodes = []
@@ -331,8 +316,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         atlantis-block-number = "8772000"
         agharta-block-number = "9573000"
         phoenix-block-number = "10500839"
-        ecip1098-block-number = "1000000000000000000"
-        ecip1097-block-number = "1000000000000000000"
         ecip1099-block-number = "11700000"
         muir-glacier-block-number = "1000000000000000000"
         magneto-block-number = "13189133"
@@ -344,7 +327,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         difficulty-bomb-removal-block-number = "5900000"
         max-code-size = "24576"
         account-start-nonce = "0"
-        treasury-address = "0011223344556677889900112233445566778899"
         gas-tie-breaker = false
         eth-compatible-storage = true
         bootstrap-nodes = []

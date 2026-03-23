@@ -4,6 +4,10 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/test-helpers.sh"
+require_tools curl jq
+
 echo "=== Mining Compatibility Test ==="
 echo "Testing mining across different clients..."
 echo ""

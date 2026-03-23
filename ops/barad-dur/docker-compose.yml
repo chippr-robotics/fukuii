@@ -5,6 +5,11 @@
 networks:
   fukuii-network:
     driver: bridge
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
+        - subnet: fd00:ba00:d000::/80
 
 services:
   # PostgreSQL database for Kong (replaces deprecated Cassandra support)
@@ -101,7 +106,7 @@ services:
 
   # Fukuii Ethereum Client - Primary Instance
   fukuii-primary:
-    image: chipprbots/fukuii:latest
+    image: ${FUKUII_IMAGE:-chipprbots/fukuii:latest}
     container_name: fukuii-primary
     restart: unless-stopped
     ports:
@@ -115,8 +120,52 @@ services:
     volumes:
       - ${FUKUII_DATA_DIR:-./data/fukuii}:/app/data
       - ./fukuii-conf-1:/app/conf:ro
-    environment:
-      - JAVA_OPTS=${JAVA_OPTS:--Xmx4g -Xms4g}
+    # Assembly JAR uses java entrypoint directly (not dist launcher)
+    command:
+      - "-Xmx8g"
+      - "-Xms2g"
+      - "-Xss10M"
+      - "-XX:+UseG1GC"
+      - "-XX:MaxGCPauseMillis=200"
+      - "-Dconfig.file=/app/conf/mordor.conf"
+      - "-Dfukuii.datadir=/app/data"
+      - "-jar"
+      - "/app/fukuii/lib/fukuii-assembly-0.1.240.jar"
+      - "mordor"
+    networks:
+      - fukuii-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8545/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Fukuii Ethereum Client - Secondary Instance — Mordor Testnet
+  fukuii-secondary:
+    image: ${FUKUII_IMAGE:-chipprbots/fukuii:latest}
+    container_name: fukuii-secondary
+    restart: unless-stopped
+    ports:
+      - "${FUKUII_SECONDARY_RPC_PORT:-8547}:8545"
+      - "${FUKUII_SECONDARY_WS_PORT:-8548}:8546"
+      - "${FUKUII_SECONDARY_P2P_PORT:-30304}:30304/tcp"
+      - "${FUKUII_SECONDARY_DISCOVERY_PORT:-30304}:30304/udp"
+      - "${FUKUII_SECONDARY_METRICS_PORT:-9096}:9095"
+    volumes:
+      - ${FUKUII_SECONDARY_DATA_DIR:-./data/fukuii-secondary}:/app/data
+      - ./fukuii-conf-2:/app/conf:ro
+    command:
+      - "-Xmx3g"
+      - "-Xms1g"
+      - "-Xss10M"
+      - "-XX:+UseG1GC"
+      - "-XX:MaxGCPauseMillis=200"
+      - "-Dconfig.file=/app/conf/mordor.conf"
+      - "-Dfukuii.datadir=/app/data"
+      - "-jar"
+      - "/app/fukuii/lib/fukuii-assembly-0.1.240.jar"
+      - "mordor"
     networks:
       - fukuii-network
     healthcheck:
@@ -125,34 +174,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-
-  # Fukuii Ethereum Client - Secondary Instance (for HADR)
-  # DISABLED: Running single node until SNAP sync and peer discovery are stabilized.
-  # Two nodes on the same external IP confuse Kademlia DHT enrollment and compete
-  # for the same limited ETC mainnet peer pool.
-  # fukuii-secondary:
-  #   image: chipprbots/fukuii:latest
-  #   container_name: fukuii-secondary
-  #   restart: unless-stopped
-  #   ports:
-  #     - "${FUKUII_SECONDARY_RPC_PORT:-8547}:8545"
-  #     - "${FUKUII_SECONDARY_WS_PORT:-8548}:8546"
-  #     - "${FUKUII_SECONDARY_P2P_PORT:-30304}:9076/tcp"
-  #     - "${FUKUII_SECONDARY_DISCOVERY_PORT:-30304}:30303/udp"
-  #     - "${FUKUII_SECONDARY_METRICS_PORT:-9096}:9095"
-  #   volumes:
-  #     - ${FUKUII_SECONDARY_DATA_DIR:-./data/fukuii-secondary}:/app/data
-  #     - ./fukuii-conf-2:/app/conf:ro
-  #   environment:
-  #     - JAVA_OPTS=${JAVA_OPTS:--Xmx4g -Xms4g}
-  #   networks:
-  #     - fukuii-network
-  #   healthcheck:
-  #     test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 3
-  #     start_period: 60s
 
   # Prometheus for metrics collection
   prometheus:

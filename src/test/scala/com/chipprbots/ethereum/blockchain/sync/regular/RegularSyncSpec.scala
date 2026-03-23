@@ -27,7 +27,6 @@ import org.scalatest.diagrams.Diagrams
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.BlockHelpers
-import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.ResourceFixtures
 import com.chipprbots.ethereum.WordSpecBase
 import com.chipprbots.ethereum.testing.Tags._
@@ -37,7 +36,6 @@ import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.Start
-import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync.NewCheckpoint
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits._
@@ -129,7 +127,7 @@ class RegularSyncSpec
         // It's weird that we're using block number for total difficulty but I'm too scared to fight this dragon
         peerEventBus.reply(
           MessageFromPeer(
-            NewBlock(testBlocks.last, ChainWeight(0, testBlocks.last.number).totalDifficulty),
+            NewBlock(testBlocks.last, ChainWeight(testBlocks.last.number).totalDifficulty),
             defaultPeer.id
           )
         )
@@ -199,68 +197,9 @@ class RegularSyncSpec
         }
       })
 
-      "blacklist peer which sends headers that were not requested" ignore sync(new Fixture(testSystem) {
-        import org.apache.pekko.actor.typed.scaladsl.adapter._
-
-        val blockImporter: TestProbe = TestProbe()
-        val fetcher: typed.ActorRef[BlockFetcher.FetchCommand] =
-          system.spawn(
-            BlockFetcher(peersClient.ref, peerEventBus.ref, regularSync, syncConfig, validators.blockValidator),
-            "block-fetcher"
-          )
-
-        fetcher ! Start(blockImporter.ref, 0)
-
-        peersClient.expectMsgEq(blockHeadersChunkRequest(0))
-        peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
-
-        // Now expects ETH66 GetBlockBodies with requestId
-        // requestId is dynamic (generated per request) so we ignore it with _
-        val expectedHashes = testBlocksChunked.head.headers.map(_.hash).toSet
-        peersClient.expectMsgPF() {
-          case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) 
-            if hashes.toSet == expectedHashes => ()
-        }
-        peersClient.reply(PeersClient.Response(defaultPeer, BlockBodies(testBlocksChunked.head.bodies)))
-
-        fetcher ! BlockFetcher.ReceivedHeaders(defaultPeer, testBlocksChunked(3).headers)
-
-        peersClient.expectMsgPF() {
-          case PeersClient.BlacklistPeer(id, _) if id == defaultPeer.id => true
-        }
-      })
-
-      "blacklist peer which sends bodies that were not requested" ignore sync(new Fixture(testSystem) {
-        import org.apache.pekko.actor.typed.scaladsl.adapter._
-
-        var blockFetcherAdapter: TypedActorRef[MessageFromPeer] = _
-        val blockImporter: TestProbe = TestProbe()
-        val fetcher: typed.ActorRef[BlockFetcher.FetchCommand] =
-          system.spawn(
-            BlockFetcher(peersClient.ref, peerEventBus.ref, regularSync, syncConfig, validators.blockValidator),
-            "block-fetcher"
-          )
-
-        fetcher ! Start(blockImporter.ref, 0)
-
-        peersClient.expectMsgEq(blockHeadersChunkRequest(0))
-        peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
-
-        // Now expects ETH66 GetBlockBodies with requestId
-        // requestId is dynamic (generated per request) so we ignore it with _
-        val expectedHashes = testBlocksChunked.head.headers.map(_.hash).toSet
-        peersClient.expectMsgPF() {
-          case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) 
-            if hashes.toSet == expectedHashes => ()
-        }
-        peersClient.reply(PeersClient.Response(defaultPeer, BlockBodies(testBlocksChunked.head.bodies)))
-
-        fetcher ! BlockFetcher.ReceivedBodies(defaultPeer, testBlocksChunked(3).bodies)
-
-        peersClient.expectMsgPF() {
-          case PeersClient.BlacklistPeer(id, _) if id == defaultPeer.id => true
-        }
-      })
+      // Deleted: "blacklist peer which sends headers/bodies that were not requested"
+      // These tests expected BlacklistPeer for unsolicited data, but BlockFetcher drops
+      // unsolicited data silently instead of blacklisting — behavior was never implemented.
 
       "wait for time defined in config until issuing a retry request due to no suitable peer" in sync(
         new Fixture(
@@ -289,20 +228,19 @@ class RegularSyncSpec
         peerEventBus.expectMsgClass(classOf[Subscribe])
         peerEventBus.reply(
           MessageFromPeer(
-            NewBlock(testBlocks.last, ChainWeight(0, testBlocks.last.header.difficulty).totalDifficulty),
+            NewBlock(testBlocks.last, ChainWeight(testBlocks.last.header.difficulty).totalDifficulty),
             defaultPeer.id
           )
         )
 
         peersClient.expectMsgEq(blockHeadersChunkRequest(0))
         peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
-        
+
         // Now expects ETH66 GetBlockBodies with requestId
         // requestId is dynamic (generated per request) so we ignore it with _
         val expectedHashes = testBlocksChunked.head.hashes.toSet
         peersClient.expectMsgPF() {
-          case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) 
-            if hashes.toSet == expectedHashes => ()
+          case PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) if hashes.toSet == expectedHashes => ()
         }
         peersClient.reply(PeersClient.Response(defaultPeer, BlockBodies(testBlocksChunked.head.bodies)))
 
@@ -378,7 +316,7 @@ class RegularSyncSpec
           peerEventBus.expectMsgClass(classOf[Subscribe])
           peerEventBus.reply(
             MessageFromPeer(
-              NewBlock(alternativeBlocks.last, ChainWeight(0, alternativeBlocks.last.number).totalDifficulty),
+              NewBlock(alternativeBlocks.last, ChainWeight(alternativeBlocks.last.number).totalDifficulty),
               defaultPeer.id
             )
           )
@@ -423,7 +361,7 @@ class RegularSyncSpec
             case req @ PeersClient.Request(ETH66GetBlockBodies(_, hashes), _, _) =>
               handleForkLogic(hashes, req, sender)
           }
-          
+
           private def handleForkLogic(hashes: Seq[ByteString], req: Any, sender: ActorRef): Option[AutoPilot] = {
             val defaultResult = defaultHandlers(sender)(req)
             if (forkedBlocks.nonEmpty && hashes.contains(blocksToRespond.last.hash)) {
@@ -443,7 +381,7 @@ class RegularSyncSpec
         val blockFetcher: ActorRef = peerEventBus.sender()
         peerEventBus.reply(
           MessageFromPeer(
-            NewBlock(originalBranch.last, ChainWeight(0, originalBranch.last.number).totalDifficulty),
+            NewBlock(originalBranch.last, ChainWeight(originalBranch.last.number).totalDifficulty),
             defaultPeer.id
           )
         )
@@ -452,7 +390,7 @@ class RegularSyncSpec
 
         // As node will be on top, we have to re-trigger the fetching process by simulating a block from the fork being broadcasted
         blockFetcher ! MessageFromPeer(
-          NewBlock(betterBranch.last, ChainWeight(0, betterBranch.last.number).totalDifficulty),
+          NewBlock(betterBranch.last, ChainWeight(betterBranch.last.number).totalDifficulty),
           defaultPeer.id
         )
         awaitCond(bestBlock == betterBranch.last, 5.seconds)
@@ -574,7 +512,7 @@ class RegularSyncSpec
         peerEventBus.expectMsgClass(classOf[Subscribe])
 
         peerEventBus.reply(
-          MessageFromPeer(NewBlock(newBlock, ChainWeight(0, 1).totalDifficulty), defaultPeer.id)
+          MessageFromPeer(NewBlock(newBlock, ChainWeight(BigInt(1)).totalDifficulty), defaultPeer.id)
         )
 
         // Wait for actor to finish processing and verify it never calls evaluateBranchBlock
@@ -598,7 +536,7 @@ class RegularSyncSpec
         peerEventBus.expectMsgClass(classOf[Subscribe])
         peerEventBus.reply(
           MessageFromPeer(
-            NewBlock(testBlocks.last, ChainWeight(0, testBlocks.last.number).totalDifficulty),
+            NewBlock(testBlocks.last, ChainWeight(testBlocks.last.number).totalDifficulty),
             defaultPeer.id
           )
         )
@@ -660,7 +598,7 @@ class RegularSyncSpec
         peerEventBus.expectMsgClass(classOf[Subscribe])
         peerEventBus.reply(
           MessageFromPeer(
-            NewBlock(testBlocks.last, ChainWeight(0, testBlocks.last.number).totalDifficulty),
+            NewBlock(testBlocks.last, ChainWeight(testBlocks.last.number).totalDifficulty),
             defaultPeer.id
           )
         )
@@ -709,69 +647,6 @@ class RegularSyncSpec
             message.underlyingMsg match {
               case NewBlock(block, _) if block == newBlock => true
               case _                                       => false
-            }
-          case _ => false
-        }
-      })
-    }
-
-    "handling checkpoints" should {
-      val checkpoint = ObjectGenerators.fakeCheckpointGen(3, 3).sample.get
-
-      "wait while importing other blocks and then import" in sync(new Fixture(testSystem) {
-        val block = testBlocks.head
-        val blockPromise: Promise[BlockImportResult] = Promise()
-        setImportResult(block, IO.fromFuture(IO.pure(blockPromise.future)))
-
-        setImportResult(testBlocks(1), IO.pure(BlockImportedToTop(Nil)))
-
-        val checkpointBlock: Block = checkpointBlockGenerator.generate(block, checkpoint)
-        val newCheckpointMsg: NewCheckpoint = NewCheckpoint(checkpointBlock)
-        setImportResult(checkpointBlock, IO(BlockImportedToTop(Nil)))
-
-        regularSync ! SyncProtocol.Start
-
-        peersClient.setAutoPilot(new PeersClientAutoPilot())
-
-        awaitCond(didTryToImportBlock(block))
-        regularSync ! newCheckpointMsg
-
-        assertForDuration(
-          didTryToImportBlock(checkpointBlock) shouldBe false,
-          1.second
-        )
-        blockPromise.success(BlockImportedToTop(Nil))
-        awaitCond(didTryToImportBlock(checkpointBlock))
-      })
-
-      "import checkpoint when not importing other blocks and broadcast it" in sync(new Fixture(testSystem) {
-        regularSync ! SyncProtocol.Start
-
-        val parentBlock = testBlocks.last
-        setImportResult(parentBlock, IO(BlockImportedToTop(Nil)))
-        consensusAdapter.evaluateBranchBlock(parentBlock)(implicitly[IORuntime], implicitly[BlockchainConfig])
-
-        val checkpointBlock: Block = checkpointBlockGenerator.generate(parentBlock, checkpoint)
-        val newCheckpointMsg: NewCheckpoint = NewCheckpoint(checkpointBlock)
-        setImportResult(
-          checkpointBlock,
-          // FIXME: lastCheckpointNumber == 0, refactor RegularSyncFixture?
-          IO(
-            BlockImportedToTop(List(BlockData(checkpointBlock, Nil, ChainWeight(parentBlock.number + 1, 42))))
-          )
-        )
-
-        networkPeerManager.expectMsg(GetHandshakedPeers)
-        networkPeerManager.reply(HandshakedPeers(handshakedPeers))
-
-        regularSync ! newCheckpointMsg
-
-        awaitCond(didTryToImportBlock(checkpointBlock))
-        networkPeerManager.fishForSpecificMessageMatching() {
-          case NetworkPeerManagerActor.SendMessage(message, _) =>
-            message.underlyingMsg match {
-              case NewBlock(block, _) if block == checkpointBlock => true
-              case _                                              => false
             }
           case _ => false
         }

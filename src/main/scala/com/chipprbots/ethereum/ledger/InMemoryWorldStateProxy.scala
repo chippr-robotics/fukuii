@@ -7,6 +7,8 @@ import com.chipprbots.ethereum.db.storage.EvmCodeStorage.Code
 import com.chipprbots.ethereum.db.storage._
 import com.chipprbots.ethereum.domain
 import com.chipprbots.ethereum.domain._
+import com.chipprbots.ethereum.rlp
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingAccountNodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
@@ -26,7 +28,8 @@ object InMemoryWorldStateProxy {
       accountStartNonce: UInt256,
       stateRootHash: ByteString,
       noEmptyAccounts: Boolean,
-      ethCompatibleStorage: Boolean
+      ethCompatibleStorage: Boolean,
+      flatSlotStorage: Option[FlatSlotStorage] = None
   ): InMemoryWorldStateProxy = InMemoryWorldStateProxy.apply(
     evmCodeStorage,
     mptStorage,
@@ -34,7 +37,8 @@ object InMemoryWorldStateProxy {
     getBlockHashByNumber,
     stateRootHash,
     noEmptyAccounts,
-    ethCompatibleStorage
+    ethCompatibleStorage,
+    flatSlotStorage
   )
 
   private def apply(
@@ -44,7 +48,8 @@ object InMemoryWorldStateProxy {
       getBlockHashByNumber: BigInt => Option[ByteString],
       stateRootHash: ByteString,
       noEmptyAccounts: Boolean,
-      ethCompatibleStorage: Boolean
+      ethCompatibleStorage: Boolean,
+      flatSlotStorage: Option[FlatSlotStorage]
   ): InMemoryWorldStateProxy = {
     val accountsStateTrieProxy = createProxiedAccountsStateTrie(nodesKeyValueStorage, stateRootHash)
     new InMemoryWorldStateProxy(
@@ -57,7 +62,8 @@ object InMemoryWorldStateProxy {
       accountStartNonce,
       Set.empty,
       noEmptyAccounts,
-      ethCompatibleStorage
+      ethCompatibleStorage,
+      flatSlotStorage
     )
   }
 
@@ -130,17 +136,47 @@ object InMemoryWorldStateProxy {
 }
 
 class InMemoryWorldStateProxyStorage(
-    val wrapped: InMemorySimpleMapProxy[BigInt, BigInt, MerklePatriciaTrie[BigInt, BigInt]]
+    val wrapped: InMemorySimpleMapProxy[BigInt, BigInt, MerklePatriciaTrie[BigInt, BigInt]],
+    val flatSlotStorage: Option[FlatSlotStorage] = None,
+    val accountHash: Option[ByteString] = None
 ) extends Storage[InMemoryWorldStateProxyStorage] {
 
   override def store(addr: BigInt, value: BigInt): InMemoryWorldStateProxyStorage = {
     val newWrapped =
       if (value == 0) wrapped - addr
       else wrapped + (addr -> value)
-    new InMemoryWorldStateProxyStorage(newWrapped)
+    new InMemoryWorldStateProxyStorage(newWrapped, flatSlotStorage, accountHash)
   }
 
-  override def load(addr: BigInt): BigInt = wrapped.get(addr).getOrElse(0)
+  override def load(addr: BigInt): BigInt = {
+    // 1. Check dirty state first (in-memory modifications from current transaction)
+    wrapped.cache.get(addr) match {
+      case Some(optValue) => optValue.getOrElse(0)
+      case None =>
+        // 2. Try flat storage O(1) lookup before O(log n) MPT traversal
+        flatLookup(addr) match {
+          case Some(value) => value
+          case None =>
+            // 3. Fall back to MPT traversal (handles pre-sync data, missing flat entries)
+            wrapped.get(addr).getOrElse(0)
+        }
+    }
+  }
+
+  /** O(1) flat storage lookup: accountHash ++ keccak256(pad32(slotIndex)) → RLP(value) */
+  private def flatLookup(addr: BigInt): Option[BigInt] =
+    (flatSlotStorage, accountHash) match {
+      case (Some(flat), Some(acctHash)) =>
+        // Compute slot hash: keccak256(pad32(slotIndex)) — matches SNAP protocol key format
+        val slotKey = domain.EthereumUInt256Mpt.byteArrayBigIntSerializer.toBytes(addr)
+        val slotHash = kec256(ByteString(slotKey))
+        flat.getSlot(acctHash, slotHash).flatMap { rawValue =>
+          // Decode RLP-encoded BigInt value
+          try Some(com.chipprbots.ethereum.rlp.decode[BigInt](rawValue.toArray))
+          catch { case _: Exception => None } // Malformed data — fall through to MPT
+        }
+      case _ => None
+    }
 }
 
 class InMemoryWorldStateProxy(
@@ -161,7 +197,10 @@ class InMemoryWorldStateProxy(
     // operate on empty set.
     val touchedAccounts: Set[Address],
     val noEmptyAccountsCond: Boolean,
-    val ethCompatibleStorage: Boolean
+    val ethCompatibleStorage: Boolean,
+    // Optional flat slot storage for O(1) SLOAD lookups (populated by SNAP sync).
+    // When present, storage reads check flat storage before MPT traversal.
+    val flatSlotStorage: Option[FlatSlotStorage] = None
 ) extends WorldStateProxy[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage] {
 
   override def getAccount(address: Address): Option[Account] =
@@ -191,8 +230,14 @@ class InMemoryWorldStateProxy(
       getAccount(address).flatMap(account => evmCodeStorage.get(account.codeHash)).getOrElse(ByteString.empty)
     )
 
-  override def getStorage(address: Address): InMemoryWorldStateProxyStorage =
-    new InMemoryWorldStateProxyStorage(contractStorages.getOrElse(address, getStorageForAddress(address, stateStorage)))
+  override def getStorage(address: Address): InMemoryWorldStateProxyStorage = {
+    val proxy = contractStorages.getOrElse(address, getStorageForAddress(address, stateStorage))
+    new InMemoryWorldStateProxyStorage(
+      proxy,
+      flatSlotStorage,
+      flatSlotStorage.map(_ => kec256(address.bytes))
+    )
+  }
 
   override def saveCode(address: Address, code: ByteString): InMemoryWorldStateProxy =
     copyWith(accountCodes = accountCodes + (address -> code))
@@ -260,7 +305,8 @@ class InMemoryWorldStateProxy(
       accountStartNonce,
       touchedAccounts,
       noEmptyAccountsCond,
-      ethCompatibleStorage
+      ethCompatibleStorage,
+      flatSlotStorage
     )
 
   override def getBlockHash(number: UInt256): Option[UInt256] = getBlockByNumber(number).map(UInt256(_))

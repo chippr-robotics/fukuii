@@ -228,7 +228,7 @@ case class AuthHandshaker(
         throw new IllegalStateException("Unable to recover public key from signature")
       )
 
-    curve.getCurve.decodePoint(ECDSASignature.UncompressedIndicator +: signaturePubBytes)
+    decodeAndValidatePoint(ECDSASignature.UncompressedIndicator +: signaturePubBytes)
   }
 
   private def createAuthInitiateMessageV4(remotePubKey: ECPoint) = {

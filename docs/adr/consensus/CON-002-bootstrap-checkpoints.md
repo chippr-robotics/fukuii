@@ -61,8 +61,8 @@ We will implement a bootstrap checkpoint system that provides trusted block refe
 
 3. **Checkpoint Selection Strategy**
    - Use major fork activation blocks as checkpoints:
-     - **ETC Mainnet**: Spiral (19,250,000), Mystique (14,525,000), Magneto (13,189,133), Phoenix (10,500,839)
-     - **Mordor**: Spiral (9,957,000), Mystique (5,520,000), Magneto (3,985,893), ECIP-1099 (2,520,000)
+     - **ETC Mainnet**: Olympia (TBD), Spiral (19,250,000), Mystique (14,525,000), Magneto (13,189,133), Phoenix (10,500,839)
+     - **Mordor**: Olympia (15,800,850), Spiral (9,957,000), Mystique (5,520,000), Magneto (3,985,893), ECIP-1099 (2,520,000)
    - These blocks are well-known, widely accepted, and unlikely to be reorganized
 
 4. **Loading Process**

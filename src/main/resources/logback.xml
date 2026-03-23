@@ -21,7 +21,7 @@
         <defaultValue>fukuii</defaultValue>
     </define>
 
-    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <appender name="FILE" class="com.chipprbots.ethereum.utils.ResilientRollingFileAppender">
         <file>${LOGSDIR}/${LOGSFILENAME}.log</file>
         <append>true</append>
         <rollingPolicy class="ch.qos.logback.core.rolling.FixedWindowRollingPolicy">
@@ -165,9 +165,9 @@
     <logger name="com.chipprbots.ethereum.network.discovery.StaticNodesLoader" level="ERROR" />
     
     <!-- Network handshaking - protocol handshake details -->
-    <logger name="com.chipprbots.ethereum.network.handshaker" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.network.handshaker" level="INFO" />
     <logger name="com.chipprbots.ethereum.network.handshaker.EtcHelloExchangeState" level="ERROR" />
-    <logger name="com.chipprbots.ethereum.network.handshaker.EthNodeStatus64ExchangeState" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.network.handshaker.EthNodeStatus64ExchangeState" level="INFO" />
     <logger name="com.chipprbots.ethereum.network.handshaker.EthNodeStatus63ExchangeState" level="ERROR" />
     <logger name="com.chipprbots.ethereum.network.handshaker.EtcForkBlockExchangeState" level="ERROR" />
     <logger name="com.chipprbots.ethereum.network.handshaker.EtcNodeStatusExchangeState" level="ERROR" />
@@ -176,7 +176,7 @@
     <!-- RLPX - Encrypted transport protocol (ERROR only)                    -->
     <!-- =================================================================== -->
     <logger name="com.chipprbots.ethereum.network.rlpx" level="ERROR" />
-    <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="INFO" />
     <logger name="com.chipprbots.ethereum.network.rlpx.FrameCodec" level="ERROR" />
     <logger name="com.chipprbots.ethereum.network.rlpx.MessageCodec" level="ERROR" />
     <logger name="com.chipprbots.ethereum.network.rlpx.AuthHandshaker" level="ERROR" />
@@ -185,7 +185,7 @@
     <!-- SYNC INTERNALS (ERROR only - detailed sync operations)             -->
     <!-- =================================================================== -->
     <!-- Peer list management and blacklist -->
-    <logger name="com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler" level="DEBUG" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.PeersClient" level="ERROR" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg" level="ERROR" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.Blacklist" level="INFO" />
@@ -201,15 +201,17 @@
     
     <!-- Regular sync internals -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.regular" level="ERROR" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher" level="ERROR" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.regular.HeadersFetcher" level="ERROR" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.regular.BodiesFetcher" level="ERROR" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.regular.FetchRequest" level="ERROR" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.regular.StateNodeFetcher" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.regular.StateNodeFetcher" level="INFO" />
     
     <!-- SNAP sync internals -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap" level="ERROR" />
+    <!-- SNAP sync actors (AccountRangeCoordinator, workers) — INFO for optimization visibility -->
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.actors" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.AccountRangeDownloader" level="ERROR" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.StorageRangeDownloader" level="ERROR" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.TrieNodeHealer" level="ERROR" />

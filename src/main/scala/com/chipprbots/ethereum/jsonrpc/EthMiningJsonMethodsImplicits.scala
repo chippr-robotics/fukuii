@@ -93,9 +93,13 @@ object EthMiningJsonMethodsImplicits extends JsonMethodsImplicits {
       }
     }
 
-  implicit val eth_setEtherbase: JsonMethodDecoder[EthMiningService.SetEtherbaseRequest] with JsonEncoder[EthMiningService.SetEtherbaseResponse] =
-    new JsonMethodDecoder[EthMiningService.SetEtherbaseRequest] with JsonEncoder[EthMiningService.SetEtherbaseResponse] {
-      override def decodeJson(params: Option[JsonAST.JArray]): Either[JsonRpcError, EthMiningService.SetEtherbaseRequest] =
+  implicit val eth_setEtherbase: JsonMethodDecoder[EthMiningService.SetEtherbaseRequest]
+    with JsonEncoder[EthMiningService.SetEtherbaseResponse] =
+    new JsonMethodDecoder[EthMiningService.SetEtherbaseRequest]
+      with JsonEncoder[EthMiningService.SetEtherbaseResponse] {
+      override def decodeJson(
+          params: Option[JsonAST.JArray]
+      ): Either[JsonRpcError, EthMiningService.SetEtherbaseRequest] =
         params match {
           case Some(JArray(JString(addressStr) :: Nil)) =>
             extractAddress(addressStr).map(address => EthMiningService.SetEtherbaseRequest(address))

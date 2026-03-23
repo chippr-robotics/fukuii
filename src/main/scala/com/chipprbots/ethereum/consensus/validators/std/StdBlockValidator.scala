@@ -15,6 +15,9 @@ import com.chipprbots.ethereum.utils.ByteUtils.or
 
 object StdBlockValidator extends BlockValidator {
 
+  /** EIP-7934: Max RLP-encoded block size (10 MiB - 2 MiB safety margin). */
+  val BlockRLPSizeCap: Long = 10L * 1024 * 1024 - 2L * 1024 * 1024 // 8,388,608
+
   /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.transactionsRoot]] matches [[BlockBody.transactionList]]
     * based on validations stated in section 4.4.2 of http://paper.gavwood.com/
     *
@@ -81,60 +84,24 @@ object StdBlockValidator extends BlockValidator {
     else Left(BlockLogBloomError)
   }
 
-  /** Validates that the block body does not contain transactions
-    *
-    * @param blockBody
-    *   BlockBody to validate
-    * @return
-    *   BlockValid if there are no transactions, error otherwise
-    */
-  private def validateNoTransactions(blockBody: BlockBody): Either[BlockError, BlockValid] =
-    Either.cond(blockBody.transactionList.isEmpty, BlockValid, CheckpointBlockTransactionsNotEmptyError)
-
-  /** Validates that the block body does not contain ommers
-    *
-    * @param blockBody
-    *   BlockBody to validate
-    * @return
-    *   BlockValid if there are no ommers, error otherwise
-    */
-  private def validateNoOmmers(blockBody: BlockBody): Either[BlockError, BlockValid] =
-    Either.cond(blockBody.uncleNodesList.isEmpty, BlockValid, CheckpointBlockOmmersNotEmptyError)
-
-  /** This method allows validate block with checkpoint. It performs the following validations:
-    *   - no transactions in the body
-    *   - no ommers in the body
-    *
-    * @param blockBody
-    *   BlockBody to validate
-    * @return
-    *   The BlockValid if validations are ok, BlockError otherwise
-    */
-  private def validateBlockWithCheckpoint(blockBody: BlockBody): Either[BlockError, BlockValid] =
-    for {
-      _ <- validateNoTransactions(blockBody)
-      _ <- validateNoOmmers(blockBody)
-    } yield BlockValid
-
-  /** This method allows validate a regular Block. It only performs the following validations (stated on section 4.4.2
-    * of http://paper.gavwood.com/):
-    *   - BlockValidator.validateTransactionRoot
-    *   - BlockValidator.validateOmmersHash
+  /** EIP-7934: Validates that the RLP-encoded block size does not exceed the cap.
     *
     * @param block
     *   Block to validate
     * @return
-    *   The BlockValid if validations are ok, BlockError otherwise
+    *   Block if valid, BlockRLPSizeError otherwise
     */
-  private def validateRegularBlock(block: Block): Either[BlockError, BlockValid] =
-    for {
-      _ <- validateTransactionRoot(block)
-      _ <- validateOmmersHash(block)
-    } yield BlockValid
+  private def validateBlockRLPSize(block: Block): Either[BlockError, BlockValid] = {
+    val size = Block.size(block)
+    if (size <= BlockRLPSizeCap) Right(BlockValid)
+    else Left(BlockRLPSizeError(size, BlockRLPSizeCap))
+  }
 
-  /** This method allows validate a Block. It only perfoms the following validations (stated on section 4.4.2 of
+  /** This method allows validate a Block. It only performs the following validations (stated on section 4.4.2 of
     * http://paper.gavwood.com/):
-    *   - validate regular block or block with checkpoint
+    *   - BlockValidator.validateTransactionRoot
+    *   - BlockValidator.validateOmmersHash
+    *   - BlockValidator.validateBlockRLPSize (EIP-7934)
     *   - BlockValidator.validateReceipts
     *   - BlockValidator.validateLogBloom
     *
@@ -162,8 +129,11 @@ object StdBlockValidator extends BlockValidator {
     */
   def validateHeaderAndBody(blockHeader: BlockHeader, blockBody: BlockBody): Either[BlockError, BlockValid] = {
     val block = Block(blockHeader, blockBody)
-    if (blockHeader.hasCheckpoint) validateBlockWithCheckpoint(blockBody)
-    else validateRegularBlock(block)
+    for {
+      _ <- validateTransactionRoot(block)
+      _ <- validateOmmersHash(block)
+      _ <- validateBlockRLPSize(block)
+    } yield BlockValid
   }
 
   /** This method allows validations of the block with its associated receipts. It only perfoms the following
@@ -194,9 +164,7 @@ object StdBlockValidator extends BlockValidator {
 
   case object BlockLogBloomError extends BlockError
 
-  case object CheckpointBlockTransactionsNotEmptyError extends BlockError
-
-  case object CheckpointBlockOmmersNotEmptyError extends BlockError
+  case class BlockRLPSizeError(size: Long, cap: Long) extends BlockError
 
   sealed trait BlockValid
 

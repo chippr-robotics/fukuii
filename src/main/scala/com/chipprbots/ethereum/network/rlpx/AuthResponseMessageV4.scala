@@ -35,12 +35,13 @@ object AuthResponseMessageV4 {
           (list.items(0), list.items(1), list.items(2)) match {
             case (RLPValue(ephemeralPublicKeyBytesArr), RLPValue(nonceArr), RLPValue(versionArr)) =>
               val ephemeralPublicKey =
-                curve.getCurve.decodePoint(ECDSASignature.UncompressedIndicator +: ephemeralPublicKeyBytesArr)
+                decodeAndValidatePoint(ECDSASignature.UncompressedIndicator +: ephemeralPublicKeyBytesArr)
               val version = BigInt(versionArr).toInt
               AuthResponseMessageV4(ephemeralPublicKey, ByteString(nonceArr), version)
             case _ => throw new RuntimeException("Cannot decode auth response message: invalid field types")
           }
-        case _ => throw new RuntimeException("Cannot decode auth response message: expected RLPList with at least 3 elements")
+        case _ =>
+          throw new RuntimeException("Cannot decode auth response message: expected RLPList with at least 3 elements")
       }
     }
 }

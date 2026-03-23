@@ -89,7 +89,7 @@ class ForkIdValidatorSpec extends AnyWordSpec with Matchers {
       // 0xffffffff. Local needs software update, reject.
       validatePeer(7279999, ForkId(0x5cddc0e1L, None)) shouldBe ErrLocalIncompatibleOrStale
 
-      // Local is mainnet Petersburg, remote is Rinkeby Petersburg.
+      // Local is mainnet Petersburg, remote announces incompatible fork ID.
       validatePeer(7987396, ForkId(0xafec6b27L, None)) shouldBe ErrLocalIncompatibleOrStale
 
       // Local is mainnet Petersburg, far in the future. Remote announces Gopherium (non existing fork)

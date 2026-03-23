@@ -132,12 +132,12 @@ class ReceiptsSpec extends AnyFlatSpec with Matchers {
         RLPValue(typedReceiptBytes)
       )
     )
-    
+
     // This should decode successfully to Type01Receipt
     val decoded = EthereumMessageDecoder
       .ethMessageDecoder(Capability.ETH64)
       .fromBytes(Codes.ReceiptsCode, encode(encodedType01ReceiptsAsRLPValue))
-    
+
     decoded shouldBe Right(type01Receipts)
   }
 

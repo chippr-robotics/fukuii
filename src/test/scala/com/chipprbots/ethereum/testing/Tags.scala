@@ -267,6 +267,9 @@ object Tags {
   /** Tests specific to Ethereum Classic Spiral fork. */
   object SpiralTest extends Tag("SpiralTest")
 
+  /** Tests specific to Ethereum Classic Olympia fork (ECIP-1111/1112/1121). */
+  object OlympiaTest extends Tag("OlympiaTest")
+
   // ===== Environment-Specific Tags (from RPC tests) =====
 
   /** Tests that require connection to MainNet. */

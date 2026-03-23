@@ -41,6 +41,10 @@ object SignedTransactionError {
     override def toString: String =
       s"${getClass.getSimpleName}(Transaction initcode size ($actualSize) exceeds maximum ($maxSize))"
   }
+  case class TransactionGasLimitExceedsCap(txGasLimit: BigInt, cap: BigInt) extends SignedTransactionError {
+    override def toString: String =
+      s"${getClass.getSimpleName}(Tx gas limit ($txGasLimit) exceeds per-tx cap ($cap))"
+  }
 }
 
 sealed trait SignedTransactionValid

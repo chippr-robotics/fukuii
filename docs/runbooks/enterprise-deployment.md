@@ -70,16 +70,14 @@ cat > /opt/fukuii/chains/myenterprise-chain.conf << 'EOF'
   magneto-block-number = "0"
   mystique-block-number = "0"
   spiral-block-number = "0"
-  
+  olympia-block-number = "0"
+
   # Enable ETH-specific forks for maximum compatibility
   muir-glacier-block-number = "0"
   berlin-block-number = "0"
   
-  # ECIP checkpointing/treasury forks - may not be relevant for private enterprise chains
-  ecip1098-block-number = "1000000000000000000"
-  ecip1097-block-number = "1000000000000000000"
+  # ECIP forks - may not be relevant for private enterprise chains
   ecip1099-block-number = "1000000000000000000"
-  ecip1049-block-number = "1000000000000000000"
   
   # Disable difficulty bomb (not needed in private networks)
   difficulty-bomb-pause-block-number = "0"
@@ -279,7 +277,7 @@ fukuii enterprise -Dconfig.file=/opt/fukuii/enterprise-node.conf
 1. **Unique Network ID**: Always use a unique `network-id` not used by public networks
    ```hocon
    # Guidelines for selecting network-id:
-   #   - Avoid 1 (Ethereum mainnet), 61 (ETC mainnet), 3 (Ropsten), etc.
+   #   - Avoid 1 (Ethereum mainnet), 61 (ETC mainnet), 63 (Mordor testnet), etc.
    #   - Check https://chainlist.org/ for existing network IDs
    #   - For private networks, use IDs > 10000 to avoid conflicts
    #   - Common practice: use your organization ID or random 5-digit number

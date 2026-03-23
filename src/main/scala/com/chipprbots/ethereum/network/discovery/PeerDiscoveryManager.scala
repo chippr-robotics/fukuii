@@ -112,7 +112,10 @@ class PeerDiscoveryManager(
           context.become(started(discovery, release))
 
         case Left(ex) =>
-          log.warning("Failed to start peer discovery; will keep running without discovery (static/known nodes only).", ex)
+          log.warning(
+            "Failed to start peer discovery; will keep running without discovery (static/known nodes only).",
+            ex
+          )
           context.become(init)
       }
   }
@@ -208,7 +211,8 @@ class PeerDiscoveryManager(
   ): Unit = maybeRandomNodes.foreach { consumer =>
     pipeToRecipient[RandomNodeInfo](recipient) {
       consumer.take(1).compile.lastOrError.flatMap { node =>
-        IO(log.debug("Random node candidate {} delivered to {}", formatNodeForLogs(node), recipient.path)).as(RandomNodeInfo(node))
+        IO(log.debug("Random node candidate {} delivered to {}", formatNodeForLogs(node), recipient.path))
+          .as(RandomNodeInfo(node))
       }
     }
   }
@@ -248,7 +252,7 @@ class PeerDiscoveryManager(
 
   private def formatNodeForLogs(node: Node): String = {
     val id = Hex.toHexString(node.id.take(6).toArray)
-    s"${node.addr.getHostAddress}:${node.tcpPort}/$id"
+    s"${com.chipprbots.ethereum.network.getHostName(node.addr)}:${node.tcpPort}/$id"
   }
 
   def randomNodeId: ENode.Id = {

@@ -47,7 +47,7 @@ import com.chipprbots.ethereum.utils.ByteUtils
 class RLPxConnectionHandler(
     capabilities: List[Capability],
     authHandshaker: AuthHandshaker,
-  messageCodecFactory: (FrameCodec, Capability, Long, String, CompressionPolicy, Boolean) => MessageCodec,
+    messageCodecFactory: (FrameCodec, Capability, Long, String, CompressionPolicy, Boolean) => MessageCodec,
     rlpxConfiguration: RLPxConfiguration,
     extractor: Secrets => HelloCodec
 ) extends Actor
@@ -124,7 +124,7 @@ class RLPxConnectionHandler(
     private val CanonicalSnapSize = 0x08
 
     private case class InboundTranslator(peerEthBase: Int, peerSnapBase: Option[Int], snapFirst: Boolean) {
-      def translateType(messageType: Int): Int = {
+      def translateType(messageType: Int): Int =
         if (messageType < CanonicalEthBase) {
           messageType
         } else {
@@ -141,7 +141,6 @@ class RLPxConnectionHandler(
               }
           }
         }
-      }
 
       /** Translate a canonical (this codebase) message type to the peer's negotiated wire message space.
         *
@@ -152,7 +151,7 @@ class RLPxConnectionHandler(
         *
         * On the wire, ETH/SNAP bases depend on the peer's capability ordering.
         */
-      def toPeerWireType(canonicalType: Int): Int = {
+      def toPeerWireType(canonicalType: Int): Int =
         if (canonicalType < CanonicalEthBase) {
           canonicalType
         } else if (canonicalType >= CanonicalSnapBase && canonicalType < CanonicalSnapBase + CanonicalSnapSize) {
@@ -174,7 +173,6 @@ class RLPxConnectionHandler(
         } else {
           canonicalType
         }
-      }
 
       def translateFrames(frames: Seq[Frame]): Seq[Frame] =
         if (frames.isEmpty) frames
@@ -204,7 +202,11 @@ class RLPxConnectionHandler(
         }
     }
 
-    private def computeInboundTranslator(hello: Hello, negotiatedEth: Capability, supportsSnap: Boolean): InboundTranslator = {
+    private def computeInboundTranslator(
+        hello: Hello,
+        negotiatedEth: Capability,
+        supportsSnap: Boolean
+    ): InboundTranslator = {
       val peerCaps = hello.capabilities.toList
       val snapIndex = peerCaps.indexWhere(_ == Capability.SNAP1)
       val ethIndex = peerCaps.indexWhere(_ == negotiatedEth) match {
@@ -390,6 +392,13 @@ class RLPxConnectionHandler(
       }
 
       val encryptedPayloadSize = ByteUtils.bigEndianToShort(data.take(2).toArray)
+      // Security: reject oversized handshake packets (CVE-2026-26314)
+      // Matches go-ethereum's baseProtocolMaxMsgSize = 2 * 1024
+      if (encryptedPayloadSize > 2048) {
+        throw new RuntimeException(
+          s"EIP-8 handshake packet too large: sizePrefix=${encryptedPayloadSize} max=2048"
+        )
+      }
       val totalFrameSize = encryptedPayloadSize + 2
       if (encryptedPayloadSize <= 0 || totalFrameSize > data.length) {
         val headHex = Hex.toHexString(data.take(Math.min(32, data.length)).toArray)
@@ -436,7 +445,6 @@ class RLPxConnectionHandler(
         seqNumber: Int = 0
     ): Receive =
       handleConnectionTerminated.orElse(handleWriteFailed).orElse(handleConnectionClosed).orElse {
-        // TODO when cancellableAckTimeout is Some
         case SendMessage(h: HelloEnc) =>
           val out = extractor.writeHello(h)
           connection ! Write(out, Ack)
@@ -511,7 +519,10 @@ class RLPxConnectionHandler(
           context.become(awaitInitialHello(extractor, cancellableAckTimeout, seqNumber))
       }
 
-    private def negotiateCodec(hello: Hello, extractor: HelloCodec): Option[(MessageCodec, Capability, InboundTranslator)] =
+    private def negotiateCodec(
+        hello: Hello,
+        extractor: HelloCodec
+    ): Option[(MessageCodec, Capability, InboundTranslator)] =
       Capability.negotiate(hello.capabilities.toList, capabilities).map { negotiated =>
         val compressionPolicy =
           CompressionPolicy.fromHandshake(EtcHelloExchangeState.P2pVersion, hello.p2pVersion)
@@ -535,7 +546,11 @@ class RLPxConnectionHandler(
         )
       }
 
-    private def processFrames(frames: Seq[Frame], messageCodec: MessageCodec, inboundTranslator: InboundTranslator): Unit =
+    private def processFrames(
+        frames: Seq[Frame],
+        messageCodec: MessageCodec,
+        inboundTranslator: InboundTranslator
+    ): Unit =
       if (frames.nonEmpty) {
         val translatedFrames = inboundTranslator.translateFrames(frames)
         val messagesSoFar = messageCodec.readFrames(translatedFrames) // omit hello
@@ -609,8 +624,8 @@ class RLPxConnectionHandler(
       *   , sequence number for the next message to be sent
       */
     private def handshaked(
-      messageCodec: MessageCodec,
-      inboundTranslator: InboundTranslator,
+        messageCodec: MessageCodec,
+        inboundTranslator: InboundTranslator,
         messagesNotSent: Queue[MessageSerializable] = Queue.empty,
         cancellableAckTimeout: Option[CancellableAckTimeout] = None,
         seqNumber: Int = 0
@@ -728,8 +743,8 @@ class RLPxConnectionHandler(
       *   , messages not yet sent
       */
     private def sendMessage(
-      messageCodec: MessageCodec,
-      inboundTranslator: InboundTranslator,
+        messageCodec: MessageCodec,
+        inboundTranslator: InboundTranslator,
         messageToSend: MessageSerializable,
         seqNumber: Int,
         remainingMsgsToSend: Queue[MessageSerializable]
@@ -905,7 +920,7 @@ object RLPxConnectionHandler {
       val frameData = frame.payload.toArray
       if (frame.`type` == Hello.code) {
         NetworkMessageDecoder.fromBytes(frame.`type`, frameData) match {
-          case Left(err)  => throw err // TODO: rethink throwing here
+          case Left(err)  => throw err
           case Right(msg) => Some(msg.asInstanceOf[Hello])
         }
       } else {

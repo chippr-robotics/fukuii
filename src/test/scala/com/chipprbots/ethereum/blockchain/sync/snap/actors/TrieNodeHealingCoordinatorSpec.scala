@@ -72,7 +72,7 @@ class TrieNodeHealingCoordinatorSpec
     )
 
     coordinator ! Messages.QueueMissingNodes(missingNodes)
-    
+
     // Coordinator should queue the nodes
     coordinator ! Messages.HealingGetProgress
     expectMsgType[Any](3.seconds)
@@ -129,7 +129,7 @@ class TrieNodeHealingCoordinatorSpec
     )
 
     coordinator ! Messages.HealingTaskComplete(BigInt(123), Right(5))
-    
+
     // Coordinator should handle completion
     coordinator ! Messages.HealingGetProgress
     expectMsgType[Any](3.seconds)
@@ -155,7 +155,7 @@ class TrieNodeHealingCoordinatorSpec
 
     coordinator ! Messages.StartTrieNodeHealing(stateRoot)
     coordinator ! Messages.HealingCheckCompletion
-    
+
     // Should complete immediately if no nodes to heal
     snapSyncController.expectMsg(3.seconds, SNAPSyncController.StateHealingComplete)
   }
@@ -179,7 +179,7 @@ class TrieNodeHealingCoordinatorSpec
     )
 
     coordinator ! Messages.HealingTaskFailed(BigInt(123), "Test failure")
-    
+
     // Coordinator should still be operational
     coordinator ! Messages.HealingGetProgress
     expectMsgType[Any](3.seconds)

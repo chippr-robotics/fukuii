@@ -41,7 +41,7 @@ object Capability {
     case "eth/67" => Some(ETH67)
     case "eth/68" => Some(ETH68)
     case "snap/1" => Some(SNAP1)
-    case _        => None // TODO: log unknown capability?
+    case _        => None
   }
 
   def parseUnsafe(s: String): Capability =

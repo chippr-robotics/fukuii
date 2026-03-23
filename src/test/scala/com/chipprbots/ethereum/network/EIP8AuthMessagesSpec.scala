@@ -60,7 +60,7 @@ class EIP8AuthMessagesSpec extends AnyFlatSpec with Matchers with SecureRandomBu
       RLPValue(nonce.toArray),
       RLPValue(Array(version.toByte)),
       RLPValue(Array[Byte](1, 2, 3)), // Extra field #1 - should be ignored
-      RLPValue(Array[Byte](4, 5, 6))  // Extra field #2 - should be ignored
+      RLPValue(Array[Byte](4, 5, 6)) // Extra field #2 - should be ignored
     )
     val encodedWithExtra = encode(rlpWithExtraField)
 
@@ -84,7 +84,7 @@ class EIP8AuthMessagesSpec extends AnyFlatSpec with Matchers with SecureRandomBu
       RLPValue(publicKey.getEncoded(false).drop(1)),
       RLPValue(nonce.toArray),
       RLPValue(Array(version.toByte)),
-      RLPValue(Array[Byte](0xFF.toByte)) // One extra field - mimics CoreGeth's behavior
+      RLPValue(Array[Byte](0xff.toByte)) // One extra field - mimics CoreGeth's behavior
     )
     val encoded = encode(rlpWithOneExtraField)
 
@@ -96,7 +96,10 @@ class EIP8AuthMessagesSpec extends AnyFlatSpec with Matchers with SecureRandomBu
     decoded.version shouldBe version
   }
 
-  it should "decode message with trailing padding bytes after the RLP payload (EIP-8)" taggedAs (UnitTest, NetworkTest) in {
+  it should "decode message with trailing padding bytes after the RLP payload (EIP-8)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
     // EIP-8 allows random padding after the RLP list inside the ECIES envelope.
     // Our decoder should parse only the first RLP item and ignore any trailing bytes.
     val signature = ECDSASignature(BigInt(42), BigInt(43), BigInt(0))
@@ -113,7 +116,7 @@ class EIP8AuthMessagesSpec extends AnyFlatSpec with Matchers with SecureRandomBu
     val encoded = encode(rlpList)
 
     // Append random-looking padding bytes that are not valid RLP continuation.
-    val padded = encoded ++ Array[Byte](0x00, 0x01, 0x02, 0x03, 0x7F.toByte, 0x55)
+    val padded = encoded ++ Array[Byte](0x00, 0x01, 0x02, 0x03, 0x7f.toByte, 0x55)
 
     val decoded = padded.toAuthInitiateMessageV4
     decoded.signature shouldBe signature

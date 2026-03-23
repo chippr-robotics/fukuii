@@ -23,12 +23,26 @@ case class DiscoveryConfig(
 )
 
 object DiscoveryConfig extends Logger {
-  def apply(etcClientConfig: com.typesafe.config.Config, bootstrapNodes: Set[String]): DiscoveryConfig = {
+  def apply(
+      etcClientConfig: com.typesafe.config.Config,
+      bootstrapNodes: Set[String],
+      dnsDiscoveryDomains: Seq[String] = Seq.empty
+  ): DiscoveryConfig = {
     val discoveryConfig = etcClientConfig.getConfig("network.discovery")
 
     // Load static nodes from datadir/static-nodes.json if it exists
     val datadir = etcClientConfig.getString("datadir")
     val staticNodes = StaticNodesLoader.loadFromDatadir(datadir)
+
+    // Resolve DNS discovery domains (EIP-1459) to enode URLs
+    val dnsNodes: Set[String] = if (dnsDiscoveryDomains.nonEmpty) {
+      log.info(s"Resolving ${dnsDiscoveryDomains.size} DNS discovery domain(s): ${dnsDiscoveryDomains.mkString(", ")}")
+      dnsDiscoveryDomains.flatMap { domain =>
+        DnsDiscovery.resolveEnodes(domain)
+      }.toSet
+    } else {
+      Set.empty
+    }
 
     // Check if bootstrap nodes should be used (controlled by modifiers like 'enterprise')
     // Default to true if not specified to maintain backward compatibility
@@ -41,20 +55,19 @@ object DiscoveryConfig extends Logger {
 
     // Combine nodes based on configuration
     val allBootstrapNodes = if (useBootstrapNodes) {
-      // Public/default mode: merge bootstrap nodes and static nodes
-      val combined = bootstrapNodes ++ staticNodes
-      if (staticNodes.nonEmpty && bootstrapNodes.nonEmpty) {
-        log.info(
-          s"Merged ${staticNodes.size} static node(s) from static-nodes.json with ${bootstrapNodes.size} bootstrap node(s) from config"
-        )
-      } else if (staticNodes.nonEmpty) {
-        log.info(s"Using ${staticNodes.size} static node(s) from static-nodes.json")
-      } else if (bootstrapNodes.nonEmpty) {
-        log.info(s"Using ${bootstrapNodes.size} bootstrap node(s) from config")
+      // Public/default mode: merge bootstrap nodes, DNS-discovered nodes, and static nodes
+      val combined = bootstrapNodes ++ dnsNodes ++ staticNodes
+      val sources = Seq(
+        if (bootstrapNodes.nonEmpty) Some(s"${bootstrapNodes.size} config") else None,
+        if (dnsNodes.nonEmpty) Some(s"${dnsNodes.size} DNS") else None,
+        if (staticNodes.nonEmpty) Some(s"${staticNodes.size} static") else None
+      ).flatten
+      if (sources.nonEmpty) {
+        log.info(s"Bootstrap nodes: ${combined.size} total (${sources.mkString(", ")})")
       }
       combined
     } else {
-      // Enterprise mode: use only static nodes, ignore bootstrap nodes
+      // Enterprise mode: use only static nodes, ignore bootstrap nodes and DNS
       if (staticNodes.nonEmpty) {
         log.info(s"Using ${staticNodes.size} static node(s) from static-nodes.json (bootstrap nodes ignored)")
       } else {

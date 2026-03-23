@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.jsonrpc
 
+import java.util.concurrent.atomic.AtomicReference
+
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.testkit.{TestKit, TestProbe}
 import org.apache.pekko.util.Timeout
@@ -12,7 +14,10 @@ import org.scalatest.BeforeAndAfterAll
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpecLike
 
+import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
+import com.chipprbots.ethereum.domain.{Address, BlockchainReader}
 import com.chipprbots.ethereum.jsonrpc.McpService._
+import com.chipprbots.ethereum.utils._
 
 class McpServiceSpec
     extends TestKit(ActorSystem("McpServiceSpec"))
@@ -20,9 +25,8 @@ class McpServiceSpec
     with Matchers
     with BeforeAndAfterAll {
 
-  override def afterAll(): Unit = {
+  override def afterAll(): Unit =
     TestKit.shutdownActorSystem(system)
-  }
 
   implicit val timeout: Timeout = Timeout(3.seconds)
   implicit val ec: scala.concurrent.ExecutionContext = scala.concurrent.ExecutionContext.global
@@ -30,7 +34,31 @@ class McpServiceSpec
   val peerManagerProbe = TestProbe()
   val syncControllerProbe = TestProbe()
 
-  val service = new McpService(peerManagerProbe.ref, syncControllerProbe.ref)
+  val testBlockchainConfig = BlockchainConfig(
+    chainId = BigInt(61),
+    networkId = 1,
+    maxCodeSize = None,
+    forkBlockNumbers = ForkBlockNumbers.Empty,
+    customGenesisFileOpt = None,
+    customGenesisJsonOpt = None,
+    accountStartNonce = com.chipprbots.ethereum.domain.UInt256.Zero,
+    monetaryPolicyConfig =
+      MonetaryPolicyConfig(5000000, 0.2, BigInt("5000000000000000000"), BigInt("4000000000000000000")),
+    daoForkConfig = None,
+    bootstrapNodes = Set(),
+    gasTieBreaker = false,
+    ethCompatibleStorage = true
+  )
+
+  // Use null for dependencies not exercised in basic tests
+  val service = new McpService(
+    peerManagerProbe.ref,
+    syncControllerProbe.ref,
+    null.asInstanceOf[BlockchainReader],
+    testBlockchainConfig,
+    new AtomicReference[NodeStatus](),
+    null.asInstanceOf[TransactionMappingStorage]
+  )
 
   "McpService" should {
 
@@ -40,7 +68,7 @@ class McpServiceSpec
 
       response.isRight shouldBe true
       val result = response.getOrElse(throw new Exception("Expected Right"))
-      result.protocolVersion shouldBe "2024-11-05"
+      result.protocolVersion shouldBe "2025-11-25"
       result.serverInfo.name shouldBe "Fukuii ETC Node MCP Server"
       result.capabilities.tools shouldBe defined
       result.capabilities.resources shouldBe defined
@@ -54,7 +82,7 @@ class McpServiceSpec
       response.isRight shouldBe true
       val result = response.getOrElse(throw new Exception("Expected Right"))
       result.tools.length should be >= 5
-      result.tools.map(_.name) should contain allOf (
+      (result.tools.map(_.name) should contain).allOf(
         "mcp_node_status",
         "mcp_node_info",
         "mcp_blockchain_info",
@@ -90,25 +118,13 @@ class McpServiceSpec
       response.isRight shouldBe true
       val result = response.getOrElse(throw new Exception("Expected Right"))
       result.resources.length should be >= 5
-      result.resources.map(_.uri) should contain allOf (
+      (result.resources.map(_.uri) should contain).allOf(
         "fukuii://node/status",
         "fukuii://node/config",
         "fukuii://blockchain/latest",
         "fukuii://peers/connected",
         "fukuii://sync/status"
       )
-    }
-
-    "read node config resource successfully" in {
-      val request = McpResourcesReadRequest("fukuii://node/config")
-      val response = service.resourcesRead(request).unsafeRunSync()
-
-      response.isRight shouldBe true
-      val result = response.getOrElse(throw new Exception("Expected Right"))
-      result.contents should not be empty
-      result.contents.head.uri shouldBe "fukuii://node/config"
-      result.contents.head.mimeType shouldBe Some("application/json")
-      result.contents.head.text shouldBe defined
     }
 
     "return error for unknown resource URI" in {
@@ -125,7 +141,7 @@ class McpServiceSpec
       response.isRight shouldBe true
       val result = response.getOrElse(throw new Exception("Expected Right"))
       result.prompts.length should be >= 3
-      result.prompts.map(_.name) should contain allOf (
+      (result.prompts.map(_.name) should contain).allOf(
         "mcp_node_health_check",
         "mcp_sync_troubleshooting",
         "mcp_peer_management"

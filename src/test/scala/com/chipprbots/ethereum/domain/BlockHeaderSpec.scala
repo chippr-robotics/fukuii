@@ -9,7 +9,8 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.ObjectGenerators
-import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields._
+import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty
+import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostOlympia
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits._
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
@@ -43,132 +44,86 @@ class BlockHeaderSpec extends AnyFreeSpec with Matchers with ScalaCheckPropertyC
       }
     }
 
-    "should generate the expected RLP object for pre ECIP1098 headers" in {
+    "should generate the expected RLP object for standard headers" in {
       import com.chipprbots.ethereum.rlp.RLPValue
       import com.chipprbots.ethereum.utils.ByteUtils
 
-      val preECIP1098Header = Fixtures.Blocks.ValidBlock.header.copy(extraFields = HefEmpty)
+      val standardHeader = Fixtures.Blocks.ValidBlock.header
 
       val expectedRLPEncoded = RLPList(
-        preECIP1098Header.parentHash.toArray,
-        preECIP1098Header.ommersHash.toArray,
-        preECIP1098Header.beneficiary.toArray,
-        preECIP1098Header.stateRoot.toArray,
-        preECIP1098Header.transactionsRoot.toArray,
-        preECIP1098Header.receiptsRoot.toArray,
-        preECIP1098Header.logsBloom.toArray,
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(preECIP1098Header.difficulty)),
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(preECIP1098Header.number)),
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(preECIP1098Header.gasLimit)),
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(preECIP1098Header.gasUsed)),
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(preECIP1098Header.unixTimestamp)),
-        preECIP1098Header.extraData.toArray,
-        preECIP1098Header.mixHash.toArray,
-        preECIP1098Header.nonce.toArray
+        standardHeader.parentHash.toArray,
+        standardHeader.ommersHash.toArray,
+        standardHeader.beneficiary.toArray,
+        standardHeader.stateRoot.toArray,
+        standardHeader.transactionsRoot.toArray,
+        standardHeader.receiptsRoot.toArray,
+        standardHeader.logsBloom.toArray,
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(standardHeader.difficulty)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(standardHeader.number)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(standardHeader.gasLimit)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(standardHeader.gasUsed)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(standardHeader.unixTimestamp)),
+        standardHeader.extraData.toArray,
+        standardHeader.mixHash.toArray,
+        standardHeader.nonce.toArray
       )
 
-      rlp.encode(expectedRLPEncoded) shouldBe (preECIP1098Header.toBytes: Array[Byte])
+      rlp.encode(expectedRLPEncoded) shouldBe (standardHeader.toBytes: Array[Byte])
     }
 
-    "should generate the expected RLP object for post ECIP1098 headers" in {
+    "should generate the expected RLP object for post Olympia headers with baseFee" taggedAs (
+      OlympiaTest,
+      RLPTest
+    ) in {
       import com.chipprbots.ethereum.rlp.RLPValue
       import com.chipprbots.ethereum.utils.ByteUtils
 
-      val postECIP1098Header = Fixtures.Blocks.ValidBlock.header.copy(
-        extraFields = HefEmpty
+      val baseFee = BigInt(1000000000) // 1 gwei
+      val olympiaHeader = Fixtures.Blocks.ValidBlock.header.copy(
+        extraFields = HefPostOlympia(baseFee)
       )
 
       val expectedRLPEncoded = RLPList(
-        postECIP1098Header.parentHash.toArray,
-        postECIP1098Header.ommersHash.toArray,
-        postECIP1098Header.beneficiary.toArray,
-        postECIP1098Header.stateRoot.toArray,
-        postECIP1098Header.transactionsRoot.toArray,
-        postECIP1098Header.receiptsRoot.toArray,
-        postECIP1098Header.logsBloom.toArray,
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1098Header.difficulty)),
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1098Header.number)),
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1098Header.gasLimit)),
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1098Header.gasUsed)),
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1098Header.unixTimestamp)),
-        postECIP1098Header.extraData.toArray,
-        postECIP1098Header.mixHash.toArray,
-        postECIP1098Header.nonce.toArray
+        olympiaHeader.parentHash.toArray,
+        olympiaHeader.ommersHash.toArray,
+        olympiaHeader.beneficiary.toArray,
+        olympiaHeader.stateRoot.toArray,
+        olympiaHeader.transactionsRoot.toArray,
+        olympiaHeader.receiptsRoot.toArray,
+        olympiaHeader.logsBloom.toArray,
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(olympiaHeader.difficulty)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(olympiaHeader.number)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(olympiaHeader.gasLimit)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(olympiaHeader.gasUsed)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(olympiaHeader.unixTimestamp)),
+        olympiaHeader.extraData.toArray,
+        olympiaHeader.mixHash.toArray,
+        olympiaHeader.nonce.toArray,
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(baseFee))
       )
 
-      rlp.encode(expectedRLPEncoded) shouldBe (postECIP1098Header.toBytes: Array[Byte])
+      rlp.encode(expectedRLPEncoded) shouldBe (olympiaHeader.toBytes: Array[Byte])
     }
 
-    "should generate the expected RLP object for post ECIP1097 headers with checkpoint" in {
-      import com.chipprbots.ethereum.rlp.RLPValue
-      import com.chipprbots.ethereum.utils.ByteUtils
-
-      val checkpoint = Checkpoint(Nil)
-      val postECIP1097Header = Fixtures.Blocks.ValidBlock.header.copy(
-        extraFields = HefPostEcip1097(Some(checkpoint))
-      )
-
-      val expectedRLPEncoded = RLPList(
-        postECIP1097Header.parentHash.toArray,
-        postECIP1097Header.ommersHash.toArray,
-        postECIP1097Header.beneficiary.toArray,
-        postECIP1097Header.stateRoot.toArray,
-        postECIP1097Header.transactionsRoot.toArray,
-        postECIP1097Header.receiptsRoot.toArray,
-        postECIP1097Header.logsBloom.toArray,
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1097Header.difficulty)),
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1097Header.number)),
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1097Header.gasLimit)),
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1097Header.gasUsed)),
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1097Header.unixTimestamp)),
-        postECIP1097Header.extraData.toArray,
-        postECIP1097Header.mixHash.toArray,
-        postECIP1097Header.nonce.toArray,
-        Some(checkpoint): Option[Checkpoint]
-      )
-
-      rlp.encode(expectedRLPEncoded) shouldBe (postECIP1097Header.toBytes: Array[Byte])
-    }
-
-    "should generate the expected RLP object for post ECIP1097 headers without checkpoint" in {
-      import com.chipprbots.ethereum.rlp.RLPValue
-      import com.chipprbots.ethereum.utils.ByteUtils
-
-      val postECIP1097Header = Fixtures.Blocks.ValidBlock.header.copy(
-        extraFields = HefPostEcip1097(None)
-      )
-
-      val expectedRLPEncoded = RLPList(
-        postECIP1097Header.parentHash.toArray,
-        postECIP1097Header.ommersHash.toArray,
-        postECIP1097Header.beneficiary.toArray,
-        postECIP1097Header.stateRoot.toArray,
-        postECIP1097Header.transactionsRoot.toArray,
-        postECIP1097Header.receiptsRoot.toArray,
-        postECIP1097Header.logsBloom.toArray,
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1097Header.difficulty)),
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1097Header.number)),
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1097Header.gasLimit)),
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1097Header.gasUsed)),
-        RLPValue(ByteUtils.bigIntToUnsignedByteArray(postECIP1097Header.unixTimestamp)),
-        postECIP1097Header.extraData.toArray,
-        postECIP1097Header.mixHash.toArray,
-        postECIP1097Header.nonce.toArray,
-        None: Option[Checkpoint]
-      )
-
-      rlp.encode(expectedRLPEncoded) shouldBe (postECIP1097Header.toBytes: Array[Byte])
-    }
-
-    "should decode post ECIP1097 headers without checkpoint without losing the extra field" in {
+    "should decode post Olympia headers preserving baseFee" taggedAs (OlympiaTest, RLPTest) in {
+      val baseFee = BigInt(1500000000)
       val originalHeader = Fixtures.Blocks.ValidBlock.header.copy(
-        extraFields = HefPostEcip1097(None)
+        extraFields = HefPostOlympia(baseFee)
       )
 
       val decoded = originalHeader.toBytes.toBlockHeader
 
-      decoded.extraFields shouldBe HefPostEcip1097(None)
+      decoded.extraFields shouldBe HefPostOlympia(baseFee)
+      decoded.baseFee shouldBe Some(baseFee)
       decoded.hash shouldBe originalHeader.hash
+    }
+
+    "should decode pre-Olympia headers as HefEmpty" taggedAs (OlympiaTest, RLPTest) in {
+      val emptyHeader = Fixtures.Blocks.ValidBlock.header.copy(extraFields = HefEmpty)
+
+      val decodedEmpty = emptyHeader.toBytes.toBlockHeader
+      decodedEmpty.extraFields shouldBe HefEmpty
+      decodedEmpty.baseFee shouldBe None
     }
   }
 

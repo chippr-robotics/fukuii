@@ -121,7 +121,7 @@ class SyncControllerSpec
       // switch to regular download
       val children = syncController.children
       assert(storagesInstance.storages.appStateStorage.isFastSyncDone())
-      assert(children.exists(ref => ref.path.name == "regular-sync"))
+      assert(children.exists(ref => ref.path.name.startsWith("regular-sync")))
       assert(blockchainReader.getBestBlockNumber() == defaultPivotBlockHeader.number)
     }
   }
@@ -155,7 +155,7 @@ class SyncControllerSpec
       assert(storagesInstance.storages.appStateStorage.isFastSyncDone())
       // switch to regular download
       val children = syncController.children
-      assert(children.exists(ref => ref.path.name == "regular-sync"))
+      assert(children.exists(ref => ref.path.name.startsWith("regular-sync")))
       assert(blockchainReader.getBestBlockNumber() == defaultPivotBlockHeader.number)
     }
   }
@@ -273,7 +273,7 @@ class SyncControllerSpec
       getHeaders(defaultStateBeforeNodeRestart.bestBlockHeaderNumber + 1, syncConfig.blockHeadersPerRequest)
 
     setupAutoPilot(networkPeerManager, handshakedPeers, defaultPivotBlockHeader, BlockchainData(newBlocks))
-    val fast = syncController.getSingleChild("fast-sync")
+    val fast = syncController.children.find(_.path.name.startsWith("fast-sync")).get
 
     // Send block that is way forward, we should ignore that block and blacklist that peer
     val futureHeaders = Seq(defaultPivotBlockHeader.copy(number = defaultPivotBlockHeader.number + 20))
@@ -441,7 +441,7 @@ class SyncControllerSpec
       assert(storagesInstance.storages.appStateStorage.isFastSyncDone())
       // switch to regular download
       val children = syncController.children
-      assert(children.exists(ref => ref.path.name == "regular-sync"))
+      assert(children.exists(ref => ref.path.name.startsWith("regular-sync")))
       assert(blockchainReader.getBestBlockNumber() == freshHeader1.number)
     }
   }
@@ -473,7 +473,7 @@ class SyncControllerSpec
       assert(storagesInstance.storages.appStateStorage.isFastSyncDone())
       // switch to regular download
       val children = syncController.children
-      assert(children.exists(ref => ref.path.name == "regular-sync"))
+      assert(children.exists(ref => ref.path.name.startsWith("regular-sync")))
       assert(blockchainReader.getBestBlockNumber() == defaultPivotBlockHeader.number)
     }
   }
@@ -535,7 +535,7 @@ class SyncControllerSpec
         // switch to regular download
         val children = syncController.children
         assert(storagesInstance.storages.appStateStorage.isFastSyncDone())
-        assert(children.exists(ref => ref.path.name == "regular-sync"))
+        assert(children.exists(ref => ref.path.name.startsWith("regular-sync")))
         assert(blockchainReader.getBestBlockNumber() == newPivot.number)
       }
   }
@@ -598,6 +598,7 @@ class SyncControllerSpec
           storagesInstance.storages.evmCodeStorage,
           storagesInstance.storages.stateStorage,
           storagesInstance.storages.nodeStorage,
+          storagesInstance.storages.flatSlotStorage,
           storagesInstance.storages.fastSyncStateStorage,
           consensusAdapter,
           validators,

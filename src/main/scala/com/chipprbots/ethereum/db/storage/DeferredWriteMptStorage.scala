@@ -6,14 +6,13 @@ import com.chipprbots.ethereum.mpt.MptNode
 
 /** An MptStorage wrapper that defers all collapse and write operations for bulk trie insertion.
   *
-  * During SNAP sync account download, each MerklePatriciaTrie.put() normally calls
-  * updateNodesInStorage() which collapses the trie (RLP-encodes + Keccak-256 hashes every node on
-  * the modified path) and writes to RocksDB. This is extremely expensive — O(log n) encoding,
-  * hashing, and DB I/O per account.
+  * During SNAP sync account download, each MerklePatriciaTrie.put() normally calls updateNodesInStorage() which
+  * collapses the trie (RLP-encodes + Keccak-256 hashes every node on the modified path) and writes to RocksDB. This is
+  * extremely expensive — O(log n) encoding, hashing, and DB I/O per account.
   *
-  * DeferredWriteMptStorage makes updateNodesInStorage() a no-op, returning the full in-memory node
-  * so subsequent puts traverse in-memory without any DB I/O. When ready to persist, call flush() to
-  * collapse and write everything in one batch.
+  * DeferredWriteMptStorage makes updateNodesInStorage() a no-op, returning the full in-memory node so subsequent puts
+  * traverse in-memory without any DB I/O. When ready to persist, call flush() to collapse and write everything in one
+  * batch.
   */
 class DeferredWriteMptStorage(val backing: MptStorage) extends MptStorage {
 
@@ -37,12 +36,22 @@ class DeferredWriteMptStorage(val backing: MptStorage) extends MptStorage {
 
   /** Flush all deferred trie nodes to backing storage in one batch.
     *
-    * Calls backing.updateNodesInStorage() which triggers collapseNode() on the entire in-memory
-    * tree, encoding/hashing all nodes at once, then batch-writing to RocksDB.
+    * Calls backing.updateNodesInStorage() which triggers collapseNode() on the entire in-memory tree, encoding/hashing
+    * all nodes at once, then batch-writing to RocksDB.
     *
     * @return
     *   Root hash if nodes were flushed, None if nothing to flush
     */
+  /** Take the current root for flushing, atomically clearing it.
+    * The caller flushes the returned root on a background thread via the backing storage.
+    * New puts will accumulate a fresh root via updateNodesInStorage().
+    */
+  def takeRoot(): Option[MptNode] = {
+    val root = currentRoot
+    currentRoot = None
+    root
+  }
+
   def flush(): Option[Array[Byte]] =
     currentRoot match {
       case Some(root) =>

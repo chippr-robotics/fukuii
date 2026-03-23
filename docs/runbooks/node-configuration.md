@@ -44,9 +44,9 @@ src/main/resources/conf/
 ├── metrics.conf           # Metrics configuration
 └── chains/
     ├── etc-chain.conf     # ETC chain parameters
-    ├── eth-chain.conf     # ETH chain parameters
     ├── mordor-chain.conf  # Mordor chain parameters
-    └── ...
+    ├── gorgoroth-chain.conf # Gorgoroth (Olympia test) parameters
+    └── test-chain.conf    # Test/dev chain parameters
 ```
 
 **Runtime Configurations**:
@@ -97,9 +97,8 @@ Chain configuration files define blockchain-specific parameters such as fork blo
 | Chain File | Network | Network ID | Chain ID |
 |------------|---------|------------|----------|
 | `etc-chain.conf` | Ethereum Classic | 1 | 0x3d (61) |
-| `eth-chain.conf` | Ethereum | 1 | 0x01 (1) |
 | `mordor-chain.conf` | Mordor Testnet | 7 | 0x3f (63) |
-| `pottery-chain.conf` | Pottery Testnet | 10 | 0xa (10) |
+| `gorgoroth-chain.conf` | Gorgoroth (Olympia) | 7 | 0x3f (63) |
 | `test-chain.conf` | Test/Dev | Varies | Varies |
 
 ### Chain Configuration Parameters
@@ -153,6 +152,9 @@ Chain configs define when specific protocol upgrades activate:
   
   # Spiral (ETC-specific, EIP-3855, EIP-3651, EIP-3860)
   spiral-block-number = "19250000"
+
+  # Olympia (ECIP-1111/1112/1121: EIP-1559, EVM modernization, EIP-7702)
+  # olympia-block-number = "TBD"  # ~mid-June 2026
 }
 ```
 
@@ -354,7 +356,7 @@ fukuii {
       }
       
       # Enabled RPC APIs
-      apis = "eth,web3,net,personal,fukuii,debug,qa,checkpointing"
+      apis = "eth,web3,net,personal,fukuii,debug,qa"
     }
   }
 }
@@ -930,7 +932,7 @@ fukuii {
       }
       
       # Enable all APIs for testing
-      apis = "eth,web3,net,personal,fukuii,debug,qa,test,checkpointing"
+      apis = "eth,web3,net,personal,fukuii,debug,qa,test"
     }
     
     # Minimal peers for faster startup

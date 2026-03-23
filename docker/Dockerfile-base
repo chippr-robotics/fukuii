@@ -2,7 +2,7 @@
 # Base image for Fukuii Docker builds
 # This provides a minimal Ubuntu base with essential tools
 
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 # OCI labels for container metadata
 LABEL org.opencontainers.image.title="Fukuii Base Image"
@@ -25,9 +25,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && locale-gen en_US.UTF-8 \
     && update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
 
-# Create non-root user
-RUN groupadd -r fukuii --gid=1000 && \
-    useradd -r -g fukuii --uid=1000 --home-dir=/home/fukuii --shell=/bin/bash fukuii && \
+# Create non-root user without hard-coding uid/gid (base image may already use 1000)
+RUN groupadd -r fukuii && \
+    useradd -r -g fukuii --home-dir=/home/fukuii --shell=/bin/bash fukuii && \
     mkdir -p /home/fukuii && \
     chown -R fukuii:fukuii /home/fukuii
 

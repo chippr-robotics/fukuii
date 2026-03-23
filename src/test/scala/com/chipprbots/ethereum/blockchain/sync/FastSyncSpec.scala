@@ -139,49 +139,51 @@ class FastSyncSpec
 
   "FastSync" - {
     "handles typed receipts" - {
-      "does not crash when ETH66 receipts include typed receipts in wire format" taggedAs (UnitTest, SyncTest) in testCaseM {
-        (fixture: Fixture) =>
-          import fixture._
+      "does not crash when ETH66 receipts include typed receipts in wire format" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in testCaseM { (fixture: Fixture) =>
+        import fixture._
 
-          (for {
-            _ <- saveGenesis
-            _ <- saveTestBlocksWithWeights
-            _ <- startSync
-            _ <- networkPeerManager.onPeersConnected
-            _ <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError
-            _ <- networkPeerManager.fetchedBlocks.head.compile.lastOrError
-          } yield {
-            val peer = testPeers.keys.head
+        (for {
+          _ <- saveGenesis
+          _ <- saveTestBlocksWithWeights
+          _ <- startSync
+          _ <- networkPeerManager.onPeersConnected
+          _ <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError
+          _ <- networkPeerManager.fetchedBlocks.head.compile.lastOrError
+        } yield {
+          val peer = testPeers.keys.head
 
-            // Simulate a typed receipt coming over the ETH66 Receipts message as:
-            //   RLPValue(typeByte || rlp(payload))
-            // which historically caused FastSync to throw "expected RLPList, got RLPValue".
-            val stateHash = org.apache.pekko.util.ByteString(Array.fill(32)(1.toByte))
-            val logsBloom = org.apache.pekko.util.ByteString(Array.fill(256)(0.toByte))
-            val legacyReceiptRLP = RLPList(
-              RLPValue(stateHash.toArray),
-              RLPValue(ByteUtils.bigIntToUnsignedByteArray(0)),
-              RLPValue(logsBloom.toArray),
-              RLPList()
+          // Simulate a typed receipt coming over the ETH66 Receipts message as:
+          //   RLPValue(typeByte || rlp(payload))
+          // which historically caused FastSync to throw "expected RLPList, got RLPValue".
+          val stateHash = org.apache.pekko.util.ByteString(Array.fill(32)(1.toByte))
+          val logsBloom = org.apache.pekko.util.ByteString(Array.fill(256)(0.toByte))
+          val legacyReceiptRLP = RLPList(
+            RLPValue(stateHash.toArray),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(0)),
+            RLPValue(logsBloom.toArray),
+            RLPList()
+          )
+          val typedReceiptBytes = Transaction.Type01 +: encode(legacyReceiptRLP)
+
+          val receiptsForBlocks = RLPList(
+            RLPList(
+              RLPValue(typedReceiptBytes)
             )
-            val typedReceiptBytes = Transaction.Type01 +: encode(legacyReceiptRLP)
+          )
 
-            val receiptsForBlocks = RLPList(
-              RLPList(
-                RLPValue(typedReceiptBytes)
-              )
-            )
+          val msg = ETH66Receipts(requestId = 1, receiptsForBlocks = receiptsForBlocks)
 
-            val msg = ETH66Receipts(requestId = 1, receiptsForBlocks = receiptsForBlocks)
+          val watcher = TestProbe()
+          watcher.watch(fastSync)
+          fastSync ! ResponseReceived(peer, msg, timeTaken = 0L)
 
-            val watcher = TestProbe()
-            watcher.watch(fastSync)
-            fastSync ! ResponseReceived(peer, msg, timeTaken = 0L)
-
-            // If the actor crashes, we'll receive Terminated.
-            watcher.expectNoMessage(500.millis)
-            assert(true)
-          }).timeout(timeout.duration)
+          // If the actor crashes, we'll receive Terminated.
+          watcher.expectNoMessage(500.millis)
+          assert(true)
+        }).timeout(timeout.duration)
       }
     }
 
@@ -276,9 +278,8 @@ class FastSyncSpec
           status <- Stream
             .awakeEvery[IO](10.millis)
             .evalMap(_ => getSyncStatus)
-            .collect {
-              case stat @ Status.Syncing(_, _, Some(stateNodesProgress)) =>
-                stat
+            .collect { case stat @ Status.Syncing(_, _, Some(stateNodesProgress)) =>
+              stat
             }
             .head
             .compile

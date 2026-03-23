@@ -1,5 +1,9 @@
 # Gorgoroth Internal Test Network - 3 Fukuii + 3 Core-Geth Nodes
 # This configuration creates a private test network with mixed client implementations
+#
+# ETC client images — build locally from chris-mercer forks:
+#   FUKUII_IMAGE:   docker build -t fukuii-etc:local -f docker/Dockerfile .
+#   COREGETH_IMAGE: docker build -t coregeth-etc:local -f Dockerfile .  (from chris-mercer/core-geth etc branch)
 
 networks:
   gorgoroth:
@@ -11,7 +15,7 @@ networks:
 services:
   # Fukuii Nodes
   fukuii-node1:
-    image: ghcr.io/chippr-robotics/fukuii:latest
+    image: ${FUKUII_IMAGE:-fukuii-etc:local}
     container_name: gorgoroth-fukuii-node1
     hostname: fukuii-node1
     restart: unless-stopped
@@ -44,7 +48,7 @@ services:
     command: ["fukuii", "enterprise", "gorgoroth"]
 
   fukuii-node2:
-    image: ghcr.io/chippr-robotics/fukuii:latest
+    image: ${FUKUII_IMAGE:-fukuii-etc:local}
     container_name: gorgoroth-fukuii-node2
     hostname: fukuii-node2
     restart: unless-stopped
@@ -60,7 +64,7 @@ services:
       - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node2/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
-      - ./conf/logback-node2-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
+      - ./conf/logback-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
       - ./conf/mordor-genesis.json:/app/fukuii/conf/mordor-genesis.json:ro
       - ./conf/node2/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node2-data:/app/data
@@ -78,7 +82,7 @@ services:
     command: ["fukuii", "enterprise", "gorgoroth"]
 
   fukuii-node3:
-    image: ghcr.io/chippr-robotics/fukuii:latest
+    image: ${FUKUII_IMAGE:-fukuii-etc:local}
     container_name: gorgoroth-fukuii-node3
     hostname: fukuii-node3
     restart: unless-stopped
@@ -94,7 +98,7 @@ services:
       - ./conf/app-gorgoroth-override.conf:/app/fukuii/conf/app.conf:ro
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node3/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
-      - ./conf/logback-node2-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
+      - ./conf/logback-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
       - ./conf/mordor-genesis.json:/app/fukuii/conf/mordor-genesis.json:ro
       - ./conf/node3/static-nodes.json:/app/data/static-nodes.json:ro
       - fukuii-node3-data:/app/data
@@ -113,7 +117,7 @@ services:
 
   # Core-Geth Nodes
   geth-node1:
-    image: etclabscore/core-geth:latest
+    image: ${COREGETH_IMAGE:-coregeth-etc:local}
     container_name: gorgoroth-geth-node1
     hostname: geth-node1
     restart: unless-stopped
@@ -155,7 +159,7 @@ services:
           exec geth --mordor --config="$$MERGED_CONFIG" --verbosity=5 --log.vmodule=p2p=5,discover=5,net=5 "$$@"
 
   geth-node2:
-    image: etclabscore/core-geth:latest
+    image: ${COREGETH_IMAGE:-coregeth-etc:local}
     container_name: gorgoroth-geth-node2
     hostname: geth-node2
     restart: unless-stopped
@@ -197,7 +201,7 @@ services:
           exec geth --mordor --config="$$MERGED_CONFIG" --verbosity=5 --log.vmodule=p2p=5,discover=5,net=5 "$$@"
 
   geth-node3:
-    image: etclabscore/core-geth:latest
+    image: ${COREGETH_IMAGE:-coregeth-etc:local}
     container_name: gorgoroth-geth-node3
     hostname: geth-node3
     restart: unless-stopped

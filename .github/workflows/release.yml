@@ -33,7 +33,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: chippr-robotics/chordodes_fukuii
+  IMAGE_NAME: chippr-robotics/fukuii
   DOCKERHUB_IMAGE: chipprbots/fukuii
 
 jobs:
@@ -62,9 +62,8 @@ jobs:
 
       - name: Set up SBT
         run: |
-          echo "deb https://repo.scala-sbt.org/scalasbt/debian all main" | sudo tee /etc/apt/sources.list.d/sbt.list
-          echo "deb https://repo.scala-sbt.org/scalasbt/debian /" | sudo tee /etc/apt/sources.list.d/sbt_old.list
-          curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" | sudo apt-key add
+          curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" | sudo gpg --dearmor -o /usr/share/keyrings/scalasbt-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/scalasbt-archive-keyring.gpg] https://repo.scala-sbt.org/scalasbt/debian all main" | sudo tee /etc/apt/sources.list.d/sbt.list
           sudo apt-get update
           sudo apt-get install sbt
 
@@ -186,8 +185,8 @@ jobs:
 
           **Docker**:
           \`\`\`bash
-          docker pull ghcr.io/chippr-robotics/chordodes_fukuii:${VERSION}
-          docker run -p 8545:8545 -p 30303:30303 ghcr.io/chippr-robotics/chordodes_fukuii:${VERSION}
+          docker pull ghcr.io/chippr-robotics/fukuii:${VERSION}
+          docker run -p 8545:8545 -p 30303:30303 ghcr.io/chippr-robotics/fukuii:${VERSION}
           \`\`\`
           DOCKER
           fi
@@ -379,7 +378,7 @@ jobs:
       contents: write
     uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@5a775b367a56d5bd118a224a811bba288150a563 # v1.10.0
     with:
-      image: ghcr.io/chippr-robotics/chordodes_fukuii
+      image: ghcr.io/chippr-robotics/fukuii
       digest: ${{ needs.build-and-push-image.outputs.image-digest }}
       registry-username: ${{ github.actor }}
     secrets:

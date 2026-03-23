@@ -76,3 +76,18 @@ ops/
 chain-data/
 **/chaindata/
 **/ancient/
+
+# Secrets & credentials (security)
+.env*
+!.env.example
+*.pem
+*.key
+*.p12
+keystore/
+credentials.json
+
+# Claude/agent internal files
+.claude/
+SESSION_NOTES.md
+PLANNING.md
+SCRATCH.md

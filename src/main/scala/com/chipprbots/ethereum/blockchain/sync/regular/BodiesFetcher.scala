@@ -14,14 +14,20 @@ import scala.util.Failure
 import scala.util.Success
 
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.BestPeer
+import com.chipprbots.ethereum.blockchain.sync.PeersClient.ExcludingPeers
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.Request
+import com.chipprbots.ethereum.blockchain.sync.PeersClient.RequestFailed
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchCommand
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockBodies => Eth62BlockBodies}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockBodies => Eth66BlockBodies, GetBlockBodies => Eth66GetBlockBodies}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{
+  BlockBodies => Eth66BlockBodies,
+  GetBlockBodies => Eth66GetBlockBodies
+}
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 class BodiesFetcher(
@@ -42,21 +48,25 @@ class BodiesFetcher(
 
   override def onMessage(message: Command): Behavior[Command] =
     message match {
-      case FetchBodies(hashes) =>
-        log.debug("Start fetching bodies for {} hashes", hashes.size)
+      case FetchBodies(hashes, triedPeers, retryCount) =>
+        log.debug(
+          "Start fetching bodies for {} hashes (tried: {}, retry: {})",
+          hashes.size,
+          triedPeers.size,
+          retryCount
+        )
         if (hashes.isEmpty) {
           log.warn("FetchBodies called with empty hashes list")
         }
-        requestBodies(hashes)
+        requestBodies(hashes, triedPeers, retryCount)
         Behaviors.same
       case AdaptedMessage(peer, eth62Bodies: Eth62BlockBodies) =>
         handleBodiesResponse(peer, eth62Bodies.bodies, protocolLabel = "ETH62")
       case AdaptedMessage(peer, eth66Bodies: Eth66BlockBodies) =>
         handleBodiesResponse(peer, eth66Bodies.bodies, protocolLabel = "ETH66")
-      case BodiesFetcher.RetryBodiesRequest =>
-        log.debug("Retrying bodies request")
-        // Always forward retry to supervisor to ensure state is cleared
-        supervisor ! BlockFetcher.RetryBodiesRequest
+      case BodiesFetcher.RetryBodiesRequest(failedPeerId, triedPeers, retryCount) =>
+        log.debug("Retrying bodies request (tried: {}, retry: {})", triedPeers.size, retryCount)
+        supervisor ! BlockFetcher.RetryBodiesRequest(failedPeerId, triedPeers, retryCount)
         Behaviors.same
       case other =>
         log.warn("BodiesFetcher received unhandled message of type: {}", other.getClass.getSimpleName)
@@ -77,12 +87,14 @@ class BodiesFetcher(
     Behaviors.same
   }
 
-  private def requestBodies(hashes: Seq[ByteString]): Unit = {
-    log.debug("Requesting {} block bodies", hashes.size)
+  private def requestBodies(hashes: Seq[ByteString], triedPeers: Set[PeerId], retryCount: Int): Unit = {
+    log.debug("Requesting {} block bodies (excluding {} tried peers)", hashes.size, triedPeers.size)
     val msg = Eth66GetBlockBodies(ETH66.nextRequestId, hashes)
-    val resp = makeRequest(Request.create(msg, BestPeer), BodiesFetcher.RetryBodiesRequest)
+    val peerSelector = if (triedPeers.nonEmpty) ExcludingPeers(triedPeers) else BestPeer
+    val fallback = BodiesFetcher.RetryBodiesRequest(failedPeerId = None, triedPeers, retryCount)
+    val resp = makeRequest(Request.create(msg, peerSelector), fallback, triedPeers, retryCount)
     context.pipeToSelf(resp.unsafeToFuture()) {
-      case Success(res: BodiesFetcher.RetryBodiesRequest.type) =>
+      case Success(res: BodiesFetcher.RetryBodiesRequest) =>
         log.debug("Bodies request will be retried")
         res
       case Success(res) =>
@@ -90,7 +102,7 @@ class BodiesFetcher(
         res
       case Failure(ex) =>
         log.warn("Bodies request failed with exception: {}", ex.getMessage)
-        BodiesFetcher.RetryBodiesRequest
+        BodiesFetcher.RetryBodiesRequest(failedPeerId = None, triedPeers, retryCount)
     }
   }
 }
@@ -105,7 +117,15 @@ object BodiesFetcher {
     Behaviors.setup(context => new BodiesFetcher(peersClient, syncConfig, supervisor, context))
 
   sealed trait BodiesFetcherCommand
-  final case class FetchBodies(hashes: Seq[ByteString]) extends BodiesFetcherCommand
-  case object RetryBodiesRequest extends BodiesFetcherCommand
+  final case class FetchBodies(
+      hashes: Seq[ByteString],
+      triedPeers: Set[PeerId] = Set.empty,
+      retryCount: Int = 0
+  ) extends BodiesFetcherCommand
+  final case class RetryBodiesRequest(
+      failedPeerId: Option[PeerId],
+      triedPeers: Set[PeerId],
+      retryCount: Int
+  ) extends BodiesFetcherCommand
   final private case class AdaptedMessage[T <: Message](peer: Peer, msg: T) extends BodiesFetcherCommand
 }

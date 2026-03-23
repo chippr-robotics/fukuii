@@ -281,7 +281,7 @@ ulimit -n  # Should show 65536
 docker run -d \
   --ulimit nofile=65536:65536 \
   --name fukuii \
-  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+  ghcr.io/chippr-robotics/fukuii:v1.0.0
 ```
 
 Or in `docker-compose.yml`:
@@ -523,7 +523,7 @@ For 32 GB RAM system:
 docker run -d \
   -e JAVA_OPTS="-Xms8g -Xmx16g" \
   --name fukuii \
-  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+  ghcr.io/chippr-robotics/fukuii:v1.0.0
 ```
 
 **Verify settings**:

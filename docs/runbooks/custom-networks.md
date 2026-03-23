@@ -69,13 +69,11 @@ Create a file named `<network-name>-chain.conf` in your chains directory. For ex
   magneto-block-number = "1000000000000000000"
   mystique-block-number = "1000000000000000000"
   spiral-block-number = "1000000000000000000"
-  
-  # Treasury and checkpointing (ETC-specific, usually disabled for custom networks)
+  olympia-block-number = "1000000000000000000"
+
+  # Treasury (ETC-specific, usually disabled for custom networks)
   treasury-address = "0011223344556677889900112233445566778899"
-  ecip1098-block-number = "1000000000000000000"
-  ecip1097-block-number = "1000000000000000000"
   ecip1099-block-number = "1000000000000000000"
-  ecip1049-block-number = "1000000000000000000"
   
   # Difficulty bomb (usually disabled for custom networks)
   difficulty-bomb-pause-block-number = "0"
@@ -293,12 +291,11 @@ For a simple private network, this minimal configuration is sufficient:
   magneto-block-number = "1000000000000000000"
   mystique-block-number = "1000000000000000000"
   spiral-block-number = "1000000000000000000"
-  ecip1098-block-number = "1000000000000000000"
-  ecip1097-block-number = "1000000000000000000"
+  olympia-block-number = "1000000000000000000"
   ecip1099-block-number = "1000000000000000000"
   muir-glacier-block-number = "1000000000000000000"
   berlin-block-number = "1000000000000000000"
-  
+
   # Disable difficulty bomb
   difficulty-bomb-pause-block-number = "0"
   difficulty-bomb-continue-block-number = "0"
@@ -518,16 +515,15 @@ Perfect for local testing with all modern features enabled:
   magneto-block-number = "1000000000000000000"
   mystique-block-number = "1000000000000000000"
   spiral-block-number = "1000000000000000000"
-  ecip1098-block-number = "1000000000000000000"
-  ecip1097-block-number = "1000000000000000000"
+  olympia-block-number = "1000000000000000000"
   ecip1099-block-number = "1000000000000000000"
   muir-glacier-block-number = "1000000000000000000"
   berlin-block-number = "1000000000000000000"
-  
+
   difficulty-bomb-pause-block-number = "0"
   difficulty-bomb-continue-block-number = "0"
   difficulty-bomb-removal-block-number = "0"
-  
+
   max-code-size = "24576"
   dao = null
   account-start-nonce = "0"
@@ -589,20 +585,19 @@ Configuration for a permissioned consortium network:
   magneto-block-number = "1000000000000000000"
   mystique-block-number = "1000000000000000000"
   spiral-block-number = "1000000000000000000"
-  ecip1098-block-number = "1000000000000000000"
-  ecip1097-block-number = "1000000000000000000"
+  olympia-block-number = "1000000000000000000"
   ecip1099-block-number = "1000000000000000000"
   muir-glacier-block-number = "1000000000000000000"
   berlin-block-number = "1000000000000000000"
-  
+
   difficulty-bomb-pause-block-number = "0"
   difficulty-bomb-continue-block-number = "0"
   difficulty-bomb-removal-block-number = "0"
-  
+
   max-code-size = "24576"
   dao = null
   account-start-nonce = "0"
-  
+
   # Reference genesis file with pre-allocated accounts
   custom-genesis-file = { include required("consortium-genesis.json") }
   
@@ -678,11 +673,10 @@ Configuration for a test network with planned fork activations:
   magneto-block-number = "1000000000000000000"
   mystique-block-number = "1000000000000000000"
   spiral-block-number = "1000000000000000000"
-  ecip1098-block-number = "1000000000000000000"
-  ecip1097-block-number = "1000000000000000000"
+  olympia-block-number = "1000000000000000000"
   ecip1099-block-number = "1000000000000000000"
   muir-glacier-block-number = "1000000000000000000"
-  
+
   difficulty-bomb-pause-block-number = "0"
   difficulty-bomb-continue-block-number = "0"
   difficulty-bomb-removal-block-number = "0"

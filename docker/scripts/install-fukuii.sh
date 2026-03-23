@@ -8,7 +8,7 @@ FUKUII_DIST_ZIP_NAME=$2
 HERE=$(readlink -m $(dirname ${BASH_SOURCE[0]}))
 . $HERE/install-nix-common.sh
 
-cd ~/repos/chordodes_fukuii
+cd ~/repos/fukuii
 
 git checkout $FUKUII_TAG
 git submodule update --init

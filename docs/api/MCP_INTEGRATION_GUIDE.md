@@ -895,7 +895,7 @@ version: '3.8'
 
 services:
   fukuii:
-    image: ghcr.io/chippr-robotics/chordodes_fukuii:latest
+    image: ghcr.io/chippr-robotics/fukuii:latest
     ports:
       - "8546:8546"
       - "30303:30303"

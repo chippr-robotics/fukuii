@@ -8,7 +8,7 @@ Welcome to the Fukuii JSON-RPC API documentation. This directory contains compre
 
 1. **[Interactive API Reference](./interactive-api-reference.md)** 🆕
    - **Fully browsable OpenAPI specification** with Swagger UI
-   - All 83 JSON-RPC endpoints with live examples
+   - All 97 JSON-RPC endpoints with live examples
    - Organized by namespace with filtering
    - Try-it-out functionality for testing endpoints
    - **Use this for**: Exploring the API interactively, testing endpoints, integration planning
@@ -94,7 +94,7 @@ Welcome to the Fukuii JSON-RPC API documentation. This directory contains compre
 3. **Import Insomnia Workspace**:
    - Open Insomnia
    - Import the Insomnia workspace from the repository root
-   - Start exploring all 78 endpoints
+   - Start exploring all 97 endpoints
 
 ### For AI Integration
 
@@ -115,7 +115,6 @@ Fukuii organizes JSON-RPC methods into namespaces:
 | **PERSONAL** | 8 | Account management | ⚠️ Dev only |
 | **DEBUG** | 3 | Debugging and analysis | ⚠️ Use with caution |
 | **QA** | 3 | Testing utilities | ❌ Testing only |
-| **CHECKPOINTING** | 2 | ETC checkpointing | ✅ Yes (ETC specific) |
 | **FUKUII** | 1 | Custom extensions | ✅ Yes |
 | **TEST** | 7 | Test harness | ❌ Testing only |
 | **IELE** | 2 | IELE VM support | ⚠️ If IELE enabled |
@@ -136,7 +135,6 @@ Fukuii organizes JSON-RPC methods into namespaces:
 #### 🔧 ETC Extensions
 - Raw transaction retrieval
 - Storage root queries
-- Checkpointing system
 - Account transaction history
 
 #### 🧪 Development Tools

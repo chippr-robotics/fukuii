@@ -106,6 +106,44 @@ run_test \
   "$SCRIPT_DIR/test-snap-sync.sh" \
   "$RESULTS_DIR/05-snap-sync.log"
 
+# Olympia-specific tests (post-fork)
+
+# Test 6: EIP-1559 BaseFee (Olympia)
+run_test \
+  "EIP-1559 BaseFee (Olympia)" \
+  "$SCRIPT_DIR/test-eip1559-basefee.sh" \
+  "$RESULTS_DIR/06-eip1559-basefee.log"
+
+# Test 7: ECIP-1111 Treasury Accumulation (Olympia)
+run_test \
+  "Treasury Accumulation (Olympia)" \
+  "$SCRIPT_DIR/test-treasury-accumulation.sh" \
+  "$RESULTS_DIR/07-treasury-accumulation.log"
+
+# Test 8: EIP-7935 Gas Limit Convergence (Olympia)
+run_test \
+  "Gas Limit Convergence (Olympia)" \
+  "$SCRIPT_DIR/test-gas-limit-convergence.sh" \
+  "$RESULTS_DIR/08-gas-limit-convergence.log"
+
+# Test 9: Olympia EVM Opcodes
+run_test \
+  "Olympia EVM Opcodes" \
+  "$SCRIPT_DIR/test-olympia-opcodes.sh" \
+  "$RESULTS_DIR/09-olympia-opcodes.log"
+
+# Test 10: ECIP-1111 BaseFee Redirect (Olympia)
+run_test \
+  "ECIP-1111 BaseFee Redirect (Olympia)" \
+  "$SCRIPT_DIR/test-ecip1111-basefee-redirect.sh" \
+  "$RESULTS_DIR/10-ecip1111-basefee-redirect.log"
+
+# Test 11: ECIP-1112 Treasury Address Verification (Olympia)
+run_test \
+  "ECIP-1112 Treasury Address (Olympia)" \
+  "$SCRIPT_DIR/test-ecip1112-treasury-address.sh" \
+  "$RESULTS_DIR/11-ecip1112-treasury-address.log"
+
 # Generate summary report
 echo "========================================="
 echo "Generating Summary Report"
@@ -120,7 +158,7 @@ echo "========================================="
 echo "Test Suite Complete"
 echo "========================================="
 echo ""
-echo "Total tests: 5"
+echo "Total tests: 11"
 echo "Failed tests: ${#FAILED_TESTS[@]}"
 echo ""
 

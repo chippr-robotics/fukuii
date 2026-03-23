@@ -191,7 +191,7 @@ This makes the implementation very simple and efficient.
    - Added `spiralBlockNumber` parameter (set to far future as TODO)
 
 6. **Configuration files**:
-   - Updated `etc-chain.conf`, `mordor-chain.conf`, `eth-chain.conf`, `test-chain.conf`, `ropsten-chain.conf`, `testnet-internal-nomad-chain.conf`
+   - Updated `etc-chain.conf`, `mordor-chain.conf`, `test-chain.conf`
 
 7. **Test files**:
    - Updated `Fixtures.scala`, `VMSpec.scala`, `VMClientSpec.scala` to include `spiralBlockNumber`

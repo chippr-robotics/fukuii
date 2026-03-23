@@ -113,7 +113,7 @@ gh workflow run fast-distro.yml
 - Git SHA (e.g., `sha-abc123`)
 - `latest` (default branch only)
 
-**Note:** Development images built by this workflow are **not signed** and do **not include provenance attestations**. For production deployments, use release images from `ghcr.io/chippr-robotics/chordodes_fukuii` which are built by `release.yml` with full security features.
+**Note:** Development images built by this workflow are **not signed** and do **not include provenance attestations**. For production deployments, use release images from `ghcr.io/chippr-robotics/fukuii` which are built by `release.yml` with full security features.
 
 ---
 
@@ -130,7 +130,7 @@ gh workflow run fast-distro.yml
 4. Generates SBOM (Software Bill of Materials) in CycloneDX format
 5. Generates CHANGELOG.md from commits since last release
 6. Creates GitHub release with all artifacts
-7. Builds and publishes Docker image to `ghcr.io/chippr-robotics/chordodes_fukuii`
+7. Builds and publishes Docker image to `ghcr.io/chippr-robotics/fukuii`
 8. Signs image with Cosign (keyless, using GitHub OIDC)
 9. Generates SLSA Level 3 provenance attestations
 10. Logs immutable image digest and tags
@@ -160,12 +160,12 @@ gh workflow run fast-distro.yml
 **Verification Example:**
 ```bash
 # Pull and verify a signed release image
-docker pull ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+docker pull ghcr.io/chippr-robotics/fukuii:v1.0.0
 
 cosign verify \
   --certificate-identity-regexp=https://github.com/chippr-robotics/fukuii \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
-  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+  ghcr.io/chippr-robotics/fukuii:v1.0.0
 ```
 
 **Usage:**

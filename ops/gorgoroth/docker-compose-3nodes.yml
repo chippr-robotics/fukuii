@@ -11,7 +11,7 @@ networks:
 
 services:
   fukuii-node1:
-    image: ghcr.io/chippr-robotics/fukuii:latest
+    image: ${FUKUII_IMAGE:-fukuii-etc:local}
     container_name: gorgoroth-fukuii-node1
     hostname: fukuii-node1
     restart: unless-stopped
@@ -50,7 +50,7 @@ services:
       start_period: 60s
 
   fukuii-node2:
-    image: ghcr.io/chippr-robotics/fukuii:latest
+    image: ${FUKUII_IMAGE:-fukuii-etc:local}
     container_name: gorgoroth-fukuii-node2
     hostname: fukuii-node2
     restart: unless-stopped
@@ -67,7 +67,7 @@ services:
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node2/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
       - ./conf/node2/static-nodes.json:/app/data/static-nodes.json:ro
-      - ./conf/logback-node2-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
+      - ./conf/logback-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
       - fukuii-node2-data:/app/data
       - fukuii-node2-logs:/app/logs
     environment:
@@ -90,7 +90,7 @@ services:
       start_period: 60s
 
   fukuii-node3:
-    image: ghcr.io/chippr-robotics/fukuii:latest
+    image: ${FUKUII_IMAGE:-fukuii-etc:local}
     container_name: gorgoroth-fukuii-node3
     hostname: fukuii-node3
     restart: unless-stopped
@@ -107,7 +107,7 @@ services:
       - ./conf/base-gorgoroth.conf:/app/fukuii/conf/base-gorgoroth.conf:ro
       - ./conf/node3/gorgoroth.conf:/app/fukuii/conf/gorgoroth.conf:ro
       - ./conf/node3/static-nodes.json:/app/data/static-nodes.json:ro
-      - ./conf/logback-node2-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
+      - ./conf/logback-sync-trace.xml:/app/fukuii/conf/logback.xml:ro
       - fukuii-node3-data:/app/data
       - fukuii-node3-logs:/app/logs
     environment:

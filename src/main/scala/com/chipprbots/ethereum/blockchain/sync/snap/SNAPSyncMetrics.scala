@@ -25,8 +25,8 @@ object SNAPSyncMetrics extends MetricsContainer {
 
   // ===== Sync Phase Metrics =====
 
-  /** Current SNAP sync phase (0=Idle, 1=AccountRange, 2=Bytecode, 3=StorageRange, 4=StateHealing, 5=StateValidation,
-    * 6=Completed)
+  /** Current SNAP sync phase (0=Idle, 1=AccountRange, 2=ByteCode, 3=ByteCode+Storage, 4=Storage,
+    * 5=StateHealing, 6=StateValidation, 7=ChainDownload, 8=Completed)
     */
   final private val CurrentPhaseGauge =
     metrics.registry.gauge("snapsync.phase.current.gauge", new AtomicDouble(0d))
@@ -219,13 +219,15 @@ object SNAPSyncMetrics extends MetricsContainer {
   def measure(progress: SyncProgress): Unit = {
     // Phase
     val phaseValue = progress.phase match {
-      case SNAPSyncController.Idle             => 0
-      case SNAPSyncController.AccountRangeSync => 1
-      case SNAPSyncController.ByteCodeSync     => 2
-      case SNAPSyncController.StorageRangeSync => 3
-      case SNAPSyncController.StateHealing     => 4
-      case SNAPSyncController.StateValidation  => 5
-      case SNAPSyncController.Completed        => 6
+      case SNAPSyncController.Idle                    => 0
+      case SNAPSyncController.AccountRangeSync        => 1
+      case SNAPSyncController.ByteCodeSync            => 2
+      case SNAPSyncController.ByteCodeAndStorageSync  => 3
+      case SNAPSyncController.StorageRangeSync        => 4
+      case SNAPSyncController.StateHealing            => 5
+      case SNAPSyncController.StateValidation         => 6
+      case SNAPSyncController.ChainDownloadCompletion => 7
+      case SNAPSyncController.Completed               => 8
     }
     setCurrentPhase(phaseValue)
 

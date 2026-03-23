@@ -200,7 +200,7 @@ class BlockBroadcastSpec
     val peerStatus: RemoteStatus = RemoteStatus(
       capability = Capability.ETH68,
       networkId = 1,
-      chainWeight = ChainWeight(10, 10000),
+      chainWeight = ChainWeight(BigInt(10000)),
       bestHash = Fixtures.Blocks.Block3125369.header.hash,
       genesisHash = Fixtures.Blocks.Genesis.header.hash
     )

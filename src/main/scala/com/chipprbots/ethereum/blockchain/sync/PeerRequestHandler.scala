@@ -17,6 +17,7 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.
 import com.chipprbots.ethereum.network.PeerEventBusActor.Unsubscribe
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
+import com.chipprbots.ethereum.network.p2p.messages.ETH66
 
 class PeerRequestHandler[RequestMsg <: Message, ResponseMsg <: Message: ClassTag](
     peer: Peer,
@@ -36,6 +37,11 @@ class PeerRequestHandler[RequestMsg <: Message, ResponseMsg <: Message: ClassTag
   private val timeout: Cancellable = scheduler.scheduleOnce(responseTimeout, self, Timeout)
 
   private val startTime: Long = System.currentTimeMillis()
+
+  private val expectedRequestId: Option[BigInt] = requestMsg match {
+    case hasId: ETH66.HasRequestId => Some(hasId.requestId)
+    case _                         => None
+  }
 
   private def subscribeMessageClassifier = MessageClassifier(Set(responseMsgCode), PeerSelector.WithId(peer.id))
 
@@ -59,7 +65,16 @@ class PeerRequestHandler[RequestMsg <: Message, ResponseMsg <: Message: ClassTag
   }
 
   override def receive: Receive = {
-    case MessageFromPeer(responseMsg: ResponseMsg, _)  => handleResponseMsg(responseMsg)
+    case MessageFromPeer(responseMsg: ResponseMsg, _) =>
+      (expectedRequestId, responseMsg) match {
+        case (Some(expected), hasId: ETH66.HasRequestId) if hasId.requestId != expected =>
+          log.debug(
+            "PEER_REQUEST_STALE: peer={}, expected requestId={}, got={} — ignoring",
+            peer.id, expected, hasId.requestId
+          )
+        case _ =>
+          handleResponseMsg(responseMsg)
+      }
     case Timeout                                       => handleTimeout()
     case PeerDisconnected(peerId) if peerId == peer.id => handleTerminated()
   }

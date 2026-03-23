@@ -6,28 +6,15 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GORGOROTH_DIR="$(dirname "$SCRIPT_DIR")"
+source "$SCRIPT_DIR/lib/test-helpers.sh"
+require_tools curl jq docker
+detect_docker_compose
 
 echo "=== Fast Sync Test - Lightweight Integration Test ==="
 echo "Starting at: $(date)"
 echo
 
-# Color output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
 
-log_info() {
-  echo -e "${GREEN}ℹ${NC} $1"
-}
-
-log_error() {
-  echo -e "${RED}✗${NC} $1"
-}
-
-log_success() {
-  echo -e "${GREEN}✓${NC} $1"
-}
 
 TESTS_FAILED=false
 
@@ -39,10 +26,10 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 cd "$GORGOROTH_DIR"
 
 # Check if any nodes are running
-if docker compose -f docker-compose-6nodes.yml ps -q 2>/dev/null | grep -q .; then
-  RUNNING_NODES=$(docker compose -f docker-compose-6nodes.yml ps -q 2>/dev/null | wc -l)
+if $DOCKER_COMPOSE -f docker-compose-6nodes.yml ps -q 2>/dev/null | grep -q .; then
+  RUNNING_NODES=$($DOCKER_COMPOSE -f docker-compose-6nodes.yml ps -q 2>/dev/null | wc -l)
   log_info "Found $RUNNING_NODES running nodes - stopping for clean test"
-  docker compose -f docker-compose-6nodes.yml down 2>/dev/null || true
+  $DOCKER_COMPOSE -f docker-compose-6nodes.yml down 2>/dev/null || true
 else
   log_info "No running nodes found"
 fi

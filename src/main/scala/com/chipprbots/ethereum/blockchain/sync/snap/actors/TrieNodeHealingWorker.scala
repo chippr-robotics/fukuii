@@ -21,8 +21,8 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP._
   */
 class TrieNodeHealingWorker(
     coordinator: ActorRef,
-    networkPeerManager: ActorRef,
-    requestTracker: SNAPRequestTracker
+    _networkPeerManager: ActorRef,
+    _requestTracker: SNAPRequestTracker
 ) extends Actor
     with ActorLogging {
 
@@ -33,15 +33,14 @@ class TrieNodeHealingWorker(
 
   override def receive: Receive = idle
 
-  def idle: Receive = {
-    case FetchTrieNodes(_, peer) =>
-      currentPeer = Some(peer)
-      // Request work from coordinator by notifying it of peer availability
-      coordinator ! HealingPeerAvailable(peer)
-      context.become(working)
-          
-      import context.dispatcher
-      context.system.scheduler.scheduleOnce(30.seconds, self, HealingCheckIdle)
+  def idle: Receive = { case FetchTrieNodes(_, peer) =>
+    currentPeer = Some(peer)
+    // Request work from coordinator by notifying it of peer availability
+    coordinator ! HealingPeerAvailable(peer)
+    context.become(working)
+
+    import context.dispatcher
+    context.system.scheduler.scheduleOnce(30.seconds, self, HealingCheckIdle)
   }
 
   def working: Receive = {

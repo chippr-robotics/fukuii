@@ -23,7 +23,6 @@ import com.chipprbots.ethereum.network.PeerManagerActor.FastSyncHostConfiguratio
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
 import com.chipprbots.ethereum.utils.VmConfig.VmMode
-import com.chipprbots.ethereum.utils.Logger
 
 import ConfigUtils._
 
@@ -52,12 +51,12 @@ object Config {
   // proper capability negotiation with peers that may only support older versions.
   // Geth advertises: eth/66, eth/67, eth/68, snap/1
   // We advertise: eth/65, eth/66, eth/67, eth/68, snap/1 to maximize compatibility
-  // 
+  //
   // Note: ETH63 and ETH64 are legacy protocols from 2016-2019 and are not actively
   // advertised in the Hello message. However, they remain supported during the
   // negotiation phase for backward compatibility with very old clients.
   // ETH65+ are advertised as they are still commonly used in the ecosystem.
-  // 
+  //
   // Historical note: ETC64 protocol support was removed in favor of standard ETH protocols.
   // The client now exclusively supports ETH63-68 and SNAP1, aligning with Ethereum specifications.
   // See docs/validation/ETC64_REMOVAL_VALIDATION.md for details.
@@ -176,7 +175,12 @@ object Config {
       pivotBlockReScheduleInterval: FiniteDuration,
       maxPivotBlockAge: Int,
       fastSyncMaxBatchRetries: Int,
-      maxPivotBlockFailuresCount: Int
+      maxPivotBlockFailuresCount: Int,
+      maxRetryDelay: FiniteDuration,
+      maxBodyFetchRetries: Int,
+      maxSnapFastCycleTransitions: Int,
+      useBootstrapCheckpoints: Boolean,
+      bootstrapCheckpoints: Seq[(BigInt, String)] // (blockNumber, blockHash)
   )
 
   object SyncConfig {
@@ -235,7 +239,41 @@ object Config {
         pivotBlockReScheduleInterval = syncConfig.getDuration("pivot-block-reschedule-interval").toMillis.millis,
         maxPivotBlockAge = syncConfig.getInt("max-pivot-block-age"),
         fastSyncMaxBatchRetries = syncConfig.getInt("fast-sync-max-batch-retries"),
-        maxPivotBlockFailuresCount = syncConfig.getInt("max-pivot-block-failures-count")
+        maxPivotBlockFailuresCount = syncConfig.getInt("max-pivot-block-failures-count"),
+        maxRetryDelay =
+          if (syncConfig.hasPath("max-retry-delay"))
+            syncConfig.getDuration("max-retry-delay").toMillis.millis
+          else 30.seconds,
+        maxBodyFetchRetries =
+          if (syncConfig.hasPath("max-body-fetch-retries"))
+            syncConfig.getInt("max-body-fetch-retries")
+          else 10,
+        maxSnapFastCycleTransitions =
+          if (syncConfig.hasPath("max-snap-fast-cycle-transitions"))
+            syncConfig.getInt("max-snap-fast-cycle-transitions")
+          else 3,
+        useBootstrapCheckpoints =
+          if (syncConfig.hasPath("use-bootstrap-checkpoints"))
+            syncConfig.getBoolean("use-bootstrap-checkpoints")
+          else false,
+        bootstrapCheckpoints =
+          if (syncConfig.hasPath("bootstrap-checkpoints")) {
+            import scala.jdk.CollectionConverters._
+            syncConfig.getStringList("bootstrap-checkpoints").asScala.toSeq.flatMap { entry =>
+              // Format: "blockNumber:0xblockHash"
+              entry.split(":") match {
+                case Array(num, hash) =>
+                  try {
+                    val blockNum = BigInt(num.trim)
+                    val blockHash = hash.trim
+                    Some((blockNum, blockHash))
+                  } catch {
+                    case _: NumberFormatException => None
+                  }
+                case _ => None
+              }
+            }
+          } else Seq.empty
       )
     }
   }
@@ -311,7 +349,6 @@ object KeyStoreConfig {
       val allowNoPassphrase: Boolean = true
     }
 }
-
 
 trait FilterConfig {
   val filterTimeout: FiniteDuration

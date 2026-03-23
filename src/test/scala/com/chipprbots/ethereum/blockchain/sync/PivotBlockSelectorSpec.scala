@@ -469,16 +469,17 @@ class PivotBlockSelectorSpec
       case _           => false
     }
 
-  def expectGetBlockHeadersRequests(peers: Seq[Peer], blockNumber: BigInt): Unit = {
+    def expectGetBlockHeadersRequests(peers: Seq[Peer], blockNumber: BigInt): Unit = {
       val expectedPeerIds = peers.map(_.id)
-      val receivedMessages = (1 to expectedPeerIds.size).map(_ =>
-        networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage]
-      )
+      val receivedMessages =
+        (1 to expectedPeerIds.size).map(_ => networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage])
 
       expectedPeerIds.foreach { peerId =>
-        val sendMsg = receivedMessages.find(_.peerId == peerId).getOrElse(
-          fail(s"Expected GetBlockHeaders request for peer $peerId, but received ${receivedMessages.map(_.peerId)}")
-        )
+        val sendMsg = receivedMessages
+          .find(_.peerId == peerId)
+          .getOrElse(
+            fail(s"Expected GetBlockHeaders request for peer $peerId, but received ${receivedMessages.map(_.peerId)}")
+          )
         assertGetBlockHeaders(sendMsg.message.underlyingMsg, blockNumber)
       }
 
@@ -488,7 +489,7 @@ class PivotBlockSelectorSpec
       }
     }
 
-  private def assertGetBlockHeaders(msg: Message, expectedBlockNumber: BigInt): Unit = msg match {
+    private def assertGetBlockHeaders(msg: Message, expectedBlockNumber: BigInt): Unit = msg match {
       case GetBlockHeaders(Left(number), maxHeaders, skip, reverse) =>
         number shouldBe expectedBlockNumber
         maxHeaders shouldBe 1

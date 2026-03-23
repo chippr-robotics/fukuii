@@ -75,7 +75,7 @@ class SNAPSyncIntegrationSpec extends FreeSpecBase with Matchers with BeforeAndA
 
           coordinator ! Messages.StartAccountRangeSync(stateRoot)
           coordinator ! Messages.GetProgress
-          
+
           val progress = snapController.expectMsgType[AccountRangeProgress](5.seconds)
           progress.progress should be >= 0.0
           progress.progress should be <= 1.0
@@ -176,11 +176,13 @@ class SNAPSyncIntegrationSpec extends FreeSpecBase with Matchers with BeforeAndA
           val missingNode2 = kec256(ByteString("missing2"))
           val emptyPath = ByteString(Array[Byte](0x00))
 
-          coordinator ! Messages.QueueMissingNodes(Seq(
-            (Seq(emptyPath), missingNode1),
-            (Seq(emptyPath), missingNode2)
-          ))
-          
+          coordinator ! Messages.QueueMissingNodes(
+            Seq(
+              (Seq(emptyPath), missingNode1),
+              (Seq(emptyPath), missingNode2)
+            )
+          )
+
           // Verify coordinator accepts the nodes
           coordinator ! Messages.HealingGetProgress
           snapController.expectMsgType[Any](3.seconds)

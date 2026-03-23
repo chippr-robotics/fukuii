@@ -237,51 +237,46 @@ upstreams:
       #     - secondary
 
 # Consumers for authentication
-# ⚠️ WARNING: The credentials below are EXAMPLES ONLY for demonstration purposes.
-# ⚠️ CHANGE ALL PASSWORDS, API KEYS, AND SECRETS before deploying to production!
-# For production, consider using environment variables or external secrets management.
+# Credentials are loaded from environment variables defined in .env
+# See .env.example for generation instructions
 consumers:
   - username: admin
     custom_id: admin-user
     tags:
       - admin
-    
-    # Basic Auth credentials - CHANGE THIS PASSWORD!
+
     basicauth_credentials:
       - username: admin
-        password: fukuii_admin_password
-    
-    # Key Auth credentials - CHANGE THIS API KEY!
+        password: ${BASIC_AUTH_ADMIN_PASSWORD}
+
     keyauth_credentials:
-      - key: admin_api_key_change_me
-    
-    # JWT credentials (optional) - CHANGE THIS SECRET!
+      - key: ${API_KEY_ADMIN}
+
     jwt_secrets:
       - key: admin_jwt_key
         algorithm: HS256
-        secret: your_jwt_secret_change_me
-    
-    # ACL groups
+        secret: ${JWT_SECRET}
+
     acls:
       - group: admin
-  
+
   - username: developer
     custom_id: developer-user
     tags:
       - developer
-    
+
     basicauth_credentials:
       - username: developer
-        password: fukuii_dev_password
-    
+        password: ${BASIC_AUTH_DEV_PASSWORD}
+
     keyauth_credentials:
-      - key: dev_api_key_change_me
-    
+      - key: ${API_KEY_DEV}
+
     jwt_secrets:
       - key: developer_jwt_key
         algorithm: HS256
-        secret: your_jwt_secret_change_me
-    
+        secret: ${JWT_SECRET}
+
     acls:
       - group: developer
 

@@ -50,7 +50,12 @@ trait TestSyncConfig extends SyncConfigBuilder {
     pivotBlockReScheduleInterval = 1.second,
     maxPivotBlockAge = 96,
     fastSyncMaxBatchRetries = 3,
-    maxPivotBlockFailuresCount = 3
+    maxPivotBlockFailuresCount = 3,
+    maxRetryDelay = 30.seconds,
+    maxBodyFetchRetries = 10,
+    maxSnapFastCycleTransitions = 3,
+    useBootstrapCheckpoints = false,
+    bootstrapCheckpoints = Seq.empty
   )
 
   override lazy val syncConfig: SyncConfig = defaultSyncConfig

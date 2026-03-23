@@ -100,6 +100,43 @@ fukuii-cli start mixed
 **Besu Nodes:**
 - 3 nodes, ports: 8557-8562
 
+## Docker Image Builds
+
+Gorgoroth compose files use environment variables for image names. Build all 3 clients with:
+
+```bash
+# Build pre-Olympia images (from alpha/etc branches)
+ops/tools/build-all-images.sh pre-olympia
+
+# Build Olympia images (from olympia branches)
+ops/tools/build-all-images.sh olympia
+```
+
+This builds sequentially (resource constraint) and tags each image:
+- `fukuii-etc:<target>` + `fukuii-etc:local`
+- `coregeth-etc:<target>` + `coregeth-etc:local`
+- `besu-etc:<target>` + `besu-etc:local`
+
+Use with compose via `--env-file`:
+
+```bash
+cd ops/gorgoroth
+# Copy the template first, then use the copy:
+cp .env.pre-olympia.example .env.pre-olympia
+docker compose --env-file .env.pre-olympia -f docker-compose-3nodes.yml up -d
+```
+
+### Image Configuration Templates
+
+| Template | Purpose |
+|----------|---------|
+| `.env.example` | Default template (`:local` tags) |
+| `.env.pre-olympia.example` | Pre-Olympia branch images |
+| `.env.olympia.example` | Olympia branch images (created on olympia branch) |
+
+Copy templates before use: `cp .env.example .env` — never edit templates directly.
+The `.env` copies are gitignored and safe for local customization.
+
 ## Quick Start
 
 ### Prerequisites
@@ -526,12 +563,18 @@ cd ops/gorgoroth/test-scripts
 ./run-test-suite.sh fukuii-geth
 ```
 
-The test suite includes:
+The test suite includes 11 tests:
 - Network connectivity validation
 - Block propagation testing
 - Mining compatibility checks
 - Consensus maintenance monitoring
 - Fast sync functionality validation
+- EIP-1559 baseFee validation (Olympia)
+- ECIP-1111 treasury baseFee accumulation (Olympia)
+- Gas limit convergence 8M to 60M (Olympia)
+- Olympia EVM opcode validation (Olympia)
+- ECIP-1111 baseFee redirect verification (Olympia) — verifies baseFee goes to ECIP-1112 Treasury Address, not burned
+- ECIP-1112 Treasury Address verification (Olympia) — cross-client parity, address correctness, nonce zero
 
 ### Individual Tests
 

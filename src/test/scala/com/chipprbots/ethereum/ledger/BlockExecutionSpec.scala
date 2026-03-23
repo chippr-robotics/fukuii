@@ -15,8 +15,6 @@ import com.chipprbots.ethereum.Mocks
 import com.chipprbots.ethereum.Mocks.MockVM
 import com.chipprbots.ethereum.Mocks.MockValidatorsAlwaysSucceed
 import com.chipprbots.ethereum.Mocks.MockValidatorsFailOnSpecificBlockNumber
-import com.chipprbots.ethereum.ObjectGenerators
-import com.chipprbots.ethereum.consensus.blocks.CheckpointBlockGenerator
 import com.chipprbots.ethereum.consensus.mining.TestMining
 import com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator
@@ -164,50 +162,6 @@ class BlockExecutionSpec
         error.isDefined shouldBe true
       }
 
-      "block with checkpoint and without txs" taggedAs (UnitTest, StateTest) in new BlockchainSetup {
-        val checkpoint = ObjectGenerators.fakeCheckpointGen(2, 5).sample.get
-        val blockWithCheckpoint =
-          new CheckpointBlockGenerator().generate(Block(validBlockParentHeader, validBlockBodyWithNoTxs), checkpoint)
-        val treasuryAccountBefore = blockchainReader.getAccount(
-          blockchainReader.getBestBranch(),
-          blockchainConfig.treasuryAddress,
-          blockWithCheckpoint.number
-        )
-
-        val mockValidators = MockValidatorsAlwaysSucceed
-        val newMining: TestMining = mining.withVM(vm).withValidators(mockValidators)
-        override lazy val blockValidation =
-          new BlockValidation(newMining, blockchainReader, BlockQueue(blockchainReader, syncConfig))
-        override lazy val blockExecution =
-          new BlockExecution(
-            blockchain,
-            blockchainReader,
-            blockchainWriter,
-            blockchainStorages.evmCodeStorage,
-            newMining.blockPreparator,
-            blockValidation
-          )
-
-        val (blocks, error) =
-          blockExecution.executeAndValidateBlocks(List(blockWithCheckpoint), defaultChainWeight)
-        val beneficiaryAccount =
-          blockchainReader.getAccount(
-            blockchainReader.getBestBranch(),
-            Address(blockWithCheckpoint.header.beneficiary),
-            blockWithCheckpoint.number
-          )
-        val treasuryAccountAfter = blockchainReader.getAccount(
-          blockchainReader.getBestBranch(),
-          blockchainConfig.treasuryAddress,
-          blockWithCheckpoint.number
-        )
-
-        beneficiaryAccount.isDefined shouldBe false
-        treasuryAccountBefore shouldBe treasuryAccountAfter
-        blocks.size shouldBe 1
-        blocks.head.block shouldBe blockWithCheckpoint
-        error.isDefined shouldBe false
-      }
     }
 
     "correctly run executeBlockTransactions" when {
@@ -662,22 +616,6 @@ class BlockExecutionSpec
       }
     }
 
-    // SCALA 3 MIGRATION: These tests require mocking methods on InMemoryWorldStateProxy which is a case class.
-    // ScalaMock cannot mock methods on case class instances. These tests need refactoring to use
-    // a mock WorldStateProxy trait instead. DAO fork is also not relevant to ETC (only ETH mainnet).
-    "drain DAO accounts and send the funds to refund address if Pro DAO Fork was configured" taggedAs (
-      UnitTest,
-      StateTest
-    ) ignore {
-      // Test disabled - needs WorldStateProxy mocking refactor
-    }
-
-    "neither drain DAO accounts nor send the funds to refund address if Pro DAO Fork was not configured" taggedAs (
-      UnitTest,
-      StateTest
-    ) ignore {
-      // Test disabled - needs WorldStateProxy mocking refactor
-    }
   }
 
   trait BlockExecutionTestSetup extends BlockchainSetup {

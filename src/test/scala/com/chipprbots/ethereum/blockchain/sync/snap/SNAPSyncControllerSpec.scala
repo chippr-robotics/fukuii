@@ -72,9 +72,9 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     )
 
     val formattedString = progress.formattedString
-    formattedString should include("AccountRange")
-    formattedString should include("(50%)")
-    formattedString should include("accounts=1.0K/~2.0K")
+    formattedString should include("Accounts")
+    formattedString should include("50%")
+    formattedString should include("1.0K/~2.0K")
   }
 
   it should "handle different phases correctly" taggedAs UnitTest in {
@@ -140,7 +140,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     // Test bootstrap message
     val targetBlock = BigInt(1025)
     val bootstrap = StartRegularSyncBootstrap(targetBlock)
-    
+
     bootstrap.targetBlock shouldBe targetBlock
     bootstrap shouldBe a[StartRegularSyncBootstrap]
   }
@@ -174,7 +174,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     // Verify that SNAP sync phases can be converted to state node progress
     // This is tested indirectly through the currentSyncStatus method
     // but we can verify the data structures are compatible
-    
+
     val accountProgress = SyncProgress(
       phase = AccountRangeSync,
       accountsSynced = 1000,
@@ -198,40 +198,40 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
       startTime = System.currentTimeMillis(),
       phaseStartTime = System.currentTimeMillis()
     )
-    
+
     // Verify progress tracking for different phases
     accountProgress.accountsSynced shouldBe 1000
     accountProgress.estimatedTotalAccounts shouldBe 2000
     accountProgress.phase shouldBe AccountRangeSync
-    
+
     // Verify that we can represent state node progress
     // In SNAP sync, state nodes = accounts + bytecodes + storage slots + healed nodes
-    val totalStateNodes = accountProgress.accountsSynced + 
-                         accountProgress.bytecodesDownloaded + 
-                         accountProgress.storageSlotsSynced + 
-                         accountProgress.nodesHealed
-    
+    val totalStateNodes = accountProgress.accountsSynced +
+      accountProgress.bytecodesDownloaded +
+      accountProgress.storageSlotsSynced +
+      accountProgress.nodesHealed
+
     totalStateNodes shouldBe 1000 // Only accounts at this phase
-    
+
     // Test bytecode phase accumulation
     val bytecodeProgress = accountProgress.copy(
       phase = ByteCodeSync,
       bytecodesDownloaded = 500
     )
-    
-    val totalWithBytecodes = bytecodeProgress.accountsSynced + 
-                            bytecodeProgress.bytecodesDownloaded
+
+    val totalWithBytecodes = bytecodeProgress.accountsSynced +
+      bytecodeProgress.bytecodesDownloaded
     totalWithBytecodes shouldBe 1500
-    
+
     // Test storage phase accumulation
     val storageProgress = bytecodeProgress.copy(
       phase = StorageRangeSync,
       storageSlotsSynced = 3000
     )
-    
-    val totalWithStorage = storageProgress.accountsSynced + 
-                          storageProgress.bytecodesDownloaded + 
-                          storageProgress.storageSlotsSynced
+
+    val totalWithStorage = storageProgress.accountsSynced +
+      storageProgress.bytecodesDownloaded +
+      storageProgress.storageSlotsSynced
     totalWithStorage shouldBe 4500
   }
 
@@ -264,7 +264,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
 
     val formatted = progress.formattedString
     formatted should include("13.2M")
-    formatted should include("(100%)")
+    formatted should include("100%")
   }
 
   it should "show ByteCode phase with total and percentage" taggedAs UnitTest in {
@@ -296,7 +296,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
 
     val formatted = progress.formattedString
     formatted should include("ByteCode")
-    formatted should include("(65%)")
+    formatted should include("65%")
     formatted should include("95.2K/146.0K")
   }
 
@@ -331,8 +331,8 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
 
     val formatted = progress.formattedString
     formatted should include("Storage")
-    formatted should include("(12%)")
+    formatted should include("12%")
     formatted should include("44.5K")
-    formatted should include("contracts=1823/15234")
+    formatted should include("1823/15234 contracts")
   }
 }

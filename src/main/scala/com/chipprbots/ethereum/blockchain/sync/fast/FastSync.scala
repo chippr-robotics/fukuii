@@ -17,6 +17,7 @@ import scala.util.Random
 
 import org.bouncycastle.util.encoders.Hex
 
+import com.chipprbots.ethereum.domain.appstate.BlockInfo
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason._
 import com.chipprbots.ethereum.blockchain.sync.Blacklist._
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg.PeerWithInfo
@@ -227,6 +228,14 @@ class FastSync(
       case StateSyncFinished =>
         syncState = syncState.copy(stateSyncFinished = true)
         processSyncing()
+      case SyncStateSchedulerActor.NetworkIncompatible =>
+        log.warning(
+          "State scheduler reports no ETH63-67 peers available (ETH68-only network). " +
+            "Fast sync cannot use GetNodeData. Requesting fallback to SNAP sync."
+        )
+        cleanup()
+        context.become(idle)
+        syncController ! FallbackToSnapSync
     }
 
     def handleRequestFailure: Receive = {
@@ -322,9 +331,9 @@ class FastSync(
                 // Typed receipt in wire format: RLPValue(typeByte || rlp(payload))
                 // Expand it to Seq(RLPValue(typeByte), RLPList(payload)) for toTypedRLPEncodables.
                 if ((first & 0xff) < 0x7f && receiptBytes.length > 1) {
-                  try {
+                  try
                     Seq(RLPValue(Array(first)), rawDecode(receiptBytes.tail))
-                  } catch {
+                  catch {
                     case _: RuntimeException | _: RLPException => Seq(v)
                   }
                 } else {
@@ -382,6 +391,15 @@ class FastSync(
             "Pivot block selection failed after maximum attempts during update. Continuing with current pivot."
           )
           syncState = syncState.copy(updatingPivotBlock = false)
+          // On SyncRestart, the state scheduler is in idle state waiting for StartSyncingTo.
+          // Send it the existing pivot's state root so it doesn't deadlock.
+          if (updateReason.isSyncRestart) {
+            log.info(
+              "SyncRestart: sending existing pivot state root to state scheduler (block {})",
+              syncState.pivotBlock.number
+            )
+            syncStateScheduler ! StartSyncingTo(syncState.pivotBlock.stateRoot, syncState.pivotBlock.number)
+          }
           context.become(this.receive)
           processSyncing()
 
@@ -487,9 +505,8 @@ class FastSync(
       assignedHandlers -= handler
     }
 
-    // TODO [ETCM-676]: Move to blockchain and make sure it's atomic
+    // TODO: Move to blockchain and make sure it's atomic
     private def discardLastBlocks(startBlock: BigInt, blocksToDiscard: Int): Unit =
-      // TODO (maybe ETCM-77): Manage last checkpoint number too
       (startBlock to ((startBlock - blocksToDiscard).max(1)) by -1).foreach { n =>
         blockchainReader.getBlockHeaderByNumber(n).foreach { headerToRemove =>
           blockchain.removeBlock(headerToRemove.hash)
@@ -713,7 +730,7 @@ class FastSync(
     private def printStatus(): Unit = {
       def formatPeerEntry(entry: PeerWithInfo): String = formatPeer(entry.peer)
       def formatPeer(peer: Peer): String =
-        s"${peer.remoteAddress.getAddress.getHostAddress}:${peer.remoteAddress.getPort}"
+        s"${com.chipprbots.ethereum.network.getHostName(peer.remoteAddress.getAddress)}:${peer.remoteAddress.getPort}"
 
       def pct(done: BigInt, total: BigInt): Int =
         if (total <= 0) 0
@@ -778,7 +795,9 @@ class FastSync(
       val blacklistedIds = blacklist.keys
       log.info(
         s"""|🧠🪱 FastSync Progress: phase=$phase, blocks=$lastFull/$blockTarget (${blockPercent}%), state=$savedNodes/$totalNodes (${nodePercent}%),
-        |to_brain=$blocksToBrain, rates=${formatRate(blocksPerSec)} blocks, ${formatRate(nodesPerSec)} nodes, queues=bodies=${syncState.blockBodiesQueue.size}, receipts=${syncState.receiptsQueue.size},
+        |to_brain=$blocksToBrain, rates=${formatRate(blocksPerSec)} blocks, ${formatRate(
+             nodesPerSec
+           )} nodes, queues=bodies=${syncState.blockBodiesQueue.size}, receipts=${syncState.receiptsQueue.size},
             |peers=waiting=${assignedHandlers.size}, connected=${handshakedPeers.size}, blacklisted=${blacklistedIds.size}, elapsed=${totalMinutesTaken()}m
             |""".stripMargin.replace("\n", " ")
       )
@@ -1135,9 +1154,10 @@ class FastSync(
         val bestReceivedBlock = fullBlocks.maxBy(_.number)
         val lastStoredBestBlockNumber = blockchainReader.getBestBlockNumber()
         if (lastStoredBestBlockNumber < bestReceivedBlock.number) {
-          // TODO ETCM-1089 move direct calls to storages to blockchain or blockchain writer
+          // Set best block info with BOTH hash and number (putBestBlockNumber only
+          // sets the number, leaving getBestBlockInfo().hash stale/empty).
           appStateStorage
-            .putBestBlockNumber(bestReceivedBlock.number)
+            .putBestBlockInfo(BlockInfo(bestReceivedBlock.hash, bestReceivedBlock.number))
             .and(blockNumberMappingStorage.put(bestReceivedBlock.number, bestReceivedBlock.hash))
             .commit()
         }
@@ -1257,6 +1277,7 @@ object FastSync {
   case class StorageRootHash(v: ByteString) extends HashType
 
   case object Done
+  case object FallbackToSnapSync
 
   sealed abstract class HeaderProcessingResult
   case object HeadersProcessingFinished extends HeaderProcessingResult

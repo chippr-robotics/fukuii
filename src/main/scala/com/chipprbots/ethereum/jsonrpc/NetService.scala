@@ -108,7 +108,7 @@ class NetService(
     nodeStatusHolder: AtomicReference[NodeStatus],
     peerManager: ActorRef,
     blacklist: Blacklist,
-  config: NetService.NetServiceConfig
+    config: NetService.NetServiceConfig
 ) extends NetServiceAPI {
   import NetService._
   import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps._
@@ -139,7 +139,8 @@ class NetService(
 
     status.serverStatus match {
       case Listening(address) if address != null =>
-        val host = Option(address.getAddress).flatMap(addr => Option(addr.getHostAddress)).getOrElse(address.getHostString)
+        val host =
+          Option(address.getAddress).map(com.chipprbots.ethereum.network.getHostName).getOrElse(address.getHostString)
         val port = address.getPort
         val listenAddr = s"$host:$port"
         val enode = s"enode://$nodeId@$listenAddr"

@@ -4,6 +4,10 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/test-helpers.sh"
+require_tools curl jq
+
 echo "=== Block Propagation Test ==="
 echo "Testing block propagation across network..."
 echo ""

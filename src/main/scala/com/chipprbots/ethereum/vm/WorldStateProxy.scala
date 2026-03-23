@@ -7,8 +7,6 @@ import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.rlp
-import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPValue
 import com.chipprbots.ethereum.rlp.UInt256RLPImplicits._
@@ -121,7 +119,9 @@ trait WorldStateProxy[WS <: WorldStateProxy[WS, S], S <: Storage[S]] { self: WS 
     val creatorAccount = getGuaranteedAccount(creatorAddr)
     // Important: Address must be encoded as a single RLP string (20 bytes).
     // If it is treated as a Seq[Byte], it will be encoded as a list of 20 items and produce a different address.
-    val hash = kec256(rlp.encode(RLPList(RLPValue(creatorAddr.bytes.toArray), (creatorAccount.nonce - 1).toRLPEncodable)))
+    val hash = kec256(
+      rlp.encode(RLPList(RLPValue(creatorAddr.bytes.toArray), (creatorAccount.nonce - 1).toRLPEncodable))
+    )
     Address(hash)
   }
 

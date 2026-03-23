@@ -11,6 +11,7 @@ import cats.effect.IO
 import scala.util.Try
 
 import com.chipprbots.ethereum.crypto
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
@@ -84,7 +85,9 @@ trait PersonalServiceAPI {
   def lockAccount(request: LockAccountRequest): ServiceResponse[LockAccountResponse]
   def sign(request: SignRequest): ServiceResponse[SignResponse]
   def ecRecover(req: EcRecoverRequest): ServiceResponse[EcRecoverResponse]
-  def sendTransaction(request: SendTransactionWithPassphraseRequest): ServiceResponse[SendTransactionWithPassphraseResponse]
+  def sendTransaction(
+      request: SendTransactionWithPassphraseRequest
+  ): ServiceResponse[SendTransactionWithPassphraseResponse]
   def sendTransaction(request: SendTransactionRequest): ServiceResponse[SendTransactionResponse]
   def sendIeleTransaction(request: SendIeleTransactionRequest): ServiceResponse[SendTransactionResponse]
 }
@@ -180,7 +183,9 @@ class PersonalService(
     maybeWalletUnlocked.flatMap {
       case Right(wallet) =>
         val futureTxHash = sendTransaction(request.tx, wallet)
-        futureTxHash.map(txHash => Right(SendTransactionWithPassphraseResponse(txHash)))
+        futureTxHash
+          .map(txHash => Right(SendTransactionWithPassphraseResponse(txHash)))
+          .recover { case _: MissingNodeException => Left(JsonRpcError.NodeNotFound) }
       case Left(err) => IO.pure(Left(err))
     }
   }
@@ -189,7 +194,9 @@ class PersonalService(
     IO(unlockedWallets.get(request.tx.from)).flatMap {
       case Some(wallet) =>
         val futureTxHash = sendTransaction(request.tx, wallet)
-        futureTxHash.map(txHash => Right(SendTransactionResponse(txHash)))
+        futureTxHash
+          .map(txHash => Right(SendTransactionResponse(txHash)))
+          .recover { case _: MissingNodeException => Left(JsonRpcError.NodeNotFound) }
 
       case None => IO.pure(Left(AccountLocked))
     }

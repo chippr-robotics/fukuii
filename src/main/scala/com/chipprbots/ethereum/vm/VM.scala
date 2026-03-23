@@ -8,10 +8,9 @@ import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.domain.SetCodeTransaction
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.rlp
-import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPValue
 import com.chipprbots.ethereum.rlp.UInt256RLPImplicits._
@@ -66,13 +65,24 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
       if (PrecompiledContracts.isDefinedAt(context1))
         PrecompiledContracts.run(context1)
       else {
-        val code = world1.getCode(recipientAddr)
+        val code = resolveCode(world1, recipientAddr)
         val env = ExecEnv(context1, code, ownerAddr)
 
         val initialState: PS = ProgramState(this, context1, env)
         exec(initialState).toResult
       }
     }
+
+  /** EIP-7702: Resolve delegation code one level deep. If the account has a delegation prefix (0xef0100), load the
+    * target's code instead.
+    */
+  private def resolveCode(world: W, addr: Address): ByteString = {
+    val code = world.getCode(addr)
+    SetCodeTransaction.parseDelegation(code) match {
+      case Some(target) => world.getCode(target)
+      case None         => code
+    }
+  }
 
   /** Contract creation - Λ function in YP salt is used to create contract by CREATE2 opcode. See
     * https://github.com/ethereum/EIPs/blob/master/EIPS/eip-1014.md
@@ -102,7 +112,8 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
         callerAccountNonce.foreach { n =>
           val nonceForCreate = n - 1
           // Address must be encoded as a single RLP string (20 bytes), not as a Seq[Byte].
-          val rlpPreimage = rlp.encode(RLPList(RLPValue(context.callerAddr.bytes.toArray), nonceForCreate.toRLPEncodable))
+          val rlpPreimage =
+            rlp.encode(RLPList(RLPValue(context.callerAddr.bytes.toArray), nonceForCreate.toRLPEncodable))
           val hash = kec256(rlpPreimage)
           val derived = Address(hash)
           log.info(

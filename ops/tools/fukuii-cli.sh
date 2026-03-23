@@ -25,6 +25,20 @@ CONFIGS=(
     "cirith-ungol:docker-compose.yml:cirith-ungol:Fukuii + Core-Geth on ETC mainnet"
 )
 
+# Constants for enode validation (must be before sanitize_enode_url)
+readonly ENODE_ID_LENGTH=128  # Enode IDs are 128 hex characters (512 bits)
+
+# Detect docker compose command (plugin vs standalone)
+if docker compose version &>/dev/null; then
+    DOCKER_COMPOSE="docker compose"
+elif command -v docker-compose &>/dev/null; then
+    DOCKER_COMPOSE="docker-compose"
+else
+    echo -e "${RED}Error: Neither 'docker compose' (plugin) nor 'docker-compose' (standalone) found${NC}" >&2
+    echo "Install Docker Compose: https://docs.docker.com/compose/install/" >&2
+    exit 1
+fi
+
 # ============================================================================
 # Utility helpers
 # ============================================================================
@@ -152,7 +166,7 @@ start_network() {
     echo "Network directory: $network_dir"
     
     cd "$network_dir"
-    docker compose -f "$compose_file" up -d
+    $DOCKER_COMPOSE -f "$compose_file" up -d
     
     echo -e "${GREEN}Network started successfully!${NC}"
     echo ""
@@ -173,7 +187,7 @@ stop_network() {
     
     echo -e "${YELLOW}Stopping network: $config${NC}"
     cd "$network_dir"
-    docker compose -f "$compose_file" down
+    $DOCKER_COMPOSE -f "$compose_file" down
     echo -e "${GREEN}Network stopped${NC}"
 }
 
@@ -193,7 +207,7 @@ show_status() {
     
     echo -e "${GREEN}Status of network: $config${NC}"
     cd "$network_dir"
-    docker compose -f "$compose_file" ps
+    $DOCKER_COMPOSE -f "$compose_file" ps
 }
 
 show_logs() {
@@ -206,7 +220,7 @@ show_logs() {
     echo -e "${GREEN}Following logs for: $config${NC}"
     echo "Press Ctrl+C to stop following logs"
     cd "$network_dir"
-    docker compose -f "$compose_file" logs -f
+    $DOCKER_COMPOSE -f "$compose_file" logs -f
 }
 
 clean_network() {
@@ -221,7 +235,7 @@ clean_network() {
     if [[ $REPLY =~ ^[Yy]es$ ]]; then
         echo -e "${YELLOW}Cleaning network...${NC}"
         cd "$network_dir"
-        docker compose -f "$compose_file" down -v
+        $DOCKER_COMPOSE -f "$compose_file" down -v
         echo -e "${GREEN}Network cleaned${NC}"
     else
         echo "Cancelled"
@@ -231,9 +245,6 @@ clean_network() {
 # ============================================================================
 # Node Configuration Commands
 # ============================================================================
-
-# Constants for enode validation
-readonly ENODE_ID_LENGTH=128  # Enode IDs are 128 hex characters (512 bits)
 
 # Helper function to generate static-nodes.json content from array of enodes
 generate_static_nodes_json() {
@@ -455,7 +466,7 @@ sync_cirith_ungol_nodes() {
     # If we can't collect both, don't clobber existing peer configuration.
     local have_geth=false
     local have_fukuii=false
-    for container in $(echo "${!ENODES_MAP[@]}" | tr ' ' '\n' | sort); do
+    for container in $(printf '%s\n' "${!ENODES_MAP[@]}" | sort); do
         local t="${CONTAINER_TYPES[$container]}"
         if [ "$t" == "geth" ]; then
             have_geth=true
@@ -477,7 +488,7 @@ sync_cirith_ungol_nodes() {
 
     local fukuii_peers=()
     local geth_peers=()
-    for container in $(echo "${!ENODES_MAP[@]}" | tr ' ' '\n' | sort); do
+    for container in $(printf '%s\n' "${!ENODES_MAP[@]}" | sort); do
         local container_type="${CONTAINER_TYPES[$container]}"
         if [ "$container_type" == "geth" ]; then
             fukuii_peers+=("${ENODES_MAP[$container]}")
@@ -512,7 +523,7 @@ sync_cirith_ungol_nodes() {
     # wrong pubkey and cause RLPx auth-init decode failures on the remote.
     local coregeth_config_file="$network_dir/conf/coregeth-config.toml"
     local peer_enodes=()
-    for container in $(echo "${!ENODES_MAP[@]}" | tr ' ' '\n' | sort); do
+    for container in $(printf '%s\n' "${!ENODES_MAP[@]}" | sort); do
         local container_type="${CONTAINER_TYPES[$container]}"
         if [ "$container_type" != "geth" ]; then
             peer_enodes+=("${ENODES_MAP[$container]}")
@@ -617,13 +628,7 @@ sync_gorgoroth_nodes() {
     
     echo ""
     echo -e "${GREEN}Collected ${#ENODES_MAP[@]} enode(s)${NC}"
-    
-    # Build list of all enodes for full mesh connectivity
-    local all_enodes=()
-    for container in $(echo "${!ENODES_MAP[@]}" | tr ' ' '\n' | sort); do
-        all_enodes+=("${ENODES_MAP[$container]}")
-    done
-    
+
     # Update static-nodes.json for each container based on client type
     echo ""
     echo -e "${BLUE}Updating static-nodes.json for all containers...${NC}"
@@ -934,38 +939,9 @@ rpc_call_container() {
                 return 1
                 ;;
         esac
-                # Update Besu node's static-nodes.json in container volume.
-                # Besu requires IP addresses (not hostnames) in enode URLs.
-                local besu_peer_enodes=()
-                local other
-                for other in $containers; do
-                    if [ "$other" = "$container" ]; then
-                        continue
-                    fi
-                    local other_enode="${ENODES_MAP[$other]}"
-                    if [ -z "$other_enode" ]; then
-                        continue
-                    fi
 
-                    local other_ip
-                    other_ip=$(get_container_network_ip "$other")
-                    if [ -z "$other_ip" ]; then
-                        echo -e "${YELLOW}⚠ missing container IP for $other; skipping for Besu peers${NC}"
-                        continue
-                    fi
-
-                    besu_peer_enodes+=("$(force_enode_host "$other_enode" "$other_ip")")
-                done
-
-                local static_nodes_content
-                static_nodes_content=$(generate_static_nodes_json besu_peer_enodes)
-
-                # Write to /opt/besu/data/static-nodes.json inside the container
-                if docker exec "$container" sh -c "echo '$static_nodes_content' > /opt/besu/data/static-nodes.json" 2>/dev/null; then
-                    echo -e "${GREEN}✓ updated container volume${NC}"
-                else
-                    echo -e "${RED}✗ failed to update${NC}"
-                fi
+        local attach_out
+        attach_out=$(docker exec "$container_name" geth attach --exec "$expr" 2>/dev/null) || true
 
         printf '%s' "$attach_out" | python3 - <<'PY'
 import json
@@ -1522,7 +1498,7 @@ collect_logs_cmd() {
         mkdir -p "$output_dir"
         local compose_file
         compose_file=$(get_compose_file "$config") || exit 1
-        docker compose -f "$compose_file" logs > "$output_dir/all-logs.txt"
+        $DOCKER_COMPOSE -f "$compose_file" logs > "$output_dir/all-logs.txt"
         echo -e "${GREEN}Logs saved to: $output_dir/all-logs.txt${NC}"
     fi
 }
@@ -1624,7 +1600,7 @@ EOF
 
     echo -e "${GREEN}Pitya-lórë watcher engaged — monitoring $rpc_url until block >= $target_block${NC}"
     echo "Snapshot directory: $snapshot_dir"
-    echo "Stopping action: docker compose -f $compose_file $stop_mode"
+    echo "Stopping action: $DOCKER_COMPOSE -f $compose_file $stop_mode"
 
     local current_block=0
     while true; do
@@ -1690,7 +1666,7 @@ EOF
 
     cd "$network_dir"
     echo -e "${YELLOW}Target met — issuing docker compose $stop_mode to let the network take its short nap${NC}"
-    if ! docker compose -f "$compose_file" "$stop_mode"; then
+    if ! $DOCKER_COMPOSE -f "$compose_file" "$stop_mode"; then
         echo -e "${RED}Warning: docker compose $stop_mode failed${NC}"
         return 1
     fi
@@ -1709,7 +1685,7 @@ reset_fast_sync_cmd() {
     cd "$network_dir"
 
     local container_id
-    container_id=$(docker compose -f "$compose_file" ps -q fukuii 2>/dev/null || true)
+    container_id=$($DOCKER_COMPOSE -f "$compose_file" ps -q fukuii 2>/dev/null || true)
     if [ -z "$container_id" ]; then
         echo -e "${RED}Error: fukuii container not found for config '$config'${NC}" >&2
         return 1

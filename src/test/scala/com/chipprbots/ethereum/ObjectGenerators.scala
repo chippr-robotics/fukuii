@@ -11,9 +11,9 @@ import org.scalacheck.Gen
 
 import com.chipprbots.ethereum.blockchain.sync.StateSyncUtils.MptNodeData
 import com.chipprbots.ethereum.crypto.ECDSASignature
+import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields._
-import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.mpt.BranchNode
 import com.chipprbots.ethereum.mpt.ExtensionNode
 import com.chipprbots.ethereum.mpt.HashNode
@@ -91,8 +91,41 @@ trait ObjectGenerators {
     storageKeys <- Gen.listOf(bigIntGen)
   } yield AccessListItem(address, storageKeys)
 
+  def setCodeAuthorizationGen: Gen[SetCodeAuthorization] = for {
+    chainId <- bigIntGen
+    address <- addressGen
+    nonce <- bigIntGen
+    v <- Gen.choose(BigInt(0), BigInt(1))
+    r <- bigIntGen
+    s <- bigIntGen
+  } yield SetCodeAuthorization(chainId, address, nonce, v, r, s)
+
+  def setCodeTransactionGen: Gen[SetCodeTransaction] = for {
+    chainId <- bigIntGen
+    nonce <- bigIntGen
+    maxPriorityFeePerGas <- bigIntGen
+    maxFeePerGas <- bigIntGen
+    gasLimit <- bigIntGen
+    receivingAddress <- addressGen
+    value <- bigIntGen
+    payload <- byteStringOfLengthNGen(256)
+    accessList <- Gen.listOf(accessListItemGen)
+    authorizationList <- Gen.listOfN(2, setCodeAuthorizationGen)
+  } yield SetCodeTransaction(
+    chainId,
+    nonce,
+    maxPriorityFeePerGas,
+    maxFeePerGas,
+    gasLimit,
+    Some(receivingAddress),
+    value,
+    payload,
+    accessList,
+    authorizationList
+  )
+
   def transactionGen: Gen[Transaction] =
-    Gen.oneOf(legacyTransactionGen, typedTransactionGen)
+    Gen.oneOf(legacyTransactionGen, typedTransactionGen, dynamicFeeTransactionGen, setCodeTransactionGen)
 
   def legacyTransactionGen: Gen[LegacyTransaction] = for {
     nonce <- bigIntGen
@@ -123,6 +156,28 @@ trait ObjectGenerators {
     chainId,
     nonce,
     gasPrice,
+    gasLimit,
+    receivingAddress,
+    value,
+    payload,
+    accessList
+  )
+
+  def dynamicFeeTransactionGen: Gen[TransactionWithDynamicFee] = for {
+    chainId <- bigIntGen
+    nonce <- bigIntGen
+    maxPriorityFeePerGas <- bigIntGen
+    maxFeePerGas <- bigIntGen
+    gasLimit <- bigIntGen
+    receivingAddress <- addressGen
+    value <- bigIntGen
+    payload <- byteStringOfLengthNGen(256)
+    accessList <- Gen.listOf(accessListItemGen)
+  } yield TransactionWithDynamicFee(
+    chainId,
+    nonce,
+    maxPriorityFeePerGas,
+    maxFeePerGas,
     gasLimit,
     receivingAddress,
     value,
@@ -200,7 +255,7 @@ trait ObjectGenerators {
 
   def extraFieldsGen: Gen[HeaderExtraFields] = Gen.oneOf(
     Gen.const(HefEmpty),
-    Gen.option(fakeCheckpointGen(0, 5)).map(cp => HefPostEcip1097(cp))
+    bigIntGen.map(baseFee => HefPostOlympia(baseFee))
   )
 
   def blockHeaderGen: Gen[BlockHeader] = for {
@@ -219,7 +274,6 @@ trait ObjectGenerators {
     extraData <- byteStringOfLengthNGen(8)
     mixHash <- byteStringOfLengthNGen(8)
     nonce <- byteStringOfLengthNGen(8)
-    extraFields <- extraFieldsGen
   } yield BlockHeader(
     parentHash = parentHash,
     ommersHash = ommersHash,
@@ -235,17 +289,10 @@ trait ObjectGenerators {
     unixTimestamp = unixTimestamp,
     extraData = extraData,
     mixHash = mixHash,
-    nonce = nonce,
-    extraFields = extraFields
+    nonce = nonce
   )
 
   def seqBlockHeaderGen: Gen[Seq[BlockHeader]] = Gen.listOf(blockHeaderGen)
-
-  def fakeCheckpointGen(minSignatures: Int, maxSignatures: Int): Gen[Checkpoint] =
-    for {
-      n <- Gen.choose(minSignatures, maxSignatures)
-      signatures <- Gen.listOfN(n, fakeSignatureGen)
-    } yield Checkpoint(signatures)
 
   def fakeSignatureGen: Gen[ECDSASignature] =
     for {
@@ -274,9 +321,8 @@ trait ObjectGenerators {
   } yield list
 
   val chainWeightGen: Gen[ChainWeight] = for {
-    lcn <- bigIntGen
     td <- bigIntGen
-  } yield ChainWeight(lcn, td)
+  } yield ChainWeight.totalDifficultyOnly(td)
 }
 
 object ObjectGenerators extends ObjectGenerators

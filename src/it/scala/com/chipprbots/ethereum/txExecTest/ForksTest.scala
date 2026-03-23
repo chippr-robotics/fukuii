@@ -43,8 +43,7 @@ class ForksTest extends AnyFlatSpec with Matchers {
       accountStartNonce = UInt256.Zero,
       daoForkConfig = None,
       gasTieBreaker = false,
-      ethCompatibleStorage = true,
-      treasuryAddress = Address(0)
+      ethCompatibleStorage = true
     )
     val noErrors: ResultOfATypeInvocation[Right[_, Seq[Receipt]]] = a[Right[_, Seq[Receipt]]]
   }

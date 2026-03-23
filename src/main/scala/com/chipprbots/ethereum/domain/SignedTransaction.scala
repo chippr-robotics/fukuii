@@ -78,6 +78,8 @@ object SignedTransaction {
     tx match {
       case legacyTransaction: LegacyTransaction => getLegacyBytesToSign(legacyTransaction, chainId)
       case twal: TransactionWithAccessList      => getTWALBytesToSign(twal)
+      case twdf: TransactionWithDynamicFee      => getTWDFBytesToSign(twdf)
+      case sct: SetCodeTransaction              => getSCTBytesToSign(sct)
     }
 
   private def getLegacyBytesToSign(legacyTransaction: LegacyTransaction, chainIdOpt: Option[BigInt]): Array[Byte] =
@@ -111,6 +113,12 @@ object SignedTransaction {
         val chainIdOpt = extractChainId(signedTransaction)
         getLegacyTransactionRawSignature(signedTransaction.signature, chainIdOpt)
       case _: TransactionWithAccessList =>
+        getTWALRawSignature(signedTransaction.signature)
+      case _: TransactionWithDynamicFee =>
+        // Type-2 uses same y-parity encoding as Type-1
+        getTWALRawSignature(signedTransaction.signature)
+      case _: SetCodeTransaction =>
+        // Type-4 uses same y-parity encoding as Type-1/Type-2
         getTWALRawSignature(signedTransaction.signature)
     }
 
@@ -203,6 +211,12 @@ object SignedTransaction {
       case _: LegacyTransaction =>
         getLegacyEthereumSignature(rawSignature, chainIdOpt)
       case _: TransactionWithAccessList =>
+        getTWALEthereumSignature(rawSignature)
+      case _: TransactionWithDynamicFee =>
+        // Type-2 uses same y-parity encoding as Type-1
+        getTWALEthereumSignature(rawSignature)
+      case _: SetCodeTransaction =>
+        // Type-4 uses same y-parity encoding as Type-1/Type-2
         getTWALEthereumSignature(rawSignature)
     }
 
@@ -375,6 +389,8 @@ object SignedTransaction {
           None
         }
       case twal: TransactionWithAccessList => Some(twal.chainId)
+      case twdf: TransactionWithDynamicFee => Some(twdf.chainId)
+      case sct: SetCodeTransaction         => Some(sct.chainId)
     }
     chainIdOpt
   }
@@ -392,6 +408,8 @@ object SignedTransaction {
     signedTransaction.tx match {
       case _: LegacyTransaction            => getLegacyBytesToSign(signedTransaction)
       case twal: TransactionWithAccessList => getTWALBytesToSign(twal)
+      case twdf: TransactionWithDynamicFee => getTWDFBytesToSign(twdf)
+      case sct: SetCodeTransaction         => getSCTBytesToSign(sct)
     }
 
   /** Transaction specific piece of code. This should be moved to the Signer architecture once available.
@@ -436,6 +454,54 @@ object SignedTransaction {
             tx.value,
             tx.payload,
             tx.accessList
+          )
+        )
+      )
+    )
+  }
+
+  private def getTWDFBytesToSign(tx: TransactionWithDynamicFee): Array[Byte] = {
+    import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.accessListItemCodec
+    val receivingAddressAsArray: Array[Byte] = tx.receivingAddress.map(_.toArray).getOrElse(Array.empty[Byte])
+    crypto.kec256(
+      rlpEncode(
+        PrefixedRLPEncodable(
+          0x02,
+          RLPList(
+            tx.chainId,
+            tx.nonce,
+            tx.maxPriorityFeePerGas,
+            tx.maxFeePerGas,
+            tx.gasLimit,
+            receivingAddressAsArray,
+            tx.value,
+            tx.payload,
+            tx.accessList
+          )
+        )
+      )
+    )
+  }
+
+  private def getSCTBytesToSign(tx: SetCodeTransaction): Array[Byte] = {
+    import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.accessListItemCodec
+    import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.setCodeAuthorizationCodec
+    val receivingAddressAsArray: Array[Byte] = tx.receivingAddress.map(_.toArray).getOrElse(Array.empty[Byte])
+    crypto.kec256(
+      rlpEncode(
+        PrefixedRLPEncodable(
+          0x04,
+          RLPList(
+            tx.chainId,
+            tx.nonce,
+            tx.maxPriorityFeePerGas,
+            tx.maxFeePerGas,
+            tx.gasLimit,
+            receivingAddressAsArray,
+            tx.value,
+            tx.payload,
+            tx.accessList,
+            tx.authorizationList
           )
         )
       )

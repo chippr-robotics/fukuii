@@ -7,14 +7,14 @@ object SyncProtocol {
   case object GetStatus extends SyncProtocolMsg
   case class MinedBlock(block: Block) extends SyncProtocolMsg
 
-  /** Clears persisted fast-sync markers so the next start can enter fast sync again.
-    * This is intentionally a "soft" reset: it does not wipe the chain DB.
+  /** Clears persisted fast-sync markers so the next start can enter fast sync again. This is intentionally a "soft"
+    * reset: it does not wipe the chain DB.
     */
   case object ResetFastSync extends SyncProtocolMsg
   final case class ResetFastSyncResponse(reset: Boolean) extends SyncProtocolMsg
 
-  /** Requests a safe in-process restart of fast sync.
-    * The controller will apply a circuit-breaker cool-off period to avoid thrashing.
+  /** Requests a safe in-process restart of fast sync. The controller will apply a circuit-breaker cool-off period to
+    * avoid thrashing.
     */
   case object RestartFastSync extends SyncProtocolMsg
   final case class RestartFastSyncResponse(started: Boolean, cooldownUntilMillis: Long) extends SyncProtocolMsg
