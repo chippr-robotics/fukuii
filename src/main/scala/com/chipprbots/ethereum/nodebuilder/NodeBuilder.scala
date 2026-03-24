@@ -333,7 +333,8 @@ trait NetworkPeerManagerActorBuilder {
         peerEventBus,
         storagesInstance.storages.appStateStorage,
         forkResolverOpt,
-        Some(storagesInstance.storages.evmCodeStorage)
+        Some(storagesInstance.storages.evmCodeStorage),
+        Some(storagesInstance.storages.nodeStorage)
       ),
     "network-peer-manager"
   )

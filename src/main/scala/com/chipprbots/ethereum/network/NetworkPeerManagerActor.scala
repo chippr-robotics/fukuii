@@ -11,6 +11,8 @@ import scala.concurrent.duration._
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapServerChecker
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.NodeStorage
+import com.chipprbots.ethereum.mpt._
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor._
 import com.chipprbots.ethereum.network.PeerActor.DisconnectPeer
@@ -51,6 +53,7 @@ class NetworkPeerManagerActor(
     appStateStorage: AppStateStorage,
     forkResolverOpt: Option[ForkResolver],
     evmCodeStorage: Option[EvmCodeStorage] = None,
+    nodeStorage: Option[NodeStorage] = None,
     initialSnapSyncControllerOpt: Option[ActorRef] = None
 ) extends Actor
     with ActorLogging {
@@ -518,18 +521,241 @@ class NetworkPeerManagerActor(
       s"Received GetTrieNodes request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, paths=${msg.paths.size}, bytes=${msg.responseBytes}"
     )
 
-    // TODO: Implement server-side trie node retrieval
-    // 1. Verify we have the requested state root
-    // 2. For each path, retrieve the trie node
-    // 3. Send TrieNodes response
-
-    // For now, send an empty response
     peerWithInfo.foreach { pwi =>
-      val emptyResponse = TrieNodes(
-        requestId = msg.requestId,
-        nodes = Seq.empty
-      )
-      pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+      val responseLimit = msg.responseBytes.toLong.min(MaxSnapResponseBytes)
+      val nodes = nodeStorage match {
+        case Some(storage) =>
+          var totalBytes = 0L
+          val builder = Seq.newBuilder[ByteString]
+          val pathIter = msg.paths.iterator
+          while (pathIter.hasNext && totalBytes < responseLimit) {
+            val pathGroup = pathIter.next()
+            if (pathGroup.nonEmpty) {
+              // First element is the account trie path (or empty for root-level lookups)
+              // Subsequent elements are storage trie paths under that account
+              if (pathGroup.size == 1) {
+                // Single path: account trie node lookup
+                resolveTrieNode(msg.rootHash, pathGroup.head, storage) match {
+                  case Some(nodeData) =>
+                    builder += nodeData
+                    totalBytes += nodeData.length
+                  case None => // skip missing nodes
+                }
+              } else {
+                // Multi-path: first is account path, rest are storage paths under that account
+                // For Phase 3 we handle the account trie path; storage trie deferred to Phase 7
+                val accountPath = pathGroup.head
+                resolveTrieNode(msg.rootHash, accountPath, storage) match {
+                  case Some(nodeData) =>
+                    builder += nodeData
+                    totalBytes += nodeData.length
+                  case None => // skip missing
+                }
+                // Storage paths: walk from account's storageRoot
+                // Find the account node to get storageRoot, then walk storage trie
+                resolveAccountStorageRoot(msg.rootHash, accountPath, storage).foreach { storageRoot =>
+                  val storageIter = pathGroup.iterator
+                  storageIter.next() // skip the account path (already processed)
+                  while (storageIter.hasNext && totalBytes < responseLimit) {
+                    resolveTrieNode(storageRoot, storageIter.next(), storage) match {
+                      case Some(nodeData) =>
+                        builder += nodeData
+                        totalBytes += nodeData.length
+                      case None => // skip missing
+                    }
+                  }
+                }
+              }
+            }
+          }
+          val result = builder.result()
+          log.debug(
+            s"GetTrieNodes response for peer $peerId: ${result.size} nodes found, $totalBytes bytes"
+          )
+          result
+        case None =>
+          log.debug(s"GetTrieNodes: no NodeStorage available, returning empty response to peer $peerId")
+          Seq.empty
+      }
+      pwi.peer.ref ! PeerActor.SendMessage(TrieNodes(msg.requestId, nodes))
+    }
+  }
+
+  /** Walk the MPT from rootHash following an HP-encoded compact path to find the node at that path.
+    * Returns the RLP-encoded node bytes if found.
+    */
+  private def resolveTrieNode(
+      rootHash: ByteString,
+      compactPath: ByteString,
+      storage: NodeStorage
+  ): Option[ByteString] = {
+    if (compactPath.isEmpty) {
+      // Empty path = root node itself
+      storage.get(rootHash).map(ByteString(_))
+    } else {
+      val (nibbles, _) = HexPrefix.decode(compactPath.toArray)
+      // Load root node
+      storage.get(rootHash).flatMap { rootEncoded =>
+        val rootNode = MptTraversals.decodeNode(rootEncoded)
+        walkTriePath(rootNode, nibbles, 0, storage)
+      }
+    }
+  }
+
+  /** Recursively walk the trie following nibble path, returning the RLP-encoded node at the target position. */
+  private def walkTriePath(
+      node: MptNode,
+      nibbles: Array[Byte],
+      pos: Int,
+      storage: NodeStorage
+  ): Option[ByteString] = {
+    if (pos >= nibbles.length) {
+      // We've consumed the entire path — this node is the target
+      Some(ByteString(node.encode))
+    } else {
+      node match {
+        case BranchNode(children, _, _, _, _) =>
+          val childIdx = nibbles(pos) & 0x0f
+          children(childIdx) match {
+            case NullNode => None
+            case hashNode: HashNode =>
+              storage.get(ByteString(hashNode.hashNode)).flatMap { childEncoded =>
+                val childNode = MptTraversals.decodeNode(childEncoded)
+                walkTriePath(childNode, nibbles, pos + 1, storage)
+              }
+            case inlineNode =>
+              walkTriePath(inlineNode, nibbles, pos + 1, storage)
+          }
+
+        case ExtensionNode(sharedKey, next, _, _, _) =>
+          val keyNibbles = HexPrefix.decode(sharedKey.toArray)._1
+          // Check if remaining path starts with the extension's shared key
+          if (pos + keyNibbles.length > nibbles.length) {
+            None // path too short
+          } else {
+            var matches = true
+            var i = 0
+            while (i < keyNibbles.length && matches) {
+              if (nibbles(pos + i) != keyNibbles(i)) matches = false
+              i += 1
+            }
+            if (!matches) {
+              None
+            } else {
+              val newPos = pos + keyNibbles.length
+              next match {
+                case hashNode: HashNode =>
+                  storage.get(ByteString(hashNode.hashNode)).flatMap { childEncoded =>
+                    val childNode = MptTraversals.decodeNode(childEncoded)
+                    walkTriePath(childNode, nibbles, newPos, storage)
+                  }
+                case _ =>
+                  walkTriePath(next, nibbles, newPos, storage)
+              }
+            }
+          }
+
+        case _: LeafNode =>
+          // Leaf node reached before path consumed — no deeper nodes exist
+          None
+
+        case hashNode: HashNode =>
+          // Resolve hash reference and continue walking
+          storage.get(ByteString(hashNode.hashNode)).flatMap { childEncoded =>
+            val childNode = MptTraversals.decodeNode(childEncoded)
+            walkTriePath(childNode, nibbles, pos, storage)
+          }
+
+        case NullNode => None
+      }
+    }
+  }
+
+  /** Given an account trie path, resolve the account's storageRoot hash.
+    * Returns None if the account node cannot be found or decoded.
+    */
+  private def resolveAccountStorageRoot(
+      stateRootHash: ByteString,
+      accountPath: ByteString,
+      storage: NodeStorage
+  ): Option[ByteString] = {
+    import com.chipprbots.ethereum.rlp.{rawDecode, RLPList, RLPValue}
+    // Walk account trie to find the leaf, then decode Account RLP to get storageRoot
+    if (accountPath.isEmpty) return None
+    val (nibbles, _) = HexPrefix.decode(accountPath.toArray)
+    storage.get(stateRootHash).flatMap { rootEncoded =>
+      val rootNode = MptTraversals.decodeNode(rootEncoded)
+      findLeafValue(rootNode, nibbles, 0, storage)
+    }.flatMap { accountRlp =>
+      // Account RLP: [nonce, balance, storageRoot, codeHash]
+      try {
+        rawDecode(accountRlp.toArray) match {
+          case RLPList(_, _, storageRootRlp: RLPValue, _) =>
+            Some(ByteString(storageRootRlp.bytes))
+          case _ => None
+        }
+      } catch {
+        case _: Exception => None
+      }
+    }
+  }
+
+  /** Walk the trie to find the value stored at the leaf matching the given nibble path. */
+  private def findLeafValue(
+      node: MptNode,
+      nibbles: Array[Byte],
+      pos: Int,
+      storage: NodeStorage
+  ): Option[ByteString] = {
+    node match {
+      case LeafNode(key, value, _, _, _) =>
+        val keyNibbles = HexPrefix.decode(key.toArray)._1
+        // Check remaining nibbles match the leaf key
+        if (nibbles.length - pos == keyNibbles.length &&
+            (0 until keyNibbles.length).forall(i => nibbles(pos + i) == keyNibbles(i))) {
+          Some(value)
+        } else {
+          None
+        }
+
+      case BranchNode(children, terminator, _, _, _) =>
+        if (pos >= nibbles.length) {
+          terminator
+        } else {
+          val childIdx = nibbles(pos) & 0x0f
+          children(childIdx) match {
+            case NullNode => None
+            case hashNode: HashNode =>
+              storage.get(ByteString(hashNode.hashNode)).flatMap { enc =>
+                findLeafValue(MptTraversals.decodeNode(enc), nibbles, pos + 1, storage)
+              }
+            case inline => findLeafValue(inline, nibbles, pos + 1, storage)
+          }
+        }
+
+      case ExtensionNode(sharedKey, next, _, _, _) =>
+        val keyNibbles = HexPrefix.decode(sharedKey.toArray)._1
+        if (pos + keyNibbles.length > nibbles.length) return None
+        var i = 0
+        while (i < keyNibbles.length) {
+          if (nibbles(pos + i) != keyNibbles(i)) return None
+          i += 1
+        }
+        val newPos = pos + keyNibbles.length
+        next match {
+          case hashNode: HashNode =>
+            storage.get(ByteString(hashNode.hashNode)).flatMap { enc =>
+              findLeafValue(MptTraversals.decodeNode(enc), nibbles, newPos, storage)
+            }
+          case _ => findLeafValue(next, nibbles, newPos, storage)
+        }
+
+      case hashNode: HashNode =>
+        storage.get(ByteString(hashNode.hashNode)).flatMap { enc =>
+          findLeafValue(MptTraversals.decodeNode(enc), nibbles, pos, storage)
+        }
+
+      case NullNode => None
     }
   }
 
@@ -747,6 +973,7 @@ object NetworkPeerManagerActor {
       appStateStorage: AppStateStorage,
       forkResolverOpt: Option[ForkResolver],
       evmCodeStorage: Option[EvmCodeStorage] = None,
+      nodeStorage: Option[NodeStorage] = None,
       snapSyncControllerOpt: Option[ActorRef] = None
   ): Props =
     Props(
@@ -756,6 +983,7 @@ object NetworkPeerManagerActor {
         appStateStorage,
         forkResolverOpt,
         evmCodeStorage,
+        nodeStorage,
         snapSyncControllerOpt
       )
     )
