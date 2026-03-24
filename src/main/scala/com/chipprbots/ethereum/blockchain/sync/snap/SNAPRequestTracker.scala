@@ -242,7 +242,9 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
       return Left(s"Expected ${RequestType.GetByteCodes} but got response for ${pending.requestType}")
     }
 
-    // TODO: Validate bytecode hashes match requested hashes
+    // Bytecode hash validation is performed by ByteCodeCoordinator.validateReturnedCodes()
+    // which keccak256-hashes each returned code and verifies it matches the requested hashes
+    // in subsequence order. No need to duplicate that check here.
     Right(response)
   }
 
