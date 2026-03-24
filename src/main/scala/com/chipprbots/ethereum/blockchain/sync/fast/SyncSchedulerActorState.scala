@@ -12,7 +12,6 @@ import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.Scheduler
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor.PeerRequest
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor.RequestResult
 import com.chipprbots.ethereum.network.Peer
-import com.chipprbots.ethereum.network.PeerId
 
 case class SyncSchedulerActorState(
     currentSchedulerState: SchedulerState,
@@ -88,7 +87,7 @@ case class SyncSchedulerActorState(
 
   def memBatch: Map[ByteString, (ByteString, SyncStateScheduler.RequestType)] = currentSchedulerState.memBatch
 
-  def activePeerRequests: Map[PeerId, NonEmptyList[ByteString]] = currentDownloaderState.activeRequests
+  def activeRequestCount: Int = currentDownloaderState.activeRequests.size
 
   override def toString: String =
     s""" Status of mpt state sync:
@@ -98,7 +97,7 @@ case class SyncSchedulerActorState(
        | Number of Mpt nodes saved to database: ${currentStats.saved},
        | Number of duplicated hashes: ${currentStats.duplicatedHashes},
        | Number of not requested hashes: ${currentStats.notRequestedHashes},
-       | Number of active peer requests: ${currentDownloaderState.activeRequests.size}
+       | Number of active requests in flight: ${currentDownloaderState.activeRequests.size}
                         """.stripMargin
 }
 
