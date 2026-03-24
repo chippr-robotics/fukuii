@@ -12,6 +12,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SnapServerChecker
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatAccountStorage
+import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.NodeStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt._
@@ -57,6 +58,7 @@ class NetworkPeerManagerActor(
     evmCodeStorage: Option[EvmCodeStorage] = None,
     nodeStorage: Option[NodeStorage] = None,
     flatAccountStorage: Option[FlatAccountStorage] = None,
+    flatSlotStorage: Option[FlatSlotStorage] = None,
     initialSnapSyncControllerOpt: Option[ActorRef] = None
 ) extends Actor
     with ActorLogging {
@@ -538,20 +540,47 @@ class NetworkPeerManagerActor(
       s"Received GetStorageRanges request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, accounts=${msg.accountHashes.size}, start=${msg.startingHash.take(4).toHex}, limit=${msg.limitHash.take(4).toHex}, bytes=${msg.responseBytes}"
     )
 
-    // TODO: Implement server-side storage range retrieval
-    // 1. Verify we have the requested state root
-    // 2. For each account, retrieve storage slots from startingHash to limitHash
-    // 3. Generate Merkle proofs for each account's storage
-    // 4. Send StorageRanges response
-
-    // For now, send an empty response
     peerWithInfo.foreach { pwi =>
-      val emptyResponse = StorageRanges(
-        requestId = msg.requestId,
-        slots = Seq.empty,
-        proof = Seq.empty
-      )
-      pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+      val responseLimit = msg.responseBytes.toLong.min(MaxSnapResponseBytes)
+      flatSlotStorage match {
+        case Some(storage) =>
+          import cats.effect.unsafe.IORuntime
+          implicit val runtime: IORuntime = IORuntime.global
+          var totalBytes = 0L
+          val allSlots = Seq.newBuilder[Seq[(ByteString, ByteString)]]
+
+          val accountIter = msg.accountHashes.iterator
+          while (accountIter.hasNext && totalBytes < responseLimit) {
+            val accountHash = accountIter.next()
+            val accountSlots = storage
+              .seekStorageRange(accountHash, msg.startingHash)
+              .collect { case Right((slotHash, value)) => (slotHash, value) }
+              .takeWhile { case (slotHash, _) =>
+                compareByteStrings(slotHash, msg.limitHash) <= 0
+              }
+              .compile
+              .toVector
+              .unsafeRunSync()
+
+            if (accountSlots.nonEmpty) {
+              val slotBytes = accountSlots.foldLeft(0L) { case (acc, (k, v)) => acc + k.length + v.length }
+              totalBytes += slotBytes
+              allSlots += accountSlots
+            } else {
+              allSlots += Seq.empty
+            }
+          }
+
+          val result = allSlots.result()
+          log.debug(
+            s"GetStorageRanges response for peer $peerId: ${result.size} account slot sets, $totalBytes bytes"
+          )
+          pwi.peer.ref ! PeerActor.SendMessage(StorageRanges(msg.requestId, result, Seq.empty))
+
+        case None =>
+          log.debug(s"GetStorageRanges: no FlatSlotStorage available, returning empty response to peer $peerId")
+          pwi.peer.ref ! PeerActor.SendMessage(StorageRanges(msg.requestId, Seq.empty, Seq.empty))
+      }
     }
   }
 
@@ -1027,6 +1056,7 @@ object NetworkPeerManagerActor {
       evmCodeStorage: Option[EvmCodeStorage] = None,
       nodeStorage: Option[NodeStorage] = None,
       flatAccountStorage: Option[FlatAccountStorage] = None,
+      flatSlotStorage: Option[FlatSlotStorage] = None,
       snapSyncControllerOpt: Option[ActorRef] = None
   ): Props =
     Props(
@@ -1038,6 +1068,7 @@ object NetworkPeerManagerActor {
         evmCodeStorage,
         nodeStorage,
         flatAccountStorage,
+        flatSlotStorage,
         snapSyncControllerOpt
       )
     )
