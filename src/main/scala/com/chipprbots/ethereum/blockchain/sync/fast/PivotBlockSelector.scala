@@ -259,7 +259,7 @@ class PivotBlockSelector(
 
   private def collectVoters(previousBestBlockNumber: Option[BigInt] = None): ElectionDetails = {
     val peersUsedToChooseTarget = peersToDownloadFrom.collect {
-      case (_, PeerWithInfo(peer, PeerInfo(_, _, true, maxBlockNumber, _))) =>
+      case (_, PeerWithInfo(peer, PeerInfo(_, _, true, maxBlockNumber, _, _))) =>
         (peer, maxBlockNumber)
     }
 

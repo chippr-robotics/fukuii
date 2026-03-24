@@ -6,6 +6,9 @@ import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.Props
 import org.apache.pekko.util.ByteString
 
+import scala.concurrent.duration._
+
+import com.chipprbots.ethereum.blockchain.sync.snap.SnapServerChecker
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor._
@@ -120,6 +123,23 @@ class NetworkPeerManagerActor(
     case MessageFromPeer(message, peerId) if peersWithInfo.contains(peerId) =>
       // Route SNAP protocol messages to SNAPSyncController
       message match {
+        // Intercept AccountRange that might be a probe response
+        case msg: AccountRange if SnapServerChecker.isProbeRequestId(msg.requestId) =>
+          SnapServerChecker.completeProbe(msg.requestId).foreach { probedPeerId =>
+            val serving = SnapServerChecker.isServingSnap(msg)
+            log.info(
+              "SNAP_PROBE_RESULT: peer={} isServingSnap={} (accounts={}, proofNodes={})",
+              probedPeerId,
+              serving,
+              msg.accounts.size,
+              msg.proof.size
+            )
+            peersWithInfo.get(probedPeerId).foreach { pwi =>
+              val updatedInfo = pwi.peerInfo.withServingSnap(serving)
+              context.become(handleMessages(peersWithInfo + (probedPeerId -> pwi.copy(peerInfo = updatedInfo))))
+            }
+          }
+
         case msg @ (_: AccountRange | _: StorageRanges | _: TrieNodes | _: ByteCodes) =>
           log.debug("Routing {} message to SNAPSyncController from peer {}", msg.getClass.getSimpleName, peerId)
           snapSyncControllerOpt.foreach(_ ! msg)
@@ -195,6 +215,24 @@ class NetworkPeerManagerActor(
         )
         peer.ref ! SendMessage(getBlockHeadersMsg)
       }
+      // Probe snap/1 peers to verify they actually serve SNAP data (Besu SnapServerChecker pattern)
+      if (peerInfo.remoteStatus.supportsSnap) {
+        val probeRequestId = SnapServerChecker.sendProbe(peer.ref, peerInfo.remoteStatus.bestHash, peer.id)
+        log.info(
+          "SNAP_PROBE_SENT: Probing peer {} for snap serving capability (requestId={}, stateRoot={})",
+          peer.id,
+          probeRequestId,
+          ByteStringUtils.hash2string(peerInfo.remoteStatus.bestHash)
+        )
+        // Schedule timeout
+        import context.dispatcher
+        context.system.scheduler.scheduleOnce(
+          SnapServerChecker.ProbeTimeoutMillis.millis,
+          self,
+          SnapProbeTimeout(probeRequestId)
+        )
+      }
+
       NetworkMetrics.registerAddHandshakedPeer(peer)
       context.become(handleMessages(peersWithInfo + (peer.id -> PeerWithInfo(peer, peerInfo))))
 
@@ -203,6 +241,12 @@ class NetworkPeerManagerActor(
       peerEventBusActor ! Unsubscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peerId)))
       NetworkMetrics.registerRemoveHandshakedPeer(peersWithInfo(peerId).peer)
       context.become(handleMessages(peersWithInfo - peerId))
+
+    case SnapProbeTimeout(requestId) =>
+      SnapServerChecker.cancelProbe(requestId).foreach { peerId =>
+        log.info("SNAP_PROBE_TIMEOUT: peer={} did not respond to snap probe within {}ms", peerId, SnapServerChecker.ProbeTimeoutMillis)
+        // Peer stays isServingSnap=false (default) — will be excluded from snap peer selection
+      }
 
   }
 
@@ -619,7 +663,8 @@ object NetworkPeerManagerActor {
       chainWeight: ChainWeight,
       forkAccepted: Boolean,
       maxBlockNumber: BigInt,
-      bestBlockHash: ByteString
+      bestBlockHash: ByteString,
+      isServingSnap: Boolean = false // Verified by SnapServerChecker probe
   ) extends HandshakeResult {
 
     def withForkAccepted(forkAccepted: Boolean): PeerInfo = copy(forkAccepted = forkAccepted)
@@ -629,6 +674,8 @@ object NetworkPeerManagerActor {
 
     def withChainWeight(weight: ChainWeight): PeerInfo =
       copy(chainWeight = weight)
+
+    def withServingSnap(serving: Boolean): PeerInfo = copy(isServingSnap = serving)
 
     /** Checks if this peer is at genesis block (bestHash == genesisHash). Peers at genesis often disconnect when asked
       * for headers as they implement peer selection policies that reject genesis-only nodes.
@@ -676,6 +723,9 @@ object NetworkPeerManagerActor {
 
   /** Register the SNAPSyncController actor for message routing */
   case class RegisterSnapSyncController(snapSyncController: ActorRef)
+
+  /** Sent by scheduler when a snap server probe times out */
+  private case class SnapProbeTimeout(requestId: BigInt)
 
   def props(
       peerManagerActor: ActorRef,

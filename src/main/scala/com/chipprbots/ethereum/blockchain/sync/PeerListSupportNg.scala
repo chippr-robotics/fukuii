@@ -66,7 +66,7 @@ trait PeerListSupportNg { self: Actor with ActorLogging =>
 
   def getSnapPeerWithHighestBlock: Option[PeerWithInfo] =
     peersToDownloadFrom.values.toList
-      .filter(_.peerInfo.remoteStatus.supportsSnap)
+      .filter(p => p.peerInfo.remoteStatus.supportsSnap && p.peerInfo.isServingSnap)
       .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
       .headOption
 

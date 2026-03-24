@@ -342,7 +342,7 @@ object PeersClient {
         log.debug("Peer {} chainWeight: {}", peer.id, peerInfo.chainWeight)
         (peer, peerInfo, isReady)
       }
-      .collect { case (peer, PeerInfo(_, chainWeight, true, _, _), _) =>
+      .collect { case (peer, PeerInfo(_, chainWeight, true, _, _, _), _) =>
         log.debug("Peer {} is ready and eligible for selection", peer.id)
         log.debug("Peer {} chainWeight: {}", peer.id, chainWeight)
         (peer, chainWeight)
@@ -361,7 +361,7 @@ object PeersClient {
   // Legacy method for backward compatibility
   def bestPeer(peersToDownloadFrom: Map[PeerId, PeerWithInfo]): Option[Peer] = {
     val peersToUse = peersToDownloadFrom.values
-      .collect { case PeerWithInfo(peer, PeerInfo(_, chainWeight, true, _, _)) =>
+      .collect { case PeerWithInfo(peer, PeerInfo(_, chainWeight, true, _, _, _)) =>
         (peer, chainWeight)
       }
 

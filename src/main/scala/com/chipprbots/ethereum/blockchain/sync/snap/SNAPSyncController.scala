@@ -282,15 +282,25 @@ class SNAPSyncController(
 
     // Snap capability grace period check: if still no snap/1 peers, fall back to fast sync
     case CheckSnapCapability =>
-      val snapPeerCount = peersToDownloadFrom.count { case (_, p) =>
+      val verifiedSnapPeerCount = peersToDownloadFrom.count { case (_, p) =>
+        p.peerInfo.remoteStatus.supportsSnap && p.peerInfo.isServingSnap
+      }
+      val advertisedSnapPeerCount = peersToDownloadFrom.count { case (_, p) =>
         p.peerInfo.remoteStatus.supportsSnap
       }
-      if (snapPeerCount > 0) {
-        val effectiveConcurrency = math.min(snapSyncConfig.accountConcurrency, snapPeerCount).max(1)
+      if (verifiedSnapPeerCount > 0) {
+        val effectiveConcurrency = math.min(snapSyncConfig.accountConcurrency, verifiedSnapPeerCount).max(1)
         log.info(
-          s"Found $snapPeerCount snap-capable peer(s) during grace period, starting account range sync (concurrency=$effectiveConcurrency)"
+          s"Found $verifiedSnapPeerCount verified snap-serving peer(s) ($advertisedSnapPeerCount advertised) during grace period, " +
+            s"starting account range sync (concurrency=$effectiveConcurrency)"
         )
         stateRoot.foreach(launchAccountRangeWorkers(_, effectiveConcurrency))
+      } else if (advertisedSnapPeerCount > 0) {
+        log.warning(
+          s"$advertisedSnapPeerCount peer(s) advertise snap/1 but none verified as serving. " +
+            "Probes may still be pending. Falling back to fast sync."
+        )
+        fallbackToFastSync()
       } else {
         log.warning("No snap-capable peers found after grace period. Falling back to fast sync.")
         fallbackToFastSync()
@@ -1582,33 +1592,41 @@ class SNAPSyncController(
     */
   private def evictNonSnapPeers(): Unit = {
     val allPeers = handshakedPeers.values.toSeq
-    val snapPeerCount = allPeers.count(_.peerInfo.remoteStatus.supportsSnap)
+    val verifiedSnapPeerCount = allPeers.count(p => p.peerInfo.remoteStatus.supportsSnap && p.peerInfo.isServingSnap)
+    // Peers that advertise snap but failed/pending probe — wasting a slot
+    val fakeSnapOutgoing = allPeers
+      .filter(p => p.peerInfo.remoteStatus.supportsSnap && !p.peerInfo.isServingSnap && !p.peer.incomingConnection)
+      .sortBy(_.peer.createTimeMillis)
+    // Peers that don't advertise snap at all
     val nonSnapOutgoing = allPeers
       .filter(p => !p.peerInfo.remoteStatus.supportsSnap && !p.peer.incomingConnection)
-      .sortBy(_.peer.createTimeMillis) // oldest first
+      .sortBy(_.peer.createTimeMillis)
+    // Evict fake-snap peers first (they're wasting a slot), then non-snap peers
+    val evictionCandidates = fakeSnapOutgoing ++ nonSnapOutgoing
 
-    if (snapPeerCount >= snapSyncConfig.minSnapPeers || nonSnapOutgoing.isEmpty) {
+    if (verifiedSnapPeerCount >= snapSyncConfig.minSnapPeers || evictionCandidates.isEmpty) {
       log.debug(
-        s"SNAP peer eviction: $snapPeerCount snap peers (need ${snapSyncConfig.minSnapPeers}), " +
-          s"${nonSnapOutgoing.size} non-snap outgoing — no eviction needed"
+        s"SNAP peer eviction: $verifiedSnapPeerCount verified snap peers (need ${snapSyncConfig.minSnapPeers}), " +
+          s"${evictionCandidates.size} eviction candidates — no eviction needed"
       )
       return
     }
 
     val numToEvict = math.min(
       snapSyncConfig.maxEvictionsPerCycle,
-      math.min(nonSnapOutgoing.size, snapSyncConfig.minSnapPeers - snapPeerCount)
+      math.min(evictionCandidates.size, snapSyncConfig.minSnapPeers - verifiedSnapPeerCount)
     )
 
     if (numToEvict > 0) {
       log.info(
-        s"SNAP peer eviction: only $snapPeerCount snap peers (need ${snapSyncConfig.minSnapPeers}), " +
-          s"evicting $numToEvict of ${nonSnapOutgoing.size} non-snap outgoing peers to free slots for discovery"
+        s"SNAP peer eviction: only $verifiedSnapPeerCount verified snap peers (need ${snapSyncConfig.minSnapPeers}), " +
+          s"evicting $numToEvict (${fakeSnapOutgoing.size} fake-snap + ${nonSnapOutgoing.size} non-snap candidates)"
       )
-      nonSnapOutgoing.take(numToEvict).foreach { peerWithInfo =>
+      evictionCandidates.take(numToEvict).foreach { peerWithInfo =>
+        val snapStatus = if (peerWithInfo.peerInfo.remoteStatus.supportsSnap) "advertises-snap-not-serving" else "no-snap"
         log.info(
-          s"Evicting non-SNAP peer ${peerWithInfo.peer.id} (${peerWithInfo.peer.remoteAddress}, " +
-            s"cap=${peerWithInfo.peerInfo.remoteStatus.capability})"
+          s"Evicting peer ${peerWithInfo.peer.id} (${peerWithInfo.peer.remoteAddress}, " +
+            s"cap=${peerWithInfo.peerInfo.remoteStatus.capability}, $snapStatus)"
         )
         peerWithInfo.peer.ref ! com.chipprbots.ethereum.network.PeerActor.DisconnectPeer(
           com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.Reasons.TooManyPeers
@@ -1635,12 +1653,11 @@ class SNAPSyncController(
     }
 
   private def startAccountRangeSync(rootHash: ByteString): Unit = {
-    // Before starting workers, check if any connected peer supports the snap/1 protocol.
-    // If no peers support snap, the workers will send requests that are silently ignored,
-    // stalling sync until the 3-minute stagnation watchdog fires. Instead, check upfront
-    // and schedule a grace period for peers to connect before falling back to fast sync.
+    // Before starting workers, check if any connected peer has been verified as serving SNAP data.
+    // Peers that advertise snap/1 but fail the SnapServerChecker probe are not counted.
+    // If no verified peers exist, schedule a grace period before falling back to fast sync.
     val snapPeerCount = peersToDownloadFrom.count { case (_, p) =>
-      p.peerInfo.remoteStatus.supportsSnap
+      p.peerInfo.remoteStatus.supportsSnap && p.peerInfo.isServingSnap
     }
 
     if (snapPeerCount == 0) {

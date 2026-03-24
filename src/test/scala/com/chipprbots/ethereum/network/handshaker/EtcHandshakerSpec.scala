@@ -57,7 +57,8 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
                 chainWeight,
                 forkAccepted,
                 currentMaxBlockNumber,
-                bestBlockHash
+                bestBlockHash,
+                _
               )
             )
           ) =>
@@ -123,7 +124,8 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
                 chainWeight,
                 forkAccepted,
                 currentMaxBlockNumber,
-                bestBlockHash
+                bestBlockHash,
+                _
               )
             )
           ) =>
@@ -159,7 +161,8 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
                 chainWeight,
                 forkAccepted,
                 currentMaxBlockNumber,
-                bestBlockHash
+                bestBlockHash,
+                _
               )
             )
           ) =>
