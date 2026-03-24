@@ -10,6 +10,7 @@ import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapServerChecker
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor._
 import com.chipprbots.ethereum.network.PeerActor.DisconnectPeer
@@ -49,6 +50,7 @@ class NetworkPeerManagerActor(
     peerEventBusActor: ActorRef,
     appStateStorage: AppStateStorage,
     forkResolverOpt: Option[ForkResolver],
+    evmCodeStorage: Option[EvmCodeStorage] = None,
     initialSnapSyncControllerOpt: Option[ActorRef] = None
 ) extends Actor
     with ActorLogging {
@@ -531,14 +533,12 @@ class NetworkPeerManagerActor(
     }
   }
 
-  /** Handle incoming GetByteCodes request from a peer (server-side)
-    *
-    * @param msg
-    *   The GetByteCodes request
-    * @param peerId
-    *   The peer that sent the request
-    * @param peerWithInfo
-    *   Optional peer information
+  /** Soft response size limit for SNAP serving (2MB, matches Geth's softResponseLimit) */
+  private val MaxSnapResponseBytes: Long = 2L * 1024 * 1024
+
+  /** Handle incoming GetByteCodes request from a peer (server-side).
+    * Looks up each requested code hash in EvmCodeStorage, accumulating results
+    * until the response byte limit is reached.
     */
   private def handleGetByteCodes(
       msg: GetByteCodes,
@@ -549,17 +549,31 @@ class NetworkPeerManagerActor(
       s"Received GetByteCodes request from peer $peerId: requestId=${msg.requestId}, hashes=${msg.hashes.size}, bytes=${msg.responseBytes}"
     )
 
-    // TODO: Implement server-side bytecode retrieval
-    // 1. For each code hash, retrieve the bytecode from EvmCodeStorage
-    // 2. Send ByteCodes response (up to responseBytes limit)
-
-    // For now, send an empty response
     peerWithInfo.foreach { pwi =>
-      val emptyResponse = ByteCodes(
-        requestId = msg.requestId,
-        codes = Seq.empty
-      )
-      pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+      val responseLimit = msg.responseBytes.toLong.min(MaxSnapResponseBytes)
+      val codes = evmCodeStorage match {
+        case Some(storage) =>
+          var totalBytes = 0L
+          val builder = Seq.newBuilder[ByteString]
+          val iter = msg.hashes.iterator
+          while (iter.hasNext && totalBytes < responseLimit) {
+            storage.get(iter.next()) match {
+              case Some(code) =>
+                builder += code
+                totalBytes += code.length
+              case None => // skip missing codes
+            }
+          }
+          val result = builder.result()
+          log.debug(
+            s"GetByteCodes response for peer $peerId: ${result.size}/${msg.hashes.size} codes found, $totalBytes bytes"
+          )
+          result
+        case None =>
+          log.debug(s"GetByteCodes: no EvmCodeStorage available, returning empty response to peer $peerId")
+          Seq.empty
+      }
+      pwi.peer.ref ! PeerActor.SendMessage(ByteCodes(msg.requestId, codes))
     }
   }
 
@@ -732,6 +746,7 @@ object NetworkPeerManagerActor {
       peerEventBusActor: ActorRef,
       appStateStorage: AppStateStorage,
       forkResolverOpt: Option[ForkResolver],
+      evmCodeStorage: Option[EvmCodeStorage] = None,
       snapSyncControllerOpt: Option[ActorRef] = None
   ): Props =
     Props(
@@ -740,6 +755,7 @@ object NetworkPeerManagerActor {
         peerEventBusActor,
         appStateStorage,
         forkResolverOpt,
+        evmCodeStorage,
         snapSyncControllerOpt
       )
     )

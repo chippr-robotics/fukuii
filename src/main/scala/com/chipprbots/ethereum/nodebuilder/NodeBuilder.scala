@@ -328,7 +328,13 @@ trait NetworkPeerManagerActorBuilder {
 
   lazy val networkPeerManager: ActorRef = system.actorOf(
     NetworkPeerManagerActor
-      .props(peerManager, peerEventBus, storagesInstance.storages.appStateStorage, forkResolverOpt),
+      .props(
+        peerManager,
+        peerEventBus,
+        storagesInstance.storages.appStateStorage,
+        forkResolverOpt,
+        Some(storagesInstance.storages.evmCodeStorage)
+      ),
     "network-peer-manager"
   )
 
