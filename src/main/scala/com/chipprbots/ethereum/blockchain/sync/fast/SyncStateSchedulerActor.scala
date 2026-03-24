@@ -243,19 +243,25 @@ class SyncStateSchedulerActor(
       initialStats: ProcessingStatistics,
       initiator: ActorRef
   ): Unit = {
-    timers.startTimerAtFixedRate(PrintInfoKey, PrintInfo, 30.seconds)
-    timers.startTimerAtFixedRate(TuneRateTrackerKey, TuneRateTracker, 5.seconds)
     log.info("Starting state sync to root {} on block {}", ByteStringUtils.hash2string(root), bn)
-    // TODO handle case when we already have root i.e state is synced up to this point
-    val initState = sync.initState(root).getOrElse {
-      throw new IllegalStateException(s"Failed to initialize state sync for root ${ByteStringUtils.hash2string(root)}")
+    sync.initState(root) match {
+      case Some(initState) =>
+        timers.startTimerAtFixedRate(PrintInfoKey, PrintInfo, 30.seconds)
+        timers.startTimerAtFixedRate(TuneRateTrackerKey, TuneRateTracker, 5.seconds)
+        context.become(
+          syncing(
+            SyncSchedulerActorState.initial(initState, initialStats, bn, initiator)
+          )
+        )
+        self ! Sync
+      case None =>
+        log.info(
+          "State root {} already present in storage — skipping state download",
+          ByteStringUtils.hash2string(root)
+        )
+        initiator ! StateSyncFinished
+        context.become(idle(initialStats))
     }
-    context.become(
-      syncing(
-        SyncSchedulerActorState.initial(initState, initialStats, bn, initiator)
-      )
-    )
-    self ! Sync
   }
 
   def idle(processingStatistics: ProcessingStatistics): Receive = handlePeerListMessages.orElse {
