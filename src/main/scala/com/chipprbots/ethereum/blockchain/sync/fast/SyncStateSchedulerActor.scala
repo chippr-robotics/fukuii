@@ -12,6 +12,7 @@ import cats.data.NonEmptyList
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
+import scala.collection.mutable
 import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
@@ -29,6 +30,7 @@ import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.Processin
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.SchedulerState
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.SyncResponse
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor._
+import com.chipprbots.ethereum.blockchain.sync.snap.PeerRateTracker
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.mpt.HexPrefix
@@ -78,6 +80,23 @@ class SyncStateSchedulerActor(
     )
   )
 
+  /** Adaptive per-peer rate tracker (Geth msgrate port). Computes adaptive timeouts and per-peer request capacities
+    * based on EMA-smoothed RTT measurements.
+    */
+  private val rateTracker = new PeerRateTracker()
+
+  /** Maps PeerRequestHandler actor refs to their requestIds for response correlation. */
+  private val handlerToRequestId = mutable.Map[ActorRef, Long]()
+
+  /** Maximum concurrent in-flight requests per peer. Matches SNAP coordinator pipelining (5 concurrent requests per
+    * peer eliminates idle time between request send and response processing).
+    */
+  private val MaxInFlightPerPeer: Int = 5
+
+  /** Track consecutive sync cycles with zero ETH63-67 peers (all ETH68/SNAP only). */
+  private var noCompatiblePeersCount: Int = 0
+  private val NoCompatiblePeersThreshold: Int = 5
+
   /** Check if a capability supports GetNodeData message. GetNodeData is available in ETH63-67 but removed in ETH68 per
     * EIP-4938. SNAP protocol uses different messages (GetAccountRange, etc.) and doesn't support GetNodeData.
     *
@@ -95,26 +114,57 @@ class SyncStateSchedulerActor(
     case Capability.SNAP1                                                                             => false
   }
 
-  /** Find free peers that can serve state nodes via either GetNodeData (ETH66/67) or GetTrieNodes (SNAP). On modern ETC
-    * networks, most peers negotiate ETH68 which doesn't support GetNodeData. These peers typically also support snap/1,
-    * so we can use GetTrieNodes with nibble paths instead.
+  /** Find free peers with available pipelining slots that can serve state nodes via GetNodeData (ETH63-67) or
+    * GetTrieNodes (SNAP).
+    *
+    * Compatible peers = ETH63-67 OR SNAP-capable. Returns a list where each peer appears once per available pipelining
+    * slot (up to MaxInFlightPerPeer), enabling the existing assignTasksToPeers loop to assign multiple batches per peer.
     */
   private def getFreePeers(state: DownloaderState): List[Peer] = {
-    val freePeers = peersToDownloadFrom.collect {
-      case (_, PeerWithInfo(peer, peerInfo))
-          if !state.activeRequests.contains(peer.id) &&
-            (supportsGetNodeData(peerInfo.remoteStatus.capability) || peerInfo.remoteStatus.supportsSnap) =>
-        peer
-    }.toList
+    val (compatiblePeersWithSlots, incompatibleCount) =
+      peersToDownloadFrom.foldLeft((List.empty[Peer], 0)) {
+        case ((slots, inCount), (_, PeerWithInfo(peer, peerInfo))) =>
+          if (supportsGetNodeData(peerInfo.remoteStatus.capability) || peerInfo.remoteStatus.supportsSnap) {
+            val inFlight = state.inFlightCount(peer.id)
+            val availableSlots = (MaxInFlightPerPeer - inFlight).max(0)
+            (List.fill(availableSlots)(peer) ::: slots, inCount)
+          } else {
+            (slots, inCount + 1) // Incompatible peer
+          }
+      }
 
-    if (freePeers.isEmpty && peersToDownloadFrom.nonEmpty) {
+    if (compatiblePeersWithSlots.isEmpty && peersToDownloadFrom.nonEmpty) {
       log.debug(
-        "No free peers for state download ({} total, {} with active requests)",
-        peersToDownloadFrom.size,
-        state.activeRequests.size
+        "Filtered out {} peers not supporting GetNodeData or SNAP. {} peer slots available for state sync.",
+        incompatibleCount,
+        compatiblePeersWithSlots.size
       )
     }
-    freePeers
+
+    // Track consecutive cycles with no compatible peers
+    if (compatiblePeersWithSlots.isEmpty && incompatibleCount > 0) {
+      noCompatiblePeersCount += 1
+      log.warning(
+        "No compatible peers available for GetNodeData/SNAP ({} consecutive cycles). {} incompatible peers present.",
+        noCompatiblePeersCount,
+        incompatibleCount
+      )
+      if (noCompatiblePeersCount >= NoCompatiblePeersThreshold) {
+        log.warning(
+          "No compatible peers for {} consecutive cycles (threshold: {}). Network appears incompatible. Signaling NetworkIncompatible.",
+          noCompatiblePeersCount,
+          NoCompatiblePeersThreshold
+        )
+        noCompatiblePeersCount = 0
+        context.parent ! NetworkIncompatible
+      }
+      List.empty
+    } else {
+      if (compatiblePeersWithSlots.nonEmpty) {
+        noCompatiblePeersCount = 0
+      }
+      compatiblePeersWithSlots
+    }
   }
 
   /** Check if a specific peer should use SNAP GetTrieNodes instead of GetNodeData */
@@ -125,11 +175,14 @@ class SyncStateSchedulerActor(
 
   private def requestNodes(request: PeerRequest): ActorRef = {
     val useSnap = peerUsesSnap(request.peer)
+    val timeout = rateTracker.targetTimeout()
     log.debug(
-      "Requesting {} nodes from peer {} via {}",
+      "Requesting {} nodes from peer {} via {} (requestId={}, timeout={}s)",
       request.nodes.size,
       request.peer.id,
-      if (useSnap) "GetTrieNodes" else "GetNodeData"
+      if (useSnap) "GetTrieNodes" else "GetNodeData",
+      request.requestId,
+      timeout.toSeconds
     )
 
     val handler = if (useSnap && currentStateRoot.nonEmpty) {
@@ -150,7 +203,7 @@ class SyncStateSchedulerActor(
       context.actorOf(
         PeerRequestHandler.props[GetTrieNodes, TrieNodes](
           request.peer,
-          syncConfig.peerResponseTimeout,
+          timeout,
           networkPeerManager,
           peerEventBus,
           requestMsg = GetTrieNodes(
@@ -163,11 +216,11 @@ class SyncStateSchedulerActor(
         )
       )
     } else {
-      // Original GetNodeData path for ETH66/67 peers
+      // GetNodeData path for ETH63-67 peers
       context.actorOf(
         PeerRequestHandler.props[GetNodeData, NodeData](
           request.peer,
-          syncConfig.peerResponseTimeout,
+          timeout,
           networkPeerManager,
           peerEventBus,
           requestMsg = GetNodeData(request.nodes.toList),
@@ -175,15 +228,28 @@ class SyncStateSchedulerActor(
         )
       )
     }
-    context.watchWith(handler, RequestTerminated(request.peer))
+    handlerToRequestId(handler) = request.requestId
+    context.watchWith(handler, RequestTerminated(request.peer, request.requestId))
   }
 
   def handleRequestResults: Receive = {
     case ResponseReceived(peer, nodeData: NodeData, timeTaken) =>
       log.debug("Received {} state nodes via GetNodeData in {} ms", nodeData.values.size, timeTaken)
       FastSyncMetrics.setMptStateDownloadTime(timeTaken)
-      context.unwatch(sender())
-      self ! RequestData(nodeData, peer)
+
+      val handlerRef = sender()
+      context.unwatch(handlerRef)
+      val requestId = handlerToRequestId.remove(handlerRef).getOrElse(-1L)
+
+      // Track measurement for adaptive timeouts
+      rateTracker.update(
+        peer.id.value,
+        PeerRateTracker.MsgGetNodeData,
+        timeTaken,
+        nodeData.values.size
+      )
+
+      self ! RequestData(nodeData, peer, requestId)
 
     case ResponseReceived(peer, trieNodes: TrieNodes, timeTaken) =>
       // Convert SNAP TrieNodes response to NodeData format.
@@ -195,12 +261,21 @@ class SyncStateSchedulerActor(
       self ! RequestData(asNodeData, peer)
 
     case PeerRequestHandler.RequestFailed(peer, reason) =>
-      context.unwatch(sender())
-      log.debug("Request to peer {} failed due to {}", peer.id, reason)
-      self ! RequestFailed(peer, reason)
-    case RequestTerminated(peer) =>
-      log.debug("Request to {} terminated", peer.id)
-      self ! RequestFailed(peer, "Peer disconnected in the middle of request")
+      val handlerRef = sender()
+      context.unwatch(handlerRef)
+      val requestId = handlerToRequestId.remove(handlerRef).getOrElse(-1L)
+      log.debug("Request {} to peer {} failed due to {}", requestId, peer.id, reason)
+
+      // Track failure (items=0 slashes capacity)
+      rateTracker.update(peer.id.value, PeerRateTracker.MsgGetNodeData, 0, 0)
+
+      self ! RequestFailed(peer, reason, requestId)
+
+    case RequestTerminated(peer, requestId) =>
+      log.debug("Request {} to {} terminated", requestId, peer.id)
+      // Handler may already be removed if response/failure was processed first
+      handlerToRequestId.remove(sender())
+      self ! RequestFailed(peer, "Peer disconnected in the middle of request", requestId)
   }
 
   private val loadingCancelable = sync.loadFilterFromBlockchain.attempt
@@ -254,6 +329,7 @@ class SyncStateSchedulerActor(
       initiator: ActorRef
   ): Unit = {
     timers.startTimerAtFixedRate(PrintInfoKey, PrintInfo, 30.seconds)
+    timers.startTimerAtFixedRate(TuneRateTrackerKey, TuneRateTracker, 5.seconds)
     currentStateRoot = root
     consecutiveUselessResponses = 0
     uselessResponseRetryState = uselessResponseRetryState.reset
@@ -278,6 +354,7 @@ class SyncStateSchedulerActor(
       sender() ! WaitingForNewTargetBlock
     case PrintInfo =>
       log.info("Waiting for target block to start the state sync")
+    case TuneRateTracker => // Ignore tune ticks when idle
   }
 
   private def finalizeSync(
@@ -288,10 +365,12 @@ class SyncStateSchedulerActor(
       val finalState = sync.persistBatch(state.currentSchedulerState, state.targetBlock)
       reportStats(state.syncInitiator, state.currentStats.addSaved(state.memBatch.size), finalState)
       state.syncInitiator ! StateSyncFinished
+      timers.cancel(TuneRateTrackerKey)
       context.become(idle(ProcessingStatistics()))
     } else {
       log.info("Finalizing the state sync")
       state.syncInitiator ! StateSyncFinished
+      timers.cancel(TuneRateTrackerKey)
       context.become(idle(ProcessingStatistics()))
     }
 
@@ -300,8 +379,9 @@ class SyncStateSchedulerActor(
       requestResult: RequestResult
   ): ProcessingResult =
     requestResult match {
-      case RequestData(nodeData, from) =>
-        val (resp, newDownloaderState) = currentState.currentDownloaderState.handleRequestSuccess(from, nodeData)
+      case RequestData(nodeData, from, requestId) =>
+        val (resp, newDownloaderState) =
+          currentState.currentDownloaderState.handleRequestSuccess(requestId, nodeData)
         resp match {
           case UnrequestedResponse =>
             ProcessingResult(
@@ -321,9 +401,9 @@ class SyncStateSchedulerActor(
                 )
             }
         }
-      case RequestFailed(from, reason) =>
-        log.debug("Processing failed request from {}. Failure reason {}", from, reason)
-        val newDownloaderState = currentState.currentDownloaderState.handleRequestFailure(from)
+      case RequestFailed(from, reason, requestId) =>
+        log.debug("Processing failed request {} from {}. Failure reason {}", requestId, from, reason)
+        val newDownloaderState = currentState.currentDownloaderState.handleRequestFailure(requestId)
         ProcessingResult(
           Left(DownloaderError(newDownloaderState, from, Some(BlacklistReason.FastSyncRequestFailed(reason))))
         )
@@ -338,6 +418,7 @@ class SyncStateSchedulerActor(
     log.debug("Starting request sequence")
     sync.persistBatch(currentState, targetBlock)
     restartRequester ! WaitingForNewTargetBlock
+    timers.cancel(TuneRateTrackerKey)
     context.become(idle(currentStats.addSaved(currentState.memBatch.size)))
   }
 
@@ -349,7 +430,7 @@ class SyncStateSchedulerActor(
         (currentState.getRequestToProcess, NonEmptyList.fromList(freePeers)) match {
           case (Some((nodes, newState)), Some(peers)) =>
             log.debug(
-              "Got {} peer responses remaining to process, and there are {} idle peers available",
+              "Got {} peer responses remaining to process, and there are {} peer slots available",
               newState.numberOfRemainingRequests,
               peers.size
             )
@@ -361,7 +442,7 @@ class SyncStateSchedulerActor(
 
           case (Some((nodes, newState)), None) =>
             log.debug(
-              "Got {} peer responses remaining to process, but there are no idle peers to assign new tasks",
+              "Got {} peer responses remaining to process, but there are no peer slots to assign new tasks",
               newState.numberOfRemainingRequests
             )
             // we do not have any peers and cannot assign new tasks, but we can still process remaining requests
@@ -369,18 +450,18 @@ class SyncStateSchedulerActor(
             context.become(syncing(newState))
 
           case (None, Some(peers)) =>
-            log.debug("There no responses to process, but there are {} free peers to assign new tasks", peers.size)
+            log.debug("There no responses to process, but there are {} free peer slots to assign new tasks", peers.size)
             val (requests, newState) = currentState.assignTasksToPeers(peers, syncConfig.nodesPerRequest)
             requests.foreach(req => requestNodes(req))
             context.become(syncing(newState.finishProcessing))
 
           case (None, None) =>
             log.debug(
-              "There no responses to process, and no free peers to assign new tasks. There are" +
+              "There no responses to process, and no free peer slots. There are" +
                 "{} active requests in flight",
-              currentState.activePeerRequests.size
+              currentState.activeRequestCount
             )
-            if (currentState.activePeerRequests.isEmpty) {
+            if (currentState.activeRequestCount == 0) {
               // we are not processing anything, and there are no free peers and we not waiting for any requests in flight
               // reschedule sync check
               timers.startSingleTimer(SyncKey, Sync, syncConfig.syncRetryInterval)
@@ -492,8 +573,18 @@ class SyncStateSchedulerActor(
             }
         }
 
+      case TuneRateTracker =>
+        rateTracker.tune()
+
       case PrintInfo =>
         log.info("{}", currentState)
+        log.info(
+          "PeerRateTracker: timeout={}s, medianRTT={}ms, confidence={}, tracked peers={}",
+          rateTracker.targetTimeout().toSeconds,
+          rateTracker.currentMedianRTT,
+          "%.3f".format(rateTracker.currentConfidence),
+          rateTracker.peerCount
+        )
     }
 
   override def receive: Receive = waitingForBloomFilterToLoad(None)
@@ -512,6 +603,9 @@ object SyncStateSchedulerActor {
   // Besu: PipelineChainDownloader.PAUSE_AFTER_ERROR_DURATION = 2s.
   // Base delay for exponential backoff on InvalidStateResponse errors.
   val PauseAfterErrorDuration: FiniteDuration = 2.seconds
+
+  case object TuneRateTrackerKey
+  case object TuneRateTracker
 
   private def reportStats(
       to: ActorRef,
@@ -557,8 +651,8 @@ object SyncStateSchedulerActor {
   final case class BloomFilterResult(res: BloomFilterLoadingResult)
 
   sealed trait RequestResult
-  final case class RequestData(nodeData: NodeData, from: Peer) extends RequestResult
-  final case class RequestFailed(from: Peer, reason: String) extends RequestResult
+  final case class RequestData(nodeData: NodeData, from: Peer, requestId: Long) extends RequestResult
+  final case class RequestFailed(from: Peer, reason: String, requestId: Long) extends RequestResult
 
   sealed trait ProcessingError
   final case class Critical(er: CriticalError) extends ProcessingError
@@ -574,11 +668,12 @@ object SyncStateSchedulerActor {
       processingStats: ProcessingStatistics
   )
 
-  final case class RequestTerminated(to: Peer)
+  final case class RequestTerminated(to: Peer, requestId: Long)
 
   final case class PeerRequest(
       peer: Peer,
       nodes: NonEmptyList[ByteString],
+      requestId: Long,
       pathInfo: Map[ByteString, (Seq[Byte], Option[ByteString])] = Map.empty
   )
 
