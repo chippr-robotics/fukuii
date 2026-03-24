@@ -334,7 +334,8 @@ trait NetworkPeerManagerActorBuilder {
         storagesInstance.storages.appStateStorage,
         forkResolverOpt,
         Some(storagesInstance.storages.evmCodeStorage),
-        Some(storagesInstance.storages.nodeStorage)
+        Some(storagesInstance.storages.nodeStorage),
+        Some(storagesInstance.storages.flatAccountStorage)
       ),
     "network-peer-manager"
   )

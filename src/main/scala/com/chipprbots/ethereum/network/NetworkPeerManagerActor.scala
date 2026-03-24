@@ -11,7 +11,9 @@ import scala.concurrent.duration._
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapServerChecker
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.FlatAccountStorage
 import com.chipprbots.ethereum.db.storage.NodeStorage
+import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt._
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor._
@@ -54,6 +56,7 @@ class NetworkPeerManagerActor(
     forkResolverOpt: Option[ForkResolver],
     evmCodeStorage: Option[EvmCodeStorage] = None,
     nodeStorage: Option[NodeStorage] = None,
+    flatAccountStorage: Option[FlatAccountStorage] = None,
     initialSnapSyncControllerOpt: Option[ActorRef] = None
 ) extends Actor
     with ActorLogging {
@@ -445,27 +448,76 @@ class NetworkPeerManagerActor(
       peerId: PeerId,
       peerWithInfo: Option[PeerWithInfo]
   ): Unit = {
-    // Note: This is an optional server-side implementation
-    // Fukuii primarily acts as a client, so we log and ignore for now
     log.debug(
       s"Received GetAccountRange request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, start=${msg.startingHash.take(4).toHex}, limit=${msg.limitHash.take(4).toHex}, bytes=${msg.responseBytes}"
     )
 
-    // TODO: Implement server-side account range retrieval
-    // 1. Verify we have the requested state root
-    // 2. Retrieve accounts from startingHash to limitHash (up to responseBytes)
-    // 3. Generate Merkle proofs for the range
-    // 4. Send AccountRange response
-
-    // For now, send an empty response to indicate we don't serve SNAP data
     peerWithInfo.foreach { pwi =>
-      val emptyResponse = AccountRange(
-        requestId = msg.requestId,
-        accounts = Seq.empty,
-        proof = Seq.empty
-      )
-      pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+      val responseLimit = msg.responseBytes.toLong.min(MaxSnapResponseBytes)
+      flatAccountStorage match {
+        case Some(storage) =>
+          import cats.effect.unsafe.IORuntime
+          implicit val runtime: IORuntime = IORuntime.global
+          val accounts = storage
+            .seekFrom(msg.startingHash)
+            .collect { case Right((key, value)) => (key, value) }
+            .takeWhile { case (key, _) =>
+              // Stop when key exceeds limitHash (unsigned byte comparison)
+              compareByteStrings(key, msg.limitHash) <= 0
+            }
+            .through(accumulateWithByteLimit(responseLimit))
+            .compile
+            .toVector
+            .unsafeRunSync()
+
+          val accountPairs: Seq[(ByteString, Account)] = accounts.flatMap { case (hash, rlpBytes) =>
+            Account(rlpBytes).toOption.map(acc => (hash, acc))
+          }
+          log.debug(
+            s"GetAccountRange response for peer $peerId: ${accountPairs.size} accounts"
+          )
+          pwi.peer.ref ! PeerActor.SendMessage(AccountRange(msg.requestId, accountPairs, Seq.empty))
+
+        case None =>
+          log.debug(s"GetAccountRange: no FlatAccountStorage available, returning empty response to peer $peerId")
+          pwi.peer.ref ! PeerActor.SendMessage(AccountRange(msg.requestId, Seq.empty, Seq.empty))
+      }
     }
+  }
+
+  /** fs2 Pipe that accumulates (key, value) pairs until the byte limit is reached.
+    * Allows one entry to overshoot (Besu's ExceedingPredicate pattern).
+    */
+  private def accumulateWithByteLimit(
+      maxBytes: Long
+  ): fs2.Pipe[cats.effect.IO, (ByteString, ByteString), (ByteString, ByteString)] = { stream =>
+    stream.scanChunks(0L) { (totalBytes, chunk) =>
+      if (totalBytes >= maxBytes) {
+        (totalBytes, fs2.Chunk.empty)
+      } else {
+        val builder = Vector.newBuilder[(ByteString, ByteString)]
+        var bytes = totalBytes
+        val iter = chunk.iterator
+        while (iter.hasNext && bytes < maxBytes) {
+          val pair = iter.next()
+          bytes += pair._1.length + pair._2.length
+          builder += pair
+        }
+        (bytes, fs2.Chunk.from(builder.result()))
+      }
+    }
+  }
+
+  /** Unsigned lexicographic comparison of two ByteStrings (used for hash range checks). */
+  private def compareByteStrings(a: ByteString, b: ByteString): Int = {
+    val minLen = math.min(a.length, b.length)
+    var i = 0
+    while (i < minLen) {
+      val diff = (a(i) & 0xff) - (b(i) & 0xff)
+      if (diff != 0) return diff
+      i += 1
+    }
+    a.length - b.length
   }
 
   /** Handle incoming GetStorageRanges request from a peer (server-side)
@@ -974,6 +1026,7 @@ object NetworkPeerManagerActor {
       forkResolverOpt: Option[ForkResolver],
       evmCodeStorage: Option[EvmCodeStorage] = None,
       nodeStorage: Option[NodeStorage] = None,
+      flatAccountStorage: Option[FlatAccountStorage] = None,
       snapSyncControllerOpt: Option[ActorRef] = None
   ): Props =
     Props(
@@ -984,6 +1037,7 @@ object NetworkPeerManagerActor {
         forkResolverOpt,
         evmCodeStorage,
         nodeStorage,
+        flatAccountStorage,
         snapSyncControllerOpt
       )
     )
