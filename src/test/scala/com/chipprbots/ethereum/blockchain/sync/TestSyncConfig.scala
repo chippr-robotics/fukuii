@@ -55,7 +55,8 @@ trait TestSyncConfig extends SyncConfigBuilder {
     maxBodyFetchRetries = 10,
     maxSnapFastCycleTransitions = 3,
     useBootstrapCheckpoints = false,
-    bootstrapCheckpoints = Seq.empty
+    bootstrapCheckpoints = Seq.empty,
+    snapServerEnabled = false
   )
 
   override lazy val syncConfig: SyncConfig = defaultSyncConfig

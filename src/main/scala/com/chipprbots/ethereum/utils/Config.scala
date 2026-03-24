@@ -180,7 +180,8 @@ object Config {
       maxBodyFetchRetries: Int,
       maxSnapFastCycleTransitions: Int,
       useBootstrapCheckpoints: Boolean,
-      bootstrapCheckpoints: Seq[(BigInt, String)] // (blockNumber, blockHash)
+      bootstrapCheckpoints: Seq[(BigInt, String)], // (blockNumber, blockHash)
+      snapServerEnabled: Boolean
   )
 
   object SyncConfig {
@@ -273,7 +274,11 @@ object Config {
                 case _ => None
               }
             }
-          } else Seq.empty
+          } else Seq.empty,
+        snapServerEnabled =
+          if (syncConfig.hasPath("snap-server-enabled"))
+            syncConfig.getBoolean("snap-server-enabled")
+          else false
       )
     }
   }

@@ -324,22 +324,27 @@ trait NetworkPeerManagerActorBuilder {
     with PeerManagerActorBuilder
     with PeerEventBusBuilder
     with ForkResolverBuilder
-    with StorageBuilder =>
+    with StorageBuilder
+    with SyncConfigBuilder =>
 
-  lazy val networkPeerManager: ActorRef = system.actorOf(
-    NetworkPeerManagerActor
-      .props(
-        peerManager,
-        peerEventBus,
-        storagesInstance.storages.appStateStorage,
-        forkResolverOpt,
-        Some(storagesInstance.storages.evmCodeStorage),
-        Some(storagesInstance.storages.nodeStorage),
-        Some(storagesInstance.storages.flatAccountStorage),
-        Some(storagesInstance.storages.flatSlotStorage)
-      ),
-    "network-peer-manager"
-  )
+  lazy val networkPeerManager: ActorRef = {
+    // Only pass SNAP serving storage references when snap-server-enabled = true
+    val snapServing = syncConfig.snapServerEnabled
+    system.actorOf(
+      NetworkPeerManagerActor
+        .props(
+          peerManager,
+          peerEventBus,
+          storagesInstance.storages.appStateStorage,
+          forkResolverOpt,
+          Some(storagesInstance.storages.evmCodeStorage),
+          if (snapServing) Some(storagesInstance.storages.nodeStorage) else None,
+          if (snapServing) Some(storagesInstance.storages.flatAccountStorage) else None,
+          if (snapServing) Some(storagesInstance.storages.flatSlotStorage) else None
+        ),
+      "network-peer-manager"
+    )
+  }
 
 }
 
