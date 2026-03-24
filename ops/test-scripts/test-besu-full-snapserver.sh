@@ -40,6 +40,7 @@ exec "$BINARY" \
   --p2p-port=30304 \
   --data-storage-format=BONSAI \
   --sync-mode=FULL \
+  --sync-min-peers=1 \
   --snapsync-server-enabled \
   --bootnodes="$COREGETH_ENODE" \
   --logging=INFO
