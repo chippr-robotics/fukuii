@@ -90,7 +90,7 @@ class SyncStateDownloaderStateSpec
     assert(requests.forall(req => req.nodes.size == perPeerCapacity))
 
     val (handlingResult, newState2) =
-      newState1.handleRequestSuccess(requests(0).peer, NodeData(requests(0).nodes.map(h => hashNodeMap(h)).toList))
+      newState1.handleRequestSuccess(requests(0).requestId, NodeData(requests(0).nodes.map(h => hashNodeMap(h)).toList))
 
     val usefulData: UsefulData = expectUsefulData(handlingResult)
     assert(usefulData.responses.size == perPeerCapacity)
@@ -98,14 +98,14 @@ class SyncStateDownloaderStateSpec
     assert(newState2.activeRequests.size == 2)
 
     val (handlingResult1, newState3) =
-      newState2.handleRequestSuccess(requests(1).peer, NodeData(requests(1).nodes.map(h => hashNodeMap(h)).toList))
+      newState2.handleRequestSuccess(requests(1).requestId, NodeData(requests(1).nodes.map(h => hashNodeMap(h)).toList))
     val usefulData1: UsefulData = expectUsefulData(handlingResult1)
     assert(usefulData1.responses.size == perPeerCapacity)
     assert(requests(1).nodes.forall(h => !newState3.nodesToGet.contains(h)))
     assert(newState3.activeRequests.size == 1)
 
     val (handlingResult2, newState4) =
-      newState3.handleRequestSuccess(requests(2).peer, NodeData(requests(2).nodes.map(h => hashNodeMap(h)).toList))
+      newState3.handleRequestSuccess(requests(2).requestId, NodeData(requests(2).nodes.map(h => hashNodeMap(h)).toList))
 
     val usefulData2: UsefulData = expectUsefulData(handlingResult2)
     assert(usefulData2.responses.size == perPeerCapacity)
@@ -113,15 +113,16 @@ class SyncStateDownloaderStateSpec
     assert(newState4.activeRequests.isEmpty)
   }
 
-  it should "ignore responses from not requested peers" taggedAs (UnitTest, SyncTest) in new TestSetup {
+  it should "ignore responses from unknown requests" taggedAs (UnitTest, SyncTest) in new TestSetup {
     val perPeerCapacity = 20
     val newState: DownloaderState = initialState.scheduleNewNodesForRetrieval(potentialNodesHashes)
     val (requests, newState1) = newState.assignTasksToPeers(peers, None, nodesPerPeerCapacity = perPeerCapacity)
     assert(requests.size == 3)
     assert(requests.forall(req => req.nodes.size == perPeerCapacity))
 
+    // Use a requestId that doesn't exist
     val (handlingResult, newState2) =
-      newState1.handleRequestSuccess(notKnownPeer, NodeData(requests(0).nodes.map(h => hashNodeMap(h)).toList))
+      newState1.handleRequestSuccess(999L, NodeData(requests(0).nodes.map(h => hashNodeMap(h)).toList))
     assert(handlingResult == UnrequestedResponse)
     // check that all requests are unchanged
     assert(newState2.activeRequests.size == 3)
@@ -137,7 +138,7 @@ class SyncStateDownloaderStateSpec
     assert(requests.size == 3)
     assert(requests.forall(req => req.nodes.size == perPeerCapacity))
 
-    val (handlingResult, newState2) = newState1.handleRequestSuccess(requests(0).peer, NodeData(Seq()))
+    val (handlingResult, newState2) = newState1.handleRequestSuccess(requests(0).requestId, NodeData(Seq()))
     assert(handlingResult == NoUsefulDataInResponse)
     assert(newState2.activeRequests.size == 2)
     // hashes are still in download queue but they are free to graby other peers
@@ -161,7 +162,8 @@ class SyncStateDownloaderStateSpec
     val peerRequest = requests.head
     val goodResponse: List[ByteString] = peerRequest.nodes.toList.take(perPeerCapacity / 2).map(h => hashNodeMap(h))
     val badResponse: List[ByteString] = (200 until 210).map(ByteString(_)).toList
-    val (result, newState2) = newState1.handleRequestSuccess(requests(0).peer, NodeData(goodResponse ++ badResponse))
+    val (result, newState2) =
+      newState1.handleRequestSuccess(requests(0).requestId, NodeData(goodResponse ++ badResponse))
 
     val usefulData: UsefulData = expectUsefulData(result)
     assert(usefulData.responses.size == perPeerCapacity / 2)
@@ -239,6 +241,33 @@ class SyncStateDownloaderStateSpec
     assert(delivered == List(responses(2), responses(3)))
   }
 
+  it should "track in-flight requests per peer" taggedAs (UnitTest, SyncTest) in new TestSetup {
+    val perPeerCapacity = 20
+    val newState: DownloaderState = initialState.scheduleNewNodesForRetrieval(potentialNodesHashes)
+    val (requests, newState1) = newState.assignTasksToPeers(peers, None, nodesPerPeerCapacity = perPeerCapacity)
+    assert(requests.size == 3)
+    assert(newState1.inFlightCount(peer1.id) == 1)
+    assert(newState1.inFlightCount(peer2.id) == 1)
+    assert(newState1.inFlightCount(peer3.id) == 1)
+    assert(newState1.inFlightCount(notKnownPeer.id) == 0)
+
+    // After handling one request, that peer's count drops
+    val (_, newState2) =
+      newState1.handleRequestSuccess(requests(0).requestId, NodeData(requests(0).nodes.map(h => hashNodeMap(h)).toList))
+    assert(newState2.inFlightCount(requests(0).peer.id) == 0)
+    assert(newState2.inFlightCount(peer2.id) == 1)
+  }
+
+  it should "generate unique requestIds across assignments" taggedAs (UnitTest, SyncTest) in new TestSetup {
+    val perPeerCapacity = 20
+    val newState: DownloaderState = initialState.scheduleNewNodesForRetrieval(potentialNodesHashes)
+    val (requests, newState1) = newState.assignTasksToPeers(peers, None, nodesPerPeerCapacity = perPeerCapacity)
+    val requestIds = requests.map(_.requestId)
+    assert(requestIds.distinct.size == requestIds.size) // All unique
+    assert(requestIds == Seq(0L, 1L, 2L)) // Sequential from 0
+    assert(newState1.nextRequestId == 3L) // Counter advanced
+  }
+
   trait TestSetup {
     def expectUsefulData(result: ResponseProcessingResult): UsefulData =
       result match {
@@ -252,7 +281,7 @@ class SyncStateDownloaderStateSpec
     val ref3: ActorRef = TestProbe().ref
     val ref4: ActorRef = TestProbe().ref
 
-    val initialState: DownloaderState = DownloaderState(Map.empty, Map.empty)
+    val initialState: DownloaderState = DownloaderState()
     val peer1: Peer = Peer(PeerId("peer1"), new InetSocketAddress("127.0.0.1", 1), ref1, incomingConnection = false)
     val peer2: Peer = Peer(PeerId("peer2"), new InetSocketAddress("127.0.0.1", 2), ref2, incomingConnection = false)
     val peer3: Peer = Peer(PeerId("peer3"), new InetSocketAddress("127.0.0.1", 3), ref3, incomingConnection = false)

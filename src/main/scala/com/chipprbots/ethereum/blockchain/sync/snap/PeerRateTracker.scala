@@ -5,10 +5,12 @@ import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.utils.Logger
 
-/** Per-peer message rate tracker for adaptive SNAP sync timeouts.
+/** Per-peer message rate tracker for adaptive sync timeouts.
   *
   * Port of geth's p2p/msgrate package. Tracks per-peer throughput (items/sec) and round-trip times, then computes
   * adaptive request timeouts and per-peer request capacities.
+  *
+  * Used by SNAP sync coordinators and fast sync state downloader.
   *
   * Algorithm:
   *   - Each peer has an EMA-smoothed capacity (items/sec per message type) and roundtrip estimate
@@ -212,8 +214,14 @@ object PeerRateTracker {
   val MsgGetByteCodes: Int = 2
   val MsgGetTrieNodes: Int = 3
 
+  // --- ETH protocol message type ordinals (for fast sync capacity tracking) ---
+  val MsgGetNodeData: Int = 4
+  val MsgGetBlockHeaders: Int = 5
+  val MsgGetBlockBodies: Int = 6
+  val MsgGetReceipts: Int = 7
+
   /** Per-peer statistics */
-  private[snap] case class PeerStats(
+  private[sync] case class PeerStats(
       capacity: mutable.Map[Int, Double] = mutable.Map.empty,
       var roundtripMs: Long = RttMinEstimateMs * 2 // Start at 4s (conservative)
   )
