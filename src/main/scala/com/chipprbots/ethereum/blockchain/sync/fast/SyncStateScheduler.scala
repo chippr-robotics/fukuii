@@ -78,6 +78,13 @@ class SyncStateScheduler(
     * critical errors. If it would valuable, it possible to implement processor which would gather statistics about
     * duplicated or not requested data.
     */
+  /** Process a batch of responses, accumulating state changes and statistics.
+    *
+    * Malformed MPT nodes (CannotDecodeMptNode, NotAccountLeafNode) are treated as recoverable: the bad response is
+    * skipped, its hash is re-queued for download from a different peer, and a decode failure is counted in statistics.
+    * The caller uses the failure count to blacklist the sender. This prevents a single malformed response from killing
+    * the entire state sync.
+    */
   def processResponses(
       state: SchedulerState,
       responses: List[SyncResponse]
@@ -95,8 +102,11 @@ class SyncStateScheduler(
         processResponse(currentState, responseToProcess) match {
           case Left(value) =>
             value match {
-              case error: CriticalError =>
-                Left(error)
+              case SyncStateScheduler.CannotDecodeMptNode | SyncStateScheduler.NotAccountLeafNode =>
+                // Recoverable: peer sent bad data for this node. The hash stays in the scheduler's
+                // pending queue for retry from a different peer. The caller blacklists the sender
+                // based on decodeFailures count.
+                go(currentState, currentStatistics.addDecodeFailure(), remaining.tail)
               case err: NotCriticalError =>
                 err match {
                   case SyncStateScheduler.NotRequestedItem =>
@@ -473,18 +483,25 @@ object SyncStateScheduler {
 
   case object AlreadyProcessedItem extends NotCriticalError
 
-  final case class ProcessingStatistics(duplicatedHashes: Long, notRequestedHashes: Long, saved: Long) {
+  final case class ProcessingStatistics(
+      duplicatedHashes: Long,
+      notRequestedHashes: Long,
+      saved: Long,
+      decodeFailures: Long = 0
+  ) {
     def addNotRequested(): ProcessingStatistics = copy(notRequestedHashes = notRequestedHashes + 1)
     def addDuplicated(): ProcessingStatistics = copy(duplicatedHashes = duplicatedHashes + 1)
     def addSaved(newSaved: Long): ProcessingStatistics = copy(saved = saved + newSaved)
+    def addDecodeFailure(): ProcessingStatistics = copy(decodeFailures = decodeFailures + 1)
     def addStats(that: ProcessingStatistics): ProcessingStatistics =
       copy(
         duplicatedHashes = that.duplicatedHashes,
-        notRequestedHashes = that.notRequestedHashes
+        notRequestedHashes = that.notRequestedHashes,
+        decodeFailures = that.decodeFailures
       )
   }
 
   object ProcessingStatistics {
-    def apply(): ProcessingStatistics = new ProcessingStatistics(0, 0, 0)
+    def apply(): ProcessingStatistics = new ProcessingStatistics(0, 0, 0, 0)
   }
 }
