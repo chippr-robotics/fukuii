@@ -316,8 +316,10 @@ class SyncStateSchedulerActor(
               case Left(value) =>
                 ProcessingResult(Left(Critical(value)))
               case Right((newState, stats)) =>
+                val combinedStats = currentState.currentStats.addStats(stats)
+                val peerToBlacklist = if (stats.decodeFailures > 0) Some(from) else None
                 ProcessingResult(
-                  Right(ProcessingSuccess(newState, newDownloaderState, currentState.currentStats.addStats(stats)))
+                  Right(ProcessingSuccess(newState, newDownloaderState, combinedStats, peerToBlacklist))
                 )
             }
         }
@@ -430,7 +432,7 @@ class SyncStateSchedulerActor(
           )
         }
 
-      case ProcessingResult(Right(ProcessingSuccess(newState, newDownloaderState, newStats))) =>
+      case ProcessingResult(Right(ProcessingSuccess(newState, newDownloaderState, newStats, respondingPeer))) =>
         consecutiveUselessResponses = 0 // Reset on successful processing
         uselessResponseRetryState = uselessResponseRetryState.reset
         log.debug(
@@ -438,6 +440,21 @@ class SyncStateSchedulerActor(
           newState.numberOfPendingRequests,
           newState.numberOfMissingHashes
         )
+
+        // Blacklist peers that sent malformed MPT nodes (CannotDecodeMptNode / NotAccountLeafNode)
+        respondingPeer.foreach { peer =>
+          log.warning(
+            "Peer {} sent {} malformed MPT node(s), blacklisting with critical duration",
+            peer.id,
+            newStats.decodeFailures
+          )
+          blacklistIfHandshaked(
+            peer.id,
+            syncConfig.criticalBlacklistDuration,
+            InvalidStateResponse("malformed MPT node data")
+          )
+        }
+
         val (newState1, newStats1) = if (newState.memBatch.size >= syncConfig.stateSyncPersistBatchSize) {
           log.debug("Current membatch size is {}, persisting nodes to database", newState.memBatch.size)
           (sync.persistBatch(newState, currentState.targetBlock), newStats.addSaved(newState.memBatch.size))
@@ -571,7 +588,8 @@ object SyncStateSchedulerActor {
   final case class ProcessingSuccess(
       newSchedulerState: SchedulerState,
       newDownloaderState: DownloaderState,
-      processingStats: ProcessingStatistics
+      processingStats: ProcessingStatistics,
+      respondingPeer: Option[Peer] = None
   )
 
   final case class RequestTerminated(to: Peer)
