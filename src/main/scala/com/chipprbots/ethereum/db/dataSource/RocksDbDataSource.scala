@@ -135,6 +135,48 @@ class RocksDbDataSource(
   def iterate(namespace: Namespace): Stream[IO, Either[IterationError, (Array[Byte], Array[Byte])]] =
     Stream.resource(namespaceIterator(namespace)).flatMap(it => moveIterator(it))
 
+  /** ReadOptions for range scans with fillCache=false to avoid polluting the block cache.
+    * Regular point reads continue using the default readOptions with cache enabled.
+    */
+  private lazy val scanReadOptions: ReadOptions = {
+    val opts = new ReadOptions()
+    opts.setVerifyChecksums(rocksDbConfig.verifyChecksums)
+    opts.setFillCache(false)
+    opts
+  }
+
+  /** Seek-based range iterator starting from the given key within a namespace.
+    * Uses fillCache=false to avoid evicting hot trie nodes from the block cache
+    * during large range scans (safeguard P-1 from SNAP server plan).
+    *
+    * Returns an fs2 Stream of (key, value) pairs in sorted key order,
+    * starting from the first key >= startKey. The iterator is resource-managed
+    * and automatically closed when the stream completes or errors.
+    */
+  def seekFrom(
+      namespace: Namespace,
+      startKey: Array[Byte]
+  ): Stream[IO, Either[IterationError, (Array[Byte], Array[Byte])]] = {
+    val iterResource = Resource.fromAutoCloseable(
+      IO(db.newIterator(handles(namespace), scanReadOptions))
+    )
+    Stream.resource(iterResource).flatMap { it =>
+      Stream
+        .eval(IO(it.seek(startKey)))
+        .flatMap { _ =>
+          Stream.repeatEval(for {
+            isValid <- IO(it.isValid)
+            item <- if (isValid) IO(Right((it.key(), it.value()))) else IO.raiseError(IterationFinished)
+            _ <- IO(it.next())
+          } yield item)
+        }
+        .handleErrorWith {
+          case IterationFinished => Stream.empty
+          case ex                => Stream.emit(Left(IterationError(ex)))
+        }
+    }
+  }
+
   /** This function is used only for tests. This function updates the DataSource by deleting all the (key-value) pairs
     * in it.
     */
