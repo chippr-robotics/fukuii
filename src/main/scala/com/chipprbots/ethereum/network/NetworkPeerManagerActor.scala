@@ -71,6 +71,38 @@ class NetworkPeerManagerActor(
   // Mutable reference to SNAPSyncController that can be set after initialization
   private var snapSyncControllerOpt: Option[ActorRef] = initialSnapSyncControllerOpt
 
+  // LRU cache for upper trie nodes in GetTrieNodes serving.
+  // Top 4-5 levels of the account trie (~340 nodes) are identical across requests
+  // until the state root changes. Cache is invalidated when a new root is seen.
+  private val TrieNodeCacheCapacity = 512
+  private var trieNodeCacheRoot: ByteString = ByteString.empty
+  private val trieNodeCache: java.util.LinkedHashMap[ByteString, Array[Byte]] =
+    new java.util.LinkedHashMap[ByteString, Array[Byte]](TrieNodeCacheCapacity, 0.75f, true) {
+      override def removeEldestEntry(eldest: java.util.Map.Entry[ByteString, Array[Byte]]): Boolean =
+        size() > TrieNodeCacheCapacity
+    }
+
+  /** Get a trie node by hash, checking the LRU cache first.
+    * If the root hash has changed since last request, the cache is cleared.
+    */
+  private def cachedNodeGet(rootHash: ByteString, nodeHash: ByteString, storage: NodeStorage): Option[Array[Byte]] = {
+    if (rootHash != trieNodeCacheRoot) {
+      trieNodeCache.clear()
+      trieNodeCacheRoot = rootHash
+    }
+    val cached = trieNodeCache.get(nodeHash)
+    if (cached != null) {
+      Some(cached)
+    } else {
+      storage.get(nodeHash) match {
+        case some @ Some(data) =>
+          trieNodeCache.put(nodeHash, data)
+          some
+        case None => None
+      }
+    }
+  }
+
   // Subscribe to the event of any peer getting handshaked
   peerEventBusActor ! Subscribe(PeerHandshaked)
 
@@ -663,7 +695,7 @@ class NetworkPeerManagerActor(
   }
 
   /** Walk the MPT from rootHash following an HP-encoded compact path to find the node at that path.
-    * Returns the RLP-encoded node bytes if found.
+    * Returns the RLP-encoded node bytes if found. Uses the LRU cache for upper trie nodes.
     */
   private def resolveTrieNode(
       rootHash: ByteString,
@@ -672,19 +704,22 @@ class NetworkPeerManagerActor(
   ): Option[ByteString] = {
     if (compactPath.isEmpty) {
       // Empty path = root node itself
-      storage.get(rootHash).map(ByteString(_))
+      cachedNodeGet(rootHash, rootHash, storage).map(ByteString(_))
     } else {
       val (nibbles, _) = HexPrefix.decode(compactPath.toArray)
       // Load root node
-      storage.get(rootHash).flatMap { rootEncoded =>
+      cachedNodeGet(rootHash, rootHash, storage).flatMap { rootEncoded =>
         val rootNode = MptTraversals.decodeNode(rootEncoded)
-        walkTriePath(rootNode, nibbles, 0, storage)
+        walkTriePath(rootHash, rootNode, nibbles, 0, storage)
       }
     }
   }
 
-  /** Recursively walk the trie following nibble path, returning the RLP-encoded node at the target position. */
+  /** Recursively walk the trie following nibble path, returning the RLP-encoded node at the target position.
+    * Uses the LRU cache for hash node resolution.
+    */
   private def walkTriePath(
+      rootHash: ByteString,
       node: MptNode,
       nibbles: Array[Byte],
       pos: Int,
@@ -700,12 +735,12 @@ class NetworkPeerManagerActor(
           children(childIdx) match {
             case NullNode => None
             case hashNode: HashNode =>
-              storage.get(ByteString(hashNode.hashNode)).flatMap { childEncoded =>
+              cachedNodeGet(rootHash, ByteString(hashNode.hashNode), storage).flatMap { childEncoded =>
                 val childNode = MptTraversals.decodeNode(childEncoded)
-                walkTriePath(childNode, nibbles, pos + 1, storage)
+                walkTriePath(rootHash, childNode, nibbles, pos + 1, storage)
               }
             case inlineNode =>
-              walkTriePath(inlineNode, nibbles, pos + 1, storage)
+              walkTriePath(rootHash, inlineNode, nibbles, pos + 1, storage)
           }
 
         case ExtensionNode(sharedKey, next, _, _, _) =>
@@ -726,12 +761,12 @@ class NetworkPeerManagerActor(
               val newPos = pos + keyNibbles.length
               next match {
                 case hashNode: HashNode =>
-                  storage.get(ByteString(hashNode.hashNode)).flatMap { childEncoded =>
+                  cachedNodeGet(rootHash, ByteString(hashNode.hashNode), storage).flatMap { childEncoded =>
                     val childNode = MptTraversals.decodeNode(childEncoded)
-                    walkTriePath(childNode, nibbles, newPos, storage)
+                    walkTriePath(rootHash, childNode, nibbles, newPos, storage)
                   }
                 case _ =>
-                  walkTriePath(next, nibbles, newPos, storage)
+                  walkTriePath(rootHash, next, nibbles, newPos, storage)
               }
             }
           }
@@ -742,9 +777,9 @@ class NetworkPeerManagerActor(
 
         case hashNode: HashNode =>
           // Resolve hash reference and continue walking
-          storage.get(ByteString(hashNode.hashNode)).flatMap { childEncoded =>
+          cachedNodeGet(rootHash, ByteString(hashNode.hashNode), storage).flatMap { childEncoded =>
             val childNode = MptTraversals.decodeNode(childEncoded)
-            walkTriePath(childNode, nibbles, pos, storage)
+            walkTriePath(rootHash, childNode, nibbles, pos, storage)
           }
 
         case NullNode => None
@@ -764,9 +799,9 @@ class NetworkPeerManagerActor(
     // Walk account trie to find the leaf, then decode Account RLP to get storageRoot
     if (accountPath.isEmpty) return None
     val (nibbles, _) = HexPrefix.decode(accountPath.toArray)
-    storage.get(stateRootHash).flatMap { rootEncoded =>
+    cachedNodeGet(stateRootHash, stateRootHash, storage).flatMap { rootEncoded =>
       val rootNode = MptTraversals.decodeNode(rootEncoded)
-      findLeafValue(rootNode, nibbles, 0, storage)
+      findLeafValue(stateRootHash, rootNode, nibbles, 0, storage)
     }.flatMap { accountRlp =>
       // Account RLP: [nonce, balance, storageRoot, codeHash]
       try {
@@ -781,8 +816,11 @@ class NetworkPeerManagerActor(
     }
   }
 
-  /** Walk the trie to find the value stored at the leaf matching the given nibble path. */
+  /** Walk the trie to find the value stored at the leaf matching the given nibble path.
+    * Uses the LRU cache for hash node resolution.
+    */
   private def findLeafValue(
+      rootHash: ByteString,
       node: MptNode,
       nibbles: Array[Byte],
       pos: Int,
@@ -807,10 +845,10 @@ class NetworkPeerManagerActor(
           children(childIdx) match {
             case NullNode => None
             case hashNode: HashNode =>
-              storage.get(ByteString(hashNode.hashNode)).flatMap { enc =>
-                findLeafValue(MptTraversals.decodeNode(enc), nibbles, pos + 1, storage)
+              cachedNodeGet(rootHash, ByteString(hashNode.hashNode), storage).flatMap { enc =>
+                findLeafValue(rootHash, MptTraversals.decodeNode(enc), nibbles, pos + 1, storage)
               }
-            case inline => findLeafValue(inline, nibbles, pos + 1, storage)
+            case inline => findLeafValue(rootHash, inline, nibbles, pos + 1, storage)
           }
         }
 
@@ -825,15 +863,15 @@ class NetworkPeerManagerActor(
         val newPos = pos + keyNibbles.length
         next match {
           case hashNode: HashNode =>
-            storage.get(ByteString(hashNode.hashNode)).flatMap { enc =>
-              findLeafValue(MptTraversals.decodeNode(enc), nibbles, newPos, storage)
+            cachedNodeGet(rootHash, ByteString(hashNode.hashNode), storage).flatMap { enc =>
+              findLeafValue(rootHash, MptTraversals.decodeNode(enc), nibbles, newPos, storage)
             }
-          case _ => findLeafValue(next, nibbles, newPos, storage)
+          case _ => findLeafValue(rootHash, next, nibbles, newPos, storage)
         }
 
       case hashNode: HashNode =>
-        storage.get(ByteString(hashNode.hashNode)).flatMap { enc =>
-          findLeafValue(MptTraversals.decodeNode(enc), nibbles, pos, storage)
+        cachedNodeGet(rootHash, ByteString(hashNode.hashNode), storage).flatMap { enc =>
+          findLeafValue(rootHash, MptTraversals.decodeNode(enc), nibbles, pos, storage)
         }
 
       case NullNode => None
