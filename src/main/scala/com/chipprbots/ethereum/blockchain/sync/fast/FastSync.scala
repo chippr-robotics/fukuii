@@ -90,6 +90,7 @@ class FastSync(
   override def receive: Receive = idle
 
   private case object RetryPivotBlockSelection
+  private var pivotBackoffAttempt: Int = 0
 
   def idle: Receive = handlePeerListMessages.orElse {
     case SyncProtocol.Start     => start()
@@ -129,12 +130,16 @@ class FastSync(
       )
       pivotBlockSelector ! PivotBlockSelector.SelectPivotBlock
     case PivotBlockSelector.SelectionFailed =>
+      val retryDelay = BackoffRetry.delay(pivotBackoffAttempt, startRetryInterval, 5.minutes)
+      pivotBackoffAttempt += 1
       log.warning(
-        "Pivot block selection failed after maximum attempts. Retrying in {}",
-        startRetryInterval
+        "Pivot block selection failed after maximum attempts. Retrying in {} (attempt {})",
+        retryDelay,
+        pivotBackoffAttempt
       )
-      scheduler.scheduleOnce(startRetryInterval, self, RetryPivotBlockSelection)
+      scheduler.scheduleOnce(retryDelay, self, RetryPivotBlockSelection)
     case PivotBlockSelector.Result(pivotBlockHeader) =>
+      pivotBackoffAttempt = 0
       if (pivotBlockHeader.number < 1) {
         log.info("Unable to start block synchronization in fast mode: pivot block is less than 1")
         appStateStorage.fastSyncDone().commit()

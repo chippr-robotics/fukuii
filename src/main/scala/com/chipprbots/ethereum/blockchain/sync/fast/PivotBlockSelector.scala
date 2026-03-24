@@ -9,7 +9,7 @@ import org.apache.pekko.actor.Scheduler
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.ExecutionContext.Implicits.global
-import scala.concurrent.duration.FiniteDuration
+import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason.InvalidPivotBlockElectionResponse
@@ -52,6 +52,7 @@ class PivotBlockSelector(
 
   private var pivotBlockRetryCount = 0
   private var totalSelectionAttempts = 0
+  private var backoffAttempt = 0
   // Maximum total attempts to prevent infinite loops (e.g., when no peers are available).
   // This is separate from pivotBlockRetryCount which resets after each scheduleRetry call.
   // Configurable via sync.pivot-block-max-total-selection-attempts.
@@ -121,13 +122,16 @@ class PivotBlockSelector(
       val electionDetails = collectVoters(Some(pivotBlockNumber))
       startPivotBlockSelection(electionDetails)
     } else {
+      val retryDelay = BackoffRetry.delay(backoffAttempt, startRetryInterval, 60.seconds)
+      backoffAttempt += 1
       log.debug(
-        "Cannot pick pivot block. Current best block number [{}]. Retrying in [{}]",
+        "Cannot pick pivot block. Current best block number [{}]. Retrying in [{}] (attempt {})",
         pivotBlockNumber,
-        startRetryInterval
+        retryDelay,
+        backoffAttempt
       )
       // Restart the whole process.
-      scheduleRetry(startRetryInterval)
+      scheduleRetry(retryDelay)
     }
   }
 
@@ -172,8 +176,10 @@ class PivotBlockSelector(
           blacklist.add(peerId, blacklistDuration, PivotBlockElectionTimeout)
         }
         peerEventBus ! Unsubscribe()
-        log.warning("Pivot block header receive timeout. Retrying in {}", startRetryInterval)
-        scheduleRetry(startRetryInterval)
+        val retryDelay = BackoffRetry.delay(backoffAttempt, startRetryInterval, 60.seconds)
+        backoffAttempt += 1
+        log.warning("Pivot block header receive timeout. Retrying in {} (attempt {})", retryDelay, backoffAttempt)
+        scheduleRetry(retryDelay)
     }
 
   private def votingProcess(
@@ -210,8 +216,10 @@ class PivotBlockSelector(
         )
       } else { // No more peers. Restart the whole process
         peerEventBus ! Unsubscribe()
-        log.warning("Not enough votes for pivot block. Retrying in {}", startRetryInterval)
-        scheduleRetry(startRetryInterval)
+        val retryDelay = BackoffRetry.delay(backoffAttempt, startRetryInterval, 60.seconds)
+        backoffAttempt += 1
+        log.warning("Not enough votes for pivot block. Retrying in {} (attempt {})", retryDelay, backoffAttempt)
+        scheduleRetry(retryDelay)
       }
       // Continue voting
     } else {

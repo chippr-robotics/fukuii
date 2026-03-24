@@ -70,6 +70,9 @@ class SyncStateSchedulerActor(
   private var noCompatiblePeersCount: Int = 0
   private val NoCompatiblePeersThreshold: Int = 5
 
+  /** Exponential backoff attempt counter for sync retries when no peers are available. Reset on successful sync progress. */
+  private var syncBackoffAttempt: Int = 0
+
   /** Check if a capability supports GetNodeData message. GetNodeData is available in ETH63-67 but removed in ETH68 per
     * EIP-4938. SNAP protocol uses different messages (GetAccountRange, etc.) and doesn't support GetNodeData.
     *
@@ -374,8 +377,10 @@ class SyncStateSchedulerActor(
             )
             if (currentState.activeRequestCount == 0) {
               // we are not processing anything, and there are no free peers and we not waiting for any requests in flight
-              // reschedule sync check
-              timers.startSingleTimer(SyncKey, Sync, syncConfig.syncRetryInterval)
+              // reschedule sync check with exponential backoff
+              val retryDelay = BackoffRetry.delay(syncBackoffAttempt, syncConfig.syncRetryInterval, 30.seconds)
+              syncBackoffAttempt += 1
+              timers.startSingleTimer(SyncKey, Sync, retryDelay)
             }
             context.become(syncing(currentState.finishProcessing))
         }
@@ -450,6 +455,7 @@ class SyncStateSchedulerActor(
           (newState, newStats)
         }
 
+        syncBackoffAttempt = 0
         reportStats(currentState.syncInitiator, newStats1, newState1)
         context.become(syncing(currentState.withNewProcessingResults(newState1, newDownloaderState, newStats1)))
         self ! Sync
