@@ -71,6 +71,8 @@ jobs:
             echo "::warning::Code formatting issues detected. Please run 'sbt scalafmtAll' locally and commit the changes."
             echo "Files needing formatting:"
             git diff --name-only
+            # Restore original files so subsequent steps compile the committed code
+            git checkout -- .
           else
             echo "All files are properly formatted."
           fi
