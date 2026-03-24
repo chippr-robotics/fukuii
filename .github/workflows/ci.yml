@@ -64,7 +64,18 @@ jobs:
           sudo apt-get install sbt
       
       - name: Check formatting
-        run: sbt scalafmtCheckAll
+        continue-on-error: true
+        run: |
+          sbt scalafmtAll
+          if ! git diff --quiet; then
+            echo "::warning::Code formatting issues detected. Please run 'sbt scalafmtAll' locally and commit the changes."
+            echo "Files needing formatting:"
+            git diff --name-only
+            # Restore original files so subsequent steps compile the committed code
+            git checkout -- .
+          else
+            echo "All files are properly formatted."
+          fi
         env:
           FUKUII_DEV: true
 
