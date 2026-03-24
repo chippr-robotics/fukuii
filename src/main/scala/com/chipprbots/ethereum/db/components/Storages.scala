@@ -49,6 +49,8 @@ object Storages {
 
       override val flatSlotStorage: FlatSlotStorage = new FlatSlotStorage(dataSource)
 
+      override val flatAccountStorage: FlatAccountStorage = new FlatAccountStorage(dataSource)
+
       override val stateStorage: StateStorage =
         StateStorage(
           pruningMode,
