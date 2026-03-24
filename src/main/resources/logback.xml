@@ -191,12 +191,12 @@
     <logger name="com.chipprbots.ethereum.blockchain.sync.Blacklist" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.BlockchainHostActor" level="ERROR" />
     
-    <!-- Fast sync internals -->
+    <!-- Fast sync internals — core actors at INFO (aligned with SNAP/regular pattern) -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.fast" level="ERROR" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.fast.PivotBlockSelector" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.fast.PivotBlockSelector" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler" level="ERROR" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor" level="ERROR" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.fast.StateStorageActor" level="ERROR" />
     
     <!-- Regular sync internals -->
