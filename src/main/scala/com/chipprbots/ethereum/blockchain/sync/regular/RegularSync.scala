@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.consensus.validators.BlockValidator
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.ledger.BranchResolution
+import com.chipprbots.ethereum.ledger.StatePrefetcher
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
@@ -40,7 +41,8 @@ class RegularSync(
     ommersPool: ActorRef,
     pendingTransactionsManager: ActorRef,
     scheduler: Scheduler,
-    configBuilder: BlockchainConfigBuilder
+    configBuilder: BlockchainConfigBuilder,
+    statePrefetcher: Option[StatePrefetcher] = None
 ) extends Actor
     with ActorLogging {
 
@@ -77,7 +79,8 @@ class RegularSync(
         broadcaster,
         pendingTransactionsManager,
         self,
-        configBuilder
+        configBuilder,
+        statePrefetcher
       ),
       "block-importer"
     )
@@ -155,7 +158,8 @@ object RegularSync {
       ommersPool: ActorRef,
       pendingTransactionsManager: ActorRef,
       scheduler: Scheduler,
-      configBuilder: BlockchainConfigBuilder
+      configBuilder: BlockchainConfigBuilder,
+      statePrefetcher: Option[StatePrefetcher] = None
   ): Props =
     Props(
       new RegularSync(
@@ -172,7 +176,8 @@ object RegularSync {
         ommersPool,
         pendingTransactionsManager,
         scheduler,
-        configBuilder
+        configBuilder,
+        statePrefetcher
       )
     )
 

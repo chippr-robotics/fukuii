@@ -50,7 +50,8 @@ class BlockImporter(
     broadcaster: ActorRef,
     pendingTransactionsManager: ActorRef,
     supervisor: ActorRef,
-    configBuilder: BlockchainConfigBuilder
+    configBuilder: BlockchainConfigBuilder,
+    statePrefetcher: Option[StatePrefetcher] = None
 ) extends Actor
     with ActorLogging {
 
@@ -520,6 +521,14 @@ class BlockImporter(
       IO.pure((importedBlocks, None))
     } else {
       val restOfBlocks = blocks.tail
+      // Prefetch next block's state while executing current block
+      statePrefetcher.foreach { prefetcher =>
+        restOfBlocks.headOption.foreach { nextBlock =>
+          blockchainReader.getBlockHeaderByHash(blocks.head.header.parentHash).foreach { parentHeader =>
+            prefetcher.prefetchAsync(nextBlock, parentHeader.stateRoot)
+          }
+        }
+      }
       consensus
         .evaluateBranchBlock(blocks.head)
         .flatMap {
@@ -672,7 +681,8 @@ object BlockImporter {
       broadcaster: ActorRef,
       pendingTransactionsManager: ActorRef,
       supervisor: ActorRef,
-      configBuilder: BlockchainConfigBuilder
+      configBuilder: BlockchainConfigBuilder,
+      statePrefetcher: Option[StatePrefetcher] = None
   ): Props =
     Props(
       new BlockImporter(
@@ -686,7 +696,8 @@ object BlockImporter {
         broadcaster,
         pendingTransactionsManager,
         supervisor,
-        configBuilder
+        configBuilder,
+        statePrefetcher
       )
     )
 

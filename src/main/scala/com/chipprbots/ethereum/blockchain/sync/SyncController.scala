@@ -32,6 +32,7 @@ import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.ledger.BranchResolution
+import com.chipprbots.ethereum.ledger.StatePrefetcher
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Config.SyncConfig
@@ -71,6 +72,8 @@ class SyncController(
 
   // SNAP<->Fast sync bounce cycle counter, persisted across restarts.
   private var snapFastCycleCount: Int = appStateStorage.getSnapFastCycleCount()
+
+  private val statePrefetcher = new StatePrefetcher(blockchain, blockchainReader, evmCodeStorage)
 
   private def stopSyncChildren(): Unit = {
     // Stop all sync-related child actors. Names may have generation suffixes
@@ -634,7 +637,8 @@ class SyncController(
           ommersPool,
           pendingTransactionsManager,
           scheduler,
-          configBuilder
+          configBuilder,
+          Some(statePrefetcher)
         )
         .withDispatcher("sync-dispatcher"),
       s"regular-sync-$syncGeneration"
