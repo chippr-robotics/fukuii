@@ -659,100 +659,84 @@ object PrecompiledContracts {
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(6900)
   }
 
-  // ===== EIP-2537: BLS12-381 Precompiles (final spec: 7 precompiles at 0x0b-0x11) =====
-  // Uses org.hyperledger.besu:bls12-381 native library (gnark/Constantine backends via JNA).
-  // G1MUL/G2MUL removed — MSM at k=1 covers single-point multiplication.
+  // ===== EIP-2537: BLS12-381 Precompiles (7 precompiles at 0x0b-0x11) =====
+  // Crypto operations via Besu's gnark JNI library. Gas costs and addresses match
+  // the final EIP-2537 spec. G1MUL/G2MUL removed — MSM at k=1 covers single-point multiplication.
 
-  /** Execute a BLS12-381 operation via the Besu native library. Returns Some(result) on success, None on error (invalid
-    * point, wrong input size, etc.)
-    */
-  private def blsNativeOp(opByte: Byte, inputData: ByteString): Option[ByteString] = {
-    import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
-    if (!LibEthPairings.ENABLED) return None
-    try {
-      val resultBuf = new Array[Byte](LibEthPairings.EIP2537_PREALLOCATE_FOR_RESULT_BYTES)
-      val errorBuf = new Array[Byte](LibEthPairings.EIP2537_PREALLOCATE_FOR_ERROR_BYTES)
-      val resultLen = new com.sun.jna.ptr.IntByReference(resultBuf.length)
-      val errorLen = new com.sun.jna.ptr.IntByReference(errorBuf.length)
-
-      val ret = LibEthPairings.eip2537_perform_operation(
-        opByte,
-        inputData.toArray,
-        inputData.length,
-        resultBuf,
-        resultLen,
-        errorBuf,
-        errorLen
-      )
-      if (ret == 0) Some(ByteString(resultBuf.take(resultLen.getValue)))
-      else None
-    } catch {
-      case _: Exception => None
-    }
-  }
-
-  sealed trait BlsPrecompile extends PrecompiledContract
-
-  object BlsG1Add extends BlsPrecompile {
-    import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
+  object BlsG1Add extends PrecompiledContract {
     def exec(inputData: ByteString): Option[ByteString] =
-      blsNativeOp(LibEthPairings.BLS12_G1ADD_OPERATION_RAW_VALUE, inputData)
+      if (inputData.length != 256) None
+      else Bls12381.g1Add(inputData.toArray).map(ByteString(_))
+
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(375)
   }
 
-  object BlsG1MultiExp extends BlsPrecompile {
-    import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
+  object BlsG1MultiExp extends PrecompiledContract {
     private val pairSize = 160 // 128-byte G1 point + 32-byte scalar
+
     def exec(inputData: ByteString): Option[ByteString] =
-      blsNativeOp(LibEthPairings.BLS12_G1MULTIEXP_OPERATION_RAW_VALUE, inputData)
+      if (inputData.isEmpty || inputData.length % pairSize != 0) None
+      else Bls12381.g1MultiExp(inputData.toArray).map(ByteString(_))
+
+
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = {
-      val k = math.max(1, inputData.length / pairSize)
-      val discount = blsG1MsmDiscount(k)
-      BigInt(12000) * k * discount / 1000
+      val k = inputData.length / pairSize
+      if (k == 0) BigInt(0)
+      else BigInt(12000) * k * blsG1MsmDiscount(k) / 1000
     }
   }
 
-  object BlsG2Add extends BlsPrecompile {
-    import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
+  object BlsG2Add extends PrecompiledContract {
     def exec(inputData: ByteString): Option[ByteString] =
-      blsNativeOp(LibEthPairings.BLS12_G2ADD_OPERATION_RAW_VALUE, inputData)
+      if (inputData.length != 512) None
+      else Bls12381.g2Add(inputData.toArray).map(ByteString(_))
+
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(600)
   }
 
-  object BlsG2MultiExp extends BlsPrecompile {
-    import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
+  object BlsG2MultiExp extends PrecompiledContract {
     private val pairSize = 288 // 256-byte G2 point + 32-byte scalar
+
     def exec(inputData: ByteString): Option[ByteString] =
-      blsNativeOp(LibEthPairings.BLS12_G2MULTIEXP_OPERATION_RAW_VALUE, inputData)
+      if (inputData.isEmpty || inputData.length % pairSize != 0) None
+      else Bls12381.g2MultiExp(inputData.toArray).map(ByteString(_))
+
+
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = {
-      val k = math.max(1, inputData.length / pairSize)
-      val discount = blsG2MsmDiscount(k)
-      BigInt(22500) * k * discount / 1000
+      val k = inputData.length / pairSize
+      if (k == 0) BigInt(0)
+      else BigInt(22500) * k * blsG2MsmDiscount(k) / 1000
     }
   }
 
-  object BlsPairing extends BlsPrecompile {
-    import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
+  object BlsPairing extends PrecompiledContract {
     private val pairSize = 384 // 128-byte G1 + 256-byte G2
+
     def exec(inputData: ByteString): Option[ByteString] =
-      blsNativeOp(LibEthPairings.BLS12_PAIR_OPERATION_RAW_VALUE, inputData)
+      if (inputData.isEmpty || inputData.length % pairSize != 0) None
+      else Bls12381.pairing(inputData.toArray).map(ByteString(_))
+
+
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = {
-      val k = math.max(1, inputData.length / pairSize)
-      BigInt(32600) * k + BigInt(37700)
+      val k = inputData.length / pairSize
+      if (k == 0) BigInt(0)
+      else BigInt(32600) * k + BigInt(37700)
     }
   }
 
-  object BlsMapG1 extends BlsPrecompile {
-    import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
+  object BlsMapG1 extends PrecompiledContract {
     def exec(inputData: ByteString): Option[ByteString] =
-      blsNativeOp(LibEthPairings.BLS12_MAP_FP_TO_G1_OPERATION_RAW_VALUE, inputData)
+      if (inputData.length != 64) None
+      else Bls12381.mapFpToG1(inputData.toArray).map(ByteString(_))
+
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(5500)
   }
 
-  object BlsMapG2 extends BlsPrecompile {
-    import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
+  object BlsMapG2 extends PrecompiledContract {
     def exec(inputData: ByteString): Option[ByteString] =
-      blsNativeOp(LibEthPairings.BLS12_MAP_FP2_TO_G2_OPERATION_RAW_VALUE, inputData)
+      if (inputData.length != 128) None
+      else Bls12381.mapFp2ToG2(inputData.toArray).map(ByteString(_))
+
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(23800)
   }
 
@@ -819,30 +803,30 @@ object PrecompiledContracts {
     }
   }
 
-  /** EIP-2537 G1 MSM discount table (128 entries). max_discount=519 at k>=128. */
+  /** EIP-2537 G1 MSM discount table (128 entries, from geth params/protocol_params.go). */
   private def blsG1MsmDiscount(k: Int): Int = {
     val table = Array(
-      1000, 949, 848, 797, 764, 740, 721, 707, 695, 685, 677, 670, 664, 659, 654, 650, 646, 643, 640, 637, 634, 632,
-      630, 627, 625, 624, 622, 620, 618, 617, 615, 614, 613, 611, 610, 609, 608, 607, 606, 605, 604, 603, 602, 601, 600,
-      599, 598, 597, 596, 595, 594, 593, 592, 591, 590, 589, 588, 587, 586, 585, 584, 583, 582, 581, 580, 579, 578, 577,
-      576, 575, 574, 573, 572, 571, 570, 569, 568, 567, 566, 565, 564, 563, 562, 561, 560, 559, 558, 557, 556, 555, 554,
-      553, 552, 551, 550, 549, 548, 547, 546, 545, 544, 543, 542, 541, 540, 539, 538, 537, 536, 535, 534, 533, 532, 531,
-      530, 529, 528, 527, 526, 525, 524, 523, 522, 521, 520, 519, 519, 519
+      1000, 949, 848, 797, 764, 750, 738, 728, 719, 712, 705, 698, 692, 687, 682, 677, 673, 669, 665, 661, 658, 654,
+      651, 648, 645, 642, 640, 637, 635, 632, 630, 627, 625, 623, 621, 619, 617, 615, 613, 611, 609, 608, 606, 604, 603,
+      601, 599, 598, 596, 595, 593, 592, 591, 589, 588, 586, 585, 584, 582, 581, 580, 579, 577, 576, 575, 574, 573, 572,
+      570, 569, 568, 567, 566, 565, 564, 563, 562, 561, 560, 559, 558, 557, 556, 555, 554, 553, 552, 551, 550, 549, 548,
+      547, 547, 546, 545, 544, 543, 542, 541, 540, 540, 539, 538, 537, 536, 536, 535, 534, 533, 532, 532, 531, 530, 529,
+      528, 528, 527, 526, 525, 525, 524, 523, 522, 522, 521, 520, 520, 519
     )
     if (k <= 0) 1000
     else if (k <= table.length) table(k - 1)
     else 519 // for k > 128
   }
 
-  /** EIP-2537 G2 MSM discount table (128 entries). max_discount=524 at k>=128. */
+  /** EIP-2537 G2 MSM discount table (128 entries, from geth params/protocol_params.go). */
   private def blsG2MsmDiscount(k: Int): Int = {
     val table = Array(
-      1000, 1000, 923, 884, 855, 832, 812, 796, 782, 770, 759, 750, 742, 734, 727, 721, 715, 709, 704, 699, 694, 689,
-      685, 681, 677, 673, 669, 666, 662, 659, 656, 653, 650, 647, 644, 641, 639, 636, 634, 631, 629, 627, 624, 622, 620,
-      618, 616, 614, 612, 610, 608, 606, 604, 603, 601, 599, 597, 596, 594, 593, 591, 590, 588, 587, 585, 584, 582, 581,
-      580, 578, 577, 576, 574, 573, 572, 571, 569, 568, 567, 566, 565, 564, 563, 562, 561, 560, 559, 558, 557, 556, 555,
-      554, 553, 552, 551, 550, 549, 548, 547, 547, 546, 545, 544, 543, 543, 542, 541, 540, 540, 539, 538, 537, 537, 536,
-      535, 535, 534, 533, 533, 532, 531, 531, 530, 530, 529, 528, 528, 527
+      1000, 1000, 923, 884, 855, 832, 812, 796, 782, 770, 759, 749, 740, 732, 724, 717, 711, 704, 699, 693, 688, 683,
+      679, 674, 670, 666, 663, 659, 655, 652, 649, 646, 643, 640, 637, 634, 632, 629, 627, 624, 622, 620, 618, 615, 613,
+      611, 609, 607, 606, 604, 602, 600, 598, 597, 595, 593, 592, 590, 589, 587, 586, 584, 583, 582, 580, 579, 578, 576,
+      575, 574, 573, 571, 570, 569, 568, 567, 566, 565, 563, 562, 561, 560, 559, 558, 557, 556, 555, 554, 553, 552, 552,
+      551, 550, 549, 548, 547, 546, 545, 545, 544, 543, 542, 541, 541, 540, 539, 538, 537, 537, 536, 535, 535, 534, 533,
+      532, 532, 531, 530, 530, 529, 528, 528, 527, 526, 526, 525, 524, 524
     )
     if (k <= 0) 1000
     else if (k <= table.length) table(k - 1)
