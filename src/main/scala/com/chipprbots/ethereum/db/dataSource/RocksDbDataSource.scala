@@ -195,6 +195,54 @@ class RocksDbDataSource(
     this.isClosed = false
   }
 
+  /** Enable write-optimized RocksDB settings for bulk sync (fast sync / SNAP sync).
+    * Larger write buffers reduce flush frequency, and relaxed L0 triggers reduce write stalls.
+    * Call disableBulkSyncMode() when transitioning to tip-following (regular sync at chain head).
+    */
+  def enableBulkSyncMode(): Unit = {
+    dbLock.readLock().lock()
+    try {
+      assureNotClosed()
+      val bulkOptions = MutableColumnFamilyOptions.builder()
+        .setWriteBufferSize(256L * 1024 * 1024) // 256MB (default ~64MB)
+        .setMaxWriteBufferNumber(6) // default 3
+        .setLevel0SlowdownWritesTrigger(40) // default 20
+        .setLevel0StopWritesTrigger(56) // default 36
+        .build()
+      handles.values.foreach { handle =>
+        db.setOptions(handle, bulkOptions.asInstanceOf[MutableColumnFamilyOptions])
+      }
+      log.info("RocksDB bulk sync mode enabled (larger write buffers, relaxed compaction triggers)")
+    } catch {
+      case _: RocksDbDataSourceClosedException => // ignore if closed
+      case NonFatal(error) =>
+        log.warn("Failed to enable bulk sync mode: {}", error.getMessage)
+    } finally dbLock.readLock().unlock()
+  }
+
+  /** Revert to default RocksDB settings for normal operation (tip-following).
+    */
+  def disableBulkSyncMode(): Unit = {
+    dbLock.readLock().lock()
+    try {
+      assureNotClosed()
+      val normalOptions = MutableColumnFamilyOptions.builder()
+        .setWriteBufferSize(64L * 1024 * 1024) // 64MB default
+        .setMaxWriteBufferNumber(3)
+        .setLevel0SlowdownWritesTrigger(20)
+        .setLevel0StopWritesTrigger(36)
+        .build()
+      handles.values.foreach { handle =>
+        db.setOptions(handle, normalOptions.asInstanceOf[MutableColumnFamilyOptions])
+      }
+      log.info("RocksDB bulk sync mode disabled (default write settings restored)")
+    } catch {
+      case _: RocksDbDataSourceClosedException => // ignore if closed
+      case NonFatal(error) =>
+        log.warn("Failed to disable bulk sync mode: {}", error.getMessage)
+    } finally dbLock.readLock().unlock()
+  }
+
   /** This function closes the DataSource, without deleting the files used by it.
     */
   override def close(): Unit = {

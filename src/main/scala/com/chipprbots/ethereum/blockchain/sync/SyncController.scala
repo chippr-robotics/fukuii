@@ -31,6 +31,7 @@ import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
+import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource
 import com.chipprbots.ethereum.ledger.BranchResolution
 import com.chipprbots.ethereum.ledger.StatePrefetcher
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
@@ -74,6 +75,11 @@ class SyncController(
   private var snapFastCycleCount: Int = appStateStorage.getSnapFastCycleCount()
 
   private val statePrefetcher = new StatePrefetcher(blockchain, blockchainReader, evmCodeStorage)
+
+  private val rocksDbDataSourceOpt: Option[RocksDbDataSource] = nodeStorage.dataSource match {
+    case rds: RocksDbDataSource => Some(rds)
+    case _                     => None
+  }
 
   private def stopSyncChildren(): Unit = {
     // Stop all sync-related child actors. Names may have generation suffixes
@@ -552,6 +558,7 @@ class SyncController(
   }
 
   def startFastSync(): Unit = {
+    rocksDbDataSourceOpt.foreach(_.enableBulkSyncMode())
     syncGeneration += 1
     val fastSync = context.actorOf(
       FastSync
@@ -581,6 +588,7 @@ class SyncController(
   }
 
   def startSnapSync(): Unit = {
+    rocksDbDataSourceOpt.foreach(_.enableBulkSyncMode())
     log.info("Starting SNAP sync mode")
     syncGeneration += 1
 
@@ -613,6 +621,7 @@ class SyncController(
   }
 
   def startRegularSync(): Unit = {
+    rocksDbDataSourceOpt.foreach(_.disableBulkSyncMode())
     syncGeneration += 1
     val peersClient =
       context.actorOf(
