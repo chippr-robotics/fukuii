@@ -149,6 +149,8 @@ object Dependencies {
 
   val jna = "net.java.dev.jna" % "jna" % "5.14.0" // Stable version
 
+  val gnark = "org.hyperledger.besu" % "gnark" % "1.4.2" // BLS12-381 native crypto (EIP-2537)
+
   val dependencies = Seq(
     jline,
     "org.scala-lang.modules" %% "scala-parser-combinators" % "2.4.0",
