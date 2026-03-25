@@ -553,13 +553,8 @@ class FastSync(
       assignedHandlers -= handler
     }
 
-    // TODO: Move to blockchain and make sure it's atomic
     private def discardLastBlocks(startBlock: BigInt, blocksToDiscard: Int): Unit =
-      (startBlock to ((startBlock - blocksToDiscard).max(1)) by -1).foreach { n =>
-        blockchainReader.getBlockHeaderByNumber(n).foreach { headerToRemove =>
-          blockchain.removeBlock(headerToRemove.hash)
-        }
-      }
+      blockchain.removeBlockRange(from = (startBlock - blocksToDiscard).max(1), to = startBlock)
 
     private def validateHeader(header: BlockHeader, peer: Peer): Either[HeaderProcessingResult, BlockHeader] = {
       val shouldValidate = header.number >= syncState.nextBlockToFullyValidate
