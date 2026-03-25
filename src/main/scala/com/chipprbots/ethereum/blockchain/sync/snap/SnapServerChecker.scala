@@ -1,7 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
 import org.apache.pekko.actor.ActorRef
-import org.apache.pekko.actor.Cancellable
 import org.apache.pekko.util.ByteString
 
 import java.util.concurrent.ConcurrentHashMap
@@ -31,6 +30,9 @@ object SnapServerChecker {
   /** Active probes keyed by requestId → peerId */
   private val pendingProbes = new ConcurrentHashMap[BigInt, PeerId]()
 
+  /** Peers that have already been probed (to avoid duplicate probes) */
+  private val probedPeers = ConcurrentHashMap.newKeySet[PeerId]()
+
   /** Generate a unique request ID for probe messages */
   def nextProbeRequestId: BigInt = BigInt(probeRequestIdCounter.getAndIncrement())
 
@@ -39,7 +41,8 @@ object SnapServerChecker {
 
   /** Create a probe GetAccountRange message.
     *
-    * Uses the peer's reported best block state root as the world state root.
+    * Uses the stateRoot from the peer's best block header (fetched via GetBlockHeaders).
+    * Note: this must be the header's stateRoot field, NOT the block hash (bestHash).
     * Start and end hash are both 0x00...00 (Besu's exact probe pattern).
     * responseBytes is set to 4096 — small enough to be fast, large enough for at least one account.
     */
@@ -70,14 +73,18 @@ object SnapServerChecker {
     Option(pendingProbes.remove(requestId))
 
   /** Evaluate whether a probe response indicates the peer is serving SNAP data.
-    * Non-empty accounts = verified server.
+    * Non-empty accounts OR proofs = verified server (aligned with Besu's check).
     */
   def isServingSnap(response: AccountRange): Boolean =
-    response.accounts.nonEmpty
+    response.accounts.nonEmpty || response.proof.nonEmpty
 
-  /** Send a probe to a peer and register it for tracking. */
+  /** Check if a peer has already been probed (to avoid duplicate probes on repeated BlockHeaders). */
+  def hasBeenProbed(peerId: PeerId): Boolean = probedPeers.contains(peerId)
+
+  /** Send a probe to a peer and register it for tracking. Returns None if already probed. */
   def sendProbe(peerRef: ActorRef, stateRoot: ByteString, peerId: PeerId): BigInt = {
     val (requestId, probeMsg) = createProbe(stateRoot)
+    probedPeers.add(peerId)
     registerProbe(requestId, peerId)
     peerRef ! PeerActor.SendMessage(probeMsg)
     requestId
@@ -85,4 +92,11 @@ object SnapServerChecker {
 
   /** Number of currently pending probes */
   def pendingCount: Int = pendingProbes.size()
+
+  /** Reset all state — for testing only */
+  def reset(): Unit = {
+    pendingProbes.clear()
+    probedPeers.clear()
+    probeRequestIdCounter.set(Long.MaxValue / 2)
+  }
 }

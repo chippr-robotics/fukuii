@@ -163,9 +163,8 @@ class NetworkPeerManagerActor(
   private def handlePeersInfoEvents(peersWithInfo: PeersWithInfo): Receive = {
 
     case MessageFromPeer(message, peerId) if peersWithInfo.contains(peerId) =>
-      // Route SNAP protocol messages to SNAPSyncController
-      message match {
-        // Intercept AccountRange that might be a probe response
+      // Check if this is a SNAP probe response FIRST — handle and return without falling through
+      val handledAsProbe = message match {
         case msg: AccountRange if SnapServerChecker.isProbeRequestId(msg.requestId) =>
           SnapServerChecker.completeProbe(msg.requestId).foreach { probedPeerId =>
             val serving = SnapServerChecker.isServingSnap(msg)
@@ -181,30 +180,37 @@ class NetworkPeerManagerActor(
               context.become(handleMessages(peersWithInfo + (probedPeerId -> pwi.copy(peerInfo = updatedInfo))))
             }
           }
-
-        case msg @ (_: AccountRange | _: StorageRanges | _: TrieNodes | _: ByteCodes) =>
-          log.debug("Routing {} message to SNAPSyncController from peer {}", msg.getClass.getSimpleName, peerId)
-          snapSyncControllerOpt.foreach(_ ! msg)
-
-        // Handle incoming SNAP request messages (server-side)
-        case msg: GetAccountRange =>
-          handleGetAccountRange(msg, peerId, peersWithInfo.get(peerId))
-
-        case msg: GetStorageRanges =>
-          handleGetStorageRanges(msg, peerId, peersWithInfo.get(peerId))
-
-        case msg: GetTrieNodes =>
-          handleGetTrieNodes(msg, peerId, peersWithInfo.get(peerId))
-
-        case msg: GetByteCodes =>
-          handleGetByteCodes(msg, peerId, peersWithInfo.get(peerId))
-
-        case _ => // ETH protocol messages - no special routing needed
+          true
+        case _ => false
       }
 
-      val newPeersWithInfo = updatePeersWithInfo(peersWithInfo, peerId, message, handleReceivedMessage)
-      NetworkMetrics.ReceivedMessagesCounter.increment()
-      context.become(handleMessages(newPeersWithInfo))
+      if (!handledAsProbe) {
+        // Route SNAP protocol messages to SNAPSyncController
+        message match {
+          case msg @ (_: AccountRange | _: StorageRanges | _: TrieNodes | _: ByteCodes) =>
+            log.debug("Routing {} message to SNAPSyncController from peer {}", msg.getClass.getSimpleName, peerId)
+            snapSyncControllerOpt.foreach(_ ! msg)
+
+          // Handle incoming SNAP request messages (server-side)
+          case msg: GetAccountRange =>
+            handleGetAccountRange(msg, peerId, peersWithInfo.get(peerId))
+
+          case msg: GetStorageRanges =>
+            handleGetStorageRanges(msg, peerId, peersWithInfo.get(peerId))
+
+          case msg: GetTrieNodes =>
+            handleGetTrieNodes(msg, peerId, peersWithInfo.get(peerId))
+
+          case msg: GetByteCodes =>
+            handleGetByteCodes(msg, peerId, peersWithInfo.get(peerId))
+
+          case _ => // ETH protocol messages - no special routing needed
+        }
+
+        val newPeersWithInfo = updatePeersWithInfo(peersWithInfo, peerId, message, handleReceivedMessage)
+        NetworkMetrics.ReceivedMessagesCounter.increment()
+        context.become(handleMessages(newPeersWithInfo))
+      }
 
     case PeerHandshakeSuccessful(peer, peerInfo: PeerInfo) =>
       log.info(
@@ -222,9 +228,9 @@ class NetworkPeerManagerActor(
       // When peer is at genesis, we skip this initial GetBlockHeaders to avoid disconnect.
       // Block synchronization will be initiated by the sync controller (SyncController/SNAPSyncController)
       // once it determines which peers to use for sync, avoiding unnecessary blacklisting.
-      if (peerInfo.isAtGenesis) {
+      if (peerInfo.isAtGenesis && !peerInfo.remoteStatus.supportsSnap) {
         log.info(
-          "PEER_HANDSHAKE_SUCCESS: Peer {} is at genesis block - skipping GetBlockHeaders to avoid disconnect. " +
+          "PEER_HANDSHAKE_SUCCESS: Peer {} is at genesis block (non-snap) - skipping GetBlockHeaders to avoid disconnect. " +
             "Peer will be available for sync controller.",
           peer.id
         )
@@ -257,23 +263,9 @@ class NetworkPeerManagerActor(
         )
         peer.ref ! SendMessage(getBlockHeadersMsg)
       }
-      // Probe snap/1 peers to verify they actually serve SNAP data (Besu SnapServerChecker pattern)
-      if (peerInfo.remoteStatus.supportsSnap) {
-        val probeRequestId = SnapServerChecker.sendProbe(peer.ref, peerInfo.remoteStatus.bestHash, peer.id)
-        log.info(
-          "SNAP_PROBE_SENT: Probing peer {} for snap serving capability (requestId={}, stateRoot={})",
-          peer.id,
-          probeRequestId,
-          ByteStringUtils.hash2string(peerInfo.remoteStatus.bestHash)
-        )
-        // Schedule timeout
-        import context.dispatcher
-        context.system.scheduler.scheduleOnce(
-          SnapServerChecker.ProbeTimeoutMillis.millis,
-          self,
-          SnapProbeTimeout(probeRequestId)
-        )
-      }
+      // SNAP probe is deferred until we receive BlockHeaders response — we need the
+      // header's stateRoot (not bestHash which is a block hash) for GetAccountRange.
+      // See handleReceivedMessage where the probe is sent after extracting stateRoot.
 
       NetworkMetrics.registerAddHandshakedPeer(peer)
       context.become(handleMessages(peersWithInfo + (peer.id -> PeerWithInfo(peer, peerInfo))))
@@ -340,29 +332,59 @@ class NetworkPeerManagerActor(
     *   new updated peer info
     */
   private def handleReceivedMessage(message: Message, initialPeerWithInfo: PeerWithInfo): PeerInfo = {
-    // Log received BlockHeaders for debugging GetBlockHeaders response tracking
+    // Log received BlockHeaders and send deferred SNAP probe using actual stateRoot
     message match {
       case m: ETH62BlockHeaders =>
-        log.info(
+        log.debug(
           "RECV_BLOCKHEADERS: peer={}, count={}, blockNumbers={}",
           initialPeerWithInfo.peer.id,
           m.headers.size,
           m.headers.take(5).map(_.number).mkString(", ") + (if (m.headers.size > 5) "..." else "")
         )
+        maybeSendSnapProbe(initialPeerWithInfo, m.headers.headOption.map(_.stateRoot))
       case m: ETH66BlockHeaders =>
-        log.info(
+        log.debug(
           "RECV_BLOCKHEADERS: peer={}, requestId={}, count={}, blockNumbers={}",
           initialPeerWithInfo.peer.id,
           m.requestId,
           m.headers.size,
           m.headers.take(5).map(_.number).mkString(", ") + (if (m.headers.size > 5) "..." else "")
         )
+        maybeSendSnapProbe(initialPeerWithInfo, m.headers.headOption.map(_.stateRoot))
       case _ => // Don't log other message types at INFO level
     }
 
     (updateChainWeight(message) _)
       .andThen(updateForkAccepted(message, initialPeerWithInfo.peer))
       .andThen(updateMaxBlock(message))(initialPeerWithInfo.peerInfo)
+  }
+
+  /** Sends a SNAP probe to a peer using the stateRoot from their best block header.
+    * Only probes peers that advertise snap/1 and haven't been probed yet.
+    */
+  private def maybeSendSnapProbe(peerWithInfo: PeerWithInfo, stateRootOpt: Option[ByteString]): Unit = {
+    val peer = peerWithInfo.peer
+    val peerInfo = peerWithInfo.peerInfo
+    if (peerInfo.remoteStatus.supportsSnap && !peerInfo.isServingSnap && !SnapServerChecker.hasBeenProbed(peer.id)) {
+      stateRootOpt match {
+        case Some(stateRoot) =>
+          val probeRequestId = SnapServerChecker.sendProbe(peer.ref, stateRoot, peer.id)
+          log.info(
+            "SNAP_PROBE_SENT: Probing peer {} for snap serving capability (requestId={}, stateRoot={})",
+            peer.id,
+            probeRequestId,
+            ByteStringUtils.hash2string(stateRoot)
+          )
+          import context.dispatcher
+          context.system.scheduler.scheduleOnce(
+            SnapServerChecker.ProbeTimeoutMillis.millis,
+            self,
+            SnapProbeTimeout(probeRequestId)
+          )
+        case None =>
+          log.debug("SNAP_PROBE_SKIPPED: peer={} - no headers in response", peer.id)
+      }
+    }
   }
 
   /** Processes the message and updates the chain weight of the peer

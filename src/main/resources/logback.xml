@@ -167,7 +167,7 @@
     <!-- Network handshaking - protocol handshake details -->
     <logger name="com.chipprbots.ethereum.network.handshaker" level="INFO" />
     <logger name="com.chipprbots.ethereum.network.handshaker.EtcHelloExchangeState" level="ERROR" />
-    <logger name="com.chipprbots.ethereum.network.handshaker.EthNodeStatus64ExchangeState" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network.handshaker.EthNodeStatus64ExchangeState" level="WARN" />
     <logger name="com.chipprbots.ethereum.network.handshaker.EthNodeStatus63ExchangeState" level="ERROR" />
     <logger name="com.chipprbots.ethereum.network.handshaker.EtcForkBlockExchangeState" level="ERROR" />
     <logger name="com.chipprbots.ethereum.network.handshaker.EtcNodeStatusExchangeState" level="ERROR" />
@@ -176,7 +176,7 @@
     <!-- RLPX - Encrypted transport protocol (ERROR only)                    -->
     <!-- =================================================================== -->
     <logger name="com.chipprbots.ethereum.network.rlpx" level="ERROR" />
-    <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="WARN" />
     <logger name="com.chipprbots.ethereum.network.rlpx.FrameCodec" level="ERROR" />
     <logger name="com.chipprbots.ethereum.network.rlpx.MessageCodec" level="ERROR" />
     <logger name="com.chipprbots.ethereum.network.rlpx.AuthHandshaker" level="ERROR" />
@@ -185,7 +185,7 @@
     <!-- SYNC INTERNALS (ERROR only - detailed sync operations)             -->
     <!-- =================================================================== -->
     <!-- Peer list management and blacklist -->
-    <logger name="com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler" level="WARN" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.PeersClient" level="ERROR" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg" level="ERROR" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.Blacklist" level="INFO" />

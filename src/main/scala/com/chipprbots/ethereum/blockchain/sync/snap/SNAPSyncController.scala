@@ -1593,16 +1593,13 @@ class SNAPSyncController(
   private def evictNonSnapPeers(): Unit = {
     val allPeers = handshakedPeers.values.toSeq
     val verifiedSnapPeerCount = allPeers.count(p => p.peerInfo.remoteStatus.supportsSnap && p.peerInfo.isServingSnap)
-    // Peers that advertise snap but failed/pending probe — wasting a slot
-    val fakeSnapOutgoing = allPeers
-      .filter(p => p.peerInfo.remoteStatus.supportsSnap && !p.peerInfo.isServingSnap && !p.peer.incomingConnection)
-      .sortBy(_.peer.createTimeMillis)
-    // Peers that don't advertise snap at all
+    // Only evict peers that don't advertise snap at all.
+    // Aligned with Besu: snap-advertising peers with pending/failed probes are NOT evicted —
+    // they are simply excluded from snap sync selection until verified.
     val nonSnapOutgoing = allPeers
       .filter(p => !p.peerInfo.remoteStatus.supportsSnap && !p.peer.incomingConnection)
       .sortBy(_.peer.createTimeMillis)
-    // Evict fake-snap peers first (they're wasting a slot), then non-snap peers
-    val evictionCandidates = fakeSnapOutgoing ++ nonSnapOutgoing
+    val evictionCandidates = nonSnapOutgoing
 
     if (verifiedSnapPeerCount >= snapSyncConfig.minSnapPeers || evictionCandidates.isEmpty) {
       log.debug(
@@ -1620,13 +1617,12 @@ class SNAPSyncController(
     if (numToEvict > 0) {
       log.info(
         s"SNAP peer eviction: only $verifiedSnapPeerCount verified snap peers (need ${snapSyncConfig.minSnapPeers}), " +
-          s"evicting $numToEvict (${fakeSnapOutgoing.size} fake-snap + ${nonSnapOutgoing.size} non-snap candidates)"
+          s"evicting $numToEvict non-snap peers (${nonSnapOutgoing.size} candidates)"
       )
       evictionCandidates.take(numToEvict).foreach { peerWithInfo =>
-        val snapStatus = if (peerWithInfo.peerInfo.remoteStatus.supportsSnap) "advertises-snap-not-serving" else "no-snap"
         log.info(
-          s"Evicting peer ${peerWithInfo.peer.id} (${peerWithInfo.peer.remoteAddress}, " +
-            s"cap=${peerWithInfo.peerInfo.remoteStatus.capability}, $snapStatus)"
+          s"Evicting non-snap peer ${peerWithInfo.peer.id} (${peerWithInfo.peer.remoteAddress}, " +
+            s"cap=${peerWithInfo.peerInfo.remoteStatus.capability})"
         )
         peerWithInfo.peer.ref ! com.chipprbots.ethereum.network.PeerActor.DisconnectPeer(
           com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.Reasons.TooManyPeers

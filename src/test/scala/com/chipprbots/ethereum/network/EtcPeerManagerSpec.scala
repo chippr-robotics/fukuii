@@ -33,6 +33,7 @@ import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
+import com.chipprbots.ethereum.blockchain.sync.snap.SnapServerChecker
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.Config
 
@@ -294,6 +295,74 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     requestSender.expectMsg(PeerInfoResponse(Some(genesisInfo)))
   }
 
+  it should "send GetBlockHeaders to snap/1 peer even when at genesis" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+    SnapServerChecker.reset()
+
+    // Create a snap-capable peer at genesis (bestHash == genesisHash, supportsSnap = true)
+    val genesisInfo: PeerInfo = createGenesisPeerInfo()
+    val snapGenesisStatus = genesisInfo.remoteStatus.copy(supportsSnap = true)
+    val snapGenesisInfo = genesisInfo.copy(remoteStatus = snapGenesisStatus)
+
+    // Use setupNewPeer — it will expect GetBlockHeaders because supportsSnap = true
+    setupNewPeer(peer1, peer1Probe, snapGenesisInfo)
+
+    // Verify peer is registered
+    requestSender.send(peersInfoHolder, PeerInfoRequest(peer1.id))
+    requestSender.expectMsg(PeerInfoResponse(Some(snapGenesisInfo)))
+  }
+
+  it should "trigger snap probe when BlockHeaders received from snap/1 peer" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+    SnapServerChecker.reset()
+
+    // Setup a snap-capable peer (not at genesis, so GetBlockHeaders is sent normally)
+    val snapStatus = peer1Info.remoteStatus.copy(supportsSnap = true)
+    val snapPeerInfo = peer1Info.copy(remoteStatus = snapStatus)
+    setupNewPeer(peer1, peer1Probe, snapPeerInfo)
+
+    // Simulate receiving BlockHeaders response with a stateRoot
+    val testStateRoot = ByteString(Array.fill(32)(0xAB.toByte))
+    val header = baseBlockHeader.copy(stateRoot = testStateRoot)
+    val blockHeadersMsg = BlockHeaders(Seq(header))
+    peersInfoHolder ! MessageFromPeer(blockHeadersMsg, peer1.id)
+
+    // Peer should receive the SNAP probe (GetAccountRange via PeerActor.SendMessage)
+    val sentMsg = peer1Probe.expectMsgType[PeerActor.SendMessage]
+    sentMsg.message should not be null
+
+    // Verify the probe was registered
+    SnapServerChecker.hasBeenProbed(peer1.id) shouldBe true
+  }
+
+  it should "not re-probe an already probed snap/1 peer" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+    SnapServerChecker.reset()
+
+    val snapStatus = peer1Info.remoteStatus.copy(supportsSnap = true)
+    val snapPeerInfo = peer1Info.copy(remoteStatus = snapStatus)
+    setupNewPeer(peer1, peer1Probe, snapPeerInfo)
+
+    // First BlockHeaders → triggers probe
+    val testStateRoot = ByteString(Array.fill(32)(0xCD.toByte))
+    val header = baseBlockHeader.copy(stateRoot = testStateRoot)
+    peersInfoHolder ! MessageFromPeer(BlockHeaders(Seq(header)), peer1.id)
+    peer1Probe.expectMsgType[PeerActor.SendMessage] // First probe
+
+    // Second BlockHeaders → should NOT trigger another probe
+    peersInfoHolder ! MessageFromPeer(BlockHeaders(Seq(header)), peer1.id)
+    peer1Probe.expectNoMessage()
+  }
+
   it should "route SNAP protocol messages to registered SNAPSyncController" taggedAs (
     UnitTest,
     NetworkTest
@@ -475,10 +544,10 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
         )
       )
 
-      // Peer should receive request for highest block UNLESS peer is at genesis
-      // When peer is at genesis, no GetBlockHeaders is sent to avoid triggering
-      // disconnect with reason 0x10 (Other) from peers that reject genesis-only nodes
-      if (!peerInfo.isAtGenesis) {
+      // Peer should receive request for highest block UNLESS peer is at genesis AND non-snap.
+      // Snap/1 peers at genesis still get GetBlockHeaders so the SNAP probe can fire.
+      // Non-snap genesis peers skip to avoid disconnect with reason 0x10 (Other).
+      if (!peerInfo.isAtGenesis || peerInfo.remoteStatus.supportsSnap) {
         peerProbe.expectMsg(PeerActor.SendMessage(GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, false)))
       }
     }
