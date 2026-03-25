@@ -153,6 +153,7 @@ class QaJRCSpec
         fukuiiService,
         mcpService,
         ProofServiceDummy,
+        mock[TxPoolService],
         config
       )
 

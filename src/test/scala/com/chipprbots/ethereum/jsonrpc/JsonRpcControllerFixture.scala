@@ -184,6 +184,7 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
       fukuiiService,
       mcpService,
       ProofServiceDummy,
+      mock[TxPoolService],
       config
     )
 

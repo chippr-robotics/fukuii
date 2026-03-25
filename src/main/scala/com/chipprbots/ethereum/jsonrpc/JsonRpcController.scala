@@ -21,6 +21,7 @@ import com.chipprbots.ethereum.jsonrpc.FukuiiService.RestartFastSyncResponse
 import com.chipprbots.ethereum.jsonrpc.McpService._
 import com.chipprbots.ethereum.jsonrpc.NetService._
 import com.chipprbots.ethereum.jsonrpc.PersonalService._
+import com.chipprbots.ethereum.jsonrpc.TxPoolService._
 import com.chipprbots.ethereum.jsonrpc.ProofService.GetProofRequest
 import com.chipprbots.ethereum.jsonrpc.ProofService.GetProofResponse
 import com.chipprbots.ethereum.jsonrpc.TestService._
@@ -46,6 +47,7 @@ case class JsonRpcController(
     fukuiiService: FukuiiService,
     mcpService: McpService,
     proofService: ProofService,
+    txPoolService: TxPoolService,
     override val config: JsonRpcConfig
 ) extends ApisBuilder
     with Logger
@@ -65,6 +67,7 @@ case class JsonRpcController(
   import TestJsonMethodsImplicits._
   import FukuiiJsonMethodImplicits._
   import McpJsonMethodsImplicits._
+  import TxPoolJsonMethodsImplicits._
 
   override def apisHandleFns: Map[String, PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]]] = Map(
     Apis.Eth -> handleEthRequest,
@@ -77,7 +80,8 @@ case class JsonRpcController(
     Apis.Debug -> handleDebugRequest,
     Apis.Test -> handleTestRequest,
     Apis.Iele -> handleIeleRequest,
-    Apis.Qa -> handleQARequest
+    Apis.Qa -> handleQARequest,
+    Apis.TxPool -> handleTxPoolRequest
   )
 
   override def enabledApis: Seq[String] = config.apis :+ Apis.Rpc // RPC enabled by default
@@ -357,6 +361,17 @@ case class JsonRpcController(
   private def handleQARequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "qa_mineBlocks", _, _) =>
       handle[QAService.MineBlocksRequest, QAService.MineBlocksResponse](qaService.mineBlocks, req)
+  }
+
+  private def handleTxPoolRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
+    case req @ JsonRpcRequest(_, "txpool_status", _, _) =>
+      handle[TxPoolStatusRequest, TxPoolStatusResponse](txPoolService.getStatus, req)
+    case req @ JsonRpcRequest(_, "txpool_content", _, _) =>
+      handle[TxPoolContentRequest, TxPoolContentResponse](txPoolService.getContent, req)
+    case req @ JsonRpcRequest(_, "txpool_inspect", _, _) =>
+      handle[TxPoolInspectRequest, TxPoolInspectResponse](txPoolService.getInspect, req)
+    case req @ JsonRpcRequest(_, "txpool_contentFrom", _, _) =>
+      handle[TxPoolContentFromRequest, TxPoolContentFromResponse](txPoolService.getContentFrom, req)
   }
 
   private def handleRpcRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {

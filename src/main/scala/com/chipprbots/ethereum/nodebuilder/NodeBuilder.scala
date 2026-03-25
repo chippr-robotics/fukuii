@@ -552,6 +552,15 @@ trait EthFilterServiceBuilder {
   )
 }
 
+trait TxPoolServiceBuilder {
+  self: PendingTransactionsManagerBuilder with TxPoolConfigBuilder =>
+
+  lazy val txPoolService = new TxPoolService(
+    pendingTransactionsManager,
+    txPoolConfig.getTransactionFromPoolTimeout
+  )
+}
+
 trait PersonalServiceBuilder {
   self: KeyStoreBuilder
     with BlockchainBuilder
@@ -625,10 +634,11 @@ trait ApisBuilder extends ApisBase {
     val Test = "test"
     val Iele = "iele"
     val Qa = "qa"
+    val TxPool = "txpool"
   }
 
   import Apis._
-  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa)
+  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa, TxPool)
 }
 
 trait JSONRpcConfigBuilder {
@@ -652,6 +662,7 @@ trait JSONRpcControllerBuilder {
     with DebugServiceBuilder
     with JSONRpcConfigBuilder
     with QaServiceBuilder
+    with TxPoolServiceBuilder
     with FukuiiServiceBuilder
     with McpServiceBuilder =>
 
@@ -674,6 +685,7 @@ trait JSONRpcControllerBuilder {
       fukuiiService,
       mcpService,
       ethProofService,
+      txPoolService,
       jsonRpcConfig
     )
 }
@@ -971,6 +983,7 @@ trait Node
     with PersonalServiceBuilder
     with DebugServiceBuilder
     with QaServiceBuilder
+    with TxPoolServiceBuilder
     with FukuiiServiceBuilder
     with McpServiceBuilder
     with KeyStoreBuilder
