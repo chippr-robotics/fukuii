@@ -14,7 +14,7 @@ import com.chipprbots.ethereum.testing.Tags._
 class PoWBlockHeaderValidatorSpec extends AnyFlatSpecLike with Matchers {
   import PoWBlockHeaderValidatorSpec._
 
-  "PoWBlockHeaderValidator" should "validate Ethash block headers" taggedAs (UnitTest, ConsensusTest, SlowTest) in {
+  "PoWBlockHeaderValidator" should "validate Ethash block headers" taggedAs (UnitTest, ConsensusTest) in {
     PoWBlockHeaderValidator.validateEvenMore(validEthashBlockHeader)(blockchainConfig) shouldBe Right(BlockHeaderValid)
   }
 }

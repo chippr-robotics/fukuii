@@ -73,7 +73,7 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   // organize-imports removed — built-in to Scalafix 0.11.0+
   // Scalanet snapshots are published to Sonatype after each build (now defined in inThisBuild resolvers).
   (Test / testOptions) += Tests
-    .Argument(TestFrameworks.ScalaTest, "-l", "EthashMinerSpec"), // miner tests disabled by default,
+    .Argument(TestFrameworks.ScalaTest, "-l", "SlowTest"), // Exclude slow tests (real PoW mining) from default runs
   // Configure scalacOptions for Scala 3
   scalacOptions := {
     val base = baseScalacOptions

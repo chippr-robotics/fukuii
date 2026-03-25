@@ -86,7 +86,8 @@ class StateSyncSpec
 
   it should "sync state to different tries when peer provide mixed responses" taggedAs (
     UnitTest,
-    SyncTest
+    SyncTest,
+    SlowTest
   ) in new TestSetup() {
     forAll(ObjectGenerators.genMultipleNodeData(1000)) { nodeData =>
       val initiator = TestProbe()

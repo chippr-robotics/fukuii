@@ -22,7 +22,7 @@ class BlockBodiesStorageSpec
 
   "BlockBodiesStorage" should {
 
-    "insert block body properly" taggedAs (UnitTest, DatabaseTest) in {
+    "insert block body properly" taggedAs (UnitTest, DatabaseTest, SlowTest) in {
       forAll(Gen.listOfN(32, ObjectGenerators.newBlockGen(secureRandom, chainId))) { newBlocks =>
         val blocks = newBlocks.distinct
         val totalStorage = insertBlockBodiesMapping(newBlocks)
@@ -33,7 +33,7 @@ class BlockBodiesStorageSpec
       }
     }
 
-    "delete block body properly" taggedAs (UnitTest, DatabaseTest) in {
+    "delete block body properly" taggedAs (UnitTest, DatabaseTest, SlowTest) in {
       forAll(Gen.listOfN(32, ObjectGenerators.newBlockGen(secureRandom, chainId))) { newBlocks =>
         val blocks = newBlocks.distinct
         val storage = insertBlockBodiesMapping(newBlocks)

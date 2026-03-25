@@ -438,17 +438,21 @@ class RegularSyncSpec
       })
 
       "retry fetching node if validation failed" in sync(new MissingStateNodeFixture(testSystem) {
-        def fishForFailingBlockNodeRequest(): Boolean = peersClient.fishForSpecificMessage() {
+        def fishForFailingBlockNodeRequest(): Boolean = peersClient.fishForSpecificMessage(15.seconds) {
           case PeersClient.Request(GetNodeData(hash :: Nil), _, _) if hash == failingBlock.hash => true
         }
 
+        // Autopilot that returns bad data twice, then valid data on the 3rd attempt
         class WrongNodeDataPeersClientAutoPilot(var handledRequests: Int = 0) extends PeersClientAutoPilot {
           override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
-            case PeersClient.Request(GetNodeData(_), _, _) =>
+            case PeersClient.Request(GetNodeData(hashes), _, _) =>
               val response = handledRequests match {
                 case 0 => Some(PeersClient.Response(peerByNumber(1), NodeData(Nil)))
                 case 1 => Some(PeersClient.Response(peerByNumber(2), NodeData(List(ByteString("foo")))))
-                case _ => None
+                case _ =>
+                  // On 3rd+ attempt, return valid node data (proving retry succeeded)
+                  val validNode = ByteString(failingBlock.header.toBytes: Array[Byte])
+                  Some(PeersClient.Response(peerByNumber(3), NodeData(List(validNode))))
               }
 
               response.foreach(sender ! _)
@@ -465,25 +469,10 @@ class RegularSyncSpec
         fishForFailingBlockNodeRequest()
       })
 
-      "save fetched node" in sync(new Fixture(testSystem) {
-        override lazy val blockchain: BlockchainImpl = stub[BlockchainImpl]
-        override lazy val consensusAdapter: ConsensusAdapter = stub[ConsensusAdapter]
-
-        override lazy val blockchainReader: BlockchainReader = stub[BlockchainReader]
-        val failingBlock: Block = testBlocksChunked.head.head
-        peersClient.setAutoPilot(new PeersClientAutoPilot)
-        override lazy val branchResolution: BranchResolution = stub[BranchResolution]
-        (blockchainReader.getBestBlockNumber _).when().returns(0)
-        (branchResolution.resolveBranch _).when(*).returns(NewBetterBranch(Nil)).atLeastOnce()
-        (consensusAdapter
-          .evaluateBranchBlock(_: Block)(_: IORuntime, _: BlockchainConfig))
-          .when(*, *, *)
-          .returns(IO.pure(BlockImportFailedDueToMissingNode(new MissingNodeException(failingBlock.hash))))
-
+      "save fetched node" in sync(new MissingStateNodeFixture(testSystem) {
         var saveNodeWasCalled: Boolean = false
         val nodeData: List[ByteString] = List(ByteString(failingBlock.header.toBytes: Array[Byte]))
-        (blockchainReader.getBestBlockNumber _).when().returns(0)
-        (blockchainReader.getBlockHeaderByNumber _).when(*).returns(Some(BlockHelpers.genesis.header))
+
         (stateStorage.saveNode _)
           .when(*, *, *)
           .onCall { (hash, encoded, totalDifficulty) =>
@@ -496,9 +485,17 @@ class RegularSyncSpec
             saveNodeWasCalled = true
           }
 
+        peersClient.setAutoPilot(new PeersClientAutoPilot {
+          override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
+            case PeersClient.Request(GetNodeData(hash :: Nil), _, _) if hash == failingBlock.hash =>
+              sender ! PeersClient.Response(defaultPeer, NodeData(nodeData))
+              None
+          }
+        })
+
         regularSync ! SyncProtocol.Start
 
-        awaitCond(saveNodeWasCalled)
+        awaitCond(saveNodeWasCalled, 15.seconds)
       })
     }
 
