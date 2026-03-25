@@ -38,7 +38,7 @@ exec "$BINARY" \
   --rpc-http-cors-origins="*" \
   --rpc-http-api=ADMIN,ETH,NET,WEB3 \
   --p2p-port=30304 \
-  --data-storage-format=BONSAI \
+  --data-storage-format=FOREST \
   --sync-mode=FULL \
   --sync-min-peers=1 \
   --snapsync-server-enabled \
