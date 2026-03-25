@@ -167,7 +167,7 @@
     <!-- Network handshaking - protocol handshake details -->
     <logger name="com.chipprbots.ethereum.network.handshaker" level="INFO" />
     <logger name="com.chipprbots.ethereum.network.handshaker.EtcHelloExchangeState" level="ERROR" />
-    <logger name="com.chipprbots.ethereum.network.handshaker.EthNodeStatus64ExchangeState" level="WARN" />
+    <logger name="com.chipprbots.ethereum.network.handshaker.EthNodeStatus64ExchangeState" level="ERROR" />
     <logger name="com.chipprbots.ethereum.network.handshaker.EthNodeStatus63ExchangeState" level="ERROR" />
     <logger name="com.chipprbots.ethereum.network.handshaker.EtcForkBlockExchangeState" level="ERROR" />
     <logger name="com.chipprbots.ethereum.network.handshaker.EtcNodeStatusExchangeState" level="ERROR" />
