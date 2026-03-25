@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.jsonrpc
 
 import java.time.Duration
 import java.util.Date
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 import org.apache.pekko.actor.ActorRef
@@ -13,13 +14,14 @@ import cats.syntax.parallel._
 
 import scala.collection.concurrent.TrieMap
 import scala.collection.concurrent.{Map => ConcurrentMap}
-import scala.concurrent.duration.FiniteDuration
+import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
 import com.chipprbots.ethereum.consensus.mining.CoinbaseProvider
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.consensus.mining.RichMining
+import com.chipprbots.ethereum.consensus.pow.PoWMining
 import com.chipprbots.ethereum.consensus.pow.EthashUtils
 import com.chipprbots.ethereum.consensus.pow.WorkNotifier
 import com.chipprbots.ethereum.consensus.pow.miners.MinerProtocol
@@ -69,6 +71,9 @@ object EthMiningService {
 
   case class SetEtherbaseRequest(address: Address)
   case class SetEtherbaseResponse(success: Boolean)
+
+  case class SetRecommitIntervalRequest(intervalMs: Int)
+  case class SetRecommitIntervalResponse(success: Boolean)
 }
 
 class EthMiningService(
@@ -89,6 +94,9 @@ class EthMiningService(
 
   val hashRate: ConcurrentMap[ByteString, (BigInt, Date)] = new TrieMap[ByteString, (BigInt, Date)]()
   val lastActive = new AtomicReference[Option[Date]](None)
+
+  /** Tracks blocks successfully mined by this node. Incremented on each successful submitWork. */
+  private val blocksMinedCounter = new AtomicLong(0L)
 
   private[this] implicit val notifierEc: scala.concurrent.ExecutionContext =
     scala.concurrent.ExecutionContext.Implicits.global
@@ -164,9 +172,9 @@ class EthMiningService(
         ethash.blockGenerator.getPrepared(req.powHeaderHash) match {
           case Some(pendingBlock) if blockchainReader.getBestBlockNumber() <= pendingBlock.block.header.number =>
             import pendingBlock._
-            syncingController ! SyncProtocol.MinedBlock(
-              block.copy(header = block.header.copy(nonce = req.nonce, mixHash = req.mixHash))
-            )
+            val minedBlock = block.copy(header = block.header.copy(nonce = req.nonce, mixHash = req.mixHash))
+            syncingController ! SyncProtocol.MinedBlock(minedBlock)
+            blocksMinedCounter.incrementAndGet()
             Right(SubmitWorkResponse(true))
           case _ =>
             Right(SubmitWorkResponse(false))
@@ -211,17 +219,7 @@ class EthMiningService(
       }
     }(IO.pure(Left(JsonRpcError.MiningIsNotEthash)))
 
-  /** Returns comprehensive mining status information.
-    *
-    * Provides a consolidated view of the mining state including:
-    *   - Whether the node is actively mining (based on recent activity)
-    *   - The coinbase address receiving mining rewards
-    *   - Current aggregate hashrate from all connected miners
-    *   - Blocks mined count (currently reserved for future implementation)
-    *
-    * Note: blocksMinedCount is always None in the current implementation. Future versions may track and report this
-    * metric.
-    */
+  /** Returns comprehensive mining status information. */
   def getMinerStatus(req: GetMinerStatusRequest): ServiceResponse[GetMinerStatusResponse] =
     ifEthash(req) { _ =>
       val now = new Date
@@ -238,7 +236,7 @@ class EthMiningService(
         isMining = isMining,
         coinbase = coinbaseProvider.get(),
         hashRate = currentHashRate,
-        blocksMinedCount = None // Reserved for future implementation - would require tracking mined blocks
+        blocksMinedCount = Some(blocksMinedCounter.get())
       )
     }
 
@@ -248,6 +246,18 @@ class EthMiningService(
       log.info("Updated miner coinbase via eth_setEtherbase to {}", request.address)
       SetEtherbaseResponse(success = true)
     }
+
+  /** Dynamically update the recommit interval. Matches geth's miner_setRecommitInterval. */
+  def setRecommitInterval(req: SetRecommitIntervalRequest): ServiceResponse[SetRecommitIntervalResponse] =
+    mining.ifEthash[ServiceResponse[SetRecommitIntervalResponse]] { ethash =>
+      IO {
+        val interval = req.intervalMs.milliseconds
+        // ifEthash guarantees ethash is PoWMining
+        ethash.asInstanceOf[PoWMining].setRecommitInterval(interval)
+        log.info(s"Recommit interval set to $interval via RPC")
+        Right(SetRecommitIntervalResponse(true))
+      }
+    }(IO.pure(Left(JsonRpcError.MiningIsNotEthash)))
 
   // NOTE This is called from places that guarantee we are running Ethash consensus.
   private def removeObsoleteHashrates(now: Date): Unit =

@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.jsonrpc
 import org.json4s.JsonAST
 import org.json4s.JsonAST.JArray
 import org.json4s.JsonAST.JBool
+import org.json4s.JsonAST.JInt
 import org.json4s.JsonAST.JString
 import org.json4s.JsonAST.JValue
 
@@ -108,6 +109,22 @@ object EthMiningJsonMethodsImplicits extends JsonMethodsImplicits {
         }
 
       override def encodeJson(t: EthMiningService.SetEtherbaseResponse): JValue = JBool(t.success)
+    }
+
+  implicit val miner_setRecommitInterval: JsonMethodDecoder[SetRecommitIntervalRequest]
+    with JsonEncoder[SetRecommitIntervalResponse] =
+    new JsonMethodDecoder[SetRecommitIntervalRequest] with JsonEncoder[SetRecommitIntervalResponse] {
+      override def decodeJson(
+          params: Option[JsonAST.JArray]
+      ): Either[JsonRpcError, SetRecommitIntervalRequest] =
+        params match {
+          case Some(JArray(JInt(ms) :: Nil)) =>
+            Right(SetRecommitIntervalRequest(ms.toInt))
+          case _ =>
+            Left(InvalidParams())
+        }
+
+      override def encodeJson(t: SetRecommitIntervalResponse): JValue = JBool(t.success)
     }
 
 }

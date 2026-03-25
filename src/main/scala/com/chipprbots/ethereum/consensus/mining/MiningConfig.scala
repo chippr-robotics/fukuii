@@ -32,6 +32,9 @@ import com.chipprbots.ethereum.utils.Logger
   * @param recommitInterval
   *   Interval for regenerating mining work with latest pending transactions. Matches geth's `miner.recommit` (default
   *   2s). Set to Duration.Zero to disable.
+  * @param noverify
+  *   If true, skip PoW verification when accepting submitted work via eth_submitWork. Matches geth's `miner.noverify`.
+  *   Use for trusted pool connections where the pool has already verified the solution.
   */
 final case class MiningConfig(
     protocol: Protocol,
@@ -42,7 +45,8 @@ final case class MiningConfig(
     gasLimitTarget: BigInt,
     notifyUrls: Seq[String] = Seq.empty,
     notifyFull: Boolean = false,
-    recommitInterval: FiniteDuration = 2.seconds
+    recommitInterval: FiniteDuration = 2.seconds,
+    noverify: Boolean = false
 )
 
 object MiningConfig extends Logger {
@@ -57,6 +61,7 @@ object MiningConfig extends Logger {
     final val NotifyUrls = "notify"
     final val NotifyFull = "notify-full"
     final val RecommitInterval = "recommit-interval"
+    final val Noverify = "noverify"
   }
 
   final val AllowedProtocols: Set[String] = Set(
@@ -110,6 +115,10 @@ object MiningConfig extends Logger {
       if (config.hasPath(Keys.RecommitInterval)) config.getDuration(Keys.RecommitInterval).toMillis.millis
       else 2.seconds
 
+    val noverify =
+      if (config.hasPath(Keys.Noverify)) config.getBoolean(Keys.Noverify)
+      else false
+
     new MiningConfig(
       protocol = protocol,
       coinbase = coinbase,
@@ -119,7 +128,8 @@ object MiningConfig extends Logger {
       gasLimitTarget = gasLimitTarget,
       notifyUrls = notifyUrls,
       notifyFull = notifyFull,
-      recommitInterval = recommitInterval
+      recommitInterval = recommitInterval,
+      noverify = noverify
     )
   }
 }

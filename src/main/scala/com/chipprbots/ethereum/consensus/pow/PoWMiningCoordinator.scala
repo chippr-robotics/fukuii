@@ -33,6 +33,9 @@ object PoWMiningCoordinator {
   /** Periodic work regeneration with latest pending transactions (geth recommit equivalent) */
   case object RecommitWork extends CoordinatorProtocol
 
+  /** Dynamically update the recommit interval without restart (geth miner_setRecommitInterval equivalent) */
+  final case class SetRecommitInterval(interval: FiniteDuration) extends CoordinatorProtocol
+
   case object MiningSuccessful extends CoordinatorProtocol
 
   case object MiningUnsuccessful extends CoordinatorProtocol
@@ -140,6 +143,16 @@ class PoWMiningCoordinator private (
           case Right(Left(err)) => log.warn(s"Recommit: work regeneration failed: $err")
           case Left(ex)         => log.warn(s"Recommit: work regeneration error: ${ex.getMessage}")
         }
+      Behaviors.same
+
+    case SetRecommitInterval(interval) =>
+      if (interval > Duration.Zero) {
+        timers.startTimerWithFixedDelay(RecommitTimerKey, RecommitWork, interval)
+        log.info(s"Recommit interval updated to $interval")
+      } else {
+        timers.cancel(RecommitTimerKey)
+        log.info("Recommit timer disabled")
+      }
       Behaviors.same
 
     case StopMining =>

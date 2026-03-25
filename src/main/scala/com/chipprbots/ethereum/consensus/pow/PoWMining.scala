@@ -10,6 +10,7 @@ import org.apache.pekko.util.Timeout
 import cats.effect.IO
 
 import scala.concurrent.duration._
+import scala.concurrent.duration.FiniteDuration
 
 import com.chipprbots.ethereum.consensus.blocks.TestBlockGenerator
 import com.chipprbots.ethereum.consensus.difficulty.DifficultyCalculator
@@ -84,6 +85,10 @@ class PoWMining private (
         minerCoordinatorRef.foreach(_ ! PoWMiningCoordinator.StopMining)
       case _ => log.warn("SendMiner method received unexpected message {}", msg)
     }
+
+  /** Update the recommit interval on the mining coordinator. */
+  def setRecommitInterval(interval: FiniteDuration): Unit =
+    minerCoordinatorRef.foreach(_ ! PoWMiningCoordinator.SetRecommitInterval(interval))
 
   // no interactions are done with minerCoordinatorRef using the ask pattern
   override def askMiner(msg: MockedMinerProtocol): IO[MockedMinerResponse] =

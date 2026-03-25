@@ -148,6 +148,8 @@ case class JsonRpcController(
       handle[StopMinerRequest, StopMinerResponse](ethMiningService.stopMiner, req)
     case req @ JsonRpcRequest(_, "miner_getStatus", _, _) =>
       handle[GetMinerStatusRequest, GetMinerStatusResponse](ethMiningService.getMinerStatus, req)
+    case req @ JsonRpcRequest(_, "miner_setRecommitInterval", _, _) =>
+      handle[SetRecommitIntervalRequest, SetRecommitIntervalResponse](ethMiningService.setRecommitInterval, req)
     case req @ JsonRpcRequest(_, "eth_setEtherbase", _, _) =>
       handle[EthMiningService.SetEtherbaseRequest, EthMiningService.SetEtherbaseResponse](
         ethMiningService.setEtherbase,
