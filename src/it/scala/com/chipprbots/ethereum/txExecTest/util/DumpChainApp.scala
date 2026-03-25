@@ -174,6 +174,7 @@ class BlockchainMock(genesisHash: ByteString) extends Blockchain {
   ): StorageProof = EmptyStorageValueProof(StorageProofKey(position))
 
   override def removeBlock(hash: ByteString): Unit = ???
+  override def removeBlockRange(from: BigInt, to: BigInt): Unit = ???
 
   override def getAccountStorageAt(rootHash: ByteString, position: BigInt, ethCompatibleStorage: Boolean): ByteString =
     ???
