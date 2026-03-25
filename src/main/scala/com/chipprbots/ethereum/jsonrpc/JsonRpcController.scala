@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.jsonrpc.FukuiiService.RestartFastSyncRequest
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.RestartFastSyncResponse
 import com.chipprbots.ethereum.jsonrpc.McpService._
 import com.chipprbots.ethereum.jsonrpc.AdminService._
+import com.chipprbots.ethereum.jsonrpc.TraceService._
 import com.chipprbots.ethereum.jsonrpc.NetService._
 import com.chipprbots.ethereum.jsonrpc.PersonalService._
 import com.chipprbots.ethereum.jsonrpc.TxPoolService._
@@ -50,6 +51,7 @@ case class JsonRpcController(
     proofService: ProofService,
     txPoolService: TxPoolService,
     adminService: AdminService,
+    traceService: TraceService,
     override val config: JsonRpcConfig
 ) extends ApisBuilder
     with Logger
@@ -71,6 +73,7 @@ case class JsonRpcController(
   import McpJsonMethodsImplicits._
   import TxPoolJsonMethodsImplicits._
   import AdminJsonMethodsImplicits._
+  import TraceJsonMethodsImplicits._
 
   override def apisHandleFns: Map[String, PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]]] = Map(
     Apis.Eth -> handleEthRequest,
@@ -85,7 +88,8 @@ case class JsonRpcController(
     Apis.Iele -> handleIeleRequest,
     Apis.Qa -> handleQARequest,
     Apis.TxPool -> handleTxPoolRequest,
-    Apis.Admin -> handleAdminRequest
+    Apis.Admin -> handleAdminRequest,
+    Apis.Trace -> handleTraceRequest
   )
 
   override def enabledApis: Seq[String] = config.apis :+ Apis.Rpc // RPC enabled by default
@@ -393,6 +397,13 @@ case class JsonRpcController(
       handle[TxPoolInspectRequest, TxPoolInspectResponse](txPoolService.getInspect, req)
     case req @ JsonRpcRequest(_, "txpool_contentFrom", _, _) =>
       handle[TxPoolContentFromRequest, TxPoolContentFromResponse](txPoolService.getContentFrom, req)
+  }
+
+  private def handleTraceRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
+    case req @ JsonRpcRequest(_, "trace_block", _, _) =>
+      handle[TraceBlockRequest, TraceBlockResponse](traceService.traceBlock, req)
+    case req @ JsonRpcRequest(_, "trace_transaction", _, _) =>
+      handle[TraceTransactionRequest, TraceTransactionResponse](traceService.traceTransaction, req)
   }
 
   private def handleRpcRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {

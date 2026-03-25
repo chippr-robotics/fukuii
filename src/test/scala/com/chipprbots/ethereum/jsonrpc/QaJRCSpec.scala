@@ -155,6 +155,7 @@ class QaJRCSpec
         ProofServiceDummy,
         mock[TxPoolService],
         null.asInstanceOf[AdminService],
+        null.asInstanceOf[TraceService],
         config
       )
 

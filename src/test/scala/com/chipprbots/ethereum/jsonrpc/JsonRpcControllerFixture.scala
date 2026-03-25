@@ -186,6 +186,7 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
       ProofServiceDummy,
       mock[TxPoolService],
       null.asInstanceOf[AdminService],
+      null.asInstanceOf[TraceService],
       config
     )
 

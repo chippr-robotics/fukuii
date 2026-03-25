@@ -573,6 +573,18 @@ trait AdminServiceBuilder {
   )
 }
 
+trait TraceServiceBuilder {
+  self: BlockchainBuilder with BlockchainConfigBuilder with StorageBuilder with MiningBuilder =>
+
+  lazy val traceService = new TraceService(
+    blockchain,
+    blockchainReader,
+    storagesInstance.storages.evmCodeStorage,
+    mining.blockPreparator,
+    storagesInstance.storages.transactionMappingStorage
+  )
+}
+
 trait PersonalServiceBuilder {
   self: KeyStoreBuilder
     with BlockchainBuilder
@@ -648,10 +660,11 @@ trait ApisBuilder extends ApisBase {
     val Qa = "qa"
     val TxPool = "txpool"
     val Admin = "admin"
+    val Trace = "trace"
   }
 
   import Apis._
-  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa, TxPool, Admin)
+  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa, TxPool, Admin, Trace)
 }
 
 trait JSONRpcConfigBuilder {
@@ -677,6 +690,7 @@ trait JSONRpcControllerBuilder {
     with QaServiceBuilder
     with TxPoolServiceBuilder
     with AdminServiceBuilder
+    with TraceServiceBuilder
     with FukuiiServiceBuilder
     with McpServiceBuilder =>
 
@@ -701,6 +715,7 @@ trait JSONRpcControllerBuilder {
       ethProofService,
       txPoolService,
       adminService,
+      traceService,
       jsonRpcConfig
     )
 }
@@ -1000,6 +1015,7 @@ trait Node
     with QaServiceBuilder
     with TxPoolServiceBuilder
     with AdminServiceBuilder
+    with TraceServiceBuilder
     with FukuiiServiceBuilder
     with McpServiceBuilder
     with KeyStoreBuilder

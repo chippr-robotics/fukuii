@@ -18,6 +18,12 @@ import com.chipprbots.ethereum.utils.DebugTrace
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.vm.{PC => _, _}
 
+/** Result of executing a transaction with trace data preserved. */
+case class TxTraceData(
+    txResult: TxResult,
+    internalTxs: Seq[InternalTransaction]
+)
+
 /** This is used from a [[com.chipprbots.ethereum.consensus.blocks.BlockGenerator BlockGenerator]].
   */
 class BlockPreparator(
@@ -314,6 +320,66 @@ class BlockPreparator(
          | - Execution gas paid to miner: $executionGasToPayToMiner""".stripMargin)
 
     TxResult(world2, executionGasToPayToMiner, resultWithErrorHandling.logs, result.returnData, result.error)
+  }
+
+  /** Execute a transaction and return both the TxResult and the internal transaction traces.
+    * Used by the trace_* RPC methods. Same execution logic as executeTransaction but preserves
+    * the ProgramResult.internalTxs that would otherwise be discarded.
+    */
+  /** Accessible from jsonrpc package for trace_* RPC methods. */
+  def executeTransactionWithTrace(
+      stx: SignedTransaction,
+      senderAddress: Address,
+      blockHeader: BlockHeader,
+      world: InMemoryWorldStateProxy
+  )(implicit blockchainConfig: BlockchainConfig): TxTraceData = {
+    val gasPrice = UInt256(Transaction.effectiveGasPrice(stx.tx, blockHeader.baseFee))
+    val gasLimit = stx.tx.gasLimit
+
+    val checkpointWorldState = updateSenderAccountBeforeExecution(stx, senderAddress, world)
+
+    val worldAfterAuths = stx.tx match {
+      case sct: SetCodeTransaction =>
+        applyAuthorizations(sct.authorizationList, checkpointWorldState)
+      case _ => checkpointWorldState
+    }
+
+    val result = runVM(stx, senderAddress, blockHeader, worldAfterAuths)
+    val internalTxs = result.internalTxs
+
+    val resultWithErrorHandling: PR =
+      if (result.error.isDefined) {
+        result.copy(world = checkpointWorldState, addressesToDelete = Set.empty, logs = Nil)
+      } else
+        result
+
+    val totalGasToRefundBase = calcTotalGasToRefund(stx, resultWithErrorHandling, blockHeader.number)
+    val executionGasBase = gasLimit - totalGasToRefundBase
+
+    val isOlympiaActivated = blockHeader.number >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+    val executionGasToPayToMiner = if (isOlympiaActivated) {
+      executionGasBase.max(BlockPreparator.calcFloorDataGas(stx.tx.payload))
+    } else {
+      executionGasBase
+    }
+    val totalGasToRefund = gasLimit - executionGasToPayToMiner
+
+    val refundGasFn = pay(senderAddress, (totalGasToRefund * gasPrice).toUInt256, withTouch = false) _
+    val payMinerForGasFn =
+      pay(Address(blockHeader.beneficiary), (executionGasToPayToMiner * gasPrice).toUInt256, withTouch = true) _
+
+    val worldAfterPayments = refundGasFn.andThen(payMinerForGasFn)(resultWithErrorHandling.world)
+
+    val deleteAccountsFn = deleteAccounts(resultWithErrorHandling.addressesToDelete) _
+    val deleteTouchedAccountsFn = deleteEmptyTouchedAccounts _
+    val persistStateFn = InMemoryWorldStateProxy.persistState _
+
+    val world2 = deleteAccountsFn.andThen(deleteTouchedAccountsFn).andThen(persistStateFn)(worldAfterPayments)
+
+    TxTraceData(
+      TxResult(world2, executionGasToPayToMiner, resultWithErrorHandling.logs, result.returnData, result.error),
+      internalTxs
+    )
   }
 
   // scalastyle:off method.length
