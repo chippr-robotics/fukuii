@@ -21,6 +21,7 @@ trait Blacklist {
   def add(id: BlacklistId, duration: FiniteDuration, reason: BlacklistReason): Unit
   def remove(id: BlacklistId): Unit
   def keys: Set[BlacklistId]
+  def entries: Map[BlacklistId, BlacklistReasonType]
 }
 
 // scalastyle:off number.of.types number.of.methods
@@ -347,6 +348,11 @@ final case class CacheBasedBlacklist(cache: Cache[BlacklistId, BlacklistReasonTy
   override def keys: Set[BlacklistId] = {
     cache.cleanUp() // Remove expired entries before returning keys
     cache.underlying.asMap().keySet().asScala.toSet
+  }
+
+  override def entries: Map[BlacklistId, BlacklistReasonType] = {
+    cache.cleanUp()
+    cache.underlying.asMap().asScala.toMap
   }
 }
 

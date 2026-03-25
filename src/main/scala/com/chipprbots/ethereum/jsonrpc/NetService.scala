@@ -192,13 +192,11 @@ class NetService(
 
   def listBlacklistedPeers(req: ListBlacklistedPeersRequest): ServiceResponse[ListBlacklistedPeersResponse] =
     IO.pure {
-      // Note: Current Blacklist implementation doesn't store reason or timestamp with entries.
-      // These fields are populated with placeholder values. See GitHub issue for enhancement.
-      val blacklistedPeers = blacklist.keys.map { id =>
+      val blacklistedPeers = blacklist.entries.map { case (id, reasonType) =>
         BlacklistEntry(
           id = id.value,
-          reason = "Unknown", // Blacklist doesn't currently store reason with the entry
-          addedAt = System.currentTimeMillis() // Placeholder, would need to extend Blacklist to track this
+          reason = reasonType.name,
+          addedAt = System.currentTimeMillis() // Caffeine doesn't expose per-entry creation time
         )
       }.toList
       Right(ListBlacklistedPeersResponse(blacklistedPeers))

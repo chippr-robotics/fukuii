@@ -2,8 +2,9 @@ package com.chipprbots.ethereum.jsonrpc
 
 import java.time.Duration
 import java.time.temporal.ChronoUnit
+import java.util.concurrent.ConcurrentHashMap
 
-import scala.collection.mutable
+import scala.jdk.CollectionConverters._
 import scala.util.Try
 
 import com.chipprbots.ethereum.jsonrpc.ExpiringMap.ValueWithDuration
@@ -13,22 +14,21 @@ object ExpiringMap {
   case class ValueWithDuration[V](value: V, expiration: Duration)
 
   def empty[K, V](defaultElementRetentionTime: Duration): ExpiringMap[K, V] =
-    new ExpiringMap(mutable.Map.empty, defaultElementRetentionTime)
+    new ExpiringMap(new ConcurrentHashMap[K, ValueWithDuration[V]](), defaultElementRetentionTime)
 }
 
-/** Simple wrapper around mutable map which enriches each element with expiration time (specified by user or default)
-  * Map is passive which means it only check for expiration and remove expired element during get function. Duration in
-  * all calls is relative to current System.nanoTime()
+/** Thread-safe wrapper around ConcurrentHashMap which enriches each element with expiration time (specified by user or
+  * default). Map is passive which means it only checks for expiration and removes expired elements during get. Duration
+  * in all calls is relative to current System.nanoTime().
   */
-//TODO: Make class thread safe
 class ExpiringMap[K, V] private (
-    val underlying: mutable.Map[K, ValueWithDuration[V]],
+    val underlying: ConcurrentHashMap[K, ValueWithDuration[V]],
     val defaultRetentionTime: Duration
 ) {
   private val maxHoldDuration = ChronoUnit.CENTURIES.getDuration
 
   def addFor(k: K, v: V, duration: Duration): ExpiringMap[K, V] = {
-    underlying += k -> ValueWithDuration(v, Try(currentPlus(duration)).getOrElse(currentPlus(maxHoldDuration)))
+    underlying.put(k, ValueWithDuration(v, Try(currentPlus(duration)).getOrElse(currentPlus(maxHoldDuration))))
     this
   }
 
@@ -42,21 +42,19 @@ class ExpiringMap[K, V] private (
     addFor(k, v, defaultRetentionTime)
 
   def remove(k: K): ExpiringMap[K, V] = {
-    underlying -= k
+    underlying.remove(k)
     this
   }
 
   def get(k: K): Option[V] =
-    underlying
-      .get(k)
-      .flatMap(value =>
-        if (isNotExpired(value))
-          Some(value.value)
-        else {
-          remove(k)
-          None
-        }
-      )
+    Option(underlying.get(k)).flatMap(value =>
+      if (isNotExpired(value))
+        Some(value.value)
+      else {
+        underlying.remove(k, value) // Atomic remove only if value hasn't changed
+        None
+      }
+    )
 
   private def isNotExpired(value: ValueWithDuration[V]) =
     currentNanoDuration().minus(value.expiration).isNegative
