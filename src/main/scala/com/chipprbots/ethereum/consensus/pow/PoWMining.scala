@@ -112,7 +112,8 @@ class PoWMining private (
                   node.ethMiningService,
                   blockCreator,
                   blockchainReader,
-                  node
+                  node,
+                  config.generic
                 ),
                 "PoWMinerCoordinator",
                 DispatcherSelector.fromConfig(BlockForgerDispatcherId)

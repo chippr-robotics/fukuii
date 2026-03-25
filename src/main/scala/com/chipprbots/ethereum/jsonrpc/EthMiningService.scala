@@ -19,9 +19,9 @@ import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
 import com.chipprbots.ethereum.consensus.mining.CoinbaseProvider
 import com.chipprbots.ethereum.consensus.mining.Mining
-import com.chipprbots.ethereum.consensus.mining.MiningConfig
 import com.chipprbots.ethereum.consensus.mining.RichMining
 import com.chipprbots.ethereum.consensus.pow.EthashUtils
+import com.chipprbots.ethereum.consensus.pow.WorkNotifier
 import com.chipprbots.ethereum.consensus.pow.miners.MinerProtocol
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.Address
@@ -90,6 +90,15 @@ class EthMiningService(
   val hashRate: ConcurrentMap[ByteString, (BigInt, Date)] = new TrieMap[ByteString, (BigInt, Date)]()
   val lastActive = new AtomicReference[Option[Date]](None)
 
+  private[this] implicit val notifierEc: scala.concurrent.ExecutionContext =
+    scala.concurrent.ExecutionContext.Implicits.global
+
+  /** Work notifier for HTTP POST to configured URLs (geth miner.notify equivalent) */
+  private[jsonrpc] lazy val workNotifier: WorkNotifier = {
+    val miningConfig = fullConsensusConfig.generic
+    new WorkNotifier(miningConfig.notifyUrls, miningConfig.notifyFull)
+  }
+
   def getMining(req: GetMiningRequest): ServiceResponse[GetMiningResponse] =
     ifEthash(req) { _ =>
       val isMining = lastActive.updateAndGet { (e: Option[Date]) =>
@@ -115,15 +124,30 @@ class EthMiningService(
               ommers.headers,
               None
             )
+            val powHeaderHash = ByteString(kec256(BlockHeader.getEncodedWithoutNonce(pb.block.header)))
+            val dagSeed = EthashUtils
+              .seed(
+                pb.block.header.number.toLong,
+                blockchainConfig.forkBlockNumbers.ecip1099BlockNumber.toLong
+              )
+            val target = ByteString((BigInt(2).pow(256) / pb.block.header.difficulty).toByteArray)
+
+            // Notify configured URLs of new work (fire-and-forget, geth miner.notify equivalent)
+            if (workNotifier.hasTargets) {
+              workNotifier.notifyWork(
+                powHeaderHash,
+                dagSeed,
+                target,
+                pb.block.header.number,
+                if (fullConsensusConfig.generic.notifyFull) Some(pb.block.header) else None
+              )
+            }
+
             Right(
               GetWorkResponse(
-                powHeaderHash = ByteString(kec256(BlockHeader.getEncodedWithoutNonce(pb.block.header))),
-                dagSeed = EthashUtils
-                  .seed(
-                    pb.block.header.number.toLong,
-                    blockchainConfig.forkBlockNumbers.ecip1099BlockNumber.toLong
-                  ),
-                target = ByteString((BigInt(2).pow(256) / pb.block.header.difficulty).toByteArray)
+                powHeaderHash = powHeaderHash,
+                dagSeed = dagSeed,
+                target = target
               )
             )
           }

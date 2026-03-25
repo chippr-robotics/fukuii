@@ -4,12 +4,14 @@ import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.scaladsl.AbstractBehavior
 import org.apache.pekko.actor.typed.scaladsl.ActorContext
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
+import org.apache.pekko.actor.typed.scaladsl.TimerScheduler
 import org.apache.pekko.actor.{ActorRef => ClassicActorRef}
 
 import cats.effect.unsafe.IORuntime
 
-import scala.concurrent.duration.DurationInt
+import scala.concurrent.duration._
 
+import com.chipprbots.ethereum.consensus.mining.MiningConfig
 import com.chipprbots.ethereum.consensus.pow.PoWMiningCoordinator.CoordinatorProtocol
 import com.chipprbots.ethereum.consensus.pow.miners.EthashDAGManager
 import com.chipprbots.ethereum.consensus.pow.miners.EthashMiner
@@ -28,6 +30,9 @@ object PoWMiningCoordinator {
 
   case object StopMining extends CoordinatorProtocol
 
+  /** Periodic work regeneration with latest pending transactions (geth recommit equivalent) */
+  case object RecommitWork extends CoordinatorProtocol
+
   case object MiningSuccessful extends CoordinatorProtocol
 
   case object MiningUnsuccessful extends CoordinatorProtocol
@@ -43,35 +48,44 @@ object PoWMiningCoordinator {
 
   case object MiningComplete extends MiningResponse
 
+  private val RecommitTimerKey = "recommit"
+
   def apply(
       syncController: ClassicActorRef,
       ethMiningService: EthMiningService,
       blockCreator: PoWBlockCreator,
       blockchainReader: BlockchainReader,
       configBuilder: BlockchainConfigBuilder,
+      miningConfig: MiningConfig,
       minerOpt: Option[Miner] = None
   ): Behavior[CoordinatorProtocol] =
-    Behaviors
-      .setup[CoordinatorProtocol](context =>
-        new PoWMiningCoordinator(
-          context,
-          syncController,
-          ethMiningService,
-          blockCreator,
-          blockchainReader,
-          configBuilder,
-          minerOpt
+    Behaviors.withTimers[CoordinatorProtocol] { timers =>
+      Behaviors
+        .setup[CoordinatorProtocol](context =>
+          new PoWMiningCoordinator(
+            context,
+            timers,
+            syncController,
+            ethMiningService,
+            blockCreator,
+            blockchainReader,
+            configBuilder,
+            miningConfig,
+            minerOpt
+          )
         )
-      )
+    }
 }
 
 class PoWMiningCoordinator private (
     context: ActorContext[CoordinatorProtocol],
+    timers: TimerScheduler[CoordinatorProtocol],
     syncController: ClassicActorRef,
     ethMiningService: EthMiningService,
     blockCreator: PoWBlockCreator,
     blockchainReader: BlockchainReader,
     configBuilder: BlockchainConfigBuilder,
+    miningConfig: MiningConfig,
     minerOpt: Option[Miner]
 ) extends AbstractBehavior[CoordinatorProtocol](context) {
 
@@ -83,6 +97,12 @@ class PoWMiningCoordinator private (
   5.seconds
   private val log = context.log
   private val dagManager = new EthashDAGManager(blockCreator)
+
+  // Start recommit timer if configured (geth miner.recommit equivalent)
+  if (miningConfig.recommitInterval > Duration.Zero) {
+    timers.startTimerWithFixedDelay(RecommitTimerKey, RecommitWork, miningConfig.recommitInterval)
+    log.info(s"Mining recommit timer started: interval=${miningConfig.recommitInterval}")
+  }
 
   override def onMessage(msg: CoordinatorProtocol): Behavior[CoordinatorProtocol] = msg match {
     case SetMiningMode(mode) =>
@@ -107,8 +127,24 @@ class PoWMiningCoordinator private (
         }
       Behaviors.same
 
+    case RecommitWork =>
+      // Regenerate work with latest pending transactions (geth recommit).
+      // Triggers getWork via the RPC service which rebuilds the block template,
+      // caches the new work, and fires HTTP notifications if configured.
+      log.debug("Recommit: regenerating work with latest pending transactions")
+      import cats.effect.unsafe.implicits.global
+      ethMiningService
+        .getWork(EthMiningService.GetWorkRequest())
+        .unsafeRunAsync {
+          case Right(Right(_)) => log.debug("Recommit: work regenerated successfully")
+          case Right(Left(err)) => log.warn(s"Recommit: work regeneration failed: $err")
+          case Left(ex)         => log.warn(s"Recommit: work regeneration error: ${ex.getMessage}")
+        }
+      Behaviors.same
+
     case StopMining =>
       log.info("Stopping PoWMiningCoordinator...")
+      timers.cancel(RecommitTimerKey)
       Behaviors.stopped
   }
 

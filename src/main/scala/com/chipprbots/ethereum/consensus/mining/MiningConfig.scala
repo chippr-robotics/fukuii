@@ -4,6 +4,9 @@ import org.apache.pekko.util.ByteString
 
 import com.typesafe.config.{Config => TypesafeConfig}
 
+import scala.concurrent.duration._
+import scala.jdk.CollectionConverters._
+
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.utils.Logger
@@ -21,13 +24,25 @@ import com.chipprbots.ethereum.utils.Logger
   *   Target gas limit for mined blocks. The miner will gradually adjust the gas limit toward this target at ±1/1024 per
   *   block, matching the consensus-enforced bound divisor. ETC mainnet default: 8,000,000.
   */
+/** @param notifyUrls
+  *   HTTP URLs to POST new work packages to when a new block is available for mining. Matches geth's `miner.notify`
+  *   config. Each URL receives a JSON array: [powHeaderHash, dagSeed, target, blockNumber].
+  * @param notifyFull
+  *   If true, POST full block header JSON instead of the work array. Matches geth's `miner.notify.full`.
+  * @param recommitInterval
+  *   Interval for regenerating mining work with latest pending transactions. Matches geth's `miner.recommit` (default
+  *   2s). Set to Duration.Zero to disable.
+  */
 final case class MiningConfig(
     protocol: Protocol,
     coinbase: Address,
     headerExtraData: ByteString, // only used in BlockGenerator
     blockCacheSize: Int, // only used in BlockGenerator
     miningEnabled: Boolean,
-    gasLimitTarget: BigInt
+    gasLimitTarget: BigInt,
+    notifyUrls: Seq[String] = Seq.empty,
+    notifyFull: Boolean = false,
+    recommitInterval: FiniteDuration = 2.seconds
 )
 
 object MiningConfig extends Logger {
@@ -39,6 +54,9 @@ object MiningConfig extends Logger {
     final val BlockCacheSize = "block-cashe-size"
     final val MiningEnabled = "mining-enabled"
     final val GasLimitTarget = "gas-limit-target"
+    final val NotifyUrls = "notify"
+    final val NotifyFull = "notify-full"
+    final val RecommitInterval = "recommit-interval"
   }
 
   final val AllowedProtocols: Set[String] = Set(
@@ -80,13 +98,28 @@ object MiningConfig extends Logger {
       if (config.hasPath(Keys.GasLimitTarget)) BigInt(config.getLong(Keys.GasLimitTarget))
       else BigInt(8_000_000) // ETC mainnet default
 
+    val notifyUrls =
+      if (config.hasPath(Keys.NotifyUrls)) config.getStringList(Keys.NotifyUrls).asScala.toSeq
+      else Seq.empty
+
+    val notifyFull =
+      if (config.hasPath(Keys.NotifyFull)) config.getBoolean(Keys.NotifyFull)
+      else false
+
+    val recommitInterval =
+      if (config.hasPath(Keys.RecommitInterval)) config.getDuration(Keys.RecommitInterval).toMillis.millis
+      else 2.seconds
+
     new MiningConfig(
       protocol = protocol,
       coinbase = coinbase,
       headerExtraData = headerExtraData,
       blockCacheSize = blockCacheSize,
       miningEnabled = miningEnabled,
-      gasLimitTarget = gasLimitTarget
+      gasLimitTarget = gasLimitTarget,
+      notifyUrls = notifyUrls,
+      notifyFull = notifyFull,
+      recommitInterval = recommitInterval
     )
   }
 }

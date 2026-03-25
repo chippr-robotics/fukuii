@@ -127,6 +127,7 @@ class PoWMiningCoordinatorSpec
             blockCreator,
             blockchainReader,
             this,
+            miningConfig,
             minerOpt = Some(testMiner)
           ),
           coordinatorName
@@ -160,6 +161,7 @@ class PoWMiningCoordinatorSpec
             blockCreator,
             blockchainReader,
             this,
+            miningConfig,
             minerOpt = Some(testMiner)
           ),
           coordinatorName
@@ -189,7 +191,8 @@ class PoWMiningCoordinatorSpec
             ethMiningService,
             blockCreator,
             blockchainReader,
-            this
+            this,
+            miningConfig
           ),
           coordinatorName
         )
@@ -280,7 +283,8 @@ class PoWMiningCoordinatorSpec
         ethMiningService,
         blockCreator,
         blockchainReader,
-        this
+        this,
+        miningConfig
       ),
       coordinatorName
     )
