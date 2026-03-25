@@ -30,7 +30,7 @@ inThisBuild(
       "Typesafe Releases" at "https://repo.typesafe.com/typesafe/releases/",
       "Sonatype OSS Releases" at "https://oss.sonatype.org/content/repositories/releases/",
       "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots/",
-      "Hyperledger Besu" at "https://hyperledger.jfrog.io/artifactory/besu-maven/"
+      "Hyperledger Besu" at "https://hyperledger.jfrog.io/hyperledger/besu-maven"
     )
   )
 )
@@ -232,7 +232,8 @@ lazy val node = {
     Dependencies.scopt
   ).flatten ++ Seq(
     Dependencies.jline,
-    Dependencies.jna
+    Dependencies.jna,
+    Dependencies.gnark
   )
 
   val dep = {
