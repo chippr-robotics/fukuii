@@ -404,6 +404,14 @@ case class JsonRpcController(
       handle[TraceBlockRequest, TraceBlockResponse](traceService.traceBlock, req)
     case req @ JsonRpcRequest(_, "trace_transaction", _, _) =>
       handle[TraceTransactionRequest, TraceTransactionResponse](traceService.traceTransaction, req)
+    case req @ JsonRpcRequest(_, "trace_filter", _, _) =>
+      handle[TraceFilterRequest, TraceFilterResponse](traceService.traceFilter, req)
+    case req @ JsonRpcRequest(_, "trace_replayBlockTransactions", _, _) =>
+      handle[TraceReplayBlockRequest, TraceReplayBlockResponse](traceService.traceReplayBlock, req)
+    case req @ JsonRpcRequest(_, "trace_replayTransaction", _, _) =>
+      handle[TraceReplayTransactionRequest, TraceReplayTransactionResponse](traceService.traceReplayTransaction, req)
+    case req @ JsonRpcRequest(_, "trace_get", _, _) =>
+      handle[TraceGetRequest, TraceGetResponse](traceService.traceGet, req)
   }
 
   private def handleRpcRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {

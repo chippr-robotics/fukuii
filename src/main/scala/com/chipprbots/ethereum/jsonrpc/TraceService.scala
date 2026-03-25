@@ -66,6 +66,33 @@ object TraceService {
       returnData: ByteString,
       error: Option[String]
   )
+
+  case class TraceFilterRequest(
+      fromBlock: Option[BlockParam],
+      toBlock: Option[BlockParam],
+      fromAddress: Option[Seq[Address]],
+      toAddress: Option[Seq[Address]],
+      after: Option[Int],
+      count: Option[Int]
+  )
+  case class TraceFilterResponse(traces: Seq[Trace])
+
+  case class TraceReplayBlockRequest(blockNumber: BlockParam, traceTypes: Seq[String])
+  case class TraceReplayBlockResponse(results: Seq[ReplayResult])
+
+  case class TraceReplayTransactionRequest(txHash: ByteString, traceTypes: Seq[String])
+  case class TraceReplayTransactionResponse(result: ReplayResult)
+
+  case class TraceGetRequest(txHash: ByteString, traceIndex: Seq[Int])
+  case class TraceGetResponse(trace: Option[Trace])
+
+  case class ReplayResult(
+      transactionHash: ByteString,
+      output: ByteString,
+      trace: Seq[Trace],
+      stateDiff: Option[String], // placeholder — not implemented
+      vmTrace: Option[String]    // placeholder — not implemented
+  )
 }
 
 class TraceService(
@@ -281,5 +308,124 @@ class TraceService(
   private def createTypeFromOpcode(opcode: OpCode): String = opcode match {
     case CREATE2 => "create2"
     case _              => "create"
+  }
+
+  def traceFilter(req: TraceFilterRequest): ServiceResponse[TraceFilterResponse] = IO {
+    val fromBlockNum = req.fromBlock.flatMap(resolveBlockNumber).getOrElse(BigInt(0))
+    val toBlockNum = req.toBlock.flatMap(resolveBlockNumber).getOrElse(blockchainReader.getBestBlockNumber())
+
+    // Cap range to prevent DoS — max 1000 blocks per filter query
+    val maxRange = 1000
+    val effectiveTo = fromBlockNum + maxRange min toBlockNum
+
+    var allTraces = Seq.empty[Trace]
+    var blockNum = fromBlockNum
+    while (blockNum <= effectiveTo) {
+      for {
+        header <- blockchainReader.getBlockHeaderByNumber(blockNum)
+        block <- blockchainReader.getBlockByHash(header.hash)
+        txTraces <- replayBlock(block).toOption
+      } {
+        val blockTraces = txTraces.zipWithIndex.flatMap { case (txTrace, txIdx) =>
+          val stx = block.body.transactionList(txIdx)
+          buildTraces(txTrace, stx.hash, txIdx, block.header)
+        }
+        allTraces = allTraces ++ blockTraces
+      }
+      blockNum += 1
+    }
+
+    // Apply address filters
+    val filtered = allTraces.filter { trace =>
+      val fromMatch = req.fromAddress match {
+        case Some(addrs) => addrs.contains(trace.action.from)
+        case None        => true
+      }
+      val toMatch = req.toAddress match {
+        case Some(addrs) => trace.action.to.exists(addrs.contains)
+        case None        => true
+      }
+      fromMatch && toMatch
+    }
+
+    // Apply pagination
+    val afterSkip = req.after.map(n => filtered.drop(n)).getOrElse(filtered)
+    val limited = req.count.map(n => afterSkip.take(n)).getOrElse(afterSkip)
+
+    Right(TraceFilterResponse(limited))
+  }
+
+  def traceReplayBlock(req: TraceReplayBlockRequest): ServiceResponse[TraceReplayBlockResponse] = IO {
+    resolveBlock(req.blockNumber) match {
+      case None =>
+        Left(JsonRpcError.InvalidParams("Block not found"))
+      case Some(block) =>
+        replayBlock(block) match {
+          case Left(err) =>
+            log.error(s"Failed to replay block ${block.header.number}: $err")
+            Left(JsonRpcError.InternalError)
+          case Right(txTraces) =>
+            val results = txTraces.zipWithIndex.map { case (txTrace, txIdx) =>
+              val stx = block.body.transactionList(txIdx)
+              val traces = buildTraces(txTrace, stx.hash, txIdx, block.header)
+              ReplayResult(
+                transactionHash = stx.hash,
+                output = txTrace.returnData,
+                trace = traces,
+                stateDiff = None,
+                vmTrace = None
+              )
+            }
+            Right(TraceReplayBlockResponse(results))
+        }
+    }
+  }
+
+  def traceReplayTransaction(req: TraceReplayTransactionRequest): ServiceResponse[TraceReplayTransactionResponse] = IO {
+    findTransactionBlock(req.txHash) match {
+      case None =>
+        Left(JsonRpcError.InvalidParams("Transaction not found"))
+      case Some((block, txIndex)) =>
+        replayBlockUpTo(block, txIndex) match {
+          case Left(err) =>
+            log.error(s"Failed to replay tx: $err")
+            Left(JsonRpcError.InternalError)
+          case Right(txTrace) =>
+            val stx = block.body.transactionList(txIndex)
+            val traces = buildTraces(txTrace, stx.hash, txIndex, block.header)
+            Right(TraceReplayTransactionResponse(ReplayResult(
+              transactionHash = stx.hash,
+              output = txTrace.returnData,
+              trace = traces,
+              stateDiff = None,
+              vmTrace = None
+            )))
+        }
+    }
+  }
+
+  def traceGet(req: TraceGetRequest): ServiceResponse[TraceGetResponse] = IO {
+    findTransactionBlock(req.txHash) match {
+      case None =>
+        Left(JsonRpcError.InvalidParams("Transaction not found"))
+      case Some((block, txIndex)) =>
+        replayBlockUpTo(block, txIndex) match {
+          case Left(err) =>
+            log.error(s"Failed to trace tx for trace_get: $err")
+            Left(JsonRpcError.InternalError)
+          case Right(txTrace) =>
+            val stx = block.body.transactionList(txIndex)
+            val traces = buildTraces(txTrace, stx.hash, txIndex, block.header)
+            val matched = traces.find(_.traceAddress == req.traceIndex)
+            Right(TraceGetResponse(matched))
+        }
+    }
+  }
+
+  private def resolveBlockNumber(blockParam: BlockParam): Option[BigInt] = blockParam match {
+    case BlockParam.WithNumber(n) => Some(n)
+    case BlockParam.Latest        => Some(blockchainReader.getBestBlockNumber())
+    case BlockParam.Earliest      => Some(BigInt(0))
+    case BlockParam.Pending       => None
   }
 }
