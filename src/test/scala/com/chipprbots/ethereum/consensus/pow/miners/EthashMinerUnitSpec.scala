@@ -34,8 +34,7 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
 
 /** Fast unit tests for EthashMiner control flow — no real DAG generation or PoW mining.
-  * Replaces the @Ignore'd EthashMinerSpec tests with reliable, fast alternatives
-  * that verify the same logic paths without CPU-intensive Ethash computation.
+  * Verifies the same logic paths as EthashMinerSpec without CPU-intensive Ethash computation.
   */
 class EthashMinerUnitSpec extends AnyFlatSpec with Matchers with MockFactory {
 

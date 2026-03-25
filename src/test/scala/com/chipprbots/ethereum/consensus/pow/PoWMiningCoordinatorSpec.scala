@@ -45,10 +45,6 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 
 import com.chipprbots.ethereum.testing.Tags._
 
-// SCALA 3 MIGRATION: Fixed by refactoring MinerSpecSetup to use abstract mock members pattern.
-// ACTOR SYSTEM FIX: TestSetup now overrides classicSystem to use ScalaTestWithActorTestKit's
-// actor system (converted to classic), preventing actor system conflicts between the test kit
-// and MinerSpecSetup.
 class PoWMiningCoordinatorSpec
     extends ScalaTestWithActorTestKit
     with AnyFreeSpecLike

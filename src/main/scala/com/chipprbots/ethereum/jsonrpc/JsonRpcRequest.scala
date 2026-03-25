@@ -6,7 +6,6 @@ import org.json4s.JsonAST.JArray
 import org.json4s.JsonAST.JValue
 import org.json4s.native.Serialization.write
 
-//TODO: work on a more elegant solution
 trait SensitiveInformationToString {
   val method: String
 

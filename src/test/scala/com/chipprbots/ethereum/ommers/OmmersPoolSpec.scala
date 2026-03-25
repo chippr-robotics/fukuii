@@ -122,8 +122,6 @@ class OmmersPoolSpec
     }
   }
 
-  // SCALA 3 MIGRATION: Cannot use self-type constraint with `new TestSetup` in Scala 3.
-  // Using lazy val for mock ensures it's created when accessed within MockFactory context.
   trait TestSetup {
 
     // In order to support all the blocks for the given scenarios

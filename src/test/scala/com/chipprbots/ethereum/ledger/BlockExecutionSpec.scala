@@ -30,7 +30,6 @@ import com.chipprbots.ethereum.vm.OutOfGas
 
 import com.chipprbots.ethereum.testing.Tags._
 
-// SCALA 3 MIGRATION: Fixed by having test class extend MockFactory, which satisfies inner trait self-type constraints
 // scalastyle:off magic.number
 class BlockExecutionSpec
     extends AnyWordSpec

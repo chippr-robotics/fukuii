@@ -35,7 +35,6 @@ import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
 import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
 import com.chipprbots.ethereum.testing.Tags._
 
-// SCALA 3 MIGRATION: Fixed by creating manual stub implementation for WalletRpcClient
 class WalletServiceSpec extends AnyFlatSpec with Matchers with MockFactory {
 
   implicit val runtime: IORuntime = IORuntime.global

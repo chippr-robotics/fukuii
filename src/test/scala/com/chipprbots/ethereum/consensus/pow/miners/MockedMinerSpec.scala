@@ -33,9 +33,6 @@ import com.chipprbots.ethereum.utils.ByteStringUtils
 
 import com.chipprbots.ethereum.testing.Tags._
 
-// SCALA 3 MIGRATION: Fixed by refactoring MinerSpecSetup to use abstract mock members pattern.
-// ACTOR SYSTEM FIX: TestSetup now overrides classicSystem to use TestKit's actor system,
-// preventing actor system conflicts between TestKit and MinerSpecSetup.
 class MockedMinerSpec
     extends TestKit(ClassicSystem("MockedPowMinerSpec_System"))
     with AnyWordSpecLike

@@ -51,7 +51,6 @@ class MockableJsonRpcController extends JsonRpcBaseController with ApisBase with
   override val config: JsonRpcConfig = null
 }
 
-// SCALA 3 MIGRATION: Fixed by having test class extend MockFactory, which satisfies inner trait self-type constraints
 class JsonRpcHttpServerSpec
     extends AnyFlatSpec
     with Matchers
@@ -447,9 +446,6 @@ class JsonRpcHttpServerSpec
     }
   }
 
-  // SCALA 3 MIGRATION: TestSetup takes implicit MockFactory parameter to properly capture mock context.
-  // This follows the pattern used in JsonRpcControllerFixture for Scala 3 compatibility.
-  // We use mockFactory.mock explicitly to avoid ambiguity with inherited mock method.
   class TestSetup(implicit mockFactory: org.scalamock.scalatest.MockFactory) {
 
     val jsonRpc = "2.0"

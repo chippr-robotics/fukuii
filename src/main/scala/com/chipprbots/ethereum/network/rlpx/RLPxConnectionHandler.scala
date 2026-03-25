@@ -297,7 +297,6 @@ class RLPxConnectionHandler(
         case Received(data) =>
           log.debug("[RLPx] Received auth handshake init message for peer {} ({} bytes)", peerId, data.length)
           timeout.cancel()
-          // FIXME EIP8 is 6 years old, time to drop it
           log.debug(
             "[RLPx] Attempting pre-EIP8 auth-init decode for peer {} (taking {} bytes from {} total)",
             peerId,

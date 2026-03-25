@@ -226,7 +226,6 @@ class SyncStateSchedulerActor(
             val initStats = ProcessingStatistics().addSaved(result.writtenElements)
             startSyncing(startSignal.stateRoot, startSignal.blockNumber, initStats, sender)
           case Some((RestartRequested, sender)) =>
-            // TODO: are we testing this path?
             sender ! WaitingForNewTargetBlock
             context.become(idle(ProcessingStatistics().addSaved(result.writtenElements)))
           case _ =>

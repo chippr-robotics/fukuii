@@ -21,7 +21,6 @@ import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EthForks.Petersburg
 /** A subset of [[com.chipprbots.ethereum.utils.BlockchainConfig]] that is required for instantiating an [[EvmConfig]]
   * Note that `accountStartNonce` is required for a [[WorldStateProxy]] implementation that is used by a given VM
   */
-// FIXME manage etc/eth forks in a more sophisticated way
 case class BlockchainConfigForEvm(
     // ETH forks
     frontierBlockNumber: BigInt,

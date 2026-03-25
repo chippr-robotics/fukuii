@@ -34,8 +34,6 @@ import com.chipprbots.ethereum.security.SecureRandomBuilder
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import com.chipprbots.ethereum.testing.Tags._
 
-// SCALA 3 MIGRATION: Fixed by creating manual stub implementation for AuthHandshaker
-// @Ignore - Un-ignored per issue to identify test failures
 class RLPxConnectionHandlerSpec
     extends TestKit(ActorSystem("RLPxConnectionHandlerSpec_System"))
     with AnyFlatSpecLike
@@ -258,8 +256,6 @@ class RLPxConnectionHandlerSpec
     encodedMessages.head.utf8String should include("Ping")
   }
 
-  // SCALA 3 MIGRATION: Cannot use self-type constraint with `new TestSetup` in Scala 3.
-  // Using lazy val for mocks ensures they're created when accessed within MockFactory context.
   trait TestSetup extends SecureRandomBuilder {
 
     // Mock parameters for RLPxConnectionHandler
@@ -269,13 +265,9 @@ class RLPxConnectionHandlerSpec
     }
     val protocolVersion = Capability.ETH63
 
-    // SCALA 3 MIGRATION: Using configurable test double instead of mock because
-    // AuthHandshaker with Selectable cannot be properly mocked in Scala 3
     lazy val mockHandshaker: ConfigurableAuthHandshaker = new ConfigurableAuthHandshaker()
     lazy val connection: TestProbe = TestProbe()
 
-    // SCALA 3 MIGRATION: Cannot mock MessageCodec with constructor parameters in Scala 3
-    // Using configurable test double pattern similar to ConfigurableAuthHandshaker
     private lazy val stubFrameCodec: FrameCodec = stub[FrameCodec]
     private val defaultCompressionPolicy = CompressionPolicy(
       compressOutbound = false,

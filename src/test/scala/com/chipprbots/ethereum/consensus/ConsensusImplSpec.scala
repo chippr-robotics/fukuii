@@ -90,7 +90,6 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     blockchainReader.getBestBlock() shouldBe Some(initialBestBlock)
   }
 
-  // SCALA 3 MIGRATION: Moved ConsensusSetup inside class to access MockFactory context
   class ConsensusSetup extends EphemBlockchainTestSetup {
     override lazy val blockExecution: BlockExecution = stub[BlockExecution]
 
