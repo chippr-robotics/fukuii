@@ -47,7 +47,8 @@ class ByteCodeWorker(
       requestId,
       peer,
       SNAPRequestTracker.RequestType.GetByteCodes,
-      timeout = 30.seconds
+      timeout = 30.seconds,
+      requestedHashes = task.codeHashes
     ) {
       self ! ByteCodeRequestTimeout(requestId)
     }

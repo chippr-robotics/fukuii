@@ -7,6 +7,7 @@ import scala.collection.mutable
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
 
+import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.utils.Logger
@@ -80,14 +81,16 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
       requestId: BigInt,
       peer: Peer,
       requestType: RequestType,
-      timeout: FiniteDuration = Duration.Zero // Zero = use adaptive
+      timeout: FiniteDuration = Duration.Zero, // Zero = use adaptive
+      requestedHashes: Seq[ByteString] = Seq.empty
   )(onTimeout: => Unit): PendingRequest = synchronized {
     val effectiveTimeout = if (timeout == Duration.Zero) rateTracker.targetTimeout() else timeout
     val request = PendingRequest(
       requestId = requestId,
       peer = peer,
       requestType = requestType,
-      timestamp = System.currentTimeMillis()
+      timestamp = System.currentTimeMillis(),
+      requestedHashes = requestedHashes
     )
 
     // Schedule timeout
@@ -242,7 +245,20 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
       return Left(s"Expected ${RequestType.GetByteCodes} but got response for ${pending.requestType}")
     }
 
-    // TODO: Validate bytecode hashes match requested hashes
+    // Validate that each returned bytecode's keccak256 hash matches a requested hash.
+    // SNAP protocol returns codes in the same order as requested hashes (may be fewer if peer doesn't have all).
+    if (pending.requestedHashes.nonEmpty && response.codes.nonEmpty) {
+      val requestedSet = pending.requestedHashes.toSet
+      val invalidCodes = response.codes.zipWithIndex.filter { case (code, _) =>
+        !requestedSet.contains(kec256(code))
+      }
+      if (invalidCodes.nonEmpty) {
+        return Left(
+          s"Bytecode hash mismatch: ${invalidCodes.size}/${response.codes.size} codes " +
+            s"don't match any requested hash (peer=${pending.peer.id})"
+        )
+      }
+    }
     Right(response)
   }
 
@@ -294,7 +310,8 @@ object SNAPRequestTracker {
       peer: Peer,
       requestType: RequestType,
       timestamp: Long,
-      timeoutTask: Option[Cancellable] = None
+      timeoutTask: Option[Cancellable] = None,
+      requestedHashes: Seq[ByteString] = Seq.empty
   )
 
   /** SNAP request types */
