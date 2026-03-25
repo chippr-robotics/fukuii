@@ -397,6 +397,13 @@ class EthMiningServiceSpec
     response shouldBe Symbol("right")
   }
 
+  // ===== setRecommitInterval =====
+
+  it should "return success for setRecommitInterval" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    val result = ethMiningService.setRecommitInterval(SetRecommitIntervalRequest(5000)).unsafeRunSync()
+    result shouldBe Right(SetRecommitIntervalResponse(true))
+  }
+
   // NOTE TestSetup uses Ethash consensus; check `consensusConfig`.
   class TestSetup(implicit system: ActorSystem) extends EphemBlockchainTestSetup with ApisBuilder {
     val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
