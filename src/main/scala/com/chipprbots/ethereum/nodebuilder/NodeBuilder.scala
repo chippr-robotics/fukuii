@@ -561,6 +561,18 @@ trait TxPoolServiceBuilder {
   )
 }
 
+trait AdminServiceBuilder {
+  self: NodeStatusBuilder with PeerManagerActorBuilder with BlockchainBuilder with NetServiceBuilder =>
+
+  lazy val adminService = new AdminService(
+    nodeStatusHolder,
+    peerManager,
+    blockchainReader,
+    netServiceConfig.peerManagerTimeout,
+    Config.config.getString("datadir")
+  )
+}
+
 trait PersonalServiceBuilder {
   self: KeyStoreBuilder
     with BlockchainBuilder
@@ -635,10 +647,11 @@ trait ApisBuilder extends ApisBase {
     val Iele = "iele"
     val Qa = "qa"
     val TxPool = "txpool"
+    val Admin = "admin"
   }
 
   import Apis._
-  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa, TxPool)
+  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa, TxPool, Admin)
 }
 
 trait JSONRpcConfigBuilder {
@@ -663,6 +676,7 @@ trait JSONRpcControllerBuilder {
     with JSONRpcConfigBuilder
     with QaServiceBuilder
     with TxPoolServiceBuilder
+    with AdminServiceBuilder
     with FukuiiServiceBuilder
     with McpServiceBuilder =>
 
@@ -686,6 +700,7 @@ trait JSONRpcControllerBuilder {
       mcpService,
       ethProofService,
       txPoolService,
+      adminService,
       jsonRpcConfig
     )
 }
@@ -984,6 +999,7 @@ trait Node
     with DebugServiceBuilder
     with QaServiceBuilder
     with TxPoolServiceBuilder
+    with AdminServiceBuilder
     with FukuiiServiceBuilder
     with McpServiceBuilder
     with KeyStoreBuilder

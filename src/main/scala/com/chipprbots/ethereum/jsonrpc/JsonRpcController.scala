@@ -19,6 +19,7 @@ import com.chipprbots.ethereum.jsonrpc.FukuiiService.ResetFastSyncResponse
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.RestartFastSyncRequest
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.RestartFastSyncResponse
 import com.chipprbots.ethereum.jsonrpc.McpService._
+import com.chipprbots.ethereum.jsonrpc.AdminService._
 import com.chipprbots.ethereum.jsonrpc.NetService._
 import com.chipprbots.ethereum.jsonrpc.PersonalService._
 import com.chipprbots.ethereum.jsonrpc.TxPoolService._
@@ -48,6 +49,7 @@ case class JsonRpcController(
     mcpService: McpService,
     proofService: ProofService,
     txPoolService: TxPoolService,
+    adminService: AdminService,
     override val config: JsonRpcConfig
 ) extends ApisBuilder
     with Logger
@@ -68,6 +70,7 @@ case class JsonRpcController(
   import FukuiiJsonMethodImplicits._
   import McpJsonMethodsImplicits._
   import TxPoolJsonMethodsImplicits._
+  import AdminJsonMethodsImplicits._
 
   override def apisHandleFns: Map[String, PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]]] = Map(
     Apis.Eth -> handleEthRequest,
@@ -81,7 +84,8 @@ case class JsonRpcController(
     Apis.Test -> handleTestRequest,
     Apis.Iele -> handleIeleRequest,
     Apis.Qa -> handleQARequest,
-    Apis.TxPool -> handleTxPoolRequest
+    Apis.TxPool -> handleTxPoolRequest,
+    Apis.Admin -> handleAdminRequest
   )
 
   override def enabledApis: Seq[String] = config.apis :+ Apis.Rpc // RPC enabled by default
@@ -361,6 +365,23 @@ case class JsonRpcController(
   private def handleQARequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "qa_mineBlocks", _, _) =>
       handle[QAService.MineBlocksRequest, QAService.MineBlocksResponse](qaService.mineBlocks, req)
+  }
+
+  private def handleAdminRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
+    case req @ JsonRpcRequest(_, "admin_nodeInfo", _, _) =>
+      handle[AdminNodeInfoRequest, AdminNodeInfoResponse](adminService.nodeInfo, req)
+    case req @ JsonRpcRequest(_, "admin_peers", _, _) =>
+      handle[AdminPeersRequest, AdminPeersResponse](adminService.peers, req)
+    case req @ JsonRpcRequest(_, "admin_addPeer", _, _) =>
+      handle[AdminAddPeerRequest, AdminAddPeerResponse](adminService.addPeer, req)
+    case req @ JsonRpcRequest(_, "admin_removePeer", _, _) =>
+      handle[AdminRemovePeerRequest, AdminRemovePeerResponse](adminService.removePeer, req)
+    case req @ JsonRpcRequest(_, "admin_datadir", _, _) =>
+      handle[AdminDatadirRequest, AdminDatadirResponse](adminService.getDatadir, req)
+    case req @ JsonRpcRequest(_, "admin_exportChain", _, _) =>
+      handle[AdminExportChainRequest, AdminExportChainResponse](adminService.exportChain, req)
+    case req @ JsonRpcRequest(_, "admin_importChain", _, _) =>
+      handle[AdminImportChainRequest, AdminImportChainResponse](adminService.importChain, req)
   }
 
   private def handleTxPoolRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
