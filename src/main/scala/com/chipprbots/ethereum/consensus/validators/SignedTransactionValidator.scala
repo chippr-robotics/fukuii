@@ -45,6 +45,10 @@ object SignedTransactionError {
     override def toString: String =
       s"${getClass.getSimpleName}(Tx gas limit ($txGasLimit) exceeds per-tx cap ($cap))"
   }
+  case class TransactionTypeNotSupported(txType: String, requiredFork: String) extends SignedTransactionError {
+    override def toString: String =
+      s"${getClass.getSimpleName}($txType transactions not supported before $requiredFork fork)"
+  }
 }
 
 sealed trait SignedTransactionValid

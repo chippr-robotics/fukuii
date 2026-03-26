@@ -131,27 +131,29 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 
 ### 1.3 — Consensus Validation Gaps (2026-03-25 audit)
 
-#### H-010: Fork-gate transaction type acceptance
+#### H-010: Fork-gate transaction type acceptance ✅ DONE
 - **Files:** `src/main/scala/.../consensus/validators/StdSignedTransactionValidator.scala:106-131`, `BlockPreparator.scala`
 - **Priority:** High | **Risk:** High (consensus-critical)
 - **Description:** `TransactionWithDynamicFee` (EIP-1559) and `SetCodeTransaction` (EIP-7702) are accepted by the signature validator without checking fork activation. A malicious peer could send pre-fork blocks containing these transaction types and they would be accepted. Similarly, `BlockPreparator` generates `Type02Receipt` for dynamic-fee transactions without verifying the fork is active. Both core-geth and Besu gate transaction type acceptance on fork block.
+- **Resolution:** Added `validateTransactionType()` as first check in `StdSignedTransactionValidator.validate()`. Rejects Type 1 pre-Magneto, Type 2/4 pre-Olympia. Added `TransactionTypeNotSupported` error type.
 
-#### H-011: Pre-Olympia baseFee field rejection
+#### H-011: Pre-Olympia baseFee field rejection ✅ DONE (already correct)
 - **File:** `src/main/scala/.../consensus/validators/BlockHeaderValidatorSkeleton.scala:207-218`
 - **Priority:** High | **Risk:** High (consensus-critical)
 - **Description:** `validateExtraFields()` correctly accepts `HefEmpty` pre-Olympia and `HefPostOlympia` post-Olympia, but does NOT explicitly reject `HefPostOlympia` pre-Olympia. A block decoded with 16 RLP fields (baseFee present) before Olympia activation falls to the default case — but downstream code like `BaseFeeCalculator` may encounter unexpected `baseFee` values on pre-Olympia blocks that slipped through other paths.
+- **Resolution:** Already correctly implemented — the exhaustive pattern match in `validateExtraFields()` rejects `HefPostOlympia` pre-Olympia via the `case _` branch which returns `Left(HeaderExtraFieldsError)`.
 
-#### H-012: BaseFee calculation corruption guard
+#### H-012: BaseFee calculation corruption guard ✅ DONE
 - **File:** `src/main/scala/.../consensus/BaseFeeCalculator.scala:25-47`
 - **Priority:** High | **Risk:** Medium
 - **Description:** `calcBaseFee()` uses `parent.baseFee.getOrElse(InitialBaseFee)` for post-Olympia parents. If a post-Olympia parent block somehow has `baseFee=None` (corruption, malformed import), the calculation silently falls back to 1 gwei instead of failing. This produces incorrect baseFee for all subsequent blocks, causing cascading validation failures.
-- **Fix:** Replace `getOrElse` with explicit error when post-Olympia parent has `baseFee=None`.
+- **Resolution:** Replaced `getOrElse(InitialBaseFee)` with `getOrElse(throw IllegalStateException)` for post-Olympia parents. Matches go-ethereum (panic), Besu (throw), Nethermind (throw) behavior.
 
-#### H-013: SNAP→Regular atomic finalization
+#### H-013: SNAP→Regular atomic finalization ✅ DONE
 - **File:** `src/main/scala/.../sync/snap/SNAPSyncController.scala`
 - **Priority:** High | **Risk:** Medium (sync-critical)
 - **Description:** `finalizeSnapSync()` stores the pivot block and then marks `SnapSyncDone` in two separate commits. If the node crashes between these operations, the next restart finds an inconsistent state: `getBestBlockNumber()` returns the pivot but the SnapSyncDone flag may not be set, or vice versa. This can cause regular sync to fail with "Unknown branch" loops.
-- **Fix:** Ensure pivot block storage + SnapSyncDone marker are atomic, or add recovery logic to detect and repair partial finalization state.
+- **Resolution:** Chained `snapSyncDone()`, `storeBlock()`, `storeChainWeight()`, and `putBestBlockInfo()` into a single atomic `DataSourceBatchUpdate.and().commit()`. Matches go-ethereum's atomic pivot+state write pattern.
 
 ### 1.4 — Network Upgrade Safety
 
