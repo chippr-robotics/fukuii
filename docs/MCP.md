@@ -66,11 +66,28 @@ ws.send(JSON.stringify({
 
 ### Integration with AI Assistants
 
-For AI assistants like Claude Desktop, you can create a simple proxy script that converts stdio to HTTP JSON-RPC:
+Fukuii's MCP server is **LLM-agnostic** — it uses standard JSON-RPC 2.0 over HTTP with no provider-specific code. Any AI assistant that supports MCP can connect directly.
+
+#### Claude Code / Claude Desktop
+
+Claude Code connects via HTTP transport natively. Add to your project's `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "fukuii": {
+      "type": "http",
+      "url": "http://localhost:8545"
+    }
+  }
+}
+```
+
+For Claude Desktop (stdio-based), use a proxy script:
 
 ```bash
 #!/bin/bash
-# mcp-proxy.sh
+# mcp-proxy.sh — converts stdio to HTTP JSON-RPC
 while IFS= read -r line; do
   curl -s -X POST http://localhost:8545 \
     -H "Content-Type: application/json" \
@@ -78,7 +95,7 @@ while IFS= read -r line; do
 done
 ```
 
-Then configure Claude Desktop:
+Then in Claude Desktop config:
 ```json
 {
   "mcpServers": {
@@ -88,6 +105,53 @@ Then configure Claude Desktop:
   }
 }
 ```
+
+#### GitHub Copilot
+
+Add `.github/copilot/mcp.json` to your repository (already included in this project):
+
+```json
+{
+  "mcpServers": {
+    "fukuii": {
+      "transport": "http",
+      "url": "http://localhost:8545"
+    }
+  }
+}
+```
+
+#### ChatGPT / Custom GPTs
+
+Use the MCP endpoint as a custom action in GPT Builder. The OpenAPI schema maps directly to MCP JSON-RPC methods:
+
+```
+POST http://localhost:8545
+Content-Type: application/json
+
+{"jsonrpc":"2.0","id":1,"method":"tools/list","params":[]}
+```
+
+#### Open-Source LLMs (Llama, Mistral, DeepSeek, Qwen)
+
+Any framework that speaks JSON-RPC 2.0 can connect. For tools like Ollama, LM Studio, or vLLM with function calling:
+
+```bash
+# Direct HTTP — works with any JSON-RPC 2.0 client
+curl -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":[{"name":"mcp_node_status","arguments":{}}]}'
+```
+
+#### Any MCP-Compatible Client
+
+The server responds to standard MCP methods over HTTP:
+- `mcp_initialize` — handshake and capability discovery
+- `tools/list`, `tools/call` — tool execution
+- `resources/list`, `resources/read` — resource access
+- `prompts/list`, `prompts/get` — prompt templates
+
+No authentication tokens, API keys, or provider-specific headers required (unless JWT auth is enabled in config).
 
 ## Available MCP Methods
 
