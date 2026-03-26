@@ -99,7 +99,10 @@ class BlockImporter(
       )(state)
 
     case ImportDone(newBehavior, importType) =>
-      val newState = state.notImportingBlocks().branchResolved()
+      val newState = newBehavior match {
+        case ResolvingBranch(_) => state.notImportingBlocks() // preserve retry counter
+        case _                 => state.notImportingBlocks().branchResolved()
+      }
       val behavior: Behavior = getBehavior(newBehavior, importType)
       if (newBehavior == Running) {
         self ! PickBlocks
@@ -140,8 +143,23 @@ class BlockImporter(
       importBlocks(blocksToRetry, blockImportType)(state)
   }
 
-  private def resolvingBranch(from: BigInt)(state: ImporterState): Receive =
-    running(state.resolvingBranch(from))
+  private def resolvingBranch(from: BigInt)(state: ImporterState): Receive = {
+    val nextState = state.resolvingBranch(from)
+    if (nextState.branchResolutionExhausted) {
+      log.error(
+        "Branch resolution exhausted after {} retries (walked back {} blocks from {}). " +
+          "Resetting to best known block {}. This may indicate missing headers after SNAP sync.",
+        nextState.branchResolutionRetries,
+        nextState.branchResolutionRetries.toLong * syncConfig.branchResolutionRequestSize,
+        from,
+        bestKnownBlockNumber
+      )
+      // Reset: clear the branch state and resume normal block picking from best known block
+      running(nextState.branchResolved())
+    } else {
+      running(nextState)
+    }
+  }
 
   /** Walk the local trie from stateRoot to find the HP-encoded path to a missing node. Returns the pathset suitable for
     * SNAP GetTrieNodes: single-element for account trie nodes, two-element [accountHash, storagePath] for storage trie
@@ -733,19 +751,28 @@ object BlockImporter {
     override def recordMetric(nanos: Long): Unit = RegularSyncMetrics.recordDefaultBlockPropagationTimer(nanos)
   }
 
+  /** Max consecutive unknown branch resolution retries before giving up. Each retry walks back
+    * branchResolutionRequestSize (default 64) blocks. 64 retries = 4,096 blocks scanned.
+    */
+  val MaxBranchResolutionRetries = 64
+
   case class ImporterState(
       importing: Boolean,
-      resolvingBranchFrom: Option[BigInt]
+      resolvingBranchFrom: Option[BigInt],
+      branchResolutionRetries: Int = 0
   ) {
     def importingBlocks(): ImporterState = copy(importing = true)
 
     def notImportingBlocks(): ImporterState = copy(importing = false)
 
-    def resolvingBranch(from: BigInt): ImporterState = copy(resolvingBranchFrom = Some(from))
+    def resolvingBranch(from: BigInt): ImporterState =
+      copy(resolvingBranchFrom = Some(from), branchResolutionRetries = branchResolutionRetries + 1)
 
-    def branchResolved(): ImporterState = copy(resolvingBranchFrom = None)
+    def branchResolved(): ImporterState = copy(resolvingBranchFrom = None, branchResolutionRetries = 0)
 
     def isResolvingBranch: Boolean = resolvingBranchFrom.isDefined
+
+    def branchResolutionExhausted: Boolean = branchResolutionRetries >= MaxBranchResolutionRetries
   }
 
   object ImporterState {
