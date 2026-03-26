@@ -417,7 +417,7 @@ This methodology ensures implementation parity across all ETC clients and consis
 ## How to Test
 
 ```bash
-cd /media/dev/2tb/dev/fukuii/fukuii-client
+cd /path/to/fukuii
 
 # Compile
 sbt compile

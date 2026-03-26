@@ -4,12 +4,12 @@
 # Admin API enabled for enode discovery.
 set -euo pipefail
 
-DATADIR="/media/dev/2tb/data/blockchain/core-geth/mordor"
-BINARY="/media/dev/2tb/dev/core-geth/build/bin/geth"
+DATADIR="${DATADIR:-$HOME/.core-geth/mordor}"
+BINARY="${BINARY:-../core-geth/build/bin/geth}"
 
 if [ ! -f "$BINARY" ]; then
   echo "ERROR: core-geth binary not found at $BINARY"
-  echo "Run 'make geth' in /media/dev/2tb/dev/core-geth/ first."
+  echo "Run 'make geth' in the core-geth repo first, or set BINARY."
   exit 1
 fi
 

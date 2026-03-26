@@ -9,7 +9,7 @@
 **License:** Apache 2.0
 **Origin:** Fork of Mantis (IOHK), maintained by Chippr Robotics LLC
 **Package:** `com.chipprbots` (renamed from `io.iohk`)
-**Path:** `/media/dev/2tb/dev/fukuii/`
+**Path:** `(repo root)`
 
 ---
 
@@ -34,7 +34,7 @@ sbt assembly
 
 # Mordor testnet (fast sync)
 java -Xmx4g \
-  -Dfukuii.datadir=/media/dev/2tb/data/blockchain/fukuii/mordor \
+  -Dfukuii.datadir=$HOME/.fukuii/mordor \
   -Dfukuii.network=mordor \
   -Dfukuii.network.rpc.http.interface=0.0.0.0 \
   -Dfukuii.network.rpc.http.port=8553 \
@@ -44,7 +44,7 @@ java -Xmx4g \
 
 # ETC mainnet (fast sync only)
 java -Xmx4g \
-  -Dfukuii.datadir=/media/dev/2tb/data/blockchain/fukuii/etc \
+  -Dfukuii.datadir=$HOME/.fukuii/etc \
   -Dfukuii.network=etc \
   -Dfukuii.network.rpc.http.interface=0.0.0.0 \
   -Dfukuii.network.rpc.http.port=8553 \
@@ -56,7 +56,7 @@ java -Xmx4g \
 
 # ETC mainnet (SNAP sync)
 java -Xmx4g \
-  -Dfukuii.datadir=/media/dev/2tb/data/blockchain/fukuii/etc \
+  -Dfukuii.datadir=$HOME/.fukuii/etc \
   -Dfukuii.network=etc \
   -Dfukuii.network.rpc.http.interface=0.0.0.0 \
   -Dfukuii.network.rpc.http.port=8553 \

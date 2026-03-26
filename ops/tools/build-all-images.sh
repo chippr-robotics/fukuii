@@ -13,8 +13,8 @@ set -euo pipefail
 # Adjust these paths to match your local repo locations.
 
 FUKUII_REPO="${FUKUII_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
-COREGETH_REPO="${COREGETH_REPO:-/media/dev/2tb/dev/core-geth}"
-BESU_REPO="${BESU_REPO:-/media/dev/2tb/dev/besu}"
+COREGETH_REPO="${COREGETH_REPO:-../core-geth}"
+BESU_REPO="${BESU_REPO:-../besu}"
 
 # Branch mapping per target
 declare -A FUKUII_BRANCH=( [pre-olympia]=alpha [olympia]=olympia )
@@ -36,8 +36,8 @@ usage() {
   echo ""
   echo "Environment variables (optional overrides):"
   echo "  FUKUII_REPO    Path to fukuii-client repo (default: auto-detected)"
-  echo "  COREGETH_REPO  Path to core-geth repo     (default: /media/dev/2tb/dev/core-geth)"
-  echo "  BESU_REPO      Path to besu repo           (default: /media/dev/2tb/dev/besu)"
+  echo "  COREGETH_REPO  Path to core-geth repo     (default: ../core-geth)"
+  echo "  BESU_REPO      Path to besu repo           (default: ../besu)"
   exit 1
 }
 

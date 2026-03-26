@@ -3,7 +3,7 @@
 Comprehensive inventory of remaining work, verified against the codebase and compared to reference clients (go-ethereum, nethermind, core-geth, Besu, Erigon).
 
 **Branch:** `march-onward` (~51 commits ahead of upstream main, at `6220ce58b`)
-**Test baseline:** 2,642 tests pass, 0 failed, 2 ignored (2 pre-existing failures unrelated to backlog work)
+**Test baseline:** 2,678 tests pass, 0 failed, 2 ignored
 **RPC methods:** 118 implemented, all wired to `JsonRpcController`, zero orphaned
 **Last audited:** 2026-03-26
 
@@ -362,7 +362,7 @@ Comprehensive inventory of remaining work, verified against the codebase and com
   - Block validation at fork boundary (N-1, N, N+1)
   - Cross-client consensus: Fukuii, core-geth, and Besu must produce identical state roots at block N
   - Reorg across fork boundary with correct rule application per era
-- **Reference:** `/media/dev/2tb/dev/hive/simulators/ethereum/` existing test patterns
+- **Reference:** `hive/simulators/ethereum/` existing test patterns (https://github.com/ethereum/hive)
 - **Existing base:** core-geth + besu-etc PASSING in hive, fukuii build WIP
 - **Depends on:** Fukuii hive client build completion, H-014
 
@@ -606,6 +606,21 @@ Items below were implemented on the `march-onward` branch and verified against t
 | `ExpiringMap.scala`             | 23   | `TODO: Make class thread safe`                | Resolved — ConcurrentHashMap |
 | `pekko.conf`                    | 4    | `TODO(production)` change loglevel to INFO    | Valid — see C-003            |
 | `EthereumTestsSpec.scala`       | 59   | TODO: execute using BlockExecution            | Valid — see M-009            |
+
+---
+
+## Pre-Upstream-PR Cleanup (DONE)
+
+Final gate before submitting PR to upstream. All items completed in a single pass.
+
+| Item | Status | Details |
+|------|--------|---------|
+| Gitignore local run scripts | ✅ DONE | Removed `!run-classic.sh`/`!run-mordor.sh` negative patterns, untracked from git |
+| Remove hardcoded local paths | ✅ DONE | 13 files had `/media/dev/2tb/` — replaced with env var defaults and generic paths |
+| Fix broken doc links | ✅ DONE | Removed references to non-existent `ETC-HANDOFF.md` and `OLYMPIA-HANDOFF.md` |
+| Update test counts | ✅ DONE | README and BACKLOG updated from 2,314/2,642 → 2,678 |
+| Fix CHANGELOG typo | ✅ DONE | "Rebranded from Fukuii to Fukuii" → "Rebranded from Mantis to Fukuii" |
+| Move internal HANDOFF.md | ✅ DONE | Moved to `.claude/` (not public-facing) |
 
 ---
 

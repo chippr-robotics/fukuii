@@ -1,11 +1,13 @@
 #!/bin/bash
-# Besu on Mordor — FULL syncs from core-geth, then serves SNAP to Fukuii.
+# Besu on Mordor — SNAP syncs from core-geth, then serves SNAP to Fukuii.
+# Uses BONSAI storage (required for SNAP serving) with SNAP sync mode
+# (skips FULL block processing, avoids Bonsai clearStorage stall at 558K).
 # Requires core-geth running on port 30303 first.
 # Admin API enabled for enode discovery.
 set -euo pipefail
 
 BESU_DIR="${BESU_DIR:-../besu}"
-DATADIR="${DATADIR:-$HOME/.besu/mordor}"
+DATADIR="${DATADIR:-$HOME/.besu/mordor-snap}"
 GENESIS="$BESU_DIR/config/mordor.json"
 BINARY="$BESU_DIR/build/install/besu/bin/besu"
 
@@ -38,8 +40,8 @@ exec "$BINARY" \
   --rpc-http-cors-origins="*" \
   --rpc-http-api=ADMIN,ETH,NET,WEB3 \
   --p2p-port=30304 \
-  --data-storage-format=FOREST \
-  --sync-mode=FULL \
+  --data-storage-format=BONSAI \
+  --sync-mode=SNAP \
   --sync-min-peers=1 \
   --snapsync-server-enabled \
   --bootnodes="$COREGETH_ENODE" \

@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Production release checklist in ETC-HANDOFF.md
+- Production release checklist
 - Shared test helper library for Gorgoroth test scripts (`ops/gorgoroth/test-scripts/lib/test-helpers.sh`)
 - Static nodes configuration support via `static-nodes.json` file in datadir
   - Nodes can now load peer configuration from `<datadir>/static-nodes.json`
@@ -74,7 +74,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Initial Fukuii Ethereum Client codebase (forked from Mantis)
-- Rebranded from Fukuii to Fukuii throughout codebase
+- Rebranded from Mantis to Fukuii throughout codebase
 - Updated package names from io.iohk to com.chipprbots
 - GitHub Actions CI/CD pipeline
 - Docker container support with signed images

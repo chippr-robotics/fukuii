@@ -1,7 +1,7 @@
 # Ethereum Classic Cross-Client Test Matrix
 
 **Last Updated:** 2026-03-06
-**Companion to:** `ETC-HANDOFF.md`
+**Companion to:** `CHANGELOG.md`
 **Specification Source:** [ECIP-1066 — Ethereum Classic Network Description](https://ecips.ethereumclassic.org/ECIPs/ecip-1066)
 **Clients:** core-geth (Go), Besu (Java), Fukuii (Scala)
 
