@@ -26,7 +26,12 @@ object BaseFeeCalculator {
     val isParentOlympia = parent.number >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
     if (!isParentOlympia) return InitialBaseFee
 
-    val parentBaseFee = parent.baseFee.getOrElse(InitialBaseFee)
+    val parentBaseFee = parent.baseFee.getOrElse(
+      throw new IllegalStateException(
+        s"Post-Olympia parent block ${parent.number} (${parent.hashAsHexString}) is missing baseFee. " +
+          "This indicates a corrupt or invalid block header."
+      )
+    )
     val parentGasTarget = parent.gasLimit / ElasticityMultiplier
 
     if (parent.gasUsed == parentGasTarget) {
