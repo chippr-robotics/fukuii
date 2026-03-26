@@ -1,4 +1,4 @@
-## 🟢 2,678 tests passing
+## 🟢 2,690 tests passing
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/chippr-robotics/fukuii/HEAD/docs/images/fukuii-hex-logo.png" alt="Fukuii Logo" width="400"/>
@@ -81,7 +81,7 @@ See [CON-002: Bootstrap Checkpoints](docs/adr/consensus/CON-002-bootstrap-checkp
 - **Scala 3.3.4 (LTS)** and **JDK 21 (LTS)** for long-term stability
 - **Apache Pekko** actor system for reliable concurrency
 - **Full ECIP-1066 Compliance**: Implements all 14 ETC hard forks from Frontier through Spiral (block 19,250,000), including Magneto (ECIP-1103), Mystique (ECIP-1104), and Spiral (ECIP-1109), plus Olympia (ECIP-1111/1112/1121)
-- **2,678 Tests Passing**: Comprehensive unit, integration, and blockchain test suite
+- **2,690 Tests Passing**: Comprehensive unit, integration, and blockchain test suite
 - **Security-First**: Signed Docker images, CodeQL scanning, dependency monitoring
 
 ### 🪱 Vibe-Coded

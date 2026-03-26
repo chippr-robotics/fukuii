@@ -829,7 +829,8 @@ trait JSONRpcWsServerBuilder {
       // Force subscription services initialization (Besu pattern: registered at startup)
       val _ = subscriptionServices
       Some(new com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer(
-        jsonRpcController, subscriptionManager, jsonRpcConfig.wsConfig
+        jsonRpcController, subscriptionManager, jsonRpcConfig.wsConfig,
+        jsonRpcConfig.httpServerConfig.jwtAuth
       ))
     } else None
 }

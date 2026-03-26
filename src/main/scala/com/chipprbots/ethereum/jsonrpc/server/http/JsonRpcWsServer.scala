@@ -10,17 +10,23 @@ import scala.util.Failure
 import scala.util.Success
 
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
+import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.JwtAuthConfig
 import com.chipprbots.ethereum.utils.Logger
 
 /** Separate WebSocket JSON-RPC server on its own port.
   *
   * Follows geth/besu/core-geth pattern: WS is on a different port from HTTP RPC.
   * Default port 8552 (see network.conf ws.port).
+  *
+  * JWT authentication is shared with the HTTP server — both read from the same
+  * `jwt-auth` config section (`network.rpc.http.jwt-auth`). The Bearer token is
+  * validated on the HTTP upgrade request before the WebSocket handshake completes.
   */
 class JsonRpcWsServer(
     jsonRpcController: JsonRpcBaseController,
     subscriptionManager: ActorRef,
-    wsConfig: JsonRpcWsServer.WsConfig
+    wsConfig: JsonRpcWsServer.WsConfig,
+    jwtAuthConfig: JwtAuthConfig
 )(implicit actorSystem: ActorSystem)
     extends Logger {
 
@@ -30,9 +36,13 @@ class JsonRpcWsServer(
     wsConfig.notificationBufferSize
   )
 
+  private val jwtAuth = new JwtAuth(jwtAuthConfig)
+
   val route: Route =
     pathEndOrSingleSlash {
-      handleWebSocketMessages(wsHandler.createFlow())
+      jwtAuth {
+        handleWebSocketMessages(wsHandler.createFlow())
+      }
     }
 
   def run(): Unit = {
@@ -42,7 +52,8 @@ class JsonRpcWsServer(
       .bind(route)
       .onComplete {
         case Success(binding) =>
-          log.info("JSON-RPC WebSocket server listening on {}", binding.localAddress)
+          val authStatus = if (jwtAuthConfig.enabled) "JWT enabled" else "no auth"
+          log.info("JSON-RPC WebSocket server listening on {} ({})", binding.localAddress, authStatus)
         case Failure(ex) =>
           log.error("Cannot start JSON-RPC WebSocket server", ex)
       }

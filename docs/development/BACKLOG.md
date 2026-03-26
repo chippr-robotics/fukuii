@@ -3,7 +3,7 @@
 Comprehensive inventory of remaining work, verified against the codebase and compared to reference clients (go-ethereum, nethermind, core-geth, Besu, Erigon).
 
 **Branch:** `march-onward` (~51 commits ahead of upstream main, at `6220ce58b`)
-**Test baseline:** 2,678 tests pass, 0 failed, 2 ignored
+**Test baseline:** 2,690 tests pass, 0 failed, 2 ignored
 **RPC methods:** 118 implemented, all wired to `JsonRpcController`, zero orphaned
 **Last audited:** 2026-03-26
 
@@ -135,15 +135,25 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 
 ### 1.2 — Operational
 
-#### H-008: pprof-equivalent profiling endpoint
+#### H-008: pprof-equivalent profiling endpoint — DONE
 
 - **Priority:** High | **Risk:** Low
-- **Description:** Zero references for pprof, profiling, JFR, or async-profiler in codebase. Core-geth exposes `--pprof` → `localhost:6060/debug/pprof/`. JVM equivalent: JFR + async-profiler HTTP endpoint, or JMX MBeans exposed via RPC.
+- **Resolution:** Two parallel implementations exist:
+  - **HTTP:** `ProfilingRoutes.scala` exposes `/debug/pprof/{heap,threads,gc,vm,pools}` — plain text, matches go-ethereum's `--pprof` format
+  - **JSON-RPC:** `DebugService.scala` exposes `debug_memStats`, `debug_gcStats`, `debug_stacks` — structured JSON responses
+  - Both use JDK ManagementFactory MBeans (no external dependencies)
+  - ProfilingRoutes wired in `JsonRpcHttpServer.scala:82`, protected by same JWT gate as RPC
+  - CPU profiling (JFR/async-profiler, flame graphs) deferred to M-024
 
-#### H-009: JWT authentication for RPC
+#### H-009: JWT authentication for RPC — DONE
 
 - **Priority:** High | **Risk:** Low
-- **Description:** Zero references for JWT, bearer tokens, or Authorization headers. Core-geth implements `node/jwt_handler.go`. Required to protect RPC when exposed to untrusted networks.
+- **Resolution:** Full JWT auth across HTTP and WebSocket:
+  - **HTTP:** `JwtAuth.scala` HS256 directive wired into `JsonRpcHttpServer.scala`. Health endpoints exempt.
+  - **WebSocket:** `JsonRpcWsServer.scala` now applies same `JwtAuth` directive on HTTP upgrade. Shares `jwt-auth` config with HTTP server.
+  - **Config:** `network.rpc.http.jwt-auth { enabled, secret-file }` in `network.conf`. Disabled by default.
+  - **Tests:** 12 tests in `JwtAuthSpec.scala` — valid/invalid/expired tokens, clock skew, secret auto-generation, missing auth header.
+  - **Secret format:** 32-byte hex file (compatible with geth `--authrpc.jwtsecret`), auto-generates if missing.
 
 ### 1.3 — Consensus Validation Gaps (2026-03-25 audit)
 
