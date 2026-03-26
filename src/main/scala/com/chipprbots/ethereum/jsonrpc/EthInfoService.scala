@@ -85,6 +85,13 @@ object EthInfoService {
   case class IeleCallRequest(tx: IeleCallTx, block: BlockParam)
   case class IeleCallResponse(returnData: Seq[ByteString])
   case class EstimateGasResponse(gas: BigInt)
+
+  case class CreateAccessListRequest(tx: CallTx, block: BlockParam)
+  case class CreateAccessListResponse(
+      accessList: Seq[AccessListItem],
+      gasUsed: BigInt,
+      error: Option[String]
+  )
 }
 
 class EthInfoService(
@@ -237,6 +244,41 @@ class EthInfoService(
   def estimateGas(req: CallRequest): ServiceResponse[EstimateGasResponse] =
     IO {
       doCall(req)(stxLedger.binarySearchGasEstimation).map(gasUsed => EstimateGasResponse(gasUsed))
+    }.recover { case _: MissingNodeException =>
+      Left(JsonRpcError.NodeNotFound)
+    }
+
+  def createAccessList(req: CreateAccessListRequest): ServiceResponse[CreateAccessListResponse] =
+    IO {
+      doCall(CallRequest(req.tx, req.block))(stxLedger.simulateTransaction).map { txResult =>
+        // Build access list from addresses and storage keys collected during execution
+        // Exclude sender and to-address (precompiles are excluded by the EVM itself)
+        val fromAddr = req.tx.from.map(Address.apply)
+        val toAddr = req.tx.to.map(Address.apply)
+        val precompileRange = (1 to 9).map(i => Address(i)).toSet
+
+        val allAddresses = txResult.accessedAddresses -- precompileRange -- fromAddr -- toAddr
+        val storageByAddress = txResult.accessedStorageKeys.groupBy(_._1).view.mapValues(_.map(_._2).toList.sorted)
+
+        // Build access list items: addresses with their storage keys
+        val accessList = allAddresses.toSeq.sorted(Ordering.by[Address, BigInt](a => BigInt(1, a.bytes.toArray))).map {
+          addr =>
+            AccessListItem(addr, storageByAddress.getOrElse(addr, Nil))
+        }
+
+        // Also include addresses that only appear in storage keys but not in accessedAddresses
+        val storageOnlyAddrs = storageByAddress.keys.toSet -- allAddresses -- precompileRange -- fromAddr -- toAddr
+        val storageOnlyItems = storageOnlyAddrs.toSeq
+          .sorted(Ordering.by[Address, BigInt](a => BigInt(1, a.bytes.toArray)))
+          .map { addr =>
+            AccessListItem(addr, storageByAddress(addr))
+          }
+
+        val fullAccessList = accessList ++ storageOnlyItems
+        val errorMsg = txResult.vmError.map(_.toString)
+
+        CreateAccessListResponse(fullAccessList, txResult.gasUsed, errorMsg)
+      }
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
     }

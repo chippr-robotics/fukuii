@@ -4,7 +4,7 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 
 **Branch:** `march-onward` (~47 commits ahead of upstream main, at `6220ce58b`)
 **Test baseline:** 2,642 tests pass, 0 failed, 2 ignored
-**RPC methods:** 100 implemented, all wired to `JsonRpcController`, zero orphaned
+**RPC methods:** 101 implemented, all wired to `JsonRpcController`, zero orphaned
 **Last audited:** 2026-03-25
 
 ---
@@ -105,9 +105,10 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Description:** Returns all receipts for a block in one call. Used by block explorers and indexers.
 - **Resolution:** Implemented in `EthTxService.getBlockReceipts()` — resolves block via `BlockParam`, fetches receipts, builds `TransactionReceiptResponse` for each. Returns `null` for unknown blocks (matches go-ethereum). Manual JSON encoder `encodeReceipt` avoids Scala 3 reflection issues. Controller wiring added.
 
-#### H-005: eth_createAccessList (EIP-2930)
+#### H-005: eth_createAccessList (EIP-2930) ✅ DONE
 - **Priority:** High | **Risk:** Medium
-- **Description:** Zero references in codebase. Generates optimal access list for a transaction by simulating execution. Both core-geth and Besu support this. Used by wallets and tooling to reduce gas costs.
+- **Description:** Generates optimal access list for a transaction by simulating execution.
+- **Resolution:** Implemented in `EthInfoService.createAccessList()` — simulates transaction via `stxLedger.simulateTransaction()`, collects `accessedAddresses` and `accessedStorageKeys` from `ProgramResult` (already tracked by all EVM opcodes: SLOAD, SSTORE, BALANCE, EXTCODEHASH, CALL, etc.). Groups storage keys by address, excludes sender/to/precompiles. Returns access list, gasUsed, and optional error. `TxResult` extended with access fields. JSON codec supports both 1-param (latest block) and 2-param forms.
 
 #### H-006: State overrides for eth_call (EIP-3030)
 - **Priority:** High | **Risk:** Medium

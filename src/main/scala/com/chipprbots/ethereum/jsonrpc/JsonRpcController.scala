@@ -280,6 +280,8 @@ case class JsonRpcController(
       handle[MaxPriorityFeePerGasRequest, MaxPriorityFeePerGasResponse](ethTxService.getMaxPriorityFeePerGas, req)
     case req @ JsonRpcRequest(_, "eth_feeHistory", _, _) =>
       handle[FeeHistoryRequest, FeeHistoryResponse](ethTxService.feeHistory, req)
+    case req @ JsonRpcRequest(_, "eth_createAccessList", _, _) =>
+      handle[CreateAccessListRequest, CreateAccessListResponse](ethInfoService.createAccessList, req)
   }
 
   private def handleDebugRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {

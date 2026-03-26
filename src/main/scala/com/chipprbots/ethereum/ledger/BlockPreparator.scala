@@ -430,7 +430,7 @@ class BlockPreparator(
 
         validatedStx match {
           case Right((account, address)) =>
-            val TxResult(newWorld, gasUsed, logs, _, vmError) =
+            val TxResult(newWorld, gasUsed, logs, _, vmError, _, _) =
               executeTransaction(stx, address, blockHeader, world.saveAccount(address, account))
 
             // spec: https://github.com/ethereum/EIPs/blob/master/EIPS/eip-658.md

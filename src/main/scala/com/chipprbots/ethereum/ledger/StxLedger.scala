@@ -52,7 +52,15 @@ class StxLedger(
     val result = blockPreparator.runVM(tx, senderAddress, blockHeader, worldForTx)
     val totalGasToRefund = blockPreparator.calcTotalGasToRefund(tx, result, blockHeader.number)
 
-    TxResult(result.world, tx.tx.gasLimit - totalGasToRefund, result.logs, result.returnData, result.error)
+    TxResult(
+      result.world,
+      tx.tx.gasLimit - totalGasToRefund,
+      result.logs,
+      result.returnData,
+      result.error,
+      result.accessedAddresses,
+      result.accessedStorageKeys
+    )
   }
 
   def binarySearchGasEstimation(
