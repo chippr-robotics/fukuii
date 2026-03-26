@@ -13,14 +13,28 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 
 | Client | Lang | RPC Methods | Key Differentiators |
 |--------|------|-------------|---------------------|
-| **core-geth** | Go | 68+ | pprof, 30+ debug_* methods, state overrides, eth_createAccessList, JWT auth |
+| **go-ethereum** | Go | ~70 | Reference implementation, bintrie/flat state, Engine API (PoS), EIP-7702 witness support |
+| **core-geth** | Go | 68+ | pprof, 30+ debug_* methods, state overrides, eth_createAccessList, JWT auth, ECBP-1100 MESS |
+| **Nethermind** | C# | ~140 | Parity RPC compat (trace_*), Flashbots/MEV, plugin system, timestamp-based fork activation, 35 debug methods |
 | **Besu** | Java | 179 | GraphQL, plugin system, permissioning, 14 debug_* methods |
 | **Erigon** | Go | ~160 | Staged sync, MDBX, advanced tracing |
-| **Fukuii** | Scala | **94** | MCP integration (unique), IELE VM, IPC, TUI, SNAP server+client |
+| **Fukuii** | Scala | **94** | MCP server (unique), IELE VM, IPC, TUI, SNAP server+client |
+
+### Network Upgrade Safety Comparison
+
+| Feature | go-ethereum | core-geth | Nethermind | Besu | Fukuii |
+|---------|-------------|-----------|------------|------|--------|
+| Fork ID (EIP-2124) | Yes (4-rule) | Yes (4-rule) | Yes (3-result) | Yes | Yes (`ForkIdValidator`) |
+| Bad block tracking | DB-backed (10 max) | BadHashes map | In-memory + RPC | Yes | Blacklist only (no hash store) |
+| Peer ban on invalid block | Downloader reputation | Blacklist | Disconnect + reputation | Yes | Blacklist (30 reasons) |
+| Chain split detection | Handshake-only | Handshake + MESS | Handshake-only | Handshake | Handshake-only |
+| Operator fork warnings | **None** | AF activation logs | **None** | **None** | **None** (see M-017) |
+| Deep reorg protection | None (PoW) | ECBP-1100 MESS | InvalidChainTracker (PoS) | None | MESS implemented (deactivated at Spiral) |
+| Fork-boundary tests | Implicit | Implicit | Implicit | Implicit | `MordorOlympiaSpec` (needs expansion, see H-014) |
 
 ### Fukuii Strengths (unique or ahead of reference clients)
 
-- **MCP server** (7 methods) — only ETC client with Claude AI integration
+- **MCP server** (7 methods) — only blockchain client with LLM integration (Claude, ChatGPT, Gemini, open-source models via MCP protocol)
 - **IELE VM support** — experimental VM
 - **TUI** (JLine 3, 306-line renderer, 8+ panels) — first ETC client with terminal UI
 - **IPC support** — Unix domain socket RPC (`JsonRpcIpcServer.scala`)
@@ -139,6 +153,46 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Description:** `finalizeSnapSync()` stores the pivot block and then marks `SnapSyncDone` in two separate commits. If the node crashes between these operations, the next restart finds an inconsistent state: `getBestBlockNumber()` returns the pivot but the SnapSyncDone flag may not be set, or vice versa. This can cause regular sync to fail with "Unknown branch" loops.
 - **Fix:** Ensure pivot block storage + SnapSyncDone marker are atomic, or add recovery logic to detect and repair partial finalization state.
 
+### 1.4 — Network Upgrade Safety
+
+#### H-014: Olympia fork boundary validation tests
+- **Priority:** High | **Risk:** High (consensus-critical)
+- **Description:** Comprehensive tests for block N-1 → N → N+1 transition where N = olympiaBlockNumber. Must verify:
+  - Block N-1: pre-Olympia rules (15 RLP header fields, no baseFee, legacy gas pricing)
+  - Block N: post-Olympia rules activate (16 RLP fields, baseFee present, EIP-1559 gas, treasury redirect begins)
+  - Block N+1: continued post-Olympia operation
+  - State root computed with correct rules at each block (wrong rules → different state root → invalid)
+  - EIP-2935 block hash history contract deployment at fork block
+  - Gas limit convergence: 8M→60M via ±1/1024 per block (~2,055 blocks)
+- **Reference:** core-geth `headerchain.go` ValidateHeaderChain, Besu `ProtocolScheduleBuilder`, go-ethereum `consensus/misc/eip1559`
+- **Existing base:** `MordorOlympiaSpec.scala` (live RPC tests) — needs unit-level counterpart
+- **Approach:** Create `OlympiaForkBoundarySpec.scala` with parameterized tests at N-1, N, N+1. Source validation patterns from go-ethereum, Erigon, Nethermind, Besu, core-geth.
+- **Depends on:** H-010, H-011
+
+#### H-015: Chain split detection and handling
+- **Priority:** High | **Risk:** High (network-critical)
+- **Description:** If some nodes don't upgrade to Olympia, the network splits at the fork block. Fukuii must:
+  - **Detect:** Fork ID mismatch via `ForkIdValidator` — peers on pre-fork chain have different CRC32 checksum after block N. Verify `ForkIdValidator.validatePeer()` correctly returns `ErrLocalIncompatibleOrStale` for non-upgraded peers.
+  - **Disconnect:** Peers on the minority fork should be disconnected and blacklisted. Verify blacklist reason propagation.
+  - **Report:** Log operator-visible messages: "Peer X disconnected: incompatible fork (pre-Olympia)", peer count by fork state, % of peers on correct fork.
+  - **Recover:** If the node itself is on the minority fork (operator didn't upgrade), detect stalling (no new blocks from compatible peers) and warn loudly.
+- **Reference:** core-geth `forkid.go` 4-tier validation, go-ethereum `eth/handler.go` peer drop on fork ID mismatch, Besu `EthProtocolManager` fork ID enforcement
+- **Existing base:** `ForkIdValidator.scala` (validation logic), `ForkIdSpec.scala` (6 tests) — needs chain split scenario tests
+- **Approach:** Create `ChainSplitSpec.scala` testing fork ID transitions at Olympia boundary. Add logging to `PeerActor` for fork-incompatible disconnections. Source disconnect patterns from go-ethereum, Erigon, Nethermind, Besu, core-geth.
+
+#### H-016: Adversarial node resilience at fork boundary
+- **Priority:** High | **Risk:** High (consensus-critical)
+- **Description:** Malicious or buggy peers may send invalid blocks around the fork boundary. Fukuii must handle:
+  - **Pre-fork blocks with post-fork features:** Block at N-1 with baseFee field, EIP-1559 txs, or new opcodes → reject and ban peer (relates to H-010, H-011)
+  - **Post-fork blocks with pre-fork rules:** Block at N without baseFee, wrong gas calculation → reject and ban peer
+  - **Deep reorg across fork boundary:** Attacker sends long chain crossing N, applying wrong rules on one side → BranchResolution must validate each block with correct era rules
+  - **Bad block hash tracking:** Maintain a set of known-bad block hashes (like core-geth `BadHashes` map). If a peer sends headers containing banned hashes, reject immediately and disconnect.
+  - **Peer scoring at boundary:** Peers sending invalid fork-boundary blocks receive heavier penalties than normal invalid blocks (deliberate attack vs. transient error)
+- **Reference:** core-geth `headerchain.go:318` BadHashes map, go-ethereum `core/block_validator.go`, Erigon `eth/stagedsync/stage_headers.go` bad block tracking, Nethermind `BlockValidator.cs`
+- **Existing base:** `Blacklist.scala` (30 reasons), `BlockHeaderValidatorSkeleton.scala`, `BranchResolution.scala`
+- **Approach:** Add `BadBlockTracker` utility (hash set + peer association). Add fork-boundary-specific validation in `BlockHeaderValidatorSkeleton`. Create `AdversarialForkBoundarySpec.scala`. Source patterns from go-ethereum, Erigon, Nethermind, Besu, core-geth.
+- **Depends on:** H-014
+
 ---
 
 ## Tier 2: MEDIUM — Feature Completeness & Testing
@@ -222,6 +276,40 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Description:** After SNAP sync completes at a pivot block, if a chain reorg occurs that invalidates the pivot (e.g., reorg at blocks before the pivot), regular sync inherits stale state. SNAP only stores the pivot header area — there are no headers to walk back to the pre-reorg state. The node could sync to the minority fork and later orphan all blocks after the reorg point.
 - **Discovered:** 2026-03-25 full feature audit.
 
+### 2.4 — Network Upgrade Testing
+
+#### M-016: MESS behavior verification at Olympia boundary
+- **Priority:** Medium | **Risk:** Medium
+- **Description:** MESS (ECBP-1100) was deactivated at Spiral on both networks (Mordor: 10,400,000, ETC: 19,250,000). Olympia activates well after deactivation. Verify:
+  - MESS is correctly inactive at Olympia activation block (both Mordor and ETC)
+  - `MESSConfig.isActiveAtBlock(olympiaBlockNumber)` returns false
+  - `BranchResolution.shouldMessReject()` does NOT apply MESS scoring at Olympia blocks
+  - If MESS is ever re-activated post-Olympia (governance decision), the polynomial curve works correctly with EIP-1559 block timestamps
+  - Deep reorg attempt at Olympia boundary without MESS protection — verify TD comparison still works correctly as the sole fork choice mechanism
+- **Reference:** core-geth `blockchain_af.go` ECBP-1100 activation window, `--ecbp1100.nodisable` flag
+- **Existing base:** `MESScorerSpec.scala` (43 tests), `MESSIntegrationSpec.scala` — needs Olympia-era test cases
+- **Approach:** Add test cases to `MESScorerSpec` and `MESSIntegrationSpec` verifying MESS inactivity at Olympia blocks. Add test for hypothetical re-activation.
+
+#### M-017: Operator upgrade signaling and warnings
+- **Priority:** Medium | **Risk:** Low
+- **Description:** Operators need clear signals about upcoming forks. Implement:
+  - **Countdown logging:** When Olympia is configured and current head approaches activation, log periodic warnings: "Olympia activates in N blocks (~X hours)"
+  - **Fork readiness RPC:** Expose fork schedule via `fukuii_getForkSchedule` or `admin_nodeInfo` extension — return all configured forks with activation status
+  - **Post-activation confirmation:** Log "Olympia activated at block N. baseFee: X, treasury balance: Y" on first post-fork block
+  - **Stale client warning:** If node is significantly behind chain head AND Olympia has passed, warn that the node may be on a minority fork
+- **Reference:** go-ethereum `log.Warn("Upcoming fork", ...)`, Besu `ProtocolSchedule` logging, core-geth `blockchain_af.go:41-46` AF warnings
+
+#### M-018: Hive integration test coverage for Olympia
+- **Priority:** Medium | **Risk:** Low
+- **Description:** The hive multi-client testing framework needs Olympia-specific test suites:
+  - Fork ID matching: pre-fork peer ↔ post-fork peer → disconnect
+  - Block validation at fork boundary (N-1, N, N+1)
+  - Cross-client consensus: Fukuii, core-geth, and Besu must produce identical state roots at block N
+  - Reorg across fork boundary with correct rule application per era
+- **Reference:** `/media/dev/2tb/dev/hive/simulators/ethereum/` existing test patterns
+- **Existing base:** core-geth + besu-etc PASSING in hive, fukuii build WIP
+- **Depends on:** Fukuii hive client build completion, H-014
+
 ---
 
 ## Tier 3: LOW — Polish
@@ -289,6 +377,11 @@ C-001 (SNAP PRs) ──┬── C-002 (#1005 healing)
 H-002 (feeHistory) ── H-003 (maxPriorityFee)
 H-001 (debug expand) ── M-001 (debug profiling)
 M-004 (msg decoding) ── M-005 (capability)
+
+H-010 (fork-gate txs) ─┬── H-014 (fork boundary tests)
+H-011 (baseFee reject) ─┘
+H-014 ── H-016 (adversarial — needs boundary validation first)
+H-015 (chain split) ── M-018 (hive — cross-client chain split)
 ```
 
 ---
@@ -301,11 +394,12 @@ M-004 (msg decoding) ── M-005 (capability)
 | 2 — Fee Market | H-002, H-003, H-004, H-005 | Wallet/explorer compatibility |
 | 3 — Debug Expand | H-001, M-001 | Geth-style tracing + profiling |
 | 4 — Simulation | H-006 | State overrides for eth_call |
-| 5 — Operations | H-008, H-009, M-002 | Profiling, auth, log control |
-| 6 — Testing | M-009..M-014 | Full test suite pass |
-| 7 — Sync + Network | H-007, M-003..M-005 | Recovery, work-stealing |
-| 8 — Polish | M-006..M-008, L-001..L-006 | Mining, perf, docs |
-| 9 — Future | F-001..F-006 | GraphQL, Stratum, plugin, GUI |
+| 5 — Operations | H-008, H-009, M-002, M-017 | Profiling, auth, log control, upgrade signaling |
+| 6 — Fork Safety | H-014, H-015, H-016, M-016 | Fork boundary tests, chain split, adversarial, MESS verification |
+| 7 — Testing | M-009..M-014, M-018 | Full test suite pass, hive Olympia coverage |
+| 8 — Sync + Network | H-007, M-003..M-005 | Recovery, work-stealing |
+| 9 — Polish | M-006..M-008, L-001..L-006 | Mining, perf, docs |
+| 10 — Future | F-001..F-006 | GraphQL, Stratum, plugin, GUI |
 
 ---
 
@@ -337,11 +431,11 @@ M-004 (msg decoding) ── M-005 (capability)
 | Tier | Count | Description |
 |------|-------|-------------|
 | Tier 0 (CRITICAL) | 4 | SNAP PRs, healing fix, prod log, branch resolution loop |
-| Tier 1 (HIGH) | 13 | debug expansion, fee market, access lists, state overrides, sync recovery, profiling, JWT, tx fork-gating, baseFee guards, SNAP finalization |
-| Tier 2 (MEDIUM) | 15 | debug profiling, log verbosity, SNAP work-stealing, miner methods, testing push, perf, SNAP reorg freshness |
+| Tier 1 (HIGH) | 16 | debug expansion, fee market, access lists, state overrides, sync recovery, profiling, JWT, tx fork-gating, baseFee guards, SNAP finalization, fork boundary tests, chain split, adversarial resilience |
+| Tier 2 (MEDIUM) | 18 | debug profiling, log verbosity, SNAP work-stealing, miner methods, testing push, perf, SNAP reorg freshness, MESS verification, operator signaling, hive Olympia |
 | Tier 3 (LOW) | 6 | networking polish, API docs, operator guide |
 | Tier 4 (FUTURE) | 6 | GraphQL, Stratum, plugin system, GUI, releases |
-| **Total remaining** | **44** | Verified NOT DONE against codebase (38 original + 6 from 2026-03-25 audit) |
+| **Total remaining** | **50** | 38 original + 6 audit (2026-03-25) + 6 network upgrade safety (2026-03-25) |
 
 ---
 
