@@ -12,8 +12,10 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SnapServerChecker
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FlatAccountStorage
+import com.chipprbots.ethereum.db.storage.ArchiveNodeStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.NodeStorage
+import com.chipprbots.ethereum.db.storage.SerializingMptStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt._
 import com.chipprbots.ethereum.domain.ChainWeight
@@ -490,6 +492,44 @@ class NetworkPeerManagerActor(
     }
   }
 
+  /** Generate Merkle boundary proofs for a partial SNAP range response.
+    *
+    * Per the devp2p SNAP/1 spec, when a server returns a partial range (not all accounts/slots
+    * up to the limit hash), it MUST include Merkle proofs for the first and last returned keys.
+    * This allows the client to verify that no accounts/slots were omitted within the range.
+    *
+    * @param rootHash
+    *   The state root hash for the trie
+    * @param firstKey
+    *   The first key in the returned range
+    * @param lastKey
+    *   The last key in the returned range
+    * @return
+    *   RLP-encoded trie nodes forming the boundary proofs, or empty if nodeStorage is unavailable
+    */
+  private def generateBoundaryProofs(
+      rootHash: ByteString,
+      firstKey: ByteString,
+      lastKey: ByteString
+  ): Seq[ByteString] =
+    nodeStorage
+      .map { ns =>
+        try {
+          val mptStorage = new SerializingMptStorage(new ArchiveNodeStorage(ns))
+          val trie = MerklePatriciaTrie[ByteString, ByteString](rootHash.toArray, mptStorage)
+          val firstProof = trie.getProof(firstKey).getOrElse(Vector.empty)
+          val lastProof = trie.getProof(lastKey).getOrElse(Vector.empty)
+          // Deduplicate nodes that appear in both proofs (common ancestors)
+          val allNodes = (firstProof ++ lastProof).distinctBy(n => MptTraversals.encodeNode(n).toSeq)
+          allNodes.map(node => ByteString(MptTraversals.encodeNode(node)))
+        } catch {
+          case e: Exception =>
+            log.warning("Failed to generate boundary proofs for root {}: {}", rootHash.take(4).toHex, e.getMessage)
+            Seq.empty
+        }
+      }
+      .getOrElse(Seq.empty)
+
   /** Handle incoming GetAccountRange request from a peer (server-side)
     *
     * @param msg
@@ -529,10 +569,23 @@ class NetworkPeerManagerActor(
           val accountPairs: Seq[(ByteString, Account)] = accounts.flatMap { case (hash, rlpBytes) =>
             Account(rlpBytes).toOption.map(acc => (hash, acc))
           }
+
+          // Generate boundary proofs for partial range responses (SNAP/1 spec compliance).
+          // Proofs are needed when the response doesn't cover the full requested range.
+          val proof: Seq[ByteString] =
+            if (accountPairs.nonEmpty) {
+              val lastReturnedHash = accountPairs.last._1
+              val isPartialRange = compareByteStrings(lastReturnedHash, msg.limitHash) < 0
+              if (isPartialRange)
+                generateBoundaryProofs(msg.rootHash, accountPairs.head._1, lastReturnedHash)
+              else
+                Seq.empty // Full range returned — no proof needed
+            } else Seq.empty
+
           log.debug(
-            s"GetAccountRange response for peer $peerId: ${accountPairs.size} accounts"
+            s"GetAccountRange response for peer $peerId: ${accountPairs.size} accounts, ${proof.size} proof nodes"
           )
-          pwi.peer.ref ! PeerActor.SendMessage(AccountRange(msg.requestId, accountPairs, Seq.empty))
+          pwi.peer.ref ! PeerActor.SendMessage(AccountRange(msg.requestId, accountPairs, proof))
 
         case None =>
           log.debug(s"GetAccountRange: no FlatAccountStorage available, returning empty response to peer $peerId")
@@ -626,10 +679,31 @@ class NetworkPeerManagerActor(
           }
 
           val result = allSlots.result()
+
+          // Generate storage trie boundary proofs for the last account if its range is partial.
+          // Per SNAP/1 spec, proofs are against the last account's storage trie root.
+          val proof: Seq[ByteString] = {
+            val lastAccountSlots = result.lastOption.getOrElse(Seq.empty)
+            if (lastAccountSlots.nonEmpty) {
+              val lastSlotHash = lastAccountSlots.last._1
+              val isPartialRange = compareByteStrings(lastSlotHash, msg.limitHash) < 0
+              if (isPartialRange) {
+                // Look up the last account to get its storageRoot
+                val lastAccountHash = msg.accountHashes(result.size - 1)
+                val storageRootOpt = flatAccountStorage.flatMap(_.getAccount(lastAccountHash)).flatMap { rlpBytes =>
+                  Account(rlpBytes).toOption.map(_.storageRoot)
+                }
+                storageRootOpt
+                  .map(root => generateBoundaryProofs(root, lastAccountSlots.head._1, lastSlotHash))
+                  .getOrElse(Seq.empty)
+              } else Seq.empty
+            } else Seq.empty
+          }
+
           log.debug(
-            s"GetStorageRanges response for peer $peerId: ${result.size} account slot sets, $totalBytes bytes"
+            s"GetStorageRanges response for peer $peerId: ${result.size} account slot sets, $totalBytes bytes, ${proof.size} proof nodes"
           )
-          pwi.peer.ref ! PeerActor.SendMessage(StorageRanges(msg.requestId, result, Seq.empty))
+          pwi.peer.ref ! PeerActor.SendMessage(StorageRanges(msg.requestId, result, proof))
 
         case None =>
           log.debug(s"GetStorageRanges: no FlatSlotStorage available, returning empty response to peer $peerId")
