@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.blockchain.sync.fast.ReceiptsValidator.ReceiptsVa
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncBlocksValidator.BlockBodyValidationResult
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor.RestartRequested
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor.StartSyncingTo
+import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor.StateSyncFailed
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor.StateSyncFinished
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor.WaitingForNewTargetBlock
 import com.chipprbots.ethereum.consensus.validators.Validators
@@ -233,6 +234,9 @@ class FastSync(
       case StateSyncFinished =>
         syncState = syncState.copy(stateSyncFinished = true)
         processSyncing()
+      case StateSyncFailed(reason) =>
+        log.warning("State sync failed with critical error: {}. Requesting fresh pivot block.", reason)
+        updatePivotBlock(ImportedLastBlock)
       case SyncStateSchedulerActor.NetworkIncompatible =>
         log.warning(
           "State scheduler reports no ETH63-67 peers available (ETH68-only network). " +

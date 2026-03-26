@@ -470,11 +470,7 @@ class SyncStateSchedulerActor(
         err match {
           case Critical(er) =>
             log.error("Critical error while state syncing {}, stopping state sync", er)
-            // TODO [BACKLOG A-004] Parent FastSync (line 182) spawns this actor but its Terminated handler
-            // (line 249) only covers assignedHandlers — NOT this child. When we stop here, fast sync
-            // stalls silently. Fix: either send StateSyncFailed to parent before stopping, or have
-            // FastSync context.watch this actor and handle Terminated to trigger pivot refresh.
-            // Reference: geth restarts with fresh pivot (skeleton reset), Besu falls back to full sync.
+            currentState.syncInitiator ! StateSyncFailed(er.toString)
             context.stop(self)
           case DownloaderError(newDownloaderState, peer, blacklistWithReason) =>
             log.debug("Downloader error by peer {}", peer)
@@ -550,6 +546,7 @@ object SyncStateSchedulerActor {
   case object StateSyncFinished extends SyncStateSchedulerActorResponse
   case object WaitingForNewTargetBlock extends SyncStateSchedulerActorResponse
   case object NetworkIncompatible extends SyncStateSchedulerActorResponse
+  final case class StateSyncFailed(reason: String) extends SyncStateSchedulerActorResponse
 
   final case class GetMissingNodes(nodesToGet: List[ByteString])
   final case class MissingNodes(missingNodes: List[SyncResponse], downloaderCapacity: Int)

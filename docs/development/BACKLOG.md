@@ -114,13 +114,10 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Priority:** High | **Risk:** Medium
 - **Resolution:** Implemented `AccountStateOverride` type with balance/nonce/code/state/stateDiff fields. Modified `doCall()` to build world state and apply overrides before simulation. Updated eth_call and eth_estimateGas JSON decoders to accept optional third parameter (state override map). Matches go-ethereum `internal/ethapi/override.go` Apply() behavior. Full state replacement (`state`) and differential patching (`stateDiff`) both supported.
 
-#### H-007: SyncStateSchedulerActor parent recovery
-- **File:** `src/main/scala/.../sync/fast/SyncStateSchedulerActor.scala:478`
+#### H-007: SyncStateSchedulerActor parent recovery — DONE
+- **File:** `src/main/scala/.../sync/fast/SyncStateSchedulerActor.scala`
 - **Priority:** High | **Risk:** Medium (sync-critical)
-- **Description:** On critical trie error, the actor calls `context.stop(self)`. Parent `FastSync` spawns this actor (line 182) but its `Terminated` handler (line 249) only covers `assignedHandlers` — NOT the scheduler child. **No recovery path exists.** If the trie is malformed, the scheduler dies silently and fast sync stalls indefinitely.
-- **Reference clients:** geth restarts with fresh pivot (skeleton reset). Besu falls back to full sync.
-- **Approach:** Either (a) send `StateSyncFailed` to parent before stopping, or (b) `FastSync` should `context.watch(syncStateScheduler)` and handle `Terminated`.
-- **Depends on:** C-001
+- **Resolution:** Added `StateSyncFailed(reason)` response message. On critical trie error, scheduler now sends `StateSyncFailed` to parent before stopping. FastSync handles it by triggering a pivot refresh (matching geth's skeleton-reset approach). Eliminates silent fast sync stall on malformed trie data.
 
 ### 1.2 — Operational
 
