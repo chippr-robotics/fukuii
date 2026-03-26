@@ -276,6 +276,12 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Description:** After SNAP sync completes at a pivot block, if a chain reorg occurs that invalidates the pivot (e.g., reorg at blocks before the pivot), regular sync inherits stale state. SNAP only stores the pivot header area — there are no headers to walk back to the pre-reorg state. The node could sync to the minority fork and later orphan all blocks after the reorg point.
 - **Discovered:** 2026-03-25 full feature audit.
 
+#### M-021: SNAP storage slot monotonicity validation
+- **File:** `src/main/scala/.../sync/snap/SNAPRequestTracker.scala`
+- **Priority:** Medium | **Risk:** Low
+- **Description:** `validateStorageRanges()` does not verify that storage slots within each account are monotonically increasing. A malicious peer could return out-of-order slots, causing incorrect state reconstruction. go-ethereum and Nethermind validate slot ordering during SNAP response processing.
+- **Discovered:** 2026-03-25 from upstream PR #1008 test coverage (test ignored on march-onward pending implementation).
+
 ### 2.4 — Network Upgrade Testing
 
 #### M-016: MESS behavior verification at Olympia boundary
@@ -412,16 +418,19 @@ H-015 (chain split) ── M-018 (hive — cross-client chain split)
 
 | Phase | Items | Focus |
 |-------|-------|-------|
-| 1 — Stabilize | C-001, C-002, C-003 | Merge PRs, fix healing, prod log |
-| 2 — Fee Market | H-002, H-003, H-004, H-005 | Wallet/explorer compatibility |
-| 3 — Debug Expand | H-001, M-001 | Geth-style tracing + profiling |
-| 4 — Simulation | H-006 | State overrides for eth_call |
-| 5 — Operations | H-008, H-009, M-002, M-017 | Profiling, auth, log control, upgrade signaling |
-| 6 — Fork Safety | H-014, H-015, H-016, M-016 | Fork boundary tests, chain split, adversarial, MESS verification |
-| 7 — Testing | M-009..M-014, M-018 | Full test suite pass, hive Olympia coverage |
-| 8 — Sync + Network | H-007, M-003..M-005 | Recovery, work-stealing |
-| 9 — Polish | M-006..M-008, L-001..L-006 | Mining, perf, docs |
-| 10 — Future | F-001..F-006 | GraphQL, Stratum, plugin, GUI |
+| 1 — Stabilize | C-001, C-002, C-003, C-004 | Merge PRs, fix healing, prod log, branch loop guard |
+| 2 — Consensus | H-010, H-011, H-012, H-013 | Fork-gate txs, baseFee guards, SNAP atomic finalization |
+| 3 — PoW Mining | M-020, M-006 | Pre-merge go-ethereum review, miner methods |
+| 4 — Fee Market | H-002, H-003, H-004, H-005 | Wallet/explorer compatibility (MetaMask, EIP-1559) |
+| 5 — Debug Expand | H-001, M-001 | Geth-style tracing + runtime profiling RPCs |
+| 6 — Simulation | H-006 | State overrides for eth_call (Tenderly/Foundry/Hardhat) |
+| 7 — Operations | H-008, H-009, M-002, M-017 | Profiling, JWT auth, log control, upgrade signaling |
+| 8 — Fork Safety | H-014, H-015, H-016, M-016 | Fork boundary tests, chain split, adversarial, MESS |
+| 9 — Sync + Network | H-007, M-003..M-005, M-015, M-021 | Recovery, work-stealing, SNAP reorg freshness, slot validation |
+| 10 — Testing | M-009..M-014, M-018 | Full test suite pass, hive Olympia coverage |
+| 11 — Polish + Future | M-007, M-008, M-019, L-001..L-006, F-001..F-006 | Perf, MCP docs, networking, GraphQL, Stratum |
+
+**Methodology:** Each item requires reviewing all 5 reference clients (go-ethereum primary, core-geth, Besu, Erigon, Nethermind) before implementation. For PoW consensus: pre-Sept 2022 go-ethereum v1.10.26, Besu, current core-geth.
 
 ---
 
@@ -454,10 +463,10 @@ H-015 (chain split) ── M-018 (hive — cross-client chain split)
 |------|-------|-------------|
 | Tier 0 (CRITICAL) | 4 | SNAP PRs, healing fix, prod log, branch resolution loop |
 | Tier 1 (HIGH) | 16 | debug expansion, fee market, access lists, state overrides, sync recovery, profiling, JWT, tx fork-gating, baseFee guards, SNAP finalization, fork boundary tests, chain split, adversarial resilience |
-| Tier 2 (MEDIUM) | 20 | debug profiling, log verbosity, SNAP work-stealing, miner methods, testing push, perf, SNAP reorg freshness, MESS verification, operator signaling, hive Olympia, MCP multi-LLM docs, go-ethereum pre-merge PoW review |
+| Tier 2 (MEDIUM) | 21 | debug profiling, log verbosity, SNAP work-stealing, miner methods, testing push, perf, SNAP reorg freshness, SNAP slot validation, MESS verification, operator signaling, hive Olympia, MCP multi-LLM docs, go-ethereum pre-merge PoW review |
 | Tier 3 (LOW) | 6 | networking polish, API docs, operator guide |
 | Tier 4 (FUTURE) | 6 | GraphQL, Stratum, plugin system, GUI, releases |
-| **Total remaining** | **52** | 38 original + 6 audit + 6 network upgrade safety + 2 (MCP docs, pre-merge PoW review) |
+| **Total remaining** | **53** | 38 original + 6 audit + 6 network upgrade safety + 2 (MCP docs, pre-merge PoW review) + 1 (SNAP slot validation) |
 
 ---
 
