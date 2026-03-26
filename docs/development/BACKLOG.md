@@ -3,8 +3,8 @@
 Comprehensive inventory of remaining work, verified against the codebase and compared to reference clients (core-geth, Besu, Erigon).
 
 **Branch:** `march-onward` (~47 commits ahead of upstream main, at `6220ce58b`)
-**Test baseline:** 2,459 tests pass, 0 failed, 0 ignored
-**RPC methods:** 94 implemented, all wired to `JsonRpcController`, zero orphaned
+**Test baseline:** 2,642 tests pass, 0 failed, 2 ignored
+**RPC methods:** 100 implemented, all wired to `JsonRpcController`, zero orphaned
 **Last audited:** 2026-03-25
 
 ---
@@ -90,18 +90,20 @@ Comprehensive inventory of remaining work, verified against the codebase and com
   - State: Move `debug_accountRange` + `debug_storageRangeAt` from TestService to DebugService
   - Other: `debug_getBadBlocks`, `debug_setHead`
 
-#### H-002: eth_feeHistory
+#### H-002: eth_feeHistory ✅ DONE
 - **Priority:** High | **Risk:** Low
-- **Description:** Zero references in codebase. Gas price history with percentiles. Required by MetaMask for EIP-1559 gas estimation. Both core-geth and Besu implement this.
+- **Description:** Gas price history with percentiles. Required by MetaMask for EIP-1559 gas estimation.
+- **Resolution:** Full implementation in `EthTxService.feeHistory()` — baseFeePerGas array (N+1 entries with next-block prediction via `BaseFeeCalculator`), gasUsedRatio, weighted percentile reward calculation matching go-ethereum's algorithm. 1024 block count limit. Handles both 2-param (no percentiles) and 3-param forms. JSON codec in `EthTxJsonMethodsImplicits`. Wired to `JsonRpcController`.
 
-#### H-003: eth_maxPriorityFeePerGas
+#### H-003: eth_maxPriorityFeePerGas ✅ DONE
 - **Priority:** High | **Risk:** Low
-- **Description:** Zero references in codebase. Returns suggested priority fee. Required by wallets for EIP-1559 transactions.
-- **Depends on:** H-002
+- **Description:** Returns suggested priority fee. Required by wallets for EIP-1559 transactions.
+- **Resolution:** Implemented in `EthTxService.getMaxPriorityFeePerGas()` — samples 20 recent blocks, calculates median effective priority fee (`effectiveGasPrice - baseFee`). Falls back to 1 gwei when no recent blocks or no transactions. JSON codec + controller wiring added.
 
-#### H-004: eth_getBlockReceipts
+#### H-004: eth_getBlockReceipts ✅ DONE
 - **Priority:** High | **Risk:** Low
-- **Description:** Zero references in codebase. Returns all receipts for a block in one call. Used by block explorers and indexers for efficient receipt retrieval.
+- **Description:** Returns all receipts for a block in one call. Used by block explorers and indexers.
+- **Resolution:** Implemented in `EthTxService.getBlockReceipts()` — resolves block via `BlockParam`, fetches receipts, builds `TransactionReceiptResponse` for each. Returns `null` for unknown blocks (matches go-ethereum). Manual JSON encoder `encodeReceipt` avoids Scala 3 reflection issues. Controller wiring added.
 
 #### H-005: eth_createAccessList (EIP-2930)
 - **Priority:** High | **Risk:** Medium
@@ -228,9 +230,10 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Description:** `TODO [BACKLOG N-004]` — Capability information from Hello message should be forwarded to `EtcHelloExchangeState`. Capabilities available at `rlpxConnectionFactory` (line 369) but not passed on `InitialHelloReceived`.
 - **Depends on:** M-004
 
-#### M-006: Additional miner methods
+#### M-006: Additional miner methods ✅ DONE
 - **Priority:** Medium | **Risk:** Low
 - **Description:** `miner_setMinGasPrice`, `miner_setExtraData`, `miner_changeTargetGasLimit` — zero references. Lower priority since gas price/extra data are less configurable in ETC PoW consensus.
+- **Resolution:** All 3 methods implemented with JSON codecs, controller routing, and AtomicReference-backed dynamic config in BlockGeneratorSkeleton. RPC count: 94 → 97.
 
 ### 2.2 — Performance
 

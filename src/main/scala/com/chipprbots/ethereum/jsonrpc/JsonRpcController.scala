@@ -274,6 +274,12 @@ case class JsonRpcController(
       handle[EthPendingTransactionsRequest, EthPendingTransactionsResponse](ethTxService.ethPendingTransactions, req)
     case req @ JsonRpcRequest(_, "eth_getProof", _, _) =>
       handle[GetProofRequest, GetProofResponse](proofService.getProof, req)
+    case req @ JsonRpcRequest(_, "eth_getBlockReceipts", _, _) =>
+      handle[GetBlockReceiptsRequest, GetBlockReceiptsResponse](ethTxService.getBlockReceipts, req)
+    case req @ JsonRpcRequest(_, "eth_maxPriorityFeePerGas", _, _) =>
+      handle[MaxPriorityFeePerGasRequest, MaxPriorityFeePerGasResponse](ethTxService.getMaxPriorityFeePerGas, req)
+    case req @ JsonRpcRequest(_, "eth_feeHistory", _, _) =>
+      handle[FeeHistoryRequest, FeeHistoryResponse](ethTxService.feeHistory, req)
   }
 
   private def handleDebugRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {

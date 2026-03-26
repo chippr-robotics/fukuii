@@ -204,4 +204,79 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
         t.transactionResponse.map((RawTransactionCodec.asRawTransaction _).andThen(encodeAsHex))
     }
 
+  implicit val eth_getBlockReceipts: JsonMethodDecoder[GetBlockReceiptsRequest]
+    with JsonEncoder[GetBlockReceiptsResponse] =
+    new JsonMethodDecoder[GetBlockReceiptsRequest] with JsonEncoder[GetBlockReceiptsResponse] {
+      override def decodeJson(
+          params: Option[JArray]
+      ): Either[JsonRpcError, GetBlockReceiptsRequest] =
+        params match {
+          case Some(JArray(blockParam :: Nil)) =>
+            extractBlockParam(blockParam).map(GetBlockReceiptsRequest(_))
+          case _ =>
+            Left(InvalidParams())
+        }
+
+      override def encodeJson(t: GetBlockReceiptsResponse): JValue =
+        t.receipts match {
+          case Some(rcpts) => JArray(rcpts.toList.map(encodeReceipt))
+          case None        => JNull
+        }
+    }
+
+  implicit val eth_maxPriorityFeePerGas: NoParamsMethodDecoder[MaxPriorityFeePerGasRequest]
+    with JsonEncoder[MaxPriorityFeePerGasResponse] =
+    new NoParamsMethodDecoder(MaxPriorityFeePerGasRequest()) with JsonEncoder[MaxPriorityFeePerGasResponse] {
+      override def encodeJson(t: MaxPriorityFeePerGasResponse): JValue =
+        encodeAsHex(t.maxPriorityFeePerGas)
+    }
+
+  implicit val eth_feeHistory: JsonMethodDecoder[FeeHistoryRequest]
+    with JsonEncoder[FeeHistoryResponse] =
+    new JsonMethodDecoder[FeeHistoryRequest] with JsonEncoder[FeeHistoryResponse] {
+      override def decodeJson(
+          params: Option[JArray]
+      ): Either[JsonRpcError, FeeHistoryRequest] =
+        params match {
+          case Some(JArray(blockCountVal :: newestBlockVal :: JArray(percentiles) :: Nil)) =>
+            for {
+              count <- extractQuantity(blockCountVal).map(_.toInt)
+              newest <- extractBlockParam(newestBlockVal)
+              pcts = percentiles.collect { case JDouble(d) => d; case JInt(i) => i.toDouble; case JDecimal(d) => d.toDouble }
+            } yield FeeHistoryRequest(count, newest, pcts)
+          case Some(JArray(blockCountVal :: newestBlockVal :: Nil)) =>
+            for {
+              count <- extractQuantity(blockCountVal).map(_.toInt)
+              newest <- extractBlockParam(newestBlockVal)
+            } yield FeeHistoryRequest(count, newest, Seq.empty)
+          case _ =>
+            Left(InvalidParams())
+        }
+
+      override def encodeJson(t: FeeHistoryResponse): JValue =
+        ("oldestBlock" -> encodeAsHex(t.oldestBlock)) ~
+          ("baseFeePerGas" -> JArray(t.baseFeePerGas.toList.map(encodeAsHex))) ~
+          ("gasUsedRatio" -> JArray(t.gasUsedRatio.toList.map(JDouble(_)))) ~
+          ("reward" -> t.reward.map(rw => JArray(rw.toList.map(r => JArray(r.toList.map(encodeAsHex))))))
+    }
+
+  private def encodeReceipt(r: TransactionReceiptResponse): JValue = {
+    val fields = List(
+      "transactionHash" -> encodeAsHex(r.transactionHash),
+      "transactionIndex" -> encodeAsHex(r.transactionIndex),
+      "blockNumber" -> encodeAsHex(r.blockNumber),
+      "blockHash" -> encodeAsHex(r.blockHash),
+      "from" -> encodeAsHex(r.from.bytes),
+      "to" -> r.to.map(a => encodeAsHex(a.bytes)).getOrElse(JNull),
+      "cumulativeGasUsed" -> encodeAsHex(r.cumulativeGasUsed),
+      "gasUsed" -> encodeAsHex(r.gasUsed),
+      "contractAddress" -> r.contractAddress.map(a => encodeAsHex(a.bytes)).getOrElse(JNull),
+      "logs" -> JArray(r.logs.toList.map(encodeTxLog)),
+      "logsBloom" -> encodeAsHex(r.logsBloom),
+      "status" -> r.status.map(encodeAsHex).getOrElse(JNull)
+    )
+    val rootField = r.root.map(h => "root" -> encodeAsHex(h)).toList
+    JObject(fields ++ rootField)
+  }
+
 }

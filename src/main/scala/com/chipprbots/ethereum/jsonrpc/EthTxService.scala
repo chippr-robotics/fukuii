@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.domain.SignedTransaction
+import com.chipprbots.ethereum.domain.Transaction
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransaction
 import com.chipprbots.ethereum.transactions.TransactionPicker
@@ -40,6 +41,20 @@ object EthTxService {
   case class GetTransactionReceiptRequest(txHash: ByteString)
   case class GetTransactionReceiptResponse(txResponse: Option[TransactionReceiptResponse])
   case class RawTransactionResponse(transactionResponse: Option[SignedTransaction])
+
+  case class GetBlockReceiptsRequest(block: BlockParam)
+  case class GetBlockReceiptsResponse(receipts: Option[Seq[TransactionReceiptResponse]])
+
+  case class FeeHistoryRequest(blockCount: Int, newestBlock: BlockParam, rewardPercentiles: Seq[Double])
+  case class FeeHistoryResponse(
+      oldestBlock: BigInt,
+      baseFeePerGas: Seq[BigInt],
+      gasUsedRatio: Seq[Double],
+      reward: Option[Seq[Seq[BigInt]]]
+  )
+
+  case class MaxPriorityFeePerGasRequest()
+  case class MaxPriorityFeePerGasResponse(maxPriorityFeePerGas: BigInt)
 }
 
 class EthTxService(
@@ -258,5 +273,152 @@ class EthTxService(
   def ethPendingTransactions(req: EthPendingTransactionsRequest): ServiceResponse[EthPendingTransactionsResponse] =
     getTransactionsFromPool.map { resp =>
       Right(EthPendingTransactionsResponse(resp.pendingTransactions))
+    }
+
+  /** eth_getBlockReceipts — returns all receipts for a given block. */
+  def getBlockReceipts(req: GetBlockReceiptsRequest): ServiceResponse[GetBlockReceiptsResponse] =
+    IO {
+      resolveBlock(req.block) match {
+        case Right(resolved) =>
+          val header = resolved.block.header
+          val txList = resolved.block.body.transactionList
+          val receipts = blockchainReader.getReceiptsByHash(header.hash)
+
+          val receiptResponses = receipts.map { rcpts =>
+            txList.zip(rcpts).zipWithIndex.flatMap { case ((stx, receipt), idx) =>
+              SignedTransaction.getSender(stx).map { sender =>
+                val gasUsed =
+                  if (idx == 0) receipt.cumulativeGasUsed
+                  else receipt.cumulativeGasUsed - rcpts(idx - 1).cumulativeGasUsed
+                TransactionReceiptResponse(receipt, stx, sender, idx, header, gasUsed)
+              }
+            }
+          }
+          Right(GetBlockReceiptsResponse(receiptResponses))
+        case Left(_) =>
+          Right(GetBlockReceiptsResponse(None))
+      }
+    }
+
+  /** eth_maxPriorityFeePerGas — suggests a max priority fee per gas.
+    * Samples recent blocks and returns the median effective priority fee.
+    * Matches go-ethereum's eth/gasprice oracle approach.
+    */
+  def getMaxPriorityFeePerGas(req: MaxPriorityFeePerGasRequest): ServiceResponse[MaxPriorityFeePerGasResponse] =
+    IO {
+      val sampleBlocks = 20
+      val bestBlock = blockchainReader.getBestBlockNumber()
+      val bestBranch = blockchainReader.getBestBranch()
+      val startBlock = (bestBlock - sampleBlocks).max(0)
+
+      val priorityFees = (startBlock to bestBlock).flatMap { num =>
+        blockchainReader.getBlockByNumber(bestBranch, num).toSeq.flatMap { block =>
+          val baseFee = block.header.baseFee.getOrElse(BigInt(0))
+          block.body.transactionList.map { stx =>
+            val effectiveGas = Transaction.effectiveGasPrice(stx.tx, block.header.baseFee)
+            (effectiveGas - baseFee).max(0)
+          }
+        }
+      }
+
+      val suggestion =
+        if (priorityFees.isEmpty) BigInt(1000000000) // 1 gwei default
+        else {
+          val sorted = priorityFees.sorted
+          sorted(sorted.length / 2) // median
+        }
+
+      Right(MaxPriorityFeePerGasResponse(suggestion))
+    }
+
+  /** eth_feeHistory — returns historical gas information for a range of blocks.
+    * Matches go-ethereum's eth/gasprice/feehistory.go implementation.
+    */
+  def feeHistory(req: FeeHistoryRequest): ServiceResponse[FeeHistoryResponse] =
+    IO {
+      val bestBlock = blockchainReader.getBestBlockNumber()
+      val bestBranch = blockchainReader.getBestBranch()
+
+      // Resolve newest block
+      val newestBlockNum = req.newestBlock match {
+        case BlockParam.Latest       => bestBlock
+        case BlockParam.Pending      => bestBlock
+        case BlockParam.Earliest     => BigInt(0)
+        case BlockParam.WithNumber(n) => n
+      }
+
+      // Clamp block count to 1024 (go-ethereum limit)
+      val blockCount = req.blockCount.min(1024).max(1)
+      val oldestBlock = (newestBlockNum - blockCount + 1).max(0)
+      val actualCount = (newestBlockNum - oldestBlock + 1).toInt
+
+      val baseFees = new scala.collection.mutable.ArrayBuffer[BigInt](actualCount + 1)
+      val gasUsedRatios = new scala.collection.mutable.ArrayBuffer[Double](actualCount)
+      val rewards: Option[scala.collection.mutable.ArrayBuffer[Seq[BigInt]]] =
+        if (req.rewardPercentiles.nonEmpty) Some(new scala.collection.mutable.ArrayBuffer[Seq[BigInt]](actualCount))
+        else None
+
+      (0 until actualCount).foreach { i =>
+        val blockNum = oldestBlock + i
+        blockchainReader.getBlockByNumber(bestBranch, blockNum) match {
+          case Some(block) =>
+            val header = block.header
+            baseFees += header.baseFee.getOrElse(BigInt(0))
+
+            val ratio =
+              if (header.gasLimit > 0) header.gasUsed.toDouble / header.gasLimit.toDouble
+              else 0.0
+            gasUsedRatios += ratio
+
+            // Calculate reward percentiles if requested
+            rewards.foreach { rewardBuf =>
+              val baseFee = header.baseFee.getOrElse(BigInt(0))
+              val txList = block.body.transactionList
+              if (txList.isEmpty) {
+                rewardBuf += req.rewardPercentiles.map(_ => BigInt(0))
+              } else {
+                // Get effective priority fees, weighted by gas used
+                val receipts = blockchainReader.getReceiptsByHash(header.hash).getOrElse(Seq.empty)
+                val txPriorityFees = txList.zip(receipts).zipWithIndex.map { case ((stx, receipt), idx) =>
+                  val gasUsed =
+                    if (idx == 0) receipt.cumulativeGasUsed
+                    else receipt.cumulativeGasUsed - receipts(idx - 1).cumulativeGasUsed
+                  val effectiveGas = Transaction.effectiveGasPrice(stx.tx, header.baseFee)
+                  val priorityFee = (effectiveGas - baseFee).max(0)
+                  (priorityFee, gasUsed)
+                }.sortBy(_._1)
+
+                val totalGas = txPriorityFees.map(_._2).sum
+                val percentileValues = req.rewardPercentiles.map { pct =>
+                  val threshold = (BigDecimal(totalGas) * BigDecimal(pct) / 100).toBigInt
+                  var cumGas = BigInt(0)
+                  txPriorityFees.find { case (_, gas) =>
+                    cumGas += gas
+                    cumGas >= threshold
+                  }.map(_._1).getOrElse(BigInt(0))
+                }
+                rewardBuf += percentileValues
+              }
+            }
+
+          case None =>
+            baseFees += BigInt(0)
+            gasUsedRatios += 0.0
+            rewards.foreach(_ += req.rewardPercentiles.map(_ => BigInt(0)))
+        }
+      }
+
+      // Add the baseFee for the next block (one beyond the range)
+      blockchainReader.getBlockHeaderByNumber(newestBlockNum).foreach { header =>
+        val nextBaseFee = com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator.calcBaseFee(header, blockchainConfig)
+        baseFees += nextBaseFee
+      }
+
+      Right(FeeHistoryResponse(
+        oldestBlock = oldestBlock,
+        baseFeePerGas = baseFees.toSeq,
+        gasUsedRatio = gasUsedRatios.toSeq,
+        reward = rewards.map(_.toSeq)
+      ))
     }
 }
