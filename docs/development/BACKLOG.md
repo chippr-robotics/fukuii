@@ -38,7 +38,7 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **IELE VM support** — experimental VM
 - **TUI** (JLine 3, 306-line renderer, 8+ panels) — first ETC client with terminal UI
 - **IPC support** — Unix domain socket RPC (`JsonRpcIpcServer.scala`)
-- **SNAP server + client** — full bidirectional SNAP protocol
+- **SNAP server + client** — full bidirectional SNAP protocol with Merkle boundary proofs
 - **BLS12-381 precompiles** — all 7 implemented (gnark JNI)
 - **DNS discovery** — EIP-1459, ENR tree, ETC + Mordor domains
 - **Health checks** — `/health`, `/readiness`, `/healthcheck`, `/buildinfo` with 6 checks
@@ -70,13 +70,16 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Priority:** Critical | **Risk:** Low
 - **Description:** `TODO(production)` — Pekko actor system log level is currently DEBUG. Must be changed to INFO before mainnet release. Trivial change but blocks production deployment.
 
-### C-004: Unknown branch resolution infinite loop guard
+### C-004: Unknown branch resolution infinite loop guard ✅ DONE
 
-- **File:** `src/main/scala/.../sync/regular/BlockImporter.scala:390-407`
+- **File:** `src/main/scala/.../sync/regular/BlockImporter.scala`, `src/main/scala/.../domain/BlockHeader.scala`
 - **Priority:** Critical | **Risk:** High (sync-critical)
-- **Description:** When `BranchResolution.resolveBranch()` returns `UnknownBranch`, the importer walks back by `branchResolutionRequestSize` (64 blocks) and retries. There is no max iterations counter — if every block in the range fails (e.g., after SNAP sync where only pivot header is stored), the importer loops indefinitely through `StrictPickBlocks`, never recovering. BlockFetcher has 1024 ready blocks queued but ignores them because they fall outside the strict range.
-- **Approach:** Add a max retry counter (e.g., 100 iterations). After exceeding it, either fall back to requesting from genesis or restart sync with a new pivot.
-- **Discovered:** 2026-03-25 full feature audit — triggered by HeaderExtraFieldsError after SNAP→regular sync transition on Mordor.
+- **Resolution:** Three-part fix for SNAP→regular sync stall:
+  1. **Fork-agnostic RLP decoder** — position-based decoding accepting 15+ fields (detects baseFee by list length, not fork config). Matches go-ethereum, Besu, Erigon, Nethermind pattern.
+  2. **SNAP gap detection in BranchResolution** — `UnknownBranch` handler checks if best block has a stored header but walk-back target doesn't (SNAP gap). Resets to best block instead of infinite walk-back.
+  3. **Fork-incompatible peer logging** — detects `HeaderExtraFieldsError`/`HeaderBaseFeeError` in block import failures and logs fork-incompatibility warning.
+  4. **Improved start() logging** — logs hash alongside block number on regular sync start, warns when no stored header found (SNAP incomplete).
+- **Discovered:** 2026-03-25 — triggered by HeaderExtraFieldsError after SNAP→regular sync transition on Mordor.
 
 ---
 
@@ -343,12 +346,11 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Description:** After SNAP sync completes at a pivot block, if a chain reorg occurs that invalidates the pivot (e.g., reorg at blocks before the pivot), regular sync inherits stale state. SNAP only stores the pivot header area — there are no headers to walk back to the pre-reorg state. The node could sync to the minority fork and later orphan all blocks after the reorg point.
 - **Discovered:** 2026-03-25 full feature audit.
 
-#### M-021: SNAP storage slot monotonicity validation
+#### M-021: SNAP storage slot monotonicity validation ✅ DONE
 
-- **File:** `src/main/scala/.../sync/snap/SNAPRequestTracker.scala`
+- **File:** `src/main/scala/.../sync/snap/SNAPRequestTracker.scala:205-229`
 - **Priority:** Medium | **Risk:** Low
-- **Description:** `validateStorageRanges()` does not verify that storage slots within each account are monotonically increasing. A malicious peer could return out-of-order slots, causing incorrect state reconstruction. go-ethereum and Nethermind validate slot ordering during SNAP response processing.
-- **Discovered:** 2026-03-25 from upstream PR #1008 test coverage (test ignored on march-onward pending implementation).
+- **Resolution:** Already implemented in `validateStorageRanges()` — iterates each account's slots and verifies `compareUnsignedLexicographically(prev, curr) < 0`. Rejects responses with non-monotonic slot ordering.
 
 ### 2.4 — Network Upgrade Testing
 
@@ -546,12 +548,12 @@ H-015 (chain split) ── M-018 (hive — cross-client chain split)
 
 | Tier                | Count  | Description                                                                                                                                                                                                                                  |
 | ------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Tier 0 (CRITICAL)   | 4      | SNAP PRs, healing fix, prod log, branch resolution loop                                                                                                                                                                                      |
+| Tier 0 (CRITICAL)   | 3      | SNAP PRs, healing fix, prod log (C-004 DONE)                                                                                                                                                                                                 |
 | Tier 1 (HIGH)       | 16     | debug expansion, fee market, access lists, state overrides, sync recovery, profiling, JWT, tx fork-gating, baseFee guards, SNAP finalization, fork boundary tests, chain split, adversarial resilience                                       |
-| Tier 2 (MEDIUM)     | 21     | debug profiling, log verbosity, SNAP work-stealing, miner methods, testing push, perf, SNAP reorg freshness, SNAP slot validation, MESS verification, operator signaling, hive Olympia, MCP multi-LLM docs, go-ethereum pre-merge PoW review |
+| Tier 2 (MEDIUM)     | 20     | debug profiling, log verbosity, SNAP work-stealing, miner methods, testing push, perf, SNAP reorg freshness, MESS verification, operator signaling, hive Olympia, MCP multi-LLM docs, go-ethereum pre-merge PoW review (M-021 DONE)         |
 | Tier 3 (LOW)        | 6      | networking polish, API docs, operator guide                                                                                                                                                                                                  |
 | Tier 4 (FUTURE)     | 6      | GraphQL, Stratum, plugin system, GUI, releases                                                                                                                                                                                               |
-| **Total remaining** | **53** | 38 original + 6 audit + 6 network upgrade safety + 2 (MCP docs, pre-merge PoW review) + 1 (SNAP slot validation)                                                                                                                             |
+| **Total remaining** | **51** | Was 53, minus C-004 (SNAP stall fix) and M-021 (slot monotonicity — already implemented)                                                                                                                                                     |
 
 ---
 
@@ -591,6 +593,10 @@ Items below were implemented on the `march-onward` branch and verified against t
 | Metrics dashboards (8)             | `ops/barad-dur/grafana/`                       | Prometheus + Docker Compose             |
 | RPC method allowlist               | `JsonRpcBaseController.enabledApis`            | Per-namespace HOCON config              |
 | 78 new tests (8 phases)            | Multiple commits                               | All passing                             |
+| SNAP sync stall fix (C-004)        | `8f80f2ff8`                                    | Fork-agnostic decoder + gap detection   |
+| SNAP server Merkle proofs          | `a0f255a54`                                    | Boundary proofs for partial ranges      |
+| SNAP client proof validation       | `AccountRangeWorker`, `StorageRangeCoordinator` | MerkleProofVerifier at worker level    |
+| SNAP slot monotonicity (M-021)     | `SNAPRequestTracker:205-229`                   | Already implemented                     |
 
 ### Resolved in FIXME/TODO Audit (2026-03-25)
 

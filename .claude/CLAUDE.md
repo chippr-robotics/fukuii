@@ -1,12 +1,15 @@
 # Fukuii - Ethereum Classic Client
 
-**Status:** ALPHA — active bug-hunting and stabilization | OLYMPIA hard fork implementation (ECIP-1111/1112/1121)
+**Status:** HANDED OFF TO CODY BURNS (2026-03-14) — read-only tracking
+**Lead:** Cody Burns (realcodywburns) — chippr-robotics/fukuii maintainer
+**Local branch:** `cody-pr1003` tracks `upstream/pr/chris-mercer/998` (PR #1003)
+**Our archives:** Tags `archive/alpha-handoff`, `archive/olympia-handoff`
 **Language:** Scala 3.3.4 LTS on JDK 21 LTS
 **Build:** sbt 1.10.7
 **License:** Apache 2.0
 **Origin:** Fork of Mantis (IOHK), maintained by Chippr Robotics LLC
 **Package:** `com.chipprbots` (renamed from `io.iohk`)
-**Branch:** `alpha` / `olympia` (from upstream `chippr-robotics/fukuii` main)
+**Path:** `/media/dev/2tb/dev/fukuii/`
 
 ---
 
