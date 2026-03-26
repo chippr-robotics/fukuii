@@ -27,6 +27,9 @@ import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.network.PeerManagerActor.Peers
 import com.chipprbots.ethereum.network.p2p.messages.Capability
+import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
+import com.chipprbots.ethereum.domain.BlockchainReader
 import scala.concurrent.Future
 import scala.concurrent.Future
 import scala.concurrent.Future
@@ -81,7 +84,10 @@ class DebugServiceSpec
   class TestSetup(implicit system: ActorSystem) {
     val peerManager: TestProbe = TestProbe()
     val etcPeerManager: TestProbe = TestProbe()
-    val debugService = new DebugService(peerManager.ref, etcPeerManager.ref)
+    val mockBlockchainReader = mock[BlockchainReader]
+    val mockAppStateStorage = mock[AppStateStorage]
+    val mockTxMappingStorage = mock[TransactionMappingStorage]
+    val debugService = new DebugService(peerManager.ref, etcPeerManager.ref, mockBlockchainReader, mockAppStateStorage, mockTxMappingStorage)
 
     val peerStatus: RemoteStatus = RemoteStatus(
       capability = Capability.ETH63,

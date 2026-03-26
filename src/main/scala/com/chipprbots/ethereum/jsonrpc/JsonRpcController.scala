@@ -4,8 +4,7 @@ import cats.effect.IO
 
 import org.json4s.JsonDSL._
 
-import com.chipprbots.ethereum.jsonrpc.DebugService.ListPeersInfoRequest
-import com.chipprbots.ethereum.jsonrpc.DebugService.ListPeersInfoResponse
+import com.chipprbots.ethereum.jsonrpc.DebugService._
 import com.chipprbots.ethereum.jsonrpc.EthBlocksService._
 import com.chipprbots.ethereum.jsonrpc.EthFilterService._
 import com.chipprbots.ethereum.jsonrpc.EthInfoService._
@@ -287,6 +286,24 @@ case class JsonRpcController(
   private def handleDebugRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "debug_listPeersInfo", _, _) =>
       handle[ListPeersInfoRequest, ListPeersInfoResponse](debugService.listPeersInfo, req)
+    case req @ JsonRpcRequest(_, "debug_getRawHeader", _, _) =>
+      handle[GetRawHeaderRequest, GetRawHeaderResponse](debugService.getRawHeader, req)
+    case req @ JsonRpcRequest(_, "debug_getRawBlock", _, _) =>
+      handle[GetRawBlockRequest, GetRawBlockResponse](debugService.getRawBlock, req)
+    case req @ JsonRpcRequest(_, "debug_getRawReceipts", _, _) =>
+      handle[GetRawReceiptsRequest, GetRawReceiptsResponse](debugService.getRawReceipts, req)
+    case req @ JsonRpcRequest(_, "debug_getRawTransaction", _, _) =>
+      handle[GetRawTransactionRequest, GetRawTransactionResponse](debugService.getRawTransaction, req)
+    case req @ JsonRpcRequest(_, "debug_getBadBlocks", _, _) =>
+      handle[GetBadBlocksRequest, GetBadBlocksResponse](debugService.getBadBlocks, req)
+    case req @ JsonRpcRequest(_, "debug_setHead", _, _) =>
+      handle[SetHeadRequest, SetHeadResponse](debugService.setHead, req)
+    case req @ JsonRpcRequest(_, "debug_memStats", _, _) =>
+      handle[MemStatsRequest, MemStatsResponse](debugService.memStats, req)
+    case req @ JsonRpcRequest(_, "debug_gcStats", _, _) =>
+      handle[GcStatsRequest, GcStatsResponse](debugService.gcStats, req)
+    case req @ JsonRpcRequest(_, "debug_stacks", _, _) =>
+      handle[StacksRequest, StacksResponse](debugService.stacks, req)
   }
 
   private def handleTestRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] =

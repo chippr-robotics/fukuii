@@ -4,7 +4,7 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 
 **Branch:** `march-onward` (~47 commits ahead of upstream main, at `6220ce58b`)
 **Test baseline:** 2,642 tests pass, 0 failed, 2 ignored
-**RPC methods:** 101 implemented, all wired to `JsonRpcController`, zero orphaned
+**RPC methods:** 110 implemented, all wired to `JsonRpcController`, zero orphaned
 **Last audited:** 2026-03-25
 
 ---
@@ -80,15 +80,15 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 
 ### 1.1 — RPC API Gaps
 
-#### H-001: Expand debug_* API
-- **File:** `src/main/scala/.../jsonrpc/DebugService.scala` (52 lines)
+#### H-001: Expand debug_* API ✅ PARTIALLY DONE (9 of 13 methods)
+- **File:** `src/main/scala/.../jsonrpc/DebugService.scala`
 - **Priority:** High | **Risk:** Low
-- **Description:** DebugService has ONLY `debug_listPeersInfo`. `debug_accountRange` and `debug_storageRangeAt` exist but ONLY in `TestService` (not production-wired). Core-geth has 30+ debug methods; Besu has 14.
-- **Need (11+ methods):**
-  - Tracing: `debug_traceBlock`, `debug_traceTransaction`, `debug_traceCall`, `debug_traceBlockByHash`, `debug_traceBlockByNumber`
-  - Raw data: `debug_getRawHeader`, `debug_getRawBlock`, `debug_getRawReceipts`, `debug_getRawTransaction`
-  - State: Move `debug_accountRange` + `debug_storageRangeAt` from TestService to DebugService
-  - Other: `debug_getBadBlocks`, `debug_setHead`
+- **Resolution:** Added 9 new debug methods to production DebugService:
+  - Raw data (4): `debug_getRawHeader`, `debug_getRawBlock`, `debug_getRawReceipts`, `debug_getRawTransaction` — RLP-encoded DB lookups via BlockchainReader
+  - Operations (2): `debug_getBadBlocks` (returns tracked bad blocks), `debug_setHead` (rewind best block)
+  - Profiling (3): `debug_memStats` (JVM heap/non-heap via ManagementFactory), `debug_gcStats` (GC collector stats), `debug_stacks` (all thread dumps)
+  - `debug_accountRange` + `debug_storageRangeAt` remain in TestService (available when test mode enabled)
+- **Remaining (deferred — requires VM step-level tracing hooks):** `debug_traceTransaction`, `debug_traceBlock`, `debug_traceCall`, `debug_traceBlockByHash`, `debug_traceBlockByNumber` — need opcode-by-opcode structLog output format (geth-style). Parity-style trace_* already available via TraceService.
 
 #### H-002: eth_feeHistory ✅ DONE
 - **Priority:** High | **Risk:** Low
@@ -204,10 +204,9 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 
 ### 2.1 — RPC & Operational
 
-#### M-001: debug runtime profiling RPCs
+#### M-001: debug runtime profiling RPCs ✅ DONE
 - **Priority:** Medium | **Risk:** Low
-- **Description:** Zero references for cpuProfile, memStats, gcStats, stacks, ManagementFactory. Methods: `debug_cpuProfile`, `debug_memStats`, `debug_gcStats`, `debug_stacks`. JVM equivalents available via `java.lang.management.ManagementFactory`.
-- **Depends on:** H-001
+- **Resolution:** Implemented `debug_memStats` (heap/non-heap usage via `ManagementFactory.getMemoryMXBean`), `debug_gcStats` (GC collector names, counts, times via `getGarbageCollectorMXBeans`), `debug_stacks` (full thread dumps via `Thread.getAllStackTraces`). `debug_cpuProfile` deferred (requires async-profiler JNI integration).
 
 #### M-002: Per-module log verbosity control
 - **Priority:** Medium | **Risk:** Low
