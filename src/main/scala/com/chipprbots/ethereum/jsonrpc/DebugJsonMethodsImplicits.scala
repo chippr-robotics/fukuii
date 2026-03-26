@@ -119,4 +119,32 @@ object DebugJsonMethodsImplicits extends JsonMethodsImplicits {
     new NoParamsMethodDecoder(StacksRequest()) with JsonEncoder[StacksResponse] {
       override def encodeJson(t: StacksResponse): JValue = JString(t.stacks)
     }
+
+  implicit val debug_setVerbosity: JsonMethodDecoder[SetVerbosityRequest] with JsonEncoder[SetVerbosityResponse] =
+    new JsonMethodDecoder[SetVerbosityRequest] with JsonEncoder[SetVerbosityResponse] {
+      override def decodeJson(params: Option[JArray]): Either[JsonRpcError, SetVerbosityRequest] =
+        params match {
+          case Some(JArray(JString(level) :: Nil)) => Right(SetVerbosityRequest(level))
+          case _ => Left(InvalidParams())
+        }
+      override def encodeJson(t: SetVerbosityResponse): JValue = JBool(t.success)
+    }
+
+  implicit val debug_setVmodule: JsonMethodDecoder[SetVmoduleRequest] with JsonEncoder[SetVmoduleResponse] =
+    new JsonMethodDecoder[SetVmoduleRequest] with JsonEncoder[SetVmoduleResponse] {
+      override def decodeJson(params: Option[JArray]): Either[JsonRpcError, SetVmoduleRequest] =
+        params match {
+          case Some(JArray(JString(module) :: JString(level) :: Nil)) =>
+            Right(SetVmoduleRequest(module, level))
+          case _ => Left(InvalidParams())
+        }
+      override def encodeJson(t: SetVmoduleResponse): JValue = JBool(t.success)
+    }
+
+  implicit val debug_getVerbosity: NoParamsMethodDecoder[GetVerbosityRequest] with JsonEncoder[GetVerbosityResponse] =
+    new NoParamsMethodDecoder(GetVerbosityRequest()) with JsonEncoder[GetVerbosityResponse] {
+      override def encodeJson(t: GetVerbosityResponse): JValue =
+        ("rootLevel" -> JString(t.rootLevel)) ~
+          ("modules" -> JObject(t.modules.toList.sorted.map { case (k, v) => JField(k, JString(v)) }))
+    }
 }

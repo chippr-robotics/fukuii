@@ -304,6 +304,12 @@ case class JsonRpcController(
       handle[GcStatsRequest, GcStatsResponse](debugService.gcStats, req)
     case req @ JsonRpcRequest(_, "debug_stacks", _, _) =>
       handle[StacksRequest, StacksResponse](debugService.stacks, req)
+    case req @ JsonRpcRequest(_, "debug_setVerbosity", _, _) =>
+      handle[SetVerbosityRequest, SetVerbosityResponse](debugService.setVerbosity, req)
+    case req @ JsonRpcRequest(_, "debug_setVmodule", _, _) =>
+      handle[SetVmoduleRequest, SetVmoduleResponse](debugService.setVmodule, req)
+    case req @ JsonRpcRequest(_, "debug_getVerbosity", _, _) =>
+      handle[GetVerbosityRequest, GetVerbosityResponse](debugService.getVerbosity, req)
   }
 
   private def handleTestRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] =

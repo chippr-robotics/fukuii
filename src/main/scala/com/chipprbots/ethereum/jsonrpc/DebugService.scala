@@ -73,6 +73,16 @@ object DebugService {
 
   case class StacksRequest()
   case class StacksResponse(stacks: String)
+
+  // Log verbosity control (M-002)
+  case class SetVerbosityRequest(level: String)
+  case class SetVerbosityResponse(success: Boolean)
+
+  case class SetVmoduleRequest(module: String, level: String)
+  case class SetVmoduleResponse(success: Boolean)
+
+  case class GetVerbosityRequest()
+  case class GetVerbosityResponse(rootLevel: String, modules: Map[String, String])
 }
 
 class DebugService(
@@ -175,6 +185,46 @@ class DebugService(
       case None =>
         Left(JsonRpcError.InvalidParams(s"Block ${req.blockNumber} not found"))
     }
+  }
+
+  def setVerbosity(req: SetVerbosityRequest): ServiceResponse[SetVerbosityResponse] = IO {
+    import ch.qos.logback.classic.{Level, LoggerContext}
+    import org.slf4j.LoggerFactory
+    val level = Level.toLevel(req.level, null)
+    if (level == null) Left(JsonRpcError.InvalidParams(s"Unknown log level: ${req.level}"))
+    else {
+      val ctx = LoggerFactory.getILoggerFactory.asInstanceOf[LoggerContext]
+      ctx.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME).setLevel(level)
+      Right(SetVerbosityResponse(true))
+    }
+  }
+
+  def setVmodule(req: SetVmoduleRequest): ServiceResponse[SetVmoduleResponse] = IO {
+    import ch.qos.logback.classic.{Level, LoggerContext}
+    import org.slf4j.LoggerFactory
+    val level = Level.toLevel(req.level, null)
+    if (level == null) Left(JsonRpcError.InvalidParams(s"Unknown log level: ${req.level}"))
+    else {
+      val ctx = LoggerFactory.getILoggerFactory.asInstanceOf[LoggerContext]
+      // Support both short module names and full package paths
+      val loggerName = if (req.module.contains(".")) req.module
+        else s"com.chipprbots.ethereum.${req.module}"
+      ctx.getLogger(loggerName).setLevel(level)
+      Right(SetVmoduleResponse(true))
+    }
+  }
+
+  def getVerbosity(req: GetVerbosityRequest): ServiceResponse[GetVerbosityResponse] = IO {
+    import ch.qos.logback.classic.LoggerContext
+    import org.slf4j.LoggerFactory
+    import scala.jdk.CollectionConverters._
+    val ctx = LoggerFactory.getILoggerFactory.asInstanceOf[LoggerContext]
+    val rootLevel = ctx.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME).getLevel.toString
+    val modules = ctx.getLoggerList.asScala
+      .filter(l => l.getLevel != null && l.getName != org.slf4j.Logger.ROOT_LOGGER_NAME)
+      .map(l => l.getName -> l.getLevel.toString)
+      .toMap
+    Right(GetVerbosityResponse(rootLevel, modules))
   }
 
   private def resolveBlockHeader(blockParam: BlockParam): Option[BlockHeader] = blockParam match {
