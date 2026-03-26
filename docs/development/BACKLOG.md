@@ -24,7 +24,185 @@ Post-Olympia engineering work items. Each item has a source location, priority, 
 - **Priority:** Low | **Risk:** Low
 - **Description:** Separate routing paths for single vs. batched JSON-RPC requests. Cache parsed request body to prevent repeated JSON deserialization. Would improve throughput under RPC load.
 
-### P-004: SNAP work-stealing for idle workers
+### Fukuii Strengths (unique or ahead of reference clients)
+
+- **MCP server** (15 tools, 9 resources, 4 prompts) — only blockchain client with LLM integration via open MCP protocol. LLM-agnostic: works with Claude, ChatGPT, Gemini, Grok, Llama, Mistral, and any JSON-RPC 2.0 client. See M-019 for multi-LLM docs.
+- **IELE VM support** — experimental VM
+- **TUI** (JLine 3, 306-line renderer, 8+ panels) — first ETC client with terminal UI
+- **IPC support** — Unix domain socket RPC (`JsonRpcIpcServer.scala`)
+- **SNAP server + client** — full bidirectional SNAP protocol
+- **BLS12-381 precompiles** — all 7 implemented (gnark JNI)
+- **DNS discovery** — EIP-1459, ENR tree, ETC + Mordor domains
+- **Health checks** — `/health`, `/readiness`, `/healthcheck`, `/buildinfo` with 6 checks
+- **Log rotation** — `ResilientRollingFileAppender`, 10MB max, 50 archives, zip
+- **Rate limiting** — `RateLimit.scala`, Guava LRU, HTTP 429, configurable
+- **Metrics dashboards** — 8 Grafana dashboards + Prometheus + Docker Compose
+- **RPC method allowlist** — `enabledApis` per-namespace filtering from HOCON config
+
+---
+
+## Tier 0: CRITICAL — Merge & Stabilize
+
+### C-001: Merge open SNAP PRs (#1007, #1008)
+- **Priority:** Critical | **Risk:** High (sync-critical)
+- **#1007:** Fix SNAP finalization deadlocks (3 fixes)
+- **#1008:** Comprehensive SNAP test coverage (~144 tests, 2,770 lines)
+- **Action:** Review and merge both PRs to unblock downstream work.
+
+### C-002: Fix SNAP healing actor name collision (#1005)
+- **Priority:** Critical | **Risk:** High (sync-critical)
+- **Description:** Actor name collision during SNAP healing phase. Needs `healingStarted` guard to prevent duplicate actor creation.
+- **Depends on:** C-001
+
+### C-003: Production log level
+- **File:** `src/main/resources/conf/base/pekko.conf:4`
+- **Priority:** Critical | **Risk:** Low
+- **Description:** `TODO(production)` — Pekko actor system log level is currently DEBUG. Must be changed to INFO before mainnet release. Trivial change but blocks production deployment.
+
+### C-004: Unknown branch resolution infinite loop guard
+- **File:** `src/main/scala/.../sync/regular/BlockImporter.scala:390-407`
+- **Priority:** Critical | **Risk:** High (sync-critical)
+- **Description:** When `BranchResolution.resolveBranch()` returns `UnknownBranch`, the importer walks back by `branchResolutionRequestSize` (64 blocks) and retries. There is no max iterations counter — if every block in the range fails (e.g., after SNAP sync where only pivot header is stored), the importer loops indefinitely through `StrictPickBlocks`, never recovering. BlockFetcher has 1024 ready blocks queued but ignores them because they fall outside the strict range.
+- **Approach:** Add a max retry counter (e.g., 100 iterations). After exceeding it, either fall back to requesting from genesis or restart sync with a new pivot.
+- **Discovered:** 2026-03-25 full feature audit — triggered by HeaderExtraFieldsError after SNAP→regular sync transition on Mordor.
+
+---
+
+## Tier 1: HIGH — Production Blockers
+
+### 1.1 — RPC API Gaps
+
+#### H-001: Expand debug_* API
+- **File:** `src/main/scala/.../jsonrpc/DebugService.scala` (52 lines)
+- **Priority:** High | **Risk:** Low
+- **Description:** DebugService has ONLY `debug_listPeersInfo`. `debug_accountRange` and `debug_storageRangeAt` exist but ONLY in `TestService` (not production-wired). Core-geth has 30+ debug methods; Besu has 14.
+- **Need (11+ methods):**
+  - Tracing: `debug_traceBlock`, `debug_traceTransaction`, `debug_traceCall`, `debug_traceBlockByHash`, `debug_traceBlockByNumber`
+  - Raw data: `debug_getRawHeader`, `debug_getRawBlock`, `debug_getRawReceipts`, `debug_getRawTransaction`
+  - State: Move `debug_accountRange` + `debug_storageRangeAt` from TestService to DebugService
+  - Other: `debug_getBadBlocks`, `debug_setHead`
+
+#### H-002: eth_feeHistory
+- **Priority:** High | **Risk:** Low
+- **Description:** Zero references in codebase. Gas price history with percentiles. Required by MetaMask for EIP-1559 gas estimation. Both core-geth and Besu implement this.
+
+#### H-003: eth_maxPriorityFeePerGas
+- **Priority:** High | **Risk:** Low
+- **Description:** Zero references in codebase. Returns suggested priority fee. Required by wallets for EIP-1559 transactions.
+- **Depends on:** H-002
+
+#### H-004: eth_getBlockReceipts
+- **Priority:** High | **Risk:** Low
+- **Description:** Zero references in codebase. Returns all receipts for a block in one call. Used by block explorers and indexers for efficient receipt retrieval.
+
+#### H-005: eth_createAccessList (EIP-2930)
+- **Priority:** High | **Risk:** Medium
+- **Description:** Zero references in codebase. Generates optimal access list for a transaction by simulating execution. Both core-geth and Besu support this. Used by wallets and tooling to reduce gas costs.
+
+#### H-006: State overrides for eth_call (EIP-3030)
+- **Priority:** High | **Risk:** Medium
+- **Description:** No `StateOverride` type in codebase. `CallTx` has only: from, to, gas, gasPrice, value, data. State overrides allow simulating calls with modified balances, nonces, code, and storage. Used by: Tenderly, Foundry, Hardhat.
+
+#### H-007: SyncStateSchedulerActor parent recovery
+- **File:** `src/main/scala/.../sync/fast/SyncStateSchedulerActor.scala:478`
+- **Priority:** High | **Risk:** Medium (sync-critical)
+- **Description:** On critical trie error, the actor calls `context.stop(self)`. Parent `FastSync` spawns this actor (line 182) but its `Terminated` handler (line 249) only covers `assignedHandlers` — NOT the scheduler child. **No recovery path exists.** If the trie is malformed, the scheduler dies silently and fast sync stalls indefinitely.
+- **Reference clients:** geth restarts with fresh pivot (skeleton reset). Besu falls back to full sync.
+- **Approach:** Either (a) send `StateSyncFailed` to parent before stopping, or (b) `FastSync` should `context.watch(syncStateScheduler)` and handle `Terminated`.
+- **Depends on:** C-001
+
+### 1.2 — Operational
+
+#### H-008: pprof-equivalent profiling endpoint
+- **Priority:** High | **Risk:** Low
+- **Description:** Zero references for pprof, profiling, JFR, or async-profiler in codebase. Core-geth exposes `--pprof` → `localhost:6060/debug/pprof/`. JVM equivalent: JFR + async-profiler HTTP endpoint, or JMX MBeans exposed via RPC.
+
+#### H-009: JWT authentication for RPC
+- **Priority:** High | **Risk:** Low
+- **Description:** Zero references for JWT, bearer tokens, or Authorization headers. Core-geth implements `node/jwt_handler.go`. Required to protect RPC when exposed to untrusted networks.
+
+### 1.3 — Consensus Validation Gaps (2026-03-25 audit)
+
+#### H-010: Fork-gate transaction type acceptance ✅ DONE
+- **Files:** `src/main/scala/.../consensus/validators/StdSignedTransactionValidator.scala:106-131`, `BlockPreparator.scala`
+- **Priority:** High | **Risk:** High (consensus-critical)
+- **Description:** `TransactionWithDynamicFee` (EIP-1559) and `SetCodeTransaction` (EIP-7702) are accepted by the signature validator without checking fork activation. A malicious peer could send pre-fork blocks containing these transaction types and they would be accepted. Similarly, `BlockPreparator` generates `Type02Receipt` for dynamic-fee transactions without verifying the fork is active. Both core-geth and Besu gate transaction type acceptance on fork block.
+- **Resolution:** Added `validateTransactionType()` as first check in `StdSignedTransactionValidator.validate()`. Rejects Type 1 pre-Magneto, Type 2/4 pre-Olympia. Added `TransactionTypeNotSupported` error type.
+
+#### H-011: Pre-Olympia baseFee field rejection ✅ DONE (already correct)
+- **File:** `src/main/scala/.../consensus/validators/BlockHeaderValidatorSkeleton.scala:207-218`
+- **Priority:** High | **Risk:** High (consensus-critical)
+- **Description:** `validateExtraFields()` correctly accepts `HefEmpty` pre-Olympia and `HefPostOlympia` post-Olympia, but does NOT explicitly reject `HefPostOlympia` pre-Olympia. A block decoded with 16 RLP fields (baseFee present) before Olympia activation falls to the default case — but downstream code like `BaseFeeCalculator` may encounter unexpected `baseFee` values on pre-Olympia blocks that slipped through other paths.
+- **Resolution:** Already correctly implemented — the exhaustive pattern match in `validateExtraFields()` rejects `HefPostOlympia` pre-Olympia via the `case _` branch which returns `Left(HeaderExtraFieldsError)`.
+
+#### H-012: BaseFee calculation corruption guard ✅ DONE
+- **File:** `src/main/scala/.../consensus/BaseFeeCalculator.scala:25-47`
+- **Priority:** High | **Risk:** Medium
+- **Description:** `calcBaseFee()` uses `parent.baseFee.getOrElse(InitialBaseFee)` for post-Olympia parents. If a post-Olympia parent block somehow has `baseFee=None` (corruption, malformed import), the calculation silently falls back to 1 gwei instead of failing. This produces incorrect baseFee for all subsequent blocks, causing cascading validation failures.
+- **Resolution:** Replaced `getOrElse(InitialBaseFee)` with `getOrElse(throw IllegalStateException)` for post-Olympia parents. Matches go-ethereum (panic), Besu (throw), Nethermind (throw) behavior.
+
+#### H-013: SNAP→Regular atomic finalization ✅ DONE
+- **File:** `src/main/scala/.../sync/snap/SNAPSyncController.scala`
+- **Priority:** High | **Risk:** Medium (sync-critical)
+- **Description:** `finalizeSnapSync()` stores the pivot block and then marks `SnapSyncDone` in two separate commits. If the node crashes between these operations, the next restart finds an inconsistent state: `getBestBlockNumber()` returns the pivot but the SnapSyncDone flag may not be set, or vice versa. This can cause regular sync to fail with "Unknown branch" loops.
+- **Resolution:** Chained `snapSyncDone()`, `storeBlock()`, `storeChainWeight()`, and `putBestBlockInfo()` into a single atomic `DataSourceBatchUpdate.and().commit()`. Matches go-ethereum's atomic pivot+state write pattern.
+
+### 1.4 — Network Upgrade Safety
+
+#### H-014: Olympia fork boundary validation tests
+- **Priority:** High | **Risk:** High (consensus-critical)
+- **Description:** Comprehensive tests for block N-1 → N → N+1 transition where N = olympiaBlockNumber. Must verify:
+  - Block N-1: pre-Olympia rules (15 RLP header fields, no baseFee, legacy gas pricing)
+  - Block N: post-Olympia rules activate (16 RLP fields, baseFee present, EIP-1559 gas, treasury redirect begins)
+  - Block N+1: continued post-Olympia operation
+  - State root computed with correct rules at each block (wrong rules → different state root → invalid)
+  - EIP-2935 block hash history contract deployment at fork block
+  - Gas limit convergence: 8M→60M via ±1/1024 per block (~2,055 blocks)
+- **Reference:** core-geth `headerchain.go` ValidateHeaderChain, Besu `ProtocolScheduleBuilder`, go-ethereum `consensus/misc/eip1559`
+- **Existing base:** `MordorOlympiaSpec.scala` (live RPC tests) — needs unit-level counterpart
+- **Approach:** Create `OlympiaForkBoundarySpec.scala` with parameterized tests at N-1, N, N+1. Source validation patterns from go-ethereum, Erigon, Nethermind, Besu, core-geth.
+- **Depends on:** H-010, H-011
+
+#### H-015: Chain split detection and handling
+- **Priority:** High | **Risk:** High (network-critical)
+- **Description:** If some nodes don't upgrade to Olympia, the network splits at the fork block. Fukuii must:
+  - **Detect:** Fork ID mismatch via `ForkIdValidator` — peers on pre-fork chain have different CRC32 checksum after block N. Verify `ForkIdValidator.validatePeer()` correctly returns `ErrLocalIncompatibleOrStale` for non-upgraded peers.
+  - **Disconnect:** Peers on the minority fork should be disconnected and blacklisted. Verify blacklist reason propagation.
+  - **Report:** Log operator-visible messages: "Peer X disconnected: incompatible fork (pre-Olympia)", peer count by fork state, % of peers on correct fork.
+  - **Recover:** If the node itself is on the minority fork (operator didn't upgrade), detect stalling (no new blocks from compatible peers) and warn loudly.
+- **Reference:** core-geth `forkid.go` 4-tier validation, go-ethereum `eth/handler.go` peer drop on fork ID mismatch, Besu `EthProtocolManager` fork ID enforcement
+- **Existing base:** `ForkIdValidator.scala` (validation logic), `ForkIdSpec.scala` (6 tests) — needs chain split scenario tests
+- **Approach:** Create `ChainSplitSpec.scala` testing fork ID transitions at Olympia boundary. Add logging to `PeerActor` for fork-incompatible disconnections. Source disconnect patterns from go-ethereum, Erigon, Nethermind, Besu, core-geth.
+
+#### H-016: Adversarial node resilience at fork boundary
+- **Priority:** High | **Risk:** High (consensus-critical)
+- **Description:** Malicious or buggy peers may send invalid blocks around the fork boundary. Fukuii must handle:
+  - **Pre-fork blocks with post-fork features:** Block at N-1 with baseFee field, EIP-1559 txs, or new opcodes → reject and ban peer (relates to H-010, H-011)
+  - **Post-fork blocks with pre-fork rules:** Block at N without baseFee, wrong gas calculation → reject and ban peer
+  - **Deep reorg across fork boundary:** Attacker sends long chain crossing N, applying wrong rules on one side → BranchResolution must validate each block with correct era rules
+  - **Bad block hash tracking:** Maintain a set of known-bad block hashes (like core-geth `BadHashes` map). If a peer sends headers containing banned hashes, reject immediately and disconnect.
+  - **Peer scoring at boundary:** Peers sending invalid fork-boundary blocks receive heavier penalties than normal invalid blocks (deliberate attack vs. transient error)
+- **Reference:** core-geth `headerchain.go:318` BadHashes map, go-ethereum `core/block_validator.go`, Erigon `eth/stagedsync/stage_headers.go` bad block tracking, Nethermind `BlockValidator.cs`
+- **Existing base:** `Blacklist.scala` (30 reasons), `BlockHeaderValidatorSkeleton.scala`, `BranchResolution.scala`
+- **Approach:** Add `BadBlockTracker` utility (hash set + peer association). Add fork-boundary-specific validation in `BlockHeaderValidatorSkeleton`. Create `AdversarialForkBoundarySpec.scala`. Source patterns from go-ethereum, Erigon, Nethermind, Besu, core-geth.
+- **Depends on:** H-014
+
+---
+
+## Tier 2: MEDIUM — Feature Completeness & Testing
+
+### 2.1 — RPC & Operational
+
+#### M-001: debug runtime profiling RPCs
+- **Priority:** Medium | **Risk:** Low
+- **Description:** Zero references for cpuProfile, memStats, gcStats, stacks, ManagementFactory. Methods: `debug_cpuProfile`, `debug_memStats`, `debug_gcStats`, `debug_stacks`. JVM equivalents available via `java.lang.management.ManagementFactory`.
+- **Depends on:** H-001
+
+#### M-002: Per-module log verbosity control
+- **Priority:** Medium | **Risk:** Low
+- **Description:** Zero references for setLogLevel, verbosity, or vmodule. Static `logback.xml` only — no runtime log level changes. Core-geth supports `--log.vmodule eth/*=5,p2p=4`, `debug_verbosity`, `debug_vmodule`. Logback supports `JMXConfigurator` for runtime changes.
+
+#### M-003: SNAP work-stealing for idle workers
 - **File:** `src/main/scala/.../sync/snap/actors/AccountRangeCoordinator.scala`
 - **Priority:** Medium | **Risk:** Medium (sync-critical)
 - **Description:** When a worker's range completes, it idles while other ranges continue. On ETC mainnet with 4 peers/ranges, Range 1 took 21h 32m but Range 2 finished 26 min later — uneven account density across keyspace means some ranges finish much earlier. Idle workers should steal work from in-progress ranges.

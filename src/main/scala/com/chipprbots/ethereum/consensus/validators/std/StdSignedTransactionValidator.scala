@@ -37,6 +37,7 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
       accumGasUsed: BigInt
   )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid] =
     for {
+      _ <- validateTransactionType(stx, blockHeader.number)
       _ <- checkSyntacticValidity(stx)
       _ <- validateInitCodeSize(stx, blockHeader.number)
       _ <- validateSignature(stx, blockHeader.number)
@@ -79,6 +80,29 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
       Left(TransactionSyntaxError(s"Invalid signature: ${signature.s} > $maxS"))
     else
       Right(SignedTransactionValid)
+  }
+
+  /** Validates that the transaction type is supported at the given block number.
+    * Follows the core-geth pattern: reject typed transactions before their activation fork.
+    * - Type 1 (EIP-2930 AccessList): requires Magneto/Berlin
+    * - Type 2 (EIP-1559 DynamicFee): requires Olympia
+    * - Type 4 (EIP-7702 SetCode): requires Olympia
+    */
+  private def validateTransactionType(
+      stx: SignedTransaction,
+      blockNumber: BigInt
+  )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid] = {
+    val forks = blockchainConfig.forkBlockNumbers
+    stx.tx match {
+      case _: SetCodeTransaction if blockNumber < forks.olympiaBlockNumber =>
+        Left(TransactionTypeNotSupported("EIP-7702 SetCode (Type 4)", "Olympia"))
+      case _: TransactionWithDynamicFee if blockNumber < forks.olympiaBlockNumber =>
+        Left(TransactionTypeNotSupported("EIP-1559 DynamicFee (Type 2)", "Olympia"))
+      case _: TransactionWithAccessList if blockNumber < forks.magnetoBlockNumber =>
+        Left(TransactionTypeNotSupported("EIP-2930 AccessList (Type 1)", "Magneto"))
+      case _ =>
+        Right(SignedTransactionValid)
+    }
   }
 
   /** Validates if the transaction signature is valid as stated in appendix F in YP
