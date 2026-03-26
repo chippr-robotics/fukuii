@@ -53,6 +53,13 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Priority:** Critical | **Risk:** Low
 - **Description:** `TODO(production)` — Pekko actor system log level is currently DEBUG. Must be changed to INFO before mainnet release. Trivial change but blocks production deployment.
 
+### C-004: Unknown branch resolution infinite loop guard
+- **File:** `src/main/scala/.../sync/regular/BlockImporter.scala:390-407`
+- **Priority:** Critical | **Risk:** High (sync-critical)
+- **Description:** When `BranchResolution.resolveBranch()` returns `UnknownBranch`, the importer walks back by `branchResolutionRequestSize` (64 blocks) and retries. There is no max iterations counter — if every block in the range fails (e.g., after SNAP sync where only pivot header is stored), the importer loops indefinitely through `StrictPickBlocks`, never recovering. BlockFetcher has 1024 ready blocks queued but ignores them because they fall outside the strict range.
+- **Approach:** Add a max retry counter (e.g., 100 iterations). After exceeding it, either fall back to requesting from genesis or restart sync with a new pivot.
+- **Discovered:** 2026-03-25 full feature audit — triggered by HeaderExtraFieldsError after SNAP→regular sync transition on Mordor.
+
 ---
 
 ## Tier 1: HIGH — Production Blockers
@@ -107,6 +114,30 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 #### H-009: JWT authentication for RPC
 - **Priority:** High | **Risk:** Low
 - **Description:** Zero references for JWT, bearer tokens, or Authorization headers. Core-geth implements `node/jwt_handler.go`. Required to protect RPC when exposed to untrusted networks.
+
+### 1.3 — Consensus Validation Gaps (2026-03-25 audit)
+
+#### H-010: Fork-gate transaction type acceptance
+- **Files:** `src/main/scala/.../consensus/validators/StdSignedTransactionValidator.scala:106-131`, `BlockPreparator.scala`
+- **Priority:** High | **Risk:** High (consensus-critical)
+- **Description:** `TransactionWithDynamicFee` (EIP-1559) and `SetCodeTransaction` (EIP-7702) are accepted by the signature validator without checking fork activation. A malicious peer could send pre-fork blocks containing these transaction types and they would be accepted. Similarly, `BlockPreparator` generates `Type02Receipt` for dynamic-fee transactions without verifying the fork is active. Both core-geth and Besu gate transaction type acceptance on fork block.
+
+#### H-011: Pre-Olympia baseFee field rejection
+- **File:** `src/main/scala/.../consensus/validators/BlockHeaderValidatorSkeleton.scala:207-218`
+- **Priority:** High | **Risk:** High (consensus-critical)
+- **Description:** `validateExtraFields()` correctly accepts `HefEmpty` pre-Olympia and `HefPostOlympia` post-Olympia, but does NOT explicitly reject `HefPostOlympia` pre-Olympia. A block decoded with 16 RLP fields (baseFee present) before Olympia activation falls to the default case — but downstream code like `BaseFeeCalculator` may encounter unexpected `baseFee` values on pre-Olympia blocks that slipped through other paths.
+
+#### H-012: BaseFee calculation corruption guard
+- **File:** `src/main/scala/.../consensus/BaseFeeCalculator.scala:25-47`
+- **Priority:** High | **Risk:** Medium
+- **Description:** `calcBaseFee()` uses `parent.baseFee.getOrElse(InitialBaseFee)` for post-Olympia parents. If a post-Olympia parent block somehow has `baseFee=None` (corruption, malformed import), the calculation silently falls back to 1 gwei instead of failing. This produces incorrect baseFee for all subsequent blocks, causing cascading validation failures.
+- **Fix:** Replace `getOrElse` with explicit error when post-Olympia parent has `baseFee=None`.
+
+#### H-013: SNAP→Regular atomic finalization
+- **File:** `src/main/scala/.../sync/snap/SNAPSyncController.scala`
+- **Priority:** High | **Risk:** Medium (sync-critical)
+- **Description:** `finalizeSnapSync()` stores the pivot block and then marks `SnapSyncDone` in two separate commits. If the node crashes between these operations, the next restart finds an inconsistent state: `getBestBlockNumber()` returns the pivot but the SnapSyncDone flag may not be set, or vice versa. This can cause regular sync to fail with "Unknown branch" loops.
+- **Fix:** Ensure pivot block storage + SnapSyncDone marker are atomic, or add recovery logic to detect and repair partial finalization state.
 
 ---
 
@@ -184,6 +215,12 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 #### M-014: Config validation on startup
 - **Priority:** Medium | **Risk:** Low
 - **Description:** Implicit validation only — config fails at construction time with opaque errors. No dedicated `ConfigValidator` for pre-flight checks on incompatible flag combinations (e.g., SNAP sync without fast sync enabled).
+
+#### M-015: SNAP state freshness after reorg past pivot
+- **File:** `src/main/scala/.../sync/snap/SNAPSyncController.scala`
+- **Priority:** Medium | **Risk:** Medium (sync-critical)
+- **Description:** After SNAP sync completes at a pivot block, if a chain reorg occurs that invalidates the pivot (e.g., reorg at blocks before the pivot), regular sync inherits stale state. SNAP only stores the pivot header area — there are no headers to walk back to the pre-reorg state. The node could sync to the minority fork and later orphan all blocks after the reorg point.
+- **Discovered:** 2026-03-25 full feature audit.
 
 ---
 
@@ -299,12 +336,12 @@ M-004 (msg decoding) ── M-005 (capability)
 
 | Tier | Count | Description |
 |------|-------|-------------|
-| Tier 0 (CRITICAL) | 3 | SNAP PRs, healing fix, prod log |
-| Tier 1 (HIGH) | 9 | debug expansion, fee market, access lists, state overrides, sync recovery, profiling, JWT |
-| Tier 2 (MEDIUM) | 14 | debug profiling, log verbosity, SNAP work-stealing, miner methods, testing push, perf |
+| Tier 0 (CRITICAL) | 4 | SNAP PRs, healing fix, prod log, branch resolution loop |
+| Tier 1 (HIGH) | 13 | debug expansion, fee market, access lists, state overrides, sync recovery, profiling, JWT, tx fork-gating, baseFee guards, SNAP finalization |
+| Tier 2 (MEDIUM) | 15 | debug profiling, log verbosity, SNAP work-stealing, miner methods, testing push, perf, SNAP reorg freshness |
 | Tier 3 (LOW) | 6 | networking polish, API docs, operator guide |
 | Tier 4 (FUTURE) | 6 | GraphQL, Stratum, plugin system, GUI, releases |
-| **Total remaining** | **38** | All verified NOT DONE against codebase |
+| **Total remaining** | **44** | Verified NOT DONE against codebase (38 original + 6 from 2026-03-25 audit) |
 
 ---
 
