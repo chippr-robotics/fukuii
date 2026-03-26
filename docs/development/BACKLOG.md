@@ -25,7 +25,7 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 | Feature                   | go-ethereum           | core-geth          | Nethermind                | Besu      | Fukuii                                           |
 | ------------------------- | --------------------- | ------------------ | ------------------------- | --------- | ------------------------------------------------ |
 | Fork ID (EIP-2124)        | Yes (4-rule)          | Yes (4-rule)       | Yes (3-result)            | Yes       | Yes (`ForkIdValidator`)                          |
-| Bad block tracking        | DB-backed (10 max)    | BadHashes map      | In-memory + RPC           | Yes       | Blacklist only (no hash store)                   |
+| Bad block tracking        | DB-backed (10 max)    | BadHashes map      | In-memory + RPC           | Yes       | `BadBlockTracker` (Scaffeine, 128 entries, 1h TTL) |
 | Peer ban on invalid block | Downloader reputation | Blacklist          | Disconnect + reputation   | Yes       | Blacklist (30 reasons)                           |
 | Chain split detection     | Handshake-only        | Handshake + MESS   | Handshake-only            | Handshake | Handshake-only                                   |
 | Operator fork warnings    | **None**              | AF activation logs | **None**                  | **None**  | **None** (see M-017)                             |
@@ -189,18 +189,10 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Resolution:** Created `OlympiaForkIdSpec.scala` with 13 tests verifying EIP-2124 ForkId behavior at the Olympia fork boundary: ForkId hash transition, next announcement, noFork placeholder filtering, peer validation for matching/syncing/stale/incompatible states, cross-configuration detection (upgraded vs non-upgraded nodes), and pre-fork tolerance per EIP-2124 design. Existing infrastructure already handles disconnect and logging: `ForkIdValidator` validates peers at handshake in `EthNodeStatus64ExchangeState`, disconnecting with `UselessPeer` and logging both local/remote ForkIds. No additional code changes needed — the infrastructure is correct and now thoroughly tested.
 - **Existing infrastructure verified:** `ForkIdValidator.validatePeer()`, `EthNodeStatus64ExchangeState` (disconnect + logging), `gatherForks()` (auto-includes Olympia when activated)
 
-#### H-016: Adversarial node resilience at fork boundary
+#### H-016: Adversarial node resilience at fork boundary ✅ DONE
 
 - **Priority:** High | **Risk:** High (consensus-critical)
-- **Description:** Malicious or buggy peers may send invalid blocks around the fork boundary. Fukuii must handle:
-  - **Pre-fork blocks with post-fork features:** Block at N-1 with baseFee field, EIP-1559 txs, or new opcodes → reject and ban peer (relates to H-010, H-011)
-  - **Post-fork blocks with pre-fork rules:** Block at N without baseFee, wrong gas calculation → reject and ban peer
-  - **Deep reorg across fork boundary:** Attacker sends long chain crossing N, applying wrong rules on one side → BranchResolution must validate each block with correct era rules
-  - **Bad block hash tracking:** Maintain a set of known-bad block hashes (like core-geth `BadHashes` map). If a peer sends headers containing banned hashes, reject immediately and disconnect.
-  - **Peer scoring at boundary:** Peers sending invalid fork-boundary blocks receive heavier penalties than normal invalid blocks (deliberate attack vs. transient error)
-- **Reference:** core-geth `headerchain.go:318` BadHashes map, go-ethereum `core/block_validator.go`, Erigon `eth/stagedsync/stage_headers.go` bad block tracking, Nethermind `BlockValidator.cs`
-- **Existing base:** `Blacklist.scala` (30 reasons), `BlockHeaderValidatorSkeleton.scala`, `BranchResolution.scala`
-- **Approach:** Add `BadBlockTracker` utility (hash set + peer association). Add fork-boundary-specific validation in `BlockHeaderValidatorSkeleton`. Create `AdversarialForkBoundarySpec.scala`. Source patterns from go-ethereum, Erigon, Nethermind, Besu, core-geth.
+- **Resolution:** Created `BadBlockTracker` (Scaffeine cache, 128 entries, 1h TTL) for known-bad block hash tracking with peer association — modeled after core-geth's BadHashes map. Created `AdversarialForkBoundarySpec.scala` with 11 tests covering adversarial scenarios: error type classification (HeaderExtraFieldsError vs HeaderBaseFeeError), manipulated/zero/wrong initial baseFee attacks, gasUsed overflow, BadBlockTracker CRUD/eviction/listing, and error string compatibility with BlockImporter's fork detection logic. Fork-boundary validation already correct in `BlockHeaderValidatorSkeleton` (validated by H-014). BlockImporter already distinguishes fork-incompatible errors from general validation failures (no blacklist for fork peers, blacklist for general errors).
 - **Depends on:** H-014
 
 ---
@@ -534,15 +526,15 @@ H-015 (chain split) ── M-018 (hive — cross-client chain split)
 | Tier                | Count  | Description                                                                                                                                                                                                                                  |
 | ------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Tier 0 (CRITICAL)   | 3      | SNAP PRs, healing fix, prod log (C-004 DONE)                                                                                                                                                                                                 |
-| Tier 1 (HIGH)       | 14     | debug expansion, fee market, access lists, state overrides, sync recovery, profiling, JWT, tx fork-gating, baseFee guards, SNAP finalization, adversarial resilience (H-014, H-015 DONE)                                                    |
+| Tier 1 (HIGH)       | 13     | debug expansion, fee market, access lists, state overrides, sync recovery, profiling, JWT, tx fork-gating, baseFee guards, SNAP finalization (H-014, H-015, H-016 DONE)                                                                    |
 | Tier 2 (MEDIUM)     | 20     | debug profiling, log verbosity, SNAP work-stealing, miner methods, testing push, perf, SNAP reorg freshness, MESS verification, operator signaling, hive Olympia, MCP multi-LLM docs, go-ethereum pre-merge PoW review (M-021 DONE)         |
 | Tier 3 (LOW)        | 6      | networking polish, API docs, operator guide                                                                                                                                                                                                  |
 | Tier 4 (FUTURE)     | 6      | GraphQL, Stratum, plugin system, GUI, releases                                                                                                                                                                                               |
-| **Total remaining** | **49** | Was 53, minus C-004, M-021, H-014 (fork boundary tests), H-015 (chain split detection)                                                                                                                                                       |
+| **Total remaining** | **48** | Was 53, minus C-004, M-021, H-014, H-015, H-016                                                                                                                                                                                              |
 
 ---
 
-## Completed on march-onward (31+ items, verified 2026-03-26)
+## Completed on march-onward (32+ items, verified 2026-03-26)
 
 Items below were implemented on the `march-onward` branch and verified against the actual codebase with commit hashes and file locations.
 
@@ -584,6 +576,7 @@ Items below were implemented on the `march-onward` branch and verified against t
 | SNAP slot monotonicity (M-021)     | `SNAPRequestTracker:205-229`                   | Already implemented                     |
 | Fork boundary tests (H-014)       | `eaf830404`                                    | 12 tests: baseFee, RLP, gas dynamics    |
 | Chain split detection (H-015)     | `d2d87b32a`                                    | 13 tests: ForkId + peer validation      |
+| Adversarial resilience (H-016)   | `79d80c4e2`                                    | BadBlockTracker + 11 adversarial tests  |
 
 ### Resolved in FIXME/TODO Audit (2026-03-25)
 
