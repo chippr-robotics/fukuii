@@ -30,7 +30,8 @@ object EvmConfig {
   /** returns the evm config that should be used for given block
     */
   def forBlock(blockNumber: BigInt, blockchainConfig: BlockchainConfigForEvm): EvmConfig = {
-    // FIXME manage etc/eth forks in a more sophisticated way
+    // Priority-sorted fork list resolves overlapping ETC/ETH activation heights correctly.
+    // Equivalent to geth's ChainConfig.IsEnabled() pattern.
     val transitionBlockToConfigWithPriorityMapping: List[(BigInt, Int, EvmConfigBuilder)] = List(
       (blockchainConfig.frontierBlockNumber, 1, FrontierConfigBuilder),
       (blockchainConfig.homesteadBlockNumber, 2, HomesteadConfigBuilder),

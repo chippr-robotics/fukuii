@@ -99,10 +99,8 @@ class PoWMining private (
   private[this] val mutex = new Object
 
   /*
-   * guarantees one miner instance
-   * this should not use a atomic* construct as it has side-effects
-   *
-   * TODO further refactors should focus on extracting two types - one with a miner, one without - based on the config
+   * Guarantees one miner instance. Must not use atomic* constructs as it has side-effects.
+   * Single type with protocol-dispatched init mirrors geth's Miner pattern.
    */
   private[this] def startMiningProcess(node: Node, blockCreator: PoWBlockCreator): Unit =
     mutex.synchronized {

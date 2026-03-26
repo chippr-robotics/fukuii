@@ -42,4 +42,4 @@ Private keys for pre-funded accounts are located in `fukuii/src/rpcTest/resource
 13. Turn off Fukuii client.
 
 
-__TODO__: It seems that simple bash script should be able to run all these tests now.
+See `ops/test-scripts/` for automated bash test scripts covering all RPC tiers.

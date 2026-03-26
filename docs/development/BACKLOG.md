@@ -3,21 +3,15 @@
 Post-Olympia engineering work items. Each item has a source location, priority, and risk assessment.
 
 **Schedule:** Address after Mordor activation (block 15,800,850) and ETC mainnet fork are stable.
+**Last updated:** 2026-03-25 (FIXME/TODO audit — see git log for details)
 
 ---
 
 ## Performance Optimization
 
-### P-001: Deduplicate gas calculations in EVM opcodes
-- **Files:** `src/main/scala/.../vm/OpCode.scala:977`, `OpCode.scala:1187`
-- **Priority:** Low | **Risk:** High (consensus-critical)
-- **Description:** CREATE and CALL opcodes calculate gas costs twice — once for gas metering, once for execution. Account existence checks are also duplicated. Optimization would reduce CPU per transaction but must not alter consensus behavior.
-- **Approach:** Adjust `state.gas` prior to execution in `OpCode#execute` so downstream code doesn't recalculate.
-
-### P-002: Cache parsed configuration files
-- **File:** `src/main/scala/.../utils/Config.scala:436`
-- **Priority:** Low | **Risk:** Low
-- **Description:** Chain config parsing runs on every startup. Cache parsed configs with file modification time checks to skip re-parsing unchanged files. Minor startup optimization.
+### P-001: ~~Deduplicate gas calculations in EVM opcodes~~ — RESOLVED
+- **Status:** Fixed in `march-onward` branch (EC-243 gas dedup commit)
+- **What was done:** Passed pre-computed gas from `execute()` into `exec()` so CREATE/CREATE2 no longer recompute `baseGas + varGas`.
 
 ### P-003: Optimize JSON-RPC request parsing
 - **Files:** `src/main/scala/.../jsonrpc/server/http/JsonRpcHttpServer.scala:90-91`
@@ -32,7 +26,6 @@ Post-Olympia engineering work items. Each item has a source location, priority, 
 - **Approach:** When a range completes and `pendingTasks` is empty, split the largest remaining active task at its current `next` midpoint. Create a new `AccountTask` for the upper half, update original task's `last` to midpoint, enqueue the new task. ~30-40 lines in `handleStoreAccountChunk` after the `isTaskRangeComplete` branch.
 - **Constraint:** Must handle the case where the active task has an in-flight request — split at the `next` position (not the in-flight boundary) and let the original task's response naturally stop at the new `last`.
 
-
 ---
 
 ## Architecture
@@ -42,20 +35,22 @@ Post-Olympia engineering work items. Each item has a source location, priority, 
 - **Priority:** Medium | **Risk:** Medium (sync-critical)
 - **Description:** `discardBlocksAfter` and `discardBlocks` are called from sync actors during chain reorganizations. These should be moved into the `Blockchain` interface as atomic operations to prevent race conditions between concurrent sync and RPC state reads.
 
-### A-002: Refactor fork management in EVM config
-- **Files:** `src/main/scala/.../vm/EvmConfig.scala:33`, `BlockchainConfigForEvm.scala:23`
-- **Priority:** Low | **Risk:** Medium (consensus-adjacent)
-- **Description:** Fork configuration uses a flat list of block numbers (16+ forks). A more structured approach (fork registry, ordered activation) would reduce maintenance burden when adding future forks. Current approach works but is verbose.
-
 ### A-003: Handle existing state root in sync restart
 - **File:** `src/main/scala/.../sync/fast/SyncStateSchedulerActor.scala:185`
 - **Priority:** Low | **Risk:** Low
 - **Description:** When restarting sync, if we already have the target state root, skip directly to block sync instead of re-downloading known state. Optimization for crash recovery scenarios.
 
-### A-004: Improve trie corruption recovery
-- **File:** `src/main/scala/.../sync/fast/SyncStateSchedulerActor.scala:376`
-- **Priority:** Low | **Risk:** Medium
-- **Description:** When a malformed trie is detected during sync, restart from a new target block rather than continuing with corrupt data. Current behavior logs and continues, which is safe but suboptimal.
+### A-004: Critical error recovery in SyncStateSchedulerActor
+- **File:** `src/main/scala/.../sync/fast/SyncStateSchedulerActor.scala:473`
+- **Priority:** Medium | **Risk:** Medium (sync-critical)
+- **Description:** On critical trie error, the actor calls `context.stop(self)`. The parent `FastSync` spawns this actor (line 182) but its `Terminated` handler (line 249) only covers `assignedHandlers` — NOT the scheduler child. **No recovery path exists.** If the trie is malformed, the scheduler dies silently and fast sync stalls indefinitely.
+- **Reference clients:** geth restarts with fresh pivot (skeleton reset). Besu falls back to full sync.
+- **Approach:** Either (a) send a `StateSyncFailed` message to parent before stopping, so `FastSync` can restart with a new pivot, or (b) `FastSync` should `context.watch(syncStateScheduler)` and handle `Terminated` to trigger pivot refresh.
+
+### A-005: EVM Stack data structure optimization
+- **Priority:** Low | **Risk:** High (consensus-critical)
+- **Description:** Current `Vector[UInt256]` stack provides O(log32 n) indexed access. Reference clients (geth, Besu) use array-backed stacks with O(1) indexed access and pooled allocation. Potential throughput improvement for DUP/SWAP-heavy code. The old TODO suggested `List` — that would be worse (O(n) indexed). An `Array`-backed `Stack` is the correct optimization target.
+- **Note:** Previous TODO at `Stack.scala:15` suggested List — removed as incorrect.
 
 ---
 
@@ -75,12 +70,12 @@ Post-Olympia engineering work items. Each item has a source location, priority, 
 ### N-003: Use negotiated protocol version in message decoder
 - **File:** `src/main/scala/.../network/rlpx/MessageCodec.scala:127`
 - **Priority:** Low | **Risk:** Low
-- **Description:** Message decoding doesn't switch on the negotiated P2P protocol version. Relevant if Fukuii adopts P2P v5 or later protocol versions. Current approach works for ETH/63-68.
+- **Description:** Message decoding doesn't switch on the negotiated P2P protocol version. Compression IS version-aware (line 58), but message format decoding isn't. Relevant if Fukuii adopts P2P v5 or later. Current approach works for ETH/63-68.
 
 ### N-004: Pass capability to handshake state machine
 - **File:** `src/main/scala/.../network/PeerActor.scala:136`
 - **Priority:** Low | **Risk:** Low
-- **Description:** During peer connection, capability information from the Hello message should be forwarded to `EtcHelloExchangeState` for protocol-aware negotiation. Currently works without it but limits future protocol flexibility.
+- **Description:** During peer connection, capability information from the Hello message should be forwarded to `EtcHelloExchangeState` for protocol-aware negotiation. Capabilities are available at `rlpxConnectionFactory` (line 369) but NOT passed through on `InitialHelloReceived`. Currently works without it but limits future protocol flexibility.
 
 ### N-005: Deprecate pre-EIP-8 handshake support
 - **File:** `src/main/scala/.../network/rlpx/RLPxConnectionHandler.scala:298`
@@ -98,6 +93,15 @@ Post-Olympia engineering work items. Each item has a source location, priority, 
 
 ---
 
+## Pre-Release
+
+### X-001: Change production log level to INFO
+- **File:** `src/main/resources/conf/base/pekko.conf:4`
+- **Priority:** High | **Risk:** Low
+- **Description:** `TODO(production)` — Pekko actor system log level is currently DEBUG. Must be changed to INFO before mainnet release to avoid excessive logging in production.
+
+---
+
 ## Testing
 
 ### T-001: Extend Ethereum test suite to execute blocks
@@ -109,6 +113,25 @@ Post-Olympia engineering work items. Each item has a source location, priority, 
 - **File:** `src/main/scala/.../sync/fast/SyncStateSchedulerActor.scala:166`
 - **Priority:** Low | **Risk:** Low
 - **Description:** Verify whether the pivot block selection path in `SyncStateSchedulerActor` has test coverage. If not, add a test case for the scenario where a new pivot is selected during active sync.
+
+---
+
+## Resolved in FIXME/TODO Audit (2026-03-25)
+
+Items below were investigated against reference clients (geth, Besu, Erigon) and resolved:
+
+| Item | Resolution |
+|------|-----------|
+| EC-242 SELFDESTRUCT storage (`BlockPreparator.scala:194`) | Already handled by `InMemoryWorldStateProxy.deleteAccount` |
+| Config caching (`Config.scala:469`) | Configs parsed once at startup — caching unnecessary |
+| Fork management (`EvmConfig.scala:33`) | Priority-sorted list is functionally correct — equivalent to geth's `IsEnabled()` |
+| Stack List vs Vector (`Stack.scala:15`) | List would be worse (O(n) indexed). Vector is correct. See A-005 for real optimization. |
+| PoW two-type extraction (`PoWMining.scala:105`) | Mutex + Option pattern works correctly. Besu splits types but no behavioral benefit. |
+| JsonRpcBaseController config (`JsonRpcBaseController.scala:40`) | Config required for enabledApis filtering. Only 2 implementors, both pass correctly. |
+| MessageSerializableImplicit redundancy (`MessageSerializableImplicit.scala:5`) | `msg: T` provides typed access used by all 41 subclasses. NOT redundant — type-safe convenience. |
+| Chain config format (`*-chain.conf:50`) | Inline comments already document EIP-170 gating. Config parser changes not worth it. |
+| Mallet wiki reference (`mallet.conf:10`) | IOHK wiki no longer exists. HTTPS docs kept inline. |
+| RPC test script (`rpcTest/README.md:45`) | Superseded by `ops/test-scripts/test-rpc-endpoints.sh` |
 
 ---
 
