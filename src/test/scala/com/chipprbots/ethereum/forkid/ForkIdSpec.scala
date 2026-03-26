@@ -76,12 +76,9 @@ class ForkIdSpec extends AnyWordSpec with Matchers {
       create(5520000 - 1) shouldBe ForkId(0x92b323e0L, Some(5520000))
       create(5520000) shouldBe ForkId(0x8c9b1797L, Some(9957000)) // First Mystique block
       create(9957000 - 1) shouldBe ForkId(0x8c9b1797L, Some(9957000))
-      create(9957000) shouldBe ForkId(0x3a6b00d7L, Some(15800850)) // First Spiral block
-      create(15800850 - 1) shouldBe ForkId(0x3a6b00d7L, Some(15800850))
-      // Olympia fork hash is computed by CRC32(genesis ++ all prior fork blocks ++ 15800850)
-      val olympiaForkId = create(15800850)
-      olympiaForkId.next shouldBe None // Olympia is the latest fork
-      create(15800850) shouldBe olympiaForkId // First Olympia block
+      // Spiral is the latest activated fork on Mordor (Olympia is far-future placeholder)
+      create(9957000) shouldBe ForkId(0x3a6b00d7L, None) // First Spiral block, no next fork
+      create(9957000 + 1000000) shouldBe ForkId(0x3a6b00d7L, None) // Still Spiral era
     }
 
     "follow EIP-2124 specification for ForkId at all block heights" in {
