@@ -286,8 +286,8 @@ See `CHANGELOG.md` and `.claude/CLAUDE.md` for the full list.
 
 ## Known Limitations
 
-- **ETC mainnet SNAP:** Disabled by default (`do-snap-sync=false` in `etc-chain.conf`). No public ETC peers serve `snap/1`. Would require a local Besu SNAP server synced to ETC mainnet (~3-4 hours for Besu to FULL sync ETC).
-- **No public Mordor SNAP peers:** SNAP sync on Mordor requires the local Besu setup described above.
+- **ETC mainnet SNAP:** Disabled by default (`do-snap-sync=false` in `etc-chain.conf`). No public ETC peers serve `snap/1`. Requires a local Besu SNAP server synced to ETC mainnet. Besu must use `--sync-mode=SNAP` (not FULL) — FULL sync with BONSAI stalls indefinitely on blocks containing SELFDESTRUCT of contracts with large storage tries due to O(n²) `clearStorage()` trie iteration. Besu SNAP syncs from core-geth in ~10-15 minutes.
+- **No public Mordor/ETC SNAP peers:** SNAP sync on both networks requires the local Besu setup described above.
 - **Memory:** 4GB heap is sufficient for Mordor (2.6M accounts). ETC mainnet (~45M accounts) may require 8-12GB and has not been tested with SNAP.
 - **SNAP server:** Fukuii does not yet serve `snap/1` to other clients (`snap-server-enabled=false`). This is backlog item H-015.
 
@@ -313,8 +313,9 @@ Automated versions of the above are in `ops/test-scripts/`:
 | Script | Purpose |
 |--------|---------|
 | `test-fukuii-snap.sh` | Launch Fukuii SNAP sync (auto-configures static-nodes from Besu) |
-| `test-besu-snap-snapserver.sh` | Start Besu as SNAP-synced SNAP server |
-| `test-besu-full-snapserver.sh` | Start Besu as FULL-synced SNAP server |
+| `test-besu-snap-snapserver.sh` | Start Besu as SNAP server on Mordor (BONSAI + SNAP sync) |
+| `test-besu-etc-snapserver.sh` | Start Besu as SNAP server on ETC mainnet (BONSAI + SNAP sync) |
+| `test-besu-full-snapserver.sh` | Start Besu FULL sync on Mordor (FOREST — no SNAP serving) |
 | `test-coregeth-full.sh` | Start core-geth full node |
 
 Set `FUKUII_DIR`, `BESU_DIR`, `BINARY`, `DATADIR` environment variables or create `ops/local.env` with local paths (gitignored).

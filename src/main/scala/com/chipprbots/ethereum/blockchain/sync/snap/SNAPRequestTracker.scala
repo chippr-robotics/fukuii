@@ -211,7 +211,7 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
         Left(s"Expected ${RequestType.GetStorageRanges} but got response for ${pending.requestType}")
       } else {
         // Validate storage slots are monotonically increasing within each account
-        val violation = response.slots.zipWithIndex.collectFirst { case (accountSlots, accountIdx) =>
+        val violation = response.slots.zipWithIndex.flatMap { case (accountSlots, accountIdx) =>
           (1 until accountSlots.size)
             .find { i =>
               val prevHash = accountSlots(i - 1)._1
@@ -219,7 +219,7 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
               compareUnsignedLexicographically(prevHash, currHash) >= 0
             }
             .map(i => (accountIdx, i))
-        }.flatten
+        }.headOption
         violation match {
           case Some((accountIdx, i)) =>
             Left(s"Storage slots not monotonically increasing for account $accountIdx at index $i")

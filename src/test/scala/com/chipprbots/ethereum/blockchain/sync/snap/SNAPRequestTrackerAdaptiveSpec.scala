@@ -300,9 +300,7 @@ class SNAPRequestTrackerAdaptiveSpec
     tracker.validateAccountRange(response) shouldBe Right(response)
   }
 
-  // TODO: march-onward does not yet validate slot ordering in validateStorageRanges.
-  // Enable this test when storage slot monotonicity validation is added.
-  ignore should "reject StorageRanges with non-monotonic slots in second account" taggedAs UnitTest in {
+  it should "reject StorageRanges with non-monotonic slots in second account" taggedAs UnitTest in {
     val tracker = new SNAPRequestTracker()
     val testProbe = TestProbe()
     val peer = createTestPeer("peer-1", testProbe.ref)

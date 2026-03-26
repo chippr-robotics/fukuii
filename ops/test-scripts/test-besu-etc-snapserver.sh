@@ -1,5 +1,7 @@
 #!/bin/bash
-# Besu on ETC mainnet — FULL syncs from core-geth, then serves SNAP to Fukuii.
+# Besu on ETC mainnet — SNAP syncs from core-geth, then serves SNAP to Fukuii.
+# Uses BONSAI storage (required for SNAP serving) with SNAP sync mode
+# (skips FULL block processing, avoids Bonsai clearStorage stall on SELFDESTRUCT blocks).
 # Requires core-geth running on port 8545 (run-classic.sh) first.
 # Admin API enabled for enode discovery.
 #
@@ -56,7 +58,7 @@ exec "$BINARY" \
   --rpc-http-api=ADMIN,ETH,NET,WEB3 \
   --p2p-port=30304 \
   --data-storage-format=BONSAI \
-  --sync-mode=FULL \
+  --sync-mode=SNAP \
   --sync-min-peers=1 \
   --snapsync-server-enabled \
   --bootnodes="$COREGETH_ENODE" \

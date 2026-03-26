@@ -210,9 +210,7 @@ class SnapSyncPipelineSpec
     networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
   }
 
-  // TODO: march-onward's ByteCodeCoordinator sends ProgressBytecodesDownloaded before
-  // ByteCodeSyncComplete. Update test to expect progress message first, then completion.
-  ignore should "download and store bytecodes end-to-end" taggedAs UnitTest in {
+  it should "download and store bytecodes end-to-end" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
     val requestTracker = new SNAPRequestTracker()(system.scheduler)
     val networkPeerManager = TestProbe()
@@ -254,6 +252,9 @@ class SnapSyncPipelineSpec
         evmCodeStorage.get(h2) shouldEqual Some(code2)
       }
     }
+
+    // Expect progress message from bytecode download
+    snapSyncController.expectMsgType[SNAPSyncController.ProgressBytecodesDownloaded](5.seconds)
 
     // Now signal completion
     coordinator ! Messages.NoMoreByteCodeTasks
