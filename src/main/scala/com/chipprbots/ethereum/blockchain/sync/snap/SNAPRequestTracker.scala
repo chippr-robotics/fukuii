@@ -247,6 +247,7 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
 
     // Validate that each returned bytecode's keccak256 hash matches a requested hash.
     // SNAP protocol returns codes in the same order as requested hashes (may be fewer if peer doesn't have all).
+    // Defense in depth: ByteCodeCoordinator.validateReturnedCodes() also checks, but we catch bad peers early here.
     if (pending.requestedHashes.nonEmpty && response.codes.nonEmpty) {
       val requestedSet = pending.requestedHashes.toSet
       val invalidCodes = response.codes.zipWithIndex.filter { case (code, _) =>
