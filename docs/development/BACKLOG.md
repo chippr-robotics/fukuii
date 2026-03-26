@@ -34,7 +34,7 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 
 ### Fukuii Strengths (unique or ahead of reference clients)
 
-- **MCP server** (7 methods) — only blockchain client with LLM integration (Claude, ChatGPT, Gemini, open-source models via MCP protocol)
+- **MCP server** (15 tools, 9 resources, 4 prompts) — only blockchain client with LLM integration via open MCP protocol. LLM-agnostic: works with Claude, ChatGPT, Gemini, Grok, Llama, Mistral, and any JSON-RPC 2.0 client. See M-019 for multi-LLM docs.
 - **IELE VM support** — experimental VM
 - **TUI** (JLine 3, 306-line renderer, 8+ panels) — first ETC client with terminal UI
 - **IPC support** — Unix domain socket RPC (`JsonRpcIpcServer.scala`)
@@ -310,6 +310,28 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Existing base:** core-geth + besu-etc PASSING in hive, fukuii build WIP
 - **Depends on:** Fukuii hive client build completion, H-014
 
+#### M-019: MCP server multi-LLM documentation and examples
+- **Priority:** Medium | **Risk:** Low
+- **Description:** The MCP server is already fully LLM-agnostic (pure JSON-RPC 2.0 over HTTP, zero provider-specific code), but documentation and config examples only reference Claude Desktop. Expand to explicitly support all major LLMs:
+  - **Proprietary:** Claude (Anthropic), ChatGPT (OpenAI), Gemini (Google), Grok (xAI), Copilot (Microsoft/GitHub)
+  - **Open-source:** Llama (Meta), Mistral, DeepSeek, Qwen (Alibaba), Phi (Microsoft), Gemma (Google), Command R (Cohere)
+  - Add config examples for each (HTTP transport, stdio proxy bridge where needed)
+  - Update `docs/MCP.md` and `docs/api/MCP_INTEGRATION_GUIDE.md` to remove Claude-only framing
+  - Update BACKLOG strengths description and README
+- **Existing base:** `McpService.scala` (236 lines), `.github/copilot/mcp.json` (Claude Desktop config)
+- **No code changes needed** — only documentation and config examples
+
+#### M-020: go-ethereum pre-merge PoW codebase review
+- **Priority:** Medium | **Risk:** Low
+- **Description:** go-ethereum removed PoW consensus code after The Merge (September 2022, block 15,537,394). ETC still uses PoW. Review the pre-merge go-ethereum codebase (v1.10.x, before `consensus/ethash` was removed) to identify:
+  - PoW-specific fork activation patterns that Fukuii should adopt
+  - Ethash/difficulty calculation improvements made between go-ethereum's ETC fork and The Merge
+  - Block validation logic for PoW chains (uncle validation, difficulty bombs, reward calculation)
+  - PoW-specific peer scoring and sync optimizations (e.g., TD-based peer selection)
+  - Any PoW safety mechanisms that were removed post-merge but remain relevant for ETC
+- **Reference:** go-ethereum v1.10.26 (last PoW release), `consensus/ethash/`, `core/block_validator.go`, `eth/downloader/`
+- **Approach:** Checkout go-ethereum at tag `v1.10.26` or last pre-merge commit. Systematic diff against current Fukuii consensus code. Source any missing PoW hardening.
+
 ---
 
 ## Tier 3: LOW — Polish
@@ -432,10 +454,10 @@ H-015 (chain split) ── M-018 (hive — cross-client chain split)
 |------|-------|-------------|
 | Tier 0 (CRITICAL) | 4 | SNAP PRs, healing fix, prod log, branch resolution loop |
 | Tier 1 (HIGH) | 16 | debug expansion, fee market, access lists, state overrides, sync recovery, profiling, JWT, tx fork-gating, baseFee guards, SNAP finalization, fork boundary tests, chain split, adversarial resilience |
-| Tier 2 (MEDIUM) | 18 | debug profiling, log verbosity, SNAP work-stealing, miner methods, testing push, perf, SNAP reorg freshness, MESS verification, operator signaling, hive Olympia |
+| Tier 2 (MEDIUM) | 20 | debug profiling, log verbosity, SNAP work-stealing, miner methods, testing push, perf, SNAP reorg freshness, MESS verification, operator signaling, hive Olympia, MCP multi-LLM docs, go-ethereum pre-merge PoW review |
 | Tier 3 (LOW) | 6 | networking polish, API docs, operator guide |
 | Tier 4 (FUTURE) | 6 | GraphQL, Stratum, plugin system, GUI, releases |
-| **Total remaining** | **50** | 38 original + 6 audit (2026-03-25) + 6 network upgrade safety (2026-03-25) |
+| **Total remaining** | **52** | 38 original + 6 audit + 6 network upgrade safety + 2 (MCP docs, pre-merge PoW review) |
 
 ---
 
