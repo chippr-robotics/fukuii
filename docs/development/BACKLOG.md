@@ -258,11 +258,10 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Priority:** Medium | **Risk:** Low
 - **Resolution:** Lightweight header-only retrieval. `eth_getHeaderByNumber(blockParam)` and `eth_getHeaderByHash(hash)` return block header JSON without `transactions` or `uncles` fields. Uses existing `resolveBlock()` and `getBlockHeaderByHash()`. Codecs strip transactions/uncles via `removeField`. Wired in `JsonRpcController`.
 
-#### M-024: debug_cpuProfile
+#### M-024: debug_cpuProfile ✅ DONE
 
 - **Priority:** Medium | **Risk:** Low
-- **Description:** CPU profiling via RPC (deferred from M-001). Requires async-profiler JNI integration or JFR activation via `ManagementFactory`. go-ethereum exposes `debug.CpuProfile()` via pprof. JVM equivalent: start/stop JFR recording and return the `.jfr` file as hex, or integrate async-profiler for flamegraph output.
-- **Reference:** go-ethereum `internal/debug/api.go` `CpuProfile()`, `StartCpuProfile()`, `StopCpuProfile()`
+- **Resolution:** Implemented `debug_startCpuProfile` and `debug_stopCpuProfile` using JDK 21's built-in Java Flight Recorder (JFR) API. `startCpuProfile` accepts optional file path (defaults to `$TMPDIR/fukuii-cpu-profile.jfr`), uses `jdk.jfr.Configuration.getConfiguration("profile")` for standard CPU sampling. `stopCpuProfile` dumps and closes the recording, returns file path and size. Guards against double-start and stop-without-start. No external dependencies (JFR is built into JDK 21). 4 new tests in `DebugServiceSpec`. RPC count: 113 → 115.
 
 #### M-025: README accuracy audit ✅ DONE
 
@@ -307,10 +306,14 @@ Comprehensive inventory of remaining work, verified against the codebase and com
   - All are legitimately slow (real cryptographic work). No tests need to be moved to the standard suite.
   - Build.sbt line 76 correctly excludes `SlowTest` from default runs.
 
-#### M-011: Investigate nightly test failures (#936)
+#### M-011: Investigate nightly test failures (#936) ✅ DONE
 
 - **Priority:** Medium | **Risk:** Low
-- **Description:** 37 failures reported in nightly runs. Need triage to separate flaky tests from real regressions.
+- **Resolution:** Triaged in two passes:
+  1. **Bug fix:** `validateStorageRanges()` in `SNAPRequestTracker` used `collectFirst`+`flatten` which silently accepted non-monotonic storage slots when the violation was in any account except the first. Changed to `flatMap`+`headOption`. Security-relevant: malicious peer could bypass monotonicity validation.
+  2. **Re-enabled tests:** Both previously-ignored unit tests now pass — `SNAPRequestTrackerAdaptiveSpec` (non-monotonic slots in second account) and `SnapSyncPipelineSpec` (bytecode end-to-end, needed `ProgressBytecodesDownloaded` expectation).
+  3. **Remaining:** 1 ignored integration test (`ContractTest.scala`) — corrupted fixture data from legacy Mantis codebase (incorrect `codeHash` in account state). Not a code bug. Historical CI analysis (Dec 2025) showed 2 `RegularSyncSpec` timeout-sensitive flaky tests (3s→5s timeout fix recommended).
+  - **Result:** 2,701 unit tests, 0 failed, 0 ignored.
 
 #### M-012: Run full integration test suite
 
@@ -538,7 +541,7 @@ H-015 (chain split) ── M-018 (hive — cross-client chain split)
 | Tier 2 (MEDIUM)     | 20     | debug profiling, log verbosity, SNAP work-stealing, testing push, perf, SNAP reorg freshness, hive Olympia, MCP multi-LLM docs, go-ethereum pre-merge PoW review (M-007, M-016, M-017, M-021 DONE)                                          |
 | Tier 3 (LOW)        | 6      | networking polish, API docs, operator guide                                                                                                                                                                                                  |
 | Tier 4 (FUTURE)     | 6      | GraphQL, Stratum, plugin system, GUI, releases                                                                                                                                                                                               |
-| **Total remaining** | **41** | Was 53, minus C-003, C-004, M-007, M-010, M-016, M-017, M-019, M-021, H-014, H-015, H-016. M-013 BLOCKED (needs solc).                                                                                                                       |
+| **Total remaining** | **39** | Was 53, minus C-003, C-004, M-007, M-010, M-011, M-016, M-017, M-019, M-021, M-024, H-014, H-015, H-016. M-013 BLOCKED (needs solc).                                                                                                            |
 
 ---
 
@@ -591,6 +594,8 @@ Items below were implemented on the `march-onward` branch and verified against t
 | Fork boundary tests (H-014)       | `eaf830404`                                    | 12 tests: baseFee, RLP, gas dynamics    |
 | Chain split detection (H-015)     | `d2d87b32a`                                    | 13 tests: ForkId + peer validation      |
 | Adversarial resilience (H-016)   | `79d80c4e2`                                    | BadBlockTracker + 11 adversarial tests  |
+| Nightly failures triage (M-011)  | `a4997acfa`                                    | validateStorageRanges bug fix + 2 tests re-enabled |
+| CPU profiling via JFR (M-024)    | `DebugService.scala`                           | debug_startCpuProfile + debug_stopCpuProfile, 4 tests |
 
 ### Resolved in FIXME/TODO Audit (2026-03-25)
 
@@ -617,8 +622,8 @@ Items below were implemented on the `march-onward` branch and verified against t
 | `SyncStateSchedulerActor.scala` | 473  | `TODO [BACKLOG A-004]` parent supervision gap | Valid — see H-007            |
 | `MessageCodec.scala`            | 127  | `TODO [BACKLOG N-003]` version-aware decoding | Valid — see M-004            |
 | `PeerActor.scala`               | 136  | `TODO [BACKLOG N-004]` capability passing     | Valid — see M-005            |
-| `ExpiringMap.scala`             | 23   | `TODO: Make class thread safe`                | Resolved — ConcurrentHashMap |
-| `pekko.conf`                    | 4    | `TODO(production)` change loglevel to INFO    | Resolved — already INFO      |
+| `ExpiringMap.scala`             | 23   | `TODO: Make class thread safe`                | Resolved — ConcurrentHashMap. TODO removed. |
+| `pekko.conf`                    | 4    | `TODO(production)` change loglevel to INFO    | Resolved — already INFO. TODO removed.      |
 | `EthereumTestsSpec.scala`       | 59   | TODO: execute using BlockExecution            | Valid — see M-009            |
 
 ---

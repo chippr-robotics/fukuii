@@ -147,4 +147,24 @@ object DebugJsonMethodsImplicits extends JsonMethodsImplicits {
         ("rootLevel" -> JString(t.rootLevel)) ~
           ("modules" -> JObject(t.modules.toList.sorted.map { case (k, v) => JField(k, JString(v)) }))
     }
+
+  // CPU profiling (M-024)
+  implicit val debug_startCpuProfile
+      : JsonMethodDecoder[StartCpuProfileRequest] with JsonEncoder[StartCpuProfileResponse] =
+    new JsonMethodDecoder[StartCpuProfileRequest] with JsonEncoder[StartCpuProfileResponse] {
+      override def decodeJson(params: Option[JArray]): Either[JsonRpcError, StartCpuProfileRequest] =
+        params match {
+          case Some(JArray(JString(file) :: Nil)) => Right(StartCpuProfileRequest(Some(file)))
+          case Some(JArray(Nil)) | None           => Right(StartCpuProfileRequest(None))
+          case _                                  => Left(InvalidParams())
+        }
+      override def encodeJson(t: StartCpuProfileResponse): JValue = JBool(t.success)
+    }
+
+  implicit val debug_stopCpuProfile
+      : NoParamsMethodDecoder[StopCpuProfileRequest] with JsonEncoder[StopCpuProfileResponse] =
+    new NoParamsMethodDecoder(StopCpuProfileRequest()) with JsonEncoder[StopCpuProfileResponse] {
+      override def encodeJson(t: StopCpuProfileResponse): JValue =
+        ("file" -> t.file) ~ ("sizeBytes" -> t.sizeBytes)
+    }
 }

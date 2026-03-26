@@ -83,6 +83,13 @@ object DebugService {
 
   case class GetVerbosityRequest()
   case class GetVerbosityResponse(rootLevel: String, modules: Map[String, String])
+
+  // CPU profiling via JFR (M-024)
+  case class StartCpuProfileRequest(file: Option[String])
+  case class StartCpuProfileResponse(success: Boolean)
+
+  case class StopCpuProfileRequest()
+  case class StopCpuProfileResponse(file: String, sizeBytes: Long)
 }
 
 class DebugService(
@@ -225,6 +232,52 @@ class DebugService(
       .map(l => l.getName -> l.getLevel.toString)
       .toMap
     Right(GetVerbosityResponse(rootLevel, modules))
+  }
+
+  /** Active JFR recording for CPU profiling (M-024). Guarded by synchronized. */
+  @volatile private var activeRecording: Option[(jdk.jfr.Recording, java.nio.file.Path)] = None
+
+  def startCpuProfile(req: StartCpuProfileRequest): ServiceResponse[StartCpuProfileResponse] = IO {
+    synchronized {
+      if (activeRecording.isDefined) {
+        Left(JsonRpcError.InvalidParams("CPU profiling already in progress"))
+      } else {
+        try {
+          val outFile = req.file
+            .map(java.nio.file.Paths.get(_))
+            .getOrElse(java.nio.file.Paths.get(System.getProperty("java.io.tmpdir"), "fukuii-cpu-profile.jfr"))
+          val recording = new jdk.jfr.Recording(jdk.jfr.Configuration.getConfiguration("profile"))
+          recording.start()
+          activeRecording = Some((recording, outFile))
+          Right(StartCpuProfileResponse(true))
+        } catch {
+          case e: Exception =>
+            Left(JsonRpcError.LogicError(s"Failed to start JFR recording: ${e.getMessage}"))
+        }
+      }
+    }
+  }
+
+  def stopCpuProfile(req: StopCpuProfileRequest): ServiceResponse[StopCpuProfileResponse] = IO {
+    synchronized {
+      activeRecording match {
+        case None =>
+          Left(JsonRpcError.InvalidParams("No CPU profiling in progress"))
+        case Some((recording, outFile)) =>
+          try {
+            recording.stop()
+            recording.dump(outFile)
+            recording.close()
+            activeRecording = None
+            val size = java.nio.file.Files.size(outFile)
+            Right(StopCpuProfileResponse(outFile.toString, size))
+          } catch {
+            case e: Exception =>
+              activeRecording = None
+              Left(JsonRpcError.LogicError(s"Failed to stop JFR recording: ${e.getMessage}"))
+          }
+      }
+    }
   }
 
   private def resolveBlockHeader(blockParam: BlockParam): Option[BlockHeader] = blockParam match {

@@ -321,6 +321,10 @@ case class JsonRpcController(
       handle[SetVmoduleRequest, SetVmoduleResponse](debugService.setVmodule, req)
     case req @ JsonRpcRequest(_, "debug_getVerbosity", _, _) =>
       handle[GetVerbosityRequest, GetVerbosityResponse](debugService.getVerbosity, req)
+    case req @ JsonRpcRequest(_, "debug_startCpuProfile", _, _) =>
+      handle[StartCpuProfileRequest, StartCpuProfileResponse](debugService.startCpuProfile, req)
+    case req @ JsonRpcRequest(_, "debug_stopCpuProfile", _, _) =>
+      handle[StopCpuProfileRequest, StopCpuProfileResponse](debugService.stopCpuProfile, req)
     case req @ JsonRpcRequest(_, "debug_traceTransaction", _, _) =>
       handle[DebugTraceTransactionRequest, DebugTraceTransactionResponse](debugTracingService.traceTransaction, req)
     case req @ JsonRpcRequest(_, "debug_traceCall", _, _) =>
