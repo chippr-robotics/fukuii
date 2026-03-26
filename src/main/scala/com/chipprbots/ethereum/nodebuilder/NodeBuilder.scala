@@ -629,9 +629,9 @@ trait SyncControllerRefBuilder {
 }
 
 trait FukuiiServiceBuilder {
-  self: TransactionHistoryServiceBuilder with JSONRpcConfigBuilder with SyncControllerRefBuilder =>
+  self: TransactionHistoryServiceBuilder with JSONRpcConfigBuilder with SyncControllerRefBuilder with BlockchainBuilder =>
 
-  lazy val fukuiiService = new FukuiiService(transactionHistoryService, jsonRpcConfig, syncController)
+  lazy val fukuiiService = new FukuiiService(transactionHistoryService, jsonRpcConfig, syncController, blockchainReader)
 }
 
 trait McpServiceBuilder {

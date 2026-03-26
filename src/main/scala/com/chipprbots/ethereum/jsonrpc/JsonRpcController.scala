@@ -14,6 +14,8 @@ import com.chipprbots.ethereum.jsonrpc.EthTxService._
 import com.chipprbots.ethereum.jsonrpc.EthUserService._
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsRequest
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsResponse
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetForkScheduleRequest
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetForkScheduleResponse
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.ResetFastSyncRequest
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.ResetFastSyncResponse
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.RestartFastSyncRequest
@@ -397,6 +399,9 @@ case class JsonRpcController(
 
     case req @ JsonRpcRequest(_, "fukuii_restartFastSync", _, _) =>
       handle[RestartFastSyncRequest, RestartFastSyncResponse](fukuiiService.restartFastSync, req)
+
+    case req @ JsonRpcRequest(_, "fukuii_getForkSchedule", _, _) =>
+      handle[GetForkScheduleRequest, GetForkScheduleResponse](fukuiiService.getForkSchedule, req)
   }
 
   private def handleMcpRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {

@@ -32,6 +32,8 @@ object JsonRpcError extends JsonMethodsImplicits {
   case class RateLimitInformation(backoffSeconds: Long)
   def RateLimitError(backoffSeconds: Long): JsonRpcError =
     JsonRpcError(-32005, "request rate exceeded", RateLimitInformation(backoffSeconds))
+  def JwtAuthError(msg: String): JsonRpcError =
+    JsonRpcError(-32006, s"JWT authentication failed: $msg", None)
   val ParseError: JsonRpcError =
     JsonRpcError(-32700, "An error occurred on the server while parsing the JSON text", None)
   val InvalidRequest: JsonRpcError = JsonRpcError(-32600, "The JSON sent is not a valid Request object", None)

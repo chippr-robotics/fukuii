@@ -5,8 +5,11 @@ import org.json4s.Merge
 
 import com.chipprbots.ethereum.jsonrpc.EthTxJsonMethodsImplicits.transactionResponseJsonEncoder
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InvalidParams
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.ForkEntry
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsRequest
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsResponse
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetForkScheduleRequest
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetForkScheduleResponse
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.ResetFastSyncRequest
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.ResetFastSyncResponse
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.RestartFastSyncRequest
@@ -71,4 +74,17 @@ object FukuiiJsonMethodImplicits extends JsonMethodsImplicits {
       "started" -> t.started.jsonEncoded,
       "cooldownUntilMillis" -> t.cooldownUntilMillis.jsonEncoded
     )
+
+  implicit val forkEntryJsonEncoder: JsonEncoder[ForkEntry] = entry =>
+    JObject(
+      "name" -> JString(entry.name),
+      "block" -> encodeAsHex(entry.block),
+      "active" -> JBool(entry.active)
+    )
+
+  implicit val fukuii_getForkSchedule_decoder: JsonMethodDecoder[GetForkScheduleRequest] =
+    new NoParamsMethodDecoder(GetForkScheduleRequest())
+
+  implicit val fukuii_getForkSchedule_encoder: JsonEncoder[GetForkScheduleResponse] = t =>
+    JObject("forks" -> JArray(t.forks.map(JsonEncoder.encode(_))))
 }

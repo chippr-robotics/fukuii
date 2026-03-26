@@ -150,9 +150,11 @@ class JsonRpcControllerSpec
     )
     val peers: List[PeerInfo] = List(initialPeerInfo)
 
-    (debugService.listPeersInfo _)
-      .expects(ListPeersInfoRequest())
-      .returning(IO.pure(Right(ListPeersInfoResponse(peers))))
+    // Manual stub — bypasses scalamock .expects() reflection which breaks under Scala 3 anonymous class renumbering
+    override val debugService: DebugService = new DebugService(null, null, null, null, null) {
+      override def listPeersInfo(req: ListPeersInfoRequest): ServiceResponse[ListPeersInfoResponse] =
+        IO.pure(Right(ListPeersInfoResponse(peers)))
+    }
 
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("debug_listPeersInfo")
     val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()

@@ -21,12 +21,15 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.LongPatience
-import com.chipprbots.ethereum.Timeouts
 import com.chipprbots.ethereum.WithActorSystemShutDown
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
+import com.chipprbots.ethereum.consensus.blocks.BlockTimestampProvider
 import com.chipprbots.ethereum.consensus.blocks.PendingBlock
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
+import com.chipprbots.ethereum.consensus.blocks.TestBlockGenerator
+import com.chipprbots.ethereum.consensus.mining.TestMining
+import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.jsonrpc.EthBlocksService.GetUncleCountByBlockHashResponse
@@ -262,23 +265,63 @@ class JsonRpcControllerEthSpec
     response should haveResult(expectedUncleBlockResponse)
   }
 
+  // Helper: create a PoWBlockGenerator stub for generateBlock tests.
+  // Bypasses scalamock .expects() reflection which breaks under Scala 3 anonymous class renumbering.
+  private def stubBlockGeneratorForGenerate(
+      headerForBlock: => BlockHeader,
+      worldState: => InMemoryWorldStateProxy
+  ): PoWBlockGenerator = new PoWBlockGenerator {
+    def emptyX: Seq[BlockHeader] = Nil
+    def getPrepared(powHeaderHash: ByteString): Option[PendingBlock] = None
+    def setHeaderExtraData(data: ByteString): Unit = ()
+    def setGasLimitTarget(target: BigInt): Unit = ()
+    def getPendingBlock: Option[PendingBlock] = None
+    def getPendingBlockAndState: Option[PendingBlockAndState] = None
+    def blockTimestampProvider: BlockTimestampProvider = ???
+    def withBlockTimestampProvider(p: BlockTimestampProvider): TestBlockGenerator = ???
+    def generateBlock(
+        parent: Block,
+        transactions: Seq[SignedTransaction],
+        beneficiary: Address,
+        x: Seq[BlockHeader],
+        initialWorldStateBeforeExecution: Option[InMemoryWorldStateProxy]
+    )(implicit blockchainConfig: BlockchainConfig): PendingBlockAndState =
+      PendingBlockAndState(PendingBlock(Block(headerForBlock, BlockBody(Nil, Nil)), Nil), worldState)
+  }
+
+  private def stubBlockGeneratorForSubmit(
+      headerForBlock: => BlockHeader
+  ): PoWBlockGenerator = new PoWBlockGenerator {
+    def emptyX: Seq[BlockHeader] = Nil
+    def getPrepared(powHeaderHash: ByteString): Option[PendingBlock] =
+      Some(PendingBlock(Block(headerForBlock, BlockBody(Nil, Nil)), Nil))
+    def setHeaderExtraData(data: ByteString): Unit = ()
+    def setGasLimitTarget(target: BigInt): Unit = ()
+    def getPendingBlock: Option[PendingBlock] = None
+    def getPendingBlockAndState: Option[PendingBlockAndState] = None
+    def blockTimestampProvider: BlockTimestampProvider = ???
+    def withBlockTimestampProvider(p: BlockTimestampProvider): TestBlockGenerator = ???
+    def generateBlock(
+        parent: Block,
+        transactions: Seq[SignedTransaction],
+        beneficiary: Address,
+        x: Seq[BlockHeader],
+        initialWorldStateBeforeExecution: Option[InMemoryWorldStateProxy]
+    )(implicit blockchainConfig: BlockchainConfig): PendingBlockAndState = ???
+  }
+
   it should "eth_getWork" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    // Just record the fact that this is going to be called, we do not care about the returned value
+    // Override blockGenerator via mining to bypass scalamock reflection. Must be lazy val
+    // so it's resolved via late binding when ethMiningService accesses mining during fixture init.
+    override lazy val mining: TestMining = buildTestMining()
+      .withValidators(validators)
+      .withBlockGenerator(stubBlockGeneratorForGenerate(blockHeader, fakeWorld))
+
     val seed: String = s"""0x${"00" * 32}"""
     val target = "0x1999999999999999999999999999999999999999999999999999999999999999"
     val headerPowHash: String = s"0x${Hex.toHexString(kec256(BlockHeader.getEncodedWithoutNonce(blockHeader)))}"
 
     blockchainWriter.save(parentBlock, Nil, ChainWeight.zero.increase(parentBlock.header), true)
-    (blockGenerator
-      .generateBlock(
-        _: Block,
-        _: Seq[SignedTransaction],
-        _: Address,
-        _: Seq[BlockHeader],
-        _: Option[InMemoryWorldStateProxy]
-      )(_: BlockchainConfig))
-      .expects(parentBlock, *, *, *, *, *)
-      .returns(PendingBlockAndState(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil), fakeWorld))
 
     // Set up AutoPilot to respond immediately when messages are received
     pendingTransactionsManager.setAutoPilot(simpleAutoPilot { case PendingTransactionsManager.GetPendingTransactions =>
@@ -308,22 +351,15 @@ class JsonRpcControllerEthSpec
     UnitTest,
     RPCTest
   ) in new JsonRpcControllerFixture {
-    // Test that when actors timeout, the service handles it gracefully and returns empty lists
+    override lazy val mining: TestMining = buildTestMining()
+      .withValidators(validators)
+      .withBlockGenerator(stubBlockGeneratorForGenerate(blockHeader, fakeWorld))
+
     val seed: String = s"""0x${"00" * 32}"""
     val target = "0x1999999999999999999999999999999999999999999999999999999999999999"
     val headerPowHash: String = s"0x${Hex.toHexString(kec256(BlockHeader.getEncodedWithoutNonce(blockHeader)))}"
 
     blockchainWriter.save(parentBlock, Nil, ChainWeight.zero.increase(parentBlock.header), true)
-    (blockGenerator
-      .generateBlock(
-        _: Block,
-        _: Seq[SignedTransaction],
-        _: Address,
-        _: Seq[BlockHeader],
-        _: Option[InMemoryWorldStateProxy]
-      )(_: BlockchainConfig))
-      .expects(parentBlock, *, *, *, *, *)
-      .returns(PendingBlockAndState(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil), fakeWorld))
 
     // Don't set up AutoPilot - let the actors timeout and verify error handling returns empty lists
     val request: JsonRpcRequest = newJsonRpcRequest("eth_getWork")
@@ -342,14 +378,13 @@ class JsonRpcControllerEthSpec
   }
 
   it should "eth_submitWork" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    // Just record the fact that this is going to be called, we do not care about the returned value
+    override lazy val mining: TestMining = buildTestMining()
+      .withValidators(validators)
+      .withBlockGenerator(stubBlockGeneratorForSubmit(blockHeader))
+
     val nonce: String = s"0x0000000000000001"
     val mixHash: String = s"""0x${"01" * 32}"""
     val headerPowHash: String = "02" * 32
-
-    (blockGenerator.getPrepared _)
-      .expects(ByteString(Hex.decode(headerPowHash)))
-      .returns(Some(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil)))
 
     val request: JsonRpcRequest = newJsonRpcRequest(
       "eth_submitWork",

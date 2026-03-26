@@ -593,6 +593,7 @@ class BlockImporter(
             val (blocks, weights) = importedBlocksData.map(data => (data.block, data.weight)).unzip
             broadcastBlocks(blocks, weights)
             updateTxPool(importedBlocksData.map(_.block), Seq.empty)
+            logForkSignaling(block.number)
             supervisor ! ProgressProtocol.ImportedBlock(block.number, internally)
           case ChainReorganised(oldBranch, newBranch, weights) =>
             updateTxPool(newBranch, oldBranch)
@@ -624,6 +625,26 @@ class BlockImporter(
   private def updateTxPool(blocksAdded: Seq[Block], blocksRemoved: Seq[Block]): Unit = {
     blocksRemoved.foreach(block => pendingTransactionsManager ! AddUncheckedTransactions(block.body.transactionList))
     blocksAdded.foreach(block => pendingTransactionsManager ! RemoveTransactions(block.body.transactionList))
+  }
+
+  /** Log fork countdown warnings and activation confirmation (go-ethereum pattern). */
+  private def logForkSignaling(blockNumber: BigInt): Unit = {
+    val olympiaBlock = blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+    val maxVal = BigInt(Long.MaxValue)
+    if (olympiaBlock >= maxVal) return // not configured
+
+    val remaining = olympiaBlock - blockNumber
+    if (remaining == 0) {
+      log.warning("Olympia fork activated at block {}", blockNumber)
+    } else if (remaining == 1) {
+      log.warning("Olympia fork activates NEXT BLOCK (block {})", olympiaBlock)
+    } else if (remaining > 0 && remaining <= 100) {
+      log.warning("Olympia fork in {} blocks (block {})", remaining, olympiaBlock)
+    } else if (remaining > 0 && remaining <= 1000 && remaining % 100 == 0) {
+      log.info("Olympia fork in {} blocks (block {})", remaining, olympiaBlock)
+    } else if (remaining > 0 && remaining <= 10000 && remaining % 1000 == 0) {
+      log.info("Olympia fork in {} blocks (block {})", remaining, olympiaBlock)
+    }
   }
 
   private def importWith(importTask: IO[NewBehavior], blockImportType: BlockImportType)(

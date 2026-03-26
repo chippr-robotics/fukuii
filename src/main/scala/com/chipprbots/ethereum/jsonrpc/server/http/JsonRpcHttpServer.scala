@@ -67,6 +67,7 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
       .result()
 
   protected val rateLimit = new RateLimit(config.rateLimit)
+  protected val jwtAuth = new JwtAuth(config.jwtAuth)
 
   val route: Route = handleRejections(myRejectionHandler) {
     cors(corsSettings) {
@@ -78,25 +79,27 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
         handleHealthcheck()
       } ~ (path("buildinfo") & pathEndOrSingleSlash & get) {
         handleBuildInfo()
-      } ~ (pathEndOrSingleSlash & post) {
-        // Rate-limiting not applied to health endpoints
-        entity(as[JsonRpcRequest]) {
-          case statusReq if statusReq.method == FaucetJsonRpcController.Status =>
-            handleRequest(statusReq)
-          case jsonReq =>
-            rateLimit {
-              handleRequest(jsonReq)
-            }
-          // Optimization: single+batch requests share JSON parsing path
-        } ~ entity(as[Seq[JsonRpcRequest]]) {
-          case _ if config.rateLimit.enabled =>
-            complete(StatusCodes.MethodNotAllowed, JsonRpcError.MethodNotFound)
-          case reqSeq =>
-            complete {
-              reqSeq.toList
-                .traverse(request => jsonRpcController.handleRequest(request))
-                .unsafeToFuture()
-            }
+      } ~ ProfilingRoutes.route ~ (pathEndOrSingleSlash & post) {
+        // JWT auth + rate-limiting not applied to health endpoints
+        jwtAuth {
+          entity(as[JsonRpcRequest]) {
+            case statusReq if statusReq.method == FaucetJsonRpcController.Status =>
+              handleRequest(statusReq)
+            case jsonReq =>
+              rateLimit {
+                handleRequest(jsonReq)
+              }
+            // Optimization: single+batch requests share JSON parsing path
+          } ~ entity(as[Seq[JsonRpcRequest]]) {
+            case _ if config.rateLimit.enabled =>
+              complete(StatusCodes.MethodNotAllowed, JsonRpcError.MethodNotFound)
+            case reqSeq =>
+              complete {
+                reqSeq.toList
+                  .traverse(request => jsonRpcController.handleRequest(request))
+                  .unsafeToFuture()
+              }
+          }
         }
       }
     }
@@ -215,6 +218,25 @@ object JsonRpcHttpServer extends Logger {
       }
   }
 
+  trait JwtAuthConfig {
+    val enabled: Boolean
+    val secretFile: String
+  }
+
+  object JwtAuthConfig {
+    def apply(rpcHttpConfig: TypesafeConfig): JwtAuthConfig =
+      if (rpcHttpConfig.hasPath("jwt-auth"))
+        new JwtAuthConfig {
+          override val enabled: Boolean = rpcHttpConfig.getBoolean("jwt-auth.enabled")
+          override val secretFile: String = rpcHttpConfig.getString("jwt-auth.secret-file")
+        }
+      else
+        new JwtAuthConfig {
+          override val enabled: Boolean = false
+          override val secretFile: String = ""
+        }
+  }
+
   trait JsonRpcHttpServerConfig {
     val mode: String
     val enabled: Boolean
@@ -222,6 +244,7 @@ object JsonRpcHttpServer extends Logger {
     val port: Int
     val corsAllowedOrigins: HttpOriginMatcher
     val rateLimit: RateLimitConfig
+    val jwtAuth: JwtAuthConfig
   }
 
   object JsonRpcHttpServerConfig {
@@ -238,6 +261,7 @@ object JsonRpcHttpServer extends Logger {
           ConfigUtils.parseCorsAllowedOrigins(rpcHttpConfig, "cors-allowed-origins")
 
         override val rateLimit: RateLimitConfig = RateLimitConfig(rpcHttpConfig.getConfig("rate-limit"))
+        override val jwtAuth: JwtAuthConfig = JwtAuthConfig(rpcHttpConfig)
       }
     }
   }

@@ -32,6 +32,7 @@ import com.chipprbots.ethereum.jsonrpc.server.controllers.ApisBase
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.JsonRpcHttpServerConfig
+import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.JwtAuthConfig
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.RateLimitConfig
 import com.chipprbots.ethereum.utils.BuildInfo
@@ -460,6 +461,11 @@ class JsonRpcHttpServerSpec
       override val latestTimestampCacheSize: Int = 1024
     }
 
+    val jwtAuthDisabledConfig: JwtAuthConfig = new JwtAuthConfig {
+      override val enabled: Boolean = false
+      override val secretFile: String = ""
+    }
+
     val serverConfig: JsonRpcHttpServerConfig = new JsonRpcHttpServerConfig {
       override val mode: String = "mockJsonRpc"
       override val enabled: Boolean = true
@@ -467,6 +473,7 @@ class JsonRpcHttpServerSpec
       override val port: Int = 123
       override val corsAllowedOrigins = HttpOriginMatcher.*
       override val rateLimit: RateLimitConfig = rateLimitConfig
+      override val jwtAuth: JwtAuthConfig = jwtAuthDisabledConfig
     }
 
     val rateLimitEnabledConfig: RateLimitConfig = new RateLimitConfig {
@@ -482,6 +489,7 @@ class JsonRpcHttpServerSpec
       override val port: Int = 123
       override val corsAllowedOrigins = HttpOriginMatcher.*
       override val rateLimit: RateLimitConfig = rateLimitEnabledConfig
+      override val jwtAuth: JwtAuthConfig = jwtAuthDisabledConfig
     }
 
     // Mock the MockableJsonRpcController which satisfies JsonRpcBaseController's self-type constraints
