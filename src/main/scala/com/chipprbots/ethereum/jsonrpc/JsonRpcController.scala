@@ -190,6 +190,10 @@ case class JsonRpcController(
       handle[BlockByBlockHashRequest, BlockByBlockHashResponse](ethBlocksService.getByBlockHash, req)
     case req @ JsonRpcRequest(_, "eth_getBlockByNumber", _, _) =>
       handle[BlockByNumberRequest, BlockByNumberResponse](ethBlocksService.getBlockByNumber, req)
+    case req @ JsonRpcRequest(_, "eth_getHeaderByNumber", _, _) =>
+      handle[GetHeaderByNumberRequest, GetHeaderByNumberResponse](ethBlocksService.getHeaderByNumber, req)
+    case req @ JsonRpcRequest(_, "eth_getHeaderByHash", _, _) =>
+      handle[GetHeaderByHashRequest, GetHeaderByHashResponse](ethBlocksService.getHeaderByHash, req)
     case req @ JsonRpcRequest(_, "eth_getTransactionByBlockHashAndIndex", _, _) =>
       handle[GetTransactionByBlockHashAndIndexRequest, GetTransactionByBlockHashAndIndexResponse](
         ethTxService.getTransactionByBlockHashAndIndex,
@@ -211,6 +215,8 @@ case class JsonRpcController(
       handle[SendRawTransactionRequest, SendRawTransactionResponse](ethTxService.sendRawTransaction, req)
     case req @ JsonRpcRequest(_, "eth_sendTransaction", _, _) =>
       handle[SendTransactionRequest, SendTransactionResponse](personalService.sendTransaction, req)
+    case req @ JsonRpcRequest(_, "eth_signTransaction", _, _) =>
+      handle[SignTransactionRequest, SignTransactionResponse](personalService.signTransaction, req)
     case req @ JsonRpcRequest(_, "eth_call", _, _) =>
       handle[CallRequest, CallResponse](ethInfoService.call, req)(eth_call, eth_call)
     case req @ JsonRpcRequest(_, "eth_estimateGas", _, _) =>

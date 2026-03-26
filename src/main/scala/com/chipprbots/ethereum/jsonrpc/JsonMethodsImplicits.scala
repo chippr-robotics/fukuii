@@ -335,6 +335,23 @@ object JsonMethodsImplicits extends JsonMethodsImplicits {
         encodeAsHex(t.txHash)
     }
 
+  implicit val eth_signTransaction
+      : JsonMethodCodec[SignTransactionRequest, SignTransactionResponse] =
+    new JsonMethodCodec[SignTransactionRequest, SignTransactionResponse] {
+      def decodeJson(params: Option[JArray]): Either[JsonRpcError, SignTransactionRequest] =
+        params match {
+          case Some(JArray(JObject(tx) :: JString(passphrase) :: _)) =>
+            extractTx(tx.toMap).map(SignTransactionRequest(_, passphrase))
+          case _ =>
+            Left(InvalidParams())
+        }
+
+      def encodeJson(t: SignTransactionResponse): JValue =
+        JObject(
+          "raw" -> encodeAsHex(t.raw)
+        )
+    }
+
   implicit val personal_sign: JsonMethodCodec[SignRequest, SignResponse] =
     new JsonMethodCodec[SignRequest, SignResponse] {
       override def encodeJson(t: SignResponse): JValue = {

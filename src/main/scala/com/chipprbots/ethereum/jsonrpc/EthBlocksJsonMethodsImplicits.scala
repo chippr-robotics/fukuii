@@ -208,4 +208,44 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
 
       def encodeJson(t: GetBlockTransactionCountByNumberResponse): JValue = encodeAsHex(t.result)
     }
+
+  implicit val eth_getHeaderByNumber
+      : JsonMethodDecoder[GetHeaderByNumberRequest] with JsonEncoder[GetHeaderByNumberResponse] =
+    new JsonMethodDecoder[GetHeaderByNumberRequest] with JsonEncoder[GetHeaderByNumberResponse] {
+      override def decodeJson(params: Option[JArray]): Either[JsonRpcError, GetHeaderByNumberRequest] =
+        params match {
+          case Some(JArray(blockStr :: Nil)) =>
+            extractBlockParam(blockStr).map(GetHeaderByNumberRequest.apply)
+          case _ => Left(InvalidParams())
+        }
+
+      override def encodeJson(t: GetHeaderByNumberResponse): JValue = {
+        val response = JsonEncoder.encode(t.blockResponse)
+        response.removeField {
+          case JField("transactions", _) => true
+          case JField("uncles", _)       => true
+          case _                         => false
+        }
+      }
+    }
+
+  implicit val eth_getHeaderByHash
+      : JsonMethodDecoder[GetHeaderByHashRequest] with JsonEncoder[GetHeaderByHashResponse] =
+    new JsonMethodDecoder[GetHeaderByHashRequest] with JsonEncoder[GetHeaderByHashResponse] {
+      override def decodeJson(params: Option[JArray]): Either[JsonRpcError, GetHeaderByHashRequest] =
+        params match {
+          case Some(JArray(JString(blockHash) :: Nil)) =>
+            extractHash(blockHash).map(GetHeaderByHashRequest.apply)
+          case _ => Left(InvalidParams())
+        }
+
+      override def encodeJson(t: GetHeaderByHashResponse): JValue = {
+        val response = JsonEncoder.encode(t.blockResponse)
+        response.removeField {
+          case JField("transactions", _) => true
+          case JField("uncles", _)       => true
+          case _                         => false
+        }
+      }
+    }
 }

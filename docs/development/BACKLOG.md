@@ -248,17 +248,15 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Description:** `miner_setMinGasPrice`, `miner_setExtraData`, `miner_changeTargetGasLimit` — zero references. Lower priority since gas price/extra data are less configurable in ETC PoW consensus.
 - **Resolution:** All 3 methods implemented with JSON codecs, controller routing, and AtomicReference-backed dynamic config in BlockGeneratorSkeleton. RPC count: 94 → 97.
 
-#### M-022: eth_signTransaction
+#### M-022: eth_signTransaction — DONE
 
 - **Priority:** Medium | **Risk:** Low
-- **Description:** Sign a transaction without broadcasting it. Returns the signed raw transaction hex. Present in go-ethereum (`eth_signTransaction`), Besu, Nethermind. Useful for offline signing workflows and multisig preparation. Uses existing `personal_signAndSendTransaction` infrastructure minus the broadcast step.
-- **Reference:** go-ethereum `internal/ethapi/api.go` `SignTransaction()`, Besu `EthSignTransaction.java`
+- **Resolution:** Signs transaction without broadcasting. Accepts `{from, to, value, gas, gasPrice, nonce, data}` + passphrase, returns `{raw: "0x..."}` signed bytes. Uses existing `Wallet.signTx()` infrastructure with EIP-155 chain-specific signing. Wired in `JsonRpcController`, codec in `JsonMethodsImplicits`.
 
-#### M-023: eth_getHeaderByNumber / eth_getHeaderByHash
+#### M-023: eth_getHeaderByNumber / eth_getHeaderByHash — DONE
 
 - **Priority:** Medium | **Risk:** Low
-- **Description:** Lightweight header retrieval without full block body. Returns only the block header JSON. Present in go-ethereum, Erigon. Useful for light clients and header-only queries. Implementation is trivial — same as `getBlockByNumber`/`getBlockByHash` but skip body and uncle fields.
-- **Reference:** go-ethereum `internal/ethapi/api.go` `GetHeaderByNumber()`, `GetHeaderByHash()`
+- **Resolution:** Lightweight header-only retrieval. `eth_getHeaderByNumber(blockParam)` and `eth_getHeaderByHash(hash)` return block header JSON without `transactions` or `uncles` fields. Uses existing `resolveBlock()` and `getBlockHeaderByHash()`. Codecs strip transactions/uncles via `removeField`. Wired in `JsonRpcController`.
 
 #### M-024: debug_cpuProfile
 

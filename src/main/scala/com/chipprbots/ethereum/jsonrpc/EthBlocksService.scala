@@ -40,6 +40,12 @@ object EthBlocksService {
 
   case class GetUncleCountByBlockHashRequest(blockHash: ByteString)
   case class GetUncleCountByBlockHashResponse(result: BigInt)
+
+  case class GetHeaderByNumberRequest(block: BlockParam)
+  case class GetHeaderByNumberResponse(blockResponse: Option[BaseBlockResponse])
+
+  case class GetHeaderByHashRequest(blockHash: ByteString)
+  case class GetHeaderByHashResponse(blockResponse: Option[BaseBlockResponse])
 }
 
 class EthBlocksService(
@@ -202,4 +208,22 @@ class EthBlocksService(
           )
       }
     }
+
+  /** eth_getHeaderByNumber — lightweight header retrieval without full block body. */
+  def getHeaderByNumber(req: GetHeaderByNumberRequest): ServiceResponse[GetHeaderByNumberResponse] = IO {
+    val headerOpt = resolveBlock(req.block).toOption.map { case ResolvedBlock(block, pending) =>
+      val weight = blockchainReader.getChainWeightByHash(block.header.hash)
+      BlockResponse(blockHeader = block.header, weight = weight, pendingBlock = pending.isDefined)
+    }
+    Right(GetHeaderByNumberResponse(headerOpt))
+  }
+
+  /** eth_getHeaderByHash — lightweight header retrieval without full block body. */
+  def getHeaderByHash(req: GetHeaderByHashRequest): ServiceResponse[GetHeaderByHashResponse] = IO {
+    val headerOpt = blockchainReader.getBlockHeaderByHash(req.blockHash).map { header =>
+      val weight = blockchainReader.getChainWeightByHash(req.blockHash)
+      BlockResponse(blockHeader = header, weight = weight, pendingBlock = false)
+    }
+    Right(GetHeaderByHashResponse(headerOpt))
+  }
 }

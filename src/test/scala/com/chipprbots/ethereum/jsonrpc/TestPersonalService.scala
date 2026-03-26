@@ -44,6 +44,9 @@ class TestPersonalService extends PersonalServiceAPI {
   var sendIeleTransactionFn: SendIeleTransactionRequest => ServiceResponse[SendTransactionResponse] =
     _ => IO.raiseError(new NotImplementedError("TestPersonalService.sendIeleTransaction not configured"))
 
+  var signTransactionFn: SignTransactionRequest => ServiceResponse[SignTransactionResponse] =
+    _ => IO.raiseError(new NotImplementedError("TestPersonalService.signTransaction not configured"))
+
   override def importRawKey(req: ImportRawKeyRequest): ServiceResponse[ImportRawKeyResponse] = importRawKeyFn(req)
   override def newAccount(req: NewAccountRequest): ServiceResponse[NewAccountResponse] = newAccountFn(req)
   override def listAccounts(request: ListAccountsRequest): ServiceResponse[ListAccountsResponse] = listAccountsFn(
@@ -62,4 +65,6 @@ class TestPersonalService extends PersonalServiceAPI {
     sendTransactionFn(request)
   override def sendIeleTransaction(request: SendIeleTransactionRequest): ServiceResponse[SendTransactionResponse] =
     sendIeleTransactionFn(request)
+  override def signTransaction(request: SignTransactionRequest): ServiceResponse[SignTransactionResponse] =
+    signTransactionFn(request)
 }

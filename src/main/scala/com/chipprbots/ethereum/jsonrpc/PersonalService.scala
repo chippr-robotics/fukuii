@@ -21,6 +21,7 @@ import com.chipprbots.ethereum.jsonrpc.JsonRpcError._
 import com.chipprbots.ethereum.jsonrpc.PersonalService._
 import com.chipprbots.ethereum.keystore.KeyStore
 import com.chipprbots.ethereum.keystore.Wallet
+import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions.SignedTransactionEnc
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
@@ -64,6 +65,9 @@ object PersonalService {
   case class EcRecoverRequest(message: ByteString, signature: ECDSASignature)
   case class EcRecoverResponse(address: Address)
 
+  case class SignTransactionRequest(tx: TransactionRequest, passphrase: String)
+  case class SignTransactionResponse(raw: ByteString, tx: TransactionRequest)
+
   val InvalidKey: JsonRpcError = InvalidParams("Invalid key provided, expected 32 bytes (64 hex digits)")
   val InvalidAddress: JsonRpcError = InvalidParams("Invalid address, expected 20 bytes (40 hex digits)")
   val InvalidPassphrase: JsonRpcError = LogicError("Could not decrypt key with given passphrase")
@@ -90,6 +94,7 @@ trait PersonalServiceAPI {
   ): ServiceResponse[SendTransactionWithPassphraseResponse]
   def sendTransaction(request: SendTransactionRequest): ServiceResponse[SendTransactionResponse]
   def sendIeleTransaction(request: SendIeleTransactionRequest): ServiceResponse[SendTransactionResponse]
+  def signTransaction(request: SignTransactionRequest): ServiceResponse[SignTransactionResponse]
 }
 
 class PersonalService(
@@ -161,6 +166,30 @@ class PersonalService(
       .map { wallet =>
         SignResponse(ECDSASignature.sign(getMessageToSign(message), wallet.keyPair))
       }
+  }
+
+  /** eth_signTransaction — sign a transaction without broadcasting it. */
+  def signTransaction(request: SignTransactionRequest): ServiceResponse[SignTransactionResponse] = {
+    val maybeWallet = IO {
+      keyStore.unlockAccount(request.tx.from, request.passphrase).left.map(handleError)
+    }
+
+    maybeWallet.flatMap {
+      case Right(wallet) =>
+        IO {
+          val maybeCurrentNonce = getCurrentAccount(request.tx.from).map(_.nonce.toBigInt)
+          val tx = request.tx.toTransaction(
+            request.tx.nonce.orElse(maybeCurrentNonce).getOrElse(blockchainConfig.accountStartNonce)
+          )
+          val stx = if (blockchainReader.getBestBlockNumber() >= blockchainConfig.forkBlockNumbers.eip155BlockNumber)
+            wallet.signTx(tx, Some(blockchainConfig.chainId))
+          else
+            wallet.signTx(tx, None)
+
+          Right(SignTransactionResponse(ByteString(stx.tx.toBytes), request.tx))
+        }.recover { case _: MissingNodeException => Left(JsonRpcError.NodeNotFound) }
+      case Left(err) => IO.pure(Left(err))
+    }
   }
 
   def ecRecover(req: EcRecoverRequest): ServiceResponse[EcRecoverResponse] = IO {
