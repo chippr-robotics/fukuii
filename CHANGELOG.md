@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Verified
+- **First successful Mordor SNAP sync to chain head** (2026-03-26)
+  - Genesis to block 15,821,493 via SNAP, then regular sync to chain head (15,821,700+)
+  - Total SNAP sync time: ~35 minutes (13:43:06 → 14:17:46)
+  - Accounts: 2,628,940 accounts downloaded, 148,486 contract accounts, 57,337 unique codeHashes
+  - Throughput: peaked at 6,786 accounts/sec, sustained ~2,400 accounts/sec
+  - Phases: Account range (18 min) → Bytecode (16 min, 57,337 codes) → Storage → Complete
+  - 6 in-place pivot refreshes (15821349 → 15821493), zero restarts
+  - Transitioned to regular sync at 14:17:46, caught chain head within minutes
+  - `is on top -> true` confirmed — importing blocks in real-time
+
 ### Added
 - Production release checklist
 - Shared test helper library for Gorgoroth test scripts (`ops/gorgoroth/test-scripts/lib/test-helpers.sh`)
