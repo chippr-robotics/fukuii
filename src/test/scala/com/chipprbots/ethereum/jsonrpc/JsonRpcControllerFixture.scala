@@ -114,7 +114,8 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
     keyStore,
     syncingController.ref,
     Capability.ETH63,
-    Timeouts.shortTimeout
+    Timeouts.shortTimeout,
+    storagesInstance.storages.evmCodeStorage
   )
 
   override lazy val coinbaseProvider = new CoinbaseProvider(mining.config.generic.coinbase)

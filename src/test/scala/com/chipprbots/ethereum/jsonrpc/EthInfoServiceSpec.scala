@@ -174,7 +174,8 @@ class EthServiceSpec
       keyStore,
       syncingController.ref,
       Capability.ETH63,
-      Timeouts.shortTimeout
+      Timeouts.shortTimeout,
+      storagesInstance.storages.evmCodeStorage
     )
 
     val blockToRequest: Block = Block(Fixtures.Blocks.Block3125369.header, Fixtures.Blocks.Block3125369.body)

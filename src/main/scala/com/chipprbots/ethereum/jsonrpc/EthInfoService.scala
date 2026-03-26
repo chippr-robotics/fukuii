@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.ledger.BlockExecution.HistoryStorageAddress
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.vm.EvmConfig
 import com.chipprbots.ethereum.vm.PrecompiledContracts
 
 object EthInfoService {
@@ -80,7 +81,16 @@ object EthInfoService {
       contractCode: Option[ByteString]
   )
 
-  case class CallRequest(tx: CallTx, block: BlockParam)
+  /** Per-account state override for eth_call/eth_estimateGas simulation */
+  case class AccountStateOverride(
+      balance: Option[BigInt] = None,
+      nonce: Option[BigInt] = None,
+      code: Option[ByteString] = None,
+      state: Option[Map[BigInt, BigInt]] = None,
+      stateDiff: Option[Map[BigInt, BigInt]] = None
+  )
+
+  case class CallRequest(tx: CallTx, block: BlockParam, stateOverrides: Option[Map[Address, AccountStateOverride]] = None)
   case class CallResponse(returnData: ByteString)
   case class IeleCallRequest(tx: IeleCallTx, block: BlockParam)
   case class IeleCallResponse(returnData: Seq[ByteString])
@@ -103,7 +113,8 @@ class EthInfoService(
     keyStore: KeyStore,
     syncingController: ActorRef,
     capability: Capability,
-    askTimeout: Timeout
+    askTimeout: Timeout,
+    evmCodeStorage: com.chipprbots.ethereum.db.storage.EvmCodeStorage
 ) extends ResolveBlock {
 
   import EthInfoService._
@@ -288,7 +299,29 @@ class EthInfoService(
   ): Either[JsonRpcError, A] = for {
     stx <- prepareTransaction(req)
     block <- resolveBlock(req.block)
-  } yield f(stx, block.block.header, block.pendingState)
+  } yield {
+    val baseWorld = block.pendingState
+    val overriddenWorld = req.stateOverrides match {
+      case Some(overrides) if overrides.nonEmpty =>
+        // Build the world state first if we don't have one yet, so we can apply overrides
+        val world = baseWorld.getOrElse(
+          InMemoryWorldStateProxy(
+            evmCodeStorage = evmCodeStorage,
+            mptStorage = blockchain.getReadOnlyMptStorage(),
+            getBlockHashByNumber =
+              (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
+            accountStartNonce = blockchainConfig.accountStartNonce,
+            stateRootHash = block.block.header.stateRoot,
+            noEmptyAccounts =
+              EvmConfig.forBlock(block.block.header.number, blockchainConfig).noEmptyAccounts,
+            ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
+          )
+        )
+        Some(applyStateOverrides(world, overrides))
+      case _ => baseWorld
+    }
+    f(stx, block.block.header, overriddenWorld)
+  }
 
   private def getGasLimit(req: CallRequest): Either[JsonRpcError, BigInt] =
     req.tx.gas.map(Right.apply).getOrElse(resolveBlock(BlockParam.Latest).map(r => r.block.header.gasLimit))
@@ -310,6 +343,53 @@ class EthInfoService(
       val tx = LegacyTransaction(0, req.tx.gasPrice, gasLimit, toAddress, req.tx.value, req.tx.data)
       val fakeSignature = ECDSASignature(0, 0, 0)
       SignedTransactionWithSender(tx, fakeSignature, fromAddress)
+    }
+
+  /** Apply per-account state overrides to the world state (EIP-3155 / geth stateOverride).
+    * Matches go-ethereum internal/ethapi/override.go Apply() behavior.
+    */
+  private def applyStateOverrides(
+      world: InMemoryWorldStateProxy,
+      overrides: Map[Address, AccountStateOverride]
+  ): InMemoryWorldStateProxy =
+    overrides.foldLeft(world) { case (w, (address, ovr)) =>
+      val account = w.getAccount(address).getOrElse(w.getEmptyAccount)
+
+      // Apply balance and nonce overrides
+      val updated = account.copy(
+        balance = ovr.balance.map(UInt256(_)).getOrElse(account.balance),
+        nonce = ovr.nonce.map(UInt256(_)).getOrElse(account.nonce)
+      )
+      val w1 = w.saveAccount(address, updated)
+
+      // Apply code override
+      val w2 = ovr.code match {
+        case Some(code) => w1.saveCode(address, code)
+        case None       => w1
+      }
+
+      // Apply full state replacement (clears existing storage)
+      val w3 = ovr.state match {
+        case Some(slots) =>
+          // Start from empty storage, write all slots
+          val storage = w2.getStorage(address)
+          val clearedStorage = slots.foldLeft(storage) { case (s, (k, v)) =>
+            s.store(k, v)
+          }
+          w2.saveStorage(address, clearedStorage)
+        case None => w2
+      }
+
+      // Apply state diff (merge into existing storage)
+      ovr.stateDiff match {
+        case Some(diff) =>
+          val storage = w3.getStorage(address)
+          val patchedStorage = diff.foldLeft(storage) { case (s, (k, v)) =>
+            s.store(k, v)
+          }
+          w3.saveStorage(address, patchedStorage)
+        case None => w3
+      }
     }
 
 }

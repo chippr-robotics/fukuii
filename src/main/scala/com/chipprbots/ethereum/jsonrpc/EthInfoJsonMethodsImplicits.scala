@@ -77,6 +77,12 @@ object EthJsonMethodsImplicits extends JsonMethodsImplicits {
     new JsonMethodDecoder[CallRequest] with JsonEncoder[CallResponse] {
       def decodeJson(params: Option[JArray]): Either[JsonRpcError, CallRequest] =
         params match {
+          case Some(JArray((txObj: JObject) :: (blockValue: JValue) :: (overridesObj: JObject) :: Nil)) =>
+            for {
+              blockParam <- extractBlockParam(blockValue)
+              tx <- extractCall(txObj)
+              overrides <- extractStateOverrides(overridesObj)
+            } yield CallRequest(tx, blockParam, Some(overrides))
           case Some(JArray((txObj: JObject) :: (blockValue: JValue) :: Nil)) =>
             for {
               blockParam <- extractBlockParam(blockValue)
@@ -93,11 +99,20 @@ object EthJsonMethodsImplicits extends JsonMethodsImplicits {
     override def encodeJson(t: EstimateGasResponse): JValue = encodeAsHex(t.gas)
 
     override def decodeJson(params: Option[JArray]): Either[JsonRpcError, CallRequest] =
-      withoutBlockParam.applyOrElse(params, eth_call.decodeJson)
+      withoutBlockParam.applyOrElse(params, withOverrides.applyOrElse(_, eth_call.decodeJson))
 
     def withoutBlockParam: PartialFunction[Option[JArray], Either[JsonRpcError, CallRequest]] = {
       case Some(JArray((txObj: JObject) :: Nil)) =>
         extractCall(txObj).map(CallRequest(_, BlockParam.Latest))
+    }
+
+    def withOverrides: PartialFunction[Option[JArray], Either[JsonRpcError, CallRequest]] = {
+      case Some(JArray((txObj: JObject) :: (blockValue: JValue) :: (overridesObj: JObject) :: Nil)) =>
+        for {
+          blockParam <- extractBlockParam(blockValue)
+          tx <- extractCall(txObj)
+          overrides <- extractStateOverrides(overridesObj)
+        } yield CallRequest(tx, blockParam, Some(overrides))
     }
 
   }
@@ -144,6 +159,34 @@ object EthJsonMethodsImplicits extends JsonMethodsImplicits {
         }
       }
     }
+
+  /** Parse the state override object: { "0xAddr": { balance, nonce, code, state, stateDiff }, ... } */
+  def extractStateOverrides(obj: JObject): Either[JsonRpcError, Map[Address, AccountStateOverride]] = {
+    try {
+      val overrides = obj.obj.collect { case JField(addrStr, overrideObj: JObject) =>
+        val addr = Address(ByteString(Hex.decode(addrStr.stripPrefix("0x"))))
+        val balance = (overrideObj \ "balance").extractOpt[String].map(s => BigInt(s.stripPrefix("0x"), 16))
+        val nonce = (overrideObj \ "nonce").extractOpt[String].map(s => BigInt(s.stripPrefix("0x"), 16))
+        val code = (overrideObj \ "code").extractOpt[String].map(s => ByteString(Hex.decode(s.stripPrefix("0x"))))
+
+        def extractStorageMap(field: String): Option[Map[BigInt, BigInt]] =
+          (overrideObj \ field) match {
+            case JObject(fields) =>
+              Some(fields.collect { case JField(k, JString(v)) =>
+                BigInt(k.stripPrefix("0x"), 16) -> BigInt(v.stripPrefix("0x"), 16)
+              }.toMap)
+            case _ => None
+          }
+
+        val state = extractStorageMap("state")
+        val stateDiff = extractStorageMap("stateDiff")
+        addr -> AccountStateOverride(balance, nonce, code, state, stateDiff)
+      }.toMap
+      Right(overrides)
+    } catch {
+      case _: Exception => Left(InvalidParams("Invalid state override format"))
+    }
+  }
 
   def extractCall(obj: JObject): Either[JsonRpcError, CallTx] = {
     def toEitherOpt[A, B](opt: Option[Either[A, B]]): Either[A, Option[B]] =

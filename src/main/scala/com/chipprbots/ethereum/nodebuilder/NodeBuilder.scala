@@ -482,7 +482,8 @@ trait EthInfoServiceBuilder {
     keyStore,
     syncController,
     Capability.best(Config.supportedCapabilities),
-    asyncConfig.askTimeout
+    asyncConfig.askTimeout,
+    storagesInstance.storages.evmCodeStorage
   )
 }
 

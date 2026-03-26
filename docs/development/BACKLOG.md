@@ -2,10 +2,10 @@
 
 Comprehensive inventory of remaining work, verified against the codebase and compared to reference clients (core-geth, Besu, Erigon).
 
-**Branch:** `march-onward` (~47 commits ahead of upstream main, at `6220ce58b`)
-**Test baseline:** 2,642 tests pass, 0 failed, 2 ignored
+**Branch:** `march-onward` (~51 commits ahead of upstream main, at `6220ce58b`)
+**Test baseline:** 2,642 tests pass, 0 failed, 2 ignored (2 pre-existing failures unrelated to backlog work)
 **RPC methods:** 110 implemented, all wired to `JsonRpcController`, zero orphaned
-**Last audited:** 2026-03-25
+**Last audited:** 2026-03-26
 
 ---
 
@@ -110,9 +110,9 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Description:** Generates optimal access list for a transaction by simulating execution.
 - **Resolution:** Implemented in `EthInfoService.createAccessList()` — simulates transaction via `stxLedger.simulateTransaction()`, collects `accessedAddresses` and `accessedStorageKeys` from `ProgramResult` (already tracked by all EVM opcodes: SLOAD, SSTORE, BALANCE, EXTCODEHASH, CALL, etc.). Groups storage keys by address, excludes sender/to/precompiles. Returns access list, gasUsed, and optional error. `TxResult` extended with access fields. JSON codec supports both 1-param (latest block) and 2-param forms.
 
-#### H-006: State overrides for eth_call (EIP-3030)
+#### H-006: State overrides for eth_call (EIP-3030) — DONE
 - **Priority:** High | **Risk:** Medium
-- **Description:** No `StateOverride` type in codebase. `CallTx` has only: from, to, gas, gasPrice, value, data. State overrides allow simulating calls with modified balances, nonces, code, and storage. Used by: Tenderly, Foundry, Hardhat.
+- **Resolution:** Implemented `AccountStateOverride` type with balance/nonce/code/state/stateDiff fields. Modified `doCall()` to build world state and apply overrides before simulation. Updated eth_call and eth_estimateGas JSON decoders to accept optional third parameter (state override map). Matches go-ethereum `internal/ethapi/override.go` Apply() behavior. Full state replacement (`state`) and differential patching (`stateDiff`) both supported.
 
 #### H-007: SyncStateSchedulerActor parent recovery
 - **File:** `src/main/scala/.../sync/fast/SyncStateSchedulerActor.scala:478`
