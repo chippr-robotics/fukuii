@@ -17,7 +17,9 @@ import com.chipprbots.ethereum.rlp.UInt256RLPImplicits._
 import com.chipprbots.ethereum.utils.DebugTrace
 import com.chipprbots.ethereum.utils.Logger
 
-class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
+class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
+    val structLogTracer: Option[StructLogTracer] = None
+) extends Logger {
 
   type PC = ProgramContext[W, S]
   type PR = ProgramResult[W, S]
@@ -168,6 +170,7 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
     state.config.byteToOpCode.get(byte) match {
       case Some(opCode) =>
         val newState = opCode.execute(state)
+        structLogTracer.foreach(_.onStep(opCode, state, newState))
         import newState._
         log.trace(
           s"$opCode | pc: $pc | depth: ${env.callDepth} | gasUsed: ${state.gas - gas} | gas: $gas | stack: $stack"

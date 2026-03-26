@@ -586,6 +586,18 @@ trait TraceServiceBuilder {
   )
 }
 
+trait DebugTracingServiceBuilder {
+  self: BlockchainBuilder with BlockchainConfigBuilder with StorageBuilder with StxLedgerBuilder =>
+
+  lazy val debugTracingService = new com.chipprbots.ethereum.jsonrpc.DebugTracingService(
+    blockchain,
+    blockchainReader,
+    storagesInstance.storages.evmCodeStorage,
+    storagesInstance.storages.transactionMappingStorage,
+    stxLedger
+  )
+}
+
 trait PersonalServiceBuilder {
   self: KeyStoreBuilder
     with BlockchainBuilder
@@ -692,6 +704,7 @@ trait JSONRpcControllerBuilder {
     with TxPoolServiceBuilder
     with AdminServiceBuilder
     with TraceServiceBuilder
+    with DebugTracingServiceBuilder
     with FukuiiServiceBuilder
     with McpServiceBuilder =>
 
@@ -717,6 +730,7 @@ trait JSONRpcControllerBuilder {
       txPoolService,
       adminService,
       traceService,
+      debugTracingService,
       jsonRpcConfig
     )
 }
@@ -1017,6 +1031,7 @@ trait Node
     with TxPoolServiceBuilder
     with AdminServiceBuilder
     with TraceServiceBuilder
+    with DebugTracingServiceBuilder
     with FukuiiServiceBuilder
     with McpServiceBuilder
     with KeyStoreBuilder

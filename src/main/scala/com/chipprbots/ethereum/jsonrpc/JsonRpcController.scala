@@ -5,6 +5,7 @@ import cats.effect.IO
 import org.json4s.JsonDSL._
 
 import com.chipprbots.ethereum.jsonrpc.DebugService._
+import com.chipprbots.ethereum.jsonrpc.DebugTracingService._
 import com.chipprbots.ethereum.jsonrpc.EthBlocksService._
 import com.chipprbots.ethereum.jsonrpc.EthFilterService._
 import com.chipprbots.ethereum.jsonrpc.EthInfoService._
@@ -51,6 +52,7 @@ case class JsonRpcController(
     txPoolService: TxPoolService,
     adminService: AdminService,
     traceService: TraceService,
+    debugTracingService: DebugTracingService,
     override val config: JsonRpcConfig
 ) extends ApisBuilder
     with Logger
@@ -73,6 +75,7 @@ case class JsonRpcController(
   import TxPoolJsonMethodsImplicits._
   import AdminJsonMethodsImplicits._
   import TraceJsonMethodsImplicits._
+  import DebugTracingJsonMethodsImplicits._
 
   override def apisHandleFns: Map[String, PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]]] = Map(
     Apis.Eth -> handleEthRequest,
@@ -310,6 +313,16 @@ case class JsonRpcController(
       handle[SetVmoduleRequest, SetVmoduleResponse](debugService.setVmodule, req)
     case req @ JsonRpcRequest(_, "debug_getVerbosity", _, _) =>
       handle[GetVerbosityRequest, GetVerbosityResponse](debugService.getVerbosity, req)
+    case req @ JsonRpcRequest(_, "debug_traceTransaction", _, _) =>
+      handle[DebugTraceTransactionRequest, DebugTraceTransactionResponse](debugTracingService.traceTransaction, req)
+    case req @ JsonRpcRequest(_, "debug_traceCall", _, _) =>
+      handle[DebugTraceCallRequest, DebugTraceCallResponse](debugTracingService.traceCall, req)
+    case req @ JsonRpcRequest(_, "debug_traceBlock", _, _) =>
+      handle[DebugTraceBlockRequest, DebugTraceBlockResponse](debugTracingService.traceBlock, req)
+    case req @ JsonRpcRequest(_, "debug_traceBlockByHash", _, _) =>
+      handle[DebugTraceBlockByHashRequest, DebugTraceBlockResponse](debugTracingService.traceBlockByHash, req)
+    case req @ JsonRpcRequest(_, "debug_traceBlockByNumber", _, _) =>
+      handle[DebugTraceBlockByNumberRequest, DebugTraceBlockResponse](debugTracingService.traceBlockByNumber, req)
   }
 
   private def handleTestRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] =

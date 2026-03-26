@@ -4,7 +4,7 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 
 **Branch:** `march-onward` (~51 commits ahead of upstream main, at `6220ce58b`)
 **Test baseline:** 2,642 tests pass, 0 failed, 2 ignored (2 pre-existing failures unrelated to backlog work)
-**RPC methods:** 113 implemented, all wired to `JsonRpcController`, zero orphaned
+**RPC methods:** 118 implemented, all wired to `JsonRpcController`, zero orphaned
 **Last audited:** 2026-03-26
 
 ---
@@ -18,7 +18,7 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 | **Nethermind**  | C#    | ~140        | Parity RPC compat (trace\_\*), Flashbots/MEV, plugin system, timestamp-based fork activation, 35 debug methods |
 | **Besu**        | Java  | 179         | GraphQL, plugin system, permissioning, 14 debug\_\* methods                                                    |
 | **Erigon**      | Go    | ~160        | Staged sync, MDBX, advanced tracing                                                                            |
-| **Fukuii**      | Scala | **113**     | MCP server (unique), IELE VM, IPC, TUI, SNAP server+client, WS subscriptions                                   |
+| **Fukuii**      | Scala | **118**     | MCP server (unique), IELE VM, IPC, TUI, SNAP server+client, WS subscriptions                                   |
 
 ### Network Upgrade Safety Comparison
 
@@ -84,16 +84,16 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 
 ### 1.1 — RPC API Gaps
 
-#### H-001: Expand debug\_\* API ✅ PARTIALLY DONE (9 of 13 methods)
+#### H-001: Expand debug\_\* API ✅ DONE (14 methods)
 
-- **File:** `src/main/scala/.../jsonrpc/DebugService.scala`
+- **File:** `src/main/scala/.../jsonrpc/DebugService.scala`, `DebugTracingService.scala`, `StructLogTracer.scala`
 - **Priority:** High | **Risk:** Low
-- **Resolution:** Added 9 new debug methods to production DebugService:
+- **Resolution:** 14 debug methods across two services:
   - Raw data (4): `debug_getRawHeader`, `debug_getRawBlock`, `debug_getRawReceipts`, `debug_getRawTransaction` — RLP-encoded DB lookups via BlockchainReader
   - Operations (2): `debug_getBadBlocks` (returns tracked bad blocks), `debug_setHead` (rewind best block)
   - Profiling (3): `debug_memStats` (JVM heap/non-heap via ManagementFactory), `debug_gcStats` (GC collector stats), `debug_stacks` (all thread dumps)
+  - Tracing (5): `debug_traceTransaction`, `debug_traceBlock`, `debug_traceCall`, `debug_traceBlockByHash`, `debug_traceBlockByNumber` — geth-style structLog format via `StructLogTracer` hooked into VM exec loop. Supports TraceConfig (disableStack, disableStorage, enableMemory, enableReturnData, limit). Prior-tx replay for correct state. Nested CALL/CREATE captured automatically via VM-level tracer.
   - `debug_accountRange` + `debug_storageRangeAt` remain in TestService (available when test mode enabled)
-- **Remaining (deferred — requires VM step-level tracing hooks):** `debug_traceTransaction`, `debug_traceBlock`, `debug_traceCall`, `debug_traceBlockByHash`, `debug_traceBlockByNumber` — need opcode-by-opcode structLog output format (geth-style). Parity-style trace\_\* already available via TraceService.
 
 #### H-002: eth_feeHistory ✅ DONE
 

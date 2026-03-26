@@ -154,6 +154,7 @@ class QaJRCSpec
         mock[TxPoolService],
         null.asInstanceOf[AdminService],
         null.asInstanceOf[TraceService],
+        mock[DebugTracingService],
         config
       )
 
