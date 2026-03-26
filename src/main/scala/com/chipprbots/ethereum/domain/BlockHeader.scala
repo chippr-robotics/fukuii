@@ -126,7 +126,6 @@ object BlockHeader {
 object BlockHeaderImplicits {
 
   import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-  import com.chipprbots.ethereum.rlp.RLPImplicits._
   import com.chipprbots.ethereum.rlp.RLPValue
   import com.chipprbots.ethereum.utils.ByteUtils
 
@@ -183,83 +182,46 @@ object BlockHeaderImplicits {
   }
 
   implicit class BlockHeaderDec(val rlpEncodeable: RLPEncodeable) extends AnyVal {
+    // Fork-agnostic RLP decoder: decode mandatory fields by position, then detect optional
+    // fields by list length. This matches the universal pattern used by go-ethereum, besu,
+    // erigon, nethermind, and core-geth — decoding is separated from fork validation.
     def toBlockHeader: BlockHeader =
       rlpEncodeable match {
-        case RLPList(
-              parentHash,
-              ommersHash,
-              beneficiary,
-              stateRoot,
-              transactionsRoot,
-              receiptsRoot,
-              logsBloom,
-              difficulty,
-              number,
-              gasLimit,
-              gasUsed,
-              unixTimestamp,
-              extraData,
-              mixHash,
-              nonce,
-              encodedBaseFee
-            ) =>
-          val extraFields = HefPostOlympia(bigIntFromEncodeable(encodedBaseFee))
-          BlockHeader(
-            byteStringFromEncodeable(parentHash),
-            byteStringFromEncodeable(ommersHash),
-            byteStringFromEncodeable(beneficiary),
-            byteStringFromEncodeable(stateRoot),
-            byteStringFromEncodeable(transactionsRoot),
-            byteStringFromEncodeable(receiptsRoot),
-            byteStringFromEncodeable(logsBloom),
-            bigIntFromEncodeable(difficulty),
-            bigIntFromEncodeable(number),
-            bigIntFromEncodeable(gasLimit),
-            bigIntFromEncodeable(gasUsed),
-            longFromEncodeable(unixTimestamp),
-            byteStringFromEncodeable(extraData),
-            byteStringFromEncodeable(mixHash),
-            byteStringFromEncodeable(nonce),
-            extraFields
-          )
+        case rlpList: RLPList =>
+          val items = rlpList.items
+          if (items.length < 15)
+            throw new Exception(s"BlockHeader cannot be decoded: expected at least 15 fields, got ${items.length}")
 
-        case RLPList(
-              parentHash,
-              ommersHash,
-              beneficiary,
-              stateRoot,
-              transactionsRoot,
-              receiptsRoot,
-              logsBloom,
-              difficulty,
-              number,
-              gasLimit,
-              gasUsed,
-              unixTimestamp,
-              extraData,
-              mixHash,
-              nonce
-            ) =>
+          // 15 mandatory fields (positions 0-14)
+          val parentHash = byteStringFromEncodeable(items(0))
+          val ommersHash = byteStringFromEncodeable(items(1))
+          val beneficiary = byteStringFromEncodeable(items(2))
+          val stateRoot = byteStringFromEncodeable(items(3))
+          val transactionsRoot = byteStringFromEncodeable(items(4))
+          val receiptsRoot = byteStringFromEncodeable(items(5))
+          val logsBloom = byteStringFromEncodeable(items(6))
+          val difficulty = bigIntFromEncodeable(items(7))
+          val number = bigIntFromEncodeable(items(8))
+          val gasLimit = bigIntFromEncodeable(items(9))
+          val gasUsed = bigIntFromEncodeable(items(10))
+          val unixTimestamp = longFromEncodeable(items(11))
+          val extraData = byteStringFromEncodeable(items(12))
+          val mixHash = byteStringFromEncodeable(items(13))
+          val nonce = byteStringFromEncodeable(items(14))
+
+          // Optional field at position 15: baseFee (EIP-1559 / Olympia)
+          val extraFields: HeaderExtraFields =
+            if (items.length > 15) HefPostOlympia(bigIntFromEncodeable(items(15)))
+            else HefEmpty
+
           BlockHeader(
-            byteStringFromEncodeable(parentHash),
-            byteStringFromEncodeable(ommersHash),
-            byteStringFromEncodeable(beneficiary),
-            byteStringFromEncodeable(stateRoot),
-            byteStringFromEncodeable(transactionsRoot),
-            byteStringFromEncodeable(receiptsRoot),
-            byteStringFromEncodeable(logsBloom),
-            bigIntFromEncodeable(difficulty),
-            bigIntFromEncodeable(number),
-            bigIntFromEncodeable(gasLimit),
-            bigIntFromEncodeable(gasUsed),
-            longFromEncodeable(unixTimestamp),
-            byteStringFromEncodeable(extraData),
-            byteStringFromEncodeable(mixHash),
-            byteStringFromEncodeable(nonce)
+            parentHash, ommersHash, beneficiary, stateRoot, transactionsRoot,
+            receiptsRoot, logsBloom, difficulty, number, gasLimit, gasUsed,
+            unixTimestamp, extraData, mixHash, nonce, extraFields
           )
 
         case _ =>
-          throw new Exception("BlockHeader cannot be decoded")
+          throw new Exception("BlockHeader cannot be decoded: not an RLPList")
       }
   }
 }

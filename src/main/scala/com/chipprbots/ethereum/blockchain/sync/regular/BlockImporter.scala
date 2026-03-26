@@ -392,9 +392,18 @@ class BlockImporter(
   }
 
   private def start(): Unit = {
-    log.info("Starting Regular Sync, current best block is {}", bestKnownBlockNumber)
-    fetcher ! BlockFetcher.Start(self, bestKnownBlockNumber)
-    supervisor ! ProgressProtocol.StartingFrom(bestKnownBlockNumber)
+    val bestBlock = bestKnownBlockNumber
+    Option(blockchainReader.getBlockHeaderByNumber(bestBlock)).flatten match {
+      case Some(header) =>
+        log.info("Starting Regular Sync from block {} (hash={})", bestBlock,
+          ByteStringUtils.hash2string(header.hash))
+      case None =>
+        log.warning(
+          "Starting Regular Sync from block {} but no stored header found — " +
+            "SNAP sync may not have completed cleanly", bestBlock)
+    }
+    fetcher ! BlockFetcher.Start(self, bestBlock)
+    supervisor ! ProgressProtocol.StartingFrom(bestBlock)
     context.become(running(ImporterState.initial))
   }
 
@@ -522,7 +531,19 @@ class BlockImporter(
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
               case _ =>
                 val invalidBlockNr = notImportedBlocks.head.number
-                fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
+                val errStr = err.toString
+                // Detect fork-incompatible blocks: header validation errors that indicate the peer
+                // is on a different fork (e.g., missing baseFee after Olympia activation, or baseFee
+                // present before activation). These won't resolve by retrying the same peer.
+                val isForkIncompatible = errStr.contains("HeaderExtraFieldsError") ||
+                  errStr.contains("HeaderBaseFeeError")
+                if (isForkIncompatible) {
+                  log.warning(
+                    "Fork-incompatible block {} rejected: {}. Peer may not support the current fork rules.",
+                    invalidBlockNr, errStr
+                  )
+                }
+                fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, errStr)
                 Running
             }
         }
@@ -679,10 +700,23 @@ class BlockImporter(
       case UnknownBranch =>
         val currentBlock = blocks.head.number.min(bestKnownBlockNumber)
         val goingBackTo = (currentBlock - syncConfig.branchResolutionRequestSize).max(0)
-        val msg = s"Unknown branch, going back to block nr $goingBackTo in order to resolve branches"
-        log.warning(msg)
-        fetcher ! BlockFetcher.InvalidateBlocksFrom(goingBackTo, msg, shouldBlacklist = false)
-        Left(goingBackTo)
+        // After SNAP sync, only the pivot block (and a few surrounding blocks) are stored.
+        // Walking back below the pivot enters a gap with no stored blocks, causing infinite
+        // walk-back. Detect this: best block has a header but walk-back target does not.
+        val bestHasHeader = Option(blockchainReader.getBlockHeaderByNumber(bestKnownBlockNumber)).flatten.isDefined
+        val targetHasHeader = Option(blockchainReader.getBlockHeaderByNumber(goingBackTo)).flatten.isDefined
+        if (bestHasHeader && !targetHasHeader && goingBackTo > 0) {
+          val msg = s"Unknown branch at block ${blocks.head.number}, walk-back target $goingBackTo has no stored header " +
+            s"(SNAP sync gap). Resetting to best block $bestKnownBlockNumber."
+          log.warning(msg)
+          fetcher ! BlockFetcher.InvalidateBlocksFrom(bestKnownBlockNumber, msg)
+          Right(Nil)
+        } else {
+          val msg = s"Unknown branch, going back to block nr $goingBackTo in order to resolve branches"
+          log.warning(msg)
+          fetcher ! BlockFetcher.InvalidateBlocksFrom(goingBackTo, msg, shouldBlacklist = false)
+          Left(goingBackTo)
+        }
       case InvalidBranch =>
         val goingBackTo = blocks.head.number
         val msg = s"Invalid branch, going back to $goingBackTo"
