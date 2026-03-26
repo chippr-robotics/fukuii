@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
 import com.chipprbots.ethereum.nodebuilder.tooling.PeriodicConsistencyCheck
 import com.chipprbots.ethereum.nodebuilder.tooling.StorageConsistencyChecker
 import com.chipprbots.ethereum.utils.Config
+import com.chipprbots.ethereum.utils.ConfigValidator
 import com.chipprbots.ethereum.utils.Hex
 
 /** A standard node is everything Ethereum prescribes except the mining algorithm, which is plugged in dynamically.
@@ -38,6 +39,8 @@ abstract class BaseNode extends Node {
   private var tuiUpdater: Option[TuiUpdater] = None
 
   def start(): Unit = {
+    ConfigValidator.validate()
+
     startMetricsClient()
 
     fixDatabase()

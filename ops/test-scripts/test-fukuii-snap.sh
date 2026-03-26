@@ -5,7 +5,7 @@
 set -euo pipefail
 
 FUKUII_DIR="${FUKUII_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
-DATADIR="${DATADIR:-$HOME/.fukuii/mordor-snap}"
+DATADIR="${DATADIR:-$HOME/.fukuii/mordor}"
 JAR="$FUKUII_DIR/target/scala-3.3.4/fukuii-assembly-0.1.240.jar"
 
 if [ ! -f "$JAR" ]; then

@@ -96,7 +96,7 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
             case reqSeq =>
               complete {
                 reqSeq.toList
-                  .traverse(request => jsonRpcController.handleRequest(request))
+                  .parTraverse(request => jsonRpcController.handleRequest(request))
                   .unsafeToFuture()
               }
           }

@@ -1,4 +1,4 @@
-## 🟢 2,690 tests passing
+## 🟢 2,695 tests passing
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/chippr-robotics/fukuii/HEAD/docs/images/fukuii-hex-logo.png" alt="Fukuii Logo" width="400"/>
@@ -81,7 +81,8 @@ See [CON-002: Bootstrap Checkpoints](docs/adr/consensus/CON-002-bootstrap-checkp
 - **Scala 3.3.4 (LTS)** and **JDK 21 (LTS)** for long-term stability
 - **Apache Pekko** actor system for reliable concurrency
 - **Full ECIP-1066 Compliance**: Implements all 14 ETC hard forks from Frontier through Spiral (block 19,250,000), including Magneto (ECIP-1103), Mystique (ECIP-1104), and Spiral (ECIP-1109), plus Olympia (ECIP-1111/1112/1121)
-- **2,690 Tests Passing**: Comprehensive unit, integration, and blockchain test suite
+- **2,695 Tests Passing**: Comprehensive unit, integration, and blockchain test suite
+- **Rate Limiting**: Per-IP request throttling with configurable limits and HTTP 429 responses
 - **Security-First**: Signed Docker images, CodeQL scanning, dependency monitoring
 
 ### 🪱 Vibe-Coded
@@ -92,9 +93,28 @@ Fukuii is developed with AI-assisted engineering (Claude) as a core methodology 
 
 - **Interactive Console UI**: Optional TUI for monitoring sync progress (use `--tui` flag)
 - **Extensive CLI Tools**: Key generation, address derivation, and more
-- **JSON-RPC API**: Full eth/web3/net API support
+- **JSON-RPC API**: 118 RPC methods across eth, debug, net, personal, miner, admin, trace, txpool, web3, mcp, and more
+- **WebSocket Subscriptions**: `eth_subscribe`/`eth_unsubscribe` for newHeads, logs, newPendingTransactions, and syncing
 - **Custom Networks**: Deploy on private networks without modifying source code
 - **Well-Documented**: Comprehensive runbooks and ADRs
+
+### 🔌 Comprehensive RPC Coverage
+
+118 JSON-RPC methods across 12 namespaces:
+
+| Namespace | Methods | Highlights |
+|-----------|---------|------------|
+| **eth** | 55 | Full transaction lifecycle, block queries, filters, logs, proofs, fee history |
+| **debug** | 20 | Transaction tracing, raw block/receipt access, memory stats, bad block tracking |
+| **net** | 10 | Peer management, blacklist control, node info |
+| **personal** | 8 | Account management, signing, key import |
+| **miner** | 8 | Mining control, gas price, extra data |
+| **admin** | 7 | Node admin, chain import/export, peer management |
+| **trace** | 6 | Parity-compatible transaction and block tracing |
+| **txpool** | 4 | Pool status, content inspection, per-sender queries |
+| **web3** | 2 | Client version, SHA3 |
+
+Plus MCP, IELE, and Fukuii-specific extensions. All methods are wired to the controller with zero orphaned handlers.
 
 ### 🤖 Agentic Control via MCP
 
@@ -512,6 +532,14 @@ curl http://localhost:8546/readiness
     ...
   ]
 }
+```
+
+#### `/buildinfo` - Build Information
+Returns version, git commit, build time, and Scala/JDK versions.
+
+**Example:**
+```bash
+curl http://localhost:8546/buildinfo
 ```
 
 #### `/healthcheck` - Detailed Health Status

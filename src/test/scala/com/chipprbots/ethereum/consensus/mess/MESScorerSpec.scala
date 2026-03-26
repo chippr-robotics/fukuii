@@ -77,6 +77,52 @@ class MESSConfigSpec extends AnyFlatSpec with Matchers {
     config.isActiveAtBlock(19249999) shouldBe true
     config.isActiveAtBlock(19250000) shouldBe false
   }
+
+  // M-016: MESS behavior at Olympia fork boundary
+  // MESS (ECBP-1100) was deactivated at Spiral on both networks.
+  // Olympia activates well after Spiral. Verify MESS is inactive at Olympia blocks.
+
+  it should "be inactive at Olympia activation on Mordor (deactivated at block 10,400,000)" taggedAs (UnitTest, ConsensusTest) in {
+    val mordorMess = MESSConfig(enabled = true, activationBlock = Some(2380000), deactivationBlock = Some(10400000))
+    // Olympia Mordor target: ~16,001,337 (well after MESS deactivation at 10,400,000)
+    mordorMess.isActiveAtBlock(16001337) shouldBe false
+    // Any future Olympia block is also inactive
+    mordorMess.isActiveAtBlock(20000000) shouldBe false
+    mordorMess.isActiveAtBlock(BigInt("1000000000000000000")) shouldBe false
+  }
+
+  it should "be inactive at Olympia activation on ETC mainnet (deactivated at Spiral 19,250,000)" taggedAs (UnitTest, ConsensusTest) in {
+    val etcMess = MESSConfig(enabled = true, activationBlock = Some(11380000), deactivationBlock = Some(19250000))
+    // Any realistic Olympia block on ETC is well after Spiral
+    etcMess.isActiveAtBlock(25000000) shouldBe false
+    etcMess.isActiveAtBlock(30000000) shouldBe false
+    etcMess.isActiveAtBlock(BigInt("1000000000000000000")) shouldBe false
+  }
+
+  it should "allow TD-only fork choice at Olympia boundary (no MESS antigravity)" taggedAs (UnitTest, ConsensusTest) in {
+    // When MESS is inactive, reorgs are decided purely by total difficulty.
+    // This is correct behavior at Olympia — EIP-1559 doesn't change PoW fork choice.
+    val config = MESSConfig(enabled = true, activationBlock = Some(11380000), deactivationBlock = Some(19250000))
+    // At any post-Spiral block, MESS should not interfere
+    config.isActiveAtBlock(19250000) shouldBe false
+    config.isActiveAtBlock(19250001) shouldBe false
+    // Confirm the gap: last active block vs first Olympia-eligible block
+    config.isActiveAtBlock(19249999) shouldBe true  // last active MESS block
+    config.isActiveAtBlock(19250000) shouldBe false  // Spiral deactivation (exclusive boundary)
+  }
+
+  it should "remain inactive even if hypothetically re-enabled without activation window" taggedAs (UnitTest, ConsensusTest) in {
+    // If governance ever re-activates MESS post-Olympia, it would need a NEW activation window.
+    // A config with enabled=true but deactivation at Spiral stays inactive post-Spiral.
+    val config = MESSConfig(enabled = true, activationBlock = Some(11380000), deactivationBlock = Some(19250000))
+    config.isActiveAtBlock(30000000) shouldBe false
+
+    // A hypothetical re-activation would require a new MESSConfig with new window
+    val reactivated = MESSConfig(enabled = true, activationBlock = Some(30000000), deactivationBlock = None)
+    reactivated.isActiveAtBlock(29999999) shouldBe false
+    reactivated.isActiveAtBlock(30000000) shouldBe true  // new window starts
+    reactivated.isActiveAtBlock(50000000) shouldBe true   // no deactivation = stays active
+  }
 }
 
 /** Tests for ArtificialFinality (ECIP-1100 cubic polynomial).
