@@ -33,7 +33,10 @@ abstract class BlockGeneratorSkeleton(
     _blockTimestampProvider: BlockTimestampProvider = DefaultBlockTimestampProvider
 ) extends TestBlockGenerator {
 
-  protected val headerExtraData = miningConfig.headerExtraData
+  private val headerExtraDataRef = new AtomicReference[ByteString](miningConfig.headerExtraData)
+  protected def headerExtraData: ByteString = headerExtraDataRef.get()
+
+  private val gasLimitTargetRef = new AtomicReference[BigInt](miningConfig.gasLimitTarget)
 
   protected val blockCacheSize = miningConfig.blockCacheSize
 
@@ -168,7 +171,7 @@ abstract class BlockGeneratorSkeleton(
     * OlympiaTargetingGasLimitCalculator.
     */
   protected def calculateGasLimit(parentGas: BigInt): BigInt = {
-    val target = miningConfig.gasLimitTarget
+    val target = gasLimitTargetRef.get()
     val delta = parentGas / BlockHeaderValidator.GasLimitBoundDivisor - 1
     if (parentGas < target) {
       val next = parentGas + delta
@@ -180,6 +183,14 @@ abstract class BlockGeneratorSkeleton(
       parentGas
     }
   }
+
+  /** Update the extra data included in mined block headers at runtime. */
+  def setHeaderExtraData(data: ByteString): Unit =
+    headerExtraDataRef.set(data.take(BlockHeaderValidator.MaxExtraDataSize))
+
+  /** Update the target gas limit for mined blocks at runtime. */
+  def setGasLimitTarget(target: BigInt): Unit =
+    gasLimitTargetRef.set(target)
 
   protected def buildMpt[K](entities: Seq[K], vSerializable: ByteArraySerializable[K]): ByteString = {
     val stateStorage = StateStorage.getReadOnlyStorage(EphemDataSource())

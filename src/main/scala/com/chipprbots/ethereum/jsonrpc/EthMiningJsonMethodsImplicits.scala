@@ -127,4 +127,52 @@ object EthMiningJsonMethodsImplicits extends JsonMethodsImplicits {
       override def encodeJson(t: SetRecommitIntervalResponse): JValue = JBool(t.success)
     }
 
+  implicit val miner_setMinGasPrice: JsonMethodDecoder[SetMinGasPriceRequest]
+    with JsonEncoder[SetMinGasPriceResponse] =
+    new JsonMethodDecoder[SetMinGasPriceRequest] with JsonEncoder[SetMinGasPriceResponse] {
+      override def decodeJson(
+          params: Option[JsonAST.JArray]
+      ): Either[JsonRpcError, SetMinGasPriceRequest] =
+        params match {
+          case Some(JArray(quantity :: Nil)) =>
+            extractQuantity(quantity).map(SetMinGasPriceRequest(_))
+          case _ =>
+            Left(InvalidParams())
+        }
+
+      override def encodeJson(t: SetMinGasPriceResponse): JValue = JBool(t.success)
+    }
+
+  implicit val miner_setExtraData: JsonMethodDecoder[SetExtraDataRequest]
+    with JsonEncoder[SetExtraDataResponse] =
+    new JsonMethodDecoder[SetExtraDataRequest] with JsonEncoder[SetExtraDataResponse] {
+      override def decodeJson(
+          params: Option[JsonAST.JArray]
+      ): Either[JsonRpcError, SetExtraDataRequest] =
+        params match {
+          case Some(JArray(JString(hexData) :: Nil)) =>
+            extractBytes(hexData).map(SetExtraDataRequest(_))
+          case _ =>
+            Left(InvalidParams())
+        }
+
+      override def encodeJson(t: SetExtraDataResponse): JValue = JBool(t.success)
+    }
+
+  implicit val miner_changeTargetGasLimit: JsonMethodDecoder[ChangeTargetGasLimitRequest]
+    with JsonEncoder[ChangeTargetGasLimitResponse] =
+    new JsonMethodDecoder[ChangeTargetGasLimitRequest] with JsonEncoder[ChangeTargetGasLimitResponse] {
+      override def decodeJson(
+          params: Option[JsonAST.JArray]
+      ): Either[JsonRpcError, ChangeTargetGasLimitRequest] =
+        params match {
+          case Some(JArray(quantity :: Nil)) =>
+            extractQuantity(quantity).map(ChangeTargetGasLimitRequest(_))
+          case _ =>
+            Left(InvalidParams())
+        }
+
+      override def encodeJson(t: ChangeTargetGasLimitResponse): JValue = JBool(t.success)
+    }
+
 }

@@ -24,6 +24,12 @@ trait PoWBlockGenerator extends TestBlockGenerator {
   def emptyX: Ommers
 
   def getPrepared(powHeaderHash: ByteString): Option[PendingBlock]
+
+  /** Update the extra data included in mined block headers at runtime. */
+  def setHeaderExtraData(data: ByteString): Unit
+
+  /** Update the target gas limit for mined blocks at runtime. */
+  def setGasLimitTarget(target: BigInt): Unit
 }
 
 class PoWBlockGeneratorImpl(

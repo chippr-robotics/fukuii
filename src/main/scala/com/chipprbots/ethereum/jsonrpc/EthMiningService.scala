@@ -74,6 +74,15 @@ object EthMiningService {
 
   case class SetRecommitIntervalRequest(intervalMs: Int)
   case class SetRecommitIntervalResponse(success: Boolean)
+
+  case class SetMinGasPriceRequest(minGasPrice: BigInt)
+  case class SetMinGasPriceResponse(success: Boolean)
+
+  case class SetExtraDataRequest(extraData: ByteString)
+  case class SetExtraDataResponse(success: Boolean)
+
+  case class ChangeTargetGasLimitRequest(targetGasLimit: BigInt)
+  case class ChangeTargetGasLimitResponse(success: Boolean)
 }
 
 class EthMiningService(
@@ -246,6 +255,40 @@ class EthMiningService(
       log.info("Updated miner coinbase via eth_setEtherbase to {}", request.address)
       SetEtherbaseResponse(success = true)
     }
+
+  /** Minimum gas price threshold for transaction selection during block creation.
+    * Transactions with gasPrice below this are excluded from mined blocks.
+    * Matches geth's miner.gasprice / miner_setGasPrice (pre-merge).
+    */
+  private val minGasPriceRef = new AtomicReference[BigInt](BigInt(0))
+
+  /** Get the current minimum gas price for mining. */
+  def getMinGasPrice: BigInt = minGasPriceRef.get()
+
+  def setMinGasPrice(req: SetMinGasPriceRequest): ServiceResponse[SetMinGasPriceResponse] =
+    ifEthash(req) { request =>
+      minGasPriceRef.set(request.minGasPrice)
+      log.info("Miner minimum gas price set to {} wei via RPC", request.minGasPrice)
+      SetMinGasPriceResponse(success = true)
+    }
+
+  def setExtraData(req: SetExtraDataRequest): ServiceResponse[SetExtraDataResponse] =
+    mining.ifEthash[ServiceResponse[SetExtraDataResponse]] { ethash =>
+      IO {
+        ethash.blockGenerator.setHeaderExtraData(req.extraData)
+        log.info("Miner extra data updated via RPC ({} bytes)", req.extraData.size)
+        Right(SetExtraDataResponse(success = true))
+      }
+    }(IO.pure(Left(JsonRpcError.MiningIsNotEthash)))
+
+  def changeTargetGasLimit(req: ChangeTargetGasLimitRequest): ServiceResponse[ChangeTargetGasLimitResponse] =
+    mining.ifEthash[ServiceResponse[ChangeTargetGasLimitResponse]] { ethash =>
+      IO {
+        ethash.blockGenerator.setGasLimitTarget(req.targetGasLimit)
+        log.info("Miner target gas limit changed to {} via RPC", req.targetGasLimit)
+        Right(ChangeTargetGasLimitResponse(success = true))
+      }
+    }(IO.pure(Left(JsonRpcError.MiningIsNotEthash)))
 
   /** Dynamically update the recommit interval. Matches geth's miner_setRecommitInterval. */
   def setRecommitInterval(req: SetRecommitIntervalRequest): ServiceResponse[SetRecommitIntervalResponse] =
