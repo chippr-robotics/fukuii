@@ -33,6 +33,14 @@ case class ConnectedPeers(
   def hasHandshakedWith(nodeId: ByteString): Boolean =
     handshakedPeersNodeIds.contains(nodeId)
 
+  /** Check if a node ID is already associated with a pending peer (outgoing or incoming).
+    * Used by CheckStaticPeers to prevent duplicate outbound connections when the same peer
+    * is already connecting inbound (with a different remoteAddress due to ephemeral ports).
+    */
+  def hasNodeIdPending(nodeId: ByteString): Boolean =
+    outgoingPendingPeers.values.exists(_.nodeId.contains(nodeId)) ||
+      incomingPendingPeers.values.exists(_.nodeId.contains(nodeId))
+
   def incomingPendingPeersCount: Int = incomingPendingPeers.size
   def outgoingPendingPeersCount: Int = outgoingPendingPeers.size
   def pendingPeersCount: Int = incomingPendingPeersCount + outgoingPendingPeersCount

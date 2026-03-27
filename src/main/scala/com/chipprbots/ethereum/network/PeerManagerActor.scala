@@ -165,12 +165,16 @@ class PeerManagerActor(
       staticNodes.foreach { uri =>
         val nodeId = ByteString(Hex.decode(uri.getUserInfo))
         val addr = new InetSocketAddress(uri.getHost, uri.getPort)
-        if (
-          !connectedPeers.hasHandshakedWith(nodeId) &&
-          !connectedPeers.isConnectionHandled(addr)
-        ) {
+        val handshaked = connectedPeers.hasHandshakedWith(nodeId)
+        val addrHandled = connectedPeers.isConnectionHandled(addr)
+        val nodeIdPending = connectedPeers.hasNodeIdPending(nodeId)
+        if (!handshaked && !addrHandled && !nodeIdPending) {
           log.info("Reconnecting to static peer {}:{}", uri.getHost, uri.getPort)
           self ! ConnectToPeer(uri)
+        } else if (log.isDebugEnabled) {
+          log.debug(
+            s"Static peer ${uri.getHost}:${uri.getPort} already connected (handshaked=$handshaked, addrHandled=$addrHandled, nodeIdPending=$nodeIdPending)"
+          )
         }
       }
 
@@ -349,7 +353,7 @@ class PeerManagerActor(
 
     validConnection match {
       case Right(address) =>
-        val (peer, newConnectedPeers) = createPeer(address, incomingConnection = false, connectedPeers, isStatic = isStaticNode(uri))
+        val (peer, newConnectedPeers) = createPeer(address, incomingConnection = false, connectedPeers, isStatic = isStaticNode(uri), targetNodeId = Some(nodeId))
         peer.ref ! PeerActor.ConnectTo(uri)
         context.become(listening(newConnectedPeers))
 
@@ -451,7 +455,8 @@ class PeerManagerActor(
       address: InetSocketAddress,
       incomingConnection: Boolean,
       connectedPeers: ConnectedPeers,
-      isStatic: Boolean = false
+      isStatic: Boolean = false,
+      targetNodeId: Option[ByteString] = None
   ): (Peer, ConnectedPeers) = {
     val ref = peerFactory(context, address, incomingConnection)
     context.watch(ref)
@@ -459,13 +464,16 @@ class PeerManagerActor(
     // The peerId is unknown for a pending peer, hence it is created from the PeerActor's path.
     // Upon successful handshake, the pending peer is updated with the actual peerId derived from
     // the Node's public key. See: ConnectedPeers#promotePeerToHandshaked
+    // For outgoing peers, targetNodeId is set from the enode URI so that CheckStaticPeers
+    // can detect duplicate connections even when the remote address differs (ephemeral ports).
     val pendingPeer =
       Peer(
         PeerId.fromRef(ref),
         address,
         ref,
         incomingConnection,
-        isStatic = isStatic
+        isStatic = isStatic,
+        nodeId = targetNodeId
       )
 
     peerStatusCache = peerStatusCache + (pendingPeer.id -> PeerActor.Status.Connecting)
