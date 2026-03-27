@@ -530,13 +530,14 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Priority:** Future | **Risk:** High
 - **Description:** Besu model: lifecycle hooks, RPC registration, storage plugins. Major architectural addition.
 
-#### F-004: ECIP-1121 research (#975)
+#### F-004: ECIP-1121 research (#975) ✅ DONE
 
 - **Priority:** Future | **Risk:** Low
+- **Status:** DONE — ECIP-1121 is fully implemented as part of the Olympia fork across all 3 clients (core-geth, Besu, Fukuii).
 
-#### F-005: ECIP-1120 research (#972)
+#### ~~F-005: ECIP-1120 research (#972)~~ REMOVED
 
-- **Priority:** Future | **Risk:** Low
+- **Status:** REMOVED — Not pursuing this ECIP.
 
 #### F-006: Release builder (#966) + GUI/web dashboard
 
@@ -615,7 +616,7 @@ H-015 (chain split) ── M-018 (hive — cross-client chain split)
 | Tier 1 (HIGH)       | 13     | debug expansion, fee market, access lists, state overrides, sync recovery, profiling, JWT, tx fork-gating, baseFee guards, SNAP finalization (H-014, H-015, H-016 DONE)                                                                    |
 | Tier 2 (MEDIUM)     | 20     | debug profiling, log verbosity, SNAP work-stealing, testing push, perf, SNAP reorg freshness, hive Olympia, MCP multi-LLM docs, go-ethereum pre-merge PoW review (M-007, M-016, M-017, M-021 DONE)                                          |
 | Tier 3 (LOW)        | 6      | networking polish, API docs, operator guide                                                                                                                                                                                                  |
-| Tier 4 (FUTURE)     | 6      | GraphQL, Stratum, plugin system, GUI, releases                                                                                                                                                                                               |
+| Tier 4 (FUTURE)     | 4      | GraphQL, Stratum, plugin system, GUI/releases (F-004 DONE via Olympia, F-005 removed)                                                                                                                                                        |
 | **Total remaining** | **39** | Was 53, minus C-003, C-004, M-007, M-010, M-011, M-016, M-017, M-019, M-021, M-024, H-014, H-015, H-016. M-013 BLOCKED (needs solc).                                                                                                            |
 
 ---
