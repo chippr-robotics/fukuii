@@ -398,8 +398,24 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Resolution:** Comprehensive comparison of Fukuii's PoW consensus against go-ethereum v1.10.26 (last pre-merge release). Report at `docs/reports/POW-CODEBASE-REVIEW.md`. Key findings:
   - **0 critical gaps** — Ethash, difficulty, rewards, uncle validation, header validation all match go-ethereum patterns
   - **Fukuii ahead in:** BadBlockTracker (128 vs 10 entries), ECBP-1100 MESS, typed actor mining, fork boundary test coverage (36 tests), transaction type fork-gating (H-010)
-  - **5 low-priority recommendations:** nonce range partitioning, bandwidth-weighted peer selection, emergency PoW halt mechanism, memory-mapped DAGs, mining hashrate Prometheus metrics
+  - **7 recommendations** (5 low, 1 medium, 1 added to High tier): nonce range partitioning, bandwidth-weighted peer selection, emergency PoW halt mechanism, memory-mapped DAGs, mining hashrate metrics, future block timestamp check (M-027), unclean shutdown recovery (H-017)
   - Recent H-010 through H-016 hardening pass closed all consensus safety gaps identified in the comparison
+
+#### M-027: Future block timestamp validation (PoW review R-006)
+
+- **File:** `src/main/scala/.../consensus/validators/BlockHeaderValidatorSkeleton.scala`
+- **Priority:** Medium | **Risk:** Low
+- **Description:** go-ethereum rejects non-uncle blocks where `timestamp > now + 15s` (wall-clock check). Fukuii only checks `timestamp > parentTimestamp` — no wall-clock bound. A malicious miner could create blocks with far-future timestamps to manipulate difficulty. In practice, other ETC clients reject these at propagation, so this is defense-in-depth.
+- **Fix:** Add `if (!isUncleBranch && blockHeader.unixTimestamp > Instant.now().getEpochSecond + 15) Left(HeaderTimestampError)` to `validateTimestamp()`. One-line addition.
+- **Source:** PoW review R-006, `docs/reports/POW-CODEBASE-REVIEW.md`
+
+#### H-017: Unclean shutdown recovery (PoW review R-007)
+
+- **File:** New file + `src/main/scala/.../StdNode.scala` or equivalent startup path
+- **Priority:** High | **Risk:** Medium (operational)
+- **Description:** go-ethereum writes periodic safe-block markers to LevelDB and rewinds chain head to the last marker on startup after unclean shutdown (OOM kill, power loss). Fukuii does not have this mechanism. After a crash, the chain head might point to a state root not fully committed to RocksDB, causing state inconsistencies. RocksDB WAL provides atomic single-key writes, but multi-key updates (block storage spans multiple column families) could be partially committed.
+- **Fix:** Write a `lastSafeBlock` marker to RocksDB every N blocks (e.g., 64) or M seconds (e.g., 30s). On startup, check if the last shutdown was clean (marker present + cleared on clean shutdown). If unclean, rewind `bestBlockNumber` to the marker and rebuild state from there.
+- **Source:** PoW review R-007, `docs/reports/POW-CODEBASE-REVIEW.md`
 
 ---
 
