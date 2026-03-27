@@ -208,6 +208,23 @@ class SyncController(
         startSnapSync()
       }
 
+    case FastSync.PivotRetriesExhausted =>
+      fastSync ! PoisonPill
+      log.warning("Fast sync pivot retries exhausted. Attempting SNAP sync fallback.")
+      snapFastCycleCount += 1
+      appStateStorage.putSnapFastCycleCount(snapFastCycleCount).commit()
+      log.info("SNAP<->Fast cycle count: {}", snapFastCycleCount)
+      if (!checkSnapFastEscapeHatch()) {
+        if (syncConfig.doSnapSync) {
+          startSnapSync()
+        } else {
+          log.warning("SNAP sync disabled in config. Escaping to regular sync.")
+          appStateStorage.fastSyncDone().commit()
+          fastSyncStateStorage.purge()
+          startRegularSync()
+        }
+      }
+
     case other => fastSync.forward(other)
   }
 

@@ -420,6 +420,19 @@ Comprehensive inventory of remaining work, verified against the codebase and com
   - 4 new tests (16 total in AppStateStorageSpec): clean/unclean flag, 64-block marker interval, empty state
 - **Source:** PoW review R-007, `docs/reports/POW-CODEBASE-REVIEW.md`
 
+#### H-018: Fast sync pivot selection deadlock — bounded retries + single-peer pivot ✅ DONE
+
+- **Files:** `sync.conf`, `Config.scala`, `FastSync.scala`, `SyncController.scala`
+- **Priority:** High | **Risk:** High (sync-critical)
+- **Status:** DONE — Fixed infinite retry loop in fast sync pivot selection:
+  - Lowered `min-peers-to-choose-pivot-block` from 3 to 1 (matches geth/Besu behavior)
+  - Lowered `peers-to-choose-pivot-block-margin` from 3 to 1
+  - Added `max-fast-sync-outer-pivot-retries = 10` config with bounded outer retry loop
+  - `PivotRetriesExhausted` message signals SyncController to try SNAP sync or escape to regular sync
+  - Existing `checkSnapFastEscapeHatch()` (3 transitions) still applies as final safety net
+- **Root cause:** After SNAP→Fast fallback, PivotBlockSelector required 3 peers for consensus but only 1-2 were available. Inner selector failed after 20 attempts → FastSync created new selector → repeat forever at 5-min intervals with no upper bound.
+- **Reference clients:** geth and Besu both use 1 peer for pivot selection. Besu has explicit 50-retry budget.
+
 ---
 
 ## Tier 3: LOW — Polish

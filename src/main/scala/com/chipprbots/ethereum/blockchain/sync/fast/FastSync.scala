@@ -131,14 +131,25 @@ class FastSync(
       )
       pivotBlockSelector ! PivotBlockSelector.SelectPivotBlock
     case PivotBlockSelector.SelectionFailed =>
-      val retryDelay = BackoffRetry.delay(pivotBackoffAttempt, startRetryInterval, 5.minutes)
       pivotBackoffAttempt += 1
-      log.warning(
-        "Pivot block selection failed after maximum attempts. Retrying in {} (attempt {})",
-        retryDelay,
-        pivotBackoffAttempt
-      )
-      scheduler.scheduleOnce(retryDelay, self, RetryPivotBlockSelection)
+      if (pivotBackoffAttempt >= syncConfig.maxFastSyncOuterPivotRetries) {
+        log.warning(
+          "Fast sync pivot selection exhausted {} outer retries. Signaling fallback.",
+          pivotBackoffAttempt
+        )
+        pivotBackoffAttempt = 0
+        context.become(idle)
+        syncController ! PivotRetriesExhausted
+      } else {
+        val retryDelay = BackoffRetry.delay(pivotBackoffAttempt, startRetryInterval, 5.minutes)
+        log.warning(
+          "Pivot block selection failed. Retrying in {} (outer attempt {}/{})",
+          retryDelay,
+          pivotBackoffAttempt,
+          syncConfig.maxFastSyncOuterPivotRetries
+        )
+        scheduler.scheduleOnce(retryDelay, self, RetryPivotBlockSelection)
+      }
     case PivotBlockSelector.Result(pivotBlockHeader) =>
       pivotBackoffAttempt = 0
       if (pivotBlockHeader.number < 1) {
@@ -1282,6 +1293,7 @@ object FastSync {
 
   case object Done
   case object FallbackToSnapSync
+  case object PivotRetriesExhausted
 
   sealed abstract class HeaderProcessingResult
   case object HeadersProcessingFinished extends HeaderProcessingResult

@@ -179,6 +179,7 @@ object Config {
       maxRetryDelay: FiniteDuration,
       maxBodyFetchRetries: Int,
       maxSnapFastCycleTransitions: Int,
+      maxFastSyncOuterPivotRetries: Int,
       useBootstrapCheckpoints: Boolean,
       bootstrapCheckpoints: Seq[(BigInt, String)], // (blockNumber, blockHash)
       snapServerEnabled: Boolean
@@ -253,6 +254,10 @@ object Config {
           if (syncConfig.hasPath("max-snap-fast-cycle-transitions"))
             syncConfig.getInt("max-snap-fast-cycle-transitions")
           else 3,
+        maxFastSyncOuterPivotRetries =
+          if (syncConfig.hasPath("max-fast-sync-outer-pivot-retries"))
+            syncConfig.getInt("max-fast-sync-outer-pivot-retries")
+          else 10,
         useBootstrapCheckpoints =
           if (syncConfig.hasPath("use-bootstrap-checkpoints"))
             syncConfig.getBoolean("use-bootstrap-checkpoints")

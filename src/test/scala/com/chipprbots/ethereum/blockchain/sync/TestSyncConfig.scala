@@ -54,6 +54,7 @@ trait TestSyncConfig extends SyncConfigBuilder {
     maxRetryDelay = 30.seconds,
     maxBodyFetchRetries = 10,
     maxSnapFastCycleTransitions = 3,
+    maxFastSyncOuterPivotRetries = 10,
     useBootstrapCheckpoints = false,
     bootstrapCheckpoints = Seq.empty,
     snapServerEnabled = false
