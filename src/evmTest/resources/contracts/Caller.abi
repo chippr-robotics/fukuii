@@ -1,0 +1,1 @@
+[{"constant":false,"inputs":[{"internalType":"address","name":"calleeAddr","type":"address"},{"internalType":"uint256","name":"fooVal","type":"uint256"}],"name":"makeACall","outputs":[],"payable":false,"stateMutability":"nonpayable","type":"function"}]

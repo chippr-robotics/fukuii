@@ -265,7 +265,8 @@ lazy val node = {
     ).flatten ++ malletDeps
   }
 
-  (Evm / test) := (Evm / test).dependsOn(solidityCompile).value
+  // Pre-compiled contracts in src/evmTest/resources/contracts/ — no solc required
+  // (Evm / test) := (Evm / test).dependsOn(solidityCompile).value
   (Evm / sourceDirectory) := baseDirectory.value / "src" / "evmTest"
 
   val node = project
@@ -325,7 +326,12 @@ lazy val node = {
       ): _*
     )
     .settings(inConfig(Benchmark)(Defaults.testSettings :+ (Test / parallelExecution := true)): _*)
-    .settings(inConfig(Evm)(Defaults.testSettings :+ (Test / parallelExecution := true)): _*)
+    .settings(inConfig(Evm)(Defaults.testSettings ++ Seq(
+      Test / parallelExecution := true,
+      sourceDirectory := baseDirectory.value / "src" / "evmTest",
+      scalaSource := baseDirectory.value / "src" / "evmTest" / "scala",
+      resourceDirectory := baseDirectory.value / "src" / "evmTest" / "resources"
+    )): _*)
     .settings(inConfig(Rpc)(Defaults.testSettings :+ (Test / parallelExecution := true)): _*)
     .settings(
       // protobuf compilation

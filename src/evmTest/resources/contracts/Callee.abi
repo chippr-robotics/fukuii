@@ -1,0 +1,1 @@
+[{"constant":true,"inputs":[],"name":"getFoo","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"payable":false,"stateMutability":"view","type":"function"},{"constant":false,"inputs":[{"internalType":"uint256","name":"v","type":"uint256"}],"name":"setFoo","outputs":[],"payable":false,"stateMutability":"nonpayable","type":"function"}]

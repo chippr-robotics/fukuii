@@ -13,7 +13,7 @@ import scala.language.dynamics
 import scala.util.Random
 
 object EvmTestEnv {
-  val ContractsDir = new File("target/contracts")
+  val ContractsDir = new File("src/evmTest/resources/contracts")
 }
 
 // scalastyle:off magic.number
