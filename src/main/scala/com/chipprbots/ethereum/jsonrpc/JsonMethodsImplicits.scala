@@ -132,9 +132,11 @@ trait JsonMethodsImplicits {
 
   protected def extractBlockParam(input: JValue): Either[JsonRpcError, BlockParam] =
     input match {
-      case JString("earliest") => Right(BlockParam.Earliest)
-      case JString("latest")   => Right(BlockParam.Latest)
-      case JString("pending")  => Right(BlockParam.Pending)
+      case JString("earliest")  => Right(BlockParam.Earliest)
+      case JString("latest")    => Right(BlockParam.Latest)
+      case JString("pending")   => Right(BlockParam.Pending)
+      case JString("safe")      => Right(BlockParam.Safe)
+      case JString("finalized") => Right(BlockParam.Finalized)
       case other =>
         extractQuantity(other)
           .map(BlockParam.WithNumber.apply)

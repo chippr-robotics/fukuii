@@ -301,14 +301,10 @@ class DebugTracingService(
     }
 
   private def resolveBlock(blockParam: BlockParam): Option[Block] = blockParam match {
-    case BlockParam.WithNumber(n) =>
-      blockchainReader.getBlockHeaderByNumber(n).flatMap(h => blockchainReader.getBlockByHash(h.hash))
-    case BlockParam.Latest =>
-      val best = blockchainReader.getBestBlockNumber()
-      blockchainReader.getBlockHeaderByNumber(best).flatMap(h => blockchainReader.getBlockByHash(h.hash))
-    case BlockParam.Earliest =>
-      blockchainReader.getBlockHeaderByNumber(0).flatMap(h => blockchainReader.getBlockByHash(h.hash))
     case BlockParam.Pending => None
+    case other =>
+      val n = BlockParam.resolveNumber(other, blockchainReader.getBestBlockNumber())
+      blockchainReader.getBlockHeaderByNumber(n).flatMap(h => blockchainReader.getBlockByHash(h.hash))
   }
 
   private def buildInitialWorld(block: Block): InMemoryWorldStateProxy =

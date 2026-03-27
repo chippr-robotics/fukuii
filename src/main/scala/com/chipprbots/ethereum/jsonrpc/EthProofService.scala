@@ -223,20 +223,15 @@ class EthProofService(
         .getBlockByNumber(blockchainReader.getBestBranch(), number)
         .toRight(JsonRpcError.InvalidParams(s"Block $number not found"))
 
-    def getLatestBlock(): Either[JsonRpcError, Block] =
-      blockchainReader
-        .getBestBlock()
-        .toRight(JsonRpcError.InvalidParams("Latest block not found"))
-
     blockParam match {
-      case BlockParam.WithNumber(blockNumber) => getBlock(blockNumber).map(ResolvedBlock(_, pendingState = None))
-      case BlockParam.Earliest                => getBlock(0).map(ResolvedBlock(_, pendingState = None))
-      case BlockParam.Latest                  => getLatestBlock().map(ResolvedBlock(_, pendingState = None))
       case BlockParam.Pending =>
         blockGenerator.getPendingBlockAndState
           .map(pb => ResolvedBlock(pb.pendingBlock.block, pendingState = Some(pb.worldState)))
           .map(Right.apply)
           .getOrElse(resolveBlock(BlockParam.Latest)) // Default behavior in other clients
+      case other =>
+        val n = BlockParam.resolveNumber(other, blockchainReader.getBestBlockNumber())
+        getBlock(n).map(ResolvedBlock(_, pendingState = None))
     }
   }
 }

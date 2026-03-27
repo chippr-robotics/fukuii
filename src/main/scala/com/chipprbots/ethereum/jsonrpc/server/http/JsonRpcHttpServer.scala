@@ -90,14 +90,13 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
                 handleRequest(jsonReq)
               }
             // Optimization: single+batch requests share JSON parsing path
-          } ~ entity(as[Seq[JsonRpcRequest]]) {
-            case _ if config.rateLimit.enabled =>
-              complete(StatusCodes.MethodNotAllowed, JsonRpcError.MethodNotFound)
-            case reqSeq =>
-              complete {
-                reqSeq.toList
-                  .parTraverse(request => jsonRpcController.handleRequest(request))
-                  .unsafeToFuture()
+          } ~ entity(as[Seq[JsonRpcRequest]]) { reqSeq =>
+              rateLimit {
+                complete {
+                  reqSeq.toList
+                    .parTraverse(request => jsonRpcController.handleRequest(request))
+                    .unsafeToFuture()
+                }
               }
           }
         }

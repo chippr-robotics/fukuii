@@ -96,6 +96,7 @@ object EthFilterJsonMethodsImplicits extends JsonMethodsImplicits {
       override def encodeJson(t: GetFilterLogsResponse): JValue =
         t.filterLogs match {
           case LogFilterLogs(logs)                    => JArray(logs.map(encodeTxLog).toList)
+          case FilterManager.LogFilterError(_)        => JArray(Nil) // error handled upstream
           case BlockFilterLogs(blockHashes)           => JArray(blockHashes.map(encodeAsHex).toList)
           case PendingTransactionFilterLogs(txHashes) => JArray(txHashes.map(encodeAsHex).toList)
         }

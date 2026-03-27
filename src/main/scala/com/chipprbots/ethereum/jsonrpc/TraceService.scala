@@ -149,14 +149,10 @@ class TraceService(
   }
 
   private def resolveBlock(blockParam: BlockParam): Option[Block] = blockParam match {
-    case BlockParam.WithNumber(n) =>
-      blockchainReader.getBlockHeaderByNumber(n).flatMap(h => blockchainReader.getBlockByHash(h.hash))
-    case BlockParam.Latest =>
-      val best = blockchainReader.getBestBlockNumber()
-      blockchainReader.getBlockHeaderByNumber(best).flatMap(h => blockchainReader.getBlockByHash(h.hash))
-    case BlockParam.Earliest =>
-      blockchainReader.getBlockHeaderByNumber(0).flatMap(h => blockchainReader.getBlockByHash(h.hash))
     case BlockParam.Pending => None
+    case other =>
+      val n = BlockParam.resolveNumber(other, blockchainReader.getBestBlockNumber())
+      blockchainReader.getBlockHeaderByNumber(n).flatMap(h => blockchainReader.getBlockByHash(h.hash))
   }
 
   private def findTransactionBlock(txHash: ByteString): Option[(Block, Int)] =
@@ -423,9 +419,7 @@ class TraceService(
   }
 
   private def resolveBlockNumber(blockParam: BlockParam): Option[BigInt] = blockParam match {
-    case BlockParam.WithNumber(n) => Some(n)
-    case BlockParam.Latest        => Some(blockchainReader.getBestBlockNumber())
-    case BlockParam.Earliest      => Some(BigInt(0))
-    case BlockParam.Pending       => None
+    case BlockParam.Pending => None
+    case other              => Some(BlockParam.resolveNumber(other, blockchainReader.getBestBlockNumber()))
   }
 }

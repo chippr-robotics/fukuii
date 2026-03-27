@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.keystore.KeyStore
 import com.chipprbots.ethereum.ledger.BloomFilter
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransaction
+import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.FilterConfig
 import com.chipprbots.ethereum.utils.TxPoolConfig
 
@@ -38,6 +39,11 @@ class FilterManager(
   import FilterManager._
   import org.apache.pekko.pattern.pipe
   import context.system
+
+  private lazy val maxLogRange: BigInt = {
+    val c = Config.config
+    if (c.hasPath("network.rpc.max-log-range")) c.getInt("network.rpc.max-log-range") else 10000
+  }
 
   def scheduler: Scheduler = externalSchedulerOpt.getOrElse(system.scheduler)
   implicit private val executionContext: ExecutionContext = system.dispatcher
@@ -66,7 +72,16 @@ class FilterManager(
     case FilterTimeout(id)           => uninstallFilter(id)
     case gl: GetLogs =>
       val filter = LogFilter(0, gl.fromBlock, gl.toBlock, gl.address, gl.topics)
-      sender() ! LogFilterLogs(getLogs(filter, None))
+      val best = blockchainReader.getBestBlockNumber()
+      val from = resolveBlockNumber(gl.fromBlock.getOrElse(BlockParam.Latest), best)
+      val to = resolveBlockNumber(gl.toBlock.getOrElse(BlockParam.Latest), best)
+      if (to - from > maxLogRange) {
+        sender() ! LogFilterError(
+          JsonRpcError.InvalidParams(s"Log query range ${to - from} exceeds maximum ($maxLogRange blocks)")
+        )
+      } else {
+        sender() ! LogFilterLogs(getLogs(filter, None))
+      }
   }
 
   private def resetTimeout(id: BigInt): Unit = {
@@ -265,12 +280,7 @@ class FilterManager(
   private def generateId(): BigInt = BigInt(Random.nextLong()).abs
 
   private def resolveBlockNumber(blockParam: BlockParam, bestBlockNumber: BigInt): BigInt =
-    blockParam match {
-      case BlockParam.WithNumber(blockNumber) => blockNumber
-      case BlockParam.Earliest                => 0
-      case BlockParam.Latest                  => bestBlockNumber
-      case BlockParam.Pending                 => bestBlockNumber
-    }
+    BlockParam.resolveNumber(blockParam, bestBlockNumber)
 }
 
 object FilterManager {
@@ -347,6 +357,7 @@ object FilterManager {
 
   sealed trait FilterLogs
   case class LogFilterLogs(logs: Seq[TxLog]) extends FilterLogs
+  case class LogFilterError(error: JsonRpcError) extends FilterLogs
   case class BlockFilterLogs(blockHashes: Seq[ByteString]) extends FilterLogs
   case class PendingTransactionFilterLogs(txHashes: Seq[ByteString]) extends FilterLogs
 

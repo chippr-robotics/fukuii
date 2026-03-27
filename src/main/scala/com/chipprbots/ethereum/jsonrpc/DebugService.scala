@@ -280,22 +280,14 @@ class DebugService(
     }
   }
 
-  private def resolveBlockHeader(blockParam: BlockParam): Option[BlockHeader] = blockParam match {
-    case BlockParam.WithNumber(n) => blockchainReader.getBlockHeaderByNumber(n)
-    case BlockParam.Latest        => blockchainReader.getBlockHeaderByNumber(blockchainReader.getBestBlockNumber())
-    case BlockParam.Earliest      => blockchainReader.getBlockHeaderByNumber(0)
-    case BlockParam.Pending       => blockchainReader.getBlockHeaderByNumber(blockchainReader.getBestBlockNumber())
+  private def resolveBlockHeader(blockParam: BlockParam): Option[BlockHeader] = {
+    val n = BlockParam.resolveNumber(blockParam, blockchainReader.getBestBlockNumber())
+    blockchainReader.getBlockHeaderByNumber(n)
   }
 
-  private def resolveBlock(blockParam: BlockParam): Option[Block] = blockParam match {
-    case BlockParam.WithNumber(n) =>
-      blockchainReader.getBlockByNumber(blockchainReader.getBestBranch(), n)
-    case BlockParam.Latest =>
-      blockchainReader.getBlockByNumber(blockchainReader.getBestBranch(), blockchainReader.getBestBlockNumber())
-    case BlockParam.Earliest =>
-      blockchainReader.getBlockByNumber(blockchainReader.getBestBranch(), 0)
-    case BlockParam.Pending =>
-      blockchainReader.getBlockByNumber(blockchainReader.getBestBranch(), blockchainReader.getBestBlockNumber())
+  private def resolveBlock(blockParam: BlockParam): Option[Block] = {
+    val n = BlockParam.resolveNumber(blockParam, blockchainReader.getBestBlockNumber())
+    blockchainReader.getBlockByNumber(blockchainReader.getBestBranch(), n)
   }
 
   private def getPeerIds: IO[List[PeerId]] = {

@@ -93,9 +93,11 @@ class EthFilterService(
     import req.filter._
 
     filterManager
-      .askFor[FM.LogFilterLogs](FM.GetLogs(fromBlock, toBlock, address, topics))
-      .map { filterLogs =>
-        Right(GetLogsResponse(filterLogs))
+      .askFor[FM.FilterLogs](FM.GetLogs(fromBlock, toBlock, address, topics))
+      .map {
+        case filterLogs: FM.LogFilterLogs => Right(GetLogsResponse(filterLogs))
+        case FM.LogFilterError(error)     => Left(error)
+        case _                            => Left(JsonRpcError.InternalError)
       }
   }
 }

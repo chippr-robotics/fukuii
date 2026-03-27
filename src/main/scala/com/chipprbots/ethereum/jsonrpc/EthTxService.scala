@@ -340,12 +340,7 @@ class EthTxService(
       val bestBranch = blockchainReader.getBestBranch()
 
       // Resolve newest block
-      val newestBlockNum = req.newestBlock match {
-        case BlockParam.Latest       => bestBlock
-        case BlockParam.Pending      => bestBlock
-        case BlockParam.Earliest     => BigInt(0)
-        case BlockParam.WithNumber(n) => n
-      }
+      val newestBlockNum = BlockParam.resolveNumber(req.newestBlock, bestBlock)
 
       // Clamp block count to 1024 (go-ethereum limit)
       val blockCount = req.blockCount.min(1024).max(1)
