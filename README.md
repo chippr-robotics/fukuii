@@ -1,4 +1,4 @@
-## 🟢 2,695 tests passing
+## 🟢 2,705 tests passing
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/chippr-robotics/fukuii/HEAD/docs/images/fukuii-hex-logo.png" alt="Fukuii Logo" width="400"/>
@@ -93,28 +93,33 @@ Fukuii is developed with AI-assisted engineering (Claude) as a core methodology 
 
 - **Interactive Console UI**: Optional TUI for monitoring sync progress (use `--tui` flag)
 - **Extensive CLI Tools**: Key generation, address derivation, and more
-- **JSON-RPC API**: 118 RPC methods across eth, debug, net, personal, miner, admin, trace, txpool, web3, mcp, and more
+- **JSON-RPC API**: 143 RPC methods across eth, debug, net, personal, miner, admin, trace, txpool, web3, mcp, and more
 - **WebSocket Subscriptions**: `eth_subscribe`/`eth_unsubscribe` for newHeads, logs, newPendingTransactions, and syncing
 - **Custom Networks**: Deploy on private networks without modifying source code
 - **Well-Documented**: Comprehensive runbooks and ADRs
 
 ### 🔌 Comprehensive RPC Coverage
 
-118 JSON-RPC methods across 12 namespaces:
+143 JSON-RPC methods across 14 namespaces:
 
 | Namespace | Methods | Highlights |
 |-----------|---------|------------|
 | **eth** | 55 | Full transaction lifecycle, block queries, filters, logs, proofs, fee history |
-| **debug** | 20 | Transaction tracing, raw block/receipt access, memory stats, bad block tracking |
+| **debug** | 22 | Transaction tracing, raw block/receipt access, memory stats, CPU profiling, runtime log verbosity |
 | **net** | 10 | Peer management, blacklist control, node info |
 | **personal** | 8 | Account management, signing, key import |
 | **miner** | 8 | Mining control, gas price, extra data |
 | **admin** | 7 | Node admin, chain import/export, peer management |
 | **trace** | 6 | Parity-compatible transaction and block tracing |
 | **txpool** | 4 | Pool status, content inspection, per-sender queries |
+| **test** | 6 | Debug/test mode: account range, storage range, snapshot control |
+| **fukuii** | 4 | Fork schedule, health, version, Fukuii-specific extensions |
 | **web3** | 2 | Client version, SHA3 |
+| **iele** | 2 | IELE VM call and install |
+| **MCP** | 8 | Tools, resources, prompts (Model Context Protocol) |
+| **qa/rpc** | 2 | Quality assurance and RPC introspection |
 
-Plus MCP, IELE, and Fukuii-specific extensions. All methods are wired to the controller with zero orphaned handlers.
+All methods are wired to the controller with zero orphaned handlers.
 
 ### 🤖 Agentic Control via MCP
 

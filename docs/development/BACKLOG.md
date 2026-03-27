@@ -2,9 +2,9 @@
 
 Comprehensive inventory of remaining work, verified against the codebase and compared to reference clients (go-ethereum, nethermind, core-geth, Besu, Erigon).
 
-**Branch:** `march-onward` (~51 commits ahead of upstream main, at `6220ce58b`)
-**Test baseline:** 2,699 tests pass, 0 failed, 2 ignored
-**RPC methods:** 118 implemented, all wired to `JsonRpcController`, zero orphaned
+**Branch:** `march-onward` (~90 commits ahead of upstream main, at `e7ab739c6`)
+**Test baseline:** 2,705 tests pass, 0 failed, 0 ignored
+**RPC methods:** 135 standard + 8 MCP protocol = 143 total, all wired to `JsonRpcController`, zero orphaned
 **Last audited:** 2026-03-26
 
 ---
@@ -18,7 +18,7 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 | **Nethermind**  | C#    | ~140        | Parity RPC compat (trace\_\*), Flashbots/MEV, plugin system, timestamp-based fork activation, 35 debug methods |
 | **Besu**        | Java  | 179         | GraphQL, plugin system, permissioning, 14 debug\_\* methods                                                    |
 | **Erigon**      | Go    | ~160        | Staged sync, MDBX, advanced tracing                                                                            |
-| **Fukuii**      | Scala | **118**     | MCP server (unique), IELE VM, IPC, TUI, SNAP server+client, WS subscriptions                                   |
+| **Fukuii**      | Scala | **143**     | MCP server (unique), IELE VM, IPC, TUI, SNAP server+client, WS subscriptions                                   |
 
 ### Network Upgrade Safety Comparison
 
@@ -239,6 +239,13 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Description:** `TODO [BACKLOG N-004]` — Capability information from Hello message should be forwarded to `EtcHelloExchangeState`. Only relevant for P2P v5+. `EtcHelloExchangeState` already extracts capabilities from Hello — the issue is threading them to subsequent negotiation states.
 - **Depends on:** M-004
 
+#### M-026: Static node direct-dial with auto-reconnect ✅ DONE
+
+- **Files:** `PeerManagerActor.scala`, `StaticNodesLoader.scala`, `NodeBuilder.scala`, `logback.xml`
+- **Priority:** Medium | **Risk:** Medium (network-critical)
+- **Description:** Fukuii treated `static-nodes.json` entries as Kademlia discovery seeds (wrong). All reference clients (geth, core-geth, Besu, Nethermind, Erigon) treat them as direct TCP dial targets with 15-second auto-reconnect, exempt from max outgoing peer limit. Local peers (Besu SNAP server, core-geth) never formed persistent connections.
+- **Resolution:** Added `staticNodes: Set[URI]` to `PeerManagerActor` with direct-dial on `StartConnecting`, `CheckStaticPeers` every 15s (matches geth's `staticPeerCheckInterval`), exempt from `MaxOutgoingConnections`. Added `StaticNodesLoader.loadUrisFromDatadir()` returning parsed URIs. Wired through `NodeBuilder`. Promoted `StaticNodesLoader` and `PeerManagerActor` logback to INFO. Verified: ETC mainnet SNAP sync immediately connects to local Besu and downloads accounts at ~6K/sec.
+
 #### M-006: Additional miner methods ✅ DONE
 
 - **Priority:** Medium | **Risk:** Low
@@ -385,17 +392,14 @@ Comprehensive inventory of remaining work, verified against the codebase and com
   - Removed Claude-only framing — now explicitly states "LLM-agnostic" and "no provider-specific code"
   - No code changes needed — documentation only
 
-#### M-020: go-ethereum pre-merge PoW codebase review
+#### M-020: go-ethereum pre-merge PoW codebase review ✅ DONE
 
 - **Priority:** Medium | **Risk:** Low
-- **Description:** go-ethereum removed PoW consensus code after The Merge (September 2022, block 15,537,394). ETC still uses PoW. Review the pre-merge go-ethereum codebase (v1.10.x, before `consensus/ethash` was removed) to identify:
-  - PoW-specific fork activation patterns that Fukuii should adopt
-  - Ethash/difficulty calculation improvements made between go-ethereum's ETC fork and The Merge
-  - Block validation logic for PoW chains (uncle validation, difficulty bombs, reward calculation)
-  - PoW-specific peer scoring and sync optimizations (e.g., TD-based peer selection)
-  - Any PoW safety mechanisms that were removed post-merge but remain relevant for ETC
-- **Reference:** go-ethereum v1.10.26 (last PoW release), `consensus/ethash/`, `core/block_validator.go`, `eth/downloader/`
-- **Approach:** Checkout go-ethereum at tag `v1.10.26` or last pre-merge commit. Systematic diff against current Fukuii consensus code. Source any missing PoW hardening.
+- **Resolution:** Comprehensive comparison of Fukuii's PoW consensus against go-ethereum v1.10.26 (last pre-merge release). Report at `docs/reports/POW-CODEBASE-REVIEW.md`. Key findings:
+  - **0 critical gaps** — Ethash, difficulty, rewards, uncle validation, header validation all match go-ethereum patterns
+  - **Fukuii ahead in:** BadBlockTracker (128 vs 10 entries), ECBP-1100 MESS, typed actor mining, fork boundary test coverage (36 tests), transaction type fork-gating (H-010)
+  - **5 low-priority recommendations:** nonce range partitioning, bandwidth-weighted peer selection, emergency PoW halt mechanism, memory-mapped DAGs, mining hashrate Prometheus metrics
+  - Recent H-010 through H-016 hardening pass closed all consensus safety gaps identified in the comparison
 
 ---
 
@@ -422,15 +426,32 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Files:** `scalanet` submodule (5 TODOs)
 - **Priority:** Low | **Risk:** Low
 
-#### L-005: API documentation
+#### L-005: API documentation ✅ DONE
 
 - **Priority:** Low | **Risk:** Low
-- **Description:** Document all 94+ RPC methods with request/response examples. Would improve developer onboarding and third-party integration.
+- **Resolution:** Comprehensive API documentation already exists:
+  - `docs/api/JSON_RPC_API_REFERENCE.md` (53KB) — full reference for all RPC methods with request/response examples
+  - `docs/api/openapi.json` (201KB) — OpenAPI 3.0 specification for automated tooling
+  - `docs/api/JSON_RPC_COVERAGE_ANALYSIS.md` — gap analysis against reference clients
+  - `docs/api/INSOMNIA_RPC_ANALYSIS.md` + `INSOMNIA_WORKSPACE_GUIDE.md` — interactive testing
+  - `docs/api/MCP_INTEGRATION_GUIDE.md` + `MCP_ANALYSIS_SUMMARY.md` — MCP server documentation
+  - `docs/api/MAINTAINING_API_REFERENCE.md` — maintenance guide for keeping docs current
 
-#### L-006: Operator guide
+#### L-006: Operator guide ✅ DONE
 
 - **Priority:** Low | **Risk:** Low
-- **Description:** Hardware requirements, config tuning, monitoring setup, backup procedures, upgrade path. Currently documentation is developer-focused, not operator-focused.
+- **Resolution:** Comprehensive operator documentation already exists across 20+ guides:
+  - `docs/runbooks/first-start.md` — initial setup and configuration
+  - `docs/runbooks/node-configuration.md` — all config options with examples
+  - `docs/runbooks/operating-modes.md` — SNAP/fast/regular sync modes
+  - `docs/runbooks/snap-sync-user-guide.md` + `snap-sync-faq.md` + `snap-sync-performance-tuning.md`
+  - `docs/runbooks/peering.md` + `network-management.md` — peer management and network ops
+  - `docs/runbooks/security.md` — JWT auth, TLS, rate limiting, firewall
+  - `docs/runbooks/backup-restore.md` + `disk-management.md` — data management
+  - `docs/runbooks/enterprise-deployment.md` — production deployment patterns
+  - `docs/runbooks/known-issues.md` — known issues and workarounds
+  - `docs/runbooks/log-triage.md` — log analysis and troubleshooting
+  - `docs/for-operators/index.md` + `static-nodes-configuration.md` — operator-focused index
 
 ---
 
