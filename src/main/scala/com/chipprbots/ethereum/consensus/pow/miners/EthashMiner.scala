@@ -68,11 +68,11 @@ class EthashMiner(
   ): (Long, MiningResult) = {
     val epoch =
       EthashUtils.epoch(blockNumber, blockchainConfig.forkBlockNumbers.ecip1099BlockNumber.toLong)
-    val (dag, dagSize) = dagManager.calculateDagSize(blockNumber, epoch)
+    val (dagLookup, dagSize) = dagManager.calculateDagSize(blockNumber, epoch)
     val headerHash = crypto.kec256(BlockHeader.getEncodedWithoutNonce(block.header))
     val startTime = System.nanoTime()
     val mineResult =
-      mineEthash(headerHash, block.header.difficulty.toLong, dagSize, dag, blockCreator.miningConfig.mineRounds)
+      mineEthash(headerHash, block.header.difficulty.toLong, dagSize, dagLookup, blockCreator.miningConfig.mineRounds)
     (startTime, mineResult)
   }
 
@@ -80,14 +80,14 @@ class EthashMiner(
       headerHash: Array[Byte],
       difficulty: Long,
       dagSize: Long,
-      dag: Array[Array[Int]],
+      dagLookup: Int => Array[Int],
       numRounds: Int
   ): MiningResult = {
     val numThreads = math.max(1, Runtime.getRuntime.availableProcessors() - 2) // reserve 2 for sync/RPC
     if (numThreads <= 1) {
-      mineEthashSingleThread(headerHash, difficulty, dagSize, dag, numRounds)
+      mineEthashSingleThread(headerHash, difficulty, dagSize, dagLookup, numRounds)
     } else {
-      mineEthashParallel(headerHash, difficulty, dagSize, dag, numRounds, numThreads)
+      mineEthashParallel(headerHash, difficulty, dagSize, dagLookup, numRounds, numThreads)
     }
   }
 
@@ -95,7 +95,7 @@ class EthashMiner(
       headerHash: Array[Byte],
       difficulty: Long,
       dagSize: Long,
-      dag: Array[Array[Int]],
+      dagLookup: Int => Array[Int],
       numRounds: Int,
       numThreads: Int
   ): MiningResult = {
@@ -115,7 +115,7 @@ class EthashMiner(
         while (round < endRound && !found.get()) {
           val nonce = (initNonce + round) % MaxNounce
           val nonceBytes = ByteUtils.padLeft(ByteString(nonce.toUnsignedByteArray), 8)
-          val pow = EthashUtils.hashimoto(headerHash, nonceBytes.toArray[Byte], dagSize, dag.apply)
+          val pow = EthashUtils.hashimoto(headerHash, nonceBytes.toArray[Byte], dagSize, dagLookup)
           if (EthashUtils.checkDifficulty(difficulty, pow)) {
             found.set(true)
             result = MiningSuccessful(round + 1, pow.mixHash, nonceBytes)
@@ -135,7 +135,7 @@ class EthashMiner(
       headerHash: Array[Byte],
       difficulty: Long,
       dagSize: Long,
-      dag: Array[Array[Int]],
+      dagLookup: Int => Array[Int],
       numRounds: Int
   ): MiningResult = {
     val initNonce = BigInt(NumBits, new Random())
@@ -144,7 +144,7 @@ class EthashMiner(
       .map { round =>
         val nonce = (initNonce + round) % MaxNounce
         val nonceBytes = ByteUtils.padLeft(ByteString(nonce.toUnsignedByteArray), 8)
-        val pow = EthashUtils.hashimoto(headerHash, nonceBytes.toArray[Byte], dagSize, dag.apply)
+        val pow = EthashUtils.hashimoto(headerHash, nonceBytes.toArray[Byte], dagSize, dagLookup)
         (EthashUtils.checkDifficulty(difficulty, pow), pow, nonceBytes, round)
       }
       .collectFirst { case (true, pow, nonceBytes, n) => MiningSuccessful(n + 1, pow.mixHash, nonceBytes) }
