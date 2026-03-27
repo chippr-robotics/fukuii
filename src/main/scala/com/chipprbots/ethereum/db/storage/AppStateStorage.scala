@@ -39,8 +39,13 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     put(Keys.BestBlockNumber, b.number.toString)
       .and(put(Keys.BestBlockHash, Hex.toHexString(b.hash.toArray)))
 
-  def putBestBlockNumber(bestBlockNumber: BigInt): DataSourceBatchUpdate =
-    put(Keys.BestBlockNumber, bestBlockNumber.toString)
+  def putBestBlockNumber(bestBlockNumber: BigInt): DataSourceBatchUpdate = {
+    val batch = put(Keys.BestBlockNumber, bestBlockNumber.toString)
+    // H-017: Write safe-block marker every 64 blocks for crash recovery
+    if (bestBlockNumber > 0 && bestBlockNumber % SafeBlockInterval == 0)
+      batch.and(put(Keys.LastSafeBlock, bestBlockNumber.toString))
+    else batch
+  }
 
   def isFastSyncDone(): Boolean =
     get(Keys.FastSyncDone).exists(_.toBoolean)
@@ -274,11 +279,34 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   /** Store the finalized account trie root hash from finalizeTrie(). */
   def putSnapSyncFinalizedRoot(root: ByteString): DataSourceBatchUpdate =
     put(Keys.SnapSyncFinalizedRoot, Hex.toHexString(root.toArray))
+
+  // --- Unclean shutdown recovery (H-017) ---
+
+  /** Check if the last shutdown was clean. Returns false on first run or after crash. */
+  def isCleanShutdown(): Boolean =
+    get(Keys.CleanShutdown).exists(_.toBoolean)
+
+  /** Mark shutdown as clean (called during graceful shutdown). */
+  def putCleanShutdown(clean: Boolean): DataSourceBatchUpdate =
+    put(Keys.CleanShutdown, clean.toString)
+
+  /** Get the last known-safe block number (written periodically during operation). */
+  def getLastSafeBlock(): BigInt =
+    getBigInt(Keys.LastSafeBlock)
+
+  /** Store the last known-safe block number. Written every SafeBlockInterval blocks. */
+  def putLastSafeBlock(blockNumber: BigInt): DataSourceBatchUpdate =
+    put(Keys.LastSafeBlock, blockNumber.toString)
 }
 
 object AppStateStorage {
   type Key = String
   type Value = String
+
+  /** Interval (in blocks) between safe-block marker writes for crash recovery (H-017).
+    * Matches go-ethereum's marker frequency. Maximum data loss on crash: 64 blocks.
+    */
+  val SafeBlockInterval: Int = 64
 
   object Keys {
     val BestBlockNumber = "BestBlockNumber"
@@ -301,6 +329,8 @@ object AppStateStorage {
     val SnapSyncCodeHashesPath = "SnapSyncCodeHashesPath"
     val SnapSyncStorageFilePath = "SnapSyncStorageFilePath"
     val SnapSyncFinalizedRoot = "SnapSyncFinalizedRoot"
+    val CleanShutdown = "CleanShutdown"
+    val LastSafeBlock = "LastSafeBlock"
   }
 
 }

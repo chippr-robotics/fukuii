@@ -408,12 +408,16 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Status:** DONE — Added `HeaderFutureTimestampError` and wall-clock check (`timestamp > now + 15s`) to `validateTimestamp()`. Matches go-ethereum's `allowedFutureBlockTimeSeconds`. Added distinct error type for diagnostics. Updated `EthashBlockHeaderValidatorSpec` to cover the new check. 52 validation tests pass.
 - **Source:** PoW review R-006, `docs/reports/POW-CODEBASE-REVIEW.md`
 
-#### H-017: Unclean shutdown recovery (PoW review R-007)
+#### H-017: Unclean shutdown recovery (PoW review R-007) ✅ DONE
 
-- **File:** New file + `src/main/scala/.../StdNode.scala` or equivalent startup path
+- **File:** `AppStateStorage.scala`, `StdNode.scala`, `AppStateStorageSpec.scala`
 - **Priority:** High | **Risk:** Medium (operational)
-- **Description:** go-ethereum writes periodic safe-block markers to LevelDB and rewinds chain head to the last marker on startup after unclean shutdown (OOM kill, power loss). Fukuii does not have this mechanism. After a crash, the chain head might point to a state root not fully committed to RocksDB, causing state inconsistencies. RocksDB WAL provides atomic single-key writes, but multi-key updates (block storage spans multiple column families) could be partially committed.
-- **Fix:** Write a `lastSafeBlock` marker to RocksDB every N blocks (e.g., 64) or M seconds (e.g., 30s). On startup, check if the last shutdown was clean (marker present + cleared on clean shutdown). If unclean, rewind `bestBlockNumber` to the marker and rebuild state from there.
+- **Status:** DONE — Implemented go-ethereum-style crash recovery:
+  - `CleanShutdown` flag in AppStateStorage (set `true` on graceful shutdown, cleared on startup)
+  - `LastSafeBlock` marker written every 64 blocks via `putBestBlockNumber()` (same batch, no extra I/O)
+  - On startup: if unclean shutdown detected and `lastSafeBlock < bestBlock`, rewinds chain head
+  - Graceful shutdown writes both `CleanShutdown=true` and `LastSafeBlock=bestBlock`
+  - 4 new tests (16 total in AppStateStorageSpec): clean/unclean flag, 64-block marker interval, empty state
 - **Source:** PoW review R-007, `docs/reports/POW-CODEBASE-REVIEW.md`
 
 ---

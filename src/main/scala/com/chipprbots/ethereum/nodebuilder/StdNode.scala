@@ -45,6 +45,8 @@ abstract class BaseNode extends Node {
 
     fixDatabase()
 
+    checkUncleanShutdown()
+
     loadGenesisData()
 
     runDBConsistencyCheck()
@@ -172,6 +174,17 @@ abstract class BaseNode extends Node {
       case Success(_) =>
     }
 
+    // H-017: Mark clean shutdown and record last safe block before closing DB
+    tryAndLogFailure { () =>
+      val appState = storagesInstance.storages.appStateStorage
+      val bestBlock = appState.getBestBlockNumber()
+      appState
+        .putCleanShutdown(true)
+        .and(appState.putLastSafeBlock(bestBlock))
+        .commit()
+      log.info("Clean shutdown marker written at block {}", bestBlock)
+    }
+
     tryAndLogFailure(() => tuiUpdater.foreach(_.stop()))
     tryAndLogFailure(() => Tui.getInstance().shutdown())
     tryAndLogFailure(() => peerDiscoveryManager ! PeerDiscoveryManager.Stop)
@@ -193,6 +206,32 @@ abstract class BaseNode extends Node {
     }
     tryAndLogFailure(() => Metrics.get().close())
     tryAndLogFailure(() => storagesInstance.dataSource.close())
+  }
+
+  /** H-017: Check if last shutdown was unclean and rewind chain head if needed.
+    * go-ethereum pattern: periodic safe-block markers + clean shutdown flag.
+    */
+  private[this] def checkUncleanShutdown(): Unit = {
+    val appState = storagesInstance.storages.appStateStorage
+    val wasClean = appState.isCleanShutdown()
+    val lastSafe = appState.getLastSafeBlock()
+    val bestBlock = appState.getBestBlockNumber()
+
+    if (!wasClean && lastSafe > 0 && lastSafe < bestBlock) {
+      log.warn(
+        "Unclean shutdown detected! Best block {} may have inconsistent state. " +
+          "Rewinding to last safe block {}.",
+        bestBlock,
+        lastSafe
+      )
+      appState.putBestBlockNumber(lastSafe).commit()
+      log.info("Chain head rewound from {} to {}", bestBlock, lastSafe)
+    } else if (!wasClean && bestBlock > 0) {
+      log.warn("Unclean shutdown detected, but no safe block marker found. Proceeding with best block {}.", bestBlock)
+    }
+
+    // Clear the flag — it's set to true only during graceful shutdown
+    appState.putCleanShutdown(false).commit()
   }
 
   def fixDatabase(): Unit = {

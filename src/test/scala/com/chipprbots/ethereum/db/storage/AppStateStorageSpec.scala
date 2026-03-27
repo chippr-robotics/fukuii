@@ -98,6 +98,41 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
       val storage = newAppStateStorage()
       assert(storage.getSnapSyncProgress().isEmpty)
     }
+
+    "report unclean shutdown when flag was never set" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      assert(!storage.isCleanShutdown())
+    }
+
+    "report clean shutdown after marking it" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      storage.putCleanShutdown(true).commit()
+      assert(storage.isCleanShutdown())
+    }
+
+    "write safe-block marker every 64 blocks via putBestBlockNumber" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+
+      // Block 63: no marker
+      storage.putBestBlockNumber(63).commit()
+      assert(storage.getLastSafeBlock() == 0)
+
+      // Block 64: marker written
+      storage.putBestBlockNumber(64).commit()
+      assert(storage.getLastSafeBlock() == 64)
+
+      // Block 100: marker not updated (not a multiple of 64)
+      storage.putBestBlockNumber(100).commit()
+      assert(storage.getLastSafeBlock() == 64)
+
+      // Block 128: marker updated
+      storage.putBestBlockNumber(128).commit()
+      assert(storage.getLastSafeBlock() == 128)
+    }
+
+    "get zero as last safe block when storage is empty" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      assert(newAppStateStorage().getLastSafeBlock() == 0)
+    }
   }
 
   trait Fixtures {
