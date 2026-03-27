@@ -1,9 +1,9 @@
 # Fukuii `march-onward` Branch — Handoff Document
 
-**Branch:** `march-onward` (104 commits ahead of `upstream/main` at `6220ce58b`)
+**Branch:** `march-onward` (~107 commits ahead of `upstream/main` at `6220ce58b`)
 **Author:** Christopher Mercer (chris-mercer) + Claude Opus 4.6
 **Date:** 2026-03-27
-**Test results:** 2,713 unit tests passing, 2 pre-existing unrelated failures (DnsDiscoverySpec), 0 ignored
+**Test results:** 2,706 unit tests passing, 0 failures, 0 ignored (DnsDiscoverySpec now excluded via IntegrationTest tag)
 **RPC methods:** 143 implemented (135 standard + 8 MCP), all wired to `JsonRpcController`, zero orphaned
 **Build:** Scala 3.3.4 LTS, JDK 21, sbt 1.10.7
 
@@ -11,7 +11,7 @@
 
 ## Summary
 
-The `march-onward` branch is a comprehensive production-readiness pass building on the `alpha` (PR #1003, merged) and `olympia` branches. It adds 104 commits covering:
+The `march-onward` branch is a comprehensive production-readiness pass building on the `alpha` (PR #1003, merged) and `olympia` branches. It adds ~107 commits covering:
 
 - **SNAP sync server + client** — Full bidirectional SNAP protocol implementation, first successful Mordor sync to chain head (~35 min)
 - **79 new RPC methods** (64 → 143) — trace, txpool, admin, debug, miner, fee market, state overrides, MCP
@@ -21,10 +21,11 @@ The `march-onward` branch is a comprehensive production-readiness pass building 
 - **Consensus hardening** — Fork-boundary validation, adversarial resilience, transaction type gating
 - **Production infrastructure** — Health checks, rate limiting, config validation, log rotation, DNS discovery
 - **EVM Stack optimization** — Mutable array-backed stack matching all 5 reference clients
+- **Memory-mapped DAG files** — MappedByteBuffer replaces heap Array, aligns with geth/Erigon mmap pattern
 
 ---
 
-## Commit Categories (104 total)
+## Commit Categories (~107 total)
 
 | Category | Count | Description |
 |----------|-------|-------------|
@@ -208,6 +209,7 @@ HS256 JWT auth for both HTTP and WebSocket RPC:
 | Per-peer adaptive timeouts + pipelining | Better utilization of fast peers | — |
 | Atomic block discard in removeBlockRange | Prevents partial state corruption | — |
 | JSON-RPC batch parsing: traverse → parTraverse | Concurrent batch request processing | M-007 |
+| Memory-mapped DAG: MappedByteBuffer replaces heap Array | ~2.4GB off JVM heap, instant startup, OS page cache | L-010 |
 
 ---
 
@@ -273,22 +275,23 @@ See `docs/development/BACKLOG.md` for the complete inventory (38 remaining items
 
 ### In-scope for this branch (before PR)
 
-- **M-012:** Run full integration test suite (`sbt it:test`)
-- **M-028:** Fix DnsDiscoverySpec exclusion from unit tests (tagged IntegrationTest but not excluded)
+- ~~**M-012:** Run full integration test suite (`sbt it:test`)~~ ✅ DONE — 24 suites, 8 tests pass, 16 empty (need ethereum/tests fixtures)
+- ~~**M-028:** Fix DnsDiscoverySpec exclusion from unit tests~~ ✅ DONE — IntegrationTest tag excluded in `build.sbt`
+- ~~**L-010:** Memory-mapped DAG files~~ ✅ DONE — MappedByteBuffer, ECIP-1099 compatible
 - **Handoff document update** (this document — keep current before PR)
+- **ETC mainnet SNAP sync test** — In progress
 
 ### Deferred to later branch/PR
 
 - **M-004/M-005:** Version-aware message decoding + capability passing (P2P v5+, not currently needed)
 - **M-018:** Hive integration test coverage for Olympia (separate testing effort)
-- **L-001:** Deprecate pre-EIP-8 handshake support
+- **L-001:** Pre-EIP-8 handshake — WONTFIX (all 5 reference clients retain fallback, Postel's Law)
 - **L-002/L-003/L-004:** Discovery v5 improvements (scalanet submodule)
-- **L-010:** Memory-mapped DAG files
 - **F-001..F-006:** Future roadmap (GraphQL, Stratum, plugin system)
 
 ### All items DONE
 
-All Critical (C-001..C-004), High (H-001..H-018), and most Medium items are DONE. See the Completed Items table in BACKLOG.md (50+ items).
+All Critical (C-001..C-004), High (H-001..H-018), and most Medium items are DONE. See the Completed Items table in BACKLOG.md (35+ items).
 
 ---
 

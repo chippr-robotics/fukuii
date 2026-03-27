@@ -2,10 +2,10 @@
 
 Comprehensive inventory of remaining work, verified against the codebase and compared to reference clients (go-ethereum, nethermind, core-geth, Besu, Erigon).
 
-**Branch:** `march-onward` (~90 commits ahead of upstream main, at `e7ab739c6`)
-**Test baseline:** 2,705 tests pass, 0 failed, 0 ignored
+**Branch:** `march-onward` (~107 commits ahead of upstream main, at `19c27fe70`)
+**Test baseline:** 2,706 unit tests pass, 0 failed, 0 ignored; 12/12 EVM consensus; 8/8 integration (24 suites, 16 empty — need ethereum/tests fixtures)
 **RPC methods:** 135 standard + 8 MCP protocol = 143 total, all wired to `JsonRpcController`, zero orphaned
-**Last audited:** 2026-03-26
+**Last audited:** 2026-03-27
 
 ---
 
@@ -294,11 +294,11 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 
 ### 2.3 — Testing
 
-#### M-028: DnsDiscoverySpec fails in unit test suite
+#### M-028: DnsDiscoverySpec fails in unit test suite ✅ DONE
 
-- **File:** `src/test/scala/.../network/discovery/DnsDiscoverySpec.scala`
+- **File:** `build.sbt` (line 75-78)
 - **Priority:** Low | **Risk:** None (test-only)
-- **Description:** "should resolve enodes from ETC mainnet DNS tree" makes a live DNS query to `all.classic.blockd.info` which returns empty results. Already tagged `IntegrationTest` but not excluded from `sbt test`. Fix: add `Tests.Argument(TestFrameworks.ScalaTest, "-l", "IntegrationTest")` to `build.sbt` Test/testOptions, or move to `src/it/`.
+- **Resolution:** Added `IntegrationTest` to `Test/testOptions` exclusion alongside `SlowTest`. Network-dependent DNS tests (live queries to `all.classic.blockd.info`, `all.mordor.blockd.info`) now excluded from `sbt test`. Still run via `sbt testStandard` and `sbt IntegrationTest/test`. Result: 2,706/2,706 unit tests pass.
 
 #### M-009: Complete EthereumTestsSpec block execution ✅ DONE
 
@@ -325,11 +325,10 @@ Comprehensive inventory of remaining work, verified against the codebase and com
   3. **Remaining:** 1 ignored integration test (`ContractTest.scala`) — corrupted fixture data from legacy Mantis codebase (incorrect `codeHash` in account state). Not a code bug. Historical CI analysis (Dec 2025) showed 2 `RegularSyncSpec` timeout-sensitive flaky tests (3s→5s timeout fix recommended).
   - **Result:** 2,701 unit tests, 0 failed, 0 ignored.
 
-#### M-012: Run full integration test suite
+#### M-012: Run full integration test suite ✅ DONE
 
 - **Priority:** Medium | **Risk:** Low
-- **Description:** `sbt it:test` — 37 spec files, 1 ignored. Full run needed to establish baseline.
-- **Depends on:** ~~C-001~~ (resolved)
+- **Resolution:** `sbt IntegrationTest/test` — 24 suites loaded, 8 tests pass, 0 failures. 16 suites are empty (depend on external `ethereum/tests` fixtures not present locally — these run in CI with the full fixture repo). Key suites verified: MerklePatriciaTree, RocksDbDataSource, AppLauncher (3 configs). All passing.
 
 #### M-013: Run full EVM test suite ✅ DONE
 
@@ -443,11 +442,11 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 
 ## Tier 3: LOW — Polish
 
-#### L-001: Deprecate pre-EIP-8 handshake support
+#### L-001: Deprecate pre-EIP-8 handshake support — WONTFIX
 
 - **File:** `src/main/scala/.../network/rlpx/RLPxConnectionHandler.scala:298`
 - **Priority:** Low | **Risk:** Medium (network compatibility)
-- **Description:** EIP-8 (May 2016) added variable-length RLPx handshake encoding. Fukuii supports both pre-EIP-8 and EIP-8. Dropping pre-EIP-8 would simplify the handshake code but could break connectivity with very old peers.
+- **Resolution:** WONTFIX — all 5 reference clients (go-ethereum, core-geth, Erigon, Nethermind, Besu) retain pre-EIP-8 handshake fallback. Fukuii already matches this pattern (dual-path: tries pre-EIP-8 first, falls back to EIP-8). Follows Postel's Law ("be liberal in what you accept"). No change needed.
 
 #### L-002: Discovery v5 topic registration
 
@@ -513,12 +512,11 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Usage:** Set `-Dfukuii.blockchains.etc.emergency-td-ceiling=<value>` or add `emergency-td-ceiling = "..."` in chain config. Omit or leave unset for normal operation.
 - **Source:** PoW review R-003, `docs/reports/POW-CODEBASE-REVIEW.md`
 
-#### L-010: Memory-mapped DAG files (PoW review R-004)
+#### L-010: Memory-mapped DAG files (PoW review R-004) ✅ DONE
 
-- **File:** `src/main/scala/.../consensus/pow/miners/EthashDAGManager.scala`
+- **File:** `src/main/scala/.../consensus/pow/miners/EthashDAGManager.scala`, `EthashMiner.scala`
 - **Priority:** Low | **Risk:** Low
-- **Description:** go-ethereum uses memory-mapped files for DAG storage, letting the OS manage paging. Fukuii loads the entire DAG into JVM arrays. Current ETC DAG is ~4GB and growing. Memory-mapped files would reduce JVM heap pressure and allow the OS to page DAG data intelligently.
-- **Fix:** Replace `Array[Array[Int]]` with `MappedByteBuffer` from `java.nio.channels.FileChannel.map()`. DAG file format already compatible (sequential 64-byte hashes).
+- **Resolution:** Replaced in-heap `Array[Array[Int]]` DAG (~40M GC-tracked objects for a 2.4GB DAG) with `MappedByteBuffer` via `FileChannel.map(READ_ONLY, 8, dataSize)`. Aligns with go-ethereum/core-geth/Erigon mmap approach; improvement over Besu/Nethermind heap pattern. Thread-safe concurrent reads via `ThreadLocal<byte[]>` + absolute-position `buffer.slice(offset, 64).get(bytes)`. DAG files keyed by seed hash — fully ECIP-1099 (Etchash) compatible, epoch/seed/naming logic untouched. Benefits: GC pressure elimination (~2.4GB off heap), instant startup (demand-paged by kernel), OS page cache integration for hot mining pages. `EthashMiner` mining methods updated from `dag: Array[Array[Int]]` to `dagLookup: Int => Array[Int]` (already the callback pattern used by `EthashUtils.hashimoto()`). 47 mining tests pass.
 - **Source:** PoW review R-004, `docs/reports/POW-CODEBASE-REVIEW.md`
 
 #### L-011: Mining hashrate Prometheus metrics (PoW review R-005) ✅ DONE
@@ -638,7 +636,7 @@ H-015 (chain split) ── M-018 (hive — cross-client chain split)
 
 ---
 
-## Completed on march-onward (32+ items, verified 2026-03-26)
+## Completed on march-onward (35+ items, verified 2026-03-27)
 
 Items below were implemented on the `march-onward` branch and verified against the actual codebase with commit hashes and file locations.
 
@@ -697,6 +695,9 @@ Items below were implemented on the `march-onward` branch and verified against t
 | SNAP work-stealing (M-003)               | `AccountRangeCoordinator.scala:maybeStealWork` | Split largest active range at midpoint when idle |
 | CPU profiling via JFR (M-024)    | `DebugService.scala`                           | debug_startCpuProfile + debug_stopCpuProfile, 4 tests |
 | EVM Stack mutable array (M-008)  | `Stack.scala`, `OpCode.scala`, 6 test files    | Array[UInt256]+top replaces Vector. peek/set in-place. 540 VM tests + 12 EVM consensus pass |
+| IntegrationTest exclusion (M-028) | `build.sbt:75-78`                              | ScalaTest `-l IntegrationTest` alongside SlowTest. 2,706/2,706 pass |
+| Integration test baseline (M-012) | Diagnostic only                                 | 24 suites, 8 tests pass, 16 empty (need ethereum/tests fixtures) |
+| Memory-mapped DAG files (L-010)  | `EthashDAGManager.scala`, `EthashMiner.scala`   | MappedByteBuffer replaces heap Array. Aligns with geth mmap. ECIP-1099 compatible |
 
 ### Resolved in FIXME/TODO Audit (2026-03-25)
 
