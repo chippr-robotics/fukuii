@@ -13,6 +13,8 @@ import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostShang
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.DaoForkConfig
 
+import java.time.Instant
+
 /** A block header validator that does everything Ethereum prescribes except from:
   *   - PoW validation
   *   - Difficulty validation.
@@ -123,12 +125,19 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
     * @return
     *   BlockHeader if valid, an [[HeaderTimestampError]] otherwise
     */
+  /** Maximum number of seconds a block timestamp can be ahead of wall-clock time.
+    * Matches go-ethereum's allowedFutureBlockTimeSeconds (15s).
+    */
+  private val AllowedFutureBlockTimeSeconds: Long = 15
+
   private def validateTimestamp(
       blockHeader: BlockHeader,
       parentHeader: BlockHeader
   ): Either[BlockHeaderError, BlockHeaderValid] =
-    if (blockHeader.unixTimestamp > parentHeader.unixTimestamp) Right(BlockHeaderValid)
-    else Left(HeaderTimestampError)
+    if (blockHeader.unixTimestamp <= parentHeader.unixTimestamp) Left(HeaderTimestampError)
+    else if (blockHeader.unixTimestamp > Instant.now().getEpochSecond + AllowedFutureBlockTimeSeconds)
+      Left(HeaderFutureTimestampError)
+    else Right(BlockHeaderValid)
 
   /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.difficulty]] is correct based on validations stated in
     * section 4.4.4 of http://paper.gavwood.com/
