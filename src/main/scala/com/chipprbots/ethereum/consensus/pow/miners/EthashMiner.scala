@@ -5,7 +5,12 @@ import org.apache.pekko.util.ByteString
 
 import cats.effect.unsafe.IORuntime
 
+import java.util.concurrent.atomic.AtomicBoolean
+
+import scala.concurrent.Await
+import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
+import scala.concurrent.duration._
 import scala.util.Random
 
 import com.chipprbots.ethereum.consensus.blocks.PendingBlock
@@ -72,6 +77,61 @@ class EthashMiner(
   }
 
   private def mineEthash(
+      headerHash: Array[Byte],
+      difficulty: Long,
+      dagSize: Long,
+      dag: Array[Array[Int]],
+      numRounds: Int
+  ): MiningResult = {
+    val numThreads = math.max(1, Runtime.getRuntime.availableProcessors() - 2) // reserve 2 for sync/RPC
+    if (numThreads <= 1) {
+      mineEthashSingleThread(headerHash, difficulty, dagSize, dag, numRounds)
+    } else {
+      mineEthashParallel(headerHash, difficulty, dagSize, dag, numRounds, numThreads)
+    }
+  }
+
+  private def mineEthashParallel(
+      headerHash: Array[Byte],
+      difficulty: Long,
+      dagSize: Long,
+      dag: Array[Array[Int]],
+      numRounds: Int,
+      numThreads: Int
+  ): MiningResult = {
+    val roundsPerThread = numRounds / numThreads
+    val found = new AtomicBoolean(false)
+    implicit val ec: ExecutionContext = scheduler.compute
+
+    val futures = (0 until numThreads).map { threadIdx =>
+      Future {
+        val rng = new Random()
+        val initNonce = BigInt(NumBits, rng)
+        val startRound = threadIdx * roundsPerThread
+        val endRound = if (threadIdx == numThreads - 1) numRounds - startRound else roundsPerThread
+
+        var round = 0
+        var result: MiningResult = MiningUnsuccessful(endRound)
+        while (round < endRound && !found.get()) {
+          val nonce = (initNonce + round) % MaxNounce
+          val nonceBytes = ByteUtils.padLeft(ByteString(nonce.toUnsignedByteArray), 8)
+          val pow = EthashUtils.hashimoto(headerHash, nonceBytes.toArray[Byte], dagSize, dag.apply)
+          if (EthashUtils.checkDifficulty(difficulty, pow)) {
+            found.set(true)
+            result = MiningSuccessful(round + 1, pow.mixHash, nonceBytes)
+          }
+          round += 1
+        }
+        result
+      }
+    }
+
+    val results = Await.result(Future.sequence(futures), 5.minutes)
+    results.collectFirst { case s: MiningSuccessful => s }
+      .getOrElse(MiningUnsuccessful(numRounds))
+  }
+
+  private def mineEthashSingleThread(
       headerHash: Array[Byte],
       difficulty: Long,
       dagSize: Long,

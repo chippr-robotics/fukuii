@@ -472,12 +472,11 @@ Comprehensive inventory of remaining work, verified against the codebase and com
   - `docs/runbooks/log-triage.md` — log analysis and troubleshooting
   - `docs/for-operators/index.md` + `static-nodes-configuration.md` — operator-focused index
 
-#### L-007: Multi-threaded CPU mining with nonce range partitioning (PoW review R-001)
+#### L-007: Multi-threaded CPU mining with nonce range partitioning (PoW review R-001) ✅ DONE
 
 - **File:** `src/main/scala/.../consensus/pow/miners/EthashMiner.scala`
 - **Priority:** Low | **Risk:** Low
-- **Description:** go-ethereum partitions the nonce space across goroutines for parallel CPU mining. Fukuii's `EthashMiner.mineEthash()` uses single-threaded sequential nonce iteration. Partitioning across N threads would increase mining throughput linearly. Not relevant for nodes that don't mine, but improves competitiveness for solo/small-pool miners.
-- **Fix:** Split nonce space into `Runtime.getRuntime.availableProcessors` ranges, spawn parallel `Future[MiningResult]` per range, race for first valid nonce.
+- **Resolution:** Added parallel mining with `mineEthashParallel()`. Dispatcher method checks `availableProcessors - 2` (reserves cores for sync/RPC); if >1 thread available, splits nonce space across N `Future` workers with `AtomicBoolean` early cancellation. Falls back to single-threaded `mineEthashSingleThread()` on low-core machines. Uses IORuntime compute pool, `Await.result` with 5-minute timeout.
 - **Source:** PoW review R-001, `docs/reports/POW-CODEBASE-REVIEW.md`
 
 #### L-008: Bandwidth-weighted peer selection (PoW review R-002) ✅ DONE
