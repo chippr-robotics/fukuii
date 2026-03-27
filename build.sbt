@@ -72,8 +72,10 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   scalaModuleInfo ~= (_.map(_.withOverrideScalaVersion(true))),
   // organize-imports removed — built-in to Scalafix 0.11.0+
   // Scalanet snapshots are published to Sonatype after each build (now defined in inThisBuild resolvers).
-  (Test / testOptions) += Tests
-    .Argument(TestFrameworks.ScalaTest, "-l", "SlowTest"), // Exclude slow tests (real PoW mining) from default runs
+  (Test / testOptions) ++= Seq(
+    Tests.Argument(TestFrameworks.ScalaTest, "-l", "SlowTest"),      // Exclude real PoW mining tests from default runs
+    Tests.Argument(TestFrameworks.ScalaTest, "-l", "IntegrationTest") // Exclude network-dependent tests (DNS discovery, etc.)
+  ),
   // Configure scalacOptions for Scala 3
   scalacOptions := {
     val base = baseScalacOptions
