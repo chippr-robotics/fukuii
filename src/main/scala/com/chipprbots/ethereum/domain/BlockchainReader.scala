@@ -93,6 +93,10 @@ class BlockchainReader(
 
   def getBestBlockNumber(): BigInt = appStateStorage.getBestBlockNumber()
 
+  def getBestBlockInfo(): com.chipprbots.ethereum.domain.appstate.BlockInfo = appStateStorage.getBestBlockInfo()
+
+  def isSnapSyncDone(): Boolean = appStateStorage.isSnapSyncDone()
+
   // returns the best known block if it's available in the storage
   def getBestBlock(): Option[Block] = {
     val bestKnownBlockinfo = appStateStorage.getBestBlockInfo()

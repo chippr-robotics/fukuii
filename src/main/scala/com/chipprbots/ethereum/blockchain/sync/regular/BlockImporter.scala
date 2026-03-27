@@ -397,6 +397,25 @@ class BlockImporter(
       case Some(header) =>
         log.info("Starting Regular Sync from block {} (hash={})", bestBlock,
           ByteStringUtils.hash2string(header.hash))
+
+        // M-015: Validate pivot canonical consistency after SNAP sync.
+        // If a reorg orphaned the pivot between SNAP finalization and regular sync start,
+        // the stored best block hash won't match the header at that number.
+        if (blockchainReader.isSnapSyncDone()) {
+          val storedInfo = blockchainReader.getBestBlockInfo()
+          if (storedInfo.hash.nonEmpty && storedInfo.hash != header.hash) {
+            log.error(
+              "SNAP PIVOT REORG DETECTED: Stored best block hash {} does not match " +
+                "header hash {} at block {}. A chain reorganization has invalidated the " +
+                "SNAP sync pivot. The node may be on a minority fork. " +
+                "Consider clearing data and re-syncing.",
+              ByteStringUtils.hash2string(storedInfo.hash),
+              ByteStringUtils.hash2string(header.hash),
+              bestBlock
+            )
+          }
+        }
+
       case None =>
         log.warning(
           "Starting Regular Sync from block {} but no stored header found — " +

@@ -229,17 +229,17 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Approach:** When a range completes, split the largest active task at its `next` midpoint. ~30-40 lines in `handleStoreAccountChunk`.
 - **Depends on:** C-001, C-002
 
-#### M-004: Version-aware message decoding
+#### M-004: Version-aware message decoding — DEFERRED
 
 - **File:** `src/main/scala/.../network/rlpx/MessageCodec.scala:127`
 - **Priority:** Medium | **Risk:** Low
-- **Description:** `TODO [BACKLOG N-003]` — `remotePeer2PeerVersion` is available but not threaded to `fromBytes()`. Compression IS version-aware (line 58), but message format decoding is not. Relevant if Fukuii adopts P2P v5+.
+- **Description:** `TODO [BACKLOG N-003]` — `remotePeer2PeerVersion` is available but not threaded to `fromBytes()`. Compression IS version-aware (line 58), but message format decoding is not. Only relevant if Fukuii adopts P2P v5+ (not currently planned). Would require changing `MessageDecoder` trait + all implementations for no immediate benefit.
 
-#### M-005: Pass capability to handshake state machine
+#### M-005: Pass capability to handshake state machine — DEFERRED
 
 - **File:** `src/main/scala/.../network/PeerActor.scala:136`
 - **Priority:** Medium | **Risk:** Low
-- **Description:** `TODO [BACKLOG N-004]` — Capability information from Hello message should be forwarded to `EtcHelloExchangeState`. Capabilities available at `rlpxConnectionFactory` (line 369) but not passed on `InitialHelloReceived`.
+- **Description:** `TODO [BACKLOG N-004]` — Capability information from Hello message should be forwarded to `EtcHelloExchangeState`. Only relevant for P2P v5+. `EtcHelloExchangeState` already extracts capabilities from Hello — the issue is threading them to subsequent negotiation states.
 - **Depends on:** M-004
 
 #### M-006: Additional miner methods ✅ DONE
@@ -336,12 +336,11 @@ Comprehensive inventory of remaining work, verified against the codebase and com
   - JVM heap size vs sync mode (SNAP needs 3+ GB)
   - Integrated into `StdNode.start()` as first call. Fatal issues throw `IllegalStateException`. 5 unit tests in `ConfigValidatorSpec`.
 
-#### M-015: SNAP state freshness after reorg past pivot
+#### M-015: SNAP state freshness after reorg past pivot ✅ DONE
 
-- **File:** `src/main/scala/.../sync/snap/SNAPSyncController.scala`
+- **File:** `src/main/scala/.../sync/regular/BlockImporter.scala`, `BlockchainReader.scala`
 - **Priority:** Medium | **Risk:** Medium (sync-critical)
-- **Description:** After SNAP sync completes at a pivot block, if a chain reorg occurs that invalidates the pivot (e.g., reorg at blocks before the pivot), regular sync inherits stale state. SNAP only stores the pivot header area — there are no headers to walk back to the pre-reorg state. The node could sync to the minority fork and later orphan all blocks after the reorg point.
-- **Discovered:** 2026-03-25 full feature audit.
+- **Resolution:** Added pivot canonical validation at regular sync startup. When starting after SNAP sync, `BlockImporter.start()` compares the stored best block hash against the header at that block number. If they differ (reorg orphaned the pivot), logs a critical error with guidance to re-sync. Added `getBestBlockInfo()` and `isSnapSyncDone()` to `BlockchainReader` for access. Detection-only (not auto-recovery) — matches go-ethereum's approach of alerting rather than silently recovering from deep reorgs past the pivot.
 
 #### M-021: SNAP storage slot monotonicity validation ✅ DONE
 
@@ -595,6 +594,8 @@ Items below were implemented on the `march-onward` branch and verified against t
 | Chain split detection (H-015)     | `d2d87b32a`                                    | 13 tests: ForkId + peer validation      |
 | Adversarial resilience (H-016)   | `79d80c4e2`                                    | BadBlockTracker + 11 adversarial tests  |
 | Nightly failures triage (M-011)  | `a4997acfa`                                    | validateStorageRanges bug fix + 2 tests re-enabled |
+| JFR CPU profiling (M-024)       | `2e55b16e4`                                    | `debug_startCpuProfile`/`stopCpuProfile` + 4 tests |
+| SNAP pivot reorg detection (M-015) | `BlockImporter.scala`, `BlockchainReader.scala` | Canonical validation at regular sync startup |
 | CPU profiling via JFR (M-024)    | `DebugService.scala`                           | debug_startCpuProfile + debug_stopCpuProfile, 4 tests |
 
 ### Resolved in FIXME/TODO Audit (2026-03-25)
