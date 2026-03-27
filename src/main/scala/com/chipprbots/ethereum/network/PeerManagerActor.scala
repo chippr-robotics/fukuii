@@ -67,6 +67,18 @@ class PeerManagerActor(
 
   val triedNodes: mutable.Set[ByteString] = lruSet[ByteString](maxBlacklistedNodes)
 
+  /** Precomputed node IDs for static peers (from enode URIs). Used to identify static peers
+    * in handshake/disconnect handlers without re-parsing URIs each time.
+    */
+  private val staticNodeIds: Set[ByteString] = staticNodes.map { uri =>
+    ByteString(Hex.decode(uri.getUserInfo))
+  }
+
+  /** Tracks the last time we attempted to connect to each static peer.
+    * Prevents rapid reconnection cycling (15s CheckStaticPeers vs 60s cooldown).
+    */
+  private var lastStaticConnectAttempt: Map[URI, Long] = Map.empty
+
   /** In-process cache of peer statuses, updated reactively and via scheduled refresh. This allows GetPeers to return
     * immediately without querying individual peer actors.
     */
@@ -162,18 +174,25 @@ class PeerManagerActor(
 
   private def handleNewNodesToConnectMessages(connectedPeers: ConnectedPeers): Receive = {
     case CheckStaticPeers =>
+      val now = System.currentTimeMillis()
       staticNodes.foreach { uri =>
         val nodeId = ByteString(Hex.decode(uri.getUserInfo))
         val addr = new InetSocketAddress(uri.getHost, uri.getPort)
         val handshaked = connectedPeers.hasHandshakedWith(nodeId)
         val addrHandled = connectedPeers.isConnectionHandled(addr)
         val nodeIdPending = connectedPeers.hasNodeIdPending(nodeId)
-        if (!handshaked && !addrHandled && !nodeIdPending) {
+        val coolingDown =
+          lastStaticConnectAttempt.get(uri).exists(t => now - t < StaticPeerReconnectCooldown.toMillis)
+        if (handshaked) {
+          // Peer is healthy — clear any cooldown
+          lastStaticConnectAttempt = lastStaticConnectAttempt - uri
+        } else if (!addrHandled && !nodeIdPending && !coolingDown) {
           log.info("Reconnecting to static peer {}:{}", uri.getHost, uri.getPort)
+          lastStaticConnectAttempt = lastStaticConnectAttempt + (uri -> now)
           self ! ConnectToPeer(uri)
         } else if (log.isDebugEnabled) {
           log.debug(
-            s"Static peer ${uri.getHost}:${uri.getPort} already connected (handshaked=$handshaked, addrHandled=$addrHandled, nodeIdPending=$nodeIdPending)"
+            s"Static peer ${uri.getHost}:${uri.getPort} skipped (handshaked=$handshaked, addrHandled=$addrHandled, nodeIdPending=$nodeIdPending, coolingDown=$coolingDown)"
           )
         }
       }
@@ -415,6 +434,13 @@ class PeerManagerActor(
       }
 
     case Terminated(ref) =>
+      // Look up static peer info before removal (for lifecycle logging)
+      connectedPeers.findByRef(ref).foreach { peer =>
+        if (peer.nodeId.exists(staticNodeIds.contains)) {
+          val dir = if (peer.incomingConnection) "inbound" else "outbound"
+          log.info(s"Static peer disconnected: ${peer.remoteAddress} ($dir)")
+        }
+      }
       val (terminatedPeersIds, newConnectedPeers) = connectedPeers.removeTerminatedPeer(ref)
       terminatedPeersIds.foreach { peerId =>
         peerStatusCache = peerStatusCache - peerId
@@ -428,8 +454,11 @@ class PeerManagerActor(
       context.become(listening(newConnectedPeers))
 
     case PeerEvent.PeerHandshakeSuccessful(handshakedPeer, _) =>
+      val isStaticPeer = handshakedPeer.nodeId.exists(staticNodeIds.contains)
       if (
-        handshakedPeer.incomingConnection && connectedPeers.incomingHandshakedPeersCount >= peerConfiguration.maxIncomingPeers
+        handshakedPeer.incomingConnection &&
+        connectedPeers.incomingHandshakedPeersCount >= peerConfiguration.maxIncomingPeers &&
+        !isStaticPeer // Static peers bypass incoming slot limits (matches geth behavior)
       ) {
         handshakedPeer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.TooManyPeers)
 
@@ -446,6 +475,10 @@ class PeerManagerActor(
         // Keep the current connectedPeers state; the Terminated message will clean up the peer
         context.become(listening(connectedPeers))
       } else {
+        if (isStaticPeer) {
+          val dir = if (handshakedPeer.incomingConnection) "inbound" else "outbound"
+          log.info(s"Static peer handshaked: ${handshakedPeer.remoteAddress} ($dir)")
+        }
         peerStatusCache = peerStatusCache + (handshakedPeer.id -> PeerActor.Status.Handshaked)
         context.become(listening(connectedPeers.promotePeerToHandshaked(handshakedPeer)))
       }
@@ -595,6 +628,12 @@ class PeerManagerActor(
 object PeerManagerActor {
   /** Reconnect interval for static nodes (matches geth's staticPeerCheckInterval). */
   val StaticPeerCheckInterval: FiniteDuration = 15.seconds
+
+  /** Minimum time between reconnection attempts to the same static peer.
+    * Prevents rapid cycling when bidirectional static-nodes cause a connection deduplication deadlock
+    * (both sides keep their outbound, kill the other's inbound, repeat every 15s).
+    */
+  val StaticPeerReconnectCooldown: FiniteDuration = 60.seconds
 
   // scalastyle:off parameter.number
   def props[R <: HandshakeResult](

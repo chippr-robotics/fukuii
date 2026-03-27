@@ -56,6 +56,9 @@ case class ConnectedPeers(
 
   def getPeer(peerId: PeerId): Option[Peer] = peers.get(peerId)
 
+  /** Find a peer by its ActorRef across all states (pending, handshaked, pruning). */
+  def findByRef(ref: ActorRef): Option[Peer] = allPeers.values.find(_.ref == ref)
+
   def addNewPendingPeer(pendingPeer: Peer): ConnectedPeers =
     if (pendingPeer.incomingConnection)
       copy(incomingPendingPeers = incomingPendingPeers + (pendingPeer.id -> pendingPeer))
