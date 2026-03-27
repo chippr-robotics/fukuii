@@ -51,18 +51,17 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 
 ## Tier 0: CRITICAL — Merge & Stabilize
 
-### C-001: Merge open SNAP PRs (#1007, #1008)
+### C-001: Merge open SNAP PRs (#1007, #1008) ✅ DONE
 
 - **Priority:** Critical | **Risk:** High (sync-critical)
-- **#1007:** Fix SNAP finalization deadlocks (3 fixes)
-- **#1008:** Comprehensive SNAP test coverage (~144 tests, 2,770 lines)
-- **Action:** Review and merge both PRs to unblock downstream work.
+- **Resolution:** All fixes already implemented on `march-onward`:
+  - #1007 (3 deadlock fixes): validateState catch-all sends Done, 2h chain download timeout, stale TODO removed
+  - #1008 (144 SNAP tests): All 10 test files already exist in `src/test/.../sync/snap/`
 
-### C-002: Fix SNAP healing actor name collision (#1005)
+### C-002: Fix SNAP healing actor name collision (#1005) ✅ DONE
 
 - **Priority:** Critical | **Risk:** High (sync-critical)
-- **Description:** Actor name collision during SNAP healing phase. Needs `healingStarted` guard to prevent duplicate actor creation.
-- **Depends on:** C-001
+- **Resolution:** Duplicate guard already at `SNAPSyncController.scala:2044` — "healing coordinator already exists — ignoring duplicate". `trieNodeHealingCoordinator` Option guard prevents duplicate creation.
 
 ### C-003: Production log level ✅ DONE
 
@@ -227,7 +226,7 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Priority:** Medium | **Risk:** Medium (sync-critical)
 - **Description:** No work-stealing queue. 1:1 worker-to-peer mapping. On ETC mainnet with 4 peers/ranges, 2/4 ranges finished early (uneven account density), leaving 2 workers idle while others continued.
 - **Approach:** When a range completes, split the largest active task at its `next` midpoint. ~30-40 lines in `handleStoreAccountChunk`.
-- **Depends on:** C-001, C-002
+- **Depends on:** ~~C-001, C-002~~ (resolved)
 
 #### M-004: Version-aware message decoding — DEFERRED
 
@@ -319,7 +318,7 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 
 - **Priority:** Medium | **Risk:** Low
 - **Description:** `sbt it:test` — 37 spec files, 1 ignored. Full run needed to establish baseline.
-- **Depends on:** C-001
+- **Depends on:** ~~C-001~~ (resolved)
 
 #### M-013: Run full EVM test suite — BLOCKED
 
@@ -597,6 +596,9 @@ Items below were implemented on the `march-onward` branch and verified against t
 | JFR CPU profiling (M-024)       | `2e55b16e4`                                    | `debug_startCpuProfile`/`stopCpuProfile` + 4 tests |
 | SNAP pivot reorg detection (M-015) | `BlockImporter.scala`, `BlockchainReader.scala` | Canonical validation at regular sync startup |
 | EthereumTestsSpec block execution (M-009) | `EthereumTestsSpec.scala` + 2 IT compile fixes | `runSingleTest` now executes blocks via `BlockExecution` |
+| SNAP finalization fixes (C-001/#1007)    | Already on `march-onward`                      | Deadlock fix, 2h timeout, TODO cleanup — all pre-existing |
+| SNAP test coverage (C-001/#1008)         | Already on `march-onward`                      | 10 test files, 144 tests — all pre-existing |
+| SNAP healing name collision (C-002/#1005) | `SNAPSyncController.scala:2044`                | Duplicate guard already implemented |
 | CPU profiling via JFR (M-024)    | `DebugService.scala`                           | debug_startCpuProfile + debug_stopCpuProfile, 4 tests |
 
 ### Resolved in FIXME/TODO Audit (2026-03-25)
