@@ -290,11 +290,11 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 
 ### 2.3 — Testing
 
-#### M-009: Complete EthereumTestsSpec block execution
+#### M-009: Complete EthereumTestsSpec block execution ✅ DONE
 
-- **File:** `src/it/scala/.../ethtest/EthereumTestsSpec.scala:59`
+- **File:** `src/it/scala/.../ethtest/EthereumTestsSpec.scala`
 - **Priority:** Medium | **Risk:** Low
-- **Description:** The spec currently parses test fixtures and sets up initial state but does not execute blocks through `BlockExecution`. Completing this gives full consensus test coverage against the ethereum/tests suite.
+- **Resolution:** Updated `runSingleTest` in base class to call `executeTest` (full block execution + post-state validation) instead of just setting up state. The execution infrastructure (`EthereumTestHelper.setupAndExecuteTest`, `BlockExecution`) was already built — only the base class entry point was bypassing it. Also fixed 2 pre-existing integration test compilation errors: `BlockImporterItSpec` (FetchStateNode pattern match arity) and `SNAPSyncIntegrationSpec` (AccountRangeProgress type change). All integration tests now compile.
 
 #### M-010: Audit SlowTest-tagged tests ✅ DONE
 
@@ -596,6 +596,7 @@ Items below were implemented on the `march-onward` branch and verified against t
 | Nightly failures triage (M-011)  | `a4997acfa`                                    | validateStorageRanges bug fix + 2 tests re-enabled |
 | JFR CPU profiling (M-024)       | `2e55b16e4`                                    | `debug_startCpuProfile`/`stopCpuProfile` + 4 tests |
 | SNAP pivot reorg detection (M-015) | `BlockImporter.scala`, `BlockchainReader.scala` | Canonical validation at regular sync startup |
+| EthereumTestsSpec block execution (M-009) | `EthereumTestsSpec.scala` + 2 IT compile fixes | `runSingleTest` now executes blocks via `BlockExecution` |
 | CPU profiling via JFR (M-024)    | `DebugService.scala`                           | debug_startCpuProfile + debug_stopCpuProfile, 4 tests |
 
 ### Resolved in FIXME/TODO Audit (2026-03-25)

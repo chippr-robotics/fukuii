@@ -1,6 +1,5 @@
 package com.chipprbots.ethereum.ethtest
 
-import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -43,7 +42,8 @@ abstract class EthereumTestsSpec extends AnyFlatSpec with Matchers {
     }
   }
 
-  /** Run a single blockchain test case
+  /** Run a single blockchain test case — executes blocks through BlockExecution
+    * and validates the final state matches the expected post-state.
     *
     * @param testName
     *   Name of the test case
@@ -56,17 +56,15 @@ abstract class EthereumTestsSpec extends AnyFlatSpec with Matchers {
     info(s"  Blocks to execute: ${test.blocks.size}")
     info(s"  Expected post-state accounts: ${test.postState.size}")
 
-    // TODO: Execute the test using BlockExecution infrastructure
-    // For now, just validate we can parse and set up state
-    val setupResult = EthereumTestExecutor.setupInitialStateForTest(test)
+    val result = executeTest(test)
 
-    setupResult match {
-      case Right(world) =>
-        info(s"  ✓ Initial state setup successful")
-        info(s"  State root: ${org.bouncycastle.util.encoders.Hex.toHexString(world.stateRootHash.toArray)}")
+    result match {
+      case Right(executionResult) =>
+        info(s"  ✓ Test passed — ${executionResult.blocksExecuted} blocks executed")
+        info(s"  Final state root: ${org.bouncycastle.util.encoders.Hex.toHexString(executionResult.finalStateRoot.toArray)}")
 
       case Left(error) =>
-        fail(s"Failed to setup initial state: $error")
+        fail(s"Test execution failed: $error")
     }
   }
 
