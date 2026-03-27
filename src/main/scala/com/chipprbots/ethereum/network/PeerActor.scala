@@ -322,7 +322,7 @@ class PeerActor[R <: HandshakeResult](
           )
       )
       .map(_.message)
-    val peer: Peer = Peer(peerId, peerAddress, self, incomingConnection, source, Some(remoteNodeId))
+    val peer: Peer = Peer(peerId, peerAddress, self, incomingConnection, source = source, nodeId = Some(remoteNodeId))
     peerEventBus ! Publish(PeerHandshakeSuccessful(peer, handshakeResult))
 
     /** main behavior of actor that handles peer communication and subscriptions for messages

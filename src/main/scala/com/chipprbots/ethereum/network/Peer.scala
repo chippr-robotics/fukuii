@@ -21,6 +21,7 @@ final case class Peer(
     remoteAddress: InetSocketAddress,
     ref: ActorRef,
     incomingConnection: Boolean,
+    isStatic: Boolean = false,
     source: Source[Message, NotUsed] = Source.empty,
     nodeId: Option[ByteString] = None,
     createTimeMillis: Long = System.currentTimeMillis

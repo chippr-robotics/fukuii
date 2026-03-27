@@ -119,6 +119,11 @@ final class PivotHeaderBootstrap(
           log.debug("Unexpected pivot header response: {}", other)
           None
       }
+      .recover { case ex =>
+        // Ask timeout or unexpected failure — retry instead of silently stalling
+        log.warning("Pivot header fetch failed with exception: {}", ex.getMessage)
+        None
+      }
       .foreach {
         case Some(header) if header.number == targetBlock =>
           self ! Fetched(header)

@@ -54,17 +54,24 @@ case class ConnectedPeers(
     else
       copy(outgoingPendingPeers = outgoingPendingPeers + (pendingPeer.id -> pendingPeer))
 
-  def promotePeerToHandshaked(peerAfterHandshake: Peer): ConnectedPeers =
-    if (peerAfterHandshake.incomingConnection)
+  def promotePeerToHandshaked(peerAfterHandshake: Peer): ConnectedPeers = {
+    val pendingPeerId = PeerId.fromRef(peerAfterHandshake.ref)
+    if (peerAfterHandshake.incomingConnection) {
       copy(
-        incomingPendingPeers = incomingPendingPeers - PeerId.fromRef(peerAfterHandshake.ref),
+        incomingPendingPeers = incomingPendingPeers - pendingPeerId,
         handshakedPeers = handshakedPeers + (peerAfterHandshake.id -> peerAfterHandshake)
       )
-    else
+    } else {
+      // Propagate isStatic from the pending peer — PeerActor creates a fresh Peer on
+      // handshake without knowledge of PeerManagerActor's static node list.
+      val wasStatic = outgoingPendingPeers.get(pendingPeerId).exists(_.isStatic)
+      val promoted = if (wasStatic) peerAfterHandshake.copy(isStatic = true) else peerAfterHandshake
       copy(
-        outgoingPendingPeers = outgoingPendingPeers - PeerId.fromRef(peerAfterHandshake.ref),
-        handshakedPeers = handshakedPeers + (peerAfterHandshake.id -> peerAfterHandshake)
+        outgoingPendingPeers = outgoingPendingPeers - pendingPeerId,
+        handshakedPeers = handshakedPeers + (promoted.id -> promoted)
       )
+    }
+  }
 
   def removeTerminatedPeer(peerRef: ActorRef): (Iterable[PeerId], ConnectedPeers) = {
     val peersId = allPeers.collect { case (id, peer) if peer.ref == peerRef => id }

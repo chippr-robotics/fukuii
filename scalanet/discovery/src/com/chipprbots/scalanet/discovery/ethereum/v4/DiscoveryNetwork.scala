@@ -2,6 +2,7 @@ package com.chipprbots.scalanet.discovery.ethereum.v4
 
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeoutException
 
 import cats.Show
@@ -87,6 +88,32 @@ object DiscoveryNetwork {
 
       private val maxNeighborsPerPacket = getMaxNeighborsPerPacket
 
+      // Per-IP exponential backoff for error logging.
+      // Prevents log spam from peers sending malformed packets repeatedly.
+      // Pattern: log first error immediately, then suppress for 1min→2min→4min→...→30min cap.
+      private case class ErrorBackoff(suppressUntilMs: Long, intervalMs: Long)
+      private val errorBackoffs = new ConcurrentHashMap[String, ErrorBackoff]()
+      private val InitialBackoffMs: Long = 60_000L       // 1 minute
+      private val MaxBackoffMs: Long     = 30 * 60_000L  // 30 minutes
+      private val BackoffMultiplier: Int = 2
+
+      private def shouldLogError(remoteKey: String): Boolean = {
+        val now = System.currentTimeMillis()
+        val backoff = errorBackoffs.get(remoteKey)
+        if (backoff == null) {
+          // First error from this peer — log and start backoff
+          errorBackoffs.put(remoteKey, ErrorBackoff(now + InitialBackoffMs, InitialBackoffMs))
+          true
+        } else if (now >= backoff.suppressUntilMs) {
+          // Backoff expired — log and double the interval (capped)
+          val nextInterval = math.min(backoff.intervalMs * BackoffMultiplier, MaxBackoffMs)
+          errorBackoffs.put(remoteKey, ErrorBackoff(now + nextInterval, nextInterval))
+          true
+        } else {
+          false // Still suppressed
+        }
+      }
+
       /** Start a fiber that accepts incoming channels and starts a dedicated fiber
         * to handle every channel separtely, processing their messages one by one.
         * This is fair: every remote connection can be throttled independently
@@ -104,7 +131,10 @@ object DiscoveryNetwork {
                   .recover {
                     case ex: TimeoutException =>
                     case NonFatal(ex) =>
-                      logger.error(s"Error handling channel from ${channel.to}: $ex")
+                      val remoteKey = channel.to.toString
+                      if (shouldLogError(remoteKey)) {
+                        logger.warn(s"Error handling channel from ${channel.to}: $ex")
+                      }
                   }
                   .start.void
 

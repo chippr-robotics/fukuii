@@ -86,8 +86,20 @@ class AccountRangeCoordinator(
 
   private def markPeerStateless(peer: Peer, reason: String): Unit = {
     val shouldMark = if (reason.contains("Missing proof for empty account range")) {
-      // Peer explicitly returned empty response — immediately stateless
-      true
+      // Geth/Besu alignment: don't mark stateless for proof failures — just use graduated cooldown.
+      // Empty proofs often come from peers with incomplete snap serving, not from root staleness.
+      val count = peerEmptyProofFailures.getOrElse(peer.id.value, 0) + 1
+      peerEmptyProofFailures.update(peer.id.value, count)
+      if (count >= 5) {
+        val cooldownMs = 5 * 60 * 1000L // 5 minutes
+        peerCooldownUntilMs.put(peer.id.value, System.currentTimeMillis() + cooldownMs)
+        log.info(s"Peer ${peer.id.value} hit $count empty-proof failures — 5min cooldown")
+      } else if (count >= 3) {
+        val cooldownMs = 60 * 1000L // 60 seconds
+        peerCooldownUntilMs.put(peer.id.value, System.currentTimeMillis() + cooldownMs)
+        log.info(s"Peer ${peer.id.value} hit $count empty-proof failures — 60s cooldown")
+      }
+      false // Never mark stateless for empty proofs
     } else if (reason.contains("Request timeout")) {
       // Peer timed out — track consecutive timeouts.
       // On ETC mainnet, peers silently stop responding when the snap serve window expires
@@ -286,6 +298,11 @@ class AccountRangeCoordinator(
   private val peerConsecutiveTimeouts = mutable.Map[String, Int]()
   private val consecutiveTimeoutThreshold = 3 // Mark stateless after 3 consecutive timeouts
 
+  // Track empty-proof failures per peer (persists across pivot refreshes — geth/Besu alignment).
+  // Neither geth nor Besu marks peers stateless for empty/invalid proofs; they just reschedule.
+  // We use graduated cooldowns: 1-2 failures = no penalty, 3+ = 60s cooldown, 5+ = 5min cooldown.
+  private val peerEmptyProofFailures = mutable.Map[String, Int]()
+
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
   private val peerCooldownDefault = 30.seconds
@@ -426,6 +443,7 @@ class AccountRangeCoordinator(
       // If the same peer is re-reported (same id), preserve its stateless marking —
       // otherwise PeerAvailable from SNAPSyncController clears stateless every ~1s,
       // bypassing the backoff mechanism entirely (Bug 24).
+      val peerCountBefore = activePeerCount
       val evicted = knownAvailablePeers.filter(_.remoteAddress == peer.remoteAddress)
       knownAvailablePeers --= evicted
       evicted.foreach { p =>
@@ -438,12 +456,20 @@ class AccountRangeCoordinator(
         log.debug(s"Ignoring PeerAvailable(${peer.id.value}) - peer is stateless for current root")
       } else if (isPeerCoolingDown(peer)) {
         log.debug(s"Ignoring PeerAvailable(${peer.id.value}) - peer is cooling down")
-      } else if (pendingTasks.isEmpty) {
-        log.debug("No pending tasks")
-      } else {
+      } else if (pendingTasks.nonEmpty) {
         // Pipeline multiple requests per peer (core-geth parity).
         // ByteCodeCoordinator already uses this pattern with maxInFlightPerPeer = 5.
         dispatchIfPossible(peer)
+      } else if (activePeerCount > peerCountBefore && activeTasks.nonEmpty) {
+        // New snap peer joined but no pending tasks — steal work from active ranges
+        // to utilize the new capacity. This makes worker scaling dynamic: ranges are
+        // split when peers increase mid-sync, matching geth's per-round assignment.
+        log.info(
+          s"New snap peer increased capacity ($peerCountBefore -> $activePeerCount active peers, " +
+            s"maxWorkers: ${peerCountBefore * maxInFlightPerPeer} -> $maxWorkers). Splitting work."
+        )
+        maybeStealWork()
+        tryRedispatchPendingTasks()
       }
 
     case UpdateMaxInFlightPerPeer(newLimit) =>
@@ -562,8 +588,11 @@ class AccountRangeCoordinator(
     // Already finalizing, ignore
   }
 
-  // Cap total workers to activePeerCount * maxInFlightPerPeer — enough to saturate all peers.
-  private def maxWorkers: Int = concurrency * maxInFlightPerPeer
+  // Dynamic worker cap: activePeerCount * maxInFlightPerPeer — scales with peer discovery.
+  // Was previously static (concurrency * maxInFlightPerPeer), which left workers idle when
+  // new snap peers joined mid-sync. Now matches geth's Syncer.assignAccountTasks() pattern
+  // of dynamic range assignment per scheduling round.
+  private def maxWorkers: Int = activePeerCount * maxInFlightPerPeer
 
   private def createWorker(): ActorRef = {
     val worker = context.actorOf(
@@ -653,8 +682,9 @@ class AccountRangeCoordinator(
           val estimatedBytes = BigInt(accountCount * 100) // ~100 bytes per account (hash + RLP)
           adjustResponseBytesOnSuccess(peer, responseBytesTargetFor(peer), estimatedBytes)
 
-          // Reset consecutive timeout counter — peer is responsive
+          // Reset failure counters — peer is responsive
           peerConsecutiveTimeouts.remove(peer.id.value)
+          peerEmptyProofFailures.remove(peer.id.value)
 
           // Reset pivot refresh backoff on receiving real account data
           if (accountCount > 0) {

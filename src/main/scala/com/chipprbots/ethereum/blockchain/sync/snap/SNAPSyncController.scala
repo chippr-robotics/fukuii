@@ -549,9 +549,8 @@ class SNAPSyncController(
         currentPhase = ByteCodeAndStorageSync
         progressMonitor.startPhase(ByteCodeAndStorageSync)
 
-        // Redistribute per-peer budget: accounts done, give storage+bytecode more bandwidth.
-        // Global budget remains 5 per peer: storage=3, bytecode=2.
-        storageRangeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(3))
+        // Storage already starts at budget=3 (parallel with accounts, matching geth/Besu).
+        // Bytecode gets more bandwidth now that accounts are done.
         bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(2))
 
         // Cancel account stagnation checks (no longer relevant)
@@ -1597,8 +1596,11 @@ class SNAPSyncController(
     // Only evict peers that don't advertise snap at all.
     // Aligned with Besu: snap-advertising peers with pending/failed probes are NOT evicted —
     // they are simply excluded from snap sync selection until verified.
+    // Static peers are exempt from eviction (matches geth/Besu behavior).
+    // core-geth advertises snap/1 but doesn't serve SNAP state — keeping it
+    // connected as eth/68 peer is still valuable for block header/body sync.
     val nonSnapOutgoing = allPeers
-      .filter(p => !p.peerInfo.remoteStatus.supportsSnap && !p.peer.incomingConnection)
+      .filter(p => !p.peerInfo.remoteStatus.supportsSnap && !p.peer.incomingConnection && !p.peer.isStatic)
       .sortBy(_.peer.createTimeMillis)
     val evictionCandidates = nonSnapOutgoing
 
@@ -1828,7 +1830,7 @@ class SNAPSyncController(
               maxInFlightRequests = snapSyncConfig.storageConcurrency,
               requestTimeout = snapSyncConfig.timeout,
               snapSyncController = self,
-              initialMaxInFlightPerPeer = 0, // Defer storage dispatch during AccountRangeSync — prevents false pivot refreshes from stale-root timeouts
+              initialMaxInFlightPerPeer = 3, // Parallel with accounts — matches geth/Besu (both run storage concurrently from the start)
               initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
               minResponseBytes = snapSyncConfig.storageMinResponseBytes
             )

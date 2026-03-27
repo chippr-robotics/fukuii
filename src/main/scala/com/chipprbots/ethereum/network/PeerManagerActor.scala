@@ -349,7 +349,7 @@ class PeerManagerActor(
 
     validConnection match {
       case Right(address) =>
-        val (peer, newConnectedPeers) = createPeer(address, incomingConnection = false, connectedPeers)
+        val (peer, newConnectedPeers) = createPeer(address, incomingConnection = false, connectedPeers, isStatic = isStaticNode(uri))
         peer.ref ! PeerActor.ConnectTo(uri)
         context.become(listening(newConnectedPeers))
 
@@ -450,7 +450,8 @@ class PeerManagerActor(
   private def createPeer(
       address: InetSocketAddress,
       incomingConnection: Boolean,
-      connectedPeers: ConnectedPeers
+      connectedPeers: ConnectedPeers,
+      isStatic: Boolean = false
   ): (Peer, ConnectedPeers) = {
     val ref = peerFactory(context, address, incomingConnection)
     context.watch(ref)
@@ -463,7 +464,8 @@ class PeerManagerActor(
         PeerId.fromRef(ref),
         address,
         ref,
-        incomingConnection
+        incomingConnection,
+        isStatic = isStatic
       )
 
     peerStatusCache = peerStatusCache + (pendingPeer.id -> PeerActor.Status.Connecting)
