@@ -8,6 +8,7 @@ import scala.concurrent.Future
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.consensus.pow.PoWMiningCoordinator
 import com.chipprbots.ethereum.consensus.pow.PoWMiningCoordinator.CoordinatorProtocol
+import com.chipprbots.ethereum.consensus.mining.MiningMetrics
 import com.chipprbots.ethereum.consensus.pow.miners.MinerProtocol.MiningResult
 import com.chipprbots.ethereum.consensus.pow.miners.MinerProtocol.MiningSuccessful
 import com.chipprbots.ethereum.domain.Block
@@ -47,5 +48,11 @@ trait Miner extends Logger {
   def submitHashRate(ethMiningService: EthMiningService, time: Long, mineResult: MiningResult): Unit = {
     val hashRate = if (time > 0) (mineResult.triedHashes.toLong * 1000000000) / time else Long.MaxValue
     ethMiningService.submitHashRate(SubmitHashRateRequest(hashRate, ByteString("fukuii-miner")))
+    MiningMetrics.setHashRate(hashRate)
+    MiningMetrics.addTriedHashes(mineResult.triedHashes.toLong)
+    mineResult match {
+      case _: MiningSuccessful => MiningMetrics.incrementBlocksMined()
+      case _                   => MiningMetrics.incrementBlocksFailed()
+    }
   }
 }

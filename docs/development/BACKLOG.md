@@ -500,12 +500,11 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Fix:** Replace `Array[Array[Int]]` with `MappedByteBuffer` from `java.nio.channels.FileChannel.map()`. DAG file format already compatible (sequential 64-byte hashes).
 - **Source:** PoW review R-004, `docs/reports/POW-CODEBASE-REVIEW.md`
 
-#### L-011: Mining hashrate Prometheus metrics (PoW review R-005)
+#### L-011: Mining hashrate Prometheus metrics (PoW review R-005) ✅ DONE
 
-- **File:** `src/main/scala/.../consensus/pow/miners/EthashMiner.scala`, metrics registration
+- **File:** `src/main/scala/.../consensus/mining/MiningMetrics.scala`, `src/main/scala/.../consensus/pow/miners/Miner.scala`
 - **Priority:** Low | **Risk:** Low
-- **Description:** Fukuii has 8 Grafana dashboards and Prometheus integration but no mining-specific metrics. Mining operators need real-time visibility into hashrate, nonce attempts/sec, blocks found, DAG generation time, and work template refresh rate.
-- **Fix:** Register Prometheus counters/gauges: `fukuii_mining_hashrate` (gauge), `fukuii_mining_nonce_attempts_total` (counter), `fukuii_mining_blocks_found_total` (counter), `fukuii_mining_dag_generation_seconds` (histogram), `fukuii_mining_recommit_total` (counter). Hook into existing `EthashMiner.submitHashRate()` and `PoWMiningCoordinator`.
+- **Status:** DONE — Added 4 Prometheus metrics to `MiningMetrics`: `mining.hashrate.hps.gauge` (current H/s), `mining.hashes.tried.total` (cumulative nonce attempts), `mining.blocks.mined.success.counter`, `mining.blocks.mined.failure.counter`. Instrumented via `Miner.submitHashRate()` which is called after every mining round. 47 mining tests pass.
 - **Source:** PoW review R-005, `docs/reports/POW-CODEBASE-REVIEW.md`
 
 ---
