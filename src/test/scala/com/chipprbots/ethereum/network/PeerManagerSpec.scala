@@ -700,6 +700,7 @@ class PeerManagerSpec
           peerFactory,
           discoveryConfig,
           blacklist,
+          staticNodes = Set.empty,
           Some(testScheduler)
         )
       )

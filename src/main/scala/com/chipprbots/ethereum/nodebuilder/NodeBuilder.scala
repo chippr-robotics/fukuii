@@ -52,6 +52,7 @@ import com.chipprbots.ethereum.network._
 import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
 import com.chipprbots.ethereum.network.discovery.DiscoveryServiceBuilder
 import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
+import com.chipprbots.ethereum.network.discovery.StaticNodesLoader
 import com.chipprbots.ethereum.network.handshaker.NetworkHandshaker
 import com.chipprbots.ethereum.network.handshaker.NetworkHandshakerConfiguration
 import com.chipprbots.ethereum.network.handshaker.Handshaker
@@ -301,6 +302,9 @@ trait PeerManagerActorBuilder {
 
   lazy val peerConfiguration: PeerConfiguration = Config.Network.peer
 
+  lazy val staticNodeUris: Set[java.net.URI] =
+    StaticNodesLoader.loadUrisFromDatadir(Config.config.getString("datadir"))
+
   lazy val peerManager: ActorRef = system.actorOf(
     PeerManagerActor.props(
       peerDiscoveryManager,
@@ -312,7 +316,8 @@ trait PeerManagerActorBuilder {
       authHandshaker,
       discoveryConfig,
       blacklist,
-      Config.supportedCapabilities
+      Config.supportedCapabilities,
+      staticNodeUris
     ),
     "peer-manager"
   )

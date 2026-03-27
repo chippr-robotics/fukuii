@@ -47,6 +47,7 @@ class PeerManagerActor(
     peerFactory: (ActorContext, InetSocketAddress, Boolean) => ActorRef,
     discoveryConfig: DiscoveryConfig,
     val blacklist: Blacklist,
+    staticNodes: Set[URI] = Set.empty,
     externalSchedulerOpt: Option[Scheduler] = None
 ) extends Actor
     with ActorLogging
@@ -109,6 +110,13 @@ class PeerManagerActor(
       // Without this, the first connection attempt waits for updateNodesInitialDelay.
       // Core-geth dials bootstrap nodes at t+0; we should too.
       peerDiscoveryManager ! PeerDiscoveryManager.GetDiscoveredNodesInfo
+      // Direct-dial static nodes immediately (matches geth/core-geth behavior).
+      // Static nodes are treated as direct TCP dial targets, not just discovery seeds.
+      if (staticNodes.nonEmpty) {
+        log.info("Direct-dialing {} static node(s)", staticNodes.size)
+        staticNodes.foreach(uri => self ! ConnectToPeer(uri))
+        scheduleStaticPeerCheck()
+      }
       context.become(listening(ConnectedPeers.empty))
       unstashAll()
     case _ =>
@@ -135,6 +143,17 @@ class PeerManagerActor(
     )
   }
 
+  /** Schedule periodic reconnection attempts to static nodes (every 15s, matching geth). */
+  private def scheduleStaticPeerCheck(): Unit = {
+    implicit val ec = context.dispatcher
+    scheduler.scheduleWithFixedDelay(
+      StaticPeerCheckInterval,
+      StaticPeerCheckInterval,
+      self,
+      CheckStaticPeers
+    )
+  }
+
   private def listening(connectedPeers: ConnectedPeers): Receive =
     handleCommonMessages(connectedPeers)
       .orElse(handleConnections(connectedPeers))
@@ -142,6 +161,19 @@ class PeerManagerActor(
       .orElse(handlePruning(connectedPeers))
 
   private def handleNewNodesToConnectMessages(connectedPeers: ConnectedPeers): Receive = {
+    case CheckStaticPeers =>
+      staticNodes.foreach { uri =>
+        val nodeId = ByteString(Hex.decode(uri.getUserInfo))
+        val addr = new InetSocketAddress(uri.getHost, uri.getPort)
+        if (
+          !connectedPeers.hasHandshakedWith(nodeId) &&
+          !connectedPeers.isConnectionHandled(addr)
+        ) {
+          log.info("Reconnecting to static peer {}:{}", uri.getHost, uri.getPort)
+          self ! ConnectToPeer(uri)
+        }
+      }
+
     case KnownNodesManager.KnownNodes(nodes) =>
       val nodesToConnect = nodes.take(peerConfiguration.maxOutgoingPeers)
 
@@ -298,13 +330,17 @@ class PeerManagerActor(
     }
   }
 
+  private def isStaticNode(uri: URI): Boolean = staticNodes.contains(uri)
+
   private def connectWith(uri: URI, connectedPeers: ConnectedPeers): Unit = {
     val nodeId = ByteString(Hex.decode(uri.getUserInfo))
     val remoteAddress = new InetSocketAddress(uri.getHost, uri.getPort)
 
     val alreadyConnectedToPeer =
       connectedPeers.hasHandshakedWith(nodeId) || connectedPeers.isConnectionHandled(remoteAddress)
-    val isOutgoingPeersNotMaxValue = connectedPeers.outgoingPeersCount < peerConfiguration.maxOutgoingPeers
+    // Static nodes are exempt from MaxOutgoingConnections (matches geth behavior)
+    val isOutgoingPeersNotMaxValue =
+      isStaticNode(uri) || connectedPeers.outgoingPeersCount < peerConfiguration.maxOutgoingPeers
 
     val validConnection = for {
       validHandler <- validateConnection(remoteAddress, OutgoingConnectionAlreadyHandled(uri), !alreadyConnectedToPeer)
@@ -547,6 +583,9 @@ class PeerManagerActor(
 }
 
 object PeerManagerActor {
+  /** Reconnect interval for static nodes (matches geth's staticPeerCheckInterval). */
+  val StaticPeerCheckInterval: FiniteDuration = 15.seconds
+
   // scalastyle:off parameter.number
   def props[R <: HandshakeResult](
       peerDiscoveryManager: ActorRef,
@@ -558,7 +597,8 @@ object PeerManagerActor {
       authHandshaker: AuthHandshaker,
       discoveryConfig: DiscoveryConfig,
       blacklist: Blacklist,
-      capabilities: List[Capability]
+      capabilities: List[Capability],
+      staticNodes: Set[URI] = Set.empty
   ): Props = {
     val factory: (ActorContext, InetSocketAddress, Boolean) => ActorRef =
       peerFactory(
@@ -579,7 +619,8 @@ object PeerManagerActor {
         peerStatistics,
         peerFactory = factory,
         discoveryConfig,
-        blacklist
+        blacklist,
+        staticNodes
       )
     )
   }
@@ -651,6 +692,8 @@ object PeerManagerActor {
   }
 
   case object StartConnecting
+
+  case object CheckStaticPeers
 
   case class HandlePeerConnection(connection: ActorRef, remoteAddress: InetSocketAddress)
 

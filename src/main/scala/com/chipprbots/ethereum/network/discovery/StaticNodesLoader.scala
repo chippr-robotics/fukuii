@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.network.discovery
 
 import java.io.File
+import java.net.URI
 import java.nio.file.Paths
 
 import scala.io.Source
@@ -70,6 +71,31 @@ object StaticNodesLoader extends Logger {
     val staticNodesPath = Paths.get(datadir, "static-nodes.json").toString
     loadFromFile(staticNodesPath)
   }
+
+  /** Load static nodes from the datadir as parsed URIs for direct-dial connections.
+    *
+    * Reference clients (geth, core-geth, Besu, Nethermind, Erigon) treat static nodes
+    * as direct TCP dial targets with auto-reconnect, NOT as discovery bootstrap seeds.
+    * This method returns URIs suitable for direct connection by PeerManagerActor.
+    *
+    * @param datadir
+    *   the data directory path
+    * @return
+    *   Set of parsed enode URIs, or empty set if file doesn't exist or is invalid
+    */
+  def loadUrisFromDatadir(datadir: String): Set[URI] =
+    loadFromDatadir(datadir).flatMap { enodeStr =>
+      Try(new URI(enodeStr)) match {
+        case Success(uri) if uri.getUserInfo != null && uri.getHost != null && uri.getPort > 0 =>
+          Some(uri)
+        case Success(uri) =>
+          log.warn(s"Static node enode URI missing required fields (userInfo/host/port): $enodeStr")
+          None
+        case Failure(ex) =>
+          log.warn(s"Failed to parse static node enode URI: $enodeStr - ${ex.getMessage}")
+          None
+      }
+    }
 
   /** Parse static nodes JSON content
     *
