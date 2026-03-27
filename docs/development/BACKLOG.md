@@ -480,12 +480,11 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Fix:** Split nonce space into `Runtime.getRuntime.availableProcessors` ranges, spawn parallel `Future[MiningResult]` per range, race for first valid nonce.
 - **Source:** PoW review R-001, `docs/reports/POW-CODEBASE-REVIEW.md`
 
-#### L-008: Bandwidth-weighted peer selection (PoW review R-002)
+#### L-008: Bandwidth-weighted peer selection (PoW review R-002) ✅ DONE
 
-- **File:** `src/main/scala/.../blockchain/sync/PeersClient.scala`
+- **File:** `src/main/scala/.../blockchain/sync/PeersClient.scala`, `SyncController.scala`
 - **Priority:** Low | **Risk:** Low
-- **Description:** go-ethereum weighs peer selection by both total difficulty AND download bandwidth. Fukuii selects peers primarily by TD via `ChainWeight`. Adding bandwidth tracking (bytes/second per peer over a rolling window) and weighting peer selection by `TD * bandwidth_score` would improve sync speed when multiple peers have similar TD but different throughput.
-- **Fix:** Track `bytesReceived / elapsed` per peer in `PeerScoringManager`, expose as `bandwidthScore`. Weight `bestPeer()` selection by `chainWeight * bandwidthScore`.
+- **Resolution:** Connected the existing `PeerScoringManager` (was built but never wired) to `PeersClient`. Shared scoring manager instance created in `SyncController`, passed to all `PeersClient` instances. `bestPeer()` now uses quality scores as tiebreaker among peers with equal chain weight. Response success/failure events from `PeerRequestHandler` feed into scoring (latency tracking on success, timeout recording on failure).
 - **Source:** PoW review R-002, `docs/reports/POW-CODEBASE-REVIEW.md`
 
 #### L-009: Emergency PoW halt mechanism (PoW review R-003) ✅ DONE

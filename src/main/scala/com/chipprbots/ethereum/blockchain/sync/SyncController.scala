@@ -66,6 +66,9 @@ class SyncController(
   private case object RestartFastSyncNow
   private case object PollRecoveryPeers
 
+  // Shared peer scoring — tracks response quality across all PeersClient instances
+  private val peerScoringManager = new com.chipprbots.ethereum.network.PeerScoringManager()
+
   // Generation counters for actor names to prevent Pekko name collisions
   // (context.stop is async — new actors can race with still-stopping ones).
   private var bootstrapGeneration: Long = 0
@@ -223,7 +226,7 @@ class SyncController(
       val gen = bootstrapGeneration
       val peersClient =
         context.actorOf(
-          PeersClient.props(networkPeerManager, peerEventBus, blacklist, syncConfig, scheduler),
+          PeersClient.props(networkPeerManager, peerEventBus, blacklist, syncConfig, peerScoringManager, scheduler),
           s"peers-client-bootstrap-$gen"
         )
       val headerBootstrap =
@@ -360,7 +363,7 @@ class SyncController(
       val gen = bootstrapGeneration
       val newPeersClient =
         context.actorOf(
-          PeersClient.props(networkPeerManager, peerEventBus, blacklist, syncConfig, scheduler),
+          PeersClient.props(networkPeerManager, peerEventBus, blacklist, syncConfig, peerScoringManager, scheduler),
           s"peers-client-bootstrap-$gen"
         )
       val newHeaderBootstrap =
@@ -626,7 +629,7 @@ class SyncController(
     val peersClient =
       context.actorOf(
         PeersClient
-          .props(networkPeerManager, peerEventBus, blacklist, syncConfig, scheduler)
+          .props(networkPeerManager, peerEventBus, blacklist, syncConfig, peerScoringManager, scheduler)
           .withDispatcher("sync-dispatcher"),
         s"peers-client-$syncGeneration"
       )
@@ -797,7 +800,7 @@ class SyncController(
 
     val peersClient =
       context.actorOf(
-        PeersClient.props(networkPeerManager, peerEventBus, blacklist, syncConfig, scheduler),
+        PeersClient.props(networkPeerManager, peerEventBus, blacklist, syncConfig, peerScoringManager, scheduler),
         "peers-client-bootstrap"
       )
     val regularSync = context.actorOf(

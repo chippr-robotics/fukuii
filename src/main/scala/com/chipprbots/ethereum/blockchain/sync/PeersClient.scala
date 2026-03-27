@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg.PeerWithInfo
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
+import com.chipprbots.ethereum.network.PeerScoringManager
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Capability
@@ -43,6 +44,7 @@ class PeersClient(
     val peerEventBus: ActorRef,
     val blacklist: Blacklist,
     val syncConfig: SyncConfig,
+    val peerScoringManager: PeerScoringManager,
     implicit val scheduler: Scheduler
 ) extends Actor
     with ActorLogging
@@ -116,9 +118,11 @@ class PeersClient(
             )
             requester ! NoSuitablePeer
         }
-      case PeerRequestHandler.ResponseReceived(peer, message, _) =>
+      case PeerRequestHandler.ResponseReceived(peer, message, timeTaken) =>
+        peerScoringManager.recordResponse(peer.id, 0, timeTaken)
         handleResponse(requesters, Response(peer, message.asInstanceOf[Message]))
       case PeerRequestHandler.RequestFailed(peer, reason) =>
+        peerScoringManager.recordTimeout(peer.id)
         log.warning(s"Request to peer ${peer.remoteAddress} failed - reason: $reason")
         handleResponse(requesters, RequestFailed(peer, BlacklistReason.RegularSyncRequestFailed(reason)))
     }
@@ -150,7 +154,7 @@ class PeersClient(
     peerSelector match {
       case BestPeer =>
         log.debug("Selecting best peer from {} available peers", peersToDownloadFrom.size)
-        bestPeer(peersToDownloadFrom, log)
+        bestPeer(peersToDownloadFrom, peerScoringManager, log)
 
       case BestSnapPeer =>
         val snapPeers = peersToDownloadFrom.filter { case (_, peerWithInfo) =>
@@ -161,7 +165,7 @@ class PeersClient(
           peersToDownloadFrom.size,
           snapPeers.size
         )
-        bestPeer(snapPeers, log)
+        bestPeer(snapPeers, peerScoringManager, log)
 
       case BestNodeDataPeer =>
         val nodeDataPeers = peersToDownloadFrom.filter { case (_, peerWithInfo) =>
@@ -175,7 +179,7 @@ class PeersClient(
           peersToDownloadFrom.size,
           nodeDataPeers.size
         )
-        bestPeer(nodeDataPeers, log)
+        bestPeer(nodeDataPeers, peerScoringManager, log)
 
       case ExcludingPeers(exclude) =>
         val filteredPeers = peersToDownloadFrom.filterNot { case (peerId, _) => exclude.contains(peerId) }
@@ -185,7 +189,7 @@ class PeersClient(
           peersToDownloadFrom.size,
           filteredPeers.size
         )
-        bestPeer(filteredPeers, log)
+        bestPeer(filteredPeers, peerScoringManager, log)
     }
 
   /** Adapts message format based on peer's negotiated capability. ETH66+ peers use RequestId wrapper, earlier versions
@@ -280,9 +284,10 @@ object PeersClient {
       peerEventBus: ActorRef,
       blacklist: Blacklist,
       syncConfig: SyncConfig,
+      peerScoringManager: PeerScoringManager,
       scheduler: Scheduler
   ): Props =
-    Props(new PeersClient(networkPeerManager, peerEventBus, blacklist, syncConfig, scheduler))
+    Props(new PeersClient(networkPeerManager, peerEventBus, blacklist, syncConfig, peerScoringManager, scheduler))
 
   type Requesters = Map[ActorRef, ActorRef]
 
@@ -325,6 +330,7 @@ object PeersClient {
 
   def bestPeer(
       peersToDownloadFrom: Map[PeerId, PeerWithInfo],
+      scoringManager: PeerScoringManager,
       log: org.apache.pekko.event.LoggingAdapter
   ): Option[Peer] = {
     log.debug("Evaluating {} peers to find best peer", peersToDownloadFrom.size)
@@ -349,8 +355,17 @@ object PeersClient {
       }
 
     if (peersToUse.nonEmpty) {
-      val (peer, chainWeight) = peersToUse.maxBy(_._2)
-      log.debug("Selected best peer {} with chainWeight {}", peer.id, chainWeight)
+      // Among peers with the highest chain weight, prefer the one with the best quality score.
+      // This avoids selecting a slow/unreliable peer just because it has equal TD.
+      val maxWeight = peersToUse.map(_._2).max
+      val topPeers = peersToUse.filter(_._2 == maxWeight).toSeq
+      val (peer, chainWeight) = if (topPeers.size > 1) {
+        topPeers.maxBy { case (p, _) => scoringManager.getScore(p.id).score }
+      } else {
+        topPeers.head
+      }
+      log.debug("Selected best peer {} with chainWeight {} (score: {}))",
+        peer.id, chainWeight, f"${scoringManager.getScore(peer.id).score}%.3f")
       Some(peer)
     } else {
       log.debug("No ready peers available for selection from {} total peers", peersToDownloadFrom.size)

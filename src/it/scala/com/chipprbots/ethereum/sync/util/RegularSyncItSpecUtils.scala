@@ -79,7 +79,7 @@ object RegularSyncItSpecUtils {
 
     lazy val peersClient: ActorRef =
       system.actorOf(
-        PeersClient.props(etcPeerManager, peerEventBus, blacklist, testSyncConfig, system.scheduler),
+        PeersClient.props(etcPeerManager, peerEventBus, blacklist, testSyncConfig, new com.chipprbots.ethereum.network.PeerScoringManager(), system.scheduler),
         "peers-client"
       )
 
