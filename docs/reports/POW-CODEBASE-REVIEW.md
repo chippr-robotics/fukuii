@@ -263,7 +263,29 @@ Block header validation is comprehensive and matches go-ethereum. The recent H-0
 
 ---
 
-## 10. Summary of Recommendations
+## 10. Additional Gaps (from deep-dive agent review)
+
+### 10.1 Future Block Timestamp Validation (MINOR)
+
+go-ethereum rejects non-uncle blocks where `timestamp > now + 15s` (wall-clock check in `verifyHeader()`). Fukuii's `BlockHeaderValidatorSkeleton` only checks `timestamp > parentTimestamp` — no wall-clock bound.
+
+**Impact:** A malicious miner could create blocks with far-future timestamps to manipulate difficulty calculation. In practice, ETC's network would reject these blocks at propagation (other clients validate wall-clock), so this is a defense-in-depth gap only.
+
+**Fix:** One-line addition to `validateTimestamp()` in `BlockHeaderValidatorSkeleton.scala`.
+
+### 10.2 Unclean Shutdown Recovery (MODERATE)
+
+go-ethereum writes periodic markers to LevelDB (every N blocks or M seconds) and on startup checks if the last shutdown was clean. If unclean, it rewinds the chain head to the last known-good marker before proceeding.
+
+Fukuii does not have this mechanism. After a crash (OOM kill, power loss), the chain head might point to a state root that is not fully committed to RocksDB, causing state inconsistencies on restart.
+
+**Impact:** Operational — affects crash resilience. Mitigated by RocksDB's WAL (Write-Ahead Log) which provides atomic writes, but partial multi-key updates could still leave inconsistent state.
+
+**Fix:** Add a periodic `lastSafeBlock` marker to RocksDB, and check/rewind on startup.
+
+---
+
+## 11. Summary of Recommendations
 
 | ID | Priority | Description | Impact |
 |----|----------|-------------|--------|
@@ -272,5 +294,7 @@ Block header validation is comprehensive and matches go-ethereum. The recent H-0
 | R-003 | LOW | Consider emergency PoW halt mechanism (configurable TD ceiling) | Safety mechanism for 51% attack response |
 | R-004 | LOW | Memory-map DAG files instead of JVM arrays for large DAGs | Memory efficiency for future DAG growth |
 | R-005 | LOW | Add mining hashrate metrics to Prometheus | Observability for mining operators |
+| R-006 | LOW | Add wall-clock future block timestamp check (±15s) | Defense-in-depth against timestamp manipulation |
+| R-007 | MEDIUM | Add unclean shutdown recovery with periodic safe-block marker | Crash resilience after OOM/power loss |
 
-**Overall assessment:** Fukuii's PoW consensus implementation is production-ready for ETC. No critical or high-priority gaps relative to go-ethereum v1.10.26. The recent H-010/H-011/H-012/H-013/H-014/H-015/H-016 hardening pass addressed the most important consensus safety gaps.
+**Overall assessment:** Fukuii's PoW consensus implementation is production-ready for ETC. One moderate-priority gap (unclean shutdown recovery) and 6 low-priority recommendations. No critical gaps. The recent H-010/H-011/H-012/H-013/H-014/H-015/H-016 hardening pass addressed the most important consensus safety gaps.
