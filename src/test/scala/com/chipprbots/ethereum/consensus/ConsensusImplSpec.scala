@@ -14,6 +14,7 @@ import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.NormalPatience
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.consensus.Consensus.BranchExecutionFailure
+import com.chipprbots.ethereum.consensus.Consensus.ConsensusError
 import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranchPartially
 import com.chipprbots.ethereum.consensus.Consensus.KeptCurrentBestBranch
@@ -88,6 +89,41 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
       _ shouldBe a[BranchExecutionFailure]
     }
     blockchainReader.getBestBlock() shouldBe Some(initialBestBlock)
+  }
+
+  it should "reject a branch extension that exceeds the emergency TD ceiling" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup {
+    // Initial chain: 5 blocks × 1,000,000 difficulty = TD 5,000,000
+    // Set ceiling to 6,000,000 — extension of 3 blocks would push to 8,000,000
+    override implicit def blockchainConfig: BlockchainConfig =
+      super.blockchainConfig.copy(emergencyTdCeiling = Some(BigInt(6000000)))
+
+    val chainExtension = BlockHelpers.generateChain(3, initialBestBlock)
+
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(chainExtension)).unsafeToFuture()) { result =>
+      result shouldBe a[ConsensusError]
+      result.asInstanceOf[ConsensusError].err should include("TD ceiling exceeded")
+    }
+
+    // Best block should remain unchanged
+    blockchainReader.getBestBlock() shouldBe Some(initialBestBlock)
+  }
+
+  it should "allow a branch extension when TD stays below the ceiling" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup {
+    // Set ceiling high enough for the extension to pass
+    override implicit def blockchainConfig: BlockchainConfig =
+      super.blockchainConfig.copy(emergencyTdCeiling = Some(BigInt(100000000)))
+
+    val chainExtension = BlockHelpers.generateChain(3, initialBestBlock)
+
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(chainExtension)).unsafeToFuture()) {
+      _ shouldBe a[ExtendedCurrentBestBranch]
+    }
   }
 
   class ConsensusSetup extends EphemBlockchainTestSetup {

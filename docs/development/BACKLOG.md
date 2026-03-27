@@ -325,10 +325,10 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Description:** `sbt it:test` — 37 spec files, 1 ignored. Full run needed to establish baseline.
 - **Depends on:** ~~C-001~~ (resolved)
 
-#### M-013: Run full EVM test suite — BLOCKED
+#### M-013: Run full EVM test suite ✅ DONE
 
 - **Priority:** Medium | **Risk:** Low
-- **Description:** `sbt Evm/test` — 8 spec files. Requires `solc` (Solidity compiler) for `solidityCompile` task (compiles `.sol` contracts to ABI+bin). Not available on current machine. Install `solc` 0.8.x to unblock.
+- **Resolution:** Pre-compiled `.bin`/`.abi` fixtures with solc 0.5.17 (matching `pragma ^0.5.1`), stored in `src/evmTest/resources/contracts/`. Removed runtime `solc` dependency, following reference client pattern. Fixed circe-generic-extras import (deprecated in Scala 3) with manual decoders. Fixed sbt `Evm` config source directory resolution. All 12 EVM tests pass.
 
 #### M-014: Config validation on startup ✅ DONE
 
@@ -488,12 +488,12 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Fix:** Track `bytesReceived / elapsed` per peer in `PeerScoringManager`, expose as `bandwidthScore`. Weight `bestPeer()` selection by `chainWeight * bandwidthScore`.
 - **Source:** PoW review R-002, `docs/reports/POW-CODEBASE-REVIEW.md`
 
-#### L-009: Emergency PoW halt mechanism (PoW review R-003)
+#### L-009: Emergency PoW halt mechanism (PoW review R-003) ✅ DONE
 
-- **File:** `src/main/scala/.../consensus/ConsensusImpl.scala`, config
+- **File:** `src/main/scala/.../consensus/ConsensusImpl.scala`, `BlockchainConfig.scala`
 - **Priority:** Low | **Risk:** Low
-- **Description:** go-ethereum had `TerminalTotalDifficulty` for the merge transition. While ETC doesn't need a merge, the pattern of "halt PoW at a configured TD" could serve as an emergency mechanism — if a 51% attack is detected, operators could configure a TD ceiling to stop following the attacker's chain. Also useful for controlled testnet shutdowns.
-- **Fix:** Add optional `emergencyTdCeiling` config. In `evaluateBranch()`, reject blocks that would push chain TD above ceiling. Log critical warning when approaching ceiling.
+- **Resolution:** Added `emergencyTdCeiling: Option[BigInt]` to `BlockchainConfig` with HOCON key `emergency-td-ceiling`. `ConsensusImpl` rejects branches (both extend and reorg paths) that would push chain TD above ceiling. Warns when within 10% of ceiling. 2 new tests in `ConsensusImplSpec`.
+- **Usage:** Set `-Dfukuii.blockchains.etc.emergency-td-ceiling=<value>` or add `emergency-td-ceiling = "..."` in chain config. Omit or leave unset for normal operation.
 - **Source:** PoW review R-003, `docs/reports/POW-CODEBASE-REVIEW.md`
 
 #### L-010: Memory-mapped DAG files (PoW review R-004)

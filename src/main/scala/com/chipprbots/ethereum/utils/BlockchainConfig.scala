@@ -29,7 +29,8 @@ case class BlockchainConfig(
     dnsDiscoveryDomains: Seq[String] = Seq.empty,
     allowedMinersPublicKeys: Set[ByteString] = Set.empty,
     messConfig: MESSConfig = MESSConfig(),
-    treasuryAddress: Address = Address(0)
+    treasuryAddress: Address = Address(0),
+    emergencyTdCeiling: Option[BigInt] = None
 ) {
   def withUpdatedForkBlocks(update: (ForkBlockNumbers) => ForkBlockNumbers): BlockchainConfig =
     copy(forkBlockNumbers = update(forkBlockNumbers))
@@ -168,6 +169,9 @@ object BlockchainConfig {
     val treasuryAddress: Address =
       Try(Address(blockchainConfig.getString("treasury-address"))).getOrElse(Address(0))
 
+    val emergencyTdCeiling: Option[BigInt] =
+      Try(BigInt(blockchainConfig.getString("emergency-td-ceiling"))).toOption
+
     val messConfig: MESSConfig = Try {
       val messConf = blockchainConfig.getConfig("mess")
       MESSConfig(
@@ -219,7 +223,8 @@ object BlockchainConfig {
       dnsDiscoveryDomains = dnsDiscoveryDomains,
       allowedMinersPublicKeys = allowedMinersPublicKeys,
       messConfig = messConfig,
-      treasuryAddress = treasuryAddress
+      treasuryAddress = treasuryAddress,
+      emergencyTdCeiling = emergencyTdCeiling
     )
   }
   // scalastyle:on method.length

@@ -93,7 +93,11 @@ class ConsensusImpl(
 
     blockchainReader.getChainWeightByHash(parentHash) match {
       case Some(parentWeight) =>
-        if (newBranchWeight(branch, parentWeight) > currentBestBlockWeight) {
+        val branchWeight = newBranchWeight(branch, parentWeight)
+        if (exceedsTdCeiling(branchWeight)) {
+          log.error("EMERGENCY TD CEILING: Rejecting branch (TD {} exceeds ceiling {})", branchWeight.totalDifficulty, blockchainConfig.emergencyTdCeiling.get)
+          ConsensusError(branch.toList, s"Emergency TD ceiling exceeded: ${branchWeight.totalDifficulty} > ${blockchainConfig.emergencyTdCeiling.get}")
+        } else if (branchWeight > currentBestBlockWeight) {
           reorganise(currentBestBlockNumber, branch, parentWeight, parentHash)
         } else {
           KeptCurrentBestBranch
@@ -108,7 +112,13 @@ class ConsensusImpl(
 
   private def importToTop(branch: NonEmptyList[Block], currentBestBlockWeight: ChainWeight)(implicit
       blockchainConfig: BlockchainConfig
-  ): ConsensusResult =
+  ): ConsensusResult = {
+    val projectedWeight = newBranchWeight(branch, currentBestBlockWeight)
+    if (exceedsTdCeiling(projectedWeight)) {
+      log.error("EMERGENCY TD CEILING: Rejecting branch extension (TD {} exceeds ceiling {})", projectedWeight.totalDifficulty, blockchainConfig.emergencyTdCeiling.get)
+      return ConsensusError(branch.toList, s"Emergency TD ceiling exceeded: ${projectedWeight.totalDifficulty} > ${blockchainConfig.emergencyTdCeiling.get}")
+    }
+
     blockExecution.executeAndValidateBlocks(branch.toList, currentBestBlockWeight) match {
       case (importedBlocks, None) =>
         saveLastBlock(importedBlocks)
@@ -128,6 +138,7 @@ class ConsensusImpl(
           BranchExecutionFailure(Nil, failingBlock.hash, error.toString)
         )
     }
+  }
 
   private def saveLastBlock(blocks: List[BlockData]): Unit = blocks.lastOption.foreach(b =>
     blockchainWriter.saveBestKnownBlocks(
@@ -169,6 +180,17 @@ class ConsensusImpl(
 
   private def newBranchWeight(newBranch: NonEmptyList[Block], parentWeight: ChainWeight) =
     newBranch.foldLeft(parentWeight)((w, b) => w.increase(b.header))
+
+  private def exceedsTdCeiling(weight: ChainWeight)(implicit blockchainConfig: BlockchainConfig): Boolean =
+    blockchainConfig.emergencyTdCeiling.exists { ceiling =>
+      val td = weight.totalDifficulty
+      if (td > ceiling) true
+      else {
+        if (td * 10 > ceiling * 9)
+          log.warn("EMERGENCY TD CEILING WARNING: Chain TD {} is within 10% of ceiling {}", td, ceiling)
+        false
+      }
+    }
 
   private def returnNoTotalDifficulty(bestBlock: Block): IO[ConsensusError] = {
     log.error(
