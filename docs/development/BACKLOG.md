@@ -401,12 +401,11 @@ Comprehensive inventory of remaining work, verified against the codebase and com
   - **7 recommendations** (5 low, 1 medium, 1 added to High tier): nonce range partitioning, bandwidth-weighted peer selection, emergency PoW halt mechanism, memory-mapped DAGs, mining hashrate metrics, future block timestamp check (M-027), unclean shutdown recovery (H-017)
   - Recent H-010 through H-016 hardening pass closed all consensus safety gaps identified in the comparison
 
-#### M-027: Future block timestamp validation (PoW review R-006)
+#### M-027: Future block timestamp validation (PoW review R-006) ✅ DONE
 
 - **File:** `src/main/scala/.../consensus/validators/BlockHeaderValidatorSkeleton.scala`
 - **Priority:** Medium | **Risk:** Low
-- **Description:** go-ethereum rejects non-uncle blocks where `timestamp > now + 15s` (wall-clock check). Fukuii only checks `timestamp > parentTimestamp` — no wall-clock bound. A malicious miner could create blocks with far-future timestamps to manipulate difficulty. In practice, other ETC clients reject these at propagation, so this is defense-in-depth.
-- **Fix:** Add `if (!isUncleBranch && blockHeader.unixTimestamp > Instant.now().getEpochSecond + 15) Left(HeaderTimestampError)` to `validateTimestamp()`. One-line addition.
+- **Status:** DONE — Added `HeaderFutureTimestampError` and wall-clock check (`timestamp > now + 15s`) to `validateTimestamp()`. Matches go-ethereum's `allowedFutureBlockTimeSeconds`. Added distinct error type for diagnostics. Updated `EthashBlockHeaderValidatorSpec` to cover the new check. 52 validation tests pass.
 - **Source:** PoW review R-006, `docs/reports/POW-CODEBASE-REVIEW.md`
 
 #### H-017: Unclean shutdown recovery (PoW review R-007)

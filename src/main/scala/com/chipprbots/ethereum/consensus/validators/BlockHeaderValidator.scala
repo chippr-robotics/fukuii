@@ -35,6 +35,7 @@ object BlockHeaderError {
   case object RestrictedPoWHeaderExtraDataError extends BlockHeaderError
   case object DaoHeaderExtraDataError extends BlockHeaderError
   case object HeaderTimestampError extends BlockHeaderError
+  case object HeaderFutureTimestampError extends BlockHeaderError
   case object HeaderDifficultyError extends BlockHeaderError
   case object HeaderGasUsedError extends BlockHeaderError
   case object HeaderGasLimitError extends BlockHeaderError
