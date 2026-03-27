@@ -21,33 +21,39 @@ class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaC
 
   test("PUSH0 should push zero onto the stack", UnitTest, VMTest) {
     forAll(Generators.getProgramStateGen()) { stateIn =>
+      val initialSize = stateIn.stack.size
+      val initialPc = stateIn.pc
+      val hasRoom = initialSize < stateIn.stack.maxSize
       val stateOut = PUSH0.execute(stateIn)
 
       // Should not error if stack has room
-      if (stateIn.stack.size < stateIn.stack.maxSize) {
+      if (hasRoom) {
         stateOut.error shouldBe None
-        stateOut.stack.size shouldEqual stateIn.stack.size + 1
-        val (top, _) = stateOut.stack.pop()
+        stateOut.stack.size shouldEqual initialSize + 1
+        val top = stateOut.stack.pop()
         top shouldEqual UInt256.Zero
-        stateOut.pc shouldEqual stateIn.pc + 1
+        stateOut.pc shouldEqual initialPc + 1
       }
     }
   }
 
   test("PUSH0 should use 2 gas (G_base)", UnitTest, VMTest) {
     forAll(Generators.getProgramStateGen()) { stateIn =>
+      val initialGas = stateIn.gas
+      val hasRoom = stateIn.stack.size < stateIn.stack.maxSize
       // Only test when we have enough gas
-      if (stateIn.gas >= 2 && stateIn.stack.size < stateIn.stack.maxSize) {
+      if (initialGas >= 2 && hasRoom) {
         val stateOut = PUSH0.execute(stateIn)
         stateOut.error shouldBe None
-        stateOut.gas shouldEqual (stateIn.gas - 2)
+        stateOut.gas shouldEqual (initialGas - 2)
       }
     }
   }
 
   test("PUSH0 should fail with StackOverflow when stack is full", UnitTest, VMTest) {
     // Create a full stack by pushing 1024 items
-    val fullStack = (1 to 1024).foldLeft(Stack.empty(1024))((stack, _) => stack.push(UInt256.One))
+    val fullStack = Stack.empty(1024)
+    (1 to 1024).foreach(_ => fullStack.push(UInt256.One))
     val stateIn = Generators.getProgramStateGen().sample.get.withStack(fullStack)
     val stateOut = PUSH0.execute(stateIn)
 
@@ -77,16 +83,18 @@ class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaC
       .withStack(Stack.empty())
       .copy(gas = 1000)
 
+    val size0 = initialState.stack.size
     val state1 = PUSH0.execute(initialState)
     state1.error shouldBe None
-    state1.stack.size shouldEqual initialState.stack.size + 1
+    state1.stack.size shouldEqual size0 + 1
 
+    val size1 = state1.stack.size
     val state2 = PUSH0.execute(state1)
     state2.error shouldBe None
-    state2.stack.size shouldEqual initialState.stack.size + 2
+    state2.stack.size shouldEqual size1 + 1
 
-    val (top1, stack1) = state2.stack.pop()
-    val (top2, _) = stack1.pop()
+    val top1 = state2.stack.pop()
+    val top2 = state2.stack.pop()
 
     top1 shouldEqual UInt256.Zero
     top2 shouldEqual UInt256.Zero
@@ -133,7 +141,7 @@ class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaC
 
     result.error shouldBe None
     result.stack.size shouldBe 1
-    val (value, _) = result.stack.pop()
+    val value = result.stack.pop()
     value shouldEqual UInt256.Zero
   }
 
@@ -156,11 +164,9 @@ class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaC
     state.stack.size shouldBe 1024
 
     // Verify all items are zero
-    var currentStack = state.stack
     (1 to 1024).foreach { _ =>
-      val (value, newStack) = currentStack.pop()
+      val value = state.stack.pop()
       value shouldEqual UInt256.Zero
-      currentStack = newStack
     }
   }
 

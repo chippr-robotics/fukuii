@@ -37,7 +37,7 @@ trait CallOpCodesBehaviors extends Matchers { this: AnyWordSpec =>
     }
 
     "return 1" in {
-      call.stateOut.stack.pop()._1 shouldEqual UInt256.One
+      call.stateOut.stack.pop() shouldEqual UInt256.One
     }
 
     "should store contract's return data in memory" in {
@@ -60,7 +60,7 @@ trait CallOpCodesBehaviors extends Matchers { this: AnyWordSpec =>
     }
 
     "return 0" in {
-      call.stateOut.stack.pop()._1 shouldEqual UInt256.Zero
+      call.stateOut.stack.pop() shouldEqual UInt256.Zero
     }
 
   }
@@ -72,7 +72,7 @@ trait CallOpCodesBehaviors extends Matchers { this: AnyWordSpec =>
     }
 
     "return 0" in {
-      call.stateOut.stack.pop()._1 shouldEqual UInt256.Zero
+      call.stateOut.stack.pop() shouldEqual UInt256.Zero
     }
   }
 
@@ -82,7 +82,7 @@ trait CallOpCodesBehaviors extends Matchers { this: AnyWordSpec =>
     }
 
     "return 0" in {
-      call.stateOut.stack.pop()._1 shouldEqual UInt256.Zero
+      call.stateOut.stack.pop() shouldEqual UInt256.Zero
     }
 
     "extend memory" in {
@@ -98,7 +98,7 @@ trait CallOpCodesBehaviors extends Matchers { this: AnyWordSpec =>
     }
 
     "return 1" in {
-      call.stateOut.stack.pop()._1 shouldEqual UInt256.One
+      call.stateOut.stack.pop() shouldEqual UInt256.One
     }
 
   }
@@ -115,7 +115,7 @@ trait CallOpCodesBehaviors extends Matchers { this: AnyWordSpec =>
     }
 
     "return 1" in {
-      call.stateOut.stack.pop()._1 shouldEqual UInt256.One
+      call.stateOut.stack.pop() shouldEqual UInt256.One
     }
 
     "update precompiled contract's balance" in {
@@ -152,7 +152,7 @@ trait CallOpCodesBehaviors extends Matchers { this: AnyWordSpec =>
     val call = fxt.ExecuteCall(op = CALL, context)
 
     "return 0" in {
-      call.stateOut.stack.pop()._1 shouldEqual UInt256.Zero
+      call.stateOut.stack.pop() shouldEqual UInt256.Zero
     }
 
     "store cause of reversion in memory" in {
@@ -194,7 +194,7 @@ trait CallOpCodesBehaviors extends Matchers { this: AnyWordSpec =>
     }
 
     "cap the provided gas after EIP-150" in {
-      call(EvmConfig.PostEIP150ConfigBuilder(blockchainConfig)).stateOut.stack.pop()._1 shouldEqual UInt256.One
+      call(EvmConfig.PostEIP150ConfigBuilder(blockchainConfig)).stateOut.stack.pop() shouldEqual UInt256.One
     }
 
     "go OOG before EIP-150 becaouse of extensive memory cost" in {
@@ -203,7 +203,7 @@ trait CallOpCodesBehaviors extends Matchers { this: AnyWordSpec =>
 
     "cap memory cost post EIP-150" in {
       val CallResult = callVarMemCost(EvmConfig.PostEIP150ConfigBuilder(blockchainConfig))
-      CallResult.stateOut.stack.pop()._1 shouldEqual UInt256.One
+      CallResult.stateOut.stack.pop() shouldEqual UInt256.One
     }
   }
 
@@ -225,7 +225,7 @@ trait CallOpCodesBehaviors extends Matchers { this: AnyWordSpec =>
     }
 
     "return 1" in {
-      call.stateOut.stack.pop()._1 shouldEqual UInt256(1)
+      call.stateOut.stack.pop() shouldEqual UInt256(1)
     }
 
     "should store contract's return data in memory" in {
@@ -248,7 +248,7 @@ trait CallOpCodesBehaviors extends Matchers { this: AnyWordSpec =>
     }
 
     "return 1" in {
-      call.stateOut.stack.pop()._1 shouldEqual UInt256(1)
+      call.stateOut.stack.pop() shouldEqual UInt256(1)
     }
   }
 
@@ -261,7 +261,7 @@ trait CallOpCodesBehaviors extends Matchers { this: AnyWordSpec =>
     }
 
     "return 1" in {
-      call.stateOut.stack.pop()._1 shouldEqual UInt256.One
+      call.stateOut.stack.pop() shouldEqual UInt256.One
     }
 
     "not update precompiled contract's balance" in {
@@ -289,7 +289,7 @@ trait CallOpCodesBehaviors extends Matchers { this: AnyWordSpec =>
     }
 
     "return 1" in {
-      call.stateOut.stack.pop()._1 shouldEqual UInt256(1)
+      call.stateOut.stack.pop() shouldEqual UInt256(1)
     }
 
     "should store contract's return data in memory" in {
@@ -314,7 +314,7 @@ trait CallOpCodesBehaviors extends Matchers { this: AnyWordSpec =>
     }
 
     "return 1" in {
-      call.stateOut.stack.pop()._1 shouldEqual UInt256.One
+      call.stateOut.stack.pop() shouldEqual UInt256.One
     }
 
     "not update precompiled contract's balance" in {
@@ -577,7 +577,7 @@ class CallOpcodesSpec extends AnyWordSpec with CallOpCodesBehaviors with Matcher
       }
 
       "cap the provided gas after EIP-150" in {
-        call(EvmConfig.PostEIP150ConfigBuilder(blockchainConfig)).stateOut.stack.pop()._1 shouldEqual UInt256.One
+        call(EvmConfig.PostEIP150ConfigBuilder(blockchainConfig)).stateOut.stack.pop() shouldEqual UInt256.One
       }
     }
   }
@@ -688,7 +688,7 @@ class CallOpcodesSpec extends AnyWordSpec with CallOpCodesBehaviors with Matcher
       }
 
       "cap the provided gas after EIP-150" in {
-        call(EvmConfig.PostEIP150ConfigBuilder(blockchainConfig)).stateOut.stack.pop()._1 shouldEqual UInt256.One
+        call(EvmConfig.PostEIP150ConfigBuilder(blockchainConfig)).stateOut.stack.pop() shouldEqual UInt256.One
       }
     }
 

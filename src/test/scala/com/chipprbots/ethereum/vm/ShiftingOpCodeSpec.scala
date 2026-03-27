@@ -128,7 +128,7 @@ class ShiftingOpCodeSpec extends AnyWordSpec with Matchers with ScalaCheckProper
             val state: ProgramState[MockWorldState, MockStorage] = prepareProgramState(assemblyCode, arg1, arg2)
 
             val result: ProgramState[MockWorldState, MockStorage] = SHL.execute(state)
-            result.stack.pop()._1 shouldBe UInt256(expectedResult)
+            result.stack.pop() shouldBe UInt256(expectedResult)
           }
       }
 
@@ -138,7 +138,7 @@ class ShiftingOpCodeSpec extends AnyWordSpec with Matchers with ScalaCheckProper
             val state: ProgramState[MockWorldState, MockStorage] = prepareProgramState(assemblyCode, arg1, arg2)
 
             val result: ProgramState[MockWorldState, MockStorage] = SHR.execute(state)
-            result.stack.pop()._1 shouldBe UInt256(expectedResult)
+            result.stack.pop() shouldBe UInt256(expectedResult)
           }
       }
 
@@ -148,7 +148,7 @@ class ShiftingOpCodeSpec extends AnyWordSpec with Matchers with ScalaCheckProper
             val state: ProgramState[MockWorldState, MockStorage] = prepareProgramState(assemblyCode, arg1, arg2)
 
             val result: ProgramState[MockWorldState, MockStorage] = SAR.execute(state)
-            result.stack.pop()._1 shouldBe UInt256(expectedResult)
+            result.stack.pop() shouldBe UInt256(expectedResult)
           }
       }
     }
@@ -209,8 +209,10 @@ class ShiftingOpCodeSpec extends AnyWordSpec with Matchers with ScalaCheckProper
       val initMemory = Memory.empty.store(UInt256.Zero, assemblyCode)
       val initStack: Seq[UInt256] = Seq(UInt256(arg1), UInt256(arg2))
 
+      val stack = Stack.empty()
+      stack.push(initStack)
       ProgramState(vm, context, env)
-        .withStack(Stack.empty().push(initStack))
+        .withStack(stack)
         .withMemory(initMemory)
     }
   }

@@ -46,7 +46,7 @@ trait OpCodeGasSpecPostEip2929 extends AnyFunSuite with OpCodeTesting with Match
     val codeGen = getByteStringGen(0, 512)
 
     forAll(stateGen) { stateIn =>
-      val (addrUint, _) = stateIn.stack.pop()
+      val addrUint = stateIn.stack.peek(0)
       val addr = Address(addrUint)
       stateIn.accessedAddresses shouldNot contain(addr)
 
@@ -57,7 +57,7 @@ trait OpCodeGasSpecPostEip2929 extends AnyFunSuite with OpCodeTesting with Match
     }
 
     forAll(stateGen, codeGen) { (stateIn, extCode) =>
-      val (addrUint, _) = stateIn.stack.pop()
+      val addrUint = stateIn.stack.peek(0)
       val addr = Address(addrUint)
       val program = Program(extCode)
       val world1 = stateIn.world.saveCode(addr, program.code)
@@ -95,7 +95,8 @@ trait OpCodeGasSpecPostEip2929 extends AnyFunSuite with OpCodeTesting with Match
       // Pick an address (small, so it fits into memory) that is not on the precompiles list
       val addr =
         getUInt256Gen(max = 1000).map(Address(_)).retryUntil(!initState.accessedAddresses.contains(_)).sample.get
-      val stackIn = Stack.empty().push(Seq(size, Zero, Zero, addr.toUInt256))
+      val stackIn = Stack.empty()
+      stackIn.push(Seq(size, Zero, Zero, addr.toUInt256))
       val memIn = Memory.empty.store(addr.toUInt256, Array.fill[Byte](size.toInt)(-1))
       val stateIn = initState.withStack(stackIn).withMemory(memIn).copy(gas = expectedGas)
 
@@ -115,10 +116,11 @@ trait OpCodeGasSpecPostEip2929 extends AnyFunSuite with OpCodeTesting with Match
     )
 
     forAll(stateGen) { stateIn =>
-      val stateOut = op.execute(stateIn)
-
-      val (Seq(address, offset, _, size), _) = stateIn.stack.pop(4)
+      val address = stateIn.stack.peek(0)
+      val offset = stateIn.stack.peek(1)
+      val size = stateIn.stack.peek(3)
       val addr = Address(address)
+      val stateOut = op.execute(stateIn)
       val memCost = config.calcMemCost(stateIn.memory.size, offset, size)
       val copyCost = G_copy * wordsForBytes(size)
       val expectedGas =
@@ -139,7 +141,7 @@ trait OpCodeGasSpecPostEip2929 extends AnyFunSuite with OpCodeTesting with Match
 
     forAll(stateGen) { stateIn =>
       stateIn.accessedStorageKeys shouldBe empty
-      val (offset, _) = stateIn.stack.pop()
+      val offset = stateIn.stack.peek(0)
 
       val stateOut = op.execute(stateIn)
 
@@ -148,7 +150,7 @@ trait OpCodeGasSpecPostEip2929 extends AnyFunSuite with OpCodeTesting with Match
     }
 
     forAll(stateGen) { stateIn =>
-      val (offset, _) = stateIn.stack.pop()
+      val offset = stateIn.stack.peek(0)
 
       val stateOut = op.execute(stateIn.addAccessedStorageKey(stateIn.ownAddress, offset))
 
@@ -168,7 +170,7 @@ trait OpCodeGasSpecPostEip2929 extends AnyFunSuite with OpCodeTesting with Match
 
     // Sending refund to a non-existent account
     forAll(stateGen, addressAlreadyAccessedGen) { (stateIn, addressAlreadyAccessed) =>
-      val (refund, _) = stateIn.stack.pop()
+      val refund = stateIn.stack.peek(0)
       val refundAddress = Address(refund)
       whenever(stateIn.world.getAccount(refundAddress).isEmpty && stateIn.ownBalance > 0) {
         val stateOut =
@@ -183,7 +185,7 @@ trait OpCodeGasSpecPostEip2929 extends AnyFunSuite with OpCodeTesting with Match
 
     // Sending refund to an already existing account not dead account
     forAll(stateGen, addressAlreadyAccessedGen) { (stateIn, addressAlreadyAccessed) =>
-      val (refund, _) = stateIn.stack.pop()
+      val refund = stateIn.stack.peek(0)
       val refundAddress = Address(refund)
       val world = stateIn.world.saveAccount(refundAddress, Account.empty().increaseNonce())
       val updatedStateIn = stateIn.withWorld(world)
@@ -199,7 +201,7 @@ trait OpCodeGasSpecPostEip2929 extends AnyFunSuite with OpCodeTesting with Match
 
     // Owner account was already selfdestructed
     forAll(stateGen, addressAlreadyAccessedGen) { (stateIn, addressAlreadyAccessed) =>
-      val (refund, _) = stateIn.stack.pop()
+      val refund = stateIn.stack.peek(0)
       val refundAddress = Address(refund)
       whenever(stateIn.world.getAccount(refundAddress).isEmpty && stateIn.ownBalance > 0) {
         val updatedStateIn = stateIn.withAddressToDelete(stateIn.env.ownerAddr)
@@ -230,7 +232,9 @@ trait OpCodeGasSpecPostEip2929 extends AnyFunSuite with OpCodeTesting with Match
     )
 
     forAll(table) { (offset, value, alreadyAccessed, startGas, expectedGasConsumption) =>
-      val stackIn = Stack.empty().push(value).push(offset)
+      val stackIn = Stack.empty()
+      stackIn.push(value)
+      stackIn.push(offset)
       val stateIn = getProgramStateGen(
         blockNumberGen = getUInt256Gen(forkBlockHeight),
         evmConfig = config
@@ -248,7 +252,9 @@ trait OpCodeGasSpecPostEip2929 extends AnyFunSuite with OpCodeTesting with Match
       val value = 0
       val expectedGasConsumption = if (alreadyAccessed) G_sreset else G_sreset + G_cold_sload
 
-      val stackIn = Stack.empty().push(value).push(offset)
+      val stackIn = Stack.empty()
+      stackIn.push(value)
+      stackIn.push(offset)
       val stateIn = getProgramStateGen(
         blockNumberGen = getUInt256Gen(forkBlockHeight),
         evmConfig = config,

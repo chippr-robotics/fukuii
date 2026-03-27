@@ -47,7 +47,7 @@ object Generators extends ObjectGenerators {
       size <- Gen.choose(minElems, maxElems)
       list <- Gen.listOfN(size, valueGen)
       stack = Stack.empty(maxSize)
-    } yield stack.push(list)
+    } yield { stack.push(list); stack }
 
   def getStackGen(elems: Int, uint256Gen: Gen[UInt256]): Gen[Stack] =
     getStackGen(minElems = elems, maxElems = elems, uint256Gen)

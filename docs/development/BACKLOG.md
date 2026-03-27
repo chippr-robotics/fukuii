@@ -286,13 +286,19 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Priority:** Medium | **Risk:** Low
 - **Resolution:** Changed batch request processing from sequential `traverse` to concurrent `parTraverse` (cats-effect parallel fibers). Each request in a batch now runs concurrently instead of waiting for the previous to complete. JSON parsing already handled by json4s entity unmarshaller (single parse).
 
-#### M-008: EVM Stack array-backed optimization
+#### M-008: EVM Stack array-backed optimization ✅ DONE
 
 - **File:** `src/main/scala/.../vm/Stack.scala`
 - **Priority:** Medium | **Risk:** High (consensus-critical)
-- **Description:** Current `Vector[UInt256]` provides O(log32 n) indexed access. Reference clients use array-backed stacks with O(1) access and pooled allocation. Potential throughput improvement for DUP/SWAP-heavy code.
+- **Resolution:** Full rewrite from immutable `Vector[UInt256]` to mutable `Array[UInt256]` + `top: Int` pointer. Matches all reference clients (geth, Besu, Nethermind, core-geth, Erigon). New API: `pop(): UInt256`, `push(): Unit`, `peek(i): UInt256`, `set(i, value): Unit` (in-place mutation). All `varGas()` methods converted to `peek()`/`peekN()` (never pop). All `exec()` methods use in-place mutation patterns. `CallOp.getParams()` split into `peekParams()` (varGas) + `popParams()` (exec). 2,713/2,715 tests pass (2 pre-existing unrelated failures). All 540 VM/Stack/OpCode tests pass.
 
 ### 2.3 — Testing
+
+#### M-028: DnsDiscoverySpec fails in unit test suite
+
+- **File:** `src/test/scala/.../network/discovery/DnsDiscoverySpec.scala`
+- **Priority:** Low | **Risk:** None (test-only)
+- **Description:** "should resolve enodes from ETC mainnet DNS tree" makes a live DNS query to `all.classic.blockd.info` which returns empty results. Already tagged `IntegrationTest` but not excluded from `sbt test`. Fix: add `Tests.Argument(TestFrameworks.ScalaTest, "-l", "IntegrationTest")` to `build.sbt` Test/testOptions, or move to `src/it/`.
 
 #### M-009: Complete EthereumTestsSpec block execution ✅ DONE
 
@@ -628,7 +634,7 @@ H-015 (chain split) ── M-018 (hive — cross-client chain split)
 | Tier 2 (MEDIUM)     | 20     | debug profiling, log verbosity, SNAP work-stealing, testing push, perf, SNAP reorg freshness, hive Olympia, MCP multi-LLM docs, go-ethereum pre-merge PoW review (M-007, M-016, M-017, M-021 DONE)                                          |
 | Tier 3 (LOW)        | 6      | networking polish, API docs, operator guide                                                                                                                                                                                                  |
 | Tier 4 (FUTURE)     | 4      | GraphQL, Stratum, plugin system, GUI/releases (F-004 DONE via Olympia, F-005 removed)                                                                                                                                                        |
-| **Total remaining** | **39** | Was 53, minus C-003, C-004, M-007, M-010, M-011, M-016, M-017, M-019, M-021, M-024, H-014, H-015, H-016. M-013 BLOCKED (needs solc).                                                                                                            |
+| **Total remaining** | **38** | Was 53, minus C-003, C-004, M-007, M-008, M-010, M-011, M-016, M-017, M-019, M-021, M-024, H-014, H-015, H-016. M-013 BLOCKED (needs solc). M-028 added (DnsDiscovery test).                                                                       |
 
 ---
 
@@ -690,6 +696,7 @@ Items below were implemented on the `march-onward` branch and verified against t
 | SNAP healing name collision (C-002/#1005) | `SNAPSyncController.scala:2044`                | Duplicate guard already implemented |
 | SNAP work-stealing (M-003)               | `AccountRangeCoordinator.scala:maybeStealWork` | Split largest active range at midpoint when idle |
 | CPU profiling via JFR (M-024)    | `DebugService.scala`                           | debug_startCpuProfile + debug_stopCpuProfile, 4 tests |
+| EVM Stack mutable array (M-008)  | `Stack.scala`, `OpCode.scala`, 6 test files    | Array[UInt256]+top replaces Vector. peek/set in-place. 540 VM tests + 12 EVM consensus pass |
 
 ### Resolved in FIXME/TODO Audit (2026-03-25)
 

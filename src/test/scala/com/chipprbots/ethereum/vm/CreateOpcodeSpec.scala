@@ -196,14 +196,20 @@ class CreateOpcodeSpec extends AnyWordSpec with Matchers with ScalaCheckProperty
 
     val mem: Memory = Memory.empty.store(0, createCode)
     val stack: Stack = opcode match {
-      case CREATE  => Stack.empty().push(Seq[UInt256](createCode.size, 0, value))
-      case CREATE2 => Stack.empty().push(Seq[UInt256](salt, createCode.size, 0, value))
+      case CREATE =>
+        val s = Stack.empty()
+        s.push(Seq[UInt256](createCode.size, 0, value))
+        s
+      case CREATE2 =>
+        val s = Stack.empty()
+        s.push(Seq[UInt256](salt, createCode.size, 0, value))
+        s
     }
     val stateIn: PS = ProgramState(vm, context, env).withStack(stack).withMemory(mem)
     val stateOut: PS = opcode.execute(stateIn)
 
     val world = stateOut.world
-    val returnValue: UInt256 = stateOut.stack.pop()._1
+    val returnValue: UInt256 = stateOut.stack.pop()
   }
 
   def commonBehaviour(opcode: CreateOp): Unit = {
