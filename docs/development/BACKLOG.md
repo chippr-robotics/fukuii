@@ -469,6 +469,46 @@ Comprehensive inventory of remaining work, verified against the codebase and com
   - `docs/runbooks/log-triage.md` — log analysis and troubleshooting
   - `docs/for-operators/index.md` + `static-nodes-configuration.md` — operator-focused index
 
+#### L-007: Multi-threaded CPU mining with nonce range partitioning (PoW review R-001)
+
+- **File:** `src/main/scala/.../consensus/pow/miners/EthashMiner.scala`
+- **Priority:** Low | **Risk:** Low
+- **Description:** go-ethereum partitions the nonce space across goroutines for parallel CPU mining. Fukuii's `EthashMiner.mineEthash()` uses single-threaded sequential nonce iteration. Partitioning across N threads would increase mining throughput linearly. Not relevant for nodes that don't mine, but improves competitiveness for solo/small-pool miners.
+- **Fix:** Split nonce space into `Runtime.getRuntime.availableProcessors` ranges, spawn parallel `Future[MiningResult]` per range, race for first valid nonce.
+- **Source:** PoW review R-001, `docs/reports/POW-CODEBASE-REVIEW.md`
+
+#### L-008: Bandwidth-weighted peer selection (PoW review R-002)
+
+- **File:** `src/main/scala/.../blockchain/sync/PeersClient.scala`
+- **Priority:** Low | **Risk:** Low
+- **Description:** go-ethereum weighs peer selection by both total difficulty AND download bandwidth. Fukuii selects peers primarily by TD via `ChainWeight`. Adding bandwidth tracking (bytes/second per peer over a rolling window) and weighting peer selection by `TD * bandwidth_score` would improve sync speed when multiple peers have similar TD but different throughput.
+- **Fix:** Track `bytesReceived / elapsed` per peer in `PeerScoringManager`, expose as `bandwidthScore`. Weight `bestPeer()` selection by `chainWeight * bandwidthScore`.
+- **Source:** PoW review R-002, `docs/reports/POW-CODEBASE-REVIEW.md`
+
+#### L-009: Emergency PoW halt mechanism (PoW review R-003)
+
+- **File:** `src/main/scala/.../consensus/ConsensusImpl.scala`, config
+- **Priority:** Low | **Risk:** Low
+- **Description:** go-ethereum had `TerminalTotalDifficulty` for the merge transition. While ETC doesn't need a merge, the pattern of "halt PoW at a configured TD" could serve as an emergency mechanism — if a 51% attack is detected, operators could configure a TD ceiling to stop following the attacker's chain. Also useful for controlled testnet shutdowns.
+- **Fix:** Add optional `emergencyTdCeiling` config. In `evaluateBranch()`, reject blocks that would push chain TD above ceiling. Log critical warning when approaching ceiling.
+- **Source:** PoW review R-003, `docs/reports/POW-CODEBASE-REVIEW.md`
+
+#### L-010: Memory-mapped DAG files (PoW review R-004)
+
+- **File:** `src/main/scala/.../consensus/pow/miners/EthashDAGManager.scala`
+- **Priority:** Low | **Risk:** Low
+- **Description:** go-ethereum uses memory-mapped files for DAG storage, letting the OS manage paging. Fukuii loads the entire DAG into JVM arrays. Current ETC DAG is ~4GB and growing. Memory-mapped files would reduce JVM heap pressure and allow the OS to page DAG data intelligently.
+- **Fix:** Replace `Array[Array[Int]]` with `MappedByteBuffer` from `java.nio.channels.FileChannel.map()`. DAG file format already compatible (sequential 64-byte hashes).
+- **Source:** PoW review R-004, `docs/reports/POW-CODEBASE-REVIEW.md`
+
+#### L-011: Mining hashrate Prometheus metrics (PoW review R-005)
+
+- **File:** `src/main/scala/.../consensus/pow/miners/EthashMiner.scala`, metrics registration
+- **Priority:** Low | **Risk:** Low
+- **Description:** Fukuii has 8 Grafana dashboards and Prometheus integration but no mining-specific metrics. Mining operators need real-time visibility into hashrate, nonce attempts/sec, blocks found, DAG generation time, and work template refresh rate.
+- **Fix:** Register Prometheus counters/gauges: `fukuii_mining_hashrate` (gauge), `fukuii_mining_nonce_attempts_total` (counter), `fukuii_mining_blocks_found_total` (counter), `fukuii_mining_dag_generation_seconds` (histogram), `fukuii_mining_recommit_total` (counter). Hook into existing `EthashMiner.submitHashRate()` and `PoWMiningCoordinator`.
+- **Source:** PoW review R-005, `docs/reports/POW-CODEBASE-REVIEW.md`
+
 ---
 
 ## Tier 4: FUTURE — Post-Production Roadmap
