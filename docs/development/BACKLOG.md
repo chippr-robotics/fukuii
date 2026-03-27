@@ -729,9 +729,9 @@ Items below were implemented on the `march-onward` branch and verified against t
 
 ---
 
-## Pre-Upstream-PR Cleanup (DONE)
+## Pre-Upstream-PR Cleanup
 
-Final gate before submitting PR to upstream. All items completed in a single pass.
+Final gate before submitting PR to upstream.
 
 | Item | Status | Details |
 |------|--------|---------|
@@ -741,6 +741,7 @@ Final gate before submitting PR to upstream. All items completed in a single pas
 | Update test counts | ✅ DONE | README and BACKLOG updated from 2,314/2,642 → 2,678 |
 | Fix CHANGELOG typo | ✅ DONE | "Rebranded from Fukuii to Fukuii" → "Rebranded from Mantis to Fukuii" |
 | Move internal HANDOFF.md | ✅ DONE | Moved to `.claude/` (not public-facing) |
+| Update MARCH-ONWARD-HANDOFF.md | ✅ DONE | Added M-008 section (why/what/where/who/how), reference client table, updated commit/test/RPC counts |
 
 ---
 
