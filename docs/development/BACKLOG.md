@@ -561,6 +561,41 @@ EIP-3085 (`wallet_addEthereumChain`) and EIP-3326 (`wallet_switchEthereumChain`)
   8. Factor in post-Merge hashrate/price decorrelation: BitInfoCharts ETC hashrate vs price shows complete decorrelation after Sep 2022. Pre-Merge, hashrate tracked price (miners follow profitability). Post-Merge, hashrate jumped 6x (50→300 TH/s) while price was flat ($25), and remains at 198 TH/s with price at $8.10. Honest mining revenue per TH/s is near break-even — the opportunity cost of redirecting hashrate from honest mining to attacking is minimal. The `hashratePremium` parameter in the cost model should account for this: when mining margins are thin, attack hashrate is cheaper to acquire because miners lose little by switching. Consider using `ETC_price / mining_cost_per_TH` as a profitability-aware input to the rental cost estimate.
 - **Depends on:** M-033 (MESS reactivation testing), M-032 (production benchmarking)
 
+### 2.1d — MEV & Transaction Pool Modernization (2026-03-27 audit)
+
+Research into MEV (Flashbots, CoW Protocol), decentralized RPC protocols (DRPC, Pocket, Lava, Ankr), and on-chain data indexing (The Graph, Parsiq, Envio) revealed three client-level code gaps in Fukuii's transaction pool and block building that affect correctness and mining competitiveness. Strategic product-level findings (decentralized mining pools, indexer infrastructure, DRPC provider networks) are documented separately in `FUTURE-PRODUCTS.md` (gitignored).
+
+#### M-038: Transaction pool fee-market ordering (EIP-1559 effective tip sorting)
+
+- **Priority:** Medium | **Risk:** Medium (mining-revenue-critical)
+- **Description:** Post-Olympia, Fukuii builds suboptimal blocks because transaction ordering does not account for EIP-1559 fee dynamics. Two problems:
+  1. **Pool eviction:** `PendingTransactionsManager.scala` uses a Guava `Cache<ByteString, PendingTransaction>` with FIFO/LRU eviction (`expireAfterWrite` + `maximumSize`). When the pool is full (1,000 txs), high-tip transactions that arrived earlier are evicted in favor of low-tip transactions that arrived later. Every other EVM client (geth, Besu, Nethermind, Erigon) uses a price-ordered heap so the pool always retains the highest-paying transactions.
+  2. **Block building:** `BlockGeneratorSkeleton.prepareTransactions()` at line 141 sorts by `-gasPrice` — correct for legacy (Type 0) and access-list (Type 1) transactions but **wrong for EIP-1559 (Type 2)**. Type 2 txs have `maxFeePerGas` and `maxPriorityFeePerGas` — the miner's revenue is the *effective tip* (`min(maxFeePerGas - baseFee, maxPriorityFeePerGas)`), not `gasPrice`. The `Transaction.effectiveGasPrice(tx, baseFee)` method at `Transaction.scala:53` computes the correct value but `prepareTransactions()` does not use it.
+- **Impact:** Miners running Fukuii earn less per block than miners running geth/core-geth because high-tip transactions may be evicted from the pool or sorted behind low-tip EIP-1559 transactions.
+- **Files:** `BlockGeneratorSkeleton.scala:126-166` (`prepareTransactions()`), `PendingTransactionsManager.scala:90-101` (Guava cache), `Transaction.scala:53-62` (`effectiveGasPrice()` — exists but unused in block building)
+- **Reference clients:** geth `txsByPriceAndNonce` (effective tip heap), Besu `BaseFeePendingTransactionsSorter`, Nethermind `CompareTxByGasPrice`
+- **Depends on:** None (standalone, EIP-1559 infrastructure already complete via H-002/H-003)
+
+#### M-039: Transaction pool nonce queuing
+
+- **Priority:** Medium | **Risk:** Medium (correctness)
+- **Description:** `txpool_status` always returns `queued: 0` (hardcoded at `TxPoolService.scala:97`). Fukuii has no concept of queued (future-nonce) transactions. When a user submits nonce N+1 before nonce N arrives, the transaction is either rejected or placed in the pending pool where it cannot execute. Every reference client maintains a separate "queued" pool for future-nonce transactions and automatically promotes them to "pending" when the gap fills.
+- **Why it matters:** Wallet software (MetaMask, Rabby) and DApp frontends routinely send multiple transactions in rapid succession with sequential nonces. If nonce N+1 arrives before nonce N (common with network latency), Fukuii drops it. The user must manually resubmit.
+- **Files:** `PendingTransactionsManager.scala` (add queued storage), `TxPoolService.scala:97` (`queued = 0` hardcoded)
+- **Reference clients:** geth `TxPool.queue` + `promoteExecutables()`, Besu `PendingTransactions` pending+ready buckets, Nethermind `_pendingTxs` + `_futureTxs`
+- **Depends on:** None
+
+#### M-040: Private transaction submission RPC (`fukuii_sendPrivateTransaction`)
+
+- **Priority:** Medium | **Risk:** Low
+- **Description:** Add `fukuii_sendPrivateTransaction` RPC method that accepts a signed transaction and adds it to the local pending pool WITHOUT broadcasting to P2P peers. The transaction enters the miner's block template directly and is only revealed when included in a mined block. This is the minimal viable MEV protection feature.
+- **MEV context:** On ETC, sandwich bots monitor the public mempool via `eth_subscribe("newPendingTransactions")` or `txpool_content`. A private transaction bypasses both — never visible to peers, only to the local miner. Eliminates frontrunning and sandwich attacks for users who submit to a trusted Fukuii node. This is the local-only equivalent of Flashbots Protect (PoS relay service) and MEV Blocker (CoW DAO) — no relay infrastructure needed.
+- **How it differs from `eth_sendRawTransaction`:** Current `sendRawTransaction` at `EthTxService.scala:206` calls `AddOrOverrideTransaction` which triggers `NotifyPeers` at line 162-166 — immediate P2P broadcast. The private variant skips `NotifyPeers`.
+- **Namespace:** `fukuii_*` (like Nethermind's `nethermind_*`, Besu's `priv_*`, geth's `mev_*`)
+- **Security:** Must be JWT-protected (H-009 already implemented). Without JWT, any peer could use the node as a free private mempool relay.
+- **Files:** `EthTxService.scala:200-214` (`sendRawTransaction()` as template), `PendingTransactionsManager.scala:168-185` (`NotifyPeers` — the P2P broadcast path to skip), `JsonRpcController.scala` (method registration)
+- **Depends on:** None
+
 #### M-019: MCP server multi-LLM documentation and examples ✅ DONE
 
 - **Priority:** Medium | **Risk:** Low
@@ -698,6 +733,13 @@ EIP-3085 (`wallet_addEthereumChain`) and EIP-3326 (`wallet_switchEthereumChain`)
 - **Priority:** Low | **Risk:** Low
 - **Status:** DONE — Added 4 Prometheus metrics to `MiningMetrics`: `mining.hashrate.hps.gauge` (current H/s), `mining.hashes.tried.total` (cumulative nonce attempts), `mining.blocks.mined.success.counter`, `mining.blocks.mined.failure.counter`. Instrumented via `Miner.submitHashRate()` which is called after every mining round. 47 mining tests pass.
 - **Source:** PoW review R-005, `docs/reports/POW-CODEBASE-REVIEW.md`
+
+#### L-012: Static peer outbound RLPx connection silently fails on localhost
+
+- **File:** `src/main/scala/.../network/ConnectedPeers.scala`, `src/main/scala/.../network/PeerManagerActor.scala`
+- **Priority:** Low | **Risk:** Medium (affects multi-client local setups)
+- **Discovered:** 2026-03-27, during core-geth snap/1 serving verification
+- **Status:** DONE — Race condition in `CheckStaticPeers`: inbound peer from core-geth uses ephemeral source port (`127.0.0.1:RANDOM`), which doesn't match static node address (`127.0.0.1:30303`). Neither `isConnectionHandled(addr)` nor `hasHandshakedWith(nodeId)` catches a pending inbound, so duplicate outbound connections are initiated every 15-30s, immediately disconnected with `AlreadyConnected`. Fix: (1) Added `hasNodeIdPending(nodeId)` to `ConnectedPeers` — checks pending peers by node ID across both incoming and outgoing. (2) `createPeer` accepts `targetNodeId` from enode URI for outgoing peers. (3) `CheckStaticPeers` guard now includes `!connectedPeers.hasNodeIdPending(nodeId)` + debug-level lifecycle logging. 2,706 tests pass.
 
 ---
 
@@ -866,6 +908,8 @@ M-034 (finalized/safe tags) ─┬── F-007 (bridge conformance)
 M-035 (batch + rate limit) ──┘
 M-036 (getLogs range limit) ── M-032 (production benchmarks)
 F-008 (ecosystem infra guide) ── F-010 (Safe compatibility)
+M-038 (fee-market ordering) ── (future: bundle tx support)
+M-040 (private tx) ── (future: MEV documentation, bundle tx support)
 ```
 
 ---
@@ -886,7 +930,9 @@ F-008 (ecosystem infra guide) ── F-010 (Safe compatibility)
 | 10 — Testing         | M-009..M-014, M-018                             | Full test suite pass, hive Olympia coverage                    |
 | 11a — Protocol Prereqs | M-034, M-035, M-036                            | finalized/safe tags, batch+ratelimit, getLogs range limit      |
 | 11b — Customer Gaps  | M-029, M-030, M-031, M-032                     | JS tracer, Blockscout compat, archive verify, benchmarks       |
+| 11c — Tx Pool Modernization | M-038, M-039                              | Fee-market ordering, nonce queuing                             |
 | 12 — MESS Defense    | M-033, M-037                                    | MESS reactivation + dynamic confirmation recommendations       |
+| 12b — MEV Foundation | M-040                                           | Private transaction submission                                 |
 | 13 — Polish + Future | M-007, M-008, M-019, M-022..M-025, L-001..L-006, F-001..F-006 | Perf, MCP docs, missing RPC, README, networking, GraphQL       |
 | 14 — Ecosystem       | F-007, F-008, F-009, F-010, F-011               | Bridge/oracle/Safe conformance, infra guide, prod architecture |
 
