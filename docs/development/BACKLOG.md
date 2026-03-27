@@ -278,6 +278,109 @@ Comprehensive inventory of remaining work, verified against the codebase and com
   - Added `/buildinfo` endpoint to health documentation
   - Added rate limiting to Key Features
 
+### 2.1b — Customer Segment Gaps (2026-03-27 audit)
+
+These items address specific requirements identified by analyzing the three main client user segments: block explorers (Blockscout), centralized exchanges, and mining pools.
+
+#### M-029: JS tracer support for debug_traceTransaction (Blockscout geth-mode)
+
+- **Priority:** Medium | **Risk:** Medium
+- **Description:** Blockscout's `geth` variant mode requires JavaScript-based custom tracers (`callTracer`, `prestateTracer`, `4byteTracer`) passed via `debug_traceTransaction`'s `tracer` field. Fukuii's current `StructLogTracer` outputs raw structLog format only — this works for basic tracing but Blockscout's geth-mode expects the higher-level tracer output format (nested call trees with gas, value, input/output).
+- **Current state:** 5 debug trace methods implemented (H-001) with `StructLogTracer` + `TraceConfig`. Missing: `tracer: "callTracer"` / `tracer: "prestateTracer"` parameter support, and the corresponding output formatters.
+- **Workaround:** Blockscout can use `erigon` variant mode with Fukuii's existing `trace_replayBlockTransactions` and `trace_block` methods (Parity-style trace format). Needs verification (M-030).
+- **Reference:** go-ethereum `eth/tracers/native/` (callTracer, prestateTracer, 4byteTracer as Go built-ins) + `eth/tracers/js/` (arbitrary JS tracer via otto/goja). Besu implements `callTracer`/`flatCallTracer` as native Java. Minimum viable: native `callTracer` + `prestateTracer` (covers 95% of Blockscout needs without JS VM).
+- **Depends on:** H-001
+
+#### M-030: Blockscout compatibility testing
+
+- **Priority:** Medium | **Risk:** Low
+- **Description:** Verify Fukuii works as a Blockscout backend. Blockscout configures client type via `ETHEREUM_JSONRPC_VARIANT` env var and normalizes all trace output to Parity-compatible format. Fukuii implements `trace_replayBlockTransactions`, `trace_block`, and `trace_transaction` — this may already work with Blockscout's `erigon` variant (which expects Parity-style traces).
+- **Test plan:**
+  1. Run Blockscout against synced Fukuii node with `ETHEREUM_JSONRPC_VARIANT=erigon`
+  2. Verify block indexing completes (RPC calls: `eth_getBlockByNumber`, `eth_getBlockReceipts`, `trace_replayBlockTransactions`)
+  3. Verify `eth_subscribe("newHeads")` WebSocket delivers new block notifications
+  4. Verify transaction detail pages render traces correctly
+  5. Verify token transfer indexing works (depends on `eth_getLogs` + receipt parsing)
+  6. Document any missing methods or format mismatches
+- **Success criteria:** Blockscout indexes Mordor chain head to head with zero RPC errors
+- **Depends on:** Synced Fukuii node (Mordor or ETC)
+
+#### M-031: Archive mode verification
+
+- **Priority:** Medium | **Risk:** Medium
+- **Description:** Blockscout and some exchange integrations require archive node access — the ability to query historical state at any block height (`eth_getBalance`, `eth_getCode`, `eth_getStorageAt`, `eth_call` with historical block parameter). Fukuii stores state in RocksDB via Merkle Patricia Trie, but the pruning behavior and historical state retention need verification. After SNAP sync, only state at/after the pivot block is available — this is expected and matches all reference clients. For full archive, a node must sync from genesis via regular sync.
+- **Test plan:**
+  1. Sync Fukuii via regular sync (genesis) on Mordor
+  2. Query `eth_getBalance` at blocks 1, 1000, 100000, and head — verify all return correct values
+  3. Query `eth_call` with historical `blockNumber` parameter — verify execution against historical state
+  4. Verify `trace_replayBlockTransactions` works on historical blocks (not just recent)
+  5. Document any state pruning defaults and configuration options
+- **Success criteria:** All historical state queries return correct results on a genesis-synced node
+
+#### M-032: Production benchmarking (exchange/pool readiness)
+
+- **Priority:** Medium | **Risk:** Low
+- **Description:** Centralized exchanges require <100ms RPC latency and 99.9% uptime. Mining pools require <100ms `newHeads` WebSocket notification latency. Neither segment will adopt a client without published benchmark data showing it meets their SLA requirements.
+- **Test plan:**
+  1. Benchmark core RPC methods under load: `eth_getBlockByNumber`, `eth_getBalance`, `eth_call`, `eth_getLogs`, `eth_getTransactionReceipt` — measure p50/p95/p99 latency
+  2. Benchmark WebSocket `eth_subscribe("newHeads")` notification latency (time from block import to subscriber delivery)
+  3. Benchmark under concurrent load (50, 100, 500 concurrent RPC connections)
+  4. Measure memory and CPU profile during sustained RPC serving
+  5. Compare against core-geth and Besu on same hardware
+  6. Publish results in `docs/reports/PRODUCTION-BENCHMARKS.md`
+- **Success criteria:** p99 latency <100ms for read-only RPCs on synced node; WebSocket notification latency <200ms
+- **Tools:** `wrk`, `vegeta`, or custom JMH benchmark harness
+
+### 2.1c — Institutional Protocol Prerequisites (2026-03-27 audit)
+
+These items address code-level gaps identified by analyzing cross-chain bridge protocols (CCIP, CCTP, LayerZero, Axelar, Wormhole), oracle providers (Chainlink, RedStone, Tellor, Chronicle, Pyth, API3), and DApp infrastructure requirements. Small changes that unblock multiple protocol integrations.
+
+#### M-034: Support `finalized` and `safe` block tags (EIP-1898 extension)
+
+- **Priority:** Medium | **Risk:** Low
+- **Description:** `JsonMethodsImplicits.scala:135-137` only handles `earliest`, `latest`, `pending` block tags. Cross-chain bridges (CCIP, LayerZero, Axelar, Wormhole) all query the `finalized` tag to determine when a block is safe to act on. On PoW chains, both `finalized` and `safe` should map to `latest - N` where N is a configurable confirmation depth.
+- **Files:** `ResolveBlock.scala` (add `Finalized`/`Safe` to `BlockParam`), `JsonMethodsImplicits.scala:135-137` (add string matching), config (add `finalized-depth`/`safe-depth`)
+- **Defaults:** `finalized` = `latest - 120` (~30 min at 15s blocks), `safe` = `latest - 15` (~4 min). Configurable via `fukuii.network.rpc.finalized-depth` and `fukuii.network.rpc.safe-depth`.
+- **Note:** core-geth does not implement these tags either — Fukuii would be the first ETC client with bridge-compatible finality tags.
+- **Unblocks:** ALL cross-chain bridge integrations (CCIP, LayerZero, Axelar, Wormhole, CCTP all query `finalized`)
+- **Scope:** ~30 lines across 3 files
+
+#### M-035: Batch RPC compatibility with rate limiting
+
+- **Priority:** Medium | **Risk:** Low
+- **Description:** `JsonRpcHttpServer.scala:94-95` returns `MethodNotAllowed` for ALL batch requests when rate limiting is enabled. Chainlink CCIP requires batch `GetLogs` and `GetBlockByNumber`. Production nodes need rate limiting. These two features must coexist.
+- **File:** `src/main/scala/.../jsonrpc/server/http/JsonRpcHttpServer.scala:94-95`
+- **Fix:** Apply per-request rate limiting within batch processing — each request in the batch counts individually against the rate limit, matching Infura/Alchemy behavior. Remove the blanket batch rejection.
+- **Unblocks:** CCIP integration (explicitly requires batch RPC), production deployments with rate limiting enabled
+- **Scope:** ~15 lines
+
+#### M-036: `eth_getLogs` block range limit
+
+- **Priority:** Medium | **Risk:** Low
+- **Description:** `FilterManager.scala:125` recursively iterates from `fromBlock` to `toBlock` with no upper bound on the range. A single query for blocks `0` to `latest` (~21M blocks on ETC mainnet) will iterate every block sequentially, consuming unbounded CPU/IO — effectively a DoS vector. All production RPC providers cap this: Infura 2,000 blocks, Alchemy 2,000, QuickNode varies. Exchanges, bridges, and RPC providers all require this DoS protection.
+- **File:** `src/main/scala/.../jsonrpc/FilterManager.scala:125-166`
+- **Fix:** Add configurable `max-log-range` with `JsonRpcError` when exceeded. Default 10,000 blocks (generous but bounded).
+- **Config:** `fukuii.network.rpc.max-log-range = 10000`
+- **Unblocks:** Production RPC serving (exchanges, bridges, RPC providers)
+- **Scope:** ~20 lines + config entry
+
+### Wallet Readiness Assessment (2026-03-27)
+
+Research confirmed all major wallets are RPC-agnostic — no Fukuii client changes needed:
+
+| Wallet | ETC Support | Integration Model |
+|--------|-------------|-------------------|
+| MetaMask | Custom RPC (EIP-3085) | User adds Fukuii endpoint manually |
+| Rabby | Native (141+ chains) | Uses trace_* for tx simulation — Fukuii has this |
+| Trust Wallet | Native | Multi-chain, standard RPC |
+| Coinbase Wallet | Custom RPC | User configures endpoint |
+| Ledger Live | Native | Built-in ETC app on device |
+| Frame | Direct node | Perfect solo-operator use case |
+| Safe (Gnosis) | Not deployed | Needs tx service infrastructure (F-010) |
+| WalletConnect v2 | Chain-agnostic | Supports `eip155:61` (ETC mainnet) |
+
+EIP-3085 (`wallet_addEthereumChain`) and EIP-3326 (`wallet_switchEthereumChain`) both support ETC natively. DApps can programmatically add ETC with `chainId: '0x3d'`.
+
 ### 2.2 — Performance
 
 #### M-007: JSON-RPC batch parsing optimization ✅ DONE
@@ -387,6 +490,76 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Reference:** `hive/simulators/ethereum/` existing test patterns (https://github.com/ethereum/hive)
 - **Existing base:** core-geth + besu-etc PASSING in hive, fukuii build WIP
 - **Depends on:** Fukuii hive client build completion, H-014
+
+#### M-033: MESS reactivation testing for Olympia hardfork defense
+
+- **Priority:** Medium | **Risk:** High (network-critical)
+- **Description:** ECBP-1100 MESS (Modified Exponential Subjective Scoring) is currently deactivated at Spiral (block 19,250,000 on ETC). MESS should be **re-enabled by default in Olympia** to protect the network from 51% attacks and to address centralized exchange confidence concerns around the fork.
+- **Historical context (2020 attacks):** ETC suffered **3-4 separate 51% attacks in 2020**, resulting in millions of dollars in double-spend losses. These attacks directly led to two defensive ECIPs:
+  - **ECIP-1099 (Thanos/ETChash):** Reduced DAG size to keep GPU miners viable, activated Nov 2020 at block 11,700,000
+  - **ECIP-1100 (MESS):** Antigravity polynomial making deep reorgs exponentially more expensive, activated Oct 2020 at block 11,380,000
+  - MESS was subsequently **deactivated at Spiral** (ECBP-1110) — this was a mistake that should be reversed
+- **Current threat indicators (2026-03-27, sources: [2miners ETC hashrate](https://2miners.com/etc-network-hashrate), [BitInfoCharts ETC hashrate vs price](https://bitinfocharts.com/comparison/hashrate-price-etc.html#alltime)):**
+  - **Week view:** Network at 175 TH/s, oscillating between ~150-220 TH/s — a **~70 TH/s daily sawtooth cycle (40% of total hashrate)** appearing and disappearing in regular patterns. Not organic mining behavior; indicates programmatic hashrate rental cycling on/off to game the difficulty adjustment.
+  - **Year view:** Reveals a longer pattern. Apr-Sep 2025: ~250-300 TH/s with the same sawtooth cycling. **Oct 2025: ~100 TH/s dropped off almost overnight** (300→200 TH/s), suggesting a single large entity switched off. The 70 TH/s sawtooth cycling continues at the lower baseline. This means ~100 TH/s of rentable ETChash hashrate exists in the market that was previously on the ETC network and could return at any time — for honest mining or for an attack.
+  - **All-time view — post-Merge hashrate profile (BitInfoCharts ETH vs ETC overlay):** ETC was ~20-50 TH/s from 2016 to Sep 2022. ETH peaked at ~1.1 PH/s (1,100 TH/s) before the Merge. At the Merge (Sep 2022), ETH hashrate drops to zero and ETC spikes from ~50 TH/s to ~300 TH/s — absorbing ~250 TH/s of displaced ex-ETH GPU miners (~25% of ETH's peak hashrate). **ETC's current hashrate is 75%+ mercenary post-Merge miners** with no ideological commitment to the chain. They mine whatever is most profitable and their hashrate is available for rent on NiceHash/MiningRigRentals at any time. The remaining ~750 TH/s of ex-ETH hashrate went to other coins or shut down but could return to ETC at any time if profitable. The original MESS parameters were calibrated for 3 TH/s network vs 66 TH/s attacker (2020). Post-Merge, the raw numbers are higher but the dynamic is arguably *worse* — nearly all the hashrate is rentable, not committed, and there is a massive pool of idle ethash-compatible hashrate in the broader market. MESS parameter recalibration for the post-Merge hashrate landscape should be evaluated as part of this work item.
+  - **Implication for MESS:** At 175 TH/s network hashrate, an attacker could rent the 100 TH/s that left in October. Without MESS, a deep reorg costs only hashrate rental × blocks (linear). With MESS at 31x peak multiplier, deep reorgs become economically prohibitive. Re-enabling MESS is not theoretical — the hashrate to attack already exists and was recently on the network.
+- **Olympia fork defense:** Re-enabling MESS addresses centralized exchange concerns about a minority chain attacking the main Olympia branch:
+  - The minority chain (anti-development/ossify faction) has no significant hashrate and no economic backing
+  - Olympia is the primary branch — it includes ETC Cooperative, Grayscale's ETC trust products, and alignment with all material stakeholders who need a modern, maintained client
+  - ETC needs active development, not ossification. Olympia absorbs all meaningful hashrate because the entire institutional ecosystem (exchanges, funds, infrastructure) follows the maintained fork
+  - MESS makes it economically impossible for a minority chain to reorg the Olympia branch, giving exchanges confidence to credit deposits without extended confirmation delays
+- **Current state:** MESS is fully implemented in Fukuii (`MESSScorer`, `ChainDifficultyHelper`). M-016 verified MESS is inactive at Olympia blocks. 29 MESS tests pass. The question is no longer *whether* to reactivate — it's ensuring all 3 clients handle reactivation correctly.
+- **Adversarial scenario:** A minority chain split (no significant hashrate, <18 participants with no mining hardware) attempts to:
+  1. Mine a competing chain at the Olympia fork block using pre-fork rules
+  2. Accumulate enough TD to trigger reorgs on upgraded nodes that accepted the minority chain's blocks pre-fork
+  3. Confuse network topology by running nodes that reject Olympia blocks and relay pre-fork blocks
+- **Test plan:**
+  1. **Reactivation mechanics:** Verify MESS can be re-enabled via new `MESSConfig` window (activation block, deactivation block) in chain config. Test that adding a new MESS window after Spiral works alongside the existing Mordor/ETC windows.
+  2. **Antigravity at fork boundary:** Simulate a minority chain that forks at Olympia block N with pre-fork rules. Measure the antigravity penalty applied to competing chains of length 1, 10, 100, 1000 blocks. Verify upgraded nodes reject the minority chain even if it temporarily has higher raw TD.
+  3. **Fork choice interaction with EIP-1559:** Post-Olympia blocks have baseFee. Pre-fork minority blocks do not. Verify MESS scoring handles the mixed-era comparison correctly (TD-only fork choice, no baseFee influence on MESS penalty).
+  4. **Peer handling:** Verify that peers serving minority chain blocks (pre-fork headers at post-fork heights) are identified and handled — ForkId mismatch should trigger disconnect before MESS even applies. Test the interaction between ForkId validation (H-015) and MESS scoring.
+  5. **Configuration proposal:** Document recommended MESS reactivation window for Olympia (e.g., activate at N-1000, deactivate at N+10000) and the config entries needed for all 3 clients.
+- **Cross-client:** Core-geth has MESS natively. Besu does NOT implement MESS — Besu nodes would rely on ForkId filtering only. Document this asymmetry and its implications for network defense.
+- **Depends on:** M-016 (MESS verification), H-015 (chain split detection), H-014 (fork boundary tests)
+
+#### M-037: Dynamic confirmation recommendations RPC (MESS + attack cost model)
+
+- **Priority:** Medium | **Risk:** Medium
+- **Description:** No EVM client provides transaction-aware confirmation recommendations. Every centralized exchange hardcodes a static confirmation count (e.g., "24 confirmations for ETC") regardless of transaction value — a $1 transfer and a $1M deposit get the same wait time. With MESS reactivated, Fukuii can compute the actual cost to attack (reorg) at any given depth using the antigravity polynomial, current network difficulty, and ETChash hashrate market price. This creates a new RPC method that returns dynamic confirmation recommendations based on transaction value: "how many confirmations until the cost to reorg exceeds the transaction value?"
+- **Concept:** For a given transaction value V, compute the number of confirmations N where:
+  `cost_to_reorg(N) = hashrate_rental_cost(N_blocks) × MESS_antigravity_multiplier(N) > V`
+  - `hashrate_rental_cost` = blocks × block_reward × (1 + rental_premium), derived from current difficulty + ETChash hashrate market rates
+  - `MESS_antigravity_multiplier` = the cubic polynomial from `ArtificialFinality.scala` (1x at 0s, rising to 31x at ~9000s)
+  - With MESS active, deep reorgs cost exponentially more than without — a 100-block reorg costs ~8x more than 100× the single-block cost
+  - Without MESS, cost scales linearly with depth (just hashrate rental)
+- **Existing infrastructure:**
+  - `ArtificialFinality.scala` — antigravity polynomial (cubic, 1x→31x multiplier over ~9000s)
+  - `ChainDifficultyHelper` — difficulty calculation
+  - `EthMiningService` — current hashrate via `eth_hashrate`
+  - `MiningMetrics` — Prometheus hashrate gauge
+- **Proposed RPC method:** `fukuii_getConfirmationRecommendation`
+  - **Input:** `{ value: "0x..." }` (transaction value in wei) + optional `{ hashratePremium: 1.5 }` (rental cost multiplier, default 1.5x)
+  - **Output:** `{ confirmations: 6, estimatedSeconds: 90, costToAttack: "0x...", messMultiplier: 3.2, withoutMess: { confirmations: 24, estimatedSeconds: 360 } }`
+  - Returns both MESS-protected and unprotected recommendations for comparison
+  - Dynamically adjusts as difficulty changes (recalculated per-call against current chain state)
+- **MESS cost-to-attack table:** Recreate the original ECBP-1100 analysis table showing cost to attack at various reorg depths with and without MESS. Sources identified:
+  - **ECIP-1100 spec** (local: `/ECIPs/_specs/ecip-1100.md`): Polynomial implementation, parameter reasoning, Go code from core-geth. Constants: `xcap=25132` (floor(8000π)), `ampl=15`, `denominator=128`, `height=3840`. Peak multiplier 31x at ~7 hours.
+  - **meowsbits/51-percent-docs** (Isaac Ardis, original MESS author): Cost-to-attack tables, Messnet simulation results. Historical: Aug 2020 attack cost ~$192K for 3,594-block reorg without MESS; with MESS 31x multiplier: ~$5.9M required (net loss for attacker). Messnet finality times: $100K tx = 2.53hr, $1M tx = 8.15hr.
+  - **Polynomial:** `y = 128 + (3x² - 2x³/xcap) × height / xcap²` where height=128×15×2=3840. Integer-only arithmetic. Multiplier ramps 1x→31x over ~9000s. 31x ceiling based on 22x worst-case hashrate ratio (66TH attacker vs 3TH ETC) with 50% safety margin.
+  - **Safety mechanisms** (from core-geth impl in ECIP-1100): MESS disabled during sync, requires MinimumSyncPeers (5), disabled if head stale (>30×13s). Fukuii must replicate these guards.
+- **Exchange value proposition:** Exchanges could query this endpoint per-deposit to dynamically set confirmation requirements. A $1 ETC deposit could confirm in 1-2 blocks (~15-30s). A $100K deposit might need 30+ blocks (~7.5 min). This replaces the current "one size fits all" 24-block static policy that every exchange uses.
+- **Differentiator:** No EVM client (geth, Besu, Nethermind, Erigon, core-geth) offers this. Unique to Fukuii. Directly monetizable for exchange partnerships — reduces deposit latency for small transactions while maintaining security for large ones.
+- **Research items:**
+  1. ~~Locate original ECBP-1100 cost-to-attack table~~ — **DONE.** ECIP-1100 spec + meowsbits/51-percent-docs (see sources above)
+  2. Model ETChash hashrate rental market (NiceHash ETC rates, historical attack costs from 2020 51% attacks — baseline: $192K for 3,594-block reorg at Aug 2020 hashrate)
+  3. Define the cost function: `hashrate_cost_per_second × reorg_depth_seconds × MESS_multiplier(depth)` — polynomial constants now known (see sources above)
+  4. Validate against historical ETC attacks (2020: 3-4 separate 51% attacks including 3,594-block and 7,000+ block reorgs) — would MESS + dynamic confirms have caught them? These attacks directly led to ECIP-1099 and ECIP-1100.
+  5. Determine if the `hashratePremium` parameter should be configurable per-exchange or use a network-wide default
+  6. Port the Fukuii `ArtificialFinality.scala` antigravity polynomial into the cost model (already implemented in `consensus/mess/`)
+  7. Evaluate MESS parameter recalibration for post-Merge hashrate landscape: original xcap=25132 and 31x ceiling were set for 3 TH/s network (2020). Current network is 175 TH/s but ~75% mercenary/rentable. The multiplier ceiling may need adjustment based on the ratio of rentable-to-committed hashrate rather than absolute values.
+  8. Factor in post-Merge hashrate/price decorrelation: BitInfoCharts ETC hashrate vs price shows complete decorrelation after Sep 2022. Pre-Merge, hashrate tracked price (miners follow profitability). Post-Merge, hashrate jumped 6x (50→300 TH/s) while price was flat ($25), and remains at 198 TH/s with price at $8.10. Honest mining revenue per TH/s is near break-even — the opportunity cost of redirecting hashrate from honest mining to attacking is minimal. The `hashratePremium` parameter in the cost model should account for this: when mining margins are thin, attack hashrate is cheaper to acquire because miners lose little by switching. Consider using `ETC_price / mining_cost_per_TH` as a profitability-aware input to the rental cost estimate.
+- **Depends on:** M-033 (MESS reactivation testing), M-032 (production benchmarking)
 
 #### M-019: MCP server multi-LLM documentation and examples ✅ DONE
 
@@ -533,12 +706,50 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 #### F-001: GraphQL endpoint
 
 - **Priority:** Future | **Risk:** Medium
-- **Description:** Core-geth, Besu, and Erigon all expose GraphQL. Would allow flexible queries without multiple RPC calls.
+- **Description:** Core-geth, Besu, and Erigon all expose GraphQL (EIP-1767 schema). Thin wrapper over same backend as JSON-RPC — Besu uses graphql-java on separate port 8547, core-geth uses graphql-go on shared port at `/graphql` path. Covers blocks, transactions, accounts, logs, pending state.
+- **Customer segment analysis (2026-03-27):** NOT needed by current customer segments. Blockscout uses JSON-RPC (configurable `ETHEREUM_JSONRPC_VARIANT`, supports geth/erigon/nethermind/besu — does NOT use GraphQL to talk to clients). Centralized exchanges use standard JSON-RPC + WebSocket. Mining pools use `eth_getWork`/`eth_submitWork` + WebSocket. GraphQL becomes relevant for DApp developers post-Olympia — deprioritize behind customer-facing gaps (M-029, M-030, M-031, M-032). Also not required by cross-chain bridges (CCIP, LayerZero, Axelar, Wormhole), oracle providers (Chainlink, RedStone, Tellor, Pyth), or wallets (MetaMask, Rabby, Trust, Ledger, Safe). Post-Olympia DApp developer convenience only.
 
-#### F-002: Stratum server
+#### F-002: Built-in Stratum mining server
 
 - **Priority:** Future | **Risk:** Medium
-- **Description:** Neither Fukuii nor core-geth implement Stratum protocol. Would be a differentiator for GPU mining pool connectivity.
+- **Description:** No ETC client (core-geth, Besu, Fukuii) implements the Stratum protocol. Adding a built-in Stratum TCP server would make Fukuii the first ETC client where ASIC/GPU miners can connect directly without external pool software — reducing the mining stack from 3 components (node + pool software + miner) to 2 (Fukuii + miner). Large pool operators (F2pool, 2miners, Antpool) continue using their proprietary infrastructure via `eth_getWork`/`eth_submitWork` RPC — this feature serves solo miners, small cooperatives, and operators who want a single-binary mining setup.
+- **ETChash note:** ETC mining is primarily ASIC (iPollo, Jasminer, Bitmain E9) and GPU. The existing `EthashMiner` CPU miner is useful for Mordor testnet only. Stratum serves the real mining hardware on mainnet.
+- **Monero precedent:** Monero (monero-project/monero-gui) is the only major PoW project where the reference client includes built-in mining, eliminating external dependencies. No other PoW client (Zcash, Kaspa, Ergo, Ravencoin) has built-in Stratum.
+
+**Protocol:** Stratum V1 (widely supported by all ASIC/GPU mining software). Stratum V2 (stratum-mining/stratum) as future upgrade path.
+
+**Architecture:** Pekko TCP actor accepting persistent miner connections, integrated with existing `EthMiningService`, `WorkNotifier`, and `PoWMiningCoordinator`.
+
+**Scope:**
+- Stratum TCP server (configurable port, default 3333, `--stratum-enabled --stratum-port=3333`)
+- Job distribution (new work pushed on block change + `recommit-interval` timer)
+- Share validation (configurable difficulty target per miner)
+- Miner authentication (optional, for operator tracking and per-worker stats)
+- Hashrate reporting (feeds into existing `eth_submitHashrate` aggregation and Prometheus `mining.hashrate.hps.gauge`)
+- TUI mining panel (connected miners, aggregate hashrate, shares accepted/rejected, blocks found)
+- Configurable payout address (uses existing `mining.coinbase` config)
+
+**Existing integration points:**
+- `EthMiningService` — already handles `eth_getWork`/`eth_submitWork`, `BlockGenerator.getPrepared()` cache
+- `WorkNotifier` — HTTP POST push to external URLs, same pattern adapts to Stratum job push
+- `PoWMiningCoordinator` — `RecommitWork` message already regenerates work on timer
+- `MiningMetrics` — Prometheus counters already in place for hashrate/blocks
+- `Tui.scala` / `TuiRenderer.scala` — JLine 3 framework ready for mining panel addition
+
+**What it replaces:** External pool software (open-etc-pool, etc-stratum) for solo/small-pool operators.
+**What it doesn't replace:** Large pool proprietary infrastructure — they keep using `eth_getWork`/`eth_submitWork` RPC.
+
+**Research references (for implementation phase):**
+
+| Repo | Language | Relevance |
+|------|----------|-----------|
+| `monero-project/monero` | C++ | Built-in solo mining, CLI mine command |
+| `monero-project/monero-gui` | C++/QML | GUI mining UI with thread slider — gold standard UX |
+| `sammy007/monero-stratum` | Go | Simple Stratum server with web UI — closest architectural match |
+| `stratum-mining/stratum` | Rust | Stratum V2 reference implementation — future protocol path |
+| `stratum-mining/sv2-spec` | Spec | V2 protocol specification |
+| `etclabscore/open-etc-pool` | Go | Current ETC pool software — shows what Fukuii would replace |
+| `ethereum-mining/ethminer` | C++ | GPU miner Stratum client — what connects to the server |
 
 #### F-003: Plugin system
 
@@ -558,6 +769,74 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 
 - **Priority:** Future | **Risk:** Low
 
+### 4.1 — Post-Olympia Ecosystem Enablement (2026-03-27 audit)
+
+These items prepare Fukuii for institutional protocol integrations post-Olympia. They are documentation and conformance testing — not code changes.
+
+#### F-007: Cross-chain bridge conformance testing
+
+- **Priority:** Future | **Risk:** Low
+- **Description:** Test and document Fukuii's RPC conformance against cross-chain bridge requirements. Creates the technical collateral needed for bridge governance proposals (CCIP, LayerZero, Axelar, Wormhole, CCTP).
+- **Test plan:**
+  1. Run CCIP contract simulations against Fukuii (batch eth_getLogs, `finalized` tag queries, WebSocket newHeads)
+  2. Run LayerZero Ultra Light Node client simulation (event monitoring via getLogs + subscribe)
+  3. Test Wormhole Guardian observer pattern (full node event monitoring, block confirmation depth)
+  4. Document PoW ETC block confirmation semantics (how `finalized` depth maps to security assumptions — 120 blocks ≈ 30 min for high-value cross-chain transfers)
+  5. Test Axelar Gateway contract interaction patterns
+- **Output:** `docs/integrations/BRIDGE-CONFORMANCE.md`
+- **Depends on:** M-034 (finalized/safe tags), M-035 (batch + rate limit)
+- **Note:** Actual bridge deployment requires protocol governance votes (CCIP: Chainlink node operator review, Axelar: AXL holder vote, LayerZero: DVN deployment). This item provides the technical evidence for those proposals.
+
+#### F-008: Ecosystem infrastructure deployment guide
+
+- **Priority:** Future | **Risk:** Low
+- **Description:** Many institutional integrations require deployed infrastructure that is NOT client code. Document what needs to be deployed on ETC post-Olympia and who deploys it:
+  - **Multicall3** — Deterministic CREATE2 address (`0xcA11bde05977b3631167028862bE2a173976CA11`), deployed on 250+ chains. Requires pre-signed deployment transaction. ETC gas limit going to 60M post-Olympia (well above 872,776 gas requirement).
+  - **Safe singleton + proxy factory** — Deterministic CREATE2 addresses. Required for multisig governance (Olympia DAO uses Safe).
+  - **The Graph subgraph node** — Standard EVM indexer. Document Fukuii as `graph-node` backend configuration (eth_getLogs + eth_getBlockByNumber).
+  - **ERC-4337 bundler** — Application-layer account abstraction. No client changes needed, but needs bundler infrastructure (alt-mempool, EntryPoint contract deployment).
+- **Output:** `docs/integrations/ECOSYSTEM-INFRASTRUCTURE-GUIDE.md`
+
+#### F-009: Oracle provider conformance testing
+
+- **Priority:** Future | **Risk:** Low
+- **Description:** Verify and document Fukuii compatibility with oracle node software. No oracle provider (Chainlink, RedStone, Tellor, Chronicle, Pyth, API3) is currently deployed on ETC — these are prerequisites for DeFi.
+- **Test plan:**
+  1. Run Chainlink OCR node simulation against Fukuii (eth_getLogs for FluxAggregator events, eth_estimateGas for report submission, eth_feeHistory for gas oracle)
+  2. Verify Fukuii behind nginx/caddy TLS termination (Chainlink requires `https://` and `wss://`)
+  3. Document multi-provider setup (Chainlink requires 3 independent, stable RPC endpoints with no rate limiting and valid SSL)
+  4. Verify RedStone pull-oracle pattern (standard eth_call + eth_sendTransaction — minimal client overhead)
+  5. Verify Tellor dispute contract interaction (standard RPC, 1-hour optimistic delay between report and attestation)
+  6. Document Pyth/Wormhole price feed integration path (Wormhole attestation service → ETC contract)
+- **Output:** `docs/integrations/ORACLE-CONFORMANCE.md`
+- **Note:** Oracle deployment requires business decisions from providers (Chainlink Labs, Chronicle validators, Pyth network). This item provides technical readiness proof.
+
+#### F-010: Safe transaction service compatibility
+
+- **Priority:** Future | **Risk:** Low
+- **Description:** Safe (Gnosis Safe) is the standard multisig wallet for DAO governance. Requires `trace_*` methods for transaction indexing and a dedicated transaction service. Fukuii already has `trace_replayBlockTransactions`, `trace_block`, `trace_transaction` (Parity-style). This item verifies the trace output format matches Safe's transaction service expectations.
+- **Test plan:**
+  1. Run Safe transaction service against Fukuii's `trace_*` output (Parity-format)
+  2. Verify ERC-20 transfer indexing via event logs
+  3. Document Safe singleton + proxy factory deployment addresses for ETC
+  4. Test Safe contract deployment via deterministic CREATE2 factory
+- **Output:** `docs/integrations/SAFE-COMPATIBILITY.md`
+- **Depends on:** F-008 (Multicall3 deployment)
+
+#### F-011: Production deployment reference architecture
+
+- **Priority:** Future | **Risk:** Low
+- **Description:** Document the canonical production deployment topology for institutional use. Chainlink requires `https://` + `wss://`. Exchanges require <100ms latency. Multiple RPC providers need this reference to list ETC.
+- **Scope:**
+  - nginx/caddy TLS termination config with WebSocket passthrough (`proxy_pass`, `Upgrade`/`Connection` headers)
+  - Let's Encrypt / Cloudflare certificate automation
+  - Health check integration (`/health`, `/readiness`, `/buildinfo`)
+  - Rate limiting at both proxy (nginx `limit_req`) and Fukuii (`rateLimit.enabled`) levels
+  - JWT secret management and rotation
+  - Docker Compose reference for the full stack (Fukuii + nginx + certbot + Prometheus + Grafana)
+  - Multi-instance load balancing (active-active Fukuii nodes behind nginx upstream)
+- **Output:** `docs/deployment/PRODUCTION-REFERENCE-ARCHITECTURE.md`
+
 ---
 
 ## Dependency Graph
@@ -576,6 +855,17 @@ H-010 (fork-gate txs) ─┬── H-014 (fork boundary tests)
 H-011 (baseFee reject) ─┘
 H-014 ── H-016 (adversarial — needs boundary validation first)
 H-015 (chain split) ── M-018 (hive — cross-client chain split)
+H-001 (debug expand) ── M-029 (JS tracer — needs StructLogTracer base)
+M-029 (JS tracer) ── M-030 (Blockscout compat — needs trace methods)
+M-016 (MESS verify) ─┬── M-033 (MESS reactivation — needs baseline)
+H-015 (chain split) ──┘
+H-014 (fork boundary) ─┘
+M-033 (MESS reactivation) ─┬── M-037 (dynamic confirms — needs MESS + cost model)
+M-032 (benchmarks) ────────┘
+M-034 (finalized/safe tags) ─┬── F-007 (bridge conformance)
+M-035 (batch + rate limit) ──┘
+M-036 (getLogs range limit) ── M-032 (production benchmarks)
+F-008 (ecosystem infra guide) ── F-010 (Safe compatibility)
 ```
 
 ---
@@ -594,7 +884,11 @@ H-015 (chain split) ── M-018 (hive — cross-client chain split)
 | 8 — Fork Safety      | H-014, H-015, H-016, M-016                      | Fork boundary tests, chain split, adversarial, MESS            |
 | 9 — Sync + Network   | H-007, M-003..M-005, M-015, M-021               | Recovery, work-stealing, SNAP reorg freshness, slot validation |
 | 10 — Testing         | M-009..M-014, M-018                             | Full test suite pass, hive Olympia coverage                    |
-| 11 — Polish + Future | M-007, M-008, M-019, M-022..M-025, L-001..L-006, F-001..F-006 | Perf, MCP docs, missing RPC, README, networking, GraphQL       |
+| 11a — Protocol Prereqs | M-034, M-035, M-036                            | finalized/safe tags, batch+ratelimit, getLogs range limit      |
+| 11b — Customer Gaps  | M-029, M-030, M-031, M-032                     | JS tracer, Blockscout compat, archive verify, benchmarks       |
+| 12 — MESS Defense    | M-033, M-037                                    | MESS reactivation + dynamic confirmation recommendations       |
+| 13 — Polish + Future | M-007, M-008, M-019, M-022..M-025, L-001..L-006, F-001..F-006 | Perf, MCP docs, missing RPC, README, networking, GraphQL       |
+| 14 — Ecosystem       | F-007, F-008, F-009, F-010, F-011               | Bridge/oracle/Safe conformance, infra guide, prod architecture |
 
 **Methodology:** Each item requires reviewing all 5 reference clients (go-ethereum primary, core-geth, Besu, Erigon, Nethermind) before implementation. For PoW consensus: pre-Sept 2022 go-ethereum v1.10.26, Besu, current core-geth.
 
