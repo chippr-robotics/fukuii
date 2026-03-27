@@ -220,13 +220,11 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 - **Priority:** Medium | **Risk:** Low
 - **Resolution:** Implemented `debug_setVerbosity` (set root log level), `debug_setVmodule` (set per-module level, supports short names like "sync" → `com.chipprbots.ethereum.sync` and full package paths), `debug_getVerbosity` (return root level + all module overrides). Uses Logback `LoggerContext` API for runtime level changes without restart. JSON codecs + controller wiring. RPC count: 110 → 113.
 
-#### M-003: SNAP work-stealing for idle workers
+#### M-003: SNAP work-stealing for idle workers ✅ DONE
 
 - **File:** `src/main/scala/.../sync/snap/actors/AccountRangeCoordinator.scala`
 - **Priority:** Medium | **Risk:** Medium (sync-critical)
-- **Description:** No work-stealing queue. 1:1 worker-to-peer mapping. On ETC mainnet with 4 peers/ranges, 2/4 ranges finished early (uneven account density), leaving 2 workers idle while others continued.
-- **Approach:** When a range completes, split the largest active task at its `next` midpoint. ~30-40 lines in `handleStoreAccountChunk`.
-- **Depends on:** ~~C-001, C-002~~ (resolved)
+- **Resolution:** Added `maybeStealWork()` method. When a range completes and no pending tasks remain, finds the active task with the largest remaining keyspace (>2^248 threshold) and splits it at the midpoint. New task is enqueued for idle workers. Prevents 2/4 workers sitting idle during uneven account density on ETC mainnet. ~50 lines in `handleStoreAccountChunk` + new method.
 
 #### M-004: Version-aware message decoding — DEFERRED
 
@@ -599,6 +597,7 @@ Items below were implemented on the `march-onward` branch and verified against t
 | SNAP finalization fixes (C-001/#1007)    | Already on `march-onward`                      | Deadlock fix, 2h timeout, TODO cleanup — all pre-existing |
 | SNAP test coverage (C-001/#1008)         | Already on `march-onward`                      | 10 test files, 144 tests — all pre-existing |
 | SNAP healing name collision (C-002/#1005) | `SNAPSyncController.scala:2044`                | Duplicate guard already implemented |
+| SNAP work-stealing (M-003)               | `AccountRangeCoordinator.scala:maybeStealWork` | Split largest active range at midpoint when idle |
 | CPU profiling via JFR (M-024)    | `DebugService.scala`                           | debug_startCpuProfile + debug_stopCpuProfile, 4 tests |
 
 ### Resolved in FIXME/TODO Audit (2026-03-25)

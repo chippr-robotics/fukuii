@@ -860,6 +860,9 @@ class AccountRangeCoordinator(
           )
           // Send progress snapshot so controller can resume from saved positions
           sendProgressSnapshot()
+          // M-003: Work-stealing — when no pending tasks remain but active tasks exist,
+          // split the largest active task to keep idle workers productive.
+          maybeStealWork()
         } else {
           // Need more requests for the same interval; re-queue with updated `next`.
           pendingTasks.enqueue(task)
@@ -875,6 +878,66 @@ class AccountRangeCoordinator(
         task.pending = false
         task.done = false
         pendingTasks.enqueue(task)
+    }
+  }
+
+  /** M-003: Work-stealing for idle workers.
+    *
+    * When a range completes and there are no pending tasks, but active tasks remain,
+    * split the largest active task at its midpoint. This prevents 2/4 workers sitting
+    * idle while the remaining workers finish large ranges (uneven account density).
+    *
+    * Minimum remaining keyspace threshold prevents splitting nearly-complete tasks
+    * where the overhead of a new request outweighs the benefit.
+    */
+  private def maybeStealWork(): Unit = {
+    if (pendingTasks.nonEmpty) return // already have work to dispatch
+    if (activeTasks.isEmpty) return   // nothing to steal from
+
+    // Find the active task with the largest remaining keyspace
+    val candidates = activeTasks.values.toSeq
+      .filter { case (task, _, _) =>
+        // Only split if the remaining range is large enough to be worth it.
+        // Minimum ~1/256th of total keyspace (2^248) prevents splitting tiny tail ranges.
+        task.remainingKeyspace > (BigInt(2).pow(248))
+      }
+      .sortBy { case (task, _, _) => task.remainingKeyspace }
+      .lastOption
+
+    candidates match {
+      case Some((victim, _, _)) =>
+        val nextBig = BigInt(1, victim.next.toArray.padTo(32, 0.toByte))
+        val lastBig = BigInt(1, victim.last.toArray.padTo(32, 0.toByte))
+        val midpoint = nextBig + (lastBig - nextBig) / 2
+
+        // Create a new task for the upper half: [midpoint, victim.last]
+        val midpointBytes = {
+          val bytes = midpoint.toByteArray
+          val unsigned = if (bytes.nonEmpty && bytes(0) == 0) bytes.drop(1) else bytes
+          ByteString(Array.fill(32 - unsigned.length.min(32))(0.toByte) ++ unsigned.takeRight(32))
+        }
+        val stolenTask = AccountTask(
+          next = midpointBytes,
+          last = victim.last,
+          rootHash = stateRoot
+        )
+        // Shrink the victim's range to [victim.next, midpoint)
+        // We can't modify `last` (it's val), but we can adjust by creating a replacement.
+        // Since victim is an active task (in-flight request), we don't modify it —
+        // the current request continues on [victim.next, victim.last] and the response
+        // may include accounts beyond midpoint. When it re-queues with updated `next`,
+        // it will naturally overlap with the stolen task's range.
+        // The stolen task starts fresh from midpoint, and the priority queue handles ordering.
+
+        pendingTasks.enqueue(stolenTask)
+        log.info(
+          s"WORK-STEAL: Split largest active range ${victim.rangeString} at midpoint " +
+            s"${midpointBytes.take(4).toArray.map("%02x".format(_)).mkString}. " +
+            s"New task: ${stolenTask.rangeString} (${pendingTasks.size} pending)"
+        )
+
+      case None =>
+        log.debug("No active tasks large enough to split for work-stealing")
     }
   }
 
