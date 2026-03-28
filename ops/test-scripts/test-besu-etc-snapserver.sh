@@ -47,6 +47,12 @@ echo "Data dir: $DATADIR"
 echo "SNAP server: ENABLED (Fukuii can SNAP sync from this peer)"
 echo ""
 
+# JVM flags: cap heap at 3G to coexist with Fukuii (-Xmx8g) and core-geth (~1.2G)
+# on a 32GB machine. Besu defaults to 25% of RAM (~8G) which causes OOM when
+# all three clients run simultaneously.
+export BESU_OPTS="${BESU_OPTS:--Xmx3g -Xms1g}"
+echo "JVM opts: $BESU_OPTS"
+
 exec "$BINARY" \
   --genesis-file="$GENESIS" \
   --data-path="$DATADIR" \
