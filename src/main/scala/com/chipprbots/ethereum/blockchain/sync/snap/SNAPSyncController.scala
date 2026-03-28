@@ -1901,6 +1901,11 @@ class SNAPSyncController(
           peerWithInfo.peer
       }
 
+      // Adaptive bytecode budget: scale with verified SNAP peer count.
+      // 1 peer: budget=1 (avoid starving accounts/storage). 2+: budget=2.
+      val bytecodeBudget = if (snapPeers.size <= 1) 1 else 2
+      coordinator ! actors.Messages.UpdateMaxInFlightPerPeer(bytecodeBudget)
+
       if (snapPeers.isEmpty) {
         log.debug("No verified SNAP-serving peers available for bytecode requests")
       } else {
@@ -1929,6 +1934,11 @@ class SNAPSyncController(
       }
 
       SNAPSyncMetrics.setSnapCapablePeers(snapPeers.size)
+
+      // Adaptive storage budget: scale with verified SNAP peer count.
+      // 1 peer: budget=2 (share with accounts=5, bytecodes=1 → total ~8). 2+: budget=3.
+      val storageBudget = if (snapPeers.size <= 1) 2 else 3
+      coordinator ! actors.Messages.UpdateMaxInFlightPerPeer(storageBudget)
 
       if (snapPeers.isEmpty) {
         log.info(s"No SNAP-capable peers at or above pivot $pivot available for storage range requests")
@@ -2116,6 +2126,13 @@ class SNAPSyncController(
             if peerWithInfo.peerInfo.remoteStatus.supportsSnap
               && peerWithInfo.peerInfo.isServingSnap =>
           peerWithInfo.peer
+      }
+
+      // Adaptive healing budget: distribute global concurrency across available peers.
+      // healingConcurrency=16: 1 peer→5, 2→5, 3→5, 4→4, 5+→16/N
+      if (snapPeers.nonEmpty) {
+        val healingBudget = math.max(1, math.min(5, snapSyncConfig.healingConcurrency / snapPeers.size))
+        coordinator ! actors.Messages.UpdateMaxInFlightPerPeer(healingBudget)
       }
 
       if (snapPeers.isEmpty) {
