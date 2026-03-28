@@ -256,6 +256,11 @@ class StorageRangeCoordinator(
   private val emptyResponsesByTask = mutable.HashMap.empty[StorageTaskKey, Int]
   private val maxEmptyResponsesPerTask: Int = 5
 
+  // Track proof verification failures per task. Same pattern as emptyResponsesByTask:
+  // after repeated proof mismatches (stale peer state), skip the task and let healing fix it.
+  private val proofFailuresByTask = mutable.HashMap.empty[StorageTaskKey, Int]
+  private val maxProofFailuresPerTask: Int = 5
+
   // Sentinel: when true, no more AddStorageTasks will arrive (all accounts downloaded).
   // Completion is only reported after this is set AND pending+active tasks drain.
   // Geth-aligned: coordinators run from start, tasks arrive inline during account download.
@@ -654,6 +659,7 @@ class StorageRangeCoordinator(
       peerBatchSuccessStreak.clear()
       peerResponseBytesTarget.clear()
       emptyResponsesByTask.clear()
+      proofFailuresByTask.clear()
       proofVerifiers.clear()
 
       // Clear two-phase storage buffers — data for old root is stale.
@@ -950,11 +956,29 @@ class StorageRangeCoordinator(
       val verifier = getOrCreateVerifier(task.storageRoot)
       verifier.verifyStorageRange(accountSlots, proofForThisTask, task.next, task.last) match {
         case Left(error) =>
-          log.warning(s"Storage proof verification failed for account ${task.accountString}: $error")
-          recordPeerCooldown(peer, s"verification failed: $error")
-          adjustResponseBytesOnFailure(peer, s"verification failed: $error")
-          task.pending = false
-          this.tasks.enqueue(task)
+          val key = StorageTaskKey(task.accountHash, task.next, task.last)
+          val failCount = proofFailuresByTask.getOrElse(key, 0) + 1
+          proofFailuresByTask.update(key, failCount)
+
+          if (failCount >= maxProofFailuresPerTask) {
+            log.warning(
+              s"Storage proof verification failed ${failCount}x for account ${task.accountString}, " +
+                s"skipping (healing will recover). Last error: $error"
+            )
+            proofFailuresByTask.remove(key)
+            // Mark task done — healing phase will fill any gaps
+            task.done = true
+            completedTasks += task
+            completedAccountHashes.add(task.accountHash)
+          } else {
+            if (failCount == 1) {
+              log.warning(s"Storage proof verification failed for account ${task.accountString}: $error")
+            }
+            recordPeerCooldown(peer, s"verification failed: $error")
+            adjustResponseBytesOnFailure(peer, s"verification failed: $error")
+            task.pending = false
+            this.tasks.enqueue(task)
+          }
 
         case Right(_) =>
           val slotBytes = accountSlots.map { case (hash, value) => hash.size + value.size }.sum
