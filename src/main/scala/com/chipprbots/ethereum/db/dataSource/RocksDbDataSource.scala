@@ -285,7 +285,7 @@ class RocksDbDataSource(
       import rocksDbConfig._
       val tableCfg = new BlockBasedTableConfig()
         .setBlockSize(blockSize)
-        .setBlockCache(new ClockCache(blockCacheSize))
+        .setBlockCache(new LRUCache(blockCacheSize))
         .setCacheIndexAndFilterBlocks(true)
         .setPinL0FilterAndIndexBlocksInCache(true)
         .setFilterPolicy(new BloomFilter(10, false))
@@ -399,9 +399,18 @@ object RocksDbDataSource extends Logger {
 
       val readOptions = new ReadOptions().setVerifyChecksums(rocksDbConfig.verifyChecksums)
 
+      // LRUCache replaces deprecated ClockCache (removed in RocksDB 8.x) — eliminates
+      // memory fragmentation and over-allocation observed during SNAP sync.
+      val cache = new LRUCache(blockCacheSize)
+      // WriteBufferManager enforces a shared memory ceiling across block cache + all
+      // memtable write buffers across all 14 column families. Without this, each CF's
+      // memtables grow independently during write-heavy SNAP sync, causing unbounded
+      // RSS growth (~1.9 GB/hr observed on ETC mainnet attempt 3).
+      val writeBufferManager = new WriteBufferManager(blockCacheSize, cache)
+
       val tableCfg = new BlockBasedTableConfig()
         .setBlockSize(blockSize)
-        .setBlockCache(new ClockCache(blockCacheSize))
+        .setBlockCache(cache)
         .setCacheIndexAndFilterBlocks(true)
         .setPinL0FilterAndIndexBlocksInCache(true)
         .setFilterPolicy(new BloomFilter(10, false))
@@ -412,12 +421,14 @@ object RocksDbDataSource extends Logger {
         .setMaxOpenFiles(maxOpenFiles)
         .setIncreaseParallelism(maxThreads)
         .setCreateMissingColumnFamilies(true)
+        .setWriteBufferManager(writeBufferManager)
 
       val cfOpts =
         new ColumnFamilyOptions()
           .setCompressionType(CompressionType.LZ4_COMPRESSION)
           .setBottommostCompressionType(CompressionType.ZSTD_COMPRESSION)
           .setLevelCompactionDynamicLevelBytes(levelCompaction)
+          .setMaxWriteBufferNumber(2)
           .setTableFormatConfig(tableCfg)
 
       val cfDescriptors = List(new ColumnFamilyDescriptor(RocksDB.DEFAULT_COLUMN_FAMILY, cfOpts)) ++ namespaces.map {

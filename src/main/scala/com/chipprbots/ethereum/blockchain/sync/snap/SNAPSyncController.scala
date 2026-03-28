@@ -549,9 +549,9 @@ class SNAPSyncController(
         currentPhase = ByteCodeAndStorageSync
         progressMonitor.startPhase(ByteCodeAndStorageSync)
 
-        // Storage already starts at budget=3 (parallel with accounts, matching geth/Besu).
-        // Bytecode gets more bandwidth now that accounts are done.
-        bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(2))
+        // All 3 coordinators already running concurrently. Bytecode and storage budgets
+        // stay at 2 and 3 respectively — accounts freed up 5 per-peer slots that now
+        // benefit storage/bytecode through reduced peer contention.
 
         // Cancel account stagnation checks (no longer relevant)
         accountStagnationCheckTask.foreach(_.cancel()); accountStagnationCheckTask = None
@@ -1745,6 +1745,8 @@ class SNAPSyncController(
 
     val storage = getOrCreateMptStorage(currentPivot)
 
+    val tempDir = java.nio.file.Paths.get(Config.config.getString("tmpdir"))
+
     accountRangeCoordinator = Some(
       context.actorOf(
         actors.AccountRangeCoordinator
@@ -1759,7 +1761,8 @@ class SNAPSyncController(
             initialMaxInFlightPerPeer = 5, // Full per-peer budget during AccountRangeSync (storage+bytecode deferred to 0)
             trieFlushThreshold = snapSyncConfig.accountTrieFlushThreshold,
             initialResponseBytes = snapSyncConfig.accountInitialResponseBytes,
-            minResponseBytes = snapSyncConfig.accountMinResponseBytes
+            minResponseBytes = snapSyncConfig.accountMinResponseBytes,
+            tempDir = tempDir
           )
           .withDispatcher("sync-dispatcher"),
         s"account-range-coordinator-$coordinatorGeneration"
@@ -1846,11 +1849,11 @@ class SNAPSyncController(
       )
     }
 
-    // ByteCode and storage start with budget=0 during account phase (tasks accumulate, dispatch deferred).
-    // During AccountRangeSync: accounts=5, storage=0, bytecode=0 — avoids false pivot refreshes
-    // from stale-root storage timeouts and gives accounts full per-peer bandwidth.
-    bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(0))
-    storageRangeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(0))
+    // Geth-aligned: all 3 coordinators run concurrently from the start.
+    // Storage at budget=3, bytecode at budget=2 (tasks arrive incrementally as contracts are
+    // discovered). Bytecodes are content-addressed so pivot changes don't invalidate them.
+    // On ETC mainnet (~2M contracts), this eliminates the post-account bytecode download wait.
+    bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(2))
 
     progressMonitor.startPhase(AccountRangeSync)
   }

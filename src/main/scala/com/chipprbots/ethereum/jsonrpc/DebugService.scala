@@ -245,7 +245,7 @@ class DebugService(
         try {
           val outFile = req.file
             .map(java.nio.file.Paths.get(_))
-            .getOrElse(java.nio.file.Paths.get(System.getProperty("java.io.tmpdir"), "fukuii-cpu-profile.jfr"))
+            .getOrElse(java.nio.file.Paths.get(com.chipprbots.ethereum.utils.Config.config.getString("datadir"), "fukuii-cpu-profile.jfr"))
           val recording = new jdk.jfr.Recording(jdk.jfr.Configuration.getConfiguration("profile"))
           recording.start()
           activeRecording = Some((recording, outFile))

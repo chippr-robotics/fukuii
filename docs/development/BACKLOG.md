@@ -741,6 +741,26 @@ Research into MEV (Flashbots, CoW Protocol), decentralized RPC protocols (DRPC, 
 - **Discovered:** 2026-03-27, during core-geth snap/1 serving verification
 - **Status:** DONE — Race condition in `CheckStaticPeers`: inbound peer from core-geth uses ephemeral source port (`127.0.0.1:RANDOM`), which doesn't match static node address (`127.0.0.1:30303`). Neither `isConnectionHandled(addr)` nor `hasHandshakedWith(nodeId)` catches a pending inbound, so duplicate outbound connections are initiated every 15-30s, immediately disconnected with `AlreadyConnected`. Fix: (1) Added `hasNodeIdPending(nodeId)` to `ConnectedPeers` — checks pending peers by node ID across both incoming and outgoing. (2) `createPeer` accepts `targetNodeId` from enode URI for outgoing peers. (3) `CheckStaticPeers` guard now includes `!connectedPeers.hasNodeIdPending(nodeId)` + debug-level lifecycle logging. 2,706 tests pass.
 
+#### L-013: Review concurrent bytecode download during account phase ✅ DONE
+
+- **File:** `src/main/scala/.../blockchain/sync/snap/SNAPSyncController.scala`
+- **Priority:** Low | **Risk:** Low
+- **Discovered:** 2026-03-27, during ETC mainnet SNAP sync attempt 3
+- **Status:** DONE (2026-03-28) — Enabled concurrent bytecode download during account phase with `budget=2` (was 0). All 3 coordinators (accounts=5, storage=3, bytecode=2) now run concurrently from the first account batch, matching geth's behavior. Bytecodes are content-addressed (hash-keyed) so pivot changes don't invalidate them — the existing `ByteCodePivotRefreshed` handler already clears stale peer tracking. On ETC mainnet (~2M contracts, ~50K+ unique codeHashes), this eliminates the post-account bytecode download wait. Removed the redundant budget boost in `AccountRangeSyncComplete` handler (budget was already at 2).
+
+#### L-014: RocksDB memory budget — replace ClockCache, add WriteBufferManager ✅ DONE
+
+- **File:** `src/main/scala/.../db/dataSource/RocksDbDataSource.scala`
+- **Priority:** Low | **Risk:** Medium (affects sync performance if budget too tight)
+- **Discovered:** 2026-03-27, during ETC mainnet SNAP sync attempt 3 (RSS 10.6GB on 4GB heap, swap nearly exhausted)
+- **Status:** DONE (2026-03-28) — Three changes to cap RocksDB native memory:
+  1. Replaced deprecated `ClockCache` with `LRUCache` (both `apply()` and `destroyDB()` paths) — ClockCache was deprecated in RocksDB 8.x due to memory fragmentation and over-allocation.
+  2. Added `WriteBufferManager(blockCacheSize, cache)` on `DBOptions` — enforces a shared memory ceiling across block cache + all memtable write buffers across 14 column families. This is what Besu does to keep RSS stable.
+  3. Set `setMaxWriteBufferNumber(2)` on `ColumnFamilyOptions` — caps queued memtables per CF.
+- **Also fixed:** SNAP sync temp files (`fukuii-contract-*.bin`) now write to `<datadir>/tmp/` instead of `/tmp` on root SSD. 739 stale temp files (14 GB) accumulated on root across sync restarts — caused root drive to fill to 100% and crash Besu (ETC mainnet attempt 3 failure at ~03:44). `AccountRangeCoordinator` now accepts `tempDir` parameter, defaulting to datadir.
+  4. Added configurable `tmpdir` variable to `fukuii.conf` — defaults to `${fukuii.datadir}/tmp`, independently overridable via `-Dfukuii.tmpdir=...`. `Fukuii.scala` sets `java.io.tmpdir` at JVM startup so ALL temp file paths (RocksDB JNI `.so` extraction, `Files.createTempFile()`, JFR profiles) land on the same volume as the database. `SNAPSyncController` reads from config for `AccountRangeCoordinator`. `DebugService` CPU profiler output also redirected to datadir.
+- 2,706 tests pass.
+
 ---
 
 ## Tier 4: FUTURE — Post-Production Roadmap
