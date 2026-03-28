@@ -57,6 +57,7 @@ exec "$BINARY" \
   --genesis-file="$GENESIS" \
   --data-path="$DATADIR" \
   --network-id=1 \
+  --identity="Ethereum Classic" \
   --rpc-http-enabled \
   --rpc-http-host=0.0.0.0 \
   --rpc-http-port=8548 \
