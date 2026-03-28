@@ -35,19 +35,20 @@ class ByteCodeWorker(
 
   override def receive: Receive = idle
 
-  private def idle: Receive = { case ByteCodeWorkerFetchTask(task, peer, requestId, maxResponseSize) =>
+  private def idle: Receive = { case ByteCodeWorkerFetchTask(task, peer, requestId, maxResponseSize, requestTimeout) =>
     val request = GetByteCodes(
       requestId = requestId,
       hashes = task.codeHashes,
       responseBytes = maxResponseSize
     )
 
-    // Track request with timeout
+    // Track request with adaptive timeout (Duration.Zero = use PeerRateTracker's adaptive timeout,
+    // matching geth's msgrate algorithm: min(60s, 3 × medianRTT / confidence))
     requestTracker.trackRequest(
       requestId,
       peer,
       SNAPRequestTracker.RequestType.GetByteCodes,
-      timeout = 30.seconds,
+      timeout = requestTimeout,
       requestedHashes = task.codeHashes
     ) {
       self ! ByteCodeRequestTimeout(requestId)

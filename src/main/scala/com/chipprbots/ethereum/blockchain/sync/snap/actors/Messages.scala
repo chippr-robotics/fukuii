@@ -110,8 +110,13 @@ object Messages {
 
   sealed trait ByteCodeWorkerMessage
   case class FetchByteCodes(task: ByteCodeTask, peer: Peer) extends ByteCodeWorkerMessage
-  case class ByteCodeWorkerFetchTask(task: ByteCodeTask, peer: Peer, requestId: BigInt, maxResponseSize: BigInt)
-      extends ByteCodeWorkerMessage
+  case class ByteCodeWorkerFetchTask(
+      task: ByteCodeTask,
+      peer: Peer,
+      requestId: BigInt,
+      maxResponseSize: BigInt,
+      requestTimeout: scala.concurrent.duration.FiniteDuration = scala.concurrent.duration.Duration.Zero
+  ) extends ByteCodeWorkerMessage
   case class ByteCodesResponseMsg(response: ByteCodes) extends ByteCodeWorkerMessage
   case class ByteCodeRequestTimeout(requestId: BigInt) extends ByteCodeWorkerMessage
   case class ByteCodeProgress(progress: Double, bytecodesDownloaded: Long, bytesDownloaded: Long)

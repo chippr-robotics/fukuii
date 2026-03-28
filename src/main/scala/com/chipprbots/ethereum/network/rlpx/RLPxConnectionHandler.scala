@@ -108,7 +108,7 @@ class RLPxConnectionHandler(
       context.become(new ConnectedHandler(connection).waitingForAuthHandshakeResponse(handshaker, timeout))
 
     case CommandFailed(_: Connect) =>
-      log.error("[Stopping Connection] TCP connection to {} failed for peer {}", uri, peerId)
+      log.debug("[Stopping Connection] TCP connection to {} failed for peer {}", uri, peerId)
       context.parent ! ConnectionFailed
       gracefulStop()
   }
@@ -411,7 +411,7 @@ class RLPxConnectionHandler(
     }
 
     def handleTimeout: Receive = { case AuthHandshakeTimeout =>
-      log.error(
+      log.debug(
         "[Stopping Connection] Auth handshake timeout for peer {} after {}ms",
         peerId,
         rlpxConfiguration.waitForHandshakeTimeout.toMillis

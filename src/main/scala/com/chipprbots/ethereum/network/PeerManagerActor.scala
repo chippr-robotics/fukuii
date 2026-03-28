@@ -74,10 +74,10 @@ class PeerManagerActor(
     ByteString(Hex.decode(uri.getUserInfo))
   }
 
-  /** Tracks the last time we attempted to connect to each static peer.
-    * Prevents rapid reconnection cycling (15s CheckStaticPeers vs 60s cooldown).
+  /** Tracks reconnection backoff state per static peer: (lastAttemptMs, currentBackoffMs).
+    * Exponential backoff: 15s → 30s → 60s → 120s → 300s cap. Cleared on successful handshake.
     */
-  private var lastStaticConnectAttempt: Map[URI, Long] = Map.empty
+  private var staticPeerBackoff: Map[URI, (Long, Long)] = Map.empty
 
   /** In-process cache of peer statuses, updated reactively and via scheduled refresh. This allows GetPeers to return
     * immediately without querying individual peer actors.
@@ -181,19 +181,23 @@ class PeerManagerActor(
         val handshaked = connectedPeers.hasHandshakedWith(nodeId)
         val addrHandled = connectedPeers.isConnectionHandled(addr)
         val nodeIdPending = connectedPeers.hasNodeIdPending(nodeId)
-        val coolingDown =
-          lastStaticConnectAttempt.get(uri).exists(t => now - t < StaticPeerReconnectCooldown.toMillis)
         if (handshaked) {
-          // Peer is healthy — clear any cooldown
-          lastStaticConnectAttempt = lastStaticConnectAttempt - uri
-        } else if (!addrHandled && !nodeIdPending && !coolingDown) {
-          log.info("Reconnecting to static peer {}:{}", uri.getHost, uri.getPort)
-          lastStaticConnectAttempt = lastStaticConnectAttempt + (uri -> now)
-          self ! ConnectToPeer(uri)
-        } else if (log.isDebugEnabled) {
-          log.debug(
-            s"Static peer ${uri.getHost}:${uri.getPort} skipped (handshaked=$handshaked, addrHandled=$addrHandled, nodeIdPending=$nodeIdPending, coolingDown=$coolingDown)"
-          )
+          // Peer is healthy — clear backoff so next disconnect retries quickly
+          staticPeerBackoff -= uri
+        } else if (!addrHandled && !nodeIdPending) {
+          val (lastAttempt, backoff) =
+            staticPeerBackoff.getOrElse(uri, (0L, StaticPeerInitialBackoffMs))
+          val coolingDown = now - lastAttempt < backoff
+          if (!coolingDown) {
+            log.info("Reconnecting to static peer {}:{} (backoff={}s)", uri.getHost, uri.getPort, backoff / 1000)
+            val nextBackoff = (backoff * StaticPeerBackoffFactor).min(StaticPeerMaxBackoffMs)
+            staticPeerBackoff += (uri -> (now, nextBackoff))
+            self ! ConnectToPeer(uri)
+          } else if (log.isDebugEnabled) {
+            log.debug(
+              s"Static peer ${uri.getHost}:${uri.getPort} cooling down (${(backoff - (now - lastAttempt)) / 1000}s remaining)"
+            )
+          }
         }
       }
 
@@ -629,11 +633,13 @@ object PeerManagerActor {
   /** Reconnect interval for static nodes (matches geth's staticPeerCheckInterval). */
   val StaticPeerCheckInterval: FiniteDuration = 15.seconds
 
-  /** Minimum time between reconnection attempts to the same static peer.
-    * Prevents rapid cycling when bidirectional static-nodes cause a connection deduplication deadlock
-    * (both sides keep their outbound, kill the other's inbound, repeat every 15s).
+  /** Exponential backoff for static peer reconnection.
+    * Prevents log flooding when a static peer is offline or building state (e.g., core-geth syncing).
+    * Backoff: 15s → 30s → 60s → 120s → 300s (cap). Resets on successful handshake.
     */
-  val StaticPeerReconnectCooldown: FiniteDuration = 60.seconds
+  val StaticPeerInitialBackoffMs: Long = 15000  // 15s — same as CheckStaticPeers interval
+  val StaticPeerMaxBackoffMs: Long = 300000     // 5 minutes
+  val StaticPeerBackoffFactor: Int = 2
 
   // scalastyle:off parameter.number
   def props[R <: HandshakeResult](

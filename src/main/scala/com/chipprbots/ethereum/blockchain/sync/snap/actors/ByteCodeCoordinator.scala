@@ -256,19 +256,40 @@ class ByteCodeCoordinator(
     // Mark worker busy.
     idleWorkers -= worker
 
-    val task = pendingTasks.dequeue()
-    val requestId = requestTracker.generateRequestId()
+    // Geth-aligned: size batch to peer's measured capacity via PeerRateTracker.
+    // New/slow peers get smaller batches that complete faster, building rate measurements.
+    // Fast peers get full batches (up to batchSize, default 85).
+    val targetRTT = requestTracker.rateTracker.targetRoundTrip()
+    // Floor of 10: don't split tiny batches (avoids degenerate 1-hash requests when no measurements exist).
+    // New peers: capacity()=1 → floored to 10. Measured fast peers: capacity()=50-85 → full batches.
+    val peerCap = requestTracker.rateTracker
+      .capacity(peer.id.value, PeerRateTracker.MsgGetByteCodes, targetRTT)
+      .max(10) // Floor: never go below 10 hashes per request
+      .min(batchSize) // Ceiling: never exceed configured max
 
+    val task = pendingTasks.dequeue()
+    // If peer capacity < task size, split: send peerCap hashes, re-queue remainder
+    val toSend = if (task.codeHashes.size > peerCap && peerCap > 0) {
+      val (send, keep) = task.codeHashes.splitAt(peerCap)
+      pendingTasks.enqueue(ByteCodeTask(keep))
+      ByteCodeTask(send)
+    } else {
+      task
+    }
+
+    val requestId = requestTracker.generateRequestId()
     val requestedBytes = responseBytesTargetFor(peer)
 
-    task.pending = true
+    toSend.pending = true
     activeTasks.put(
       requestId,
-      ActiveByteCodeRequest(task, worker, peer, requestedBytes = requestedBytes, startedAtMillis = nowMillis)
+      ActiveByteCodeRequest(toSend, worker, peer, requestedBytes = requestedBytes, startedAtMillis = nowMillis)
     )
 
-    log.debug(s"Assigning bytecode task (${task.codeHashes.size} hashes) to worker for peer ${peer.id}")
-    worker ! ByteCodeWorkerFetchTask(task, peer, requestId, requestedBytes)
+    log.debug(
+      s"Assigning bytecode task (${toSend.codeHashes.size} hashes, peerCap=$peerCap) to worker for peer ${peer.id}"
+    )
+    worker ! ByteCodeWorkerFetchTask(toSend, peer, requestId, requestedBytes, cooldownConfig.requestTimeout)
   }
 
   private def dispatchIfPossible(peer: Peer): Unit = {
@@ -555,7 +576,8 @@ object ByteCodeCoordinator {
       baseInvalid: FiniteDuration,
       maxInFlightPerPeer: Int,
       max: FiniteDuration,
-      exponentCap: Int
+      exponentCap: Int,
+      requestTimeout: FiniteDuration = Duration.Zero // Zero = adaptive (PeerRateTracker)
   )
 
   object ByteCodePeerCooldownConfig {
@@ -566,7 +588,8 @@ object ByteCodeCoordinator {
       // Increase per-peer concurrency (Besu caps peer-wide outstanding at 5; this keeps us competitive).
       maxInFlightPerPeer = 5,
       max = 2.minutes,
-      exponentCap = 10
+      exponentCap = 10,
+      requestTimeout = Duration.Zero // Adaptive: min(60s, 3 × medianRTT / confidence)
     )
   }
 
