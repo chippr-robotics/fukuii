@@ -217,9 +217,11 @@ class TrieNodeHealingCoordinator(
       dispatchIfPossible(peer)
 
     case UpdateMaxInFlightPerPeer(newLimit) =>
-      log.info(s"Healing per-peer budget: $maxInFlightPerPeer -> $newLimit")
-      maxInFlightPerPeer = newLimit
-      if (newLimit > 0) tryRedispatchPendingTasks()
+      if (newLimit != maxInFlightPerPeer) {
+        log.info(s"Healing per-peer budget: $maxInFlightPerPeer -> $newLimit")
+        maxInFlightPerPeer = newLimit
+        if (newLimit > 0) tryRedispatchPendingTasks()
+      }
 
     case HealingPivotRefreshed(newStateRoot) =>
       val oldRoot = Hex.toHexString(stateRoot.take(4).toArray)

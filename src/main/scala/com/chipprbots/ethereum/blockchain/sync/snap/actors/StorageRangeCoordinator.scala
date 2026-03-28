@@ -558,9 +558,11 @@ class StorageRangeCoordinator(
       }
 
     case UpdateMaxInFlightPerPeer(newLimit) =>
-      log.info(s"Storage per-peer budget: $maxInFlightPerPeer -> $newLimit")
-      maxInFlightPerPeer = newLimit
-      if (newLimit > 0) tryRedispatchPendingTasks()
+      if (newLimit != maxInFlightPerPeer) {
+        log.info(s"Storage per-peer budget: $maxInFlightPerPeer -> $newLimit")
+        maxInFlightPerPeer = newLimit
+        if (newLimit > 0) tryRedispatchPendingTasks()
+      }
 
     case StorageRangesResponseMsg(response) =>
       handleResponse(response)

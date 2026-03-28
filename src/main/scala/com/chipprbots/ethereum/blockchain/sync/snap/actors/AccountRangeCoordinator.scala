@@ -474,9 +474,11 @@ class AccountRangeCoordinator(
       }
 
     case UpdateMaxInFlightPerPeer(newLimit) =>
-      log.info(s"AccountRange per-peer budget: $maxInFlightPerPeer -> $newLimit")
-      maxInFlightPerPeer = newLimit
-      if (newLimit > 0) tryRedispatchPendingTasks()
+      if (newLimit != maxInFlightPerPeer) {
+        log.info(s"AccountRange per-peer budget: $maxInFlightPerPeer -> $newLimit")
+        maxInFlightPerPeer = newLimit
+        if (newLimit > 0) tryRedispatchPendingTasks()
+      }
 
     case TaskComplete(requestId, result) =>
       handleTaskComplete(requestId, result)

@@ -203,9 +203,11 @@ class ByteCodeCoordinator(
       }
 
     case UpdateMaxInFlightPerPeer(newLimit) =>
-      log.info(s"ByteCode per-peer budget: $maxInFlightPerPeer -> $newLimit")
-      maxInFlightPerPeer = newLimit
-      if (newLimit > 0) tryRedispatchPendingTasks()
+      if (newLimit != maxInFlightPerPeer) {
+        log.info(s"ByteCode per-peer budget: $maxInFlightPerPeer -> $newLimit")
+        maxInFlightPerPeer = newLimit
+        if (newLimit > 0) tryRedispatchPendingTasks()
+      }
 
     case ByteCodesResponseMsg(response) =>
       handleByteCodesResponse(response)
