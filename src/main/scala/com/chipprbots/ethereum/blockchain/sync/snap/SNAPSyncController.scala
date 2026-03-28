@@ -1869,14 +1869,16 @@ class SNAPSyncController(
 
       val snapPeers = peersToDownloadFrom.collect {
         case (_, peerWithInfo)
-            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
+            if peerWithInfo.peerInfo.remoteStatus.supportsSnap
+              && peerWithInfo.peerInfo.isServingSnap
+              && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
           peerWithInfo.peer
       }
 
       SNAPSyncMetrics.setSnapCapablePeers(snapPeers.size)
 
       if (snapPeers.isEmpty) {
-        log.debug("No SNAP-capable peers available for account range requests")
+        log.debug("No verified SNAP-serving peers available for account range requests")
       } else {
         snapPeers.foreach { peer =>
           coordinator ! actors.Messages.PeerAvailable(peer)
@@ -1893,12 +1895,14 @@ class SNAPSyncController(
     // Notify coordinator of available peers
     bytecodeCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
-        case (peerId, peerWithInfo) if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
+        case (peerId, peerWithInfo)
+            if peerWithInfo.peerInfo.remoteStatus.supportsSnap
+              && peerWithInfo.peerInfo.isServingSnap =>
           peerWithInfo.peer
       }
 
       if (snapPeers.isEmpty) {
-        log.debug("No SNAP-capable peers available for bytecode requests")
+        log.debug("No verified SNAP-serving peers available for bytecode requests")
       } else {
         snapPeers.foreach { peer =>
           coordinator ! actors.Messages.ByteCodePeerAvailable(peer)
@@ -1918,7 +1922,9 @@ class SNAPSyncController(
 
       val snapPeers = peersToDownloadFrom.collect {
         case (peerId, peerWithInfo)
-            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
+            if peerWithInfo.peerInfo.remoteStatus.supportsSnap
+              && peerWithInfo.peerInfo.isServingSnap
+              && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
           peerWithInfo.peer
       }
 
@@ -2106,7 +2112,9 @@ class SNAPSyncController(
     // Notify coordinator of available peers
     trieNodeHealingCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
-        case (peerId, peerWithInfo) if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
+        case (peerId, peerWithInfo)
+            if peerWithInfo.peerInfo.remoteStatus.supportsSnap
+              && peerWithInfo.peerInfo.isServingSnap =>
           peerWithInfo.peer
       }
 
