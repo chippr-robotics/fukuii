@@ -468,9 +468,9 @@ object StaticUDPPeerGroup extends StrictLogging {
         // Check if the Netty channel is actually open and active
         _ <- IO {
           if (!nettyChannel.isOpen) {
-            logger.error(s"Netty channel is CLOSED when trying to send to $remoteAddress. Channel: ${nettyChannel.getClass.getSimpleName}, isActive: ${nettyChannel.isActive}, isRegistered: ${nettyChannel.isRegistered}")
+            logger.debug(s"Netty channel is CLOSED when trying to send to $remoteAddress. Channel: ${nettyChannel.getClass.getSimpleName}, isActive: ${nettyChannel.isActive}, isRegistered: ${nettyChannel.isRegistered}")
           } else if (!nettyChannel.isActive) {
-            logger.error(s"Netty channel is open but NOT ACTIVE when trying to send to $remoteAddress. isRegistered: ${nettyChannel.isRegistered}")
+            logger.debug(s"Netty channel is open but NOT ACTIVE when trying to send to $remoteAddress. isRegistered: ${nettyChannel.isRegistered}")
           } else {
             logger.debug(s"Netty channel is open and active for sending to $remoteAddress")
           }

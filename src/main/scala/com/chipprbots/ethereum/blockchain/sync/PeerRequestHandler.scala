@@ -95,7 +95,7 @@ class PeerRequestHandler[RequestMsg <: Message, ResponseMsg <: Message: ClassTag
 
   def handleTimeout(): Unit = {
     val elapsed = timeTakenSoFar()
-    log.error(
+    log.warning(
       "PEER_REQUEST_TIMEOUT: peer={}, reqType={}, elapsed={}ms (timeout={}ms)",
       peer.id,
       requestMsg.getClass.getSimpleName,
@@ -108,7 +108,7 @@ class PeerRequestHandler[RequestMsg <: Message, ResponseMsg <: Message: ClassTag
 
   def handleTerminated(): Unit = {
     val elapsed = timeTakenSoFar()
-    log.error(
+    log.warning(
       "PEER_REQUEST_DISCONNECTED: peer={}, reqType={}, elapsed={}ms - connection closed before response",
       peer.id,
       requestMsg.getClass.getSimpleName,

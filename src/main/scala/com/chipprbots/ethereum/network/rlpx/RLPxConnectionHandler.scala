@@ -509,7 +509,7 @@ class RLPxConnectionHandler(
                 )
               )
             case None =>
-              log.error("[Stopping Connection] Unable to negotiate protocol with peer {}", peerId)
+              log.debug("[Stopping Connection] Unable to negotiate protocol with peer {}", peerId)
               context.parent ! ConnectionFailed
               gracefulStop()
           }
