@@ -355,7 +355,9 @@ class SNAPSyncController(
     case ProgressStorageSlotsSynced(count) =>
       progressMonitor.incrementStorageSlotsSynced(count)
       lastStorageProgressMs = System.currentTimeMillis()
-      storageStagnationRefreshAttempted = false
+      // Only reset stagnation escalation on substantial progress (>100 slots).
+      // Trickle progress from stale in-flight responses shouldn't prevent force-complete.
+      if (count > 100) storageStagnationRefreshAttempted = false
 
     case ProgressNodesHealed(count) =>
       progressMonitor.incrementNodesHealed(count)
@@ -647,7 +649,16 @@ class SNAPSyncController(
     )
   }
 
-  /** Handle stagnation for storage phase: first attempt refreshes pivot, second force-completes to healing. */
+  /** Handle stagnation for storage phase.
+    *
+    * When storage has no progress for StorageStagnationThreshold:
+    * - First stall: attempt pivot refresh (cheaper recovery)
+    * - Second stall (30s later, not 20min): force-complete to healing
+    *
+    * The second check uses a short window because the pivot refresh either works
+    * immediately (peers serve new root) or it doesn't (all peers stateless again).
+    * Waiting another 20 minutes just delays the inevitable force-complete.
+    */
   private def maybeRestartIfStorageStagnant(stats: actors.StorageRangeCoordinator.SyncStatistics): Unit = {
     if (currentPhase != ByteCodeAndStorageSync) return
 
@@ -656,11 +667,12 @@ class SNAPSyncController(
 
     val now = System.currentTimeMillis()
     val stalledForMs = now - lastStorageProgressMs
-    if (stalledForMs < StorageStagnationThreshold.toMillis) return
-    if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) return
-    lastPivotRestartMs = now
 
     if (!storageStagnationRefreshAttempted) {
+      // First stall: needs full threshold before triggering
+      if (stalledForMs < StorageStagnationThreshold.toMillis) return
+      if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) return
+      lastPivotRestartMs = now
       storageStagnationRefreshAttempted = true
       log.warning(
         s"Storage sync stalled: no progress for ${stalledForMs / 1000}s " +
@@ -669,9 +681,13 @@ class SNAPSyncController(
       lastStorageProgressMs = now
       refreshPivotInPlace(s"storage stagnation: no progress for ${stalledForMs / 1000}s")
     } else {
+      // Second stall after refresh: short grace period (2 min), then force-complete.
+      // The pivot refresh either works quickly or not at all.
+      val postRefreshGrace = 2.minutes
+      if (stalledForMs < postRefreshGrace.toMillis) return
       log.warning(
         s"Storage sync stalled after pivot refresh: no progress for ${stalledForMs / 1000}s. " +
-          s"Promoting to healing phase."
+          s"Promoting to healing phase (preserving downloaded state)."
       )
       storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
       storageStagnationCheckTask.foreach(_.cancel()); storageStagnationCheckTask = None
