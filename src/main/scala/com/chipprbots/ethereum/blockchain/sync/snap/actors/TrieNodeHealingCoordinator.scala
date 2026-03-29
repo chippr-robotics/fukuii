@@ -70,6 +70,11 @@ class TrieNodeHealingCoordinator(
   private var totalNodesHealed: Int = 0
   private var totalBytesReceived: Long = 0
   private val startTime = System.currentTimeMillis()
+  private var lastProgressLogAt: Long = 0
+  private val ProgressLogInterval: Long = 5_000
+  // Rolling 60s window for recent throughput (matches controller's SyncProgressMonitor pattern)
+  private val recentHistory: mutable.Queue[(Long, Long)] = mutable.Queue.empty
+  private val RecentWindowMs: Long = 60_000
 
   // Adaptive healing throttle (geth p2p/msgrate alignment)
   // When pending nodes exceed 2× the processing rate, throttle increases (slow down requests).
@@ -258,7 +263,18 @@ class TrieNodeHealingCoordinator(
       result match {
         case Right(count) =>
           totalNodesHealed += count
-          log.info(s"Healing task completed: $count nodes")
+          log.debug(s"Healing task completed: $count nodes")
+          // Periodic progress summary (every 5K nodes)
+          if (totalNodesHealed - lastProgressLogAt >= ProgressLogInterval) {
+            val rate = calculateNodesPerSecond()
+            val activeTaskCount = activeRequests.values.map(_.tasks.size).sum
+            log.info(
+              s"Healing progress: $totalNodesHealed nodes (${"%.1f".format(totalBytesReceived / 1048576.0)} MB) " +
+                s"(${pendingTasks.size} pending, $activeTaskCount active, " +
+                s"${"%.0f".format(rate)} nodes/sec)"
+            )
+            lastProgressLogAt = totalNodesHealed
+          }
           self ! HealingCheckCompletion
         case Left(error) =>
           log.warning(s"Healing task failed: $error")
@@ -563,11 +579,25 @@ class TrieNodeHealingCoordinator(
     else completedTaskCount.toDouble / total
   }
 
+  /** Recent nodes/sec using 60s rolling window. Falls back to overall average when insufficient data. */
   private def calculateNodesPerSecond(): Double = {
-    val elapsedSec = (System.currentTimeMillis() - startTime) / 1000.0
-    if (elapsedSec > 0) totalNodesHealed / elapsedSec else 0.0
+    val now = System.currentTimeMillis()
+    recentHistory.enqueue((now, totalNodesHealed.toLong))
+    while (recentHistory.nonEmpty && now - recentHistory.head._1 > RecentWindowMs)
+      recentHistory.dequeue()
+    if (recentHistory.size >= 2) {
+      val oldest = recentHistory.head
+      val timeDiff = (now - oldest._1) / 1000.0
+      val countDiff = totalNodesHealed - oldest._2
+      if (timeDiff > 0) countDiff / timeDiff else 0.0
+    } else {
+      // Fallback to overall average
+      val elapsedSec = (now - startTime) / 1000.0
+      if (elapsedSec > 0) totalNodesHealed / elapsedSec else 0.0
+    }
   }
 
+  /** Recent KB/sec using overall average (bytes not tracked in rolling window). */
   private def calculateKilobytesPerSecond(): Double = {
     val elapsedSec = (System.currentTimeMillis() - startTime) / 1000.0
     if (elapsedSec > 0) (totalBytesReceived / 1024.0) / elapsedSec else 0.0

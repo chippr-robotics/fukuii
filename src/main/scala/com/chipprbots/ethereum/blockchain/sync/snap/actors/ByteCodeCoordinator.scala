@@ -110,6 +110,9 @@ class ByteCodeCoordinator(
   // Statistics
   private var bytecodesDownloaded: Long = 0
   private var bytesDownloaded: Long = 0
+  private val startTime = System.currentTimeMillis()
+  private var lastProgressLogAt: Long = 0
+  private val ProgressLogInterval: Long = 500
 
   // ByteCodes request tuning (Nethermind-style): use a per-peer dynamic byte budget, clamped hard to 2 MiB.
   // We send many hashes and rely on the peer-side `responseBytes` soft limit to bound work.
@@ -434,9 +437,22 @@ class ByteCodeCoordinator(
                 activeTasks.remove(response.requestId)
                 markWorkerIdle(worker)
 
-                log.info(
+                log.debug(
                   s"Successfully processed $bytecodeCount bytecodes (receivedBytes=$receivedBytes requestedBytes=$requestedBytes)"
                 )
+
+                // Periodic progress summary (every 500 bytecodes)
+                if (bytecodesDownloaded - lastProgressLogAt >= ProgressLogInterval) {
+                  val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
+                  val rate = if (elapsed > 0) (bytecodesDownloaded / elapsed).toLong else 0L
+                  log.info(
+                    s"Bytecode progress: $bytecodesDownloaded codes (${"%.1f".format(bytesDownloaded / 1048576.0)} MB) " +
+                      s"(${completedTasks.size} done, ${pendingTasks.size} pending, ${activeTasks.size} active, " +
+                      s"$rate codes/sec)"
+                  )
+                  lastProgressLogAt = bytecodesDownloaded
+                }
+
                 checkCompletion()
             }
         }
@@ -498,7 +514,7 @@ class ByteCodeCoordinator(
       }
 
       updates.commit()
-      log.info(s"Successfully persisted ${codesByHash.size} bytecodes to storage")
+      log.debug(s"Successfully persisted ${codesByHash.size} bytecodes to storage")
       Right(())
     } catch {
       case e: Exception =>

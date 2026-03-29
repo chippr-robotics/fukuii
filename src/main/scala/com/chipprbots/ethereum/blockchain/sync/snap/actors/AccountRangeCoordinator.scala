@@ -222,6 +222,19 @@ class AccountRangeCoordinator(
   // Cumulative keyspace consumed: incremented each time a task's `next` advances.
   // This avoids the jitter from snapshotting in-flight task positions.
   private var consumedKeyspace: BigInt = BigInt(0)
+  // Per-range keyspace consumed, indexed by original range boundary (task.last).
+  // Work-stolen sub-ranges credit their parent range via originalRangeFor().
+  private val consumedPerRange: mutable.Map[ByteString, BigInt] = mutable.Map.empty
+  // Total keyspace per range: computed from original boundaries (start..last), not current `next`.
+  // `next` may have been advanced by resume logic, so remainingKeyspace would be too small.
+  private val rangeKeyspaceTotal: Map[ByteString, BigInt] = {
+    val chunkSize = totalKeyspace / concurrency
+    allInitialTasks.zipWithIndex.map { case (t, i) =>
+      val start = if (i == 0) BigInt(0) else chunkSize * i
+      val end = BigInt(1, t.last.toArray.padTo(32, 0.toByte))
+      t.last -> (end - start).max(BigInt(1))
+    }.toMap
+  }
 
   // Contract accounts persisted to temp files to avoid unbounded memory growth.
   // On ETC mainnet ~20% of ~67M accounts are contracts — ~13M entries × 64 bytes each
@@ -721,16 +734,21 @@ class AccountRangeCoordinator(
     }
 
   private def updateTaskProgress(task: AccountTask, accounts: Seq[(ByteString, Account)]): Boolean = {
+    val rangeKey = originalRangeFor(task)
     // If the peer returns no accounts for this segment, we assume the remainder of the interval is empty.
     if (accounts.isEmpty) {
-      consumedKeyspace += task.remainingKeyspace
+      val remaining = task.remainingKeyspace
+      consumedKeyspace += remaining
+      consumedPerRange(rangeKey) = consumedPerRange.getOrElse(rangeKey, BigInt(0)) + remaining
       return true
     }
 
     val lastHash = accounts.last._1
     if (isMaxHash(lastHash)) {
       // Cannot advance beyond 0xFF..; this must be the end.
-      consumedKeyspace += task.remainingKeyspace
+      val remaining = task.remainingKeyspace
+      consumedKeyspace += remaining
+      consumedPerRange(rangeKey) = consumedPerRange.getOrElse(rangeKey, BigInt(0)) + remaining
       return true
     }
 
@@ -740,6 +758,7 @@ class AccountRangeCoordinator(
     val newNext = BigInt(1, nextStart.toArray.padTo(32, 0.toByte))
     val advanced = (newNext - oldNext).max(BigInt(0))
     consumedKeyspace += advanced
+    consumedPerRange(rangeKey) = consumedPerRange.getOrElse(rangeKey, BigInt(0)) + advanced
     task.next = nextStart
 
     // If this task has no upper bound, keep going until peer returns empty.
@@ -858,9 +877,18 @@ class AccountRangeCoordinator(
       if (accountsDownloaded - lastProgressLogAt >= ProgressLogInterval) {
         val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
         val rate = if (elapsed > 0) (accountsDownloaded / elapsed).toLong else 0L
-        val pct = (consumedKeyspace * 10000 / totalKeyspace).toDouble / 100.0
+        // Per-range progress from cumulative counters (handles work-stealing correctly)
+        val rangeDetails = allInitialTasks.zipWithIndex.map { case (initTask, idx) =>
+          val total = rangeKeyspaceTotal.getOrElse(initTask.last, BigInt(1))
+          val consumed = consumedPerRange.getOrElse(initTask.last, BigInt(0))
+          val pct = if (total <= 0) 100.0 else (consumed * 10000 / total).toDouble / 100.0
+          s"R${idx + 1}:${"%.1f".format(math.min(pct, 100.0))}%%"
+        }.mkString(", ")
+        // Total progress: average of all ranges
+        val totalPct = (consumedKeyspace * 10000 / (totalKeyspace * concurrency)).toDouble / 100.0
         log.info(
-          s"Account download progress: $accountsDownloaded accounts (${"%.1f".format(pct)}% keyspace) " +
+          s"Account download progress: $accountsDownloaded accounts (${"%.1f".format(totalPct)}% total) " +
+            s"[$rangeDetails] " +
             s"(${completedTasks.size}/$concurrency ranges done, " +
             s"${pendingTasks.size} pending, ${activeTasks.size} active, " +
             s"${workers.size} workers/${activePeerCount} peers, " +
@@ -1136,6 +1164,21 @@ class AccountRangeCoordinator(
       }
       result.toSeq
     } finally raf.close()
+  }
+
+  /** Map a task to its original range boundary. Stolen sub-ranges fall within
+    * one of the initial ranges; find it by checking which original range contains
+    * the task's `last` value.
+    */
+  private def originalRangeFor(task: AccountTask): ByteString = {
+    val taskLast = BigInt(1, task.last.toArray.padTo(32, 0.toByte))
+    allInitialTasks.find { init =>
+      val initLast = BigInt(1, init.last.toArray.padTo(32, 0.toByte))
+      val initStart = BigInt(1, init.next.toArray.padTo(32, 0.toByte))
+      // Task belongs to this range if task.last <= init.last
+      // (stolen ranges always have last <= parent's original last)
+      taskLast <= initLast
+    }.map(_.last).getOrElse(allInitialTasks.last.last)
   }
 
   private def calculateProgress(): AccountRangeStats = {

@@ -270,6 +270,8 @@ class StorageRangeCoordinator(
   private var slotsDownloaded: Long = 0
   private var bytesDownloaded: Long = 0
   private val startTime = System.currentTimeMillis()
+  private var lastProgressLogAt: Long = 0
+  private val ProgressLogInterval: Long = 10_000
 
   // Per-peer adaptive byte budgeting (ported from ByteCodeCoordinator).
   // Geth's snap handler supports up to 2MB responses. Starting at 512KB and probing upward
@@ -576,7 +578,20 @@ class StorageRangeCoordinator(
       result match {
         case Right(count) =>
           slotsDownloaded += count
-          log.info(s"Storage task completed: $count slots")
+          log.debug(s"Storage task completed: $count slots")
+          // Periodic progress summary (every 10K slots)
+          if (slotsDownloaded - lastProgressLogAt >= ProgressLogInterval) {
+            val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
+            val rate = if (elapsed > 0) (slotsDownloaded / elapsed).toLong else 0L
+            val completed = completedTasks.map(_.accountHash).toSet.size
+            log.info(
+              s"Storage progress: $slotsDownloaded slots (${"%.1f".format(bytesDownloaded / 1048576.0)} MB) " +
+                s"($completed/$totalStorageContracts contracts, " +
+                s"${tasks.size} pending, ${activeTasks.values.map(_._2.size).sum} active, " +
+                s"$rate slots/sec)"
+            )
+            lastProgressLogAt = slotsDownloaded
+          }
           self ! StorageCheckCompletion
         case Left(error) =>
           log.warning(s"Storage task failed: $error")
