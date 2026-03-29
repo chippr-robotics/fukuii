@@ -626,11 +626,21 @@ class BlockImporter(
         Right(Nil)
       case UnknownBranch =>
         val currentBlock = blocks.head.number.min(bestKnownBlockNumber)
-        val goingBackTo = (currentBlock - syncConfig.branchResolutionRequestSize).max(0)
-        val msg = s"Unknown branch, going back to block nr $goingBackTo in order to resolve branches"
-        log.warning(msg)
-        fetcher ! BlockFetcher.InvalidateBlocksFrom(goingBackTo, msg, shouldBlacklist = false)
-        Left(goingBackTo)
+        // Floor at best block number (SNAP pivot) — no headers exist below that after SNAP sync.
+        // Without this floor, branch resolution walks infinitely backward into the void.
+        val floor = blockchainReader.getBestBlockNumber()
+        val goingBackTo = (currentBlock - syncConfig.branchResolutionRequestSize).max(floor)
+        if (goingBackTo >= currentBlock) {
+          // Already at the floor — can't resolve further. Accept the blocks from the pivot.
+          log.warning(s"Branch resolution hit floor at block $floor, resuming from best block")
+          fetcher ! BlockFetcher.InvalidateBlocksFrom(floor, "branch resolution floor", shouldBlacklist = false)
+          Left(floor)
+        } else {
+          val msg = s"Unknown branch, going back to block nr $goingBackTo in order to resolve branches"
+          log.warning(msg)
+          fetcher ! BlockFetcher.InvalidateBlocksFrom(goingBackTo, msg, shouldBlacklist = false)
+          Left(goingBackTo)
+        }
       case InvalidBranch =>
         val goingBackTo = blocks.head.number
         val msg = s"Invalid branch, going back to $goingBackTo"
