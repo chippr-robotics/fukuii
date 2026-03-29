@@ -52,13 +52,6 @@ class SNAPSyncController(
       storage
     }
 
-  // Error handler for retry logic and peer blacklisting
-  private val errorHandler = new SNAPErrorHandler(
-    maxRetries = snapSyncConfig.maxRetries,
-    initialBackoff = 1.second,
-    maxBackoff = 60.seconds,
-    circuitBreakerThreshold = 10
-  )
 
   // Actor-based coordinators
   private var accountRangeCoordinator: Option[ActorRef] = None
@@ -105,12 +98,11 @@ class SNAPSyncController(
   private val MaxValidationRetries = 3
   private val ValidationRetryDelay = 500.millis
 
-  // Retry counter for bootstrap-to-SNAP transition
+  // Retry counter for bootstrap-to-SNAP transition (exponential backoff: 2s→60s cap, max 10 retries)
   private var bootstrapRetryCount: Int = 0
   private val BootstrapRetryBaseDelay = 2.seconds
   private val BootstrapRetryMaxDelay = 60.seconds
-  private val MaxBootstrapRetryDuration = 5.minutes
-  private var bootstrapRetryStartMs: Long = 0L
+  private val MaxBootstrapRetries = 10
 
   // Pivot restart guard (prevents noisy rapid restarts if peer head fluctuates)
   private var lastPivotRestartMs: Long = 0L
@@ -211,17 +203,11 @@ class SNAPSyncController(
   // Storage stagnation watchdog: if storage stops advancing while tasks remain, repivot/restart.
   // This addresses the common case where peers no longer serve the chosen pivot/state window.
   // Threshold must be generous enough to allow large chains to complete within the SNAP serve window.
+  // Unified stagnation watchdog thresholds — one check interval, phase-specific thresholds
+  private val DownloadStagnationCheckInterval: FiniteDuration = 30.seconds
   private val StorageStagnationThreshold: FiniteDuration = 20.minutes
-  private val StorageStagnationCheckInterval: FiniteDuration = 30.seconds
-  private var lastStorageProgressMs: Long = System.currentTimeMillis()
-
-  // AccountRange stagnation watchdog: if no download progress occurs, repivot/restart (and possibly fallback).
-  // Tracks both task completions AND accountsDownloaded as liveness signals. The sync is only
-  // stalled if neither metric advances within the threshold window. This prevents false stagnation
-  // triggers when accounts are being downloaded steadily but no single 1/16th chunk has finished yet
-  // (common with many concurrent workers and few peers).
   private val AccountStagnationThreshold: FiniteDuration = snapSyncConfig.accountStagnationTimeout
-  private val AccountStagnationCheckInterval: FiniteDuration = 30.seconds
+  private var lastStorageProgressMs: Long = System.currentTimeMillis()
   private var lastAccountProgressMs: Long = System.currentTimeMillis()
   private var lastAccountTasksCompleted: Int = 0
   private var lastAccountsDownloaded: Long = 0
@@ -244,18 +230,8 @@ class SNAPSyncController(
     snapCapabilityCheckTask.foreach(_.cancel())
     snapPeerEvictionTask.foreach(_.cancel())
     rateTrackerTuneTask.foreach(_.cancel())
-    pivotFreshnessCheckTask.foreach(_.cancel())
     progressMonitor.stopPeriodicLogging()
 
-    // Log final error handler statistics
-    val retryStats = errorHandler.getRetryStatistics
-    val peerStats = errorHandler.getPeerStatistics
-    log.info(
-      s"SNAP Sync error statistics: retries=${retryStats.totalRetryAttempts}, " +
-        s"failed_tasks=${retryStats.tasksAtMaxRetries}, " +
-        s"peer_failures=${peerStats.totalFailuresRecorded}, " +
-        s"peers_blacklisted=${peerStats.peersRecommendedForBlacklist}"
-    )
 
     log.info("SNAP Sync Controller stopped")
   }
@@ -407,7 +383,7 @@ class SNAPSyncController(
             s"(phase=$currentPhase, emptyResponses=$emptyResponses, reason=$reason)"
         )
       } else if (
-        currentPhase == AccountRangeSync || currentPhase == StorageRangeSync || currentPhase == ByteCodeAndStorageSync
+        currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync
       ) {
         lastPivotRestartMs = now
         consecutivePivotRefreshes += 1
@@ -478,7 +454,7 @@ class SNAPSyncController(
     case RetryPivotRefresh =>
       pivotBootstrapRetryTask = None
       if (
-        currentPhase == AccountRangeSync || currentPhase == StorageRangeSync || currentPhase == ByteCodeAndStorageSync
+        currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync
       ) {
         log.info("Retrying pivot refresh after bootstrap failure...")
         refreshPivotInPlace("retry after bootstrap failure")
@@ -548,7 +524,7 @@ class SNAPSyncController(
 
         // Start storage stagnation watchdog now that accounts are done
         lastStorageProgressMs = System.currentTimeMillis()
-        scheduleStorageStagnationChecks()
+        scheduleStagnationChecks()
 
         checkAllDownloadsComplete()
       }
@@ -657,137 +633,50 @@ class SNAPSyncController(
   }
 
   // Internal message for periodic storage stagnation checks
-  private case object CheckStorageStagnation
-
-  // Proactive pivot freshness check (Geth-aligned).
-  // Geth refreshes the pivot when head > pivot + 2*fsMinFullBlocks - 8 = 120 blocks.
-  // This ensures the pivot stays within the 128-block SNAP serve window with an 8-block
-  // safety margin, rather than waiting for peers to start returning empty responses.
-  private case object CheckPivotFreshness
-  private val PivotFreshnessThreshold: Long = 120 // blocks (Geth: 2*64-8)
-  private val PivotFreshnessCheckInterval: FiniteDuration = 30.seconds
-  private var pivotFreshnessCheckTask: Option[Cancellable] = None
-
+  // Unified stagnation detection — single timer dispatches to the active coordinator
+  private case object CheckDownloadStagnation
+  private case class AccountCoordinatorProgress(progress: actors.AccountRangeStats)
   private case class StorageCoordinatorProgress(stats: actors.StorageRangeCoordinator.SyncStatistics)
 
-  private def scheduleStorageStagnationChecks(): Unit = {
+  private def scheduleStagnationChecks(): Unit = {
+    accountStagnationCheckTask.foreach(_.cancel())
     storageStagnationCheckTask.foreach(_.cancel())
-    storageStagnationCheckTask = Some(
-      scheduler.scheduleWithFixedDelay(
-        StorageStagnationCheckInterval,
-        StorageStagnationCheckInterval,
-        self,
-        CheckStorageStagnation
-      )(ec)
+    val interval = DownloadStagnationCheckInterval
+    accountStagnationCheckTask = Some(
+      scheduler.scheduleWithFixedDelay(interval, interval, self, CheckDownloadStagnation)(ec)
     )
   }
 
+  /** Handle stagnation for storage phase: first attempt refreshes pivot, second force-completes to healing. */
   private def maybeRestartIfStorageStagnant(stats: actors.StorageRangeCoordinator.SyncStatistics): Unit = {
-    if (currentPhase != StorageRangeSync && currentPhase != ByteCodeAndStorageSync) return
+    if (currentPhase != ByteCodeAndStorageSync) return
 
-    // Only consider it a stall if there is still work to do.
     val workRemaining = stats.tasksPending > 0 || stats.tasksActive > 0
     if (!workRemaining) return
 
     val now = System.currentTimeMillis()
     val stalledForMs = now - lastStorageProgressMs
     if (stalledForMs < StorageStagnationThreshold.toMillis) return
-
-    // Avoid noisy rapid restarts.
     if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) return
     lastPivotRestartMs = now
 
     if (!storageStagnationRefreshAttempted) {
-      // First stagnation detection: try a pivot refresh (cheaper than force-completing).
-      // A fresh pivot may bring peers back to a serveable root, resuming storage download.
       storageStagnationRefreshAttempted = true
       log.warning(
         s"Storage sync stalled: no progress for ${stalledForMs / 1000}s " +
-          s"(threshold=${StorageStagnationThreshold.toSeconds}s), tasksPending=${stats.tasksPending}, " +
-          s"tasksActive=${stats.tasksActive}. Attempting pivot refresh before force-completing."
+          s"(threshold=${StorageStagnationThreshold.toSeconds}s). Attempting pivot refresh."
       )
-      // Reset timer to give the pivot refresh time to work (re-fires in another 20 min if refresh doesn't help)
       lastStorageProgressMs = now
       refreshPivotInPlace(s"storage stagnation: no progress for ${stalledForMs / 1000}s")
     } else {
-      // Second stagnation after a refresh attempt already failed — force-complete and promote to healing.
-      // The healing phase walks the state trie via GetTrieNodes (content-addressed by hash), which works
-      // even when peers can't serve StorageRanges at the current pivot block.
       log.warning(
-        s"Storage sync stalled after pivot refresh attempt: no progress for ${stalledForMs / 1000}s " +
-          s"(threshold=${StorageStagnationThreshold.toSeconds}s), tasksPending=${stats.tasksPending}, " +
-          s"tasksActive=${stats.tasksActive}. Promoting to healing phase (preserving downloaded state)."
+        s"Storage sync stalled after pivot refresh: no progress for ${stalledForMs / 1000}s. " +
+          s"Promoting to healing phase."
       )
-
-      // Cancel storage-phase timers
       storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
       storageStagnationCheckTask.foreach(_.cancel()); storageStagnationCheckTask = None
-
-      // Tell coordinator to flush downloaded data and report completion
       storageRangeCoordinator.foreach(_ ! actors.Messages.ForceCompleteStorage)
     }
-  }
-
-  /** Proactive pivot freshness check (Geth-aligned).
-    *
-    * Unlike the reactive PivotStateUnservable approach (which waits until peers return empty responses),
-    * this proactively refreshes the pivot when the network head has advanced 120 blocks past it.
-    * This matches Geth's behavior: `head > pivot + 2*fsMinFullBlocks - 8` (120 blocks),
-    * leaving an 8-block safety margin before the 128-block SNAP serve window expires.
-    *
-    * Benefits:
-    *   - No wasted requests on a soon-to-be-stale root
-    *   - No false PivotStateUnservable triggers
-    *   - Predictable refresh cadence (~26 min on ETC at 13s/block)
-    */
-  private def maybeProactivelyRefreshPivot(): Unit = {
-    if (pendingPivotRefresh.isDefined) return // Already refreshing
-
-    val now = System.currentTimeMillis()
-    if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) return
-
-    (pivotBlock, currentNetworkBestFromSnapPeers()) match {
-      case (Some(pivot), Some(networkBest)) if networkBest > pivot =>
-        val drift = networkBest - pivot
-        if (drift > PivotFreshnessThreshold) {
-          log.info(
-            s"Proactive pivot refresh: network head $networkBest is $drift blocks ahead of pivot $pivot " +
-              s"(threshold=$PivotFreshnessThreshold). Refreshing in-place to stay within SNAP serve window."
-          )
-          lastPivotRestartMs = now
-          refreshPivotInPlace(s"proactive: head drifted $drift blocks (>${PivotFreshnessThreshold})")
-        }
-      case _ => // No pivot or no peers — nothing to do
-    }
-  }
-
-  private def schedulePivotFreshnessChecks(): Unit = {
-    pivotFreshnessCheckTask.foreach(_.cancel())
-    pivotFreshnessCheckTask = Some(
-      scheduler.scheduleWithFixedDelay(
-        PivotFreshnessCheckInterval,
-        PivotFreshnessCheckInterval,
-        self,
-        CheckPivotFreshness
-      )(ec)
-    )
-  }
-
-  // Internal message for periodic account stagnation checks
-  private case object CheckAccountStagnation
-
-  private case class AccountCoordinatorProgress(progress: actors.AccountRangeStats)
-
-  private def scheduleAccountStagnationChecks(): Unit = {
-    accountStagnationCheckTask.foreach(_.cancel())
-    accountStagnationCheckTask = Some(
-      scheduler.scheduleWithFixedDelay(
-        AccountStagnationCheckInterval,
-        AccountStagnationCheckInterval,
-        self,
-        CheckAccountStagnation
-      )(ec)
-    )
   }
 
   /** Geth-aligned: check if all 3 concurrent download phases are complete. Only transitions to healing when accounts +
@@ -1175,8 +1064,7 @@ class SNAPSyncController(
 
             currentPhase = ByteCodeAndStorageSync
             lastStorageProgressMs = System.currentTimeMillis()
-            scheduleStorageStagnationChecks()
-            schedulePivotFreshnessChecks()
+            scheduleStagnationChecks()
             progressMonitor.startPhase(ByteCodeAndStorageSync)
 
             // Start parallel chain download during recovery too
@@ -1263,7 +1151,6 @@ class SNAPSyncController(
         // This ensures we sync to the actual chain tip, not just our local view
         // Reset bootstrap retry state since we have peers
         bootstrapRetryCount = 0
-        bootstrapRetryStartMs = 0L
         (networkBestBlock, NetworkPivot)
       case None =>
         // No peers available yet - fall back to local best block
@@ -1331,7 +1218,6 @@ class SNAPSyncController(
 
           // Reset bootstrap retry state
           bootstrapRetryCount = 0
-          bootstrapRetryStartMs = 0L
 
           // Start account range sync with genesis state root
           currentPhase = AccountRangeSync
@@ -1418,7 +1304,6 @@ class SNAPSyncController(
 
           // Reset bootstrap retry state
           bootstrapRetryCount = 0
-          bootstrapRetryStartMs = 0L
 
           log.info(s"Local pivot header available for block $pivotBlockNumber, starting SNAP sync")
 
@@ -1491,27 +1376,21 @@ class SNAPSyncController(
     math.min(delaySeconds, BootstrapRetryMaxDelay.toSeconds).seconds
   }
 
-  /** Check if bootstrap retry has exceeded the maximum duration. If so, falls back to fast sync. Returns true if
-    * fallback was triggered.
-    */
+  /** Check if bootstrap retry has exceeded the maximum count. If so, falls back to fast sync. */
   private def checkBootstrapRetryTimeout(context: String): Boolean = {
-    if (bootstrapRetryStartMs == 0L) bootstrapRetryStartMs = System.currentTimeMillis()
-    val elapsed = System.currentTimeMillis() - bootstrapRetryStartMs
-    if (elapsed > MaxBootstrapRetryDuration.toMillis) {
+    if (bootstrapRetryCount >= MaxBootstrapRetries) {
       log.warning(
-        s"No peers found after ${elapsed / 1000}s of bootstrap retries ($context). Falling back to fast sync."
+        s"No peers found after $bootstrapRetryCount bootstrap retries ($context). Falling back to fast sync."
       )
       fallbackToFastSync()
       true
     } else {
-      // Periodic diagnostic logging (~every 30s based on accumulated delay)
       if (bootstrapRetryCount > 0 && bootstrapRetryCount % 5 == 0) {
         log.info(
           s"Bootstrap retry diagnostics ($context): " +
-            s"attempt=$bootstrapRetryCount, " +
+            s"attempt=$bootstrapRetryCount/$MaxBootstrapRetries, " +
             s"handshakedPeers=${handshakedPeers.size}, " +
-            s"snapCapable=${handshakedPeers.values.count(_.peerInfo.remoteStatus.supportsSnap)}, " +
-            s"elapsed=${elapsed / 1000}s"
+            s"snapCapable=${handshakedPeers.values.count(_.peerInfo.remoteStatus.supportsSnap)}"
         )
       }
       false
@@ -1763,8 +1642,7 @@ class SNAPSyncController(
       )(ec)
     )
 
-    scheduleAccountStagnationChecks()
-    schedulePivotFreshnessChecks()
+    scheduleStagnationChecks()
 
     // Schedule periodic rate tracker tuning (geth msgrate alignment: recalculate median RTT every 5s)
     if (rateTrackerTuneTask.isEmpty) {
@@ -1843,7 +1721,6 @@ class SNAPSyncController(
   private case object RequestAccountRanges
 
   private def requestAccountRanges(): Unit = {
-    if (maybeRestartIfPivotTooStale("AccountRangeSync")) return
     // Notify coordinator of available peers
     accountRangeCoordinator.foreach { coordinator =>
       val pivot = pivotBlock.getOrElse(BigInt(0))
@@ -1870,7 +1747,6 @@ class SNAPSyncController(
   private case object RequestByteCodes
 
   private def requestByteCodes(): Unit = {
-    if (maybeRestartIfPivotTooStale("ByteCodeSync")) return
     // Notify coordinator of available peers
     bytecodeCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
@@ -1892,7 +1768,6 @@ class SNAPSyncController(
   private case object RequestStorageRanges
 
   private def requestStorageRanges(): Unit = {
-    if (maybeRestartIfPivotTooStale("StorageRangeSync")) return
     // Notify coordinator of available peers
     storageRangeCoordinator.foreach { coordinator =>
       val pivot = pivotBlock.getOrElse(BigInt(0))
@@ -1915,81 +1790,50 @@ class SNAPSyncController(
     }
   }
 
-  // Handle storage stagnation checks in the actor mailbox so we can safely ask the coordinator.
+  // Unified stagnation check — dispatches to the active coordinator based on current phase.
   override def aroundReceive(receive: Receive, msg: Any): Unit = msg match {
-    case CheckAccountStagnation if currentPhase == AccountRangeSync =>
-      accountRangeCoordinator match {
-        case Some(coordinator) =>
-          import org.apache.pekko.pattern.{ask, pipe}
-          import org.apache.pekko.util.Timeout
-          implicit val timeout: Timeout = Timeout(2.seconds)
+    case CheckDownloadStagnation =>
+      import org.apache.pekko.pattern.{ask, pipe}
+      import org.apache.pekko.util.Timeout
+      implicit val timeout: Timeout = Timeout(2.seconds)
 
-          (coordinator ? actors.Messages.GetProgress)
-            .mapTo[actors.AccountRangeStats]
-            .map(AccountCoordinatorProgress.apply)
-            .recover { case ex =>
-              log.debug(s"Account stagnation check failed to query coordinator: ${ex.getMessage}")
-              AccountCoordinatorProgress(
-                actors.AccountRangeStats(
-                  accountsDownloaded = 0L,
-                  bytesDownloaded = 0L,
-                  tasksCompleted = 0,
-                  tasksActive = 0,
-                  tasksPending = 0,
-                  progress = 0.0,
-                  elapsedTimeMs = 0L,
-                  contractAccountsFound = 0
+      currentPhase match {
+        case AccountRangeSync =>
+          accountRangeCoordinator.foreach { coordinator =>
+            (coordinator ? actors.Messages.GetProgress)
+              .mapTo[actors.AccountRangeStats]
+              .map(AccountCoordinatorProgress.apply)
+              .recover { case _ =>
+                AccountCoordinatorProgress(
+                  actors.AccountRangeStats(0L, 0L, 0, 0, 0, 0.0, 0L, 0)
                 )
-              )
-            }
-            .pipeTo(self)
-        case None =>
-          ()
+              }
+              .pipeTo(self)
+          }
+        case ByteCodeAndStorageSync =>
+          storageRangeCoordinator.foreach { coordinator =>
+            (coordinator ? actors.Messages.StorageGetProgress)
+              .mapTo[actors.StorageRangeCoordinator.SyncStatistics]
+              .map(StorageCoordinatorProgress.apply)
+              .recover { case _ =>
+                StorageCoordinatorProgress(
+                  actors.StorageRangeCoordinator.SyncStatistics(0, 0, 0, 0, 0, 0, 0.0)
+                )
+              }
+              .pipeTo(self)
+          }
+        case _ => // No stagnation check needed in other phases
       }
       super.aroundReceive(receive, msg)
 
     case AccountCoordinatorProgress(progress) if currentPhase == AccountRangeSync =>
-      // Ignore the dummy progress used on recover.
-      if (
-        progress.elapsedTimeMs > 0 || progress.tasksPending > 0 || progress.tasksActive > 0 || progress.tasksCompleted > 0
-      )
+      if (progress.elapsedTimeMs > 0 || progress.tasksPending > 0 || progress.tasksActive > 0 || progress.tasksCompleted > 0)
         maybeRestartIfAccountStagnant(progress)
       super.aroundReceive(receive, msg)
 
-    case CheckStorageStagnation if currentPhase == StorageRangeSync || currentPhase == ByteCodeAndStorageSync =>
-      storageRangeCoordinator match {
-        case Some(coordinator) =>
-          import org.apache.pekko.pattern.{ask, pipe}
-          import org.apache.pekko.util.Timeout
-          implicit val timeout: Timeout = Timeout(2.seconds)
-
-          (coordinator ? actors.Messages.StorageGetProgress)
-            .mapTo[actors.StorageRangeCoordinator.SyncStatistics]
-            .map(StorageCoordinatorProgress.apply)
-            .recover { case ex =>
-              log.debug(s"Storage stagnation check failed to query coordinator: ${ex.getMessage}")
-              // No stats; do nothing.
-              StorageCoordinatorProgress(
-                actors.StorageRangeCoordinator.SyncStatistics(0, 0, 0, 0, 0, 0, 0.0)
-              )
-            }
-            .pipeTo(self)
-        case None =>
-          ()
-      }
-      super.aroundReceive(receive, msg)
-
-    case StorageCoordinatorProgress(stats)
-        if (currentPhase == StorageRangeSync || currentPhase == ByteCodeAndStorageSync) =>
-      // Ignore the dummy stats used on recover.
+    case StorageCoordinatorProgress(stats) if currentPhase == ByteCodeAndStorageSync =>
       if (stats.elapsedTimeMs > 0 || stats.tasksPending > 0 || stats.tasksActive > 0 || stats.tasksCompleted > 0)
         maybeRestartIfStorageStagnant(stats)
-      super.aroundReceive(receive, msg)
-
-    // Proactive pivot freshness (Geth-aligned): refresh before peers start returning empty responses.
-    case CheckPivotFreshness
-        if currentPhase == AccountRangeSync || currentPhase == StorageRangeSync || currentPhase == ByteCodeAndStorageSync =>
-      maybeProactivelyRefreshPivot()
       super.aroundReceive(receive, msg)
 
     case _ =>
@@ -2083,7 +1927,6 @@ class SNAPSyncController(
   private case object RequestTrieNodeHealing
 
   private def requestTrieNodeHealing(): Unit = {
-    if (maybeRestartIfPivotTooStale("StateHealing")) return
     // Notify coordinator of available peers
     trieNodeHealingCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
@@ -2202,28 +2045,6 @@ class SNAPSyncController(
       .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
       .headOption
       .map(_.peerInfo.maxBlockNumber)
-  }
-
-  private def maybeRestartIfPivotTooStale(contextLabel: String): Boolean = {
-    val now = System.currentTimeMillis()
-    if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) return false
-
-    (pivotBlock, currentNetworkBestFromSnapPeers()) match {
-      case (Some(pivot), Some(networkBest)) if networkBest > 0 && networkBest > pivot =>
-        val delta = networkBest - pivot
-        if (delta > snapSyncConfig.maxPivotStalenessBlocks) {
-          lastPivotRestartMs = now
-          restartSnapSync(
-            s"pivot=$pivot is $delta blocks behind visible networkBest=$networkBest in $contextLabel " +
-              s"(maxPivotStaleness=${snapSyncConfig.maxPivotStalenessBlocks})"
-          )
-          true
-        } else {
-          false
-        }
-      case _ =>
-        false
-    }
   }
 
   /** Refresh the pivot block and state root without destroying coordinators.
@@ -2387,7 +2208,6 @@ class SNAPSyncController(
     storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
     accountStagnationCheckTask.foreach(_.cancel()); accountStagnationCheckTask = None
     storageStagnationCheckTask.foreach(_.cancel()); storageStagnationCheckTask = None
-    pivotFreshnessCheckTask.foreach(_.cancel()); pivotFreshnessCheckTask = None
     healingRequestTask.foreach(_.cancel()); healingRequestTask = None
     bootstrapCheckTask.foreach(_.cancel()); bootstrapCheckTask = None
     pivotBootstrapRetryTask.foreach(_.cancel()); pivotBootstrapRetryTask = None
@@ -2470,15 +2290,6 @@ class SNAPSyncController(
         // In account range sync, we track accounts synced
         (progress.accountsSynced, estimateOrActual(progress.estimatedTotalAccounts, progress.accountsSynced))
 
-      case ByteCodeSync =>
-        // In bytecode sync, we add accounts + bytecodes
-        val pulled = progress.accountsSynced + progress.bytecodesDownloaded
-        val known = progress.estimatedTotalAccounts + estimateOrActual(
-          progress.estimatedTotalBytecodes,
-          progress.bytecodesDownloaded
-        )
-        (pulled, known)
-
       case ByteCodeAndStorageSync =>
         // Concurrent bytecode + storage sync
         val pulled = progress.accountsSynced + progress.bytecodesDownloaded + progress.storageSlotsSynced
@@ -2486,13 +2297,6 @@ class SNAPSyncController(
           progress.estimatedTotalBytecodes,
           progress.bytecodesDownloaded
         ) +
-          estimateOrActual(progress.estimatedTotalSlots, progress.storageSlotsSynced)
-        (pulled, known)
-
-      case StorageRangeSync =>
-        // In storage sync, we add accounts + bytecodes + storage slots
-        val pulled = progress.accountsSynced + progress.bytecodesDownloaded + progress.storageSlotsSynced
-        val known = progress.estimatedTotalAccounts + progress.estimatedTotalBytecodes +
           estimateOrActual(progress.estimatedTotalSlots, progress.storageSlotsSynced)
         (pulled, known)
 
@@ -2786,9 +2590,7 @@ object SNAPSyncController {
   sealed trait SyncPhase
   case object Idle extends SyncPhase
   case object AccountRangeSync extends SyncPhase
-  case object ByteCodeSync extends SyncPhase
   case object ByteCodeAndStorageSync extends SyncPhase
-  case object StorageRangeSync extends SyncPhase
   case object StateHealing extends SyncPhase
   case object StateValidation extends SyncPhase
   case object ChainDownloadCompletion extends SyncPhase
@@ -3016,862 +2818,6 @@ object SNAPSyncConfig {
   }
 }
 
-class StateValidator(mptStorage: MptStorage) {
+// StateValidator has been extracted to StateValidator.scala
+// SyncProgressMonitor and SyncProgress have been extracted to SyncProgressMonitor.scala
 
-  import com.chipprbots.ethereum.mpt._
-  import com.chipprbots.ethereum.domain.Account
-  import scala.collection.mutable
-
-  /** Validate the account trie by traversing it and detecting missing nodes.
-    *
-    * @param stateRoot
-    *   The expected state root hash
-    * @return
-    *   Right with missing node hashes if any, or Left with error message
-    */
-  def validateAccountTrie(stateRoot: ByteString): Either[String, Seq[ByteString]] =
-    try {
-      val missingNodes = mutable.ArrayBuffer[ByteString]()
-
-      // Try to load the root node from storage
-      try {
-        val rootNode = mptStorage.get(stateRoot.toArray)
-
-        // Traverse the trie and collect missing nodes
-        traverseForMissingNodes(rootNode, mptStorage, missingNodes)
-
-        if (missingNodes.isEmpty) {
-          Right(Seq.empty)
-        } else {
-          Right(missingNodes.toSeq)
-        }
-
-      } catch {
-        case e: MerklePatriciaTrie.MissingNodeException =>
-          // Root node itself is missing
-          Left(s"Missing root node: ${stateRoot.take(8).toHex}")
-        case e: Exception =>
-          Left(s"Failed to load root node: ${e.getMessage}")
-      }
-
-    } catch {
-      case e: Exception =>
-        Left(s"Validation error: ${e.getMessage}")
-    }
-
-  /** Validate all storage tries by walking through all accounts and checking their storage.
-    *
-    * @param stateRoot
-    *   The state root to validate from
-    * @return
-    *   Right with missing node hashes if any, or Left with error message
-    */
-  def validateAllStorageTries(stateRoot: ByteString): Either[String, Seq[ByteString]] =
-    try {
-      val missingStorageNodes = mutable.ArrayBuffer[ByteString]()
-      val accounts = mutable.ArrayBuffer[Account]()
-
-      // First, collect all accounts by traversing the account trie
-      try {
-        val rootNode = mptStorage.get(stateRoot.toArray)
-        collectAccounts(rootNode, mptStorage, accounts)
-      } catch {
-        case _: Exception =>
-          return Left("Cannot validate storage tries: failed to traverse account trie")
-      }
-
-      // Now validate each account's storage trie
-      accounts.foreach { account =>
-        if (account.storageRoot != Account.EmptyStorageRootHash) {
-          try {
-            val storageRootNode = mptStorage.get(account.storageRoot.toArray)
-            traverseForMissingNodes(storageRootNode, mptStorage, missingStorageNodes)
-          } catch {
-            case e: MerklePatriciaTrie.MissingNodeException =>
-              missingStorageNodes += e.hash
-            case e: Exception =>
-              // Continue with other accounts - log at caller level if needed
-              ()
-          }
-        }
-      }
-
-      if (missingStorageNodes.isEmpty) {
-        Right(Seq.empty)
-      } else {
-        Right(missingStorageNodes.toSeq)
-      }
-
-    } catch {
-      case e: Exception =>
-        Left(s"Storage validation error: ${e.getMessage}")
-    }
-
-  /** Recursively traverse a trie and collect missing node hashes.
-    *
-    * @param node
-    *   The current node being traversed
-    * @param storage
-    *   The storage to lookup nodes from
-    * @param missingNodes
-    *   Buffer to collect missing node hashes
-    * @param visited
-    *   Set of visited node hashes to prevent infinite loops
-    */
-  private def traverseForMissingNodes(
-      node: MptNode,
-      storage: MptStorage,
-      missingNodes: mutable.ArrayBuffer[ByteString],
-      visited: mutable.Set[ByteString] = mutable.Set.empty
-  ): Unit =
-    // Note: visited check is per-case, NOT at the top.
-    // HashNode and its resolved node share the same hash (decodeNode sets
-    // cachedHash = lookupKey), so a top-level visited check would skip the
-    // resolved node immediately after adding the HashNode — truncating the
-    // traversal at depth 1.
-    node match {
-      case _: LeafNode | NullNode =>
-        ()
-
-      case ext: ExtensionNode =>
-        val nodeHash = ByteString(ext.hash)
-        if (!visited.contains(nodeHash)) {
-          visited += nodeHash
-          traverseForMissingNodes(ext.next, storage, missingNodes, visited)
-        }
-
-      case branch: BranchNode =>
-        val nodeHash = ByteString(branch.hash)
-        if (!visited.contains(nodeHash)) {
-          visited += nodeHash
-          branch.children.foreach { child =>
-            traverseForMissingNodes(child, storage, missingNodes, visited)
-          }
-        }
-
-      case hash: HashNode =>
-        // Don't add to visited here — the resolved node will add its hash
-        // (which is the same value) when it recurses as a non-HashNode.
-        val hashKey = ByteString(hash.hash)
-        if (!visited.contains(hashKey)) {
-          try {
-            val resolvedNode = storage.get(hash.hash)
-            traverseForMissingNodes(resolvedNode, storage, missingNodes, visited)
-          } catch {
-            case _: MerklePatriciaTrie.MissingNodeException =>
-              missingNodes += ByteString(hash.hash)
-            case _: Exception =>
-              // Unreachable node — treat as missing
-              missingNodes += ByteString(hash.hash)
-          }
-        }
-    }
-
-  /** Recursively collect all accounts from a trie.
-    *
-    * @param node
-    *   The current node being traversed
-    * @param storage
-    *   The storage to lookup nodes from
-    * @param accounts
-    *   Buffer to collect accounts
-    * @param visited
-    *   Set of visited node hashes to prevent infinite loops
-    */
-  private def collectAccounts(
-      node: MptNode,
-      storage: MptStorage,
-      accounts: mutable.ArrayBuffer[Account],
-      visited: mutable.Set[ByteString] = mutable.Set.empty
-  ): Unit = {
-    import com.chipprbots.ethereum.domain.Account.accountSerializer
-
-    // Note: visited check is per-case (see traverseForMissingNodes comment)
-    node match {
-      case leaf: LeafNode =>
-        try {
-          val account = accountSerializer.fromBytes(leaf.value.toArray)
-          accounts += account
-        } catch {
-          case _: Exception => ()
-        }
-
-      case ext: ExtensionNode =>
-        val nodeHash = ByteString(ext.hash)
-        if (!visited.contains(nodeHash)) {
-          visited += nodeHash
-          collectAccounts(ext.next, storage, accounts, visited)
-        }
-
-      case branch: BranchNode =>
-        val nodeHash = ByteString(branch.hash)
-        if (!visited.contains(nodeHash)) {
-          visited += nodeHash
-          branch.children.foreach { child =>
-            collectAccounts(child, storage, accounts, visited)
-          }
-          branch.terminator.foreach { value =>
-            try {
-              val account = accountSerializer.fromBytes(value.toArray)
-              accounts += account
-            } catch {
-              case _: Exception => ()
-            }
-          }
-        }
-
-      case hash: HashNode =>
-        val hashKey = ByteString(hash.hash)
-        if (!visited.contains(hashKey)) {
-          try {
-            val resolvedNode = storage.get(hash.hash)
-            collectAccounts(resolvedNode, storage, accounts, visited)
-          } catch {
-            case _: MerklePatriciaTrie.MissingNodeException => ()
-            case _: Exception                               => ()
-          }
-        }
-
-      case NullNode => ()
-    }
-  }
-
-  // ========================================
-  // Path-tracking trie walk for GetTrieNodes healing
-  // ========================================
-
-  /** Find all missing trie nodes with GetTrieNodes-compatible pathsets. Walks the account trie and each account's
-    * storage trie, tracking the hex nibble path to each missing node and encoding it as an HP-encoded compact path for
-    * GetTrieNodes.
-    *
-    * @return
-    *   (pathset, hash) pairs ready for TrieNodeHealingCoordinator.QueueMissingNodes
-    */
-  def findMissingNodesWithPaths(stateRoot: ByteString): Either[String, Seq[(Seq[ByteString], ByteString)]] = {
-    val result = mutable.ArrayBuffer[(Seq[ByteString], ByteString)]()
-
-    try {
-      val rootNode = mptStorage.get(stateRoot.toArray)
-
-      // Walk the account trie — missing account nodes get single-element pathsets
-      traverseAccountTrieWithPaths(
-        rootNode,
-        mptStorage,
-        Array.empty[Byte],
-        result,
-        mutable.Set.empty
-      )
-
-      Right(result.toSeq)
-    } catch {
-      case e: MerklePatriciaTrie.MissingNodeException =>
-        // Root node itself is missing
-        val compactPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-        result += ((Seq(compactPath), e.hash))
-        Right(result.toSeq)
-      case e: Exception =>
-        Left(s"Trie walk failed: ${e.getMessage}")
-    }
-  }
-
-  /** Walk the account trie, tracking nibble paths for missing nodes. Also checks storage tries for each account found.
-    */
-  private def traverseAccountTrieWithPaths(
-      node: MptNode,
-      storage: MptStorage,
-      currentNibblePath: Array[Byte],
-      result: mutable.ArrayBuffer[(Seq[ByteString], ByteString)],
-      visited: mutable.Set[ByteString]
-  ): Unit = {
-    import com.chipprbots.ethereum.domain.Account.accountSerializer
-
-    // Note: visited check is per-case (see traverseForMissingNodes comment)
-    node match {
-      case leaf: LeafNode =>
-        try {
-          val account = accountSerializer.fromBytes(leaf.value.toArray)
-          if (account.storageRoot != com.chipprbots.ethereum.domain.Account.EmptyStorageRootHash) {
-            val leafKeyNibbles = leaf.key.toArray
-            val fullNibblePath = currentNibblePath ++ leafKeyNibbles
-            val accountHashBytes = HexPrefix.nibblesToBytes(fullNibblePath)
-
-            try {
-              val storageRoot = storage.get(account.storageRoot.toArray)
-              traverseStorageTrieWithPaths(
-                storageRoot,
-                storage,
-                Array.empty[Byte],
-                ByteString(accountHashBytes),
-                result,
-                mutable.Set.empty
-              )
-            } catch {
-              case e: MerklePatriciaTrie.MissingNodeException =>
-                val compactPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-                result += ((Seq(ByteString(accountHashBytes), compactPath), e.hash))
-            }
-          }
-        } catch {
-          case _: Exception => ()
-        }
-
-      case ext: ExtensionNode =>
-        val nodeHash = ByteString(ext.hash)
-        if (!visited.contains(nodeHash)) {
-          visited += nodeHash
-          val sharedKeyNibbles = ext.sharedKey.toArray
-          val newPath = currentNibblePath ++ sharedKeyNibbles
-          traverseAccountTrieWithPaths(ext.next, storage, newPath, result, visited)
-        }
-
-      case branch: BranchNode =>
-        val nodeHash = ByteString(branch.hash)
-        if (!visited.contains(nodeHash)) {
-          visited += nodeHash
-          for (i <- 0 until 16) {
-            val child = branch.children(i)
-            if (!child.isNull) {
-              val newPath = currentNibblePath :+ i.toByte
-              traverseAccountTrieWithPaths(child, storage, newPath, result, visited)
-            }
-          }
-        }
-
-      case hash: HashNode =>
-        val hashKey = ByteString(hash.hash)
-        if (!visited.contains(hashKey)) {
-          try {
-            val resolvedNode = storage.get(hash.hash)
-            traverseAccountTrieWithPaths(resolvedNode, storage, currentNibblePath, result, visited)
-          } catch {
-            case _: MerklePatriciaTrie.MissingNodeException =>
-              val compactPath = ByteString(HexPrefix.encode(currentNibblePath, isLeaf = false))
-              result += ((Seq(compactPath), ByteString(hash.hash)))
-          }
-        }
-
-      case NullNode => ()
-    }
-  }
-
-  /** Walk a storage trie, tracking nibble paths for missing nodes. Missing nodes get two-element pathsets:
-    * [account_hash, compact_storage_path].
-    */
-  private def traverseStorageTrieWithPaths(
-      node: MptNode,
-      storage: MptStorage,
-      currentNibblePath: Array[Byte],
-      accountHash: ByteString,
-      result: mutable.ArrayBuffer[(Seq[ByteString], ByteString)],
-      visited: mutable.Set[ByteString]
-  ): Unit =
-    // Note: visited check is per-case (see traverseForMissingNodes comment)
-    node match {
-      case _: LeafNode | NullNode => ()
-
-      case ext: ExtensionNode =>
-        val nodeHash = ByteString(ext.hash)
-        if (!visited.contains(nodeHash)) {
-          visited += nodeHash
-          val sharedKeyNibbles = ext.sharedKey.toArray
-          val newPath = currentNibblePath ++ sharedKeyNibbles
-          traverseStorageTrieWithPaths(ext.next, storage, newPath, accountHash, result, visited)
-        }
-
-      case branch: BranchNode =>
-        val nodeHash = ByteString(branch.hash)
-        if (!visited.contains(nodeHash)) {
-          visited += nodeHash
-          for (i <- 0 until 16) {
-            val child = branch.children(i)
-            if (!child.isNull) {
-              val newPath = currentNibblePath :+ i.toByte
-              traverseStorageTrieWithPaths(child, storage, newPath, accountHash, result, visited)
-            }
-          }
-        }
-
-      case hash: HashNode =>
-        val hashKey = ByteString(hash.hash)
-        if (!visited.contains(hashKey)) {
-          try {
-            val resolvedNode = storage.get(hash.hash)
-            traverseStorageTrieWithPaths(resolvedNode, storage, currentNibblePath, accountHash, result, visited)
-          } catch {
-            case _: MerklePatriciaTrie.MissingNodeException =>
-              val compactPath = ByteString(HexPrefix.encode(currentNibblePath, isLeaf = false))
-              result += ((Seq(accountHash, compactPath), ByteString(hash.hash)))
-          }
-        }
-    }
-}
-
-class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
-
-  import SNAPSyncController._
-  import scala.concurrent.ExecutionContext.Implicits.global
-
-  private var currentPhaseState: SyncPhase = Idle
-  private var bytecodesDone: Boolean = false
-  private var accountsSynced: Long = 0
-  private var bytecodesDownloaded: Long = 0
-  private var storageSlotsSynced: Long = 0
-  private var nodesHealed: Long = 0
-  private val startTime: Long = System.currentTimeMillis()
-  private var phaseStartTime: Long = System.currentTimeMillis()
-
-  // Whether the account range download is complete and the trie is being flushed to disk
-  private var finalizingTrie: Boolean = false
-  private var finalizeStartTimeMs: Long = 0
-
-  // Estimated totals for ETA calculation (updated during sync)
-  private var estimatedTotalAccounts: Long = 0
-  private var estimatedTotalBytecodes: Long = 0
-  private var estimatedTotalSlots: Long = 0
-
-  // Storage contract completion tracking
-  private var storageContractsCompleted: Int = 0
-  private var storageContractsTotal: Int = 0
-
-  // Chain download tracking (parallel header/body/receipt download)
-  private var chainHeaders: BigInt = BigInt(0)
-  private var chainBodies: BigInt = BigInt(0)
-  private var chainReceipts: BigInt = BigInt(0)
-  private var chainTarget: BigInt = BigInt(0)
-
-  // Periodic logging
-  private var lastLogTime: Long = System.currentTimeMillis()
-
-  private var periodicLogTask: Option[Cancellable] = None
-
-  // Metrics history for throughput averaging
-  private val metricsWindow = 60 // 60 seconds window for averaging
-  private val accountsHistory = mutable.Queue[(Long, Long)]() // (timestamp, count)
-  private val bytecodesHistory = mutable.Queue[(Long, Long)]()
-  private val slotsHistory = mutable.Queue[(Long, Long)]()
-  private val nodesHistory = mutable.Queue[(Long, Long)]()
-
-  /** Start periodic progress logging.
-    * Uses java.util.Timer instead of Pekko Scheduler for reliability — the Pekko scheduler
-    * silently fails in some configuration environments (observed on Barad-dûr mainnet).
-    */
-  def startPeriodicLogging(): Unit = {
-    val timer = new java.util.Timer("sync-progress-monitor", true)
-    timer.scheduleAtFixedRate(new java.util.TimerTask {
-      def run(): Unit =
-        try logProgress()
-        catch { case e: Exception => log.error(s"Progress monitor error: ${e.getMessage}", e) }
-    }, 30000L, 30000L)
-    periodicLogTask = Some(new org.apache.pekko.actor.Cancellable {
-      def cancel(): Boolean = { timer.cancel(); true }
-      def isCancelled: Boolean = false
-    })
-  }
-
-  /** Stop periodic progress logging */
-  def stopPeriodicLogging(): Unit = {
-    periodicLogTask.foreach(_.cancel())
-    periodicLogTask = None
-  }
-
-  def setFinalizingTrie(value: Boolean): Unit = synchronized {
-    finalizingTrie = value
-    if (value) finalizeStartTimeMs = System.currentTimeMillis()
-  }
-
-  def setBytecodeComplete(): Unit = synchronized { bytecodesDone = true }
-
-  /** Reset all counters/ETA state for a fresh SNAP attempt */
-  def reset(): Unit = synchronized {
-    currentPhaseState = Idle
-    accountsSynced = 0
-    bytecodesDownloaded = 0
-    storageSlotsSynced = 0
-    nodesHealed = 0
-    finalizingTrie = false
-
-    estimatedTotalAccounts = 0
-    estimatedTotalBytecodes = 0
-    estimatedTotalSlots = 0
-    storageContractsCompleted = 0
-    storageContractsTotal = 0
-    chainHeaders = BigInt(0)
-    chainBodies = BigInt(0)
-    chainReceipts = BigInt(0)
-    chainTarget = BigInt(0)
-
-    phaseStartTime = System.currentTimeMillis()
-    lastLogTime = System.currentTimeMillis()
-
-    accountsHistory.clear()
-    bytecodesHistory.clear()
-    slotsHistory.clear()
-    nodesHistory.clear()
-  }
-
-  def startPhase(phase: SyncPhase): Unit = {
-    val previousPhase = currentPhaseState
-
-    // Idempotency: callers may invoke startPhase(phase) more than once.
-    // Only treat it as a transition when the phase actually changes.
-    if (previousPhase != phase) {
-      currentPhaseState = phase
-      phaseStartTime = System.currentTimeMillis()
-      log.info(s"📊 SNAP Sync phase transition: $previousPhase → $phase")
-    }
-
-    logProgress()
-  }
-
-  def complete(): Unit = {
-    currentPhaseState = Completed
-    stopPeriodicLogging()
-    log.info("✅ SNAP Sync completed!")
-    logProgress()
-  }
-
-  def incrementAccountsSynced(count: Long): Unit = synchronized {
-    accountsSynced += count
-    val now = System.currentTimeMillis()
-    accountsHistory.enqueue((now, accountsSynced))
-    cleanupHistory(accountsHistory, now)
-  }
-
-  def incrementBytecodesDownloaded(count: Long): Unit = synchronized {
-    bytecodesDownloaded += count
-    val now = System.currentTimeMillis()
-    bytecodesHistory.enqueue((now, bytecodesDownloaded))
-    cleanupHistory(bytecodesHistory, now)
-  }
-
-  def incrementStorageSlotsSynced(count: Long): Unit = synchronized {
-    storageSlotsSynced += count
-    val now = System.currentTimeMillis()
-    slotsHistory.enqueue((now, storageSlotsSynced))
-    cleanupHistory(slotsHistory, now)
-  }
-
-  def incrementNodesHealed(count: Long): Unit = synchronized {
-    nodesHealed += count
-    val now = System.currentTimeMillis()
-    nodesHistory.enqueue((now, nodesHealed))
-    cleanupHistory(nodesHistory, now)
-  }
-
-  /** Update estimated totals for ETA calculation */
-  def updateEstimates(accounts: Long = 0, bytecodes: Long = 0, slots: Long = 0): Unit = synchronized {
-    if (accounts > 0) estimatedTotalAccounts = accounts
-    if (bytecodes > 0) estimatedTotalBytecodes = bytecodes
-    if (slots > 0) estimatedTotalSlots = slots
-  }
-
-  /** Get current storage slots synced count */
-  def getStorageSlotsSynced: Long = synchronized(storageSlotsSynced)
-
-  /** Update storage contract completion counts for display */
-  def updateStorageContracts(completed: Int, total: Int): Unit = synchronized {
-    storageContractsCompleted = completed
-    storageContractsTotal = total
-  }
-
-  /** Update chain download progress (headers/bodies/receipts vs target) */
-  def updateChainProgress(headers: BigInt, bodies: BigInt, receipts: BigInt, target: BigInt): Unit = synchronized {
-    chainHeaders = headers
-    chainBodies = bodies
-    chainReceipts = receipts
-    chainTarget = target
-  }
-
-  /** Remove old entries from history (keep only last N seconds) */
-  private def cleanupHistory(history: mutable.Queue[(Long, Long)], now: Long): Unit = {
-    val cutoff = now - (metricsWindow * 1000)
-    while (history.nonEmpty && history.head._1 < cutoff)
-      history.dequeue()
-  }
-
-  /** Calculate recent throughput from history.
-    *
-    * NOTE: This method must only be called from synchronized contexts (calculateETA, currentProgress). It accesses
-    * mutable collections that are modified by synchronized methods.
-    */
-  private def calculateRecentThroughput(history: mutable.Queue[(Long, Long)]): Double = {
-    if (history.size < 2) return 0.0
-
-    val oldest = history.head
-    val newest = history.last
-    val timeDiff = (newest._1 - oldest._1) / 1000.0
-    val countDiff = newest._2 - oldest._2
-
-    if (timeDiff > 0) countDiff / timeDiff else 0.0
-  }
-
-  /** Calculate ETA in seconds based on current progress and throughput */
-  def calculateETA: Option[Long] = synchronized {
-    currentPhaseState match {
-      case AccountRangeSync if estimatedTotalAccounts > 0 =>
-        val remaining = estimatedTotalAccounts - accountsSynced
-        val throughput = calculateRecentThroughput(accountsHistory)
-        if (throughput > 0 && remaining > 0) {
-          Some((remaining / throughput).toLong)
-        } else None
-
-      case ByteCodeSync if estimatedTotalBytecodes > 0 =>
-        val remaining = estimatedTotalBytecodes - bytecodesDownloaded
-        val throughput = calculateRecentThroughput(bytecodesHistory)
-        if (throughput > 0 && remaining > 0) {
-          Some((remaining / throughput).toLong)
-        } else None
-
-      case ByteCodeAndStorageSync if estimatedTotalSlots > 0 =>
-        // ETA based on storage (the longer phase)
-        val remaining = estimatedTotalSlots - storageSlotsSynced
-        val throughput = calculateRecentThroughput(slotsHistory)
-        if (throughput > 0 && remaining > 0) {
-          Some((remaining / throughput).toLong)
-        } else None
-
-      case StorageRangeSync if estimatedTotalSlots > 0 =>
-        val remaining = estimatedTotalSlots - storageSlotsSynced
-        val throughput = calculateRecentThroughput(slotsHistory)
-        if (throughput > 0 && remaining > 0) {
-          Some((remaining / throughput).toLong)
-        } else None
-
-      case _ => None
-    }
-  }
-
-  /** Format ETA as human-readable string */
-  private def formatETA(seconds: Long): String =
-    if (seconds < 60) s"${seconds}s"
-    else if (seconds < 3600) s"${seconds / 60}m ${seconds % 60}s"
-    else s"${seconds / 3600}h ${(seconds % 3600) / 60}m"
-
-  /** Log current progress.
-    *
-    * Synchronized to ensure consistent snapshot of state when logging.
-    */
-  def logProgress(): Unit = synchronized {
-    val progress = currentProgress
-    val etaStr = calculateETA.map(eta => s", ETA: ${formatETA(eta)}").getOrElse("")
-
-    // Update Prometheus metrics
-    SNAPSyncMetrics.measure(progress)
-
-    log.info(s"📈 SNAP Sync Progress: ${progress.formattedString}$etaStr")
-    lastLogTime = System.currentTimeMillis()
-  }
-
-  def currentProgress: SyncProgress = synchronized {
-    val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
-    val phaseElapsed = (System.currentTimeMillis() - phaseStartTime) / 1000.0
-
-    // Calculate overall throughput (since start)
-    val overallAccountsPerSec = if (elapsed > 0) accountsSynced / elapsed else 0
-    val overallBytecodesPerSec = if (elapsed > 0) bytecodesDownloaded / elapsed else 0
-    val overallSlotsPerSec = if (elapsed > 0) storageSlotsSynced / elapsed else 0
-    val overallNodesPerSec = if (elapsed > 0) nodesHealed / elapsed else 0
-
-    // Calculate recent throughput (last 60 seconds)
-    val recentAccountsPerSec = calculateRecentThroughput(accountsHistory)
-    val recentBytecodesPerSec = calculateRecentThroughput(bytecodesHistory)
-    val recentSlotsPerSec = calculateRecentThroughput(slotsHistory)
-    val recentNodesPerSec = calculateRecentThroughput(nodesHistory)
-
-    // Calculate progress percentage for current phase
-    val phaseProgress = currentPhaseState match {
-      case AccountRangeSync if estimatedTotalAccounts > 0 =>
-        (accountsSynced.toDouble / estimatedTotalAccounts * 100).toInt
-      case ByteCodeSync if estimatedTotalBytecodes > 0 =>
-        (bytecodesDownloaded.toDouble / estimatedTotalBytecodes * 100).toInt
-      case ByteCodeAndStorageSync if estimatedTotalSlots > 0 =>
-        // Use storage progress as the overall indicator (it's the longer phase)
-        (storageSlotsSynced.toDouble / estimatedTotalSlots * 100).toInt
-      case StorageRangeSync if estimatedTotalSlots > 0 =>
-        (storageSlotsSynced.toDouble / estimatedTotalSlots * 100).toInt
-      case _ => 0
-    }
-
-    val finalizeElapsedSec =
-      if (finalizingTrie) ((System.currentTimeMillis() - finalizeStartTimeMs) / 1000.0).toInt else 0
-
-    SyncProgress(
-      phase = currentPhaseState,
-      accountsSynced = accountsSynced,
-      bytecodesDownloaded = bytecodesDownloaded,
-      storageSlotsSynced = storageSlotsSynced,
-      nodesHealed = nodesHealed,
-      elapsedSeconds = elapsed,
-      phaseElapsedSeconds = phaseElapsed,
-      accountsPerSec = overallAccountsPerSec,
-      bytecodesPerSec = overallBytecodesPerSec,
-      slotsPerSec = overallSlotsPerSec,
-      nodesPerSec = overallNodesPerSec,
-      recentAccountsPerSec = recentAccountsPerSec,
-      recentBytecodesPerSec = recentBytecodesPerSec,
-      recentSlotsPerSec = recentSlotsPerSec,
-      recentNodesPerSec = recentNodesPerSec,
-      phaseProgress = phaseProgress,
-      estimatedTotalAccounts = estimatedTotalAccounts,
-      estimatedTotalBytecodes = estimatedTotalBytecodes,
-      estimatedTotalSlots = estimatedTotalSlots,
-      startTime = startTime,
-      phaseStartTime = phaseStartTime,
-      isFinalizingTrie = finalizingTrie,
-      finalizeElapsedSeconds = finalizeElapsedSec,
-      storageContractsCompleted = storageContractsCompleted,
-      storageContractsTotal = storageContractsTotal,
-      chainHeaders = chainHeaders,
-      chainBodies = chainBodies,
-      chainReceipts = chainReceipts,
-      chainTarget = chainTarget,
-      bytecodeComplete = bytecodesDone
-    )
-  }
-}
-
-case class SyncProgress(
-    phase: SNAPSyncController.SyncPhase,
-    accountsSynced: Long,
-    bytecodesDownloaded: Long,
-    storageSlotsSynced: Long,
-    nodesHealed: Long,
-    elapsedSeconds: Double,
-    phaseElapsedSeconds: Double,
-    accountsPerSec: Double,
-    bytecodesPerSec: Double,
-    slotsPerSec: Double,
-    nodesPerSec: Double,
-    recentAccountsPerSec: Double,
-    recentBytecodesPerSec: Double,
-    recentSlotsPerSec: Double,
-    recentNodesPerSec: Double,
-    phaseProgress: Int,
-    estimatedTotalAccounts: Long,
-    estimatedTotalBytecodes: Long,
-    estimatedTotalSlots: Long,
-    startTime: Long,
-    phaseStartTime: Long,
-    isFinalizingTrie: Boolean = false,
-    finalizeElapsedSeconds: Int = 0,
-    storageContractsCompleted: Int = 0,
-    storageContractsTotal: Int = 0,
-    chainHeaders: BigInt = BigInt(0),
-    chainBodies: BigInt = BigInt(0),
-    chainReceipts: BigInt = BigInt(0),
-    chainTarget: BigInt = BigInt(0),
-    bytecodeComplete: Boolean = false
-) {
-
-  private def wormChasesBrainBar: String = {
-    import SNAPSyncController._
-
-    // 6-stage pipeline: Accounts → Code+Storage → Healing → Validation → Chain → Done
-    val stages = Vector[SyncPhase](
-      AccountRangeSync,
-      ByteCodeAndStorageSync,
-      StateHealing,
-      StateValidation,
-      ChainDownloadCompletion,
-      Completed
-    )
-
-    val stageIndex = stages.indexOf(phase) match {
-      case -1 => 0
-      case i  => i
-    }
-
-    val stageSize = if (stages.size <= 1) 1.0 else 1.0 / (stages.size - 1)
-    val withinStage =
-      if (phaseProgress > 0 && phaseProgress <= 100) (phaseProgress / 100.0) * stageSize else 0.0
-
-    val globalProgress = math.max(0.0, math.min(1.0, stageIndex * stageSize + withinStage))
-
-    val trackLen = 20
-    val wormPos = math.max(0, math.min(trackLen, math.round(globalProgress * trackLen).toInt))
-    val filled = "=" * math.max(0, wormPos)
-    val remaining = "." * (trackLen - wormPos)
-    val worm = "\ud83e\udeb1"
-    val brain = "\ud83e\udde0"
-    s"$worm[$filled$remaining]$brain"
-  }
-
-  private def formatCount(n: Long): String =
-    if (n >= 1000000) f"${n / 1000000.0}%.1fM"
-    else if (n >= 1000) f"${n / 1000.0}%.1fK"
-    else n.toString
-
-  override def toString: String =
-    s"SNAP Sync Progress: phase=$phase, accounts=$accountsSynced (${accountsPerSec.toInt}/s), " +
-      s"bytecodes=$bytecodesDownloaded (${bytecodesPerSec.toInt}/s), " +
-      s"slots=$storageSlotsSynced (${slotsPerSec.toInt}/s), nodes=$nodesHealed (${nodesPerSec.toInt}/s), " +
-      s"elapsed=${elapsedSeconds.toInt}s"
-
-  /** Format chain download status as a compact suffix. Shows header/body/receipt progress when active. */
-  private def chainStr: String =
-    if (chainTarget > 0) {
-      val pct = if (chainTarget > 0) (chainHeaders * 100 / chainTarget).toInt else 0
-      s" | chain: h=${formatBigInt(chainHeaders)}/${formatBigInt(chainTarget)}($pct%) b=${formatBigInt(chainBodies)} r=${formatBigInt(chainReceipts)}"
-    } else ""
-
-  private def formatBigInt(n: BigInt): String =
-    if (n >= 1000000) f"${(n.toDouble / 1000000)}%.1fM"
-    else if (n >= 1000) f"${(n.toDouble / 1000)}%.1fK"
-    else n.toString
-
-  private def elapsedStr: String = {
-    val s = elapsedSeconds.toInt
-    if (s >= 3600) f"${s / 3600}h${(s % 3600) / 60}%02dm"
-    else if (s >= 60) s"${s / 60}m${s % 60}s"
-    else s"${s}s"
-  }
-
-  def formattedString: String = {
-    val bar = wormChasesBrainBar
-    val chain = chainStr
-    val elapsed = elapsedStr
-
-    phase match {
-      case SNAPSyncController.AccountRangeSync if isFinalizingTrie =>
-        s"$bar FINALIZING TRIE: flushing ${formatCount(accountsSynced)} accounts to disk (${finalizeElapsedSeconds}s)$chain | $elapsed"
-
-      case SNAPSyncController.AccountRangeSync =>
-        val progressStr = if (estimatedTotalAccounts > 0) s" ${phaseProgress}%" else ""
-        val totalStr = if (estimatedTotalAccounts > 0) s"/~${formatCount(estimatedTotalAccounts)}" else ""
-        s"$bar Accounts$progressStr: ${formatCount(accountsSynced)}$totalStr @ ${accountsPerSec.toInt}/s$chain | $elapsed"
-
-      case SNAPSyncController.ByteCodeSync =>
-        val progressStr = if (estimatedTotalBytecodes > 0) s" ${phaseProgress}%" else ""
-        val totalStr = if (estimatedTotalBytecodes > 0) s"/${formatCount(estimatedTotalBytecodes)}" else ""
-        s"$bar ByteCode$progressStr: ${formatCount(bytecodesDownloaded)}$totalStr @ ${bytecodesPerSec.toInt}/s$chain | $elapsed"
-
-      case SNAPSyncController.ByteCodeAndStorageSync =>
-        val contractsStr =
-          if (storageContractsTotal > 0) s" (${storageContractsCompleted}/${storageContractsTotal} contracts)" else ""
-        val codeStr =
-          if (bytecodeComplete) s"codes=${formatCount(bytecodesDownloaded)} \u2714"
-          else s"codes=${formatCount(bytecodesDownloaded)} @ ${bytecodesPerSec.toInt}/s"
-        s"$bar Code+Storage: $codeStr, slots=${formatCount(storageSlotsSynced)} @ ${slotsPerSec.toInt}/s$contractsStr$chain | $elapsed"
-
-      case SNAPSyncController.StorageRangeSync =>
-        val progressStr = if (estimatedTotalSlots > 0) s" ${phaseProgress}%" else ""
-        val contractsStr =
-          if (storageContractsTotal > 0) s" (${storageContractsCompleted}/${storageContractsTotal} contracts)" else ""
-        s"$bar Storage$progressStr: ${formatCount(storageSlotsSynced)} @ ${slotsPerSec.toInt}/s$contractsStr$chain | $elapsed"
-
-      case SNAPSyncController.StateHealing =>
-        s"$bar Healing: ${formatCount(nodesHealed)} nodes @ ${nodesPerSec.toInt}/s$chain | $elapsed"
-
-      case SNAPSyncController.StateValidation =>
-        s"$bar Validating state trie...$chain | $elapsed"
-
-      case SNAPSyncController.ChainDownloadCompletion =>
-        val bodiesPct = if (chainTarget > 0) (chainBodies * 100 / chainTarget).toInt else 0
-        val receiptsPct = if (chainTarget > 0) (chainReceipts * 100 / chainTarget).toInt else 0
-        s"$bar State done, chain download (boosted): bodies=${formatBigInt(chainBodies)}/$bodiesPct% receipts=${formatBigInt(chainReceipts)}/$receiptsPct% | $elapsed"
-
-      case _ =>
-        s"$bar $phase$chain | $elapsed"
-    }
-  }
-}
