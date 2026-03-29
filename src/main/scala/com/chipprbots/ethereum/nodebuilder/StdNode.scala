@@ -59,6 +59,8 @@ abstract class BaseNode extends Node {
 
     startSyncController()
 
+    startNodeStatusReporter()
+
     startMining()
 
     startDiscoveryManager()
@@ -121,6 +123,13 @@ abstract class BaseNode extends Node {
   private[this] def startServer(): Unit = server ! ServerActor.StartServer(networkConfig.Server.listenAddress)
 
   private[this] def startSyncController(): Unit = syncController ! SyncProtocol.Start
+
+  private[this] def startNodeStatusReporter(): Unit = {
+    system.actorOf(
+      NodeStatusReporter.props(blockchainReader, syncController, peerManager, Config.Db.RocksDb.path),
+      "node-status-reporter"
+    )
+  }
 
   private[this] def startMining(): Unit = mining.startProtocol(this)
 

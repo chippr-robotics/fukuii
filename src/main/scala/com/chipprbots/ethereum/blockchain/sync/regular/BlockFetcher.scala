@@ -61,6 +61,10 @@ class BlockFetcher(
   implicit val timeout: Timeout = syncConfig.peerResponseTimeout + 2.second // some margin for actor communication
   private val log = context.log
 
+  /** Tracking for progress rate calculation in PrintStatus. */
+  private var fetchStartTime: Long = System.currentTimeMillis()
+  private var initialBlock: BigInt = 0
+
   val headersFetcher: ActorRef[HeadersFetcher.HeadersFetcherCommand] =
     context.spawn(
       HeadersFetcher(peersClient, syncConfig, context.self),
@@ -93,6 +97,8 @@ class BlockFetcher(
   override def onMessage(message: FetchCommand): Behavior[FetchCommand] =
     message match {
       case Start(importer, fromBlock) =>
+        fetchStartTime = System.currentTimeMillis()
+        initialBlock = fromBlock
         log.debug("BlockFetcher starting from block {} with importer {}", fromBlock, importer)
         val sa = context.spawn(subscribeAdapter(context.self), "fetcher-subscribe-adapter")
         peerEventBus.tell(
@@ -115,16 +121,21 @@ class BlockFetcher(
   private def processFetchCommands(state: BlockFetcherState): Behavior[FetchCommand] =
     Behaviors.receiveMessage {
       case PrintStatus =>
-        log.info("BlockFetcher status: {}", state.status)
-        log.debug("BlockFetcher detailed status: {}", state.statusDetailed)
-        log.debug(
-          "Current state - last block: {}, known top: {}, is on top: {}, ready blocks: {}, waiting headers: {}",
-          state.lastBlock,
-          state.knownTop,
-          state.isOnTop,
-          state.readyBlocks.size,
-          state.waitingHeaders.size
-        )
+        val blocksRemaining = state.knownTop - state.lastBlock
+        val imported = state.lastBlock - initialBlock
+        val elapsed = (System.currentTimeMillis() - fetchStartTime) / 1000.0
+        val rate = if (elapsed > 0) (imported.toDouble / elapsed).toLong else 0L
+        if (state.isOnTop) {
+          log.info("RegularSync: block {} (at chain tip) | ready: {}, headers: {}",
+            state.lastBlock, state.readyBlocks.size, state.waitingHeaders.size)
+        } else {
+          log.info(
+            "RegularSync: block {} / {} ({} remaining, {} blk/s) | ready: {}, headers: {}, fetching: {}/{}",
+            state.lastBlock, state.knownTop, blocksRemaining, rate,
+            state.readyBlocks.size, state.waitingHeaders.size,
+            state.isFetchingHeaders, state.isFetchingBodies
+          )
+        }
         Behaviors.same
 
       case PickBlocks(amount, replyTo) =>

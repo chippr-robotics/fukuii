@@ -116,6 +116,7 @@ class PeerManagerActor(
     case StartConnecting =>
       scheduleNodesUpdate()
       schedulePeerStatusRefresh()
+      schedulePeerSummary()
       knownNodesManager ! KnownNodesManager.GetKnownNodes
       // Also request discovered/bootstrap nodes immediately. On a fresh node, KnownNodes is empty
       // but bootstrap/static nodes are available as alreadyDiscoveredNodes in PeerDiscoveryManager.
@@ -163,6 +164,17 @@ class PeerManagerActor(
       StaticPeerCheckInterval,
       self,
       CheckStaticPeers
+    )
+  }
+
+  /** Schedule periodic peer summary log (every 60s). */
+  private def schedulePeerSummary(): Unit = {
+    implicit val ec = context.dispatcher
+    scheduler.scheduleWithFixedDelay(
+      60.seconds,
+      60.seconds,
+      self,
+      PeerSummaryTick
     )
   }
 
@@ -396,6 +408,17 @@ class PeerManagerActor(
 
     case RefreshPeerStatuses =>
       refreshPeerStatusCache(connectedPeers)
+
+    case PeerSummaryTick =>
+      val total = connectedPeers.handshakedPeersCount
+      if (total > 0) {
+        val inbound = connectedPeers.incomingHandshakedPeersCount
+        val outbound = connectedPeers.outgoingHandshakedPeersCount
+        val pending = connectedPeers.peers.size - total
+        log.info("Peers: {} connected ({} in, {} out, {} pending)", total, inbound, outbound, pending)
+      } else if (log.isDebugEnabled) {
+        log.debug("Peers: 0 connected ({} pending)", connectedPeers.peers.size)
+      }
 
     case PeerStatusCacheUpdated(statuses) =>
       peerStatusCache = statuses.map { case (peer, status) => peer.id -> status }
@@ -793,6 +816,7 @@ object PeerManagerActor {
   case class PruneIncomingPeers(stats: PeerStatisticsActor.StatsForAll)
 
   case object RefreshPeerStatuses
+  case object PeerSummaryTick
   private case class PeerStatusCacheUpdated(statuses: Map[Peer, PeerActor.Status])
 
   /** Number of new connections the node should try to open at any given time. */

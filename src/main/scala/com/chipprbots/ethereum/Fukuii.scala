@@ -52,6 +52,19 @@ object Fukuii extends Logger {
 
     log.info("Fukuii app {}", Config.clientVersion)
     log.info("Using network {}", Config.blockchains.network)
+    {
+      val syncConf = Config.config.getConfig("sync")
+      val doSnap = scala.util.Try(syncConf.getBoolean("do-snap-sync")).getOrElse(false)
+      val doFast = scala.util.Try(syncConf.getBoolean("do-fast-sync")).getOrElse(false)
+      val mode = if (doSnap) "SNAP" else if (doFast) "fast" else "regular"
+      log.info("Sync mode: {}", mode)
+    }
+    log.info("Datadir: {}", Config.Db.RocksDb.path)
+    log.info(
+      "JVM: {} MB heap max, {} cores available",
+      Runtime.getRuntime.maxMemory / 1048576,
+      Runtime.getRuntime.availableProcessors
+    )
 
     // Update TUI with network info
     tui.foreach { ui =>
