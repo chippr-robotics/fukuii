@@ -534,7 +534,7 @@ class SNAPSyncController(
         checkAllDownloadsComplete()
       }
 
-    case ByteCodeSyncComplete =>
+    case ByteCodeSyncComplete if !bytecodePhaseComplete =>
       bytecodePhaseComplete = true
       progressMonitor.setBytecodeComplete()
       val downloaded = progressMonitor.currentProgress.bytecodesDownloaded
@@ -551,7 +551,7 @@ class SNAPSyncController(
       }
       checkAllDownloadsComplete()
 
-    case StorageRangeSyncComplete =>
+    case StorageRangeSyncComplete if !storagePhaseComplete =>
       storagePhaseComplete = true
       log.info(s"Storage range sync complete. ByteCode: $bytecodePhaseComplete, Accounts: $accountsComplete")
       checkAllDownloadsComplete()
