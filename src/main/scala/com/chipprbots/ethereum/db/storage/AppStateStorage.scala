@@ -270,6 +270,14 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putSnapSyncStorageFilePath(path: String): DataSourceBatchUpdate =
     put(Keys.SnapSyncStorageFilePath, path)
 
+  /** Get the persisted path to the completed storage accounts file (R6 crash recovery). */
+  def getSnapSyncCompletedStoragePath(): Option[String] =
+    get(Keys.SnapSyncCompletedStoragePath).filter(_.nonEmpty)
+
+  /** Persist the path to the completed storage accounts file for crash recovery. */
+  def putSnapSyncCompletedStoragePath(path: String): DataSourceBatchUpdate =
+    put(Keys.SnapSyncCompletedStoragePath, path)
+
   /** Get the finalized account trie root hash produced by finalizeTrie().
     * This may differ from the pivot block header's stateRoot after pivot refreshes.
     */
@@ -328,6 +336,7 @@ object AppStateStorage {
     val SnapSyncAccountsComplete = "SnapSyncAccountsComplete"
     val SnapSyncCodeHashesPath = "SnapSyncCodeHashesPath"
     val SnapSyncStorageFilePath = "SnapSyncStorageFilePath"
+    val SnapSyncCompletedStoragePath = "SnapSyncCompletedStoragePath"
     val SnapSyncFinalizedRoot = "SnapSyncFinalizedRoot"
     val CleanShutdown = "CleanShutdown"
     val LastSafeBlock = "LastSafeBlock"

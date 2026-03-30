@@ -147,6 +147,17 @@ object Messages {
     */
   case class StoragePivotRefreshed(newStateRoot: ByteString) extends StorageRangeCoordinatorMessage
 
+  /** Pre-populate completedAccountHashes on recovery. Sent by controller before streaming
+    * storage tasks so that already-completed accounts are skipped.
+    */
+  case class InitCompletedStorageAccounts(hashes: Set[ByteString]) extends StorageRangeCoordinatorMessage
+
+  /** Request the coordinator to report its completed-accounts file path. */
+  case object GetCompletedStorageFilePath extends StorageRangeCoordinatorMessage
+
+  /** Response containing the path to the completed-accounts file (32-byte entries). */
+  case class CompletedStorageFilePath(filePath: java.nio.file.Path)
+
   /** Signal that no more storage tasks will arrive (all accounts downloaded). Coordinator may now report completion
     * when pending + active tasks drain.
     */

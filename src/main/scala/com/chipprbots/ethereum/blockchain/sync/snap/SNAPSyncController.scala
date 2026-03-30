@@ -533,6 +533,21 @@ class SNAPSyncController(
             }
         }
 
+        // Persist completed-storage-accounts file path for R6 crash recovery
+        storageRangeCoordinator.foreach { coordinator =>
+          import org.apache.pekko.pattern.ask
+          import org.apache.pekko.util.Timeout
+          implicit val timeout: Timeout = Timeout(5.seconds)
+          (coordinator ? actors.Messages.GetCompletedStorageFilePath)
+            .mapTo[actors.Messages.CompletedStorageFilePath]
+            .foreach { info =>
+              if (info.filePath != null) {
+                appStateStorage.putSnapSyncCompletedStoragePath(info.filePath.toString).commit()
+                log.info(s"Persisted completed-storage file path for recovery: ${info.filePath}")
+              }
+            }
+        }
+
         // Clear persisted range progress — account phase is done, no need to resume it
         appStateStorage.putSnapSyncProgress("").commit()
         preservedRangeProgress = Map.empty
@@ -1129,6 +1144,29 @@ class SNAPSyncController(
             // Recovery budget: accounts done, bytecode=2, storage=3 (total 5 per peer)
             bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(2))
 
+            // R6 fix: Load completed storage accounts from persisted file to avoid re-downloading
+            val completedStoragePath = appStateStorage.getSnapSyncCompletedStoragePath()
+            completedStoragePath.foreach { pathStr =>
+              val filePath = java.nio.file.Paths.get(pathStr)
+              if (java.nio.file.Files.exists(filePath)) {
+                val completedHashes = mutable.Set[ByteString]()
+                val raf = new java.io.RandomAccessFile(filePath.toFile, "r")
+                try {
+                  val buf = new Array[Byte](32)
+                  while (raf.getFilePointer < raf.length()) {
+                    raf.readFully(buf)
+                    completedHashes += ByteString(buf.clone())
+                  }
+                } finally raf.close()
+                if (completedHashes.nonEmpty) {
+                  storageRangeCoordinator.foreach(_ ! actors.Messages.InitCompletedStorageAccounts(completedHashes.toSet))
+                  log.info(s"Recovery: loaded ${completedHashes.size} completed storage accounts from $filePath")
+                }
+              } else {
+                log.info(s"Recovery: completed-storage file $filePath not found (no prior completions to restore)")
+              }
+            }
+
             // Stream storage tasks from persisted file if available
             savedStoragePath.foreach { pathStr =>
               val filePath = java.nio.file.Paths.get(pathStr)
@@ -1571,6 +1609,7 @@ class SNAPSyncController(
     appStateStorage.putSnapSyncProgress("").commit()
     appStateStorage.putSnapSyncAccountsComplete(false).commit()
     appStateStorage.putSnapSyncStorageFilePath("").commit()
+    appStateStorage.putSnapSyncCompletedStoragePath("").commit()
     preservedRangeProgress = Map.empty
     preservedAtPivotBlock = None
 
@@ -2458,6 +2497,7 @@ class SNAPSyncController(
     storagePhaseComplete = false
     appStateStorage.putSnapSyncAccountsComplete(false).commit()
     appStateStorage.putSnapSyncStorageFilePath("").commit()
+    appStateStorage.putSnapSyncCompletedStoragePath("").commit()
 
     // Reset pivot/state root and storage so a new selection is committed
     pivotBlock = None

@@ -304,15 +304,25 @@ class TrieNodeHealingCoordinator(
   }
 
   private def queueNodes(pathsAndHashes: Seq[(Seq[ByteString], ByteString)]): Unit = {
+    var skippedExisting = 0
     val entries = pathsAndHashes.collect {
       case (pathset, hash) if !pendingHashSet.contains(hash) =>
-        pendingHashSet += hash
-        HealingEntry(pathset = pathset, hash = hash)
-    }
-    val deduped = pathsAndHashes.size - entries.size
+        // R5 fix: Check if the node already exists in storage (downloaded during account/storage phase).
+        // mptStorage.get() throws MissingRootNodeException for missing nodes — fast O(1) RocksDB lookup.
+        val alreadyExists = try { mptStorage.get(hash.toArray); true } catch { case _: Exception => false }
+        if (alreadyExists) {
+          skippedExisting += 1
+          None
+        } else {
+          pendingHashSet += hash
+          Some(HealingEntry(pathset = pathset, hash = hash))
+        }
+    }.flatten
+    val deduped = pathsAndHashes.size - entries.size - skippedExisting
     pendingTasks = pendingTasks ++ entries
     val dedupStr = if (deduped > 0) s" ($deduped duplicates filtered)" else ""
-    log.info(s"Queued ${entries.size} nodes for healing$dedupStr. Total pending: ${pendingTasks.size}")
+    val existsStr = if (skippedExisting > 0) s" ($skippedExisting already in storage)" else ""
+    log.info(s"Queued ${entries.size} nodes for healing$dedupStr$existsStr. Total pending: ${pendingTasks.size}")
   }
 
   /** Update healing rate EMA and adjust throttle (geth p2p/msgrate alignment).

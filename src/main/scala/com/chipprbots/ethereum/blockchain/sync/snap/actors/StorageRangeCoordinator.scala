@@ -4,6 +4,9 @@ import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props, SupervisorS
 import org.apache.pekko.actor.SupervisorStrategy._
 import org.apache.pekko.util.ByteString
 
+import java.io.{BufferedOutputStream, FileOutputStream}
+import java.nio.file.{Files, Path}
+
 import scala.collection.mutable
 import scala.concurrent.duration._
 import scala.math.Ordered.orderingToOrdered
@@ -91,8 +94,13 @@ class StorageRangeCoordinator(
   // Contract completion tracking for progress estimation.
   // totalStorageContracts counts unique contracts added via AddStorageTasks.
   // completedAccountHashes tracks unique contracts that have been fully synced.
+  // R6 fix: File-backed persistence — completedAccountHashes are appended to a temp file
+  // so crash recovery can skip already-completed accounts instead of re-downloading everything.
   private var totalStorageContracts: Int = 0
   private val completedAccountHashes = mutable.Set[ByteString]()
+  private val completedAccountsFile: Path = Files.createTempFile("fukuii-completed-storage-", ".bin")
+  private val completedAccountsOut = new BufferedOutputStream(new FileOutputStream(completedAccountsFile.toFile), 32768)
+  private var completedAccountsFileCount: Long = 0
 
   // Pivot refresh backoff: prevents rapid refresh loops when no peers can serve any recent root.
   // After each unproductive refresh (one that doesn't yield real slot data), the backoff interval
@@ -499,8 +507,21 @@ class StorageRangeCoordinator(
     }
   }
 
-  /** Shut down the trie builder thread pool when the actor stops. */
+  /** Record a completed account hash: add to in-memory set AND append to file for crash recovery. */
+  private def markAccountCompleted(accountHash: ByteString): Unit = {
+    if (completedAccountHashes.add(accountHash)) {
+      completedAccountsOut.write(accountHash.toArray.padTo(32, 0.toByte), 0, 32)
+      completedAccountsFileCount += 1
+      // Flush periodically (every 100 completions) to limit data loss on crash
+      if (completedAccountsFileCount % 100 == 0) {
+        completedAccountsOut.flush()
+      }
+    }
+  }
+
+  /** Shut down the trie builder thread pool and close the completed-accounts file. */
   override def postStop(): Unit = {
+    try { completedAccountsOut.flush(); completedAccountsOut.close() } catch { case _: Exception => }
     trieBuilderPool.shutdown()
     super.postStop()
   }
@@ -525,6 +546,20 @@ class StorageRangeCoordinator(
   override def receive: Receive = {
     case StartStorageRangeSync(root) =>
       log.info(s"Starting storage range sync for state root ${root.take(8).toHex}")
+
+    case InitCompletedStorageAccounts(hashes) =>
+      completedAccountHashes ++= hashes
+      // Write all recovered hashes to the new file so it's a superset going forward
+      hashes.foreach { h =>
+        completedAccountsOut.write(h.toArray.padTo(32, 0.toByte), 0, 32)
+        completedAccountsFileCount += 1
+      }
+      completedAccountsOut.flush()
+      log.info(s"Initialized ${hashes.size} completed storage accounts from recovery")
+
+    case GetCompletedStorageFilePath =>
+      try completedAccountsOut.flush() catch { case _: Exception => }
+      sender() ! CompletedStorageFilePath(completedAccountsFile)
 
     case AddStorageTasks(storageTasks) =>
       tasks.enqueueAll(storageTasks)
@@ -730,7 +765,7 @@ class StorageRangeCoordinator(
       } else {
         accountHashes.foreach { hash =>
           accountsInTrieConstruction.remove(hash)
-          completedAccountHashes.add(hash)
+          markAccountCompleted(hash)
         }
         val rate = if (elapsedMs > 0) totalSlots * 1000 / elapsedMs else totalSlots
         log.info(
@@ -994,7 +1029,7 @@ class StorageRangeCoordinator(
             // Mark task done — healing phase will fill any gaps
             task.done = true
             completedTasks += task
-            completedAccountHashes.add(task.accountHash)
+            markAccountCompleted(task.accountHash)
           } else {
             if (failCount == 1) {
               log.warning(s"Storage proof verification failed for account ${task.accountString}: $error")
@@ -1042,7 +1077,7 @@ class StorageRangeCoordinator(
                 // smallContractThreshold: ~95% of ETC contracts have < 1024 slots.
                 // MPT built from flat data in post-download Merkleization pass or healing.
                 writeSmallContractFlatOnly(task.accountHash, slotBuffer)
-                completedAccountHashes.add(task.accountHash)
+                markAccountCompleted(task.accountHash)
                 log.debug(
                   s"Account ${task.accountHash.take(4).toArray.map("%02x".format(_)).mkString}: " +
                     s"flat-only write (${slotBuffer.size} slots" +
