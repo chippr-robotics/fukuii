@@ -18,7 +18,7 @@ import com.chipprbots.ethereum.domain.Account
   */
 case class AccountTask(
     var next: ByteString,
-    last: ByteString,
+    var last: ByteString,
     var rootHash: ByteString,
     // Runtime fields
     var pending: Boolean = false,

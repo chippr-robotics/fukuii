@@ -651,17 +651,27 @@ class StorageRangeCoordinator(
       stateRoot = newStateRoot
 
       // Cancel all in-flight requests: their responses are for the old root and will
-      // contaminate stateless detection if processed. Re-queue tasks for the new root.
+      // contaminate stateless detection if processed. Re-queue tasks for the new root,
+      // but skip tasks for accounts whose storage has already been fully downloaded —
+      // re-downloading completed storage under a new root is wasteful (R2 redundancy fix).
       val cancelledCount = activeTasks.size
+      var requeued = 0
+      var skippedCompleted = 0
       activeTasks.values.foreach { case (_, batchTasks, _) =>
         batchTasks.foreach { task =>
-          task.pending = false
-          tasks.enqueue(task)
+          if (completedAccountHashes.contains(task.accountHash)) {
+            skippedCompleted += 1
+          } else {
+            task.pending = false
+            tasks.enqueue(task)
+            requeued += 1
+          }
         }
       }
       activeTasks.clear()
       if (cancelledCount > 0) {
-        log.info(s"Cancelled $cancelledCount in-flight storage requests (stale root)")
+        log.info(s"Cancelled $cancelledCount in-flight storage requests (stale root): " +
+          s"$requeued re-queued, $skippedCompleted skipped (already completed)")
       }
 
       // Clear all per-peer adaptive state — fresh start with new root

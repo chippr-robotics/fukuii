@@ -235,6 +235,10 @@ class AccountRangeCoordinator(
       t.last -> (end - start).max(BigInt(1))
     }.toMap
   }
+  // Snapshot of original range boundaries (immutable). Work-stealing mutates task.last,
+  // so originalRangeFor() needs these preserved values to map sub-ranges back to parents.
+  private val originalRangeBoundaries: Seq[BigInt] =
+    allInitialTasks.map(t => BigInt(1, t.last.toArray.padTo(32, 0.toByte)))
 
   // Contract accounts persisted to temp files to avoid unbounded memory growth.
   // On ETC mainnet ~20% of ~67M accounts are contracts — ~13M entries × 64 bytes each
@@ -877,10 +881,12 @@ class AccountRangeCoordinator(
       if (accountsDownloaded - lastProgressLogAt >= ProgressLogInterval) {
         val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
         val rate = if (elapsed > 0) (accountsDownloaded / elapsed).toLong else 0L
-        // Per-range progress from cumulative counters (handles work-stealing correctly)
-        val rangeDetails = allInitialTasks.zipWithIndex.map { case (initTask, idx) =>
-          val total = rangeKeyspaceTotal.getOrElse(initTask.last, BigInt(1))
-          val consumed = consumedPerRange.getOrElse(initTask.last, BigInt(0))
+        // Per-range progress from cumulative counters (handles work-stealing correctly).
+        // Uses rangeKeyspaceTotal keys (immutable, captured at init) — safe after work-steal mutations.
+        val rangeDetails = rangeKeyspaceTotal.toSeq.sortBy { case (key, _) =>
+          BigInt(1, key.toArray.padTo(32, 0.toByte))
+        }.zipWithIndex.map { case ((rangeKey, total), idx) =>
+          val consumed = consumedPerRange.getOrElse(rangeKey, BigInt(0))
           val pct = if (total <= 0) 100.0 else (consumed * 10000 / total).toDouble / 100.0
           s"R${idx + 1}:${"%.1f".format(math.min(pct, 100.0))}%%"
         }.mkString(", ")
@@ -982,19 +988,20 @@ class AccountRangeCoordinator(
           last = victim.last,
           rootHash = stateRoot
         )
-        // Shrink the victim's range to [victim.next, midpoint)
-        // We can't modify `last` (it's val), but we can adjust by creating a replacement.
-        // Since victim is an active task (in-flight request), we don't modify it —
-        // the current request continues on [victim.next, victim.last] and the response
-        // may include accounts beyond midpoint. When it re-queues with updated `next`,
-        // it will naturally overlap with the stolen task's range.
-        // The stolen task starts fresh from midpoint, and the priority queue handles ordering.
+        // Shrink the victim's range to [victim.next, midpoint) so ranges are non-overlapping.
+        // The in-flight request may return accounts beyond midpoint (sent with original `last`),
+        // but updateTaskProgress will see next >= task.last and complete the task — any accounts
+        // beyond midpoint are stored idempotently but don't create a continuation.
+        // This eliminates the ~1.7x redundant traversal from overlapping ranges (R1 fix).
+        val oldLast = victim.last
+        victim.last = midpointBytes
 
         pendingTasks.enqueue(stolenTask)
         log.info(
-          s"WORK-STEAL: Split largest active range ${victim.rangeString} at midpoint " +
+          s"WORK-STEAL: Split active range at midpoint " +
             s"${midpointBytes.take(4).toArray.map("%02x".format(_)).mkString}. " +
-            s"New task: ${stolenTask.rangeString} (${pendingTasks.size} pending)"
+            s"Victim: ${victim.rangeString} (truncated from ${oldLast.take(4).toArray.map("%02x".format(_)).mkString}), " +
+            s"Stolen: ${stolenTask.rangeString} (${pendingTasks.size} pending)"
         )
 
       case None =>
@@ -1169,16 +1176,17 @@ class AccountRangeCoordinator(
   /** Map a task to its original range boundary. Stolen sub-ranges fall within
     * one of the initial ranges; find it by checking which original range contains
     * the task's `last` value.
+    * Uses immutable `originalRangeBoundaries` snapshot — safe even after work-stealing
+    * mutates task.last on victim tasks.
     */
   private def originalRangeFor(task: AccountTask): ByteString = {
     val taskLast = BigInt(1, task.last.toArray.padTo(32, 0.toByte))
-    allInitialTasks.find { init =>
-      val initLast = BigInt(1, init.last.toArray.padTo(32, 0.toByte))
-      val initStart = BigInt(1, init.next.toArray.padTo(32, 0.toByte))
-      // Task belongs to this range if task.last <= init.last
-      // (stolen ranges always have last <= parent's original last)
-      taskLast <= initLast
-    }.map(_.last).getOrElse(allInitialTasks.last.last)
+    val boundaryBigInt = originalRangeBoundaries.find(_ >= taskLast)
+      .getOrElse(originalRangeBoundaries.last)
+    // Convert back to ByteString key matching rangeKeyspaceTotal keys
+    val bytes = boundaryBigInt.toByteArray
+    val unsigned = if (bytes.nonEmpty && bytes(0) == 0) bytes.drop(1) else bytes
+    ByteString(Array.fill(32 - unsigned.length.min(32))(0.toByte) ++ unsigned.takeRight(32))
   }
 
   private def calculateProgress(): AccountRangeStats = {
