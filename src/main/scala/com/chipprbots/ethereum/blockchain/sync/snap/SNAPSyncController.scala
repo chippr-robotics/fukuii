@@ -670,6 +670,24 @@ class SNAPSyncController(
     // we're still in ByteCodeAndStorageSync phase (would have transitioned if truly complete).
     val isTimeoutResponse = stats.tasksPending == 0 && stats.tasksActive == 0 && stats.tasksCompleted == 0 && stats.elapsedTimeMs == 0
     val workRemaining = isTimeoutResponse || stats.tasksPending > 0 || stats.tasksActive > 0
+
+    // Special case: coordinator reports 0 pending + 0 active but never sent StorageRangeSyncComplete.
+    // This means trie construction is stuck (accountsInTrieConstruction/pendingAccountSlots not empty).
+    // After the stagnation threshold, force-complete to unstick it.
+    if (!workRemaining && !isTimeoutResponse && !storagePhaseComplete) {
+      val now = System.currentTimeMillis()
+      val stalledForMs = now - lastStorageProgressMs
+      if (stalledForMs > StorageStagnationThreshold.toMillis) {
+        log.warning(
+          s"Storage coordinator reports 0 pending/0 active but never sent StorageRangeSyncComplete " +
+            s"(stalled ${stalledForMs / 1000}s). Trie construction likely stuck. Force-completing."
+        )
+        storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
+        storageStagnationCheckTask.foreach(_.cancel()); storageStagnationCheckTask = None
+        storageRangeCoordinator.foreach(_ ! actors.Messages.ForceCompleteStorage)
+      }
+      return
+    }
     if (!workRemaining) return
 
     val now = System.currentTimeMillis()
@@ -1819,6 +1837,7 @@ class SNAPSyncController(
       import org.apache.pekko.pattern.{ask, pipe}
       import org.apache.pekko.util.Timeout
       implicit val timeout: Timeout = Timeout(2.seconds)
+      log.debug(s"Stagnation check: phase=$currentPhase, stalledMs=${System.currentTimeMillis() - lastStorageProgressMs}")
 
       currentPhase match {
         case AccountRangeSync =>
@@ -1855,8 +1874,11 @@ class SNAPSyncController(
       super.aroundReceive(receive, msg)
 
     case StorageCoordinatorProgress(stats) if currentPhase == ByteCodeAndStorageSync =>
-      // Always call stagnation check — even if coordinator times out and returns zeros,
-      // the stagnation timer should still count. The coordinator itself checks workRemaining.
+      log.info(
+        s"Storage stagnation check: pending=${stats.tasksPending}, active=${stats.tasksActive}, " +
+          s"completed=${stats.tasksCompleted}, stalledMs=${System.currentTimeMillis() - lastStorageProgressMs}, " +
+          s"refreshAttempted=$storageStagnationRefreshAttempted"
+      )
       maybeRestartIfStorageStagnant(stats)
       super.aroundReceive(receive, msg)
 
