@@ -665,7 +665,11 @@ class SNAPSyncController(
   private def maybeRestartIfStorageStagnant(stats: actors.StorageRangeCoordinator.SyncStatistics): Unit = {
     if (currentPhase != ByteCodeAndStorageSync) return
 
-    val workRemaining = stats.tasksPending > 0 || stats.tasksActive > 0
+    // If coordinator responded with real stats, check if work remains.
+    // If all stats are zero (ask timeout), assume work IS remaining since
+    // we're still in ByteCodeAndStorageSync phase (would have transitioned if truly complete).
+    val isTimeoutResponse = stats.tasksPending == 0 && stats.tasksActive == 0 && stats.tasksCompleted == 0 && stats.elapsedTimeMs == 0
+    val workRemaining = isTimeoutResponse || stats.tasksPending > 0 || stats.tasksActive > 0
     if (!workRemaining) return
 
     val now = System.currentTimeMillis()
@@ -1851,8 +1855,9 @@ class SNAPSyncController(
       super.aroundReceive(receive, msg)
 
     case StorageCoordinatorProgress(stats) if currentPhase == ByteCodeAndStorageSync =>
-      if (stats.elapsedTimeMs > 0 || stats.tasksPending > 0 || stats.tasksActive > 0 || stats.tasksCompleted > 0)
-        maybeRestartIfStorageStagnant(stats)
+      // Always call stagnation check — even if coordinator times out and returns zeros,
+      // the stagnation timer should still count. The coordinator itself checks workRemaining.
+      maybeRestartIfStorageStagnant(stats)
       super.aroundReceive(receive, msg)
 
     case _ =>
