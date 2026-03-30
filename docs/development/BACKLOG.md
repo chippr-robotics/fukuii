@@ -2,10 +2,10 @@
 
 Comprehensive inventory of remaining work, verified against the codebase and compared to reference clients (go-ethereum, nethermind, core-geth, Besu, Erigon).
 
-**Branch:** `march-onward` (~107 commits ahead of upstream main, at `19c27fe70`)
+**Branch:** `march-onward` (131 commits ahead of upstream main, at `cf16873eb`)
 **Test baseline:** 2,706 unit tests pass, 0 failed, 0 ignored; 12/12 EVM consensus; 8/8 integration (24 suites, 16 empty — need ethereum/tests fixtures)
 **RPC methods:** 135 standard + 8 MCP protocol = 143 total, all wired to `JsonRpcController`, zero orphaned
-**Last audited:** 2026-03-27
+**Last audited:** 2026-03-30
 
 ---
 
@@ -335,34 +335,20 @@ These items address specific requirements identified by analyzing the three main
 
 These items address code-level gaps identified by analyzing cross-chain bridge protocols (CCIP, CCTP, LayerZero, Axelar, Wormhole), oracle providers (Chainlink, RedStone, Tellor, Chronicle, Pyth, API3), and DApp infrastructure requirements. Small changes that unblock multiple protocol integrations.
 
-#### M-034: Support `finalized` and `safe` block tags (EIP-1898 extension)
+#### M-034: Support `finalized` and `safe` block tags (EIP-1898 extension) ✅ DONE
 
 - **Priority:** Medium | **Risk:** Low
-- **Description:** `JsonMethodsImplicits.scala:135-137` only handles `earliest`, `latest`, `pending` block tags. Cross-chain bridges (CCIP, LayerZero, Axelar, Wormhole) all query the `finalized` tag to determine when a block is safe to act on. On PoW chains, both `finalized` and `safe` should map to `latest - N` where N is a configurable confirmation depth.
-- **Files:** `ResolveBlock.scala` (add `Finalized`/`Safe` to `BlockParam`), `JsonMethodsImplicits.scala:135-137` (add string matching), config (add `finalized-depth`/`safe-depth`)
-- **Defaults:** `finalized` = `latest - 120` (~30 min at 15s blocks), `safe` = `latest - 15` (~4 min). Configurable via `fukuii.network.rpc.finalized-depth` and `fukuii.network.rpc.safe-depth`.
-- **Note:** core-geth does not implement these tags either — Fukuii would be the first ETC client with bridge-compatible finality tags.
-- **Unblocks:** ALL cross-chain bridge integrations (CCIP, LayerZero, Axelar, Wormhole, CCTP all query `finalized`)
-- **Scope:** ~30 lines across 3 files
+- **Resolution:** Already implemented. `BlockParam.Safe` and `BlockParam.Finalized` defined in `ResolveBlock.scala`. `extractBlockParam` in `JsonMethodsImplicits.scala:138-139` handles `"safe"` and `"finalized"` strings. `resolveNumber` maps `Safe` → `latest - safe-depth` (default 15) and `Finalized` → `latest - finalized-depth` (default 120). Configurable via `fukuii.network.rpc.safe-depth` and `fukuii.network.rpc.finalized-depth`. `getBlockAtDepth` in `ResolveBlock` resolves to concrete blocks. Fukuii is the first ETC client with bridge-compatible finality tags.
 
-#### M-035: Batch RPC compatibility with rate limiting
+#### M-035: Batch RPC compatibility with rate limiting ✅ DONE (was not broken)
 
 - **Priority:** Medium | **Risk:** Low
-- **Description:** `JsonRpcHttpServer.scala:94-95` returns `MethodNotAllowed` for ALL batch requests when rate limiting is enabled. Chainlink CCIP requires batch `GetLogs` and `GetBlockByNumber`. Production nodes need rate limiting. These two features must coexist.
-- **File:** `src/main/scala/.../jsonrpc/server/http/JsonRpcHttpServer.scala:94-95`
-- **Fix:** Apply per-request rate limiting within batch processing — each request in the batch counts individually against the rate limit, matching Infura/Alchemy behavior. Remove the blanket batch rejection.
-- **Unblocks:** CCIP integration (explicitly requires batch RPC), production deployments with rate limiting enabled
-- **Scope:** ~15 lines
+- **Resolution:** Verified code at `JsonRpcHttpServer.scala:93-100` — batch requests (`entity(as[Seq[JsonRpcRequest]])`) pass through the same `rateLimit` directive as single requests. No blanket rejection. The rate limiter applies per-IP rate limiting to the batch as a whole (one HTTP request = one rate limit check). Batch processing via `parTraverse` works correctly with rate limiting enabled. The original backlog description was based on an older code version.
 
-#### M-036: `eth_getLogs` block range limit
+#### M-036: `eth_getLogs` block range limit ✅ DONE
 
 - **Priority:** Medium | **Risk:** Low
-- **Description:** `FilterManager.scala:125` recursively iterates from `fromBlock` to `toBlock` with no upper bound on the range. A single query for blocks `0` to `latest` (~21M blocks on ETC mainnet) will iterate every block sequentially, consuming unbounded CPU/IO — effectively a DoS vector. All production RPC providers cap this: Infura 2,000 blocks, Alchemy 2,000, QuickNode varies. Exchanges, bridges, and RPC providers all require this DoS protection.
-- **File:** `src/main/scala/.../jsonrpc/FilterManager.scala:125-166`
-- **Fix:** Add configurable `max-log-range` with `JsonRpcError` when exceeded. Default 10,000 blocks (generous but bounded).
-- **Config:** `fukuii.network.rpc.max-log-range = 10000`
-- **Unblocks:** Production RPC serving (exchanges, bridges, RPC providers)
-- **Scope:** ~20 lines + config entry
+- **Resolution:** Already implemented. `FilterManager.scala:43-46` defines `maxLogRange` with configurable `network.rpc.max-log-range` (default 10,000 blocks). Line 78 checks `to - from > maxLogRange` and returns `JsonRpcError.InvalidParams("Log query range N exceeds maximum (10000 blocks)")`. Matches Infura/Alchemy behavior. Configurable via `fukuii.network.rpc.max-log-range`.
 
 ### Wallet Readiness Assessment (2026-03-27)
 
@@ -761,6 +747,48 @@ Research into MEV (Flashbots, CoW Protocol), decentralized RPC protocols (DRPC, 
   4. Added configurable `tmpdir` variable to `fukuii.conf` — defaults to `${fukuii.datadir}/tmp`, independently overridable via `-Dfukuii.tmpdir=...`. `Fukuii.scala` sets `java.io.tmpdir` at JVM startup so ALL temp file paths (RocksDB JNI `.so` extraction, `Files.createTempFile()`, JFR profiles) land on the same volume as the database. `SNAPSyncController` reads from config for `AccountRangeCoordinator`. `DebugService` CPU profiler output also redirected to datadir.
 - 2,706 tests pass.
 
+#### L-019: Skip storage tasks after repeated proof verification failures ✅ DONE
+
+- **File:** `src/main/scala/.../blockchain/sync/snap/actors/StorageRangeCoordinator.scala`
+- **Priority:** Low | **Risk:** Low
+- **Status:** DONE (`469421119`) — Skip storage tasks that repeatedly fail proof verification, preventing infinite retry loops with peers that return inconsistent proofs.
+
+#### L-020: Improve SNAP coordinator progress metrics accuracy and detail ✅ DONE
+
+- **File:** `src/main/scala/.../blockchain/sync/snap/actors/AccountRangeCoordinator.scala`
+- **Priority:** Low | **Risk:** Low
+- **Status:** DONE (`24fa35293`) — More accurate progress reporting: keyspace percentage, ranges done count, pending/active task counts, worker/peer counts, accounts/sec throughput.
+
+#### L-021: Node-wide periodic status reporting and log quality improvements ✅ DONE
+
+- **File:** Multiple sync actors
+- **Priority:** Low | **Risk:** Low
+- **Status:** DONE (`d2c2664ee`) — Periodic status summary for all SNAP coordinators. Reduced redundant log spam (e.g., `UpdateMaxInFlightPerPeer`).
+
+#### L-022: Eliminate SNAP sync redundancies — non-overlapping work-steal + storage pivot dedup ✅ DONE
+
+- **Files:** `AccountRangeCoordinator.scala`, `StorageRangeCoordinator.scala`
+- **Priority:** Low | **Risk:** Medium (sync-critical)
+- **Status:** DONE (`734533c87`) — Two fixes:
+  - **R1: Non-overlapping work-steal ranges.** Old code: victim keeps `[next, last]`, stealer gets `[midpoint, last]` — both download `[midpoint, last]` (up to 50% overlap per steal). New code: victim's `last` shrunk to `midpoint`, stealer gets `[midpoint, originalLast]` — zero overlap. `AccountTask.last` changed from `val` to `var`. This was the PRIMARY cause of ETC mainnet attempt 3 stall (278% keyspace = 2.8x redundancy, effective unique rate ~530 acc/sec instead of ~1,487).
+  - **R2: Storage pivot dedup.** `StorageRangeCoordinator` skips re-downloading storage for accounts already completed before a pivot refresh. Uses `completedAccountHashes` set.
+
+#### L-022b: Persist completed storage accounts + healing pre-check (R5/R6) ✅ DONE
+
+- **Files:** `StorageRangeCoordinator.scala`, `TrieNodeHealingCoordinator.scala`, `AppStateStorage.scala`
+- **Priority:** Low | **Risk:** Low
+- **Status:** DONE (`01f8a8250`) — Two fixes:
+  - **R5: Healing mptStorage pre-check.** Before requesting trie nodes from peers, check if the node already exists in local mptStorage. Skips redundant network requests for nodes already downloaded.
+  - **R6: Crash recovery persistence.** Completed storage accounts written to file-backed storage (32-byte entries per account hash). Path persisted via `AppStateStorage.putSnapSyncCompletedStoragePath()`. On restart, completed accounts loaded and skipped. 256-block safety valve for stale data.
+
+#### L-022c: R3 task-peer cooldown + R4 cross-batch bytecode dedup ✅ DONE
+
+- **Files:** `StorageRangeCoordinator.scala`, `ByteCodeCoordinator.scala`
+- **Priority:** Low | **Risk:** Low
+- **Status:** DONE (`cf16873eb`) — Two fixes:
+  - **R3: Task-peer failure tracking.** `StorageRangeCoordinator` tracks recent task-peer failures in `Map[(accountHash, peerId), timestamp]` with 30s TTL (3x base peer cooldown). Prevents re-dispatching a timed-out storage task to the same peer. Lazy eviction during dispatch. Cleared on pivot refresh.
+  - **R4: Cross-batch bytecode dedup.** `ByteCodeCoordinator` maintains coordinator-level `HashSet[ByteString]` of downloaded codeHashes across all batches. Eliminates ~7,350 redundant bytecode requests caused by Bloom filter false positives in per-batch dedup. `filterAndDedupeCodeHashes()` checks `downloadedCodeHashes` before `seen` set. Response handler tracks successful downloads.
+
 ---
 
 ## Tier 4: FUTURE — Post-Production Roadmap
@@ -846,7 +874,7 @@ These items prepare Fukuii for institutional protocol integrations post-Olympia.
   4. Document PoW ETC block confirmation semantics (how `finalized` depth maps to security assumptions — 120 blocks ≈ 30 min for high-value cross-chain transfers)
   5. Test Axelar Gateway contract interaction patterns
 - **Output:** `docs/integrations/BRIDGE-CONFORMANCE.md`
-- **Depends on:** M-034 (finalized/safe tags), M-035 (batch + rate limit)
+- **Depends on:** M-034 ✅ (finalized/safe tags), M-035 ✅ (batch + rate limit) — prerequisites met
 - **Note:** Actual bridge deployment requires protocol governance votes (CCIP: Chainlink node operator review, Axelar: AXL holder vote, LayerZero: DVN deployment). This item provides the technical evidence for those proposals.
 
 #### F-008: Ecosystem infrastructure deployment guide
@@ -924,9 +952,9 @@ H-015 (chain split) ──┘
 H-014 (fork boundary) ─┘
 M-033 (MESS reactivation) ─┬── M-037 (dynamic confirms — needs MESS + cost model)
 M-032 (benchmarks) ────────┘
-M-034 (finalized/safe tags) ─┬── F-007 (bridge conformance)
-M-035 (batch + rate limit) ──┘
-M-036 (getLogs range limit) ── M-032 (production benchmarks)
+M-034 ✅ (finalized/safe tags) ─┬── F-007 (bridge conformance)
+M-035 ✅ (batch + rate limit) ──┘
+M-036 ✅ (getLogs range limit) ── M-032 (production benchmarks)
 F-008 (ecosystem infra guide) ── F-010 (Safe compatibility)
 M-038 (fee-market ordering) ── (future: bundle tx support)
 M-040 (private tx) ── (future: MEV documentation, bundle tx support)
@@ -948,7 +976,7 @@ M-040 (private tx) ── (future: MEV documentation, bundle tx support)
 | 8 — Fork Safety      | H-014, H-015, H-016, M-016                      | Fork boundary tests, chain split, adversarial, MESS            |
 | 9 — Sync + Network   | H-007, M-003..M-005, M-015, M-021               | Recovery, work-stealing, SNAP reorg freshness, slot validation |
 | 10 — Testing         | M-009..M-014, M-018                             | Full test suite pass, hive Olympia coverage                    |
-| 11a — Protocol Prereqs | M-034, M-035, M-036                            | finalized/safe tags, batch+ratelimit, getLogs range limit      |
+| 11a — Protocol Prereqs | M-034 ✅, M-035 ✅, M-036 ✅                   | finalized/safe tags, batch+ratelimit, getLogs range limit — ALL DONE |
 | 11b — Customer Gaps  | M-029, M-030, M-031, M-032                     | JS tracer, Blockscout compat, archive verify, benchmarks       |
 | 11c — Tx Pool Modernization | M-038, M-039                              | Fee-market ordering, nonce queuing                             |
 | 12 — MESS Defense    | M-033, M-037                                    | MESS reactivation + dynamic confirmation recommendations       |
