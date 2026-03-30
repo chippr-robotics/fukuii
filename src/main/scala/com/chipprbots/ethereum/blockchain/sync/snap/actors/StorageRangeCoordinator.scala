@@ -80,6 +80,12 @@ class StorageRangeCoordinator(
   private val peerConsecutiveTimeouts = mutable.Map[String, Int]()
   private val consecutiveTimeoutThreshold = 3 // Mark stateless after 3 consecutive timeouts
 
+  // R3: Track recent task-peer failures to avoid re-dispatching the same task to a peer that
+  // just timed out on it. Key: (accountHash, peerId), Value: failure timestamp.
+  // Entries expire after taskPeerCooldownMs (30s — 3x the base per-peer cooldown).
+  private val recentTaskPeerFailures = mutable.Map.empty[(ByteString, String), Long]
+  private val taskPeerCooldownMs: Long = 30_000L
+
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
   // This is separate from stateless peer detection — cooldowns are short and per-error-type.
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
@@ -721,6 +727,7 @@ class StorageRangeCoordinator(
       emptyResponsesByTask.clear()
       proofFailuresByTask.clear()
       proofVerifiers.clear()
+      recentTaskPeerFailures.clear()
 
       // Clear two-phase storage buffers — data for old root is stale.
       // Any in-progress trie constructions will complete harmlessly (writes are content-addressed),
@@ -809,6 +816,18 @@ class StorageRangeCoordinator(
 
     if (isPeerStateless(peer)) {
       return None
+    }
+
+    // R3: Evict expired task-peer failure entries and skip if the front task recently failed with this peer.
+    val now = System.currentTimeMillis()
+    recentTaskPeerFailures.filterInPlace { case (_, ts) => now - ts < taskPeerCooldownMs }
+    if (tasks.nonEmpty) {
+      val front = tasks.front
+      if (recentTaskPeerFailures.contains((front.accountHash, peer.id.value))) {
+        log.debug(s"R3: Skipping task for account ${front.accountHash.take(4).toArray.map("%02x".format(_)).mkString} — " +
+          s"peer ${peer.id.value} recently timed out on it")
+        return None
+      }
     }
 
     val min = ByteString(Array.fill(32)(0.toByte))
@@ -1138,8 +1157,11 @@ class StorageRangeCoordinator(
         markPeerStateless(peer)
       }
 
+      val failTs = System.currentTimeMillis()
       batchTasks.foreach { task =>
         task.pending = false
+        // R3: Record this task-peer failure so we don't immediately re-dispatch to the same peer
+        recentTaskPeerFailures.put((task.accountHash, peer.id.value), failTs)
         tasks.enqueue(task)
       }
     }

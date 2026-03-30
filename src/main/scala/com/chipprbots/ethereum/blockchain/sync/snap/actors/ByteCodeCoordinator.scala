@@ -97,6 +97,10 @@ class ByteCodeCoordinator(
   private val activeTasks = mutable.Map.empty[BigInt, ActiveByteCodeRequest] // requestId -> active request
   private val completedTasks = mutable.ArrayBuffer[ByteCodeTask]()
 
+  // R4: Track all codeHashes that have been successfully downloaded (across all batches).
+  // Eliminates ~7,350 redundant bytecode requests from cross-batch Bloom filter false positives.
+  private val downloadedCodeHashes = mutable.HashSet.empty[ByteString]
+
   // Worker pool
   private val workers = mutable.ArrayBuffer[ActorRef]()
   private val maxWorkers = 32
@@ -375,7 +379,11 @@ class ByteCodeCoordinator(
                 checkCompletion()
 
               case Right(_) =>
-                val remainingHashes = task.codeHashes.filterNot(validated.matchedHashes.contains)
+                // R4: Track successfully downloaded hashes for cross-batch dedup
+                downloadedCodeHashes ++= validated.matchedHashes
+                val remainingHashes = task.codeHashes
+                  .filterNot(validated.matchedHashes.contains)
+                  .filterNot(downloadedCodeHashes.contains)
 
                 val receivedBytes: BigInt = BigInt(response.codes.map(_.size.toLong).sum)
                 // Update per-peer budget based on observed response size.
@@ -559,12 +567,16 @@ class ByteCodeCoordinator(
     val seen = mutable.HashSet.empty[ByteString]
     var invalidCount = 0
     var dupeCount = 0
+    var alreadyDownloaded = 0
 
     val filtered = codeHashes.filter { codeHash =>
       if (codeHash.length != 32) {
         invalidCount += 1
         false
       } else if (codeHash == Account.EmptyCodeHash) {
+        false
+      } else if (downloadedCodeHashes.contains(codeHash)) {
+        alreadyDownloaded += 1
         false
       } else if (seen.contains(codeHash)) {
         dupeCount += 1
@@ -575,12 +587,12 @@ class ByteCodeCoordinator(
       }
     }
 
-    if (invalidCount > 0) {
+    if (invalidCount > 0)
       log.warning(s"Dropped $invalidCount codeHashes with non-32-byte length")
-    }
-    if (dupeCount > 0) {
+    if (dupeCount > 0)
       log.info(s"Deduplicated $dupeCount codeHashes (Bloom filter false positives)")
-    }
+    if (alreadyDownloaded > 0)
+      log.info(s"Skipped $alreadyDownloaded codeHashes already downloaded (cross-batch dedup)")
 
     filtered
   }
