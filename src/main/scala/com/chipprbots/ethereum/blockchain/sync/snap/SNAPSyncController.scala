@@ -354,10 +354,13 @@ class SNAPSyncController(
 
     case ProgressStorageSlotsSynced(count) =>
       progressMonitor.incrementStorageSlotsSynced(count)
-      lastStorageProgressMs = System.currentTimeMillis()
-      // Only reset stagnation escalation on substantial progress (>100 slots).
-      // Trickle progress from stale in-flight responses shouldn't prevent force-complete.
-      if (count > 100) storageStagnationRefreshAttempted = false
+      // Only reset stagnation timer on meaningful progress (>10 slots).
+      // Trickle progress from stale in-flight responses or pivot refresh cycles
+      // shouldn't keep the stagnation timer from eventually firing.
+      if (count > 10) {
+        lastStorageProgressMs = System.currentTimeMillis()
+        if (count > 100) storageStagnationRefreshAttempted = false
+      }
 
     case ProgressNodesHealed(count) =>
       progressMonitor.incrementNodesHealed(count)
