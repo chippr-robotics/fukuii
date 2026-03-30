@@ -2116,8 +2116,9 @@ class SNAPSyncController(
       log.warning(
         "Cannot refresh pivot: no suitable SNAP peers available. Scheduling retry in 30s."
       )
-      // Don't restart — restarting can't help with no peers, and it destroys all in-memory trie data.
-      // Schedule an explicit retry so we don't stall indefinitely waiting for coordinator backoff.
+      // Don't restart or fallback — SNAP peers are intermittent on ETC mainnet.
+      // The serve window is ~28 min; peers will reappear when new blocks are mined.
+      // Restarting can't help with no peers, and it destroys all downloaded trie data.
       pivotBootstrapRetryTask.foreach(_.cancel())
       pivotBootstrapRetryTask = Some(
         scheduler.scheduleOnce(30.seconds, self, RetryPivotRefresh)(context.dispatcher)
