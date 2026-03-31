@@ -282,13 +282,19 @@ Comprehensive inventory of remaining work, verified against the codebase and com
 
 These items address specific requirements identified by analyzing the three main client user segments: block explorers (Blockscout), centralized exchanges, and mining pools.
 
-#### M-029: JS tracer support for debug_traceTransaction (Blockscout geth-mode)
+#### M-029: Native callTracer + prestateTracer for debug_trace* (Blockscout geth-mode) ✅ DONE
 
 - **Priority:** Medium | **Risk:** Medium
-- **Description:** Blockscout's `geth` variant mode requires JavaScript-based custom tracers (`callTracer`, `prestateTracer`, `4byteTracer`) passed via `debug_traceTransaction`'s `tracer` field. Fukuii's current `StructLogTracer` outputs raw structLog format only — this works for basic tracing but Blockscout's geth-mode expects the higher-level tracer output format (nested call trees with gas, value, input/output).
-- **Current state:** 5 debug trace methods implemented (H-001) with `StructLogTracer` + `TraceConfig`. Missing: `tracer: "callTracer"` / `tracer: "prestateTracer"` parameter support, and the corresponding output formatters.
-- **Workaround:** Blockscout can use `erigon` variant mode with Fukuii's existing `trace_replayBlockTransactions` and `trace_block` methods (Parity-style trace format). Needs verification (M-030).
-- **Reference:** go-ethereum `eth/tracers/native/` (callTracer, prestateTracer, 4byteTracer as Go built-ins) + `eth/tracers/js/` (arbitrary JS tracer via otto/goja). Besu implements `callTracer`/`flatCallTracer` as native Java. Minimum viable: native `callTracer` + `prestateTracer` (covers 95% of Blockscout needs without JS VM).
+- **Status:** DONE (`1e4c807f9`) — Implemented native `callTracer` and `prestateTracer` matching go-ethereum's `eth/tracers/native/call.go` and `prestate.go` output format exactly. 7 new/modified files, 15 new unit tests (2,713 total pass).
+- **What was implemented:**
+  1. `ExecutionTracer` trait — pluggable tracer interface with `onStep`, `onTxStart`/`onTxEnd`, `onCallEnter`/`onCallExit`, `getResult`
+  2. `CallTracer` — nested call tree with gas as decimal JInt (geth-compatible), revert reason parsing, `onlyTopCall` config
+  3. `PrestateTracer` — pre-tx state capture, default mode + diffMode `{pre, post}` output, storage key tracking via `onStep`
+  4. `StructLogTracer` adapted to `ExecutionTracer` trait
+  5. `DebugTracingService` tracer factory — dispatches based on `TraceConfig.tracer` field
+  6. `DebugTracingJsonMethodsImplicits` — `tracer`/`tracerConfig` JSON parsing, polymorphic response encoding via `nativeResult: Option[JValue]`
+  7. Hooks in `CallOp.exec()` and `CreateOp.exec()` (OpCode.scala) for `onCallEnter`/`onCallExit`
+- **Coverage:** All `debug_trace*` methods (traceTransaction, traceCall, traceBlock, traceBlockByHash, traceBlockByNumber) use the same tracer factory
 - **Depends on:** H-001
 
 #### M-030: Blockscout compatibility testing
@@ -789,9 +795,96 @@ Research into MEV (Flashbots, CoW Protocol), decentralized RPC protocols (DRPC, 
   - **R3: Task-peer failure tracking.** `StorageRangeCoordinator` tracks recent task-peer failures in `Map[(accountHash, peerId), timestamp]` with 30s TTL (3x base peer cooldown). Prevents re-dispatching a timed-out storage task to the same peer. Lazy eviction during dispatch. Cleared on pivot refresh.
   - **R4: Cross-batch bytecode dedup.** `ByteCodeCoordinator` maintains coordinator-level `HashSet[ByteString]` of downloaded codeHashes across all batches. Eliminates ~7,350 redundant bytecode requests caused by Bloom filter false positives in per-batch dedup. `filterAndDedupeCodeHashes()` checks `downloadedCodeHashes` before `seen` set. Response handler tracks successful downloads.
 
+#### S-001: StateNodeFetcher escape valve — max retries + GetNodeData fallback ✅ DONE
+
+- **Files:** `StateNodeFetcher.scala`, `BlockFetcher.scala`, `BlockImporter.scala`, `Config.scala`, `sync.conf`
+- **Priority:** P0 | **Risk:** Medium (sync-critical)
+- **Status:** ✅ Done (2026-03-31) — escape valve prevents infinite retry.
+- **Problem:** `StateNodeFetcher` retried GetTrieNodes forever with 5s backoff when responses were empty. 16,896 empty responses = ~23.5 hours of futile retrying in attempt 4. No max retry, no fallback, no stale root detection.
+- **Research (2026-03-31):** Geth has no max retry but healing runs in snap syncer with multi-node batch requests, not one-at-a-time in RegularSync. Besu uses MAX_RETRIES=4 per request (`RetryingGetAccountRangeFromPeerTask.java:30`), then switches peer.
+- **Fix:** Added retry counters (`snapRetryCount`, `totalRetryCount`, `emptyResponseCount`). After `maxStateNodeSnapRetries` (10) empty SNAP responses, falls back to GetNodeData (hash-based, works regardless of state root). After `maxStateNodeTotalRetries` (30) total failures, signals `StateNodeFetchFailed` to supervisor. BlockImporter skips the failing block and continues. Rate-limited logging (first + every 100th empty response).
+- **Config:** `sync.max-state-node-snap-retries = 10`, `sync.max-state-node-total-retries = 30`
+- **Observed in:** ETC mainnet attempt 4 (2026-03-30). 16,896 empty GetTrieNodes responses, 23.5h stall at 0 blk/s.
+
+#### S-002: Disable deferred merkleization by default ✅ DONE
+
+- **Files:** `sync.conf`
+- **Priority:** P0 | **Risk:** Low
+- **Status:** ✅ Done (2026-03-31) — `deferred-merkleization = false`.
+- **Problem:** `deferred-merkleization = true` (default) caused `checkAllDownloadsComplete()` to skip healing entirely. RegularSync then hit missing trie nodes on every block and relied on StateNodeFetcher's one-at-a-time GetTrieNodes requests — which stalled because the state root was stale.
+- **Research (2026-03-31):** Both geth and Besu run mandatory healing after snap download. Geth: eager healing phase with `healTask` scheduler (`sync.go:705-718`). Besu: two dedicated healing pipelines (account + storage flat DB). Neither skips healing.
+- **Fix:** Changed `deferred-merkleization = false` in `sync.conf`. Re-enables existing `startStateHealing()` which was already implemented but bypassed.
+- **Observed in:** ETC mainnet attempt 4 (2026-03-30). Root cause of the 0 blk/s stall.
+
+#### S-003: Per-peer request cap — ✅ ALREADY IMPLEMENTED
+
+- **Files:** All three coordinators
+- **Priority:** P1 | **Risk:** Medium
+- **Status:** ✅ Already implemented — `maxInFlightPerPeer = 5` (matches Besu's MAX_OUTSTANDING_REQUESTS=5).
+- **Research (2026-03-31):** Besu caps at `MAX_OUTSTANDING_REQUESTS = 5` per peer (`EthPeer.java`). Geth doesn't have explicit cap but uses capacity-sorted peer selection with dynamic throttle that implicitly limits requests to high-throughput peers. Fukuii already has `maxInFlightPerPeer` tracked via `UpdateMaxInFlightPerPeer` messages across all coordinators.
+
+#### S-004: Log noise reduction ✅ DONE
+
+- **Files:** `StateNodeFetcher.scala`
+- **Priority:** P2 | **Risk:** Low
+- **Status:** ✅ Done (2026-03-31) — rate-limited empty response logging.
+- **Problem:** Attempt 4 logs were flooded with "SNAP TrieNodes response was empty, retrying" — 16,896 times.
+- **Fix:** Rate-limited in S-001 implementation: logs first occurrence, then every 100th occurrence with cumulative count. Coordinator stateless marking messages are already one-per-event (not repeated).
+- **Observed in:** ETC mainnet attempt 4 (2026-03-30). Log file dominated by repeated warnings.
+
+#### L-023: Peer rehabilitation after pivot refresh — ✅ ALREADY ALIGNED
+
+- **Files:** `AccountRangeCoordinator.scala`, `StorageRangeCoordinator.scala`, `ByteCodeCoordinator.scala`
+- **Priority:** Low | **Risk:** Medium (sync-critical, peer management)
+- **Status:** ✅ No change needed — already aligned with reference clients.
+- **Research (2026-03-31):** Geth clears `statelessPeers` map on new sync cycle (equivalent to pivot refresh) at `sync.go:617`. Fukuii's `PivotRefreshed` handler already clears `statelessPeers` and `peerConsecutiveTimeouts`. Besu has no explicit rehabilitation — uses per-request retry with peer switching instead.
+- **Observed in:** ETC mainnet attempt 4 (2026-03-30), 6.5h into sync. 13/14 storage peers marked stateless.
+
+#### L-024: Auto-scale worker count based on connected peer count — ✅ ALREADY IMPLEMENTED
+
+- **Files:** `AccountRangeCoordinator.scala`, `StorageRangeCoordinator.scala`, `ByteCodeCoordinator.scala`
+- **Priority:** Low | **Risk:** Medium (performance-critical)
+- **Status:** ✅ Already implemented — `maxWorkers = activePeerCount * maxInFlightPerPeer` (default 5).
+- **Research (2026-03-31):** Geth uses goroutine-per-request with capacity-sorted peer selection (`capacitySort` at `sync.go:1382-1393`) and dynamic throttle (1.33x increase / 1.25x decrease at `sync.go:2370-2385`) — implicit scaling via peer throughput. Besu uses fixed `maxOutstandingRequests` per pipeline — no auto-scaling. Fukuii's approach (explicit scaling tied to peer count) goes beyond both reference clients, which is appropriate for ETC's low snap peer count.
+- **Observed in:** ETC mainnet attempt 4 (2026-03-30). 14 workers on 2 peers.
+
+#### L-025: Less aggressive stateless marking under peer pressure — ✅ DONE
+
+- **Files:** `AccountRangeCoordinator.scala`, `StorageRangeCoordinator.scala`
+- **Priority:** Low | **Risk:** Medium (sync-critical)
+- **Status:** ✅ Done (2026-03-31) — dynamic threshold scales with workers/peers ratio.
+- **Research (2026-03-31):** Geth marks stateless on first empty response — even more aggressive than Fukuii's 3-timeout threshold (`sync.go:2574, 2684, 2812, 2931`). But geth doesn't suffer because Ethereum mainnet has many peers. Besu uses MAX_RETRIES=4 per request with `AbstractRetryingSwitchingPeerTask` peer switching (lines 62-161). Neither approach works well for ETC's low peer count.
+- **Fix:** Changed `consecutiveTimeoutThreshold` from static `val = 3` to dynamic `def` that scales with `workers / peers`: `max(3, 3 * (workers / peers))`. With 14 workers / 2 peers → threshold 21. Applied to AccountRangeCoordinator and StorageRangeCoordinator. ByteCodeCoordinator doesn't have stateless peer tracking.
+- **Related:** L-024 (worker auto-scaling) also mitigates by reducing per-peer load.
+- **Observed in:** ETC mainnet attempt 4 (2026-03-30). 1,643 account + 3,521 storage + 2,958 bytecode timeouts.
+
+#### L-026: Aggressive peer discovery when snap peer count is low — RESEARCH DONE, DEFERRED
+
+- **Files:** `src/main/scala/.../network/PeerManagerActor.scala`, `src/main/scala/.../network/discovery/`
+- **Priority:** Low | **Risk:** Low
+- **Status:** Deferred to post-attempt-5. Research complete, implementation deferred.
+- **Research (2026-03-31):** Geth reserves half of peer slots for snap/1-capable peers during snap sync (PR #22171). Besu has no adaptive discovery. Geth's approach is relevant but requires deeper changes to `PeerManagerActor` and `ConnectedPeers` to distinguish snap-capable peers during connection selection.
+- **Proposed fix:** When connected snap peers < 5, double discovery frequency and prioritize snap/1-capable peers in `PeerManagerActor.maybeConnectToDiscoveredNodes()`. Reserve a portion of outgoing peer slots for snap-capable peers during SNAP sync phase.
+- **Observed in:** ETC mainnet attempt 4 (2026-03-30). 2 connected peers, 32 pending, 0 inbound.
+
 ---
 
 ## Tier 4: FUTURE — Post-Production Roadmap
+
+#### F-007: Geth-style lazy healing for RegularSync (Option B)
+
+- **Files:** New subsystem in `src/main/scala/.../sync/regular/`
+- **Priority:** Future | **Risk:** High (significant new subsystem, ~300-500 lines)
+- **Prerequisite:** Successful ETC mainnet SNAP sync with healing enabled (attempt 5+)
+- **Description:** Make `deferred-merkleization = true` viable by adding a proper healing mechanism to RegularSync instead of relying on one-at-a-time GetTrieNodes. Currently, deferred merkleization skips healing entirely, causing RegularSync to stall on missing trie nodes.
+- **Research (2026-03-31):** Geth runs an eager healing phase with `assignTrienodeHealTasks()` integrated into the snap syncer — discovers missing nodes via trie walk and batch-fetches via GetTrieNodes (multiple nodes per request). Besu runs two dedicated healing pipelines (account + storage flat DB). Both require healing; neither defers it entirely to block execution.
+- **Proposed implementation:**
+  1. When RegularSync starts after deferred-merkleization SNAP sync, launch a background healing task
+  2. The healing task walks the state trie from the pivot root, discovers missing nodes, and batch-fetches them via GetTrieNodes (multiple nodes per request, unlike current one-at-a-time)
+  3. Block import waits for healing to reach "good enough" coverage before proceeding
+  4. This eliminates the healing phase bottleneck while still ensuring all nodes are present before RegularSync
+- **Why deferred:** The current fix (S-002: disable deferred merkleization) re-enables the existing healing phase, which is slower but proven. This Option B optimization should wait until attempt 5 succeeds and we have telemetry on healing phase duration.
+- **Geth reference:** `go-ethereum/eth/protocols/snap/sync.go:705-718` (healing begins when `len(s.tasks) == 0`)
 
 #### F-001: GraphQL endpoint
 
@@ -958,6 +1051,9 @@ M-036 ✅ (getLogs range limit) ── M-032 (production benchmarks)
 F-008 (ecosystem infra guide) ── F-010 (Safe compatibility)
 M-038 (fee-market ordering) ── (future: bundle tx support)
 M-040 (private tx) ── (future: MEV documentation, bundle tx support)
+L-024 (worker auto-scale) ── L-025 (stateless marking — L-024 partially mitigates)
+L-023 (peer rehab) ── L-025 (stateless marking — rehab reduces need for lenient marking)
+L-026 (aggressive discovery) ── (independent, low risk)
 ```
 
 ---
@@ -1018,9 +1114,9 @@ M-040 (private tx) ── (future: MEV documentation, bundle tx support)
 | Tier 0 (CRITICAL)   | 3      | SNAP PRs, healing fix (C-003 DONE, C-004 DONE)                                                                                                                                                                                               |
 | Tier 1 (HIGH)       | 13     | debug expansion, fee market, access lists, state overrides, sync recovery, profiling, JWT, tx fork-gating, baseFee guards, SNAP finalization (H-014, H-015, H-016 DONE)                                                                    |
 | Tier 2 (MEDIUM)     | 20     | debug profiling, log verbosity, SNAP work-stealing, testing push, perf, SNAP reorg freshness, hive Olympia, MCP multi-LLM docs, go-ethereum pre-merge PoW review (M-007, M-016, M-017, M-021 DONE)                                          |
-| Tier 3 (LOW)        | 6      | networking polish, API docs, operator guide                                                                                                                                                                                                  |
-| Tier 4 (FUTURE)     | 4      | GraphQL, Stratum, plugin system, GUI/releases (F-004 DONE via Olympia, F-005 removed)                                                                                                                                                        |
-| **Total remaining** | **38** | Was 53, minus C-003, C-004, M-007, M-008, M-010, M-011, M-016, M-017, M-019, M-021, M-024, H-014, H-015, H-016. M-013 BLOCKED (needs solc). M-028 added (DnsDiscovery test).                                                                       |
+| Tier 3 (LOW)        | 6      | networking polish, API docs, operator guide. S-001–S-004 DONE, L-023/L-024/L-025 DONE/ALIGNED, L-026 DEFERRED                                                                                                                               |
+| Tier 4 (FUTURE)     | 5      | GraphQL, Stratum, plugin system, GUI/releases, lazy healing Option B (F-004 DONE via Olympia, F-005 removed, F-007 added)                                                                                                                   |
+| **Total remaining** | **39** | Was 38, +4 SNAP attempt 5 items (S-001–S-004 all DONE), +1 future item (F-007 lazy healing). L-026 deferred.                                                                                                                                |
 
 ---
 
