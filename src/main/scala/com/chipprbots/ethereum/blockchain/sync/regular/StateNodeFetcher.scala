@@ -49,10 +49,22 @@ class StateNodeFetcher(
 
   private var requester: Option[StateNodeRequester] = None
 
+  // Retry tracking for escape valve (Besu-inspired: MAX_RETRIES=4, we use configurable limits)
+  private var snapRetryCount: Int = 0
+  private var totalRetryCount: Int = 0
+  private var emptyResponseCount: Long = 0
+
   override def onMessage(message: StateNodeFetcherCommand): Behavior[StateNodeFetcherCommand] =
     message match {
       case StateNodeFetcher.FetchStateNode(hash, sender, stateRoot, paths, _) =>
-        log.debug("Start fetching state node (snap paths available: {})", paths.isDefined)
+        val isRetry = requester.exists(_.hash == hash)
+        if (!isRetry) {
+          // New fetch request — reset retry counters
+          snapRetryCount = 0
+          totalRetryCount = 0
+          emptyResponseCount = 0
+        }
+        log.debug("Start fetching state node (snap paths available: {}, retry: {})", paths.isDefined, isRetry)
         requester = Some(StateNodeRequester(hash, sender, stateRoot, paths))
         requestStateNode(hash, stateRoot, paths)
         Behaviors.same
@@ -85,9 +97,43 @@ class StateNodeFetcher(
       case _ => Behaviors.unhandled
     }
 
-  private def retryAfterBackoff(req: StateNodeRequester): Unit =
-    context.scheduleOnce(5.seconds, context.self,
-      StateNodeFetcher.FetchStateNode(req.hash, req.replyTo, req.stateRoot, req.paths))
+  private def retryOrFallback(req: StateNodeRequester): Unit = {
+    totalRetryCount += 1
+
+    // Check if we've exhausted all retries — signal failure to supervisor
+    if (totalRetryCount >= syncConfig.maxStateNodeTotalRetries) {
+      val hashHex = req.hash.take(4).toArray.map("%02x".format(_)).mkString
+      log.error(
+        "State node fetch FAILED after {} total retries ({} snap, {} fallback) for hash={}. " +
+          "Signaling failure to supervisor.",
+        totalRetryCount, snapRetryCount, totalRetryCount - snapRetryCount, hashHex
+      )
+      req.replyTo ! BlockFetcher.StateNodeFetchFailed(req.hash)
+      requester = None
+      return
+    }
+
+    // After maxSnapRetries empty SNAP responses, fall back to GetNodeData (hash-only, no paths)
+    // This handles the case where the SNAP root is stale — GetNodeData uses hash-based lookup
+    // which works regardless of the current state root.
+    if (snapRetryCount >= syncConfig.maxStateNodeSnapRetries && req.paths.isDefined) {
+      val hashHex = req.hash.take(4).toArray.map("%02x".format(_)).mkString
+      if (snapRetryCount == syncConfig.maxStateNodeSnapRetries) {
+        log.warn(
+          "SNAP GetTrieNodes returned empty {} times for hash={}. " +
+            "Falling back to GetNodeData (hash-based lookup, no SNAP paths).",
+          snapRetryCount, hashHex
+        )
+      }
+      // Retry without paths — forces GetNodeData path in requestStateNode()
+      context.scheduleOnce(5.seconds, context.self,
+        StateNodeFetcher.FetchStateNode(req.hash, req.replyTo, req.stateRoot, paths = None))
+    } else {
+      // Normal retry with original parameters
+      context.scheduleOnce(5.seconds, context.self,
+        StateNodeFetcher.FetchStateNode(req.hash, req.replyTo, req.stateRoot, req.paths))
+    }
+  }
 
   private def handleNodeDataValues(peer: Peer, values: Seq[ByteString]): Behavior[StateNodeFetcherCommand] =
     requester
@@ -101,9 +147,12 @@ class StateNodeFetcher(
           case Left(err) =>
             log.debug("State node validation failed with {}", err.description)
             peersClient ! BlacklistPeer(peer.id, err)
-            retryAfterBackoff(stateNodeRequester)
+            retryOrFallback(stateNodeRequester)
             Behaviors.same[StateNodeFetcherCommand]
           case Right(node) =>
+            if (totalRetryCount > 0) {
+              log.info("Successfully fetched state node after {} retries (via GetNodeData)", totalRetryCount)
+            }
             stateNodeRequester.replyTo ! FetchedStateNode(NodeData(node))
             requester = None
             Behaviors.same[StateNodeFetcherCommand]
@@ -115,9 +164,18 @@ class StateNodeFetcher(
     requester
       .collect { stateNodeRequester =>
         if (nodes.isEmpty) {
-          log.warn("SNAP TrieNodes response was empty, retrying")
+          emptyResponseCount += 1
+          snapRetryCount += 1
+          // Rate-limit log noise: log first, then every 100th occurrence
+          if (emptyResponseCount == 1 || emptyResponseCount % 100 == 0) {
+            log.warn(
+              "SNAP TrieNodes response empty ({} total, snap retry {}/{}), root={}",
+              emptyResponseCount, snapRetryCount, syncConfig.maxStateNodeSnapRetries,
+              stateNodeRequester.stateRoot.map(_.take(4).toArray.map("%02x".format(_)).mkString).getOrElse("none")
+            )
+          }
           peersClient ! BlacklistPeer(peer.id, BlacklistReason.EmptyStateNodeResponse)
-          retryAfterBackoff(stateNodeRequester)
+          retryOrFallback(stateNodeRequester)
           Behaviors.same[StateNodeFetcherCommand]
         } else {
           // Multi-depth request: scan all returned nodes for one matching the target hash.
@@ -131,7 +189,7 @@ class StateNodeFetcher(
             case None =>
               log.warn("SNAP TrieNodes: got {} nodes but none matched target hash, retrying", nodes.size)
               peersClient ! BlacklistPeer(peer.id, BlacklistReason.WrongStateNodeResponse)
-              retryAfterBackoff(stateNodeRequester)
+              retryOrFallback(stateNodeRequester)
               Behaviors.same[StateNodeFetcherCommand]
           }
         }

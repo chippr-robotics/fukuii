@@ -57,7 +57,9 @@ trait TestSyncConfig extends SyncConfigBuilder {
     maxFastSyncOuterPivotRetries = 10,
     useBootstrapCheckpoints = false,
     bootstrapCheckpoints = Seq.empty,
-    snapServerEnabled = false
+    snapServerEnabled = false,
+    maxStateNodeSnapRetries = 10,
+    maxStateNodeTotalRetries = 30
   )
 
   override lazy val syncConfig: SyncConfig = defaultSyncConfig

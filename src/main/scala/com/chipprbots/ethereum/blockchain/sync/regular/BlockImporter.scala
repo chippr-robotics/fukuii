@@ -119,6 +119,10 @@ class BlockImporter(
       val hash = kec256(node)
       log.info("Saving late-arriving fetched state node {}", ByteStringUtils.hash2string(hash))
       stateStorage.saveNode(hash, node.toArray, blockchainReader.getBestBlockNumber())
+
+    // Late-arriving fetch failure — already moved past this block, ignore.
+    case BlockFetcher.StateNodeFetchFailed(hash) =>
+      log.debug("Late-arriving state node fetch failure for {}, ignoring", ByteStringUtils.hash2string(hash))
   }
 
   private def resolvingMissingNode(blocksToRetry: NonEmptyList[Block], blockImportType: BlockImportType)(
@@ -134,6 +138,26 @@ class BlockImporter(
       )
       stateStorage.saveNode(hash, node.toArray, blocksToRetry.head.number)
       importBlocks(blocksToRetry, blockImportType)(state)
+
+    case BlockFetcher.StateNodeFetchFailed(hash) =>
+      // All retry attempts exhausted (snap + GetNodeData fallback).
+      // Skip this block and continue with the remaining blocks.
+      // The missing node will be encountered again on re-import if the state is still incomplete.
+      log.error(
+        "State node fetch exhausted all retries for hash={} at block {}. " +
+          "Skipping block and continuing sync. Node may be fetched on subsequent attempts.",
+        ByteStringUtils.hash2string(hash),
+        blocksToRetry.head.number
+      )
+      val remaining = blocksToRetry.tail
+      if (remaining.nonEmpty) {
+        importBlocks(NonEmptyList.fromListUnsafe(remaining), blockImportType)(state)
+      } else {
+        // No more blocks to retry — go back to running state and pick new blocks
+        context.setReceiveTimeout(syncConfig.syncRetryInterval)
+        context.become(running(state))
+        self ! PickBlocks
+      }
 
     case ReceiveTimeout =>
       log.warning("Timed out waiting for missing state node for block {}, retrying import", blocksToRetry.head.number)

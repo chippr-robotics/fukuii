@@ -314,7 +314,20 @@ class AccountRangeCoordinator(
   // This handles the case where ETC mainnet peers silently stop responding (timeout) when
   // their snap serve window expires, rather than returning empty responses with proofs.
   private val peerConsecutiveTimeouts = mutable.Map[String, Int]()
-  private val consecutiveTimeoutThreshold = 3 // Mark stateless after 3 consecutive timeouts
+  private val baseConsecutiveTimeoutThreshold = 3
+
+  /** Dynamic stateless threshold: scale up when peer count is low to avoid death spiral.
+    * With 14 workers / 2 peers, timeouts are caused by overload, not statelessness.
+    * Formula: max(3, baseThreshold * (workers / max(connectedPeers, 1)))
+    * - 14 workers / 10 peers = max(3, 3*1) = 3 (normal)
+    * - 14 workers / 2 peers = max(3, 3*7) = 21 (lenient under pressure)
+    * Besu-inspired: distinguish overload timeouts from genuine statelessness.
+    */
+  private def consecutiveTimeoutThreshold: Int = {
+    val peers = math.max(activePeerCount, 1)
+    val workers = math.max(maxWorkers, 1)
+    math.max(baseConsecutiveTimeoutThreshold, baseConsecutiveTimeoutThreshold * (workers / peers))
+  }
 
   // Track empty-proof failures per peer (persists across pivot refreshes — geth/Besu alignment).
   // Neither geth nor Besu marks peers stateless for empty/invalid proofs; they just reschedule.

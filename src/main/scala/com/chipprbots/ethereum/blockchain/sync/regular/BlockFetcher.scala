@@ -598,4 +598,6 @@ object BlockFetcher {
   sealed trait FetchResponse
   final case class PickedBlocks(blocks: NonEmptyList[Block]) extends FetchResponse
   final case class FetchedStateNode(stateNode: NodeData) extends FetchResponse
+  /** Sent when StateNodeFetcher exhausts all retries (SNAP + GetNodeData fallback). */
+  final case class StateNodeFetchFailed(hash: ByteString) extends FetchResponse
 }

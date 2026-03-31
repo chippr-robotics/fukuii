@@ -182,7 +182,9 @@ object Config {
       maxFastSyncOuterPivotRetries: Int,
       useBootstrapCheckpoints: Boolean,
       bootstrapCheckpoints: Seq[(BigInt, String)], // (blockNumber, blockHash)
-      snapServerEnabled: Boolean
+      snapServerEnabled: Boolean,
+      maxStateNodeSnapRetries: Int,
+      maxStateNodeTotalRetries: Int
   )
 
   object SyncConfig {
@@ -283,7 +285,15 @@ object Config {
         snapServerEnabled =
           if (syncConfig.hasPath("snap-server-enabled"))
             syncConfig.getBoolean("snap-server-enabled")
-          else false
+          else false,
+        maxStateNodeSnapRetries =
+          if (syncConfig.hasPath("max-state-node-snap-retries"))
+            syncConfig.getInt("max-state-node-snap-retries")
+          else 10,
+        maxStateNodeTotalRetries =
+          if (syncConfig.hasPath("max-state-node-total-retries"))
+            syncConfig.getInt("max-state-node-total-retries")
+          else 30
       )
     }
   }

@@ -78,7 +78,14 @@ class StorageRangeCoordinator(
   // This handles the case where ETC mainnet peers silently stop responding (timeout) when
   // their snap serve window expires, rather than returning empty responses with proofs.
   private val peerConsecutiveTimeouts = mutable.Map[String, Int]()
-  private val consecutiveTimeoutThreshold = 3 // Mark stateless after 3 consecutive timeouts
+  // Dynamic threshold: scales with workers/peers ratio to prevent premature stateless marking
+  // when few peers are available. With 14 workers / 2 peers, threshold becomes max(3, 3*7)=21.
+  private val baseConsecutiveTimeoutThreshold = 3
+  private def consecutiveTimeoutThreshold: Int = {
+    val peers = math.max(knownAvailablePeers.size, 1)
+    val workers = math.max(maxInFlightRequests, 1)
+    math.max(baseConsecutiveTimeoutThreshold, baseConsecutiveTimeoutThreshold * (workers / peers))
+  }
 
   // R3: Track recent task-peer failures to avoid re-dispatching the same task to a peer that
   // just timed out on it. Key: (accountHash, peerId), Value: failure timestamp.
