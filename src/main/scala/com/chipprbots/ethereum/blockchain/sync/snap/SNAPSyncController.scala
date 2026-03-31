@@ -2416,37 +2416,38 @@ class SNAPSyncController(
     if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) return
     lastPivotRestartMs = now
 
+    // Check if the stall is due to no peers (not a processing failure).
+    // On ETC mainnet, SNAP peer gaps of 30-60 minutes are normal.
+    // Don't escalate when the root cause is simply waiting for peers.
+    val snapPeerCount = handshakedPeers.values.count(_.peerInfo.remoteStatus.supportsSnap)
+    if (snapPeerCount == 0) {
+      log.info(
+        s"Account sync stalled (${stalledForMs / 1000}s) but no SNAP peers available. " +
+          s"Waiting for peers to reconnect (downloaded=${progress.accountsDownloaded})."
+      )
+      // Don't increment stall counter — this is a peer availability issue, not a sync failure.
+      // Reset the stall timer so we don't immediately escalate when peers return.
+      lastAccountProgressMs = System.currentTimeMillis()
+      return
+    }
+
     consecutiveAccountStallRefreshes += 1
 
     val context =
       s"account range sync stalled: no download progress for ${stalledForMs / 1000}s " +
         s"(threshold=${AccountStagnationThreshold.toSeconds}s), accountsDownloaded=${progress.accountsDownloaded}, " +
-        s"tasksPending=${progress.tasksPending}, tasksActive=${progress.tasksActive}"
+        s"tasksPending=${progress.tasksPending}, tasksActive=${progress.tasksActive}, snapPeers=$snapPeerCount"
 
-    if (consecutiveAccountStallRefreshes > maxAccountStallRefreshes) {
-      // Truly unrecoverable after many pivot refreshes — fall back
-      log.error(
-        s"Account sync stalled after $consecutiveAccountStallRefreshes consecutive pivot refreshes. " +
-          s"Falling back to fast sync."
-      )
-      if (recordCriticalFailure(context)) {
-        fallbackToFastSync()
-      } else {
-        restartSnapSync(context)
-      }
-    } else {
-      // Bug 29 fix: do an in-place pivot refresh instead of restartSnapSync().
-      // restartSnapSync() destroys all in-memory account trie data (50M+ accounts lost).
-      // In-place refresh updates the state root while preserving downloaded data.
-      // Trie nodes are content-addressed, so ~99.9% remain valid across pivots.
-      log.warning(
-        s"Account stall detected ($context). " +
-          s"Refreshing pivot in-place to recover (attempt $consecutiveAccountStallRefreshes/$maxAccountStallRefreshes). " +
-          s"Account data preserved."
-      )
-      lastAccountProgressMs = System.currentTimeMillis() // Reset stall timer after refresh
-      refreshPivotInPlace(s"account stall: $context")
-    }
+    // In-place pivot refresh to try to find a serveable root.
+    // Never restart or fallback — restartSnapSync() destroys all downloaded data,
+    // and fast sync doesn't work on ETH68 networks.
+    log.warning(
+      s"Account stall detected ($context). " +
+        s"Refreshing pivot in-place to recover (attempt $consecutiveAccountStallRefreshes). " +
+        s"Account data preserved."
+    )
+    lastAccountProgressMs = System.currentTimeMillis()
+    refreshPivotInPlace(s"account stall: $context")
   }
 
   private def completeSnapSync(): Unit =
