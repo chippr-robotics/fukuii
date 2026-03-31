@@ -137,9 +137,10 @@ class FastSync(
     case PivotBlockSelector.Result(pivotBlockHeader) =>
       if (pivotBlockHeader.number < 1) {
         log.info("Unable to start block synchronization in fast mode: pivot block is less than 1")
-        appStateStorage.fastSyncDone().commit()
-        context.become(idle)
-        syncController ! Done
+        // Don't give up — peers may not have been fork-validated yet at startup.
+        // Retry pivot selection after a delay instead of marking fast sync done.
+        log.info("Retrying pivot selection in {} (peers may still be connecting)", startRetryInterval)
+        scheduler.scheduleOnce(startRetryInterval, self, RetryPivotBlockSelection)
       } else {
         val initialSyncState =
           SyncState(
