@@ -21,7 +21,9 @@ object DebugTracingJsonMethodsImplicits extends JsonMethodsImplicits {
         disableStorage = fieldMap.get("disableStorage").collect { case JBool(v) => v }.getOrElse(true),
         enableMemory = fieldMap.get("enableMemory").collect { case JBool(v) => v }.getOrElse(false),
         enableReturnData = fieldMap.get("enableReturnData").collect { case JBool(v) => v }.getOrElse(false),
-        limit = fieldMap.get("limit").collect { case JInt(v) => v.toInt }.getOrElse(0)
+        limit = fieldMap.get("limit").collect { case JInt(v) => v.toInt }.getOrElse(0),
+        tracer = fieldMap.get("tracer").collect { case JString(v) => v },
+        tracerConfig = fieldMap.get("tracerConfig").collect { case o: JObject => o }
       )
     case _ => TraceConfig()
   }
@@ -79,7 +81,7 @@ object DebugTracingJsonMethodsImplicits extends JsonMethodsImplicits {
         }
 
       override def encodeJson(t: DebugTraceTransactionResponse): JValue =
-        encodeTraceResponse(t.gas, t.failed, t.returnValue, t.structLogs)
+        t.nativeResult.getOrElse(encodeTraceResponse(t.gas, t.failed, t.returnValue, t.structLogs))
     }
 
   implicit val debug_traceCall
@@ -101,20 +103,23 @@ object DebugTracingJsonMethodsImplicits extends JsonMethodsImplicits {
         }
 
       override def encodeJson(t: DebugTraceCallResponse): JValue =
-        encodeTraceResponse(t.gas, t.failed, t.returnValue, t.structLogs)
+        t.nativeResult.getOrElse(encodeTraceResponse(t.gas, t.failed, t.returnValue, t.structLogs))
     }
 
   implicit val debugTraceBlockResponseEncoder: JsonEncoder[DebugTraceBlockResponse] =
     new JsonEncoder[DebugTraceBlockResponse] {
       override def encodeJson(t: DebugTraceBlockResponse): JValue =
         JArray(t.results.toList.map { txResult =>
-          ("txHash" -> encodeAsHex(txResult.txHash)) ~
-            ("result" -> encodeTraceResponse(
+          val resultJson = txResult.result.nativeResult.getOrElse(
+            encodeTraceResponse(
               txResult.result.gas,
               txResult.result.failed,
               txResult.result.returnValue,
               txResult.result.structLogs
-            ))
+            )
+          )
+          ("txHash" -> encodeAsHex(txResult.txHash)) ~
+            ("result" -> resultJson)
         })
     }
 

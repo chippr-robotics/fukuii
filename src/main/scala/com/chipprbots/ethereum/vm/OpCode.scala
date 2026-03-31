@@ -999,12 +999,24 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
       transientStorage = state.transientStorage
     )
 
+    // CaptureEnter — tracer hook for CREATE/CREATE2
+    // Note: 'to' is Address(0) here since address isn't known until after execution
+    state.vm.tracer.foreach(_.onCallEnter(
+      this.toString, state.env.ownerAddr, Address(0), startGas,
+      endowment.toBigInt, initCode
+    ))
+
     val (result, newAddress) = this match {
       case CREATE => state.vm.create(context)
       case CREATE2 =>
         val salt = state.stack.pop()
         state.vm.create(context, Some(salt))
     }
+
+    // CaptureExit — tracer hook after CREATE/CREATE2 returns
+    state.vm.tracer.foreach(_.onCallExit(
+      startGas - result.gasRemaining, result.returnData, result.error.map(_.toString)
+    ))
 
     result.error match {
       case Some(error) =>
@@ -1132,7 +1144,18 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
       transientStorage = state.transientStorage
     )
 
+    // CaptureEnter — tracer hook for internal calls (geth CaptureEnter equivalent)
+    state.vm.tracer.foreach(_.onCallEnter(
+      this.toString, context.callerAddr, toAddr, startGas,
+      value.toBigInt, inputData
+    ))
+
     val result = state.vm.call(context, owner)
+
+    // CaptureExit — tracer hook after internal call returns
+    state.vm.tracer.foreach(_.onCallExit(
+      startGas - result.gasRemaining, result.returnData, result.error.map(_.toString)
+    ))
 
     lazy val sizeCap = outSize.min(result.returnData.size).toInt
     lazy val output = result.returnData.take(sizeCap)

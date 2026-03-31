@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.vm
 
 import org.apache.pekko.util.ByteString
 
+import org.json4s.JsonAST._
+import org.json4s.JsonDSL._
 
 /** A single step in EVM execution, matching go-ethereum's structLog format. */
 case class StructLog(
@@ -29,13 +31,13 @@ class StructLogTracer(
     enableMemory: Boolean = false,
     enableStorage: Boolean = false,
     limit: Int = 0
-) {
+) extends ExecutionTracer {
   private val steps = scala.collection.mutable.ArrayBuffer[StructLog]()
   private var _gas: BigInt = 0
   private var _failed: Boolean = false
   private var _returnValue: ByteString = ByteString.empty
 
-  def onStep[W <: WorldStateProxy[W, S], S <: Storage[S]](
+  override def onStep[W <: WorldStateProxy[W, S], S <: Storage[S]](
       opCode: OpCode,
       prevState: ProgramState[W, S],
       nextState: ProgramState[W, S]
@@ -87,4 +89,9 @@ class StructLogTracer(
   def gas: BigInt = _gas
   def failed: Boolean = _failed
   def returnValue: ByteString = _returnValue
+
+  /** Not used for StructLogTracer — response is built by DebugTracingJsonMethodsImplicits using getSteps/gas/failed/returnValue.
+    * This exists to satisfy the ExecutionTracer trait for native tracers (callTracer, prestateTracer).
+    */
+  override def getResult: JValue = JNothing
 }

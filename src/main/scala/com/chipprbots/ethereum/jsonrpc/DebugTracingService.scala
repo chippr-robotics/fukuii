@@ -4,6 +4,9 @@ import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 
+import org.json4s.JsonAST._
+import org.json4s.MonadicJValue.jvalueToMonadic
+
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.domain._
@@ -14,13 +17,20 @@ import com.chipprbots.ethereum.vm._
 
 object DebugTracingService {
 
-  /** Tracing options matching go-ethereum's TracerConfig. */
+  /** Tracing options matching go-ethereum's TracerConfig.
+    * @param tracer
+    *   native tracer name: "callTracer", "prestateTracer", or None for default structLog
+    * @param tracerConfig
+    *   tracer-specific options as raw JSON (e.g., {"onlyTopCall": true} for callTracer)
+    */
   case class TraceConfig(
       disableStack: Boolean = false,
       disableStorage: Boolean = true,
       enableMemory: Boolean = false,
       enableReturnData: Boolean = false,
-      limit: Int = 0
+      limit: Int = 0,
+      tracer: Option[String] = None,
+      tracerConfig: Option[JValue] = None
   )
 
   case class DebugTraceTransactionRequest(txHash: ByteString, config: TraceConfig = TraceConfig())
@@ -28,7 +38,8 @@ object DebugTracingService {
       gas: BigInt,
       failed: Boolean,
       returnValue: ByteString,
-      structLogs: Seq[StructLog]
+      structLogs: Seq[StructLog],
+      nativeResult: Option[JValue] = None
   )
 
   case class DebugTraceCallRequest(
@@ -40,7 +51,8 @@ object DebugTracingService {
       gas: BigInt,
       failed: Boolean,
       returnValue: ByteString,
-      structLogs: Seq[StructLog]
+      structLogs: Seq[StructLog],
+      nativeResult: Option[JValue] = None
   )
 
   case class DebugTraceBlockRequest(blockParam: BlockParam, config: TraceConfig = TraceConfig())
@@ -82,15 +94,11 @@ class DebugTracingService(
       case None =>
         Left(JsonRpcError.InvalidParams("Block not found"))
       case Some(block) =>
-        val tracer = new StructLogTracer(
-          enableMemory = req.config.enableMemory,
-          enableStorage = !req.config.disableStorage,
-          limit = req.config.limit
-        )
-        val tracingVm = new VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](Some(tracer))
+        val world = buildInitialWorld(block)
+        val executionTracer = createTracer(req.config, world)
+        val tracingVm = new VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](Some(executionTracer))
         val evmConfig = EvmConfig.forBlock(block.header.number, blockchainConfig)
 
-        val world = buildInitialWorld(block)
         val gasLimit = req.tx.gas.getOrElse(block.header.gasLimit)
         val gasPrice = req.tx.gasPrice
         val from = req.tx.from.map(Address(_)).getOrElse(Address(0))
@@ -118,19 +126,23 @@ class DebugTracingService(
           warmStorage = Set.empty
         )
 
+        // Fire top-level hooks
+        executionTracer.onTxStart(from, to, gasLimit, value, data)
         val result = tracingVm.run(context)
-        tracer.setResult(result.gasRemaining, result.returnData, result.error.isDefined)
+        val gasUsed = context.startGas - result.gasRemaining
+        executionTracer.onTxEnd(gasUsed, result.returnData, result.error.map(_.toString))
 
-        val structLogs = if (req.config.disableStack) {
-          tracer.getSteps.map(_.copy(stack = Seq.empty))
-        } else tracer.getSteps
+        // Handle prestateTracer diffMode
+        executionTracer match {
+          case pt: PrestateTracer[_, _] => pt.setPostWorld(result.world.asInstanceOf[pt.preWorld.type])
+          case _ => ()
+        }
 
-        Right(DebugTraceCallResponse(
-          gas = context.startGas - result.gasRemaining,
-          failed = result.error.isDefined,
-          returnValue = result.returnData,
-          structLogs = structLogs
-        ))
+        buildResponse[DebugTraceCallResponse](executionTracer, req.config, context.startGas, result) { (gas, failed, rv, logs) =>
+          DebugTraceCallResponse(gas, failed, rv, logs)
+        } { nativeJson =>
+          DebugTraceCallResponse(gasUsed, result.error.isDefined, result.returnData, Seq.empty, Some(nativeJson))
+        }
     }
   }
 
@@ -170,6 +182,74 @@ class DebugTracingService(
     }
   }
 
+  /** Create the appropriate tracer based on TraceConfig. */
+  private def createTracer(
+      config: TraceConfig,
+      world: InMemoryWorldStateProxy
+  ): ExecutionTracer = {
+    config.tracer match {
+      case Some("callTracer") =>
+        val onlyTopCall = config.tracerConfig
+          .flatMap { c =>
+            (c \ "onlyTopCall") match {
+              case JBool(v) => Some(v)
+              case _ => None
+            }
+          }
+          .getOrElse(false)
+        new CallTracer(onlyTopCall)
+
+      case Some("prestateTracer") =>
+        val diffMode = config.tracerConfig
+          .flatMap { c =>
+            (c \ "diffMode") match {
+              case JBool(v) => Some(v)
+              case _ => None
+            }
+          }
+          .getOrElse(false)
+        new PrestateTracer(world, diffMode)
+
+      case None | Some("") =>
+        new StructLogTracer(
+          enableMemory = config.enableMemory,
+          enableStorage = !config.disableStorage,
+          limit = config.limit
+        )
+
+      case Some(unsupported) =>
+        throw new IllegalArgumentException(s"Unsupported tracer: $unsupported")
+    }
+  }
+
+  /** Build a trace response, polymorphic on tracer type. */
+  private def buildResponse[R](
+      executionTracer: ExecutionTracer,
+      config: TraceConfig,
+      startGas: BigInt,
+      result: ProgramResult[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage]
+  )(structLogBuilder: (BigInt, Boolean, ByteString, Seq[StructLog]) => R)(
+      nativeBuilder: JValue => R
+  ): Either[JsonRpcError, R] = {
+    config.tracer match {
+      case Some("callTracer") | Some("prestateTracer") =>
+        Right(nativeBuilder(executionTracer.getResult))
+
+      case _ =>
+        val slt = executionTracer.asInstanceOf[StructLogTracer]
+        slt.setResult(result.gasRemaining, result.returnData, result.error.isDefined)
+        val structLogs = if (config.disableStack) {
+          slt.getSteps.map(_.copy(stack = Seq.empty))
+        } else slt.getSteps
+        Right(structLogBuilder(
+          startGas - result.gasRemaining,
+          result.error.isDefined,
+          result.returnData,
+          structLogs
+        ))
+    }
+  }
+
   private def traceBlockTransaction(
       block: Block,
       txIndex: Int,
@@ -179,42 +259,41 @@ class DebugTracingService(
       case None => Left(JsonRpcError.InternalError)
       case Some(parentHeader) =>
         val world = buildWorldFromParent(block, parentHeader)
-        // Replay transactions before the target to get correct state
         val (finalWorld, _) = replayPriorTransactions(block.body.transactionList.take(txIndex), block.header, world)
 
         val stx = block.body.transactionList(txIndex)
         SignedTransaction.getSender(stx) match {
           case None => Left(JsonRpcError.InternalError)
           case Some(sender) =>
-            val tracer = new StructLogTracer(
-              enableMemory = config.enableMemory,
-              enableStorage = !config.disableStorage,
-              limit = config.limit
-            )
-            val tracingVm = new VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](Some(tracer))
-            val evmConfig = EvmConfig.forBlock(block.header.number, blockchainConfig)
-
             val account = finalWorld
               .getAccount(sender)
               .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
             val worldWithAccount = finalWorld.saveAccount(sender, account)
 
+            val executionTracer = createTracer(config, worldWithAccount)
+            val tracingVm = new VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](Some(executionTracer))
+            val evmConfig = EvmConfig.forBlock(block.header.number, blockchainConfig)
+
             val context = ProgramContext[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](
               stx, block.header, sender, worldWithAccount, evmConfig
             )
+
+            val to = stx.tx.receivingAddress
+            executionTracer.onTxStart(sender, to, context.startGas, stx.tx.value, stx.tx.payload)
             val result = tracingVm.run(context)
-            tracer.setResult(result.gasRemaining, result.returnData, result.error.isDefined)
+            val gasUsed = context.startGas - result.gasRemaining
+            executionTracer.onTxEnd(gasUsed, result.returnData, result.error.map(_.toString))
 
-            val structLogs = if (config.disableStack) {
-              tracer.getSteps.map(_.copy(stack = Seq.empty))
-            } else tracer.getSteps
+            executionTracer match {
+              case pt: PrestateTracer[_, _] => pt.setPostWorld(result.world.asInstanceOf[pt.preWorld.type])
+              case _ => ()
+            }
 
-            Right(DebugTraceTransactionResponse(
-              gas = context.startGas - result.gasRemaining,
-              failed = result.error.isDefined,
-              returnValue = result.returnData,
-              structLogs = structLogs
-            ))
+            buildResponse[DebugTraceTransactionResponse](executionTracer, config, context.startGas, result) { (gas, failed, rv, logs) =>
+              DebugTraceTransactionResponse(gas, failed, rv, logs)
+            } { nativeJson =>
+              DebugTraceTransactionResponse(gasUsed, result.error.isDefined, result.returnData, Seq.empty, Some(nativeJson))
+            }
         }
     }
   }
@@ -235,39 +314,41 @@ class DebugTracingService(
             SignedTransaction.getSender(stx) match {
               case None => Left(JsonRpcError.InternalError)
               case Some(sender) =>
-                val tracer = new StructLogTracer(
-                  enableMemory = config.enableMemory,
-                  enableStorage = !config.disableStorage,
-                  limit = config.limit
-                )
-                val tracingVm = new VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](Some(tracer))
-                val evmConfig = EvmConfig.forBlock(block.header.number, blockchainConfig)
-
                 val account = world
                   .getAccount(sender)
                   .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
                 val worldWithAccount = world.saveAccount(sender, account)
 
+                val executionTracer = createTracer(config, worldWithAccount)
+                val tracingVm = new VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](Some(executionTracer))
+                val evmConfig = EvmConfig.forBlock(block.header.number, blockchainConfig)
+
                 val context = ProgramContext[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](
                   stx, block.header, sender, worldWithAccount, evmConfig
                 )
+
+                val to = stx.tx.receivingAddress
+                executionTracer.onTxStart(sender, to, context.startGas, stx.tx.value, stx.tx.payload)
                 val result = tracingVm.run(context)
-                tracer.setResult(result.gasRemaining, result.returnData, result.error.isDefined)
+                val gasUsed = context.startGas - result.gasRemaining
+                executionTracer.onTxEnd(gasUsed, result.returnData, result.error.map(_.toString))
 
-                val structLogs = if (config.disableStack) {
-                  tracer.getSteps.map(_.copy(stack = Seq.empty))
-                } else tracer.getSteps
+                executionTracer match {
+                  case pt: PrestateTracer[_, _] => pt.setPostWorld(result.world.asInstanceOf[pt.preWorld.type])
+                  case _ => ()
+                }
 
-                val txResult = TxTraceResult(
-                  txHash = stx.hash,
-                  result = DebugTraceTransactionResponse(
-                    gas = context.startGas - result.gasRemaining,
-                    failed = result.error.isDefined,
-                    returnValue = result.returnData,
-                    structLogs = structLogs
-                  )
-                )
-                Right((result.world, acc :+ txResult))
+                val txResultEither = buildResponse[DebugTraceTransactionResponse](executionTracer, config, context.startGas, result) { (gas, failed, rv, logs) =>
+                  DebugTraceTransactionResponse(gas, failed, rv, logs)
+                } { nativeJson =>
+                  DebugTraceTransactionResponse(gasUsed, result.error.isDefined, result.returnData, Seq.empty, Some(nativeJson))
+                }
+
+                txResultEither match {
+                  case Left(err) => Left(err)
+                  case Right(txResponse) =>
+                    Right((result.world, acc :+ TxTraceResult(txHash = stx.hash, result = txResponse)))
+                }
             }
         }.map(_._2)
     }
