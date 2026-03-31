@@ -12,7 +12,13 @@ import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.network.p2p.messages.ETH62
 import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
-import com.chipprbots.ethereum.blockchain.sync.PeersClient.{BestPeer, BestSnapPeer, NoSuitablePeer, Request, RequestFailed}
+import com.chipprbots.ethereum.blockchain.sync.PeersClient.{
+  BestPeer,
+  BestSnapPeer,
+  NoSuitablePeer,
+  Request,
+  RequestFailed
+}
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 /** Fetches and persists a single pivot header (by block number) so SNAP can start without importing blocks.
@@ -99,7 +105,8 @@ final class PivotHeaderBootstrap(
         case NoSuitablePeer if preferSnapPeers =>
           // No SNAP peer available — try any peer as fallback
           log.debug("No SNAP-capable peer for pivot header, falling back to BestPeer")
-          val fallbackMsg = ETH66.GetBlockHeaders(ETH66.nextRequestId, Left(targetBlock), maxHeaders = 1, skip = 0, reverse = false)
+          val fallbackMsg =
+            ETH66.GetBlockHeaders(ETH66.nextRequestId, Left(targetBlock), maxHeaders = 1, skip = 0, reverse = false)
           val fallbackReq = Request[ETH66.GetBlockHeaders](fallbackMsg, BestPeer, (m: ETH66.GetBlockHeaders) => m)
           peersClient ? fallbackReq
         case other =>

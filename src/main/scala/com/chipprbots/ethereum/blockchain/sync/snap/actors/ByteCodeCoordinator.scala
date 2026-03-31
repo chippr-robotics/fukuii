@@ -294,8 +294,8 @@ class ByteCodeCoordinator(
     }
   }
 
-  /** Re-dispatch pending tasks to peers known from active requests.
-    * Called after budget increase to avoid waiting for the next 1-second PeerAvailable tick.
+  /** Re-dispatch pending tasks to peers known from active requests. Called after budget increase to avoid waiting for
+    * the next 1-second PeerAvailable tick.
     */
   private def tryRedispatchPendingTasks(): Unit = {
     if (pendingTasks.isEmpty) return

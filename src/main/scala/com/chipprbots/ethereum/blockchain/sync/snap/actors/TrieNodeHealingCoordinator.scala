@@ -148,12 +148,11 @@ class TrieNodeHealingCoordinator(
     if (statelessPeers.contains(peer.id.value)) return
     if (isPeerCoolingDown(peer)) return
     var inflight = inFlightForPeer(peer)
-    while (pendingTasks.nonEmpty && inflight < maxInFlightPerPeer && activeRequests.size < maxConcurrentRequests) {
+    while (pendingTasks.nonEmpty && inflight < maxInFlightPerPeer && activeRequests.size < maxConcurrentRequests)
       requestNextBatch(peer) match {
         case Some(_) => inflight += 1
         case None    => return
       }
-    }
   }
 
   // Batched raw node storage: accumulate nodes and flush asynchronously
@@ -265,7 +264,8 @@ class TrieNodeHealingCoordinator(
     case HealingCheckCompletion =>
       if (isComplete && !flushing) {
         flushRawNodesSync()
-        val abandonedStr = if (abandonedTaskCount > 0) s" ($abandonedTaskCount abandoned — regular sync will recover)" else ""
+        val abandonedStr =
+          if (abandonedTaskCount > 0) s" ($abandonedTaskCount abandoned — regular sync will recover)" else ""
         log.info(s"Healing round complete: $totalNodesHealed total nodes healed$abandonedStr. Notifying controller.")
         snapSyncController ! SNAPSyncController.StateHealingComplete
       }
@@ -520,8 +520,10 @@ class TrieNodeHealingCoordinator(
     }
 
     if (requeued > 0) {
-      log.info(s"Re-queued $requeued timed-out healing tasks (pending: ${pendingTasks.size})" +
-        (if (abandoned > 0) s", abandoned $abandoned" else ""))
+      log.info(
+        s"Re-queued $requeued timed-out healing tasks (pending: ${pendingTasks.size})" +
+          (if (abandoned > 0) s", abandoned $abandoned" else "")
+      )
     }
 
     // Check global stagnation: no nodes healed for healingStagnationTimeoutMs

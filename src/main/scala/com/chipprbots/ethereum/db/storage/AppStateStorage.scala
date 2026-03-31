@@ -265,8 +265,8 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putSnapSyncStorageFilePath(path: String): DataSourceBatchUpdate =
     put(Keys.SnapSyncStorageFilePath, path)
 
-  /** Get the finalized account trie root hash produced by finalizeTrie().
-    * This may differ from the pivot block header's stateRoot after pivot refreshes.
+  /** Get the finalized account trie root hash produced by finalizeTrie(). This may differ from the pivot block header's
+    * stateRoot after pivot refreshes.
     */
   def getSnapSyncFinalizedRoot(): Option[ByteString] =
     get(Keys.SnapSyncFinalizedRoot).map(v => ByteString(Hex.decode(v)))

@@ -24,9 +24,8 @@ import com.chipprbots.ethereum.utils.ByteUtils
   */
 object ETH66 {
 
-  /** Marker trait for ETH66 messages that carry a request ID.
-    * Used by PeerRequestHandler to validate that a response's request ID
-    * matches the outstanding request, preventing stale response consumption.
+  /** Marker trait for ETH66 messages that carry a request ID. Used by PeerRequestHandler to validate that a response's
+    * request ID matches the outstanding request, preventing stale response consumption.
     */
   trait HasRequestId { def requestId: BigInt }
 
@@ -118,7 +117,8 @@ object ETH66 {
       maxHeaders: BigInt,
       skip: BigInt,
       reverse: Boolean
-  ) extends Message with HasRequestId {
+  ) extends Message
+      with HasRequestId {
     override def code: Int = Codes.GetBlockHeadersCode
 
     override def toString: String =

@@ -52,11 +52,15 @@ class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
   /** Start periodic progress logging. */
   def startPeriodicLogging(): Unit = {
     val timer = new java.util.Timer("sync-progress-monitor", true)
-    timer.scheduleAtFixedRate(new java.util.TimerTask {
-      def run(): Unit =
-        try logProgress()
-        catch { case e: Exception => log.error(s"Progress monitor error: ${e.getMessage}", e) }
-    }, 30000L, 30000L)
+    timer.scheduleAtFixedRate(
+      new java.util.TimerTask {
+        def run(): Unit =
+          try logProgress()
+          catch { case e: Exception => log.error(s"Progress monitor error: ${e.getMessage}", e) }
+      },
+      30000L,
+      30000L
+    )
     periodicLogTask = Some(new Cancellable {
       def cancel(): Boolean = { timer.cancel(); true }
       def isCancelled: Boolean = false
@@ -305,8 +309,12 @@ case class SyncProgress(
     import SNAPSyncController._
 
     val stages = Vector[SyncPhase](
-      AccountRangeSync, ByteCodeAndStorageSync, StateHealing,
-      StateValidation, ChainDownloadCompletion, Completed
+      AccountRangeSync,
+      ByteCodeAndStorageSync,
+      StateHealing,
+      StateValidation,
+      ChainDownloadCompletion,
+      Completed
     )
 
     val stageIndex = stages.indexOf(phase) match {

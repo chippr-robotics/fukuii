@@ -222,7 +222,12 @@ class StateValidator(mptStorage: MptStorage) {
             try {
               val storageRoot = storage.get(account.storageRoot.toArray)
               traverseStorageTrieWithPaths(
-                storageRoot, storage, Array.empty[Byte], ByteString(accountHashBytes), result, mutable.Set.empty
+                storageRoot,
+                storage,
+                Array.empty[Byte],
+                ByteString(accountHashBytes),
+                result,
+                mutable.Set.empty
               )
             } catch {
               case e: MerklePatriciaTrie.MissingNodeException =>

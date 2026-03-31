@@ -517,7 +517,10 @@ class AccountRangeCoordinator(
     */
   private def finalizing: Receive = {
     case TrieFlushComplete(Right(finalizedRoot)) =>
-      log.info("State trie finalized successfully with root {}", finalizedRoot.take(8).toArray.map("%02x".format(_)).mkString)
+      log.info(
+        "State trie finalized successfully with root {}",
+        finalizedRoot.take(8).toArray.map("%02x".format(_)).mkString
+      )
       snapSyncController ! SNAPSyncController.AccountTrieFinalized(finalizedRoot)
       snapSyncController ! SNAPSyncController.ProgressAccountsTrieFinalized
       context.stop(self)
@@ -586,8 +589,8 @@ class AccountRangeCoordinator(
       idleWorkers += worker
     }
 
-  /** Dispatch up to maxInFlightPerPeer tasks to the given peer (pipelining).
-    * Mirrors ByteCodeCoordinator.dispatchIfPossible — the proven pattern for SNAP sync.
+  /** Dispatch up to maxInFlightPerPeer tasks to the given peer (pipelining). Mirrors
+    * ByteCodeCoordinator.dispatchIfPossible — the proven pattern for SNAP sync.
     */
   private def dispatchIfPossible(peer: Peer): Unit = {
     if (pendingTasks.isEmpty) return
@@ -849,7 +852,9 @@ class AccountRangeCoordinator(
           flushTrieToStorage()
           accountsSinceLastFlush = 0
         }
-        log.debug(s"Stored all $totalCount accounts in-memory ($accountsDownloaded total, ${accountsSinceLastFlush} since last flush)")
+        log.debug(
+          s"Stored all $totalCount accounts in-memory ($accountsDownloaded total, ${accountsSinceLastFlush} since last flush)"
+        )
 
         if (isTaskRangeComplete) {
           task.done = true
@@ -1066,8 +1071,8 @@ class AccountRangeCoordinator(
     * per unit of keyspace), then extrapolates to the full 2^256 space. Only considers tasks that have actually been
     * explored, avoiding inflation from un-dispatched chunks.
     *
-    * Uses BigInt arithmetic throughout to avoid precision loss — 2^256 is far beyond Double's
-    * 15-17 significant digits, so `covered.toDouble / keyspaceSize.toDouble` always produces 0.0.
+    * Uses BigInt arithmetic throughout to avoid precision loss — 2^256 is far beyond Double's 15-17 significant digits,
+    * so `covered.toDouble / keyspaceSize.toDouble` always produces 0.0.
     */
   private def computeKeyspaceEstimate(): Option[Long] = {
     if (accountsDownloaded < 10000) return None // too early for reliable estimate

@@ -25,8 +25,8 @@ object SNAPSyncMetrics extends MetricsContainer {
 
   // ===== Sync Phase Metrics =====
 
-  /** Current SNAP sync phase (0=Idle, 1=AccountRange, 2=ByteCode, 3=ByteCode+Storage, 4=Storage,
-    * 5=StateHealing, 6=StateValidation, 7=ChainDownload, 8=Completed)
+  /** Current SNAP sync phase (0=Idle, 1=AccountRange, 2=ByteCode, 3=ByteCode+Storage, 4=Storage, 5=StateHealing,
+    * 6=StateValidation, 7=ChainDownload, 8=Completed)
     */
   final private val CurrentPhaseGauge =
     metrics.registry.gauge("snapsync.phase.current.gauge", new AtomicDouble(0d))

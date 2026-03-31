@@ -78,16 +78,22 @@ class StateNodeFetcher(
         // Without this, each failure immediately spawns a new request while old PeerRequestHandler
         // actors are still alive waiting for timeout — creating unbounded request multiplication.
         requester.foreach { req =>
-          context.scheduleOnce(5.seconds, context.self,
-            StateNodeFetcher.FetchStateNode(req.hash, req.replyTo, req.stateRoot, req.paths))
+          context.scheduleOnce(
+            5.seconds,
+            context.self,
+            StateNodeFetcher.FetchStateNode(req.hash, req.replyTo, req.stateRoot, req.paths)
+          )
         }
         Behaviors.same
       case _ => Behaviors.unhandled
     }
 
   private def retryAfterBackoff(req: StateNodeRequester): Unit =
-    context.scheduleOnce(5.seconds, context.self,
-      StateNodeFetcher.FetchStateNode(req.hash, req.replyTo, req.stateRoot, req.paths))
+    context.scheduleOnce(
+      5.seconds,
+      context.self,
+      StateNodeFetcher.FetchStateNode(req.hash, req.replyTo, req.stateRoot, req.paths)
+    )
 
   private def handleNodeDataValues(peer: Peer, values: Seq[ByteString]): Behavior[StateNodeFetcherCommand] =
     requester
@@ -124,7 +130,10 @@ class StateNodeFetcher(
           val matchingNode = nodes.find(n => kec256(n) == stateNodeRequester.hash)
           matchingNode match {
             case Some(nodeData) =>
-              log.info("Successfully fetched missing state node via SNAP GetTrieNodes ({} nodes in response)", nodes.size)
+              log.info(
+                "Successfully fetched missing state node via SNAP GetTrieNodes ({} nodes in response)",
+                nodes.size
+              )
               stateNodeRequester.replyTo ! FetchedStateNode(NodeData(Seq(nodeData)))
               requester = None
               Behaviors.same[StateNodeFetcherCommand]
@@ -165,8 +174,11 @@ class StateNodeFetcher(
     }
 
   private def sendGetTrieNodes(root: ByteString, pathGroups: Seq[Seq[ByteString]]): Unit = {
-    log.info("Requesting missing state node via SNAP GetTrieNodes ({} path groups, root={})",
-      pathGroups.size, root.take(4).toArray.map("%02x".format(_)).mkString)
+    log.info(
+      "Requesting missing state node via SNAP GetTrieNodes ({} path groups, root={})",
+      pathGroups.size,
+      root.take(4).toArray.map("%02x".format(_)).mkString
+    )
     val request = GetTrieNodes(
       requestId = ETH66.nextRequestId,
       rootHash = root,

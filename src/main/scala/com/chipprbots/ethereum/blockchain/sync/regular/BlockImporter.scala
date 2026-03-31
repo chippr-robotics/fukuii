@@ -435,18 +435,19 @@ class BlockImporter(
                 val accountHash = kec256(e.accountAddress)
                 // Try local trie walk first; if that fails (deferred merkleization — no local trie),
                 // construct multi-depth pathsets from the account hash directly.
-                val paths: Option[Seq[Seq[ByteString]]] = parentStateRoot.flatMap { root =>
-                  walkAccountPath(root, accountHash, e.hash).map(p => Seq(p))
-                }.orElse {
-                  // Deferred merkleization fallback: request nodes at nibble prefix depths 1-16.
-                  // Each prefix is a 1-element pathset group (account trie, not storage).
-                  // The SNAP server walks its own trie and returns the node at each depth.
-                  val nibbles = accountHash.toArray.flatMap(b =>
-                    Array(((b >> 4) & 0xf).toByte, (b & 0xf).toByte))
-                  Some((1 to 16).map { depth =>
-                    Seq(ByteString(HexPrefix.encode(nibbles.take(depth), isLeaf = false)))
-                  })
-                }
+                val paths: Option[Seq[Seq[ByteString]]] = parentStateRoot
+                  .flatMap { root =>
+                    walkAccountPath(root, accountHash, e.hash).map(p => Seq(p))
+                  }
+                  .orElse {
+                    // Deferred merkleization fallback: request nodes at nibble prefix depths 1-16.
+                    // Each prefix is a 1-element pathset group (account trie, not storage).
+                    // The SNAP server walks its own trie and returns the node at each depth.
+                    val nibbles = accountHash.toArray.flatMap(b => Array(((b >> 4) & 0xf).toByte, (b & 0xf).toByte))
+                    Some((1 to 16).map { depth =>
+                      Seq(ByteString(HexPrefix.encode(nibbles.take(depth), isLeaf = false)))
+                    })
+                  }
                 log.info(
                   "Missing account trie node {} for account {} during import of block {}, pathFound={}",
                   ByteStringUtils.hash2string(e.hash),

@@ -12,9 +12,8 @@ object Messages {
   // Global Coordinator Control Messages
   // ========================================
 
-  /** Dynamically adjust per-peer concurrency budget for a coordinator.
-    * Sent by SNAPSyncController at phase transitions to implement global per-peer request budgeting
-    * (Geth-aligned: total 5 requests per peer across all coordinators).
+  /** Dynamically adjust per-peer concurrency budget for a coordinator. Sent by SNAPSyncController at phase transitions
+    * to implement global per-peer request budgeting (Geth-aligned: total 5 requests per peer across all coordinators).
     */
   case class UpdateMaxInFlightPerPeer(newLimit: Int)
 
@@ -152,10 +151,9 @@ object Messages {
     */
   case object ForceCompleteStorage extends StorageRangeCoordinatorMessage
 
-  /** Two-phase storage: async trie construction completed for a batch of accounts.
-    * Background thread built tries from buffered raw slots and flushed to storage.
-    * `forStateRoot` tags the pivot state root this construction was initiated under,
-    * so stale completions (after pivot refresh) can be detected and ignored.
+  /** Two-phase storage: async trie construction completed for a batch of accounts. Background thread built tries from
+    * buffered raw slots and flushed to storage. `forStateRoot` tags the pivot state root this construction was
+    * initiated under, so stale completions (after pivot refresh) can be detected and ignored.
     */
   private[actors] case class TrieConstructionComplete(
       accountHashes: Seq[ByteString],
@@ -192,9 +190,8 @@ object Messages {
   case object HealingGetProgress extends TrieNodeHealingCoordinatorMessage
   case object HealingCheckCompletion extends TrieNodeHealingCoordinatorMessage
 
-  /** Sent by SNAPSyncController when a fresher pivot has been selected during healing.
-    * Coordinator updates state root, clears pending tasks and stateless tracking.
-    * A new trie walk will re-populate tasks for the new root.
+  /** Sent by SNAPSyncController when a fresher pivot has been selected during healing. Coordinator updates state root,
+    * clears pending tasks and stateless tracking. A new trie walk will re-populate tasks for the new root.
     */
   case class HealingPivotRefreshed(newStateRoot: ByteString) extends TrieNodeHealingCoordinatorMessage
 

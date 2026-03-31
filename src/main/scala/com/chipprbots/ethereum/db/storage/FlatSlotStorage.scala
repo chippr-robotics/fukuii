@@ -12,8 +12,8 @@ import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError
 
 /** Flat storage for contract storage slots — O(1) reads by (accountHash, slotHash).
   *
-  * Stores raw slot values keyed by `accountHash ++ slotHash` (64 bytes) in a dedicated
-  * RocksDB column family. This is the dominant pattern in modern Ethereum clients:
+  * Stores raw slot values keyed by `accountHash ++ slotHash` (64 bytes) in a dedicated RocksDB column family. This is
+  * the dominant pattern in modern Ethereum clients:
   *   - geth: snapshot layer (PathDB/HashDB flat storage)
   *   - nethermind: flat DB for SLOAD
   *   - besu: Bonsai Tries flat storage
@@ -23,8 +23,8 @@ import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError
   *   - Fast SNAP peer serving of GetStorageRanges (sequential scan by account prefix)
   *   - Efficient state iteration for eth_getProof, debug APIs
   *
-  * The MPT-based storage trie is still maintained for Merkle proof generation and
-  * state root computation. Flat storage is a read/write optimization layer.
+  * The MPT-based storage trie is still maintained for Merkle proof generation and state root computation. Flat storage
+  * is a read/write optimization layer.
   */
 class FlatSlotStorage(val dataSource: DataSource) extends TransactionalKeyValueStorage[ByteString, ByteString] {
   val namespace: IndexedSeq[Byte] = Namespaces.FlatSlotNamespace
@@ -37,13 +37,16 @@ class FlatSlotStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def getSlot(accountHash: ByteString, slotHash: ByteString): Option[ByteString] =
     get(accountHash ++ slotHash)
 
-  /** Bulk write for SNAP sync: write all slots for an account in one batch.
-    * Returns a DataSourceBatchUpdate that must be `.commit()`ed.
+  /** Bulk write for SNAP sync: write all slots for an account in one batch. Returns a DataSourceBatchUpdate that must
+    * be `.commit()`ed.
     */
   def putSlotsBatch(accountHash: ByteString, slots: Seq[(ByteString, ByteString)]): DataSourceBatchUpdate =
-    update(Nil, slots.map { case (slotHash, value) =>
-      (accountHash ++ slotHash) -> value
-    })
+    update(
+      Nil,
+      slots.map { case (slotHash, value) =>
+        (accountHash ++ slotHash) -> value
+      }
+    )
 
   override def storageContent: Stream[IO, Either[IterationError, (ByteString, ByteString)]] =
     dataSource.iterate(namespace).map { result =>

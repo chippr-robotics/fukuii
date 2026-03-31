@@ -120,19 +120,19 @@ case class SnapSyncState(
 
   /** Get formatted phase description. */
   def phaseDescription: String = phase match
-    case "AccountRangeSync"      => "📦 Downloading accounts"
+    case "AccountRangeSync"       => "📦 Downloading accounts"
     case "ByteCodeAndStorageSync" => "💾 Downloading bytecodes & storage"
-    case "StateHealing"          => "🔧 Healing trie nodes"
-    case "StateValidation"  => "✓ Validating state"
-    case "Completed"        => "✅ SNAP sync complete"
-    case _                  => "⏸️  Idle"
+    case "StateHealing"           => "🔧 Healing trie nodes"
+    case "StateValidation"        => "✓ Validating state"
+    case "Completed"              => "✅ SNAP sync complete"
+    case _                        => "⏸️  Idle"
 
   /** Get primary metric for current phase. */
   def primaryMetric: (String, Long, Double) = phase match
     case "AccountRangeSync"       => ("Accounts", accountsSynced, recentAccountsPerSec)
     case "ByteCodeAndStorageSync" => ("Slots", storageSlotsSynced, recentSlotsPerSec)
     case "StateHealing"           => ("Nodes", nodesHealed, recentNodesPerSec)
-    case _                  => ("Items", 0L, 0.0)
+    case _                        => ("Items", 0L, 0.0)
 
 object TuiState:
   /** Minimum uptime in seconds before sync estimates are provided. This ensures we have enough data points for accurate
