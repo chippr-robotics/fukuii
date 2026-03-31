@@ -626,11 +626,29 @@ class BlockImporter(
         Right(Nil)
       case UnknownBranch =>
         val currentBlock = blocks.head.number.min(bestKnownBlockNumber)
-        val goingBackTo = (currentBlock - syncConfig.branchResolutionRequestSize).max(0)
-        val msg = s"Unknown branch, going back to block nr $goingBackTo in order to resolve branches"
-        log.warning(msg)
-        fetcher ! BlockFetcher.InvalidateBlocksFrom(goingBackTo, msg, shouldBlacklist = false)
-        Left(goingBackTo)
+        // Floor at best block number (SNAP pivot) — no headers exist below that after SNAP sync.
+        val floor = blockchainReader.getBestBlockNumber()
+        val goingBackTo = (currentBlock - syncConfig.branchResolutionRequestSize).max(floor)
+        if (goingBackTo >= currentBlock) {
+          // At the pivot floor after SNAP sync — skip branch resolution and import directly.
+          // After SNAP sync only the pivot header exists, so branch resolution can never
+          // find a known parent below the pivot. The blocks ARE valid (they continue from
+          // the SNAP-validated pivot). Filter blocks to only those at or above the pivot.
+          val validBlocks = blocks.filter(_.number > floor)
+          if (validBlocks.nonEmpty) {
+            log.info(s"Branch resolution at SNAP pivot floor ($floor), importing ${validBlocks.size} blocks directly")
+            Right(validBlocks)
+          } else {
+            log.warning(s"Branch resolution hit floor at block $floor, no importable blocks in batch")
+            fetcher ! BlockFetcher.InvalidateBlocksFrom(floor + 1, "branch resolution floor", shouldBlacklist = false)
+            Left(floor + 1)
+          }
+        } else {
+          val msg = s"Unknown branch, going back to block nr $goingBackTo in order to resolve branches"
+          log.warning(msg)
+          fetcher ! BlockFetcher.InvalidateBlocksFrom(goingBackTo, msg, shouldBlacklist = false)
+          Left(goingBackTo)
+        }
       case InvalidBranch =>
         val goingBackTo = blocks.head.number
         val msg = s"Invalid branch, going back to $goingBackTo"

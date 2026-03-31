@@ -111,10 +111,8 @@ case class SnapSyncState(
     phase match
       case "AccountRangeSync" if estimatedTotalAccounts > 0 =>
         (accountsSynced.toDouble / estimatedTotalAccounts * 25.0) // 25% of total
-      case "ByteCodeSync" if estimatedTotalBytecodes > 0 =>
-        25.0 + (bytecodesDownloaded.toDouble / estimatedTotalBytecodes * 15.0) // 15% of total
-      case "StorageRangeSync" if estimatedTotalSlots > 0 =>
-        40.0 + (storageSlotsSynced.toDouble / estimatedTotalSlots * 40.0) // 40% of total
+      case "ByteCodeAndStorageSync" if estimatedTotalSlots > 0 =>
+        25.0 + (storageSlotsSynced.toDouble / estimatedTotalSlots * 55.0) // 55% of total
       case "StateHealing"    => 80.0 // Healing is variable but assume 80-95%
       case "StateValidation" => 95.0
       case "Completed"       => 100.0
@@ -122,20 +120,18 @@ case class SnapSyncState(
 
   /** Get formatted phase description. */
   def phaseDescription: String = phase match
-    case "AccountRangeSync" => "📦 Downloading accounts"
-    case "ByteCodeSync"     => "💾 Downloading bytecodes"
-    case "StorageRangeSync" => "🗄️  Downloading storage"
-    case "StateHealing"     => "🔧 Healing trie nodes"
+    case "AccountRangeSync"      => "📦 Downloading accounts"
+    case "ByteCodeAndStorageSync" => "💾 Downloading bytecodes & storage"
+    case "StateHealing"          => "🔧 Healing trie nodes"
     case "StateValidation"  => "✓ Validating state"
     case "Completed"        => "✅ SNAP sync complete"
     case _                  => "⏸️  Idle"
 
   /** Get primary metric for current phase. */
   def primaryMetric: (String, Long, Double) = phase match
-    case "AccountRangeSync" => ("Accounts", accountsSynced, recentAccountsPerSec)
-    case "ByteCodeSync"     => ("Bytecodes", bytecodesDownloaded, recentBytecodesPerSec)
-    case "StorageRangeSync" => ("Slots", storageSlotsSynced, recentSlotsPerSec)
-    case "StateHealing"     => ("Nodes", nodesHealed, recentNodesPerSec)
+    case "AccountRangeSync"       => ("Accounts", accountsSynced, recentAccountsPerSec)
+    case "ByteCodeAndStorageSync" => ("Slots", storageSlotsSynced, recentSlotsPerSec)
+    case "StateHealing"           => ("Nodes", nodesHealed, recentNodesPerSec)
     case _                  => ("Items", 0L, 0.0)
 
 object TuiState:

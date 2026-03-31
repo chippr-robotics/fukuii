@@ -221,9 +221,7 @@ object SNAPSyncMetrics extends MetricsContainer {
     val phaseValue = progress.phase match {
       case SNAPSyncController.Idle                    => 0
       case SNAPSyncController.AccountRangeSync        => 1
-      case SNAPSyncController.ByteCodeSync            => 2
       case SNAPSyncController.ByteCodeAndStorageSync  => 3
-      case SNAPSyncController.StorageRangeSync        => 4
       case SNAPSyncController.StateHealing            => 5
       case SNAPSyncController.StateValidation         => 6
       case SNAPSyncController.ChainDownloadCompletion => 7
