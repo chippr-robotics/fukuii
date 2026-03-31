@@ -37,6 +37,7 @@ import com.chipprbots.ethereum.ledger.StatePrefetcher
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Config.SyncConfig
+import com.chipprbots.ethereum.utils.MilestoneLog
 
 class SyncController(
     blockchain: Blockchain,
@@ -257,12 +258,14 @@ class SyncController(
     case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Done =>
       snapSync ! PoisonPill
       log.info("SNAP sync completed, transitioning to regular sync")
+      MilestoneLog.phase("SNAP sync complete, transitioning to regular sync")
       resetSnapFastCycleCount()
       startRegularSync()
 
     case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.FallbackToFastSync =>
       snapSync ! PoisonPill
       log.warning("SNAP sync failed repeatedly, falling back to fast sync")
+      MilestoneLog.event(s"SNAP->fast sync fallback | cycle=$snapFastCycleCount")
       snapFastCycleCount += 1
       appStateStorage.putSnapFastCycleCount(snapFastCycleCount).commit()
       log.info("SNAP<->Fast cycle count: {}", snapFastCycleCount)
@@ -394,6 +397,7 @@ class SyncController(
 
     case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.FallbackToFastSync =>
       log.warning("Received FallbackToFastSync during pivot header bootstrap. Stopping bootstrap and falling back.")
+      MilestoneLog.event(s"SNAP->fast sync fallback (during pivot bootstrap) | cycle=$snapFastCycleCount")
       headerBootstrap ! PoisonPill
       peersClient ! PoisonPill
       originalSnapSyncRef ! PoisonPill
@@ -579,6 +583,7 @@ class SyncController(
 
   def startFastSync(): Unit = {
     rocksDbDataSourceOpt.foreach(_.enableBulkSyncMode())
+    MilestoneLog.phase("Fast sync starting")
     syncGeneration += 1
     val fastSync = context.actorOf(
       FastSync
@@ -610,6 +615,7 @@ class SyncController(
   def startSnapSync(): Unit = {
     rocksDbDataSourceOpt.foreach(_.enableBulkSyncMode())
     log.info("Starting SNAP sync mode")
+    MilestoneLog.phase("SNAP sync starting")
     syncGeneration += 1
 
     val snapSyncConfig = loadSnapSyncConfig()
@@ -642,6 +648,7 @@ class SyncController(
 
   def startRegularSync(): Unit = {
     rocksDbDataSourceOpt.foreach(_.disableBulkSyncMode())
+    MilestoneLog.phase("Regular sync starting")
     syncGeneration += 1
     val peersClient =
       context.actorOf(
@@ -772,6 +779,7 @@ class SyncController(
           context.system.deadLetters
         )
         log.info("All recovery complete. Transitioning to regular sync.")
+        MilestoneLog.phase("Recovery complete (bytecode+storage), transitioning to regular sync")
         startRegularSync()
       } else {
         context.become(
@@ -787,6 +795,7 @@ class SyncController(
           context.system.deadLetters
         )
         log.info("All recovery complete. Transitioning to regular sync.")
+        MilestoneLog.phase("Recovery complete (storage+bytecode), transitioning to regular sync")
         startRegularSync()
       } else {
         context.become(

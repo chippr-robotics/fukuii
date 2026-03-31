@@ -31,6 +31,7 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes.GetTrieNod
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes
 import com.chipprbots.ethereum.rlp.RLPValue
 import com.chipprbots.ethereum.utils.Config.SyncConfig
+import com.chipprbots.ethereum.utils.MilestoneLog
 
 class StateNodeFetcher(
     val peersClient: ClassicActorRef,
@@ -109,6 +110,9 @@ class StateNodeFetcher(
         totalRetryCount, snapRetryCount, totalRetryCount - snapRetryCount, hashHex
       )
       req.replyTo ! BlockFetcher.StateNodeFetchFailed(req.hash)
+      MilestoneLog.error(
+        s"State node fetch failed | hash=$hashHex retries=$totalRetryCount snap=$snapRetryCount fallback=${totalRetryCount - snapRetryCount}"
+      )
       requester = None
       return
     }
@@ -119,6 +123,7 @@ class StateNodeFetcher(
     if (snapRetryCount >= syncConfig.maxStateNodeSnapRetries && req.paths.isDefined) {
       val hashHex = req.hash.take(4).toArray.map("%02x".format(_)).mkString
       if (snapRetryCount == syncConfig.maxStateNodeSnapRetries) {
+        MilestoneLog.event(s"State node SNAP->GetNodeData fallback | hash=$hashHex after $snapRetryCount SNAP retries")
         log.warn(
           "SNAP GetTrieNodes returned empty {} times for hash={}. " +
             "Falling back to GetNodeData (hash-based lookup, no SNAP paths).",

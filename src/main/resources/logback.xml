@@ -37,6 +37,19 @@
         </encoder>
     </appender>
 
+    <appender name="MILESTONE" class="ch.qos.logback.core.FileAppender">
+        <file>${LOGSDIR}/milestone.log</file>
+        <append>true</append>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <logger name="fukuii.milestone" level="INFO" additivity="false">
+        <appender-ref ref="MILESTONE" />
+        <appender-ref ref="CONSOLE" />
+    </logger>
+
     <appender name="METRICS" class="io.prometheus.client.logback.InstrumentedAppender" />
 
     <!-- Console appender - uses JSON output if ASJSON property is true, otherwise plain text -->

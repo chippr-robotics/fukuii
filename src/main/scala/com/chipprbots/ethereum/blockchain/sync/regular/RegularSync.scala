@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.ledger.BranchResolution
 import com.chipprbots.ethereum.ledger.StatePrefetcher
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.utils.Config.SyncConfig
+import com.chipprbots.ethereum.utils.MilestoneLog
 
 class RegularSync(
     peersClient: ActorRef,
@@ -100,6 +101,7 @@ class RegularSync(
   def running(progressState: ProgressState): Receive = {
     case SyncProtocol.Start =>
       log.info("Starting regular sync")
+      MilestoneLog.phase(s"Regular sync started | initial=${progressState.initialBlock} best_known=${progressState.bestKnownNetworkBlock}")
       importer ! BlockImporter.Start
     case SyncProtocol.MinedBlock(block) =>
       log.info(s"Block mined [number = {}, hash = {}]", block.number, block.header.hashAsHexString)

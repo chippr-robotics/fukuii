@@ -13,7 +13,7 @@ import com.chipprbots.ethereum.domain.{Block, BlockBody, BlockHeader, Blockchain
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
-import com.chipprbots.ethereum.utils.{Config, Hex, Logger}
+import com.chipprbots.ethereum.utils.{Config, Hex, Logger, MilestoneLog}
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
@@ -512,7 +512,9 @@ class SNAPSyncController(
         log.info("Ignoring duplicate AccountRangeSyncComplete")
       } else {
         accountsComplete = true
+        val acctCount = progressMonitor.currentProgress.accountsSynced
         log.info("Account range sync complete. Signaling NoMore to bytecode/storage coordinators.")
+        MilestoneLog.phase(s"Account download complete | ${acctCount} accounts")
 
         // Persist accounts-complete flag for crash recovery (Step 7)
         appStateStorage.putSnapSyncAccountsComplete(true).commit()
@@ -585,6 +587,7 @@ class SNAPSyncController(
       log.info(
         s"ByteCode sync complete ($downloaded bytecodes). Storage: $storagePhaseComplete, Accounts: $accountsComplete"
       )
+      MilestoneLog.phase(s"Bytecode sync complete | $downloaded bytecodes")
       // Bytecode done — give storage the full per-peer budget (was 3/5, now 5/5).
       // On peer-limited networks (Mordor: ~10 peers), this nearly doubles storage throughput.
       if (!storagePhaseComplete) {
@@ -598,6 +601,7 @@ class SNAPSyncController(
     case StorageRangeSyncComplete =>
       storagePhaseComplete = true
       log.info(s"Storage range sync complete. ByteCode: $bytecodePhaseComplete, Accounts: $accountsComplete")
+      MilestoneLog.phase("Storage sync complete")
       checkAllDownloadsComplete()
 
     case HealingAllPeersStateless if currentPhase == StateHealing =>
@@ -618,6 +622,7 @@ class SNAPSyncController(
       trieWalkInProgress = false
       if (missingNodes.isEmpty) {
         log.info("Trie walk found no missing nodes — healing complete!")
+        MilestoneLog.phase("Trie healing complete | 0 missing nodes")
         consecutiveUnproductiveHealingRounds = 0
         progressMonitor.startPhase(StateValidation)
         currentPhase = StateValidation
@@ -629,6 +634,9 @@ class SNAPSyncController(
             s"Healing stagnation: ${missingNodes.size} missing nodes persist after " +
               s"$consecutiveUnproductiveHealingRounds consecutive rounds with no progress. " +
               s"Proceeding to validation — regular sync will recover missing nodes on-demand."
+          )
+          MilestoneLog.error(
+            s"Healing stagnation | ${missingNodes.size} missing nodes after $consecutiveUnproductiveHealingRounds rounds, proceeding to validation"
           )
           consecutiveUnproductiveHealingRounds = 0
           progressMonitor.startPhase(StateValidation)
@@ -661,6 +669,9 @@ class SNAPSyncController(
 
     case StateValidationComplete =>
       log.info("State validation complete. SNAP sync finished!")
+      MilestoneLog.phase(
+        s"State validation complete | pivot=${pivotBlock.getOrElse("?")} root=${stateRoot.map(_.toHex.take(8)).getOrElse("?")}"
+      )
       completeSnapSync()
 
     // Chain download runs in parallel — track progress and completion
@@ -838,6 +849,7 @@ class SNAPSyncController(
         completeSnapSync()
       } else {
         log.info("All state downloads complete (accounts + bytecodes + storage). Starting healing...")
+        MilestoneLog.phase("Trie healing starting")
         currentPhase = StateHealing
         startStateHealing()
       }
@@ -922,6 +934,9 @@ class SNAPSyncController(
             log.info(s"State root: ${header.stateRoot.toHex.take(16)}...")
             log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
             log.info("=" * 80)
+            MilestoneLog.phase(
+              s"SNAP account download starting | pivot=$targetPivot root=${header.stateRoot.toHex.take(8)} workers=${snapSyncConfig.accountConcurrency}"
+            )
 
             currentPhase = AccountRangeSync
             startAccountRangeSync(header.stateRoot)
@@ -2413,6 +2428,10 @@ class SNAPSyncController(
     }
 
     log.info(s"Pivot refreshed: block $oldPivot -> $newPivotBlock, root $oldRoot -> $newRoot")
+    val drift = newPivotBlock - oldPivot
+    if (drift > 500) {
+      MilestoneLog.event(s"Pivot refreshed | old=$oldPivot new=$newPivotBlock drift=$drift phase=$currentPhase")
+    }
 
     // Update internal state
     pivotBlock = Some(newPivotBlock)
@@ -2667,6 +2686,9 @@ class SNAPSyncController(
       log.error(
         s"Account sync stalled after $consecutiveAccountStallRefreshes consecutive pivot refreshes. " +
           s"Falling back to fast sync."
+      )
+      MilestoneLog.error(
+        s"Account stagnation | $consecutiveAccountStallRefreshes consecutive stall refreshes, falling back to fast sync"
       )
       if (recordCriticalFailure(context)) {
         fallbackToFastSync()

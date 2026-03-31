@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.ledger._
 import com.chipprbots.ethereum.mpt._
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingAccountNodeException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
+import com.chipprbots.ethereum.utils.MilestoneLog
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingStorageNodeException
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
@@ -148,6 +149,9 @@ class BlockImporter(
           "Skipping block and continuing sync. Node may be fetched on subsequent attempts.",
         ByteStringUtils.hash2string(hash),
         blocksToRetry.head.number
+      )
+      MilestoneLog.error(
+        s"State node fetch exhausted | block=${blocksToRetry.head.number} hash=${ByteStringUtils.hash2string(hash)} action=skip_block"
       )
       val remaining = blocksToRetry.tail
       if (remaining.nonEmpty) {
