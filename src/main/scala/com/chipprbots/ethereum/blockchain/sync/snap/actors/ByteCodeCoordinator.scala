@@ -56,6 +56,7 @@ class ByteCodeCoordinator(
 
   private val peerFailureCounts = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
   private val peerCooldownUntilMillis = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Long]
+  private val knownAvailablePeers = mutable.Set[Peer]()
 
   private def nowMillis: Long = System.currentTimeMillis()
 
@@ -192,20 +193,25 @@ class ByteCodeCoordinator(
       peerFailureCounts.clear()
       peerCooldownUntilMillis.clear()
       peerResponseBytesTarget.clear()
+      knownAvailablePeers.clear()
 
     case PeerAvailable(peer) =>
+      val evicted0 = knownAvailablePeers.filter(_.remoteAddress == peer.remoteAddress)
+      knownAvailablePeers --= evicted0
+      knownAvailablePeers += peer
       if (isPeerCoolingDown(peer)) {
         log.debug(s"Ignoring PeerAvailable(${peer.id.value}) due to cooldown")
       } else {
-        // Dispatch tasks to available peer
         dispatchIfPossible(peer)
       }
 
     case ByteCodePeerAvailable(peer) =>
+      val evicted1 = knownAvailablePeers.filter(_.remoteAddress == peer.remoteAddress)
+      knownAvailablePeers --= evicted1
+      knownAvailablePeers += peer
       if (isPeerCoolingDown(peer)) {
         log.debug(s"Ignoring ByteCodePeerAvailable(${peer.id.value}) due to cooldown")
       } else {
-        // Same as PeerAvailable - dispatch tasks to available peer
         dispatchIfPossible(peer)
       }
 
@@ -324,13 +330,15 @@ class ByteCodeCoordinator(
     }
   }
 
-  /** Re-dispatch pending tasks to peers known from active requests.
-    * Called after budget increase to avoid waiting for the next 1-second PeerAvailable tick.
+  /** Re-dispatch pending tasks to known available peers not on cooldown.
+    * Uses knownAvailablePeers (populated on every PeerAvailable tick) rather than
+    * activeTasks — ensures redispatch works even when all active tasks are cooling down.
     */
   private def tryRedispatchPendingTasks(): Unit = {
     if (pendingTasks.isEmpty) return
-    val knownPeers = activeTasks.values.map(_.peer).toSet
-    for (peer <- knownPeers if pendingTasks.nonEmpty && !isPeerCoolingDown(peer))
+    val eligiblePeers = knownAvailablePeers.filterNot(isPeerCoolingDown).toList
+    if (eligiblePeers.isEmpty) return
+    for (peer <- eligiblePeers if pendingTasks.nonEmpty)
       dispatchIfPossible(peer)
   }
 
