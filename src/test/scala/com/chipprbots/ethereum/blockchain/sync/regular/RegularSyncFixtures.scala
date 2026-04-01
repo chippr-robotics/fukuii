@@ -32,7 +32,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.blockchain.sync._
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
-import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.{EvmCodeStorage, StateStorage}
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits._
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.ledger._
@@ -82,6 +82,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
     lazy val branchResolution = new BranchResolution(blockchainReader)
 
     val stateStorage: StateStorage = stub[StateStorage]
+    val evmCodeStorage: EvmCodeStorage = stub[EvmCodeStorage]
 
     lazy val regularSync: ActorRef = system.actorOf(
       RegularSync
@@ -92,6 +93,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
           consensusAdapter,
           blockchainReader,
           stateStorage,
+          evmCodeStorage,
           branchResolution,
           validators.blockValidator,
           blacklist,

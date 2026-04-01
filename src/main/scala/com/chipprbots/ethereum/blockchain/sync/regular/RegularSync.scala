@@ -20,7 +20,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync.ProgressProto
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync.ProgressState
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.validators.BlockValidator
-import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.{EvmCodeStorage, StateStorage}
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.ledger.BranchResolution
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
@@ -33,6 +33,7 @@ class RegularSync(
     consensus: ConsensusAdapter,
     blockchainReader: BlockchainReader,
     stateStorage: StateStorage,
+    evmCodeStorage: EvmCodeStorage,
     branchResolution: BranchResolution,
     blockValidator: BlockValidator,
     blacklist: Blacklist,
@@ -71,6 +72,7 @@ class RegularSync(
         consensus,
         blockchainReader,
         stateStorage,
+        evmCodeStorage,
         branchResolution,
         syncConfig,
         ommersPool,
@@ -144,6 +146,7 @@ object RegularSync {
       consensus: ConsensusAdapter,
       blockchainReader: BlockchainReader,
       stateStorage: StateStorage,
+      evmCodeStorage: EvmCodeStorage,
       branchResolution: BranchResolution,
       blockValidator: BlockValidator,
       blacklist: Blacklist,
@@ -161,6 +164,7 @@ object RegularSync {
         consensus,
         blockchainReader,
         stateStorage,
+        evmCodeStorage,
         branchResolution,
         blockValidator,
         blacklist,
