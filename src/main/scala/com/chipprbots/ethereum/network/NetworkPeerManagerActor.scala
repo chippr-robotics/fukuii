@@ -282,7 +282,10 @@ class NetworkPeerManagerActor(
     case SnapProbeTimeout(requestId) =>
       SnapServerChecker.cancelProbe(requestId).foreach { peerId =>
         log.info("SNAP_PROBE_TIMEOUT: peer={} did not respond to snap probe within {}ms", peerId, SnapServerChecker.ProbeTimeoutMillis)
-        // Peer stays isServingSnap=false (default) — will be excluded from snap peer selection
+        // Clear probed state so the peer can be re-probed on the next BlockHeaders message.
+        // Without this, a single timeout permanently excludes the peer (hasBeenProbed stays true
+        // but isServingSnap stays false — the probe condition can never pass again).
+        SnapServerChecker.clearProbedState(peerId)
       }
 
   }
