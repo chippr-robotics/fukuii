@@ -276,6 +276,7 @@ class NetworkPeerManagerActor(
       peerEventBusActor ! Unsubscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peerId)))
       peerEventBusActor ! Unsubscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peerId)))
       NetworkMetrics.registerRemoveHandshakedPeer(peersWithInfo(peerId).peer)
+      SnapServerChecker.clearProbedState(peerId) // allow re-probe on reconnect with same PeerId
       context.become(handleMessages(peersWithInfo - peerId))
 
     case SnapProbeTimeout(requestId) =>

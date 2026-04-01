@@ -118,6 +118,16 @@ class SnapServerCheckerSpec
     SnapServerChecker.hasBeenProbed(peerId) shouldBe true
   }
 
+  it should "clearProbedState removes peer from probed set" taggedAs UnitTest in {
+    val testProbe = TestProbe()
+    val peerId = PeerId("test-clear")
+    SnapServerChecker.sendProbe(testProbe.ref, testStateRoot, peerId)
+    SnapServerChecker.hasBeenProbed(peerId) shouldBe true
+
+    SnapServerChecker.clearProbedState(peerId)
+    SnapServerChecker.hasBeenProbed(peerId) shouldBe false
+  }
+
   it should "send PeerActor.SendMessage when sendProbe is called" taggedAs UnitTest in {
     val testProbe = TestProbe()
     val peerId = PeerId("msg-peer")

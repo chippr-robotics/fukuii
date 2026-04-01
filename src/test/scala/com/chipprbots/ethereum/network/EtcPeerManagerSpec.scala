@@ -27,6 +27,7 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnec
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerHandshakeSuccessful
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
 import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
+import com.chipprbots.ethereum.network.PeerEventBusActor.Unsubscribe
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier._
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.Capability
@@ -361,6 +362,35 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     // Second BlockHeaders → should NOT trigger another probe
     peersInfoHolder ! MessageFromPeer(BlockHeaders(Seq(header)), peer1.id)
     peer1Probe.expectNoMessage()
+  }
+
+  it should "re-probe a snap/1 peer after disconnect and reconnect" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+    SnapServerChecker.reset()
+
+    val snapStatus = peer1Info.remoteStatus.copy(supportsSnap = true)
+    val snapPeerInfo = peer1Info.copy(remoteStatus = snapStatus)
+    setupNewPeer(peer1, peer1Probe, snapPeerInfo)
+
+    // First session: BlockHeaders → probe fires
+    val stateRoot = ByteString(Array.fill(32)(0xAB.toByte))
+    peersInfoHolder ! MessageFromPeer(BlockHeaders(Seq(baseBlockHeader.copy(stateRoot = stateRoot))), peer1.id)
+    peer1Probe.expectMsgType[PeerActor.SendMessage] // probe sent
+    SnapServerChecker.hasBeenProbed(peer1.id) shouldBe true
+
+    // Peer disconnects — probedPeers must be cleared.
+    // Disconnect sends two Unsubscribe messages to peerEventBus; drain them before reconnect.
+    peersInfoHolder ! PeerDisconnected(peer1.id)
+    peerEventBus.expectMsgType[Unsubscribe] // PeerDisconnectedClassifier unsubscribe
+    peerEventBus.expectMsgType[Unsubscribe] // MessageClassifier unsubscribe
+    SnapServerChecker.hasBeenProbed(peer1.id) shouldBe false
+
+    // Peer reconnects with same PeerId (Besu fixed node key)
+    setupNewPeer(peer1, peer1Probe, snapPeerInfo)
+
+    // Second session: BlockHeaders → probe fires again
+    peersInfoHolder ! MessageFromPeer(BlockHeaders(Seq(baseBlockHeader.copy(stateRoot = stateRoot))), peer1.id)
+    peer1Probe.expectMsgType[PeerActor.SendMessage] // probe re-sent
   }
 
   it should "route SNAP protocol messages to registered SNAPSyncController" taggedAs (

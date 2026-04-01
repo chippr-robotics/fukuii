@@ -81,6 +81,14 @@ object SnapServerChecker {
   /** Check if a peer has already been probed (to avoid duplicate probes on repeated BlockHeaders). */
   def hasBeenProbed(peerId: PeerId): Boolean = probedPeers.contains(peerId)
 
+  /** Remove a peer from the probed set so it will be re-probed on reconnect.
+    * Call this when a peer disconnects — Besu always reconnects with the same PeerId
+    * (fixed node key), so without clearing, the probe is skipped and isServingSnap
+    * stays false permanently on the new PeerInfo instance.
+    */
+  def clearProbedState(peerId: PeerId): Unit =
+    probedPeers.remove(peerId): Unit
+
   /** Send a probe to a peer and register it for tracking. Returns None if already probed. */
   def sendProbe(peerRef: ActorRef, stateRoot: ByteString, peerId: PeerId): BigInt = {
     val (requestId, probeMsg) = createProbe(stateRoot)
