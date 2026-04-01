@@ -207,7 +207,8 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with 
       peerManager.ref,
       null, // blockchainReader not needed for non-export tests
       5.seconds,
-      "/tmp/fukuii-test"
+      "/tmp/fukuii-test",
+      new com.chipprbots.ethereum.network.BlockedIPRegistry(Set.empty)
     )
   }
 
@@ -230,7 +231,8 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with 
       peerManager.ref,
       blockchainReader,
       5.seconds,
-      "/tmp/fukuii-test"
+      "/tmp/fukuii-test",
+      new com.chipprbots.ethereum.network.BlockedIPRegistry(Set.empty)
     )
 
     val block0: Block = Block(

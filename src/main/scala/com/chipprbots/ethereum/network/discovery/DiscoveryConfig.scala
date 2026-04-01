@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.network.discovery
 
+import scala.jdk.CollectionConverters._
 import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.utils.ConfigUtils
@@ -19,7 +20,8 @@ case class DiscoveryConfig(
     kademliaTimeout: FiniteDuration,
     kademliaBucketSize: Int,
     kademliaAlpha: Int,
-    channelCapacity: Int
+    channelCapacity: Int,
+    blockedIPs: Set[String]
 )
 
 object DiscoveryConfig extends Logger {
@@ -90,7 +92,10 @@ object DiscoveryConfig extends Logger {
       kademliaTimeout = discoveryConfig.getDuration("kademlia-timeout").toMillis.millis,
       kademliaBucketSize = discoveryConfig.getInt("kademlia-bucket-size"),
       kademliaAlpha = discoveryConfig.getInt("kademlia-alpha"),
-      channelCapacity = discoveryConfig.getInt("channel-capacity")
+      channelCapacity = discoveryConfig.getInt("channel-capacity"),
+      blockedIPs =
+        if (discoveryConfig.hasPath("blocked-ips")) discoveryConfig.getStringList("blocked-ips").asScala.toSet
+        else Set.empty[String]
     )
   }
 

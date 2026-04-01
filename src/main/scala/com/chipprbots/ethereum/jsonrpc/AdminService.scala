@@ -64,6 +64,12 @@ object AdminService {
 
   case class AdminImportChainRequest(file: String)
   case class AdminImportChainResponse(success: Boolean)
+
+  case class AdminBlockIPRequest(ip: String)
+  case class AdminBlockIPResponse(success: Boolean)
+
+  case class AdminUnblockIPRequest(ip: String)
+  case class AdminUnblockIPResponse(success: Boolean)
 }
 
 class AdminService(
@@ -71,7 +77,8 @@ class AdminService(
     peerManager: ActorRef,
     blockchainReader: BlockchainReader,
     peerManagerTimeout: FiniteDuration,
-    datadir: String
+    datadir: String,
+    blockedIPRegistry: com.chipprbots.ethereum.network.BlockedIPRegistry
 ) extends Logger {
   import AdminService._
 
@@ -230,5 +237,17 @@ class AdminService(
         log.error(s"Failed to import chain from ${req.file}", ex)
         Right(AdminImportChainResponse(false))
     }
+  }
+
+  def blockIP(req: AdminBlockIPRequest): ServiceResponse[AdminBlockIPResponse] = IO {
+    val added = blockedIPRegistry.block(req.ip)
+    if (added) log.info(s"Blocked IP: ${req.ip}")
+    Right(AdminBlockIPResponse(added))
+  }
+
+  def unblockIP(req: AdminUnblockIPRequest): ServiceResponse[AdminUnblockIPResponse] = IO {
+    val removed = blockedIPRegistry.unblock(req.ip)
+    if (removed) log.info(s"Unblocked IP: ${req.ip}")
+    Right(AdminUnblockIPResponse(removed))
   }
 }

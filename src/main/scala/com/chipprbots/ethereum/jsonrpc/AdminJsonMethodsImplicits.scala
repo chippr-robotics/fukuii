@@ -99,4 +99,28 @@ object AdminJsonMethodsImplicits extends JsonMethodsImplicits {
 
       override def encodeJson(t: AdminImportChainResponse): JValue = JBool(t.success)
     }
+
+  implicit val admin_blockIP
+      : JsonMethodDecoder[AdminBlockIPRequest] with JsonEncoder[AdminBlockIPResponse] =
+    new JsonMethodDecoder[AdminBlockIPRequest] with JsonEncoder[AdminBlockIPResponse] {
+      override def decodeJson(params: Option[JsonAST.JArray]): Either[JsonRpcError, AdminBlockIPRequest] =
+        params match {
+          case Some(JArray(JString(ip) :: Nil)) => Right(AdminBlockIPRequest(ip))
+          case _                                 => Left(InvalidParams())
+        }
+
+      override def encodeJson(t: AdminBlockIPResponse): JValue = JBool(t.success)
+    }
+
+  implicit val admin_unblockIP
+      : JsonMethodDecoder[AdminUnblockIPRequest] with JsonEncoder[AdminUnblockIPResponse] =
+    new JsonMethodDecoder[AdminUnblockIPRequest] with JsonEncoder[AdminUnblockIPResponse] {
+      override def decodeJson(params: Option[JsonAST.JArray]): Either[JsonRpcError, AdminUnblockIPRequest] =
+        params match {
+          case Some(JArray(JString(ip) :: Nil)) => Right(AdminUnblockIPRequest(ip))
+          case _                                 => Left(InvalidParams())
+        }
+
+      override def encodeJson(t: AdminUnblockIPResponse): JValue = JBool(t.success)
+    }
 }

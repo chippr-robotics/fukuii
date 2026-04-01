@@ -700,6 +700,7 @@ class PeerManagerSpec
           peerFactory,
           discoveryConfig,
           blacklist,
+          new BlockedIPRegistry(Set.empty),
           staticNodes = Set.empty,
           Some(testScheduler)
         )

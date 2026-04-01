@@ -61,13 +61,20 @@ object Config {
   // The client now exclusively supports ETH63-68 and SNAP1, aligning with Ethereum specifications.
   // See docs/validation/ETC64_REMOVAL_VALIDATION.md for details.
   import com.chipprbots.ethereum.network.p2p.messages.Capability
-  val supportedCapabilities: List[Capability] = List(
-    Capability.ETH65,
-    Capability.ETH66,
-    Capability.ETH67,
-    Capability.ETH68,
-    Capability.SNAP1
-  )
+  private val snapEnabled: Boolean = {
+    val syncConfig = config.getConfig("sync")
+    syncConfig.getBoolean("do-snap-sync") ||
+      (syncConfig.hasPath("snap-server-enabled") && syncConfig.getBoolean("snap-server-enabled"))
+  }
+  val supportedCapabilities: List[Capability] = {
+    val eth = List(
+      Capability.ETH65,
+      Capability.ETH66,
+      Capability.ETH67,
+      Capability.ETH68
+    )
+    if (snapEnabled) eth :+ Capability.SNAP1 else eth
+  }
 
   val blockchains: BlockchainsConfig = BlockchainsConfig(config.getConfig("blockchains"))
 

@@ -51,6 +51,7 @@ object Node {
         ip <- tryParseIP(Keys.ip6) orElse tryParseIP(Keys.ip)
         udp <- tryParsePort(Keys.udp6) orElse tryParsePort(Keys.udp)
         tcp <- tryParsePort(Keys.tcp6) orElse tryParsePort(Keys.tcp)
+        if udp > 0 && tcp > 0 // Filter peers advertising invalid port 0
       } yield Node.Address(ip, udpPort = udp, tcpPort = tcp)
     }
 

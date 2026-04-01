@@ -475,6 +475,12 @@ object StaticUDPPeerGroup extends StrictLogging {
             logger.debug(s"Netty channel is open and active for sending to $remoteAddress")
           }
         }
+        // Reject sends to invalid port 0 — OS will refuse the syscall anyway
+        _ <- if (remoteAddress.getPort == 0) {
+          IO.raiseError(new IOException(s"Cannot send UDP packet to $remoteAddress: invalid port 0"))
+        } else {
+          IO.unit
+        }
         // Verify channel is open and active before attempting to send
         _ <- if (!nettyChannel.isOpen) {
           IO.raiseError(new IOException(s"Channel is closed, cannot send to $remoteAddress"))

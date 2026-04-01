@@ -47,6 +47,7 @@ class PeerManagerActor(
     peerFactory: (ActorContext, InetSocketAddress, Boolean) => ActorRef,
     discoveryConfig: DiscoveryConfig,
     val blacklist: Blacklist,
+    blockedIPRegistry: BlockedIPRegistry,
     staticNodes: Set[URI] = Set.empty,
     externalSchedulerOpt: Option[Scheduler] = None
 ) extends Actor
@@ -260,6 +261,7 @@ class PeerManagerActor(
 
   private def maybeConnectToDiscoveredNodes(connectedPeers: ConnectedPeers, nodes: Set[Node]): Unit = {
     val discoveredNodes = nodes
+      .filterNot(n => blockedIPRegistry.isBlocked(n.addr.getHostAddress))
       .filter(connectedPeers.canConnectTo)
 
     val nodesToConnect = discoveredNodes
@@ -342,6 +344,13 @@ class PeerManagerActor(
       remoteAddress: InetSocketAddress,
       connectedPeers: ConnectedPeers
   ): Unit = {
+    val ip = remoteAddress.getAddress.getHostAddress
+    if (blockedIPRegistry.isBlocked(ip)) {
+      log.debug("Rejecting inbound connection from blocked IP {}", ip)
+      connection ! PoisonPill
+      return
+    }
+
     val alreadyConnectedToPeer = connectedPeers.isConnectionHandled(remoteAddress)
     val isPendingPeersNotMaxValue = connectedPeers.incomingPendingPeersCount < peerConfiguration.maxPendingPeers
 
@@ -372,6 +381,12 @@ class PeerManagerActor(
   private def isStaticNode(uri: URI): Boolean = staticNodes.contains(uri)
 
   private def connectWith(uri: URI, connectedPeers: ConnectedPeers): Unit = {
+    val ip = uri.getHost
+    if (blockedIPRegistry.isBlocked(ip)) {
+      log.debug("Skipping outbound connection to blocked IP {}", ip)
+      return
+    }
+
     val nodeId = ByteString(Hex.decode(uri.getUserInfo))
     val remoteAddress = new InetSocketAddress(uri.getHost, uri.getPort)
 
@@ -676,6 +691,7 @@ object PeerManagerActor {
       discoveryConfig: DiscoveryConfig,
       blacklist: Blacklist,
       capabilities: List[Capability],
+      blockedIPRegistry: BlockedIPRegistry,
       staticNodes: Set[URI] = Set.empty
   ): Props = {
     val factory: (ActorContext, InetSocketAddress, Boolean) => ActorRef =
@@ -698,6 +714,7 @@ object PeerManagerActor {
         peerFactory = factory,
         discoveryConfig,
         blacklist,
+        blockedIPRegistry,
         staticNodes
       )
     )

@@ -305,6 +305,9 @@ trait PeerManagerActorBuilder {
   lazy val staticNodeUris: Set[java.net.URI] =
     StaticNodesLoader.loadUrisFromDatadir(Config.config.getString("datadir"))
 
+  lazy val blockedIPRegistry: BlockedIPRegistry =
+    new BlockedIPRegistry(discoveryConfig.blockedIPs)
+
   lazy val peerManager: ActorRef = system.actorOf(
     PeerManagerActor.props(
       peerDiscoveryManager,
@@ -317,6 +320,7 @@ trait PeerManagerActorBuilder {
       discoveryConfig,
       blacklist,
       Config.supportedCapabilities,
+      blockedIPRegistry,
       staticNodeUris
     ),
     "peer-manager"
@@ -575,7 +579,8 @@ trait AdminServiceBuilder {
     peerManager,
     blockchainReader,
     netServiceConfig.peerManagerTimeout,
-    Config.config.getString("datadir")
+    Config.config.getString("datadir"),
+    blockedIPRegistry
   )
 }
 
