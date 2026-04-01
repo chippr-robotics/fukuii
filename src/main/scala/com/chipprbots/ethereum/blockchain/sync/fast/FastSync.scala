@@ -193,6 +193,7 @@ class FastSync(
     private val BlockHeadersHandlerName = "block-headers-request-handler"
     // not part of syncstate as we do not want to persist is.
     private var stateSyncRestartRequested = false
+    private var stateSyncStarted = false
 
     private var requestedHeaders: Map[Peer, BigInt] = Map.empty
 
@@ -430,6 +431,7 @@ class FastSync(
               "SyncRestart: sending existing pivot state root to state scheduler (block {})",
               syncState.pivotBlock.number
             )
+            stateSyncStarted = true
             syncStateScheduler ! StartSyncingTo(syncState.pivotBlock.stateRoot, syncState.pivotBlock.number)
           }
           context.become(this.receive)
@@ -493,6 +495,7 @@ class FastSync(
             } else {
               syncState = syncState.copy(updatingPivotBlock = false)
               stateSyncRestartRequested = false
+              stateSyncStarted = true
               syncStateScheduler ! StartSyncingTo(pivotBlockHeader.stateRoot, pivotBlockHeader.number)
             }
           } else {
@@ -524,11 +527,19 @@ class FastSync(
             syncConfig.fastSyncBlockValidationX,
             updateFailures = false
           )
-          log.debug(
-            "Changing pivot block to {}, new safe target is {}",
+          log.info(
+            "SyncRestart: pivot block updated to {}, safe target {}, starting state download",
             pivotBlockHeader.number,
             syncState.safeDownloadTarget
           )
+          // Start the state scheduler — without this, state download never begins after restart.
+          if (
+            !syncState.stateSyncFinished && pivotBlockHeader.stateRoot != ByteString(MerklePatriciaTrie.EmptyRootHash)
+          ) {
+            stateSyncRestartRequested = false
+            stateSyncStarted = true
+            syncStateScheduler ! StartSyncingTo(pivotBlockHeader.stateRoot, pivotBlockHeader.number)
+          }
       }
 
     private def removeRequestHandler(handler: ActorRef): Unit = {
@@ -945,7 +956,14 @@ class FastSync(
         if (blockchainDataToDownload) {
           processDownloads()
         } else if (noBlockchainWorkRemaining && !syncState.stateSyncFinished && notInTheMiddleOfUpdate) {
-          if (pivotBlockIsStale()) {
+          if (!stateSyncStarted && syncState.pivotBlock.stateRoot != ByteString(MerklePatriciaTrie.EmptyRootHash)) {
+            // State scheduler hasn't been started yet — send StartSyncingTo to begin state download.
+            // This happens on startFromScratch when headers were bootstrapped from existing DB.
+            log.info("Block download complete. Starting state download for pivot block {}", syncState.pivotBlock.number)
+            stateSyncStarted = true
+            stateSyncRestartRequested = false
+            syncStateScheduler ! StartSyncingTo(syncState.pivotBlock.stateRoot, syncState.pivotBlock.number)
+          } else if (pivotBlockIsStale()) {
             log.debug("Restarting state sync to new pivot block")
             syncStateScheduler ! RestartRequested
             stateSyncRestartRequested = true
