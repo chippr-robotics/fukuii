@@ -35,7 +35,8 @@ trait DiscoveryServiceBuilder extends Logger {
       discoveryConfig: DiscoveryConfig,
       tcpPort: Int,
       nodeStatusHolder: AtomicReference[NodeStatus],
-      knownNodesStorage: KnownNodesStorage
+      knownNodesStorage: KnownNodesStorage,
+      autoBlocker: Option[com.chipprbots.ethereum.network.AutoBlocker] = None
   )(implicit scheduler: IORuntime): Resource[IO, v4.DiscoveryService] = {
 
     implicit val sigalg = new Secp256k1SigAlg()
@@ -63,7 +64,7 @@ trait DiscoveryServiceBuilder extends Logger {
         makeDiscoveryConfig(discoveryConfig, knownNodesStorage)
       }
       udpConfig = makeUdpConfig(discoveryConfig, host)
-      network <- makeDiscoveryNetwork(privateKey, localNode, v4Config, udpConfig)
+      network <- makeDiscoveryNetwork(privateKey, localNode, v4Config, udpConfig, autoBlocker)
       service <- makeDiscoveryService(privateKey, localNode, v4Config, network)
       _ <- Resource.eval {
         setDiscoveryStatus(nodeStatusHolder, ServerStatus.Listening(udpConfig.bindAddress))
@@ -165,7 +166,8 @@ trait DiscoveryServiceBuilder extends Logger {
       privateKey: PrivateKey,
       localNode: ENode,
       v4Config: v4.DiscoveryConfig,
-      udpConfig: StaticUDPPeerGroup.Config
+      udpConfig: StaticUDPPeerGroup.Config,
+      autoBlocker: Option[com.chipprbots.ethereum.network.AutoBlocker]
   )(implicit
       payloadCodec: Codec[v4.Payload],
       packetCodec: Codec[v4.Packet],
@@ -184,7 +186,10 @@ trait DiscoveryServiceBuilder extends Logger {
               udpPort = address.inetSocketAddress.getPort,
               tcpPort = 0
             ),
-          config = v4Config
+          config = v4Config,
+          onSendFailure = autoBlocker.map { ab =>
+            (addr: InetMultiAddress) => ab.recordUdpFailure(addr.inetSocketAddress.getAddress.getHostAddress)
+          }
         )
       }
     } yield network

@@ -49,7 +49,8 @@ class PeerManagerActor(
     val blacklist: Blacklist,
     blockedIPRegistry: BlockedIPRegistry,
     staticNodes: Set[URI] = Set.empty,
-    externalSchedulerOpt: Option[Scheduler] = None
+    externalSchedulerOpt: Option[Scheduler] = None,
+    autoBlocker: Option[AutoBlocker] = None
 ) extends Actor
     with ActorLogging
     with Stash {
@@ -315,6 +316,9 @@ class PeerManagerActor(
         getBlacklistDuration(reason),
         Blacklist.BlacklistReason.getP2PBlacklistReasonByDescription(Disconnect.reasonToString(reason))
       )
+      if (reason == Disconnect.Reasons.IncompatibleP2pProtocolVersion) {
+        autoBlocker.foreach(_.recordHardFailure(peerAddress, "IncompatibleP2pProtocolVersion"))
+      }
 
     case HandlePeerConnection(connection, remoteAddress) =>
       handleConnection(connection, remoteAddress, connectedPeers)
@@ -692,7 +696,8 @@ object PeerManagerActor {
       blacklist: Blacklist,
       capabilities: List[Capability],
       blockedIPRegistry: BlockedIPRegistry,
-      staticNodes: Set[URI] = Set.empty
+      staticNodes: Set[URI] = Set.empty,
+      autoBlocker: Option[AutoBlocker] = None
   ): Props = {
     val factory: (ActorContext, InetSocketAddress, Boolean) => ActorRef =
       peerFactory(
@@ -715,7 +720,8 @@ object PeerManagerActor {
         discoveryConfig,
         blacklist,
         blockedIPRegistry,
-        staticNodes
+        staticNodes,
+        autoBlocker = autoBlocker
       )
     )
   }

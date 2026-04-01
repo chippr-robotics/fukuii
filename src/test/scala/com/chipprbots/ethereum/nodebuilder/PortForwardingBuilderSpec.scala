@@ -17,6 +17,7 @@ import org.scalatest.matchers.should.Matchers
 import org.scalatest.time.Seconds
 import org.scalatest.time.Span
 
+import com.chipprbots.ethereum.network.discovery.AutoBlockConfig
 import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
 import com.chipprbots.ethereum.testing.Tags._
 
@@ -271,7 +272,14 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
       kademliaBucketSize = 16,
       kademliaAlpha = 3,
       channelCapacity = 100,
-      blockedIPs = Set.empty
+      blockedIPs = Set.empty,
+      autoBlock = AutoBlockConfig(
+        enabled = false,
+        udpFailureThreshold = 3,
+        udpFailureWindow = 5.minutes,
+        udpBlockDuration = 30.minutes,
+        hardFailureBlockDuration = 60.minutes
+      )
     )
 
     // Override the portForwarding to use a mock implementation

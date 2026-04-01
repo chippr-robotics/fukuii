@@ -133,11 +133,31 @@ trait KnownNodesManagerBuilder {
   )
 }
 
+trait AutoBlockerBuilder {
+  self: ActorSystemBuilder with DiscoveryConfigBuilder =>
+
+  def blockedIPRegistry: BlockedIPRegistry
+
+  lazy val autoBlocker: Option[AutoBlocker] =
+    if (discoveryConfig.autoBlock.enabled)
+      Some(new AutoBlocker(
+        blockedIPRegistry,
+        system.scheduler,
+        system.dispatcher,
+        discoveryConfig.autoBlock.udpFailureThreshold,
+        discoveryConfig.autoBlock.udpFailureWindow,
+        discoveryConfig.autoBlock.udpBlockDuration,
+        discoveryConfig.autoBlock.hardFailureBlockDuration
+      ))
+    else None
+}
+
 trait PeerDiscoveryManagerBuilder {
   self: ActorSystemBuilder
     with NodeStatusBuilder
     with DiscoveryConfigBuilder
     with DiscoveryServiceBuilder
+    with AutoBlockerBuilder
     with StorageBuilder =>
 
   implicit lazy val ioRuntime: IORuntime = IORuntime.global
@@ -151,7 +171,8 @@ trait PeerDiscoveryManagerBuilder {
         discoveryConfig,
         tcpPort = Config.Network.Server.port,
         nodeStatusHolder,
-        storagesInstance.storages.knownNodesStorage
+        storagesInstance.storages.knownNodesStorage,
+        autoBlocker
       ),
       randomNodeBufferSize = Config.Network.peer.maxOutgoingPeers
     ),
@@ -295,6 +316,7 @@ trait PeerManagerActorBuilder {
     with AuthHandshakerBuilder
     with PeerDiscoveryManagerBuilder
     with DiscoveryConfigBuilder
+    with AutoBlockerBuilder
     with StorageBuilder
     with KnownNodesManagerBuilder
     with PeerStatisticsBuilder
@@ -321,7 +343,8 @@ trait PeerManagerActorBuilder {
       blacklist,
       Config.supportedCapabilities,
       blockedIPRegistry,
-      staticNodeUris
+      staticNodeUris,
+      autoBlocker
     ),
     "peer-manager"
   )
@@ -1084,6 +1107,7 @@ trait Node
     with AsyncConfigBuilder
     with TransactionHistoryServiceBuilder.Default
     with PortForwardingBuilder
+    with AutoBlockerBuilder
     with BlacklistBuilder {
   // Resolve conflicting ioRuntime from PeerDiscoveryManagerBuilder and PortForwardingBuilder
   implicit override lazy val ioRuntime: IORuntime = IORuntime.global

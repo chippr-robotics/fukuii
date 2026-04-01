@@ -70,6 +70,9 @@ object AdminService {
 
   case class AdminUnblockIPRequest(ip: String)
   case class AdminUnblockIPResponse(success: Boolean)
+
+  case class AdminListBlockedIPsRequest()
+  case class AdminListBlockedIPsResponse(ips: List[String])
 }
 
 class AdminService(
@@ -249,5 +252,9 @@ class AdminService(
     val removed = blockedIPRegistry.unblock(req.ip)
     if (removed) log.info(s"Unblocked IP: ${req.ip}")
     Right(AdminUnblockIPResponse(removed))
+  }
+
+  def listBlockedIPs(req: AdminListBlockedIPsRequest): ServiceResponse[AdminListBlockedIPsResponse] = IO {
+    Right(AdminListBlockedIPsResponse(blockedIPRegistry.all.toList.sorted))
   }
 }

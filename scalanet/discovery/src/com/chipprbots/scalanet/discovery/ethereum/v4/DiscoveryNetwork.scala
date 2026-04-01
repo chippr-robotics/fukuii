@@ -75,7 +75,8 @@ object DiscoveryNetwork {
       // Sent in pings; some clients use the the TCP port in the `from` so it should be accurate.
       localNodeAddress: Node.Address,
       toNodeAddress: A => Node.Address,
-      config: DiscoveryConfig
+      config: DiscoveryConfig,
+      onSendFailure: Option[A => Unit] = None
   )(implicit codec: Codec[Payload], sigalg: SigAlg, temporal: Temporal[IO]): IO[DiscoveryNetwork[A]] = IO {
     new DiscoveryNetwork[A] with LazyLogging {
 
@@ -346,7 +347,9 @@ object DiscoveryNetwork {
               logger
                 .debug(s"Sending ${payload.getClass.getSimpleName} from ${peerGroup.processAddress} to ${channel.to}")
             )
-            _ <- channel.sendMessage(packet)
+            _ <- channel.sendMessage(packet).handleErrorWith { ex =>
+              IO(onSendFailure.foreach(_(channel.to))) >> IO.raiseError(ex)
+            }
           } yield packet
         }
 

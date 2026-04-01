@@ -455,6 +455,8 @@ case class JsonRpcController(
       handle[AdminBlockIPRequest, AdminBlockIPResponse](adminService.blockIP, req)
     case req @ JsonRpcRequest(_, "admin_unblockIP", _, _) =>
       handle[AdminUnblockIPRequest, AdminUnblockIPResponse](adminService.unblockIP, req)
+    case req @ JsonRpcRequest(_, "admin_listBlockedIPs", _, _) =>
+      handle[AdminListBlockedIPsRequest, AdminListBlockedIPsResponse](adminService.listBlockedIPs, req)
   }
 
   private def handleTxPoolRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {

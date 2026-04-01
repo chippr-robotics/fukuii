@@ -123,4 +123,11 @@ object AdminJsonMethodsImplicits extends JsonMethodsImplicits {
 
       override def encodeJson(t: AdminUnblockIPResponse): JValue = JBool(t.success)
     }
+
+  implicit val admin_listBlockedIPs
+      : NoParamsMethodDecoder[AdminListBlockedIPsRequest] with JsonEncoder[AdminListBlockedIPsResponse] =
+    new NoParamsMethodDecoder(AdminListBlockedIPsRequest()) with JsonEncoder[AdminListBlockedIPsResponse] {
+      override def encodeJson(t: AdminListBlockedIPsResponse): JValue =
+        JArray(t.ips.map(JString(_)))
+    }
 }
