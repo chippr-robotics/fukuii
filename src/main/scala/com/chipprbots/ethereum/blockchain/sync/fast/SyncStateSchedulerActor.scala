@@ -51,9 +51,12 @@ class SyncStateSchedulerActor(
   implicit private val monixScheduler: IORuntime = IORuntime.global
   implicit private val ec: scala.concurrent.ExecutionContext = context.dispatcher
 
-  /** Track consecutive sync cycles with zero ETH63-67 peers (all ETH68/SNAP only). */
+  /** Track consecutive sync cycles with zero ETH63-67 peers (all ETH68/SNAP only). Threshold is high (120 cycles × 0.5s
+    * \= 60 seconds) because peers need time to connect and handshake at startup. A threshold of 5 (2.5s) caused
+    * premature NetworkIncompatible detection before ETH66/67 peers had connected.
+    */
   private var noCompatiblePeersCount: Int = 0
-  private val NoCompatiblePeersThreshold: Int = 5
+  private val NoCompatiblePeersThreshold: Int = 120
 
   /** Check if a capability supports GetNodeData message. GetNodeData is available in ETH63-67 but removed in ETH68 per
     * EIP-4938. SNAP protocol uses different messages (GetAccountRange, etc.) and doesn't support GetNodeData.
