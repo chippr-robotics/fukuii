@@ -19,6 +19,7 @@ import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason.InvalidStateResponse
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg.PeerWithInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler
 import com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.ResponseReceived
 import com.chipprbots.ethereum.blockchain.sync.fast.LoadableBloomFilter.BloomFilterLoadingResult
@@ -64,10 +65,25 @@ class SyncStateSchedulerActor(
     * Note: Capability is a sealed trait, so this match is exhaustive. If new capabilities are added in the future, this
     * method will need to be updated accordingly.
     */
-  private def supportsGetNodeData(capability: Capability): Boolean = capability match {
-    case Capability.ETH63 | Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 => true
-    case Capability.ETH68 => false // GetNodeData removed in ETH68 per EIP-4938
-    case Capability.SNAP1 => false // SNAP uses different sync protocol
+  /** Check if a peer supports GetNodeData by examining ALL its capabilities, not just the negotiated (highest) one. A
+    * peer negotiating ETH68 may also support ETH66/67 which includes GetNodeData. The `capabilities` field lists all
+    * protocols the peer advertised during the Hello handshake.
+    */
+  private def supportsGetNodeData(remoteStatus: NetworkPeerManagerActor.RemoteStatus): Boolean = {
+    // Check the full capabilities list first (all protocols the peer supports)
+    val allCaps = remoteStatus.capabilities
+    if (allCaps.nonEmpty) {
+      allCaps.exists {
+        case Capability.ETH63 | Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 => true
+        case _                                                                                            => false
+      }
+    } else {
+      // Fallback to negotiated capability if capabilities list is empty
+      remoteStatus.capability match {
+        case Capability.ETH63 | Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 => true
+        case _                                                                                            => false
+      }
+    }
   }
 
   private def getFreePeers(state: DownloaderState): List[Peer] = {
@@ -77,7 +93,7 @@ class SyncStateSchedulerActor(
         case ((compat, incompat, count), (_, PeerWithInfo(peer, peerInfo))) =>
           if (state.activeRequests.contains(peer.id)) {
             (compat, incompat, count) // Skip peers with active requests
-          } else if (supportsGetNodeData(peerInfo.remoteStatus.capability)) {
+          } else if (supportsGetNodeData(peerInfo.remoteStatus)) {
             (peer :: compat, incompat, count) // Compatible peer
           } else {
             (compat, peer :: incompat, count + 1) // Incompatible peer, increment count
