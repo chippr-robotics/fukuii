@@ -5,6 +5,14 @@ import scala.concurrent.duration._
 import com.chipprbots.ethereum.utils.ConfigUtils
 import com.chipprbots.ethereum.utils.Logger
 
+case class AutoBlockConfig(
+    enabled: Boolean,
+    udpFailureThreshold: Int,
+    udpFailureWindow: FiniteDuration,
+    udpBlockDuration: FiniteDuration,
+    hardFailureBlockDuration: FiniteDuration
+)
+
 case class DiscoveryConfig(
     discoveryEnabled: Boolean,
     host: Option[String],
@@ -19,7 +27,9 @@ case class DiscoveryConfig(
     kademliaTimeout: FiniteDuration,
     kademliaBucketSize: Int,
     kademliaAlpha: Int,
-    channelCapacity: Int
+    channelCapacity: Int,
+    blockedIPs: Set[String],
+    autoBlock: AutoBlockConfig
 )
 
 object DiscoveryConfig extends Logger {
@@ -76,6 +86,7 @@ object DiscoveryConfig extends Logger {
       staticNodes
     }
 
+    val autoBlockCfg = discoveryConfig.getConfig("auto-block")
     DiscoveryConfig(
       discoveryEnabled = discoveryConfig.getBoolean("discovery-enabled"),
       host = ConfigUtils.getOptionalValue(discoveryConfig, _.getString, "host"),
@@ -90,7 +101,17 @@ object DiscoveryConfig extends Logger {
       kademliaTimeout = discoveryConfig.getDuration("kademlia-timeout").toMillis.millis,
       kademliaBucketSize = discoveryConfig.getInt("kademlia-bucket-size"),
       kademliaAlpha = discoveryConfig.getInt("kademlia-alpha"),
-      channelCapacity = discoveryConfig.getInt("channel-capacity")
+      channelCapacity = discoveryConfig.getInt("channel-capacity"),
+      blockedIPs =
+        if (discoveryConfig.hasPath("blocked-ips")) discoveryConfig.getStringList("blocked-ips").asScala.toSet
+        else Set.empty[String],
+      autoBlock = AutoBlockConfig(
+        enabled = autoBlockCfg.getBoolean("enabled"),
+        udpFailureThreshold = autoBlockCfg.getInt("udp-failure-threshold"),
+        udpFailureWindow = autoBlockCfg.getDuration("udp-failure-window").toMillis.millis,
+        udpBlockDuration = autoBlockCfg.getDuration("udp-block-duration").toMillis.millis,
+        hardFailureBlockDuration = autoBlockCfg.getDuration("hard-failure-block-duration").toMillis.millis
+      )
     )
   }
 
