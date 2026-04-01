@@ -53,7 +53,6 @@ trait TestSyncConfig extends SyncConfigBuilder {
     maxPivotBlockFailuresCount = 3,
     maxRetryDelay = 30.seconds,
     maxBodyFetchRetries = 10,
-    maxSnapFastCycleTransitions = 3,
     maxFastSyncOuterPivotRetries = 10,
     useBootstrapCheckpoints = false,
     bootstrapCheckpoints = Seq.empty,

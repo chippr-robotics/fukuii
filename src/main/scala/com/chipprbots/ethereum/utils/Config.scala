@@ -185,7 +185,6 @@ object Config {
       maxPivotBlockFailuresCount: Int,
       maxRetryDelay: FiniteDuration,
       maxBodyFetchRetries: Int,
-      maxSnapFastCycleTransitions: Int,
       maxFastSyncOuterPivotRetries: Int,
       useBootstrapCheckpoints: Boolean,
       bootstrapCheckpoints: Seq[(BigInt, String)], // (blockNumber, blockHash)
@@ -259,10 +258,6 @@ object Config {
           if (syncConfig.hasPath("max-body-fetch-retries"))
             syncConfig.getInt("max-body-fetch-retries")
           else 10,
-        maxSnapFastCycleTransitions =
-          if (syncConfig.hasPath("max-snap-fast-cycle-transitions"))
-            syncConfig.getInt("max-snap-fast-cycle-transitions")
-          else 3,
         maxFastSyncOuterPivotRetries =
           if (syncConfig.hasPath("max-fast-sync-outer-pivot-retries"))
             syncConfig.getInt("max-fast-sync-outer-pivot-retries")

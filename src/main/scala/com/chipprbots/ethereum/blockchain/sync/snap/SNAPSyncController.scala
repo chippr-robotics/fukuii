@@ -299,12 +299,12 @@ class SNAPSyncController(
       } else if (advertisedSnapPeerCount > 0) {
         log.warning(
           s"$advertisedSnapPeerCount peer(s) advertise snap/1 but none verified as serving. " +
-            "Probes may still be pending. Falling back to fast sync."
+            "Probes may still be pending."
         )
-        fallbackToFastSync()
+        requestSnapRetry("No snap/1 peers found within capability check timeout")
       } else {
-        log.warning("No snap-capable peers found after grace period. Falling back to fast sync.")
-        fallbackToFastSync()
+        log.warning("No snap-capable peers found after grace period.")
+        requestSnapRetry("No snap/1 peers found within capability check timeout")
       }
 
     // Periodic request triggers
@@ -443,7 +443,7 @@ class SNAPSyncController(
                 "Peers likely lack snapshot databases."
             )
             if (recordCriticalFailure(s"$consecutivePivotRefreshes consecutive stateless pivot refreshes")) {
-              fallbackToFastSync()
+              requestSnapRetry("Pivot state unservable after 3 consecutive refreshes")
             } else {
               restartSnapSync(s"consecutive stateless pivots ($consecutivePivotRefreshes): $reason")
             }
@@ -1040,7 +1040,7 @@ class SNAPSyncController(
       log.warning(s"Pivot header bootstrap failed during initial startup: $reason")
       bootstrapRetryCount += 1
       if (checkBootstrapRetryTimeout(s"bootstrap failed: $reason")) {
-        // checkBootstrapRetryTimeout already called fallbackToFastSync()
+        // checkBootstrapRetryTimeout already called requestSnapRetry()
       } else {
         val delay = bootstrapRetryDelay
         log.info(s"Retrying SNAP sync start in $delay (attempt $bootstrapRetryCount)")
@@ -1403,7 +1403,7 @@ class SNAPSyncController(
 
         case None =>
           log.error("Genesis block header not available - cannot start SNAP sync")
-          context.parent ! FallbackToFastSync
+          context.parent ! RetrySnapSync("Genesis block header not available")
       }
       return
     }
@@ -1562,9 +1562,9 @@ class SNAPSyncController(
     val elapsed = System.currentTimeMillis() - bootstrapRetryStartMs
     if (elapsed > MaxBootstrapRetryDuration.toMillis) {
       log.warning(
-        s"No peers found after ${elapsed / 1000}s of bootstrap retries ($context). Falling back to fast sync."
+        s"No peers found after ${elapsed / 1000}s of bootstrap retries ($context)."
       )
-      fallbackToFastSync()
+      requestSnapRetry(s"No peers found after bootstrap timeout (${elapsed / 1000}s)")
       true
     } else {
       // Periodic diagnostic logging (~every 30s based on accumulated delay)
@@ -1601,13 +1601,13 @@ class SNAPSyncController(
     }
   }
 
-  /** Trigger fallback to fast sync due to repeated SNAP sync failures */
-  private def fallbackToFastSync(): Unit = {
+  /** Request SNAP sync retry from parent controller due to repeated failures */
+  private def requestSnapRetry(reason: String): Unit = {
     // Set phase to Completed FIRST to prevent aroundReceive guards (which check currentPhase)
     // from re-triggering stagnation checks while we're tearing down.
     currentPhase = Completed
 
-    log.warning("Triggering fallback to fast sync due to repeated SNAP sync failures")
+    log.warning(s"Requesting SNAP sync retry: $reason")
 
     // Cancel all scheduled tasks
     accountRangeRequestTask.foreach(_.cancel())
@@ -1620,7 +1620,7 @@ class SNAPSyncController(
     // Stop progress monitoring
     progressMonitor.stopPeriodicLogging()
 
-    // Clear persisted SNAP progress — fast sync will start fresh
+    // Clear persisted SNAP progress — retry will start fresh
     appStateStorage.putSnapSyncProgress("").commit()
     appStateStorage.putSnapSyncAccountsComplete(false).commit()
     appStateStorage.putSnapSyncStorageFilePath("").commit()
@@ -1632,8 +1632,8 @@ class SNAPSyncController(
     chainDownloader.foreach(context.stop)
     chainDownloader = None
 
-    // Notify parent controller to switch to fast sync
-    context.parent ! FallbackToFastSync
+    // Notify parent controller to retry SNAP sync with backoff
+    context.parent ! RetrySnapSync(reason)
     context.become(completed)
   }
 
@@ -2691,7 +2691,7 @@ class SNAPSyncController(
         s"Account stagnation | $consecutiveAccountStallRefreshes consecutive stall refreshes, falling back to fast sync"
       )
       if (recordCriticalFailure(context)) {
-        fallbackToFastSync()
+        requestSnapRetry(s"Account stagnation: $context")
       } else {
         restartSnapSync(context)
       }
@@ -2930,7 +2930,7 @@ object SNAPSyncController {
 
   case object Start
   case object Done
-  case object FallbackToFastSync // Signal to fallback to fast sync due to repeated failures
+  case class RetrySnapSync(reason: String) // Signal to parent to retry SNAP sync with backoff
   case class StartRegularSyncBootstrap(targetBlock: BigInt) // Request bootstrap from SyncController
   final case class BootstrapComplete(
       pivotHeader: Option[BlockHeader] = None

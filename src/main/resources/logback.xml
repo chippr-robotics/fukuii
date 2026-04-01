@@ -142,7 +142,6 @@
     <logger name="com.chipprbots.ethereum.blockchain.sync.fast.FastSync" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.regular.RegularSync" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.AdaptiveSyncStrategy" level="INFO" />
     
     <!-- Genesis and checkpoint loading -->
     <logger name="com.chipprbots.ethereum.blockchain.data.GenesisDataLoader" level="INFO" />

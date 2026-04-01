@@ -66,6 +66,8 @@ class SyncController(
 
   private case object RestartFastSyncNow
   private case object PollRecoveryPeers
+  private case object StartSnapSyncRetry
+  private case object StartFastSyncRetry
 
   // Shared peer scoring — tracks response quality across all PeersClient instances
   private val peerScoringManager = new com.chipprbots.ethereum.network.PeerScoringManager()
@@ -75,8 +77,9 @@ class SyncController(
   private var bootstrapGeneration: Long = 0
   private var syncGeneration: Long = 0
 
-  // SNAP<->Fast sync bounce cycle counter, persisted across restarts.
-  private var snapFastCycleCount: Int = appStateStorage.getSnapFastCycleCount()
+  // Retry attempt counters for sync mode self-retry with backoff
+  private var snapRetryAttempt: Int = 0
+  private var fastRetryAttempt: Int = 0
 
   private val statePrefetcher = new StatePrefetcher(blockchain, blockchainReader, evmCodeStorage)
 
@@ -196,35 +199,32 @@ class SyncController(
       val cooldownUntil = System.currentTimeMillis() + syncConfig.fastSyncRestartCooloff.toMillis
       appStateStorage.putFastSyncCooldownUntilMillis(cooldownUntil).commit()
 
-      resetSnapFastCycleCount()
+      fastRetryAttempt = 0
       startRegularSync()
 
     case FastSync.FallbackToSnapSync =>
       fastSync ! PoisonPill
-      log.warning("Fast sync detected ETH68-only network (no GetNodeData support), falling back to SNAP sync")
-      snapFastCycleCount += 1
-      appStateStorage.putSnapFastCycleCount(snapFastCycleCount).commit()
-      log.info("SNAP<->Fast cycle count: {}", snapFastCycleCount)
-      if (!checkSnapFastEscapeHatch()) {
-        startSnapSync()
-      }
+      fastRetryAttempt += 1
+      val delay = syncRetryDelay(fastRetryAttempt)
+      log.warning(
+        s"Fast sync detected ETH68-only network (GetNodeData unavailable). " +
+          s"Retry $fastRetryAttempt in ${delay.toSeconds}s. " +
+          s"Consider enabling do-snap-sync=true for faster sync on modern networks."
+      )
+      MilestoneLog.event(s"Fast sync retry $fastRetryAttempt | reason=ETH68 network | delay=${delay.toSeconds}s")
+      fastSyncStateStorage.purge()
+      scheduler.scheduleOnce(delay, self, StartFastSyncRetry)
+      context.become(waitingForFastRetry)
 
     case FastSync.PivotRetriesExhausted =>
       fastSync ! PoisonPill
-      log.warning("Fast sync pivot retries exhausted. Attempting SNAP sync fallback.")
-      snapFastCycleCount += 1
-      appStateStorage.putSnapFastCycleCount(snapFastCycleCount).commit()
-      log.info("SNAP<->Fast cycle count: {}", snapFastCycleCount)
-      if (!checkSnapFastEscapeHatch()) {
-        if (syncConfig.doSnapSync) {
-          startSnapSync()
-        } else {
-          log.warning("SNAP sync disabled in config. Escaping to regular sync.")
-          appStateStorage.fastSyncDone().commit()
-          fastSyncStateStorage.purge()
-          startRegularSync()
-        }
-      }
+      fastRetryAttempt += 1
+      val delay = syncRetryDelay(fastRetryAttempt)
+      log.warning(s"Fast sync pivot retries exhausted. Retry $fastRetryAttempt in ${delay.toSeconds}s with fresh state.")
+      MilestoneLog.event(s"Fast sync retry $fastRetryAttempt | reason=pivot exhausted | delay=${delay.toSeconds}s")
+      fastSyncStateStorage.purge()
+      scheduler.scheduleOnce(delay, self, StartFastSyncRetry)
+      context.become(waitingForFastRetry)
 
     case other => fastSync.forward(other)
   }
@@ -259,19 +259,17 @@ class SyncController(
       snapSync ! PoisonPill
       log.info("SNAP sync completed, transitioning to regular sync")
       MilestoneLog.phase("SNAP sync complete, transitioning to regular sync")
-      resetSnapFastCycleCount()
+      snapRetryAttempt = 0
       startRegularSync()
 
-    case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.FallbackToFastSync =>
+    case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.RetrySnapSync(reason) =>
       snapSync ! PoisonPill
-      log.warning("SNAP sync failed repeatedly, falling back to fast sync")
-      MilestoneLog.event(s"SNAP->fast sync fallback | cycle=$snapFastCycleCount")
-      snapFastCycleCount += 1
-      appStateStorage.putSnapFastCycleCount(snapFastCycleCount).commit()
-      log.info("SNAP<->Fast cycle count: {}", snapFastCycleCount)
-      if (!checkSnapFastEscapeHatch()) {
-        startFastSync()
-      }
+      snapRetryAttempt += 1
+      val delay = syncRetryDelay(snapRetryAttempt)
+      log.warning(s"SNAP sync failed: $reason. Retry $snapRetryAttempt in ${delay.toSeconds}s with fresh pivot.")
+      MilestoneLog.event(s"SNAP retry $snapRetryAttempt | reason=$reason | delay=${delay.toSeconds}s")
+      scheduler.scheduleOnce(delay, self, StartSnapSyncRetry)
+      context.become(waitingForSnapRetry)
 
     case SyncProtocol.Status.Progress(_, _) =>
       log.debug("SNAP sync in progress")
@@ -395,18 +393,17 @@ class SyncController(
         runningPivotHeaderBootstrap(newPeersClient, newHeaderBootstrap, newTargetBlock, originalSnapSyncRef)
       )
 
-    case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.FallbackToFastSync =>
-      log.warning("Received FallbackToFastSync during pivot header bootstrap. Stopping bootstrap and falling back.")
-      MilestoneLog.event(s"SNAP->fast sync fallback (during pivot bootstrap) | cycle=$snapFastCycleCount")
+    case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.RetrySnapSync(reason) =>
+      log.warning(s"SNAP sync retry requested during pivot header bootstrap: $reason")
       headerBootstrap ! PoisonPill
       peersClient ! PoisonPill
       originalSnapSyncRef ! PoisonPill
-      snapFastCycleCount += 1
-      appStateStorage.putSnapFastCycleCount(snapFastCycleCount).commit()
-      log.info("SNAP<->Fast cycle count: {}", snapFastCycleCount)
-      if (!checkSnapFastEscapeHatch()) {
-        startFastSync()
-      }
+      snapRetryAttempt += 1
+      val delay = syncRetryDelay(snapRetryAttempt)
+      log.warning(s"SNAP sync failed during pivot bootstrap: $reason. Retry $snapRetryAttempt in ${delay.toSeconds}s")
+      MilestoneLog.event(s"SNAP retry $snapRetryAttempt (pivot bootstrap) | reason=$reason | delay=${delay.toSeconds}s")
+      scheduler.scheduleOnce(delay, self, StartSnapSyncRetry)
+      context.become(waitingForSnapRetry)
 
     case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Done =>
       log.info(
@@ -415,7 +412,7 @@ class SyncController(
       headerBootstrap ! PoisonPill
       peersClient ! PoisonPill
       originalSnapSyncRef ! PoisonPill
-      resetSnapFastCycleCount()
+      snapRetryAttempt = 0
       startRegularSync()
 
     case msg =>
@@ -424,35 +421,43 @@ class SyncController(
       originalSnapSyncRef.forward(msg)
   }
 
-  /** Check if the SNAP<->Fast bounce cycle count has exceeded the configured threshold. If so, mark both sync modes as
-    * done and escape to regular sync.
-    * @return
-    *   true if the escape hatch fired (caller should NOT start another sync), false otherwise
-    */
-  private def checkSnapFastEscapeHatch(): Boolean = {
-    val threshold = syncConfig.maxSnapFastCycleTransitions
-    if (threshold > 0 && snapFastCycleCount >= threshold) {
-      log.warning(
-        "SNAP<->Fast sync bounce cycle count ({}) reached threshold ({}). " +
-          "Escaping to regular sync — missing state will be fetched on-demand via GetTrieNodes.",
-        snapFastCycleCount,
-        threshold
-      )
-      // Mark both sync modes as done so they won't restart
-      appStateStorage.snapSyncDone().commit()
-      appStateStorage.fastSyncDone().commit()
-      // Purge persisted fast sync state to prevent stale state on next restart
-      fastSyncStateStorage.purge()
-      // Reset cycle count
-      resetSnapFastCycleCount()
-      startRegularSync()
-      true
-    } else false
+  /** Waiting state during SNAP sync retry backoff delay. */
+  def waitingForSnapRetry: Receive = {
+    case StartSnapSyncRetry =>
+      log.info(s"Starting SNAP sync retry $snapRetryAttempt")
+      startSnapSync()
+    case SyncProtocol.GetStatus =>
+      sender() ! SyncProtocol.Status.NotSyncing
+    case SyncProtocol.ResetFastSync =>
+      handleResetFastSync()
+    case SyncProtocol.RestartFastSync =>
+      handleRestartFastSync()
+    case RestartFastSyncNow =>
+      doRestartFastSyncNow()
+    case _ => // ignore stale messages during retry delay
   }
 
-  private def resetSnapFastCycleCount(): Unit = {
-    snapFastCycleCount = 0
-    appStateStorage.clearSnapFastCycleCount().commit()
+  /** Waiting state during fast sync retry backoff delay. */
+  def waitingForFastRetry: Receive = {
+    case StartFastSyncRetry =>
+      log.info(s"Starting fast sync retry $fastRetryAttempt")
+      startFastSync()
+    case SyncProtocol.GetStatus =>
+      sender() ! SyncProtocol.Status.NotSyncing
+    case SyncProtocol.ResetFastSync =>
+      handleResetFastSync()
+    case SyncProtocol.RestartFastSync =>
+      handleRestartFastSync()
+    case RestartFastSyncNow =>
+      doRestartFastSyncNow()
+    case _ => // ignore stale messages during retry delay
+  }
+
+  /** Exponential backoff for sync retries: 30s → 60s → 120s → 240s → 300s (cap). Retries forever. */
+  private def syncRetryDelay(attempt: Int): FiniteDuration = {
+    val base = 30.seconds
+    val delay = base * math.pow(2, (attempt - 1).min(4)).toLong
+    delay.min(5.minutes)
   }
 
   def start(): Unit = {
@@ -501,8 +506,7 @@ class SyncController(
 
     (appStateStorage.isSnapSyncDone(), appStateStorage.isFastSyncDone(), doSnapSync, doFastSync) match {
       case (false, _, true, _) =>
-        // SNAP sync requested - just start it
-        // It will fall back to fast sync if needed
+        // SNAP sync requested — retries itself on failure with exponential backoff
         startSnapSync()
       case (true, _, true, _) =>
         log.warning("do-snap-sync is true but SNAP sync already completed")

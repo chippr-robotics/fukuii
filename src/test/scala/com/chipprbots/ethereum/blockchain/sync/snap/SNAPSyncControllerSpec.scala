@@ -124,14 +124,14 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     val validationComplete = StateValidationComplete
     val getProgress = GetProgress
     val bootstrapComplete = BootstrapComplete
-    val fallback = FallbackToFastSync
+    val retry = RetrySnapSync("test reason")
 
     // Verify they exist
     start shouldBe Start
     done shouldBe Done
     getProgress shouldBe GetProgress
     bootstrapComplete shouldBe BootstrapComplete
-    fallback shouldBe FallbackToFastSync
+    retry.reason shouldBe "test reason"
   }
 
   it should "have bootstrap message with target block" taggedAs UnitTest in {

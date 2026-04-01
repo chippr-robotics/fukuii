@@ -96,39 +96,3 @@ object RetryStrategy {
     jitterFactor = 0.5
   )
 }
-
-/** Retry state tracker for individual operations */
-final case class RetryState(
-    attempt: Int = 0,
-    strategy: RetryStrategy = RetryStrategy.default,
-    firstAttemptTime: Option[Long] = None,
-    lastAttemptTime: Option[Long] = None
-) {
-
-  /** Get next delay for current attempt */
-  def nextDelay: FiniteDuration = strategy.nextDelay(attempt)
-
-  /** Record a retry attempt */
-  def recordAttempt: RetryState = {
-    val now = System.currentTimeMillis()
-    copy(
-      attempt = attempt + 1,
-      firstAttemptTime = firstAttemptTime.orElse(Some(now)),
-      lastAttemptTime = Some(now)
-    )
-  }
-
-  /** Reset retry state (e.g., after success) */
-  def reset: RetryState = RetryState(0, strategy, None, None)
-
-  /** Check if max attempts reached */
-  def shouldGiveUp(maxAttempts: Int): Boolean = attempt >= maxAttempts
-
-  /** Get total time spent retrying */
-  def totalTimeSpent: FiniteDuration =
-    firstAttemptTime match {
-      case None => 0.millis
-      case Some(startTime) =>
-        (System.currentTimeMillis() - startTime).millis
-    }
-}
