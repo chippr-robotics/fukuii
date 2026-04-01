@@ -932,7 +932,7 @@ class SNAPSyncController(
             log.info(s"Local best block: $localBestBlock")
             log.info(s"Using bootstrapped pivot block: $targetPivot")
             log.info(s"State root: ${header.stateRoot.toHex.take(16)}...")
-            log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
+            log.info(s"Beginning SNAP account download with ${snapSyncConfig.accountConcurrency} concurrent workers")
             log.info("=" * 80)
             MilestoneLog.phase(
               s"SNAP account download starting | pivot=$targetPivot root=${header.stateRoot.toHex.take(8)} workers=${snapSyncConfig.accountConcurrency}"
@@ -966,7 +966,7 @@ class SNAPSyncController(
                     log.info(s"Local best block: $localBestBlock")
                     log.info(s"Using bootstrapped pivot block: $targetPivot")
                     log.info(s"State root: ${header.stateRoot.toHex.take(16)}...")
-                    log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
+                    log.info(s"Beginning SNAP account download with ${snapSyncConfig.accountConcurrency} concurrent workers")
                     log.info("=" * 80)
 
                     currentPhase = AccountRangeSync
@@ -1708,7 +1708,7 @@ class SNAPSyncController(
   private def startAccountRangeSync(rootHash: ByteString): Unit = {
     // Before starting workers, check if any connected peer has been verified as serving SNAP data.
     // Peers that advertise snap/1 but fail the SnapServerChecker probe are not counted.
-    // If no verified peers exist, schedule a grace period before falling back to fast sync.
+    // If no verified peers exist, schedule a grace period then retry SNAP with backoff.
     val snapPeerCount = peersToDownloadFrom.count { case (_, p) =>
       p.peerInfo.remoteStatus.supportsSnap && p.peerInfo.isServingSnap
     }
@@ -1716,7 +1716,7 @@ class SNAPSyncController(
     if (snapPeerCount == 0) {
       val gracePeriod = snapSyncConfig.snapCapabilityGracePeriod
       log.warning(s"No peers with snap/1 capability found ($peersToDownloadFrom.size peers connected)")
-      log.warning(s"Scheduling snap capability check in ${gracePeriod.toSeconds}s before falling back to fast sync")
+      log.warning(s"No verified SNAP peers — scheduling capability check in ${gracePeriod.toSeconds}s (will retry SNAP with backoff if none confirmed)")
       snapCapabilityCheckTask = Some(
         scheduler.scheduleOnce(gracePeriod, self, CheckSnapCapability)(ec)
       )
@@ -2682,13 +2682,13 @@ class SNAPSyncController(
         s"tasksPending=${progress.tasksPending}, tasksActive=${progress.tasksActive}"
 
     if (consecutiveAccountStallRefreshes > maxAccountStallRefreshes) {
-      // Truly unrecoverable after many pivot refreshes — fall back
+      // Truly unrecoverable after many pivot refreshes — request SNAP retry with backoff
       log.error(
         s"Account sync stalled after $consecutiveAccountStallRefreshes consecutive pivot refreshes. " +
-          s"Falling back to fast sync."
+          s"Requesting SNAP retry with backoff."
       )
       MilestoneLog.error(
-        s"Account stagnation | $consecutiveAccountStallRefreshes consecutive stall refreshes, falling back to fast sync"
+        s"Account stagnation | $consecutiveAccountStallRefreshes consecutive stall refreshes, requesting SNAP retry"
       )
       if (recordCriticalFailure(context)) {
         requestSnapRetry(s"Account stagnation: $context")
