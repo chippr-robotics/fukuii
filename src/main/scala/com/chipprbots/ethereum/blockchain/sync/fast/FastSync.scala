@@ -105,8 +105,25 @@ class FastSync(
   }
 
   def startWithState(syncState: SyncState): Unit = {
+    // Check if headers in RocksDB go beyond the persisted bestBlockHeaderNumber.
+    // This happens when SyncState was persisted mid-download but the node restarted —
+    // headers continued being written to RocksDB past the last SyncState snapshot.
+    val existingBestHeader = blockchainReader.getBestBlockNumber()
+    val updatedState =
+      if (existingBestHeader > syncState.bestBlockHeaderNumber && existingBestHeader <= syncState.pivotBlock.number) {
+        log.info(
+          "Headers in database ({}) ahead of persisted sync state ({}). Advancing to skip redundant download.",
+          existingBestHeader,
+          syncState.bestBlockHeaderNumber
+        )
+        syncState.copy(
+          bestBlockHeaderNumber = existingBestHeader,
+          lastFullBlockNumber = existingBestHeader.max(syncState.lastFullBlockNumber)
+        )
+      } else syncState
+
     log.info("Starting fast sync with existing state and asking for new pivot block")
-    val syncingHandler = new SyncingHandler(syncState)
+    val syncingHandler = new SyncingHandler(updatedState)
     syncingHandler.askForPivotBlockUpdate(SyncRestart)
   }
 
@@ -142,10 +159,24 @@ class FastSync(
         log.info("Retrying pivot selection in {} (peers may still be connecting)", startRetryInterval)
         scheduler.scheduleOnce(startRetryInterval, self, RetryPivotBlockSelection)
       } else {
+        // Check if headers already exist in RocksDB from a previous sync run.
+        // This avoids re-downloading millions of headers that survived a restart.
+        val existingBestHeader = blockchainReader.getBestBlockNumber()
+        val bootstrappedHeaderNumber =
+          if (existingBestHeader > 0 && existingBestHeader <= pivotBlockHeader.number) {
+            log.info(
+              "Found existing headers in database up to block {}. Skipping redundant header download.",
+              existingBestHeader
+            )
+            existingBestHeader
+          } else BigInt(0)
+
         val initialSyncState =
           SyncState(
             pivotBlockHeader,
-            safeDownloadTarget = pivotBlockHeader.number + syncConfig.fastSyncBlockValidationX
+            safeDownloadTarget = pivotBlockHeader.number + syncConfig.fastSyncBlockValidationX,
+            bestBlockHeaderNumber = bootstrappedHeaderNumber,
+            lastFullBlockNumber = bootstrappedHeaderNumber
           )
         val syncingHandler = new SyncingHandler(initialSyncState)
         context.become(syncingHandler.receive)
