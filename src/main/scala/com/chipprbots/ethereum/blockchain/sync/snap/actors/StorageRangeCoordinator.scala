@@ -145,6 +145,10 @@ class StorageRangeCoordinator(
     statelessPeers.contains(peer.id.value)
 
   private def markPeerStateless(peer: Peer): Unit = {
+    if (peer.isStatic) {
+      log.debug(s"[STATIC] Skipping penalization for static peer ${peer.remoteAddress}")
+      return
+    }
     statelessPeers.add(peer.id.value)
     log.info(
       s"Peer ${peer.id.value} marked stateless for storage root ${stateRoot.take(4).toHex} " +

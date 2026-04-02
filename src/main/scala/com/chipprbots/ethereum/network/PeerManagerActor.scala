@@ -550,7 +550,8 @@ class PeerManagerActor(
           log.info(s"Static peer handshaked: ${handshakedPeer.remoteAddress} ($dir)")
         }
         peerStatusCache = peerStatusCache + (handshakedPeer.id -> PeerActor.Status.Handshaked)
-        context.become(listening(connectedPeers.promotePeerToHandshaked(handshakedPeer)))
+        val finalPeer = if (isStaticPeer) handshakedPeer.copy(isStatic = true) else handshakedPeer
+        context.become(listening(connectedPeers.promotePeerToHandshaked(finalPeer)))
       }
   }
 

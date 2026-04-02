@@ -86,6 +86,10 @@ class AccountRangeCoordinator(
     statelessPeers.contains(peer.id)
 
   private def markPeerStateless(peer: Peer, reason: String): Unit = {
+    if (peer.isStatic) {
+      log.debug(s"[STATIC] Skipping penalization for static peer ${peer.remoteAddress} (reason: $reason)")
+      return
+    }
     val shouldMark = if (reason.contains("Missing proof for empty account range")) {
       // Geth/Besu alignment: don't mark stateless for proof failures — just use graduated cooldown.
       // Empty proofs often come from peers with incomplete snap serving, not from root staleness.

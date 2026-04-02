@@ -484,20 +484,24 @@ class TrieNodeHealingCoordinator(
     } else {
       adjustResponseBytesOnFailure(peer, "empty healing response")
       recordPeerCooldown(peer, "empty healing response")
-      // Mark peer stateless for current root (geth-aligned)
-      statelessPeers += peer.id.value
-      log.info(
-        s"Peer ${peer.id.value} marked stateless for healing root " +
-          s"${Hex.toHexString(stateRoot.take(4).toArray)} (${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
-      )
-      // Check if all known peers are stateless — request pivot refresh
-      if (statelessPeers.size >= knownAvailablePeers.size && knownAvailablePeers.nonEmpty && !pivotRefreshRequested) {
-        pivotRefreshRequested = true
-        log.warning(
-          s"All ${statelessPeers.size} peers stateless for healing root " +
-            s"${Hex.toHexString(stateRoot.take(4).toArray)}. Requesting pivot refresh."
+      // Mark peer stateless for current root (geth-aligned) — skip for static peers
+      if (!peer.isStatic) {
+        statelessPeers += peer.id.value
+        log.info(
+          s"Peer ${peer.id.value} marked stateless for healing root " +
+            s"${Hex.toHexString(stateRoot.take(4).toArray)} (${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
         )
-        snapSyncController ! SNAPSyncController.HealingAllPeersStateless
+        // Check if all known peers are stateless — request pivot refresh
+        if (statelessPeers.size >= knownAvailablePeers.size && knownAvailablePeers.nonEmpty && !pivotRefreshRequested) {
+          pivotRefreshRequested = true
+          log.warning(
+            s"All ${statelessPeers.size} peers stateless for healing root " +
+              s"${Hex.toHexString(stateRoot.take(4).toArray)}. Requesting pivot refresh."
+          )
+          snapSyncController ! SNAPSyncController.HealingAllPeersStateless
+        }
+      } else {
+        log.debug(s"[STATIC] Skipping stateless marking for static peer ${peer.remoteAddress} (healing)")
       }
     }
 
