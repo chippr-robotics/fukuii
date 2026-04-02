@@ -19,7 +19,6 @@ import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason.InvalidStateResponse
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg.PeerWithInfo
-import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler
 import com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.ResponseReceived
 import com.chipprbots.ethereum.blockchain.sync.fast.LoadableBloomFilter.BloomFilterLoadingResult
@@ -52,12 +51,14 @@ class SyncStateSchedulerActor(
   implicit private val monixScheduler: IORuntime = IORuntime.global
   implicit private val ec: scala.concurrent.ExecutionContext = context.dispatcher
 
-  /** Track consecutive sync cycles with zero ETH63-67 peers (all ETH68/SNAP only). Threshold is high (120 cycles × 0.5s
-    * \= 60 seconds) because peers need time to connect and handshake at startup. A threshold of 5 (2.5s) caused
-    * premature NetworkIncompatible detection before ETH66/67 peers had connected.
+  /** Track consecutive sync cycles with zero ETH63-67 peers (all ETH68/SNAP only). On modern ETC networks, all peers
+    * negotiate ETH68 as the highest common protocol. GetNodeData is only valid on the negotiated protocol version, so
+    * ETH68 peers cannot serve GetNodeData even if they also support ETH67. The threshold gives peers time to connect
+    * (30 cycles × 0.5s = 15 seconds) but doesn't wait too long since ETH68-only is the expected state on current
+    * networks.
     */
   private var noCompatiblePeersCount: Int = 0
-  private val NoCompatiblePeersThreshold: Int = 120
+  private val NoCompatiblePeersThreshold: Int = 30
 
   /** Check if a capability supports GetNodeData message. GetNodeData is available in ETH63-67 but removed in ETH68 per
     * EIP-4938. SNAP protocol uses different messages (GetAccountRange, etc.) and doesn't support GetNodeData.
@@ -65,25 +66,14 @@ class SyncStateSchedulerActor(
     * Note: Capability is a sealed trait, so this match is exhaustive. If new capabilities are added in the future, this
     * method will need to be updated accordingly.
     */
-  /** Check if a peer supports GetNodeData by examining ALL its capabilities, not just the negotiated (highest) one. A
-    * peer negotiating ETH68 may also support ETH66/67 which includes GetNodeData. The `capabilities` field lists all
-    * protocols the peer advertised during the Hello handshake.
+  /** Check if a peer supports GetNodeData on the negotiated protocol. GetNodeData is available in ETH63-67 but removed
+    * in ETH68 (EIP-4938). Only the negotiated (connection-level) capability matters — sending GetNodeData on an ETH68
+    * connection causes the peer to disconnect.
     */
-  private def supportsGetNodeData(remoteStatus: NetworkPeerManagerActor.RemoteStatus): Boolean = {
-    // Check the full capabilities list first (all protocols the peer supports)
-    val allCaps = remoteStatus.capabilities
-    if (allCaps.nonEmpty) {
-      allCaps.exists {
-        case Capability.ETH63 | Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 => true
-        case _                                                                                            => false
-      }
-    } else {
-      // Fallback to negotiated capability if capabilities list is empty
-      remoteStatus.capability match {
-        case Capability.ETH63 | Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 => true
-        case _                                                                                            => false
-      }
-    }
+  private def supportsGetNodeData(capability: Capability): Boolean = capability match {
+    case Capability.ETH63 | Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 => true
+    case Capability.ETH68                                                                             => false
+    case Capability.SNAP1                                                                             => false
   }
 
   private def getFreePeers(state: DownloaderState): List[Peer] = {
@@ -93,12 +83,25 @@ class SyncStateSchedulerActor(
         case ((compat, incompat, count), (_, PeerWithInfo(peer, peerInfo))) =>
           if (state.activeRequests.contains(peer.id)) {
             (compat, incompat, count) // Skip peers with active requests
-          } else if (supportsGetNodeData(peerInfo.remoteStatus)) {
+          } else if (supportsGetNodeData(peerInfo.remoteStatus.capability)) {
             (peer :: compat, incompat, count) // Compatible peer
           } else {
             (compat, peer :: incompat, count + 1) // Incompatible peer, increment count
           }
       }
+
+    // Log peer capability details when no compatible peers found
+    if (compatiblePeers.isEmpty && peersToDownloadFrom.nonEmpty) {
+      val samplePeer = peersToDownloadFrom.values.headOption
+      samplePeer.foreach { p =>
+        log.debug(
+          "State peer debug: negotiated={}, allCaps=[{}], peersTotal={}",
+          p.peerInfo.remoteStatus.capability,
+          p.peerInfo.remoteStatus.capabilities.mkString(", "),
+          peersToDownloadFrom.size
+        )
+      }
+    }
 
     if (incompatibleCount > 0) {
       log.debug(

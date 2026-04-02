@@ -66,9 +66,12 @@ class SyncStateScheduler(
   def initState(targetRootHash: ByteString): Option[SchedulerState] =
     if (targetRootHash == emptyStateRootHash) {
       None
-    } else if (blockchainReader.getMptNodeByHash(targetRootHash).isDefined) {
-      None
     } else {
+      // Always schedule the root for download even if it exists locally.
+      // The root node existing doesn't mean the full state trie is complete —
+      // a previous SNAP or fast sync may have stored only the root without
+      // all child nodes. The scheduler will skip nodes it already has via
+      // the bloom filter during traversal.
       val initialState = SchedulerState()
       val initialRequest = StateNodeRequest(targetRootHash, None, StateNode, Seq(), 0, 0)
       Option(initialState.schedule(initialRequest))
