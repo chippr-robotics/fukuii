@@ -139,6 +139,9 @@ class SNAPSyncController(
   private var healingRequestTask: Option[Cancellable] = None
   private var storageStagnationRefreshAttempted: Boolean = false
   private var trieWalkInProgress: Boolean = false
+  private var trieWalkStartedAtMs: Long = 0L
+  @volatile private var trieWalkNodesScanned: java.util.concurrent.atomic.AtomicLong =
+    new java.util.concurrent.atomic.AtomicLong(0)
   private var consecutiveUnproductiveHealingRounds: Int = 0
   private val maxUnproductiveHealingRounds: Int = 3 // After 3 rounds of finding same missing nodes with 0 healed, skip to validation
   private var bootstrapCheckTask: Option[Cancellable] = None
@@ -616,6 +619,17 @@ class SNAPSyncController(
       } else {
         // No walk in progress — start one to check for deeper missing nodes
         startTrieWalk()
+      }
+
+    case TrieWalkHeartbeat =>
+      if (trieWalkInProgress) {
+        val elapsedSec = ((System.currentTimeMillis() - trieWalkStartedAtMs) / 1000).toInt
+        val scanned = trieWalkNodesScanned.get()
+        log.info(
+          f"[HEALING] Trie walk in progress: $scanned%,d nodes scanned, " +
+            s"${elapsedSec / 60}m ${elapsedSec % 60}s elapsed"
+        )
+        scheduler.scheduleOnce(30.seconds, self, TrieWalkHeartbeat)(ec)
       }
 
     case TrieWalkResult(missingNodes) if currentPhase == StateHealing =>
@@ -2089,19 +2103,24 @@ class SNAPSyncController(
   private case class TrieWalkResult(missingNodes: Seq[(Seq[ByteString], ByteString)])
   private case class TrieWalkFailed(error: String)
   private case object ScheduledTrieWalk
+  private case object TrieWalkHeartbeat
 
   /** Start an async trie walk to discover missing nodes. Guards against concurrent walks. */
   private def startTrieWalk(): Unit = {
     if (trieWalkInProgress) return
     if (currentPhase != StateHealing) return
     trieWalkInProgress = true
+    trieWalkStartedAtMs = System.currentTimeMillis()
+    val counter = new java.util.concurrent.atomic.AtomicLong(0)
+    trieWalkNodesScanned = counter
     stateRoot.foreach { root =>
       log.info("Starting trie walk to discover missing nodes for healing...")
       val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
       val selfRef = self
+      scheduler.scheduleOnce(30.seconds, self, TrieWalkHeartbeat)(ec)
       scala.concurrent
         .Future {
-          val validator = new StateValidator(storage)
+          val validator = new StateValidator(storage, counter)
           validator.findMissingNodesWithPaths(root)
         }(ec)
         .foreach {
@@ -3140,7 +3159,10 @@ object SNAPSyncConfig {
   }
 }
 
-class StateValidator(mptStorage: MptStorage) {
+class StateValidator(
+    mptStorage: MptStorage,
+    nodesScanned: java.util.concurrent.atomic.AtomicLong = new java.util.concurrent.atomic.AtomicLong(0)
+) {
 
   import com.chipprbots.ethereum.mpt._
   import com.chipprbots.ethereum.domain.Account
@@ -3409,6 +3431,7 @@ class StateValidator(mptStorage: MptStorage) {
   ): Unit = {
     import com.chipprbots.ethereum.domain.Account.accountSerializer
 
+    nodesScanned.incrementAndGet()
     // Note: visited check is per-case (see traverseForMissingNodes comment)
     node match {
       case leaf: LeafNode =>
@@ -3488,7 +3511,8 @@ class StateValidator(mptStorage: MptStorage) {
       accountHash: ByteString,
       result: mutable.ArrayBuffer[(Seq[ByteString], ByteString)],
       visited: mutable.Set[ByteString]
-  ): Unit =
+  ): Unit = {
+    nodesScanned.incrementAndGet()
     // Note: visited check is per-case (see traverseForMissingNodes comment)
     node match {
       case _: LeafNode | NullNode => ()
@@ -3528,6 +3552,7 @@ class StateValidator(mptStorage: MptStorage) {
           }
         }
     }
+  }
 }
 
 class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {

@@ -110,6 +110,7 @@ class StorageRangeCoordinator(
   // R6 fix: File-backed persistence — completedAccountHashes are appended to a temp file
   // so crash recovery can skip already-completed accounts instead of re-downloading everything.
   private var totalStorageContracts: Int = 0
+  private var storageSyncCompleteReported: Boolean = false
   private val completedAccountHashes = mutable.Set[ByteString]()
   private val completedAccountsFile: Path = Files.createTempFile("fukuii-completed-storage-", ".bin")
   private val completedAccountsOut = new BufferedOutputStream(new FileOutputStream(completedAccountsFile.toFile), 32768)
@@ -654,13 +655,25 @@ class StorageRangeCoordinator(
         flushAllPendingTrieBuilds()
       }
       if (isComplete) {
-        log.info("Storage range sync complete!")
-        snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
+        if (!storageSyncCompleteReported) {
+          storageSyncCompleteReported = true
+          log.info("Storage range sync complete!")
+          snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
+        }
       } else if (tasks.nonEmpty) {
         // Try to dispatch pending tasks — per-peer and global limits enforced in dispatchIfPossible().
         // Previously guarded by activeTasks.isEmpty which defeated pipelining.
         maybeRequestPivotRefresh()
         tryRedispatchPendingTasks()
+        log.info(
+          s"Storage progress [30s]: ${completedAccountHashes.size}/$totalStorageContracts contracts, " +
+            s"$slotsDownloaded slots, ${tasks.size} pending, ${activeTasks.size} active"
+        )
+      } else if (noMoreTasksExpected) {
+        log.info(
+          s"Storage trie builds in progress: ${completedAccountHashes.size}/$totalStorageContracts contracts, " +
+            s"$slotsDownloaded slots, ready=${accountsReadyForBuild.size}, building=${accountsInTrieConstruction.size}"
+        )
       }
 
     case NoMoreStorageTasks =>
@@ -674,8 +687,11 @@ class StorageRangeCoordinator(
         flushAllPendingTrieBuilds()
       }
       if (isComplete) {
-        log.info("Storage range sync complete!")
-        snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
+        if (!storageSyncCompleteReported) {
+          storageSyncCompleteReported = true
+          log.info("Storage range sync complete!")
+          snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
+        }
       }
 
     case ForceCompleteStorage =>
@@ -725,6 +741,7 @@ class StorageRangeCoordinator(
       // Clear all per-peer adaptive state — fresh start with new root
       statelessPeers.clear()
       pivotRefreshRequested = false
+      storageSyncCompleteReported = false
       lastDispatchOrResponseMs = System.currentTimeMillis()
       peerCooldownUntilMs.clear()
       peerConsecutiveTimeouts.clear()
