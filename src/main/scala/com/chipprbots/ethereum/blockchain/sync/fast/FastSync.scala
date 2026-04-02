@@ -965,6 +965,19 @@ class FastSync(
         syncStateScheduler ! StartSyncingTo(syncState.pivotBlock.stateRoot, syncState.pivotBlock.number)
       }
 
+      // Refresh pivot for state download when it becomes stale — whether blocks are done or not.
+      // The SNAP serve window is ~128 blocks (~28 min on ETC). If state download takes longer,
+      // peers stop serving the old root. Refreshing the pivot gives state a fresh root to work with.
+      if (
+        stateSyncStarted && !syncState.stateSyncFinished && !stateSyncRestartRequested &&
+        notInTheMiddleOfUpdate && pivotBlockIsStale()
+      ) {
+        log.info("Pivot block stale during parallel state download, requesting pivot update for state refresh")
+        syncStateScheduler ! RestartRequested
+        stateSyncRestartRequested = true
+        askForPivotBlockUpdate(ImportedLastBlock)
+      }
+
       if (fullySynced) {
         finish()
       } else {
