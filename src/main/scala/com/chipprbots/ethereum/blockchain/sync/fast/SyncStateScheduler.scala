@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.mpt.BranchNode
 import com.chipprbots.ethereum.mpt.ExtensionNode
 import com.chipprbots.ethereum.mpt.HashNode
 import com.chipprbots.ethereum.mpt.LeafNode
+import com.chipprbots.ethereum.mpt.HexPrefix
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.MptNodeEncoders.MptNodeDec
@@ -197,6 +198,11 @@ class SyncStateScheduler(
             }
 
             val storageRequests = if (account.storageRoot != emptyStateRootHash) {
+              // Compute the full account hash from the leaf's nibble path + leaf key.
+              // This is needed for GetTrieNodes storage requests: [accountHash, storagePath].
+              val leafKeyNibbles = n.key.toArray.toSeq
+              val fullAccountPath = parentRequest.nibblePath ++ leafKeyNibbles
+              val acctHash = ByteString(HexPrefix.nibblesToBytes(fullAccountPath.toArray))
               Seq(
                 StateNodeRequest(
                   account.storageRoot,
@@ -204,7 +210,9 @@ class SyncStateScheduler(
                   StorageNode,
                   Seq(parentRequest.nodeHash),
                   maxMptTrieDepth,
-                  0
+                  0,
+                  nibblePath = Seq.empty,
+                  accountHash = Some(acctHash)
                 )
               )
             } else {
@@ -220,14 +228,16 @@ class SyncStateScheduler(
 
     case n: BranchNode =>
       val children = ArraySeq.unsafeWrapArray(n.children)
-      Right(children.collect { case HashNode(childHash) =>
+      Right(children.zipWithIndex.collect { case (HashNode(childHash), idx) =>
         StateNodeRequest(
           ByteString.fromArrayUnsafe(childHash),
           None,
           requestType,
           Seq(parentRequest.nodeHash),
           parentRequest.nodeDepth + 1,
-          0
+          0,
+          nibblePath = parentRequest.nibblePath :+ idx.toByte,
+          accountHash = parentRequest.accountHash
         )
       })
 
@@ -241,7 +251,9 @@ class SyncStateScheduler(
               requestType,
               Seq(parentRequest.nodeHash),
               parentRequest.nodeDepth + n.sharedKey.size,
-              0
+              0,
+              nibblePath = parentRequest.nibblePath ++ n.sharedKey.toArray.toSeq,
+              accountHash = parentRequest.accountHash
             )
           )
         case _ => Nil
@@ -316,7 +328,9 @@ object SyncStateScheduler {
       requestType: RequestType,
       parents: Seq[ByteString],
       nodeDepth: Int,
-      dependencies: Int
+      dependencies: Int,
+      nibblePath: Seq[Byte] = Seq.empty,
+      accountHash: Option[ByteString] = None
   ) {
     def isNodeRequest: Boolean = requestType match {
       case _: CodeRequest => false

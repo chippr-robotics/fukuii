@@ -29,9 +29,15 @@ import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.SyncRespo
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor._
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.Capability
+import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.mpt.HexPrefix
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETH66
+import com.chipprbots.ethereum.network.p2p.messages.SNAP
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
@@ -51,14 +57,8 @@ class SyncStateSchedulerActor(
   implicit private val monixScheduler: IORuntime = IORuntime.global
   implicit private val ec: scala.concurrent.ExecutionContext = context.dispatcher
 
-  /** Track consecutive sync cycles with zero ETH63-67 peers (all ETH68/SNAP only). On modern ETC networks, all peers
-    * negotiate ETH68 as the highest common protocol. GetNodeData is only valid on the negotiated protocol version, so
-    * ETH68 peers cannot serve GetNodeData even if they also support ETH67. The threshold gives peers time to connect
-    * (30 cycles × 0.5s = 15 seconds) but doesn't wait too long since ETH68-only is the expected state on current
-    * networks.
-    */
-  private var noCompatiblePeersCount: Int = 0
-  private val NoCompatiblePeersThreshold: Int = 30
+  /** State root for the current sync target — needed for GetTrieNodes requests. */
+  private var currentStateRoot: ByteString = ByteString.empty
 
   /** Check if a capability supports GetNodeData message. GetNodeData is available in ETH63-67 but removed in ETH68 per
     * EIP-4938. SNAP protocol uses different messages (GetAccountRange, etc.) and doesn't support GetNodeData.
@@ -76,90 +76,104 @@ class SyncStateSchedulerActor(
     case Capability.SNAP1                                                                             => false
   }
 
+  /** Find free peers that can serve state nodes via either GetNodeData (ETH66/67) or GetTrieNodes (SNAP). On modern ETC
+    * networks, most peers negotiate ETH68 which doesn't support GetNodeData. These peers typically also support snap/1,
+    * so we can use GetTrieNodes with nibble paths instead.
+    */
   private def getFreePeers(state: DownloaderState): List[Peer] = {
-    // Partition peers into compatible, incompatible, and all free peers
-    val (compatiblePeers, incompatiblePeers, incompatibleCount) =
-      peersToDownloadFrom.foldLeft((List.empty[Peer], List.empty[Peer], 0)) {
-        case ((compat, incompat, count), (_, PeerWithInfo(peer, peerInfo))) =>
-          if (state.activeRequests.contains(peer.id)) {
-            (compat, incompat, count) // Skip peers with active requests
-          } else if (supportsGetNodeData(peerInfo.remoteStatus.capability)) {
-            (peer :: compat, incompat, count) // Compatible peer
-          } else {
-            (compat, peer :: incompat, count + 1) // Incompatible peer, increment count
-          }
-      }
+    val freePeers = peersToDownloadFrom.collect {
+      case (_, PeerWithInfo(peer, peerInfo))
+          if !state.activeRequests.contains(peer.id) &&
+            (supportsGetNodeData(peerInfo.remoteStatus.capability) || peerInfo.remoteStatus.supportsSnap) =>
+        peer
+    }.toList
 
-    // Log peer capability details when no compatible peers found
-    if (compatiblePeers.isEmpty && peersToDownloadFrom.nonEmpty) {
-      val samplePeer = peersToDownloadFrom.values.headOption
-      samplePeer.foreach { p =>
-        log.debug(
-          "State peer debug: negotiated={}, allCaps=[{}], peersTotal={}",
-          p.peerInfo.remoteStatus.capability,
-          p.peerInfo.remoteStatus.capabilities.mkString(", "),
-          peersToDownloadFrom.size
-        )
-      }
-    }
-
-    if (incompatibleCount > 0) {
+    if (freePeers.isEmpty && peersToDownloadFrom.nonEmpty) {
       log.debug(
-        "Filtered out {} peers not supporting GetNodeData (ETH68/SNAP peers). {} peers available for state sync.",
-        incompatibleCount,
-        compatiblePeers.size
+        "No free peers for state download ({} total, {} with active requests)",
+        peersToDownloadFrom.size,
+        state.activeRequests.size
       )
     }
-
-    // Track consecutive cycles with no compatible peers
-    if (compatiblePeers.isEmpty && incompatiblePeers.nonEmpty) {
-      noCompatiblePeersCount += 1
-      log.warning(
-        "No ETH63-67 peers available for GetNodeData ({} consecutive cycles). {} incompatible (ETH68/SNAP) peers present.",
-        noCompatiblePeersCount,
-        incompatiblePeers.size
-      )
-      if (noCompatiblePeersCount >= NoCompatiblePeersThreshold) {
-        log.warning(
-          "No compatible peers for {} consecutive cycles (threshold: {}). Network appears ETH68-only. Signaling NetworkIncompatible.",
-          noCompatiblePeersCount,
-          NoCompatiblePeersThreshold
-        )
-        noCompatiblePeersCount = 0
-        context.parent ! NetworkIncompatible
-      }
-      // Return empty list — don't fall back to incompatible peers that can't serve GetNodeData
-      List.empty
-    } else {
-      if (compatiblePeers.nonEmpty) {
-        noCompatiblePeersCount = 0
-      }
-      compatiblePeers
-    }
+    freePeers
   }
 
+  /** Check if a specific peer should use SNAP GetTrieNodes instead of GetNodeData */
+  private def peerUsesSnap(peer: Peer): Boolean =
+    handshakedPeers.get(peer.id).exists { pwi =>
+      !supportsGetNodeData(pwi.peerInfo.remoteStatus.capability) && pwi.peerInfo.remoteStatus.supportsSnap
+    }
+
   private def requestNodes(request: PeerRequest): ActorRef = {
-    log.debug("Requesting {} from peer {}", request.nodes.size, request.peer.id)
-    val handler = context.actorOf(
-      PeerRequestHandler.props[GetNodeData, NodeData](
-        request.peer,
-        syncConfig.peerResponseTimeout,
-        networkPeerManager,
-        peerEventBus,
-        requestMsg = GetNodeData(request.nodes.toList),
-        responseMsgCode = Codes.NodeDataCode
-      )
+    val useSnap = peerUsesSnap(request.peer)
+    log.debug(
+      "Requesting {} nodes from peer {} via {}",
+      request.nodes.size,
+      request.peer.id,
+      if (useSnap) "GetTrieNodes" else "GetNodeData"
     )
+
+    val handler = if (useSnap && currentStateRoot.nonEmpty) {
+      // Convert hash-based requests to SNAP GetTrieNodes with nibble paths
+      val paths: Seq[Seq[ByteString]] = request.nodes.toList.map { hash =>
+        request.pathInfo.get(hash) match {
+          case Some((nibblePath, accountHashOpt)) =>
+            val compactPath = ByteString(HexPrefix.encode(nibblePath.toArray, isLeaf = false))
+            accountHashOpt match {
+              case Some(acctHash) => Seq(acctHash, compactPath)
+              case None           => Seq(compactPath)
+            }
+          case None =>
+            // No path info — request root path as fallback
+            Seq(ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false)))
+        }
+      }
+      context.actorOf(
+        PeerRequestHandler.props[GetTrieNodes, TrieNodes](
+          request.peer,
+          syncConfig.peerResponseTimeout,
+          networkPeerManager,
+          peerEventBus,
+          requestMsg = GetTrieNodes(
+            requestId = ETH66.nextRequestId,
+            rootHash = currentStateRoot,
+            paths = paths,
+            responseBytes = BigInt(512 * 1024)
+          ),
+          responseMsgCode = SNAP.Codes.TrieNodesCode
+        )
+      )
+    } else {
+      // Original GetNodeData path for ETH66/67 peers
+      context.actorOf(
+        PeerRequestHandler.props[GetNodeData, NodeData](
+          request.peer,
+          syncConfig.peerResponseTimeout,
+          networkPeerManager,
+          peerEventBus,
+          requestMsg = GetNodeData(request.nodes.toList),
+          responseMsgCode = Codes.NodeDataCode
+        )
+      )
+    }
     context.watchWith(handler, RequestTerminated(request.peer))
   }
 
   def handleRequestResults: Receive = {
     case ResponseReceived(peer, nodeData: NodeData, timeTaken) =>
-      log.debug("Received {} state nodes in {} ms", nodeData.values.size, timeTaken)
+      log.debug("Received {} state nodes via GetNodeData in {} ms", nodeData.values.size, timeTaken)
       FastSyncMetrics.setMptStateDownloadTime(timeTaken)
-
       context.unwatch(sender())
       self ! RequestData(nodeData, peer)
+
+    case ResponseReceived(peer, trieNodes: TrieNodes, timeTaken) =>
+      // Convert SNAP TrieNodes response to NodeData format for the existing processing pipeline.
+      // TrieNodes returns raw node bytes — wrap them as NodeData values.
+      log.debug("Received {} state nodes via GetTrieNodes in {} ms", trieNodes.nodes.size, timeTaken)
+      FastSyncMetrics.setMptStateDownloadTime(timeTaken)
+      context.unwatch(sender())
+      val asNodeData = NodeData(trieNodes.nodes.toList)
+      self ! RequestData(asNodeData, peer)
 
     case PeerRequestHandler.RequestFailed(peer, reason) =>
       context.unwatch(sender())
@@ -221,6 +235,7 @@ class SyncStateSchedulerActor(
       initiator: ActorRef
   ): Unit = {
     timers.startTimerAtFixedRate(PrintInfoKey, PrintInfo, 30.seconds)
+    currentStateRoot = root
     log.info("Starting state sync to root {} on block {}", ByteStringUtils.hash2string(root), bn)
     // TODO handle case when we already have root i.e state is synced up to this point
     val initState = sync.initState(root).getOrElse {
@@ -506,7 +521,11 @@ object SyncStateSchedulerActor {
 
   final case class RequestTerminated(to: Peer)
 
-  final case class PeerRequest(peer: Peer, nodes: NonEmptyList[ByteString])
+  final case class PeerRequest(
+      peer: Peer,
+      nodes: NonEmptyList[ByteString],
+      pathInfo: Map[ByteString, (Seq[Byte], Option[ByteString])] = Map.empty
+  )
 
   case object RegisterScheduler
 
