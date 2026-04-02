@@ -115,7 +115,7 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with 
     val result = adminService.addPeer(AdminAddPeerRequest("enode://abcd1234@192.168.1.100:30303")).unsafeRunSync()
     result shouldBe Symbol("right")
     result.toOption.get.success shouldBe true
-    peerManager.expectMsgClass(classOf[PeerManagerActor.ConnectToPeer])
+    peerManager.expectMsgClass(classOf[PeerManagerActor.AddStaticPeer])
   }
 
   it should "return false for malformed enode URL in addPeer" taggedAs (UnitTest, RPCTest) in new TestSetup {
@@ -131,7 +131,7 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with 
     val result = adminService.removePeer(AdminRemovePeerRequest("enode://abcd1234@192.168.1.100:30303")).unsafeRunSync()
     result shouldBe Symbol("right")
     result.toOption.get.success shouldBe true
-    peerManager.expectMsgClass(classOf[PeerManagerActor.DisconnectPeerById])
+    peerManager.expectMsgClass(classOf[PeerManagerActor.RemoveStaticPeer])
   }
 
   it should "return false when no userInfo in URL for removePeer" taggedAs (UnitTest, RPCTest) in new TestSetup {

@@ -29,6 +29,7 @@ import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
 import com.chipprbots.ethereum.network.discovery.Node
 import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
+import com.chipprbots.ethereum.network.discovery.StaticNodesLoader
 
 import com.chipprbots.ethereum.network.handshaker.Handshaker
 import com.chipprbots.ethereum.network.handshaker.Handshaker.HandshakeResult
@@ -48,9 +49,10 @@ class PeerManagerActor(
     discoveryConfig: DiscoveryConfig,
     val blacklist: Blacklist,
     blockedIPRegistry: BlockedIPRegistry,
-    staticNodes: Set[URI] = Set.empty,
+    initialStaticNodes: Set[URI] = Set.empty,
     externalSchedulerOpt: Option[Scheduler] = None,
-    autoBlocker: Option[AutoBlocker] = None
+    autoBlocker: Option[AutoBlocker] = None,
+    datadirPath: String = ""
 ) extends Actor
     with ActorLogging
     with Stash {
@@ -69,10 +71,12 @@ class PeerManagerActor(
 
   val triedNodes: mutable.Set[ByteString] = lruSet[ByteString](maxBlacklistedNodes)
 
+  private var staticNodes: Set[URI] = initialStaticNodes
+
   /** Precomputed node IDs for static peers (from enode URIs). Used to identify static peers
     * in handshake/disconnect handlers without re-parsing URIs each time.
     */
-  private val staticNodeIds: Set[ByteString] = staticNodes.map { uri =>
+  private var staticNodeIds: Set[ByteString] = initialStaticNodes.map { uri =>
     ByteString(Hex.decode(uri.getUserInfo))
   }
 
@@ -325,6 +329,26 @@ class PeerManagerActor(
 
     case ConnectToPeer(uri) =>
       connectWith(uri, connectedPeers)
+
+    case AddStaticPeer(uri, writeToFile) =>
+      if (!staticNodes.contains(uri)) {
+        staticNodes = staticNodes + uri
+        staticNodeIds = staticNodeIds + ByteString(Hex.decode(uri.getUserInfo))
+        if (writeToFile && datadirPath.nonEmpty)
+          StaticNodesLoader.appendToDatadir(datadirPath, uri.toString)
+      }
+      self ! ConnectToPeer(uri)
+
+    case RemoveStaticPeer(uri, writeToFile) =>
+      if (staticNodes.contains(uri)) {
+        val nodeId = ByteString(Hex.decode(uri.getUserInfo))
+        staticNodes = staticNodes - uri
+        staticNodeIds = staticNodeIds - nodeId
+        staticPeerBackoff -= uri
+        if (writeToFile && datadirPath.nonEmpty)
+          StaticNodesLoader.removeFromDatadir(datadirPath, uri.toString)
+      }
+      self ! DisconnectPeerById(PeerId(uri.getUserInfo))
   }
 
   private def getBlacklistDuration(reason: Long): FiniteDuration = {
@@ -697,7 +721,8 @@ object PeerManagerActor {
       capabilities: List[Capability],
       blockedIPRegistry: BlockedIPRegistry,
       staticNodes: Set[URI] = Set.empty,
-      autoBlocker: Option[AutoBlocker] = None
+      autoBlocker: Option[AutoBlocker] = None,
+      datadirPath: String = ""
   ): Props = {
     val factory: (ActorContext, InetSocketAddress, Boolean) => ActorRef =
       peerFactory(
@@ -720,8 +745,9 @@ object PeerManagerActor {
         discoveryConfig,
         blacklist,
         blockedIPRegistry,
-        staticNodes,
-        autoBlocker = autoBlocker
+        initialStaticNodes = staticNodes,
+        autoBlocker = autoBlocker,
+        datadirPath = datadirPath
       )
     )
   }
@@ -799,6 +825,10 @@ object PeerManagerActor {
   case class HandlePeerConnection(connection: ActorRef, remoteAddress: InetSocketAddress)
 
   case class ConnectToPeer(uri: URI)
+
+  case class AddStaticPeer(uri: URI, writeToFile: Boolean = true)
+
+  case class RemoveStaticPeer(uri: URI, writeToFile: Boolean = true)
 
   case object GetPeers
 

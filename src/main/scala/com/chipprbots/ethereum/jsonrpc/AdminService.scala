@@ -147,7 +147,7 @@ class AdminService(
   def addPeer(req: AdminAddPeerRequest): ServiceResponse[AdminAddPeerResponse] = IO {
     try {
       val uri = new URI(req.enodeUrl)
-      peerManager ! PeerManagerActor.ConnectToPeer(uri)
+      peerManager ! PeerManagerActor.AddStaticPeer(uri, writeToFile = true)
       Right(AdminAddPeerResponse(true))
     } catch {
       case ex: Exception =>
@@ -159,10 +159,9 @@ class AdminService(
   def removePeer(req: AdminRemovePeerRequest): ServiceResponse[AdminRemovePeerResponse] = IO {
     try {
       val uri = new URI(req.enodeUrl)
-      // Extract node ID from enode URL (enode://nodeId@host:port)
       val nodeId = uri.getUserInfo
       if (nodeId != null) {
-        peerManager ! PeerManagerActor.DisconnectPeerById(PeerId(nodeId))
+        peerManager ! PeerManagerActor.RemoveStaticPeer(uri, writeToFile = true)
         Right(AdminRemovePeerResponse(true))
       } else {
         Right(AdminRemovePeerResponse(false))

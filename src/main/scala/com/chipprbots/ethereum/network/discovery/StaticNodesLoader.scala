@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.network.discovery
 
 import java.io.File
 import java.net.URI
+import java.nio.file.Files
 import java.nio.file.Paths
 
 import scala.io.Source
@@ -96,6 +97,48 @@ object StaticNodesLoader extends Logger {
           None
       }
     }
+
+  /** Append an enode URL to the static-nodes.json in the given datadir.
+    *
+    * If the enode URL is already present, this is a no-op.
+    *
+    * @param datadir
+    *   the data directory path
+    * @param enodeUrl
+    *   the enode URL string to add
+    */
+  def appendToDatadir(datadir: String, enodeUrl: String): Unit = {
+    val path = Paths.get(datadir, "static-nodes.json")
+    val existing = loadFromFile(path.toString)
+    if (!existing.contains(enodeUrl)) {
+      val updated = (existing + enodeUrl).toList.sorted
+      val json = updated.map(e => s""""$e"""").mkString("[\n  ", ",\n  ", "\n]")
+      Files.writeString(path, json)
+      log.info("Wrote {} static node(s) to {}", updated.size, path)
+    }
+  }
+
+  /** Remove an enode URL from the static-nodes.json in the given datadir.
+    *
+    * If the enode URL is not present, this is a no-op.
+    *
+    * @param datadir
+    *   the data directory path
+    * @param enodeUrl
+    *   the enode URL string to remove
+    */
+  def removeFromDatadir(datadir: String, enodeUrl: String): Unit = {
+    val path = Paths.get(datadir, "static-nodes.json")
+    val existing = loadFromFile(path.toString)
+    if (existing.contains(enodeUrl)) {
+      val updated = (existing - enodeUrl).toList.sorted
+      val json =
+        if (updated.isEmpty) "[]"
+        else updated.map(e => s""""$e"""").mkString("[\n  ", ",\n  ", "\n]")
+      Files.writeString(path, json)
+      log.info("Wrote {} static node(s) to {} (removed 1)", updated.size, path)
+    }
+  }
 
   /** Parse static nodes JSON content
     *

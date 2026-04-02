@@ -701,7 +701,7 @@ class PeerManagerSpec
           discoveryConfig,
           blacklist,
           new BlockedIPRegistry(Set.empty),
-          staticNodes = Set.empty,
+          initialStaticNodes = Set.empty,
           Some(testScheduler)
         )
       )

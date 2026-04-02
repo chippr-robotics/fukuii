@@ -344,7 +344,8 @@ trait PeerManagerActorBuilder {
       Config.supportedCapabilities,
       blockedIPRegistry,
       staticNodeUris,
-      autoBlocker
+      autoBlocker,
+      Config.config.getString("datadir")
     ),
     "peer-manager"
   )
