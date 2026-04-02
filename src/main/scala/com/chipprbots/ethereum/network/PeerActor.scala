@@ -133,7 +133,7 @@ class PeerActor[R <: HandshakeResult](
         case RLPxConnectionHandler.InitialHelloReceived(msg, _) =>
           // Processes the InitialHelloReceived, cancels the timeout and processes a new message but only if the handshaker
           // handles the received message
-          // TODO [BACKLOG N-004] Pass capabilities to EtcHelloExchangeState for protocol-aware negotiation.
+          // TODO: Pass capabilities to EtcHelloExchangeState for protocol-aware negotiation.
           // Capabilities are available at rlpxConnectionFactory (line 369) but not forwarded here.
           // Approach: add "post auth handshake" state (ETCAwaitingInitialHelloHandshaker) that
           // receives negotiatedProtocol from ConnectionEstablished.

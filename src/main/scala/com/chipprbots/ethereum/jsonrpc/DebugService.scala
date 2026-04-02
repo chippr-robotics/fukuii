@@ -54,7 +54,7 @@ object DebugService {
   case class SetHeadRequest(blockNumber: BigInt)
   case class SetHeadResponse(success: Boolean)
 
-  // Runtime profiling (M-001)
+  // Runtime profiling
   case class MemStatsRequest()
   case class MemStatsResponse(
       heapUsed: Long,
@@ -74,7 +74,7 @@ object DebugService {
   case class StacksRequest()
   case class StacksResponse(stacks: String)
 
-  // Log verbosity control (M-002)
+  // Log verbosity control
   case class SetVerbosityRequest(level: String)
   case class SetVerbosityResponse(success: Boolean)
 
@@ -84,7 +84,7 @@ object DebugService {
   case class GetVerbosityRequest()
   case class GetVerbosityResponse(rootLevel: String, modules: Map[String, String])
 
-  // CPU profiling via JFR (M-024)
+  // CPU profiling via JFR
   case class StartCpuProfileRequest(file: Option[String])
   case class StartCpuProfileResponse(success: Boolean)
 
@@ -234,7 +234,7 @@ class DebugService(
     Right(GetVerbosityResponse(rootLevel, modules))
   }
 
-  /** Active JFR recording for CPU profiling (M-024). Guarded by synchronized. */
+  /** Active JFR recording for CPU profiling. Guarded by synchronized. */
   @volatile private var activeRecording: Option[(jdk.jfr.Recording, java.nio.file.Path)] = None
 
   def startCpuProfile(req: StartCpuProfileRequest): ServiceResponse[StartCpuProfileResponse] = IO {

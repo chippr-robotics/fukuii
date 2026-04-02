@@ -148,7 +148,7 @@ object DebugJsonMethodsImplicits extends JsonMethodsImplicits {
           ("modules" -> JObject(t.modules.toList.sorted.map { case (k, v) => JField(k, JString(v)) }))
     }
 
-  // CPU profiling (M-024)
+  // CPU profiling
   implicit val debug_startCpuProfile
       : JsonMethodDecoder[StartCpuProfileRequest] with JsonEncoder[StartCpuProfileResponse] =
     new JsonMethodDecoder[StartCpuProfileRequest] with JsonEncoder[StartCpuProfileResponse] {

@@ -264,6 +264,118 @@ class TraceServiceSpec
     result shouldBe Symbol("left")
   }
 
+  // ===== traceTypes gating =====
+
+  it should "return empty trace when traceTypes does not include 'trace'" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    storeBlockWithParent(blockWithOneTx, parentBlock)
+    setupMockTraceForAnyTx(simpleTxTraceData)
+
+    val result = traceService
+      .traceReplayBlock(TraceReplayBlockRequest(BlockParam.WithNumber(1), Seq("stateDiff")))
+      .unsafeRunSync()
+    result shouldBe Symbol("right")
+    result.toOption.get.results.foreach(_.trace shouldBe empty)
+  }
+
+  it should "return stateDiff = None when traceTypes does not include 'stateDiff'" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    storeBlockWithParent(blockWithOneTx, parentBlock)
+    setupMockTraceForAnyTx(simpleTxTraceData)
+
+    val result = traceService
+      .traceReplayBlock(TraceReplayBlockRequest(BlockParam.WithNumber(1), Seq("trace")))
+      .unsafeRunSync()
+    result shouldBe Symbol("right")
+    result.toOption.get.results.foreach(_.stateDiff shouldBe None)
+  }
+
+  it should "return vmTrace = None when traceTypes does not include 'vmTrace'" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    storeBlockWithParent(blockWithOneTx, parentBlock)
+    setupMockTraceForAnyTx(simpleTxTraceData)
+
+    val result = traceService
+      .traceReplayBlock(TraceReplayBlockRequest(BlockParam.WithNumber(1), Seq("trace")))
+      .unsafeRunSync()
+    result shouldBe Symbol("right")
+    result.toOption.get.results.foreach(_.vmTrace shouldBe None)
+  }
+
+  it should "populate stateDiff when traceTypes includes 'stateDiff'" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    storeBlockWithParent(blockWithOneTx, parentBlock)
+    setupMockTraceForAnyTx(simpleTxTraceData)
+
+    val result = traceService
+      .traceReplayBlock(TraceReplayBlockRequest(BlockParam.WithNumber(1), Seq("stateDiff")))
+      .unsafeRunSync()
+    result shouldBe Symbol("right")
+    result.toOption.get.results.foreach(_.stateDiff shouldBe defined)
+  }
+
+  it should "populate vmTrace when traceTypes includes 'vmTrace'" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    storeBlockWithParent(blockWithOneTx, parentBlock)
+    setupMockTraceForAnyTx(simpleTxTraceData)
+
+    val result = traceService
+      .traceReplayBlock(TraceReplayBlockRequest(BlockParam.WithNumber(1), Seq("vmTrace")))
+      .unsafeRunSync()
+    result shouldBe Symbol("right")
+    result.toOption.get.results.foreach(_.vmTrace shouldBe defined)
+  }
+
+  // ===== revertReason =====
+
+  it should "populate revertReason on root trace when tx reverts with Error(string)" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    storeBlockWithParent(blockWithOneTx, parentBlock)
+
+    // ABI-encoded data matching parseRevertReason's expected layout:
+    // selector (4) + offset=0 (32) + length (32) + utf8 data (padded to 32)
+    val message     = "transfer failed"
+    val msgBytes    = message.getBytes("UTF-8")
+    val padLen      = if (msgBytes.length % 32 == 0) 0 else 32 - (msgBytes.length % 32)
+    val revertData  = ByteString(
+      Array(0x08.toByte, 0xc3.toByte, 0x79.toByte, 0xa0.toByte) ++  // Error(string) selector
+      Array.fill(32)(0.toByte) ++                                      // offset = 0
+      Array.fill(31)(0.toByte) ++ Array(msgBytes.length.toByte) ++    // length
+      msgBytes ++ Array.fill(padLen)(0.toByte)                         // string data padded
+    )
+    val revertTraceData = TxTraceData(
+      txResult = TxResult(
+        worldState = stubWorld,
+        gasUsed = 21000,
+        logs = Nil,
+        vmReturnData = revertData,
+        vmError = Some(com.chipprbots.ethereum.vm.RevertOccurs)
+      ),
+      internalTxs = Nil
+    )
+    setupMockTraceForAnyTx(revertTraceData)
+
+    val txHash = blockWithOneTx.body.transactionList.head.hash
+    storeTxMapping(txHash, blockWithOneTx.header.hash, 0)
+    val result = traceService
+      .traceReplayTransaction(TraceReplayTransactionRequest(txHash, Seq("trace")))
+      .unsafeRunSync()
+    result shouldBe Symbol("right")
+    val replay = result.toOption.get.result
+    replay.revertReason shouldBe defined
+    replay.revertReason.get shouldBe message
+  }
+
+  // ===== root trace sender/to/gas =====
+
+  it should "populate root trace sender from signed transaction" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    storeBlockWithParent(blockWithOneTx, parentBlock)
+    val txHash = blockWithOneTx.body.transactionList.head.hash
+    storeTxMapping(txHash, blockWithOneTx.header.hash, 0)
+    setupMockTraceForTx(blockWithOneTx, 0, simpleTxTraceData)
+
+    val result = traceService.traceTransaction(TraceTransactionRequest(txHash)).unsafeRunSync()
+    result shouldBe Symbol("right")
+    val rootTrace = result.toOption.get.traces.head
+    rootTrace.action.from shouldBe senderAddress
+    rootTrace.action.to shouldBe Some(recipientAddress)
+    rootTrace.action.gas shouldBe testTx1.tx.gasLimit
+  }
+
   // ===== traceGet =====
 
   it should "return specific trace by index in traceGet" taggedAs (UnitTest, RPCTest) in new TestSetup {

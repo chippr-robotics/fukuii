@@ -183,7 +183,7 @@ abstract class BaseNode extends Node {
       case Success(_) =>
     }
 
-    // H-017: Mark clean shutdown and record last safe block before closing DB
+    // Mark clean shutdown and record last safe block before closing DB
     tryAndLogFailure { () =>
       val appState = storagesInstance.storages.appStateStorage
       val bestBlock = appState.getBestBlockNumber()
@@ -217,7 +217,7 @@ abstract class BaseNode extends Node {
     tryAndLogFailure(() => storagesInstance.dataSource.close())
   }
 
-  /** H-017: Check if last shutdown was unclean and rewind chain head if needed.
+  /** Check if last shutdown was unclean and rewind chain head if needed.
     * go-ethereum pattern: periodic safe-block markers + clean shutdown flag.
     */
   private[this] def checkUncleanShutdown(): Unit = {

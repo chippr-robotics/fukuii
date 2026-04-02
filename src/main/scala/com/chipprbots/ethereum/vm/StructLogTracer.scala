@@ -59,9 +59,21 @@ class StructLogTracer(
     } else None
 
     val storageSnapshot = if (enableStorage) {
-      // Capture storage changes — only show slots accessed by SLOAD/SSTORE
-      // This is expensive; only enable when explicitly requested
-      None // TODO: track per-step storage diffs
+      opCode match {
+        case SLOAD if prevState.stack.size >= 1 =>
+          val slot = prevState.stack.peek(0).toBigInt
+          val value = nextState.stack.peek(0).toBigInt
+          val k = "0x" + slot.toString(16).reverse.padTo(64, '0').reverse
+          val v = "0x" + value.toString(16).reverse.padTo(64, '0').reverse
+          Some(Map(k -> v))
+        case SSTORE if prevState.stack.size >= 2 =>
+          val slot = prevState.stack.peek(0).toBigInt
+          val value = prevState.stack.peek(1).toBigInt
+          val k = "0x" + slot.toString(16).reverse.padTo(64, '0').reverse
+          val v = "0x" + value.toString(16).reverse.padTo(64, '0').reverse
+          Some(Map(k -> v))
+        case _ => None
+      }
     } else None
 
     val error = nextState.error.map(_.toString)

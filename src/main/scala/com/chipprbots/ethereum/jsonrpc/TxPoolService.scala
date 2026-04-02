@@ -94,13 +94,13 @@ class TxPoolService(
 
   def getStatus(req: TxPoolStatusRequest): ServiceResponse[TxPoolStatusResponse] =
     getPendingTransactions.map { response =>
-      Right(TxPoolStatusResponse(pending = response.pendingTransactions.size, queued = 0))
+      Right(TxPoolStatusResponse(pending = response.pendingTransactions.size, queued = 0)) // queued transactions not separately tracked
     }
 
   def getContent(req: TxPoolContentRequest): ServiceResponse[TxPoolContentResponse] =
     getPendingTransactions.map { response =>
       val grouped = groupBySenderAndNonce(response.pendingTransactions)
-      Right(TxPoolContentResponse(pending = grouped, queued = Map.empty))
+      Right(TxPoolContentResponse(pending = grouped, queued = Map.empty)) // queued transactions not separately tracked
     }
 
   def getInspect(req: TxPoolInspectRequest): ServiceResponse[TxPoolInspectResponse] =
@@ -115,7 +115,7 @@ class TxPoolService(
             stx.tx.nonce -> summary
           }.toMap
         }
-      Right(TxPoolInspectResponse(pending = grouped, queued = Map.empty))
+      Right(TxPoolInspectResponse(pending = grouped, queued = Map.empty)) // queued transactions not separately tracked
     }
 
   def getContentFrom(req: TxPoolContentFromRequest): ServiceResponse[TxPoolContentFromResponse] =
@@ -124,6 +124,6 @@ class TxPoolService(
         .filter(_.stx.senderAddress == req.address)
         .map(pt => pt.stx.tx.tx.nonce -> TxPoolTxInfo.from(pt.stx.tx, pt.stx.senderAddress))
         .toMap
-      Right(TxPoolContentFromResponse(pending = filtered, queued = Map.empty))
+      Right(TxPoolContentFromResponse(pending = filtered, queued = Map.empty)) // queued transactions not separately tracked
     }
 }

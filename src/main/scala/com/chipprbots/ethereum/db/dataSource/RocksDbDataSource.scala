@@ -405,7 +405,7 @@ object RocksDbDataSource extends Logger {
       // WriteBufferManager enforces a shared memory ceiling across block cache + all
       // memtable write buffers across all 14 column families. Without this, each CF's
       // memtables grow independently during write-heavy SNAP sync, causing unbounded
-      // RSS growth (~1.9 GB/hr observed on ETC mainnet attempt 3).
+      // RSS growth observed during ETC mainnet sync.
       val writeBufferManager = new WriteBufferManager(blockCacheSize, cache)
 
       val tableCfg = new BlockBasedTableConfig()

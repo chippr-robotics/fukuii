@@ -426,7 +426,7 @@ class BlockImporter(
         log.info("Starting Regular Sync from block {} (hash={})", bestBlock,
           ByteStringUtils.hash2string(header.hash))
 
-        // M-015: Validate pivot canonical consistency after SNAP sync.
+        // Validate pivot canonical consistency after SNAP sync.
         // If a reorg orphaned the pivot between SNAP finalization and regular sync start,
         // the stored best block hash won't match the header at that number.
         if (blockchainReader.isSnapSyncDone()) {

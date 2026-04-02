@@ -57,7 +57,10 @@ object TraceJsonMethodsImplicits extends JsonMethodsImplicits {
       case Some(err) => base ~ ("error" -> err) ~ ("result" -> JNull)
       case None      => base ~ ("result" -> result)
     }
-    withResult
+    trace.revertReason match {
+      case Some(r) => withResult ~ ("revertReason" -> r)
+      case None    => withResult
+    }
   }
 
   private def encodeAction(action: TraceAction, traceType: String): JValue = traceType match {
@@ -166,11 +169,23 @@ object TraceJsonMethodsImplicits extends JsonMethodsImplicits {
         t.trace.map(encodeTrace).getOrElse(JNull)
     }
 
-  private def encodeReplayResult(result: ReplayResult): JValue =
-    ("transactionHash" -> encodeAsHex(result.transactionHash)) ~
+  private def encodeReplayResult(result: ReplayResult): JValue = {
+    val base: JObject =
       ("output" -> encodeAsHex(result.output)) ~
-      ("trace" -> JArray(result.trace.map(encodeTrace).toList)) ~
-      ("stateDiff" -> result.stateDiff.map(JString(_)).getOrElse(JNull)) ~
-      ("vmTrace" -> result.vmTrace.map(JString(_)).getOrElse(JNull))
+        ("stateDiff" -> result.stateDiff.getOrElse(JNull: JValue)) ~
+        ("trace" -> JArray(result.trace.map(encodeTrace).toList)) ~
+        ("transactionHash" -> encodeAsHex(result.transactionHash)) ~
+        ("vmTrace" -> result.vmTrace.getOrElse(JNull: JValue))
+    result.revertReason match {
+      case Some(r) =>
+        ("output" -> encodeAsHex(result.output)) ~
+          ("revertReason" -> r) ~
+          ("stateDiff" -> result.stateDiff.getOrElse(JNull: JValue)) ~
+          ("trace" -> JArray(result.trace.map(encodeTrace).toList)) ~
+          ("transactionHash" -> encodeAsHex(result.transactionHash)) ~
+          ("vmTrace" -> result.vmTrace.getOrElse(JNull: JValue))
+      case None => base
+    }
+  }
 
 }

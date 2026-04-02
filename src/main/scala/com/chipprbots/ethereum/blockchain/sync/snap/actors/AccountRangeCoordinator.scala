@@ -940,7 +940,7 @@ class AccountRangeCoordinator(
           )
           // Send progress snapshot so controller can resume from saved positions
           sendProgressSnapshot()
-          // M-003: Work-stealing — when no pending tasks remain but active tasks exist,
+          // Work-stealing — when no pending tasks remain but active tasks exist,
           // split the largest active task to keep idle workers productive.
           maybeStealWork()
         } else {
@@ -961,7 +961,7 @@ class AccountRangeCoordinator(
     }
   }
 
-  /** M-003: Work-stealing for idle workers.
+  /** Work-stealing for idle workers.
     *
     * When a range completes and there are no pending tasks, but active tasks remain,
     * split the largest active task at its midpoint. This prevents 2/4 workers sitting

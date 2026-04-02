@@ -124,7 +124,7 @@ class MessageCodec(
       )
     }
 
-  // TODO [BACKLOG N-003]: messageDecoder should use negotiated protocol version.
+  // TODO: messageDecoder should use negotiated protocol version.
   // Compression is version-aware (line 58) but message format decoding is not.
   // remotePeer2PeerVersion is available but not threaded to fromBytes().
   def readMessages(data: ByteString): Seq[Either[DecodingError, Message]] = {

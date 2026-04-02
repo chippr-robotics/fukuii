@@ -4,12 +4,23 @@ import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 
+import scala.collection.mutable
+
+import org.json4s.JsonAST._
+import org.json4s.JsonDSL._
+
+import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.ledger._
+import com.chipprbots.ethereum.rlp
+import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.rlp.RLPValue
+import com.chipprbots.ethereum.rlp.UInt256RLPImplicits._
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import com.chipprbots.ethereum.utils.Hex
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.vm._
 
@@ -26,6 +37,7 @@ object TraceService {
       action: TraceAction,
       result: Option[TraceResult],
       error: Option[String],
+      revertReason: Option[String] = None,
       subtraces: Int,
       traceAddress: Seq[Int],
       transactionHash: Option[ByteString],
@@ -64,7 +76,10 @@ object TraceService {
       gasUsed: BigInt,
       internalTxs: Seq[InternalTransaction],
       returnData: ByteString,
-      error: Option[String]
+      error: Option[String],
+      sender: Address,
+      preWorld: InMemoryWorldStateProxy,
+      postWorld: InMemoryWorldStateProxy
   )
 
   case class TraceFilterRequest(
@@ -90,8 +105,9 @@ object TraceService {
       transactionHash: ByteString,
       output: ByteString,
       trace: Seq[Trace],
-      stateDiff: Option[String], // placeholder — not implemented
-      vmTrace: Option[String]    // placeholder — not implemented
+      stateDiff: Option[JValue],
+      vmTrace: Option[JValue],
+      revertReason: Option[String] = None
   )
 }
 
@@ -117,7 +133,7 @@ class TraceService(
           case Right(txTraces) =>
             val allTraces = txTraces.zipWithIndex.flatMap { case (txTrace, txIdx) =>
               val stx = block.body.transactionList(txIdx)
-              buildTraces(txTrace, stx.hash, txIdx, block.header)
+              buildTraces(txTrace, stx, txIdx, block.header)
             }
             val grouped = allTraces.groupBy(_.transactionHash).toSeq
               .sortBy { case (_, traces) => traces.head.transactionPosition.getOrElse(0) }
@@ -142,7 +158,7 @@ class TraceService(
             Left(JsonRpcError.InternalError)
           case Right(txTrace) =>
             val stx = block.body.transactionList(txIndex)
-            val traces = buildTraces(txTrace, stx.hash, txIndex, block.header)
+            val traces = buildTraces(txTrace, stx, txIndex, block.header)
             Right(TraceTransactionResponse(traces))
         }
     }
@@ -220,73 +236,93 @@ class TraceService(
             gasUsed = traceResult.txResult.gasUsed,
             internalTxs = traceResult.internalTxs,
             returnData = traceResult.txResult.vmReturnData,
-            error = traceResult.txResult.vmError.map(_.toString)
+            error = traceResult.txResult.vmError.map(_.toString),
+            sender = senderAddress,
+            preWorld = worldWithAccount,
+            postWorld = nextWorld
           )
           replayTransactions(rest, blockHeader, nextWorld, accumulated :+ txTrace)
       }
   }
 
-  /** Convert internal transactions into OpenEthereum-compatible traces. */
+  /** Convert internal transactions into OpenEthereum-compatible traces.
+    * Root trace fields are populated from the signed transaction and recovered sender.
+    */
   private def buildTraces(
       txTrace: TxTraceResult,
-      txHash: ByteString,
+      stx: SignedTransaction,
       txIndex: Int,
       blockHeader: BlockHeader
   ): Seq[Trace] = {
-    // Root trace for the top-level transaction
+    val isCreate = stx.tx.isContractInit
+
+    // Compute created contract address for root-level CREATE transactions
+    val createdAddr: Option[Address] = if (isCreate) {
+      val rlpPreimage = rlp.encode(
+        RLPList(RLPValue(txTrace.sender.bytes.toArray), UInt256(stx.tx.nonce).toRLPEncodable)
+      )
+      Some(Address(ByteString(crypto.kec256(rlpPreimage))))
+    } else None
+
+    val rootRevertReason = txTrace.error
+      .filter(_.toLowerCase.contains("revert"))
+      .flatMap(_ => parseRevertReason(txTrace.returnData))
+
     val rootTrace = Trace(
       action = TraceAction(
-        callType = Some("call"),
-        from = Address(ByteString.empty), // will be filled from tx sender
-        to = None,
-        gas = 0,
-        input = ByteString.empty,
-        value = 0,
-        creationType = None
+        callType = if (isCreate) None else Some("call"),
+        from = txTrace.sender,
+        to = stx.tx.receivingAddress,
+        gas = stx.tx.gasLimit,
+        input = stx.tx.payload,
+        value = stx.tx.value,
+        creationType = if (isCreate) Some("create") else None
       ),
-      result = Some(TraceResult(
+      result = if (txTrace.error.isEmpty) Some(TraceResult(
         gasUsed = txTrace.gasUsed,
-        output = txTrace.returnData,
-        address = None,
-        code = None
-      )),
+        output = if (isCreate) ByteString.empty else txTrace.returnData,
+        address = createdAddr,
+        code = if (isCreate) Some(txTrace.returnData) else None
+      )) else None,
       error = txTrace.error,
+      revertReason = rootRevertReason,
       subtraces = txTrace.internalTxs.size,
       traceAddress = Seq.empty,
-      transactionHash = Some(txHash),
+      transactionHash = Some(stx.hash),
       transactionPosition = Some(txIndex),
       blockNumber = blockHeader.number,
       blockHash = blockHeader.hash,
-      traceType = "call"
+      traceType = if (isCreate) "create" else "call"
     )
 
     // Internal traces from CALL/CREATE opcodes
     val internalTraces = txTrace.internalTxs.zipWithIndex.map { case (itx, idx) =>
-      val isCreate = itx.opcode == CREATE || itx.opcode == CREATE2
+      val isInternalCreate = itx.opcode == CREATE || itx.opcode == CREATE2
       Trace(
         action = TraceAction(
-          callType = if (isCreate) None else Some(callTypeFromOpcode(itx.opcode)),
+          callType = if (isInternalCreate) None else Some(callTypeFromOpcode(itx.opcode)),
           from = itx.from,
-          to = itx.to,
+          to = if (isInternalCreate) None else itx.to,
           gas = itx.gasLimit,
           input = itx.data,
           value = itx.value,
-          creationType = if (isCreate) Some(createTypeFromOpcode(itx.opcode)) else None
+          creationType = if (isInternalCreate) Some(createTypeFromOpcode(itx.opcode)) else None
         ),
         result = Some(TraceResult(
           gasUsed = 0, // gas used per internal call is not tracked in InternalTransaction
           output = ByteString.empty,
-          address = if (isCreate) itx.to else None,
-          code = None
+          address = if (isInternalCreate) itx.to else None,
+          code = if (isInternalCreate) itx.to.map(addr => txTrace.postWorld.getCode(addr)).filter(_.nonEmpty) else None
         )),
         error = None,
+        revertReason = None,
         subtraces = 0,
         traceAddress = Seq(idx),
-        transactionHash = Some(txHash),
+        transactionHash = Some(stx.hash),
         transactionPosition = Some(txIndex),
         blockNumber = blockHeader.number,
         blockHash = blockHeader.hash,
-        traceType = if (isCreate) "create" else "call"
+        traceType = if (isInternalCreate) "create" else "call"
       )
     }
 
@@ -298,12 +334,12 @@ class TraceService(
     case CALLCODE     => "callcode"
     case DELEGATECALL => "delegatecall"
     case STATICCALL   => "staticcall"
-    case _                   => "call"
+    case _            => "call"
   }
 
   private def createTypeFromOpcode(opcode: OpCode): String = opcode match {
     case CREATE2 => "create2"
-    case _              => "create"
+    case _       => "create"
   }
 
   def traceFilter(req: TraceFilterRequest): ServiceResponse[TraceFilterResponse] = IO {
@@ -324,7 +360,7 @@ class TraceService(
       } {
         val blockTraces = txTraces.zipWithIndex.flatMap { case (txTrace, txIdx) =>
           val stx = block.body.transactionList(txIdx)
-          buildTraces(txTrace, stx.hash, txIdx, block.header)
+          buildTraces(txTrace, stx, txIdx, block.header)
         }
         allTraces = allTraces ++ blockTraces
       }
@@ -361,15 +397,25 @@ class TraceService(
             log.error(s"Failed to replay block ${block.header.number}: $err")
             Left(JsonRpcError.InternalError)
           case Right(txTraces) =>
+            val includeTrace     = req.traceTypes.contains("trace")
+            val includeStateDiff = req.traceTypes.contains("stateDiff")
+            val includeVmTrace   = req.traceTypes.contains("vmTrace")
+
             val results = txTraces.zipWithIndex.map { case (txTrace, txIdx) =>
               val stx = block.body.transactionList(txIdx)
-              val traces = buildTraces(txTrace, stx.hash, txIdx, block.header)
+              val traces = if (includeTrace) buildTraces(txTrace, stx, txIdx, block.header) else Seq.empty
+              val stateDiff = if (includeStateDiff) Some(computeStateDiff(txTrace, stx, block.header)) else None
+              val vmTrace = if (includeVmTrace) computeVmTrace(txTrace, stx, block.header) else None
+              val revertReason = txTrace.error
+                .filter(_.toLowerCase.contains("revert"))
+                .flatMap(_ => parseRevertReason(txTrace.returnData))
               ReplayResult(
                 transactionHash = stx.hash,
                 output = txTrace.returnData,
                 trace = traces,
-                stateDiff = None,
-                vmTrace = None
+                stateDiff = stateDiff,
+                vmTrace = vmTrace,
+                revertReason = revertReason
               )
             }
             Right(TraceReplayBlockResponse(results))
@@ -388,13 +434,23 @@ class TraceService(
             Left(JsonRpcError.InternalError)
           case Right(txTrace) =>
             val stx = block.body.transactionList(txIndex)
-            val traces = buildTraces(txTrace, stx.hash, txIndex, block.header)
+            val includeTrace     = req.traceTypes.contains("trace")
+            val includeStateDiff = req.traceTypes.contains("stateDiff")
+            val includeVmTrace   = req.traceTypes.contains("vmTrace")
+
+            val traces = if (includeTrace) buildTraces(txTrace, stx, txIndex, block.header) else Seq.empty
+            val stateDiff = if (includeStateDiff) Some(computeStateDiff(txTrace, stx, block.header)) else None
+            val vmTrace = if (includeVmTrace) computeVmTrace(txTrace, stx, block.header) else None
+            val revertReason = txTrace.error
+              .filter(_.toLowerCase.contains("revert"))
+              .flatMap(_ => parseRevertReason(txTrace.returnData))
             Right(TraceReplayTransactionResponse(ReplayResult(
               transactionHash = stx.hash,
               output = txTrace.returnData,
               trace = traces,
-              stateDiff = None,
-              vmTrace = None
+              stateDiff = stateDiff,
+              vmTrace = vmTrace,
+              revertReason = revertReason
             )))
         }
     }
@@ -411,15 +467,173 @@ class TraceService(
             Left(JsonRpcError.InternalError)
           case Right(txTrace) =>
             val stx = block.body.transactionList(txIndex)
-            val traces = buildTraces(txTrace, stx.hash, txIndex, block.header)
+            val traces = buildTraces(txTrace, stx, txIndex, block.header)
             val matched = traces.find(_.traceAddress == req.traceIndex)
             Right(TraceGetResponse(matched))
         }
     }
   }
 
+  /** Compute OpenEthereum/Parity stateDiff for a transaction.
+    * Re-executes the transaction with a storage-change tracer to capture SSTORE events,
+    * then combines with account-level diffs from the pre/post execution worlds.
+    *
+    * Format: per-account DiffNode — "=" unchanged, {"*":{from,to}} changed, {"+":{...}} created, {"-":{...}} deleted.
+    */
+  private def computeStateDiff(
+      txTrace: TxTraceResult,
+      stx: SignedTransaction,
+      blockHeader: BlockHeader
+  ): JValue = {
+    // Re-execute to capture dirty storage slots (preWorld is before persistState, so cache is populated)
+    val storageTracer = new StorageChangeTracer(txTrace.preWorld)
+    val evmConfig = EvmConfig.forBlock(blockHeader.number, blockchainConfig)
+    val tracingVm = new VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](Some(storageTracer))
+    val context = ProgramContext[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](
+      stx, blockHeader, txTrace.sender, txTrace.preWorld, evmConfig
+    )
+    storageTracer.onTxStart(txTrace.sender, stx.tx.receivingAddress, context.startGas, stx.tx.value, stx.tx.payload)
+    val reExecResult = tracingVm.run(context)
+    storageTracer.onTxEnd(
+      context.startGas - reExecResult.gasRemaining,
+      reExecResult.returnData,
+      reExecResult.error.map(_.toString)
+    )
+
+    // All addresses affected by this transaction (from full execution including gas payments)
+    val touched = txTrace.postWorld.touchedAccounts ++
+      txTrace.postWorld.contractStorages.keySet ++
+      storageTracer.changes.keySet
+
+    val entries: List[JField] = touched.toList.sortBy(_.toString).map { addr =>
+      val addrHex = "0x" + Hex.toHexString(addr.bytes.toArray)
+      val preAcc  = txTrace.preWorld.getAccount(addr)
+      val postAcc = txTrace.postWorld.getAccount(addr)
+
+      val balanceDiff = diffNode(
+        preAcc.map(a => "0x" + a.balance.toBigInt.toString(16)),
+        postAcc.map(a => "0x" + a.balance.toBigInt.toString(16))
+      )
+      val nonceDiff = diffNode(
+        preAcc.map(a => "0x" + a.nonce.toBigInt.toString(16)),
+        postAcc.map(a => "0x" + a.nonce.toBigInt.toString(16))
+      )
+      val preCode  = txTrace.preWorld.getCode(addr)
+      val postCode = txTrace.postWorld.getCode(addr)
+      val codeDiff = diffNode(
+        Some(if (preCode.nonEmpty) "0x" + Hex.toHexString(preCode.toArray) else "0x"),
+        Some(if (postCode.nonEmpty) "0x" + Hex.toHexString(postCode.toArray) else "0x")
+      )
+
+      val storageDiff: JValue = storageTracer.changes.get(addr) match {
+        case None => JObject(Nil)
+        case Some(slotChanges) =>
+          val fields = slotChanges.toList.flatMap { case (slot, (preVal, postVal)) =>
+            val slotHex = "0x" + slot.toString(16).reverse.padTo(64, '0').reverse
+            val d = diffNode(
+              Some("0x" + preVal.toString(16).reverse.padTo(64, '0').reverse),
+              Some("0x" + postVal.toString(16).reverse.padTo(64, '0').reverse)
+            )
+            if (d == JString("=")) None
+            else Some(JField(slotHex, d))
+          }
+          JObject(fields)
+      }
+
+      JField(addrHex,
+        ("balance" -> balanceDiff) ~
+        ("nonce"   -> nonceDiff) ~
+        ("code"    -> codeDiff) ~
+        ("storage" -> storageDiff)
+      )
+    }
+    JObject(entries)
+  }
+
+  /** Compute Parity vmTrace for a transaction using VmTracer re-execution. */
+  private def computeVmTrace(
+      txTrace: TxTraceResult,
+      stx: SignedTransaction,
+      blockHeader: BlockHeader
+  ): Option[JValue] = {
+    val vmTracer = new VmTracer()
+    val evmConfig = EvmConfig.forBlock(blockHeader.number, blockchainConfig)
+    val tracingVm = new VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](Some(vmTracer))
+    val context = ProgramContext[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](
+      stx, blockHeader, txTrace.sender, txTrace.preWorld, evmConfig
+    )
+    vmTracer.onTxStart(txTrace.sender, stx.tx.receivingAddress, context.startGas, stx.tx.value, stx.tx.payload)
+    val reExecResult = tracingVm.run(context)
+    vmTracer.onTxEnd(
+      context.startGas - reExecResult.gasRemaining,
+      reExecResult.returnData,
+      reExecResult.error.map(_.toString)
+    )
+    Some(vmTracer.getResult)
+  }
+
+  /** DiffNode encoding — matches OpenEthereum/Besu/Parity trace_replay format. */
+  private def diffNode(pre: Option[String], post: Option[String]): JValue = (pre, post) match {
+    case (None, None)             => JNull
+    case (None, Some(to))         => JObject(List(JField("+", JString(to))))
+    case (Some(from), None)       => JObject(List(JField("-", JString(from))))
+    case (Some(f), Some(t)) if f == t => JString("=")
+    case (Some(f), Some(t))       => JObject(List(JField("*", ("from" -> JString(f)) ~ ("to" -> JString(t)))))
+  }
+
+  /** Parse Solidity revert reason from ABI-encoded error data.
+    * Format: 0x08c379a0 (Error(string) selector) + ABI-encoded string.
+    */
+  private def parseRevertReason(data: ByteString): Option[String] = {
+    if (data.length < 68) return None
+    val selector = data.take(4)
+    if (selector != ByteString(0x08, 0xc3, 0x79, 0xa0)) return None
+    try {
+      val offset = BigInt(1, data.slice(4, 36).toArray).toInt
+      val length = BigInt(1, data.slice(36 + offset, 68 + offset).toArray).toInt
+      if (data.length < 68 + offset + length) return None
+      Some(new String(data.slice(68 + offset, 68 + offset + length).toArray, "UTF-8"))
+    } catch {
+      case _: Exception => None
+    }
+  }
+
   private def resolveBlockNumber(blockParam: BlockParam): Option[BigInt] = blockParam match {
     case BlockParam.Pending => None
     case other              => Some(BlockParam.resolveNumber(other, blockchainReader.getBestBlockNumber()))
+  }
+
+  /** Tracks SSTORE events during VM re-execution for stateDiff computation.
+    * Records net change (original pre-tx value → final post-tx value) per (address, slot) pair.
+    */
+  private class StorageChangeTracer(preWorld: InMemoryWorldStateProxy) extends ExecutionTracer {
+    // address -> slot -> (originalPreValue, currentPostValue)
+    val changes: mutable.Map[Address, mutable.Map[BigInt, (BigInt, BigInt)]] = mutable.Map.empty
+
+    override def onStep[W <: WorldStateProxy[W, S], S <: Storage[S]](
+        opCode: OpCode,
+        prevState: ProgramState[W, S],
+        nextState: ProgramState[W, S]
+    ): Unit = {
+      opCode match {
+        case SSTORE if prevState.stack.size >= 2 =>
+          val addr    = prevState.env.ownerAddr
+          val slot    = prevState.stack.peek(0).toBigInt
+          val postVal = prevState.stack.peek(1).toBigInt
+          val addrMap = changes.getOrElseUpdate(addr, mutable.Map.empty)
+          addrMap.get(slot) match {
+            case Some((originalPre, _)) =>
+              // Subsequent SSTORE to same slot: update post-value only, preserve original pre-value
+              addrMap(slot) = (originalPre, postVal)
+            case None =>
+              // First SSTORE to this slot: record original pre-tx value
+              val preVal = preWorld.getStorage(addr).load(slot)
+              addrMap(slot) = (preVal, postVal)
+          }
+        case _ =>
+      }
+    }
+
+    override def getResult: JValue = JNothing
   }
 }

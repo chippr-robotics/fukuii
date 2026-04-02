@@ -16,7 +16,7 @@ object MiningMetrics extends MetricsContainer {
 
   final val MinedBlockEvaluationTimer: Timer = metrics.timer("mining.minedblocks.evaluation.timer")
 
-  // Hashrate metrics (L-011)
+  // Hashrate metrics
   final private val HashRateGauge: AtomicLong =
     metrics.registry.gauge("mining.hashrate.hps.gauge", new AtomicLong(0L))
   final private val TriedHashesCounter: Counter =

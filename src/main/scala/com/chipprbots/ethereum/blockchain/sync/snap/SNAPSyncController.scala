@@ -2763,7 +2763,7 @@ class SNAPSyncController(
         val pivotHash = pivotHeader.hash
         val estimatedTotalDifficulty = pivotHeader.difficulty * pivot
 
-        // H-013: Atomic finalization — commit SnapSyncDone marker together with
+        // Atomic finalization — commit SnapSyncDone marker together with
         // pivot block, chain weight, and best block info in a single batch.
         // If any of these are missing when SnapSyncDone=true, regular sync fails
         // on startup (branch resolution finds no chain weight, no best block hash).
