@@ -950,20 +950,28 @@ class FastSync(
           "notInTheMiddleOfUpdate" -> notInTheMiddleOfUpdate
         )
       )
+      // Start state download in parallel with block download — don't wait for blocks to finish.
+      // State only depends on the pivot block's state root, which we know from the start.
+      if (
+        !stateSyncStarted && !syncState.stateSyncFinished && notInTheMiddleOfUpdate &&
+        syncState.pivotBlock.stateRoot != ByteString(MerklePatriciaTrie.EmptyRootHash)
+      ) {
+        log.info(
+          "Starting state download in parallel with block download for pivot block {}",
+          syncState.pivotBlock.number
+        )
+        stateSyncStarted = true
+        stateSyncRestartRequested = false
+        syncStateScheduler ! StartSyncingTo(syncState.pivotBlock.stateRoot, syncState.pivotBlock.number)
+      }
+
       if (fullySynced) {
         finish()
       } else {
         if (blockchainDataToDownload) {
           processDownloads()
         } else if (noBlockchainWorkRemaining && !syncState.stateSyncFinished && notInTheMiddleOfUpdate) {
-          if (!stateSyncStarted && syncState.pivotBlock.stateRoot != ByteString(MerklePatriciaTrie.EmptyRootHash)) {
-            // State scheduler hasn't been started yet — send StartSyncingTo to begin state download.
-            // This happens on startFromScratch when headers were bootstrapped from existing DB.
-            log.info("Block download complete. Starting state download for pivot block {}", syncState.pivotBlock.number)
-            stateSyncStarted = true
-            stateSyncRestartRequested = false
-            syncStateScheduler ! StartSyncingTo(syncState.pivotBlock.stateRoot, syncState.pivotBlock.number)
-          } else if (pivotBlockIsStale()) {
+          if (pivotBlockIsStale()) {
             log.debug("Restarting state sync to new pivot block")
             syncStateScheduler ! RestartRequested
             stateSyncRestartRequested = true
