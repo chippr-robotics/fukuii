@@ -211,6 +211,7 @@ class TrieNodeHealingCoordinator(
 
     case QueueMissingNodes(nodes) =>
       log.info(s"Queuing ${nodes.size} missing nodes for healing")
+      lastHealedAtMs = System.currentTimeMillis() // reset stagnation timer at start of each healing round
       queueNodes(nodes)
       // Immediately dispatch to any known available peers
       tryRedispatchPendingTasks()
