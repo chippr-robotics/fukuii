@@ -167,7 +167,7 @@ class SyncStateSchedulerActor(
       self ! RequestData(nodeData, peer)
 
     case ResponseReceived(peer, trieNodes: TrieNodes, timeTaken) =>
-      // Convert SNAP TrieNodes response to NodeData format for the existing processing pipeline.
+      // Convert SNAP TrieNodes response to NodeData format.
       // TrieNodes returns raw node bytes — wrap them as NodeData values.
       log.debug("Received {} state nodes via GetTrieNodes in {} ms", trieNodes.nodes.size, timeTaken)
       FastSyncMetrics.setMptStateDownloadTime(timeTaken)
