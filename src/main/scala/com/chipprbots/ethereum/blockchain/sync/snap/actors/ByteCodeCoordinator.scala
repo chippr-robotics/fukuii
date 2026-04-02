@@ -56,6 +56,11 @@ class ByteCodeCoordinator(
 
   private val peerFailureCounts = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
   private val peerCooldownUntilMillis = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Long]
+
+  // Permanently excluded peers: consistently failed to serve GetByteCodes.
+  // Inspired by go-ethereum's statelessPeers blacklist. NOT cleared on pivot refresh.
+  private val bytecodeIncapablePeers = mutable.Set.empty[com.chipprbots.ethereum.network.PeerId]
+
   private val knownAvailablePeers = mutable.Set[Peer]()
 
   private def nowMillis: Long = System.currentTimeMillis()
@@ -71,6 +76,14 @@ class ByteCodeCoordinator(
   private def recordPeerCooldown(peer: Peer, base: FiniteDuration, reason: String): FiniteDuration = {
     val failures = peerFailureCounts.getOrElse(peer.id, 0) + 1
     peerFailureCounts.update(peer.id, failures)
+
+    if (failures >= cooldownConfig.bytecodeIncapableThreshold && !bytecodeIncapablePeers.contains(peer.id)) {
+      bytecodeIncapablePeers += peer.id
+      log.warning(
+        s"Peer ${peer.id.value} permanently excluded from bytecode dispatch " +
+          s"after $failures consecutive failures ($reason)"
+      )
+    }
 
     // Exponential backoff: base, 2*base, 4*base, ... (capped)
     val exponent = math.min(failures - 1, cooldownConfig.exponentCap)
@@ -189,17 +202,22 @@ class ByteCodeCoordinator(
       checkCompletion()
 
     case ByteCodePivotRefreshed =>
-      log.info("Pivot refreshed — clearing bytecode peer cooldowns")
-      peerFailureCounts.clear()
-      peerCooldownUntilMillis.clear()
+      // Retain failure state for permanently excluded peers; clear transient failures for everyone else.
+      // bytecodeIncapablePeers is NEVER cleared — peers that can't serve bytecodes stay excluded
+      // for the duration of the session regardless of pivot changes.
+      peerFailureCounts.filterInPlace { case (id, _) => bytecodeIncapablePeers.contains(id) }
+      peerCooldownUntilMillis.filterInPlace { case (id, _) => bytecodeIncapablePeers.contains(id) }
       peerResponseBytesTarget.clear()
       knownAvailablePeers.clear()
+      log.info(s"Pivot refreshed — cleared peer state (${bytecodeIncapablePeers.size} peer(s) permanently excluded)")
 
     case PeerAvailable(peer) =>
       val evicted0 = knownAvailablePeers.filter(_.remoteAddress == peer.remoteAddress)
       knownAvailablePeers --= evicted0
       knownAvailablePeers += peer
-      if (isPeerCoolingDown(peer)) {
+      if (bytecodeIncapablePeers.contains(peer.id)) {
+        log.debug(s"Ignoring PeerAvailable(${peer.id.value}) — permanently excluded from bytecode dispatch")
+      } else if (isPeerCoolingDown(peer)) {
         log.debug(s"Ignoring PeerAvailable(${peer.id.value}) due to cooldown")
       } else {
         dispatchIfPossible(peer)
@@ -209,7 +227,9 @@ class ByteCodeCoordinator(
       val evicted1 = knownAvailablePeers.filter(_.remoteAddress == peer.remoteAddress)
       knownAvailablePeers --= evicted1
       knownAvailablePeers += peer
-      if (isPeerCoolingDown(peer)) {
+      if (bytecodeIncapablePeers.contains(peer.id)) {
+        log.debug(s"Ignoring ByteCodePeerAvailable(${peer.id.value}) — permanently excluded from bytecode dispatch")
+      } else if (isPeerCoolingDown(peer)) {
         log.debug(s"Ignoring ByteCodePeerAvailable(${peer.id.value}) due to cooldown")
       } else {
         dispatchIfPossible(peer)
@@ -308,6 +328,7 @@ class ByteCodeCoordinator(
   }
 
   private def dispatchIfPossible(peer: Peer): Unit = {
+    if (bytecodeIncapablePeers.contains(peer.id)) return
     if (pendingTasks.isEmpty) return
 
     // Keep a small bounded number of inflight requests per peer to maximize throughput
@@ -615,7 +636,8 @@ object ByteCodeCoordinator {
       maxInFlightPerPeer: Int,
       max: FiniteDuration,
       exponentCap: Int,
-      requestTimeout: FiniteDuration = Duration.Zero // Zero = adaptive (PeerRateTracker)
+      requestTimeout: FiniteDuration = Duration.Zero, // Zero = adaptive (PeerRateTracker)
+      bytecodeIncapableThreshold: Int = 5 // consecutive failures before permanent session exclusion
   )
 
   object ByteCodePeerCooldownConfig {
@@ -627,7 +649,8 @@ object ByteCodeCoordinator {
       maxInFlightPerPeer = 5,
       max = 2.minutes,
       exponentCap = 10,
-      requestTimeout = Duration.Zero // Adaptive: min(60s, 3 × medianRTT / confidence)
+      requestTimeout = Duration.Zero, // Adaptive: min(60s, 3 × medianRTT / confidence)
+      bytecodeIncapableThreshold = 5  // go-ethereum-inspired: 5 strikes → permanent session blacklist
     )
   }
 
