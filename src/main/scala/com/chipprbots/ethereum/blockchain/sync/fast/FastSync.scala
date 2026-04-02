@@ -504,11 +504,16 @@ class FastSync(
               syncConfig.fastSyncBlockValidationX,
               updateFailures = false
             )
-            log.debug(
-              "Changing pivot block to {}, new safe target is {}",
+            log.info(
+              "Pivot block updated to {}, new safe target {}. Resuming state download with new root.",
               pivotBlockHeader.number,
               syncState.safeDownloadTarget
             )
+            // Always restart state download with new pivot — even if the jump is large.
+            // The state scheduler's bloom filter handles nodes already downloaded.
+            stateSyncRestartRequested = false
+            stateSyncStarted = true
+            syncStateScheduler ! StartSyncingTo(pivotBlockHeader.stateRoot, pivotBlockHeader.number)
           }
 
         case LastBlockValidationFailed =>
