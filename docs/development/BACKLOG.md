@@ -1230,6 +1230,444 @@ Final gate before submitting PR to upstream.
 
 ---
 
+## Comprehensive QA & Deep Review
+
+**Status:** DEFERRED — not blocking ETC mainnet SNAP sync, but must not be forgotten. This section documents every area of the client that requires systematic review, testing, optimization, and code hygiene work once the client is operational. This is a living checklist, not a complete audit — each area will surface additional items during the review itself.
+
+**Context:** Fukuii is now functional (SNAP sync operational, 2,718 tests passing, 150 commits on `march-onward`). The next phase after ETC mainnet SNAP success is a disciplined client-wide QA pass: identify correctness gaps, test blind spots, dead code, redundant logic, placeholder implementations, and optimization opportunities. The goal is production-grade code quality equivalent to reference clients.
+
+---
+
+### QA-01: Sync — Regular Sync Review
+
+**Files:** `blockchain/sync/regular/` — `RegularSync.scala`, `BlockImporter.scala`, `BlockFetcher.scala`, `BlockFetcherState.scala`, `BodiesFetcher.scala`, `HeadersFetcher.scala`, `BlockBroadcasterActor.scala`, `StateNodeFetcher.scala`
+
+**Tests exist:** `RegularSyncSpec`, `BlockFetcherSpec`, `BlockFetcherStateSpec`, `FetchRequestSpec` — but coverage is shallow relative to file complexity.
+
+**Review areas:**
+- Reorg handling: correct chain reorganization under all fork depths
+- Ommer validation during block import (`StdOmmersValidator`, `OmmersValidator`)
+- `StateNodeFetcher` — state node recovery path; confirm it handles all MPT node types
+- `BlockBroadcasterActor` — peer selection strategy for new block announcements (ETH65 `NewPooledTransactionHashes` vs full block)
+- Block import failure modes: bad blocks, invalid state root, orphaned branches — all paths reach `BadBlockTracker`
+- Memory/resource cleanup after import failures — no leaked actor refs or pending messages
+- Interaction with SNAP→regular transition: first regular sync block after SNAP completes
+- `BlockImporter` 886-line file: dead code paths, redundant state, cleanup opportunities
+- Test: adversarial block sequence (repeated forks at various depths, invalid blocks injected between valid ones)
+
+---
+
+### QA-02: Sync — Fast Sync Review
+
+**Files:** `blockchain/sync/fast/` — `FastSync.scala` (1,314 lines), `SyncStateSchedulerActor.scala` (585 lines), `SyncStateScheduler.scala` (507 lines), `HeaderSkeletonSpec.scala`
+
+**Tests exist:** `FastSyncBranchResolverActorSpec`, `FastSyncBranchResolverSpec`, `HeaderSkeletonSpec` — skeleton/branch resolution tested, state download has thin coverage.
+
+**Review areas:**
+- State download completeness: all MPT node types fetched, no silent skips
+- Pivot selection: edge cases (1 peer, all peers at same height, pivot far behind network head)
+- Checkpoint validation: genesis→pivot chain verified before state download begins
+- Recovery after partial state download (crash mid-sync, partial RocksDB state)
+- `SyncStateSchedulerActor` 585-line actor: message handling exhaustiveness, actor lifecycle (postStop cleanup)
+- FastSync→RegularSync transition: timing, pivot validation, first regular block
+- `H-018` (bounded pivot retry) under stress: what happens at retry limit?
+- Block body download stall detection and recovery
+- Test: corrupt state node in response stream — does scheduler detect and retry?
+- Test: pivot block replaced mid-download (pivot refresh) — no double-download, no orphaned state
+- Performance: batch sizing vs. peer count, parallel vs. sequential node fetching
+
+---
+
+### QA-03: Sync — SNAP Serving (SNAP Server)
+
+**Files:** `network/NetworkPeerManagerActor.scala`, `network/p2p/messages/SNAP.scala` (693 lines), SNAP server handlers in `NetworkPeerManagerActor`
+
+**Tests exist:** `SNAPServerHandlerSpec` (11 tests) — basic handler coverage only.
+
+**Review areas:**
+- `GetAccountRange`: boundary proof correctness under all trie shapes (empty trie, single account, accounts at exact boundary)
+- `GetStorageRanges`: 128-account batching logic; account with no storage; account with exactly 1 slot; account with 10K+ slots
+- `GetByteCodes`: hash validation; missing code (deleted contract); duplicate hash in request
+- `GetTrieNodes`: LRU upper-trie cache correctness; cache invalidation on reorg; node not found response
+- Proof generation for empty ranges (`emptyAccountProof` edge case)
+- Response size capping: does oversized response truncate correctly per SNAP spec?
+- Concurrency: multiple simultaneous SNAP requests from different peers — no shared mutable state corruption
+- Rate limiting: does the per-IP rate limiter apply to SNAP requests?
+- Behavior at chain tip: serving requests for a block only 1–2 blocks old
+- Test: SNAP client (Fukuii) syncing against Fukuii as SNAP server — full round-trip
+- Test: boundary proof verification (Merkle proof for range start/end) by independent verifier
+
+---
+
+### QA-04: Sync — SNAP Client Deep Dive
+
+**Files:** `blockchain/sync/snap/` — `SNAPSyncController.scala` (4,026 lines), all coordinators, `MerkleProofVerifier.scala`, `SNAPRequestTracker.scala`, `SNAPErrorHandler.scala`, `PeerRateTracker.scala`
+
+**Tests exist:** Comprehensive (16 spec files, ~144 tests) — but many edge cases remain.
+
+**Review areas:**
+- `SNAPSyncController.scala` 4,026-line file: dead code paths from earlier iterations, redundant state, actor message handling completeness — this file has grown organically and needs a careful pass
+- Pivot refresh race conditions: in-flight requests completing after pivot change — all responses validated against current root hash
+- All-peers-stateless path: `HealingAllPeersStateless` → pivot refresh → healing restart — full round-trip test
+- Healing convergence guarantee: does healing always terminate? What if a node is perpetually unavailable?
+- `MerkleProofVerifier`: edge cases in proof verification (empty proof, single-node trie, proof for non-existent key)
+- `SNAPErrorHandler` 434-line file: all error classifications correct? Any missing cases that fall through to wrong handler?
+- `PeerRateTracker`: adaptive timeout calibration — does it converge correctly for slow peers? Fast peers?
+- Static peer exemption (SP-001): confirm that static peers never enter `statelessPeers` across all code paths, including edge cases (reconnect, capability re-probe, pivot refresh clearing stateless set)
+- Storage range coordinator: `storageSyncCompleteReported` flag correctness — no double-completion signal
+- Bytecode deduplication: confirm `knownCodeHashes` Bloom filter has no false-positive issues at scale
+- Test: healing with only one available peer (Besu only, no core-geth) — completes without hanging
+- Test: healing across two pivot refreshes in sequence — no task queue corruption
+- Performance: coordinator lock contention under 16-worker load
+
+---
+
+### QA-05: EVM Review
+
+**Files:** `vm/` — `VM.scala`, `OpCode.scala` (1,519 lines), `PrecompiledContracts.scala` (672 lines), `Stack.scala`, `Memory.scala`, `ProgramState.scala`, `EvmConfig.scala` (444 lines)
+
+**Tests exist:** 40+ spec files in `src/test/.../vm/` — good coverage but several gaps.
+
+**Review areas:**
+- `OpCode.scala` 1,519 lines: every opcode implementation reviewed against EVM yellow paper and ETC fork rules — confirm gas, stack effects, error conditions
+- Fork-gated opcode availability: each opcode only enabled at the correct fork boundary (e.g., PUSH0 at Shanghai, MCOPY at Cancun, transient storage at Cancun)
+- `PrecompiledContracts.scala` 672 lines: all 7 BLS12-381 precompiles, MODEXP (EIP-7883 gas formula), BLAKE2b, P256VERIFY — input validation, gas calculation, failure modes
+- `Stack.scala` mutable array implementation: bounds checking, overflow (>1024 elements), underflow, `copy()` for tracer snapshots
+- `Memory.scala`: expansion gas cost calculation, out-of-bounds reads (should zero-fill), large memory allocation (memory bomb protection)
+- `EvmConfig.scala` 444 lines: fork config correctness for all ETC fork names — Olympia opcodes enabled at correct block
+- Gas calculation: verify every opcode's `varGas()` method against reference client behavior (peek-only, no stack mutation)
+- `SSTORE` gas rules: EIP-2200 (net metering), EIP-3529 (reduced refunds) — both sides of the dirty/clean/original state matrix
+- `CALL` family: value transfer to non-existent account (new account creation gas), stipend forwarding, depth limit (1024)
+- `CREATE`/`CREATE2`: collision detection, init code size limit (EIP-3860), gas dedup fix (CREATE gas dedup commit `6c705432b`) correctness
+- Olympia-specific: `BASEFEE`, transient storage (`TLOAD`/`TSTORE`), `MCOPY`, `SELFDESTRUCT` post-Cancun semantics
+- Test: run full ethereum/tests EVM test vectors (currently 12/12 EVM consensus pass — expand coverage)
+- Test: gas exhaustion in every opcode — confirm correct `OutOfGas` error, no state mutation after OOG
+- Test: EIP-7702 (if applicable to ETC) — currently tracked in reference client comparison
+
+---
+
+### QA-06: Consensus & Block Validation
+
+**Files:** `consensus/` — `ConsensusImpl.scala`, `ConsensusAdapter.scala`, validators, difficulty calculators, block generators
+
+**Tests exist:** `ConsensusAdapterSpec`, `ConsensusImplSpec`, `PreOlympiaForkComplianceSpec`, `OlympiaForkBoundarySpec`, `OlympiaForkIdSpec`, `AdversarialForkBoundarySpec`
+
+**Review areas:**
+- `StdBlockValidator`: all validation rules exhaustively tested — header hash, tx root, receipts root, state root, gas limit bounds, timestamp ordering, extraData length
+- `StdOmmersValidator`: ommer depth (≤6 blocks), ommer not already in chain, ommer header valid
+- `SignedTransactionValidator`: each tx type (Legacy/Type1/Type2) at each fork — correct acceptance gates
+- `EthashBlockHeaderValidator`: PoW hash validation, difficulty check, mixHash format
+- Difficulty calculation: `EthashDifficultyCalculator` vs. `TargetTimeDifficultyCalculator` — which is active at which fork, correct bomb delay for ETC
+- EIP-1559 `BaseFeeCalculator`: all three cases (congested, sparse, at target) at fork boundary block N-1/N/N+1
+- Block generator (`PoWBlockGenerator`, `BlockGeneratorSkeleton`): produced blocks pass all validators — no silent misconfiguration
+- `BadBlockTracker`: eviction policy (128 entries, 1h TTL), persistence across restarts (currently in-memory only — risk?)
+- Test: produce a block with each possible validation failure and confirm correct rejection with correct error type
+- Test: timestamp edge cases — block exactly at parent time (should fail), block 1s after (should pass)
+
+---
+
+### QA-07: PoW Mining Review
+
+**Files:** `consensus/pow/miners/` — `EthashMiner.scala`, `EthashDAGManager.scala`, `PoWMiningCoordinator.scala`, `PoWBlockCreator.scala`, `WorkNotifier.scala`
+
+**Tests exist:** `EthashMinerSpec`, `EthashMinerUnitSpec`, `MockedMinerSpec`, `WorkNotifierSpec`
+
+**Review areas:**
+- `EthashDAGManager`: DAG file memory-mapping (M-010 MappedByteBuffer) — correct epoch boundary handling, file path construction, file integrity check
+- `EthashMiner` multi-threaded nonce partitioning (L-007): nonce ranges don't overlap between threads, full uint64 space covered, no gap at epoch boundaries
+- `PoWMiningCoordinator`: work notification to external miners (stratum/HTTP), new-block interrupt (stop current search immediately), mining coordinator restart on uncle/reorg
+- `WorkNotifier` HTTP work notifications: correct getwork format, reconnect on failure, rate limiting
+- Hashrate metrics (L-011 Prometheus): correct calculation from completed nonce ranges, reset on new work
+- Emergency TD ceiling (`L-009`): correctly halts mining at threshold, logs warning
+- `PeerScoringManager` integration (L-008): mined blocks propagated with correct peer selection
+- Test: mine a block on a private test network (Gorgoroth/anvil) — confirms full round-trip (mine → broadcast → accepted by peer)
+- Test: epoch boundary (DAG change at block 30000) — no mining gap or crash during epoch transition
+- Test: mining resume after `miner_setRecommitInterval` change mid-mining
+
+---
+
+### QA-08: MESS (Modified Exponential Subjective Scoring) Review
+
+**Files:** `consensus/mess/` — `ArtificialFinality.scala`, `MESSConfig.scala`
+
+**Tests exist:** `MESScorerSpec` (shallow), `OlympiaForkBoundarySpec` (includes MESS deactivation test)
+
+**Review areas:**
+- MESS score calculation: exponential decay formula matches ECBP-1100 specification exactly
+- Fork selection: MESS-enhanced fork choice correctly prefers high-scoring chains over higher-TD chains in reorg scenarios
+- Deactivation at Spiral fork (ETC mainnet block 19,250,000): MESS disabled, standard TD fork choice resumes — no edge case at exactly the deactivation block
+- MESS config validation: `antigravityConstant`, `ecbp1100EcipActivationBlock` correct for ETC mainnet vs. Mordor vs. test networks
+- Adversarial reorg: attacker chain with >50% hashrate attempts deep reorg — MESS resistance quantified
+- Interaction with SNAP sync: MESS scoring during sync (pivot block in the past) — no false finalization
+- Test: deep reorg (100 blocks) on network with MESS enabled — correct rejection
+- Test: MESS deactivation block boundary — behavior changes exactly at block N, not N±1
+
+---
+
+### QA-09: Network Layer — Peer Management & Scoring
+
+**Files:** `network/` — `PeerManagerActor.scala` (921 lines), `NetworkPeerManagerActor.scala` (1,213 lines), `PeerScoringManager.scala`, `PeerScore.scala`, `ConnectedPeers.scala`, `PeerActor.scala` (432 lines), `AutoBlocker.scala`, `BlockedIPRegistry.scala`
+
+**Tests exist:** `PeerManagerSpec`, `EtcPeerManagerSpec`, `PeerActorHandshakingSpec`, `PeerScoreSpec`, `PeerStatisticsSpec`, `AutoBlockerSpec`
+
+**Review areas:**
+- Static peer exemption (SP-001) completeness: `isStatic=true` propagates through all peer lifecycle events (reconnect, capability re-probe, PeerDisconnected, PeerAvailable) — no path where a static peer is lost silently
+- Static peer reconnect (L-035 / `StaticNodesLoader`): 15s reconnect timer fires correctly, no double-dial race, persists to `static-nodes.json` via `admin_addPeer`
+- `PeerScoringManager` (L-008): score decay, reputation thresholds, peer eviction ordering — tests cover the actual scoring formulas
+- `AutoBlocker` (L-031): detection threshold calibration, block duration, unblock behavior, interaction with `BlockedIPRegistry`
+- `BlockedIPRegistry`: persistence across restarts (currently in-memory — is this intentional?), `admin_addBlockedIP`/`admin_removeBlockedIP` correctness
+- `ConnectedPeers`: `promotePeerToHandshaked` / `removePeer` concurrent access safety, stale entry detection
+- `NetworkPeerManagerActor` 1,213 lines: dead message handlers, redundant state, actor lifecycle cleanup
+- Port-0 filter (L-027): applied at exactly the right point in peer discovery pipeline
+- IP blocklist (L-028): IPv4/IPv6 both filtered, CIDR range support (if any), blocklist max size
+- Max outbound peer limit enforcement: static peers don't count toward the limit
+- Test: peer connects, gets scored low, gets evicted — correct sequence of events
+- Test: static peer repeatedly disconnects and reconnects — remains in pool, never blacklisted
+- Test: IP blocklist with 1000 entries — no performance regression in hot path
+
+---
+
+### QA-10: Network Layer — P2P Protocol & Handshaker
+
+**Files:** `network/handshaker/`, `network/rlpx/`, `network/p2p/messages/`
+
+**Tests exist:** `AuthHandshakerSpec`, `AuthInitiateMessageSpec`, `EIP8AuthMessagesSpec`, `PeerActorHandshakingSpec`
+
+**Review areas:**
+- ETH61–ETH68 message codec round-trips: every message type encodes→decodes correctly at every protocol version
+- `MessageDecoders.scala` (553 lines): version negotiation correctness — highest common version selected, fallback for older peers
+- RLPx frame codec: framing, de-framing, chunked message reassembly, encrypted frame integrity
+- `AuthHandshaker`: EIP-8 forward compatibility, pre-EIP-8 fallback (L-001 WONTFIX — document why)
+- Fork ID (EIP-2124) handshake: correct fork hash computation for all ETC fork history, correct rejection of non-ETC peers
+- `EtcForkBlockExchangeState`: fork block exchange at ETH63/ETH64 boundary, correct acceptance/rejection
+- ETH68 `NewPooledTransactionHashes` (typed tx announcements): announcement/retrieval round-trip
+- Capability negotiation: peer advertising snap/1 but not capable (tested by `SnapServerChecker`) — no false admission
+- Test: complete handshake sequence against real peers (core-geth, Besu) — no unexpected disconnects
+- Test: malformed handshake message — clean disconnect, no panic, no resource leak
+
+---
+
+### QA-11: JSON-RPC API — Correctness & Completeness
+
+**Files:** `jsonrpc/` — 15+ service files, `JsonRpcController.scala` (493 lines), `JsonMethodsImplicits.scala` (440 lines)
+
+**Tests exist:** 30+ spec files — but many services tested in isolation without integration.
+
+**Review areas:**
+- `eth_getLogs` range limit (M-036): correct rejection at limit, correct acceptance just below, no off-by-one
+- `finalized`/`safe` block tags (M-034): consistent behavior across all 143 methods — any method accepting a block parameter must handle these tags
+- Batch RPC rate limiting (M-035): batch requests count toward per-IP limit correctly, not per-method
+- `trace_replayBlockTransactions` all four trace types (`trace`, `stateDiff`, `vmTrace`, `revertReason`): each produces correct output for a known transaction, format matches geth/Erigon exactly
+- `debug_traceTransaction` callTracer output: nested calls, DELEGATECALL, CREATE, REVERT — output format matches geth callTracer JSON schema
+- `debug_traceTransaction` prestateTracer: pre-state snapshot includes all touched accounts/storage slots
+- `eth_feeHistory` percentile calculation: matches go-ethereum algorithm for varied block populations
+- `eth_createAccessList`: output matches go-ethereum for ERC-20 transfer, complex DeFi call
+- `FilterManager` (`eth_newFilter`, `eth_getLogs`, `eth_newBlockFilter`): filter expiry (5-minute idle cleanup), concurrent filter creation, log matching with complex topic filters
+- WebSocket subscription (`eth_subscribe`): newHeads fires for every new block, logs deliver correct events, unsubscribe cleans up resources with no leak
+- `personal_*` methods: keystore operations tested with real encrypted keystores
+- `TestService.scala` (489 lines) and `QAService.scala`: are these dead code or intentionally test-mode only? Document and clean up if unused
+- JSON serialization edge cases: null fields, empty arrays, uint256 overflow, address checksum encoding
+- IPC transport (`JsonRpcIpcServer.scala`): correct behavior under concurrent connections, large request/response
+
+---
+
+### QA-12: MCP Server Review
+
+**Files:** `jsonrpc/mcp/` — `McpTools.scala` (610 lines), `McpResources.scala` (421 lines), `McpService.scala`, `McpJsonMethodsImplicits.scala`
+
+**Tests exist:** `McpServiceSpec` — basic coverage.
+
+**Review areas:**
+- All 15 MCP tools: each tool tested with valid/invalid parameters, correct error responses
+- All 9 MCP resources: resource enumeration, resource content correctness, update notifications
+- All 4 MCP prompts: prompt rendering with variable substitution
+- LLM-agnostic compatibility: verify JSON-RPC 2.0 framing works with Claude, GPT-4, and any spec-compliant client
+- Authentication: MCP over JWT-protected HTTP — confirm auth is enforced
+- Large response handling: MCP tool returning large state diffs — no truncation
+- `McpTools.scala` 610 lines: dead tool implementations, placeholder responses
+
+---
+
+### QA-13: Storage & Database Layer
+
+**Files:** `db/` — `RocksDbDataSource.scala` (488 lines), `db/storage/`, `db/cache/`, `db/components/`
+
+**Tests exist:** `db/dataSource/` and `db/storage/` — moderate coverage.
+
+**Review areas:**
+- RocksDB write options: `sync`, `disableWAL`, column family usage — correct for each data type (headers, state, receipts, SNAP flat storage)
+- `FlatAccountStorage` / `FlatSlotStorage`: write ordering, key collision handling, seek-based range iteration correctness
+- `DeferredWriteMptStorage` (deferred-write MPT): flush timing, memory bound, correct root computation after flush
+- State trie pruning (`db/storage/pruning/`): is pruning code active? Correct at fork boundaries?
+- Cache eviction (`db/cache/`): cache hit/miss ratio under sync load, no stale reads after cache invalidation on reorg
+- Write-ahead log recovery: if the node crashes mid-batch-write, does the DB recover to a consistent state?
+- `RocksDbDataSource` 488 lines: error handling on disk full, read-only mode behavior, correct column family routing
+- Test: RocksDB state after 10,000-block reorg — no orphaned state, no dangling references
+- Test: crash recovery (SIGKILL during bulk write) — node restarts cleanly, state root verifiable
+
+---
+
+### QA-14: Merkle Patricia Trie (MPT)
+
+**Files:** `mpt/` — `MerklePatriciaTrie.scala` (528 lines), `MptVisitors/`
+
+**Tests exist:** `mpt/` test directory — coverage unknown.
+
+**Review areas:**
+- All four node types: BranchNode, ExtensionNode, LeafNode, HashNode — encode/decode round-trips
+- Empty trie root: keccak256(RLP("")) = correct EIP-style empty root constant
+- Insert/update/delete operations: correct node splitting, merging, hash propagation to root
+- Proof generation and verification: `eth_getProof` Merkle proofs validated against EIP-1186 test vectors
+- Large trie performance: 85M+ account trie — no O(n) operations in hot path
+- `decodeNode()` visited set: HashNode collision fix (commit on march-onward) — verify fix is correct and no regression
+- Test: delete all keys from a trie → root equals empty trie root
+- Test: insert 1M accounts, verify root matches reference client for same data
+
+---
+
+### QA-15: Transaction Pool & Mempool
+
+**Files:** `transactions/`, relevant portions of `EthTxService.scala`, `TxPoolService.scala`
+
+**Tests exist:** `TxPoolServiceSpec` (9 tests), various tx-related specs.
+
+**Review areas:**
+- Transaction ordering: price-sorted pending queue, nonce-gapped queued set
+- Nonce gap handling: gapped transactions moved to queued, promoted to pending when gap filled
+- Transaction replacement: higher-fee replacement (>10% bump rule), eviction of replaced tx
+- Memory bound: max pool size enforcement, eviction of lowest-priority transactions
+- Transaction types: Legacy, EIP-2930 (Type 1), EIP-1559 (Type 2) in pool simultaneously — correct sorting (effective priority fee)
+- `eth_sendRawTransaction` validation: all rejection cases (nonce too low, insufficient balance, gas too low, invalid sig)
+- Pool persistence: across restarts? What survives a node restart?
+- `txpool_content` / `txpool_inspect` response format matches geth for wallets relying on it
+- Test: fill pool to capacity, confirm oldest/lowest-fee transactions evicted correctly
+
+---
+
+### QA-16: Network Upgrade Gating (Fork Boundary Correctness)
+
+**Files:** `vm/EvmConfig.scala`, `consensus/validators/`, `domain/`, fork ID implementation
+
+**Tests exist:** `OlympiaForkBoundarySpec` (12), `OlympiaForkIdSpec` (13), `AdversarialForkBoundarySpec` (11), `PreOlympiaForkComplianceSpec`
+
+**Review areas:**
+- Pre-upgrade block N-1: all Olympia features (BLS12-381, BASEFEE opcode, transient storage, MCOPY) absent — test with actual opcode bytes
+- Upgrade block N: all features enabled — test with minimal valid post-Olympia transaction
+- Post-upgrade adversarial: attacker sends Type 2 tx pre-Magneto — rejected; attacker sends `PUSH0` pre-Shanghai — rejected
+- Fork ID mismatch: Fukuii correctly disconnects from non-ETC peers and from ETC peers on wrong fork (e.g., pre-Olympia peer after activation)
+- Timestamp vs. block-number activation: ETC uses block-number activation; verify no timestamp-based path is accidentally active
+- Mordor testnet vs. ETC mainnet activation blocks: both correct, no config cross-contamination
+- Test network configs (Gorgoroth, test-mode): Olympia activated at block 0 — all post-Olympia features available immediately
+- `M-017` operator fork warning (not yet implemented): add log warning when fork activation is approaching (within N blocks)
+
+---
+
+### QA-17: Peer Penalization & Reputation Systems
+
+**Files:** `network/PeerScoringManager.scala`, `network/PeerScore.scala`, `network/AutoBlocker.scala`, `network/BlockedIPRegistry.scala`, `network/TimeSlotStats.scala`, `blockchain/sync/Blacklist.scala`
+
+**Tests exist:** `PeerScoreSpec`, `AutoBlockerSpec`, `TimeSlotStatsSpec` — fragmented coverage.
+
+**Review areas:**
+- `PeerScoringManager` score update logic: all 30 scored events in `Blacklist.scala` produce correct score delta — no event that should penalize goes unscored
+- Score decay over time: peers recover reputation after good behavior — decay rate calibrated correctly
+- Eviction threshold: peer evicted at correct score, not before or after
+- `AutoBlocker` detection criteria: which behaviors trigger auto-block vs. just penalization? Are thresholds appropriate for ETC network conditions?
+- Interaction between `PeerScoringManager` (soft: score down), `Blacklist` (medium: connection ban), `BlockedIPRegistry` (hard: IP ban) — correct escalation path
+- Static peer exemption: static peers (`isStatic=true`) must never be score-penalized into disconnection — verify `PeerScoringManager` respects this
+- Reconnect after ban expiry: peer banned for N minutes, correctly reconnected after expiry, score reset
+- SNAP coordinator penalization vs. network-layer penalization: `statelessPeers` in SNAP coordinators and `Blacklist` in network layer are separate — no double-penalization
+- Test: peer sends 10 consecutive bad blocks → evicted with correct reason logged
+- Test: static peer gets a bad block → scored down at network layer (if any) but NOT evicted
+
+---
+
+### QA-18: Code Hygiene — Dead Code, Redundant Logic, Placeholders
+
+**Scope:** All 76,631 lines of source across every subsystem.
+
+**Review areas:**
+- `TestService.scala` (489 lines): large test-mode service — document exactly which methods are test-only, which are used in production; add `@testModeOnly` annotation or equivalent
+- `QAService.scala`, `QAJsonMethodsImplicits.scala`: QA/test namespace — is any of this in the production RPC surface? Should it be gated?
+- `IeleJsonMethodsImplicits.scala`, `IeleService.scala` (if it exists): IELE VM experimental — is it dead code? Remove or document
+- `faucet/` package: faucet RPC — production or test-only? If test-only, not exposed in default API list?
+- `extvm/` package: external VM support — active code path or placeholder?
+- `console/` package: TUI console — working? Tested? Dead code?
+- `testmode/` package: test-mode utilities — should not be compiled into production JAR
+- `NodeBuilder.scala` (1,115 lines): largest bootstrap file — review for dead initialization paths, commented-out features, unused wiring
+- Actor lifecycle: every actor has a `postStop()` that cleans up timers, subscriptions, child actors — verify no resource leaks
+- Message handling exhaustiveness: every `receive` / `case` should either handle or explicitly log unhandled messages — no silently dropped messages in production code
+- Error handling: every `Future` has a `.recover` or `.onFailure`; no unhandled `Left[Error]` in chain of `Either` handling
+- Commented-out code blocks: remove or document with `// TODO:` if intentional
+- Redundant logging: duplicate log lines in hot paths (sync progress logged by both coordinator and controller?)
+
+---
+
+### QA-19: Testing Suite Quality & Coverage
+
+**Scope:** All 2,718 tests, test infrastructure, coverage gaps.
+
+**Review areas:**
+- Test isolation: every test cleans up actors, RocksDB instances, temp files — no test-order dependencies
+- `SlowTest` tag audit: tagged tests run in CI? Are slow tests actually slow, or just tagged out of caution?
+- Flaky test registry: `SyncControllerSpec` pivot freshness test (tagged flaky) — root cause identified and fixed or documented
+- Integration test completeness: `src/it/` — which integration tests are actually wired and pass? Which are empty stubs?
+- Missing spec files: compare `src/main/scala` packages against `src/test/scala` — packages with no corresponding test file are coverage gaps
+- Property-based testing: `ScalaCheck` used anywhere? Consider adding property tests for MPT operations, RLP codec, crypto primitives
+- Test data: test fixtures use real ETC transaction data or constructed? Real data catches more edge cases
+- Performance regression tests: no test currently measures sync speed, block import time, RPC latency — add benchmarks for critical paths
+- EVM consensus tests (`ethereum/tests` fixtures): currently 12/12 EVM consensus pass — expand to full GeneralStateTests, BlockchainTests suites
+- Cross-client compatibility test: Fukuii blocks accepted by core-geth and Besu; core-geth blocks accepted by Fukuii — round-trip test
+
+---
+
+### QA-20: Performance Optimization Opportunities
+
+**Scope:** Identified from code review and sync benchmarks. Not blocking, but significant.
+
+**Review areas:**
+- `SNAPSyncController.scala` (4,026 lines): actor message processing under high load — are there N+1 dispatcher round-trips that could be collapsed?
+- RocksDB read amplification: `GetTrieNodes` SNAP server handler reads many individual nodes — batch read with `multiGet()`?
+- `MerklePatriciaTrie.scala` hash caching: does the trie cache computed hashes, or recompute on every `encode()`?
+- JSON-RPC serialization: `JsonMethodsImplicits.scala` (440 lines) — circe codecs generating intermediate objects? Consider direct streaming encoder for large responses
+- `BlockPreparator.scala` (618 lines): transaction execution loop — parallel transaction execution within a block (EIP-2929 access list enables independence detection)
+- Peer message routing: `NetworkPeerManagerActor` (1,213 lines) as central routing bottleneck — consider sharding by peer ID range
+- `ExpiringMap.scala`: currently backed by `ConcurrentHashMap` + background cleaner — could use Guava `CacheBuilder` for built-in expiry
+- `FilterManager.scala`: log filter matching — linear scan per new block? Could index by topic
+- DAG memory mapping: `EthashDAGManager` with `MappedByteBuffer` — is the page fault pattern optimal? Consider pre-faulting on startup
+- Actor mailbox sizing: default Pekko mailboxes — should high-throughput sync actors use bounded mailboxes with backpressure?
+
+---
+
+### QA Summary Checklist
+
+| Area | Files | Tests Exist | Status |
+|------|-------|-------------|--------|
+| Regular Sync | `blockchain/sync/regular/` | Partial | NEEDS REVIEW |
+| Fast Sync | `blockchain/sync/fast/` | Partial | NEEDS REVIEW |
+| SNAP Server | `NetworkPeerManagerActor` + handlers | Thin (11 tests) | NEEDS REVIEW |
+| SNAP Client | `sync/snap/` | Good (144 tests) | ONGOING |
+| EVM | `vm/` | Good (40+ specs) | EXPAND COVERAGE |
+| Consensus/Validation | `consensus/` | Good | EXPAND ADVERSARIAL |
+| PoW Mining | `consensus/pow/miners/` | Moderate | NEEDS REVIEW |
+| MESS | `consensus/mess/` | Thin (1 spec) | NEEDS REVIEW |
+| Peer Management | `network/PeerManagerActor` | Moderate | NEEDS REVIEW |
+| P2P Protocol | `network/handshaker/`, `rlpx/` | Good | NEEDS REVIEW |
+| JSON-RPC API | `jsonrpc/` | Good (30+ specs) | EXPAND INTEGRATION |
+| MCP Server | `jsonrpc/mcp/` | Thin | NEEDS REVIEW |
+| Storage/DB | `db/` | Moderate | NEEDS REVIEW |
+| MPT | `mpt/` | Unknown | AUDIT |
+| Transaction Pool | `transactions/` | Thin | NEEDS REVIEW |
+| Fork Boundary | `vm/EvmConfig`, validators | Good (36 tests) | EXPAND |
+| Peer Penalization | `network/PeerScoringManager` | Partial | NEEDS REVIEW |
+| Code Hygiene | All | N/A | DEFERRED |
+| Test Suite Quality | All tests | N/A | DEFERRED |
+| Performance | All | N/A | DEFERRED |
+
+**Total QA items:** 20 review areas, each containing 8–15 specific check points. Estimated effort: 4–6 engineering weeks for a single thorough pass. Each area will surface additional sub-items during review.
+
+---
+
 ## Legend
 
 | Priority     | Meaning                                          |
