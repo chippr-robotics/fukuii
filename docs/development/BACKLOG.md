@@ -1386,21 +1386,34 @@ Final gate before submitting PR to upstream.
 
 ---
 
-### QA-08: MESS (Modified Exponential Subjective Scoring) Review
+### QA-08: MESS (Modified Exponential Subjective Scoring / ECBP-1100) Review
 
 **Files:** `consensus/mess/` — `ArtificialFinality.scala`, `MESSConfig.scala`
 
-**Tests exist:** `MESScorerSpec` (shallow), `OlympiaForkBoundarySpec` (includes MESS deactivation test)
+**Tests exist:** `MESScorerSpec` (shallow), `OlympiaForkBoundarySpec` (includes MESS reactivation test)
+
+**MESS lifecycle on ETC mainnet:**
+- **Activated at Thanos** — MESS enabled; ECBP-1100 scoring applied to fork choice
+- **Deactivated at Spiral** (block 19,250,000) — MESS disabled; standard TD fork choice resumes
+- **Reactivated at Olympia** — MESS re-enabled with updated parameters for PoW tail security post-merge era
+
+Each transition must be exact — off-by-one errors at fork boundaries leave the chain briefly unprotected or applying MESS to blocks where it shouldn't apply.
 
 **Review areas:**
-- MESS score calculation: exponential decay formula matches ECBP-1100 specification exactly
+- MESS score calculation: exponential decay formula matches ECBP-1100 specification exactly for all three active periods
 - Fork selection: MESS-enhanced fork choice correctly prefers high-scoring chains over higher-TD chains in reorg scenarios
-- Deactivation at Spiral fork (ETC mainnet block 19,250,000): MESS disabled, standard TD fork choice resumes — no edge case at exactly the deactivation block
-- MESS config validation: `antigravityConstant`, `ecbp1100EcipActivationBlock` correct for ETC mainnet vs. Mordor vs. test networks
-- Adversarial reorg: attacker chain with >50% hashrate attempts deep reorg — MESS resistance quantified
-- Interaction with SNAP sync: MESS scoring during sync (pivot block in the past) — no false finalization
-- Test: deep reorg (100 blocks) on network with MESS enabled — correct rejection
-- Test: MESS deactivation block boundary — behavior changes exactly at block N, not N±1
+- **Thanos activation** (block N): MESS scoring begins at exactly block N — block N-1 uses standard TD, block N uses MESS
+- **Spiral deactivation** (block 19,250,000): MESS disabled at exactly that block — no scoring applied post-Spiral, no residual state from pre-Spiral scores
+- **Olympia reactivation**: MESS resumes at Olympia activation block — confirm parameters (antigravityConstant, window) are the Olympia values, not the original Thanos values if they differ
+- `MESSConfig.scala`: correct activation/deactivation/reactivation block numbers for ETC mainnet, Mordor, Gorgoroth test network — no hardcoded numbers that differ between network configs
+- `ArtificialFinality.scala`: state machine correctly tracks which period (pre-Thanos / Thanos→Spiral / Spiral→Olympia / post-Olympia) and applies correct logic
+- Adversarial reorg during active MESS: attacker chain with >50% hashrate attempts deep reorg — MESS resistance quantified for both active periods
+- Adversarial reorg during inactive MESS (Spiral→Olympia): standard TD fork choice, no MESS protection — documented as known reduced security window
+- Interaction with SNAP sync: MESS scoring during sync (pivot block in the past, history spans all three transitions) — no false finalization from scoring stale blocks
+- Test: deep reorg (100 blocks) during active MESS — correct rejection
+- Test: identical attack during inactive window (Spiral→Olympia) — succeeds (expected behavior, not a bug, but must be documented)
+- Test: each of the three boundary blocks (Thanos activation, Spiral deactivation, Olympia reactivation) — behavior changes exactly at block N, not N±1
+- Test: Mordor testnet activation blocks match Mordor config, not mainnet blocks
 
 ---
 
