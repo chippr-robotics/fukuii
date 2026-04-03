@@ -996,6 +996,26 @@ class FastSync(
         }
       }
 
+      // When blocks are done and state download is mostly complete but can't converge
+      // (remaining nodes change every block), declare state done and let regular sync
+      // fetch missing nodes on-demand via resolvingMissingNode.
+      if (noBlockchainWorkRemaining && !syncState.stateSyncFinished && stateSyncStarted) {
+        val downloaded = FastSyncMetrics.getDownloadedNodes
+        val total = FastSyncMetrics.getTotalNodes
+        val pct = if (total > 0) (downloaded.toDouble / total * 100).toInt else 0
+        if (pct >= 95 && total > 1000) {
+          log.info(
+            "State download at {}% ({}/{}) with blocks complete. " +
+              "Remaining nodes are at the chain tip and change every block. " +
+              "Completing fast sync — regular sync will fetch missing nodes on-demand.",
+            pct,
+            downloaded,
+            total
+          )
+          syncState = syncState.copy(stateSyncFinished = true)
+        }
+      }
+
       if (fullySynced) {
         finish()
       } else {
