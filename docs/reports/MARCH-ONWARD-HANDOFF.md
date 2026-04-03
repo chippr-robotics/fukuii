@@ -1,8 +1,8 @@
 # Fukuii `march-onward` Branch — Handoff Document
 
-**Branch:** `march-onward` (143 commits ahead of `upstream/main` at `6220ce58b`)
+**Branch:** `march-onward` (150 commits ahead of `upstream/main` at `6220ce58b`)
 **Author:** Christopher Mercer (chris-mercer) + Claude Opus/Sonnet 4.6
-**Updated:** 2026-04-01
+**Updated:** 2026-04-03
 **Test results:** 2,718 unit tests passing, 0 failures
 **RPC methods:** 143 implemented (135 standard + 8 MCP), all wired to `JsonRpcController`, zero orphaned
 **Build:** Scala 3.3.4 LTS, JDK 21, sbt 1.10.7
@@ -14,16 +14,16 @@
 
 **A single `march-onward` PR will be submitted to `chippr-robotics/fukuii` after ETC mainnet SNAP sync completes successfully.** The cherry-pick multi-PR approach was evaluated and abandoned — commits were authored on top of each other and cherry-picking produced structural conflicts on nearly every PR. Submitting the full branch is simpler and submits code as it was actually tested.
 
-SNAP sync gating: ETC mainnet SNAP sync attempt 6 is underway. Once it completes, the branch is ready for upstream PR submission.
+SNAP sync gating: ETC mainnet SNAP sync attempt 12 is in the healing phase — account download complete (85.9M accounts in 10h 53m, 4 peers sustained). Healing rounds are active. Once healing completes and the chain tip is reached, the branch is ready for upstream PR submission.
 
 ---
 
 ## Summary
 
-The `march-onward` branch is a comprehensive production-readiness pass building on the `alpha` (PR #1003, merged) and `olympia` branches. It adds 143 commits covering:
+The `march-onward` branch is a comprehensive production-readiness pass building on the `alpha` (PR #1003, merged) and `olympia` branches. It adds 150 commits covering:
 
-- **SNAP sync server + client** — Full bidirectional SNAP/1 protocol, first successful Mordor sync to chain head (~35 min), ETC mainnet SNAP sync in progress (attempt 6)
-- **SNAP reliability series (L-015 → L-033)** — 19 commits hardening SNAP client for ETC mainnet conditions
+- **SNAP sync server + client** — Full bidirectional SNAP/1 protocol, first successful Mordor sync to chain head (~35 min), ETC mainnet SNAP sync attempt 12 in healing phase
+- **SNAP reliability series (L-015 → L-036 + H-001 + SP-001)** — 25 commits hardening SNAP client for ETC mainnet conditions
 - **79 new RPC methods** (64 → 143) — trace, txpool, admin, debug, miner, fee market, state overrides, MCP
 - **BLS12-381 precompiles** — All 7 Olympia precompiles via gnark JNI
 - **WebSocket subscriptions** — eth_subscribe/eth_unsubscribe (newHeads, logs, pendingTransactions, syncing)
@@ -37,21 +37,21 @@ The `march-onward` branch is a comprehensive production-readiness pass building 
 
 ---
 
-## Commit Categories (143 total)
+## Commit Categories (150 total)
 
 | Category | Count | Description |
 |----------|-------|-------------|
 | feat(snap) | 12 | SNAP server handlers, client probes, flat storage, trie node cache |
-| L-series (snap) | 19 | SNAP client reliability: L-015 through L-033 |
-| feat(rpc) | 14 | trace/txpool/admin/debug/miner/fee market/state overrides/JWT |
+| L-series (snap) | 22 | SNAP client reliability: L-015 through L-036 |
+| feat(rpc) | 15 | trace/txpool/admin/debug/miner/fee market/state overrides/JWT; trace_replayBlockTransactions complete |
 | feat(evm) | 3 | BLS12-381 precompiles, CREATE gas dedup, Stack array optimization |
 | feat | 3 | WebSocket transport, config centralization, treasury updates |
 | fix(sync) | 5 | Fork-agnostic RLP, SNAP gap detection, fast sync recovery |
-| fix(snap) | 3 | Probe clobber, bytecode validation, premature eviction |
+| fix(snap) | 7 | Probe clobber, bytecode validation, premature eviction, storage spam, trie walk heartbeat, H-001, SP-001 |
 | fix(consensus) | 2 | Transaction type gating, baseFee corruption guard, atomic finalization |
 | perf | 8 | RocksDB bulk write, trie cache, prefetch, adaptive timeouts, pipelining, Stack array |
 | test | 12 | SNAP PRs #1007/#1008, trace/txpool/admin specs, flat storage, mining, fork boundary |
-| docs | 10 | BACKLOG, SNAP report, cleanup, multi-LLM MCP docs, handoff updates |
+| docs | 11 | BACKLOG, SNAP report, cleanup, multi-LLM MCP docs, handoff updates |
 | chore | 6 | Log noise, config alignment, stale TODO cleanup |
 | refactor | 2 | Treasury centralization, config includes |
 | fix(config) | 3 | Olympia alignment, prod log level, API defaults |
@@ -75,6 +75,7 @@ Full bidirectional SNAP/1 protocol — Fukuii can both serve and consume SNAP st
 **Client achievements:**
 - First successful Mordor SNAP sync: genesis → chain head in ~35 minutes
 - 2,628,940 accounts, peak 6,786 accts/sec, 6 in-place pivot refreshes
+- ETC mainnet attempt 12: 85.9M accounts in 10h 53m (3h faster than attempt 10); healing active
 - File-backed contract account buffers (OOM fix for ~45M ETC mainnet entries)
 - Deferred-write MPT storage (~200x speedup for batch trie insertion)
 - Binary stateless detection + adaptive batching per peer
@@ -85,9 +86,9 @@ Full bidirectional SNAP/1 protocol — Fukuii can both serve and consume SNAP st
 - `src/main/scala/.../db/FlatAccountStorage.scala` — O(1) SLOAD via flat key-value
 - `docs/reports/SNAP-SYNC-MORDOR-FIRST-SUCCESS.md` — Detailed sync report
 
-### 2. SNAP Reliability Series (L-015 → L-033)
+### 2. SNAP Reliability Series (L-015 → L-036 + H-001 + SP-001)
 
-19 commits added after initial Mordor success, targeting ETC mainnet conditions (~60M accounts, persistent SNAP peers, hostile network):
+25 commits added after initial Mordor success, targeting ETC mainnet conditions (~85M accounts, persistent SNAP peers, hostile network):
 
 | Commit | Description |
 |--------|-------------|
@@ -107,8 +108,15 @@ Full bidirectional SNAP/1 protocol — Fukuii can both serve and consume SNAP st
 | L-032 | ByteCodeCoordinator `knownAvailablePeers` — fix single-peer redispatch stall |
 | L-033 | Re-probe SNAP peer after disconnect/reconnect (clear `probedPeers` on PeerDisconnected) |
 | L-033b | Clear `probedPeers` on SnapProbeTimeout to allow re-probe after failure |
+| L-035 | `admin_addPeer`/`removePeer` persist to `static-nodes.json` — survives restart |
+| L-036 | ByteCodeCoordinator: permanently exclude peers after 5 consecutive empty `GetByteCodes` responses; exclusion survives pivot refreshes (Besu does not serve bytecodes) |
+| S-003+S-004 | Storage coordinator: suppress 30s heartbeat spam after storage sync completes; SNAPSyncController: add 15s trie walk heartbeat for long walks |
+| H-001 | Healing stagnation timer: reset `lastHealedAtMs` on `QueueMissingNodes` — prevents false stagnation abort after long trie walks (root cause of attempts 10–11 healing failure) |
+| SP-001 | Static peer exemption: `PeerManagerActor` sets `isStatic=true` at handshake; all three SNAP coordinators skip `statelessPeers`/cooldown for static peers — trusted local infrastructure (Besu, core-geth) stays active for entire sync |
 
 Also: `8808bcd35` — SNAP sync reliability fixes for ETC mainnet (Fixes 1-6), and `e077fcaa4` — SNAP attempt 5: escape valve, healing, dynamic stateless threshold.
+
+**External fix (not a Fukuii commit):** Besu `--bonsai-historical-block-limit` 2048→8192 in `run-besu-classic.sh`. Original limit caused Besu to stop serving trie nodes after chain advanced >2,048 blocks past pivot during healing (5,480 blocks in attempt 10). 8,192 covers the full ~16h ETC mainnet sync with 2× margin.
 
 ### 3. RPC Expansion (64 → 143 methods)
 
@@ -127,6 +135,8 @@ Also: `8808bcd35` — SNAP sync reliability fixes for ETC mainnet (Fixes 1-6), a
 - `finalized` and `safe` block tags supported across all block-param methods
 - Batch RPC requests are now rate-limited (same per-IP throttle as single requests)
 - `eth_getLogs` enforces a configurable block range limit to prevent OOM
+
+**trace_replayBlockTransactions complete** (commit `a890a2545`): All four trace types now implemented — `trace`, `stateDiff`, `vmTrace`, `revertReason`; with `traceTypes` gating so callers can request any subset.
 
 ### 4. Debug Tracers (M-029)
 
@@ -312,7 +322,19 @@ See `docs/development/BACKLOG.md` for the complete inventory. Key items:
 
 ### Gating condition for upstream PR
 
-- **ETC mainnet SNAP sync** — Attempt 6 underway. Once ETC mainnet SNAP completes successfully, open the upstream PR.
+- **ETC mainnet SNAP sync** — Attempt 12 in healing phase. Account download complete (85.9M accounts, 10h 53m, 4 peers sustained throughout). Healing rounds active. Once healing completes and chain tip is reached, open the upstream PR.
+
+### ETC Mainnet SNAP Sync — Attempt History
+
+| Attempt | JAR | Outcome | Root Cause |
+|---------|-----|---------|------------|
+| 1–5 | various | Failed | UDP spam, fast-sync bounce, deferred-merkleization stall |
+| 6–9 | `d9a22c2` | Stalled on bytecodes | L-036 not yet written; remote Besu doesn't serve `GetByteCodes` |
+| 10 | `a890a25` | Healing cycling (stagnation false-fire) | H-001 not yet written; stagnation timer false-fired after 5h 19m trie walk |
+| 11 | `74918ee` | Not deployed | Superseded by SP-001 before it ran |
+| **12** | **`e8d4f243`** | **In progress — healing active** | All fixes bundled; 85.9M accounts in 10h 53m |
+
+Key fixes that unblocked ETC mainnet healing: **L-035, L-036, H-001, SP-001** (Fukuii commits) + **B-001** (Besu bonsai window 2048→8192).
 
 ### Deferred to later branch/PR
 
@@ -334,9 +356,9 @@ All Critical (C-001..C-004), High (H-001..H-018), and most Medium items are DONE
 |--------|--------|--------|
 | core-geth | `etc` | Synced to head, all tests pass |
 | Besu | `etc` | SNAP server for Fukuii SNAP sync |
-| Fukuii | `march-onward` | 2,718 tests, Mordor SNAP synced, ETC mainnet attempt 6 underway |
+| Fukuii | `march-onward` | 2,718 tests, Mordor SNAP synced, ETC mainnet attempt 12 healing active |
 
-Fukuii successfully syncs Mordor using Besu as a SNAP server peer (core-geth provides block headers, Besu provides SNAP state). ETC mainnet SNAP sync attempt 6 is underway.
+Fukuii successfully syncs Mordor using Besu as a SNAP server peer (core-geth provides block headers, Besu provides SNAP state). ETC mainnet attempt 12 completed account download in 10h 53m and is now in the healing phase.
 
 ---
 
