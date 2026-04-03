@@ -60,6 +60,12 @@ class SyncStateSchedulerActor(
   /** State root for the current sync target — needed for GetTrieNodes requests. */
   private var currentStateRoot: ByteString = ByteString.empty
 
+  /** Track consecutive "no useful data" responses — signals the state root is stale. After the threshold, the scheduler
+    * requests a restart with a fresh root.
+    */
+  private var consecutiveUselessResponses: Int = 0
+  private val UselessResponseThreshold: Int = 20
+
   /** Check if a capability supports GetNodeData message. GetNodeData is available in ETH63-67 but removed in ETH68 per
     * EIP-4938. SNAP protocol uses different messages (GetAccountRange, etc.) and doesn't support GetNodeData.
     *
@@ -236,6 +242,7 @@ class SyncStateSchedulerActor(
   ): Unit = {
     timers.startTimerAtFixedRate(PrintInfoKey, PrintInfo, 30.seconds)
     currentStateRoot = root
+    consecutiveUselessResponses = 0
     log.info("Starting state sync to root {} on block {}", ByteStringUtils.hash2string(root), bn)
     // TODO handle case when we already have root i.e state is synced up to this point
     val initState = sync.initState(root).getOrElse {
@@ -410,6 +417,7 @@ class SyncStateSchedulerActor(
         }
 
       case ProcessingResult(Right(ProcessingSuccess(newState, newDownloaderState, newStats))) =>
+        consecutiveUselessResponses = 0 // Reset on successful processing
         log.debug(
           "Finished processing mpt node batch. Got {} missing nodes. Missing queue has {} elements",
           newState.numberOfPendingRequests,
@@ -437,8 +445,31 @@ class SyncStateSchedulerActor(
           case DownloaderError(newDownloaderState, peer, blacklistWithReason) =>
             log.debug("Downloader error by peer {}", peer)
             blacklistWithReason.foreach(blacklistIfHandshaked(peer.id, syncConfig.blacklistDuration, _))
-            context.become(syncing(currentState.withNewDownloaderState(newDownloaderState)))
-            self ! Sync
+            // Track consecutive useless responses — all peers returning useless data
+            // means the state root is stale and needs refreshing.
+            blacklistWithReason match {
+              case Some(InvalidStateResponse(_)) =>
+                consecutiveUselessResponses += 1
+                if (consecutiveUselessResponses >= UselessResponseThreshold && !currentState.restartHasBeenRequested) {
+                  log.warning(
+                    "{} consecutive useless responses — state root likely stale. Triggering self-restart.",
+                    consecutiveUselessResponses
+                  )
+                  consecutiveUselessResponses = 0
+                  handleRestart(
+                    currentState.currentSchedulerState,
+                    currentState.currentStats,
+                    currentState.targetBlock,
+                    context.parent
+                  )
+                } else {
+                  context.become(syncing(currentState.withNewDownloaderState(newDownloaderState)))
+                  self ! Sync
+                }
+              case _ =>
+                context.become(syncing(currentState.withNewDownloaderState(newDownloaderState)))
+                self ! Sync
+            }
         }
 
       case PrintInfo =>

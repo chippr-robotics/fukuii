@@ -979,12 +979,21 @@ class FastSync(
       }
       if (
         stateSyncStarted && !syncState.stateSyncFinished && !stateSyncRestartRequested &&
-        !syncState.updatingPivotBlock && pivotBlockIsStale()
+        !syncState.updatingPivotBlock
       ) {
-        log.info("Pivot block stale during parallel state download, requesting pivot update for state refresh")
-        syncStateScheduler ! RestartRequested
-        stateSyncRestartRequested = true
-        askForPivotBlockUpdate(ImportedLastBlock)
+        // Detect stale state root via two signals:
+        // 1. pivotBlockIsStale() — peers are ahead of our pivot
+        // 2. All peers blacklisted — evidence the root expired (peers return empty for this root)
+        val allPeersBlacklisted = peersToDownloadFrom.isEmpty && handshakedPeers.nonEmpty
+        if (pivotBlockIsStale() || allPeersBlacklisted) {
+          log.info(
+            "State root stale (allBlacklisted={}), requesting pivot update for state refresh",
+            allPeersBlacklisted
+          )
+          syncStateScheduler ! RestartRequested
+          stateSyncRestartRequested = true
+          askForPivotBlockUpdate(ImportedLastBlock)
+        }
       }
 
       if (fullySynced) {
