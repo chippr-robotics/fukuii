@@ -5,12 +5,16 @@ import org.apache.pekko.util.ByteString
 import cats.effect.IO
 
 import com.chipprbots.ethereum.consensus.engine.PayloadStatus._
+import com.chipprbots.ethereum.consensus.validators.std.MptListValidator
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields._
+import com.chipprbots.ethereum.domain.Withdrawal._
 import com.chipprbots.ethereum.ledger.BlockExecution
+import com.chipprbots.ethereum.mpt.ByteArraySerializable
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions._
 import com.chipprbots.ethereum.rlp.rawDecode
+import com.chipprbots.ethereum.rlp.{encode => rlpEncode}
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Logger
 
@@ -25,7 +29,7 @@ class EngineApiService(
 )(implicit blockchainConfig: BlockchainConfig)
     extends Logger {
 
-  /** engine_newPayloadV1/V2/V3 — Validate and execute a new payload from the CL. */
+  /** engine_newPayloadV1/V2/V3/V4 — Validate and execute a new payload from the CL. */
   def newPayload(payload: ExecutionPayload): IO[PayloadStatusV1] = IO {
     // 1. Convert ExecutionPayload → Block
     val block = payloadToBlock(payload)
@@ -43,6 +47,7 @@ class EngineApiService(
     } else if (blockchainReader.getBlockHeaderByHash(payload.parentHash).isEmpty) {
       // Parent not known — we need to sync
       log.info(s"newPayload: parent ${payload.parentHash} not known, returning SYNCING")
+      EngineApiMetrics.recordNewPayload("SYNCING", payload.blockNumber.toLong, payload.timestamp)
       PayloadStatusV1(Syncing)
     } else {
       // 3. Execute the block
@@ -52,12 +57,13 @@ class EngineApiService(
           blockchainWriter.storeBlock(block)
           blockchainWriter.storeReceipts(block.header.hash, receipts)
           log.info(s"newPayload: block ${block.header.number} executed and stored successfully")
+          EngineApiMetrics.recordNewPayload("VALID", payload.blockNumber.toLong, payload.timestamp)
           PayloadStatusV1(Valid, latestValidHash = Some(payload.blockHash))
 
         case Left(error) =>
           log.warn(s"newPayload: block ${block.header.number} execution failed: $error")
-          // Find the latest valid ancestor
           val latestValid = blockchainReader.getBlockHeaderByHash(payload.parentHash).map(_.hash)
+          EngineApiMetrics.recordNewPayload("INVALID", payload.blockNumber.toLong, payload.timestamp)
           PayloadStatusV1(Invalid, latestValidHash = latestValid, validationError = Some(error.toString))
       }
     }
@@ -70,7 +76,7 @@ class EngineApiService(
   ): IO[ForkchoiceUpdatedResponse] = IO {
     forkChoiceManager.applyForkChoiceState(forkChoiceState) match {
       case Left(_) =>
-        // Head block not known — syncing
+        EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
         ForkchoiceUpdatedResponse(PayloadStatusV1(Syncing))
 
       case Right(()) =>
@@ -85,6 +91,7 @@ class EngineApiService(
           ByteString(idBytes.take(8))
         }
 
+        EngineApiMetrics.recordForkchoiceUpdated("VALID")
         ForkchoiceUpdatedResponse(
           payloadStatus = PayloadStatusV1(Valid, latestValidHash = Some(forkChoiceState.headBlockHash)),
           payloadId = payloadId
@@ -98,12 +105,14 @@ class EngineApiService(
       "engine_newPayloadV1",
       "engine_newPayloadV2",
       "engine_newPayloadV3",
+      "engine_newPayloadV4",
       "engine_forkchoiceUpdatedV1",
       "engine_forkchoiceUpdatedV2",
       "engine_forkchoiceUpdatedV3",
       "engine_getPayloadV1",
       "engine_getPayloadV2",
       "engine_getPayloadV3",
+      "engine_getPayloadV4",
       "engine_getPayloadBodiesByHashV1",
       "engine_getPayloadBodiesByRangeV1",
       "engine_exchangeCapabilities"
@@ -172,31 +181,39 @@ class EngineApiService(
     Block(header, body)
   }
 
-  /** Compute the withdrawals trie root using keccak256 of RLP-encoded ordered list. */
+  /** Compute the withdrawals trie root via ephemeral MPT (same approach as StdBlockValidator). */
   private def computeWithdrawalsRoot(withdrawals: Seq[Withdrawal]): ByteString = {
-    import com.chipprbots.ethereum.domain.Withdrawal._
-    import com.chipprbots.ethereum.rlp.{encode => rlpEncode}
-    import com.chipprbots.ethereum.rlp.RLPList
-
     if (withdrawals.isEmpty) {
       BlockHeader.EmptyMpt
     } else {
-      // For a proper implementation, this should build a Merkle Patricia Trie.
-      // For now, use the same approach as the existing transaction root computation
-      // via the block validator infrastructure (which will verify correctness).
-      // The actual root is computed during block execution validation.
-      BlockHeader.EmptyMpt // Placeholder — the correct root comes from the CL payload
+      val serializable = new ByteArraySerializable[Withdrawal] {
+        override def fromBytes(bytes: Array[Byte]): Withdrawal = bytes.toWithdrawal
+        override def toBytes(input: Withdrawal): Array[Byte] = rlpEncode(WithdrawalEnc(input).toRLPEncodable)
+      }
+      val stateStorage = com.chipprbots.ethereum.db.storage.StateStorage.getReadOnlyStorage(
+        com.chipprbots.ethereum.db.dataSource.EphemDataSource()
+      )
+      val trie = com.chipprbots.ethereum.mpt.MerklePatriciaTrie[Int, Withdrawal](
+        source = stateStorage
+      )(MptListValidator.intByteArraySerializable, serializable)
+      val root = withdrawals.zipWithIndex.foldLeft(trie)((t, r) => t.put(r._2, r._1)).getRootHash
+      ByteString(root)
     }
   }
 
-  /** Compute the transactions trie root. */
+  /** Compute the transactions trie root via ephemeral MPT (same approach as StdBlockValidator). */
   private def computeTransactionsRoot(txs: Seq[SignedTransaction]): ByteString = {
     if (txs.isEmpty) {
       BlockHeader.EmptyMpt
     } else {
-      // Same as above — the CL provides the correct root via the payload.
-      // Block validation will verify it matches.
-      BlockHeader.EmptyMpt // Placeholder
+      val stateStorage = com.chipprbots.ethereum.db.storage.StateStorage.getReadOnlyStorage(
+        com.chipprbots.ethereum.db.dataSource.EphemDataSource()
+      )
+      val trie = com.chipprbots.ethereum.mpt.MerklePatriciaTrie[Int, SignedTransaction](
+        source = stateStorage
+      )(MptListValidator.intByteArraySerializable, SignedTransaction.byteArraySerializable)
+      val root = txs.zipWithIndex.foldLeft(trie)((t, r) => t.put(r._2, r._1)).getRootHash
+      ByteString(root)
     }
   }
 }

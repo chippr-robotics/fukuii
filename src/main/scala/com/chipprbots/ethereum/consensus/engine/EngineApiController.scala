@@ -29,12 +29,14 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
   def handleRequest(request: JsonRpcRequest): IO[JsonRpcResponse] = {
     request.method match {
       case "engine_newPayloadV1" | "engine_newPayloadV2" | "engine_newPayloadV3" =>
-        handleNewPayload(request)
+        handleNewPayload(request, version = 3)
+      case "engine_newPayloadV4" =>
+        handleNewPayload(request, version = 4)
       case "engine_forkchoiceUpdatedV1" | "engine_forkchoiceUpdatedV2" | "engine_forkchoiceUpdatedV3" =>
         handleForkchoiceUpdated(request)
       case "engine_exchangeCapabilities" =>
         handleExchangeCapabilities(request)
-      case "engine_getPayloadV1" | "engine_getPayloadV2" | "engine_getPayloadV3" =>
+      case "engine_getPayloadV1" | "engine_getPayloadV2" | "engine_getPayloadV3" | "engine_getPayloadV4" =>
         handleGetPayload(request)
       case "engine_getPayloadBodiesByHashV1" =>
         handleGetPayloadBodiesByHash(request)
@@ -58,10 +60,21 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
     }
   }
 
-  private def handleNewPayload(request: JsonRpcRequest): IO[JsonRpcResponse] = {
-    request.params.flatMap(_.arr.headOption) match {
+  private def handleNewPayload(request: JsonRpcRequest, version: Int): IO[JsonRpcResponse] = {
+    val params = request.params.map(_.arr).getOrElse(Nil)
+    params.headOption match {
       case Some(payloadJson: JObject) =>
-        val payload = decodeExecutionPayload(payloadJson)
+        var payload = decodeExecutionPayload(payloadJson)
+
+        // V3+: second param is versioned hashes array, third param is parentBeaconBlockRoot
+        // V4: fourth param is executionRequests (EIP-7685)
+        if (version >= 4) {
+          val executionRequests = params.lift(3).collect { case JArray(items) =>
+            items.collect { case JString(hex) => hexToByteString(hex) }
+          }
+          payload = payload.copy(executionRequests = executionRequests)
+        }
+
         engineApiService.newPayload(payload).map { status =>
           JsonRpcResponse("2.0", Some(encodePayloadStatus(status)), None, reqId(request))
         }

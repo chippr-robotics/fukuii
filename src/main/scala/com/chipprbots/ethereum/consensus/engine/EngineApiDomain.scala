@@ -27,7 +27,9 @@ case class ExecutionPayload(
     withdrawals: Option[Seq[Withdrawal]] = None,
     // Cancun+
     blobGasUsed: Option[BigInt] = None,
-    excessBlobGas: Option[BigInt] = None
+    excessBlobGas: Option[BigInt] = None,
+    // Prague/Electra+ (EIP-7685)
+    executionRequests: Option[Seq[ByteString]] = None
 )
 
 /** Payload attributes for engine_forkchoiceUpdated (optional payload building). */
