@@ -692,10 +692,8 @@ class SNAPSyncController(
           trieNodeHealingCoordinator.foreach { coordinator =>
             coordinator ! actors.Messages.QueueMissingNodes(missingNodes)
           }
-          // Schedule next overlapping trie walk — don't wait for healing to complete
-          scheduler.scheduleOnce(2.minutes) {
-            self ! ScheduledTrieWalk
-          }(ec)
+          // Healing coordinator self-feeds via discoverMissingChildren (BUG-HW1).
+          // No periodic walk needed — StateHealingComplete triggers the final validation walk.
         }
       }
 
@@ -2300,11 +2298,8 @@ class SNAPSyncController(
         )
 
         progressMonitor.startPhase(StateHealing)
-
-        // Schedule overlapping trie walk — verify healing progress and find any new gaps
-        scheduler.scheduleOnce(2.minutes) {
-          self ! ScheduledTrieWalk
-        }(ec)
+        // Healing coordinator self-feeds via discoverMissingChildren (BUG-HW1).
+        // No periodic walk needed here — coordinator queues children as it heals nodes.
     }
   }
 

@@ -464,6 +464,7 @@ class TrieNodeHealingCoordinator(
       if (nodeHash == task.hash) {
         // Valid node — store directly by hash
         rawNodeBuffer += ((nodeHash, nodeData.toArray))
+        discoverMissingChildren(nodeData, task.pathset)
         healedCount += 1
         totalNodesHealed += 1
         receivedBytes += nodeData.length
@@ -636,6 +637,76 @@ class TrieNodeHealingCoordinator(
     val elapsedSec = (System.currentTimeMillis() - startTime) / 1000.0
     if (elapsedSec > 0) (totalBytesReceived / 1024.0) / elapsedSec else 0.0
   }
+
+  /** Decode a healed node and queue any missing children for healing.
+    * Makes healing self-feeding: each healed node expands the work queue without
+    * requiring a full periodic trie walk (geth trie.Sync scheduler alignment).
+    */
+  private def discoverMissingChildren(nodeData: ByteString, pathset: Seq[ByteString]): Unit = {
+    import com.chipprbots.ethereum.mpt.{MptTraversals, BranchNode, ExtensionNode, HashNode}
+    import com.chipprbots.ethereum.mpt.HexPrefix
+    import scala.util.control.NonFatal
+
+    if (pathset.isEmpty) return
+
+    try {
+      val decoded = MptTraversals.decodeNode(nodeData.toArray)
+      val parentCompact = pathset.last.toArray
+      val parentNibbles = HexPrefix.decode(parentCompact)._1
+      val isStorageTrie = pathset.size > 1  // Seq(accountHash, path) vs Seq(path)
+
+      val newEntries = mutable.Buffer.empty[HealingEntry]
+
+      decoded match {
+        case branch: BranchNode =>
+          for (i <- 0 until 16) {
+            branch.children(i) match {
+              case hash: HashNode =>
+                val childHash = ByteString(hash.hashNode)
+                if (!pendingHashSet.contains(childHash) && !isNodeInStorage(childHash)) {
+                  val childNibbles = parentNibbles :+ i.toByte
+                  val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
+                  val childPathset = if (isStorageTrie) Seq(pathset.head, childCompact) else Seq(childCompact)
+                  newEntries += HealingEntry(childPathset, childHash)
+                }
+              case _ => // Inline-encoded or null — already resolved
+            }
+          }
+
+        case ext: ExtensionNode =>
+          ext.next match {
+            case hash: HashNode =>
+              val childHash = ByteString(hash.hashNode)
+              if (!pendingHashSet.contains(childHash) && !isNodeInStorage(childHash)) {
+                // ext.sharedKey is already HP-decoded nibbles (ByteString of nibble bytes)
+                val childNibbles = parentNibbles ++ ext.sharedKey.toArray
+                val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
+                val childPathset = if (isStorageTrie) Seq(pathset.head, childCompact) else Seq(childCompact)
+                newEntries += HealingEntry(childPathset, childHash)
+              }
+            case _ => // Already inline-encoded — no missing child
+          }
+
+        case _ => // LeafNode, NullNode — no children to discover
+      }
+
+      if (newEntries.nonEmpty) {
+        newEntries.foreach(e => pendingHashSet += e.hash)
+        pendingTasks = pendingTasks ++ newEntries
+        log.debug(
+          s"[HEAL-INCREMENTAL] Queued ${newEntries.size} missing children from healed node " +
+          s"${Hex.toHexString(pathset.last.take(4).toArray)} (total pending: ${pendingTasks.size})"
+        )
+      }
+    } catch {
+      case NonFatal(e) =>
+        log.debug(s"[HEAL-INCREMENTAL] Could not decode node for child discovery: ${e.getMessage}")
+        // Non-fatal — healing still works via final validation walk as safety net
+    }
+  }
+
+  private def isNodeInStorage(hash: ByteString): Boolean =
+    try { mptStorage.get(hash.toArray); true } catch { case _: Exception => false }
 
   private def isComplete: Boolean =
     pendingTasks.isEmpty && activeRequests.isEmpty
