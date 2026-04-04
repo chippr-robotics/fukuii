@@ -103,11 +103,12 @@ abstract class BaseNode extends Node {
     }
 
   private[this] def runDBConsistencyCheck(): Unit = {
-    // Skip consistency check after SNAP sync — block headers 0..pivot don't exist yet.
-    // SNAP sync only stores the pivot block header; earlier headers are downloaded
-    // incrementally during regular sync's block-by-block import.
-    if (storagesInstance.storages.appStateStorage.isSnapSyncDone()) {
-      log.info("Skipping DB consistency check: SNAP sync stores only pivot block header, not full header chain")
+    // Skip consistency check when SNAP sync is in progress OR complete.
+    // During SNAP sync only the pivot block header is stored (not the full chain from 0),
+    // so the block-number-mapping gap check would always fire a false "inconsistent state".
+    val appState = storagesInstance.storages.appStateStorage
+    if (appState.isSnapSyncDone() || appState.getSnapSyncPivotBlock().isDefined) {
+      log.info("Skipping DB consistency check: SNAP sync in progress or complete (pivot block header only, not full chain)")
       return
     }
     StorageConsistencyChecker.checkStorageConsistency(
