@@ -1031,10 +1031,16 @@ class AccountRangeCoordinator(
     * rebuilt from the persisted root hash so old in-memory nodes can be garbage collected.
     */
   private def flushTrieToStorage(): Unit =
-    deferredStorage.flush().foreach { rootHash =>
-      import com.chipprbots.ethereum.mpt.byteStringSerializer
-      stateTrie = MerklePatriciaTrie[ByteString, Account](rootHash, deferredStorage)
-      log.info(s"Flushed trie to storage, root=${rootHash.take(8).map("%02x".format(_)).mkString}...")
+    deferredStorage.flush() match {
+      case Some(rootHash) =>
+        import com.chipprbots.ethereum.mpt.byteStringSerializer
+        stateTrie = MerklePatriciaTrie[ByteString, Account](rootHash, deferredStorage)
+        log.info(s"Flushed trie to storage, root=${rootHash.take(8).map("%02x".format(_)).mkString}...")
+      case None =>
+        log.error(
+          "Trie flush returned no root — in-memory trie may be empty or corrupted. " +
+            "This could result in missing account nodes. Continuing with current trie state."
+        )
     }
 
   /** Identify contract accounts (those with non-empty code hash)

@@ -143,7 +143,10 @@ class SNAPSyncController(
   @volatile private var trieWalkNodesScanned: java.util.concurrent.atomic.AtomicLong =
     new java.util.concurrent.atomic.AtomicLong(0)
   private var consecutiveUnproductiveHealingRounds: Int = 0
-  private val maxUnproductiveHealingRounds: Int = 3 // After 3 rounds of finding same missing nodes with 0 healed, skip to validation
+  private val maxUnproductiveHealingRounds: Int = 5 // 5 rounds × 2 min = 10-min window before skipping to validation
+  private var lastTrieWalkMissingCount: Int = Int.MaxValue // progress tracker — reset counter when count decreases
+  private var healingValidationCycles: Int = 0           // counts healing→validation→healing oscillations
+  private val maxHealingValidationCycles: Int = 5        // after 5 full cycles, stop oscillating and declare done
   private var bootstrapCheckTask: Option[Cancellable] = None
   private var pivotBootstrapRetryTask: Option[Cancellable] = None
   private var rateTrackerTuneTask: Option[Cancellable] = None
@@ -638,11 +641,29 @@ class SNAPSyncController(
         log.info("Trie walk found no missing nodes — healing complete!")
         MilestoneLog.phase("Trie healing complete | 0 missing nodes")
         consecutiveUnproductiveHealingRounds = 0
+        lastTrieWalkMissingCount = 0
+        // Clear persisted healing state — successfully healed
+        appStateStorage.putSnapSyncHealingPendingNodes("").and(appStateStorage.putSnapSyncHealingRound(0)).commit()
         progressMonitor.startPhase(StateValidation)
         currentPhase = StateValidation
         validateState()
       } else {
-        consecutiveUnproductiveHealingRounds += 1
+        // Reset counter if progress was made (fewer missing nodes than previous walk)
+        if (missingNodes.size < lastTrieWalkMissingCount) {
+          val healed = lastTrieWalkMissingCount - missingNodes.size
+          log.info(
+            s"Healing made progress: $healed nodes healed, ${missingNodes.size} remaining — resetting stagnation counter"
+          )
+          consecutiveUnproductiveHealingRounds = 0
+        } else {
+          consecutiveUnproductiveHealingRounds += 1
+        }
+        lastTrieWalkMissingCount = missingNodes.size
+        // Persist missing nodes so restart can skip re-walk
+        appStateStorage
+          .putSnapSyncHealingPendingNodes(SNAPSyncController.serializeHealingNodes(missingNodes))
+          .and(appStateStorage.putSnapSyncHealingRound(consecutiveUnproductiveHealingRounds))
+          .commit()
         if (consecutiveUnproductiveHealingRounds >= maxUnproductiveHealingRounds) {
           log.warning(
             s"Healing stagnation: ${missingNodes.size} missing nodes persist after " +
@@ -653,6 +674,9 @@ class SNAPSyncController(
             s"Healing stagnation | ${missingNodes.size} missing nodes after $consecutiveUnproductiveHealingRounds rounds, proceeding to validation"
           )
           consecutiveUnproductiveHealingRounds = 0
+          lastTrieWalkMissingCount = Int.MaxValue
+          // Clear persisted healing state — giving up on these nodes, validation will continue
+          appStateStorage.putSnapSyncHealingPendingNodes("").and(appStateStorage.putSnapSyncHealingRound(0)).commit()
           progressMonitor.startPhase(StateValidation)
           currentPhase = StateValidation
           validateState()
@@ -865,7 +889,28 @@ class SNAPSyncController(
         log.info("All state downloads complete (accounts + bytecodes + storage). Starting healing...")
         MilestoneLog.phase("Trie healing starting")
         currentPhase = StateHealing
-        startStateHealing()
+        // Check if healing was in progress when the node last stopped — skip re-walk if so
+        appStateStorage.getSnapSyncHealingPendingNodes() match {
+          case Some(data) if data.nonEmpty =>
+            val savedNodes = SNAPSyncController.deserializeHealingNodes(data)
+            if (savedNodes.isEmpty) {
+              log.warning("[HEAL-RESUME] Persisted healing data was malformed — starting fresh trie walk")
+            }
+            if (savedNodes.nonEmpty) {
+              val savedRound = appStateStorage.getSnapSyncHealingRound()
+              log.info(
+                s"[HEAL-RESUME] Restoring ${savedNodes.size} missing nodes from prior healing " +
+                  s"round $savedRound — skipping 5h trie re-walk"
+              )
+              consecutiveUnproductiveHealingRounds = savedRound
+              lastTrieWalkMissingCount = savedNodes.size
+              startStateHealingWithSavedNodes(savedNodes)
+            } else {
+              startStateHealing()
+            }
+          case _ =>
+            startStateHealing()
+        }
       }
     }
 
@@ -1639,6 +1684,8 @@ class SNAPSyncController(
     appStateStorage.putSnapSyncAccountsComplete(false).commit()
     appStateStorage.putSnapSyncStorageFilePath("").commit()
     appStateStorage.putSnapSyncCompletedStoragePath("").commit()
+    appStateStorage.putSnapSyncHealingPendingNodes("").commit()
+    appStateStorage.putSnapSyncHealingRound(0).commit()
     preservedRangeProgress = Map.empty
     preservedAtPivotBlock = None
 
@@ -2187,6 +2234,73 @@ class SNAPSyncController(
     }
   }
 
+  /** Resume healing from a persisted missing-nodes list, skipping the initial trie walk.
+    * Creates the healing coordinator and dispatches the saved nodes immediately.
+    */
+  private def startStateHealingWithSavedNodes(
+      missingNodes: Seq[(Seq[ByteString], ByteString)]
+  ): Unit = {
+    if (trieNodeHealingCoordinator.isDefined) {
+      log.warning("startStateHealingWithSavedNodes called but healing coordinator already exists — ignoring")
+      return
+    }
+
+    trieWalkInProgress = false
+
+    stateRoot match {
+      case None =>
+        log.error("[HEAL-RESUME] No stateRoot available — falling back to fresh trie walk")
+        startStateHealing()
+
+      case Some(root) =>
+        log.info(
+          s"[HEAL-RESUME] Creating healing coordinator for ${missingNodes.size} saved nodes " +
+            s"(root=${root.toHex.take(8)})"
+        )
+
+        val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
+
+        trieNodeHealingCoordinator = Some(
+          context.actorOf(
+            actors.TrieNodeHealingCoordinator
+              .props(
+                stateRoot = root,
+                networkPeerManager = networkPeerManager,
+                requestTracker = requestTracker,
+                mptStorage = storage,
+                batchSize = snapSyncConfig.healingBatchSize,
+                snapSyncController = self,
+                concurrency = snapSyncConfig.healingConcurrency
+              )
+              .withDispatcher("sync-dispatcher"),
+            s"trie-node-healing-coordinator-$coordinatorGeneration"
+          )
+        )
+
+        trieNodeHealingCoordinator.foreach { coordinator =>
+          coordinator ! actors.Messages.StartTrieNodeHealing(root)
+          coordinator ! actors.Messages.UpdateMaxInFlightPerPeer(5)
+          coordinator ! actors.Messages.QueueMissingNodes(missingNodes)
+        }
+
+        healingRequestTask = Some(
+          scheduler.scheduleWithFixedDelay(
+            0.seconds,
+            1.second,
+            self,
+            RequestTrieNodeHealing
+          )(ec)
+        )
+
+        progressMonitor.startPhase(StateHealing)
+
+        // Schedule overlapping trie walk — verify healing progress and find any new gaps
+        scheduler.scheduleOnce(2.minutes) {
+          self ! ScheduledTrieWalk
+        }(ec)
+    }
+  }
+
   // Internal message for periodic healing requests
   private case object RequestTrieNodeHealing
 
@@ -2286,10 +2400,17 @@ class SNAPSyncController(
                     s"Proceeding to regular sync — missing nodes will be fetched on-demand during block execution."
                 )
                 // Skip validation and proceed: mark SNAP done, start regular sync.
-                // With deferred merkleization, the root node was never built from flat data.
-                // Regular sync's StateNodeFetcher will retrieve it via GetTrieNodes when needed.
-                appStateStorage.snapSyncDone().commit()
-                context.parent ! Done
+                // Include best block number in the batch so regular sync startup doesn't fail.
+                pivotBlock match {
+                  case Some(pivot) =>
+                    appStateStorage.snapSyncDone()
+                      .and(appStateStorage.putBestBlockNumber(pivot))
+                      .commit()
+                    context.parent ! Done
+                  case None =>
+                    log.error("Cannot finalize: pivotBlock is None in root-missing fallback. Triggering SNAP retry.")
+                    context.parent ! RetrySnapSync("pivot block unknown during root-missing validation fallback")
+                }
               } else {
                 log.error(s"Root node is missing (retry attempt $validationRetryCount of $MaxValidationRetries)")
                 log.info("Retrying validation after brief delay...")
@@ -2309,11 +2430,18 @@ class SNAPSyncController(
         log.error("Missing state root or pivot block for validation — cannot validate state")
         log.error(s"stateRoot=${stateRoot.map(_.toHex.take(16))}, pivotBlock=$pivotBlock")
         // Don't leave the controller stuck in StateValidation phase.
-        // Mark SNAP done and hand off to regular sync, which will fetch any
-        // missing state on-demand during block execution.
-        log.warning("Proceeding to regular sync without state validation")
-        appStateStorage.snapSyncDone().commit()
-        context.parent ! Done
+        // Include best block number in the batch so regular sync startup doesn't fail.
+        pivotBlock match {
+          case Some(pivot) =>
+            log.warning("Proceeding to regular sync without state validation")
+            appStateStorage.snapSyncDone()
+              .and(appStateStorage.putBestBlockNumber(pivot))
+              .commit()
+            context.parent ! Done
+          case None =>
+            log.error("Cannot finalize: pivotBlock is None in missing-state-root fallback. Triggering SNAP retry.")
+            context.parent ! RetrySnapSync("pivot block unknown in missing-state-root fallback")
+        }
     }
   }
 
@@ -2412,9 +2540,11 @@ class SNAPSyncController(
     */
   private def updateBestBlockForPivot(header: BlockHeader, pivotBlockNumber: BigInt): Unit = {
     val pivotHash = header.hash
-    val estimatedTotalDifficulty =
-      if (pivotBlockNumber == BigInt(0)) header.difficulty
-      else header.difficulty * pivotBlockNumber
+    // Use single-block difficulty as lower bound for ETH Status TD.
+    // Advertising difficulty × blockNumber (~150× real cumulative TD for ETC) causes fully-synced
+    // peers to think Fukuii is way ahead, triggering repeated ETH sync attempts. Those fail because
+    // Fukuii only has blocks 0..pivot, causing a 15s connect/disconnect loop on static peers.
+    val estimatedTotalDifficulty = header.difficulty
     // Store header so getBestBlockHeader() -> getBlockHeaderByNumber(pivot) finds it
     blockchainWriter.storeBlockHeader(header).commit()
     blockchainWriter
@@ -2556,7 +2686,23 @@ class SNAPSyncController(
     * discovered. The passed hashes are just an indicator — we re-walk to get proper paths for GetTrieNodes.
     */
   private def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit = {
-    log.info(s"Validation found ${missingNodes.size} missing nodes — re-running trie walk with paths for healing")
+    healingValidationCycles += 1
+    if (healingValidationCycles >= maxHealingValidationCycles) {
+      log.warning(
+        s"Healing↔Validation oscillation detected after $healingValidationCycles cycles with " +
+          s"${missingNodes.size} remaining missing nodes. Proceeding to regular sync — " +
+          s"missing nodes will be fetched on-demand."
+      )
+      self ! StateValidationComplete
+      return
+    }
+    // Fix 7: re-entering healing from validation is a fresh start — reset stagnation counters
+    consecutiveUnproductiveHealingRounds = 0
+    lastTrieWalkMissingCount = Int.MaxValue
+    log.info(
+      s"Validation found ${missingNodes.size} missing nodes — re-running trie walk with paths for healing " +
+        s"(healing↔validation cycle $healingValidationCycles/$maxHealingValidationCycles)"
+    )
     currentPhase = StateHealing
     stateRoot.foreach { root =>
       val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
@@ -2780,7 +2926,16 @@ class SNAPSyncController(
     blockchainReader.getBlockHeaderByNumber(pivot) match {
       case Some(pivotHeader) =>
         val pivotHash = pivotHeader.hash
-        val estimatedTotalDifficulty = pivotHeader.difficulty * pivot
+        val estimatedTotalDifficulty = blockchainReader
+          .getChainWeightByHash(pivotHash)
+          .map(_.totalDifficulty)
+          .getOrElse {
+            log.warning(
+              s"No stored chain weight for pivot block $pivot — using single-block difficulty as lower bound. " +
+                s"Chain weight will be corrected during regular sync."
+            )
+            pivotHeader.difficulty
+          }
 
         // Atomic finalization — commit SnapSyncDone marker together with
         // pivot block, chain weight, and best block info in a single batch.
@@ -3023,6 +3178,33 @@ object SNAPSyncController {
         scheduler
       )
     )
+
+  // --- Healing-node serialization helpers (accessible from snap package for testing) ---
+
+  /** Serialize missing trie node paths to a newline-delimited hex string for AppStateStorage.
+    * Format per line: "hash:path1,path2,..." — hash first, comma-separated path nibbles.
+    * Returns empty string when nodes is empty.
+    */
+  def serializeHealingNodes(nodes: Seq[(Seq[ByteString], ByteString)]): String =
+    nodes.map { case (paths, hash) =>
+      val hashHex  = hash.toHex
+      val pathsHex = paths.map(_.toHex).mkString(",")
+      s"$hashHex:$pathsHex"
+    }.mkString("\n")
+
+  /** Deserialize persisted healing nodes. Returns Seq.empty if data is blank or malformed. */
+  def deserializeHealingNodes(data: String): Seq[(Seq[ByteString], ByteString)] =
+    scala.util.Try {
+      data.split('\n').filter(_.nonEmpty).map { line =>
+        val colonIdx = line.indexOf(':')
+        if (colonIdx < 0) throw new IllegalArgumentException(s"No colon separator in: $line")
+        val hash  = ByteString(com.chipprbots.ethereum.utils.Hex.decode(line.substring(0, colonIdx)))
+        val paths = line.substring(colonIdx + 1).split(',').filter(_.nonEmpty).map { p =>
+          ByteString(com.chipprbots.ethereum.utils.Hex.decode(p))
+        }.toSeq
+        (paths, hash)
+      }.toSeq
+    }.getOrElse(Seq.empty)
 }
 
 case class SNAPSyncConfig(

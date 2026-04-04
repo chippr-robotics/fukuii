@@ -133,6 +133,37 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
     "get zero as last safe block when storage is empty" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
       assert(newAppStateStorage().getLastSafeBlock() == 0)
     }
+
+    "store and retrieve healing pending nodes" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      assert(storage.getSnapSyncHealingPendingNodes().isEmpty)
+      storage.putSnapSyncHealingPendingNodes("aabbccdd:0102,0304\neeff0011:").commit()
+      assert(storage.getSnapSyncHealingPendingNodes().contains("aabbccdd:0102,0304\neeff0011:"))
+    }
+
+    "return None for healing pending nodes when key is absent" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      assert(newAppStateStorage().getSnapSyncHealingPendingNodes().isEmpty)
+    }
+
+    "return None for healing pending nodes when value is empty string" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      storage.putSnapSyncHealingPendingNodes("").commit()
+      assert(storage.getSnapSyncHealingPendingNodes().isEmpty)
+    }
+
+    "store and retrieve healing round counter" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      assert(storage.getSnapSyncHealingRound() == 0)
+      storage.putSnapSyncHealingRound(3).commit()
+      assert(storage.getSnapSyncHealingRound() == 3)
+    }
+
+    "reset healing round counter to zero" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      storage.putSnapSyncHealingRound(5).commit()
+      storage.putSnapSyncHealingRound(0).commit()
+      assert(storage.getSnapSyncHealingRound() == 0)
+    }
   }
 
   trait Fixtures {

@@ -288,6 +288,25 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putSnapSyncFinalizedRoot(root: ByteString): DataSourceBatchUpdate =
     put(Keys.SnapSyncFinalizedRoot, Hex.toHexString(root.toArray))
 
+  /** Get persisted missing trie node paths from the last healing walk result.
+    * Non-empty means healing was in progress when the node last stopped.
+    * Format: newline-delimited hex-encoded ByteString paths.
+    */
+  def getSnapSyncHealingPendingNodes(): Option[String] =
+    get(Keys.SnapSyncHealingPendingNodes).filter(_.nonEmpty)
+
+  /** Persist the trie walk result (missing node paths) so healing can resume without re-walking. */
+  def putSnapSyncHealingPendingNodes(data: String): DataSourceBatchUpdate =
+    put(Keys.SnapSyncHealingPendingNodes, data)
+
+  /** Get the healing round counter at the time the node last stopped (used to restore stagnation counter). */
+  def getSnapSyncHealingRound(): Int =
+    get(Keys.SnapSyncHealingRound).flatMap(s => scala.util.Try(s.toInt).toOption).getOrElse(0)
+
+  /** Persist the current healing round counter. */
+  def putSnapSyncHealingRound(round: Int): DataSourceBatchUpdate =
+    put(Keys.SnapSyncHealingRound, round.toString)
+
   // --- Unclean shutdown recovery ---
 
   /** Check if the last shutdown was clean. Returns false on first run or after crash. */
@@ -340,6 +359,8 @@ object AppStateStorage {
     val SnapSyncFinalizedRoot = "SnapSyncFinalizedRoot"
     val CleanShutdown = "CleanShutdown"
     val LastSafeBlock = "LastSafeBlock"
+    val SnapSyncHealingPendingNodes = "SnapSyncHealingPendingNodes"
+    val SnapSyncHealingRound        = "SnapSyncHealingRound"
   }
 
 }

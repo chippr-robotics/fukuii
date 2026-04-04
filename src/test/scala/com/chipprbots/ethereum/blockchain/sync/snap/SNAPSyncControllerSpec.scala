@@ -335,4 +335,71 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     formatted should include("44.5K")
     formatted should include("1823/15234 contracts")
   }
+
+  "SNAPSyncController healing-node serialization" should "round-trip a single node with one path" taggedAs UnitTest in {
+    val hash  = ByteString(Array.fill(32)(0xab.toByte))
+    val path1 = ByteString(Array[Byte](0x01, 0x02, 0x03))
+    val nodes: Seq[(Seq[ByteString], ByteString)] = Seq((Seq(path1), hash))
+
+    val serialized   = SNAPSyncController.serializeHealingNodes(nodes)
+    val deserialized = SNAPSyncController.deserializeHealingNodes(serialized)
+
+    deserialized should have size 1
+    deserialized.head._2 shouldBe hash
+    deserialized.head._1 should have size 1
+    deserialized.head._1.head shouldBe path1
+  }
+
+  it should "round-trip multiple nodes with multiple paths each" taggedAs UnitTest in {
+    val hash1  = ByteString(Array.fill(32)(0xaa.toByte))
+    val hash2  = ByteString(Array.fill(32)(0xbb.toByte))
+    val path1a = ByteString(Array[Byte](0x01, 0x02))
+    val path1b = ByteString(Array[Byte](0x03, 0x04))
+    val path2a = ByteString(Array[Byte](0x05, 0x06, 0x07, 0x08))
+
+    val nodes: Seq[(Seq[ByteString], ByteString)] = Seq(
+      (Seq(path1a, path1b), hash1),
+      (Seq(path2a), hash2)
+    )
+
+    val deserialized = SNAPSyncController.deserializeHealingNodes(
+      SNAPSyncController.serializeHealingNodes(nodes)
+    )
+
+    deserialized should have size 2
+    deserialized(0)._2 shouldBe hash1
+    deserialized(0)._1 shouldBe Seq(path1a, path1b)
+    deserialized(1)._2 shouldBe hash2
+    deserialized(1)._1 shouldBe Seq(path2a)
+  }
+
+  it should "round-trip an empty list" taggedAs UnitTest in {
+    val result = SNAPSyncController.deserializeHealingNodes(
+      SNAPSyncController.serializeHealingNodes(Seq.empty)
+    )
+    result shouldBe empty
+  }
+
+  it should "return empty Seq for malformed input without throwing" taggedAs UnitTest in {
+    val result = SNAPSyncController.deserializeHealingNodes("not-valid-hex-at-all!!!")
+    result shouldBe empty
+  }
+
+  it should "return empty Seq for blank input" taggedAs UnitTest in {
+    SNAPSyncController.deserializeHealingNodes("") shouldBe empty
+    SNAPSyncController.deserializeHealingNodes("   ") shouldBe empty
+  }
+
+  it should "handle a node with empty paths list" taggedAs UnitTest in {
+    val hash  = ByteString(Array.fill(32)(0xcc.toByte))
+    val nodes: Seq[(Seq[ByteString], ByteString)] = Seq((Seq.empty, hash))
+
+    val deserialized = SNAPSyncController.deserializeHealingNodes(
+      SNAPSyncController.serializeHealingNodes(nodes)
+    )
+
+    deserialized should have size 1
+    deserialized.head._2 shouldBe hash
+    deserialized.head._1 shouldBe empty
+  }
 }
