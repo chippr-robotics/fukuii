@@ -40,10 +40,6 @@ import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.{
-  BlockHeaders => ETH62BlockHeaders,
-  GetBlockHeaders => ETH62GetBlockHeaders
-}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{
   BlockHeaders => ETH66BlockHeaders,
   GetBlockHeaders => ETH66GetBlockHeaders
@@ -361,10 +357,6 @@ object FastSyncBranchResolverActorSpec extends Logger {
               if (blockIndex < blocksSetSize)
                 blockIndex += 1
               ETH66BlockHeaders(req.requestId, blocks.get(blockIndex).map(_.map(_.header)).getOrElse(Nil))
-            case req: ETH62GetBlockHeaders if !req.reverse =>
-              if (blockIndex < blocksSetSize)
-                blockIndex += 1
-              ETH62BlockHeaders(blocks.get(blockIndex).map(_.map(_.header)).getOrElse(Nil))
             case other =>
               throw new RuntimeException(s"Unexpected message sent to NetworkPeerManagerAutoPilot: $other")
           }

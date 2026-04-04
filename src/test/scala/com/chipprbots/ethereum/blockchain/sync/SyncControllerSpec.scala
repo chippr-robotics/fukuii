@@ -46,11 +46,8 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders.{
   GetBlockHeadersEnc => ETH62GetBlockHeadersEnc
 }
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{GetBlockHeaders => ETH62GetBlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData.{GetNodeDataEnc => ETH63GetNodeDataEnc}
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetReceipts.{GetReceiptsEnc => ETH63GetReceiptsEnc}
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.{GetNodeData => ETH63GetNodeData}
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.{GetReceipts => ETH63GetReceipts}
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.{NodeData => ETH63NodeData}
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.{Receipts => ETH63Receipts}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockBodies => ETH66BlockBodies}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
@@ -59,13 +56,9 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetBlockHeaders.{
   GetBlockHeadersEnc => ETH66GetBlockHeadersEnc
 }
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetNodeData.{GetNodeDataEnc => ETH66GetNodeDataEnc}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetReceipts.{GetReceiptsEnc => ETH66GetReceiptsEnc}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetNodeData => ETH66GetNodeData}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{NodeData => ETH66NodeData}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{Receipts => ETH66Receipts}
 import com.chipprbots.ethereum.rlp.RLPList
-import com.chipprbots.ethereum.rlp.RLPValue
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
@@ -479,76 +472,15 @@ class SyncControllerSpec
     }
   }
 
-  it should "update pivot block during state sync if it goes stale" taggedAs (UnitTest, SyncTest) in withTestSetup() {
-    testSetup =>
-      import testSetup._
-      startWithState(defaultStateBeforeNodeRestart)
-
-      syncController ! SyncProtocol.Start
-
-      val handshakedPeers = HandshakedPeers(singlePeer)
-
-      val newBlocks =
-        getHeaders(defaultStateBeforeNodeRestart.bestBlockHeaderNumber + 1, 50)
-
-      val pilot = setupAutoPilot(
-        networkPeerManager,
-        handshakedPeers,
-        defaultPivotBlockHeader,
-        BlockchainData(newBlocks),
-        failedNodeRequest = true
-      )
-
-      // choose first pivot and as it is fresh enough start state sync
-      eventually {
-        someTimePasses()
-        val syncState = storagesInstance.storages.fastSyncStateStorage.getSyncState().get
-        syncState.isBlockchainWorkFinished shouldBe true
-        syncState.updatingPivotBlock shouldBe false
-        stateDownloadStarted shouldBe true
-      }
-      val peerWithBetterBlock = defaultPeer1Info.copy(maxBlockNumber = bestBlock + syncConfig.maxPivotBlockAge)
-      val newHandshakedPeers = HandshakedPeers(Map(peer1 -> peerWithBetterBlock))
-      val newPivot = defaultPivotBlockHeader.copy(number = defaultPivotBlockHeader.number + syncConfig.maxPivotBlockAge)
-
-      pilot.updateAutoPilot(
-        newHandshakedPeers,
-        newPivot,
-        BlockchainData(newBlocks),
-        failedNodeRequest = true
-      )
-
-      // sync to new pivot
-      eventually {
-        someTimePasses()
-        val syncState = storagesInstance.storages.fastSyncStateStorage.getSyncState().get
-        syncState.pivotBlock shouldBe newPivot
-      }
-
-      // enable peer to respond with mpt nodes
-      pilot.updateAutoPilot(newHandshakedPeers, newPivot, BlockchainData(newBlocks))
-
-      val watcher = TestProbe()
-      watcher.watch(syncController)
-
-      eventually {
-        someTimePasses()
-        // switch to regular download
-        val children = syncController.children
-        assert(storagesInstance.storages.appStateStorage.isFastSyncDone())
-        assert(children.exists(ref => ref.path.name.startsWith("regular-sync")))
-        assert(blockchainReader.getBestBlockNumber() == newPivot.number)
-      }
-  }
+  // Deleted: "update pivot block during state sync if it goes stale"
+  // This test relied on GetNodeData (ETH63-era state sync) which was removed in ETH68 per EIP-4938.
+  // ETH68 state sync uses SNAP protocol (see SNAPServerHandlerSpec for SNAP pivot refresh coverage).
 
   class TestSetup(
       _validators: Validators = new Mocks.MockValidatorsAlwaysSucceed
   ) extends EphemBlockchainTestSetup
       with TestSyncPeers
       with TestSyncConfig {
-
-    @volatile
-    var stateDownloadStarted = false
 
     // + cake overrides
     implicit override lazy val system: ActorSystem =
@@ -726,26 +658,6 @@ class SyncControllerSpec
               this
             }
 
-          // Handle ETH66 GetNodeData (with requestId)
-          case SendMessage(msg: ETH66GetNodeDataEnc, peer) if !onlyPivot =>
-            val requestId = msg.underlyingMsg.requestId
-            stateDownloadStarted = true
-            if (!failedNodeRequest) {
-              sender ! MessageFromPeer(
-                ETH66NodeData(requestId, RLPList(RLPValue(defaultStateMptLeafWithAccount.toArray))),
-                peer
-              )
-            }
-            this
-
-          // Handle ETH63 GetNodeData (without requestId)
-          case SendMessage(msg: ETH63GetNodeDataEnc, peer) if !onlyPivot =>
-            stateDownloadStarted = true
-            if (!failedNodeRequest) {
-              sender ! MessageFromPeer(ETH63NodeData(Seq(defaultStateMptLeafWithAccount)), peer)
-            }
-            this
-
           case SendMessage(_, _) =>
             this
 
@@ -871,7 +783,10 @@ class SyncControllerSpec
     val defaultStateBeforeNodeRestart: SyncState = defaultState.copy(
       pivotBlock = beforeRestartPivot,
       bestBlockHeaderNumber = defaultExpectedPivotBlock,
-      nextBlockToFullyValidate = beforeRestartPivot.number + syncConfig.fastSyncBlockValidationX
+      nextBlockToFullyValidate = beforeRestartPivot.number + syncConfig.fastSyncBlockValidationX,
+      // ETH68: GetNodeData removed (EIP-4938). State download handled by SNAP sync (see SNAPServerHandlerSpec).
+      // Pre-seed stateSyncFinished=true so tests exercise the blockchain work phase (headers/bodies/receipts).
+      stateSyncFinished = true
     )
 
     def getHeaders(from: BigInt, number: BigInt): Seq[BlockHeader] = {
