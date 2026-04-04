@@ -9,6 +9,7 @@ import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistId
 import com.chipprbots.ethereum.network.p2p.Message
+import com.chipprbots.ethereum.network.p2p.messages.Capability
 
 final case class PeerId(value: String) extends BlacklistId
 
@@ -23,5 +24,6 @@ final case class Peer(
     incomingConnection: Boolean,
     source: Source[Message, NotUsed] = Source.empty,
     nodeId: Option[ByteString] = None,
+    negotiatedCapability: Option[Capability] = None,
     createTimeMillis: Long = System.currentTimeMillis
 )
