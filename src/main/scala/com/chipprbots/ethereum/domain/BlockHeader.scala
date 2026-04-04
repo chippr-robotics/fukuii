@@ -43,9 +43,38 @@ case class BlockHeader(
     copy(extraData = extraData.dropRight(n))
 
   val baseFee: Option[BigInt] = extraFields match {
-    case HefPostOlympia(fee) => Some(fee)
-    case _                   => None
+    case HefPostOlympia(fee)           => Some(fee)
+    case HefPostShanghai(fee, _)       => Some(fee)
+    case HefPostCancun(fee, _, _, _, _) => Some(fee)
+    case _                             => None
   }
+
+  val withdrawalsRoot: Option[ByteString] = extraFields match {
+    case HefPostShanghai(_, wr)       => Some(wr)
+    case HefPostCancun(_, wr, _, _, _) => Some(wr)
+    case _                            => None
+  }
+
+  val blobGasUsed: Option[BigInt] = extraFields match {
+    case HefPostCancun(_, _, bgu, _, _) => Some(bgu)
+    case _                              => None
+  }
+
+  val excessBlobGas: Option[BigInt] = extraFields match {
+    case HefPostCancun(_, _, _, ebg, _) => Some(ebg)
+    case _                              => None
+  }
+
+  val parentBeaconBlockRoot: Option[ByteString] = extraFields match {
+    case HefPostCancun(_, _, _, _, pbbr) => Some(pbbr)
+    case _                               => None
+  }
+
+  /** True if this is a post-merge block (difficulty == 0, used as prevRandao). */
+  def isPostMerge: Boolean = difficulty == 0 && baseFee.isDefined
+
+  /** Post-merge, mixHash carries the prevRandao value from the beacon chain. */
+  def prevRandao: Option[ByteString] = if (isPostMerge) Some(mixHash) else None
 
   def isParentOf(child: BlockHeader): Boolean = number + 1 == child.number && child.parentHash == hash
 
@@ -105,8 +134,10 @@ object BlockHeader {
 
     val numberOfPowFields = 2
     val numberOfExtraFields = blockHeader.extraFields match {
-      case HefPostOlympia(_) => 1 // baseFee
-      case HefEmpty          => 0
+      case HefPostCancun(_, _, _, _, _) => 5 // baseFee + withdrawalsRoot + blobGasUsed + excessBlobGas + parentBeaconBlockRoot
+      case HefPostShanghai(_, _)        => 2 // baseFee + withdrawalsRoot
+      case HefPostOlympia(_)            => 1 // baseFee
+      case HefEmpty                     => 0
     }
 
     val baseFields = rlpList.items.dropRight(numberOfPowFields + numberOfExtraFields)
@@ -120,6 +151,18 @@ object BlockHeader {
   object HeaderExtraFields {
     case object HefEmpty extends HeaderExtraFields
     case class HefPostOlympia(baseFee: BigInt) extends HeaderExtraFields
+
+    /** Shanghai: adds withdrawalsRoot to the header (EIP-4895). RLP = 17 items. */
+    case class HefPostShanghai(baseFee: BigInt, withdrawalsRoot: ByteString) extends HeaderExtraFields
+
+    /** Cancun: adds blob gas fields and parent beacon block root (EIP-4844, EIP-4788). RLP = 20 items. */
+    case class HefPostCancun(
+        baseFee: BigInt,
+        withdrawalsRoot: ByteString,
+        blobGasUsed: BigInt,
+        excessBlobGas: BigInt,
+        parentBeaconBlockRoot: ByteString
+    ) extends HeaderExtraFields
   }
 }
 
@@ -135,46 +178,46 @@ object BlockHeaderImplicits {
   implicit class BlockHeaderEnc(blockHeader: BlockHeader) extends RLPSerializable {
     override def toRLPEncodable: RLPEncodeable = {
       import blockHeader._
-      extraFields match {
-        case HefPostOlympia(bf) =>
-          RLPList(
-            parentHash.toArray,
-            ommersHash.toArray,
-            beneficiary.toArray,
-            stateRoot.toArray,
-            transactionsRoot.toArray,
-            receiptsRoot.toArray,
-            logsBloom.toArray,
-            RLPValue(ByteUtils.bigIntToUnsignedByteArray(difficulty)),
-            RLPValue(ByteUtils.bigIntToUnsignedByteArray(number)),
-            RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasLimit)),
-            RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasUsed)),
-            RLPValue(ByteUtils.bigIntToUnsignedByteArray(unixTimestamp)),
-            extraData.toArray,
-            mixHash.toArray,
-            nonce.toArray,
-            RLPValue(ByteUtils.bigIntToUnsignedByteArray(bf))
-          )
 
-        case HefEmpty =>
-          RLPList(
-            parentHash.toArray,
-            ommersHash.toArray,
-            beneficiary.toArray,
-            stateRoot.toArray,
-            transactionsRoot.toArray,
-            receiptsRoot.toArray,
-            logsBloom.toArray,
-            RLPValue(ByteUtils.bigIntToUnsignedByteArray(difficulty)),
-            RLPValue(ByteUtils.bigIntToUnsignedByteArray(number)),
-            RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasLimit)),
-            RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasUsed)),
-            RLPValue(ByteUtils.bigIntToUnsignedByteArray(unixTimestamp)),
-            extraData.toArray,
-            mixHash.toArray,
-            nonce.toArray
+      val baseItems: Seq[RLPEncodeable] = Seq(
+        RLPValue(parentHash.toArray),
+        RLPValue(ommersHash.toArray),
+        RLPValue(beneficiary.toArray),
+        RLPValue(stateRoot.toArray),
+        RLPValue(transactionsRoot.toArray),
+        RLPValue(receiptsRoot.toArray),
+        RLPValue(logsBloom.toArray),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(difficulty)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(number)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasLimit)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(gasUsed)),
+        RLPValue(ByteUtils.bigIntToUnsignedByteArray(unixTimestamp)),
+        RLPValue(extraData.toArray),
+        RLPValue(mixHash.toArray),
+        RLPValue(nonce.toArray)
+      )
+
+      val extraItems: Seq[RLPEncodeable] = extraFields match {
+        case HefPostCancun(bf, wr, bgu, ebg, pbbr) =>
+          Seq(
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(bf)),
+            RLPValue(wr.toArray),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(bgu)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(ebg)),
+            RLPValue(pbbr.toArray)
           )
+        case HefPostShanghai(bf, wr) =>
+          Seq(
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(bf)),
+            RLPValue(wr.toArray)
+          )
+        case HefPostOlympia(bf) =>
+          Seq(RLPValue(ByteUtils.bigIntToUnsignedByteArray(bf)))
+        case HefEmpty =>
+          Seq.empty
       }
+
+      RLPList((baseItems ++ extraItems): _*)
     }
   }
 
@@ -183,83 +226,54 @@ object BlockHeaderImplicits {
   }
 
   implicit class BlockHeaderDec(val rlpEncodeable: RLPEncodeable) extends AnyVal {
-    def toBlockHeader: BlockHeader =
+    def toBlockHeader: BlockHeader = {
       rlpEncodeable match {
-        case RLPList(
-              parentHash,
-              ommersHash,
-              beneficiary,
-              stateRoot,
-              transactionsRoot,
-              receiptsRoot,
-              logsBloom,
-              difficulty,
-              number,
-              gasLimit,
-              gasUsed,
-              unixTimestamp,
-              extraData,
-              mixHash,
-              nonce,
-              encodedBaseFee
-            ) =>
-          val extraFields = HefPostOlympia(bigIntFromEncodeable(encodedBaseFee))
-          BlockHeader(
-            byteStringFromEncodeable(parentHash),
-            byteStringFromEncodeable(ommersHash),
-            byteStringFromEncodeable(beneficiary),
-            byteStringFromEncodeable(stateRoot),
-            byteStringFromEncodeable(transactionsRoot),
-            byteStringFromEncodeable(receiptsRoot),
-            byteStringFromEncodeable(logsBloom),
-            bigIntFromEncodeable(difficulty),
-            bigIntFromEncodeable(number),
-            bigIntFromEncodeable(gasLimit),
-            bigIntFromEncodeable(gasUsed),
-            longFromEncodeable(unixTimestamp),
-            byteStringFromEncodeable(extraData),
-            byteStringFromEncodeable(mixHash),
-            byteStringFromEncodeable(nonce),
-            extraFields
+        case rlpList: RLPList =>
+          val items = rlpList.items
+          if (items.length < 15)
+            throw new Exception(s"BlockHeader cannot be decoded: expected >= 15 items, got ${items.length}")
+
+          val base = BlockHeader(
+            parentHash = byteStringFromEncodeable(items(0)),
+            ommersHash = byteStringFromEncodeable(items(1)),
+            beneficiary = byteStringFromEncodeable(items(2)),
+            stateRoot = byteStringFromEncodeable(items(3)),
+            transactionsRoot = byteStringFromEncodeable(items(4)),
+            receiptsRoot = byteStringFromEncodeable(items(5)),
+            logsBloom = byteStringFromEncodeable(items(6)),
+            difficulty = bigIntFromEncodeable(items(7)),
+            number = bigIntFromEncodeable(items(8)),
+            gasLimit = bigIntFromEncodeable(items(9)),
+            gasUsed = bigIntFromEncodeable(items(10)),
+            unixTimestamp = longFromEncodeable(items(11)),
+            extraData = byteStringFromEncodeable(items(12)),
+            mixHash = byteStringFromEncodeable(items(13)),
+            nonce = byteStringFromEncodeable(items(14))
           )
 
-        case RLPList(
-              parentHash,
-              ommersHash,
-              beneficiary,
-              stateRoot,
-              transactionsRoot,
-              receiptsRoot,
-              logsBloom,
-              difficulty,
-              number,
-              gasLimit,
-              gasUsed,
-              unixTimestamp,
-              extraData,
-              mixHash,
-              nonce
-            ) =>
-          BlockHeader(
-            byteStringFromEncodeable(parentHash),
-            byteStringFromEncodeable(ommersHash),
-            byteStringFromEncodeable(beneficiary),
-            byteStringFromEncodeable(stateRoot),
-            byteStringFromEncodeable(transactionsRoot),
-            byteStringFromEncodeable(receiptsRoot),
-            byteStringFromEncodeable(logsBloom),
-            bigIntFromEncodeable(difficulty),
-            bigIntFromEncodeable(number),
-            bigIntFromEncodeable(gasLimit),
-            bigIntFromEncodeable(gasUsed),
-            longFromEncodeable(unixTimestamp),
-            byteStringFromEncodeable(extraData),
-            byteStringFromEncodeable(mixHash),
-            byteStringFromEncodeable(nonce)
-          )
+          items.length match {
+            case 15 => base // HefEmpty
+            case 16 => base.copy(extraFields = HefPostOlympia(bigIntFromEncodeable(items(15))))
+            case 17 =>
+              base.copy(extraFields = HefPostShanghai(
+                baseFee = bigIntFromEncodeable(items(15)),
+                withdrawalsRoot = byteStringFromEncodeable(items(16))
+              ))
+            case n if n >= 20 =>
+              base.copy(extraFields = HefPostCancun(
+                baseFee = bigIntFromEncodeable(items(15)),
+                withdrawalsRoot = byteStringFromEncodeable(items(16)),
+                blobGasUsed = bigIntFromEncodeable(items(17)),
+                excessBlobGas = bigIntFromEncodeable(items(18)),
+                parentBeaconBlockRoot = byteStringFromEncodeable(items(19))
+              ))
+            case n =>
+              throw new Exception(s"BlockHeader cannot be decoded: unexpected item count $n")
+          }
 
         case _ =>
-          throw new Exception("BlockHeader cannot be decoded")
+          throw new Exception("BlockHeader cannot be decoded: not an RLPList")
       }
+    }
   }
 }

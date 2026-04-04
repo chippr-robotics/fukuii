@@ -680,6 +680,44 @@ trait JSONRpcHealthcheckerBuilder {
     )
 }
 
+trait EngineApiBuilder {
+  self: ActorSystemBuilder with BlockchainBuilder with BlockchainConfigBuilder with ConsensusBuilder with StorageBuilder with MiningBuilder =>
+
+  import com.chipprbots.ethereum.consensus.engine._
+
+  lazy val engineApiConfig: EngineApiHttpServer.Config = {
+    val rootConfig = com.typesafe.config.ConfigFactory.load()
+    val engineConf = scala.util.Try(rootConfig.getConfig("fukuii.network.engine-api")).toOption
+    EngineApiHttpServer.Config(
+      enabled = engineConf.flatMap(c => scala.util.Try(c.getBoolean("enabled")).toOption).getOrElse(false),
+      interface = engineConf.flatMap(c => scala.util.Try(c.getString("interface")).toOption).getOrElse("localhost"),
+      port = engineConf.flatMap(c => scala.util.Try(c.getInt("port")).toOption).getOrElse(8551),
+      jwtSecretPath = engineConf.flatMap(c => scala.util.Try(c.getString("jwt-secret-path")).toOption)
+    )
+  }
+
+  lazy val forkChoiceManager: ForkChoiceManager = new ForkChoiceManager(blockchainReader)
+
+  lazy val engineApiService: EngineApiService = new EngineApiService(
+    blockchainReader,
+    blockchainWriter,
+    blockExecution,
+    forkChoiceManager
+  )(blockchainConfig)
+
+  lazy val engineApiController: EngineApiController = new EngineApiController(engineApiService)
+
+  lazy val maybeEngineApiServer: Option[EngineApiHttpServer] = {
+    if (engineApiConfig.enabled) {
+      val jwtAuth = engineApiConfig.jwtSecretPath match {
+        case Some(path) => JwtAuthenticator.fromFile(path)
+        case None       => JwtAuthenticator.generateRandom()
+      }
+      Some(new EngineApiHttpServer(engineApiController, jwtAuth, engineApiConfig))
+    } else None
+  }
+}
+
 trait JSONRpcHttpServerBuilder {
   self: ActorSystemBuilder
     with BlockchainBuilder
@@ -908,6 +946,7 @@ trait Node
     with SSLContextBuilder
     with JSONRpcHttpServerBuilder
     with JSONRpcIpcServerBuilder
+    with EngineApiBuilder
     with ShutdownHookBuilder
     with Logger
     with GenesisDataLoaderBuilder

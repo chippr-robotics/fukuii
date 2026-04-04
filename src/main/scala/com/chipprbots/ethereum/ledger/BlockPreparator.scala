@@ -50,6 +50,12 @@ class BlockPreparator(
       block: Block,
       worldStateProxy: InMemoryWorldStateProxy
   )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy = {
+    // Post-merge: no PoW rewards, no ommer rewards. Process withdrawals instead.
+    if (block.header.isPostMerge) {
+      val worldAfterWithdrawals = processWithdrawals(block, worldStateProxy)
+      return worldAfterWithdrawals
+    }
+
     val blockNumber = block.header.number
     val minerRewardForBlock = blockRewardCalculator.calculateMiningRewardForBlock(blockNumber)
     val minerRewardForOmmers =
@@ -70,6 +76,30 @@ class BlockPreparator(
 
     // ECIP-1111: After Olympia activation, credit baseFee * gasUsed to treasury
     creditBaseFeeToTreasury(block.header, blockchainConfig.treasuryAddress, worldAfterOmmers)
+  }
+
+  /** EIP-4895: Process withdrawals from the beacon chain. Each withdrawal credits the target address
+    * with the specified amount (in Gwei, converted to Wei).
+    */
+  private def processWithdrawals(
+      block: Block,
+      world: InMemoryWorldStateProxy
+  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy = {
+    block.body.withdrawals match {
+      case Some(withdrawals) =>
+        withdrawals.foldLeft(world) { (ws, withdrawal) =>
+          val weiAmount = UInt256(withdrawal.amount * BigInt("1000000000")) // Gwei → Wei
+          log.debug(
+            "Processing withdrawal idx={} validator={} to {} amount={} Gwei",
+            withdrawal.index,
+            withdrawal.validatorIndex,
+            withdrawal.address,
+            withdrawal.amount
+          )
+          increaseAccountBalance(withdrawal.address, weiAmount)(ws)
+        }
+      case None => world
+    }
   }
 
   /** ECIP-1111: Credit baseFee revenue to the treasury address. This runs AFTER block rewards and ommer rewards,
@@ -389,6 +419,7 @@ class BlockPreparator(
               case _: LegacyTransaction         => legacyReceipt
               case _: TransactionWithAccessList => Type01Receipt(legacyReceipt)
               case _: TransactionWithDynamicFee => Type02Receipt(legacyReceipt)
+              case _: BlobTransaction           => Type03Receipt(legacyReceipt)
               case _: SetCodeTransaction        => Type04Receipt(legacyReceipt)
             }
 

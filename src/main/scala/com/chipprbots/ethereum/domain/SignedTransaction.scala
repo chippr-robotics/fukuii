@@ -79,6 +79,7 @@ object SignedTransaction {
       case legacyTransaction: LegacyTransaction => getLegacyBytesToSign(legacyTransaction, chainId)
       case twal: TransactionWithAccessList      => getTWALBytesToSign(twal)
       case twdf: TransactionWithDynamicFee      => getTWDFBytesToSign(twdf)
+      case btx: BlobTransaction                 => getBlobTxBytesToSign(btx)
       case sct: SetCodeTransaction              => getSCTBytesToSign(sct)
     }
 
@@ -116,6 +117,9 @@ object SignedTransaction {
         getTWALRawSignature(signedTransaction.signature)
       case _: TransactionWithDynamicFee =>
         // Type-2 uses same y-parity encoding as Type-1
+        getTWALRawSignature(signedTransaction.signature)
+      case _: BlobTransaction =>
+        // Type-3 uses same y-parity encoding as Type-1/Type-2
         getTWALRawSignature(signedTransaction.signature)
       case _: SetCodeTransaction =>
         // Type-4 uses same y-parity encoding as Type-1/Type-2
@@ -214,6 +218,9 @@ object SignedTransaction {
         getTWALEthereumSignature(rawSignature)
       case _: TransactionWithDynamicFee =>
         // Type-2 uses same y-parity encoding as Type-1
+        getTWALEthereumSignature(rawSignature)
+      case _: BlobTransaction =>
+        // Type-3 uses same y-parity encoding as Type-1/Type-2
         getTWALEthereumSignature(rawSignature)
       case _: SetCodeTransaction =>
         // Type-4 uses same y-parity encoding as Type-1/Type-2
@@ -390,6 +397,7 @@ object SignedTransaction {
         }
       case twal: TransactionWithAccessList => Some(twal.chainId)
       case twdf: TransactionWithDynamicFee => Some(twdf.chainId)
+      case btx: BlobTransaction            => Some(btx.chainId)
       case sct: SetCodeTransaction         => Some(sct.chainId)
     }
     chainIdOpt
@@ -409,6 +417,7 @@ object SignedTransaction {
       case _: LegacyTransaction            => getLegacyBytesToSign(signedTransaction)
       case twal: TransactionWithAccessList => getTWALBytesToSign(twal)
       case twdf: TransactionWithDynamicFee => getTWDFBytesToSign(twdf)
+      case btx: BlobTransaction            => getBlobTxBytesToSign(btx)
       case sct: SetCodeTransaction         => getSCTBytesToSign(sct)
     }
 
@@ -477,6 +486,31 @@ object SignedTransaction {
             tx.value,
             tx.payload,
             tx.accessList
+          )
+        )
+      )
+    )
+  }
+
+  private def getBlobTxBytesToSign(tx: BlobTransaction): Array[Byte] = {
+    import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.accessListItemCodec
+    val receivingAddressAsArray: Array[Byte] = tx.receivingAddress.map(_.toArray).getOrElse(Array.empty[Byte])
+    crypto.kec256(
+      rlpEncode(
+        PrefixedRLPEncodable(
+          0x03,
+          RLPList(
+            tx.chainId,
+            tx.nonce,
+            tx.maxPriorityFeePerGas,
+            tx.maxFeePerGas,
+            tx.gasLimit,
+            receivingAddressAsArray,
+            tx.value,
+            tx.payload,
+            tx.accessList,
+            tx.maxFeePerBlobGas,
+            RLPList(tx.blobVersionedHashes.map(h => RLPValue(h.toArray)): _*)
           )
         )
       )

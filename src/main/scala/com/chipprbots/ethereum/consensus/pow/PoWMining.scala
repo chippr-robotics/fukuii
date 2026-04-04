@@ -19,6 +19,7 @@ import com.chipprbots.ethereum.consensus.mining.Protocol.AdditionalPoWProtocolDa
 import com.chipprbots.ethereum.consensus.mining.Protocol.MockedPow
 import com.chipprbots.ethereum.consensus.mining.Protocol.NoAdditionalPoWData
 import com.chipprbots.ethereum.consensus.mining.Protocol.PoW
+import com.chipprbots.ethereum.consensus.mining.Protocol.EngineApi
 import com.chipprbots.ethereum.consensus.mining.Protocol.RestrictedPoW
 import com.chipprbots.ethereum.consensus.mining.Protocol.RestrictedPoWMinerData
 import com.chipprbots.ethereum.consensus.mining.TestMining
@@ -121,6 +122,8 @@ class PoWMining private (
           case MockedPow =>
             log.info("Instantiating MockedMiner")
             mockedMinerRef = Some(MockedMiner(node))
+          case EngineApi =>
+            log.info("Engine API mode — mining disabled (blocks from CL)")
         }
         sendMiner(MinerProtocol.StartMining)
       }

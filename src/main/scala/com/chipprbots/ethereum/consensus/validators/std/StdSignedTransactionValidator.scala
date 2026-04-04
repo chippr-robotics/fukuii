@@ -111,6 +111,9 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
       case _: TransactionWithDynamicFee =>
         // EIP-1559 Type-2 transactions use y-parity (0 or 1) for v, same as Type-1
         stx.signature.v == ECDSASignature.negativeYParity || stx.signature.v == ECDSASignature.positiveYParity
+      case _: BlobTransaction =>
+        // EIP-4844 Type-3 transactions use y-parity (0 or 1) for v, same as Type-1/Type-2
+        stx.signature.v == ECDSASignature.negativeYParity || stx.signature.v == ECDSASignature.positiveYParity
       case _: TransactionWithAccessList =>
         // EIP-2930+ transactions use y-parity (0 or 1) for v
         stx.signature.v == ECDSASignature.negativeYParity || stx.signature.v == ECDSASignature.positiveYParity

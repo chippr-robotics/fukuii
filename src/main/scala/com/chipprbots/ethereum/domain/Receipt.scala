@@ -107,6 +107,11 @@ case class Type02Receipt(legacyReceipt: LegacyReceipt) extends TypedLegacyReceip
   override def toString: String = legacyReceipt.toPrettyString("Type02Receipt")
 }
 
+/** EIP-4844 receipt for Transaction type 3 (blob) */
+case class Type03Receipt(legacyReceipt: LegacyReceipt) extends TypedLegacyReceipt(Transaction.Type03, legacyReceipt) {
+  override def toString: String = legacyReceipt.toPrettyString("Type03Receipt")
+}
+
 /** EIP-7702 receipt for Transaction type 4 */
 case class Type04Receipt(legacyReceipt: LegacyReceipt) extends TypedLegacyReceipt(Transaction.Type04, legacyReceipt) {
   override def toString: String = legacyReceipt.toPrettyString("Type04Receipt")

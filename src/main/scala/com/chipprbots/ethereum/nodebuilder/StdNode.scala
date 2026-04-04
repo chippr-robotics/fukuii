@@ -62,6 +62,8 @@ abstract class BaseNode extends Node {
 
     startJsonRpcIpcServer()
 
+    startEngineApiServer()
+
     startPeriodicDBConsistencyCheck()
 
     startTuiUpdater()
@@ -128,6 +130,12 @@ abstract class BaseNode extends Node {
 
   private[this] def startJsonRpcIpcServer(): Unit =
     if (jsonRpcConfig.ipcServerConfig.enabled) jsonRpcIpcServer.run()
+
+  private[this] def startEngineApiServer(): Unit =
+    maybeEngineApiServer.foreach { server =>
+      server.start()
+      log.info(s"Engine API server started on ${engineApiConfig.interface}:${engineApiConfig.port}")
+    }
 
   def startPeriodicDBConsistencyCheck(): Unit =
     if (Config.Db.periodicConsistencyCheck)
