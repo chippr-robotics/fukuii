@@ -61,6 +61,7 @@ import com.chipprbots.ethereum.network.rlpx.AuthHandshaker
 import com.chipprbots.ethereum.ommers.OmmersPool
 import com.chipprbots.ethereum.security.SSLContextBuilder
 import com.chipprbots.ethereum.security.SecureRandomBuilder
+import com.chipprbots.ethereum.transactions.ETH65TxHandlerActor
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.TransactionHistoryService
 import com.chipprbots.ethereum.utils.Config.SyncConfig
@@ -387,7 +388,8 @@ trait BlockchainHostBuilder {
     with StorageBuilder
     with PeerManagerActorBuilder
     with NetworkPeerManagerActorBuilder
-    with PeerEventBusBuilder =>
+    with PeerEventBusBuilder
+    with PendingTransactionsManagerBuilder =>
 
   val blockchainHost: ActorRef = system.actorOf(
     BlockchainHostActor.props(
@@ -395,11 +397,24 @@ trait BlockchainHostBuilder {
       storagesInstance.storages.evmCodeStorage,
       peerConfiguration,
       peerEventBus,
-      networkPeerManager
+      networkPeerManager,
+      Some(pendingTransactionsManager)
     ),
     "blockchain-host"
   )
 
+}
+
+trait ETH65TxHandlerActorBuilder {
+  self: ActorSystemBuilder
+    with NetworkPeerManagerActorBuilder
+    with PendingTransactionsManagerBuilder
+    with PeerEventBusBuilder =>
+
+  val eth65TxHandler: ActorRef = system.actorOf(
+    ETH65TxHandlerActor.props(networkPeerManager, pendingTransactionsManager, peerEventBus),
+    "eth65-tx-handler"
+  )
 }
 
 trait ServerActorBuilder {
@@ -1090,6 +1105,7 @@ trait Node
     with OmmersPoolBuilder
     with NetworkPeerManagerActorBuilder
     with BlockchainHostBuilder
+    with ETH65TxHandlerActorBuilder
     with FilterManagerBuilder
     with FilterConfigBuilder
     with TxPoolConfigBuilder
