@@ -38,12 +38,16 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
         handleExchangeCapabilities(request)
       case "engine_getPayloadV1" | "engine_getPayloadV2" | "engine_getPayloadV3" | "engine_getPayloadV4" =>
         handleGetPayload(request)
+      case "engine_getBlobsV1" =>
+        handleGetBlobs(request)
       case "engine_getPayloadBodiesByHashV1" =>
         handleGetPayloadBodiesByHash(request)
       case "engine_getPayloadBodiesByRangeV1" =>
         handleGetPayloadBodiesByRange(request)
       // CL clients also send eth_* methods through the authrpc port
       case "eth_syncing" =>
+        // Return false (not syncing) — CL uses forkchoiceUpdated SYNCING status to know
+        // we need blocks, not eth_syncing. Returning false tells CL the EL is responsive.
         IO.pure(JsonRpcResponse("2.0", Some(JBool(false)), None, reqId(request)))
       case "eth_getBlockByNumber" =>
         // Return null for now — CL just checks if EL is responsive
@@ -66,7 +70,13 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
       case Some(payloadJson: JObject) =>
         var payload = decodeExecutionPayload(payloadJson)
 
-        // V3+: second param is versioned hashes array, third param is parentBeaconBlockRoot
+        // V3+: second param is versioned hashes array (ignored for now),
+        //       third param is parentBeaconBlockRoot
+        if (version >= 3) {
+          val parentBeaconBlockRoot = params.lift(2).collect { case JString(hex) => hexToByteString(hex) }
+          payload = payload.copy(parentBeaconBlockRoot = parentBeaconBlockRoot)
+        }
+
         // V4: fourth param is executionRequests (EIP-7685)
         if (version >= 4) {
           val executionRequests = params.lift(3).collect { case JArray(items) =>
@@ -111,6 +121,16 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
   private def handleGetPayload(request: JsonRpcRequest): IO[JsonRpcResponse] = {
     // Stub — payload building not yet implemented
     IO.pure(JsonRpcResponse("2.0", None, Some(JsonRpcError(-38001, "Payload not available", None)), reqId(request)))
+  }
+
+  private def handleGetBlobs(request: JsonRpcRequest): IO[JsonRpcResponse] = {
+    // engine_getBlobsV1: return null for each requested versioned hash (we don't store blobs)
+    // Lighthouse will fall back to fetching blobs from CL peers
+    val hashes = request.params.map(_.arr).getOrElse(Nil).headOption.collect {
+      case JArray(items) => items
+    }.getOrElse(Nil)
+    val nullBlobs = hashes.map(_ => JNull)
+    IO.pure(JsonRpcResponse("2.0", Some(JArray(nullBlobs)), None, reqId(request)))
   }
 
   private def handleGetPayloadBodiesByHash(request: JsonRpcRequest): IO[JsonRpcResponse] = {

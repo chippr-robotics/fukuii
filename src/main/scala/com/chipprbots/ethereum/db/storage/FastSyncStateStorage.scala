@@ -38,6 +38,7 @@ class FastSyncStateStorage(val dataSource: DataSource)
       .addConcreteType[HefPostOlympia]
       .addConcreteType[HefPostShanghai]
       .addConcreteType[HefPostCancun]
+      .addConcreteType[HefPostPrague]
 
   implicit val hashTypePickler: CompositePickler[HashType] =
     compositePickler[HashType]

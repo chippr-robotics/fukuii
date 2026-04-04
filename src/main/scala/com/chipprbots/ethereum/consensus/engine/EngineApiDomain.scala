@@ -28,7 +28,9 @@ case class ExecutionPayload(
     // Cancun+
     blobGasUsed: Option[BigInt] = None,
     excessBlobGas: Option[BigInt] = None,
-    // Prague/Electra+ (EIP-7685)
+    // Cancun+ (passed as separate newPayload param, not in payload object)
+    parentBeaconBlockRoot: Option[ByteString] = None,
+    // Prague/Electra+ (EIP-7685, passed as separate newPayload param)
     executionRequests: Option[Seq[ByteString]] = None
 )
 

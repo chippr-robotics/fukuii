@@ -50,6 +50,7 @@ object BlockHelpers extends SecureRandomBuilder {
     case HeaderExtraFields.HefPostOlympia(baseFee)           => HeaderExtraFields.HefPostOlympia(baseFee)
     case s: HeaderExtraFields.HefPostShanghai                => s
     case c: HeaderExtraFields.HefPostCancun                  => c
+    case p: HeaderExtraFields.HefPostPrague                  => p
   }
 
   def generateBlock(parent: Block): Block = {

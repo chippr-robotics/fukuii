@@ -30,12 +30,14 @@ object Picklers {
   implicit val hefPostOlympiaPickler: Pickler[HefPostOlympia] = generatePickler[HefPostOlympia]
   implicit val hefPostShanghaiPickler: Pickler[HefPostShanghai] = generatePickler[HefPostShanghai]
   implicit val hefPostCancunPickler: Pickler[HefPostCancun] = generatePickler[HefPostCancun]
+  implicit val hefPostPraguePickler: Pickler[HefPostPrague] = generatePickler[HefPostPrague]
 
   implicit val extraFieldsPickler: Pickler[HeaderExtraFields] = compositePickler[HeaderExtraFields]
     .addConcreteType[HefEmpty.type]
     .addConcreteType[HefPostOlympia]
     .addConcreteType[HefPostShanghai]
     .addConcreteType[HefPostCancun]
+    .addConcreteType[HefPostPrague]
 
   implicit val addressPickler: Pickler[Address] =
     transformPickler[Address, ByteString](bytes => Address(bytes))(address => address.bytes)

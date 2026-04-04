@@ -43,30 +43,40 @@ case class BlockHeader(
     copy(extraData = extraData.dropRight(n))
 
   val baseFee: Option[BigInt] = extraFields match {
-    case HefPostOlympia(fee)           => Some(fee)
-    case HefPostShanghai(fee, _)       => Some(fee)
-    case HefPostCancun(fee, _, _, _, _) => Some(fee)
-    case _                             => None
+    case HefPostOlympia(fee)              => Some(fee)
+    case HefPostShanghai(fee, _)          => Some(fee)
+    case HefPostCancun(fee, _, _, _, _)   => Some(fee)
+    case HefPostPrague(fee, _, _, _, _, _) => Some(fee)
+    case _                                => None
   }
 
   val withdrawalsRoot: Option[ByteString] = extraFields match {
-    case HefPostShanghai(_, wr)       => Some(wr)
-    case HefPostCancun(_, wr, _, _, _) => Some(wr)
-    case _                            => None
+    case HefPostShanghai(_, wr)          => Some(wr)
+    case HefPostCancun(_, wr, _, _, _)   => Some(wr)
+    case HefPostPrague(_, wr, _, _, _, _) => Some(wr)
+    case _                               => None
   }
 
   val blobGasUsed: Option[BigInt] = extraFields match {
-    case HefPostCancun(_, _, bgu, _, _) => Some(bgu)
-    case _                              => None
+    case HefPostCancun(_, _, bgu, _, _)   => Some(bgu)
+    case HefPostPrague(_, _, bgu, _, _, _) => Some(bgu)
+    case _                                => None
   }
 
   val excessBlobGas: Option[BigInt] = extraFields match {
-    case HefPostCancun(_, _, _, ebg, _) => Some(ebg)
-    case _                              => None
+    case HefPostCancun(_, _, _, ebg, _)   => Some(ebg)
+    case HefPostPrague(_, _, _, ebg, _, _) => Some(ebg)
+    case _                                => None
   }
 
   val parentBeaconBlockRoot: Option[ByteString] = extraFields match {
-    case HefPostCancun(_, _, _, _, pbbr) => Some(pbbr)
+    case HefPostCancun(_, _, _, _, pbbr)   => Some(pbbr)
+    case HefPostPrague(_, _, _, _, pbbr, _) => Some(pbbr)
+    case _                                 => None
+  }
+
+  val requestsHash: Option[ByteString] = extraFields match {
+    case HefPostPrague(_, _, _, _, _, rh) => Some(rh)
     case _                               => None
   }
 
@@ -134,10 +144,11 @@ object BlockHeader {
 
     val numberOfPowFields = 2
     val numberOfExtraFields = blockHeader.extraFields match {
-      case HefPostCancun(_, _, _, _, _) => 5 // baseFee + withdrawalsRoot + blobGasUsed + excessBlobGas + parentBeaconBlockRoot
-      case HefPostShanghai(_, _)        => 2 // baseFee + withdrawalsRoot
-      case HefPostOlympia(_)            => 1 // baseFee
-      case HefEmpty                     => 0
+      case HefPostPrague(_, _, _, _, _, _) => 6
+      case HefPostCancun(_, _, _, _, _)    => 5
+      case HefPostShanghai(_, _)           => 2
+      case HefPostOlympia(_)               => 1
+      case HefEmpty                        => 0
     }
 
     val baseFields = rlpList.items.dropRight(numberOfPowFields + numberOfExtraFields)
@@ -162,6 +173,16 @@ object BlockHeader {
         blobGasUsed: BigInt,
         excessBlobGas: BigInt,
         parentBeaconBlockRoot: ByteString
+    ) extends HeaderExtraFields
+
+    /** Prague/Electra: adds requestsHash (EIP-7685). RLP = 21 items. */
+    case class HefPostPrague(
+        baseFee: BigInt,
+        withdrawalsRoot: ByteString,
+        blobGasUsed: BigInt,
+        excessBlobGas: BigInt,
+        parentBeaconBlockRoot: ByteString,
+        requestsHash: ByteString
     ) extends HeaderExtraFields
   }
 }
@@ -198,6 +219,15 @@ object BlockHeaderImplicits {
       )
 
       val extraItems: Seq[RLPEncodeable] = extraFields match {
+        case HefPostPrague(bf, wr, bgu, ebg, pbbr, rh) =>
+          Seq(
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(bf)),
+            RLPValue(wr.toArray),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(bgu)),
+            RLPValue(ByteUtils.bigIntToUnsignedByteArray(ebg)),
+            RLPValue(pbbr.toArray),
+            RLPValue(rh.toArray)
+          )
         case HefPostCancun(bf, wr, bgu, ebg, pbbr) =>
           Seq(
             RLPValue(ByteUtils.bigIntToUnsignedByteArray(bf)),
@@ -259,13 +289,22 @@ object BlockHeaderImplicits {
                 baseFee = bigIntFromEncodeable(items(15)),
                 withdrawalsRoot = byteStringFromEncodeable(items(16))
               ))
-            case n if n >= 20 =>
+            case 20 =>
               base.copy(extraFields = HefPostCancun(
                 baseFee = bigIntFromEncodeable(items(15)),
                 withdrawalsRoot = byteStringFromEncodeable(items(16)),
                 blobGasUsed = bigIntFromEncodeable(items(17)),
                 excessBlobGas = bigIntFromEncodeable(items(18)),
                 parentBeaconBlockRoot = byteStringFromEncodeable(items(19))
+              ))
+            case n if n >= 21 =>
+              base.copy(extraFields = HefPostPrague(
+                baseFee = bigIntFromEncodeable(items(15)),
+                withdrawalsRoot = byteStringFromEncodeable(items(16)),
+                blobGasUsed = bigIntFromEncodeable(items(17)),
+                excessBlobGas = bigIntFromEncodeable(items(18)),
+                parentBeaconBlockRoot = byteStringFromEncodeable(items(19)),
+                requestsHash = byteStringFromEncodeable(items(20))
               ))
             case n =>
               throw new Exception(s"BlockHeader cannot be decoded: unexpected item count $n")

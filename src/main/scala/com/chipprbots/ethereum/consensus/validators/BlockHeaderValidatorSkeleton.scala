@@ -8,6 +8,7 @@ import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostCancun
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostOlympia
+import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostPrague
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostShanghai
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.DaoForkConfig
@@ -212,9 +213,10 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
     val isOlympiaActivated = blockHeader.number >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
 
     blockHeader.extraFields match {
-      case HefPostCancun(_, _, _, _, _) if isOlympiaActivated => Right(BlockHeaderValid)
-      case HefPostShanghai(_, _) if isOlympiaActivated        => Right(BlockHeaderValid)
-      case HefPostOlympia(_) if isOlympiaActivated            => Right(BlockHeaderValid)
+      case HefPostPrague(_, _, _, _, _, _) if isOlympiaActivated => Right(BlockHeaderValid)
+      case HefPostCancun(_, _, _, _, _) if isOlympiaActivated   => Right(BlockHeaderValid)
+      case HefPostShanghai(_, _) if isOlympiaActivated          => Right(BlockHeaderValid)
+      case HefPostOlympia(_) if isOlympiaActivated              => Right(BlockHeaderValid)
       case HefEmpty if !isOlympiaActivated                    => Right(BlockHeaderValid)
       case _ =>
         Left(HeaderExtraFieldsError(blockHeader.extraFields))

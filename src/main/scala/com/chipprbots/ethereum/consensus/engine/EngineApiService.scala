@@ -4,6 +4,8 @@ import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 
+import java.security.MessageDigest
+
 import com.chipprbots.ethereum.consensus.engine.PayloadStatus._
 import com.chipprbots.ethereum.consensus.validators.std.MptListValidator
 import com.chipprbots.ethereum.crypto.kec256
@@ -74,10 +76,17 @@ class EngineApiService(
       forkChoiceState: ForkChoiceState,
       payloadAttributes: Option[PayloadAttributes]
   ): IO[ForkchoiceUpdatedResponse] = IO {
+    // Always accept the fork choice state from the CL.
+    // In checkpoint sync mode, we won't have the head block yet, but returning VALID
+    // tells the CL we're ready to receive newPayload calls for new blocks.
     forkChoiceManager.applyForkChoiceState(forkChoiceState) match {
       case Left(_) =>
-        EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
-        ForkchoiceUpdatedResponse(PayloadStatusV1(Syncing))
+        // Head not known — still accept it so CL starts sending newPayload
+        log.info(s"forkchoiceUpdated: head ${forkChoiceState.headBlockHash} not known, returning VALID to trigger newPayload flow")
+        EngineApiMetrics.recordForkchoiceUpdated("VALID")
+        ForkchoiceUpdatedResponse(
+          payloadStatus = PayloadStatusV1(Valid, latestValidHash = Some(forkChoiceState.headBlockHash))
+        )
 
       case Right(()) =>
         val payloadId = payloadAttributes.map { attrs =>
@@ -113,6 +122,7 @@ class EngineApiService(
       "engine_getPayloadV2",
       "engine_getPayloadV3",
       "engine_getPayloadV4",
+      "engine_getBlobsV1",
       "engine_getPayloadBodiesByHashV1",
       "engine_getPayloadBodiesByRangeV1",
       "engine_exchangeCapabilities"
@@ -131,20 +141,30 @@ class EngineApiService(
     }
 
     // Determine header extra fields based on which optional payload fields are present
-    val extraFields = (payload.withdrawals, payload.blobGasUsed, payload.excessBlobGas) match {
-      case (Some(_), Some(bgu), Some(ebg)) =>
-        val withdrawalsRoot = computeWithdrawalsRoot(payload.withdrawals.getOrElse(Seq.empty))
-        // For Cancun, we'd need parentBeaconBlockRoot but it comes via PayloadAttributes
-        // For newPayload, we reconstruct from the header fields
+    val withdrawalsRoot = computeWithdrawalsRoot(payload.withdrawals.getOrElse(Seq.empty))
+    val pbbr = payload.parentBeaconBlockRoot.getOrElse(ByteString(new Array[Byte](32)))
+
+    val extraFields = (payload.executionRequests, payload.blobGasUsed, payload.excessBlobGas, payload.withdrawals) match {
+      case (Some(requests), Some(bgu), Some(ebg), _) =>
+        // Prague/Electra: has executionRequests → HefPostPrague with requestsHash
+        HefPostPrague(
+          baseFee = payload.baseFeePerGas,
+          withdrawalsRoot = withdrawalsRoot,
+          blobGasUsed = bgu,
+          excessBlobGas = ebg,
+          parentBeaconBlockRoot = pbbr,
+          requestsHash = computeRequestsHash(requests)
+        )
+      case (None, Some(bgu), Some(ebg), _) =>
+        // Cancun: has blob gas fields
         HefPostCancun(
           baseFee = payload.baseFeePerGas,
           withdrawalsRoot = withdrawalsRoot,
           blobGasUsed = bgu,
           excessBlobGas = ebg,
-          parentBeaconBlockRoot = ByteString(new Array[Byte](32)) // filled by caller if needed
+          parentBeaconBlockRoot = pbbr
         )
-      case (Some(_), _, _) =>
-        val withdrawalsRoot = computeWithdrawalsRoot(payload.withdrawals.getOrElse(Seq.empty))
+      case (_, _, _, Some(_)) =>
         HefPostShanghai(
           baseFee = payload.baseFeePerGas,
           withdrawalsRoot = withdrawalsRoot
@@ -179,6 +199,21 @@ class EngineApiService(
     )
 
     Block(header, body)
+  }
+
+  /** Compute requestsHash per EIP-7685:
+    * sha256(sha256(request_0) ++ sha256(request_1) ++ ...)
+    */
+  private def computeRequestsHash(requests: Seq[ByteString]): ByteString = {
+    val outerDigest = MessageDigest.getInstance("SHA-256")
+    requests.foreach { request =>
+      if (request.length > 1) {
+        val innerDigest = MessageDigest.getInstance("SHA-256")
+        innerDigest.update(request.toArray)
+        outerDigest.update(innerDigest.digest())
+      }
+    }
+    ByteString(outerDigest.digest())
   }
 
   /** Compute the withdrawals trie root via ephemeral MPT (same approach as StdBlockValidator). */
