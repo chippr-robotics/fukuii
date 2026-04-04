@@ -55,7 +55,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
 
     // GetHandshakedPeers should work properly
     requestSender.send(peersInfoHolder, GetHandshakedPeers)
-    requestSender.expectMsg(HandshakedPeers(Map(peer1 -> peer1Info, peer2 -> peer2Info)))
+    requestSender.expectMsg(HandshakedPeers(Map(peer1WithCapability -> peer1Info, peer2WithCapability -> peer2Info)))
   }
 
   it should "update max peer when receiving new block ETH63" taggedAs (UnitTest, NetworkTest) in new TestSetup {
@@ -191,7 +191,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
 
     // GetHandshakedPeers should work properly
     requestSender.send(peersInfoHolder, GetHandshakedPeers)
-    requestSender.expectMsg(HandshakedPeers(Map(peer1 -> peer1Info)))
+    requestSender.expectMsg(HandshakedPeers(Map(peer1WithCapability -> peer1Info)))
 
     peersInfoHolder ! PeerDisconnected(peer1.id)
 
@@ -228,7 +228,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     // After receiving peer best block number, peer should be provided as handshaked peer
     requestSender.send(peersInfoHolder, GetHandshakedPeers)
     requestSender.expectMsg(
-      HandshakedPeers(Map(freshPeer -> freshPeerInfo.withBestBlockData(newMaxBlock, firstHeader.hash)))
+      HandshakedPeers(Map(freshPeerWithCapability -> freshPeerInfo.withBestBlockData(newMaxBlock, firstHeader.hash)))
     )
   }
 
@@ -245,14 +245,14 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
 
     // if peer best block is its genesis block then it is available right from the start
     requestSender.send(peersInfoHolder, GetHandshakedPeers)
-    requestSender.expectMsg(HandshakedPeers(Map(freshPeer -> genesisInfo)))
+    requestSender.expectMsg(HandshakedPeers(Map(freshPeerWithCapability -> genesisInfo)))
 
     // Fresh peer received best block
     peersInfoHolder ! MessageFromPeer(BlockHeaders(Seq(Fixtures.Blocks.Genesis.header)), freshPeer.id)
 
     // receiving best block does not change a thing, as peer best block is it genesis
     requestSender.send(peersInfoHolder, GetHandshakedPeers)
-    requestSender.expectMsg(HandshakedPeers(Map(freshPeer -> genesisInfo)))
+    requestSender.expectMsg(HandshakedPeers(Map(freshPeerWithCapability -> genesisInfo)))
   }
 
   it should "skip GetBlockHeaders request when peer is at genesis to avoid disconnect" taggedAs (
@@ -280,7 +280,12 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
             com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.AccountRangeCode,
             com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.StorageRangesCode,
             com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.TrieNodesCode,
-            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.ByteCodesCode
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.ByteCodesCode,
+            // SNAP protocol request codes (server-side)
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccountRangeCode,
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetStorageRangesCode,
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode,
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetTrieNodesCode
           ),
           PeerSelector.WithId(peer1.id)
         )
@@ -546,6 +551,11 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
 
     val requestSender: TestProbe = TestProbe()
 
+    // Peers as stored by NetworkPeerManagerActor after handshake — capability is populated from remoteStatus
+    val peer1WithCapability: Peer    = peer1.copy(negotiatedCapability = Some(Capability.ETH63))
+    val peer2WithCapability: Peer    = peer2.copy(negotiatedCapability = Some(Capability.ETH63))
+    val freshPeerWithCapability: Peer = freshPeer.copy(negotiatedCapability = Some(Capability.ETH63))
+
     val baseBlockHeader = Fixtures.Blocks.Block3125369.header
     val baseBlockBody: BlockBody = BlockBody(Nil, Nil)
     val baseBlock: Block = Block(baseBlockHeader, baseBlockBody)
@@ -567,7 +577,12 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
               com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.AccountRangeCode,
               com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.StorageRangesCode,
               com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.TrieNodesCode,
-              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.ByteCodesCode
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.ByteCodesCode,
+              // SNAP protocol request codes (server-side)
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccountRangeCode,
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetStorageRangesCode,
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode,
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetTrieNodesCode
             ),
             PeerSelector.WithId(peer.id)
           )

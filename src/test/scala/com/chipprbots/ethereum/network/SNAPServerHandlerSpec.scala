@@ -259,6 +259,8 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
     val forkResolver = new ForkResolver.EtcForkResolver(blockchainConfig.daoForkConfig.get)
 
     blockchainWriter.storeBlockHeader(Fixtures.Blocks.Genesis.header).commit()
+    // Mark SNAP sync as done so the server-guard passes in all handler tests
+    storagesInstance.storages.appStateStorage.snapSyncDone().commit()
 
     val evmCodeStorage = storagesInstance.storages.evmCodeStorage
     val flatAccountStorage = storagesInstance.storages.flatAccountStorage
@@ -321,7 +323,11 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
               com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.AccountRangeCode,
               com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.StorageRangesCode,
               com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.TrieNodesCode,
-              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.ByteCodesCode
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.ByteCodesCode,
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccountRangeCode,
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetStorageRangesCode,
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode,
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetTrieNodesCode
             ),
             PeerSelector.WithId(peer.id)
           )
@@ -343,6 +349,7 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
     val forkResolver = new ForkResolver.EtcForkResolver(blockchainConfig.daoForkConfig.get)
 
     blockchainWriter.storeBlockHeader(Fixtures.Blocks.Genesis.header).commit()
+    storagesInstance.storages.appStateStorage.snapSyncDone().commit()
 
     val peerManager: TestProbe = TestProbe()
     val peerEventBus: TestProbe = TestProbe()
@@ -397,7 +404,11 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
             com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.AccountRangeCode,
             com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.StorageRangesCode,
             com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.TrieNodesCode,
-            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.ByteCodesCode
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.ByteCodesCode,
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccountRangeCode,
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetStorageRangesCode,
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode,
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetTrieNodesCode
           ),
           PeerSelector.WithId(peer1.id)
         )

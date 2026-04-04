@@ -47,10 +47,10 @@ echo "Data dir: $DATADIR"
 echo "SNAP server: ENABLED (Fukuii can SNAP sync from this peer)"
 echo ""
 
-# JVM flags: cap heap at 3G to coexist with Fukuii (-Xmx8g) and core-geth (~1.2G)
-# on a 32GB machine. Besu defaults to 25% of RAM (~8G) which causes OOM when
-# all three clients run simultaneously.
-export BESU_OPTS="${BESU_OPTS:--Xmx3g -Xms1g}"
+# JVM flags: 4G heap to coexist with Fukuii (-Xmx8g) and core-geth (~1.2G) on 32GB.
+# 3G was too tight — caused GC pauses exceeding Fukuii's 10s GetReceipts timeout,
+# leading to repeated static peer disconnect/reconnect cycles during SNAP sync.
+export BESU_OPTS="${BESU_OPTS:--Xmx4g -Xms1g}"
 echo "JVM opts: $BESU_OPTS"
 
 exec "$BINARY" \
@@ -64,6 +64,7 @@ exec "$BINARY" \
   --rpc-http-cors-origins="*" \
   --rpc-http-api=ADMIN,ETH,NET,WEB3 \
   --p2p-port=30304 \
+  --max-peers=10 \
   --data-storage-format=BONSAI \
   --sync-mode=SNAP \
   --sync-min-peers=1 \

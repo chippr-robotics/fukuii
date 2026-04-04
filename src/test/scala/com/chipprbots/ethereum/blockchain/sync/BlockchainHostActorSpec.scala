@@ -45,7 +45,7 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
     peerEventBus.expectMsg(
       Subscribe(
         MessageClassifier(
-          Set(Codes.GetNodeDataCode, Codes.GetReceiptsCode, Codes.GetBlockBodiesCode, Codes.GetBlockHeadersCode),
+          Set(Codes.GetNodeDataCode, Codes.GetReceiptsCode, Codes.GetBlockBodiesCode, Codes.GetBlockHeadersCode, Codes.GetPooledTransactionsCode),
           PeerSelector.AllPeers
         )
       )

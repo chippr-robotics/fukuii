@@ -269,8 +269,9 @@ class NetworkPeerManagerActor(
       // header's stateRoot (not bestHash which is a block hash) for GetAccountRange.
       // See handleReceivedMessage where the probe is sent after extracting stateRoot.
 
-      NetworkMetrics.registerAddHandshakedPeer(peer)
-      context.become(handleMessages(peersWithInfo + (peer.id -> PeerWithInfo(peer, peerInfo))))
+      val peerWithCapability = peer.copy(negotiatedCapability = Some(peerInfo.remoteStatus.capability))
+      NetworkMetrics.registerAddHandshakedPeer(peerWithCapability)
+      context.become(handleMessages(peersWithInfo + (peer.id -> PeerWithInfo(peerWithCapability, peerInfo))))
 
     case PeerDisconnected(peerId) if peersWithInfo.contains(peerId) =>
       peerEventBusActor ! Unsubscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peerId)))
@@ -552,6 +553,13 @@ class NetworkPeerManagerActor(
       s"Received GetAccountRange request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, start=${msg.startingHash.take(4).toHex}, limit=${msg.limitHash.take(4).toHex}, bytes=${msg.responseBytes}"
     )
 
+    // Guard: only serve SNAP state when sync is complete — state is incomplete during sync
+    if (!appStateStorage.isSnapSyncDone()) {
+      log.debug(s"[SNAP-SERVER] GetAccountRange from $peerId: SNAP sync not complete, sending empty response")
+      peerWithInfo.foreach(_.peer.ref ! PeerActor.SendMessage(AccountRange(msg.requestId, Seq.empty, Seq.empty)))
+      return
+    }
+
     peerWithInfo.foreach { pwi =>
       val responseLimit = msg.responseBytes.toLong.min(MaxSnapResponseBytes)
       flatAccountStorage match {
@@ -651,6 +659,12 @@ class NetworkPeerManagerActor(
       s"Received GetStorageRanges request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, accounts=${msg.accountHashes.size}, start=${msg.startingHash.take(4).toHex}, limit=${msg.limitHash.take(4).toHex}, bytes=${msg.responseBytes}"
     )
 
+    if (!appStateStorage.isSnapSyncDone()) {
+      log.debug(s"[SNAP-SERVER] GetStorageRanges from $peerId: SNAP sync not complete, sending empty response")
+      peerWithInfo.foreach(_.peer.ref ! PeerActor.SendMessage(StorageRanges(msg.requestId, Seq.empty, Seq.empty)))
+      return
+    }
+
     peerWithInfo.foreach { pwi =>
       val responseLimit = msg.responseBytes.toLong.min(MaxSnapResponseBytes)
       flatSlotStorage match {
@@ -733,6 +747,12 @@ class NetworkPeerManagerActor(
     log.debug(
       s"Received GetTrieNodes request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, paths=${msg.paths.size}, bytes=${msg.responseBytes}"
     )
+
+    if (!appStateStorage.isSnapSyncDone()) {
+      log.debug(s"[SNAP-SERVER] GetTrieNodes from $peerId: SNAP sync not complete, sending empty response")
+      peerWithInfo.foreach(_.peer.ref ! PeerActor.SendMessage(TrieNodes(msg.requestId, Seq.empty)))
+      return
+    }
 
     peerWithInfo.foreach { pwi =>
       val responseLimit = msg.responseBytes.toLong.min(MaxSnapResponseBytes)
@@ -994,6 +1014,12 @@ class NetworkPeerManagerActor(
       s"Received GetByteCodes request from peer $peerId: requestId=${msg.requestId}, hashes=${msg.hashes.size}, bytes=${msg.responseBytes}"
     )
 
+    if (!appStateStorage.isSnapSyncDone()) {
+      log.debug(s"[SNAP-SERVER] GetByteCodes from $peerId: SNAP sync not complete, sending empty response")
+      peerWithInfo.foreach(_.peer.ref ! PeerActor.SendMessage(ByteCodes(msg.requestId, Seq.empty)))
+      return
+    }
+
     peerWithInfo.foreach { pwi =>
       val responseLimit = msg.responseBytes.toLong.min(MaxSnapResponseBytes)
       val codes = evmCodeStorage match {
@@ -1030,11 +1056,16 @@ object NetworkPeerManagerActor {
     Codes.BlockHeadersCode,
     Codes.NewBlockCode,
     Codes.NewBlockHashesCode,
-    // SNAP protocol response codes (responses we receive from peers)
+    // SNAP protocol response codes (responses we receive from peers as a client)
     SNAP.Codes.AccountRangeCode,
     SNAP.Codes.StorageRangesCode,
     SNAP.Codes.TrieNodesCode,
-    SNAP.Codes.ByteCodesCode
+    SNAP.Codes.ByteCodesCode,
+    // SNAP protocol request codes (requests we receive from peers as a server)
+    SNAP.Codes.GetAccountRangeCode,
+    SNAP.Codes.GetStorageRangesCode,
+    SNAP.Codes.GetByteCodesCode,
+    SNAP.Codes.GetTrieNodesCode
   )
 
   /** RemoteStatus was created to decouple status information from protocol status messages (they are different versions
