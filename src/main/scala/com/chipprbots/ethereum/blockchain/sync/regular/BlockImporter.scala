@@ -116,6 +116,9 @@ class BlockImporter(
       val hash = kec256(node)
       log.info("Saving late-arriving fetched state node {}", ByteStringUtils.hash2string(hash))
       stateStorage.saveNode(hash, node.toArray, blockchainReader.getBestBlockNumber())
+      // Also save as contract code in case this was a bytecode fetch
+      try evmCodeStorage.put(hash, node).commit()
+      catch { case _: Exception => () }
   }
 
   private def resolvingMissingNode(blocksToRetry: NonEmptyList[Block], blockImportType: BlockImportType)(
@@ -691,14 +694,17 @@ class BlockImporter(
   /** Check if a block's transactions touch any contract whose code is missing from local storage. Returns the codeHash
     * of the first missing contract found.
     */
-  private def findMissingContractCode(block: Block): Option[ByteString] =
+  private def findMissingContractCode(block: Block): Option[ByteString] = {
+    // Use the parent block number — execution starts from the parent's state root.
+    // The failing block hasn't been imported yet, so its state root doesn't exist locally.
+    val parentBlockNumber = block.header.number - 1
     block.body.transactionList.iterator
       .flatMap { stx =>
         stx.tx.receivingAddress.flatMap { address =>
           try
             // Look up the account directly via blockchainReader
             blockchainReader
-              .getAccount(blockchainReader.getBestBranch(), address, block.header.number)
+              .getAccount(blockchainReader.getBestBranch(), address, parentBlockNumber)
               .flatMap { account =>
                 if (account.codeHash != Account.EmptyCodeHash) {
                   evmCodeStorage.get(account.codeHash) match {
@@ -714,11 +720,14 @@ class BlockImporter(
                 } else None
               }
           catch {
-            case _: Exception => None
+            case ex: Exception =>
+              log.warning("Failed to check contract code for {} at block {}: {}", address, parentBlockNumber, ex.getMessage)
+              None
           }
         }
       }
       .nextOption()
+  }
 
   private def bestKnownBlockNumber: BigInt = blockchainReader.getBestBlockNumber()
 
