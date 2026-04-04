@@ -287,6 +287,14 @@ class StorageRangeCoordinator(
   private val proofFailuresByTask = mutable.HashMap.empty[StorageTaskKey, Int]
   private val maxProofFailuresPerTask: Int = 5
 
+  // Fast-fail for unservable storage roots (BUG-SU1).
+  // A proof root mismatch means the peer's current state cannot serve this storage root —
+  // it was recorded at a pivot now beyond the peer's pruning window (Besu bonsai: 8,192 blocks).
+  // When MinPeersForStaleDecision distinct peers confirm the mismatch for the same storageRoot,
+  // all tasks for that root are skipped immediately rather than cycling through pivot refreshes.
+  private val staleRootMismatchPeers = mutable.HashMap.empty[ByteString, mutable.Set[String]]
+  private val MinPeersForStaleDecision: Int = 2
+
   // Sentinel: when true, no more AddStorageTasks will arrive (all accounts downloaded).
   // Completion is only reported after this is set AND pending+active tasks drain.
   // Geth-aligned: coordinators run from start, tasks arrive inline during account download.
@@ -537,6 +545,29 @@ class StorageRangeCoordinator(
     }
   }
 
+  /** Skip all queued tasks for a given storageRoot (BUG-SU1 fast-fail path).
+    * Called when enough peers have confirmed a root mismatch to declare it definitively unservable.
+    * Returns the count of tasks skipped.
+    */
+  private def skipAllTasksForRoot(storageRoot: ByteString): Int = {
+    var skipped = 0
+    val keep = mutable.Queue.empty[StorageTask]
+    while (tasks.nonEmpty) {
+      val t = tasks.dequeue()
+      if (t.storageRoot == storageRoot) {
+        t.done = true
+        t.pending = false
+        completedTasks += t
+        markAccountCompleted(t.accountHash)
+        skipped += 1
+      } else {
+        keep.enqueue(t)
+      }
+    }
+    tasks.enqueueAll(keep)
+    skipped
+  }
+
   /** Shut down the trie builder thread pool and close the completed-accounts file. */
   override def postStop(): Unit = {
     try { completedAccountsOut.flush(); completedAccountsOut.close() } catch { case _: Exception => }
@@ -759,6 +790,9 @@ class StorageRangeCoordinator(
       // now correctly accumulates across pivots and permanently skips unserveable accounts after 5 failures,
       // deferring them to the healing phase which reconstructs missing slots via GetTrieNodes.
       proofFailuresByTask.clear()
+      // BUG-SU1: Clear stale-root tracking on pivot refresh — new pivot has a different state root
+      // so previously-unservable roots may become servable (or will be re-detected quickly).
+      staleRootMismatchPeers.clear()
       proofVerifiers.clear()
       recentTaskPeerFailures.clear()
 
@@ -990,6 +1024,19 @@ class StorageRangeCoordinator(
       var skipped = 0
       var requeued = 0
       tasks.foreach { task =>
+        // BUG-SU1 fast-path: if a proof root mismatch has already been confirmed for this
+        // storage root by another peer, skip immediately without incrementing empty counter.
+        if (staleRootMismatchPeers.contains(task.storageRoot)) {
+          skipped += 1
+          task.done = true
+          task.pending = false
+          completedTasks += task
+          markAccountCompleted(task.accountHash)
+          log.debug(
+            s"Fast-skipping empty-response task for known-stale root ${task.storageRoot.take(4).toHex}: " +
+              s"account=${task.accountHash.take(4).toHex}"
+          )
+        } else {
         val key = StorageTaskKey(task.accountHash, task.next, task.last)
         val attempts = emptyResponsesByTask.getOrElse(key, 0) + 1
         emptyResponsesByTask.update(key, attempts)
@@ -1012,6 +1059,7 @@ class StorageRangeCoordinator(
               s"account=${task.accountHash.take(4).toHex} range=${task.rangeString}"
           )
         }
+        } // end BUG-SU1 fast-path else
       }
 
       // Always mark this peer as stateless for the current root on empty response.
@@ -1069,27 +1117,63 @@ class StorageRangeCoordinator(
       verifier.verifyStorageRange(accountSlots, proofForThisTask, task.next, task.last) match {
         case Left(error) =>
           val key = StorageTaskKey(task.accountHash, task.next, task.last)
-          val failCount = proofFailuresByTask.getOrElse(key, 0) + 1
-          proofFailuresByTask.update(key, failCount)
 
-          if (failCount >= maxProofFailuresPerTask) {
-            log.warning(
-              s"Storage proof verification failed ${failCount}x for account ${task.accountString}, " +
-                s"skipping (healing will recover). Last error: $error"
-            )
-            proofFailuresByTask.remove(key)
-            // Mark task done — healing phase will fill any gaps
-            task.done = true
-            completedTasks += task
-            markAccountCompleted(task.accountHash)
-          } else {
-            if (failCount == 1) {
-              log.warning(s"Storage proof verification failed for account ${task.accountString}: $error")
+          // BUG-SU1: Proof root mismatch is a structural signal — the peer's state cannot serve
+          // this storage root (recorded at a stale pivot beyond the pruning window). Two distinct
+          // peers confirming the same mismatch is definitive: skip all tasks for this root immediately
+          // rather than cycling through 5 failures × N ranges × multiple pivot refreshes.
+          val isRootMismatch = error.contains("root mismatch") || error.contains("Proof root")
+          if (isRootMismatch) {
+            val storageRoot = task.storageRoot
+            val mismatchPeers = staleRootMismatchPeers.getOrElseUpdate(storageRoot, mutable.Set.empty)
+            mismatchPeers += peer.id.value
+            val mismatchCount = mismatchPeers.size
+            val available = math.max(knownAvailablePeers.size, 1)
+
+            if (mismatchCount >= math.min(MinPeersForStaleDecision, available)) {
+              val skipped = skipAllTasksForRoot(storageRoot)
+              log.warning(
+                s"Storage root ${storageRoot.take(4).toHex} unservable: $mismatchCount/$available peers " +
+                s"returned proof root mismatch (root beyond pruning window). " +
+                s"Skipping $skipped tasks immediately — healing phase will recover."
+              )
+              staleRootMismatchPeers.remove(storageRoot)
+              // DO NOT markPeerStateless — peer is healthy, the storage root is the problem
+              self ! StorageCheckCompletion
+            } else {
+              if (mismatchCount == 1)
+                log.warning(
+                  s"Proof root mismatch for ${task.accountString} from peer ${peer.id.value} " +
+                  s"($mismatchCount/$MinPeersForStaleDecision confirmations to declare unservable) — re-queuing"
+                )
+              recordPeerCooldown(peer, s"root mismatch: $error")
+              task.pending = false
+              this.tasks.enqueue(task)
             }
-            recordPeerCooldown(peer, s"verification failed: $error")
-            adjustResponseBytesOnFailure(peer, s"verification failed: $error")
-            task.pending = false
-            this.tasks.enqueue(task)
+          } else {
+            // Non-mismatch proof failure: existing per-task failure counter
+            val failCount = proofFailuresByTask.getOrElse(key, 0) + 1
+            proofFailuresByTask.update(key, failCount)
+
+            if (failCount >= maxProofFailuresPerTask) {
+              log.warning(
+                s"Storage proof verification failed ${failCount}x for account ${task.accountString}, " +
+                  s"skipping (healing will recover). Last error: $error"
+              )
+              proofFailuresByTask.remove(key)
+              // Mark task done — healing phase will fill any gaps
+              task.done = true
+              completedTasks += task
+              markAccountCompleted(task.accountHash)
+            } else {
+              if (failCount == 1) {
+                log.warning(s"Storage proof verification failed for account ${task.accountString}: $error")
+              }
+              recordPeerCooldown(peer, s"verification failed: $error")
+              adjustResponseBytesOnFailure(peer, s"verification failed: $error")
+              task.pending = false
+              this.tasks.enqueue(task)
+            }
           }
 
         case Right(_) =>
