@@ -53,7 +53,8 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
         // Return null for now — CL just checks if EL is responsive
         IO.pure(JsonRpcResponse("2.0", Some(JNull), None, reqId(request)))
       case "eth_blockNumber" =>
-        IO.pure(JsonRpcResponse("2.0", Some(JString("0x0")), None, reqId(request)))
+        val blockNum = engineApiService.getLatestBlockNumber
+        IO.pure(JsonRpcResponse("2.0", Some(JString(s"0x${blockNum.toLong.toHexString}")), None, reqId(request)))
       case "eth_chainId" =>
         IO.pure(JsonRpcResponse("2.0", Some(JString("0xaa36a7")), None, reqId(request)))
       case "net_version" =>
