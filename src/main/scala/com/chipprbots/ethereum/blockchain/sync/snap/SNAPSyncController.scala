@@ -144,7 +144,7 @@ class SNAPSyncController(
     new java.util.concurrent.atomic.AtomicLong(0)
   private var consecutiveUnproductiveHealingRounds: Int = 0
   private val maxUnproductiveHealingRounds: Int = 5 // 5 rounds × 2 min = 10-min window before skipping to validation
-  private var lastTrieWalkMissingCount: Int = Int.MaxValue // progress tracker — reset counter when count decreases
+  private var lastTrieWalkMissingCount: Option[Int] = None // progress tracker — None on first round, Some(n) thereafter
   private var healingValidationCycles: Int = 0           // counts healing→validation→healing oscillations
   private val maxHealingValidationCycles: Int = 5        // after 5 full cycles, stop oscillating and declare done
   private var bootstrapCheckTask: Option[Cancellable] = None
@@ -641,24 +641,28 @@ class SNAPSyncController(
         log.info("Trie walk found no missing nodes — healing complete!")
         MilestoneLog.phase("Trie healing complete | 0 missing nodes")
         consecutiveUnproductiveHealingRounds = 0
-        lastTrieWalkMissingCount = 0
+        lastTrieWalkMissingCount = None
         // Clear persisted healing state — successfully healed
         appStateStorage.putSnapSyncHealingPendingNodes("").and(appStateStorage.putSnapSyncHealingRound(0)).commit()
         progressMonitor.startPhase(StateValidation)
         currentPhase = StateValidation
         validateState()
       } else {
-        // Reset counter if progress was made (fewer missing nodes than previous walk)
-        if (missingNodes.size < lastTrieWalkMissingCount) {
-          val healed = lastTrieWalkMissingCount - missingNodes.size
-          log.info(
-            s"Healing made progress: $healed nodes healed, ${missingNodes.size} remaining — resetting stagnation counter"
-          )
-          consecutiveUnproductiveHealingRounds = 0
-        } else {
-          consecutiveUnproductiveHealingRounds += 1
+        // Reset counter if progress was made (fewer missing nodes than previous walk).
+        // On the first round (None), neither increment nor reset — no baseline to compare against.
+        lastTrieWalkMissingCount match {
+          case Some(prev) if missingNodes.size < prev =>
+            val healed = prev - missingNodes.size
+            log.info(
+              s"Healing made progress: $healed nodes healed, ${missingNodes.size} remaining — resetting stagnation counter"
+            )
+            consecutiveUnproductiveHealingRounds = 0
+          case Some(_) =>
+            consecutiveUnproductiveHealingRounds += 1
+          case None =>
+            // First healing round — no prior baseline, don't penalise stagnation counter
         }
-        lastTrieWalkMissingCount = missingNodes.size
+        lastTrieWalkMissingCount = Some(missingNodes.size)
         // Persist missing nodes so restart can skip re-walk
         appStateStorage
           .putSnapSyncHealingPendingNodes(SNAPSyncController.serializeHealingNodes(missingNodes))
@@ -674,7 +678,7 @@ class SNAPSyncController(
             s"Healing stagnation | ${missingNodes.size} missing nodes after $consecutiveUnproductiveHealingRounds rounds, proceeding to validation"
           )
           consecutiveUnproductiveHealingRounds = 0
-          lastTrieWalkMissingCount = Int.MaxValue
+          lastTrieWalkMissingCount = None
           // Clear persisted healing state — giving up on these nodes, validation will continue
           appStateStorage.putSnapSyncHealingPendingNodes("").and(appStateStorage.putSnapSyncHealingRound(0)).commit()
           progressMonitor.startPhase(StateValidation)
@@ -696,7 +700,10 @@ class SNAPSyncController(
       }
 
     case ScheduledTrieWalk if currentPhase == StateHealing =>
-      startTrieWalk()
+      // Guard: a previous quick healing round may have already started a walk before the
+      // scheduled message arrived. Don't launch a second parallel walk.
+      if (!trieWalkInProgress) startTrieWalk()
+      else log.debug("[HEALING] ScheduledTrieWalk skipped — trie walk already in progress")
 
     case TrieWalkFailed(error) if currentPhase == StateHealing =>
       trieWalkInProgress = false
@@ -903,7 +910,7 @@ class SNAPSyncController(
                   s"round $savedRound — skipping 5h trie re-walk"
               )
               consecutiveUnproductiveHealingRounds = savedRound
-              lastTrieWalkMissingCount = savedNodes.size
+              lastTrieWalkMissingCount = Some(savedNodes.size)
               startStateHealingWithSavedNodes(savedNodes)
             } else {
               startStateHealing()
@@ -2698,7 +2705,7 @@ class SNAPSyncController(
     }
     // Fix 7: re-entering healing from validation is a fresh start — reset stagnation counters
     consecutiveUnproductiveHealingRounds = 0
-    lastTrieWalkMissingCount = Int.MaxValue
+    lastTrieWalkMissingCount = None
     log.info(
       s"Validation found ${missingNodes.size} missing nodes — re-running trie walk with paths for healing " +
         s"(healing↔validation cycle $healingValidationCycles/$maxHealingValidationCycles)"

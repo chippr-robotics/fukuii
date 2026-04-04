@@ -752,7 +752,12 @@ class StorageRangeCoordinator(
       peerBatchSize.clear()
       peerBatchSuccessStreak.clear()
       peerResponseBytesTarget.clear()
-      emptyResponsesByTask.clear()
+      // NOTE: emptyResponsesByTask is intentionally NOT cleared on pivot refresh (BUG-S1 fix).
+      // Clearing it allowed accounts with permanently-unserveable storage roots (e.g. high-frequency
+      // contracts whose root was recorded 13,000+ blocks ago — beyond Besu's 8192-block bonsai window)
+      // to cycle indefinitely through pivot refreshes. The per-task skip threshold (maxEmptyResponsesPerTask)
+      // now correctly accumulates across pivots and permanently skips unserveable accounts after 5 failures,
+      // deferring them to the healing phase which reconstructs missing slots via GetTrieNodes.
       proofFailuresByTask.clear()
       proofVerifiers.clear()
       recentTaskPeerFailures.clear()
