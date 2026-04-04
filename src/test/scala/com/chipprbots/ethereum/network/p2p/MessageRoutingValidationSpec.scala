@@ -57,6 +57,7 @@ class MessageRoutingValidationSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "route ETH63 Status messages to ETH63MessageDecoder" taggedAs (UnitTest, NetworkTest) in {
+    // ETH68 only supports ETH64+ Status format (with ForkId). ETH63 format (no ForkId) is rejected.
     val status = BaseETH6XMessages.Status(
       protocolVersion = 63,
       networkId = 1,
@@ -69,12 +70,7 @@ class MessageRoutingValidationSpec extends AnyFlatSpec with Matchers {
     val decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH68)
     val decoded = decoder.fromBytes(Codes.StatusCode, statusBytes)
 
-    decoded shouldBe a[Right[?, ?]]
-    decoded.toOption.get shouldBe a[BaseETH6XMessages.Status]
-
-    val decodedStatus = decoded.toOption.get.asInstanceOf[BaseETH6XMessages.Status]
-    decodedStatus.protocolVersion shouldBe 63
-    decodedStatus.networkId shouldBe 1
+    decoded shouldBe a[Left[?, ?]]
   }
 
   it should "route ETH65 Status messages to ETH65MessageDecoder" taggedAs (UnitTest, NetworkTest) in {

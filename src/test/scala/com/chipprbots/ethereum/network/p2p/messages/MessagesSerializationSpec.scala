@@ -14,7 +14,6 @@ import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.network.p2p.EthereumMessageDecoder
 import com.chipprbots.ethereum.network.p2p.NetworkMessageDecoder
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages._
-import com.chipprbots.ethereum.network.p2p.messages.ETH61.BlockHashesFromNumber
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol._
 
@@ -98,32 +97,7 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
     }
   }
 
-  "ETH63" when {
-    val version = Capability.ETH68
-    "encoding and decoding Status" should {
-      "return same result for Status v63" in {
-        val msg = Status(1, 2, 2, ByteString("HASH"), ByteString("HASH2"))
-        verify(msg, (m: Status) => m.toBytes, Codes.StatusCode, Capability.ETH68)
-      }
-
-      // Test with values >= 128 to verify RLP encoding handles high-bit values correctly
-      // BigInt.toByteArray uses two's complement which adds leading 0x00 for values with high bit set
-      // (e.g., 128 -> [0x00, 0x80] instead of [0x80]). This tests the fix using bigIntToUnsignedByteArray.
-      "handle values >= 128 correctly (two's complement edge case)" in {
-        val msg = Status(
-          protocolVersion = 128, // Tests high bit in single byte
-          networkId = 256, // Tests value requiring 2 bytes
-          totalDifficulty = BigInt("8000000000000000", 16), // Tests high bit in large value
-          bestHash = ByteString("HASH"),
-          genesisHash = ByteString("HASH2")
-        )
-        verify(msg, (m: Status) => m.toBytes, Codes.StatusCode, Capability.ETH68)
-      }
-    }
-    commonEthAssertions(version)
-  }
-
-  "ETH64" when {
+  "ETH68" when {
     val version = Capability.ETH68
     "encoding and decoding Status" should {
       "return same result" in {
@@ -158,13 +132,6 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
       }
     }
 
-    "encoding and decoding BlockHashesFromNumber" should {
-      "return same result" in {
-        val msg = BlockHashesFromNumber(1, 2)
-        verify(msg, (m: BlockHashesFromNumber) => m.toBytes, Codes.BlockHashesFromNumberCode, version)
-      }
-    }
-
     "encoding and decoding ETH62.NewBlockHashes" should {
       "return same result" in {
         val msg = ETH62.NewBlockHashes(Seq(BlockHash(ByteString("hash1"), 1), BlockHash(ByteString("hash2"), 2)))
@@ -172,38 +139,38 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
       }
     }
 
-    "encoding and decoding BlockBodies" should {
+    "encoding and decoding ETH66.BlockBodies" should {
       "return same result" in {
-        val msg = BlockBodies(Seq(Fixtures.Blocks.Block3125369.body, Fixtures.Blocks.DaoForkBlock.body))
-        verify(msg, (m: BlockBodies) => m.toBytes, Codes.BlockBodiesCode, version)
+        val msg = ETH66.BlockBodies(0, Seq(Fixtures.Blocks.Block3125369.body, Fixtures.Blocks.DaoForkBlock.body))
+        verify(msg, (m: ETH66.BlockBodies) => m.toBytes, Codes.BlockBodiesCode, version)
       }
     }
 
-    "encoding and decoding GetBlockBodies" should {
+    "encoding and decoding ETH66.GetBlockBodies" should {
       "return same result" in {
-        val msg = GetBlockBodies(Seq(ByteString("111"), ByteString("2222")))
-        verify(msg, (m: GetBlockBodies) => m.toBytes, Codes.GetBlockBodiesCode, version)
+        val msg = ETH66.GetBlockBodies(0, Seq(ByteString("111"), ByteString("2222")))
+        verify(msg, (m: ETH66.GetBlockBodies) => m.toBytes, Codes.GetBlockBodiesCode, version)
       }
     }
 
-    "encoding and decoding BlockHeaders" should {
+    "encoding and decoding ETH66.BlockHeaders" should {
       "return same result" in {
-        val msg = BlockHeaders(Seq(Fixtures.Blocks.Block3125369.header, Fixtures.Blocks.DaoForkBlock.header))
-        verify(msg, (m: BlockHeaders) => m.toBytes, Codes.BlockHeadersCode, version)
+        val msg = ETH66.BlockHeaders(0, Seq(Fixtures.Blocks.Block3125369.header, Fixtures.Blocks.DaoForkBlock.header))
+        verify(msg, (m: ETH66.BlockHeaders) => m.toBytes, Codes.BlockHeadersCode, version)
       }
     }
 
-    "encoding and decoding GetBlockHeaders" should {
+    "encoding and decoding ETH66.GetBlockHeaders" should {
       "return same result" in {
         verify(
-          GetBlockHeaders(Left(1), 1, 1, false),
-          (m: GetBlockHeaders) => m.toBytes,
+          ETH66.GetBlockHeaders(0, Left(1), 1, 1, false),
+          (m: ETH66.GetBlockHeaders) => m.toBytes,
           Codes.GetBlockHeadersCode,
           version
         )
         verify(
-          GetBlockHeaders(Right(ByteString("1" * 32)), 1, 1, true),
-          (m: GetBlockHeaders) => m.toBytes,
+          ETH66.GetBlockHeaders(0, Right(ByteString("1" * 32)), 1, 1, true),
+          (m: ETH66.GetBlockHeaders) => m.toBytes,
           Codes.GetBlockHeadersCode,
           version
         )

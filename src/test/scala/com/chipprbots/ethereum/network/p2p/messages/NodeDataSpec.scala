@@ -89,26 +89,21 @@ class NodeDataSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "be decoded properly" taggedAs (UnitTest, NetworkTest) in {
+    // NodeData (0x0e) is not supported in eth/68 — removed per EIP-4444 direction
     val result = EthereumMessageDecoder
       .ethMessageDecoder(Capability.ETH68)
       .fromBytes(Codes.NodeDataCode, encode(encodedNodeData))
-      .getOrElse(fail("Should have decoded NodeData"))
-
-    result match {
-      case m: NodeData =>
-        m.getMptNode(0) shouldBe leafNode
-        m.getMptNode(1) shouldBe branchNode
-        m.getMptNode(2) shouldBe extensionNode
-      case _ => fail("wrong type")
-    }
-
-    result shouldBe nodeData
+    result shouldBe a[Left[?, ?]]
+    result.swap.toOption.get.getMessage should include("not supported in eth/68")
   }
 
   it should "be decoded previously encoded value" taggedAs (UnitTest, NetworkTest) in {
-    EthereumMessageDecoder
+    // NodeData (0x0e) is not supported in eth/68 — removed per EIP-4444 direction
+    val result = EthereumMessageDecoder
       .ethMessageDecoder(Capability.ETH68)
-      .fromBytes(Codes.NodeDataCode, nodeData.toBytes) shouldBe Right(nodeData)
+      .fromBytes(Codes.NodeDataCode, nodeData.toBytes)
+    result shouldBe a[Left[?, ?]]
+    result.swap.toOption.get.getMessage should include("not supported in eth/68")
   }
 
   it should "decode branch node with values taggedAs (UnitTest, NetworkTest) in leafs that looks like RLP list" in {

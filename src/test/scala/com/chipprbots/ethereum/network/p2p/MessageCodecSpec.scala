@@ -5,9 +5,10 @@ import org.apache.pekko.util.ByteString
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.Status
+import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
+import com.chipprbots.ethereum.network.p2p.messages.ETH64
 import com.chipprbots.ethereum.network.rlpx.Frame
 import com.chipprbots.ethereum.network.rlpx.FrameCodec
 import com.chipprbots.ethereum.network.rlpx.Header
@@ -73,12 +74,13 @@ class MessageCodecSpec extends AnyFlatSpec with Matchers {
     lazy val localAdvertisedVersion: Int = 5
     lazy val remoteAdvertisedVersion: Int = 5
 
-    val status: Status = Status(
+    val status: ETH64.Status = ETH64.Status(
       protocolVersion = Capability.ETH68.version,
       networkId = Config.Network.peer.networkId,
       totalDifficulty = 1,
       bestHash = ByteString(1),
-      genesisHash = ByteString(1)
+      genesisHash = ByteString(1),
+      forkId = ForkId(0L, None)
     )
 
     val decoder: MessageDecoder =
