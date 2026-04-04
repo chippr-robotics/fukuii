@@ -294,6 +294,17 @@ class StorageRangeCoordinator(
   // all tasks for that root are skipped immediately rather than cycling through pivot refreshes.
   private val staleRootMismatchPeers = mutable.HashMap.empty[ByteString, mutable.Set[String]]
   private val MinPeersForStaleDecision: Int = 2
+  // BUG-SU1b: Persistent set of roots confirmed unservable across pivot refreshes.
+  // Once a root is confirmed stale, in-flight returns for that root skip immediately
+  // without re-confirming (avoids missing tasks not in the queue at skip time).
+  // Cleared only on full SnapRetry, NOT on pivot refresh.
+  private val confirmedStaleRoots = mutable.Set.empty[ByteString]
+  // BUG-SU1b: Total mismatch attempts per storageRoot (not just distinct peers).
+  // Escape hatch for single-peer scenarios: skip after MaxMismatchAttempts regardless
+  // of how many distinct peers confirmed. Cleared on pivot refresh (attempts counter
+  // resets to avoid cross-pivot false accumulation on transient errors).
+  private val totalMismatchAttempts = mutable.HashMap.empty[ByteString, Int]
+  private val MaxMismatchAttempts: Int = 5
 
   // Sentinel: when true, no more AddStorageTasks will arrive (all accounts downloaded).
   // Completion is only reported after this is set AND pending+active tasks drain.
@@ -306,6 +317,10 @@ class StorageRangeCoordinator(
   private val startTime = System.currentTimeMillis()
   private var lastProgressLogAt: Long = 0
   private val ProgressLogInterval: Long = 10_000
+  // OPT-P1: Wall-clock gate for the per-StorageCheckCompletion contract-level progress log.
+  // Without this, the log fires on every coordinator message (~120x/sec during storage phase).
+  private var lastContractProgressLogMs: Long = 0
+  private val ContractProgressLogIntervalMs: Long = 10_000 // 10 seconds
 
   // Per-peer adaptive byte budgeting (ported from ByteCodeCoordinator).
   // Geth's snap handler supports up to 2MB responses. Starting at 512KB and probing upward
@@ -550,6 +565,9 @@ class StorageRangeCoordinator(
     * Returns the count of tasks skipped.
     */
   private def skipAllTasksForRoot(storageRoot: ByteString): Int = {
+    // BUG-SU1b: persist confirmation so in-flight tasks that return after this call
+    // are also fast-skipped without re-confirming (they won't be in the queue below).
+    confirmedStaleRoots += storageRoot
     var skipped = 0
     val keep = mutable.Queue.empty[StorageTask]
     while (tasks.nonEmpty) {
@@ -700,10 +718,17 @@ class StorageRangeCoordinator(
         // Previously guarded by activeTasks.isEmpty which defeated pipelining.
         maybeRequestPivotRefresh()
         tryRedispatchPendingTasks()
-        log.info(
-          s"Storage progress [30s]: ${completedAccountHashes.size}/$totalStorageContracts contracts, " +
-            s"$slotsDownloaded slots, ${tasks.size} pending, ${activeTasks.size} active"
-        )
+        // OPT-P1: Gate progress log to avoid ~120 log lines/sec (fires on every response).
+        // The label "[30s]" was misleading — this fires per StorageCheckCompletion message,
+        // not every 30 seconds. Wall-clock gate every 10s reduces log noise by ~99%.
+        val nowMs = System.currentTimeMillis()
+        if (nowMs - lastContractProgressLogMs >= ContractProgressLogIntervalMs) {
+          log.info(
+            s"Storage progress: ${completedAccountHashes.size}/$totalStorageContracts contracts, " +
+              s"$slotsDownloaded slots, ${tasks.size} pending, ${activeTasks.size} active"
+          )
+          lastContractProgressLogMs = nowMs
+        }
       } else if (noMoreTasksExpected) {
         log.info(
           s"Storage trie builds in progress: ${completedAccountHashes.size}/$totalStorageContracts contracts, " +
@@ -790,9 +815,16 @@ class StorageRangeCoordinator(
       // now correctly accumulates across pivots and permanently skips unserveable accounts after 5 failures,
       // deferring them to the healing phase which reconstructs missing slots via GetTrieNodes.
       proofFailuresByTask.clear()
-      // BUG-SU1: Clear stale-root tracking on pivot refresh — new pivot has a different state root
-      // so previously-unservable roots may become servable (or will be re-detected quickly).
-      staleRootMismatchPeers.clear()
+      // BUG-SU1b: Do NOT clear staleRootMismatchPeers on pivot refresh.
+      // Keys are storageRoot hash values (32-byte): a changed pivot gives different keys,
+      // so cross-pivot false matches require a 32-byte hash collision (negligible risk).
+      // Clearing here prevented d4c431f9-style accounts from ever accumulating 2 confirmations
+      // because each pivot refresh fired before the 2nd peer could confirm.
+      // staleRootMismatchPeers is cleared on full SnapRetry only (see SnapRetry handler).
+      // BUG-SU1b: Clear totalMismatchAttempts on pivot refresh — it's an attempt counter
+      // (not a structural cross-pivot signal), so reset to avoid false accumulation on
+      // transient per-pivot errors that clear up after state refresh.
+      totalMismatchAttempts.clear()
       proofVerifiers.clear()
       recentTaskPeerFailures.clear()
 
@@ -1024,9 +1056,10 @@ class StorageRangeCoordinator(
       var skipped = 0
       var requeued = 0
       tasks.foreach { task =>
-        // BUG-SU1 fast-path: if a proof root mismatch has already been confirmed for this
-        // storage root by another peer, skip immediately without incrementing empty counter.
-        if (staleRootMismatchPeers.contains(task.storageRoot)) {
+        // BUG-SU1/SU1b fast-path: if a proof root mismatch has already been confirmed for this
+        // storage root (either pending confirmation in staleRootMismatchPeers, or already
+        // confirmed in confirmedStaleRoots), skip immediately without incrementing empty counter.
+        if (staleRootMismatchPeers.contains(task.storageRoot) || confirmedStaleRoots.contains(task.storageRoot)) {
           skipped += 1
           task.done = true
           task.pending = false
@@ -1118,6 +1151,18 @@ class StorageRangeCoordinator(
         case Left(error) =>
           val key = StorageTaskKey(task.accountHash, task.next, task.last)
 
+          // BUG-SU1b: Fast-path for roots already confirmed unservable in a prior skip.
+          // In-flight tasks are not in the queue when skipAllTasksForRoot fires, so they
+          // return here after staleRootMismatchPeers has been cleaned up. confirmedStaleRoots
+          // persists across pivot refreshes so these stragglers are handled immediately.
+          if (confirmedStaleRoots.contains(task.storageRoot)) {
+            task.done = true
+            task.pending = false
+            completedTasks += task
+            markAccountCompleted(task.accountHash)
+            self ! StorageCheckCompletion
+          } else {
+
           // BUG-SU1: Proof root mismatch is a structural signal — the peer's state cannot serve
           // this storage root (recorded at a stale pivot beyond the pruning window). Two distinct
           // peers confirming the same mismatch is definitive: skip all tasks for this root immediately
@@ -1128,23 +1173,40 @@ class StorageRangeCoordinator(
             val mismatchPeers = staleRootMismatchPeers.getOrElseUpdate(storageRoot, mutable.Set.empty)
             mismatchPeers += peer.id.value
             val mismatchCount = mismatchPeers.size
-            val available = math.max(knownAvailablePeers.size, 1)
 
-            if (mismatchCount >= math.min(MinPeersForStaleDecision, available)) {
+            // BUG-SU1b: Count total attempts (not just distinct peers) for single-peer escape hatch.
+            val attempts = totalMismatchAttempts.getOrElse(storageRoot, 0) + 1
+            totalMismatchAttempts(storageRoot) = attempts
+
+            // BUG-SU1b: Use eligible peer count (not cooled, not stateless) for threshold.
+            // knownAvailablePeers.size includes cooled/stateless peers, inflating the count
+            // so math.min(2, 4)=2 never gets satisfied by a single active peer.
+            val eligibleCount = math.max(
+              knownAvailablePeers.count(p =>
+                !statelessPeers.contains(p.id.value) && !isPeerCoolingDown(p)
+              ),
+              1
+            )
+            val threshold = math.min(MinPeersForStaleDecision, eligibleCount)
+            val shouldSkip = mismatchCount >= threshold || attempts >= MaxMismatchAttempts
+
+            if (shouldSkip) {
               val skipped = skipAllTasksForRoot(storageRoot)
               log.warning(
-                s"Storage root ${storageRoot.take(4).toHex} unservable: $mismatchCount/$available peers " +
-                s"returned proof root mismatch (root beyond pruning window). " +
-                s"Skipping $skipped tasks immediately — healing phase will recover."
+                s"Storage root ${storageRoot.take(4).toHex} unservable: $mismatchCount distinct peers, " +
+                s"$attempts total attempts (threshold=$threshold/$MinPeersForStaleDecision, " +
+                s"eligible=$eligibleCount peers). " +
+                s"Skipping $skipped queued tasks immediately — healing phase will recover."
               )
               staleRootMismatchPeers.remove(storageRoot)
+              totalMismatchAttempts.remove(storageRoot)
               // DO NOT markPeerStateless — peer is healthy, the storage root is the problem
               self ! StorageCheckCompletion
             } else {
               if (mismatchCount == 1)
                 log.warning(
                   s"Proof root mismatch for ${task.accountString} from peer ${peer.id.value} " +
-                  s"($mismatchCount/$MinPeersForStaleDecision confirmations to declare unservable) — re-queuing"
+                  s"($mismatchCount/$MinPeersForStaleDecision distinct peers, $attempts/$MaxMismatchAttempts total attempts) — re-queuing"
                 )
               recordPeerCooldown(peer, s"root mismatch: $error")
               task.pending = false
@@ -1175,6 +1237,7 @@ class StorageRangeCoordinator(
               this.tasks.enqueue(task)
             }
           }
+          } // end confirmedStaleRoots else
 
         case Right(_) =>
           val slotBytes = accountSlots.map { case (hash, value) => hash.size + value.size }.sum
