@@ -333,11 +333,13 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
           )
         )
       )
-      peerProbe.expectMsg(
-        PeerActor.SendMessage(
-          com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, false)
-        )
-      )
+      peerProbe.expectMsgPF() {
+        case PeerActor.SendMessage(enc: com.chipprbots.ethereum.network.p2p.messages.ETH66.GetBlockHeaders.GetBlockHeadersEnc)
+            if enc.underlyingMsg.block == Right(peerInfo.remoteStatus.bestHash) &&
+               enc.underlyingMsg.maxHeaders == 1 &&
+               enc.underlyingMsg.skip == 0 &&
+               !enc.underlyingMsg.reverse => ()
+      }
     }
   }
 
@@ -414,10 +416,12 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
         )
       )
     )
-    peer1Probe.expectMsg(
-      PeerActor.SendMessage(
-        com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders(Right(peer1Info.remoteStatus.bestHash), 1, 0, false)
-      )
-    )
+    peer1Probe.expectMsgPF() {
+      case PeerActor.SendMessage(enc: com.chipprbots.ethereum.network.p2p.messages.ETH66.GetBlockHeaders.GetBlockHeadersEnc)
+          if enc.underlyingMsg.block == Right(peer1Info.remoteStatus.bestHash) &&
+             enc.underlyingMsg.maxHeaders == 1 &&
+             enc.underlyingMsg.skip == 0 &&
+             !enc.underlyingMsg.reverse => ()
+    }
   }
 }

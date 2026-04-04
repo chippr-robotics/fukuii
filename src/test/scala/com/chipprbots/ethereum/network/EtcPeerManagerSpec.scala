@@ -33,6 +33,7 @@ import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
+import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapServerChecker
 import com.chipprbots.ethereum.testing.Tags._
@@ -593,7 +594,13 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
       // Snap/1 peers at genesis still get GetBlockHeaders so the SNAP probe can fire.
       // Non-snap genesis peers skip to avoid disconnect with reason 0x10 (Other).
       if (!peerInfo.isAtGenesis || peerInfo.remoteStatus.supportsSnap) {
-        peerProbe.expectMsg(PeerActor.SendMessage(GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, false)))
+        peerProbe.expectMsgPF() {
+          case PeerActor.SendMessage(enc: ETH66.GetBlockHeaders.GetBlockHeadersEnc)
+              if enc.underlyingMsg.block == Right(peerInfo.remoteStatus.bestHash) &&
+                 enc.underlyingMsg.maxHeaders == 1 &&
+                 enc.underlyingMsg.skip == 0 &&
+                 !enc.underlyingMsg.reverse => ()
+        }
       }
     }
   }
