@@ -51,4 +51,7 @@ object FastSyncMetrics extends MetricsContainer {
   def setBlockReceiptsDownloadTime(time: Long): Unit = BlockReceiptsDownloadTimer.record(time, MILLISECONDS)
 
   def setMptStateDownloadTime(time: Long): Unit = MptStateDownloadTimer.record(time, MILLISECONDS)
+
+  def getDownloadedNodes: Long = MptStateDownloadedNodesGauge.get()
+  def getTotalNodes: Long = MptStateTotalNodesGauge.get()
 }

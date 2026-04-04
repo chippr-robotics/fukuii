@@ -70,7 +70,9 @@ class PeerRequestHandler[RequestMsg <: Message, ResponseMsg <: Message: ClassTag
         case (Some(expected), hasId: ETH66.HasRequestId) if hasId.requestId != expected =>
           log.debug(
             "PEER_REQUEST_STALE: peer={}, expected requestId={}, got={} — ignoring",
-            peer.id, expected, hasId.requestId
+            peer.id,
+            expected,
+            hasId.requestId
           )
         case _ =>
           handleResponseMsg(responseMsg)

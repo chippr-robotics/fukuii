@@ -52,7 +52,6 @@ class SNAPSyncController(
       storage
     }
 
-
   // Actor-based coordinators
   private var accountRangeCoordinator: Option[ActorRef] = None
   private var bytecodeCoordinator: Option[ActorRef] = None
@@ -131,7 +130,8 @@ class SNAPSyncController(
   private var storageStagnationRefreshAttempted: Boolean = false
   private var trieWalkInProgress: Boolean = false
   private var consecutiveUnproductiveHealingRounds: Int = 0
-  private val maxUnproductiveHealingRounds: Int = 3 // After 3 rounds of finding same missing nodes with 0 healed, skip to validation
+  private val maxUnproductiveHealingRounds: Int =
+    3 // After 3 rounds of finding same missing nodes with 0 healed, skip to validation
   private var bootstrapCheckTask: Option[Cancellable] = None
   private var pivotBootstrapRetryTask: Option[Cancellable] = None
   private var rateTrackerTuneTask: Option[Cancellable] = None
@@ -143,10 +143,10 @@ class SNAPSyncController(
   private var snapCapabilityCheckTask: Option[Cancellable] = None
   private var snapPeerEvictionTask: Option[Cancellable] = None
 
-  /** Like handlePeerListMessagesWithRateTracking, but also reactively triggers a bootstrap retry
-    * when new SNAP-capable peers arrive during the bootstrapping state. Without this, the node
-    * waits for the full exponential backoff timer (up to 60s) even though peers are already available.
-    * Core-geth starts syncing within 200ms of first peer — we should too.
+  /** Like handlePeerListMessagesWithRateTracking, but also reactively triggers a bootstrap retry when new SNAP-capable
+    * peers arrive during the bootstrapping state. Without this, the node waits for the full exponential backoff timer
+    * (up to 60s) even though peers are already available. Core-geth starts syncing within 200ms of first peer — we
+    * should too.
     */
   private def handlePeerListMessagesWithBootstrapReactivity: Receive = {
     case msg @ com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers(peers) =>
@@ -231,7 +231,6 @@ class SNAPSyncController(
     snapPeerEvictionTask.foreach(_.cancel())
     rateTrackerTuneTask.foreach(_.cancel())
     progressMonitor.stopPeriodicLogging()
-
 
     log.info("SNAP Sync Controller stopped")
   }
@@ -342,7 +341,10 @@ class SNAPSyncController(
       // Persist the finalized trie root hash so we can recover after restart.
       // With pivot refreshes, the finalized root differs from the pivot block header's stateRoot.
       // On startup, SyncController substitutes this root into the pivot block header.
-      log.info("Persisting finalized account trie root: {}", finalizedRoot.take(8).toArray.map("%02x".format(_)).mkString)
+      log.info(
+        "Persisting finalized account trie root: {}",
+        finalizedRoot.take(8).toArray.map("%02x".format(_)).mkString
+      )
       appStateStorage.putSnapSyncFinalizedRoot(finalizedRoot).commit()
 
     case ProgressAccountsTrieFinalized =>
@@ -387,9 +389,7 @@ class SNAPSyncController(
           s"Ignoring PivotStateUnservable due to restart guard " +
             s"(phase=$currentPhase, emptyResponses=$emptyResponses, reason=$reason)"
         )
-      } else if (
-        currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync
-      ) {
+      } else if (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync) {
         lastPivotRestartMs = now
         consecutivePivotRefreshes += 1
         log.info(s"Consecutive stateless pivot refreshes: $consecutivePivotRefreshes/$MaxConsecutivePivotRefreshes")
@@ -458,9 +458,7 @@ class SNAPSyncController(
 
     case RetryPivotRefresh =>
       pivotBootstrapRetryTask = None
-      if (
-        currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync
-      ) {
+      if (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync) {
         log.info("Retrying pivot refresh after bootstrap failure...")
         refreshPivotInPlace("retry after bootstrap failure")
       } else {
@@ -546,7 +544,9 @@ class SNAPSyncController(
       if (!storagePhaseComplete) {
         storageRangeCoordinator.foreach { coord =>
           coord ! actors.Messages.UpdateMaxInFlightPerPeer(snapSyncConfig.maxInFlightPerPeer)
-          log.info(s"Storage per-peer budget boosted to ${snapSyncConfig.maxInFlightPerPeer} (bytecode complete, full budget)")
+          log.info(
+            s"Storage per-peer budget boosted to ${snapSyncConfig.maxInFlightPerPeer} (bytecode complete, full budget)"
+          )
         }
       }
       checkAllDownloadsComplete()
@@ -655,12 +655,11 @@ class SNAPSyncController(
   /** Handle stagnation for storage phase.
     *
     * When storage has no progress for StorageStagnationThreshold:
-    * - First stall: attempt pivot refresh (cheaper recovery)
-    * - Second stall (30s later, not 20min): force-complete to healing
+    *   - First stall: attempt pivot refresh (cheaper recovery)
+    *   - Second stall (30s later, not 20min): force-complete to healing
     *
-    * The second check uses a short window because the pivot refresh either works
-    * immediately (peers serve new root) or it doesn't (all peers stateless again).
-    * Waiting another 20 minutes just delays the inevitable force-complete.
+    * The second check uses a short window because the pivot refresh either works immediately (peers serve new root) or
+    * it doesn't (all peers stateless again). Waiting another 20 minutes just delays the inevitable force-complete.
     */
   private def maybeRestartIfStorageStagnant(stats: actors.StorageRangeCoordinator.SyncStatistics): Unit = {
     if (currentPhase != ByteCodeAndStorageSync) return
@@ -668,7 +667,8 @@ class SNAPSyncController(
     // If coordinator responded with real stats, check if work remains.
     // If all stats are zero (ask timeout), assume work IS remaining since
     // we're still in ByteCodeAndStorageSync phase (would have transitioned if truly complete).
-    val isTimeoutResponse = stats.tasksPending == 0 && stats.tasksActive == 0 && stats.tasksCompleted == 0 && stats.elapsedTimeMs == 0
+    val isTimeoutResponse =
+      stats.tasksPending == 0 && stats.tasksActive == 0 && stats.tasksCompleted == 0 && stats.elapsedTimeMs == 0
     val workRemaining = isTimeoutResponse || stats.tasksPending > 0 || stats.tasksActive > 0
 
     // Special case: coordinator reports 0 pending + 0 active but never sent StorageRangeSyncComplete.
@@ -725,8 +725,10 @@ class SNAPSyncController(
     * and storage cannot complete before accounts.
     */
   private def checkAllDownloadsComplete(): Unit =
-    if (accountsComplete && bytecodePhaseComplete && storagePhaseComplete &&
-        currentPhase != StateHealing && currentPhase != ChainDownloadCompletion && currentPhase != Completed) {
+    if (
+      accountsComplete && bytecodePhaseComplete && storagePhaseComplete &&
+      currentPhase != StateHealing && currentPhase != ChainDownloadCompletion && currentPhase != Completed
+    ) {
       if (snapSyncConfig.deferredMerkleization) {
         // With deferred merkleization, trie nodes were never constructed during download —
         // only flat storage was written. A trie walk would find the entire internal trie "missing",
@@ -936,7 +938,7 @@ class SNAPSyncController(
         log.info(s"Retrying SNAP sync start in $delay (attempt $bootstrapRetryCount)")
         bootstrapCheckTask.foreach(_.cancel())
         bootstrapCheckTask = Some(
-          scheduler.scheduleOnce(delay) { self ! RetrySnapSyncStart }(ec)
+          scheduler.scheduleOnce(delay)(self ! RetrySnapSyncStart)(ec)
         )
       }
 
@@ -1418,7 +1420,7 @@ class SNAPSyncController(
   }
 
   /** Check if bootstrap retry has exceeded the maximum count. If so, falls back to fast sync. */
-  private def checkBootstrapRetryTimeout(context: String): Boolean = {
+  private def checkBootstrapRetryTimeout(context: String): Boolean =
     if (bootstrapRetryCount >= MaxBootstrapRetries) {
       log.warning(
         s"No peers found after $bootstrapRetryCount bootstrap retries ($context). Falling back to fast sync."
@@ -1436,7 +1438,6 @@ class SNAPSyncController(
       }
       false
     }
-  }
 
   /** Record a critical failure and check if we should fallback to fast sync. Critical failures are those that indicate
     * SNAP sync cannot proceed.
@@ -1495,10 +1496,10 @@ class SNAPSyncController(
 
   /** Evict non-SNAP outgoing peers when SNAP peer count is below threshold.
     *
-    * Core-Geth completes full SNAP sync in ~5 minutes because it connects to SNAP-capable peers
-    * rapidly. Fukuii's peer slots can fill with non-SNAP peers (ETH-only), leaving no room for
-    * SNAP-capable peers to connect. This method actively disconnects the oldest non-SNAP outgoing
-    * peers to free connection slots, allowing discovery to fill them with SNAP-capable peers.
+    * Core-Geth completes full SNAP sync in ~5 minutes because it connects to SNAP-capable peers rapidly. Fukuii's peer
+    * slots can fill with non-SNAP peers (ETH-only), leaving no room for SNAP-capable peers to connect. This method
+    * actively disconnects the oldest non-SNAP outgoing peers to free connection slots, allowing discovery to fill them
+    * with SNAP-capable peers.
     */
   private def evictNonSnapPeers(): Unit = {
     val allPeers = handshakedPeers.values.toSeq
@@ -1660,7 +1661,8 @@ class SNAPSyncController(
             concurrency = effectiveConcurrency,
             snapSyncController = self,
             resumeProgress = resumeProgress,
-            initialMaxInFlightPerPeer = 5, // Full per-peer budget during AccountRangeSync (storage+bytecode deferred to 0)
+            initialMaxInFlightPerPeer =
+              5, // Full per-peer budget during AccountRangeSync (storage+bytecode deferred to 0)
             trieFlushThreshold = snapSyncConfig.accountTrieFlushThreshold,
             initialResponseBytes = snapSyncConfig.accountInitialResponseBytes,
             minResponseBytes = snapSyncConfig.accountMinResponseBytes
@@ -1733,7 +1735,8 @@ class SNAPSyncController(
               maxInFlightRequests = snapSyncConfig.storageConcurrency,
               requestTimeout = snapSyncConfig.timeout,
               snapSyncController = self,
-              initialMaxInFlightPerPeer = 0, // Defer storage dispatch during AccountRangeSync — prevents false pivot refreshes from stale-root timeouts
+              initialMaxInFlightPerPeer =
+                0, // Defer storage dispatch during AccountRangeSync — prevents false pivot refreshes from stale-root timeouts
               initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
               minResponseBytes = snapSyncConfig.storageMinResponseBytes
             )
@@ -1761,7 +1764,7 @@ class SNAPSyncController(
   // Internal message for periodic account range requests
   private case object RequestAccountRanges
 
-  private def requestAccountRanges(): Unit = {
+  private def requestAccountRanges(): Unit =
     // Notify coordinator of available peers
     accountRangeCoordinator.foreach { coordinator =>
       val pivot = pivotBlock.getOrElse(BigInt(0))
@@ -1782,12 +1785,11 @@ class SNAPSyncController(
         }
       }
     }
-  }
 
   // Internal message for periodic bytecode requests
   private case object RequestByteCodes
 
-  private def requestByteCodes(): Unit = {
+  private def requestByteCodes(): Unit =
     // Notify coordinator of available peers
     bytecodeCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
@@ -1803,12 +1805,11 @@ class SNAPSyncController(
         }
       }
     }
-  }
 
   // Internal message for periodic storage range requests
   private case object RequestStorageRanges
 
-  private def requestStorageRanges(): Unit = {
+  private def requestStorageRanges(): Unit =
     // Notify coordinator of available peers
     storageRangeCoordinator.foreach { coordinator =>
       val pivot = pivotBlock.getOrElse(BigInt(0))
@@ -1829,7 +1830,6 @@ class SNAPSyncController(
         }
       }
     }
-  }
 
   // Unified stagnation check — dispatches to the active coordinator based on current phase.
   override def aroundReceive(receive: Receive, msg: Any): Unit = msg match {
@@ -1837,7 +1837,9 @@ class SNAPSyncController(
       import org.apache.pekko.pattern.{ask, pipe}
       import org.apache.pekko.util.Timeout
       implicit val timeout: Timeout = Timeout(2.seconds)
-      log.debug(s"Stagnation check: phase=$currentPhase, stalledMs=${System.currentTimeMillis() - lastStorageProgressMs}")
+      log.debug(
+        s"Stagnation check: phase=$currentPhase, stalledMs=${System.currentTimeMillis() - lastStorageProgressMs}"
+      )
 
       currentPhase match {
         case AccountRangeSync =>
@@ -1869,7 +1871,9 @@ class SNAPSyncController(
       super.aroundReceive(receive, msg)
 
     case AccountCoordinatorProgress(progress) if currentPhase == AccountRangeSync =>
-      if (progress.elapsedTimeMs > 0 || progress.tasksPending > 0 || progress.tasksActive > 0 || progress.tasksCompleted > 0)
+      if (
+        progress.elapsedTimeMs > 0 || progress.tasksPending > 0 || progress.tasksActive > 0 || progress.tasksCompleted > 0
+      )
         maybeRestartIfAccountStagnant(progress)
       super.aroundReceive(receive, msg)
 
@@ -1972,7 +1976,7 @@ class SNAPSyncController(
   // Internal message for periodic healing requests
   private case object RequestTrieNodeHealing
 
-  private def requestTrieNodeHealing(): Unit = {
+  private def requestTrieNodeHealing(): Unit =
     // Notify coordinator of available peers
     trieNodeHealingCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
@@ -1988,7 +1992,6 @@ class SNAPSyncController(
         }
       }
     }
-  }
 
   private def validateState(): Unit = {
     if (!snapSyncConfig.stateValidationEnabled) {
@@ -2469,9 +2472,11 @@ class SNAPSyncController(
         // If chain download is still running, boost its concurrency and wait
         if (!chainDownloadComplete && chainDownloader.isDefined) {
           log.info("SNAP state sync complete, boosting chain download concurrency and waiting for completion...")
-          chainDownloader.foreach(_ ! ChainDownloader.BoostConcurrency(
-            snapSyncConfig.chainDownloadBoostedConcurrentRequests
-          ))
+          chainDownloader.foreach(
+            _ ! ChainDownloader.BoostConcurrency(
+              snapSyncConfig.chainDownloadBoostedConcurrentRequests
+            )
+          )
           currentPhase = ChainDownloadCompletion
           progressMonitor.startPhase(ChainDownloadCompletion)
           context.become(waitingForChainDownload)
@@ -2868,4 +2873,3 @@ object SNAPSyncConfig {
 
 // StateValidator has been extracted to StateValidator.scala
 // SyncProgressMonitor and SyncProgress have been extracted to SyncProgressMonitor.scala
-

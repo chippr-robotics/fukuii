@@ -105,8 +105,25 @@ class FastSync(
   }
 
   def startWithState(syncState: SyncState): Unit = {
+    // Check if headers in RocksDB go beyond the persisted bestBlockHeaderNumber.
+    // This happens when SyncState was persisted mid-download but the node restarted —
+    // headers continued being written to RocksDB past the last SyncState snapshot.
+    val existingBestHeader = blockchainReader.getBestBlockNumber()
+    val updatedState =
+      if (existingBestHeader > syncState.bestBlockHeaderNumber && existingBestHeader <= syncState.pivotBlock.number) {
+        log.info(
+          "Headers in database ({}) ahead of persisted sync state ({}). Advancing to skip redundant download.",
+          existingBestHeader,
+          syncState.bestBlockHeaderNumber
+        )
+        syncState.copy(
+          bestBlockHeaderNumber = existingBestHeader,
+          lastFullBlockNumber = existingBestHeader.max(syncState.lastFullBlockNumber)
+        )
+      } else syncState
+
     log.info("Starting fast sync with existing state and asking for new pivot block")
-    val syncingHandler = new SyncingHandler(syncState)
+    val syncingHandler = new SyncingHandler(updatedState)
     syncingHandler.askForPivotBlockUpdate(SyncRestart)
   }
 
@@ -137,14 +154,29 @@ class FastSync(
     case PivotBlockSelector.Result(pivotBlockHeader) =>
       if (pivotBlockHeader.number < 1) {
         log.info("Unable to start block synchronization in fast mode: pivot block is less than 1")
-        appStateStorage.fastSyncDone().commit()
-        context.become(idle)
-        syncController ! Done
+        // Don't give up — peers may not have been fork-validated yet at startup.
+        // Retry pivot selection after a delay instead of marking fast sync done.
+        log.info("Retrying pivot selection in {} (peers may still be connecting)", startRetryInterval)
+        scheduler.scheduleOnce(startRetryInterval, self, RetryPivotBlockSelection)
       } else {
+        // Check if headers already exist in RocksDB from a previous sync run.
+        // This avoids re-downloading millions of headers that survived a restart.
+        val existingBestHeader = blockchainReader.getBestBlockNumber()
+        val bootstrappedHeaderNumber =
+          if (existingBestHeader > 0 && existingBestHeader <= pivotBlockHeader.number) {
+            log.info(
+              "Found existing headers in database up to block {}. Skipping redundant header download.",
+              existingBestHeader
+            )
+            existingBestHeader
+          } else BigInt(0)
+
         val initialSyncState =
           SyncState(
             pivotBlockHeader,
-            safeDownloadTarget = pivotBlockHeader.number + syncConfig.fastSyncBlockValidationX
+            safeDownloadTarget = pivotBlockHeader.number + syncConfig.fastSyncBlockValidationX,
+            bestBlockHeaderNumber = bootstrappedHeaderNumber,
+            lastFullBlockNumber = bootstrappedHeaderNumber
           )
         val syncingHandler = new SyncingHandler(initialSyncState)
         context.become(syncingHandler.receive)
@@ -161,6 +193,7 @@ class FastSync(
     private val BlockHeadersHandlerName = "block-headers-request-handler"
     // not part of syncstate as we do not want to persist is.
     private var stateSyncRestartRequested = false
+    private var stateSyncStarted = false
 
     private var requestedHeaders: Map[Peer, BigInt] = Map.empty
 
@@ -398,6 +431,7 @@ class FastSync(
               "SyncRestart: sending existing pivot state root to state scheduler (block {})",
               syncState.pivotBlock.number
             )
+            stateSyncStarted = true
             syncStateScheduler ! StartSyncingTo(syncState.pivotBlock.stateRoot, syncState.pivotBlock.number)
           }
           context.become(this.receive)
@@ -461,6 +495,7 @@ class FastSync(
             } else {
               syncState = syncState.copy(updatingPivotBlock = false)
               stateSyncRestartRequested = false
+              stateSyncStarted = true
               syncStateScheduler ! StartSyncingTo(pivotBlockHeader.stateRoot, pivotBlockHeader.number)
             }
           } else {
@@ -469,11 +504,16 @@ class FastSync(
               syncConfig.fastSyncBlockValidationX,
               updateFailures = false
             )
-            log.debug(
-              "Changing pivot block to {}, new safe target is {}",
+            log.info(
+              "Pivot block updated to {}, new safe target {}. Resuming state download with new root.",
               pivotBlockHeader.number,
               syncState.safeDownloadTarget
             )
+            // Always restart state download with new pivot — even if the jump is large.
+            // The state scheduler's bloom filter handles nodes already downloaded.
+            stateSyncRestartRequested = false
+            stateSyncStarted = true
+            syncStateScheduler ! StartSyncingTo(pivotBlockHeader.stateRoot, pivotBlockHeader.number)
           }
 
         case LastBlockValidationFailed =>
@@ -492,11 +532,19 @@ class FastSync(
             syncConfig.fastSyncBlockValidationX,
             updateFailures = false
           )
-          log.debug(
-            "Changing pivot block to {}, new safe target is {}",
+          log.info(
+            "SyncRestart: pivot block updated to {}, safe target {}, starting state download",
             pivotBlockHeader.number,
             syncState.safeDownloadTarget
           )
+          // Start the state scheduler — without this, state download never begins after restart.
+          if (
+            !syncState.stateSyncFinished && pivotBlockHeader.stateRoot != ByteString(MerklePatriciaTrie.EmptyRootHash)
+          ) {
+            stateSyncRestartRequested = false
+            stateSyncStarted = true
+            syncStateScheduler ! StartSyncingTo(pivotBlockHeader.stateRoot, pivotBlockHeader.number)
+          }
       }
 
     private def removeRequestHandler(handler: ActorRef): Unit = {
@@ -907,6 +955,67 @@ class FastSync(
           "notInTheMiddleOfUpdate" -> notInTheMiddleOfUpdate
         )
       )
+      // Start state download in parallel with block download — don't wait for blocks to finish.
+      // State only depends on the pivot block's state root, which we know from the start.
+      if (
+        !stateSyncStarted && !syncState.stateSyncFinished && notInTheMiddleOfUpdate &&
+        syncState.pivotBlock.stateRoot != ByteString(MerklePatriciaTrie.EmptyRootHash)
+      ) {
+        log.info(
+          "Starting state download in parallel with block download for pivot block {}",
+          syncState.pivotBlock.number
+        )
+        stateSyncStarted = true
+        stateSyncRestartRequested = false
+        syncStateScheduler ! StartSyncingTo(syncState.pivotBlock.stateRoot, syncState.pivotBlock.number)
+      }
+
+      // Refresh pivot for state download when it becomes stale — whether blocks are done or not.
+      // The SNAP serve window is ~128 blocks (~28 min on ETC). If state download takes longer,
+      // peers stop serving the old root. Refreshing the pivot gives state a fresh root to work with.
+      // Reset the restart flag once the pivot update completes (updatingPivotBlock returns to false).
+      if (stateSyncRestartRequested && !syncState.updatingPivotBlock) {
+        stateSyncRestartRequested = false
+      }
+      if (
+        stateSyncStarted && !syncState.stateSyncFinished && !stateSyncRestartRequested &&
+        !syncState.updatingPivotBlock
+      ) {
+        // Detect stale state root via two signals:
+        // 1. pivotBlockIsStale() — peers are ahead of our pivot
+        // 2. All peers blacklisted — evidence the root expired (peers return empty for this root)
+        val allPeersBlacklisted = peersToDownloadFrom.isEmpty && handshakedPeers.nonEmpty
+        if (pivotBlockIsStale() || allPeersBlacklisted) {
+          log.info(
+            "State root stale (allBlacklisted={}), requesting pivot update for state refresh",
+            allPeersBlacklisted
+          )
+          syncStateScheduler ! RestartRequested
+          stateSyncRestartRequested = true
+          askForPivotBlockUpdate(ImportedLastBlock)
+        }
+      }
+
+      // When blocks are done and state download is mostly complete but can't converge
+      // (remaining nodes change every block), declare state done and let regular sync
+      // fetch missing nodes on-demand via resolvingMissingNode.
+      if (noBlockchainWorkRemaining && !syncState.stateSyncFinished && stateSyncStarted) {
+        val downloaded = FastSyncMetrics.getDownloadedNodes
+        val total = FastSyncMetrics.getTotalNodes
+        val pct = if (total > 0) (downloaded.toDouble / total * 100).toInt else 0
+        if (pct >= 95 && total > 1000) {
+          log.info(
+            "State download at {}% ({}/{}) with blocks complete. " +
+              "Remaining nodes are at the chain tip and change every block. " +
+              "Completing fast sync — regular sync will fetch missing nodes on-demand.",
+            pct,
+            downloaded,
+            total
+          )
+          syncState = syncState.copy(stateSyncFinished = true)
+        }
+      }
+
       if (fullySynced) {
         finish()
       } else {

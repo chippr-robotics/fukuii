@@ -122,16 +122,16 @@ services:
       - ./fukuii-conf-1:/app/conf:ro
     # Assembly JAR uses java entrypoint directly (not dist launcher)
     command:
-      - "-Xmx8g"
+      - "-Xmx6g"
       - "-Xms2g"
       - "-Xss10M"
       - "-XX:+UseG1GC"
       - "-XX:MaxGCPauseMillis=200"
-      - "-Dconfig.file=/app/conf/mordor.conf"
+      - "-Dconfig.file=/app/conf/etc.conf"
       - "-Dfukuii.datadir=/app/data"
       - "-jar"
       - "/app/fukuii/lib/fukuii-assembly-0.1.240.jar"
-      - "mordor"
+      - "etc"
     networks:
       - fukuii-network
     healthcheck:

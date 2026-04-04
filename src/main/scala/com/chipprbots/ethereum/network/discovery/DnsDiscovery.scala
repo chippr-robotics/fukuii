@@ -23,8 +23,8 @@ import com.chipprbots.ethereum.utils.Logger
 
 /** EIP-1459: DNS-based peer discovery.
   *
-  * Resolves Ethereum Node Records (ENR) from a DNS tree, converting them to enode:// URLs.
-  * This is the same mechanism core-geth uses to find Mordor peers via `all.mordor.blockd.info`.
+  * Resolves Ethereum Node Records (ENR) from a DNS tree, converting them to enode:// URLs. This is the same mechanism
+  * core-geth uses to find Mordor peers via `all.mordor.blockd.info`.
   *
   * DNS tree format:
   *   - Root: `enrtree-root:v1 e=<hash> l=<hash> seq=<n> sig=<base64>`
@@ -34,8 +34,8 @@ import com.chipprbots.ethereum.utils.Logger
   */
 object DnsDiscovery extends Logger {
 
-  /** Maximum number of ENR records to resolve from a single DNS tree.
-    * Prevents runaway resolution if the tree is very large.
+  /** Maximum number of ENR records to resolve from a single DNS tree. Prevents runaway resolution if the tree is very
+    * large.
     */
   private val MaxRecords = 500
 
@@ -47,8 +47,10 @@ object DnsDiscovery extends Logger {
 
   /** Resolve enode URLs from a DNS discovery domain.
     *
-    * @param domain DNS domain hosting the ENR tree (e.g., "all.mordor.blockd.info")
-    * @return set of enode:// URL strings, empty on any failure
+    * @param domain
+    *   DNS domain hosting the ENR tree (e.g., "all.mordor.blockd.info")
+    * @return
+    *   set of enode:// URL strings, empty on any failure
     */
   def resolveEnodes(domain: String): Set[String] = {
     log.info("DNS_DISCOVERY: Resolving peers from DNS tree: {}", domain)
@@ -81,9 +83,7 @@ object DnsDiscovery extends Logger {
             log.warn("DNS_DISCOVERY: No TXT record found for {}", domain)
             Set.empty
         }
-      } finally {
-        ctx.close()
-      }
+      } finally ctx.close()
     } catch {
       case ex: Exception =>
         log.warn("DNS_DISCOVERY: Failed to resolve DNS tree from {}: {}", domain, ex.getMessage)
@@ -133,7 +133,7 @@ object DnsDiscovery extends Logger {
       case Some(record) if record.startsWith("enr:") =>
         parseEnrToEnode(record) match {
           case Some(enode) => enodes += enode
-          case None => log.debug("DNS_DISCOVERY: Failed to parse ENR leaf at {}", subdomain)
+          case None        => log.debug("DNS_DISCOVERY: Failed to parse ENR leaf at {}", subdomain)
         }
 
       case Some(record) if record.startsWith("enrtree://") =>
@@ -150,10 +150,10 @@ object DnsDiscovery extends Logger {
 
   /** Parse an ENR record into an enode:// URL.
     *
-    * ENR format (EIP-778): RLP([signature, seq, k1, v1, k2, v2, ...])
-    * Base64 encoded (URL-safe, no padding) after "enr:" prefix.
+    * ENR format (EIP-778): RLP([signature, seq, k1, v1, k2, v2, ...]) Base64 encoded (URL-safe, no padding) after
+    * "enr:" prefix.
     */
-  private[discovery] def parseEnrToEnode(enrRecord: String): Option[String] = {
+  private[discovery] def parseEnrToEnode(enrRecord: String): Option[String] =
     try {
       val base64Data = enrRecord.stripPrefix("enr:")
       val bytes = decodeBase64Url(base64Data)
@@ -201,7 +201,6 @@ object DnsDiscovery extends Logger {
         log.debug("DNS_DISCOVERY: ENR parse error: {}", ex.getMessage)
         None
     }
-  }
 
   /** Parse RLP key-value pairs into a map. Keys are UTF-8 strings, values are raw byte arrays. */
   private def parseKVPairs(items: Seq[rlp.RLPEncodeable]): Map[String, Array[Byte]] = {
@@ -219,17 +218,16 @@ object DnsDiscovery extends Logger {
     pairs.toMap
   }
 
-  private def parseIp(bytes: Array[Byte]): Option[InetAddress] = {
+  private def parseIp(bytes: Array[Byte]): Option[InetAddress] =
     if (bytes.length == 4 || bytes.length == 16)
       Try(InetAddress.getByAddress(bytes)).toOption
     else
       None
-  }
 
   private def parsePort(bytes: Array[Byte]): Int = {
     if (bytes.isEmpty) return 0
     // Big-endian integer
-    bytes.foldLeft(0) { (acc, b) => (acc << 8) | (b & 0xff) }
+    bytes.foldLeft(0)((acc, b) => (acc << 8) | (b & 0xff))
   }
 
   private def formatIp(addr: InetAddress): String = {
@@ -238,11 +236,11 @@ object DnsDiscovery extends Logger {
     if (host.contains(":")) s"[$host]" else host
   }
 
-  /** Decompress a 33-byte compressed secp256k1 public key to a 64-char hex node ID.
-    * Node ID = keccak256(uncompressed_pubkey_64_bytes) — wait, no.
-    * In devp2p, node ID IS the 64-byte uncompressed public key (without prefix), hex-encoded.
+  /** Decompress a 33-byte compressed secp256k1 public key to a 64-char hex node ID. Node ID =
+    * keccak256(uncompressed_pubkey_64_bytes) — wait, no. In devp2p, node ID IS the 64-byte uncompressed public key
+    * (without prefix), hex-encoded.
     */
-  private def decompressToNodeId(compressedKey: Array[Byte]): Option[String] = {
+  private def decompressToNodeId(compressedKey: Array[Byte]): Option[String] =
     try {
       if (compressedKey.length != 33) return None
       val point = crypto.curve.getCurve.decodePoint(compressedKey)
@@ -255,10 +253,9 @@ object DnsDiscovery extends Logger {
     } catch {
       case _: Exception => None
     }
-  }
 
   /** URL-safe Base64 decode (RFC 4648 §5, no padding). */
-  private def decodeBase64Url(input: String): Array[Byte] = {
+  private def decodeBase64Url(input: String): Array[Byte] =
     try {
       // Add padding if needed
       val padded = input.length % 4 match {
@@ -272,10 +269,9 @@ object DnsDiscovery extends Logger {
     } catch {
       case _: Exception => Array.empty
     }
-  }
 
   /** DNS TXT record lookup using JNDI (JDK built-in, no external dependency). */
-  private def lookupTxt(ctx: InitialDirContext, domain: String): Option[String] = {
+  private def lookupTxt(ctx: InitialDirContext, domain: String): Option[String] =
     try {
       val attrs = ctx.getAttributes(domain, Array("TXT"))
       val txtAttr = attrs.get("TXT")
@@ -293,7 +289,6 @@ object DnsDiscovery extends Logger {
         log.debug("DNS_DISCOVERY: DNS lookup failed for {}: {}", domain, ex.getMessage)
         None
     }
-  }
 
   /** Create a JNDI DNS context with reasonable timeouts. */
   private def createDnsContext(): InitialDirContext = {

@@ -22,7 +22,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockBroadcasterActor.Bro
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync.ProgressProtocol
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.crypto.kec256
-import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.{EvmCodeStorage, StateStorage}
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.ledger._
 import com.chipprbots.ethereum.mpt._
@@ -44,6 +44,7 @@ class BlockImporter(
     consensus: ConsensusAdapter,
     blockchainReader: BlockchainReader,
     stateStorage: StateStorage,
+    evmCodeStorage: EvmCodeStorage,
     branchResolution: BranchResolution,
     syncConfig: SyncConfig,
     ommersPool: ActorRef,
@@ -115,6 +116,9 @@ class BlockImporter(
       val hash = kec256(node)
       log.info("Saving late-arriving fetched state node {}", ByteStringUtils.hash2string(hash))
       stateStorage.saveNode(hash, node.toArray, blockchainReader.getBestBlockNumber())
+      // Also save as contract code in case this was a bytecode fetch
+      try evmCodeStorage.put(hash, node).commit()
+      catch { case _: Exception => () }
   }
 
   private def resolvingMissingNode(blocksToRetry: NonEmptyList[Block], blockImportType: BlockImportType)(
@@ -129,6 +133,10 @@ class BlockImporter(
         blocksToRetry.head.number
       )
       stateStorage.saveNode(hash, node.toArray, blocksToRetry.head.number)
+      // Also save as contract code — if this was a code fetch, the hash is the codeHash
+      // and the data is the bytecode. EvmCodeStorage is keyed by codeHash, same as the fetch.
+      try evmCodeStorage.put(hash, node).commit()
+      catch { case _: Exception => () }
       importBlocks(blocksToRetry, blockImportType)(state)
 
     case ReceiveTimeout =>
@@ -435,18 +443,19 @@ class BlockImporter(
                 val accountHash = kec256(e.accountAddress)
                 // Try local trie walk first; if that fails (deferred merkleization — no local trie),
                 // construct multi-depth pathsets from the account hash directly.
-                val paths: Option[Seq[Seq[ByteString]]] = parentStateRoot.flatMap { root =>
-                  walkAccountPath(root, accountHash, e.hash).map(p => Seq(p))
-                }.orElse {
-                  // Deferred merkleization fallback: request nodes at nibble prefix depths 1-16.
-                  // Each prefix is a 1-element pathset group (account trie, not storage).
-                  // The SNAP server walks its own trie and returns the node at each depth.
-                  val nibbles = accountHash.toArray.flatMap(b =>
-                    Array(((b >> 4) & 0xf).toByte, (b & 0xf).toByte))
-                  Some((1 to 16).map { depth =>
-                    Seq(ByteString(HexPrefix.encode(nibbles.take(depth), isLeaf = false)))
-                  })
-                }
+                val paths: Option[Seq[Seq[ByteString]]] = parentStateRoot
+                  .flatMap { root =>
+                    walkAccountPath(root, accountHash, e.hash).map(p => Seq(p))
+                  }
+                  .orElse {
+                    // Deferred merkleization fallback: request nodes at nibble prefix depths 1-16.
+                    // Each prefix is a 1-element pathset group (account trie, not storage).
+                    // The SNAP server walks its own trie and returns the node at each depth.
+                    val nibbles = accountHash.toArray.flatMap(b => Array(((b >> 4) & 0xf).toByte, (b & 0xf).toByte))
+                    Some((1 to 16).map { depth =>
+                      Seq(ByteString(HexPrefix.encode(nibbles.take(depth), isLeaf = false)))
+                    })
+                  }
                 log.info(
                   "Missing account trie node {} for account {} during import of block {}, pathFound={}",
                   ByteStringUtils.hash2string(e.hash),
@@ -501,6 +510,31 @@ class BlockImporter(
                 )
                 fetcher ! BlockFetcher.FetchStateNode(e.hash, self, parentStateRoot, paths)
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
+              case _ if err.toString.contains("Block has invalid gas used") =>
+                // Gas mismatch after execution — likely missing contract code from
+                // incomplete fast sync state. The EVM treated a contract as an EOA
+                // because its code wasn't in EvmCodeStorage.
+                val failedBlock = notImportedBlocks.head
+                findMissingContractCode(failedBlock) match {
+                  case Some(codeHash) =>
+                    log.warning(
+                      "Gas mismatch on block {} — missing contract code {}. Fetching via GetNodeData.",
+                      failedBlock.number,
+                      ByteStringUtils.hash2string(codeHash)
+                    )
+                    val parentStateRoot =
+                      try
+                        Option(blockchainReader.getBlockHeaderByHash(failedBlock.header.parentHash)).flatten
+                          .map(_.stateRoot)
+                      catch { case _: Exception => None }
+                    fetcher ! BlockFetcher.FetchStateNode(codeHash, self, parentStateRoot, None)
+                    ResolvingMissingNode(NonEmptyList(failedBlock, notImportedBlocks.tail))
+                  case None =>
+                    log.error("Gas mismatch on block {} but no missing contract code found", failedBlock.number)
+                    val invalidBlockNr = failedBlock.number
+                    fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
+                    Running
+                }
               case _ =>
                 val invalidBlockNr = notImportedBlocks.head.number
                 fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
@@ -657,6 +691,44 @@ class BlockImporter(
         Right(Nil)
     }
 
+  /** Check if a block's transactions touch any contract whose code is missing from local storage. Returns the codeHash
+    * of the first missing contract found.
+    */
+  private def findMissingContractCode(block: Block): Option[ByteString] = {
+    // Use the parent block number — execution starts from the parent's state root.
+    // The failing block hasn't been imported yet, so its state root doesn't exist locally.
+    val parentBlockNumber = block.header.number - 1
+    block.body.transactionList.iterator
+      .flatMap { stx =>
+        stx.tx.receivingAddress.flatMap { address =>
+          try
+            // Look up the account directly via blockchainReader
+            blockchainReader
+              .getAccount(blockchainReader.getBestBranch(), address, parentBlockNumber)
+              .flatMap { account =>
+                if (account.codeHash != Account.EmptyCodeHash) {
+                  evmCodeStorage.get(account.codeHash) match {
+                    case None =>
+                      log.info(
+                        "Found missing code for contract {} (codeHash={})",
+                        address,
+                        ByteStringUtils.hash2string(account.codeHash)
+                      )
+                      Some(account.codeHash)
+                    case Some(_) => None
+                  }
+                } else None
+              }
+          catch {
+            case ex: Exception =>
+              log.warning("Failed to check contract code for {} at block {}: {}", address, parentBlockNumber, ex.getMessage)
+              None
+          }
+        }
+      }
+      .nextOption()
+  }
+
   private def bestKnownBlockNumber: BigInt = blockchainReader.getBestBlockNumber()
 
   private def getBehavior(newBehavior: NewBehavior, blockImportType: BlockImportType): Behavior = newBehavior match {
@@ -680,6 +752,7 @@ object BlockImporter {
       consensus: ConsensusAdapter,
       blockchainReader: BlockchainReader,
       stateStorage: StateStorage,
+      evmCodeStorage: EvmCodeStorage,
       branchResolution: BranchResolution,
       syncConfig: SyncConfig,
       ommersPool: ActorRef,
@@ -694,6 +767,7 @@ object BlockImporter {
         consensus,
         blockchainReader,
         stateStorage,
+        evmCodeStorage,
         branchResolution,
         syncConfig,
         ommersPool,

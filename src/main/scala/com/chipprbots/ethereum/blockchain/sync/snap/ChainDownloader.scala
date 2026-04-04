@@ -41,8 +41,8 @@ import com.chipprbots.ethereum.utils.Config.SyncConfig
 /** Downloads block headers, bodies, and receipts from genesis to a target block in parallel with SNAP state sync.
   *
   * This follows the Geth/Nethermind pattern of overlapping chain download with state download. Chain data (headers,
-  * bodies, receipts) is canonical and valid regardless of which pivot block is used for state sync. By downloading chain
-  * data during SNAP sync, the node is ready for regular sync immediately after state download completes.
+  * bodies, receipts) is canonical and valid regardless of which pivot block is used for state sync. By downloading
+  * chain data during SNAP sync, the node is ready for regular sync immediately after state download completes.
   *
   * Uses a simple pipeline: headers first, then bodies and receipts for downloaded headers. Each peer gets at most one
   * outstanding request to avoid contention with SNAP state sync (which has higher priority).
@@ -370,16 +370,30 @@ class ChainDownloader(
       val trimmed = headers.dropWhile(_.number < expectedStart)
       log.debug(
         "Chain download: trimmed overlapping headers {}-{} to start at {} ({} usable)",
-        headers.head.number, headers.last.number, expectedStart, trimmed.size
+        headers.head.number,
+        headers.last.number,
+        expectedStart,
+        trimmed.size
       )
       trimmed
     } else if (headers.head.number > expectedStart) {
       // Gap — can't use without the intervening headers
-      log.debug("Chain download: peer {} sent headers starting at {} but we need {} (gap)", peer.id, headers.head.number, expectedStart)
+      log.debug(
+        "Chain download: peer {} sent headers starting at {} but we need {} (gap)",
+        peer.id,
+        headers.head.number,
+        expectedStart
+      )
       return
     } else {
       // All stale (before our cursor)
-      log.debug("Chain download: peer {} sent stale headers {}-{}, already past {}", peer.id, headers.head.number, headers.last.number, expectedStart)
+      log.debug(
+        "Chain download: peer {} sent stale headers {}-{}, already past {}",
+        peer.id,
+        headers.head.number,
+        headers.last.number,
+        expectedStart
+      )
       return
     }
 
@@ -387,7 +401,7 @@ class ChainDownloader(
     var prevHash = blockchainReader.getBlockHeaderByNumber(bestHeaderNumber).map(_.hash)
     var validCount = 0
 
-    for (header <- usable) {
+    for (header <- usable)
       if (prevHash.exists(_ == header.parentHash)) {
         // Store header + chain weight
         val parentWeight = blockchainReader
@@ -417,7 +431,6 @@ class ChainDownloader(
         }
         return
       }
-    }
 
     bestHeaderNumber += validCount
     headersDownloaded += validCount
@@ -427,7 +440,11 @@ class ChainDownloader(
     if (bodies.isEmpty) {
       // Re-queue the hashes
       bodiesQueue = requestedHashes.toVector ++ bodiesQueue
-      blacklist.add(peer.id, syncConfig.blacklistDuration, EmptyBlockBodies(requestedHashes.map(h => s"0x${h.toArray.map("%02x".format(_)).mkString}")))
+      blacklist.add(
+        peer.id,
+        syncConfig.blacklistDuration,
+        EmptyBlockBodies(requestedHashes.map(h => s"0x${h.toArray.map("%02x".format(_)).mkString}"))
+      )
       return
     }
 
@@ -465,15 +482,18 @@ class ChainDownloader(
     try {
       // Decode using the same approach as ETH63.Receipts.ReceiptsDec
       val receiptsByBlock: Seq[Seq[Receipt]] = receiptsRlp.items.collect { case blockReceipts: RLPList =>
-        blockReceipts.items.flatMap {
-          case v: RLPValue =>
-            val receiptBytes = v.bytes
-            if (receiptBytes.nonEmpty && (receiptBytes(0) & 0xff) < 0x7f && receiptBytes.length > 1) {
-              try Seq(RLPValue(Array(receiptBytes(0))), rawDecode(receiptBytes.tail))
-              catch { case _: Exception => Seq(v) }
-            } else Seq(v)
-          case other => Seq(other)
-        }.toTypedRLPEncodables.map(_.toReceipt)
+        blockReceipts.items
+          .flatMap {
+            case v: RLPValue =>
+              val receiptBytes = v.bytes
+              if (receiptBytes.nonEmpty && (receiptBytes(0) & 0xff) < 0x7f && receiptBytes.length > 1) {
+                try Seq(RLPValue(Array(receiptBytes(0))), rawDecode(receiptBytes.tail))
+                catch { case _: Exception => Seq(v) }
+              } else Seq(v)
+            case other => Seq(other)
+          }
+          .toTypedRLPEncodables
+          .map(_.toReceipt)
       }
 
       // Store receipts
@@ -492,11 +512,15 @@ class ChainDownloader(
       case ex: Exception =>
         log.warning("Chain download: failed to decode receipts from peer {}: {}", peer.id, ex.getMessage)
         receiptsQueue = requestedHashes.toVector ++ receiptsQueue
-        blacklist.add(peer.id, syncConfig.blacklistDuration, FastSyncRequestFailed(s"Invalid receipts: ${ex.getMessage}"))
+        blacklist.add(
+          peer.id,
+          syncConfig.blacklistDuration,
+          FastSyncRequestFailed(s"Invalid receipts: ${ex.getMessage}")
+        )
     }
   }
 
-  private def checkCompletion(): Unit = {
+  private def checkCompletion(): Unit =
     if (
       bestHeaderNumber >= targetBlock &&
       bodiesQueue.isEmpty &&
@@ -515,7 +539,6 @@ class ChainDownloader(
       context.parent ! Done
       context.become(idle)
     }
-  }
 
   private def findBestStoredHeader(): BigInt = {
     // Binary search for the highest stored header starting from genesis

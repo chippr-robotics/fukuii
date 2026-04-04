@@ -220,10 +220,10 @@ class StorageRangeCoordinator(
     peerBatchSuccessStreak.remove(peer.id.value)
   }
 
-  /** Scale batch size back up after consecutive successful packed responses.
-    * Doubles the batch size per peer, capped at maxAccountsPerBatch.
+  /** Scale batch size back up after consecutive successful packed responses. Doubles the batch size per peer, capped at
+    * maxAccountsPerBatch.
     */
-  private def maybeIncreaseBatchSize(peer: Peer, servedCount: Int, requestedCount: Int): Unit = {
+  private def maybeIncreaseBatchSize(peer: Peer, servedCount: Int, requestedCount: Int): Unit =
     // Only count as "packed" if the response served most of the requested accounts
     if (requestedCount > 1 && servedCount >= requestedCount / 2) {
       val streak = peerBatchSuccessStreak.getOrElse(peer.id.value, 0) + 1
@@ -234,11 +234,12 @@ class StorageRangeCoordinator(
         if (next > current) {
           peerBatchSize.update(peer.id.value, next)
           peerBatchSuccessStreak.update(peer.id.value, 0)
-          log.info(s"Peer ${peer.id.value} batch size increased: $current -> $next (after $streak consecutive successes)")
+          log.info(
+            s"Peer ${peer.id.value} batch size increased: $current -> $next (after $streak consecutive successes)"
+          )
         }
       }
     }
-  }
 
   // Track last known available peers so we can re-dispatch after task failures
   // without waiting for the next StoragePeerAvailable message.
@@ -317,66 +318,67 @@ class StorageRangeCoordinator(
   /** Accounts currently having their tries built asynchronously. Prevents double-building. */
   private val accountsInTrieConstruction = mutable.Set[ByteString]()
 
-  /** Maximum buffered slots across all accounts before forcing an incremental trie build.
-    * Prevents OOM when downloading mainnet with millions of storage slots.
-    * At ~64 bytes per slot (32 hash + 32 value), 1M slots ≈ 64MB.
+  /** Maximum buffered slots across all accounts before forcing an incremental trie build. Prevents OOM when downloading
+    * mainnet with millions of storage slots. At ~64 bytes per slot (32 hash + 32 value), 1M slots ≈ 64MB.
     */
   private val maxBufferedSlots: Long = 1000000
   private var totalBufferedSlots: Long = 0
 
-  /** Per-account memory limit: flush large accounts incrementally when they exceed this.
-    * Mainnet DeFi contracts can have 10-50M slots. Without per-account limits, a single
-    * contract could buffer several GB before trie construction starts.
-    * At 64 bytes/slot, 500K slots = ~32MB per account.
+  /** Per-account memory limit: flush large accounts incrementally when they exceed this. Mainnet DeFi contracts can
+    * have 10-50M slots. Without per-account limits, a single contract could buffer several GB before trie construction
+    * starts. At 64 bytes/slot, 500K slots = ~32MB per account.
     */
   private val maxSlotsPerAccount: Long = 500000
 
-  /** Threshold for triggering incremental builds of complete accounts.
-    * When we have this many complete accounts buffered, build their tries without waiting.
+  /** Threshold for triggering incremental builds of complete accounts. When we have this many complete accounts
+    * buffered, build their tries without waiting.
     */
   private val trieConstructionBatchSize = 64
 
-  /** Accounts whose slots have been fully downloaded (no continuation) and are ready for trie construction.
-    * Using LinkedHashSet for dedup + insertion order (FIFO processing).
+  /** Accounts whose slots have been fully downloaded (no continuation) and are ready for trie construction. Using
+    * LinkedHashSet for dedup + insertion order (FIFO processing).
     */
   private val accountsReadyForBuild = mutable.LinkedHashSet[ByteString]()
 
-  /** StackTrie shortcut threshold: contracts with fewer slots than this skip MPT construction
-    * entirely — only flat storage is written. The trie is reconstructed lazily from flat data
-    * during the healing phase or deferred Merkleization pass. ~95% of ETC contracts qualify.
+  /** StackTrie shortcut threshold: contracts with fewer slots than this skip MPT construction entirely — only flat
+    * storage is written. The trie is reconstructed lazily from flat data during the healing phase or deferred
+    * Merkleization pass. ~95% of ETC contracts qualify.
     */
   private val smallContractThreshold = 1024
 
-  /** Bounded thread pool for trie construction — controls RocksDB write pressure.
-    * Using 3 threads avoids overwhelming the single-threaded RocksDB compaction while
-    * still enabling parallel trie builds. Unbounded Futures on sync-dispatcher caused
-    * thread starvation under heavy load.
+  /** Bounded thread pool for trie construction — controls RocksDB write pressure. Using 3 threads avoids overwhelming
+    * the single-threaded RocksDB compaction while still enabling parallel trie builds. Unbounded Futures on
+    * sync-dispatcher caused thread starvation under heavy load.
     */
   private val trieBuilderPool: java.util.concurrent.ExecutorService =
-    java.util.concurrent.Executors.newFixedThreadPool(3, (r: Runnable) => {
-      val t = new Thread(r, "storage-trie-builder")
-      t.setDaemon(true)
-      t
-    })
+    java.util.concurrent.Executors.newFixedThreadPool(
+      3,
+      (r: Runnable) => {
+        val t = new Thread(r, "storage-trie-builder")
+        t.setDaemon(true)
+        t
+      }
+    )
   private val trieBuilderEc = scala.concurrent.ExecutionContext.fromExecutorService(trieBuilderPool)
 
-  /** Write only to flat storage for small contracts — skip MPT construction.
-    * Called synchronously from the actor for accounts that arrived in a single response
-    * with fewer slots than smallContractThreshold. These are ~95% of ETC contracts.
-    * The MPT will be built lazily from flat data during healing or post-sync Merkleization.
+  /** Write only to flat storage for small contracts — skip MPT construction. Called synchronously from the actor for
+    * accounts that arrived in a single response with fewer slots than smallContractThreshold. These are ~95% of ETC
+    * contracts. The MPT will be built lazily from flat data during healing or post-sync Merkleization.
     */
-  private def writeSmallContractFlatOnly(accountHash: ByteString, slots: mutable.ArrayBuffer[(ByteString, ByteString)]): Unit = {
+  private def writeSmallContractFlatOnly(
+      accountHash: ByteString,
+      slots: mutable.ArrayBuffer[(ByteString, ByteString)]
+  ): Unit = {
     val sorted = slots.sortBy(_._1)(ByteStringOrdering)
     flatSlotStorage.putSlotsBatch(accountHash, sorted.toSeq).commit()
     pendingAccountSlots.remove(accountHash)
     totalBufferedSlots -= slots.size
   }
 
-  /** Build tries for a batch of complete accounts on a background thread.
-    * Sorts slots by key for better trie locality, builds tries, and flushes to storage.
-    * Uses a batch-local DeferredWriteMptStorage to avoid thread-safety issues with the
-    * shared mptStorage — each batch gets its own write buffer that flushes independently.
-    * Trie nodes and flat slot data are written in a single combined RocksDB batch.
+  /** Build tries for a batch of complete accounts on a background thread. Sorts slots by key for better trie locality,
+    * builds tries, and flushes to storage. Uses a batch-local DeferredWriteMptStorage to avoid thread-safety issues
+    * with the shared mptStorage — each batch gets its own write buffer that flushes independently. Trie nodes and flat
+    * slot data are written in a single combined RocksDB batch.
     */
   private def buildAccountTriesAsync(accountHashes: Seq[ByteString]): Unit = {
     if (accountHashes.isEmpty) return
@@ -453,7 +455,7 @@ class StorageRangeCoordinator(
   }
 
   /** Check if a large account needs incremental flushing (per-account memory limit). */
-  private def maybeFlushLargeAccount(accountHash: ByteString): Unit = {
+  private def maybeFlushLargeAccount(accountHash: ByteString): Unit =
     pendingAccountSlots.get(accountHash).foreach { slots =>
       if (slots.size >= maxSlotsPerAccount) {
         // Large account — build trie incrementally to prevent OOM
@@ -466,7 +468,6 @@ class StorageRangeCoordinator(
         maybeStartTrieConstruction()
       }
     }
-  }
 
   /** Force build all remaining buffered accounts (e.g., on sync completion or force-complete). */
   private def flushAllPendingTrieBuilds(): Unit = {
@@ -579,8 +580,10 @@ class StorageRangeCoordinator(
       // Update contract completion progress for the progress monitor
       updateContractProgress()
       // When all downloads complete, flush remaining buffered accounts for trie construction
-      if (noMoreTasksExpected && tasks.isEmpty && activeTasks.isEmpty &&
-        accountsReadyForBuild.nonEmpty && accountsInTrieConstruction.isEmpty) {
+      if (
+        noMoreTasksExpected && tasks.isEmpty && activeTasks.isEmpty &&
+        accountsReadyForBuild.nonEmpty && accountsInTrieConstruction.isEmpty
+      ) {
         flushAllPendingTrieBuilds()
       }
       if (isComplete) {
@@ -666,7 +669,9 @@ class StorageRangeCoordinator(
       // Dispatching immediately causes all peers to return empty → marked stateless →
       // another pivot refresh → infinite tight loop (Bug 24).
       postRefreshCooldownUntilMs = System.currentTimeMillis() + postRefreshCooldownMs
-      log.info(s"Post-refresh cooldown active for ${postRefreshCooldownMs / 1000}s — waiting for peers to sync to new root")
+      log.info(
+        s"Post-refresh cooldown active for ${postRefreshCooldownMs / 1000}s — waiting for peers to sync to new root"
+      )
 
       // Schedule dispatch after the cooldown period instead of dispatching immediately
       import context.dispatcher
@@ -1064,12 +1069,11 @@ class StorageRangeCoordinator(
   /** Dispatch up to maxInFlightPerPeer requests to a single peer (pipelining). */
   private def dispatchIfPossible(peer: Peer): Unit = {
     var inflight = inFlightForPeer(peer)
-    while (tasks.nonEmpty && inflight < maxInFlightPerPeer && activeTasks.size < maxInFlightRequests) {
+    while (tasks.nonEmpty && inflight < maxInFlightPerPeer && activeTasks.size < maxInFlightRequests)
       requestNextRanges(peer) match {
         case Some(_) => inflight += 1
         case None    => return
       }
-    }
   }
 
   private def tryRedispatchPendingTasks(): Unit = {

@@ -148,20 +148,19 @@ class InMemoryWorldStateProxyStorage(
     new InMemoryWorldStateProxyStorage(newWrapped, flatSlotStorage, accountHash)
   }
 
-  override def load(addr: BigInt): BigInt = {
+  override def load(addr: BigInt): BigInt =
     // 1. Check dirty state first (in-memory modifications from current transaction)
     wrapped.cache.get(addr) match {
       case Some(optValue) => optValue.getOrElse(0)
-      case None =>
+      case None           =>
         // 2. Try flat storage O(1) lookup before O(log n) MPT traversal
         flatLookup(addr) match {
           case Some(value) => value
-          case None =>
+          case None        =>
             // 3. Fall back to MPT traversal (handles pre-sync data, missing flat entries)
             wrapped.get(addr).getOrElse(0)
         }
     }
-  }
 
   /** O(1) flat storage lookup: accountHash ++ keccak256(pad32(slotIndex)) → RLP(value) */
   private def flatLookup(addr: BigInt): Option[BigInt] =

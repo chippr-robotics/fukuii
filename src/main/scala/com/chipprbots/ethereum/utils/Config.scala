@@ -256,24 +256,23 @@ object Config {
           if (syncConfig.hasPath("use-bootstrap-checkpoints"))
             syncConfig.getBoolean("use-bootstrap-checkpoints")
           else false,
-        bootstrapCheckpoints =
-          if (syncConfig.hasPath("bootstrap-checkpoints")) {
-            import scala.jdk.CollectionConverters._
-            syncConfig.getStringList("bootstrap-checkpoints").asScala.toSeq.flatMap { entry =>
-              // Format: "blockNumber:0xblockHash"
-              entry.split(":") match {
-                case Array(num, hash) =>
-                  try {
-                    val blockNum = BigInt(num.trim)
-                    val blockHash = hash.trim
-                    Some((blockNum, blockHash))
-                  } catch {
-                    case _: NumberFormatException => None
-                  }
-                case _ => None
-              }
+        bootstrapCheckpoints = if (syncConfig.hasPath("bootstrap-checkpoints")) {
+          import scala.jdk.CollectionConverters._
+          syncConfig.getStringList("bootstrap-checkpoints").asScala.toSeq.flatMap { entry =>
+            // Format: "blockNumber:0xblockHash"
+            entry.split(":") match {
+              case Array(num, hash) =>
+                try {
+                  val blockNum = BigInt(num.trim)
+                  val blockHash = hash.trim
+                  Some((blockNum, blockHash))
+                } catch {
+                  case _: NumberFormatException => None
+                }
+              case _ => None
             }
-          } else Seq.empty
+          }
+        } else Seq.empty
       )
     }
   }

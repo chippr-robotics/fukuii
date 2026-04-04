@@ -219,7 +219,8 @@ class SyncController(
         )
       val headerBootstrap =
         context.actorOf(
-          PivotHeaderBootstrap.props(peersClient, blockchainWriter, targetBlock, syncConfig, scheduler, preferSnapPeers = true),
+          PivotHeaderBootstrap
+            .props(peersClient, blockchainWriter, targetBlock, syncConfig, scheduler, preferSnapPeers = true),
           s"pivot-header-bootstrap-$gen"
         )
 
@@ -356,7 +357,8 @@ class SyncController(
         )
       val newHeaderBootstrap =
         context.actorOf(
-          PivotHeaderBootstrap.props(newPeersClient, blockchainWriter, newTargetBlock, syncConfig, scheduler, preferSnapPeers = true),
+          PivotHeaderBootstrap
+            .props(newPeersClient, blockchainWriter, newTargetBlock, syncConfig, scheduler, preferSnapPeers = true),
           s"pivot-header-bootstrap-$gen"
         )
       context.become(
@@ -491,7 +493,9 @@ class SyncController(
         // Fix: substitute the finalized root into the pivot block header.
         bestBlockHeader.foreach { header =>
           val mptStorage = stateStorage.getReadOnlyStorage
-          val pivotRootExists = try { mptStorage.get(header.stateRoot.toArray); true } catch { case _: Exception => false }
+          val pivotRootExists =
+            try { mptStorage.get(header.stateRoot.toArray); true }
+            catch { case _: Exception => false }
           log.info(
             "State root availability check: pivotRoot({})={}",
             header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString,
@@ -501,7 +505,9 @@ class SyncController(
             val finalizedRoot = appStateStorage.getSnapSyncFinalizedRoot()
             finalizedRoot match {
               case Some(fRoot) =>
-                val fRootExists = try { mptStorage.get(fRoot.toArray); true } catch { case _: Exception => false }
+                val fRootExists =
+                  try { mptStorage.get(fRoot.toArray); true }
+                  catch { case _: Exception => false }
                 log.info(
                   "Finalized trie root {} availability: {}",
                   fRoot.take(8).toArray.map("%02x".format(_)).mkString,
@@ -627,6 +633,7 @@ class SyncController(
           consensus,
           blockchainReader,
           stateStorage,
+          evmCodeStorage,
           { val br = new BranchResolution(blockchainReader); br.messConfig = messConfig; br },
           validators.blockValidator,
           blacklist,
@@ -795,6 +802,7 @@ class SyncController(
         consensus,
         blockchainReader,
         stateStorage,
+        evmCodeStorage,
         { val br = new BranchResolution(blockchainReader); br.messConfig = messConfig; br },
         validators.blockValidator,
         blacklist,
