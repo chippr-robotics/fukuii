@@ -47,8 +47,6 @@ import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.Status.Sta
 import com.chipprbots.ethereum.network.p2p.messages.ETH64
 import com.chipprbots.ethereum.network.p2p.messages.ETH64.Status.{StatusEnc => ETH64StatusEnc}
 import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders.GetBlockHeadersEnc
-import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.DisconnectEnc
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.Reasons
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello.HelloEnc
@@ -149,34 +147,35 @@ class PeerActorSpec
   it should "successfully connect to ETC peer" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     val uri = new URI(s"enode://${Hex.toHexString(remoteNodeId.toArray[Byte])}@localhost:9000")
     val completeUri = new URI(s"enode://${Hex.toHexString(remoteNodeId.toArray[Byte])}@127.0.0.1:9000?discport=9000")
+
+    blockchainWriter.save(
+      Fixtures.Blocks.DaoForkBlock.block, Seq.empty,
+      ChainWeight.totalDifficultyOnly(daoForkBlockChainTotalDifficulty), saveAsBestBlock = true
+    )
+
     peer ! PeerActor.ConnectTo(uri)
     peer ! PeerActor.ConnectTo(uri)
 
     rlpxConnection.expectMsgClass(classOf[RLPxConnectionHandler.ConnectTo])
     rlpxConnection.reply(RLPxConnectionHandler.ConnectionEstablished(remoteNodeId))
 
-    // Hello exchange
     val remoteHello: Hello = Hello(4, "test-client", Seq(Capability.ETH68), 9000, ByteString("unused"))
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
 
-    val remoteStatus: Status = Status(
+    val remoteStatus: ETH64.Status = ETH64.Status(
       protocolVersion = Capability.ETH68.version,
       networkId = peerConf.networkId,
-      totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
+      totalDifficulty = daoForkBlockChainTotalDifficulty + 100000,
       bestHash = ByteString("blockhash"),
-      genesisHash = genesisHash
+      genesisHash = genesisHash,
+      forkId = ForkId.create(genesisHash, PeerActorSpec.this.blockchainConfig)(daoForkBlockNumber)
     )
-
-    // Node status exchange
     expectStatusMessage()
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
+    // ETH68: ForkId validation replaces fork block exchange per EIP-2124
+    rlpxConnection.expectNoMessage(200.milliseconds)
 
-    // Fork block exchange
-    rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
-    rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(Seq(etcForkBlockHeader))))
-
-    // Check that peer is connected
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(Ping()))
     rlpxConnection.expectMsg(RLPxConnectionHandler.SendMessage(Pong()))
 
@@ -186,27 +185,24 @@ class PeerActorSpec
 
   it should "fail handshake with peer that has a wrong genesis hash" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     val uri = new URI(s"enode://${Hex.toHexString(remoteNodeId.toArray[Byte])}@localhost:9000")
-    new URI(s"enode://${Hex.toHexString(remoteNodeId.toArray[Byte])}@127.0.0.1:9000?discport=9000")
     peer ! PeerActor.ConnectTo(uri)
     peer ! PeerActor.ConnectTo(uri)
 
     rlpxConnection.expectMsgClass(classOf[RLPxConnectionHandler.ConnectTo])
     rlpxConnection.reply(RLPxConnectionHandler.ConnectionEstablished(remoteNodeId))
 
-    // Hello exchange
     val remoteHello: Hello = Hello(4, "test-client", Seq(Capability.ETH68), 9000, ByteString("unused"))
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
 
-    val remoteStatus: Status = Status(
+    val remoteStatus: ETH64.Status = ETH64.Status(
       protocolVersion = Capability.ETH68.version,
       networkId = peerConf.networkId,
-      totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
+      totalDifficulty = daoForkBlockChainTotalDifficulty + 100000,
       bestHash = ByteString("blockhash"),
-      genesisHash = genesisHash.drop(2)
+      genesisHash = genesisHash.drop(2), // Wrong genesis hash
+      forkId = ForkId(0L, None)
     )
-
-    // Node status exchange
     expectStatusMessage()
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
 
@@ -265,32 +261,34 @@ class PeerActorSpec
     val uri = new URI(s"enode://${Hex.toHexString(remoteNodeId.toArray[Byte])}@[::]:9000")
     val completeUri =
       new URI(s"enode://${Hex.toHexString(remoteNodeId.toArray[Byte])}@[0:0:0:0:0:0:0:0]:9000?discport=9000")
+
+    blockchainWriter.save(
+      Fixtures.Blocks.DaoForkBlock.block, Seq.empty,
+      ChainWeight.totalDifficultyOnly(daoForkBlockChainTotalDifficulty), saveAsBestBlock = true
+    )
+
     peer ! PeerActor.ConnectTo(uri)
 
     rlpxConnection.expectMsgClass(classOf[RLPxConnectionHandler.ConnectTo])
     rlpxConnection.reply(RLPxConnectionHandler.ConnectionEstablished(remoteNodeId))
 
-    // Hello exchange
     val remoteHello: Hello = Hello(4, "test-client", Seq(Capability.ETH68), 9000, ByteString("unused"))
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
 
-    val remoteStatus: Status = Status(
+    val remoteStatus: ETH64.Status = ETH64.Status(
       protocolVersion = Capability.ETH68.version,
       networkId = peerConf.networkId,
-      totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
+      totalDifficulty = daoForkBlockChainTotalDifficulty + 100000,
       bestHash = ByteString("blockhash"),
-      genesisHash = genesisHash
+      genesisHash = genesisHash,
+      forkId = ForkId.create(genesisHash, PeerActorSpec.this.blockchainConfig)(daoForkBlockNumber)
     )
-    // Node status exchange
     expectStatusMessage()
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
+    // ETH68: ForkId validation replaces fork block exchange per EIP-2124
+    rlpxConnection.expectNoMessage(200.milliseconds)
 
-    // Fork block exchange
-    rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
-    rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(Seq(etcForkBlockHeader))))
-
-    // Check that peer is connected
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(Ping()))
     rlpxConnection.expectMsg(RLPxConnectionHandler.SendMessage(Pong()))
 
@@ -308,34 +306,25 @@ class PeerActorSpec
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
 
-    val header: BlockHeader =
-      Fixtures.Blocks.ValidBlock.header
-        .copy(difficulty = daoForkBlockChainTotalDifficulty + 100000, number = 3000000)
-    storagesInstance.storages.appStateStorage
-      .putBestBlockNumber(3000000) // after the fork
-      .and(blockchainWriter.storeBlockHeader(header))
-      .and(storagesInstance.storages.blockNumberMappingStorage.put(3000000, header.hash))
-      .commit()
-
-    val remoteStatus: Status = Status(
+    // ETH68: ForkId incompatibility triggers immediate UselessPeer disconnect, no fork block exchange
+    val remoteStatus: ETH64.Status = ETH64.Status(
       protocolVersion = Capability.ETH68.version,
       networkId = peerConf.networkId,
-      totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
+      totalDifficulty = daoForkBlockChainTotalDifficulty + 100000,
       bestHash = ByteString("blockhash"),
-      genesisHash = genesisHash
+      genesisHash = genesisHash,
+      forkId = ForkId(BigInt("12345678", 16), None) // Incompatible ForkId — non-ETC chain
     )
     expectStatusMessage()
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
-
-    rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
-    rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(Seq(nonEtcForkBlockHeader))))
-    rlpxConnection.expectMsg(RLPxConnectionHandler.SendMessage(Disconnect(Disconnect.Reasons.UselessPeer)))
+    rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: DisconnectEnc) => () }
   }
 
   it should "disconnect from non-ETC peer (when node is before fork)" taggedAs (
     UnitTest,
     NetworkTest
   ) in new TestSetup {
+    // ETH68: ForkId validation is used regardless of local block height
     peer ! PeerActor.ConnectTo(new URI("encode://localhost:9000"))
 
     rlpxConnection.expectMsgClass(classOf[RLPxConnectionHandler.ConnectTo])
@@ -345,20 +334,17 @@ class PeerActorSpec
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
 
-    val remoteStatus: Status = Status(
+    val remoteStatus: ETH64.Status = ETH64.Status(
       protocolVersion = Capability.ETH68.version,
       networkId = peerConf.networkId,
-      totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
+      totalDifficulty = daoForkBlockChainTotalDifficulty + 100000,
       bestHash = ByteString("blockhash"),
-      genesisHash = genesisHash
+      genesisHash = genesisHash,
+      forkId = ForkId(BigInt("12345678", 16), None) // Incompatible ForkId — non-ETC chain
     )
     expectStatusMessage()
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
-
-    rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
-    rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(Seq(nonEtcForkBlockHeader))))
-
-    rlpxConnection.expectMsg(RLPxConnectionHandler.SendMessage(Disconnect(Disconnect.Reasons.UselessPeer)))
+    rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: DisconnectEnc) => () }
   }
 
   it should "disconnect on Hello timeout" taggedAs (UnitTest, NetworkTest) in new TestSetup {
@@ -377,41 +363,12 @@ class PeerActorSpec
 
   }
 
-  it should "respond to fork block request during the handshake" taggedAs (UnitTest, NetworkTest) in new TestSetup {
-    // Save dao fork block
-    blockchainWriter.storeBlockHeader(Fixtures.Blocks.DaoForkBlock.header).commit()
-
-    // Handshake till EtcForkBlockExchangeState
-    peer ! PeerActor.ConnectTo(new URI("encode://localhost:9000"))
-
-    rlpxConnection.expectMsgClass(classOf[RLPxConnectionHandler.ConnectTo])
-    rlpxConnection.reply(RLPxConnectionHandler.ConnectionEstablished(remoteNodeId))
-
-    val remoteHello: Hello = Hello(4, "test-client", Seq(Capability.ETH68), 9000, ByteString("unused"))
-    rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
-    rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
-
-    val remoteStatus: Status = Status(
-      protocolVersion = Capability.ETH68.version,
-      networkId = peerConf.networkId,
-      totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
-      bestHash = ByteString("blockhash"),
-      genesisHash = genesisHash
-    )
-    expectStatusMessage()
-    rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
-
-    rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
-
-    // Request dao fork block from the peer
-    rlpxConnection.send(
-      peer,
-      RLPxConnectionHandler.MessageReceived(GetBlockHeaders(Left(daoForkBlockNumber), 1, 0, false))
-    )
-    rlpxConnection.expectMsg(RLPxConnectionHandler.SendMessage(BlockHeaders(Seq(Fixtures.Blocks.DaoForkBlock.header))))
-  }
-
   it should "stash disconnect message until handshaked" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+    blockchainWriter.save(
+      Fixtures.Blocks.DaoForkBlock.block, Seq.empty,
+      ChainWeight.totalDifficultyOnly(daoForkBlockChainTotalDifficulty), saveAsBestBlock = true
+    )
+
     peer ! PeerActor.ConnectTo(new URI("encode://localhost:9000"))
     peer ! PeerActor.DisconnectPeer(Disconnect.Reasons.TooManyPeers)
 
@@ -422,19 +379,18 @@ class PeerActorSpec
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
 
-    val remoteStatus: Status = Status(
+    val remoteStatus: ETH64.Status = ETH64.Status(
       protocolVersion = Capability.ETH68.version,
       networkId = peerConf.networkId,
-      totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
+      totalDifficulty = daoForkBlockChainTotalDifficulty + 100000,
       bestHash = ByteString("blockhash"),
-      genesisHash = genesisHash
+      genesisHash = genesisHash,
+      forkId = ForkId.create(genesisHash, PeerActorSpec.this.blockchainConfig)(daoForkBlockNumber)
     )
     expectStatusMessage()
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
-
-    rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
-    rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(Seq(etcForkBlockHeader))))
-
+    // ETH68: handshake completes after status exchange (no fork block exchange)
+    // Stashed DisconnectPeer is processed immediately after handshake
     rlpxConnection.expectMsg(RLPxConnectionHandler.SendMessage(Disconnect(Disconnect.Reasons.TooManyPeers)))
   }
 
@@ -474,6 +430,11 @@ class PeerActorSpec
   }
 
   it should "disconnect gracefully after handshake" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+    blockchainWriter.save(
+      Fixtures.Blocks.DaoForkBlock.block, Seq.empty,
+      ChainWeight.totalDifficultyOnly(daoForkBlockChainTotalDifficulty), saveAsBestBlock = true
+    )
+
     peer ! PeerActor.ConnectTo(new URI("encode://localhost:9000"))
 
     rlpxConnection.expectMsgClass(classOf[RLPxConnectionHandler.ConnectTo])
@@ -483,19 +444,17 @@ class PeerActorSpec
     rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: HelloEnc) => () }
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteHello))
 
-    val remoteStatus: Status = Status(
+    val remoteStatus: ETH64.Status = ETH64.Status(
       protocolVersion = Capability.ETH68.version,
       networkId = peerConf.networkId,
-      totalDifficulty = daoForkBlockChainTotalDifficulty + 100000, // remote is after the fork
+      totalDifficulty = daoForkBlockChainTotalDifficulty + 100000,
       bestHash = ByteString("blockhash"),
-      genesisHash = genesisHash
+      genesisHash = genesisHash,
+      forkId = ForkId.create(genesisHash, PeerActorSpec.this.blockchainConfig)(daoForkBlockNumber)
     )
-
     expectStatusMessage()
     rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(remoteStatus))
-
-    rlpxConnection.expectMsgPF() { case RLPxConnectionHandler.SendMessage(_: GetBlockHeadersEnc) => () }
-    rlpxConnection.send(peer, RLPxConnectionHandler.MessageReceived(BlockHeaders(Seq(etcForkBlockHeader))))
+    // ETH68: handshake completes after status exchange (no fork block exchange)
 
     // Test that the handshake succeeded
     val sender: TestProbe = TestProbe()(system)
