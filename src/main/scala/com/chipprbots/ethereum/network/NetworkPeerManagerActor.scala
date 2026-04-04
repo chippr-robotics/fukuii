@@ -152,15 +152,53 @@ class NetworkPeerManagerActor(
       peerEventBusActor ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)))
       peerEventBusActor ! Subscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)))
 
-      // Do NOT send unsolicited GetBlockHeaders after handshake.
-      // The sync engine (BlockFetcher/HeadersFetcher) will request headers when needed through
-      // the normal PeersClient polling mechanism. Sending GetBlockHeaders immediately violates
-      // the expected message flow in devp2p protocol tests and is not standard behavior
-      // (geth does not send unsolicited GetBlockHeaders after Status exchange).
-      // For ETH69+, latestBlock/latestBlockHash are already in the Status message.
-      // For ETH64+, ForkId in Status provides fork validation without needing block headers.
-      NetworkMetrics.registerAddHandshakedPeer(peer)
-      context.become(handleMessages(peersWithInfo + (peer.id -> PeerWithInfo(peer, peerInfo))))
+      // Many peers disconnect with reason 0x10 (Other) when asked for headers at genesis
+      // as they implement peer selection policies that reject genesis-only nodes.
+      // When peer is at genesis, we skip this initial GetBlockHeaders to avoid disconnect.
+      // Block synchronization will be initiated by the sync controller (SyncController/SNAPSyncController)
+      // once it determines which peers to use for sync, avoiding unnecessary blacklisting.
+      if (peerInfo.isAtGenesis && !peerInfo.remoteStatus.supportsSnap) {
+        log.info(
+          "PEER_HANDSHAKE_SUCCESS: Peer {} is at genesis block (non-snap) - skipping GetBlockHeaders to avoid disconnect. " +
+            "Peer will be available for sync controller.",
+          peer.id
+        )
+      } else {
+        // Ask for the highest block from the peer
+        // Send GetBlockHeaders in format based on negotiated capability
+        val usesRequestId = Capability.usesRequestId(peerInfo.remoteStatus.capability)
+        val getBlockHeadersMsg: MessageSerializable =
+          if (usesRequestId)
+            ETH66GetBlockHeaders(ETH66.nextRequestId, Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
+          else
+            ETH62GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
+
+        // Debug: Log the raw RLP-encoded message bytes for protocol analysis
+        if (log.isDebugEnabled) {
+          val encodedBytes = getBlockHeadersMsg.toBytes
+          val hexBytes = Hex.toHexString(encodedBytes)
+          log.debug(
+            "PEER_HANDSHAKE_SUCCESS: GetBlockHeaders RLP bytes (len={}): {}",
+            encodedBytes.length,
+            if (hexBytes.length > MaxHexLogLength) hexBytes.take(MaxHexLogLength) + "..." else hexBytes
+          )
+        }
+
+        log.info(
+          "PEER_HANDSHAKE_SUCCESS: Sending GetBlockHeaders to peer {} (usesRequestId: {}, bestHash: {})",
+          peer.id,
+          usesRequestId,
+          ByteStringUtils.hash2string(peerInfo.remoteStatus.bestHash)
+        )
+        peer.ref ! SendMessage(getBlockHeadersMsg)
+      }
+      // SNAP probe is deferred until we receive BlockHeaders response — we need the
+      // header's stateRoot (not bestHash which is a block hash) for GetAccountRange.
+      // See handleReceivedMessage where the probe is sent after extracting stateRoot.
+
+      val peerWithCapability = peer.copy(negotiatedCapability = Some(peerInfo.remoteStatus.capability))
+      NetworkMetrics.registerAddHandshakedPeer(peerWithCapability)
+      context.become(handleMessages(peersWithInfo + (peer.id -> PeerWithInfo(peerWithCapability, peerInfo))))
 
     case PeerDisconnected(peerId) if peersWithInfo.contains(peerId) =>
       peerEventBusActor ! Unsubscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peerId)))
@@ -364,6 +402,14 @@ class NetworkPeerManagerActor(
       s"Received GetAccountRange request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, start=${msg.startingHash.take(4).toHex}, limit=${msg.limitHash.take(4).toHex}, bytes=${msg.responseBytes}"
     )
 
+    // Guard: only serve SNAP state when sync is complete — state is incomplete during sync
+    if (!appStateStorage.isSnapSyncDone()) {
+      log.debug(s"[SNAP-SERVER] GetAccountRange from $peerId: SNAP sync not complete, sending empty response")
+      peerWithInfo.foreach(_.peer.ref ! PeerActor.SendMessage(AccountRange(msg.requestId, Seq.empty, Seq.empty)))
+      return
+    }
+
+
     peerWithInfo.foreach { pwi =>
       val response = mptStorageOpt match {
         case Some(storage) if isStateRootFresh(msg.rootHash) =>
@@ -436,6 +482,13 @@ class NetworkPeerManagerActor(
     log.debug(
       s"Received GetStorageRanges request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, accounts=${msg.accountHashes.size}, start=${msg.startingHash.take(4).toHex}, limit=${msg.limitHash.take(4).toHex}, bytes=${msg.responseBytes}"
     )
+
+    if (!appStateStorage.isSnapSyncDone()) {
+      log.debug(s"[SNAP-SERVER] GetStorageRanges from $peerId: SNAP sync not complete, sending empty response")
+      peerWithInfo.foreach(_.peer.ref ! PeerActor.SendMessage(StorageRanges(msg.requestId, Seq.empty, Seq.empty)))
+      return
+    }
+
 
     peerWithInfo.foreach { pwi =>
       val response = mptStorageOpt match {
@@ -527,6 +580,13 @@ class NetworkPeerManagerActor(
       s"Received GetTrieNodes request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, paths=${msg.paths.size}, bytes=${msg.responseBytes}"
     )
 
+    if (!appStateStorage.isSnapSyncDone()) {
+      log.debug(s"[SNAP-SERVER] GetTrieNodes from $peerId: SNAP sync not complete, sending empty response")
+      peerWithInfo.foreach(_.peer.ref ! PeerActor.SendMessage(TrieNodes(msg.requestId, Seq.empty)))
+      return
+    }
+
+
     peerWithInfo.foreach { pwi =>
       val response = mptStorageOpt match {
         case Some(storage) =>
@@ -562,6 +622,13 @@ class NetworkPeerManagerActor(
       s"Received GetByteCodes request from peer $peerId: requestId=${msg.requestId}, hashes=${msg.hashes.size}, bytes=${msg.responseBytes}"
     )
 
+    if (!appStateStorage.isSnapSyncDone()) {
+      log.debug(s"[SNAP-SERVER] GetByteCodes from $peerId: SNAP sync not complete, sending empty response")
+      peerWithInfo.foreach(_.peer.ref ! PeerActor.SendMessage(ByteCodes(msg.requestId, Seq.empty)))
+      return
+    }
+
+
     peerWithInfo.foreach { pwi =>
       // Look up each requested code hash in EvmCodeStorage. Stop accumulating when we
       // would exceed the peer's responseBytes soft limit (per SNAP/1 spec, the server
@@ -596,19 +663,16 @@ object NetworkPeerManagerActor {
     Codes.BlockHeadersCode,
     Codes.NewBlockCode,
     Codes.NewBlockHashesCode,
-    // SNAP protocol response codes (responses we receive from peers)
+    // SNAP protocol response codes (responses we receive from peers as a client)
     SNAP.Codes.AccountRangeCode,
     SNAP.Codes.StorageRangesCode,
     SNAP.Codes.TrieNodesCode,
     SNAP.Codes.ByteCodesCode,
-    // SNAP protocol request codes — incoming requests we serve as a SNAP server.
-    // Hive's devp2p snap suite (and any peer that decides to fetch state from us)
-    // sends these. Subscribing here is required for handleGet*Range/Codes/TrieNodes
-    // to fire.
+    // SNAP protocol request codes (requests we receive from peers as a server)
     SNAP.Codes.GetAccountRangeCode,
     SNAP.Codes.GetStorageRangesCode,
-    SNAP.Codes.GetTrieNodesCode,
-    SNAP.Codes.GetByteCodesCode
+    SNAP.Codes.GetByteCodesCode,
+    SNAP.Codes.GetTrieNodesCode
   )
 
   /** RemoteStatus was created to decouple status information from protocol status messages (they are different versions

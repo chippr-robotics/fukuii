@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
 import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
@@ -34,10 +35,10 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH63.MptNodeEncoders._
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.ReceiptImplicits._
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.Receipts
+import com.chipprbots.ethereum.network.p2p.messages.ETH65
 import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
-import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransactionsResponse
 
 /** BlockchainHost actor is in charge of replying to the peer's requests for blockchain data, which includes both node
   * and block data.
@@ -48,7 +49,7 @@ class BlockchainHostActor(
     peerConfiguration: PeerConfiguration,
     peerEventBusActor: ActorRef,
     networkPeerManagerActor: ActorRef,
-    pendingTransactionsManager: ActorRef
+    pendingTransactionsManager: Option[ActorRef] = None
 ) extends Actor
     with ActorLogging {
 
@@ -66,38 +67,66 @@ class BlockchainHostActor(
   peerEventBusActor ! Subscribe(MessageClassifier(requestMsgsCodes, PeerSelector.AllPeers))
 
   override def receive: Receive = { case MessageFromPeer(message, peerId) =>
-    // Handle GetPooledTransactions asynchronously (requires ask to PendingTransactionsManager)
-    message match {
-      case ETH66.GetPooledTransactions(requestId, txHashes) =>
-        handleGetPooledTransactions(txHashes, Some(requestId), peerId)
-      case _ =>
-        val responseOpt = handleBlockFastDownload(message).orElse(handleEvmCodeMptFastDownload(message))
-        responseOpt.foreach { response =>
-          networkPeerManagerActor ! NetworkPeerManagerActor.SendMessage(response, peerId)
-        }
+    val responseOpt = handleBlockFastDownload(message).orElse(handleEvmCodeMptFastDownload(message))
+    responseOpt match {
+      case Some(response) =>
+        networkPeerManagerActor ! NetworkPeerManagerActor.SendMessage(response, peerId)
+      case None =>
+        handlePooledTransactionsRequest(message, peerId)
     }
   }
 
-  private def handleGetPooledTransactions(
-      txHashes: Seq[ByteString],
-      requestIdOpt: Option[BigInt],
-      peerId: com.chipprbots.ethereum.network.PeerId
-  ): Unit = {
-    val hashSet = txHashes.toSet
-    (pendingTransactionsManager ? PendingTransactionsManager.GetPendingTransactions)
-      .mapTo[PendingTransactionsResponse]
-      .foreach { response =>
-        val matchingTxs = response.pendingTransactions
-          .map(_.stx.tx)
-          .filter(tx => hashSet.contains(tx.hash))
-        // Include blob tx sidecar bytes for EIP-4844 network wrapping in PooledTransactions
-        val matchingBlobBytes = response.blobTxNetworkBytes.filter { case (hash, _) => hashSet.contains(hash) }
-        val responseMsg: MessageSerializable = requestIdOpt match {
-          case Some(requestId) => ETH66.PooledTransactions(requestId, matchingTxs, blobTxRawBytes = matchingBlobBytes)
-          case None            => com.chipprbots.ethereum.network.p2p.messages.ETH65.PooledTransactions(matchingTxs)
-        }
-        networkPeerManagerActor ! NetworkPeerManagerActor.SendMessage(responseMsg, peerId)
+  /** Handles ETH65 and ETH66 GetPooledTransactions requests by looking up the requested hashes in the tx pool.
+    * Response is sent asynchronously via networkPeerManagerActor once the pool responds.
+    */
+  private def handlePooledTransactionsRequest(message: Message, peerId: PeerId): Unit = message match {
+    case msg: ETH65.GetPooledTransactions =>
+      import com.chipprbots.ethereum.network.p2p.messages.ETH65.PooledTransactions._
+      pendingTransactionsManager match {
+        case Some(txPool) =>
+          val requestedHashes = msg.txHashes.toSet
+          (txPool ? PendingTransactionsManager.GetPendingTransactions)
+            .mapTo[PendingTransactionsManager.PendingTransactionsResponse]
+            .foreach { response =>
+              val txs = response.pendingTransactions
+                .filter(pt => requestedHashes.contains(pt.stx.tx.hash))
+                .map(_.stx.tx)
+              networkPeerManagerActor ! NetworkPeerManagerActor.SendMessage(
+                ETH65.PooledTransactions(txs),
+                peerId
+              )
+            }(context.dispatcher)
+        case None =>
+          log.debug("GetPooledTransactions from {}: tx pool not available, sending empty response", peerId)
+          networkPeerManagerActor ! NetworkPeerManagerActor.SendMessage(
+            ETH65.PooledTransactions(Seq.empty),
+            peerId
+          )
       }
+    case ETH66.GetPooledTransactions(requestId, txHashes) =>
+      val hashSet = txHashes.toSet
+      pendingTransactionsManager match {
+        case Some(txPool) =>
+          (txPool ? PendingTransactionsManager.GetPendingTransactions)
+            .mapTo[PendingTransactionsManager.PendingTransactionsResponse]
+            .foreach { response =>
+              val matchingTxs = response.pendingTransactions
+                .map(_.stx.tx)
+                .filter(tx => hashSet.contains(tx.hash))
+              // Include blob tx sidecar bytes for EIP-4844 network wrapping in PooledTransactions
+              val matchingBlobBytes = response.blobTxNetworkBytes.filter { case (hash, _) => hashSet.contains(hash) }
+              networkPeerManagerActor ! NetworkPeerManagerActor.SendMessage(
+                ETH66.PooledTransactions(requestId, matchingTxs, blobTxRawBytes = matchingBlobBytes),
+                peerId
+              )
+            }(context.dispatcher)
+        case None =>
+          networkPeerManagerActor ! NetworkPeerManagerActor.SendMessage(
+            ETH66.PooledTransactions(requestId, Seq.empty),
+            peerId
+          )
+      }
+    case _ => // Not a tx pool message — no handler needed
   }
 
   /** Handles requests for node data, which includes both mpt nodes and evm code (both requested by hash). Both types of
@@ -122,6 +151,22 @@ class BlockchainHostActor(
       }
 
       Some(NodeData(nodeData))
+
+    // ETH66+ GetNodeData with request ID — same logic, wraps response in ETH66 format
+    case ETH66.GetNodeData(requestId, mptElementsHashes) =>
+      import com.chipprbots.ethereum.network.p2p.messages.ETH66.NodeData._
+      import com.chipprbots.ethereum.rlp.RLPValue
+
+      val hashesRequested =
+        mptElementsHashes.take(peerConfiguration.fastSyncHostConfiguration.maxMptComponentsPerMessage)
+
+      val nodeData: Seq[ByteString] = hashesRequested.flatMap { hash =>
+        val maybeMptNodeData = blockchainReader.getMptNodeByHash(hash).map(e => e.toBytes: ByteString)
+        maybeMptNodeData.orElse(evmCodeStorage.get(hash))
+      }
+
+      val rlpValues = RLPList(nodeData.map(bs => RLPValue(bs.toArray[Byte])): _*)
+      Some(ETH66.NodeData(requestId, rlpValues))
 
     case _ => None
   }
@@ -247,7 +292,7 @@ object BlockchainHostActor {
       peerConfiguration: PeerConfiguration,
       peerEventBusActor: ActorRef,
       networkPeerManagerActor: ActorRef,
-      pendingTransactionsManager: ActorRef
+      pendingTransactionsManager: Option[ActorRef] = None
   ): Props =
     Props(
       new BlockchainHostActor(
