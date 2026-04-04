@@ -113,7 +113,7 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
     stxLedger,
     keyStore,
     syncingController.ref,
-    Capability.ETH63,
+    Capability.ETH68,
     Timeouts.shortTimeout,
     storagesInstance.storages.evmCodeStorage
   )

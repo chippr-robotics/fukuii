@@ -513,7 +513,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
       }
 
     val initHandshakerWithoutResolver: NetworkHandshaker = NetworkHandshaker(
-      new MockNetworkHandshakerConfiguration(List(Capability.ETH63, Capability.ETH64))
+      new MockNetworkHandshakerConfiguration(List(Capability.ETH68, Capability.ETH68))
     )
 
     val initHandshakerWithResolver: NetworkHandshaker = NetworkHandshaker(networkHandshakerConfigurationWithResolver)
@@ -537,7 +537,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
 
   trait LocalPeerETH63Setup extends LocalPeerSetup {
     val localStatusMsg: BaseETH6XMessages.Status = BaseETH6XMessages.Status(
-      protocolVersion = Capability.ETH63.version,
+      protocolVersion = Capability.ETH68.version,
       networkId = Config.Network.peer.networkId,
       totalDifficulty = genesisBlock.header.difficulty,
       bestHash = genesisBlock.header.hash,
@@ -548,7 +548,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
 
   trait LocalPeerETH64Setup extends LocalPeerSetup {
     val localStatusMsg: ETH64.Status = ETH64.Status(
-      protocolVersion = Capability.ETH64.version,
+      protocolVersion = Capability.ETH68.version,
       networkId = Config.Network.peer.networkId,
       totalDifficulty = genesisBlock.header.difficulty,
       bestHash = genesisBlock.header.hash,
@@ -571,13 +571,13 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     val remoteHello: Hello = Hello(
       p2pVersion = EtcHelloExchangeState.P2pVersion,
       clientId = "remote-peer",
-      capabilities = Seq(Capability.ETH63),
+      capabilities = Seq(Capability.ETH68),
       listenPort = remotePort,
       nodeId = ByteString(remoteNodeStatus.nodeId)
     )
 
     val remoteStatusMsg: BaseETH6XMessages.Status = BaseETH6XMessages.Status(
-      protocolVersion = Capability.ETH63.version,
+      protocolVersion = Capability.ETH68.version,
       networkId = Config.Network.peer.networkId,
       totalDifficulty = 0,
       bestHash = genesisBlock.header.hash,
@@ -586,9 +586,9 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
 
     val remoteStatus: RemoteStatus = RemoteStatus(
       remoteStatusMsg,
-      Capability.ETH63,
+      Capability.ETH68,
       false,
-      Seq(Capability.ETH63).toList
+      Seq(Capability.ETH68).toList
     )
   }
 
@@ -596,13 +596,13 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     val remoteHello: Hello = Hello(
       p2pVersion = EtcHelloExchangeState.P2pVersion,
       clientId = "remote-peer",
-      capabilities = Seq(Capability.ETH64),
+      capabilities = Seq(Capability.ETH68),
       listenPort = remotePort,
       nodeId = ByteString(remoteNodeStatus.nodeId)
     )
 
     val remoteStatusMsg: ETH64.Status = ETH64.Status(
-      protocolVersion = Capability.ETH64.version,
+      protocolVersion = Capability.ETH68.version,
       networkId = Config.Network.peer.networkId,
       totalDifficulty = 0,
       bestHash = genesisBlock.header.hash,

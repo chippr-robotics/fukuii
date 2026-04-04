@@ -15,8 +15,6 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
 import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.MessageClassifier
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETH65
-import com.chipprbots.ethereum.network.p2p.messages.ETH65.GetPooledTransactions._
 import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetPooledTransactions._
 import com.chipprbots.ethereum.network.p2p.messages.ETH67
@@ -24,16 +22,14 @@ import com.chipprbots.ethereum.transactions.SignedTransactionsFilterActor.Proper
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
 
-/** Handles ETH65+ transaction gossip:
-  *   - Inbound NewPooledTransactionHashes (ETH65/66 or ETH67/68 format): fetches unknown
-  *     transactions from the announcing peer via GetPooledTransactions
-  *   - Inbound PooledTransactions: validates sender and forwards to the pending tx pool
+/** Handles ETH68 transaction gossip (NewPooledTransactionHashes / PooledTransactions):
+  *   - Inbound NewPooledTransactionHashes (ETH67/68 format with types+sizes): fetches unknown
+  *     transactions from the announcing peer via GetPooledTransactions (ETH66 requestId format)
+  *   - Inbound PooledTransactions (ETH66/68 requestId format): validates sender and forwards
+  *     to the pending tx pool
   *
-  * Subscribes directly to the peer event bus (same pattern as SignedTransactionsFilterActor),
-  * receiving messages from all peers.
-  *
-  * An LRU set of 32K recently-seen hashes avoids re-fetching transactions that were already
-  * requested or are already in the pool (mirrors geth's maxKnownTxs = 32768).
+  * Subscribes directly to the peer event bus (same pattern as SignedTransactionsFilterActor).
+  * An LRU set of 32K recently-seen hashes avoids re-fetching (mirrors geth's maxKnownTxs = 32768).
   */
 class ETH65TxHandlerActor(
     networkPeerManager: ActorRef,
@@ -64,30 +60,13 @@ class ETH65TxHandlerActor(
 
   override def receive: Receive = {
 
-    // ETH65/66 hash-only announcement: [hash1, hash2, ...]
-    case MessageFromPeer(msg: ETH65.NewPooledTransactionHashes, peerId) =>
-      val unknownHashes = msg.txHashes.filterNot(h => knownHashes.containsKey(h))
-      if (unknownHashes.nonEmpty) {
-        log.debug(
-          "ETH65 NewPooledTransactionHashes from {}: requesting {}/{} unknown hashes",
-          peerId,
-          unknownHashes.size,
-          msg.txHashes.size
-        )
-        unknownHashes.foreach(h => knownHashes.put(h, ()))
-        networkPeerManager ! NetworkPeerManagerActor.SendMessage(
-          ETH65.GetPooledTransactions(unknownHashes),
-          peerId
-        )
-      }
-
-    // ETH67/68 enhanced announcement: [types, sizes, hashes]
-    // Reply with ETH66-wrapped GetPooledTransactions (requestId required for ETH67+)
+    // ETH68 hash-only announcement (ETH67/68 format: types, sizes, hashes)
+    // Reply with ETH66-wrapped GetPooledTransactions (requestId required for ETH68)
     case MessageFromPeer(msg: ETH67.NewPooledTransactionHashes, peerId) =>
       val unknownHashes = msg.hashes.filterNot(h => knownHashes.containsKey(h))
       if (unknownHashes.nonEmpty) {
         log.debug(
-          "ETH67 NewPooledTransactionHashes from {}: requesting {}/{} unknown hashes",
+          "ETH68 NewPooledTransactionHashes from {}: requesting {}/{} unknown hashes",
           peerId,
           unknownHashes.size,
           msg.hashes.size
@@ -100,20 +79,11 @@ class ETH65TxHandlerActor(
         )
       }
 
-    // ETH65 PooledTransactions response (no requestId)
-    case MessageFromPeer(msg: ETH65.PooledTransactions, peerId) =>
-      if (msg.txs.nonEmpty) {
-        log.debug("ETH65 PooledTransactions from {}: {} txs", peerId, msg.txs.size)
-        val valid = SignedTransactionWithSender.getSignedTransactions(msg.txs)
-        if (valid.nonEmpty)
-          pendingTransactionsManager ! ProperSignedTransactions(valid.toSet, peerId)
-      }
-
-    // ETH66+ PooledTransactions response (has requestId — ETH66/67/68 all use this format)
+    // ETH68 PooledTransactions response (ETH66/68 requestId format)
     case MessageFromPeer(msg: ETH66.PooledTransactions, peerId) =>
       if (msg.txs.nonEmpty) {
         log.debug(
-          "ETH66 PooledTransactions from {}: {} txs (requestId={})",
+          "ETH68 PooledTransactions from {}: {} txs (requestId={})",
           peerId,
           msg.txs.size,
           msg.requestId

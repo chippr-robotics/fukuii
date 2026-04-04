@@ -79,11 +79,8 @@ class SyncStateSchedulerActor(
     * Note: Capability is a sealed trait, so this match is exhaustive. If new capabilities are added in the future, this
     * method will need to be updated accordingly.
     */
-  private def supportsGetNodeData(capability: Capability): Boolean = capability match {
-    case Capability.ETH63 | Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 => true
-    case Capability.ETH68 => false // GetNodeData removed in ETH68 per EIP-4938
-    case Capability.SNAP1 => false // SNAP uses different sync protocol
-  }
+  // GetNodeData was removed in ETH68 per EIP-4938; ETH63-67 are no longer supported
+  private def supportsGetNodeData(capability: Capability): Boolean = false
 
   /** Get free peers with available pipelining slots.
     *

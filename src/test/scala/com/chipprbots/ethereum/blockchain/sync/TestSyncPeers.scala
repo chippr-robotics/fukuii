@@ -27,7 +27,7 @@ trait TestSyncPeers { self: TestSyncConfig =>
   // GetNodeData was removed in ETH68 per EIP-4938.
   val peer1Status: RemoteStatus =
     RemoteStatus(
-      Capability.ETH66,
+      Capability.ETH68,
       1,
       ChainWeight.totalDifficultyOnly(20),
       ByteString("peer1_bestHash"),

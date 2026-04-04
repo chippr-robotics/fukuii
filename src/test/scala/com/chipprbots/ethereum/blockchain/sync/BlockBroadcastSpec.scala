@@ -68,7 +68,7 @@ class BlockBroadcastSpec
     val blockHeader: BlockHeader = baseBlockHeader.copy(number = initialPeerInfo.maxBlockNumber - 3)
     val newBlockNewHashes: NewBlockHashes = NewBlockHashes(Seq(ETH62.BlockHash(blockHeader.hash, blockHeader.number)))
     val peerInfo: PeerInfo = initialPeerInfo
-      .copy(remoteStatus = peerStatus.copy(capability = Capability.ETH63))
+      .copy(remoteStatus = peerStatus.copy(capability = Capability.ETH68))
       .withChainWeight(ChainWeight.totalDifficultyOnly(initialPeerInfo.chainWeight.totalDifficulty))
     val block = Block(blockHeader, BlockBody(Nil, Nil))
     val newBlockMsg = BaseETH6XMessages.NewBlock(block, peerInfo.chainWeight.totalDifficulty + 2)

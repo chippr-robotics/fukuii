@@ -223,26 +223,34 @@ object BaseETH6XMessages {
         * @return
         *   a Seq of TypedTransaction enriched RLPEncodable
         */
-      def toTypedRLPEncodables: Seq[RLPEncodeable] =
-        encodables match {
-          case Seq() => Seq()
-          case Seq(RLPValue(v), rlpList: RLPList, tail @ _*) if v.isValidTransactionType =>
-            PrefixedRLPEncodable(v.head, rlpList) +: tail.toTypedRLPEncodables
-          case Seq(RLPValue(v), tail @ _*) if v.length > 1 && v.head.isValidTransactionType =>
-            // Typed envelopes (EIP-2718) are encoded on the wire as: typeByte || rlp(payload).
-            // When such bytes appear as an element inside an outer RLP list, the decoder yields an RLPValue(bytes)
-            // rather than a split (RLPValue(typeByte), RLPList(payload)). Normalize it here so all callers that use
-            // toTypedRLPEncodables (BlockBody, SignedTransactions, PooledTransactions, etc.) can decode typed txs.
-            try
-              rawDecode(v.tail) match {
-                case rlpList: RLPList => PrefixedRLPEncodable(v.head, rlpList) +: tail.toTypedRLPEncodables
-                case _                => RLPValue(v) +: tail.toTypedRLPEncodables
-              }
-            catch {
-              case _: Throwable => RLPValue(v) +: tail.toTypedRLPEncodables
-            }
-          case Seq(head, tail @ _*) => head +: tail.toTypedRLPEncodables
+      def toTypedRLPEncodables: Seq[RLPEncodeable] = {
+        // Iterative implementation — the recursive version caused StackOverflowError on large
+        // transaction lists (e.g. PooledTransactions responses with hundreds/thousands of entries).
+        val result    = scala.collection.mutable.ArrayBuffer.empty[RLPEncodeable]
+        var remaining = encodables
+        while (remaining.nonEmpty) {
+          remaining match {
+            case Seq(RLPValue(v), rlpList: RLPList, tail @ _*) if v.isValidTransactionType =>
+              result += PrefixedRLPEncodable(v.head, rlpList)
+              remaining = tail
+            case Seq(RLPValue(v), tail @ _*) if v.length > 1 && v.head.isValidTransactionType =>
+              // Typed envelopes (EIP-2718) are encoded on the wire as: typeByte || rlp(payload).
+              // When such bytes appear as an element inside an outer RLP list, the decoder yields an RLPValue(bytes)
+              // rather than a split (RLPValue(typeByte), RLPList(payload)). Normalize it here so all callers that use
+              // toTypedRLPEncodables (BlockBody, SignedTransactions, PooledTransactions, etc.) can decode typed txs.
+              try rawDecode(v.tail) match {
+                case rlpList: RLPList => result += PrefixedRLPEncodable(v.head, rlpList)
+                case _                => result += RLPValue(v)
+              } catch { case _: Throwable => result += RLPValue(v) }
+              remaining = tail
+            case Seq(head, tail @ _*) =>
+              result += head
+              remaining = tail
+            case _ => remaining = Seq.empty
+          }
         }
+        result.toSeq
+      }
     }
   }
 

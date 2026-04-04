@@ -288,7 +288,7 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
     val fakeNodeId: ByteString = ByteString()
 
     val peerStatus: RemoteStatus = RemoteStatus(
-      capability = Capability.ETH63,
+      capability = Capability.ETH68,
       networkId = 1,
       chainWeight = com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly(10000),
       bestHash = Fixtures.Blocks.Block3125369.header.hash,
@@ -372,7 +372,7 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
     val fakeNodeId: ByteString = ByteString()
 
     val peerStatus: RemoteStatus = RemoteStatus(
-      capability = Capability.ETH63,
+      capability = Capability.ETH68,
       networkId = 1,
       chainWeight = com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly(10000),
       bestHash = Fixtures.Blocks.Block3125369.header.hash,

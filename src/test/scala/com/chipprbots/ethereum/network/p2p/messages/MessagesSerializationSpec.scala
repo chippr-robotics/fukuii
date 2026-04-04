@@ -25,10 +25,10 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
     "encoding and decoding Hello" should {
       "return same result" in {
         verify(
-          Hello(1, "teest", Seq(Capability.ETH63, Capability.ETH64), 1, ByteString("Id")),
+          Hello(1, "teest", Seq(Capability.ETH68, Capability.ETH68), 1, ByteString("Id")),
           (m: Hello) => m.toBytes,
           Hello.code,
-          Capability.ETH63
+          Capability.ETH68
         )
       }
     }
@@ -39,20 +39,20 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
           Disconnect(Disconnect.Reasons.AlreadyConnected),
           (m: Disconnect) => m.toBytes,
           Disconnect.code,
-          Capability.ETH63
+          Capability.ETH68
         )
       }
     }
 
     "encoding and decoding Ping" should {
       "return same result" in {
-        verify(Ping(), (m: Ping) => m.toBytes, Ping.code, Capability.ETH63)
+        verify(Ping(), (m: Ping) => m.toBytes, Ping.code, Capability.ETH68)
       }
     }
 
     "encoding and decoding Pong" should {
       "return same result" in {
-        verify(Pong(), (m: Pong) => m.toBytes, Pong.code, Capability.ETH63)
+        verify(Pong(), (m: Pong) => m.toBytes, Pong.code, Capability.ETH68)
       }
     }
   }
@@ -61,7 +61,7 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
     "encoding and decoding SignedTransactions" should {
       "return same result" in {
         val msg = SignedTransactions(Fixtures.Blocks.Block3125369.body.transactionList)
-        verify(msg, (m: SignedTransactions) => m.toBytes, Codes.SignedTransactionsCode, Capability.ETH63)
+        verify(msg, (m: SignedTransactions) => m.toBytes, Codes.SignedTransactionsCode, Capability.ETH68)
       }
 
       "return same result for typed transaction wire encoding" in {
@@ -77,14 +77,14 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
         )
         val signedTypedTx = SignedTransaction(typedTx, ECDSASignature(r = 1, s = 2, v = 1))
         val msg = SignedTransactions(Seq(signedTypedTx))
-        verify(msg, (m: SignedTransactions) => m.toBytes, Codes.SignedTransactionsCode, Capability.ETH63)
+        verify(msg, (m: SignedTransactions) => m.toBytes, Codes.SignedTransactionsCode, Capability.ETH68)
       }
     }
 
     "encoding and decoding NewBlock" should {
       "return same result for NewBlock v63" in {
         val msg = NewBlock(Fixtures.Blocks.Block3125369.block, 2323)
-        verify(msg, (m: NewBlock) => m.toBytes, Codes.NewBlockCode, Capability.ETH63)
+        verify(msg, (m: NewBlock) => m.toBytes, Codes.NewBlockCode, Capability.ETH68)
       }
 
       // Test with totalDifficulty >= 128 to verify RLP encoding handles high-bit values correctly
@@ -93,17 +93,17 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
           Fixtures.Blocks.Block3125369.block,
           totalDifficulty = BigInt("8000000000000000", 16) // Tests high bit in large value
         )
-        verify(msg, (m: NewBlock) => m.toBytes, Codes.NewBlockCode, Capability.ETH63)
+        verify(msg, (m: NewBlock) => m.toBytes, Codes.NewBlockCode, Capability.ETH68)
       }
     }
   }
 
   "ETH63" when {
-    val version = Capability.ETH63
+    val version = Capability.ETH68
     "encoding and decoding Status" should {
       "return same result for Status v63" in {
         val msg = Status(1, 2, 2, ByteString("HASH"), ByteString("HASH2"))
-        verify(msg, (m: Status) => m.toBytes, Codes.StatusCode, Capability.ETH63)
+        verify(msg, (m: Status) => m.toBytes, Codes.StatusCode, Capability.ETH68)
       }
 
       // Test with values >= 128 to verify RLP encoding handles high-bit values correctly
@@ -117,18 +117,18 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
           bestHash = ByteString("HASH"),
           genesisHash = ByteString("HASH2")
         )
-        verify(msg, (m: Status) => m.toBytes, Codes.StatusCode, Capability.ETH63)
+        verify(msg, (m: Status) => m.toBytes, Codes.StatusCode, Capability.ETH68)
       }
     }
     commonEthAssertions(version)
   }
 
   "ETH64" when {
-    val version = Capability.ETH64
+    val version = Capability.ETH68
     "encoding and decoding Status" should {
       "return same result" in {
         val msg = ETH64.Status(1, 2, 3, ByteString("HASH"), ByteString("HASH2"), ForkId(1L, None))
-        verify(msg, (m: ETH64.Status) => m.toBytes, Codes.StatusCode, Capability.ETH64)
+        verify(msg, (m: ETH64.Status) => m.toBytes, Codes.StatusCode, Capability.ETH68)
       }
 
       // Test with values >= 128 to verify RLP encoding handles high-bit values correctly
@@ -141,7 +141,7 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
           genesisHash = ByteString("HASH2"),
           forkId = ForkId(1L, None)
         )
-        verify(msg, (m: ETH64.Status) => m.toBytes, Codes.StatusCode, Capability.ETH64)
+        verify(msg, (m: ETH64.Status) => m.toBytes, Codes.StatusCode, Capability.ETH68)
       }
     }
     commonEthAssertions(version)

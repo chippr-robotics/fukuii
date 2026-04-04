@@ -163,7 +163,7 @@ class EthServiceSpec
 
     val syncingController: TestProbe = TestProbe()
 
-    val currentProtocolVersion = Capability.ETH63.version
+    val currentProtocolVersion = Capability.ETH68.version
 
     lazy val ethService = new EthInfoService(
       blockchain,
@@ -173,7 +173,7 @@ class EthServiceSpec
       stxLedger,
       keyStore,
       syncingController.ref,
-      Capability.ETH63,
+      Capability.ETH68,
       Timeouts.shortTimeout,
       storagesInstance.storages.evmCodeStorage
     )

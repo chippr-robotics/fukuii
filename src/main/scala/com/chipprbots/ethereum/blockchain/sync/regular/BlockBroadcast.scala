@@ -14,7 +14,6 @@ import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
-import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.ETH62
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.BlockHash
 
@@ -45,19 +44,7 @@ class BlockBroadcast(val networkPeerManager: ActorRef) {
 
   private def broadcastNewBlock(blockToBroadcast: BlockToBroadcast, peers: Map[PeerId, PeerWithInfo]): Unit =
     obtainRandomPeerSubset(peers.values.map(_.peer).toSet).foreach { peer =>
-      val remoteStatus = peers(peer.id).peerInfo.remoteStatus
-
-      val message: MessageSerializable = remoteStatus.capability match {
-        case Capability.ETH63 => blockToBroadcast.as63
-        case Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 | Capability.ETH68 =>
-          blockToBroadcast.as63
-        case Capability.SNAP1 =>
-          // SNAP is a satellite protocol for state sync, not for block broadcasting
-          // Block broadcasting should use the ETH capability
-          blockToBroadcast.as63
-      }
-
-      networkPeerManager ! NetworkPeerManagerActor.SendMessage(message, peer.id)
+      networkPeerManager ! NetworkPeerManagerActor.SendMessage(blockToBroadcast.as63, peer.id)
     }
 
   private def broadcastNewBlockHash(blockToBroadcast: BlockToBroadcast, peers: Set[Peer]): Unit = peers.foreach {

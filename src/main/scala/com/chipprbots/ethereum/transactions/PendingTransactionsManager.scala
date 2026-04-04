@@ -27,9 +27,6 @@ import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.network.PeerManagerActor.Peers
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions
-import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.network.p2p.messages.ETH65
-import com.chipprbots.ethereum.network.p2p.messages.ETH65.NewPooledTransactionHashes._
 import com.chipprbots.ethereum.transactions.SignedTransactionsFilterActor.ProperSignedTransactions
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
@@ -182,20 +179,13 @@ class PendingTransactionsManager(
       peers.foreach { peer =>
         val txsToNotify = stillPending.filterNot(stx => isTxKnown(stx.tx, peer.id)) // and not known by peer
         if (txsToNotify.nonEmpty) {
-          // ETH65/66: send hash-only announcement — peer fetches what it needs via GetPooledTransactions.
-          // ETH67/68 and ETH64/None: send full transactions (ETH67/68 enhanced format deferred, legacy path correct).
-          peer.negotiatedCapability match {
-            case Some(Capability.ETH65) | Some(Capability.ETH66) =>
-              networkPeerManager ! NetworkPeerManagerActor.SendMessage(
-                ETH65.NewPooledTransactionHashes(txsToNotify.map(_.tx.hash)),
-                peer.id
-              )
-            case _ =>
-              networkPeerManager ! NetworkPeerManagerActor.SendMessage(
-                SignedTransactions(txsToNotify.map(_.tx)),
-                peer.id
-              )
-          }
+          // ETH68: broadcast full transactions. NewPooledTransactionHashes hash-announce is an
+          // optimization handled by ETH65TxHandlerActor for inbound announcements; outbound
+          // full-tx broadcast is correct and ETH68-compliant.
+          networkPeerManager ! NetworkPeerManagerActor.SendMessage(
+            SignedTransactions(txsToNotify.map(_.tx)),
+            peer.id
+          )
           txsToNotify.foreach(stx => setTxKnown(stx.tx, peer.id))
         }
       }

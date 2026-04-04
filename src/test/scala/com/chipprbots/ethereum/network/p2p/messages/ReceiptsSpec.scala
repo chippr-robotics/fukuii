@@ -85,7 +85,7 @@ class ReceiptsSpec extends AnyFlatSpec with Matchers {
 
   it should "decode legacy receipts" taggedAs (UnitTest, NetworkTest) in {
     EthereumMessageDecoder
-      .ethMessageDecoder(Capability.ETH63)
+      .ethMessageDecoder(Capability.ETH68)
       .fromBytes(
         Codes.ReceiptsCode,
         encode(encodedLegacyReceipts)
@@ -94,7 +94,7 @@ class ReceiptsSpec extends AnyFlatSpec with Matchers {
 
   it should "decode encoded legacy receipts" taggedAs (UnitTest, NetworkTest) in {
     EthereumMessageDecoder
-      .ethMessageDecoder(Capability.ETH63)
+      .ethMessageDecoder(Capability.ETH68)
       .fromBytes(Codes.ReceiptsCode, legacyReceipts.toBytes) shouldBe Right(legacyReceipts)
   }
 
@@ -104,7 +104,7 @@ class ReceiptsSpec extends AnyFlatSpec with Matchers {
 
   it should "decode type 01 receipts" taggedAs (UnitTest, NetworkTest) in {
     EthereumMessageDecoder
-      .ethMessageDecoder(Capability.ETH64)
+      .ethMessageDecoder(Capability.ETH68)
       .fromBytes(
         Codes.ReceiptsCode,
         encode(encodedType01Receipts)
@@ -113,7 +113,7 @@ class ReceiptsSpec extends AnyFlatSpec with Matchers {
 
   it should "decode encoded type 01 receipts" taggedAs (UnitTest, NetworkTest) in {
     EthereumMessageDecoder
-      .ethMessageDecoder(Capability.ETH64)
+      .ethMessageDecoder(Capability.ETH68)
       .fromBytes(Codes.ReceiptsCode, type01Receipts.toBytes) shouldBe Right(type01Receipts)
   }
 
@@ -135,7 +135,7 @@ class ReceiptsSpec extends AnyFlatSpec with Matchers {
 
     // This should decode successfully to Type01Receipt
     val decoded = EthereumMessageDecoder
-      .ethMessageDecoder(Capability.ETH64)
+      .ethMessageDecoder(Capability.ETH68)
       .fromBytes(Codes.ReceiptsCode, encode(encodedType01ReceiptsAsRLPValue))
 
     decoded shouldBe Right(type01Receipts)

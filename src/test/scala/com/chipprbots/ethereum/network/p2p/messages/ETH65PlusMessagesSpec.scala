@@ -13,42 +13,8 @@ import com.chipprbots.ethereum.testing.Tags._
 
 class ETH65PlusMessagesSpec extends AnyWordSpec with Matchers {
 
-  "ETH65" when {
-    val version = Capability.ETH65
-
-    "encoding and decoding Status" should {
-      "return same result" in {
-        val msg = ETH64.Status(1, 2, 3, ByteString("HASH"), ByteString("HASH2"), ForkId(1L, None))
-        verify(msg, (m: ETH64.Status) => m.toBytes, Codes.StatusCode, version)
-      }
-    }
-
-    "encoding and decoding NewPooledTransactionHashes" should {
-      "return same result" in {
-        val hashes = Seq(ByteString("hash1"), ByteString("hash2"), ByteString("hash3"))
-        val msg = ETH65.NewPooledTransactionHashes(hashes)
-        verify(msg, (m: ETH65.NewPooledTransactionHashes) => m.toBytes, Codes.NewPooledTransactionHashesCode, version)
-      }
-    }
-
-    "encoding and decoding GetPooledTransactions" should {
-      "return same result" in {
-        val hashes = Seq(ByteString("hash1"), ByteString("hash2"))
-        val msg = ETH65.GetPooledTransactions(hashes)
-        verify(msg, (m: ETH65.GetPooledTransactions) => m.toBytes, Codes.GetPooledTransactionsCode, version)
-      }
-    }
-
-    "encoding and decoding PooledTransactions" should {
-      "return same result" in {
-        val msg = ETH65.PooledTransactions(Fixtures.Blocks.Block3125369.body.transactionList)
-        verify(msg, (m: ETH65.PooledTransactions) => m.toBytes, Codes.PooledTransactionsCode, version)
-      }
-    }
-  }
-
   "ETH66" when {
-    val version = Capability.ETH66
+    val version = Capability.ETH68
 
     "encoding and decoding Status" should {
       "return same result" in {
@@ -212,7 +178,7 @@ class ETH65PlusMessagesSpec extends AnyWordSpec with Matchers {
   }
 
   "ETH67" when {
-    val version = Capability.ETH67
+    val version = Capability.ETH68
 
     "encoding and decoding Status" should {
       "return same result" in {

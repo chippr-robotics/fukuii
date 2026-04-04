@@ -484,7 +484,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     val forkResolver = new ForkResolver.EtcForkResolver(blockchainConfig.daoForkConfig.get)
 
     val peerStatus: RemoteStatus = RemoteStatus(
-      capability = Capability.ETH63,
+      capability = Capability.ETH68,
       networkId = 1,
       chainWeight = ChainWeight.totalDifficultyOnly(10000),
       bestHash = Fixtures.Blocks.Block3125369.header.hash,
@@ -552,9 +552,9 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     val requestSender: TestProbe = TestProbe()
 
     // Peers as stored by NetworkPeerManagerActor after handshake — capability is populated from remoteStatus
-    val peer1WithCapability: Peer    = peer1.copy(negotiatedCapability = Some(Capability.ETH63))
-    val peer2WithCapability: Peer    = peer2.copy(negotiatedCapability = Some(Capability.ETH63))
-    val freshPeerWithCapability: Peer = freshPeer.copy(negotiatedCapability = Some(Capability.ETH63))
+    val peer1WithCapability: Peer    = peer1.copy(negotiatedCapability = Some(Capability.ETH68))
+    val peer2WithCapability: Peer    = peer2.copy(negotiatedCapability = Some(Capability.ETH68))
+    val freshPeerWithCapability: Peer = freshPeer.copy(negotiatedCapability = Some(Capability.ETH68))
 
     val baseBlockHeader = Fixtures.Blocks.Block3125369.header
     val baseBlockBody: BlockBody = BlockBody(Nil, Nil)

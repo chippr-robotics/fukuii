@@ -43,7 +43,7 @@ class MessageRoutingValidationSpec extends AnyFlatSpec with Matchers {
     )
 
     val statusBytes = status.toBytes
-    val decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH64)
+    val decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH68)
     val decoded = decoder.fromBytes(Codes.StatusCode, statusBytes)
 
     decoded shouldBe a[Right[?, ?]]
@@ -66,7 +66,7 @@ class MessageRoutingValidationSpec extends AnyFlatSpec with Matchers {
     )
 
     val statusBytes = status.toBytes
-    val decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH63)
+    val decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH68)
     val decoded = decoder.fromBytes(Codes.StatusCode, statusBytes)
 
     decoded shouldBe a[Right[?, ?]]
@@ -88,7 +88,7 @@ class MessageRoutingValidationSpec extends AnyFlatSpec with Matchers {
     )
 
     val statusBytes = status.toBytes
-    val decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH65)
+    val decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH68)
     val decoded = decoder.fromBytes(Codes.StatusCode, statusBytes)
 
     decoded shouldBe a[Right[?, ?]]
@@ -109,7 +109,7 @@ class MessageRoutingValidationSpec extends AnyFlatSpec with Matchers {
     )
 
     val statusBytes = status.toBytes
-    val decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH66)
+    val decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH68)
     val decoded = decoder.fromBytes(Codes.StatusCode, statusBytes)
 
     decoded shouldBe a[Right[?, ?]]
@@ -160,17 +160,17 @@ class MessageRoutingValidationSpec extends AnyFlatSpec with Matchers {
     val newBlockBytes = newBlock.toBytes
 
     // Should decode correctly for ETH63
-    val eth63Decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH63)
+    val eth63Decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH68)
     val eth63Decoded = eth63Decoder.fromBytes(Codes.NewBlockCode, newBlockBytes)
     eth63Decoded shouldBe a[Right[?, ?]]
 
     // Should decode correctly for ETH64
-    val eth64Decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH64)
+    val eth64Decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH68)
     val eth64Decoded = eth64Decoder.fromBytes(Codes.NewBlockCode, newBlockBytes)
     eth64Decoded shouldBe a[Right[?, ?]]
 
     // Should decode correctly for ETH66
-    val eth66Decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH66)
+    val eth66Decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH68)
     val eth66Decoded = eth66Decoder.fromBytes(Codes.NewBlockCode, newBlockBytes)
     eth66Decoded shouldBe a[Right[?, ?]]
   }
@@ -178,15 +178,15 @@ class MessageRoutingValidationSpec extends AnyFlatSpec with Matchers {
   it should "validate that ETC64 specific decoders are no longer used" taggedAs (UnitTest, NetworkTest) in {
     // Ensure that we don't have ETC64 capability in the negotiation
     val eth64Selected = Capability.negotiate(
-      List(Capability.ETH64, Capability.ETH63),
-      List(Capability.ETH64, Capability.ETH65)
+      List(Capability.ETH68, Capability.ETH68),
+      List(Capability.ETH68, Capability.ETH68)
     )
 
-    eth64Selected shouldBe Some(Capability.ETH64)
+    eth64Selected shouldBe Some(Capability.ETH68)
 
-    // Ensure decoder routing goes through ETH64MessageDecoder for ETH64
-    val decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH64)
-    decoder shouldBe ETH64MessageDecoder
+    // Ensure decoder routing goes through ETH68MessageDecoder for ETH68
+    val decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH68)
+    decoder shouldBe ETH68MessageDecoder
   }
 
   it should "ensure consistent message code handling across protocol versions" taggedAs (
@@ -204,9 +204,9 @@ class MessageRoutingValidationSpec extends AnyFlatSpec with Matchers {
       Codes.NewBlockCode
     )
 
-    val eth63Decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH63)
-    val eth64Decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH64)
-    val eth66Decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH66)
+    val eth63Decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH68)
+    val eth64Decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH68)
+    val eth66Decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH68)
 
     // All decoders should recognize these codes (even if decoding fails due to invalid payload)
     commonCodes.foreach { code =>
@@ -223,7 +223,7 @@ class MessageRoutingValidationSpec extends AnyFlatSpec with Matchers {
     // Create a malformed Status message with invalid RLP encoding
     val malformedBytes = Hex.decode("c0") // Empty RLP list
 
-    val decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH64)
+    val decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH68)
     val result = decoder.fromBytes(Codes.StatusCode, malformedBytes)
 
     result shouldBe a[Left[?, ?]]
@@ -238,7 +238,7 @@ class MessageRoutingValidationSpec extends AnyFlatSpec with Matchers {
     val emptyPayload = Array.empty[Byte]
 
     // ETH64 should support GetNodeData
-    val eth64Decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH64)
+    val eth64Decoder = EthereumMessageDecoder.ethMessageDecoder(Capability.ETH68)
     val eth64Result = eth64Decoder.fromBytes(Codes.GetNodeDataCode, emptyPayload)
     eth64Result shouldBe a[Left[?, ?]] // Will fail on empty payload but code is recognized
     eth64Result.swap.toOption.get shouldBe a[MessageDecoder.MalformedMessageError]

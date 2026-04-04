@@ -1111,7 +1111,7 @@ object NetworkPeerManagerActor {
 
     def apply(status: ETH64.Status): RemoteStatus =
       RemoteStatus(
-        Capability.ETH64,
+        Capability.ETH68,
         status.networkId,
         ChainWeight.totalDifficultyOnly(status.totalDifficulty),
         status.bestHash,
@@ -1138,7 +1138,7 @@ object NetworkPeerManagerActor {
 
     def apply(status: BaseETH6XMessages.Status): RemoteStatus =
       RemoteStatus(
-        Capability.ETH63,
+        Capability.ETH68,
         status.networkId,
         ChainWeight.totalDifficultyOnly(status.totalDifficulty),
         status.bestHash,

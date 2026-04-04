@@ -90,7 +90,7 @@ class NodeDataSpec extends AnyFlatSpec with Matchers {
 
   it should "be decoded properly" taggedAs (UnitTest, NetworkTest) in {
     val result = EthereumMessageDecoder
-      .ethMessageDecoder(Capability.ETH63)
+      .ethMessageDecoder(Capability.ETH68)
       .fromBytes(Codes.NodeDataCode, encode(encodedNodeData))
       .getOrElse(fail("Should have decoded NodeData"))
 
@@ -107,7 +107,7 @@ class NodeDataSpec extends AnyFlatSpec with Matchers {
 
   it should "be decoded previously encoded value" taggedAs (UnitTest, NetworkTest) in {
     EthereumMessageDecoder
-      .ethMessageDecoder(Capability.ETH63)
+      .ethMessageDecoder(Capability.ETH68)
       .fromBytes(Codes.NodeDataCode, nodeData.toBytes) shouldBe Right(nodeData)
   }
 

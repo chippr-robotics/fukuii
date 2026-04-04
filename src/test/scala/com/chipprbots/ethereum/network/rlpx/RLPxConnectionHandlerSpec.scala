@@ -231,7 +231,7 @@ class RLPxConnectionHandlerSpec
     val lateHello = Hello(
       p2pVersion = 5,
       clientId = "test-client",
-      capabilities = Seq(Capability.ETH63),
+      capabilities = Seq(Capability.ETH68),
       listenPort = 30303,
       nodeId = ByteString(Array.fill[Byte](64)(0))
     )
@@ -263,7 +263,7 @@ class RLPxConnectionHandlerSpec
       override def fromBytes(`type`: Int, payload: Array[Byte]) =
         throw new Exception("Mock message decoder fails to decode all messages")
     }
-    val protocolVersion = Capability.ETH63
+    val protocolVersion = Capability.ETH68
 
     lazy val mockHandshaker: ConfigurableAuthHandshaker = new ConfigurableAuthHandshaker()
     lazy val connection: TestProbe = TestProbe()
@@ -423,7 +423,7 @@ class RLPxConnectionHandlerSpec
 
       (mockHelloExtractor.readHello _)
         .expects(ByteString.empty)
-        .returning(Some((Hello(5, "", Capability.ETH63 :: Nil, 30303, ByteString("abc")), Seq.empty)))
+        .returning(Some((Hello(5, "", Capability.ETH68 :: Nil, 30303, ByteString("abc")), Seq.empty)))
       mockMessageCodec.readMessagesHandler = Some(_ => Nil) // For processing of messages after handshaking finishes
 
       rlpxConnection ! Tcp.Received(data)

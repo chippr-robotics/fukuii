@@ -212,10 +212,8 @@ class RLPxConnectionHandler(
       val ethIndex = peerCaps.indexWhere(_ == negotiatedEth) match {
         case -1 =>
           peerCaps.indexWhere {
-            case Capability.ETH63 | Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 |
-                Capability.ETH68 =>
-              true
-            case _ => false
+            case Capability.ETH68 => true
+            case _                => false
           }
         case idx => idx
       }

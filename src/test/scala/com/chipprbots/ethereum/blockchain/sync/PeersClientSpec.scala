@@ -87,7 +87,7 @@ class PeersClientSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
     val peer3: Peer = Peer(PeerId("peer3"), new InetSocketAddress("127.0.0.1", 3), TestProbe().ref, false)
 
     private val peerStatus = RemoteStatus(
-      capability = Capability.ETH63,
+      capability = Capability.ETH68,
       networkId = 1,
       chainWeight = ChainWeight.zero,
       bestHash = ByteString.empty,

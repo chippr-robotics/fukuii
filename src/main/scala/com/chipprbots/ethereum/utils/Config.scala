@@ -45,21 +45,9 @@ object Config {
     if (config.hasPath("secure-random-algo")) Some(config.getString("secure-random-algo"))
     else None
 
-  // Node capabilities - determined by what this version of Fukuii supports
-  // Per DevP2P spec and Geth implementation: advertise ALL supported protocol versions
-  // While ETH versions are backward compatible, advertising all versions ensures
-  // proper capability negotiation with peers that may only support older versions.
-  // Geth advertises: eth/66, eth/67, eth/68, snap/1
-  // We advertise: eth/65, eth/66, eth/67, eth/68, snap/1 to maximize compatibility
-  //
-  // Note: ETH63 and ETH64 are legacy protocols from 2016-2019 and are not actively
-  // advertised in the Hello message. However, they remain supported during the
-  // negotiation phase for backward compatibility with very old clients.
-  // ETH65+ are advertised as they are still commonly used in the ecosystem.
-  //
-  // Historical note: ETC64 protocol support was removed in favor of standard ETH protocols.
-  // The client now exclusively supports ETH63-68 and SNAP1, aligning with Ethereum specifications.
-  // See docs/validation/ETC64_REMOVAL_VALIDATION.md for details.
+  // Node capabilities — ETH68 is the only live protocol on ETC mainnet.
+  // core-geth: ETH68 only. Besu: ETH68 + ETH69. go-ethereum: ETH69 only.
+  // ETH65/66/67 are removed from all reference clients and no ETC peer negotiates them.
   import com.chipprbots.ethereum.network.p2p.messages.Capability
   private val snapEnabled: Boolean = {
     val syncConfig = config.getConfig("sync")
@@ -67,12 +55,7 @@ object Config {
       (syncConfig.hasPath("snap-server-enabled") && syncConfig.getBoolean("snap-server-enabled"))
   }
   val supportedCapabilities: List[Capability] = {
-    val eth = List(
-      Capability.ETH65,
-      Capability.ETH66,
-      Capability.ETH67,
-      Capability.ETH68
-    )
+    val eth = List(Capability.ETH68)
     if (snapEnabled) eth :+ Capability.SNAP1 else eth
   }
 

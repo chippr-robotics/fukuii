@@ -30,7 +30,6 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH63.MptNodeEncoders._
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.ReceiptImplicits._
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.Receipts
-import com.chipprbots.ethereum.network.p2p.messages.ETH65
 import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
@@ -68,19 +67,20 @@ class BlockchainHostActor(
     }
   }
 
-  /** Handles ETH65 GetPooledTransactions requests by looking up the requested hashes in the tx pool.
+  /** Handles ETH68 GetPooledTransactions requests (ETH66 requestId format) from peers.
     * Response is sent asynchronously via networkPeerManagerActor once the pool responds.
     */
   private def handlePooledTransactionsRequest(message: Message, peerId: PeerId): Unit = message match {
-    case msg: ETH65.GetPooledTransactions =>
+    case msg: ETH66.GetPooledTransactions =>
+      import com.chipprbots.ethereum.network.p2p.messages.ETH66.PooledTransactions._
       pendingTransactionsManager match {
         case Some(txPool) =>
           import org.apache.pekko.pattern.ask
           import org.apache.pekko.util.Timeout
           import scala.concurrent.duration._
-          import com.chipprbots.ethereum.network.p2p.messages.ETH65.PooledTransactions._
           implicit val timeout: Timeout = Timeout(3.seconds)
           val capturedPeerId = peerId
+          val requestId      = msg.requestId
           val requestedHashes = msg.txHashes.toSet
           (txPool ? PendingTransactionsManager.GetPendingTransactions)
             .mapTo[PendingTransactionsManager.PendingTransactionsResponse]
@@ -89,15 +89,14 @@ class BlockchainHostActor(
                 .filter(pt => requestedHashes.contains(pt.stx.tx.hash))
                 .map(_.stx.tx)
               networkPeerManagerActor ! NetworkPeerManagerActor.SendMessage(
-                ETH65.PooledTransactions(txs),
+                ETH66.PooledTransactions(requestId, txs),
                 capturedPeerId
               )
             }(context.dispatcher)
         case None =>
           log.debug("GetPooledTransactions from {}: tx pool not available, sending empty response", peerId)
-          import com.chipprbots.ethereum.network.p2p.messages.ETH65.PooledTransactions._
           networkPeerManagerActor ! NetworkPeerManagerActor.SendMessage(
-            ETH65.PooledTransactions(Seq.empty),
+            ETH66.PooledTransactions(msg.requestId, Seq.empty),
             peerId
           )
       }

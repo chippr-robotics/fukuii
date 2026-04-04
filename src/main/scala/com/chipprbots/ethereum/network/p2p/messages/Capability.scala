@@ -25,57 +25,30 @@ object ProtocolFamily {
 sealed abstract class Capability(val name: ProtocolFamily, val version: Byte)
 
 object Capability {
-  case object ETH63 extends Capability(ProtocolFamily.ETH, 63) // scalastyle:ignore magic.number
-  case object ETH64 extends Capability(ProtocolFamily.ETH, 64) // scalastyle:ignore magic.number
-  case object ETH65 extends Capability(ProtocolFamily.ETH, 65) // scalastyle:ignore magic.number
-  case object ETH66 extends Capability(ProtocolFamily.ETH, 66) // scalastyle:ignore magic.number
-  case object ETH67 extends Capability(ProtocolFamily.ETH, 67) // scalastyle:ignore magic.number
+  // ETH68 is the only live ETH protocol on ETC mainnet.
+  // core-geth: ETH68 only. Besu: ETH68 + ETH69. go-ethereum: ETH69 only (dropped ETH68 Mar 2026).
+  // ETH63/64/65/66/67 are dead — removed from all reference clients, no ETC peer negotiates them.
   case object ETH68 extends Capability(ProtocolFamily.ETH, 68) // scalastyle:ignore magic.number
   case object SNAP1 extends Capability(ProtocolFamily.SNAP, 1) // scalastyle:ignore magic.number
 
   def parse(s: String): Option[Capability] = s match {
-    case "eth/63" => Some(ETH63)
-    case "eth/64" => Some(ETH64)
-    case "eth/65" => Some(ETH65)
-    case "eth/66" => Some(ETH66)
-    case "eth/67" => Some(ETH67)
     case "eth/68" => Some(ETH68)
     case "snap/1" => Some(SNAP1)
-    case _        => None
+    case _        => None // Silently ignore unknown/deprecated protocol versions from peer Hello
   }
 
   def parseUnsafe(s: String): Capability =
     parse(s).getOrElse(throw new RuntimeException(s"Capability $s not supported by Fukuii"))
 
   def negotiate(c1: List[Capability], c2: List[Capability]): Option[Capability] = {
-    // ETH protocol versions are backward compatible
-    // If we advertise ETH68 and peer advertises ETH64, we should negotiate ETH64
-    // This means we need to find the highest common version for each protocol family
-
-    val ethVersions1 = c1.collect { case cap @ (ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68) =>
-      cap
-    }
-    val ethVersions2 = c2.collect { case cap @ (ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68) =>
-      cap
-    }
+    val ethVersions1 = c1.collect { case cap @ ETH68 => cap }
+    val ethVersions2 = c2.collect { case cap @ ETH68 => cap }
 
     val snapVersions1 = c1.collect { case cap @ SNAP1 => cap }
     val snapVersions2 = c2.collect { case cap @ SNAP1 => cap }
 
-    // For each protocol family, find the highest common version
     val negotiatedCapabilities = List(
-      // ETH: if both support ETH, use the minimum of their maximum versions
-      if (ethVersions1.nonEmpty && ethVersions2.nonEmpty) {
-        val maxVersion = math.min(
-          ethVersions1.maxBy(_.version).version,
-          ethVersions2.maxBy(_.version).version
-        )
-        // Find the capability with that version number from either side
-        ethVersions1
-          .find(_.version == maxVersion)
-          .orElse(ethVersions2.find(_.version == maxVersion))
-      } else None,
-      // SNAP: exact match required
+      if (ethVersions1.nonEmpty && ethVersions2.nonEmpty) Some(ETH68) else None,
       if (snapVersions1.intersect(snapVersions2).nonEmpty) Some(SNAP1) else None
     ).flatten
 
@@ -85,18 +58,16 @@ object Capability {
     }
   }
 
-  /** Select the best capability from a list, with protocol-family-aware scoring. Priority: ETC > ETH > SNAP (within
-    * each family, higher versions preferred)
-    */
+  /** Select the best capability from a list. ETH takes priority over SNAP. */
   def best(capabilities: List[Capability]): Capability =
     capabilities
       .groupBy {
-        case ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68 => "ETH"
-        case SNAP1                                         => "SNAP"
+        case ETH68 => "ETH"
+        case SNAP1 => "SNAP"
       }
       .toList
       .sortBy {
-        case ("ETH", _)  => 0 // Highest priority now that ETC is removed
+        case ("ETH", _)  => 0
         case ("SNAP", _) => 1
         case _           => 2
       }
@@ -106,13 +77,8 @@ object Capability {
       }
       .getOrElse(capabilities.head)
 
-  /** Determines if this capability uses RequestId wrapper in messages (ETH66+, SNAP1+) ETH66, ETH67, ETH68, SNAP1 use
-    * RequestId wrapper ETH63, ETH64, ETH65 do not use RequestId wrapper
-    */
-  def usesRequestId(capability: Capability): Boolean = capability match {
-    case ETH66 | ETH67 | ETH68 | SNAP1 => true
-    case _                             => false
-  }
+  /** ETH68 and SNAP1 both use RequestId wrapper in messages. */
+  def usesRequestId(capability: Capability): Boolean = true
 
   implicit class CapabilityEnc(val msg: Capability) extends RLPSerializable {
     override def toRLPEncodable: RLPEncodeable = RLPList(msg.name.toRLPEncodable, msg.version)

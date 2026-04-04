@@ -17,7 +17,7 @@ case class EthNodeStatus63ExchangeState(
 
   def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = {
     case status: BaseETH6XMessages.Status =>
-      applyRemoteStatusMessage(RemoteStatus(status, Capability.ETH63, supportsSnap, peerCapabilities))
+      applyRemoteStatusMessage(RemoteStatus(status, Capability.ETH68, supportsSnap, peerCapabilities))
   }
 
   override protected def createStatusMsg(): MessageSerializable = {
@@ -30,7 +30,7 @@ case class EthNodeStatus63ExchangeState(
       )
 
     val status = BaseETH6XMessages.Status(
-      protocolVersion = Capability.ETH63.version,
+      protocolVersion = Capability.ETH68.version,
       networkId = peerConfiguration.networkId,
       totalDifficulty = chainWeight.totalDifficulty,
       bestHash = bestBlockHeader.hash,

@@ -334,7 +334,7 @@ class PeerEventBusActorSpec
     val peerEventBusActor: ActorRef = system.actorOf(PeerEventBusActor.props)
 
     val peerStatus: RemoteStatus = RemoteStatus(
-      capability = Capability.ETH63,
+      capability = Capability.ETH68,
       networkId = 1,
       chainWeight = ChainWeight.totalDifficultyOnly(10000),
       bestHash = Fixtures.Blocks.Block3125369.header.hash,
