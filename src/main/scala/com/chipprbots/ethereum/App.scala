@@ -17,6 +17,7 @@ object App extends Logger {
     "etc",
     "eth",
     "mordor",
+    "sepolia",
     "bootnode",
     "gorgoroth"
   )
@@ -161,6 +162,7 @@ object App extends Logger {
         |Networks:
         |  etc                    Ethereum Classic mainnet (default)
         |  eth                    Ethereum mainnet
+        |  sepolia                Sepolia testnet (ETH)
         |  mordor                 Mordor testnet
         |  gorgoroth              Fukuii battlenet
         |  bootnode               Bootnode configuration (advanced)

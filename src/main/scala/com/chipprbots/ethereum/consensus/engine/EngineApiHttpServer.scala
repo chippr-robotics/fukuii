@@ -82,16 +82,27 @@ class EngineApiHttpServer(
   }
 
   private def processRequest(json: JValue): Future[JsonRpcResponse] = {
-    val request = JsonRpcRequest(
-      jsonrpc = (json \ "jsonrpc").extractOpt[String].getOrElse("2.0"),
-      method = (json \ "method").extract[String],
-      params = (json \ "params") match {
-        case arr: JArray => Some(arr)
-        case _           => None
-      },
-      id = (json \ "id").extractOpt[JValue]
-    )
-    controller.handleRequest(request).unsafeToFuture()
+    try {
+      val method = (json \ "method").extractOpt[String].getOrElse("unknown")
+      log.warn(s"Engine API request: method=$method")
+      val request = JsonRpcRequest(
+        jsonrpc = (json \ "jsonrpc").extractOpt[String].getOrElse("2.0"),
+        method = (json \ "method").extract[String],
+        params = (json \ "params") match {
+          case arr: JArray => Some(arr)
+          case _           => None
+        },
+        id = (json \ "id").extractOpt[JValue]
+      )
+      controller.handleRequest(request).unsafeToFuture().recover { case e: Exception =>
+        log.error(s"Engine API handler error: ${e.getMessage}")
+        JsonRpcResponse("2.0", None, Some(JsonRpcError.InternalError), request.id.getOrElse(JNull))
+      }
+    } catch {
+      case e: Exception =>
+        log.error(s"Engine API request decode error for method=$method: ${e.getMessage}", e)
+        Future.successful(JsonRpcResponse("2.0", None, Some(JsonRpcError.InternalError), JNull))
+    }
   }
 
   private def responseToJson(resp: JsonRpcResponse): JValue = {

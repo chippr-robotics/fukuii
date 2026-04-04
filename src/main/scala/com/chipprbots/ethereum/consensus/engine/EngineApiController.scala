@@ -7,7 +7,7 @@ import org.json4s.JNull
 import org.json4s.JObject
 import org.json4s.JString
 import org.json4s.JValue
-import org.json4s.JsonAST.JInt
+import org.json4s.JsonAST.{JBool, JInt}
 
 import org.apache.pekko.util.ByteString
 
@@ -40,7 +40,20 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
         handleGetPayloadBodiesByHash(request)
       case "engine_getPayloadBodiesByRangeV1" =>
         handleGetPayloadBodiesByRange(request)
+      // CL clients also send eth_* methods through the authrpc port
+      case "eth_syncing" =>
+        IO.pure(JsonRpcResponse("2.0", Some(JBool(false)), None, reqId(request)))
+      case "eth_getBlockByNumber" =>
+        // Return null for now — CL just checks if EL is responsive
+        IO.pure(JsonRpcResponse("2.0", Some(JNull), None, reqId(request)))
+      case "eth_blockNumber" =>
+        IO.pure(JsonRpcResponse("2.0", Some(JString("0x0")), None, reqId(request)))
+      case "eth_chainId" =>
+        IO.pure(JsonRpcResponse("2.0", Some(JString("0xaa36a7")), None, reqId(request)))
+      case "net_version" =>
+        IO.pure(JsonRpcResponse("2.0", Some(JString("11155111")), None, reqId(request)))
       case other =>
+        log.warn(s"Engine API: unknown method '$other'")
         IO.pure(JsonRpcResponse("2.0", None, Some(JsonRpcError.MethodNotFound), reqId(request)))
     }
   }
@@ -99,7 +112,11 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
 
   // --- JSON encoding/decoding helpers ---
 
-  private def hexToByteString(hex: String): ByteString = ByteStringUtils.string2hash(hex)
+  private def hexToByteString(hex: String): ByteString = {
+    val clean = hex.stripPrefix("0x")
+    if (clean.isEmpty) ByteString.empty
+    else ByteString(org.bouncycastle.util.encoders.Hex.decode(clean))
+  }
 
   private def byteStringToHex(bs: ByteString): String = "0x" + bs.map("%02x".format(_)).mkString
 
@@ -182,7 +199,9 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
 
   private def extractQuantity(fields: Map[String, JValue], key: String): BigInt =
     fields.get(key).collect {
-      case JString(hex) => BigInt(hex.stripPrefix("0x"), 16)
-      case JInt(n)      => n
+      case JString(hex) =>
+        val clean = hex.stripPrefix("0x")
+        if (clean.isEmpty) BigInt(0) else BigInt(clean, 16)
+      case JInt(n) => n
     }.getOrElse(BigInt(0))
 }
