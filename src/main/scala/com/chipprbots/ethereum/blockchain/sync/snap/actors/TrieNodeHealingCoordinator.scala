@@ -141,9 +141,12 @@ class TrieNodeHealingCoordinator(
     peerCooldownUntilMs.get(peer.id.value).exists(_ > System.currentTimeMillis())
 
   private def recordPeerCooldown(peer: Peer, reason: String): Unit = {
-    val until = System.currentTimeMillis() + peerCooldownDefault.toMillis
+    // OPT-P5: Static peers (core-geth, Besu configured as static) get a shorter cooldown —
+    // trusted infrastructure should be re-tried sooner after transient failures.
+    val cooldown = if (peer.isStatic) 5.seconds else peerCooldownDefault
+    val until = System.currentTimeMillis() + cooldown.toMillis
     peerCooldownUntilMs.put(peer.id.value, until)
-    log.debug(s"Cooling down peer ${peer.id.value} for ${peerCooldownDefault.toSeconds}s: $reason")
+    log.debug(s"Cooling down peer ${peer.id.value} for ${cooldown.toSeconds}s (static=${peer.isStatic}): $reason")
   }
 
   /** Count in-flight requests for a given peer (pipelining support). */
@@ -420,9 +423,12 @@ class TrieNodeHealingCoordinator(
 
     activeRequests(requestId) = ActiveRequest(batch, peer, responseBytes)
 
-    // Use 30s minimum timeout for GetTrieNodes — the adaptive floor (6s) is too short for static
-    // peers (Besu/core-geth) that may be busy after a long account download phase.
-    requestTracker.trackRequest(requestId, peer, SNAPRequestTracker.RequestType.GetTrieNodes, 30.seconds) {
+    // OPT-P3: Use adaptive timeout clamped between 30s–60s for GetTrieNodes.
+    // The adaptive floor (6s) is too short for static peers busy after a long account download.
+    // 30s floor: accounts for Besu/core-geth RocksDB compaction spikes.
+    // 60s ceiling: prevents indefinite waits on stale/slow peers.
+    val healingTimeout = requestTracker.rateTracker.targetTimeout().max(30.seconds).min(60.seconds)
+    requestTracker.trackRequest(requestId, peer, SNAPRequestTracker.RequestType.GetTrieNodes, healingTimeout) {
       handleTimeout(requestId, batch, peer)
     }
 

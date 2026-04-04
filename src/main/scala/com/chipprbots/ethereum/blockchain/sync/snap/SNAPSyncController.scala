@@ -149,6 +149,9 @@ class SNAPSyncController(
   private val maxHealingValidationCycles: Int = 5        // after 5 full cycles, stop oscillating and declare done
   private var bootstrapCheckTask: Option[Cancellable] = None
   private var pivotBootstrapRetryTask: Option[Cancellable] = None
+  // OPT-P8: Exponential backoff for RetryPivotRefresh — avoids hammering same peers repeatedly.
+  // Resets to 30s on successful pivot refresh. Doubles on each failure, capped at 5 minutes.
+  private var pivotRefreshRetryDelay: FiniteDuration = 30.seconds
   private var rateTrackerTuneTask: Option[Cancellable] = None
 
   private case object RetryPivotRefresh
@@ -489,8 +492,10 @@ class SNAPSyncController(
       )
       pivotBootstrapRetryTask.foreach(_.cancel())
       pivotBootstrapRetryTask = Some(
-        scheduler.scheduleOnce(60.seconds, self, RetryPivotRefresh)(context.dispatcher)
+        scheduler.scheduleOnce(pivotRefreshRetryDelay, self, RetryPivotRefresh)(context.dispatcher)
       )
+      log.warning(s"Scheduling pivot refresh retry in ${pivotRefreshRetryDelay.toSeconds}s (backoff)")
+      pivotRefreshRetryDelay = (pivotRefreshRetryDelay * 2).min(5.minutes)
 
     case RetryPivotRefresh =>
       pivotBootstrapRetryTask = None
@@ -632,7 +637,7 @@ class SNAPSyncController(
           f"[HEALING] Trie walk in progress: $scanned%,d nodes scanned, " +
             s"${elapsedSec / 60}m ${elapsedSec % 60}s elapsed"
         )
-        scheduler.scheduleOnce(30.seconds, self, TrieWalkHeartbeat)(ec)
+        scheduler.scheduleOnce(10.seconds, self, TrieWalkHeartbeat)(ec)
       }
 
     case TrieWalkResult(missingNodes) if currentPhase == StateHealing =>
@@ -2169,7 +2174,7 @@ class SNAPSyncController(
       log.info("Starting trie walk to discover missing nodes for healing...")
       val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
       val selfRef = self
-      scheduler.scheduleOnce(30.seconds, self, TrieWalkHeartbeat)(ec)
+      scheduler.scheduleOnce(10.seconds, self, TrieWalkHeartbeat)(ec)
       scala.concurrent
         .Future {
           val validator = new StateValidator(storage, counter)
@@ -2500,14 +2505,15 @@ class SNAPSyncController(
 
     if (newPivotOpt.isEmpty) {
       log.warning(
-        "Cannot refresh pivot: no suitable SNAP peers available. Scheduling retry in 30s."
+        s"Cannot refresh pivot: no suitable SNAP peers available. Scheduling retry in ${pivotRefreshRetryDelay.toSeconds}s (backoff)."
       )
       // Don't restart — restarting can't help with no peers, and it destroys all in-memory trie data.
       // Schedule an explicit retry so we don't stall indefinitely waiting for coordinator backoff.
       pivotBootstrapRetryTask.foreach(_.cancel())
       pivotBootstrapRetryTask = Some(
-        scheduler.scheduleOnce(30.seconds, self, RetryPivotRefresh)(context.dispatcher)
+        scheduler.scheduleOnce(pivotRefreshRetryDelay, self, RetryPivotRefresh)(context.dispatcher)
       )
+      pivotRefreshRetryDelay = (pivotRefreshRetryDelay * 2).min(5.minutes)
       return
     }
 
@@ -2567,6 +2573,8 @@ class SNAPSyncController(
       newPivotHeader: BlockHeader,
       reason: String
   ): Unit = {
+    // OPT-P8: Reset exponential backoff on successful pivot refresh.
+    pivotRefreshRetryDelay = 30.seconds
     val newStateRoot = newPivotHeader.stateRoot
     val oldPivot = pivotBlock.getOrElse(BigInt(0))
     val oldRoot = stateRoot.map(_.take(4).toHex).getOrElse("none")

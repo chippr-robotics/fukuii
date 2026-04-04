@@ -346,9 +346,12 @@ class AccountRangeCoordinator(
     peerCooldownUntilMs.get(peer.id.value).exists(_ > System.currentTimeMillis())
 
   private def recordPeerCooldown(peer: Peer, reason: String): Unit = {
-    val until = System.currentTimeMillis() + peerCooldownDefault.toMillis
+    // OPT-P5: Static peers (core-geth, Besu configured as static) get a shorter cooldown —
+    // trusted infrastructure should be re-tried sooner after transient failures.
+    val cooldown = if (peer.isStatic) 5.seconds else peerCooldownDefault
+    val until = System.currentTimeMillis() + cooldown.toMillis
     peerCooldownUntilMs.put(peer.id.value, until)
-    log.debug(s"Cooling down peer ${peer.id.value} for ${peerCooldownDefault.toSeconds}s: $reason")
+    log.debug(s"Cooling down peer ${peer.id.value} for ${cooldown.toSeconds}s (static=${peer.isStatic}): $reason")
   }
 
   // Pivot refresh backoff: prevents rapid-fire pivot refresh requests when all peers are stateless.
