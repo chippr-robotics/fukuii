@@ -2490,27 +2490,37 @@ class SNAPSyncController(
             if (error.contains("Missing root node")) {
               validationRetryCount += 1
 
-              if (validationRetryCount > MaxValidationRetries) {
+              if (validationRetryCount == 1) {
+                // First failure: flush LRU cache to RocksDB. The account download pipeline writes
+                // nodes via DeferredWriteMptStorage.flush() → CachedReferenceCountedStorage.persist()
+                // which is a NO-OP — nodes land in the LRU cache only, not in RocksDB.
+                // forcePersist(GenesisDataLoad) calls persistCache() which writes all cache entries
+                // to RocksDB and clears the cache. After this, mptStorage.get(root) reads from RocksDB
+                // directly, so the queueNodes false-positive in healing is also resolved.
+                log.info("Root node missing — flushing LRU cache to RocksDB before retrying validation")
+                stateStorage.forcePersist(StateStorage.GenesisDataLoad)
+                scheduler.scheduleOnce(ValidationRetryDelay) {
+                  validateState()
+                }(ec)
+              } else if (validationRetryCount > MaxValidationRetries) {
+                // After retries, root is genuinely missing from RocksDB: trigger a targeted network
+                // fetch via trie healing rather than proceeding with a broken state root.
                 log.warning(
-                  s"Root node missing after $validationRetryCount validation attempts. " +
-                    s"Proceeding to regular sync — missing nodes will be fetched on-demand during block execution."
+                  s"Root node missing after $validationRetryCount validation attempts — " +
+                    s"triggering targeted healing fetch for state root ${stateRoot.map(_.take(8).toHex).getOrElse("?")}."
                 )
-                // Skip validation and proceed: mark SNAP done, start regular sync.
-                // Include best block number in the batch so regular sync startup doesn't fail.
-                pivotBlock match {
-                  case Some(pivot) =>
-                    appStateStorage.snapSyncDone()
-                      .and(appStateStorage.putBestBlockNumber(pivot))
-                      .commit()
-                    context.parent ! Done
+                stateRoot match {
+                  case Some(root) =>
+                    // Reset oscillation guard so healing can run again
+                    healingValidationCycles = 0
+                    triggerHealingForMissingNodes(Seq(root))
                   case None =>
-                    log.error("Cannot finalize: pivotBlock is None in root-missing fallback. Triggering SNAP retry.")
-                    context.parent ! RetrySnapSync("pivot block unknown during root-missing validation fallback")
+                    log.error("Cannot force-fetch root: stateRoot is None. Triggering SNAP retry.")
+                    context.parent ! RetrySnapSync("stateRoot unknown in root-missing healing fallback")
                 }
               } else {
                 log.error(s"Root node is missing (retry attempt $validationRetryCount of $MaxValidationRetries)")
                 log.info("Retrying validation after brief delay...")
-                // Retry validation after a short delay — direct retry, don't loop through healing
                 scheduler.scheduleOnce(ValidationRetryDelay) {
                   validateState()
                 }(ec)

@@ -108,8 +108,24 @@ class BlockchainReader(
         Hex.toHexString(bestKnownBlockinfo.hash.toArray),
         bestKnownBlockinfo.number
       )
-    }
-    bestBlock
+      // Post-SNAP fallback: the pivot block body may be missing (encoding issue across restarts)
+      // but the header is always stored separately via storeBlockHeader. Reconstruct with empty body
+      // since SNAP always stores the pivot with BlockBody.empty anyway.
+      if (appStateStorage.isSnapSyncDone()) {
+        val fallback = getBlockHeaderByNumber(bestKnownBlockinfo.number).map(h => Block(h, BlockBody.empty))
+        if (fallback.isDefined)
+          log.info(
+            "Post-SNAP fallback: reconstructed pivot block {} from header-only storage",
+            bestKnownBlockinfo.number
+          )
+        else
+          log.error(
+            "Post-SNAP fallback also failed: header for block {} not found in storage",
+            bestKnownBlockinfo.number
+          )
+        fallback
+      } else None
+    } else bestBlock
   }
 
   def genesisHeader: BlockHeader =

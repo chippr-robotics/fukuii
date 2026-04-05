@@ -753,11 +753,24 @@ class BlockImporter(
         val bestHasHeader = Option(blockchainReader.getBlockHeaderByNumber(bestKnownBlockNumber)).flatten.isDefined
         val targetHasHeader = Option(blockchainReader.getBlockHeaderByNumber(goingBackTo)).flatten.isDefined
         if (bestHasHeader && !targetHasHeader && goingBackTo > 0) {
-          val msg = s"Unknown branch at block ${blocks.head.number}, walk-back target $goingBackTo has no stored header " +
-            s"(SNAP sync gap). Resetting to best block $bestKnownBlockNumber."
-          log.warning(msg)
-          fetcher ! BlockFetcher.InvalidateBlocksFrom(bestKnownBlockNumber, msg)
-          Right(Nil)
+          val isFirstBlockAfterPivot = blocks.head.number == bestKnownBlockNumber + 1
+          if (blockchainReader.isSnapSyncDone() && isFirstBlockAfterPivot) {
+            // The incoming block builds directly on the SNAP pivot. No walk-back needed —
+            // the pivot IS the canonical trust anchor (geth pattern: recoverAncestors terminates
+            // at the pivot because the pivot has committed state). Accept the block directly.
+            log.info(
+              s"Post-SNAP: accepting block ${blocks.head.number} directly on pivot $bestKnownBlockNumber"
+            )
+            Right(blocks.toList)
+          } else {
+            val msg = s"Unknown branch at block ${blocks.head.number}, walk-back target $goingBackTo has no stored header " +
+              s"(SNAP sync gap). Re-fetching from ${blocks.head.number}."
+            log.warning(msg)
+            // Invalidate from blocks.head.number (not bestKnownBlockNumber) to prevent
+            // re-requesting the same block that just failed, which would cause an infinite loop.
+            fetcher ! BlockFetcher.InvalidateBlocksFrom(blocks.head.number, msg)
+            Right(Nil)
+          }
         } else {
           val msg = s"Unknown branch, going back to block nr $goingBackTo in order to resolve branches"
           log.warning(msg)
