@@ -78,7 +78,7 @@ class JsonRpcControllerEthSpec
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("eth_protocolVersion")
     val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
-    response should haveStringResult("0x3f")
+    response should haveStringResult("0x44")
   }
 
   it should "handle eth_chainId" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {

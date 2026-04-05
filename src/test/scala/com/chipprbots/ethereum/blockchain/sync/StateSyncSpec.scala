@@ -31,7 +31,6 @@ import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor.Star
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor.StateSyncFinished
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor.StateSyncStats
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor.WaitingForNewTargetBlock
-import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlockchainImpl
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.ChainWeight
@@ -57,50 +56,13 @@ class StateSyncSpec
   implicit override val generatorDrivenConfig: PropertyCheckConfiguration =
     PropertyCheckConfiguration(minSuccessful = PosInt(3))
 
-  "StateSync" should "sync state to different tries" taggedAs (UnitTest, SyncTest) in new TestSetup() {
-    forAll(ObjectGenerators.genMultipleNodeData(1000)) { nodeData =>
-      val initiator = TestProbe()
-      initiator.ignoreMsg { case SyncStateSchedulerActor.StateSyncStats(_, _) => true }
-      val trieProvider = TrieProvider()
-      val target = trieProvider.buildWorld(nodeData)
-      setAutoPilotWithProvider(trieProvider)
-      initiator.send(syncStateSchedulerActor, StartSyncingTo(target, 1))
-      initiator.expectMsg(20.seconds, StateSyncFinished)
-    }
-  }
+  // Deleted: "sync state to different tries" (3 variants)
+  // These tests relied on SyncStateSchedulerActor using GetNodeData (ETH63-era) to download state.
+  // In ETH68, supportsGetNodeData() returns false for all peers (EIP-4938 removed GetNodeData).
+  // The scheduler reports NetworkIncompatible → never sends StateSyncFinished → 20s timeout.
+  // ETH68 state sync uses SNAP protocol (see SNAPServerHandlerSpec for SNAP coverage).
 
-  it should "sync state to different tries when peers provide different set of data each time" taggedAs (
-    UnitTest,
-    SyncTest
-  ) in new TestSetup() {
-    forAll(ObjectGenerators.genMultipleNodeData(1000)) { nodeData =>
-      val initiator = TestProbe()
-      initiator.ignoreMsg { case SyncStateSchedulerActor.StateSyncStats(_, _) => true }
-      val trieProvider1 = TrieProvider()
-      val target = trieProvider1.buildWorld(nodeData)
-      setAutoPilotWithProvider(trieProvider1, partialResponseConfig)
-      initiator.send(syncStateSchedulerActor, StartSyncingTo(target, 1))
-      initiator.expectMsg(20.seconds, StateSyncFinished)
-    }
-  }
-
-  it should "sync state to different tries when peer provide mixed responses" taggedAs (
-    UnitTest,
-    SyncTest,
-    SlowTest
-  ) in new TestSetup() {
-    forAll(ObjectGenerators.genMultipleNodeData(1000)) { nodeData =>
-      val initiator = TestProbe()
-      initiator.ignoreMsg { case SyncStateSchedulerActor.StateSyncStats(_, _) => true }
-      val trieProvider1 = TrieProvider()
-      val target = trieProvider1.buildWorld(nodeData)
-      setAutoPilotWithProvider(trieProvider1, mixedResponseConfig)
-      initiator.send(syncStateSchedulerActor, StartSyncingTo(target, 1))
-      initiator.expectMsg(20.seconds, StateSyncFinished)
-    }
-  }
-
-  it should "restart state sync when requested" taggedAs (UnitTest, SyncTest) in new TestSetup() {
+  "StateSync" should "restart state sync when requested" taggedAs (UnitTest, SyncTest) in new TestSetup() {
     forAll(ObjectGenerators.genMultipleNodeData(1000)) { nodeData =>
       val initiator = TestProbe()
       val trieProvider1 = TrieProvider()
@@ -115,25 +77,8 @@ class StateSyncSpec
     }
   }
 
-  it should "start state sync when receiving start signal while bloom filter is loading" taggedAs (
-    UnitTest,
-    SyncTest
-  ) in new TestSetup() {
-    override def buildBlockChain(): (BlockchainReader, BlockchainImpl) = {
-      val storages = getNewStorages.storages
-      val blockchainReader = BlockchainReader(storages)
-      (blockchainReader, BlockchainImpl(storages, blockchainReader))
-    }
-
-    val nodeData: IndexedSeq[MptNodeData] = (0 until 1000).map(i => MptNodeData(Address(i), None, Seq(), i))
-    val initiator: TestProbe = TestProbe()
-    initiator.ignoreMsg { case SyncStateSchedulerActor.StateSyncStats(_, _) => true }
-    val trieProvider1: TrieProvider = TrieProvider()
-    val target: ByteString = trieProvider1.buildWorld(nodeData)
-    setAutoPilotWithProvider(trieProvider1)
-    initiator.send(syncStateSchedulerActor, StartSyncingTo(target, 1))
-    initiator.expectMsg(20.seconds, StateSyncFinished)
-  }
+  // Deleted: "start state sync when receiving start signal while bloom filter is loading"
+  // Same root cause as above — waits for StateSyncFinished via GetNodeData which ETH68 doesn't support.
 
   class TestSetup extends EphemBlockchainTestSetup with TestSyncConfig {
     implicit override lazy val system: ActorSystem = StateSyncSpec.this.system

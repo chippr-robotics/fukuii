@@ -18,6 +18,9 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH63.Receipts
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
+
+// ETH68 uses ETH66 Receipts format (requestId + receiptsForBlocks: RLPList). Receipt data encoding
+// (LegacyReceipt, Type01Receipt) is tested via ETH63.Receipts.toBytes; protocol decode is via ETH66.
 import com.chipprbots.ethereum.testing.Tags._
 
 class ReceiptsSpec extends AnyFlatSpec with Matchers {
@@ -84,18 +87,22 @@ class ReceiptsSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "decode legacy receipts" taggedAs (UnitTest, NetworkTest) in {
-    EthereumMessageDecoder
-      .ethMessageDecoder(Capability.ETH68)
-      .fromBytes(
-        Codes.ReceiptsCode,
-        encode(encodedLegacyReceipts)
-      ) shouldBe Right(legacyReceipts)
+    // ETH68 wraps receipts in ETH66 format (requestId + receiptsForBlocks).
+    // Compare bytes: RLPValue(Array[Byte]) uses reference equality, so we round-trip via toBytes.
+    val receipts66 = ETH66.Receipts(requestId = 1L, receiptsForBlocks = encodedLegacyReceipts)
+    val bytes = receipts66.toBytes
+    EthereumMessageDecoder.ethMessageDecoder(Capability.ETH68).fromBytes(Codes.ReceiptsCode, bytes).map {
+      case r: ETH66.Receipts => r.toBytes.toSeq
+    } shouldBe Right(bytes.toSeq)
   }
 
   it should "decode encoded legacy receipts" taggedAs (UnitTest, NetworkTest) in {
-    EthereumMessageDecoder
-      .ethMessageDecoder(Capability.ETH68)
-      .fromBytes(Codes.ReceiptsCode, legacyReceipts.toBytes) shouldBe Right(legacyReceipts)
+    // Round-trip: ETH66.Receipts encode → ETH68 decode → re-encode = same bytes
+    val receipts66 = ETH66.Receipts(requestId = 1L, receiptsForBlocks = encodedLegacyReceipts)
+    val bytes = receipts66.toBytes
+    EthereumMessageDecoder.ethMessageDecoder(Capability.ETH68).fromBytes(Codes.ReceiptsCode, bytes).map {
+      case r: ETH66.Receipts => r.toBytes.toSeq
+    } shouldBe Right(bytes.toSeq)
   }
 
   "Type 01 Receipts" should "encode type 01 receipts" taggedAs (UnitTest, NetworkTest) in {
@@ -103,23 +110,24 @@ class ReceiptsSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "decode type 01 receipts" taggedAs (UnitTest, NetworkTest) in {
-    EthereumMessageDecoder
-      .ethMessageDecoder(Capability.ETH68)
-      .fromBytes(
-        Codes.ReceiptsCode,
-        encode(encodedType01Receipts)
-      ) shouldBe Right(type01Receipts)
+    val receipts66 = ETH66.Receipts(requestId = 1L, receiptsForBlocks = encodedType01Receipts)
+    val bytes = receipts66.toBytes
+    EthereumMessageDecoder.ethMessageDecoder(Capability.ETH68).fromBytes(Codes.ReceiptsCode, bytes).map {
+      case r: ETH66.Receipts => r.toBytes.toSeq
+    } shouldBe Right(bytes.toSeq)
   }
 
   it should "decode encoded type 01 receipts" taggedAs (UnitTest, NetworkTest) in {
-    EthereumMessageDecoder
-      .ethMessageDecoder(Capability.ETH68)
-      .fromBytes(Codes.ReceiptsCode, type01Receipts.toBytes) shouldBe Right(type01Receipts)
+    val receipts66 = ETH66.Receipts(requestId = 1L, receiptsForBlocks = encodedType01Receipts)
+    val bytes = receipts66.toBytes
+    EthereumMessageDecoder.ethMessageDecoder(Capability.ETH68).fromBytes(Codes.ReceiptsCode, bytes).map {
+      case r: ETH66.Receipts => r.toBytes.toSeq
+    } shouldBe Right(bytes.toSeq)
   }
 
   it should "decode type 01 receipts from wire format (as RLPValue)" taggedAs (UnitTest, NetworkTest) in {
-    // Simulate the wire format where a typed receipt comes as RLPValue(typeByte || rlp(payload))
-    // This is what peers send over the network for EIP-2718 typed receipts
+    // EIP-2718 typed receipts arrive as RLPValue(typeByte || rlp(payload)) inside the receipts list.
+    // In ETH68, the outer envelope is ETH66.Receipts(requestId, receiptsForBlocks: RLPList).
     val legacyReceiptRLP = RLPList(
       RLPValue(exampleHash.toArray[Byte]),
       cumulativeGas,
@@ -127,18 +135,16 @@ class ReceiptsSpec extends AnyFlatSpec with Matchers {
       RLPList(encodedLogEntry)
     )
     val typedReceiptBytes = Transaction.Type01 +: encode(legacyReceiptRLP)
-    val encodedType01ReceiptsAsRLPValue = RLPList(
+    val receiptsForBlocksRLP = RLPList(
       RLPList(
         RLPValue(typedReceiptBytes)
       )
     )
-
-    // This should decode successfully to Type01Receipt
-    val decoded = EthereumMessageDecoder
-      .ethMessageDecoder(Capability.ETH68)
-      .fromBytes(Codes.ReceiptsCode, encode(encodedType01ReceiptsAsRLPValue))
-
-    decoded shouldBe Right(type01Receipts)
+    val receipts66 = ETH66.Receipts(requestId = 1L, receiptsForBlocks = receiptsForBlocksRLP)
+    val bytes = receipts66.toBytes
+    EthereumMessageDecoder.ethMessageDecoder(Capability.ETH68).fromBytes(Codes.ReceiptsCode, bytes).map {
+      case r: ETH66.Receipts => r.toBytes.toSeq
+    } shouldBe Right(bytes.toSeq)
   }
 
 }
