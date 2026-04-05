@@ -14,13 +14,8 @@ mkdir -p "$DATADIR" "$CONFIG_DIR"
 # 1. Determine fork configuration from HIVE_FORK_* environment variables
 # ==============================================================================
 
-FORK_ARGS=""
-
-# Block-number forks (defaults to max = disabled)
 MAX="1000000000000000000"
-FRONTIER=0
 HOMESTEAD=${HIVE_FORK_HOMESTEAD:-$MAX}
-DAO_BLOCK=${HIVE_FORK_DAO_BLOCK:-$MAX}
 TANGERINE=${HIVE_FORK_TANGERINE:-$MAX}
 SPURIOUS=${HIVE_FORK_SPURIOUS:-$MAX}
 BYZANTIUM=${HIVE_FORK_BYZANTIUM:-$MAX}
@@ -47,7 +42,6 @@ PRAGUE_TS=${HIVE_PRAGUE_TIMESTAMP:-}
 
 if [ -f "$GENESIS_FILE" ]; then
     echo "Processing genesis file..."
-    # Use mapper.jq to convert geth-format genesis to fukuii format
     jq -f /mapper.jq "$GENESIS_FILE" > "$CONFIG_DIR/genesis.json"
 else
     echo "No genesis file provided, using default"
@@ -59,7 +53,6 @@ fi
 
 if [ -n "$TTD" ]; then
     echo "Engine API mode: TTD=$TTD"
-    # Standard hive JWT secret
     echo "0x7365637265747365637265747365637265747365637265747365637265747365" > "$JWT_SECRET_FILE"
 fi
 
@@ -83,14 +76,38 @@ FLAGS=""
 FLAGS="$FLAGS -Dfukuii.datadir=$DATADIR"
 FLAGS="$FLAGS -Dfukuii.blockchains.network=mordor"
 
+# Override chain ID and network ID from hive env vars
+FLAGS="$FLAGS -Dfukuii.blockchains.mordor.chain-id=$CHAIN_ID"
+FLAGS="$FLAGS -Dfukuii.blockchains.mordor.network-id=$NETWORK_ID"
+
+# Fork block overrides (override mordor defaults with hive values)
+FLAGS="$FLAGS -Dfukuii.blockchains.mordor.homestead-block-number=$HOMESTEAD"
+FLAGS="$FLAGS -Dfukuii.blockchains.mordor.eip150-block-number=$TANGERINE"
+FLAGS="$FLAGS -Dfukuii.blockchains.mordor.eip155-block-number=$SPURIOUS"
+FLAGS="$FLAGS -Dfukuii.blockchains.mordor.eip160-block-number=$SPURIOUS"
+FLAGS="$FLAGS -Dfukuii.blockchains.mordor.eip161-block-number=$SPURIOUS"
+FLAGS="$FLAGS -Dfukuii.blockchains.mordor.byzantium-block-number=$BYZANTIUM"
+FLAGS="$FLAGS -Dfukuii.blockchains.mordor.constantinople-block-number=$CONSTANTINOPLE"
+FLAGS="$FLAGS -Dfukuii.blockchains.mordor.petersburg-block-number=$PETERSBURG"
+FLAGS="$FLAGS -Dfukuii.blockchains.mordor.istanbul-block-number=$ISTANBUL"
+FLAGS="$FLAGS -Dfukuii.blockchains.mordor.muir-glacier-block-number=$MUIRGLACIER"
+FLAGS="$FLAGS -Dfukuii.blockchains.mordor.berlin-block-number=$BERLIN"
+# London = Olympia in Fukuii (EIP-1559)
+FLAGS="$FLAGS -Dfukuii.blockchains.mordor.olympia-block-number=$LONDON"
+
 # Network config
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.enabled=true"
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.interface=0.0.0.0"
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.port=8545"
+FLAGS="$FLAGS -Dfukuii.network.rpc.apis=eth,web3,net,personal,fukuii,debug,qa"
 FLAGS="$FLAGS -Dfukuii.network.server-address.interface=0.0.0.0"
 FLAGS="$FLAGS -Dfukuii.network.server-address.port=30303"
 FLAGS="$FLAGS -Dfukuii.network.discovery.interface=0.0.0.0"
 FLAGS="$FLAGS -Dfukuii.network.discovery.port=30303"
+
+# Disable sync (hive provides chain data, we don't sync from peers)
+FLAGS="$FLAGS -Dfukuii.sync.do-fast-sync=false"
+FLAGS="$FLAGS -Dfukuii.sync.do-snap-sync=false"
 
 # Bootnode
 if [ -n "$HIVE_BOOTNODE" ]; then
@@ -110,20 +127,19 @@ if [ -n "$TTD" ]; then
     FLAGS="$FLAGS -Dfukuii.network.engine-api.port=8551"
     FLAGS="$FLAGS -Dfukuii.network.engine-api.jwt-secret-path=$JWT_SECRET_FILE"
     FLAGS="$FLAGS -Dfukuii.mining.protocol=engine-api"
+    FLAGS="$FLAGS -Dfukuii.blockchains.mordor.terminal-total-difficulty=$TTD"
+    FLAGS="$FLAGS -Dfukuii.blockchains.mordor.network-type=eth"
 fi
 
 # Timestamp forks
 if [ -n "$SHANGHAI_TS" ]; then
-    FLAGS="$FLAGS -Dfukuii.blockchains.test.shanghai-timestamp=$SHANGHAI_TS"
+    FLAGS="$FLAGS -Dfukuii.blockchains.mordor.shanghai-timestamp=$SHANGHAI_TS"
 fi
 if [ -n "$CANCUN_TS" ]; then
-    FLAGS="$FLAGS -Dfukuii.blockchains.test.cancun-timestamp=$CANCUN_TS"
+    FLAGS="$FLAGS -Dfukuii.blockchains.mordor.cancun-timestamp=$CANCUN_TS"
 fi
 if [ -n "$PRAGUE_TS" ]; then
-    FLAGS="$FLAGS -Dfukuii.blockchains.test.prague-timestamp=$PRAGUE_TS"
-fi
-if [ -n "$TTD" ]; then
-    FLAGS="$FLAGS -Dfukuii.blockchains.test.terminal-total-difficulty=$TTD"
+    FLAGS="$FLAGS -Dfukuii.blockchains.mordor.prague-timestamp=$PRAGUE_TS"
 fi
 
 # Log level
@@ -139,9 +155,11 @@ esac
 # 6. Start Fukuii
 # ==============================================================================
 
-echo "Starting Fukuii with flags: $FLAGS"
-echo "Network ID: $NETWORK_ID, Chain ID: $CHAIN_ID"
-echo "Log level: $LOGLEVEL"
+echo "Starting Fukuii for hive test"
+echo "  Chain ID: $CHAIN_ID, Network ID: $NETWORK_ID"
+echo "  Forks: London=$LONDON, Berlin=$BERLIN"
+echo "  TTD: ${TTD:-none}"
+echo "  Log level: $LOGLEVEL"
 
 exec java \
     -Xmx2g \
