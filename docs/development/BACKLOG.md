@@ -876,6 +876,31 @@ Research into MEV (Flashbots, CoW Protocol), decentralized RPC protocols (DRPC, 
   hashes only, so proof-discovered nodes can be queued via `QueueMissingNodes` with proper pathsets.
   The current implementation collects hashes only — the flush is deferred and logged as `[PROOF-SEED]`.
 
+#### L-029: Trie walk throughput below target on memory-constrained hardware
+
+- **Files:** `SNAPSyncController.scala` (`StateValidator`, `findMissingNodesWithPaths`, `collectDepth2Subtrees`)
+- **Priority:** Low | **Risk:** Low
+- **Status:** Observation from attempt 14 (2026-04-04)
+- **Observed:** Walk throughput ~6,300 nodes/s (~4× over baseline 1,600/s). Target was 8,000–12,000/s (~8×).
+  ETA ~6h 20m vs old ~25h — still a meaningful win.
+- **Root cause hypothesis:** NUC swap pressure (6.6GB/8GB used) limits effective I/O concurrency.
+  `fillCache=false` correctly stopped cache thrashing (load avg dropped from 16+ to 3.79 ✓).
+  Depth-2 fan-out with 2 walkers not saturating I/O — trie likely unbalanced at depth 2, or swap
+  I/O is the bottleneck before RocksDB.
+- **If further improvement needed:** Raise `snap-sync.trie-walk-parallelism` to 3 on next attempt
+  (monitor load avg, abort if >5.0). Add swap/available-RAM check before adjusting parallelism.
+
+#### L-030: "Unservable" storage root log message wording is ambiguous
+
+- **File:** `StorageRangeCoordinator.scala`
+- **Priority:** Low | **Risk:** None
+- **Status:** Observation from attempt 14 (2026-04-04)
+- **Observed:** `Storage root X unservable: 2 distinct peers, 1 total attempts (threshold=2/2, eligible=9 peers)`
+  — "2 distinct peers" but "1 total attempts" is internally contradictory. Exact semantics unclear.
+- **Fix:** Clarify the log message to distinguish "distinct peers tried" from "attempt count per peer".
+  Suggested: `Storage root X unservable: tried N distinct peers with M total requests (threshold=2 peers, eligible=K)`
+- **Impact:** No functional issue. Operator confusion only.
+
 #### L-026: Aggressive peer discovery when snap peer count is low — RESEARCH DONE, DEFERRED
 
 - **Files:** `src/main/scala/.../network/PeerManagerActor.scala`, `src/main/scala/.../network/discovery/`
