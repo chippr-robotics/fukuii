@@ -699,13 +699,12 @@ trait JSONRpcHealthcheckerBuilder {
 }
 
 trait EngineApiBuilder {
-  self: ActorSystemBuilder with BlockchainBuilder with BlockchainConfigBuilder with ConsensusBuilder with StorageBuilder with MiningBuilder =>
+  self: ActorSystemBuilder with BlockchainBuilder with BlockchainConfigBuilder with ConsensusBuilder with StorageBuilder with MiningBuilder with InstanceConfigProvider =>
 
   import com.chipprbots.ethereum.consensus.engine._
 
   lazy val engineApiConfig: EngineApiHttpServer.Config = {
-    val rootConfig = com.typesafe.config.ConfigFactory.load()
-    val engineConf = scala.util.Try(rootConfig.getConfig("fukuii.network.engine-api")).toOption
+    val engineConf = scala.util.Try(instanceConfig.config.getConfig("network.engine-api")).toOption
     EngineApiHttpServer.Config(
       enabled = engineConf.flatMap(c => scala.util.Try(c.getBoolean("enabled")).toOption).getOrElse(false),
       interface = engineConf.flatMap(c => scala.util.Try(c.getString("interface")).toOption).getOrElse("localhost"),
