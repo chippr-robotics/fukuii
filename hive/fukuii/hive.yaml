@@ -1,0 +1,7 @@
+# Hive client definition for Fukuii
+# See https://github.com/ethereum/hive/blob/master/docs/clients.md
+
+client: fukuii
+roles:
+  - eth1
+  - eth1_engine
