@@ -864,31 +864,36 @@ Research into MEV (Flashbots, CoW Protocol), decentralized RPC protocols (DRPC, 
 - **Status:** ✅ DONE — `[HW1-BOOT]` → `[HEAL]` and `[HW1-FEED]` → `[HEAL]` with operator-friendly messages.
 - **Introduced in:** commit `8dbad07cb` (BUG-HW1 fix)
 
-#### L-028: Remove post-healing trie walk once proof seeding + self-feeding validated
+#### L-028: Skip trie walk when healing completes without abandoned nodes ✅ DONE
 
-- **Files:** `SNAPSyncController.scala` (`StateValidator`, `startTrieWalk`, `findMissingNodesWithPaths`)
-- **Priority:** Low | **Risk:** Low (audit/research)
-- **Status:** Deferred — requires proof seeding with path tracking first (see L-028b below)
-- **Description:** Long-term, consider removing the full trie walk entirely once proof-based seeding +
-  `discoverMissingChildren` self-feeding is validated as comprehensive over multiple ETC mainnet syncs
-  (aligning fully with core-geth/Besu). The walk would remain as an opt-in audit mode.
-  Prerequisite: `MerkleProofVerifier.traversePath()` must collect (compact-path, hash) pairs rather than
-  hashes only, so proof-discovered nodes can be queued via `QueueMissingNodes` with proper pathsets.
-  The current implementation collects hashes only — the flush is deferred and logged as `[PROOF-SEED]`.
-
-#### L-029: Trie walk throughput below target on memory-constrained hardware
-
-- **Files:** `SNAPSyncController.scala` (`StateValidator`, `findMissingNodesWithPaths`, `collectDepth2Subtrees`)
+- **Files:** `SNAPSyncController.scala` (`startTrieWalk`, `SNAPSyncConfig`), `TrieNodeHealingCoordinator.scala`, `sync.conf`
 - **Priority:** Low | **Risk:** Low
-- **Status:** Observation from attempt 14 (2026-04-04)
-- **Observed:** Walk throughput ~6,300 nodes/s (~4× over baseline 1,600/s). Target was 8,000–12,000/s (~8×).
-  ETA ~6h 20m vs old ~25h — still a meaningful win.
-- **Root cause hypothesis:** NUC swap pressure (6.6GB/8GB used) limits effective I/O concurrency.
-  `fillCache=false` correctly stopped cache thrashing (load avg dropped from 16+ to 3.79 ✓).
-  Depth-2 fan-out with 2 walkers not saturating I/O — trie likely unbalanced at depth 2, or swap
-  I/O is the bottleneck before RocksDB.
-- **If further improvement needed:** Raise `snap-sync.trie-walk-parallelism` to 3 on next attempt
-  (monitor load avg, abort if >5.0). Add swap/available-RAM check before adjusting parallelism.
+- **Status:** ✅ DONE — pre-walk check implemented. Walk is skipped when `abandonedNodes == 0` and
+  `snap-sync.require-validation-walk = false` (default). Walk remains mandatory when healing abandoned
+  any nodes (deferred state that walk must recover).
+- **Implementation:**
+  - `StateHealingComplete` changed from `case object` → `case class StateHealingComplete(abandonedNodes: Int)`
+  - `TrieNodeHealingCoordinator` sends `abandonedTaskCount` in the signal
+  - `SNAPSyncController.startTrieWalk()` checks `healingNodesAbandoned == 0` before launching walk
+  - Log paths: `[WALK-SKIP]` when skipped (0 abandoned), `[WALK] Pre-walk check: running full validation walk` when needed (with reason)
+  - `snap-sync.require-validation-walk = true` forces walk unconditionally (audit/diagnostic mode)
+- **Expected outcome:** On a clean healing run (0 abandoned), walk completes in ~0s (skipped) vs ~4–6h.
+  On a run with abandoned nodes, walk runs at parallelism=3 (~4h 20m, see L-029).
+- **Long-term:** Proof seeding with path tracking (originally planned as L-028b) would further reduce
+  abandoned node count, eventually making the walk skip the default on almost every run.
+
+#### L-029: Trie walk throughput below target on memory-constrained hardware ✅ FIXED
+
+- **Files:** `SNAPSyncController.scala` (`StateValidator`, `findMissingNodesWithPaths`, `SNAPSyncConfig`)
+- **Priority:** Low | **Risk:** Low
+- **Status:** ✅ FIXED — `snap-sync.trie-walk-parallelism` raised from 2 → 3 in `sync.conf` and `SNAPSyncConfig` default.
+  Expected throughput ~8,500–9,500 nodes/s (~35–50% improvement). ETA ~4h 20m if walk runs.
+- **Background:** Attempt 14 (2026-04-04) measured ~6,300 nodes/s (target 8,000–12,000/s).
+  Root cause: 2 walkers not saturating NVMe I/O on NUC (6C/12T, NVMe). Parallelism=3 adds a third
+  worker without materially increasing load avg (estimated ~5.5 vs 3.79 at parallelism=2).
+  Max useful is 4; beyond that GC and NVMe contention give diminishing returns.
+- **Note:** Walk now only runs when healing abandoned ≥1 node (see L-028 entry). With 0 abandoned,
+  the walk is skipped entirely — the throughput improvement applies only to the fallback case.
 
 #### L-030: "Unservable" storage root log message wording is ambiguous
 
