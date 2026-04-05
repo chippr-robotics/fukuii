@@ -29,7 +29,7 @@ class MerkleProofVerifierStorageSpec extends AnyFlatSpec with Matchers {
       endHash = ByteString.fromArray(Array.fill(32)(0xff.toByte))
     )
 
-    result shouldBe Right(())
+    result map(_ => ()) shouldBe Right(())
   }
 
   it should "reject empty response for non-empty storage root" taggedAs UnitTest in {
@@ -69,7 +69,7 @@ class MerkleProofVerifierStorageSpec extends AnyFlatSpec with Matchers {
       endHash = ByteString(Array.fill(32)(0xff.toByte))
     )
 
-    result shouldBe Right(())
+    result map(_ => ()) shouldBe Right(())
   }
 
   it should "reject non-monotonic storage slots without proof" taggedAs UnitTest in {
@@ -168,7 +168,7 @@ class MerkleProofVerifierStorageSpec extends AnyFlatSpec with Matchers {
       endHash = ByteString(Array.fill(32)(0xff.toByte))
     )
 
-    result shouldBe Right(())
+    result map(_ => ()) shouldBe Right(())
   }
 
   // ========================================
@@ -240,7 +240,7 @@ class MerkleProofVerifierStorageSpec extends AnyFlatSpec with Matchers {
   it should "distinguish empty trie from non-empty trie" taggedAs UnitTest in {
     // Empty trie: empty proof + empty accounts = OK
     val emptyVerifier = MerkleProofVerifier(ByteString(MerklePatriciaTrie.EmptyRootHash))
-    emptyVerifier.verifyAccountRange(Seq.empty, Seq.empty, ByteString.empty, ByteString.empty) shouldBe Right(())
+    emptyVerifier.verifyAccountRange(Seq.empty, Seq.empty, ByteString.empty, ByteString.empty) map(_ => ()) shouldBe Right(())
 
     // Non-empty trie: empty proof + empty accounts = error
     val nonEmptyVerifier = MerkleProofVerifier(kec256(ByteString("non-empty")))

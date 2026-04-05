@@ -39,7 +39,7 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
       endHash = ByteString.fromArray(Array.fill(32)(0xff.toByte))
     )
 
-    result shouldBe Right(())
+    result map(_ => ()) shouldBe Right(())
   }
 
   it should "reject missing proof when accounts are present" taggedAs UnitTest in {
@@ -163,7 +163,7 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
       endHash = ByteString.fromArray(Array.fill(32)(0xff.toByte))
     )
 
-    result shouldBe Right(())
+    result map(_ => ()) shouldBe Right(())
   }
 
   it should "handle proof with single account correctly" taggedAs UnitTest in {
