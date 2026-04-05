@@ -1,9 +1,9 @@
 # Fukuii `march-onward` Branch — Handoff Document
 
-**Branch:** `march-onward` (150 commits ahead of `upstream/main` at `6220ce58b`)
+**Branch:** `march-onward` (172 commits ahead of `upstream/main` at `6220ce58b`)
 **Author:** Christopher Mercer (chris-mercer) + Claude Opus/Sonnet 4.6
-**Updated:** 2026-04-03
-**Test results:** 2,718 unit tests passing, 0 failures
+**Updated:** 2026-04-04
+**Test results:** 2,738 unit tests passing, 0 failures
 **RPC methods:** 143 implemented (135 standard + 8 MCP), all wired to `JsonRpcController`, zero orphaned
 **Build:** Scala 3.3.4 LTS, JDK 21, sbt 1.10.7
 **Diff vs upstream:** 321 files changed, +27,947 / -1,947 lines
@@ -14,16 +14,17 @@
 
 **A single `march-onward` PR will be submitted to `chippr-robotics/fukuii` after ETC mainnet SNAP sync completes successfully.** The cherry-pick multi-PR approach was evaluated and abandoned — commits were authored on top of each other and cherry-picking produced structural conflicts on nearly every PR. Submitting the full branch is simpler and submits code as it was actually tested.
 
-SNAP sync gating: ETC mainnet SNAP sync attempt 12 is in the healing phase — account download complete (85.9M accounts in 10h 53m, 4 peers sustained). Healing rounds are active. Once healing completes and the chain tip is reached, the branch is ready for upstream PR submission.
+SNAP sync gating: ETC mainnet SNAP sync attempt 14 (JAR `668c04c30`) is in progress with three critical bugs fixed (BUG-S1 storage loop, BUG-H1 parallel trie walk, BUG-H2 healing sentinel). Once healing completes and the chain tip is reached, the branch is ready for upstream PR submission.
 
 ---
 
 ## Summary
 
-The `march-onward` branch is a comprehensive production-readiness pass building on the `alpha` (PR #1003, merged) and `olympia` branches. It adds 150 commits covering:
+The `march-onward` branch is a comprehensive production-readiness pass building on the `alpha` (PR #1003, merged) and `olympia` branches. It adds 172 commits covering:
 
-- **SNAP sync server + client** — Full bidirectional SNAP/1 protocol, first successful Mordor sync to chain head (~35 min), ETC mainnet SNAP sync attempt 12 in healing phase
-- **SNAP reliability series (L-015 → L-036 + H-001 + SP-001)** — 25 commits hardening SNAP client for ETC mainnet conditions
+- **SNAP sync server + client** — Full bidirectional SNAP/1 protocol, first successful Mordor sync to chain head (~35 min), ETC mainnet SNAP sync attempt 14 in progress
+- **SNAP reliability series (L-015 → L-036 + H-001 + SP-001 + BUG-S1/H1/H2)** — 28 commits hardening SNAP client for ETC mainnet conditions
+- **ETH63-67 protocol removal** — ETH68-only modernization: `ETH65.scala` deleted, 7 old decoders removed, `Capability.scala` simplified, all tests rewritten to ETH68 expectations
 - **79 new RPC methods** (64 → 143) — trace, txpool, admin, debug, miner, fee market, state overrides, MCP
 - **BLS12-381 precompiles** — All 7 Olympia precompiles via gnark JNI
 - **WebSocket subscriptions** — eth_subscribe/eth_unsubscribe (newHeads, logs, pendingTransactions, syncing)
@@ -37,20 +38,22 @@ The `march-onward` branch is a comprehensive production-readiness pass building 
 
 ---
 
-## Commit Categories (150 total)
+## Commit Categories (172 total)
 
 | Category | Count | Description |
 |----------|-------|-------------|
 | feat(snap) | 12 | SNAP server handlers, client probes, flat storage, trie node cache |
 | L-series (snap) | 22 | SNAP client reliability: L-015 through L-036 |
+| BUG-series (snap) | 3 | BUG-S1 (storage loop), BUG-H1 (parallel walk), BUG-H2 (healing sentinel) |
 | feat(rpc) | 15 | trace/txpool/admin/debug/miner/fee market/state overrides/JWT; trace_replayBlockTransactions complete |
 | feat(evm) | 3 | BLS12-381 precompiles, CREATE gas dedup, Stack array optimization |
+| feat(protocol) | 3 | ETH63-67 removal, ETH65TxHandlerActor, BUG-TX1 RLP iterative fix |
 | feat | 3 | WebSocket transport, config centralization, treasury updates |
 | fix(sync) | 5 | Fork-agnostic RLP, SNAP gap detection, fast sync recovery |
 | fix(snap) | 7 | Probe clobber, bytecode validation, premature eviction, storage spam, trie walk heartbeat, H-001, SP-001 |
 | fix(consensus) | 2 | Transaction type gating, baseFee corruption guard, atomic finalization |
 | perf | 8 | RocksDB bulk write, trie cache, prefetch, adaptive timeouts, pipelining, Stack array |
-| test | 12 | SNAP PRs #1007/#1008, trace/txpool/admin specs, flat storage, mining, fork boundary |
+| test | 17 | SNAP PRs #1007/#1008, trace/txpool/admin specs, flat storage, mining, fork boundary, ETH68 protocol rewrite |
 | docs | 11 | BACKLOG, SNAP report, cleanup, multi-LLM MCP docs, handoff updates |
 | chore | 6 | Log noise, config alignment, stale TODO cleanup |
 | refactor | 2 | Treasury centralization, config includes |
@@ -75,7 +78,7 @@ Full bidirectional SNAP/1 protocol — Fukuii can both serve and consume SNAP st
 **Client achievements:**
 - First successful Mordor SNAP sync: genesis → chain head in ~35 minutes
 - 2,628,940 accounts, peak 6,786 accts/sec, 6 in-place pivot refreshes
-- ETC mainnet attempt 12: 85.9M accounts in 10h 53m (3h faster than attempt 10); healing active
+- ETC mainnet attempt 14 (JAR `668c04c30`): BUG-S1/H1/H2 fixes bundled; in progress
 - File-backed contract account buffers (OOM fix for ~45M ETC mainnet entries)
 - Deferred-write MPT storage (~200x speedup for batch trie insertion)
 - Binary stateless detection + adaptive batching per peer
@@ -113,6 +116,9 @@ Full bidirectional SNAP/1 protocol — Fukuii can both serve and consume SNAP st
 | S-003+S-004 | Storage coordinator: suppress 30s heartbeat spam after storage sync completes; SNAPSyncController: add 15s trie walk heartbeat for long walks |
 | H-001 | Healing stagnation timer: reset `lastHealedAtMs` on `QueueMissingNodes` — prevents false stagnation abort after long trie walks (root cause of attempts 10–11 healing failure) |
 | SP-001 | Static peer exemption: `PeerManagerActor` sets `isStatic=true` at handshake; all three SNAP coordinators skip `statelessPeers`/cooldown for static peers — trusted local infrastructure (Besu, core-geth) stays active for entire sync |
+| BUG-S1 | Storage infinite loop: removed `emptyResponsesByTask.clear()` on pivot refresh — escape-hatch counter now accumulates across pivots; 3 stuck contracts complete in ~3 min vs 1 h each |
+| BUG-H1 | Parallel trie walk guard: added `if (!trieWalkInProgress)` in `ScheduledTrieWalk` handler — prevents 4 concurrent walks (was causing ~3.5× slower healing; 242K nodes/min → 467K nodes/min single walk) |
+| BUG-H2 | Healing sentinel fix: `lastTrieWalkMissingCount` changed from `Int = Int.MaxValue` sentinel to `Option[Int] = None` — eliminates spurious "2147483646 nodes healed" log and incorrect stagnation comparison on first round |
 
 Also: `8808bcd35` — SNAP sync reliability fixes for ETC mainnet (Fixes 1-6), and `e077fcaa4` — SNAP attempt 5: escape valve, healing, dynamic stateless threshold.
 
@@ -238,6 +244,37 @@ HS256 JWT auth for both HTTP and WebSocket RPC:
 
 ---
 
+### 12. ETH63-67 Protocol Removal — ETH68-Only Modernization
+
+ETC now operates exclusively on ETH68 (core-geth: ETH68-only; Besu: ETH68+ETH69; go-ethereum: ETH69-only). The deprecated ETH63-67 legacy protocol code was removed entirely.
+
+**What was removed:**
+- `ETH65.scala` — deleted (defined pre-EIP-2681 transaction pool messages without requestId)
+- 7 decoders from `MessageDecoders.scala` — ETH63/64/65/66/67 message decoders removed (-376 lines)
+- ETH63-67 entries from capability negotiation — `Capability.scala` simplified from version-range to ETH68 check
+
+**What was simplified:**
+- `Capability.scala`: `ethVersions1.nonEmpty && ethVersions2.nonEmpty` → ETH68; clean ETH68+SNAP1 pair
+- `Config.supportedCapabilities`: advertises `[ETH68]` or `[ETH68, SNAP1]` only — no legacy versions
+
+**New: ETH65TxHandlerActor** (commit `7005512d6`)
+- Handles inbound ETH67/68 `NewPooledTransactionHashes` (with types+sizes, EIP-2464)
+- Requests unknown hashes via `ETH66.GetPooledTransactions` (with requestId)
+- `PendingTransactionsManager` outbound split: ETH67/68 peers get typed announcements; legacy peers get full transactions
+
+**BUG-TX1: RLP StackOverflowError fix** (same commit)
+- `toTypedRLPEncodables()` in `BaseETH6XMessages.scala` converted from recursive to iterative
+- Recursive version crashed with `StackOverflowError` on large `PooledTransactions` batches (hundreds of EIP-2718 typed envelopes)
+- Iterative while-loop version: O(1) stack depth, identical semantics
+
+**Test rewrite scope:**
+- `EtcHandshakerSpec`: replaced ETH62 Status tests with ETH68+ForkId variants (206 → 73 lines in the changed section)
+- `SyncControllerSpec`: updated for ETH68-only network (GetNodeData/NodeData now rejected)
+- `PeerManagerSpec`, message layer tests: all updated to ETH66/68 expectations
+- Net: -294 lines of obsolete ETH63/64/65 test code
+
+---
+
 ## Performance Optimizations
 
 | Optimization | Impact |
@@ -276,8 +313,10 @@ HS256 JWT auth for both HTTP and WebSocket RPC:
 | `ConfigValidatorSpec` | 5 | Startup config validation |
 | `StackSpec` | 12 | Mutable stack API (rewritten for M-008) |
 | SNAP PRs #1007/#1008 | ~144 | SNAP finalization + comprehensive coverage |
+| ETH68 handshaker tests | ~12 | EtcHandshakerSpec rewritten for ETH68+ForkId (replaces ETH62 variants) |
+| ETH68 p2p/sync/network tests | ~20 | SyncControllerSpec, PeerManagerSpec, message layer — all ETH68-only expectations |
 
-**Total: ~2,718 tests passing**
+**Total: ~2,738 tests passing**
 
 ---
 
@@ -322,7 +361,7 @@ See `docs/development/BACKLOG.md` for the complete inventory. Key items:
 
 ### Gating condition for upstream PR
 
-- **ETC mainnet SNAP sync** — Attempt 12 in healing phase. Account download complete (85.9M accounts, 10h 53m, 4 peers sustained throughout). Healing rounds active. Once healing completes and chain tip is reached, open the upstream PR.
+- **ETC mainnet SNAP sync** — Attempt 14 in progress (JAR `668c04c30`). Three bugs fixed: BUG-S1 (storage infinite loop), BUG-H1 (4-parallel trie walks), BUG-H2 (healing sentinel). Once healing completes and chain tip is reached, open the upstream PR.
 
 ### ETC Mainnet SNAP Sync — Attempt History
 
@@ -332,7 +371,9 @@ See `docs/development/BACKLOG.md` for the complete inventory. Key items:
 | 6–9 | `d9a22c2` | Stalled on bytecodes | L-036 not yet written; remote Besu doesn't serve `GetByteCodes` |
 | 10 | `a890a25` | Healing cycling (stagnation false-fire) | H-001 not yet written; stagnation timer false-fired after 5h 19m trie walk |
 | 11 | `74918ee` | Not deployed | Superseded by SP-001 before it ran |
-| **12** | **`e8d4f243`** | **In progress — healing active** | All fixes bundled; 85.9M accounts in 10h 53m |
+| 12 | `e8d4f243` | Healing active, then superseded | All L/H/SP fixes bundled; 85.9M accounts in 10h 53m; BUG-S1/H1/H2 not yet |
+| 13 | `7005512d6` | Superseded by BUG-S1/H1/H2 fixes | ETH65TxHandlerActor + RLP iterative fix bundled; BUG-* fixes pending |
+| **14** | **`668c04c30`** | **In progress** | BUG-S1 (storage loop) + BUG-H1 (parallel walk) + BUG-H2 (sentinel) all fixed |
 
 Key fixes that unblocked ETC mainnet healing: **L-035, L-036, H-001, SP-001** (Fukuii commits) + **B-001** (Besu bonsai window 2048→8192).
 
@@ -356,9 +397,9 @@ All Critical (C-001..C-004), High (H-001..H-018), and most Medium items are DONE
 |--------|--------|--------|
 | core-geth | `etc` | Synced to head, all tests pass |
 | Besu | `etc` | SNAP server for Fukuii SNAP sync |
-| Fukuii | `march-onward` | 2,718 tests, Mordor SNAP synced, ETC mainnet attempt 12 healing active |
+| Fukuii | `march-onward` | 2,738 tests, Mordor SNAP synced, ETC mainnet attempt 14 in progress |
 
-Fukuii successfully syncs Mordor using Besu as a SNAP server peer (core-geth provides block headers, Besu provides SNAP state). ETC mainnet attempt 12 completed account download in 10h 53m and is now in the healing phase.
+Fukuii successfully syncs Mordor using Besu as a SNAP server peer (core-geth provides block headers, Besu provides SNAP state). ETC mainnet attempt 14 (JAR `668c04c30`) targets the three healing-phase blockers fixed by BUG-S1/H1/H2.
 
 ---
 
@@ -375,7 +416,7 @@ sbt assembly
 ./run-classic.sh
 
 # Run tests
-sbt test          # 2,718 tests, ~7 min
+sbt test          # 2,738 tests, ~7 min
 sbt "evm:test"    # EVM consensus tests
 sbt it:test       # Integration tests
 sbt pp            # Pre-PR: format + style + tests

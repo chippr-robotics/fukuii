@@ -2,10 +2,10 @@
 
 Comprehensive inventory of remaining work, verified against the codebase and compared to reference clients (go-ethereum, nethermind, core-geth, Besu, Erigon).
 
-**Branch:** `march-onward` (131 commits ahead of upstream main, at `cf16873eb`)
-**Test baseline:** 2,706 unit tests pass, 0 failed, 0 ignored; 12/12 EVM consensus; 8/8 integration (24 suites, 16 empty — need ethereum/tests fixtures)
+**Branch:** `march-onward` (172 commits ahead of upstream main, at `668c04c30`)
+**Test baseline:** 2,738 unit tests pass, 0 failed, 0 ignored; 12/12 EVM consensus; 8/8 integration (24 suites, 16 empty — need ethereum/tests fixtures)
 **RPC methods:** 135 standard + 8 MCP protocol = 143 total, all wired to `JsonRpcController`, zero orphaned
-**Last audited:** 2026-03-30
+**Last audited:** 2026-04-04
 
 ---
 
@@ -1182,6 +1182,12 @@ Items below were implemented on the `march-onward` branch and verified against t
 | IntegrationTest exclusion (M-028) | `build.sbt:75-78`                              | ScalaTest `-l IntegrationTest` alongside SlowTest. 2,706/2,706 pass |
 | Integration test baseline (M-012) | Diagnostic only                                 | 24 suites, 8 tests pass, 16 empty (need ethereum/tests fixtures) |
 | Memory-mapped DAG files (L-010)  | `EthashDAGManager.scala`, `EthashMiner.scala`   | MappedByteBuffer replaces heap Array. Aligns with geth mmap. ECIP-1099 compatible |
+| ETH63-67 protocol removal (ETH68-only) | `bc7c62666` | `ETH65.scala` deleted, 7 old decoders removed (-376 lines from `MessageDecoders.scala`), `Capability.scala` simplified to ETH68+SNAP1 only, all test specs rewritten |
+| ETH65TxHandlerActor (ETH67/68 tx handling) | `7005512d6` | New actor: capability-aware ETH67/68 `NewPooledTransactionHashes` announcement/retrieval; PendingTransactionsManager outbound split by capability |
+| BUG-TX1: RLP iterative decode fix | `bc7c62666` | `toTypedRLPEncodables()` converted from recursive→iterative — fixes `StackOverflowError` on large `PooledTransactions` batches (hundreds of typed txs) |
+| BUG-S1: Storage infinite loop fix | `668c04c30` | `StorageRangeCoordinator`: removed `emptyResponsesByTask.clear()` on pivot refresh — escape-hatch counter now accumulates across pivots; stuck accounts complete in ~3 min vs 1 h |
+| BUG-H1: Parallel trie walk guard  | `668c04c30` | `SNAPSyncController`: added `if (!trieWalkInProgress)` guard in `ScheduledTrieWalk` handler — prevents 4 concurrent redundant walks (was ~3.5× slower) |
+| BUG-H2: Healing sentinel fix      | `668c04c30` | Changed `lastTrieWalkMissingCount: Int = Int.MaxValue` → `Option[Int] = None` — eliminates spurious "2147483646 nodes healed" log + incorrect stagnation comparison on first round |
 
 ### Resolved in FIXME/TODO Audit (2026-03-25)
 
@@ -1223,7 +1229,7 @@ Final gate before submitting PR to upstream.
 | Gitignore local run scripts | ✅ DONE | Removed `!run-classic.sh`/`!run-mordor.sh` negative patterns, untracked from git |
 | Remove hardcoded local paths | ✅ DONE | 13 files had `/media/dev/2tb/` — replaced with env var defaults and generic paths |
 | Fix broken doc links | ✅ DONE | Removed references to non-existent `ETC-HANDOFF.md` and `OLYMPIA-HANDOFF.md` |
-| Update test counts | ✅ DONE | README and BACKLOG updated from 2,314/2,642 → 2,678 |
+| Update test counts | ✅ DONE | README and BACKLOG updated to 2,738 (was 2,314/2,642 → 2,678 → 2,706 → 2,738) |
 | Fix CHANGELOG typo | ✅ DONE | "Rebranded from Fukuii to Fukuii" → "Rebranded from Mantis to Fukuii" |
 | Move internal HANDOFF.md | ✅ DONE | Moved to `.claude/` (not public-facing) |
 | Update MARCH-ONWARD-HANDOFF.md | ✅ DONE | Added M-008 section (why/what/where/who/how), reference client table, updated commit/test/RPC counts |
@@ -1234,7 +1240,7 @@ Final gate before submitting PR to upstream.
 
 **Status:** DEFERRED — not blocking ETC mainnet SNAP sync, but must not be forgotten. This section documents every area of the client that requires systematic review, testing, optimization, and code hygiene work once the client is operational. This is a living checklist, not a complete audit — each area will surface additional items during the review itself.
 
-**Context:** Fukuii is now functional (SNAP sync operational, 2,718 tests passing, 150 commits on `march-onward`). The next phase after ETC mainnet SNAP success is a disciplined client-wide QA pass: identify correctness gaps, test blind spots, dead code, redundant logic, placeholder implementations, and optimization opportunities. The goal is production-grade code quality equivalent to reference clients.
+**Context:** Fukuii is now functional (SNAP sync operational, 2,738 tests passing, 172 commits on `march-onward`). The next phase after ETC mainnet SNAP success is a disciplined client-wide QA pass: identify correctness gaps, test blind spots, dead code, redundant logic, placeholder implementations, and optimization opportunities. The goal is production-grade code quality equivalent to reference clients.
 
 ---
 
@@ -1248,7 +1254,7 @@ Final gate before submitting PR to upstream.
 - Reorg handling: correct chain reorganization under all fork depths
 - Ommer validation during block import (`StdOmmersValidator`, `OmmersValidator`)
 - `StateNodeFetcher` — state node recovery path; confirm it handles all MPT node types
-- `BlockBroadcasterActor` — peer selection strategy for new block announcements (ETH65 `NewPooledTransactionHashes` vs full block)
+- `BlockBroadcasterActor` — peer selection strategy for new block announcements (ETH67/68 `NewPooledTransactionHashes` with types+sizes vs full block)
 - Block import failure modes: bad blocks, invalid state root, orphaned branches — all paths reach `BadBlockTracker`
 - Memory/resource cleanup after import failures — no leaked actor refs or pending messages
 - Interaction with SNAP→regular transition: first regular sync block after SNAP completes
@@ -1452,8 +1458,8 @@ Each transition must be exact — off-by-one errors at fork boundaries leave the
 - RLPx frame codec: framing, de-framing, chunked message reassembly, encrypted frame integrity
 - `AuthHandshaker`: EIP-8 forward compatibility, pre-EIP-8 fallback (L-001 WONTFIX — document why)
 - Fork ID (EIP-2124) handshake: correct fork hash computation for all ETC fork history, correct rejection of non-ETC peers
-- `EtcForkBlockExchangeState`: fork block exchange at ETH63/ETH64 boundary, correct acceptance/rejection
-- ETH68 `NewPooledTransactionHashes` (typed tx announcements): announcement/retrieval round-trip
+- `EtcForkBlockExchangeState`: fork block exchange with ETH64 `Status` message (ForkId validation) — ETH63-67 capability negotiation removed (see ETH68-only refactor below)
+- ETH68 `NewPooledTransactionHashes` (typed tx announcements with types+sizes): announcement/retrieval round-trip via `ETH65TxHandlerActor`
 - Capability negotiation: peer advertising snap/1 but not capable (tested by `SnapServerChecker`) — no false admission
 - Test: complete handshake sequence against real peers (core-geth, Besu) — no unexpected disconnects
 - Test: malformed handshake message — clean disconnect, no panic, no resource leak
@@ -1599,6 +1605,11 @@ Each transition must be exact — off-by-one errors at fork boundaries leave the
 
 **Scope:** All 76,631 lines of source across every subsystem.
 
+**Already cleaned (2026-04-04):**
+- `ETH65.scala` — **deleted** as part of ETH63-67 deprecation. ETH65 defined pre-ETH68 transaction pool message types (pre-EIP-2681 format, no requestId). No ETC peer negotiates ETH63-67 anymore.
+- `MessageDecoders.scala` — ETH63/64/65/66/67 decoders removed (-376 lines); only `ETH68MessageDecoder` active
+- `Capability.scala` — simplified from version-range negotiation to ETH68-only (or ETH68+SNAP1)
+
 **Review areas:**
 - `TestService.scala` (489 lines): large test-mode service — document exactly which methods are test-only, which are used in production; add `@testModeOnly` annotation or equivalent
 - `QAService.scala`, `QAJsonMethodsImplicits.scala`: QA/test namespace — is any of this in the production RPC surface? Should it be gated?
@@ -1618,7 +1629,7 @@ Each transition must be exact — off-by-one errors at fork boundaries leave the
 
 ### QA-19: Testing Suite Quality & Coverage
 
-**Scope:** All 2,718 tests, test infrastructure, coverage gaps.
+**Scope:** All 2,738 tests, test infrastructure, coverage gaps.
 
 **Review areas:**
 - Test isolation: every test cleans up actors, RocksDB instances, temp files — no test-order dependencies
