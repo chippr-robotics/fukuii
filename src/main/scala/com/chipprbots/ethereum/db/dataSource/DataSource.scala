@@ -43,6 +43,22 @@ trait DataSource {
     */
   def getOptimized(namespace: Namespace, key: Array[Byte]): Option[Array[Byte]]
 
+  /** Same as getOptimized but uses trie-walk-optimized read options (fillCache=false,
+    * verifyChecksums=false). Use only for single-pass walks over large subtrees where
+    * caching the result would pollute the block cache with single-use data.
+    * Default implementation delegates to getOptimized for compatibility.
+    */
+  def getOptimizedForWalk(namespace: Namespace, key: Array[Byte]): Option[Array[Byte]] =
+    getOptimized(namespace, key)
+
+  /** Batch read: retrieve multiple keys in a single RocksDB call (multiGetAsList).
+    * Reduces per-call JNI overhead when fetching all children of a BranchNode.
+    * Result is parallel to keys: result(i) corresponds to keys(i).
+    * Default implementation falls back to sequential getOptimizedForWalk calls.
+    */
+  def getMultipleForWalk(namespace: Namespace, keys: Seq[Array[Byte]]): Seq[Option[Array[Byte]]] =
+    keys.map(k => getOptimizedForWalk(namespace, k))
+
   /** This function updates the DataSource by deleting, updating and inserting new (key-value) pairs. Implementations
     * should guarantee that the whole operation is atomic.
     */

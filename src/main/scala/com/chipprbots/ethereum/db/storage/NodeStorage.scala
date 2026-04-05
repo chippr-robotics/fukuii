@@ -15,6 +15,8 @@ import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
 
 sealed trait NodesStorage {
   def get(key: NodeHash): Option[NodeEncoded]
+  def getForWalk(key: NodeHash): Option[NodeEncoded] = get(key)
+  def getMultipleForWalk(keys: Seq[NodeHash]): Seq[Option[NodeEncoded]] = keys.map(getForWalk)
   def update(toRemove: Seq[NodeHash], toUpsert: Seq[(NodeHash, NodeEncoded)]): NodesStorage
   def updateCond(toRemove: Seq[NodeHash], toUpsert: Seq[(NodeHash, NodeEncoded)], inMemory: Boolean): NodesStorage
 }
@@ -33,6 +35,11 @@ class NodeStorage(val dataSource: DataSource)
   def valueDeserializer: IndexedSeq[Byte] => NodeEncoded = _.toArray
 
   override def get(key: NodeHash): Option[NodeEncoded] = dataSource.getOptimized(namespace, key.toArray)
+
+  override def getForWalk(key: NodeHash): Option[NodeEncoded] = dataSource.getOptimizedForWalk(namespace, key.toArray)
+
+  override def getMultipleForWalk(keys: Seq[NodeHash]): Seq[Option[NodeEncoded]] =
+    dataSource.getMultipleForWalk(namespace, keys.map(_.toArray))
 
   /** This function updates the KeyValueStorage by deleting, updating and inserting new (key-value) pairs in the current
     * namespace.

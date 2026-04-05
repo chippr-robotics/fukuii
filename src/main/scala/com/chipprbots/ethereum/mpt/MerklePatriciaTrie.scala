@@ -78,6 +78,8 @@ object MerklePatriciaTrie {
 
 trait NodesKeyValueStorage extends SimpleMap[NodeHash, NodeEncoded, NodesKeyValueStorage] {
   def persist(): Unit
+  def getForWalk(key: NodeHash): Option[NodeEncoded] = get(key)
+  def getMultipleForWalk(keys: Seq[NodeHash]): Seq[Option[NodeEncoded]] = keys.map(getForWalk)
 }
 
 class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNode], val nodeStorage: MptStorage)(

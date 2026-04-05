@@ -145,6 +145,47 @@ class RocksDbDataSource(
     opts
   }
 
+  /** ReadOptions for trie walks: fillCache=false to avoid evicting hot data from the 512MB block
+    * cache, and verifyChecksums=false to skip CRC32 per read (the walk is a single-pass scan
+    * over 145M single-use nodes — caching is wasteful, checksum is redundant).
+    */
+  private lazy val trieWalkReadOptions: ReadOptions = {
+    new ReadOptions()
+      .setVerifyChecksums(false)
+      .setFillCache(false)
+  }
+
+  override def getMultipleForWalk(namespace: DataSource.Namespace, keys: Seq[Array[Byte]]): Seq[Option[Array[Byte]]] = {
+    if (keys.isEmpty) return Seq.empty
+    dbLock.readLock().lock()
+    try {
+      assureNotClosed()
+      import scala.jdk.CollectionConverters._
+      val handle = handles(namespace)
+      val handleList = java.util.Collections.nCopies(keys.size, handle)
+      val values = db.multiGetAsList(trieWalkReadOptions, handleList, keys.asJava)
+      values.asScala.map(v => Option(v)).toSeq
+    } catch {
+      case error: RocksDbDataSourceClosedException => throw error
+      case NonFatal(_)                              =>
+        // Fall back to sequential reads on any multiGet failure
+        keys.map(k => Option(db.get(handles(namespace), trieWalkReadOptions, k)))
+    } finally dbLock.readLock().unlock()
+  }
+
+  override def getOptimizedForWalk(namespace: DataSource.Namespace, key: Array[Byte]): Option[Array[Byte]] = {
+    dbLock.readLock().lock()
+    try {
+      assureNotClosed()
+      Option(db.get(handles(namespace), trieWalkReadOptions, key))
+    } catch {
+      case error: RocksDbDataSourceClosedException =>
+        throw error
+      case NonFatal(error) =>
+        throw RocksDbDataSourceException(s"Not found associated value to a key: $key", error)
+    } finally dbLock.readLock().unlock()
+  }
+
   /** Seek-based range iterator starting from the given key within a namespace.
     * Uses fillCache=false to avoid evicting hot trie nodes from the block cache
     * during large range scans (safeguard P-1 from SNAP server plan).

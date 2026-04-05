@@ -16,5 +16,10 @@ class ArchiveNodeStorage(nodeStorage: NodesStorage) extends NodesKeyValueStorage
 
   override def get(key: NodeHash): Option[NodeEncoded] = nodeStorage.get(key)
 
+  override def getForWalk(key: NodeHash): Option[NodeEncoded] = nodeStorage.getForWalk(key)
+
+  override def getMultipleForWalk(keys: Seq[NodeHash]): Seq[Option[NodeEncoded]] =
+    nodeStorage.getMultipleForWalk(keys)
+
   override def persist(): Unit = {}
 }

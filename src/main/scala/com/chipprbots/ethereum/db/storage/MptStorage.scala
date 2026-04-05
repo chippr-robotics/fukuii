@@ -10,6 +10,24 @@ import com.chipprbots.ethereum.mpt.NodesKeyValueStorage
 
 trait MptStorage {
   def get(nodeId: Array[Byte]): MptNode
+
+  /** Walk-optimized read: same as get() but uses fillCache=false to avoid polluting the
+    * block cache during single-pass trie walks over large subtrees. Default delegates to get().
+    */
+  def getForWalk(nodeId: Array[Byte]): MptNode = get(nodeId)
+
+  /** Batch walk-optimized read: fetch multiple nodes in a single RocksDB multiGet call.
+    * Reduces JNI overhead when resolving all children of a BranchNode.
+    * Result is parallel to nodeIds: result(i) corresponds to nodeIds(i).
+    * None means the node is missing (MissingRootNodeException would fire for individual get).
+    * Default delegates to sequential getForWalk calls.
+    */
+  def getMultipleForWalk(nodeIds: Seq[Array[Byte]]): Seq[Option[MptNode]] =
+    nodeIds.map { id =>
+      try Some(getForWalk(id))
+      catch { case _: com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingRootNodeException => None }
+    }
+
   def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode]
   def persist(): Unit
 
@@ -27,6 +45,21 @@ class SerializingMptStorage(storage: NodesKeyValueStorage) extends MptStorage {
       .get(key)
       .map(nodeEncoded => MptStorage.decodeNode(nodeEncoded, nodeId))
       .getOrElse(throw new MissingRootNodeException(ByteString(nodeId)))
+  }
+
+  override def getForWalk(nodeId: Array[Byte]): MptNode = {
+    val key = ByteString(nodeId)
+    storage
+      .getForWalk(key)
+      .map(nodeEncoded => MptStorage.decodeNode(nodeEncoded, nodeId))
+      .getOrElse(throw new MissingRootNodeException(ByteString(nodeId)))
+  }
+
+  override def getMultipleForWalk(nodeIds: Seq[Array[Byte]]): Seq[Option[MptNode]] = {
+    val keys = nodeIds.map(ByteString(_))
+    storage.getMultipleForWalk(keys).zip(nodeIds).map { case (maybeEncoded, nodeId) =>
+      maybeEncoded.map(nodeEncoded => MptStorage.decodeNode(nodeEncoded, nodeId))
+    }
   }
 
   override def updateNodesInStorage(newRoot: Option[MptNode], toRemove: Seq[MptNode]): Option[MptNode] = {
