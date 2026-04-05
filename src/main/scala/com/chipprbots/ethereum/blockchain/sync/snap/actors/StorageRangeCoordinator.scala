@@ -146,7 +146,7 @@ class StorageRangeCoordinator(
 
   private def markPeerStateless(peer: Peer): Unit = {
     if (peer.isStatic) {
-      log.debug(s"[STATIC] Skipping penalization for static peer ${peer.remoteAddress}")
+      log.debug(s"[STATIC] Skipping cooldown penalty for static peer ${peer.remoteAddress} (trusted infrastructure — always retried immediately)")
       return
     }
     statelessPeers.add(peer.id.value)
@@ -174,10 +174,13 @@ class StorageRangeCoordinator(
 
     if (dispatchStalled) {
       log.warning(
-        s"Storage dispatch stalled: ${tasks.size} pending, ${activeTasks.size} active, " +
-          s"no activity for ${(now - lastDispatchOrResponseMs) / 1000}s. " +
-          s"Peers: ${knownAvailablePeers.size} known, ${statelessPeers.size} stateless. " +
-          s"Marking remaining peers as stateless (likely disconnected)."
+        s"Storage sync stalled: no new requests/responses for ${(now - lastDispatchOrResponseMs) / 1000}s. " +
+          s"pending=${tasks.size}, active=${activeTasks.size}"
+      )
+      val remainingActive = knownAvailablePeers.count(p => !statelessPeers.contains(p.id.value))
+      log.warning(
+        s"Assuming $remainingActive ghost connections (no dispatch activity), marking stateless " +
+          s"→ will trigger pivot refresh to reconnect to peers"
       )
       knownAvailablePeers.foreach(p => statelessPeers.add(p.id.value))
       // Re-queue any stale in-flight tasks from ghost peers
@@ -321,6 +324,12 @@ class StorageRangeCoordinator(
   // Without this, the log fires on every coordinator message (~120x/sec during storage phase).
   private var lastContractProgressLogMs: Long = 0
   private val ContractProgressLogIntervalMs: Long = 10_000 // 10 seconds
+
+  // Tiered milestone progress: 1% steps in first/last 10%, 5% steps through the middle.
+  // 0% logged at start, 100% logged at completion (explicit boundaries catch edge-case stalls).
+  private val StorageMilestones: Seq[Int] =
+    Seq(0) ++ (1 to 10) ++ (15 to 90 by 5) ++ (91 to 99) ++ Seq(100)
+  private var lastLoggedMilestonePct: Int = -1
 
   // Per-peer adaptive byte budgeting (ported from ByteCodeCoordinator).
   // Geth's snap handler supports up to 2MB responses. Starting at 512KB and probing upward
@@ -557,6 +566,17 @@ class StorageRangeCoordinator(
       if (completedAccountsFileCount % 100 == 0) {
         completedAccountsOut.flush()
       }
+      // Tiered milestone progress log
+      if (totalStorageContracts > 0) {
+        val pct = (completedAccountHashes.size * 100 / totalStorageContracts).toInt
+        val nextMilestone = StorageMilestones.find(m => m > lastLoggedMilestonePct && pct >= m)
+        nextMilestone.foreach { m =>
+          log.info(
+            s"[STORAGE] $m% — ${completedAccountHashes.size}/$totalStorageContracts contracts, $slotsDownloaded slots"
+          )
+          lastLoggedMilestonePct = m
+        }
+      }
     }
   }
 
@@ -613,6 +633,8 @@ class StorageRangeCoordinator(
   override def receive: Receive = {
     case StartStorageRangeSync(root) =>
       log.info(s"Starting storage range sync for state root ${root.take(8).toHex}")
+      log.info(s"[STORAGE] 0% — storage download starting")
+      lastLoggedMilestonePct = 0
 
     case InitCompletedStorageAccounts(hashes) =>
       completedAccountHashes ++= hashes
@@ -668,7 +690,8 @@ class StorageRangeCoordinator(
 
     case UpdateMaxInFlightPerPeer(newLimit) =>
       if (newLimit != maxInFlightPerPeer) {
-        log.info(s"Storage per-peer budget: $maxInFlightPerPeer -> $newLimit")
+        log.info(s"Adjusting storage per-peer concurrency: $maxInFlightPerPeer -> $newLimit " +
+          s"(${if (newLimit > maxInFlightPerPeer) "increasing" else "decreasing"} to match available SNAP peers)")
         maxInFlightPerPeer = newLimit
         if (newLimit > 0) tryRedispatchPendingTasks()
       }
@@ -710,7 +733,10 @@ class StorageRangeCoordinator(
       if (isComplete) {
         if (!storageSyncCompleteReported) {
           storageSyncCompleteReported = true
-          log.info("Storage range sync complete!")
+          log.info(
+            s"[STORAGE] 100% — Storage range sync complete: ${completedAccountHashes.size}/$totalStorageContracts contracts, $slotsDownloaded slots " +
+              s"in ${(System.currentTimeMillis() - startTime) / 1000}s"
+          )
           snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
         }
       } else if (tasks.nonEmpty) {
@@ -749,7 +775,10 @@ class StorageRangeCoordinator(
       if (isComplete) {
         if (!storageSyncCompleteReported) {
           storageSyncCompleteReported = true
-          log.info("Storage range sync complete!")
+          log.info(
+            s"[STORAGE] 100% — Storage range sync complete: ${completedAccountHashes.size}/$totalStorageContracts contracts, $slotsDownloaded slots " +
+              s"in ${(System.currentTimeMillis() - startTime) / 1000}s"
+          )
           snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
         }
       }
@@ -1367,7 +1396,13 @@ class StorageRangeCoordinator(
     val eligiblePeers = knownAvailablePeers
       .filterNot(p => isPeerStateless(p) || isPeerCoolingDown(p))
       .toList
-    if (eligiblePeers.isEmpty) return
+    if (eligiblePeers.isEmpty) {
+      log.debug(
+        s"[STORAGE-REDISPATCH] No eligible peers — ${knownAvailablePeers.size} known, " +
+          s"${statelessPeers.size} stateless. pending: ${tasks.size}"
+      )
+      return
+    }
 
     for (peer <- eligiblePeers if tasks.nonEmpty)
       dispatchIfPossible(peer)
