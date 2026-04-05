@@ -63,7 +63,7 @@ object FixtureProvider {
           pruningMode,
           nodeStorage,
           new LruCache[NodeHash, HeapEntry](
-            Config.InMemoryPruningNodeCacheConfig,
+            Config.inMemoryPruningNodeCacheConfig,
             Some(CachedReferenceCountedStorage.saveOnlyNotificationHandler(nodeStorage))
           )
         )

@@ -251,7 +251,8 @@ class PortForwardingBuilderSpec extends AnyFlatSpec with Matchers with BeforeAnd
       cleanupCounter: AtomicInteger,
       simulateDelay: Long = 0
   ) extends PortForwardingBuilder
-      with DiscoveryConfigBuilder {
+      with DiscoveryConfigBuilder
+      with com.chipprbots.ethereum.TestInstanceConfigProvider {
 
     implicit override lazy val ioRuntime: IORuntime = IORuntime.global
 

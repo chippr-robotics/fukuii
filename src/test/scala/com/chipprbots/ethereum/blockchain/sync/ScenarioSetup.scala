@@ -26,7 +26,7 @@ import com.chipprbots.ethereum.nodebuilder._
   * Specifically it relates to the creation and wiring of the several components of a
   * [[com.chipprbots.ethereum.nodebuilder.Node Node]].
   */
-trait ScenarioSetup extends StdTestMiningBuilder with StxLedgerBuilder {
+trait ScenarioSetup extends StdTestMiningBuilder with StxLedgerBuilder with com.chipprbots.ethereum.TestInstanceConfigProvider {
   protected lazy val executionContextExecutor: ExecutionContextExecutor =
     ExecutionContext.fromExecutor(Executors.newFixedThreadPool(4))
   implicit protected lazy val ioRuntime: IORuntime = IORuntime.global

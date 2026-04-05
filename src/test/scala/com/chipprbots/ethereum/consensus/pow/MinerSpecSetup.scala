@@ -40,7 +40,7 @@ import com.chipprbots.ethereum.utils.Config
 // SCALA 3 MIGRATION: Refactored to use abstract mock members pattern.
 // The test class (which extends MockFactory) provides the mock implementations.
 // This avoids the self-type constraint issue where inner classes cannot satisfy MockFactory.
-trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
+trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder with com.chipprbots.ethereum.TestInstanceConfigProvider {
   // Abstract mock members - must be implemented by test class that has MockFactory
   def mockBlockchainReader: BlockchainReader
   def mockBlockchain: BlockchainImpl

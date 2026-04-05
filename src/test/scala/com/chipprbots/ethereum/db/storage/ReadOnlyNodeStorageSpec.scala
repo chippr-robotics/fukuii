@@ -19,7 +19,7 @@ import com.chipprbots.ethereum.db.storage.StateStorage.GenesisDataLoad
 import com.chipprbots.ethereum.db.storage.pruning.InMemoryPruning
 import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.testing.Tags._
-import com.chipprbots.ethereum.utils.Config.NodeCacheConfig
+import com.chipprbots.ethereum.utils.NodeCacheConfig
 
 class ReadOnlyNodeStorageSpec extends AnyFlatSpec with Matchers {
 

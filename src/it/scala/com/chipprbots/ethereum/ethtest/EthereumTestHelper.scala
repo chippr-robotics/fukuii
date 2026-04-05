@@ -38,7 +38,7 @@ class EthereumTestHelper(using bc: BlockchainConfig) extends ScenarioSetup {
           pruningMode,
           nodeStorage,
           new LruCache[NodeHash, HeapEntry](
-            Config.InMemoryPruningNodeCacheConfig,
+            Config.inMemoryPruningNodeCacheConfig,
             Some(CachedReferenceCountedStorage.saveOnlyNotificationHandler(nodeStorage))
           )
         )
