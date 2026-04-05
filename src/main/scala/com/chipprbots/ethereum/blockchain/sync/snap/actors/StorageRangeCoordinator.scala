@@ -93,6 +93,19 @@ class StorageRangeCoordinator(
   private val recentTaskPeerFailures = mutable.Map.empty[(ByteString, String), Long]
   private val taskPeerCooldownMs: Long = 30_000L
 
+  // Option A: per-request dispatch timestamp — used to detect stale in-flight requests.
+  // Stale = in-flight longer than staleFractionBeforeHold * requestTimeout.
+  // When a peer has a stale in-flight, we hold new dispatches to it rather than piling on.
+  private val requestSentAtMs          = mutable.Map[BigInt, Long]()
+  private val staleFractionBeforeHold  = 0.5 // hold once in-flight age > 50% of timeout window
+
+  // Option B: per-peer EMA of response latency (ms). Used to cap per-peer concurrency
+  // proportionally to how slow the peer is responding — prevents pile-on on heavy peers (e.g. besu).
+  private val peerResponseLatencyEma = mutable.Map[String, Double]()
+  private val emaAlpha        = 0.3   // smoothing factor (higher = more reactive to recent samples)
+  private val latencyFastMs   = 2000L // < 2s  → full concurrency (maxInFlightPerPeer)
+  private val latencyMediumMs = 8000L // 2–8s  → 2 concurrent; >8s → 1 concurrent
+
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
   // This is separate from stateless peer detection — cooldowns are short and per-error-type.
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
@@ -276,6 +289,26 @@ class StorageRangeCoordinator(
   /** Count in-flight requests for a given peer (pipelining support). */
   private def inFlightForPeer(peer: Peer): Int =
     activeTasks.values.count(_._1.id == peer.id)
+
+  /** Option A: true if this peer has any in-flight request older than staleFractionBeforeHold of the timeout. */
+  private def peerHasStaleInFlight(peer: Peer): Boolean = {
+    val now        = System.currentTimeMillis()
+    val halfWindow = (requestTimeout.toMillis * staleFractionBeforeHold).toLong
+    activeTasks.exists { case (reqId, (p, _, _)) =>
+      p.id == peer.id &&
+      requestSentAtMs.get(reqId).exists(sent => now - sent > halfWindow)
+    }
+  }
+
+  /** Option B: per-peer concurrency cap derived from EMA latency. Fast peers get full budget;
+   *  slow peers (e.g. besu under GC pressure) are throttled to 1–2 to prevent pile-on. */
+  private def effectiveConcurrencyFor(peer: Peer): Int =
+    peerResponseLatencyEma.get(peer.id.value) match {
+      case None                               => maxInFlightPerPeer
+      case Some(ema) if ema < latencyFastMs   => maxInFlightPerPeer
+      case Some(ema) if ema < latencyMediumMs => math.min(maxInFlightPerPeer, 2)
+      case _                                  => 1
+    }
 
   // Per-task empty-response tracking.
   // Some peers legitimately return empty slotSets+proofs in cases we can't easily distinguish
@@ -997,6 +1030,7 @@ class StorageRangeCoordinator(
 
     batchTasks.foreach(_.pending = true)
     activeTasks.put(requestId, (peer, batchTasks, requestedBytes))
+    requestSentAtMs.put(requestId, System.currentTimeMillis())
 
     requestTracker.trackRequest(
       requestId,
@@ -1141,6 +1175,19 @@ class StorageRangeCoordinator(
     peerConsecutiveTimeouts.remove(peer.id.value)
     consecutiveUnproductiveRefreshes = 0
     lastDispatchOrResponseMs = System.currentTimeMillis()
+
+    // Option B: update EMA latency for this peer on every successful response.
+    requestSentAtMs.remove(response.requestId).foreach { sentAt =>
+      val latency = System.currentTimeMillis() - sentAt
+      val current = peerResponseLatencyEma.getOrElse(peer.id.value, latency.toDouble)
+      val updated = emaAlpha * latency + (1 - emaAlpha) * current
+      peerResponseLatencyEma.update(peer.id.value, updated)
+      val cap = effectiveConcurrencyFor(peer)
+      if (cap < maxInFlightPerPeer)
+        log.info(
+          s"[PEER-THROTTLE] ${peer.id.value.take(12)} concurrency capped at $cap/$maxInFlightPerPeer (ema latency=${updated.toInt}ms)"
+        )
+    }
 
     // Adaptive batch scaling: track successes for this peer, scale up after consecutive packed responses
     maybeIncreaseBatchSize(peer, servedCount, tasks.size)
@@ -1352,6 +1399,7 @@ class StorageRangeCoordinator(
     proofVerifiers.getOrElseUpdate(storageRoot, MerkleProofVerifier(storageRoot))
 
   private def handleTimeout(requestId: BigInt): Unit = {
+    requestSentAtMs.remove(requestId)
     activeTasks.remove(requestId).foreach { case (peer, batchTasks, _) =>
       log.warning(s"Storage range request timeout for ${batchTasks.size} accounts from peer ${peer.id.value}")
       recordPeerCooldown(peer, "request timeout")
@@ -1378,10 +1426,17 @@ class StorageRangeCoordinator(
     tryRedispatchPendingTasks()
   }
 
-  /** Dispatch up to maxInFlightPerPeer requests to a single peer (pipelining). */
+  /** Dispatch up to effectiveConcurrencyFor(peer) requests to a single peer (pipelining).
+   *  Option A: skip if any in-flight request is already "getting old" — avoids pile-on when
+   *  a peer is slow (e.g. besu under GC pressure). Option B: cap concurrency by EMA latency. */
   private def dispatchIfPossible(peer: Peer): Unit = {
+    if (peerHasStaleInFlight(peer)) {
+      log.info(s"[PEER-HOLD] Holding dispatch to ${peer.id.value.take(12)} — stale in-flight request (>${(requestTimeout.toMillis * staleFractionBeforeHold).toInt}ms)")
+      return
+    }
+    val cap      = effectiveConcurrencyFor(peer)
     var inflight = inFlightForPeer(peer)
-    while (tasks.nonEmpty && inflight < maxInFlightPerPeer && activeTasks.size < maxInFlightRequests) {
+    while (tasks.nonEmpty && inflight < cap && activeTasks.size < maxInFlightRequests) {
       requestNextRanges(peer) match {
         case Some(_) => inflight += 1
         case None    => return
