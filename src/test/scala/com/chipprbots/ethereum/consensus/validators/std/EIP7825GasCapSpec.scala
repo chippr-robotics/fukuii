@@ -17,7 +17,11 @@ import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
 /** EIP-7825: Validate per-transaction gas limit cap of 2^24 (16,777,216) post-Olympia. */
-class EIP7825GasCapSpec extends AnyFlatSpec with Matchers with BlockchainConfigBuilder with com.chipprbots.ethereum.TestInstanceConfigProvider {
+class EIP7825GasCapSpec
+    extends AnyFlatSpec
+    with Matchers
+    with BlockchainConfigBuilder
+    with com.chipprbots.ethereum.TestInstanceConfigProvider {
 
   val olympiaBlock: BigInt = 10
 
