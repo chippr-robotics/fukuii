@@ -4,7 +4,7 @@ import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props, Scheduler, 
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
-import scala.concurrent.ExecutionContext
+import scala.concurrent.{ExecutionContext, Future}
 import scala.collection.mutable
 
 import com.chipprbots.ethereum.blockchain.sync.{Blacklist, CacheBasedBlacklist, PeerListSupportNg, SyncProtocol}
@@ -140,6 +140,12 @@ class SNAPSyncController(
   private var storageStagnationRefreshAttempted: Boolean = false
   private var trieWalkInProgress: Boolean = false
   private var trieWalkStartedAtMs: Long = 0L
+
+  // Proof-seeding buffer: interior trie node hashes discovered from boundary proofs during
+  // account download. Flushed to the healing coordinator at healing start so it begins with
+  // a pre-populated queue instead of an empty one (aligns with core-geth's Sync scheduler).
+  private val proofDiscoveredHealNodes = mutable.Set.empty[ByteString]
+  private val ProofSeedCap = 500_000 // 32 bytes/hash → ~16MB; log WARN if exceeded
   @volatile private var trieWalkNodesScanned: java.util.concurrent.atomic.AtomicLong =
     new java.util.concurrent.atomic.AtomicLong(0)
   private var consecutiveUnproductiveHealingRounds: Int = 0
@@ -635,13 +641,33 @@ class SNAPSyncController(
       )
       if (!trieWalkInProgress) startTrieWalk()
 
+    case ProofDiscoveredNodes(nodes) =>
+      if (nodes.nonEmpty) {
+        val sizeBefore = proofDiscoveredHealNodes.size
+        if (sizeBefore < ProofSeedCap) {
+          proofDiscoveredHealNodes ++= nodes
+          if (proofDiscoveredHealNodes.size >= ProofSeedCap)
+            log.warning(
+              s"[PROOF-SEED] Proof-discovered node buffer reached cap ($ProofSeedCap entries) — " +
+                s"further proof nodes discarded. This is unexpected; inspect proof sizes."
+            )
+        }
+      }
+
     case TrieWalkHeartbeat =>
       if (trieWalkInProgress) {
         val elapsedSec = ((System.currentTimeMillis() - trieWalkStartedAtMs) / 1000).toInt
         val scanned = trieWalkNodesScanned.get()
+        val nodesPerSec = if (elapsedSec > 0) scanned / elapsedSec else 0L
+        val etaStr = if (nodesPerSec > 0) {
+          val remaining = (145_000_000L - scanned).max(0L)
+          val etaSec = remaining / nodesPerSec
+          s", ETA ~${etaSec / 3600}h ${(etaSec % 3600) / 60}m"
+        } else ""
         log.info(
-          f"[HEALING] Trie walk in progress: $scanned%,d nodes scanned, " +
-            s"${elapsedSec / 60}m ${elapsedSec % 60}s elapsed"
+          f"[WALK] Trie walk in progress: $scanned%,d nodes scanned, " +
+            f"$nodesPerSec%,d nodes/s, " +
+            s"${elapsedSec / 60}m ${elapsedSec % 60}s elapsed$etaStr"
         )
         scheduler.scheduleOnce(10.seconds, self, TrieWalkHeartbeat)(ec)
       }
@@ -2182,19 +2208,29 @@ class SNAPSyncController(
       log.info("=" * 60)
       log.info("PHASE: Trie Healing → State Validation Walk")
       log.info("=" * 60)
-      log.info("Starting trie walk to discover missing nodes for healing...")
+      log.info("[WALK] Starting trie walk (fillCache=false, verifyChecksums=false — cache-safe single-pass scan)")
+      val walkThreads = math.max(1, math.min(4, snapSyncConfig.trieWalkParallelism))
+      log.info(s"[WALK] Parallel subtree walkers: $walkThreads (configurable via snap-sync.trie-walk-parallelism)")
       val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
       val selfRef = self
+      // Dedicated thread pool for trie walk — isolated from sync-dispatcher to avoid I/O starvation.
+      // Shutdown is called in onComplete once results are delivered to the actor.
+      val walkEc = ExecutionContext.fromExecutorService(
+        java.util.concurrent.Executors.newFixedThreadPool(walkThreads)
+      )
       scheduler.scheduleOnce(10.seconds, self, TrieWalkHeartbeat)(ec)
-      scala.concurrent
-        .Future {
-          val validator = new StateValidator(storage, counter)
-          validator.findMissingNodesWithPaths(root)
-        }(ec)
-        .foreach {
-          case Right(missingNodes) => selfRef ! TrieWalkResult(missingNodes)
-          case Left(error)         => selfRef ! TrieWalkFailed(error)
-        }(ec)
+      val validator = new StateValidator(storage, counter)
+      validator.findMissingNodesWithPaths(root)(walkEc).onComplete {
+        case scala.util.Success(Right(missingNodes)) =>
+          walkEc.shutdown()
+          selfRef ! TrieWalkResult(missingNodes)
+        case scala.util.Success(Left(error)) =>
+          walkEc.shutdown()
+          selfRef ! TrieWalkFailed(error)
+        case scala.util.Failure(ex) =>
+          walkEc.shutdown()
+          selfRef ! TrieWalkFailed(Option(ex.getMessage).getOrElse(ex.getClass.getSimpleName))
+      }(ec)
     }
   }
 
@@ -2236,6 +2272,16 @@ class SNAPSyncController(
       trieNodeHealingCoordinator.foreach { coordinator =>
         coordinator ! actors.Messages.StartTrieNodeHealing(root)
         coordinator ! actors.Messages.UpdateMaxInFlightPerPeer(5)
+
+        // Proof-seeded nodes: we have hashes from boundary proof traversal but not trie paths.
+        // QueueMissingNodes requires (pathset, hash) pairs — without paths, we can't make
+        // valid GetTrieNodes requests. Log the count and discard; the trie walk discovers
+        // these nodes with proper paths. (Path tracking in MerkleProofVerifier: see L-028.)
+        if (proofDiscoveredHealNodes.nonEmpty) {
+          log.info(s"[PROOF-SEED] ${proofDiscoveredHealNodes.size} proof-discovered interior node hashes collected " +
+            s"(path tracking deferred — trie walk will discover with paths)")
+          proofDiscoveredHealNodes.clear()
+        }
       }
 
       // Periodically send peer availability notifications
@@ -2302,6 +2348,14 @@ class SNAPSyncController(
           coordinator ! actors.Messages.StartTrieNodeHealing(root)
           coordinator ! actors.Messages.UpdateMaxInFlightPerPeer(5)
           coordinator ! actors.Messages.QueueMissingNodes(missingNodes)
+
+          // Proof-seeded nodes: hashes without paths — cannot use QueueMissingNodes.
+          // Log count and discard; trie walk discovers with proper paths. (See L-028.)
+          if (proofDiscoveredHealNodes.nonEmpty) {
+            log.info(s"[PROOF-SEED] ${proofDiscoveredHealNodes.size} proof-discovered hashes collected " +
+              s"(path tracking deferred — trie walk will discover with paths)")
+            proofDiscoveredHealNodes.clear()
+          }
         }
 
         healingRequestTask = Some(
@@ -2727,15 +2781,23 @@ class SNAPSyncController(
     currentPhase = StateHealing
     stateRoot.foreach { root =>
       val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
-      scala.concurrent
-        .Future {
-          val validator = new StateValidator(storage)
-          validator.findMissingNodesWithPaths(root)
-        }(ec)
-        .foreach {
-          case Right(nodes) => self ! TrieWalkResult(nodes)
-          case Left(error)  => self ! TrieWalkFailed(error)
-        }(ec)
+      val selfRef = self
+      val walkThreads = math.max(1, math.min(4, snapSyncConfig.trieWalkParallelism))
+      val walkEc = ExecutionContext.fromExecutorService(
+        java.util.concurrent.Executors.newFixedThreadPool(walkThreads)
+      )
+      val validator = new StateValidator(storage)
+      validator.findMissingNodesWithPaths(root)(walkEc).onComplete {
+        case scala.util.Success(Right(nodes)) =>
+          walkEc.shutdown()
+          selfRef ! TrieWalkResult(nodes)
+        case scala.util.Success(Left(error)) =>
+          walkEc.shutdown()
+          selfRef ! TrieWalkFailed(error)
+        case scala.util.Failure(ex) =>
+          walkEc.shutdown()
+          selfRef ! TrieWalkFailed(Option(ex.getMessage).getOrElse(ex.getClass.getSimpleName))
+      }(ec)
     }
   }
 
@@ -3160,6 +3222,12 @@ object SNAPSyncController {
     */
   final case class PivotStateUnservable(rootHash: ByteString, reason: String, consecutiveEmptyResponses: Int)
 
+  /** Sent by AccountRangeCoordinator to SNAPSyncController with interior trie node hashes
+    * discovered from boundary Merkle proofs during account download. SNAPSyncController
+    * accumulates these and flushes to TrieNodeHealingCoordinator at healing start.
+    */
+  final case class ProofDiscoveredNodes(nodes: Set[ByteString])
+
   /** Progress updates emitted by worker coordinators.
     *
     * These are deltas (increments), not absolute totals.
@@ -3268,7 +3336,10 @@ case class SNAPSyncConfig(
     minSnapPeers: Int = 3,
     snapPeerEvictionInterval: FiniteDuration = 15.seconds,
     maxEvictionsPerCycle: Int = 3,
-    deferredMerkleization: Boolean = true
+    deferredMerkleization: Boolean = true,
+    // Number of parallel subtree walkers for the post-healing trie validation walk.
+    // Default 2 for NUC hardware (constrained RAM + NVMe). Max 4 before I/O contention.
+    trieWalkParallelism: Int = 2
 )
 
 object SNAPSyncConfig {
@@ -3360,7 +3431,11 @@ object SNAPSyncConfig {
       deferredMerkleization =
         if (snapConfig.hasPath("deferred-merkleization"))
           snapConfig.getBoolean("deferred-merkleization")
-        else true
+        else true,
+      trieWalkParallelism =
+        if (snapConfig.hasPath("trie-walk-parallelism"))
+          snapConfig.getInt("trie-walk-parallelism")
+        else 2
     )
   }
 }
@@ -3596,34 +3671,103 @@ class StateValidator(
     * storage trie, tracking the hex nibble path to each missing node and encoding it as an HP-encoded compact path for
     * GetTrieNodes.
     *
+    * Parallelizes by fanning out at depth-2 of the root BranchNode, launching one Future per subtree.
+    * Each subtree gets its own result buffer and visited set — no shared mutable state between workers.
+    *
     * @return
-    *   (pathset, hash) pairs ready for TrieNodeHealingCoordinator.QueueMissingNodes
+    *   Future of (pathset, hash) pairs ready for TrieNodeHealingCoordinator.QueueMissingNodes
     */
-  def findMissingNodesWithPaths(stateRoot: ByteString): Either[String, Seq[(Seq[ByteString], ByteString)]] = {
-    val result = mutable.ArrayBuffer[(Seq[ByteString], ByteString)]()
-
+  def findMissingNodesWithPaths(stateRoot: ByteString)(implicit ec: ExecutionContext): Future[Either[String, Seq[(Seq[ByteString], ByteString)]]] = {
     try {
-      val rootNode = mptStorage.get(stateRoot.toArray)
+      val rootNode = mptStorage.getForWalk(stateRoot.toArray)
+      rootNode match {
+        case branch: BranchNode =>
+          // Fan out to depth-2 subtrees for parallel walking (up to 256 subtrees)
+          val subtrees = collectDepth2Subtrees(branch)
+          val futures = subtrees.map { case (prefixPath, subtreeRoot) =>
+            Future {
+              val localResult = mutable.ArrayBuffer[(Seq[ByteString], ByteString)]()
+              traverseAccountTrieWithPaths(subtreeRoot, mptStorage, prefixPath, localResult, mutable.Set.empty)
+              localResult.toSeq
+            }
+          }
+          Future.sequence(futures).map(results => Right(results.flatten))
 
-      // Walk the account trie — missing account nodes get single-element pathsets
-      traverseAccountTrieWithPaths(
-        rootNode,
-        mptStorage,
-        Array.empty[Byte],
-        result,
-        mutable.Set.empty
-      )
-
-      Right(result.toSeq)
+        case other =>
+          // Small or degenerate trie — run single-threaded
+          val result = mutable.ArrayBuffer[(Seq[ByteString], ByteString)]()
+          traverseAccountTrieWithPaths(other, mptStorage, Array.empty[Byte], result, mutable.Set.empty)
+          Future.successful(Right(result.toSeq))
+      }
     } catch {
       case e: MerklePatriciaTrie.MissingNodeException =>
         // Root node itself is missing
         val compactPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-        result += ((Seq(compactPath), e.hash))
-        Right(result.toSeq)
+        Future.successful(Right(Seq((Seq(compactPath), e.hash))))
       case e: Exception =>
-        Left(s"Trie walk failed: ${e.getMessage}")
+        Future.successful(Left(s"Trie walk failed: ${e.getMessage}"))
     }
+  }
+
+  /** Collect depth-2 subtrees from the root BranchNode for parallel walking.
+    * Uses multiGet to batch-fetch depth-1 and depth-2 HashNode children, reducing JNI overhead.
+    * Returns (nibblePath prefix, subtreeRoot) pairs — each is an independent walk unit.
+    */
+  private def collectDepth2Subtrees(root: BranchNode): Seq[(Array[Byte], MptNode)] = {
+    // --- Depth 1: batch-fetch all HashNode children of root ---
+    val hashChildrenD1: IndexedSeq[(Int, HashNode)] = (0 until 16).flatMap { i =>
+      root.children(i) match {
+        case h: HashNode => Some((i, h))
+        case _           => None
+      }
+    }
+    val fetchedD1: Seq[Option[MptNode]] =
+      if (hashChildrenD1.nonEmpty) mptStorage.getMultipleForWalk(hashChildrenD1.map(_._2.hash))
+      else Seq.empty
+
+    // Assemble depth-1 (path, node) pairs
+    val d1nodes = mutable.ArrayBuffer[(Array[Byte], MptNode)]()
+    hashChildrenD1.zip(fetchedD1).foreach { case ((i, hashNode), maybeResolved) =>
+      // Missing node: pass the HashNode itself — traversal will detect + record it
+      d1nodes += ((Array(i.toByte), maybeResolved.getOrElse(hashNode)))
+    }
+    for (i <- 0 until 16) {
+      val child = root.children(i)
+      if (!child.isNull && !child.isInstanceOf[HashNode])
+        d1nodes += ((Array(i.toByte), child))
+    }
+
+    // --- Depth 2: for each depth-1 BranchNode, batch-fetch its HashNode children ---
+    val d2subtrees = mutable.ArrayBuffer[(Array[Byte], MptNode)]()
+    d1nodes.foreach { case (path1, node) =>
+      node match {
+        case branch: BranchNode =>
+          val hashChildrenD2: IndexedSeq[(Int, HashNode)] = (0 until 16).flatMap { i =>
+            branch.children(i) match {
+              case h: HashNode => Some((i, h))
+              case _           => None
+            }
+          }
+          val fetchedD2: Seq[Option[MptNode]] =
+            if (hashChildrenD2.nonEmpty) mptStorage.getMultipleForWalk(hashChildrenD2.map(_._2.hash))
+            else Seq.empty
+
+          hashChildrenD2.zip(fetchedD2).foreach { case ((i, hashNode), maybeResolved) =>
+            d2subtrees += ((path1 :+ i.toByte, maybeResolved.getOrElse(hashNode)))
+          }
+          for (i <- 0 until 16) {
+            val child = branch.children(i)
+            if (!child.isNull && !child.isInstanceOf[HashNode])
+              d2subtrees += ((path1 :+ i.toByte, child))
+          }
+
+        case _ =>
+          // Leaf, Extension, or missing node at depth-1 — treat as single subtree
+          d2subtrees += ((path1, node))
+      }
+    }
+
+    if (d2subtrees.nonEmpty) d2subtrees.toSeq else d1nodes.toSeq
   }
 
   /** Walk the account trie, tracking nibble paths for missing nodes. Also checks storage tries for each account found.
@@ -3649,7 +3793,7 @@ class StateValidator(
             val accountHashBytes = HexPrefix.nibblesToBytes(fullNibblePath)
 
             try {
-              val storageRoot = storage.get(account.storageRoot.toArray)
+              val storageRoot = storage.getForWalk(account.storageRoot.toArray)
               traverseStorageTrieWithPaths(
                 storageRoot,
                 storage,
@@ -3681,9 +3825,30 @@ class StateValidator(
         val nodeHash = ByteString(branch.hash)
         if (!visited.contains(nodeHash)) {
           visited += nodeHash
+          // Batch-fetch all unvisited HashNode children in one multiGet call to reduce JNI overhead
+          val hashChildEntries = (0 until 16).flatMap { i =>
+            branch.children(i) match {
+              case h: HashNode if !visited.contains(ByteString(h.hash)) => Some((i, h))
+              case _                                                     => None
+            }
+          }
+          if (hashChildEntries.nonEmpty) {
+            val fetched = storage.getMultipleForWalk(hashChildEntries.map(_._2.hash))
+            hashChildEntries.zip(fetched).foreach { case ((i, hashNode), maybeResolved) =>
+              val newPath = currentNibblePath :+ i.toByte
+              maybeResolved match {
+                case Some(resolved) =>
+                  traverseAccountTrieWithPaths(resolved, storage, newPath, result, visited)
+                case None =>
+                  val compactPath = ByteString(HexPrefix.encode(newPath, isLeaf = false))
+                  result += ((Seq(compactPath), ByteString(hashNode.hash)))
+              }
+            }
+          }
+          // Process inline children (already decoded — no fetch needed)
           for (i <- 0 until 16) {
             val child = branch.children(i)
-            if (!child.isNull) {
+            if (!child.isNull && !child.isInstanceOf[HashNode]) {
               val newPath = currentNibblePath :+ i.toByte
               traverseAccountTrieWithPaths(child, storage, newPath, result, visited)
             }
@@ -3694,7 +3859,7 @@ class StateValidator(
         val hashKey = ByteString(hash.hash)
         if (!visited.contains(hashKey)) {
           try {
-            val resolvedNode = storage.get(hash.hash)
+            val resolvedNode = storage.getForWalk(hash.hash)
             traverseAccountTrieWithPaths(resolvedNode, storage, currentNibblePath, result, visited)
           } catch {
             case _: MerklePatriciaTrie.MissingNodeException =>
@@ -3736,9 +3901,30 @@ class StateValidator(
         val nodeHash = ByteString(branch.hash)
         if (!visited.contains(nodeHash)) {
           visited += nodeHash
+          // Batch-fetch all unvisited HashNode children in one multiGet call
+          val hashChildEntries = (0 until 16).flatMap { i =>
+            branch.children(i) match {
+              case h: HashNode if !visited.contains(ByteString(h.hash)) => Some((i, h))
+              case _                                                     => None
+            }
+          }
+          if (hashChildEntries.nonEmpty) {
+            val fetched = storage.getMultipleForWalk(hashChildEntries.map(_._2.hash))
+            hashChildEntries.zip(fetched).foreach { case ((i, hashNode), maybeResolved) =>
+              val newPath = currentNibblePath :+ i.toByte
+              maybeResolved match {
+                case Some(resolved) =>
+                  traverseStorageTrieWithPaths(resolved, storage, newPath, accountHash, result, visited)
+                case None =>
+                  val compactPath = ByteString(HexPrefix.encode(newPath, isLeaf = false))
+                  result += ((Seq(accountHash, compactPath), ByteString(hashNode.hash)))
+              }
+            }
+          }
+          // Process inline children (already decoded — no fetch needed)
           for (i <- 0 until 16) {
             val child = branch.children(i)
-            if (!child.isNull) {
+            if (!child.isNull && !child.isInstanceOf[HashNode]) {
               val newPath = currentNibblePath :+ i.toByte
               traverseStorageTrieWithPaths(child, storage, newPath, accountHash, result, visited)
             }
@@ -3749,7 +3935,7 @@ class StateValidator(
         val hashKey = ByteString(hash.hash)
         if (!visited.contains(hashKey)) {
           try {
-            val resolvedNode = storage.get(hash.hash)
+            val resolvedNode = storage.getForWalk(hash.hash)
             traverseStorageTrieWithPaths(resolvedNode, storage, currentNibblePath, accountHash, result, visited)
           } catch {
             case _: MerklePatriciaTrie.MissingNodeException =>
