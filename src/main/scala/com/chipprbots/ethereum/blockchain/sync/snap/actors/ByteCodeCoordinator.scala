@@ -132,6 +132,12 @@ class ByteCodeCoordinator(
   private var lastProgressLogAt: Long = 0
   private val ProgressLogInterval: Long = 500
 
+  // Milestone progress tracking (fires after noMoreTasksExpected is set — total is frozen then)
+  private val BytecodeMilestones: Seq[Int] =
+    Seq(0) ++ (1 to 10) ++ (15 to 90 by 5) ++ (91 to 99) ++ Seq(100)
+  private var lastLoggedBytecodeMilestonePct: Int = -1
+  private var totalCodeHashesQueued: Long = 0
+
   // ByteCodes request tuning (Nethermind-style): use a per-peer dynamic byte budget, clamped hard to 2 MiB.
   // We send many hashes and rely on the peer-side `responseBytes` soft limit to bound work.
   private val minResponseBytes: BigInt = 50 * 1024
@@ -179,26 +185,30 @@ class ByteCodeCoordinator(
 
   override def receive: Receive = {
     case StartByteCodeSync(codeHashes) =>
-      log.info(s"Starting bytecode sync for ${codeHashes.size} unique codeHashes")
-
       val filteredHashes = filterAndDedupeCodeHashes(codeHashes)
       val newTasks = ByteCodeTask.createBatchedTasks(filteredHashes, batchSize)
       pendingTasks.enqueueAll(newTasks)
-      log.info(s"Queued ${newTasks.size} bytecode tasks from ${filteredHashes.size} unique hashes")
+      totalCodeHashesQueued += filteredHashes.size
+      log.info(s"[BYTECODE] Starting bytecode download — $totalCodeHashesQueued unique hashes queued (${newTasks.size} tasks)")
 
     case AddByteCodeTasks(codeHashes) =>
       val filtered = filterAndDedupeCodeHashes(codeHashes)
       if (filtered.nonEmpty) {
         val newTasks = ByteCodeTask.createBatchedTasks(filtered, batchSize)
         pendingTasks.enqueueAll(newTasks)
+        totalCodeHashesQueued += filtered.size
         log.debug(
-          s"Added ${newTasks.size} bytecode tasks from ${filtered.size} incremental hashes (pending: ${pendingTasks.size})"
+          s"Added ${newTasks.size} bytecode tasks from ${filtered.size} incremental hashes (total queued: $totalCodeHashesQueued, pending: ${pendingTasks.size})"
         )
       }
 
     case NoMoreByteCodeTasks =>
       noMoreTasksExpected = true
-      log.info(s"No more bytecode tasks expected. Pending: ${pendingTasks.size}, active: ${activeTasks.size}")
+      log.info(
+        s"[BYTECODE] All code hashes received — $totalCodeHashesQueued total unique hashes. " +
+          s"Progress so far: $bytecodesDownloaded done, ${pendingTasks.size} pending, ${activeTasks.size} active"
+      )
+      lastLoggedBytecodeMilestonePct = 0
       checkCompletion()
 
     case ByteCodePivotRefreshed =>
@@ -358,7 +368,13 @@ class ByteCodeCoordinator(
   private def tryRedispatchPendingTasks(): Unit = {
     if (pendingTasks.isEmpty) return
     val eligiblePeers = knownAvailablePeers.filterNot(isPeerCoolingDown).toList
-    if (eligiblePeers.isEmpty) return
+    if (eligiblePeers.isEmpty) {
+      log.debug(
+        s"[BYTECODE-REDISPATCH] No eligible peers — ${knownAvailablePeers.size} known, " +
+          s"${bytecodeIncapablePeers.size} stateless, rest cooling down. pending: ${pendingTasks.size}"
+      )
+      return
+    }
     for (peer <- eligiblePeers if pendingTasks.nonEmpty)
       dispatchIfPossible(peer)
   }
@@ -366,7 +382,7 @@ class ByteCodeCoordinator(
   private def handleByteCodesResponse(response: ByteCodes): Unit = {
     activeTasks.get(response.requestId) match {
       case None =>
-        log.debug(s"Received ByteCodes response for unknown or completed request ${response.requestId}")
+        log.debug(s"Received ByteCodes response for requestId=${response.requestId} (no longer tracked — already completed or timed out). Discarding stale response.")
 
       case Some(active) =>
         val task = active.task
@@ -444,8 +460,9 @@ class ByteCodeCoordinator(
                   }
                   if (exhausted.nonEmpty) {
                     log.warning(
-                      s"Skipping ${exhausted.size} bytecode hashes after $maxFailuresPerHash failures each " +
-                        s"(no peer could serve them). Sample: ${exhausted.take(3).map(_.take(4).toArray.map("%02x".format(_)).mkString).mkString(", ")}"
+                      s"Skipping ${exhausted.size} bytecode hashes after $maxFailuresPerHash failures each — " +
+                        s"no peer could serve them. Affected contracts will be non-executable. " +
+                        s"Sample: ${exhausted.take(3).map(_.take(4).toArray.map("%02x".format(_)).mkString).mkString(", ")}"
                     )
                     exhausted.foreach(hashFailureCounts.remove)
                   }
@@ -488,6 +505,19 @@ class ByteCodeCoordinator(
                       s"$rate codes/sec)"
                   )
                   lastProgressLogAt = bytecodesDownloaded
+                }
+
+                // Milestone progress (only once total is frozen after NoMoreByteCodeTasks)
+                if (noMoreTasksExpected && totalCodeHashesQueued > 0) {
+                  val pct = (bytecodesDownloaded * 100 / totalCodeHashesQueued).toInt
+                  val nextMilestone = BytecodeMilestones.find(m => m > lastLoggedBytecodeMilestonePct && pct >= m)
+                  nextMilestone.foreach { m =>
+                    log.info(
+                      s"[BYTECODE] $m% — $bytecodesDownloaded/$totalCodeHashesQueued hashes, " +
+                        s"${"%.1f".format(bytesDownloaded / 1048576.0)}MB"
+                    )
+                    lastLoggedBytecodeMilestonePct = m
+                  }
                 }
 
                 checkCompletion()
