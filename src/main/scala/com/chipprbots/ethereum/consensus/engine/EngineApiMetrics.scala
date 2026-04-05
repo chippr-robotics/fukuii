@@ -19,20 +19,21 @@ object EngineApiMetrics extends MetricsContainer {
   private val _latestPayloadBlockNumber = new AtomicLong(0)
   private val _latestPayloadTimestamp = new AtomicLong(0)
 
-  val newPayloadTotal = metrics.gauge("app_engine_newpayload_total", () => _newPayloadCount.get().toDouble)
-  val newPayloadValid = metrics.gauge("app_engine_newpayload_valid", () => _newPayloadValidCount.get().toDouble)
-  val newPayloadSyncing = metrics.gauge("app_engine_newpayload_syncing", () => _newPayloadSyncingCount.get().toDouble)
-  val newPayloadInvalid = metrics.gauge("app_engine_newpayload_invalid", () => _newPayloadInvalidCount.get().toDouble)
+  // Note: Metrics.mkName adds "app_" prefix, so "engine_foo" becomes "app_engine_foo" in Prometheus
+  val newPayloadTotal = metrics.gauge("engine_newpayload_total", () => _newPayloadCount.get().toDouble)
+  val newPayloadValid = metrics.gauge("engine_newpayload_valid", () => _newPayloadValidCount.get().toDouble)
+  val newPayloadSyncing = metrics.gauge("engine_newpayload_syncing", () => _newPayloadSyncingCount.get().toDouble)
+  val newPayloadInvalid = metrics.gauge("engine_newpayload_invalid", () => _newPayloadInvalidCount.get().toDouble)
 
   val forkchoiceUpdatedTotal =
-    metrics.gauge("app_engine_forkchoice_total", () => _forkchoiceUpdatedCount.get().toDouble)
-  val forkchoiceValid = metrics.gauge("app_engine_forkchoice_valid", () => _forkchoiceValidCount.get().toDouble)
-  val forkchoiceSyncing = metrics.gauge("app_engine_forkchoice_syncing", () => _forkchoiceSyncingCount.get().toDouble)
+    metrics.gauge("engine_forkchoice_total", () => _forkchoiceUpdatedCount.get().toDouble)
+  val forkchoiceValid = metrics.gauge("engine_forkchoice_valid", () => _forkchoiceValidCount.get().toDouble)
+  val forkchoiceSyncing = metrics.gauge("engine_forkchoice_syncing", () => _forkchoiceSyncingCount.get().toDouble)
 
   val latestPayloadBlock =
-    metrics.gauge("app_engine_latest_payload_block", () => _latestPayloadBlockNumber.get().toDouble)
+    metrics.gauge("engine_latest_payload_block", () => _latestPayloadBlockNumber.get().toDouble)
   val latestPayloadTimestamp =
-    metrics.gauge("app_engine_latest_payload_timestamp", () => _latestPayloadTimestamp.get().toDouble)
+    metrics.gauge("engine_latest_payload_timestamp", () => _latestPayloadTimestamp.get().toDouble)
 
   def recordNewPayload(status: String, blockNumber: Long, timestamp: Long): Unit = {
     _newPayloadCount.incrementAndGet()
