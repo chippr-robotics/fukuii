@@ -535,46 +535,19 @@ class SyncController(
             if (pivotRootExists) "EXISTS" else "MISSING"
           )
           if (!pivotRootExists) {
-            val finalizedRoot = appStateStorage.getSnapSyncFinalizedRoot()
-            finalizedRoot match {
-              case Some(fRoot) =>
-                val fRootExists = try { mptStorage.get(fRoot.toArray); true } catch { case _: Exception => false }
-                log.info(
-                  "Finalized trie root {} availability: {}",
-                  fRoot.take(8).toArray.map("%02x".format(_)).mkString,
-                  if (fRootExists) "EXISTS" else "MISSING"
-                )
-                if (fRootExists) {
-                  log.warning(
-                    "Substituting finalized trie root {} into pivot block header (replacing missing root {})",
-                    fRoot.take(8).toArray.map("%02x".format(_)).mkString,
-                    header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString
-                  )
-                  val updatedHeader = header.copy(stateRoot = fRoot)
-                  val updatedHash = updatedHeader.hash
-                  // Carry chain weight and bestBlockInfo forward to the new header hash.
-                  // storeBlockHeader changes the hash (it includes stateRoot); without this,
-                  // the ETH handshaker throws "Chain weight not found" on the new hash.
-                  val existingWeight = blockchainReader.getChainWeightByHash(header.hash)
-                    .getOrElse(com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly(header.difficulty))
-                  blockchainWriter.storeBlockHeader(updatedHeader)
-                    .and(blockchainWriter.storeChainWeight(updatedHash, existingWeight))
-                    .and(appStateStorage.putBestBlockInfo(
-                      com.chipprbots.ethereum.domain.appstate.BlockInfo(updatedHash, header.number)
-                    ))
-                    .commit()
-                  log.info(
-                    "Carried chain weight and bestBlockInfo forward to new hash {}",
-                    updatedHash.take(8).toArray.map("%02x".format(_)).mkString
-                  )
-                }
-              case None =>
-                log.error(
-                  "Pivot state root {} MISSING and no finalized root stored! " +
-                    "Database is in an unrecoverable state — clear data and re-sync.",
-                  header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString
-                )
-            }
+            // snapSyncDone=true but the pivot's stateRoot is missing from RocksDB — this is a
+            // false positive (state was only in the LRU cache when snapSyncDone was committed).
+            // The correct recovery is to reset snapSyncDone=false and re-run SNAP sync, which
+            // will resume from the healing phase (accounts already complete, drift < maxPivotStalenessBlocks).
+            // Geth/Besu never substitute non-network blocks; they re-run the sync phase.
+            log.warning(
+              "SNAP sync false positive detected: snapSyncDone=true but pivot stateRoot {} " +
+                "is MISSING from RocksDB. Resetting snapSyncDone to re-run SNAP healing.",
+              header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString
+            )
+            appStateStorage.resetSnapSyncDone().commit()
+            startSnapSync()
+            return
           }
         }
         // General consistency repair: ensure bestBlockInfo and chain weight agree with

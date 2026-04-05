@@ -118,6 +118,10 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def snapSyncDone(): DataSourceBatchUpdate =
     put(Keys.SnapSyncDone, true.toString)
 
+  /** Reset SNAP sync completion flag so a false-positive can be recovered by re-running SNAP */
+  def resetSnapSyncDone(): DataSourceBatchUpdate =
+    put(Keys.SnapSyncDone, false.toString)
+
   /** Check if bytecode recovery scan has completed (Bug 20 hardening) */
   def isBytecodeRecoveryDone(): Boolean =
     get(Keys.BytecodeRecoveryDone).exists(_.toBoolean)

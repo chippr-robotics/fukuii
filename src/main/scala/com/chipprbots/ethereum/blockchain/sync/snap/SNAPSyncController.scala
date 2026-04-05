@@ -3065,17 +3065,20 @@ class SNAPSyncController(
         log.info("Flushing state trie LRU cache to RocksDB before SNAP finalization...")
         stateStorage.forcePersist(StateStorage.GenesisDataLoad)
 
-        // Verify the state root is now durably in RocksDB before marking snapSyncDone.
-        val finalizedRoot = appStateStorage.getSnapSyncFinalizedRoot().orElse(stateRoot)
+        // Verify the pivot's actual stateRoot (not the pre-healing finalizedRoot) is durable.
+        // finalizedRoot is computed during account trie assembly BEFORE healing completes and may
+        // differ from the pivot's stateRoot. Only mark done when the target root is present, which
+        // guarantees regular sync can execute block pivot+1 without MissingNodeException.
+        val rootToVerify = stateRoot
         val rootStorage = stateStorage.getReadOnlyStorage
-        val rootConfirmed = finalizedRoot.exists { r =>
+        val rootConfirmed = rootToVerify.exists { r =>
           try { rootStorage.get(r.toArray); true }
           catch { case _: Exception => false }
         }
 
         if (!rootConfirmed) {
           log.error(
-            "State root NOT confirmed in RocksDB after forcePersist — aborting snapSyncDone commit. " +
+            "Pivot stateRoot NOT confirmed in RocksDB after forcePersist — aborting snapSyncDone commit. " +
               "Resetting validation counters to trigger healing fetch of missing root."
           )
           validationRetryCount = 0
@@ -3085,7 +3088,7 @@ class SNAPSyncController(
         } else {
           log.info(
             "State root {} confirmed in RocksDB. Committing SNAP finalization.",
-            finalizedRoot.map(_.take(8).toHex).getOrElse("?")
+            stateRoot.map(_.take(8).toHex).getOrElse("?")
           )
           // Atomic finalization — commit SnapSyncDone marker together with
           // pivot block, chain weight, and best block info in a single batch.
