@@ -13,7 +13,8 @@ trait TestMiningBuilder { self: StdMiningBuilder =>
 
 /** A standard [[TestMiningBuilder]] cake. */
 trait StdTestMiningBuilder
-    extends StdMiningBuilder
+    extends com.chipprbots.ethereum.utils.InstanceConfigProvider
+    with StdMiningBuilder
     with TestMiningBuilder
     with VmBuilder
     with VmConfigBuilder

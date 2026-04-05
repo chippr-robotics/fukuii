@@ -23,7 +23,7 @@ import com.chipprbots.ethereum.testing.Tags._
   */
 class BlockchainTestsSpec extends EthereumTestsSpec {
 
-  // Supported networks (pre-Spiral fork only)
+  // Supported networks — all forks through Prague
   val supportedNetworks = Set(
     "Frontier",
     "Homestead",
@@ -32,7 +32,15 @@ class BlockchainTestsSpec extends EthereumTestsSpec {
     "Byzantium",
     "Constantinople",
     "Istanbul",
-    "Berlin"
+    "Berlin",
+    "London",
+    "ArrowGlacier",
+    "GrayGlacier",
+    "Merge",
+    "Paris",
+    "Shanghai",
+    "Cancun",
+    "Prague"
   )
 
   /** Helper to discover test files in a directory
@@ -191,8 +199,8 @@ class BlockchainTestsSpec extends EthereumTestsSpec {
       supportedNetworks.contains(test.network)
     }
 
-    filtered.size shouldBe 1
+    filtered.size shouldBe 2
     (filtered should contain).key("Berlin_Test")
-    filtered should not contain key("London_Test")
+    (filtered should contain).key("London_Test")
   }
 }

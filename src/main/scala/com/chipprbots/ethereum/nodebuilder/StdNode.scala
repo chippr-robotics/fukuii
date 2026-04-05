@@ -70,16 +70,14 @@ abstract class BaseNode extends Node {
   }
 
   private[this] def startMetricsClient(): Unit = {
-    val rootConfig = com.typesafe.config.ConfigFactory.load()
-    val fukuiiConfig = rootConfig.getConfig("fukuii")
-    val metricsConfig = MetricsConfig(fukuiiConfig)
-    Metrics.configure(metricsConfig) match {
+    val metricsConfig = MetricsConfig(instanceConfig.config)
+    Metrics.configure(metricsConfig, instanceConfig.instanceId) match {
       case Success(_) =>
         log.info("Metrics started")
 
         if (metricsConfig.enabled) {
           val snapSyncEnabled =
-            Try(fukuiiConfig.getConfig("sync").getBoolean("do-snap-sync")).getOrElse(false)
+            Try(instanceConfig.config.getConfig("sync").getBoolean("do-snap-sync")).getOrElse(false)
 
           if (snapSyncEnabled) {
             // Ensure app_snapsync_* series exist even before SNAP sync starts.
@@ -152,7 +150,7 @@ abstract class BaseNode extends Node {
           storagesInstance.storages.blockHeadersStorage,
           shutdown
         ),
-        "PeriodicDBConsistencyCheck"
+        s"PeriodicDBConsistencyCheck_${instanceConfig.instanceId}"
       )
 
   private[this] def startTuiUpdater(): Unit = {
@@ -218,4 +216,9 @@ abstract class BaseNode extends Node {
   }
 }
 
-class StdNode extends BaseNode with StdMiningBuilder
+class StdNode(
+    _instanceConfig: com.chipprbots.ethereum.utils.InstanceConfig = com.chipprbots.ethereum.utils.Config
+) extends BaseNode
+    with StdMiningBuilder {
+  override lazy val instanceConfig: com.chipprbots.ethereum.utils.InstanceConfig = _instanceConfig
+}

@@ -118,7 +118,8 @@ case class EthNodeStatus64ExchangeState(
     // To align with core-geth: Use actual bestBlockNumber for ForkId calculation.
     val forkIdBlockNumber = bestBlockNumber
     // Use system time when at genesis to correctly advertise post-merge fork status
-    val forkIdTimestamp = if (bestBlockHeader.unixTimestamp == 0L) System.currentTimeMillis() / 1000 else bestBlockHeader.unixTimestamp
+    val forkIdTimestamp =
+      if (bestBlockHeader.unixTimestamp == 0L) System.currentTimeMillis() / 1000 else bestBlockHeader.unixTimestamp
     val forkId = ForkId.create(genesisHash, blockchainConfig)(forkIdBlockNumber, forkIdTimestamp)
 
     val status = ETH64.Status(

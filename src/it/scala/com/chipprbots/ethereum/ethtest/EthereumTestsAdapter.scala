@@ -221,9 +221,13 @@ case class TestTransaction(
     v: String,
     r: String,
     s: String,
-    txType: Option[String] = None, // "0x01" for EIP-2930, "0x02" for EIP-1559, etc.
+    txType: Option[String] = None, // "0x01" for EIP-2930, "0x02" for EIP-1559, "0x03" for blob
     chainId: Option[String] = None, // Chain ID for typed transactions
-    accessList: Option[List[TestAccessListItem]] = None // Access list for EIP-2930+
+    accessList: Option[List[TestAccessListItem]] = None, // Access list for EIP-2930+
+    maxPriorityFeePerGas: Option[String] = None, // EIP-1559
+    maxFeePerGas: Option[String] = None, // EIP-1559
+    maxFeePerBlobGas: Option[String] = None, // EIP-4844
+    blobVersionedHashes: Option[List[String]] = None // EIP-4844
 )
 
 /** Access list item from ethereum/tests */
@@ -256,6 +260,27 @@ object TestTransaction {
       txType <- cursor.downField("type").as[Option[String]]
       chainId <- cursor.downField("chainId").as[Option[String]]
       accessList <- cursor.downField("accessList").as[Option[List[TestAccessListItem]]]
-    } yield TestTransaction(data, gasLimit, gasPrice, nonce, to, value, v, r, s, txType, chainId, accessList)
+      maxPriorityFeePerGas <- cursor.downField("maxPriorityFeePerGas").as[Option[String]]
+      maxFeePerGas <- cursor.downField("maxFeePerGas").as[Option[String]]
+      maxFeePerBlobGas <- cursor.downField("maxFeePerBlobGas").as[Option[String]]
+      blobVersionedHashes <- cursor.downField("blobVersionedHashes").as[Option[List[String]]]
+    } yield TestTransaction(
+      data,
+      gasLimit,
+      gasPrice,
+      nonce,
+      to,
+      value,
+      v,
+      r,
+      s,
+      txType,
+      chainId,
+      accessList,
+      maxPriorityFeePerGas,
+      maxFeePerGas,
+      maxFeePerBlobGas,
+      blobVersionedHashes
+    )
   }
 }

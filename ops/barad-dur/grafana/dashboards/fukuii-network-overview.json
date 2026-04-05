@@ -1,0 +1,192 @@
+{
+  "annotations": { "list": [] },
+  "description": "Fukuii Multi-Network Overview — all chain instances at a glance",
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "options": {
+        "content": "<div style=\"text-align:center;padding:8px 0\">\n<span style=\"font-size:28px;letter-spacing:4px;font-weight:200;color:#b4a7d6\">FUKUII</span>\n<span style=\"font-size:28px;letter-spacing:4px;font-weight:200;color:#93c47d\"> MULTI-NETWORK</span>\n<span style=\"font-size:28px;letter-spacing:4px;font-weight:200;color:#6fa8dc\"> OVERVIEW</span>\n<br/><span style=\"font-size:12px;color:#999;letter-spacing:2px\">one runtime, multiple chains</span>\n</div>",
+        "mode": "html"
+      },
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Current block number per network",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#6fa8dc", "value": null }, { "color": "#93c47d", "value": 1 }] },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 3 },
+      "id": 1,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Sepolia Block",
+      "type": "stat",
+      "targets": [{ "expr": "app_engine_latest_payload_block{instance=~\".*sepolia.*\"}", "legendFormat": "sepolia", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Current block number for Mordor",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#b4a7d6", "value": null }, { "color": "#93c47d", "value": 1 }] }
+        }
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 3 },
+      "id": 2,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Mordor Block",
+      "type": "stat",
+      "targets": [{ "expr": "app_regularsync_block_current_number_gauge{instance=~\".*mordor.*\"}", "legendFormat": "mordor", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Engine API payloads received (Sepolia)",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "#93c47d" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#93c47d", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 7, "w": 4, "x": 16, "y": 3 },
+      "id": 3,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Engine Payloads",
+      "type": "stat",
+      "targets": [{ "expr": "app_engine_newpayload_total{instance=~\".*sepolia.*\"}", "legendFormat": "payloads", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Fork choice updates from CL",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "#6fa8dc" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#6fa8dc", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 7, "w": 4, "x": 20, "y": 3 },
+      "id": 4,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Fork Choice",
+      "type": "stat",
+      "targets": [{ "expr": "app_engine_forkchoice_total{instance=~\".*sepolia.*\"}", "legendFormat": "updates", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Block height over time — all networks",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 15, "gradientMode": "scheme", "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never", "spanNulls": true }
+        }
+      },
+      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 10 },
+      "id": 10,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Block Height — All Networks",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "app_engine_latest_payload_block{instance=~\".*sepolia.*\"}", "legendFormat": "Sepolia (ETH)", "refId": "A" },
+        { "expr": "app_regularsync_block_current_number_gauge{instance=~\".*mordor.*\"}", "legendFormat": "Mordor (ETC)", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Engine API call rates",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "bars", "fillOpacity": 60, "gradientMode": "hue", "lineWidth": 0, "stacking": { "mode": "normal" } },
+          "unit": "ops"
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 10 },
+      "id": 11,
+      "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" } },
+      "title": "Engine API Activity",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(app_engine_newpayload_total{instance=~\".*sepolia.*\"}[1m])", "legendFormat": "newPayload/m", "refId": "A" },
+        { "expr": "rate(app_engine_forkchoice_total{instance=~\".*sepolia.*\"}[1m])", "legendFormat": "forkchoice/m", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "JVM heap memory",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 30, "gradientMode": "scheme", "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true },
+          "unit": "bytes"
+        }
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 18 },
+      "id": 20,
+      "title": "JVM Heap Memory",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "jvm_memory_bytes_used{area=\"heap\",instance=~\".*fukuii.*\"}", "legendFormat": "{{instance}} used", "refId": "A" },
+        { "expr": "jvm_memory_bytes_max{area=\"heap\",instance=~\".*fukuii.*\"}", "legendFormat": "{{instance}} max", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "JVM threads",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "#b4a7d6" },
+          "custom": { "drawStyle": "line", "fillOpacity": 15, "lineInterpolation": "smooth", "lineWidth": 1 }
+        }
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 18 },
+      "id": 21,
+      "title": "JVM Threads",
+      "type": "timeseries",
+      "targets": [{ "expr": "jvm_threads_current{instance=~\".*fukuii.*\"}", "legendFormat": "{{instance}}", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Process CPU usage",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 20, "lineInterpolation": "smooth", "lineWidth": 1 },
+          "unit": "percentunit"
+        }
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 18 },
+      "id": 22,
+      "title": "CPU Usage",
+      "type": "timeseries",
+      "targets": [{ "expr": "rate(process_cpu_seconds_total{instance=~\".*fukuii.*\"}[1m])", "legendFormat": "{{instance}}", "refId": "A" }]
+    },
+    {
+      "gridPos": { "h": 2, "w": 24, "x": 0, "y": 25 },
+      "id": 99,
+      "options": {
+        "content": "<div style=\"text-align:center;padding:4px 0\"><span style=\"font-size:10px;color:#666;letter-spacing:3px\">FUKUII MULTI-NETWORK</span> <span style=\"font-size:10px;color:#555\">|</span> <span style=\"font-size:10px;color:#666\">Mordor (ETC) + Sepolia (ETH)</span> <span style=\"font-size:10px;color:#555\">|</span> <span style=\"font-size:10px;color:#666\">Chippr Robotics</span></div>",
+        "mode": "html"
+      },
+      "transparent": true,
+      "type": "text"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 37,
+  "style": "dark",
+  "tags": ["fukuii", "multi-network", "overview"],
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "Fukuii Multi-Network Overview",
+  "uid": "fukuii-multi-overview",
+  "version": 1
+}

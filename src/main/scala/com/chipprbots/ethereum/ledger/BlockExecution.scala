@@ -136,10 +136,10 @@ class BlockExecution(
 
   /** EIP-4788: Store the parent beacon block root in the beacon root system contract.
     *
-    * Post-Cancun, the parentBeaconBlockRoot from the CL is stored at the beacon root contract
-    * address (0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02) before executing transactions.
-    * The contract stores: timestamp → root at slot (timestamp % HISTORY_BUFFER_LENGTH),
-    * and root at slot (timestamp % HISTORY_BUFFER_LENGTH + HISTORY_BUFFER_LENGTH).
+    * Post-Cancun, the parentBeaconBlockRoot from the CL is stored at the beacon root contract address
+    * (0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02) before executing transactions. The contract stores: timestamp → root
+    * at slot (timestamp % HISTORY_BUFFER_LENGTH), and root at slot (timestamp % HISTORY_BUFFER_LENGTH +
+    * HISTORY_BUFFER_LENGTH).
     */
   private def applyEip4788(
       block: Block,

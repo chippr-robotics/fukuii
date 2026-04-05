@@ -39,20 +39,12 @@ scrape_configs:
           network: 'etc-mainnet'
           environment: 'production'
 
-  # Fukuii secondary instance metrics (Mordor testnet)
-  - job_name: 'fukuii-secondary'
-    scrape_interval: 15s
-    scrape_timeout: 10s
-    metrics_path: '/metrics'
-    static_configs:
-      - targets: ['fukuii-secondary:9095']
-        labels:
-          instance: 'fukuii-secondary'
-          role: 'secondary'
-          network: 'mordor'
-          environment: 'production'
+  # Fukuii secondary instance metrics (Mordor testnet) — DISABLED, using multi-network instead
+  # - job_name: 'fukuii-secondary'
+  #   static_configs:
+  #     - targets: ['fukuii-secondary:9095']
 
-  # Fukuii Sepolia instance metrics (Engine API validation)
+  # Fukuii Multi-Network (Sepolia + Mordor in one process)
   - job_name: 'fukuii-sepolia'
     scrape_interval: 15s
     scrape_timeout: 10s
@@ -63,6 +55,18 @@ scrape_configs:
           instance: 'fukuii-sepolia'
           role: 'sepolia'
           network: 'sepolia'
+          environment: 'staging'
+
+  - job_name: 'fukuii-mordor-multi'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['172.21.0.1:9096']
+        labels:
+          instance: 'fukuii-mordor-multi'
+          role: 'mordor'
+          network: 'mordor'
           environment: 'staging'
 
   # Kong API Gateway metrics

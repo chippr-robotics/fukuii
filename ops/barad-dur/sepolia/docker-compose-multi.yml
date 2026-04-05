@@ -1,0 +1,84 @@
+# Multi-Network Fukuii: Mordor + Sepolia in one process
+# Memory-conscious: 4GB heap shared across both instances
+#
+# Usage:
+#   docker compose -f docker-compose-multi.yml up -d
+#   docker compose -f docker-compose-multi.yml logs -f fukuii-multi
+
+networks:
+  sepolia-network:
+    driver: bridge
+
+services:
+  # Fukuii Multi-Network Runtime (Mordor + Sepolia in-process)
+  fukuii-multi:
+    image: chipprbots/fukuii:latest
+    container_name: fukuii-multi
+    restart: unless-stopped
+    ports:
+      # Sepolia ports
+      - "8555:8545"       # Sepolia JSON-RPC
+      - "8561:8551"       # Sepolia Engine API
+      - "30306:30306/tcp" # Sepolia P2P
+      - "30306:30306/udp" # Sepolia Discovery
+      - "9097:9095"       # Sepolia Metrics
+      # Mordor ports
+      - "8547:8547"       # Mordor JSON-RPC
+      - "30304:30304/tcp" # Mordor P2P
+      - "30304:30304/udp" # Mordor Discovery
+      - "9096:9096"       # Mordor Metrics
+    volumes:
+      - /chipprbots/blockchain/chain-data/etc/fukuii-sepolia:/app/data/sepolia
+      - /chipprbots/blockchain/chain-data/etc/fukuii-mordor-multi:/app/data/mordor
+      - ./fukuii-conf:/app/conf:ro
+      - ./jwt.hex:/app/jwt/jwt.hex:ro
+    command:
+      - "-Xmx4g"
+      - "-Xms1g"
+      - "-Xss10M"
+      - "-XX:+UseG1GC"
+      - "-XX:MaxGCPauseMillis=200"
+      - "-Dconfig.file=/app/conf/multi-network.conf"
+      - "-jar"
+      - "/app/fukuii/lib/fukuii-assembly-0.1.240.jar"
+      - "runtime"
+    networks:
+      - sepolia-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8545/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
+
+  # Lighthouse CL for Sepolia
+  lighthouse:
+    image: sigp/lighthouse:latest
+    container_name: lighthouse-sepolia
+    restart: unless-stopped
+    ports:
+      - "5052:5052"
+      - "9100:9000/tcp"
+      - "9100:9000/udp"
+    volumes:
+      - /chipprbots/blockchain/chain-data/etc/lighthouse-sepolia:/data
+      - ./jwt.hex:/jwt/jwt.hex:ro
+    command:
+      - "lighthouse"
+      - "bn"
+      - "--network=sepolia"
+      - "--execution-endpoint=http://fukuii-multi:8551"
+      - "--execution-jwt=/jwt/jwt.hex"
+      - "--datadir=/data"
+      - "--http"
+      - "--http-address=0.0.0.0"
+      - "--http-port=5052"
+      - "--http-allow-origin=*"
+      - "--port=9000"
+      - "--target-peers=50"
+      - "--checkpoint-sync-url=https://sepolia.beaconstate.info"
+    depends_on:
+      fukuii-multi:
+        condition: service_healthy
+    networks:
+      - sepolia-network

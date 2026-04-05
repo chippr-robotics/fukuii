@@ -156,7 +156,7 @@ class StorageRecoveryActor(
               checkedCount += 1
               // Check if the storage root node exists in MptStorage
               try
-              mptStorage.get(account.storageRoot.toArray)
+                mptStorage.get(account.storageRoot.toArray)
               // Storage root exists — may be incomplete deeper, but the root is present
               catch {
                 case _: MerklePatriciaTrie.MPTException =>

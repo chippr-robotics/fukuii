@@ -114,13 +114,18 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
       override val blockCacheSize: Long = 33554432
     }
 
-  sealed trait LocalPruningConfigBuilder extends PruningConfigBuilder {
+  sealed trait LocalPruningConfigBuilder
+      extends PruningConfigBuilder
+      with com.chipprbots.ethereum.TestInstanceConfigProvider {
     override val pruningMode: PruningMode = ArchivePruning
   }
 
   lazy val nodeStatusHolder = new AtomicReference(nodeStatus)
   lazy val storagesInstance: RocksDbDataSourceComponent with LocalPruningConfigBuilder with Storages.DefaultStorages =
-    new RocksDbDataSourceComponent with LocalPruningConfigBuilder with Storages.DefaultStorages {
+    new RocksDbDataSourceComponent
+      with LocalPruningConfigBuilder
+      with Storages.DefaultStorages
+      with com.chipprbots.ethereum.TestInstanceConfigProvider {
       override lazy val dataSource: RocksDbDataSource =
         RocksDbDataSource(getRockDbTestConfig(tempDir.toAbsolutePath.toString), Namespaces.nsSeq)
     }

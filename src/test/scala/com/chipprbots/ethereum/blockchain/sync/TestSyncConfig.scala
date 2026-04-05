@@ -5,7 +5,7 @@ import scala.concurrent.duration._
 import com.chipprbots.ethereum.nodebuilder.SyncConfigBuilder
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
-trait TestSyncConfig extends SyncConfigBuilder {
+trait TestSyncConfig extends SyncConfigBuilder with com.chipprbots.ethereum.TestInstanceConfigProvider {
   def defaultSyncConfig: SyncConfig = SyncConfig(
     doFastSync = false,
     doSnapSync = false,

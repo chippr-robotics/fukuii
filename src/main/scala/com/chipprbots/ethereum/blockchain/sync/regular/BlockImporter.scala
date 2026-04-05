@@ -721,7 +721,12 @@ class BlockImporter(
               }
           catch {
             case ex: Exception =>
-              log.warning("Failed to check contract code for {} at block {}: {}", address, parentBlockNumber, ex.getMessage)
+              log.warning(
+                "Failed to check contract code for {} at block {}: {}",
+                address,
+                parentBlockNumber,
+                ex.getMessage
+              )
               None
           }
         }

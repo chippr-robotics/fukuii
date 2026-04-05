@@ -7,6 +7,7 @@ This directory contains architectural documentation for the Fukuii Ethereum Clas
 ### Architecture Overview
 - **[Architecture Overview](architecture-overview.md)** - High-level system architecture and component interactions
 - **[Architecture Diagrams](ARCHITECTURE_DIAGRAMS.md)** - C4 architecture diagrams and visual representations
+- **[Pluggable Consensus Vision](pluggable-consensus-vision.md)** - Three-layer architecture for multi-network support with Orbita sidechains
 
 ### User Interfaces
 - **[Console UI](console-ui.md)** - Console user interface design and implementation

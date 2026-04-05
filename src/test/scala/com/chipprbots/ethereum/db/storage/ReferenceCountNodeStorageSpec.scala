@@ -15,7 +15,7 @@ import com.chipprbots.ethereum.db.cache.MapCache
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.mpt.NodesKeyValueStorage
 import com.chipprbots.ethereum.testing.Tags._
-import com.chipprbots.ethereum.utils.Config.NodeCacheConfig
+import com.chipprbots.ethereum.utils.NodeCacheConfig
 
 class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers {
 

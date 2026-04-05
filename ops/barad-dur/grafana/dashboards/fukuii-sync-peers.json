@@ -1,0 +1,148 @@
+{
+  "annotations": { "list": [] },
+  "description": "Fukuii Sync & Peers — network health and sync progress across all instances",
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "options": {
+        "content": "<div style=\"text-align:center;padding:8px 0\"><span style=\"font-size:24px;letter-spacing:3px;font-weight:200;color:#93c47d\">SYNC</span> <span style=\"font-size:24px;letter-spacing:3px;font-weight:200;color:#6fa8dc\">&</span> <span style=\"font-size:24px;letter-spacing:3px;font-weight:200;color:#b4a7d6\">PEERS</span></div>",
+        "mode": "html"
+      },
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Outgoing handshaked peers",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#e06666", "value": null }, { "color": "#f6b26b", "value": 3 }, { "color": "#93c47d", "value": 10 }] }
+        }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 3 },
+      "id": 1,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Outgoing Peers",
+      "type": "stat",
+      "targets": [{ "expr": "app_network_peers_outgoing_handshaked_gauge{instance=~\".*fukuii.*\"}", "legendFormat": "{{instance}}", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Incoming handshaked peers",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#e06666", "value": null }, { "color": "#f6b26b", "value": 1 }, { "color": "#93c47d", "value": 5 }] }
+        }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 3 },
+      "id": 2,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Incoming Peers",
+      "type": "stat",
+      "targets": [{ "expr": "app_network_peers_incoming_handshaked_gauge{instance=~\".*fukuii.*\"}", "legendFormat": "{{instance}}", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Discovered peers in DHT",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "#6fa8dc" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#6fa8dc", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 3 },
+      "id": 3,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Discovered Peers",
+      "type": "stat",
+      "targets": [{ "expr": "app_network_discovery_foundPeers_gauge{instance=~\".*fukuii.*\"}", "legendFormat": "{{instance}}", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Blacklisted peers",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "#e06666" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#93c47d", "value": null }, { "color": "#e06666", "value": 10 }] }
+        }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 3 },
+      "id": 4,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Blacklisted",
+      "type": "stat",
+      "targets": [{ "expr": "app_network_peers_blacklisted_gauge{instance=~\".*fukuii.*\"}", "legendFormat": "{{instance}}", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Peer count over time",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 20, "gradientMode": "scheme", "lineInterpolation": "smooth", "lineWidth": 2, "spanNulls": true }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "id": 10,
+      "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Peer Count Over Time",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "app_network_peers_outgoing_handshaked_gauge{instance=~\".*fukuii.*\"}", "legendFormat": "{{instance}} outgoing", "refId": "A" },
+        { "expr": "app_network_peers_incoming_handshaked_gauge{instance=~\".*fukuii.*\"}", "legendFormat": "{{instance}} incoming", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Network message rates",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1 },
+          "unit": "ops"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "id": 11,
+      "title": "Message Rates",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(app_network_messages_sent_counter_total{instance=~\".*fukuii.*\"}[1m])", "legendFormat": "{{instance}} sent/m", "refId": "A" },
+        { "expr": "rate(app_network_messages_received_counter_total{instance=~\".*fukuii.*\"}[1m])", "legendFormat": "{{instance}} recv/m", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Blocks imported over time",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 20, "gradientMode": "scheme", "lineInterpolation": "smooth", "lineWidth": 2 }
+        }
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 17 },
+      "id": 20,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Block Height — All Networks",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "app_regularsync_block_current_number_gauge{instance=~\".*fukuii.*\"}", "legendFormat": "{{instance}} block", "refId": "A" },
+        { "expr": "app_engine_latest_payload_block{instance=~\".*fukuii.*\"}", "legendFormat": "{{instance}} engine block", "refId": "B" }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 37,
+  "style": "dark",
+  "tags": ["fukuii", "sync", "peers", "network"],
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "Fukuii Sync & Peers",
+  "uid": "fukuii-sync-peers",
+  "version": 1
+}

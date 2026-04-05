@@ -10,7 +10,11 @@ import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
-class BaseFeeCalculatorSpec extends AnyFlatSpec with Matchers with BlockchainConfigBuilder {
+class BaseFeeCalculatorSpec
+    extends AnyFlatSpec
+    with Matchers
+    with BlockchainConfigBuilder
+    with com.chipprbots.ethereum.TestInstanceConfigProvider {
 
   val olympiaBlock: BigInt = 10
 
