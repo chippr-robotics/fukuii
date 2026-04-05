@@ -858,6 +858,24 @@ Research into MEV (Flashbots, CoW Protocol), decentralized RPC protocols (DRPC, 
 - **Related:** L-024 (worker auto-scaling) also mitigates by reducing per-peer load.
 - **Observed in:** ETC mainnet attempt 4 (2026-03-30). 1,643 account + 3,521 storage + 2,958 bytecode timeouts.
 
+#### L-027: Clean up internal bug-reference log tags in TrieNodeHealingCoordinator ✅ DONE
+
+- **File:** `src/main/scala/.../blockchain/sync/snap/actors/TrieNodeHealingCoordinator.scala`
+- **Status:** ✅ DONE — `[HW1-BOOT]` → `[HEAL]` and `[HW1-FEED]` → `[HEAL]` with operator-friendly messages.
+- **Introduced in:** commit `8dbad07cb` (BUG-HW1 fix)
+
+#### L-028: Remove post-healing trie walk once proof seeding + self-feeding validated
+
+- **Files:** `SNAPSyncController.scala` (`StateValidator`, `startTrieWalk`, `findMissingNodesWithPaths`)
+- **Priority:** Low | **Risk:** Low (audit/research)
+- **Status:** Deferred — requires proof seeding with path tracking first (see L-028b below)
+- **Description:** Long-term, consider removing the full trie walk entirely once proof-based seeding +
+  `discoverMissingChildren` self-feeding is validated as comprehensive over multiple ETC mainnet syncs
+  (aligning fully with core-geth/Besu). The walk would remain as an opt-in audit mode.
+  Prerequisite: `MerkleProofVerifier.traversePath()` must collect (compact-path, hash) pairs rather than
+  hashes only, so proof-discovered nodes can be queued via `QueueMissingNodes` with proper pathsets.
+  The current implementation collects hashes only — the flush is deferred and logged as `[PROOF-SEED]`.
+
 #### L-026: Aggressive peer discovery when snap peer count is low — RESEARCH DONE, DEFERRED
 
 - **Files:** `src/main/scala/.../network/PeerManagerActor.scala`, `src/main/scala/.../network/discovery/`

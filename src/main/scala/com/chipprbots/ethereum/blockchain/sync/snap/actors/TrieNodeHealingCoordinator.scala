@@ -226,8 +226,8 @@ class TrieNodeHealingCoordinator(
       tryRedispatchPendingTasks()
       if (pendingTasks.isEmpty)
         log.info(
-          s"[HW1-BOOT] All ${nodes.size} resumed nodes already confirmed present in trie DB " +
-            s"(healed in prior session) — no network requests needed, signalling trie walk"
+          s"[HEAL] All ${nodes.size} resumed nodes already present in trie DB — " +
+            s"no network requests needed, proceeding to trie walk"
         )
       self ! HealingCheckCompletion
 
@@ -724,13 +724,13 @@ class TrieNodeHealingCoordinator(
         childrenDiscoveredTotal += newEntries.size
         if (childrenDiscoveredTotal % 100 == 0 || childrenDiscoveredTotal <= 20)
           log.info(
-            s"[HW1-FEED] Missing trie children queued: $childrenDiscoveredTotal total " +
+            s"[HEAL] Missing trie children queued: $childrenDiscoveredTotal total " +
               s"(+${newEntries.size} from this node, pending: ${pendingTasks.size})"
           )
       }
     } catch {
       case NonFatal(e) =>
-        log.debug(s"[HW1-FEED] Cannot decode healed node for child discovery: ${e.getMessage}. Skipping incremental discovery — full trie walk will find these nodes.")
+        log.debug(s"[HEAL] Cannot decode healed node for child discovery: ${e.getMessage}. Skipping incremental discovery — full trie walk will find these nodes.")
         // Non-fatal — healing still works via final validation walk as safety net
     }
   }
