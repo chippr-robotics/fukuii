@@ -31,6 +31,7 @@ services:
       - ${SEPOLIA_DATA_DIR:-/chipprbots/blockchain/chain-data/etc/fukuii-sepolia}:/app/data
       - ./fukuii-conf:/app/conf:ro
       - ./jwt.hex:/app/jwt/jwt.hex:ro
+      - ./fukuii-conf/static-nodes.json:/app/data/static-nodes.json:ro
     command:
       - "-Xmx4g"
       - "-Xms2g"
