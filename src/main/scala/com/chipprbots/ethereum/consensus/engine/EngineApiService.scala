@@ -10,6 +10,7 @@ import com.chipprbots.ethereum.consensus.engine.PayloadStatus._
 import com.chipprbots.ethereum.consensus.validators.std.MptListValidator
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain._
+import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields._
 import com.chipprbots.ethereum.domain.Withdrawal._
 import com.chipprbots.ethereum.ledger.BlockExecution
@@ -110,7 +111,10 @@ class EngineApiService(
         case None =>
           // Optimistic import: store block without execution.
           // Parent unknown or state unavailable — trust CL consensus.
-          blockchainWriter.storeBlock(block).commit()
+          // Store block + chain weight (post-merge TD=0) so P2P handshake can look up best block weight.
+          blockchainWriter.storeBlock(block)
+            .and(blockchainWriter.storeChainWeight(block.header.hash, ChainWeight.totalDifficultyOnly(0)))
+            .commit()
           blockchainWriter.saveBestKnownBlocks(block.header.hash, block.header.number)
           System.err.println(
             s"[ENGINE-API] newPayload #${payload.blockNumber}: OPTIMISTIC IMPORT " +
