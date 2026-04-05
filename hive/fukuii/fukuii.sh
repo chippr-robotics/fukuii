@@ -81,7 +81,7 @@ fi
 
 FLAGS=""
 FLAGS="$FLAGS -Dfukuii.datadir=$DATADIR"
-FLAGS="$FLAGS -Dfukuii.blockchains.network=test"
+FLAGS="$FLAGS -Dfukuii.blockchains.network=mordor"
 
 # Network config
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.enabled=true"
@@ -150,4 +150,4 @@ exec java \
     -XX:+UseG1GC \
     $FLAGS \
     -jar /app/fukuii/lib/fukuii-assembly-0.1.240.jar \
-    test
+    mordor
