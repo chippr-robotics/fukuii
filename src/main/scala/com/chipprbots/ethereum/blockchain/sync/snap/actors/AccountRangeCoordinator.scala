@@ -525,8 +525,8 @@ class AccountRangeCoordinator(
         if (newLimit > 0) tryRedispatchPendingTasks()
       }
 
-    case TaskComplete(requestId, result) =>
-      handleTaskComplete(requestId, result)
+    case TaskComplete(requestId, result, proofMissingNodes) =>
+      handleTaskComplete(requestId, result, proofMissingNodes)
 
     case TaskFailed(requestId, reason) =>
       handleTaskFailed(requestId, reason)
@@ -718,7 +718,8 @@ class AccountRangeCoordinator(
 
   private def handleTaskComplete(
       requestId: BigInt,
-      result: Either[String, (Int, Seq[(ByteString, Account)], Seq[ByteString])]
+      result: Either[String, (Int, Seq[(ByteString, Account)], Seq[ByteString])],
+      proofMissingNodes: Set[ByteString] = Set.empty
   ): Unit =
     activeTasks.remove(requestId).foreach { case (task, worker, peer) =>
       markWorkerIdle(worker)
@@ -735,6 +736,10 @@ class AccountRangeCoordinator(
           // Reset failure counters — peer is responsive
           peerConsecutiveTimeouts.remove(peer.id.value)
           peerEmptyProofFailures.remove(peer.id.value)
+
+          // Forward proof-discovered interior node hashes to SNAPSyncController for healing pre-seeding
+          if (proofMissingNodes.nonEmpty)
+            snapSyncController ! SNAPSyncController.ProofDiscoveredNodes(proofMissingNodes)
 
           // Reset pivot refresh backoff on receiving real account data
           if (accountCount > 0) {

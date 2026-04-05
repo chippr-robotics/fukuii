@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.blockchain.sync.snap
 
 import org.apache.pekko.util.ByteString
 
+import scala.collection.mutable
+
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.MptTraversals
@@ -27,11 +29,12 @@ import com.chipprbots.ethereum.utils.Logger
   */
 class MerkleProofVerifier(rootHash: ByteString) extends Logger {
 
-  /** Verify an account range response with Merkle proof
+  /** Verify an account range response with Merkle proof.
     *
-    * This method verifies that:
-    *   1. The proof is valid and forms a proper Merkle Patricia Trie path 2. All accounts in the range are present in
-    *      the proof 3. The proof root matches the expected state root
+    * Returns a Set of HashNode hashes encountered during proof traversal that are NOT present in the
+    * local proofMap — these are interior trie nodes referenced by the proof but not provided in the
+    * proof bundle. Callers should forward these to the trie healing coordinator as pre-seeded missing
+    * nodes, eliminating the need to discover them via a full post-healing trie walk.
     *
     * @param accounts
     *   Accounts to verify (hash -> account)
@@ -42,19 +45,19 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
     * @param endHash
     *   Ending hash of the range
     * @return
-    *   Either error message or Unit on success
+    *   Either error message or Set of missing interior node hashes discovered during traversal
     */
   def verifyAccountRange(
       accounts: Seq[(ByteString, Account)],
       proof: Seq[ByteString],
       startHash: ByteString,
       endHash: ByteString
-  ): Either[String, Unit] = {
+  ): Either[String, Set[ByteString]] = {
 
     // For non-empty tries, even an empty account range must come with a proof proving non-existence.
     // The only case where empty proof + empty accounts is valid is an empty trie.
     if (proof.isEmpty && accounts.isEmpty) {
-      if (rootHash == ByteString(MerklePatriciaTrie.EmptyRootHash)) return Right(())
+      if (rootHash == ByteString(MerklePatriciaTrie.EmptyRootHash)) return Right(Set.empty)
       return Left("Missing proof for empty account range")
     }
 
@@ -70,9 +73,13 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
       // Build proof map: hash -> node
       val proofMap = buildProofMap(proofNodes)
 
+      // Accumulate HashNode references encountered in proof traversal that are not in proofMap.
+      // These are interior trie nodes the proof references but didn't include — we need to heal them.
+      val missingInteriorNodes = mutable.Set.empty[ByteString]
+
       // Verify each account is in the proof
       val verificationResults = accounts.map { case (accountHash, account) =>
-        verifyAccountInProof(accountHash, account, proofMap) match {
+        verifyAccountInProof(accountHash, account, proofMap, missingInteriorNodes) match {
           case Left(error) =>
             Left(s"Account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString} verification failed: $error")
           case Right(_) => Right(())
@@ -88,7 +95,7 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
       // Verify the proof forms a valid path to the state root
       verifyProofRoot(proofNodes) match {
         case Left(error) => Left(s"Proof root verification failed: $error")
-        case Right(_)    => Right(())
+        case Right(_)    => Right(missingInteriorNodes.toSet)
       }
 
     } catch {
@@ -141,21 +148,11 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
   private def verifyAccountInProof(
       accountHash: ByteString,
       account: Account,
-      proofMap: Map[ByteString, MptNode]
+      proofMap: Map[ByteString, MptNode],
+      missingInteriorNodes: mutable.Set[ByteString]
   ): Either[String, Unit] = {
-
-    // For now, we do a simplified verification:
-    // Just check that we can find a path in the proof nodes
-    // A full implementation would traverse the trie path
-
-    // Convert account hash to nibbles (path in the trie)
     val path = hashToNibbles(accountHash)
-
-    // Start from the root (use stateRoot for account verification)
-    val root = rootHash
-
-    // Traverse the proof following the path
-    traversePath(root, path, proofMap, account)
+    traversePath(rootHash, path, proofMap, account, missingInteriorNodes)
   }
 
   /** Traverse the trie path to find the account
@@ -175,13 +172,15 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
       currentHash: ByteString,
       path: Seq[Int],
       proofMap: Map[ByteString, MptNode],
-      expectedAccount: Account
+      expectedAccount: Account,
+      missingInteriorNodes: mutable.Set[ByteString]
   ): Either[String, Unit] =
     // Look up the node in the proof
     proofMap.get(currentHash) match {
       case None =>
-        // Node not in proof - this is acceptable for partial proofs
-        // The proof only needs to cover the range being verified
+        // Node not in proof — this is acceptable for partial proofs (proof only covers range boundary).
+        // Record the hash as a missing interior node for healing pre-seeding.
+        missingInteriorNodes += currentHash
         Right(())
 
       case Some(leafNode: LeafNode) =>
@@ -201,9 +200,9 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
           val nextIndex = path.head
           branchNode.children.lift(nextIndex) match {
             case Some(nextNode: HashNode) =>
-              traversePath(ByteString(nextNode.hash), path.tail, proofMap, expectedAccount)
+              traversePath(ByteString(nextNode.hash), path.tail, proofMap, expectedAccount, missingInteriorNodes)
             case Some(nextNode) =>
-              traversePath(ByteString(nextNode.hash), path.tail, proofMap, expectedAccount)
+              traversePath(ByteString(nextNode.hash), path.tail, proofMap, expectedAccount, missingInteriorNodes)
             case None =>
               Left(s"No child at index $nextIndex")
           }
@@ -217,9 +216,9 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
         if (path.startsWith(sharedNibbles)) {
           extensionNode.next match {
             case hashNode: HashNode =>
-              traversePath(ByteString(hashNode.hash), path.drop(sharedNibbles.length), proofMap, expectedAccount)
+              traversePath(ByteString(hashNode.hash), path.drop(sharedNibbles.length), proofMap, expectedAccount, missingInteriorNodes)
             case nextNode =>
-              traversePath(ByteString(nextNode.hash), path.drop(sharedNibbles.length), proofMap, expectedAccount)
+              traversePath(ByteString(nextNode.hash), path.drop(sharedNibbles.length), proofMap, expectedAccount, missingInteriorNodes)
           }
         } else {
           Left("Path doesn't match extension node")

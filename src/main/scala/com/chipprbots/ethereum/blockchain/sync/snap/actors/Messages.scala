@@ -28,7 +28,8 @@ object Messages {
   case class PeerAvailable(peer: Peer) extends AccountRangeCoordinatorMessage
   case class TaskComplete(
       requestId: BigInt,
-      result: Either[String, (Int, Seq[(ByteString, com.chipprbots.ethereum.domain.Account)], Seq[ByteString])]
+      result: Either[String, (Int, Seq[(ByteString, com.chipprbots.ethereum.domain.Account)], Seq[ByteString])],
+      proofMissingNodes: Set[ByteString] = Set.empty
   ) extends AccountRangeCoordinatorMessage
   case class TaskFailed(requestId: BigInt, reason: String) extends AccountRangeCoordinatorMessage
   case object GetProgress extends AccountRangeCoordinatorMessage

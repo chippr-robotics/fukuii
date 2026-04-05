@@ -116,9 +116,11 @@ class AccountRangeWorker(
               log.warning(s"AccountRange validation/proof failed for reqId=$reqId range=${task.rangeString}: $error")
               coordinator ! TaskFailed(reqId, error)
 
-            case Right(_) =>
+            case Right(missingInteriorNodes) =>
+              if (missingInteriorNodes.nonEmpty)
+                log.debug(s"[PROOF-SEED] ${missingInteriorNodes.size} interior node hashes discovered from boundary proof for range ${task.rangeString}")
               log.debug(s"Successfully received $accountCount accounts")
-              coordinator ! TaskComplete(reqId, Right((accountCount, response.accounts, response.proof)))
+              coordinator ! TaskComplete(reqId, Right((accountCount, response.accounts, response.proof)), missingInteriorNodes)
           }
 
           // Return to idle state for potential reuse
