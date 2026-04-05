@@ -41,11 +41,7 @@ object MiningConfig extends Logger {
     final val GasLimitTarget = "gas-limit-target"
   }
 
-  final val AllowedProtocols: Set[String] = Set(
-    Protocol.Names.PoW,
-    Protocol.Names.MockedPow,
-    Protocol.Names.RestrictedPoW
-  )
+  final val AllowedProtocols: Set[String] = Protocol.KnownProtocolNames
 
   final val AllowedProtocolsError: String => String = (s: String) =>
     Keys.Mining +

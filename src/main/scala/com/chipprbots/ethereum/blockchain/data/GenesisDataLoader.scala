@@ -170,7 +170,17 @@ class GenesisDataLoader(
     ByteString(storageTrie.getRootHash)
   }
 
-  private def prepareHeader(genesisData: GenesisData, stateMptRootHash: Array[Byte]) =
+  private def prepareHeader(genesisData: GenesisData, stateMptRootHash: Array[Byte])(implicit
+      blockchainConfig: BlockchainConfig
+  ) = {
+    // EIP-1559: If London/Olympia is active at genesis (block 0), include baseFee in the header.
+    // Initial baseFee per EIP-1559 spec is 1 Gwei (10^9 Wei).
+    val extraFields = if (blockchainConfig.forkBlockNumbers.olympiaBlockNumber == 0) {
+      BlockHeader.HeaderExtraFields.HefPostOlympia(baseFee = BigInt("1000000000"))
+    } else {
+      BlockHeader.HeaderExtraFields.HefEmpty
+    }
+
     BlockHeader(
       parentHash = zeros(hashLength),
       ommersHash = ByteString(crypto.kec256(rlp.encode(RLPList()))),
@@ -186,8 +196,10 @@ class GenesisDataLoader(
       unixTimestamp = BigInt(genesisData.timestamp.replace("0x", ""), 16).toLong,
       extraData = genesisData.extraData,
       mixHash = genesisData.mixHash.getOrElse(zeros(hashLength)),
-      nonce = genesisData.nonce
+      nonce = genesisData.nonce,
+      extraFields = extraFields
     )
+  }
 
   private def zeros(length: Int) =
     ByteString(Hex.decode(List.fill(length)("0").mkString))
@@ -220,8 +232,13 @@ object GenesisDataLoader {
 
     def deserializeUint256String(jv: JValue): UInt256 = jv match {
       case JString(s) =>
-        Try(UInt256(BigInt(s))) match {
-          case Failure(_)     => throw new RuntimeException("Cannot parse hex string: " + s)
+        val parsed = if (s.startsWith("0x") || s.startsWith("0X")) {
+          Try(UInt256(BigInt(s.substring(2), 16)))
+        } else {
+          Try(UInt256(BigInt(s)))
+        }
+        parsed match {
+          case Failure(_)     => throw new RuntimeException("Cannot parse numeric string: " + s)
           case Success(value) => value
         }
       case other => throw new RuntimeException("Expected hex string, but got: " + other)

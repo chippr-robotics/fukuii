@@ -220,6 +220,7 @@ object ETH63 {
           case _: LegacyReceipt      => legacyRLPReceipt
           case _: Type01Receipt      => PrefixedRLPEncodable(Transaction.Type01, legacyRLPReceipt)
           case _: Type02Receipt      => PrefixedRLPEncodable(Transaction.Type02, legacyRLPReceipt)
+          case _: Type03Receipt      => PrefixedRLPEncodable(Transaction.Type03, legacyRLPReceipt)
           case _: Type04Receipt      => PrefixedRLPEncodable(Transaction.Type04, legacyRLPReceipt)
           case _: TypedLegacyReceipt => legacyRLPReceipt // Handle typed legacy receipts
         }
@@ -294,6 +295,7 @@ object ETH63 {
 
       def toReceipt: Receipt = rlpEncodeable match {
         case PrefixedRLPEncodable(Transaction.Type04, legacyReceipt) => Type04Receipt(legacyReceipt.toLegacyReceipt)
+        case PrefixedRLPEncodable(Transaction.Type03, legacyReceipt) => Type03Receipt(legacyReceipt.toLegacyReceipt)
         case PrefixedRLPEncodable(Transaction.Type02, legacyReceipt) => Type02Receipt(legacyReceipt.toLegacyReceipt)
         case PrefixedRLPEncodable(Transaction.Type01, legacyReceipt) => Type01Receipt(legacyReceipt.toLegacyReceipt)
         case RLPValue(bytes) if bytes.nonEmpty && bytes.head.isValidTransactionType && bytes.length > 1 =>

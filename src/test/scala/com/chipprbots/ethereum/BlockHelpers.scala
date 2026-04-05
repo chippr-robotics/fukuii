@@ -46,8 +46,11 @@ object BlockHelpers extends SecureRandomBuilder {
     }
 
   def resetHeaderExtraFields(hef: BlockHeader.HeaderExtraFields): BlockHeader.HeaderExtraFields = hef match {
-    case HeaderExtraFields.HefEmpty                => HeaderExtraFields.HefEmpty
-    case HeaderExtraFields.HefPostOlympia(baseFee) => HeaderExtraFields.HefPostOlympia(baseFee)
+    case HeaderExtraFields.HefEmpty                          => HeaderExtraFields.HefEmpty
+    case HeaderExtraFields.HefPostOlympia(baseFee)           => HeaderExtraFields.HefPostOlympia(baseFee)
+    case s: HeaderExtraFields.HefPostShanghai                => s
+    case c: HeaderExtraFields.HefPostCancun                  => c
+    case p: HeaderExtraFields.HefPostPrague                  => p
   }
 
   def generateBlock(parent: Block): Block = {

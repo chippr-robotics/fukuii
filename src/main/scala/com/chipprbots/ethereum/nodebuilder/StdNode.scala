@@ -62,6 +62,8 @@ abstract class BaseNode extends Node {
 
     startJsonRpcIpcServer()
 
+    startEngineApiServer()
+
     startPeriodicDBConsistencyCheck()
 
     startTuiUpdater()
@@ -101,6 +103,12 @@ abstract class BaseNode extends Node {
       log.info("Skipping DB consistency check: SNAP sync stores only pivot block header, not full header chain")
       return
     }
+    // Skip consistency check in Engine API mode — optimistic imports store blocks
+    // at the chain tip without the full header chain from genesis.
+    if (engineApiConfig.enabled) {
+      log.info("Skipping DB consistency check: Engine API mode uses optimistic block import")
+      return
+    }
     StorageConsistencyChecker.checkStorageConsistency(
       storagesInstance.storages.appStateStorage.getBestBlockNumber(),
       storagesInstance.storages.blockNumberMappingStorage,
@@ -128,6 +136,12 @@ abstract class BaseNode extends Node {
 
   private[this] def startJsonRpcIpcServer(): Unit =
     if (jsonRpcConfig.ipcServerConfig.enabled) jsonRpcIpcServer.run()
+
+  private[this] def startEngineApiServer(): Unit =
+    maybeEngineApiServer.foreach { server =>
+      server.start()
+      log.info(s"Engine API server started on ${engineApiConfig.interface}:${engineApiConfig.port}")
+    }
 
   def startPeriodicDBConsistencyCheck(): Unit =
     if (Config.Db.periodicConsistencyCheck)

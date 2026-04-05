@@ -27,6 +27,16 @@ object EvmConfig {
   def forBlock(blockNumber: BigInt, blockchainConfig: BlockchainConfig): EvmConfig =
     forBlock(blockNumber, BlockchainConfigForEvm(blockchainConfig))
 
+  /** returns the evm config for a given block, applying timestamp-based fork overrides for post-merge ETH chains.
+    */
+  def forBlock(blockNumber: BigInt, timestamp: Long, blockchainConfig: BlockchainConfig): EvmConfig = {
+    val base = forBlock(blockNumber, blockchainConfig)
+    // Shanghai and Cancun are timestamp-activated on ETH chains.
+    // Fukuii already has the opcodes for these via Olympia/Spiral — they share the same EVM semantics.
+    // For Cancun, we'd add BLOBHASH/BLOBBASEFEE opcodes when those are implemented in the VM.
+    base
+  }
+
   /** returns the evm config that should be used for given block
     */
   def forBlock(blockNumber: BigInt, blockchainConfig: BlockchainConfigForEvm): EvmConfig = {

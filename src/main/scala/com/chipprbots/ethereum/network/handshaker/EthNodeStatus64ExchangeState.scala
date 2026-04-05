@@ -36,7 +36,12 @@ case class EthNodeStatus64ExchangeState(
 
     val localBestBlock = blockchainReader.getBestBlockNumber()
     val localGenesisHash = blockchainReader.genesisHeader.hash
-    val localForkId = ForkId.create(localGenesisHash, blockchainConfig)(localBestBlock)
+    // Use current system time if best block is genesis (timestamp 0) — this happens at startup
+    // before Engine API imports any blocks. Without this, ForkID incorrectly reports pre-Shanghai
+    // and all post-merge peers reject us.
+    val storedTimestamp = blockchainReader.getBlockHeaderByNumber(localBestBlock).map(_.unixTimestamp).getOrElse(0L)
+    val localBestTimestamp = if (storedTimestamp == 0L) System.currentTimeMillis() / 1000 else storedTimestamp
+    val localForkId = ForkId.create(localGenesisHash, blockchainConfig)(localBestBlock, localBestTimestamp)
 
     log.info(
       "STATUS_EXCHANGE: Local state - bestBlock={}, genesisHash={}, localForkId={}",
@@ -112,7 +117,9 @@ case class EthNodeStatus64ExchangeState(
     //
     // To align with core-geth: Use actual bestBlockNumber for ForkId calculation.
     val forkIdBlockNumber = bestBlockNumber
-    val forkId = ForkId.create(genesisHash, blockchainConfig)(forkIdBlockNumber)
+    // Use system time when at genesis to correctly advertise post-merge fork status
+    val forkIdTimestamp = if (bestBlockHeader.unixTimestamp == 0L) System.currentTimeMillis() / 1000 else bestBlockHeader.unixTimestamp
+    val forkId = ForkId.create(genesisHash, blockchainConfig)(forkIdBlockNumber, forkIdTimestamp)
 
     val status = ETH64.Status(
       protocolVersion = negotiatedCapability.version,

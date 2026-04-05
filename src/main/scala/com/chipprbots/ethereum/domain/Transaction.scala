@@ -24,6 +24,7 @@ sealed trait Transaction extends Product with Serializable {
 object Transaction {
   val Type01: Byte = 1.toByte
   val Type02: Byte = 2.toByte
+  val Type03: Byte = 3.toByte
   val Type04: Byte = 4.toByte
 
   val MinAllowedType: Byte = 0
@@ -36,6 +37,7 @@ object Transaction {
     case tx: LegacyTransaction         => tx.copy(gasLimit = gl)
     case tx: TransactionWithAccessList => tx.copy(gasLimit = gl)
     case tx: TransactionWithDynamicFee => tx.copy(gasLimit = gl)
+    case tx: BlobTransaction           => tx.copy(gasLimit = gl)
     case tx: SetCodeTransaction        => tx.copy(gasLimit = gl)
   }
 
@@ -43,6 +45,7 @@ object Transaction {
     tx match {
       case tx: TransactionWithDynamicFee => tx.accessList
       case tx: TransactionWithAccessList => tx.accessList
+      case tx: BlobTransaction           => tx.accessList
       case tx: SetCodeTransaction        => tx.accessList
       case _: LegacyTransaction          => Nil
     }
@@ -53,6 +56,9 @@ object Transaction {
   def effectiveGasPrice(tx: Transaction, baseFee: Option[BigInt]): BigInt =
     tx match {
       case tx: TransactionWithDynamicFee =>
+        val base = baseFee.getOrElse(BigInt(0))
+        tx.maxFeePerGas.min(base + tx.maxPriorityFeePerGas)
+      case tx: BlobTransaction =>
         val base = baseFee.getOrElse(BigInt(0))
         tx.maxFeePerGas.min(base + tx.maxPriorityFeePerGas)
       case tx: SetCodeTransaction =>
@@ -201,6 +207,69 @@ case class TransactionWithDynamicFee(
 }
 
 case class AccessListItem(address: Address, storageKeys: List[BigInt]) // bytes32
+
+/** EIP-4844 Type-3 blob transaction. Introduces maxFeePerBlobGas and blobVersionedHashes for blob-carrying
+  * transactions. Must have a To address (no contract creation). gasPrice is defined as maxFeePerGas for upfront cost
+  * calculation compatibility.
+  */
+case class BlobTransaction(
+    chainId: BigInt,
+    nonce: BigInt,
+    maxPriorityFeePerGas: BigInt,
+    maxFeePerGas: BigInt,
+    gasLimit: BigInt,
+    receivingAddress: Option[Address],
+    value: BigInt,
+    payload: ByteString,
+    accessList: List[AccessListItem],
+    maxFeePerBlobGas: BigInt,
+    blobVersionedHashes: List[ByteString]
+) extends TypedTransaction {
+  override def gasPrice: BigInt = maxFeePerGas
+
+  override def toString: String =
+    s"BlobTransaction {" +
+      s"nonce: $nonce " +
+      s"maxPriorityFeePerGas: $maxPriorityFeePerGas " +
+      s"maxFeePerGas: $maxFeePerGas " +
+      s"gasLimit: $gasLimit " +
+      s"receivingAddress: $receivingAddressString " +
+      s"value: $value wei " +
+      s"payload: $payloadString " +
+      s"accessList: $accessList " +
+      s"maxFeePerBlobGas: $maxFeePerBlobGas " +
+      s"blobVersionedHashes: ${blobVersionedHashes.size} hashes" +
+      s"}"
+}
+
+object BlobTransaction {
+  def apply(
+      chainId: BigInt,
+      nonce: BigInt,
+      maxPriorityFeePerGas: BigInt,
+      maxFeePerGas: BigInt,
+      gasLimit: BigInt,
+      receivingAddress: Address,
+      value: BigInt,
+      payload: ByteString,
+      accessList: List[AccessListItem],
+      maxFeePerBlobGas: BigInt,
+      blobVersionedHashes: List[ByteString]
+  ): BlobTransaction =
+    BlobTransaction(
+      chainId,
+      nonce,
+      maxPriorityFeePerGas,
+      maxFeePerGas,
+      gasLimit,
+      Some(receivingAddress),
+      value,
+      payload,
+      accessList,
+      maxFeePerBlobGas,
+      blobVersionedHashes
+    )
+}
 
 /** EIP-7702 authorization tuple signed by the authority (account being delegated). */
 case class SetCodeAuthorization(

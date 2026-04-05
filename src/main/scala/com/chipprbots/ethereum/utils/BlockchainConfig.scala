@@ -12,6 +12,26 @@ import com.chipprbots.ethereum.consensus.mess.MESSConfig
 import com.chipprbots.ethereum.domain.{Address, UInt256}
 import com.chipprbots.ethereum.utils.NumericUtils._
 
+/** Identifies whether the chain follows ETC (PoW indefinitely) or ETH (post-Merge PoS via CL). */
+sealed trait NetworkType
+object NetworkType {
+  case object ETC extends NetworkType
+  case object ETH extends NetworkType
+
+  def fromString(s: String): NetworkType = s.toLowerCase match {
+    case "etc" => ETC
+    case "eth" => ETH
+    case other => throw new IllegalArgumentException(s"Unknown network-type: $other (expected 'etc' or 'eth')")
+  }
+}
+
+/** Timestamp-based fork activation for post-Merge Ethereum forks. */
+case class ForkTimestamps(
+    shanghaiTimestamp: Option[Long] = None,
+    cancunTimestamp: Option[Long] = None,
+    pragueTimestamp: Option[Long] = None
+)
+
 case class BlockchainConfig(
     powTargetTime: Option[Long] = None,
     forkBlockNumbers: ForkBlockNumbers,
@@ -29,8 +49,22 @@ case class BlockchainConfig(
     dnsDiscoveryDomains: Seq[String] = Seq.empty,
     allowedMinersPublicKeys: Set[ByteString] = Set.empty,
     messConfig: MESSConfig = MESSConfig(),
-    treasuryAddress: Address = Address(0)
+    treasuryAddress: Address = Address(0),
+    networkType: NetworkType = NetworkType.ETC,
+    terminalTotalDifficulty: Option[BigInt] = None,
+    forkTimestamps: ForkTimestamps = ForkTimestamps()
 ) {
+  def isPostMerge(totalDifficulty: BigInt): Boolean =
+    terminalTotalDifficulty.exists(ttd => totalDifficulty >= ttd)
+
+  def isShanghaiTimestamp(timestamp: Long): Boolean =
+    forkTimestamps.shanghaiTimestamp.exists(ts => timestamp >= ts)
+
+  def isCancunTimestamp(timestamp: Long): Boolean =
+    forkTimestamps.cancunTimestamp.exists(ts => timestamp >= ts)
+
+  def isPragueTimestamp(timestamp: Long): Boolean =
+    forkTimestamps.pragueTimestamp.exists(ts => timestamp >= ts)
   def withUpdatedForkBlocks(update: (ForkBlockNumbers) => ForkBlockNumbers): BlockchainConfig =
     copy(forkBlockNumbers = update(forkBlockNumbers))
 }
@@ -168,6 +202,18 @@ object BlockchainConfig {
     val treasuryAddress: Address =
       Try(Address(blockchainConfig.getString("treasury-address"))).getOrElse(Address(0))
 
+    val networkType: NetworkType =
+      Try(NetworkType.fromString(blockchainConfig.getString("network-type"))).getOrElse(NetworkType.ETC)
+
+    val terminalTotalDifficulty: Option[BigInt] =
+      Try(BigInt(blockchainConfig.getString("terminal-total-difficulty"))).toOption
+
+    val forkTimestamps: ForkTimestamps = ForkTimestamps(
+      shanghaiTimestamp = Try(blockchainConfig.getLong("shanghai-timestamp")).toOption,
+      cancunTimestamp = Try(blockchainConfig.getLong("cancun-timestamp")).toOption,
+      pragueTimestamp = Try(blockchainConfig.getLong("prague-timestamp")).toOption
+    )
+
     val messConfig: MESSConfig = Try {
       val messConf = blockchainConfig.getConfig("mess")
       MESSConfig(
@@ -219,7 +265,10 @@ object BlockchainConfig {
       dnsDiscoveryDomains = dnsDiscoveryDomains,
       allowedMinersPublicKeys = allowedMinersPublicKeys,
       messConfig = messConfig,
-      treasuryAddress = treasuryAddress
+      treasuryAddress = treasuryAddress,
+      networkType = networkType,
+      terminalTotalDifficulty = terminalTotalDifficulty,
+      forkTimestamps = forkTimestamps
     )
   }
   // scalastyle:on method.length

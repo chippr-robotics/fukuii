@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.consensus.pow.validators
 
 import org.apache.pekko.util.ByteString
 
+import com.chipprbots.ethereum.consensus.engine.PostMergeBlockHeaderValidator
 import com.chipprbots.ethereum.consensus.mining.GetBlockHeaderByHash
 import com.chipprbots.ethereum.consensus.mining.GetNBlocksBack
 import com.chipprbots.ethereum.consensus.mining.Protocol
@@ -57,6 +58,7 @@ object ValidatorsExecutor {
       case Protocol.MockedPow     => MockedPowBlockHeaderValidator
       case Protocol.PoW           => PoWBlockHeaderValidator
       case Protocol.RestrictedPoW => RestrictedEthashBlockHeaderValidator
+      case Protocol.EngineApi     => PostMergeBlockHeaderValidator
     }
 
     new StdValidatorsExecutor(

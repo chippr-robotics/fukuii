@@ -43,6 +43,11 @@ object BlockHeaderError {
   case class HeaderExtraFieldsError(extraFields: HeaderExtraFields) extends BlockHeaderError
   case class HeaderBaseFeeError(msg: String) extends BlockHeaderError
   case class HeaderUnexpectedError(msg: String) extends BlockHeaderError
+  // Post-merge validation errors
+  case class PostMergeNonceError(nonce: org.apache.pekko.util.ByteString) extends BlockHeaderError
+  case object PostMergeOmmersError extends BlockHeaderError
+  case object MissingWithdrawalsRootError extends BlockHeaderError
+  case object MissingBlobGasFieldsError extends BlockHeaderError
 }
 
 sealed trait BlockHeaderValid

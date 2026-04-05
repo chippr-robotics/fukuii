@@ -52,6 +52,19 @@ scrape_configs:
           network: 'mordor'
           environment: 'production'
 
+  # Fukuii Sepolia instance metrics (Engine API validation)
+  - job_name: 'fukuii-sepolia'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['172.21.0.1:9097']
+        labels:
+          instance: 'fukuii-sepolia'
+          role: 'sepolia'
+          network: 'sepolia'
+          environment: 'staging'
+
   # Kong API Gateway metrics
   - job_name: 'kong'
     scrape_interval: 10s

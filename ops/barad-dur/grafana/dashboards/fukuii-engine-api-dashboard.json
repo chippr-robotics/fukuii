@@ -1,0 +1,408 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Engine API Sync Vibes - Watch Fukuii sync with the Ethereum consensus layer",
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "datasource": "Prometheus",
+      "description": "",
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "options": {
+        "content": "<div style=\"text-align:center;padding:8px 0;\">\n  <span style=\"font-size:28px;letter-spacing:4px;font-weight:200;color:#b4a7d6;\">FUKUII</span>\n  <span style=\"font-size:28px;letter-spacing:4px;font-weight:200;color:#93c47d;\"> ENGINE API</span>\n  <span style=\"font-size:28px;letter-spacing:4px;font-weight:200;color:#6fa8dc;\"> SYNC VIBES</span>\n  <br/>\n  <span style=\"font-size:12px;color:#999;letter-spacing:2px;\">consensus layer driven block execution</span>\n</div>",
+        "mode": "html"
+      },
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Latest block received via Engine API newPayload",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#6fa8dc", "value": null },
+              { "color": "#93c47d", "value": 1 }
+            ]
+          },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 3 },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "title": "Latest Block",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "app_engine_latest_payload_block{instance=~\".*fukuii.*\"}",
+          "legendFormat": "block #",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Total newPayload calls received from CL",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#b4a7d6", "value": null },
+              { "color": "#93c47d", "value": 1 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 6, "w": 4, "x": 6, "y": 3 },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "title": "Payloads Received",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "app_engine_newpayload_total{instance=~\".*fukuii.*\"}",
+          "legendFormat": "total",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Payloads validated and executed successfully",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "#93c47d" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#93c47d", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 6, "w": 4, "x": 10, "y": 3 },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "title": "Valid",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "app_engine_newpayload_valid{instance=~\".*fukuii.*\"}",
+          "legendFormat": "valid",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Payloads where parent is unknown (syncing state)",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "#f6b26b" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#f6b26b", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 6, "w": 3, "x": 14, "y": 3 },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "title": "Syncing",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "app_engine_newpayload_syncing{instance=~\".*fukuii.*\"}",
+          "legendFormat": "syncing",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Payloads that failed validation",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "#e06666" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#e06666", "value": null }] }
+        }
+      },
+      "gridPos": { "h": 6, "w": 3, "x": 17, "y": 3 },
+      "id": 5,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "title": "Invalid",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "app_engine_newpayload_invalid{instance=~\".*fukuii.*\"}",
+          "legendFormat": "invalid",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Fork choice updates from CL",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#6fa8dc", "value": null },
+              { "color": "#b4a7d6", "value": 1 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 6, "w": 4, "x": 20, "y": 3 },
+      "id": 6,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "title": "Fork Choice Updates",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "app_engine_forkchoice_total{instance=~\".*fukuii.*\"}",
+          "legendFormat": "total",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Block number over time — watch the chain grow",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "scheme",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 9 },
+      "id": 10,
+      "options": {
+        "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "title": "Block Height",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "app_engine_latest_payload_block{instance=~\".*fukuii.*\"}",
+          "legendFormat": "Fukuii EL block",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Engine API call rates",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "gradientMode": "hue",
+            "lineWidth": 0,
+            "stacking": { "mode": "normal", "group": "A" }
+          },
+          "unit": "ops"
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 9 },
+      "id": 11,
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "Engine API Activity",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(app_engine_newpayload_total{instance=~\".*fukuii.*\"}[1m])",
+          "legendFormat": "newPayload/m",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(app_engine_forkchoice_total{instance=~\".*fukuii.*\"}[1m])",
+          "legendFormat": "forkchoice/m",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "JVM heap memory usage",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 30,
+            "gradientMode": "scheme",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "spanNulls": true
+          },
+          "unit": "bytes"
+        }
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 17 },
+      "id": 20,
+      "options": {
+        "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }
+      },
+      "title": "JVM Heap Memory",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "jvm_memory_bytes_used{area=\"heap\",instance=~\".*fukuii.*\"}",
+          "legendFormat": "heap used",
+          "refId": "A"
+        },
+        {
+          "expr": "jvm_memory_bytes_max{area=\"heap\",instance=~\".*fukuii.*\"}",
+          "legendFormat": "heap max",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "JVM thread count",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "#b4a7d6" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "gradientMode": "scheme",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "spanNulls": true
+          }
+        }
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 17 },
+      "id": 21,
+      "options": {
+        "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }
+      },
+      "title": "JVM Threads",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "jvm_threads_current{instance=~\".*fukuii.*\"}",
+          "legendFormat": "threads",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Process CPU and system load",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "scheme",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1,
+            "spanNulls": true
+          },
+          "unit": "percentunit"
+        }
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 17 },
+      "id": 22,
+      "options": {
+        "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }
+      },
+      "title": "CPU Usage",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "process_cpu_seconds_total{instance=~\".*fukuii.*\"}",
+          "legendFormat": "CPU seconds",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "",
+      "gridPos": { "h": 2, "w": 24, "x": 0, "y": 24 },
+      "id": 99,
+      "options": {
+        "content": "<div style=\"text-align:center;padding:4px 0;\">\n  <span style=\"font-size:10px;color:#666;letter-spacing:3px;\">FUKUII ENGINE API DASHBOARD</span>\n  <span style=\"font-size:10px;color:#555;\"> | </span>\n  <span style=\"font-size:10px;color:#666;\">Consensus: Lighthouse</span>\n  <span style=\"font-size:10px;color:#555;\"> | </span>\n  <span style=\"font-size:10px;color:#666;\">Network: Sepolia</span>\n  <span style=\"font-size:10px;color:#555;\"> | </span>\n  <span style=\"font-size:10px;color:#666;\">Chippr Robotics LLC</span>\n</div>",
+        "mode": "html"
+      },
+      "transparent": true,
+      "type": "text"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 37,
+  "style": "dark",
+  "tags": ["fukuii", "engine-api", "sepolia", "sync"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Fukuii Engine API Sync Vibes",
+  "uid": "fukuii-engine-api-vibes",
+  "version": 1
+}
