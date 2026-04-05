@@ -411,7 +411,7 @@ class SnapSyncPipelineSpec
     coordinator ! Messages.StartTrieNodeHealing(stateRoot)
     coordinator ! Messages.HealingCheckCompletion
 
-    snapSyncController.expectMsg(3.seconds, SNAPSyncController.StateHealingComplete)
+    snapSyncController.expectMsg(3.seconds, SNAPSyncController.StateHealingComplete(0))
   }
 
   it should "dispatch healing requests when missing nodes queued" taggedAs UnitTest in {

@@ -140,6 +140,7 @@ class SNAPSyncController(
   private var storageStagnationRefreshAttempted: Boolean = false
   private var trieWalkInProgress: Boolean = false
   private var trieWalkStartedAtMs: Long = 0L
+  private var healingNodesAbandoned: Int = 0 // set from StateHealingComplete; drives pre-walk skip check
 
   // Proof-seeding buffer: interior trie node hashes discovered from boundary proofs during
   // account download. Flushed to the healing coordinator at healing start so it begins with
@@ -634,11 +635,12 @@ class SNAPSyncController(
       log.warning("All healing peers stateless — refreshing pivot in-place for healing")
       refreshPivotInPlace("all healing peers stateless")
 
-    case StateHealingComplete =>
-      log.info(
-        s"State healing complete — ${if (trieWalkInProgress) "trie walk already in progress (waiting for result)"
-         else "starting validation trie walk to confirm state root"}"
-      )
+    case StateHealingComplete(abandonedNodes) =>
+      healingNodesAbandoned = abandonedNodes
+      val walkNote = if (trieWalkInProgress) "trie walk already in progress (waiting for result)"
+                     else if (abandonedNodes == 0) "pre-walk check will determine if walk is needed"
+                     else s"$abandonedNodes abandoned nodes — walk required to find missing state"
+      log.info(s"State healing complete [abandonedNodes=$abandonedNodes] — $walkNote")
       if (!trieWalkInProgress) startTrieWalk()
 
     case ProofDiscoveredNodes(nodes) =>
@@ -2200,6 +2202,28 @@ class SNAPSyncController(
   private def startTrieWalk(): Unit = {
     if (trieWalkInProgress) return
     if (currentPhase != StateHealing) return
+
+    // Pre-walk check: if healing completed with 0 abandoned nodes and operator hasn't
+    // forced the walk, skip it — a complete healing pass guarantees no missing nodes.
+    // Set snap-sync.require-validation-walk = true to always run the full scan.
+    if (!snapSyncConfig.requireValidationWalk && healingNodesAbandoned == 0) {
+      log.info("=" * 60)
+      log.info("PHASE: Trie Healing → State Validation Walk")
+      log.info("=" * 60)
+      log.info(
+        "[WALK-SKIP] Healing completed with 0 abandoned nodes — no missing state expected. " +
+        "Skipping validation walk. (snap-sync.require-validation-walk = false)"
+      )
+      log.info("[WALK-SKIP] Set snap-sync.require-validation-walk = true to force a full trie scan.")
+      self ! TrieWalkResult(Seq.empty)
+      return
+    }
+
+    val walkReason =
+      if (snapSyncConfig.requireValidationWalk) "operator forced via snap-sync.require-validation-walk = true"
+      else s"healing abandoned $healingNodesAbandoned nodes — walk required to recover missing state"
+    log.info(s"[WALK] Pre-walk check: running full validation walk ($walkReason)")
+
     trieWalkInProgress = true
     trieWalkStartedAtMs = System.currentTimeMillis()
     val counter = new java.util.concurrent.atomic.AtomicLong(0)
@@ -3210,7 +3234,7 @@ object SNAPSyncController {
       codeHashes: Seq[ByteString],
       storageTasks: Seq[StorageTask]
   )
-  case object StateHealingComplete
+  case class StateHealingComplete(abandonedNodes: Int)
   case object HealingAllPeersStateless
   case object StateValidationComplete
   case object ChainDownloadTimeout
@@ -3338,8 +3362,11 @@ case class SNAPSyncConfig(
     maxEvictionsPerCycle: Int = 3,
     deferredMerkleization: Boolean = true,
     // Number of parallel subtree walkers for the post-healing trie validation walk.
-    // Default 2 for NUC hardware (constrained RAM + NVMe). Max 4 before I/O contention.
-    trieWalkParallelism: Int = 2
+    // Default 3: ~8,500-9,500 nodes/s vs 6,300 at 2. Max 4 before I/O contention on constrained hardware.
+    trieWalkParallelism: Int = 3,
+    // When false (default): skip the validation walk if healing completed with 0 abandoned nodes.
+    // When true: always run the full trie scan regardless of healing outcome (audit/diagnostic mode).
+    requireValidationWalk: Boolean = false
 )
 
 object SNAPSyncConfig {
@@ -3435,7 +3462,11 @@ object SNAPSyncConfig {
       trieWalkParallelism =
         if (snapConfig.hasPath("trie-walk-parallelism"))
           snapConfig.getInt("trie-walk-parallelism")
-        else 2
+        else 3,
+      requireValidationWalk =
+        if (snapConfig.hasPath("require-validation-walk"))
+          snapConfig.getBoolean("require-validation-walk")
+        else false
     )
   }
 }

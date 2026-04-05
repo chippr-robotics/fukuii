@@ -318,7 +318,7 @@ class TrieNodeHealingCoordinator(
             s"(${"%.1f".format(totalBytesReceived / 1048576.0)}MB received)$abandonedStr. " +
             s"Signalling controller to begin state validation trie walk."
         )
-        snapSyncController ! SNAPSyncController.StateHealingComplete
+        snapSyncController ! SNAPSyncController.StateHealingComplete(abandonedTaskCount)
       } else if (!isComplete) {
         log.debug(
           s"[HEAL-CHECK] pending=${pendingTasks.size} active=${activeRequests.size} flushing=$flushing"
