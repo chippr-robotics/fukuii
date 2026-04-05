@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.metrics
 
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 
 import scala.util.Try
@@ -69,30 +70,39 @@ case class Metrics(metricsPrefix: String, registry: MeterRegistry, serverPort: I
 object Metrics {
   final val MetricsPrefix = "app"
 
-  // + Metrics singleton support
-  final private[this] val metricsSentinel = Metrics(MetricsPrefix, new SimpleMeterRegistry())
+  // Multi-instance registry: maps instanceId → Metrics
+  private val instances = new ConcurrentHashMap[String, Metrics]()
 
-  final private[this] val metricsRef = new AtomicReference[Metrics](metricsSentinel)
+  // Default/fallback instance for backward compatibility
+  final private[this] val defaultMetrics = Metrics(MetricsPrefix, new SimpleMeterRegistry())
+  private val defaultRef = new AtomicReference[Metrics](defaultMetrics)
 
-  private[this] def setOnce(metrics: Metrics): Boolean = metricsRef.compareAndSet(metricsSentinel, metrics)
+  /** Get the default metrics instance (backward compatible with single-instance mode). */
+  def get(): Metrics = defaultRef.get()
 
-  def get(): Metrics = metricsRef.get()
-  // - Metrics singleton support
+  /** Get metrics for a specific instance. Falls back to default if not registered. */
+  def forInstance(instanceId: String): Metrics =
+    Option(instances.get(instanceId)).getOrElse(get())
 
-  /** Instantiates and configures the metrics "service". This should happen once in the lifetime of the application.
-    * After this call completes successfully, you can obtain the metrics service by using `Metrics.get()`.
-    */
-  def configure(config: MetricsConfig): Try[Unit] =
+  /** Configure metrics for a specific instance. Thread-safe, supports multiple calls. */
+  def configure(config: MetricsConfig, instanceId: String = "default"): Try[Unit] =
     Try {
       if (config.enabled) {
         val registry = MeterRegistryBuilder.build(MetricsPrefix)
         val metrics = new Metrics(MetricsPrefix, registry, config.port)
-        if (setOnce(metrics))
+        val existing = instances.putIfAbsent(instanceId, metrics)
+        if (existing == null) {
           metrics.start()
-        else {
+          // First instance also becomes the default
+          defaultRef.compareAndSet(defaultMetrics, metrics)
+        } else {
           metrics.close()
-          throw new MetricsAlreadyConfiguredError(previous = metrics, current = get())
+          // Already configured for this instance — not an error in multi-instance mode
         }
       }
     }
+
+  /** Shut down metrics for a specific instance. */
+  def closeInstance(instanceId: String): Unit =
+    Option(instances.remove(instanceId)).foreach(_.close())
 }

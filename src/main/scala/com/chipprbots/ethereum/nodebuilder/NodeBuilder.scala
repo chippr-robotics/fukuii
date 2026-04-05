@@ -111,7 +111,7 @@ trait AsyncConfigBuilder {
 
 trait ActorSystemBuilder {
   self: InstanceConfigProvider =>
-  implicit lazy val system: ActorSystem = ActorSystem("fukuii_system", ConfigFactory.load())
+  implicit lazy val system: ActorSystem = ActorSystem(s"fukuii_${instanceConfig.instanceId}", ConfigFactory.load())
 }
 
 trait PruningConfigBuilder extends PruningModeComponent {

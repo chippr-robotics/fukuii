@@ -73,7 +73,7 @@ abstract class BaseNode extends Node {
     val rootConfig = com.typesafe.config.ConfigFactory.load()
     val fukuiiConfig = rootConfig.getConfig("fukuii")
     val metricsConfig = MetricsConfig(fukuiiConfig)
-    Metrics.configure(metricsConfig) match {
+    Metrics.configure(metricsConfig, instanceConfig.instanceId) match {
       case Success(_) =>
         log.info("Metrics started")
 
@@ -152,7 +152,7 @@ abstract class BaseNode extends Node {
           storagesInstance.storages.blockHeadersStorage,
           shutdown
         ),
-        "PeriodicDBConsistencyCheck"
+        s"PeriodicDBConsistencyCheck_${instanceConfig.instanceId}"
       )
 
   private[this] def startTuiUpdater(): Unit = {
