@@ -36,7 +36,8 @@ case class EthNodeStatus64ExchangeState(
 
     val localBestBlock = blockchainReader.getBestBlockNumber()
     val localGenesisHash = blockchainReader.genesisHeader.hash
-    val localForkId = ForkId.create(localGenesisHash, blockchainConfig)(localBestBlock)
+    val localBestTimestamp = blockchainReader.getBlockHeaderByNumber(localBestBlock).map(_.unixTimestamp).getOrElse(0L)
+    val localForkId = ForkId.create(localGenesisHash, blockchainConfig)(localBestBlock, localBestTimestamp)
 
     log.info(
       "STATUS_EXCHANGE: Local state - bestBlock={}, genesisHash={}, localForkId={}",
@@ -112,7 +113,8 @@ case class EthNodeStatus64ExchangeState(
     //
     // To align with core-geth: Use actual bestBlockNumber for ForkId calculation.
     val forkIdBlockNumber = bestBlockNumber
-    val forkId = ForkId.create(genesisHash, blockchainConfig)(forkIdBlockNumber)
+    val forkIdTimestamp = bestBlockHeader.unixTimestamp
+    val forkId = ForkId.create(genesisHash, blockchainConfig)(forkIdBlockNumber, forkIdTimestamp)
 
     val status = ETH64.Status(
       protocolVersion = negotiatedCapability.version,
