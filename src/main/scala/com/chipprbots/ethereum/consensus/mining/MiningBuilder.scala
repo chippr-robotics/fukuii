@@ -32,9 +32,10 @@ trait StdMiningBuilder extends MiningBuilder {
     with BlockchainConfigBuilder
     with MiningConfigBuilder
     with NodeKeyBuilder
+    with com.chipprbots.ethereum.utils.InstanceConfigProvider
     with Logger =>
 
-  private lazy val fukuiiConfig = Config.config
+  private lazy val fukuiiConfig = instanceConfig.config
 
   lazy val coinbaseProvider: CoinbaseProvider = new CoinbaseProvider(miningConfig.coinbase)
 
