@@ -56,38 +56,69 @@ class EngineApiService(
     } else if (blockchainReader.getBlockHeaderByHash(payload.blockHash).isDefined) {
       PayloadStatusV1(Valid, latestValidHash = Some(payload.blockHash))
     } else {
-      // Try full execution if parent state is available
+      // Try full execution if parent block is known
       val parentKnown = blockchainReader.getBlockHeaderByHash(payload.parentHash).isDefined
-      val imported = if (parentKnown) {
-        blockExecution.executeAndValidateBlock(block) match {
-          case Right(receipts) =>
-            blockchainWriter.storeBlock(block).commit()
-            blockchainWriter.storeReceipts(block.header.hash, receipts).commit()
-            System.err.println(s"[ENGINE-API] newPayload #${payload.blockNumber}: EXECUTED (${block.body.numberOfTxs} txs)")
-            true
-          case Left(error) =>
-            System.err.println(s"[ENGINE-API] newPayload #${payload.blockNumber}: execution failed: $error, storing optimistically")
-            // Fall through to optimistic import
-            false
+      val executionResult = if (parentKnown) {
+        try {
+          blockExecution.executeAndValidateBlock(block, alreadyValidated = true) match {
+            case Right(receipts) =>
+              blockchainWriter.storeBlock(block).commit()
+              blockchainWriter.storeReceipts(block.header.hash, receipts).commit()
+              System.err.println(
+                s"[ENGINE-API] newPayload #${payload.blockNumber}: EXECUTED " +
+                  s"(${block.body.numberOfTxs} txs, stateRoot=${block.header.stateRoot.take(8).map("%02x".format(_)).mkString}...)"
+              )
+              Some(true) // fully executed
+            case Left(error) =>
+              error match {
+                case com.chipprbots.ethereum.ledger.BlockExecutionError.MPTError(_) |
+                     com.chipprbots.ethereum.ledger.BlockExecutionError.MissingParentError =>
+                  // Missing state data — can't execute yet, fall back to optimistic
+                  System.err.println(s"[ENGINE-API] newPayload #${payload.blockNumber}: missing state (${error.reason}), optimistic import")
+                  None
+                case _ =>
+                  // Genuine validation failure
+                  System.err.println(s"[ENGINE-API] newPayload #${payload.blockNumber}: execution INVALID: ${error.reason}")
+                  Some(false)
+              }
+          }
+        } catch {
+          case e: com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException =>
+            // Missing state nodes — can't execute, fall through to optimistic
+            System.err.println(s"[ENGINE-API] newPayload #${payload.blockNumber}: missing state (${e.getMessage}), optimistic import")
+            None
+          case e: Exception =>
+            System.err.println(s"[ENGINE-API] newPayload #${payload.blockNumber}: unexpected error: ${e.getMessage}, optimistic import")
+            None
         }
       } else {
-        false
+        None // parent not known
       }
 
-      if (!imported) {
-        // Optimistic import: store block without execution.
-        // The CL has already validated consensus — we trust and store.
-        blockchainWriter.storeBlock(block).commit()
-        System.err.println(
-          s"[ENGINE-API] newPayload #${payload.blockNumber}: OPTIMISTIC IMPORT " +
-            s"(${block.body.numberOfTxs} txs, ${block.body.withdrawals.map(_.size).getOrElse(0)} withdrawals)"
-        )
-      }
+      executionResult match {
+        case Some(true) =>
+          // Fully executed and validated
+          EngineApiMetrics.recordNewPayload("VALID", payload.blockNumber.toLong, payload.timestamp)
+          PayloadStatusV1(Valid, latestValidHash = Some(payload.blockHash))
 
-      // Update best block tracking
-      blockchainWriter.saveBestKnownBlocks(block.header.hash, block.header.number)
-      EngineApiMetrics.recordNewPayload("VALID", payload.blockNumber.toLong, payload.timestamp)
-      PayloadStatusV1(Valid, latestValidHash = Some(payload.blockHash))
+        case Some(false) =>
+          // Execution failed — block is invalid
+          val latestValid = blockchainReader.getBlockHeaderByHash(payload.parentHash).map(_.hash)
+          EngineApiMetrics.recordNewPayload("INVALID", payload.blockNumber.toLong, payload.timestamp)
+          PayloadStatusV1(Invalid, latestValidHash = latestValid, validationError = Some("block execution failed"))
+
+        case None =>
+          // Optimistic import: store block without execution.
+          // Parent unknown or state unavailable — trust CL consensus.
+          blockchainWriter.storeBlock(block).commit()
+          blockchainWriter.saveBestKnownBlocks(block.header.hash, block.header.number)
+          System.err.println(
+            s"[ENGINE-API] newPayload #${payload.blockNumber}: OPTIMISTIC IMPORT " +
+              s"(${block.body.numberOfTxs} txs, ${block.body.withdrawals.map(_.size).getOrElse(0)} withdrawals)"
+          )
+          EngineApiMetrics.recordNewPayload("VALID", payload.blockNumber.toLong, payload.timestamp)
+          PayloadStatusV1(Valid, latestValidHash = Some(payload.blockHash))
+      }
     }
   }
 
@@ -145,10 +176,42 @@ class EngineApiService(
       "engine_getBlobsV1",
       "engine_getPayloadBodiesByHashV1",
       "engine_getPayloadBodiesByRangeV1",
+      "engine_getClientVersionV1",
       "engine_exchangeCapabilities"
     )
     log.info(s"exchangeCapabilities: CL supports ${clCapabilities.size} methods, we support ${supported.size}")
     supported
+  }
+
+  /** engine_getPayloadBodiesByHashV1: look up a block body by hash.
+    * Returns (rawTransactions, encodedWithdrawals) or None if not found.
+    */
+  def getPayloadBodyByHash(hash: ByteString): Option[(Seq[ByteString], Option[Seq[org.json4s.JValue]])] =
+    blockchainReader.getBlockBodyByHash(hash).map(bodyToPayloadBody)
+
+  /** engine_getPayloadBodiesByRangeV1: look up a block body by number. */
+  def getPayloadBodyByNumber(number: BigInt): Option[(Seq[ByteString], Option[Seq[org.json4s.JValue]])] =
+    blockchainReader.getBlockHeaderByNumber(number).flatMap { header =>
+      blockchainReader.getBlockBodyByHash(header.hash).map(bodyToPayloadBody)
+    }
+
+  private def bodyToPayloadBody(body: BlockBody): (Seq[ByteString], Option[Seq[org.json4s.JValue]]) = {
+    val rawTxs = body.transactionList.map { stx =>
+      ByteString(rlpEncode(SignedTransactionEnc(stx).toRLPEncodable))
+    }
+    val withdrawals = body.withdrawals.map { ws =>
+      ws.map { w =>
+        import org.json4s.JsonDSL._
+        import org.json4s.JValue
+        org.json4s.JObject(
+          "index" -> org.json4s.JString(s"0x${w.index.toString(16)}"),
+          "validatorIndex" -> org.json4s.JString(s"0x${w.validatorIndex.toString(16)}"),
+          "address" -> org.json4s.JString(s"0x${w.address.bytes.map("%02x".format(_)).mkString}"),
+          "amount" -> org.json4s.JString(s"0x${w.amount.toString(16)}")
+        ): JValue
+      }
+    }
+    (rawTxs, withdrawals)
   }
 
   /** Convert an ExecutionPayload into a Block. */

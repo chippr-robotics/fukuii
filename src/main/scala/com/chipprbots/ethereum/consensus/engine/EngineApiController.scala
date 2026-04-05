@@ -38,6 +38,8 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
         handleExchangeCapabilities(request)
       case "engine_getPayloadV1" | "engine_getPayloadV2" | "engine_getPayloadV3" | "engine_getPayloadV4" =>
         handleGetPayload(request)
+      case "engine_getClientVersionV1" =>
+        handleGetClientVersion(request)
       case "engine_getBlobsV1" =>
         handleGetBlobs(request)
       case "engine_getPayloadBodiesByHashV1" =>
@@ -124,6 +126,16 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
     IO.pure(JsonRpcResponse("2.0", None, Some(JsonRpcError(-38001, "Payload not available", None)), reqId(request)))
   }
 
+  private def handleGetClientVersion(request: JsonRpcRequest): IO[JsonRpcResponse] = {
+    val clientVersion = JArray(List(JObject(
+      "code" -> JString("FK"),
+      "name" -> JString("Fukuii"),
+      "version" -> JString("0.1.240"),
+      "commit" -> JString(com.chipprbots.ethereum.utils.Config.clientVersion.takeRight(8))
+    )))
+    IO.pure(JsonRpcResponse("2.0", Some(clientVersion), None, reqId(request)))
+  }
+
   private def handleGetBlobs(request: JsonRpcRequest): IO[JsonRpcResponse] = {
     // engine_getBlobsV1: return null for each requested versioned hash (we don't store blobs)
     // Lighthouse will fall back to fetching blobs from CL peers
@@ -135,13 +147,38 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
   }
 
   private def handleGetPayloadBodiesByHash(request: JsonRpcRequest): IO[JsonRpcResponse] = {
-    // Stub — returns empty array
-    IO.pure(JsonRpcResponse("2.0", Some(JArray(Nil)), None, reqId(request)))
+    val hashes = request.params.map(_.arr).getOrElse(Nil).headOption.collect {
+      case JArray(items) => items.collect { case JString(hex) => hexToByteString(hex) }
+    }.getOrElse(Nil)
+
+    val bodies = hashes.map { hash =>
+      engineApiService.getPayloadBodyByHash(hash).map(encodePayloadBody).getOrElse(JNull)
+    }
+    IO.pure(JsonRpcResponse("2.0", Some(JArray(bodies)), None, reqId(request)))
   }
 
   private def handleGetPayloadBodiesByRange(request: JsonRpcRequest): IO[JsonRpcResponse] = {
-    // Stub — returns empty array
-    IO.pure(JsonRpcResponse("2.0", Some(JArray(Nil)), None, reqId(request)))
+    val params = request.params.map(_.arr).getOrElse(Nil)
+    val start = params.headOption.collect {
+      case JString(hex) => val c = hex.stripPrefix("0x"); if (c.isEmpty) BigInt(0) else BigInt(c, 16)
+      case JInt(n) => n
+    }.getOrElse(BigInt(0))
+    val count = params.lift(1).collect {
+      case JString(hex) => val c = hex.stripPrefix("0x"); if (c.isEmpty) BigInt(0) else BigInt(c, 16)
+      case JInt(n) => n
+    }.getOrElse(BigInt(0))
+
+    val bodies = (0L until count.toLong.min(1024L)).map { offset =>
+      engineApiService.getPayloadBodyByNumber(start + offset).map(encodePayloadBody).getOrElse(JNull)
+    }.toList
+    IO.pure(JsonRpcResponse("2.0", Some(JArray(bodies)), None, reqId(request)))
+  }
+
+  private def encodePayloadBody(body: (Seq[ByteString], Option[Seq[org.json4s.JValue]])): JValue = {
+    val (txs, withdrawals) = body
+    val txsJson = JArray(txs.map(tx => JString(byteStringToHex(tx))).toList)
+    val wsJson = withdrawals.map(ws => JArray(ws.toList)).getOrElse(JNull)
+    JObject("transactions" -> txsJson, "withdrawals" -> wsJson)
   }
 
   // --- JSON encoding/decoding helpers ---

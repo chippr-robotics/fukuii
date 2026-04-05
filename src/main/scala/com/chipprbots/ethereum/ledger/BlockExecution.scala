@@ -114,8 +114,11 @@ class BlockExecution(
       case _ => initialWorld
     }
 
+    // EIP-4788: Store parent beacon block root in system contract (post-Cancun)
+    val worldAfterBeaconRoot = applyEip4788(block, worldAfterDao)
+
     // EIP-2935: Store parent block hash in history storage contract
-    val inputWorld = applyEip2935(block, worldAfterDao)
+    val inputWorld = applyEip2935(block, worldAfterBeaconRoot)
 
     val hashAsHexString = block.header.hashAsHexString
     val transactionList = block.body.transactionList
@@ -129,6 +132,43 @@ class BlockExecution(
         log.debug(s"Not all txs from block $hashAsHexString were executed correctly, due to ${error.reason}")
     }
     blockTxsExecResult
+  }
+
+  /** EIP-4788: Store the parent beacon block root in the beacon root system contract.
+    *
+    * Post-Cancun, the parentBeaconBlockRoot from the CL is stored at the beacon root contract
+    * address (0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02) before executing transactions.
+    * The contract stores: timestamp → root at slot (timestamp % HISTORY_BUFFER_LENGTH),
+    * and root at slot (timestamp % HISTORY_BUFFER_LENGTH + HISTORY_BUFFER_LENGTH).
+    */
+  private def applyEip4788(
+      block: Block,
+      world: InMemoryWorldStateProxy
+  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy = {
+    import BlockExecution._
+    // Only apply post-Cancun (when parentBeaconBlockRoot is present)
+    block.header.parentBeaconBlockRoot match {
+      case Some(beaconRoot) if blockchainConfig.isCancunTimestamp(block.header.unixTimestamp) =>
+        val timestamp = UInt256(block.header.unixTimestamp)
+        val timestampIdx = timestamp.mod(UInt256(BeaconRootHistoryBufferLength))
+        val rootIdx = timestampIdx + UInt256(BeaconRootHistoryBufferLength)
+
+        // Ensure the contract account exists
+        val account = world
+          .getAccount(BeaconRootContractAddress)
+          .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
+
+        val w1 = if (!world.getAccount(BeaconRootContractAddress).isDefined) {
+          world.saveAccount(BeaconRootContractAddress, account)
+        } else world
+
+        val storage = w1.getStorage(BeaconRootContractAddress)
+        val s1 = storage.store(timestampIdx.toBigInt, timestamp.toBigInt)
+        val s2 = s1.store(rootIdx.toBigInt, UInt256(beaconRoot).toBigInt)
+        w1.saveStorage(BeaconRootContractAddress, s2)
+
+      case _ => world
+    }
   }
 
   /** EIP-2935: Deploy history storage contract at fork block and store parent block hash.
@@ -235,6 +275,12 @@ class BlockExecution(
 }
 
 object BlockExecution {
+
+  /** EIP-4788: Address of the beacon block root system contract */
+  val BeaconRootContractAddress: Address = Address("0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02")
+
+  /** EIP-4788: History buffer length for beacon root storage (8191 slots) */
+  val BeaconRootHistoryBufferLength: BigInt = BigInt(8191)
 
   /** EIP-2935: Address of the history storage contract */
   val HistoryStorageAddress: Address = Address("0x0000F90827F1C53a10cb7A02335B175320002935")

@@ -696,7 +696,7 @@ trait EngineApiBuilder {
     )
   }
 
-  lazy val forkChoiceManager: ForkChoiceManager = new ForkChoiceManager(blockchainReader)
+  lazy val forkChoiceManager: ForkChoiceManager = new ForkChoiceManager(blockchainReader, blockchainWriter)
 
   lazy val engineApiService: EngineApiService = new EngineApiService(
     blockchainReader,

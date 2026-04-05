@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 import java.util.concurrent.atomic.AtomicReference
 
 import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.utils.Logger
 
 /** Thread-safe manager for CL-driven fork choice (post-Merge Ethereum).
@@ -12,7 +13,10 @@ import com.chipprbots.ethereum.utils.Logger
   * When active, this replaces total-difficulty-based fork choice with CL-driven fork choice.
   * The CL (Prysm, Lighthouse, etc.) drives the canonical chain via forkchoiceUpdated calls.
   */
-class ForkChoiceManager(blockchainReader: BlockchainReader) extends Logger {
+class ForkChoiceManager(
+    blockchainReader: BlockchainReader,
+    blockchainWriter: BlockchainWriter
+) extends Logger {
 
   private val currentState: AtomicReference[Option[ForkChoiceState]] =
     new AtomicReference(None)
@@ -44,6 +48,12 @@ class ForkChoiceManager(blockchainReader: BlockchainReader) extends Logger {
           s"safe=${newState.safeBlockHash}, finalized=${newState.finalizedBlockHash}"
       )
       currentState.set(Some(newState))
+
+      // Persist canonical head to chain storage
+      blockchainReader.getBlockHeaderByHash(newState.headBlockHash).foreach { header =>
+        blockchainWriter.saveBestKnownBlocks(newState.headBlockHash, header.number)
+      }
+
       Right(())
     }
   }
