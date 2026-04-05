@@ -2203,20 +2203,32 @@ class SNAPSyncController(
     if (trieWalkInProgress) return
     if (currentPhase != StateHealing) return
 
-    // Pre-walk check: if healing completed with 0 abandoned nodes and operator hasn't
-    // forced the walk, skip it — a complete healing pass guarantees no missing nodes.
-    // Set snap-sync.require-validation-walk = true to always run the full scan.
-    if (!snapSyncConfig.requireValidationWalk && healingNodesAbandoned == 0) {
+    // Pre-walk check: if healing completed with 0 abandoned nodes AND the pivot root is
+    // confirmed durable in RocksDB, skip the walk — state is verifiably complete.
+    // If root is absent, 0 abandoned nodes just means every requested node was received,
+    // but the root itself may not have been fetched yet — the walk must run to find it.
+    val rootInDb = stateRoot.exists { r =>
+      try { stateStorage.getReadOnlyStorage.get(r.toArray); true }
+      catch { case _: Exception => false }
+    }
+    if (!snapSyncConfig.requireValidationWalk && healingNodesAbandoned == 0 && rootInDb) {
       log.info("=" * 60)
       log.info("PHASE: Trie Healing → State Validation Walk")
       log.info("=" * 60)
       log.info(
-        "[WALK-SKIP] Healing completed with 0 abandoned nodes — no missing state expected. " +
+        "[WALK-SKIP] Healing completed with 0 abandoned nodes and root confirmed in RocksDB. " +
         "Skipping validation walk. (snap-sync.require-validation-walk = false)"
       )
       log.info("[WALK-SKIP] Set snap-sync.require-validation-walk = true to force a full trie scan.")
       self ! TrieWalkResult(Seq.empty)
       return
+    }
+    if (!snapSyncConfig.requireValidationWalk && healingNodesAbandoned == 0 && !rootInDb) {
+      log.warning(
+        "[WALK-SKIP overridden] Healing completed with 0 abandoned nodes but root {} is MISSING " +
+          "from RocksDB — forcing trie walk to discover remaining gaps.",
+        stateRoot.map(_.take(8).toHex).getOrElse("?")
+      )
     }
 
     val walkReason =
