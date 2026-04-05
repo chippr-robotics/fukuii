@@ -218,4 +218,7 @@ abstract class BaseNode extends Node {
   }
 }
 
-class StdNode extends BaseNode with StdMiningBuilder
+class StdNode(
+    override val instanceConfig: com.chipprbots.ethereum.utils.InstanceConfig = com.chipprbots.ethereum.utils.Config
+) extends BaseNode
+    with StdMiningBuilder

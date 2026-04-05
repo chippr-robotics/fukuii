@@ -12,7 +12,9 @@ import com.chipprbots.ethereum.testmode.TestModeComponentsProvider
 import com.chipprbots.ethereum.testmode.TestmodeMining
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
-class TestNode extends BaseNode {
+class TestNode(
+    override val instanceConfig: com.chipprbots.ethereum.utils.InstanceConfig = com.chipprbots.ethereum.utils.Config
+) extends BaseNode {
 
   override lazy val ioRuntime: IORuntime = IORuntime.global
 
