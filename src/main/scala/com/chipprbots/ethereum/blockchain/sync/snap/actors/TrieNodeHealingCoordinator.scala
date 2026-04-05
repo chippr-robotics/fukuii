@@ -71,7 +71,7 @@ class TrieNodeHealingCoordinator(
   private var totalBytesReceived: Long = 0
   private val startTime = System.currentTimeMillis()
   private var lastProgressLogAt: Long = 0
-  private val ProgressLogInterval: Long = 5_000
+  private val ProgressLogInterval: Long = 500
   // Rolling 60s window for recent throughput (matches controller's SyncProgressMonitor pattern)
   private val recentHistory: mutable.Queue[(Long, Long)] = mutable.Queue.empty
   private val RecentWindowMs: Long = 60_000
@@ -111,6 +111,9 @@ class TrieNodeHealingCoordinator(
   private val decreaseFactor: Double = 0.5
 
   private val peerResponseBytesTarget = mutable.Map.empty[String, BigInt]
+
+  // HW1 self-feeding: tracks total missing trie children discovered across all healed nodes
+  private var childrenDiscoveredTotal: Int = 0
 
   private def responseBytesTargetFor(peer: Peer): BigInt =
     peerResponseBytesTarget
@@ -216,11 +219,17 @@ class TrieNodeHealingCoordinator(
       log.info(s"Starting trie node healing for state root ${Hex.toHexString(root.take(8).toArray)}")
 
     case QueueMissingNodes(nodes) =>
-      log.info(s"Queuing ${nodes.size} missing nodes for healing")
+      log.info(s"[HEAL-RESUME] Received ${nodes.size} persisted missing nodes from prior session")
       lastHealedAtMs = System.currentTimeMillis() // reset stagnation timer at start of each healing round
       queueNodes(nodes)
       // Immediately dispatch to any known available peers
       tryRedispatchPendingTasks()
+      if (pendingTasks.isEmpty)
+        log.info(
+          s"[HW1-BOOT] All ${nodes.size} resumed nodes already confirmed present in trie DB " +
+            s"(healed in prior session) — no network requests needed, signalling trie walk"
+        )
+      self ! HealingCheckCompletion
 
     case HealingPeerAvailable(peer) =>
       // Skip if this remote address has been marked stateless — blocks reconnected dead peers
@@ -282,7 +291,7 @@ class TrieNodeHealingCoordinator(
       result match {
         case Right(count) =>
           totalNodesHealed += count
-          log.debug(s"Healing task completed: $count nodes")
+          log.info(s"Healing task completed: $count nodes (total: $totalNodesHealed, pending: ${pendingTasks.size})")
           // Periodic progress summary (every 5K nodes)
           if (totalNodesHealed - lastProgressLogAt >= ProgressLogInterval) {
             val rate = calculateNodesPerSecond()
@@ -302,9 +311,18 @@ class TrieNodeHealingCoordinator(
     case HealingCheckCompletion =>
       if (isComplete && !flushing) {
         flushRawNodesSync()
-        val abandonedStr = if (abandonedTaskCount > 0) s" ($abandonedTaskCount abandoned — regular sync will recover)" else ""
-        log.info(s"Healing round complete: $totalNodesHealed total nodes healed$abandonedStr. Notifying controller.")
+        val abandonedStr = if (abandonedTaskCount > 0) s" ($abandonedTaskCount abandoned — deferred to state validation)" else ""
+        log.info(
+          s"Healing complete: $totalNodesHealed nodes healed in " +
+            s"${(System.currentTimeMillis() - startTime) / 1000}s " +
+            s"(${"%.1f".format(totalBytesReceived / 1048576.0)}MB received)$abandonedStr. " +
+            s"Signalling controller to begin state validation trie walk."
+        )
         snapSyncController ! SNAPSyncController.StateHealingComplete
+      } else if (!isComplete) {
+        log.debug(
+          s"[HEAL-CHECK] pending=${pendingTasks.size} active=${activeRequests.size} flushing=$flushing"
+        )
       }
 
     case HealingGetProgress =>
@@ -453,7 +471,7 @@ class TrieNodeHealingCoordinator(
     val activeReq = activeRequests.get(requestId) match {
       case Some(req) => req
       case None =>
-        log.warning(s"No active healing request found for requestId=$requestId")
+        log.debug(s"Received orphaned TrieNodes response (reqId=$requestId). Request was already cancelled (timeout or pivot refresh). Discarding stale response.")
         return
     }
 
@@ -531,9 +549,8 @@ class TrieNodeHealingCoordinator(
     }
 
     log.info(
-      s"Healed $healedCount/${nodes.size} trie nodes from peer ${peer.id.value} " +
-        s"(total: $totalNodesHealed, pending: ${pendingTasks.size}, active: ${activeRequests.size} reqs, " +
-        s"responseBytes=${responseBytesTargetFor(peer)})"
+      s"Healed $healedCount of ${nodes.size} requested trie nodes from ${peer.id.value}. " +
+        s"Cumulative: $totalNodesHealed healed, ${pendingTasks.size} pending, ${activeRequests.size} in-flight"
     )
 
     if (healedCount > 0) {
@@ -567,9 +584,8 @@ class TrieNodeHealingCoordinator(
         abandoned += 1
         abandonedTaskCount += 1
         log.warning(
-          s"Abandoning healing task after ${updated.retries} retries: " +
-            s"hash=${Hex.toHexString(task.hash.take(4).toArray)} " +
-            s"(regular sync will fetch on-demand)"
+          s"Giving up on trie node ${Hex.toHexString(task.hash.take(4).toArray)} after $maxRetriesPerTask retries. " +
+            s"Deferring to state validation phase — node will be re-discovered and fetched during trie walk."
         )
       } else {
         pendingTasks = pendingTasks :+ updated
@@ -587,9 +603,9 @@ class TrieNodeHealingCoordinator(
     if (stagnantMs > healingStagnationTimeoutMs && pendingTasks.nonEmpty) {
       val pendingCount = pendingTasks.size
       log.warning(
-        s"Healing stagnation detected: no nodes healed in ${stagnantMs / 1000}s. " +
-          s"Abandoning $pendingCount remaining tasks. " +
-          s"Regular sync will fetch missing nodes on-demand via GetTrieNodes."
+        s"Healing stagnation timeout (${stagnantMs / 1000}s, no progress). " +
+          s"Likely cause: peers lack GetTrieNodes support or all peers offline. " +
+          s"Abandoning $pendingCount remaining tasks. Nodes will be re-discovered during state validation trie walk."
       )
       abandonedTaskCount += pendingCount
       pendingTasks = Seq.empty
@@ -607,7 +623,13 @@ class TrieNodeHealingCoordinator(
       .filterNot(isPeerCoolingDown)
       .filterNot(p => statelessPeers.contains(p.id.value))
       .filterNot(p => statelessRemoteAddresses.contains(p.remoteAddress.toString))
-    if (eligiblePeers.isEmpty) return
+    if (eligiblePeers.isEmpty) {
+      log.debug(
+        s"[REDISPATCH] No eligible peers — ${knownAvailablePeers.size} known, " +
+          s"${statelessPeers.size} stateless, rest cooling down. pending: ${pendingTasks.size}"
+      )
+      return
+    }
 
     for (peer <- eligiblePeers if pendingTasks.nonEmpty)
       dispatchIfPossible(peer)
@@ -699,14 +721,16 @@ class TrieNodeHealingCoordinator(
       if (newEntries.nonEmpty) {
         newEntries.foreach(e => pendingHashSet += e.hash)
         pendingTasks = pendingTasks ++ newEntries
-        log.debug(
-          s"[HEAL-INCREMENTAL] Queued ${newEntries.size} missing children from healed node " +
-          s"${Hex.toHexString(pathset.last.take(4).toArray)} (total pending: ${pendingTasks.size})"
-        )
+        childrenDiscoveredTotal += newEntries.size
+        if (childrenDiscoveredTotal % 100 == 0 || childrenDiscoveredTotal <= 20)
+          log.info(
+            s"[HW1-FEED] Missing trie children queued: $childrenDiscoveredTotal total " +
+              s"(+${newEntries.size} from this node, pending: ${pendingTasks.size})"
+          )
       }
     } catch {
       case NonFatal(e) =>
-        log.debug(s"[HEAL-INCREMENTAL] Could not decode node for child discovery: ${e.getMessage}")
+        log.debug(s"[HW1-FEED] Cannot decode healed node for child discovery: ${e.getMessage}. Skipping incremental discovery — full trie walk will find these nodes.")
         // Non-fatal — healing still works via final validation walk as safety net
     }
   }
