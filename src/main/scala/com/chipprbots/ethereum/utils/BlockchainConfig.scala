@@ -175,7 +175,10 @@ object BlockchainConfig {
       parseHexOrDecNumber(s)
     }
 
-    val networkId: Int = blockchainConfig.getInt("network-id")
+    val networkId: Int = Try(blockchainConfig.getInt("network-id")).getOrElse {
+      // Fallback for large network IDs (e.g., from hive test configs)
+      Try(BigInt(blockchainConfig.getString("network-id")).toInt).getOrElse(1)
+    }
 
     val monetaryPolicyConfig = MonetaryPolicyConfig(blockchainConfig.getConfig("monetary-policy"))
 
