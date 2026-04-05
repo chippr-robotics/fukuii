@@ -16,8 +16,10 @@ import com.chipprbots.ethereum.utils.Logger
   *   - JSON-RPC and Engine API servers
   *   - Metrics endpoint
   *
-  * @param instanceId unique identifier for this instance (e.g., "etc", "mordor", "sepolia")
-  * @param instanceConfig the per-instance configuration
+  * @param instanceId
+  *   unique identifier for this instance (e.g., "etc", "mordor", "sepolia")
+  * @param instanceConfig
+  *   the per-instance configuration
   */
 class ChainInstance(val instanceId: String, override val instanceConfig: InstanceConfig)
     extends BaseNode

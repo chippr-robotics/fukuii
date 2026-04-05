@@ -19,14 +19,14 @@ import com.chipprbots.ethereum.jsonrpc.JsonRpcResponse
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Logger
 
-/** Handles Engine API JSON-RPC methods (engine_* namespace).
-  * This controller processes raw JSON requests and delegates to EngineApiService.
+/** Handles Engine API JSON-RPC methods (engine_* namespace). This controller processes raw JSON requests and delegates
+  * to EngineApiService.
   */
 class EngineApiController(engineApiService: EngineApiService) extends Logger {
 
   private def reqId(request: JsonRpcRequest): JValue = request.id.getOrElse(JNull)
 
-  def handleRequest(request: JsonRpcRequest): IO[JsonRpcResponse] = {
+  def handleRequest(request: JsonRpcRequest): IO[JsonRpcResponse] =
     request.method match {
       case "engine_newPayloadV1" | "engine_newPayloadV2" | "engine_newPayloadV3" =>
         handleNewPayload(request, version = 3)
@@ -65,7 +65,6 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
         log.warn(s"Engine API: unknown method '$other'")
         IO.pure(JsonRpcResponse("2.0", None, Some(JsonRpcError.MethodNotFound), reqId(request)))
     }
-  }
 
   private def handleNewPayload(request: JsonRpcRequest, version: Int): IO[JsonRpcResponse] = {
     val params = request.params.map(_.arr).getOrElse(Nil)
@@ -92,7 +91,9 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
           JsonRpcResponse("2.0", Some(encodePayloadStatus(status)), None, reqId(request))
         }
       case _ =>
-        IO.pure(JsonRpcResponse("2.0", None, Some(JsonRpcError.InvalidParams("missing execution payload")), reqId(request)))
+        IO.pure(
+          JsonRpcResponse("2.0", None, Some(JsonRpcError.InvalidParams("missing execution payload")), reqId(request))
+        )
     }
   }
 
@@ -106,7 +107,9 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
           JsonRpcResponse("2.0", Some(encodeForkchoiceUpdatedResponse(response)), None, reqId(request))
         }
       case _ =>
-        IO.pure(JsonRpcResponse("2.0", None, Some(JsonRpcError.InvalidParams("missing fork choice state")), reqId(request)))
+        IO.pure(
+          JsonRpcResponse("2.0", None, Some(JsonRpcError.InvalidParams("missing fork choice state")), reqId(request))
+        )
     }
   }
 
@@ -121,35 +124,48 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
     }
   }
 
-  private def handleGetPayload(request: JsonRpcRequest): IO[JsonRpcResponse] = {
+  private def handleGetPayload(request: JsonRpcRequest): IO[JsonRpcResponse] =
     // Stub — payload building not yet implemented
     IO.pure(JsonRpcResponse("2.0", None, Some(JsonRpcError(-38001, "Payload not available", None)), reqId(request)))
-  }
 
   private def handleGetClientVersion(request: JsonRpcRequest): IO[JsonRpcResponse] = {
-    val clientVersion = JArray(List(JObject(
-      "code" -> JString("FK"),
-      "name" -> JString("Fukuii"),
-      "version" -> JString("0.1.240"),
-      "commit" -> JString(com.chipprbots.ethereum.utils.Config.clientVersion.takeRight(8))
-    )))
+    val clientVersion = JArray(
+      List(
+        JObject(
+          "code" -> JString("FK"),
+          "name" -> JString("Fukuii"),
+          "version" -> JString("0.1.240"),
+          "commit" -> JString(com.chipprbots.ethereum.utils.Config.clientVersion.takeRight(8))
+        )
+      )
+    )
     IO.pure(JsonRpcResponse("2.0", Some(clientVersion), None, reqId(request)))
   }
 
   private def handleGetBlobs(request: JsonRpcRequest): IO[JsonRpcResponse] = {
     // engine_getBlobsV1: return null for each requested versioned hash (we don't store blobs)
     // Lighthouse will fall back to fetching blobs from CL peers
-    val hashes = request.params.map(_.arr).getOrElse(Nil).headOption.collect {
-      case JArray(items) => items
-    }.getOrElse(Nil)
+    val hashes = request.params
+      .map(_.arr)
+      .getOrElse(Nil)
+      .headOption
+      .collect { case JArray(items) =>
+        items
+      }
+      .getOrElse(Nil)
     val nullBlobs = hashes.map(_ => JNull)
     IO.pure(JsonRpcResponse("2.0", Some(JArray(nullBlobs)), None, reqId(request)))
   }
 
   private def handleGetPayloadBodiesByHash(request: JsonRpcRequest): IO[JsonRpcResponse] = {
-    val hashes = request.params.map(_.arr).getOrElse(Nil).headOption.collect {
-      case JArray(items) => items.collect { case JString(hex) => hexToByteString(hex) }
-    }.getOrElse(Nil)
+    val hashes = request.params
+      .map(_.arr)
+      .getOrElse(Nil)
+      .headOption
+      .collect { case JArray(items) =>
+        items.collect { case JString(hex) => hexToByteString(hex) }
+      }
+      .getOrElse(Nil)
 
     val bodies = hashes.map { hash =>
       engineApiService.getPayloadBodyByHash(hash).map(encodePayloadBody).getOrElse(JNull)
@@ -159,14 +175,19 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
 
   private def handleGetPayloadBodiesByRange(request: JsonRpcRequest): IO[JsonRpcResponse] = {
     val params = request.params.map(_.arr).getOrElse(Nil)
-    val start = params.headOption.collect {
-      case JString(hex) => val c = hex.stripPrefix("0x"); if (c.isEmpty) BigInt(0) else BigInt(c, 16)
-      case JInt(n) => n
-    }.getOrElse(BigInt(0))
-    val count = params.lift(1).collect {
-      case JString(hex) => val c = hex.stripPrefix("0x"); if (c.isEmpty) BigInt(0) else BigInt(c, 16)
-      case JInt(n) => n
-    }.getOrElse(BigInt(0))
+    val start = params.headOption
+      .collect {
+        case JString(hex) => val c = hex.stripPrefix("0x"); if (c.isEmpty) BigInt(0) else BigInt(c, 16)
+        case JInt(n)      => n
+      }
+      .getOrElse(BigInt(0))
+    val count = params
+      .lift(1)
+      .collect {
+        case JString(hex) => val c = hex.stripPrefix("0x"); if (c.isEmpty) BigInt(0) else BigInt(c, 16)
+        case JInt(n)      => n
+      }
+      .getOrElse(BigInt(0))
 
     val bodies = (0L until count.toLong.min(1024L)).map { offset =>
       engineApiService.getPayloadBodyByNumber(start + offset).map(encodePayloadBody).getOrElse(JNull)
@@ -207,9 +228,12 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
       extraData = hexToByteString(extractString(fields, "extraData")),
       baseFeePerGas = extractQuantity(fields, "baseFeePerGas"),
       blockHash = hexToByteString(extractString(fields, "blockHash")),
-      transactions = fields.get("transactions").collect { case JArray(items) =>
-        items.collect { case JString(hex) => hexToByteString(hex) }
-      }.getOrElse(Seq.empty),
+      transactions = fields
+        .get("transactions")
+        .collect { case JArray(items) =>
+          items.collect { case JString(hex) => hexToByteString(hex) }
+        }
+        .getOrElse(Seq.empty),
       withdrawals = fields.get("withdrawals").collect { case JArray(items) =>
         items.collect { case obj: JObject => decodeWithdrawal(obj) }
       },
@@ -252,7 +276,8 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
 
   private def encodePayloadStatus(status: PayloadStatusV1): JValue = {
     var fields: List[(String, JValue)] = List("status" -> JString(status.status.value))
-    fields = fields :+ ("latestValidHash" -> status.latestValidHash.map(h => JString(byteStringToHex(h))).getOrElse(JNull))
+    fields =
+      fields :+ ("latestValidHash" -> status.latestValidHash.map(h => JString(byteStringToHex(h))).getOrElse(JNull))
     fields = fields :+ ("validationError" -> status.validationError.map(JString(_)).getOrElse(JNull))
     JObject(fields)
   }
@@ -264,15 +289,21 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
   }
 
   private def extractString(fields: Map[String, JValue], key: String): String =
-    fields.get(key).collect { case JString(s) => s }.getOrElse(
-      throw new IllegalArgumentException(s"Missing required field: $key")
-    )
+    fields
+      .get(key)
+      .collect { case JString(s) => s }
+      .getOrElse(
+        throw new IllegalArgumentException(s"Missing required field: $key")
+      )
 
   private def extractQuantity(fields: Map[String, JValue], key: String): BigInt =
-    fields.get(key).collect {
-      case JString(hex) =>
-        val clean = hex.stripPrefix("0x")
-        if (clean.isEmpty) BigInt(0) else BigInt(clean, 16)
-      case JInt(n) => n
-    }.getOrElse(BigInt(0))
+    fields
+      .get(key)
+      .collect {
+        case JString(hex) =>
+          val clean = hex.stripPrefix("0x")
+          if (clean.isEmpty) BigInt(0) else BigInt(clean, 16)
+        case JInt(n) => n
+      }
+      .getOrElse(BigInt(0))
 }

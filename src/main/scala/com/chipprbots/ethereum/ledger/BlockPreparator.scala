@@ -78,13 +78,13 @@ class BlockPreparator(
     creditBaseFeeToTreasury(block.header, blockchainConfig.treasuryAddress, worldAfterOmmers)
   }
 
-  /** EIP-4895: Process withdrawals from the beacon chain. Each withdrawal credits the target address
-    * with the specified amount (in Gwei, converted to Wei).
+  /** EIP-4895: Process withdrawals from the beacon chain. Each withdrawal credits the target address with the specified
+    * amount (in Gwei, converted to Wei).
     */
   private def processWithdrawals(
       block: Block,
       world: InMemoryWorldStateProxy
-  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy = {
+  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
     block.body.withdrawals match {
       case Some(withdrawals) =>
         withdrawals.foldLeft(world) { (ws, withdrawal) =>
@@ -100,7 +100,6 @@ class BlockPreparator(
         }
       case None => world
     }
-  }
 
   /** ECIP-1111: Credit baseFee revenue to the treasury address. This runs AFTER block rewards and ommer rewards,
     * matching core-geth's Finalize() order.

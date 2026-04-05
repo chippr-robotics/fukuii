@@ -11,9 +11,8 @@ import com.chipprbots.ethereum.utils.Logger
 
 /** Multi-network runtime that manages concurrent ChainInstances.
   *
-  * Reads the `fukuii-runtime.instances` HOCON block and creates one
-  * ChainInstance per entry. Each instance runs its own ActorSystem,
-  * database, networking, and Engine API on separate ports.
+  * Reads the `fukuii-runtime.instances` HOCON block and creates one ChainInstance per entry. Each instance runs its own
+  * ActorSystem, database, networking, and Engine API on separate ports.
   *
   * Usage:
   * {{{
@@ -64,21 +63,26 @@ object FukuiiRuntime extends Logger {
     *   }
     * }}}
     *
-    * Each instance block must be a valid fukuii configuration (same
-    * structure as the standard `fukuii {}` block).
+    * Each instance block must be a valid fukuii configuration (same structure as the standard `fukuii {}` block).
     */
   def fromConfig(rootConfig: TypesafeConfig): FukuiiRuntime = {
     val runtimeConfig = rootConfig.getConfig("fukuii-runtime")
     val instancesConfig = runtimeConfig.getConfig("instances")
 
-    val instances = instancesConfig.root().keySet().asScala.map { instanceId =>
-      val rawInstanceConf = instancesConfig.getConfig(instanceId)
-      // Each instance block wraps config in a `fukuii { ... }` section — extract it
-      val instanceConf = if (rawInstanceConf.hasPath("fukuii")) rawInstanceConf.getConfig("fukuii") else rawInstanceConf
-      val ic = new InstanceConfig(instanceConf, instanceId)
-      log.info(s"Parsed chain instance: $instanceId (network=${ic.blockchains.network})")
-      instanceId -> new ChainInstance(instanceId, ic)
-    }.toMap
+    val instances = instancesConfig
+      .root()
+      .keySet()
+      .asScala
+      .map { instanceId =>
+        val rawInstanceConf = instancesConfig.getConfig(instanceId)
+        // Each instance block wraps config in a `fukuii { ... }` section — extract it
+        val instanceConf =
+          if (rawInstanceConf.hasPath("fukuii")) rawInstanceConf.getConfig("fukuii") else rawInstanceConf
+        val ic = new InstanceConfig(instanceConf, instanceId)
+        log.info(s"Parsed chain instance: $instanceId (network=${ic.blockchains.network})")
+        instanceId -> new ChainInstance(instanceId, ic)
+      }
+      .toMap
 
     new FukuiiRuntime(instances)
   }

@@ -10,9 +10,8 @@ import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields._
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
-/** Post-merge block header validator. Skips PoW (Ethash) validation entirely.
-  * Enforces: difficulty=0, nonce=0, empty ommers.
-  * Validates withdrawalsRoot (Shanghai+) and blob gas fields (Cancun+).
+/** Post-merge block header validator. Skips PoW (Ethash) validation entirely. Enforces: difficulty=0, nonce=0, empty
+  * ommers. Validates withdrawalsRoot (Shanghai+) and blob gas fields (Cancun+).
   */
 object PostMergeBlockHeaderValidator extends BlockHeaderValidatorSkeleton {
 

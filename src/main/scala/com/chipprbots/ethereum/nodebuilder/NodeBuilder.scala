@@ -123,9 +123,13 @@ trait StorageBuilder {
   self: InstanceConfigProvider =>
   lazy val storagesInstance: DataSourceComponent with StoragesComponent with PruningModeComponent =
     instanceConfig.Db.dataSource match {
-      case "rocksdb" => new RocksDbDataSourceComponent with PruningConfigBuilder with Storages.DefaultStorages with InstanceConfigProvider {
-        override def instanceConfig: InstanceConfig = self.instanceConfig
-      }
+      case "rocksdb" =>
+        new RocksDbDataSourceComponent
+          with PruningConfigBuilder
+          with Storages.DefaultStorages
+          with InstanceConfigProvider {
+          override def instanceConfig: InstanceConfig = self.instanceConfig
+        }
     }
 }
 
@@ -374,7 +378,11 @@ trait BlockchainHostBuilder {
 
 trait ServerActorBuilder {
 
-  self: ActorSystemBuilder with NodeStatusBuilder with BlockchainBuilder with PeerManagerActorBuilder with InstanceConfigProvider =>
+  self: ActorSystemBuilder
+    with NodeStatusBuilder
+    with BlockchainBuilder
+    with PeerManagerActorBuilder
+    with InstanceConfigProvider =>
 
   lazy val networkConfig = instanceConfig.Network
 
@@ -699,7 +707,13 @@ trait JSONRpcHealthcheckerBuilder {
 }
 
 trait EngineApiBuilder {
-  self: ActorSystemBuilder with BlockchainBuilder with BlockchainConfigBuilder with ConsensusBuilder with StorageBuilder with MiningBuilder with InstanceConfigProvider =>
+  self: ActorSystemBuilder
+    with BlockchainBuilder
+    with BlockchainConfigBuilder
+    with ConsensusBuilder
+    with StorageBuilder
+    with MiningBuilder
+    with InstanceConfigProvider =>
 
   import com.chipprbots.ethereum.consensus.engine._
 
@@ -724,7 +738,7 @@ trait EngineApiBuilder {
 
   lazy val engineApiController: EngineApiController = new EngineApiController(engineApiService)
 
-  lazy val maybeEngineApiServer: Option[EngineApiHttpServer] = {
+  lazy val maybeEngineApiServer: Option[EngineApiHttpServer] =
     if (engineApiConfig.enabled) {
       val jwtAuth = engineApiConfig.jwtSecretPath match {
         case Some(path) => JwtAuthenticator.fromFile(path)
@@ -732,7 +746,6 @@ trait EngineApiBuilder {
       }
       Some(new EngineApiHttpServer(engineApiController, jwtAuth, engineApiConfig))
     } else None
-  }
 }
 
 trait JSONRpcHttpServerBuilder {

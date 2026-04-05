@@ -26,9 +26,8 @@ import com.chipprbots.ethereum.utils.VmConfig.VmMode
 
 import ConfigUtils._
 
-/** Singleton Config for backward compatibility.
-  * All existing code that references `Config.xxx` continues to work unchanged.
-  * For multi-instance mode, create new `InstanceConfig` instances instead.
+/** Singleton Config for backward compatibility. All existing code that references `Config.xxx` continues to work
+  * unchanged. For multi-instance mode, create new `InstanceConfig` instances instead.
   */
 object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "default") {
 

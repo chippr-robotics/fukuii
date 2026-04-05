@@ -22,8 +22,8 @@ object ForkId {
   def create(genesisHash: ByteString, config: BlockchainConfig)(head: BigInt): ForkId =
     create(genesisHash, config)(head, 0L)
 
-  /** EIP-2124 + EIP-6122: ForkId computation with both block number and timestamp.
-    * Block-number forks are compared against `head`, timestamp forks against `headTimestamp`.
+  /** EIP-2124 + EIP-6122: ForkId computation with both block number and timestamp. Block-number forks are compared
+    * against `head`, timestamp forks against `headTimestamp`.
     */
   def create(genesisHash: ByteString, config: BlockchainConfig)(head: BigInt, headTimestamp: Long): ForkId = {
     val crc = new CRC32()

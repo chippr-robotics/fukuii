@@ -27,14 +27,16 @@ import ConfigUtils._
 
 /** Per-instance configuration for a Fukuii chain instance.
   *
-  * This class mirrors every field from the legacy `object Config` singleton,
-  * but is instantiable per-chain-instance for multi-network support.
+  * This class mirrors every field from the legacy `object Config` singleton, but is instantiable per-chain-instance for
+  * multi-network support.
   *
-  * For backward compatibility, `object Config` extends `InstanceConfig` with
-  * the default `ConfigFactory.load().getConfig("fukuii")` configuration.
+  * For backward compatibility, `object Config` extends `InstanceConfig` with the default
+  * `ConfigFactory.load().getConfig("fukuii")` configuration.
   *
-  * @param config the "fukuii" section of the HOCON configuration
-  * @param instanceId optional instance identifier for multi-instance mode (e.g., "etc", "mordor", "sepolia")
+  * @param config
+  *   the "fukuii" section of the HOCON configuration
+  * @param instanceId
+  *   optional instance identifier for multi-instance mode (e.g., "etc", "mordor", "sepolia")
   */
 class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "default") {
 
@@ -155,16 +157,16 @@ class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "defau
   }
 }
 
-/** Cache configuration used by LruCache, MapCache, StateStorage.
-  * Defined at package level so it can be referenced as a type from anywhere.
+/** Cache configuration used by LruCache, MapCache, StateStorage. Defined at package level so it can be referenced as a
+  * type from anywhere.
   */
 trait NodeCacheConfig {
   val maxSize: Long
   val maxHoldTime: scala.concurrent.duration.FiniteDuration
 }
 
-/** Trait that provides access to an InstanceConfig.
-  * Mix this into cake pattern traits that need per-instance configuration.
+/** Trait that provides access to an InstanceConfig. Mix this into cake pattern traits that need per-instance
+  * configuration.
   */
 trait InstanceConfigProvider {
   def instanceConfig: InstanceConfig
