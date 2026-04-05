@@ -237,7 +237,9 @@ class SNAPSyncController(
   private var lastAccountsDownloaded: Long = 0
 
   override def preStart(): Unit = {
-    log.info("SNAP Sync Controller initialized")
+    log.info("=" * 70)
+    log.info(s"=== Fukuii SNAP Sync — ${java.time.Instant.now()} ===")
+    log.info("=" * 70)
     progressMonitor.startPeriodicLogging()
   }
 
@@ -312,7 +314,11 @@ class SNAPSyncController(
         )
         requestSnapRetry("No snap/1 peers found within capability check timeout")
       } else {
-        log.warning("No snap-capable peers found after grace period.")
+        val graceSeconds = snapSyncConfig.snapCapabilityGracePeriod.toSeconds
+        log.warning(
+          s"No SNAP-capable peers found after ${graceSeconds}s bootstrap grace period. " +
+            s"Falling back to fast sync (full header + state download)."
+        )
         requestSnapRetry("No snap/1 peers found within capability check timeout")
       }
 
@@ -422,9 +428,10 @@ class SNAPSyncController(
       // are ~99.9% valid across pivot changes) and avoids the download-stall-restart loop.
       val now = System.currentTimeMillis()
       if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) {
-        log.warning(
-          s"Ignoring PivotStateUnservable due to restart guard " +
-            s"(phase=$currentPhase, emptyResponses=$emptyResponses, reason=$reason)"
+        val elapsed = (now - lastPivotRestartMs) / 1000
+        log.debug(
+          s"Rate-limiting pivot refresh: PivotStateUnservable received within ${elapsed}s of last refresh " +
+            s"(phase=$currentPhase). Minimum interval: ${MinPivotRestartInterval.toSeconds}s."
         )
       } else if (
         currentPhase == AccountRangeSync || currentPhase == StorageRangeSync || currentPhase == ByteCodeAndStorageSync
@@ -461,7 +468,9 @@ class SNAPSyncController(
           refreshPivotInPlace(reason)
         }
       } else {
-        log.info(s"Ignoring PivotStateUnservable in phase=$currentPhase (reason=$reason)")
+        log.debug(
+          s"Dropping PivotStateUnservable during $currentPhase — signal is irrelevant for this phase. Sync continuing normally."
+        )
       }
 
     // Handle pivot header bootstrap completion during active sync.
@@ -620,14 +629,11 @@ class SNAPSyncController(
       refreshPivotInPlace("all healing peers stateless")
 
     case StateHealingComplete =>
-      log.info("Healing coordinator idle (no pending tasks, no active requests).")
-      if (trieWalkInProgress) {
-        // A trie walk is already running — its result will determine next step
-        log.info("Trie walk in progress, waiting for result...")
-      } else {
-        // No walk in progress — start one to check for deeper missing nodes
-        startTrieWalk()
-      }
+      log.info(
+        s"State healing complete — ${if (trieWalkInProgress) "trie walk already in progress (waiting for result)"
+         else "starting validation trie walk to confirm state root"}"
+      )
+      if (!trieWalkInProgress) startTrieWalk()
 
     case TrieWalkHeartbeat =>
       if (trieWalkInProgress) {
@@ -896,7 +902,9 @@ class SNAPSyncController(
         )
         completeSnapSync()
       } else {
-        log.info("All state downloads complete (accounts + bytecodes + storage). Starting healing...")
+        log.info("=" * 60)
+        log.info("PHASE: All downloads complete → Trie Healing")
+        log.info("=" * 60)
         MilestoneLog.phase("Trie healing starting")
         currentPhase = StateHealing
         // Check if healing was in progress when the node last stopped — skip re-walk if so
@@ -2171,6 +2179,9 @@ class SNAPSyncController(
     val counter = new java.util.concurrent.atomic.AtomicLong(0)
     trieWalkNodesScanned = counter
     stateRoot.foreach { root =>
+      log.info("=" * 60)
+      log.info("PHASE: Trie Healing → State Validation Walk")
+      log.info("=" * 60)
       log.info("Starting trie walk to discover missing nodes for healing...")
       val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
       val selfRef = self
@@ -2887,6 +2898,9 @@ class SNAPSyncController(
 
   private def completeSnapSync(): Unit =
     pivotBlock.foreach { pivot =>
+      log.info("=" * 60)
+      log.info(s"PHASE: SNAP Sync Complete → Starting Regular Sync from block $pivot")
+      log.info("=" * 60)
       if (snapSyncConfig.deferredMerkleization) {
         // With deferred merkleization, don't wait for chain download to finish.
         // Downloading 24M+ block headers/bodies/receipts from genesis takes days and
