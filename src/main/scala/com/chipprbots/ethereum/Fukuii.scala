@@ -22,6 +22,11 @@ object Fukuii extends Logger {
     java.nio.file.Files.createDirectories(tmpDir)
     System.setProperty("java.io.tmpdir", tmpDir.toString)
 
+    // Truncate log files so each process starts with a clean log (no stale output from prior runs).
+    // Placed here — after Config is available, before any log.info() call — so the truncation
+    // notice is the first line in the file and nothing is missed.
+    truncateLogs()
+
     // Check for --tui flag to enable console UI (disabled by default)
     val enableConsoleUI = args.contains("--tui")
 
@@ -77,6 +82,27 @@ object Fukuii extends Logger {
     Runtime.getRuntime.addShutdownHook(new Thread(() => tui.foreach(_.shutdown())))
 
     node.start()
+  }
+
+  private def truncateLogs(): Unit = {
+    import java.nio.file.{Files, Paths, StandardOpenOption}
+    import scala.util.Try
+
+    val logsDir  = Try(Config.config.getString("logging.logs-dir")).getOrElse("./logs")
+    val logsFile = Try(Config.config.getString("logging.logs-file")).getOrElse("fukuii")
+
+    val paths = Seq(
+      Paths.get(logsDir).resolve(s"$logsFile.log"),
+      Paths.get(logsDir).resolve("milestone.log")
+    )
+
+    paths.foreach { path =>
+      if (Files.exists(path)) {
+        Try(Files.write(path, Array.emptyByteArray, StandardOpenOption.TRUNCATE_EXISTING))
+          .failed.foreach(e => log.warn("Failed to truncate log file {}: {}", path, e.getMessage))
+      }
+    }
+    log.info("Log files truncated on startup")
   }
 
   private def deleteRocksDBFiles(): Unit = {
