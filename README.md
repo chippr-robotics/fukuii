@@ -1,4 +1,4 @@
-## <i>Alpha/Olympia Status</i>: 🟢 2,314 tests passing — [View ETC Handoff](ETC-HANDOFF.md) | [View Olympia Handoff](OLYMPIA-HANDOFF.md)
+## <i>Alpha/Olympia Status</i>: 🟢 2,314 tests passing — [View ETC Handoff](ETC-HANDOFF.md) | [View Olympia Handoff](OLYMPIA-HANDOFF.md) | 🔷 Engine API: Sepolia validated
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/chippr-robotics/fukuii/HEAD/docs/images/fukuii-hex-logo.png" alt="Fukuii Logo" width="400"/>
@@ -17,6 +17,8 @@
 [![codecov](https://codecov.io/gh/chippr-robotics/fukuii/graph/badge.svg)](https://codecov.io/gh/chippr-robotics/fukuii)
 
 Fukuii is a continuation and re‑branding of the Ethereum Classic client previously known as Mantis. Mantis was developed by Input Output (HK) as a Scala client for the Ethereum Classic (ETC) network. This project is an independent fork maintained by Chippr Robotics LLC with the aim of modernising the codebase and ensuring long‑term support.
+
+With the Engine API implementation (V1-V4, through Prague/Electra), Fukuii now operates as a **dual ETC/ETH execution client**. When paired with any Ethereum consensus layer client (Lighthouse, Prysm, Teku, Lodestar, Nimbus), Fukuii can sync and follow Ethereum mainnet and testnets via the standard Engine API protocol. This has been validated on the Sepolia testnet with 21+ EL peers and a Lighthouse consensus layer.
 
 Fukuii retains the robust architecture and ETC compatibility of Mantis while introducing new features, updated dependencies and a streamlined build. This fork has been renamed throughout the code and documentation:
 - Executable scripts are renamed from mantis to fukuii.
@@ -110,6 +112,47 @@ Fukuii is developed with AI-assisted engineering (Claude) as a core methodology 
 Enable MCP by adding `"mcp"` to `fukuii.network.rpc.apis` in your configuration.
 
 See [MCP Documentation](docs/MCP.md) for detailed integration instructions with AI assistants.
+
+### 🔷 Engine API — Dual ETC/ETH Execution
+
+Fukuii implements the Ethereum Engine API (V1-V4), enabling it to operate as a full execution layer client for post-Merge Ethereum networks:
+
+- **Engine API V1-V4**: Complete implementation through Prague/Electra, including `engine_newPayloadV1-V4`, `engine_forkchoiceUpdatedV1-V3`, `engine_getPayloadV1-V4`, `engine_exchangeCapabilities`, `engine_getClientVersionV1`, `engine_getBlobsV1`, and payload body retrieval
+- **Any CL Client**: Pairs with Lighthouse, Prysm, Teku, Lodestar, or Nimbus via JWT-authenticated authrpc port (default 8551)
+- **Optimistic Block Import**: Follows the CL chain tip via checkpoint sync, with automatic fallback to full execution when state is available
+- **Post-Merge Validation**: Block header validation for PoS blocks (difficulty=0, nonce=0, empty ommers, withdrawalsRoot, blobGas, requestsHash)
+- **EIP Support**: EIP-4895 withdrawals, EIP-4844 blob transactions, EIP-4788 beacon root contract, EIP-7685 execution requests, EIP-6122 timestamp ForkID
+
+**Supported ETH Networks:**
+
+| Network | Chain ID | Status |
+|---------|----------|--------|
+| Sepolia | 11155111 | Validated — 21+ EL peers, Lighthouse CL |
+| Ethereum Mainnet | 1 | Configuration available |
+
+**Quick Start (Sepolia with Lighthouse):**
+
+```bash
+cd ops/barad-dur/sepolia
+openssl rand -hex 32 > jwt.hex    # generate JWT secret
+docker compose up -d
+docker compose logs -f fukuii-sepolia   # watch EL
+docker compose logs -f lighthouse       # watch CL
+```
+
+See [`ops/barad-dur/sepolia/`](ops/barad-dur/sepolia/) for the full deployment configuration including Grafana dashboard.
+
+### 🔮 Pluggable Consensus Architecture
+
+The Engine API implementation is the first step toward Fukuii's long-term architecture: a **pluggable consensus, multi-network runtime** with three layers:
+
+1. **fukuii-core** — Consensus-agnostic EVM execution engine, state storage, and JSON-RPC
+2. **fukuii-env** — Per-network chain parameters, genesis, fork schedules, and gas mechanics
+3. **Consensus Module** — Swappable backends: PoW (ETC), Engine API (ETH), PoA, OP-style derivation, ZK verification, or checkpoint-based sidechains (Orbita)
+
+This enables running ETC mainnet, ETH mainnet/testnets, L2 rollups, and application-specific chains from a single codebase. The design draws from ETCDEV's Orbita sidechain proposal (ETC Summit 2018) — an "orbita" is a chain instance within the fukuii runtime.
+
+For the full architectural vision, see [Pluggable Consensus & Multi-Network Architecture](docs/architecture/pluggable-consensus-vision.md).
 
 ## Getting started
 
