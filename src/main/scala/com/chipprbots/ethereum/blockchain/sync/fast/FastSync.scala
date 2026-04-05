@@ -99,6 +99,9 @@ class FastSync(
   }
 
   def start(): Unit = {
+    log.info("=" * 70)
+    log.info(s"=== Fukuii Fast Sync — ${java.time.Instant.now()} ===")
+    log.info("=" * 70)
     log.info("Trying to start block synchronization (fast mode)")
     fastSyncStateStorage.getSyncState() match {
       case Some(syncState) => startWithState(syncState)
@@ -246,12 +249,12 @@ class FastSync(
         syncState = syncState.copy(stateSyncFinished = true)
         processSyncing()
       case StateSyncFailed(reason) =>
-        log.warning("State sync failed with critical error: {}. Requesting fresh pivot block.", reason)
+        log.warning("Fast sync state download failed: {}. Requesting new pivot block to retry from a fresh checkpoint.", reason)
         updatePivotBlock(ImportedLastBlock)
       case SyncStateSchedulerActor.NetworkIncompatible =>
         log.warning(
-          "State scheduler reports no ETH63-67 peers available (ETH68-only network). " +
-            "Fast sync cannot use GetNodeData. Requesting fallback to SNAP sync."
+          "ETH63/64 GetNodeData unavailable — network appears ETH68-only (no peers serving state trie). " +
+            "Fast sync cannot proceed without state trie access. Falling back to SNAP sync."
         )
         cleanup()
         context.become(idle)
@@ -479,6 +482,9 @@ class FastSync(
             if (syncState.pivotBlock.stateRoot == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
               syncState = syncState.copy(stateSyncFinished = true, updatingPivotBlock = false)
             } else {
+              log.info("=" * 60)
+              log.info(s"PHASE: Fast Sync state download — pivot ${pivotBlockHeader.number}, root ${ByteStringUtils.hash2string(pivotBlockHeader.stateRoot)}")
+              log.info("=" * 60)
               syncState = syncState.copy(updatingPivotBlock = false)
               stateSyncRestartRequested = false
               syncStateScheduler ! StartSyncingTo(pivotBlockHeader.stateRoot, pivotBlockHeader.number)
@@ -942,7 +948,9 @@ class FastSync(
     def finish(): Unit = {
       val totalTime = totalMinutesTaken()
       FastSyncMetrics.setFastSyncTotalTimeGauge(totalTime.toDouble)
-      log.info("Total time taken for FastSync was {} minutes", totalTime)
+      log.info("=" * 60)
+      log.info(s"PHASE: Fast Sync complete → Switching to Regular Sync (${totalTime}m elapsed)")
+      log.info("=" * 60)
       log.info("Block synchronization in fast mode finished, switching to regular mode")
 
       // We have downloaded to target + fastSyncBlockValidationX, se we must discard those last blocks
