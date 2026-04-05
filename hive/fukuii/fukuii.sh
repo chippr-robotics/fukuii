@@ -51,10 +51,8 @@ fi
 # 3. Set up JWT secret for Engine API
 # ==============================================================================
 
-if [ -n "$TTD" ]; then
-    echo "Engine API mode: TTD=$TTD"
-    echo "0x7365637265747365637265747365637265747365637265747365637265747365" > "$JWT_SECRET_FILE"
-fi
+# JWT secret is always written (Engine API always enabled for hive)
+echo "Engine API mode: TTD=${TTD:-0}"
 
 # ==============================================================================
 # 4. Import chain data if provided
@@ -120,15 +118,20 @@ if [ -n "$HIVE_MINER" ]; then
     FLAGS="$FLAGS -Dfukuii.mining.coinbase=$HIVE_MINER"
 fi
 
-# Engine API
+# Engine API — always enabled (hive RPC-compat tests are post-merge)
+echo "0x7365637265747365637265747365637265747365637265747365637265747365" > "$JWT_SECRET_FILE"
+FLAGS="$FLAGS -Dfukuii.network.engine-api.enabled=true"
+FLAGS="$FLAGS -Dfukuii.network.engine-api.interface=0.0.0.0"
+FLAGS="$FLAGS -Dfukuii.network.engine-api.port=8551"
+FLAGS="$FLAGS -Dfukuii.network.engine-api.jwt-secret-path=$JWT_SECRET_FILE"
+FLAGS="$FLAGS -Dfukuii.mining.protocol=engine-api"
+FLAGS="$FLAGS -Dfukuii.blockchains.mordor.network-type=eth"
+
 if [ -n "$TTD" ]; then
-    FLAGS="$FLAGS -Dfukuii.network.engine-api.enabled=true"
-    FLAGS="$FLAGS -Dfukuii.network.engine-api.interface=0.0.0.0"
-    FLAGS="$FLAGS -Dfukuii.network.engine-api.port=8551"
-    FLAGS="$FLAGS -Dfukuii.network.engine-api.jwt-secret-path=$JWT_SECRET_FILE"
-    FLAGS="$FLAGS -Dfukuii.mining.protocol=engine-api"
     FLAGS="$FLAGS -Dfukuii.blockchains.mordor.terminal-total-difficulty=$TTD"
-    FLAGS="$FLAGS -Dfukuii.blockchains.mordor.network-type=eth"
+else
+    # Default TTD=0 for post-merge tests
+    FLAGS="$FLAGS -Dfukuii.blockchains.mordor.terminal-total-difficulty=0"
 fi
 
 # Timestamp forks
