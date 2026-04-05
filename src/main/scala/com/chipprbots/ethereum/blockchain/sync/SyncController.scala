@@ -522,33 +522,34 @@ class SyncController(
           bestBlockNum,
           snapStateRoot == pivotStateRoot
         )
-        // After SNAP sync with deferred merkleization + pivot refreshes, the finalized trie root
-        // may differ from the pivot block header's stateRoot. The trie nodes are stored under
-        // the finalized root's hash, but the pivot header references the original (now orphaned) root.
-        // Fix: substitute the finalized root into the pivot block header.
-        bestBlockHeader.foreach { header =>
-          val mptStorage = stateStorage.getReadOnlyStorage
-          val pivotRootExists = try { mptStorage.get(header.stateRoot.toArray); true } catch { case _: Exception => false }
-          log.info(
-            "State root availability check: pivotRoot({})={}",
-            header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString,
-            if (pivotRootExists) "EXISTS" else "MISSING"
+        // Check the canonical SNAP target root (stored in AppStateStorage) against RocksDB.
+        // We must NOT use the number-mapped block header's stateRoot: a prior run may have
+        // substituted a non-network block whose stateRoot (6fd8f81d) is already in RocksDB,
+        // making the old header-based check always pass and silently skipping recovery.
+        // snapSyncStateRoot is the real ETC-network stateRoot we must achieve for regular sync.
+        val canonicalRoot = snapStateRoot.orElse(bestBlockHeader.map(_.stateRoot))
+        val mptStorage = stateStorage.getReadOnlyStorage
+        val canonicalRootExists = canonicalRoot.exists { r =>
+          try { mptStorage.get(r.toArray); true } catch { case _: Exception => false }
+        }
+        log.info(
+          "State root availability check: canonicalRoot({})={}",
+          canonicalRoot.map(r => r.take(8).toArray.map("%02x".format(_)).mkString).getOrElse("none"),
+          if (canonicalRootExists) "EXISTS" else "MISSING"
+        )
+        if (!canonicalRootExists) {
+          // snapSyncDone=true but the real SNAP target root is missing from RocksDB — false positive.
+          // Reset and re-run SNAP sync. SNAP resumes from the healing phase when accounts are already
+          // complete and pivot drift is within maxPivotStalenessBlocks. Geth/Besu never substitute
+          // non-network blocks; they re-run the sync phase to obtain the correct state.
+          log.warning(
+            "SNAP sync false positive detected: snapSyncDone=true but canonical SNAP state root {} " +
+              "is MISSING from RocksDB. Resetting snapSyncDone to re-run SNAP healing.",
+            canonicalRoot.map(r => r.take(8).toArray.map("%02x".format(_)).mkString).getOrElse("none")
           )
-          if (!pivotRootExists) {
-            // snapSyncDone=true but the pivot's stateRoot is missing from RocksDB — this is a
-            // false positive (state was only in the LRU cache when snapSyncDone was committed).
-            // The correct recovery is to reset snapSyncDone=false and re-run SNAP sync, which
-            // will resume from the healing phase (accounts already complete, drift < maxPivotStalenessBlocks).
-            // Geth/Besu never substitute non-network blocks; they re-run the sync phase.
-            log.warning(
-              "SNAP sync false positive detected: snapSyncDone=true but pivot stateRoot {} " +
-                "is MISSING from RocksDB. Resetting snapSyncDone to re-run SNAP healing.",
-              header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString
-            )
-            appStateStorage.resetSnapSyncDone().commit()
-            startSnapSync()
-            return
-          }
+          appStateStorage.resetSnapSyncDone().commit()
+          startSnapSync()
+          return
         }
         // General consistency repair: ensure bestBlockInfo and chain weight agree with
         // the number-mapped header hash. This handles any case where a prior run changed
