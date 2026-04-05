@@ -3057,23 +3057,61 @@ class SNAPSyncController(
             pivotHeader.difficulty
           }
 
-        // Atomic finalization — commit SnapSyncDone marker together with
-        // pivot block, chain weight, and best block info in a single batch.
-        // If any of these are missing when SnapSyncDone=true, regular sync fails
-        // on startup (branch resolution finds no chain weight, no best block hash).
-        // go-ethereum writes pivot + state atomically; we do the same.
-        appStateStorage.snapSyncDone()
-          .and(blockchainWriter.storeBlock(Block(pivotHeader, BlockBody.empty)))
-          .and(blockchainWriter.storeChainWeight(
-            pivotHash,
-            ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty)
-          ))
-          .and(appStateStorage.putBestBlockInfo(
-            com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash, pivot)
-          ))
-          .commit()
+        // Flush LRU cache to RocksDB BEFORE committing snapSyncDone.
+        // DeferredWriteMptStorage.flush() writes nodes to CachedReferenceCountedStorage's
+        // LRU cache only (persist() is a NO-OP). If the process dies after snapSyncDone=true
+        // but before a real flush, the state root is lost — a false-positive snapSyncDone.
+        // forcePersist(GenesisDataLoad) writes all LRU entries to RocksDB and clears the cache.
+        log.info("Flushing state trie LRU cache to RocksDB before SNAP finalization...")
+        stateStorage.forcePersist(StateStorage.GenesisDataLoad)
 
-        log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.take(8).toHex})")
+        // Verify the state root is now durably in RocksDB before marking snapSyncDone.
+        val finalizedRoot = appStateStorage.getSnapSyncFinalizedRoot().orElse(stateRoot)
+        val rootStorage = stateStorage.getReadOnlyStorage
+        val rootConfirmed = finalizedRoot.exists { r =>
+          try { rootStorage.get(r.toArray); true }
+          catch { case _: Exception => false }
+        }
+
+        if (!rootConfirmed) {
+          log.error(
+            "State root NOT confirmed in RocksDB after forcePersist — aborting snapSyncDone commit. " +
+              "Resetting validation counters to trigger healing fetch of missing root."
+          )
+          validationRetryCount = 0
+          healingValidationCycles = 0
+          scheduler.scheduleOnce(ValidationRetryDelay) { validateState() }(ec)
+          // Do NOT finalize — return without sending Done or stopping chainDownloader.
+        } else {
+          log.info(
+            "State root {} confirmed in RocksDB. Committing SNAP finalization.",
+            finalizedRoot.map(_.take(8).toHex).getOrElse("?")
+          )
+          // Atomic finalization — commit SnapSyncDone marker together with
+          // pivot block, chain weight, and best block info in a single batch.
+          // go-ethereum writes pivot + state atomically; we do the same.
+          appStateStorage.snapSyncDone()
+            .and(blockchainWriter.storeBlock(Block(pivotHeader, BlockBody.empty)))
+            .and(blockchainWriter.storeChainWeight(
+              pivotHash,
+              ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty)
+            ))
+            .and(appStateStorage.putBestBlockInfo(
+              com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash, pivot)
+            ))
+            .commit()
+
+          log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.take(8).toHex})")
+
+          chainDownloader.foreach(context.stop)
+          chainDownloader = None
+
+          progressMonitor.complete()
+          log.info(progressMonitor.currentProgress.toString)
+
+          context.become(completed)
+          context.parent ! Done
+        }
 
       case None =>
         // Fallback: shouldn't happen since PivotHeaderBootstrap stored the header
@@ -3081,17 +3119,16 @@ class SNAPSyncController(
         appStateStorage.snapSyncDone()
           .and(appStateStorage.putBestBlockNumber(pivot))
           .commit()
+
+        chainDownloader.foreach(context.stop)
+        chainDownloader = None
+
+        progressMonitor.complete()
+        log.info(progressMonitor.currentProgress.toString)
+
+        context.become(completed)
+        context.parent ! Done
     }
-
-    // Stop chain downloader if still running
-    chainDownloader.foreach(context.stop)
-    chainDownloader = None
-
-    progressMonitor.complete()
-    log.info(progressMonitor.currentProgress.toString)
-
-    context.become(completed)
-    context.parent ! Done
   }
 
   /** Waiting for parallel chain download to finish after SNAP state sync completed. */

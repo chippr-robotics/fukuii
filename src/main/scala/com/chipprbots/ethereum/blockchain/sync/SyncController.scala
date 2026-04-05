@@ -551,7 +551,22 @@ class SyncController(
                     header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString
                   )
                   val updatedHeader = header.copy(stateRoot = fRoot)
-                  blockchainWriter.storeBlockHeader(updatedHeader).commit()
+                  val updatedHash = updatedHeader.hash
+                  // Carry chain weight and bestBlockInfo forward to the new header hash.
+                  // storeBlockHeader changes the hash (it includes stateRoot); without this,
+                  // the ETH handshaker throws "Chain weight not found" on the new hash.
+                  val existingWeight = blockchainReader.getChainWeightByHash(header.hash)
+                    .getOrElse(com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly(header.difficulty))
+                  blockchainWriter.storeBlockHeader(updatedHeader)
+                    .and(blockchainWriter.storeChainWeight(updatedHash, existingWeight))
+                    .and(appStateStorage.putBestBlockInfo(
+                      com.chipprbots.ethereum.domain.appstate.BlockInfo(updatedHash, header.number)
+                    ))
+                    .commit()
+                  log.info(
+                    "Carried chain weight and bestBlockInfo forward to new hash {}",
+                    updatedHash.take(8).toArray.map("%02x".format(_)).mkString
+                  )
                 }
               case None =>
                 log.error(
