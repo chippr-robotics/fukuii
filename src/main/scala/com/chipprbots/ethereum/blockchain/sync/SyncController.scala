@@ -577,6 +577,33 @@ class SyncController(
             }
           }
         }
+        // General consistency repair: ensure bestBlockInfo and chain weight agree with
+        // the number-mapped header hash. This handles any case where a prior run changed
+        // the pivot header (e.g. root substitution) without updating the index entries.
+        // Idempotent — if everything is consistent this is a no-op.
+        val bestInfo = appStateStorage.getBestBlockInfo()
+        blockchainReader.getBlockHeaderByNumber(bestInfo.number).foreach { currentHeader =>
+          if (currentHeader.hash != bestInfo.hash) {
+            log.warning(
+              "Pivot header hash mismatch: bestBlockInfo={} but number-mapped header={}. " +
+                "Repairing chain weight and bestBlockInfo.",
+              bestInfo.hash.take(8).toArray.map("%02x".format(_)).mkString,
+              currentHeader.hash.take(8).toArray.map("%02x".format(_)).mkString
+            )
+            val weight = blockchainReader.getChainWeightByHash(bestInfo.hash)
+              .getOrElse(com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly(currentHeader.difficulty))
+            blockchainWriter.storeChainWeight(currentHeader.hash, weight)
+              .and(appStateStorage.putBestBlockInfo(
+                com.chipprbots.ethereum.domain.appstate.BlockInfo(currentHeader.hash, currentHeader.number)
+              ))
+              .commit()
+            log.info(
+              "Repaired: chain weight and bestBlockInfo now point to {}",
+              currentHeader.hash.take(8).toArray.map("%02x".format(_)).mkString
+            )
+          }
+        }
+
         val needBytecode = !appStateStorage.isBytecodeRecoveryDone()
         val needStorage = !appStateStorage.isStorageRecoveryDone()
         if (needBytecode || needStorage) {
