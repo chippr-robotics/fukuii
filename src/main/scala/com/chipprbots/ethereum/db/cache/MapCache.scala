@@ -6,7 +6,7 @@ import java.util.concurrent.atomic.AtomicLong
 import scala.collection.mutable
 import scala.concurrent.duration.FiniteDuration
 
-import com.chipprbots.ethereum.utils.Config.NodeCacheConfig
+import com.chipprbots.ethereum.utils.NodeCacheConfig
 
 //TODO: Investigate more carefully possibility of having read cache in front of db
 // class is not entirely thread safe
