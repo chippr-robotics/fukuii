@@ -141,6 +141,7 @@ class SNAPSyncController(
   private var trieWalkInProgress: Boolean = false
   private var trieWalkStartedAtMs: Long = 0L
   private var healingNodesAbandoned: Int = 0 // set from StateHealingComplete; drives pre-walk skip check
+  private var healingNodesTotal: Int = 0     // total nodes healed (0 = healing was a no-op)
 
   // Proof-seeding buffer: interior trie node hashes discovered from boundary proofs during
   // account download. Flushed to the healing coordinator at healing start so it begins with
@@ -635,12 +636,20 @@ class SNAPSyncController(
       log.warning("All healing peers stateless — refreshing pivot in-place for healing")
       refreshPivotInPlace("all healing peers stateless")
 
-    case StateHealingComplete(abandonedNodes) =>
+    case StateHealingComplete(abandonedNodes, totalHealed) =>
       healingNodesAbandoned = abandonedNodes
+      healingNodesTotal = totalHealed
       val walkNote = if (trieWalkInProgress) "trie walk already in progress (waiting for result)"
                      else if (abandonedNodes == 0) "pre-walk check will determine if walk is needed"
                      else s"$abandonedNodes abandoned nodes — walk required to find missing state"
       log.info(s"State healing complete [abandonedNodes=$abandonedNodes] — $walkNote")
+      // Flush healed nodes from LRU to RocksDB before the next walk.
+      // TrieNodeHealingCoordinator.persist() is a NO-OP on CachedReferenceCountedStorage —
+      // nodes are in LRU only. Without this flush, rootInDb=false in startTrieWalk() and
+      // Fix D forces a redundant 6h trie walk even though healing just completed.
+      log.info("Flushing healed trie nodes from LRU to RocksDB...")
+      stateStorage.forcePersist(StateStorage.GenesisDataLoad)
+      log.info("LRU flush complete.")
       if (!trieWalkInProgress) startTrieWalk()
 
     case ProofDiscoveredNodes(nodes) =>
@@ -685,7 +694,12 @@ class SNAPSyncController(
         appStateStorage.putSnapSyncHealingPendingNodes("").and(appStateStorage.putSnapSyncHealingRound(0)).commit()
         progressMonitor.startPhase(StateValidation)
         currentPhase = StateValidation
-        validateState()
+        // The async trie walk already traversed the full state trie and found 0 missing nodes.
+        // validateState() would re-traverse the same trie synchronously (~6h on ETC mainnet),
+        // blocking the actor with no progress output. It is fully redundant here.
+        // completeSnapSync() performs its own forcePersist + rootConfirmed check as a safety net.
+        log.info("State trie proven complete by walk (0 missing nodes) — proceeding to finalization.")
+        self ! StateValidationComplete
       } else {
         // Reset counter if progress was made (fewer missing nodes than previous walk).
         // On the first round (None), neither increment nor reset — no baseline to compare against.
@@ -2211,21 +2225,21 @@ class SNAPSyncController(
       try { stateStorage.getReadOnlyStorage.get(r.toArray); true }
       catch { case _: Exception => false }
     }
-    if (!snapSyncConfig.requireValidationWalk && healingNodesAbandoned == 0 && rootInDb) {
+    if (!snapSyncConfig.requireValidationWalk && healingNodesAbandoned == 0 && healingNodesTotal == 0 && rootInDb) {
       log.info("=" * 60)
       log.info("PHASE: Trie Healing → State Validation Walk")
       log.info("=" * 60)
       log.info(
-        "[WALK-SKIP] Healing completed with 0 abandoned nodes and root confirmed in RocksDB. " +
+        s"[WALK-SKIP] Healing was a no-op (0 nodes healed, 0 abandoned) and root confirmed in RocksDB. " +
         "Skipping validation walk. (snap-sync.require-validation-walk = false)"
       )
       log.info("[WALK-SKIP] Set snap-sync.require-validation-walk = true to force a full trie scan.")
       self ! TrieWalkResult(Seq.empty)
       return
     }
-    if (!snapSyncConfig.requireValidationWalk && healingNodesAbandoned == 0 && !rootInDb) {
+    if (!snapSyncConfig.requireValidationWalk && healingNodesAbandoned == 0 && healingNodesTotal == 0 && !rootInDb) {
       log.warning(
-        "[WALK-SKIP overridden] Healing completed with 0 abandoned nodes but root {} is MISSING " +
+        "[WALK-SKIP overridden] Healing was a no-op but root {} is MISSING " +
           "from RocksDB — forcing trie walk to discover remaining gaps.",
         stateRoot.map(_.take(8).toHex).getOrElse("?")
       )
@@ -3296,7 +3310,7 @@ object SNAPSyncController {
       codeHashes: Seq[ByteString],
       storageTasks: Seq[StorageTask]
   )
-  case class StateHealingComplete(abandonedNodes: Int)
+  case class StateHealingComplete(abandonedNodes: Int, totalHealed: Int)
   case object HealingAllPeersStateless
   case object StateValidationComplete
   case object ChainDownloadTimeout

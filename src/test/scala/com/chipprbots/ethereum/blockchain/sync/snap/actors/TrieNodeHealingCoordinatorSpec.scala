@@ -157,7 +157,7 @@ class TrieNodeHealingCoordinatorSpec
     coordinator ! Messages.HealingCheckCompletion
 
     // Should complete immediately if no nodes to heal
-    snapSyncController.expectMsg(3.seconds, SNAPSyncController.StateHealingComplete(0))
+    snapSyncController.expectMsg(3.seconds, SNAPSyncController.StateHealingComplete(0, 0))
   }
 
   it should "handle task failures" taggedAs UnitTest in {

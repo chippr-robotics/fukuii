@@ -120,7 +120,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     val accountComplete = AccountRangeSyncComplete
     val bytecodeComplete = ByteCodeSyncComplete
     val storageComplete = StorageRangeSyncComplete
-    val healingComplete = StateHealingComplete
+    val healingComplete = StateHealingComplete(0, 0)
     val validationComplete = StateValidationComplete
     val getProgress = GetProgress
     val bootstrapComplete = BootstrapComplete
