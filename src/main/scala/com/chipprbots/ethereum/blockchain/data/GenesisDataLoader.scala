@@ -199,9 +199,15 @@ class GenesisDataLoader(
       unixTimestamp = BigInt(genesisData.timestamp.replace("0x", ""), 16).toLong,
       extraData = genesisData.extraData,
       mixHash = genesisData.mixHash.getOrElse(zeros(hashLength)),
-      nonce = genesisData.nonce,
+      nonce = padToEightBytes(genesisData.nonce),
       extraFields = extraFields
     )
+  }
+
+  /** Ethereum block header nonce is always 8 bytes (uint64). Pad short nonces with leading zeros. */
+  private def padToEightBytes(bs: ByteString): ByteString = {
+    if (bs.length >= 8) bs
+    else ByteString(new Array[Byte](8 - bs.length) ++ bs.toArray)
   }
 
   private def zeros(length: Int) =
