@@ -102,13 +102,27 @@ class ChainImporter(
     // Execute without pre/post validation — blocks are from a trusted source.
     // Validate stateRoot (proves correct execution), log gas mismatches as warnings.
     blockExecution.executeBlockNoValidation(block).flatMap { case (receipts, gasUsed, stateRootHash) =>
-      if (block.header.stateRoot != stateRootHash) {
+      val gasMismatch = block.header.gasUsed != gasUsed
+      val stateMismatch = block.header.stateRoot != stateRootHash
+
+      if (gasMismatch || stateMismatch) {
+        // Per-tx cumulative gas for debugging
+        receipts.zipWithIndex.foreach { case (r, i) =>
+          log.error(s"Chain import: block ${block.header.number} tx[$i] cumulativeGas=${r.cumulativeGasUsed}")
+        }
+        log.error(s"Chain import: block ${block.header.number} totalGas: expected=${block.header.gasUsed} got=$gasUsed")
+      }
+
+      if (stateMismatch && gasMismatch) {
+        // Both state and gas are wrong — real execution error
+        Left(s"stateRoot mismatch: expected ${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(block.header.stateRoot)}" +
+          s" got ${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(stateRootHash)}")
+      } else if (stateMismatch) {
         Left(s"stateRoot mismatch: expected ${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(block.header.stateRoot)}" +
           s" got ${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(stateRootHash)}")
       } else {
-        if (block.header.gasUsed != gasUsed) {
-          log.warn(s"Chain import: block ${block.header.number} gas mismatch " +
-            s"(expected=${block.header.gasUsed}, got=$gasUsed) — state is correct, accepting block")
+        if (gasMismatch) {
+          log.warn(s"Chain import: block ${block.header.number} gas mismatch — state correct, accepting")
         }
         Right(receipts)
       }
