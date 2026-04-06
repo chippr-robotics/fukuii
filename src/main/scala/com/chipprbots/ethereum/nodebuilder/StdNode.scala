@@ -42,7 +42,6 @@ abstract class BaseNode extends Node {
     startMetricsClient()
     fixDatabase()
     loadGenesisData()
-    importChainData()
 
     // Phase 2: API servers (user-facing, ready as early as possible)
     startJsonRpcHttpServer()
@@ -55,11 +54,14 @@ abstract class BaseNode extends Node {
     startServer()
     startDiscoveryManager()
 
-    // Phase 4: Background work
+    // Phase 4: Chain data import (after APIs are ready, before sync)
+    importChainData()
+
+    // Phase 5: Background work
     startSyncController()
     startMining()
 
-    // Phase 5: Non-critical maintenance
+    // Phase 6: Non-critical maintenance
     runDBConsistencyCheck()
     startPeriodicDBConsistencyCheck()
     startTuiUpdater()

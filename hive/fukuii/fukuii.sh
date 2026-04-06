@@ -1,7 +1,7 @@
 #!/bin/bash
 # Hive entry point for Fukuii
-# Translates Hive environment variables into Fukuii -D system properties.
-# No special modes or hacks — Fukuii runs as a normal node with config overrides.
+# Uses the "hive" network config (vanilla Ethereum, no ETC baggage).
+# Translates HIVE_* env vars to -Dfukuii.blockchains.hive.* overrides.
 set -e
 
 DATADIR="/app/data"
@@ -49,42 +49,41 @@ fi
 echo "0x7365637265747365637265747365637265747365637265747365637265747365" > "$JWT_SECRET_FILE"
 
 # ==============================================================================
-# Build JVM flags — all configuration via -D system properties
+# Build JVM flags — "hive" network with clean Ethereum defaults
 # ==============================================================================
 
 FLAGS=""
 FLAGS="$FLAGS -Dfukuii.datadir=$DATADIR"
-FLAGS="$FLAGS -Dfukuii.blockchains.network=mordor"
+FLAGS="$FLAGS -Dfukuii.blockchains.network=hive"
 
 # Chain/network identity
-FLAGS="$FLAGS -Dfukuii.blockchains.mordor.chain-id=$CHAIN_ID"
-FLAGS="$FLAGS -Dfukuii.blockchains.mordor.network-id=$NETWORK_ID"
-FLAGS="$FLAGS -Dfukuii.blockchains.mordor.network-type=eth"
+FLAGS="$FLAGS -Dfukuii.blockchains.hive.chain-id=$CHAIN_ID"
+FLAGS="$FLAGS -Dfukuii.blockchains.hive.network-id=$NETWORK_ID"
 
 # Genesis override
 if [ -f "$CONFIG_DIR/genesis.json" ]; then
-    FLAGS="$FLAGS -Dfukuii.blockchains.mordor.custom-genesis-file=$CONFIG_DIR/genesis.json"
+    FLAGS="$FLAGS -Dfukuii.blockchains.hive.custom-genesis-file=$CONFIG_DIR/genesis.json"
 fi
 
-# Fork block overrides
-FLAGS="$FLAGS -Dfukuii.blockchains.mordor.homestead-block-number=$HOMESTEAD"
-FLAGS="$FLAGS -Dfukuii.blockchains.mordor.eip150-block-number=$TANGERINE"
-FLAGS="$FLAGS -Dfukuii.blockchains.mordor.eip155-block-number=$SPURIOUS"
-FLAGS="$FLAGS -Dfukuii.blockchains.mordor.eip160-block-number=$SPURIOUS"
-FLAGS="$FLAGS -Dfukuii.blockchains.mordor.eip161-block-number=$SPURIOUS"
-FLAGS="$FLAGS -Dfukuii.blockchains.mordor.byzantium-block-number=$BYZANTIUM"
-FLAGS="$FLAGS -Dfukuii.blockchains.mordor.constantinople-block-number=$CONSTANTINOPLE"
-FLAGS="$FLAGS -Dfukuii.blockchains.mordor.petersburg-block-number=$PETERSBURG"
-FLAGS="$FLAGS -Dfukuii.blockchains.mordor.istanbul-block-number=$ISTANBUL"
-FLAGS="$FLAGS -Dfukuii.blockchains.mordor.muir-glacier-block-number=$MUIRGLACIER"
-FLAGS="$FLAGS -Dfukuii.blockchains.mordor.berlin-block-number=$BERLIN"
-FLAGS="$FLAGS -Dfukuii.blockchains.mordor.olympia-block-number=$LONDON"
-FLAGS="$FLAGS -Dfukuii.blockchains.mordor.terminal-total-difficulty=$TTD"
+# Standard Ethereum fork overrides
+FLAGS="$FLAGS -Dfukuii.blockchains.hive.homestead-block-number=$HOMESTEAD"
+FLAGS="$FLAGS -Dfukuii.blockchains.hive.eip150-block-number=$TANGERINE"
+FLAGS="$FLAGS -Dfukuii.blockchains.hive.eip155-block-number=$SPURIOUS"
+FLAGS="$FLAGS -Dfukuii.blockchains.hive.eip160-block-number=$SPURIOUS"
+FLAGS="$FLAGS -Dfukuii.blockchains.hive.eip161-block-number=$SPURIOUS"
+FLAGS="$FLAGS -Dfukuii.blockchains.hive.byzantium-block-number=$BYZANTIUM"
+FLAGS="$FLAGS -Dfukuii.blockchains.hive.constantinople-block-number=$CONSTANTINOPLE"
+FLAGS="$FLAGS -Dfukuii.blockchains.hive.petersburg-block-number=$PETERSBURG"
+FLAGS="$FLAGS -Dfukuii.blockchains.hive.istanbul-block-number=$ISTANBUL"
+FLAGS="$FLAGS -Dfukuii.blockchains.hive.muir-glacier-block-number=$MUIRGLACIER"
+FLAGS="$FLAGS -Dfukuii.blockchains.hive.berlin-block-number=$BERLIN"
+FLAGS="$FLAGS -Dfukuii.blockchains.hive.olympia-block-number=$LONDON"
+FLAGS="$FLAGS -Dfukuii.blockchains.hive.terminal-total-difficulty=$TTD"
 
 # Timestamp-based forks
-[ -n "$SHANGHAI_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.mordor.shanghai-timestamp=$SHANGHAI_TS"
-[ -n "$CANCUN_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.mordor.cancun-timestamp=$CANCUN_TS"
-[ -n "$PRAGUE_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.mordor.prague-timestamp=$PRAGUE_TS"
+[ -n "$SHANGHAI_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.shanghai-timestamp=$SHANGHAI_TS"
+[ -n "$CANCUN_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.cancun-timestamp=$CANCUN_TS"
+[ -n "$PRAGUE_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.prague-timestamp=$PRAGUE_TS"
 
 # RPC
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.enabled=true"
@@ -105,11 +104,7 @@ FLAGS="$FLAGS -Dfukuii.network.server-address.port=30303"
 FLAGS="$FLAGS -Dfukuii.network.discovery.interface=0.0.0.0"
 FLAGS="$FLAGS -Dfukuii.network.discovery.port=30303"
 
-# Disable sync (hive provides chain data directly)
-FLAGS="$FLAGS -Dfukuii.sync.do-fast-sync=false"
-FLAGS="$FLAGS -Dfukuii.sync.do-snap-sync=false"
-
-# Import chain data if provided
+# Chain import
 [ -f "/chain.rlp" ] && FLAGS="$FLAGS -Dfukuii.import-chain-file=/chain.rlp"
 
 # Bootnode
@@ -128,4 +123,4 @@ exec java \
     -XX:+UseG1GC \
     $FLAGS \
     -jar /app/fukuii/lib/fukuii-assembly-0.1.240.jar \
-    mordor
+    hive

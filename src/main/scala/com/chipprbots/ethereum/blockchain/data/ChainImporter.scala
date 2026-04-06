@@ -98,8 +98,23 @@ class ChainImporter(
     (imported, skipped, failed)
   }
 
-  private def importBlock(block: Block)(implicit blockchainConfig: BlockchainConfig): Either[Any, Seq[Receipt]] =
-    blockExecution.executeAndValidateBlock(block, alreadyValidated = false)
+  private def importBlock(block: Block)(implicit blockchainConfig: BlockchainConfig): Either[Any, Seq[Receipt]] = {
+    // Skip pre-execution validation (header PoW, etc) for imported blocks —
+    // they're from a trusted source (chain.rlp file). Post-execution validation
+    // (stateRoot, receipts, gas) still runs to verify our execution matches.
+    val result = blockExecution.executeAndValidateBlock(block, alreadyValidated = true)
+    result.left.foreach { error =>
+      // Log extra detail for difficulty errors to aid debugging
+      blockchainReader.getBlockHeaderByHash(block.header.parentHash).foreach { parent =>
+          val expected = com.chipprbots.ethereum.consensus.difficulty.DifficultyCalculator
+          .calculateDifficulty(block.header.number, block.header.unixTimestamp, parent)
+        log.error(s"Chain import: block ${block.header.number} difficulty detail — " +
+          s"actual=${block.header.difficulty}, calculated=$expected, parent=${parent.difficulty}, " +
+          s"parentTimestamp=${parent.unixTimestamp}, blockTimestamp=${block.header.unixTimestamp}")
+      }
+    }
+    result
+  }
 
   /** Decode concatenated RLP-encoded blocks from a byte array. */
   private def decodeBlocks(data: Array[Byte]): Seq[Block] = {
