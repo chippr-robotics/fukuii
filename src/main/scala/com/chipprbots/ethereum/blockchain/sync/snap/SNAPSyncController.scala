@@ -152,6 +152,8 @@ class SNAPSyncController(
     new java.util.concurrent.atomic.AtomicLong(0)
   private var consecutiveUnproductiveHealingRounds: Int = 0
   private val maxUnproductiveHealingRounds: Int = 5 // 5 rounds × 2 min = 10-min window before skipping to validation
+  private var consecutiveHealingPivotRefreshAttempts: Int = 0
+  private val maxHealingPivotRefreshAttempts: Int = 10 // after 10 failed pivot refreshes during healing, restart SNAP sync
   private var lastTrieWalkMissingCount: Option[Int] = None // progress tracker — None on first round, Some(n) thereafter
   private var healingValidationCycles: Int = 0           // counts healing→validation→healing oscillations
   private val maxHealingValidationCycles: Int = 5        // after 5 full cycles, stop oscillating and declare done
@@ -517,9 +519,10 @@ class SNAPSyncController(
     case RetryPivotRefresh =>
       pivotBootstrapRetryTask = None
       if (
-        currentPhase == AccountRangeSync || currentPhase == StorageRangeSync || currentPhase == ByteCodeAndStorageSync
+        currentPhase == AccountRangeSync || currentPhase == StorageRangeSync ||
+        currentPhase == ByteCodeAndStorageSync || currentPhase == StateHealing
       ) {
-        log.info("Retrying pivot refresh after bootstrap failure...")
+        log.info(s"Retrying pivot refresh after bootstrap failure (phase=$currentPhase)...")
         refreshPivotInPlace("retry after bootstrap failure")
       } else {
         log.info(s"Skipping pivot refresh retry — phase=$currentPhase no longer needs it")
@@ -633,8 +636,20 @@ class SNAPSyncController(
       checkAllDownloadsComplete()
 
     case HealingAllPeersStateless if currentPhase == StateHealing =>
-      log.warning("All healing peers stateless — refreshing pivot in-place for healing")
-      refreshPivotInPlace("all healing peers stateless")
+      consecutiveHealingPivotRefreshAttempts += 1
+      if (consecutiveHealingPivotRefreshAttempts > maxHealingPivotRefreshAttempts) {
+        log.warning(
+          s"[HEAL-STALL] Healing pivot refresh failed $consecutiveHealingPivotRefreshAttempts times — " +
+          s"restarting SNAP sync to recover from unservable state root"
+        )
+        restartSnapSync("healing pivot refresh limit exceeded")
+      } else {
+        log.warning(
+          s"All healing peers stateless (attempt $consecutiveHealingPivotRefreshAttempts/$maxHealingPivotRefreshAttempts) — " +
+          s"refreshing pivot in-place for healing"
+        )
+        refreshPivotInPlace("all healing peers stateless")
+      }
 
     case StateHealingComplete(abandonedNodes, totalHealed) =>
       healingNodesAbandoned = abandonedNodes
@@ -2738,6 +2753,7 @@ class SNAPSyncController(
     bytecodeCoordinator.foreach(_ ! actors.Messages.ByteCodePivotRefreshed)
     // Healing coordinator: update root, clear pending tasks and stateless peers.
     // Then re-walk the trie with the new root to discover missing nodes.
+    consecutiveHealingPivotRefreshAttempts = 0 // successful pivot refresh — reset stall counter
     trieNodeHealingCoordinator.foreach { coordinator =>
       coordinator ! actors.Messages.HealingPivotRefreshed(newStateRoot)
       // Re-walk trie with new root to populate fresh healing tasks

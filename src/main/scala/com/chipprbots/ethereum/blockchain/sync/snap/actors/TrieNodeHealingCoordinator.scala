@@ -53,6 +53,14 @@ class TrieNodeHealingCoordinator(
   private var lastHealedAtMs: Long = System.currentTimeMillis()
   private val healingStagnationTimeoutMs: Long = 5 * 60 * 1000 // 5 minutes
 
+  // Pivot refresh stall detection: tracks when pivotRefreshRequested was set and when
+  // dispatch or responses last occurred, enabling the periodic HealingStagnationCheck to
+  // detect and recover from controller-side retry failures (Bug 1 defense-in-depth).
+  private var pivotRefreshRequestedAtMs: Long = 0L
+  private var lastDispatchOrResponseMs: Long = System.currentTimeMillis()
+  private val noActivityTimeoutMs: Long = 120_000L        // 2 min: ghost-peer detection (matches StorageRangeCoordinator)
+  private val pivotRefreshStallTimeoutMs: Long = 600_000L // 10 min: re-trigger if controller retry is stuck
+
   // Active request tracking: maps requestId -> (tasks, peer, requestedBytes, sentAtMs)
   private case class ActiveRequest(
       tasks: Seq[HealingEntry],
@@ -102,6 +110,10 @@ class TrieNodeHealingCoordinator(
   // Non-static peers that return empty GetTrieNodes are blocked even after reconnection.
   private val statelessRemoteAddresses = mutable.Set[String]()
   private var pivotRefreshRequested: Boolean = false
+  // Post-pivot-refresh cooldown: prevents immediate re-dispatch before peers sync to new root.
+  // Without this, all peers return empty → stateless → another HealingAllPeersStateless → tight loop.
+  private var postRefreshCooldownUntilMs: Long = 0L
+  private val postRefreshCooldownMs: Long = 10_000L // 10s (matches StorageRangeCoordinator)
 
   // Per-peer adaptive byte budgeting
   private val minResponseBytes: BigInt = 50 * 1024
@@ -159,6 +171,11 @@ class TrieNodeHealingCoordinator(
   /** Dispatch up to maxInFlightPerPeer requests to a single peer (pipelining). */
   private def dispatchIfPossible(peer: Peer): Unit = {
     if (pivotRefreshRequested) return
+    val nowMs = System.currentTimeMillis()
+    if (nowMs < postRefreshCooldownUntilMs) {
+      log.debug(s"[HEAL] Dispatch to ${peer.id.value} deferred — post-refresh cooldown (${(postRefreshCooldownUntilMs - nowMs) / 1000}s remaining)")
+      return
+    }
     if (statelessPeers.contains(peer.id.value)) return
     if (isPeerCoolingDown(peer)) return
     var inflight = inFlightForPeer(peer)
@@ -177,6 +194,8 @@ class TrieNodeHealingCoordinator(
 
   // Internal message for async flush completion
   private case class FlushComplete(count: Int)
+  // Periodic stagnation and no-activity check (every 2 minutes)
+  private case object HealingStagnationCheck
 
   /** Synchronous flush — used only for final completion flush (small buffer, safe to block). */
   private def flushRawNodesSync(): Unit =
@@ -205,8 +224,11 @@ class TrieNodeHealingCoordinator(
       }(context.dispatcher).foreach(n => selfRef ! FlushComplete(n))(context.dispatcher)
     }
 
-  override def preStart(): Unit =
+  override def preStart(): Unit = {
     log.info(s"TrieNodeHealingCoordinator starting (concurrency=$concurrency)")
+    import context.dispatcher
+    context.system.scheduler.scheduleWithFixedDelay(2.minutes, 2.minutes, self, HealingStagnationCheck)
+  }
 
   override val supervisorStrategy: SupervisorStrategy =
     OneForOneStrategy(maxNrOfRetries = 3, withinTimeRange = 1.minute) { case _: Exception =>
@@ -274,6 +296,13 @@ class TrieNodeHealingCoordinator(
       activeRequests.keys.foreach(requestTracker.completeRequest(_, 0))
       activeRequests.clear()
       pivotRefreshRequested = false
+      pivotRefreshRequestedAtMs = 0L
+      // Post-refresh cooldown: peers need time to sync to new root before we dispatch.
+      // Without this, immediate dispatch → all stateless → another HealingAllPeersStateless → tight loop.
+      postRefreshCooldownUntilMs = System.currentTimeMillis() + postRefreshCooldownMs
+      log.info(s"Post-refresh cooldown active for ${postRefreshCooldownMs / 1000}s — waiting for peers to sync to new root")
+      import context.dispatcher
+      context.system.scheduler.scheduleOnce(postRefreshCooldownMs.millis, self, HealingStagnationCheck)
 
     case TrieNodesResponseMsg(response) =>
       handleResponse(response)
@@ -338,6 +367,59 @@ class TrieNodeHealingCoordinator(
         progress = calculateProgress()
       )
       sender() ! stats
+
+    case HealingStagnationCheck =>
+      val now = System.currentTimeMillis()
+      log.debug(
+        s"[HEAL-CHECK] pivotRefreshRequested=$pivotRefreshRequested " +
+        s"pending=${pendingTasks.size} active=${activeRequests.size} " +
+        s"peers=${knownAvailablePeers.size} stateless=${statelessPeers.size} " +
+        s"idleFor=${(now - lastDispatchOrResponseMs) / 1000}s"
+      )
+
+      // 1. Detect pivot refresh stall: pivotRefreshRequested set but unresolved for >10min.
+      // Defense-in-depth — normally Bug 1 fix (RetryPivotRefresh handling StateHealing) resolves it.
+      if (pivotRefreshRequested && pivotRefreshRequestedAtMs > 0 &&
+          (now - pivotRefreshRequestedAtMs) > pivotRefreshStallTimeoutMs) {
+        log.warning(
+          s"[HEAL-STALL] Pivot refresh has been pending for ${(now - pivotRefreshRequestedAtMs) / 60000}min " +
+          s"without resolution. Re-triggering — controller retry may be stuck."
+        )
+        // Reset all stateless state and re-request so the controller gets another HealingAllPeersStateless
+        pivotRefreshRequested = false
+        pivotRefreshRequestedAtMs = 0L
+        statelessPeers.clear()
+        peerCooldownUntilMs.clear()
+        val allStillStateless = knownAvailablePeers.nonEmpty &&
+          knownAvailablePeers.forall(p => statelessPeers.contains(p.id.value))
+        if (allStillStateless || knownAvailablePeers.isEmpty) {
+          pivotRefreshRequested = true
+          pivotRefreshRequestedAtMs = now
+          log.warning("[HEAL-STALL] Still no capable peers after reset — re-sending HealingAllPeersStateless")
+          snapSyncController ! SNAPSyncController.HealingAllPeersStateless
+        } else {
+          tryRedispatchPendingTasks()
+        }
+      }
+
+      // 2. Detect no-activity stall from ghost peers (present in knownAvailablePeers but disconnected).
+      // If tasks are pending but no dispatch/response has occurred for 2min and dispatch is not blocked,
+      // the remaining peers are likely disconnected ghosts — mark stateless to trigger pivot refresh.
+      if (!pivotRefreshRequested && pendingTasks.nonEmpty && activeRequests.isEmpty &&
+          knownAvailablePeers.nonEmpty &&
+          (now - lastDispatchOrResponseMs) > noActivityTimeoutMs) {
+        log.warning(
+          s"[HEAL-STALL] No healing activity for ${(now - lastDispatchOrResponseMs) / 1000}s " +
+          s"with ${pendingTasks.size} pending tasks and ${knownAvailablePeers.size} known peers. " +
+          s"Assuming ghost connections — marking all peers stateless to trigger pivot refresh."
+        )
+        knownAvailablePeers.foreach(p => statelessPeers.add(p.id.value))
+        if (!pivotRefreshRequested) {
+          pivotRefreshRequested = true
+          pivotRefreshRequestedAtMs = now
+          snapSyncController ! SNAPSyncController.HealingAllPeersStateless
+        }
+      }
   }
 
   private def queueNodes(pathsAndHashes: Seq[(Seq[ByteString], ByteString)]): Unit = {
@@ -458,6 +540,7 @@ class TrieNodeHealingCoordinator(
       s"Requested ${batch.size} trie nodes from peer ${peer.id.value} " +
         s"(reqId=$requestId, responseBytes=$responseBytes, pending=${pendingTasks.size})"
     )
+    lastDispatchOrResponseMs = System.currentTimeMillis()
 
     Some(requestId)
   }
@@ -512,6 +595,7 @@ class TrieNodeHealingCoordinator(
     completedTaskCount += healedCount
     activeRequests.remove(requestId)
     requestTracker.completeRequest(requestId, nodes.size.max(1))
+    lastDispatchOrResponseMs = System.currentTimeMillis()
 
     // Update healing throttle (geth msgrate alignment)
     val elapsedMs = System.currentTimeMillis() - activeReq.sentAtMs
@@ -537,6 +621,7 @@ class TrieNodeHealingCoordinator(
         // Check if all known peers are stateless — request pivot refresh
         if (statelessPeers.size >= knownAvailablePeers.size && knownAvailablePeers.nonEmpty && !pivotRefreshRequested) {
           pivotRefreshRequested = true
+          pivotRefreshRequestedAtMs = System.currentTimeMillis()
           log.warning(
             s"All ${statelessPeers.size} peers stateless for healing root " +
               s"${Hex.toHexString(stateRoot.take(4).toArray)}. Requesting pivot refresh."
