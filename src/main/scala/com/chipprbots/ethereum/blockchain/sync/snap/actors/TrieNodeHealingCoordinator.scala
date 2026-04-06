@@ -696,6 +696,10 @@ class TrieNodeHealingCoordinator(
           s"Abandoning $pendingCount remaining tasks. Nodes will be re-discovered during state validation trie walk."
       )
       abandonedTaskCount += pendingCount
+      // Persist the abandoned list before discarding — controller will use it to skip the trie
+      // re-walk and retry healing directly (OPT-H2). force=true bypasses the counter gate.
+      val abandonedSnapshot = pendingTasks.map(e => (e.pathset, e.hash))
+      snapSyncController ! SNAPSyncController.PersistHealingQueue(abandonedSnapshot, force = true)
       pendingTasks = Seq.empty
       pendingHashSet.clear()
     }

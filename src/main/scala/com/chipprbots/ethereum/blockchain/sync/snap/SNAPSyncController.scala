@@ -156,6 +156,10 @@ class SNAPSyncController(
   private val maxHealingPivotRefreshAttempts: Int = 10 // after 10 failed pivot refreshes during healing, restart SNAP sync
   private var healingSaveCounter: Int = 0
   private var lastTrieWalkMissingCount: Option[Int] = None // progress tracker — None on first round, Some(n) thereafter
+  // OPT-W1: Walk resume state — partial nodes and completed subtrees from a previous interrupted walk
+  private var walkResumedNodes: Seq[(Seq[ByteString], ByteString)] = Seq.empty
+  private val walkCurrentNodes = mutable.ArrayBuffer[(Seq[ByteString], ByteString)]()
+  private var walkCompletedPrefixes: Set[String] = Set.empty
   private var healingValidationCycles: Int = 0           // counts healing→validation→healing oscillations
   private val maxHealingValidationCycles: Int = 5        // after 5 full cycles, stop oscillating and declare done
   private var bootstrapCheckTask: Option[Cancellable] = None
@@ -652,10 +656,10 @@ class SNAPSyncController(
         refreshPivotInPlace("all healing peers stateless")
       }
 
-    case PersistHealingQueue(pending) =>
+    case PersistHealingQueue(pending, force) =>
       healingSaveCounter += 1
-      if (healingSaveCounter % 10 == 0) {
-        log.debug(s"[HEAL-PERSIST] Saving mid-healing snapshot: ${pending.size} pending nodes (flush #$healingSaveCounter)")
+      if (force || healingSaveCounter % 10 == 0) {
+        log.debug(s"[HEAL-PERSIST] Saving ${pending.size} pending nodes (force=$force, flush #$healingSaveCounter)")
         appStateStorage
           .putSnapSyncHealingPendingNodes(serializeHealingNodes(pending))
           .commit()
@@ -664,10 +668,7 @@ class SNAPSyncController(
     case StateHealingComplete(abandonedNodes, totalHealed) =>
       healingNodesAbandoned = abandonedNodes
       healingNodesTotal = totalHealed
-      val walkNote = if (trieWalkInProgress) "trie walk already in progress (waiting for result)"
-                     else if (abandonedNodes == 0) "pre-walk check will determine if walk is needed"
-                     else s"$abandonedNodes abandoned nodes — walk required to find missing state"
-      log.info(s"State healing complete [abandonedNodes=$abandonedNodes] — $walkNote")
+      log.info(s"State healing complete [abandonedNodes=$abandonedNodes, healed=$totalHealed]")
       // Flush healed nodes from LRU to RocksDB before the next walk.
       // TrieNodeHealingCoordinator.persist() is a NO-OP on CachedReferenceCountedStorage —
       // nodes are in LRU only. Without this flush, rootInDb=false in startTrieWalk() and
@@ -675,7 +676,33 @@ class SNAPSyncController(
       log.info("Flushing healed trie nodes from LRU to RocksDB...")
       stateStorage.forcePersist(StateStorage.GenesisDataLoad)
       log.info("LRU flush complete.")
-      if (!trieWalkInProgress) startTrieWalk()
+      if (!trieWalkInProgress) {
+        if (abandonedNodes > 0) {
+          // Stagnation saved the abandoned list via PersistHealingQueue(force=true) — load and
+          // retry healing directly, skipping the 27h+ trie re-walk. If peers are still stateless
+          // for the current root, HealingAllPeersStateless → refreshPivotInPlace fires, then a
+          // new walk runs for the new root. Walk is only needed after a root change, not reflexively.
+          appStateStorage.getSnapSyncHealingPendingNodes() match {
+            case Some(data) =>
+              val savedNodes = deserializeHealingNodes(data)
+              if (savedNodes.nonEmpty) {
+                log.info(
+                  s"[WALK-SKIP] $abandonedNodes abandoned nodes — resuming healing from saved list " +
+                  s"(${savedNodes.size} nodes, skipping trie re-walk)"
+                )
+                startStateHealingWithSavedNodes(savedNodes)
+              } else {
+                log.info(s"[WALK] $abandonedNodes abandoned nodes but saved list empty — running trie walk")
+                startTrieWalk()
+              }
+            case None =>
+              log.info(s"[WALK] $abandonedNodes abandoned nodes but no saved list — running trie walk")
+              startTrieWalk()
+          }
+        } else {
+          startTrieWalk()
+        }
+      }
 
     case ProofDiscoveredNodes(nodes) =>
       if (nodes.nonEmpty) {
@@ -710,13 +737,26 @@ class SNAPSyncController(
 
     case TrieWalkResult(missingNodes) if currentPhase == StateHealing =>
       trieWalkInProgress = false
-      if (missingNodes.isEmpty) {
+      // OPT-W1: merge partial nodes from previous interrupted walk into final result
+      val allMissingNodes = walkResumedNodes ++ missingNodes
+      if (walkResumedNodes.nonEmpty)
+        log.info(
+          s"[WALK-RESUME] Merged ${walkResumedNodes.size} partial nodes from previous run + " +
+          s"${missingNodes.size} from current run = ${allMissingNodes.size} total missing nodes"
+        )
+      walkResumedNodes = Seq.empty
+      walkCurrentNodes.clear()
+      walkCompletedPrefixes = Set.empty
+      if (allMissingNodes.isEmpty) {
         log.info("Trie walk found no missing nodes — healing complete!")
         MilestoneLog.phase("Trie healing complete | 0 missing nodes")
         consecutiveUnproductiveHealingRounds = 0
         lastTrieWalkMissingCount = None
         // Clear persisted healing state — successfully healed
-        appStateStorage.putSnapSyncHealingPendingNodes("").and(appStateStorage.putSnapSyncHealingRound(0)).commit()
+        appStateStorage.putSnapSyncHealingPendingNodes("")
+          .and(appStateStorage.putSnapSyncHealingRound(0))
+          .and(appStateStorage.putSnapSyncWalkCompletedPrefixes(Set.empty))
+          .commit()
         progressMonitor.startPhase(StateValidation)
         currentPhase = StateValidation
         // The async trie walk already traversed the full state trie and found 0 missing nodes.
@@ -729,10 +769,10 @@ class SNAPSyncController(
         // Reset counter if progress was made (fewer missing nodes than previous walk).
         // On the first round (None), neither increment nor reset — no baseline to compare against.
         lastTrieWalkMissingCount match {
-          case Some(prev) if missingNodes.size < prev =>
-            val healed = prev - missingNodes.size
+          case Some(prev) if allMissingNodes.size < prev =>
+            val healed = prev - allMissingNodes.size
             log.info(
-              s"Healing made progress: $healed nodes healed, ${missingNodes.size} remaining — resetting stagnation counter"
+              s"Healing made progress: $healed nodes healed, ${allMissingNodes.size} remaining — resetting stagnation counter"
             )
             consecutiveUnproductiveHealingRounds = 0
           case Some(_) =>
@@ -740,20 +780,21 @@ class SNAPSyncController(
           case None =>
             // First healing round — no prior baseline, don't penalise stagnation counter
         }
-        lastTrieWalkMissingCount = Some(missingNodes.size)
-        // Persist missing nodes so restart can skip re-walk
+        lastTrieWalkMissingCount = Some(allMissingNodes.size)
+        // Persist missing nodes so restart can skip re-walk; clear walk checkpoint (walk done)
         appStateStorage
-          .putSnapSyncHealingPendingNodes(SNAPSyncController.serializeHealingNodes(missingNodes))
+          .putSnapSyncHealingPendingNodes(SNAPSyncController.serializeHealingNodes(allMissingNodes))
           .and(appStateStorage.putSnapSyncHealingRound(consecutiveUnproductiveHealingRounds))
+          .and(appStateStorage.putSnapSyncWalkCompletedPrefixes(Set.empty))
           .commit()
         if (consecutiveUnproductiveHealingRounds >= maxUnproductiveHealingRounds) {
           log.warning(
-            s"Healing stagnation: ${missingNodes.size} missing nodes persist after " +
+            s"Healing stagnation: ${allMissingNodes.size} missing nodes persist after " +
               s"$consecutiveUnproductiveHealingRounds consecutive rounds with no progress. " +
               s"Proceeding to validation — regular sync will recover missing nodes on-demand."
           )
           MilestoneLog.error(
-            s"Healing stagnation | ${missingNodes.size} missing nodes after $consecutiveUnproductiveHealingRounds rounds, proceeding to validation"
+            s"Healing stagnation | ${allMissingNodes.size} missing nodes after $consecutiveUnproductiveHealingRounds rounds, proceeding to validation"
           )
           consecutiveUnproductiveHealingRounds = 0
           lastTrieWalkMissingCount = None
@@ -764,11 +805,11 @@ class SNAPSyncController(
           validateState()
         } else {
           log.info(
-            s"Trie walk found ${missingNodes.size} missing nodes — queuing for healing " +
+            s"Trie walk found ${allMissingNodes.size} missing nodes — queuing for healing " +
               s"(round $consecutiveUnproductiveHealingRounds/$maxUnproductiveHealingRounds)"
           )
           trieNodeHealingCoordinator.foreach { coordinator =>
-            coordinator ! actors.Messages.QueueMissingNodes(missingNodes)
+            coordinator ! actors.Messages.QueueMissingNodes(allMissingNodes)
           }
           // Healing coordinator self-feeds via discoverMissingChildren (BUG-HW1).
           // No periodic walk needed — StateHealingComplete triggers the final validation walk.
@@ -781,9 +822,34 @@ class SNAPSyncController(
       if (!trieWalkInProgress) startTrieWalk()
       else log.debug("[HEALING] ScheduledTrieWalk skipped — trie walk already in progress")
 
+    case TrieWalkSubtreeResult(prefixHex, nodes) if trieWalkInProgress =>
+      walkCurrentNodes ++= nodes
+      walkCompletedPrefixes += prefixHex
+      val totalSoFar = walkResumedNodes.size + walkCurrentNodes.size
+      log.debug(
+        s"[WALK-CHECKPOINT] Subtree $prefixHex done: ${nodes.size} nodes, " +
+        s"${walkCompletedPrefixes.size}/256 subtrees complete, $totalSoFar total missing nodes saved"
+      )
+      // Persist crash-recovery state after each subtree: all nodes so far + completed prefix set
+      appStateStorage
+        .putSnapSyncHealingPendingNodes(
+          serializeHealingNodes(walkResumedNodes ++ walkCurrentNodes.toSeq))
+        .and(appStateStorage.putSnapSyncWalkCompletedPrefixes(walkCompletedPrefixes))
+        .commit()
+
     case TrieWalkFailed(error) if currentPhase == StateHealing =>
       trieWalkInProgress = false
-      log.error(s"Trie walk failed: $error. Retrying after delay...")
+      val checkpointedSoFar = walkCompletedPrefixes.size
+      // Clear in-memory walk state — startTrieWalk() will reload from storage on retry
+      walkResumedNodes = Seq.empty
+      walkCurrentNodes.clear()
+      walkCompletedPrefixes = Set.empty
+      // Leave SnapSyncWalkCompletedPrefixes in storage intact — resume checkpoint preserved
+      log.error(
+        s"Trie walk failed: $error. " +
+        s"$checkpointedSoFar/256 subtrees were checkpointed — will resume from checkpoint on retry. " +
+        s"Retrying after delay..."
+      )
       scheduler.scheduleOnce(5.seconds) {
         self ! ScheduledTrieWalk
       }(ec)
@@ -2234,6 +2300,7 @@ class SNAPSyncController(
   // Internal message for async trie walk result
   private case class TrieWalkResult(missingNodes: Seq[(Seq[ByteString], ByteString)])
   private case class TrieWalkFailed(error: String)
+  private case class TrieWalkSubtreeResult(prefixHex: String, nodes: Seq[(Seq[ByteString], ByteString)])
   private case object ScheduledTrieWalk
   private case object TrieWalkHeartbeat
 
@@ -2279,6 +2346,36 @@ class SNAPSyncController(
     trieWalkStartedAtMs = System.currentTimeMillis()
     val counter = new java.util.concurrent.atomic.AtomicLong(0)
     trieWalkNodesScanned = counter
+
+    // OPT-W1: Check for resumable partial walk (same root, completed subtrees saved)
+    val currentRootHex = stateRoot.map(r => Hex.toHexString(r.toArray)).getOrElse("")
+    val savedWalkRoot = appStateStorage.getSnapSyncWalkRoot()
+    val savedPrefixes = appStateStorage.getSnapSyncWalkCompletedPrefixes()
+    if (savedWalkRoot.contains(currentRootHex) && savedPrefixes.nonEmpty) {
+      walkResumedNodes = appStateStorage.getSnapSyncHealingPendingNodes()
+        .map(data => deserializeHealingNodes(data)).getOrElse(Seq.empty)
+      walkCompletedPrefixes = savedPrefixes
+      log.info(
+        s"[WALK-RESUME] Resuming walk for root ${currentRootHex.take(16)}: " +
+        s"${savedPrefixes.size}/256 subtrees already complete, " +
+        s"${walkResumedNodes.size} partial nodes saved — skipping completed subtrees"
+      )
+    } else {
+      if (savedWalkRoot.exists(_ != currentRootHex) && savedPrefixes.nonEmpty)
+        log.info(
+          s"[WALK-RESUME] Root changed (${savedWalkRoot.map(_.take(16)).getOrElse("none")} → " +
+          s"${currentRootHex.take(16)}) — discarding stale walk checkpoint"
+        )
+      walkResumedNodes = Seq.empty
+      walkCompletedPrefixes = Set.empty
+      appStateStorage
+        .putSnapSyncWalkCompletedPrefixes(Set.empty)
+        .and(appStateStorage.putSnapSyncWalkRoot(currentRootHex))
+        .commit()
+    }
+    walkCurrentNodes.clear()
+    val completedPrefixesForWalk = walkCompletedPrefixes
+
     stateRoot.foreach { root =>
       log.info("=" * 60)
       log.info("PHASE: Trie Healing → State Validation Walk")
@@ -2295,7 +2392,11 @@ class SNAPSyncController(
       )
       scheduler.scheduleOnce(10.seconds, self, TrieWalkHeartbeat)(ec)
       val validator = new StateValidator(storage, counter)
-      validator.findMissingNodesWithPaths(root)(walkEc).onComplete {
+      validator.findMissingNodesWithPaths(
+        root,
+        completedPrefixesForWalk,
+        (pfx, nodes) => selfRef ! TrieWalkSubtreeResult(pfx, nodes)
+      )(walkEc).onComplete {
         case scala.util.Success(Right(missingNodes)) =>
           walkEc.shutdown()
           selfRef ! TrieWalkResult(missingNodes)
@@ -3338,7 +3439,7 @@ object SNAPSyncController {
   )
   case class StateHealingComplete(abandonedNodes: Int, totalHealed: Int)
   case object HealingAllPeersStateless
-  case class PersistHealingQueue(pending: Seq[(Seq[ByteString], ByteString)])
+  case class PersistHealingQueue(pending: Seq[(Seq[ByteString], ByteString)], force: Boolean = false)
   case object StateValidationComplete
   case object ChainDownloadTimeout
   case object GetProgress
@@ -3811,7 +3912,11 @@ class StateValidator(
     * @return
     *   Future of (pathset, hash) pairs ready for TrieNodeHealingCoordinator.QueueMissingNodes
     */
-  def findMissingNodesWithPaths(stateRoot: ByteString)(implicit ec: ExecutionContext): Future[Either[String, Seq[(Seq[ByteString], ByteString)]]] = {
+  def findMissingNodesWithPaths(
+    stateRoot: ByteString,
+    completedPrefixes: Set[String] = Set.empty,
+    onSubtreeComplete: (String, Seq[(Seq[ByteString], ByteString)]) => Unit = (_, _) => ()
+  )(implicit ec: ExecutionContext): Future[Either[String, Seq[(Seq[ByteString], ByteString)]]] = {
     try {
       val rootNode = mptStorage.getForWalk(stateRoot.toArray)
       rootNode match {
@@ -3819,10 +3924,21 @@ class StateValidator(
           // Fan out to depth-2 subtrees for parallel walking (up to 256 subtrees)
           val subtrees = collectDepth2Subtrees(branch)
           val futures = subtrees.map { case (prefixPath, subtreeRoot) =>
-            Future {
-              val localResult = mutable.ArrayBuffer[(Seq[ByteString], ByteString)]()
-              traverseAccountTrieWithPaths(subtreeRoot, mptStorage, prefixPath, localResult, mutable.Set.empty)
-              localResult.toSeq
+            val prefixHex = Hex.toHexString(prefixPath)
+            if (completedPrefixes.contains(prefixHex)) {
+              // OPT-W1: Already completed in a previous run — skip, partial nodes in AppStateStorage
+              Future.successful(Seq.empty[(Seq[ByteString], ByteString)])
+            } else {
+              val fut = Future {
+                val localResult = mutable.ArrayBuffer[(Seq[ByteString], ByteString)]()
+                traverseAccountTrieWithPaths(subtreeRoot, mptStorage, prefixPath, localResult, mutable.Set.empty)
+                localResult.toSeq
+              }
+              fut.onComplete {
+                case scala.util.Success(nodes) => onSubtreeComplete(prefixHex, nodes)
+                case _                         => () // failure handled via TrieWalkFailed path
+              }
+              fut
             }
           }
           Future.sequence(futures).map(results => Right(results.flatten))

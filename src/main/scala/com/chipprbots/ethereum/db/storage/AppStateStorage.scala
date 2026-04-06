@@ -311,6 +311,27 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putSnapSyncHealingRound(round: Int): DataSourceBatchUpdate =
     put(Keys.SnapSyncHealingRound, round.toString)
 
+  /** Get the set of depth-2 subtree prefixes (hex) already completed in an in-progress trie walk.
+    * Non-empty means a walk was interrupted mid-run and can be resumed by skipping these subtrees.
+    */
+  def getSnapSyncWalkCompletedPrefixes(): Set[String] =
+    get(Keys.SnapSyncWalkCompletedPrefixes)
+      .filter(_.nonEmpty)
+      .map(_.split(',').toSet)
+      .getOrElse(Set.empty)
+
+  /** Persist the set of completed subtree prefixes (hex) for walk resume on crash. */
+  def putSnapSyncWalkCompletedPrefixes(prefixes: Set[String]): DataSourceBatchUpdate =
+    put(Keys.SnapSyncWalkCompletedPrefixes, prefixes.mkString(","))
+
+  /** Get the state root hex for the walk-in-progress (to detect root changes on resume). */
+  def getSnapSyncWalkRoot(): Option[String] =
+    get(Keys.SnapSyncWalkRoot).filter(_.nonEmpty)
+
+  /** Persist the state root hex for the walk-in-progress. */
+  def putSnapSyncWalkRoot(rootHex: String): DataSourceBatchUpdate =
+    put(Keys.SnapSyncWalkRoot, rootHex)
+
   // --- Unclean shutdown recovery ---
 
   /** Check if the last shutdown was clean. Returns false on first run or after crash. */
@@ -363,8 +384,10 @@ object AppStateStorage {
     val SnapSyncFinalizedRoot = "SnapSyncFinalizedRoot"
     val CleanShutdown = "CleanShutdown"
     val LastSafeBlock = "LastSafeBlock"
-    val SnapSyncHealingPendingNodes = "SnapSyncHealingPendingNodes"
-    val SnapSyncHealingRound        = "SnapSyncHealingRound"
+    val SnapSyncHealingPendingNodes  = "SnapSyncHealingPendingNodes"
+    val SnapSyncHealingRound         = "SnapSyncHealingRound"
+    val SnapSyncWalkCompletedPrefixes = "SnapSyncWalkCompletedPrefixes"
+    val SnapSyncWalkRoot              = "SnapSyncWalkRoot"
   }
 
 }
