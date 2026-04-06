@@ -323,6 +323,17 @@ class StorageRangeCoordinator(
   private val proofFailuresByTask = mutable.HashMap.empty[StorageTaskKey, Int]
   private val maxProofFailuresPerTask: Int = 5
 
+  // Track total timeout attempts per task. Some accounts have storage tries too large to serve
+  // within SNAP's time window — peers accept the request but never respond in time. Without a
+  // per-task limit these accounts loop indefinitely, blocking the transition to trie healing.
+  // After MaxTimeoutAttemptsPerTask, defer to trie healing (which fetches nodes by hash, no size limit).
+  private val timeoutsByTask          = mutable.HashMap.empty[StorageTaskKey, Int]
+  private val deferredToHealing       = mutable.Set.empty[ByteString] // accountHash
+  // One attempt per available peer is enough evidence that the account's storage trie
+  // exceeds the SNAP serve window. Dynamic so it scales with peer count; floor of 3
+  // avoids skipping on transient single-peer timeouts.
+  private def maxTimeoutAttemptsPerTask: Int = math.max(3, knownAvailablePeers.size)
+
   // Fast-fail for unservable storage roots (BUG-SU1).
   // A proof root mismatch means the peer's current state cannot serve this storage root —
   // it was recorded at a pivot now beyond the peer's pruning window (Besu bonsai: 8,192 blocks).
@@ -808,6 +819,12 @@ class StorageRangeCoordinator(
       if (isComplete) {
         if (!storageSyncCompleteReported) {
           storageSyncCompleteReported = true
+          if (deferredToHealing.nonEmpty) {
+            log.warning(
+              s"[STORAGE-DEFER] ${deferredToHealing.size} account(s) deferred to trie healing " +
+              s"— storage tries exceed SNAP serve window, will be recovered via GetTrieNodes"
+            )
+          }
           log.info(
             s"[STORAGE] 100% — Storage range sync complete: ${completedAccountHashes.size}/$totalStorageContracts contracts, $slotsDownloaded slots " +
               s"in ${(System.currentTimeMillis() - startTime) / 1000}s"
@@ -1419,7 +1436,22 @@ class StorageRangeCoordinator(
         task.pending = false
         // R3: Record this task-peer failure so we don't immediately re-dispatch to the same peer
         recentTaskPeerFailures.put((task.accountHash, peer.id.value), failTs)
-        tasks.enqueue(task)
+        val key      = StorageTaskKey(task.accountHash, task.next, task.last)
+        val attempts = timeoutsByTask.getOrElse(key, 0) + 1
+        timeoutsByTask.update(key, attempts)
+        if (attempts >= maxTimeoutAttemptsPerTask) {
+          log.warning(
+            s"[STORAGE-DEFER] Account ${task.accountHash.take(4).toHex} storage root " +
+            s"${task.storageRoot.take(4).toHex} — $attempts timeouts across all peers " +
+            s"(threshold=${maxTimeoutAttemptsPerTask}), storage trie exceeds SNAP serve window. " +
+            s"Deferring to trie healing."
+          )
+          task.done = true
+          deferredToHealing += task.accountHash
+          completedTasks += task
+        } else {
+          tasks.enqueue(task)
+        }
       }
     }
     // Re-dispatch re-queued tasks to any known available peer that isn't stateless or on cooldown.
