@@ -154,6 +154,7 @@ class SNAPSyncController(
   private val maxUnproductiveHealingRounds: Int = 5 // 5 rounds × 2 min = 10-min window before skipping to validation
   private var consecutiveHealingPivotRefreshAttempts: Int = 0
   private val maxHealingPivotRefreshAttempts: Int = 10 // after 10 failed pivot refreshes during healing, restart SNAP sync
+  private var healingSaveCounter: Int = 0
   private var lastTrieWalkMissingCount: Option[Int] = None // progress tracker — None on first round, Some(n) thereafter
   private var healingValidationCycles: Int = 0           // counts healing→validation→healing oscillations
   private val maxHealingValidationCycles: Int = 5        // after 5 full cycles, stop oscillating and declare done
@@ -649,6 +650,15 @@ class SNAPSyncController(
           s"refreshing pivot in-place for healing"
         )
         refreshPivotInPlace("all healing peers stateless")
+      }
+
+    case PersistHealingQueue(pending) =>
+      healingSaveCounter += 1
+      if (healingSaveCounter % 10 == 0) {
+        log.debug(s"[HEAL-PERSIST] Saving mid-healing snapshot: ${pending.size} pending nodes (flush #$healingSaveCounter)")
+        appStateStorage
+          .putSnapSyncHealingPendingNodes(serializeHealingNodes(pending))
+          .commit()
       }
 
     case StateHealingComplete(abandonedNodes, totalHealed) =>
@@ -3328,6 +3338,7 @@ object SNAPSyncController {
   )
   case class StateHealingComplete(abandonedNodes: Int, totalHealed: Int)
   case object HealingAllPeersStateless
+  case class PersistHealingQueue(pending: Seq[(Seq[ByteString], ByteString)])
   case object StateValidationComplete
   case object ChainDownloadTimeout
   case object GetProgress

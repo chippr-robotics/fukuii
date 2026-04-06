@@ -310,6 +310,9 @@ class TrieNodeHealingCoordinator(
     case FlushComplete(count) =>
       flushing = false
       log.info(s"Async flush complete: $count healed nodes written to disk (total: $totalNodesHealed)")
+      // Snapshot pending queue for crash recovery (piggybacks on existing flush cadence)
+      val snapshot = pendingTasks.map(e => (e.pathset, e.hash))
+      snapSyncController ! SNAPSyncController.PersistHealingQueue(snapshot)
       // Check if buffer filled up again during the flush
       if (rawNodeBuffer.size >= rawFlushThreshold) {
         flushRawNodesAsync()
