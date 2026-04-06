@@ -2,8 +2,8 @@
 
 **Status:** IN PROGRESS — ETC mainnet SNAP sync attempt 14 running (JAR `668c04c30`)
 **Mordor:** ✅ First successful sync March 2026 (~35 minutes, genesis to chain head)
-**ETC mainnet:** ⏳ Attempt 14 in progress — BUG-S1/H1/H2 fixes deployed
-**Last updated:** 2026-04-04
+**ETC mainnet:** ⏳ Attempt 14 in progress — BUG-S1/H1/H2 + post-series handoff/heal fixes deployed
+**Last updated:** 2026-04-06
 
 > **Note:** This document will be updated when ETC mainnet SNAP sync succeeds. Sections marked `[ESTIMATE]` contain projected values from Attempt 10 benchmarks and may change.
 
@@ -254,7 +254,24 @@ All bugs below have been fixed as of attempt 14 (JAR `668c04c30`).
 | L-022 | MEDIUM | Work-steal overlap (278% keyspace redundancy on ETC) | Non-overlapping steal: victim shrinks to midpoint, stealer gets second half | `734533c87` |
 | R4 | LOW | Bytecode redundant requests across batches | Cross-batch Bloom filter dedup eliminates ~7,350 requests | `cf16873eb` |
 
-**Full history:** See L-015 through L-036 + S-001 through S-004 in `MARCH-ONWARD-HANDOFF.md` for the complete 28-commit SNAP reliability series.
+**Post-BUG-series fixes (April 2026):**
+
+| ID | Severity | Description | Fix | Commits |
+|----|---------|-------------|-----|---------|
+| BUG-SD1 | HIGH | SNAP→Regular handoff: false-positive `snapSyncDone`, chain weight orphan after pivot substitution, wrong stateRoot check | Reset + re-heal path; accumulate chain weight; check `snapSyncStateRoot` not substituted header | `95545f9d8`, `3d6566fa2`, `d14e4080c`, `5e020472b`, `4a57c1d93` |
+| BUG-WS1 | HIGH | WALK-SKIP infinite loop when pivot root absent from RocksDB | Skip-walk path returns to heal; don't re-enter skip on empty DB | `2ee32fd55` |
+| BUG-WS2 | MEDIUM | WALK-SKIP false positive when healing is non-trivial | Check actual abandoned node count before deciding to skip | `15a782094` |
+| BUG-HS1 | MEDIUM | Healing stall: `RetryPivotRefresh` message sent during `StateHealing` phase, interrupting heal | Exclude `StateHealing` from `RetryPivotRefresh` handler | `77c72db11` |
+| OPT-H1 | — | Mid-healing pending queue lost on crash; entire queue re-derived from scratch on restart | Persist pending queue to `AppStateStorage` on each flush | `2123348ba` |
+| OPT-SD1 | — | Oversized storage accounts (too large for SNAP serve window) caused repeated timeouts | Defer to trie healing after `max(3, peerCount)` timeouts | `cd1bbeea2` |
+| OPT-AD1 | — | Peer dispatch could flood slow peers or hold stale peers in rotation | EMA latency throttle + stale-hold gate per peer | `349673b9a` |
+
+**Trie walk speedups (April 2026):**
+- `c3c51a713` — fillCache=false + multiGet for storage walk chain (Speedup 0+1)
+- `10d00ca28` — parallel depth-2 fan-out + multiGet BranchNode + fillCache=false in StateValidator (Speedup 2)
+- `0e0cd3fda` — collect proof-discovered interior node hashes during account download (reduces subsequent healing rounds)
+
+**Full history:** See L-015 through L-036 + S-001 through S-004 in `MARCH-ONWARD-HANDOFF.md` for the complete SNAP reliability series.
 
 ---
 
@@ -295,16 +312,20 @@ Attempt 10 failed due to H-001 (stagnation false-fire after the long trie walk).
 
 ## Current Status
 
-**Attempt 14 (JAR `668c04c30`) — IN PROGRESS as of 2026-04-04**
+**Attempt 14 (JAR `668c04c30`) — IN PROGRESS as of 2026-04-06**
 
-Three healing-phase bugs fixed:
+All known blockers fixed in this JAR:
 1. **BUG-S1:** Storage infinite loop for 3 unservable contracts (each was stalling 1h per attempt)
-2. **BUG-H1:** 4 concurrent trie walks replaced by single walk with guard (expected 3.5× healing speedup)
+2. **BUG-H1:** 4 concurrent trie walks replaced by single walk with guard (3.5× healing speedup)
 3. **BUG-H2:** Healing sentinel corrected (removes spurious log + incorrect stagnation comparison)
+4. **BUG-SD1:** SNAP→Regular handoff race (false-positive done, chain weight orphan, stateRoot mismatch)
+5. **BUG-WS1/WS2:** WALK-SKIP infinite loop + false positive
+6. **BUG-HS1:** Healing stall from RetryPivotRefresh interrupting StateHealing
+7. **OPT-H1/SD1/AD1:** Mid-healing crash recovery, oversized storage deferral, adaptive dispatch
 
-**Expected outcome:** If these are the last blockers, attempt 14 should complete account download in ~11-14h and heal in 1-2h.
+**Status as of 2026-04-06 ~13:38:** Healing complete (301,631 nodes, 0 abandoned). State validation trie walk in progress — 108.8M nodes scanned @ ~3,250 nodes/s, ETA ~3h.
 
-**When this succeeds:** Upstream PR to `chippr-robotics/fukuii` will be opened with the full `march-onward` branch (172 commits). See `MARCH-ONWARD-HANDOFF.md` for the PR strategy.
+**Upstream PR:** Submitted to `chippr-robotics/fukuii` while sync finalizes. See `MARCH-ONWARD-HANDOFF.md` for full details (197 commits).
 
 ---
 
@@ -340,7 +361,7 @@ sbt pp            # Pre-PR: format + style + tests
 
 ## Related Documents
 
-- [`MARCH-ONWARD-HANDOFF.md`](MARCH-ONWARD-HANDOFF.md) — Full branch handoff (172 commits)
+- [`MARCH-ONWARD-HANDOFF.md`](MARCH-ONWARD-HANDOFF.md) — Full branch handoff (197 commits)
 - [`SNAP-SYNC-MORDOR-FIRST-SUCCESS.md`](SNAP-SYNC-MORDOR-FIRST-SUCCESS.md) — Detailed Mordor sync report
 - [`docs/architecture/`](../architecture/) — Sync architecture ADRs
 - [`docs/runbooks/SNAP-SYNC-FAQ.md`](../runbooks/SNAP-SYNC-FAQ.md) — Operational FAQ

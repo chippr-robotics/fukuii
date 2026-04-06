@@ -2,10 +2,10 @@
 
 Comprehensive inventory of remaining work, verified against the codebase and compared to reference clients (go-ethereum, nethermind, core-geth, Besu, Erigon).
 
-**Branch:** `march-onward` (172 commits ahead of upstream main, at `668c04c30`)
+**Branch:** `march-onward` (197 commits ahead of upstream main, at `668c04c30`)
 **Test baseline:** 2,738 unit tests pass, 0 failed, 0 ignored; 12/12 EVM consensus; 8/8 integration (24 suites, 16 empty — need ethereum/tests fixtures)
 **RPC methods:** 135 standard + 8 MCP protocol = 143 total, all wired to `JsonRpcController`, zero orphaned
-**Last audited:** 2026-04-04
+**Last audited:** 2026-04-06
 
 ---
 
@@ -906,6 +906,26 @@ Research into MEV (Flashbots, CoW Protocol), decentralized RPC protocols (DRPC, 
   Suggested: `Storage root X unservable: tried N distinct peers with M total requests (threshold=2 peers, eligible=K)`
 - **Impact:** No functional issue. Operator confusion only.
 
+#### L-031: "Marked stateless" log message conflates peer incapability with unservable contract root
+
+- **File:** `StorageRangeCoordinator.scala`
+- **Priority:** Low | **Risk:** None
+- **Status:** Observation from ETC mainnet attempt 14 (2026-04-05)
+- **Observed:** At the tail end of storage sync, the final ~6 contracts cannot be served because their
+  storage sub-trie root predates the current pivot and has been pruned by all peers. The coordinator
+  correctly defers them to healing, but logs:
+  `Peer X marked stateless for storage root 68c884ca (N/10 stateless)`
+  — which implies the *peer* lacks SNAP capability, when in reality the *contract's storage root*
+  simply doesn't exist under any peer's serving window. The peers are responding correctly with
+  `served=0, proofs=N` (proof of absence), not failing.
+- **Fix:** Distinguish the two cases in log output:
+  - `served=0, proofs=N` (non-zero proofs) → peer answered correctly but root is unprovable:
+    log as `Contract storage root X not present under pivot for peer Y (N/M peers tried) — deferring to healing`
+  - Timeout or `served=0, proofs=0` → genuine peer incapability:
+    log as existing `Peer X marked stateless for storage root Y (N/M stateless)`
+- **Impact:** No functional issue. Operator confusion when reading logs — makes it appear peers are
+  degraded when the storage download phase is actually completing correctly.
+
 #### L-026: Aggressive peer discovery when snap peer count is low — RESEARCH DONE, DEFERRED
 
 - **Files:** `src/main/scala/.../network/PeerManagerActor.scala`, `src/main/scala/.../network/discovery/`
@@ -1236,6 +1256,13 @@ Items below were implemented on the `march-onward` branch and verified against t
 | BUG-S1: Storage infinite loop fix | `668c04c30` | `StorageRangeCoordinator`: removed `emptyResponsesByTask.clear()` on pivot refresh — escape-hatch counter now accumulates across pivots; stuck accounts complete in ~3 min vs 1 h |
 | BUG-H1: Parallel trie walk guard  | `668c04c30` | `SNAPSyncController`: added `if (!trieWalkInProgress)` guard in `ScheduledTrieWalk` handler — prevents 4 concurrent redundant walks (was ~3.5× slower) |
 | BUG-H2: Healing sentinel fix      | `668c04c30` | Changed `lastTrieWalkMissingCount: Int = Int.MaxValue` → `Option[Int] = None` — eliminates spurious "2147483646 nodes healed" log + incorrect stagnation comparison on first round |
+| BUG-SD1: SNAP→Regular handoff race | `95545f9d8` + 4 follow-ups | False-positive `snapSyncDone`, chain weight orphan after pivot substitution, wrong stateRoot check — 5 commits fix all variants |
+| BUG-WS1: WALK-SKIP infinite loop  | `2ee32fd55` | Infinite loop when pivot root absent from RocksDB |
+| BUG-WS2: WALK-SKIP false positive | `15a782094` | Walk skipped when healing was non-trivial |
+| BUG-HS1: Healing stall            | `77c72db11` | `RetryPivotRefresh` interrupted `StateHealing` phase |
+| OPT-H1: Mid-healing crash recovery | `2123348ba` | Persist pending queue to `AppStateStorage` — survives restart without full re-derivation |
+| OPT-SD1: Oversized storage deferral | `cd1bbeea2` | Defer accounts with `max(3, peerCount)` timeouts to trie healing (avoids SNAP serve window limit) |
+| OPT-AD1: Adaptive peer dispatch   | `349673b9a` | EMA latency throttle + stale-hold gate — prevents flooding slow peers or holding stale ones |
 
 ### Resolved in FIXME/TODO Audit (2026-03-25)
 

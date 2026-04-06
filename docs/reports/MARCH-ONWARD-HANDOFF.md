@@ -1,29 +1,29 @@
 # Fukuii `march-onward` Branch — Handoff Document
 
-**Branch:** `march-onward` (172 commits ahead of `upstream/main` at `6220ce58b`)
+**Branch:** `march-onward` (197 commits ahead of `upstream/main` at `6220ce58b`)
 **Author:** Christopher Mercer (chris-mercer) + Claude Opus/Sonnet 4.6
-**Updated:** 2026-04-04
+**Updated:** 2026-04-06
 **Test results:** 2,738 unit tests passing, 0 failures
 **RPC methods:** 143 implemented (135 standard + 8 MCP), all wired to `JsonRpcController`, zero orphaned
 **Build:** Scala 3.3.4 LTS, JDK 21, sbt 1.10.7
-**Diff vs upstream:** 321 files changed, +27,947 / -1,947 lines
+**Diff vs upstream:** 357 files changed, +32,289 / -3,561 lines
 
 ---
 
 ## Upstream PR Strategy
 
-**A single `march-onward` PR will be submitted to `chippr-robotics/fukuii` after ETC mainnet SNAP sync completes successfully.** The cherry-pick multi-PR approach was evaluated and abandoned — commits were authored on top of each other and cherry-picking produced structural conflicts on nearly every PR. Submitting the full branch is simpler and submits code as it was actually tested.
+**Submitting now for early review while ETC mainnet SNAP sync finalizes.** The cherry-pick multi-PR approach was evaluated and abandoned — commits were authored on top of each other and cherry-picking produced structural conflicts on nearly every PR. Submitting the full branch is simpler and submits code as it was actually tested.
 
-SNAP sync gating: ETC mainnet SNAP sync attempt 14 (JAR `668c04c30`) is in progress with three critical bugs fixed (BUG-S1 storage loop, BUG-H1 parallel trie walk, BUG-H2 healing sentinel). Once healing completes and the chain tip is reached, the branch is ready for upstream PR submission.
+ETC mainnet SNAP sync attempt 14 (JAR `668c04c30`) is still in progress. All known blockers are fixed (BUG-S1 storage loop, BUG-H1 parallel trie walk, BUG-H2 healing sentinel, plus 10+ additional post-BUG-series handoff and healing fixes). Submitting PR now allows Cody to begin review while the sync completes.
 
 ---
 
 ## Summary
 
-The `march-onward` branch is a comprehensive production-readiness pass building on the `alpha` (PR #1003, merged) and `olympia` branches. It adds 172 commits covering:
+The `march-onward` branch is a comprehensive production-readiness pass building on the `alpha` (PR #1003, merged) and `olympia` branches. It adds 197 commits covering:
 
 - **SNAP sync server + client** — Full bidirectional SNAP/1 protocol, first successful Mordor sync to chain head (~35 min), ETC mainnet SNAP sync attempt 14 in progress
-- **SNAP reliability series (L-015 → L-036 + H-001 + SP-001 + BUG-S1/H1/H2)** — 28 commits hardening SNAP client for ETC mainnet conditions
+- **SNAP reliability series (L-015 → L-036 + H-001 + SP-001 + BUG-S1/H1/H2)** — 28 commits hardening SNAP client for ETC mainnet conditions, plus 10 post-BUG-series handoff/heal fixes
 - **ETH63-67 protocol removal** — ETH68-only modernization: `ETH65.scala` deleted, 7 old decoders removed, `Capability.scala` simplified, all tests rewritten to ETH68 expectations
 - **79 new RPC methods** (64 → 143) — trace, txpool, admin, debug, miner, fee market, state overrides, MCP
 - **BLS12-381 precompiles** — All 7 Olympia precompiles via gnark JNI
@@ -38,12 +38,12 @@ The `march-onward` branch is a comprehensive production-readiness pass building 
 
 ---
 
-## Commit Categories (172 total)
+## Commit Categories (197 total)
 
 | Category | Count | Description |
 |----------|-------|-------------|
 | feat(snap) | 12 | SNAP server handlers, client probes, flat storage, trie node cache |
-| L-series (snap) | 22 | SNAP client reliability: L-015 through L-036 |
+| L-series (snap) | 32 | SNAP client reliability: L-015 through L-036 + 10 post-BUG-series SNAP→handoff + heal fixes |
 | BUG-series (snap) | 3 | BUG-S1 (storage loop), BUG-H1 (parallel walk), BUG-H2 (healing sentinel) |
 | feat(rpc) | 15 | trace/txpool/admin/debug/miner/fee market/state overrides/JWT; trace_replayBlockTransactions complete |
 | feat(evm) | 3 | BLS12-381 precompiles, CREATE gas dedup, Stack array optimization |
@@ -54,7 +54,7 @@ The `march-onward` branch is a comprehensive production-readiness pass building 
 | fix(consensus) | 2 | Transaction type gating, baseFee corruption guard, atomic finalization |
 | perf | 8 | RocksDB bulk write, trie cache, prefetch, adaptive timeouts, pipelining, Stack array |
 | test | 17 | SNAP PRs #1007/#1008, trace/txpool/admin specs, flat storage, mining, fork boundary, ETH68 protocol rewrite |
-| docs | 11 | BACKLOG, SNAP report, cleanup, multi-LLM MCP docs, handoff updates |
+| docs | 13 | BACKLOG, SNAP report, cleanup, multi-LLM MCP docs, handoff updates |
 | chore | 6 | Log noise, config alignment, stale TODO cleanup |
 | refactor | 2 | Treasury centralization, config includes |
 | fix(config) | 3 | Olympia alignment, prod log level, API defaults |
@@ -275,6 +275,44 @@ ETC now operates exclusively on ETH68 (core-geth: ETH68-only; Besu: ETH68+ETH69;
 
 ---
 
+### 13. Post-BUG-Series SNAP Reliability + Handoff Fixes (April 2026)
+
+~25 commits hardening SNAP→Regular sync handoff and healing-phase robustness, added after the BUG-S1/H1/H2 fixes while ETC mainnet attempt 14 runs:
+
+**SNAP→Regular Handoff Fixes:**
+
+| Commit | Description |
+|--------|-------------|
+| `95545f9d8` | Fix three SNAP→regular sync handoff bugs (race between snapSyncDone flag and regular sync start) |
+| `3d6566fa2` | Fix chain weight orphan after pivot header substitution + false-positive snapSyncDone |
+| `d14e4080c` | Add pivot header/chain weight consistency repair on SNAP restart |
+| `5e020472b` | Fix SNAP false-positive recovery: reset and heal instead of substituting wrong stateRoot |
+| `4a57c1d93` | Fix C2: check snapSyncStateRoot not substituted block header stateRoot |
+| `2ee32fd55` | Fix D: WALK-SKIP infinite loop when pivot root is absent from RocksDB |
+| `15a782094` | Fix WALK-SKIP false positive when healing is non-trivial |
+| `77c72db11` | Fix healing stall: RetryPivotRefresh excluded StateHealing phase |
+
+**Healing + Dispatch Improvements:**
+
+| Commit | Description |
+|--------|-------------|
+| `cd1bbeea2` | Defer oversized storage accounts to trie healing after `max(3, peerCount)` timeouts |
+| `2123348ba` | OPT-H1: persist mid-healing pending queue for crash recovery |
+| `349673b9a` | Adaptive SNAP peer dispatch: stale-hold gate + EMA latency throttle |
+| `dedc6c51c` | Skip validation walk when healing completes with 0 abandoned nodes |
+| `25c241486` | Truncate log files on startup before first log line (clean logs per run) |
+| `c894558d5` | Replace [HW1-BOOT]/[HW1-FEED] with operator-friendly [HEAL] log tags |
+
+**Trie Walk Speedups:**
+
+| Commit | Description |
+|--------|-------------|
+| `c3c51a713` | Walk Speedup 0+1: fillCache=false + multiGet for storage walk chain |
+| `10d00ca28` | Walk Speedup 2: parallel depth-2 fan-out + multiGet BranchNode + fillCache=false in StateValidator |
+| `0e0cd3fda` | Collect proof-discovered interior node hashes during account download (reduces healing rounds) |
+
+---
+
 ## Performance Optimizations
 
 | Optimization | Impact |
@@ -361,7 +399,7 @@ See `docs/development/BACKLOG.md` for the complete inventory. Key items:
 
 ### Gating condition for upstream PR
 
-- **ETC mainnet SNAP sync** — Attempt 14 in progress (JAR `668c04c30`). Three bugs fixed: BUG-S1 (storage infinite loop), BUG-H1 (4-parallel trie walks), BUG-H2 (healing sentinel). Once healing completes and chain tip is reached, open the upstream PR.
+- **ETC mainnet SNAP sync** — Attempt 14 in progress (JAR `668c04c30`). All known blockers fixed: BUG-S1/H1/H2 plus 10 post-series handoff and healing fixes. PR now submitted for early review. Update PR status once healing completes and chain tip is reached.
 
 ### ETC Mainnet SNAP Sync — Attempt History
 
@@ -397,7 +435,7 @@ All Critical (C-001..C-004), High (H-001..H-018), and most Medium items are DONE
 |--------|--------|--------|
 | core-geth | `etc` | Synced to head, all tests pass |
 | Besu | `etc` | SNAP server for Fukuii SNAP sync |
-| Fukuii | `march-onward` | 2,738 tests, Mordor SNAP synced, ETC mainnet attempt 14 in progress |
+| Fukuii | `march-onward` | 2,738 tests, Mordor SNAP synced, ETC mainnet attempt 14 in progress (post-BUG-series + handoff fixes) |
 
 Fukuii successfully syncs Mordor using Besu as a SNAP server peer (core-geth provides block headers, Besu provides SNAP state). ETC mainnet attempt 14 (JAR `668c04c30`) targets the three healing-phase blockers fixed by BUG-S1/H1/H2.
 
