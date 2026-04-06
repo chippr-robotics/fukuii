@@ -1,6 +1,7 @@
 #!/bin/bash
 # Hive entry point for Fukuii
-# Translates Hive environment variables into Fukuii configuration
+# Translates Hive environment variables into Fukuii -D system properties.
+# No special modes or hacks — Fukuii runs as a normal node with config overrides.
 set -e
 
 DATADIR="/app/data"
@@ -11,7 +12,7 @@ CONFIG_DIR="/app/hive-conf"
 mkdir -p "$DATADIR" "$CONFIG_DIR"
 
 # ==============================================================================
-# 1. Determine fork configuration from HIVE_FORK_* environment variables
+# Fork configuration from HIVE_FORK_* environment variables
 # ==============================================================================
 
 MAX="1000000000000000000"
@@ -26,55 +27,46 @@ MUIRGLACIER=${HIVE_FORK_MUIRGLACIER:-$MAX}
 BERLIN=${HIVE_FORK_BERLIN:-$MAX}
 LONDON=${HIVE_FORK_LONDON:-$MAX}
 
-# Network/Chain IDs
 NETWORK_ID=${HIVE_NETWORK_ID:-1}
 CHAIN_ID=${HIVE_CHAIN_ID:-1}
-
-# Engine API / PoS
-TTD=${HIVE_TERMINAL_TOTAL_DIFFICULTY:-}
+TTD=${HIVE_TERMINAL_TOTAL_DIFFICULTY:-0}
 SHANGHAI_TS=${HIVE_SHANGHAI_TIMESTAMP:-}
 CANCUN_TS=${HIVE_CANCUN_TIMESTAMP:-}
 PRAGUE_TS=${HIVE_PRAGUE_TIMESTAMP:-}
 
 # ==============================================================================
-# 2. Process genesis file
+# Genesis: convert geth format to Fukuii format
 # ==============================================================================
 
 if [ -f "$GENESIS_FILE" ]; then
-    echo "Processing genesis file..."
     jq -f /mapper.jq "$GENESIS_FILE" > "$CONFIG_DIR/genesis.json"
-    echo "Mapped genesis: $(cat $CONFIG_DIR/genesis.json | head -1)"
-else
-    echo "No genesis file provided, using default"
 fi
 
 # ==============================================================================
-# 3. Set up JWT secret for Engine API
+# JWT secret for Engine API
 # ==============================================================================
 
-# JWT secret is always written (Engine API always enabled for hive)
-echo "Engine API mode: TTD=${TTD:-0}"
+echo "0x7365637265747365637265747365637265747365637265747365637265747365" > "$JWT_SECRET_FILE"
 
 # ==============================================================================
-# 4. Import chain data if provided
-# ==============================================================================
-
-CHAIN_RLP="/chain.rlp"
-BLOCKS_DIR="/blocks"
-
-# ==============================================================================
-# 5. Build JVM flags
+# Build JVM flags — all configuration via -D system properties
 # ==============================================================================
 
 FLAGS=""
 FLAGS="$FLAGS -Dfukuii.datadir=$DATADIR"
 FLAGS="$FLAGS -Dfukuii.blockchains.network=mordor"
 
-# Override chain ID and network ID from hive env vars
+# Chain/network identity
 FLAGS="$FLAGS -Dfukuii.blockchains.mordor.chain-id=$CHAIN_ID"
 FLAGS="$FLAGS -Dfukuii.blockchains.mordor.network-id=$NETWORK_ID"
+FLAGS="$FLAGS -Dfukuii.blockchains.mordor.network-type=eth"
 
-# Fork block overrides (override mordor defaults with hive values)
+# Genesis override
+if [ -f "$CONFIG_DIR/genesis.json" ]; then
+    FLAGS="$FLAGS -Dfukuii.blockchains.mordor.custom-genesis-file=$CONFIG_DIR/genesis.json"
+fi
+
+# Fork block overrides
 FLAGS="$FLAGS -Dfukuii.blockchains.mordor.homestead-block-number=$HOMESTEAD"
 FLAGS="$FLAGS -Dfukuii.blockchains.mordor.eip150-block-number=$TANGERINE"
 FLAGS="$FLAGS -Dfukuii.blockchains.mordor.eip155-block-number=$SPURIOUS"
@@ -86,83 +78,45 @@ FLAGS="$FLAGS -Dfukuii.blockchains.mordor.petersburg-block-number=$PETERSBURG"
 FLAGS="$FLAGS -Dfukuii.blockchains.mordor.istanbul-block-number=$ISTANBUL"
 FLAGS="$FLAGS -Dfukuii.blockchains.mordor.muir-glacier-block-number=$MUIRGLACIER"
 FLAGS="$FLAGS -Dfukuii.blockchains.mordor.berlin-block-number=$BERLIN"
-# London = Olympia in Fukuii (EIP-1559)
 FLAGS="$FLAGS -Dfukuii.blockchains.mordor.olympia-block-number=$LONDON"
+FLAGS="$FLAGS -Dfukuii.blockchains.mordor.terminal-total-difficulty=$TTD"
 
-# Network config
+# Timestamp-based forks
+[ -n "$SHANGHAI_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.mordor.shanghai-timestamp=$SHANGHAI_TS"
+[ -n "$CANCUN_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.mordor.cancun-timestamp=$CANCUN_TS"
+[ -n "$PRAGUE_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.mordor.prague-timestamp=$PRAGUE_TS"
+
+# RPC
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.enabled=true"
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.interface=0.0.0.0"
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.port=8545"
-FLAGS="$FLAGS -Dfukuii.network.rpc.apis=eth,web3,net,personal,fukuii,debug,qa,test"
+FLAGS="$FLAGS -Dfukuii.network.rpc.apis=eth,web3,net,debug"
+
+# Engine API
+FLAGS="$FLAGS -Dfukuii.network.engine-api.enabled=true"
+FLAGS="$FLAGS -Dfukuii.network.engine-api.interface=0.0.0.0"
+FLAGS="$FLAGS -Dfukuii.network.engine-api.port=8551"
+FLAGS="$FLAGS -Dfukuii.network.engine-api.jwt-secret-path=$JWT_SECRET_FILE"
+FLAGS="$FLAGS -Dfukuii.mining.protocol=engine-api"
+
+# P2P
 FLAGS="$FLAGS -Dfukuii.network.server-address.interface=0.0.0.0"
 FLAGS="$FLAGS -Dfukuii.network.server-address.port=30303"
 FLAGS="$FLAGS -Dfukuii.network.discovery.interface=0.0.0.0"
 FLAGS="$FLAGS -Dfukuii.network.discovery.port=30303"
 
-# Disable sync (hive provides chain data, we don't sync from peers)
+# Disable sync (hive provides chain data directly)
 FLAGS="$FLAGS -Dfukuii.sync.do-fast-sync=false"
 FLAGS="$FLAGS -Dfukuii.sync.do-snap-sync=false"
 
-
-# Override log level for visibility in hive
-FLAGS="$FLAGS -Dfukuii.logging.logs-level=INFO"
-
 # Bootnode
-if [ -n "$HIVE_BOOTNODE" ]; then
-    FLAGS="$FLAGS -Dfukuii.network.peer.bootstrap-nodes.0=$HIVE_BOOTNODE"
-fi
+[ -n "$HIVE_BOOTNODE" ] && FLAGS="$FLAGS -Dfukuii.network.peer.bootstrap-nodes.0=$HIVE_BOOTNODE"
 
 # Mining
 if [ -n "$HIVE_MINER" ]; then
     FLAGS="$FLAGS -Dfukuii.mining.mining-enabled=true"
     FLAGS="$FLAGS -Dfukuii.mining.coinbase=$HIVE_MINER"
 fi
-
-# Engine API — always enabled (hive RPC-compat tests are post-merge)
-echo "0x7365637265747365637265747365637265747365637265747365637265747365" > "$JWT_SECRET_FILE"
-FLAGS="$FLAGS -Dfukuii.network.engine-api.enabled=true"
-FLAGS="$FLAGS -Dfukuii.network.engine-api.interface=0.0.0.0"
-FLAGS="$FLAGS -Dfukuii.network.engine-api.port=8551"
-FLAGS="$FLAGS -Dfukuii.network.engine-api.jwt-secret-path=$JWT_SECRET_FILE"
-FLAGS="$FLAGS -Dfukuii.mining.protocol=engine-api"
-FLAGS="$FLAGS -Dfukuii.blockchains.mordor.network-type=eth"
-
-if [ -n "$TTD" ]; then
-    FLAGS="$FLAGS -Dfukuii.blockchains.mordor.terminal-total-difficulty=$TTD"
-else
-    # Default TTD=0 for post-merge tests
-    FLAGS="$FLAGS -Dfukuii.blockchains.mordor.terminal-total-difficulty=0"
-fi
-
-# Timestamp forks
-if [ -n "$SHANGHAI_TS" ]; then
-    FLAGS="$FLAGS -Dfukuii.blockchains.mordor.shanghai-timestamp=$SHANGHAI_TS"
-fi
-if [ -n "$CANCUN_TS" ]; then
-    FLAGS="$FLAGS -Dfukuii.blockchains.mordor.cancun-timestamp=$CANCUN_TS"
-fi
-if [ -n "$PRAGUE_TS" ]; then
-    FLAGS="$FLAGS -Dfukuii.blockchains.mordor.prague-timestamp=$PRAGUE_TS"
-fi
-
-# Log level
-case "$HIVE_LOGLEVEL" in
-    0|1) LOGLEVEL="ERROR" ;;
-    2)   LOGLEVEL="WARN" ;;
-    3)   LOGLEVEL="INFO" ;;
-    4|5) LOGLEVEL="DEBUG" ;;
-    *)   LOGLEVEL="INFO" ;;
-esac
-
-# ==============================================================================
-# 6. Start Fukuii
-# ==============================================================================
-
-echo "Starting Fukuii for hive test"
-echo "  Chain ID: $CHAIN_ID, Network ID: $NETWORK_ID"
-echo "  Forks: London=$LONDON, Berlin=$BERLIN"
-echo "  TTD: ${TTD:-none}"
-echo "  Log level: $LOGLEVEL"
 
 exec java \
     -Xmx2g \

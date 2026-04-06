@@ -38,34 +38,29 @@ abstract class BaseNode extends Node {
   private var tuiUpdater: Option[TuiUpdater] = None
 
   def start(): Unit = {
+    // Phase 1: Essential initialization (must complete before anything else)
     startMetricsClient()
-
     fixDatabase()
-
     loadGenesisData()
 
-    runDBConsistencyCheck()
-
-    startPeerManager()
-
-    startPortForwarding()
-
-    startServer()
-
-    startSyncController()
-
-    startMining()
-
-    startDiscoveryManager()
-
+    // Phase 2: API servers (user-facing, ready as early as possible)
     startJsonRpcHttpServer()
-
     startJsonRpcIpcServer()
-
     startEngineApiServer()
 
-    startPeriodicDBConsistencyCheck()
+    // Phase 3: P2P networking
+    startPeerManager()
+    startPortForwarding()
+    startServer()
+    startDiscoveryManager()
 
+    // Phase 4: Background work
+    startSyncController()
+    startMining()
+
+    // Phase 5: Non-critical maintenance
+    runDBConsistencyCheck()
+    startPeriodicDBConsistencyCheck()
     startTuiUpdater()
   }
 
@@ -137,15 +132,15 @@ abstract class BaseNode extends Node {
 
   private[this] def startEngineApiServer(): Unit =
     maybeEngineApiServer.foreach { server =>
-      import scala.concurrent.ExecutionContext.Implicits.global
-      System.err.println(s"[ENGINE-API] Starting on ${engineApiConfig.interface}:${engineApiConfig.port}")
-      val f = server.start()
-      f.foreach { binding =>
-        System.err.println(s"[ENGINE-API] Bound to ${binding.localAddress}")
-      }
-      f.failed.foreach { ex =>
-        System.err.println(s"[ENGINE-API] FAILED: ${ex.getMessage}")
-        ex.printStackTrace(System.err)
+      try {
+        val binding = scala.concurrent.Await.result(
+          server.start(),
+          scala.concurrent.duration.Duration(10, "seconds")
+        )
+        log.info(s"Engine API server bound to ${binding.localAddress}")
+      } catch {
+        case ex: Exception =>
+          log.error(s"Engine API server failed to start on ${engineApiConfig.interface}:${engineApiConfig.port}", ex)
       }
     }
 
