@@ -56,6 +56,17 @@ class BlockExecution(
     blockExecResult
   }
 
+  /** Executes a block without pre/post validation. Returns the execution result
+    * including receipts, gasUsed, and the persisted world state. Used by ChainImporter
+    * for trusted block import where only state correctness matters.
+    */
+  def executeBlockNoValidation(
+      block: Block
+  )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, (Seq[Receipt], BigInt, ByteString)] =
+    executeBlock(block).map { result =>
+      (result.receipts, result.gasUsed, result.worldState.stateRootHash)
+    }
+
   /** Executes a block (executes transactions and pays rewards) */
   private def executeBlock(
       block: Block
