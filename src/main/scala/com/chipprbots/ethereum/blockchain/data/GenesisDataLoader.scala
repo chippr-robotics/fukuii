@@ -14,6 +14,7 @@ import org.json4s.CustomSerializer
 import org.json4s.DefaultFormats
 import org.json4s.Extraction
 import org.json4s.Formats
+import org.json4s.JObject
 import org.json4s.JString
 import org.json4s.JValue
 
@@ -90,7 +91,8 @@ class GenesisDataLoader(
 
   private def loadGenesisData(genesisJson: String)(implicit blockchainConfig: BlockchainConfig): Try[Unit] = {
     import org.json4s.native.JsonMethods.parse
-    implicit val formats: Formats = DefaultFormats + ByteStringJsonSerializer + UInt256JsonSerializer
+    import GenesisDataLoader.JsonSerializers.GenesisAccountSerializer
+    implicit val formats: Formats = DefaultFormats + ByteStringJsonSerializer + UInt256JsonSerializer + GenesisAccountSerializer
     for {
       genesisData <- Try(Extraction.extract[GenesisData](parse(genesisJson)))
       _ <- loadGenesisData(genesisData)
@@ -138,7 +140,8 @@ class GenesisDataLoader(
 
     genesisData.alloc.zipWithIndex.foldLeft(initalRootHash) { case (rootHash, ((address, genesisAccount), _)) =>
       val mpt = MerklePatriciaTrie[Array[Byte], Account](rootHash, storage)
-      val paddedAddress = address.reverse.padTo(addressLength, "0").reverse.mkString
+      val cleanAddress = if (address.startsWith("0x") || address.startsWith("0X")) address.substring(2) else address
+      val paddedAddress = cleanAddress.reverse.padTo(addressLength, "0").reverse.mkString
 
       val stateRoot = mpt
         .put(
@@ -246,6 +249,32 @@ object GenesisDataLoader {
 
     object UInt256JsonSerializer
         extends CustomSerializer[UInt256](_ => ({ case jv => deserializeUint256String(jv) }, PartialFunction.empty))
+
+    private def parseStorageMap(jv: JValue): Option[Map[UInt256, UInt256]] = jv match {
+      case JObject(fields) if fields.nonEmpty =>
+        Some(fields.map { case (key, value) =>
+          deserializeUint256String(JString(key)) -> deserializeUint256String(value)
+        }.toMap)
+      case _ => None
+    }
+
+    object GenesisAccountSerializer
+        extends CustomSerializer[GenesisAccount](_ =>
+          (
+            {
+              case JObject(fields) =>
+                val map = fields.toMap
+                GenesisAccount(
+                  precompiled = None,
+                  balance = map.get("balance").map(deserializeUint256String).getOrElse(UInt256.Zero),
+                  code = map.get("code").map(deserializeByteString),
+                  nonce = map.get("nonce").map(deserializeUint256String),
+                  storage = map.get("storage").flatMap(parseStorageMap)
+                )
+            },
+            PartialFunction.empty
+          )
+        )
   }
 }
 

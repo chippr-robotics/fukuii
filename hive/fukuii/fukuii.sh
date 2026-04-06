@@ -109,6 +109,9 @@ FLAGS="$FLAGS -Dfukuii.network.discovery.port=30303"
 FLAGS="$FLAGS -Dfukuii.sync.do-fast-sync=false"
 FLAGS="$FLAGS -Dfukuii.sync.do-snap-sync=false"
 
+# Import chain data if provided
+[ -f "/chain.rlp" ] && FLAGS="$FLAGS -Dfukuii.import-chain-file=/chain.rlp"
+
 # Bootnode
 [ -n "$HIVE_BOOTNODE" ] && FLAGS="$FLAGS -Dfukuii.network.peer.bootstrap-nodes.0=$HIVE_BOOTNODE"
 

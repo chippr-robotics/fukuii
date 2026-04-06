@@ -42,6 +42,7 @@ abstract class BaseNode extends Node {
     startMetricsClient()
     fixDatabase()
     loadGenesisData()
+    importChainData()
 
     // Phase 2: API servers (user-facing, ready as early as possible)
     startJsonRpcHttpServer()
@@ -87,6 +88,15 @@ abstract class BaseNode extends Node {
     if (!Config.testmode) {
       genesisDataLoader.loadGenesisData()
     }
+
+  private[this] def importChainData(): Unit = {
+    val chainFile = scala.util.Try(instanceConfig.config.getString("import-chain-file")).toOption
+    chainFile.foreach { path =>
+      log.info(s"Importing chain data from: $path")
+      val (imported, skipped, failed) = chainImporter.importChainFile(path)
+      log.info(s"Chain import: $imported imported, $skipped skipped, $failed failed")
+    }
+  }
 
   private[this] def runDBConsistencyCheck(): Unit = {
     // Skip consistency check after SNAP sync — block headers 0..pivot don't exist yet.

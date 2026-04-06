@@ -23,7 +23,7 @@ import scala.util.Try
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 
-import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader
+import com.chipprbots.ethereum.blockchain.data.{ChainImporter, GenesisDataLoader}
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.BlockchainHostActor
 import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
@@ -236,6 +236,9 @@ trait ConsensusBuilder {
       blockchainWriter,
       blockExecution
     )
+
+  lazy val chainImporter: ChainImporter =
+    new ChainImporter(blockchainReader, blockchainWriter, blockExecution)
 
   lazy val consensusAdapter: ConsensusAdapter =
     new ConsensusAdapter(
