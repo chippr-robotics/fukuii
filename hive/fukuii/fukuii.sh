@@ -74,11 +74,6 @@ FLAGS="$FLAGS -Dfukuii.blockchains.network=mordor"
 FLAGS="$FLAGS -Dfukuii.blockchains.mordor.chain-id=$CHAIN_ID"
 FLAGS="$FLAGS -Dfukuii.blockchains.mordor.network-id=$NETWORK_ID"
 
-# Use hive-provided genesis file
-if [ -f "$CONFIG_DIR/genesis.json" ]; then
-    FLAGS="$FLAGS -Dfukuii.blockchains.mordor.custom-genesis-file=$CONFIG_DIR/genesis.json"
-fi
-
 # Fork block overrides (override mordor defaults with hive values)
 FLAGS="$FLAGS -Dfukuii.blockchains.mordor.homestead-block-number=$HOMESTEAD"
 FLAGS="$FLAGS -Dfukuii.blockchains.mordor.eip150-block-number=$TANGERINE"
@@ -108,8 +103,6 @@ FLAGS="$FLAGS -Dfukuii.network.discovery.port=30303"
 FLAGS="$FLAGS -Dfukuii.sync.do-fast-sync=false"
 FLAGS="$FLAGS -Dfukuii.sync.do-snap-sync=false"
 
-# Enable test mode for chain import functionality
-FLAGS="$FLAGS -Dfukuii.testmode=true"
 
 # Override log level for visibility in hive
 FLAGS="$FLAGS -Dfukuii.logging.logs-level=INFO"
@@ -171,47 +164,11 @@ echo "  Forks: London=$LONDON, Berlin=$BERLIN"
 echo "  TTD: ${TTD:-none}"
 echo "  Log level: $LOGLEVEL"
 
-# Start the node in the background
-java \
+exec java \
     -Xmx2g \
     -Xms512m \
     -Xss4M \
     -XX:+UseG1GC \
     $FLAGS \
     -jar /app/fukuii/lib/fukuii-assembly-0.1.240.jar \
-    mordor &
-NODE_PID=$!
-
-# Wait for the RPC server to come up
-echo "Waiting for RPC server..."
-for i in $(seq 1 60); do
-    if curl -sf http://localhost:8545 -X POST -H "Content-Type: application/json" \
-       -d '{"jsonrpc":"2.0","method":"web3_clientVersion","params":[],"id":1}' > /dev/null 2>&1; then
-        echo "RPC server ready after ${i}s"
-        break
-    fi
-    sleep 1
-done
-
-# Import chain.rlp if provided (RLP-encoded blocks)
-if [ -f "$CHAIN_RLP" ]; then
-    echo "Importing chain.rlp..."
-    # Use a Python script to parse RLP blocks and import them via test_importRawBlock
-    python3 /import-chain.py "$CHAIN_RLP" "http://localhost:8545" 2>&1 || echo "Chain import finished with errors"
-fi
-
-# Import individual block files if provided
-if [ -d "$BLOCKS_DIR" ]; then
-    echo "Importing blocks from $BLOCKS_DIR..."
-    for blockfile in "$BLOCKS_DIR"/*.rlp; do
-        if [ -f "$blockfile" ]; then
-            BLOCK_HEX=$(xxd -p "$blockfile" | tr -d '\n')
-            curl -sf http://localhost:8545 -X POST -H "Content-Type: application/json" \
-                -d "{\"jsonrpc\":\"2.0\",\"method\":\"test_importRawBlock\",\"params\":[\"0x$BLOCK_HEX\"],\"id\":1}" > /dev/null 2>&1
-        fi
-    done
-    echo "Block import complete"
-fi
-
-# Wait for the node process
-wait $NODE_PID
+    mordor
