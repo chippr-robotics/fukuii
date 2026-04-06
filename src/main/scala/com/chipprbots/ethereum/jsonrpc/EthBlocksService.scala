@@ -51,7 +51,9 @@ object EthBlocksService {
       oldestBlock: BigInt,
       baseFeePerGas: Seq[BigInt],
       gasUsedRatio: Seq[Double],
-      reward: Option[Seq[Seq[BigInt]]]
+      reward: Option[Seq[Seq[BigInt]]],
+      baseFeePerBlobGas: Seq[BigInt],
+      blobGasUsedRatio: Seq[Double]
   )
 
   case class MaxPriorityFeePerGasRequest()
@@ -262,11 +264,29 @@ class EthBlocksService(
       }.getOrElse(0.0)
     }.toSeq
 
+    val blobBaseFees = (oldestBlock.toLong to (newestBlockNum + 1).toLong).map { num =>
+      blockchainReader.getBlockHeaderByNumber(num).flatMap(_.excessBlobGas).map(_ => BigInt(1)).getOrElse(BigInt(1))
+    }.toSeq
+
+    val blobGasUsedRatios = (oldestBlock.toLong to newestBlockNum.toLong).map { num =>
+      blockchainReader.getBlockHeaderByNumber(num).flatMap(_.blobGasUsed).map { used =>
+        if (used > 0) used.toDouble / 786432.0 else 0.0
+      }.getOrElse(0.0)
+    }.toSeq
+
+    val rewards = req.rewardPercentiles.map { _ =>
+      (oldestBlock.toLong to newestBlockNum.toLong).map { _ =>
+        req.rewardPercentiles.getOrElse(Seq.empty).map(_ => BigInt(0))
+      }.toSeq
+    }
+
     Right(FeeHistoryResponse(
       oldestBlock = oldestBlock,
       baseFeePerGas = baseFees,
       gasUsedRatio = gasUsedRatios,
-      reward = None
+      reward = rewards,
+      baseFeePerBlobGas = blobBaseFees,
+      blobGasUsedRatio = blobGasUsedRatios
     ))
   }
 

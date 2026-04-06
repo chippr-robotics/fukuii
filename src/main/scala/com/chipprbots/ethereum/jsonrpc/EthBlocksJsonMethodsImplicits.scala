@@ -257,13 +257,17 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
           case _ => Left(InvalidParams())
         }
 
-      def encodeJson(t: FeeHistoryResponse): JValue =
-        JObject(
+      def encodeJson(t: FeeHistoryResponse): JValue = {
+        val base = List(
           "oldestBlock" -> encodeAsHex(t.oldestBlock),
           "baseFeePerGas" -> JArray(t.baseFeePerGas.toList.map(encodeAsHex)),
           "gasUsedRatio" -> JArray(t.gasUsedRatio.toList.map(JDouble.apply)),
-          "reward" -> t.reward.map(rs => JArray(rs.toList.map(r => JArray(r.toList.map(encodeAsHex))))).getOrElse(JNull)
+          "baseFeePerBlobGas" -> JArray(t.baseFeePerBlobGas.toList.map(encodeAsHex)),
+          "blobGasUsedRatio" -> JArray(t.blobGasUsedRatio.toList.map(JDouble.apply))
         )
+        val rewardField = t.reward.map(rs => "reward" -> JArray(rs.toList.map(r => JArray(r.toList.map(encodeAsHex))))).toList
+        JObject(base ::: rewardField)
+      }
     }
 
   // eth_maxPriorityFeePerGas

@@ -43,6 +43,7 @@ PRAGUE_TS=${HIVE_PRAGUE_TIMESTAMP:-}
 if [ -f "$GENESIS_FILE" ]; then
     echo "Processing genesis file..."
     jq -f /mapper.jq "$GENESIS_FILE" > "$CONFIG_DIR/genesis.json"
+    echo "Mapped genesis: $(cat $CONFIG_DIR/genesis.json | head -1)"
 else
     echo "No genesis file provided, using default"
 fi
@@ -58,13 +59,8 @@ echo "Engine API mode: TTD=${TTD:-0}"
 # 4. Import chain data if provided
 # ==============================================================================
 
-if [ -f "/chain.rlp" ]; then
-    echo "Chain import requested (chain.rlp) — not yet supported, skipping"
-fi
-
-if [ -d "/blocks" ]; then
-    echo "Block import requested (/blocks/) — not yet supported, skipping"
-fi
+CHAIN_RLP="/chain.rlp"
+BLOCKS_DIR="/blocks"
 
 # ==============================================================================
 # 5. Build JVM flags
@@ -77,6 +73,11 @@ FLAGS="$FLAGS -Dfukuii.blockchains.network=mordor"
 # Override chain ID and network ID from hive env vars
 FLAGS="$FLAGS -Dfukuii.blockchains.mordor.chain-id=$CHAIN_ID"
 FLAGS="$FLAGS -Dfukuii.blockchains.mordor.network-id=$NETWORK_ID"
+
+# Use hive-provided genesis file
+if [ -f "$CONFIG_DIR/genesis.json" ]; then
+    FLAGS="$FLAGS -Dfukuii.blockchains.mordor.custom-genesis-file=$CONFIG_DIR/genesis.json"
+fi
 
 # Fork block overrides (override mordor defaults with hive values)
 FLAGS="$FLAGS -Dfukuii.blockchains.mordor.homestead-block-number=$HOMESTEAD"
@@ -97,7 +98,7 @@ FLAGS="$FLAGS -Dfukuii.blockchains.mordor.olympia-block-number=$LONDON"
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.enabled=true"
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.interface=0.0.0.0"
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.port=8545"
-FLAGS="$FLAGS -Dfukuii.network.rpc.apis=eth,web3,net,personal,fukuii,debug,qa"
+FLAGS="$FLAGS -Dfukuii.network.rpc.apis=eth,web3,net,personal,fukuii,debug,qa,test"
 FLAGS="$FLAGS -Dfukuii.network.server-address.interface=0.0.0.0"
 FLAGS="$FLAGS -Dfukuii.network.server-address.port=30303"
 FLAGS="$FLAGS -Dfukuii.network.discovery.interface=0.0.0.0"
@@ -106,6 +107,9 @@ FLAGS="$FLAGS -Dfukuii.network.discovery.port=30303"
 # Disable sync (hive provides chain data, we don't sync from peers)
 FLAGS="$FLAGS -Dfukuii.sync.do-fast-sync=false"
 FLAGS="$FLAGS -Dfukuii.sync.do-snap-sync=false"
+
+# Enable test mode for chain import functionality
+FLAGS="$FLAGS -Dfukuii.testmode=true"
 
 # Override log level for visibility in hive
 FLAGS="$FLAGS -Dfukuii.logging.logs-level=INFO"
@@ -167,11 +171,47 @@ echo "  Forks: London=$LONDON, Berlin=$BERLIN"
 echo "  TTD: ${TTD:-none}"
 echo "  Log level: $LOGLEVEL"
 
-exec java \
+# Start the node in the background
+java \
     -Xmx2g \
     -Xms512m \
     -Xss4M \
     -XX:+UseG1GC \
     $FLAGS \
     -jar /app/fukuii/lib/fukuii-assembly-0.1.240.jar \
-    mordor
+    mordor &
+NODE_PID=$!
+
+# Wait for the RPC server to come up
+echo "Waiting for RPC server..."
+for i in $(seq 1 60); do
+    if curl -sf http://localhost:8545 -X POST -H "Content-Type: application/json" \
+       -d '{"jsonrpc":"2.0","method":"web3_clientVersion","params":[],"id":1}' > /dev/null 2>&1; then
+        echo "RPC server ready after ${i}s"
+        break
+    fi
+    sleep 1
+done
+
+# Import chain.rlp if provided (RLP-encoded blocks)
+if [ -f "$CHAIN_RLP" ]; then
+    echo "Importing chain.rlp..."
+    # Use a Python script to parse RLP blocks and import them via test_importRawBlock
+    python3 /import-chain.py "$CHAIN_RLP" "http://localhost:8545" 2>&1 || echo "Chain import finished with errors"
+fi
+
+# Import individual block files if provided
+if [ -d "$BLOCKS_DIR" ]; then
+    echo "Importing blocks from $BLOCKS_DIR..."
+    for blockfile in "$BLOCKS_DIR"/*.rlp; do
+        if [ -f "$blockfile" ]; then
+            BLOCK_HEX=$(xxd -p "$blockfile" | tr -d '\n')
+            curl -sf http://localhost:8545 -X POST -H "Content-Type: application/json" \
+                -d "{\"jsonrpc\":\"2.0\",\"method\":\"test_importRawBlock\",\"params\":[\"0x$BLOCK_HEX\"],\"id\":1}" > /dev/null 2>&1
+        fi
+    done
+    echo "Block import complete"
+fi
+
+# Wait for the node process
+wait $NODE_PID

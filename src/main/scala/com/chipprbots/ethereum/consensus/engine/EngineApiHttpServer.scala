@@ -84,7 +84,7 @@ class EngineApiHttpServer(
   private def processRequest(json: JValue): Future[JsonRpcResponse] =
     try {
       val method = (json \ "method").extractOpt[String].getOrElse("unknown")
-      System.err.println(s"[ENGINE-API] request: method=$method")
+      log.debug(s"Engine API request: method=$method")
       val request = JsonRpcRequest(
         jsonrpc = (json \ "jsonrpc").extractOpt[String].getOrElse("2.0"),
         method = (json \ "method").extract[String],

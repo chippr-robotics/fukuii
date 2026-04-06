@@ -11,14 +11,15 @@ USER root
 
 # Install dependencies for the entry point scripts
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    jq \
+    jq python3 curl xxd \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy adapter scripts
 COPY fukuii.sh /fukuii.sh
 COPY mapper.jq /mapper.jq
+COPY import-chain.py /import-chain.py
 COPY enode.sh /hive-bin/enode.sh
-RUN chmod +x /fukuii.sh /hive-bin/enode.sh
+RUN chmod +x /fukuii.sh /hive-bin/enode.sh /import-chain.py
 
 # Write version info
 RUN echo "fukuii-0.1.240" > /version.txt
