@@ -3,14 +3,7 @@ package com.chipprbots.ethereum.jsonrpc
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.crypto.kec256
-import com.chipprbots.ethereum.domain.Address
-import com.chipprbots.ethereum.domain.BlockHeader
-import com.chipprbots.ethereum.domain.FailureOutcome
-import com.chipprbots.ethereum.domain.HashOutcome
-import com.chipprbots.ethereum.domain.Receipt
-import com.chipprbots.ethereum.domain.SignedTransaction
-import com.chipprbots.ethereum.domain.SuccessOutcome
-import com.chipprbots.ethereum.domain.UInt256
+import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.jsonrpc.FilterManager.TxLog
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
@@ -60,7 +53,11 @@ case class TransactionReceiptResponse(
     logs: Seq[TxLog],
     logsBloom: ByteString,
     root: Option[ByteString],
-    status: Option[BigInt]
+    status: Option[BigInt],
+    `type`: Option[BigInt] = None,
+    effectiveGasPrice: Option[BigInt] = None,
+    blobGasUsed: Option[BigInt] = None,
+    blobGasPrice: Option[BigInt] = None
 )
 
 object TransactionReceiptResponse {
@@ -101,6 +98,21 @@ object TransactionReceiptResponse {
       case HashOutcome(stateHash) => (Some(stateHash), None)
     }
 
+    val txType: BigInt = stx.tx match {
+      case _: LegacyTransaction          => BigInt(0)
+      case _: TransactionWithAccessList   => BigInt(1)
+      case _: TransactionWithDynamicFee   => BigInt(2)
+      case _: BlobTransaction             => BigInt(3)
+      case _: SetCodeTransaction          => BigInt(4)
+    }
+
+    val effectiveGasPrice = Transaction.effectiveGasPrice(stx.tx, blockHeader.baseFee)
+
+    val blobGasUsed: Option[BigInt] = stx.tx match {
+      case blob: BlobTransaction => Some(BigInt(blob.blobVersionedHashes.size) * BigInt(131072))
+      case _ => None
+    }
+
     new TransactionReceiptResponse(
       transactionHash = stx.hash,
       transactionIndex = transactionIndex,
@@ -114,7 +126,11 @@ object TransactionReceiptResponse {
       logs = txLogs,
       logsBloom = receipt.logsBloomFilter,
       root = root,
-      status = status
+      status = status,
+      `type` = Some(txType),
+      effectiveGasPrice = Some(effectiveGasPrice),
+      blobGasUsed = blobGasUsed,
+      blobGasPrice = blockHeader.excessBlobGas.map(_ => BigInt(1)) // TODO: proper blob base fee calculation
     )
   }
 }

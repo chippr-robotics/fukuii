@@ -62,7 +62,14 @@ case class BlockResponse(
     transactions: Either[Seq[ByteString], Seq[TransactionResponse]],
     uncles: Seq[ByteString],
     signature: String,
-    signer: String
+    signer: String,
+    baseFeePerGas: Option[BigInt],
+    withdrawalsRoot: Option[ByteString],
+    withdrawals: Option[Seq[Map[String, String]]],
+    blobGasUsed: Option[BigInt],
+    excessBlobGas: Option[BigInt],
+    parentBeaconBlockRoot: Option[ByteString],
+    requestsHash: Option[ByteString]
 ) extends BaseBlockResponse
 
 object BlockResponse {
@@ -97,6 +104,15 @@ object BlockResponse {
       .map(ByteStringUtils.hash2string)
       .getOrElse(NotAvailable)
 
+    val withdrawals = block.body.withdrawals.map(_.map { w =>
+      Map(
+        "index" -> s"0x${w.index.toString(16)}",
+        "validatorIndex" -> s"0x${w.validatorIndex.toString(16)}",
+        "address" -> s"0x${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(w.address.bytes).stripPrefix("0x")}",
+        "amount" -> s"0x${w.amount.toString(16)}"
+      )
+    })
+
     BlockResponse(
       number = block.header.number,
       hash = if (pendingBlock) None else Some(block.header.hash),
@@ -119,7 +135,14 @@ object BlockResponse {
       transactions = transactions,
       uncles = block.body.uncleNodesList.map(_.hash),
       signature = signatureStr,
-      signer = signerStr
+      signer = signerStr,
+      baseFeePerGas = block.header.baseFee,
+      withdrawalsRoot = block.header.withdrawalsRoot,
+      withdrawals = withdrawals,
+      blobGasUsed = block.header.blobGasUsed,
+      excessBlobGas = block.header.excessBlobGas,
+      parentBeaconBlockRoot = block.header.parentBeaconBlockRoot,
+      requestsHash = block.header.requestsHash
     )
   }
 

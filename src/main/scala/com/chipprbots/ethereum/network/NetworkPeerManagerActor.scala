@@ -539,7 +539,7 @@ object NetworkPeerManagerActor {
     */
   case class RemoteStatus(
       capability: Capability,
-      networkId: Int,
+      networkId: Long,
       chainWeight: ChainWeight,
       bestHash: ByteString,
       genesisHash: ByteString,

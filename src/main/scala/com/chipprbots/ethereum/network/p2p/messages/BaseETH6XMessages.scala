@@ -51,7 +51,7 @@ object BaseETH6XMessages {
             ) =>
           Status(
             ByteUtils.bytesToBigInt(protocolVersionBytes).toInt,
-            ByteUtils.bytesToBigInt(networkIdBytes).toInt,
+            ByteUtils.bytesToBigInt(networkIdBytes).toLong,
             ByteUtils.bytesToBigInt(totalDifficultyBytes),
             ByteString(bestHashBytes),
             ByteString(genesisHashBytes)
@@ -109,7 +109,7 @@ object BaseETH6XMessages {
     */
   case class Status(
       protocolVersion: Int,
-      networkId: Int,
+      networkId: Long,
       totalDifficulty: BigInt,
       bestHash: ByteString,
       genesisHash: ByteString

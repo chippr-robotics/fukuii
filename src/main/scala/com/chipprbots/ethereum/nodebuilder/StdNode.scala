@@ -135,11 +135,20 @@ abstract class BaseNode extends Node {
   private[this] def startJsonRpcIpcServer(): Unit =
     if (jsonRpcConfig.ipcServerConfig.enabled) jsonRpcIpcServer.run()
 
-  private[this] def startEngineApiServer(): Unit =
-    maybeEngineApiServer.foreach { server =>
-      server.start()
-      log.info(s"Engine API server started on ${engineApiConfig.interface}:${engineApiConfig.port}")
+  private[this] def startEngineApiServer(): Unit = {
+    maybeEngineApiServer match {
+      case Some(server) =>
+        try {
+          val binding = scala.concurrent.Await.result(server.start(), scala.concurrent.duration.Duration(30, "seconds"))
+          log.info(s"Engine API server bound to ${binding.localAddress}")
+        } catch {
+          case ex: Exception =>
+            log.error(s"Engine API server failed to start: ${ex.getMessage}", ex)
+        }
+      case None =>
+        log.debug("Engine API not enabled")
     }
+  }
 
   def startPeriodicDBConsistencyCheck(): Unit =
     if (Config.Db.periodicConsistencyCheck)

@@ -107,6 +107,9 @@ FLAGS="$FLAGS -Dfukuii.network.discovery.port=30303"
 FLAGS="$FLAGS -Dfukuii.sync.do-fast-sync=false"
 FLAGS="$FLAGS -Dfukuii.sync.do-snap-sync=false"
 
+# Override log level for visibility in hive
+FLAGS="$FLAGS -Dfukuii.logging.logs-level=INFO"
+
 # Bootnode
 if [ -n "$HIVE_BOOTNODE" ]; then
     FLAGS="$FLAGS -Dfukuii.network.peer.bootstrap-nodes.0=$HIVE_BOOTNODE"

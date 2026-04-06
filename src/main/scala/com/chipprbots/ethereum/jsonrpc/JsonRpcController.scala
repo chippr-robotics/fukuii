@@ -254,11 +254,27 @@ case class JsonRpcController(
       handle[EthPendingTransactionsRequest, EthPendingTransactionsResponse](ethTxService.ethPendingTransactions, req)
     case req @ JsonRpcRequest(_, "eth_getProof", _, _) =>
       handle[GetProofRequest, GetProofResponse](proofService.getProof, req)
+    case req @ JsonRpcRequest(_, "eth_getBlockReceipts", _, _) =>
+      handle[GetBlockReceiptsRequest, GetBlockReceiptsResponse](ethBlocksService.getBlockReceipts, req)
+    case req @ JsonRpcRequest(_, "eth_feeHistory", _, _) =>
+      handle[FeeHistoryRequest, FeeHistoryResponse](ethBlocksService.feeHistory, req)
+    case req @ JsonRpcRequest(_, "eth_maxPriorityFeePerGas", _, _) =>
+      handle[MaxPriorityFeePerGasRequest, MaxPriorityFeePerGasResponse](ethBlocksService.maxPriorityFeePerGas, req)
+    case req @ JsonRpcRequest(_, "eth_blobBaseFee", _, _) =>
+      handle[BlobBaseFeeRequest, BlobBaseFeeResponse](ethBlocksService.blobBaseFee, req)
   }
 
   private def handleDebugRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "debug_listPeersInfo", _, _) =>
       handle[ListPeersInfoRequest, ListPeersInfoResponse](debugService.listPeersInfo, req)
+    case req @ JsonRpcRequest(_, "debug_getRawBlock", _, _) =>
+      handle[GetRawBlockRequest, GetRawBlockResponse](ethBlocksService.getRawBlock, req)
+    case req @ JsonRpcRequest(_, "debug_getRawHeader", _, _) =>
+      handle[GetRawHeaderRequest, GetRawHeaderResponse](ethBlocksService.getRawHeader, req)
+    case req @ JsonRpcRequest(_, "debug_getRawReceipts", _, _) =>
+      handle[GetRawReceiptsRequest, GetRawReceiptsResponse](ethBlocksService.getRawReceipts, req)
+    case req @ JsonRpcRequest(_, "debug_getRawTransaction", _, _) =>
+      handle[GetTransactionByHashRequest, RawTransactionResponse](ethTxService.getRawTransactionByHash, req)
   }
 
   private def handleTestRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] =
