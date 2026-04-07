@@ -10,6 +10,8 @@ import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsReque
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsResponse
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetForkScheduleRequest
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetForkScheduleResponse
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.ClearFastSyncCooldownRequest
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.ClearFastSyncCooldownResponse
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.ResetFastSyncRequest
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.ResetFastSyncResponse
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.RestartFastSyncRequest
@@ -74,6 +76,12 @@ object FukuiiJsonMethodImplicits extends JsonMethodsImplicits {
       "started" -> t.started.jsonEncoded,
       "cooldownUntilMillis" -> t.cooldownUntilMillis.jsonEncoded
     )
+
+  implicit val fukuii_clearFastSyncCooldown_decoder: JsonMethodDecoder[ClearFastSyncCooldownRequest] =
+    new NoParamsMethodDecoder(ClearFastSyncCooldownRequest())
+
+  implicit val fukuii_clearFastSyncCooldown_encoder: JsonEncoder[ClearFastSyncCooldownResponse] = t =>
+    JObject("cleared" -> t.cleared.jsonEncoded)
 
   implicit val forkEntryJsonEncoder: JsonEncoder[ForkEntry] = entry =>
     JObject(

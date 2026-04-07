@@ -110,7 +110,15 @@ class FastSync(
   }
 
   def startWithState(syncState: SyncState): Unit = {
-    log.info("Starting fast sync with existing state and asking for new pivot block")
+    val pct = if (syncState.totalNodesCount > 0)
+      s"${(syncState.downloadedNodesCount * 100L / syncState.totalNodesCount).toInt}%"
+    else "?"
+    log.info(
+      s"[FAST-RECOVERY] Resuming fast sync: headers=0-${syncState.bestBlockHeaderNumber}, " +
+        s"bodies queued=${syncState.blockBodiesQueue.size}, receipts queued=${syncState.receiptsQueue.size}, " +
+        s"state nodes=${syncState.downloadedNodesCount}/${syncState.totalNodesCount} ($pct), " +
+        s"pivot=${syncState.pivotBlock.number}"
+    )
     val syncingHandler = new SyncingHandler(syncState)
     syncingHandler.askForPivotBlockUpdate(SyncRestart)
   }

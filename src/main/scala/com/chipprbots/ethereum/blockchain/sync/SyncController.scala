@@ -119,6 +119,12 @@ class SyncController(
     )
   }
 
+  private def handleClearFastSyncCooldown(): Unit = {
+    log.info("ClearFastSyncCooldown requested: fast-sync circuit-breaker cooldown cleared")
+    appStateStorage.clearFastSyncCooldown().commit()
+    sender() ! SyncProtocol.ClearFastSyncCooldownResponse(cleared = true)
+  }
+
   private def handleResetFastSync(): Unit = {
     log.warning("ResetFastSync requested: clearing persisted fast-sync markers")
     appStateStorage.clearFastSyncDone().commit()
@@ -177,6 +183,8 @@ class SyncController(
   def idle: Receive = {
     case SyncProtocol.Start =>
       start()
+    case SyncProtocol.ClearFastSyncCooldown =>
+      handleClearFastSyncCooldown()
     case SyncProtocol.ResetFastSync =>
       handleResetFastSync()
     case SyncProtocol.RestartFastSync =>
@@ -186,6 +194,8 @@ class SyncController(
   }
 
   def runningFastSync(fastSync: ActorRef): Receive = {
+    case SyncProtocol.ClearFastSyncCooldown =>
+      handleClearFastSyncCooldown()
     case SyncProtocol.ResetFastSync =>
       handleResetFastSync()
     case SyncProtocol.RestartFastSync =>
@@ -230,6 +240,8 @@ class SyncController(
   }
 
   def runningSnapSync(snapSync: ActorRef): Receive = {
+    case SyncProtocol.ClearFastSyncCooldown =>
+      handleClearFastSyncCooldown()
     case SyncProtocol.ResetFastSync =>
       handleResetFastSync()
     case SyncProtocol.RestartFastSync =>
@@ -296,6 +308,8 @@ class SyncController(
       targetBlock: BigInt,
       originalSnapSyncRef: ActorRef
   ): Receive = {
+    case SyncProtocol.ClearFastSyncCooldown =>
+      handleClearFastSyncCooldown()
     case SyncProtocol.ResetFastSync =>
       handleResetFastSync()
     case SyncProtocol.RestartFastSync =>
@@ -340,6 +354,8 @@ class SyncController(
       targetBlock: BigInt,
       originalSnapSyncRef: ActorRef
   ): Receive = {
+    case SyncProtocol.ClearFastSyncCooldown =>
+      handleClearFastSyncCooldown()
     case SyncProtocol.ResetFastSync =>
       handleResetFastSync()
     case SyncProtocol.RestartFastSync =>
@@ -428,6 +444,8 @@ class SyncController(
       startSnapSync()
     case SyncProtocol.GetStatus =>
       sender() ! SyncProtocol.Status.NotSyncing
+    case SyncProtocol.ClearFastSyncCooldown =>
+      handleClearFastSyncCooldown()
     case SyncProtocol.ResetFastSync =>
       handleResetFastSync()
     case SyncProtocol.RestartFastSync =>
@@ -444,6 +462,8 @@ class SyncController(
       startFastSync()
     case SyncProtocol.GetStatus =>
       sender() ! SyncProtocol.Status.NotSyncing
+    case SyncProtocol.ClearFastSyncCooldown =>
+      handleClearFastSyncCooldown()
     case SyncProtocol.ResetFastSync =>
       handleResetFastSync()
     case SyncProtocol.RestartFastSync =>
@@ -694,7 +714,8 @@ class SyncController(
           pendingTransactionsManager,
           scheduler,
           configBuilder,
-          Some(statePrefetcher)
+          Some(statePrefetcher),
+          appStateStorage
         )
         .withDispatcher("sync-dispatcher"),
       s"regular-sync-$syncGeneration"
@@ -864,7 +885,8 @@ class SyncController(
         ommersPool,
         pendingTransactionsManager,
         scheduler,
-        configBuilder
+        configBuilder,
+        appStateStorage = appStateStorage
       ),
       "regular-sync-bootstrap"
     )

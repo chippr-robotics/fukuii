@@ -407,11 +407,8 @@ class SNAPSyncController(
       lastAccountProgressMs = System.currentTimeMillis()
 
     case AccountTrieFinalized(finalizedRoot) =>
-      // Persist the finalized trie root hash so we can recover after restart.
-      // With pivot refreshes, the finalized root differs from the pivot block header's stateRoot.
-      // On startup, SyncController substitutes this root into the pivot block header.
-      log.info("Persisting finalized account trie root: {}", finalizedRoot.take(8).toArray.map("%02x".format(_)).mkString)
-      appStateStorage.putSnapSyncFinalizedRoot(finalizedRoot).commit()
+      // SnapSyncFinalizedRoot is intentionally not persisted — recovery uses the pivot block's stateRoot.
+      log.info("Account trie finalized (root {})", finalizedRoot.take(8).toArray.map("%02x".format(_)).mkString)
 
     case ProgressAccountsTrieFinalized =>
       progressMonitor.setFinalizingTrie(false)
@@ -1961,6 +1958,8 @@ class SNAPSyncController(
     appStateStorage.putSnapSyncContractAccountsPath("").commit()
     appStateStorage.putSnapSyncHealingPendingNodes("").commit()
     appStateStorage.putSnapSyncHealingRound(0).commit()
+    appStateStorage.putSnapSyncWalkCompletedPrefixes(Set.empty).commit()
+    appStateStorage.putSnapSyncWalkRoot("").commit()
     preservedRangeProgress = Map.empty
     preservedAtPivotBlock = None
 
@@ -3084,6 +3083,7 @@ class SNAPSyncController(
     appStateStorage.putSnapSyncCompletedStoragePath("").commit()
     appStateStorage.putSnapSyncCodeHashesPath("").commit()
     appStateStorage.putSnapSyncContractAccountsPath("").commit()
+    appStateStorage.putSnapSyncWalkRoot("").commit()
 
     // Reset pivot/state root and storage so a new selection is committed
     pivotBlock = None

@@ -16,6 +16,8 @@ import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsReque
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsResponse
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetForkScheduleRequest
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetForkScheduleResponse
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.ClearFastSyncCooldownRequest
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.ClearFastSyncCooldownResponse
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.ResetFastSyncRequest
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.ResetFastSyncResponse
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.RestartFastSyncRequest
@@ -36,6 +38,9 @@ object FukuiiService {
 
   case class RestartFastSyncRequest()
   case class RestartFastSyncResponse(started: Boolean, cooldownUntilMillis: Long)
+
+  case class ClearFastSyncCooldownRequest()
+  case class ClearFastSyncCooldownResponse(cleared: Boolean)
 
   case class GetForkScheduleRequest()
   case class ForkEntry(name: String, block: BigInt, active: Boolean)
@@ -80,6 +85,11 @@ class FukuiiService(
     syncController
       .askFor[SyncProtocol.RestartFastSyncResponse](SyncProtocol.RestartFastSync)
       .map(resp => Right(RestartFastSyncResponse(resp.started, resp.cooldownUntilMillis)))
+
+  def clearFastSyncCooldown(request: ClearFastSyncCooldownRequest): ServiceResponse[ClearFastSyncCooldownResponse] =
+    syncController
+      .askFor[SyncProtocol.ClearFastSyncCooldownResponse](SyncProtocol.ClearFastSyncCooldown)
+      .map(resp => Right(ClearFastSyncCooldownResponse(resp.cleared)))
 
   def getForkSchedule(request: GetForkScheduleRequest): ServiceResponse[GetForkScheduleResponse] = IO {
     val forks = blockchainConfig.forkBlockNumbers

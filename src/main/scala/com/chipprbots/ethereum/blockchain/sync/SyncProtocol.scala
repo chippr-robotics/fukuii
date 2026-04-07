@@ -19,6 +19,12 @@ object SyncProtocol {
   case object RestartFastSync extends SyncProtocolMsg
   final case class RestartFastSyncResponse(started: Boolean, cooldownUntilMillis: Long) extends SyncProtocolMsg
 
+  /** Immediately clears the fast-sync cooldown circuit-breaker. Useful when a restart is needed
+    * before the cooldown window expires (e.g., after a node restart or operator intervention).
+    */
+  case object ClearFastSyncCooldown extends SyncProtocolMsg
+  final case class ClearFastSyncCooldownResponse(cleared: Boolean) extends SyncProtocolMsg
+
   sealed trait Status {
     def syncing: Boolean = this match {
       case Status.Syncing(_, _, _) => true

@@ -65,6 +65,16 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def isFastSyncCoolingOff(nowMillis: Long): Boolean =
     getFastSyncCooldownUntilMillis() > nowMillis
 
+  /** Clear the fast-sync cooldown circuit-breaker, allowing an immediate restart. */
+  def clearFastSyncCooldown(): DataSourceBatchUpdate =
+    put(Keys.FastSyncCooldownUntilMillis, "0")
+
+  def getLastBlockImportTime(): Long =
+    get(Keys.LastBlockImportTime).flatMap(v => scala.util.Try(v.toLong).toOption).getOrElse(0L)
+
+  def putLastBlockImportTime(millis: Long): DataSourceBatchUpdate =
+    put(Keys.LastBlockImportTime, millis.toString)
+
   def getEstimatedHighestBlock(): BigInt =
     getBigInt(Keys.EstimatedHighestBlock)
 
@@ -378,9 +388,9 @@ object AppStateStorage {
   type Value = String
 
   /** Interval (in blocks) between safe-block marker writes for crash recovery.
-    * Matches go-ethereum's marker frequency. Maximum data loss on crash: 64 blocks.
+    * Reduced from 64 to 16 to limit maximum data loss on crash to ~3 min (vs ~13 min at 64).
     */
-  val SafeBlockInterval: Int = 64
+  val SafeBlockInterval: Int = 16
 
   object Keys {
     val BestBlockNumber = "BestBlockNumber"
@@ -412,6 +422,7 @@ object AppStateStorage {
     val SnapSyncWalkCompletedPrefixes = "SnapSyncWalkCompletedPrefixes"
     val SnapSyncWalkRoot              = "SnapSyncWalkRoot"
     val SnapSyncStorageCompletionRoot = "SnapSyncStorageCompletionRoot"
+    val LastBlockImportTime           = "LastBlockImportTime"
   }
 
 }

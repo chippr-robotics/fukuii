@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync.ProgressProto
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync.ProgressState
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.validators.BlockValidator
+import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.ledger.BranchResolution
@@ -43,7 +44,8 @@ class RegularSync(
     pendingTransactionsManager: ActorRef,
     scheduler: Scheduler,
     configBuilder: BlockchainConfigBuilder,
-    statePrefetcher: Option[StatePrefetcher] = None
+    statePrefetcher: Option[StatePrefetcher] = None,
+    appStateStorage: AppStateStorage
 ) extends Actor
     with ActorLogging {
 
@@ -98,6 +100,9 @@ class RegularSync(
   private val CatchUpMilestoneInterval: Long = 100_000L
   private var lastMilestoneBlock: BigInt = 0
   private var loggedFollowMode: Boolean = false
+
+  // Rate-limiting for EstimatedHighestBlock persistence (write at most once per 1000-block delta)
+  private var lastPersistedHighestBlock: BigInt = 0
   private var lastMilestonePct: Int = -1
 
   override def receive: Receive = running(
@@ -111,6 +116,17 @@ class RegularSync(
       log.info(s"=== Starting from block ${progressState.currentBlock} → following chain head ===")
       log.info("=" * 70)
       MilestoneLog.phase(s"Regular sync started | initial=${progressState.initialBlock} best_known=${progressState.bestKnownNetworkBlock}")
+      val lastImport = appStateStorage.getLastBlockImportTime()
+      if (lastImport > 0) {
+        val gapMs = System.currentTimeMillis() - lastImport
+        if (gapMs > 600_000L)
+          log.warning(
+            "[REGULAR-RECOVERY] Last block import was {:.1f} min ago — possible prior stagnation or crash",
+            gapMs / 60000.0
+          )
+        else
+          log.info("[REGULAR-RECOVERY] Last block import was {:.1f} min ago", gapMs / 60000.0)
+      }
       importer ! BlockImporter.Start
     case SyncProtocol.MinedBlock(block) =>
       log.info(s"Block mined [number = {}, hash = {}]", block.number, block.header.hashAsHexString)
@@ -130,12 +146,18 @@ class RegularSync(
       log.debug(s"Got information about new block [number = $blockNumber]")
       val newState = progressState.copy(bestKnownNetworkBlock = blockNumber)
       RegularSyncMetrics.setBestKnownNetworkBlock(blockNumber)
+      if (blockNumber - lastPersistedHighestBlock > 1000) {
+        appStateStorage.putEstimatedHighestBlock(blockNumber).commit()
+        lastPersistedHighestBlock = blockNumber
+      }
       context.become(running(newState))
     case ProgressProtocol.ImportedBlock(blockNumber, internally) =>
       log.debug(s"Imported new block [number = $blockNumber, internally = $internally]")
       val newState = progressState.copy(currentBlock = blockNumber)
       RegularSyncMetrics.setCurrentBlock(blockNumber)
       RegularSyncMetrics.incrementBlocksImported()
+      if (blockNumber % 100 == 0)
+        appStateStorage.putLastBlockImportTime(System.currentTimeMillis()).commit()
       if (internally) {
         fetcher ! InternalLastBlockImport(blockNumber)
       }
@@ -193,7 +215,8 @@ object RegularSync {
       pendingTransactionsManager: ActorRef,
       scheduler: Scheduler,
       configBuilder: BlockchainConfigBuilder,
-      statePrefetcher: Option[StatePrefetcher] = None
+      statePrefetcher: Option[StatePrefetcher] = None,
+      appStateStorage: AppStateStorage
   ): Props =
     Props(
       new RegularSync(
@@ -211,7 +234,8 @@ object RegularSync {
         pendingTransactionsManager,
         scheduler,
         configBuilder,
-        statePrefetcher
+        statePrefetcher,
+        appStateStorage
       )
     )
 
