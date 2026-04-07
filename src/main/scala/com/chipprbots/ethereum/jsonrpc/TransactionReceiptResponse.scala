@@ -89,7 +89,8 @@ object TransactionReceiptResponse {
         blockNumber = blockHeader.number,
         address = txLog.loggerAddress,
         data = txLog.data,
-        topics = txLog.logTopics
+        topics = txLog.logTopics,
+        blockTimestamp = Some(BigInt(blockHeader.unixTimestamp))
       )
     }
 

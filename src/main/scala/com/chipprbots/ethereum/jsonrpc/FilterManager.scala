@@ -222,7 +222,8 @@ class FilterManager(
               blockNumber = block.header.number,
               address = log.loggerAddress,
               data = log.data,
-              topics = log.logTopics
+              topics = log.logTopics,
+              blockTimestamp = Some(BigInt(block.header.unixTimestamp))
             )
           }
       } else logsSoFar
@@ -337,7 +338,8 @@ object FilterManager {
       blockNumber: BigInt,
       address: Address,
       data: ByteString,
-      topics: Seq[ByteString]
+      topics: Seq[ByteString],
+      blockTimestamp: Option[BigInt] = None
   )
 
   sealed trait FilterChanges

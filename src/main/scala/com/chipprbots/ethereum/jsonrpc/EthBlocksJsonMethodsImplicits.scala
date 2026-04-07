@@ -46,7 +46,6 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
       "receiptsRoot" -> encodeAsHex(block.receiptsRoot),
       "miner" -> block.miner.map(encodeAsHex).getOrElse(JNull),
       "difficulty" -> encodeAsHex(block.difficulty),
-      "totalDifficulty" -> block.totalDifficulty.map(encodeAsHex).getOrElse(JNull),
       "extraData" -> encodeAsHex(block.extraData),
       "size" -> encodeAsHex(block.size),
       "gasLimit" -> encodeAsHex(block.gasLimit),

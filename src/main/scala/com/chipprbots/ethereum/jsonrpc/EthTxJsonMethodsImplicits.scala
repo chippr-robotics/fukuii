@@ -15,8 +15,8 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
   import org.json4s.CustomSerializer
 
   // Manual encoder for TxLog to avoid Scala 3 reflection issues
-  private def encodeTxLog(log: FilterManager.TxLog): JValue =
-    JObject(
+  private def encodeTxLog(log: FilterManager.TxLog): JValue = {
+    val base = List(
       "logIndex" -> encodeAsHex(log.logIndex),
       "transactionIndex" -> encodeAsHex(log.transactionIndex),
       "transactionHash" -> encodeAsHex(log.transactionHash),
@@ -27,6 +27,9 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
       "topics" -> JArray(log.topics.toList.map(encodeAsHex)),
       "removed" -> JBool(false)
     )
+    val tsField = log.blockTimestamp.map(ts => "blockTimestamp" -> encodeAsHex(ts)).toList
+    JObject(base ::: tsField)
+  }
 
   // Custom serializers for json4s Extraction.decompose to work in tests
   implicit val transactionResponseCustomSerializer: CustomSerializer[TransactionResponse] =

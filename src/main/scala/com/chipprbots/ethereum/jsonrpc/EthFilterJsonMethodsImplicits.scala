@@ -13,8 +13,8 @@ import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder.NoParamsM
 object EthFilterJsonMethodsImplicits extends JsonMethodsImplicits {
 
   // Manual encoder for TxLog to avoid Scala 3 reflection issues
-  private def encodeTxLog(log: FilterManager.TxLog): JValue =
-    JObject(
+  private def encodeTxLog(log: FilterManager.TxLog): JValue = {
+    val base = List(
       "logIndex" -> encodeAsHex(log.logIndex),
       "transactionIndex" -> encodeAsHex(log.transactionIndex),
       "transactionHash" -> encodeAsHex(log.transactionHash),
@@ -22,8 +22,12 @@ object EthFilterJsonMethodsImplicits extends JsonMethodsImplicits {
       "blockNumber" -> encodeAsHex(log.blockNumber),
       "address" -> encodeAsHex(log.address.bytes),
       "data" -> encodeAsHex(log.data),
-      "topics" -> JArray(log.topics.toList.map(encodeAsHex))
+      "topics" -> JArray(log.topics.toList.map(encodeAsHex)),
+      "removed" -> JBool(false)
     )
+    val tsField = log.blockTimestamp.map(ts => "blockTimestamp" -> encodeAsHex(ts)).toList
+    JObject(base ::: tsField)
+  }
 
   implicit val newFilterResponseEnc: JsonEncoder[NewFilterResponse] = new JsonEncoder[NewFilterResponse] {
     def encodeJson(t: NewFilterResponse): JValue = encodeAsHex(t.filterId)
