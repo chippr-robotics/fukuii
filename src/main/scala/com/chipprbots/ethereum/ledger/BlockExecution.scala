@@ -193,10 +193,21 @@ class BlockExecution(
   )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy = {
     import BlockExecution._
     val blockNumber = block.header.number
-    if (blockNumber < blockchainConfig.forkBlockNumbers.olympiaBlockNumber) return world
+    // EIP-2935 activates at Prague on ETH chains (timestamp fork), or at Olympia on ETC chains (block number fork).
+    val pragueActive = blockchainConfig.isPragueTimestamp(block.header.unixTimestamp)
+    val etcOlympiaActive = blockchainConfig.networkType == com.chipprbots.ethereum.utils.NetworkType.ETC &&
+      blockNumber >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+    if (!pragueActive && !etcOlympiaActive) return world
+    // Only deploy at the FIRST block where it activates
+    val isActivationBlock = if (pragueActive) {
+      blockchainReader.getBlockHeaderByHash(block.header.parentHash)
+        .exists(parent => !blockchainConfig.isPragueTimestamp(parent.unixTimestamp))
+    } else {
+      blockNumber == blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+    }
 
     // At the fork block, deploy the history storage contract
-    val w1 = if (blockNumber == blockchainConfig.forkBlockNumbers.olympiaBlockNumber) {
+    val w1 = if (isActivationBlock) {
       val account = world
         .getAccount(HistoryStorageAddress)
         .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
