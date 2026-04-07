@@ -926,6 +926,28 @@ Research into MEV (Flashbots, CoW Protocol), decentralized RPC protocols (DRPC, 
 - **Impact:** No functional issue. Operator confusion when reading logs — makes it appear peers are
   degraded when the storage download phase is actually completing correctly.
 
+#### L-032: Skip storage phase on restart when storage was already completed (OPT-SR2)
+
+- **Files:** `SNAPSyncController.scala`, `AppStateStorage.scala`
+- **Priority:** Low | **Risk:** Low
+- **Status:** Backlog — deferred until after ETC mainnet SNAP sync succeeds
+- **Problem:** On every restart during healing, the StorageRangeCoordinator re-runs the full
+  storage phase from scratch (~2h). The storage slot data is already in RocksDB, but the
+  coordinator has no persistent record of which pivot's storage was completed.
+  `completedAccountHashes` (L-022b / R6) filters already-done accounts, but the coordinator
+  still has to stream the entire 4.4GB contract accounts file to apply the filter.
+- **Prior attempt:** OPT-SR1 (`28cba3ac3`) tried to skip the coordinator entirely using
+  `isSnapSyncHealingStarted()` as a proxy for "storage is done." This was reverted — the flag
+  gets cleared by false healing completions (BUG-WS3), causing the skip to fire too early.
+- **Correct fix:** Persist `storageCompletionStateRoot: Option[ByteString]` in `AppStateStorage`.
+  - Set when `StorageRangeSyncComplete` fires — store the current pivot state root.
+  - On restart, compare stored root against current pivot root:
+    - Match → skip `StorageRangeCoordinator` entirely, proceed directly to bytecode/healing check.
+    - Mismatch (pivot refreshed past completion) → re-run storage phase.
+  - Clear on `putSnapSyncDone` and on pivot staleness reset.
+- **Scope:** ~10-line change in `SNAPSyncController.scala` + 2-line getter/setter in `AppStateStorage.scala`.
+- **Savings:** ~2h per restart during healing phase.
+
 #### L-026: Aggressive peer discovery when snap peer count is low — RESEARCH DONE, DEFERRED
 
 - **Files:** `src/main/scala/.../network/PeerManagerActor.scala`, `src/main/scala/.../network/discovery/`
