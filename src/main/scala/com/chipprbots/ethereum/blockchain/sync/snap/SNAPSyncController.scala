@@ -1284,55 +1284,6 @@ class SNAPSyncController(
     // This runs during pivot selection and bootstrap, not just after account sync starts.
     startSnapPeerEviction()
 
-    // OPT-SR1: If healing was in progress at last shutdown, skip accounts/bytecode/storage entirely
-    // and resume directly in the healing phase. This avoids re-running 20-60 min of storage download
-    // and 27h trie walk on every JAR restart while iterating on the healing code.
-    if (appStateStorage.isSnapSyncHealingStarted()) {
-      val savedRootOpt = appStateStorage.getSnapSyncStateRoot()
-      val savedPivotOpt = appStateStorage.getSnapSyncPivotBlock()
-      (savedRootOpt, savedPivotOpt) match {
-        case (Some(rootBs), Some(pivot)) =>
-          log.info(
-            s"[HEAL-RESUME] Healing was in progress at pivot #$pivot " +
-              s"(root ${Hex.toHexString(rootBs.toArray).take(16)}) — " +
-              s"skipping accounts/bytecode/storage, resuming healing directly"
-          )
-          stateRoot = Some(rootBs)
-          pivotBlock = Some(pivot)
-          accountsComplete = true
-          currentPhase = StateHealing
-
-          // Reload saved nodes if available (OPT-H1 periodic saves / OPT-H2 stagnation saves)
-          appStateStorage.getSnapSyncHealingPendingNodes() match {
-            case Some(data) if data.nonEmpty =>
-              val savedNodes = SNAPSyncController.deserializeHealingNodes(data)
-              if (savedNodes.nonEmpty) {
-                val savedRound = appStateStorage.getSnapSyncHealingRound()
-                log.info(
-                  s"[HEAL-RESUME] Restoring ${savedNodes.size} saved pending nodes " +
-                    s"from round $savedRound — skipping trie walk"
-                )
-                consecutiveUnproductiveHealingRounds = savedRound
-                lastTrieWalkMissingCount = Some(savedNodes.size)
-                startStateHealingWithSavedNodes(savedNodes)
-              } else {
-                log.info("[HEAL-RESUME] Saved node data malformed — starting fresh trie walk (OPT-W1 may resume checkpoint)")
-                startStateHealing()
-              }
-            case _ =>
-              log.info("[HEAL-RESUME] No saved pending nodes — starting trie walk (OPT-W1 will resume checkpoint if available)")
-              startStateHealing()
-          }
-
-          startChainDownloader()
-          context.become(syncing)
-          return
-        case _ =>
-          log.warning("[HEAL-RESUME] SnapSyncHealingStarted flag set but root/pivot missing — clearing flag, falling through to normal startup")
-          appStateStorage.putSnapSyncHealingStarted(false).commit()
-      }
-    }
-
     // Step 7: Check for accounts-complete recovery (process crash during bytecode/storage phase).
     // If accounts were previously completed and the pivot is still fresh, skip account download
     // and only re-run bytecodes + storage from the persisted storage file.
@@ -2469,7 +2420,6 @@ class SNAPSyncController(
     }
 
     trieWalkInProgress = false // Reset for fresh healing phase
-    appStateStorage.putSnapSyncHealingStarted(true).commit()
     log.info(s"Starting state healing with batch size ${snapSyncConfig.healingBatchSize}")
 
     stateRoot.foreach { root =>
@@ -2539,7 +2489,6 @@ class SNAPSyncController(
     }
 
     trieWalkInProgress = false
-    appStateStorage.putSnapSyncHealingStarted(true).commit()
 
     stateRoot match {
       case None =>
@@ -2745,7 +2694,6 @@ class SNAPSyncController(
             log.warning("Proceeding to regular sync without state validation")
             appStateStorage.snapSyncDone()
               .and(appStateStorage.putBestBlockNumber(pivot))
-              .and(appStateStorage.putSnapSyncHealingStarted(false))
               .commit()
             context.parent ! Done
           case None =>
@@ -3307,7 +3255,6 @@ class SNAPSyncController(
             .and(appStateStorage.putBestBlockInfo(
               com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash, pivot)
             ))
-            .and(appStateStorage.putSnapSyncHealingStarted(false))
             .commit()
 
           log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.take(8).toHex})")
@@ -3327,7 +3274,6 @@ class SNAPSyncController(
         log.warning(s"Pivot header for block $pivot not found in storage — setting best block number only")
         appStateStorage.snapSyncDone()
           .and(appStateStorage.putBestBlockNumber(pivot))
-          .and(appStateStorage.putSnapSyncHealingStarted(false))
           .commit()
 
         chainDownloader.foreach(context.stop)

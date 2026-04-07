@@ -332,14 +332,6 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putSnapSyncWalkRoot(rootHex: String): DataSourceBatchUpdate =
     put(Keys.SnapSyncWalkRoot, rootHex)
 
-  /** Check whether the controller was in healing phase when last shut down. */
-  def isSnapSyncHealingStarted(): Boolean =
-    get(Keys.SnapSyncHealingStarted).contains("true")
-
-  /** Persist whether the controller is in healing phase (set on entry, cleared on completion). */
-  def putSnapSyncHealingStarted(v: Boolean): DataSourceBatchUpdate =
-    put(Keys.SnapSyncHealingStarted, v.toString)
-
   // --- Unclean shutdown recovery ---
 
   /** Check if the last shutdown was clean. Returns false on first run or after crash. */
@@ -396,7 +388,6 @@ object AppStateStorage {
     val SnapSyncHealingRound         = "SnapSyncHealingRound"
     val SnapSyncWalkCompletedPrefixes = "SnapSyncWalkCompletedPrefixes"
     val SnapSyncWalkRoot              = "SnapSyncWalkRoot"
-    val SnapSyncHealingStarted        = "SnapSyncHealingStarted"
   }
 
 }
