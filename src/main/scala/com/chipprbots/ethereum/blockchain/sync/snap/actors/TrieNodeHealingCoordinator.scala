@@ -587,8 +587,23 @@ class TrieNodeHealingCoordinator(
           s"Node hash mismatch: expected ${Hex.toHexString(task.hash.take(4).toArray)}, " +
             s"got ${Hex.toHexString(nodeHash.take(4).toArray)}"
         )
-        // Re-queue this task for retry
-        pendingTasks = pendingTasks :+ task
+        // Re-queue with incremented retry count — abandon after maxRetriesPerTask mismatches.
+        // Without this, a ghost node from a prior session's HEAL-RESUME queue (whose path no
+        // longer exists in the current trie) causes an infinite loop: peers return the nearest
+        // ancestor (the root) for non-existent paths, the mismatch re-queues without progress,
+        // and the node can never be healed regardless of how many pivot refreshes occur.
+        val updated = task.copy(retries = task.retries + 1)
+        if (updated.retries >= maxRetriesPerTask) {
+          abandonedTaskCount += 1
+          log.warning(
+            s"Giving up on trie node ${Hex.toHexString(task.hash.take(4).toArray)} after " +
+              s"$maxRetriesPerTask consecutive hash mismatches " +
+              s"(got ${Hex.toHexString(nodeHash.take(4).toArray)}). " +
+              s"Node not present in current trie — deferring to state validation."
+          )
+        } else {
+          pendingTasks = pendingTasks :+ updated
+        }
       }
     }
 

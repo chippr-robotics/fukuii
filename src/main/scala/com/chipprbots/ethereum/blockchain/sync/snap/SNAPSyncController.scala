@@ -2958,8 +2958,24 @@ class SNAPSyncController(
     val newRoot = newStateRoot.take(4).toHex
 
     if (stateRoot.contains(newStateRoot)) {
-      log.warning(s"Pivot refresh: new root $newRoot is same as old. Falling back to full restart.")
-      restartSnapSync(s"pivot refresh produced same root ($newRoot): $reason")
+      // Root unchanged — chain hasn't moved or state is identical across blocks. Do NOT restart.
+      // Content-addressed trie nodes remain valid; healing coordinator keeps its pending queue.
+      // Advance the pivot block number for chain download, but leave all coordinators running.
+      if (newPivotBlock > oldPivot) {
+        pivotBlock = Some(newPivotBlock)
+        appStateStorage.putSnapSyncPivotBlock(newPivotBlock).commit()
+        updateBestBlockForPivot(newPivotHeader, newPivotBlock)
+        chainDownloader.foreach(_ ! ChainDownloader.UpdateTarget(newPivotBlock))
+        chainDownloader.foreach(_ ! ChainDownloader.Resume)
+      }
+      if (currentPhase == StateHealing) {
+        // Near chain head — same root is expected. Reset stall counter and keep healing.
+        consecutiveHealingPivotRefreshAttempts = 0
+        log.info(s"[HEAL] Pivot refresh: root $newRoot unchanged at block $newPivotBlock — continuing healing")
+      } else {
+        log.warning(s"[SNAP] Pivot refresh: root $newRoot unchanged in $currentPhase phase — continuing (chain at head?)")
+      }
+      lastAccountProgressMs = System.currentTimeMillis()
       return
     }
 
@@ -3070,20 +3086,48 @@ class SNAPSyncController(
     // Clear inflight request timeouts and internal phase state
     requestTracker.clear()
 
-    // Delete temp files and clear all persisted file paths
-    deleteSnapSyncTempFiles()
+    // Snapshot in-memory completion flags before clearing — used to decide what to preserve in DB
+    val wasAccountsComplete = accountsComplete
+    val wasStorageComplete  = storagePhaseComplete
 
-    // Clear concurrent download state and recovery data
+    // Clear temp files and DB state — conditionally preserve account progress if already done
+    if (!wasAccountsComplete) {
+      // Accounts still in progress — full reset (existing behavior)
+      deleteSnapSyncTempFiles()
+      appStateStorage.putSnapSyncAccountsComplete(false).commit()
+      appStateStorage.clearSnapSyncStorageCompletionRoot().commit()
+      appStateStorage.putSnapSyncStorageFilePath("").commit()
+      appStateStorage.putSnapSyncCompletedStoragePath("").commit()
+      appStateStorage.putSnapSyncCodeHashesPath("").commit()
+      appStateStorage.putSnapSyncContractAccountsPath("").commit()
+    } else {
+      // Accounts fully downloaded — preserve accounts_complete=true so startup skips re-download.
+      // Contract accounts + code hashes files remain valid for the new pivot (content is stable).
+      // Only delete storage in-progress files which are stale for a new pivot.
+      log.info(s"[SNAP] Preserving accounts_complete=true across restart — startup will skip account phase")
+      val tmpDir = java.nio.file.Paths.get(Config.config.getString("tmpdir"))
+      Seq("snap-contract-storage.bin", "snap-completed-storage.bin").foreach { name =>
+        scala.util.Try(java.nio.file.Files.deleteIfExists(tmpDir.resolve(name)))
+      }
+      appStateStorage.putSnapSyncStorageFilePath("").commit()
+      appStateStorage.putSnapSyncCompletedStoragePath("").commit()
+      if (!wasStorageComplete) {
+        // Storage was in progress — force re-run with new pivot
+        appStateStorage.clearSnapSyncStorageCompletionRoot().commit()
+      }
+      // Preserved in DB: accounts_complete=true, contractAccountsPath, codeHashesPath
+      // Preserved if storage was done: storageCompletionRoot (L-032 will skip storage on next startup)
+    }
+    // Always clear healing state — it is recomputed for the new pivot root
+    appStateStorage.putSnapSyncWalkRoot("").commit()
+    appStateStorage.putSnapSyncHealingPendingNodes("").commit()
+    appStateStorage.putSnapSyncHealingRound(0).commit()
+    appStateStorage.putSnapSyncWalkCompletedPrefixes(Set.empty).commit()
+
+    // Clear in-memory phase state
     accountsComplete = false
     bytecodePhaseComplete = false
     storagePhaseComplete = false
-    appStateStorage.putSnapSyncAccountsComplete(false).commit()
-    appStateStorage.clearSnapSyncStorageCompletionRoot().commit()
-    appStateStorage.putSnapSyncStorageFilePath("").commit()
-    appStateStorage.putSnapSyncCompletedStoragePath("").commit()
-    appStateStorage.putSnapSyncCodeHashesPath("").commit()
-    appStateStorage.putSnapSyncContractAccountsPath("").commit()
-    appStateStorage.putSnapSyncWalkRoot("").commit()
 
     // Reset pivot/state root and storage so a new selection is committed
     pivotBlock = None
