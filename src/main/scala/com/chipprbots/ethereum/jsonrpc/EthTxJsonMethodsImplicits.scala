@@ -59,8 +59,8 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
       "from" -> encodeAsHex(receipt.from.bytes)
     )
 
-    // Add "to" field only if it's defined (omit for contract creation)
-    val toField = receipt.to.map(addr => "to" -> encodeAsHex(addr.bytes)).toList
+    // "to" is null for contract creation, address for regular transactions
+    val toField = List("to" -> receipt.to.map(addr => encodeAsHex(addr.bytes)).getOrElse(JNull))
 
     // Continue with more fields
     val middleFields = List(
@@ -82,10 +82,8 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
     val blobGasUsedField = receipt.blobGasUsed.map(v => "blobGasUsed" -> encodeAsHex(v)).toList
     val blobGasPriceField = receipt.blobGasPrice.map(v => "blobGasPrice" -> encodeAsHex(v)).toList
 
-    val blockTimestampField = receipt.blockTimestamp.map(v => "blockTimestamp" -> encodeAsHex(v)).toList
-
     JObject(baseFields ::: toField ::: middleFields ::: rootField ::: statusField :::
-      typeField ::: effectiveGasPriceField ::: blobGasUsedField ::: blobGasPriceField ::: blockTimestampField)
+      typeField ::: effectiveGasPriceField ::: blobGasUsedField ::: blobGasPriceField)
   }
 
   implicit val transactionResponseJsonEncoder: JsonEncoder[TransactionResponse] = { tx =>

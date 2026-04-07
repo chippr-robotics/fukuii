@@ -85,6 +85,14 @@ object EthInfoService {
   case class IeleCallRequest(tx: IeleCallTx, block: BlockParam)
   case class IeleCallResponse(returnData: Seq[ByteString])
   case class EstimateGasResponse(gas: BigInt)
+  case class CreateAccessListRequest(tx: CallTx, block: BlockParam) {
+    def toCallRequest: CallRequest = CallRequest(tx, block)
+  }
+  case class CreateAccessListResponse(
+      accessList: Seq[Map[String, Any]],
+      gasUsed: BigInt,
+      error: Option[String]
+  )
 }
 
 class EthInfoService(
@@ -248,6 +256,23 @@ class EthInfoService(
   def estimateGas(req: CallRequest): ServiceResponse[EstimateGasResponse] =
     IO {
       doCall(req)(stxLedger.binarySearchGasEstimation).map(gasUsed => EstimateGasResponse(gasUsed))
+    }.recover { case _: MissingNodeException =>
+      Left(JsonRpcError.NodeNotFound)
+    }
+
+  def createAccessList(req: CreateAccessListRequest): ServiceResponse[CreateAccessListResponse] =
+    IO {
+      doCall(req.toCallRequest)(stxLedger.simulateTransaction).map { result =>
+        val gasUsed = result.gasUsed
+        val error = result.vmError.map(_.toString)
+        // Build access list from the VM's accessed addresses and storage keys
+        // For now, return empty access list with gas used (partial implementation)
+        CreateAccessListResponse(
+          accessList = Seq.empty,
+          gasUsed = gasUsed,
+          error = error
+        )
+      }
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
     }
