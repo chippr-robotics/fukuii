@@ -1738,6 +1738,40 @@ Each transition must be exact — off-by-one errors at fork boundaries leave the
 
 ---
 
+### QA-21: CVE Review — Reference Clients + Dependency Audit
+
+**Scope:** Review published CVEs and security advisories from reference Ethereum clients for patterns that may be present in Fukuii. Cross-reference against Fukuii's JVM dependency tree for known vulnerabilities.
+
+**Reference client security advisories:**
+- **go-ethereum / core-geth:** Check https://github.com/ethereum/go-ethereum/security/advisories — focus on consensus-critical CVEs (state root divergence, uncle/ommer manipulation, fee market edge cases), P2P DoS (devp2p message flooding, large message OOM), and RPC injection/overexposure. Core-geth forks inherit all go-ethereum CVEs.
+- **Besu:** Check https://github.com/hyperledger/besu/security/advisories — focus on Java-specific patterns (deserialization, classpath issues), JSON-RPC auth bypass, and BONSAI trie edge cases.
+- **Nethermind:** Check GitHub security advisories — focus on RPC method exposure, sync edge cases, and .NET-specific patterns.
+- **Ethereum network-level disclosures:** Check https://github.com/ethereum/eth2.0-specs/security and EIP security considerations for any consensus-layer CVEs applicable to ETC.
+
+**Fukuii-specific review areas:**
+
+| Area | CVE Pattern to Check |
+|------|---------------------|
+| JSON-RPC endpoint exposure | Unauthenticated methods callable without JWT; `eth_sendRawTransaction` rate limiting; batch request amplification |
+| P2P message handling | Large `GetBlockHeaders` / `GetBlockBodies` responses — OOM from unbounded allocation; devp2p hello message size check |
+| RLP decoding | Stack overflow on deeply nested RLP (BUG-TX1 fixed one; check all `RLPDecoder` call sites for similar recursion) |
+| Transaction pool | Mempool flooding — no per-sender cap? Gas price undercut spam? |
+| State trie | `MerklePatriciaTrie.scala` — integer overflow in node size calculations; hash collision in `HashNode` lookup |
+| SNAP server | Request amplification — can a peer trigger O(n) DB reads with a single `GetTrieNodes` request? Response byte budget enforced? |
+| Mining | `emergency-td-ceiling` bypass — can an adversary craft blocks to exceed the ceiling silently? |
+| Config | Secrets in log output — JWT secret path logged? Admin RPC unintentionally bound to 0.0.0.0? |
+| Dependencies | `sbt dependencyUpdates` + `sbt audit` — check RocksDB JNI, gnark JNI, Pekko, Netty, circe for known CVEs |
+
+**Dependency CVE scan commands:**
+```bash
+sbt dependencyUpdates          # stale dependencies
+sbt dependencyCheckAggregate   # OWASP NVD scan (requires owasp-dependency-check plugin)
+```
+
+**Output:** Create `docs/security/CVE-AUDIT.md` with findings table: CVE ID / reference client / affected pattern in Fukuii / severity / status (N/A / mitigated / open).
+
+---
+
 ### QA Summary Checklist
 
 | Area | Files | Tests Exist | Status |
