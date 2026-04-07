@@ -641,6 +641,11 @@ class SNAPSyncController(
       storagePhaseComplete = true
       log.info(s"Storage range sync complete. ByteCode: $bytecodePhaseComplete, Accounts: $accountsComplete")
       MilestoneLog.phase("Storage sync complete")
+      // L-032: persist the completion root so future restarts can skip storage re-download
+      stateRoot.foreach { root =>
+        appStateStorage.putSnapSyncStorageCompletionRoot(root).commit()
+        log.info(s"L-032: persisted storage completion root for fast restart")
+      }
       checkAllDownloadsComplete()
 
     case HealingAllPeersStateless if currentPhase == StateHealing =>
@@ -1309,6 +1314,7 @@ class SNAPSyncController(
                 "Clearing accounts-complete flag and restarting fresh."
             )
             appStateStorage.putSnapSyncAccountsComplete(false).commit()
+            appStateStorage.clearSnapSyncStorageCompletionRoot().commit()
             // Fall through to normal startup
           } else {
             // Pivot is fresh enough — recover bytecodes + storage only
@@ -1316,9 +1322,18 @@ class SNAPSyncController(
             stateRoot = Some(rootBs)
             accountsComplete = true
             bytecodePhaseComplete = false
-            storagePhaseComplete = false
+            // L-032: if storage completed at this exact pivot root in a prior run, skip re-download
+            val storageSkip = appStateStorage.getSnapSyncStorageCompletionRoot().exists(_ == rootBs)
+            storagePhaseComplete = storageSkip
 
-            log.info(s"Recovery: resuming bytecodes + storage sync from pivot $pivot (drift=$drift blocks)")
+            if (storageSkip) {
+              log.info(
+                s"L-032: storage already completed at root ${Hex.toHexString(rootBs.toArray)} — " +
+                  s"skipping StorageRangeCoordinator, resuming bytecodes only"
+              )
+            } else {
+              log.info(s"Recovery: resuming bytecodes + storage sync from pivot $pivot (drift=$drift blocks)")
+            }
 
             // Create bytecode coordinator (will receive NoMore immediately since we have no new accounts)
             val storage = getOrCreateMptStorage(pivot)
@@ -1343,6 +1358,7 @@ class SNAPSyncController(
               scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestByteCodes)(ec)
             )
 
+            if (!storageSkip) {
             storageRangeCoordinator = Some(
               context.actorOf(
                 actors.StorageRangeCoordinator
@@ -1444,6 +1460,7 @@ class SNAPSyncController(
               log.warning("Recovery: no storage file path persisted. Sending NoMore immediately.")
               storageRangeCoordinator.foreach(_ ! actors.Messages.NoMoreStorageTasks)
             }
+            } // end if (!storageSkip)
 
             // Bytecodes: with inline dispatch, codeHashes were already sent to the old coordinator.
             // On recovery, we can't recover those. Send NoMore — the healing phase will catch any
@@ -1465,6 +1482,7 @@ class SNAPSyncController(
         case _ =>
           log.warning("Recovery: accounts-complete flag set but missing pivot/root. Clearing and restarting fresh.")
           appStateStorage.putSnapSyncAccountsComplete(false).commit()
+          appStateStorage.clearSnapSyncStorageCompletionRoot().commit()
       }
     }
 
@@ -1837,6 +1855,7 @@ class SNAPSyncController(
     // Clear persisted SNAP progress — retry will start fresh
     appStateStorage.putSnapSyncProgress("").commit()
     appStateStorage.putSnapSyncAccountsComplete(false).commit()
+    appStateStorage.clearSnapSyncStorageCompletionRoot().commit()
     appStateStorage.putSnapSyncStorageFilePath("").commit()
     appStateStorage.putSnapSyncCompletedStoragePath("").commit()
     appStateStorage.putSnapSyncHealingPendingNodes("").commit()
@@ -2932,6 +2951,7 @@ class SNAPSyncController(
     bytecodePhaseComplete = false
     storagePhaseComplete = false
     appStateStorage.putSnapSyncAccountsComplete(false).commit()
+    appStateStorage.clearSnapSyncStorageCompletionRoot().commit()
     appStateStorage.putSnapSyncStorageFilePath("").commit()
     appStateStorage.putSnapSyncCompletedStoragePath("").commit()
 

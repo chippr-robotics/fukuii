@@ -332,6 +332,20 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putSnapSyncWalkRoot(rootHex: String): DataSourceBatchUpdate =
     put(Keys.SnapSyncWalkRoot, rootHex)
 
+  /** Get the pivot state root at which storage range sync completed.
+    * L-032: if this matches the current pivot root on restart, skip StorageRangeCoordinator entirely.
+    */
+  def getSnapSyncStorageCompletionRoot(): Option[ByteString] =
+    get(Keys.SnapSyncStorageCompletionRoot).filter(_.nonEmpty).map(v => ByteString(Hex.decode(v)))
+
+  /** Persist the pivot state root when StorageRangeSyncComplete fires. */
+  def putSnapSyncStorageCompletionRoot(root: ByteString): DataSourceBatchUpdate =
+    put(Keys.SnapSyncStorageCompletionRoot, Hex.toHexString(root.toArray))
+
+  /** Clear the storage completion root (called on restart or stale pivot). */
+  def clearSnapSyncStorageCompletionRoot(): DataSourceBatchUpdate =
+    put(Keys.SnapSyncStorageCompletionRoot, "")
+
   // --- Unclean shutdown recovery ---
 
   /** Check if the last shutdown was clean. Returns false on first run or after crash. */
@@ -388,6 +402,7 @@ object AppStateStorage {
     val SnapSyncHealingRound         = "SnapSyncHealingRound"
     val SnapSyncWalkCompletedPrefixes = "SnapSyncWalkCompletedPrefixes"
     val SnapSyncWalkRoot              = "SnapSyncWalkRoot"
+    val SnapSyncStorageCompletionRoot = "SnapSyncStorageCompletionRoot"
   }
 
 }

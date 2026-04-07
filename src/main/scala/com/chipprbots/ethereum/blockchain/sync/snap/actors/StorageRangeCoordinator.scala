@@ -695,10 +695,16 @@ class StorageRangeCoordinator(
       sender() ! CompletedStorageFilePath(completedAccountsFile)
 
     case AddStorageTasks(storageTasks) =>
-      tasks.enqueueAll(storageTasks)
+      // L-033 Bug A fix: filter out accounts already completed in a previous run.
+      // completedAccountHashes is loaded from AppStateStorage on recovery (537K on ETC mainnet).
+      // Without this filter, all 537K tasks re-enter the queue and get re-downloaded every restart.
+      // totalStorageContracts still counts ALL incoming tasks — keeps the progress % denominator correct.
+      val newTasks = storageTasks.filterNot(t => completedAccountHashes.contains(t.accountHash))
+      tasks.enqueueAll(newTasks)
       totalStorageContracts += storageTasks.map(_.accountHash).distinct.size
+      val skipped = storageTasks.size - newTasks.size
       log.info(
-        s"Added ${storageTasks.size} storage tasks to queue (total pending: ${tasks.size}, contracts: $totalStorageContracts)"
+        s"Added ${newTasks.size} storage tasks to queue (skipped $skipped already completed, total pending: ${tasks.size}, contracts: $totalStorageContracts)"
       )
 
     case AddStorageTask(task) =>
@@ -1509,16 +1515,15 @@ class StorageRangeCoordinator(
   /** Update contract completion counts and send progress to controller. */
   private def updateContractProgress(): Unit = {
     if (totalStorageContracts <= 0) return
-    // Count unique completed accounts from completedTasks
-    val uniqueCompleted = completedTasks.map(_.accountHash).toSet.size
-    if (uniqueCompleted != completedAccountHashes.size) {
-      completedAccountHashes.clear()
-      completedTasks.foreach(t => completedAccountHashes.add(t.accountHash))
-      snapSyncController ! SNAPSyncController.ProgressStorageContracts(
-        completedAccountHashes.size,
-        totalStorageContracts
-      )
-    }
+    // L-033 Bug B fix: completedAccountHashes is already maintained correctly by two paths:
+    // (1) InitCompletedStorageAccounts loads persisted hashes on recovery
+    // (2) markAccountCompleted() adds each hash as tasks finish
+    // The previous reconciliation against completedTasks was session-only and cleared the
+    // 537K loaded recovery hashes on the first response (0 != 537K → clear all → rebuild from 0).
+    snapSyncController ! SNAPSyncController.ProgressStorageContracts(
+      completedAccountHashes.size,
+      totalStorageContracts
+    )
   }
 
   private def isPeerCoolingDown(peer: Peer): Boolean =
