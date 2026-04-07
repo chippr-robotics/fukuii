@@ -54,7 +54,7 @@ abstract class BaseNode extends Node {
     startServer()
     startDiscoveryManager()
 
-    // Phase 4: Chain data import (after APIs, non-blocking)
+    // Phase 4: Chain data import
     importChainData()
 
     // Phase 5: Background work
