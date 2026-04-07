@@ -98,6 +98,7 @@ class RegularSync(
   private val CatchUpMilestoneInterval: Long = 100_000L
   private var lastMilestoneBlock: BigInt = 0
   private var loggedFollowMode: Boolean = false
+  private var lastMilestonePct: Int = -1
 
   override def receive: Receive = running(
     ProgressState(startedFetching = false, initialBlock = 0, currentBlock = 0, bestKnownNetworkBlock = 0)
@@ -144,15 +145,21 @@ class RegularSync(
       if (isCatchingUp) {
         if ((blockNumber - lastMilestoneBlock) >= CatchUpMilestoneInterval || lastMilestoneBlock == 0) {
           val blocksRemaining = bestKnown - blockNumber
+          val pct = (blockNumber * 100 / bestKnown).toInt
           log.info(
-            s"[REGULAR] Catch-up progress: block $blockNumber/$bestKnown " +
-              s"(${(blockNumber * 100 / bestKnown).toInt}%), $blocksRemaining blocks remaining"
+            s"[REGULAR] Catch-up progress: block $blockNumber/$bestKnown ($pct%), $blocksRemaining blocks remaining"
           )
+          val milestonePct = (pct / 10) * 10
+          if (milestonePct > lastMilestonePct && milestonePct > 0) {
+            MilestoneLog.phase(s"Regular sync catch-up: $milestonePct% complete (block $blockNumber / $bestKnown)")
+            lastMilestonePct = milestonePct
+          }
           lastMilestoneBlock = blockNumber
           loggedFollowMode = false
         }
       } else if (!loggedFollowMode && bestKnown > 0) {
         log.info(s"[REGULAR] Reached chain head at block $blockNumber. Switching to follow mode.")
+        MilestoneLog.phase(s"Regular sync: reached chain head at block $blockNumber")
         loggedFollowMode = true
       }
       // Publish to eventStream for subscription services (newHeads, logs)

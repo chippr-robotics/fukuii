@@ -126,7 +126,7 @@ class BlockImporter(
       log.debug("Late-arriving state node fetch failure for {}, ignoring", ByteStringUtils.hash2string(hash))
   }
 
-  private def resolvingMissingNode(blocksToRetry: NonEmptyList[Block], blockImportType: BlockImportType)(
+  private def resolvingMissingNode(blocksToRetry: NonEmptyList[Block], blockImportType: BlockImportType, retryCount: Int = 0)(
       state: ImporterState
   ): Receive = {
     case BlockFetcher.FetchedStateNode(nodeData) =>
@@ -164,11 +164,17 @@ class BlockImporter(
       }
 
     case ReceiveTimeout =>
-      log.warning("Timed out waiting for missing state node for block {}, retrying import", blocksToRetry.head.number)
+      val nextRetry = retryCount + 1
+      log.warning("Timed out waiting for missing state node for block {}, retry {}", blocksToRetry.head.number, nextRetry)
+      if (nextRetry % 5 == 0) {
+        MilestoneLog.error(
+          s"State node stall: block ${blocksToRetry.head.number} — $nextRetry retries waiting on node fetch"
+        )
+      }
       // Retry the same blocks directly — don't PickBlocks, which would fetch from wherever the
       // fetcher is now (potentially far beyond the pivot). After SNAP sync, only the pivot header
       // has a number→hash mapping, so branch resolution would fail for any other starting point.
-      importBlocks(blocksToRetry, blockImportType)(state)
+      context.become(resolvingMissingNode(blocksToRetry, blockImportType, nextRetry)(state))
   }
 
   private def resolvingBranch(from: BigInt)(state: ImporterState): Receive = {
