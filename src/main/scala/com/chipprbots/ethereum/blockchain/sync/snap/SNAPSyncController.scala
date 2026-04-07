@@ -1674,11 +1674,24 @@ class SNAPSyncController(
           return
 
         case NetworkPivot =>
-          // Pivot is at or behind local state - this means we're already synced or very close
-          // Fall back to regular sync to catch up the remaining blocks
-          log.warning("Pivot block is not ahead of local state - likely already synced")
-          log.warning("Transitioning to regular sync for final block catch-up")
-          context.parent ! Done // Signal completion, which will transition to regular sync
+          // BUG-RS1: Pivot is at or behind local state after a restart (restartSnapSync clears
+          // in-memory pivotBlock/stateRoot but NOT AppStateStorage). Must call finalizeSnapSync
+          // to commit storeBlock + putBestBlockInfo before signalling Done, otherwise regular
+          // sync cannot find the best block and crashes immediately.
+          log.warning("BUG-RS1: Pivot block is not ahead of local state — finalizing SNAP sync at localBestBlock")
+          pivotBlock = appStateStorage.getSnapSyncPivotBlock()
+          stateRoot = appStateStorage.getSnapSyncStateRoot()
+          if (pivotBlock.isDefined && stateRoot.isDefined) {
+            log.warning(
+              s"BUG-RS1: Restored pivot=${pivotBlock.get}, stateRoot=${stateRoot.get.toArray.take(4).map("%02x".format(_)).mkString} — calling finalizeSnapSync($localBestBlock)"
+            )
+            finalizeSnapSync(localBestBlock)
+          } else {
+            log.warning(
+              s"BUG-RS1: No persisted pivot/stateRoot (pivot=$pivotBlock, root=$stateRoot) — sending Done directly"
+            )
+            context.parent ! Done
+          }
           return
       }
     } else {
