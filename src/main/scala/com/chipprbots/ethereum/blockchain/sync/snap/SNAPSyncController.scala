@@ -1683,9 +1683,9 @@ class SNAPSyncController(
           stateRoot = appStateStorage.getSnapSyncStateRoot()
           if (pivotBlock.isDefined && stateRoot.isDefined) {
             log.warning(
-              s"BUG-RS1: Restored pivot=${pivotBlock.get}, stateRoot=${stateRoot.get.toArray.take(4).map("%02x".format(_)).mkString} — calling finalizeSnapSync($localBestBlock)"
+              s"BUG-RS1: Restored pivot=${pivotBlock.get}, stateRoot=${stateRoot.get.toArray.take(4).map("%02x".format(_)).mkString} — calling finalizeSnapSync(${pivotBlock.get})"
             )
-            finalizeSnapSync(localBestBlock)
+            finalizeSnapSync(pivotBlock.get)
           } else {
             log.warning(
               s"BUG-RS1: No persisted pivot/stateRoot (pivot=$pivotBlock, root=$stateRoot) — sending Done directly"
