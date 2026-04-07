@@ -243,6 +243,7 @@ All bugs below have been fixed as of attempt 14 (JAR `668c04c30`).
 
 | ID | Severity | Description | Fix | JAR |
 |----|---------|-------------|-----|-----|
+| BUG-H3 | CRITICAL | Healing pivot infinite loop: pivot drifts to Besu bonsai limit (8,192 blocks) → all peers stateless → pivot refresh discards entire pending queue → hours-long re-walk → repeat | (a) Add `StateHealing` to `CheckPivotFreshness` condition — proactive 120-block refresh every ~28 min; (b) Remove `pendingTasks = Seq.empty` + `pendingHashSet.clear()` from `HealingPivotRefreshed` — queue preserved across refreshes; (c) `--bonsai-historical-block-limit=131072` in Besu script | Attempt 15 JAR |
 | BUG-S1 | HIGH | Storage infinite loop — 3 contracts × 1 hour each | Remove `emptyResponsesByTask.clear()` on pivot refresh | `668c04c30` |
 | BUG-H1 | MEDIUM | 4 concurrent trie walks (3.5× slower) | Add `if (!trieWalkInProgress)` guard in `ScheduledTrieWalk` handler | `668c04c30` |
 | BUG-H2 | LOW | Spurious "2147483646 nodes healed" log | Change `Int.MaxValue` sentinel to `Option[Int] = None` | `668c04c30` |
