@@ -2289,7 +2289,7 @@ class SNAPSyncController(
 
     // Proactive pivot freshness (Geth-aligned): refresh before peers start returning empty responses.
     case CheckPivotFreshness
-        if currentPhase == AccountRangeSync || currentPhase == StorageRangeSync || currentPhase == ByteCodeAndStorageSync =>
+        if currentPhase == AccountRangeSync || currentPhase == StorageRangeSync || currentPhase == ByteCodeAndStorageSync || currentPhase == StateHealing =>
       maybeProactivelyRefreshPivot()
       super.aroundReceive(receive, msg)
 

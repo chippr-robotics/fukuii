@@ -282,12 +282,15 @@ class TrieNodeHealingCoordinator(
       val newRootHex = Hex.toHexString(newStateRoot.take(4).toArray)
       log.info(
         s"Healing pivot refreshed: $oldRoot -> $newRootHex. " +
-          s"Clearing ${pendingTasks.size} pending tasks, ${statelessPeers.size} stateless peers."
+          s"Preserving ${pendingTasks.size} pending tasks (content-addressed, ~99% valid for new root). " +
+          s"Clearing ${statelessPeers.size} stateless peers."
       )
       stateRoot = newStateRoot
-      flushRawNodesSync() // Flush any buffered nodes before clearing state
-      pendingTasks = Seq.empty // Will be re-populated by trie walk from controller
-      pendingHashSet.clear()
+      flushRawNodesSync() // Flush any buffered nodes before pivot switch
+      // BUG-H3: Do NOT clear pendingTasks/pendingHashSet on pivot refresh.
+      // Trie nodes are content-addressed (keccak256), so ~99% of pending items remain valid
+      // for any consecutive pivot. The new trie walk adds only the delta; dedup via
+      // pendingHashSet prevents duplicates. Clearing here caused the heal→walk→heal→walk cycle.
       statelessPeers.clear()
       statelessRemoteAddresses.clear() // new root — peers that failed old root may serve new one
       peerCooldownUntilMs.clear()
