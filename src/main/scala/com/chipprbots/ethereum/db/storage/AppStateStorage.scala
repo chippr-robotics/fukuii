@@ -138,6 +138,10 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def storageRecoveryDone(): DataSourceBatchUpdate =
     put(Keys.StorageRecoveryDone, true.toString)
 
+  /** Reset storage recovery flag (pivot stale or fresh sync) */
+  def resetStorageRecoveryDone(): DataSourceBatchUpdate =
+    put(Keys.StorageRecoveryDone, false.toString)
+
   /** Get the SNAP sync pivot block number
     * @return
     *   SNAP sync pivot block number, or None if not set
