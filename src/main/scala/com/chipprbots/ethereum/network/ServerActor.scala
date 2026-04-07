@@ -1,6 +1,5 @@
 package com.chipprbots.ethereum.network
 
-import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.concurrent.atomic.AtomicReference
 
@@ -27,10 +26,7 @@ class ServerActor(nodeStatusHolder: AtomicReference[NodeStatus], peerManager: Ac
   import ServerActor._
   import context.system
 
-  private var advertisedAddressOverride: Option[InetAddress] = None
-
-  override def receive: Receive = { case StartServer(address, advertisedAddress) =>
-    advertisedAddressOverride = advertisedAddress
+  override def receive: Receive = { case StartServer(address) =>
     IO(Tcp) ! Bind(self, address)
     context.become(waitingForBindingResult)
   }
@@ -38,22 +34,14 @@ class ServerActor(nodeStatusHolder: AtomicReference[NodeStatus], peerManager: Ac
   def waitingForBindingResult: Receive = {
     case Bound(localAddress) =>
       val nodeStatus = nodeStatusHolder.get()
-      // Resolve the address to advertise in enode URL and to peers.
-      // When bound to an unspecified address (:: or 0.0.0.0), peers cannot dial back using
-      // that address — fall back to the configured advertised-address or InetAddress.getLocalHost.
-      val advertisedHost: InetAddress = advertisedAddressOverride.getOrElse {
-        if (localAddress.getAddress.isAnyLocalAddress) InetAddress.getLocalHost
-        else localAddress.getAddress
-      }
-      val advertisedAddress = new InetSocketAddress(advertisedHost, localAddress.getPort)
       log.info("Listening on {}", localAddress)
       log.info(
         "Node address: enode://{}@{}:{}",
         Hex.toHexString(nodeStatus.nodeId),
-        getHostName(advertisedHost),
-        advertisedAddress.getPort
+        getHostName(localAddress.getAddress),
+        localAddress.getPort
       )
-      nodeStatusHolder.getAndUpdate(_.copy(serverStatus = ServerStatus.Listening(advertisedAddress)))
+      nodeStatusHolder.getAndUpdate(_.copy(serverStatus = ServerStatus.Listening(localAddress)))
       context.become(listening)
 
     case CommandFailed(b: Bind) =>
@@ -71,5 +59,5 @@ object ServerActor {
   def props(nodeStatusHolder: AtomicReference[NodeStatus], peerManager: ActorRef): Props =
     Props(new ServerActor(nodeStatusHolder, peerManager))
 
-  case class StartServer(address: InetSocketAddress, advertisedAddress: Option[InetAddress] = None)
+  case class StartServer(address: InetSocketAddress)
 }
