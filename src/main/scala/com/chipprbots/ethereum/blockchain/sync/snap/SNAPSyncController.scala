@@ -142,10 +142,6 @@ class SNAPSyncController(
   private var trieWalkStartedAtMs: Long = 0L
   private var healingNodesAbandoned: Int = 0 // set from StateHealingComplete; drives pre-walk skip check
   private var healingNodesTotal: Int = 0     // total nodes healed (0 = healing was a no-op)
-  // BUG-WS3: true when healing was started from a checkpoint (HEAL-RESUME), not a complete walk.
-  // WALK-SKIP must not fire until at least one TrieWalkResult is received in this session,
-  // because the checkpoint may be partial — millions of nodes never walked, queued, or healed.
-  private var resumedFromPartialHealCheckpoint: Boolean = false
 
   // Proof-seeding buffer: interior trie node hashes discovered from boundary proofs during
   // account download. Flushed to the healing coordinator at healing start so it begins with
@@ -742,7 +738,6 @@ class SNAPSyncController(
 
     case TrieWalkResult(missingNodes) if currentPhase == StateHealing =>
       trieWalkInProgress = false
-      resumedFromPartialHealCheckpoint = false // BUG-WS3: walk ran → WALK-SKIP safe from here
       // OPT-W1: merge partial nodes from previous interrupted walk into final result
       val allMissingNodes = walkResumedNodes ++ missingNodes
       if (walkResumedNodes.nonEmpty)
@@ -2387,7 +2382,7 @@ class SNAPSyncController(
       try { stateStorage.getReadOnlyStorage.get(r.toArray); true }
       catch { case _: Exception => false }
     }
-    if (!snapSyncConfig.requireValidationWalk && healingNodesAbandoned == 0 && healingNodesTotal == 0 && rootInDb && !resumedFromPartialHealCheckpoint) {
+    if (!snapSyncConfig.requireValidationWalk && healingNodesAbandoned == 0 && healingNodesTotal == 0 && rootInDb) {
       log.info("=" * 60)
       log.info("PHASE: Trie Healing → State Validation Walk")
       log.info("=" * 60)
@@ -2560,7 +2555,6 @@ class SNAPSyncController(
     }
 
     trieWalkInProgress = false
-    resumedFromPartialHealCheckpoint = true // BUG-WS3: checkpoint may be partial — block WALK-SKIP until walk runs
     appStateStorage.putSnapSyncHealingStarted(true).commit()
 
     stateRoot match {
