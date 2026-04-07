@@ -948,6 +948,72 @@ Research into MEV (Flashbots, CoW Protocol), decentralized RPC protocols (DRPC, 
 - **Scope:** ~10-line change in `SNAPSyncController.scala` + 2-line getter/setter in `AppStateStorage.scala`.
 - **Savings:** ~2h per restart during healing phase.
 
+#### L-033: Fix storage recovery filter — completedAccountHashes loaded but never used (two bugs)
+
+- **File:** `src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/StorageRangeCoordinator.scala`
+- **Priority:** Low | **Risk:** Low (correctness-only, no sync logic change)
+- **Status:** Backlog — deferred until after ETC mainnet SNAP sync succeeds
+- **⚠️ DO NOT implement while a sync is in progress** — changes to StorageRangeCoordinator affect the live storage path. Only implement between attempts.
+
+**Background:** L-022b (R6) correctly persists completed storage account hashes to `AppStateStorage`
+and loads them via `InitCompletedStorageAccounts` on restart. This should allow already-completed
+accounts to be skipped on the next run. However, two bugs prevent this — the loaded hashes are
+discarded on every restart, causing full re-download of all storage every time.
+
+**Bug A: `AddStorageTasks` never filters against `completedAccountHashes`** — lines 697-702
+
+Current:
+```scala
+case AddStorageTasks(storageTasks) =>
+  tasks.enqueueAll(storageTasks)   // ← no filter — all 537K re-queued regardless
+  totalStorageContracts += storageTasks.map(_.accountHash).distinct.size
+```
+Fix — filter before enqueue:
+```scala
+case AddStorageTasks(storageTasks) =>
+  val newTasks = storageTasks.filterNot(t => completedAccountHashes.contains(t.accountHash))
+  tasks.enqueueAll(newTasks)
+  totalStorageContracts += storageTasks.map(_.accountHash).distinct.size
+  // totalStorageContracts still counts ALL incoming tasks — denominator for progress % stays correct
+```
+
+**Bug B: `updateContractProgress` reconciliation destroys loaded recovery data** — lines 1510-1522
+
+Current:
+```scala
+private def updateContractProgress(): Unit = {
+  if (totalStorageContracts <= 0) return
+  val uniqueCompleted = completedTasks.map(_.accountHash).toSet.size
+  if (uniqueCompleted != completedAccountHashes.size) {
+    completedAccountHashes.clear()   // ← DESTROYS the 537K loaded hashes
+    completedTasks.foreach(t => completedAccountHashes.add(t.accountHash))
+    snapSyncController ! ProgressStorageContracts(completedAccountHashes.size, totalStorageContracts)
+  }
+}
+```
+On recovery: `completedTasks=0`, `completedAccountHashes=537K` → condition fires on first
+response → clears 537K → rebuilds from 0. Even if Bug A is fixed first, this undoes it.
+
+Fix — remove reconciliation entirely. `completedAccountHashes` is already maintained accurately
+by `InitCompletedStorageAccounts` (recovery load) and `markAccountCompleted()` (per-completion).
+The `completedTasks` reconciliation was redundant before recovery was added:
+```scala
+private def updateContractProgress(): Unit = {
+  if (totalStorageContracts <= 0) return
+  snapSyncController ! SNAPSyncController.ProgressStorageContracts(
+    completedAccountHashes.size,
+    totalStorageContracts
+  )
+}
+```
+
+**Implementation order:** Fix Bug B first, then Bug A. If A is applied first, the first storage
+response will trigger B and clear the filter — defeating the change before it can be tested.
+
+**Relationship to L-032:** L-033 makes the coordinator's own recovery logic work correctly when
+it runs. L-032 skips the coordinator entirely when the pivot root matches. Implement L-033 first —
+it is a pure bug fix with no new persistence. L-032 builds on top of it.
+
 #### L-026: Aggressive peer discovery when snap peer count is low — RESEARCH DONE, DEFERRED
 
 - **Files:** `src/main/scala/.../network/PeerManagerActor.scala`, `src/main/scala/.../network/discovery/`
