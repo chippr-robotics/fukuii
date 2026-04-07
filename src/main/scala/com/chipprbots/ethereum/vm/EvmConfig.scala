@@ -30,17 +30,31 @@ object EvmConfig {
   /** returns the evm config for a given block, applying timestamp-based fork overrides for post-merge ETH chains.
     */
   def forBlock(blockNumber: BigInt, timestamp: Long, blockchainConfig: BlockchainConfig): EvmConfig = {
-    val base = forBlock(blockNumber, blockchainConfig)
-    // Shanghai and Cancun are timestamp-activated on ETH chains.
-    // Fukuii already has the opcodes for these via Olympia/Spiral — they share the same EVM semantics.
-    // For Cancun, we'd add BLOBHASH/BLOBBASEFEE opcodes when those are implemented in the VM.
-    base
+    var config = forBlock(blockNumber, blockchainConfig)
+    // Apply timestamp-based fork upgrades for ETH chains
+    if (blockchainConfig.isShanghaiTimestamp(timestamp)) {
+      config = config.copy(
+        eip3651Enabled = true,  // Warm COINBASE
+        eip3860Enabled = true   // Initcode metering
+      )
+    }
+    if (blockchainConfig.isCancunTimestamp(timestamp)) {
+      config = config.copy(
+        eip6780Enabled = true   // SELFDESTRUCT restriction
+      )
+    }
+    config
   }
 
   /** returns the evm config that should be used for given block
     */
   def forBlock(blockNumber: BigInt, blockchainConfig: BlockchainConfigForEvm): EvmConfig = {
-    // FIXME manage etc/eth forks in a more sophisticated way
+    // When ETC-specific forks (Spiral, Mystique) activate AFTER Olympia, the chain follows
+    // standard Ethereum fork schedule where London only activates EIP-1559/3529/3541.
+    // On ETC, Spiral < Olympia in the fork sequence, so Olympia bundles all EIPs.
+    val etcForksDisabled = blockchainConfig.spiralBlockNumber > blockchainConfig.olympiaBlockNumber
+    val olympiaBuilder = if (etcForksDisabled) LondonConfigBuilder else OlympiaConfigBuilder
+
     val transitionBlockToConfigWithPriorityMapping: List[(BigInt, Int, EvmConfigBuilder)] = List(
       (blockchainConfig.frontierBlockNumber, 1, FrontierConfigBuilder),
       (blockchainConfig.homesteadBlockNumber, 2, HomesteadConfigBuilder),
@@ -60,7 +74,7 @@ object EvmConfig {
       (blockchainConfig.berlinBlockNumber, 14, BerlinConfigBuilder),
       (blockchainConfig.mystiqueBlockNumber, 15, MystiqueConfigBuilder),
       (blockchainConfig.spiralBlockNumber, 16, SpiralConfigBuilder),
-      (blockchainConfig.olympiaBlockNumber, 17, OlympiaConfigBuilder)
+      (blockchainConfig.olympiaBlockNumber, 17, olympiaBuilder)
     )
 
     // highest transition block that is less/equal to `blockNumber`
@@ -173,6 +187,15 @@ object EvmConfig {
       eip3651Enabled = true,
       eip3860Enabled = true,
       eip6049DeprecationEnabled = true
+    )
+
+  /** London-only config for ETH chains. Enables EIP-1559/3529/3541 without Shanghai+ EIPs.
+    * Used when Olympia block number differs from Spiral/Mystique (i.e., ETH fork schedule).
+    */
+  val LondonConfigBuilder: EvmConfigBuilder = config =>
+    MagnetoConfigBuilder(config).copy(
+      feeSchedule = new ethereum.vm.FeeSchedule.MystiqueFeeSchedule, // EIP-3529 refund changes
+      eip3541Enabled = true // EIP-3541: reject 0xEF contracts
     )
 
   val OlympiaConfigBuilder: EvmConfigBuilder = config =>

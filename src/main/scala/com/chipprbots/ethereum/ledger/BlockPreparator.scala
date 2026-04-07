@@ -168,7 +168,7 @@ class BlockPreparator(
       blockHeader: BlockHeader,
       world: InMemoryWorldStateProxy
   )(implicit blockchainConfig: BlockchainConfig): PR = {
-    val evmConfig = EvmConfig.forBlock(blockHeader.number, blockchainConfig)
+    val evmConfig = EvmConfig.forBlock(blockHeader.number, blockHeader.unixTimestamp, blockchainConfig)
     val context: PC = ProgramContext(stx, blockHeader, senderAddress, world, evmConfig)
     vm.run(context)
   }
