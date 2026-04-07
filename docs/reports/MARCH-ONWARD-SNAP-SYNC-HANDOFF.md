@@ -243,6 +243,7 @@ All bugs below have been fixed as of attempt 14 (JAR `668c04c30`).
 
 | ID | Severity | Description | Fix | JAR |
 |----|---------|-------------|-----|-----|
+| BUG-WS3 | CRITICAL | WALK-SKIP false positive on HEAL-RESUME: saved checkpoint nodes all in DB → 0 healed → WALK-SKIP fires before walk ran → trie declared complete while millions of undiscovered nodes remain missing → regular sync fails → restart loop | Add `resumedFromPartialHealCheckpoint` flag; set in `startStateHealingWithSavedNodes`, clear in `TrieWalkResult` handler, add `&& !resumedFromPartialHealCheckpoint` to WALK-SKIP guard | Attempt 16 JAR |
 | BUG-H3 | CRITICAL | Healing pivot infinite loop: pivot drifts to Besu bonsai limit (8,192 blocks) → all peers stateless → pivot refresh discards entire pending queue → hours-long re-walk → repeat | (a) Add `StateHealing` to `CheckPivotFreshness` condition — proactive 120-block refresh every ~28 min; (b) Remove `pendingTasks = Seq.empty` + `pendingHashSet.clear()` from `HealingPivotRefreshed` — queue preserved across refreshes; (c) `--bonsai-historical-block-limit=131072` in Besu script | Attempt 15 JAR |
 | BUG-S1 | HIGH | Storage infinite loop — 3 contracts × 1 hour each | Remove `emptyResponsesByTask.clear()` on pivot refresh | `668c04c30` |
 | BUG-H1 | MEDIUM | 4 concurrent trie walks (3.5× slower) | Add `if (!trieWalkInProgress)` guard in `ScheduledTrieWalk` handler | `668c04c30` |
@@ -313,15 +314,16 @@ Attempt 10 failed due to H-001 (stagnation false-fire after the long trie walk).
 
 ## Current Status
 
-**Attempt 14 (JAR `668c04c30`) — IN PROGRESS as of 2026-04-06**
+**Attempt 15 (JAR `1670becf3`) — IN PROGRESS as of 2026-04-06**
 
 All known blockers fixed in this JAR:
-1. **BUG-S1:** Storage infinite loop for 3 unservable contracts (each was stalling 1h per attempt)
-2. **BUG-H1:** 4 concurrent trie walks replaced by single walk with guard (3.5× healing speedup)
-3. **BUG-H2:** Healing sentinel corrected (removes spurious log + incorrect stagnation comparison)
-4. **BUG-SD1:** SNAP→Regular handoff race (false-positive done, chain weight orphan, stateRoot mismatch)
-5. **BUG-WS1/WS2:** WALK-SKIP infinite loop + false positive
-6. **BUG-HS1:** Healing stall from RetryPivotRefresh interrupting StateHealing
+1. **BUG-H3:** Healing pivot infinite loop (proactive refresh during StateHealing + preserve pending queue)
+2. **BUG-S1:** Storage infinite loop for 3 unservable contracts (each was stalling 1h per attempt)
+3. **BUG-H1:** 4 concurrent trie walks replaced by single walk with guard (3.5× healing speedup)
+4. **BUG-H2:** Healing sentinel corrected (removes spurious log + incorrect stagnation comparison)
+5. **BUG-SD1:** SNAP→Regular handoff race (false-positive done, chain weight orphan, stateRoot mismatch)
+6. **BUG-WS1/WS2:** WALK-SKIP infinite loop + false positive
+7. **BUG-HS1:** Healing stall from RetryPivotRefresh interrupting StateHealing
 7. **OPT-H1/SD1/AD1:** Mid-healing crash recovery, oversized storage deferral, adaptive dispatch
 
 **Status as of 2026-04-06 ~13:38:** Healing complete (301,631 nodes, 0 abandoned). State validation trie walk in progress — 108.8M nodes scanned @ ~3,250 nodes/s, ETA ~3h.
