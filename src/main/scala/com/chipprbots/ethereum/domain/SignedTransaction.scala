@@ -461,7 +461,7 @@ object SignedTransaction {
             tx.gasLimit,
             receivingAddressAsArray,
             tx.value,
-            tx.payload,
+            RLPValue(tx.payload.toArray[Byte]),
             tx.accessList
           )
         )
@@ -484,7 +484,7 @@ object SignedTransaction {
             tx.gasLimit,
             receivingAddressAsArray,
             tx.value,
-            tx.payload,
+            RLPValue(tx.payload.toArray[Byte]),
             tx.accessList
           )
         )
@@ -507,7 +507,7 @@ object SignedTransaction {
             tx.gasLimit,
             receivingAddressAsArray,
             tx.value,
-            tx.payload,
+            RLPValue(tx.payload.toArray[Byte]),
             tx.accessList,
             tx.maxFeePerBlobGas,
             RLPList(tx.blobVersionedHashes.map(h => RLPValue(h.toArray)): _*)
@@ -533,7 +533,7 @@ object SignedTransaction {
             tx.gasLimit,
             receivingAddressAsArray,
             tx.value,
-            tx.payload,
+            RLPValue(tx.payload.toArray[Byte]),
             tx.accessList,
             tx.authorizationList
           )
