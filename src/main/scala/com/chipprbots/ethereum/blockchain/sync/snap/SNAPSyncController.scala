@@ -558,20 +558,37 @@ class SNAPSyncController(
         // Persist accounts-complete flag for crash recovery (Step 7)
         appStateStorage.putSnapSyncAccountsComplete(true).commit()
 
-        // Persist temp file paths for crash recovery (non-blocking ask — if this fails,
-        // recovery will do a full restart which is acceptable since account trie data survives)
+        // Persist all temp file paths for crash recovery.
+        // Non-blocking asks — if any fail, recovery does a full restart (acceptable, account trie survives).
         accountRangeCoordinator.foreach { coordinator =>
           import org.apache.pekko.pattern.ask
           import org.apache.pekko.util.Timeout
           implicit val timeout: Timeout = Timeout(5.seconds)
+
           (coordinator ? actors.Messages.GetStorageFileInfo)
             .mapTo[actors.Messages.StorageFileInfoResponse]
             .foreach { info =>
               if (info.filePath != null) {
                 appStateStorage.putSnapSyncStorageFilePath(info.filePath.toString).commit()
-                log.info(s"Persisted storage file path for recovery: ${info.filePath} (${info.count} entries)")
+                log.info(s"[SNAP-PERSIST] contract-storage:  ${info.filePath} (${info.count} entries)")
               }
             }
+
+          (coordinator ? actors.Messages.GetCodeHashesFileInfo)
+            .mapTo[actors.Messages.CodeHashesFileInfoResponse]
+            .foreach { info =>
+              if (info.filePath != null) {
+                appStateStorage.putSnapSyncCodeHashesPath(info.filePath.toString).commit()
+                log.info(s"[SNAP-PERSIST] unique-codehashes: ${info.filePath} (${info.count} entries)")
+              }
+            }
+
+          // Also persist the contract-accounts file path (needed for mid-download bytecode re-feed on restart)
+          // We know the fixed path from tempDir — no ask needed since the file always exists after account download
+          val tempDir = java.nio.file.Paths.get(Config.config.getString("tmpdir"))
+          val contractAccountsPath = tempDir.resolve("snap-contract-accounts.bin")
+          appStateStorage.putSnapSyncContractAccountsPath(contractAccountsPath.toString).commit()
+          log.info(s"[SNAP-PERSIST] contract-accounts: $contractAccountsPath")
         }
 
         // Persist completed-storage-accounts file path for R6 crash recovery
@@ -584,7 +601,7 @@ class SNAPSyncController(
             .foreach { info =>
               if (info.filePath != null) {
                 appStateStorage.putSnapSyncCompletedStoragePath(info.filePath.toString).commit()
-                log.info(s"Persisted completed-storage file path for recovery: ${info.filePath}")
+                log.info(s"[SNAP-PERSIST] completed-storage: ${info.filePath}")
               }
             }
         }
@@ -1303,18 +1320,21 @@ class SNAPSyncController(
 
       (savedPivot, savedRootOpt) match {
         case (Some(pivot), Some(rootBs)) if pivot > 0 =>
-          log.info(s"Recovery: accounts previously completed at pivot $pivot. Checking freshness...")
+          log.info(s"[SNAP-RECOVERY] accounts previously completed at pivot $pivot. Checking freshness...")
 
           // Check if pivot is still fresh enough
           val networkBest = currentNetworkBestFromSnapPeers().getOrElse(BigInt(0))
           val drift = if (networkBest > 0) (networkBest - pivot).abs else BigInt(0)
           if (networkBest > 0 && drift > snapSyncConfig.maxPivotStalenessBlocks) {
             log.warning(
-              s"Recovery: pivot $pivot drifted $drift blocks from network best $networkBest. " +
-                "Clearing accounts-complete flag and restarting fresh."
+              s"[SNAP-RECOVERY] Pivot drifted $drift blocks (> ${snapSyncConfig.maxPivotStalenessBlocks} maxPivotStalenessBlocks). " +
+                s"Clearing accounts-complete flag and deleting stale work files. Starting fresh."
             )
+            deleteSnapSyncTempFiles()
             appStateStorage.putSnapSyncAccountsComplete(false).commit()
             appStateStorage.clearSnapSyncStorageCompletionRoot().commit()
+            appStateStorage.putSnapSyncCodeHashesPath("").commit()
+            appStateStorage.putSnapSyncContractAccountsPath("").commit()
             // Fall through to normal startup
           } else {
             // Pivot is fresh enough — recover bytecodes + storage only
@@ -1332,7 +1352,7 @@ class SNAPSyncController(
                   s"skipping StorageRangeCoordinator, resuming bytecodes only"
               )
             } else {
-              log.info(s"Recovery: resuming bytecodes + storage sync from pivot $pivot (drift=$drift blocks)")
+              log.info(s"[SNAP-RECOVERY] resuming bytecodes + storage sync from pivot $pivot (drift=$drift blocks)")
             }
 
             // Create bytecode coordinator (will receive NoMore immediately since we have no new accounts)
@@ -1359,6 +1379,7 @@ class SNAPSyncController(
             )
 
             if (!storageSkip) {
+            val recoveryTempDir = java.nio.file.Paths.get(Config.config.getString("tmpdir"))
             storageRangeCoordinator = Some(
               context.actorOf(
                 actors.StorageRangeCoordinator
@@ -1375,7 +1396,8 @@ class SNAPSyncController(
                     initialMaxInFlightPerPeer = 3, // Recovery: accounts done, storage gets 3 of 5 per-peer budget
                     initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
                     minResponseBytes = snapSyncConfig.storageMinResponseBytes,
-                    deferredMerkleization = snapSyncConfig.deferredMerkleization
+                    deferredMerkleization = snapSyncConfig.deferredMerkleization,
+                    tempDir = recoveryTempDir
                   )
                   .withDispatcher("sync-dispatcher"),
                 s"storage-range-coordinator-$coordinatorGeneration"
@@ -1405,10 +1427,10 @@ class SNAPSyncController(
                 } finally raf.close()
                 if (completedHashes.nonEmpty) {
                   storageRangeCoordinator.foreach(_ ! actors.Messages.InitCompletedStorageAccounts(completedHashes.toSet))
-                  log.info(s"Recovery: loaded ${completedHashes.size} completed storage accounts from $filePath")
+                  log.info(s"[SNAP-RECOVERY] completed-storage: found $filePath, ${completedHashes.size} entries — seeding completed set")
                 }
               } else {
-                log.info(s"Recovery: completed-storage file $filePath not found (no prior completions to restore)")
+                log.warning(s"[SNAP-RECOVERY] completed-storage: path $filePath not found on disk — no prior completions to restore")
               }
             }
 
@@ -1447,25 +1469,63 @@ class SNAPSyncController(
                     totalTasks
                   }
                   .foreach { count =>
-                    log.info(s"Recovery: streamed $count storage tasks from ${filePath}")
+                    log.info(s"[SNAP-RECOVERY] contract-storage: found $filePath, $count entries — streaming to storage coordinator")
                     // Signal no more tasks — sentinel allows completion
                     coordinator ! actors.Messages.NoMoreStorageTasks
                   }
               } else {
-                log.warning(s"Recovery: storage file $filePath not found. Sending NoMore immediately.")
+                log.warning(s"[SNAP-RECOVERY] contract-storage: path $filePath not found on disk — will re-download from accounts")
                 storageRangeCoordinator.foreach(_ ! actors.Messages.NoMoreStorageTasks)
               }
             }
             if (savedStoragePath.isEmpty) {
-              log.warning("Recovery: no storage file path persisted. Sending NoMore immediately.")
+              log.warning("[SNAP-RECOVERY] contract-storage: no path persisted — sending NoMore immediately")
               storageRangeCoordinator.foreach(_ ! actors.Messages.NoMoreStorageTasks)
             }
             } // end if (!storageSkip)
 
-            // Bytecodes: with inline dispatch, codeHashes were already sent to the old coordinator.
-            // On recovery, we can't recover those. Send NoMore — the healing phase will catch any
-            // missing bytecodes via trie walk.
-            bytecodeCoordinator.foreach(_ ! actors.Messages.NoMoreByteCodeTasks)
+            // Bytecodes: re-feed unique codeHashes from the persisted uniqueCodeHashesFile.
+            // filterAndDedupeCodeHashes will skip any already fetched via EvmCodeStorage (cross-restart dedup).
+            val savedCodeHashesPath = appStateStorage.getSnapSyncCodeHashesPath()
+            savedCodeHashesPath match {
+              case Some(pathStr) =>
+                val filePath = java.nio.file.Paths.get(pathStr)
+                if (java.nio.file.Files.exists(filePath)) {
+                  val coordinator = bytecodeCoordinator.get
+                  import context.dispatcher
+                  scala.concurrent.Future {
+                    val raf = new java.io.RandomAccessFile(filePath.toFile, "r")
+                    val buf = new Array[Byte](32)
+                    val batch = new scala.collection.mutable.ArrayBuffer[ByteString](10000)
+                    var totalHashes = 0
+                    try {
+                      while (raf.getFilePointer < raf.length()) {
+                        raf.readFully(buf)
+                        batch += ByteString(buf.clone())
+                        if (batch.size >= 10000) {
+                          coordinator ! actors.Messages.AddByteCodeTasks(batch.toSeq)
+                          totalHashes += batch.size
+                          batch.clear()
+                        }
+                      }
+                      if (batch.nonEmpty) {
+                        coordinator ! actors.Messages.AddByteCodeTasks(batch.toSeq)
+                        totalHashes += batch.size
+                      }
+                    } finally raf.close()
+                    totalHashes
+                  }.foreach { count =>
+                    log.info(s"[SNAP-RECOVERY] unique-codehashes: found $filePath, $count entries — re-feeding bytecode coordinator")
+                    coordinator ! actors.Messages.NoMoreByteCodeTasks
+                  }
+                } else {
+                  log.warning(s"[SNAP-RECOVERY] unique-codehashes: path $filePath not found on disk — will rely on healing for missing bytecodes")
+                  bytecodeCoordinator.foreach(_ ! actors.Messages.NoMoreByteCodeTasks)
+                }
+              case None =>
+                log.warning("[SNAP-RECOVERY] unique-codehashes: no path persisted — sending NoMore immediately")
+                bytecodeCoordinator.foreach(_ ! actors.Messages.NoMoreByteCodeTasks)
+            }
 
             currentPhase = ByteCodeAndStorageSync
             lastStorageProgressMs = System.currentTimeMillis()
@@ -1480,9 +1540,12 @@ class SNAPSyncController(
             return
           }
         case _ =>
-          log.warning("Recovery: accounts-complete flag set but missing pivot/root. Clearing and restarting fresh.")
+          log.warning("[SNAP-RECOVERY] accounts-complete flag set but missing pivot/root. Clearing and restarting fresh.")
+          deleteSnapSyncTempFiles()
           appStateStorage.putSnapSyncAccountsComplete(false).commit()
           appStateStorage.clearSnapSyncStorageCompletionRoot().commit()
+          appStateStorage.putSnapSyncCodeHashesPath("").commit()
+          appStateStorage.putSnapSyncContractAccountsPath("").commit()
       }
     }
 
@@ -1865,12 +1928,17 @@ class SNAPSyncController(
     // Stop progress monitoring
     progressMonitor.stopPeriodicLogging()
 
+    // Delete temp files and clear all persisted file paths
+    deleteSnapSyncTempFiles()
+
     // Clear persisted SNAP progress — retry will start fresh
     appStateStorage.putSnapSyncProgress("").commit()
     appStateStorage.putSnapSyncAccountsComplete(false).commit()
     appStateStorage.clearSnapSyncStorageCompletionRoot().commit()
     appStateStorage.putSnapSyncStorageFilePath("").commit()
     appStateStorage.putSnapSyncCompletedStoragePath("").commit()
+    appStateStorage.putSnapSyncCodeHashesPath("").commit()
+    appStateStorage.putSnapSyncContractAccountsPath("").commit()
     appStateStorage.putSnapSyncHealingPendingNodes("").commit()
     appStateStorage.putSnapSyncHealingRound(0).commit()
     preservedRangeProgress = Map.empty
@@ -2137,7 +2205,8 @@ class SNAPSyncController(
               snapSyncController = self,
               initialMaxInFlightPerPeer = 3, // Parallel with accounts — matches geth/Besu (both run storage concurrently from the start)
               initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
-              minResponseBytes = snapSyncConfig.storageMinResponseBytes
+              minResponseBytes = snapSyncConfig.storageMinResponseBytes,
+              tempDir = tempDir
             )
             .withDispatcher("sync-dispatcher"),
           s"storage-range-coordinator-$coordinatorGeneration"
@@ -2927,6 +2996,29 @@ class SNAPSyncController(
     lastAccountProgressMs = System.currentTimeMillis()
   }
 
+  /** Delete all snap sync work files from tmpdir and clear their DB paths.
+    * Called before restartSnapSync() and requestSnapRetry() to ensure a clean slate.
+    */
+  private def deleteSnapSyncTempFiles(): Unit = {
+    val tempDir = java.nio.file.Paths.get(Config.config.getString("tmpdir"))
+    val fixedFiles = Seq(
+      tempDir.resolve("snap-contract-accounts.bin"),
+      tempDir.resolve("snap-contract-storage.bin"),
+      tempDir.resolve("snap-unique-codehashes.bin"),
+      tempDir.resolve("snap-completed-storage.bin")
+    )
+    log.info(s"[SNAP] Clearing snap sync state — deleting work files and resetting DB keys:")
+    fixedFiles.foreach { f =>
+      try {
+        val deleted = java.nio.file.Files.deleteIfExists(f)
+        if (deleted) log.info(s"[SNAP]   Deleted: $f")
+        else log.info(s"[SNAP]   Not found — already absent: $f")
+      } catch {
+        case e: Exception => log.warning(s"[SNAP]   Failed to delete $f: ${e.getMessage}")
+      }
+    }
+  }
+
   private def restartSnapSync(reason: String): Unit = {
     log.warning(s"Restarting SNAP sync with a fresher pivot: $reason")
 
@@ -2959,6 +3051,9 @@ class SNAPSyncController(
     // Clear inflight request timeouts and internal phase state
     requestTracker.clear()
 
+    // Delete temp files and clear all persisted file paths
+    deleteSnapSyncTempFiles()
+
     // Clear concurrent download state and recovery data
     accountsComplete = false
     bytecodePhaseComplete = false
@@ -2967,6 +3062,8 @@ class SNAPSyncController(
     appStateStorage.clearSnapSyncStorageCompletionRoot().commit()
     appStateStorage.putSnapSyncStorageFilePath("").commit()
     appStateStorage.putSnapSyncCompletedStoragePath("").commit()
+    appStateStorage.putSnapSyncCodeHashesPath("").commit()
+    appStateStorage.putSnapSyncContractAccountsPath("").commit()
 
     // Reset pivot/state root and storage so a new selection is committed
     pivotBlock = None

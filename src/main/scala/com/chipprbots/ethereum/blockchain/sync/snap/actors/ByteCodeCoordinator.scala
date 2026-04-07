@@ -625,6 +625,9 @@ class ByteCodeCoordinator(
 
   /** Filter and deduplicate codeHashes. Input is already Bloom-filtered by AccountRangeCoordinator (~0.01% FPR), so
     * this is a final dedup pass over ~2M entries (not 73.5M). Bug 20 fix.
+    *
+    * Also checks EvmCodeStorage for cross-restart dedup: when contractAccountsFile is re-fed on restart,
+    * hashes already fetched in a prior session are skipped rather than re-queued.
     */
   private def filterAndDedupeCodeHashes(
       codeHashes: Seq[ByteString]
@@ -633,6 +636,7 @@ class ByteCodeCoordinator(
     var invalidCount = 0
     var dupeCount = 0
     var alreadyDownloaded = 0
+    var alreadyInStorage = 0
 
     val filtered = codeHashes.filter { codeHash =>
       if (codeHash.length != 32) {
@@ -642,6 +646,10 @@ class ByteCodeCoordinator(
         false
       } else if (downloadedCodeHashes.contains(codeHash)) {
         alreadyDownloaded += 1
+        false
+      } else if (evmCodeStorage.get(codeHash).isDefined) {
+        alreadyInStorage += 1
+        downloadedCodeHashes += codeHash // prevent re-check on future batches
         false
       } else if (seen.contains(codeHash)) {
         dupeCount += 1
@@ -658,6 +666,8 @@ class ByteCodeCoordinator(
       log.info(s"Deduplicated $dupeCount codeHashes (Bloom filter false positives)")
     if (alreadyDownloaded > 0)
       log.info(s"Skipped $alreadyDownloaded codeHashes already downloaded (cross-batch dedup)")
+    if (alreadyInStorage > 0)
+      log.info(s"Skipped $alreadyInStorage codeHashes already in EvmCodeStorage (cross-restart dedup)")
 
     filtered
   }

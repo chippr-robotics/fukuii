@@ -260,11 +260,19 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
 
   /** Get the persisted path to the unique codeHashes file for bytecode sync recovery. */
   def getSnapSyncCodeHashesPath(): Option[String] =
-    get(Keys.SnapSyncCodeHashesPath)
+    get(Keys.SnapSyncCodeHashesPath).filter(_.nonEmpty)
 
   /** Persist the path to the unique codeHashes file so bytecode sync can resume after restart. */
   def putSnapSyncCodeHashesPath(path: String): DataSourceBatchUpdate =
     put(Keys.SnapSyncCodeHashesPath, path)
+
+  /** Get the persisted path to the contract accounts file for bytecode re-feed recovery. */
+  def getSnapSyncContractAccountsPath(): Option[String] =
+    get(Keys.SnapSyncContractAccountsPath).filter(_.nonEmpty)
+
+  /** Persist the path to the contract accounts file so bytecodes can be re-fed after mid-download restart. */
+  def putSnapSyncContractAccountsPath(path: String): DataSourceBatchUpdate =
+    put(Keys.SnapSyncContractAccountsPath, path)
 
   /** Get the persisted path to the contract storage file for storage sync recovery. */
   def getSnapSyncStorageFilePath(): Option[String] =
@@ -393,6 +401,7 @@ object AppStateStorage {
     val StorageRecoveryDone = "StorageRecoveryDone"
     val SnapSyncAccountsComplete = "SnapSyncAccountsComplete"
     val SnapSyncCodeHashesPath = "SnapSyncCodeHashesPath"
+    val SnapSyncContractAccountsPath = "SnapSyncContractAccountsPath"
     val SnapSyncStorageFilePath = "SnapSyncStorageFilePath"
     val SnapSyncCompletedStoragePath = "SnapSyncCompletedStoragePath"
     val SnapSyncFinalizedRoot = "SnapSyncFinalizedRoot"

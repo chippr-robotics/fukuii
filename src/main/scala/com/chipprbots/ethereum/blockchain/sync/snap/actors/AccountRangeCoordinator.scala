@@ -5,7 +5,7 @@ import org.apache.pekko.actor.SupervisorStrategy._
 import org.apache.pekko.util.ByteString
 
 import java.io.{BufferedOutputStream, FileOutputStream, RandomAccessFile}
-import java.nio.file.{Files, Path}
+import java.nio.file.Path
 
 import scala.collection.mutable
 import scala.concurrent.{Future, blocking}
@@ -254,10 +254,11 @@ class AccountRangeCoordinator(
   // On ETC mainnet ~20% of ~67M accounts are contracts — ~13M entries × 64 bytes each
   // would consume ~1.6GB in memory. Writing to disk keeps memory usage near zero.
   // Each entry is 64 bytes: 32-byte accountHash + 32-byte codeHash (or storageRoot).
-  private val contractAccountsFile: Path = Files.createTempFile(tempDir, "fukuii-contract-accounts-", ".bin")
-  private val contractStorageFile: Path = Files.createTempFile(tempDir, "fukuii-contract-storage-", ".bin")
-  private val contractAccountsOut = new BufferedOutputStream(new FileOutputStream(contractAccountsFile.toFile), 65536)
-  private val contractStorageOut = new BufferedOutputStream(new FileOutputStream(contractStorageFile.toFile), 65536)
+  // Fixed filenames under configured tmpdir (not random suffixes) so paths survive restarts.
+  private val contractAccountsFile: Path = tempDir.resolve("snap-contract-accounts.bin")
+  private val contractStorageFile: Path = tempDir.resolve("snap-contract-storage.bin")
+  private val contractAccountsOut = new BufferedOutputStream(new FileOutputStream(contractAccountsFile.toFile, false), 65536)
+  private val contractStorageOut = new BufferedOutputStream(new FileOutputStream(contractStorageFile.toFile, false), 65536)
   private var contractAccountsCount: Long = 0
   private var contractStorageCount: Long = 0
   private val ContractEntrySize = 64 // 32 bytes hash + 32 bytes codeHash/storageRoot
@@ -274,8 +275,8 @@ class AccountRangeCoordinator(
     3_000_000,
     0.0001 // ~4MB for 3M expected entries at 0.01% FPR
   )
-  private val uniqueCodeHashesFile: Path = Files.createTempFile(tempDir, "fukuii-unique-codehashes-", ".bin")
-  private val uniqueCodeHashesOut = new BufferedOutputStream(new FileOutputStream(uniqueCodeHashesFile.toFile), 65536)
+  private val uniqueCodeHashesFile: Path = tempDir.resolve("snap-unique-codehashes.bin")
+  private val uniqueCodeHashesOut = new BufferedOutputStream(new FileOutputStream(uniqueCodeHashesFile.toFile, false), 65536)
   private var uniqueCodeHashesCount: Long = 0
 
   // Track last known available peers so we can re-dispatch after task failures
@@ -389,6 +390,9 @@ class AccountRangeCoordinator(
   }
 
   override def preStart(): Unit = {
+    log.info(s"[SNAP] Creating snap sync work file: $contractAccountsFile")
+    log.info(s"[SNAP] Creating snap sync work file: $contractStorageFile")
+    log.info(s"[SNAP] Creating snap sync work file: $uniqueCodeHashesFile")
     if (skippedTasks.nonEmpty) {
       log.info(
         s"AccountRangeCoordinator starting with $concurrency workers — " +
@@ -419,11 +423,8 @@ class AccountRangeCoordinator(
     catch { case _: Exception => }
     try uniqueCodeHashesOut.close()
     catch { case _: Exception => }
-    try Files.deleteIfExists(contractAccountsFile)
-    catch { case _: Exception => }
-    // contractStorageFile intentionally NOT deleted — controller manages its lifecycle
-    // uniqueCodeHashesFile intentionally NOT deleted — controller manages its lifecycle
-    // (needed for accounts-complete recovery across process restarts)
+    // All three files use fixed names and are managed by the controller's deleteSnapSyncTempFiles().
+    // Do NOT delete here — they must survive process restarts for crash recovery.
     log.info(
       s"AccountRangeCoordinator stopped. Downloaded $accountsDownloaded accounts, identified $contractAccountsCount contracts ($uniqueCodeHashesCount unique codeHashes)"
     )
@@ -552,6 +553,10 @@ class AccountRangeCoordinator(
       contractStorageOut.flush()
       sender() ! StorageFileInfoResponse(contractStorageFile, contractStorageCount)
 
+    case GetCodeHashesFileInfo =>
+      uniqueCodeHashesOut.flush()
+      sender() ! CodeHashesFileInfoResponse(uniqueCodeHashesFile, uniqueCodeHashesCount)
+
     case StoreAccountChunk(task, remaining, totalCount, storedSoFar, isTaskRangeComplete) =>
       handleStoreAccountChunk(task, remaining, totalCount, storedSoFar, isTaskRangeComplete)
 
@@ -633,6 +638,10 @@ class AccountRangeCoordinator(
     case GetStorageFileInfo =>
       contractStorageOut.flush()
       sender() ! StorageFileInfoResponse(contractStorageFile, contractStorageCount)
+
+    case GetCodeHashesFileInfo =>
+      uniqueCodeHashesOut.flush()
+      sender() ! CodeHashesFileInfoResponse(uniqueCodeHashesFile, uniqueCodeHashesCount)
 
     case CheckCompletion =>
     // Already finalizing, ignore

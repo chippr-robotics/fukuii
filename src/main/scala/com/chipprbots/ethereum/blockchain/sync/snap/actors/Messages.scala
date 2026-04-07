@@ -48,6 +48,10 @@ object Messages {
   /** Request storage file metadata for async streaming. Returns instantly (no file read). */
   case object GetStorageFileInfo extends AccountRangeCoordinatorMessage
   case class StorageFileInfoResponse(filePath: java.nio.file.Path, count: Long)
+
+  /** Request unique codeHashes file path and count for crash-recovery path persistence. Returns instantly. */
+  case object GetCodeHashesFileInfo extends AccountRangeCoordinatorMessage
+  case class CodeHashesFileInfoResponse(filePath: java.nio.file.Path, count: Long)
   case object CheckCompletion extends AccountRangeCoordinatorMessage
 
   /** Sent by AccountRangeCoordinator to SNAPSyncController with progress for ALL ranges. Maps range `last` hash →

@@ -5,7 +5,7 @@ import org.apache.pekko.actor.SupervisorStrategy._
 import org.apache.pekko.util.ByteString
 
 import java.io.{BufferedOutputStream, FileOutputStream}
-import java.nio.file.{Files, Path}
+import java.nio.file.Path
 
 import scala.collection.mutable
 import scala.concurrent.duration._
@@ -56,7 +56,8 @@ class StorageRangeCoordinator(
     initialMaxInFlightPerPeer: Int = 5,
     configInitialResponseBytes: Int = 1048576,
     configMinResponseBytes: Int = 131072,
-    deferredMerkleization: Boolean = true
+    deferredMerkleization: Boolean = true,
+    tempDir: Path = Path.of(System.getProperty("java.io.tmpdir"))
 ) extends Actor
     with ActorLogging {
 
@@ -125,8 +126,8 @@ class StorageRangeCoordinator(
   private var totalStorageContracts: Int = 0
   private var storageSyncCompleteReported: Boolean = false
   private val completedAccountHashes = mutable.Set[ByteString]()
-  private val completedAccountsFile: Path = Files.createTempFile("fukuii-completed-storage-", ".bin")
-  private val completedAccountsOut = new BufferedOutputStream(new FileOutputStream(completedAccountsFile.toFile), 32768)
+  private val completedAccountsFile: Path = tempDir.resolve("snap-completed-storage.bin")
+  private val completedAccountsOut = new BufferedOutputStream(new FileOutputStream(completedAccountsFile.toFile, false), 32768)
   private var completedAccountsFileCount: Long = 0
 
   // Pivot refresh backoff: prevents rapid refresh loops when no peers can serve any recent root.
@@ -661,6 +662,7 @@ class StorageRangeCoordinator(
   private val proofVerifiers = mutable.Map[ByteString, MerkleProofVerifier]()
 
   override def preStart(): Unit = {
+    log.info(s"[SNAP] Creating snap sync work file: $completedAccountsFile")
     log.info(s"StorageRangeCoordinator starting (concurrency=$maxInFlightRequests, batchSize=$maxAccountsPerBatch)")
     // Periodic liveness: re-evaluate dispatch and pivot refresh even when no events flow.
     // Without this, ghost peers cause a silent stall with no incoming messages to trigger re-evaluation.
@@ -1554,7 +1556,8 @@ object StorageRangeCoordinator {
       initialMaxInFlightPerPeer: Int = 5,
       initialResponseBytes: Int = 1048576,
       minResponseBytes: Int = 131072,
-      deferredMerkleization: Boolean = true
+      deferredMerkleization: Boolean = true,
+      tempDir: Path = Path.of(System.getProperty("java.io.tmpdir"))
   ): Props =
     Props(
       new StorageRangeCoordinator(
@@ -1570,7 +1573,8 @@ object StorageRangeCoordinator {
         initialMaxInFlightPerPeer,
         configInitialResponseBytes = initialResponseBytes,
         configMinResponseBytes = minResponseBytes,
-        deferredMerkleization = deferredMerkleization
+        deferredMerkleization = deferredMerkleization,
+        tempDir = tempDir
       )
     )
 
