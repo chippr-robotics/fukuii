@@ -54,6 +54,28 @@ object Block {
             uncles.items.map(_.toBlockHeader)
           )
         )
+      // Shanghai+ blocks include withdrawals as 4th item
+      case rlpList: RLPList if rlpList.items.size >= 4 =>
+        val header = rlpList.items(0).asInstanceOf[RLPList]
+        val stx = rlpList.items(1).asInstanceOf[RLPList]
+        val uncles = rlpList.items(2).asInstanceOf[RLPList]
+        val withdrawalsRlp = rlpList.items(3).asInstanceOf[RLPList]
+        import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
+        val ws = withdrawalsRlp.items.collect { case w: RLPList =>
+          val idx: BigInt = bigIntFromEncodeable(w.items(0))
+          val vIdx: BigInt = bigIntFromEncodeable(w.items(1))
+          val addr: ByteString = byteStringFromEncodeable(w.items(2))
+          val amt: BigInt = bigIntFromEncodeable(w.items(3))
+          Withdrawal(idx, vIdx, Address(addr), amt)
+        }
+        Block(
+          header.toBlockHeader,
+          BlockBody(
+            stx.items.toTypedRLPEncodables.map(_.toSignedTransaction),
+            uncles.items.map(_.toBlockHeader),
+            Some(ws.toSeq)
+          )
+        )
       case _ => throw new RuntimeException("Cannot decode block")
     }
   }
