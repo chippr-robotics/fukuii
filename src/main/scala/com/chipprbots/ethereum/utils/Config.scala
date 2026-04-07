@@ -72,6 +72,10 @@ object Config {
       val interface: String = serverConfig.getString("interface")
       val port: Int = serverConfig.getInt("port")
       val listenAddress = new InetSocketAddress(interface, port)
+      val advertisedAddress: Option[String] =
+        if (serverConfig.hasPath("advertised-address") && !serverConfig.getIsNull("advertised-address"))
+          Some(serverConfig.getString("advertised-address"))
+        else None
     }
 
     val peer: PeerConfiguration = new PeerConfiguration {

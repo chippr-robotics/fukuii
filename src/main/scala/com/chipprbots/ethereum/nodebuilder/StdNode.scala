@@ -121,7 +121,10 @@ abstract class BaseNode extends Node {
 
   private[this] def startPeerManager(): Unit = peerManager ! PeerManagerActor.StartConnecting
 
-  private[this] def startServer(): Unit = server ! ServerActor.StartServer(networkConfig.Server.listenAddress)
+  private[this] def startServer(): Unit = server ! ServerActor.StartServer(
+    networkConfig.Server.listenAddress,
+    networkConfig.Server.advertisedAddress.map(java.net.InetAddress.getByName)
+  )
 
   private[this] def startSyncController(): Unit = syncController ! SyncProtocol.Start
 
