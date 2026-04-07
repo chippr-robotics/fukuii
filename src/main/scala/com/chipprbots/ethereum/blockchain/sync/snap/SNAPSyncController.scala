@@ -2348,13 +2348,7 @@ class SNAPSyncController(
 
     // Proactive pivot freshness (Geth-aligned): refresh before peers start returning empty responses.
     case CheckPivotFreshness
-        if currentPhase == AccountRangeSync || currentPhase == StorageRangeSync || currentPhase == ByteCodeAndStorageSync || currentPhase == StateHealing =>
-      // BUG-H3 FIX: Also fire during StateHealing. Without this, pivot drifts unchecked until
-      // Besu's bonsai historical limit (8,192 blocks) is exceeded, causing all peers to become
-      // stateless and triggering a destructive pivot refresh. With the HealingPivotRefreshed
-      // queue-preserve fix, proactive refreshes every ~120 blocks (~28 min) are cheap: the
-      // pending queue is kept, only the delta walk runs (seconds via self-feeding), and the
-      // 10s post-refresh cooldown is the only overhead (~1.8% of total healing time).
+        if currentPhase == AccountRangeSync || currentPhase == StorageRangeSync || currentPhase == ByteCodeAndStorageSync =>
       maybeProactivelyRefreshPivot()
       super.aroundReceive(receive, msg)
 

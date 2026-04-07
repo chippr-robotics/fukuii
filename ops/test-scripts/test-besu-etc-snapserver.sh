@@ -69,8 +69,6 @@ exec "$BINARY" \
   --sync-mode=SNAP \
   --sync-min-peers=1 \
   --snapsync-server-enabled \
-  --bonsai-historical-block-limit=131072 \
-  --bonsai-trie-logs-pruning-window-size=200000 \
   --bootnodes="$COREGETH_ENODE" \
   --logging=INFO \
   "$@"
