@@ -1310,6 +1310,26 @@ class SNAPSyncController(
     // This runs during pivot selection and bootstrap, not just after account sync starts.
     startSnapPeerEviction()
 
+    // Log the current DB state so operators can see what will be restored
+    {
+      val accountsComplete = appStateStorage.isSnapSyncAccountsComplete()
+      val savedPivot       = appStateStorage.getSnapSyncPivotBlock()
+      val savedStoragePath = appStateStorage.getSnapSyncStorageFilePath()
+      val savedCodeHashes  = appStateStorage.getSnapSyncCodeHashesPath()
+      val savedContractAcc = appStateStorage.getSnapSyncContractAccountsPath()
+      val savedCompleted   = appStateStorage.getSnapSyncCompletedStoragePath()
+      val healingPending   = appStateStorage.getSnapSyncHealingPendingNodes().map(d => s"${deserializeHealingNodes(d).size} nodes")
+      val healingRound     = appStateStorage.getSnapSyncHealingRound()
+      val snapDone         = appStateStorage.isSnapSyncDone()
+      log.info("[SNAP-STATE] Persisted SNAP sync state at startup:")
+      log.info(s"[SNAP-STATE]   snap_done=$snapDone  accounts_complete=$accountsComplete  pivot=${savedPivot.getOrElse("none")}")
+      log.info(s"[SNAP-STATE]   contract-storage:  ${savedStoragePath.getOrElse("none")}")
+      log.info(s"[SNAP-STATE]   unique-codehashes: ${savedCodeHashes.getOrElse("none")}")
+      log.info(s"[SNAP-STATE]   contract-accounts: ${savedContractAcc.getOrElse("none")}")
+      log.info(s"[SNAP-STATE]   completed-storage: ${savedCompleted.getOrElse("none")}")
+      log.info(s"[SNAP-STATE]   healing: ${healingPending.getOrElse("none")} (round $healingRound)")
+    }
+
     // Step 7: Check for accounts-complete recovery (process crash during bytecode/storage phase).
     // If accounts were previously completed and the pivot is still fresh, skip account download
     // and only re-run bytecodes + storage from the persisted storage file.
