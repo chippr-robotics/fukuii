@@ -189,7 +189,9 @@ class BlockPreparator(
         val gasUsed = stx.tx.gasLimit - result.gasRemaining
         val blockchainConfigForEvm = BlockchainConfigForEvm(blockchainConfig)
         val etcFork = blockchainConfigForEvm.etcForkForBlockNumber(blockNumber)
-        val maxRefundQuotient = if (BlockchainConfigForEvm.isEip3529Enabled(etcFork)) 5 else 2
+        // EIP-3529: post-London refund cap is gasUsed/5 (not gasUsed/2)
+        val isPostLondon = blockNumber >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+        val maxRefundQuotient = if (BlockchainConfigForEvm.isEip3529Enabled(etcFork) || isPostLondon) 5 else 2
         result.gasRemaining + (gasUsed / maxRefundQuotient).min(result.gasRefund)
     }
 
