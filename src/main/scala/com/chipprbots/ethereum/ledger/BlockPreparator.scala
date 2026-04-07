@@ -289,6 +289,17 @@ class BlockPreparator(
     val totalGasToRefundBase = calcTotalGasToRefund(stx, resultWithErrorHandling, blockHeader.number)
     val executionGasBase = gasLimit - totalGasToRefundBase
 
+    if (DebugTrace.enabledForBlock(blockHeader.number)) {
+      val evmConfig = EvmConfig.forBlock(blockHeader.number, blockchainConfig)
+      val isCreate = stx.tx.isContractInit
+      val intrinsicGas = evmConfig.calcTransactionIntrinsicGas(stx.tx.payload, isCreate, Seq.empty)
+      System.err.println(s"[TX-TRACE] block=${blockHeader.number} tx=${stx.hash.toHex} " +
+        s"create=$isCreate gasLimit=$gasLimit intrinsic=$intrinsicGas " +
+        s"vmGasRemaining=${result.gasRemaining} vmError=${result.error} " +
+        s"refund=${result.gasRefund} returnDataLen=${result.returnData.size} " +
+        s"gasToRefundBase=$totalGasToRefundBase executionGas=$executionGasBase")
+    }
+
     // EIP-7623: Floor calldata gas — ensure gas charged is at least the floor data cost
     val isOlympiaActivated = blockHeader.number >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
     val executionGasToPayToMiner = if (isOlympiaActivated) {

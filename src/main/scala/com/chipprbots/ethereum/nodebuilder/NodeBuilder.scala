@@ -931,6 +931,7 @@ trait GenesisDataLoaderBuilder {
     new GenesisDataLoader(
       blockchainReader,
       blockchainWriter,
+      storagesInstance.storages.evmCodeStorage,
       storagesInstance.storages.stateStorage
     )
 

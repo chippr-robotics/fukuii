@@ -107,6 +107,9 @@ FLAGS="$FLAGS -Dfukuii.network.discovery.port=30303"
 # Chain import
 [ -f "/chain.rlp" ] && FLAGS="$FLAGS -Dfukuii.import-chain-file=/chain.rlp"
 
+# Trace block 2 EVM execution
+FLAGS="$FLAGS -Dfukuii.trace.block=2"
+
 # Bootnode
 [ -n "$HIVE_BOOTNODE" ] && FLAGS="$FLAGS -Dfukuii.network.peer.bootstrap-nodes.0=$HIVE_BOOTNODE"
 

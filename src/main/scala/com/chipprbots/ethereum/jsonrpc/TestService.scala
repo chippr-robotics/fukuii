@@ -191,7 +191,7 @@ class TestService(
     Try(blockchain.removeBlock(blockchainReader.genesisHeader.hash))
 
     // load the new genesis
-    val genesisDataLoader = new GenesisDataLoader(blockchainReader, blockchainWriter, stateStorage)
+    val genesisDataLoader = new GenesisDataLoader(blockchainReader, blockchainWriter, evmCodeStorage, stateStorage)
     genesisDataLoader.loadGenesisData(genesisData)
 
     // save account codes to world state

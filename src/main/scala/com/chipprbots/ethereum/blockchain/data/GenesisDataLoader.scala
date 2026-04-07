@@ -40,6 +40,7 @@ import com.chipprbots.ethereum.utils.Logger
 class GenesisDataLoader(
     blockchainReader: BlockchainReader,
     blockchainWriter: BlockchainWriter,
+    evmCodeStorage: com.chipprbots.ethereum.db.storage.EvmCodeStorage,
     stateStorage: StateStorage
 ) extends Logger {
 
@@ -142,6 +143,12 @@ class GenesisDataLoader(
       val mpt = MerklePatriciaTrie[Array[Byte], Account](rootHash, storage)
       val cleanAddress = if (address.startsWith("0x") || address.startsWith("0X")) address.substring(2) else address
       val paddedAddress = cleanAddress.reverse.padTo(addressLength, "0").reverse.mkString
+
+      // Store contract code in EVM code storage if present
+      genesisAccount.code.foreach { code =>
+        val codeHash = ByteString(crypto.kec256(code))
+        evmCodeStorage.put(codeHash, code).commit()
+      }
 
       val stateRoot = mpt
         .put(

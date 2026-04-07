@@ -172,6 +172,10 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
         log.trace(
           s"$opCode | pc: $pc | depth: ${env.callDepth} | gasUsed: ${state.gas - gas} | gas: $gas | stack: $stack"
         )
+        // Opcode-level tracing for targeted debugging
+        if (DebugTrace.enabledForBlock(state.env.blockHeader.number) && state.env.callDepth == 0) {
+          System.err.println(s"[EVM] pc=${state.pc} op=$opCode gas=${state.gas} -> gasAfter=$gas depth=${env.callDepth}")
+        }
         if (newState.halted)
           newState
         else
