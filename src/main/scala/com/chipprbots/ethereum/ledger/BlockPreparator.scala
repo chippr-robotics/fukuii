@@ -310,8 +310,14 @@ class BlockPreparator(
     val totalGasToRefund = gasLimit - executionGasToPayToMiner
 
     val refundGasFn = pay(senderAddress, (totalGasToRefund * gasPrice).toUInt256, withTouch = false) _
+    // EIP-1559: miner receives only the priority fee (effectiveGasPrice - baseFee).
+    // The baseFee portion is burned on ETH chains, or credited to treasury on ETC (ECIP-1111).
+    val minerGasPrice = blockHeader.baseFee match {
+      case Some(baseFee) => UInt256(gasPrice.toBigInt - baseFee)
+      case None => gasPrice
+    }
     val payMinerForGasFn =
-      pay(Address(blockHeader.beneficiary), (executionGasToPayToMiner * gasPrice).toUInt256, withTouch = true) _
+      pay(Address(blockHeader.beneficiary), (executionGasToPayToMiner * minerGasPrice).toUInt256, withTouch = true) _
 
     val worldAfterPayments = refundGasFn.andThen(payMinerForGasFn)(resultWithErrorHandling.world)
 
