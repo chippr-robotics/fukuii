@@ -207,7 +207,18 @@ class EthInfoService(
 
   def call(req: CallRequest): ServiceResponse[CallResponse] =
     IO {
-      doCall(req)(stxLedger.simulateTransaction).map(r => CallResponse(r.vmReturnData))
+      doCall(req)(stxLedger.simulateTransaction).flatMap { r =>
+        r.vmError match {
+          case Some(com.chipprbots.ethereum.vm.RevertOccurs) =>
+            val dataHex = "0x" + org.bouncycastle.util.encoders.Hex.toHexString(r.vmReturnData.toArray[Byte])
+            Left(JsonRpcError(3, "execution reverted", Some(org.json4s.JString(dataHex))))
+          case Some(_) =>
+            // Other VM errors (out of gas, etc) — return empty result
+            Right(CallResponse(r.vmReturnData))
+          case None =>
+            Right(CallResponse(r.vmReturnData))
+        }
+      }
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
     }
