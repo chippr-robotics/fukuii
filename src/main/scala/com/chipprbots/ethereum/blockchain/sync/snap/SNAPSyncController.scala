@@ -142,6 +142,9 @@ class SNAPSyncController(
   private var trieWalkStartedAtMs: Long = 0L
   private var healingNodesAbandoned: Int = 0 // set from StateHealingComplete; drives pre-walk skip check
   private var healingNodesTotal: Int = 0     // total nodes healed (0 = healing was a no-op)
+  // BUG-WS3: WALK-SKIP must not fire until a walk has completed in this healing session.
+  // Both healing entry points reset this to false; TrieWalkResult sets it to true.
+  private var healingWalkRunThisSession: Boolean = false
 
   // Proof-seeding buffer: interior trie node hashes discovered from boundary proofs during
   // account download. Flushed to the healing coordinator at healing start so it begins with
@@ -737,6 +740,7 @@ class SNAPSyncController(
 
     case TrieWalkResult(missingNodes) if currentPhase == StateHealing =>
       trieWalkInProgress = false
+      healingWalkRunThisSession = true // BUG-WS3: walk ran — WALK-SKIP is now safe
       // OPT-W1: merge partial nodes from previous interrupted walk into final result
       val allMissingNodes = walkResumedNodes ++ missingNodes
       if (walkResumedNodes.nonEmpty)
@@ -2317,7 +2321,7 @@ class SNAPSyncController(
       try { stateStorage.getReadOnlyStorage.get(r.toArray); true }
       catch { case _: Exception => false }
     }
-    if (!snapSyncConfig.requireValidationWalk && healingNodesAbandoned == 0 && healingNodesTotal == 0 && rootInDb) {
+    if (!snapSyncConfig.requireValidationWalk && healingNodesAbandoned == 0 && healingNodesTotal == 0 && rootInDb && healingWalkRunThisSession) {
       log.info("=" * 60)
       log.info("PHASE: Trie Healing → State Validation Walk")
       log.info("=" * 60)
@@ -2420,6 +2424,7 @@ class SNAPSyncController(
     }
 
     trieWalkInProgress = false // Reset for fresh healing phase
+    healingWalkRunThisSession = false // BUG-WS3: no walk has run yet this session
     log.info(s"Starting state healing with batch size ${snapSyncConfig.healingBatchSize}")
 
     stateRoot.foreach { root =>
@@ -2489,6 +2494,7 @@ class SNAPSyncController(
     }
 
     trieWalkInProgress = false
+    healingWalkRunThisSession = false // BUG-WS3: no walk has run yet this session
 
     stateRoot match {
       case None =>
