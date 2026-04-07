@@ -57,7 +57,8 @@ case class TransactionReceiptResponse(
     `type`: Option[BigInt] = None,
     effectiveGasPrice: Option[BigInt] = None,
     blobGasUsed: Option[BigInt] = None,
-    blobGasPrice: Option[BigInt] = None
+    blobGasPrice: Option[BigInt] = None,
+    blockTimestamp: Option[BigInt] = None
 )
 
 object TransactionReceiptResponse {
@@ -130,7 +131,8 @@ object TransactionReceiptResponse {
       `type` = Some(txType),
       effectiveGasPrice = Some(effectiveGasPrice),
       blobGasUsed = blobGasUsed,
-      blobGasPrice = blockHeader.excessBlobGas.map(_ => BigInt(1)) // TODO: proper blob base fee calculation
+      blobGasPrice = blockHeader.excessBlobGas.map(_ => BigInt(1)), // TODO: proper blob base fee calculation
+      blockTimestamp = Some(BigInt(blockHeader.unixTimestamp))
     )
   }
 }

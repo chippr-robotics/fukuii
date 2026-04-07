@@ -42,7 +42,8 @@ final case class TransactionResponse(
     yParity: Option[BigInt],
     v: Option[BigInt],
     r: Option[BigInt],
-    s: Option[BigInt]
+    s: Option[BigInt],
+    blockTimestamp: Option[BigInt]
 ) extends BaseTransactionResponse
 
 final case class TransactionData(
@@ -99,10 +100,12 @@ object TransactionResponse {
       accessList = txAccessList,
       maxFeePerBlobGas = txMaxBlobFee,
       blobVersionedHashes = txBlobHashes,
-      yParity = Some(stx.signature.v),
+      // yParity only for typed transactions (type >= 1), not legacy
+      yParity = if (txType > 0) Some(stx.signature.v) else None,
       v = Some(stx.signature.v),
       r = Some(stx.signature.r),
-      s = Some(stx.signature.s)
+      s = Some(stx.signature.s),
+      blockTimestamp = blockHeader.map(h => BigInt(h.unixTimestamp))
     )
   }
 

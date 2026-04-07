@@ -24,7 +24,8 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
       "blockNumber" -> encodeAsHex(log.blockNumber),
       "address" -> encodeAsHex(log.address.bytes),
       "data" -> encodeAsHex(log.data),
-      "topics" -> JArray(log.topics.toList.map(encodeAsHex))
+      "topics" -> JArray(log.topics.toList.map(encodeAsHex)),
+      "removed" -> JBool(false)
     )
 
   // Custom serializers for json4s Extraction.decompose to work in tests
@@ -78,8 +79,10 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
     val blobGasUsedField = receipt.blobGasUsed.map(v => "blobGasUsed" -> encodeAsHex(v)).toList
     val blobGasPriceField = receipt.blobGasPrice.map(v => "blobGasPrice" -> encodeAsHex(v)).toList
 
+    val blockTimestampField = receipt.blockTimestamp.map(v => "blockTimestamp" -> encodeAsHex(v)).toList
+
     JObject(baseFields ::: toField ::: middleFields ::: rootField ::: statusField :::
-      typeField ::: effectiveGasPriceField ::: blobGasUsedField ::: blobGasPriceField)
+      typeField ::: effectiveGasPriceField ::: blobGasUsedField ::: blobGasPriceField ::: blockTimestampField)
   }
 
   implicit val transactionResponseJsonEncoder: JsonEncoder[TransactionResponse] = { tx =>
@@ -130,8 +133,10 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
       tx.s.map(v => "s" -> encodeAsHex(v))
     ).flatten
 
+    val blockTimestampField = tx.blockTimestamp.map(v => "blockTimestamp" -> encodeAsHex(v)).toList
+
     JObject(baseFields ::: typeField ::: chainIdField ::: maxFeeField ::: maxPriorityField :::
-      accessListField ::: maxBlobFeeField ::: blobHashesField ::: sigFields)
+      accessListField ::: maxBlobFeeField ::: blobHashesField ::: sigFields ::: blockTimestampField)
   }
 
   implicit val eth_gasPrice: NoParamsMethodDecoder[GetGasPriceRequest] with JsonEncoder[GetGasPriceResponse] =
