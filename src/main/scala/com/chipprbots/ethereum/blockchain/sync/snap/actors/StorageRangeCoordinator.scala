@@ -1516,16 +1516,10 @@ class StorageRangeCoordinator(
   /** Update contract completion counts and send progress to controller. */
   private def updateContractProgress(): Unit = {
     if (totalStorageContracts <= 0) return
-    // Count unique completed accounts from completedTasks
-    val uniqueCompleted = completedTasks.map(_.accountHash).toSet.size
-    if (uniqueCompleted != completedAccountHashes.size) {
-      completedAccountHashes.clear()
-      completedTasks.foreach(t => completedAccountHashes.add(t.accountHash))
-      snapSyncController ! SNAPSyncController.ProgressStorageContracts(
-        completedAccountHashes.size,
-        totalStorageContracts
-      )
-    }
+    snapSyncController ! SNAPSyncController.ProgressStorageContracts(
+      completedAccountHashes.size,
+      totalStorageContracts
+    )
   }
 
   private def isPeerCoolingDown(peer: Peer): Boolean =
