@@ -119,13 +119,11 @@ class RegularSync(
       val lastImport = appStateStorage.getLastBlockImportTime()
       if (lastImport > 0) {
         val gapMs = System.currentTimeMillis() - lastImport
+        val gapMin = f"${gapMs / 60000.0}%.1f"
         if (gapMs > 600_000L)
-          log.warning(
-            "[REGULAR-RECOVERY] Last block import was {:.1f} min ago — possible prior stagnation or crash",
-            gapMs / 60000.0
-          )
+          log.warning(s"[REGULAR-RECOVERY] Last block import was $gapMin min ago — possible prior stagnation or crash")
         else
-          log.info("[REGULAR-RECOVERY] Last block import was {:.1f} min ago", gapMs / 60000.0)
+          log.info(s"[REGULAR-RECOVERY] Last block import was $gapMin min ago")
       }
       importer ! BlockImporter.Start
     case SyncProtocol.MinedBlock(block) =>

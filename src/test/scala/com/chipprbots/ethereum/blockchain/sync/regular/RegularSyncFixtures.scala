@@ -32,6 +32,8 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.blockchain.sync._
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
+import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits._
 import com.chipprbots.ethereum.domain._
@@ -99,7 +101,8 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
           ommersPool.ref,
           pendingTransactionsManager.ref,
           system.scheduler,
-          this
+          this,
+          appStateStorage = new AppStateStorage(EphemDataSource())
         )
         .withDispatcher("pekko.actor.default-dispatcher")
     )
