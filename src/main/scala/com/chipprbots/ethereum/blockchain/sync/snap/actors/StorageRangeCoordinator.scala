@@ -695,18 +695,11 @@ class StorageRangeCoordinator(
       sender() ! CompletedStorageFilePath(completedAccountsFile)
 
     case AddStorageTasks(storageTasks) =>
-      val newTasks = storageTasks.filterNot(t => completedAccountHashes.contains(t.accountHash))
-      val skipped = storageTasks.size - newTasks.size
-      tasks.enqueueAll(newTasks)
-      totalStorageContracts += newTasks.map(_.accountHash).distinct.size
-      if (skipped > 0)
-        log.info(
-          s"Added ${newTasks.size} storage tasks to queue ($skipped skipped — already completed, total pending: ${tasks.size}, contracts: $totalStorageContracts)"
-        )
-      else
-        log.info(
-          s"Added ${newTasks.size} storage tasks to queue (total pending: ${tasks.size}, contracts: $totalStorageContracts)"
-        )
+      tasks.enqueueAll(storageTasks)
+      totalStorageContracts += storageTasks.map(_.accountHash).distinct.size
+      log.info(
+        s"Added ${storageTasks.size} storage tasks to queue (total pending: ${tasks.size}, contracts: $totalStorageContracts)"
+      )
 
     case AddStorageTask(task) =>
       tasks.enqueue(task)
