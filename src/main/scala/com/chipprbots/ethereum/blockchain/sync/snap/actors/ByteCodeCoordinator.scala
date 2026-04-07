@@ -77,7 +77,7 @@ class ByteCodeCoordinator(
     val failures = peerFailureCounts.getOrElse(peer.id, 0) + 1
     peerFailureCounts.update(peer.id, failures)
 
-    if (failures >= cooldownConfig.bytecodeIncapableThreshold && !bytecodeIncapablePeers.contains(peer.id)) {
+    if (failures >= cooldownConfig.bytecodeIncapableThreshold && !bytecodeIncapablePeers.contains(peer.id) && !peer.isStatic) {
       bytecodeIncapablePeers += peer.id
       log.warning(
         s"Peer ${peer.id.value} permanently excluded from bytecode dispatch " +
@@ -212,14 +212,20 @@ class ByteCodeCoordinator(
       checkCompletion()
 
     case ByteCodePivotRefreshed =>
-      // Retain failure state for permanently excluded peers; clear transient failures for everyone else.
-      // bytecodeIncapablePeers is NEVER cleared — peers that can't serve bytecodes stay excluded
-      // for the duration of the session regardless of pivot changes.
-      peerFailureCounts.filterInPlace { case (id, _) => bytecodeIncapablePeers.contains(id) }
+      // Clear cooldowns so peers can be dispatched with the new pivot root.
+      // Do NOT clear failure counts — peers that consistently timeout must accumulate to
+      // bytecodeIncapableThreshold regardless of pivot changes. Good peers that successfully
+      // serve bytecodes have their counts reset via clearPeerFailures() on each success.
+      // Static peers (core-geth, besu) are additionally protected by the !peer.isStatic guard
+      // in recordPeerCooldown and can never be permanently excluded.
       peerCooldownUntilMillis.filterInPlace { case (id, _) => bytecodeIncapablePeers.contains(id) }
       peerResponseBytesTarget.clear()
       knownAvailablePeers.clear()
-      log.info(s"Pivot refreshed — cleared peer state (${bytecodeIncapablePeers.size} peer(s) permanently excluded)")
+      log.info(
+        s"Pivot refreshed — cleared cooldowns " +
+          s"(${bytecodeIncapablePeers.size} permanently excluded, " +
+          s"${peerFailureCounts.count(_._2 > 0)} with active failure counts)"
+      )
 
     case PeerAvailable(peer) =>
       val evicted0 = knownAvailablePeers.filter(_.remoteAddress == peer.remoteAddress)
