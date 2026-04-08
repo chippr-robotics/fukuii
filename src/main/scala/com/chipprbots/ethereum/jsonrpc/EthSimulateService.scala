@@ -97,7 +97,7 @@ object EthSimulateService {
       receipts: Seq[Receipt]
   )
 
-  case class EthSimulateResponse(blocks: Seq[SimulateBlockResult])
+  case class EthSimulateResponse(blocks: Seq[SimulateBlockResult], returnFullTransactions: Boolean = false)
 
   // Empty trie root = keccak256(RLP("")) = keccak256(0x80)
   val EmptyTrieRoot: ByteString = ByteString(kec256(rlp.encode(rlp.RLPValue(Array.empty[Byte]))))
@@ -236,7 +236,7 @@ class EthSimulateService(
       parentHeader = finalHeader
     }
 
-    Right(EthSimulateResponse(blockResults.toSeq))
+    Right(EthSimulateResponse(blockResults.toSeq, req.returnFullTransactions))
   }
 
   private def validateBlockOrdering(
@@ -279,7 +279,7 @@ class EthSimulateService(
     val prevRandao = ov.prevRandao.getOrElse(ByteString(new Array[Byte](32)))
     val baseFee = ov.baseFeePerGas.getOrElse(
       if (!validation) BigInt(0)
-      else parentHeader.baseFee.getOrElse(BigInt(0))
+      else computeNextBaseFee(parentHeader)
     )
     val parentBeaconBlockRoot = ByteString(new Array[Byte](32)) // Zero for simulated blocks
 
@@ -632,6 +632,27 @@ class EthSimulateService(
     val storage = w1.getStorage(HistoryStorageAddress)
     val updatedStorage = storage.store(slot, parentHashValue.toBigInt)
     w1.saveStorage(HistoryStorageAddress, updatedStorage)
+  }
+
+  /** EIP-1559: Compute the base fee for the next block */
+  private def computeNextBaseFee(parentHeader: BlockHeader): BigInt = {
+    val parentBaseFee = parentHeader.baseFee.getOrElse(BigInt(0))
+    if (parentBaseFee == 0) return BigInt(0)
+    val elasticityMultiplier = 2
+    val baseFeeChangeDenominator = 8
+    val parentGasTarget = parentHeader.gasLimit / elasticityMultiplier
+    if (parentGasTarget == 0) return parentBaseFee
+    if (parentHeader.gasUsed == parentGasTarget) {
+      parentBaseFee
+    } else if (parentHeader.gasUsed > parentGasTarget) {
+      val gasUsedDelta = parentHeader.gasUsed - parentGasTarget
+      val baseFeePerGasDelta = (parentBaseFee * gasUsedDelta / parentGasTarget / baseFeeChangeDenominator).max(1)
+      parentBaseFee + baseFeePerGasDelta
+    } else {
+      val gasUsedDelta = parentGasTarget - parentHeader.gasUsed
+      val baseFeePerGasDelta = parentBaseFee * gasUsedDelta / parentGasTarget / baseFeeChangeDenominator
+      (parentBaseFee - baseFeePerGasDelta).max(0)
+    }
   }
 
   private def computeTransactionsRoot(txs: Seq[SignedTransaction]): ByteString = {

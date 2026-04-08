@@ -163,10 +163,10 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits {
 
       // --- Encoder ---
       override def encodeJson(t: EthSimulateResponse): JValue = {
-        JArray(t.blocks.map(encodeSimulatedBlock).toList)
+        JArray(t.blocks.map(b => encodeSimulatedBlock(b, t.returnFullTransactions)).toList)
       }
 
-      private def encodeSimulatedBlock(block: SimulateBlockResult): JValue = {
+      private def encodeSimulatedBlock(block: SimulateBlockResult, returnFullTxs: Boolean): JValue = {
         val h = block.header
         val blockHash = h.hash
 
@@ -199,13 +199,70 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits {
           "withdrawalsRoot" -> encodeAsHex(h.withdrawalsRoot.getOrElse(EthSimulateService.EmptyWithdrawalsRoot))
         )
 
-        // Transactions: just hashes (returnFullTransactions handled later)
-        val txField = "transactions" -> JArray(block.transactions.map(tx => encodeAsHex(tx.hash)).toList)
+        // Transactions: hashes or full objects depending on returnFullTransactions flag
+        val txField = if (returnFullTxs) {
+          "transactions" -> JArray(block.transactions.zipWithIndex.map { case (tx, idx) =>
+            encodeSimulatedTxFull(tx, idx, h)
+          }.toList)
+        } else {
+          "transactions" -> JArray(block.transactions.map(tx => encodeAsHex(tx.hash)).toList)
+        }
 
         // Per-call results
         val callsField = "calls" -> JArray(block.calls.map(encodeCallResult(_, blockHash, h)).toList)
 
         JObject(headerFields :+ txField :+ callsField)
+      }
+
+      private def encodeSimulatedTxFull(stx: com.chipprbots.ethereum.domain.SignedTransaction, txIdx: Int, header: com.chipprbots.ethereum.domain.BlockHeader): JValue = {
+        val tx = stx.tx
+        val blockHash = header.hash
+        val txType = tx match {
+          case _: com.chipprbots.ethereum.domain.LegacyTransaction => BigInt(0)
+          case _: com.chipprbots.ethereum.domain.TransactionWithAccessList => BigInt(1)
+          case _: com.chipprbots.ethereum.domain.TransactionWithDynamicFee => BigInt(2)
+          case _: com.chipprbots.ethereum.domain.BlobTransaction => BigInt(3)
+          case _: com.chipprbots.ethereum.domain.SetCodeTransaction => BigInt(4)
+        }
+        val chainId = tx match {
+          case t: com.chipprbots.ethereum.domain.TransactionWithDynamicFee => Some(t.chainId)
+          case t: com.chipprbots.ethereum.domain.TransactionWithAccessList => Some(t.chainId)
+          case _ => None
+        }
+        implicit val bcConfig: com.chipprbots.ethereum.utils.BlockchainConfig = com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
+        val sender = com.chipprbots.ethereum.domain.SignedTransaction.getSender(stx)
+          .map(_.bytes).getOrElse(ByteString(new Array[Byte](20)))
+        val baseFields = List(
+          "blockHash" -> encodeAsHex(blockHash),
+          "blockNumber" -> encodeAsHex(header.number),
+          "blockTimestamp" -> encodeAsHex(BigInt(header.unixTimestamp)),
+          "from" -> encodeAsHex(sender),
+          "gas" -> encodeAsHex(tx.gasLimit),
+          "gasPrice" -> encodeAsHex(tx.gasPrice),
+          "hash" -> encodeAsHex(stx.hash),
+          "input" -> encodeAsHex(tx.payload),
+          "nonce" -> encodeAsHex(tx.nonce),
+          "to" -> tx.receivingAddress.map(a => encodeAsHex(a.bytes)).getOrElse(JNull),
+          "transactionIndex" -> encodeAsHex(BigInt(txIdx)),
+          "type" -> encodeAsHex(txType),
+          "value" -> encodeAsHex(tx.value),
+          "v" -> encodeAsHex(BigInt(0)),
+          "r" -> encodeAsHex(BigInt(0)),
+          "s" -> encodeAsHex(BigInt(0)),
+          "yParity" -> encodeAsHex(BigInt(0))
+        )
+        val chainIdField = chainId.map(c => "chainId" -> encodeAsHex(c)).toList
+        val maxFeeFields = tx match {
+          case t: com.chipprbots.ethereum.domain.TransactionWithDynamicFee =>
+            List("maxFeePerGas" -> encodeAsHex(t.maxFeePerGas), "maxPriorityFeePerGas" -> encodeAsHex(t.maxPriorityFeePerGas))
+          case _ => Nil
+        }
+        val accessListField = tx match {
+          case t: com.chipprbots.ethereum.domain.TransactionWithDynamicFee => List("accessList" -> JArray(Nil))
+          case t: com.chipprbots.ethereum.domain.TransactionWithAccessList => List("accessList" -> JArray(Nil))
+          case _ => Nil
+        }
+        JObject(baseFields ::: chainIdField ::: maxFeeFields ::: accessListField)
       }
 
       private def encodeCallResult(cr: SimulateCallResult, blockHash: ByteString, header: BlockHeader): JValue = {
