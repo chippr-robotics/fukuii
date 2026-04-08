@@ -34,13 +34,16 @@ object EvmConfig {
     // Apply timestamp-based fork upgrades for ETH chains
     if (blockchainConfig.isShanghaiTimestamp(timestamp)) {
       config = config.copy(
-        eip3651Enabled = true,  // Warm COINBASE
-        eip3860Enabled = true   // Initcode metering
+        opCodeList = SpiralOpCodes,  // Adds PUSH0 (EIP-3855)
+        eip3651Enabled = true,       // Warm COINBASE
+        eip3860Enabled = true        // Initcode metering
       )
     }
     if (blockchainConfig.isCancunTimestamp(timestamp)) {
       config = config.copy(
-        eip6780Enabled = true   // SELFDESTRUCT restriction
+        opCodeList = OlympiaOpCodes,  // Adds TSTORE/TLOAD/MCOPY/BLOBHASH/BLOBBASEFEE
+        feeSchedule = new FeeSchedule.OlympiaFeeSchedule,
+        eip6780Enabled = true         // SELFDESTRUCT restriction
       )
     }
     config
