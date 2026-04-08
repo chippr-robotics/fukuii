@@ -105,8 +105,8 @@ class EthFilterService(
     val fromNum = fromBlock.collect { case BlockParam.WithNumber(n) => n }.getOrElse(BigInt(0))
     val toNum = toBlock.collect { case BlockParam.WithNumber(n) => n }.getOrElse(bestBlockNum)
 
-    // Validate: fromBlock must not exceed current head
-    if (fromNum > bestBlockNum) {
+    // Validate: block range must not exceed current head
+    if (fromNum > bestBlockNum || toNum > bestBlockNum) {
       return cats.effect.IO.pure(Left(JsonRpcError.InvalidParams(
         "block range extends beyond current head block")))
     }

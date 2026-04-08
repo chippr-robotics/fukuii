@@ -255,7 +255,18 @@ class EthInfoService(
 
   def estimateGas(req: CallRequest): ServiceResponse[EstimateGasResponse] =
     IO {
-      doCall(req)(stxLedger.binarySearchGasEstimation).map(gasUsed => EstimateGasResponse(gasUsed))
+      // First check if the tx reverts at the max gas limit
+      val simCheck = doCall(req)(stxLedger.simulateTransaction)
+      simCheck.flatMap { r =>
+        r.vmError match {
+          case Some(com.chipprbots.ethereum.vm.RevertOccurs) =>
+            val dataHex = "0x" + org.bouncycastle.util.encoders.Hex.toHexString(r.vmReturnData.toArray[Byte])
+            Left(JsonRpcError(3, "execution reverted", Some(org.json4s.JString(dataHex))))
+          case _ =>
+            // Tx doesn't revert — find minimum gas via binary search
+            doCall(req)(stxLedger.binarySearchGasEstimation).map(gas => EstimateGasResponse(gas))
+        }
+      }
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
     }
