@@ -45,7 +45,10 @@ object EthUserJsonMethodsImplicits extends JsonMethodsImplicits {
       def decodeJson(params: Option[JArray]): Either[JsonRpcError, GetStorageAtRequest] =
         params match {
           case Some(JArray((addressStr: JString) :: (positionStr: JString) :: (blockValue: JValue) :: Nil)) =>
-            for {
+            val keyHex = positionStr.s.stripPrefix("0x").stripPrefix("0X")
+            if (keyHex.length > 64)
+              Left(InvalidParams(s"""storage key too long (want at most 32 bytes): "${positionStr.s}""""))
+            else for {
               address <- extractAddress(addressStr)
               position <- extractQuantity(positionStr)
               block <- extractBlockParam(blockValue)

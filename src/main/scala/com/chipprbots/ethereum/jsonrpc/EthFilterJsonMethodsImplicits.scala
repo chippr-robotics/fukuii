@@ -160,6 +160,11 @@ object EthFilterJsonMethodsImplicits extends JsonMethodsImplicits {
       toBlock <- toEitherOpt(optionalBlockParam("toBlock"))
       address <- toEitherOpt((obj \ "address").extractOpt[String].map(extractAddress))
       topics <- topicsEither
-    } yield Filter(fromBlock = fromBlock, toBlock = toBlock, address = address, topics = topics)
+    } yield {
+      val blockHash = (obj \ "blockHash").extractOpt[String].flatMap(s =>
+        scala.util.Try(org.apache.pekko.util.ByteString(org.bouncycastle.util.encoders.Hex.decode(
+          s.stripPrefix("0x")))).toOption)
+      Filter(fromBlock = fromBlock, toBlock = toBlock, address = address, topics = topics, blockHash = blockHash)
+    }
   }
 }

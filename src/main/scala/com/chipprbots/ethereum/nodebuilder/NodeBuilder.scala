@@ -559,11 +559,12 @@ trait EthUserServiceBuilder {
 }
 
 trait EthFilterServiceBuilder {
-  self: FilterManagerBuilder with FilterConfigBuilder =>
+  self: FilterManagerBuilder with FilterConfigBuilder with BlockchainBuilder =>
 
   lazy val ethFilterService = new EthFilterService(
     filterManager,
-    filterConfig
+    filterConfig,
+    blockchainReader
   )
 }
 
