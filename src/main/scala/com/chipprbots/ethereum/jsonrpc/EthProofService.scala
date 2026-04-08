@@ -56,7 +56,8 @@ object ProofService {
       }
 
     def asRlpSerializedNode(node: MptNode): ByteString =
-      ByteString(MptTraversals.encodeNode(node))
+      // Use cached RLP encoding if available (preserves original storage bytes)
+      node.cachedRlpEncoded.map(ByteString(_)).getOrElse(ByteString(MptTraversals.encodeNode(node)))
   }
 
   /** Object proving a relationship of a storage value to an account's storageHash
