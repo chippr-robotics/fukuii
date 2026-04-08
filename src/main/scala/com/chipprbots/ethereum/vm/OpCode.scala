@@ -1003,7 +1003,8 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
       originalWorld = state.originalWorld,
       warmAddresses = state.accessedAddresses,
       warmStorage = state.accessedStorageKeys,
-      transientStorage = state.transientStorage
+      transientStorage = state.transientStorage,
+      precompileRelocations = state.env.precompileRelocations
     )
 
     val ((result, newAddress), stack2) = this match {
@@ -1136,7 +1137,8 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
       originalWorld = state.originalWorld,
       warmAddresses = stateWithDelegationWarming.accessedAddresses,
       warmStorage = state.accessedStorageKeys,
-      transientStorage = state.transientStorage
+      transientStorage = state.transientStorage,
+      precompileRelocations = state.env.precompileRelocations
     )
 
     val result = state.vm.call(context, owner)

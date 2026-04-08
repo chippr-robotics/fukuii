@@ -104,5 +104,6 @@ case class ProgramContext[W <: WorldStateProxy[W, S], S <: Storage[S]](
     originalWorld: W,
     warmAddresses: Set[Address],
     warmStorage: Set[(Address, BigInt)],
-    transientStorage: Map[(Address, BigInt), BigInt] = Map.empty
+    transientStorage: Map[(Address, BigInt), BigInt] = Map.empty,
+    precompileRelocations: Map[Address, Address] = Map.empty
 )

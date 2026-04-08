@@ -21,7 +21,8 @@ object ExecEnv {
       blockHeader,
       callDepth,
       startGas,
-      evmConfig
+      evmConfig,
+      context.precompileRelocations
     )
   }
 }
@@ -61,5 +62,6 @@ case class ExecEnv(
     blockHeader: BlockHeader,
     callDepth: Int,
     startGas: BigInt,
-    evmConfig: EvmConfig
+    evmConfig: EvmConfig,
+    precompileRelocations: Map[Address, Address] = Map.empty
 )

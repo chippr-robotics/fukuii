@@ -91,8 +91,25 @@ object PrecompiledContracts {
 
   private def getContract(context: ProgramContext[_, _]): Option[PrecompiledContract] =
     context.recipientAddr.flatMap { addr =>
-      getContracts(context).get(addr)
+      val baseContracts = getContracts(context)
+      val relocations = context.precompileRelocations
+      if (relocations.isEmpty) {
+        baseContracts.get(addr)
+      } else {
+        // If this address was a precompile source (moved away), it's no longer a precompile
+        if (relocations.contains(addr)) return None
+        // Check if this address is a relocation target
+        val reverseMap = relocations.map(_.swap)
+        reverseMap.get(addr) match {
+          case Some(originalAddr) => baseContracts.get(originalAddr) // Precompile relocated here
+          case None => baseContracts.get(addr) // Normal precompile check
+        }
+      }
     }
+
+  /** Check if an address is a known precompile address (without relocation) */
+  def isPrecompileAddress(addr: Address, context: ProgramContext[_, _]): Boolean =
+    getContracts(context).contains(addr)
 
   def getContracts(context: ProgramContext[_, _]): Map[Address, PrecompiledContract] = {
     val ethFork = context.evmConfig.blockchainConfig.ethForkForBlockNumber(context.blockHeader.number)

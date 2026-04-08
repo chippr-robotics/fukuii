@@ -187,14 +187,20 @@ class EthSimulateService(
         world = applyEip2935(simHeader, world)
       }
 
-      // Apply state overrides
+      // Apply state overrides and build precompile relocations
+      var precompileRelocations = Map.empty[Address, Address]
       blockStateCall.stateOverrides.foreach { overrides =>
-        world = applyStateOverrides(world, overrides)
+        applyStateOverrides(world, overrides, precompileRelocations) match {
+          case Right((newWorld, newRelocations)) =>
+            world = newWorld
+            precompileRelocations = newRelocations
+          case Left(err) => return Left(err)
+        }
       }
 
       // Execute calls
       val calls = blockStateCall.calls.getOrElse(Seq.empty)
-      val execResult = executeCalls(calls, simHeader, world, req.validation, req.traceTransfers, nonceMap)
+      val execResult = executeCalls(calls, simHeader, world, req.validation, req.traceTransfers, nonceMap, precompileRelocations)
       execResult match {
         case Left(err) => return Left(err)
         case _ =>
@@ -314,31 +320,47 @@ class EthSimulateService(
 
   private def applyStateOverrides(
       world: InMemoryWorldStateProxy,
-      overrides: Map[Address, StateOverride]
-  ): InMemoryWorldStateProxy = {
+      overrides: Map[Address, StateOverride],
+      existingRelocations: Map[Address, Address]
+  ): Either[JsonRpcError, (InMemoryWorldStateProxy, Map[Address, Address])] = {
     var w = world
+    var relocations = existingRelocations
+
+    // First pass: validate movePrecompileToAddress
     for ((address, ov) <- overrides) {
-      // Get or create account
+      ov.movePrecompileToAddress.foreach { targetAddr =>
+        // Check: source must be a known precompile
+        val evmConfig = EvmConfig.forBlock(BigInt(1000000000), Long.MaxValue, blockchainConfig)
+        val allPrecompiles = Set(
+          Address(1), Address(2), Address(3), Address(4), Address(5),
+          Address(6), Address(7), Address(8), Address(9),
+          Address(0x0b), Address(0x0c), Address(0x0d), Address(0x0e),
+          Address(0x0f), Address(0x10), Address(0x11), Address(0x100)
+        )
+        if (!allPrecompiles.contains(address)) {
+          return Left(JsonRpcError.LogicError(
+            s"account ${address.toString} is not a precompile"))
+        }
+        relocations = relocations + (address -> targetAddr)
+      }
+    }
+
+    // Second pass: apply overrides
+    for ((address, ov) <- overrides) {
       var account = w.getAccount(address).getOrElse(Account.empty(blockchainConfig.accountStartNonce))
 
-      // Apply balance override
       ov.balance.foreach(bal => account = account.copy(balance = UInt256(bal)))
-
-      // Apply nonce override
       ov.nonce.foreach(n => account = account.copy(nonce = UInt256(n)))
 
       w = w.saveAccount(address, account)
 
-      // Apply code override
       ov.code.foreach { code =>
         w = w.saveCode(address, code)
       }
 
-      // Apply state override (full replacement)
       ov.state.foreach { slots =>
-        // Clear existing storage by creating fresh storage
         val storage = w.getStorage(address)
-        val cleared = storage.store(UInt256.Zero.toBigInt, BigInt(0)) // trigger fresh storage
+        val cleared = storage.store(UInt256.Zero.toBigInt, BigInt(0))
         var s = cleared
         for ((key, value) <- slots) {
           s = s.store(key, value)
@@ -346,7 +368,6 @@ class EthSimulateService(
         w = w.saveStorage(address, s)
       }
 
-      // Apply stateDiff (partial update)
       ov.stateDiff.foreach { slots =>
         val storage = w.getStorage(address)
         var s = storage
@@ -355,10 +376,8 @@ class EthSimulateService(
         }
         w = w.saveStorage(address, s)
       }
-
-      // movePrecompileToAddress is handled separately (advanced feature)
     }
-    w
+    Right((w, relocations))
   }
 
   private def executeCalls(
@@ -367,7 +386,8 @@ class EthSimulateService(
       initialWorld: InMemoryWorldStateProxy,
       validation: Boolean,
       traceTransfers: Boolean,
-      nonceMap: mutable.Map[Address, BigInt]
+      nonceMap: mutable.Map[Address, BigInt],
+      precompileRelocations: Map[Address, Address] = Map.empty
   ): Either[JsonRpcError, (InMemoryWorldStateProxy, Seq[SimulateCallResult], Seq[SignedTransaction], Seq[Receipt], BigInt)] = {
     var world = initialWorld
     val callResults = mutable.ArrayBuffer[SimulateCallResult]()
@@ -490,7 +510,7 @@ class EthSimulateService(
 
       // Execute transaction
       val TxResult(newWorld, gasUsed, logs, returnData, vmError) =
-        blockPreparator.executeTransactionForSimulation(stx, sender, blockHeader, world)
+        blockPreparator.executeTransactionForSimulation(stx, sender, blockHeader, world, precompileRelocations)
 
       world = newWorld
 

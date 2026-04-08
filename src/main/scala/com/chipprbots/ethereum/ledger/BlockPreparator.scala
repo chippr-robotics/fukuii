@@ -215,7 +215,10 @@ class BlockPreparator(
   )(implicit blockchainConfig: BlockchainConfig): PR = {
     val evmConfig = EvmConfig.forBlock(blockHeader.number, blockHeader.unixTimestamp, blockchainConfig)
     val context: PC = ProgramContext(stx, blockHeader, senderAddress, world, evmConfig)
-    vm.run(context)
+    // Apply precompile relocations if set (for eth_simulateV1)
+    val contextWithRelocations = if (_simulatePrecompileRelocations.nonEmpty)
+      context.copy(precompileRelocations = _simulatePrecompileRelocations) else context
+    vm.run(contextWithRelocations)
   }
 
   /** Calculate total gas to be refunded See YP, eq (72)
@@ -305,14 +308,24 @@ class BlockPreparator(
       .clearTouchedAccounts
   }
 
-  /** Public facade for eth_simulateV1 — delegates to the private executeTransaction */
+  /** Public facade for eth_simulateV1 — delegates to the private executeTransaction.
+    * Supports optional precompile relocations for movePrecompileToAddress.
+    */
   def executeTransactionForSimulation(
       stx: SignedTransaction,
       senderAddress: Address,
       blockHeader: BlockHeader,
-      world: InMemoryWorldStateProxy
-  )(implicit blockchainConfig: BlockchainConfig): TxResult =
-    executeTransaction(stx, senderAddress, blockHeader, world)
+      world: InMemoryWorldStateProxy,
+      precompileRelocations: Map[Address, Address] = Map.empty
+  )(implicit blockchainConfig: BlockchainConfig): TxResult = {
+    // Store relocations temporarily for runVM to pick up
+    _simulatePrecompileRelocations = precompileRelocations
+    try executeTransaction(stx, senderAddress, blockHeader, world)
+    finally _simulatePrecompileRelocations = Map.empty
+  }
+
+  // Thread-local-like storage for precompile relocations during simulation
+  @volatile private var _simulatePrecompileRelocations: Map[Address, Address] = Map.empty
 
   private[ledger] def executeTransaction(
       stx: SignedTransaction,
