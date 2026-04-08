@@ -386,8 +386,10 @@ class EthSimulateService(
         })
       }
 
-      // Build transaction
-      val gasLimit = call.gas.getOrElse(blockHeader.gasLimit - accumGas)
+      // Build transaction — default gas limit matches geth's simulate cap of 50M
+      val DefaultSimGasLimit = BigInt(50000000)
+      val remainingBlockGas = blockHeader.gasLimit - accumGas
+      val gasLimit = call.gas.getOrElse(remainingBlockGas.min(DefaultSimGasLimit))
       val value = call.value.getOrElse(BigInt(0))
       val payload = call.input.getOrElse(ByteString.empty)
       val toAddr = call.to
