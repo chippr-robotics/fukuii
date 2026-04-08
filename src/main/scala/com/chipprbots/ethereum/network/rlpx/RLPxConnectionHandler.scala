@@ -479,8 +479,12 @@ class RLPxConnectionHandler(
         cancellableAckTimeout: Option[CancellableAckTimeout] = None,
         seqNumber: Int = 0
     ): Unit =
-      extractor.readHello(data) match {
-        case Some((hello, restFrames)) =>
+      Try(extractor.readHello(data)) match {
+        case Failure(err) =>
+          log.warning("[RLPx] Malformed Hello from peer {}: {} — disconnecting", peerId, err.getMessage)
+          context.parent ! ConnectionFailed
+          gracefulStop()
+        case Success(Some((hello, restFrames))) =>
           log.debug(
             "[RLPx] Extracted Hello message from peer {}, protocol version: {}, capabilities: {}",
             peerId,
@@ -511,7 +515,7 @@ class RLPxConnectionHandler(
               context.parent ! ConnectionFailed
               gracefulStop()
           }
-        case None =>
+        case Success(None) =>
           log.debug("[RLPx] Did not find 'Hello' in message from peer {}, continuing to await", peerId)
           context.become(awaitInitialHello(extractor, cancellableAckTimeout, seqNumber))
       }
