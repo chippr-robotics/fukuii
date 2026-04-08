@@ -318,9 +318,13 @@ class BlockPreparator(
     val checkpointWorldState = updateSenderAccountBeforeExecution(stx, senderAddress, world)
 
     // EIP-7702: Process authorization list for Type-4 transactions before VM execution
+    // Track refund for existing accounts (geth refunds CallNewAccountGas - TxAuthTupleGas per existing account)
+    var authExistingAccountRefund: BigInt = 0
     val worldAfterAuths = stx.tx match {
       case sct: SetCodeTransaction =>
-        applyAuthorizations(sct.authorizationList, checkpointWorldState)
+        val (world, refund) = applyAuthorizationsWithRefund(sct.authorizationList, checkpointWorldState)
+        authExistingAccountRefund = refund
+        world
       case _ => checkpointWorldState
     }
 
@@ -333,7 +337,11 @@ class BlockPreparator(
       } else
         result
 
-    val totalGasToRefundBase = calcTotalGasToRefund(stx, resultWithErrorHandling, blockHeader.number)
+    // EIP-7702: Add auth refund to the VM's refund counter before capping
+    val resultWithAuthRefund = if (authExistingAccountRefund > 0) {
+      resultWithErrorHandling.copy(gasRefund = resultWithErrorHandling.gasRefund + authExistingAccountRefund)
+    } else resultWithErrorHandling
+    val totalGasToRefundBase = calcTotalGasToRefund(stx, resultWithAuthRefund, blockHeader.number)
     val executionGasBase = gasLimit - totalGasToRefundBase
 
     if (DebugTrace.enabledForBlock(blockHeader.number)) {
@@ -568,9 +576,51 @@ class BlockPreparator(
       authList: List[SetCodeAuthorization],
       world: InMemoryWorldStateProxy
   )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
-    authList.foldLeft(world) { (w, auth) =>
-      applyAuthorization(auth, w).getOrElse(w)
+    applyAuthorizationsWithRefund(authList, world)._1
+
+  /** Apply authorizations and return (world, refund) where refund is the gas to refund
+    * for existing accounts per geth's EIP-7702 implementation:
+    * Intrinsic charges CallNewAccountGas (25000) per auth.
+    * If the authority account exists, refund CallNewAccountGas - TxAuthTupleGas (25000 - 12500 = 12500).
+    */
+  private def applyAuthorizationsWithRefund(
+      authList: List[SetCodeAuthorization],
+      world: InMemoryWorldStateProxy
+  )(implicit blockchainConfig: BlockchainConfig): (InMemoryWorldStateProxy, BigInt) =
+    authList.foldLeft((world, BigInt(0))) { case ((w, refund), auth) =>
+      // Recover authority to check existence (needed for refund even if auth is invalid)
+      val authorityOpt = recoverAuthority(auth)
+      val existsRefund = authorityOpt match {
+        case Some(addr) if w.getAccount(addr).isDefined => BigInt(25000 - 12500)
+        case _ => BigInt(0)
+      }
+      applyAuthorization(auth, w) match {
+        case Some(newWorld) => (newWorld, refund + existsRefund)
+        case None => (w, refund + existsRefund)
+      }
     }
+
+  /** Recover authority address from authorization signature (for gas accounting) */
+  private def recoverAuthority(auth: SetCodeAuthorization)(implicit blockchainConfig: BlockchainConfig): Option[Address] = {
+    import com.chipprbots.ethereum.crypto.ECDSASignature
+    import com.chipprbots.ethereum.rlp.{encode, PrefixedRLPEncodable, RLPList}
+    import com.chipprbots.ethereum.rlp.RLPImplicitConversions.toEncodeable
+    import com.chipprbots.ethereum.rlp.RLPImplicits.given
+
+    if (auth.chainId != 0 && auth.chainId != blockchainConfig.chainId) return None
+
+    val sigHash = com.chipprbots.ethereum.crypto.kec256(
+      encode(PrefixedRLPEncodable(0x05, RLPList(
+        toEncodeable(auth.chainId), toEncodeable(auth.address.toArray), toEncodeable(auth.nonce)
+      )))
+    )
+    val rawV = if (auth.v == 0) ECDSASignature.negativePointSign else ECDSASignature.positivePointSign
+    val ecdsaSig = ECDSASignature(auth.r, auth.s, BigInt(rawV))
+    ecdsaSig.publicKey(sigHash).flatMap { key =>
+      val addrBytes = com.chipprbots.ethereum.crypto.kec256(key).slice(12, 32)
+      if (addrBytes.length == Address.Length) Some(Address(addrBytes)) else None
+    }
+  }
 
   /** Apply a single EIP-7702 authorization. Returns None if the authorization should be skipped. */
   private def applyAuthorization(
