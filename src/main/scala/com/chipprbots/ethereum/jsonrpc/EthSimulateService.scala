@@ -194,8 +194,12 @@ class EthSimulateService(
 
       // Execute calls
       val calls = blockStateCall.calls.getOrElse(Seq.empty)
-      val (newWorld, callResults, txs, receipts, gasUsed) =
-        executeCalls(calls, simHeader, world, req.validation, req.traceTransfers, nonceMap)
+      val execResult = executeCalls(calls, simHeader, world, req.validation, req.traceTransfers, nonceMap)
+      execResult match {
+        case Left(err) => return Left(err)
+        case _ =>
+      }
+      val (newWorld, callResults, txs, receipts, gasUsed) = execResult.toOption.get
 
       world = newWorld
 
@@ -364,12 +368,13 @@ class EthSimulateService(
       validation: Boolean,
       traceTransfers: Boolean,
       nonceMap: mutable.Map[Address, BigInt]
-  ): (InMemoryWorldStateProxy, Seq[SimulateCallResult], Seq[SignedTransaction], Seq[Receipt], BigInt) = {
+  ): Either[JsonRpcError, (InMemoryWorldStateProxy, Seq[SimulateCallResult], Seq[SignedTransaction], Seq[Receipt], BigInt)] = {
     var world = initialWorld
     val callResults = mutable.ArrayBuffer[SimulateCallResult]()
     val txs = mutable.ArrayBuffer[SignedTransaction]()
     val receipts = mutable.ArrayBuffer[Receipt]()
     var accumGas = BigInt(0)
+    val baseFee = blockHeader.baseFee.getOrElse(BigInt(0))
 
     for ((call, callIdx) <- calls.zipWithIndex) {
       val sender = call.from.getOrElse(Address(0))
@@ -387,7 +392,57 @@ class EthSimulateService(
       val payload = call.input.getOrElse(ByteString.empty)
       val toAddr = call.to
 
+      val maxFeePerGas = call.maxFeePerGas.getOrElse(BigInt(0))
       val gasPrice = call.gasPrice.orElse(call.maxFeePerGas).getOrElse(BigInt(0))
+
+      // Always check: intrinsic gas
+      val baseGas = if (toAddr.isEmpty) BigInt(53000) else BigInt(21000)
+      val calldataGas = payload.foldLeft(BigInt(0)) { (acc, b) =>
+        acc + (if (b == 0) 4 else 16)
+      }
+      val intrinsicGas = baseGas + calldataGas
+      if (call.gas.isDefined && gasLimit < intrinsicGas) {
+        return Left(JsonRpcError.SimulateIntrinsicGasTooLow(
+          s"err: intrinsic gas too low: have $gasLimit, want $intrinsicGas (supplied gas $gasLimit)"))
+      }
+
+      // Always check: insufficient funds for value transfer (non-gas)
+      {
+        val senderBal = world.getAccount(sender).map(_.balance.toBigInt).getOrElse(BigInt(0))
+        if (value > 0 && senderBal < value && !validation) {
+          return Left(JsonRpcError.SimulateInsufficientFunds(
+            s"err: insufficient funds for gas * price + value: address ${sender.toString} have $senderBal want $value (supplied gas ${blockHeader.gasLimit})"))
+        }
+      }
+
+      // Validation mode checks
+      if (validation) {
+        // Check maxFeePerGas >= baseFee
+        if (baseFee > 0 && maxFeePerGas < baseFee && !call.gasPrice.isDefined) {
+          return Left(JsonRpcError.InvalidParams(
+            s"max fee per gas less than block base fee: address ${sender.toString}, maxFeePerGas: $maxFeePerGas, baseFee: $baseFee"))
+        }
+
+        // Check nonce
+        val expectedNonce = world.getAccount(sender).map(_.nonce.toBigInt).getOrElse(BigInt(0))
+        if (call.nonce.isDefined && senderNonce < expectedNonce) {
+          return Left(JsonRpcError.InvalidParams(
+            s"nonce too low: address ${sender.toString}, tx: $senderNonce state: $expectedNonce"))
+        }
+        if (call.nonce.isDefined && senderNonce > expectedNonce) {
+          return Left(JsonRpcError.InvalidParams(
+            s"nonce too high: address ${sender.toString}, tx: $senderNonce state: $expectedNonce"))
+        }
+
+        // Check balance for gas + value
+        val senderAccount = world.getAccount(sender).getOrElse(Account.empty(blockchainConfig.accountStartNonce))
+        val upfrontCost = gasLimit * gasPrice + value
+        if (senderAccount.balance.toBigInt < upfrontCost) {
+          return Left(JsonRpcError.SimulateInsufficientFunds(
+            s"err: insufficient funds for gas * price + value: address ${sender.toString} have ${senderAccount.balance} want $upfrontCost (supplied gas $gasLimit)"))
+        }
+      }
+
       // Default transaction type is 2 (EIP-1559) unless explicitly set to 0 (legacy)
       val isLegacy = call.`type`.contains(BigInt(0)) || (call.gasPrice.isDefined && call.maxFeePerGas.isEmpty && !call.`type`.contains(BigInt(2)))
       val tx: Transaction = if (!isLegacy) {
@@ -427,12 +482,6 @@ class EthSimulateService(
         val upfrontCost = gasLimit * gasPrice + value
         if (senderAccount.balance < upfrontCost) {
           senderAccount = senderAccount.copy(balance = UInt256(upfrontCost))
-        }
-      } else {
-        // Validation mode: check balance
-        val upfrontCost = gasLimit * gasPrice + value
-        if (senderAccount.balance < upfrontCost) {
-          return (world, callResults.toSeq, txs.toSeq, receipts.toSeq, accumGas)
         }
       }
 
@@ -536,7 +585,7 @@ class EthSimulateService(
       callResults += callResult
     }
 
-    (world, callResults.toSeq, txs.toSeq, receipts.toSeq, accumGas)
+    Right((world, callResults.toSeq, txs.toSeq, receipts.toSeq, accumGas))
   }
 
   /** EIP-4788: Store the parent beacon block root in the beacon root system contract */
