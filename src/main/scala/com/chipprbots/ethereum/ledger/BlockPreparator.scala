@@ -162,6 +162,51 @@ class BlockPreparator(
     worldStateProxy.saveAccount(senderAddress, account.increaseBalance(-calculateUpfrontGas(stx.tx)).increaseNonce())
   }
 
+  /** EIP-4844: Deduct blob gas cost from sender after execution.
+    * The blob gas is burned (not paid to miner). Uses actual blobBaseFee from block header.
+    */
+  private[ledger] def deductBlobGas(
+      stx: SignedTransaction,
+      senderAddress: Address,
+      blockHeader: BlockHeader,
+      world: InMemoryWorldStateProxy
+  ): InMemoryWorldStateProxy = stx.tx match {
+    case bt: com.chipprbots.ethereum.domain.BlobTransaction =>
+      val blobGasUsed = BigInt(bt.blobVersionedHashes.size) * BigInt(131072)
+      // Compute blob base fee from header's excessBlobGas
+      val blobBaseFee = blockHeader.excessBlobGas.map(computeBlobBaseFee).getOrElse(BigInt(1))
+      val blobGasCost = blobGasUsed * blobBaseFee
+      val account = world.getGuaranteedAccount(senderAddress)
+      world.saveAccount(senderAddress, account.increaseBalance(UInt256(-blobGasCost)))
+    case _ => world
+  }
+
+  /** Compute the blob base fee from excessBlobGas per EIP-4844 */
+  private def computeBlobBaseFee(excessBlobGas: BigInt): BigInt = {
+    // fake_exponential(MIN_BLOB_BASE_FEE=1, excess_blob_gas, BLOB_BASE_FEE_UPDATE_FRACTION=3338477)
+    val minBlobBaseFee = BigInt(1)
+    val updateFraction = BigInt(3338477)
+    if (excessBlobGas == 0) minBlobBaseFee
+    else {
+      // Simplified: baseFee = minBlobBaseFee * e^(excessBlobGas / updateFraction)
+      // Use the integer approximation from the spec
+      fakeExponential(minBlobBaseFee, excessBlobGas, updateFraction)
+    }
+  }
+
+  /** Integer approximation of factor * e^(numerator / denominator) per EIP-4844 */
+  private def fakeExponential(factor: BigInt, numerator: BigInt, denominator: BigInt): BigInt = {
+    var i = 1
+    var output = BigInt(0)
+    var numeratorAccum = factor * denominator
+    while (numeratorAccum > 0) {
+      output += numeratorAccum
+      numeratorAccum = (numeratorAccum * numerator) / (denominator * i)
+      i += 1
+    }
+    output / denominator
+  }
+
   private[ledger] def runVM(
       stx: SignedTransaction,
       senderAddress: Address,
@@ -323,11 +368,14 @@ class BlockPreparator(
 
     val worldAfterPayments = refundGasFn.andThen(payMinerForGasFn)(resultWithErrorHandling.world)
 
+    // EIP-4844: Deduct blob gas cost (burned, not paid to miner)
+    val worldAfterBlobGas = deductBlobGas(stx, senderAddress, blockHeader, worldAfterPayments)
+
     val deleteAccountsFn = deleteAccounts(resultWithErrorHandling.addressesToDelete) _
     val deleteTouchedAccountsFn = deleteEmptyTouchedAccounts _
     val persistStateFn = InMemoryWorldStateProxy.persistState _
 
-    val world2 = deleteAccountsFn.andThen(deleteTouchedAccountsFn).andThen(persistStateFn)(worldAfterPayments)
+    val world2 = deleteAccountsFn.andThen(deleteTouchedAccountsFn).andThen(persistStateFn)(worldAfterBlobGas)
 
     if (DebugTrace.enabledForTx(blockHeader.number, stx.hash.toHex)) {
       val tx = stx.tx
