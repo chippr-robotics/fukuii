@@ -207,7 +207,8 @@ class BlockExecution(
     }
 
     // At the fork block, deploy the history storage contract
-    val w1 = if (isActivationBlock) {
+    // Deploy history storage contract only if not already deployed (genesis may pre-deploy it)
+    val w1 = if (isActivationBlock && world.getCode(HistoryStorageAddress).isEmpty) {
       val account = world
         .getAccount(HistoryStorageAddress)
         .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
