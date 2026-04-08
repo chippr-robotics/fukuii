@@ -42,6 +42,7 @@ abstract class BaseNode extends Node {
     startMetricsClient()
     fixDatabase()
     loadGenesisData()
+    importChainData() // Must complete before APIs so queries return chain data
 
     // Phase 2: API servers (user-facing, ready as early as possible)
     startJsonRpcHttpServer()
@@ -53,9 +54,6 @@ abstract class BaseNode extends Node {
     startPortForwarding()
     startServer()
     startDiscoveryManager()
-
-    // Phase 4: Chain data import
-    importChainData()
 
     // Phase 5: Background work
     startSyncController()
