@@ -39,6 +39,7 @@ final case class TransactionResponse(
     accessList: Option[Seq[Map[String, Any]]],
     maxFeePerBlobGas: Option[BigInt],
     blobVersionedHashes: Option[Seq[ByteString]],
+    authorizationList: Option[Seq[Map[String, Any]]],
     yParity: Option[BigInt],
     v: Option[BigInt],
     r: Option[BigInt],
@@ -64,19 +65,22 @@ object TransactionResponse {
       blockHeader: Option[BlockHeader] = None,
       transactionIndex: Option[Int] = None
   ): TransactionResponse = {
-    val (txType, txChainId, txMaxFee, txMaxPriority, txAccessList, txMaxBlobFee, txBlobHashes) = stx.tx match {
-      case _: LegacyTransaction => (BigInt(0), None, None, None, None, None, None)
+    val (txType, txChainId, txMaxFee, txMaxPriority, txAccessList, txMaxBlobFee, txBlobHashes, txAuthList) = stx.tx match {
+      case _: LegacyTransaction =>
+        // EIP-155: extract chainId from v value for replay-protected legacy txs
+        val legacyChainId = if (stx.signature.v > 35) Some((stx.signature.v - 35) / 2) else None
+        (BigInt(0), legacyChainId, None, None, None, None, None, None)
       case tx: TransactionWithAccessList =>
-        (BigInt(1), Some(tx.chainId), None, None, Some(encodeAccessList(tx.accessList)), None, None)
+        (BigInt(1), Some(tx.chainId), None, None, Some(encodeAccessList(tx.accessList)), None, None, None)
       case tx: TransactionWithDynamicFee =>
         (BigInt(2), Some(tx.chainId), Some(tx.maxFeePerGas), Some(tx.maxPriorityFeePerGas),
-          Some(encodeAccessList(tx.accessList)), None, None)
+          Some(encodeAccessList(tx.accessList)), None, None, None)
       case tx: BlobTransaction =>
         (BigInt(3), Some(tx.chainId), Some(tx.maxFeePerGas), Some(tx.maxPriorityFeePerGas),
-          Some(encodeAccessList(tx.accessList)), Some(tx.maxFeePerBlobGas), Some(tx.blobVersionedHashes))
+          Some(encodeAccessList(tx.accessList)), Some(tx.maxFeePerBlobGas), Some(tx.blobVersionedHashes), None)
       case tx: SetCodeTransaction =>
         (BigInt(4), Some(tx.chainId), Some(tx.maxFeePerGas), Some(tx.maxPriorityFeePerGas),
-          Some(encodeAccessList(tx.accessList)), None, None)
+          Some(encodeAccessList(tx.accessList)), None, None, Some(encodeAuthorizationList(tx.authorizationList)))
     }
 
     val effectiveGasPrice = Transaction.effectiveGasPrice(stx.tx, blockHeader.flatMap(_.baseFee))
@@ -100,6 +104,7 @@ object TransactionResponse {
       accessList = txAccessList,
       maxFeePerBlobGas = txMaxBlobFee,
       blobVersionedHashes = txBlobHashes,
+      authorizationList = txAuthList,
       // yParity only for typed transactions (type >= 1), not legacy
       yParity = if (txType > 0) Some(stx.signature.v) else None,
       v = Some(stx.signature.v),
@@ -114,6 +119,18 @@ object TransactionResponse {
       Map(
         "address" -> item.address,
         "storageKeys" -> item.storageKeys
+      )
+    }
+
+  private def encodeAuthorizationList(authList: List[SetCodeAuthorization]): Seq[Map[String, Any]] =
+    authList.map { auth =>
+      Map(
+        "chainId" -> auth.chainId,
+        "address" -> auth.address,
+        "nonce" -> auth.nonce,
+        "yParity" -> auth.v,
+        "r" -> auth.r,
+        "s" -> auth.s
       )
     }
 

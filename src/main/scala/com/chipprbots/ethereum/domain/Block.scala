@@ -33,12 +33,39 @@ object Block {
 
   implicit class BlockEnc(val obj: Block) extends RLPSerializable {
     import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions.given
+    import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
+    import com.chipprbots.ethereum.rlp.RLPImplicits.given
 
-    override def toRLPEncodable: RLPEncodeable = RLPList(
-      obj.header.toRLPEncodable,
-      RLPList(obj.body.transactionList.map(_.toRLPEncodable): _*),
-      RLPList(obj.body.uncleNodesList.map(_.toRLPEncodable): _*)
-    )
+    override def toRLPEncodable: RLPEncodeable = {
+      // EIP-2718: typed transactions in block body must be RLP byte strings
+      val txItems = obj.body.transactionList.map { stx =>
+        stx.toRLPEncodable match {
+          case p: com.chipprbots.ethereum.rlp.PrefixedRLPEncodable =>
+            // Typed tx: encode as raw bytes, wrap in RLPValue for proper string encoding
+            com.chipprbots.ethereum.rlp.RLPValue(com.chipprbots.ethereum.rlp.encode(p))
+          case other => other
+        }
+      }
+      val base = Seq(
+        obj.header.toRLPEncodable,
+        RLPList(txItems: _*),
+        RLPList(obj.body.uncleNodesList.map(_.toRLPEncodable): _*)
+      )
+      // Shanghai+ blocks include withdrawals as 4th item
+      val withWithdrawals = obj.body.withdrawals match {
+        case Some(ws) =>
+          base :+ RLPList(ws.map { w =>
+            RLPList(
+              toEncodeable[BigInt](w.index),
+              toEncodeable[BigInt](w.validatorIndex),
+              byteStringToEncodeable(w.address.bytes),
+              toEncodeable[BigInt](w.amount)
+            )
+          }: _*)
+        case None => base
+      }
+      RLPList(withWithdrawals: _*)
+    }
   }
 
   implicit class BlockDec(val bytes: Array[Byte]) extends AnyVal {

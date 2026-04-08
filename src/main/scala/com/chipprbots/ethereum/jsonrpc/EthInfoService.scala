@@ -66,7 +66,8 @@ object EthInfoService {
       gas: Option[BigInt],
       gasPrice: BigInt,
       value: BigInt,
-      data: ByteString
+      data: ByteString,
+      gasPriceExplicit: Boolean = false
   )
 
   case class IeleCallTx(
@@ -293,7 +294,22 @@ class EthInfoService(
   ): Either[JsonRpcError, A] = for {
     stx <- prepareTransaction(req)
     block <- resolveBlock(req.block)
-  } yield f(stx, block.block.header, block.pendingState)
+  } yield {
+    // EIP-1559: When no gas price is explicitly specified, use baseFee=0 so calls
+    // don't need to worry about funding. Matches geth behavior for eth_call/eth_estimateGas.
+    val header = if (!req.tx.gasPriceExplicit && block.block.header.baseFee.isDefined) {
+      import BlockHeader.HeaderExtraFields._
+      val zeroBaseFeeExtra = block.block.header.extraFields match {
+        case HefPostOlympia(_)               => HefPostOlympia(0)
+        case HefPostShanghai(_, wr)          => HefPostShanghai(0, wr)
+        case HefPostCancun(_, wr, bg, eb, pb) => HefPostCancun(0, wr, bg, eb, pb)
+        case HefPostPrague(_, wr, bg, eb, pb, rh) => HefPostPrague(0, wr, bg, eb, pb, rh)
+        case other => other
+      }
+      block.block.header.copy(extraFields = zeroBaseFeeExtra)
+    } else block.block.header
+    f(stx, header, block.pendingState)
+  }
 
   private def getGasLimit(req: CallRequest): Either[JsonRpcError, BigInt] =
     req.tx.gas.map(Right.apply).getOrElse(resolveBlock(BlockParam.Latest).map(r => r.block.header.gasLimit))

@@ -13,6 +13,7 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.DaoForkConfig
+import com.chipprbots.ethereum.vm.{EvmConfig, ProgramContext}
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.vm.EvmConfig
 
@@ -78,11 +79,13 @@ class BlockExecution(
           .toRight(MissingParentError) // Should not never occur because validated earlier
         initialWorld = buildInitialWorld(block, parentHeader)
         execResult <- executeBlockTransactions(block, initialWorld)
-        worldToPersist <- Either
+        worldAfterReward <- Either
           .catchOnly[MPTException](blockPreparator.payBlockReward(block, execResult.worldState))
           .leftMap(BlockExecutionError.MPTError.apply)
+        // Prague: Process system calls for withdrawal/consolidation requests
+        worldAfterSystemCalls = processPragueSystemCalls(block, worldAfterReward)
         // State root hash needs to be up-to-date for validateBlockAfterExecution
-        worldPersisted = InMemoryWorldStateProxy.persistState(worldToPersist)
+        worldPersisted = InMemoryWorldStateProxy.persistState(worldAfterSystemCalls)
       } yield execResult.copy(worldState = worldPersisted)
     catch {
       case e: MPTException => Left(BlockExecutionError.MPTError(e))
@@ -295,9 +298,56 @@ class BlockExecution(
     go(List.empty[BlockData], blocks, parentChainWeight)
   }
 
+  /** Prague: Execute system calls for withdrawal and consolidation request processing.
+    * Per EIP-7002 and EIP-7251, the system makes calls to the withdrawal queue and
+    * consolidation queue contracts after all transactions in the block.
+    */
+  private def processPragueSystemCalls(
+      block: Block,
+      world: InMemoryWorldStateProxy
+  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy = {
+    if (!blockchainConfig.isPragueTimestamp(block.header.unixTimestamp)) return world
+
+    import BlockExecution._
+    val evmConfig = EvmConfig.forBlock(block.header.number, block.header.unixTimestamp, blockchainConfig)
+    var w = world
+
+    for (queueAddr <- Seq(WithdrawalQueueAddress, ConsolidationQueueAddress)) {
+      val code = w.getCode(queueAddr)
+      if (code.nonEmpty) {
+        val context = ProgramContext[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](
+          callerAddr = SystemAddress,
+          originAddr = SystemAddress,
+          recipientAddr = Some(queueAddr),
+          gasPrice = com.chipprbots.ethereum.domain.UInt256.Zero,
+          startGas = BigInt(30000000),
+          inputData = ByteString.empty,
+          value = com.chipprbots.ethereum.domain.UInt256.Zero,
+          endowment = com.chipprbots.ethereum.domain.UInt256.Zero,
+          doTransfer = false,
+          blockHeader = block.header,
+          callDepth = 0,
+          world = w,
+          initialAddressesToDelete = Set.empty,
+          evmConfig = evmConfig,
+          originalWorld = w,
+          warmAddresses = Set(queueAddr),
+          warmStorage = Set.empty
+        )
+        val vm = new com.chipprbots.ethereum.vm.VM[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage]
+        val result = vm.run(context)
+        w = InMemoryWorldStateProxy.persistState(result.world)
+      }
+    }
+    w
+  }
 }
 
 object BlockExecution {
+
+  val SystemAddress: Address = Address("0xfffffffffffffffffffffffffffffffffffffffe")
+  val WithdrawalQueueAddress: Address = Address("0x00000961ef480eb55e80d19ad83579a64c007002")
+  val ConsolidationQueueAddress: Address = Address("0x0000bbddc7ce488642fb579f8b00f3a590007251")
 
   /** EIP-4788: Address of the beacon block root system contract */
   val BeaconRootContractAddress: Address = Address("0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02")

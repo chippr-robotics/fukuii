@@ -165,15 +165,18 @@ object EthJsonMethodsImplicits extends JsonMethodsImplicits {
       to <- toEitherOpt((obj \ "to").extractOpt[String].map(extractBytes))
       gas <- optionalQuantity(obj \ "gas")
       gasPrice <- optionalQuantity(obj \ "gasPrice")
+      maxFeePerGas <- optionalQuantity(obj \ "maxFeePerGas")
       value <- optionalQuantity(obj \ "value")
       data <- toEitherOpt((obj \ "data").extractOpt[String].map(extractBytes))
+      input <- toEitherOpt((obj \ "input").extractOpt[String].map(extractBytes))
     } yield CallTx(
       from = from,
       to = to,
       gas = gas,
-      gasPrice = gasPrice.getOrElse(0),
+      gasPrice = gasPrice.orElse(maxFeePerGas).getOrElse(0),
       value = value.getOrElse(0),
-      data = data.getOrElse(ByteString(""))
+      data = data.orElse(input).getOrElse(ByteString("")),
+      gasPriceExplicit = gasPrice.isDefined || maxFeePerGas.isDefined
     )
   }
 

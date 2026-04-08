@@ -111,6 +111,10 @@ class ChainImporter(
           log.error(s"Chain import: block ${block.header.number} tx[$i] cumulativeGas=${r.cumulativeGasUsed}")
         }
         log.error(s"Chain import: block ${block.header.number} totalGas: expected=${block.header.gasUsed} got=$gasUsed")
+        if (stateMismatch && !gasMismatch) {
+          // Gas matches but state doesn't — check EIP-2935 history storage
+          log.error(s"Chain import: block ${block.header.number} STATE MISMATCH with correct gas — checking system state")
+        }
       }
 
       if (stateMismatch && gasMismatch) {

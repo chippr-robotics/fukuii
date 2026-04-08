@@ -237,11 +237,14 @@ class EthBlocksService(
   def getBlockReceipts(req: GetBlockReceiptsRequest): ServiceResponse[GetBlockReceiptsResponse] = IO {
     val result = resolveBlock(req.block).toOption.flatMap { case ResolvedBlock(block, _) =>
       blockchainReader.getReceiptsByHash(block.header.hash).map { receipts =>
+        var baseLogIndex = 0
         block.body.transactionList.zip(receipts).zipWithIndex.map { case ((stx, receipt), idx) =>
           val gasUsed = if (idx == 0) receipt.cumulativeGasUsed
                         else receipt.cumulativeGasUsed - receipts(idx - 1).cumulativeGasUsed
           val sender = SignedTransaction.getSender(stx).getOrElse(Address(0))
-          TransactionReceiptResponse(receipt, stx, sender, idx, block.header, gasUsed)
+          val resp = TransactionReceiptResponse(receipt, stx, sender, idx, block.header, gasUsed, baseLogIndex)
+          baseLogIndex += receipt.logs.size
+          resp
         }
       }
     }

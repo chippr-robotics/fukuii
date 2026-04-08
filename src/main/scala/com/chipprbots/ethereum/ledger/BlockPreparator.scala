@@ -305,6 +305,15 @@ class BlockPreparator(
       .clearTouchedAccounts
   }
 
+  /** Public facade for eth_simulateV1 — delegates to the private executeTransaction */
+  def executeTransactionForSimulation(
+      stx: SignedTransaction,
+      senderAddress: Address,
+      blockHeader: BlockHeader,
+      world: InMemoryWorldStateProxy
+  )(implicit blockchainConfig: BlockchainConfig): TxResult =
+    executeTransaction(stx, senderAddress, blockHeader, world)
+
   private[ledger] def executeTransaction(
       stx: SignedTransaction,
       senderAddress: Address,

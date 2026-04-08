@@ -143,6 +143,19 @@ trait JsonMethodsImplicits {
       case JString("pending")   => Right(BlockParam.Pending)
       case JString("safe")      => Right(BlockParam.Latest)
       case JString("finalized") => Right(BlockParam.Latest)
+      // 32-byte hex string (0x + 64 hex chars) = block hash, not a number
+      case JString(s) if s.startsWith("0x") && s.length == 66 =>
+        extractBytes(JString(s)).map(hash => BlockParam.WithHash(hash))
+          .left.map(_ => JsonRpcError.InvalidParams(s"Invalid default block param: $input"))
+      case JObject(fields) =>
+        // Support {"blockHash": "0x..."} object form
+        fields.collectFirst { case ("blockHash", JString(hash)) => hash } match {
+          case Some(hash) =>
+            extractBytes(JString(hash)).map(h => BlockParam.WithHash(h))
+              .left.map(_ => JsonRpcError.InvalidParams(s"Invalid block hash"))
+          case None =>
+            Left(JsonRpcError.InvalidParams(s"Invalid default block param: $input"))
+        }
       case other =>
         extractQuantity(other)
           .map(BlockParam.WithNumber.apply)

@@ -17,7 +17,7 @@ object EthFilterService {
   case class Filter(
       fromBlock: Option[BlockParam],
       toBlock: Option[BlockParam],
-      address: Option[Address],
+      address: Option[Seq[Address]],
       topics: Seq[Seq[ByteString]],
       blockHash: Option[org.apache.pekko.util.ByteString] = None
   )
@@ -117,8 +117,21 @@ class EthFilterService(
         "invalid block range params")))
     }
 
+    // If blockHash specified, resolve to block number and use as from=to
+    val (resolvedFrom, resolvedTo) = if (blockHash.isDefined) {
+      val blockNum = blockHash.flatMap(h =>
+        blockchainReader.getBlockByHash(h).map(_.header.number))
+      blockNum match {
+        case Some(n) =>
+          val bp = Some(BlockParam.WithNumber(n))
+          (bp, bp)
+        case None =>
+          return cats.effect.IO.pure(Right(GetLogsResponse(FM.LogFilterLogs(Nil))))
+      }
+    } else (fromBlock, toBlock)
+
     filterManager
-      .askFor[FM.LogFilterLogs](FM.GetLogs(fromBlock, toBlock, address, topics))
+      .askFor[FM.LogFilterLogs](FM.GetLogs(resolvedFrom, resolvedTo, address, topics))
       .map { filterLogs =>
         Right(GetLogsResponse(filterLogs))
       }

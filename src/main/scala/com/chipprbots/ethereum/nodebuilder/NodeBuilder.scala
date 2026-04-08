@@ -501,6 +501,22 @@ trait EthInfoServiceBuilder {
   )
 }
 
+trait EthSimulateServiceBuilder {
+  self: StorageBuilder
+    with BlockchainBuilder
+    with BlockchainConfigBuilder
+    with MiningBuilder =>
+
+  lazy val ethSimulateService = new com.chipprbots.ethereum.jsonrpc.EthSimulateService(
+    blockchain,
+    blockchainReader,
+    storagesInstance.storages.evmCodeStorage,
+    mining.blockPreparator,
+    mining,
+    blockchainConfig
+  )
+}
+
 trait EthMiningServiceBuilder {
   self: BlockchainBuilder
     with BlockchainConfigBuilder
@@ -658,6 +674,7 @@ trait JSONRpcControllerBuilder {
   this: Web3ServiceBuilder
     with EthInfoServiceBuilder
     with EthProofServiceBuilder
+    with EthSimulateServiceBuilder
     with EthMiningServiceBuilder
     with EthBlocksServiceBuilder
     with EthTxServiceBuilder
@@ -690,6 +707,7 @@ trait JSONRpcControllerBuilder {
       fukuiiService,
       mcpService,
       ethProofService,
+      ethSimulateService,
       jsonRpcConfig
     )
 }
@@ -965,6 +983,7 @@ trait Node
     with Web3ServiceBuilder
     with EthInfoServiceBuilder
     with EthProofServiceBuilder
+    with EthSimulateServiceBuilder
     with EthMiningServiceBuilder
     with EthBlocksServiceBuilder
     with EthTxServiceBuilder

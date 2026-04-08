@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.jsonrpc.NetService._
 import com.chipprbots.ethereum.jsonrpc.PersonalService._
 import com.chipprbots.ethereum.jsonrpc.ProofService.GetProofRequest
 import com.chipprbots.ethereum.jsonrpc.ProofService.GetProofResponse
+import com.chipprbots.ethereum.jsonrpc.EthSimulateService._
 import com.chipprbots.ethereum.jsonrpc.TestService._
 import com.chipprbots.ethereum.jsonrpc.Web3Service._
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
@@ -46,6 +47,7 @@ case class JsonRpcController(
     fukuiiService: FukuiiService,
     mcpService: McpService,
     proofService: ProofService,
+    ethSimulateService: EthSimulateService,
     override val config: JsonRpcConfig
 ) extends ApisBuilder
     with Logger
@@ -264,6 +266,9 @@ case class JsonRpcController(
       handle[BlobBaseFeeRequest, BlobBaseFeeResponse](ethBlocksService.blobBaseFee, req)
     case req @ JsonRpcRequest(_, "eth_createAccessList", _, _) =>
       handle[CreateAccessListRequest, CreateAccessListResponse](ethInfoService.createAccessList, req)
+    case req @ JsonRpcRequest(_, "eth_simulateV1", _, _) =>
+      handle[EthSimulateRequest, EthSimulateResponse](ethSimulateService.ethSimulate, req)(
+        EthSimulateJsonMethodsImplicits.eth_simulateV1, EthSimulateJsonMethodsImplicits.eth_simulateV1)
   }
 
   private def handleDebugRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {

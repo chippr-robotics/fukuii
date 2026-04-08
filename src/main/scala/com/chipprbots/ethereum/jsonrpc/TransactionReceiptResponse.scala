@@ -69,7 +69,8 @@ object TransactionReceiptResponse {
       signedTransactionSender: Address,
       transactionIndex: Int,
       blockHeader: BlockHeader,
-      gasUsedByTransaction: BigInt
+      gasUsedByTransaction: BigInt,
+      baseLogIndex: Int
   ): TransactionReceiptResponse = {
     val contractAddress = if (stx.tx.isContractInit) {
       // do not subtract 1 from nonce because in transaction we have nonce of account before transaction execution
@@ -82,7 +83,7 @@ object TransactionReceiptResponse {
     }
     val txLogs = receipt.logs.zipWithIndex.map { case (txLog, index) =>
       TxLog(
-        logIndex = index,
+        logIndex = baseLogIndex + index,
         transactionIndex = transactionIndex,
         transactionHash = stx.hash,
         blockHash = blockHeader.hash,
@@ -132,7 +133,8 @@ object TransactionReceiptResponse {
       `type` = Some(txType),
       effectiveGasPrice = Some(effectiveGasPrice),
       blobGasUsed = blobGasUsed,
-      blobGasPrice = blockHeader.excessBlobGas.map(_ => BigInt(1)), // TODO: proper blob base fee calculation
+      // blobGasPrice only for blob (type 3) transactions
+      blobGasPrice = blobGasUsed.flatMap(_ => blockHeader.excessBlobGas.map(_ => BigInt(1))),
       blockTimestamp = Some(BigInt(blockHeader.unixTimestamp))
     )
   }

@@ -176,11 +176,11 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
 
     rootNode match {
       case Some(hash: HashNode) =>
-        // Resolve root hash to actual node before including in accumulator
+        // Resolve root hash to actual node, but don't pre-add — pathTraverse will add it
         val resolved = getFromHash(hash.hashNode, nodeStorage)
-        pathTraverse(op(acc, Some(resolved)), resolved, searchKey, op)
+        pathTraverse(acc, resolved, searchKey, op)
       case Some(root) =>
-        pathTraverse(op(acc, Some(root)), root, searchKey, op)
+        pathTraverse(acc, root, searchKey, op)
       case None =>
         None
     }

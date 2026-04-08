@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.jsonrpc
 
+import org.apache.pekko.util.ByteString
 import org.json4s.JsonAST._
 
 import com.chipprbots.ethereum.jsonrpc.EthUserService._
@@ -56,7 +57,13 @@ object EthUserJsonMethodsImplicits extends JsonMethodsImplicits {
           case _ => Left(InvalidParams())
         }
 
-      def encodeJson(t: GetStorageAtResponse): JValue = encodeAsHex(t.value)
+      def encodeJson(t: GetStorageAtResponse): JValue = {
+        // eth_getStorageAt returns a full 32-byte zero-padded value per spec
+        val padded = if (t.value.length < 32) {
+          ByteString(new Array[Byte](32 - t.value.length)) ++ t.value
+        } else t.value
+        encodeAsHex(padded)
+      }
     }
 
   implicit val eth_getTransactionCount

@@ -126,6 +126,22 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
     val blobHashesField = tx.blobVersionedHashes.map { hashes =>
       "blobVersionedHashes" -> JArray(hashes.toList.map(encodeAsHex))
     }.toList
+    val authListField = tx.authorizationList.map { auths =>
+      "authorizationList" -> JArray(auths.toList.map { item =>
+        val addr = item("address") match {
+          case a: com.chipprbots.ethereum.domain.Address => encodeAsHex(a.bytes)
+          case other => JString(other.toString)
+        }
+        JObject(
+          "chainId" -> encodeAsHex(item("chainId").asInstanceOf[BigInt]),
+          "address" -> addr,
+          "nonce" -> encodeAsHex(item("nonce").asInstanceOf[BigInt]),
+          "yParity" -> encodeAsHex(item("yParity").asInstanceOf[BigInt]),
+          "r" -> encodeAsHex(item("r").asInstanceOf[BigInt]),
+          "s" -> encodeAsHex(item("s").asInstanceOf[BigInt])
+        )
+      })
+    }.toList
 
     val sigFields = List(
       tx.yParity.map(v => "yParity" -> encodeAsHex(v)),
@@ -137,7 +153,7 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
     val blockTimestampField = tx.blockTimestamp.map(v => "blockTimestamp" -> encodeAsHex(v)).toList
 
     JObject(baseFields ::: typeField ::: chainIdField ::: maxFeeField ::: maxPriorityField :::
-      accessListField ::: maxBlobFeeField ::: blobHashesField ::: sigFields ::: blockTimestampField)
+      accessListField ::: maxBlobFeeField ::: blobHashesField ::: authListField ::: sigFields ::: blockTimestampField)
   }
 
   implicit val eth_gasPrice: NoParamsMethodDecoder[GetGasPriceRequest] with JsonEncoder[GetGasPriceResponse] =

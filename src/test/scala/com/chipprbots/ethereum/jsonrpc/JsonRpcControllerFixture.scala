@@ -152,7 +152,8 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
 
   val ethFilterService = new EthFilterService(
     filterManager.ref,
-    filterConfig
+    filterConfig,
+    blockchainReader
   )
   val personalService: TestPersonalService = new TestPersonalService
   val debugService: DebugService = mock[DebugService]

@@ -158,7 +158,17 @@ object EthFilterJsonMethodsImplicits extends JsonMethodsImplicits {
     for {
       fromBlock <- toEitherOpt(optionalBlockParam("fromBlock"))
       toBlock <- toEitherOpt(optionalBlockParam("toBlock"))
-      address <- toEitherOpt((obj \ "address").extractOpt[String].map(extractAddress))
+      address <- {
+        // Support both single string and array of addresses
+        (obj \ "address") match {
+          case JString(s) => extractAddress(JString(s)).map(a => Some(Seq(a)))
+          case JArray(arr) =>
+            val addrs = arr.map { case JString(s) => extractAddress(JString(s)); case _ => Left(InvalidParams()) }
+            if (addrs.forall(_.isRight)) Right(Some(addrs.collect { case Right(a) => a }))
+            else Left(InvalidParams("Invalid address in array"))
+          case _ => Right(None)
+        }
+      }
       topics <- topicsEither
     } yield {
       val blockHash = (obj \ "blockHash").extractOpt[String].flatMap(s =>

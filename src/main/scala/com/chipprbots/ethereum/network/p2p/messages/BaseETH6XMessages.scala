@@ -603,7 +603,16 @@ object BaseETH6XMessages {
         val first = bytes(0)
         (first match {
           case Transaction.Type04 => PrefixedRLPEncodable(Transaction.Type04, rawDecode(bytes.tail))
-          case Transaction.Type03 => PrefixedRLPEncodable(Transaction.Type03, rawDecode(bytes.tail))
+          case Transaction.Type03 =>
+            // EIP-4844: handle network-wrapped blob tx ([tx_payload, blobs, commitments, proofs])
+            val decoded = rawDecode(bytes.tail)
+            decoded match {
+              case outer: RLPList if outer.items.size == 4 && outer.items.head.isInstanceOf[RLPList] =>
+                // Network wrapped form: extract just the tx payload (first element)
+                PrefixedRLPEncodable(Transaction.Type03, outer.items.head)
+              case _ =>
+                PrefixedRLPEncodable(Transaction.Type03, decoded)
+            }
           case Transaction.Type02 => PrefixedRLPEncodable(Transaction.Type02, rawDecode(bytes.tail))
           case Transaction.Type01 => PrefixedRLPEncodable(Transaction.Type01, rawDecode(bytes.tail))
           case _                  => rawDecode(bytes)
