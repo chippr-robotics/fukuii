@@ -6,6 +6,7 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.handshaker.Handshaker.NextMessage
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
+import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.Reasons
 import com.chipprbots.ethereum.utils.Logger
@@ -35,9 +36,12 @@ trait EtcNodeStatusExchangeState[T <: Message] extends InProgressState[PeerInfo]
 
     if (validNetworkID && validGenesisHash) {
       forkResolverOpt match {
-        case Some(forkResolver) =>
+        case Some(forkResolver) if status.capability != Capability.ETH68 =>
+          // Legacy ETH63/64 fork block exchange — only needed for pre-ETH68 peers.
+          // ETH68 includes ForkID in Status which already validates chain identity.
           EtcForkBlockExchangeState(handshakerConfiguration, forkResolver, status)
-        case None =>
+        case _ =>
+          // ETH68: ForkID in Status validated by remote peer; skip redundant block exchange.
           ConnectedState(PeerInfo.withForkAccepted(status))
       }
     } else
