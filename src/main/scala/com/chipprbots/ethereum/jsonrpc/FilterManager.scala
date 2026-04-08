@@ -268,6 +268,8 @@ class FilterManager(
   private def resolveBlockNumber(blockParam: BlockParam, bestBlockNumber: BigInt): BigInt =
     blockParam match {
       case BlockParam.WithNumber(blockNumber) => blockNumber
+      case BlockParam.WithHash(hash) =>
+        blockchainReader.getBlockHeaderByHash(hash).map(_.number).getOrElse(bestBlockNumber)
       case BlockParam.Earliest                => 0
       case BlockParam.Latest                  => bestBlockNumber
       case BlockParam.Pending                 => bestBlockNumber

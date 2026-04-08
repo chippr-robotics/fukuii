@@ -141,8 +141,8 @@ trait JsonMethodsImplicits {
       case JString("earliest")  => Right(BlockParam.Earliest)
       case JString("latest")    => Right(BlockParam.Latest)
       case JString("pending")   => Right(BlockParam.Pending)
-      case JString("safe")      => Right(BlockParam.Latest) // safe ≈ latest for our purposes
-      case JString("finalized") => Right(BlockParam.Latest) // finalized ≈ latest for our purposes
+      case JString("safe")      => Right(BlockParam.Latest)
+      case JString("finalized") => Right(BlockParam.Latest)
       case other =>
         extractQuantity(other)
           .map(BlockParam.WithNumber.apply)
