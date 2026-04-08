@@ -150,7 +150,9 @@ class EthSimulateService(
     // Resolve base block
     val baseBlock = resolveBlock(req.blockTag) match {
       case Right(resolved) => resolved.block
-      case Left(err) => return Left(err)
+      case Left(_) =>
+        // Return -32000 for block not found (not -32602)
+        return Left(JsonRpcError.LogicError(s"header not found"))
     }
 
     // Pre-validate block number/timestamp ordering
