@@ -738,13 +738,19 @@ class EthSimulateService(
               if (returnData.nonEmpty) Some(returnData) else None))
           )
         case Some(err) =>
+          // Map VM error names to geth-compatible lowercase messages
+          val errMsg = err match {
+            case com.chipprbots.ethereum.vm.OutOfGas => "out of gas"
+            case com.chipprbots.ethereum.vm.InvalidOpCode(code) => s"invalid opcode: 0x${code.toInt.toHexString}"
+            case other => other.toString.toLowerCase
+          }
           SimulateCallResult(
             status = BigInt(0),
             returnData = returnData,
             gasUsed = gasUsed,
             maxUsedGas = gasUsed,
             logs = Seq.empty,
-            error = Some(SimulateError(-32015, err.toString))
+            error = Some(SimulateError(-32015, errMsg))
           )
         case None =>
           SimulateCallResult(
