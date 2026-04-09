@@ -231,13 +231,14 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits {
           case _ => None
         }
         val sender = senderAddr.bytes
+        val effectiveGasPrice = com.chipprbots.ethereum.domain.Transaction.effectiveGasPrice(tx, header.baseFee)
         val baseFields = List(
           "blockHash" -> encodeAsHex(blockHash),
           "blockNumber" -> encodeAsHex(header.number),
           "blockTimestamp" -> encodeAsHex(BigInt(header.unixTimestamp)),
           "from" -> encodeAsHex(sender),
           "gas" -> encodeAsHex(tx.gasLimit),
-          "gasPrice" -> encodeAsHex(tx.gasPrice),
+          "gasPrice" -> encodeAsHex(effectiveGasPrice),
           "hash" -> encodeAsHex(stx.hash),
           "input" -> encodeAsHex(tx.payload),
           "nonce" -> encodeAsHex(tx.nonce),

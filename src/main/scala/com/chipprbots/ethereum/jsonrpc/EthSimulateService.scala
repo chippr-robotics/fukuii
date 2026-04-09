@@ -370,9 +370,22 @@ class EthSimulateService(
       }
 
       ov.state.foreach { slots =>
+        // Full state replacement: clear all storage, then set specified slots
+        // Persist first so any cached storage changes are committed
+        w = InMemoryWorldStateProxy.persistState(w)
+        // Reset storageRoot to empty and clear storage cache by delete+recreate
+        val currentAcct = w.getAccount(address).getOrElse(Account.empty(blockchainConfig.accountStartNonce))
+        // Delete and re-save account to clear storage cache
+        w = w.deleteAccount(address)
+        w = w.saveAccount(address, currentAcct.copy(storageRoot = Account.EmptyStorageRootHash))
+        // Re-apply code if it was set
+        if (currentAcct.codeHash != Account.EmptyCodeHash) {
+          // Code is in the EVM code storage, re-associate it
+          ov.code.foreach(code => w = w.saveCode(address, code))
+        }
+        // Write the new slots on fresh (empty) storage
         val storage = w.getStorage(address)
-        val cleared = storage.store(UInt256.Zero.toBigInt, BigInt(0))
-        var s = cleared
+        var s = storage
         for ((key, value) <- slots) {
           s = s.store(key, value)
         }
