@@ -215,10 +215,16 @@ class BlockPreparator(
   )(implicit blockchainConfig: BlockchainConfig): PR = {
     val evmConfig = EvmConfig.forBlock(blockHeader.number, blockHeader.unixTimestamp, blockchainConfig)
     val context: PC = ProgramContext(stx, blockHeader, senderAddress, world, evmConfig)
-    // Apply precompile relocations if set (for eth_simulateV1)
-    val contextWithRelocations = if (_simulatePrecompileRelocations.nonEmpty)
-      context.copy(precompileRelocations = _simulatePrecompileRelocations) else context
-    vm.run(contextWithRelocations)
+    // Apply simulation flags if set (for eth_simulateV1)
+    val contextWithSimFlags = {
+      var ctx = context
+      if (_simulatePrecompileRelocations.nonEmpty)
+        ctx = ctx.copy(precompileRelocations = _simulatePrecompileRelocations)
+      if (_simulateTraceTransfers)
+        ctx = ctx.copy(traceTransfers = true)
+      ctx
+    }
+    vm.run(contextWithSimFlags)
   }
 
   /** Calculate total gas to be refunded See YP, eq (72)
@@ -316,16 +322,22 @@ class BlockPreparator(
       senderAddress: Address,
       blockHeader: BlockHeader,
       world: InMemoryWorldStateProxy,
-      precompileRelocations: Map[Address, Address] = Map.empty
+      precompileRelocations: Map[Address, Address] = Map.empty,
+      traceTransfers: Boolean = false
   )(implicit blockchainConfig: BlockchainConfig): TxResult = {
-    // Store relocations temporarily for runVM to pick up
+    // Store simulation flags temporarily for runVM to pick up
     _simulatePrecompileRelocations = precompileRelocations
+    _simulateTraceTransfers = traceTransfers
     try executeTransaction(stx, senderAddress, blockHeader, world)
-    finally _simulatePrecompileRelocations = Map.empty
+    finally {
+      _simulatePrecompileRelocations = Map.empty
+      _simulateTraceTransfers = false
+    }
   }
 
   // Thread-local-like storage for precompile relocations during simulation
   @volatile private var _simulatePrecompileRelocations: Map[Address, Address] = Map.empty
+  @volatile private var _simulateTraceTransfers: Boolean = false
 
   private[ledger] def executeTransaction(
       stx: SignedTransaction,

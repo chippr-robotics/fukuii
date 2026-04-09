@@ -1005,7 +1005,8 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
       warmStorage = state.accessedStorageKeys,
       transientStorage = state.transientStorage,
       precompileRelocations = state.env.precompileRelocations,
-      blobVersionedHashes = state.env.blobVersionedHashes
+      blobVersionedHashes = state.env.blobVersionedHashes,
+      traceTransfers = state.env.traceTransfers
     )
 
     val ((result, newAddress), stack2) = this match {
@@ -1140,7 +1141,8 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
       warmStorage = state.accessedStorageKeys,
       transientStorage = state.transientStorage,
       precompileRelocations = state.env.precompileRelocations,
-      blobVersionedHashes = state.env.blobVersionedHashes
+      blobVersionedHashes = state.env.blobVersionedHashes,
+      traceTransfers = state.env.traceTransfers
     )
 
     val result = state.vm.call(context, owner)
@@ -1170,6 +1172,17 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
         val stack2 = stack1.push(UInt256.One)
         val internalTx = internalTransaction(state.env, to, startGas, inputData, endowment)
 
+        // Emit synthetic Transfer log for traceTransfers (ETH value transfers)
+        val transferLogs = if (state.env.traceTransfers && endowment > UInt256.Zero && doTransfer) {
+          val transferTopic = ByteString(com.chipprbots.ethereum.crypto.kec256("Transfer(address,address,uint256)".getBytes))
+          val ethAddr = com.chipprbots.ethereum.domain.Address("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+          val fromPadded = ByteString(new Array[Byte](12) ++ caller.bytes.padTo(20, 0.toByte).takeRight(20))
+          val toPadded = ByteString(new Array[Byte](12) ++ toAddr.bytes.padTo(20, 0.toByte).takeRight(20))
+          val valueBytes = endowment.bytes
+          val data = ByteString(new Array[Byte](32 - valueBytes.length) ++ valueBytes.toArray)
+          Seq(com.chipprbots.ethereum.domain.TxLogEntry(ethAddr, Seq(transferTopic, fromPadded, toPadded), data))
+        } else Seq.empty
+
         state
           .spendGas(-result.gasRemaining)
           .refundGas(result.gasRefund)
@@ -1178,7 +1191,7 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
           .withWorld(result.world)
           .withAddressesToDelete(result.addressesToDelete)
           .withInternalTxs(internalTx +: result.internalTxs)
-          .withLogs(result.logs)
+          .withLogs(result.logs ++ transferLogs)
           .withReturnData(result.returnData)
           .addAccessedStorageKeys(result.accessedStorageKeys)
           .addAccessedAddresses(result.accessedAddresses + toAddr)
@@ -1368,12 +1381,24 @@ case object SELFDESTRUCT extends OpCode(0xff, 1, 0, _.G_selfdestruct) {
     val createdInThisTx = !state.originalWorld.accountExists(state.ownAddress)
     val shouldDelete = !state.config.eip6780Enabled || createdInThisTx
 
+    // Emit synthetic Transfer log for traceTransfers (SELFDESTRUCT value transfers)
+    val transferLogs = if (state.env.traceTransfers && state.ownBalance > UInt256.Zero && state.ownAddress != refundAddr) {
+      val transferTopic = ByteString(com.chipprbots.ethereum.crypto.kec256("Transfer(address,address,uint256)".getBytes))
+      val ethAddr = com.chipprbots.ethereum.domain.Address("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+      val fromPadded = ByteString(new Array[Byte](12) ++ state.ownAddress.bytes.toArray)
+      val toPadded = ByteString(new Array[Byte](12) ++ refundAddr.bytes.toArray)
+      val valueBytes = state.ownBalance.bytes
+      val data = ByteString(new Array[Byte](32 - valueBytes.length) ++ valueBytes.toArray)
+      Seq(com.chipprbots.ethereum.domain.TxLogEntry(ethAddr, Seq(transferTopic, fromPadded, toPadded), data))
+    } else Seq.empty
+
     val state1 = state
       .withWorld(world)
       .refundGas(gasRefund)
       .addAccessedAddress(refundAddr)
       .withStack(stack1)
       .withReturnData(ByteString.empty)
+      .withLogs(transferLogs)
 
     if (shouldDelete) state1.withAddressToDelete(state.ownAddress).halt
     else state1.halt

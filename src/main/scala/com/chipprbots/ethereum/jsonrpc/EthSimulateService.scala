@@ -672,7 +672,7 @@ class EthSimulateService(
 
       // Execute transaction
       val TxResult(newWorld, gasUsed, logs, returnData, vmError) =
-        blockPreparator.executeTransactionForSimulation(stx, sender, blockHeader, world, precompileRelocations)
+        blockPreparator.executeTransactionForSimulation(stx, sender, blockHeader, world, precompileRelocations, traceTransfers)
 
       world = newWorld
 
