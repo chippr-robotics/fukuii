@@ -656,9 +656,9 @@ class EthSimulateService(
 
       // Ensure sender account exists with sufficient balance
       var senderAccount = world.getAccount(sender).getOrElse(Account.empty(blockchainConfig.accountStartNonce))
-
-      // Set correct nonce
-      senderAccount = senderAccount.copy(nonce = UInt256(senderNonce))
+      // Note: the call's nonce only affects the transaction hash/encoding. The account's
+      // nonce is managed by the EVM's incrementNonce during execution. We do NOT set
+      // the account nonce to match the call nonce (geth doesn't either).
 
       // In non-validation mode, ensure sender has enough balance
       if (!validation) {
@@ -676,9 +676,15 @@ class EthSimulateService(
 
       world = newWorld
 
-      // Update nonce tracking
-      // Wrap nonce at uint64 boundary (geth uses uint64 for nonces)
+      // Wrap nonce at uint64 boundary if it overflowed (geth uses uint64 for nonces)
       val MaxUint64Plus1 = BigInt("18446744073709551616") // 2^64
+      world.getAccount(sender).foreach { acct =>
+        if (acct.nonce.toBigInt >= MaxUint64Plus1) {
+          world = world.saveAccount(sender, acct.copy(nonce = UInt256(acct.nonce.toBigInt % MaxUint64Plus1)))
+        }
+      }
+
+      // Update nonce tracking
       nonceMap(sender) = (senderNonce + 1) % MaxUint64Plus1
 
       // Build receipt
