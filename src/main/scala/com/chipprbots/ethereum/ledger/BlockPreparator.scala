@@ -390,7 +390,8 @@ class BlockPreparator(
     // EIP-1559: miner receives only the priority fee (effectiveGasPrice - baseFee).
     // The baseFee portion is burned on ETH chains, or credited to treasury on ETC (ECIP-1111).
     val minerGasPrice = blockHeader.baseFee match {
-      case Some(baseFee) => UInt256(gasPrice.toBigInt - baseFee)
+      case Some(baseFee) if gasPrice.toBigInt >= baseFee => UInt256(gasPrice.toBigInt - baseFee)
+      case Some(_) => UInt256.Zero // effectiveGasPrice < baseFee: no priority fee
       case None => gasPrice
     }
     val payMinerForGasFn =
