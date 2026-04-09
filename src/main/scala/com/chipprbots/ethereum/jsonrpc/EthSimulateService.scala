@@ -543,9 +543,9 @@ class EthSimulateService(
       val maxFeePerGas = call.maxFeePerGas.getOrElse(BigInt(0))
       val gasPrice = call.gasPrice.orElse(call.maxFeePerGas).getOrElse(BigInt(0))
 
-      // Check nonce overflow (uint64 max) — only in validation mode
+      // Check nonce overflow (uint64 max) — always check, returns -32603 (InternalError)
       val MaxUint64 = BigInt("18446744073709551615") // 0xffffffffffffffff
-      if (validation && senderNonce > MaxUint64) {
+      if (senderNonce > MaxUint64) {
         return Left(JsonRpcError.InternalError)
       }
 
