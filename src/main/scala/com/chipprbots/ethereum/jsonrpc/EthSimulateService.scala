@@ -260,19 +260,24 @@ class EthSimulateService(
 
     for ((bsc, idx) <- blockStateCalls.zipWithIndex) {
       val overrides = bsc.blockOverrides.getOrElse(BlockOverrides())
-      val number = overrides.number.getOrElse(prevNumber + 1)
+      val autoNumber = prevNumber + 1
       val timestamp = overrides.time.getOrElse(prevTimestamp + 12)
 
-      if (number <= prevNumber) {
-        return Left(JsonRpcError.SimulateBlockNumberNotIncreasing(
-          s"block numbers must be in order: $number <= $prevNumber"))
+      // Validate block number override doesn't go backwards
+      overrides.number.foreach { n =>
+        if (n <= prevNumber) {
+          return Left(JsonRpcError.SimulateBlockNumberNotIncreasing(
+            s"block numbers must be in order: $n <= $prevNumber"))
+        }
       }
+
       if (timestamp <= prevTimestamp) {
         return Left(JsonRpcError.SimulateTimestampNotIncreasing(
           s"block timestamps must be in order: $timestamp <= $prevTimestamp"))
       }
 
-      prevNumber = number
+      // Track the override number for validation of next block (if present), else auto
+      prevNumber = overrides.number.getOrElse(autoNumber)
       prevTimestamp = timestamp
     }
     Right(())
@@ -442,9 +447,9 @@ class EthSimulateService(
       val maxFeePerGas = call.maxFeePerGas.getOrElse(BigInt(0))
       val gasPrice = call.gasPrice.orElse(call.maxFeePerGas).getOrElse(BigInt(0))
 
-      // Check nonce overflow (uint64 max)
+      // Check nonce overflow (uint64 max) — only in validation mode
       val MaxUint64 = BigInt("18446744073709551615") // 0xffffffffffffffff
-      if (senderNonce > MaxUint64) {
+      if (validation && senderNonce > MaxUint64) {
         return Left(JsonRpcError.InternalError)
       }
 
