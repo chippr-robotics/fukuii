@@ -329,10 +329,10 @@ class RLPxConnectionHandler(
               processHandshakeResult(result, remainingData)
 
             case Failure(ex) =>
-              log.debug(
-                "[Stopping Connection] Init AuthHandshaker message handling failed for peer {}",
+              log.error(
+                "[HIVE-DEBUG] Auth handshake FAILED for peer {} - both pre-EIP8 and EIP-8 decode failed: {}",
                 peerId,
-                ex
+                ex.getMessage
               )
               context.parent ! ConnectionFailed
               gracefulStop()
@@ -510,7 +510,7 @@ class RLPxConnectionHandler(
                 )
               )
             case None =>
-              log.error("[Stopping Connection] Unable to negotiate protocol with peer {}", peerId)
+              log.error("[Stopping Connection] Unable to negotiate protocol with peer {} — peerCaps=[{}], ourCaps=[{}]", peerId, hello.capabilities.mkString(", "), capabilities.mkString(", "))
               context.parent ! ConnectionFailed
               gracefulStop()
           }
