@@ -240,7 +240,24 @@ class EthSimulateService(
       }
 
       val body = BlockBody(txs, Nil, Some(Seq.empty))
-      // (debug logging removed)
+      // Debug: dump account states for failing tests
+      if (calls.nonEmpty) {
+        val h2s = com.chipprbots.ethereum.utils.ByteStringUtils.hash2string _
+        log.error(s"SIMULATE-DEBUG block=${finalHeader.number} stateRoot=${h2s(stateRoot)} gasUsed=$gasUsed txCount=${txs.size}")
+        // Dump key addresses
+        val debugAddrs = calls.flatMap(c => Seq(c.from, c.to).flatten).distinct ++ Seq(
+          Address(blockchainConfig.accountStartNonce.toBigInt), // zero addr
+          Address(finalHeader.beneficiary)
+        )
+        for (addr <- debugAddrs.distinct) {
+          world.getAccount(addr) match {
+            case Some(acct) =>
+              log.error(s"SIMULATE-DEBUG   ${addr}: nonce=${acct.nonce} balance=${acct.balance} codeHash=${h2s(acct.codeHash)} storageRoot=${h2s(acct.storageRoot)}")
+            case None =>
+              log.error(s"SIMULATE-DEBUG   ${addr}: NOT_FOUND")
+          }
+        }
+      }
       blockResults += SimulateBlockResult(finalHeader, body, txs, updatedCallResults, receipts)
       parentHeader = finalHeader
     }
@@ -359,6 +376,11 @@ class EthSimulateService(
 
       ov.code.foreach { code =>
         w = w.saveCode(address, code)
+        // Update the account's codeHash immediately (not just in cache)
+        // This prevents EIP-161 from deleting the account as "empty"
+        val codeHash = if (code.isEmpty) Account.EmptyCodeHash else ByteString(kec256(code.toArray))
+        val acctWithCode = w.getAccount(address).getOrElse(Account.empty(blockchainConfig.accountStartNonce))
+        w = w.saveAccount(address, acctWithCode.copy(codeHash = codeHash))
       }
 
       ov.state.foreach { slots =>
