@@ -22,7 +22,8 @@ object ExecEnv {
       callDepth,
       startGas,
       evmConfig,
-      context.precompileRelocations
+      context.precompileRelocations,
+      context.blobVersionedHashes
     )
   }
 }
@@ -63,5 +64,6 @@ case class ExecEnv(
     callDepth: Int,
     startGas: BigInt,
     evmConfig: EvmConfig,
-    precompileRelocations: Map[Address, Address] = Map.empty
+    precompileRelocations: Map[Address, Address] = Map.empty,
+    blobVersionedHashes: Seq[ByteString] = Seq.empty
 )

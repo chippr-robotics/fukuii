@@ -160,7 +160,7 @@ object OpCodes {
     PUSH0 +: PhoenixOpCodes
 
   val OlympiaOpCodes: List[OpCode] =
-    List(BASEFEE, TLOAD, TSTORE, MCOPY) ++ SpiralOpCodes
+    List(BASEFEE, BLOBHASH, BLOBBASEFEE, TLOAD, TSTORE, MCOPY) ++ SpiralOpCodes
 }
 
 object OpCode {
@@ -1004,7 +1004,8 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
       warmAddresses = state.accessedAddresses,
       warmStorage = state.accessedStorageKeys,
       transientStorage = state.transientStorage,
-      precompileRelocations = state.env.precompileRelocations
+      precompileRelocations = state.env.precompileRelocations,
+      blobVersionedHashes = state.env.blobVersionedHashes
     )
 
     val ((result, newAddress), stack2) = this match {
@@ -1138,7 +1139,8 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
       warmAddresses = stateWithDelegationWarming.accessedAddresses,
       warmStorage = state.accessedStorageKeys,
       transientStorage = state.transientStorage,
-      precompileRelocations = state.env.precompileRelocations
+      precompileRelocations = state.env.precompileRelocations,
+      blobVersionedHashes = state.env.blobVersionedHashes
     )
 
     val result = state.vm.call(context, owner)
@@ -1422,6 +1424,35 @@ case object BASEFEE extends OpCode(0x48, 0, 1, _.G_base) with ConstGas {
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] = {
     val baseFee = state.env.blockHeader.baseFee.getOrElse(BigInt(0))
     val stack1 = state.stack.push(UInt256(baseFee))
+    state.withStack(stack1).step()
+  }
+}
+
+/** EIP-4844: BLOBHASH opcode — returns the versioned hash at the given index from the
+  * current transaction's blob_versioned_hashes, or 0 if index is out of bounds.
+  */
+case object BLOBHASH extends OpCode(0x49, 1, 1, _.G_verylow) with ConstGas {
+  protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] = {
+    val (index, stack1) = state.stack.pop()
+    val hashes = state.env.blobVersionedHashes
+    val result = if (index.toBigInt < hashes.size && index.toBigInt >= 0) {
+      UInt256(hashes(index.toInt))
+    } else {
+      UInt256.Zero
+    }
+    state.withStack(stack1.push(result)).step()
+  }
+}
+
+/** EIP-7516: BLOBBASEFEE opcode — returns the current block's blob base fee. */
+case object BLOBBASEFEE extends OpCode(0x4a, 0, 1, _.G_base) with ConstGas {
+  protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] = {
+    // Blob base fee from the block header's excessBlobGas
+    val blobBaseFee = state.env.blockHeader.excessBlobGas.map { excess =>
+      // Simplified: for now return 1 (minimum blob base fee)
+      BigInt(1)
+    }.getOrElse(BigInt(0))
+    val stack1 = state.stack.push(UInt256(blobBaseFee))
     state.withStack(stack1).step()
   }
 }

@@ -224,13 +224,26 @@ class EthSimulateService(
       val stateRoot = persistedWorld.stateRootHash
       world = persistedWorld
 
-      // Build final header with computed roots
+      // Compute blob gas used from blob transactions
+      val blobGasUsed = txs.foldLeft(BigInt(0)) { (acc, stx) =>
+        stx.tx match {
+          case blob: BlobTransaction => acc + BigInt(blob.blobVersionedHashes.size) * BigInt(131072)
+          case _ => acc
+        }
+      }
+
+      // Build final header with computed roots and blob gas
+      val finalExtraFields = simHeader.extraFields match {
+        case p: HefPostPrague => p.copy(blobGasUsed = blobGasUsed)
+        case other => other
+      }
       val finalHeader = simHeader.copy(
         stateRoot = stateRoot,
         transactionsRoot = transactionsRoot,
         receiptsRoot = receiptsRoot,
         logsBloom = logsBloom,
-        gasUsed = gasUsed
+        gasUsed = gasUsed,
+        extraFields = finalExtraFields
       )
 
       // Update call results with correct block hash and number
@@ -501,9 +514,24 @@ class EthSimulateService(
         }
       }
 
-      // Default transaction type is 2 (EIP-1559) unless explicitly set to 0 (legacy)
-      val isLegacy = call.`type`.contains(BigInt(0)) || (call.gasPrice.isDefined && call.maxFeePerGas.isEmpty && !call.`type`.contains(BigInt(2)))
-      val tx: Transaction = if (!isLegacy) {
+      // Determine transaction type: blob (3), legacy (0), or dynamic fee (2, default)
+      val isBlob = call.`type`.contains(BigInt(3)) || call.blobVersionedHashes.exists(_.nonEmpty)
+      val isLegacy = call.`type`.contains(BigInt(0)) || (call.gasPrice.isDefined && call.maxFeePerGas.isEmpty && !call.`type`.contains(BigInt(2)) && !isBlob)
+      val tx: Transaction = if (isBlob) {
+        BlobTransaction(
+          chainId = blockchainConfig.chainId,
+          nonce = senderNonce,
+          maxPriorityFeePerGas = call.maxPriorityFeePerGas.getOrElse(BigInt(0)),
+          maxFeePerGas = call.maxFeePerGas.getOrElse(BigInt(0)),
+          gasLimit = gasLimit,
+          receivingAddress = toAddr,
+          value = value,
+          payload = payload,
+          accessList = call.accessList.getOrElse(Nil),
+          maxFeePerBlobGas = call.maxFeePerBlobGas.getOrElse(BigInt(0)),
+          blobVersionedHashes = call.blobVersionedHashes.getOrElse(Nil).toList
+        )
+      } else if (!isLegacy) {
         TransactionWithDynamicFee(
           chainId = blockchainConfig.chainId,
           nonce = senderNonce,
@@ -563,6 +591,7 @@ class EthSimulateService(
         logs = logs
       )
       val receipt: Receipt = tx match {
+        case _: BlobTransaction => Type03Receipt(legacyReceipt)
         case _: TransactionWithDynamicFee => Type02Receipt(legacyReceipt)
         case _: LegacyTransaction => legacyReceipt
         case _ => legacyReceipt
