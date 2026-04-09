@@ -180,12 +180,9 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits {
         val h = block.header
         val blockHash = h.hash
 
-        // Standard block header fields
-        val headerFields = List(
-          "baseFeePerGas" -> encodeAsHex(h.baseFee.getOrElse(BigInt(0))),
-          "blobGasUsed" -> encodeAsHex(h.blobGasUsed.getOrElse(BigInt(0))),
+        // Standard block header fields — conditionally include fork-specific fields
+        val baseHeaderFields = List(
           "difficulty" -> encodeAsHex(h.difficulty),
-          "excessBlobGas" -> encodeAsHex(h.excessBlobGas.getOrElse(BigInt(0))),
           "extraData" -> encodeAsHex(h.extraData),
           "gasLimit" -> encodeAsHex(h.gasLimit),
           "gasUsed" -> encodeAsHex(h.gasUsed),
@@ -195,19 +192,25 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits {
           "mixHash" -> encodeAsHex(h.mixHash),
           "nonce" -> encodeAsHex(h.nonce),
           "number" -> encodeAsHex(h.number),
-          "parentBeaconBlockRoot" -> encodeAsHex(h.parentBeaconBlockRoot.getOrElse(ByteString(new Array[Byte](32)))),
           "parentHash" -> encodeAsHex(h.parentHash),
           "receiptsRoot" -> encodeAsHex(h.receiptsRoot),
-          "requestsHash" -> encodeAsHex(h.requestsHash.getOrElse(EthSimulateService.EmptyRequestsHash)),
           "sha3Uncles" -> encodeAsHex(h.ommersHash),
           "size" -> encodeAsHex(BigInt(Block.size(Block(h, block.body)))),
           "stateRoot" -> encodeAsHex(h.stateRoot),
           "timestamp" -> encodeAsHex(BigInt(h.unixTimestamp)),
           "transactionsRoot" -> encodeAsHex(h.transactionsRoot),
-          "uncles" -> JArray(Nil),
-          "withdrawals" -> JArray(Nil),
-          "withdrawalsRoot" -> encodeAsHex(h.withdrawalsRoot.getOrElse(EthSimulateService.EmptyWithdrawalsRoot))
-        )
+          "uncles" -> JArray(Nil)
+        ) ++ (if (h.withdrawalsRoot.isDefined) List("withdrawals" -> JArray(Nil)) else Nil)
+
+        // Conditionally add fork-specific fields
+        val baseFeeField = h.baseFee.map(bf => "baseFeePerGas" -> encodeAsHex(bf)).toList
+        val blobFields = h.blobGasUsed.map(bg => "blobGasUsed" -> encodeAsHex(bg)).toList ++
+          h.excessBlobGas.map(eb => "excessBlobGas" -> encodeAsHex(eb)).toList
+        val beaconField = h.parentBeaconBlockRoot.map(pb => "parentBeaconBlockRoot" -> encodeAsHex(pb)).toList
+        val requestsField = h.requestsHash.map(rh => "requestsHash" -> encodeAsHex(rh)).toList
+        val withdrawalsRootField = h.withdrawalsRoot.map(wr => "withdrawalsRoot" -> encodeAsHex(wr)).toList
+
+        val headerFields = baseFeeField ::: blobFields ::: baseHeaderFields ::: beaconField ::: requestsField ::: withdrawalsRootField
 
         // Transactions: hashes or full objects depending on returnFullTransactions flag
         val txField = if (returnFullTxs) {

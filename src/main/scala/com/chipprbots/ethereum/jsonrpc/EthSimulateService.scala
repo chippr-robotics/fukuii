@@ -394,14 +394,28 @@ class EthSimulateService(
     )
     val parentBeaconBlockRoot = ByteString(new Array[Byte](32)) // Zero for simulated blocks
 
-    val extraFields = HefPostPrague(
-      baseFee = baseFee,
-      withdrawalsRoot = EmptyWithdrawalsRoot,
-      blobGasUsed = BigInt(0),
-      excessBlobGas = parentHeader.excessBlobGas.getOrElse(BigInt(0)),
-      parentBeaconBlockRoot = parentBeaconBlockRoot,
-      requestsHash = EmptyRequestsHash
-    )
+    // Determine the fork era for the header based on the block's timestamp
+    // This handles both pre-merge blocks and fork boundary crossings
+    val ts = timestamp.toLong
+    val extraFields = if (blockchainConfig.isPragueTimestamp(ts)) {
+      HefPostPrague(baseFee, EmptyWithdrawalsRoot, BigInt(0),
+        parentHeader.excessBlobGas.getOrElse(BigInt(0)), parentBeaconBlockRoot, EmptyRequestsHash)
+    } else if (blockchainConfig.isCancunTimestamp(ts)) {
+      HefPostCancun(baseFee, EmptyWithdrawalsRoot, BigInt(0),
+        parentHeader.excessBlobGas.getOrElse(BigInt(0)), parentBeaconBlockRoot)
+    } else if (blockchainConfig.isShanghaiTimestamp(ts)) {
+      HefPostShanghai(baseFee, EmptyWithdrawalsRoot)
+    } else if (parentHeader.baseFee.isDefined) {
+      HefPostOlympia(baseFee) // Post-London but pre-Shanghai
+    } else {
+      HefEmpty // Pre-London
+    }
+
+    // Pre-merge blocks have non-zero difficulty
+    val difficulty = extraFields match {
+      case HefEmpty => parentHeader.difficulty // Inherit PoW difficulty
+      case _ => BigInt(0) // Post-merge
+    }
 
     BlockHeader(
       parentHash = parentHeader.hash,
@@ -411,7 +425,7 @@ class EthSimulateService(
       transactionsRoot = EmptyMpt,
       receiptsRoot = EmptyMpt,
       logsBloom = EmptyBloom,
-      difficulty = BigInt(0),
+      difficulty = difficulty,
       number = number,
       gasLimit = gasLimit,
       gasUsed = BigInt(0), // Placeholder — filled after execution
@@ -543,9 +557,9 @@ class EthSimulateService(
       val maxFeePerGas = call.maxFeePerGas.getOrElse(BigInt(0))
       val gasPrice = call.gasPrice.orElse(call.maxFeePerGas).getOrElse(BigInt(0))
 
-      // Check nonce overflow (uint64 max) — always check, returns -32603 (InternalError)
+      // Check nonce overflow (uint64 max) — returns -32603 (InternalError)
       val MaxUint64 = BigInt("18446744073709551615") // 0xffffffffffffffff
-      if (senderNonce > MaxUint64) {
+      if (senderNonce > MaxUint64 || (validation && senderNonce == MaxUint64)) {
         return Left(JsonRpcError.InternalError)
       }
 
