@@ -160,12 +160,16 @@ class EthSimulateService(
     val validationResult = validateBlockOrdering(req.blockStateCalls, baseBlock.header)
     if (validationResult.isLeft) return validationResult.map(_ => null)
 
+    // Simulated block hash registry for BLOCKHASH opcode support
+    val simulatedBlockHashes = mutable.Map[BigInt, ByteString]()
+
     // Create initial world state from base block
     val evmConfig = EvmConfig.forBlock(baseBlock.header.number, baseBlock.header.unixTimestamp, blockchainConfig)
     var world = InMemoryWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
       mptStorage = blockchain.getReadOnlyMptStorage(),
-      getBlockHashByNumber = (n: BigInt) => blockchainReader.getBlockHeaderByNumber(n).map(_.hash),
+      getBlockHashByNumber = (n: BigInt) =>
+        simulatedBlockHashes.get(n).orElse(blockchainReader.getBlockHeaderByNumber(n).map(_.hash)),
       accountStartNonce = blockchainConfig.accountStartNonce,
       stateRootHash = baseBlock.header.stateRoot,
       noEmptyAccounts = evmConfig.noEmptyAccounts,
@@ -177,91 +181,155 @@ class EthSimulateService(
     val nonceMap = mutable.Map[Address, BigInt]() // Track nonces across blocks
     var globalAccumGas = BigInt(0) // Global gas accumulator across all blocks (geth shares the 50M pool)
 
+    // Pre-compute total blocks including gap-filling to validate against limit
+    var totalBlocks = 0
+    var prevNum = baseBlock.header.number
+    for (bsc <- req.blockStateCalls) {
+      val targetNum = bsc.blockOverrides.flatMap(_.number).getOrElse(prevNum + 1)
+      totalBlocks += (targetNum - prevNum).toInt
+      prevNum = targetNum
+    }
+    if (totalBlocks > MaxBlockStateCalls) {
+      return Left(JsonRpcError.SimulateClientLimitExceeded(
+        s"too many blocks (including gaps): $totalBlocks > $MaxBlockStateCalls"))
+    }
+
     for ((blockStateCall, blockIdx) <- req.blockStateCalls.zipWithIndex) {
-      // Build simulated block header
-      val simHeader = buildBlockHeader(parentHeader, blockStateCall.blockOverrides, req.validation)
+      val targetNumber = blockStateCall.blockOverrides.flatMap(_.number).getOrElse(parentHeader.number + 1)
 
-      // Apply EIP-4788: store parent beacon block root in system contract
-      if (blockchainConfig.isCancunTimestamp(simHeader.unixTimestamp)) {
-        world = applyEip4788(simHeader, world)
-      }
-
-      // Apply EIP-2935: store parent block hash in history storage
-      if (blockchainConfig.isPragueTimestamp(simHeader.unixTimestamp)) {
-        world = applyEip2935(simHeader, world)
-      }
-
-      // Apply state overrides and build precompile relocations
-      var precompileRelocations = Map.empty[Address, Address]
-      blockStateCall.stateOverrides.foreach { overrides =>
-        applyStateOverrides(world, overrides, precompileRelocations) match {
-          case Right((newWorld, newRelocations)) =>
-            world = newWorld
-            precompileRelocations = newRelocations
+      // Generate gap-filling empty blocks if the target number is ahead
+      while (parentHeader.number + 1 < targetNumber) {
+        val gapResult = buildAndFinalizeBlock(
+          parentHeader, None, None, Seq.empty,
+          req.validation, req.traceTransfers, nonceMap, Map.empty, globalAccumGas,
+          world, simulatedBlockHashes
+        )
+        gapResult match {
           case Left(err) => return Left(err)
+          case Right((gapHeader, gapWorld, gapBlockResult, gapGasUsed)) =>
+            blockResults += gapBlockResult
+            simulatedBlockHashes(gapHeader.number) = gapHeader.hash
+            parentHeader = gapHeader
+            world = gapWorld
+            globalAccumGas += gapGasUsed
         }
       }
 
-      // Execute calls
-      val calls = blockStateCall.calls.getOrElse(Seq.empty)
-      val execResult = executeCalls(calls, simHeader, world, req.validation, req.traceTransfers, nonceMap, precompileRelocations, globalAccumGas)
-      execResult match {
-        case Left(err) => return Left(err)
-        case _ =>
-      }
-      val (newWorld, callResults, txs, txSenders, receipts, gasUsed) = execResult.toOption.get
-
-      world = newWorld
-      globalAccumGas += gasUsed
-
-      // Compute Merkle roots
-      val transactionsRoot = computeTransactionsRoot(txs)
-      val receiptsRoot = computeReceiptsRoot(receipts)
-      val logsBloom = computeLogsBloom(receipts)
-
-      // Persist state to compute stateRoot
-      val persistedWorld = InMemoryWorldStateProxy.persistState(world)
-      val stateRoot = persistedWorld.stateRootHash
-      world = persistedWorld
-
-      // Compute blob gas used from blob transactions
-      val blobGasUsed = txs.foldLeft(BigInt(0)) { (acc, stx) =>
-        stx.tx match {
-          case blob: BlobTransaction => acc + BigInt(blob.blobVersionedHashes.size) * BigInt(131072)
-          case _ => acc
-        }
-      }
-
-      // Build final header with computed roots and blob gas
-      val finalExtraFields = simHeader.extraFields match {
-        case p: HefPostPrague => p.copy(blobGasUsed = blobGasUsed)
-        case other => other
-      }
-      val finalHeader = simHeader.copy(
-        stateRoot = stateRoot,
-        transactionsRoot = transactionsRoot,
-        receiptsRoot = receiptsRoot,
-        logsBloom = logsBloom,
-        gasUsed = gasUsed,
-        extraFields = finalExtraFields
+      // Build the actual BSC block
+      val bscResult = buildAndFinalizeBlock(
+        parentHeader, blockStateCall.blockOverrides, blockStateCall.stateOverrides,
+        blockStateCall.calls.getOrElse(Seq.empty),
+        req.validation, req.traceTransfers, nonceMap, Map.empty, globalAccumGas,
+        world, simulatedBlockHashes
       )
-
-      // Update call results with correct block hash and number
-      val blockHash = finalHeader.hash
-      val updatedCallResults = callResults.zipWithIndex.map { case (cr, callIdx) =>
-        cr.copy(logs = cr.logs.map(_.copy(
-          blockHash = blockHash,
-          blockNumber = finalHeader.number
-        )))
+      bscResult match {
+        case Left(err) => return Left(err)
+        case Right((bscHeader, bscWorld, bscBlockResult, bscGasUsed)) =>
+          blockResults += bscBlockResult
+          simulatedBlockHashes(bscHeader.number) = bscHeader.hash
+          parentHeader = bscHeader
+          world = bscWorld
+          globalAccumGas += bscGasUsed
       }
-
-      val body = BlockBody(txs, Nil, Some(Seq.empty))
-      // (debug logging removed)
-      blockResults += SimulateBlockResult(finalHeader, body, txs, txSenders, updatedCallResults, receipts)
-      parentHeader = finalHeader
     }
 
     Right(EthSimulateResponse(blockResults.toSeq, req.returnFullTransactions))
+  }
+
+  /** Build, execute, and finalize a single simulated block. Returns (finalHeader, world, blockResult, gasUsed). */
+  private def buildAndFinalizeBlock(
+      parentHeader: BlockHeader,
+      blockOverrides: Option[BlockOverrides],
+      stateOverrides: Option[Map[Address, StateOverride]],
+      calls: Seq[SimulateCall],
+      validation: Boolean,
+      traceTransfers: Boolean,
+      nonceMap: mutable.Map[Address, BigInt],
+      existingRelocations: Map[Address, Address],
+      globalGasOffset: BigInt,
+      initialWorld: InMemoryWorldStateProxy,
+      simulatedBlockHashes: mutable.Map[BigInt, ByteString]
+  ): Either[JsonRpcError, (BlockHeader, InMemoryWorldStateProxy, SimulateBlockResult, BigInt)] = {
+    var world = initialWorld
+
+    // Build simulated block header
+    val simHeader = buildBlockHeader(parentHeader, blockOverrides, validation)
+
+    // Apply EIP-4788: store parent beacon block root in system contract
+    if (blockchainConfig.isCancunTimestamp(simHeader.unixTimestamp)) {
+      world = applyEip4788(simHeader, world)
+    }
+
+    // Apply EIP-2935: store parent block hash in history storage
+    if (blockchainConfig.isPragueTimestamp(simHeader.unixTimestamp)) {
+      world = applyEip2935(simHeader, world)
+    }
+
+    // Apply state overrides and build precompile relocations
+    var precompileRelocations = existingRelocations
+    stateOverrides.foreach { overrides =>
+      applyStateOverrides(world, overrides, precompileRelocations) match {
+        case Right((newWorld, newRelocations)) =>
+          world = newWorld
+          precompileRelocations = newRelocations
+        case Left(err) => return Left(err)
+      }
+    }
+
+    // Execute calls
+    val execResult = executeCalls(calls, simHeader, world, validation, traceTransfers, nonceMap, precompileRelocations, globalGasOffset)
+    execResult match {
+      case Left(err) => return Left(err)
+      case _ =>
+    }
+    val (newWorld, callResults, txs, txSenders, receipts, gasUsed) = execResult.toOption.get
+
+    world = newWorld
+
+    // Compute Merkle roots
+    val transactionsRoot = computeTransactionsRoot(txs)
+    val receiptsRoot = computeReceiptsRoot(receipts)
+    val logsBloom = computeLogsBloom(receipts)
+
+    // Persist state to compute stateRoot
+    val persistedWorld = InMemoryWorldStateProxy.persistState(world)
+    val stateRoot = persistedWorld.stateRootHash
+    world = persistedWorld
+
+    // Compute blob gas used from blob transactions
+    val blobGasUsed = txs.foldLeft(BigInt(0)) { (acc, stx) =>
+      stx.tx match {
+        case blob: BlobTransaction => acc + BigInt(blob.blobVersionedHashes.size) * BigInt(131072)
+        case _ => acc
+      }
+    }
+
+    // Build final header with computed roots and blob gas
+    val finalExtraFields = simHeader.extraFields match {
+      case p: HefPostPrague => p.copy(blobGasUsed = blobGasUsed)
+      case other => other
+    }
+    val finalHeader = simHeader.copy(
+      stateRoot = stateRoot,
+      transactionsRoot = transactionsRoot,
+      receiptsRoot = receiptsRoot,
+      logsBloom = logsBloom,
+      gasUsed = gasUsed,
+      extraFields = finalExtraFields
+    )
+
+    // Update call results with correct block hash and number
+    val blockHash = finalHeader.hash
+    val updatedCallResults = callResults.zipWithIndex.map { case (cr, callIdx) =>
+      cr.copy(logs = cr.logs.map(_.copy(
+        blockHash = blockHash,
+        blockNumber = finalHeader.number
+      )))
+    }
+
+    val body = BlockBody(txs, Nil, Some(Seq.empty))
+    val blockResult = SimulateBlockResult(finalHeader, body, txs, txSenders, updatedCallResults, receipts)
+    Right((finalHeader, world, blockResult, gasUsed))
   }
 
   private def validateBlockOrdering(
@@ -273,24 +341,31 @@ class EthSimulateService(
 
     for ((bsc, idx) <- blockStateCalls.zipWithIndex) {
       val overrides = bsc.blockOverrides.getOrElse(BlockOverrides())
-      val autoNumber = prevNumber + 1
-      val timestamp = overrides.time.getOrElse(prevTimestamp + 12)
+      val targetNumber = overrides.number.getOrElse(prevNumber + 1)
 
       // Validate block number override doesn't go backwards
-      overrides.number.foreach { n =>
-        if (n <= prevNumber) {
-          return Left(JsonRpcError.SimulateBlockNumberNotIncreasing(
-            s"block numbers must be in order: $n <= $prevNumber"))
-        }
+      if (targetNumber <= prevNumber) {
+        return Left(JsonRpcError.SimulateBlockNumberNotIncreasing(
+          s"block numbers must be in order: $targetNumber <= $prevNumber"))
       }
+
+      // For gap-filling blocks, compute the minimum timestamp at the target number
+      val gapBlocks = targetNumber - prevNumber // Number of blocks between prev and target (inclusive)
+      val minTimestamp = prevTimestamp + gapBlocks * 12
+      val timestamp = overrides.time.getOrElse(minTimestamp)
 
       if (timestamp <= prevTimestamp) {
         return Left(JsonRpcError.SimulateTimestampNotIncreasing(
           s"block timestamps must be in order: $timestamp <= $prevTimestamp"))
       }
 
-      // Track the override number for validation of next block (if present), else auto
-      prevNumber = overrides.number.getOrElse(autoNumber)
+      // Gap-aware: check that the explicit timestamp is >= the minimum for this block number
+      if (overrides.time.isDefined && timestamp < minTimestamp) {
+        return Left(JsonRpcError.SimulateTimestampNotIncreasing(
+          s"block timestamps must be in order: $timestamp <= ${minTimestamp - 12}"))
+      }
+
+      prevNumber = targetNumber
       prevTimestamp = timestamp
     }
     Right(())

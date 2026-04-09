@@ -235,11 +235,12 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits {
           case _: com.chipprbots.ethereum.domain.BlobTransaction => BigInt(3)
           case _: com.chipprbots.ethereum.domain.SetCodeTransaction => BigInt(4)
         }
-        val chainId = tx match {
+        val chainId: Option[BigInt] = tx match {
           case t: com.chipprbots.ethereum.domain.BlobTransaction => Some(t.chainId)
+          case t: com.chipprbots.ethereum.domain.SetCodeTransaction => Some(t.chainId)
           case t: com.chipprbots.ethereum.domain.TransactionWithDynamicFee => Some(t.chainId)
           case t: com.chipprbots.ethereum.domain.TransactionWithAccessList => Some(t.chainId)
-          case _ => None
+          case _ => Some(com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig.chainId)
         }
         val sender = senderAddr.bytes
         val effectiveGasPrice = com.chipprbots.ethereum.domain.Transaction.effectiveGasPrice(tx, header.baseFee)
