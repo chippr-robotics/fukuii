@@ -691,6 +691,10 @@ class SNAPSyncController(
       healingNodesAbandoned = abandonedNodes
       healingNodesTotal = totalHealed
       log.info(s"State healing complete [abandonedNodes=$abandonedNodes, healed=$totalHealed]")
+      // Clear the coordinator so startStateHealingWithSavedNodes / startStateHealing can create a fresh one.
+      // The coordinator sends this message and then stops itself; clearing the reference here prevents
+      // startStateHealingWithSavedNodes from seeing isDefined=true and silently ignoring the restart.
+      trieNodeHealingCoordinator.foreach(context.stop); trieNodeHealingCoordinator = None
       // Flush healed nodes from LRU to RocksDB before the next walk.
       // TrieNodeHealingCoordinator.persist() is a NO-OP on CachedReferenceCountedStorage —
       // nodes are in LRU only. Without this flush, rootInDb=false in startTrieWalk() and
