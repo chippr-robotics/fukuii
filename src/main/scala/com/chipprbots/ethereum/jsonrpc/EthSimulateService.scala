@@ -349,20 +349,26 @@ class EthSimulateService(
           s"block numbers must be in order: $targetNumber <= $prevNumber"))
       }
 
-      // For gap-filling blocks, compute the minimum timestamp at the target number
-      val gapBlocks = targetNumber - prevNumber // Number of blocks between prev and target (inclusive)
-      val minTimestamp = prevTimestamp + gapBlocks * 12
-      val timestamp = overrides.time.getOrElse(minTimestamp)
+      // Compute the minimum timestamp for the target block number
+      // Gap blocks each take 12 seconds, so the minimum is prevTimestamp + gapBlocks * 12
+      val gapBlocks = targetNumber - prevNumber // Number of blocks between prev and target
+      val autoTimestamp = prevTimestamp + gapBlocks * 12
+      val timestamp = overrides.time.getOrElse(autoTimestamp)
 
+      // Explicit timestamp must be strictly greater than previous
       if (timestamp <= prevTimestamp) {
         return Left(JsonRpcError.SimulateTimestampNotIncreasing(
           s"block timestamps must be in order: $timestamp <= $prevTimestamp"))
       }
 
-      // Gap-aware: check that the explicit timestamp is >= the minimum for this block number
-      if (overrides.time.isDefined && timestamp < minTimestamp) {
-        return Left(JsonRpcError.SimulateTimestampNotIncreasing(
-          s"block timestamps must be in order: $timestamp <= ${minTimestamp - 12}"))
+      // Gap-aware: if there are gap blocks AND an explicit timestamp, the timestamp
+      // must be high enough to accommodate the gap blocks (each +12s)
+      if (overrides.time.isDefined && gapBlocks > 1) {
+        val minTimestamp = prevTimestamp + gapBlocks * 12
+        if (timestamp < minTimestamp) {
+          return Left(JsonRpcError.SimulateTimestampNotIncreasing(
+            s"block timestamps must be in order: $timestamp <= ${minTimestamp - 12}"))
+        }
       }
 
       prevNumber = targetNumber
