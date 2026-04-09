@@ -175,6 +175,7 @@ class EthSimulateService(
     var parentHeader = baseBlock.header
     val blockResults = mutable.ArrayBuffer[SimulateBlockResult]()
     val nonceMap = mutable.Map[Address, BigInt]() // Track nonces across blocks
+    var globalAccumGas = BigInt(0) // Global gas accumulator across all blocks (geth shares the 50M pool)
 
     for ((blockStateCall, blockIdx) <- req.blockStateCalls.zipWithIndex) {
       // Build simulated block header
@@ -203,7 +204,7 @@ class EthSimulateService(
 
       // Execute calls
       val calls = blockStateCall.calls.getOrElse(Seq.empty)
-      val execResult = executeCalls(calls, simHeader, world, req.validation, req.traceTransfers, nonceMap, precompileRelocations)
+      val execResult = executeCalls(calls, simHeader, world, req.validation, req.traceTransfers, nonceMap, precompileRelocations, globalAccumGas)
       execResult match {
         case Left(err) => return Left(err)
         case _ =>
@@ -211,6 +212,7 @@ class EthSimulateService(
       val (newWorld, callResults, txs, txSenders, receipts, gasUsed) = execResult.toOption.get
 
       world = newWorld
+      globalAccumGas += gasUsed
 
       // Compute Merkle roots
       val transactionsRoot = computeTransactionsRoot(txs)
@@ -241,24 +243,7 @@ class EthSimulateService(
       }
 
       val body = BlockBody(txs, Nil, Some(Seq.empty))
-      // Debug: dump account states for failing tests
-      if (calls.nonEmpty) {
-        val h2s = com.chipprbots.ethereum.utils.ByteStringUtils.hash2string _
-        log.error(s"SIMULATE-DEBUG block=${finalHeader.number} stateRoot=${h2s(stateRoot)} gasUsed=$gasUsed txCount=${txs.size}")
-        // Dump key addresses
-        val debugAddrs = calls.flatMap(c => Seq(c.from, c.to).flatten).distinct ++ Seq(
-          Address(blockchainConfig.accountStartNonce.toBigInt), // zero addr
-          Address(finalHeader.beneficiary)
-        )
-        for (addr <- debugAddrs.distinct) {
-          world.getAccount(addr) match {
-            case Some(acct) =>
-              log.error(s"SIMULATE-DEBUG   ${addr}: nonce=${acct.nonce} balance=${acct.balance} codeHash=${h2s(acct.codeHash)} storageRoot=${h2s(acct.storageRoot)}")
-            case None =>
-              log.error(s"SIMULATE-DEBUG   ${addr}: NOT_FOUND")
-          }
-        }
-      }
+      // (debug logging removed)
       blockResults += SimulateBlockResult(finalHeader, body, txs, txSenders, updatedCallResults, receipts)
       parentHeader = finalHeader
     }
@@ -413,7 +398,8 @@ class EthSimulateService(
       validation: Boolean,
       traceTransfers: Boolean,
       nonceMap: mutable.Map[Address, BigInt],
-      precompileRelocations: Map[Address, Address] = Map.empty
+      precompileRelocations: Map[Address, Address] = Map.empty,
+      globalGasOffset: BigInt = BigInt(0)
   ): Either[JsonRpcError, (InMemoryWorldStateProxy, Seq[SimulateCallResult], Seq[SignedTransaction], Seq[Address], Seq[Receipt], BigInt)] = {
     var world = initialWorld
     val callResults = mutable.ArrayBuffer[SimulateCallResult]()
@@ -433,9 +419,9 @@ class EthSimulateService(
         })
       }
 
-      // Build transaction — default gas = remaining from geth's simulate cap of 50M
+      // Build transaction — default gas = remaining from geth's global 50M pool
       val DefaultSimGasLimit = BigInt(50000000)
-      val gasLimit = call.gas.getOrElse(DefaultSimGasLimit - accumGas)
+      val gasLimit = call.gas.getOrElse(DefaultSimGasLimit - globalGasOffset - accumGas)
       val value = call.value.getOrElse(BigInt(0))
       val payload = call.input.getOrElse(ByteString.empty)
       val toAddr = call.to
