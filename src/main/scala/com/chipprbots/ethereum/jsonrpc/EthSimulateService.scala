@@ -531,9 +531,11 @@ class EthSimulateService(
         })
       }
 
-      // Build transaction — default gas = remaining from geth's global 50M pool
+      // Build transaction — default gas = min of remaining global 50M pool and remaining block gas
       val DefaultSimGasLimit = BigInt(50000000)
-      val gasLimit = call.gas.getOrElse(DefaultSimGasLimit - globalGasOffset - accumGas)
+      val remainingGlobalGas = DefaultSimGasLimit - globalGasOffset - accumGas
+      val remainingBlockGas = blockHeader.gasLimit - accumGas
+      val gasLimit = call.gas.getOrElse(remainingGlobalGas.min(remainingBlockGas).max(BigInt(0)))
       val value = call.value.getOrElse(BigInt(0))
       val payload = call.input.getOrElse(ByteString.empty)
       val toAddr = call.to
@@ -661,7 +663,9 @@ class EthSimulateService(
       world = newWorld
 
       // Update nonce tracking
-      nonceMap(sender) = senderNonce + 1
+      // Wrap nonce at uint64 boundary (geth uses uint64 for nonces)
+      val MaxUint64Plus1 = BigInt("18446744073709551616") // 2^64
+      nonceMap(sender) = (senderNonce + 1) % MaxUint64Plus1
 
       // Build receipt
       val outcome = if (vmError.isDefined) FailureOutcome else SuccessOutcome
