@@ -19,7 +19,7 @@ RUN echo "fukuii-0.1.240" > /version.txt
 
 EXPOSE 8545 8546 8551 30303 30303/udp
 
-# Check Engine API port — it binds synchronously, so when it's up, the node is ready
-ENV HIVE_CHECK_LIVE_PORT=8551
+# Check HTTP RPC port — always available regardless of PoW/PoS mode
+ENV HIVE_CHECK_LIVE_PORT=8545
 
 ENTRYPOINT ["/fukuii.sh"]

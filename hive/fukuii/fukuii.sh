@@ -29,7 +29,7 @@ LONDON=${HIVE_FORK_LONDON:-$MAX}
 
 NETWORK_ID=${HIVE_NETWORK_ID:-1}
 CHAIN_ID=${HIVE_CHAIN_ID:-1}
-TTD=${HIVE_TERMINAL_TOTAL_DIFFICULTY:-0}
+TTD=${HIVE_TERMINAL_TOTAL_DIFFICULTY:-$MAX}
 SHANGHAI_TS=${HIVE_SHANGHAI_TIMESTAMP:-}
 CANCUN_TS=${HIVE_CANCUN_TIMESTAMP:-}
 PRAGUE_TS=${HIVE_PRAGUE_TIMESTAMP:-}
@@ -91,12 +91,18 @@ FLAGS="$FLAGS -Dfukuii.network.rpc.http.interface=0.0.0.0"
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.port=8545"
 FLAGS="$FLAGS -Dfukuii.network.rpc.apis=eth,web3,net,debug"
 
-# Engine API
-FLAGS="$FLAGS -Dfukuii.network.engine-api.enabled=true"
-FLAGS="$FLAGS -Dfukuii.network.engine-api.interface=0.0.0.0"
-FLAGS="$FLAGS -Dfukuii.network.engine-api.port=8551"
-FLAGS="$FLAGS -Dfukuii.network.engine-api.jwt-secret-path=$JWT_SECRET_FILE"
-FLAGS="$FLAGS -Dfukuii.mining.protocol=engine-api"
+# Engine API — only enable for post-merge chains (TTD is not MAX)
+if [ "$TTD" != "$MAX" ]; then
+    FLAGS="$FLAGS -Dfukuii.network.engine-api.enabled=true"
+    FLAGS="$FLAGS -Dfukuii.network.engine-api.interface=0.0.0.0"
+    FLAGS="$FLAGS -Dfukuii.network.engine-api.port=8551"
+    FLAGS="$FLAGS -Dfukuii.network.engine-api.jwt-secret-path=$JWT_SECRET_FILE"
+    FLAGS="$FLAGS -Dfukuii.mining.protocol=engine-api"
+else
+    # PoW chain — no engine API, use ethash mining
+    FLAGS="$FLAGS -Dfukuii.network.engine-api.enabled=false"
+    FLAGS="$FLAGS -Dfukuii.mining.protocol=ethash"
+fi
 
 # P2P
 FLAGS="$FLAGS -Dfukuii.network.server-address.interface=0.0.0.0"
