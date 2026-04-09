@@ -202,7 +202,8 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits {
         // Transactions: hashes or full objects depending on returnFullTransactions flag
         val txField = if (returnFullTxs) {
           "transactions" -> JArray(block.transactions.zipWithIndex.map { case (tx, idx) =>
-            encodeSimulatedTxFull(tx, idx, h)
+            val sender = if (idx < block.senders.size) block.senders(idx) else com.chipprbots.ethereum.domain.Address(0)
+            encodeSimulatedTxFull(tx, idx, h, sender)
           }.toList)
         } else {
           "transactions" -> JArray(block.transactions.map(tx => encodeAsHex(tx.hash)).toList)
@@ -214,7 +215,7 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits {
         JObject(headerFields :+ txField :+ callsField)
       }
 
-      private def encodeSimulatedTxFull(stx: com.chipprbots.ethereum.domain.SignedTransaction, txIdx: Int, header: com.chipprbots.ethereum.domain.BlockHeader): JValue = {
+      private def encodeSimulatedTxFull(stx: com.chipprbots.ethereum.domain.SignedTransaction, txIdx: Int, header: com.chipprbots.ethereum.domain.BlockHeader, senderAddr: com.chipprbots.ethereum.domain.Address): JValue = {
         val tx = stx.tx
         val blockHash = header.hash
         val txType = tx match {
@@ -229,9 +230,7 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits {
           case t: com.chipprbots.ethereum.domain.TransactionWithAccessList => Some(t.chainId)
           case _ => None
         }
-        implicit val bcConfig: com.chipprbots.ethereum.utils.BlockchainConfig = com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
-        val sender = com.chipprbots.ethereum.domain.SignedTransaction.getSender(stx)
-          .map(_.bytes).getOrElse(ByteString(new Array[Byte](20)))
+        val sender = senderAddr.bytes
         val baseFields = List(
           "blockHash" -> encodeAsHex(blockHash),
           "blockNumber" -> encodeAsHex(header.number),

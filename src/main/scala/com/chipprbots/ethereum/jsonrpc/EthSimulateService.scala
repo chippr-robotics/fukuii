@@ -93,6 +93,7 @@ object EthSimulateService {
       header: BlockHeader,
       body: BlockBody,
       transactions: Seq[SignedTransaction],
+      senders: Seq[Address], // Actual sender addresses (can't recover from zero signatures)
       calls: Seq[SimulateCallResult],
       receipts: Seq[Receipt]
   )
@@ -207,7 +208,7 @@ class EthSimulateService(
         case Left(err) => return Left(err)
         case _ =>
       }
-      val (newWorld, callResults, txs, receipts, gasUsed) = execResult.toOption.get
+      val (newWorld, callResults, txs, txSenders, receipts, gasUsed) = execResult.toOption.get
 
       world = newWorld
 
@@ -258,7 +259,7 @@ class EthSimulateService(
           }
         }
       }
-      blockResults += SimulateBlockResult(finalHeader, body, txs, updatedCallResults, receipts)
+      blockResults += SimulateBlockResult(finalHeader, body, txs, txSenders, updatedCallResults, receipts)
       parentHeader = finalHeader
     }
 
@@ -413,10 +414,11 @@ class EthSimulateService(
       traceTransfers: Boolean,
       nonceMap: mutable.Map[Address, BigInt],
       precompileRelocations: Map[Address, Address] = Map.empty
-  ): Either[JsonRpcError, (InMemoryWorldStateProxy, Seq[SimulateCallResult], Seq[SignedTransaction], Seq[Receipt], BigInt)] = {
+  ): Either[JsonRpcError, (InMemoryWorldStateProxy, Seq[SimulateCallResult], Seq[SignedTransaction], Seq[Address], Seq[Receipt], BigInt)] = {
     var world = initialWorld
     val callResults = mutable.ArrayBuffer[SimulateCallResult]()
     val txs = mutable.ArrayBuffer[SignedTransaction]()
+    val senders = mutable.ArrayBuffer[Address]()
     val receipts = mutable.ArrayBuffer[Receipt]()
     var accumGas = BigInt(0)
     val baseFee = blockHeader.baseFee.getOrElse(BigInt(0))
@@ -558,6 +560,7 @@ class EthSimulateService(
 
       accumGas += gasUsed
       txs += stx
+      senders += sender
       receipts += receipt
 
       // Build per-call result
@@ -631,7 +634,7 @@ class EthSimulateService(
       callResults += callResult
     }
 
-    Right((world, callResults.toSeq, txs.toSeq, receipts.toSeq, accumGas))
+    Right((world, callResults.toSeq, txs.toSeq, senders.toSeq, receipts.toSeq, accumGas))
   }
 
   /** EIP-4788: Store the parent beacon block root in the beacon root system contract */
