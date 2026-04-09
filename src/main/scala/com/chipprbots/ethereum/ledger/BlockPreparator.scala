@@ -254,7 +254,7 @@ class BlockPreparator(
   private[ledger] def pay(address: Address, value: UInt256, withTouch: Boolean)(
       world: InMemoryWorldStateProxy
   )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
-    if (world.isZeroValueTransferToNonExistentAccount(address, value)) {
+    if (value == UInt256.Zero || world.isZeroValueTransferToNonExistentAccount(address, value)) {
       world
     } else {
       val savedWorld = increaseAccountBalance(address, value)(world)

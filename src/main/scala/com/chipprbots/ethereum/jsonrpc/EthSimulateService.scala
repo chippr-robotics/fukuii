@@ -240,6 +240,7 @@ class EthSimulateService(
       }
 
       val body = BlockBody(txs, Nil, Some(Seq.empty))
+      // (debug logging removed)
       blockResults += SimulateBlockResult(finalHeader, body, txs, updatedCallResults, receipts)
       parentHeader = finalHeader
     }
