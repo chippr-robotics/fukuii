@@ -429,6 +429,12 @@ class EthSimulateService(
       val maxFeePerGas = call.maxFeePerGas.getOrElse(BigInt(0))
       val gasPrice = call.gasPrice.orElse(call.maxFeePerGas).getOrElse(BigInt(0))
 
+      // Check nonce overflow (uint64 max)
+      val MaxUint64 = BigInt("18446744073709551615") // 0xffffffffffffffff
+      if (senderNonce > MaxUint64) {
+        return Left(JsonRpcError.InternalError)
+      }
+
       // Always check: intrinsic gas
       val baseGas = if (toAddr.isEmpty) BigInt(53000) else BigInt(21000)
       val calldataGas = payload.foldLeft(BigInt(0)) { (acc, b) =>
