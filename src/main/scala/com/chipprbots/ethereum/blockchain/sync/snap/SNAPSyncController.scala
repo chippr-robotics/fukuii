@@ -1332,8 +1332,12 @@ class SNAPSyncController(
     }
 
     // Step 7: Check for accounts-complete recovery (process crash during bytecode/storage phase).
-    // If accounts were previously completed and the pivot is still fresh, skip account download
-    // and only re-run bytecodes + storage from the persisted storage file.
+    // If accounts were previously completed, skip account download and re-run bytecodes + storage.
+    // Note: pivot staleness is intentionally NOT checked here. Account data is content-addressed
+    // (Keccak256 hash → value) and remains valid regardless of how many blocks have passed.
+    // A stale pivot is updated by proactive in-place refresh within 30s of startup.
+    // Trie walk + healing discovers and repairs any state differences from the new pivot root.
+    // (Prior bug: staleness restart during StateHealing + this check = double-clear of accounts_complete)
     if (appStateStorage.isSnapSyncAccountsComplete()) {
       val savedPivot = appStateStorage.getSnapSyncPivotBlock()
       val savedRootOpt = appStateStorage.getSnapSyncStateRoot()
@@ -1341,24 +1345,10 @@ class SNAPSyncController(
 
       (savedPivot, savedRootOpt) match {
         case (Some(pivot), Some(rootBs)) if pivot > 0 =>
-          log.info(s"[SNAP-RECOVERY] accounts previously completed at pivot $pivot. Checking freshness...")
+          log.info(s"[SNAP-RECOVERY] accounts previously completed at pivot $pivot — resuming (skipping account phase)")
 
-          // Check if pivot is still fresh enough
-          val networkBest = currentNetworkBestFromSnapPeers().getOrElse(BigInt(0))
-          val drift = if (networkBest > 0) (networkBest - pivot).abs else BigInt(0)
-          if (networkBest > 0 && drift > snapSyncConfig.maxPivotStalenessBlocks) {
-            log.warning(
-              s"[SNAP-RECOVERY] Pivot drifted $drift blocks (> ${snapSyncConfig.maxPivotStalenessBlocks} maxPivotStalenessBlocks). " +
-                s"Clearing accounts-complete flag and deleting stale work files. Starting fresh."
-            )
-            deleteSnapSyncTempFiles()
-            appStateStorage.putSnapSyncAccountsComplete(false).commit()
-            appStateStorage.clearSnapSyncStorageCompletionRoot().commit()
-            appStateStorage.putSnapSyncCodeHashesPath("").commit()
-            appStateStorage.putSnapSyncContractAccountsPath("").commit()
-            // Fall through to normal startup
-          } else {
-            // Pivot is fresh enough — recover bytecodes + storage only
+          {
+            // Always recover bytecodes + storage — pivot age does not invalidate account data
             pivotBlock = Some(pivot)
             stateRoot = Some(rootBs)
             accountsComplete = true
@@ -1373,7 +1363,7 @@ class SNAPSyncController(
                   s"skipping StorageRangeCoordinator, resuming bytecodes only"
               )
             } else {
-              log.info(s"[SNAP-RECOVERY] resuming bytecodes + storage sync from pivot $pivot (drift=$drift blocks)")
+              log.info(s"[SNAP-RECOVERY] resuming bytecodes + storage sync from pivot $pivot")
             }
 
             // Create bytecode coordinator (will receive NoMore immediately since we have no new accounts)
@@ -2683,7 +2673,9 @@ class SNAPSyncController(
   private case object RequestTrieNodeHealing
 
   private def requestTrieNodeHealing(): Unit = {
-    if (maybeRestartIfPivotTooStale("StateHealing")) return
+    // Pivot staleness during healing is handled by proactive in-place refresh (CheckPivotFreshness).
+    // A full restart here clears healing state (trie walk queue, round counter) unnecessarily,
+    // and can trigger the recovery double-clear bug when accounts_complete=true.
     // Notify coordinator of available peers
     trieNodeHealingCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
