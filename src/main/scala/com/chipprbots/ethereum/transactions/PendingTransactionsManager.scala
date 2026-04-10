@@ -25,7 +25,6 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor
-import com.chipprbots.ethereum.network.PeerManagerActor.Peers
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETH66
@@ -79,7 +78,6 @@ class PendingTransactionsManager(
     with ActorLogging {
 
   import PendingTransactionsManager._
-  import org.apache.pekko.pattern.ask
 
   metrics.gauge(
     "transactions.pool.size.gauge",
@@ -107,7 +105,14 @@ class PendingTransactionsManager(
 
   implicit val timeout: Timeout = Timeout(3.seconds)
 
+  /** Locally-cached set of connected peers, updated reactively via PeerHandshakeSuccessful/PeerDisconnected.
+    * Eliminates the async ask to PeerManagerActor which added seconds of latency to tx propagation.
+    */
+  var connectedPeers: Map[PeerId, Peer] = Map.empty
+
   peerEventBus ! Subscribe(SubscriptionClassifier.PeerHandshaked)
+  peerEventBus ! Subscribe(SubscriptionClassifier.PeerDisconnectedClassifier(
+    com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector.AllPeers))
   // Subscribe to NewPooledTransactionHashes and PooledTransactions for tx pool protocol
   peerEventBus ! Subscribe(SubscriptionClassifier.MessageClassifier(
     Set(Codes.NewPooledTransactionHashesCode, Codes.PooledTransactionsCode),
@@ -121,9 +126,13 @@ class PendingTransactionsManager(
   // scalastyle:off method.length
   override def receive: Receive = {
     case PeerEvent.PeerHandshakeSuccessful(peer, _) =>
+      connectedPeers += (peer.id -> peer)
       pendingTransactions.cleanUp()
       val stxs = pendingTransactions.asMap().values().asScala.toSeq.map(_.stx)
       self ! NotifyPeers(stxs, Seq(peer))
+
+    case PeerEvent.PeerDisconnected(peerId) =>
+      connectedPeers -= peerId
 
     case AddUncheckedTransactions(transactions) =>
       val validTxs = SignedTransactionWithSender.getSignedTransactions(transactions)
@@ -137,11 +146,10 @@ class PendingTransactionsManager(
       if (transactionsToAdd.nonEmpty) {
         val timestamp = System.currentTimeMillis()
         transactionsToAdd.foreach(t => pendingTransactions.put(t.tx.hash, PendingTransaction(t, timestamp)))
-        (peerManager ? PeerManagerActor.GetPeers)
-          .mapTo[Peers]
-          .map(_.handshaked)
-          .filter(_.nonEmpty)
-          .foreach(peers => self ! NotifyPeers(transactionsToAdd.toSeq, peers))
+        val peers = connectedPeers.values.toSeq
+        if (peers.nonEmpty) {
+          self ! NotifyPeers(transactionsToAdd.toSeq, peers)
+        }
       }
 
     case AddOrOverrideTransaction(newStx) =>
@@ -163,11 +171,10 @@ class PendingTransactionsManager(
       val newPendingTx = SignedTransactionWithSender(newStx, newStxSender)
       pendingTransactions.put(newStx.hash, PendingTransaction(newPendingTx, timestamp))
 
-      (peerManager ? PeerManagerActor.GetPeers)
-        .mapTo[Peers]
-        .map(_.handshaked)
-        .filter(_.nonEmpty)
-        .foreach(peers => self ! NotifyPeers(Seq(newPendingTx), peers))
+      val peers = connectedPeers.values.toSeq
+      if (peers.nonEmpty) {
+        self ! NotifyPeers(Seq(newPendingTx), peers)
+      }
 
     case NotifyPeers(signedTransactions, peers) =>
       pendingTransactions.cleanUp()
@@ -233,6 +240,8 @@ class PendingTransactionsManager(
       transactions.foreach(stx => setTxKnown(stx.tx, peerId))
       // Announce new tx hashes to ALL peers (including sender) via NewPooledTransactionHashes.
       // Per ETH/68 spec, nodes announce hashes even to the peer that sent the full tx.
+      // IMPORTANT: Always send directly to the sender peer by peerId, because
+      // PeerHandshakeSuccessful may not have been processed yet (race condition).
       if (transactions.nonEmpty) {
         import com.chipprbots.ethereum.domain._
         val txSeq = transactions.toSeq
@@ -246,15 +255,14 @@ class PendingTransactionsManager(
         }}
         val sizes = txSeq.map(stx => BigInt(SignedTransaction.byteArraySerializable.toBytes(stx.tx).length))
         val announcement = ETH67.NewPooledTransactionHashes(types, sizes, hashes)
-        (peerManager ? PeerManagerActor.GetPeers)
-          .mapTo[Peers]
-          .map(_.handshaked)
-          .filter(_.nonEmpty)
-          .foreach { peers =>
-            peers.foreach { peer =>
-              networkPeerManager ! NetworkPeerManagerActor.SendMessage(announcement, peer.id)
-            }
+        // Send to sender peer directly (always, even if not yet in connectedPeers)
+        networkPeerManager ! NetworkPeerManagerActor.SendMessage(announcement, peerId)
+        // Also send to all other connected peers
+        connectedPeers.values.foreach { peer =>
+          if (peer.id != peerId) {
+            networkPeerManager ! NetworkPeerManagerActor.SendMessage(announcement, peer.id)
           }
+        }
       }
 
     case ClearPendingTransactions =>
