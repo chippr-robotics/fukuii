@@ -223,26 +223,49 @@ object BaseETH6XMessages {
         * @return
         *   a Seq of TypedTransaction enriched RLPEncodable
         */
-      def toTypedRLPEncodables: Seq[RLPEncodeable] =
-        encodables match {
-          case Seq() => Seq()
-          case Seq(RLPValue(v), rlpList: RLPList, tail @ _*) if v.isValidTransactionType =>
-            PrefixedRLPEncodable(v.head, rlpList) +: tail.toTypedRLPEncodables
-          case Seq(RLPValue(v), tail @ _*) if v.length > 1 && v.head.isValidTransactionType =>
-            // Typed envelopes (EIP-2718) are encoded on the wire as: typeByte || rlp(payload).
-            // When such bytes appear as an element inside an outer RLP list, the decoder yields an RLPValue(bytes)
-            // rather than a split (RLPValue(typeByte), RLPList(payload)). Normalize it here so all callers that use
-            // toTypedRLPEncodables (BlockBody, SignedTransactions, PooledTransactions, etc.) can decode typed txs.
-            try
-              rawDecode(v.tail) match {
-                case rlpList: RLPList => PrefixedRLPEncodable(v.head, rlpList) +: tail.toTypedRLPEncodables
-                case _                => RLPValue(v) +: tail.toTypedRLPEncodables
-              }
-            catch {
-              case _: Throwable => RLPValue(v) +: tail.toTypedRLPEncodables
-            }
-          case Seq(head, tail @ _*) => head +: tail.toTypedRLPEncodables
+      def toTypedRLPEncodables: Seq[RLPEncodeable] = {
+        // Iterative implementation — the recursive version was O(n²) due to Seq pattern matching
+        // creating intermediate views for each element. For 2000 txs this caused ~2M operations.
+        val result = new scala.collection.mutable.ArrayBuffer[RLPEncodeable](encodables.size)
+        var i = 0
+        val items = encodables match {
+          case indexed: IndexedSeq[RLPEncodeable] => indexed
+          case other => other.toIndexedSeq
         }
+        val len = items.size
+        while (i < len) {
+          items(i) match {
+            case RLPValue(v) if v.isValidTransactionType && i + 1 < len =>
+              items(i + 1) match {
+                case rlpList: RLPList =>
+                  // Type byte followed by RLPList: combine into PrefixedRLPEncodable
+                  result += PrefixedRLPEncodable(v.head, rlpList)
+                  i += 2
+                case _ =>
+                  result += items(i)
+                  i += 1
+              }
+            case RLPValue(v) if v.length > 1 && v.head.isValidTransactionType =>
+              // Typed envelopes (EIP-2718): typeByte || rlp(payload) encoded as single RLPValue.
+              // Normalize to PrefixedRLPEncodable for all callers (BlockBody, SignedTransactions, etc.)
+              try
+                rawDecode(v.tail) match {
+                  case rlpList: RLPList =>
+                    result += PrefixedRLPEncodable(v.head, rlpList)
+                  case _ =>
+                    result += RLPValue(v)
+                }
+              catch {
+                case _: Throwable => result += RLPValue(v)
+              }
+              i += 1
+            case other =>
+              result += other
+              i += 1
+          }
+        }
+        result.toSeq
+      }
     }
   }
 
