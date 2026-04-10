@@ -440,6 +440,8 @@ class AccountRangeCoordinator(
   private def sendProgressSnapshot(): Unit = {
     val allTasks = pendingTasks.iterator ++ activeTasks.values.map(_._1) ++ completedTasks
     val progress: Map[ByteString, ByteString] = allTasks.map(t => t.last -> t.next).toMap
+    val completedCount = progress.count { case (last, next) => next == last }
+    log.info(s"[CHECKPOINT] Sending progress snapshot: ${progress.size} ranges ($completedCount complete)")
     snapSyncController ! AccountRangeProgress(progress)
   }
 

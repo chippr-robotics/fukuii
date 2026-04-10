@@ -408,12 +408,12 @@ class SNAPSyncController(
         // A range is "complete" when next >= last (entire keyspace traversed)
         next == last || BigInt(1, next.toArray.padTo(32, 0.toByte)) >= BigInt(1, last.toArray.padTo(32, 0.toByte))
       }
-      log.info(
-        s"Preserved account range progress: ${progress.size} ranges ($completedCount fully complete)"
-      )
       // Persist to disk for crash recovery
       val effectivePivot = preservedAtPivotBlock.getOrElse(BigInt(0))
       appStateStorage.putSnapSyncProgress(serializeSnapProgress(progress, effectivePivot)).commit()
+      log.info(
+        s"[CHECKPOINT] Progress saved to disk: ${progress.size} ranges ($completedCount fully complete), pivot=$effectivePivot"
+      )
 
     case ProgressAccountsFinalizingTrie =>
       progressMonitor.setFinalizingTrie(true)
