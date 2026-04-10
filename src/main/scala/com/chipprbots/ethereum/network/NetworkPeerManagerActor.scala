@@ -612,6 +612,23 @@ object NetworkPeerManagerActor {
         false, // supportsSnap defaults to false
         List.empty
       )
+
+    /** ETH/69: no totalDifficulty — use latestBlock number as a proxy for chain weight */
+    def fromETH69Status(
+        status: com.chipprbots.ethereum.network.p2p.messages.ETH69.Status,
+        negotiatedCapability: Capability,
+        supportsSnap: Boolean,
+        capabilities: List[Capability]
+    ): RemoteStatus =
+      RemoteStatus(
+        negotiatedCapability,
+        status.networkId,
+        ChainWeight.totalDifficultyOnly(status.latestBlock), // Use block number as weight proxy
+        status.latestBlockHash,
+        status.genesisHash,
+        supportsSnap,
+        capabilities
+      )
   }
 
   case class PeerInfo(

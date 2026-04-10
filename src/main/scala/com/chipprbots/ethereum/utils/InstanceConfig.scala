@@ -61,6 +61,7 @@ class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "defau
     Capability.ETH66,
     Capability.ETH67,
     Capability.ETH68,
+    Capability.ETH69,
     Capability.SNAP1
   )
 
