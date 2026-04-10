@@ -670,12 +670,6 @@ class RLPxConnectionHandler(
             )
 
         case Received(data) =>
-          log.debug(
-            "RECV_MSG: peer={}, dataLen={}, pendingAck={}",
-            peerId,
-            data.length,
-            cancellableAckTimeout.isDefined
-          )
           val frames = messageCodec.frameCodec.readFrames(data)
           val translatedFrames = inboundTranslator.translateFrames(frames)
           val messages = messageCodec.readFrames(translatedFrames)

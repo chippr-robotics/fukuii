@@ -236,6 +236,7 @@ class PendingTransactionsManager(
       knownTransactions = knownTransactions -- signedTransactions.map(_.hash)
 
     case ProperSignedTransactions(transactions, peerId) =>
+      log.debug("Received {} signed txs from peer {}, connectedPeers={}", transactions.size, peerId, connectedPeers.size)
       self ! AddTransactions(transactions)
       transactions.foreach(stx => setTxKnown(stx.tx, peerId))
       // Announce new tx hashes to ALL peers (including sender) via NewPooledTransactionHashes.

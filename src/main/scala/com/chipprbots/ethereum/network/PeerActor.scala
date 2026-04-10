@@ -143,13 +143,19 @@ class PeerActor[R <: HandshakeResult](
           }
           handshaker.respondToRequest(msg).foreach(msgToSend => rlpxConnection.sendMessage(msgToSend))
 
-        case RLPxConnectionHandler.MessageReceived(msg) =>
+        case msgReceived @ RLPxConnectionHandler.MessageReceived(msg) =>
           // Processes the received message, cancels the timeout and processes a new message but only if the handshaker
-          // handles the received message
+          // handles the received message. If the handshaker doesn't handle it (returns None), stash
+          // it for delivery after handshake completes — this handles the case where Status and
+          // subsequent messages (e.g. Transactions) arrive in the same TCP segment.
           log.debug("Message received: {} from peer {}", msg, peerAddress)
-          handshaker.applyMessage(msg).foreach { newHandshaker =>
-            timeout.cancel()
-            processHandshakerNextMessage(newHandshaker, remoteNodeId, rlpxConnection, numRetries)
+          handshaker.applyMessage(msg) match {
+            case Some(newHandshaker) =>
+              timeout.cancel()
+              processHandshakerNextMessage(newHandshaker, remoteNodeId, rlpxConnection, numRetries)
+            case None =>
+              log.debug("Stashing message during handshake: {}", msg.getClass.getSimpleName)
+              stash()
           }
           handshaker.respondToRequest(msg).foreach(msgToSend => rlpxConnection.sendMessage(msgToSend))
 
