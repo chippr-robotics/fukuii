@@ -117,6 +117,9 @@ class SNAPSyncController(
   private var lastPivotRestartMs: Long = 0L
   private val MinPivotRestartInterval: FiniteDuration = 30.seconds
 
+  // Tracks when the current in-place pivot bootstrap was initiated, for stall detection
+  private var pendingPivotRefreshStartMs: Long = 0L
+
   // Consecutive pivot refresh counter: when all peers are repeatedly stateless after
   // pivot refreshes, it strongly indicates no peer has a snapshot database. Each
   // PivotStateUnservable increments this; any successful account download resets it.
@@ -493,10 +496,11 @@ class SNAPSyncController(
     // it wasn't available locally. The coordinator is still alive with all its state.
     case BootstrapComplete(pivotHeaderOpt) if pendingPivotRefresh.isDefined =>
       val (pendingPivot, reason) = pendingPivotRefresh.get
+      val bootstrapMs = System.currentTimeMillis() - pendingPivotRefreshStartMs
       pendingPivotRefresh = None
       pivotHeaderOpt match {
         case Some(header) =>
-          log.info(s"Pivot header bootstrap complete for block ${header.number} (requested $pendingPivot)")
+          log.info(s"[PIVOT] Bootstrap complete for block ${header.number} (requested $pendingPivot, took ${bootstrapMs / 1000}s)")
           completePivotRefreshWithStateRoot(pendingPivot, header, reason)
         case None =>
           log.warning(
@@ -991,7 +995,19 @@ class SNAPSyncController(
     *   - Predictable refresh cadence (~26 min on ETC at 13s/block)
     */
   private def maybeProactivelyRefreshPivot(): Unit = {
-    if (pendingPivotRefresh.isDefined) return // Already refreshing
+    if (pendingPivotRefresh.isDefined) {
+      // Bootstrap request is in-flight. Warn if it's been pending too long — peer unresponsiveness
+      // can block the pending flag for hours, silently freezing the pivot (root cause of accounts wipe).
+      val pendingMs = System.currentTimeMillis() - pendingPivotRefreshStartMs
+      if (pendingMs > 60_000) {
+        log.warning(
+          s"[PIVOT] In-place bootstrap pending for ${pendingMs / 1000}s — peer may be unresponsive. " +
+            s"Pivot frozen at ${pivotBlock.getOrElse("unknown")}. " +
+            s"Proactive refresh blocked until BootstrapComplete/PivotBootstrapFailed arrives."
+        )
+      }
+      return
+    }
 
     val now = System.currentTimeMillis()
     if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) return
@@ -1345,7 +1361,15 @@ class SNAPSyncController(
 
       (savedPivot, savedRootOpt) match {
         case (Some(pivot), Some(rootBs)) if pivot > 0 =>
-          log.info(s"[SNAP-RECOVERY] accounts previously completed at pivot $pivot — resuming (skipping account phase)")
+          val networkBest = currentNetworkBestFromSnapPeers().getOrElse(BigInt(0))
+          val drift = if (networkBest > 0) (networkBest - pivot).abs else BigInt(0)
+          val driftNote = if (drift > 0) s", drift=$drift blocks from networkBest=$networkBest" else ""
+          log.info(s"[SNAP-RECOVERY] accounts previously completed at pivot $pivot — resuming (skipping account phase$driftNote)")
+          if (drift > snapSyncConfig.maxPivotStalenessBlocks)
+            log.warning(
+              s"[SNAP-RECOVERY] Pivot is $drift blocks stale (> ${snapSyncConfig.maxPivotStalenessBlocks} threshold). " +
+                s"Proceeding anyway — account data is content-addressed. Proactive refresh will update pivot within 30s."
+            )
 
           {
             // Always recover bytecodes + storage — pivot age does not invalidate account data
@@ -2676,6 +2700,31 @@ class SNAPSyncController(
     // Pivot staleness during healing is handled by proactive in-place refresh (CheckPivotFreshness).
     // A full restart here clears healing state (trie walk queue, round counter) unnecessarily,
     // and can trigger the recovery double-clear bug when accounts_complete=true.
+
+    // Warn if pivot is significantly stale so we can verify in-place refresh is keeping up.
+    // This is informational only — in-place refresh corrects staleness, not a restart.
+    for {
+      pivot       <- pivotBlock
+      networkBest <- currentNetworkBestFromSnapPeers()
+      if networkBest > pivot
+    } {
+      val delta = networkBest - pivot
+      if (delta > snapSyncConfig.maxPivotStalenessBlocks) {
+        if (pendingPivotRefresh.isDefined) {
+          val pendingMs = System.currentTimeMillis() - pendingPivotRefreshStartMs
+          log.warning(
+            s"[HEAL] Pivot $pivot is $delta blocks stale; in-place bootstrap pending ${pendingMs / 1000}s. " +
+              s"Healing requests against stale root may fail until bootstrap completes."
+          )
+        } else {
+          log.warning(
+            s"[HEAL] Pivot $pivot is $delta blocks stale (> ${snapSyncConfig.maxPivotStalenessBlocks}). " +
+              s"In-place refresh should trigger within 30s via CheckPivotFreshness."
+          )
+        }
+      }
+    }
+
     // Notify coordinator of available peers
     trieNodeHealingCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
@@ -2901,6 +2950,7 @@ class SNAPSyncController(
       // Pause chain download to free up peers for the pivot header bootstrap
       chainDownloader.foreach(_ ! ChainDownloader.Pause)
       pendingPivotRefresh = Some((newPivotBlock, reason))
+      pendingPivotRefreshStartMs = System.currentTimeMillis()
       context.parent ! StartRegularSyncBootstrap(newPivotBlock)
       // Reset account stagnation timer while we wait for the header.
       // Note: do NOT reset lastStorageProgressMs here — if storage has been stalled with
