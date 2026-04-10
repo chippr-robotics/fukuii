@@ -34,6 +34,7 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.rlp.RLPValue
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Logger
 
@@ -183,10 +184,23 @@ class GenesisDataLoader(
   private def prepareHeader(genesisData: GenesisData, stateMptRootHash: Array[Byte])(implicit
       blockchainConfig: BlockchainConfig
   ) = {
-    // EIP-1559: If London/Olympia is active at genesis (block 0), include baseFee in the header.
-    // Initial baseFee per EIP-1559 spec is 1 Gwei (10^9 Wei).
-    val extraFields = if (blockchainConfig.forkBlockNumbers.olympiaBlockNumber == 0) {
-      BlockHeader.HeaderExtraFields.HefPostOlympia(baseFee = BigInt("1000000000"))
+    // Determine the fork era for the genesis block based on the genesis timestamp (0)
+    val genesisTimestamp = BigInt(genesisData.timestamp.replace("0x", ""), 16).toLong
+    val baseFee = genesisData.baseFeePerGas.map(s => BigInt(s.replace("0x", ""), 16))
+      .getOrElse(BigInt("1000000000")) // EIP-1559 default: 1 Gwei
+    // Empty trie root = keccak256(RLP("")) = keccak256(0x80) — NOT keccak of empty list
+    val emptyWithdrawalsRoot = ByteString(crypto.kec256(rlp.encode(RLPValue(Array.empty[Byte]))))
+
+    val extraFields = if (blockchainConfig.isPragueTimestamp(genesisTimestamp)) {
+      val emptyRequestsHash = ByteString(java.security.MessageDigest.getInstance("SHA-256").digest(Array.empty[Byte]))
+      BlockHeader.HeaderExtraFields.HefPostPrague(baseFee, emptyWithdrawalsRoot, BigInt(0), BigInt(0),
+        zeros(hashLength), emptyRequestsHash)
+    } else if (blockchainConfig.isCancunTimestamp(genesisTimestamp)) {
+      BlockHeader.HeaderExtraFields.HefPostCancun(baseFee, emptyWithdrawalsRoot, BigInt(0), BigInt(0), zeros(hashLength))
+    } else if (blockchainConfig.isShanghaiTimestamp(genesisTimestamp)) {
+      BlockHeader.HeaderExtraFields.HefPostShanghai(baseFee, emptyWithdrawalsRoot)
+    } else if (blockchainConfig.forkBlockNumbers.olympiaBlockNumber == 0) {
+      BlockHeader.HeaderExtraFields.HefPostOlympia(baseFee)
     } else {
       BlockHeader.HeaderExtraFields.HefEmpty
     }

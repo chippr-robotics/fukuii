@@ -22,5 +22,6 @@ case class GenesisData(
     gasLimit: String,
     coinbase: ByteString,
     timestamp: String,
-    alloc: Map[String, GenesisAccount]
+    alloc: Map[String, GenesisAccount],
+    baseFeePerGas: Option[String] = None
 )

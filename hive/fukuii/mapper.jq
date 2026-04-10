@@ -1,4 +1,5 @@
 # mapper.jq — Convert geth-format genesis.json to fukuii-compatible genesis.json
+# Pass through all header fields that affect the genesis block hash
 {
   "difficulty": .difficulty,
   "gasLimit": .gasLimit,
@@ -7,6 +8,11 @@
   "coinbase": (.coinbase // "0x0000000000000000000000000000000000000000"),
   "mixHash": (.mixHash // .mixhash // "0x0000000000000000000000000000000000000000000000000000000000000000"),
   "extraData": (.extraData // "0x"),
+  "gasUsed": (.gasUsed // "0x0"),
+  "parentHash": (.parentHash // "0x0000000000000000000000000000000000000000000000000000000000000000"),
+  "baseFeePerGas": .baseFeePerGas,
+  "excessBlobGas": .excessBlobGas,
+  "blobGasUsed": .blobGasUsed,
   "alloc": ((.alloc // {}) | to_entries | map({
     key: .key,
     value: {
@@ -16,4 +22,4 @@
       storage: .value.storage
     } | with_entries(select(.value != null))
   }) | from_entries)
-}
+} | with_entries(select(.value != null))
