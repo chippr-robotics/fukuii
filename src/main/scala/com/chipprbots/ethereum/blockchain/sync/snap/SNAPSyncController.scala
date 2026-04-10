@@ -160,6 +160,7 @@ class SNAPSyncController(
   private val maxUnproductiveHealingRounds: Int = 5 // 5 rounds × 2 min = 10-min window before skipping to validation
   private var consecutiveHealingPivotRefreshAttempts: Int = 0
   private val maxHealingPivotRefreshAttempts: Int = 10 // after 10 failed pivot refreshes during healing, restart SNAP sync
+  private var totalSnapRestarts: Int = 0 // cumulative restart count across this node session
   private var healingSaveCounter: Int = 0
   private var lastTrieWalkMissingCount: Option[Int] = None // progress tracker — None on first round, Some(n) thereafter
   // OPT-W1: Walk resume state — partial nodes and completed subtrees from a previous interrupted walk
@@ -237,6 +238,16 @@ class SNAPSyncController(
     case msg @ com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnected(peerId) =>
       handlePeerListMessages(msg) // removes from handshakedPeers
       requestTracker.rateTracker.removePeer(peerId.value)
+      // Warn if a SNAP-capable peer drops during active healing/downloading
+      if (currentPhase == StateHealing || currentPhase == ByteCodeAndStorageSync ||
+          currentPhase == StorageRangeSync || currentPhase == AccountRangeSync) {
+        val remainingSnap = peersToDownloadFrom.values.count(_.peerInfo.remoteStatus.supportsSnap)
+        val phaseLabel = currentPhase.toString
+        if (remainingSnap == 0)
+          log.warning(s"[PEER] SNAP peer $peerId disconnected during $phaseLabel — now at 0 SNAP peers. Sync stalled until reconnect.")
+        else
+          log.info(s"[PEER] SNAP peer $peerId disconnected during $phaseLabel — $remainingSnap SNAP peer(s) remaining")
+      }
   }
 
   // Storage stagnation watchdog: if storage stops advancing while tasks remain, repivot/restart.
@@ -757,10 +768,12 @@ class SNAPSyncController(
           val etaSec = remaining / nodesPerSec
           s", ETA ~${etaSec / 3600}h ${(etaSec % 3600) / 60}m"
         } else ""
+        val roundLabel = s"round ${consecutiveUnproductiveHealingRounds + 1}/$maxUnproductiveHealingRounds"
+        val pivotLabel = pivotBlock.map(b => s", pivot=$b").getOrElse("")
         log.info(
-          f"[WALK] Trie walk in progress: $scanned%,d nodes scanned, " +
+          f"[WALK] $roundLabel — $scanned%,d nodes scanned, " +
             f"$nodesPerSec%,d nodes/s, " +
-            s"${elapsedSec / 60}m ${elapsedSec % 60}s elapsed$etaStr"
+            s"${elapsedSec / 60}m ${elapsedSec % 60}s elapsed$etaStr$pivotLabel"
         )
         scheduler.scheduleOnce(10.seconds, self, TrieWalkHeartbeat)(ec)
       }
@@ -3101,7 +3114,8 @@ class SNAPSyncController(
   }
 
   private def restartSnapSync(reason: String): Unit = {
-    log.warning(s"Restarting SNAP sync with a fresher pivot: $reason")
+    totalSnapRestarts += 1
+    log.warning(s"[RESTART #$totalSnapRestarts] Restarting SNAP sync with a fresher pivot: $reason")
 
     // Clear any pending pivot refresh (we're doing a full restart instead)
     pendingPivotRefresh = None

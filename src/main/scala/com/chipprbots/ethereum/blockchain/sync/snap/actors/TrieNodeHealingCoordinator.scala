@@ -78,8 +78,9 @@ class TrieNodeHealingCoordinator(
   private var totalNodesHealed: Int = 0
   private var totalBytesReceived: Long = 0
   private val startTime = System.currentTimeMillis()
-  private var lastProgressLogAt: Long = 0
+  private var lastProgressLogAt: Long = 0   // for 500-node interval progress log
   private val ProgressLogInterval: Long = 500
+  private var lastPulseHealedCount: Int = 0 // for 2-min stagnation-check velocity
   // Rolling 60s window for recent throughput (matches controller's SyncProgressMonitor pattern)
   private val recentHistory: mutable.Queue[(Long, Long)] = mutable.Queue.empty
   private val RecentWindowMs: Long = 60_000
@@ -376,12 +377,15 @@ class TrieNodeHealingCoordinator(
 
     case HealingStagnationCheck =>
       val now = System.currentTimeMillis()
-      log.debug(
-        s"[HEAL-CHECK] pivotRefreshRequested=$pivotRefreshRequested " +
-        s"pending=${pendingTasks.size} active=${activeRequests.size} " +
-        s"peers=${knownAvailablePeers.size} stateless=${statelessPeers.size} " +
-        s"idleFor=${(now - lastDispatchOrResponseMs) / 1000}s"
+      // Compute recent throughput over the last 2 min (since last stagnation check)
+      val recentHealed = totalNodesHealed - lastPulseHealedCount
+      val idleSec = (now - lastDispatchOrResponseMs) / 1000
+      log.info(
+        s"[HEAL-PULSE] healed=$totalNodesHealed total, +$recentHealed last 2min | " +
+        s"pending=${pendingTasks.size} active=${activeRequests.size} peers=${knownAvailablePeers.size} | " +
+        s"idleFor=${idleSec}s pivotRefreshPending=$pivotRefreshRequested"
       )
+      lastPulseHealedCount = totalNodesHealed
 
       // 1. Detect pivot refresh stall: pivotRefreshRequested set but unresolved for >10min.
       // Defense-in-depth — normally Bug 1 fix (RetryPivotRefresh handling StateHealing) resolves it.
