@@ -400,9 +400,10 @@ class SNAPSyncController(
 
     case actors.Messages.AccountRangeProgress(progress) =>
       preservedRangeProgress = progress
-      if (preservedAtPivotBlock.isEmpty) {
-        preservedAtPivotBlock = pivotBlock
-      }
+      // Always update to the current pivot — the old guard (isEmpty) froze the pivot at the
+      // first value of the session, causing drift of 5000+ blocks across long sessions and
+      // triggering the 256-block safety valve on every restart (discarding all progress).
+      preservedAtPivotBlock = pivotBlock
       val completedCount = progress.count { case (last, next) =>
         // A range is "complete" when next >= last (entire keyspace traversed)
         next == last || BigInt(1, next.toArray.padTo(32, 0.toByte)) >= BigInt(1, last.toArray.padTo(32, 0.toByte))

@@ -487,6 +487,12 @@ class AccountRangeCoordinator(
       // Note: do NOT reset consecutiveUnproductiveRefreshes here.
       // Only reset when we receive real account data (proof the new root is servable).
 
+      // Snapshot progress so the checkpoint on disk reflects the new pivot block.
+      // Without this, the snapshot only fires at postStop() and records the INITIAL pivot of
+      // the session — after many refreshes the checkpoint pivot drifts 5000+ blocks, causing
+      // the 256-block safety valve to discard all progress on every restart.
+      sendProgressSnapshot()
+
       // Resume dispatching with the fresh root
       tryRedispatchPendingTasks()
 
