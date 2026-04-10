@@ -883,11 +883,10 @@ class AccountRangeCoordinator(
       }
       log.warning(s"Task failed: $reason")
 
-      // Reset per-task empty-proof counter if the pivot changed since this request was dispatched.
-      // The new root may serve ranges that were empty under the old root.
-      if (task.rootHash != stateRoot) {
-        task.emptyProofFailures = 0
-      }
+      // Note: emptyProofFailures is intentionally NOT reset on pivot change.
+      // An empty keyspace sub-range stays empty regardless of which recent state root is queried —
+      // ETC mainnet does not create new accounts in sparse regions between consecutive pivots (~26 min).
+      // Resetting here prevented the threshold from ever being reached in practice.
       task.pending = false
       task.rootHash = stateRoot
 
