@@ -575,8 +575,20 @@ object SignedTransactionWithSender {
       stxs: Seq[SignedTransaction]
   )(implicit blockchainConfig: BlockchainConfig): Seq[SignedTransactionWithSender] =
     stxs.foldLeft(List.empty[SignedTransactionWithSender]) { (acc, stx) =>
-      val sender = SignedTransaction.getSender(stx)
-      sender.fold(acc)(addr => SignedTransactionWithSender(stx, addr) :: acc)
+      // Validate chain ID for typed transactions (EIP-2930+) before expensive ECDSA recovery.
+      // Legacy tx chain ID is validated in extractChainId during getSender.
+      val chainIdValid = stx.tx match {
+        case twal: TransactionWithAccessList => twal.chainId == blockchainConfig.chainId
+        case twdf: TransactionWithDynamicFee => twdf.chainId == blockchainConfig.chainId
+        case btx: BlobTransaction            => btx.chainId == blockchainConfig.chainId
+        case sct: SetCodeTransaction         => sct.chainId == blockchainConfig.chainId
+        case _: LegacyTransaction            => true // validated in getSender
+      }
+      if (!chainIdValid) acc
+      else {
+        val sender = SignedTransaction.getSender(stx)
+        sender.fold(acc)(addr => SignedTransactionWithSender(stx, addr) :: acc)
+      }
     }
 
   def apply(transaction: LegacyTransaction, signature: ECDSASignature, sender: Address): SignedTransactionWithSender =
