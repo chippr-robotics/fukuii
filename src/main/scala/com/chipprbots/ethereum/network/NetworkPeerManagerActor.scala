@@ -10,7 +10,6 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor._
 import com.chipprbots.ethereum.network.PeerActor.DisconnectPeer
-import com.chipprbots.ethereum.network.PeerActor.SendMessage
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent._
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
 import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
@@ -23,11 +22,9 @@ import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH62.{GetBlockHeaders => ETH62GetBlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.NewBlockHashes
 import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
-import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH64
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
@@ -35,7 +32,6 @@ import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
-import org.bouncycastle.util.encoders.Hex
 
 /** NetworkPeerManager actor keeps peer state up to date and exposes that information to other components. It subscribes
   * to peer lifecycle events (handshake, disconnection, messages) and routes protocol traffic to the appropriate
@@ -53,7 +49,6 @@ class NetworkPeerManagerActor(
   private[network] type PeersWithInfo = Map[PeerId, PeerWithInfo]
 
   // Maximum length for hex string in debug logs (to avoid very long log lines)
-  private val MaxHexLogLength = 200
 
   // Mutable reference to SNAPSyncController that can be set after initialization
   private var snapSyncControllerOpt: Option[ActorRef] = initialSnapSyncControllerOpt
@@ -155,46 +150,13 @@ class NetworkPeerManagerActor(
       peerEventBusActor ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)))
       peerEventBusActor ! Subscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)))
 
-      // Many peers disconnect with reason 0x10 (Other) when asked for headers at genesis
-      // as they implement peer selection policies that reject genesis-only nodes.
-      // When peer is at genesis, we skip this initial GetBlockHeaders to avoid disconnect.
-      // Block synchronization will be initiated by the sync controller (SyncController/SNAPSyncController)
-      // once it determines which peers to use for sync, avoiding unnecessary blacklisting.
-      if (peerInfo.isAtGenesis) {
-        log.info(
-          "PEER_HANDSHAKE_SUCCESS: Peer {} is at genesis block - skipping GetBlockHeaders to avoid disconnect. " +
-            "Peer will be available for sync controller.",
-          peer.id
-        )
-      } else {
-        // Ask for the highest block from the peer
-        // Send GetBlockHeaders in format based on negotiated capability
-        val usesRequestId = Capability.usesRequestId(peerInfo.remoteStatus.capability)
-        val getBlockHeadersMsg: MessageSerializable =
-          if (usesRequestId)
-            ETH66GetBlockHeaders(ETH66.nextRequestId, Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
-          else
-            ETH62GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
-
-        // Debug: Log the raw RLP-encoded message bytes for protocol analysis
-        if (log.isDebugEnabled) {
-          val encodedBytes = getBlockHeadersMsg.toBytes
-          val hexBytes = Hex.toHexString(encodedBytes)
-          log.debug(
-            "PEER_HANDSHAKE_SUCCESS: GetBlockHeaders RLP bytes (len={}): {}",
-            encodedBytes.length,
-            if (hexBytes.length > MaxHexLogLength) hexBytes.take(MaxHexLogLength) + "..." else hexBytes
-          )
-        }
-
-        log.info(
-          "PEER_HANDSHAKE_SUCCESS: Sending GetBlockHeaders to peer {} (usesRequestId: {}, bestHash: {})",
-          peer.id,
-          usesRequestId,
-          ByteStringUtils.hash2string(peerInfo.remoteStatus.bestHash)
-        )
-        peer.ref ! SendMessage(getBlockHeadersMsg)
-      }
+      // Do NOT send unsolicited GetBlockHeaders after handshake.
+      // The sync engine (BlockFetcher/HeadersFetcher) will request headers when needed through
+      // the normal PeersClient polling mechanism. Sending GetBlockHeaders immediately violates
+      // the expected message flow in devp2p protocol tests and is not standard behavior
+      // (geth does not send unsolicited GetBlockHeaders after Status exchange).
+      // For ETH69+, latestBlock/latestBlockHash are already in the Status message.
+      // For ETH64+, ForkId in Status provides fork validation without needing block headers.
       NetworkMetrics.registerAddHandshakedPeer(peer)
       context.become(handleMessages(peersWithInfo + (peer.id -> PeerWithInfo(peer, peerInfo))))
 

@@ -27,6 +27,11 @@ import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.network.PeerManagerActor.Peers
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions
+import com.chipprbots.ethereum.network.p2p.messages.Codes
+import com.chipprbots.ethereum.network.p2p.messages.ETH66
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetPooledTransactions._
+import com.chipprbots.ethereum.network.p2p.messages.ETH67
+import com.chipprbots.ethereum.network.p2p.messages.ETH67.NewPooledTransactionHashes._
 import com.chipprbots.ethereum.transactions.SignedTransactionsFilterActor.ProperSignedTransactions
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
@@ -103,6 +108,11 @@ class PendingTransactionsManager(
   implicit val timeout: Timeout = Timeout(3.seconds)
 
   peerEventBus ! Subscribe(SubscriptionClassifier.PeerHandshaked)
+  // Subscribe to NewPooledTransactionHashes and PooledTransactions for tx pool protocol
+  peerEventBus ! Subscribe(SubscriptionClassifier.MessageClassifier(
+    Set(Codes.NewPooledTransactionHashesCode, Codes.PooledTransactionsCode),
+    com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector.AllPeers
+  ))
 
   val transactionFilter: ActorRef = context.actorOf(SignedTransactionsFilterActor.props(context.self, peerEventBus))
 
@@ -178,6 +188,37 @@ class PendingTransactionsManager(
         }
       }
 
+    // ETH67+ NewPooledTransactionHashes — request unknown tx hashes via GetPooledTransactions
+    case com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer(
+      msg: ETH67.NewPooledTransactionHashes, peerId) =>
+      val unknownHashes = msg.hashes.filterNot(h => pendingTransactions.asMap().containsKey(h))
+      if (unknownHashes.nonEmpty) {
+        log.debug("Requesting {} unknown pooled transactions from peer {}", unknownHashes.size, peerId)
+        val requestId = ETH66.nextRequestId
+        networkPeerManager ! NetworkPeerManagerActor.SendMessage(
+          ETH66.GetPooledTransactions(requestId, unknownHashes), peerId)
+      }
+
+    // ETH65 NewPooledTransactionHashes (legacy format — list of hashes only)
+    case com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer(
+      msg: com.chipprbots.ethereum.network.p2p.messages.ETH65.NewPooledTransactionHashes, peerId) =>
+      val unknownHashes = msg.txHashes.filterNot(h => pendingTransactions.asMap().containsKey(h))
+      if (unknownHashes.nonEmpty) {
+        log.debug("Requesting {} unknown pooled transactions from peer {}", unknownHashes.size, peerId)
+        val requestId = ETH66.nextRequestId
+        networkPeerManager ! NetworkPeerManagerActor.SendMessage(
+          ETH66.GetPooledTransactions(requestId, unknownHashes), peerId)
+      }
+
+    // ETH66+ PooledTransactions response — add received txs to pool
+    case com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer(
+      msg: ETH66.PooledTransactions, peerId) =>
+      val validTxs = SignedTransactionWithSender.getSignedTransactions(msg.txs)
+      if (validTxs.nonEmpty) {
+        self ! AddTransactions(validTxs.toSet)
+        validTxs.foreach(stx => setTxKnown(stx.tx, peerId))
+      }
+
     case GetPendingTransactions =>
       pendingTransactions.cleanUp()
       sender() ! PendingTransactionsResponse(pendingTransactions.asMap().asScala.values.toSeq)
@@ -190,6 +231,31 @@ class PendingTransactionsManager(
     case ProperSignedTransactions(transactions, peerId) =>
       self ! AddTransactions(transactions)
       transactions.foreach(stx => setTxKnown(stx.tx, peerId))
+      // Announce new tx hashes to ALL peers (including sender) via NewPooledTransactionHashes.
+      // Per ETH/68 spec, nodes announce hashes even to the peer that sent the full tx.
+      if (transactions.nonEmpty) {
+        import com.chipprbots.ethereum.domain._
+        val txSeq = transactions.toSeq
+        val hashes = txSeq.map(_.tx.hash)
+        val types = txSeq.map { stx => stx.tx.tx match {
+          case _: LegacyTransaction         => 0.toByte
+          case _: TransactionWithAccessList  => Transaction.Type01
+          case _: TransactionWithDynamicFee  => Transaction.Type02
+          case _: BlobTransaction            => Transaction.Type03
+          case _: SetCodeTransaction         => Transaction.Type04
+        }}
+        val sizes = txSeq.map(stx => BigInt(SignedTransaction.byteArraySerializable.toBytes(stx.tx).length))
+        val announcement = ETH67.NewPooledTransactionHashes(types, sizes, hashes)
+        (peerManager ? PeerManagerActor.GetPeers)
+          .mapTo[Peers]
+          .map(_.handshaked)
+          .filter(_.nonEmpty)
+          .foreach { peers =>
+            peers.foreach { peer =>
+              networkPeerManager ! NetworkPeerManagerActor.SendMessage(announcement, peer.id)
+            }
+          }
+      }
 
     case ClearPendingTransactions =>
       log.debug("Dropping all cached transactions")

@@ -364,7 +364,8 @@ trait BlockchainHostBuilder {
     with StorageBuilder
     with PeerManagerActorBuilder
     with NetworkPeerManagerActorBuilder
-    with PeerEventBusBuilder =>
+    with PeerEventBusBuilder
+    with PendingTransactionsManagerBuilder =>
 
   val blockchainHost: ActorRef = system.actorOf(
     BlockchainHostActor.props(
@@ -372,7 +373,8 @@ trait BlockchainHostBuilder {
       storagesInstance.storages.evmCodeStorage,
       peerConfiguration,
       peerEventBus,
-      networkPeerManager
+      networkPeerManager,
+      pendingTransactionsManager
     ),
     "blockchain-host"
   )

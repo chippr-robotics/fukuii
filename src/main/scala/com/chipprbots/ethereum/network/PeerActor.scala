@@ -334,8 +334,20 @@ class PeerActor[R <: HandshakeResult](
         .orElse {
 
           case RLPxConnectionHandler.MessageReceived(message) =>
-            MessageLogger.logMessage(peerId, message)
-            peerEventBus ! Publish(MessageFromPeer(message, peerId))
+            // ETH/69: Validate BlockRangeUpdate — disconnect on invalid
+            message match {
+              case bru: com.chipprbots.ethereum.network.p2p.messages.ETH69.BlockRangeUpdate =>
+                if (bru.earliestBlock > bru.latestBlock || bru.latestBlockHash == org.apache.pekko.util.ByteString(new Array[Byte](32))) {
+                  log.warning("Invalid BlockRangeUpdate from peer {}: earliest={} > latest={} — disconnecting", peerId, bru.earliestBlock, bru.latestBlock)
+                  disconnectFromPeer(rlpxConnection, com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.Reasons.BreachOfProtocol)
+                } else {
+                  MessageLogger.logMessage(peerId, message)
+                  peerEventBus ! Publish(MessageFromPeer(message, peerId))
+                }
+              case _ =>
+                MessageLogger.logMessage(peerId, message)
+                peerEventBus ! Publish(MessageFromPeer(message, peerId))
+            }
 
           case DisconnectPeer(reason) =>
             disconnectFromPeer(rlpxConnection, reason)
