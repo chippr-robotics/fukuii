@@ -30,8 +30,9 @@ object SignedTransaction {
   // around 70bytes then 100k entries have around 7mb. 100k entries is around 300blocks for Ethereum network.
   val maximumSenderCacheSize = 100000
 
-  // Each background thread gets batch of signed tx to calculate senders
-  val batchSize = 5
+  // Each background thread gets batch of signed tx to calculate senders.
+  // Batch size balances scheduling overhead vs core utilization.
+  val batchSize = 50
 
   // Cache available processors count for parallel execution (constant at runtime)
   private val availableProcessors: Int = Runtime.getRuntime.availableProcessors
@@ -276,7 +277,11 @@ object SignedTransaction {
     }
 
   def getSender(tx: SignedTransaction)(implicit blockchainConfig: BlockchainConfig): Option[Address] =
-    Option(txSenders.getIfPresent(tx.hash)).orElse(calculateSender(tx))
+    Option(txSenders.getIfPresent(tx.hash)).orElse {
+      val result = calculateSender(tx)
+      result.foreach(address => txSenders.put(tx.hash, address))
+      result
+    }
 
   private def calculateSender(tx: SignedTransaction)(implicit blockchainConfig: BlockchainConfig): Option[Address] =
     Try {
