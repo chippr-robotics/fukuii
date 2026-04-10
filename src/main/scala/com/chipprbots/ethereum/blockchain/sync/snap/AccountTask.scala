@@ -24,7 +24,11 @@ case class AccountTask(
     var pending: Boolean = false,
     var done: Boolean = false,
     var accounts: Seq[(ByteString, Account)] = Seq.empty,
-    var proof: Seq[ByteString] = Seq.empty
+    var proof: Seq[ByteString] = Seq.empty,
+    // Count of "Missing proof for empty account range" failures at the current `next` position.
+    // Reset when `next` advances (different position) or pivot changes (new root).
+    // When this reaches emptyProofAcceptThreshold, the range is accepted as genuinely empty.
+    var emptyProofFailures: Int = 0
 ) {
 
   /** Check if this task is completed */

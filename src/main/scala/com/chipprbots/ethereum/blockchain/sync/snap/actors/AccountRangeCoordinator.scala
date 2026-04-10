@@ -345,6 +345,12 @@ class AccountRangeCoordinator(
   // We use graduated cooldowns: 1-2 failures = no penalty, 3+ = 60s cooldown, 5+ = 5min cooldown.
   private val peerEmptyProofFailures = mutable.Map[String, Int]()
 
+  // Per-task accept-as-empty threshold: after this many "Missing proof for empty account range"
+  // failures at the same task position (different peers), the range is accepted as genuinely empty.
+  // Rationale: 3 independent peers all returning empty = the range IS empty. Any missed accounts
+  // will be discovered and fixed by StateHealing.
+  private val emptyProofAcceptThreshold = 3
+
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
   private val peerCooldownDefault = 30.seconds
@@ -808,6 +814,7 @@ class AccountRangeCoordinator(
     consumedKeyspace += advanced
     consumedPerRange(rangeKey) = consumedPerRange.getOrElse(rangeKey, BigInt(0)) + advanced
     task.next = nextStart
+    task.emptyProofFailures = 0 // next advanced — previous failures were at the old position
 
     // If this task has no upper bound, keep going until peer returns empty.
     if (task.last.isEmpty) {
@@ -867,8 +874,37 @@ class AccountRangeCoordinator(
         )
       }
       log.warning(s"Task failed: $reason")
+
+      // Reset per-task empty-proof counter if the pivot changed since this request was dispatched.
+      // The new root may serve ranges that were empty under the old root.
+      if (task.rootHash != stateRoot) {
+        task.emptyProofFailures = 0
+      }
       task.pending = false
       task.rootHash = stateRoot
+
+      // Accept-as-empty: after emptyProofAcceptThreshold failures at the same `next` position
+      // from distinct peers, the range is genuinely empty. Any missed accounts will be caught
+      // by StateHealing. This eliminates the ~1/6s wasted round-trip loop on sparse keyspace.
+      if (reason.contains("Missing proof for empty account range")) {
+        task.emptyProofFailures += 1
+        if (task.emptyProofFailures >= emptyProofAcceptThreshold) {
+          log.info(
+            s"[EMPTY-RANGE] ${task.rangeString} accepted as empty after " +
+            s"${task.emptyProofFailures} empty-proof failures from distinct peers — advancing"
+          )
+          val rangeKey = originalRangeFor(task)
+          val remaining = task.remainingKeyspace
+          consumedKeyspace += remaining
+          consumedPerRange(rangeKey) = consumedPerRange.getOrElse(rangeKey, BigInt(0)) + remaining
+          task.next = task.last
+          task.done = true
+          completedTasks += task
+          tryRedispatchPendingTasks()
+          return
+        }
+      }
+
       pendingTasks.enqueue(task)
 
       // Apply cooldown and reduce byte budget for failing peers (unless stateless-marked,
