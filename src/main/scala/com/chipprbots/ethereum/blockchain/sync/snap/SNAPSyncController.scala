@@ -162,6 +162,14 @@ class SNAPSyncController(
   private val maxHealingPivotRefreshAttempts: Int = 10 // after 10 failed pivot refreshes during healing, restart SNAP sync
   private var totalSnapRestarts: Int = 0 // cumulative restart count across this node session
   private var healingSaveCounter: Int = 0
+  // Cycling peer cooldown: suppress SNAP re-admission for peers that repeatedly connect-and-drop.
+  // Peers that disconnect N times within a window waste worker slots (30s timeout per cycle).
+  private val snapPeerDisconnectCount      = mutable.Map[String, Int]()
+  private val snapPeerDisconnectWindowStart = mutable.Map[String, Long]()
+  private val snapPeerCooldownUntil        = mutable.Map[String, Long]()
+  private val cyclingDisconnectThreshold   = 3               // disconnects within window before cooldown
+  private val cyclingWindowMs              = 5 * 60 * 1000L  // 5-minute sliding window
+  private val cyclingCooldownMs            = 10 * 60 * 1000L // 10-minute suppression period
   private var lastTrieWalkMissingCount: Option[Int] = None // progress tracker — None on first round, Some(n) thereafter
   // OPT-W1: Walk resume state — partial nodes and completed subtrees from a previous interrupted walk
   private var walkResumedNodes: Seq[(Seq[ByteString], ByteString)] = Seq.empty
@@ -247,6 +255,27 @@ class SNAPSyncController(
           log.warning(s"[PEER] SNAP peer $peerId disconnected during $phaseLabel — now at 0 SNAP peers. Sync stalled until reconnect.")
         else
           log.info(s"[PEER] SNAP peer $peerId disconnected during $phaseLabel — $remainingSnap SNAP peer(s) remaining")
+        // Track cycling peers: suppress SNAP re-admission if disconnecting too frequently.
+        // Cycling peers waste worker slots — they connect, get workers assigned, drop TCP,
+        // then workers wait out the full 30s timeout before re-enqueueing.
+        val pidStr = peerId.value
+        val now    = System.currentTimeMillis()
+        val windowStart = snapPeerDisconnectWindowStart.getOrElse(pidStr, now)
+        val count = if (now - windowStart > cyclingWindowMs) {
+          snapPeerDisconnectWindowStart(pidStr) = now
+          1
+        } else {
+          snapPeerDisconnectCount.getOrElse(pidStr, 0) + 1
+        }
+        snapPeerDisconnectCount(pidStr) = count
+        if (count >= cyclingDisconnectThreshold) {
+          val cooldownUntil = now + cyclingCooldownMs
+          snapPeerCooldownUntil(pidStr) = cooldownUntil
+          log.info(
+            s"[PEER-CYCLE] $peerId disconnected $count times in ${cyclingWindowMs / 60000}min — " +
+            s"suppressing SNAP re-admission for ${cyclingCooldownMs / 60000}min"
+          )
+        }
       }
   }
 
@@ -694,14 +723,16 @@ class SNAPSyncController(
         refreshPivotInPlace("all healing peers stateless")
       }
 
-    case PersistHealingQueue(pending, force) =>
+    case PersistHealingQueue(pending, _) =>
       healingSaveCounter += 1
-      if (force || healingSaveCounter % 10 == 0) {
-        log.debug(s"[HEAL-PERSIST] Saving ${pending.size} pending nodes (force=$force, flush #$healingSaveCounter)")
-        appStateStorage
-          .putSnapSyncHealingPendingNodes(serializeHealingNodes(pending))
-          .commit()
-      }
+      // Save on every flush (not every 10th). Healing sessions are short due to frequent pivot
+      // refreshes (~26 min); the 10-flush gate meant the queue was never persisted before
+      // coordinator teardown — HEAL-RESUME always loaded exactly 1 seed node instead of the
+      // mid-session queue. Cost: one RocksDB write per 1000 healed nodes (negligible).
+      log.debug(s"[HEAL-PERSIST] Saving ${pending.size} pending nodes (flush #$healingSaveCounter)")
+      appStateStorage
+        .putSnapSyncHealingPendingNodes(serializeHealingNodes(pending))
+        .commit()
 
     case StateHealingComplete(abandonedNodes, totalHealed) =>
       healingNodesAbandoned = abandonedNodes
@@ -2289,11 +2320,13 @@ class SNAPSyncController(
     accountRangeCoordinator.foreach { coordinator =>
       val pivot = pivotBlock.getOrElse(BigInt(0))
 
+      val now = System.currentTimeMillis()
       val snapPeers = peersToDownloadFrom.collect {
         case (_, peerWithInfo)
             if peerWithInfo.peerInfo.remoteStatus.supportsSnap
               && peerWithInfo.peerInfo.isServingSnap
-              && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
+              && peerWithInfo.peerInfo.maxBlockNumber >= pivot
+              && !snapPeerCooldownUntil.get(peerWithInfo.peer.id.value).exists(_ > now) =>
           peerWithInfo.peer
       }
 
