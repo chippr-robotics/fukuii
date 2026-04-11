@@ -183,6 +183,12 @@ class SNAPSyncController(
   // Resets to 30s on successful pivot refresh. Doubles on each failure, capped at 5 minutes.
   private var pivotRefreshRetryDelay: FiniteDuration = 30.seconds
   private var rateTrackerTuneTask: Option[Cancellable] = None
+  // Rate-limit probe triggers sent to NetworkPeerManagerActor during storage phase.
+  // maybeSendSnapProbe checks hasBeenProbed, so triggering more than once per window is wasteful.
+  private var lastSnapProbeTriggerMs: Long = 0L
+  // Rate-limit the [HEAL] Pivot stale WARN during healing. The healing scheduler fires every 1s;
+  // without this gate the WARN floods logs once per second for the full staleness window.
+  private var lastHealStalePivotWarnMs: Long = 0L
 
   private case object RetryPivotRefresh
   private case object CheckSnapCapability
@@ -2410,6 +2416,24 @@ class SNAPSyncController(
 
       if (snapPeers.isEmpty) {
         log.info(s"No SNAP-capable peers at or above pivot $pivot available for storage range requests")
+        // Peers may have supportsSnap=true but isServingSnap=false because the SNAP probe hasn't fired yet.
+        // During storage phase, BlockHeaders rarely arrive (no active header requests), so
+        // maybeSendSnapProbe in handleReceivedMessage never triggers. Directly probe unconfirmed snap peers
+        // using the known pivot stateRoot so they can be promoted to confirmed snap servers.
+        val now = System.currentTimeMillis()
+        if (now - lastSnapProbeTriggerMs > 15_000) {
+          lastSnapProbeTriggerMs = now
+          val unprobed = peersToDownloadFrom.values
+            .filter(pwi => pwi.peerInfo.remoteStatus.supportsSnap && !pwi.peerInfo.isServingSnap)
+          if (unprobed.nonEmpty) {
+            log.info(s"[SNAP-PROBE] Triggering direct snap probes for ${unprobed.size} unconfirmed snap peers during storage phase")
+            unprobed.foreach { pwi =>
+              stateRoot.foreach { root =>
+                networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.TriggerSnapProbe(pwi.peer.id, root)
+              }
+            }
+          }
+        }
       } else {
         snapPeers.foreach { peer =>
           coordinator ! actors.Messages.StoragePeerAvailable(peer)
@@ -2763,6 +2787,8 @@ class SNAPSyncController(
 
     // Warn if pivot is significantly stale so we can verify in-place refresh is keeping up.
     // This is informational only — in-place refresh corrects staleness, not a restart.
+    // Rate-limited to once per 30s: the healing scheduler fires every 1s, so without this
+    // gate the WARN floods logs for the entire staleness window.
     for {
       pivot       <- pivotBlock
       networkBest <- currentNetworkBestFromSnapPeers()
@@ -2770,17 +2796,21 @@ class SNAPSyncController(
     } {
       val delta = networkBest - pivot
       if (delta > snapSyncConfig.maxPivotStalenessBlocks) {
-        if (pendingPivotRefresh.isDefined) {
-          val pendingMs = System.currentTimeMillis() - pendingPivotRefreshStartMs
-          log.warning(
-            s"[HEAL] Pivot $pivot is $delta blocks stale; in-place bootstrap pending ${pendingMs / 1000}s. " +
-              s"Healing requests against stale root may fail until bootstrap completes."
-          )
-        } else {
-          log.warning(
-            s"[HEAL] Pivot $pivot is $delta blocks stale (> ${snapSyncConfig.maxPivotStalenessBlocks}). " +
-              s"In-place refresh should trigger within 30s via CheckPivotFreshness."
-          )
+        val nowMs = System.currentTimeMillis()
+        if (nowMs - lastHealStalePivotWarnMs > 30_000) {
+          lastHealStalePivotWarnMs = nowMs
+          if (pendingPivotRefresh.isDefined) {
+            val pendingMs = nowMs - pendingPivotRefreshStartMs
+            log.warning(
+              s"[HEAL] Pivot $pivot is $delta blocks stale; in-place bootstrap pending ${pendingMs / 1000}s. " +
+                s"Healing requests against stale root may fail until bootstrap completes."
+            )
+          } else {
+            log.warning(
+              s"[HEAL] Pivot $pivot is $delta blocks stale (> ${snapSyncConfig.maxPivotStalenessBlocks}). " +
+                s"In-place refresh should trigger within 30s via CheckPivotFreshness."
+            )
+          }
         }
       }
     }

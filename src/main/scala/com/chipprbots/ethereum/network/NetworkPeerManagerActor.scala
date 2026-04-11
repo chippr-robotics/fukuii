@@ -144,6 +144,11 @@ class NetworkPeerManagerActor(
       log.info("Registering SNAPSyncController for message routing")
       snapSyncControllerOpt = Some(snapSyncController)
 
+    case TriggerSnapProbe(peerId, stateRoot) =>
+      peersWithInfo.get(peerId).foreach { pwi =>
+        maybeSendSnapProbe(pwi, Some(stateRoot))
+      }
+
     case NetworkPeerManagerActor.SendMessage(message, peerId) =>
       NetworkMetrics.SentMessagesCounter.increment()
       log.debug(
@@ -1210,6 +1215,12 @@ object NetworkPeerManagerActor {
   case class PeerInfoResponse(peerInfo: Option[PeerInfo])
 
   case class SendMessage(message: MessageSerializable, peerId: PeerId)
+
+  /** Trigger a direct SNAP probe for a peer using the given stateRoot.
+    * Used during storage/healing phases when BlockHeaders are not flowing but we know the pivot stateRoot.
+    * maybeSendSnapProbe checks hasBeenProbed — this is a no-op if the peer is already awaiting a probe response.
+    */
+  case class TriggerSnapProbe(peerId: PeerId, stateRoot: ByteString)
 
   /** Register the SNAPSyncController actor for message routing */
   case class RegisterSnapSyncController(snapSyncController: ActorRef)
