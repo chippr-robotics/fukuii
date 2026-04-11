@@ -243,9 +243,6 @@ class PendingTransactionsManager(
       knownTransactions = knownTransactions -- signedTransactions.map(_.hash)
 
     case ProperSignedTransactions(transactions, peerId) =>
-      // Add to pool via AddTransactions (which validates against state before adding).
-      // Hash announcement is sent from AddTransactions AFTER validation, not here,
-      // to avoid announcing invalid txs before they're validated.
       self ! AddTransactions(transactions)
       transactions.foreach(stx => setTxKnown(stx.tx, peerId))
 
@@ -253,6 +250,7 @@ class PendingTransactionsManager(
       log.debug("Dropping all cached transactions")
       pendingTransactions.invalidateAll()
   }
+
 
   /** Announce validated transaction hashes to all connected peers via NewPooledTransactionHashes (ETH/68 spec). */
   private def announceNewTxHashes(txs: Set[SignedTransactionWithSender]): Unit = {
@@ -293,16 +291,31 @@ class PendingTransactionsManager(
             bestBlock.header.stateRoot.toArray, mptStorage)(
             defaultByteArraySerializable, Account.accountSerializer)
 
+          // Track (sender, nonce) pairs within this batch + pending pool to reject duplicates
+          val existingNonces = pendingTransactions.asMap().values().asScala
+            .map(pt => (pt.stx.senderAddress, pt.stx.tx.tx.nonce)).toSet
+          val acceptedNonces = scala.collection.mutable.Set.from(existingNonces)
+
           txs.filter { stx =>
             val addressHash = com.chipprbots.ethereum.crypto.kec256(stx.senderAddress.toArray)
             val accountOpt = stateTrie.get(addressHash)
             accountOpt.exists { account =>
               val tx = stx.tx.tx
-              val nonceValid = tx.nonce >= account.nonce.toBigInt
+              val nonceKey = (stx.senderAddress, tx.nonce)
+              // Nonce must be >= account nonce
+              val baseNonceValid = tx.nonce >= account.nonce.toBigInt
+              // Reject absurdly high nonces (uint64 underflow: Go's uint(0)-1 = maxUint64)
+              val nonceNotAbsurd = tx.nonce < account.nonce.toBigInt + 1024
+              // Reject duplicate nonces (same sender+nonce already in pool or accepted in this batch)
+              val nonceDuplicate = acceptedNonces.contains(nonceKey)
+              val nonceValid = baseNonceValid && nonceNotAbsurd && !nonceDuplicate
+              // Balance must cover value + gas cost
               val maxGasCost = tx.gasLimit * tx.gasPrice
               val totalCost = tx.value + maxGasCost
               val balanceValid = account.balance.toBigInt >= totalCost
-              nonceValid && balanceValid
+              val ok = nonceValid && balanceValid
+              if (ok) acceptedNonces += nonceKey // track for within-batch dedup
+              ok
             }
           }
         case None =>
