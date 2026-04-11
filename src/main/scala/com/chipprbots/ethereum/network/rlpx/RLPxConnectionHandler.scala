@@ -599,14 +599,14 @@ class RLPxConnectionHandler(
           // reduce our ability to maintain connections with diverse peer implementations.
         } else {
           // For other decoding errors (truly malformed RLP, structure mismatches, etc.),
-          // close the connection to protect against attacks
+          // send proper Disconnect to remote peer before closing connection
           log.error(
-            "DECODE_ERROR: Cannot decode message from {} - connection will be closed. Error: {}",
+            "DECODE_ERROR: Cannot decode message from {} - disconnecting. Error: {}",
             peerId,
             ex.getMessage
           )
-          // break connection in case of failed decoding, to avoid attack which would send us garbage
-          connection ! Close
+          context.parent ! com.chipprbots.ethereum.network.PeerActor.DisconnectPeer(
+            com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.Reasons.BreachOfProtocol)
         }
       // Let handleConnectionTerminated clean up after TCP connection closes (if closed)
     }

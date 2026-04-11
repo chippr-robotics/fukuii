@@ -8,6 +8,7 @@ import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockBody._
+import com.chipprbots.ethereum.domain.Transaction
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits._
 import com.chipprbots.ethereum.domain.SignedTransaction
@@ -311,9 +312,46 @@ object ETH66 {
 
       def toPooledTransactions: PooledTransactions = rawDecode(bytes) match {
         case RLPList(RLPValue(requestIdBytes), rlpList: RLPList) =>
+          // Validate blob txs in PooledTransactions: per EIP-4844, blob txs MUST be
+          // in network-wrapped form [tx_payload, blobs, commitments, proofs].
+          // Also validate that sidecar commitments match versioned hashes.
+          val typedItems = rlpList.items.toTypedRLPEncodables
+          typedItems.foreach {
+            case PrefixedRLPEncodable(Transaction.Type03, inner: RLPList) =>
+              // Network-wrapped blob tx: must have 4 elements [payload, blobs, commitments, proofs]
+              if (inner.items.size == 4 && inner.items.head.isInstanceOf[RLPList]) {
+                // Validate commitments match versioned hashes in tx payload
+                val txPayload = inner.items.head.asInstanceOf[RLPList]
+                // blobVersionedHashes is the 11th element (index 10) of the tx payload
+                if (txPayload.items.size >= 14) {
+                  val versionedHashes = txPayload.items(10).asInstanceOf[RLPList]
+                  val commitmentsRlp = inner.items(2).asInstanceOf[RLPList]
+                  // Each commitment (48 bytes) hashes to a versioned hash (32 bytes)
+                  // versioned_hash = 0x01 || SHA256(commitment)[1:]
+                  if (versionedHashes.items.size != commitmentsRlp.items.size) {
+                    throw new RuntimeException("Blob tx: commitment count mismatch with versioned hashes")
+                  }
+                  val sha256 = java.security.MessageDigest.getInstance("SHA-256")
+                  versionedHashes.items.zip(commitmentsRlp.items).foreach { case (hashItem, commitItem) =>
+                    val expectedHash = hashItem.asInstanceOf[RLPValue].bytes
+                    val commitment = commitItem.asInstanceOf[RLPValue].bytes
+                    val computedHash = sha256.digest(commitment)
+                    computedHash(0) = 0x01.toByte // version prefix
+                    if (!java.util.Arrays.equals(expectedHash, computedHash)) {
+                      throw new RuntimeException("Blob tx: sidecar commitment does not match versioned hash")
+                    }
+                    sha256.reset()
+                  }
+                }
+              } else if (!inner.items.head.isInstanceOf[RLPList]) {
+                // Non-wrapped blob tx (missing sidecar) — invalid in PooledTransactions
+                throw new RuntimeException("Blob tx in PooledTransactions missing sidecar (network wrapping required)")
+              }
+            case _ => // non-blob txs are fine
+          }
           PooledTransactions(
             ByteUtils.bytesToBigInt(requestIdBytes),
-            rlpList.items.toTypedRLPEncodables.map(_.toSignedTransaction)
+            typedItems.map(_.toSignedTransaction)
           )
         case _ => throw new RuntimeException("Cannot decode PooledTransactions")
       }
