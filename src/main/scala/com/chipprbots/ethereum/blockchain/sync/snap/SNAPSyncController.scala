@@ -742,6 +742,11 @@ class SNAPSyncController(
       // The coordinator sends this message and then stops itself; clearing the reference here prevents
       // startStateHealingWithSavedNodes from seeing isDefined=true and silently ignoring the restart.
       trieNodeHealingCoordinator.foreach(context.stop); trieNodeHealingCoordinator = None
+      // Increment generation so the next healing coordinator gets a unique actor name.
+      // context.stop is async — the old actor's name stays registered until postStop completes,
+      // so reusing coordinatorGeneration in startStateHealingWithSavedNodes/startStateHealing
+      // causes InvalidActorNameException (healing stall, requires manual restart).
+      coordinatorGeneration += 1
       // Flush healed nodes from LRU to RocksDB before the next walk.
       // TrieNodeHealingCoordinator.persist() is a NO-OP on CachedReferenceCountedStorage —
       // nodes are in LRU only. Without this flush, rootInDb=false in startTrieWalk() and
