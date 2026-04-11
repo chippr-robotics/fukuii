@@ -575,11 +575,15 @@ class SNAPSyncController(
     case RetryPivotRefresh =>
       pivotBootstrapRetryTask = None
       if (
-        currentPhase == AccountRangeSync || currentPhase == StorageRangeSync ||
-        currentPhase == ByteCodeAndStorageSync || currentPhase == StateHealing
+        (currentPhase == AccountRangeSync || currentPhase == StorageRangeSync ||
+        currentPhase == ByteCodeAndStorageSync || currentPhase == StateHealing) &&
+        !trieWalkInProgress
       ) {
         log.info(s"Retrying pivot refresh after bootstrap failure (phase=$currentPhase)...")
         refreshPivotInPlace("retry after bootstrap failure")
+      } else if (trieWalkInProgress) {
+        // BUG-W3 FIX: Don't retry pivot refresh during validation walk.
+        log.info("[WALK] Skipping pivot refresh retry — validation walk in progress.")
       } else {
         log.info(s"Skipping pivot refresh retry — phase=$currentPhase no longer needs it")
       }
@@ -714,19 +718,25 @@ class SNAPSyncController(
       checkAllDownloadsComplete()
 
     case HealingAllPeersStateless if currentPhase == StateHealing =>
-      consecutiveHealingPivotRefreshAttempts += 1
-      if (consecutiveHealingPivotRefreshAttempts > maxHealingPivotRefreshAttempts) {
-        log.warning(
-          s"[HEAL-STALL] Healing pivot refresh failed $consecutiveHealingPivotRefreshAttempts times — " +
-          s"restarting SNAP sync to recover from unservable state root"
-        )
-        restartSnapSync("healing pivot refresh limit exceeded")
+      if (trieWalkInProgress) {
+        // BUG-W3 FIX: Walk makes no peer requests — all-peers-stateless is irrelevant.
+        // No pivot refresh needed; walk will complete for the current root.
+        log.info("[WALK] All healing peers stateless during validation walk — walk reads local RocksDB, no pivot refresh needed.")
       } else {
-        log.warning(
-          s"All healing peers stateless (attempt $consecutiveHealingPivotRefreshAttempts/$maxHealingPivotRefreshAttempts) — " +
-          s"refreshing pivot in-place for healing"
-        )
-        refreshPivotInPlace("all healing peers stateless")
+        consecutiveHealingPivotRefreshAttempts += 1
+        if (consecutiveHealingPivotRefreshAttempts > maxHealingPivotRefreshAttempts) {
+          log.warning(
+            s"[HEAL-STALL] Healing pivot refresh failed $consecutiveHealingPivotRefreshAttempts times — " +
+            s"restarting SNAP sync to recover from unservable state root"
+          )
+          restartSnapSync("healing pivot refresh limit exceeded")
+        } else {
+          log.warning(
+            s"All healing peers stateless (attempt $consecutiveHealingPivotRefreshAttempts/$maxHealingPivotRefreshAttempts) — " +
+            s"refreshing pivot in-place for healing"
+          )
+          refreshPivotInPlace("all healing peers stateless")
+        }
       }
 
     case PersistHealingQueue(pending, _) =>
@@ -2529,7 +2539,18 @@ class SNAPSyncController(
     // Proactive pivot freshness (Geth-aligned): refresh before peers start returning empty responses.
     case CheckPivotFreshness
         if currentPhase == AccountRangeSync || currentPhase == StorageRangeSync || currentPhase == ByteCodeAndStorageSync || currentPhase == StateHealing =>
-      maybeProactivelyRefreshPivot()
+      if (trieWalkInProgress) {
+        // BUG-W3 FIX: Walk reads local RocksDB only — no SNAP peers needed.
+        // Proactive pivot refresh would invalidate the walk via BUG-W1 discard,
+        // creating an infinite restart loop. Pivot stays fixed until walk completes.
+        log.info(
+          s"[WALK] Skipping proactive pivot refresh — validation walk in progress " +
+          s"(root ${stateRoot.map(r => Hex.toHexString(r.toArray).take(16)).getOrElse("?")}). " +
+          s"Walk reads local RocksDB only; pivot will refresh after walk completes."
+        )
+      } else {
+        maybeProactivelyRefreshPivot()
+      }
       super.aroundReceive(receive, msg)
 
     case _ =>
