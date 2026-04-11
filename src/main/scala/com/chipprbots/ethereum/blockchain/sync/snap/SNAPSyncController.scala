@@ -750,7 +750,7 @@ class SNAPSyncController(
         .putSnapSyncHealingPendingNodes(serializeHealingNodes(pending))
         .commit()
 
-    case StateHealingComplete(abandonedNodes, totalHealed) =>
+    case StateHealingComplete(abandonedNodes, totalHealed) if currentPhase == StateHealing =>
       healingNodesAbandoned = abandonedNodes
       healingNodesTotal = totalHealed
       log.info(s"State healing complete [abandonedNodes=$abandonedNodes, healed=$totalHealed]")
@@ -2697,6 +2697,20 @@ class SNAPSyncController(
 
     trieWalkInProgress = false // Reset for fresh healing phase
     healingWalkRunThisSession = false // BUG-WS3: no walk has run yet this session
+
+    // BUG-W5 FIX: Cancel download-phase periodic tasks when entering StateHealing.
+    // These schedulers were started during AccountRangeSync / ByteCodeAndStorageSync and
+    // are only cancelled in restartSnapSync(). Without this, they continue firing every 1s
+    // during StateHealing — each tick calls maybeRestartIfPivotTooStale() which hard-restarts
+    // sync when the pivot is stale, killing the validation walk every ~13-14 minutes.
+    // StateHealing uses in-place pivot refresh (CheckPivotFreshness → maybeProactivelyRefreshPivot),
+    // not destructive restart.
+    accountRangeRequestTask.foreach(_.cancel()); accountRangeRequestTask = None
+    bytecodeRequestTask.foreach(_.cancel()); bytecodeRequestTask = None
+    storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
+    accountStagnationCheckTask.foreach(_.cancel()); accountStagnationCheckTask = None
+    storageStagnationCheckTask.foreach(_.cancel()); storageStagnationCheckTask = None
+
     log.info(s"Starting state healing with batch size ${snapSyncConfig.healingBatchSize}")
 
     stateRoot.foreach { root =>
@@ -2767,6 +2781,13 @@ class SNAPSyncController(
 
     trieWalkInProgress = false
     healingWalkRunThisSession = false // BUG-WS3: no walk has run yet this session
+
+    // BUG-W5 FIX: Same as startStateHealing() — cancel download-phase schedulers.
+    accountRangeRequestTask.foreach(_.cancel()); accountRangeRequestTask = None
+    bytecodeRequestTask.foreach(_.cancel()); bytecodeRequestTask = None
+    storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
+    accountStagnationCheckTask.foreach(_.cancel()); accountStagnationCheckTask = None
+    storageStagnationCheckTask.foreach(_.cancel()); storageStagnationCheckTask = None
 
     stateRoot match {
       case None =>
@@ -3032,6 +3053,11 @@ class SNAPSyncController(
     // destroying coordinator progress. If the bootstrap times out, maybeProactivelyRefreshPivot
     // clears the pending flag so the next CheckPivotFreshness tick can retry.
     if (pendingPivotRefresh.isDefined) return false
+    // BUG-W5 FIX: Never hard-restart during StateHealing. Pivot updates in StateHealing use
+    // in-place refresh (CheckPivotFreshness → maybeProactivelyRefreshPivot), which preserves
+    // healing/walk progress. Hard restart destroys all coordinator state unnecessarily.
+    // The extreme case (all peers stateless) is handled by HealingAllPeersStateless → refreshPivotInPlace.
+    if (currentPhase == StateHealing) return false
 
     (pivotBlock, currentNetworkBestFromSnapPeers()) match {
       case (Some(pivot), Some(networkBest)) if networkBest > 0 && networkBest > pivot =>
@@ -3281,6 +3307,11 @@ class SNAPSyncController(
     bytecodeCoordinator.foreach(context.stop); bytecodeCoordinator = None
     storageRangeCoordinator.foreach(context.stop); storageRangeCoordinator = None
     trieNodeHealingCoordinator.foreach(context.stop); trieNodeHealingCoordinator = None
+    // BUG-W5 secondary: if restartSnapSync fires during an active walk, the async walk thread
+    // is orphaned — TrieWalkResult arrives but is discarded (currentPhase != StateHealing).
+    // Without this reset, trieWalkInProgress stays true permanently and startTrieWalk()
+    // silently returns on the next healing entry.
+    trieWalkInProgress = false
 
     // Clear inflight request timeouts and internal phase state
     requestTracker.clear()
