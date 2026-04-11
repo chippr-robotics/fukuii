@@ -821,8 +821,20 @@ class SNAPSyncController(
         scheduler.scheduleOnce(10.seconds, self, TrieWalkHeartbeat)(ec)
       }
 
-    case TrieWalkResult(missingNodes) if currentPhase == StateHealing =>
+    case TrieWalkResult(missingNodes, walkedRoot) if currentPhase == StateHealing =>
       trieWalkInProgress = false
+      // BUG-W1: discard results from a walk that started for an older pivot root.
+      // CheckPivotFreshness fires during the walk (currentPhase stays StateHealing), so stateRoot
+      // can advance while the walk runs. If the roots don't match, a newer walk is either running
+      // (BUG-W2 fix) or needs to be started — either way, restart for the current root.
+      if (!stateRoot.contains(walkedRoot)) {
+        log.info(
+          s"[WALK] Stale walk result discarded — walked ${Hex.toHexString(walkedRoot.toArray).take(16)} " +
+          s"but current root is ${stateRoot.map(r => Hex.toHexString(r.toArray).take(16)).getOrElse("?")}. " +
+          s"Re-starting walk for current root."
+        )
+        startTrieWalk()
+      } else {
       healingWalkRunThisSession = true // BUG-WS3: walk ran — WALK-SKIP is now safe
       // OPT-W1: merge partial nodes from previous interrupted walk into final result
       val allMissingNodes = walkResumedNodes ++ missingNodes
@@ -902,6 +914,7 @@ class SNAPSyncController(
           // No periodic walk needed — StateHealingComplete triggers the final validation walk.
         }
       }
+      } // end else (walkedRoot matches stateRoot)
 
     case ScheduledTrieWalk if currentPhase == StateHealing =>
       // Guard: a previous quick healing round may have already started a walk before the
@@ -2524,7 +2537,7 @@ class SNAPSyncController(
   }
 
   // Internal message for async trie walk result
-  private case class TrieWalkResult(missingNodes: Seq[(Seq[ByteString], ByteString)])
+  private case class TrieWalkResult(missingNodes: Seq[(Seq[ByteString], ByteString)], walkedRoot: ByteString)
   private case class TrieWalkFailed(error: String)
   private case class TrieWalkSubtreeResult(prefixHex: String, nodes: Seq[(Seq[ByteString], ByteString)])
   private case object ScheduledTrieWalk
@@ -2552,7 +2565,7 @@ class SNAPSyncController(
         "Skipping validation walk. (snap-sync.require-validation-walk = false)"
       )
       log.info("[WALK-SKIP] Set snap-sync.require-validation-walk = true to force a full trie scan.")
-      self ! TrieWalkResult(Seq.empty)
+      stateRoot.foreach(root => self ! TrieWalkResult(Seq.empty, root))
       return
     }
     if (!snapSyncConfig.requireValidationWalk && healingNodesAbandoned == 0 && healingNodesTotal == 0 && !rootInDb) {
@@ -2625,7 +2638,7 @@ class SNAPSyncController(
       )(walkEc).onComplete {
         case scala.util.Success(Right(missingNodes)) =>
           walkEc.shutdown()
-          selfRef ! TrieWalkResult(missingNodes)
+          selfRef ! TrieWalkResult(missingNodes, root)
         case scala.util.Success(Left(error)) =>
           walkEc.shutdown()
           selfRef ! TrieWalkFailed(error)
@@ -3150,9 +3163,16 @@ class SNAPSyncController(
     consecutiveHealingPivotRefreshAttempts = 0 // successful pivot refresh — reset stall counter
     trieNodeHealingCoordinator.foreach { coordinator =>
       coordinator ! actors.Messages.HealingPivotRefreshed(newStateRoot)
-      // Re-walk trie with new root to populate fresh healing tasks
-      trieWalkInProgress = false // Reset so startTrieWalk() can proceed
-      startTrieWalk()
+      if (trieWalkInProgress) {
+        // BUG-W2: a walk is already running for the old root. Don't spawn a concurrent walk —
+        // when it finishes, BUG-W1 fix discards the stale result and re-starts for the new root.
+        log.info(
+          s"[WALK] Pivot refreshed during active walk — walk will restart for " +
+          s"new root ${Hex.toHexString(newStateRoot.toArray).take(16)} on completion."
+        )
+      } else {
+        startTrieWalk()
+      }
     }
     // Chain download target extends to the new pivot (chain data is canonical, never invalidated)
     if (chainDownloader.isDefined) {
@@ -3329,7 +3349,7 @@ class SNAPSyncController(
       validator.findMissingNodesWithPaths(root)(walkEc).onComplete {
         case scala.util.Success(Right(nodes)) =>
           walkEc.shutdown()
-          selfRef ! TrieWalkResult(nodes)
+          selfRef ! TrieWalkResult(nodes, root)
         case scala.util.Success(Left(error)) =>
           walkEc.shutdown()
           selfRef ! TrieWalkFailed(error)
