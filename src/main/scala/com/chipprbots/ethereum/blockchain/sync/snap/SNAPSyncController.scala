@@ -780,11 +780,27 @@ class SNAPSyncController(
             case Some(data) =>
               val savedNodes = deserializeHealingNodes(data)
               if (savedNodes.nonEmpty) {
-                log.info(
-                  s"[WALK-SKIP] $abandonedNodes abandoned nodes — resuming healing from saved list " +
-                  s"(${savedNodes.size} nodes, skipping trie re-walk)"
-                )
-                startStateHealingWithSavedNodes(savedNodes)
+                // BUG-W4 FIX: forcePersist() above flushed LRU → RocksDB.
+                // Abandoned nodes may now be present — skip Coordinator B if all are resolved
+                // to avoid a redundant healing round and duplicate trie walk.
+                val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
+                val stillMissing = savedNodes.filter { case (_, hash) =>
+                  try { storage.get(hash.toArray); false }
+                  catch { case _: Exception => true }
+                }
+                if (stillMissing.nonEmpty) {
+                  log.info(
+                    s"[HEAL] $abandonedNodes abandoned nodes — resuming healing from saved list " +
+                    s"(${stillMissing.size}/${savedNodes.size} still missing after flush)"
+                  )
+                  startStateHealingWithSavedNodes(stillMissing)
+                } else {
+                  log.info(
+                    s"[HEAL] All $abandonedNodes abandoned nodes now present in RocksDB after flush " +
+                    s"— skipping healing round, proceeding to trie walk"
+                  )
+                  startTrieWalk()
+                }
               } else {
                 log.info(s"[WALK] $abandonedNodes abandoned nodes but saved list empty — running trie walk")
                 startTrieWalk()
