@@ -174,31 +174,44 @@ class AccountRangeCoordinator(
 
   // Task management — resume ranges from saved positions (core-geth parity).
   // On restart, each range resumes from its saved `next` position instead of starting from 0x00.
+  // Also captures how much keyspace was already consumed, so consumedKeyspace/consumedPerRange
+  // are seeded correctly and the progress display shows the real percentage instead of 0%.
   private val allInitialTasks = AccountTask.createInitialTasks(stateRoot, concurrency)
-  private val (skippedTasks, remainingTasks) = if (resumeProgress.nonEmpty) {
-    val resumed = allInitialTasks.map { task =>
-      resumeProgress.get(task.last) match {
-        case Some(savedNext)
-            if BigInt(1, savedNext.toArray.padTo(32, 0.toByte)) >=
-              BigInt(1, task.last.toArray.padTo(32, 0.toByte)) =>
-          // Range fully traversed — mark as done
-          task.next = task.last
-          task.done = true
-          task
-        case Some(savedNext) if savedNext != task.next =>
-          log.info(
-            s"Resuming range ${task.rangeString} from saved position ${savedNext.take(4).toArray.map("%02x".format(_)).mkString}"
-          )
-          task.next = savedNext
-          task
-        case _ => task
+  private val (recoveredConsumedKeyspace, recoveredConsumedPerRange, skippedTasks, remainingTasks) =
+    if (resumeProgress.nonEmpty) {
+      var totalConsumed = BigInt(0)
+      val perRangeConsumed = mutable.Map[ByteString, BigInt]()
+      val resumed = allInitialTasks.map { task =>
+        val originalNextBig = BigInt(1, task.next.toArray.padTo(32, 0.toByte))
+        resumeProgress.get(task.last) match {
+          case Some(savedNext)
+              if BigInt(1, savedNext.toArray.padTo(32, 0.toByte)) >=
+                BigInt(1, task.last.toArray.padTo(32, 0.toByte)) =>
+            // Range fully traversed — credit entire range width and mark done
+            val consumed = (BigInt(1, task.last.toArray.padTo(32, 0.toByte)) - originalNextBig).max(BigInt(0))
+            totalConsumed += consumed
+            perRangeConsumed(task.last) = consumed
+            task.next = task.last
+            task.done = true
+            task
+          case Some(savedNext) if savedNext != task.next =>
+            log.info(
+              s"Resuming range ${task.rangeString} from saved position ${savedNext.take(4).toArray.map("%02x".format(_)).mkString}"
+            )
+            val savedNextBig = BigInt(1, savedNext.toArray.padTo(32, 0.toByte))
+            val consumed = (savedNextBig - originalNextBig).max(BigInt(0))
+            totalConsumed += consumed
+            perRangeConsumed(task.last) = consumed
+            task.next = savedNext
+            task
+          case _ => task
+        }
       }
+      val (done, todo) = resumed.partition(_.done)
+      (totalConsumed, perRangeConsumed.toMap, done, todo)
+    } else {
+      (BigInt(0), Map.empty[ByteString, BigInt], Seq.empty, allInitialTasks)
     }
-    val (done, todo) = resumed.partition(_.done)
-    (done, todo)
-  } else {
-    (Seq.empty, allInitialTasks)
-  }
   // Priority queue: dequeue the task with the SMALLEST remaining keyspace first.
   // This focuses workers on nearly-complete ranges, ensuring at least some ranges
   // finish before peers stop responding (instead of spreading work evenly across all 16).
@@ -231,10 +244,10 @@ class AccountRangeCoordinator(
   private val totalKeyspace: BigInt = BigInt(2).pow(256)
   // Cumulative keyspace consumed: incremented each time a task's `next` advances.
   // This avoids the jitter from snapshotting in-flight task positions.
-  private var consumedKeyspace: BigInt = BigInt(0)
+  private var consumedKeyspace: BigInt = recoveredConsumedKeyspace
   // Per-range keyspace consumed, indexed by original range boundary (task.last).
   // Work-stolen sub-ranges credit their parent range via originalRangeFor().
-  private val consumedPerRange: mutable.Map[ByteString, BigInt] = mutable.Map.empty
+  private val consumedPerRange: mutable.Map[ByteString, BigInt] = mutable.Map.from(recoveredConsumedPerRange)
   // Total keyspace per range: computed from original boundaries (start..last), not current `next`.
   // `next` may have been advanced by resume logic, so remainingKeyspace would be too small.
   private val rangeKeyspaceTotal: Map[ByteString, BigInt] = {
@@ -407,8 +420,16 @@ class AccountRangeCoordinator(
     } else {
       log.info(s"AccountRangeCoordinator starting with $concurrency workers")
     }
-    log.info(s"[ACCOUNT] 0% — starting account download across $concurrency parallel ranges")
-    lastLoggedAccountMilestonePct = 0
+    val seedPct = (recoveredConsumedKeyspace * 10000 / (totalKeyspace * concurrency)).toDouble / 100.0
+    if (recoveredConsumedKeyspace > 0) {
+      log.info(
+        s"[ACCOUNT] ${"%.1f".format(seedPct)}% (recovered) — resuming account download across $concurrency parallel ranges"
+      )
+      lastLoggedAccountMilestonePct = seedPct.toInt
+    } else {
+      log.info(s"[ACCOUNT] 0% — starting account download across $concurrency parallel ranges")
+      lastLoggedAccountMilestonePct = 0
+    }
     // If all tasks were already completed, report completion immediately
     if (pendingTasks.isEmpty && activeTasks.isEmpty) {
       import context.dispatcher
