@@ -122,6 +122,12 @@ class PendingTransactionsManager(
     */
   var pendingNonces: Map[Address, BigInt] = Map.empty
 
+  /** Tracks announced tx metadata (type, size) from NewPooledTransactionHashes.
+    * Used to validate PooledTransactions responses — disconnect peers that send
+    * txs with type/size mismatched from their announcement (EIP-4844 blob violations).
+    */
+  var pendingAnnouncements: Map[ByteString, (Byte, BigInt, PeerId)] = Map.empty
+
   peerEventBus ! Subscribe(SubscriptionClassifier.PeerHandshaked)
   peerEventBus ! Subscribe(SubscriptionClassifier.PeerDisconnectedClassifier(
     com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector.AllPeers))
@@ -231,7 +237,10 @@ class PendingTransactionsManager(
       msg: ETH67.NewPooledTransactionHashes, peerId) =>
       val unknownHashes = msg.hashes.filterNot(h => pendingTransactions.asMap().containsKey(h))
       if (unknownHashes.nonEmpty) {
-        log.debug("Requesting {} unknown pooled transactions from peer {}", unknownHashes.size, peerId)
+        // Track announced types/sizes for validation when PooledTransactions arrives
+        msg.hashes.zip(msg.types).zip(msg.sizes).foreach { case ((hash, txType), size) =>
+          pendingAnnouncements = pendingAnnouncements.updated(hash, (txType, size, peerId))
+        }
         val requestId = ETH66.nextRequestId
         networkPeerManager ! NetworkPeerManagerActor.SendMessage(
           ETH66.GetPooledTransactions(requestId, unknownHashes), peerId)
@@ -251,10 +260,36 @@ class PendingTransactionsManager(
     // ETH66+ PooledTransactions response — add received txs to pool
     case com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer(
       msg: ETH66.PooledTransactions, peerId) =>
-      val validTxs = SignedTransactionWithSender.getSignedTransactions(msg.txs)
-      if (validTxs.nonEmpty) {
-        self ! AddTransactions(validTxs.toSet)
-        validTxs.foreach(stx => setTxKnown(stx.tx, peerId))
+      // Validate received txs against their announcements (type/size mismatch = blob violation)
+      import com.chipprbots.ethereum.domain._
+      val announcementViolation = msg.txs.zipWithIndex.exists { case (stx, idx) =>
+        pendingAnnouncements.get(stx.hash).exists { case (announcedType, announcedSize, _) =>
+          val actualType: Byte = stx.tx match {
+            case _: LegacyTransaction         => 0.toByte
+            case _: TransactionWithAccessList  => Transaction.Type01
+            case _: TransactionWithDynamicFee  => Transaction.Type02
+            case _: BlobTransaction            => Transaction.Type03
+            case _: SetCodeTransaction         => Transaction.Type04
+          }
+          val typeMismatch = actualType != announcedType
+          // Use original wire size (from PooledTransactions decode) for accurate comparison
+          val sizeMismatch = if (idx < msg.originalSizes.size) {
+            BigInt(msg.originalSizes(idx)) != announcedSize
+          } else false
+          typeMismatch || sizeMismatch
+        }
+      }
+      // Clean up announcements for received txs
+      msg.txs.foreach(stx => pendingAnnouncements -= stx.hash)
+      if (announcementViolation) {
+        log.debug("PooledTransactions from peer {} has type/size mismatch with announcement — disconnecting", peerId)
+        peerManager ! PeerManagerActor.DisconnectPeerById(peerId)
+      } else {
+        val validTxs = SignedTransactionWithSender.getSignedTransactions(msg.txs)
+        if (validTxs.nonEmpty) {
+          self ! AddTransactions(validTxs.toSet)
+          validTxs.foreach(stx => setTxKnown(stx.tx, peerId))
+        }
       }
 
     case GetPendingTransactions =>

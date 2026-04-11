@@ -347,16 +347,32 @@ object ETH66 {
               }
             case _ =>
           }
+          // Unwrap network-wrapped blob txs: extract tx_payload from [tx_payload, blobs, commitments, proofs]
+          // so toSignedTransaction receives the 14-field tx payload, not the 4-element wrapper
+          val unwrappedItems = typedItems.map {
+            case PrefixedRLPEncodable(Transaction.Type03, inner: RLPList)
+              if inner.items.size == 4 && inner.items.head.isInstanceOf[RLPList] =>
+              PrefixedRLPEncodable(Transaction.Type03, inner.items.head)
+            case other => other
+          }
+          // Compute original wire sizes of each tx item (before unwrapping) for announcement validation
+          val originalSizes = rlpList.items.map {
+            case RLPValue(v) => v.length  // typed tx: typeByte + rlp_payload
+            case rl: RLPList => com.chipprbots.ethereum.rlp.encode(rl).length  // legacy tx: RLP-encoded
+            case other => 0
+          }
           PooledTransactions(
             ByteUtils.bytesToBigInt(requestIdBytes),
-            typedItems.map(_.toSignedTransaction)
+            unwrappedItems.map(_.toSignedTransaction),
+            originalSizes
           )
         case _ => throw new RuntimeException("Cannot decode PooledTransactions")
       }
     }
   }
 
-  case class PooledTransactions(requestId: BigInt, txs: Seq[SignedTransaction]) extends Message with HasRequestId {
+  case class PooledTransactions(requestId: BigInt, txs: Seq[SignedTransaction],
+      originalSizes: Seq[Int] = Seq.empty) extends Message with HasRequestId {
     override def code: Int = Codes.PooledTransactionsCode
 
     override def toString: String =
