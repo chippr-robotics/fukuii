@@ -761,7 +761,8 @@ trait EngineApiBuilder {
     blockchainReader,
     blockchainWriter,
     blockExecution,
-    forkChoiceManager
+    forkChoiceManager,
+    mining
   )(blockchainConfig)
 
   lazy val engineApiController: EngineApiController = new EngineApiController(engineApiService)

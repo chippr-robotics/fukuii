@@ -28,9 +28,13 @@ class EngineApiService(
     blockchainReader: BlockchainReader,
     blockchainWriter: BlockchainWriter,
     blockExecution: BlockExecution,
-    forkChoiceManager: ForkChoiceManager
+    forkChoiceManager: ForkChoiceManager,
+    mining: com.chipprbots.ethereum.consensus.mining.Mining
 )(implicit blockchainConfig: BlockchainConfig)
     extends Logger {
+
+  /** Pending payloads built by forkchoiceUpdated, keyed by payloadId. */
+  private val pendingPayloads = new java.util.concurrent.ConcurrentHashMap[ByteString, Block]()
 
   /** Return the latest block number from the blockchain storage. */
   def getLatestBlockNumber: BigInt =
@@ -162,7 +166,43 @@ class EngineApiService(
               attrs.prevRandao.toArray ++
               attrs.suggestedFeeRecipient.bytes.toArray
           )
-          ByteString(idBytes.take(8))
+          val id = ByteString(idBytes.take(8))
+
+          // Build the payload (empty block with given attributes)
+          try {
+            val parentOpt = blockchainReader.getBlockByHash(forkChoiceState.headBlockHash)
+            parentOpt.foreach { parent =>
+              val generator = mining.blockGenerator
+              // Get pending transactions from the pool (empty for now — tx inclusion comes later)
+              val pendingTxs = Seq.empty[SignedTransaction]
+              val pendingBlockAndState = generator.generateBlock(
+                parent, pendingTxs, attrs.suggestedFeeRecipient, generator.emptyX, None)
+
+              // Override timestamp, prevRandao, difficulty from payload attributes
+              val builtBlock = pendingBlockAndState.pendingBlock.block
+              val extraFields = builtBlock.header.extraFields match {
+                case HefPostOlympia(baseFee) =>
+                  HefPostShanghai(baseFee, ByteString(kec256(com.chipprbots.ethereum.rlp.encode(
+                    com.chipprbots.ethereum.rlp.RLPValue(Array.empty[Byte])))))
+                case other => other
+              }
+              val adjustedHeader = builtBlock.header.copy(
+                unixTimestamp = attrs.timestamp,
+                mixHash = attrs.prevRandao,
+                difficulty = 0, // post-merge: difficulty is always 0
+                nonce = ByteString(new Array[Byte](8)), // post-merge: nonce is always 0
+                extraFields = extraFields
+              )
+              val payload = builtBlock.copy(header = adjustedHeader)
+              pendingPayloads.put(id, payload)
+              log.info("Built payload {} for block {} (parent={})",
+                id.toArray.map("%02x".format(_)).mkString, payload.header.number, parent.header.number)
+            }
+          } catch {
+            case e: Exception =>
+              log.error("Failed to build payload: {}", e.getMessage)
+          }
+          id
         }
 
         EngineApiMetrics.recordForkchoiceUpdated("VALID")
@@ -170,6 +210,14 @@ class EngineApiService(
           payloadStatus = PayloadStatusV1(Valid, latestValidHash = Some(forkChoiceState.headBlockHash)),
           payloadId = payloadId
         )
+    }
+  }
+
+  /** engine_getPayloadV1/V2/V3/V4 — Return a previously built payload by ID. */
+  def getPayload(payloadId: ByteString): IO[Either[String, Block]] = IO {
+    Option(pendingPayloads.remove(payloadId)) match {
+      case Some(block) => Right(block)
+      case None => Left("Payload not available")
     }
   }
 
