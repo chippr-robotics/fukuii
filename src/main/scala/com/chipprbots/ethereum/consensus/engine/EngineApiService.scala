@@ -173,30 +173,45 @@ class EngineApiService(
             val parentOpt = blockchainReader.getBlockByHash(forkChoiceState.headBlockHash)
             parentOpt.foreach { parent =>
               val generator = mining.blockGenerator
-              // Get pending transactions from the pool (empty for now — tx inclusion comes later)
               val pendingTxs = Seq.empty[SignedTransaction]
               val pendingBlockAndState = generator.generateBlock(
                 parent, pendingTxs, attrs.suggestedFeeRecipient, generator.emptyX, None)
 
-              // Override timestamp, prevRandao, difficulty from payload attributes
               val builtBlock = pendingBlockAndState.pendingBlock.block
-              val extraFields = builtBlock.header.extraFields match {
-                case HefPostOlympia(baseFee) =>
-                  HefPostShanghai(baseFee, ByteString(kec256(com.chipprbots.ethereum.rlp.encode(
-                    com.chipprbots.ethereum.rlp.RLPValue(Array.empty[Byte])))))
-                case other => other
+
+              // Compute EIP-1559 base fee from parent
+              val parentBaseFee = parent.header.baseFee.getOrElse(BigInt("1000000000"))
+              val parentGasTarget = parent.header.gasLimit / 2
+              val baseFee: BigInt = if (parent.header.number == 0) parentBaseFee
+              else if (parent.header.gasUsed == parentGasTarget) parentBaseFee
+              else if (parent.header.gasUsed > parentGasTarget) {
+                val delta = parentBaseFee * (parent.header.gasUsed - parentGasTarget) / parentGasTarget / 8
+                parentBaseFee + (if (delta == BigInt(0)) BigInt(1) else delta)
+              } else {
+                val delta = parentBaseFee * (parentGasTarget - parent.header.gasUsed) / parentGasTarget / 8
+                if (parentBaseFee - delta < 0) BigInt(0) else parentBaseFee - delta
               }
+
+              // Post-merge header: Shanghai (withdrawals), difficulty=0, nonce=0
+              val emptyWithdrawalsRoot = ByteString(kec256(com.chipprbots.ethereum.rlp.encode(
+                com.chipprbots.ethereum.rlp.RLPValue(Array.empty[Byte]))))
+              val extraFields = HefPostShanghai(baseFee, emptyWithdrawalsRoot)
+
               val adjustedHeader = builtBlock.header.copy(
                 unixTimestamp = attrs.timestamp,
                 mixHash = attrs.prevRandao,
-                difficulty = 0, // post-merge: difficulty is always 0
-                nonce = ByteString(new Array[Byte](8)), // post-merge: nonce is always 0
+                difficulty = 0,
+                nonce = ByteString(new Array[Byte](8)),
+                extraData = builtBlock.header.extraData,
                 extraFields = extraFields
               )
-              val payload = builtBlock.copy(header = adjustedHeader)
+
+              // Add empty withdrawals to body
+              val adjustedBody = builtBlock.body.copy(withdrawals = Some(Nil))
+              val payload = Block(adjustedHeader, adjustedBody)
               pendingPayloads.put(id, payload)
-              log.info("Built payload {} for block {} (parent={})",
-                id.toArray.map("%02x".format(_)).mkString, payload.header.number, parent.header.number)
+              log.info("Built payload {} for block {} (baseFee={}, parent={})",
+                id.toArray.map("%02x".format(_)).mkString, payload.header.number, baseFee, parent.header.number)
             }
           } catch {
             case e: Exception =>
