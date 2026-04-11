@@ -15,6 +15,7 @@ import com.google.common.cache.Cache
 import com.google.common.cache.CacheBuilder
 import com.google.common.cache.RemovalNotification
 
+import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.metrics.MetricsContainer
@@ -114,6 +115,13 @@ class PendingTransactionsManager(
     */
   var connectedPeers: Map[PeerId, Peer] = Map.empty
 
+  /** High-water mark of the next expected nonce per sender address.
+    * Once nonce N is accepted, pendingNonces(sender) = max(current, N+1).
+    * Never decremented on removal — only cleared on ClearPendingTransactions.
+    * Applied before MPT state validation so it works even when state trie is unavailable.
+    */
+  var pendingNonces: Map[Address, BigInt] = Map.empty
+
   peerEventBus ! Subscribe(SubscriptionClassifier.PeerHandshaked)
   peerEventBus ! Subscribe(SubscriptionClassifier.PeerDisconnectedClassifier(
     com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector.AllPeers))
@@ -146,11 +154,13 @@ class PendingTransactionsManager(
       pendingTransactions.cleanUp()
       val stxs = pendingTransactions.asMap().values().asScala.map(_.stx).toSet
       val newTxs = signedTransactions.diff(stxs)
+      log.debug("Adding {} txs ({} new, {} in pool)", signedTransactions.size, newTxs.size, stxs.size)
       // Validate against chain state (nonce, balance) before adding to pool
       val transactionsToAdd = validateAgainstState(newTxs)
       if (transactionsToAdd.nonEmpty) {
         val timestamp = System.currentTimeMillis()
         transactionsToAdd.foreach(t => pendingTransactions.put(t.tx.hash, PendingTransaction(t, timestamp)))
+        updatePendingNonces(transactionsToAdd)
         val peers = connectedPeers.values.toSeq
         if (peers.nonEmpty) {
           self ! NotifyPeers(transactionsToAdd.toSeq, peers)
@@ -177,6 +187,7 @@ class PendingTransactionsManager(
       val timestamp = System.currentTimeMillis()
       val newPendingTx = SignedTransactionWithSender(newStx, newStxSender)
       pendingTransactions.put(newStx.hash, PendingTransaction(newPendingTx, timestamp))
+      updatePendingNonces(Seq(newPendingTx))
 
       val peers = connectedPeers.values.toSeq
       if (peers.nonEmpty) {
@@ -195,9 +206,22 @@ class PendingTransactionsManager(
         .filter(stx => pendingTxMap.containsKey(stx.tx.hash)) // signed transactions that are still pending
 
       peers.foreach { peer =>
-        val txsToNotify = stillPending.filterNot(stx => isTxKnown(stx.tx, peer.id)) // and not known by peer
+        val txsToNotify = stillPending.filterNot(stx => isTxKnown(stx.tx, peer.id))
         if (txsToNotify.nonEmpty) {
-          networkPeerManager ! NetworkPeerManagerActor.SendMessage(SignedTransactions(txsToNotify.map(_.tx)), peer.id)
+          // Use NewPooledTransactionHashes (ETH/68 spec) instead of full SignedTransactions.
+          // Peers can request full txs via GetPooledTransactions if interested.
+          import com.chipprbots.ethereum.domain._
+          val hashes = txsToNotify.map(_.tx.hash)
+          val types = txsToNotify.map { stx => stx.tx.tx match {
+            case _: LegacyTransaction         => 0.toByte
+            case _: TransactionWithAccessList  => Transaction.Type01
+            case _: TransactionWithDynamicFee  => Transaction.Type02
+            case _: BlobTransaction            => Transaction.Type03
+            case _: SetCodeTransaction         => Transaction.Type04
+          }}
+          val sizes = txsToNotify.map(stx => BigInt(SignedTransaction.byteArraySerializable.toBytes(stx.tx).length))
+          val announcement = ETH67.NewPooledTransactionHashes(types, sizes, hashes)
+          networkPeerManager ! NetworkPeerManagerActor.SendMessage(announcement, peer.id)
           txsToNotify.foreach(stx => setTxKnown(stx.tx, peer.id))
         }
       }
@@ -249,6 +273,7 @@ class PendingTransactionsManager(
     case ClearPendingTransactions =>
       log.debug("Dropping all cached transactions")
       pendingTransactions.invalidateAll()
+      pendingNonces = Map.empty
   }
 
 
@@ -272,12 +297,28 @@ class PendingTransactionsManager(
     }
   }
 
+  /** Update pendingNonces high-water mark for accepted transactions. */
+  private def updatePendingNonces(txs: Iterable[SignedTransactionWithSender]): Unit =
+    txs.foreach { stx =>
+      val nextNonce = stx.tx.tx.nonce + 1
+      val current = pendingNonces.getOrElse(stx.senderAddress, BigInt(0))
+      if (nextNonce > current) pendingNonces = pendingNonces.updated(stx.senderAddress, nextNonce)
+    }
+
   /** Validate transactions against the current chain state.
     * Rejects: stale nonces, insufficient balance for value + gas.
     * Returns only transactions that pass state validation.
     */
   private def validateAgainstState(txs: Set[SignedTransactionWithSender]): Set[SignedTransactionWithSender] = {
-    if (blockchainReader == null || stateStorage == null) return txs
+    // 1. Always apply pending nonce check first (no MPT state needed, immune to race conditions)
+    val afterPendingNonceCheck = txs.filter { stx =>
+      pendingNonces.get(stx.senderAddress) match {
+        case Some(nextExpected) => stx.tx.tx.nonce >= nextExpected
+        case None => true
+      }
+    }
+
+    if (blockchainReader == null || stateStorage == null) return afterPendingNonceCheck
     try {
       import com.chipprbots.ethereum.domain.Account
       import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
@@ -291,39 +332,27 @@ class PendingTransactionsManager(
             bestBlock.header.stateRoot.toArray, mptStorage)(
             defaultByteArraySerializable, Account.accountSerializer)
 
-          // Track (sender, nonce) pairs within this batch + pending pool to reject duplicates
-          val existingNonces = pendingTransactions.asMap().values().asScala
-            .map(pt => (pt.stx.senderAddress, pt.stx.tx.tx.nonce)).toSet
-          val acceptedNonces = scala.collection.mutable.Set.from(existingNonces)
-
-          txs.filter { stx =>
+          afterPendingNonceCheck.filter { stx =>
             val addressHash = com.chipprbots.ethereum.crypto.kec256(stx.senderAddress.toArray)
             val accountOpt = stateTrie.get(addressHash)
             accountOpt.exists { account =>
               val tx = stx.tx.tx
-              val nonceKey = (stx.senderAddress, tx.nonce)
-              // Nonce must be >= account nonce
-              val baseNonceValid = tx.nonce >= account.nonce.toBigInt
-              // Reject absurdly high nonces (uint64 underflow: Go's uint(0)-1 = maxUint64)
-              val nonceNotAbsurd = tx.nonce < account.nonce.toBigInt + 1024
-              // Reject duplicate nonces (same sender+nonce already in pool or accepted in this batch)
-              val nonceDuplicate = acceptedNonces.contains(nonceKey)
-              val nonceValid = baseNonceValid && nonceNotAbsurd && !nonceDuplicate
-              // Balance must cover value + gas cost
+              val nonceValid = tx.nonce >= account.nonce.toBigInt && tx.nonce < account.nonce.toBigInt + 1024
               val maxGasCost = tx.gasLimit * tx.gasPrice
               val totalCost = tx.value + maxGasCost
               val balanceValid = account.balance.toBigInt >= totalCost
-              val ok = nonceValid && balanceValid
-              if (ok) acceptedNonces += nonceKey // track for within-batch dedup
-              ok
+              nonceValid && balanceValid
             }
           }
         case None =>
-          log.error("TX_VALIDATE: No best block, accepting all txs")
-          txs
+          // No best block — only accept txs from senders we've already seen
+          afterPendingNonceCheck.filter(stx => pendingNonces.contains(stx.senderAddress))
       }
     } catch {
-      case _: Exception => txs
+      case _: Exception =>
+        // MPT failed — only accept txs from senders with established pending nonces
+        // (unknown senders can't be validated without state)
+        afterPendingNonceCheck.filter(stx => pendingNonces.contains(stx.senderAddress))
     }
   }
 
