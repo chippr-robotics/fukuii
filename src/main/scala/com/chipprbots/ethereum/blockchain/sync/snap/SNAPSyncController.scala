@@ -1051,12 +1051,15 @@ class SNAPSyncController(
       val pendingMs = System.currentTimeMillis() - pendingPivotRefreshStartMs
       if (pendingMs > 60_000) {
         log.warning(
-          s"[PIVOT] In-place bootstrap pending for ${pendingMs / 1000}s — peer may be unresponsive. " +
-            s"Pivot frozen at ${pivotBlock.getOrElse("unknown")}. " +
-            s"Proactive refresh blocked until BootstrapComplete/PivotBootstrapFailed arrives."
+          s"[PIVOT] In-place bootstrap pending for ${pendingMs / 1000}s — peer unresponsive. " +
+            s"Clearing pending flag so next CheckPivotFreshness tick can retry. " +
+            s"Pivot frozen at ${pivotBlock.getOrElse("unknown")}."
         )
+        pendingPivotRefresh = None
+        // Fall through to attempt a fresh refresh below.
+      } else {
+        return
       }
-      return
     }
 
     val now = System.currentTimeMillis()
@@ -1415,11 +1418,16 @@ class SNAPSyncController(
           val drift = if (networkBest > 0) (networkBest - pivot).abs else BigInt(0)
           val driftNote = if (drift > 0) s", drift=$drift blocks from networkBest=$networkBest" else ""
           log.info(s"[SNAP-RECOVERY] accounts previously completed at pivot $pivot — resuming (skipping account phase$driftNote)")
-          if (drift > snapSyncConfig.maxPivotStalenessBlocks)
+          if (drift > snapSyncConfig.maxPivotStalenessBlocks) {
             log.warning(
               s"[SNAP-RECOVERY] Pivot is $drift blocks stale (> ${snapSyncConfig.maxPivotStalenessBlocks} threshold). " +
-                s"Proceeding anyway — account data is content-addressed. Proactive refresh will update pivot within 30s."
+                s"Triggering immediate in-place pivot refresh — storage sync will hold off until refresh completes."
             )
+            // Trigger the refresh now so pendingPivotRefresh is set before storage coordinators
+            // start receiving messages. This prevents maybeRestartIfPivotTooStale from racing
+            // the 30s CheckPivotFreshness tick and restarting with the same stale pivot.
+            refreshPivotInPlace(s"startup: pivot $pivot is $drift blocks stale at recovery")
+          }
 
           {
             // Always recover bytecodes + storage — pivot age does not invalidate account data
@@ -2939,6 +2947,11 @@ class SNAPSyncController(
   private def maybeRestartIfPivotTooStale(contextLabel: String): Boolean = {
     val now = System.currentTimeMillis()
     if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) return false
+    // A proactive in-place refresh is already in-flight — don't restart and cancel it.
+    // The refresh will complete (or PivotBootstrapFailed) and update the pivot without
+    // destroying coordinator progress. If the bootstrap times out, maybeProactivelyRefreshPivot
+    // clears the pending flag so the next CheckPivotFreshness tick can retry.
+    if (pendingPivotRefresh.isDefined) return false
 
     (pivotBlock, currentNetworkBestFromSnapPeers()) match {
       case (Some(pivot), Some(networkBest)) if networkBest > 0 && networkBest > pivot =>
