@@ -111,6 +111,12 @@ class TrieNodeHealingCoordinator(
   // Non-static peers that return empty GetTrieNodes are blocked even after reconnection.
   private val statelessRemoteAddresses = mutable.Set[String]()
   private var pivotRefreshRequested: Boolean = false
+  // BUG-W4 FIX: Guard against sending StateHealingComplete more than once per healing session.
+  // Multiple HealingCheckCompletion messages can arrive in rapid succession (e.g. early completion
+  // from QueueMissingNodes when all resumed nodes are already present, followed by cascade
+  // completion from in-flight responses). Without this guard, SNAPSyncController receives two
+  // StateHealingComplete messages and starts two concurrent trie walks for the same root.
+  private var healingCompletedSignalled: Boolean = false
   // Post-pivot-refresh cooldown: prevents immediate re-dispatch before peers sync to new root.
   // Without this, all peers return empty → stateless → another HealingAllPeersStateless → tight loop.
   private var postRefreshCooldownUntilMs: Long = 0L
@@ -345,7 +351,8 @@ class TrieNodeHealingCoordinator(
       }
 
     case HealingCheckCompletion =>
-      if (isComplete && !flushing) {
+      if (isComplete && !flushing && !healingCompletedSignalled) {
+        healingCompletedSignalled = true
         flushRawNodesSync()
         val abandonedStr = if (abandonedTaskCount > 0) s" ($abandonedTaskCount abandoned — deferred to state validation)" else ""
         log.info(
