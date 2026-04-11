@@ -42,9 +42,11 @@ object PendingTransactionsManager {
       txPoolConfig: TxPoolConfig,
       peerManager: ActorRef,
       networkPeerManager: ActorRef,
-      peerMessageBus: ActorRef
+      peerMessageBus: ActorRef,
+      blockchainReader: com.chipprbots.ethereum.domain.BlockchainReader = null,
+      stateStorage: com.chipprbots.ethereum.db.storage.StateStorage = null
   ): Props =
-    Props(new PendingTransactionsManager(txPoolConfig, peerManager, networkPeerManager, peerMessageBus))
+    Props(new PendingTransactionsManager(txPoolConfig, peerManager, networkPeerManager, peerMessageBus, blockchainReader, stateStorage))
 
   case class AddTransactions(signedTransactions: Set[SignedTransactionWithSender])
 
@@ -72,7 +74,9 @@ class PendingTransactionsManager(
     txPoolConfig: TxPoolConfig,
     peerManager: ActorRef,
     networkPeerManager: ActorRef,
-    peerEventBus: ActorRef
+    peerEventBus: ActorRef,
+    blockchainReader: com.chipprbots.ethereum.domain.BlockchainReader,
+    stateStorage: com.chipprbots.ethereum.db.storage.StateStorage
 ) extends Actor
     with MetricsContainer
     with ActorLogging {
@@ -140,9 +144,10 @@ class PendingTransactionsManager(
 
     case AddTransactions(signedTransactions) =>
       pendingTransactions.cleanUp()
-      log.debug("Adding transactions: {}", signedTransactions.map(_.tx.hash.toHex))
       val stxs = pendingTransactions.asMap().values().asScala.map(_.stx).toSet
-      val transactionsToAdd = signedTransactions.diff(stxs)
+      val newTxs = signedTransactions.diff(stxs)
+      // Validate against chain state (nonce, balance) before adding to pool
+      val transactionsToAdd = validateAgainstState(newTxs)
       if (transactionsToAdd.nonEmpty) {
         val timestamp = System.currentTimeMillis()
         transactionsToAdd.foreach(t => pendingTransactions.put(t.tx.hash, PendingTransaction(t, timestamp)))
@@ -150,6 +155,8 @@ class PendingTransactionsManager(
         if (peers.nonEmpty) {
           self ! NotifyPeers(transactionsToAdd.toSeq, peers)
         }
+        // Announce validated tx hashes to ALL connected peers via NewPooledTransactionHashes
+        announceNewTxHashes(transactionsToAdd)
       }
 
     case AddOrOverrideTransaction(newStx) =>
@@ -236,39 +243,75 @@ class PendingTransactionsManager(
       knownTransactions = knownTransactions -- signedTransactions.map(_.hash)
 
     case ProperSignedTransactions(transactions, peerId) =>
-      log.debug("Received {} signed txs from peer {}, connectedPeers={}", transactions.size, peerId, connectedPeers.size)
+      // Add to pool via AddTransactions (which validates against state before adding).
+      // Hash announcement is sent from AddTransactions AFTER validation, not here,
+      // to avoid announcing invalid txs before they're validated.
       self ! AddTransactions(transactions)
       transactions.foreach(stx => setTxKnown(stx.tx, peerId))
-      // Announce new tx hashes to ALL peers (including sender) via NewPooledTransactionHashes.
-      // Per ETH/68 spec, nodes announce hashes even to the peer that sent the full tx.
-      // IMPORTANT: Always send directly to the sender peer by peerId, because
-      // PeerHandshakeSuccessful may not have been processed yet (race condition).
-      if (transactions.nonEmpty) {
-        import com.chipprbots.ethereum.domain._
-        val txSeq = transactions.toSeq
-        val hashes = txSeq.map(_.tx.hash)
-        val types = txSeq.map { stx => stx.tx.tx match {
-          case _: LegacyTransaction         => 0.toByte
-          case _: TransactionWithAccessList  => Transaction.Type01
-          case _: TransactionWithDynamicFee  => Transaction.Type02
-          case _: BlobTransaction            => Transaction.Type03
-          case _: SetCodeTransaction         => Transaction.Type04
-        }}
-        val sizes = txSeq.map(stx => BigInt(SignedTransaction.byteArraySerializable.toBytes(stx.tx).length))
-        val announcement = ETH67.NewPooledTransactionHashes(types, sizes, hashes)
-        // Send to sender peer directly (always, even if not yet in connectedPeers)
-        networkPeerManager ! NetworkPeerManagerActor.SendMessage(announcement, peerId)
-        // Also send to all other connected peers
-        connectedPeers.values.foreach { peer =>
-          if (peer.id != peerId) {
-            networkPeerManager ! NetworkPeerManagerActor.SendMessage(announcement, peer.id)
-          }
-        }
-      }
 
     case ClearPendingTransactions =>
       log.debug("Dropping all cached transactions")
       pendingTransactions.invalidateAll()
+  }
+
+  /** Announce validated transaction hashes to all connected peers via NewPooledTransactionHashes (ETH/68 spec). */
+  private def announceNewTxHashes(txs: Set[SignedTransactionWithSender]): Unit = {
+    if (txs.isEmpty) return
+    import com.chipprbots.ethereum.domain._
+    val txSeq = txs.toSeq
+    val hashes = txSeq.map(_.tx.hash)
+    val types = txSeq.map { stx => stx.tx.tx match {
+      case _: LegacyTransaction         => 0.toByte
+      case _: TransactionWithAccessList  => Transaction.Type01
+      case _: TransactionWithDynamicFee  => Transaction.Type02
+      case _: BlobTransaction            => Transaction.Type03
+      case _: SetCodeTransaction         => Transaction.Type04
+    }}
+    val sizes = txSeq.map(stx => BigInt(SignedTransaction.byteArraySerializable.toBytes(stx.tx).length))
+    val announcement = ETH67.NewPooledTransactionHashes(types, sizes, hashes)
+    connectedPeers.values.foreach { peer =>
+      networkPeerManager ! NetworkPeerManagerActor.SendMessage(announcement, peer.id)
+    }
+  }
+
+  /** Validate transactions against the current chain state.
+    * Rejects: stale nonces, insufficient balance for value + gas.
+    * Returns only transactions that pass state validation.
+    */
+  private def validateAgainstState(txs: Set[SignedTransactionWithSender]): Set[SignedTransactionWithSender] = {
+    if (blockchainReader == null || stateStorage == null) return txs
+    try {
+      import com.chipprbots.ethereum.domain.Account
+      import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
+      import MerklePatriciaTrie.defaultByteArraySerializable
+
+      val bestBlockOpt = blockchainReader.getBestBlock()
+      bestBlockOpt match {
+        case Some(bestBlock) =>
+          val mptStorage = stateStorage.getReadOnlyStorage
+          val stateTrie = MerklePatriciaTrie[Array[Byte], Account](
+            bestBlock.header.stateRoot.toArray, mptStorage)(
+            defaultByteArraySerializable, Account.accountSerializer)
+
+          txs.filter { stx =>
+            val addressHash = com.chipprbots.ethereum.crypto.kec256(stx.senderAddress.toArray)
+            val accountOpt = stateTrie.get(addressHash)
+            accountOpt.exists { account =>
+              val tx = stx.tx.tx
+              val nonceValid = tx.nonce >= account.nonce.toBigInt
+              val maxGasCost = tx.gasLimit * tx.gasPrice
+              val totalCost = tx.value + maxGasCost
+              val balanceValid = account.balance.toBigInt >= totalCost
+              nonceValid && balanceValid
+            }
+          }
+        case None =>
+          log.error("TX_VALIDATE: No best block, accepting all txs")
+          txs
+      }
+    } catch {
+      case _: Exception => txs
+    }
   }
 
   private def isTxKnown(signedTransaction: SignedTransaction, peerId: PeerId): Boolean =

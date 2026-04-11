@@ -577,31 +577,46 @@ case class SignedTransactionWithSender(tx: SignedTransaction, senderAddress: Add
 object SignedTransactionWithSender {
 
   /** Validates and recovers senders for a batch of signed transactions.
+    * Performs stateless validation (chain ID, intrinsic gas) before expensive ECDSA recovery.
     * Uses parallel ECDSA recovery across all CPU cores for large batches (>= 16 txs).
-    * Small batches are processed sequentially to avoid Future/IO overhead.
     */
   def getSignedTransactions(
       stxs: Seq[SignedTransaction]
   )(implicit blockchainConfig: BlockchainConfig): Seq[SignedTransactionWithSender] = {
-    // Filter out wrong chain ID before expensive ECDSA recovery
-    val chainFiltered = stxs.filter { stx =>
-      stx.tx match {
+    import com.chipprbots.ethereum.vm.EvmConfig
+    // Cheap stateless pre-filters before expensive ECDSA recovery
+    val validated = stxs.filter { stx =>
+      val tx = stx.tx
+      // 1. Chain ID validation for typed transactions (EIP-2930+)
+      val chainIdValid = tx match {
         case twal: TransactionWithAccessList => twal.chainId == blockchainConfig.chainId
         case twdf: TransactionWithDynamicFee => twdf.chainId == blockchainConfig.chainId
         case btx: BlobTransaction            => btx.chainId == blockchainConfig.chainId
         case sct: SetCodeTransaction         => sct.chainId == blockchainConfig.chainId
         case _: LegacyTransaction            => true // validated in getSender
       }
+      if (!chainIdValid) false
+      else {
+        // 2. Intrinsic gas validation — reject txs with gas below minimum
+        val config = EvmConfig.forBlock(blockchainConfig.forkBlockNumbers.olympiaBlockNumber, blockchainConfig)
+        val authListSize = tx match {
+          case sct: SetCodeTransaction => sct.authorizationList.size
+          case _                       => 0
+        }
+        val intrinsicGas = config.calcTransactionIntrinsicGas(
+          tx.payload, tx.isContractInit, Transaction.accessList(tx), authListSize)
+        tx.gasLimit >= intrinsicGas
+      }
     }
 
-    if (chainFiltered.size < 16) {
+    if (validated.size < 16) {
       // Small batch: sequential to avoid overhead
-      chainFiltered.flatMap { stx =>
+      validated.flatMap { stx =>
         SignedTransaction.getSender(stx).map(addr => SignedTransactionWithSender(stx, addr))
       }
     } else {
       // Large batch: parallel ECDSA recovery across all cores
-      getSignedTransactionsParallel(chainFiltered)
+      getSignedTransactionsParallel(validated)
     }
   }
 

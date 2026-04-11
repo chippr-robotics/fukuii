@@ -416,10 +416,14 @@ object PendingTransactionsManagerBuilder {
       with PeerManagerActorBuilder
       with NetworkPeerManagerActorBuilder
       with PeerEventBusBuilder
-      with TxPoolConfigBuilder =>
+      with TxPoolConfigBuilder
+      with BlockchainBuilder
+      with StorageBuilder =>
 
     lazy val pendingTransactionsManager: ActorRef =
-      system.actorOf(PendingTransactionsManager.props(txPoolConfig, peerManager, networkPeerManager, peerEventBus))
+      system.actorOf(PendingTransactionsManager.props(
+        txPoolConfig, peerManager, networkPeerManager, peerEventBus,
+        blockchainReader, storagesInstance.storages.stateStorage))
   }
 }
 
