@@ -3248,17 +3248,27 @@ class SNAPSyncController(
       // Only delete storage in-progress files which are stale for a new pivot.
       log.info(s"[SNAP] Preserving accounts_complete=true across restart — startup will skip account phase")
       val tmpDir = java.nio.file.Paths.get(Config.config.getString("tmpdir"))
-      Seq("snap-contract-storage.bin", "snap-completed-storage.bin").foreach { name =>
-        scala.util.Try(java.nio.file.Files.deleteIfExists(tmpDir.resolve(name)))
-      }
-      appStateStorage.putSnapSyncStorageFilePath("").commit()
-      appStateStorage.putSnapSyncCompletedStoragePath("").commit()
-      if (!wasStorageComplete) {
+      if (wasStorageComplete) {
+        // Storage is done. Keep snap-contract-storage.bin so recovery can re-run storage if the
+        // pivot root changes on next restart (L-032 fast path only skips when root matches exactly).
+        // Entries with outdated storageRoots will get empty responses → deferred to healing.
+        // snap-completed-storage.bin tracks per-account progress for the current pivot — stale
+        // for a new pivot, so delete it. savedStoragePath in DB is preserved (not cleared).
+        scala.util.Try(java.nio.file.Files.deleteIfExists(tmpDir.resolve("snap-completed-storage.bin")))
+        appStateStorage.putSnapSyncCompletedStoragePath("").commit()
+        // Preserved in DB: accounts_complete=true, contractAccountsPath, codeHashesPath, savedStoragePath
+        // Preserved: storageCompletionRoot (L-032 fast path for exact root match on next startup)
+      } else {
+        // Storage in progress — stale for new pivot, must re-download from scratch
+        Seq("snap-contract-storage.bin", "snap-completed-storage.bin").foreach { name =>
+          scala.util.Try(java.nio.file.Files.deleteIfExists(tmpDir.resolve(name)))
+        }
+        appStateStorage.putSnapSyncStorageFilePath("").commit()
+        appStateStorage.putSnapSyncCompletedStoragePath("").commit()
         // Storage was in progress — force re-run with new pivot
         appStateStorage.clearSnapSyncStorageCompletionRoot().commit()
+        // Preserved in DB: accounts_complete=true, contractAccountsPath, codeHashesPath
       }
-      // Preserved in DB: accounts_complete=true, contractAccountsPath, codeHashesPath
-      // Preserved if storage was done: storageCompletionRoot (L-032 will skip storage on next startup)
     }
     // Always clear healing state — it is recomputed for the new pivot root
     appStateStorage.putSnapSyncWalkRoot("").commit()

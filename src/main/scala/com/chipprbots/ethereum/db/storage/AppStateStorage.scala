@@ -286,7 +286,7 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
 
   /** Get the persisted path to the contract storage file for storage sync recovery. */
   def getSnapSyncStorageFilePath(): Option[String] =
-    get(Keys.SnapSyncStorageFilePath)
+    get(Keys.SnapSyncStorageFilePath).filter(_.nonEmpty)
 
   /** Persist the path to the contract storage file so storage sync can resume after restart. */
   def putSnapSyncStorageFilePath(path: String): DataSourceBatchUpdate =
