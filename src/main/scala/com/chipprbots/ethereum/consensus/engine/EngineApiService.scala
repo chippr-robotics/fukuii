@@ -30,9 +30,16 @@ class EngineApiService(
     blockExecution: BlockExecution,
     forkChoiceManager: ForkChoiceManager,
     mining: com.chipprbots.ethereum.consensus.mining.Mining,
-    evmCodeStorage: com.chipprbots.ethereum.db.storage.EvmCodeStorage
+    evmCodeStorage: com.chipprbots.ethereum.db.storage.EvmCodeStorage,
+    pendingTransactionsManager: org.apache.pekko.actor.ActorRef
 )(implicit blockchainConfig: BlockchainConfig)
     extends Logger {
+
+  import org.apache.pekko.pattern.ask
+  import org.apache.pekko.util.Timeout
+  import scala.concurrent.duration._
+  import scala.concurrent.Await
+  private implicit val askTimeout: Timeout = Timeout(3.seconds)
 
   /** Pending payloads built by forkchoiceUpdated, keyed by payloadId. */
   private val pendingPayloads = new java.util.concurrent.ConcurrentHashMap[ByteString, Block]()
@@ -149,16 +156,40 @@ class EngineApiService(
     // tells the CL we're ready to receive newPayload calls for new blocks.
     forkChoiceManager.applyForkChoiceState(forkChoiceState) match {
       case Left(_) =>
-        // Head not known — still accept it so CL starts sending newPayload
+        // Head not known — return SYNCING so CL knows we need newPayload
         log.info(
-          s"forkchoiceUpdated: head ${forkChoiceState.headBlockHash} not known, returning VALID to trigger newPayload flow"
+          s"forkchoiceUpdated: head ${forkChoiceState.headBlockHash} not known, returning SYNCING"
         )
-        EngineApiMetrics.recordForkchoiceUpdated("VALID")
+        EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
         ForkchoiceUpdatedResponse(
-          payloadStatus = PayloadStatusV1(Valid, latestValidHash = Some(forkChoiceState.headBlockHash))
+          payloadStatus = PayloadStatusV1(Syncing)
         )
 
       case Right(()) =>
+        // Validate payload attributes if present
+        val invalidAttrs: Option[ForkchoiceUpdatedResponse] = payloadAttributes.flatMap { attrs =>
+          if (attrs.timestamp == 0) {
+            Some(ForkchoiceUpdatedResponse(
+              payloadStatus = PayloadStatusV1(Invalid,
+                latestValidHash = Some(forkChoiceState.headBlockHash),
+                validationError = Some("invalid payload attributes: zero timestamp"))))
+          } else {
+            val parentHeader = blockchainReader.getBlockHeaderByHash(forkChoiceState.headBlockHash)
+            parentHeader.flatMap { parent =>
+              if (attrs.timestamp <= parent.unixTimestamp) {
+                Some(ForkchoiceUpdatedResponse(
+                  payloadStatus = PayloadStatusV1(Invalid,
+                    latestValidHash = Some(forkChoiceState.headBlockHash),
+                    validationError = Some("invalid payload attributes: timestamp too low"))))
+              } else None
+            }
+          }
+        }
+        if (invalidAttrs.isDefined) {
+          EngineApiMetrics.recordForkchoiceUpdated("INVALID")
+          invalidAttrs.get
+        } else {
+
         val payloadId = payloadAttributes.map { attrs =>
           // Generate a payload ID from the attributes (deterministic)
           val idBytes = kec256(
@@ -185,6 +216,15 @@ class EngineApiService(
                 val delta = parentBaseFee * (parentGasTarget - parent.header.gasUsed) / parentGasTarget / 8
                 if (parentBaseFee - delta < 0) BigInt(0) else parentBaseFee - delta
               }
+
+              // Fetch pending transactions from the tx pool
+              val pendingTxs: Seq[SignedTransaction] = try {
+                import com.chipprbots.ethereum.transactions.PendingTransactionsManager._
+                val response = Await.result(
+                  (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse],
+                  3.seconds)
+                response.pendingTransactions.map(_.stx.tx)
+              } catch { case _: Exception => Seq.empty }
 
               val emptyWithdrawalsRoot = ByteString(kec256(com.chipprbots.ethereum.rlp.encode(
                 com.chipprbots.ethereum.rlp.RLPValue(Array.empty[Byte]))))
@@ -213,7 +253,7 @@ class EngineApiService(
                 nonce = ByteString(new Array[Byte](8)),
                 extraFields = HefPostShanghai(baseFee, emptyWithdrawalsRoot)
               )
-              val body = BlockBody(Nil, Nil, withdrawals = Some(Nil))
+              val body = BlockBody(pendingTxs.toList, Nil, withdrawals = Some(Nil))
               val block = Block(header, body)
 
               // Execute block to compute correct stateRoot
@@ -262,6 +302,7 @@ class EngineApiService(
           payloadStatus = PayloadStatusV1(Valid, latestValidHash = Some(forkChoiceState.headBlockHash)),
           payloadId = payloadId
         )
+        } // end else (invalidAttrs check)
     }
   }
 
