@@ -220,11 +220,16 @@ class EngineApiService(
               // Fetch pending transactions from the tx pool
               val pendingTxs: Seq[SignedTransaction] = try {
                 import com.chipprbots.ethereum.transactions.PendingTransactionsManager._
-                val response = Await.result(
-                  (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse],
-                  3.seconds)
-                response.pendingTransactions.map(_.stx.tx)
-              } catch { case _: Exception => Seq.empty }
+                val future = (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse]
+                val response = Await.result(future, 3.seconds)
+                val txs = response.pendingTransactions.map(_.stx.tx)
+                if (txs.nonEmpty) log.info("Payload includes {} pending transactions", txs.size)
+                txs
+              } catch {
+                case e: Exception =>
+                  log.error("Failed to fetch pending txs: {}", e.getMessage)
+                  Seq.empty
+              }
 
               val emptyWithdrawalsRoot = ByteString(kec256(com.chipprbots.ethereum.rlp.encode(
                 com.chipprbots.ethereum.rlp.RLPValue(Array.empty[Byte]))))
