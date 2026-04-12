@@ -129,13 +129,17 @@ class EthTxService(
           if (txIndex == 0) receipt.cumulativeGasUsed
           else receipt.cumulativeGasUsed - receipts(txIndex - 1).cumulativeGasUsed
 
+        // Compute cumulative log index from prior receipts in the block
+        val baseLogIndex = receipts.take(txIndex).map(_.logs.size).sum
+
         TransactionReceiptResponse(
           receipt = receipt,
           stx = stx,
           signedTransactionSender = sender,
           transactionIndex = txIndex,
           blockHeader = header,
-          gasUsedByTransaction = gasUsed
+          gasUsedByTransaction = gasUsed,
+          baseLogIndex = baseLogIndex
         )
       }
 

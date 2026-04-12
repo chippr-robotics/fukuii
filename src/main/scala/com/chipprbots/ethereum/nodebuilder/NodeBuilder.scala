@@ -23,7 +23,7 @@ import scala.util.Try
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 
-import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader
+import com.chipprbots.ethereum.blockchain.data.{ChainImporter, GenesisDataLoader}
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.BlockchainHostActor
 import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
@@ -237,6 +237,9 @@ trait ConsensusBuilder {
       blockExecution
     )
 
+  lazy val chainImporter: ChainImporter =
+    new ChainImporter(blockchainReader, blockchainWriter, blockExecution)
+
   lazy val consensusAdapter: ConsensusAdapter =
     new ConsensusAdapter(
       consensus,
@@ -361,7 +364,8 @@ trait BlockchainHostBuilder {
     with StorageBuilder
     with PeerManagerActorBuilder
     with NetworkPeerManagerActorBuilder
-    with PeerEventBusBuilder =>
+    with PeerEventBusBuilder
+    with PendingTransactionsManagerBuilder =>
 
   val blockchainHost: ActorRef = system.actorOf(
     BlockchainHostActor.props(
@@ -369,7 +373,8 @@ trait BlockchainHostBuilder {
       storagesInstance.storages.evmCodeStorage,
       peerConfiguration,
       peerEventBus,
-      networkPeerManager
+      networkPeerManager,
+      pendingTransactionsManager
     ),
     "blockchain-host"
   )
@@ -411,10 +416,14 @@ object PendingTransactionsManagerBuilder {
       with PeerManagerActorBuilder
       with NetworkPeerManagerActorBuilder
       with PeerEventBusBuilder
-      with TxPoolConfigBuilder =>
+      with TxPoolConfigBuilder
+      with BlockchainBuilder
+      with StorageBuilder =>
 
     lazy val pendingTransactionsManager: ActorRef =
-      system.actorOf(PendingTransactionsManager.props(txPoolConfig, peerManager, networkPeerManager, peerEventBus))
+      system.actorOf(PendingTransactionsManager.props(
+        txPoolConfig, peerManager, networkPeerManager, peerEventBus,
+        blockchainReader, storagesInstance.storages.stateStorage))
   }
 }
 
@@ -498,6 +507,22 @@ trait EthInfoServiceBuilder {
   )
 }
 
+trait EthSimulateServiceBuilder {
+  self: StorageBuilder
+    with BlockchainBuilder
+    with BlockchainConfigBuilder
+    with MiningBuilder =>
+
+  lazy val ethSimulateService = new com.chipprbots.ethereum.jsonrpc.EthSimulateService(
+    blockchain,
+    blockchainReader,
+    storagesInstance.storages.evmCodeStorage,
+    mining.blockPreparator,
+    mining,
+    blockchainConfig
+  )
+}
+
 trait EthMiningServiceBuilder {
   self: BlockchainBuilder
     with BlockchainConfigBuilder
@@ -556,11 +581,12 @@ trait EthUserServiceBuilder {
 }
 
 trait EthFilterServiceBuilder {
-  self: FilterManagerBuilder with FilterConfigBuilder =>
+  self: FilterManagerBuilder with FilterConfigBuilder with BlockchainBuilder =>
 
   lazy val ethFilterService = new EthFilterService(
     filterManager,
-    filterConfig
+    filterConfig,
+    blockchainReader
   )
 }
 
@@ -654,6 +680,7 @@ trait JSONRpcControllerBuilder {
   this: Web3ServiceBuilder
     with EthInfoServiceBuilder
     with EthProofServiceBuilder
+    with EthSimulateServiceBuilder
     with EthMiningServiceBuilder
     with EthBlocksServiceBuilder
     with EthTxServiceBuilder
@@ -686,6 +713,7 @@ trait JSONRpcControllerBuilder {
       fukuiiService,
       mcpService,
       ethProofService,
+      ethSimulateService,
       jsonRpcConfig
     )
 }
@@ -733,7 +761,9 @@ trait EngineApiBuilder {
     blockchainReader,
     blockchainWriter,
     blockExecution,
-    forkChoiceManager
+    forkChoiceManager,
+    mining,
+    storagesInstance.storages.evmCodeStorage
   )(blockchainConfig)
 
   lazy val engineApiController: EngineApiController = new EngineApiController(engineApiService)
@@ -928,6 +958,7 @@ trait GenesisDataLoaderBuilder {
     new GenesisDataLoader(
       blockchainReader,
       blockchainWriter,
+      storagesInstance.storages.evmCodeStorage,
       storagesInstance.storages.stateStorage
     )
 
@@ -960,6 +991,7 @@ trait Node
     with Web3ServiceBuilder
     with EthInfoServiceBuilder
     with EthProofServiceBuilder
+    with EthSimulateServiceBuilder
     with EthMiningServiceBuilder
     with EthBlocksServiceBuilder
     with EthTxServiceBuilder

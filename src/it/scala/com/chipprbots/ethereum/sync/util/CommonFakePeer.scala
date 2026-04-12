@@ -183,7 +183,7 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
     override val maxPendingPeers = 5
     override val pruneIncomingPeers = 0
     override val minPruneAge: FiniteDuration = 1.minute
-    override val networkId: Int = 1
+    override val networkId: Long = 1L
     override val p2pVersion: Int = Config.Network.peer.p2pVersion
 
     override val updateNodesInitialDelay: FiniteDuration = 5.seconds

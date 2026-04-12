@@ -65,7 +65,10 @@ trait JsonMethodsImplicits {
     extractAddress(input.s)
 
   protected def extractBytes(input: String): Either[JsonRpcError, ByteString] =
-    Try(ByteString(decode(input))).toEither.left.map(_ => InvalidParams())
+    if (!input.startsWith("0x") && !input.startsWith("0X") && input.nonEmpty)
+      Left(InvalidParams(s"invalid argument: hex string without 0x prefix"))
+    else
+      Try(ByteString(decode(input))).toEither.left.map(_ => InvalidParams())
 
   protected def extractBytes(input: JString): Either[JsonRpcError, ByteString] =
     extractBytes(input.s)
@@ -81,8 +84,11 @@ trait JsonMethodsImplicits {
       case JInt(n) =>
         Right(n)
 
-      case JString(s) =>
+      case JString(s) if s.startsWith("0x") || s.startsWith("0X") =>
         Try(ByteUtils.bytesToBigInt(decode(s))).toEither.left.map(_ => InvalidParams())
+
+      case JString(s) =>
+        Left(InvalidParams(s"invalid argument: hex string without 0x prefix"))
 
       case _ =>
         Left(InvalidParams("could not extract quantity"))
@@ -132,9 +138,24 @@ trait JsonMethodsImplicits {
 
   protected def extractBlockParam(input: JValue): Either[JsonRpcError, BlockParam] =
     input match {
-      case JString("earliest") => Right(BlockParam.Earliest)
-      case JString("latest")   => Right(BlockParam.Latest)
-      case JString("pending")  => Right(BlockParam.Pending)
+      case JString("earliest")  => Right(BlockParam.Earliest)
+      case JString("latest")    => Right(BlockParam.Latest)
+      case JString("pending")   => Right(BlockParam.Pending)
+      case JString("safe")      => Right(BlockParam.Latest)
+      case JString("finalized") => Right(BlockParam.Latest)
+      // 32-byte hex string (0x + 64 hex chars) = block hash, not a number
+      case JString(s) if s.startsWith("0x") && s.length == 66 =>
+        extractBytes(JString(s)).map(hash => BlockParam.WithHash(hash))
+          .left.map(_ => JsonRpcError.InvalidParams(s"Invalid default block param: $input"))
+      case JObject(fields) =>
+        // Support {"blockHash": "0x..."} object form
+        fields.collectFirst { case ("blockHash", JString(hash)) => hash } match {
+          case Some(hash) =>
+            extractBytes(JString(hash)).map(h => BlockParam.WithHash(h))
+              .left.map(_ => JsonRpcError.InvalidParams(s"Invalid block hash"))
+          case None =>
+            Left(JsonRpcError.InvalidParams(s"Invalid default block param: $input"))
+        }
       case other =>
         extractQuantity(other)
           .map(BlockParam.WithNumber.apply)

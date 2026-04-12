@@ -3,14 +3,7 @@ package com.chipprbots.ethereum.jsonrpc
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.crypto.kec256
-import com.chipprbots.ethereum.domain.Address
-import com.chipprbots.ethereum.domain.BlockHeader
-import com.chipprbots.ethereum.domain.FailureOutcome
-import com.chipprbots.ethereum.domain.HashOutcome
-import com.chipprbots.ethereum.domain.Receipt
-import com.chipprbots.ethereum.domain.SignedTransaction
-import com.chipprbots.ethereum.domain.SuccessOutcome
-import com.chipprbots.ethereum.domain.UInt256
+import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.jsonrpc.FilterManager.TxLog
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
@@ -60,7 +53,12 @@ case class TransactionReceiptResponse(
     logs: Seq[TxLog],
     logsBloom: ByteString,
     root: Option[ByteString],
-    status: Option[BigInt]
+    status: Option[BigInt],
+    `type`: Option[BigInt] = None,
+    effectiveGasPrice: Option[BigInt] = None,
+    blobGasUsed: Option[BigInt] = None,
+    blobGasPrice: Option[BigInt] = None,
+    blockTimestamp: Option[BigInt] = None
 )
 
 object TransactionReceiptResponse {
@@ -71,7 +69,8 @@ object TransactionReceiptResponse {
       signedTransactionSender: Address,
       transactionIndex: Int,
       blockHeader: BlockHeader,
-      gasUsedByTransaction: BigInt
+      gasUsedByTransaction: BigInt,
+      baseLogIndex: Int
   ): TransactionReceiptResponse = {
     val contractAddress = if (stx.tx.isContractInit) {
       // do not subtract 1 from nonce because in transaction we have nonce of account before transaction execution
@@ -84,14 +83,15 @@ object TransactionReceiptResponse {
     }
     val txLogs = receipt.logs.zipWithIndex.map { case (txLog, index) =>
       TxLog(
-        logIndex = index,
+        logIndex = baseLogIndex + index,
         transactionIndex = transactionIndex,
         transactionHash = stx.hash,
         blockHash = blockHeader.hash,
         blockNumber = blockHeader.number,
         address = txLog.loggerAddress,
         data = txLog.data,
-        topics = txLog.logTopics
+        topics = txLog.logTopics,
+        blockTimestamp = Some(BigInt(blockHeader.unixTimestamp))
       )
     }
 
@@ -99,6 +99,21 @@ object TransactionReceiptResponse {
       case FailureOutcome         => (None, Some(BigInt(0)))
       case SuccessOutcome         => (None, Some(BigInt(1)))
       case HashOutcome(stateHash) => (Some(stateHash), None)
+    }
+
+    val txType: BigInt = stx.tx match {
+      case _: LegacyTransaction          => BigInt(0)
+      case _: TransactionWithAccessList   => BigInt(1)
+      case _: TransactionWithDynamicFee   => BigInt(2)
+      case _: BlobTransaction             => BigInt(3)
+      case _: SetCodeTransaction          => BigInt(4)
+    }
+
+    val effectiveGasPrice = Transaction.effectiveGasPrice(stx.tx, blockHeader.baseFee)
+
+    val blobGasUsed: Option[BigInt] = stx.tx match {
+      case blob: BlobTransaction => Some(BigInt(blob.blobVersionedHashes.size) * BigInt(131072))
+      case _ => None
     }
 
     new TransactionReceiptResponse(
@@ -114,7 +129,13 @@ object TransactionReceiptResponse {
       logs = txLogs,
       logsBloom = receipt.logsBloomFilter,
       root = root,
-      status = status
+      status = status,
+      `type` = Some(txType),
+      effectiveGasPrice = Some(effectiveGasPrice),
+      blobGasUsed = blobGasUsed,
+      // blobGasPrice only for blob (type 3) transactions
+      blobGasPrice = blobGasUsed.flatMap(_ => blockHeader.excessBlobGas.map(_ => BigInt(1))),
+      blockTimestamp = Some(BigInt(blockHeader.unixTimestamp))
     )
   }
 }

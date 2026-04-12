@@ -146,13 +146,18 @@ private[rlp] object RLP {
     *   If the value cannot be converted to a valid int
     */
   private[rlp] def bigEndianMinLengthToInt(bytes: Array[Byte]): Int =
-    (bytes.length: @switch) match {
+    bigEndianMinLengthToInt(bytes, 0, bytes.length)
+
+  /** Read a big-endian int from `data` at `offset` with `len` bytes, without allocating a slice. */
+  private[rlp] def bigEndianMinLengthToInt(data: Array[Byte], offset: Int, len: Int): Int =
+    (len: @switch) match {
       case 0 => 0: Short
-      case 1 => bytes(0) & 0xff
-      case 2 => ((bytes(0) & 0xff) << 8) + (bytes(1) & 0xff)
-      case 3 => ((bytes(0) & 0xff) << 16) + ((bytes(1) & 0xff) << 8) + (bytes(2) & 0xff)
+      case 1 => data(offset) & 0xff
+      case 2 => ((data(offset) & 0xff) << 8) + (data(offset + 1) & 0xff)
+      case 3 => ((data(offset) & 0xff) << 16) + ((data(offset + 1) & 0xff) << 8) + (data(offset + 2) & 0xff)
       case Integer.BYTES =>
-        ((bytes(0) & 0xff) << 24) + ((bytes(1) & 0xff) << 16) + ((bytes(2) & 0xff) << 8) + (bytes(3) & 0xff)
+        ((data(offset) & 0xff) << 24) + ((data(offset + 1) & 0xff) << 16) +
+          ((data(offset + 2) & 0xff) << 8) + (data(offset + 3) & 0xff)
       case _ => throw RLPException("Bytes don't represent an int")
     }
 
@@ -200,8 +205,7 @@ private[rlp] object RLP {
         ItemBounds(start = pos + 1, end = pos + length, isList = false)
       } else if (prefix < OffsetShortList) {
         val lengthOfLength = prefix - OffsetLongItem
-        val lengthBytes = data.slice(pos + 1, pos + 1 + lengthOfLength)
-        val length = bigEndianMinLengthToInt(lengthBytes)
+        val length = bigEndianMinLengthToInt(data, pos + 1, lengthOfLength)
         val beginPos = pos + 1 + lengthOfLength
         ItemBounds(start = beginPos, end = beginPos + length - 1, isList = false)
       } else if (prefix <= OffsetLongList) {
@@ -209,8 +213,7 @@ private[rlp] object RLP {
         ItemBounds(start = pos + 1, end = pos + length, isList = true)
       } else {
         val lengthOfLength = prefix - OffsetLongList
-        val lengthBytes = data.slice(pos + 1, pos + 1 + lengthOfLength)
-        val length = bigEndianMinLengthToInt(lengthBytes)
+        val length = bigEndianMinLengthToInt(data, pos + 1, lengthOfLength)
         val beginPos = pos + 1 + lengthOfLength
         ItemBounds(start = beginPos, end = beginPos + length - 1, isList = true)
       }

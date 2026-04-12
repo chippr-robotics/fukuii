@@ -66,6 +66,29 @@ java -Xmx4g \
 
 Config path: `-Dfukuii.<key>=<value>` (HOCON, namespaced under `fukuii`)
 
+### Chain Import
+
+Import pre-built chain data (RLP-encoded blocks) at startup:
+```bash
+java -Xmx4g \
+  -Dfukuii.import-chain-file=/path/to/chain.rlp \
+  -jar target/scala-3.3.4/fukuii-assembly-0.1.240.jar mordor
+```
+
+Blocks are executed through the standard block validation + execution pipeline and persisted with receipts and chain weight. Used by hive test framework and for bootstrapping from exported chain data.
+
+---
+
+## Startup Sequence
+
+1. **Metrics + DB fix + Genesis + Chain import** — essential initialization
+2. **JSON-RPC + Engine API** — API servers bind synchronously (user-facing)
+3. **P2P + Discovery** — networking layer
+4. **Sync + Mining** — background work
+5. **DB consistency check + TUI** — non-critical maintenance
+
+Engine API binds synchronously with 10s timeout — fails loudly if port is unavailable.
+
 ---
 
 ## Network Ports (multi-client setup)
@@ -86,9 +109,13 @@ Health endpoints: `GET /health`, `GET /readiness`, `GET /healthcheck`, `GET /bui
 
 ```
 src/main/scala/com/chipprbots/ethereum/
+  blockchain/data/           # Genesis loading, chain import
+    ChainImporter.scala      # RLP chain file import (chain.rlp)
+    GenesisDataLoader.scala  # Genesis block creation from JSON
   blockchain/sync/           # Sync controllers (fast, SNAP, regular)
     fast/                    # FastSync, PivotBlockSelector
     snap/                    # SNAPSyncController, coordinators, workers
+  consensus/engine/          # Engine API (post-merge CL interface)
   jsonrpc/                   # JSON-RPC API
     server/http/             # HTTP server (Pekko HTTP)
     server/controllers/      # RPC method handlers

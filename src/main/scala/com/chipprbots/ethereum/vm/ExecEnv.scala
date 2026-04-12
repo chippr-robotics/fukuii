@@ -21,7 +21,10 @@ object ExecEnv {
       blockHeader,
       callDepth,
       startGas,
-      evmConfig
+      evmConfig,
+      context.precompileRelocations,
+      context.blobVersionedHashes,
+      context.traceTransfers
     )
   }
 }
@@ -61,5 +64,8 @@ case class ExecEnv(
     blockHeader: BlockHeader,
     callDepth: Int,
     startGas: BigInt,
-    evmConfig: EvmConfig
+    evmConfig: EvmConfig,
+    precompileRelocations: Map[Address, Address] = Map.empty,
+    blobVersionedHashes: Seq[ByteString] = Seq.empty,
+    traceTransfers: Boolean = false
 )

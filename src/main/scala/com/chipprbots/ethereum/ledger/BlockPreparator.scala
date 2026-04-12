@@ -162,15 +162,69 @@ class BlockPreparator(
     worldStateProxy.saveAccount(senderAddress, account.increaseBalance(-calculateUpfrontGas(stx.tx)).increaseNonce())
   }
 
+  /** EIP-4844: Deduct blob gas cost from sender after execution.
+    * The blob gas is burned (not paid to miner). Uses actual blobBaseFee from block header.
+    */
+  private[ledger] def deductBlobGas(
+      stx: SignedTransaction,
+      senderAddress: Address,
+      blockHeader: BlockHeader,
+      world: InMemoryWorldStateProxy
+  ): InMemoryWorldStateProxy = stx.tx match {
+    case bt: com.chipprbots.ethereum.domain.BlobTransaction =>
+      val blobGasUsed = BigInt(bt.blobVersionedHashes.size) * BigInt(131072)
+      // Compute blob base fee from header's excessBlobGas
+      val blobBaseFee = blockHeader.excessBlobGas.map(computeBlobBaseFee).getOrElse(BigInt(1))
+      val blobGasCost = blobGasUsed * blobBaseFee
+      val account = world.getGuaranteedAccount(senderAddress)
+      world.saveAccount(senderAddress, account.increaseBalance(UInt256(-blobGasCost)))
+    case _ => world
+  }
+
+  /** Compute the blob base fee from excessBlobGas per EIP-4844 */
+  private def computeBlobBaseFee(excessBlobGas: BigInt): BigInt = {
+    // fake_exponential(MIN_BLOB_BASE_FEE=1, excess_blob_gas, BLOB_BASE_FEE_UPDATE_FRACTION=3338477)
+    val minBlobBaseFee = BigInt(1)
+    val updateFraction = BigInt(3338477)
+    if (excessBlobGas == 0) minBlobBaseFee
+    else {
+      // Simplified: baseFee = minBlobBaseFee * e^(excessBlobGas / updateFraction)
+      // Use the integer approximation from the spec
+      fakeExponential(minBlobBaseFee, excessBlobGas, updateFraction)
+    }
+  }
+
+  /** Integer approximation of factor * e^(numerator / denominator) per EIP-4844 */
+  private def fakeExponential(factor: BigInt, numerator: BigInt, denominator: BigInt): BigInt = {
+    var i = 1
+    var output = BigInt(0)
+    var numeratorAccum = factor * denominator
+    while (numeratorAccum > 0) {
+      output += numeratorAccum
+      numeratorAccum = (numeratorAccum * numerator) / (denominator * i)
+      i += 1
+    }
+    output / denominator
+  }
+
   private[ledger] def runVM(
       stx: SignedTransaction,
       senderAddress: Address,
       blockHeader: BlockHeader,
       world: InMemoryWorldStateProxy
   )(implicit blockchainConfig: BlockchainConfig): PR = {
-    val evmConfig = EvmConfig.forBlock(blockHeader.number, blockchainConfig)
+    val evmConfig = EvmConfig.forBlock(blockHeader.number, blockHeader.unixTimestamp, blockchainConfig)
     val context: PC = ProgramContext(stx, blockHeader, senderAddress, world, evmConfig)
-    vm.run(context)
+    // Apply simulation flags if set (for eth_simulateV1)
+    val contextWithSimFlags = {
+      var ctx = context
+      if (_simulatePrecompileRelocations.nonEmpty)
+        ctx = ctx.copy(precompileRelocations = _simulatePrecompileRelocations)
+      if (_simulateTraceTransfers)
+        ctx = ctx.copy(traceTransfers = true)
+      ctx
+    }
+    vm.run(contextWithSimFlags)
   }
 
   /** Calculate total gas to be refunded See YP, eq (72)
@@ -189,7 +243,9 @@ class BlockPreparator(
         val gasUsed = stx.tx.gasLimit - result.gasRemaining
         val blockchainConfigForEvm = BlockchainConfigForEvm(blockchainConfig)
         val etcFork = blockchainConfigForEvm.etcForkForBlockNumber(blockNumber)
-        val maxRefundQuotient = if (BlockchainConfigForEvm.isEip3529Enabled(etcFork)) 5 else 2
+        // EIP-3529: post-London refund cap is gasUsed/5 (not gasUsed/2)
+        val isPostLondon = blockNumber >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+        val maxRefundQuotient = if (BlockchainConfigForEvm.isEip3529Enabled(etcFork) || isPostLondon) 5 else 2
         result.gasRemaining + (gasUsed / maxRefundQuotient).min(result.gasRefund)
     }
 
@@ -204,7 +260,7 @@ class BlockPreparator(
   private[ledger] def pay(address: Address, value: UInt256, withTouch: Boolean)(
       world: InMemoryWorldStateProxy
   )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
-    if (world.isZeroValueTransferToNonExistentAccount(address, value)) {
+    if (value == UInt256.Zero || world.isZeroValueTransferToNonExistentAccount(address, value)) {
       world
     } else {
       val savedWorld = increaseAccountBalance(address, value)(world)
@@ -258,6 +314,31 @@ class BlockPreparator(
       .clearTouchedAccounts
   }
 
+  /** Public facade for eth_simulateV1 — delegates to the private executeTransaction.
+    * Supports optional precompile relocations for movePrecompileToAddress.
+    */
+  def executeTransactionForSimulation(
+      stx: SignedTransaction,
+      senderAddress: Address,
+      blockHeader: BlockHeader,
+      world: InMemoryWorldStateProxy,
+      precompileRelocations: Map[Address, Address] = Map.empty,
+      traceTransfers: Boolean = false
+  )(implicit blockchainConfig: BlockchainConfig): TxResult = {
+    // Store simulation flags temporarily for runVM to pick up
+    _simulatePrecompileRelocations = precompileRelocations
+    _simulateTraceTransfers = traceTransfers
+    try executeTransaction(stx, senderAddress, blockHeader, world)
+    finally {
+      _simulatePrecompileRelocations = Map.empty
+      _simulateTraceTransfers = false
+    }
+  }
+
+  // Thread-local-like storage for precompile relocations during simulation
+  @volatile private var _simulatePrecompileRelocations: Map[Address, Address] = Map.empty
+  @volatile private var _simulateTraceTransfers: Boolean = false
+
   private[ledger] def executeTransaction(
       stx: SignedTransaction,
       senderAddress: Address,
@@ -271,9 +352,13 @@ class BlockPreparator(
     val checkpointWorldState = updateSenderAccountBeforeExecution(stx, senderAddress, world)
 
     // EIP-7702: Process authorization list for Type-4 transactions before VM execution
+    // Track refund for existing accounts (geth refunds CallNewAccountGas - TxAuthTupleGas per existing account)
+    var authExistingAccountRefund: BigInt = 0
     val worldAfterAuths = stx.tx match {
       case sct: SetCodeTransaction =>
-        applyAuthorizations(sct.authorizationList, checkpointWorldState)
+        val (world, refund) = applyAuthorizationsWithRefund(sct.authorizationList, checkpointWorldState)
+        authExistingAccountRefund = refund
+        world
       case _ => checkpointWorldState
     }
 
@@ -286,8 +371,23 @@ class BlockPreparator(
       } else
         result
 
-    val totalGasToRefundBase = calcTotalGasToRefund(stx, resultWithErrorHandling, blockHeader.number)
+    // EIP-7702: Add auth refund to the VM's refund counter before capping
+    val resultWithAuthRefund = if (authExistingAccountRefund > 0) {
+      resultWithErrorHandling.copy(gasRefund = resultWithErrorHandling.gasRefund + authExistingAccountRefund)
+    } else resultWithErrorHandling
+    val totalGasToRefundBase = calcTotalGasToRefund(stx, resultWithAuthRefund, blockHeader.number)
     val executionGasBase = gasLimit - totalGasToRefundBase
+
+    if (DebugTrace.enabledForBlock(blockHeader.number)) {
+      val evmConfig = EvmConfig.forBlock(blockHeader.number, blockchainConfig)
+      val isCreate = stx.tx.isContractInit
+      val intrinsicGas = evmConfig.calcTransactionIntrinsicGas(stx.tx.payload, isCreate, Seq.empty)
+      System.err.println(s"[TX-TRACE] block=${blockHeader.number} tx=${stx.hash.toHex} " +
+        s"create=$isCreate gasLimit=$gasLimit intrinsic=$intrinsicGas " +
+        s"vmGasRemaining=${result.gasRemaining} vmError=${result.error} " +
+        s"refund=${result.gasRefund} returnDataLen=${result.returnData.size} " +
+        s"gasToRefundBase=$totalGasToRefundBase executionGas=$executionGasBase")
+    }
 
     // EIP-7623: Floor calldata gas — ensure gas charged is at least the floor data cost
     val isOlympiaActivated = blockHeader.number >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
@@ -299,16 +399,26 @@ class BlockPreparator(
     val totalGasToRefund = gasLimit - executionGasToPayToMiner
 
     val refundGasFn = pay(senderAddress, (totalGasToRefund * gasPrice).toUInt256, withTouch = false) _
+    // EIP-1559: miner receives only the priority fee (effectiveGasPrice - baseFee).
+    // The baseFee portion is burned on ETH chains, or credited to treasury on ETC (ECIP-1111).
+    val minerGasPrice = blockHeader.baseFee match {
+      case Some(baseFee) if gasPrice.toBigInt >= baseFee => UInt256(gasPrice.toBigInt - baseFee)
+      case Some(_) => UInt256.Zero // effectiveGasPrice < baseFee: no priority fee
+      case None => gasPrice
+    }
     val payMinerForGasFn =
-      pay(Address(blockHeader.beneficiary), (executionGasToPayToMiner * gasPrice).toUInt256, withTouch = true) _
+      pay(Address(blockHeader.beneficiary), (executionGasToPayToMiner * minerGasPrice).toUInt256, withTouch = true) _
 
     val worldAfterPayments = refundGasFn.andThen(payMinerForGasFn)(resultWithErrorHandling.world)
+
+    // EIP-4844: Deduct blob gas cost (burned, not paid to miner)
+    val worldAfterBlobGas = deductBlobGas(stx, senderAddress, blockHeader, worldAfterPayments)
 
     val deleteAccountsFn = deleteAccounts(resultWithErrorHandling.addressesToDelete) _
     val deleteTouchedAccountsFn = deleteEmptyTouchedAccounts _
     val persistStateFn = InMemoryWorldStateProxy.persistState _
 
-    val world2 = deleteAccountsFn.andThen(deleteTouchedAccountsFn).andThen(persistStateFn)(worldAfterPayments)
+    val world2 = deleteAccountsFn.andThen(deleteTouchedAccountsFn).andThen(persistStateFn)(worldAfterBlobGas)
 
     if (DebugTrace.enabledForTx(blockHeader.number, stx.hash.toHex)) {
       val tx = stx.tx
@@ -377,6 +487,7 @@ class BlockPreparator(
       case Seq(stx, otherStxs @ _*) =>
         val upfrontCost = calculateUpfrontCost(stx.tx)
         val senderAddress = SignedTransaction.getSender(stx)
+
 
         val accountDataOpt = senderAddress
           .map { address =>
@@ -500,9 +611,51 @@ class BlockPreparator(
       authList: List[SetCodeAuthorization],
       world: InMemoryWorldStateProxy
   )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
-    authList.foldLeft(world) { (w, auth) =>
-      applyAuthorization(auth, w).getOrElse(w)
+    applyAuthorizationsWithRefund(authList, world)._1
+
+  /** Apply authorizations and return (world, refund) where refund is the gas to refund
+    * for existing accounts per geth's EIP-7702 implementation:
+    * Intrinsic charges CallNewAccountGas (25000) per auth.
+    * If the authority account exists, refund CallNewAccountGas - TxAuthTupleGas (25000 - 12500 = 12500).
+    */
+  private def applyAuthorizationsWithRefund(
+      authList: List[SetCodeAuthorization],
+      world: InMemoryWorldStateProxy
+  )(implicit blockchainConfig: BlockchainConfig): (InMemoryWorldStateProxy, BigInt) =
+    authList.foldLeft((world, BigInt(0))) { case ((w, refund), auth) =>
+      // Recover authority to check existence (needed for refund even if auth is invalid)
+      val authorityOpt = recoverAuthority(auth)
+      val existsRefund = authorityOpt match {
+        case Some(addr) if w.getAccount(addr).isDefined => BigInt(25000 - 12500)
+        case _ => BigInt(0)
+      }
+      applyAuthorization(auth, w) match {
+        case Some(newWorld) => (newWorld, refund + existsRefund)
+        case None => (w, refund + existsRefund)
+      }
     }
+
+  /** Recover authority address from authorization signature (for gas accounting) */
+  private def recoverAuthority(auth: SetCodeAuthorization)(implicit blockchainConfig: BlockchainConfig): Option[Address] = {
+    import com.chipprbots.ethereum.crypto.ECDSASignature
+    import com.chipprbots.ethereum.rlp.{encode, PrefixedRLPEncodable, RLPList}
+    import com.chipprbots.ethereum.rlp.RLPImplicitConversions.toEncodeable
+    import com.chipprbots.ethereum.rlp.RLPImplicits.given
+
+    if (auth.chainId != 0 && auth.chainId != blockchainConfig.chainId) return None
+
+    val sigHash = com.chipprbots.ethereum.crypto.kec256(
+      encode(PrefixedRLPEncodable(0x05, RLPList(
+        toEncodeable(auth.chainId), toEncodeable(auth.address.toArray), toEncodeable(auth.nonce)
+      )))
+    )
+    val rawV = if (auth.v == 0) ECDSASignature.negativePointSign else ECDSASignature.positivePointSign
+    val ecdsaSig = ECDSASignature(auth.r, auth.s, BigInt(rawV))
+    ecdsaSig.publicKey(sigHash).flatMap { key =>
+      val addrBytes = com.chipprbots.ethereum.crypto.kec256(key).slice(12, 32)
+      if (addrBytes.length == Address.Length) Some(Address(addrBytes)) else None
+    }
+  }
 
   /** Apply a single EIP-7702 authorization. Returns None if the authorization should be skipped. */
   private def applyAuthorization(

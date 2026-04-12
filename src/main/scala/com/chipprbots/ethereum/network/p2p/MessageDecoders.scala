@@ -483,6 +483,89 @@ object ETH68MessageDecoder extends MessageDecoder {
     }
 }
 
+/** ETH/69 message decoder (EIP-7642).
+  * Uses new Status message format (no TD, has block range).
+  * BlockRangeUpdate (0x11) is a new notification message.
+  * All other messages are the same as ETH/68.
+  */
+object ETH69MessageDecoder extends MessageDecoder {
+  import com.chipprbots.ethereum.network.p2p.messages.ETH69.Status._
+  import com.chipprbots.ethereum.network.p2p.messages.ETH69.BlockRangeUpdate._
+  import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock._
+  import com.chipprbots.ethereum.network.p2p.messages.ETH67.NewPooledTransactionHashes._
+  import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetBlockHeaders._
+  import com.chipprbots.ethereum.network.p2p.messages.ETH66.BlockHeaders._
+  import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetBlockBodies._
+  import com.chipprbots.ethereum.network.p2p.messages.ETH66.BlockBodies._
+  import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetPooledTransactions._
+  import com.chipprbots.ethereum.network.p2p.messages.ETH66.PooledTransactions._
+  import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetReceipts._
+  import com.chipprbots.ethereum.network.p2p.messages.ETH66.Receipts._
+
+  def fromBytes(msgCode: Int, payload: Array[Byte]): Either[DecodingError, Message] =
+    msgCode match {
+      case Codes.StatusCode =>
+        Try(payload.toETH69Status).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NewBlockHashesCode =>
+        Try(payload.toNewBlockHashes).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.SignedTransactionsCode =>
+        Try(payload.toSignedTransactions).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetBlockHeadersCode =>
+        Try(payload.toGetBlockHeaders).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.BlockHeadersCode =>
+        Try(payload.toBlockHeaders).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetBlockBodiesCode =>
+        Try(payload.toGetBlockBodies).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.BlockBodiesCode =>
+        Try(payload.toBlockBodies).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NewBlockCode =>
+        Try(payload.toNewBlock).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.NewPooledTransactionHashesCode =>
+        Try(payload.toNewPooledTransactionHashes).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetPooledTransactionsCode =>
+        Try(payload.toGetPooledTransactions).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.PooledTransactionsCode =>
+        Try(payload.toPooledTransactions).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.GetNodeDataCode => Left(MalformedMessageError("GetNodeData is not supported in eth/69"))
+      case Codes.NodeDataCode    => Left(MalformedMessageError("NodeData is not supported in eth/69"))
+      case Codes.GetReceiptsCode =>
+        Try(payload.toGetReceipts).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.ReceiptsCode =>
+        Try(payload.toReceipts).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case Codes.BlockRangeUpdateCode =>
+        Try(payload.toBlockRangeUpdate).toEither.left.map(ex =>
+          MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        )
+      case _ => Left(UnknownMessageTypeError(msgCode, s"Unknown eth/69 message type: $msgCode"))
+    }
+}
+
 // scalastyle:off
 object EthereumMessageDecoder {
   def ethMessageDecoder(protocolVersion: Capability): MessageDecoder =
@@ -493,6 +576,7 @@ object EthereumMessageDecoder {
       case Capability.ETH66 => ETH66MessageDecoder
       case Capability.ETH67 => ETH67MessageDecoder
       case Capability.ETH68 => ETH68MessageDecoder
+      case Capability.ETH69 => ETH69MessageDecoder
       case Capability.SNAP1 => SNAPMessageDecoder
     }
 }

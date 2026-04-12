@@ -66,7 +66,8 @@ object EthInfoService {
       gas: Option[BigInt],
       gasPrice: BigInt,
       value: BigInt,
-      data: ByteString
+      data: ByteString,
+      gasPriceExplicit: Boolean = false
   )
 
   case class IeleCallTx(
@@ -85,6 +86,14 @@ object EthInfoService {
   case class IeleCallRequest(tx: IeleCallTx, block: BlockParam)
   case class IeleCallResponse(returnData: Seq[ByteString])
   case class EstimateGasResponse(gas: BigInt)
+  case class CreateAccessListRequest(tx: CallTx, block: BlockParam) {
+    def toCallRequest: CallRequest = CallRequest(tx, block)
+  }
+  case class CreateAccessListResponse(
+      accessList: Seq[Map[String, Any]],
+      gasUsed: BigInt,
+      error: Option[String]
+  )
 }
 
 class EthInfoService(
@@ -207,7 +216,18 @@ class EthInfoService(
 
   def call(req: CallRequest): ServiceResponse[CallResponse] =
     IO {
-      doCall(req)(stxLedger.simulateTransaction).map(r => CallResponse(r.vmReturnData))
+      doCall(req)(stxLedger.simulateTransaction).flatMap { r =>
+        r.vmError match {
+          case Some(com.chipprbots.ethereum.vm.RevertOccurs) =>
+            val dataHex = "0x" + org.bouncycastle.util.encoders.Hex.toHexString(r.vmReturnData.toArray[Byte])
+            Left(JsonRpcError(3, "execution reverted", Some(org.json4s.JString(dataHex))))
+          case Some(_) =>
+            // Other VM errors (out of gas, etc) — return empty result
+            Right(CallResponse(r.vmReturnData))
+          case None =>
+            Right(CallResponse(r.vmReturnData))
+        }
+      }
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
     }
@@ -236,7 +256,35 @@ class EthInfoService(
 
   def estimateGas(req: CallRequest): ServiceResponse[EstimateGasResponse] =
     IO {
-      doCall(req)(stxLedger.binarySearchGasEstimation).map(gasUsed => EstimateGasResponse(gasUsed))
+      // First check if the tx reverts at the max gas limit
+      val simCheck = doCall(req)(stxLedger.simulateTransaction)
+      simCheck.flatMap { r =>
+        r.vmError match {
+          case Some(com.chipprbots.ethereum.vm.RevertOccurs) =>
+            val dataHex = "0x" + org.bouncycastle.util.encoders.Hex.toHexString(r.vmReturnData.toArray[Byte])
+            Left(JsonRpcError(3, "execution reverted", Some(org.json4s.JString(dataHex))))
+          case _ =>
+            // Tx doesn't revert — find minimum gas via binary search
+            doCall(req)(stxLedger.binarySearchGasEstimation).map(gas => EstimateGasResponse(gas))
+        }
+      }
+    }.recover { case _: MissingNodeException =>
+      Left(JsonRpcError.NodeNotFound)
+    }
+
+  def createAccessList(req: CreateAccessListRequest): ServiceResponse[CreateAccessListResponse] =
+    IO {
+      doCall(req.toCallRequest)(stxLedger.simulateTransaction).map { result =>
+        val gasUsed = result.gasUsed
+        val error = result.vmError.map(_.toString)
+        // Build access list from the VM's accessed addresses and storage keys
+        // For now, return empty access list with gas used (partial implementation)
+        CreateAccessListResponse(
+          accessList = Seq.empty,
+          gasUsed = gasUsed,
+          error = error
+        )
+      }
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
     }
@@ -246,7 +294,22 @@ class EthInfoService(
   ): Either[JsonRpcError, A] = for {
     stx <- prepareTransaction(req)
     block <- resolveBlock(req.block)
-  } yield f(stx, block.block.header, block.pendingState)
+  } yield {
+    // EIP-1559: When no gas price is explicitly specified, use baseFee=0 so calls
+    // don't need to worry about funding. Matches geth behavior for eth_call/eth_estimateGas.
+    val header = if (!req.tx.gasPriceExplicit && block.block.header.baseFee.isDefined) {
+      import BlockHeader.HeaderExtraFields._
+      val zeroBaseFeeExtra = block.block.header.extraFields match {
+        case HefPostOlympia(_)               => HefPostOlympia(0)
+        case HefPostShanghai(_, wr)          => HefPostShanghai(0, wr)
+        case HefPostCancun(_, wr, bg, eb, pb) => HefPostCancun(0, wr, bg, eb, pb)
+        case HefPostPrague(_, wr, bg, eb, pb, rh) => HefPostPrague(0, wr, bg, eb, pb, rh)
+        case other => other
+      }
+      block.block.header.copy(extraFields = zeroBaseFeeExtra)
+    } else block.block.header
+    f(stx, header, block.pendingState)
+  }
 
   private def getGasLimit(req: CallRequest): Either[JsonRpcError, BigInt] =
     req.tx.gas.map(Right.apply).getOrElse(resolveBlock(BlockParam.Latest).map(r => r.block.header.gasLimit))

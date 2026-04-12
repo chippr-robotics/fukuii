@@ -14,6 +14,7 @@ import org.json4s.CustomSerializer
 import org.json4s.DefaultFormats
 import org.json4s.Extraction
 import org.json4s.Formats
+import org.json4s.JObject
 import org.json4s.JString
 import org.json4s.JValue
 
@@ -33,12 +34,14 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.rlp.RLPValue
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Logger
 
 class GenesisDataLoader(
     blockchainReader: BlockchainReader,
     blockchainWriter: BlockchainWriter,
+    evmCodeStorage: com.chipprbots.ethereum.db.storage.EvmCodeStorage,
     stateStorage: StateStorage
 ) extends Logger {
 
@@ -90,7 +93,8 @@ class GenesisDataLoader(
 
   private def loadGenesisData(genesisJson: String)(implicit blockchainConfig: BlockchainConfig): Try[Unit] = {
     import org.json4s.native.JsonMethods.parse
-    implicit val formats: Formats = DefaultFormats + ByteStringJsonSerializer + UInt256JsonSerializer
+    import GenesisDataLoader.JsonSerializers.GenesisAccountSerializer
+    implicit val formats: Formats = DefaultFormats + ByteStringJsonSerializer + UInt256JsonSerializer + GenesisAccountSerializer
     for {
       genesisData <- Try(Extraction.extract[GenesisData](parse(genesisJson)))
       _ <- loadGenesisData(genesisData)
@@ -138,7 +142,14 @@ class GenesisDataLoader(
 
     genesisData.alloc.zipWithIndex.foldLeft(initalRootHash) { case (rootHash, ((address, genesisAccount), _)) =>
       val mpt = MerklePatriciaTrie[Array[Byte], Account](rootHash, storage)
-      val paddedAddress = address.reverse.padTo(addressLength, "0").reverse.mkString
+      val cleanAddress = if (address.startsWith("0x") || address.startsWith("0X")) address.substring(2) else address
+      val paddedAddress = cleanAddress.reverse.padTo(addressLength, "0").reverse.mkString
+
+      // Store contract code in EVM code storage if present
+      genesisAccount.code.foreach { code =>
+        val codeHash = ByteString(crypto.kec256(code))
+        evmCodeStorage.put(codeHash, code).commit()
+      }
 
       val stateRoot = mpt
         .put(
@@ -173,10 +184,23 @@ class GenesisDataLoader(
   private def prepareHeader(genesisData: GenesisData, stateMptRootHash: Array[Byte])(implicit
       blockchainConfig: BlockchainConfig
   ) = {
-    // EIP-1559: If London/Olympia is active at genesis (block 0), include baseFee in the header.
-    // Initial baseFee per EIP-1559 spec is 1 Gwei (10^9 Wei).
-    val extraFields = if (blockchainConfig.forkBlockNumbers.olympiaBlockNumber == 0) {
-      BlockHeader.HeaderExtraFields.HefPostOlympia(baseFee = BigInt("1000000000"))
+    // Determine the fork era for the genesis block based on the genesis timestamp (0)
+    val genesisTimestamp = BigInt(genesisData.timestamp.replace("0x", ""), 16).toLong
+    val baseFee = genesisData.baseFeePerGas.map(s => BigInt(s.replace("0x", ""), 16))
+      .getOrElse(BigInt("1000000000")) // EIP-1559 default: 1 Gwei
+    // Empty trie root = keccak256(RLP("")) = keccak256(0x80) — NOT keccak of empty list
+    val emptyWithdrawalsRoot = ByteString(crypto.kec256(rlp.encode(RLPValue(Array.empty[Byte]))))
+
+    val extraFields = if (blockchainConfig.isPragueTimestamp(genesisTimestamp)) {
+      val emptyRequestsHash = ByteString(java.security.MessageDigest.getInstance("SHA-256").digest(Array.empty[Byte]))
+      BlockHeader.HeaderExtraFields.HefPostPrague(baseFee, emptyWithdrawalsRoot, BigInt(0), BigInt(0),
+        zeros(hashLength), emptyRequestsHash)
+    } else if (blockchainConfig.isCancunTimestamp(genesisTimestamp)) {
+      BlockHeader.HeaderExtraFields.HefPostCancun(baseFee, emptyWithdrawalsRoot, BigInt(0), BigInt(0), zeros(hashLength))
+    } else if (blockchainConfig.isShanghaiTimestamp(genesisTimestamp)) {
+      BlockHeader.HeaderExtraFields.HefPostShanghai(baseFee, emptyWithdrawalsRoot)
+    } else if (blockchainConfig.forkBlockNumbers.olympiaBlockNumber == 0) {
+      BlockHeader.HeaderExtraFields.HefPostOlympia(baseFee)
     } else {
       BlockHeader.HeaderExtraFields.HefEmpty
     }
@@ -196,9 +220,15 @@ class GenesisDataLoader(
       unixTimestamp = BigInt(genesisData.timestamp.replace("0x", ""), 16).toLong,
       extraData = genesisData.extraData,
       mixHash = genesisData.mixHash.getOrElse(zeros(hashLength)),
-      nonce = genesisData.nonce,
+      nonce = padToEightBytes(genesisData.nonce),
       extraFields = extraFields
     )
+  }
+
+  /** Ethereum block header nonce is always 8 bytes (uint64). Pad short nonces with leading zeros. */
+  private def padToEightBytes(bs: ByteString): ByteString = {
+    if (bs.length >= 8) bs
+    else ByteString(new Array[Byte](8 - bs.length) ++ bs.toArray)
   }
 
   private def zeros(length: Int) =
@@ -246,6 +276,32 @@ object GenesisDataLoader {
 
     object UInt256JsonSerializer
         extends CustomSerializer[UInt256](_ => ({ case jv => deserializeUint256String(jv) }, PartialFunction.empty))
+
+    private def parseStorageMap(jv: JValue): Option[Map[UInt256, UInt256]] = jv match {
+      case JObject(fields) if fields.nonEmpty =>
+        Some(fields.map { case (key, value) =>
+          deserializeUint256String(JString(key)) -> deserializeUint256String(value)
+        }.toMap)
+      case _ => None
+    }
+
+    object GenesisAccountSerializer
+        extends CustomSerializer[GenesisAccount](_ =>
+          (
+            {
+              case JObject(fields) =>
+                val map = fields.toMap
+                GenesisAccount(
+                  precompiled = None,
+                  balance = map.get("balance").map(deserializeUint256String).getOrElse(UInt256.Zero),
+                  code = map.get("code").map(deserializeByteString),
+                  nonce = map.get("nonce").map(deserializeUint256String),
+                  storage = map.get("storage").flatMap(parseStorageMap)
+                )
+            },
+            PartialFunction.empty
+          )
+        )
   }
 }
 

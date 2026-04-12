@@ -39,6 +39,7 @@ object EthProofJsonMethodsImplicits extends JsonMethodsImplicits {
 
       override def encodeJson(t: GetProofResponse): JValue =
         JObject(
+          "address" -> encodeAsHex(t.proofAccount.address.bytes),
           "accountProof" -> JArray(t.proofAccount.accountProof.toList.map(ap => encodeAsHex(ap))),
           "balance" -> encodeAsHex(t.proofAccount.balance),
           "codeHash" -> encodeAsHex(t.proofAccount.codeHash),

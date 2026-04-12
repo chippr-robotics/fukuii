@@ -28,9 +28,14 @@ class EngineApiService(
     blockchainReader: BlockchainReader,
     blockchainWriter: BlockchainWriter,
     blockExecution: BlockExecution,
-    forkChoiceManager: ForkChoiceManager
+    forkChoiceManager: ForkChoiceManager,
+    mining: com.chipprbots.ethereum.consensus.mining.Mining,
+    evmCodeStorage: com.chipprbots.ethereum.db.storage.EvmCodeStorage
 )(implicit blockchainConfig: BlockchainConfig)
     extends Logger {
+
+  /** Pending payloads built by forkchoiceUpdated, keyed by payloadId. */
+  private val pendingPayloads = new java.util.concurrent.ConcurrentHashMap[ByteString, Block]()
 
   /** Return the latest block number from the blockchain storage. */
   def getLatestBlockNumber: BigInt =
@@ -162,7 +167,94 @@ class EngineApiService(
               attrs.prevRandao.toArray ++
               attrs.suggestedFeeRecipient.bytes.toArray
           )
-          ByteString(idBytes.take(8))
+          val id = ByteString(idBytes.take(8))
+
+          // Build the payload using BlockPreparator directly with post-merge header
+          try {
+            val parentOpt = blockchainReader.getBlockByHash(forkChoiceState.headBlockHash)
+            parentOpt.foreach { parent =>
+              // Compute EIP-1559 base fee from parent
+              val parentBaseFee = parent.header.baseFee.getOrElse(BigInt("1000000000"))
+              val parentGasTarget = parent.header.gasLimit / 2
+              val baseFee: BigInt = if (parent.header.number == 0) parentBaseFee
+              else if (parent.header.gasUsed == parentGasTarget) parentBaseFee
+              else if (parent.header.gasUsed > parentGasTarget) {
+                val delta = parentBaseFee * (parent.header.gasUsed - parentGasTarget) / parentGasTarget / 8
+                parentBaseFee + (if (delta == BigInt(0)) BigInt(1) else delta)
+              } else {
+                val delta = parentBaseFee * (parentGasTarget - parent.header.gasUsed) / parentGasTarget / 8
+                if (parentBaseFee - delta < 0) BigInt(0) else parentBaseFee - delta
+              }
+
+              val emptyWithdrawalsRoot = ByteString(kec256(com.chipprbots.ethereum.rlp.encode(
+                com.chipprbots.ethereum.rlp.RLPValue(Array.empty[Byte]))))
+              val emptyTrieRoot = ByteString(kec256(com.chipprbots.ethereum.rlp.encode(
+                com.chipprbots.ethereum.rlp.RLPValue(Array.empty[Byte]))))
+
+              // Build post-merge header directly (difficulty=0 so payBlockReward skips PoW rewards)
+              val blockNumber = parent.header.number + 1
+              val gasLimit = parent.header.gasLimit // keep parent gas limit
+              val header = BlockHeader(
+                parentHash = parent.header.hash,
+                ommersHash = ByteString(kec256(com.chipprbots.ethereum.rlp.encode(
+                  com.chipprbots.ethereum.rlp.RLPList()))),
+                beneficiary = attrs.suggestedFeeRecipient.bytes,
+                stateRoot = ByteString.empty,
+                transactionsRoot = emptyTrieRoot,
+                receiptsRoot = emptyTrieRoot,
+                logsBloom = ByteString(new Array[Byte](256)),
+                difficulty = 0,
+                number = blockNumber,
+                gasLimit = gasLimit,
+                gasUsed = 0,
+                unixTimestamp = attrs.timestamp,
+                extraData = ByteString("fukuii".getBytes),
+                mixHash = attrs.prevRandao,
+                nonce = ByteString(new Array[Byte](8)),
+                extraFields = HefPostShanghai(baseFee, emptyWithdrawalsRoot)
+              )
+              val body = BlockBody(Nil, Nil, withdrawals = Some(Nil))
+              val block = Block(header, body)
+
+              // Execute block to compute correct stateRoot
+              val blockPreparator = mining.blockPreparator
+              val prepared = blockPreparator.prepareBlock(evmCodeStorage, block, parent.header, None)
+
+              // Update header with computed stateRoot, receiptsRoot, gasUsed, logsBloom
+              import com.chipprbots.ethereum.consensus.validators.std.MptListValidator.intByteArraySerializable
+              import com.chipprbots.ethereum.ledger.BloomFilter
+              import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
+              import com.chipprbots.ethereum.domain.Receipt
+              val receipts = prepared.blockResult.receipts
+              val receiptsLogs = BloomFilter.EmptyBloomFilter.toArray +: receipts.map(_.logsBloomFilter.toArray)
+              val bloomFilter = ByteString(com.chipprbots.ethereum.utils.ByteUtils.or(receiptsLogs: _*))
+              def buildMpt[T](items: Seq[T], ser: com.chipprbots.ethereum.mpt.ByteArraySerializable[T]): ByteString = {
+                val storage = new com.chipprbots.ethereum.db.storage.SerializingMptStorage(
+                  new com.chipprbots.ethereum.db.storage.ArchiveNodeStorage(
+                    new com.chipprbots.ethereum.db.storage.NodeStorage(
+                      com.chipprbots.ethereum.db.dataSource.EphemDataSource())))
+                val trie = items.zipWithIndex.foldLeft(MerklePatriciaTrie[Int, T](storage)(intByteArraySerializable, ser)) {
+                  case (t, (item, idx)) => t.put(idx, item)
+                }
+                ByteString(trie.getRootHash)
+              }
+              val updatedHeader = prepared.block.header.copy(
+                stateRoot = prepared.stateRootHash,
+                receiptsRoot = buildMpt(receipts, Receipt.byteArraySerializable),
+                transactionsRoot = buildMpt(prepared.block.body.transactionList, SignedTransaction.byteArraySerializable),
+                logsBloom = bloomFilter,
+                gasUsed = prepared.blockResult.gasUsed
+              )
+              val payload = prepared.block.copy(header = updatedHeader)
+              pendingPayloads.put(id, payload)
+              log.info("Built payload {} for block {} (baseFee={}, parent={})",
+                id.toArray.map("%02x".format(_)).mkString, payload.header.number, baseFee, parent.header.number)
+            }
+          } catch {
+            case e: Exception =>
+              log.error("Failed to build payload: {}", e.getMessage)
+          }
+          id
         }
 
         EngineApiMetrics.recordForkchoiceUpdated("VALID")
@@ -170,6 +262,14 @@ class EngineApiService(
           payloadStatus = PayloadStatusV1(Valid, latestValidHash = Some(forkChoiceState.headBlockHash)),
           payloadId = payloadId
         )
+    }
+  }
+
+  /** engine_getPayloadV1/V2/V3/V4 — Return a previously built payload by ID. */
+  def getPayload(payloadId: ByteString): IO[Either[String, Block]] = IO {
+    Option(pendingPayloads.remove(payloadId)) match {
+      case Some(block) => Right(block)
+      case None => Left("Payload not available")
     }
   }
 

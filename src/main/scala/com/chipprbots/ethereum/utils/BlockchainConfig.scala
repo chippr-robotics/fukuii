@@ -41,7 +41,7 @@ case class BlockchainConfig(
     daoForkConfig: Option[DaoForkConfig],
     accountStartNonce: UInt256,
     chainId: BigInt,
-    networkId: Int,
+    networkId: Long,
     monetaryPolicyConfig: MonetaryPolicyConfig,
     gasTieBreaker: Boolean,
     ethCompatibleStorage: Boolean,
@@ -175,7 +175,9 @@ object BlockchainConfig {
       parseHexOrDecNumber(s)
     }
 
-    val networkId: Int = blockchainConfig.getInt("network-id")
+    val networkId: Long = Try(blockchainConfig.getLong("network-id")).getOrElse {
+      Try(BigInt(blockchainConfig.getString("network-id")).toLong).getOrElse(1L)
+    }
 
     val monetaryPolicyConfig = MonetaryPolicyConfig(blockchainConfig.getConfig("monetary-policy"))
 

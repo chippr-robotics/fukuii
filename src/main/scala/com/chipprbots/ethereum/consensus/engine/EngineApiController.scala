@@ -12,6 +12,9 @@ import org.json4s.JsonAST.{JBool, JInt}
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.Withdrawal
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
@@ -124,9 +127,65 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
     }
   }
 
-  private def handleGetPayload(request: JsonRpcRequest): IO[JsonRpcResponse] =
-    // Stub — payload building not yet implemented
-    IO.pure(JsonRpcResponse("2.0", None, Some(JsonRpcError(-38001, "Payload not available", None)), reqId(request)))
+  private def handleGetPayload(request: JsonRpcRequest): IO[JsonRpcResponse] = {
+    val payloadIdHex = request.params match {
+      case Some(JArray(List(JString(id)))) => id
+      case _ => ""
+    }
+    val payloadId = hexToByteString(payloadIdHex)
+    engineApiService.getPayload(payloadId).map {
+      case Right(block) =>
+        val payload = blockToExecutionPayload(block)
+        JsonRpcResponse("2.0", Some(payload), None, reqId(request))
+      case Left(err) =>
+        JsonRpcResponse("2.0", None, Some(JsonRpcError(-38001, err, None)), reqId(request))
+    }
+  }
+
+  private def blockToExecutionPayload(block: Block): JObject = {
+    import block.header
+    def hex(bs: ByteString): String = "0x" + org.bouncycastle.util.encoders.Hex.toHexString(bs.toArray)
+    def hexQ(n: BigInt): String = s"0x${n.toString(16)}"
+
+    val txs = block.body.transactionList.map { stx =>
+      JString("0x" + org.bouncycastle.util.encoders.Hex.toHexString(
+        SignedTransaction.byteArraySerializable.toBytes(stx)))
+    }
+    val withdrawals = block.body.withdrawals.map { wds =>
+      JArray(wds.map { w =>
+        JObject(
+          "index" -> JString(hexQ(w.index)),
+          "validatorIndex" -> JString(hexQ(w.validatorIndex)),
+          "address" -> JString(hex(w.address.bytes)),
+          "amount" -> JString(hexQ(w.amount))
+        )
+      }.toList)
+    }
+    val baseFee = header.extraFields match {
+      case BlockHeader.HeaderExtraFields.HefPostOlympia(baseFee) => Some(baseFee)
+      case BlockHeader.HeaderExtraFields.HefPostShanghai(baseFee, _) => Some(baseFee)
+      case BlockHeader.HeaderExtraFields.HefPostCancun(baseFee, _, _, _, _) => Some(baseFee)
+      case BlockHeader.HeaderExtraFields.HefPostPrague(baseFee, _, _, _, _, _) => Some(baseFee)
+      case _ => None
+    }
+    val fields = List(
+      "parentHash" -> JString(hex(header.parentHash)),
+      "feeRecipient" -> JString(hex(header.beneficiary)),
+      "stateRoot" -> JString(hex(header.stateRoot)),
+      "receiptsRoot" -> JString(hex(header.receiptsRoot)),
+      "logsBloom" -> JString(hex(header.logsBloom)),
+      "prevRandao" -> JString(hex(header.mixHash)),
+      "blockNumber" -> JString(hexQ(header.number)),
+      "gasLimit" -> JString(hexQ(header.gasLimit)),
+      "gasUsed" -> JString(hexQ(header.gasUsed)),
+      "timestamp" -> JString(s"0x${header.unixTimestamp.toHexString}"),
+      "extraData" -> JString(hex(header.extraData)),
+      "baseFeePerGas" -> JString(hexQ(baseFee.getOrElse(BigInt(0)))),
+      "blockHash" -> JString(hex(header.hash)),
+      "transactions" -> JArray(txs.toList)
+    ) ++ withdrawals.map(w => "withdrawals" -> w).toList
+    JObject(fields)
+  }
 
   private def handleGetClientVersion(request: JsonRpcRequest): IO[JsonRpcResponse] = {
     val clientVersion = JArray(

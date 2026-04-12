@@ -68,8 +68,18 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
         val code = resolveCode(world1, recipientAddr)
         val env = ExecEnv(context1, code, ownerAddr)
 
+        // EIP-7702: If code was resolved from a delegation, warm the delegation target
+        val delegationTarget = try {
+          SetCodeTransaction.parseDelegation(world1.getCode(recipientAddr))
+        } catch {
+          case _: Exception => None
+        }
         val initialState: PS = ProgramState(this, context1, env)
-        exec(initialState).toResult
+        val warmState = delegationTarget match {
+          case Some(target) => initialState.addAccessedAddress(target)
+          case None => initialState
+        }
+        exec(warmState).toResult
       }
     }
 
@@ -172,6 +182,10 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
         log.trace(
           s"$opCode | pc: $pc | depth: ${env.callDepth} | gasUsed: ${state.gas - gas} | gas: $gas | stack: $stack"
         )
+        // Opcode-level tracing for targeted debugging
+        if (DebugTrace.enabledForBlock(state.env.blockHeader.number) && state.env.callDepth == 0) {
+          System.err.println(s"[EVM] pc=${state.pc} op=$opCode gas=${state.gas} -> gasAfter=$gas depth=${env.callDepth}")
+        }
         if (newState.halted)
           newState
         else

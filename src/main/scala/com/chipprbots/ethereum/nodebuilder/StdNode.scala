@@ -38,34 +38,30 @@ abstract class BaseNode extends Node {
   private var tuiUpdater: Option[TuiUpdater] = None
 
   def start(): Unit = {
+    // Phase 1: Essential initialization (must complete before anything else)
     startMetricsClient()
-
     fixDatabase()
-
     loadGenesisData()
+    importChainData() // Must complete before APIs so queries return chain data
 
-    runDBConsistencyCheck()
-
-    startPeerManager()
-
-    startPortForwarding()
-
-    startServer()
-
-    startSyncController()
-
-    startMining()
-
-    startDiscoveryManager()
-
+    // Phase 2: API servers (user-facing, ready as early as possible)
     startJsonRpcHttpServer()
-
     startJsonRpcIpcServer()
-
     startEngineApiServer()
 
-    startPeriodicDBConsistencyCheck()
+    // Phase 3: P2P networking
+    startPeerManager()
+    startPortForwarding()
+    startServer()
+    startDiscoveryManager()
 
+    // Phase 5: Background work
+    startSyncController()
+    startMining()
+
+    // Phase 6: Non-critical maintenance
+    runDBConsistencyCheck()
+    startPeriodicDBConsistencyCheck()
     startTuiUpdater()
   }
 
@@ -92,6 +88,15 @@ abstract class BaseNode extends Node {
     if (!Config.testmode) {
       genesisDataLoader.loadGenesisData()
     }
+
+  private[this] def importChainData(): Unit = {
+    val chainFile = scala.util.Try(instanceConfig.config.getString("import-chain-file")).toOption
+    chainFile.foreach { path =>
+      log.info(s"Importing chain data from: $path")
+      val (imported, skipped, failed) = chainImporter.importChainFile(path)
+      log.info(s"Chain import: $imported imported, $skipped skipped, $failed failed")
+    }
+  }
 
   private[this] def runDBConsistencyCheck(): Unit = {
     // Skip consistency check after SNAP sync — block headers 0..pivot don't exist yet.
@@ -137,8 +142,16 @@ abstract class BaseNode extends Node {
 
   private[this] def startEngineApiServer(): Unit =
     maybeEngineApiServer.foreach { server =>
-      server.start()
-      log.info(s"Engine API server started on ${engineApiConfig.interface}:${engineApiConfig.port}")
+      try {
+        val binding = scala.concurrent.Await.result(
+          server.start(),
+          scala.concurrent.duration.Duration(10, "seconds")
+        )
+        log.info(s"Engine API server bound to ${binding.localAddress}")
+      } catch {
+        case ex: Exception =>
+          log.error(s"Engine API server failed to start on ${engineApiConfig.interface}:${engineApiConfig.port}", ex)
+      }
     }
 
   def startPeriodicDBConsistencyCheck(): Unit =

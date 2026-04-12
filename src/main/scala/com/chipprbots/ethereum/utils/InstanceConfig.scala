@@ -61,6 +61,7 @@ class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "defau
     Capability.ETH66,
     Capability.ETH67,
     Capability.ETH68,
+    Capability.ETH69,
     Capability.SNAP1
   )
 
@@ -97,7 +98,7 @@ class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "defau
       val maxPendingPeers: Int = peerConfig.getInt("max-pending-peers")
       val pruneIncomingPeers: Int = peerConfig.getInt("prune-incoming-peers")
       val minPruneAge: FiniteDuration = peerConfig.getDuration("min-prune-age").toMillis.millis
-      val networkId: Int = blockchainConfig.networkId
+      val networkId: Long = blockchainConfig.networkId
       val p2pVersion: Int = if (peerConfig.hasPath("p2p-version")) peerConfig.getInt("p2p-version") else 5
 
       val rlpxConfiguration: RLPxConfiguration = new RLPxConfiguration {

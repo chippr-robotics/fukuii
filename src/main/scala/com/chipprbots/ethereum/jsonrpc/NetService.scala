@@ -114,7 +114,7 @@ class NetService(
   import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps._
 
   def version(req: VersionRequest): ServiceResponse[VersionResponse] =
-    IO.pure(Right(VersionResponse(Config.Network.peer.networkId.toString)))
+    IO.pure(Right(VersionResponse(Config.Network.peer.networkId.toString())))
 
   def listening(req: ListeningRequest): ServiceResponse[ListeningResponse] =
     IO.pure {
