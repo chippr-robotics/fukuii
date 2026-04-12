@@ -11,6 +11,7 @@ import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.ETH64
+import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 
 case class EthNodeStatus64ExchangeState(
@@ -91,9 +92,19 @@ case class EthNodeStatus64ExchangeState(
 
     val chainWeight = blockchainReader
       .getChainWeightByHash(bestBlockHeader.hash)
-      .getOrElse(
-        throw new IllegalStateException(s"Chain weight not found for hash ${bestBlockHeader.hash}")
-      )
+      .getOrElse {
+        // BUG-W7 FIX: During SNAP sync, updateBestBlockForPivot() stores the pivot header and
+        // chain weight in separate DB commits. A peer can connect between those commits, causing
+        // a lookup for a header hash that has no chain weight yet. Rather than crashing the
+        // PeerActor, fall back to single-block difficulty — same conservative estimate used in
+        // updateBestBlockForPivot(). This matches the PoW-era pattern in go-ethereum/Besu:
+        // neither crashed on missing TD; both derived a safe fallback from header data.
+        log.warn(
+          "Chain weight not found for best block hash {} — using single-block difficulty as fallback (SNAP sync pivot race)",
+          org.bouncycastle.util.encoders.Hex.toHexString(bestBlockHeader.hash.toArray).take(16)
+        )
+        ChainWeight.totalDifficultyOnly(bestBlockHeader.difficulty)
+      }
 
     val genesisHash = blockchainReader.genesisHeader.hash
 

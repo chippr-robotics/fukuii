@@ -78,6 +78,13 @@ class SNAPSyncController(
   private var currentPhase: SyncPhase = Idle
   private var pivotBlock: Option[BigInt] = None
   private var stateRoot: Option[ByteString] = None
+  // BUG-W6 FIX: Frozen at startStateHealing() entry — the state root of the SNAP snapshot
+  // we downloaded. This is the immutable validation target for trie walks during this healing session.
+  // `stateRoot` advances on every ~13-min pivot refresh (routine chain advancement; new root absent from RocksDB).
+  // `snapSyncSnapshotRoot` stays fixed so walk targets what was actually downloaded.
+  // Pattern mirrors go-ethereum Syncer.Sync(root) [s.root frozen at entry] and
+  // Besu SnapSyncState [all healing requests bound to frozen pivot header's state root].
+  private var snapSyncSnapshotRoot: Option[ByteString] = None
 
   // Preserved account range progress across SNAP sync restarts (core-geth parity).
   // Maps range `last` hash → current `next` position for ALL ranges (not just completed ones).
@@ -2585,11 +2592,15 @@ class SNAPSyncController(
     if (trieWalkInProgress) return
     if (currentPhase != StateHealing) return
 
-    // Pre-walk check: if healing completed with 0 abandoned nodes AND the pivot root is
+    // Pre-walk check: if healing completed with 0 abandoned nodes AND the snapshot root is
     // confirmed durable in RocksDB, skip the walk — state is verifiably complete.
-    // If root is absent, 0 abandoned nodes just means every requested node was received,
-    // but the root itself may not have been fetched yet — the walk must run to find it.
-    val rootInDb = stateRoot.exists { r =>
+    // BUG-W6 FIX: Use snapSyncSnapshotRoot (frozen at startStateHealing() entry) rather than
+    // the live `stateRoot`. The live pivot root advances every ~13 min as new blocks arrive —
+    // those new roots are absent from RocksDB (never downloaded), causing the WALK-SKIP override
+    // to fire on every pivot refresh and queue ~697K missing nodes each time (1.3M total in Attempt 20).
+    // The snapshot root IS in RocksDB — it was the actual SNAP sync target.
+    val snapshotRoot = snapSyncSnapshotRoot.orElse(stateRoot)
+    val rootInDb = snapshotRoot.exists { r =>
       try { stateStorage.getReadOnlyStorage.get(r.toArray); true }
       catch { case _: Exception => false }
     }
@@ -2598,17 +2609,18 @@ class SNAPSyncController(
       log.info("PHASE: Trie Healing → State Validation Walk")
       log.info("=" * 60)
       log.info(
-        s"[WALK-SKIP] Healing was a no-op (0 nodes healed, 0 abandoned) and root confirmed in RocksDB. " +
+        s"[WALK-SKIP] Healing was a no-op (0 nodes healed, 0 abandoned) and snapshot root confirmed in RocksDB. " +
         "Skipping validation walk. (snap-sync.require-validation-walk = false)"
       )
       log.info("[WALK-SKIP] Set snap-sync.require-validation-walk = true to force a full trie scan.")
-      stateRoot.foreach(root => self ! TrieWalkResult(Seq.empty, root))
+      snapshotRoot.foreach(root => self ! TrieWalkResult(Seq.empty, root))
       return
     }
     if (!snapSyncConfig.requireValidationWalk && healingNodesAbandoned == 0 && healingNodesTotal == 0 && !rootInDb) {
       log.warning(
-        "[WALK-SKIP overridden] Healing was a no-op but root {} is MISSING " +
-          "from RocksDB — forcing trie walk to discover remaining gaps.",
+        "[WALK-SKIP overridden] Snapshot root {} is MISSING from RocksDB — forcing trie walk to discover remaining gaps. " +
+          "(Live pivot root: {} — different, chain advanced normally; this is expected)",
+        snapshotRoot.map(_.take(8).toHex).getOrElse("?"),
         stateRoot.map(_.take(8).toHex).getOrElse("?")
       )
     }
@@ -2698,6 +2710,16 @@ class SNAPSyncController(
     trieWalkInProgress = false // Reset for fresh healing phase
     healingWalkRunThisSession = false // BUG-WS3: no walk has run yet this session
 
+    // BUG-W6 FIX: Freeze the snapshot root at healing entry. All trie walks target this root.
+    // `stateRoot` advances on every ~13-min pivot refresh — new live roots are absent from RocksDB
+    // (never downloaded). Checking `!rootInDb` against the live pivot root was the root cause of the
+    // divergent 1.3M-node healing queue in Attempt 20.
+    snapSyncSnapshotRoot = stateRoot
+    log.info(
+      s"[HEALING] Snapshot root frozen at ${stateRoot.map(_.take(8).toHex).getOrElse("none")} — " +
+      "walk target fixed for this healing session (live pivot advances independently)"
+    )
+
     // BUG-W5 FIX: Cancel download-phase periodic tasks when entering StateHealing.
     // These schedulers were started during AccountRangeSync / ByteCodeAndStorageSync and
     // are only cancelled in restartSnapSync(). Without this, they continue firing every 1s
@@ -2781,6 +2803,13 @@ class SNAPSyncController(
 
     trieWalkInProgress = false
     healingWalkRunThisSession = false // BUG-WS3: no walk has run yet this session
+
+    // BUG-W6 FIX: Freeze snapshot root (same as startStateHealing()).
+    snapSyncSnapshotRoot = stateRoot
+    log.info(
+      s"[HEAL-RESUME] Snapshot root frozen at ${stateRoot.map(_.take(8).toHex).getOrElse("none")} — " +
+      "walk target fixed for this healing session"
+    )
 
     // BUG-W5 FIX: Same as startStateHealing() — cancel download-phase schedulers.
     accountRangeRequestTask.foreach(_.cancel()); accountRangeRequestTask = None
@@ -3147,10 +3176,14 @@ class SNAPSyncController(
     // peers to think Fukuii is way ahead, triggering repeated ETH sync attempts. Those fail because
     // Fukuii only has blocks 0..pivot, causing a 15s connect/disconnect loop on static peers.
     val estimatedTotalDifficulty = header.difficulty
-    // Store header so getBestBlockHeader() -> getBlockHeaderByNumber(pivot) finds it
-    blockchainWriter.storeBlockHeader(header).commit()
+    // BUG-W7 FIX: Store header + chain weight in a single atomic commit.
+    // Previously 3 separate commits: a peer connecting between commit 1 (header) and commit 2
+    // (chain weight) would trigger IllegalStateException in EthNodeStatus64ExchangeState when
+    // it reads the header but finds no chain weight. Bundling them eliminates the race window.
+    // Mirrors Besu's appendBlockHelper() which writes header + TD in one updater.commit().
     blockchainWriter
-      .storeChainWeight(pivotHash, ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty))
+      .storeBlockHeader(header)
+      .and(blockchainWriter.storeChainWeight(pivotHash, ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty)))
       .commit()
     appStateStorage
       .putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash, pivotBlockNumber))
@@ -3312,6 +3345,8 @@ class SNAPSyncController(
     // Without this reset, trieWalkInProgress stays true permanently and startTrieWalk()
     // silently returns on the next healing entry.
     trieWalkInProgress = false
+    // BUG-W6: Reset snapshot root so the next healing session freezes a fresh root.
+    snapSyncSnapshotRoot = None
 
     // Clear inflight request timeouts and internal phase state
     requestTracker.clear()
