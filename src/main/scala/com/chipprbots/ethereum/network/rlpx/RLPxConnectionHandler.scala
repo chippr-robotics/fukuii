@@ -511,7 +511,7 @@ class RLPxConnectionHandler(
                 )
               )
             case None =>
-              log.warning("[RLPx] No common protocol with peer {} — capability negotiation failed", peerId)
+              log.debug("[RLPx] No common protocol with peer {} — capability negotiation failed", peerId)
               context.parent ! ConnectionFailed
               gracefulStop()
           }
@@ -824,7 +824,7 @@ class RLPxConnectionHandler(
       if (msg.isPeerClosed) {
         log.info("[RLPx] Peer {} closed connection (peer-initiated)", peerId)
       } else if (msg.isErrorClosed) {
-        log.warning("[RLPx] Connection with {} closed due to error: {}", peerId, msg.getErrorCause)
+        log.debug("[RLPx] Connection with {} closed due to error: {}", peerId, msg.getErrorCause)
       } else {
         log.info("[RLPx] Connection with {} closed ({})", peerId, msg.getClass.getSimpleName)
       }

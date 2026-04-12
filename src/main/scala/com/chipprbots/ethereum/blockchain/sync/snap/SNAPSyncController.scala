@@ -178,6 +178,7 @@ class SNAPSyncController(
   private val cyclingWindowMs              = 5 * 60 * 1000L  // 5-minute sliding window
   private val cyclingCooldownMs            = 10 * 60 * 1000L // 10-minute suppression period
   private var lastTrieWalkMissingCount: Option[Int] = None // progress tracker — None on first round, Some(n) thereafter
+  private var walkPivotRefreshSuppressLogged: Boolean = false // dedup: only log "skipping pivot refresh" once per walk
   // OPT-W1: Walk resume state — partial nodes and completed subtrees from a previous interrupted walk
   private var walkResumedNodes: Seq[(Seq[ByteString], ByteString)] = Seq.empty
   private val walkCurrentNodes = mutable.ArrayBuffer[(Seq[ByteString], ByteString)]()
@@ -856,6 +857,7 @@ class SNAPSyncController(
 
     case TrieWalkResult(missingNodes, walkedRoot) if currentPhase == StateHealing =>
       trieWalkInProgress = false
+      walkPivotRefreshSuppressLogged = false // reset for next walk
       // BUG-W1: discard results from a walk that started for an older pivot root.
       // CheckPivotFreshness fires during the walk (currentPhase stays StateHealing), so stateRoot
       // can advance while the walk runs. If the roots don't match, a newer walk is either running
@@ -879,6 +881,11 @@ class SNAPSyncController(
       walkResumedNodes = Seq.empty
       walkCurrentNodes.clear()
       walkCompletedPrefixes = Set.empty
+      log.info(
+        s"[WALK] Round ${consecutiveUnproductiveHealingRounds + 1}/$maxUnproductiveHealingRounds complete " +
+        s"— ${allMissingNodes.size} missing node(s) found" +
+        (if (allMissingNodes.isEmpty) " → proceeding to sync finalization" else " → queuing for healing")
+      )
       if (allMissingNodes.isEmpty) {
         log.info("Trie walk found no missing nodes — healing complete!")
         MilestoneLog.phase("Trie healing complete | 0 missing nodes")
@@ -972,6 +979,7 @@ class SNAPSyncController(
 
     case TrieWalkFailed(error) if currentPhase == StateHealing =>
       trieWalkInProgress = false
+      walkPivotRefreshSuppressLogged = false // reset for next walk
       val checkpointedSoFar = walkCompletedPrefixes.size
       // Clear in-memory walk state — startTrieWalk() will reload from storage on retry
       walkResumedNodes = Seq.empty
@@ -2566,11 +2574,15 @@ class SNAPSyncController(
         // BUG-W3 FIX: Walk reads local RocksDB only — no SNAP peers needed.
         // Proactive pivot refresh would invalidate the walk via BUG-W1 discard,
         // creating an infinite restart loop. Pivot stays fixed until walk completes.
-        log.info(
-          s"[WALK] Skipping proactive pivot refresh — validation walk in progress " +
-          s"(root ${stateRoot.map(r => Hex.toHexString(r.toArray).take(16)).getOrElse("?")}). " +
-          s"Walk reads local RocksDB only; pivot will refresh after walk completes."
-        )
+        // Log only once per walk — this fires every 30s over a 2-4h walk (240-480× otherwise).
+        if (!walkPivotRefreshSuppressLogged) {
+          log.info(
+            s"[WALK] Skipping proactive pivot refresh — validation walk in progress " +
+            s"(root ${stateRoot.map(r => Hex.toHexString(r.toArray).take(16)).getOrElse("?")}). " +
+            s"Walk reads local RocksDB only; pivot will refresh after walk completes."
+          )
+          walkPivotRefreshSuppressLogged = true
+        }
       } else {
         maybeProactivelyRefreshPivot()
       }
@@ -2617,11 +2629,13 @@ class SNAPSyncController(
       return
     }
     if (!snapSyncConfig.requireValidationWalk && healingNodesAbandoned == 0 && healingNodesTotal == 0 && !rootInDb) {
+      val rootRelation =
+        if (snapshotRoot == stateRoot) "same as live pivot root (fresh session)"
+        else s"live pivot root has advanced to ${stateRoot.map(_.take(8).toHex).getOrElse("?")} — BUG-W6 protection active"
       log.warning(
-        "[WALK-SKIP overridden] Snapshot root {} is MISSING from RocksDB — forcing trie walk to discover remaining gaps. " +
-          "(Live pivot root: {} — different, chain advanced normally; this is expected)",
+        "[WALK-SKIP overridden] Snapshot root {} is MISSING from RocksDB — forcing trie walk. ({})",
         snapshotRoot.map(_.take(8).toHex).getOrElse("?"),
-        stateRoot.map(_.take(8).toHex).getOrElse("?")
+        rootRelation
       )
     }
 
@@ -2671,6 +2685,10 @@ class SNAPSyncController(
       log.info("[WALK] Starting trie walk (fillCache=false, verifyChecksums=false — cache-safe single-pass scan)")
       val walkThreads = math.max(1, math.min(4, snapSyncConfig.trieWalkParallelism))
       log.info(s"[WALK] Parallel subtree walkers: $walkThreads (configurable via snap-sync.trie-walk-parallelism)")
+      log.info(
+        s"[WALK] Round ${consecutiveUnproductiveHealingRounds + 1}/$maxUnproductiveHealingRounds — " +
+        s"0 missing nodes found → SNAP sync complete this round; any missing → healing cycle"
+      )
       val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
       val selfRef = self
       // Dedicated thread pool for trie walk — isolated from sync-dispatcher to avoid I/O starvation.
@@ -2708,6 +2726,7 @@ class SNAPSyncController(
     }
 
     trieWalkInProgress = false // Reset for fresh healing phase
+    walkPivotRefreshSuppressLogged = false // reset for next walk
     healingWalkRunThisSession = false // BUG-WS3: no walk has run yet this session
 
     // BUG-W6 FIX: Freeze the snapshot root at healing entry. All trie walks target this root.
@@ -2802,6 +2821,7 @@ class SNAPSyncController(
     }
 
     trieWalkInProgress = false
+    walkPivotRefreshSuppressLogged = false // reset for next walk
     healingWalkRunThisSession = false // BUG-WS3: no walk has run yet this session
 
     // BUG-W6 FIX: Freeze snapshot root (same as startStateHealing()).
@@ -3242,6 +3262,19 @@ class SNAPSyncController(
     // The backing storage was already created for the original pivot block number,
     // but since nodes are keyed by hash, they're valid for any root.
 
+    // BUG-W6 visibility: when healing, the live pivot root advances but snapSyncSnapshotRoot
+    // stays frozen. Log the divergence explicitly so it's observable in production.
+    if (currentPhase == StateHealing) {
+      snapSyncSnapshotRoot.foreach { frozenRoot =>
+        if (frozenRoot != newStateRoot) {
+          log.info(
+            s"[HEALING] Pivot advanced during healing: live root → ${newStateRoot.take(8).toHex} " +
+            s"(snapshot root stays frozen at ${frozenRoot.take(8).toHex} — BUG-W6 protection active)"
+          )
+        }
+      }
+    }
+
     // Persist new pivot
     appStateStorage.putSnapSyncPivotBlock(newPivotBlock).commit()
     appStateStorage.putSnapSyncStateRoot(newStateRoot).commit()
@@ -3345,6 +3378,7 @@ class SNAPSyncController(
     // Without this reset, trieWalkInProgress stays true permanently and startTrieWalk()
     // silently returns on the next healing entry.
     trieWalkInProgress = false
+    walkPivotRefreshSuppressLogged = false // reset for next walk
     // BUG-W6: Reset snapshot root so the next healing session freezes a fresh root.
     snapSyncSnapshotRoot = None
 
