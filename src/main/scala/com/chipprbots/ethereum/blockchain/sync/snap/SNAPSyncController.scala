@@ -845,7 +845,8 @@ class SNAPSyncController(
           val etaSec = remaining / nodesPerSec
           s", ETA ~${etaSec / 3600}h ${(etaSec % 3600) / 60}m"
         } else ""
-        val roundLabel = s"round ${consecutiveUnproductiveHealingRounds + 1}/$maxUnproductiveHealingRounds"
+        val roundLabel = if (consecutiveUnproductiveHealingRounds == 0) "validation walk"
+                         else s"stall ${consecutiveUnproductiveHealingRounds}/$maxUnproductiveHealingRounds"
         val pivotLabel = pivotBlock.map(b => s", pivot=$b").getOrElse("")
         log.info(
           f"[WALK] $roundLabel — $scanned%,d nodes scanned, " +
@@ -881,9 +882,10 @@ class SNAPSyncController(
       walkResumedNodes = Seq.empty
       walkCurrentNodes.clear()
       walkCompletedPrefixes = Set.empty
+      val walkCompleteLabel = if (consecutiveUnproductiveHealingRounds == 0) "validation walk"
+                              else s"stall ${consecutiveUnproductiveHealingRounds}/$maxUnproductiveHealingRounds"
       log.info(
-        s"[WALK] Round ${consecutiveUnproductiveHealingRounds + 1}/$maxUnproductiveHealingRounds complete " +
-        s"— ${allMissingNodes.size} missing node(s) found" +
+        s"[WALK] $walkCompleteLabel complete — ${allMissingNodes.size} missing node(s) found" +
         (if (allMissingNodes.isEmpty) " → proceeding to sync finalization" else " → queuing for healing")
       )
       if (allMissingNodes.isEmpty) {
@@ -2685,9 +2687,11 @@ class SNAPSyncController(
       log.info("[WALK] Starting trie walk (fillCache=false, verifyChecksums=false — cache-safe single-pass scan)")
       val walkThreads = math.max(1, math.min(4, snapSyncConfig.trieWalkParallelism))
       log.info(s"[WALK] Parallel subtree walkers: $walkThreads (configurable via snap-sync.trie-walk-parallelism)")
+      val walkStartLabel = if (consecutiveUnproductiveHealingRounds == 0) "validation walk"
+                           else s"stall ${consecutiveUnproductiveHealingRounds}/$maxUnproductiveHealingRounds"
       log.info(
-        s"[WALK] Round ${consecutiveUnproductiveHealingRounds + 1}/$maxUnproductiveHealingRounds — " +
-        s"0 missing nodes found → SNAP sync complete this round; any missing → healing cycle"
+        s"[WALK] Starting $walkStartLabel — " +
+        s"0 missing nodes found → SNAP sync complete; any missing → healing cycle"
       )
       val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
       val selfRef = self
@@ -2915,7 +2919,10 @@ class SNAPSyncController(
       if networkBest > pivot
     } {
       val delta = networkBest - pivot
-      if (delta > snapSyncConfig.maxPivotStalenessBlocks) {
+      // During the trie walk, CheckPivotFreshness is intentionally suppressed (aroundReceive blocks
+      // it while trieWalkInProgress). The "should trigger within 30s" message is false during a walk,
+      // so suppress the WARN entirely. It resumes once the walk finishes.
+      if (delta > snapSyncConfig.maxPivotStalenessBlocks && !trieWalkInProgress) {
         val nowMs = System.currentTimeMillis()
         if (nowMs - lastHealStalePivotWarnMs > 30_000) {
           lastHealStalePivotWarnMs = nowMs
