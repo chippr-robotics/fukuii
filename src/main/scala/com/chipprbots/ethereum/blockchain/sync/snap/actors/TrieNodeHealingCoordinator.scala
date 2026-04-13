@@ -513,8 +513,17 @@ class TrieNodeHealingCoordinator(
     }
 
     val effectiveBatch = effectiveBatchSize
-    val batch = pendingTasks.take(effectiveBatch)
-    pendingTasks = pendingTasks.drop(effectiveBatch)
+    // BUG-W-PRIORITY: Sort root nodes to the front of the batch before dispatching.
+    // Root = HP-encoded empty nibble path = ByteString([0x00]), NOT ByteString.empty.
+    // HexPrefix.encode(Seq.empty, isLeaf=false) produces a 1-byte ByteString with value 0x00.
+    // Without this, the root may sit behind thousands of leaf tasks — if the root is unrecoverable
+    // (pruned by peers), we discover it early and trigger a pivot refresh instead of downloading
+    // thousands of leaf nodes that can't be validated without the root.
+    val sortedTasks = pendingTasks.sortBy { e =>
+      if (e.pathset.nonEmpty && e.pathset.last.length == 1 && e.pathset.last(0) == 0) 0 else 1
+    }
+    val batch = sortedTasks.take(effectiveBatch)
+    pendingTasks = sortedTasks.drop(effectiveBatch)
     // Remove dispatched hashes from dedup set (they'll be re-added if re-queued on failure)
     batch.foreach(e => pendingHashSet -= e.hash)
 

@@ -350,6 +350,19 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putSnapSyncWalkRoot(rootHex: String): DataSourceBatchUpdate =
     put(Keys.SnapSyncWalkRoot, rootHex)
 
+  /** Get the snapshot root hash that healing nodes were downloaded for.
+    * Non-empty means a healing session was started for this specific root.
+    * Used to detect stale persistence when the pivot has changed between JAR runs.
+    */
+  def getSnapSyncHealingSnapshotRoot(): String =
+    get(Keys.SnapSyncHealingSnapshotRoot).getOrElse("")
+
+  /** Persist the snapshot root hash for the current healing session.
+    * Written at healing entry (fresh start and resume) and cleared when a walk finds 0 missing nodes.
+    */
+  def putSnapSyncHealingSnapshotRoot(root: String): DataSourceBatchUpdate =
+    put(Keys.SnapSyncHealingSnapshotRoot, root)
+
   /** Get the pivot state root at which storage range sync completed.
     * L-032: if this matches the current pivot root on restart, skip StorageRangeCoordinator entirely.
     */
@@ -421,8 +434,9 @@ object AppStateStorage {
     val SnapSyncHealingRound         = "SnapSyncHealingRound"
     val SnapSyncWalkCompletedPrefixes = "SnapSyncWalkCompletedPrefixes"
     val SnapSyncWalkRoot              = "SnapSyncWalkRoot"
-    val SnapSyncStorageCompletionRoot = "SnapSyncStorageCompletionRoot"
-    val LastBlockImportTime           = "LastBlockImportTime"
+    val SnapSyncStorageCompletionRoot  = "SnapSyncStorageCompletionRoot"
+    val SnapSyncHealingSnapshotRoot    = "SnapSyncHealingSnapshotRoot"
+    val LastBlockImportTime            = "LastBlockImportTime"
   }
 
 }
