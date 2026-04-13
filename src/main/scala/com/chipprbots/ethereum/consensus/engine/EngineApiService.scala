@@ -139,11 +139,9 @@ class EngineApiService(
           PayloadStatusV1(Invalid, latestValidHash = latestValid, validationError = Some("block execution failed"))
 
         case None =>
-          // Parent unknown — store block optimistically, return ACCEPTED
-          blockchainWriter
-            .storeBlock(block)
-            .and(blockchainWriter.storeChainWeight(block.header.hash, ChainWeight.totalDifficultyOnly(0)))
-            .commit()
+          // Parent unknown — store block BY HASH ONLY (not by number) so it doesn't
+          // appear in eth_getBlockByNumber but can be deduped by hash.
+          blockchainWriter.storeBlockByHashOnly(block).commit()
           System.err.println(
             s"[ENGINE-API] newPayload #${payload.blockNumber}: ACCEPTED (parent unknown)"
           )
