@@ -857,6 +857,7 @@ class SNAPSyncController(
       }
 
     case TrieWalkResult(missingNodes, walkedRoot) if currentPhase == StateHealing =>
+      log.debug(s"[WALK] trieWalkInProgress cleared — TrieWalkResult received (${missingNodes.size} missing node(s))")
       trieWalkInProgress = false
       walkPivotRefreshSuppressLogged = false // reset for next walk
       // BUG-W1: discard results from a walk that started for an older pivot root.
@@ -980,6 +981,7 @@ class SNAPSyncController(
         .commit()
 
     case TrieWalkFailed(error) if currentPhase == StateHealing =>
+      log.debug(s"[WALK] trieWalkInProgress cleared — TrieWalkFailed received")
       trieWalkInProgress = false
       walkPivotRefreshSuppressLogged = false // reset for next walk
       val checkpointedSoFar = walkCompletedPrefixes.size
@@ -1529,8 +1531,14 @@ class SNAPSyncController(
               )
             )
             bytecodeCoordinator.foreach(_ ! actors.Messages.StartByteCodeSync(Seq.empty))
+            // BUG-STARTUP-RACE: at startup with accounts_complete=true, no SNAP peers may be available
+            // yet, so the staleness check above sees networkBest=0 and skips refreshPivotInPlace().
+            // With a 0s initial delay, bytecodeRequestTask fires before peers connect and sets
+            // pendingPivotRefresh. When the first peer handshakes, maybeRestartIfPivotTooStale()
+            // fires and triggers an unnecessary restartSnapSync(). A 5s initial delay gives peers
+            // time to connect so the startup staleness check can preemptively set pendingPivotRefresh.
             bytecodeRequestTask = Some(
-              scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestByteCodes)(ec)
+              scheduler.scheduleWithFixedDelay(5.seconds, 1.second, self, RequestByteCodes)(ec)
             )
 
             if (!storageSkip) {
@@ -1560,7 +1568,8 @@ class SNAPSyncController(
             )
             storageRangeCoordinator.foreach(_ ! actors.Messages.StartStorageRangeSync(rootBs))
             storageRangeRequestTask = Some(
-              scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestStorageRanges)(ec)
+              // 5s initial delay — same startup-race fix as bytecodeRequestTask above
+              scheduler.scheduleWithFixedDelay(5.seconds, 1.second, self, RequestStorageRanges)(ec)
             )
 
             // Recovery budget: accounts done, bytecode=2, storage=3 (total 5 per peer)
@@ -3384,6 +3393,7 @@ class SNAPSyncController(
     // is orphaned — TrieWalkResult arrives but is discarded (currentPhase != StateHealing).
     // Without this reset, trieWalkInProgress stays true permanently and startTrieWalk()
     // silently returns on the next healing entry.
+    if (trieWalkInProgress) log.debug("[WALK] trieWalkInProgress cleared by restartSnapSync() — orphaning active walk")
     trieWalkInProgress = false
     walkPivotRefreshSuppressLogged = false // reset for next walk
     // BUG-W6: Reset snapshot root so the next healing session freezes a fresh root.
