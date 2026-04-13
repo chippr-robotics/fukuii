@@ -524,7 +524,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
       p2pVersion = EtcHelloExchangeState.P2pVersion,
       clientId = Config.clientId,
       capabilities = Config.supportedCapabilities, // Use actual supported capabilities from Config
-      listenPort = 0, // Local node not listening
+      listenPort = Config.Network.Server.port, // Falls back to configured port when NotListening (BUG-NET1 fix)
       nodeId = ByteString(nodeStatus.nodeId)
     )
 
