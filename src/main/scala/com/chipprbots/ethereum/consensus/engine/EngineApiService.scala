@@ -78,7 +78,31 @@ class EngineApiService(
     } else {
       // Try full execution if parent block is known
       val parentKnown = blockchainReader.getBlockHeaderByHash(payload.parentHash).isDefined
-      System.err.println(s"[ENGINE-API] newPayload #${payload.blockNumber}: parentKnown=$parentKnown, hash=${block.header.hashAsHexString}")
+      val parentHeader = blockchainReader.getBlockHeaderByHash(payload.parentHash)
+
+      // Pre-execution header validation (catches modified Number, GasLimit, Timestamp)
+      val headerInvalid: Option[String] = parentHeader.flatMap { parent =>
+        if (block.header.number != parent.number + 1)
+          Some(s"invalid block number: expected ${parent.number + 1} got ${block.header.number}")
+        else if (block.header.unixTimestamp <= parent.unixTimestamp)
+          Some(s"invalid timestamp: ${block.header.unixTimestamp} <= parent ${parent.unixTimestamp}")
+        else {
+          // EIP-1559 gas limit bounds: |gasLimit - parent.gasLimit| < parent.gasLimit / 1024
+          val diff = (block.header.gasLimit - parent.gasLimit).abs
+          val limit = parent.gasLimit / 1024
+          if (diff >= limit && block.header.gasLimit != parent.gasLimit)
+            Some(s"invalid gas limit change: diff=$diff exceeds bound=$limit")
+          else None
+        }
+      }
+      if (headerInvalid.isDefined) {
+        invalidBlocks.add(payload.blockHash)
+        val latestValid = parentHeader.map(_.hash)
+        EngineApiMetrics.recordNewPayload("INVALID", payload.blockNumber.toLong, payload.timestamp)
+        PayloadStatusV1(Invalid, latestValidHash = latestValid,
+          validationError = Some(headerInvalid.get))
+      } else {
+
       val executionResult = if (parentKnown) {
         try
           blockExecution.executeAndValidateBlock(block, alreadyValidated = true) match {
@@ -148,6 +172,7 @@ class EngineApiService(
           EngineApiMetrics.recordNewPayload("ACCEPTED", payload.blockNumber.toLong, payload.timestamp)
           PayloadStatusV1(Accepted)
       }
+      } // end headerInvalid else
     }
   }
 
