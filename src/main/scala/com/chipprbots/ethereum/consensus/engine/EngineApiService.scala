@@ -44,6 +44,12 @@ class EngineApiService(
   /** Pending payloads built by forkchoiceUpdated, keyed by payloadId. */
   private val pendingPayloads = new java.util.concurrent.ConcurrentHashMap[ByteString, Block]()
 
+  /** Blocks that were validated and returned VALID via newPayload (fully executed). */
+  private val validatedBlocks = java.util.concurrent.ConcurrentHashMap.newKeySet[ByteString]()
+
+  /** Blocks that returned INVALID via newPayload. forkchoiceUpdated should not accept these as head. */
+  private val invalidBlocks = java.util.concurrent.ConcurrentHashMap.newKeySet[ByteString]()
+
   /** Return the latest block number from the blockchain storage. */
   def getLatestBlockNumber: BigInt =
     blockchainReader.getBestBlockNumber()
@@ -64,9 +70,10 @@ class EngineApiService(
         s"[ENGINE-API] newPayload #${payload.blockNumber}: INVALID_BLOCK_HASH " +
           s"computed=${block.header.hashAsHexString} payload=${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(payload.blockHash)}"
       )
+      invalidBlocks.add(payload.blockHash)
       PayloadStatusV1(InvalidBlockHash("block hash mismatch"))
     } else if (blockchainReader.getBlockHeaderByHash(payload.blockHash).isDefined) {
-      System.err.println(s"[ENGINE-API] newPayload #${payload.blockNumber}: DEDUP (hash already known)")
+      validatedBlocks.add(payload.blockHash) // already known = previously validated
       PayloadStatusV1(Valid, latestValidHash = Some(payload.blockHash))
     } else {
       // Try full execution if parent block is known
@@ -82,6 +89,7 @@ class EngineApiService(
                 s"[ENGINE-API] newPayload #${payload.blockNumber}: EXECUTED OK " +
                   s"(${block.body.numberOfTxs} txs, headerStateRoot=${block.header.stateRoot.take(8).map("%02x".format(_)).mkString}...)"
               )
+              validatedBlocks.add(payload.blockHash)
               Some(true) // fully executed
             case Left(error) =>
               error match {
@@ -94,6 +102,7 @@ class EngineApiService(
                   None
                 case _ =>
                   // Genuine validation failure (wrong stateRoot, gasUsed, receipts, etc.)
+                  invalidBlocks.add(payload.blockHash)
                   System.err.println(
                     s"[ENGINE-API] newPayload #${payload.blockNumber}: INVALID: ${error.reason}"
                   )
@@ -164,6 +173,24 @@ class EngineApiService(
         )
 
       case Right(()) =>
+        // Check if the head block was previously invalidated via newPayload
+        if (invalidBlocks.contains(forkChoiceState.headBlockHash)) {
+          val latestValid = blockchainReader.getBlockHeaderByHash(
+            blockchainReader.getBlockByHash(forkChoiceState.headBlockHash)
+              .map(_.header.parentHash).getOrElse(forkChoiceState.headBlockHash)
+          ).map(_.hash)
+          EngineApiMetrics.recordForkchoiceUpdated("INVALID")
+          ForkchoiceUpdatedResponse(
+            payloadStatus = PayloadStatusV1(Invalid,
+              latestValidHash = latestValid,
+              validationError = Some("head block was previously invalidated")))
+        } else if (!validatedBlocks.contains(forkChoiceState.headBlockHash) &&
+            forkChoiceState.headBlockHash != blockchainReader.getBlockHeaderByNumber(0).map(_.hash).getOrElse(ByteString.empty)) {
+          // Head block not fully validated (only accepted/optimistically imported) — return SYNCING
+          EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
+          ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))
+        } else {
+
         // Validate payload attributes if present
         val invalidAttrs: Option[ForkchoiceUpdatedResponse] = payloadAttributes.flatMap { attrs =>
           if (attrs.timestamp == 0) {
@@ -306,6 +333,7 @@ class EngineApiService(
           payloadId = payloadId
         )
         } // end else (invalidAttrs check)
+        } // end else (invalidBlocks/validatedBlocks check)
     }
   }
 
