@@ -52,10 +52,10 @@ abstract class BaseNode extends Node {
     startEngineApiServer()
 
     // Phase 3: P2P networking
-    startPeerManager()
+    startServer()
     loadStaticNodes()
     startPortForwarding()
-    startServer()
+    startPeerManager()
     startDiscoveryManager()
 
     // Phase 5: Background work
