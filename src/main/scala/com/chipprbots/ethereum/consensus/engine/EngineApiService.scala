@@ -85,29 +85,29 @@ class EngineApiService(
               error match {
                 case com.chipprbots.ethereum.ledger.BlockExecutionError.MPTError(_) |
                     com.chipprbots.ethereum.ledger.BlockExecutionError.MissingParentError =>
-                  // Missing state data — can't execute yet, fall back to optimistic
+                  // Missing state — can't validate, return SYNCING
                   System.err.println(
-                    s"[ENGINE-API] newPayload #${payload.blockNumber}: missing state (${error.reason}), optimistic import"
+                    s"[ENGINE-API] newPayload #${payload.blockNumber}: missing state, SYNCING"
                   )
                   None
                 case _ =>
-                  // Genuine validation failure
+                  // Genuine validation failure (wrong stateRoot, gasUsed, receipts, etc.)
                   System.err.println(
-                    s"[ENGINE-API] newPayload #${payload.blockNumber}: execution INVALID: ${error.reason}"
+                    s"[ENGINE-API] newPayload #${payload.blockNumber}: INVALID: ${error.reason}"
                   )
                   Some(false)
               }
           }
         catch {
           case e: com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException =>
-            // Missing state nodes — can't execute, fall through to optimistic
+            // Missing state nodes — can't execute, return SYNCING
             System.err.println(
-              s"[ENGINE-API] newPayload #${payload.blockNumber}: missing state (${e.getMessage}), optimistic import"
+              s"[ENGINE-API] newPayload #${payload.blockNumber}: MPT error, SYNCING"
             )
             None
           case e: Exception =>
             System.err.println(
-              s"[ENGINE-API] newPayload #${payload.blockNumber}: unexpected error: ${e.getMessage}, optimistic import"
+              s"[ENGINE-API] newPayload #${payload.blockNumber}: error: ${e.getMessage}, SYNCING"
             )
             None
         }
@@ -128,20 +128,16 @@ class EngineApiService(
           PayloadStatusV1(Invalid, latestValidHash = latestValid, validationError = Some("block execution failed"))
 
         case None =>
-          // Optimistic import: store block without execution.
-          // Parent unknown or state unavailable — trust CL consensus.
-          // Store block + chain weight (post-merge TD=0) so P2P handshake can look up best block weight.
+          // Parent unknown — store block optimistically, return ACCEPTED
           blockchainWriter
             .storeBlock(block)
             .and(blockchainWriter.storeChainWeight(block.header.hash, ChainWeight.totalDifficultyOnly(0)))
             .commit()
-          blockchainWriter.saveBestKnownBlocks(block.header.hash, block.header.number)
           System.err.println(
-            s"[ENGINE-API] newPayload #${payload.blockNumber}: OPTIMISTIC IMPORT " +
-              s"(${block.body.numberOfTxs} txs, ${block.body.withdrawals.map(_.size).getOrElse(0)} withdrawals)"
+            s"[ENGINE-API] newPayload #${payload.blockNumber}: ACCEPTED (parent unknown)"
           )
-          EngineApiMetrics.recordNewPayload("VALID", payload.blockNumber.toLong, payload.timestamp)
-          PayloadStatusV1(Valid, latestValidHash = Some(payload.blockHash))
+          EngineApiMetrics.recordNewPayload("ACCEPTED", payload.blockNumber.toLong, payload.timestamp)
+          PayloadStatusV1(Accepted)
       }
     }
   }
