@@ -71,8 +71,8 @@ class PeerEventBusActorSpec
 
     val msgFromPeer2: MessageFromPeer = MessageFromPeer(Ping(), PeerId("99"))
     peerEventBusActor ! PeerEventBusActor.Publish(msgFromPeer2)
-    probe1.expectNoMessage()
-    probe2.expectMsg(msgFromPeer2)
+    probe2.expectMsg(msgFromPeer2)             // barrier: event bus processed the publish
+    probe1.expectNoMessage(Duration.Zero)      // safe: mailbox check, no wait
 
   }
 
@@ -125,17 +125,24 @@ class PeerEventBusActorSpec
   it should "only relay matching message codes" taggedAs (UnitTest, NetworkTest) in new TestSetup {
 
     val probe1: TestProbe = TestProbe()
+    val syncProbe: TestProbe = TestProbe()
     val classifier1: MessageClassifier = MessageClassifier(Set(Ping.code), PeerSelector.WithId(PeerId("1")))
     peerEventBusActor.tell(PeerEventBusActor.Subscribe(classifier1), probe1.ref)
+    peerEventBusActor.tell(
+      PeerEventBusActor.Subscribe(MessageClassifier(Set(Ping.code, Pong.code), PeerSelector.AllPeers)),
+      syncProbe.ref
+    )
 
     val msgFromPeer: MessageFromPeer = MessageFromPeer(Ping(), PeerId("1"))
     peerEventBusActor ! PeerEventBusActor.Publish(msgFromPeer)
 
     probe1.expectMsg(msgFromPeer)
+    syncProbe.expectMsg(msgFromPeer)
 
     val msgFromPeer2: MessageFromPeer = MessageFromPeer(Pong(), PeerId("1"))
     peerEventBusActor ! PeerEventBusActor.Publish(msgFromPeer2)
-    probe1.expectNoMessage()
+    syncProbe.expectMsg(msgFromPeer2)     // barrier: event bus processed the Pong publish
+    probe1.expectNoMessage(Duration.Zero) // safe: classifier1 doesn't match Pong
   }
 
   it should "relay peers disconnecting to its subscribers" taggedAs (UnitTest, NetworkTest) in new TestSetup {
@@ -167,8 +174,8 @@ class PeerEventBusActorSpec
     )
 
     peerEventBusActor ! PeerEventBusActor.Publish(msgPeerDisconnected)
-    probe1.expectNoMessage()
-    probe2.expectMsg(msgPeerDisconnected)
+    probe2.expectMsg(msgPeerDisconnected)             // barrier: event bus processed the publish
+    probe1.expectNoMessage(Duration.Zero)             // safe: probe1 unsubscribed from peer2
   }
 
   it should "relay peers handshaked to its subscribers" taggedAs (UnitTest, NetworkTest) in new TestSetup {
@@ -195,8 +202,8 @@ class PeerEventBusActorSpec
     peerEventBusActor.tell(PeerEventBusActor.Unsubscribe(PeerHandshaked), probe1.ref)
 
     peerEventBusActor ! PeerEventBusActor.Publish(msgPeerHandshaked)
-    probe1.expectNoMessage()
-    probe2.expectMsg(msgPeerHandshaked)
+    probe2.expectMsg(msgPeerHandshaked)             // barrier: event bus processed the publish
+    probe1.expectNoMessage(Duration.Zero)           // safe: probe1 unsubscribed from PeerHandshaked
   }
 
   it should "relay a single notification when subscribed twice to the same message code" taggedAs (
@@ -205,6 +212,7 @@ class PeerEventBusActorSpec
   ) in new TestSetup {
 
     val probe1: TestProbe = TestProbe()
+    val syncProbe: TestProbe = TestProbe()
     peerEventBusActor.tell(
       PeerEventBusActor.Subscribe(MessageClassifier(Set(Ping.code, Ping.code), PeerSelector.WithId(PeerId("1")))),
       probe1.ref
@@ -213,12 +221,17 @@ class PeerEventBusActorSpec
       PeerEventBusActor.Subscribe(MessageClassifier(Set(Ping.code, Pong.code), PeerSelector.WithId(PeerId("1")))),
       probe1.ref
     )
+    peerEventBusActor.tell(
+      PeerEventBusActor.Subscribe(MessageClassifier(Set(Ping.code), PeerSelector.AllPeers)),
+      syncProbe.ref
+    )
 
     val msgFromPeer: MessageFromPeer = MessageFromPeer(Ping(), PeerId("1"))
     peerEventBusActor ! PeerEventBusActor.Publish(msgFromPeer)
 
-    probe1.expectMsg(msgFromPeer)
-    probe1.expectNoMessage()
+    syncProbe.expectMsg(msgFromPeer)               // barrier: event bus processed the publish
+    probe1.expectMsg(msgFromPeer)                  // one message (deduplicated)
+    probe1.expectNoMessage(Duration.Zero)          // safe: no duplicate
   }
 
   it should "allow to handle subscriptions using AllPeers and WithId PeerSelector at the same time" taggedAs (
@@ -227,6 +240,7 @@ class PeerEventBusActorSpec
   ) in new TestSetup {
 
     val probe1: TestProbe = TestProbe()
+    val syncProbe: TestProbe = TestProbe()
     peerEventBusActor.tell(
       PeerEventBusActor.Subscribe(MessageClassifier(Set(Ping.code), PeerSelector.WithId(PeerId("1")))),
       probe1.ref
@@ -235,18 +249,24 @@ class PeerEventBusActorSpec
       PeerEventBusActor.Subscribe(MessageClassifier(Set(Ping.code), PeerSelector.AllPeers)),
       probe1.ref
     )
+    peerEventBusActor.tell(
+      PeerEventBusActor.Subscribe(MessageClassifier(Set(Ping.code), PeerSelector.AllPeers)),
+      syncProbe.ref
+    )
 
     val msgFromPeer: MessageFromPeer = MessageFromPeer(Ping(), PeerId("1"))
     peerEventBusActor ! PeerEventBusActor.Publish(msgFromPeer)
 
-    // Receive a single notification
+    // Receive a single notification (dedup: AllPeers + WithId both match, only one delivery)
+    syncProbe.expectMsg(msgFromPeer)               // barrier: event bus processed the publish
     probe1.expectMsg(msgFromPeer)
-    probe1.expectNoMessage()
+    probe1.expectNoMessage(Duration.Zero)          // safe: deduplicated
 
     val msgFromPeer2: MessageFromPeer = MessageFromPeer(Ping(), PeerId("2"))
     peerEventBusActor ! PeerEventBusActor.Publish(msgFromPeer2)
 
     // Receive based on AllPeers subscription
+    syncProbe.expectMsg(msgFromPeer2)              // drain syncProbe
     probe1.expectMsg(msgFromPeer2)
 
     peerEventBusActor.tell(
@@ -255,7 +275,8 @@ class PeerEventBusActorSpec
     )
     peerEventBusActor ! PeerEventBusActor.Publish(msgFromPeer)
 
-    // Still received after unsubscribing from AllPeers
+    // Still received after unsubscribing from AllPeers (WithId subscription remains)
+    syncProbe.expectMsg(msgFromPeer)               // barrier: syncProbe still has AllPeers sub
     probe1.expectMsg(msgFromPeer)
   }
 
@@ -298,9 +319,14 @@ class PeerEventBusActorSpec
   it should "allow to unsubscribe from messages" taggedAs (UnitTest, NetworkTest) in new TestSetup {
 
     val probe1: TestProbe = TestProbe()
+    val syncProbe: TestProbe = TestProbe()
     peerEventBusActor.tell(
       PeerEventBusActor.Subscribe(MessageClassifier(Set(Ping.code, Pong.code), PeerSelector.WithId(PeerId("1")))),
       probe1.ref
+    )
+    peerEventBusActor.tell(
+      PeerEventBusActor.Subscribe(MessageClassifier(Set(Ping.code, Pong.code), PeerSelector.AllPeers)),
+      syncProbe.ref
     )
 
     val msgFromPeer1: MessageFromPeer = MessageFromPeer(Ping(), PeerId("1"))
@@ -310,6 +336,8 @@ class PeerEventBusActorSpec
 
     probe1.expectMsg(msgFromPeer1)
     probe1.expectMsg(msgFromPeer2)
+    syncProbe.expectMsg(msgFromPeer1)
+    syncProbe.expectMsg(msgFromPeer2)
 
     peerEventBusActor.tell(
       PeerEventBusActor.Unsubscribe(MessageClassifier(Set(Pong.code), PeerSelector.WithId(PeerId("1")))),
@@ -319,15 +347,19 @@ class PeerEventBusActorSpec
     peerEventBusActor ! PeerEventBusActor.Publish(msgFromPeer1)
     peerEventBusActor ! PeerEventBusActor.Publish(msgFromPeer2)
 
+    syncProbe.expectMsg(msgFromPeer1)              // barrier: Ping processed
+    syncProbe.expectMsg(msgFromPeer2)              // barrier: Pong processed (probe1 won't get it)
     probe1.expectMsg(msgFromPeer1)
-    probe1.expectNoMessage()
+    probe1.expectNoMessage(Duration.Zero)          // safe: Pong unsubscribed
 
     peerEventBusActor.tell(PeerEventBusActor.Unsubscribe(), probe1.ref)
 
     peerEventBusActor ! PeerEventBusActor.Publish(msgFromPeer1)
     peerEventBusActor ! PeerEventBusActor.Publish(msgFromPeer2)
 
-    probe1.expectNoMessage()
+    syncProbe.expectMsg(msgFromPeer1)              // barrier: Ping processed
+    syncProbe.expectMsg(msgFromPeer2)              // barrier: Pong processed
+    probe1.expectNoMessage(Duration.Zero)          // safe: fully unsubscribed
   }
 
   trait TestSetup {

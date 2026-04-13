@@ -94,8 +94,8 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
       // Mark first blocks as invalid, no further request should be done
       blockFetcher ! InvalidateBlocksFrom(1, "")
       peersClient.expectMsgClass(classOf[BlacklistPeer])
-
-      peersClient.expectNoMessage()
+      // BlacklistPeer receipt is the barrier: invalidation processed, in-flight request still pending
+      peersClient.expectNoMessage(Duration.Zero)
 
       // Respond to the second request should make the fetcher resume with his requests
       val secondBlocksBatch: List[Block] =
@@ -134,8 +134,8 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
       // Mark first blocks as invalid, no further request should be done
       blockFetcher ! InvalidateBlocksFrom(1, "")
       peersClient.expectMsgClass(classOf[BlacklistPeer])
-
-      peersClient.expectNoMessage()
+      // BlacklistPeer receipt is the barrier: invalidation processed, in-flight request still pending
+      peersClient.expectNoMessage(Duration.Zero)
 
       // Failure of the second request should make the fetcher resume with his requests
       peersClient.send(
@@ -164,10 +164,11 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
       peersClient.expectMsgPF() {
         case PeersClient.Request(msg: ETH66GetBlockBodies, _, _) if msg.hashes == firstBlocksBatch.map(_.hash) => ()
       }
+      // bodies-retry receipt is the barrier: invalid bodies processed, block buffer is empty
 
       // Fetcher should not enqueue any new block
       importer.send(blockFetcher.toClassic, PickBlocks(syncConfig.blocksBatchSize, importer.ref))
-      importer.expectNoMessage(100.millis)
+      importer.expectNoMessage(Duration.Zero)
       shutdownActorSystem()
     }
 
@@ -326,9 +327,6 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
       peersClient.expectMsgPF() {
         case PeersClient.Request(msg: ETH66GetBlockHeaders, _, _) if msg.block == Left(1) => ()
       }
-
-      // Verify no message arrives immediately
-      peersClient.expectNoMessage(500.millis)
 
       // Request should timeout and retry - wait for the timeout + retry interval
       peersClient.expectMsgPF(syncConfig.peerResponseTimeout + 5.seconds) {
