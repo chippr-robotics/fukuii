@@ -66,10 +66,12 @@ class EngineApiService(
       )
       PayloadStatusV1(InvalidBlockHash("block hash mismatch"))
     } else if (blockchainReader.getBlockHeaderByHash(payload.blockHash).isDefined) {
+      System.err.println(s"[ENGINE-API] newPayload #${payload.blockNumber}: DEDUP (hash already known)")
       PayloadStatusV1(Valid, latestValidHash = Some(payload.blockHash))
     } else {
       // Try full execution if parent block is known
       val parentKnown = blockchainReader.getBlockHeaderByHash(payload.parentHash).isDefined
+      System.err.println(s"[ENGINE-API] newPayload #${payload.blockNumber}: parentKnown=$parentKnown, hash=${block.header.hashAsHexString}")
       val executionResult = if (parentKnown) {
         try
           blockExecution.executeAndValidateBlock(block, alreadyValidated = true) match {
@@ -77,8 +79,8 @@ class EngineApiService(
               blockchainWriter.storeBlock(block).commit()
               blockchainWriter.storeReceipts(block.header.hash, receipts).commit()
               System.err.println(
-                s"[ENGINE-API] newPayload #${payload.blockNumber}: EXECUTED " +
-                  s"(${block.body.numberOfTxs} txs, stateRoot=${block.header.stateRoot.take(8).map("%02x".format(_)).mkString}...)"
+                s"[ENGINE-API] newPayload #${payload.blockNumber}: EXECUTED OK " +
+                  s"(${block.body.numberOfTxs} txs, headerStateRoot=${block.header.stateRoot.take(8).map("%02x".format(_)).mkString}...)"
               )
               Some(true) // fully executed
             case Left(error) =>
