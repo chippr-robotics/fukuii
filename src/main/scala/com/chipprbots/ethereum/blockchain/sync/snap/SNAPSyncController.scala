@@ -385,6 +385,7 @@ class SNAPSyncController(
   def idle: Receive = {
     case Start =>
       log.info("Starting SNAP sync...")
+      scheduler.scheduleOnce(60.seconds, self, ActorLivenessProbe)(ec)
       startSnapSync()
 
     case SyncProtocol.GetStatus =>
@@ -915,6 +916,13 @@ class SNAPSyncController(
         scheduler.scheduleOnce(10.seconds, self, TrieWalkHeartbeat)(ec)
       }
 
+    case ActorLivenessProbe =>
+      log.info(
+        s"[ACTOR-ALIVE] phase=$currentPhase trieWalkInProgress=$trieWalkInProgress " +
+        s"walkCompletedPrefixes=${walkCompletedPrefixes.size}/256"
+      )
+      scheduler.scheduleOnce(60.seconds, self, ActorLivenessProbe)(ec)
+
     case TrieWalkResult(missingNodes, walkedRoot) if currentPhase == StateHealing =>
       log.debug(s"[WALK] trieWalkInProgress cleared — TrieWalkResult received (${missingNodes.size} missing node(s))")
       trieWalkInProgress = false
@@ -1046,11 +1054,13 @@ class SNAPSyncController(
         s"${walkCompletedPrefixes.size}/256 subtrees complete, $totalSoFar total missing nodes saved"
       )
       // Persist crash-recovery state after each subtree: all nodes so far + completed prefix set
+      log.info(s"[WALK-CHECKPOINT] Pre-commit: ${walkCompletedPrefixes.size}/256 subtrees, $totalSoFar missing nodes")
       appStateStorage
         .putSnapSyncHealingPendingNodes(
           serializeHealingNodes(walkResumedNodes ++ walkCurrentNodes.toSeq))
         .and(appStateStorage.putSnapSyncWalkCompletedPrefixes(walkCompletedPrefixes))
         .commit()
+      log.info(s"[WALK-CHECKPOINT] Post-commit: ${walkCompletedPrefixes.size}/256 subtrees")
 
     case TrieWalkFailed(error) if currentPhase == StateHealing =>
       log.debug(s"[WALK] trieWalkInProgress cleared — TrieWalkFailed received")
@@ -2684,6 +2694,9 @@ class SNAPSyncController(
   // BUG-W10: Rate-limited walk trigger — scheduled by StateHealingComplete when minWalkIntervalMs hasn't elapsed.
   // Phase guard required: by the time this fires, phase may have changed to non-StateHealing.
   private case object TriggerNextWalk
+  // Periodic actor liveness probe — fires every 60s independent of walk state.
+  // Distinct from TrieWalkHeartbeat (which stops when trieWalkInProgress=false).
+  private case object ActorLivenessProbe
 
   /** BUG-W10: Rate-limited trie walk trigger. If minWalkIntervalMs has not elapsed since the
     * last walk was scheduled, delays via TriggerNextWalk to prevent back-to-back rapid walks.
@@ -2829,12 +2842,15 @@ class SNAPSyncController(
         (pfx, nodes) => selfRef ! TrieWalkSubtreeResult(pfx, nodes)
       )(walkEc).onComplete {
         case scala.util.Success(Right(missingNodes)) =>
+          log.info(s"[WALK-FUTURE] Walk threads done: ${missingNodes.size} missing node(s) — sending TrieWalkResult")
           walkEc.shutdown()
           selfRef ! TrieWalkResult(missingNodes, root)
         case scala.util.Success(Left(error)) =>
+          log.error(s"[WALK-FUTURE] Walk threads returned error: $error — sending TrieWalkFailed")
           walkEc.shutdown()
           selfRef ! TrieWalkFailed(error)
         case scala.util.Failure(ex) =>
+          log.error(s"[WALK-FUTURE] Walk threads threw ${ex.getClass.getName}: ${Option(ex.getMessage).getOrElse("(no message)")} — sending TrieWalkFailed")
           walkEc.shutdown()
           selfRef ! TrieWalkFailed(Option(ex.getMessage).getOrElse(ex.getClass.getSimpleName))
       }(ec)
