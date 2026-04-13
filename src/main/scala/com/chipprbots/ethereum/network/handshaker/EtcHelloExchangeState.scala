@@ -99,7 +99,9 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
     val nodeStatus = nodeStatusHolder.get()
     val listenPort = nodeStatus.serverStatus match {
       case ServerStatus.Listening(address) => address.getPort
-      case ServerStatus.NotListening       => 0
+      case ServerStatus.NotListening       =>
+        log.warn("Server not yet listening when constructing Hello — using configured port {}", Config.Network.Server.port)
+        Config.Network.Server.port
     }
     Hello(
       p2pVersion = EtcHelloExchangeState.P2pVersion,

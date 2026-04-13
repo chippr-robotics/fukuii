@@ -51,11 +51,11 @@ abstract class BaseNode extends Node {
 
     runDBConsistencyCheck()
 
-    startPeerManager()
+    startServer()
 
     startPortForwarding()
 
-    startServer()
+    startPeerManager()
 
     startSyncController()
 
