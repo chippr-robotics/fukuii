@@ -44,9 +44,6 @@ class EngineApiService(
   /** Pending payloads built by forkchoiceUpdated, keyed by payloadId. */
   private val pendingPayloads = new java.util.concurrent.ConcurrentHashMap[ByteString, Block]()
 
-  /** Blocks that were validated and returned VALID via newPayload (fully executed). */
-  private val validatedBlocks = java.util.concurrent.ConcurrentHashMap.newKeySet[ByteString]()
-
   /** Blocks that returned INVALID via newPayload. forkchoiceUpdated should not accept these as head. */
   private val invalidBlocks = java.util.concurrent.ConcurrentHashMap.newKeySet[ByteString]()
 
@@ -72,8 +69,10 @@ class EngineApiService(
       )
       invalidBlocks.add(payload.blockHash)
       PayloadStatusV1(InvalidBlockHash("block hash mismatch"))
-    } else if (validatedBlocks.contains(payload.blockHash)) {
-      // Already fully validated — skip re-execution
+    } else if (blockchainReader.getBlockHeaderByHash(payload.blockHash).exists { h =>
+        blockchainReader.getBlockHeaderByNumber(h.number).exists(_.hash == payload.blockHash)
+      }) {
+      // Already fully stored with number mapping — skip re-execution
       PayloadStatusV1(Valid, latestValidHash = Some(payload.blockHash))
     } else {
       // Try full execution if parent block is known
@@ -113,7 +112,6 @@ class EngineApiService(
                 s"[ENGINE-API] newPayload #${payload.blockNumber}: EXECUTED OK " +
                   s"(${block.body.numberOfTxs} txs, headerStateRoot=${block.header.stateRoot.take(8).map("%02x".format(_)).mkString}...)"
               )
-              validatedBlocks.add(payload.blockHash)
               Some(true) // fully executed
             case Left(error) =>
               error match {
@@ -191,15 +189,24 @@ class EngineApiService(
         payloadStatus = PayloadStatusV1(Invalid,
           latestValidHash = latestValid,
           validationError = Some("head block was previously invalidated")))
-    } else if (!validatedBlocks.contains(forkChoiceState.headBlockHash) &&
-        blockchainReader.getBlockHeaderByHash(forkChoiceState.headBlockHash).isDefined &&
-        forkChoiceState.headBlockHash != blockchainReader.getBlockHeaderByNumber(0).map(_.hash).getOrElse(ByteString.empty)) {
-      // Head block stored but not fully validated — return SYNCING without making it canonical
-      EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
-      ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))
     } else {
+      // Check if the head block is fully stored (number→hash mapping exists).
+      // Blocks stored via storeBlockByHashOnly (ACCEPTED) don't have this mapping.
+      // Chain-imported blocks (chain.rlp) and newPayload VALID blocks DO have it.
+      val headHeader = blockchainReader.getBlockHeaderByHash(forkChoiceState.headBlockHash)
+      val blockFullyStored = headHeader.exists { header =>
+        blockchainReader.getBlockHeaderByNumber(header.number).exists(_.hash == forkChoiceState.headBlockHash)
+      }
+      val blockExistsByHash = headHeader.isDefined
+      val isGenesis = forkChoiceState.headBlockHash == blockchainReader.getBlockHeaderByNumber(0).map(_.hash).getOrElse(ByteString.empty)
 
-    forkChoiceManager.applyForkChoiceState(forkChoiceState) match {
+      if (blockExistsByHash && !blockFullyStored && !isGenesis) {
+        // Block stored by hash only (ACCEPTED) — not fully validated
+        EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
+        ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))
+      } else {
+
+      forkChoiceManager.applyForkChoiceState(forkChoiceState) match {
       case Left(_) =>
         // Head not known — return SYNCING so CL knows we need newPayload
         EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
@@ -351,7 +358,8 @@ class EngineApiService(
         } // end else (invalidAttrs check)
       } // end case Right
     }
-    } // end else (pre-checks)
+      } // end else (blockFullyStored check)
+    } // end else (invalidBlocks check)
   }
 
   /** engine_getPayloadV1/V2/V3/V4 — Return a previously built payload by ID. */
