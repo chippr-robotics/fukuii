@@ -72,8 +72,8 @@ class EngineApiService(
       )
       invalidBlocks.add(payload.blockHash)
       PayloadStatusV1(InvalidBlockHash("block hash mismatch"))
-    } else if (blockchainReader.getBlockHeaderByHash(payload.blockHash).isDefined) {
-      validatedBlocks.add(payload.blockHash) // already known = previously validated
+    } else if (validatedBlocks.contains(payload.blockHash)) {
+      // Already fully validated — skip re-execution
       PayloadStatusV1(Valid, latestValidHash = Some(payload.blockHash))
     } else {
       // Try full execution if parent block is known
