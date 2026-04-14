@@ -81,8 +81,10 @@ class BlockchainHostActor(
         val matchingTxs = response.pendingTransactions
           .map(_.stx.tx)
           .filter(tx => hashSet.contains(tx.hash))
+        // Include blob tx sidecar bytes for EIP-4844 network wrapping in PooledTransactions
+        val matchingBlobBytes = response.blobTxNetworkBytes.filter { case (hash, _) => hashSet.contains(hash) }
         val responseMsg: MessageSerializable = requestIdOpt match {
-          case Some(requestId) => ETH66.PooledTransactions(requestId, matchingTxs)
+          case Some(requestId) => ETH66.PooledTransactions(requestId, matchingTxs, blobTxRawBytes = matchingBlobBytes)
           case None => com.chipprbots.ethereum.network.p2p.messages.ETH65.PooledTransactions(matchingTxs)
         }
         networkPeerManagerActor ! NetworkPeerManagerActor.SendMessage(responseMsg, peerId)

@@ -641,6 +641,26 @@ object BaseETH6XMessages {
           case _                  => rawDecode(bytes)
         }).toSignedTransaction
       }
+
+      /** Decode a signed transaction, preserving raw bytes for network-wrapped blob txs.
+        * Returns (SignedTransaction, Some(rawBytes)) if the tx was a Type-3 blob tx in
+        * network-wrapped form, otherwise (SignedTransaction, None).
+        */
+      def toSignedTransactionWithSidecar: (SignedTransaction, Option[Array[Byte]]) = {
+        val first = bytes(0)
+        first match {
+          case Transaction.Type03 =>
+            val decoded = rawDecode(bytes.tail)
+            decoded match {
+              case outer: RLPList if outer.items.size == 4 && outer.items.head.isInstanceOf[RLPList] =>
+                val stx = PrefixedRLPEncodable(Transaction.Type03, outer.items.head).toSignedTransaction
+                (stx, Some(bytes))
+              case _ =>
+                (PrefixedRLPEncodable(Transaction.Type03, decoded).toSignedTransaction, None)
+            }
+          case _ => (bytes.toSignedTransaction, None)
+        }
+      }
     }
   }
 

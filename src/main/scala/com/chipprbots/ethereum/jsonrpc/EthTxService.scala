@@ -189,10 +189,11 @@ class EthTxService(
   def sendRawTransaction(req: SendRawTransactionRequest): ServiceResponse[SendRawTransactionResponse] = {
     import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions.SignedTransactionDec
 
-    Try(req.data.toArray.toSignedTransaction) match {
-      case Success(signedTransaction) =>
+    Try(req.data.toArray.toSignedTransactionWithSidecar) match {
+      case Success((signedTransaction, rawBytesOpt)) =>
         if (SignedTransaction.getSender(signedTransaction).isDefined) {
-          pendingTransactionsManager ! PendingTransactionsManager.AddOrOverrideTransaction(signedTransaction)
+          pendingTransactionsManager ! PendingTransactionsManager.AddOrOverrideTransaction(
+            signedTransaction, rawBytesOpt.map(org.apache.pekko.util.ByteString(_)))
           IO.pure(Right(SendRawTransactionResponse(signedTransaction.hash)))
         } else {
           IO.pure(Left(JsonRpcError.InvalidRequest))

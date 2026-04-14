@@ -57,12 +57,12 @@ object PendingTransactionsManager {
     def apply(txs: SignedTransactionWithSender*): AddTransactions = AddTransactions(txs.toSet)
   }
 
-  case class AddOrOverrideTransaction(signedTransaction: SignedTransaction)
+  case class AddOrOverrideTransaction(signedTransaction: SignedTransaction, blobTxRawBytes: Option[ByteString] = None)
 
   private case class NotifyPeers(signedTransactions: Seq[SignedTransactionWithSender], peers: Seq[Peer])
 
   case object GetPendingTransactions
-  case class PendingTransactionsResponse(pendingTransactions: Seq[PendingTransaction])
+  case class PendingTransactionsResponse(pendingTransactions: Seq[PendingTransaction], blobTxNetworkBytes: Map[ByteString, ByteString] = Map.empty)
 
   case class RemoveTransactions(signedTransactions: Seq[SignedTransaction])
 
@@ -93,6 +93,11 @@ class PendingTransactionsManager(
     */
   var knownTransactions: Map[ByteString, Set[PeerId]] = Map.empty
 
+  /** Raw network-wrapped bytes for EIP-4844 blob txs (txHash → 0x03||rlp([payload,blobs,commitments,proofs])).
+    * Needed to replay the sidecar in PooledTransactions responses (EIP-4844 requirement).
+    */
+  var blobTxNetworkBytes: Map[ByteString, ByteString] = Map.empty
+
   /** stores all pending transactions
     */
   val pendingTransactions: Cache[ByteString, PendingTransaction] = CacheBuilder
@@ -104,6 +109,7 @@ class PendingTransactionsManager(
         if (notification.wasEvicted()) {
           log.debug("Evicting transaction: {} due to {}", notification.getKey.toHex, notification.getCause)
           knownTransactions = knownTransactions.filterNot(_._1 == notification.getKey)
+          blobTxNetworkBytes -= notification.getKey
         }
     })
     .build()
@@ -175,9 +181,10 @@ class PendingTransactionsManager(
         announceNewTxHashes(transactionsToAdd)
       }
 
-    case AddOrOverrideTransaction(newStx) =>
+    case AddOrOverrideTransaction(newStx, blobRawBytesOpt) =>
       pendingTransactions.cleanUp()
       log.debug("Overriding transaction: {}", newStx.hash.toHex)
+      blobRawBytesOpt.foreach(raw => blobTxNetworkBytes += (newStx.hash -> raw))
       // Only validated transactions are added this way, it is safe to call get
       val newStxSender = SignedTransaction
         .getSender(newStx)
@@ -285,6 +292,10 @@ class PendingTransactionsManager(
         log.debug("PooledTransactions from peer {} has type/size mismatch with announcement — disconnecting", peerId)
         peerManager ! PeerManagerActor.DisconnectPeerById(peerId)
       } else {
+        // Store blob tx sidecar bytes for PooledTransactions responses
+        msg.blobTxRawBytes.foreach { case (hash, rawBytes) =>
+          blobTxNetworkBytes += (hash -> rawBytes)
+        }
         val validTxs = SignedTransactionWithSender.getSignedTransactions(msg.txs)
         if (validTxs.nonEmpty) {
           self ! AddTransactions(validTxs.toSet)
@@ -294,12 +305,13 @@ class PendingTransactionsManager(
 
     case GetPendingTransactions =>
       pendingTransactions.cleanUp()
-      sender() ! PendingTransactionsResponse(pendingTransactions.asMap().asScala.values.toSeq)
+      sender() ! PendingTransactionsResponse(pendingTransactions.asMap().asScala.values.toSeq, blobTxNetworkBytes)
 
     case RemoveTransactions(signedTransactions) =>
       pendingTransactions.invalidateAll(signedTransactions.map(_.hash).asJava)
       log.debug("Removing transactions: {}", signedTransactions.map(_.hash.toHex))
       knownTransactions = knownTransactions -- signedTransactions.map(_.hash)
+      blobTxNetworkBytes = blobTxNetworkBytes -- signedTransactions.map(_.hash)
 
     case ProperSignedTransactions(transactions, peerId) =>
       self ! AddTransactions(transactions)
@@ -309,6 +321,7 @@ class PendingTransactionsManager(
       log.debug("Dropping all cached transactions")
       pendingTransactions.invalidateAll()
       pendingNonces = Map.empty
+      blobTxNetworkBytes = Map.empty
   }
 
 
