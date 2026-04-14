@@ -181,38 +181,31 @@ class EngineApiService(
       forkChoiceState: ForkChoiceState,
       payloadAttributes: Option[PayloadAttributes]
   ): IO[ForkchoiceUpdatedResponse] = IO {
-    // Always accept the fork choice state from the CL.
-    // In checkpoint sync mode, we won't have the head block yet, but returning VALID
-    // tells the CL we're ready to receive newPayload calls for new blocks.
+    // Check invalid/unvalidated blocks BEFORE applying fork choice state
+    // (applyForkChoiceState calls saveBestKnownBlocks which would make the block canonical)
+    if (invalidBlocks.contains(forkChoiceState.headBlockHash)) {
+      val parentHash = blockchainReader.getBlockHeaderByHash(forkChoiceState.headBlockHash).map(_.parentHash)
+      val latestValid = parentHash.flatMap(h => blockchainReader.getBlockHeaderByHash(h)).map(_.hash)
+      EngineApiMetrics.recordForkchoiceUpdated("INVALID")
+      ForkchoiceUpdatedResponse(
+        payloadStatus = PayloadStatusV1(Invalid,
+          latestValidHash = latestValid,
+          validationError = Some("head block was previously invalidated")))
+    } else if (!validatedBlocks.contains(forkChoiceState.headBlockHash) &&
+        blockchainReader.getBlockHeaderByHash(forkChoiceState.headBlockHash).isDefined &&
+        forkChoiceState.headBlockHash != blockchainReader.getBlockHeaderByNumber(0).map(_.hash).getOrElse(ByteString.empty)) {
+      // Head block stored but not fully validated — return SYNCING without making it canonical
+      EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
+      ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))
+    } else {
+
     forkChoiceManager.applyForkChoiceState(forkChoiceState) match {
       case Left(_) =>
         // Head not known — return SYNCING so CL knows we need newPayload
-        log.info(
-          s"forkchoiceUpdated: head ${forkChoiceState.headBlockHash} not known, returning SYNCING"
-        )
         EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
-        ForkchoiceUpdatedResponse(
-          payloadStatus = PayloadStatusV1(Syncing)
-        )
+        ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))
 
-      case Right(()) =>
-        // Check if the head block was previously invalidated via newPayload
-        if (invalidBlocks.contains(forkChoiceState.headBlockHash)) {
-          val latestValid = blockchainReader.getBlockHeaderByHash(
-            blockchainReader.getBlockByHash(forkChoiceState.headBlockHash)
-              .map(_.header.parentHash).getOrElse(forkChoiceState.headBlockHash)
-          ).map(_.hash)
-          EngineApiMetrics.recordForkchoiceUpdated("INVALID")
-          ForkchoiceUpdatedResponse(
-            payloadStatus = PayloadStatusV1(Invalid,
-              latestValidHash = latestValid,
-              validationError = Some("head block was previously invalidated")))
-        } else if (!validatedBlocks.contains(forkChoiceState.headBlockHash) &&
-            forkChoiceState.headBlockHash != blockchainReader.getBlockHeaderByNumber(0).map(_.hash).getOrElse(ByteString.empty)) {
-          // Head block not fully validated (only accepted/optimistically imported) — return SYNCING
-          EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
-          ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))
-        } else {
+      case Right(()) => {
 
         // Validate payload attributes if present
         val invalidAttrs: Option[ForkchoiceUpdatedResponse] = payloadAttributes.flatMap { attrs =>
@@ -356,8 +349,9 @@ class EngineApiService(
           payloadId = payloadId
         )
         } // end else (invalidAttrs check)
-        } // end else (invalidBlocks/validatedBlocks check)
+      } // end case Right
     }
+    } // end else (pre-checks)
   }
 
   /** engine_getPayloadV1/V2/V3/V4 — Return a previously built payload by ID. */
