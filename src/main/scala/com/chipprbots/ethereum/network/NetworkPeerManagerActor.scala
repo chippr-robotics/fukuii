@@ -625,14 +625,23 @@ object NetworkPeerManagerActor {
   }
 
   object PeerInfo {
-    def apply(remoteStatus: RemoteStatus, forkAccepted: Boolean): PeerInfo =
+    def apply(remoteStatus: RemoteStatus, forkAccepted: Boolean): PeerInfo = {
+      // For ETH/69, chainWeight.totalDifficulty holds the block number (latestBlock from Status).
+      // For ETH/64-68, it holds the actual TD which shouldn't be used as block number.
+      // Initialize maxBlockNumber from the Status message to avoid the circular dependency where
+      // peerHasUpdatedBestBlock filters out new peers before they can exchange any block data.
+      val initialMaxBlock: BigInt =
+        if (remoteStatus.capability == com.chipprbots.ethereum.network.p2p.messages.Capability.ETH69)
+          remoteStatus.chainWeight.totalDifficulty // ETH/69: latestBlock number stored as TD
+        else BigInt(0) // ETH/64-68: don't confuse TD with block number
       PeerInfo(
         remoteStatus,
         remoteStatus.chainWeight,
         forkAccepted,
-        0,
+        initialMaxBlock,
         remoteStatus.bestHash
       )
+    }
 
     def withForkAccepted(remoteStatus: RemoteStatus): PeerInfo =
       PeerInfo(remoteStatus, forkAccepted = true)

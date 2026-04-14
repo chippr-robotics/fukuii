@@ -226,7 +226,13 @@ class BlockFetcher(
                   headers.size,
                   updatedState.waitingHeaders.size
                 )
-                updatedState.withHeaderFetchReceived
+                // If we received a full batch, the peer likely has more blocks.
+                // Bump knownTop to force another fetch cycle (prevents premature isOnTop).
+                val finalState = if (headers.size.toLong >= syncConfig.blockHeadersPerRequest) {
+                  val lastHeader = headers.maxBy(_.number)
+                  updatedState.withPossibleNewTopAt(lastHeader.number + 1)
+                } else updatedState
+                finalState.withHeaderFetchReceived
             }
           }
         fetchBlocks(newState)
