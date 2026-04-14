@@ -106,8 +106,12 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
       case Some(fcsJson: JObject) =>
         val fcs = decodeForkChoiceState(fcsJson)
         val payloadAttrs = params.lift(1).collect { case obj: JObject => decodePayloadAttributes(obj) }
-        engineApiService.forkchoiceUpdated(fcs, payloadAttrs).map { response =>
-          JsonRpcResponse("2.0", Some(encodeForkchoiceUpdatedResponse(response)), None, reqId(request))
+        engineApiService.forkchoiceUpdated(fcs, payloadAttrs).map {
+          case Right(response) =>
+            JsonRpcResponse("2.0", Some(encodeForkchoiceUpdatedResponse(response)), None, reqId(request))
+          case Left(errorMsg) =>
+            // Invalid forkchoice state (e.g. unknown safe/finalized hash) → JSON-RPC error
+            JsonRpcResponse("2.0", None, Some(JsonRpcError(-38002, errorMsg, None)), reqId(request))
         }
       case _ =>
         IO.pure(

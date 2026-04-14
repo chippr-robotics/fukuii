@@ -180,11 +180,14 @@ class EngineApiService(
     }
   }
 
-  /** engine_forkchoiceUpdatedV1/V2/V3 — Update fork choice state, optionally start payload building. */
+  /** engine_forkchoiceUpdatedV1/V2/V3 — Update fork choice state, optionally start payload building.
+    * Returns Left(errorMessage) for JSON-RPC error responses (e.g. invalid forkchoice state),
+    * Right(response) for normal payload status responses.
+    */
   def forkchoiceUpdated(
       forkChoiceState: ForkChoiceState,
       payloadAttributes: Option[PayloadAttributes]
-  ): IO[ForkchoiceUpdatedResponse] = IO {
+  ): IO[Either[String, ForkchoiceUpdatedResponse]] = IO {
     // Check invalid/unvalidated blocks BEFORE applying fork choice state
     // (applyForkChoiceState calls saveBestKnownBlocks which would make the block canonical)
     val zeroHash = ByteString(new Array[Byte](32))
@@ -193,10 +196,10 @@ class EngineApiService(
       val parentHash = blockchainReader.getBlockHeaderByHash(forkChoiceState.headBlockHash).map(_.parentHash)
       val latestValid = parentHash.flatMap(h => blockchainReader.getBlockHeaderByHash(h)).map(_.hash)
       EngineApiMetrics.recordForkchoiceUpdated("INVALID")
-      ForkchoiceUpdatedResponse(
+      Right(ForkchoiceUpdatedResponse(
         payloadStatus = PayloadStatusV1(Invalid,
           latestValidHash = latestValid,
-          validationError = Some("head block was previously invalidated")))
+          validationError = Some("head block was previously invalidated"))))
     } else {
       // Check if the head block is fully stored (number→hash mapping exists).
       // Blocks stored via storeBlockByHashOnly (ACCEPTED) don't have this mapping.
@@ -211,14 +214,14 @@ class EngineApiService(
       if (blockExistsByHash && !blockFullyStored && !isGenesis) {
         // Block stored by hash only (ACCEPTED) — not fully validated
         EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
-        ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))
+        Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing)))
       } else {
 
       forkChoiceManager.applyForkChoiceState(forkChoiceState) match {
       case Left(_) =>
         // Head not known — return SYNCING so CL knows we need newPayload
         EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
-        ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))
+        Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing)))
 
       case Right(()) => {
 
@@ -230,10 +233,7 @@ class EngineApiService(
         if (safeUnknown || finalizedUnknown) {
           val msg = if (safeUnknown) "unknown safe block hash" else "unknown finalized block hash"
           EngineApiMetrics.recordForkchoiceUpdated("INVALID")
-          ForkchoiceUpdatedResponse(
-            payloadStatus = PayloadStatusV1(Invalid,
-              latestValidHash = Some(forkChoiceState.headBlockHash),
-              validationError = Some(msg)))
+          Left(msg)
         } else {
 
         // Validate payload attributes if present
@@ -257,7 +257,7 @@ class EngineApiService(
         }
         if (invalidAttrs.isDefined) {
           EngineApiMetrics.recordForkchoiceUpdated("INVALID")
-          invalidAttrs.get
+          Right(invalidAttrs.get)
         } else {
 
         val payloadId = payloadAttributes.map { attrs =>
@@ -383,10 +383,10 @@ class EngineApiService(
         }
 
         EngineApiMetrics.recordForkchoiceUpdated("VALID")
-        ForkchoiceUpdatedResponse(
+        Right(ForkchoiceUpdatedResponse(
           payloadStatus = PayloadStatusV1(Valid, latestValidHash = Some(forkChoiceState.headBlockHash)),
           payloadId = payloadId
-        )
+        ))
         } // end else (invalidAttrs check)
         } // end else (safe/finalized check)
       } // end case Right
