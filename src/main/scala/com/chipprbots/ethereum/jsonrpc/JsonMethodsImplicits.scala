@@ -141,8 +141,8 @@ trait JsonMethodsImplicits {
       case JString("earliest")  => Right(BlockParam.Earliest)
       case JString("latest")    => Right(BlockParam.Latest)
       case JString("pending")   => Right(BlockParam.Pending)
-      case JString("safe")      => Right(BlockParam.Latest)
-      case JString("finalized") => Right(BlockParam.Latest)
+      case JString("safe")      => Right(BlockParam.Safe)
+      case JString("finalized") => Right(BlockParam.Finalized)
       // 32-byte hex string (0x + 64 hex chars) = block hash, not a number
       case JString(s) if s.startsWith("0x") && s.length == 66 =>
         extractBytes(JString(s)).map(hash => BlockParam.WithHash(hash))

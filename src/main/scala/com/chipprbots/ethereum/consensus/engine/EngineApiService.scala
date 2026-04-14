@@ -181,6 +181,8 @@ class EngineApiService(
   ): IO[ForkchoiceUpdatedResponse] = IO {
     // Check invalid/unvalidated blocks BEFORE applying fork choice state
     // (applyForkChoiceState calls saveBestKnownBlocks which would make the block canonical)
+    val zeroHash = ByteString(new Array[Byte](32))
+
     if (invalidBlocks.contains(forkChoiceState.headBlockHash)) {
       val parentHash = blockchainReader.getBlockHeaderByHash(forkChoiceState.headBlockHash).map(_.parentHash)
       val latestValid = parentHash.flatMap(h => blockchainReader.getBlockHeaderByHash(h)).map(_.hash)
@@ -213,6 +215,20 @@ class EngineApiService(
         ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing))
 
       case Right(()) => {
+
+        // Validate safe/finalized block hashes: if non-zero, they must be known blocks
+        val safeHash = forkChoiceState.safeBlockHash
+        val finalizedHash = forkChoiceState.finalizedBlockHash
+        val safeUnknown = safeHash != zeroHash && blockchainReader.getBlockHeaderByHash(safeHash).isEmpty
+        val finalizedUnknown = finalizedHash != zeroHash && blockchainReader.getBlockHeaderByHash(finalizedHash).isEmpty
+        if (safeUnknown || finalizedUnknown) {
+          val msg = if (safeUnknown) "unknown safe block hash" else "unknown finalized block hash"
+          EngineApiMetrics.recordForkchoiceUpdated("INVALID")
+          ForkchoiceUpdatedResponse(
+            payloadStatus = PayloadStatusV1(Invalid,
+              latestValidHash = Some(forkChoiceState.headBlockHash),
+              validationError = Some(msg)))
+        } else {
 
         // Validate payload attributes if present
         val invalidAttrs: Option[ForkchoiceUpdatedResponse] = payloadAttributes.flatMap { attrs =>
@@ -265,12 +281,22 @@ class EngineApiService(
                 if (parentBaseFee - delta < 0) BigInt(0) else parentBaseFee - delta
               }
 
-              // Fetch pending transactions from the tx pool
+              // Fetch pending transactions from the tx pool, filtering by chain ID
               val pendingTxs: Seq[SignedTransaction] = try {
                 import com.chipprbots.ethereum.transactions.PendingTransactionsManager._
                 val future = (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse]
                 val response = Await.result(future, 3.seconds)
-                val txs = response.pendingTransactions.map(_.stx.tx)
+                val expectedChainId = blockchainConfig.chainId
+                val txs = response.pendingTransactions.map(_.stx.tx).filter { stx =>
+                  val txChainId: Option[BigInt] = stx.tx match {
+                    case t: com.chipprbots.ethereum.domain.TransactionWithAccessList => Some(t.chainId)
+                    case t: com.chipprbots.ethereum.domain.TransactionWithDynamicFee => Some(t.chainId)
+                    case t: com.chipprbots.ethereum.domain.BlobTransaction => Some(t.chainId)
+                    case t: com.chipprbots.ethereum.domain.SetCodeTransaction => Some(t.chainId)
+                    case _ => None // legacy txs don't have explicit chainID
+                  }
+                  txChainId.forall(_ == expectedChainId)
+                }
                 if (txs.nonEmpty) log.info("Payload includes {} pending transactions", txs.size)
                 txs
               } catch {
@@ -356,6 +382,7 @@ class EngineApiService(
           payloadId = payloadId
         )
         } // end else (invalidAttrs check)
+        } // end else (safe/finalized check)
       } // end case Right
     }
       } // end else (blockFullyStored check)

@@ -565,7 +565,10 @@ trait EthTxServiceBuilder {
 trait EthBlocksServiceBuilder {
   self: BlockchainBuilder with MiningBuilder with BlockQueueBuilder =>
 
-  lazy val ethBlocksService = new EthBlocksService(blockchain, blockchainReader, mining, blockQueue)
+  /** Override in subtraits that have access to ForkChoiceManager (e.g. EngineApiBuilder) */
+  def forkChoiceManagerForRpc: Option[com.chipprbots.ethereum.consensus.engine.ForkChoiceManager] = None
+
+  lazy val ethBlocksService = new EthBlocksService(blockchain, blockchainReader, mining, blockQueue, forkChoiceManagerForRpc)
 }
 
 trait EthUserServiceBuilder {
@@ -1045,4 +1048,8 @@ trait Node
     with BlacklistBuilder {
   // Resolve conflicting ioRuntime from PeerDiscoveryManagerBuilder and PortForwardingBuilder
   implicit override lazy val ioRuntime: IORuntime = IORuntime.global
+
+  // Wire ForkChoiceManager to RPC services for "safe"/"finalized" block tag resolution
+  override def forkChoiceManagerForRpc: Option[com.chipprbots.ethereum.consensus.engine.ForkChoiceManager] =
+    Some(forkChoiceManager)
 }

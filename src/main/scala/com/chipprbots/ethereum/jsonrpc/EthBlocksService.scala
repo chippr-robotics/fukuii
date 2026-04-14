@@ -77,7 +77,8 @@ class EthBlocksService(
     val blockchain: Blockchain,
     val blockchainReader: BlockchainReader,
     val mining: Mining,
-    val blockQueue: BlockQueue
+    val blockQueue: BlockQueue,
+    override val forkChoiceManagerOpt: Option[com.chipprbots.ethereum.consensus.engine.ForkChoiceManager] = None
 ) extends ResolveBlock {
   import EthBlocksService._
 
