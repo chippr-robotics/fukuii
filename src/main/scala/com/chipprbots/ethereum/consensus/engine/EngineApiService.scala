@@ -74,6 +74,12 @@ class EngineApiService(
       }) {
       // Already fully stored with number mapping — skip re-execution
       PayloadStatusV1(Valid, latestValidHash = Some(payload.blockHash))
+    } else if (invalidBlocks.contains(payload.parentHash)) {
+      // Parent was previously marked INVALID — child inherits invalidity
+      invalidBlocks.add(payload.blockHash)
+      EngineApiMetrics.recordNewPayload("INVALID", payload.blockNumber.toLong, payload.timestamp)
+      PayloadStatusV1(Invalid, latestValidHash = Some(ByteString(new Array[Byte](32))),
+        validationError = Some("parent block was previously invalidated"))
     } else {
       // Try full execution if parent block is known
       val parentKnown = blockchainReader.getBlockHeaderByHash(payload.parentHash).isDefined
