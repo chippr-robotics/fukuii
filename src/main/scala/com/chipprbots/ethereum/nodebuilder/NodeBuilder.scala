@@ -745,7 +745,8 @@ trait EngineApiBuilder {
     with StorageBuilder
     with MiningBuilder
     with PendingTransactionsManagerBuilder
-    with InstanceConfigProvider =>
+    with InstanceConfigProvider
+    with JSONRpcControllerBuilder =>
 
   import com.chipprbots.ethereum.consensus.engine._
 
@@ -771,7 +772,7 @@ trait EngineApiBuilder {
     pendingTransactionsManager
   )(blockchainConfig)
 
-  lazy val engineApiController: EngineApiController = new EngineApiController(engineApiService)
+  lazy val engineApiController: EngineApiController = new EngineApiController(engineApiService, Some(jsonRpcController))
 
   lazy val maybeEngineApiServer: Option[EngineApiHttpServer] =
     if (engineApiConfig.enabled) {

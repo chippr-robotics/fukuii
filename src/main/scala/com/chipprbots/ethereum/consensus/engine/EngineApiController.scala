@@ -25,7 +25,10 @@ import com.chipprbots.ethereum.utils.Logger
 /** Handles Engine API JSON-RPC methods (engine_* namespace). This controller processes raw JSON requests and delegates
   * to EngineApiService.
   */
-class EngineApiController(engineApiService: EngineApiService) extends Logger {
+class EngineApiController(
+    engineApiService: EngineApiService,
+    jsonRpcControllerOpt: Option[com.chipprbots.ethereum.jsonrpc.JsonRpcController] = None
+) extends Logger {
 
   private def reqId(request: JsonRpcRequest): JValue = request.id.getOrElse(JNull)
 
@@ -49,21 +52,21 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
         handleGetPayloadBodiesByHash(request)
       case "engine_getPayloadBodiesByRangeV1" =>
         handleGetPayloadBodiesByRange(request)
-      // CL clients also send eth_* methods through the authrpc port
-      case "eth_syncing" =>
-        // Return false (not syncing) — CL uses forkchoiceUpdated SYNCING status to know
-        // we need blocks, not eth_syncing. Returning false tells CL the EL is responsive.
-        IO.pure(JsonRpcResponse("2.0", Some(JBool(false)), None, reqId(request)))
-      case "eth_getBlockByNumber" =>
-        // Return null for now — CL just checks if EL is responsive
-        IO.pure(JsonRpcResponse("2.0", Some(JNull), None, reqId(request)))
-      case "eth_blockNumber" =>
-        val blockNum = engineApiService.getLatestBlockNumber
-        IO.pure(JsonRpcResponse("2.0", Some(JString(s"0x${blockNum.toLong.toHexString}")), None, reqId(request)))
-      case "eth_chainId" =>
-        IO.pure(JsonRpcResponse("2.0", Some(JString("0xaa36a7")), None, reqId(request)))
-      case "net_version" =>
-        IO.pure(JsonRpcResponse("2.0", Some(JString("11155111")), None, reqId(request)))
+      // CL clients and hive tests send eth_* methods through the authrpc port.
+      // Forward to the real JSON-RPC controller for proper responses.
+      case method if method.startsWith("eth_") || method.startsWith("net_") || method.startsWith("web3_") =>
+        jsonRpcControllerOpt match {
+          case Some(ctrl) => ctrl.handleRequest(request)
+          case None =>
+            // Fallback stubs when JSON-RPC controller is not wired
+            method match {
+              case "eth_syncing" => IO.pure(JsonRpcResponse("2.0", Some(JBool(false)), None, reqId(request)))
+              case "eth_blockNumber" =>
+                val blockNum = engineApiService.getLatestBlockNumber
+                IO.pure(JsonRpcResponse("2.0", Some(JString(s"0x${blockNum.toLong.toHexString}")), None, reqId(request)))
+              case _ => IO.pure(JsonRpcResponse("2.0", Some(JNull), None, reqId(request)))
+            }
+        }
       case other =>
         log.warn(s"Engine API: unknown method '$other'")
         IO.pure(JsonRpcResponse("2.0", None, Some(JsonRpcError.MethodNotFound), reqId(request)))
