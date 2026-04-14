@@ -622,7 +622,13 @@ case object TIMESTAMP extends ConstOp(0x42)(s => UInt256(s.env.blockHeader.unixT
 
 case object NUMBER extends ConstOp(0x43)(s => UInt256(s.env.blockHeader.number))
 
-case object DIFFICULTY extends ConstOp(0x44)(s => UInt256(s.env.blockHeader.difficulty))
+case object DIFFICULTY extends ConstOp(0x44)(s =>
+  // EIP-4399: post-merge, opcode 0x44 returns prevRandao (stored in mixHash) instead of difficulty
+  if (s.env.blockHeader.isPostMerge)
+    UInt256(s.env.blockHeader.mixHash)
+  else
+    UInt256(s.env.blockHeader.difficulty)
+)
 
 case object GASLIMIT extends ConstOp(0x45)(s => UInt256(s.env.blockHeader.gasLimit))
 
