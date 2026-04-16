@@ -144,7 +144,11 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
       blockHeader: BlockHeader,
       parent: BlockHeader
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockHeaderError, BlockHeaderValid] =
-    if (difficulty.calculateDifficulty(blockHeader.number, blockHeader.unixTimestamp, parent) == blockHeader.difficulty)
+    if (blockHeader.difficulty == 0)
+      // Post-merge: difficulty is always 0 (EIP-3675). Pre-merge blocks never have difficulty=0
+      // because the Ethash difficulty algorithm always produces a positive value.
+      Right(BlockHeaderValid)
+    else if (difficulty.calculateDifficulty(blockHeader.number, blockHeader.unixTimestamp, parent) == blockHeader.difficulty)
       Right(BlockHeaderValid)
     else Left(HeaderDifficultyError)
 

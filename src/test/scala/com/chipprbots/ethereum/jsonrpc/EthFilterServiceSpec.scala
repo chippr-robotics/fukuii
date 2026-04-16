@@ -113,7 +113,8 @@ class EthFilterServiceSpec
 
     lazy val ethFilterService = new EthFilterService(
       filterManager.ref,
-      filterConfig
+      filterConfig,
+      null.asInstanceOf[com.chipprbots.ethereum.domain.BlockchainReader]
     )
   }
 }

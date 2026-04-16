@@ -8,6 +8,7 @@ import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockBody._
+import com.chipprbots.ethereum.domain.Transaction
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits._
 import com.chipprbots.ethereum.domain.SignedTransaction
@@ -297,12 +298,23 @@ object ETH66 {
 
       override def code: Int = Codes.PooledTransactionsCode
 
-      override def toRLPEncodable: RLPEncodeable =
+      override def toRLPEncodable: RLPEncodeable = {
         // Use bigIntToUnsignedByteArray to properly encode request-id (0 should be empty bytes per RLP spec)
+        val txItems: Seq[RLPEncodeable] = msg.txs.map { stx =>
+          msg.blobTxRawBytes.get(stx.hash) match {
+            case Some(rawBytes) =>
+              // Blob tx with sidecar: reconstruct network-wrapped PrefixedRLPEncodable from raw bytes
+              // rawBytes = 0x03 || rlp([tx_payload, blobs, commitments, proofs])
+              PrefixedRLPEncodable(rawBytes(0), rawDecode(rawBytes.toArray.drop(1)))
+            case None =>
+              stx.toRLPEncodable
+          }
+        }
         RLPList(
           RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)),
-          RLPList(msg.txs.map(_.toRLPEncodable): _*)
+          RLPList(txItems: _*)
         )
+      }
     }
 
     implicit class PooledTransactionsDec(val bytes: Array[Byte]) extends AnyVal {
@@ -311,16 +323,74 @@ object ETH66 {
 
       def toPooledTransactions: PooledTransactions = rawDecode(bytes) match {
         case RLPList(RLPValue(requestIdBytes), rlpList: RLPList) =>
+          // Validate blob txs in PooledTransactions: per EIP-4844, blob txs MUST be
+          // in network-wrapped form [tx_payload, blobs, commitments, proofs].
+          val typedItems = rlpList.items.toTypedRLPEncodables
+          typedItems.foreach {
+            case PrefixedRLPEncodable(Transaction.Type03, inner: RLPList) =>
+              // Network-wrapped form has 4 elements: [tx_payload, blobs, commitments, proofs]
+              val isNetworkWrapped = inner.items.size == 4 && inner.items.head.isInstanceOf[RLPList]
+              if (!isNetworkWrapped) {
+                throw new RuntimeException("Blob tx in PooledTransactions missing sidecar (network wrapping required)")
+              }
+              // Validate sidecar commitments match versioned hashes
+              val txPayload = inner.items.head.asInstanceOf[RLPList]
+              if (txPayload.items.size >= 14) {
+                val versionedHashesOpt = txPayload.items(10) match { case rl: RLPList => Some(rl); case _ => None }
+                val commitmentsOpt = inner.items(2) match { case rl: RLPList => Some(rl); case _ => None }
+                (versionedHashesOpt, commitmentsOpt) match {
+                  case (Some(vh), Some(cm)) if vh.items.size != cm.items.size =>
+                    throw new RuntimeException("Blob tx: commitment count mismatch")
+                  case (Some(vh), Some(cm)) =>
+                    val sha256 = java.security.MessageDigest.getInstance("SHA-256")
+                    vh.items.zip(cm.items).foreach {
+                      case (RLPValue(expectedHash), RLPValue(commitment)) if expectedHash.length == 32 && commitment.length == 48 =>
+                        sha256.reset()
+                        val computed = sha256.digest(commitment)
+                        computed(0) = 0x01.toByte
+                        if (!java.util.Arrays.equals(expectedHash, computed)) {
+                          throw new RuntimeException("Blob tx: sidecar commitment hash mismatch")
+                        }
+                      case _ => // skip non-standard elements
+                    }
+                  case _ => // missing fields, accept for now
+                }
+              }
+            case _ =>
+          }
+          // Capture raw network-wrapped bytes for blob txs before unwrapping
+          val blobTxRawBytesBuilder = Map.newBuilder[ByteString, ByteString]
+          val unwrappedItems = typedItems.map {
+            case prefixed @ PrefixedRLPEncodable(Transaction.Type03, inner: RLPList)
+              if inner.items.size == 4 && inner.items.head.isInstanceOf[RLPList] =>
+              // Preserve raw bytes: 0x03 || rlp([tx_payload, blobs, commitments, proofs])
+              val rawBytes = com.chipprbots.ethereum.rlp.encode(prefixed)
+              val unwrapped = PrefixedRLPEncodable(Transaction.Type03, inner.items.head)
+              val stx = unwrapped.toSignedTransaction
+              blobTxRawBytesBuilder += (stx.hash -> ByteString(rawBytes))
+              unwrapped
+            case other => other
+          }
+          // Compute original wire sizes of each tx item (before unwrapping) for announcement validation
+          val originalSizes = rlpList.items.map {
+            case RLPValue(v) => v.length  // typed tx: typeByte + rlp_payload
+            case rl: RLPList => com.chipprbots.ethereum.rlp.encode(rl).length  // legacy tx: RLP-encoded
+            case other => 0
+          }
           PooledTransactions(
             ByteUtils.bytesToBigInt(requestIdBytes),
-            rlpList.items.toTypedRLPEncodables.map(_.toSignedTransaction)
+            unwrappedItems.map(_.toSignedTransaction),
+            originalSizes,
+            blobTxRawBytesBuilder.result()
           )
         case _ => throw new RuntimeException("Cannot decode PooledTransactions")
       }
     }
   }
 
-  case class PooledTransactions(requestId: BigInt, txs: Seq[SignedTransaction]) extends Message with HasRequestId {
+  case class PooledTransactions(requestId: BigInt, txs: Seq[SignedTransaction],
+      originalSizes: Seq[Int] = Seq.empty,
+      blobTxRawBytes: Map[ByteString, ByteString] = Map.empty) extends Message with HasRequestId {
     override def code: Int = Codes.PooledTransactionsCode
 
     override def toString: String =

@@ -74,6 +74,9 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
       case Some(Capability.ETH63) =>
         log.debug("PROTOCOL_NEGOTIATED: clientId={}, protocol=eth/63, usesRequestId=false", hello.clientId)
         EthNodeStatus63ExchangeState(handshakerConfiguration, supportsSnap, peerCapabilities)
+      case Some(Capability.ETH69) =>
+        log.debug("PROTOCOL_NEGOTIATED: clientId={}, protocol=eth/69 (EIP-7642)", hello.clientId)
+        EthNodeStatus69ExchangeState(handshakerConfiguration, Capability.ETH69, supportsSnap, peerCapabilities)
       case Some(
             negotiated @ (Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 | Capability.ETH68)
           ) =>

@@ -18,6 +18,7 @@ object App extends Logger {
     "eth",
     "mordor",
     "sepolia",
+    "hive",
     "bootnode",
     "gorgoroth"
   )

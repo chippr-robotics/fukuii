@@ -59,6 +59,20 @@ class BlockchainWriter(
   def storeBlock(block: Block): DataSourceBatchUpdate =
     storeBlockHeader(block.header).and(storeBlockBody(block.header.hash, block.body))
 
+  /** Store block by hash only (no number→hash mapping). Used for optimistic/accepted
+    * blocks that shouldn't appear in eth_getBlockByNumber until fully validated.
+    */
+  def storeBlockByHashOnly(block: Block): DataSourceBatchUpdate =
+    blockHeadersStorage.put(block.header.hash, block.header)
+      .and(blockBodiesStorage.put(block.header.hash, block.body))
+
+  /** Remove block header and body stored by hash. Inverse of storeBlockByHashOnly.
+    * Idempotent — no-op if the hash doesn't exist in storage.
+    */
+  def removeBlockByHash(blockHash: ByteString): DataSourceBatchUpdate =
+    blockHeadersStorage.remove(blockHash)
+      .and(blockBodiesStorage.remove(blockHash))
+
   def storeBlockHeader(blockHeader: BlockHeader): DataSourceBatchUpdate = {
     val hash = blockHeader.hash
     blockHeadersStorage.put(hash, blockHeader).and(saveBlockNumberMapping(blockHeader.number, hash))

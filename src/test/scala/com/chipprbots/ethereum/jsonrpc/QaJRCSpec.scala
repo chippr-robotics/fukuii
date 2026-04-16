@@ -158,6 +158,7 @@ class QaJRCSpec
         fukuiiService,
         mcpService,
         ProofServiceDummy,
+        null: EthSimulateService,
         config
       )
 

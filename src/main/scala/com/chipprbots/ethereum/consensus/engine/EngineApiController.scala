@@ -12,6 +12,9 @@ import org.json4s.JsonAST.{JBool, JInt}
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.Withdrawal
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
@@ -22,7 +25,10 @@ import com.chipprbots.ethereum.utils.Logger
 /** Handles Engine API JSON-RPC methods (engine_* namespace). This controller processes raw JSON requests and delegates
   * to EngineApiService.
   */
-class EngineApiController(engineApiService: EngineApiService) extends Logger {
+class EngineApiController(
+    engineApiService: EngineApiService,
+    jsonRpcControllerOpt: Option[com.chipprbots.ethereum.jsonrpc.JsonRpcController] = None
+) extends Logger {
 
   private def reqId(request: JsonRpcRequest): JValue = request.id.getOrElse(JNull)
 
@@ -46,21 +52,21 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
         handleGetPayloadBodiesByHash(request)
       case "engine_getPayloadBodiesByRangeV1" =>
         handleGetPayloadBodiesByRange(request)
-      // CL clients also send eth_* methods through the authrpc port
-      case "eth_syncing" =>
-        // Return false (not syncing) — CL uses forkchoiceUpdated SYNCING status to know
-        // we need blocks, not eth_syncing. Returning false tells CL the EL is responsive.
-        IO.pure(JsonRpcResponse("2.0", Some(JBool(false)), None, reqId(request)))
-      case "eth_getBlockByNumber" =>
-        // Return null for now — CL just checks if EL is responsive
-        IO.pure(JsonRpcResponse("2.0", Some(JNull), None, reqId(request)))
-      case "eth_blockNumber" =>
-        val blockNum = engineApiService.getLatestBlockNumber
-        IO.pure(JsonRpcResponse("2.0", Some(JString(s"0x${blockNum.toLong.toHexString}")), None, reqId(request)))
-      case "eth_chainId" =>
-        IO.pure(JsonRpcResponse("2.0", Some(JString("0xaa36a7")), None, reqId(request)))
-      case "net_version" =>
-        IO.pure(JsonRpcResponse("2.0", Some(JString("11155111")), None, reqId(request)))
+      // CL clients and hive tests send eth_* methods through the authrpc port.
+      // Forward to the real JSON-RPC controller for proper responses.
+      case method if method.startsWith("eth_") || method.startsWith("net_") || method.startsWith("web3_") =>
+        jsonRpcControllerOpt match {
+          case Some(ctrl) => ctrl.handleRequest(request)
+          case None =>
+            // Fallback stubs when JSON-RPC controller is not wired
+            method match {
+              case "eth_syncing" => IO.pure(JsonRpcResponse("2.0", Some(JBool(false)), None, reqId(request)))
+              case "eth_blockNumber" =>
+                val blockNum = engineApiService.getLatestBlockNumber
+                IO.pure(JsonRpcResponse("2.0", Some(JString(s"0x${blockNum.toLong.toHexString}")), None, reqId(request)))
+              case _ => IO.pure(JsonRpcResponse("2.0", Some(JNull), None, reqId(request)))
+            }
+        }
       case other =>
         log.warn(s"Engine API: unknown method '$other'")
         IO.pure(JsonRpcResponse("2.0", None, Some(JsonRpcError.MethodNotFound), reqId(request)))
@@ -103,8 +109,12 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
       case Some(fcsJson: JObject) =>
         val fcs = decodeForkChoiceState(fcsJson)
         val payloadAttrs = params.lift(1).collect { case obj: JObject => decodePayloadAttributes(obj) }
-        engineApiService.forkchoiceUpdated(fcs, payloadAttrs).map { response =>
-          JsonRpcResponse("2.0", Some(encodeForkchoiceUpdatedResponse(response)), None, reqId(request))
+        engineApiService.forkchoiceUpdated(fcs, payloadAttrs).map {
+          case Right(response) =>
+            JsonRpcResponse("2.0", Some(encodeForkchoiceUpdatedResponse(response)), None, reqId(request))
+          case Left(errorMsg) =>
+            // Invalid forkchoice state (e.g. unknown safe/finalized hash) → JSON-RPC error
+            JsonRpcResponse("2.0", None, Some(JsonRpcError(-38002, errorMsg, None)), reqId(request))
         }
       case _ =>
         IO.pure(
@@ -124,9 +134,65 @@ class EngineApiController(engineApiService: EngineApiService) extends Logger {
     }
   }
 
-  private def handleGetPayload(request: JsonRpcRequest): IO[JsonRpcResponse] =
-    // Stub — payload building not yet implemented
-    IO.pure(JsonRpcResponse("2.0", None, Some(JsonRpcError(-38001, "Payload not available", None)), reqId(request)))
+  private def handleGetPayload(request: JsonRpcRequest): IO[JsonRpcResponse] = {
+    val payloadIdHex = request.params match {
+      case Some(JArray(List(JString(id)))) => id
+      case _ => ""
+    }
+    val payloadId = hexToByteString(payloadIdHex)
+    engineApiService.getPayload(payloadId).map {
+      case Right(block) =>
+        val payload = blockToExecutionPayload(block)
+        JsonRpcResponse("2.0", Some(payload), None, reqId(request))
+      case Left(err) =>
+        JsonRpcResponse("2.0", None, Some(JsonRpcError(-38001, err, None)), reqId(request))
+    }
+  }
+
+  private def blockToExecutionPayload(block: Block): JObject = {
+    import block.header
+    def hex(bs: ByteString): String = "0x" + org.bouncycastle.util.encoders.Hex.toHexString(bs.toArray)
+    def hexQ(n: BigInt): String = s"0x${n.toString(16)}"
+
+    val txs = block.body.transactionList.map { stx =>
+      JString("0x" + org.bouncycastle.util.encoders.Hex.toHexString(
+        SignedTransaction.byteArraySerializable.toBytes(stx)))
+    }
+    val withdrawals = block.body.withdrawals.map { wds =>
+      JArray(wds.map { w =>
+        JObject(
+          "index" -> JString(hexQ(w.index)),
+          "validatorIndex" -> JString(hexQ(w.validatorIndex)),
+          "address" -> JString(hex(w.address.bytes)),
+          "amount" -> JString(hexQ(w.amount))
+        )
+      }.toList)
+    }
+    val baseFee = header.extraFields match {
+      case BlockHeader.HeaderExtraFields.HefPostOlympia(baseFee) => Some(baseFee)
+      case BlockHeader.HeaderExtraFields.HefPostShanghai(baseFee, _) => Some(baseFee)
+      case BlockHeader.HeaderExtraFields.HefPostCancun(baseFee, _, _, _, _) => Some(baseFee)
+      case BlockHeader.HeaderExtraFields.HefPostPrague(baseFee, _, _, _, _, _) => Some(baseFee)
+      case _ => None
+    }
+    val fields = List(
+      "parentHash" -> JString(hex(header.parentHash)),
+      "feeRecipient" -> JString(hex(header.beneficiary)),
+      "stateRoot" -> JString(hex(header.stateRoot)),
+      "receiptsRoot" -> JString(hex(header.receiptsRoot)),
+      "logsBloom" -> JString(hex(header.logsBloom)),
+      "prevRandao" -> JString(hex(header.mixHash)),
+      "blockNumber" -> JString(hexQ(header.number)),
+      "gasLimit" -> JString(hexQ(header.gasLimit)),
+      "gasUsed" -> JString(hexQ(header.gasUsed)),
+      "timestamp" -> JString(s"0x${header.unixTimestamp.toHexString}"),
+      "extraData" -> JString(hex(header.extraData)),
+      "baseFeePerGas" -> JString(hexQ(baseFee.getOrElse(BigInt(0)))),
+      "blockHash" -> JString(hex(header.hash)),
+      "transactions" -> JArray(txs.toList)
+    ) ++ withdrawals.map(w => "withdrawals" -> w).toList
+    JObject(fields)
+  }
 
   private def handleGetClientVersion(request: JsonRpcRequest): IO[JsonRpcResponse] = {
     val clientVersion = JArray(

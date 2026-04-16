@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync
 
+import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.actor.Props
 import org.apache.pekko.testkit.TestActorRef
@@ -331,7 +332,7 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
       override val maxPendingPeers = 5
       override val pruneIncomingPeers = 0
       override val minPruneAge: FiniteDuration = 1.minute
-      override val networkId: Int = 1
+      override val networkId: Long = 1L
       override val p2pVersion: Int = Config.Network.peer.p2pVersion
 
       override val updateNodesInitialDelay: FiniteDuration = 5.seconds
@@ -357,7 +358,8 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
           storagesInstance.storages.evmCodeStorage,
           peerConf,
           peerEventBus.ref,
-          networkPeerManager.ref
+          networkPeerManager.ref,
+          ActorRef.noSender
         )
       )
     )

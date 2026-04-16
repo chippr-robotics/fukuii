@@ -70,9 +70,11 @@ object NodeConfigResource {
     s"""{
       |  "chainId": ${cfg.chainId},
       |  "networkId": ${cfg.networkId},
-      |  "network": "${
-        if (cfg.chainId == BigInt(61)) "etc" else if (cfg.chainId == BigInt(63)) "mordor" else s"chain-${cfg.chainId}"
-      }",
+      |  "network": "${cfg.chainId match {
+        case id if id == BigInt(1)  => "ethereum"; case id if id == BigInt(61)     => "etc"
+        case id if id == BigInt(63) => "mordor"; case id if id == BigInt(11155111) => "sepolia"
+        case id                     => s"chain-$id"
+      }}",
       |  "accountStartNonce": ${cfg.accountStartNonce},
       |  "maxCodeSize": ${cfg.maxCodeSize.map(_.toString).getOrElse("null")},
       |  "monetaryPolicy": {

@@ -51,7 +51,7 @@ object BaseETH6XMessages {
             ) =>
           Status(
             ByteUtils.bytesToBigInt(protocolVersionBytes).toInt,
-            ByteUtils.bytesToBigInt(networkIdBytes).toInt,
+            ByteUtils.bytesToBigInt(networkIdBytes).toLong,
             ByteUtils.bytesToBigInt(totalDifficultyBytes),
             ByteString(bestHashBytes),
             ByteString(genesisHashBytes)
@@ -109,7 +109,7 @@ object BaseETH6XMessages {
     */
   case class Status(
       protocolVersion: Int,
-      networkId: Int,
+      networkId: Long,
       totalDifficulty: BigInt,
       bestHash: ByteString,
       genesisHash: ByteString
@@ -223,26 +223,49 @@ object BaseETH6XMessages {
         * @return
         *   a Seq of TypedTransaction enriched RLPEncodable
         */
-      def toTypedRLPEncodables: Seq[RLPEncodeable] =
-        encodables match {
-          case Seq() => Seq()
-          case Seq(RLPValue(v), rlpList: RLPList, tail @ _*) if v.isValidTransactionType =>
-            PrefixedRLPEncodable(v.head, rlpList) +: tail.toTypedRLPEncodables
-          case Seq(RLPValue(v), tail @ _*) if v.length > 1 && v.head.isValidTransactionType =>
-            // Typed envelopes (EIP-2718) are encoded on the wire as: typeByte || rlp(payload).
-            // When such bytes appear as an element inside an outer RLP list, the decoder yields an RLPValue(bytes)
-            // rather than a split (RLPValue(typeByte), RLPList(payload)). Normalize it here so all callers that use
-            // toTypedRLPEncodables (BlockBody, SignedTransactions, PooledTransactions, etc.) can decode typed txs.
-            try
-              rawDecode(v.tail) match {
-                case rlpList: RLPList => PrefixedRLPEncodable(v.head, rlpList) +: tail.toTypedRLPEncodables
-                case _                => RLPValue(v) +: tail.toTypedRLPEncodables
-              }
-            catch {
-              case _: Throwable => RLPValue(v) +: tail.toTypedRLPEncodables
-            }
-          case Seq(head, tail @ _*) => head +: tail.toTypedRLPEncodables
+      def toTypedRLPEncodables: Seq[RLPEncodeable] = {
+        // Iterative implementation — the recursive version was O(n²) due to Seq pattern matching
+        // creating intermediate views for each element. For 2000 txs this caused ~2M operations.
+        val result = new scala.collection.mutable.ArrayBuffer[RLPEncodeable](encodables.size)
+        var i = 0
+        val items = encodables match {
+          case indexed: IndexedSeq[RLPEncodeable] => indexed
+          case other => other.toIndexedSeq
         }
+        val len = items.size
+        while (i < len) {
+          items(i) match {
+            case RLPValue(v) if v.isValidTransactionType && i + 1 < len =>
+              items(i + 1) match {
+                case rlpList: RLPList =>
+                  // Type byte followed by RLPList: combine into PrefixedRLPEncodable
+                  result += PrefixedRLPEncodable(v.head, rlpList)
+                  i += 2
+                case _ =>
+                  result += items(i)
+                  i += 1
+              }
+            case RLPValue(v) if v.length > 1 && v.head.isValidTransactionType =>
+              // Typed envelopes (EIP-2718): typeByte || rlp(payload) encoded as single RLPValue.
+              // Normalize to PrefixedRLPEncodable for all callers (BlockBody, SignedTransactions, etc.)
+              try
+                rawDecode(v.tail) match {
+                  case rlpList: RLPList =>
+                    result += PrefixedRLPEncodable(v.head, rlpList)
+                  case _ =>
+                    result += RLPValue(v)
+                }
+              catch {
+                case _: Throwable => result += RLPValue(v)
+              }
+              i += 1
+            case other =>
+              result += other
+              i += 1
+          }
+        }
+        result.toSeq
+      }
     }
   }
 
@@ -603,11 +626,40 @@ object BaseETH6XMessages {
         val first = bytes(0)
         (first match {
           case Transaction.Type04 => PrefixedRLPEncodable(Transaction.Type04, rawDecode(bytes.tail))
-          case Transaction.Type03 => PrefixedRLPEncodable(Transaction.Type03, rawDecode(bytes.tail))
+          case Transaction.Type03 =>
+            // EIP-4844: handle network-wrapped blob tx ([tx_payload, blobs, commitments, proofs])
+            val decoded = rawDecode(bytes.tail)
+            decoded match {
+              case outer: RLPList if outer.items.size == 4 && outer.items.head.isInstanceOf[RLPList] =>
+                // Network wrapped form: extract just the tx payload (first element)
+                PrefixedRLPEncodable(Transaction.Type03, outer.items.head)
+              case _ =>
+                PrefixedRLPEncodable(Transaction.Type03, decoded)
+            }
           case Transaction.Type02 => PrefixedRLPEncodable(Transaction.Type02, rawDecode(bytes.tail))
           case Transaction.Type01 => PrefixedRLPEncodable(Transaction.Type01, rawDecode(bytes.tail))
           case _                  => rawDecode(bytes)
         }).toSignedTransaction
+      }
+
+      /** Decode a signed transaction, preserving raw bytes for network-wrapped blob txs.
+        * Returns (SignedTransaction, Some(rawBytes)) if the tx was a Type-3 blob tx in
+        * network-wrapped form, otherwise (SignedTransaction, None).
+        */
+      def toSignedTransactionWithSidecar: (SignedTransaction, Option[Array[Byte]]) = {
+        val first = bytes(0)
+        first match {
+          case Transaction.Type03 =>
+            val decoded = rawDecode(bytes.tail)
+            decoded match {
+              case outer: RLPList if outer.items.size == 4 && outer.items.head.isInstanceOf[RLPList] =>
+                val stx = PrefixedRLPEncodable(Transaction.Type03, outer.items.head).toSignedTransaction
+                (stx, Some(bytes))
+              case _ =>
+                (PrefixedRLPEncodable(Transaction.Type03, decoded).toSignedTransaction, None)
+            }
+          case _ => (bytes.toSignedTransaction, None)
+        }
       }
     }
   }

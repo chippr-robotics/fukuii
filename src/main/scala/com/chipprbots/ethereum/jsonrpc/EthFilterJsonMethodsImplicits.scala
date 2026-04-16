@@ -13,8 +13,8 @@ import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder.NoParamsM
 object EthFilterJsonMethodsImplicits extends JsonMethodsImplicits {
 
   // Manual encoder for TxLog to avoid Scala 3 reflection issues
-  private def encodeTxLog(log: FilterManager.TxLog): JValue =
-    JObject(
+  private def encodeTxLog(log: FilterManager.TxLog): JValue = {
+    val base = List(
       "logIndex" -> encodeAsHex(log.logIndex),
       "transactionIndex" -> encodeAsHex(log.transactionIndex),
       "transactionHash" -> encodeAsHex(log.transactionHash),
@@ -22,8 +22,12 @@ object EthFilterJsonMethodsImplicits extends JsonMethodsImplicits {
       "blockNumber" -> encodeAsHex(log.blockNumber),
       "address" -> encodeAsHex(log.address.bytes),
       "data" -> encodeAsHex(log.data),
-      "topics" -> JArray(log.topics.toList.map(encodeAsHex))
+      "topics" -> JArray(log.topics.toList.map(encodeAsHex)),
+      "removed" -> JBool(false)
     )
+    val tsField = log.blockTimestamp.map(ts => "blockTimestamp" -> encodeAsHex(ts)).toList
+    JObject(base ::: tsField)
+  }
 
   implicit val newFilterResponseEnc: JsonEncoder[NewFilterResponse] = new JsonEncoder[NewFilterResponse] {
     def encodeJson(t: NewFilterResponse): JValue = encodeAsHex(t.filterId)
@@ -154,8 +158,23 @@ object EthFilterJsonMethodsImplicits extends JsonMethodsImplicits {
     for {
       fromBlock <- toEitherOpt(optionalBlockParam("fromBlock"))
       toBlock <- toEitherOpt(optionalBlockParam("toBlock"))
-      address <- toEitherOpt((obj \ "address").extractOpt[String].map(extractAddress))
+      address <- {
+        // Support both single string and array of addresses
+        (obj \ "address") match {
+          case JString(s) => extractAddress(JString(s)).map(a => Some(Seq(a)))
+          case JArray(arr) =>
+            val addrs = arr.map { case JString(s) => extractAddress(JString(s)); case _ => Left(InvalidParams()) }
+            if (addrs.forall(_.isRight)) Right(Some(addrs.collect { case Right(a) => a }))
+            else Left(InvalidParams("Invalid address in array"))
+          case _ => Right(None)
+        }
+      }
       topics <- topicsEither
-    } yield Filter(fromBlock = fromBlock, toBlock = toBlock, address = address, topics = topics)
+    } yield {
+      val blockHash = (obj \ "blockHash").extractOpt[String].flatMap(s =>
+        scala.util.Try(org.apache.pekko.util.ByteString(org.bouncycastle.util.encoders.Hex.decode(
+          s.stripPrefix("0x")))).toOption)
+      Filter(fromBlock = fromBlock, toBlock = toBlock, address = address, topics = topics, blockHash = blockHash)
+    }
   }
 }
