@@ -93,7 +93,7 @@ class EngineApiService(
       val parentKnown = blockchainReader.getBlockHeaderByHash(payload.parentHash).isDefined
       val parentHeader = blockchainReader.getBlockHeaderByHash(payload.parentHash)
 
-      // Pre-execution header validation (catches modified Number, GasLimit, Timestamp)
+      // Pre-execution header validation (catches modified Number, GasLimit, Timestamp, BlobGas)
       val headerInvalid: Option[String] = parentHeader.flatMap { parent =>
         if (block.header.number != parent.number + 1)
           Some(s"invalid block number: expected ${parent.number + 1} got ${block.header.number}")
@@ -105,6 +105,27 @@ class EngineApiService(
           val limit = parent.gasLimit / 1024
           if (diff >= limit && block.header.gasLimit != parent.gasLimit)
             Some(s"invalid gas limit change: diff=$diff exceeds bound=$limit")
+          // EIP-4844: Validate excessBlobGas against parent
+          else if (block.header.excessBlobGas.isDefined) {
+            val parentExcess = parent.excessBlobGas.getOrElse(BigInt(0))
+            val parentUsed = parent.blobGasUsed.getOrElse(BigInt(0))
+            val expectedExcess = BlobGasUtils.calcExcessBlobGas(parentExcess, parentUsed)
+            val actual = block.header.excessBlobGas.get
+            if (actual != expectedExcess)
+              Some(s"invalid excess blob gas: expected $expectedExcess got $actual")
+            else {
+              // Validate blobGasUsed: count blob txs * GAS_PER_BLOB
+              val blobTxCount = block.body.transactionList.collect {
+                case stx if stx.tx.isInstanceOf[com.chipprbots.ethereum.domain.BlobTransaction] =>
+                  stx.tx.asInstanceOf[com.chipprbots.ethereum.domain.BlobTransaction].blobVersionedHashes.size
+              }.sum
+              val expectedBlobGas = BigInt(blobTxCount) * BlobGasUtils.GAS_PER_BLOB
+              val actualBlobGas = block.header.blobGasUsed.getOrElse(BigInt(0))
+              if (actualBlobGas != expectedBlobGas)
+                Some(s"invalid blob gas used: expected $expectedBlobGas got $actualBlobGas")
+              else None
+            }
+          }
           else None
         }
       }
@@ -586,4 +607,43 @@ class EngineApiService(
       val root = txs.zipWithIndex.foldLeft(trie)((t, r) => t.put(r._2, r._1)).getRootHash
       ByteString(root)
     }
+}
+
+/** EIP-4844 blob gas computation utilities. */
+object BlobGasUtils {
+  val GAS_PER_BLOB: BigInt = BigInt(131072)
+  val TARGET_BLOB_GAS_PER_BLOCK: BigInt = BigInt(393216) // 3 blobs
+  val BLOB_BASE_FEE_UPDATE_FRACTION: BigInt = BigInt(3338477)
+  val MIN_BLOB_BASE_FEE: BigInt = BigInt(1)
+
+  /** Calculate excess blob gas for a block from its parent's excess and used blob gas.
+    * Per EIP-4844: if parent_excess + parent_used < target then 0
+    * else parent_excess + parent_used - target
+    */
+  def calcExcessBlobGas(parentExcessBlobGas: BigInt, parentBlobGasUsed: BigInt): BigInt = {
+    val total = parentExcessBlobGas + parentBlobGasUsed
+    if (total < TARGET_BLOB_GAS_PER_BLOCK) BigInt(0)
+    else total - TARGET_BLOB_GAS_PER_BLOCK
+  }
+
+  /** Calculate the blob gas price using the fake exponential function.
+    * Per EIP-4844: fake_exponential(MIN_BLOB_BASE_FEE, excess_blob_gas, BLOB_BASE_FEE_UPDATE_FRACTION)
+    */
+  def getBlobGasPrice(excessBlobGas: BigInt): BigInt =
+    fakeExponential(MIN_BLOB_BASE_FEE, excessBlobGas, BLOB_BASE_FEE_UPDATE_FRACTION)
+
+  /** fake_exponential: approximates factor * e^(numerator / denominator) using Taylor expansion.
+    * Per EIP-4844 spec.
+    */
+  private def fakeExponential(factor: BigInt, numerator: BigInt, denominator: BigInt): BigInt = {
+    var i = BigInt(1)
+    var output = BigInt(0)
+    var numeratorAccum = factor * denominator
+    while (numeratorAccum > 0) {
+      output += numeratorAccum
+      numeratorAccum = (numeratorAccum * numerator) / (denominator * i)
+      i += 1
+    }
+    output / denominator
+  }
 }
