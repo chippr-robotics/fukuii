@@ -122,7 +122,8 @@ class QaJRCSpec
     val debugService: DebugService = mock[DebugService]
     val ethService: EthInfoService = mock[EthInfoService]
     val ethMiningService: EthMiningService = mock[EthMiningService]
-    val ethBlocksService: EthBlocksService = mock[EthBlocksService]
+    // MIGRATION: Scala 3 mock cannot infer Option[ForkChoiceManager] type param — use null (QA tests don't call eth_blocks methods)
+    val ethBlocksService: EthBlocksService = null
     val ethTxService: EthTxService = mock[EthTxService]
     val ethUserService: EthUserService = mock[EthUserService]
     val ethFilterService: EthFilterService = mock[EthFilterService]
@@ -159,6 +160,8 @@ class QaJRCSpec
         mcpService,
         ProofServiceDummy,
         null: EthSimulateService,
+        null: AdminService,
+        null: TxPoolService,
         config
       )
 

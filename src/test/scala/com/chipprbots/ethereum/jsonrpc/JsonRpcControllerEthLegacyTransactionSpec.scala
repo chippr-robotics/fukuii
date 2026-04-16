@@ -341,13 +341,13 @@ class JsonRpcControllerEthLegacyTransactionSpec
   }
 
   it should "eth_getBlockTransactionCountByNumber " taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    val mockEthBlocksService: EthBlocksService & scala.reflect.Selectable = mock[EthBlocksService]
+    // MIGRATION: Scala 3 scalamock macro drops Option[ForkChoiceManager] type arg — use concrete stub
+    val mockEthBlocksService = new EthBlocksService(null, null, null, null) {
+      override def getBlockTransactionCountByNumber(req: EthBlocksService.GetBlockTransactionCountByNumberRequest) =
+        IO.pure(Right(GetBlockTransactionCountByNumberResponse(17)))
+    }
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethBlocksService = mockEthBlocksService)
-
-    (mockEthBlocksService.getBlockTransactionCountByNumber _)
-      .expects(*)
-      .returning(IO.pure(Right(GetBlockTransactionCountByNumberResponse(17))))
 
     val request: JsonRpcRequest = newJsonRpcRequest(
       "eth_getBlockTransactionCountByNumber",
