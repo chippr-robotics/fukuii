@@ -6,6 +6,7 @@ import cats.effect.IO
 
 import org.bouncycastle.util.encoders.Hex
 
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits.BlockHeaderEnc
@@ -78,8 +79,9 @@ class EthBlocksService(
     val blockchainReader: BlockchainReader,
     val mining: Mining,
     val blockQueue: BlockQueue,
-    override val forkChoiceManagerOpt: Option[com.chipprbots.ethereum.consensus.engine.ForkChoiceManager] = None
+    private val _forkChoiceManagerOpt: Option[ForkChoiceManager] = None
 ) extends ResolveBlock {
+  final override def forkChoiceManagerOpt: Option[ForkChoiceManager] = _forkChoiceManagerOpt
   import EthBlocksService._
 
   implicit val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
