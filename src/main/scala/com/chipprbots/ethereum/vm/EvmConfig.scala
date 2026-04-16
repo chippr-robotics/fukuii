@@ -46,6 +46,11 @@ object EvmConfig {
         eip6780Enabled = true         // SELFDESTRUCT restriction
       )
     }
+    if (blockchainConfig.isPragueTimestamp(timestamp)) {
+      config = config.copy(
+        feeSchedule = new FeeSchedule.PragueFeeSchedule  // EIP-7623: increased calldata costs
+      )
+    }
     config
   }
 
@@ -433,6 +438,14 @@ object FeeSchedule {
   }
 
   class OlympiaFeeSchedule extends MystiqueFeeSchedule
+
+  /** EIP-7623: Prague increases calldata gas costs to reduce max block size.
+    * Zero bytes: 4 → 10, Non-zero bytes: 16 → 40
+    */
+  class PragueFeeSchedule extends OlympiaFeeSchedule {
+    override val G_txdatazero = 10
+    override val G_txdatanonzero = 40
+  }
 }
 
 trait FeeSchedule {

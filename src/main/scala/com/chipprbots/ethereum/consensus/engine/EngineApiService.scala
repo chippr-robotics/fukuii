@@ -609,10 +609,20 @@ class EngineApiService(
     }
 }
 
-/** EIP-4844 blob gas computation utilities. */
+/** EIP-4844 / EIP-7691 blob gas computation utilities. */
 object BlobGasUtils {
   val GAS_PER_BLOB: BigInt = BigInt(131072)
-  val TARGET_BLOB_GAS_PER_BLOCK: BigInt = BigInt(393216) // 3 blobs
+
+  // Cancun (EIP-4844): 3 target, 6 max
+  val CANCUN_TARGET_BLOB_GAS: BigInt = BigInt(393216)  // 3 * 131072
+  val CANCUN_MAX_BLOB_GAS: BigInt = BigInt(786432)     // 6 * 131072
+
+  // Prague (EIP-7691): 6 target, 9 max
+  val PRAGUE_TARGET_BLOB_GAS: BigInt = BigInt(786432)   // 6 * 131072
+  val PRAGUE_MAX_BLOB_GAS: BigInt = BigInt(1179648)     // 9 * 131072
+
+  // Default to Cancun values
+  val TARGET_BLOB_GAS_PER_BLOCK: BigInt = CANCUN_TARGET_BLOB_GAS
   val BLOB_BASE_FEE_UPDATE_FRACTION: BigInt = BigInt(3338477)
   val MIN_BLOB_BASE_FEE: BigInt = BigInt(1)
 
@@ -620,10 +630,11 @@ object BlobGasUtils {
     * Per EIP-4844: if parent_excess + parent_used < target then 0
     * else parent_excess + parent_used - target
     */
-  def calcExcessBlobGas(parentExcessBlobGas: BigInt, parentBlobGasUsed: BigInt): BigInt = {
+  def calcExcessBlobGas(parentExcessBlobGas: BigInt, parentBlobGasUsed: BigInt,
+      target: BigInt = TARGET_BLOB_GAS_PER_BLOCK): BigInt = {
     val total = parentExcessBlobGas + parentBlobGasUsed
-    if (total < TARGET_BLOB_GAS_PER_BLOCK) BigInt(0)
-    else total - TARGET_BLOB_GAS_PER_BLOCK
+    if (total < target) BigInt(0)
+    else total - target
   }
 
   /** Calculate the blob gas price using the fake exponential function.
