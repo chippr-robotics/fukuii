@@ -44,8 +44,12 @@ class EngineApiService(
   /** Pending payloads built by forkchoiceUpdated, keyed by payloadId. */
   private val pendingPayloads = new java.util.concurrent.ConcurrentHashMap[ByteString, Block]()
 
-  /** Blocks that returned INVALID via newPayload. forkchoiceUpdated should not accept these as head. */
-  private val invalidBlocks = java.util.concurrent.ConcurrentHashMap.newKeySet[ByteString]()
+  /** Blocks that returned INVALID via newPayload. Maps blockHash → latestValidHash.
+    * forkchoiceUpdated should not accept these as head.
+    * Children of invalid blocks inherit the latestValidHash of their invalid parent.
+    */
+  private val invalidBlocks = new java.util.concurrent.ConcurrentHashMap[ByteString, ByteString]()
+  private val zeroHash = ByteString(new Array[Byte](32))
 
   /** Return the latest block number from the blockchain storage. */
   def getLatestBlockNumber: BigInt =
@@ -67,18 +71,22 @@ class EngineApiService(
         s"[ENGINE-API] newPayload #${payload.blockNumber}: INVALID_BLOCK_HASH " +
           s"computed=${block.header.hashAsHexString} payload=${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(payload.blockHash)}"
       )
-      invalidBlocks.add(payload.blockHash)
+      invalidBlocks.put(payload.blockHash, zeroHash)
+      blockchainWriter.removeBlockByHash(payload.blockHash).commit()
       PayloadStatusV1(InvalidBlockHash("block hash mismatch"))
     } else if (blockchainReader.getBlockHeaderByHash(payload.blockHash).exists { h =>
         blockchainReader.getBlockHeaderByNumber(h.number).exists(_.hash == payload.blockHash)
       }) {
       // Already fully stored with number mapping — skip re-execution
       PayloadStatusV1(Valid, latestValidHash = Some(payload.blockHash))
-    } else if (invalidBlocks.contains(payload.parentHash)) {
-      // Parent was previously marked INVALID — child inherits invalidity
-      invalidBlocks.add(payload.blockHash)
+    } else if (invalidBlocks.containsKey(payload.parentHash)) {
+      // Parent was previously marked INVALID — child inherits invalidity.
+      // Propagate the parent's latestValidHash (the last valid ancestor).
+      val propagatedLvh = invalidBlocks.get(payload.parentHash) // non-null: containsKey guard
+      invalidBlocks.put(payload.blockHash, propagatedLvh)
+      blockchainWriter.removeBlockByHash(payload.blockHash).commit()
       EngineApiMetrics.recordNewPayload("INVALID", payload.blockNumber.toLong, payload.timestamp)
-      PayloadStatusV1(Invalid, latestValidHash = Some(ByteString(new Array[Byte](32))),
+      PayloadStatusV1(Invalid, latestValidHash = Some(propagatedLvh),
         validationError = Some("parent block was previously invalidated"))
     } else {
       // Try full execution if parent block is known
@@ -101,10 +109,11 @@ class EngineApiService(
         }
       }
       if (headerInvalid.isDefined) {
-        invalidBlocks.add(payload.blockHash)
-        val latestValid = parentHeader.map(_.hash)
+        val latestValid = parentHeader.map(_.hash).getOrElse(zeroHash)
+        invalidBlocks.put(payload.blockHash, latestValid)
+        blockchainWriter.removeBlockByHash(payload.blockHash).commit()
         EngineApiMetrics.recordNewPayload("INVALID", payload.blockNumber.toLong, payload.timestamp)
-        PayloadStatusV1(Invalid, latestValidHash = latestValid,
+        PayloadStatusV1(Invalid, latestValidHash = Some(latestValid),
           validationError = Some(headerInvalid.get))
       } else {
 
@@ -130,7 +139,9 @@ class EngineApiService(
                   None
                 case _ =>
                   // Genuine validation failure (wrong stateRoot, gasUsed, receipts, etc.)
-                  invalidBlocks.add(payload.blockHash)
+                  val lvh = parentHeader.map(_.hash).getOrElse(zeroHash)
+                  invalidBlocks.put(payload.blockHash, lvh)
+                  blockchainWriter.removeBlockByHash(payload.blockHash).commit()
                   System.err.println(
                     s"[ENGINE-API] newPayload #${payload.blockNumber}: INVALID: ${error.reason}"
                   )
@@ -161,8 +172,8 @@ class EngineApiService(
           PayloadStatusV1(Valid, latestValidHash = Some(payload.blockHash))
 
         case Some(false) =>
-          // Execution failed — block is invalid
-          val latestValid = blockchainReader.getBlockHeaderByHash(payload.parentHash).map(_.hash)
+          // Execution failed — block is invalid. latestValidHash was stored in invalidBlocks above.
+          val latestValid = Option(invalidBlocks.get(payload.blockHash))
           EngineApiMetrics.recordNewPayload("INVALID", payload.blockNumber.toLong, payload.timestamp)
           PayloadStatusV1(Invalid, latestValidHash = latestValid, validationError = Some("block execution failed"))
 
@@ -192,9 +203,8 @@ class EngineApiService(
     // (applyForkChoiceState calls saveBestKnownBlocks which would make the block canonical)
     val zeroHash = ByteString(new Array[Byte](32))
 
-    if (invalidBlocks.contains(forkChoiceState.headBlockHash)) {
-      val parentHash = blockchainReader.getBlockHeaderByHash(forkChoiceState.headBlockHash).map(_.parentHash)
-      val latestValid = parentHash.flatMap(h => blockchainReader.getBlockHeaderByHash(h)).map(_.hash)
+    if (invalidBlocks.containsKey(forkChoiceState.headBlockHash)) {
+      val latestValid = Option(invalidBlocks.get(forkChoiceState.headBlockHash))
       EngineApiMetrics.recordForkchoiceUpdated("INVALID")
       Right(ForkchoiceUpdatedResponse(
         payloadStatus = PayloadStatusV1(Invalid,

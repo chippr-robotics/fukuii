@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync
 
+import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.actor.Props
 import org.apache.pekko.testkit.TestActorRef
@@ -357,7 +358,8 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
           storagesInstance.storages.evmCodeStorage,
           peerConf,
           peerEventBus.ref,
-          networkPeerManager.ref
+          networkPeerManager.ref,
+          ActorRef.noSender
         )
       )
     )

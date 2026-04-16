@@ -77,7 +77,7 @@ class FilterManagerSpec
       (filterManager ? FilterManager.NewLogFilter(
         Some(BlockParam.WithNumber(1)),
         Some(BlockParam.Latest),
-        Some(address),
+        Some(Seq(address)),
         topics
       ))
         .mapTo[FilterManager.NewFilterResponse]
@@ -249,7 +249,7 @@ class FilterManagerSpec
       (filterManager ? FilterManager.NewLogFilter(
         Some(BlockParam.WithNumber(1)),
         Some(BlockParam.Pending),
-        Some(address),
+        Some(Seq(address)),
         topics
       ))
         .mapTo[FilterManager.NewFilterResponse]

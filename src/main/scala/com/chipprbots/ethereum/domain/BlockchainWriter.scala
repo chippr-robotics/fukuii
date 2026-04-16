@@ -66,6 +66,13 @@ class BlockchainWriter(
     blockHeadersStorage.put(block.header.hash, block.header)
       .and(blockBodiesStorage.put(block.header.hash, block.body))
 
+  /** Remove block header and body stored by hash. Inverse of storeBlockByHashOnly.
+    * Idempotent — no-op if the hash doesn't exist in storage.
+    */
+  def removeBlockByHash(blockHash: ByteString): DataSourceBatchUpdate =
+    blockHeadersStorage.remove(blockHash)
+      .and(blockBodiesStorage.remove(blockHash))
+
   def storeBlockHeader(blockHeader: BlockHeader): DataSourceBatchUpdate = {
     val hash = blockHeader.hash
     blockHeadersStorage.put(hash, blockHeader).and(saveBlockNumberMapping(blockHeader.number, hash))
