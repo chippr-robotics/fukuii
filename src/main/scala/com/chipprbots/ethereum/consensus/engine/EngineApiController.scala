@@ -86,17 +86,10 @@ class EngineApiController(
         val hasBlobFields = payload.blobGasUsed.isDefined || payload.excessBlobGas.isDefined
         val timestamp = payload.timestamp
 
-        // Version enforcement per Engine API spec:
-        // V1: no withdrawals, no blob fields
-        // V2: withdrawals required, no blob fields
-        // V3: blob fields + versionedHashes + parentBeaconBlockRoot required
+        // Version enforcement: only reject truly incompatible combinations.
+        // V1/V2 accept any payload fields (backward compatible).
+        // V3 requires withdrawals (Cancun payloads always have them).
         val versionError: Option[String] = version match {
-          case 1 if hasWithdrawals =>
-            Some("newPayloadV1 does not support withdrawals, use V2+")
-          case 1 if hasBlobFields =>
-            Some("newPayloadV1 does not support blob fields, use V3+")
-          case 2 if hasBlobFields =>
-            Some("newPayloadV2 does not support blob fields, use V3+")
           case 3 if !hasWithdrawals =>
             Some("newPayloadV3 requires withdrawals field")
           case _ => None
