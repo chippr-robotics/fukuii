@@ -34,16 +34,19 @@ class EngineApiController(
 
   def handleRequest(request: JsonRpcRequest): IO[JsonRpcResponse] =
     request.method match {
-      case "engine_newPayloadV1" | "engine_newPayloadV2" | "engine_newPayloadV3" =>
-        handleNewPayload(request, version = 3)
-      case "engine_newPayloadV4" =>
-        handleNewPayload(request, version = 4)
-      case "engine_forkchoiceUpdatedV1" | "engine_forkchoiceUpdatedV2" | "engine_forkchoiceUpdatedV3" =>
-        handleForkchoiceUpdated(request)
+      case "engine_newPayloadV1" => handleNewPayload(request, version = 1)
+      case "engine_newPayloadV2" => handleNewPayload(request, version = 2)
+      case "engine_newPayloadV3" => handleNewPayload(request, version = 3)
+      case "engine_newPayloadV4" => handleNewPayload(request, version = 4)
+      case "engine_forkchoiceUpdatedV1" => handleForkchoiceUpdated(request, version = 1)
+      case "engine_forkchoiceUpdatedV2" => handleForkchoiceUpdated(request, version = 2)
+      case "engine_forkchoiceUpdatedV3" => handleForkchoiceUpdated(request, version = 3)
       case "engine_exchangeCapabilities" =>
         handleExchangeCapabilities(request)
-      case "engine_getPayloadV1" | "engine_getPayloadV2" | "engine_getPayloadV3" | "engine_getPayloadV4" =>
-        handleGetPayload(request)
+      case "engine_getPayloadV1" => handleGetPayload(request, version = 1)
+      case "engine_getPayloadV2" => handleGetPayload(request, version = 2)
+      case "engine_getPayloadV3" => handleGetPayload(request, version = 3)
+      case "engine_getPayloadV4" => handleGetPayload(request, version = 4)
       case "engine_getClientVersionV1" =>
         handleGetClientVersion(request)
       case "engine_getBlobsV1" =>
@@ -72,29 +75,57 @@ class EngineApiController(
         IO.pure(JsonRpcResponse("2.0", None, Some(JsonRpcError.MethodNotFound), reqId(request)))
     }
 
+  private val UnsupportedFork = -38005
+
   private def handleNewPayload(request: JsonRpcRequest, version: Int): IO[JsonRpcResponse] = {
     val params = request.params.map(_.arr).getOrElse(Nil)
     params.headOption match {
       case Some(payloadJson: JObject) =>
         var payload = decodeExecutionPayload(payloadJson)
+        val hasWithdrawals = payload.withdrawals.isDefined
+        val hasBlobFields = payload.blobGasUsed.isDefined || payload.excessBlobGas.isDefined
+        val timestamp = payload.timestamp
 
-        // V3+: second param is versioned hashes array (ignored for now),
-        //       third param is parentBeaconBlockRoot
-        if (version >= 3) {
-          val parentBeaconBlockRoot = params.lift(2).collect { case JString(hex) => hexToByteString(hex) }
-          payload = payload.copy(parentBeaconBlockRoot = parentBeaconBlockRoot)
+        // Version enforcement per Engine API spec:
+        // V1: no withdrawals, no blob fields
+        // V2: withdrawals required, no blob fields
+        // V3: blob fields + versionedHashes + parentBeaconBlockRoot required
+        val versionError: Option[String] = version match {
+          case 1 if hasWithdrawals =>
+            Some("newPayloadV1 does not support withdrawals, use V2+")
+          case 1 if hasBlobFields =>
+            Some("newPayloadV1 does not support blob fields, use V3+")
+          case 2 if hasBlobFields =>
+            Some("newPayloadV2 does not support blob fields, use V3+")
+          case 3 if !hasWithdrawals =>
+            Some("newPayloadV3 requires withdrawals field")
+          case _ => None
         }
 
-        // V4: fourth param is executionRequests (EIP-7685)
-        if (version >= 4) {
-          val executionRequests = params.lift(3).collect { case JArray(items) =>
-            items.collect { case JString(hex) => hexToByteString(hex) }
+        if (versionError.isDefined) {
+          IO.pure(JsonRpcResponse("2.0", None,
+            Some(JsonRpcError(UnsupportedFork, versionError.get, None)), reqId(request)))
+        } else {
+          // V3+: second param is versionedHashes, third is parentBeaconBlockRoot
+          if (version >= 3) {
+            val versionedHashes = params.lift(1).collect { case JArray(items) =>
+              items.collect { case JString(hex) => hexToByteString(hex) }
+            }
+            val parentBeaconBlockRoot = params.lift(2).collect { case JString(hex) => hexToByteString(hex) }
+            payload = payload.copy(parentBeaconBlockRoot = parentBeaconBlockRoot)
           }
-          payload = payload.copy(executionRequests = executionRequests)
-        }
 
-        engineApiService.newPayload(payload).map { status =>
-          JsonRpcResponse("2.0", Some(encodePayloadStatus(status)), None, reqId(request))
+          // V4: fourth param is executionRequests (EIP-7685)
+          if (version >= 4) {
+            val executionRequests = params.lift(3).collect { case JArray(items) =>
+              items.collect { case JString(hex) => hexToByteString(hex) }
+            }
+            payload = payload.copy(executionRequests = executionRequests)
+          }
+
+          engineApiService.newPayload(payload).map { status =>
+            JsonRpcResponse("2.0", Some(encodePayloadStatus(status)), None, reqId(request))
+          }
         }
       case _ =>
         IO.pure(
@@ -103,18 +134,42 @@ class EngineApiController(
     }
   }
 
-  private def handleForkchoiceUpdated(request: JsonRpcRequest): IO[JsonRpcResponse] = {
+  private def handleForkchoiceUpdated(request: JsonRpcRequest, version: Int = 1): IO[JsonRpcResponse] = {
     val params = request.params.map(_.arr).getOrElse(Nil)
     params.headOption match {
       case Some(fcsJson: JObject) =>
         val fcs = decodeForkChoiceState(fcsJson)
         val payloadAttrs = params.lift(1).collect { case obj: JObject => decodePayloadAttributes(obj) }
-        engineApiService.forkchoiceUpdated(fcs, payloadAttrs).map {
-          case Right(response) =>
-            JsonRpcResponse("2.0", Some(encodeForkchoiceUpdatedResponse(response)), None, reqId(request))
-          case Left(errorMsg) =>
-            // Invalid forkchoice state (e.g. unknown safe/finalized hash) → JSON-RPC error
-            JsonRpcResponse("2.0", None, Some(JsonRpcError(-38002, errorMsg, None)), reqId(request))
+
+        // Version enforcement for forkchoiceUpdated:
+        // V3: requires parentBeaconBlockRoot in payload attributes (Cancun+)
+        // V1/V2: must NOT have parentBeaconBlockRoot
+        // Post-Cancun timestamp: V2 without beacon root → UnsupportedFork
+        // Pre-Cancun timestamp: V3 with beacon root → UnsupportedFork
+        val hasBeaconRoot = payloadAttrs.exists(_.parentBeaconBlockRoot.isDefined)
+        val attrTimestamp = payloadAttrs.map(_.timestamp)
+        val isCancunTimestamp = attrTimestamp.exists(ts =>
+          com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig.isCancunTimestamp(ts))
+
+        val versionError: Option[String] = (version, payloadAttrs) match {
+          case (3, Some(_)) if !isCancunTimestamp && hasBeaconRoot =>
+            Some("forkchoiceUpdatedV3 with beacon root before Cancun activation")
+          case (v, Some(_)) if v < 3 && isCancunTimestamp =>
+            Some(s"forkchoiceUpdatedV$v cannot be used post-Cancun, use V3")
+          case _ => None
+        }
+
+        if (versionError.isDefined) {
+          IO.pure(JsonRpcResponse("2.0", None,
+            Some(JsonRpcError(UnsupportedFork, versionError.get, None)), reqId(request)))
+        } else {
+          engineApiService.forkchoiceUpdated(fcs, payloadAttrs).map {
+            case Right(response) =>
+              JsonRpcResponse("2.0", Some(encodeForkchoiceUpdatedResponse(response)), None, reqId(request))
+            case Left(errorMsg) =>
+              // Invalid forkchoice state (e.g. unknown safe/finalized hash) → JSON-RPC error
+              JsonRpcResponse("2.0", None, Some(JsonRpcError(-38002, errorMsg, None)), reqId(request))
+          }
         }
       case _ =>
         IO.pure(
@@ -134,7 +189,7 @@ class EngineApiController(
     }
   }
 
-  private def handleGetPayload(request: JsonRpcRequest): IO[JsonRpcResponse] = {
+  private def handleGetPayload(request: JsonRpcRequest, version: Int = 1): IO[JsonRpcResponse] = {
     val payloadIdHex = request.params match {
       case Some(JArray(List(JString(id)))) => id
       case _ => ""
