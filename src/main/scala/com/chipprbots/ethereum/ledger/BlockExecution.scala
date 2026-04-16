@@ -335,7 +335,10 @@ class BlockExecution(
     val evmConfig = EvmConfig.forBlock(block.header.number, block.header.unixTimestamp, blockchainConfig)
     var w = world
 
-    for (queueAddr <- Seq(WithdrawalQueueAddress, ConsolidationQueueAddress)) {
+    // EIP-7685: Execute system calls to request contracts and collect output.
+    // Order matters per spec: deposits (EIP-6110), then withdrawals (EIP-7002),
+    // then consolidations (EIP-7251).
+    for (queueAddr <- Seq(DepositContractAddress, WithdrawalQueueAddress, ConsolidationQueueAddress)) {
       val code = w.getCode(queueAddr)
       if (code.nonEmpty) {
         val context = ProgramContext[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](
@@ -369,7 +372,11 @@ class BlockExecution(
 object BlockExecution {
 
   val SystemAddress: Address = Address("0xfffffffffffffffffffffffffffffffffffffffe")
+  /** EIP-6110: Deposit contract for on-chain validator deposits */
+  val DepositContractAddress: Address = Address("0x00000000219ab540356cBB839Cbe05303d7705Fa")
+  /** EIP-7002: Withdrawal request queue contract */
   val WithdrawalQueueAddress: Address = Address("0x00000961ef480eb55e80d19ad83579a64c007002")
+  /** EIP-7251: Consolidation request queue contract */
   val ConsolidationQueueAddress: Address = Address("0x0000bbddc7ce488642fb579f8b00f3a590007251")
 
   /** EIP-4788: Address of the beacon block root system contract */
