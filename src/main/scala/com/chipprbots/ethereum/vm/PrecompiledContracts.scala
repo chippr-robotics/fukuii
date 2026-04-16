@@ -591,21 +591,46 @@ object PrecompiledContracts {
   }
 
   // ===== EIP-2537: BLS12-381 Precompiles (final spec: 7 precompiles at 0x0b-0x11) =====
-  // Gas costs and addresses match the final EIP-2537 spec. Crypto operations are stub
-  // implementations that return failure. Full cryptographic operations require a JVM
-  // BLS12-381 library (e.g., besu-native gnark JNI bindings).
+  // Uses org.hyperledger.besu:bls12-381 native library (gnark/Constantine backends via JNA).
   // G1MUL/G2MUL removed — MSM at k=1 covers single-point multiplication.
 
-  sealed trait BlsPrecompile extends PrecompiledContract {
-    def exec(inputData: ByteString): Option[ByteString] = None // TODO: implement with gnark JNI
+  /** Execute a BLS12-381 operation via the Besu native library.
+    * Returns Some(result) on success, None on error (invalid point, wrong input size, etc.)
+    */
+  private def blsNativeOp(opByte: Byte, inputData: ByteString): Option[ByteString] = {
+    import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
+    if (!LibEthPairings.ENABLED) return None
+    try {
+      val resultBuf = new Array[Byte](LibEthPairings.EIP2537_PREALLOCATE_FOR_RESULT_BYTES)
+      val errorBuf = new Array[Byte](LibEthPairings.EIP2537_PREALLOCATE_FOR_ERROR_BYTES)
+      val resultLen = new com.sun.jna.ptr.IntByReference(resultBuf.length)
+      val errorLen = new com.sun.jna.ptr.IntByReference(errorBuf.length)
+
+      val ret = LibEthPairings.eip2537_perform_operation(
+        opByte, inputData.toArray, inputData.length,
+        resultBuf, resultLen, errorBuf, errorLen
+      )
+      if (ret == 0) Some(ByteString(resultBuf.take(resultLen.getValue)))
+      else None
+    } catch {
+      case _: Exception => None
+    }
   }
 
+  sealed trait BlsPrecompile extends PrecompiledContract
+
   object BlsG1Add extends BlsPrecompile {
+    import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
+    def exec(inputData: ByteString): Option[ByteString] =
+      blsNativeOp(LibEthPairings.BLS12_G1ADD_OPERATION_RAW_VALUE, inputData)
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(375)
   }
 
   object BlsG1MultiExp extends BlsPrecompile {
+    import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
     private val pairSize = 160 // 128-byte G1 point + 32-byte scalar
+    def exec(inputData: ByteString): Option[ByteString] =
+      blsNativeOp(LibEthPairings.BLS12_G1MULTIEXP_OPERATION_RAW_VALUE, inputData)
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = {
       val k = math.max(1, inputData.length / pairSize)
       val discount = blsG1MsmDiscount(k)
@@ -614,11 +639,17 @@ object PrecompiledContracts {
   }
 
   object BlsG2Add extends BlsPrecompile {
+    import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
+    def exec(inputData: ByteString): Option[ByteString] =
+      blsNativeOp(LibEthPairings.BLS12_G2ADD_OPERATION_RAW_VALUE, inputData)
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(600)
   }
 
   object BlsG2MultiExp extends BlsPrecompile {
+    import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
     private val pairSize = 288 // 256-byte G2 point + 32-byte scalar
+    def exec(inputData: ByteString): Option[ByteString] =
+      blsNativeOp(LibEthPairings.BLS12_G2MULTIEXP_OPERATION_RAW_VALUE, inputData)
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = {
       val k = math.max(1, inputData.length / pairSize)
       val discount = blsG2MsmDiscount(k)
@@ -627,7 +658,10 @@ object PrecompiledContracts {
   }
 
   object BlsPairing extends BlsPrecompile {
+    import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
     private val pairSize = 384 // 128-byte G1 + 256-byte G2
+    def exec(inputData: ByteString): Option[ByteString] =
+      blsNativeOp(LibEthPairings.BLS12_PAIR_OPERATION_RAW_VALUE, inputData)
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = {
       val k = math.max(1, inputData.length / pairSize)
       BigInt(32600) * k + BigInt(37700)
@@ -635,10 +669,16 @@ object PrecompiledContracts {
   }
 
   object BlsMapG1 extends BlsPrecompile {
+    import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
+    def exec(inputData: ByteString): Option[ByteString] =
+      blsNativeOp(LibEthPairings.BLS12_MAP_FP_TO_G1_OPERATION_RAW_VALUE, inputData)
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(5500)
   }
 
   object BlsMapG2 extends BlsPrecompile {
+    import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
+    def exec(inputData: ByteString): Option[ByteString] =
+      blsNativeOp(LibEthPairings.BLS12_MAP_FP2_TO_G2_OPERATION_RAW_VALUE, inputData)
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(23800)
   }
 
