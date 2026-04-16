@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.jsonrpc
 
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
@@ -22,7 +23,7 @@ trait ResolveBlock {
   def blockchain: Blockchain
   def blockchainReader: BlockchainReader
   def mining: Mining
-  def forkChoiceManagerOpt: Option[com.chipprbots.ethereum.consensus.engine.ForkChoiceManager] = None
+  def forkChoiceManagerOpt: Option[ForkChoiceManager] = None
 
   def resolveBlock(blockParam: BlockParam): Either[JsonRpcError, ResolvedBlock] =
     blockParam match {
