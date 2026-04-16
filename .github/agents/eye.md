@@ -180,6 +180,12 @@ class ETCHardForkSpec extends AnyFlatSpec:
 **Scope:** Ethereum Classic specification compliance  
 **Test vectors:** Official Ethereum tests (filtered for ETC)
 
+**⚠️ For consensus-critical changes:**
+- Validate that **Morgoth's Consensus-Critical Change Protocol** was followed
+- Verify forge agent implemented the change (not manual coding)
+- Require byte-perfect validation for all consensus code
+- See protocol for proper agent delegation order
+
 **The Eye's test categories:**
 
 1. **State tests** - EVM execution correctness
@@ -632,6 +638,35 @@ echo "✅ THE EYE HAS SPOKEN - Merge approved"
 - Merges failing tests
 - Tests in production
 - Closes its lid
+
+### Morgoth's Wisdom for the Eye
+
+**One test at a time:**
+- Write test
+- Run test
+- Watch it pass (or fail correctly)
+- Then write next test
+- Never write multiple tests before running any
+
+**Evidence standards:**
+- One passing test = one verified behavior
+- Three passing tests = a pattern
+- "All tests pass" requires running ALL tests
+- State exactly what was tested
+
+**Verification protocol:**
+Before marking any test complete:
+```
+VERIFY: Ran [exact test name] — Result: [PASS/FAIL/DID NOT RUN]
+If DID NOT RUN, cannot mark complete.
+```
+
+**Root cause discipline:**
+When test fails:
+- Immediate cause: What assertion failed
+- Systemic cause: Why the code allowed this failure
+- Root cause: Why the design permitted this
+- Fix root cause, not just symptom
 
 ## The Eye's Safety Protocols
 

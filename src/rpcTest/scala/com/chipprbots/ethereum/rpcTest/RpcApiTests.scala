@@ -1162,7 +1162,7 @@ abstract class ScenarioSetup {
   val config: Config = ConfigFactory.load("application.conf").getConfig("fukuii")
   val clientVersion: String = com.chipprbots.ethereum.utils.Config.clientVersion
   val networkName: String = com.chipprbots.ethereum.utils.Config.blockchains.network
-  val capabilities: List[Capability] = com.chipprbots.ethereum.utils.Config.blockchains.blockchains(networkName).capabilities
+  val capabilities: List[Capability] = com.chipprbots.ethereum.utils.Config.supportedCapabilities
   //
 
   val service: Admin = Admin.build(new HttpService(testConfig.fukuiiUrl))

@@ -15,7 +15,6 @@ case class ConnectedPeers(
     private val lastPruneTimestamp: Long
 ) {
 
-  // FIXME: Kept only for compatibility purposes, should eventually be removed
   lazy val peers: Map[PeerId, Peer] = outgoingPendingPeers ++ handshakedPeers
 
   private lazy val allPeers: Map[PeerId, Peer] = outgoingPendingPeers ++ handshakedPeers ++ incomingPendingPeers

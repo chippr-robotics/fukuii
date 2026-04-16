@@ -25,5 +25,7 @@ package object messages {
     // Receipt messages
     val GetReceiptsCode: Int = SubProtocolOffset + 0x0f
     val ReceiptsCode: Int = SubProtocolOffset + 0x10
+    // ETH/69: Block range update notification
+    val BlockRangeUpdateCode: Int = SubProtocolOffset + 0x11
   }
 }

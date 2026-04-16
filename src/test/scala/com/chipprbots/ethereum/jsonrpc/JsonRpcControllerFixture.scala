@@ -14,10 +14,9 @@ import org.json4s.JsonAST.JValue
 import org.scalamock.scalatest.MockFactory
 
 import com.chipprbots.ethereum.Fixtures
-import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.Timeouts
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
-import com.chipprbots.ethereum.consensus.blocks.CheckpointBlockGenerator
+import com.chipprbots.ethereum.consensus.mining.CoinbaseProvider
 import com.chipprbots.ethereum.consensus.mining.MiningConfigs
 import com.chipprbots.ethereum.consensus.mining.TestMining
 import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
@@ -27,8 +26,6 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
-import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty
-import com.chipprbots.ethereum.domain.Checkpoint
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
 import com.chipprbots.ethereum.keystore.KeyStore
@@ -106,7 +103,7 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
 
   val appStateStorage: AppStateStorage = mock[AppStateStorage]
   val web3Service = new Web3Service
-  val netService: NetServiceAPI = mock[NetServiceAPI]
+  val netService: TestNetService = new TestNetService
 
   val ethInfoService = new EthInfoService(
     blockchain,
@@ -120,6 +117,8 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
     Timeouts.shortTimeout
   )
 
+  override lazy val coinbaseProvider = new CoinbaseProvider(mining.config.generic.coinbase)
+
   val ethMiningService = new EthMiningService(
     blockchainReader,
     mining,
@@ -128,7 +127,8 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
     syncingController.ref,
     pendingTransactionsManager.ref,
     getTransactionFromPoolTimeout,
-    this
+    this,
+    coinbaseProvider
   )
 
   val ethBlocksService = new EthBlocksService(blockchain, blockchainReader, mining, blockQueue)
@@ -152,13 +152,21 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
 
   val ethFilterService = new EthFilterService(
     filterManager.ref,
-    filterConfig
+    filterConfig,
+    blockchainReader
   )
-  val personalService: PersonalService = mock[PersonalService]
+  val personalService: TestPersonalService = new TestPersonalService
   val debugService: DebugService = mock[DebugService]
   val qaService: QAService = mock[QAService]
-  val checkpointingService: CheckpointingService = mock[CheckpointingService]
   val fukuiiService: FukuiiService = mock[FukuiiService]
+  val mcpService: McpService = new McpService(
+    TestProbe().ref,
+    TestProbe().ref,
+    null,
+    null,
+    new java.util.concurrent.atomic.AtomicReference[com.chipprbots.ethereum.utils.NodeStatus](),
+    null
+  )(scala.concurrent.ExecutionContext.global)
 
   def jsonRpcController: JsonRpcController =
     JsonRpcController(
@@ -174,9 +182,10 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
       None,
       debugService,
       qaService,
-      checkpointingService,
       fukuiiService,
+      mcpService,
       ProofServiceDummy,
+      null: EthSimulateService,
       config
     )
 
@@ -189,12 +198,9 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
     unixTimestamp = 0
   )
 
-  val checkpoint: Checkpoint = ObjectGenerators.fakeCheckpointGen(2, 5).sample.get
-  val checkpointBlockGenerator = new CheckpointBlockGenerator()
-  val blockWithCheckpoint: Block = checkpointBlockGenerator.generate(Fixtures.Blocks.Block3125369.block, checkpoint)
   val blockWithTreasuryOptOut: Block =
     Block(
-      Fixtures.Blocks.Block3125369.header.copy(extraFields = HefEmpty),
+      Fixtures.Blocks.Block3125369.header,
       Fixtures.Blocks.Block3125369.body
     )
 

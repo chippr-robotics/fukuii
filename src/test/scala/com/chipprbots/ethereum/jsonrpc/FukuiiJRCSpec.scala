@@ -41,9 +41,10 @@ class FukuiiJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory
         )
       ),
       org.apache.pekko.testkit.TestProbe().ref,
+      com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist.empty(100),
       com.chipprbots.ethereum.jsonrpc.NetService.NetServiceConfig(scala.concurrent.duration.DurationInt(5).seconds)
     )
-    val personalService: PersonalService = mock[PersonalService]
+    val personalService: PersonalServiceAPI = mock[PersonalServiceAPI]
     val debugService: DebugService = mock[DebugService]
     val ethService: EthInfoService = mock[EthInfoService]
     val ethMiningService: EthMiningService = mock[EthMiningService]
@@ -52,8 +53,15 @@ class FukuiiJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory
     val ethUserService: EthUserService = mock[EthUserService]
     val ethFilterService: EthFilterService = mock[EthFilterService]
     val qaService: QAService = mock[QAService]
-    val checkpointingService: CheckpointingService = mock[CheckpointingService]
     val fukuiiService: FukuiiService = mock[FukuiiService]
+    val mcpService: McpService = new McpService(
+      org.apache.pekko.testkit.TestProbe().ref,
+      org.apache.pekko.testkit.TestProbe().ref,
+      null,
+      null,
+      new java.util.concurrent.atomic.AtomicReference[com.chipprbots.ethereum.utils.NodeStatus](),
+      null
+    )(scala.concurrent.ExecutionContext.global)
 
     val jsonRpcController =
       new JsonRpcController(
@@ -69,9 +77,10 @@ class FukuiiJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory
         None,
         debugService,
         qaService,
-        checkpointingService,
         fukuiiService,
+        mcpService,
         ProofServiceDummy,
+        null: EthSimulateService,
         config
       )
 
@@ -95,12 +104,12 @@ class FukuiiJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory
                   ExtendedTransactionData(
                     sentTx,
                     isOutgoing = true,
-                    Some(MinedTransactionData(block.header, 0, 42, false))
+                    Some(MinedTransactionData(block.header, 0, 42))
                   ),
                   ExtendedTransactionData(
                     receivedTx,
                     isOutgoing = false,
-                    Some(MinedTransactionData(block.header, 1, 21, true))
+                    Some(MinedTransactionData(block.header, 1, 21))
                   )
                 )
               )
@@ -130,7 +139,6 @@ class FukuiiJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory
             .asInstanceOf[JObject]
             .obj ++ List(
             "isPending" -> JBool(false),
-            "isCheckpointed" -> JBool(false),
             "isOutgoing" -> JBool(true),
             "timestamp" -> JLong(block.header.unixTimestamp),
             "gasUsed" -> JString(s"0x${BigInt(42).toString(16)}")
@@ -142,7 +150,6 @@ class FukuiiJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory
             .asInstanceOf[JObject]
             .obj ++ List(
             "isPending" -> JBool(false),
-            "isCheckpointed" -> JBool(true),
             "isOutgoing" -> JBool(false),
             "timestamp" -> JLong(block.header.unixTimestamp),
             "gasUsed" -> JString(s"0x${BigInt(21).toString(16)}")

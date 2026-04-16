@@ -2,30 +2,14 @@
 
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <!--<pattern>%d{HH:mm:ss} %-5level%n%caller{6}- %msg%n</pattern>-->
-            <!--<pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} %X{akkaSource} - %msg%n</pattern>-->
             <pattern>%d{HH:mm:ss.SSS} %-5level %logger{36} %X{akkaSource} - %msg%n</pattern>
         </encoder>
     </appender>
 
-    <logger name="com.chipprbots.ethereum" level="INFO" />
-    <logger name="com.chipprbots.ethereum.consensus.pow.PoWMiningCoordinator" level="DEBUG" />
+    <!-- Silent by default - enable specific loggers when troubleshooting tests -->
     <logger name="com.chipprbots.ethereum.vm.VM" level="OFF" />
-    
-    <!-- Enhanced logging for RLPxConnectionHandler to diagnose test failures -->
-    <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="INFO" />
-    
-    <!-- Reduce log noise from sync components in tests -->
-    <logger name="com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler" level="WARN" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor" level="WARN" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.Blacklist" level="WARN" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.PeersClient" level="WARN" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg" level="WARN" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher" level="WARN" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.regular.FetchRequest" level="WARN" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.fast.FastSync" level="WARN" />
 
-    <root level="INFO">
+    <root level="ERROR">
         <appender-ref ref="STDOUT" />
     </root>
 

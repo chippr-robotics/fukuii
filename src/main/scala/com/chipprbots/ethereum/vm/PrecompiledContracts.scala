@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 import scala.util.Try
 
 import com.chipprbots.ethereum.crypto._
+import com.chipprbots.ethereum.crypto.Secp256r1
 import com.chipprbots.ethereum.crypto.zksnark.BN128.BN128G1
 import com.chipprbots.ethereum.crypto.zksnark.BN128.BN128G2
 import com.chipprbots.ethereum.crypto.zksnark.BN128Fp
@@ -31,6 +32,19 @@ object PrecompiledContracts {
   val Bn128PairingAddr: Address = Address(8)
   val Blake2bCompressionAddr: Address = Address(9)
 
+  // EIP-2537: BLS12-381 precompile addresses (final spec: 7 precompiles at 0x0b-0x11)
+  // G1MUL/G2MUL removed — MSM at k=1 covers single-point multiplication
+  val BlsG1AddAddr: Address = Address(0x0b)
+  val BlsG1MultiExpAddr: Address = Address(0x0c)
+  val BlsG2AddAddr: Address = Address(0x0d)
+  val BlsG2MultiExpAddr: Address = Address(0x0e)
+  val BlsPairingAddr: Address = Address(0x0f)
+  val BlsMapG1Addr: Address = Address(0x10)
+  val BlsMapG2Addr: Address = Address(0x11)
+
+  // EIP-7951: P256VERIFY precompile address
+  val P256VerifyAddr: Address = Address(0x100)
+
   val contracts: Map[Address, PrecompiledContract] = Map(
     EcDsaRecAddr -> EllipticCurveRecovery,
     Sha256Addr -> Sha256,
@@ -47,6 +61,17 @@ object PrecompiledContracts {
 
   val istanbulPhoenixContracts: Map[Address, PrecompiledContract] = byzantiumAtlantisContracts ++ Map(
     Blake2bCompressionAddr -> Blake2bCompress
+  )
+
+  val olympiaContracts: Map[Address, PrecompiledContract] = istanbulPhoenixContracts ++ Map(
+    BlsG1AddAddr -> BlsG1Add,
+    BlsG1MultiExpAddr -> BlsG1MultiExp,
+    BlsG2AddAddr -> BlsG2Add,
+    BlsG2MultiExpAddr -> BlsG2MultiExp,
+    BlsPairingAddr -> BlsPairing,
+    BlsMapG1Addr -> BlsMapG1,
+    BlsMapG2Addr -> BlsMapG2,
+    P256VerifyAddr -> P256Verify
   )
 
   /** Checks whether `ProgramContext#recipientAddr` points to a precompiled contract
@@ -66,14 +91,33 @@ object PrecompiledContracts {
 
   private def getContract(context: ProgramContext[_, _]): Option[PrecompiledContract] =
     context.recipientAddr.flatMap { addr =>
-      getContracts(context).get(addr)
+      val baseContracts = getContracts(context)
+      val relocations = context.precompileRelocations
+      if (relocations.isEmpty) {
+        baseContracts.get(addr)
+      } else {
+        // If this address was a precompile source (moved away), it's no longer a precompile
+        if (relocations.contains(addr)) return None
+        // Check if this address is a relocation target
+        val reverseMap = relocations.map(_.swap)
+        reverseMap.get(addr) match {
+          case Some(originalAddr) => baseContracts.get(originalAddr) // Precompile relocated here
+          case None => baseContracts.get(addr) // Normal precompile check
+        }
+      }
     }
+
+  /** Check if an address is a known precompile address (without relocation) */
+  def isPrecompileAddress(addr: Address, context: ProgramContext[_, _]): Boolean =
+    getContracts(context).contains(addr)
 
   def getContracts(context: ProgramContext[_, _]): Map[Address, PrecompiledContract] = {
     val ethFork = context.evmConfig.blockchainConfig.ethForkForBlockNumber(context.blockHeader.number)
     val etcFork = context.evmConfig.blockchainConfig.etcForkForBlockNumber(context.blockHeader.number)
 
-    if (ethFork >= EthForks.Istanbul || etcFork >= EtcForks.Phoenix) {
+    if (etcFork >= EtcForks.Olympia) {
+      olympiaContracts
+    } else if (ethFork >= EthForks.Istanbul || etcFork >= EtcForks.Phoenix) {
       istanbulPhoenixContracts
     } else if (ethFork >= EthForks.Byzantium || etcFork >= EtcForks.Atlantis) {
       // byzantium and atlantis hard fork introduce the same set of precompiled contracts
@@ -177,6 +221,38 @@ object PrecompiledContracts {
     private val lengthBytes = 32
     private val totalLengthBytes = 3 * lengthBytes
 
+    /** EIP-7823: Maximum operand length in bytes */
+    private val maxOperandLength = 1024
+
+    override def run[W <: WorldStateProxy[W, S], S <: Storage[S]](
+        context: ProgramContext[W, S]
+    ): ProgramResult[W, S] = {
+      val etcFork = context.evmConfig.blockchainConfig.etcForkForBlockNumber(context.blockHeader.number)
+
+      // EIP-7823: Post-Olympia, reject inputs with operand lengths > 1024 bytes
+      if (etcFork >= EtcForks.Olympia) {
+        val baseLength = getLength(context.inputData, 0)
+        val expLength = getLength(context.inputData, 1)
+        val modLength = getLength(context.inputData, 2)
+        if (baseLength > maxOperandLength || expLength > maxOperandLength || modLength > maxOperandLength) {
+          return ProgramResult(
+            ByteString.empty,
+            BigInt(0),
+            context.world,
+            Set.empty,
+            Nil,
+            Nil,
+            0,
+            Some(PreCompiledContractFail),
+            Set.empty,
+            Set.empty
+          )
+        }
+      }
+
+      super.run(context)
+    }
+
     def exec(inputData: ByteString): Option[ByteString] = {
       val baseLength = getLength(inputData, 0)
       val expLength = getLength(inputData, 1)
@@ -211,7 +287,9 @@ object PrecompiledContracts {
           safeAdd(safeAdd(totalLengthBytes, baseLength), expLength)
         )
 
-      if (ethFork >= EthForks.Berlin || etcFork >= EtcForks.Magneto)
+      if (etcFork >= EtcForks.Olympia)
+        PostEIP7883Cost.calculate(baseLength, modLength, expLength, expBytes)
+      else if (ethFork >= EthForks.Berlin || etcFork >= EtcForks.Magneto)
         PostEIP2565Cost.calculate(baseLength, modLength, expLength, expBytes)
       else
         PostEIP198Cost.calculate(baseLength, modLength, expLength, expBytes)
@@ -253,6 +331,46 @@ object PrecompiledContracts {
       // ceiling(x/8)^2
       private def getMultComplexity(x: BigInt): BigInt =
         ((x + 7) / 8).pow(2)
+    }
+
+    // Spec: https://eips.ethereum.org/EIPS/eip-7883
+    // EIP-7883: ModExp gas cost increase — higher multiplication complexity, no divisor, min 500
+    object PostEIP7883Cost {
+
+      def calculate(baseLength: Int, modLength: Int, expLength: Int, expBytes: ByteString): BigInt = {
+        val multComplexity = getMultComplexity(math.max(baseLength, modLength))
+        val adjusted = adjustExpLength7883(expBytes, expLength)
+        val r = multComplexity * math.max(adjusted, 1)
+        if (r < 500) 500
+        else r
+      }
+
+      // EIP-7883 multiplication complexity:
+      // For maxLen <= 32: 16 (flat constant)
+      // For maxLen > 32: 2 * ceiling(maxLen/8)^2
+      private def getMultComplexity(x: BigInt): BigInt =
+        if (x <= 32) BigInt(16)
+        else {
+          val words = (x + 7) / 8
+          2 * words.pow(2)
+        }
+
+      // EIP-7883 adjusted exponent length uses multiplier 16 (not 8 like EIP-2565)
+      private def adjustExpLength7883(expBytes: ByteString, expLength: Int): Long = {
+        val expHead =
+          if (expLength <= lengthBytes)
+            expBytes.padToByteString(expLength, 0.toByte)
+          else
+            expBytes.take(lengthBytes).padToByteString(lengthBytes, 0.toByte)
+
+        val highestBitIndex = math.max(ByteUtils.toBigInt(expHead).bitLength - 1, 0)
+
+        if (expLength <= lengthBytes) {
+          highestBitIndex
+        } else {
+          16L * (expLength - lengthBytes) + highestBitIndex
+        }
+      }
     }
 
     private def getNumber(bytes: ByteString, offset: Int, length: Int): BigInt = {
@@ -432,5 +550,114 @@ object PrecompiledContracts {
         BigInt(0)
       }
     }
+  }
+
+  // Spec: https://eips.ethereum.org/EIPS/eip-7951
+  // EIP-7951: P256VERIFY — secp256r1 (P-256) signature verification
+  object P256Verify extends PrecompiledContract {
+    private val expectedInputLength = 160 // hash(32) + r(32) + s(32) + x(32) + y(32)
+
+    def exec(inputData: ByteString): Option[ByteString] =
+      if (inputData.length < expectedInputLength) {
+        Some(ByteString.empty) // Invalid input — return empty (failure)
+      } else {
+        val hash = inputData.slice(0, 32).toArray
+        val r = inputData.slice(32, 64).toArray
+        val s = inputData.slice(64, 96).toArray
+        val x = inputData.slice(96, 128).toArray
+        val y = inputData.slice(128, 160).toArray
+
+        if (Secp256r1.verify(hash, r, s, x, y)) {
+          // Valid signature: return 0x01 left-padded to 32 bytes
+          Some(ByteUtils.padLeft(ByteString(1), 32))
+        } else {
+          // Invalid signature: return 0x00 left-padded to 32 bytes
+          Some(ByteString(new Array[Byte](32)))
+        }
+      }
+
+    def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(6900)
+  }
+
+  // ===== EIP-2537: BLS12-381 Precompiles (final spec: 7 precompiles at 0x0b-0x11) =====
+  // Gas costs and addresses match the final EIP-2537 spec. Crypto operations are stub
+  // implementations that return failure. Full cryptographic operations require a JVM
+  // BLS12-381 library (e.g., besu-native gnark JNI bindings).
+  // G1MUL/G2MUL removed — MSM at k=1 covers single-point multiplication.
+
+  sealed trait BlsPrecompile extends PrecompiledContract {
+    def exec(inputData: ByteString): Option[ByteString] = None // TODO: implement with gnark JNI
+  }
+
+  object BlsG1Add extends BlsPrecompile {
+    def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(375)
+  }
+
+  object BlsG1MultiExp extends BlsPrecompile {
+    private val pairSize = 160 // 128-byte G1 point + 32-byte scalar
+    def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = {
+      val k = math.max(1, inputData.length / pairSize)
+      val discount = blsG1MsmDiscount(k)
+      BigInt(12000) * k * discount / 1000
+    }
+  }
+
+  object BlsG2Add extends BlsPrecompile {
+    def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(600)
+  }
+
+  object BlsG2MultiExp extends BlsPrecompile {
+    private val pairSize = 288 // 256-byte G2 point + 32-byte scalar
+    def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = {
+      val k = math.max(1, inputData.length / pairSize)
+      val discount = blsG2MsmDiscount(k)
+      BigInt(22500) * k * discount / 1000
+    }
+  }
+
+  object BlsPairing extends BlsPrecompile {
+    private val pairSize = 384 // 128-byte G1 + 256-byte G2
+    def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = {
+      val k = math.max(1, inputData.length / pairSize)
+      BigInt(32600) * k + BigInt(37700)
+    }
+  }
+
+  object BlsMapG1 extends BlsPrecompile {
+    def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(5500)
+  }
+
+  object BlsMapG2 extends BlsPrecompile {
+    def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(23800)
+  }
+
+  /** EIP-2537 G1 MSM discount table (128 entries). max_discount=519 at k>=128. */
+  private def blsG1MsmDiscount(k: Int): Int = {
+    val table = Array(
+      1000, 949, 848, 797, 764, 740, 721, 707, 695, 685, 677, 670, 664, 659, 654, 650, 646, 643, 640, 637, 634, 632,
+      630, 627, 625, 624, 622, 620, 618, 617, 615, 614, 613, 611, 610, 609, 608, 607, 606, 605, 604, 603, 602, 601, 600,
+      599, 598, 597, 596, 595, 594, 593, 592, 591, 590, 589, 588, 587, 586, 585, 584, 583, 582, 581, 580, 579, 578, 577,
+      576, 575, 574, 573, 572, 571, 570, 569, 568, 567, 566, 565, 564, 563, 562, 561, 560, 559, 558, 557, 556, 555, 554,
+      553, 552, 551, 550, 549, 548, 547, 546, 545, 544, 543, 542, 541, 540, 539, 538, 537, 536, 535, 534, 533, 532, 531,
+      530, 529, 528, 527, 526, 525, 524, 523, 522, 521, 520, 519, 519, 519
+    )
+    if (k <= 0) 1000
+    else if (k <= table.length) table(k - 1)
+    else 519 // for k > 128
+  }
+
+  /** EIP-2537 G2 MSM discount table (128 entries). max_discount=524 at k>=128. */
+  private def blsG2MsmDiscount(k: Int): Int = {
+    val table = Array(
+      1000, 1000, 923, 884, 855, 832, 812, 796, 782, 770, 759, 750, 742, 734, 727, 721, 715, 709, 704, 699, 694, 689,
+      685, 681, 677, 673, 669, 666, 662, 659, 656, 653, 650, 647, 644, 641, 639, 636, 634, 631, 629, 627, 624, 622, 620,
+      618, 616, 614, 612, 610, 608, 606, 604, 603, 601, 599, 597, 596, 594, 593, 591, 590, 588, 587, 585, 584, 582, 581,
+      580, 578, 577, 576, 574, 573, 572, 571, 569, 568, 567, 566, 565, 564, 563, 562, 561, 560, 559, 558, 557, 556, 555,
+      554, 553, 552, 551, 550, 549, 548, 547, 547, 546, 545, 544, 543, 543, 542, 541, 540, 540, 539, 538, 537, 537, 536,
+      535, 535, 534, 533, 533, 532, 531, 531, 530, 530, 529, 528, 528, 527
+    )
+    if (k <= 0) 1000
+    else if (k <= table.length) table(k - 1)
+    else 524 // for k > 128
   }
 }

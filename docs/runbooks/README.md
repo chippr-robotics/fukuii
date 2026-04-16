@@ -8,22 +8,31 @@ This directory contains operational runbooks for running and maintaining Fukuii 
 - **[First Start](first-start.md)** - Initial node setup, configuration, and first-time startup procedures
 - **[Operating Modes](operating-modes.md)** - Comprehensive guide to full nodes, archive nodes, boot nodes, and mining nodes
 - **[Node Configuration](node-configuration.md)** - Chain configs, node configs, and command line options
+- **[Custom Networks](custom-networks.md)** - Deploy Fukuii on private or custom Ethereum networks
+- **[Enterprise Deployment](enterprise-deployment.md)** - Deploy private/permissioned EVM networks for enterprise use cases
 - **[Configuration Tool](../tools/fukuii-configurator.html)** - Interactive web-based configuration generator (open in browser)
 - **[Security](security.md)** - Node security, firewall configuration, and security best practices
 - **[TLS Operations](tls-operations.md)** - TLS/HTTPS configuration for secure JSON-RPC connections
+- **[Checkpoint Service for Rapid Sync](checkpoint-service.md)** - Enable rapid blockchain synchronization with bootstrap checkpoints and SNAP sync
 
 ### Operations
+- **[Mining Operations](mining-operations.md)** - Mining configuration, start/stop control, monitoring, and external miner integration
+- **[Network Management](network-management.md)** - Peer management, blacklist operations, and network hygiene best practices
 - **[Peering](peering.md)** - Peer discovery, network connectivity, and peering troubleshooting
 - **[Disk Management](disk-management.md)** - Data directory management, pruning strategies, and disk space monitoring
 - **[Backup & Restore](backup-restore.md)** - Backup strategies, data recovery, and disaster recovery procedures
 - **[Log Triage](log-triage.md)** - Logging configuration, log analysis, and troubleshooting from logs
+
+### SNAP Sync
+- **[SNAP Sync User Guide](snap-sync-user-guide.md)** - How to enable, configure, and monitor SNAP sync
+- **[SNAP Sync Performance Tuning](snap-sync-performance-tuning.md)** - Advanced optimization and tuning strategies
+- **[SNAP Sync FAQ](snap-sync-faq.md)** - Frequently asked questions about SNAP sync
 
 ### API Operations (Barad-dûr)
 - **[Barad-dûr Operations](barad-dur-operations.md)** - Kong API Gateway stack operations, monitoring, and maintenance
 
 ### Reference
 - **[Known Issues](known-issues.md)** - Common issues with RocksDB, temporary directories, JVM flags, and their solutions
-- **[Log Analysis Reports](../analysis/)** - Detailed analysis of production issues and operational incidents
 
 ## Quick Reference
 
@@ -89,4 +98,4 @@ These runbooks are living documents. If you encounter issues not covered here or
 2. Submit a pull request with corrections or improvements
 3. Contact the maintainers at Chippr Robotics LLC
 
-**Last Updated**: 2025-11-30
+**Last Updated**: 2025-12-03

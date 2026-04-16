@@ -14,7 +14,7 @@ import com.chipprbots.ethereum.utils.Config.SyncConfig
 class BlockBroadcasterActor(
     broadcast: BlockBroadcast,
     val peerEventBus: ActorRef,
-    val etcPeerManager: ActorRef,
+    val networkPeerManager: ActorRef,
     val blacklist: Blacklist,
     val syncConfig: SyncConfig,
     val scheduler: Scheduler
@@ -38,7 +38,7 @@ object BlockBroadcasterActor {
   def props(
       broadcast: BlockBroadcast,
       peerEventBus: ActorRef,
-      etcPeerManager: ActorRef,
+      networkPeerManager: ActorRef,
       blacklist: Blacklist,
       syncConfig: SyncConfig,
       scheduler: Scheduler
@@ -47,7 +47,7 @@ object BlockBroadcasterActor {
       new BlockBroadcasterActor(
         broadcast = broadcast,
         peerEventBus = peerEventBus,
-        etcPeerManager = etcPeerManager,
+        networkPeerManager = networkPeerManager,
         blacklist = blacklist,
         syncConfig = syncConfig,
         scheduler = scheduler

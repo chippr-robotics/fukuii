@@ -56,7 +56,8 @@ object ProofService {
       }
 
     def asRlpSerializedNode(node: MptNode): ByteString =
-      ByteString(MptTraversals.encodeNode(node))
+      // Use cached RLP encoding if available (preserves original storage bytes)
+      node.cachedRlpEncoded.map(ByteString(_)).getOrElse(ByteString(MptTraversals.encodeNode(node)))
   }
 
   /** Object proving a relationship of a storage value to an account's storageHash
@@ -230,6 +231,10 @@ class EthProofService(
 
     blockParam match {
       case BlockParam.WithNumber(blockNumber) => getBlock(blockNumber).map(ResolvedBlock(_, pendingState = None))
+      case BlockParam.WithHash(hash) =>
+        blockchainReader.getBlockByHash(hash)
+          .toRight(JsonRpcError.InvalidParams("Block not found for hash"))
+          .map(ResolvedBlock(_, pendingState = None))
       case BlockParam.Earliest                => getBlock(0).map(ResolvedBlock(_, pendingState = None))
       case BlockParam.Latest                  => getLatestBlock().map(ResolvedBlock(_, pendingState = None))
       case BlockParam.Pending =>

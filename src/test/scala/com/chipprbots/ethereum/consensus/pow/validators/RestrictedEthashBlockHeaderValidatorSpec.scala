@@ -106,7 +106,7 @@ class RestrictedEthashBlockHeaderValidatorSpec
         daoForkConfig = None,
         // unused
         maxCodeSize = None,
-        chainId = 0x3d.toByte,
+        chainId = 0x3d,
         networkId = 1,
         monetaryPolicyConfig = null,
         customGenesisFileOpt = None,
@@ -115,8 +115,6 @@ class RestrictedEthashBlockHeaderValidatorSpec
         bootstrapNodes = Set(),
         gasTieBreaker = false,
         ethCompatibleStorage = true,
-        treasuryAddress = Address(0),
-        checkpointPubKeys = Set.empty,
         allowedMinersPublicKeys = allowedMiners
       )
 

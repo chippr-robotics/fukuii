@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.utils
 
+import java.io.File
 import java.net.InetSocketAddress
 
 import org.apache.pekko.util.ByteString
@@ -25,87 +26,15 @@ import com.chipprbots.ethereum.utils.VmConfig.VmMode
 
 import ConfigUtils._
 
-object Config {
-
-  val config: TypesafeConfig = ConfigFactory.load().getConfig("fukuii")
-
-  val testmode: Boolean = config.getBoolean("testmode")
-
-  val clientId: String =
-    VersionInfo.nodeName(ConfigUtils.getOptionalValue(config, _.getString, "client-identity"))
-
-  val clientVersion: String = VersionInfo.nodeName()
-
-  val nodeKeyFile: String = config.getString("node-key-file")
-
-  val shutdownTimeout: Duration = config.getDuration("shutdown-timeout").toMillis.millis
-
-  val secureRandomAlgo: Option[String] =
-    if (config.hasPath("secure-random-algo")) Some(config.getString("secure-random-algo"))
-    else None
-
-  val blockchains: BlockchainsConfig = BlockchainsConfig(config.getConfig("blockchains"))
-
-  object Network {
-    private val networkConfig = config.getConfig("network")
-
-    val automaticPortForwarding: Boolean = networkConfig.getBoolean("automatic-port-forwarding")
-
-    object Server {
-      private val serverConfig = networkConfig.getConfig("server-address")
-
-      val interface: String = serverConfig.getString("interface")
-      val port: Int = serverConfig.getInt("port")
-      val listenAddress = new InetSocketAddress(interface, port)
-    }
-
-    val peer: PeerConfiguration = new PeerConfiguration {
-      private val peerConfig = networkConfig.getConfig("peer")
-      private val blockchainConfig: BlockchainConfig = blockchains.blockchainConfig
-
-      val connectRetryDelay: FiniteDuration = peerConfig.getDuration("connect-retry-delay").toMillis.millis
-      val connectMaxRetries: Int = peerConfig.getInt("connect-max-retries")
-      val disconnectPoisonPillTimeout: FiniteDuration =
-        peerConfig.getDuration("disconnect-poison-pill-timeout").toMillis.millis
-      val waitForHelloTimeout: FiniteDuration = peerConfig.getDuration("wait-for-hello-timeout").toMillis.millis
-      val waitForStatusTimeout: FiniteDuration = peerConfig.getDuration("wait-for-status-timeout").toMillis.millis
-      val waitForChainCheckTimeout: FiniteDuration =
-        peerConfig.getDuration("wait-for-chain-check-timeout").toMillis.millis
-      val minOutgoingPeers: Int = peerConfig.getInt("min-outgoing-peers")
-      val maxOutgoingPeers: Int = peerConfig.getInt("max-outgoing-peers")
-      val maxIncomingPeers: Int = peerConfig.getInt("max-incoming-peers")
-      val maxPendingPeers: Int = peerConfig.getInt("max-pending-peers")
-      val pruneIncomingPeers: Int = peerConfig.getInt("prune-incoming-peers")
-      val minPruneAge: FiniteDuration = peerConfig.getDuration("min-prune-age").toMillis.millis
-      val networkId: Int = blockchainConfig.networkId
-
-      val rlpxConfiguration: RLPxConfiguration = new RLPxConfiguration {
-        val waitForHandshakeTimeout: FiniteDuration =
-          peerConfig.getDuration("wait-for-handshake-timeout").toMillis.millis
-        val waitForTcpAckTimeout: FiniteDuration = peerConfig.getDuration("wait-for-tcp-ack-timeout").toMillis.millis
-      }
-
-      val fastSyncHostConfiguration: FastSyncHostConfiguration = new FastSyncHostConfiguration {
-        val maxBlocksHeadersPerMessage: Int = peerConfig.getInt("max-blocks-headers-per-message")
-        val maxBlocksBodiesPerMessage: Int = peerConfig.getInt("max-blocks-bodies-per-message")
-        val maxReceiptsPerMessage: Int = peerConfig.getInt("max-receipts-per-message")
-        val maxMptComponentsPerMessage: Int = peerConfig.getInt("max-mpt-components-per-message")
-      }
-      override val updateNodesInitialDelay: FiniteDuration =
-        peerConfig.getDuration("update-nodes-initial-delay").toMillis.millis
-      override val updateNodesInterval: FiniteDuration = peerConfig.getDuration("update-nodes-interval").toMillis.millis
-
-      val shortBlacklistDuration: FiniteDuration = peerConfig.getDuration("short-blacklist-duration").toMillis.millis
-      val longBlacklistDuration: FiniteDuration = peerConfig.getDuration("long-blacklist-duration").toMillis.millis
-
-      val statSlotDuration: FiniteDuration = peerConfig.getDuration("stat-slot-duration").toMillis.millis
-      val statSlotCount: Int = peerConfig.getInt("stat-slot-count")
-    }
-
-  }
+/** Singleton Config for backward compatibility. All existing code that references `Config.xxx` continues to work
+  * unchanged. For multi-instance mode, create new `InstanceConfig` instances instead.
+  */
+object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "default") {
 
   case class SyncConfig(
       doFastSync: Boolean,
+      doSnapSync: Boolean,
+      fastSyncRestartCooloff: FiniteDuration,
       peersScanInterval: FiniteDuration,
       blacklistDuration: FiniteDuration,
       criticalBlacklistDuration: FiniteDuration,
@@ -123,6 +52,7 @@ object Config {
       peersToChoosePivotBlockMargin: Int,
       peersToFetchFrom: Int,
       pivotBlockOffset: Int,
+      pivotBlockMaxTotalSelectionAttempts: Int,
       persistStateSnapshotInterval: FiniteDuration,
       blocksBatchSize: Int,
       maxFetcherQueueSize: Int,
@@ -145,14 +75,27 @@ object Config {
       pivotBlockReScheduleInterval: FiniteDuration,
       maxPivotBlockAge: Int,
       fastSyncMaxBatchRetries: Int,
-      maxPivotBlockFailuresCount: Int
+      maxPivotBlockFailuresCount: Int,
+      maxRetryDelay: FiniteDuration,
+      maxBodyFetchRetries: Int,
+      maxSnapFastCycleTransitions: Int,
+      useBootstrapCheckpoints: Boolean,
+      bootstrapCheckpoints: Seq[(BigInt, String)] // (blockNumber, blockHash)
   )
 
   object SyncConfig {
+    private val DefaultPivotBlockMaxTotalSelectionAttempts = 20
+    private val DefaultFastSyncRestartCooloff = 10.minutes
+
     def apply(etcClientConfig: TypesafeConfig): SyncConfig = {
       val syncConfig = etcClientConfig.getConfig("sync")
       SyncConfig(
         doFastSync = syncConfig.getBoolean("do-fast-sync"),
+        doSnapSync = syncConfig.getBoolean("do-snap-sync"),
+        fastSyncRestartCooloff =
+          if (syncConfig.hasPath("fast-sync-restart-cooloff"))
+            syncConfig.getDuration("fast-sync-restart-cooloff").toMillis.millis
+          else DefaultFastSyncRestartCooloff,
         peersScanInterval = syncConfig.getDuration("peers-scan-interval").toMillis.millis,
         blacklistDuration = syncConfig.getDuration("blacklist-duration").toMillis.millis,
         criticalBlacklistDuration = syncConfig.getDuration("critical-blacklist-duration").toMillis.millis,
@@ -170,6 +113,10 @@ object Config {
         peersToChoosePivotBlockMargin = syncConfig.getInt("peers-to-choose-pivot-block-margin"),
         peersToFetchFrom = syncConfig.getInt("peers-to-fetch-from"),
         pivotBlockOffset = syncConfig.getInt("pivot-block-offset"),
+        pivotBlockMaxTotalSelectionAttempts =
+          if (syncConfig.hasPath("pivot-block-max-total-selection-attempts"))
+            syncConfig.getInt("pivot-block-max-total-selection-attempts")
+          else DefaultPivotBlockMaxTotalSelectionAttempts,
         persistStateSnapshotInterval = syncConfig.getDuration("persist-state-snapshot-interval").toMillis.millis,
         blocksBatchSize = syncConfig.getInt("blocks-batch-size"),
         maxFetcherQueueSize = syncConfig.getInt("max-fetcher-queue-size"),
@@ -192,49 +139,46 @@ object Config {
         pivotBlockReScheduleInterval = syncConfig.getDuration("pivot-block-reschedule-interval").toMillis.millis,
         maxPivotBlockAge = syncConfig.getInt("max-pivot-block-age"),
         fastSyncMaxBatchRetries = syncConfig.getInt("fast-sync-max-batch-retries"),
-        maxPivotBlockFailuresCount = syncConfig.getInt("max-pivot-block-failures-count")
+        maxPivotBlockFailuresCount = syncConfig.getInt("max-pivot-block-failures-count"),
+        maxRetryDelay =
+          if (syncConfig.hasPath("max-retry-delay"))
+            syncConfig.getDuration("max-retry-delay").toMillis.millis
+          else 30.seconds,
+        maxBodyFetchRetries =
+          if (syncConfig.hasPath("max-body-fetch-retries"))
+            syncConfig.getInt("max-body-fetch-retries")
+          else 10,
+        maxSnapFastCycleTransitions =
+          if (syncConfig.hasPath("max-snap-fast-cycle-transitions"))
+            syncConfig.getInt("max-snap-fast-cycle-transitions")
+          else 3,
+        useBootstrapCheckpoints =
+          if (syncConfig.hasPath("use-bootstrap-checkpoints"))
+            syncConfig.getBoolean("use-bootstrap-checkpoints")
+          else false,
+        bootstrapCheckpoints = if (syncConfig.hasPath("bootstrap-checkpoints")) {
+          import scala.jdk.CollectionConverters._
+          syncConfig.getStringList("bootstrap-checkpoints").asScala.toSeq.flatMap { entry =>
+            // Format: "blockNumber:0xblockHash"
+            entry.split(":") match {
+              case Array(num, hash) =>
+                try {
+                  val blockNum = BigInt(num.trim)
+                  val blockHash = hash.trim
+                  Some((blockNum, blockHash))
+                } catch {
+                  case _: NumberFormatException => None
+                }
+              case _ => None
+            }
+          }
+        } else Seq.empty
       )
     }
   }
 
-  object Db {
-
-    private val dbConfig = config.getConfig("db")
-    private val rocksDbConfig = dbConfig.getConfig("rocksdb")
-
-    val dataSource: String = dbConfig.getString("data-source")
-    val periodicConsistencyCheck: Boolean = dbConfig.getBoolean("periodic-consistency-check")
-
-    object RocksDb extends RocksDbConfig {
-      override val createIfMissing: Boolean = rocksDbConfig.getBoolean("create-if-missing")
-      override val paranoidChecks: Boolean = rocksDbConfig.getBoolean("paranoid-checks")
-      override val path: String = rocksDbConfig.getString("path")
-      override val maxThreads: Int = rocksDbConfig.getInt("max-threads")
-      override val maxOpenFiles: Int = rocksDbConfig.getInt("max-open-files")
-      override val verifyChecksums: Boolean = rocksDbConfig.getBoolean("verify-checksums")
-      override val levelCompaction: Boolean = rocksDbConfig.getBoolean("level-compaction-dynamic-level-bytes")
-      override val blockSize: Long = rocksDbConfig.getLong("block-size")
-      override val blockCacheSize: Long = rocksDbConfig.getLong("block-cache-size")
-    }
-
-  }
-
-  trait NodeCacheConfig {
-    val maxSize: Long
-    val maxHoldTime: FiniteDuration
-  }
-
-  object NodeCacheConfig extends NodeCacheConfig {
-    private val cacheConfig = config.getConfig("node-caching")
-    override val maxSize: Long = cacheConfig.getInt("max-size")
-    override val maxHoldTime: FiniteDuration = cacheConfig.getDuration("max-hold-time").toMillis.millis
-  }
-
-  object InMemoryPruningNodeCacheConfig extends NodeCacheConfig {
-    private val cacheConfig = config.getConfig("inmemory-pruning-node-caching")
-    override val maxSize: Long = cacheConfig.getInt("max-size")
-    override val maxHoldTime: FiniteDuration = cacheConfig.getDuration("max-hold-time").toMillis.millis
-  }
+  // SyncConfig remains here as it's a case class used as a type throughout the codebase.
+  // Db, Network, and cache configs are inherited from InstanceConfig.
 }
 
 case class AsyncConfig(askTimeout: Timeout)
@@ -243,6 +187,7 @@ object AsyncConfig {
     AsyncConfig(fukuiiConfig.getConfig("async").getDuration("ask-timeout").toMillis.millis)
 }
 
+//user keystore
 trait KeyStoreConfig {
   val keyStoreDir: String
   val minimalPassphraseLength: Int
@@ -354,16 +299,70 @@ object DaoForkConfig {
 case class BlockchainsConfig(network: String, blockchains: Map[String, BlockchainConfig]) {
   val blockchainConfig: BlockchainConfig = blockchains(network)
 }
-object BlockchainsConfig {
+object BlockchainsConfig extends Logger {
   private val networkKey = "network"
+  private val customChainsDirKey = "custom-chains-dir"
 
-  def apply(rawConfig: TypesafeConfig): BlockchainsConfig = BlockchainsConfig(
-    network = rawConfig.getString(networkKey),
-    blockchains = keys(rawConfig)
-      .filterNot(_ == networkKey)
+  def apply(rawConfig: TypesafeConfig): BlockchainsConfig = {
+    // Get the network name first
+    val network = rawConfig.getString(networkKey)
+
+    // Load built-in blockchain configs
+    val builtInBlockchains = keys(rawConfig)
+      .filterNot(k => k == networkKey || k == customChainsDirKey)
       .map(name => name -> BlockchainConfig.fromRawConfig(rawConfig.getConfig(name)))
       .toMap
-  )
+
+    // Check for custom chains directory
+    val customBlockchains = if (rawConfig.hasPath(customChainsDirKey)) {
+      val customChainsDir = rawConfig.getString(customChainsDirKey)
+      val chainsDir = new File(customChainsDir)
+
+      if (chainsDir.exists() && chainsDir.isDirectory) {
+        log.info(s"Loading custom chain configurations from: $customChainsDir")
+        val chainFiles = chainsDir.listFiles().filter { f =>
+          f.isFile && f.getName.endsWith("-chain.conf")
+        }
+
+        // TODO: Future optimization - cache parsed configurations and check file modification
+        // times to avoid re-parsing unchanged files on restart
+        chainFiles.flatMap { chainFile =>
+          val result = Try {
+            val chainName = chainFile.getName.stripSuffix("-chain.conf")
+            log.info(s"Loading custom chain config: $chainName from ${chainFile.getName}")
+            val chainConfig = ConfigFactory.parseFile(chainFile)
+            chainName -> BlockchainConfig.fromRawConfig(chainConfig)
+          }
+
+          result.failed.foreach { e =>
+            log.error(s"Failed to load chain config from ${chainFile.getName}: ${e.getMessage}", e)
+          }
+
+          result.toOption
+        }.toMap
+      } else {
+        if (chainsDir.exists()) {
+          log.warn(s"Custom chains directory is not a directory: $customChainsDir")
+        } else {
+          log.warn(s"Custom chains directory does not exist: $customChainsDir")
+        }
+        Map.empty[String, BlockchainConfig]
+      }
+    } else {
+      Map.empty[String, BlockchainConfig]
+    }
+
+    // Merge blockchains, with custom configs taking precedence
+    val allBlockchains = builtInBlockchains ++ customBlockchains
+
+    if (customBlockchains.nonEmpty) {
+      log.info(
+        s"Loaded ${customBlockchains.size} custom chain configuration(s): ${customBlockchains.keys.mkString(", ")}"
+      )
+    }
+
+    BlockchainsConfig(network, allBlockchains)
+  }
 }
 
 case class MonetaryPolicyConfig(

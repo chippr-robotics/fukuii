@@ -13,44 +13,69 @@ import com.chipprbots.ethereum.utils.ByteUtils
 
 /** SNAP/1 protocol messages
   *
-  * The SNAP protocol is a dependent satellite protocol of ETH that enables efficient state synchronization
-  * by downloading account and storage ranges without intermediate Merkle trie nodes.
+  * The SNAP protocol is a dependent satellite protocol of ETH that enables efficient state synchronization by
+  * downloading account and storage ranges without intermediate Merkle trie nodes.
   *
   * See: https://github.com/ethereum/devp2p/blob/master/caps/snap.md
   *
-  * Message codes:
-  *   - 0x00: GetAccountRange
-  *   - 0x01: AccountRange
-  *   - 0x02: GetStorageRanges
-  *   - 0x03: StorageRanges
-  *   - 0x04: GetByteCodes
-  *   - 0x05: ByteCodes
-  *   - 0x06: GetTrieNodes
-  *   - 0x07: TrieNodes
+  * Message codes (wire protocol): SNAP is a satellite protocol that follows ETH in capability negotiation. ETH/68 uses
+  * codes 0x10-0x20, so SNAP/1 starts at 0x21.
+  *
+  * Wire codes:
+  *   - 0x21: GetAccountRange
+  *   - 0x22: AccountRange
+  *   - 0x23: GetStorageRanges
+  *   - 0x24: StorageRanges
+  *   - 0x25: GetByteCodes
+  *   - 0x26: ByteCodes
+  *   - 0x27: GetTrieNodes
+  *   - 0x28: TrieNodes
+  *
+  * Note: The SNAP spec defines these as 0x00-0x07, but on the wire they are offset by 0x21 to follow ETH protocol
+  * messages. This matches coregeth and besu implementations.
   */
 object SNAP {
 
-  /** Message codes for SNAP/1 protocol */
+  /** SNAP protocol offset
+    *
+    * SNAP/1 is a satellite protocol that runs alongside ETH/68. According to the devp2p spec, each capability gets its
+    * own message ID space. ETH/68 occupies codes 0x10-0x20, so SNAP/1 starts at 0x21.
+    *
+    * This matches the behavior in coregeth and besu where SNAP messages are sent with absolute wire codes, not relative
+    * codes.
+    */
+  val SnapProtocolOffset = 0x21
+
+  /** Message codes for SNAP/1 protocol
+    *
+    * These are the actual wire protocol codes used for SNAP messages. While the SNAP spec documents these as 0x00-0x07
+    * (relative to the protocol), on the wire they must be offset to follow ETH protocol messages.
+    */
   object Codes {
-    val GetAccountRangeCode: Int = 0x00
-    val AccountRangeCode: Int = 0x01
-    val GetStorageRangesCode: Int = 0x02
-    val StorageRangesCode: Int = 0x03
-    val GetByteCodesCode: Int = 0x04
-    val ByteCodesCode: Int = 0x05
-    val GetTrieNodesCode: Int = 0x06
-    val TrieNodesCode: Int = 0x07
+    val GetAccountRangeCode: Int = SnapProtocolOffset + 0x00 // 0x21
+    val AccountRangeCode: Int = SnapProtocolOffset + 0x01 // 0x22
+    val GetStorageRangesCode: Int = SnapProtocolOffset + 0x02 // 0x23
+    val StorageRangesCode: Int = SnapProtocolOffset + 0x03 // 0x24
+    val GetByteCodesCode: Int = SnapProtocolOffset + 0x04 // 0x25
+    val ByteCodesCode: Int = SnapProtocolOffset + 0x05 // 0x26
+    val GetTrieNodesCode: Int = SnapProtocolOffset + 0x06 // 0x27
+    val TrieNodesCode: Int = SnapProtocolOffset + 0x07 // 0x28
   }
 
   /** GetAccountRange message (0x00)
     *
     * Request for a range of accounts from a given account trie.
     *
-    * @param requestId Request ID to match up responses
-    * @param rootHash Root hash of the account trie to serve
-    * @param startingHash Account hash of the first to retrieve
-    * @param limitHash Account hash after which to stop serving data
-    * @param responseBytes Soft limit at which to stop returning data
+    * @param requestId
+    *   Request ID to match up responses
+    * @param rootHash
+    *   Root hash of the account trie to serve
+    * @param startingHash
+    *   Account hash of the first to retrieve
+    * @param limitHash
+    *   Account hash after which to stop serving data
+    * @param responseBytes
+    *   Soft limit at which to stop returning data
     */
   case class GetAccountRange(
       requestId: BigInt,
@@ -60,22 +85,23 @@ object SNAP {
       responseBytes: BigInt
   ) extends Message {
     override def code: Int = Codes.GetAccountRangeCode
-    override def toShortString: String = 
+    override def toShortString: String =
       s"GetAccountRange(reqId=$requestId, root=${rootHash.take(4).toHex}, start=${startingHash.take(4).toHex}, limit=${limitHash.take(4).toHex}, bytes=$responseBytes)"
   }
 
   object GetAccountRange {
-    implicit class GetAccountRangeEnc(val underlyingMsg: GetAccountRange) 
-        extends MessageSerializableImplicit[GetAccountRange](underlyingMsg) with RLPSerializable {
+    implicit class GetAccountRangeEnc(val underlyingMsg: GetAccountRange)
+        extends MessageSerializableImplicit[GetAccountRange](underlyingMsg)
+        with RLPSerializable {
       override def code: Int = Codes.GetAccountRangeCode
       override def toRLPEncodable: RLPEncodeable = {
         import msg._
         RLPList(
-          RLPValue(requestId.toByteArray),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)),
           RLPValue(rootHash.toArray[Byte]),
           RLPValue(startingHash.toArray[Byte]),
           RLPValue(limitHash.toArray[Byte]),
-          RLPValue(responseBytes.toByteArray)
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(responseBytes))
         )
       }
     }
@@ -96,13 +122,13 @@ object SNAP {
             ByteString(limitHashBytes),
             ByteUtils.bytesToBigInt(responseBytesBytes)
           )
-        case rlpList: RLPList => 
+        case rlpList: RLPList =>
           throw new RuntimeException(
             s"Cannot decode GetAccountRange. Expected RLPList[5] with structure " +
-            s"[requestId, rootHash, startingHash, limitHash, responseBytes], " +
-            s"but got RLPList[${rlpList.items.size}]"
+              s"[requestId, rootHash, startingHash, limitHash, responseBytes], " +
+              s"but got RLPList[${rlpList.items.size}]"
           )
-        case other => 
+        case other =>
           throw new RuntimeException(
             s"Cannot decode GetAccountRange. Expected RLPList, got: ${other.getClass.getSimpleName}"
           )
@@ -114,9 +140,12 @@ object SNAP {
     *
     * Response containing consecutive accounts and Merkle proofs for the range.
     *
-    * @param requestId ID of the request this is a response for
-    * @param accounts List of consecutive accounts from the trie (account hash -> account body)
-    * @param proof List of trie nodes proving the account range
+    * @param requestId
+    *   ID of the request this is a response for
+    * @param accounts
+    *   List of consecutive accounts from the trie (account hash -> account body)
+    * @param proof
+    *   List of trie nodes proving the account range
     */
   case class AccountRange(
       requestId: BigInt,
@@ -124,15 +153,16 @@ object SNAP {
       proof: Seq[ByteString]
   ) extends Message {
     override def code: Int = Codes.AccountRangeCode
-    override def toShortString: String = 
+    override def toShortString: String =
       s"AccountRange(reqId=$requestId, accounts=${accounts.size}, proofNodes=${proof.size})"
   }
 
   object AccountRange {
     import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits._
-    
+
     implicit class AccountRangeEnc(val underlyingMsg: AccountRange)
-        extends MessageSerializableImplicit[AccountRange](underlyingMsg) with RLPSerializable {
+        extends MessageSerializableImplicit[AccountRange](underlyingMsg)
+        with RLPSerializable {
       override def code: Int = Codes.AccountRangeCode
       override def toRLPEncodable: RLPEncodeable = {
         import msg._
@@ -145,9 +175,9 @@ object SNAP {
         }
         // Encode proof as list of byte arrays
         val proofList = proof.map(p => RLPValue(p.toArray[Byte]))
-        
+
         RLPList(
-          RLPValue(requestId.toByteArray),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)),
           RLPList(accountsList*),
           RLPList(proofList*)
         )
@@ -186,7 +216,7 @@ object SNAP {
         case rlpList: RLPList =>
           throw new RuntimeException(
             s"Cannot decode AccountRange. Expected RLPList[3] with structure " +
-            s"[requestId, accounts, proof], but got RLPList[${rlpList.items.size}]"
+              s"[requestId, accounts, proof], but got RLPList[${rlpList.items.size}]"
           )
         case other =>
           throw new RuntimeException(
@@ -200,12 +230,18 @@ object SNAP {
     *
     * Request for storage slots from given storage tries.
     *
-    * @param requestId Request ID to match up responses
-    * @param rootHash Root hash of the account trie to serve
-    * @param accountHashes List of account hashes whose storage to retrieve
-    * @param startingHash Storage slot hash to start from
-    * @param limitHash Storage slot hash after which to stop
-    * @param responseBytes Soft limit at which to stop returning data
+    * @param requestId
+    *   Request ID to match up responses
+    * @param rootHash
+    *   Root hash of the account trie to serve
+    * @param accountHashes
+    *   List of account hashes whose storage to retrieve
+    * @param startingHash
+    *   Storage slot hash to start from
+    * @param limitHash
+    *   Storage slot hash after which to stop
+    * @param responseBytes
+    *   Soft limit at which to stop returning data
     */
   case class GetStorageRanges(
       requestId: BigInt,
@@ -216,24 +252,25 @@ object SNAP {
       responseBytes: BigInt
   ) extends Message {
     override def code: Int = Codes.GetStorageRangesCode
-    override def toShortString: String = 
+    override def toShortString: String =
       s"GetStorageRanges(reqId=$requestId, accounts=${accountHashes.size}, bytes=$responseBytes)"
   }
 
   object GetStorageRanges {
     implicit class GetStorageRangesEnc(val underlyingMsg: GetStorageRanges)
-        extends MessageSerializableImplicit[GetStorageRanges](underlyingMsg) with RLPSerializable {
+        extends MessageSerializableImplicit[GetStorageRanges](underlyingMsg)
+        with RLPSerializable {
       override def code: Int = Codes.GetStorageRangesCode
       override def toRLPEncodable: RLPEncodeable = {
         import msg._
         val accountHashesList = accountHashes.map(h => RLPValue(h.toArray[Byte]))
         RLPList(
-          RLPValue(requestId.toByteArray),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)),
           RLPValue(rootHash.toArray[Byte]),
           RLPList(accountHashesList*),
           RLPValue(startingHash.toArray[Byte]),
           RLPValue(limitHash.toArray[Byte]),
-          RLPValue(responseBytes.toByteArray)
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(responseBytes))
         )
       }
     }
@@ -266,8 +303,8 @@ object SNAP {
         case rlpList: RLPList =>
           throw new RuntimeException(
             s"Cannot decode GetStorageRanges. Expected RLPList[6] with structure " +
-            s"[requestId, rootHash, accounts, startingHash, limitHash, responseBytes], " +
-            s"but got RLPList[${rlpList.items.size}]"
+              s"[requestId, rootHash, accounts, startingHash, limitHash, responseBytes], " +
+              s"but got RLPList[${rlpList.items.size}]"
           )
         case other =>
           throw new RuntimeException(
@@ -281,9 +318,12 @@ object SNAP {
     *
     * Response containing storage slots and Merkle proofs.
     *
-    * @param requestId ID of the request this is a response for
-    * @param slots List of storage slot sets (one per account)
-    * @param proof List of trie nodes proving the storage ranges
+    * @param requestId
+    *   ID of the request this is a response for
+    * @param slots
+    *   List of storage slot sets (one per account)
+    * @param proof
+    *   List of trie nodes proving the storage ranges
     */
   case class StorageRanges(
       requestId: BigInt,
@@ -291,13 +331,14 @@ object SNAP {
       proof: Seq[ByteString]
   ) extends Message {
     override def code: Int = Codes.StorageRangesCode
-    override def toShortString: String = 
+    override def toShortString: String =
       s"StorageRanges(reqId=$requestId, slotSets=${slots.size}, proofNodes=${proof.size})"
   }
 
   object StorageRanges {
     implicit class StorageRangesEnc(val underlyingMsg: StorageRanges)
-        extends MessageSerializableImplicit[StorageRanges](underlyingMsg) with RLPSerializable {
+        extends MessageSerializableImplicit[StorageRanges](underlyingMsg)
+        with RLPSerializable {
       override def code: Int = Codes.StorageRangesCode
       override def toRLPEncodable: RLPEncodeable = {
         import msg._
@@ -313,9 +354,9 @@ object SNAP {
         }
         // Encode proof as list of byte arrays
         val proofList = proof.map(p => RLPValue(p.toArray[Byte]))
-        
+
         RLPList(
-          RLPValue(requestId.toByteArray),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)),
           RLPList(slotsList*),
           RLPList(proofList*)
         )
@@ -359,7 +400,7 @@ object SNAP {
         case rlpList: RLPList =>
           throw new RuntimeException(
             s"Cannot decode StorageRanges. Expected RLPList[3] with structure " +
-            s"[requestId, slots, proof], but got RLPList[${rlpList.items.size}]"
+              s"[requestId, slots, proof], but got RLPList[${rlpList.items.size}]"
           )
         case other =>
           throw new RuntimeException(
@@ -373,9 +414,12 @@ object SNAP {
     *
     * Request for contract bytecodes by their code hashes.
     *
-    * @param requestId Request ID to match up responses
-    * @param hashes List of bytecode hashes to retrieve
-    * @param responseBytes Soft limit at which to stop returning data
+    * @param requestId
+    *   Request ID to match up responses
+    * @param hashes
+    *   List of bytecode hashes to retrieve
+    * @param responseBytes
+    *   Soft limit at which to stop returning data
     */
   case class GetByteCodes(
       requestId: BigInt,
@@ -383,21 +427,22 @@ object SNAP {
       responseBytes: BigInt
   ) extends Message {
     override def code: Int = Codes.GetByteCodesCode
-    override def toShortString: String = 
+    override def toShortString: String =
       s"GetByteCodes(reqId=$requestId, hashes=${hashes.size}, bytes=$responseBytes)"
   }
 
   object GetByteCodes {
     implicit class GetByteCodesEnc(val underlyingMsg: GetByteCodes)
-        extends MessageSerializableImplicit[GetByteCodes](underlyingMsg) with RLPSerializable {
+        extends MessageSerializableImplicit[GetByteCodes](underlyingMsg)
+        with RLPSerializable {
       override def code: Int = Codes.GetByteCodesCode
       override def toRLPEncodable: RLPEncodeable = {
         import msg._
         val hashesList = hashes.map(h => RLPValue(h.toArray[Byte]))
         RLPList(
-          RLPValue(requestId.toByteArray),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)),
           RLPList(hashesList*),
-          RLPValue(responseBytes.toByteArray)
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(responseBytes))
         )
       }
     }
@@ -424,7 +469,7 @@ object SNAP {
         case rlpList: RLPList =>
           throw new RuntimeException(
             s"Cannot decode GetByteCodes. Expected RLPList[3] with structure " +
-            s"[requestId, hashes, responseBytes], but got RLPList[${rlpList.items.size}]"
+              s"[requestId, hashes, responseBytes], but got RLPList[${rlpList.items.size}]"
           )
         case other =>
           throw new RuntimeException(
@@ -438,27 +483,30 @@ object SNAP {
     *
     * Response containing requested contract bytecodes.
     *
-    * @param requestId ID of the request this is a response for
-    * @param codes List of contract bytecodes
+    * @param requestId
+    *   ID of the request this is a response for
+    * @param codes
+    *   List of contract bytecodes
     */
   case class ByteCodes(
       requestId: BigInt,
       codes: Seq[ByteString]
   ) extends Message {
     override def code: Int = Codes.ByteCodesCode
-    override def toShortString: String = 
+    override def toShortString: String =
       s"ByteCodes(reqId=$requestId, codes=${codes.size})"
   }
 
   object ByteCodes {
     implicit class ByteCodesEnc(val underlyingMsg: ByteCodes)
-        extends MessageSerializableImplicit[ByteCodes](underlyingMsg) with RLPSerializable {
+        extends MessageSerializableImplicit[ByteCodes](underlyingMsg)
+        with RLPSerializable {
       override def code: Int = Codes.ByteCodesCode
       override def toRLPEncodable: RLPEncodeable = {
         import msg._
         val codesList = codes.map(c => RLPValue(c.toArray[Byte]))
         RLPList(
-          RLPValue(requestId.toByteArray),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)),
           RLPList(codesList*)
         )
       }
@@ -484,7 +532,7 @@ object SNAP {
         case rlpList: RLPList =>
           throw new RuntimeException(
             s"Cannot decode ByteCodes. Expected RLPList[2] with structure " +
-            s"[requestId, codes], but got RLPList[${rlpList.items.size}]"
+              s"[requestId, codes], but got RLPList[${rlpList.items.size}]"
           )
         case other =>
           throw new RuntimeException(
@@ -498,10 +546,14 @@ object SNAP {
     *
     * Request for trie nodes by their path and hash.
     *
-    * @param requestId Request ID to match up responses
-    * @param rootHash Root hash of the trie to serve nodes from
-    * @param paths List of trie paths to retrieve (each path is a list of node hashes)
-    * @param responseBytes Soft limit at which to stop returning data
+    * @param requestId
+    *   Request ID to match up responses
+    * @param rootHash
+    *   Root hash of the trie to serve nodes from
+    * @param paths
+    *   List of trie paths to retrieve (each path is a list of node hashes)
+    * @param responseBytes
+    *   Soft limit at which to stop returning data
     */
   case class GetTrieNodes(
       requestId: BigInt,
@@ -510,13 +562,14 @@ object SNAP {
       responseBytes: BigInt
   ) extends Message {
     override def code: Int = Codes.GetTrieNodesCode
-    override def toShortString: String = 
+    override def toShortString: String =
       s"GetTrieNodes(reqId=$requestId, paths=${paths.size}, bytes=$responseBytes)"
   }
 
   object GetTrieNodes {
     implicit class GetTrieNodesEnc(val underlyingMsg: GetTrieNodes)
-        extends MessageSerializableImplicit[GetTrieNodes](underlyingMsg) with RLPSerializable {
+        extends MessageSerializableImplicit[GetTrieNodes](underlyingMsg)
+        with RLPSerializable {
       override def code: Int = Codes.GetTrieNodesCode
       override def toRLPEncodable: RLPEncodeable = {
         import msg._
@@ -526,10 +579,10 @@ object SNAP {
           RLPList(nodeHashes*)
         }
         RLPList(
-          RLPValue(requestId.toByteArray),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)),
           RLPValue(rootHash.toArray[Byte]),
           RLPList(pathsList*),
-          RLPValue(responseBytes.toByteArray)
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(responseBytes))
         )
       }
     }
@@ -565,7 +618,7 @@ object SNAP {
         case rlpList: RLPList =>
           throw new RuntimeException(
             s"Cannot decode GetTrieNodes. Expected RLPList[4] with structure " +
-            s"[requestId, rootHash, paths, responseBytes], but got RLPList[${rlpList.items.size}]"
+              s"[requestId, rootHash, paths, responseBytes], but got RLPList[${rlpList.items.size}]"
           )
         case other =>
           throw new RuntimeException(
@@ -579,27 +632,30 @@ object SNAP {
     *
     * Response containing requested trie nodes.
     *
-    * @param requestId ID of the request this is a response for
-    * @param nodes List of trie nodes (RLP-encoded)
+    * @param requestId
+    *   ID of the request this is a response for
+    * @param nodes
+    *   List of trie nodes (RLP-encoded)
     */
   case class TrieNodes(
       requestId: BigInt,
       nodes: Seq[ByteString]
   ) extends Message {
     override def code: Int = Codes.TrieNodesCode
-    override def toShortString: String = 
+    override def toShortString: String =
       s"TrieNodes(reqId=$requestId, nodes=${nodes.size})"
   }
 
   object TrieNodes {
     implicit class TrieNodesEnc(val underlyingMsg: TrieNodes)
-        extends MessageSerializableImplicit[TrieNodes](underlyingMsg) with RLPSerializable {
+        extends MessageSerializableImplicit[TrieNodes](underlyingMsg)
+        with RLPSerializable {
       override def code: Int = Codes.TrieNodesCode
       override def toRLPEncodable: RLPEncodeable = {
         import msg._
         val nodesList = nodes.map(n => RLPValue(n.toArray[Byte]))
         RLPList(
-          RLPValue(requestId.toByteArray),
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)),
           RLPList(nodesList*)
         )
       }
@@ -625,7 +681,7 @@ object SNAP {
         case rlpList: RLPList =>
           throw new RuntimeException(
             s"Cannot decode TrieNodes. Expected RLPList[2] with structure " +
-            s"[requestId, nodes], but got RLPList[${rlpList.items.size}]"
+              s"[requestId, nodes], but got RLPList[${rlpList.items.size}]"
           )
         case other =>
           throw new RuntimeException(

@@ -16,8 +16,7 @@ object AuthResponseMessage {
 
   def decode(input: Array[Byte]): AuthResponseMessage =
     AuthResponseMessage(
-      ephemeralPublicKey =
-        curve.getCurve.decodePoint(ECDSASignature.UncompressedIndicator +: input.take(PublicKeyLength)),
+      ephemeralPublicKey = decodeAndValidatePoint(ECDSASignature.UncompressedIndicator +: input.take(PublicKeyLength)),
       nonce = ByteString(input.slice(PublicKeyLength, PublicKeyLength + NonceLength)),
       knownPeer = input(PublicKeyLength + NonceLength) == 1
     )

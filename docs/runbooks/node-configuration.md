@@ -18,6 +18,7 @@ This runbook provides comprehensive documentation of Fukuii's configuration syst
 6. [Environment Variables](#environment-variables)
 7. [Common Configuration Examples](#common-configuration-examples)
 8. [Configuration Reference](#configuration-reference)
+9. [Developer Tools](#developer-tools)
 
 ## Configuration System Overview
 
@@ -43,9 +44,9 @@ src/main/resources/conf/
 ├── metrics.conf           # Metrics configuration
 └── chains/
     ├── etc-chain.conf     # ETC chain parameters
-    ├── eth-chain.conf     # ETH chain parameters
     ├── mordor-chain.conf  # Mordor chain parameters
-    └── ...
+    ├── gorgoroth-chain.conf # Gorgoroth (Olympia test) parameters
+    └── test-chain.conf    # Test/dev chain parameters
 ```
 
 **Runtime Configurations**:
@@ -96,9 +97,8 @@ Chain configuration files define blockchain-specific parameters such as fork blo
 | Chain File | Network | Network ID | Chain ID |
 |------------|---------|------------|----------|
 | `etc-chain.conf` | Ethereum Classic | 1 | 0x3d (61) |
-| `eth-chain.conf` | Ethereum | 1 | 0x01 (1) |
 | `mordor-chain.conf` | Mordor Testnet | 7 | 0x3f (63) |
-| `pottery-chain.conf` | Pottery Testnet | 10 | 0xa (10) |
+| `gorgoroth-chain.conf` | Gorgoroth (Olympia) | 7 | 0x3f (63) |
 | `test-chain.conf` | Test/Dev | Varies | Varies |
 
 ### Chain Configuration Parameters
@@ -152,6 +152,9 @@ Chain configs define when specific protocol upgrades activate:
   
   # Spiral (ETC-specific, EIP-3855, EIP-3651, EIP-3860)
   spiral-block-number = "19250000"
+
+  # Olympia (ECIP-1111/1112/1121: EIP-1559, EVM modernization, EIP-7702)
+  # olympia-block-number = "TBD"  # ~mid-June 2026
 }
 ```
 
@@ -256,6 +259,46 @@ fukuii {
 }
 ```
 
+**Static Nodes Configuration**:
+
+In addition to bootstrap nodes configured in chain configuration files, Fukuii supports loading static nodes from a `static-nodes.json` file in the data directory. This allows for dynamic peer configuration without modifying configuration files.
+
+The `static-nodes.json` file should be placed in the data directory (e.g., `~/.fukuii/etc/static-nodes.json`) and contain a JSON array of enode URLs:
+
+```json
+[
+  "enode://6eecbdcc74c0b672ce505b9c639c3ef2e8ee8cddd8447ca7ab82c65041932db64a9cd4d7e723ba180b0c3d88d1f0b2913fda48972cdd6742fea59f900af084af@192.168.1.1:9076",
+  "enode://a335a7e86eab05929266de232bec201a49fdcfc1115e8f8b861656e8afb3a6e5d3ffd172d153ae6c080401a56e3d620db2ac0695038a19e9b0c5220212651493@192.168.1.2:9076"
+]
+```
+
+**How it works**:
+- **Default/Public mode**: Static nodes are merged with bootstrap nodes from config - both are used
+- **Enterprise mode** (`fukuii enterprise <network>`): Only static nodes are used, bootstrap nodes are ignored
+- This allows complete control over peer connections in private networks while preventing accidental connections to public infrastructure
+
+**Modifier behavior**:
+```bash
+# Public mode - uses both bootstrap nodes and static-nodes.json
+fukuii public etc
+
+# Enterprise mode - uses ONLY static-nodes.json (ignores bootstrap nodes)
+fukuii enterprise gorgoroth
+```
+
+**Use cases**:
+- Private/permissioned networks where peer lists change frequently
+- Test networks where nodes are dynamically created
+- Automated deployments where peer configuration is managed externally
+- Enterprise environments with scripted node management requiring strict peer control
+
+**Notes**:
+- The file is optional - if it doesn't exist, only bootstrap nodes from config are used (unless in enterprise mode)
+- Invalid enode URLs are logged and skipped
+- Changes to the file require a node restart to take effect
+- For the Gorgoroth test network, this is the recommended way to configure peers
+
+
 **Peer Management**:
 ```hocon
 fukuii {
@@ -313,7 +356,7 @@ fukuii {
       }
       
       # Enabled RPC APIs
-      apis = "eth,web3,net,personal,fukuii,debug,qa,checkpointing"
+      apis = "eth,web3,net,personal,fukuii,debug,qa"
     }
   }
 }
@@ -698,11 +741,16 @@ Downloads and extracts blockchain bootstrap data to speed up initial sync.
 ```
 Runs a faucet service for testnet token distribution.
 
-**EC Key Generator**:
+**CLI Utilities**:
 ```bash
-./bin/fukuii eckeygen
+./bin/fukuii cli --help
+./bin/fukuii cli generate-key-pairs
+./bin/fukuii cli generate-key-pairs 5
 ```
-Generates elliptic curve key pairs for testing and development.
+Command-line utilities for key generation, address derivation, and more.
+Use `--help` to see all available subcommands.
+
+For RPC-based key generation, see `personal_newAccount` endpoint.
 
 **Signature Validator**:
 ```bash
@@ -884,7 +932,7 @@ fukuii {
       }
       
       # Enable all APIs for testing
-      apis = "eth,web3,net,personal,fukuii,debug,qa,test,checkpointing"
+      apis = "eth,web3,net,personal,fukuii,debug,qa,test"
     }
     
     # Minimal peers for faster startup
@@ -1040,3 +1088,87 @@ bootstrap-nodes = [
 **Document Version**: 1.0  
 **Last Updated**: 2025-11-04  
 **Maintainer**: Chippr Robotics LLC
+
+## Developer Tools
+
+### Fukuii CLI Tool
+
+The Fukuii CLI is a unified command-line toolkit for managing Fukuii node deployments and configurations. It consolidates all deployment and configuration operations into a single, consistent interface.
+
+#### Installation (Linux)
+
+```bash
+# Copy the tool to a system-wide location
+sudo cp ops/tools/fukuii-cli.sh /usr/local/bin/fukuii-cli
+sudo chmod +x /usr/local/bin/fukuii-cli
+
+# Verify installation
+fukuii-cli help
+```
+
+#### Installation (User-specific)
+
+```bash
+# Create a local bin directory if it doesn't exist
+mkdir -p ~/.local/bin
+
+# Copy the tool
+cp ops/tools/fukuii-cli.sh ~/.local/bin/fukuii-cli
+chmod +x ~/.local/bin/fukuii-cli
+
+# Add to PATH (add this to ~/.bashrc or ~/.zshrc)
+export PATH="$HOME/.local/bin:$PATH"
+
+# Reload your shell or run:
+source ~/.bashrc  # or source ~/.zshrc
+
+# Verify installation
+fukuii-cli help
+```
+
+#### Features
+
+The fukuii-cli tool provides a comprehensive set of commands:
+
+**Network Deployment:**
+- `start [config]` - Start the Gorgoroth test network with specified configuration
+- `stop [config]` - Stop the network
+- `restart [config]` - Restart the network
+- `status [config]` - Show status of all containers
+- `logs [config]` - Follow logs from all containers
+- `clean [config]` - Stop and remove all containers and volumes
+
+**Node Configuration:**
+- `sync-static-nodes` - Collect enode URLs and synchronize static-nodes.json across all nodes
+- `collect-logs [config]` - Collect logs from all containers for debugging
+
+**Utility:**
+- `help` - Show detailed usage information
+- `version` - Show version information
+
+#### Usage Examples
+
+```bash
+# Start a 3-node network
+fukuii-cli start 3nodes
+
+# Wait for nodes to initialize
+sleep 45
+
+# Synchronize peer connections
+fukuii-cli sync-static-nodes
+
+# Check network status
+fukuii-cli status
+
+# View logs
+fukuii-cli logs 3nodes
+
+# Collect logs for debugging
+fukuii-cli collect-logs 3nodes
+
+# Stop the network
+fukuii-cli stop 3nodes
+```
+
+**Note**: The fukuii-cli tool is the primary interface for all deployment and configuration operations. Install it system-wide for easy access from anywhere.

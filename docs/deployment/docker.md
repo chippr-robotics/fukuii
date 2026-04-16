@@ -38,7 +38,7 @@ docker run -d --name fukuii -p 8545:8545 chipprbots/fukuii:latest
 ```
 
 ### GitHub Container Registry - Official Release (Recommended for Production)
-- **Registry:** `ghcr.io/chippr-robotics/chordodes_fukuii`
+- **Registry:** `ghcr.io/chippr-robotics/fukuii`
 - **Publishing:** Automated via `.github/workflows/release.yml` on version tags
 - **Security Features:**
   - ✅ Images are signed with [Cosign](https://github.com/sigstore/cosign) (keyless signing using GitHub OIDC)
@@ -100,7 +100,7 @@ sudo install -m 755 cosign-linux-amd64 /usr/local/bin/cosign
 cosign verify \
   --certificate-identity-regexp=https://github.com/chippr-robotics/fukuii \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
-  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+  ghcr.io/chippr-robotics/fukuii:v1.0.0
 ```
 
 **What this verifies:**
@@ -116,7 +116,7 @@ go install github.com/slsa-framework/slsa-verifier/v2/cli/slsa-verifier@latest
 
 # Verify SLSA provenance
 slsa-verifier verify-image \
-  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0 \
+  ghcr.io/chippr-robotics/fukuii:v1.0.0 \
   --source-uri github.com/chippr-robotics/fukuii
 ```
 
@@ -526,7 +526,7 @@ readinessProbe:
 
 ### Trusted Supply Chain
 
-Release images published to `ghcr.io/chippr-robotics/chordodes_fukuii` follow supply chain security best practices:
+Release images published to `ghcr.io/chippr-robotics/fukuii` follow supply chain security best practices:
 
 #### 1. Image Signing with Cosign
 - All release images are signed using [Sigstore Cosign](https://docs.sigstore.dev/cosign/overview/)
@@ -554,21 +554,21 @@ Release images published to `ghcr.io/chippr-robotics/chordodes_fukuii` follow su
 **Verification Example:**
 ```bash
 # 1. Pull the image by version tag
-docker pull ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+docker pull ghcr.io/chippr-robotics/fukuii:v1.0.0
 
 # 2. Verify the signature
 cosign verify \
   --certificate-identity-regexp=https://github.com/chippr-robotics/fukuii \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
-  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+  ghcr.io/chippr-robotics/fukuii:v1.0.0
 
 # 3. Verify SLSA provenance (optional)
 slsa-verifier verify-image \
-  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0 \
+  ghcr.io/chippr-robotics/fukuii:v1.0.0 \
   --source-uri github.com/chippr-robotics/fukuii
 
 # 4. Use the verified image with immutable digest
-docker pull ghcr.io/chippr-robotics/chordodes_fukuii@sha256:abc123...
+docker pull ghcr.io/chippr-robotics/fukuii@sha256:abc123...
 ```
 
 ### Non-Root User
@@ -578,13 +578,13 @@ All images run as the `fukuii` user (UID 1000, GID 1000) for security. This prev
 Regularly scan images for vulnerabilities:
 ```bash
 # Using Docker Scout (if available)
-docker scout cves ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+docker scout cves ghcr.io/chippr-robotics/fukuii:v1.0.0
 
 # Using Trivy
-trivy image ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+trivy image ghcr.io/chippr-robotics/fukuii:v1.0.0
 
 # Using Grype
-grype ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+grype ghcr.io/chippr-robotics/fukuii:v1.0.0
 ```
 
 ### Best Practices
@@ -654,7 +654,7 @@ Fukuii uses automated workflows for container image publishing to both Docker Hu
 **Triggered by:** Git tags starting with `v` (e.g., `v1.0.0`)
 
 **Registries:** 
-- `ghcr.io/chippr-robotics/chordodes_fukuii` (Official releases - signed)
+- `ghcr.io/chippr-robotics/fukuii` (Official releases - signed)
 - `chipprbots/fukuii` (Docker Hub - unsigned)
 
 **Security Features (GHCR only):**

@@ -9,9 +9,9 @@
 
     <logger name="io.netty" level="OFF"/>
 
-    <logger name="com.chipprbots.scalanet.peergroup.udp" level="ERROR"/>
+    <!-- Silent by default - enable specific loggers when troubleshooting tests -->
 
-    <root level="WARN">
+    <root level="ERROR">
         <appender-ref ref="STDOUT"/>
     </root>
 

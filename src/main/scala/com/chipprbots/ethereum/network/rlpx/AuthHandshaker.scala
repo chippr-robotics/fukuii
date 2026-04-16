@@ -14,6 +14,8 @@ import org.bouncycastle.crypto.digests.KeccakDigest
 import org.bouncycastle.crypto.params.ECPrivateKeyParameters
 import org.bouncycastle.crypto.params.ECPublicKeyParameters
 import org.bouncycastle.math.ec.ECPoint
+import org.bouncycastle.util.encoders.Hex
+import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.crypto._
 import com.chipprbots.ethereum.network._
@@ -35,6 +37,16 @@ class Secrets(
 )
 
 object AuthHandshaker {
+  private val log = LoggerFactory.getLogger(classOf[AuthHandshaker])
+  private val MaxLoggedBytes = 512
+
+  private def toLoggableHex(bytes: ByteString): String = {
+    val arr = bytes.toArray[Byte]
+    val truncated = if (arr.length <= MaxLoggedBytes) arr else arr.take(MaxLoggedBytes)
+    val hex = Hex.toHexString(truncated)
+    if (arr.length > MaxLoggedBytes) s"$hex...(+${arr.length - MaxLoggedBytes} bytes)" else hex
+  }
+
   val InitiatePacketLength: Int = AuthInitiateMessage.EncodedLength + ECIESCoder.OverheadSize
   val ResponsePacketLength: Int = AuthResponseMessage.EncodedLength + ECIESCoder.OverheadSize
 
@@ -85,7 +97,7 @@ case class AuthHandshaker(
     copy(responsePacketOpt = Some(data)).finalizeHandshake(message.ephemeralPublicKey, message.nonce)
   }
 
-  def handleResponseMessageV4(data: ByteString): AuthHandshakeResult = {
+  def handleResponseMessageV4(data: ByteString, peerLabel: => String = "unknown"): AuthHandshakeResult = {
     val sizeBytes = data.take(2)
     val encryptedPayload = data.drop(2)
 
@@ -95,14 +107,44 @@ case class AuthHandshaker(
       macData = Some(sizeBytes.toArray)
     )
 
-    val message = rlp.decode[AuthResponseMessageV4](plaintext)
+    val message =
+      try rlp.decode[AuthResponseMessageV4](plaintext)
+      catch {
+        case ex: Throwable =>
+          AuthHandshaker.log.warn(
+            "[RLPx] AUTH_RESPONSE_DECODE_FAILED peer={} sizePrefix={} cipherLen={} plaintextLen={} plaintextHex={}",
+            peerLabel,
+            Hex.toHexString(sizeBytes.toArray[Byte]),
+            encryptedPayload.length,
+            plaintext.length,
+            AuthHandshaker.toLoggableHex(ByteString(plaintext)),
+            ex
+          )
+          throw ex
+      }
 
     copy(responsePacketOpt = Some(data)).finalizeHandshake(message.ephemeralPublicKey, message.nonce)
   }
 
   def handleInitialMessage(data: ByteString): (ByteString, AuthHandshakeResult) = {
     val plaintext = ECIESCoder.decrypt(nodeKey.getPrivate.asInstanceOf[ECPrivateKeyParameters].getD, data.toArray)
-    val message = AuthInitiateMessage.decode(plaintext)
+
+    val message =
+      try AuthInitiateMessage.decode(plaintext)
+      catch {
+        case ex: Throwable =>
+          // Log at ERROR to ensure the diagnostic is visible even in environments where WARNs
+          // from this logger are not reliably surfaced in docker compose output.
+          AuthHandshaker.log.error(
+            "[RLPx] AUTH_INIT_PRE_EIP8_DECODE_FAILED peer={} cipherLen={} plaintextLen={} plaintextHex={}",
+            "unknown",
+            data.length,
+            plaintext.length,
+            AuthHandshaker.toLoggableHex(ByteString(plaintext)),
+            ex
+          )
+          throw ex
+      }
 
     val response = AuthResponseMessage(
       ephemeralPublicKey = ephemeralKey.getPublic.asInstanceOf[ECPublicKeyParameters].getQ,
@@ -124,7 +166,7 @@ case class AuthHandshaker(
     (encryptedPacket, handshakeResult)
   }
 
-  def handleInitialMessageV4(data: ByteString): (ByteString, AuthHandshakeResult) = {
+  def handleInitialMessageV4(data: ByteString, peerLabel: => String = "unknown"): (ByteString, AuthHandshakeResult) = {
     val sizeBytes = data.take(2)
     val encryptedPayload = data.drop(2)
 
@@ -134,7 +176,22 @@ case class AuthHandshaker(
       macData = Some(sizeBytes.toArray)
     )
 
-    val message = plaintext.toAuthInitiateMessageV4
+    val message =
+      try plaintext.toAuthInitiateMessageV4
+      catch {
+        case ex: Throwable =>
+          // Log at ERROR to ensure the plaintextHex diagnostic is visible in docker compose logs.
+          AuthHandshaker.log.error(
+            "[RLPx] AUTH_INIT_DECODE_FAILED peer={} sizePrefix={} cipherLen={} plaintextLen={} plaintextHex={}",
+            peerLabel,
+            Hex.toHexString(sizeBytes.toArray[Byte]),
+            encryptedPayload.length,
+            plaintext.length,
+            AuthHandshaker.toLoggableHex(ByteString(plaintext)),
+            ex
+          )
+          throw ex
+      }
 
     val response = AuthResponseMessageV4(
       ephemeralPublicKey = ephemeralKey.getPublic.asInstanceOf[ECPublicKeyParameters].getQ,
@@ -171,7 +228,7 @@ case class AuthHandshaker(
         throw new IllegalStateException("Unable to recover public key from signature")
       )
 
-    curve.getCurve.decodePoint(ECDSASignature.UncompressedIndicator +: signaturePubBytes)
+    decodeAndValidatePoint(ECDSASignature.UncompressedIndicator +: signaturePubBytes)
   }
 
   private def createAuthInitiateMessageV4(remotePubKey: ECPoint) = {

@@ -44,8 +44,8 @@ This section contains guides for deploying, monitoring, and managing Fukuii in p
 
 | Image | Purpose |
 |-------|---------|
-| `ghcr.io/chippr-robotics/chordodes_fukuii:latest` | Production (signed) |
-| `ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0` | Specific version |
+| `ghcr.io/chippr-robotics/fukuii:latest` | Production (signed) |
+| `ghcr.io/chippr-robotics/fukuii:v1.0.0` | Specific version |
 | `ghcr.io/chippr-robotics/fukuii:main` | Development (unsigned) |
 | `ghcr.io/chippr-robotics/fukuii-dev:latest` | Development environment |
 
@@ -55,7 +55,7 @@ This section contains guides for deploying, monitoring, and managing Fukuii in p
 cosign verify \
   --certificate-identity-regexp=https://github.com/chippr-robotics/fukuii \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
-  ghcr.io/chippr-robotics/chordodes_fukuii:latest
+  ghcr.io/chippr-robotics/fukuii:latest
 ```
 
 ## Monitoring Stack

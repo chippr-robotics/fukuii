@@ -10,6 +10,7 @@ import scala.util.Success
 import scala.util.Try
 
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
 import com.chipprbots.ethereum.consensus.mining.StdMiningBuilder
 import com.chipprbots.ethereum.console.Tui
 import com.chipprbots.ethereum.console.TuiConfig
@@ -37,42 +38,48 @@ abstract class BaseNode extends Node {
   private var tuiUpdater: Option[TuiUpdater] = None
 
   def start(): Unit = {
+    // Phase 1: Essential initialization (must complete before anything else)
     startMetricsClient()
-
     fixDatabase()
-
     loadGenesisData()
+    importChainData() // Must complete before APIs so queries return chain data
 
-    runDBConsistencyCheck()
+    // Phase 2: API servers (user-facing, ready as early as possible)
+    startJsonRpcHttpServer()
+    startJsonRpcIpcServer()
+    startEngineApiServer()
 
+    // Phase 3: P2P networking
     startPeerManager()
-
     startPortForwarding()
-
     startServer()
-
-    startSyncController()
-
-    startMining()
-
     startDiscoveryManager()
 
-    startJsonRpcHttpServer()
+    // Phase 5: Background work
+    startSyncController()
+    startMining()
 
-    startJsonRpcIpcServer()
-
+    // Phase 6: Non-critical maintenance
+    runDBConsistencyCheck()
     startPeriodicDBConsistencyCheck()
-
     startTuiUpdater()
   }
 
   private[this] def startMetricsClient(): Unit = {
-    val rootConfig = com.typesafe.config.ConfigFactory.load()
-    val fukuiiConfig = rootConfig.getConfig("fukuii")
-    val metricsConfig = MetricsConfig(fukuiiConfig)
-    Metrics.configure(metricsConfig) match {
+    val metricsConfig = MetricsConfig(instanceConfig.config)
+    Metrics.configure(metricsConfig, instanceConfig.instanceId) match {
       case Success(_) =>
         log.info("Metrics started")
+
+        if (metricsConfig.enabled) {
+          val snapSyncEnabled =
+            Try(instanceConfig.config.getConfig("sync").getBoolean("do-snap-sync")).getOrElse(false)
+
+          if (snapSyncEnabled) {
+            // Ensure app_snapsync_* series exist even before SNAP sync starts.
+            val _ = SNAPSyncMetrics
+          }
+        }
       case Failure(exception) => throw exception
     }
   }
@@ -80,16 +87,38 @@ abstract class BaseNode extends Node {
   private[this] def loadGenesisData(): Unit =
     if (!Config.testmode) {
       genesisDataLoader.loadGenesisData()
-      bootstrapCheckpointLoader.loadBootstrapCheckpoints()
     }
 
-  private[this] def runDBConsistencyCheck(): Unit =
+  private[this] def importChainData(): Unit = {
+    val chainFile = scala.util.Try(instanceConfig.config.getString("import-chain-file")).toOption
+    chainFile.foreach { path =>
+      log.info(s"Importing chain data from: $path")
+      val (imported, skipped, failed) = chainImporter.importChainFile(path)
+      log.info(s"Chain import: $imported imported, $skipped skipped, $failed failed")
+    }
+  }
+
+  private[this] def runDBConsistencyCheck(): Unit = {
+    // Skip consistency check after SNAP sync — block headers 0..pivot don't exist yet.
+    // SNAP sync only stores the pivot block header; earlier headers are downloaded
+    // incrementally during regular sync's block-by-block import.
+    if (storagesInstance.storages.appStateStorage.isSnapSyncDone()) {
+      log.info("Skipping DB consistency check: SNAP sync stores only pivot block header, not full header chain")
+      return
+    }
+    // Skip consistency check in Engine API mode — optimistic imports store blocks
+    // at the chain tip without the full header chain from genesis.
+    if (engineApiConfig.enabled) {
+      log.info("Skipping DB consistency check: Engine API mode uses optimistic block import")
+      return
+    }
     StorageConsistencyChecker.checkStorageConsistency(
       storagesInstance.storages.appStateStorage.getBestBlockNumber(),
       storagesInstance.storages.blockNumberMappingStorage,
       storagesInstance.storages.blockHeadersStorage,
       shutdown
     )(log)
+  }
 
   private[this] def startPeerManager(): Unit = peerManager ! PeerManagerActor.StartConnecting
 
@@ -111,6 +140,20 @@ abstract class BaseNode extends Node {
   private[this] def startJsonRpcIpcServer(): Unit =
     if (jsonRpcConfig.ipcServerConfig.enabled) jsonRpcIpcServer.run()
 
+  private[this] def startEngineApiServer(): Unit =
+    maybeEngineApiServer.foreach { server =>
+      try {
+        val binding = scala.concurrent.Await.result(
+          server.start(),
+          scala.concurrent.duration.Duration(10, "seconds")
+        )
+        log.info(s"Engine API server bound to ${binding.localAddress}")
+      } catch {
+        case ex: Exception =>
+          log.error(s"Engine API server failed to start on ${engineApiConfig.interface}:${engineApiConfig.port}", ex)
+      }
+    }
+
   def startPeriodicDBConsistencyCheck(): Unit =
     if (Config.Db.periodicConsistencyCheck)
       ActorSystem(
@@ -120,7 +163,7 @@ abstract class BaseNode extends Node {
           storagesInstance.storages.blockHeadersStorage,
           shutdown
         ),
-        "PeriodicDBConsistencyCheck"
+        s"PeriodicDBConsistencyCheck_${instanceConfig.instanceId}"
       )
 
   private[this] def startTuiUpdater(): Unit = {
@@ -170,8 +213,6 @@ abstract class BaseNode extends Node {
   }
 
   def fixDatabase(): Unit = {
-    // FIXME this is a temporary solution to avoid an incompatibility due to the introduction of the best block hash
-    // We can remove this fix when we release an incompatible version.
     val bestBlockInfo = storagesInstance.storages.appStateStorage.getBestBlockInfo()
     if (bestBlockInfo.hash == ByteString.empty && bestBlockInfo.number > 0) {
       log.warn("Fixing best block hash into database for block {}", bestBlockInfo.number)
@@ -188,4 +229,9 @@ abstract class BaseNode extends Node {
   }
 }
 
-class StdNode extends BaseNode with StdMiningBuilder
+class StdNode(
+    _instanceConfig: com.chipprbots.ethereum.utils.InstanceConfig = com.chipprbots.ethereum.utils.Config
+) extends BaseNode
+    with StdMiningBuilder {
+  override lazy val instanceConfig: com.chipprbots.ethereum.utils.InstanceConfig = _instanceConfig
+}

@@ -18,7 +18,7 @@ class BlockBodiesStorageSpec
     with ObjectGenerators
     with SecureRandomBuilder {
 
-  val chainId: Option[Byte] = Hex.decode("3d").headOption
+  val chainId: Option[BigInt] = Some(BigInt(0x3d))
 
   "BlockBodiesStorage" should {
 

@@ -37,7 +37,7 @@ services:
       retries: 3
 
   fukuii:
-    image: fukuii:latest
+    image: ${FUKUII_IMAGE:-fukuii-etc:local}
     container_name: fukuii
     restart: unless-stopped
     ports:

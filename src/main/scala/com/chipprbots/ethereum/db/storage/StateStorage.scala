@@ -16,7 +16,7 @@ import com.chipprbots.ethereum.db.storage.pruning.ArchivePruning
 import com.chipprbots.ethereum.db.storage.pruning.PruningMode
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.MptNodeEncoders._
-import com.chipprbots.ethereum.utils.Config.NodeCacheConfig
+import com.chipprbots.ethereum.utils.NodeCacheConfig
 
 // scalastyle:off
 trait StateStorage {

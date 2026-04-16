@@ -8,37 +8,63 @@ import scala.util.Try
 import com.typesafe.config.ConfigRenderOptions
 import com.typesafe.config.{Config => TypesafeConfig}
 
-import com.chipprbots.ethereum.blockchain.data.BootstrapCheckpoint
 import com.chipprbots.ethereum.consensus.mess.MESSConfig
-import com.chipprbots.ethereum.domain.Address
-import com.chipprbots.ethereum.domain.UInt256
-import com.chipprbots.ethereum.network.p2p.messages.Capability
+import com.chipprbots.ethereum.domain.{Address, UInt256}
 import com.chipprbots.ethereum.utils.NumericUtils._
+
+/** Identifies whether the chain follows ETC (PoW indefinitely) or ETH (post-Merge PoS via CL). */
+sealed trait NetworkType
+object NetworkType {
+  case object ETC extends NetworkType
+  case object ETH extends NetworkType
+
+  def fromString(s: String): NetworkType = s.toLowerCase match {
+    case "etc" => ETC
+    case "eth" => ETH
+    case other => throw new IllegalArgumentException(s"Unknown network-type: $other (expected 'etc' or 'eth')")
+  }
+}
+
+/** Timestamp-based fork activation for post-Merge Ethereum forks. */
+case class ForkTimestamps(
+    shanghaiTimestamp: Option[Long] = None,
+    cancunTimestamp: Option[Long] = None,
+    pragueTimestamp: Option[Long] = None
+)
 
 case class BlockchainConfig(
     powTargetTime: Option[Long] = None,
     forkBlockNumbers: ForkBlockNumbers,
-    treasuryAddress: Address,
     maxCodeSize: Option[BigInt],
     customGenesisFileOpt: Option[String],
     customGenesisJsonOpt: Option[String],
     daoForkConfig: Option[DaoForkConfig],
     accountStartNonce: UInt256,
-    chainId: Byte,
-    networkId: Int,
+    chainId: BigInt,
+    networkId: Long,
     monetaryPolicyConfig: MonetaryPolicyConfig,
     gasTieBreaker: Boolean,
     ethCompatibleStorage: Boolean,
     bootstrapNodes: Set[String],
-    checkpointPubKeys: Set[ByteString] = Set.empty,
+    dnsDiscoveryDomains: Seq[String] = Seq.empty,
     allowedMinersPublicKeys: Set[ByteString] = Set.empty,
-    capabilities: List[Capability] = List.empty,
-    bootstrapCheckpoints: List[BootstrapCheckpoint] = List.empty,
-    useBootstrapCheckpoints: Boolean = true,
-    messConfig: MESSConfig = MESSConfig()
+    messConfig: MESSConfig = MESSConfig(),
+    treasuryAddress: Address = Address(0),
+    networkType: NetworkType = NetworkType.ETC,
+    terminalTotalDifficulty: Option[BigInt] = None,
+    forkTimestamps: ForkTimestamps = ForkTimestamps()
 ) {
-  val minRequireSignatures: Int = (Math.floor(checkpointPubKeys.size.toDouble / 2) + 1).toInt
+  def isPostMerge(totalDifficulty: BigInt): Boolean =
+    terminalTotalDifficulty.exists(ttd => totalDifficulty >= ttd)
 
+  def isShanghaiTimestamp(timestamp: Long): Boolean =
+    forkTimestamps.shanghaiTimestamp.exists(ts => timestamp >= ts)
+
+  def isCancunTimestamp(timestamp: Long): Boolean =
+    forkTimestamps.cancunTimestamp.exists(ts => timestamp >= ts)
+
+  def isPragueTimestamp(timestamp: Long): Boolean =
+    forkTimestamps.pragueTimestamp.exists(ts => timestamp >= ts)
   def withUpdatedForkBlocks(update: (ForkBlockNumbers) => ForkBlockNumbers): BlockchainConfig =
     copy(forkBlockNumbers = update(forkBlockNumbers))
 }
@@ -61,24 +87,16 @@ case class ForkBlockNumbers(
     aghartaBlockNumber: BigInt,
     phoenixBlockNumber: BigInt,
     petersburgBlockNumber: BigInt,
-    ecip1098BlockNumber: BigInt,
-    ecip1097BlockNumber: BigInt,
-    ecip1049BlockNumber: Option[BigInt],
     ecip1099BlockNumber: BigInt,
     muirGlacierBlockNumber: BigInt,
     magnetoBlockNumber: BigInt,
     berlinBlockNumber: BigInt,
     mystiqueBlockNumber: BigInt,
-    spiralBlockNumber: BigInt
+    spiralBlockNumber: BigInt,
+    olympiaBlockNumber: BigInt
 ) {
-  def all: List[BigInt] = this.productIterator.toList.flatMap {
-    case i: BigInt => Some(i)
-    case i: Option[_] =>
-      i.flatMap {
-        case n if n.isInstanceOf[BigInt] => Some(n.asInstanceOf[BigInt])
-        case _                           => None
-      }
-    case _ => None
+  def all: List[BigInt] = this.productIterator.toList.collect { case i: BigInt =>
+    i
   }
 }
 
@@ -101,15 +119,13 @@ object ForkBlockNumbers {
     aghartaBlockNumber = Long.MaxValue,
     phoenixBlockNumber = Long.MaxValue,
     petersburgBlockNumber = Long.MaxValue,
-    ecip1098BlockNumber = Long.MaxValue,
-    ecip1097BlockNumber = Long.MaxValue,
     ecip1099BlockNumber = Long.MaxValue,
-    ecip1049BlockNumber = None,
     muirGlacierBlockNumber = Long.MaxValue,
     magnetoBlockNumber = Long.MaxValue,
     berlinBlockNumber = Long.MaxValue,
     mystiqueBlockNumber = Long.MaxValue,
-    spiralBlockNumber = Long.MaxValue
+    spiralBlockNumber = Long.MaxValue,
+    olympiaBlockNumber = Long.MaxValue
   )
 }
 
@@ -136,12 +152,6 @@ object BlockchainConfig {
     val aghartaBlockNumber: BigInt = BigInt(blockchainConfig.getString("agharta-block-number"))
     val phoenixBlockNumber: BigInt = BigInt(blockchainConfig.getString("phoenix-block-number"))
     val petersburgBlockNumber: BigInt = BigInt(blockchainConfig.getString("petersburg-block-number"))
-    val treasuryAddress = Address(blockchainConfig.getString("treasury-address"))
-    val ecip1098BlockNumber: BigInt = BigInt(blockchainConfig.getString("ecip1098-block-number"))
-    val ecip1097BlockNumber: BigInt = BigInt(blockchainConfig.getString("ecip1097-block-number"))
-    val ecip1049BlockNumber: Option[BigInt] =
-      Try(blockchainConfig.getString("ecip1049-block-number")).map(BigInt(_)).toOption
-
     val maxCodeSize: Option[BigInt] = Try(BigInt(blockchainConfig.getString("max-code-size"))).toOption
     val difficultyBombPauseBlockNumber: BigInt = BigInt(
       blockchainConfig.getString("difficulty-bomb-pause-block-number")
@@ -160,14 +170,14 @@ object BlockchainConfig {
     val daoForkConfig = Try(blockchainConfig.getConfig("dao")).toOption.map(DaoForkConfig(_))
     val accountStartNonce: UInt256 = UInt256(BigInt(blockchainConfig.getString("account-start-nonce")))
 
-    val chainId: Byte = {
+    val chainId: BigInt = {
       val s = blockchainConfig.getString("chain-id")
-      val n = parseHexOrDecNumber(s)
-      require(n >= 0 && n <= 127, "chain-id must be a number in range [0, 127]")
-      n.toByte
+      parseHexOrDecNumber(s)
     }
 
-    val networkId: Int = blockchainConfig.getInt("network-id")
+    val networkId: Long = Try(blockchainConfig.getLong("network-id")).getOrElse {
+      Try(BigInt(blockchainConfig.getString("network-id")).toLong).getOrElse(1L)
+    }
 
     val monetaryPolicyConfig = MonetaryPolicyConfig(blockchainConfig.getConfig("monetary-policy"))
 
@@ -176,7 +186,10 @@ object BlockchainConfig {
     val ethCompatibleStorage: Boolean = blockchainConfig.getBoolean("eth-compatible-storage")
 
     val bootstrapNodes: Set[String] = blockchainConfig.getStringList("bootstrap-nodes").asScala.toSet
-    val checkpointPubKeys = readPubKeySet(blockchainConfig, "checkpoint-public-keys")
+    val dnsDiscoveryDomains: Seq[String] = ConfigUtils
+      .getOptionalValue(blockchainConfig, _.getStringList, "dns-discovery-domains")
+      .map(_.asScala.toSeq)
+      .getOrElse(Seq.empty)
     val allowedMinersPublicKeys = readPubKeySet(blockchainConfig, "allowed-miners")
 
     val ecip1099BlockNumber: BigInt = BigInt(blockchainConfig.getString("ecip1099-block-number"))
@@ -185,25 +198,30 @@ object BlockchainConfig {
     val berlinBlockNumber: BigInt = BigInt(blockchainConfig.getString("berlin-block-number"))
     val mystiqueBlockNumber: BigInt = BigInt(blockchainConfig.getString("mystique-block-number"))
     val spiralBlockNumber: BigInt = BigInt(blockchainConfig.getString("spiral-block-number"))
+    val olympiaBlockNumber: BigInt =
+      Try(BigInt(blockchainConfig.getString("olympia-block-number"))).getOrElse(BigInt(Long.MaxValue))
 
-    val capabilities: List[Capability] =
-      blockchainConfig.getStringList("capabilities").asScala.toList.map(Capability.parseUnsafe)
+    val treasuryAddress: Address =
+      Try(Address(blockchainConfig.getString("treasury-address"))).getOrElse(Address(0))
 
-    val bootstrapCheckpoints: List[BootstrapCheckpoint] = ConfigUtils
-      .getOptionalValue(blockchainConfig, _.getStringList, "bootstrap-checkpoints")
-      .map(_.asScala.toList.flatMap(BootstrapCheckpoint.fromString))
-      .getOrElse(List.empty)
+    val networkType: NetworkType =
+      Try(NetworkType.fromString(blockchainConfig.getString("network-type"))).getOrElse(NetworkType.ETC)
 
-    val useBootstrapCheckpoints: Boolean =
-      Try(blockchainConfig.getBoolean("use-bootstrap-checkpoints")).getOrElse(true)
+    val terminalTotalDifficulty: Option[BigInt] =
+      Try(BigInt(blockchainConfig.getString("terminal-total-difficulty"))).toOption
+
+    val forkTimestamps: ForkTimestamps = ForkTimestamps(
+      shanghaiTimestamp = Try(blockchainConfig.getLong("shanghai-timestamp")).toOption,
+      cancunTimestamp = Try(blockchainConfig.getLong("cancun-timestamp")).toOption,
+      pragueTimestamp = Try(blockchainConfig.getLong("prague-timestamp")).toOption
+    )
 
     val messConfig: MESSConfig = Try {
       val messConf = blockchainConfig.getConfig("mess")
       MESSConfig(
         enabled = Try(messConf.getBoolean("enabled")).getOrElse(false),
-        decayConstant = Try(messConf.getDouble("decay-constant")).getOrElse(0.0001),
-        maxTimeDelta = Try(messConf.getLong("max-time-delta")).getOrElse(2592000L),
-        minWeightMultiplier = Try(messConf.getDouble("min-weight-multiplier")).getOrElse(0.0001)
+        activationBlock = Try(BigInt(messConf.getString("ecbp1100-block-number"))).toOption,
+        deactivationBlock = Try(BigInt(messConf.getString("ecbp1100-deactivate-block-number"))).toOption
       )
     }.getOrElse(MESSConfig())
 
@@ -227,17 +245,14 @@ object BlockchainConfig {
         aghartaBlockNumber = aghartaBlockNumber,
         phoenixBlockNumber = phoenixBlockNumber,
         petersburgBlockNumber = petersburgBlockNumber,
-        ecip1098BlockNumber = ecip1098BlockNumber,
-        ecip1097BlockNumber = ecip1097BlockNumber,
-        ecip1049BlockNumber = ecip1049BlockNumber,
         ecip1099BlockNumber = ecip1099BlockNumber,
         muirGlacierBlockNumber = muirGlacierBlockNumber,
         magnetoBlockNumber = magnetoBlockNumber,
         berlinBlockNumber = berlinBlockNumber,
         mystiqueBlockNumber = mystiqueBlockNumber,
-        spiralBlockNumber = spiralBlockNumber
+        spiralBlockNumber = spiralBlockNumber,
+        olympiaBlockNumber = olympiaBlockNumber
       ),
-      treasuryAddress = treasuryAddress,
       maxCodeSize = maxCodeSize,
       customGenesisFileOpt = customGenesisFileOpt,
       customGenesisJsonOpt = customGenesisJsonOpt,
@@ -249,12 +264,13 @@ object BlockchainConfig {
       gasTieBreaker = gasTieBreaker,
       ethCompatibleStorage = ethCompatibleStorage,
       bootstrapNodes = bootstrapNodes,
-      checkpointPubKeys = checkpointPubKeys,
+      dnsDiscoveryDomains = dnsDiscoveryDomains,
       allowedMinersPublicKeys = allowedMinersPublicKeys,
-      capabilities = capabilities,
-      bootstrapCheckpoints = bootstrapCheckpoints,
-      useBootstrapCheckpoints = useBootstrapCheckpoints,
-      messConfig = messConfig
+      messConfig = messConfig,
+      treasuryAddress = treasuryAddress,
+      networkType = networkType,
+      terminalTotalDifficulty = terminalTotalDifficulty,
+      forkTimestamps = forkTimestamps
     )
   }
   // scalastyle:on method.length

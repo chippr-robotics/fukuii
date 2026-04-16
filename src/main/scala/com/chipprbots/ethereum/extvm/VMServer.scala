@@ -231,14 +231,15 @@ class VMServer(messageHandler: MessageHandler) extends Logger {
       istanbulBlockNumber = conf.istanbulBlockNumber,
       maxCodeSize = if (conf.maxCodeSize.isEmpty) None else Some(bigintFromGByteString(conf.maxCodeSize)),
       accountStartNonce = conf.accountStartNonce,
-      atlantisBlockNumber = BigInt(8772000), // TODO include atlantis block number in protobuf
-      aghartaBlockNumber = BigInt(9573000), // TODO include agharta block number in protobuf
+      atlantisBlockNumber = BigInt(8772000),
+      aghartaBlockNumber = BigInt(9573000),
       petersburgBlockNumber = conf.petersburgBlockNumber,
-      phoenixBlockNumber = BigInt(10500839), // TODO include phoenix block number in protobuf
-      magnetoBlockNumber = BigInt(13189133), // TODO include magneto block number in protobuf
-      berlinBlockNumber = BigInt("1000000000000000000"), // TODO include berlin block number in protobuf
-      mystiqueBlockNumber = BigInt("1000000000000000000"), // TODO include mystique block number in protobuf
-      spiralBlockNumber = BigInt("1000000000000000000"), // TODO include spiral block number in protobuf
-      chainId = conf.chainId.byteAt(0)
+      phoenixBlockNumber = BigInt(10500839),
+      magnetoBlockNumber = BigInt(13189133),
+      berlinBlockNumber = BigInt("1000000000000000000"),
+      mystiqueBlockNumber = BigInt("1000000000000000000"),
+      spiralBlockNumber = BigInt("1000000000000000000"),
+      olympiaBlockNumber = BigInt("1000000000000000000"),
+      chainId = bigintFromGByteString(conf.chainId)
     )
 }

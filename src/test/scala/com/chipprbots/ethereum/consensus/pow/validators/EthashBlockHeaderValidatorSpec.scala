@@ -19,7 +19,6 @@ import com.chipprbots.ethereum.consensus.validators.BlockHeaderError._
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValid
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator._
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidatorSkeleton
-import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields._
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.DaoForkConfig
@@ -199,23 +198,6 @@ class EthashBlockHeaderValidatorSpec
     res shouldBe Right(BlockHeaderValid)
   }
 
-  it should "mark as valid a post ecip1098 block opt-out with opt out undefined" taggedAs (
-    UnitTest,
-    ConsensusTest
-  ) in new EphemBlockchainTestSetup {
-    val ecip1098BlockNumber: BigInt = validBlockHeader.number / 2
-    val blockchainConfigWithECIP1098Enabled: BlockchainConfig =
-      EthashBlockHeaderValidatorSpec.this.blockchainConfig.withUpdatedForkBlocks(
-        _.copy(ecip1098BlockNumber = ecip1098BlockNumber)
-      )
-
-    val validHeader: BlockHeader = validBlockHeader.copy(extraFields = HefEmpty)
-
-    val validationResult: Either[BlockHeaderError, BlockHeaderValid] =
-      BlockValidatorWithPowMocked.validate(validHeader, validParentBlockHeader)(blockchainConfigWithECIP1098Enabled)
-    validationResult shouldBe Right(BlockHeaderValid)
-  }
-
   it should "properly calculate the difficulty after difficulty bomb resume (with reward reduction)" taggedAs (
     UnitTest,
     ConsensusTest
@@ -303,7 +285,6 @@ class EthashBlockHeaderValidatorSpec
     difficulty shouldBe blockDifficultyWihtoutBomb
   }
 
-  // FIXME: Replace with mocked miner validators once we have them
   object BlockValidatorWithPowMocked extends BlockHeaderValidatorSkeleton() {
 
     override def validateEvenMore(blockHeader: BlockHeader)(implicit
@@ -453,7 +434,7 @@ class EthashBlockHeaderValidatorSpec
       }),
       // unused
       maxCodeSize = None,
-      chainId = 0x3d.toByte,
+      chainId = 0x3d,
       networkId = 1,
       monetaryPolicyConfig = null,
       customGenesisFileOpt = None,
@@ -461,8 +442,7 @@ class EthashBlockHeaderValidatorSpec
       accountStartNonce = UInt256.Zero,
       bootstrapNodes = Set(),
       gasTieBreaker = false,
-      ethCompatibleStorage = true,
-      treasuryAddress = Address(0)
+      ethCompatibleStorage = true
     )
   }
 

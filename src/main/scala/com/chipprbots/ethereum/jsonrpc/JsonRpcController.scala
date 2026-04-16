@@ -4,7 +4,6 @@ import cats.effect.IO
 
 import org.json4s.JsonDSL._
 
-import com.chipprbots.ethereum.jsonrpc.CheckpointingService._
 import com.chipprbots.ethereum.jsonrpc.DebugService.ListPeersInfoRequest
 import com.chipprbots.ethereum.jsonrpc.DebugService.ListPeersInfoResponse
 import com.chipprbots.ethereum.jsonrpc.EthBlocksService._
@@ -15,14 +14,16 @@ import com.chipprbots.ethereum.jsonrpc.EthTxService._
 import com.chipprbots.ethereum.jsonrpc.EthUserService._
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsRequest
 import com.chipprbots.ethereum.jsonrpc.FukuiiService.GetAccountTransactionsResponse
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.ResetFastSyncRequest
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.ResetFastSyncResponse
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.RestartFastSyncRequest
+import com.chipprbots.ethereum.jsonrpc.FukuiiService.RestartFastSyncResponse
+import com.chipprbots.ethereum.jsonrpc.McpService._
 import com.chipprbots.ethereum.jsonrpc.NetService._
 import com.chipprbots.ethereum.jsonrpc.PersonalService._
 import com.chipprbots.ethereum.jsonrpc.ProofService.GetProofRequest
 import com.chipprbots.ethereum.jsonrpc.ProofService.GetProofResponse
-import com.chipprbots.ethereum.jsonrpc.QAService.GenerateCheckpointRequest
-import com.chipprbots.ethereum.jsonrpc.QAService.GenerateCheckpointResponse
-import com.chipprbots.ethereum.jsonrpc.QAService.GetFederationMembersInfoRequest
-import com.chipprbots.ethereum.jsonrpc.QAService.GetFederationMembersInfoResponse
+import com.chipprbots.ethereum.jsonrpc.EthSimulateService._
 import com.chipprbots.ethereum.jsonrpc.TestService._
 import com.chipprbots.ethereum.jsonrpc.Web3Service._
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
@@ -39,19 +40,19 @@ case class JsonRpcController(
     ethTxService: EthTxService,
     ethUserService: EthUserService,
     ethFilterService: EthFilterService,
-    personalService: PersonalService,
+    personalService: PersonalServiceAPI,
     testServiceOpt: Option[TestService],
     debugService: DebugService,
     qaService: QAService,
-    checkpointingService: CheckpointingService,
     fukuiiService: FukuiiService,
+    mcpService: McpService,
     proofService: ProofService,
+    ethSimulateService: EthSimulateService,
     override val config: JsonRpcConfig
 ) extends ApisBuilder
     with Logger
     with JsonRpcBaseController {
 
-  import CheckpointingJsonMethodsImplicits._
   import DebugJsonMethodsImplicits._
   import EthJsonMethodsImplicits._
   import EthBlocksJsonMethodsImplicits._
@@ -65,6 +66,7 @@ case class JsonRpcController(
   import QAJsonMethodsImplicits._
   import TestJsonMethodsImplicits._
   import FukuiiJsonMethodImplicits._
+  import McpJsonMethodsImplicits._
 
   override def apisHandleFns: Map[String, PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]]] = Map(
     Apis.Eth -> handleEthRequest,
@@ -72,12 +74,12 @@ case class JsonRpcController(
     Apis.Net -> handleNetRequest,
     Apis.Personal -> handlePersonalRequest,
     Apis.Fukuii -> handleFukuiiRequest,
+    Apis.Mcp -> handleMcpRequest,
     Apis.Rpc -> handleRpcRequest,
     Apis.Debug -> handleDebugRequest,
     Apis.Test -> handleTestRequest,
     Apis.Iele -> handleIeleRequest,
-    Apis.Qa -> handleQARequest,
-    Apis.Checkpointing -> handleCheckpointingRequest
+    Apis.Qa -> handleQARequest
   )
 
   override def enabledApis: Seq[String] = config.apis :+ Apis.Rpc // RPC enabled by default
@@ -96,6 +98,22 @@ case class JsonRpcController(
       handle[ListeningRequest, ListeningResponse](netService.listening, req)
     case req @ JsonRpcRequest(_, "net_peerCount", _, _) =>
       handle[PeerCountRequest, PeerCountResponse](netService.peerCount, req)
+    case req @ JsonRpcRequest(_, "net_nodeInfo", _, _) =>
+      handle[NodeInfoRequest, NodeInfoResponse](netService.nodeInfo, req)
+    // Enhanced peer management endpoints
+    case req @ JsonRpcRequest(_, "net_listPeers", _, _) =>
+      handle[ListPeersRequest, ListPeersResponse](netService.listPeers, req)
+    case req @ JsonRpcRequest(_, "net_disconnectPeer", _, _) =>
+      handle[DisconnectPeerRequest, DisconnectPeerResponse](netService.disconnectPeer, req)
+    case req @ JsonRpcRequest(_, "net_connectToPeer", _, _) =>
+      handle[ConnectToPeerRequest, ConnectToPeerResponse](netService.connectToPeer, req)
+    // Blacklist management endpoints
+    case req @ JsonRpcRequest(_, "net_listBlacklistedPeers", _, _) =>
+      handle[ListBlacklistedPeersRequest, ListBlacklistedPeersResponse](netService.listBlacklistedPeers, req)
+    case req @ JsonRpcRequest(_, "net_addToBlacklist", _, _) =>
+      handle[AddToBlacklistRequest, AddToBlacklistResponse](netService.addToBlacklist, req)
+    case req @ JsonRpcRequest(_, "net_removeFromBlacklist", _, _) =>
+      handle[RemoveFromBlacklistRequest, RemoveFromBlacklistResponse](netService.removeFromBlacklist, req)
   }
 
   // scalastyle:off cyclomatic.complexity
@@ -107,6 +125,8 @@ case class JsonRpcController(
       handle[ChainIdRequest, ChainIdResponse](ethInfoService.chainId, req)
     case req @ JsonRpcRequest(_, "eth_syncing", _, _) =>
       handle[SyncingRequest, SyncingResponse](ethInfoService.syncing, req)
+    case req @ JsonRpcRequest(_, "eth_config", _, _) =>
+      handle[ConfigRequest, ConfigResponse](ethInfoService.config, req)
     case req @ JsonRpcRequest(_, "eth_submitHashrate", _, _) =>
       handle[SubmitHashRateRequest, SubmitHashRateResponse](ethMiningService.submitHashRate, req)
     case req @ JsonRpcRequest(_, "eth_hashrate", _, _) =>
@@ -124,6 +144,17 @@ case class JsonRpcController(
       handle[GetWorkRequest, GetWorkResponse](ethMiningService.getWork, req)
     case req @ JsonRpcRequest(_, "eth_submitWork", _, _) =>
       handle[SubmitWorkRequest, SubmitWorkResponse](ethMiningService.submitWork, req)
+    case req @ JsonRpcRequest(_, "miner_start", _, _) =>
+      handle[StartMinerRequest, StartMinerResponse](ethMiningService.startMiner, req)
+    case req @ JsonRpcRequest(_, "miner_stop", _, _) =>
+      handle[StopMinerRequest, StopMinerResponse](ethMiningService.stopMiner, req)
+    case req @ JsonRpcRequest(_, "miner_getStatus", _, _) =>
+      handle[GetMinerStatusRequest, GetMinerStatusResponse](ethMiningService.getMinerStatus, req)
+    case req @ JsonRpcRequest(_, "eth_setEtherbase", _, _) =>
+      handle[EthMiningService.SetEtherbaseRequest, EthMiningService.SetEtherbaseResponse](
+        ethMiningService.setEtherbase,
+        req
+      )
     case req @ JsonRpcRequest(_, "eth_blockNumber", _, _) =>
       handle[BestBlockNumberRequest, BestBlockNumberResponse](ethBlocksService.bestBlockNumber, req)
     case req @ JsonRpcRequest(_, "eth_coinbase", _, _) =>
@@ -225,11 +256,32 @@ case class JsonRpcController(
       handle[EthPendingTransactionsRequest, EthPendingTransactionsResponse](ethTxService.ethPendingTransactions, req)
     case req @ JsonRpcRequest(_, "eth_getProof", _, _) =>
       handle[GetProofRequest, GetProofResponse](proofService.getProof, req)
+    case req @ JsonRpcRequest(_, "eth_getBlockReceipts", _, _) =>
+      handle[GetBlockReceiptsRequest, GetBlockReceiptsResponse](ethBlocksService.getBlockReceipts, req)
+    case req @ JsonRpcRequest(_, "eth_feeHistory", _, _) =>
+      handle[FeeHistoryRequest, FeeHistoryResponse](ethBlocksService.feeHistory, req)
+    case req @ JsonRpcRequest(_, "eth_maxPriorityFeePerGas", _, _) =>
+      handle[MaxPriorityFeePerGasRequest, MaxPriorityFeePerGasResponse](ethBlocksService.maxPriorityFeePerGas, req)
+    case req @ JsonRpcRequest(_, "eth_blobBaseFee", _, _) =>
+      handle[BlobBaseFeeRequest, BlobBaseFeeResponse](ethBlocksService.blobBaseFee, req)
+    case req @ JsonRpcRequest(_, "eth_createAccessList", _, _) =>
+      handle[CreateAccessListRequest, CreateAccessListResponse](ethInfoService.createAccessList, req)
+    case req @ JsonRpcRequest(_, "eth_simulateV1", _, _) =>
+      handle[EthSimulateRequest, EthSimulateResponse](ethSimulateService.ethSimulate, req)(
+        EthSimulateJsonMethodsImplicits.eth_simulateV1, EthSimulateJsonMethodsImplicits.eth_simulateV1)
   }
 
   private def handleDebugRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "debug_listPeersInfo", _, _) =>
       handle[ListPeersInfoRequest, ListPeersInfoResponse](debugService.listPeersInfo, req)
+    case req @ JsonRpcRequest(_, "debug_getRawBlock", _, _) =>
+      handle[GetRawBlockRequest, GetRawBlockResponse](ethBlocksService.getRawBlock, req)
+    case req @ JsonRpcRequest(_, "debug_getRawHeader", _, _) =>
+      handle[GetRawHeaderRequest, GetRawHeaderResponse](ethBlocksService.getRawHeader, req)
+    case req @ JsonRpcRequest(_, "debug_getRawReceipts", _, _) =>
+      handle[GetRawReceiptsRequest, GetRawReceiptsResponse](ethBlocksService.getRawReceipts, req)
+    case req @ JsonRpcRequest(_, "debug_getRawTransaction", _, _) =>
+      handle[GetTransactionByHashRequest, RawTransactionResponse](ethTxService.getRawTransactionByHash, req)
   }
 
   private def handleTestRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] =
@@ -252,8 +304,7 @@ case class JsonRpcController(
     case req @ JsonRpcRequest(_, "test_getLogHash", _, _) =>
       handle[GetLogHashRequest, GetLogHashResponse](testService.getLogHash, req)
     case req @ JsonRpcRequest(_, "miner_setEtherbase", _, _) =>
-      handle[SetEtherbaseRequest, SetEtherbaseResponse](testService.setEtherbase, req)
-    // FIXME: 'debug_' has it's own 'handle' method, should be aligned (ETCM-806)
+      handle[TestService.SetEtherbaseRequest, TestService.SetEtherbaseResponse](testService.setEtherbase, req)
     case req @ JsonRpcRequest(_, "debug_accountRange", _, _) =>
       handle[AccountsInRangeRequest, AccountsInRangeResponse](testService.getAccountsInRange, req)
     case req @ JsonRpcRequest(_, "debug_storageRangeAt", _, _) =>
@@ -299,25 +350,34 @@ case class JsonRpcController(
   private def handleFukuiiRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "fukuii_getAccountTransactions", _, _) =>
       handle[GetAccountTransactionsRequest, GetAccountTransactionsResponse](fukuiiService.getAccountTransactions, req)
+
+    case req @ JsonRpcRequest(_, "fukuii_resetFastSync", _, _) =>
+      handle[ResetFastSyncRequest, ResetFastSyncResponse](fukuiiService.resetFastSync, req)
+
+    case req @ JsonRpcRequest(_, "fukuii_restartFastSync", _, _) =>
+      handle[RestartFastSyncRequest, RestartFastSyncResponse](fukuiiService.restartFastSync, req)
+  }
+
+  private def handleMcpRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
+    case req @ JsonRpcRequest(_, "mcp_initialize", _, _) =>
+      handle[McpInitializeRequest, McpInitializeResponse](mcpService.initialize, req)
+    case req @ JsonRpcRequest(_, "tools/list", _, _) =>
+      handle[McpToolsListRequest, McpToolsListResponse](mcpService.toolsList, req)
+    case req @ JsonRpcRequest(_, "tools/call", _, _) =>
+      handle[McpToolsCallRequest, McpToolsCallResponse](mcpService.toolsCall, req)
+    case req @ JsonRpcRequest(_, "resources/list", _, _) =>
+      handle[McpResourcesListRequest, McpResourcesListResponse](mcpService.resourcesList, req)
+    case req @ JsonRpcRequest(_, "resources/read", _, _) =>
+      handle[McpResourcesReadRequest, McpResourcesReadResponse](mcpService.resourcesRead, req)
+    case req @ JsonRpcRequest(_, "prompts/list", _, _) =>
+      handle[McpPromptsListRequest, McpPromptsListResponse](mcpService.promptsList, req)
+    case req @ JsonRpcRequest(_, "prompts/get", _, _) =>
+      handle[McpPromptsGetRequest, McpPromptsGetResponse](mcpService.promptsGet, req)
   }
 
   private def handleQARequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "qa_mineBlocks", _, _) =>
       handle[QAService.MineBlocksRequest, QAService.MineBlocksResponse](qaService.mineBlocks, req)
-
-    case req @ JsonRpcRequest(_, "qa_generateCheckpoint", _, _) =>
-      handle[GenerateCheckpointRequest, GenerateCheckpointResponse](qaService.generateCheckpoint, req)
-
-    case req @ JsonRpcRequest(_, "qa_getFederationMembersInfo", _, _) =>
-      handle[GetFederationMembersInfoRequest, GetFederationMembersInfoResponse](qaService.getFederationMembersInfo, req)
-  }
-
-  private def handleCheckpointingRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
-    case req @ JsonRpcRequest(_, "checkpointing_getLatestBlock", _, _) =>
-      handle[GetLatestBlockRequest, GetLatestBlockResponse](checkpointingService.getLatestBlock, req)
-
-    case req @ JsonRpcRequest(_, "checkpointing_pushCheckpoint", _, _) =>
-      handle[PushCheckpointRequest, PushCheckpointResponse](checkpointingService.pushCheckpoint, req)
   }
 
   private def handleRpcRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {

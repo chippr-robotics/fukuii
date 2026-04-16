@@ -17,14 +17,18 @@ import scala.util.Try
 
 import org.bouncycastle.util.encoders.Hex
 
+import com.chipprbots.ethereum.network.handshaker.EtcHelloExchangeState
 import com.chipprbots.ethereum.network.p2p.EthereumMessageDecoder
 import com.chipprbots.ethereum.network.p2p.Message
+import com.chipprbots.ethereum.network.p2p.MessageDecoder
 import com.chipprbots.ethereum.network.p2p.MessageDecoder._
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.NetworkMessageDecoder
+import com.chipprbots.ethereum.network.p2p.SNAPMessageDecoder
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello.HelloEnc
+import com.chipprbots.ethereum.network.rlpx.MessageCodec.CompressionPolicy
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.HelloCodec
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
 
@@ -43,7 +47,7 @@ import com.chipprbots.ethereum.utils.ByteUtils
 class RLPxConnectionHandler(
     capabilities: List[Capability],
     authHandshaker: AuthHandshaker,
-    messageCodecFactory: (FrameCodec, Capability, Long) => MessageCodec,
+    messageCodecFactory: (FrameCodec, Capability, Long, String, CompressionPolicy, Boolean) => MessageCodec,
     rlpxConfiguration: RLPxConfiguration,
     extractor: Secrets => HelloCodec
 ) extends Actor
@@ -111,6 +115,177 @@ class RLPxConnectionHandler(
 
   class ConnectedHandler(connection: ActorRef) {
 
+    // Canonical bases used by this codebase's message models/decoders.
+    // ETH messages: 0x10..0x20 (17 codes: 0x00..0x10 relative)
+    // SNAP messages (canonical): 0x21..0x28 (8 codes: 0x00..0x07 relative)
+    private val CanonicalEthBase = 0x10
+    private val CanonicalEthSize = 0x11
+    private val CanonicalSnapBase = 0x21
+    private val CanonicalSnapSize = 0x08
+
+    private case class InboundTranslator(peerEthBase: Int, peerSnapBase: Option[Int], snapFirst: Boolean) {
+      def translateType(messageType: Int): Int =
+        if (messageType < CanonicalEthBase) {
+          messageType
+        } else {
+          peerSnapBase match {
+            case Some(snapBase) if messageType >= snapBase && messageType < snapBase + CanonicalSnapSize =>
+              val rel = messageType - snapBase
+              CanonicalSnapBase + rel
+            case _ =>
+              if (messageType >= peerEthBase && messageType < peerEthBase + CanonicalEthSize) {
+                val rel = messageType - peerEthBase
+                CanonicalEthBase + rel
+              } else {
+                messageType
+              }
+          }
+        }
+
+      /** Translate a canonical (this codebase) message type to the peer's negotiated wire message space.
+        *
+        * Canonical space assumptions in this codebase:
+        *   - P2P/WireProtocol: < 0x10 (unchanged)
+        *   - ETH: 0x10..0x20
+        *   - SNAP: 0x21..0x28
+        *
+        * On the wire, ETH/SNAP bases depend on the peer's capability ordering.
+        */
+      def toPeerWireType(canonicalType: Int): Int =
+        if (canonicalType < CanonicalEthBase) {
+          canonicalType
+        } else if (canonicalType >= CanonicalSnapBase && canonicalType < CanonicalSnapBase + CanonicalSnapSize) {
+          peerSnapBase match {
+            case Some(snapBase) =>
+              val rel = canonicalType - CanonicalSnapBase
+              snapBase + rel
+            case None =>
+              log.warning(
+                "[RLPx] Attempting to send SNAP message to peer {} without SNAP capability: canonType=0x{}",
+                peerId,
+                canonicalType.toHexString
+              )
+              canonicalType
+          }
+        } else if (canonicalType >= CanonicalEthBase && canonicalType < CanonicalEthBase + CanonicalEthSize) {
+          val rel = canonicalType - CanonicalEthBase
+          peerEthBase + rel
+        } else {
+          canonicalType
+        }
+
+      def translateFrames(frames: Seq[Frame]): Seq[Frame] =
+        if (frames.isEmpty) frames
+        else {
+          // Debug-only: this is the most direct way to validate ETH/SNAP base-offset negotiation.
+          // If peer capability ordering is misunderstood, we'll see unexpected mappings here.
+          if (log.isDebugEnabled) {
+            val translations = frames.flatMap { frame =>
+              val translatedType = translateType(frame.`type`)
+              if (translatedType == frame.`type`) None
+              else Some(s"0x${frame.`type`.toHexString}->0x${translatedType.toHexString}")
+            }
+            if (translations.nonEmpty) {
+              log.debug(
+                "INBOUND_WIRE_TRANSLATE: peer={}, count={}, mappings={}",
+                peerId,
+                translations.size,
+                translations.mkString(",")
+              )
+            }
+          }
+
+          frames.map { frame =>
+            val translatedType = translateType(frame.`type`)
+            if (translatedType == frame.`type`) frame else frame.copy(`type` = translatedType)
+          }
+        }
+    }
+
+    private def computeInboundTranslator(
+        hello: Hello,
+        negotiatedEth: Capability,
+        supportsSnap: Boolean
+    ): InboundTranslator = {
+      val peerCaps = hello.capabilities.toList
+      val snapIndex = peerCaps.indexWhere(_ == Capability.SNAP1)
+      val ethIndex = peerCaps.indexWhere(_ == negotiatedEth) match {
+        case -1 =>
+          peerCaps.indexWhere {
+            case Capability.ETH63 | Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 |
+                Capability.ETH68 =>
+              true
+            case _ => false
+          }
+        case idx => idx
+      }
+
+      val snapFirst = supportsSnap && snapIndex >= 0 && ethIndex >= 0 && snapIndex < ethIndex
+      val peerSnapBase =
+        if (!supportsSnap) None
+        else if (snapFirst) Some(CanonicalEthBase)
+        else Some(CanonicalEthBase + CanonicalEthSize)
+
+      val peerEthBase = if (snapFirst) CanonicalEthBase + CanonicalSnapSize else CanonicalEthBase
+
+      val snapBaseStr = peerSnapBase.map(b => s"0x${b.toHexString}").getOrElse("<disabled>")
+      log.info(
+        s"INBOUND_CAP_OFFSETS: peer=$peerId clientId=${hello.clientId} snapFirst=$snapFirst " +
+          s"peerEthBase=0x${peerEthBase.toHexString} peerSnapBase=$snapBaseStr"
+      )
+
+      InboundTranslator(peerEthBase = peerEthBase, peerSnapBase = peerSnapBase, snapFirst = snapFirst)
+    }
+
+    private var helloAckPending: Boolean = false
+    private var helloWriteAcknowledged: Boolean = false
+    private var activeMessageCodec: Option[MessageCodec] = None
+
+    private def markHelloAsSent(): Unit = {
+      helloAckPending = true
+      log.debug("[RLPx] Hello write queued for peer {}", peerId)
+    }
+
+    private def markHelloAckReceived(): Unit =
+      if (helloAckPending) {
+        helloAckPending = false
+        helloWriteAcknowledged = true
+        // CRITICAL FIX: Do NOT enable inbound compression here
+        // Per Core-Geth reference (p2p/transport.go#doProtoHandshake),
+        // SetSnappy should only be called AFTER both Hello messages are exchanged.
+        // Enabling it too early causes the peer to expect compressed Hello frames,
+        // leading to "Cannot decode Hello" errors.
+        log.debug("[RLPx] Hello write acknowledged for peer {} - deferring compression enable", peerId)
+      }
+
+    private def registerMessageCodec(messageCodec: MessageCodec): Unit = {
+      activeMessageCodec = Some(messageCodec)
+      // CRITICAL FIX: Enable inbound compression when MessageCodec is registered
+      // This happens after Hello exchange is complete, matching Core-Geth behavior
+      // where SetSnappy is called after doProtoHandshake completes.
+      if (helloWriteAcknowledged) {
+        messageCodec.enableInboundCompression("handshake-complete")
+        log.debug("[RLPx] Enabled inbound compression for peer {} after handshake complete", peerId)
+      }
+    }
+
+    /** Write a Hello message directly without compression. This is used to handle late Hello messages that arrive after
+      * handshake completion, preventing them from being compressed via MessageCodec. Matches HelloCodec.writeHello
+      * behavior.
+      */
+    private def writeUncompressedHello(hello: HelloEnc, messageCodec: MessageCodec): ByteString = {
+      import MessageCodec.MaxFramePayloadSize
+
+      val encoded: Array[Byte] = hello.toBytes
+      val numFrames = Math.ceil(encoded.length / MaxFramePayloadSize.toDouble).toInt
+      val frames = (0 until numFrames).map { frameNo =>
+        val payload = encoded.drop(frameNo * MaxFramePayloadSize).take(MaxFramePayloadSize)
+        val header = Header(payload.length, 0, None, None)
+        Frame(header, hello.code, ByteString(payload))
+      }
+      messageCodec.frameCodec.writeFrames(frames)
+    }
+
     val handleConnectionTerminated: Receive = { case Terminated(`connection`) =>
       log.debug("[Stopping Connection] TCP connection actor terminated for peer {}", peerId)
       context.parent ! ConnectionFailed
@@ -123,15 +298,28 @@ class RLPxConnectionHandler(
           log.debug("[RLPx] Received auth handshake init message for peer {} ({} bytes)", peerId, data.length)
           timeout.cancel()
           // FIXME EIP8 is 6 years old, time to drop it
+          log.debug(
+            "[RLPx] Attempting pre-EIP8 auth-init decode for peer {} (taking {} bytes from {} total)",
+            peerId,
+            InitiatePacketLength,
+            data.length
+          )
           val maybePreEIP8Result = Try {
             val (responsePacket, result) = handshaker.handleInitialMessage(data.take(InitiatePacketLength))
             val remainingData = data.drop(InitiatePacketLength)
             (responsePacket, result, remainingData)
           }
+          maybePreEIP8Result.failed.foreach { ex =>
+            log.debug("[RLPx] pre-EIP8 auth-init decode failed for peer {}", peerId, ex)
+          }
           lazy val maybePostEIP8Result = Try {
+            log.debug("[RLPx] Attempting EIP-8 (v4) auth-init decode for peer {}", peerId)
             val (packetData, remainingData) = decodeV4Packet(data)
-            val (responsePacket, result) = handshaker.handleInitialMessageV4(packetData)
+            val (responsePacket, result) = handshaker.handleInitialMessageV4(packetData, peerId.toString)
             (responsePacket, result, remainingData)
+          }
+          maybePostEIP8Result.failed.foreach { ex =>
+            log.debug("[RLPx] EIP-8 (v4) auth-init decode failed for peer {}", peerId, ex)
           }
 
           maybePreEIP8Result.orElse(maybePostEIP8Result) match {
@@ -141,10 +329,10 @@ class RLPxConnectionHandler(
               processHandshakeResult(result, remainingData)
 
             case Failure(ex) =>
-              log.debug(
-                "[Stopping Connection] Init AuthHandshaker message handling failed for peer {}",
+              log.error(
+                "[HIVE-DEBUG] Auth handshake FAILED for peer {} - both pre-EIP8 and EIP-8 decode failed: {}",
                 peerId,
-                ex
+                ex.getMessage
               )
               context.parent ! ConnectionFailed
               gracefulStop()
@@ -168,7 +356,7 @@ class RLPxConnectionHandler(
           }
           val maybePostEIP8Result = Try {
             val (packetData, remainingData) = decodeV4Packet(data)
-            val result = handshaker.handleResponseMessageV4(packetData)
+            val result = handshaker.handleResponseMessageV4(packetData, peerId.toString)
             (result, remainingData)
           }
           maybePreEIP8Result.orElse(maybePostEIP8Result) match {
@@ -195,8 +383,31 @@ class RLPxConnectionHandler(
       *   data of the packet and the remaining data
       */
     private def decodeV4Packet(data: ByteString): (ByteString, ByteString) = {
+      // EIP-8 auth messages are framed as: uint16be sizePrefix || encryptedPayload
+      // NOTE: TCP can split packets; 'Received(data)' is not guaranteed to contain the full frame.
+      // These logs are intentionally lightweight but should be enough to diagnose size-prefix issues.
+      if (data.length < 2) {
+        val headHex = Hex.toHexString(data.toArray)
+        throw new RuntimeException(s"EIP-8 packet too short for size prefix: len=${data.length} headHex=${headHex}")
+      }
+
       val encryptedPayloadSize = ByteUtils.bigEndianToShort(data.take(2).toArray)
-      val (packetData, remainingData) = data.splitAt(encryptedPayloadSize + 2)
+      // Security: reject oversized handshake packets (CVE-2026-26314)
+      // Matches go-ethereum's baseProtocolMaxMsgSize = 2 * 1024
+      if (encryptedPayloadSize > 2048) {
+        throw new RuntimeException(
+          s"EIP-8 handshake packet too large: sizePrefix=${encryptedPayloadSize} max=2048"
+        )
+      }
+      val totalFrameSize = encryptedPayloadSize + 2
+      if (encryptedPayloadSize <= 0 || totalFrameSize > data.length) {
+        val headHex = Hex.toHexString(data.take(Math.min(32, data.length)).toArray)
+        throw new RuntimeException(
+          s"EIP-8 frame size mismatch: sizePrefix=${encryptedPayloadSize} totalFrameSize=${totalFrameSize} bufferLen=${data.length} headHex=${headHex}"
+        )
+      }
+
+      val (packetData, remainingData) = data.splitAt(totalFrameSize)
       packetData -> remainingData
     }
 
@@ -234,10 +445,10 @@ class RLPxConnectionHandler(
         seqNumber: Int = 0
     ): Receive =
       handleConnectionTerminated.orElse(handleWriteFailed).orElse(handleConnectionClosed).orElse {
-        // TODO when cancellableAckTimeout is Some
         case SendMessage(h: HelloEnc) =>
           val out = extractor.writeHello(h)
           connection ! Write(out, Ack)
+          markHelloAsSent()
           val timeout =
             system.scheduler.scheduleOnce(rlpxConfiguration.waitForTcpAckTimeout, self, AckTimeout(seqNumber))
           context.become(
@@ -249,6 +460,7 @@ class RLPxConnectionHandler(
           )
         case Ack if cancellableAckTimeout.nonEmpty =>
           // Cancel pending message timeout
+          markHelloAckReceived()
           cancellableAckTimeout.foreach(_.cancellable.cancel())
           context.become(awaitInitialHello(extractor, None, seqNumber))
 
@@ -280,23 +492,25 @@ class RLPxConnectionHandler(
           )
           val messageCodecOpt = for {
             opt <- negotiateCodec(hello, extractor)
-            (messageCodec, negotiated) = opt
+            (messageCodec, negotiated, inboundTranslator) = opt
             _ = log.debug("[RLPx] Protocol negotiated with peer {}: {}", peerId, negotiated)
             _ = context.parent ! InitialHelloReceived(hello, negotiated)
-            _ = processFrames(restFrames, messageCodec)
-          } yield messageCodec
+            _ = processFrames(restFrames, messageCodec, inboundTranslator)
+          } yield (messageCodec, inboundTranslator)
           messageCodecOpt match {
-            case Some(messageCodec) =>
+            case Some((messageCodec, inboundTranslator)) =>
+              registerMessageCodec(messageCodec)
               log.info("[RLPx] Connection FULLY ESTABLISHED with peer {}, entering handshaked state", peerId)
               context.become(
                 handshaked(
                   messageCodec,
+                  inboundTranslator,
                   cancellableAckTimeout = cancellableAckTimeout,
                   seqNumber = seqNumber
                 )
               )
             case None =>
-              log.error("[Stopping Connection] Unable to negotiate protocol with peer {}", peerId)
+              log.error("[Stopping Connection] Unable to negotiate protocol with peer {} — peerCaps=[{}], ourCaps=[{}]", peerId, hello.capabilities.mkString(", "), capabilities.mkString(", "))
               context.parent ! ConnectionFailed
               gracefulStop()
           }
@@ -305,14 +519,41 @@ class RLPxConnectionHandler(
           context.become(awaitInitialHello(extractor, cancellableAckTimeout, seqNumber))
       }
 
-    private def negotiateCodec(hello: Hello, extractor: HelloCodec): Option[(MessageCodec, Capability)] =
+    private def negotiateCodec(
+        hello: Hello,
+        extractor: HelloCodec
+    ): Option[(MessageCodec, Capability, InboundTranslator)] =
       Capability.negotiate(hello.capabilities.toList, capabilities).map { negotiated =>
-        (messageCodecFactory(extractor.frameCodec, negotiated, hello.p2pVersion), negotiated)
+        val compressionPolicy =
+          CompressionPolicy.fromHandshake(EtcHelloExchangeState.P2pVersion, hello.p2pVersion)
+        val supportsSnap =
+          capabilities.contains(Capability.SNAP1) && hello.capabilities.contains(Capability.SNAP1)
+        if (supportsSnap) {
+          log.info("[RLPx] SNAP/1 capability enabled for peer {}", peerId)
+        }
+        val inboundTranslator = computeInboundTranslator(hello, negotiated, supportsSnap)
+        (
+          messageCodecFactory(
+            extractor.frameCodec,
+            negotiated,
+            hello.p2pVersion,
+            hello.clientId,
+            compressionPolicy,
+            supportsSnap
+          ),
+          negotiated,
+          inboundTranslator
+        )
       }
 
-    private def processFrames(frames: Seq[Frame], messageCodec: MessageCodec): Unit =
+    private def processFrames(
+        frames: Seq[Frame],
+        messageCodec: MessageCodec,
+        inboundTranslator: InboundTranslator
+    ): Unit =
       if (frames.nonEmpty) {
-        val messagesSoFar = messageCodec.readFrames(frames) // omit hello
+        val translatedFrames = inboundTranslator.translateFrames(frames)
+        val messagesSoFar = messageCodec.readFrames(translatedFrames) // omit hello
         messagesSoFar.foreach(processMessage)
       }
 
@@ -321,19 +562,53 @@ class RLPxConnectionHandler(
         context.parent ! MessageReceived(message)
 
       case Left(ex) =>
-        val errorMsg = Option(ex.getMessage).getOrElse(ex.toString)
-        log.error("Cannot decode message from {}, because of {}", peerId, errorMsg)
-        // Enhanced debugging for decompression failures
-        if (errorMsg.contains("FAILED_TO_UNCOMPRESS")) {
-          log.error(
-            "DECODE_ERROR_DEBUG: Peer {} failed message decode - connection will be closed. Error details: {}",
+        // Use type-safe error checking instead of string matching
+        val isDecompressionFailure = MessageDecoder.isDecompressionFailure(ex)
+        val isUnknownMessageType = ex.isInstanceOf[UnknownMessageTypeError]
+
+        if (isDecompressionFailure) {
+          // Log detailed debugging information for decompression failures
+          log.warning(
+            "DECODE_ERROR: Peer {} sent message that failed to decompress. " +
+              "This may indicate the peer sent malformed compressed data or there's a protocol mismatch. " +
+              "Skipping this message but keeping connection alive. Error: {}",
             peerId,
-            errorMsg
+            ex.getMessage
           )
+          // Note: We do NOT close the connection for decompression failures.
+          // This is important for SNAP protocol compatibility where some peers may send
+          // messages with compression issues. The message will be skipped, but the peer
+          // can continue sending other messages. If this becomes a pattern (multiple failures),
+          // the peer will eventually be blacklisted through other mechanisms (timeouts, etc.)
+        } else if (isUnknownMessageType) {
+          // Handle unknown message types gracefully - log warning and skip message
+          // This prevents connection closure when peers send non-standard or future protocol messages
+          val msgCode = ex.asInstanceOf[UnknownMessageTypeError].messageType
+          log.warning(
+            "DECODE_ERROR: Peer {} sent unknown message type: 0x{} ({}). " +
+              "This may be a protocol extension or malformed message. " +
+              "Skipping this message but keeping connection alive. Error: {}",
+            peerId,
+            msgCode.toHexString,
+            msgCode,
+            ex.getMessage
+          )
+          // Note: We do NOT close the connection for unknown message types.
+          // Some peers may implement protocol extensions or send messages from protocols
+          // we don't fully support. Closing the connection would be too aggressive and
+          // reduce our ability to maintain connections with diverse peer implementations.
+        } else {
+          // For other decoding errors (truly malformed RLP, structure mismatches, etc.),
+          // send proper Disconnect to remote peer before closing connection
+          log.error(
+            "DECODE_ERROR: Cannot decode message from {} - disconnecting. Error: {}",
+            peerId,
+            ex.getMessage
+          )
+          context.parent ! com.chipprbots.ethereum.network.PeerActor.DisconnectPeer(
+            com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.Reasons.BreachOfProtocol)
         }
-        // break connection in case of failed decoding, to avoid attack which would send us garbage
-        connection ! Close
-      // Let handleConnectionTerminated clean up after TCP connection closes
+      // Let handleConnectionTerminated clean up after TCP connection closes (if closed)
     }
 
     /** Handles sending and receiving messages from the Akka TCP connection, while also handling acknowledgement of
@@ -348,20 +623,46 @@ class RLPxConnectionHandler(
       * @param seqNumber
       *   , sequence number for the next message to be sent
       */
-    def handshaked(
+    private def handshaked(
         messageCodec: MessageCodec,
+        inboundTranslator: InboundTranslator,
         messagesNotSent: Queue[MessageSerializable] = Queue.empty,
         cancellableAckTimeout: Option[CancellableAckTimeout] = None,
         seqNumber: Int = 0
     ): Receive =
       handleConnectionTerminated.orElse(handleWriteFailed).orElse(handleConnectionClosed).orElse {
+        case SendMessage(h: HelloEnc) =>
+          // CRITICAL FIX: Handle late Hello messages that arrive after handshake completion
+          // This prevents the race condition where Hello gets compressed via MessageCodec
+          // instead of being sent uncompressed via HelloCodec.
+          // Per Core-Geth reference (p2p/transport.go), Hello MUST NOT be compressed.
+          log.debug(
+            "[RLPx] Received late Hello message for peer {} after handshake complete - " +
+              "sending uncompressed to prevent 'Cannot decode Hello' error on peer",
+            peerId
+          )
+          val out = writeUncompressedHello(h, messageCodec)
+          connection ! Write(out, Ack)
+          val timeout =
+            system.scheduler.scheduleOnce(rlpxConfiguration.waitForTcpAckTimeout, self, AckTimeout(seqNumber))
+          context.become(
+            handshaked(
+              messageCodec = messageCodec,
+              inboundTranslator = inboundTranslator,
+              messagesNotSent = messagesNotSent,
+              cancellableAckTimeout = Some(CancellableAckTimeout(seqNumber, timeout)),
+              seqNumber = increaseSeqNumber(seqNumber)
+            )
+          )
+
         case sm: SendMessage =>
           if (cancellableAckTimeout.isEmpty)
-            sendMessage(messageCodec, sm.serializable, seqNumber, messagesNotSent)
+            sendMessage(messageCodec, inboundTranslator, sm.serializable, seqNumber, messagesNotSent)
           else
             context.become(
               handshaked(
                 messageCodec,
+                inboundTranslator,
                 messagesNotSent :+ sm.serializable,
                 cancellableAckTimeout,
                 seqNumber
@@ -369,13 +670,9 @@ class RLPxConnectionHandler(
             )
 
         case Received(data) =>
-          log.debug(
-            "RECV_MSG: peer={}, dataLen={}, pendingAck={}",
-            peerId,
-            data.length,
-            cancellableAckTimeout.isDefined
-          )
-          val messages = messageCodec.readMessages(data)
+          val frames = messageCodec.frameCodec.readFrames(data)
+          val translatedFrames = inboundTranslator.translateFrames(frames)
+          val messages = messageCodec.readFrames(translatedFrames)
           log.debug("RECV_MSG: peer={}, decoded {} message(s)", peerId, messages.size)
           messages.zipWithIndex.foreach { case (msgResult, idx) =>
             msgResult match {
@@ -387,6 +684,17 @@ class RLPxConnectionHandler(
                   msg.getClass.getSimpleName,
                   msg.code.toHexString
                 )
+
+                // High-signal receive logging for SNAP traffic (request/response visibility).
+                // This stays INFO so it shows up even when other receive logs are DEBUG.
+                if (msg.code >= CanonicalSnapBase && msg.code < CanonicalSnapBase + CanonicalSnapSize) {
+                  log.info(
+                    "RECV_SNAP_MSG: peer={}, msg[{}] {}",
+                    peerId,
+                    idx,
+                    msg.toShortString
+                  )
+                }
               case Left(err) =>
                 log.error(
                   "RECV_MSG: peer={}, msg[{}] DECODE_ERROR: {}",
@@ -400,14 +708,15 @@ class RLPxConnectionHandler(
 
         case Ack if cancellableAckTimeout.nonEmpty =>
           // Cancel pending message timeout
+          markHelloAckReceived()
           log.debug("SEND_MSG_ACK: peer={}, seqNum={}", peerId, cancellableAckTimeout.map(_.seqNumber).getOrElse(-1))
           cancellableAckTimeout.foreach(_.cancellable.cancel())
 
           // Send next message if there is one
           if (messagesNotSent.nonEmpty)
-            sendMessage(messageCodec, messagesNotSent.head, seqNumber, messagesNotSent.tail)
+            sendMessage(messageCodec, inboundTranslator, messagesNotSent.head, seqNumber, messagesNotSent.tail)
           else
-            context.become(handshaked(messageCodec, Queue.empty, None, seqNumber))
+            context.become(handshaked(messageCodec, inboundTranslator, Queue.empty, None, seqNumber))
 
         case AckTimeout(ackSeqNumber) if cancellableAckTimeout.exists(_.seqNumber == ackSeqNumber) =>
           cancellableAckTimeout.foreach(_.cancellable.cancel())
@@ -429,19 +738,33 @@ class RLPxConnectionHandler(
       */
     private def sendMessage(
         messageCodec: MessageCodec,
+        inboundTranslator: InboundTranslator,
         messageToSend: MessageSerializable,
         seqNumber: Int,
         remainingMsgsToSend: Queue[MessageSerializable]
     ): Unit = {
-      val out = messageCodec.encodeMessage(messageToSend)
-      
+      val canonicalCode = messageToSend.code
+      val wireCode = inboundTranslator.toPeerWireType(canonicalCode)
+
+      val serializableToEncode: MessageSerializable =
+        if (wireCode == canonicalCode) messageToSend
+        else
+          new MessageSerializable {
+            override def code: Int = wireCode
+            override def toBytes: Array[Byte] = messageToSend.toBytes
+            override def underlyingMsg: Message = messageToSend.underlyingMsg
+            override def toShortString: String = messageToSend.toShortString
+          }
+
+      val out = messageCodec.encodeMessage(serializableToEncode)
+
       // Enhanced logging for GetBlockHeaders debugging
       val msgType = messageToSend.underlyingMsg.getClass.getSimpleName
       log.info(
-        "SEND_MSG: peer={}, type={}, code=0x{}, seqNum={}",
+        "SEND_MSG: peer={}, type={}, codes={}, seqNum={}",
         peerId,
         msgType,
-        messageToSend.code.toHexString,
+        s"canon=0x${canonicalCode.toHexString} wire=0x${wireCode.toHexString}",
         seqNumber
       )
       // Convert to array only once for hex logging
@@ -453,7 +776,7 @@ class RLPxConnectionHandler(
         remainingMsgsToSend.size,
         outHex
       )
-      
+
       connection ! Write(out, Ack)
       log.debug("Sent message: {} to {}", messageToSend.underlyingMsg.toShortString, peerId)
 
@@ -461,6 +784,7 @@ class RLPxConnectionHandler(
       context.become(
         handshaked(
           messageCodec = messageCodec,
+          inboundTranslator = inboundTranslator,
           messagesNotSent = remainingMsgsToSend,
           cancellableAckTimeout = Some(CancellableAckTimeout(seqNumber, timeout)),
           seqNumber = increaseSeqNumber(seqNumber)
@@ -521,10 +845,21 @@ object RLPxConnectionHandler {
   def ethMessageCodecFactory(
       frameCodec: FrameCodec,
       negotiated: Capability,
-      p2pVersion: Long
+      p2pVersion: Long,
+      clientId: String,
+      compressionPolicy: CompressionPolicy,
+      supportsSnap: Boolean
   ): MessageCodec = {
-    val md = NetworkMessageDecoder.orElse(EthereumMessageDecoder.ethMessageDecoder(negotiated))
-    new MessageCodec(frameCodec, md, p2pVersion)
+    val ethDecoder = EthereumMessageDecoder.ethMessageDecoder(negotiated)
+    // Decoder chain order matches message code ranges:
+    // - NetworkMessageDecoder: 0x00-0x0f (Wire protocol: Hello, Disconnect, Ping, Pong)
+    // - ethDecoder: 0x10-0x20 (ETH protocol: Status, NewBlockHashes, etc.)
+    // - SNAPMessageDecoder: 0x21-0x28 (SNAP protocol: GetAccountRange, AccountRange, etc.)
+    val decoderWithSnap =
+      if (supportsSnap) NetworkMessageDecoder.orElse(ethDecoder).orElse(SNAPMessageDecoder)
+      else NetworkMessageDecoder.orElse(ethDecoder)
+
+    new MessageCodec(frameCodec, decoderWithSnap, p2pVersion, clientId, compressionPolicy)
   }
 
   case class ConnectTo(uri: URI)
@@ -579,7 +914,7 @@ object RLPxConnectionHandler {
       val frameData = frame.payload.toArray
       if (frame.`type` == Hello.code) {
         NetworkMessageDecoder.fromBytes(frame.`type`, frameData) match {
-          case Left(err)  => throw err // TODO: rethink throwing here
+          case Left(err)  => throw err
           case Right(msg) => Some(msg.asInstanceOf[Hello])
         }
       } else {

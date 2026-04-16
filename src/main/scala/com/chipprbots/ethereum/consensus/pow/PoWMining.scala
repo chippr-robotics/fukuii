@@ -19,6 +19,7 @@ import com.chipprbots.ethereum.consensus.mining.Protocol.AdditionalPoWProtocolDa
 import com.chipprbots.ethereum.consensus.mining.Protocol.MockedPow
 import com.chipprbots.ethereum.consensus.mining.Protocol.NoAdditionalPoWData
 import com.chipprbots.ethereum.consensus.mining.Protocol.PoW
+import com.chipprbots.ethereum.consensus.mining.Protocol.EngineApi
 import com.chipprbots.ethereum.consensus.mining.Protocol.RestrictedPoW
 import com.chipprbots.ethereum.consensus.mining.Protocol.RestrictedPoWMinerData
 import com.chipprbots.ethereum.consensus.mining.TestMining
@@ -68,7 +69,6 @@ class PoWMining private (
   )
 
   @volatile private[pow] var minerCoordinatorRef: Option[ActorRef[CoordinatorProtocol]] = None
-  // TODO in ETCM-773 remove MockedMiner
   @volatile private[pow] var mockedMinerRef: Option[org.apache.pekko.actor.ActorRef] = None
 
   final val BlockForgerDispatcherId = "fukuii.async.dispatchers.block-forger"
@@ -113,7 +113,6 @@ class PoWMining private (
                   node.ethMiningService,
                   blockCreator,
                   blockchainReader,
-                  node.blockchainConfig.forkBlockNumbers.ecip1049BlockNumber,
                   node
                 ),
                 "PoWMinerCoordinator",
@@ -123,6 +122,8 @@ class PoWMining private (
           case MockedPow =>
             log.info("Instantiating MockedMiner")
             mockedMinerRef = Some(MockedMiner(node))
+          case EngineApi =>
+            log.info("Engine API mode — mining disabled (blocks from CL)")
         }
         sendMiner(MinerProtocol.StartMining)
       }
@@ -146,7 +147,8 @@ class PoWMining private (
             pendingTransactionsManager = node.pendingTransactionsManager,
             getTransactionFromPoolTimeout = node.txPoolConfig.getTransactionFromPoolTimeout,
             mining = mining,
-            ommersPool = node.ommersPool
+            ommersPool = node.ommersPool,
+            coinbaseProvider = node.coinbaseProvider
           )
         case mining => wrongMiningArgument[PoWMining](mining)
       }

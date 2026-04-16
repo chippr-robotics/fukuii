@@ -19,36 +19,55 @@ case class ForkId(hash: BigInt, next: Option[BigInt]) {
 
 object ForkId {
 
-  def create(genesisHash: ByteString, config: BlockchainConfig)(head: BigInt): ForkId = {
+  def create(genesisHash: ByteString, config: BlockchainConfig)(head: BigInt): ForkId =
+    create(genesisHash, config)(head, 0L)
+
+  /** EIP-2124 + EIP-6122: ForkId computation with both block number and timestamp. Block-number forks are compared
+    * against `head`, timestamp forks against `headTimestamp`.
+    */
+  def create(genesisHash: ByteString, config: BlockchainConfig)(head: BigInt, headTimestamp: Long): ForkId = {
     val crc = new CRC32()
     crc.update(genesisHash.asByteBuffer)
-    val forks = gatherForks(config)
 
-    // EIP-2124 compliant ForkId calculation matching Core-Geth reference implementation
-    // At block 0: reports genesis ForkId (0xfc64ec04 for ETC) per Core-Geth test cases
-    // Core-Geth: {0, 0, ID{Hash: checksumToBytes(0xfc64ec04), Next: 1150000}}
-    val next = forks.find { fork =>
-      if (fork <= head) {
+    val blockForks = gatherBlockForks(config)
+    val timestampForks = gatherTimestampForks(config)
+
+    // Process block forks first (sorted), then timestamp forks (sorted)
+    val allForks = blockForks.map((_, false)) ++ timestampForks.map((_, true))
+
+    val next = allForks.find { case (fork, isTimestamp) =>
+      val passed = if (isTimestamp) fork <= BigInt(headTimestamp) else fork <= head
+      if (passed) {
         crc.update(bigIntToBytes(fork, 8))
       }
-      fork > head
+      !passed
     }
-    new ForkId(crc.getValue(), next)
+    new ForkId(crc.getValue(), next.map(_._1))
   }
 
   val noFork: BigInt = BigInt("1000000000000000000")
 
-  def gatherForks(config: BlockchainConfig): List[BigInt] = {
+  def gatherForks(config: BlockchainConfig): List[BigInt] =
+    (gatherBlockForks(config) ++ gatherTimestampForks(config)).distinct.sorted
+
+  def gatherBlockForks(config: BlockchainConfig): List[BigInt] = {
     val maybeDaoBlock: Option[BigInt] = config.daoForkConfig.flatMap { daoConf =>
       if (daoConf.includeOnForkIdList) Some(daoConf.forkBlockNumber)
       else None
     }
-
     (maybeDaoBlock.toList ++ config.forkBlockNumbers.all)
       .filterNot(v => v == 0 || v == noFork)
       .distinct
       .sorted
   }
+
+  /** EIP-6122: Timestamp-based forks for post-Merge chains. */
+  def gatherTimestampForks(config: BlockchainConfig): List[BigInt] =
+    List(
+      config.forkTimestamps.shanghaiTimestamp.map(BigInt(_)),
+      config.forkTimestamps.cancunTimestamp.map(BigInt(_)),
+      config.forkTimestamps.pragueTimestamp.map(BigInt(_))
+    ).flatten.filterNot(_ == 0).distinct.sorted
 
   implicit class ForkIdEnc(forkId: ForkId) extends RLPSerializable {
 

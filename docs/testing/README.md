@@ -2,6 +2,20 @@
 
 This directory contains comprehensive testing documentation for the Fukuii Ethereum Classic client.
 
+## Network Compatibility Testing (Gorgoroth & Cirith Ungol)
+
+### Gorgoroth Multi-Client Testing
+- **[GORGOROTH_COMPATIBILITY_TESTING.md](GORGOROTH_COMPATIBILITY_TESTING.md)** - Complete testing procedures for multi-client validation
+- **[GORGOROTH_FAUCET_TESTING.md](GORGOROTH_FAUCET_TESTING.md)** - Faucet service validation procedures
+- **[FAST_SYNC_TESTING_PLAN.md](FAST_SYNC_TESTING_PLAN.md)** - Fast sync testing plan for 6-node Gorgoroth network
+
+### Cirith Ungol Real-World Sync Testing
+- **[CIRITH_UNGOL_TESTING_GUIDE.md](CIRITH_UNGOL_TESTING_GUIDE.md)** - Real-world sync testing with ETC mainnet and Mordor testnet
+
+### Validation Status
+- See **[GORGOROTH_VALIDATION_STATUS.md](../validation/GORGOROTH_VALIDATION_STATUS.md)** for current progress and roadmap
+- See **[GORGOROTH_COMPATIBILITY_TESTING.md](GORGOROTH_COMPATIBILITY_TESTING.md)** for testing procedures
+
 ## Test Strategy and KPIs
 
 ### Architecture Decision Records (ADRs)
@@ -20,6 +34,11 @@ This directory contains comprehensive testing documentation for the Fukuii Ether
 ### Programmatic KPI Access
 - **KPIBaselines.scala** - Scala object with baseline values (`src/test/scala/com/chipprbots/ethereum/testing/KPIBaselines.scala`)
 - **KPIBaselinesSpec.scala** - Test suite validating baseline definitions (`src/test/scala/com/chipprbots/ethereum/testing/KPIBaselinesSpec.scala`)
+
+### Launcher Integration Tests
+- **[LAUNCHER_INTEGRATION_TESTS.md](LAUNCHER_INTEGRATION_TESTS.md)** - Comprehensive guide for launcher configuration validation tests
+- **LauncherIntegrationSpec.scala** - Test suite validating all supported launch configurations (`src/test/scala/com/chipprbots/ethereum/LauncherIntegrationSpec.scala`)
+- Replaces standalone `test-launcher-integration.sh` bash script with automated CI/CD integration
 
 ## Test Tier Classification
 

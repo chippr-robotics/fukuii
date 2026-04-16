@@ -43,8 +43,8 @@ import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
-import com.chipprbots.ethereum.network.EtcPeerManagerActor
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.ForkResolver
 import com.chipprbots.ethereum.network.KnownNodesManager
 import com.chipprbots.ethereum.network.PeerEventBusActor
@@ -56,8 +56,8 @@ import com.chipprbots.ethereum.network.ServerActor
 import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
 import com.chipprbots.ethereum.network.discovery.Node
 import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager.DiscoveredNodesInfo
-import com.chipprbots.ethereum.network.handshaker.EtcHandshaker
-import com.chipprbots.ethereum.network.handshaker.EtcHandshakerConfiguration
+import com.chipprbots.ethereum.network.handshaker.NetworkHandshaker
+import com.chipprbots.ethereum.network.handshaker.NetworkHandshakerConfiguration
 import com.chipprbots.ethereum.network.handshaker.Handshaker
 import com.chipprbots.ethereum.network.rlpx.AuthHandshaker
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
@@ -74,7 +74,11 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
     extends SecureRandomBuilder
     with TestSyncConfig
     with BlockchainConfigBuilder {
-  implicit val akkaTimeout: Timeout = Timeout(5.second)
+  // Use longer timeout in CI environment to accommodate slower I/O and network operations
+  // CI environments (GitHub Actions, etc.) often have higher latency due to shared resources
+  private val baseTimeout = 5.seconds
+  private val ciMultiplier = sys.env.get("CI").map(_ => 6).getOrElse(1) // 30 seconds in CI, 5 seconds locally
+  implicit val akkaTimeout: Timeout = Timeout(baseTimeout * ciMultiplier)
 
   val config = Config.config
 
@@ -110,13 +114,18 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
       override val blockCacheSize: Long = 33554432
     }
 
-  sealed trait LocalPruningConfigBuilder extends PruningConfigBuilder {
+  sealed trait LocalPruningConfigBuilder
+      extends PruningConfigBuilder
+      with com.chipprbots.ethereum.TestInstanceConfigProvider {
     override val pruningMode: PruningMode = ArchivePruning
   }
 
   lazy val nodeStatusHolder = new AtomicReference(nodeStatus)
   lazy val storagesInstance: RocksDbDataSourceComponent with LocalPruningConfigBuilder with Storages.DefaultStorages =
-    new RocksDbDataSourceComponent with LocalPruningConfigBuilder with Storages.DefaultStorages {
+    new RocksDbDataSourceComponent
+      with LocalPruningConfigBuilder
+      with Storages.DefaultStorages
+      with com.chipprbots.ethereum.TestInstanceConfigProvider {
       override lazy val dataSource: RocksDbDataSource =
         RocksDbDataSource(getRockDbTestConfig(tempDir.toAbsolutePath.toString), Namespaces.nsSeq)
     }
@@ -174,7 +183,8 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
     override val maxPendingPeers = 5
     override val pruneIncomingPeers = 0
     override val minPruneAge: FiniteDuration = 1.minute
-    override val networkId: Int = 1
+    override val networkId: Long = 1L
+    override val p2pVersion: Int = Config.Network.peer.p2pVersion
 
     override val updateNodesInitialDelay: FiniteDuration = 5.seconds
     override val updateNodesInterval: FiniteDuration = 20.seconds
@@ -186,8 +196,8 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
 
   lazy val peerEventBus: ActorRef = system.actorOf(PeerEventBusActor.props, "peer-event-bus")
 
-  private val handshakerConfiguration: EtcHandshakerConfiguration =
-    new EtcHandshakerConfiguration {
+  private val handshakerConfiguration: NetworkHandshakerConfiguration =
+    new NetworkHandshakerConfiguration {
       override val forkResolverOpt: Option[ForkResolver] = None
       override val nodeStatusHolder: AtomicReference[NodeStatus] = nh
       override val peerConfiguration: PeerConfiguration = peerConf
@@ -197,7 +207,7 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
       override val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
     }
 
-  lazy val handshaker: Handshaker[PeerInfo] = EtcHandshaker(handshakerConfiguration)
+  lazy val handshaker: Handshaker[PeerInfo] = NetworkHandshaker(handshakerConfiguration)
 
   lazy val authHandshaker: AuthHandshaker = AuthHandshaker(nodeKey, secureRandom)
 
@@ -217,13 +227,13 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
       authHandshaker,
       discoveryConfig,
       blacklist,
-      blockchainConfig.capabilities
+      Config.supportedCapabilities
     ),
     "peer-manager"
   )
 
   lazy val etcPeerManager: ActorRef = system.actorOf(
-    EtcPeerManagerActor.props(peerManager, peerEventBus, storagesInstance.storages.appStateStorage, None),
+    NetworkPeerManagerActor.props(peerManager, peerEventBus, storagesInstance.storages.appStateStorage, None),
     "etc-peer-manager"
   )
 

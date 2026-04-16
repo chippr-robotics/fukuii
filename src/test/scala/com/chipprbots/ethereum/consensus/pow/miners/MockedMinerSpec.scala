@@ -24,10 +24,6 @@ import com.chipprbots.ethereum.consensus.pow.miners.MockedMiner.MineBlocks
 import com.chipprbots.ethereum.consensus.pow.miners.MockedMiner.MockedMinerResponses._
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
-import com.chipprbots.ethereum.domain.Block
-import com.chipprbots.ethereum.domain.BlockchainImpl
-import com.chipprbots.ethereum.domain.BlockchainReader
-import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.jsonrpc.EthMiningService
 import com.chipprbots.ethereum.jsonrpc.EthMiningService.SubmitHashRateResponse
@@ -135,7 +131,10 @@ class MockedMinerSpec
     }
 
     "mine valid blocks" when {
-      "there is request for block with other parent than best block" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
+      "there is request for block with other parent than best block" taggedAs (
+        UnitTest,
+        ConsensusTest
+      ) in new TestSetup {
         val parent = origin
         val parentHash = origin.hash
         val bfm = createBlockForMining(parent, Seq.empty)
@@ -238,7 +237,7 @@ class MockedMinerSpec
 
   class TestSetup extends MinerSpecSetup {
     // Override classicSystem to use the TestKit's actor system instead of creating a new one
-    override implicit def classicSystem: ClassicSystem = MockedMinerSpec.this.system
+    implicit override def classicSystem: ClassicSystem = MockedMinerSpec.this.system
     val noMessageTimeOut: FiniteDuration = 3.seconds
 
     // Implement abstract mock members - created in test class with MockFactory context
@@ -269,7 +268,9 @@ class MockedMinerSpec
         parentBlock: Block,
         block: Block,
         fakeWorld: InMemoryWorldStateProxy
-    ): CallHandler6[Block, Seq[SignedTransaction], Address, Seq[BlockHeader], Option[InMemoryWorldStateProxy], BlockchainConfig, PendingBlockAndState] =
+    ): CallHandler6[Block, Seq[SignedTransaction], Address, Seq[BlockHeader], Option[
+      InMemoryWorldStateProxy
+    ], BlockchainConfig, PendingBlockAndState] =
       (blockGenerator
         .generateBlock(
           _: Block,

@@ -2,7 +2,6 @@ package com.chipprbots.ethereum.consensus
 package validators
 
 import com.chipprbots.ethereum.consensus.mining.GetBlockHeaderByHash
-import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -41,20 +40,14 @@ object BlockHeaderError {
   case object HeaderGasLimitError extends BlockHeaderError
   case object HeaderNumberError extends BlockHeaderError
   case object HeaderPoWError extends BlockHeaderError
-  case class HeaderExtraFieldsError(
-      extraFields: HeaderExtraFields,
-      ecip1097Activated: Boolean,
-      ecip1098Activated: Boolean
-  ) extends BlockHeaderError
-  case class HeaderWrongNumberOfCheckpointSignatures(sigCount: Int) extends BlockHeaderError
-  case class HeaderInvalidCheckpointSignatures(invalidSignaturesWithPublics: Seq[(ECDSASignature, Option[String])])
-      extends BlockHeaderError
-  case object HeaderInvalidOrderOfCheckpointSignatures extends BlockHeaderError
-  case class HeaderFieldNotEmptyError(msg: String) extends BlockHeaderError
-  case class HeaderNotMatchParentError(msg: String) extends BlockHeaderError
-  case object CheckpointHeaderTreasuryOptOutError extends BlockHeaderError
-
+  case class HeaderExtraFieldsError(extraFields: HeaderExtraFields) extends BlockHeaderError
+  case class HeaderBaseFeeError(msg: String) extends BlockHeaderError
   case class HeaderUnexpectedError(msg: String) extends BlockHeaderError
+  // Post-merge validation errors
+  case class PostMergeNonceError(nonce: org.apache.pekko.util.ByteString) extends BlockHeaderError
+  case object PostMergeOmmersError extends BlockHeaderError
+  case object MissingWithdrawalsRootError extends BlockHeaderError
+  case object MissingBlobGasFieldsError extends BlockHeaderError
 }
 
 sealed trait BlockHeaderValid

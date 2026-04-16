@@ -2,17 +2,18 @@ package com.chipprbots.ethereum.network.handshaker
 
 import org.apache.pekko.util.ByteString
 
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.handshaker.Handshaker.NextMessage
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello
+import com.chipprbots.ethereum.network.rlpx.MessageCodec.CompressionPolicy
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.utils.ServerStatus
 
-case class EtcHelloExchangeState(handshakerConfiguration: EtcHandshakerConfiguration)
+case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfiguration)
     extends InProgressState[PeerInfo]
     with Logger {
 
@@ -28,22 +29,70 @@ case class EtcHelloExchangeState(handshakerConfiguration: EtcHandshakerConfigura
 
   override def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = { case hello: Hello =>
     log.debug("Protocol handshake finished with peer ({})", hello)
-    // FIXME in principle this should be already negotiated
-    Capability.negotiate(hello.capabilities.toList, handshakerConfiguration.blockchainConfig.capabilities) match {
-      case Some(Capability.ETC64) =>
-        log.debug("Negotiated protocol version with client {} is etc/64", hello.clientId)
-        EtcNodeStatus64ExchangeState(handshakerConfiguration)
+    // Store full capability list from peer
+    val peerCapabilities = hello.capabilities.toList
+
+    // Enhanced logging for peer capabilities and protocol version
+    log.debug(
+      "PEER_CAPABILITIES: clientId={}, p2pVersion={}, capabilities=[{}]",
+      hello.clientId,
+      hello.p2pVersion,
+      peerCapabilities.mkString(", ")
+    )
+
+    // Log our advertised capabilities for comparison
+    log.debug(
+      "OUR_CAPABILITIES: capabilities=[{}]",
+      Config.supportedCapabilities.mkString(", ")
+    )
+
+    // Check if peer supports SNAP/1 protocol
+    val supportsSnap = peerCapabilities.contains(Capability.SNAP1)
+    log.debug("PEER_SNAP_SUPPORT: supportsSnap={}, p2pVersion={}", supportsSnap, hello.p2pVersion)
+
+    // Log compression decision based on p2p version
+    val compressionPolicy =
+      CompressionPolicy.fromHandshake(EtcHelloExchangeState.P2pVersion, hello.p2pVersion)
+    log.debug(
+      "COMPRESSION_CONFIG: peerP2pVersion={}, ourP2pVersion={}, compressOutbound={}, expectInboundCompressed={}",
+      hello.p2pVersion,
+      EtcHelloExchangeState.P2pVersion,
+      compressionPolicy.compressOutbound,
+      compressionPolicy.expectInboundCompressed
+    )
+
+    // Negotiate protocol capability
+    val negotiationResult = Capability.negotiate(peerCapabilities, Config.supportedCapabilities)
+    log.debug(
+      "CAPABILITY_NEGOTIATION: peerCaps=[{}], ourCaps=[{}], negotiated={}",
+      peerCapabilities.mkString(", "),
+      Config.supportedCapabilities.mkString(", "),
+      negotiationResult.map(_.toString).getOrElse("NONE")
+    )
+
+    negotiationResult match {
       case Some(Capability.ETH63) =>
-        log.debug("Negotiated protocol version with client {} is eth/63", hello.clientId)
-        EthNodeStatus63ExchangeState(handshakerConfiguration)
+        log.debug("PROTOCOL_NEGOTIATED: clientId={}, protocol=eth/63, usesRequestId=false", hello.clientId)
+        EthNodeStatus63ExchangeState(handshakerConfiguration, supportsSnap, peerCapabilities)
+      case Some(Capability.ETH69) =>
+        log.debug("PROTOCOL_NEGOTIATED: clientId={}, protocol=eth/69 (EIP-7642)", hello.clientId)
+        EthNodeStatus69ExchangeState(handshakerConfiguration, Capability.ETH69, supportsSnap, peerCapabilities)
       case Some(
             negotiated @ (Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 | Capability.ETH68)
           ) =>
-        log.debug("Negotiated protocol version with client {} is {}", hello.clientId, negotiated)
-        EthNodeStatus64ExchangeState(handshakerConfiguration, negotiated)
-      case _ =>
         log.debug(
-          s"Connected peer does not support eth/63-68 or etc/64 protocol. Disconnecting."
+          "PROTOCOL_NEGOTIATED: clientId={}, protocol={}, usesRequestId={}",
+          hello.clientId,
+          negotiated,
+          Capability.usesRequestId(negotiated)
+        )
+        EthNodeStatus64ExchangeState(handshakerConfiguration, negotiated, supportsSnap, peerCapabilities)
+      case _ =>
+        log.warn(
+          "PROTOCOL_NEGOTIATION_FAILED: clientId={}, peerCaps=[{}], ourCaps=[{}], reason=IncompatibleP2pProtocolVersion",
+          hello.clientId,
+          peerCapabilities.mkString(", "),
+          Config.supportedCapabilities.mkString(", ")
         )
         DisconnectedState(Disconnect.Reasons.IncompatibleP2pProtocolVersion)
     }
@@ -63,7 +112,7 @@ case class EtcHelloExchangeState(handshakerConfiguration: EtcHandshakerConfigura
     Hello(
       p2pVersion = EtcHelloExchangeState.P2pVersion,
       clientId = Config.clientId,
-      capabilities = handshakerConfiguration.blockchainConfig.capabilities,
+      capabilities = Config.supportedCapabilities,
       listenPort = listenPort,
       nodeId = ByteString(nodeStatus.nodeId)
     )
@@ -71,8 +120,7 @@ case class EtcHelloExchangeState(handshakerConfiguration: EtcHandshakerConfigura
 }
 
 object EtcHelloExchangeState {
-  // Use p2pVersion 5 to align with CoreGeth and enable Snappy compression
-  // CoreGeth (and go-ethereum) only enable Snappy when p2pVersion >= 5
-  // See: https://github.com/etclabscore/core-geth/blob/master/p2p/peer.go#L54
-  val P2pVersion = 5
+  // Allow p2pVersion to be configured via fukuii.network.peer.p2p-version.
+  // Default remains 5 (Snappy-capable), but can be overridden per environment for investigations.
+  lazy val P2pVersion: Int = Config.Network.peer.p2pVersion
 }

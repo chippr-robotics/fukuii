@@ -28,16 +28,23 @@ import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.Scheduler
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.SyncResponse
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor._
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.p2p.messages.Capability
+import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.mpt.HexPrefix
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
+import com.chipprbots.ethereum.network.p2p.messages.ETH66
+import com.chipprbots.ethereum.network.p2p.messages.SNAP
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 class SyncStateSchedulerActor(
     sync: SyncStateScheduler,
     val syncConfig: SyncConfig,
-    val etcPeerManager: ActorRef,
+    val networkPeerManager: ActorRef,
     val peerEventBus: ActorRef,
     val blacklist: Blacklist,
     val scheduler: org.apache.pekko.actor.Scheduler
@@ -50,33 +57,129 @@ class SyncStateSchedulerActor(
   implicit private val monixScheduler: IORuntime = IORuntime.global
   implicit private val ec: scala.concurrent.ExecutionContext = context.dispatcher
 
-  private def getFreePeers(state: DownloaderState): List[Peer] =
-    peersToDownloadFrom.collect {
-      case (_, PeerWithInfo(peer, _)) if !state.activeRequests.contains(peer.id) => peer
+  /** State root for the current sync target — needed for GetTrieNodes requests. */
+  private var currentStateRoot: ByteString = ByteString.empty
+
+  /** Track consecutive "no useful data" responses — signals the state root is stale. After the threshold, the scheduler
+    * requests a restart with a fresh root.
+    */
+  private var consecutiveUselessResponses: Int = 0
+  private val UselessResponseThreshold: Int = 20
+
+  /** Check if a capability supports GetNodeData message. GetNodeData is available in ETH63-67 but removed in ETH68 per
+    * EIP-4938. SNAP protocol uses different messages (GetAccountRange, etc.) and doesn't support GetNodeData.
+    *
+    * Note: Capability is a sealed trait, so this match is exhaustive. If new capabilities are added in the future, this
+    * method will need to be updated accordingly.
+    */
+  /** Check if a peer supports GetNodeData on the negotiated protocol. GetNodeData is available in ETH63-67 but removed
+    * in ETH68 (EIP-4938). Only the negotiated (connection-level) capability matters — sending GetNodeData on an ETH68
+    * connection causes the peer to disconnect.
+    */
+  private def supportsGetNodeData(capability: Capability): Boolean = capability match {
+    case Capability.ETH63 | Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 => true
+    case Capability.ETH68                                                                             => false
+    case Capability.SNAP1                                                                             => false
+  }
+
+  /** Find free peers that can serve state nodes via either GetNodeData (ETH66/67) or GetTrieNodes (SNAP). On modern ETC
+    * networks, most peers negotiate ETH68 which doesn't support GetNodeData. These peers typically also support snap/1,
+    * so we can use GetTrieNodes with nibble paths instead.
+    */
+  private def getFreePeers(state: DownloaderState): List[Peer] = {
+    val freePeers = peersToDownloadFrom.collect {
+      case (_, PeerWithInfo(peer, peerInfo))
+          if !state.activeRequests.contains(peer.id) &&
+            (supportsGetNodeData(peerInfo.remoteStatus.capability) || peerInfo.remoteStatus.supportsSnap) =>
+        peer
     }.toList
 
-  private def requestNodes(request: PeerRequest): ActorRef = {
-    log.debug("Requesting {} from peer {}", request.nodes.size, request.peer.id)
-    val handler = context.actorOf(
-      PeerRequestHandler.props[GetNodeData, NodeData](
-        request.peer,
-        syncConfig.peerResponseTimeout,
-        etcPeerManager,
-        peerEventBus,
-        requestMsg = GetNodeData(request.nodes.toList),
-        responseMsgCode = Codes.NodeDataCode
+    if (freePeers.isEmpty && peersToDownloadFrom.nonEmpty) {
+      log.debug(
+        "No free peers for state download ({} total, {} with active requests)",
+        peersToDownloadFrom.size,
+        state.activeRequests.size
       )
+    }
+    freePeers
+  }
+
+  /** Check if a specific peer should use SNAP GetTrieNodes instead of GetNodeData */
+  private def peerUsesSnap(peer: Peer): Boolean =
+    handshakedPeers.get(peer.id).exists { pwi =>
+      !supportsGetNodeData(pwi.peerInfo.remoteStatus.capability) && pwi.peerInfo.remoteStatus.supportsSnap
+    }
+
+  private def requestNodes(request: PeerRequest): ActorRef = {
+    val useSnap = peerUsesSnap(request.peer)
+    log.debug(
+      "Requesting {} nodes from peer {} via {}",
+      request.nodes.size,
+      request.peer.id,
+      if (useSnap) "GetTrieNodes" else "GetNodeData"
     )
+
+    val handler = if (useSnap && currentStateRoot.nonEmpty) {
+      // Convert hash-based requests to SNAP GetTrieNodes with nibble paths
+      val paths: Seq[Seq[ByteString]] = request.nodes.toList.map { hash =>
+        request.pathInfo.get(hash) match {
+          case Some((nibblePath, accountHashOpt)) =>
+            val compactPath = ByteString(HexPrefix.encode(nibblePath.toArray, isLeaf = false))
+            accountHashOpt match {
+              case Some(acctHash) => Seq(acctHash, compactPath)
+              case None           => Seq(compactPath)
+            }
+          case None =>
+            // No path info — request root path as fallback
+            Seq(ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false)))
+        }
+      }
+      context.actorOf(
+        PeerRequestHandler.props[GetTrieNodes, TrieNodes](
+          request.peer,
+          syncConfig.peerResponseTimeout,
+          networkPeerManager,
+          peerEventBus,
+          requestMsg = GetTrieNodes(
+            requestId = ETH66.nextRequestId,
+            rootHash = currentStateRoot,
+            paths = paths,
+            responseBytes = BigInt(512 * 1024)
+          ),
+          responseMsgCode = SNAP.Codes.TrieNodesCode
+        )
+      )
+    } else {
+      // Original GetNodeData path for ETH66/67 peers
+      context.actorOf(
+        PeerRequestHandler.props[GetNodeData, NodeData](
+          request.peer,
+          syncConfig.peerResponseTimeout,
+          networkPeerManager,
+          peerEventBus,
+          requestMsg = GetNodeData(request.nodes.toList),
+          responseMsgCode = Codes.NodeDataCode
+        )
+      )
+    }
     context.watchWith(handler, RequestTerminated(request.peer))
   }
 
   def handleRequestResults: Receive = {
     case ResponseReceived(peer, nodeData: NodeData, timeTaken) =>
-      log.debug("Received {} state nodes in {} ms", nodeData.values.size, timeTaken)
+      log.debug("Received {} state nodes via GetNodeData in {} ms", nodeData.values.size, timeTaken)
       FastSyncMetrics.setMptStateDownloadTime(timeTaken)
-
       context.unwatch(sender())
       self ! RequestData(nodeData, peer)
+
+    case ResponseReceived(peer, trieNodes: TrieNodes, timeTaken) =>
+      // Convert SNAP TrieNodes response to NodeData format.
+      // TrieNodes returns raw node bytes — wrap them as NodeData values.
+      log.debug("Received {} state nodes via GetTrieNodes in {} ms", trieNodes.nodes.size, timeTaken)
+      FastSyncMetrics.setMptStateDownloadTime(timeTaken)
+      context.unwatch(sender())
+      val asNodeData = NodeData(trieNodes.nodes.toList)
+      self ! RequestData(asNodeData, peer)
 
     case PeerRequestHandler.RequestFailed(peer, reason) =>
       context.unwatch(sender())
@@ -138,6 +241,8 @@ class SyncStateSchedulerActor(
       initiator: ActorRef
   ): Unit = {
     timers.startTimerAtFixedRate(PrintInfoKey, PrintInfo, 30.seconds)
+    currentStateRoot = root
+    consecutiveUselessResponses = 0
     log.info("Starting state sync to root {} on block {}", ByteStringUtils.hash2string(root), bn)
     // TODO handle case when we already have root i.e state is synced up to this point
     val initState = sync.initState(root).getOrElse {
@@ -154,6 +259,9 @@ class SyncStateSchedulerActor(
   def idle(processingStatistics: ProcessingStatistics): Receive = handlePeerListMessages.orElse {
     case StartSyncingTo(root, bn) =>
       startSyncing(root, bn, processingStatistics, sender())
+    case RestartRequested =>
+      log.debug("Received RestartRequested while idle. Responding with WaitingForNewTargetBlock.")
+      sender() ! WaitingForNewTargetBlock
     case PrintInfo =>
       log.info("Waiting for target block to start the state sync")
   }
@@ -309,6 +417,7 @@ class SyncStateSchedulerActor(
         }
 
       case ProcessingResult(Right(ProcessingSuccess(newState, newDownloaderState, newStats))) =>
+        consecutiveUselessResponses = 0 // Reset on successful processing
         log.debug(
           "Finished processing mpt node batch. Got {} missing nodes. Missing queue has {} elements",
           newState.numberOfPendingRequests,
@@ -336,8 +445,31 @@ class SyncStateSchedulerActor(
           case DownloaderError(newDownloaderState, peer, blacklistWithReason) =>
             log.debug("Downloader error by peer {}", peer)
             blacklistWithReason.foreach(blacklistIfHandshaked(peer.id, syncConfig.blacklistDuration, _))
-            context.become(syncing(currentState.withNewDownloaderState(newDownloaderState)))
-            self ! Sync
+            // Track consecutive useless responses — all peers returning useless data
+            // means the state root is stale and needs refreshing.
+            blacklistWithReason match {
+              case Some(InvalidStateResponse(_)) =>
+                consecutiveUselessResponses += 1
+                if (consecutiveUselessResponses >= UselessResponseThreshold && !currentState.restartHasBeenRequested) {
+                  log.warning(
+                    "{} consecutive useless responses — state root likely stale. Triggering self-restart.",
+                    consecutiveUselessResponses
+                  )
+                  consecutiveUselessResponses = 0
+                  handleRestart(
+                    currentState.currentSchedulerState,
+                    currentState.currentStats,
+                    currentState.targetBlock,
+                    context.parent
+                  )
+                } else {
+                  context.become(syncing(currentState.withNewDownloaderState(newDownloaderState)))
+                  self ! Sync
+                }
+              case _ =>
+                context.become(syncing(currentState.withNewDownloaderState(newDownloaderState)))
+                self ! Sync
+            }
         }
 
       case PrintInfo =>
@@ -374,12 +506,14 @@ object SyncStateSchedulerActor {
   def props(
       sync: SyncStateScheduler,
       syncConfig: SyncConfig,
-      etcPeerManager: ActorRef,
+      networkPeerManager: ActorRef,
       peerEventBus: ActorRef,
       blacklist: Blacklist,
       scheduler: org.apache.pekko.actor.Scheduler
   ): Props =
-    Props(new SyncStateSchedulerActor(sync, syncConfig, etcPeerManager, peerEventBus, blacklist, scheduler)(scheduler))
+    Props(
+      new SyncStateSchedulerActor(sync, syncConfig, networkPeerManager, peerEventBus, blacklist, scheduler)(scheduler)
+    )
 
   case object PrintInfo
   case object PrintInfoKey
@@ -391,6 +525,7 @@ object SyncStateSchedulerActor {
   sealed trait SyncStateSchedulerActorResponse
   case object StateSyncFinished extends SyncStateSchedulerActorResponse
   case object WaitingForNewTargetBlock extends SyncStateSchedulerActorResponse
+  case object NetworkIncompatible extends SyncStateSchedulerActorResponse
 
   final case class GetMissingNodes(nodesToGet: List[ByteString])
   final case class MissingNodes(missingNodes: List[SyncResponse], downloaderCapacity: Int)
@@ -417,7 +552,11 @@ object SyncStateSchedulerActor {
 
   final case class RequestTerminated(to: Peer)
 
-  final case class PeerRequest(peer: Peer, nodes: NonEmptyList[ByteString])
+  final case class PeerRequest(
+      peer: Peer,
+      nodes: NonEmptyList[ByteString],
+      pathInfo: Map[ByteString, (Seq[Byte], Option[ByteString])] = Map.empty
+  )
 
   case object RegisterScheduler
 

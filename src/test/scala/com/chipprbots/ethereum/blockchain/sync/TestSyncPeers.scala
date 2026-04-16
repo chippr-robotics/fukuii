@@ -6,8 +6,8 @@ import org.apache.pekko.testkit.TestProbe
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.domain.ChainWeight
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.RemoteStatus
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.Capability
@@ -23,9 +23,11 @@ trait TestSyncPeers { self: TestSyncConfig =>
   val peer2: Peer = Peer(PeerId("peer2"), new InetSocketAddress("127.0.0.2", 0), peer2TestProbe.ref, false)
   val peer3: Peer = Peer(PeerId("peer3"), new InetSocketAddress("127.0.0.3", 0), peer3TestProbe.ref, false)
 
+  // Use ETH66 (not ETH68) because fast sync tests require GetNodeData-compatible peers.
+  // GetNodeData was removed in ETH68 per EIP-4938.
   val peer1Status: RemoteStatus =
     RemoteStatus(
-      Capability.ETC64,
+      Capability.ETH66,
       1,
       ChainWeight.totalDifficultyOnly(20),
       ByteString("peer1_bestHash"),

@@ -44,12 +44,17 @@ object Storages {
 
       override val knownNodesStorage: KnownNodesStorage = new KnownNodesStorage(dataSource)
 
+      override val blockFirstSeenStorage: BlockFirstSeenRocksDbStorage =
+        new BlockFirstSeenRocksDbStorage(dataSource)
+
+      override val flatSlotStorage: FlatSlotStorage = new FlatSlotStorage(dataSource)
+
       override val stateStorage: StateStorage =
         StateStorage(
           pruningMode,
           nodeStorage,
           new LruCache[NodeHash, HeapEntry](
-            Config.InMemoryPruningNodeCacheConfig,
+            Config.inMemoryPruningNodeCacheConfig,
             Some(CachedReferenceCountedStorage.saveOnlyNotificationHandler(nodeStorage))
           )
         )

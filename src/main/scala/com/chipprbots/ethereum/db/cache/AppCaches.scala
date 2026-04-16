@@ -6,6 +6,6 @@ import com.chipprbots.ethereum.utils.Config
 
 trait AppCaches extends CacheComponent {
   val caches: Caches = new Caches {
-    override val nodeCache: Cache[NodeHash, NodeEncoded] = MapCache.createCache(Config.NodeCacheConfig)
+    override val nodeCache: Cache[NodeHash, NodeEncoded] = MapCache.createCache(Config.nodeCacheConfig)
   }
 }

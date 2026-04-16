@@ -21,6 +21,8 @@ The following environment variables are pre-configured:
 
 ## Getting Started
 
+For a deep dive into how the sbt / Scala 3 build is structured (modules, plugins, external tools such as `protoc` and `solc`), read [`docs/development/scala-build.md`](../docs/development/scala-build.md). It explains which dependencies are required inside the dev container and which generated files (for example `project/metals.sbt`) must remain untracked so Metals does not recurse into `fukuii-build-build-build` meta-builds.
+
 1. Open this repository in GitHub Codespaces (click the green "Code" button and select "Open with Codespaces")
 2. Wait for the container to build and initialize (first time may take a few minutes)
 3. Once ready, you can start building:

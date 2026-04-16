@@ -36,8 +36,8 @@ import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.RemoteStatus
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.PeerActor.ConnectTo
 import com.chipprbots.ethereum.network.PeerActor.PeerClosedConnection
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
@@ -152,7 +152,11 @@ class PeerManagerSpec
 
     probe.ref ! PoisonPill
 
-    peerDiscoveryManager.expectMsg(PeerDiscoveryManager.GetRandomNodeInfo)
+    // Peer death triggers GetRandomNodeInfo, but timer-fired GetDiscoveredNodesInfo may arrive first
+    peerDiscoveryManager.fishForMessage(3.seconds, "waiting for GetRandomNodeInfo") {
+      case PeerDiscoveryManager.GetRandomNodeInfo => true
+      case _                                      => false
+    }
     peerDiscoveryManager.reply(PeerDiscoveryManager.RandomNodeInfo(bootstrapNodes.head))
   }
 
@@ -257,8 +261,7 @@ class PeerManagerSpec
     val requestSender: TestProbe = TestProbe()
 
     requestSender.send(peerManager, GetPeers)
-    // Advance scheduler to allow peer status requests to timeout (getPeerStatus uses 2s timeout)
-    testScheduler.timePasses((2.seconds + 1.second).toMillis.millis)
+    // With peer status caching, GetPeers returns immediately from cache — no actor asks needed
     requestSender.expectMsgClass(classOf[Peers])
   }
 
@@ -388,7 +391,11 @@ class PeerManagerSpec
 
     peerManager ! PeerDiscoveryManager.DiscoveredNodesInfo(discoveredNodes)
 
-    peerDiscoveryManager.expectMsg(PeerDiscoveryManager.GetRandomNodeInfo)
+    // DiscoveredNodesInfo triggers GetRandomNodeInfo (line 228), but eager startup messages may precede it
+    peerDiscoveryManager.fishForMessage(3.seconds, "waiting for GetRandomNodeInfo") {
+      case PeerDiscoveryManager.GetRandomNodeInfo => true
+      case _                                      => false
+    }
 
     val probe: TestProbe = createdPeers(0).probe
     probe.expectMsgClass(classOf[PeerActor.ConnectTo])

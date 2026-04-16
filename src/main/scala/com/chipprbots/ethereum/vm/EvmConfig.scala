@@ -27,10 +27,37 @@ object EvmConfig {
   def forBlock(blockNumber: BigInt, blockchainConfig: BlockchainConfig): EvmConfig =
     forBlock(blockNumber, BlockchainConfigForEvm(blockchainConfig))
 
+  /** returns the evm config for a given block, applying timestamp-based fork overrides for post-merge ETH chains.
+    */
+  def forBlock(blockNumber: BigInt, timestamp: Long, blockchainConfig: BlockchainConfig): EvmConfig = {
+    var config = forBlock(blockNumber, blockchainConfig)
+    // Apply timestamp-based fork upgrades for ETH chains
+    if (blockchainConfig.isShanghaiTimestamp(timestamp)) {
+      config = config.copy(
+        opCodeList = SpiralOpCodes,  // Adds PUSH0 (EIP-3855)
+        eip3651Enabled = true,       // Warm COINBASE
+        eip3860Enabled = true        // Initcode metering
+      )
+    }
+    if (blockchainConfig.isCancunTimestamp(timestamp)) {
+      config = config.copy(
+        opCodeList = OlympiaOpCodes,  // Adds TSTORE/TLOAD/MCOPY/BLOBHASH/BLOBBASEFEE
+        feeSchedule = new FeeSchedule.OlympiaFeeSchedule,
+        eip6780Enabled = true         // SELFDESTRUCT restriction
+      )
+    }
+    config
+  }
+
   /** returns the evm config that should be used for given block
     */
   def forBlock(blockNumber: BigInt, blockchainConfig: BlockchainConfigForEvm): EvmConfig = {
-    // FIXME manage etc/eth forks in a more sophisticated way [ETCM-249]
+    // When ETC-specific forks (Spiral, Mystique) activate AFTER Olympia, the chain follows
+    // standard Ethereum fork schedule where London only activates EIP-1559/3529/3541.
+    // On ETC, Spiral < Olympia in the fork sequence, so Olympia bundles all EIPs.
+    val etcForksDisabled = blockchainConfig.spiralBlockNumber > blockchainConfig.olympiaBlockNumber
+    val olympiaBuilder = if (etcForksDisabled) LondonConfigBuilder else OlympiaConfigBuilder
+
     val transitionBlockToConfigWithPriorityMapping: List[(BigInt, Int, EvmConfigBuilder)] = List(
       (blockchainConfig.frontierBlockNumber, 1, FrontierConfigBuilder),
       (blockchainConfig.homesteadBlockNumber, 2, HomesteadConfigBuilder),
@@ -38,16 +65,19 @@ object EvmConfig {
       (blockchainConfig.eip160BlockNumber, 4, PostEIP160ConfigBuilder),
       (blockchainConfig.eip161BlockNumber, 5, PostEIP161ConfigBuilder),
       (blockchainConfig.byzantiumBlockNumber, 6, ByzantiumConfigBuilder),
-      (blockchainConfig.atlantisBlockNumber, 6, AtlantisConfigBuilder),
-      (blockchainConfig.constantinopleBlockNumber, 7, ConstantinopleConfigBuilder),
-      (blockchainConfig.aghartaBlockNumber, 7, AghartaConfigBuilder),
-      (blockchainConfig.petersburgBlockNumber, 8, PetersburgConfigBuilder),
-      (blockchainConfig.istanbulBlockNumber, 9, IstanbulConfigBuilder),
-      (blockchainConfig.phoenixBlockNumber, 9, PhoenixConfigBuilder),
-      (blockchainConfig.magnetoBlockNumber, 10, MagnetoConfigBuilder),
-      (blockchainConfig.berlinBlockNumber, 10, BerlinConfigBuilder),
-      (blockchainConfig.mystiqueBlockNumber, 11, MystiqueConfigBuilder),
-      (blockchainConfig.spiralBlockNumber, 12, SpiralConfigBuilder)
+      // ETC forks may intentionally share the same activation height as their ETH counterparts.
+      // In that case we must prefer the ETC config, otherwise gas accounting/opcodes can diverge.
+      (blockchainConfig.atlantisBlockNumber, 7, AtlantisConfigBuilder),
+      (blockchainConfig.constantinopleBlockNumber, 8, ConstantinopleConfigBuilder),
+      (blockchainConfig.aghartaBlockNumber, 9, AghartaConfigBuilder),
+      (blockchainConfig.petersburgBlockNumber, 10, PetersburgConfigBuilder),
+      (blockchainConfig.istanbulBlockNumber, 11, IstanbulConfigBuilder),
+      (blockchainConfig.phoenixBlockNumber, 12, PhoenixConfigBuilder),
+      (blockchainConfig.magnetoBlockNumber, 13, MagnetoConfigBuilder),
+      (blockchainConfig.berlinBlockNumber, 14, BerlinConfigBuilder),
+      (blockchainConfig.mystiqueBlockNumber, 15, MystiqueConfigBuilder),
+      (blockchainConfig.spiralBlockNumber, 16, SpiralConfigBuilder),
+      (blockchainConfig.olympiaBlockNumber, 17, olympiaBuilder)
     )
 
     // highest transition block that is less/equal to `blockNumber`
@@ -68,6 +98,7 @@ object EvmConfig {
   val PhoenixOpCodes: OpCodeList = OpCodeList(OpCodes.PhoenixOpCodes)
   val MagnetoOpCodes: OpCodeList = PhoenixOpCodes
   val SpiralOpCodes: OpCodeList = OpCodeList(OpCodes.SpiralOpCodes)
+  val OlympiaOpCodes: OpCodeList = OpCodeList(OpCodes.OlympiaOpCodes)
 
   val FrontierConfigBuilder: EvmConfigBuilder = config =>
     EvmConfig(
@@ -161,6 +192,22 @@ object EvmConfig {
       eip6049DeprecationEnabled = true
     )
 
+  /** London-only config for ETH chains. Enables EIP-1559/3529/3541 without Shanghai+ EIPs.
+    * Used when Olympia block number differs from Spiral/Mystique (i.e., ETH fork schedule).
+    */
+  val LondonConfigBuilder: EvmConfigBuilder = config =>
+    MagnetoConfigBuilder(config).copy(
+      feeSchedule = new ethereum.vm.FeeSchedule.MystiqueFeeSchedule, // EIP-3529 refund changes
+      eip3541Enabled = true // EIP-3541: reject 0xEF contracts
+    )
+
+  val OlympiaConfigBuilder: EvmConfigBuilder = config =>
+    SpiralConfigBuilder(config).copy(
+      opCodeList = OlympiaOpCodes,
+      feeSchedule = new FeeSchedule.OlympiaFeeSchedule,
+      eip6780Enabled = true
+    )
+
   case class OpCodeList(opCodes: List[OpCode]) {
     val byteToOpCode: Map[Byte, OpCode] =
       opCodes.map(op => op.code -> op).toMap
@@ -180,7 +227,8 @@ case class EvmConfig(
     eip3541Enabled: Boolean = false,
     eip3651Enabled: Boolean = false,
     eip3860Enabled: Boolean = false,
-    eip6049DeprecationEnabled: Boolean = false
+    eip6049DeprecationEnabled: Boolean = false,
+    eip6780Enabled: Boolean = false
 ) {
 
   import feeSchedule._
@@ -225,7 +273,8 @@ case class EvmConfig(
   def calcTransactionIntrinsicGas(
       txData: ByteString,
       isContractCreation: Boolean,
-      accessList: Seq[AccessListItem]
+      accessList: Seq[AccessListItem],
+      authorizationListSize: Int = 0
   ): BigInt = {
     val txDataZero = txData.count(_ == 0)
     val txDataNonZero = txData.length - txDataZero
@@ -234,10 +283,14 @@ case class EvmConfig(
       accessList.size * G_access_list_address +
         accessList.map(_.storageKeys.size).sum * G_access_list_storage
 
+    // EIP-7702: Per-authorization intrinsic gas = CallNewAccountGas (25000) per geth
+    // Geth refunds (25000 - 12500 = 12500) if account exists (capped at gasUsed/5)
+    val authListPrice: BigInt = BigInt(authorizationListSize) * BigInt(25000)
+
     val initCodeCost: BigInt = if (isContractCreation) calcInitCodeCost(txData) else BigInt(0)
 
     txDataZero * G_txdatazero +
-      txDataNonZero * G_txdatanonzero + accessListPrice +
+      txDataNonZero * G_txdatanonzero + accessListPrice + authListPrice +
       (if (isContractCreation) G_txcreate else 0) +
       G_transaction +
       initCodeCost
@@ -378,6 +431,8 @@ object FeeSchedule {
     // EIP-3860: Initcode metering (activated in Spiral fork)
     override val G_initcode_word: BigInt = 2
   }
+
+  class OlympiaFeeSchedule extends MystiqueFeeSchedule
 }
 
 trait FeeSchedule {

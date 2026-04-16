@@ -66,7 +66,17 @@ case class SyncSchedulerActorState(
         Some(newNodes),
         nodesPerPeer
       )
-    (requests, copy(currentSchedulerState = newState, currentDownloaderState = newDownloaderState))
+    // Enrich PeerRequests with nibble path info from the scheduler state.
+    // This is needed for SNAP GetTrieNodes which requires paths instead of hashes.
+    val enrichedRequests = requests.map { req =>
+      val pathInfo = req.nodes.toList.flatMap { hash =>
+        newState.getPendingRequestByHash(hash).map { snr =>
+          hash -> (snr.nibblePath, snr.accountHash)
+        }
+      }.toMap
+      req.copy(pathInfo = pathInfo)
+    }
+    (enrichedRequests, copy(currentSchedulerState = newState, currentDownloaderState = newDownloaderState))
   }
 
   def getRequestToProcess: Option[(RequestResult, SyncSchedulerActorState)] =

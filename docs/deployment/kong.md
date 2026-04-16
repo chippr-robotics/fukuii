@@ -112,7 +112,7 @@ The Barad-dûr (Kong) setup provides:
 
 ```bash
 # Navigate to the Barad-dûr directory
-cd docker/barad-dur
+cd ops/barad-dur
 
 # Start all services
 docker-compose up -d

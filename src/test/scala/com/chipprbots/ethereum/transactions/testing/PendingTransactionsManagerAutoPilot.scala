@@ -24,7 +24,7 @@ case class PendingTransactionsManagerAutoPilot(pendingTransactions: Set[PendingT
       case AddTransactions(signedTransactions) =>
         this.addTransactions(signedTransactions)
 
-      case AddOrOverrideTransaction(newStx) =>
+      case AddOrOverrideTransaction(newStx, _) =>
         // Only validated transactions are added this way, it is safe to call get
         val newStxSender = SignedTransaction.getSender(newStx).get
         val obsoleteTxs = pendingTransactions

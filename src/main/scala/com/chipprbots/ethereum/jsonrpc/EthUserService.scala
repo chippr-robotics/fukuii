@@ -48,6 +48,8 @@ class EthUserService(
         )
         GetCodeResponse(world.getCode(req.address))
       }
+    }.recover { case _: MissingNodeException =>
+      Left(JsonRpcError.NodeNotFound)
     }
 
   def getBalance(req: GetBalanceRequest): ServiceResponse[GetBalanceResponse] =

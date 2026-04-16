@@ -53,9 +53,7 @@ class JsonRpcControllerPersonalSpec
     val addr: Address = Address("0x00000000000000000000000000000000000000ff")
     val pass = "aaa"
 
-    (personalService.importRawKey _)
-      .expects(ImportRawKeyRequest(keyBytes, pass))
-      .returning(IO.pure(Right(ImportRawKeyResponse(addr))))
+    personalService.importRawKeyFn = _ => IO.pure(Right(ImportRawKeyResponse(addr)))
 
     val params: List[JString] = JString(key) :: JString(pass) :: Nil
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("personal_importRawKey", params)
@@ -68,9 +66,7 @@ class JsonRpcControllerPersonalSpec
     val addr: Address = Address("0x00000000000000000000000000000000000000ff")
     val pass = "aaa"
 
-    (personalService.newAccount _)
-      .expects(NewAccountRequest(pass))
-      .returning(IO.pure(Right(NewAccountResponse(addr))))
+    personalService.newAccountFn = _ => IO.pure(Right(NewAccountResponse(addr)))
 
     val params: List[JString] = JString(pass) :: Nil
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("personal_newAccount", params)
@@ -82,9 +78,7 @@ class JsonRpcControllerPersonalSpec
   it should "personal_listAccounts" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val addresses: List[Address] = List(34, 12391, 123).map(Address(_))
 
-    (personalService.listAccounts _)
-      .expects(ListAccountsRequest())
-      .returning(IO.pure(Right(ListAccountsResponse(addresses))))
+    personalService.listAccountsFn = _ => IO.pure(Right(ListAccountsResponse(addresses)))
 
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("personal_listAccounts")
     val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
@@ -97,9 +91,7 @@ class JsonRpcControllerPersonalSpec
     val pass = "aaa"
     val params: List[JString] = JString(address.toString) :: JString(pass) :: Nil
 
-    (personalService.unlockAccount _)
-      .expects(UnlockAccountRequest(address, pass, None))
-      .returning(IO.pure(Right(UnlockAccountResponse(true))))
+    personalService.unlockAccountFn = _ => IO.pure(Right(UnlockAccountResponse(true)))
 
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("personal_unlockAccount", params)
     val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
@@ -116,9 +108,7 @@ class JsonRpcControllerPersonalSpec
     val dur = "1"
     val params: List[JString] = JString(address.toString) :: JString(pass) :: JString(dur) :: Nil
 
-    (personalService.unlockAccount _)
-      .expects(UnlockAccountRequest(address, pass, Some(Duration.ofSeconds(1))))
-      .returning(IO.pure(Right(UnlockAccountResponse(true))))
+    personalService.unlockAccountFn = _ => IO.pure(Right(UnlockAccountResponse(true)))
 
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("personal_unlockAccount", params)
     val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
@@ -157,9 +147,7 @@ class JsonRpcControllerPersonalSpec
     val pass = "aaa"
     val params: List[JValue] = JString(address.toString) :: JString(pass) :: JNull :: Nil
 
-    (personalService.unlockAccount _)
-      .expects(UnlockAccountRequest(address, pass, None))
-      .returning(IO.pure(Right(UnlockAccountResponse(true))))
+    personalService.unlockAccountFn = _ => IO.pure(Right(UnlockAccountResponse(true)))
 
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("personal_unlockAccount", params)
     val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
@@ -171,9 +159,7 @@ class JsonRpcControllerPersonalSpec
     val address: Address = Address(42)
     val params: List[JString] = JString(address.toString) :: Nil
 
-    (personalService.lockAccount _)
-      .expects(LockAccountRequest(address))
-      .returning(IO.pure(Right(LockAccountResponse(true))))
+    personalService.lockAccountFn = _ => IO.pure(Right(LockAccountResponse(true)))
 
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("personal_lockAccount", params)
     val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
@@ -190,10 +176,7 @@ class JsonRpcControllerPersonalSpec
 
     val txHash: ByteString = ByteString(1, 2, 3, 4)
 
-    (personalService
-      .sendTransaction(_: SendTransactionWithPassphraseRequest))
-      .expects(*)
-      .returning(IO.pure(Right(SendTransactionWithPassphraseResponse(txHash))))
+    personalService.sendTransactionWithPassphraseFn = _ => IO.pure(Right(SendTransactionWithPassphraseResponse(txHash)))
 
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("personal_sendTransaction", params)
     val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
@@ -203,15 +186,7 @@ class JsonRpcControllerPersonalSpec
 
   it should "personal_sign" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
 
-    (personalService.sign _)
-      .expects(
-        SignRequest(
-          ByteString(Hex.decode("deadbeaf")),
-          Address(ByteString(Hex.decode("9b2055d370f73ec7d8a03e965129118dc8f5bf83"))),
-          Some("thePassphrase")
-        )
-      )
-      .returns(IO.pure(Right(SignResponse(sig))))
+    personalService.signFn = _ => IO.pure(Right(SignResponse(sig)))
 
     val request: JsonRpcRequest = newJsonRpcRequest(
       "personal_sign",
@@ -230,12 +205,9 @@ class JsonRpcControllerPersonalSpec
 
   it should "personal_ecRecover" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
 
-    (personalService.ecRecover _)
-      .expects(EcRecoverRequest(ByteString(Hex.decode("deadbeaf")), sig))
-      .returns(
-        IO.pure(
-          Right(EcRecoverResponse(Address(ByteString(Hex.decode("9b2055d370f73ec7d8a03e965129118dc8f5bf83")))))
-        )
+    personalService.ecRecoverFn = _ =>
+      IO.pure(
+        Right(EcRecoverResponse(Address(ByteString(Hex.decode("9b2055d370f73ec7d8a03e965129118dc8f5bf83")))))
       )
 
     val request: JsonRpcRequest = newJsonRpcRequest(

@@ -11,6 +11,9 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
 
   val secp256k1n: BigInt = BigInt("115792089237316195423570985008687907852837564279074904382605163141518161494337")
 
+  /** EIP-7825: Maximum per-transaction gas limit (2^24 = 16,777,216) */
+  val TxGasLimitCap: BigInt = BigInt(1 << 24)
+
   /** Initial tests of intrinsic validity stated in Section 6 of YP
     *
     * @param stx
@@ -39,6 +42,7 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
       _ <- validateSignature(stx, blockHeader.number)
       _ <- validateNonce(stx, senderAccount.nonce)
       _ <- validateGasLimitEnoughForIntrinsicGas(stx, blockHeader.number)
+      _ <- validateTxGasLimitCap(stx, blockHeader.number)
       _ <- validateAccountHasEnoughGasToPayUpfrontCost(senderAccount.balance, upfrontGasCost)
       _ <- validateBlockHasEnoughGasLimitForTx(stx, accumGasUsed, blockHeader.gasLimit)
     } yield SignedTransactionValid
@@ -101,12 +105,32 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
 
     // Validate signing schema based on transaction type
     val validSigningSchema = stx.tx match {
+      case _: SetCodeTransaction =>
+        // EIP-7702 Type-4 transactions use y-parity (0 or 1) for v
+        stx.signature.v == ECDSASignature.negativeYParity || stx.signature.v == ECDSASignature.positiveYParity
+      case _: TransactionWithDynamicFee =>
+        // EIP-1559 Type-2 transactions use y-parity (0 or 1) for v, same as Type-1
+        stx.signature.v == ECDSASignature.negativeYParity || stx.signature.v == ECDSASignature.positiveYParity
+      case _: BlobTransaction =>
+        // EIP-4844 Type-3 transactions use y-parity (0 or 1) for v, same as Type-1/Type-2
+        stx.signature.v == ECDSASignature.negativeYParity || stx.signature.v == ECDSASignature.positiveYParity
       case _: TransactionWithAccessList =>
         // EIP-2930+ transactions use y-parity (0 or 1) for v
         stx.signature.v == ECDSASignature.negativeYParity || stx.signature.v == ECDSASignature.positiveYParity
       case _: LegacyTransaction =>
-        // Legacy transactions: before EIP-155, must use unprotected signatures (v = 27 or 28)
-        if (beforeEIP155) !stx.isChainSpecific else true
+        val v = stx.signature.v
+        // Legacy transactions can use:
+        // 1. Unprotected signatures (v = 27 or 28)
+        // 2. EIP-155 protected signatures (v = chainId * 2 + 35 or chainId * 2 + 36)
+        val isUnprotected = v == ECDSASignature.negativePointSign || v == ECDSASignature.positivePointSign
+        val isEIP155Protected = if (v >= 35) {
+          // Check if v corresponds to valid EIP-155 format: v = chainId * 2 + 35 + {0,1}
+          val chainIdFromV = (v - 35) / 2
+          v == chainIdFromV * 2 + 35 || v == chainIdFromV * 2 + 36
+        } else false
+
+        if (beforeEIP155) isUnprotected
+        else isUnprotected || isEIP155Protected
     }
 
     if (validR && validS && validSigningSchema) Right(SignedTransactionValid)
@@ -171,8 +195,12 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
   )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid] = {
     import stx.tx
     val config = EvmConfig.forBlock(blockHeaderNumber, blockchainConfig)
+    val authListSize = tx match {
+      case sct: SetCodeTransaction => sct.authorizationList.size
+      case _                       => 0
+    }
     val txIntrinsicGas =
-      config.calcTransactionIntrinsicGas(tx.payload, tx.isContractInit, Transaction.accessList(tx))
+      config.calcTransactionIntrinsicGas(tx.payload, tx.isContractInit, Transaction.accessList(tx), authListSize)
     if (stx.tx.gasLimit >= txIntrinsicGas) Right(SignedTransactionValid)
     else Left(TransactionNotEnoughGasForIntrinsicError(stx.tx.gasLimit, txIntrinsicGas))
   }
@@ -192,6 +220,19 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
   ): Either[SignedTransactionError, SignedTransactionValid] =
     if (senderBalance >= upfrontCost) Right(SignedTransactionValid)
     else Left(TransactionSenderCantPayUpfrontCostError(upfrontCost, senderBalance))
+
+  /** EIP-7825: Validates that the transaction gas limit does not exceed the per-tx cap (30M) post-Olympia.
+    */
+  private def validateTxGasLimitCap(
+      stx: SignedTransaction,
+      blockHeaderNumber: BigInt
+  )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid] = {
+    val isOlympiaActivated = blockHeaderNumber >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+    if (isOlympiaActivated && stx.tx.gasLimit > TxGasLimitCap)
+      Left(TransactionGasLimitExceedsCap(stx.tx.gasLimit, TxGasLimitCap))
+    else
+      Right(SignedTransactionValid)
+  }
 
   /** The sum of the transaction’s gas limit and the gas utilised in this block prior must be no greater than the
     * block’s gasLimit

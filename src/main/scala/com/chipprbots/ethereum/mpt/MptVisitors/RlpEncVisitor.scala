@@ -40,7 +40,7 @@ class RlpBranchVisitor(_branchNode: BranchNode) extends BranchVisitor[RLPEncodea
     list = child :: list
 
   override def visitTerminator(term: Option[NodeHash]): Unit =
-    list = RLPValue(term.map(_.toArray[Byte]).getOrElse(Array.emptyByteArray)) :: list
+    list = RLPValue(term.map(_.toArray[Byte]).getOrElse(Array.empty[Byte])) :: list
 
   override def done(): RLPEncodeable =
     RLPList(list.reverse: _*)
@@ -57,7 +57,7 @@ class RlpEncVisitor extends MptVisitor[RLPEncodeable] {
     Result(RLPValue(hashNode.hashNode))
 
   override def visitNull(): RLPEncodeable =
-    RLPValue(Array.emptyByteArray)
+    RLPValue(Array.empty[Byte])
 
   override def visitExtension(extension: ExtensionNode): ExtensionVisitor[RLPEncodeable] = new RlpExtensionVisitor(
     extension

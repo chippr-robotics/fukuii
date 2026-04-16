@@ -34,8 +34,8 @@ import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers.Unformatted
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer
 import com.chipprbots.ethereum.jsonrpc.server.ipc.JsonRpcIpcServer
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.RemoteStatus
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.testing.Tags._
 
@@ -82,7 +82,7 @@ class JsonRpcControllerSpec
   }
 
   it should "Handle net_peerCount request" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    (netService.peerCount _).expects(*).returning(IO.pure(Right(PeerCountResponse(123))))
+    netService.peerCountFn = _ => IO.pure(Right(PeerCountResponse(123)))
 
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("net_peerCount")
 
@@ -92,7 +92,7 @@ class JsonRpcControllerSpec
   }
 
   it should "Handle net_listening request" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    (netService.listening _).expects(*).returning(IO.pure(Right(ListeningResponse(false))))
+    netService.listeningFn = _ => IO.pure(Right(ListeningResponse(false)))
 
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("net_listening")
     val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
@@ -103,7 +103,7 @@ class JsonRpcControllerSpec
   it should "Handle net_version request" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val netVersion = "99"
 
-    (netService.version _).expects(*).returning(IO.pure(Right(VersionResponse(netVersion))))
+    netService.versionFn = _ => IO.pure(Right(VersionResponse(netVersion)))
 
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("net_version")
     val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
@@ -173,8 +173,7 @@ class JsonRpcControllerSpec
         "web3" -> JString("1.0"),
         "fukuii" -> JString("1.0"),
         "debug" -> JString("1.0"),
-        "qa" -> JString("1.0"),
-        "checkpointing" -> JString("1.0")
+        "qa" -> JString("1.0")
       )
     )
   }

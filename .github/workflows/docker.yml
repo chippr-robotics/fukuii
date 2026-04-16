@@ -6,13 +6,22 @@ on:
       - main
       - master
       - develop
-    tags:
-      - 'v*'
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - '.github/workflows/docs-*.yml'
+      - '.github/workflows/gh-pages.yml'
   pull_request:
     branches:
       - main
       - master
       - develop
+  # Do NOT trigger on tags - let release.yml handle tag builds
+
+# Prevent concurrent Docker builds
+concurrency:
+  group: docker-build-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io

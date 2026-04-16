@@ -17,7 +17,7 @@ limitations under the License.
 MODIFICATIONS AND DERIVATIVE WORK
 
 This software has been modified and is maintained as a derivative work by
-Chipper Robotics, LLC (2025-present) under the project name "Fukuii".
+Chippr Robotics, LLC (2025-present) under the project name "Fukuii".
 
 The original software, known as "Mantis", was developed by Input Output
 (Hong Kong) Ltd. This derivative work has been rebranded and continues
@@ -32,4 +32,4 @@ Modifications include:
 The derivative work continues to be licensed under the Apache License,
 Version 2.0, as required by the original license terms.
 
-For more information about Fukuii, visit: https://github.com/chippr-robotics/chordodes_fukuii
+For more information about Fukuii, visit: https://github.com/chippr-robotics/fukuii

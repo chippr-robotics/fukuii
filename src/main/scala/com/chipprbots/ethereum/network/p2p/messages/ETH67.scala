@@ -19,17 +19,17 @@ import com.chipprbots.ethereum.rlp._
   *   - transaction sizes (to help with bandwidth management)
   *
   * Note: For backward compatibility with some core-geth nodes, the decoder supports both:
-  *   1. Enhanced format: [[types...], [sizes...], [hashes...]]
-  *   2. Legacy ETH65 format: [hash1, hash2, ...] (sets default type=0, size=0)
+  *   1. Enhanced format: [[types...], [sizes...], [hashes...]] 2. Legacy ETH65 format: [hash1, hash2, ...] (sets
+  *      default type=0, size=0)
   */
 object ETH67 {
-  
+
   // Custom exception for ETH67 decode errors with enhanced diagnostics
-  private class ETH67DecodeException(message: String, cause: Throwable) 
-    extends RuntimeException(s"ETH67_DECODE_ERROR: $message", cause) {
+  private class ETH67DecodeException(message: String, cause: Throwable)
+      extends RuntimeException(s"ETH67_DECODE_ERROR: $message", cause) {
     def this(message: String) = this(message, null)
   }
-  
+
   // Maximum bytes to include in hex dumps for error messages
   private val HexDumpMaxBytes = 100
 
@@ -54,23 +54,25 @@ object ETH67 {
           val hexStr = Hex.toHexString(bytes.take(HexDumpMaxBytes))
           if (bytes.length > HexDumpMaxBytes) s"$hexStr..." else hexStr
         }
-        
+
         try {
           val decoded = rawDecode(bytes)
-          
+
           // Capture RLP structure for error reporting
           val structureInfo = decoded match {
             case rlpList: RLPList =>
-              val itemTypes = rlpList.items.map {
-                case RLPValue(b) => s"RLPValue(${b.length}b)"
-                case subList: RLPList => s"RLPList(${subList.items.size})"
-                case other => s"${other.getClass.getSimpleName}"
-              }.mkString(", ")
+              val itemTypes = rlpList.items
+                .map {
+                  case RLPValue(b)      => s"RLPValue(${b.length}b)"
+                  case subList: RLPList => s"RLPList(${subList.items.size})"
+                  case other            => s"${other.getClass.getSimpleName}"
+                }
+                .mkString(", ")
               s"RLPList[${rlpList.items.size}]: [$itemTypes]"
             case RLPValue(b) => s"RLPValue(${b.length} bytes)"
-            case other => s"${other.getClass.getSimpleName}"
+            case other       => s"${other.getClass.getSimpleName}"
           }
-          
+
           decoded match {
             // ETH67/ETH68 enhanced format from core-geth: [types_as_byte_string, [sizes...], [hashes...]]
             // Note: core-geth encodes Types []byte as RLPValue (byte string), not RLPList
@@ -80,7 +82,7 @@ object ETH67 {
                 val types = typesBytes.toSeq
                 val sizes = fromRlpList[BigInt](sizesList)
                 val hashes = fromRlpList[ByteString](hashesList)
-                
+
                 NewPooledTransactionHashes(
                   types = types,
                   sizes = sizes,
@@ -90,19 +92,19 @@ object ETH67 {
                 case e: ArrayIndexOutOfBoundsException =>
                   throw new ETH67DecodeException(
                     s"ArrayIndexOutOfBoundsException in ETH67/68 format. " +
-                    s"Structure: $structureInfo. " +
-                    s"Types=${typesBytes.length}, Sizes=${sizesList.items.size}, Hashes=${hashesList.items.size}. " +
-                    s"Hex: $hexDump",
+                      s"Structure: $structureInfo. " +
+                      s"Types=${typesBytes.length}, Sizes=${sizesList.items.size}, Hashes=${hashesList.items.size}. " +
+                      s"Hex: $hexDump",
                     e
                   )
                 case e: Throwable =>
                   throw new ETH67DecodeException(
                     s"${e.getClass.getSimpleName} in ETH67/68 format: ${e.getMessage}. " +
-                    s"Structure: $structureInfo. Hex: $hexDump",
+                      s"Structure: $structureInfo. Hex: $hexDump",
                     e
                   )
               }
-            
+
             // ETH65 legacy format for backward compatibility: [hash1, hash2, ...]
             // Some older nodes may still send this format
             case rlpList: RLPList =>
@@ -118,23 +120,23 @@ object ETH67 {
                 case e: Throwable =>
                   throw new ETH67DecodeException(
                     s"${e.getClass.getSimpleName} in ETH65 legacy format: ${e.getMessage}. " +
-                    s"Structure: $structureInfo. Hex: $hexDump",
+                      s"Structure: $structureInfo. Hex: $hexDump",
                     e
                   )
               }
-            
+
             case other =>
               throw new ETH67DecodeException(
                 s"Unexpected RLP structure. Expected [RLPValue, RLPList, RLPList] (ETH67/68) " +
-                s"or RLPList (ETH65 legacy), got: $structureInfo. Hex: $hexDump"
+                  s"or RLPList (ETH65 legacy), got: $structureInfo. Hex: $hexDump"
               )
           }
         } catch {
-          case e: ETH67DecodeException => throw e  // Propagate our detailed errors
+          case e: ETH67DecodeException => throw e // Propagate our detailed errors
           case e: Throwable =>
             throw new ETH67DecodeException(
               s"${e.getClass.getSimpleName} during RLP decode: ${e.getMessage}. " +
-              s"Length: ${bytes.length}, Hex: $hexDump",
+                s"Length: ${bytes.length}, Hex: $hexDump",
               e
             )
         }

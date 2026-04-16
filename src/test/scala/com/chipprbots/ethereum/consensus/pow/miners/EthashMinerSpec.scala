@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.MiningPatience
 import com.chipprbots.ethereum.consensus.blocks.PendingBlock
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
+import com.chipprbots.ethereum.consensus.mining.CoinbaseProvider
 import com.chipprbots.ethereum.consensus.pow.EthashUtils
 import com.chipprbots.ethereum.consensus.pow.MinerSpecSetup
 import com.chipprbots.ethereum.consensus.pow.PoWBlockCreator
@@ -47,7 +48,11 @@ class EthashMinerSpec extends AnyFlatSpec with Matchers with org.scalamock.scala
     executeTest(parentBlock)
   }
 
-  it should "mine valid block on the end and beginning of the new epoch" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup {
+  it should "mine valid block on the end and beginning of the new epoch" taggedAs (
+    UnitTest,
+    ConsensusTest,
+    SlowTest
+  ) in new TestSetup {
     val epochLength: Int = EthashUtils.EPOCH_LENGTH_BEFORE_ECIP_1099
     val parent29998: Int = epochLength - 2 // 29998, mined block will be 29999 (last block of the epoch)
     val parentBlock29998: Block = origin.copy(header = origin.header.copy(number = parent29998))
@@ -72,7 +77,7 @@ class EthashMinerSpec extends AnyFlatSpec with Matchers with org.scalamock.scala
 
   class TestSetup extends MinerSpecSetup with Eventually with MiningPatience {
     import scala.concurrent.ExecutionContext.Implicits.global
-    
+
     // Implement abstract mock members - created in test class with MockFactory context
     override lazy val mockBlockchainReader: BlockchainReader = mock[BlockchainReader]
     override lazy val mockBlockchain: BlockchainImpl = mock[BlockchainImpl]
@@ -81,7 +86,7 @@ class EthashMinerSpec extends AnyFlatSpec with Matchers with org.scalamock.scala
     override lazy val mockEthMiningService: EthMiningService = mock[EthMiningService]
     override lazy val mockEvmCodeStorage: EvmCodeStorage = mock[EvmCodeStorage]
     override lazy val mockMptStorage: MptStorage = mock[MptStorage]
-    
+
     override val origin: Block = Block(
       Fixtures.Blocks.Genesis.header.copy(
         difficulty = UInt256(Hex.decode("0400")).toBigInt,
@@ -94,11 +99,14 @@ class EthashMinerSpec extends AnyFlatSpec with Matchers with org.scalamock.scala
 
     val getTransactionFromPoolTimeout: FiniteDuration = 5.seconds
 
+    val coinbaseProvider = new CoinbaseProvider(miningConfig.coinbase)
+
     override lazy val blockCreator = new PoWBlockCreator(
       pendingTransactionsManager = pendingTransactionsManager.ref,
       getTransactionFromPoolTimeout = getTransactionFromPoolTimeout,
       mining = mining,
-      ommersPool = ommersPool.ref
+      ommersPool = ommersPool.ref,
+      coinbaseProvider = coinbaseProvider
     )
 
     val dagManager = new EthashDAGManager(blockCreator)
@@ -114,7 +122,9 @@ class EthashMinerSpec extends AnyFlatSpec with Matchers with org.scalamock.scala
         parentBlock: Block,
         block: Block,
         fakeWorld: InMemoryWorldStateProxy
-    ): CallHandler6[Block, Seq[SignedTransaction], Address, Seq[BlockHeader], Option[InMemoryWorldStateProxy], BlockchainConfig, PendingBlockAndState] =
+    ): CallHandler6[Block, Seq[SignedTransaction], Address, Seq[BlockHeader], Option[
+      InMemoryWorldStateProxy
+    ], BlockchainConfig, PendingBlockAndState] =
       (blockGenerator
         .generateBlock(
           _: Block,

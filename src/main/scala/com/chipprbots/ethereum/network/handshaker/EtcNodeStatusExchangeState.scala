@@ -1,8 +1,8 @@
 package com.chipprbots.ethereum.network.handshaker
 
 import com.chipprbots.ethereum.domain.BlockHeader
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.RemoteStatus
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.handshaker.Handshaker.NextMessage
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
@@ -12,7 +12,7 @@ import com.chipprbots.ethereum.utils.Logger
 
 trait EtcNodeStatusExchangeState[T <: Message] extends InProgressState[PeerInfo] with Logger {
 
-  val handshakerConfiguration: EtcHandshakerConfiguration
+  val handshakerConfiguration: NetworkHandshakerConfiguration
 
   import handshakerConfiguration._
 

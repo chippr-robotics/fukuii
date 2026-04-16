@@ -32,7 +32,7 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger {
       */
 
     val tx: LegacyTransaction = LegacyTransaction(0, 0, lastBlockGasLimit, existingAddress, 0, sendData)
-    val fakeSignature: ECDSASignature = ECDSASignature(0, 0, 0.toByte)
+    val fakeSignature: ECDSASignature = ECDSASignature(0, 0, 0)
     val stx: SignedTransaction = SignedTransaction(tx, fakeSignature)
     val stxFromAddress: SignedTransactionWithSender = SignedTransactionWithSender(stx, fromAddress)
 
@@ -69,7 +69,7 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger {
 
     val tx: LegacyTransaction =
       LegacyTransaction(0, 0, lastBlockGasLimit, existingEmptyAccountAddres, transferValue, ByteString.empty)
-    val fakeSignature: ECDSASignature = ECDSASignature(0, 0, 0.toByte)
+    val fakeSignature: ECDSASignature = ECDSASignature(0, 0, 0)
     val stx: SignedTransaction = SignedTransaction(tx, fakeSignature)
 
     val executionResult: TxResult =
@@ -88,7 +88,7 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger {
 
     val tx: LegacyTransaction =
       LegacyTransaction(0, 0, lastBlockGasLimit, existingEmptyAccountAddres, transferValue, ByteString.empty)
-    val fakeSignature: ECDSASignature = ECDSASignature(0, 0, 0.toByte)
+    val fakeSignature: ECDSASignature = ECDSASignature(0, 0, 0)
     val stxFromAddress: SignedTransactionWithSender =
       SignedTransactionWithSender(SignedTransaction(tx, fakeSignature), fromAddress)
 
@@ -150,11 +150,9 @@ trait ScenarioSetup extends EphemBlockchainTestSetup {
       atlantisBlockNumber = 0,
       aghartaBlockNumber = 0,
       phoenixBlockNumber = 0,
-      petersburgBlockNumber = 0,
-      ecip1098BlockNumber = 0,
-      ecip1097BlockNumber = 0
+      petersburgBlockNumber = 0
     ),
-    chainId = 0x03.toByte,
+    chainId = 0x03,
     networkId = 1,
     maxCodeSize = None,
     customGenesisFileOpt = None,
@@ -164,8 +162,7 @@ trait ScenarioSetup extends EphemBlockchainTestSetup {
     daoForkConfig = None,
     gasTieBreaker = false,
     ethCompatibleStorage = true,
-    bootstrapNodes = Set(),
-    treasuryAddress = Address(0)
+    bootstrapNodes = Set()
   )
 
   override lazy val stxLedger =

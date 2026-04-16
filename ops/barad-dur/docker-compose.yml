@@ -1,0 +1,230 @@
+# Barad-dûr: Docker Compose file for Kong API Gateway with Fukuii
+# Named after Sauron's Dark Tower - the fortified gateway to Fukuii
+# Compose file format: https://docs.docker.com/compose/compose-file/
+
+networks:
+  fukuii-network:
+    driver: bridge
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
+        - subnet: fd00:ba00:d000::/80
+
+services:
+  # PostgreSQL database for Kong (replaces deprecated Cassandra support)
+  postgres:
+    image: postgres:16-alpine
+    container_name: fukuii-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kong}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kong}
+      POSTGRES_DB: ${POSTGRES_DB:-kong}
+    volumes:
+      - ${POSTGRES_DATA_DIR:-./data/postgres}:/var/lib/postgresql/data
+    networks:
+      - fukuii-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kong}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Kong database migration
+  kong-migrations:
+    image: kong:3.9
+    container_name: fukuii-kong-migrations
+    command: kong migrations bootstrap
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      KONG_DATABASE: postgres
+      KONG_PG_HOST: postgres
+      KONG_PG_USER: ${POSTGRES_USER:-kong}
+      KONG_PG_PASSWORD: ${POSTGRES_PASSWORD:-kong}
+      KONG_PG_DATABASE: ${POSTGRES_DB:-kong}
+    networks:
+      - fukuii-network
+    restart: on-failure
+
+  # Kong API Gateway
+  kong:
+    image: kong:3.9
+    container_name: fukuii-kong
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kong-migrations:
+        condition: service_completed_successfully
+    environment:
+      # Database configuration (PostgreSQL)
+      KONG_DATABASE: postgres
+      KONG_PG_HOST: postgres
+      KONG_PG_USER: ${POSTGRES_USER:-kong}
+      KONG_PG_PASSWORD: ${POSTGRES_PASSWORD:-kong}
+      KONG_PG_DATABASE: ${POSTGRES_DB:-kong}
+      
+      # Proxy configuration
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+      
+      # Admin API configuration
+      KONG_ADMIN_LISTEN: 0.0.0.0:8001, 0.0.0.0:8444 ssl
+      
+      # Proxy listeners
+      KONG_PROXY_LISTEN: 0.0.0.0:8000, 0.0.0.0:8443 ssl
+      
+      # Declarative configuration
+      KONG_DECLARATIVE_CONFIG: /etc/kong/kong.yml
+      
+      # Plugins
+      KONG_PLUGINS: bundled,prometheus
+      
+      # Logging
+      KONG_LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "${KONG_PROXY_HTTP_PORT:-8000}:8000"   # Kong proxy HTTP
+      - "${KONG_PROXY_HTTPS_PORT:-8443}:8443" # Kong proxy HTTPS
+      - "${KONG_ADMIN_HTTP_PORT:-8001}:8001"   # Kong Admin API HTTP
+      - "${KONG_ADMIN_HTTPS_PORT:-8444}:8444" # Kong Admin API HTTPS
+    volumes:
+      - ./kong.yml:/etc/kong/kong.yml:ro
+    networks:
+      - fukuii-network
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Fukuii Ethereum Client - Primary Instance
+  fukuii-primary:
+    image: ${FUKUII_IMAGE:-chipprbots/fukuii:latest}
+    container_name: fukuii-primary
+    restart: unless-stopped
+    ports:
+      - "${FUKUII_PRIMARY_RPC_PORT:-8545}:8545"       # JSON-RPC HTTP (internal)
+      - "${FUKUII_PRIMARY_WS_PORT:-8546}:8546"         # JSON-RPC WebSocket (internal)
+      # P2P/TCP listens on 9076 inside the container; expose it on the host P2P port
+      - "${FUKUII_PRIMARY_P2P_PORT:-30303}:9076/tcp"
+      # Discovery uses UDP/30303
+      - "${FUKUII_PRIMARY_DISCOVERY_PORT:-30303}:30303/udp"
+      - "${FUKUII_PRIMARY_METRICS_PORT:-9095}:9095"   # Metrics
+    volumes:
+      - ${FUKUII_DATA_DIR:-./data/fukuii}:/app/data
+      - ./fukuii-conf-1:/app/conf:ro
+    # Assembly JAR uses java entrypoint directly (not dist launcher)
+    command:
+      - "-Xmx6g"
+      - "-Xms2g"
+      - "-Xss10M"
+      - "-XX:+UseG1GC"
+      - "-XX:MaxGCPauseMillis=200"
+      - "-Dconfig.file=/app/conf/etc.conf"
+      - "-Dfukuii.datadir=/app/data"
+      - "-jar"
+      - "/app/fukuii/lib/fukuii-assembly-0.1.240.jar"
+      - "etc"
+    networks:
+      - fukuii-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8545/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Fukuii Ethereum Client - Secondary Instance — Mordor Testnet
+  fukuii-secondary:
+    image: ${FUKUII_IMAGE:-chipprbots/fukuii:latest}
+    container_name: fukuii-secondary
+    restart: unless-stopped
+    ports:
+      - "${FUKUII_SECONDARY_RPC_PORT:-8547}:8545"
+      - "${FUKUII_SECONDARY_WS_PORT:-8548}:8546"
+      - "${FUKUII_SECONDARY_P2P_PORT:-30304}:30304/tcp"
+      - "${FUKUII_SECONDARY_DISCOVERY_PORT:-30304}:30304/udp"
+      - "${FUKUII_SECONDARY_METRICS_PORT:-9096}:9095"
+    volumes:
+      - ${FUKUII_SECONDARY_DATA_DIR:-./data/fukuii-secondary}:/app/data
+      - ./fukuii-conf-2:/app/conf:ro
+    command:
+      - "-Xmx3g"
+      - "-Xms1g"
+      - "-Xss10M"
+      - "-XX:+UseG1GC"
+      - "-XX:MaxGCPauseMillis=200"
+      - "-Dconfig.file=/app/conf/mordor.conf"
+      - "-Dfukuii.datadir=/app/data"
+      - "-jar"
+      - "/app/fukuii/lib/fukuii-assembly-0.1.240.jar"
+      - "mordor"
+    networks:
+      - fukuii-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8546/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: fukuii-prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ${PROMETHEUS_DATA_DIR:-./data/prometheus}:/prometheus
+    networks:
+      - fukuii-network
+    depends_on:
+      - fukuii-primary
+      # - fukuii-secondary  # DISABLED: single node mode
+      - kong
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:10.2.2
+    container_name: fukuii-grafana
+    restart: unless-stopped
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-fukuii_grafana_admin}
+      - GF_INSTALL_PLUGINS=
+    volumes:
+      - ${GRAFANA_DATA_DIR:-./data/grafana}:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      - fukuii-network
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

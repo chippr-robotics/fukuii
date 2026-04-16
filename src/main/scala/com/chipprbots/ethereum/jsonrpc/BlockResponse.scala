@@ -12,8 +12,6 @@ import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.utils.ByteStringUtils
 
-case class CheckpointResponse(signatures: Seq[ECDSASignature], signers: Seq[ByteString])
-
 /*
  * this trait has been introduced to deal with ETS requirements and discrepancies between fukuii and the spec
  * it should be considered a band-aid solution and replaced with something robust and non-intrusive
@@ -36,6 +34,7 @@ trait BaseBlockResponse {
   def gasLimit: BigInt
   def gasUsed: BigInt
   def timestamp: BigInt
+  def mixHash: ByteString
   def transactions: Either[Seq[ByteString], Seq[BaseTransactionResponse]]
   def uncles: Seq[ByteString]
 }
@@ -54,23 +53,24 @@ case class BlockResponse(
     miner: Option[ByteString],
     difficulty: BigInt,
     totalDifficulty: Option[BigInt],
-    lastCheckpointNumber: Option[BigInt],
     extraData: ByteString,
     size: BigInt,
     gasLimit: BigInt,
     gasUsed: BigInt,
     timestamp: BigInt,
-    checkpoint: Option[CheckpointResponse],
+    mixHash: ByteString,
     transactions: Either[Seq[ByteString], Seq[TransactionResponse]],
     uncles: Seq[ByteString],
     signature: String,
-    signer: String
-) extends BaseBlockResponse {
-  val chainWeight: Option[ChainWeight] = for {
-    lcn <- lastCheckpointNumber
-    td <- totalDifficulty
-  } yield ChainWeight(lcn, td)
-}
+    signer: String,
+    baseFeePerGas: Option[BigInt],
+    withdrawalsRoot: Option[ByteString],
+    withdrawals: Option[Seq[Map[String, String]]],
+    blobGasUsed: Option[BigInt],
+    excessBlobGas: Option[BigInt],
+    parentBeaconBlockRoot: Option[ByteString],
+    requestsHash: Option[ByteString]
+) extends BaseBlockResponse
 
 object BlockResponse {
 
@@ -91,13 +91,7 @@ object BlockResponse {
       else
         Left(block.body.transactionList.map(_.hash))
 
-    val checkpoint = block.header.checkpoint.map { checkpoint =>
-      val signers = checkpoint.signatures.flatMap(_.publicKey(block.header.parentHash))
-
-      CheckpointResponse(checkpoint.signatures, signers)
-    }
-
-    val (lcn, td) = weight.map(_.asTuple).separate
+    val td = weight.map(_.totalDifficulty)
 
     val signature =
       if (block.header.extraData.length >= ECDSASignature.EncodedLength)
@@ -109,6 +103,15 @@ object BlockResponse {
       .flatMap(_.publicKey(RestrictedPoWSigner.hashHeaderForSigning(block.header)))
       .map(ByteStringUtils.hash2string)
       .getOrElse(NotAvailable)
+
+    val withdrawals = block.body.withdrawals.map(_.map { w =>
+      Map(
+        "index" -> s"0x${w.index.toString(16)}",
+        "validatorIndex" -> s"0x${w.validatorIndex.toString(16)}",
+        "address" -> s"0x${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(w.address.bytes).stripPrefix("0x")}",
+        "amount" -> s"0x${w.amount.toString(16)}"
+      )
+    })
 
     BlockResponse(
       number = block.header.number,
@@ -123,17 +126,23 @@ object BlockResponse {
       miner = if (pendingBlock) None else Some(block.header.beneficiary),
       difficulty = block.header.difficulty,
       totalDifficulty = td,
-      lastCheckpointNumber = lcn,
       extraData = block.header.extraData,
       size = Block.size(block),
       gasLimit = block.header.gasLimit,
       gasUsed = block.header.gasUsed,
       timestamp = block.header.unixTimestamp,
-      checkpoint = checkpoint,
+      mixHash = block.header.mixHash,
       transactions = transactions,
       uncles = block.body.uncleNodesList.map(_.hash),
       signature = signatureStr,
-      signer = signerStr
+      signer = signerStr,
+      baseFeePerGas = block.header.baseFee,
+      withdrawalsRoot = block.header.withdrawalsRoot,
+      withdrawals = withdrawals,
+      blobGasUsed = block.header.blobGasUsed,
+      excessBlobGas = block.header.excessBlobGas,
+      parentBeaconBlockRoot = block.header.parentBeaconBlockRoot,
+      requestsHash = block.header.requestsHash
     )
   }
 

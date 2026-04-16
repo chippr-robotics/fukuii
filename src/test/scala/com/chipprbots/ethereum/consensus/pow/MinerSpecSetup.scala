@@ -18,7 +18,6 @@ import org.scalamock.handlers.CallHandler6
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
-import com.chipprbots.ethereum.consensus.blocks.PendingBlock
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
 import com.chipprbots.ethereum.consensus.mining.FullMiningConfig
 import com.chipprbots.ethereum.consensus.mining.MiningConfigBuilder
@@ -30,7 +29,6 @@ import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.jsonrpc.EthMiningService
-import com.chipprbots.ethereum.jsonrpc.EthMiningService.SubmitHashRateResponse
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ledger.VMImpl
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
@@ -42,7 +40,10 @@ import com.chipprbots.ethereum.utils.Config
 // SCALA 3 MIGRATION: Refactored to use abstract mock members pattern.
 // The test class (which extends MockFactory) provides the mock implementations.
 // This avoids the self-type constraint issue where inner classes cannot satisfy MockFactory.
-trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
+trait MinerSpecSetup
+    extends MiningConfigBuilder
+    with BlockchainConfigBuilder
+    with com.chipprbots.ethereum.TestInstanceConfigProvider {
   // Abstract mock members - must be implemented by test class that has MockFactory
   def mockBlockchainReader: BlockchainReader
   def mockBlockchain: BlockchainImpl
@@ -51,7 +52,7 @@ trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
   def mockEthMiningService: EthMiningService
   def mockEvmCodeStorage: EvmCodeStorage
   def mockMptStorage: MptStorage
-  
+
   // Concrete lazy vals that use the abstract mocks
   lazy val blockchainReader: BlockchainReader = mockBlockchainReader
   lazy val blockchain: BlockchainImpl = mockBlockchain
@@ -59,17 +60,17 @@ trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
   lazy val blockGenerator: PoWBlockGenerator = mockBlockGenerator
   lazy val ethMiningService: EthMiningService = mockEthMiningService
   lazy val evmCodeStorage: EvmCodeStorage = mockEvmCodeStorage
-  
+
   // ACTOR SYSTEM HANDLING:
   // Subclasses that extend TestKit or ScalaTestWithActorTestKit should override this
   // to provide their test kit's actor system instead of creating a new one.
   // This prevents actor system conflicts between the test kit and MinerSpecSetup.
   implicit def classicSystem: ClassicSystem = _defaultClassicSystem
-  
+
   // Lazy val to avoid creating an actor system until actually needed.
   // Tests that override classicSystem won't trigger this.
   private lazy val _defaultClassicSystem: ClassicSystem = ClassicSystem("MinerSpecSetup-DefaultSystem")
-  
+
   implicit val runtime: IORuntime = IORuntime.global
   lazy val parentActor: TestProbe = TestProbe()(classicSystem)
   lazy val sync: TestProbe = TestProbe()(classicSystem)
@@ -80,7 +81,7 @@ trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
 
   lazy val fakeWorld: InMemoryWorldStateProxy = createStubWorldStateProxy()
 
-  private def createStubWorldStateProxy(): InMemoryWorldStateProxy = {
+  private def createStubWorldStateProxy(): InMemoryWorldStateProxy =
     // Create a minimal stub instance for tests where the WorldStateProxy is just a placeholder
     InMemoryWorldStateProxy(
       mockEvmCodeStorage,
@@ -91,7 +92,6 @@ trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
       noEmptyAccounts = false,
       ethCompatibleStorage = true
     )
-  }
 
   lazy val vm: VMImpl = new VMImpl
 
@@ -143,15 +143,16 @@ trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
       parentBlock: Block,
       block: Block,
       fakeWorld: InMemoryWorldStateProxy
-  ): CallHandler6[Block, Seq[SignedTransaction], Address, Seq[BlockHeader], Option[InMemoryWorldStateProxy], BlockchainConfig, PendingBlockAndState]
+  ): CallHandler6[Block, Seq[SignedTransaction], Address, Seq[BlockHeader], Option[
+    InMemoryWorldStateProxy
+  ], BlockchainConfig, PendingBlockAndState]
 
-  /** Creates a block for mining and optionally sets up expectations.
-    * This is the main helper for tests that need mocked block generation.
-    * Tests that use MockedMiner with a fully mocked blockCreator should use
-    * `createBlockForMining` instead to avoid unsatisfied expectations on blockGenerator.
-    * 
-    * NOTE: The expectation is set to anyNumberOfTimes() to avoid failures when
-    * tests crash before actually mining (e.g., actor initialization failures).
+  /** Creates a block for mining and optionally sets up expectations. This is the main helper for tests that need mocked
+    * block generation. Tests that use MockedMiner with a fully mocked blockCreator should use `createBlockForMining`
+    * instead to avoid unsatisfied expectations on blockGenerator.
+    *
+    * NOTE: The expectation is set to anyNumberOfTimes() to avoid failures when tests crash before actually mining
+    * (e.g., actor initialization failures).
     */
   protected def setBlockForMining(parentBlock: Block, transactions: Seq[SignedTransaction] = Seq(txToMine)): Block = {
     val block = createBlockForMining(parentBlock, transactions)
@@ -160,11 +161,13 @@ trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
     block
   }
 
-  /** Creates a block for mining WITHOUT setting up any mock expectations.
-    * Use this when the test will set up its own mocks (e.g., MockedMiner tests
-    * where blockCreator is mocked and blockGenerator is never called).
+  /** Creates a block for mining WITHOUT setting up any mock expectations. Use this when the test will set up its own
+    * mocks (e.g., MockedMiner tests where blockCreator is mocked and blockGenerator is never called).
     */
-  protected def createBlockForMining(parentBlock: Block, transactions: Seq[SignedTransaction] = Seq(txToMine)): Block = {
+  protected def createBlockForMining(
+      parentBlock: Block,
+      transactions: Seq[SignedTransaction] = Seq(txToMine)
+  ): Block = {
     val parentHeader: BlockHeader = parentBlock.header
 
     Block(
@@ -191,9 +194,17 @@ trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
 
   private def calculateGasLimit(parentGas: UInt256): UInt256 = {
     val GasLimitBoundDivisor: Int = 1024
-
-    val gasLimitDifference = parentGas / GasLimitBoundDivisor
-    parentGas + gasLimitDifference - 1
+    val target = UInt256(miningConfig.gasLimitTarget)
+    val delta = parentGas / GasLimitBoundDivisor - 1
+    if (parentGas < target) {
+      val next = parentGas + delta
+      if (next > target) target else next
+    } else if (parentGas > target) {
+      val next = parentGas - delta
+      if (next < target) target else next
+    } else {
+      parentGas
+    }
   }
 
   // Abstract method for block creator behavior expectations
@@ -212,7 +223,7 @@ trait MinerSpecSetup extends MiningConfigBuilder with BlockchainConfigBuilder {
     blockCreatorBehaviourExpectation(parentBlock, withTransactions, resultBlock, fakeWorld)
       .atLeastOnce()
 
-  // Abstract method for block creator behavior with initial world expectations  
+  // Abstract method for block creator behavior with initial world expectations
   def blockCreatorBehaviourExpectingInitialWorldExpectation(
       parentBlock: Block,
       withTransactions: Boolean,

@@ -1,12 +1,20 @@
 #!/bin/bash
+set -euo pipefail
 
-echo `dirname $0`
-cd `dirname $0`
+for cmd in pwgen keytool; do
+  if ! command -v "$cmd" &>/dev/null; then
+    echo "ERROR: $cmd is required but not installed" >&2
+    exit 1
+  fi
+done
 
-export PW=`pwgen -Bs 10 1`
-echo $PW > ./password
+cd "$(dirname "${BASH_SOURCE[0]}")"
 
-rm ./fukuiiCA.p12
+export PW
+PW="$(pwgen -Bs 10 1)"
+echo "$PW" > ./password
+
+rm -f ./fukuiiCA.p12
 
 keytool -genkeypair \
   -keystore fukuiiCA.p12 \

@@ -505,7 +505,7 @@ When a release is created (via git tag `vX.Y.Z`), the release workflow automatic
 - ✅ Generates CHANGELOG from commits since last release
 - ✅ Creates Software Bill of Materials (SBOM) in CycloneDX format
 - ✅ Attaches all artifacts to GitHub release
-- ✅ Builds and publishes container images to `ghcr.io/chippr-robotics/chordodes_fukuii`
+- ✅ Builds and publishes container images to `ghcr.io/chippr-robotics/fukuii`
 - ✅ Signs images with [Cosign](https://docs.sigstore.dev/cosign/overview/) (keyless, GitHub OIDC)
 - ✅ Generates SLSA Level 3 provenance attestations
 - ✅ Outputs immutable digest references for tamper-proof deployments
@@ -531,7 +531,7 @@ git push origin v1.0.0
 cosign verify \
   --certificate-identity-regexp=https://github.com/chippr-robotics/fukuii \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
-  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+  ghcr.io/chippr-robotics/fukuii:v1.0.0
 ```
 
 **Release Drafter:**
@@ -547,11 +547,26 @@ See the [CI/CD Documentation](ci-cd.md) for detailed release process documentati
 
 This section provides rules, reminders, and prompts for LLM agents (AI coding assistants) working on this codebase to ensure consistency and quality.
 
-### Core Principles
+### Agent Roles
+
+We have specialized agents with different areas of expertise:
+- **wraith 👻**: Hunts down compilation errors and Scala 3 migration issues
+- **mithril ✨**: Transforms code using modern Scala 3 features
+- **ICE 🧊**: Manages large-scale migrations and strategic planning
+- **eye 👁️**: Ensures comprehensive testing and validation
+- **forge 🔨**: Handles consensus-critical code (EVM, mining, crypto)
+- **herald 🧭**: Fixes network protocol and peer communication issues
+- **Morgoth 🎯**: Shepherds all agents with process discipline and quality verification
+
+See [Agent Labels](https://github.com/chippr-robotics/fukuii/blob/develop/.github/AGENT_LABELS.md) for detailed descriptions and [Agent Definitions](https://github.com/chippr-robotics/fukuii/tree/develop/.github/agents/) for full agent instructions.
+
+### Core Principles (Guided by Morgoth)
 
 1. **Keep Documentation Essential**: Focus on clarity and brevity. Avoid unnecessary verbosity or redundant explanations.
 2. **Consistency Over Innovation**: Follow existing patterns in the codebase rather than introducing new approaches.
 3. **Minimal Changes**: Make the smallest possible changes to achieve the goal. Don't refactor unrelated code.
+4. **Verify Before Proceeding**: When anything fails, stop and analyze before trying another approach.
+5. **Incremental Progress**: Make 3 changes, then verify. Don't accumulate unverified work.
 
 ### Rules
 
@@ -575,8 +590,8 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 
 4. **Package Structure**
    - All code uses package prefix `com.chipprbots.ethereum`
-   - Previously used `io.iohk.ethereum` (from Fukuii project) - update if found
-   - Configuration paths use `.fukuii/` not `.fukuii/`
+   - Previously used `io.iohk.ethereum` (from Mantis/IOHK) — update if found
+   - Configuration paths use `fukuii` namespace (not `mantis`)
 
 5. **Dependencies**
    - Don't add dependencies without justification
@@ -589,7 +604,7 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 - **Scala Version**: Code must compile on Scala 3.3.4 (LTS)
 - **Logging**: Use structured logging with appropriate levels (DEBUG, INFO, WARN, ERROR)
 - **Logger Configuration**: Update logback configurations when adding new packages
-- **Rebranding**: This is a rebrand from "Fukuii" to "Fukuii" - update any remaining "fukuii" or "io.iohk" references
+- **Rebranding**: This is a rebrand from "Mantis" (IOHK) to "Fukuii" (Chippr Robotics) — update any remaining "mantis" or "io.iohk" references
 - **Commit Messages**: Use clear, descriptive commit messages in imperative mood
 - **Git Hygiene**: Don't commit build artifacts, IDE files, or temporary files
 
@@ -607,7 +622,7 @@ This section provides rules, reminders, and prompts for LLM agents (AI coding as
 **When fixing tests:**
 ```
 1. Identify the root cause of the failure
-2. Check if it's related to rebranding (fukuii→fukuii, io.iohk→com.chipprbots)
+2. Check if it's related to rebranding (mantis→fukuii, io.iohk→com.chipprbots)
 3. Check logger configurations in src/test/resources/ and src/it/resources/
 4. Run the specific test to verify the fix
 5. Run full test suite to ensure no regressions

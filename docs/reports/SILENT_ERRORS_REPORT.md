@@ -129,7 +129,7 @@ These often indicate incomplete implementations or API design issues.
    class RlpBranchVisitor(branchNode: BranchNode) extends ...
    ```
 
-4. **src/main/scala/com/chipprbots/ethereum/network/EtcPeerManagerActor.scala:154**
+4. **src/main/scala/com/chipprbots/ethereum/network/NetworkPeerManagerActor.scala:154**
    ```scala
    private def handleSentMessage(message: Message, ...)
    ```

@@ -19,7 +19,7 @@ object MockVmInput {
       signature: BigInt = 0
   ) extends SignedTransaction(
         tx,
-        ECDSASignature(v = pointSign, r = signatureRandom.bigInteger, s = signature.bigInteger)
+        ECDSASignature(r = signatureRandom, s = signature, v = BigInt(pointSign))
       )
 
   val defaultGasPrice: BigInt = 1000

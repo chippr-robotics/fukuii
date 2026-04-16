@@ -16,7 +16,7 @@ class TuiUpdater(
     syncController: Option[Any],
     networkName: String,
     shutdownHook: () => Unit
-)(using system: ActorSystem)
+)(using _system: ActorSystem)
     extends Logger:
 
   private var running = false
@@ -68,7 +68,6 @@ class TuiUpdater(
                 // Use the provided shutdown hook for graceful shutdown
                 shutdownHook()
             case None => // No input
-
           // Sleep for a bit
           Thread.sleep(config.updateIntervalMs)
         catch

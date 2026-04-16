@@ -132,10 +132,7 @@ class JsonRpcControllerEthLegacyTransactionSpec
 
     val txHash: ByteString = ByteString(1, 2, 3, 4)
 
-    (personalService
-      .sendTransaction(_: SendTransactionRequest))
-      .expects(*)
-      .returning(IO.pure(Right(SendTransactionResponse(txHash))))
+    personalService.sendTransactionFn = _ => IO.pure(Right(SendTransactionResponse(txHash)))
 
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("eth_sendTransaction", params)
     val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
@@ -590,7 +587,7 @@ class JsonRpcControllerEthLegacyTransactionSpec
           value = 0,
           payload = ByteString()
         ),
-        signature = ECDSASignature(0, 0, 0.toByte),
+        signature = ECDSASignature(0, 0, 0),
         sender = Address("0x1234")
       )
       PendingTransaction(fakeTransaction, System.currentTimeMillis)

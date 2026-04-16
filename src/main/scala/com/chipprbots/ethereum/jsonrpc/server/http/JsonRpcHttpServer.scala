@@ -68,35 +68,37 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
 
   protected val rateLimit = new RateLimit(config.rateLimit)
 
-  val route: Route = cors(corsSettings) {
-    (path("health") & pathEndOrSingleSlash & get) {
-      handleHealth()
-    } ~ (path("readiness") & pathEndOrSingleSlash & get) {
-      handleReadiness()
-    } ~ (path("healthcheck") & pathEndOrSingleSlash & get) {
-      handleHealthcheck()
-    } ~ (path("buildinfo") & pathEndOrSingleSlash & get) {
-      handleBuildInfo()
-    } ~ (pathEndOrSingleSlash & post) {
-      // TODO: maybe rate-limit this one too?
-      entity(as[JsonRpcRequest]) {
-        case statusReq if statusReq.method == FaucetJsonRpcController.Status =>
-          handleRequest(statusReq)
-        case jsonReq =>
-          rateLimit {
-            handleRequest(jsonReq)
-          }
-        // TODO: separate paths for single and multiple requests
-        // TODO: to prevent repeated body and json parsing
-      } ~ entity(as[Seq[JsonRpcRequest]]) {
-        case _ if config.rateLimit.enabled =>
-          complete(StatusCodes.MethodNotAllowed, JsonRpcError.MethodNotFound)
-        case reqSeq =>
-          complete {
-            reqSeq.toList
-              .traverse(request => jsonRpcController.handleRequest(request))
-              .unsafeToFuture()
-          }
+  val route: Route = handleRejections(myRejectionHandler) {
+    cors(corsSettings) {
+      (path("health") & pathEndOrSingleSlash & get) {
+        handleHealth()
+      } ~ (path("readiness") & pathEndOrSingleSlash & get) {
+        handleReadiness()
+      } ~ (path("healthcheck") & pathEndOrSingleSlash & get) {
+        handleHealthcheck()
+      } ~ (path("buildinfo") & pathEndOrSingleSlash & get) {
+        handleBuildInfo()
+      } ~ (pathEndOrSingleSlash & post) {
+        // TODO: maybe rate-limit this one too?
+        entity(as[JsonRpcRequest]) {
+          case statusReq if statusReq.method == FaucetJsonRpcController.Status =>
+            handleRequest(statusReq)
+          case jsonReq =>
+            rateLimit {
+              handleRequest(jsonReq)
+            }
+          // TODO: separate paths for single and multiple requests
+          // TODO: to prevent repeated body and json parsing
+        } ~ entity(as[Seq[JsonRpcRequest]]) {
+          case _ if config.rateLimit.enabled =>
+            complete(StatusCodes.MethodNotAllowed, JsonRpcError.MethodNotFound)
+          case reqSeq =>
+            complete {
+              reqSeq.toList
+                .traverse(request => jsonRpcController.handleRequest(request))
+                .unsafeToFuture()
+            }
+        }
       }
     }
   }
@@ -199,15 +201,12 @@ object JsonRpcHttpServer extends Logger {
     }
 
   trait RateLimitConfig {
-    // TODO: Move the rateLimit.enabled setting upwards:
-    // TODO: If we don't need to limit the request rate at all - we don't have to define the other settings
     val enabled: Boolean
     val minRequestInterval: FiniteDuration
     val latestTimestampCacheSize: Int
   }
 
   object RateLimitConfig {
-    // TODO: Use pureconfig
     def apply(rateLimitConfig: TypesafeConfig): RateLimitConfig =
       new RateLimitConfig {
         override val enabled: Boolean = rateLimitConfig.getBoolean("enabled")

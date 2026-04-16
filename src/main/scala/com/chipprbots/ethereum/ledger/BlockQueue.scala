@@ -16,12 +16,11 @@ object BlockQueue {
   case class QueuedBlock(block: Block, weight: Option[ChainWeight])
   case class Leaf(hash: ByteString, weight: ChainWeight)
 
-  def apply(blockchainReader: BlockchainReader, syncConfig: SyncConfig): BlockQueue =
-    new BlockQueue(
-      blockchainReader,
-      syncConfig.maxQueuedBlockNumberAhead,
-      syncConfig.maxQueuedBlockNumberBehind
-    )
+  def apply(
+      blockchainReader: BlockchainReader,
+      syncConfig: SyncConfig
+  ): BlockQueue =
+    new BlockQueue(blockchainReader, syncConfig.maxQueuedBlockNumberAhead, syncConfig.maxQueuedBlockNumberBehind)
 }
 
 class BlockQueue(
@@ -180,7 +179,9 @@ class BlockQueue(
         case Some(children) if children.nonEmpty =>
           val updatedChildren = children
             .flatMap(blocks.get)
-            .map(qb => qb.copy(weight = Some(weight.increase(qb.block.header))))
+            .map { qb =>
+              qb.copy(weight = Some(weight.increase(qb.block.header)))
+            }
           updatedChildren.foreach(qb => blocks += qb.block.header.hash -> qb)
           updatedChildren.flatMap(qb => updateChainWeights(qb.block.header.hash)).maxByOption(_.weight)
 

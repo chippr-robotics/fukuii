@@ -16,7 +16,6 @@ import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.ConsensusImpl
-import com.chipprbots.ethereum.consensus.blocks.CheckpointBlockGenerator
 import com.chipprbots.ethereum.consensus.mining.GetBlockHeaderByHash
 import com.chipprbots.ethereum.consensus.mining.TestMining
 import com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator
@@ -30,7 +29,6 @@ import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain._
-import com.chipprbots.ethereum.domain.branch.Branch
 import com.chipprbots.ethereum.ledger.BlockExecutionError.ValidationAfterExecError
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.security.SecureRandomBuilder
@@ -218,11 +216,14 @@ trait DaoForkTestSetup extends TestSetup {
   def testBlockchainReader: BlockchainReader
   def testBlockchain: BlockchainImpl
   def worldState: InMemoryWorldStateProxy
-  
+
   val proDaoBlock: Block = Fixtures.Blocks.ProDaoForkBlock.block
 
   // Helper to create stub world state - to be called from implementing class
-  protected def createStubWorldStateProxy(stubEvmCodeStorage: EvmCodeStorage, stubMptStorage: MptStorage): InMemoryWorldStateProxy = {
+  protected def createStubWorldStateProxy(
+      stubEvmCodeStorage: EvmCodeStorage,
+      stubMptStorage: MptStorage
+  ): InMemoryWorldStateProxy =
     InMemoryWorldStateProxy(
       stubEvmCodeStorage,
       stubMptStorage,
@@ -232,7 +233,6 @@ trait DaoForkTestSetup extends TestSetup {
       noEmptyAccounts = false,
       ethCompatibleStorage = true
     )
-  }
 
   val supportDaoForkConfig: DaoForkConfig = new DaoForkConfig {
     override val blockExtraData: Option[ByteString] = Some(ByteString("refund extra data"))
@@ -255,7 +255,7 @@ trait DaoForkTestSetup extends TestSetup {
       )
     )
     .copy(
-      chainId = 0x01.toByte,
+      chainId = 0x01,
       networkId = 1,
       daoForkConfig = Some(supportDaoForkConfig),
       customGenesisFileOpt = None,
@@ -466,13 +466,6 @@ trait EphemBlockchain extends TestSetupWithVmAndValidators {
 
   def blockImportWithMockedBlockExecution(blockExecutionMock: BlockExecution): ConsensusAdapter =
     mkConsensus(blockExecutionOpt = Some(blockExecutionMock))
-}
-
-trait CheckpointHelpers {
-  private val sampleCheckpoint = ObjectGenerators.fakeCheckpointGen(3, 3).sample.get
-
-  def getCheckpointBlock(parent: Block, checkpoint: Checkpoint = sampleCheckpoint): Block =
-    new CheckpointBlockGenerator().generate(parent, checkpoint)
 }
 
 trait OmmersTestSetup extends EphemBlockchain {

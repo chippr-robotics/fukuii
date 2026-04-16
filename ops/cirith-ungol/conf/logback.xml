@@ -1,0 +1,166 @@
+<configuration>
+
+    <property name="stdoutEncoderPattern" value="%d %-5level [%logger{36}] - %msg%n" />
+    <property name="fileEncoderPattern" value="%d [%thread] %-5level %logger{36} %X{akkaSource} - %msg%n" />
+
+    <!--read properties from application.conf using PropertyDefiner (logback 1.5.x compatible)-->
+    <define name="LOGSLEVEL" class="com.chipprbots.ethereum.utils.ConfigPropertyDefiner">
+        <key>logging.logs-level</key>
+        <defaultValue>WARN</defaultValue>
+    </define>
+    <define name="ASJSON" class="com.chipprbots.ethereum.utils.ConfigPropertyDefiner">
+        <key>logging.json-output</key>
+        <defaultValue>false</defaultValue>
+    </define>
+    <define name="LOGSDIR" class="com.chipprbots.ethereum.utils.ConfigPropertyDefiner">
+        <key>logging.logs-dir</key>
+        <defaultValue>./logs</defaultValue>
+    </define>
+    <define name="LOGSFILENAME" class="com.chipprbots.ethereum.utils.ConfigPropertyDefiner">
+        <key>logging.logs-file</key>
+        <defaultValue>fukuii</defaultValue>
+    </define>
+
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>${stdoutEncoderPattern}</pattern>
+        </encoder>
+    </appender>
+
+    <appender name="STASH" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <customFields>{"service":"fukuii","node":"${FUKUII_NODE_ID:-${HOSTNAME}}","environment":"${FUKUII_ENV:-production}"}</customFields>
+            <fieldNames>
+                <timestamp>timestamp</timestamp>
+                <version>[ignore]</version>
+                <logger>logger</logger>
+                <thread>thread</thread>
+                <level>level</level>
+                <levelValue>level_value</levelValue>
+                <message>message</message>
+                <stackTrace>stack_trace</stackTrace>
+            </fieldNames>
+            <includeCallerData>false</includeCallerData>
+            <includeContext>true</includeContext>
+        </encoder>
+    </appender>
+
+    <appender name="METRICS" class="io.prometheus.client.logback.InstrumentedAppender" />
+
+    <root level="${LOGSLEVEL}">
+        <if condition='p("ASJSON").contains("true")'>
+            <then>
+                <appender-ref ref="STASH" />
+            </then>
+            <else>
+                <appender-ref ref="STDOUT" />
+            </else>
+        </if>
+        <appender-ref ref="METRICS" />
+    </root>
+
+    <!-- =================================================================== -->
+    <!-- EXTERNAL LIBRARIES (WARN — only problems)                           -->
+    <!-- =================================================================== -->
+    <logger name="io.netty" level="WARN"/>
+    <logger name="org.jupnp.QueueingThreadPoolExecutor" level="WARN" />
+    <logger name="org.jupnp.util.SpecificationViolationReporter" level="ERROR" />
+    <logger name="org.jupnp.protocol.RetrieveRemoteDescriptors" level="ERROR" />
+
+    <!-- Dead-letters — WARN only (expected after coordinator actors stop) -->
+    <logger name="org.apache.pekko.actor.LocalActorRef" level="WARN" />
+
+    <!-- =================================================================== -->
+    <!-- SCALANET — Low-level networking (WARN only)                         -->
+    <!-- =================================================================== -->
+    <logger name="com.chipprbots.scalanet" level="WARN" />
+
+    <!-- =================================================================== -->
+    <!-- NETWORK — WARN default, INFO for key lifecycle events               -->
+    <!-- =================================================================== -->
+    <logger name="com.chipprbots.ethereum.network" level="WARN" />
+    <logger name="com.chipprbots.ethereum.network.PeerActor" level="WARN" />
+    <logger name="com.chipprbots.ethereum.network.PeerManagerActor" level="WARN" />
+    <logger name="com.chipprbots.ethereum.network.NetworkPeerManagerActor" level="WARN" />
+    <logger name="com.chipprbots.ethereum.network.PeerEventBusActor" level="WARN" />
+    <logger name="com.chipprbots.ethereum.network.ServerActor" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network.KnownNodesManager" level="WARN" />
+
+    <!-- Discovery — WARN (only problems) -->
+    <logger name="com.chipprbots.ethereum.network.discovery" level="WARN" />
+
+    <!-- Handshaking — ERROR (genesis mismatch warnings are common and non-actionable) -->
+    <logger name="com.chipprbots.ethereum.network.handshaker" level="ERROR" />
+
+    <!-- ForkId — WARN (only compatibility failures) -->
+    <logger name="com.chipprbots.ethereum.forkid" level="WARN" />
+
+    <!-- =================================================================== -->
+    <!-- RLPX — OFF (floods console with peer handshake noise: "Did not     -->
+    <!-- find Hello", "Unable to negotiate", "Auth handshake timeout" —     -->
+    <!-- all expected and non-actionable)                                    -->
+    <!-- =================================================================== -->
+    <logger name="com.chipprbots.ethereum.network.rlpx" level="OFF" />
+
+    <!-- =================================================================== -->
+    <!-- SYNC CORE — INFO for phase transitions and progress                 -->
+    <!-- =================================================================== -->
+    <logger name="com.chipprbots.ethereum.blockchain.sync" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.SyncController" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.AdaptiveSyncStrategy" level="WARN" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.PivotHeaderBootstrap" level="INFO" />
+
+    <!-- Peer request tracking — WARN (too noisy at INFO) -->
+    <logger name="com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler" level="WARN" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.PeersClient" level="WARN" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg" level="WARN" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.Blacklist" level="WARN" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist" level="WARN" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.BlockchainHostActor" level="WARN" />
+
+    <!-- =================================================================== -->
+    <!-- SNAP SYNC — INFO for controller + progress, WARN for internals      -->
+    <!-- =================================================================== -->
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap" level="WARN" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.actors" level="WARN" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator" level="WARN" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.MerkleProofVerifier" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker" level="WARN" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SyncProgressMonitor" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPErrorHandler" level="WARN" />
+
+    <!-- =================================================================== -->
+    <!-- FAST SYNC — WARN (not the focus)                                     -->
+    <!-- =================================================================== -->
+    <logger name="com.chipprbots.ethereum.blockchain.sync.fast" level="WARN" />
+
+    <!-- =================================================================== -->
+    <!-- REGULAR SYNC — INFO for block import heartbeat                       -->
+    <!-- =================================================================== -->
+    <logger name="com.chipprbots.ethereum.blockchain.sync.regular" level="INFO" />
+
+    <!-- =================================================================== -->
+    <!-- LEDGER / DB / MPT / VM — WARN or OFF                                -->
+    <!-- =================================================================== -->
+    <logger name="com.chipprbots.ethereum.ledger" level="WARN" />
+    <logger name="com.chipprbots.ethereum.db" level="WARN" />
+    <logger name="com.chipprbots.ethereum.mpt" level="WARN" />
+    <logger name="com.chipprbots.ethereum.vm" level="OFF" />
+    <logger name="com.chipprbots.ethereum.extvm" level="ERROR" />
+
+    <!-- =================================================================== -->
+    <!-- OTHER — Minimal noise                                                -->
+    <!-- =================================================================== -->
+    <logger name="com.chipprbots.ethereum.consensus" level="WARN" />
+    <logger name="com.chipprbots.ethereum.transactions" level="WARN" />
+    <logger name="com.chipprbots.ethereum.jsonrpc" level="WARN" />
+    <logger name="com.chipprbots.ethereum.faucet" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.metrics" level="WARN" />
+
+    <!-- Startup lifecycle — INFO for boot sequence -->
+    <logger name="com.chipprbots.ethereum.blockchain.data" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.data.GenesisDataLoader" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.data.BootstrapCheckpointLoader" level="INFO" />
+</configuration>

@@ -34,7 +34,19 @@ object MerklePatriciaTrie {
   class MissingRootNodeException(hash: ByteString)
       extends MissingNodeException(hash, s"Root node not found ${Hex.toHexString(hash.toArray)}")
 
-  val EmptyEncoded: Array[Byte] = encodeRLP(Array.emptyByteArray)
+  class MissingStorageNodeException(hash: ByteString, val accountAddress: ByteString)
+      extends MissingNodeException(
+        hash,
+        s"Storage node not found ${Hex.toHexString(hash.toArray)} for account ${Hex.toHexString(accountAddress.toArray)}"
+      )
+
+  class MissingAccountNodeException(hash: ByteString, val accountAddress: ByteString)
+      extends MissingNodeException(
+        hash,
+        s"Account trie node not found ${Hex.toHexString(hash.toArray)} while accessing account ${Hex.toHexString(accountAddress.toArray)}"
+      )
+
+  val EmptyEncoded: Array[Byte] = encodeRLP(Array.empty[Byte])
   val EmptyRootHash: Array[Byte] = Node.hashFn(EmptyEncoded)
 
   private case class NodeInsertResult(newNode: MptNode, toDeleteFromStorage: List[MptNode] = Nil)
@@ -108,8 +120,11 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
   def getProof(key: K): Option[Vector[MptNode]] =
     pathTraverse[Vector[MptNode]](Vector.empty, mkKeyNibbles(key)) { case (acc, node) =>
       node match {
-        case Some(nextNodeOnExt @ (_: BranchNode | _: ExtensionNode | _: LeafNode | _: HashNode)) =>
-          acc :+ nextNodeOnExt
+        case Some(hash: HashNode) =>
+          // Resolve hash references to actual nodes for the proof
+          acc :+ getFromHash(hash.hashNode, nodeStorage)
+        case Some(nextNode @ (_: BranchNode | _: ExtensionNode | _: LeafNode)) =>
+          acc :+ nextNode
         case _ => acc
       }
     }
@@ -160,8 +175,12 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
       }
 
     rootNode match {
+      case Some(hash: HashNode) =>
+        // Resolve root hash to actual node, but don't pre-add — pathTraverse will add it
+        val resolved = getFromHash(hash.hashNode, nodeStorage)
+        pathTraverse(acc, resolved, searchKey, op)
       case Some(root) =>
-        pathTraverse(op(acc, Some(root)), root, searchKey, op)
+        pathTraverse(acc, root, searchKey, op)
       case None =>
         None
     }

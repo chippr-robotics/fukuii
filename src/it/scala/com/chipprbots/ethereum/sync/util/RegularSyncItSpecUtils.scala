@@ -19,16 +19,11 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockBroadcast.BlockToBro
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockBroadcasterActor
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockBroadcasterActor.BroadcastBlock
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher
-import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.AdaptedMessageFromEventBus
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter
-import com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter.Start
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
-import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync.NewCheckpoint
-import com.chipprbots.ethereum.checkpointing.CheckpointingTestHelpers
 import com.chipprbots.ethereum.consensus.Consensus
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.ConsensusImpl
-import com.chipprbots.ethereum.consensus.blocks.CheckpointBlockGenerator
 import com.chipprbots.ethereum.consensus.mining.FullMiningConfig
 import com.chipprbots.ethereum.consensus.mining.MiningConfig
 import com.chipprbots.ethereum.consensus.mining.Protocol.NoAdditionalPoWData
@@ -36,12 +31,9 @@ import com.chipprbots.ethereum.consensus.pow
 import com.chipprbots.ethereum.consensus.pow.EthashConfig
 import com.chipprbots.ethereum.consensus.pow.PoWMining
 import com.chipprbots.ethereum.consensus.pow.validators.ValidatorsExecutor
-import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.ledger._
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
-import com.chipprbots.ethereum.network.PeerId
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
 import com.chipprbots.ethereum.nodebuilder.VmSetup
 import com.chipprbots.ethereum.ommers.OmmersPool
 import com.chipprbots.ethereum.sync.util.SyncCommonItSpecUtils.FakePeerCustomConfig.defaultConfig
@@ -85,7 +77,6 @@ object RegularSyncItSpecUtils {
       mining
     }
 
-    lazy val checkpointBlockGenerator: CheckpointBlockGenerator = new CheckpointBlockGenerator
     lazy val peersClient: ActorRef =
       system.actorOf(
         PeersClient.props(etcPeerManager, peerEventBus, blacklist, testSyncConfig, system.scheduler),
@@ -154,6 +145,7 @@ object RegularSyncItSpecUtils {
         consensusAdapter,
         blockchainReader,
         storagesInstance.storages.stateStorage,
+        storagesInstance.storages.evmCodeStorage,
         new BranchResolution(blockchainReader),
         syncConfig,
         ommersPool,
@@ -172,6 +164,7 @@ object RegularSyncItSpecUtils {
         consensusAdapter,
         blockchainReader,
         storagesInstance.storages.stateStorage,
+        storagesInstance.storages.evmCodeStorage,
         new BranchResolution(blockchainReader),
         validators.blockValidator,
         blacklist,
@@ -239,20 +232,6 @@ object RegularSyncItSpecUtils {
           .delayBy(delay)
           .flatMap(_ => mineNewBlocks(delay, nBlocks - 1)(updateWorldForBlock))
       } else IO(())
-
-    def addCheckpointedBlock(parent: Block): IO[Unit] = IO {
-      val signatures = CheckpointingTestHelpers.createCheckpointSignatures(
-        Seq(crypto.generateKeyPair(secureRandom)),
-        parent.hash
-      )
-      val checkpoint = checkpointBlockGenerator.generate(parent, Checkpoint(signatures))
-      regularSync ! NewCheckpoint(checkpoint)
-    }
-
-    def getCheckpointFromPeer(checkpoint: Block, peerId: PeerId): IO[Unit] = IO {
-      blockImporter ! Start
-      fetcher ! AdaptedMessageFromEventBus(NewBlock(checkpoint, checkpoint.header.difficulty), peerId)
-    }
 
     private def getMptForBlock(block: Block) =
       InMemoryWorldStateProxy(

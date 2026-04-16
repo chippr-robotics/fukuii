@@ -34,7 +34,7 @@
       "created": 1763610601296,
       "name": "Development",
       "data": {
-        "node_url": "http://127.0.0.1:8546",
+        "node_url": "http://127.0.0.1:8545",
         "address": "0x...",
         "recipient": "0x...",
         "contract": "0x...",
@@ -1438,7 +1438,7 @@
       "created": 1763690611332,
       "url": "{{ node_url }}",
       "name": "eth_mining",
-      "description": "Check if mining",
+  "description": "Check if mining (Node1@localhost:8545 returned false on 2025-12-13)",
       "method": "POST",
       "body": {
         "mimeType": "application/json",
@@ -1470,7 +1470,7 @@
       "created": 1763690611333,
       "url": "{{ node_url }}",
       "name": "eth_hashrate",
-      "description": "Get current hashrate",
+  "description": "Get current hashrate (Node1 reported 0x0 on 2025-12-13)",
       "method": "POST",
       "body": {
         "mimeType": "application/json",
@@ -1502,7 +1502,7 @@
       "created": 1763690611334,
       "url": "{{ node_url }}",
       "name": "eth_getWork",
-      "description": "Get work for mining",
+  "description": "Get work for mining (last result: powHash=0xff69bb2fce4542288b4616d50c220997b527da3f180043283b93e23b5bff2107, dagSeed=0x0…, target=0x4e8c16f1dc13d691ab85bd62a93a79ff1cf30dacdfd6a7c2ec31688eced2)",
       "method": "POST",
       "body": {
         "mimeType": "application/json",
@@ -1534,11 +1534,11 @@
       "created": 1763690611335,
       "url": "{{ node_url }}",
       "name": "eth_submitWork",
-      "description": "Submit proof-of-work",
+  "description": "Submit proof-of-work (sample taken from latest eth_getWork on 2025-12-13)",
       "method": "POST",
       "body": {
         "mimeType": "application/json",
-        "text": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"eth_submitWork\",\n  \"params\": [\n    \"0x0000000000000001\",\n    \"0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef\",\n    \"0xD1FE5700000000000000000000000000D1FE5700000000000000000000000001\"\n  ]\n}"
+  "text": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"eth_submitWork\",\n  \"params\": [\n    \"0x0000000000000001\",\n    \"0xff69bb2fce4542288b4616d50c220997b527da3f180043283b93e23b5bff2107\",\n    \"0x0000000000000000000000000000000000000000000000000000000000000000\"\n  ]\n}"
       },
       "parameters": [],
       "headers": [
@@ -1566,11 +1566,11 @@
       "created": 1763690611336,
       "url": "{{ node_url }}",
       "name": "eth_submitHashrate",
-      "description": "Submit hashrate",
+  "description": "Submit hashrate (validated with hashRate=0x1, minerId=0x1234… on 2025-12-13)",
       "method": "POST",
       "body": {
         "mimeType": "application/json",
-        "text": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"eth_submitHashrate\",\n  \"params\": [\n    \"0x500000\",\n    \"0x59daa26581d0acd1fce254fb7e85952f4c09d0915afd33d3886cd914bc7d283c\"\n  ]\n}"
+  "text": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"eth_submitHashrate\",\n  \"params\": [\n    \"0x1\",\n    \"0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef\"\n  ]\n}"
       },
       "parameters": [],
       "headers": [
@@ -1598,7 +1598,7 @@
       "created": 1763690611337,
       "url": "{{ node_url }}",
       "name": "eth_coinbase",
-      "description": "Get coinbase address",
+  "description": "Get coinbase address (Node1 returned 0x1000000000000000000000000000000000000001)",
       "method": "POST",
       "body": {
         "mimeType": "application/json",
@@ -1614,6 +1614,102 @@
       ],
       "authentication": {},
       "metaSortKey": -1763690611337,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global",
+      "_type": "request"
+    },
+    {
+      "_id": "req_miner_start_001",
+      "parentId": "fld_05c1147d",
+      "modified": 1733756575000,
+      "created": 1733756575000,
+      "url": "{{ node_url }}",
+      "name": "miner_start",
+  "description": "Start mining (confirmed 2025-12-13 on Node1)",
+      "method": "POST",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"miner_start\",\n  \"params\": []\n}"
+      },
+      "parameters": [],
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json",
+          "id": "pair_miner_start"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -1763690611338,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global",
+      "_type": "request"
+    },
+    {
+      "_id": "req_miner_stop_001",
+      "parentId": "fld_05c1147d",
+      "modified": 1733756575001,
+      "created": 1733756575001,
+      "url": "{{ node_url }}",
+      "name": "miner_stop",
+  "description": "Stop mining (confirmed 2025-12-13 on Node1)",
+      "method": "POST",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"miner_stop\",\n  \"params\": []\n}"
+      },
+      "parameters": [],
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json",
+          "id": "pair_miner_stop"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -1763690611339,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global",
+      "_type": "request"
+    },
+    {
+      "_id": "req_miner_getStatus_001",
+      "parentId": "fld_05c1147d",
+      "modified": 1733756575002,
+      "created": 1733756575002,
+      "url": "{{ node_url }}",
+      "name": "miner_getStatus",
+  "description": "Get comprehensive mining status (latest: {isMining:true, coinbase:0x1000…0001, hashRate:0x1})",
+      "method": "POST",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"miner_getStatus\",\n  \"params\": []\n}"
+      },
+      "parameters": [],
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json",
+          "id": "pair_miner_getStatus"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -1763690611340,
       "isPrivate": false,
       "settingStoreCookies": true,
       "settingSendCookies": true,
@@ -2774,6 +2870,162 @@
       "settingRebuildPath": true,
       "settingFollowRedirects": "global",
       "_type": "request"
+    },
+    {
+      "_id": "fld_faucet001",
+      "parentId": "fld_0149b7b6",
+      "modified": 1765090102436,
+      "created": 1765090102436,
+      "name": "Faucet",
+      "description": "Faucet JSON-RPC endpoints for testnet token distribution",
+      "environment": {},
+      "environmentPropertyOrder": null,
+      "metaSortKey": -1765090102436,
+      "_type": "request_group"
+    },
+    {
+      "_id": "req_faucet_sendFunds",
+      "parentId": "fld_faucet001",
+      "modified": 1765090102436,
+      "created": 1765090102436,
+      "url": "{{ faucet_url }}",
+      "name": "faucet_sendFunds",
+      "description": "Send testnet tokens to an address",
+      "method": "POST",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"faucet_sendFunds\",\n  \"params\": [\n    \"0x...address...\"\n  ]\n}"
+      },
+      "parameters": [],
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json",
+          "id": "pair_faucet_sendFunds"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -1765090102436,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global",
+      "_type": "request"
+    },
+    {
+      "_id": "req_faucet_status",
+      "parentId": "fld_faucet001",
+      "modified": 1765090102436,
+      "created": 1765090102436,
+      "url": "{{ faucet_url }}",
+      "name": "faucet_status",
+      "description": "Get faucet status",
+      "method": "POST",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"faucet_status\",\n  \"params\": []\n}"
+      },
+      "parameters": [],
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json",
+          "id": "pair_faucet_status"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -1765090102437,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global",
+      "_type": "request"
+    },
+    {
+      "_id": "env_gorgoroth_3nodes_test_network",
+      "parentId": "env_ee4c8118750744559d3b1020845fe5d4",
+      "modified": 1733612601296,
+      "created": 1733612601296,
+      "name": "Gorgoroth 3-Node Test Network",
+      "data": {
+        "node1_http": "http://localhost:8545",
+        "node1_ws": "ws://localhost:8546",
+        "node2_http": "http://localhost:8547",
+        "node2_ws": "ws://localhost:8548",
+        "node3_http": "http://localhost:8549",
+        "node3_ws": "ws://localhost:8550",
+        "node_url": "http://localhost:8545",
+        "address": "0x1000000000000000000000000000000000000001",
+        "recipient": "0x2000000000000000000000000000000000000002",
+        "contract": "0x3000000000000000000000000000000000000003",
+        "tx_hash": "0x...",
+        "filter_id": "0x1"
+      },
+      "dataPropertyOrder": {
+        "&": [
+          "node1_http",
+          "node1_ws",
+          "node2_http",
+          "node2_ws",
+          "node3_http",
+          "node3_ws",
+          "node_url",
+          "address",
+          "recipient",
+          "contract",
+          "tx_hash",
+          "filter_id"
+        ]
+      },
+      "color": "#FF6B35",
+      "isPrivate": false,
+      "metaSortKey": 1733612601296,
+      "_type": "environment"
+    },
+    {
+      "_id": "env_cirith_ungol_mainnet",
+      "parentId": "env_ee4c8118750744559d3b1020845fe5d4",
+      "modified": 1766275200000,
+      "created": 1766275200000,
+      "name": "Cirith-Ungol ETC Mainnet",
+      "data": {
+        "fukuii_http": "http://localhost:8545",
+        "fukuii_ws": "ws://localhost:8546",
+        "coregeth_http": "http://localhost:18545",
+        "coregeth_ws": "ws://localhost:18546",
+        "node_url": "http://localhost:8545",
+        "observer_url": "http://localhost:18545",
+        "address": "0x1000000000000000000000000000000000000001",
+        "recipient": "0x2000000000000000000000000000000000000002",
+        "contract": "0x3000000000000000000000000000000000000003",
+        "tx_hash": "0x...",
+        "filter_id": "0x1"
+      },
+      "dataPropertyOrder": {
+        "&": [
+          "fukuii_http",
+          "fukuii_ws",
+          "coregeth_http",
+          "coregeth_ws",
+          "node_url",
+          "observer_url",
+          "address",
+          "recipient",
+          "contract",
+          "tx_hash",
+          "filter_id"
+        ]
+      },
+      "color": "#4F9D69",
+      "isPrivate": false,
+      "metaSortKey": 1733612601297,
+      "_type": "environment"
     }
   ]
 }

@@ -38,7 +38,6 @@ import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETC64
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
@@ -133,7 +132,6 @@ class BlockFetcher(
         state.pickBlocks(amount) |> handlePickedBlocks(state, replyTo) |> fetchBlocks
 
       case StrictPickBlocks(from, atLeastWith, replyTo) =>
-        // FIXME: Consider having StrictPickBlocks calls guaranteeing this
         // from parameter could be negative or 0 so we should cap it to 1 if that's the case
         val fromCapped = from.max(1)
         val minBlock = fromCapped.min(atLeastWith).max(1)
@@ -228,18 +226,31 @@ class BlockFetcher(
                   headers.size,
                   updatedState.waitingHeaders.size
                 )
-                updatedState.withHeaderFetchReceived
+                // If we received a full batch, the peer likely has more blocks.
+                // Bump knownTop to force another fetch cycle (prevents premature isOnTop).
+                val finalState = if (headers.size.toLong >= syncConfig.blockHeadersPerRequest) {
+                  val lastHeader = headers.maxBy(_.number)
+                  updatedState.withPossibleNewTopAt(lastHeader.number + 1)
+                } else updatedState
+                finalState.withHeaderFetchReceived
             }
           }
         fetchBlocks(newState)
 
       case ReceivedHeaders(peer, _) if !state.isFetchingHeaders =>
-        peersClient ! BlacklistPeer(peer.id, BlacklistReason.UnrequestedHeaders)
-        Behaviors.same
+        log.warn("Received late/duplicate headers from peer {} (not fetching). Clearing state.", peer.id)
+        // Don't blacklist - this could be a late response from a previous request
+        // Just ensure we're not stuck by attempting to fetch if needed
+        fetchBlocks(state)
 
       case RetryHeadersRequest if state.isFetchingHeaders =>
         log.debug("Retrying headers request (likely due to no suitable peer available)")
         fetchBlocks(state.withHeaderFetchReceived)
+
+      case RetryHeadersRequest if !state.isFetchingHeaders =>
+        log.warn("Received late/duplicate RetryHeadersRequest (not fetching). Clearing state and retrying fetch.")
+        // Ensure state is cleared and attempt to fetch if needed
+        fetchBlocks(state)
 
       case ReceivedBodies(peer, bodies) if state.isFetchingBodies =>
         log.debug("Received {} block bodies from peer {}", bodies.size, peer.id)
@@ -283,17 +294,47 @@ class BlockFetcher(
           fetchBlocks(newState)
         }
 
-      case ReceivedBodies(peer, _) if !state.isFetchingBodies =>
-        peersClient ! BlacklistPeer(peer.id, BlacklistReason.UnrequestedBodies)
-        Behaviors.same
+      case ReceivedBodies(peer, bodies) if !state.isFetchingBodies =>
+        log.warn(
+          "Received late/duplicate block bodies ({} bodies) from peer {} (not fetching). Clearing state.",
+          bodies.size,
+          peer.id
+        )
+        // Don't blacklist - this could be a late response from a previous request
+        // Just ensure we're not stuck by attempting to fetch if needed
+        fetchBlocks(state)
 
-      case RetryBodiesRequest if state.isFetchingBodies =>
-        log.debug("Retrying bodies request (likely due to no suitable peer available)")
-        fetchBlocks(state.withBodiesFetchReceived)
+      case retry: RetryBodiesRequest if state.isFetchingBodies =>
+        val updatedTriedPeers = retry.failedPeerId.fold(retry.triedPeers)(retry.triedPeers + _)
+        val newRetryCount = retry.retryCount + 1
+        val clearedState = state.withBodiesFetchReceived
+        if (newRetryCount > syncConfig.maxBodyFetchRetries) {
+          log.warn(
+            "Body fetch exceeded max retries ({}), clearing tried peers and resetting",
+            syncConfig.maxBodyFetchRetries
+          )
+          // Reset tried peers — previously failed peers may have recovered after blacklist expiry
+          fetchBodiesWithRetryState(clearedState, Set.empty, 0)
+          processFetchCommands(clearedState.withNewBodiesFetch)
+        } else {
+          log.debug(
+            "Retrying bodies request (tried: {}, retry: {}/{})",
+            updatedTriedPeers.size,
+            newRetryCount,
+            syncConfig.maxBodyFetchRetries
+          )
+          fetchBodiesWithRetryState(clearedState, updatedTriedPeers, newRetryCount)
+          processFetchCommands(clearedState.withNewBodiesFetch)
+        }
 
-      case FetchStateNode(hash, replyTo) =>
-        log.debug("Fetching state node for hash {}", ByteStringUtils.hash2string(hash))
-        stateNodeFetcher ! StateNodeFetcher.FetchStateNode(hash, replyTo)
+      case _: RetryBodiesRequest if !state.isFetchingBodies =>
+        log.warn("Received late/duplicate RetryBodiesRequest (not fetching). Clearing state and retrying fetch.")
+        fetchBlocks(state)
+
+      case FetchStateNode(hash, replyTo, stateRoot, paths, networkHead) =>
+        val head = if (networkHead > 0) networkHead else state.knownTop
+        log.debug("Fetching state node for hash {}, networkHead={}", ByteStringUtils.hash2string(hash), head)
+        stateNodeFetcher ! StateNodeFetcher.FetchStateNode(hash, replyTo, stateRoot, paths, head)
         Behaviors.same
 
       case AdaptedMessageFromEventBus(NewBlockHashes(hashes), _) =>
@@ -314,9 +355,6 @@ class BlockFetcher(
         fetchBlocks(newState)
 
       case AdaptedMessageFromEventBus(BaseETH6XMessages.NewBlock(block, _), peerId) =>
-        handleNewBlock(block, peerId, state)
-
-      case AdaptedMessageFromEventBus(ETC64.NewBlock(block, _), peerId) =>
         handleNewBlock(block, peerId, state)
 
       case BlockImportFailed(blockNr, reason) =>
@@ -478,20 +516,29 @@ class BlockFetcher(
       .map(_.withNewBodiesFetch)
       .getOrElse(fetcherState)
 
-  private def fetchBodies(state: BlockFetcherState): Unit = {
+  private def fetchBodies(state: BlockFetcherState): Unit =
+    fetchBodiesWithRetryState(state, triedPeers = Set.empty, retryCount = 0)
+
+  private def fetchBodiesWithRetryState(
+      state: BlockFetcherState,
+      triedPeers: Set[PeerId],
+      retryCount: Int
+  ): Unit = {
     val hashes = state.takeHashes(syncConfig.blockBodiesPerRequest)
     log.debug(
-      "Initiating body fetch: {} hashes (max per request: {}, total waiting: {})",
+      "Initiating body fetch: {} hashes (max per request: {}, total waiting: {}, tried peers: {}, retry: {})",
       hashes.size,
       syncConfig.blockBodiesPerRequest,
-      state.waitingHeaders.size
+      state.waitingHeaders.size,
+      triedPeers.size,
+      retryCount
     )
     log.debug(
       "First hash: {}, Last hash: {}",
       hashes.headOption.map(ByteStringUtils.hash2string),
       hashes.lastOption.map(ByteStringUtils.hash2string)
     )
-    bodiesFetcher ! BodiesFetcher.FetchBodies(hashes)
+    bodiesFetcher ! BodiesFetcher.FetchBodies(hashes, triedPeers, retryCount)
   }
 }
 
@@ -509,7 +556,13 @@ object BlockFetcher {
 
   sealed trait FetchCommand
   final case class Start(importer: ClassicActorRef, fromBlock: BigInt) extends FetchCommand
-  final case class FetchStateNode(hash: ByteString, replyTo: ClassicActorRef) extends FetchCommand
+  final case class FetchStateNode(
+      hash: ByteString,
+      replyTo: ClassicActorRef,
+      stateRoot: Option[ByteString] = None,
+      paths: Option[Seq[Seq[ByteString]]] = None,
+      networkHead: BigInt = BigInt(0)
+  ) extends FetchCommand
   case object RetryFetchStateNode extends FetchCommand
   final case class PickBlocks(amount: Int, replyTo: ClassicActorRef) extends FetchCommand
   final case class StrictPickBlocks(from: BigInt, atLEastWith: BigInt, replyTo: ClassicActorRef) extends FetchCommand
@@ -527,7 +580,11 @@ object BlockFetcher {
   }
   final case class BlockImportFailed(blockNr: BigInt, reason: BlacklistReason) extends FetchCommand
   final case class InternalLastBlockImport(blockNr: BigInt) extends FetchCommand
-  case object RetryBodiesRequest extends FetchCommand
+  final case class RetryBodiesRequest(
+      failedPeerId: Option[PeerId] = None,
+      triedPeers: Set[PeerId] = Set.empty,
+      retryCount: Int = 0
+  ) extends FetchCommand
   case object RetryHeadersRequest extends FetchCommand
   final case class AdaptedMessageFromEventBus(message: Message, peerId: PeerId) extends FetchCommand
   final case class ReceivedHeaders(peer: Peer, headers: Seq[BlockHeader]) extends FetchCommand

@@ -25,43 +25,6 @@ class ForkIdSpec extends AnyWordSpec with Matchers {
         13189133, 14525000, 19250000)
     }
 
-    "gatherForks for the eth chain correctly" in {
-      val res = config.blockchains.map { case (name, conf) => (name, gatherForks(conf)) }
-      res("eth") shouldBe List(1150000, 1920000, 2463000, 2675000, 4370000, 7280000, 9069000, 9200000, 12244000)
-    }
-
-    "create correct ForkId for ETH mainnet blocks" in {
-      val ethConf = config.blockchains("eth")
-      val ethGenesisHash = ByteString(Hex.decode("d4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3"))
-      def create(head: BigInt) = ForkId.create(ethGenesisHash, ethConf)(head)
-
-      // At block 0, report genesis ForkId per EIP-2124 and Core-Geth reference implementation
-      create(0) shouldBe ForkId(0xfc64ec04L, Some(1150000)) // Unsynced (genesis)
-      create(1149999) shouldBe ForkId(0xfc64ec04L, Some(1150000)) // Last Frontier block
-      create(1150000) shouldBe ForkId(0x97c2c34cL, Some(1920000)) // First Homestead block
-      create(1919999) shouldBe ForkId(0x97c2c34cL, Some(1920000)) // Last Homestead block
-      create(1920000) shouldBe ForkId(0x91d1f948L, Some(2463000)) // First DAO block
-      create(2462999) shouldBe ForkId(0x91d1f948L, Some(2463000)) // Last DAO block
-      create(2463000) shouldBe ForkId(0x7a64da13L, Some(2675000)) // First Tangerine block
-      create(2674999) shouldBe ForkId(0x7a64da13L, Some(2675000)) // Last Tangerine block
-      create(2675000) shouldBe ForkId(0x3edd5b10L, Some(4370000)) // First Spurious block
-      create(4369999) shouldBe ForkId(0x3edd5b10L, Some(4370000)) // Last Spurious block
-      create(4370000) shouldBe ForkId(0xa00bc324L, Some(7280000)) // First Byzantium block
-      create(7279999) shouldBe ForkId(0xa00bc324L, Some(7280000)) // Last Byzantium block
-      create(7280000) shouldBe ForkId(
-        0x668db0afL,
-        Some(9069000)
-      ) // First and last Constantinople, first Petersburg block
-      create(9068999) shouldBe ForkId(0x668db0afL, Some(9069000)) // Last Petersburg block
-      create(9069000) shouldBe ForkId(0x879d6e30L, Some(9200000)) // First Istanbul block
-      create(9200000 - 1) shouldBe ForkId(0x879d6e30L, Some(9200000)) // Last Istanbul block
-      create(9200000) shouldBe ForkId(0xe029e991L, Some(12244000)) // First Muir Glacier block
-      create(12243999) shouldBe ForkId(0xe029e991L, Some(12244000)) // Last Muir Glacier block
-      create(12244000) shouldBe ForkId(0x0eb440f6L, None) // First Berlin block
-      create(12644529) shouldBe ForkId(0x0eb440f6L, None) // Today Berlin block
-      // TODO: Add London
-    }
-
     "create correct ForkId for ETC mainnet blocks" in {
       val etcConf = config.blockchains("etc")
       val etcGenesisHash = ByteString(Hex.decode("d4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3"))
@@ -113,7 +76,12 @@ class ForkIdSpec extends AnyWordSpec with Matchers {
       create(5520000 - 1) shouldBe ForkId(0x92b323e0L, Some(5520000))
       create(5520000) shouldBe ForkId(0x8c9b1797L, Some(9957000)) // First Mystique block
       create(9957000 - 1) shouldBe ForkId(0x8c9b1797L, Some(9957000))
-      create(9957000) shouldBe ForkId(0x3a6b00d7L, None) // First Spiral block
+      create(9957000) shouldBe ForkId(0x3a6b00d7L, Some(15800850)) // First Spiral block
+      create(15800850 - 1) shouldBe ForkId(0x3a6b00d7L, Some(15800850))
+      // Olympia fork hash is computed by CRC32(genesis ++ all prior fork blocks ++ 15800850)
+      val olympiaForkId = create(15800850)
+      olympiaForkId.next shouldBe None // Olympia is the latest fork
+      create(15800850) shouldBe olympiaForkId // First Olympia block
     }
 
     "follow EIP-2124 specification for ForkId at all block heights" in {

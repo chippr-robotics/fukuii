@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.nodebuilder.ApisBuilder
 import com.chipprbots.ethereum.nodebuilder.JSONRpcConfigBuilder
 import com.chipprbots.ethereum.nodebuilder.FukuiiServiceBuilder
 import com.chipprbots.ethereum.nodebuilder.PendingTransactionsManagerBuilder
+import com.chipprbots.ethereum.nodebuilder.SyncControllerRefBuilder
 import com.chipprbots.ethereum.nodebuilder.TransactionHistoryServiceBuilder
 import com.chipprbots.ethereum.nodebuilder.TxPoolConfigBuilder
 import com.chipprbots.ethereum.transactions.TransactionHistoryService
@@ -47,9 +48,12 @@ class FukuiiServiceSpec
       with TxPoolConfigBuilder
       with FukuiiServiceBuilder
       with JSONRpcConfigBuilder
-      with ApisBuilder {
+      with ApisBuilder
+      with SyncControllerRefBuilder {
     lazy val pendingTransactionsManagerProbe: TestProbe = TestProbe()
     override lazy val pendingTransactionsManager: ActorRef = pendingTransactionsManagerProbe.ref
+
+    override lazy val syncController: ActorRef = TestProbe().ref
   }
   def createFixture() = new Fixture
 
@@ -65,7 +69,7 @@ class FukuiiServiceSpec
             value = 0,
             payload = ByteString()
           ),
-          signature = ECDSASignature(0, 0, 0.toByte),
+          signature = ECDSASignature(0, 0, 0),
           sender = Address("0x1234")
         )
 
@@ -76,7 +80,7 @@ class FukuiiServiceSpec
           ExtendedTransactionData(
             fakeTransaction.tx,
             isOutgoing = true,
-            Some(MinedTransactionData(block.header, 0, 42, isCheckpointed = false))
+            Some(MinedTransactionData(block.header, 0, 42))
           )
         )
 

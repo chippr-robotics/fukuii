@@ -149,7 +149,8 @@ object MockedMiner {
           pendingTransactionsManager = node.pendingTransactionsManager,
           getTransactionFromPoolTimeout = node.txPoolConfig.getTransactionFromPoolTimeout,
           mining = mining,
-          ommersPool = node.ommersPool
+          ommersPool = node.ommersPool,
+          coinbaseProvider = node.coinbaseProvider
         )
         val minerProps = props(
           blockchainReader = node.blockchainReader,
@@ -162,7 +163,6 @@ object MockedMiner {
         wrongMiningArgument[PoWMining](mining)
     }
 
-  // TODO to be removed in ETCM-773
   sealed trait MockedMinerProtocol extends MinerProtocol
   case object StartMining extends MockedMinerProtocol
   case object StopMining extends MockedMinerProtocol

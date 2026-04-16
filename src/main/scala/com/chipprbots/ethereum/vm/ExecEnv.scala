@@ -21,12 +21,14 @@ object ExecEnv {
       blockHeader,
       callDepth,
       startGas,
-      evmConfig
+      evmConfig,
+      context.precompileRelocations,
+      context.blobVersionedHashes,
+      context.traceTransfers
     )
   }
 }
 
-//TODO: delete me
 /** Execution environment constants of an EVM program. See section 9.3 in Yellow Paper for more detail.
   * @param ownerAddr
   *   I_a: address of the account that owns the code
@@ -62,5 +64,8 @@ case class ExecEnv(
     blockHeader: BlockHeader,
     callDepth: Int,
     startGas: BigInt,
-    evmConfig: EvmConfig
+    evmConfig: EvmConfig,
+    precompileRelocations: Map[Address, Address] = Map.empty,
+    blobVersionedHashes: Seq[ByteString] = Seq.empty,
+    traceTransfers: Boolean = false
 )

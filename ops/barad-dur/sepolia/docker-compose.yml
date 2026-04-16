@@ -1,0 +1,91 @@
+# Sepolia Testnet: Fukuii EL + Lighthouse CL
+# Validates the Engine API implementation against a real consensus layer
+#
+# Architecture:
+#   Lighthouse (CL) --Engine API (JWT)--> Fukuii (EL)
+#   Both share /jwt/jwt.hex for authentication
+#
+# Usage:
+#   docker compose up -d
+#   docker compose logs -f fukuii-sepolia   # watch EL
+#   docker compose logs -f lighthouse       # watch CL
+
+networks:
+  sepolia-network:
+    driver: bridge
+
+services:
+  # Fukuii Execution Layer — Sepolia testnet
+  fukuii-sepolia:
+    image: chipprbots/fukuii:latest
+    container_name: fukuii-sepolia
+    restart: unless-stopped
+    ports:
+      - "8555:8545"       # JSON-RPC HTTP
+      - "8556:8546"       # JSON-RPC WebSocket
+      - "8561:8551"       # Engine API (authrpc)
+      - "30306:30306/tcp" # P2P TCP
+      - "30306:30306/udp" # P2P Discovery
+      - "9097:9095"       # Metrics
+    volumes:
+      - ${SEPOLIA_DATA_DIR:-/chipprbots/blockchain/chain-data/etc/fukuii-sepolia}:/app/data
+      - ./fukuii-conf:/app/conf:ro
+      - ./jwt.hex:/app/jwt/jwt.hex:ro
+      - ./fukuii-conf/static-nodes.json:/app/data/static-nodes.json:ro
+    command:
+      - "-Xmx4g"
+      - "-Xms2g"
+      - "-Xss10M"
+      - "-XX:+UseG1GC"
+      - "-XX:MaxGCPauseMillis=200"
+      - "-Dconfig.file=/app/conf/sepolia.conf"
+      - "-Dfukuii.datadir=/app/data"
+      - "-jar"
+      - "/app/fukuii/lib/fukuii-assembly-0.1.240.jar"
+      - "sepolia"
+    networks:
+      - sepolia-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8545/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
+
+  # Lighthouse Consensus Layer — Sepolia testnet
+  lighthouse:
+    image: sigp/lighthouse:latest
+    container_name: lighthouse-sepolia
+    restart: unless-stopped
+    ports:
+      - "5052:5052"       # Beacon API
+      - "9100:9000/tcp"   # P2P TCP
+      - "9100:9000/udp"   # P2P UDP
+    volumes:
+      - ${LIGHTHOUSE_DATA_DIR:-/chipprbots/blockchain/chain-data/etc/lighthouse-sepolia}:/data
+      - ./jwt.hex:/jwt/jwt.hex:ro
+    command:
+      - "lighthouse"
+      - "bn"
+      - "--network=sepolia"
+      - "--execution-endpoint=http://fukuii-sepolia:8551"
+      - "--execution-jwt=/jwt/jwt.hex"
+      - "--datadir=/data"
+      - "--http"
+      - "--http-address=0.0.0.0"
+      - "--http-port=5052"
+      - "--http-allow-origin=*"
+      - "--port=9000"
+      - "--target-peers=50"
+      - "--checkpoint-sync-url=https://sepolia.beaconstate.info"
+    depends_on:
+      fukuii-sepolia:
+        condition: service_healthy
+    networks:
+      - sepolia-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5052/eth/v1/node/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s

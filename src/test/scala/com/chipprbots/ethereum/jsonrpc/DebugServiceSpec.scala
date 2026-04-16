@@ -18,9 +18,9 @@ import com.chipprbots.ethereum.WithActorSystemShutDown
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.jsonrpc.DebugService.ListPeersInfoRequest
 import com.chipprbots.ethereum.jsonrpc.DebugService.ListPeersInfoResponse
-import com.chipprbots.ethereum.network.EtcPeerManagerActor
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.RemoteStatus
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.PeerId
@@ -49,8 +49,8 @@ class DebugServiceSpec
     peerManager.expectMsg(PeerManagerActor.GetPeers)
     peerManager.reply(Peers(Map(peer1 -> PeerActor.Status.Connecting)))
 
-    etcPeerManager.expectMsg(EtcPeerManagerActor.PeerInfoRequest(peer1.id))
-    etcPeerManager.reply(EtcPeerManagerActor.PeerInfoResponse(Some(peer1Info)))
+    etcPeerManager.expectMsg(NetworkPeerManagerActor.PeerInfoRequest(peer1.id))
+    etcPeerManager.reply(NetworkPeerManagerActor.PeerInfoResponse(Some(peer1Info)))
 
     result.futureValue shouldBe Right(ListPeersInfoResponse(List(peer1Info)))
   }
@@ -72,8 +72,8 @@ class DebugServiceSpec
     peerManager.expectMsg(PeerManagerActor.GetPeers)
     peerManager.reply(Peers(Map(peer1 -> PeerActor.Status.Connecting)))
 
-    etcPeerManager.expectMsg(EtcPeerManagerActor.PeerInfoRequest(peer1.id))
-    etcPeerManager.reply(EtcPeerManagerActor.PeerInfoResponse(None))
+    etcPeerManager.expectMsg(NetworkPeerManagerActor.PeerInfoRequest(peer1.id))
+    etcPeerManager.reply(NetworkPeerManagerActor.PeerInfoResponse(None))
 
     result.futureValue shouldBe Right(ListPeersInfoResponse(List.empty))
   }

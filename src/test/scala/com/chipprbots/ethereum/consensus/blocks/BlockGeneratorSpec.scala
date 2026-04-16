@@ -11,7 +11,6 @@ import org.bouncycastle.crypto.params.ECPublicKeyParameters
 import org.bouncycastle.util.encoders.Hex
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
@@ -20,9 +19,6 @@ import com.chipprbots.ethereum.consensus.pow.validators.ValidatorsExecutor
 import com.chipprbots.ethereum.consensus.validators._
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.crypto._
-import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields
-import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty
-import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostEcip1097
 import com.chipprbots.ethereum.domain.SignedTransaction.FirstByteOfAddress
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.ledger.BlockExecution
@@ -34,7 +30,7 @@ import com.chipprbots.ethereum.utils._
 import com.chipprbots.ethereum.ledger.TxResult
 import com.chipprbots.ethereum.testing.Tags._
 
-class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks with Logger {
+class BlockGeneratorSpec extends AnyFlatSpec with Matchers with Logger {
   implicit val testContext: IORuntime = IORuntime.global
 
   "BlockGenerator" should "generate correct block with empty transactions" taggedAs (
@@ -190,7 +186,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
       .sign(
         transaction.copy(gasLimit = BigInt(2).pow(100000), nonce = signedTransaction.tx.nonce + 1),
         keyPair,
-        Some(0x3d.toByte)
+        Some(BigInt(0x3d))
       )
 
     val transactions: Seq[SignedTransaction] =
@@ -229,7 +225,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     ConsensusTest
   ) in new TestSetup {
     implicit override lazy val blockchainConfig: BlockchainConfig = BlockchainConfig(
-      chainId = 0x3d.toByte,
+      chainId = 0x3d,
       networkId = 1,
       customGenesisFileOpt = Some("test-genesis.json"),
       customGenesisJsonOpt = None,
@@ -242,7 +238,6 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
       bootstrapNodes = Set(),
       gasTieBreaker = false,
       ethCompatibleStorage = true,
-      treasuryAddress = Address(0),
       forkBlockNumbers = ForkBlockNumbers.Empty.copy(
         frontierBlockNumber = 0,
         homesteadBlockNumber = 1150000,
@@ -264,7 +259,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
 
     val generalTx: SignedTransaction = SignedTransaction.sign(transaction, keyPair, None)
     val specificTx: SignedTransaction =
-      SignedTransaction.sign(transaction.copy(nonce = transaction.nonce + 1), keyPair, Some(0x3d.toByte))
+      SignedTransaction.sign(transaction.copy(nonce = transaction.nonce + 1), keyPair, Some(BigInt(0x3d)))
 
     val pendingBlock: PendingBlock =
       blockGenerator
@@ -308,7 +303,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
         difficultyBombRemovalBlockNumber = 5900000,
         eip161BlockNumber = 0
       ),
-      chainId = 0x3d.toByte,
+      chainId = 0x3d,
       networkId = 1,
       customGenesisFileOpt = Some("test-genesis.json"),
       customGenesisJsonOpt = None,
@@ -320,8 +315,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
       daoForkConfig = None,
       bootstrapNodes = Set(),
       gasTieBreaker = false,
-      ethCompatibleStorage = true,
-      treasuryAddress = Address(0)
+      ethCompatibleStorage = true
     )
 
     override lazy val blockExecution =
@@ -395,7 +389,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
 
   it should "include consecutive transactions from single sender" taggedAs (UnitTest, ConsensusTest) in new TestSetup {
     val nextTransaction: SignedTransaction =
-      SignedTransaction.sign(transaction.copy(nonce = signedTransaction.tx.nonce + 1), keyPair, Some(0x3d.toByte))
+      SignedTransaction.sign(transaction.copy(nonce = signedTransaction.tx.nonce + 1), keyPair, Some(BigInt(0x3d)))
 
     val pendingBlock: PendingBlock =
       blockGenerator
@@ -436,7 +430,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     ConsensusTest
   ) in new TestSetup {
     val nextTransaction: SignedTransaction =
-      SignedTransaction.sign(transaction.copy(nonce = signedTransaction.tx.nonce + 1), keyPair, Some(0x3d.toByte))
+      SignedTransaction.sign(transaction.copy(nonce = signedTransaction.tx.nonce + 1), keyPair, Some(BigInt(0x3d)))
 
     val privateKeyWithNoEthere: BigInt =
       BigInt(1, Hex.decode("584a31be275195585603ddd05a53d16fae9deafba67213b6060cec9f16e44cae"))
@@ -450,7 +444,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
       payload = ByteString.empty
     )
     val signedFailingTransaction: SignedTransaction =
-      SignedTransaction.sign(failingTransaction, keyPairFromPrvKey(privateKeyWithNoEthere), Some(0x3d.toByte))
+      SignedTransaction.sign(failingTransaction, keyPairFromPrvKey(privateKeyWithNoEthere), Some(BigInt(0x3d)))
 
     val pendingBlock: PendingBlock =
       blockGenerator
@@ -490,7 +484,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     ConsensusTest
   ) in new TestSetup {
     val txWitSameNonceButLowerGasPrice: SignedTransaction = SignedTransaction
-      .sign(transaction.copy(gasPrice = signedTransaction.tx.gasPrice - 1), keyPair, Some(0x3d.toByte))
+      .sign(transaction.copy(gasPrice = signedTransaction.tx.gasPrice - 1), keyPair, Some(BigInt(0x3d)))
 
     val pendingBlock: PendingBlock =
       blockGenerator
@@ -525,133 +519,6 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
     fullBlock.header.extraData shouldBe headerExtraData
   }
 
-  it should "generate blocks with the correct extra fields" taggedAs (UnitTest, ConsensusTest) in {
-    val table = Table[Boolean, Boolean, HeaderExtraFields](
-      ("ecip1098Activated", "ecip1097Activated", "expectedExtraFields"),
-      // No ecip activated
-      (false, false, HefEmpty),
-      (false, false, HefEmpty),
-      // ECIP 1098 activated
-      (true, false, HefEmpty),
-      (true, false, HefEmpty),
-      // ECIP 1097 and 1098 activated
-      (true, true, HefPostEcip1097(None)),
-      (true, true, HefPostEcip1097(None))
-    )
-
-    forAll(table) { case (ecip1098Activated, ecip1097Activated, headerExtraFields) =>
-      val testSetup = new TestSetup {
-        override lazy val blockchainConfig: BlockchainConfig =
-          baseBlockchainConfig.withUpdatedForkBlocks(
-            _.copy(
-              ecip1098BlockNumber = 1000,
-              ecip1097BlockNumber = 2000
-            )
-          )
-
-        override lazy val miningConfig: MiningConfig = buildMiningConfig()
-      }
-      import testSetup._
-
-      val blockNumber =
-        if (ecip1098Activated && ecip1097Activated)
-          blockchainConfig.forkBlockNumbers.ecip1097BlockNumber * 2
-        else if (ecip1098Activated)
-          (blockchainConfig.forkBlockNumbers.ecip1097BlockNumber + blockchainConfig.forkBlockNumbers.ecip1098BlockNumber) / 2
-        else
-          blockchainConfig.forkBlockNumbers.ecip1098BlockNumber / 2
-      val parentBlock = bestBlock.get.copy(header = bestBlock.get.header.copy(number = blockNumber - 1))
-      val generatedBlock =
-        blockGenerator.generateBlock(parentBlock, Nil, Address(testAddress), blockGenerator.emptyX, None).pendingBlock
-
-      generatedBlock.block.header.extraFields shouldBe headerExtraFields
-    }
-  }
-
-  it should "generate a failure if treasury transfer was not made" taggedAs (UnitTest, ConsensusTest) in {
-    val producer = new TestSetup {
-      override lazy val blockchainConfig: BlockchainConfig = baseBlockchainConfig
-        .withUpdatedForkBlocks(
-          _.copy(
-            ecip1098BlockNumber = 20000000
-          )
-        )
-        .copy(
-          treasuryAddress = treasuryAccount,
-          customGenesisFileOpt = Some("test-genesis-treasury.json")
-        )
-      override lazy val miningConfig: MiningConfig = buildMiningConfig()
-    }
-    val block = {
-      import producer._
-      blockGenerator
-        .generateBlock(bestBlock.get, Seq.empty, Address(testAddress), blockGenerator.emptyX, None)
-        .pendingBlock
-    }
-
-    val validator = new TestSetup {
-      override lazy val blockchainConfig: BlockchainConfig = baseBlockchainConfig
-        .withUpdatedForkBlocks(_.copy(ecip1098BlockNumber = 1))
-        .copy(
-          treasuryAddress = treasuryAccount,
-          customGenesisFileOpt = Some("test-genesis-treasury.json")
-        )
-      override lazy val miningConfig: MiningConfig = buildMiningConfig()
-    }
-
-    {
-      import validator._
-
-      blockExecution.executeAndValidateBlock(block.block, alreadyValidated = true) shouldBe
-        Left(
-          ValidationAfterExecError(
-            "Block has invalid state root hash, expected 47344722e6c52a85685f9c1bb1e0fe66cfaf6be00c1a752f43cc835fb7415e81 but got 41b63e59d34b5b35a040d496582fc587887af79f762210f6cf55c24d2c307d61"
-          )
-        )
-    }
-  }
-
-  it should "generate a failure if treasury transfer was made to a different treasury account" taggedAs (
-    UnitTest,
-    ConsensusTest
-  ) in {
-    val producer = new TestSetup {
-      override lazy val blockchainConfig: BlockchainConfig = baseBlockchainConfig
-        .withUpdatedForkBlocks(_.copy(ecip1098BlockNumber = 1))
-        .copy(
-          treasuryAddress = maliciousAccount,
-          customGenesisFileOpt = Some("test-genesis-treasury.json")
-        )
-      override lazy val miningConfig: MiningConfig = buildMiningConfig()
-    }
-    val block = {
-      import producer._
-      blockGenerator
-        .generateBlock(bestBlock.get, Seq.empty, Address(testAddress), blockGenerator.emptyX, None)
-        .pendingBlock
-    }
-
-    val validator = new TestSetup {
-      override lazy val blockchainConfig: BlockchainConfig = baseBlockchainConfig
-        .withUpdatedForkBlocks(_.copy(ecip1098BlockNumber = 1))
-        .copy(
-          treasuryAddress = treasuryAccount,
-          customGenesisFileOpt = Some("test-genesis-treasury.json")
-        )
-      override lazy val miningConfig: MiningConfig = buildMiningConfig()
-    }
-
-    {
-      import validator._
-      blockExecution.executeAndValidateBlock(block.block, alreadyValidated = true) shouldBe
-        Left(
-          ValidationAfterExecError(
-            "Block has invalid state root hash, expected 5bfc811dfee1fecaefbaef2dba502082a8cc72e52260368d83ed6e4ebcecae75 but got 41b63e59d34b5b35a040d496582fc587887af79f762210f6cf55c24d2c307d61"
-          )
-        )
-    }
-  }
-
   trait TestSetup extends EphemBlockchainTestSetup {
 
     val testAddress = 42
@@ -682,17 +549,13 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
       accessList = Nil
     )
 
-    // defined in test-genesis-treasury.json
-    val treasuryAccount: Address = Address(0xeeeeee)
-    val maliciousAccount: Address = Address(0x123)
-
     lazy val signedTransaction: SignedTransaction =
-      SignedTransaction.sign(transaction, keyPair, Some(0x3d.toByte))
+      SignedTransaction.sign(transaction, keyPair, Some(BigInt(0x3d)))
     lazy val duplicatedSignedTransaction: SignedTransaction =
-      SignedTransaction.sign(transaction.copy(gasLimit = 2), keyPair, Some(0x3d.toByte))
+      SignedTransaction.sign(transaction.copy(gasLimit = 2), keyPair, Some(BigInt(0x3d)))
 
     lazy val signedTypedTransaction: SignedTransaction =
-      SignedTransaction.sign(typedTransaction, keyPair, Some(0x3d.toByte))
+      SignedTransaction.sign(typedTransaction, keyPair, Some(BigInt(0x3d)))
 
     lazy val signedTransactionWithAddress: SignedTransactionWithSender =
       SignedTransactionWithSender(signedTransaction, Address(keyPair))
@@ -708,7 +571,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
         difficultyBombContinueBlockNumber = 5000000,
         difficultyBombRemovalBlockNumber = 5900000
       ),
-      chainId = 0x3d.toByte,
+      chainId = 0x3d,
       networkId = 1,
       customGenesisFileOpt = Some("test-genesis.json"),
       customGenesisJsonOpt = None,
@@ -720,8 +583,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
       daoForkConfig = None,
       bootstrapNodes = Set(),
       gasTieBreaker = false,
-      ethCompatibleStorage = true,
-      treasuryAddress = Address(0)
+      ethCompatibleStorage = true
     )
     implicit override lazy val blockchainConfig: BlockchainConfig = baseBlockchainConfig
 
@@ -729,6 +591,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
       new GenesisDataLoader(
         blockchainReader,
         blockchainWriter,
+        storagesInstance.storages.evmCodeStorage,
         storagesInstance.storages.stateStorage
       )
     genesisDataLoader.loadGenesisData()
@@ -760,9 +623,6 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with ScalaCheckProper
         blockValidation
       )
 
-    // FIXME: the change in gas limit voting strategy caused the hardcoded nonce and mixHash in this file to be invalid
-    //        The gas limit of all the generated blocks has to be set to the old strategy of increasing as much as possible
-    //        the gas limit, if not PoW validations will fail
     val generatedBlockGasLimit = 16733003
   }
 }

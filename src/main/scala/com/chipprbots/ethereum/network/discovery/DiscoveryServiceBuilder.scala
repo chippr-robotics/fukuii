@@ -23,12 +23,13 @@ import scodec.bits.BitVector
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.db.storage.KnownNodesStorage
 import com.chipprbots.ethereum.network.discovery.codecs.RLPCodecs
+import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.utils.NodeStatus
 import com.chipprbots.ethereum.utils.ServerStatus
 import com.chipprbots.scalanet.discovery.ethereum.v4.Packet
 import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord.Content
 
-trait DiscoveryServiceBuilder {
+trait DiscoveryServiceBuilder extends Logger {
 
   def discoveryServiceResource(
       discoveryConfig: DiscoveryConfig,
@@ -120,11 +121,32 @@ trait DiscoveryServiceBuilder {
           case Some(address) =>
             IO.pure(address)
           case None =>
-            IO.raiseError(
-              new IllegalStateException(
-                s"Failed to resolve the external address. Please configure it via -Dfukuii.network.discovery.host"
-              )
-            )
+            // In some environments (Docker, CI, NAT without UPnP), external address resolution can fail.
+            // Discovery can still function for outbound lookups if we bind to a local interface address.
+            val fallbackHostOpt = Option(discoveryConfig.interface)
+              .map(_.trim)
+              .filter(h => h.nonEmpty && h != "0.0.0.0" && h != "::")
+
+            fallbackHostOpt match {
+              case Some(host) =>
+                IO(InetAddress.getByName(host)).flatTap { addr =>
+                  IO(
+                    log.warn(
+                      s"Failed to resolve external discovery address; falling back to configured interface '$host' ($addr). " +
+                        "For best results set fukuii.network.discovery.host explicitly."
+                    )
+                  )
+                }
+              case None =>
+                IO(InetAddress.getLocalHost).flatTap { addr =>
+                  IO(
+                    log.warn(
+                      s"Failed to resolve external discovery address; falling back to InetAddress.getLocalHost ($addr). " +
+                        "For best results set fukuii.network.discovery.host explicitly (e.g. container DNS name or public IP)."
+                    )
+                  )
+                }
+            }
         }
     }
 

@@ -3,21 +3,23 @@ package com.chipprbots.ethereum.blockchain.sync.snap
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.domain.Account
-import com.chipprbots.ethereum.network.Peer
 
 /** Account range task for SNAP sync
   *
-  * Represents a range of accounts to download from the state trie.
-  * Follows core-geth patterns from eth/protocols/snap/sync.go
+  * Represents a range of accounts to download from the state trie. Follows core-geth patterns from
+  * eth/protocols/snap/sync.go
   *
-  * @param next Next account hash to sync in this interval
-  * @param last Last account hash to sync in this interval (exclusive upper bound)
-  * @param rootHash State root hash for verification
+  * @param next
+  *   Next account hash to sync in this interval
+  * @param last
+  *   Last account hash to sync in this interval (exclusive upper bound)
+  * @param rootHash
+  *   State root hash for verification
   */
 case class AccountTask(
-    next: ByteString,
+    var next: ByteString,
     last: ByteString,
-    rootHash: ByteString,
+    var rootHash: ByteString,
     // Runtime fields
     var pending: Boolean = false,
     var done: Boolean = false,
@@ -34,12 +36,12 @@ case class AccountTask(
   /** Get the range as a human-readable string */
   def rangeString: String = {
     val nextStr = if (next.isEmpty) "0x00..." else next.take(4).toArray.map("%02x".format(_)).mkString
-    val lastStr = if (last.isEmpty) "0xFF..." else last.take(4).toArray.map("%02x".format(_)).mkString
+    val lastStr = if (last == AccountTask.MaxHash32) "0xFF..." else last.take(4).toArray.map("%02x".format(_)).mkString
     s"[$nextStr...$lastStr]"
   }
 
   /** Calculate progress based on downloaded accounts */
-  def progress: Double = {
+  def progress: Double =
     if (done) 1.0
     else if (accounts.isEmpty) 0.0
     else {
@@ -47,49 +49,66 @@ case class AccountTask(
       // Typical ranges contain hundreds to thousands of accounts
       math.min(0.9, accounts.size.toDouble / AccountTask.ESTIMATED_ACCOUNTS_FOR_NEAR_COMPLETE)
     }
+
+  /** Remaining keyspace as BigInt. Used by priority dispatching to focus workers on the most-complete range first,
+    * ensuring at least some ranges finish before peers stop responding.
+    */
+  def remainingKeyspace: BigInt = {
+    val nextBig = BigInt(1, next.toArray.padTo(32, 0.toByte))
+    val lastBig = BigInt(1, last.toArray.padTo(32, 0.toByte))
+    (lastBig - nextBig).max(BigInt(0))
   }
 }
 
 object AccountTask {
 
-  /** 
-    * Estimated number of accounts that represents "almost complete" (90% progress).
-    * This is a rough heuristic based on typical account range sizes in SNAP sync.
-    * Actual ranges can vary significantly based on state distribution.
+  /** Maximum 32-byte hash value (0xFF..FF). */
+  val MaxHash32: ByteString = ByteString(Array.fill(32)(0xff.toByte))
+
+  /** Estimated number of accounts that represents "almost complete" (90% progress). This is a rough heuristic based on
+    * typical account range sizes in SNAP sync. Actual ranges can vary significantly based on state distribution.
     */
   val ESTIMATED_ACCOUNTS_FOR_NEAR_COMPLETE = 1000.0
 
   /** Create initial account tasks by dividing the account space
     *
-    * Following core-geth pattern, divide into chunks for parallel download.
-    * Default is 16 concurrent chunks.
+    * Following core-geth pattern, divide into chunks for parallel download. Default is 16 concurrent chunks.
     *
-    * @param rootHash State root to sync
-    * @param concurrency Number of parallel tasks (default 16)
-    * @return List of account tasks covering the full account space
+    * @param rootHash
+    *   State root to sync
+    * @param concurrency
+    *   Number of parallel tasks (default 16)
+    * @return
+    *   List of account tasks covering the full account space
     */
   def createInitialTasks(rootHash: ByteString, concurrency: Int = 16): Seq[AccountTask] = {
     require(concurrency > 0, "Concurrency must be positive")
 
     if (concurrency == 1) {
       // Single task covers entire range
-      return Seq(AccountTask(
-        next = ByteString.empty, // 0x00...
-        last = ByteString.empty, // 0xFF... (exclusive)
-        rootHash = rootHash
-      ))
+      val min = bigIntTo32ByteString(BigInt(0))
+      return Seq(
+        AccountTask(
+          next = min, // 0x00...
+          // Core-Geth expects a 32-byte hash here (RLP-decoded into common.Hash).
+          // Use 0xFF..FF as the practical upper bound.
+          last = MaxHash32,
+          rootHash = rootHash
+        )
+      )
     }
 
     // Divide 256-bit space into equal chunks
     val chunkSize = BigInt(2).pow(256) / concurrency
-    
+
     (0 until concurrency).map { i =>
       val start = if (i == 0) BigInt(0) else chunkSize * i
-      val end = if (i == concurrency - 1) BigInt(2).pow(256) - 1 else chunkSize * (i + 1)
-      
+      // For the last chunk, use the maximum possible hash as the upper bound.
+      val endOpt = if (i == concurrency - 1) None else Some(chunkSize * (i + 1))
+
       AccountTask(
         next = bigIntTo32ByteString(start),
-        last = bigIntTo32ByteString(end),
+        last = endOpt.map(bigIntTo32ByteString).getOrElse(MaxHash32),
         rootHash = rootHash
       )
     }
@@ -99,8 +118,10 @@ object AccountTask {
     *
     * Handles sign bit properly and ensures correct padding for hash values.
     *
-    * @param bi BigInt to convert
-    * @return 32-byte ByteString in big-endian format
+    * @param bi
+    *   BigInt to convert
+    * @return
+    *   32-byte ByteString in big-endian format
     */
   private def bigIntTo32ByteString(bi: BigInt): ByteString = {
     val bytes = bi.toByteArray

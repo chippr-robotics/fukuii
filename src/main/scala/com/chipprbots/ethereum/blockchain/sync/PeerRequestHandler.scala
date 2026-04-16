@@ -6,7 +6,7 @@ import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration.FiniteDuration
 import scala.reflect.ClassTag
 
-import com.chipprbots.ethereum.network.EtcPeerManagerActor
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnected
@@ -17,11 +17,12 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.
 import com.chipprbots.ethereum.network.PeerEventBusActor.Unsubscribe
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
+import com.chipprbots.ethereum.network.p2p.messages.ETH66
 
 class PeerRequestHandler[RequestMsg <: Message, ResponseMsg <: Message: ClassTag](
     peer: Peer,
     responseTimeout: FiniteDuration,
-    etcPeerManager: ActorRef,
+    networkPeerManager: ActorRef,
     peerEventBus: ActorRef,
     requestMsg: RequestMsg,
     responseMsgCode: Int
@@ -36,6 +37,11 @@ class PeerRequestHandler[RequestMsg <: Message, ResponseMsg <: Message: ClassTag
   private val timeout: Cancellable = scheduler.scheduleOnce(responseTimeout, self, Timeout)
 
   private val startTime: Long = System.currentTimeMillis()
+
+  private val expectedRequestId: Option[BigInt] = requestMsg match {
+    case hasId: ETH66.HasRequestId => Some(hasId.requestId)
+    case _                         => None
+  }
 
   private def subscribeMessageClassifier = MessageClassifier(Set(responseMsgCode), PeerSelector.WithId(peer.id))
 
@@ -53,13 +59,24 @@ class PeerRequestHandler[RequestMsg <: Message, ResponseMsg <: Message: ClassTag
       "PEER_REQUEST: Request details: {}",
       requestMsg.toShortString
     )
-    etcPeerManager ! EtcPeerManagerActor.SendMessage(toSerializable(requestMsg), peer.id)
+    networkPeerManager ! NetworkPeerManagerActor.SendMessage(toSerializable(requestMsg), peer.id)
     peerEventBus ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)))
     peerEventBus ! Subscribe(subscribeMessageClassifier)
   }
 
   override def receive: Receive = {
-    case MessageFromPeer(responseMsg: ResponseMsg, _)  => handleResponseMsg(responseMsg)
+    case MessageFromPeer(responseMsg: ResponseMsg, _) =>
+      (expectedRequestId, responseMsg) match {
+        case (Some(expected), hasId: ETH66.HasRequestId) if hasId.requestId != expected =>
+          log.debug(
+            "PEER_REQUEST_STALE: peer={}, expected requestId={}, got={} — ignoring",
+            peer.id,
+            expected,
+            hasId.requestId
+          )
+        case _ =>
+          handleResponseMsg(responseMsg)
+      }
     case Timeout                                       => handleTimeout()
     case PeerDisconnected(peerId) if peerId == peer.id => handleTerminated()
   }
@@ -114,12 +131,12 @@ object PeerRequestHandler {
   def props[RequestMsg <: Message, ResponseMsg <: Message: ClassTag](
       peer: Peer,
       responseTimeout: FiniteDuration,
-      etcPeerManager: ActorRef,
+      networkPeerManager: ActorRef,
       peerEventBus: ActorRef,
       requestMsg: RequestMsg,
       responseMsgCode: Int
   )(implicit scheduler: Scheduler, toSerializable: RequestMsg => MessageSerializable): Props =
-    Props(new PeerRequestHandler(peer, responseTimeout, etcPeerManager, peerEventBus, requestMsg, responseMsgCode))
+    Props(new PeerRequestHandler(peer, responseTimeout, networkPeerManager, peerEventBus, requestMsg, responseMsgCode))
 
   final case class RequestFailed(peer: Peer, reason: String)
   final case class ResponseReceived[T](peer: Peer, response: T, timeTaken: Long)

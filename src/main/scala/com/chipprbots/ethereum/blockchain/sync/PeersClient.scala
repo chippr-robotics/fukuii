@@ -12,7 +12,7 @@ import scala.reflect.ClassTag
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg.PeerWithInfo
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.Message
@@ -29,12 +29,17 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockBodies => ETH66B
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockBodies => ETH66GetBlockBodies}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ETH66GetBlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetNodeData => ETH66GetNodeData}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetReceipts => ETH66GetReceipts}
+import com.chipprbots.ethereum.network.p2p.messages.ETH66.{NodeData => ETH66NodeData}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{Receipts => ETH66Receipts}
+import com.chipprbots.ethereum.network.p2p.messages.SNAP
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 class PeersClient(
-    val etcPeerManager: ActorRef,
+    val networkPeerManager: ActorRef,
     val peerEventBus: ActorRef,
     val blacklist: Blacklist,
     val syncConfig: SyncConfig,
@@ -128,7 +133,7 @@ class PeersClient(
       PeerRequestHandler.props[RequestMsg, ResponseMsg](
         peer = peer,
         responseTimeout = syncConfig.peerResponseTimeout,
-        etcPeerManager = etcPeerManager,
+        networkPeerManager = networkPeerManager,
         peerEventBus = peerEventBus,
         requestMsg = requestMsg,
         responseMsgCode = responseMsgCode
@@ -146,6 +151,41 @@ class PeersClient(
       case BestPeer =>
         log.debug("Selecting best peer from {} available peers", peersToDownloadFrom.size)
         bestPeer(peersToDownloadFrom, log)
+
+      case BestSnapPeer =>
+        val snapPeers = peersToDownloadFrom.filter { case (_, peerWithInfo) =>
+          peerWithInfo.peerInfo.remoteStatus.supportsSnap
+        }
+        log.debug(
+          "Selecting best SNAP-capable peer from {} available peers ({} SNAP-capable)",
+          peersToDownloadFrom.size,
+          snapPeers.size
+        )
+        bestPeer(snapPeers, log)
+
+      case BestNodeDataPeer =>
+        val nodeDataPeers = peersToDownloadFrom.filter { case (_, peerWithInfo) =>
+          peerWithInfo.peerInfo.remoteStatus.capability match {
+            case Capability.ETH68 => false // ETH68 removed GetNodeData
+            case _                => true
+          }
+        }
+        log.debug(
+          "Selecting best GetNodeData-capable peer from {} available peers ({} capable)",
+          peersToDownloadFrom.size,
+          nodeDataPeers.size
+        )
+        bestPeer(nodeDataPeers, log)
+
+      case ExcludingPeers(exclude) =>
+        val filteredPeers = peersToDownloadFrom.filterNot { case (peerId, _) => exclude.contains(peerId) }
+        log.debug(
+          "Selecting best peer excluding {} peers from {} available ({} remaining)",
+          exclude.size,
+          peersToDownloadFrom.size,
+          filteredPeers.size
+        )
+        bestPeer(filteredPeers, log)
     }
 
   /** Adapts message format based on peer's negotiated capability. ETH66+ peers use RequestId wrapper, earlier versions
@@ -177,6 +217,13 @@ class PeersClient(
           case eth63: ETH63.GetReceipts if usesRequestId =>
             // Convert ETH63 format to ETH66 format for newer peers
             ETH66GetReceipts(ETH66.nextRequestId, eth63.blockHashes)
+          // GetNodeData adaptation
+          case eth66: ETH66GetNodeData if !usesRequestId =>
+            // Convert ETH66 format to ETH63 format for older peers
+            GetNodeData(eth66.mptElementsHashes)
+          case eth63: GetNodeData if usesRequestId =>
+            // Convert ETH63 format to ETH66 format for newer peers
+            ETH66GetNodeData(ETH66.nextRequestId, eth63.mptElementsHashes)
           case _ => message // Already in correct format
         }
       case None =>
@@ -186,21 +233,25 @@ class PeersClient(
 
   private def responseClassTag[RequestMsg <: Message](requestMsg: RequestMsg): ClassTag[_ <: Message] =
     requestMsg match {
-      case _: ETH66GetBlockHeaders     => implicitly[ClassTag[ETH66BlockHeaders]]
-      case _: ETH62.GetBlockHeaders    => implicitly[ClassTag[ETH62.BlockHeaders]]
-      case _: ETH66GetBlockBodies      => implicitly[ClassTag[ETH66BlockBodies]]
-      case _: ETH62.GetBlockBodies     => implicitly[ClassTag[ETH62.BlockBodies]]
-      case _: ETH66GetReceipts         => implicitly[ClassTag[ETH66Receipts]]
-      case _: ETH63.GetReceipts        => implicitly[ClassTag[ETH63.Receipts]]
-      case _: GetNodeData              => implicitly[ClassTag[NodeData]]
+      case _: ETH66GetBlockHeaders  => implicitly[ClassTag[ETH66BlockHeaders]]
+      case _: ETH62.GetBlockHeaders => implicitly[ClassTag[ETH62.BlockHeaders]]
+      case _: ETH66GetBlockBodies   => implicitly[ClassTag[ETH66BlockBodies]]
+      case _: ETH62.GetBlockBodies  => implicitly[ClassTag[ETH62.BlockBodies]]
+      case _: ETH66GetReceipts      => implicitly[ClassTag[ETH66Receipts]]
+      case _: ETH63.GetReceipts     => implicitly[ClassTag[ETH63.Receipts]]
+      case _: GetNodeData           => implicitly[ClassTag[NodeData]]
+      case _: ETH66GetNodeData      => implicitly[ClassTag[ETH66NodeData]]
+      case _: GetTrieNodes          => implicitly[ClassTag[TrieNodes]]
     }
 
   private def responseMsgCode[RequestMsg <: Message](requestMsg: RequestMsg): Int =
     requestMsg match {
-      case _: ETH66GetBlockHeaders | _: ETH62.GetBlockHeaders  => Codes.BlockHeadersCode
-      case _: ETH66GetBlockBodies | _: ETH62.GetBlockBodies    => Codes.BlockBodiesCode
-      case _: ETH66GetReceipts | _: ETH63.GetReceipts          => Codes.ReceiptsCode
-      case _: GetNodeData                                      => Codes.NodeDataCode
+      case _: ETH66GetBlockHeaders | _: ETH62.GetBlockHeaders => Codes.BlockHeadersCode
+      case _: ETH66GetBlockBodies | _: ETH62.GetBlockBodies   => Codes.BlockBodiesCode
+      case _: ETH66GetReceipts | _: ETH63.GetReceipts         => Codes.ReceiptsCode
+      case _: GetNodeData                                     => Codes.NodeDataCode
+      case _: ETH66GetNodeData                                => Codes.NodeDataCode
+      case _: GetTrieNodes                                    => SNAP.Codes.TrieNodesCode
     }
 
   private def printStatus(requesters: Requesters): Unit = {
@@ -225,13 +276,13 @@ class PeersClient(
 object PeersClient {
 
   def props(
-      etcPeerManager: ActorRef,
+      networkPeerManager: ActorRef,
       peerEventBus: ActorRef,
       blacklist: Blacklist,
       syncConfig: SyncConfig,
       scheduler: Scheduler
   ): Props =
-    Props(new PeersClient(etcPeerManager, peerEventBus, blacklist, syncConfig, scheduler))
+    Props(new PeersClient(networkPeerManager, peerEventBus, blacklist, syncConfig, scheduler))
 
   type Requesters = Map[ActorRef, ActorRef]
 
@@ -268,6 +319,9 @@ object PeersClient {
 
   sealed trait PeerSelector
   case object BestPeer extends PeerSelector
+  case object BestSnapPeer extends PeerSelector
+  case object BestNodeDataPeer extends PeerSelector
+  case class ExcludingPeers(exclude: Set[PeerId]) extends PeerSelector
 
   def bestPeer(
       peersToDownloadFrom: Map[PeerId, PeerWithInfo],

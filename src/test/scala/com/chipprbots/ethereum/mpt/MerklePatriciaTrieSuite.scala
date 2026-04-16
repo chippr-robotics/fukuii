@@ -462,14 +462,14 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
     val trieAfterRemoval = trie.remove(key1)
 
     // Old trie still works
-    assert(trie.get(key1).getOrElse(Array.emptyByteArray).sameElements(value))
-    assert(trie.get(key2).getOrElse(Array.emptyByteArray).sameElements(value))
-    assert(trie.get(key3).getOrElse(Array.emptyByteArray).sameElements(value))
+    assert(trie.get(key1).getOrElse(Array.empty[Byte]).sameElements(value))
+    assert(trie.get(key2).getOrElse(Array.empty[Byte]).sameElements(value))
+    assert(trie.get(key3).getOrElse(Array.empty[Byte]).sameElements(value))
 
     // New trie is consistent
     assert(trieAfterRemoval.get(key1).isEmpty)
-    assert(trieAfterRemoval.get(key2).getOrElse(Array.emptyByteArray).sameElements(value))
-    assert(trieAfterRemoval.get(key3).getOrElse(Array.emptyByteArray).sameElements(value))
+    assert(trieAfterRemoval.get(key2).getOrElse(Array.empty[Byte]).sameElements(value))
+    assert(trieAfterRemoval.get(key3).getOrElse(Array.empty[Byte]).sameElements(value))
   }
 
   /** Tests whether the creation of a duplicated valid temporal extension node removes it's original copy. The creation

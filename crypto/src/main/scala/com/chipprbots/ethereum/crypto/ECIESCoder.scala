@@ -25,10 +25,16 @@ object ECIESCoder {
   @throws[IOException]
   @throws[InvalidCipherTextException]
   def decrypt(privKey: BigInteger, cipher: Array[Byte], macData: Option[Array[Byte]] = None): Array[Byte] = {
+    // Security: minimum ciphertext = ephemeral pubkey (65) + IV (16) + MAC (32) + at least 1 byte
+    // CVE-2026-22862: reject truncated ciphertexts before parsing components
+    if (cipher.length < OverheadSize + 1)
+      throw new InvalidCipherTextException(
+        s"Ciphertext too short: ${cipher.length} < ${OverheadSize + 1}"
+      )
     val is = new ByteArrayInputStream(cipher)
     val ephemBytes = new Array[Byte](2 * ((curve.getCurve.getFieldSize + 7) / 8) + 1)
     is.read(ephemBytes)
-    val ephem = curve.getCurve.decodePoint(ephemBytes)
+    val ephem = decodeAndValidatePoint(ephemBytes)
     val IV = new Array[Byte](KeySize / 8)
     is.read(IV)
     val cipherBody = new Array[Byte](is.available)

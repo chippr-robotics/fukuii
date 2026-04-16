@@ -25,7 +25,8 @@ object MiningConfigs {
     coinbase = coinbase,
     headerExtraData = ByteString.empty,
     blockCacheSize = blockCacheSize,
-    miningEnabled = false
+    miningEnabled = false,
+    gasLimitTarget = BigInt(8_000_000)
   )
 
   final val fullMiningConfig: FullMiningConfig[EthashConfig] = FullMiningConfig(miningConfig, ethashConfig)

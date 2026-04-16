@@ -55,7 +55,7 @@ After protocol negotiation to ETH68:
 3. **Result**: Incoming `BlockHeaders` responses don't match pattern, get ignored, `maxBlockNumber` never updated
 
 **Key Files Affected**:
-- `EtcPeerManagerActor.scala` - Pattern match on `BlockHeaders` in `updateMaxBlock()` and `updateForkAccepted()`
+- `NetworkPeerManagerActor.scala` - Pattern match on `BlockHeaders` in `updateMaxBlock()` and `updateForkAccepted()`
 - `PivotBlockSelector.scala` - Pattern match on `MessageFromPeer(blockHeaders: BlockHeaders, ...)`
 - `FastSync.scala` - ResponseReceived with `BlockHeaders`
 - `HeadersFetcher.scala` - AdaptedMessage with `BlockHeaders`
@@ -104,7 +104,7 @@ req := &Request{
 ### Decision Point
 
 We have `PeerInfo.remoteStatus.capability` (type: `Capability`) storing negotiated protocol:
-- `ETH63`, `ETH64`, `ETH65`, `ETC64` → pre-ETH66 (no RequestId)
+- `ETH63`, `ETH64`, `ETH65` → pre-ETH66 (no RequestId; ETC64 retired)
 - `ETH66`, `ETH67`, `ETH68` → ETH66+ (with RequestId)
 
 **Options Considered**:
@@ -126,7 +126,7 @@ We implement a system where message format is determined by the peer's negotiate
 ```scala
 def usesRequestId(capability: Capability): Boolean = capability match {
   case Capability.ETH66 | Capability.ETH67 | Capability.ETH68 => true
-  case _ => false // ETH63, ETH64, ETH65, ETC64
+  case _ => false // ETH63, ETH64, ETH65
 }
 ```
 
@@ -145,7 +145,7 @@ val message = if (Capability.usesRequestId(peerInfo.remoteStatus.capability)) {
 ```
 
 **Files Updated**:
-1. `EtcPeerManagerActor.scala` - Sends GetBlockHeaders after handshake
+1. `NetworkPeerManagerActor.scala` - Sends GetBlockHeaders after handshake
 2. `PivotBlockSelector.scala` - Sends GetBlockHeaders for pivot block selection
 3. `FastSync.scala` - Sends GetBlockHeaders during header chain sync
 4. `FastSyncBranchResolverActor.scala` - Sends GetBlockHeaders for branch resolution
@@ -173,7 +173,7 @@ message match {
 ```
 
 **Files Updated**:
-1. `EtcPeerManagerActor.scala` - `updateForkAccepted()`, `updateMaxBlock()`
+1. `NetworkPeerManagerActor.scala` - `updateForkAccepted()`, `updateMaxBlock()`
 2. `BlockFetcher.scala` - Response handling
 3. `HeadersFetcher.scala` - Response handling
 4. `FastSync.scala` - Response handling
@@ -274,7 +274,7 @@ The fallback decoding from Phase 1 (commit 4458be6) is **retained** for robustne
 - `MessageDecoders.scala` - Protocol-specific decoder selection
 
 **Message Sending** (protocol-aware creation):
-- `EtcPeerManagerActor.scala:109` - Post-handshake GetBlockHeaders
+- `NetworkPeerManagerActor.scala:109` - Post-handshake GetBlockHeaders
 - `PivotBlockSelector.scala:230` - Pivot block header request
 - `FastSync.scala:851` - Header chain sync request
 - `FastSyncBranchResolverActor.scala:179` - Branch resolution request
@@ -282,8 +282,8 @@ The fallback decoding from Phase 1 (commit 4458be6) is **retained** for robustne
 - `PeersClient.scala` - Generic message adaptation
 
 **Message Receiving** (dual-format pattern matching):
-- `EtcPeerManagerActor.scala:199-235` - updateForkAccepted
-- `EtcPeerManagerActor.scala:264-269` - updateMaxBlock
+- `NetworkPeerManagerActor.scala:199-235` - updateForkAccepted
+- `NetworkPeerManagerActor.scala:264-269` - updateMaxBlock
 - `PivotBlockSelector.scala:137` - Voting process
 - `FastSync.scala:219` - Response handling
 - `HeadersFetcher.scala:54,84` - Response handling
@@ -478,7 +478,7 @@ Bytes: 0x... 0x80 0xf8 0x...
 // Example peer capabilities after negotiation
 val peer1Capability = Capability.ETH68  // Uses ETH66 format
 val peer2Capability = Capability.ETH64  // Uses ETH62 format
-val peer3Capability = Capability.ETC64  // Uses ETH62 format
+val peer3Capability = Capability.ETH65  // Uses ETH62 format
 
 peer1Capability.usesRequestId  // true
 peer2Capability.usesRequestId  // false

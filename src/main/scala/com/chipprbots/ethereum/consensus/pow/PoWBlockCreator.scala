@@ -9,8 +9,8 @@ import cats.syntax.parallel._
 import scala.concurrent.duration.FiniteDuration
 
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
+import com.chipprbots.ethereum.consensus.mining.CoinbaseProvider
 import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
-import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.TaskActorOps
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
@@ -23,13 +23,12 @@ class PoWBlockCreator(
     val pendingTransactionsManager: ActorRef,
     val getTransactionFromPoolTimeout: FiniteDuration,
     mining: PoWMining,
-    ommersPool: ActorRef
+    ommersPool: ActorRef,
+    coinbaseProvider: CoinbaseProvider
 ) extends TransactionPicker {
 
   lazy val fullConsensusConfig = mining.config
-  private lazy val consensusConfig = fullConsensusConfig.generic
   lazy val miningConfig = fullConsensusConfig.specific
-  private lazy val coinbase: Address = consensusConfig.coinbase
   private lazy val blockGenerator: PoWBlockGenerator = mining.blockGenerator
 
   def getBlockForMining(
@@ -42,7 +41,7 @@ class PoWBlockCreator(
       blockGenerator.generateBlock(
         parentBlock,
         pendingTxs.pendingTransactions.map(_.stx.tx),
-        coinbase,
+        coinbaseProvider.get(),
         ommers.headers,
         initialWorldStateBeforeExecution
       )

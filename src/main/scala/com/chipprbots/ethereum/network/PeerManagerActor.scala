@@ -25,9 +25,9 @@ import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.TaskActorOps
 import com.chipprbots.ethereum.network.PeerActor.PeerClosedConnection
 import com.chipprbots.ethereum.network.PeerActor.Status.Handshaked
 import com.chipprbots.ethereum.network.PeerEventBusActor._
+import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
 import com.chipprbots.ethereum.network.discovery.Node
-import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
 
 import com.chipprbots.ethereum.network.handshaker.Handshaker
@@ -66,6 +66,11 @@ class PeerManagerActor(
 
   val triedNodes: mutable.Set[ByteString] = lruSet[ByteString](maxBlacklistedNodes)
 
+  /** In-process cache of peer statuses, updated reactively and via scheduled refresh. This allows GetPeers to return
+    * immediately without querying individual peer actors.
+    */
+  private var peerStatusCache: Map[PeerId, PeerActor.Status] = Map.empty
+
   implicit class ConnectedPeersOps(connectedPeers: ConnectedPeers) {
 
     /** Number of new connections the node should try to open at any given time. */
@@ -97,7 +102,13 @@ class PeerManagerActor(
   override def receive: Receive = {
     case StartConnecting =>
       scheduleNodesUpdate()
+      schedulePeerStatusRefresh()
       knownNodesManager ! KnownNodesManager.GetKnownNodes
+      // Also request discovered/bootstrap nodes immediately. On a fresh node, KnownNodes is empty
+      // but bootstrap/static nodes are available as alreadyDiscoveredNodes in PeerDiscoveryManager.
+      // Without this, the first connection attempt waits for updateNodesInitialDelay.
+      // Core-geth dials bootstrap nodes at t+0; we should too.
+      peerDiscoveryManager ! PeerDiscoveryManager.GetDiscoveredNodesInfo
       context.become(listening(ConnectedPeers.empty))
       unstashAll()
     case _ =>
@@ -111,6 +122,16 @@ class PeerManagerActor(
       peerConfiguration.updateNodesInterval,
       peerDiscoveryManager,
       PeerDiscoveryManager.GetDiscoveredNodesInfo
+    )
+  }
+
+  private def schedulePeerStatusRefresh(): Unit = {
+    implicit val ec = context.dispatcher
+    scheduler.scheduleWithFixedDelay(
+      10.seconds,
+      10.seconds,
+      self,
+      RefreshPeerStatuses
     )
   }
 
@@ -141,11 +162,29 @@ class PeerManagerActor(
   private def maybeConnectToRandomNode(connectedPeers: ConnectedPeers, node: Node): Unit =
     if (connectedPeers.outgoingConnectionDemand > 0) {
       if (connectedPeers.canConnectTo(node)) {
+        log.debug(
+          "Random node candidate {} accepted (outgoing demand: {}, tried: {}, pending: {})",
+          formatNodeForLogs(node),
+          connectedPeers.outgoingConnectionDemand,
+          triedNodes.size,
+          connectedPeers.pendingPeersCount
+        )
         triedNodes.add(node.id)
         self ! ConnectToPeer(node.toUri)
       } else {
+        log.debug(
+          "Random node candidate {} rejected (already connected or blacklisted). Requesting replacement",
+          formatNodeForLogs(node)
+        )
         peerDiscoveryManager ! PeerDiscoveryManager.GetRandomNodeInfo
       }
+    } else {
+      log.debug(
+        "Skipping random node {} because outgoing demand is zero (handshaked {}/{})",
+        formatNodeForLogs(node),
+        connectedPeers.handshakedPeersCount,
+        peerConfiguration.maxOutgoingPeers + peerConfiguration.maxIncomingPeers
+      )
     }
 
   private def maybeConnectToDiscoveredNodes(connectedPeers: ConnectedPeers, nodes: Set[Node]): Unit = {
@@ -164,7 +203,7 @@ class PeerManagerActor(
     NetworkMetrics.PendingPeersSize.set(connectedPeers.pendingPeersCount)
     NetworkMetrics.TriedPeersSize.set(triedNodes.size)
 
-    log.info(
+    log.debug(
       s"Total number of discovered nodes ${nodes.size}. " +
         s"Total number of connection attempts ${triedNodes.size}, blacklisted ${blacklist.keys.size} nodes. " +
         s"Handshaked ${connectedPeers.handshakedPeersCount}/${peerConfiguration.maxOutgoingPeers + peerConfiguration.maxIncomingPeers}, " +
@@ -189,6 +228,11 @@ class PeerManagerActor(
     if (connectedPeers.outgoingConnectionDemand > nodesToConnect.size) {
       peerDiscoveryManager ! PeerDiscoveryManager.GetRandomNodeInfo
     }
+  }
+
+  private def formatNodeForLogs(node: Node): String = {
+    val id = Hex.toHexString(node.id.take(6).toArray)
+    s"${getHostName(node.addr)}:${node.tcpPort}/$id"
   }
 
   private def handleConnections(connectedPeers: ConnectedPeers): Receive = {
@@ -245,11 +289,13 @@ class PeerManagerActor(
 
     validConnection match {
       case Right(address) =>
+        log.error("[HIVE-DEBUG] Accepting incoming connection from {} (pending={}/{})", remoteAddress, connectedPeers.incomingPendingPeersCount, peerConfiguration.maxPendingPeers)
         val (peer, newConnectedPeers) = createPeer(address, incomingConnection = true, connectedPeers)
         peer.ref ! PeerActor.HandleConnection(connection, remoteAddress)
         context.become(listening(newConnectedPeers))
 
       case Left(error) =>
+        log.error("[HIVE-DEBUG] Rejecting incoming connection from {}: {}", remoteAddress, error)
         handleConnectionErrors(error)
     }
   }
@@ -279,14 +325,61 @@ class PeerManagerActor(
 
   private def handleCommonMessages(connectedPeers: ConnectedPeers): Receive = {
     case GetPeers =>
-      pipeToRecipient(sender())(getPeers(connectedPeers.peers.values.toSet))
+      // Return cached statuses immediately — no actor asks needed.
+      // Cache is updated reactively on connect/disconnect/handshake and via scheduled refresh.
+      val cachedPeers = connectedPeers.peers.values.map { peer =>
+        val status = peerStatusCache.getOrElse(peer.id, PeerActor.Status.Connecting)
+        peer -> status
+      }.toMap
+      sender() ! Peers(cachedPeers)
+
+    case RefreshPeerStatuses =>
+      refreshPeerStatusCache(connectedPeers)
+
+    case PeerStatusCacheUpdated(statuses) =>
+      peerStatusCache = statuses.map { case (peer, status) => peer.id -> status }
 
     case SendMessage(message, peerId) if connectedPeers.getPeer(peerId).isDefined =>
       connectedPeers.getPeer(peerId).foreach(peer => peer.ref ! PeerActor.SendMessage(message))
 
+    case DisconnectPeerById(peerId) =>
+      val requester = sender()
+      connectedPeers.getPeer(peerId) match {
+        case Some(peer) =>
+          peer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.DisconnectRequested)
+          requester ! DisconnectPeerResponse(disconnected = true)
+        case None =>
+          requester ! DisconnectPeerResponse(disconnected = false)
+      }
+
+    case req: AddToBlacklistRequest =>
+      val requester = sender()
+      try {
+        val duration = req.duration.getOrElse(PeerManagerActor.DefaultPermanentBlacklistDuration)
+        val reason = Blacklist.BlacklistReason.getP2PBlacklistReasonByDescription(req.reason)
+        blacklist.add(PeerAddress(req.address), duration, reason)
+        requester ! AddToBlacklistResponse(added = true)
+      } catch {
+        case e: Exception =>
+          log.error(s"Failed to add address ${req.address} to blacklist", e)
+          requester ! AddToBlacklistResponse(added = false)
+      }
+
+    case req: RemoveFromBlacklistRequest =>
+      val requester = sender()
+      try {
+        blacklist.remove(PeerAddress(req.address))
+        requester ! RemoveFromBlacklistResponse(removed = true)
+      } catch {
+        case e: Exception =>
+          log.error(s"Failed to remove address ${req.address} from blacklist", e)
+          requester ! RemoveFromBlacklistResponse(removed = false)
+      }
+
     case Terminated(ref) =>
       val (terminatedPeersIds, newConnectedPeers) = connectedPeers.removeTerminatedPeer(ref)
       terminatedPeersIds.foreach { peerId =>
+        peerStatusCache = peerStatusCache - peerId
         peerEventBus ! Publish(PeerEvent.PeerDisconnected(peerId))
       }
       // Try to replace a lost connection with another one.
@@ -308,14 +401,14 @@ class PeerManagerActor(
         context.become(listening(connectedPeers))
 
       } else if (handshakedPeer.nodeId.exists(connectedPeers.hasHandshakedWith)) {
-        // FIXME: peers received after handshake should always have their nodeId defined, we could maybe later distinguish
-        //        it into PendingPeer/HandshakedPeer classes
-
         // Even though we do already validations for this, we might have missed it someone tried connecting to us at the
         // same time as we do
-        log.debug(s"Disconnecting from ${handshakedPeer.remoteAddress} as we are already connected to him")
+        log.debug(s"Disconnecting from ${handshakedPeer.remoteAddress} as we are already connected to them")
         handshakedPeer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected)
+        // Keep the current connectedPeers state; the Terminated message will clean up the peer
+        context.become(listening(connectedPeers))
       } else {
+        peerStatusCache = peerStatusCache + (handshakedPeer.id -> PeerActor.Status.Handshaked)
         context.become(listening(connectedPeers.promotePeerToHandshaked(handshakedPeer)))
       }
   }
@@ -339,6 +432,7 @@ class PeerManagerActor(
         incomingConnection
       )
 
+    peerStatusCache = peerStatusCache + (pendingPeer.id -> PeerActor.Status.Connecting)
     val newConnectedPeers = connectedPeers.addNewPendingPeer(pendingPeer)
 
     (pendingPeer, newConnectedPeers)
@@ -405,11 +499,17 @@ class PeerManagerActor(
     mappedF.pipeTo(recipient)
   }
 
-  private def getPeers(peers: Set[Peer]): IO[Peers] =
-    peers.toList
+  /** Background refresh of peer status cache using the existing parTraverse pattern. Results are piped back to self and
+    * applied to the cache.
+    */
+  private def refreshPeerStatusCache(connectedPeers: ConnectedPeers): Unit = {
+    val peers = connectedPeers.peers.values.toSet
+    val task = peers.toList
       .parTraverse(getPeerStatus)
       .map(_.flatten.toMap)
-      .map(Peers.apply)
+      .map(PeerStatusCacheUpdated.apply)
+    pipeToRecipient(self)(task)
+  }
 
   private def getPeerStatus(peer: Peer): IO[Option[(Peer, PeerActor.Status)]] = {
     implicit val timeout: Timeout = Timeout(2.seconds)
@@ -495,7 +595,14 @@ object PeerManagerActor {
       authHandshaker: AuthHandshaker,
       capabilities: List[Capability]
   ): (ActorContext, InetSocketAddress, Boolean) => ActorRef = { (ctx, address, incomingConnection) =>
-    val id: String = address.toString.filterNot(_ == '/')
+    // Sanitize address for use as Pekko actor path element.
+    // IPv6 addresses contain brackets (e.g. [2a01:4f8::2]:30303) which are illegal
+    // in actor paths. Replace all non-allowed characters to prevent
+    // InvalidActorNameException from crashing PeerManagerActor.
+    val id: String = address.toString.filterNot(_ == '/').map {
+      case '[' | ']' => '_'
+      case c         => c
+    }
     val props = PeerActor.props(
       address,
       config,
@@ -518,7 +625,8 @@ object PeerManagerActor {
     val waitForChainCheckTimeout: FiniteDuration
     val fastSyncHostConfiguration: FastSyncHostConfiguration
     val rlpxConfiguration: RLPxConfiguration
-    val networkId: Int
+    val networkId: Long
+    val p2pVersion: Int
     val updateNodesInitialDelay: FiniteDuration
     val updateNodesInterval: FiniteDuration
     val shortBlacklistDuration: FiniteDuration
@@ -558,6 +666,21 @@ object PeerManagerActor {
 
   case class SendMessage(message: MessageSerializable, peerId: PeerId)
 
+  // New messages for enhanced peer management
+  case class DisconnectPeerById(peerId: PeerId)
+  case class DisconnectPeerResponse(disconnected: Boolean)
+
+  case class AddToBlacklistRequest(address: String, duration: Option[FiniteDuration], reason: String)
+  case class AddToBlacklistResponse(added: Boolean)
+
+  case class RemoveFromBlacklistRequest(address: String)
+  case class RemoveFromBlacklistResponse(removed: Boolean)
+
+  /** Default blacklist duration when none specified (permanent blacklist). Set to 365 days as a practical "permanent"
+    * duration.
+    */
+  val DefaultPermanentBlacklistDuration: FiniteDuration = 365.days
+
   sealed abstract class ConnectionError
 
   case class MaxIncomingPendingConnections(connection: ActorRef) extends ConnectionError
@@ -572,6 +695,9 @@ object PeerManagerActor {
 
   case object SchedulePruneIncomingPeers
   case class PruneIncomingPeers(stats: PeerStatisticsActor.StatsForAll)
+
+  case object RefreshPeerStatuses
+  private case class PeerStatusCacheUpdated(statuses: Map[Peer, PeerActor.Status])
 
   /** Number of new connections the node should try to open at any given time. */
   def outgoingConnectionDemand(

@@ -134,30 +134,6 @@ class JsonRpcControllerEthSpec
     response should haveResult(expectedBlockResponse)
   }
 
-  it should "handle eth_getBlockByHash request (block with checkpoint)" taggedAs (
-    UnitTest,
-    RPCTest
-  ) in new JsonRpcControllerFixture {
-    val blockToRequest = blockWithCheckpoint
-    val blockWeight: ChainWeight = ChainWeight.zero.increase(blockToRequest.header)
-
-    blockchainWriter
-      .storeBlock(blockToRequest)
-      .and(blockchainWriter.storeChainWeight(blockToRequest.header.hash, blockWeight))
-      .commit()
-
-    val request: JsonRpcRequest = newJsonRpcRequest(
-      "eth_getBlockByHash",
-      List(JString(s"0x${blockToRequest.header.hashAsHexString}"), JBool(false))
-    )
-    val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
-
-    val expectedBlockResponse: JValue =
-      Extraction.decompose(BlockResponse(blockToRequest, fullTxs = false, weight = Some(blockWeight)))
-
-    response should haveResult(expectedBlockResponse)
-  }
-
   it should "handle eth_getBlockByHash request (block with treasuryOptOut)" taggedAs (
     UnitTest,
     RPCTest
@@ -209,31 +185,6 @@ class JsonRpcControllerEthSpec
     RPCTest
   ) in new JsonRpcControllerFixture {
     val blockToRequest = blockWithTreasuryOptOut
-    val blockWeight: ChainWeight = ChainWeight.zero.increase(blockToRequest.header)
-
-    blockchainWriter
-      .storeBlock(blockToRequest)
-      .and(blockchainWriter.storeChainWeight(blockToRequest.header.hash, blockWeight))
-      .commit()
-    blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number)
-
-    val request: JsonRpcRequest = newJsonRpcRequest(
-      "eth_getBlockByNumber",
-      List(JString(s"0x${Hex.toHexString(blockToRequest.header.number.toByteArray)}"), JBool(false))
-    )
-    val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
-
-    val expectedBlockResponse: JValue =
-      Extraction.decompose(BlockResponse(blockToRequest, fullTxs = false, weight = Some(blockWeight)))
-
-    response should haveResult(expectedBlockResponse)
-  }
-
-  it should "handle eth_getBlockByNumber request (block with checkpoint)" taggedAs (
-    UnitTest,
-    RPCTest
-  ) in new JsonRpcControllerFixture {
-    val blockToRequest = blockWithCheckpoint
     val blockWeight: ChainWeight = ChainWeight.zero.increase(blockToRequest.header)
 
     blockchainWriter
@@ -642,15 +593,7 @@ class JsonRpcControllerEthSpec
 
   it should "eth_sign" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
 
-    (personalService.sign _)
-      .expects(
-        SignRequest(
-          ByteString(Hex.decode("deadbeaf")),
-          Address(ByteString(Hex.decode("9b2055d370f73ec7d8a03e965129118dc8f5bf83"))),
-          None
-        )
-      )
-      .returns(IO.pure(Right(SignResponse(sig))))
+    personalService.signFn = _ => IO.pure(Right(SignResponse(sig)))
 
     val request: JsonRpcRequest = newJsonRpcRequest(
       "eth_sign",

@@ -5,8 +5,8 @@ import cats.effect.SyncIO
 import com.chipprbots.ethereum.forkid.Connect
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.forkid.ForkIdValidator
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.RemoteStatus
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Capability
@@ -14,15 +14,13 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH64
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 
 case class EthNodeStatus64ExchangeState(
-    handshakerConfiguration: EtcHandshakerConfiguration,
-    negotiatedCapability: Capability
+    handshakerConfiguration: NetworkHandshakerConfiguration,
+    negotiatedCapability: Capability,
+    supportsSnap: Boolean = false,
+    peerCapabilities: List[Capability] = List.empty
 ) extends EtcNodeStatusExchangeState[ETH64.Status] {
 
   import handshakerConfiguration._
-  
-  // Maximum threshold for bootstrap pivot block usage (100,000 blocks)
-  // This limits the threshold to prevent using the pivot too long for very high pivot values
-  private val MaxBootstrapPivotThreshold = BigInt(100000)
 
   def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = { case status: ETH64.Status =>
     import ForkIdValidator.syncIoLogger
@@ -38,7 +36,12 @@ case class EthNodeStatus64ExchangeState(
 
     val localBestBlock = blockchainReader.getBestBlockNumber()
     val localGenesisHash = blockchainReader.genesisHeader.hash
-    val localForkId = ForkId.create(localGenesisHash, blockchainConfig)(localBestBlock)
+    // Use current system time if best block is genesis (timestamp 0) — this happens at startup
+    // before Engine API imports any blocks. Without this, ForkID incorrectly reports pre-Shanghai
+    // and all post-merge peers reject us.
+    val storedTimestamp = blockchainReader.getBlockHeaderByNumber(localBestBlock).map(_.unixTimestamp).getOrElse(0L)
+    val localBestTimestamp = if (storedTimestamp == 0L) System.currentTimeMillis() / 1000 else storedTimestamp
+    val localForkId = ForkId.create(localGenesisHash, blockchainConfig)(localBestBlock, localBestTimestamp)
 
     log.info(
       "STATUS_EXCHANGE: Local state - bestBlock={}, genesisHash={}, localForkId={}",
@@ -68,8 +71,12 @@ case class EthNodeStatus64ExchangeState(
             // EIP-2124: ForkId validation replaces the fork block exchange for ETH64+
             // When ForkId validation passes, we go directly to connected state
             // without needing to do the old-style fork block handshake
-            log.info("STATUS_EXCHANGE: ForkId validation passed - accepting peer connection (skipping fork block exchange per EIP-2124)")
-            ConnectedState(PeerInfo.withForkAccepted(RemoteStatus(status, negotiatedCapability)))
+            log.info(
+              "STATUS_EXCHANGE: ForkId validation passed - accepting peer connection (skipping fork block exchange per EIP-2124)"
+            )
+            ConnectedState(
+              PeerInfo.withForkAccepted(RemoteStatus(status, negotiatedCapability, supportsSnap, peerCapabilities))
+            )
           case other =>
             log.warn(
               "STATUS_EXCHANGE: ForkId validation failed with result: {} - disconnecting peer as UselessPeer. Local ForkId: {}, Remote ForkId: {}",
@@ -86,61 +93,34 @@ case class EthNodeStatus64ExchangeState(
   override protected def createStatusMsg(): MessageSerializable = {
     val bestBlockHeader = getBestBlockHeader()
     val bestBlockNumber = blockchainReader.getBestBlockNumber()
-    
+
     val chainWeight = blockchainReader
       .getChainWeightByHash(bestBlockHeader.hash)
       .getOrElse(
         throw new IllegalStateException(s"Chain weight not found for hash ${bestBlockHeader.hash}")
       )
-    
+
     val genesisHash = blockchainReader.genesisHeader.hash
-    
-    // EIP-2124: Use bootstrap pivot block for ForkId calculation when syncing
-    // This ensures we advertise a ForkId compatible with synced peers, avoiding
-    // immediate disconnection due to ForkId mismatch (issue #574)
-    // 
-    // During initial sync (both fast sync and regular sync), we use the bootstrap
-    // pivot block for ForkId calculation instead of the actual best block number.
-    // This prevents peer disconnections that occur when:
-    // - Regular sync: Node at block 1-1000 tries to connect to peers at block 19M+
-    // - The low block number produces an incompatible ForkId causing peer rejection
-    // 
-    // We continue using the bootstrap pivot block until the node is within a threshold
-    // distance from the pivot, where the threshold is the minimum of (10% of the pivot
-    // block number, MaxBootstrapPivotThreshold (100,000) blocks).
-    // 
-    // For example, if the pivot is at 19,250,000:
-    // - 10% = 1,925,000 blocks
-    // - threshold = min(1,925,000, 100,000) = 100,000 blocks
-    // - Use pivot when: bestBlockNumber < 19,150,000
-    // - Switch to actual when: bestBlockNumber >= 19,150,000
-    val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
-    val forkIdBlockNumber = if (bootstrapPivotBlock > 0) {
-      // Calculate the threshold: maximum distance from pivot block before switching to actual number
-      val threshold = (bootstrapPivotBlock / 10).min(MaxBootstrapPivotThreshold)
-      val shouldUseBootstrap = bestBlockNumber < (bootstrapPivotBlock - threshold)
-      
-      if (shouldUseBootstrap) {
-        log.info(
-          "STATUS_EXCHANGE: Using bootstrap pivot block {} for ForkId calculation (actual best block: {}, threshold: {})",
-          bootstrapPivotBlock,
-          bestBlockNumber,
-          threshold
-        )
-        bootstrapPivotBlock
-      } else {
-        log.info(
-          "STATUS_EXCHANGE: Node synced close to pivot block - switching to actual block number {} for ForkId (pivot: {}, threshold: {})",
-          bestBlockNumber,
-          bootstrapPivotBlock,
-          threshold
-        )
-        bestBlockNumber
-      }
-    } else {
-      bestBlockNumber
-    }
-    val forkId = ForkId.create(genesisHash, blockchainConfig)(forkIdBlockNumber)
+
+    // ALIGNMENT WITH CORE-GETH: Use actual current block number for ForkId calculation
+    // Core-geth implementation (eth/handler.go):
+    //   head = h.chain.CurrentHeader()
+    //   number = head.Number.Uint64()
+    //   forkID := forkid.NewID(h.chain.Config(), genesis, number, head.Time)
+    //
+    // Core-geth does NOT use checkpoints or pivot blocks for status messages.
+    // It always uses the actual current block for both bestHash and ForkId calculation.
+    //
+    // Previous implementation used bootstrap pivot block for ForkId to avoid peer
+    // disconnections at genesis, but this creates a mismatch with core-geth behavior
+    // where ForkId and bestHash refer to different blocks.
+    //
+    // To align with core-geth: Use actual bestBlockNumber for ForkId calculation.
+    val forkIdBlockNumber = bestBlockNumber
+    // Use system time when at genesis to correctly advertise post-merge fork status
+    val forkIdTimestamp =
+      if (bestBlockHeader.unixTimestamp == 0L) System.currentTimeMillis() / 1000 else bestBlockHeader.unixTimestamp
+    val forkId = ForkId.create(genesisHash, blockchainConfig)(forkIdBlockNumber, forkIdTimestamp)
 
     val status = ETH64.Status(
       protocolVersion = negotiatedCapability.version,

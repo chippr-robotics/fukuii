@@ -17,8 +17,8 @@ import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator.BlockV
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.ledger.BlockExecutionError.ValidationAfterExecError
 import com.chipprbots.ethereum.ledger._
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.RemoteStatus
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.handshaker.ConnectedState
 import com.chipprbots.ethereum.network.handshaker.DisconnectedState
 import com.chipprbots.ethereum.network.handshaker.Handshaker

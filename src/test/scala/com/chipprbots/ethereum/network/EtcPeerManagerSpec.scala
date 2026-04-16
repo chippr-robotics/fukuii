@@ -20,7 +20,7 @@ import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
-import com.chipprbots.ethereum.network.EtcPeerManagerActor._
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor._
 import com.chipprbots.ethereum.network.PeerActor.DisconnectPeer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnected
@@ -31,7 +31,6 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
-import com.chipprbots.ethereum.network.p2p.messages.ETC64
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.testing.Tags._
@@ -76,32 +75,6 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     // then
     requestSender.send(peersInfoHolder, PeerInfoRequest(peer1.id))
     val expectedPeerInfo: PeerInfo = initialPeerInfo
-      .withBestBlockData(initialPeerInfo.maxBlockNumber + 4, firstHeader.hash)
-      .withChainWeight(newBlockWeight)
-    requestSender.expectMsg(PeerInfoResponse(Some(expectedPeerInfo)))
-  }
-
-  it should "update max peer when receiving new block ETC64" taggedAs (UnitTest, NetworkTest) in new TestSetup {
-    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
-    setupNewPeer(peer1, peer1Probe, peer1InfoETC64)
-
-    // given
-    val newBlockWeight: ChainWeight = ChainWeight.totalDifficultyOnly(300)
-    val firstHeader: BlockHeader = baseBlockHeader.copy(number = peer1Info.maxBlockNumber + 4)
-    val firstBlock: com.chipprbots.ethereum.network.p2p.messages.ETC64.NewBlock =
-      ETC64.NewBlock(Block(firstHeader, BlockBody(Nil, Nil)), newBlockWeight)
-
-    val secondHeader: BlockHeader = baseBlockHeader.copy(number = peer2Info.maxBlockNumber + 2)
-    val secondBlock: com.chipprbots.ethereum.network.p2p.messages.ETC64.NewBlock =
-      ETC64.NewBlock(Block(secondHeader, BlockBody(Nil, Nil)), newBlockWeight)
-
-    // when
-    peersInfoHolder ! MessageFromPeer(firstBlock, peer1.id)
-    peersInfoHolder ! MessageFromPeer(secondBlock, peer1.id)
-
-    // then
-    requestSender.send(peersInfoHolder, PeerInfoRequest(peer1.id))
-    val expectedPeerInfo: PeerInfo = initialPeerInfoETC64
       .withBestBlockData(initialPeerInfo.maxBlockNumber + 4, firstHeader.hash)
       .withChainWeight(newBlockWeight)
     requestSender.expectMsg(PeerInfoResponse(Some(expectedPeerInfo)))
@@ -164,29 +137,6 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     requestSender.expectMsg(
       PeerInfoResponse(Some(peer1Info.withChainWeight(ChainWeight.totalDifficultyOnly(newBlock.totalDifficulty))))
     )
-  }
-
-  it should "update the peer chain weight when receiving a ETC64.NewBlock" taggedAs (
-    UnitTest,
-    NetworkTest
-  ) in new TestSetup {
-    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
-    setupNewPeer(peer1, peer1Probe, peer1InfoETC64)
-
-    // given
-    val newBlock: com.chipprbots.ethereum.network.p2p.messages.ETC64.NewBlock = ETC64.NewBlock(
-      baseBlock,
-      initialPeerInfoETC64.chainWeight
-        .increaseTotalDifficulty(1)
-        .copy(lastCheckpointNumber = initialPeerInfoETC64.chainWeight.lastCheckpointNumber + 1)
-    )
-
-    // when
-    peersInfoHolder ! MessageFromPeer(newBlock, peer1.id)
-
-    // then
-    requestSender.send(peersInfoHolder, PeerInfoRequest(peer1.id))
-    requestSender.expectMsg(PeerInfoResponse(Some(peer1InfoETC64.withChainWeight(newBlock.chainWeight))))
   }
 
   it should "update the fork accepted when receiving the fork block" taggedAs (UnitTest, NetworkTest) in new TestSetup {
@@ -286,12 +236,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
   ) in new TestSetup {
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
 
-    val genesisStatus: RemoteStatus = peerStatus.copy(bestHash = Fixtures.Blocks.Genesis.header.hash)
-    val genesisInfo: PeerInfo = initialPeerInfo.copy(
-      remoteStatus = genesisStatus,
-      maxBlockNumber = Fixtures.Blocks.Genesis.header.number,
-      bestBlockHash = Fixtures.Blocks.Genesis.header.hash
-    )
+    val genesisInfo: PeerInfo = createGenesisPeerInfo()
 
     // Freshly handshaked peer without best block determined
     setupNewPeer(freshPeer, freshPeerProbe, genesisInfo)
@@ -306,6 +251,124 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     // receiving best block does not change a thing, as peer best block is it genesis
     requestSender.send(peersInfoHolder, GetHandshakedPeers)
     requestSender.expectMsg(HandshakedPeers(Map(freshPeer -> genesisInfo)))
+  }
+
+  it should "skip GetBlockHeaders request when peer is at genesis to avoid disconnect" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+
+    // Create a peer at genesis (bestHash == genesisHash)
+    val genesisInfo: PeerInfo = createGenesisPeerInfo()
+
+    // Send handshake successful for peer at genesis
+    peersInfoHolder ! PeerHandshakeSuccessful(peer1, genesisInfo)
+
+    // Expect subscriptions as usual
+    peerEventBus.expectMsg(Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer1.id))))
+    peerEventBus.expectMsg(
+      Subscribe(
+        MessageClassifier(
+          Set(
+            Codes.BlockHeadersCode,
+            Codes.NewBlockCode,
+            Codes.NewBlockHashesCode,
+            // SNAP protocol response codes
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.AccountRangeCode,
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.StorageRangesCode,
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.TrieNodesCode,
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.ByteCodesCode
+          ),
+          PeerSelector.WithId(peer1.id)
+        )
+      )
+    )
+
+    // Verify NO GetBlockHeaders request is sent to avoid disconnect with reason 0x10 (Other)
+    // Many peers disconnect genesis-only nodes as a peer selection policy
+    peer1Probe.expectNoMessage()
+
+    // Verify peer is still added to handshaked peers
+    requestSender.send(peersInfoHolder, PeerInfoRequest(peer1.id))
+    requestSender.expectMsg(PeerInfoResponse(Some(genesisInfo)))
+  }
+
+  it should "route SNAP protocol messages to registered SNAPSyncController" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetupWithSnapSync {
+    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+
+    // Register SNAP sync controller
+    peersInfoHolder ! RegisterSnapSyncController(snapSyncController.ref)
+
+    // Setup a peer
+    setupNewPeer(peer1, peer1Probe, peer1Info)
+
+    // Create SNAP protocol messages
+    import com.chipprbots.ethereum.network.p2p.messages.SNAP._
+
+    val accountRange = AccountRange(
+      requestId = BigInt(1),
+      accounts = Seq.empty,
+      proof = Seq.empty
+    )
+
+    val storageRanges = StorageRanges(
+      requestId = BigInt(2),
+      slots = Seq.empty,
+      proof = Seq.empty
+    )
+
+    val trieNodes = TrieNodes(
+      requestId = BigInt(3),
+      nodes = Seq.empty
+    )
+
+    val byteCodes = ByteCodes(
+      requestId = BigInt(4),
+      codes = Seq.empty
+    )
+
+    // When SNAP messages are received from peer
+    peersInfoHolder ! MessageFromPeer(accountRange, peer1.id)
+    peersInfoHolder ! MessageFromPeer(storageRanges, peer1.id)
+    peersInfoHolder ! MessageFromPeer(trieNodes, peer1.id)
+    peersInfoHolder ! MessageFromPeer(byteCodes, peer1.id)
+
+    // Then they should be routed to SNAPSyncController
+    snapSyncController.expectMsg(accountRange)
+    snapSyncController.expectMsg(storageRanges)
+    snapSyncController.expectMsg(trieNodes)
+    snapSyncController.expectMsg(byteCodes)
+  }
+
+  it should "handle SNAP messages gracefully when SNAPSyncController is not registered" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+
+    // Setup a peer without registering SNAP sync controller
+    setupNewPeer(peer1, peer1Probe, peer1Info)
+
+    // Create a SNAP protocol message
+    import com.chipprbots.ethereum.network.p2p.messages.SNAP._
+
+    val accountRange = AccountRange(
+      requestId = BigInt(1),
+      accounts = Seq.empty,
+      proof = Seq.empty
+    )
+
+    // When SNAP message is received without registered controller
+    // It should not crash, just ignore the routing
+    peersInfoHolder ! MessageFromPeer(accountRange, peer1.id)
+
+    // Peer info should still be updated normally
+    requestSender.send(peersInfoHolder, PeerInfoRequest(peer1.id))
+    requestSender.expectMsg(PeerInfoResponse(Some(peer1Info)))
   }
 
   trait TestSetup extends EphemBlockchainTestSetup {
@@ -332,13 +395,22 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
       bestBlockHash = peerStatus.bestHash
     )
 
-    val initialPeerInfoETC64: PeerInfo = PeerInfo(
-      remoteStatus = peerStatus.copy(capability = Capability.ETC64),
-      chainWeight = peerStatus.chainWeight,
-      forkAccepted = false,
-      maxBlockNumber = Fixtures.Blocks.Block3125369.header.number,
-      bestBlockHash = peerStatus.bestHash
-    )
+    // Helper to create a PeerInfo for a peer at genesis
+    // Sets both bestHash and genesisHash to ensure isAtGenesis() returns true.
+    // In production, genesisHash should already be set correctly from handshake,
+    // but we explicitly set both here for test clarity and to avoid test brittleness.
+    def createGenesisPeerInfo(basePeerInfo: PeerInfo = initialPeerInfo): PeerInfo = {
+      val genesisHash = Fixtures.Blocks.Genesis.header.hash
+      val genesisStatus: RemoteStatus = basePeerInfo.remoteStatus.copy(
+        bestHash = genesisHash,
+        genesisHash = genesisHash // Explicitly set to match bestHash for isAtGenesis() == true
+      )
+      basePeerInfo.copy(
+        remoteStatus = genesisStatus,
+        maxBlockNumber = Fixtures.Blocks.Genesis.header.number,
+        bestBlockHash = genesisHash
+      )
+    }
 
     val fakeNodeId: ByteString = ByteString()
 
@@ -346,7 +418,6 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     val peer1: Peer =
       Peer(PeerId("peer1"), new InetSocketAddress("127.0.0.1", 1), peer1Probe.ref, false, nodeId = Some(fakeNodeId))
     val peer1Info: PeerInfo = initialPeerInfo.withForkAccepted(false)
-    val peer1InfoETC64: PeerInfo = initialPeerInfoETC64.withForkAccepted(false)
     val peer2Probe: TestProbe = TestProbe()
     val peer2: Peer =
       Peer(PeerId("peer2"), new InetSocketAddress("127.0.0.1", 2), peer2Probe.ref, false, nodeId = Some(fakeNodeId))
@@ -365,7 +436,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
 
     val peersInfoHolder: TestActorRef[Nothing] = TestActorRef(
       Props(
-        new EtcPeerManagerActor(
+        new NetworkPeerManagerActor(
           peerManager.ref,
           peerEventBus.ref,
           storagesInstance.storages.appStateStorage,
@@ -389,15 +460,32 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
       peerEventBus.expectMsg(
         Subscribe(
           MessageClassifier(
-            Set(Codes.BlockHeadersCode, Codes.NewBlockCode, Codes.NewBlockHashesCode),
+            Set(
+              Codes.BlockHeadersCode,
+              Codes.NewBlockCode,
+              Codes.NewBlockHashesCode,
+              // SNAP protocol response codes
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.AccountRangeCode,
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.StorageRangesCode,
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.TrieNodesCode,
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.ByteCodesCode
+            ),
             PeerSelector.WithId(peer.id)
           )
         )
       )
 
-      // Peer should receive request for highest block
-      peerProbe.expectMsg(PeerActor.SendMessage(GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, false)))
+      // Peer should receive request for highest block UNLESS peer is at genesis
+      // When peer is at genesis, no GetBlockHeaders is sent to avoid triggering
+      // disconnect with reason 0x10 (Other) from peers that reject genesis-only nodes
+      if (!peerInfo.isAtGenesis) {
+        peerProbe.expectMsg(PeerActor.SendMessage(GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, false)))
+      }
     }
+  }
+
+  trait TestSetupWithSnapSync extends TestSetup {
+    val snapSyncController: TestProbe = TestProbe()
   }
 
 }

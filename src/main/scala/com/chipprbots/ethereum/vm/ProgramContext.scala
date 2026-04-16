@@ -14,8 +14,17 @@ object ProgramContext {
   ): ProgramContext[W, S] = {
     import stx.tx
     val accessList = Transaction.accessList(tx)
+    val authListSize = tx match {
+      case sct: SetCodeTransaction => sct.authorizationList.size
+      case _                       => 0
+    }
     val gasLimit =
-      tx.gasLimit - evmConfig.calcTransactionIntrinsicGas(tx.payload, tx.isContractInit, accessList)
+      tx.gasLimit - evmConfig.calcTransactionIntrinsicGas(tx.payload, tx.isContractInit, accessList, authListSize)
+
+    val blobHashes = tx match {
+      case blob: BlobTransaction => blob.blobVersionedHashes
+      case _ => Seq.empty
+    }
 
     ProgramContext(
       callerAddr = senderAddress,
@@ -34,7 +43,8 @@ object ProgramContext {
       evmConfig = evmConfig,
       originalWorld = world,
       warmAddresses = accessList.map(_.address).toSet,
-      warmStorage = accessList.flatMap(i => i.storageKeys.map((i.address, _))).toSet
+      warmStorage = accessList.flatMap(i => i.storageKeys.map((i.address, _))).toSet,
+      blobVersionedHashes = blobHashes
     )
   }
 }
@@ -99,5 +109,9 @@ case class ProgramContext[W <: WorldStateProxy[W, S], S <: Storage[S]](
     staticCtx: Boolean = false,
     originalWorld: W,
     warmAddresses: Set[Address],
-    warmStorage: Set[(Address, BigInt)]
+    warmStorage: Set[(Address, BigInt)],
+    transientStorage: Map[(Address, BigInt), BigInt] = Map.empty,
+    precompileRelocations: Map[Address, Address] = Map.empty,
+    blobVersionedHashes: Seq[ByteString] = Seq.empty,
+    traceTransfers: Boolean = false
 )

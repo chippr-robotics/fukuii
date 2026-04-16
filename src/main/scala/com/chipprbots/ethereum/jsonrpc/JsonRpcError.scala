@@ -48,6 +48,20 @@ object JsonRpcError extends JsonMethodsImplicits {
   final val MiningIsNotEthash: JsonRpcError =
     JsonRpcError(200, s"The mining algorithm is not ${Protocol.Names.PoW}", None)
 
+  // eth_simulateV1 error codes (EIP-7732 / execution-apis spec)
+  def SimulateNonceTooLow(msg: String): JsonRpcError = JsonRpcError(-38010, msg, None)
+  def SimulateNonceTooHigh(msg: String): JsonRpcError = JsonRpcError(-38011, msg, None)
+  def SimulateBaseFeeTooLow(msg: String): JsonRpcError = JsonRpcError(-38012, msg, None)
+  def SimulateIntrinsicGasTooLow(msg: String): JsonRpcError = JsonRpcError(-38013, msg, None)
+  def SimulateInsufficientFunds(msg: String): JsonRpcError = JsonRpcError(-38014, msg, None)
+  def SimulateBlockGasLimitExceeded(msg: String): JsonRpcError = JsonRpcError(-38015, msg, None)
+  def SimulateBlockNumberNotIncreasing(msg: String): JsonRpcError = JsonRpcError(-38020, msg, None)
+  def SimulateTimestampNotIncreasing(msg: String): JsonRpcError = JsonRpcError(-38021, msg, None)
+  def SimulateMoveToSelf(msg: String): JsonRpcError = JsonRpcError(-38022, msg, None)
+  def SimulateMoveToSameTarget(msg: String): JsonRpcError = JsonRpcError(-38023, msg, None)
+  def SimulateSenderNotEOA(msg: String): JsonRpcError = JsonRpcError(-38024, msg, None)
+  def SimulateClientLimitExceeded(msg: String): JsonRpcError = JsonRpcError(-38026, msg, None)
+
   def executionError(reasons: List[EthCustomError]): JsonRpcError = JsonRpcError(3, "Execution error", reasons)
   val NodeNotFound: JsonRpcError = executionError(List(EthCustomError.DoesntExist("State node")))
   val BlockNotFound: JsonRpcError = executionError(List(EthCustomError.DoesntExist("Block")))

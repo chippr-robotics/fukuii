@@ -47,18 +47,20 @@ class ReferenceCountNodeStorage(nodeStorage: NodesStorage, bn: BigInt) extends N
     val upsertChanges = prepareUpsertChanges(toUpsert, bn)
     val changes = prepareRemovalChanges(toRemove, upsertChanges, bn)
 
-    val (toUpsertUpdated, snapshots) =
-      changes.foldLeft((Seq.empty[(NodeHash, NodeEncoded)], Seq.empty[StoredNodeSnapshot])) {
-        case ((upsertAcc, snapshotAcc), (key, (storedNode, theSnapshot))) =>
-          // Update it in DB
+    val (toUpsertUpdated, snapshots) = {
+      // Use List prepend (O(1)) instead of Seq append (O(n)) to avoid O(n²) for large node sets
+      val (upsertRevAcc, snapshotRevAcc) =
+        changes.foldLeft((List.empty[(NodeHash, NodeEncoded)], List.empty[StoredNodeSnapshot])) {
+          case ((upsertAcc, snapshotAcc), (key, (storedNode, theSnapshot))) =>
+            // if after update number references drop to zero mark node as possible for deletion after x blocks
+            if (storedNode.references == 0) {
+              currentDeathRow = currentDeathRow ++ key
+            }
 
-          // if after update number references drop to zero mark node as possible for deletion after x blocks
-          if (storedNode.references == 0) {
-            currentDeathRow = currentDeathRow ++ key
-          }
-
-          (upsertAcc :+ (key -> storedNodeToBytes(storedNode)), snapshotAcc :+ theSnapshot)
-      }
+            ((key -> storedNodeToBytes(storedNode)) :: upsertAcc, theSnapshot :: snapshotAcc)
+        }
+      (upsertRevAcc.reverse, snapshotRevAcc.reverse)
+    }
 
     val snapshotToSave: Seq[(NodeHash, Array[Byte])] = getSnapshotsToSave(bn, snapshots)
 

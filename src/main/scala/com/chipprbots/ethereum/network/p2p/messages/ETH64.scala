@@ -16,7 +16,7 @@ object ETH64 {
 
   case class Status(
       protocolVersion: Int,
-      networkId: Int,
+      networkId: Long,
       totalDifficulty: BigInt,
       bestHash: ByteString,
       genesisHash: ByteString,
@@ -73,7 +73,7 @@ object ETH64 {
             ) =>
           Status(
             ByteUtils.bytesToBigInt(protocolVersionBytes).toInt,
-            ByteUtils.bytesToBigInt(networkIdBytes).toInt,
+            ByteUtils.bytesToBigInt(networkIdBytes).toLong,
             ByteUtils.bytesToBigInt(totalDifficultyBytes),
             ByteString(bestHashBytes),
             ByteString(genesisHashBytes),

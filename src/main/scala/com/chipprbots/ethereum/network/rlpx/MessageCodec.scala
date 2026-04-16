@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.network.rlpx
 
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
 
 import org.apache.pekko.util.ByteString
 
@@ -11,7 +11,6 @@ import scala.util.Try
 import org.xerial.snappy.Snappy
 import org.bouncycastle.util.encoders.Hex
 
-import com.chipprbots.ethereum.network.handshaker.EtcHelloExchangeState
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageDecoder
 import com.chipprbots.ethereum.network.p2p.MessageDecoder.DecodingError
@@ -21,34 +20,111 @@ import com.chipprbots.ethereum.utils.Logger
 
 object MessageCodec {
   val MaxFramePayloadSize: Int = Int.MaxValue // no framing
-  // 16Mb in base 2
-  val MaxDecompressedLength = 16777216
+  // maxUint24 = 16,777,215 bytes (matching Core-Geth standard)
+  // Core-Geth uses maxUint24 (2^24 - 1) for maximum message size
+  val MaxDecompressedLength = 16777215
   // Maximum bytes to show fully in hex strings (larger data will be truncated)
   val MaxFullHexLength = 64
 
-  /** Utility method to truncate hex strings for logging.
-    * For data up to MaxFullHexLength bytes: shows complete hex string
-    * For larger data: shows first 32 bytes + "..." + last 32 bytes
+  final class CompressionPolicy private (
+      val compressOutbound: Boolean,
+      private val inboundCompressionNegotiated: Boolean,
+      initialExpectInboundCompressed: Boolean
+  ) {
+    private val expectInboundFlag =
+      new AtomicBoolean(initialExpectInboundCompressed && inboundCompressionNegotiated)
+
+    def expectInboundCompressed: Boolean = expectInboundFlag.get()
+
+    /** Enable inbound compression if it was negotiated during the handshake. Returns true only when the flag
+      * transitioned from false -> true so callers can emit idempotent logs.
+      */
+    def enableInboundCompression(): Boolean =
+      inboundCompressionNegotiated && expectInboundFlag.compareAndSet(false, true)
+
+    def isInboundCompressionNegotiated: Boolean = inboundCompressionNegotiated
+  }
+
+  object CompressionPolicy {
+    private val SnappySupportedFromP2pVersion = 5
+
+    def apply(compressOutbound: Boolean, expectInboundCompressed: Boolean): CompressionPolicy =
+      new CompressionPolicy(
+        compressOutbound = compressOutbound,
+        inboundCompressionNegotiated = expectInboundCompressed,
+        initialExpectInboundCompressed = expectInboundCompressed
+      )
+
+    def fromHandshake(localAdvertisedP2pVersion: Int, remotePeerP2pVersion: Long): CompressionPolicy = {
+      val localSupportsSnappy = localAdvertisedP2pVersion >= SnappySupportedFromP2pVersion
+      val remoteSupportsSnappy = remotePeerP2pVersion >= SnappySupportedFromP2pVersion
+      val compressionNegotiated = localSupportsSnappy && remoteSupportsSnappy
+
+      new CompressionPolicy(
+        compressOutbound = compressionNegotiated,
+        inboundCompressionNegotiated = compressionNegotiated,
+        // When compression is negotiated, expect compressed messages immediately
+        // (Hello is handled separately before MessageCodec is created)
+        initialExpectInboundCompressed = compressionNegotiated
+      )
+    }
+
+    def supportsSnappy(p2pVersion: Long): Boolean = p2pVersion >= SnappySupportedFromP2pVersion
+  }
+
+  /** Utility method to truncate hex strings for logging. For data up to MaxFullHexLength bytes: shows complete hex
+    * string For larger data: shows first 32 bytes + "..." + last 32 bytes
     */
-  def truncateHex(data: Array[Byte]): String = {
+  def truncateHex(data: Array[Byte]): String =
     if (data.length <= MaxFullHexLength) {
       Hex.toHexString(data)
     } else {
       Hex.toHexString(data.take(32)) + "..." + Hex.toHexString(data.takeRight(32))
     }
-  }
 }
 
 class MessageCodec(
-    frameCodec: FrameCodec,
+    val frameCodec: FrameCodec,
     messageDecoder: MessageDecoder,
-    val remotePeer2PeerVersion: Long
+    val remotePeer2PeerVersion: Long,
+    val remoteClientId: String,
+    compressionPolicy: MessageCodec.CompressionPolicy
 ) extends Logger {
   import MessageCodec._
 
   val contextIdCounter = new AtomicInteger
 
-  // TODO: ETCM-402 - messageDecoder should use negotiated protocol version
+  log.info(
+    "COMPRESSION_POLICY: peerClientId={}, peerP2pVersion={}, compressOutbound={}, expectInboundCompressed={}",
+    remoteClientId,
+    remotePeer2PeerVersion,
+    compressionPolicy.compressOutbound,
+    compressionPolicy.expectInboundCompressed
+  )
+
+  def enableInboundCompression(reason: String): Unit =
+    if (compressionPolicy.enableInboundCompression()) {
+      log.info(
+        "COMPRESSION_POLICY_UPDATE: peerClientId={}, peerP2pVersion={}, reason={}, expectInboundCompressed=true",
+        remoteClientId,
+        remotePeer2PeerVersion,
+        reason
+      )
+    } else if (!compressionPolicy.isInboundCompressionNegotiated) {
+      log.debug(
+        "COMPRESSION_POLICY_UPDATE: Skipping inbound compression enable for peer {} - not negotiated (reason={})",
+        remoteClientId,
+        reason
+      )
+    } else {
+      log.debug(
+        "COMPRESSION_POLICY_UPDATE: Inbound compression already enabled for peer {}, reason={}",
+        remoteClientId,
+        reason
+      )
+    }
+
+  // TODO: messageDecoder should use negotiated protocol version
   def readMessages(data: ByteString): Seq[Either[DecodingError, Message]] = {
     log.debug("readMessages: Received {} bytes of data, p2pVersion: {}", data.length, remotePeer2PeerVersion)
     val frames = frameCodec.readFrames(data)
@@ -70,63 +146,66 @@ class MessageCodec(
   def readFrames(frames: Seq[Frame]): Seq[Either[DecodingError, Message]] =
     frames.map { frame =>
       val frameData = frame.payload.toArray
-      val isWireProtocolMessage = frame.`type` >= 0x00 && frame.`type` <= 0x03
 
-      // Heuristic to check if data looks like RLP-encoded data
-      // RLP encoding has predictable first-byte patterns:
-      // - 0x80-0xbf: RLP string (0x80 = empty string, 0x81-0xb7 = short string, 0xb8-0xbf = long string)
-      // - 0xc0-0xff: RLP list (0xc0 = empty list, 0xc1-0xf7 = short list, 0xf8-0xff = long list)
-      // This is used as a fallback check after decompression fails to handle protocol deviations
-      // where peers send uncompressed RLP data when compression is expected.
-      def looksLikeRLP(data: Array[Byte]): Boolean = data.nonEmpty && {
-        // Bitwise AND with 0xff converts signed byte to unsigned int (Scala bytes are signed -128 to 127)
-        val firstByte = data(0) & 0xff
-        firstByte >= 0x80
-      }
+      // Attempt decompression based on negotiated compression policy
+      val shouldAttemptDecompression = compressionPolicy.expectInboundCompressed
 
-      val shouldCompress = remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion && !isWireProtocolMessage
-
+      // Enhanced logging for compression decision
       log.debug(
-        "Processing frame type 0x{}: wireProtocol={}, p2pVersion={}, shouldCompress={}, payloadLooksLikeRLP={}",
+        "COMPRESSION_DECISION: frame=0x{}, p2pVersion={}, expectInboundCompressed={}, payloadSize={}, firstByte=0x{}",
         frame.`type`.toHexString,
-        isWireProtocolMessage,
         remotePeer2PeerVersion,
-        shouldCompress,
-        looksLikeRLP(frameData)
+        shouldAttemptDecompression,
+        frameData.length,
+        if (frameData.length > 0) Integer.toHexString(frameData(0) & 0xff) else "N/A"
       )
 
       val payloadTry =
-        if (shouldCompress) {
-          // Always attempt decompression when compression is expected (p2pVersion >= 5)
-          // If decompression fails, fall back to uncompressed data if it looks like valid RLP
+        if (shouldAttemptDecompression) {
+          // Attempt decompression when compression is expected (p2pVersion >= 5)
+          // If decompression fails, fall back to treating the data as uncompressed
           decompressData(frameData, frame).recoverWith { case ex =>
-            if (looksLikeRLP(frameData)) {
-              log.warn(
-                "Frame type 0x{}: Decompression failed but data looks like RLP - using as uncompressed (peer protocol deviation). Error: {}",
-                frame.`type`.toHexString,
-                ex.getMessage
-              )
-              Success(frameData)
-            } else {
-              log.error(
-                "Frame type 0x{}: Decompression failed and data doesn't look like RLP - rejecting. Error: {}",
-                frame.`type`.toHexString,
-                ex.getMessage
-              )
-              Failure(ex)
-            }
+            log.warn(
+              "COMPRESSION_FALLBACK: Frame type 0x{}: Decompression failed - treating as uncompressed data. " +
+                "Peer sent uncompressed despite p2pVersion={}. firstByte=0x{}, size={}, error: {}",
+              frame.`type`.toHexString,
+              remotePeer2PeerVersion,
+              if (frameData.length > 0) Integer.toHexString(frameData(0) & 0xff) else "N/A",
+              frameData.length,
+              ex.getMessage
+            )
+            log.debug(
+              "COMPRESSION_FALLBACK: The RLP decoder will validate if this is legitimate uncompressed data. " +
+                "This approach is safer than guessing based on first byte patterns."
+            )
+            // Always fall back to uncompressed data when decompression fails
+            // Let the RLP decoder validate whether it's actually valid RLP
+            // This approach is safer than trying to guess based on first byte patterns because:
+            // 1. RLP can start with any byte 0x00-0xff (single byte values use 0x00-0x7f)
+            // 2. Snappy data can also start with 0x00-0x7f for small payloads
+            // 3. If it's invalid data, the RLP decoder will fail and close the connection
+            Success(frameData)
           }
         } else {
           log.debug(
-            "Skipping decompression for frame type 0x{} (wire protocol or p2pVersion < 5)",
+            "COMPRESSION_SKIP: Frame type 0x{} - skipping decompression per negotiated policy",
             frame.`type`.toHexString
           )
           Success(frameData)
         }
 
-      payloadTry.toEither.flatMap { payload =>
-        messageDecoder.fromBytes(frame.`type`, payload)
-      }
+      payloadTry.toEither.left
+        .map {
+          // Wrap decompression exceptions in DecompressionFailure for type-safe error handling
+          case ex: RuntimeException if ex.getMessage != null && ex.getMessage.contains("FAILED_TO_UNCOMPRESS") =>
+            MessageDecoder.DecompressionFailure(ex.getMessage, ex)
+          case ex =>
+            // Other errors are wrapped as MalformedMessageError
+            MessageDecoder.MalformedMessageError(Option(ex.getMessage).getOrElse(ex.toString), Some(ex))
+        }
+        .flatMap { payload =>
+          messageDecoder.fromBytes(frame.`type`, payload)
+        }
     }
 
   private def decompressData(data: Array[Byte], frame: Frame): Try[Array[Byte]] = {
@@ -201,27 +280,32 @@ class MessageCodec(
 
     val frames = (0 until numFrames).map { frameNo =>
       val framedPayload = encoded.drop(frameNo * MaxFramePayloadSize).take(MaxFramePayloadSize)
-      val isWireProtocolMessage = serializable.code >= 0x00 && serializable.code <= 0x03
-      val shouldCompressThis = remotePeer2PeerVersion >= EtcHelloExchangeState.P2pVersion && !isWireProtocolMessage
+
+      // Core-geth compresses ALL messages when p2pVersion >= 5, including wire protocol messages
+      // Matches core-geth behavior: no exceptions for wire protocol (Ping, Pong, etc.)
+      val shouldCompressThis = compressionPolicy.compressOutbound
+
       val payload =
         if (shouldCompressThis) {
           val compressed = Snappy.compress(framedPayload)
           // Safe compression ratio calculation (avoid division by zero)
           val ratio = if (framedPayload.length > 0) compressed.length.toDouble / framedPayload.length else 0.0
           log.debug(
-            "ENCODE_MSG: Snappy compressed frame {} from {} to {} bytes (ratio: {:.2f})",
+            "ENCODE_MSG: Snappy compressed frame {} from {} to {} bytes (ratio: {}), code=0x{}, p2pVersion={}, clientId={}",
             frameNo,
             framedPayload.length,
             compressed.length,
-            ratio
+            "%.2f".format(ratio),
+            serializable.code.toHexString,
+            remotePeer2PeerVersion,
+            remoteClientId
           )
           compressed
         } else {
           log.debug(
-            "ENCODE_MSG: Skipping compression for frame {} (wireProtocol={}, p2pVersion={})",
+            "ENCODE_MSG: Skipping compression for frame {} (compression disabled for this peer), code=0x{}",
             frameNo,
-            isWireProtocolMessage,
-            remotePeer2PeerVersion
+            serializable.code.toHexString
           )
           framedPayload
         }

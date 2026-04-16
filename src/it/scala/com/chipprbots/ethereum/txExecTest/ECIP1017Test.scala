@@ -30,7 +30,7 @@ class ECIP1017Test extends AnyFlatSpec with Matchers {
       monetaryPolicyConfig = MonetaryPolicyConfig(EraDuration, 0.2, 5000000000000000000L, 3000000000000000000L),
       // unused
       maxCodeSize = None,
-      chainId = 0x3d.toByte,
+      chainId = 0x3d,
       networkId = 1,
       forkBlockNumbers = ForkBlockNumbers.Empty.copy(
         frontierBlockNumber = 0,
@@ -45,8 +45,7 @@ class ECIP1017Test extends AnyFlatSpec with Matchers {
       bootstrapNodes = Set(),
       accountStartNonce = UInt256.Zero,
       ethCompatibleStorage = true,
-      gasTieBreaker = false,
-      treasuryAddress = Address(0)
+      gasTieBreaker = false
     )
     val noErrors: ResultOfATypeInvocation[Right[_, Seq[Receipt]]] = a[Right[_, Seq[Receipt]]]
   }

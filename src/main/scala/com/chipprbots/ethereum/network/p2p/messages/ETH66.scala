@@ -8,6 +8,7 @@ import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockBody._
+import com.chipprbots.ethereum.domain.Transaction
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits._
 import com.chipprbots.ethereum.domain.SignedTransaction
@@ -24,14 +25,19 @@ import com.chipprbots.ethereum.utils.ByteUtils
   */
 object ETH66 {
 
-  /** Thread-safe counter for generating unique request IDs.
-    * Starting from 1 to avoid the special case of encoding 0.
+  /** Marker trait for ETH66 messages that carry a request ID. Used by PeerRequestHandler to validate that a response's
+    * request ID matches the outstanding request, preventing stale response consumption.
+    */
+  trait HasRequestId { def requestId: BigInt }
+
+  /** Thread-safe counter for generating unique request IDs. Starting from 1 to avoid the special case of encoding 0.
     */
   private val requestIdCounter = new AtomicLong(1L)
 
-  /** Generates a new unique request ID for ETH66+ protocol messages.
-    * Request IDs are used to match responses to their corresponding requests.
-    * @return a unique, incrementing request ID
+  /** Generates a new unique request ID for ETH66+ protocol messages. Request IDs are used to match responses to their
+    * corresponding requests.
+    * @return
+    *   a unique, incrementing request ID
     */
   def nextRequestId: BigInt = BigInt(requestIdCounter.getAndIncrement())
 
@@ -112,7 +118,8 @@ object ETH66 {
       maxHeaders: BigInt,
       skip: BigInt,
       reverse: Boolean
-  ) extends Message {
+  ) extends Message
+      with HasRequestId {
     override def code: Int = Codes.GetBlockHeadersCode
 
     override def toString: String =
@@ -136,7 +143,10 @@ object ETH66 {
 
       override def toRLPEncodable: RLPEncodeable =
         // Use bigIntToUnsignedByteArray to properly encode request-id (0 should be empty bytes per RLP spec)
-        RLPList(RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)), RLPList(msg.headers.map(_.toRLPEncodable): _*))
+        RLPList(
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)),
+          RLPList(msg.headers.map(_.toRLPEncodable): _*)
+        )
     }
 
     implicit class BlockHeadersDec(val bytes: Array[Byte]) extends AnyVal {
@@ -158,7 +168,7 @@ object ETH66 {
     }
   }
 
-  case class BlockHeaders(requestId: BigInt, headers: Seq[BlockHeader]) extends Message {
+  case class BlockHeaders(requestId: BigInt, headers: Seq[BlockHeader]) extends Message with HasRequestId {
     val code: Int = Codes.BlockHeadersCode
     override def toShortString: String =
       s"BlockHeaders { requestId: $requestId, count: ${headers.size} }"
@@ -195,7 +205,7 @@ object ETH66 {
     }
   }
 
-  case class GetBlockBodies(requestId: BigInt, hashes: Seq[ByteString]) extends Message {
+  case class GetBlockBodies(requestId: BigInt, hashes: Seq[ByteString]) extends Message with HasRequestId {
     override def code: Int = Codes.GetBlockBodiesCode
 
     override def toString: String =
@@ -216,7 +226,10 @@ object ETH66 {
 
       override def toRLPEncodable: RLPEncodeable =
         // Use bigIntToUnsignedByteArray to properly encode request-id (0 should be empty bytes per RLP spec)
-        RLPList(RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)), RLPList(msg.bodies.map(_.toRLPEncodable): _*))
+        RLPList(
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)),
+          RLPList(msg.bodies.map(_.toRLPEncodable): _*)
+        )
     }
 
     implicit class BlockBodiesDec(val bytes: Array[Byte]) extends AnyVal {
@@ -238,7 +251,7 @@ object ETH66 {
     }
   }
 
-  case class BlockBodies(requestId: BigInt, bodies: Seq[BlockBody]) extends Message {
+  case class BlockBodies(requestId: BigInt, bodies: Seq[BlockBody]) extends Message with HasRequestId {
     val code: Int = Codes.BlockBodiesCode
     override def toShortString: String =
       s"BlockBodies { requestId: $requestId, count: ${bodies.size} }"
@@ -264,7 +277,7 @@ object ETH66 {
     }
   }
 
-  case class GetPooledTransactions(requestId: BigInt, txHashes: Seq[ByteString]) extends Message {
+  case class GetPooledTransactions(requestId: BigInt, txHashes: Seq[ByteString]) extends Message with HasRequestId {
     override def code: Int = Codes.GetPooledTransactionsCode
 
     override def toString: String =
@@ -285,9 +298,23 @@ object ETH66 {
 
       override def code: Int = Codes.PooledTransactionsCode
 
-      override def toRLPEncodable: RLPEncodeable =
+      override def toRLPEncodable: RLPEncodeable = {
         // Use bigIntToUnsignedByteArray to properly encode request-id (0 should be empty bytes per RLP spec)
-        RLPList(RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)), RLPList(msg.txs.map(_.toRLPEncodable): _*))
+        val txItems: Seq[RLPEncodeable] = msg.txs.map { stx =>
+          msg.blobTxRawBytes.get(stx.hash) match {
+            case Some(rawBytes) =>
+              // Blob tx with sidecar: reconstruct network-wrapped PrefixedRLPEncodable from raw bytes
+              // rawBytes = 0x03 || rlp([tx_payload, blobs, commitments, proofs])
+              PrefixedRLPEncodable(rawBytes(0), rawDecode(rawBytes.toArray.drop(1)))
+            case None =>
+              stx.toRLPEncodable
+          }
+        }
+        RLPList(
+          RLPValue(ByteUtils.bigIntToUnsignedByteArray(msg.requestId)),
+          RLPList(txItems: _*)
+        )
+      }
     }
 
     implicit class PooledTransactionsDec(val bytes: Array[Byte]) extends AnyVal {
@@ -296,16 +323,74 @@ object ETH66 {
 
       def toPooledTransactions: PooledTransactions = rawDecode(bytes) match {
         case RLPList(RLPValue(requestIdBytes), rlpList: RLPList) =>
+          // Validate blob txs in PooledTransactions: per EIP-4844, blob txs MUST be
+          // in network-wrapped form [tx_payload, blobs, commitments, proofs].
+          val typedItems = rlpList.items.toTypedRLPEncodables
+          typedItems.foreach {
+            case PrefixedRLPEncodable(Transaction.Type03, inner: RLPList) =>
+              // Network-wrapped form has 4 elements: [tx_payload, blobs, commitments, proofs]
+              val isNetworkWrapped = inner.items.size == 4 && inner.items.head.isInstanceOf[RLPList]
+              if (!isNetworkWrapped) {
+                throw new RuntimeException("Blob tx in PooledTransactions missing sidecar (network wrapping required)")
+              }
+              // Validate sidecar commitments match versioned hashes
+              val txPayload = inner.items.head.asInstanceOf[RLPList]
+              if (txPayload.items.size >= 14) {
+                val versionedHashesOpt = txPayload.items(10) match { case rl: RLPList => Some(rl); case _ => None }
+                val commitmentsOpt = inner.items(2) match { case rl: RLPList => Some(rl); case _ => None }
+                (versionedHashesOpt, commitmentsOpt) match {
+                  case (Some(vh), Some(cm)) if vh.items.size != cm.items.size =>
+                    throw new RuntimeException("Blob tx: commitment count mismatch")
+                  case (Some(vh), Some(cm)) =>
+                    val sha256 = java.security.MessageDigest.getInstance("SHA-256")
+                    vh.items.zip(cm.items).foreach {
+                      case (RLPValue(expectedHash), RLPValue(commitment)) if expectedHash.length == 32 && commitment.length == 48 =>
+                        sha256.reset()
+                        val computed = sha256.digest(commitment)
+                        computed(0) = 0x01.toByte
+                        if (!java.util.Arrays.equals(expectedHash, computed)) {
+                          throw new RuntimeException("Blob tx: sidecar commitment hash mismatch")
+                        }
+                      case _ => // skip non-standard elements
+                    }
+                  case _ => // missing fields, accept for now
+                }
+              }
+            case _ =>
+          }
+          // Capture raw network-wrapped bytes for blob txs before unwrapping
+          val blobTxRawBytesBuilder = Map.newBuilder[ByteString, ByteString]
+          val unwrappedItems = typedItems.map {
+            case prefixed @ PrefixedRLPEncodable(Transaction.Type03, inner: RLPList)
+              if inner.items.size == 4 && inner.items.head.isInstanceOf[RLPList] =>
+              // Preserve raw bytes: 0x03 || rlp([tx_payload, blobs, commitments, proofs])
+              val rawBytes = com.chipprbots.ethereum.rlp.encode(prefixed)
+              val unwrapped = PrefixedRLPEncodable(Transaction.Type03, inner.items.head)
+              val stx = unwrapped.toSignedTransaction
+              blobTxRawBytesBuilder += (stx.hash -> ByteString(rawBytes))
+              unwrapped
+            case other => other
+          }
+          // Compute original wire sizes of each tx item (before unwrapping) for announcement validation
+          val originalSizes = rlpList.items.map {
+            case RLPValue(v) => v.length  // typed tx: typeByte + rlp_payload
+            case rl: RLPList => com.chipprbots.ethereum.rlp.encode(rl).length  // legacy tx: RLP-encoded
+            case other => 0
+          }
           PooledTransactions(
             ByteUtils.bytesToBigInt(requestIdBytes),
-            rlpList.items.toTypedRLPEncodables.map(_.toSignedTransaction)
+            unwrappedItems.map(_.toSignedTransaction),
+            originalSizes,
+            blobTxRawBytesBuilder.result()
           )
         case _ => throw new RuntimeException("Cannot decode PooledTransactions")
       }
     }
   }
 
-  case class PooledTransactions(requestId: BigInt, txs: Seq[SignedTransaction]) extends Message {
+  case class PooledTransactions(requestId: BigInt, txs: Seq[SignedTransaction],
+      originalSizes: Seq[Int] = Seq.empty,
+      blobTxRawBytes: Map[ByteString, ByteString] = Map.empty) extends Message with HasRequestId {
     override def code: Int = Codes.PooledTransactionsCode
 
     override def toString: String =
@@ -348,7 +433,7 @@ object ETH66 {
     }
   }
 
-  case class GetNodeData(requestId: BigInt, mptElementsHashes: Seq[ByteString]) extends Message {
+  case class GetNodeData(requestId: BigInt, mptElementsHashes: Seq[ByteString]) extends Message with HasRequestId {
     override def code: Int = Codes.GetNodeDataCode
 
     override def toString: String =
@@ -388,7 +473,7 @@ object ETH66 {
     }
   }
 
-  case class NodeData(requestId: BigInt, values: RLPList) extends Message {
+  case class NodeData(requestId: BigInt, values: RLPList) extends Message with HasRequestId {
     override def code: Int = Codes.NodeDataCode
 
     override def toString: String =
@@ -427,7 +512,7 @@ object ETH66 {
     }
   }
 
-  case class GetReceipts(requestId: BigInt, blockHashes: Seq[ByteString]) extends Message {
+  case class GetReceipts(requestId: BigInt, blockHashes: Seq[ByteString]) extends Message with HasRequestId {
     override def code: Int = Codes.GetReceiptsCode
 
     override def toString: String =
@@ -470,7 +555,7 @@ object ETH66 {
     }
   }
 
-  case class Receipts(requestId: BigInt, receiptsForBlocks: RLPList) extends Message {
+  case class Receipts(requestId: BigInt, receiptsForBlocks: RLPList) extends Message with HasRequestId {
     override def code: Int = Codes.ReceiptsCode
 
     override def toShortString: String =

@@ -69,9 +69,7 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   scalaVersion := `scala-3`,
   // Override Scala library version to prevent SIP-51 errors with mixed Scala patch versions
   scalaModuleInfo ~= (_.map(_.withOverrideScalaVersion(true))),
-  ThisBuild / scalafixDependencies ++= List(
-    "com.github.liancheng" %% "organize-imports" % "0.6.0"
-  ),
+  // organize-imports removed — built-in to Scalafix 0.11.0+
   // Scalanet snapshots are published to Sonatype after each build (now defined in inThisBuild resolvers).
   (Test / testOptions) += Tests
     .Argument(TestFrameworks.ScalaTest, "-l", "EthashMinerSpec"), // miner tests disabled by default,
@@ -292,43 +290,6 @@ lazy val node = {
       buildInfoPackage := "com.chipprbots.ethereum.utils",
       (Test / fork) := true,
       (Compile / buildInfoOptions) += BuildInfoOption.ToMap,
-      // Temporarily exclude test files with MockFactory compilation issues (Scala 3 migration)
-      // 
-      // DISABLED TESTS DOCUMENTATION:
-      // All 13 originally disabled tests have been FIXED using the abstract mock members pattern.
-      // The pattern works by moving mock creation to the test class level (which has MockFactory)
-      // and providing abstract members that inner classes can implement.
-      //
-      // FLAKY TESTS (marked with @Ignore annotation - need further investigation):
-      // - PoWMiningCoordinatorSpec.scala - Actor timing/lifecycle issues in CI
-      // - MockedMinerSpec.scala - Actor timing/lifecycle issues in CI
-      // - JsonRpcHttpServerSpec.scala - HTTP server lifecycle issues in CI
-      // - EthashMinerSpec.scala - Real Ethash mining/DAG work too slow for CI
-      (Test / excludeFilter) := {
-        val base = (Test / excludeFilter).value
-        val disabledTests = Seq(
-          // ALL TESTS FIXED - using abstract mock members pattern:
-          // "BranchResolutionSpec.scala",
-          // "ConsensusAdapterSpec.scala",
-          // "BlockExecutionSpec.scala",         // DaoForkTestSetup refactored to abstract mock pattern
-          // "JsonRpcHttpServerSpec.scala",      // TestSetup converted to class (@Ignore - flaky)
-          // "ConsensusImplSpec.scala",          // ConsensusSetup moved inside test class
-          // "FastSyncBranchResolverActorSpec.scala", // No MockFactory usage
-          // "PoWMiningSpec.scala",              // Added ioRuntime override
-          // "MessageHandlerSpec.scala",         // Added Product trait methods
-          // "QaJRCSpec.scala",                  // TestSetup converted to class
-          // "EthProofServiceSpec.scala",        // MockFactory works at class level
-          // "LegacyTransactionHistoryServiceSpec.scala", // No MockFactory usage
-          // "PoWMiningCoordinatorSpec.scala",   // MinerSpecSetup refactored (@Ignore - flaky)
-          // "EthashMinerSpec.scala",            // MinerSpecSetup refactored (@Ignore - flaky, real mining too slow)
-          // "KeccakMinerSpec.scala",            // MinerSpecSetup refactored to abstract mock pattern
-          // "MockedMinerSpec.scala",            // MinerSpecSetup refactored (@Ignore - flaky)
-        )
-        
-        disabledTests.foldLeft(base) { (filter, testFile) =>
-          filter || new SimpleFileFilter(_.getName == testFile)
-        }
-      }
     )
     .settings(commonSettings("fukuii"): _*)
     .settings(inConfig(Integration)(scalafixConfigSettings(Integration)))
@@ -361,18 +322,14 @@ lazy val node = {
           })
       ): _*
     )
-    .settings(inConfig(Benchmark)(Defaults.testSettings :+ (Test / parallelExecution := false)): _*)
-    .settings(inConfig(Evm)(Defaults.testSettings :+ (Test / parallelExecution := false)): _*)
-    .settings(inConfig(Rpc)(Defaults.testSettings :+ (Test / parallelExecution := false)): _*)
+    .settings(inConfig(Benchmark)(Defaults.testSettings :+ (Test / parallelExecution := true)): _*)
+    .settings(inConfig(Evm)(Defaults.testSettings :+ (Test / parallelExecution := true)): _*)
+    .settings(inConfig(Rpc)(Defaults.testSettings :+ (Test / parallelExecution := true)): _*)
     .settings(
       // protobuf compilation
       // Into a subdirectory of src_managed to avoid it deleting other generated files; see https://github.com/sbt/sbt-buildinfo/issues/149
       (Compile / PB.targets) := Seq(
         scalapb.gen() -> (Compile / sourceManaged).value / "protobuf"
-      ),
-      // Use local protobuf override directory with corrected package namespace
-      (Compile / PB.protoSources) := Seq(
-        baseDirectory.value / "src" / "main" / "protobuf_override"
       ),
       // protobuf API version file is now provided in src/main/resources/extvm/VERSION
       // Packaging
@@ -542,7 +499,7 @@ addCommandAlias(
 addCommandAlias(
   "testEssential",
   """; compile-all
-    |; testOnly -- -l SlowTest -l IntegrationTest -l SyncTest -l DisabledTest
+    |; testOnly -- -l SlowTest -l IntegrationTest -l SyncTest -l DisabledTest -l FlakyTest
     |; rlp / test
     |; bytes / test
     |; crypto / test
@@ -555,15 +512,22 @@ addCommandAlias(
 addCommandAlias(
   "testStandard",
   """; compile-all
-    |; testOnly -- -l BenchmarkTest -l EthereumTest -l DisabledTest
+    |; testOnly -- -l BenchmarkTest -l EthereumTest -l DisabledTest -l FlakyTest
     |""".stripMargin
 )
 
 // testComprehensive - Tier 3: Comprehensive tests (< 3 hours)
 // Runs all tests including ethereum/tests compliance suite
+// Excludes FlakyTest and DisabledTest to ensure reliable nightly builds
 addCommandAlias(
   "testComprehensive",
-  "testAll"
+  """; compile-all
+    |; rlp / test
+    |; bytes / test
+    |; crypto / test
+    |; testOnly -- -l FlakyTest -l DisabledTest
+    |; IntegrationTest / testOnly -- -l FlakyTest -l DisabledTest
+    |""".stripMargin
 )
 
 // Module-specific test commands

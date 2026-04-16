@@ -34,7 +34,7 @@ import com.chipprbots.ethereum.utils.Config.SyncConfig
 class FastSyncBranchResolverActor(
     val fastSync: ActorRef,
     val peerEventBus: ActorRef,
-    val etcPeerManager: ActorRef,
+    val networkPeerManager: ActorRef,
     val blockchain: Blockchain,
     val blockchainReader: BlockchainReader,
     val blacklist: Blacklist,
@@ -200,7 +200,7 @@ class FastSyncBranchResolverActor(
         PeerRequestHandler.props[ETH66GetBlockHeaders, ETH66BlockHeaders](
           peer,
           syncConfig.peerResponseTimeout,
-          etcPeerManager,
+          networkPeerManager,
           peerEventBus,
           requestMsg = ETH66GetBlockHeaders(ETH66.nextRequestId, Left(fromBlock), amount, skip = 0, reverse = false),
           responseMsgCode = Codes.BlockHeadersCode
@@ -211,7 +211,7 @@ class FastSyncBranchResolverActor(
         PeerRequestHandler.props[ETH62GetBlockHeaders, ETH62BlockHeaders](
           peer,
           syncConfig.peerResponseTimeout,
-          etcPeerManager,
+          networkPeerManager,
           peerEventBus,
           requestMsg = ETH62GetBlockHeaders(Left(fromBlock), amount, skip = 0, reverse = false),
           responseMsgCode = Codes.BlockHeadersCode
@@ -279,7 +279,7 @@ object FastSyncBranchResolverActor {
   def props(
       fastSync: ActorRef,
       peerEventBus: ActorRef,
-      etcPeerManager: ActorRef,
+      networkPeerManager: ActorRef,
       blockchain: Blockchain,
       blockchainReader: BlockchainReader,
       blacklist: Blacklist,
@@ -291,7 +291,7 @@ object FastSyncBranchResolverActor {
       new FastSyncBranchResolverActor(
         fastSync,
         peerEventBus,
-        etcPeerManager,
+        networkPeerManager,
         blockchain,
         blockchainReader,
         blacklist,

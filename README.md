@@ -1,20 +1,29 @@
+## <i>Alpha/Olympia Status</i>: 🟢 2,314 tests passing — [View ETC Handoff](ETC-HANDOFF.md) | [View Olympia Handoff](OLYMPIA-HANDOFF.md) | 🔷 Engine API: Sepolia validated
+
 <div align="center">
-  <img src="docs/images/fukuii-logo-cute.png" alt="Fukuii Logo" width="400"/>
+  <img src="https://raw.githubusercontent.com/chippr-robotics/fukuii/HEAD/docs/images/fukuii-hex-logo.png" alt="Fukuii Logo" width="400"/>
 </div>
 
-# 🧠🐛 Fukuii Ethereum Client
+# 🧠🪱 Fukuii Ethereum Client
 
-[![CI](https://github.com/chippr-robotics/chordodes_fukuii/actions/workflows/ci.yml/badge.svg)](https://github.com/chippr-robotics/chordodes_fukuii/actions/workflows/ci.yml)
+### The world's first vibe-coded Ethereum client.
+
+> *Chordodes Fukuii is a parasitic worm that hijacks a mantis, rewires its brain, and drives it toward water. Fukuii hijacks Mantis (IOHK's abandoned Scala ETC client), rewires the codebase, and drives it toward Olympia.*
+
+# ALPHA/OLYMPIA TEST PHASE - DO NOT USE IN PRODUCTION
+[![CI](https://github.com/chippr-robotics/fukuii/actions/workflows/ci.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/ci.yml)
 [![Docker Build](https://github.com/chippr-robotics/fukuii/actions/workflows/docker.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/docker.yml)
 [![Nightly Build](https://github.com/chippr-robotics/fukuii/actions/workflows/nightly.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/nightly.yml)
 [![codecov](https://codecov.io/gh/chippr-robotics/fukuii/graph/badge.svg)](https://codecov.io/gh/chippr-robotics/fukuii)
 
 Fukuii is a continuation and re‑branding of the Ethereum Classic client previously known as Mantis. Mantis was developed by Input Output (HK) as a Scala client for the Ethereum Classic (ETC) network. This project is an independent fork maintained by Chippr Robotics LLC with the aim of modernising the codebase and ensuring long‑term support.
 
+With the Engine API implementation (V1-V4, through Prague/Electra), Fukuii now operates as a **dual ETC/ETH execution client**. When paired with any Ethereum consensus layer client (Lighthouse, Prysm, Teku, Lodestar, Nimbus), Fukuii can sync and follow Ethereum mainnet and testnets via the standard Engine API protocol. This has been validated on the Sepolia testnet with 21+ EL peers and a Lighthouse consensus layer.
+
 Fukuii retains the robust architecture and ETC compatibility of Mantis while introducing new features, updated dependencies and a streamlined build. This fork has been renamed throughout the code and documentation:
-- Executable scripts are renamed from fukuii to fukuii.
+- Executable scripts are renamed from mantis to fukuii.
 - Java/Scala packages under io.iohk have been moved to com.chipprbots.
-- Environment variables and configuration keys prefixed with fukuii have been changed to fukuii.
+- Environment variables and configuration keys prefixed with mantis have been changed to fukuii.
 
 #### Important Notes
 
@@ -23,7 +32,7 @@ Fukuii retains the robust architecture and ETC compatibility of Mantis while int
 <b>Origin:</b> Fukuii is derived from the Mantis
  client. Mantis is a trademark of IOHK; we use the name here only to describe the origin of this fork. 
 
-<b>Chordoes Fukuii is a worm which controls a zombie mantis.</b>
+<b>Chordodes Fukuii is a worm which controls a zombie mantis.</b>
 
 ## CI/CD and Project Hygiene
 
@@ -45,7 +54,7 @@ This project uses GitHub Actions for continuous integration and delivery:
 
 **Quick Links:**
 - [🌐 Documentation Site](https://chippr-robotics.github.io/fukuii/) - Hosted documentation (GitHub Pages)
-- [📚 Documentation Index](docs/README.md) - Complete documentation guide
+- [📚 Documentation Index](docs/index.md) - Complete documentation guide
 - [Repository Structure](docs/development/REPOSITORY_STRUCTURE.md) - Understand the codebase layout
 - [Workflow Documentation](.github/workflows/README.md)
 - [Quick Start Guide](.github/QUICKSTART.md)
@@ -59,7 +68,7 @@ This project uses GitHub Actions for continuous integration and delivery:
 
 ### 🚀 Fast Initial Sync with Bootstrap Checkpoints
 
-**New in v1.1.0**: Fukuii now includes bootstrap checkpoints that significantly improve initial sync times:
+Fukuii includes bootstrap checkpoints that significantly improve initial sync times:
 
 - **No Peer Wait**: Begin syncing immediately without waiting for peer consensus
 - **Trusted Reference Points**: Uses well-known fork activation blocks as starting points
@@ -73,20 +82,109 @@ See [CON-002: Bootstrap Checkpoints](docs/adr/consensus/CON-002-bootstrap-checkp
 
 - **Scala 3.3.4 (LTS)** and **JDK 21 (LTS)** for long-term stability
 - **Apache Pekko** actor system for reliable concurrency
-- **Full EIP Support**: Includes Spiral (ECIP-1109), Mystique (ECIP-1104), Magneto (ECIP-1103), and more
-- **Comprehensive Testing**: Unit, integration, and blockchain tests
+- **Full ECIP-1066 Compliance**: Implements all 14 ETC hard forks from Frontier through Spiral (block 19,250,000), including Magneto (ECIP-1103), Mystique (ECIP-1104), and Spiral (ECIP-1109), plus Olympia (ECIP-1111/1112/1121)
+- **2,314 Tests Passing**: Comprehensive unit, integration, and blockchain test suite
 - **Security-First**: Signed Docker images, CodeQL scanning, dependency monitoring
+
+### 🪱 Vibe-Coded
+
+Fukuii is developed with AI-assisted engineering (Claude) as a core methodology — every optimization, bug fix, and architectural decision is a collaboration between human insight and AI capability. The codebase has been through 26+ major bug fixes, each discovered and resolved through this workflow. This is not a toy — it's a production Ethereum client built at the frontier of how software gets made.
 
 ### 🎯 Developer-Friendly
 
 - **Interactive Console UI**: Optional TUI for monitoring sync progress (use `--tui` flag)
 - **Extensive CLI Tools**: Key generation, address derivation, and more
 - **JSON-RPC API**: Full eth/web3/net API support
+- **Custom Networks**: Deploy on private networks without modifying source code
 - **Well-Documented**: Comprehensive runbooks and ADRs
 
-Getting started
+### 🤖 Agentic Control via MCP
 
-## Option 1: Docker (Recommended for Production)
+**New**: Fukuii is built with agentic AI integration as a first principle — the first ETC client with a functional MCP server:
+
+- **Model Context Protocol (MCP 2025-11-25)**: Integrated into the JSON-RPC API on port 8545
+- **AI Assistant Integration**: Works with Claude, GPT, and other AI assistants via HTTP/WebSocket
+- **15 Live Tools**: Node status, sync status, peer list, block/transaction/account queries, reorg detection, ETC emission, fork history, unit conversion, chain config
+- **9 Live Resources**: Node status, config, sync status, peer list, latest block, plus URI-templated block/tx/account access (`fukuii://block/123`, `fukuii://tx/0x...`, `fukuii://account/0x...`)
+- **Guided Prompts**: Pre-built templates for health checks, troubleshooting, and management tasks
+- **Tool Annotations**: All tools annotated with `readOnlyHint`, parameterized tools include JSON Schema `inputSchema` and `idempotentHint`
+
+Enable MCP by adding `"mcp"` to `fukuii.network.rpc.apis` in your configuration.
+
+See [MCP Documentation](docs/MCP.md) for detailed integration instructions with AI assistants.
+
+### 🔷 Engine API — Dual ETC/ETH Execution
+
+Fukuii implements the Ethereum Engine API (V1-V4), enabling it to operate as a full execution layer client for post-Merge Ethereum networks:
+
+- **Engine API V1-V4**: Complete implementation through Prague/Electra, including `engine_newPayloadV1-V4`, `engine_forkchoiceUpdatedV1-V3`, `engine_getPayloadV1-V4`, `engine_exchangeCapabilities`, `engine_getClientVersionV1`, `engine_getBlobsV1`, and payload body retrieval
+- **Any CL Client**: Pairs with Lighthouse, Prysm, Teku, Lodestar, or Nimbus via JWT-authenticated authrpc port (default 8551)
+- **Optimistic Block Import**: Follows the CL chain tip via checkpoint sync, with automatic fallback to full execution when state is available
+- **Post-Merge Validation**: Block header validation for PoS blocks (difficulty=0, nonce=0, empty ommers, withdrawalsRoot, blobGas, requestsHash)
+- **EIP Support**: EIP-4895 withdrawals, EIP-4844 blob transactions, EIP-4788 beacon root contract, EIP-7685 execution requests, EIP-6122 timestamp ForkID
+
+**Supported ETH Networks:**
+
+| Network | Chain ID | Status |
+|---------|----------|--------|
+| Sepolia | 11155111 | Validated — 21+ EL peers, Lighthouse CL |
+| Ethereum Mainnet | 1 | Configuration available |
+
+**Quick Start (Sepolia with Lighthouse):**
+
+```bash
+cd ops/barad-dur/sepolia
+openssl rand -hex 32 > jwt.hex    # generate JWT secret
+docker compose up -d
+docker compose logs -f fukuii-sepolia   # watch EL
+docker compose logs -f lighthouse       # watch CL
+```
+
+See [`ops/barad-dur/sepolia/`](ops/barad-dur/sepolia/) for the full deployment configuration including Grafana dashboard.
+
+### 🔮 Pluggable Consensus Architecture
+
+The Engine API implementation is the first step toward Fukuii's long-term architecture: a **pluggable consensus, multi-network runtime** with three layers:
+
+1. **fukuii-core** — Consensus-agnostic EVM execution engine, state storage, and JSON-RPC
+2. **fukuii-env** — Per-network chain parameters, genesis, fork schedules, and gas mechanics
+3. **Consensus Module** — Swappable backends: PoW (ETC), Engine API (ETH), PoA, OP-style derivation, ZK verification, or checkpoint-based sidechains (Orbita)
+
+This enables running ETC mainnet, ETH mainnet/testnets, L2 rollups, and application-specific chains from a single codebase. The design draws from ETCDEV's Orbita sidechain proposal (ETC Summit 2018) — an "orbita" is a chain instance within the fukuii runtime.
+
+For the full architectural vision, see [Pluggable Consensus & Multi-Network Architecture](docs/architecture/pluggable-consensus-vision.md).
+
+## Getting started
+
+### Option 1: Pre-built Distributions (Quick Start)
+
+Pre-built distribution archives are available for each release, allowing you to download and run Fukuii without building from source.
+
+### Download from GitHub Releases
+
+Visit the [Releases page](https://github.com/chippr-robotics/fukuii/releases) to download the latest version:
+
+1. Navigate to the latest release
+2. Under "Assets", download `fukuii-<version>.zip`
+3. Extract the archive:
+   ```bash
+   unzip fukuii-<version>.zip
+   cd fukuii-<version>
+   ```
+4. Run Fukuii (connects to Ethereum Classic mainnet):
+   ```bash
+   ./bin/fukuii etc
+   ```
+
+**Available artifacts in each release:**
+- `fukuii-<version>.zip` - Complete distribution with launcher scripts and configuration
+- `fukuii-assembly-<version>.jar` - Standalone executable JAR (requires Java 21+, run with: `java -jar fukuii-assembly-<version>.jar etc`)
+- `fukuii-sbom-<version>.json` - Software Bill of Materials in CycloneDX format
+- `CHANGELOG.md` - Release notes and changelog
+
+**Supported Networks:** `etc` (Ethereum Classic mainnet), `mordor` (ETC testnet), `gorgoroth` (private testnet), `test` (local test)
+
+### Option 2: Docker (Recommended for Production)
 
 The easiest way to run Fukuii is using Docker. Images are available on both GitHub Container Registry and Docker Hub:
 
@@ -96,8 +194,8 @@ The easiest way to run Fukuii is using Docker. Images are available on both GitH
 # Pull the latest release
 docker pull chipprbots/fukuii:latest
 
-# Or pull a specific version
-docker pull chipprbots/fukuii:v1.0.0
+# Or pull a specific version (replace with actual release tag)
+docker pull chipprbots/fukuii:<version>
 
 # Run Fukuii
 docker run -d \
@@ -116,13 +214,13 @@ docker run -d \
 
 ```bash
 # Pull a specific version (recommended - official releases are signed)
-docker pull ghcr.io/chippr-robotics/fukuii:v1.0.0
+docker pull ghcr.io/chippr-robotics/fukuii:<version>
 
 # Verify the image signature (requires cosign)
 cosign verify \
   --certificate-identity-regexp=https://github.com/chippr-robotics/fukuii \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
-  ghcr.io/chippr-robotics/fukuii:v1.0.0
+  ghcr.io/chippr-robotics/fukuii:<version>
 
 # Or pull the latest development version
 docker pull ghcr.io/chippr-robotics/fukuii:develop
@@ -135,7 +233,7 @@ docker run -d \
   -p 30303:30303 \
   -v fukuii-data:/app/data \
   -v fukuii-conf:/app/conf \
-  ghcr.io/chippr-robotics/fukuii:v1.0.0
+  ghcr.io/chippr-robotics/fukuii:<version>
 ```
 
 **Security Note:** Release images published to `ghcr.io/chippr-robotics/fukuii` are:
@@ -149,7 +247,7 @@ See [Docker Documentation](docs/deployment/docker.md) for detailed Docker docume
 - Security considerations and signature verification
 - Docker Compose examples
 
-## Option 2: GitHub Codespaces (Recommended for Development)
+### Option 3: GitHub Codespaces (Recommended for Development)
 
 The fastest way to start developing is using GitHub Codespaces, which provides a pre-configured development environment:
 
@@ -159,7 +257,7 @@ The fastest way to start developing is using GitHub Codespaces, which provides a
 
 See [.devcontainer/README.md](.devcontainer/README.md) for more details.
 
-## Option 3: Local Development
+### Option 4: Build from Source (For Development)
 
 To build Fukuii from source locally you will need:
 
@@ -194,7 +292,7 @@ The distribution’s bin/ directory contains a launcher script named fukuii. To 
 ./bin/fukuii etc
 
 
-The launcher accepts the same network names that Fukuii did (etc, eth, mordor, testnet-internal). See the configuration files under src/universal/conf for more details.
+The launcher accepts the following network names: `etc`, `mordor`, `gorgoroth`, `test`. See the configuration files under src/main/resources/conf for more details.
 
 #### Console UI
 
@@ -220,7 +318,7 @@ The console UI provides:
 See [Console UI Documentation](docs/architecture/console-ui.md) for detailed information.
 
 
-Command line interface (CLI)
+## Command line interface (CLI)
 
 Fukuii's CLI tool provides utilities for key generation and other cryptographic functions. To see all available commands and options:
 
@@ -243,11 +341,51 @@ Examples:
 ```
 
 For detailed CLI documentation, see the [Node Configuration Runbook](docs/runbooks/node-configuration.md#cli-subcommands).
-Configuration and Environment
+
+### Network Management
+
+Fukuii provides a unified CLI tool for managing test networks and mainnet deployments:
+
+```bash
+# Show available commands and networks
+./fukuii.sh help
+
+# Start a test network (3-node, 6-node, or mixed client configurations)
+./fukuii.sh start 6nodes
+
+# Start Cirith-Ungol (ETC mainnet testing environment)
+./fukuii.sh start cirith-ungol
+
+# View logs
+./fukuii.sh logs cirith-ungol
+
+# Synchronize static nodes across running containers
+./fukuii.sh sync-static-nodes 6nodes
+
+# Check status
+./fukuii.sh status cirith-ungol
+
+# Stop network
+./fukuii.sh stop cirith-ungol
+```
+
+**Available Configurations:**
+- `3nodes` - 3 Fukuii nodes (private test network)
+- `6nodes` - 6 Fukuii nodes (private test network)
+- `fukuii-geth` - 3 Fukuii + 3 Core-Geth nodes
+- `fukuii-besu` - 3 Fukuii + 3 Besu nodes
+- `mixed` - 3 Fukuii + 3 Besu + 3 Core-Geth nodes
+- `cirith-ungol` - Fukuii + Core-Geth on ETC mainnet
+
+For detailed network management documentation, see:
+- [Gorgoroth Test Network](ops/gorgoroth/README.md) - Private test network
+- [Cirith-Ungol Mainnet Testing](ops/cirith-ungol/README.md) - ETC mainnet environment
+
+## Configuration and Environment
 
 Many configuration properties begin with the prefix fukuii instead of mantis. For example, the RPC settings are controlled by keys like fukuii.network.rpc.http.mode. Similarly, the environment variable FUKUII_DEV=true enables developer‑friendly settings during the build.
 
-Contributing
+## Contributing
 
 We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for detailed information on:
 
@@ -257,6 +395,61 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 - Testing and submitting pull requests
 
 When modifying code derived from Mantis, include a notice in the header of changed files stating that you changed the file and add your own copyright line.
+
+## Sync Architecture: How the Worm Burrows 🪱
+
+Fukuii's SNAP sync implementation draws from the best ideas across geth, nethermind, and besu — adapted for Scala's actor model and the ETC network's unique characteristics.
+
+### The Pipeline
+
+```
+🪱[====..............]🧠
+  ↑                    ↑
+  The Worm             The Brain
+  (sync progress)      (assembled state)
+```
+
+State synchronization flows through six phases:
+
+1. **Account Harvest** — Download ~600M account states from SNAP peers, verified by Merkle proofs
+2. **ByteCode Hunt** — Fetch contract bytecodes in parallel with storage
+3. **Storage Raid** — Download contract storage slots with multi-account batching (128 accounts/request)
+4. **Healing Rites** — Reconcile trie nodes at chunk boundaries after pivot refreshes
+5. **Validation** — Walk the state trie to verify completeness
+6. **Chain Assembly** — Download block headers, bodies, and receipts from genesis to pivot
+
+### Key Optimizations
+
+| Optimization | Inspiration | Impact |
+|---|---|---|
+| **Deferred Merkleization** | Nethermind Paprika | Zero CPU on trie construction during download — flat storage only |
+| **Flat Slot Storage** | geth snapshot layer, besu Bonsai | O(1) SLOAD during EVM execution via `accountHash++slotHash → value` |
+| **StackTrie Shortcut** | geth snap/sync.go | Skip MPT entirely for ~95% of contracts (< 1024 slots) |
+| **Two-Phase Storage** | geth PR #22668 | Buffer raw slots, sort by key, build tries on bounded thread pool |
+| **Adaptive Batching** | Original | 128 accounts/request with bidirectional scaling per peer |
+| **Binary Stateless Detection** | Original | Instant pivot refresh when all peers lose state (vs 2-min backoff) |
+| **Deferred Write MPT** | Original | ~200x speedup for account trie insertion (batch RocksDB writes) |
+
+### Operational Topology
+
+The project uses Tolkien-themed deployment environments:
+
+| Environment | Purpose | Network |
+|---|---|---|
+| **Barad-dûr** 🏰 | Production gateway — Kong API, Prometheus, Grafana, dual-node | ETC Mainnet + Mordor |
+| **Cirith Ungol** 🕷️ | Testing — Fukuii + Core-Geth sidecar, rapid iteration | Mordor / ETC |
+| **Gorgoroth** 🌋 | Private network — 3-node mining cluster, integration tests | Private |
+
+### Monitoring
+
+Real-time sync progress with the signature worm-chases-brain display:
+
+```
+📈 SNAP Sync Progress: 🪱[======..............]🧠 Accounts 23%: 646.2K/~2.7M @ 2720/s | 5m30s, ETA: 12m 39s
+📈 SNAP Sync Progress: 🪱[============........]🧠 Code+Storage: codes=57.3K ✔, slots=652.5K @ 196/s | 58m30s, ETA: 44m 45s
+```
+
+Prometheus metrics + Grafana dashboards provide deep visibility into sync phases, peer health, and system resources. See `ops/barad-dur/grafana/dashboards/` for themed dashboards.
 
 ## Development and Future Plans
 
@@ -269,7 +462,7 @@ When modifying code derived from Mantis, include a notice in the header of chang
 
 For the rationale behind these decisions, see [INF-001: Scala 3 Migration](docs/adr/infrastructure/INF-001-scala-3-migration.md). For historical information about the migration, see [Migration History](docs/historical/MIGRATION_HISTORY.md).
 
-**Static Analysis**: We maintain a comprehensive static analysis toolchain including Scalafmt, Scalafix, Scapegoat, and Scoverage. See [Static Analysis Inventory](STATIC_ANALYSIS_INVENTORY.md) for details on our code quality tools.
+**Static Analysis**: We maintain a comprehensive static analysis toolchain including Scalafmt, Scalafix, Scapegoat, and Scoverage. See [Static Analysis Inventory](docs/reports/STATIC_ANALYSIS_INVENTORY.md) for details on our code quality tools.
 
 ## Operations and Maintenance
 
@@ -390,7 +583,7 @@ metadata:
 spec:
   containers:
   - name: fukuii
-    image: ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+    image: ghcr.io/chippr-robotics/fukuii:latest
     ports:
     - containerPort: 8546
       name: rpc
@@ -418,7 +611,7 @@ spec:
 version: '3.8'
 services:
   fukuii:
-    image: ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+    image: ghcr.io/chippr-robotics/fukuii:latest
     ports:
       - "8546:8546"
       - "30303:30303"

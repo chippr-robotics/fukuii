@@ -17,12 +17,17 @@ import com.chipprbots.ethereum.utils.Logger
   *   Provides support for generalized "mining". The exact semantics are up to the specific mining protocol
   *   implementation.
   */
+/** @param gasLimitTarget
+  *   Target gas limit for mined blocks. The miner will gradually adjust the gas limit toward this target at ±1/1024 per
+  *   block, matching the consensus-enforced bound divisor. ETC mainnet default: 8,000,000.
+  */
 final case class MiningConfig(
     protocol: Protocol,
     coinbase: Address,
     headerExtraData: ByteString, // only used in BlockGenerator
     blockCacheSize: Int, // only used in BlockGenerator
-    miningEnabled: Boolean
+    miningEnabled: Boolean,
+    gasLimitTarget: BigInt
 )
 
 object MiningConfig extends Logger {
@@ -33,13 +38,10 @@ object MiningConfig extends Logger {
     final val HeaderExtraData = "header-extra-data"
     final val BlockCacheSize = "block-cashe-size"
     final val MiningEnabled = "mining-enabled"
+    final val GasLimitTarget = "gas-limit-target"
   }
 
-  final val AllowedProtocols: Set[String] = Set(
-    Protocol.Names.PoW,
-    Protocol.Names.MockedPow,
-    Protocol.Names.RestrictedPoW
-  )
+  final val AllowedProtocols: Set[String] = Protocol.KnownProtocolNames
 
   final val AllowedProtocolsError: String => String = (s: String) =>
     Keys.Mining +
@@ -70,13 +72,17 @@ object MiningConfig extends Logger {
       .take(BlockHeaderValidator.MaxExtraDataSize)
     val blockCacheSize = config.getInt(Keys.BlockCacheSize)
     val miningEnabled = config.getBoolean(Keys.MiningEnabled)
+    val gasLimitTarget =
+      if (config.hasPath(Keys.GasLimitTarget)) BigInt(config.getLong(Keys.GasLimitTarget))
+      else BigInt(8_000_000) // ETC mainnet default
 
     new MiningConfig(
       protocol = protocol,
       coinbase = coinbase,
       headerExtraData = headerExtraData,
       blockCacheSize = blockCacheSize,
-      miningEnabled = miningEnabled
+      miningEnabled = miningEnabled,
+      gasLimitTarget = gasLimitTarget
     )
   }
 }

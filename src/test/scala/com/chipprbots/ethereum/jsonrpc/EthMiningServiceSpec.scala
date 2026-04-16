@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.WithActorSystemShutDown
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.consensus.blocks.PendingBlock
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
+import com.chipprbots.ethereum.consensus.mining.CoinbaseProvider
 import com.chipprbots.ethereum.consensus.mining.MiningConfigs
 import com.chipprbots.ethereum.consensus.mining.TestMining
 import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
@@ -308,6 +309,93 @@ class EthMiningServiceSpec
     }
   }
 
+  it should "start mining via RPC" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    val response: ServiceResponse[StartMinerResponse] = ethMiningService.startMiner(StartMinerRequest())
+    response.unsafeRunSync() shouldEqual Right(StartMinerResponse(true))
+  }
+
+  it should "stop mining via RPC" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    val response: ServiceResponse[StopMinerResponse] = ethMiningService.stopMiner(StopMinerRequest())
+    response.unsafeRunSync() shouldEqual Right(StopMinerResponse(true))
+  }
+
+  it should "return detailed miner status" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    // Initially not mining
+    val response1: ServiceResponse[GetMinerStatusResponse] = ethMiningService.getMinerStatus(GetMinerStatusRequest())
+    val status1 = response1.unsafeRunSync()
+    status1 shouldBe Symbol("right")
+    status1.toOption.get.isMining shouldBe false
+    status1.toOption.get.coinbase shouldEqual miningConfig.coinbase
+    status1.toOption.get.hashRate shouldEqual BigInt(0)
+
+    // Submit a hashrate and check status
+    ethMiningService.submitHashRate(SubmitHashRateRequest(100, ByteString("miner1"))).unsafeRunSync()
+    val response2: ServiceResponse[GetMinerStatusResponse] = ethMiningService.getMinerStatus(GetMinerStatusRequest())
+    val status2 = response2.unsafeRunSync()
+    status2 shouldBe Symbol("right")
+    status2.toOption.get.isMining shouldBe true
+    status2.toOption.get.hashRate shouldEqual BigInt(100)
+  }
+
+  it should "set and get the etherbase address" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    // Get initial coinbase
+    val response1: ServiceResponse[GetCoinbaseResponse] = ethMiningService.getCoinbase(GetCoinbaseRequest())
+    response1.unsafeRunSync() shouldEqual Right(GetCoinbaseResponse(miningConfig.coinbase))
+
+    // Set new etherbase
+    val setResponse: ServiceResponse[EthMiningService.SetEtherbaseResponse] =
+      ethMiningService.setEtherbase(EthMiningService.SetEtherbaseRequest(testEtherbaseAddress))
+    setResponse.unsafeRunSync() shouldEqual Right(EthMiningService.SetEtherbaseResponse(true))
+
+    // Verify new coinbase
+    val response2: ServiceResponse[GetCoinbaseResponse] = ethMiningService.getCoinbase(GetCoinbaseRequest())
+    response2.unsafeRunSync() shouldEqual Right(GetCoinbaseResponse(testEtherbaseAddress))
+
+    // Verify miner status shows new coinbase
+    val statusResponse: ServiceResponse[GetMinerStatusResponse] =
+      ethMiningService.getMinerStatus(GetMinerStatusRequest())
+    val status = statusResponse.unsafeRunSync()
+    status shouldBe Symbol("right")
+    status.toOption.get.coinbase shouldEqual testEtherbaseAddress
+  }
+
+  it should "use updated etherbase in block generation" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    // Set new etherbase
+    ethMiningService.setEtherbase(EthMiningService.SetEtherbaseRequest(testEtherbaseAddress)).unsafeRunSync()
+
+    // Setup block generation with expectation that new etherbase is used
+    (blockGenerator
+      .generateBlock(
+        _: Block,
+        _: Seq[SignedTransaction],
+        _: Address,
+        _: Seq[BlockHeader],
+        _: Option[InMemoryWorldStateProxy]
+      )(_: BlockchainConfig))
+      .expects(parentBlock, Nil, testEtherbaseAddress, *, *, *)
+      .returning(PendingBlockAndState(PendingBlock(block, Nil), fakeWorld))
+
+    blockchainWriter.save(parentBlock, Nil, ChainWeight.totalDifficultyOnly(parentBlock.header.difficulty), true)
+
+    // Start the getWork call asynchronously
+    val workFuture: Future[Either[JsonRpcError, GetWorkResponse]] =
+      ethMiningService.getWork(GetWorkRequest()).unsafeToFuture()
+
+    // Handle the actor messages
+    pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)
+    pendingTransactionsManager.reply(PendingTransactionsManager.PendingTransactionsResponse(Nil))
+
+    ommersPool.expectMsg(OmmersPool.GetOmmers(parentBlock.hash))
+    ommersPool.reply(OmmersPool.Ommers(Nil))
+
+    // Wait for the result
+    import scala.concurrent.Await
+    import scala.concurrent.duration._
+    val response = Await.result(workFuture, 10.seconds)
+
+    response shouldBe Symbol("right")
+  }
+
   // NOTE TestSetup uses Ethash consensus; check `consensusConfig`.
   class TestSetup(implicit system: ActorSystem) extends EphemBlockchainTestSetup with ApisBuilder {
     val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
@@ -320,6 +408,9 @@ class EthMiningServiceSpec
 
     val minerActiveTimeout: FiniteDuration = 2.seconds // Short timeout for tests
     val getTransactionFromPoolTimeout: FiniteDuration = 20.seconds
+
+    // Test constants
+    val testEtherbaseAddress: Address = Address("0x1234567890123456789012345678901234567890")
 
     lazy val minerKey: AsymmetricCipherKeyPair = crypto.keyPairFromPrvKey(
       ByteStringUtils.string2hash("00f7500a7178548b8a4488f78477660b548c9363e16b584c21e0208b3f1e0dc61f")
@@ -346,6 +437,8 @@ class EthMiningServiceSpec
       override def healthConfig: JsonRpcHealthConfig = baseJsonRpcConfig.healthConfig
     }
 
+    override lazy val coinbaseProvider = new CoinbaseProvider(miningConfig.coinbase)
+
     lazy val ethMiningService = new EthMiningService(
       blockchainReader,
       mining,
@@ -354,7 +447,8 @@ class EthMiningServiceSpec
       syncingController.ref,
       pendingTransactionsManager.ref,
       getTransactionFromPoolTimeout,
-      this
+      this,
+      coinbaseProvider
     )
 
     val difficulty = 131072

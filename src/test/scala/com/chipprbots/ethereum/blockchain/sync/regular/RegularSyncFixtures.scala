@@ -32,20 +32,20 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.blockchain.sync._
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
-import com.chipprbots.ethereum.consensus.blocks.CheckpointBlockGenerator
-import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.{EvmCodeStorage, StateStorage}
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits._
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.ledger._
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.RemoteStatus
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.Message
+import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
+import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.network.p2p.messages.ETC64.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.NodeData
@@ -73,26 +73,27 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
       (0 to 5).toList.map((peerId _).andThen(getPeer)).fproduct(getPeerInfo(_)).toMap
     val defaultPeer: Peer = peerByNumber(0)
 
-    val etcPeerManager: TestProbe = TestProbe()
+    val networkPeerManager: TestProbe = TestProbe()
     val peerEventBus: TestProbe = TestProbe()
     val ommersPool: TestProbe = TestProbe()
     val pendingTransactionsManager: TestProbe = TestProbe()
-    val checkpointBlockGenerator: CheckpointBlockGenerator = new CheckpointBlockGenerator()
     val peersClient: TestProbe = TestProbe()
     val blacklist: CacheBasedBlacklist = CacheBasedBlacklist.empty(100)
     lazy val branchResolution = new BranchResolution(blockchainReader)
 
     val stateStorage: StateStorage = stub[StateStorage]
+    val evmCodeStorage: EvmCodeStorage = stub[EvmCodeStorage]
 
     lazy val regularSync: ActorRef = system.actorOf(
       RegularSync
         .props(
           peersClient.ref,
-          etcPeerManager.ref,
+          networkPeerManager.ref,
           peerEventBus.ref,
           consensusAdapter,
           blockchainReader,
           stateStorage,
+          evmCodeStorage,
           branchResolution,
           validators.blockValidator,
           blacklist,
@@ -142,7 +143,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
 
     def getPeerInfo(
         peer: Peer,
-        capability: Capability = Capability.ETC64
+        capability: Capability = Capability.ETH68
     ): PeerInfo = {
       val status =
         RemoteStatus(
@@ -290,7 +291,6 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
         }
     }
 
-    // TODO: consider extracting it somewhere closer to domain
     implicit class BlocksListOps(blocks: List[Block]) {
       def headNumberUnsafe: BigInt = blocks.head.number
       def headNumber: Option[BigInt] = blocks.headOption.map(_.number)
@@ -304,7 +304,6 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
       def byHashUnsafe(hash: ByteString): Block = byHash(hash).get
     }
 
-    // TODO: consider extracting it into common test environment
     implicit class TestProbeOps(probe: TestProbe) {
 
       def expectMsgEq[T: Eq](msg: T): T = expectMsgEq(remainingOrDefault, msg)
@@ -332,22 +331,41 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
 
       def expectMsgAllOfEq[T1: Eq, T2: Eq](max: FiniteDuration, msg1: T1, msg2: T2): (T1, T2) = {
         val received = probe.receiveN(2, max)
-        (
-          received.find(m => Eq[T1].eqv(msg1, m.asInstanceOf[T1])).get.asInstanceOf[T1],
-          received.find(m => Eq[T2].eqv(msg2, m.asInstanceOf[T2])).get.asInstanceOf[T2]
-        )
+        val found1 = received.find(m => Eq[T1].eqv(msg1, m.asInstanceOf[T1]))
+        val found2 = received.find(m => Eq[T2].eqv(msg2, m.asInstanceOf[T2]))
+
+        (found1, found2) match {
+          case (Some(r1), Some(r2)) => (r1.asInstanceOf[T1], r2.asInstanceOf[T2])
+          case (None, _) =>
+            fail(s"Expected message $msg1 not found in received messages: $received")
+          case (_, None) =>
+            fail(s"Expected message $msg2 not found in received messages: $received")
+        }
       }
     }
 
     // Helper to compare ETH66 messages ignoring requestId (which is dynamically generated
-    // for core-geth compatibility). Only handles GetBlockHeaders and GetBlockBodies as those
-    // are the ETH66 message types used in these tests. Other ETH66 request types like
-    // GetPooledTransactions, GetNodeData, and GetReceipts are not used in RegularSync tests.
+    // for core-geth compatibility). Also handles comparison between ETH65 and ETH66 message
+    // versions. Only handles GetBlockHeaders and GetBlockBodies as those are the ETH66
+    // message types used in these tests. Other ETH66 request types like GetPooledTransactions,
+    // GetNodeData, and GetReceipts are not used in RegularSync tests.
     private def messagesEqualIgnoringRequestId(x: Message, y: Message): Boolean = (x, y) match {
+      // ETH66 to ETH66 comparison
       case (h1: ETH66GetBlockHeaders, h2: ETH66GetBlockHeaders) =>
         h1.block == h2.block && h1.maxHeaders == h2.maxHeaders && h1.skip == h2.skip && h1.reverse == h2.reverse
       case (b1: ETH66GetBlockBodies, b2: ETH66GetBlockBodies) =>
         b1.hashes == b2.hashes
+
+      // ETH65 to ETH66 comparison (and vice versa)
+      case (b1: GetBlockBodies, b2: ETH66GetBlockBodies) =>
+        b1.hashes.toSeq == b2.hashes.toSeq
+      case (b1: ETH66GetBlockBodies, b2: GetBlockBodies) =>
+        b1.hashes.toSeq == b2.hashes.toSeq
+      case (h1: GetBlockHeaders, h2: ETH66GetBlockHeaders) =>
+        h1.block == h2.block && h1.maxHeaders == h2.maxHeaders && h1.skip == h2.skip && h1.reverse == h2.reverse
+      case (h1: ETH66GetBlockHeaders, h2: GetBlockHeaders) =>
+        h1.block == h2.block && h1.maxHeaders == h2.maxHeaders && h1.skip == h2.skip && h1.reverse == h2.reverse
+
       case _ => x == y
     }
 
@@ -411,7 +429,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
         if (block == newBlock) {
           importedNewBlock = true
           IO.pure(
-            BlockImportedToTop(List(BlockData(newBlock, Nil, ChainWeight(0, newBlock.number))))
+            BlockImportedToTop(List(BlockData(newBlock, Nil, ChainWeight(newBlock.number))))
           )
         } else {
           if (block == testBlocks.last) {
@@ -451,7 +469,10 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
     def sendLastTestBlockAsTop(): Unit = sendNewBlock(testBlocks.last)
 
     def sendNewBlock(block: Block = newBlock, peer: Peer = defaultPeer): Unit =
-      blockFetcher ! MessageFromPeer(NewBlock(block, ChainWeight.totalDifficultyOnly(block.number)), peer.id)
+      blockFetcher ! MessageFromPeer(
+        BaseETH6XMessages.NewBlock(block, ChainWeight.totalDifficultyOnly(block.number).totalDifficulty),
+        peer.id
+      )
 
     def goToTop(): Unit = {
       regularSync ! SyncProtocol.Start

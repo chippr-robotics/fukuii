@@ -6,7 +6,7 @@
     <!--read properties from application.conf using PropertyDefiner (logback 1.5.x compatible)-->
     <define name="LOGSLEVEL" class="com.chipprbots.ethereum.utils.ConfigPropertyDefiner">
         <key>logging.logs-level</key>
-        <defaultValue>INFO</defaultValue>
+        <defaultValue>ERROR</defaultValue>
     </define>
     <define name="ASJSON" class="com.chipprbots.ethereum.utils.ConfigPropertyDefiner">
         <key>logging.json-output</key>
@@ -21,44 +21,7 @@
         <defaultValue>fukuii</defaultValue>
     </define>
 
-    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder>
-            <pattern>${stdoutEncoderPattern}</pattern>
-        </encoder>
-    </appender>
-
-    <appender name="STASH" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
-            <!-- Stable JSON fields for structured logging 
-                 Use FUKUII_NODE_ID to set a custom node identifier instead of hostname for production -->
-            <customFields>{"service":"fukuii","node":"${FUKUII_NODE_ID:-${HOSTNAME}}","environment":"${FUKUII_ENV:-production}"}</customFields>
-            <fieldNames>
-                <timestamp>timestamp</timestamp>
-                <version>[ignore]</version>
-                <logger>logger</logger>
-                <thread>thread</thread>
-                <level>level</level>
-                <levelValue>level_value</levelValue>
-                <message>message</message>
-                <stackTrace>stack_trace</stackTrace>
-            </fieldNames>
-            <!-- Include MDC (Mapped Diagnostic Context) fields -->
-            <includeMdcKeyNames>
-                <includeMdcKeyName>peer</includeMdcKeyName>
-                <includeMdcKeyName>block</includeMdcKeyName>
-                <includeMdcKeyName>transaction</includeMdcKeyName>
-                <includeMdcKeyName>actor</includeMdcKeyName>
-            </includeMdcKeyNames>
-            <!-- Include caller info for debugging 
-                 Set to true via -Dlogback.includeCallerData=true for detailed debugging
-                 Disabled by default in production for performance -->
-            <includeCallerData>false</includeCallerData>
-            <!-- Include context name -->
-            <includeContext>true</includeContext>
-        </encoder>
-    </appender>
-
-    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <appender name="FILE" class="com.chipprbots.ethereum.utils.ResilientRollingFileAppender">
         <file>${LOGSDIR}/${LOGSFILENAME}.log</file>
         <append>true</append>
         <rollingPolicy class="ch.qos.logback.core.rolling.FixedWindowRollingPolicy">
@@ -76,15 +39,42 @@
 
     <appender name="METRICS" class="io.prometheus.client.logback.InstrumentedAppender" />
 
-    <root level="${LOGSLEVEL}">
+    <!-- Console appender - uses JSON output if ASJSON property is true, otherwise plain text -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <if condition='p("ASJSON").contains("true")'>
             <then>
-                <appender-ref ref="STASH" />
+                <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                    <customFields>{"service":"fukuii","node":"${FUKUII_NODE_ID:-${HOSTNAME}}","environment":"${FUKUII_ENV:-production}"}</customFields>
+                    <fieldNames>
+                        <timestamp>timestamp</timestamp>
+                        <version>[ignore]</version>
+                        <logger>logger</logger>
+                        <thread>thread</thread>
+                        <level>level</level>
+                        <levelValue>level_value</levelValue>
+                        <message>message</message>
+                        <stackTrace>stack_trace</stackTrace>
+                    </fieldNames>
+                    <includeMdcKeyNames>
+                        <includeMdcKeyName>peer</includeMdcKeyName>
+                        <includeMdcKeyName>block</includeMdcKeyName>
+                        <includeMdcKeyName>transaction</includeMdcKeyName>
+                        <includeMdcKeyName>actor</includeMdcKeyName>
+                    </includeMdcKeyNames>
+                    <includeCallerData>false</includeCallerData>
+                    <includeContext>true</includeContext>
+                </encoder>
             </then>
             <else>
-                <appender-ref ref="STDOUT" />
+                <encoder>
+                    <pattern>${stdoutEncoderPattern}</pattern>
+                </encoder>
             </else>
         </if>
+    </appender>
+
+    <root level="${LOGSLEVEL}">
+        <appender-ref ref="CONSOLE" />
         <appender-ref ref="FILE" />
         <appender-ref ref="METRICS" />
     </root>
@@ -95,6 +85,11 @@
     <!-- 
          This section provides logger entries for all major fukuii components.
          Each logger can be manually set to DEBUG for troubleshooting.
+         
+         DEFAULT POLICY (minimal base):
+         - Root level is ERROR (only actionable failures)
+         - High-level lifecycle events (DAG generation, sync status) use INFO
+         - Low-level operations (peer connections, protocol details) use ERROR
          
          Log Level Guidelines (see ADR OPS-002):
          - ERROR: Failures requiring immediate attention
@@ -117,106 +112,137 @@
     <logger name="org.jupnp.protocol.RetrieveRemoteDescriptors" level="ERROR" />
     
     <!-- =================================================================== -->
-    <!-- SCALANET - Low-level networking library                             -->
+    <!-- HIGH-LEVEL LIFECYCLE EVENTS (INFO level for actionable status)     -->
     <!-- =================================================================== -->
-    <!-- Set to DEBUG for UDP/TCP socket-level diagnostics -->
-    <logger name="com.chipprbots.scalanet" level="INFO" />
-    <logger name="com.chipprbots.scalanet.peergroup.udp.StaticUDPPeerGroup" level="INFO" />
-    <logger name="com.chipprbots.scalanet.discovery.ethereum.v4.DiscoveryService" level="INFO" />
+    <!-- Application lifecycle -->
+    <logger name="com.chipprbots.ethereum.App" level="INFO" />
+    <logger name="com.chipprbots.ethereum.Fukuii" level="INFO" />
     
-    <!-- =================================================================== -->
-    <!-- NETWORK - Peer connections and communication                        -->
-    <!-- =================================================================== -->
-    <!-- Set to DEBUG for peer connection troubleshooting -->
-    <logger name="com.chipprbots.ethereum.network" level="INFO" />
-    <logger name="com.chipprbots.ethereum.network.PeerActor" level="INFO" />
-    <logger name="com.chipprbots.ethereum.network.PeerManagerActor" level="INFO" />
-    <logger name="com.chipprbots.ethereum.network.EtcPeerManagerActor" level="INFO" />
-    <logger name="com.chipprbots.ethereum.network.ServerActor" level="INFO" />
-    <logger name="com.chipprbots.ethereum.network.KnownNodesManager" level="INFO" />
+    <!-- DAG generation progress (important for mining) -->
+    <logger name="com.chipprbots.ethereum.consensus.pow.miners.EthashDAGManager" level="INFO" />
     
-    <!-- Network discovery - set to DEBUG for peer discovery issues -->
-    <logger name="com.chipprbots.ethereum.network.discovery" level="INFO" />
+    <!-- Peer discovery lifecycle (start/stop events only) -->
     <logger name="com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager" level="INFO" />
     
-    <!-- Network handshaking - set to DEBUG for handshake protocol issues -->
-    <logger name="com.chipprbots.ethereum.network.handshaker" level="INFO" />
-    <logger name="com.chipprbots.ethereum.network.handshaker.EtcHelloExchangeState" level="INFO" />
-    <logger name="com.chipprbots.ethereum.network.handshaker.EthNodeStatus64ExchangeState" level="INFO" />
-    <logger name="com.chipprbots.ethereum.network.handshaker.EtcForkBlockExchangeState" level="INFO" />
-    
-    <!-- =================================================================== -->
-    <!-- RLPX - Encrypted transport protocol                                 -->
-    <!-- =================================================================== -->
-    <!-- Set to DEBUG for RLPx connection and message encoding issues -->
-    <logger name="com.chipprbots.ethereum.network.rlpx" level="INFO" />
-    <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="INFO" />
-    <logger name="com.chipprbots.ethereum.network.rlpx.FrameCodec" level="INFO" />
-    <logger name="com.chipprbots.ethereum.network.rlpx.MessageCodec" level="INFO" />
-    <logger name="com.chipprbots.ethereum.network.rlpx.AuthHandshaker" level="INFO" />
-    
-    <!-- =================================================================== -->
-    <!-- SYNC - Block synchronization                                        -->
-    <!-- =================================================================== -->
-    <!-- Core sync controller - set to DEBUG for sync strategy issues -->
-    <logger name="com.chipprbots.ethereum.blockchain.sync" level="INFO" />
+    <!-- Sync status and lifecycle (high-level status only) -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.SyncController" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.AdaptiveSyncStrategy" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.PeersClient" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.Blacklist" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.BlockchainHostActor" level="INFO" />
-    
-    <!-- Fast sync - set to DEBUG for fast sync troubleshooting -->
-    <logger name="com.chipprbots.ethereum.blockchain.sync.fast" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.fast.FastSync" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.fast.PivotBlockSelector" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.fast.StateStorageActor" level="INFO" />
-    
-    <!-- Regular sync - set to DEBUG for regular sync troubleshooting -->
-    <logger name="com.chipprbots.ethereum.blockchain.sync.regular" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.regular.RegularSync" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.AdaptiveSyncStrategy" level="INFO" />
+    
+    <!-- Genesis and checkpoint loading -->
+    <logger name="com.chipprbots.ethereum.blockchain.data.GenesisDataLoader" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.data.BootstrapCheckpointLoader" level="INFO" />
+    
+    <!-- =================================================================== -->
+    <!-- LOW-LEVEL NETWORKING (ERROR only - peer connections)                -->
+    <!-- =================================================================== -->
+    <!-- Scalanet - low-level networking library -->
+    <logger name="com.chipprbots.scalanet" level="ERROR" />
+    <logger name="com.chipprbots.scalanet.peergroup.udp.StaticUDPPeerGroup" level="ERROR" />
+    <logger name="com.chipprbots.scalanet.discovery.ethereum.v4.DiscoveryService" level="ERROR" />
+    
+    <!-- Discovery v5 - detailed peer discovery logs -->
+    <logger name="com.chipprbots.scalanet.discovery.ethereum.v5" level="ERROR" />
+    <logger name="com.chipprbots.scalanet.discovery.ethereum.v5.DiscoveryService" level="ERROR" />
+    <logger name="com.chipprbots.scalanet.discovery.ethereum.v5.DiscoveryNetwork" level="ERROR" />
+    <logger name="com.chipprbots.scalanet.discovery.ethereum.v5.DiscoveryRPC" level="ERROR" />
+    <logger name="com.chipprbots.scalanet.discovery.ethereum.v5.Session" level="ERROR" />
+    
+    <!-- Network - peer connections and communication -->
+    <logger name="com.chipprbots.ethereum.network" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.network.PeerActor" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.network.PeerManagerActor" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.network.NetworkPeerManagerActor" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.network.ServerActor" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network.KnownNodesManager" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.network.PeerScoringManager" level="ERROR" />
+    
+    <!-- Network discovery - detailed discovery operations -->
+    <logger name="com.chipprbots.ethereum.network.discovery" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.network.discovery.Node" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.network.discovery.StaticNodesLoader" level="ERROR" />
+    
+    <!-- Network handshaking - protocol handshake details -->
+    <logger name="com.chipprbots.ethereum.network.handshaker" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network.handshaker.EtcHelloExchangeState" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.network.handshaker.EthNodeStatus64ExchangeState" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network.handshaker.EthNodeStatus63ExchangeState" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.network.handshaker.EtcForkBlockExchangeState" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.network.handshaker.EtcNodeStatusExchangeState" level="ERROR" />
+    
+    <!-- =================================================================== -->
+    <!-- RLPX - Encrypted transport protocol (ERROR only)                    -->
+    <!-- =================================================================== -->
+    <logger name="com.chipprbots.ethereum.network.rlpx" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network.rlpx.FrameCodec" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.network.rlpx.MessageCodec" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.network.rlpx.AuthHandshaker" level="ERROR" />
+    
+    <!-- =================================================================== -->
+    <!-- SYNC INTERNALS (ERROR only - detailed sync operations)             -->
+    <!-- =================================================================== -->
+    <!-- Peer list management and blacklist -->
+    <logger name="com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.PeersClient" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.Blacklist" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.BlockchainHostActor" level="ERROR" />
+    
+    <!-- Fast sync internals -->
+    <logger name="com.chipprbots.ethereum.blockchain.sync.fast" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.fast.PivotBlockSelector" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.fast.StateStorageActor" level="ERROR" />
+    
+    <!-- Regular sync internals -->
+    <logger name="com.chipprbots.ethereum.blockchain.sync.regular" level="ERROR" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.regular.HeadersFetcher" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.regular.BodiesFetcher" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.regular.FetchRequest" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.regular.HeadersFetcher" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.regular.BodiesFetcher" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.regular.FetchRequest" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.regular.StateNodeFetcher" level="INFO" />
     
-    <!-- SNAP sync - set to DEBUG for SNAP sync troubleshooting -->
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.AccountRangeDownloader" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.StorageRangeDownloader" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.TrieNodeHealer" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.MerkleProofVerifier" level="INFO" />
+    <!-- SNAP sync internals -->
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap" level="ERROR" />
+    <!-- SNAP sync actors (AccountRangeCoordinator, workers) — INFO for optimization visibility -->
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.actors" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.AccountRangeDownloader" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.StorageRangeDownloader" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.TrieNodeHealer" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.ByteCodeDownloader" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.MerkleProofVerifier" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPErrorHandler" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker" level="ERROR" />
     
     <!-- =================================================================== -->
-    <!-- LEDGER - Block execution and state management                       -->
+    <!-- OTHER COMPONENTS (inherit ERROR from root)                          -->
     <!-- =================================================================== -->
-    <!-- Set to DEBUG for block execution troubleshooting -->
-    <logger name="com.chipprbots.ethereum.ledger" level="INFO" />
-    <logger name="com.chipprbots.ethereum.ledger.BlockExecution" level="INFO" />
-    <logger name="com.chipprbots.ethereum.ledger.BlockPreparator" level="INFO" />
-    <logger name="com.chipprbots.ethereum.ledger.BlockQueue" level="INFO" />
-    <logger name="com.chipprbots.ethereum.ledger.BranchResolution" level="INFO" />
+    <!-- Set to DEBUG for specific troubleshooting -->
+    <logger name="com.chipprbots.ethereum.ledger" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.ledger.BlockExecution" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.ledger.BlockPreparator" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.ledger.BlockQueue" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.ledger.BranchResolution" level="ERROR" />
     
     <!-- =================================================================== -->
     <!-- DATABASE - Storage and persistence                                  -->
     <!-- =================================================================== -->
     <!-- Set to DEBUG for database operation troubleshooting -->
-    <logger name="com.chipprbots.ethereum.db" level="INFO" />
-    <logger name="com.chipprbots.ethereum.db.dataSource.RocksDbDataSource" level="INFO" />
-    <logger name="com.chipprbots.ethereum.db.storage.ReferenceCountNodeStorage" level="INFO" />
+    <logger name="com.chipprbots.ethereum.db" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.db.dataSource.RocksDbDataSource" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.db.storage.ReferenceCountNodeStorage" level="ERROR" />
     
     <!-- =================================================================== -->
     <!-- MPT - Merkle Patricia Trie                                          -->
     <!-- =================================================================== -->
     <!-- Set to DEBUG for trie operation troubleshooting -->
-    <logger name="com.chipprbots.ethereum.mpt" level="INFO" />
+    <logger name="com.chipprbots.ethereum.mpt" level="ERROR" />
     
     <!-- =================================================================== -->
     <!-- VM - Ethereum Virtual Machine                                       -->
@@ -227,50 +253,42 @@
     <logger name="com.chipprbots.ethereum.vm.VM" level="OFF" />
     
     <!-- External VM interface - set to DEBUG for extvm troubleshooting -->
-    <logger name="com.chipprbots.ethereum.extvm" level="INFO" />
-    <logger name="com.chipprbots.ethereum.extvm.VMClient" level="INFO" />
+    <logger name="com.chipprbots.ethereum.extvm" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.extvm.VMClient" level="ERROR" />
     
     <!-- =================================================================== -->
     <!-- CONSENSUS - Mining and block validation                             -->
     <!-- =================================================================== -->
     <!-- Set to DEBUG for mining troubleshooting -->
-    <logger name="com.chipprbots.ethereum.consensus" level="INFO" />
-    <logger name="com.chipprbots.ethereum.consensus.pow.PoWMiningCoordinator" level="INFO" />
+    <logger name="com.chipprbots.ethereum.consensus" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.consensus.pow.PoWMiningCoordinator" level="ERROR" />
     
     <!-- =================================================================== -->
     <!-- TRANSACTIONS - Pending transactions and mempool                     -->
     <!-- =================================================================== -->
     <!-- Set to DEBUG for transaction pool troubleshooting -->
-    <logger name="com.chipprbots.ethereum.transactions" level="INFO" />
-    <logger name="com.chipprbots.ethereum.transactions.PendingTransactionsManager" level="INFO" />
-    <logger name="com.chipprbots.ethereum.transactions.TransactionHistoryService" level="INFO" />
+    <logger name="com.chipprbots.ethereum.transactions" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.transactions.PendingTransactionsManager" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.transactions.TransactionHistoryService" level="ERROR" />
     
     <!-- =================================================================== -->
     <!-- JSON-RPC - API server                                               -->
     <!-- =================================================================== -->
     <!-- Set to DEBUG for RPC request/response troubleshooting -->
-    <logger name="com.chipprbots.ethereum.jsonrpc" level="INFO" />
-    <logger name="com.chipprbots.ethereum.jsonrpc.JsonRpcController" level="INFO" />
-    <logger name="com.chipprbots.ethereum.jsonrpc.server.http" level="INFO" />
+    <logger name="com.chipprbots.ethereum.jsonrpc" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.jsonrpc.JsonRpcController" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.jsonrpc.server.http" level="ERROR" />
     
     <!-- =================================================================== -->
     <!-- FAUCET - Test network faucet                                        -->
     <!-- =================================================================== -->
     <!-- Set to DEBUG for faucet troubleshooting -->
-    <logger name="com.chipprbots.ethereum.faucet" level="INFO" />
-    <logger name="com.chipprbots.ethereum.faucet.FaucetHandler" level="INFO" />
+    <logger name="com.chipprbots.ethereum.faucet" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.faucet.FaucetHandler" level="ERROR" />
     
     <!-- =================================================================== -->
     <!-- METRICS - Performance monitoring                                    -->
     <!-- =================================================================== -->
     <!-- Set to DEBUG for metrics collection troubleshooting -->
-    <logger name="com.chipprbots.ethereum.metrics" level="INFO" />
-    
-    <!-- =================================================================== -->
-    <!-- BLOCKCHAIN DATA - Genesis and checkpoints                           -->
-    <!-- =================================================================== -->
-    <!-- Set to DEBUG for genesis loading and checkpoint troubleshooting -->
-    <logger name="com.chipprbots.ethereum.blockchain.data" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.data.GenesisDataLoader" level="INFO" />
-    <logger name="com.chipprbots.ethereum.blockchain.data.BootstrapCheckpointLoader" level="INFO" />
+    <logger name="com.chipprbots.ethereum.metrics" level="ERROR" />
 </configuration>

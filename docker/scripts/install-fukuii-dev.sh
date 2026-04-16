@@ -10,8 +10,8 @@ HERE=$(readlink -m $(dirname ${BASH_SOURCE[0]}))
 mkdir ~/repos
 
 cd ~/repos
-git clone https://github.com/chippr-robotics/chordodes_fukuii.git
-cd chordodes_fukuii
+git clone https://github.com/chippr-robotics/fukuii.git
+cd fukuii
 git checkout $FUKUII_TAG
 git submodule update --init
 

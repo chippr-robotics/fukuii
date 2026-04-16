@@ -22,7 +22,6 @@ class ReceiptStorage(val dataSource: DataSource) extends TransactionalKeyValueSt
 
   override def keySerializer: BlockHash => IndexedSeq[Byte] = _.toIndexedSeq
 
-  // FIXME: perhaps we should just operate on ByteString to avoid such strange conversions: ETCM-322
   override def keyDeserializer: IndexedSeq[Byte] => BlockHash = k => ByteString.fromArrayUnsafe(k.toArray)
 
   override def valueSerializer: ReceiptSeq => IndexedSeq[Byte] = receipts =>
@@ -73,7 +72,31 @@ object ReceiptStorage {
       (receipt.postTransactionStateHash, receipt.cumulativeGasUsed, receipt.logsBloomFilter, receipt.logs)
     }
 
+  implicit val type02ReceiptPickler: Pickler[Type02Receipt] =
+    transformPickler[Type02Receipt, (TransactionOutcome, BigInt, ByteString, Seq[TxLogEntry])] {
+      case (state, gas, filter, logs) => Type02Receipt(LegacyReceipt(state, gas, filter, logs))
+    } { receipt =>
+      (receipt.postTransactionStateHash, receipt.cumulativeGasUsed, receipt.logsBloomFilter, receipt.logs)
+    }
+
+  implicit val type03ReceiptPickler: Pickler[Type03Receipt] =
+    transformPickler[Type03Receipt, (TransactionOutcome, BigInt, ByteString, Seq[TxLogEntry])] {
+      case (state, gas, filter, logs) => Type03Receipt(LegacyReceipt(state, gas, filter, logs))
+    } { receipt =>
+      (receipt.postTransactionStateHash, receipt.cumulativeGasUsed, receipt.logsBloomFilter, receipt.logs)
+    }
+
+  implicit val type04ReceiptPickler: Pickler[Type04Receipt] =
+    transformPickler[Type04Receipt, (TransactionOutcome, BigInt, ByteString, Seq[TxLogEntry])] {
+      case (state, gas, filter, logs) => Type04Receipt(LegacyReceipt(state, gas, filter, logs))
+    } { receipt =>
+      (receipt.postTransactionStateHash, receipt.cumulativeGasUsed, receipt.logsBloomFilter, receipt.logs)
+    }
+
   implicit val receiptPickler: Pickler[Receipt] = compositePickler[Receipt]
     .addConcreteType[LegacyReceipt]
     .addConcreteType[Type01Receipt]
+    .addConcreteType[Type02Receipt]
+    .addConcreteType[Type03Receipt]
+    .addConcreteType[Type04Receipt]
 }

@@ -13,8 +13,8 @@ import com.chipprbots.ethereum.crypto.generateKeyPair
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.forkid.ForkId
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.PeerInfo
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.RemoteStatus
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.ForkResolver
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.handshaker.Handshaker.HandshakeComplete.HandshakeFailure
@@ -22,7 +22,6 @@ import com.chipprbots.ethereum.network.handshaker.Handshaker.HandshakeComplete.H
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.Status.StatusEnc
 import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.network.p2p.messages.ETC64
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.BlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders.GetBlockHeadersEnc
@@ -35,7 +34,7 @@ import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.ByteStringUtils._
 import com.chipprbots.ethereum.utils._
 
-class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
+class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
 
   it should "correctly connect during an appropriate handshake if no fork resolver is used" taggedAs (
     UnitTest,
@@ -71,7 +70,7 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     }
   }
 
-  it should "send status with total difficulty only when peer does not support ETC64" taggedAs (
+  it should "send status with total difficulty for ETH63 peers" taggedAs (
     UnitTest,
     NetworkTest
   ) in new LocalPeerETH63Setup with RemotePeerETH63Setup {
@@ -84,40 +83,6 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
       localStatusMsg.copy(totalDifficulty = newChainWeight.totalDifficulty, bestHash = firstBlock.header.hash)
 
     initHandshakerWithoutResolver.nextMessage.map(_.messageToSend) shouldBe Right(localHello: HelloEnc)
-    val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = initHandshakerWithoutResolver.applyMessage(remoteHello)
-    assert(handshakerAfterHelloOpt.isDefined)
-    handshakerAfterHelloOpt.get.nextMessage.map(_.messageToSend.underlyingMsg) shouldBe Right(newLocalStatusMsg)
-
-    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
-      handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
-    assert(handshakerAfterStatusOpt.isDefined)
-    handshakerAfterStatusOpt.get.nextMessage match {
-      case Left(HandshakeSuccess(peerInfo)) =>
-        peerInfo.remoteStatus.capability shouldBe localStatus.capability
-
-      case other =>
-        fail(s"Invalid handshaker state: $other")
-    }
-  }
-
-  it should "send status with total difficulty and latest checkpoint when peer supports ETC64" taggedAs (
-    UnitTest,
-    NetworkTest
-  ) in new LocalPeerETC64Setup with RemotePeerETC64Setup {
-
-    val newChainWeight: ChainWeight = ChainWeight.zero.increase(genesisBlock.header).increase(firstBlock.header)
-
-    blockchainWriter.save(firstBlock, Nil, newChainWeight, saveAsBestBlock = true)
-
-    val newLocalStatusMsg =
-      localStatusMsg
-        .copy(
-          chainWeight = newChainWeight,
-          bestHash = firstBlock.header.hash
-        )
-
-    initHandshakerWithoutResolver.nextMessage.map(_.messageToSend) shouldBe Right(localHello: HelloEnc)
-
     val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = initHandshakerWithoutResolver.applyMessage(remoteHello)
     assert(handshakerAfterHelloOpt.isDefined)
     handshakerAfterHelloOpt.get.nextMessage.map(_.messageToSend.underlyingMsg) shouldBe Right(newLocalStatusMsg)
@@ -299,7 +264,7 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     blockchainWriter.save(firstBlock, Nil, newChainWeight, saveAsBestBlock = true)
 
     // Use a handshaker WITH fork resolver configured
-    val eth64HandshakerWithResolver = EtcHandshaker(etcHandshakerConfigurationWithResolver)
+    val eth64HandshakerWithResolver = NetworkHandshaker(networkHandshakerConfigurationWithResolver)
 
     // Complete Hello exchange
     val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = eth64HandshakerWithResolver.applyMessage(remoteHello)
@@ -362,7 +327,7 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     UnitTest,
     NetworkTest
   ) in new LocalPeerETH63Setup with RemotePeerETH63Setup {
-    val wrongNetworkId: Int = localStatus.networkId + 1
+    val wrongNetworkId: Long = localStatus.networkId + 1
 
     val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = initHandshakerWithResolver.applyMessage(remoteHello)
     val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
@@ -387,7 +352,7 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     )
   }
 
-  it should "fail if the remote peer doesn't support ETH63/ETC64" taggedAs (
+  it should "fail if the remote peer doesn't support ETH63+" taggedAs (
     UnitTest,
     NetworkTest
   ) in new RemotePeerETH63Setup {
@@ -399,32 +364,33 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     )
   }
 
-  it should "use bootstrap pivot block for ForkId when syncing from low block numbers" taggedAs (
+  it should "use actual block number for ForkId (core-geth alignment)" taggedAs (
     UnitTest,
     NetworkTest
   ) in new LocalPeerETH64Setup with RemotePeerETH64Setup {
-    // Simulate a node that has just started regular sync and is at a low block number
-    // This test verifies the fix for the peer connection issue during regular sync
-    
-    // Set up bootstrap pivot block (simulate bootstrap checkpoint at block 19,250,000)
-    val bootstrapPivotBlockNumber = BigInt(19250000)
-    val bootstrapPivotBlockHash = ByteString(Array.fill[Byte](32)(0xaa.toByte))
-    storagesInstance.storages.appStateStorage
-      .putBootstrapPivotBlock(bootstrapPivotBlockNumber, bootstrapPivotBlockHash)
-      .commit()
-    
-    // Advance blockchain to a low block number (simulating regular sync progress)
+    // ALIGNMENT WITH CORE-GETH: ForkId should always use the actual current block number
+    // Core-geth implementation (eth/handler.go):
+    //   head = h.chain.CurrentHeader()
+    //   number = head.Number.Uint64()
+    //   forkID := forkid.NewID(h.chain.Config(), genesis, number, head.Time)
+    //
+    // Core-geth does NOT use checkpoints or pivot blocks for ForkId calculation.
+    // It always uses the actual current block for both bestHash and ForkId calculation.
+    //
+    // This test verifies our implementation matches core-geth behavior.
+
+    // Advance blockchain to a low block number
     val lowBlockNumber = BigInt(1000)
     val lowBlock = firstBlock.copy(header = firstBlock.header.copy(number = lowBlockNumber))
     val lowBlockWeight: ChainWeight = genesisWeight.increase(lowBlock.header)
     blockchainWriter.save(lowBlock, Nil, lowBlockWeight, saveAsBestBlock = true)
-    
+
     // Perform handshake
     val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = initHandshakerWithoutResolver.applyMessage(remoteHello)
     assert(handshakerAfterHelloOpt.isDefined)
-    
-    // The status message should use the bootstrap pivot block for ForkId calculation
-    // even though the actual best block is at 1000
+
+    // The status message should use the actual block number for ForkId calculation
+    // This matches core-geth behavior where ForkId and bestHash use the same block
     handshakerAfterHelloOpt.get.nextMessage match {
       case Right(nextMsg) =>
         nextMsg.messageToSend match {
@@ -432,9 +398,8 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
             val statusMsg = statusEnc.underlyingMsg
             // Best block should be the low block
             statusMsg.bestHash shouldBe lowBlock.header.hash
-            // But ForkId should be calculated using bootstrap pivot block, not the actual block number
-            // This ensures compatibility with synced peers
-            val expectedForkId = ForkId.create(genesisBlock.header.hash, blockchainConfig)(bootstrapPivotBlockNumber)
+            // ForkId should be calculated using actual block number (1000), matching core-geth
+            val expectedForkId = ForkId.create(genesisBlock.header.hash, blockchainConfig)(lowBlockNumber)
             statusMsg.forkId shouldBe expectedForkId
           case other =>
             fail(s"Expected ETH64.Status.StatusEnc message but got: $other")
@@ -442,12 +407,12 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
       case other =>
         fail(s"Expected status message but got: $other")
     }
-    
+
     val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
       handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
     assert(handshakerAfterStatusOpt.isDefined)
-    
-    // Should successfully connect (not disconnect due to ForkId mismatch)
+
+    // Should successfully connect
     handshakerAfterStatusOpt.get.nextMessage match {
       case Left(HandshakeSuccess(peerInfo)) =>
         peerInfo.remoteStatus.capability shouldBe localStatus.capability
@@ -456,46 +421,34 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     }
   }
 
-  it should "switch to actual block number for ForkId when close to bootstrap pivot" taggedAs (
+  it should "use actual block number for ForkId at high block numbers (core-geth alignment)" taggedAs (
     UnitTest,
     NetworkTest
   ) in new LocalPeerETH64Setup with RemotePeerETH64Setup {
-    // This test verifies that once the node syncs close enough to the bootstrap pivot block,
-    // it switches to using the actual block number for ForkId calculation
-    
-    // Set up bootstrap pivot block
-    val bootstrapPivotBlockNumber = BigInt(19250000)
-    val bootstrapPivotBlockHash = ByteString(Array.fill[Byte](32)(0xaa.toByte))
-    storagesInstance.storages.appStateStorage
-      .putBootstrapPivotBlock(bootstrapPivotBlockNumber, bootstrapPivotBlockHash)
-      .commit()
-    
-    // Advance blockchain to just past the threshold where we switch to actual block numbers
-    // With pivot at 19,250,000, threshold = min(1,925,000, 100,000) = 100,000
-    // The condition for using pivot is: bestBlockNumber < (pivot - threshold)
-    // So switch point is: 19,250,000 - 100,000 = 19,150,000
-    // At 19,200,000: bestBlockNumber (19,200,000) >= (pivot - threshold) (19,150,000)
-    // Since 19,200,000 >= 19,150,000, we're past the switch point
-    // Therefore we should use actual block number (19,200,000) for ForkId, not the pivot
+    // ALIGNMENT WITH CORE-GETH: ForkId should always use the actual current block number
+    // This test verifies the behavior at high block numbers matches core-geth.
+
+    // Advance blockchain to a high block number
     val highBlockNumber = BigInt(19200000)
     val highBlock = firstBlock.copy(header = firstBlock.header.copy(number = highBlockNumber))
     val highBlockWeight: ChainWeight = genesisWeight.increase(highBlock.header)
     blockchainWriter.save(highBlock, Nil, highBlockWeight, saveAsBestBlock = true)
-    
+
     // Perform handshake
     val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = initHandshakerWithoutResolver.applyMessage(remoteHello)
     assert(handshakerAfterHelloOpt.isDefined)
-    
-    // The status message should now use the actual block number for ForkId
-    // because we're within the threshold distance of the bootstrap pivot block
+
+    // The status message should use the actual block number for ForkId
+    // This matches core-geth behavior where ForkId and bestHash use the same block
     handshakerAfterHelloOpt.get.nextMessage match {
       case Right(nextMsg) =>
         nextMsg.messageToSend match {
           case statusEnc: ETH64.Status.StatusEnc =>
             val statusMsg = statusEnc.underlyingMsg
             statusMsg.bestHash shouldBe highBlock.header.hash
-            // ForkId should be calculated using actual block number (19,200,000), not the pivot
-            succeed
+            // ForkId should be calculated using actual block number (19,200,000), matching core-geth
+            val expectedForkId = ForkId.create(genesisBlock.header.hash, blockchainConfig)(highBlockNumber)
+            statusMsg.forkId shouldBe expectedForkId
           case other =>
             fail(s"Expected ETH64.Status.StatusEnc message but got: $other")
         }
@@ -538,28 +491,29 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     )
     lazy val nodeStatusHolder = new AtomicReference(nodeStatus)
 
-    class MockEtcHandshakerConfiguration(pv: List[Capability] = blockchainConfig.capabilities)
-        extends EtcHandshakerConfiguration {
+    class MockNetworkHandshakerConfiguration(pv: List[Capability] = Config.supportedCapabilities)
+        extends NetworkHandshakerConfiguration {
       override val forkResolverOpt: Option[ForkResolver] = None
       override val nodeStatusHolder: AtomicReference[NodeStatus] = TestSetup.this.nodeStatusHolder
       override val peerConfiguration: PeerConfiguration = Config.Network.peer
       override val blockchain: Blockchain = TestSetup.this.blockchain
       override val appStateStorage: AppStateStorage = TestSetup.this.storagesInstance.storages.appStateStorage
       override val blockchainReader: BlockchainReader = TestSetup.this.blockchainReader
-      override val blockchainConfig: BlockchainConfig = TestSetup.this.blockchainConfig.copy(capabilities = pv)
+      override val blockchainConfig: BlockchainConfig = TestSetup.this.blockchainConfig
     }
 
-    val etcHandshakerConfigurationWithResolver: MockEtcHandshakerConfiguration = new MockEtcHandshakerConfiguration {
-      override val forkResolverOpt: Option[ForkResolver] = Some(
-        new ForkResolver.EtcForkResolver(blockchainConfig.daoForkConfig.get)
-      )
-    }
+    val networkHandshakerConfigurationWithResolver: MockNetworkHandshakerConfiguration =
+      new MockNetworkHandshakerConfiguration {
+        override val forkResolverOpt: Option[ForkResolver] = Some(
+          new ForkResolver.EtcForkResolver(blockchainConfig.daoForkConfig.get)
+        )
+      }
 
-    val initHandshakerWithoutResolver: EtcHandshaker = EtcHandshaker(
-      new MockEtcHandshakerConfiguration(List(Capability.ETC64, Capability.ETH63, Capability.ETH64))
+    val initHandshakerWithoutResolver: NetworkHandshaker = NetworkHandshaker(
+      new MockNetworkHandshakerConfiguration(List(Capability.ETH63, Capability.ETH64))
     )
 
-    val initHandshakerWithResolver: EtcHandshaker = EtcHandshaker(etcHandshakerConfigurationWithResolver)
+    val initHandshakerWithResolver: NetworkHandshaker = NetworkHandshaker(networkHandshakerConfigurationWithResolver)
 
     val firstBlock: Block =
       genesisBlock.copy(header = genesisBlock.header.copy(parentHash = genesisBlock.header.hash, number = 1))
@@ -569,7 +523,7 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     val localHello: Hello = Hello(
       p2pVersion = EtcHelloExchangeState.P2pVersion,
       clientId = Config.clientId,
-      capabilities = Seq(Capability.ETC64, Capability.ETH63, Capability.ETH64),
+      capabilities = Config.supportedCapabilities, // Use actual supported capabilities from Config
       listenPort = 0, // Local node not listening
       nodeId = ByteString(nodeStatus.nodeId)
     )
@@ -601,17 +555,6 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
     val localStatus: RemoteStatus = RemoteStatus(localStatusMsg)
   }
 
-  trait LocalPeerETC64Setup extends LocalPeerSetup {
-    val localStatusMsg: ETC64.Status = ETC64.Status(
-      protocolVersion = Capability.ETC64.version,
-      networkId = Config.Network.peer.networkId,
-      chainWeight = ChainWeight.zero.increase(genesisBlock.header),
-      bestHash = genesisBlock.header.hash,
-      genesisHash = genesisBlock.header.hash
-    )
-    val localStatus: RemoteStatus = RemoteStatus(localStatusMsg)
-  }
-
   trait RemotePeerSetup extends TestSetup {
     val remoteNodeStatus: NodeStatus = NodeStatus(
       key = generateKeyPair(secureRandom),
@@ -638,26 +581,12 @@ class EtcHandshakerSpec extends AnyFlatSpec with Matchers {
       genesisHash = genesisBlock.header.hash
     )
 
-    val remoteStatus: RemoteStatus = RemoteStatus(remoteStatusMsg)
-  }
-
-  trait RemotePeerETC64Setup extends RemotePeerSetup {
-    val remoteHello: Hello = Hello(
-      p2pVersion = EtcHelloExchangeState.P2pVersion,
-      clientId = "remote-peer",
-      capabilities = Seq(Capability.ETC64, Capability.ETH63),
-      listenPort = remotePort,
-      nodeId = ByteString(remoteNodeStatus.nodeId)
+    val remoteStatus: RemoteStatus = RemoteStatus(
+      remoteStatusMsg,
+      Capability.ETH63,
+      false,
+      Seq(Capability.ETH63).toList
     )
-
-    val remoteStatusMsg: ETC64.Status =
-      ETC64.Status(
-        protocolVersion = Capability.ETC64.version,
-        networkId = Config.Network.peer.networkId,
-        chainWeight = ChainWeight.zero,
-        bestHash = genesisBlock.header.hash,
-        genesisHash = genesisBlock.header.hash
-      )
   }
 
   trait RemotePeerETH64Setup extends RemotePeerSetup {

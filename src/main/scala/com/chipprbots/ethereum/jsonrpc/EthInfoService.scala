@@ -25,11 +25,27 @@ import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
 import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
+import com.chipprbots.ethereum.ledger.BlockExecution.HistoryStorageAddress
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.vm.PrecompiledContracts
 
 object EthInfoService {
   case class ChainIdRequest()
-  case class ChainIdResponse(value: Byte)
+  case class ChainIdResponse(value: BigInt)
+
+  case class ConfigRequest()
+  case class ForkConfig(
+      activationBlock: BigInt,
+      chainId: BigInt,
+      precompiles: Map[String, Address],
+      systemContracts: Map[String, Address]
+  )
+  case class ConfigResponse(
+      current: Option[ForkConfig],
+      next: Option[ForkConfig],
+      last: Option[ForkConfig]
+  )
 
   case class ProtocolVersionRequest()
   case class ProtocolVersionResponse(value: String)
@@ -50,7 +66,8 @@ object EthInfoService {
       gas: Option[BigInt],
       gasPrice: BigInt,
       value: BigInt,
-      data: ByteString
+      data: ByteString,
+      gasPriceExplicit: Boolean = false
   )
 
   case class IeleCallTx(
@@ -69,6 +86,14 @@ object EthInfoService {
   case class IeleCallRequest(tx: IeleCallTx, block: BlockParam)
   case class IeleCallResponse(returnData: Seq[ByteString])
   case class EstimateGasResponse(gas: BigInt)
+  case class CreateAccessListRequest(tx: CallTx, block: BlockParam) {
+    def toCallRequest: CallRequest = CallRequest(tx, block)
+  }
+  case class CreateAccessListResponse(
+      accessList: Seq[Map[String, Any]],
+      gasUsed: BigInt,
+      error: Option[String]
+  )
 }
 
 class EthInfoService(
@@ -118,9 +143,93 @@ class EthInfoService(
       }
       .map(_.asRight)
 
+  def config(req: ConfigRequest): ServiceResponse[ConfigResponse] = IO {
+    val fbn = blockchainConfig.forkBlockNumbers
+    val chainId = blockchainConfig.chainId
+
+    val basePrecompiles: Map[String, Address] = Map(
+      "ecrecover" -> PrecompiledContracts.EcDsaRecAddr,
+      "sha256" -> PrecompiledContracts.Sha256Addr,
+      "ripemd160" -> PrecompiledContracts.Rip160Addr,
+      "identity" -> PrecompiledContracts.IdAddr
+    )
+    val byzantiumPrecompiles: Map[String, Address] = basePrecompiles ++ Map(
+      "modexp" -> PrecompiledContracts.ModExpAddr,
+      "bn256Add" -> PrecompiledContracts.Bn128AddAddr,
+      "bn256ScalarMul" -> PrecompiledContracts.Bn128MulAddr,
+      "bn256Pairing" -> PrecompiledContracts.Bn128PairingAddr
+    )
+    val istanbulPrecompiles: Map[String, Address] = byzantiumPrecompiles ++ Map(
+      "blake2f" -> PrecompiledContracts.Blake2bCompressionAddr
+    )
+    val olympiaPrecompiles: Map[String, Address] = istanbulPrecompiles ++ Map(
+      "bls12381G1Add" -> PrecompiledContracts.BlsG1AddAddr,
+      "bls12381G1MultiExp" -> PrecompiledContracts.BlsG1MultiExpAddr,
+      "bls12381G2Add" -> PrecompiledContracts.BlsG2AddAddr,
+      "bls12381G2MultiExp" -> PrecompiledContracts.BlsG2MultiExpAddr,
+      "bls12381Pairing" -> PrecompiledContracts.BlsPairingAddr,
+      "bls12381MapG1" -> PrecompiledContracts.BlsMapG1Addr,
+      "bls12381MapG2" -> PrecompiledContracts.BlsMapG2Addr,
+      "p256Verify" -> PrecompiledContracts.P256VerifyAddr
+    )
+
+    val noSystemContracts: Map[String, Address] = Map.empty
+    val olympiaSystemContracts: Map[String, Address] = Map(
+      "historyStorage" -> HistoryStorageAddress
+    )
+
+    // Build fork schedule: (name, blockNumber, precompiles, systemContracts)
+    val forks: List[(String, BigInt, Map[String, Address], Map[String, Address])] = List(
+      ("Frontier", fbn.frontierBlockNumber, basePrecompiles, noSystemContracts),
+      ("Homestead", fbn.homesteadBlockNumber, basePrecompiles, noSystemContracts),
+      ("Atlantis", fbn.atlantisBlockNumber, byzantiumPrecompiles, noSystemContracts),
+      ("Agharta", fbn.aghartaBlockNumber, byzantiumPrecompiles, noSystemContracts),
+      ("Phoenix", fbn.phoenixBlockNumber, istanbulPrecompiles, noSystemContracts),
+      ("Magneto", fbn.magnetoBlockNumber, istanbulPrecompiles, noSystemContracts),
+      ("Mystique", fbn.mystiqueBlockNumber, istanbulPrecompiles, noSystemContracts),
+      ("Spiral", fbn.spiralBlockNumber, istanbulPrecompiles, noSystemContracts),
+      ("Olympia", fbn.olympiaBlockNumber, olympiaPrecompiles, olympiaSystemContracts)
+    ).filter(_._2 < Long.MaxValue) // exclude forks not configured
+      .sortBy(_._2)
+      .distinctBy(_._2) // deduplicate by block number
+
+    val currentBlock = blockchainReader.getBestBlockNumber()
+
+    def toForkConfig(
+        name: String,
+        block: BigInt,
+        precompiles: Map[String, Address],
+        sysContracts: Map[String, Address]
+    ): ForkConfig =
+      ForkConfig(block, chainId, precompiles, sysContracts)
+
+    // Find current fork (last fork at or before currentBlock)
+    val activeForks = forks.filter(_._2 <= currentBlock)
+    val futureForks = forks.filter(_._2 > currentBlock)
+
+    val current = activeForks.lastOption.map(f => toForkConfig(f._1, f._2, f._3, f._4))
+    val next = futureForks.headOption.map(f => toForkConfig(f._1, f._2, f._3, f._4))
+    val last = forks.lastOption.map(f => toForkConfig(f._1, f._2, f._3, f._4))
+
+    Right(ConfigResponse(current, next, if (futureForks.nonEmpty) last else None))
+  }
+
   def call(req: CallRequest): ServiceResponse[CallResponse] =
     IO {
-      doCall(req)(stxLedger.simulateTransaction).map(r => CallResponse(r.vmReturnData))
+      doCall(req)(stxLedger.simulateTransaction).flatMap { r =>
+        r.vmError match {
+          case Some(com.chipprbots.ethereum.vm.RevertOccurs) =>
+            val dataHex = "0x" + org.bouncycastle.util.encoders.Hex.toHexString(r.vmReturnData.toArray[Byte])
+            Left(JsonRpcError(3, "execution reverted", Some(org.json4s.JString(dataHex))))
+          case Some(_) =>
+            // Other VM errors (out of gas, etc) — return empty result
+            Right(CallResponse(r.vmReturnData))
+          case None =>
+            Right(CallResponse(r.vmReturnData))
+        }
+      }
+    }.recover { case _: MissingNodeException =>
+      Left(JsonRpcError.NodeNotFound)
     }
 
   def ieleCall(req: IeleCallRequest): ServiceResponse[IeleCallResponse] = {
@@ -147,7 +256,37 @@ class EthInfoService(
 
   def estimateGas(req: CallRequest): ServiceResponse[EstimateGasResponse] =
     IO {
-      doCall(req)(stxLedger.binarySearchGasEstimation).map(gasUsed => EstimateGasResponse(gasUsed))
+      // First check if the tx reverts at the max gas limit
+      val simCheck = doCall(req)(stxLedger.simulateTransaction)
+      simCheck.flatMap { r =>
+        r.vmError match {
+          case Some(com.chipprbots.ethereum.vm.RevertOccurs) =>
+            val dataHex = "0x" + org.bouncycastle.util.encoders.Hex.toHexString(r.vmReturnData.toArray[Byte])
+            Left(JsonRpcError(3, "execution reverted", Some(org.json4s.JString(dataHex))))
+          case _ =>
+            // Tx doesn't revert — find minimum gas via binary search
+            doCall(req)(stxLedger.binarySearchGasEstimation).map(gas => EstimateGasResponse(gas))
+        }
+      }
+    }.recover { case _: MissingNodeException =>
+      Left(JsonRpcError.NodeNotFound)
+    }
+
+  def createAccessList(req: CreateAccessListRequest): ServiceResponse[CreateAccessListResponse] =
+    IO {
+      doCall(req.toCallRequest)(stxLedger.simulateTransaction).map { result =>
+        val gasUsed = result.gasUsed
+        val error = result.vmError.map(_.toString)
+        // Build access list from the VM's accessed addresses and storage keys
+        // For now, return empty access list with gas used (partial implementation)
+        CreateAccessListResponse(
+          accessList = Seq.empty,
+          gasUsed = gasUsed,
+          error = error
+        )
+      }
+    }.recover { case _: MissingNodeException =>
+      Left(JsonRpcError.NodeNotFound)
     }
 
   private def doCall[A](req: CallRequest)(
@@ -155,7 +294,22 @@ class EthInfoService(
   ): Either[JsonRpcError, A] = for {
     stx <- prepareTransaction(req)
     block <- resolveBlock(req.block)
-  } yield f(stx, block.block.header, block.pendingState)
+  } yield {
+    // EIP-1559: When no gas price is explicitly specified, use baseFee=0 so calls
+    // don't need to worry about funding. Matches geth behavior for eth_call/eth_estimateGas.
+    val header = if (!req.tx.gasPriceExplicit && block.block.header.baseFee.isDefined) {
+      import BlockHeader.HeaderExtraFields._
+      val zeroBaseFeeExtra = block.block.header.extraFields match {
+        case HefPostOlympia(_)               => HefPostOlympia(0)
+        case HefPostShanghai(_, wr)          => HefPostShanghai(0, wr)
+        case HefPostCancun(_, wr, bg, eb, pb) => HefPostCancun(0, wr, bg, eb, pb)
+        case HefPostPrague(_, wr, bg, eb, pb, rh) => HefPostPrague(0, wr, bg, eb, pb, rh)
+        case other => other
+      }
+      block.block.header.copy(extraFields = zeroBaseFeeExtra)
+    } else block.block.header
+    f(stx, header, block.pendingState)
+  }
 
   private def getGasLimit(req: CallRequest): Either[JsonRpcError, BigInt] =
     req.tx.gas.map(Right.apply).getOrElse(resolveBlock(BlockParam.Latest).map(r => r.block.header.gasLimit))
@@ -175,7 +329,7 @@ class EthInfoService(
       val toAddress = req.tx.to.map(Address.apply)
 
       val tx = LegacyTransaction(0, req.tx.gasPrice, gasLimit, toAddress, req.tx.value, req.tx.data)
-      val fakeSignature = ECDSASignature(0, 0, 0.toByte)
+      val fakeSignature = ECDSASignature(0, 0, 0)
       SignedTransactionWithSender(tx, fakeSignature, fromAddress)
     }
 

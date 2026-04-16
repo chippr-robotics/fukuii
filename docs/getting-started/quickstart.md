@@ -10,7 +10,7 @@ The fastest way to get started with Fukuii.
 
 ```bash
 # Pull the latest signed release
-docker pull ghcr.io/chippr-robotics/chordodes_fukuii:latest
+docker pull ghcr.io/chippr-robotics/fukuii:latest
 ```
 
 ### 2. Create Volumes
@@ -30,7 +30,7 @@ docker run -d \
   -p 30303:30303/udp \
   -v fukuii-data:/app/data \
   -v fukuii-conf:/app/conf \
-  ghcr.io/chippr-robotics/chordodes_fukuii:latest
+  ghcr.io/chippr-robotics/fukuii:latest
 ```
 
 !!! warning "Security Notice"

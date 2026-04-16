@@ -16,7 +16,7 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 
 class SignedLegacyTransactionSpec extends AnyFlatSpec with SignedTransactionBehavior with ScalaCheckPropertyChecks {
 
-  private def allowedPointSigns(chainId: Byte) = Set((chainId * 2 + 35).toByte, (chainId * 2 + 36).toByte)
+  private def allowedPointSigns(chainId: BigInt) = Set(chainId * 2 + 35, chainId * 2 + 36)
 
   ("Signed LegacyTransaction" should behave).like(
     SignedTransactionBehavior(Generators.legacyTransactionGen, allowedPointSigns)

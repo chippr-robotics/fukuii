@@ -6,7 +6,6 @@ import org.apache.pekko.util.ByteString
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
-import scala.math.Ordered.orderingToOrdered
 
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
@@ -14,14 +13,14 @@ import com.chipprbots.ethereum.utils.Logger
 
 /** SNAP request tracker for managing pending requests and matching responses
   *
-  * Tracks SNAP protocol requests by request ID, handles timeouts, and validates responses.
-  * Follows core-geth patterns from eth/protocols/snap/sync.go for request tracking.
+  * Tracks SNAP protocol requests by request ID, handles timeouts, and validates responses. Follows core-geth patterns
+  * from eth/protocols/snap/sync.go for request tracking.
   *
   * Features:
-  * - Request ID generation and tracking
-  * - Timeout handling for pending requests
-  * - Response validation and matching
-  * - Peer management for SNAP requests
+  *   - Request ID generation and tracking
+  *   - Adaptive timeout via PeerRateTracker (port of geth's msgrate)
+  *   - Response validation and matching
+  *   - Peer management for SNAP requests
   */
 class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
 
@@ -30,15 +29,28 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
   /** Pending requests tracked by request ID */
   private val pendingRequests = mutable.Map[BigInt, PendingRequest]()
 
+  /** Per-peer adaptive rate tracker (geth msgrate port) */
+  val rateTracker: PeerRateTracker = new PeerRateTracker()
+
+  private def compareUnsignedLexicographically(a: ByteString, b: ByteString): Int = {
+    val minLen = math.min(a.length, b.length)
+    var i = 0
+    while (i < minLen) {
+      val av = java.lang.Byte.toUnsignedInt(a(i))
+      val bv = java.lang.Byte.toUnsignedInt(b(i))
+      if (av != bv) return av - bv
+      i += 1
+    }
+    a.length - b.length
+  }
+
   /** Request ID counter */
   private var nextRequestId: BigInt = 1
 
-  /** Default timeout for SNAP requests */
-  private val defaultTimeout: FiniteDuration = 30.seconds
-
   /** Generate next request ID
     *
-    * @return unique request ID
+    * @return
+    *   unique request ID
     */
   def generateRequestId(): BigInt = synchronized {
     val id = nextRequestId
@@ -46,21 +58,31 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
     id
   }
 
-  /** Track a pending request
+  /** Track a pending request with adaptive timeout.
     *
-    * @param requestId the request ID
-    * @param peer the peer to which the request was sent
-    * @param requestType the type of request
-    * @param timeout timeout duration (default 30 seconds)
-    * @param onTimeout callback when request times out
-    * @return the tracked request
+    * Uses PeerRateTracker's adaptive timeout (geth msgrate algorithm) unless an explicit timeout is given. Timeout
+    * formula: min(60s, 3 × medianRTT / confidence), starting at ~12s and converging as peers respond.
+    *
+    * @param requestId
+    *   the request ID
+    * @param peer
+    *   the peer to which the request was sent
+    * @param requestType
+    *   the type of request
+    * @param timeout
+    *   explicit timeout override (None = use adaptive timeout from PeerRateTracker)
+    * @param onTimeout
+    *   callback when request times out
+    * @return
+    *   the tracked request
     */
   def trackRequest(
       requestId: BigInt,
       peer: Peer,
       requestType: RequestType,
-      timeout: FiniteDuration = defaultTimeout
+      timeout: FiniteDuration = Duration.Zero // Zero = use adaptive
   )(onTimeout: => Unit): PendingRequest = synchronized {
+    val effectiveTimeout = if (timeout == Duration.Zero) rateTracker.targetTimeout() else timeout
     val request = PendingRequest(
       requestId = requestId,
       peer = peer,
@@ -69,10 +91,17 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
     )
 
     // Schedule timeout
-    val timeoutTask = scheduler.scheduleOnce(timeout) {
+    val timeoutTask = scheduler.scheduleOnce(effectiveTimeout) {
       synchronized {
         pendingRequests.get(requestId).foreach { req =>
-          log.warn(s"SNAP request ${req.requestType} timeout for request ID $requestId from peer ${peer.id}")
+          val elapsed = System.currentTimeMillis() - req.timestamp
+          log.warn(
+            s"SNAP request ${req.requestType} timeout for request ID $requestId from peer ${peer.id} " +
+              s"(timeout=${effectiveTimeout.toSeconds}s, elapsed=${elapsed}ms)"
+          )
+          // Record timeout in rate tracker (items=0 slashes capacity to zero)
+          val msgType = requestTypeToMsgType(req.requestType)
+          rateTracker.update(peer.id.value, msgType, elapsed, items = 0)
           pendingRequests.remove(requestId)
           onTimeout
         }
@@ -85,8 +114,10 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
 
   /** Check if a request is pending
     *
-    * @param requestId the request ID
-    * @return true if request is pending
+    * @param requestId
+    *   the request ID
+    * @return
+    *   true if request is pending
     */
   def isPending(requestId: BigInt): Boolean = synchronized {
     pendingRequests.contains(requestId)
@@ -94,33 +125,50 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
 
   /** Get pending request
     *
-    * @param requestId the request ID
-    * @return the pending request if found
+    * @param requestId
+    *   the request ID
+    * @return
+    *   the pending request if found
     */
   def getPendingRequest(requestId: BigInt): Option[PendingRequest] = synchronized {
     pendingRequests.get(requestId)
   }
 
-  /** Complete a pending request
+  /** Complete a pending request and record response metrics in the rate tracker.
     *
-    * @param requestId the request ID
-    * @return the completed request if it was pending
+    * @param requestId
+    *   the request ID
+    * @param responseItems
+    *   number of items in the response (for rate tracker — default 1 if unknown)
+    * @return
+    *   the completed request if it was pending
     */
-  def completeRequest(requestId: BigInt): Option[PendingRequest] = synchronized {
+  def completeRequest(requestId: BigInt, responseItems: Int = 1): Option[PendingRequest] = synchronized {
     pendingRequests.remove(requestId).map { request =>
       // Cancel timeout
       request.timeoutTask.foreach(_.cancel())
-      log.debug(s"SNAP request ${request.requestType} completed for request ID $requestId (took ${System.currentTimeMillis() - request.timestamp}ms)")
+      val elapsed = System.currentTimeMillis() - request.timestamp
+
+      // Record measurement in rate tracker
+      val msgType = requestTypeToMsgType(request.requestType)
+      rateTracker.update(request.peer.id.value, msgType, elapsed, responseItems)
+
+      log.debug(
+        s"SNAP request ${request.requestType} completed for request ID $requestId " +
+          s"(took ${elapsed}ms, items=$responseItems, timeout=${rateTracker.targetTimeout().toSeconds}s)"
+      )
       request
     }
   }
 
   /** Validate AccountRange response
     *
-    * @param response the response to validate
-    * @return validation result
+    * @param response
+    *   the response to validate
+    * @return
+    *   validation result
     */
-  def validateAccountRange(response: AccountRange): Either[String, AccountRange] = {
+  def validateAccountRange(response: AccountRange): Either[String, AccountRange] =
     // Check if request is pending
     if (!isPending(response.requestId)) {
       Left(s"No pending request for ID ${response.requestId}")
@@ -135,23 +183,23 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
         val violation = (1 until response.accounts.size).find { i =>
           val prevHash = response.accounts(i - 1)._1
           val currHash = response.accounts(i)._1
-          // Compare ByteStrings using lexicographical ordering
-          prevHash.toSeq.compare(currHash.toSeq) >= 0
+          compareUnsignedLexicographically(prevHash, currHash) >= 0
         }
         violation match {
           case Some(i) => Left(s"Accounts not monotonically increasing at index $i")
-          case None => Right(response)
+          case None    => Right(response)
         }
       }
     }
-  }
 
   /** Validate StorageRanges response
     *
-    * @param response the response to validate
-    * @return validation result
+    * @param response
+    *   the response to validate
+    * @return
+    *   validation result
     */
-  def validateStorageRanges(response: StorageRanges): Either[String, StorageRanges] = {
+  def validateStorageRanges(response: StorageRanges): Either[String, StorageRanges] =
     if (!isPending(response.requestId)) {
       Left(s"No pending request for ID ${response.requestId}")
     } else {
@@ -160,27 +208,29 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
         Left(s"Expected ${RequestType.GetStorageRanges} but got response for ${pending.requestType}")
       } else {
         // Validate storage slots are monotonically increasing within each account
-        val violation = response.slots.zipWithIndex.collectFirst {
-          case (accountSlots, accountIdx) =>
-            (1 until accountSlots.size).find { i =>
+        val violation = response.slots.zipWithIndex.collectFirst { case (accountSlots, accountIdx) =>
+          (1 until accountSlots.size)
+            .find { i =>
               val prevHash = accountSlots(i - 1)._1
               val currHash = accountSlots(i)._1
-              // Compare ByteStrings using lexicographical ordering
-              prevHash.toSeq.compare(currHash.toSeq) >= 0
-            }.map(i => (accountIdx, i))
+              compareUnsignedLexicographically(prevHash, currHash) >= 0
+            }
+            .map(i => (accountIdx, i))
         }.flatten
         violation match {
-          case Some((accountIdx, i)) => Left(s"Storage slots not monotonically increasing for account $accountIdx at index $i")
+          case Some((accountIdx, i)) =>
+            Left(s"Storage slots not monotonically increasing for account $accountIdx at index $i")
           case None => Right(response)
         }
       }
     }
-  }
 
   /** Validate ByteCodes response
     *
-    * @param response the response to validate
-    * @return validation result
+    * @param response
+    *   the response to validate
+    * @return
+    *   validation result
     */
   def validateByteCodes(response: ByteCodes): Either[String, ByteCodes] = {
     if (!isPending(response.requestId)) {
@@ -198,8 +248,10 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
 
   /** Validate TrieNodes response
     *
-    * @param response the response to validate
-    * @return validation result
+    * @param response
+    *   the response to validate
+    * @return
+    *   validation result
     */
   def validateTrieNodes(response: TrieNodes): Either[String, TrieNodes] = {
     if (!isPending(response.requestId)) {
@@ -223,6 +275,14 @@ class SNAPRequestTracker(implicit scheduler: Scheduler) extends Logger {
   def clear(): Unit = synchronized {
     pendingRequests.values.foreach(_.timeoutTask.foreach(_.cancel()))
     pendingRequests.clear()
+  }
+
+  /** Map RequestType to PeerRateTracker message type ordinal */
+  private def requestTypeToMsgType(rt: RequestType): Int = rt match {
+    case RequestType.GetAccountRange  => PeerRateTracker.MsgGetAccountRange
+    case RequestType.GetStorageRanges => PeerRateTracker.MsgGetStorageRanges
+    case RequestType.GetByteCodes     => PeerRateTracker.MsgGetByteCodes
+    case RequestType.GetTrieNodes     => PeerRateTracker.MsgGetTrieNodes
   }
 }
 

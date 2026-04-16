@@ -89,17 +89,20 @@ object TestConverter {
     val value = parseBigInt(testTx.value)
     val payload = ByteString(parseHex(testTx.data))
 
+    // Parse access list (shared by Type 1, 2, 3, 4)
+    def parseAccessList: List[AccessListItem] =
+      testTx.accessList.getOrElse(List.empty).map { item =>
+        AccessListItem(
+          address = Address(ByteString(parseHex(item.address))),
+          storageKeys = item.storageKeys.map(key => parseBigInt(key))
+        )
+      }
+
     // Determine transaction type and create appropriate transaction object
     val tx: Transaction = testTx.txType match {
       case Some("0x01") | Some("0x1") =>
         // EIP-2930: Transaction with access list
         val chainId = testTx.chainId.map(parseBigInt).getOrElse(BigInt(1))
-        val accessList = testTx.accessList.getOrElse(List.empty).map { item =>
-          AccessListItem(
-            address = Address(ByteString(parseHex(item.address))),
-            storageKeys = item.storageKeys.map(key => parseBigInt(key))
-          )
-        }
         TransactionWithAccessList(
           chainId = chainId,
           nonce = nonce,
@@ -108,7 +111,43 @@ object TestConverter {
           receivingAddress = receivingAddress,
           value = value,
           payload = payload,
-          accessList = accessList
+          accessList = parseAccessList
+        )
+      case Some("0x02") | Some("0x2") =>
+        // EIP-1559: Dynamic fee transaction
+        val chainId = testTx.chainId.map(parseBigInt).getOrElse(BigInt(1))
+        val maxPriorityFeePerGas = testTx.maxPriorityFeePerGas.map(parseBigInt).getOrElse(gasPrice)
+        val maxFeePerGas = testTx.maxFeePerGas.map(parseBigInt).getOrElse(gasPrice)
+        TransactionWithDynamicFee(
+          chainId = chainId,
+          nonce = nonce,
+          maxPriorityFeePerGas = maxPriorityFeePerGas,
+          maxFeePerGas = maxFeePerGas,
+          gasLimit = gasLimit,
+          receivingAddress = receivingAddress,
+          value = value,
+          payload = payload,
+          accessList = parseAccessList
+        )
+      case Some("0x03") | Some("0x3") =>
+        // EIP-4844: Blob transaction
+        val chainId = testTx.chainId.map(parseBigInt).getOrElse(BigInt(1))
+        val maxPriorityFeePerGas = testTx.maxPriorityFeePerGas.map(parseBigInt).getOrElse(gasPrice)
+        val maxFeePerGas = testTx.maxFeePerGas.map(parseBigInt).getOrElse(gasPrice)
+        val maxFeePerBlobGas = testTx.maxFeePerBlobGas.map(parseBigInt).getOrElse(BigInt(0))
+        val blobVersionedHashes = testTx.blobVersionedHashes.getOrElse(List.empty).map(h => ByteString(parseHex(h)))
+        BlobTransaction(
+          chainId = chainId,
+          nonce = nonce,
+          maxPriorityFeePerGas = maxPriorityFeePerGas,
+          maxFeePerGas = maxFeePerGas,
+          gasLimit = gasLimit,
+          receivingAddress = receivingAddress,
+          value = value,
+          payload = payload,
+          accessList = parseAccessList,
+          maxFeePerBlobGas = maxFeePerBlobGas,
+          blobVersionedHashes = blobVersionedHashes
         )
       case _ =>
         // Legacy transaction (or unknown type, default to legacy)
@@ -198,18 +237,117 @@ object TestConverter {
           eip150BlockNumber = 0,
           eip160BlockNumber = 0,
           eip155BlockNumber = 0,
+          eip161BlockNumber = 0,
           byzantiumBlockNumber = 0,
           constantinopleBlockNumber = 0,
           petersburgBlockNumber = 0,
           istanbulBlockNumber = 0,
           berlinBlockNumber = 0
         )
+      case "london" | "arrowglacier" | "grayglacier" =>
+        ForkBlockNumbers.Empty.copy(
+          frontierBlockNumber = 0,
+          homesteadBlockNumber = 0,
+          eip150BlockNumber = 0,
+          eip160BlockNumber = 0,
+          eip155BlockNumber = 0,
+          eip161BlockNumber = 0,
+          byzantiumBlockNumber = 0,
+          constantinopleBlockNumber = 0,
+          petersburgBlockNumber = 0,
+          istanbulBlockNumber = 0,
+          berlinBlockNumber = 0,
+          olympiaBlockNumber = 0 // London = EIP-1559, mapped to Olympia in Fukuii
+        )
+      case "merge" | "paris" | "themerge" =>
+        ForkBlockNumbers.Empty.copy(
+          frontierBlockNumber = 0,
+          homesteadBlockNumber = 0,
+          eip150BlockNumber = 0,
+          eip160BlockNumber = 0,
+          eip155BlockNumber = 0,
+          eip161BlockNumber = 0,
+          byzantiumBlockNumber = 0,
+          constantinopleBlockNumber = 0,
+          petersburgBlockNumber = 0,
+          istanbulBlockNumber = 0,
+          berlinBlockNumber = 0,
+          olympiaBlockNumber = 0
+        )
+      case "shanghai" =>
+        ForkBlockNumbers.Empty.copy(
+          frontierBlockNumber = 0,
+          homesteadBlockNumber = 0,
+          eip150BlockNumber = 0,
+          eip160BlockNumber = 0,
+          eip155BlockNumber = 0,
+          eip161BlockNumber = 0,
+          byzantiumBlockNumber = 0,
+          constantinopleBlockNumber = 0,
+          petersburgBlockNumber = 0,
+          istanbulBlockNumber = 0,
+          berlinBlockNumber = 0,
+          olympiaBlockNumber = 0
+        )
+      case "cancun" =>
+        ForkBlockNumbers.Empty.copy(
+          frontierBlockNumber = 0,
+          homesteadBlockNumber = 0,
+          eip150BlockNumber = 0,
+          eip160BlockNumber = 0,
+          eip155BlockNumber = 0,
+          eip161BlockNumber = 0,
+          byzantiumBlockNumber = 0,
+          constantinopleBlockNumber = 0,
+          petersburgBlockNumber = 0,
+          istanbulBlockNumber = 0,
+          berlinBlockNumber = 0,
+          olympiaBlockNumber = 0
+        )
+      case "prague" =>
+        ForkBlockNumbers.Empty.copy(
+          frontierBlockNumber = 0,
+          homesteadBlockNumber = 0,
+          eip150BlockNumber = 0,
+          eip160BlockNumber = 0,
+          eip155BlockNumber = 0,
+          eip161BlockNumber = 0,
+          byzantiumBlockNumber = 0,
+          constantinopleBlockNumber = 0,
+          petersburgBlockNumber = 0,
+          istanbulBlockNumber = 0,
+          berlinBlockNumber = 0,
+          olympiaBlockNumber = 0
+        )
       case _ =>
         // Default to Frontier for unknown networks
         ForkBlockNumbers.Empty.copy(frontierBlockNumber = 0)
     }
 
-    baseConfig.copy(forkBlockNumbers = forks)
+    // For Shanghai+ forks, also set timestamp-based activations
+    val configWithForks = baseConfig.copy(forkBlockNumbers = forks)
+    network.toLowerCase match {
+      case "shanghai" =>
+        configWithForks.copy(
+          forkTimestamps = com.chipprbots.ethereum.utils.ForkTimestamps(shanghaiTimestamp = Some(0L))
+        )
+      case "cancun" =>
+        configWithForks.copy(
+          forkTimestamps = com.chipprbots.ethereum.utils.ForkTimestamps(
+            shanghaiTimestamp = Some(0L),
+            cancunTimestamp = Some(0L)
+          )
+        )
+      case "prague" =>
+        configWithForks.copy(
+          forkTimestamps = com.chipprbots.ethereum.utils.ForkTimestamps(
+            shanghaiTimestamp = Some(0L),
+            cancunTimestamp = Some(0L),
+            pragueTimestamp = Some(0L)
+          )
+        )
+      case _ => configWithForks
+    }
   }
 
   /** Parse hex string to byte array, handling "0x" prefix */

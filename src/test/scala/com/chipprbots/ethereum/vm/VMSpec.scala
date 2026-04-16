@@ -185,7 +185,8 @@ class VMSpec extends AnyWordSpec with ScalaCheckPropertyChecks with Matchers {
       berlinBlockNumber = Long.MaxValue,
       mystiqueBlockNumber = Long.MaxValue,
       spiralBlockNumber = Long.MaxValue,
-      chainId = 0x3d.toByte
+      olympiaBlockNumber = Long.MaxValue,
+      chainId = 0x3d
     )
 
     val homesteadConfig: EvmConfig = EvmConfig.forBlock(0, evmBlockchainConfig.copy(homesteadBlockNumber = 0))

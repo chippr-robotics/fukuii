@@ -17,10 +17,12 @@ import scala.concurrent.duration.FiniteDuration
 
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
+import com.chipprbots.ethereum.consensus.mining.CoinbaseProvider
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.consensus.mining.MiningConfig
 import com.chipprbots.ethereum.consensus.mining.RichMining
 import com.chipprbots.ethereum.consensus.pow.EthashUtils
+import com.chipprbots.ethereum.consensus.pow.miners.MinerProtocol
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -50,6 +52,23 @@ object EthMiningService {
 
   case class GetHashRateRequest()
   case class GetHashRateResponse(hashRate: BigInt)
+
+  case class StartMinerRequest()
+  case class StartMinerResponse(success: Boolean)
+
+  case class StopMinerRequest()
+  case class StopMinerResponse(success: Boolean)
+
+  case class GetMinerStatusRequest()
+  case class GetMinerStatusResponse(
+      isMining: Boolean,
+      coinbase: Address,
+      hashRate: BigInt,
+      blocksMinedCount: Option[Long]
+  )
+
+  case class SetEtherbaseRequest(address: Address)
+  case class SetEtherbaseResponse(success: Boolean)
 }
 
 class EthMiningService(
@@ -60,13 +79,13 @@ class EthMiningService(
     syncingController: ActorRef,
     val pendingTransactionsManager: ActorRef,
     val getTransactionFromPoolTimeout: FiniteDuration,
-    configBuilder: BlockchainConfigBuilder
+    configBuilder: BlockchainConfigBuilder,
+    coinbaseProvider: CoinbaseProvider
 ) extends TransactionPicker {
   import configBuilder._
   import EthMiningService._
 
   private[this] def fullConsensusConfig = mining.config
-  private[this] def miningConfig: MiningConfig = fullConsensusConfig.generic
 
   val hashRate: ConcurrentMap[ByteString, (BigInt, Date)] = new TrieMap[ByteString, (BigInt, Date)]()
   val lastActive = new AtomicReference[Option[Date]](None)
@@ -92,7 +111,7 @@ class EthMiningService(
             val PendingBlockAndState(pb, _) = blockGenerator.generateBlock(
               block,
               pendingTxs.pendingTransactions.map(_.stx.tx),
-              miningConfig.coinbase,
+              coinbaseProvider.get(),
               ommers.headers,
               None
             )
@@ -132,7 +151,7 @@ class EthMiningService(
     }(IO.pure(Left(JsonRpcError.MiningIsNotEthash)))
 
   def getCoinbase(req: GetCoinbaseRequest): ServiceResponse[GetCoinbaseResponse] =
-    IO.pure(Right(GetCoinbaseResponse(miningConfig.coinbase)))
+    IO.pure(Right(GetCoinbaseResponse(coinbaseProvider.get())))
 
   def submitHashRate(req: SubmitHashRateRequest): ServiceResponse[SubmitHashRateResponse] =
     ifEthash(req) { req =>
@@ -148,6 +167,62 @@ class EthMiningService(
       removeObsoleteHashrates(new Date)
       // sum all reported hashRates
       GetHashRateResponse(hashRate.map { case (_, (hr, _)) => hr }.sum)
+    }
+
+  def startMiner(req: StartMinerRequest): ServiceResponse[StartMinerResponse] =
+    mining.ifEthash[ServiceResponse[StartMinerResponse]] { ethash =>
+      IO {
+        ethash.sendMiner(MinerProtocol.StartMining)
+        log.info("Mining started via RPC")
+        Right(StartMinerResponse(true))
+      }
+    }(IO.pure(Left(JsonRpcError.MiningIsNotEthash)))
+
+  def stopMiner(req: StopMinerRequest): ServiceResponse[StopMinerResponse] =
+    mining.ifEthash[ServiceResponse[StopMinerResponse]] { ethash =>
+      IO {
+        ethash.sendMiner(MinerProtocol.StopMining)
+        log.info("Mining stopped via RPC")
+        Right(StopMinerResponse(true))
+      }
+    }(IO.pure(Left(JsonRpcError.MiningIsNotEthash)))
+
+  /** Returns comprehensive mining status information.
+    *
+    * Provides a consolidated view of the mining state including:
+    *   - Whether the node is actively mining (based on recent activity)
+    *   - The coinbase address receiving mining rewards
+    *   - Current aggregate hashrate from all connected miners
+    *   - Blocks mined count (currently reserved for future implementation)
+    *
+    * Note: blocksMinedCount is always None in the current implementation. Future versions may track and report this
+    * metric.
+    */
+  def getMinerStatus(req: GetMinerStatusRequest): ServiceResponse[GetMinerStatusResponse] =
+    ifEthash(req) { _ =>
+      val now = new Date
+      val isMining = lastActive.updateAndGet { (e: Option[Date]) =>
+        e.filter { time =>
+          Duration.between(time.toInstant, now.toInstant).toMillis < jsonRpcConfig.minerActiveTimeout.toMillis
+        }
+      }.isDefined
+
+      removeObsoleteHashrates(now)
+      val currentHashRate = hashRate.map { case (_, (hr, _)) => hr }.sum
+
+      GetMinerStatusResponse(
+        isMining = isMining,
+        coinbase = coinbaseProvider.get(),
+        hashRate = currentHashRate,
+        blocksMinedCount = None // Reserved for future implementation - would require tracking mined blocks
+      )
+    }
+
+  def setEtherbase(req: SetEtherbaseRequest): ServiceResponse[SetEtherbaseResponse] =
+    ifEthash(req) { request =>
+      coinbaseProvider.update(request.address)
+      log.info("Updated miner coinbase via eth_setEtherbase to {}", request.address)
+      SetEtherbaseResponse(success = true)
     }
 
   // NOTE This is called from places that guarantee we are running Ethash consensus.

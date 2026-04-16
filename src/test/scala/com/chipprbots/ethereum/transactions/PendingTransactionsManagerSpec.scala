@@ -25,7 +25,7 @@ import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.LegacyTransaction
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
-import com.chipprbots.ethereum.network.EtcPeerManagerActor
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerActor.Status.Handshaked
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
@@ -38,7 +38,7 @@ import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager._
 import com.chipprbots.ethereum.transactions.SignedTransactionsFilterActor.ProperSignedTransactions
 import com.chipprbots.ethereum.utils.TxPoolConfig
-import com.chipprbots.ethereum.network.EtcPeerManagerActor.SendMessage
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor.SendMessage
 import com.chipprbots.ethereum.testing.Tags._
 
 /** Test suite for PendingTransactionsManager actor.
@@ -203,9 +203,9 @@ class PendingTransactionsManagerSpec
     peerManager.reply(Peers(Map(peer1 -> Handshaked, peer2 -> Handshaked, peer3 -> Handshaked)))
 
     etcPeerManager.expectMsgAllOf(
-      EtcPeerManagerActor.SendMessage(SignedTransactions(Seq(stx.tx)), peer1.id),
-      EtcPeerManagerActor.SendMessage(SignedTransactions(Seq(stx.tx)), peer2.id),
-      EtcPeerManagerActor.SendMessage(SignedTransactions(Seq(stx.tx)), peer3.id)
+      NetworkPeerManagerActor.SendMessage(SignedTransactions(Seq(stx.tx)), peer1.id),
+      NetworkPeerManagerActor.SendMessage(SignedTransactions(Seq(stx.tx)), peer2.id),
+      NetworkPeerManagerActor.SendMessage(SignedTransactions(Seq(stx.tx)), peer3.id)
     )
 
     val pendingTxs: PendingTransactionsResponse =
@@ -221,8 +221,8 @@ class PendingTransactionsManagerSpec
     peerManager.reply(Peers(Map(peer1 -> Handshaked, peer2 -> Handshaked, peer3 -> Handshaked)))
 
     val resps1: Seq[SendMessage] = etcPeerManager.expectMsgAllConformingOf(
-      classOf[EtcPeerManagerActor.SendMessage],
-      classOf[EtcPeerManagerActor.SendMessage]
+      classOf[NetworkPeerManagerActor.SendMessage],
+      classOf[NetworkPeerManagerActor.SendMessage]
     )
 
     resps1.map(_.peerId) should contain.allOf(peer2.id, peer3.id)
@@ -236,8 +236,8 @@ class PendingTransactionsManagerSpec
     peerManager.reply(Peers(Map(peer1 -> Handshaked, peer2 -> Handshaked, peer3 -> Handshaked)))
 
     val resps2: Seq[SendMessage] = etcPeerManager.expectMsgAllConformingOf(
-      classOf[EtcPeerManagerActor.SendMessage],
-      classOf[EtcPeerManagerActor.SendMessage]
+      classOf[NetworkPeerManagerActor.SendMessage],
+      classOf[NetworkPeerManagerActor.SendMessage]
     )
     resps2.map(_.peerId) should contain.allOf(peer1.id, peer3.id)
     resps2.map(_.message.underlyingMsg).foreach { case SignedTransactions(txs) => txs.toSet shouldEqual msg2.map(_.tx) }
@@ -304,9 +304,9 @@ class PendingTransactionsManagerSpec
 
     // overriden TX will still be broadcast to peers
     etcPeerManager.expectMsgAllOf(
-      EtcPeerManagerActor.SendMessage(SignedTransactions(List(firstTx.tx)), peer1.id),
-      EtcPeerManagerActor.SendMessage(SignedTransactions(List(otherTx.tx)), peer1.id),
-      EtcPeerManagerActor.SendMessage(SignedTransactions(List(overrideTx.tx)), peer1.id)
+      NetworkPeerManagerActor.SendMessage(SignedTransactions(List(firstTx.tx)), peer1.id),
+      NetworkPeerManagerActor.SendMessage(SignedTransactions(List(otherTx.tx)), peer1.id),
+      NetworkPeerManagerActor.SendMessage(SignedTransactions(List(overrideTx.tx)), peer1.id)
     )
   }
 
@@ -319,7 +319,7 @@ class PendingTransactionsManagerSpec
 
     pendingTransactionsManager ! PeerEvent.PeerHandshakeSuccessful(peer1, new HandshakeResult {})
 
-    etcPeerManager.expectMsgAllOf(EtcPeerManagerActor.SendMessage(SignedTransactions(Seq(stx.tx)), peer1.id))
+    etcPeerManager.expectMsgAllOf(NetworkPeerManagerActor.SendMessage(SignedTransactions(Seq(stx.tx)), peer1.id))
   }
 
   it should "remove transaction on timeout" taggedAs (UnitTest) in new TestSetup {

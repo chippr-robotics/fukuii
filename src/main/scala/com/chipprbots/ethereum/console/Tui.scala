@@ -224,9 +224,8 @@ object Tui:
 
   /** Get or create the singleton instance with custom config.
     *
-    * Note: If an instance already exists, the provided config is ignored and the
-    * existing instance is returned. This is intentional to maintain singleton semantics.
-    * Use `reset()` first if you need to change the configuration.
+    * Note: If an instance already exists, the provided config is ignored and the existing instance is returned. This is
+    * intentional to maintain singleton semantics. Use `reset()` first if you need to change the configuration.
     */
   def getInstance(config: TuiConfig): Tui =
     instance match

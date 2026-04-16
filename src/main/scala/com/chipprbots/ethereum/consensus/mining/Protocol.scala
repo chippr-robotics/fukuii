@@ -44,11 +44,15 @@ object Protocol {
     */
   case object RestrictedPoW extends ProtocolImpl(Names.RestrictedPoW)
 
+  /** Post-merge consensus driven by the Engine API (CL provides blocks). No PoW validation. */
+  case object EngineApi extends ProtocolImpl("engine-api")
+
   /** All the known protocols. If a protocol is not put here, then it cannot be used to run Fukuii. */
   final val KnownProtocols: Set[ProtocolImpl] = Set(
     PoW,
     MockedPow,
-    RestrictedPoW
+    RestrictedPoW,
+    EngineApi
   )
 
   final val KnownProtocolNames: Set[String] = KnownProtocols.map(_.name)

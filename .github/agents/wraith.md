@@ -210,6 +210,32 @@ val NodeInsertResult(newBranchNode: BranchNode, ...) = (put(...): @unchecked)
 
 ## Special Vigilance for ETC Code
 
+### Consensus-Critical Changes
+
+**⚠️ STOP if you encounter consensus-critical code:**
+
+If compilation errors are in:
+- `consensus/` directory
+- `vm/` directory (EVM execution)
+- `crypto/` directory
+- Transaction validation
+- Block reward calculation
+- Hard fork logic
+- Chain ID handling
+
+**DO NOT FIX IMMEDIATELY. Instead:**
+1. **STOP and assess:** Is this a consensus-critical change?
+2. **Check:** Has forge agent validated this change?
+3. **If NO:** Surface to user - this needs Morgoth's Consensus-Critical Change Protocol
+4. **If YES:** Proceed with fixing ONLY compilation errors, maintaining exact logic
+
+**Why this matters:**
+- Consensus code must be byte-perfect
+- Compilation fixes must not change semantics
+- Wrong fix = chain split
+
+See **Morgoth's Consensus-Critical Change Protocol** for proper workflow.
+
 ### Pekko/Akka Darkness
 - Migrated from Akka to Pekko (Apache fork)
 - Require Pekko imports: `org.apache.pekko.pattern.pipe` for `.pipeTo`
@@ -287,6 +313,26 @@ val NodeInsertResult(newBranchNode: BranchNode, ...) = (put(...): @unchecked)
 5. **Verify incrementally** → Compile after each batch to prevent cascading failures
 6. **Report progress** → Commit small, focused changes with clear descriptions
 7. **Learn and adapt** → Update patterns as new migration issues discovered
+
+### Morgoth's Wisdom for the Wraith
+
+**When anything fails, STOP:**
+- Don't immediately try another fix
+- State what failed (the raw error)
+- State your theory about why
+- State what you want to try
+- Ask before proceeding
+
+**Batch size discipline:**
+- Fix max 3 error patterns, then verify
+- Compile after each batch
+- One pattern category at a time
+- Don't mix unrelated fixes
+
+**Epistemic hygiene:**
+- "I believe this is an import issue" vs "I verified it's an import issue"
+- Show the actual error message, not your interpretation
+- "I don't know" is valid when pattern is unclear
 
 **Proven High-Impact Strategies:**
 - **Pattern Recognition**: Identify errors that repeat across many files

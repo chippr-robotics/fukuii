@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.utils.Logger
 
 trait MiningBuilder {
   def mining: Mining
+  def coinbaseProvider: CoinbaseProvider
 }
 
 /** A mining builder is responsible to instantiate the consensus protocol. This is done dynamically when Fukuii boots,
@@ -31,15 +32,16 @@ trait StdMiningBuilder extends MiningBuilder {
     with BlockchainConfigBuilder
     with MiningConfigBuilder
     with NodeKeyBuilder
+    with com.chipprbots.ethereum.utils.InstanceConfigProvider
     with Logger =>
 
-  private lazy val fukuiiConfig = Config.config
+  private lazy val fukuiiConfig = instanceConfig.config
+
+  lazy val coinbaseProvider: CoinbaseProvider = new CoinbaseProvider(miningConfig.coinbase)
 
   private def newConfig[C <: AnyRef](c: C): FullMiningConfig[C] =
     FullMiningConfig(miningConfig, c)
 
-  // TODO [ETCM-397] refactor configs to avoid possibility of running mocked or
-  // restricted-pow mining on real network like ETC or Mordor
   protected def buildPoWMining(): PoWMining = {
     val specificConfig = EthashConfig(fukuiiConfig)
 
@@ -48,8 +50,8 @@ trait StdMiningBuilder extends MiningBuilder {
     val validators = ValidatorsExecutor(miningConfig.protocol)
 
     val additionalPoWData: AdditionalPoWProtocolData = miningConfig.protocol match {
-      case Protocol.PoW | Protocol.MockedPow => NoAdditionalPoWData
-      case Protocol.RestrictedPoW            => RestrictedPoWMinerData(nodeKey)
+      case Protocol.PoW | Protocol.MockedPow | Protocol.EngineApi => NoAdditionalPoWData
+      case Protocol.RestrictedPoW                                 => RestrictedPoWMinerData(nodeKey)
     }
 
     val mining =
@@ -73,6 +75,10 @@ trait StdMiningBuilder extends MiningBuilder {
     val mining =
       config.protocol match {
         case Protocol.PoW | Protocol.MockedPow | Protocol.RestrictedPoW => buildPoWMining()
+        case Protocol.EngineApi                                         =>
+          // Engine API mode reuses PoW mining infrastructure for block building
+          // but skips Ethash sealing (blocks come from CL)
+          buildPoWMining()
       }
 
     log.info(s"Using '${protocol.name}' mining protocol [${mining.getClass.getName}]")

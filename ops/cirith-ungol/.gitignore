@@ -1,0 +1,33 @@
+# Ignore log collection output
+logs-*/
+*.log
+
+# Ignore local data directories (docker volumes handle persistence)
+data/
+*.db
+*.idb
+
+# Ignore any ad-hoc local test scripts or notes (test-scripts/ dir is tracked)
+/test-*.sh
+notes.txt
+TODO.txt
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+
+# Backup files
+*.bak
+*.backup
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Local testing configurations
+*-local.yml
+*-local.conf
+
+# Private keys and secrets
+keys/

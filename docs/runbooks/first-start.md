@@ -63,13 +63,13 @@ Docker is the recommended deployment method as it provides isolation, easier upd
 
 ```bash
 # Pull a specific version (recommended - official releases are signed)
-docker pull ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+docker pull ghcr.io/chippr-robotics/fukuii:v1.0.0
 
 # Verify the image signature (requires cosign)
 cosign verify \
   --certificate-identity-regexp=https://github.com/chippr-robotics/fukuii \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
-  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+  ghcr.io/chippr-robotics/fukuii:v1.0.0
 ```
 
 #### Step 2: Create Data Directories
@@ -90,7 +90,7 @@ docker run -d \
   -p 30303:30303/udp \
   -v fukuii-data:/app/data \
   -v fukuii-conf:/app/conf \
-  ghcr.io/chippr-robotics/chordodes_fukuii:v1.0.0
+  ghcr.io/chippr-robotics/fukuii:v1.0.0
   # ⚠️ SECURITY WARNING: Do NOT expose RPC port 8546 to public internet
   # For internal RPC access, use: -p 127.0.0.1:8546:8546
   # See docs/runbooks/security.md for details
@@ -230,14 +230,17 @@ Start with the custom config:
 
 ### Generate Node Key (Optional)
 
-Each node has a unique identifier. To generate a custom node key:
+Each node has a unique identifier derived from its node key. To generate a custom node key:
 
 ```bash
-./bin/fukuii cli generate-private-key > ~/.fukuii/etc/node.key
+# Generate a node key pair (private key on first line, public key on second line)
+./bin/fukuii cli generate-key-pairs > ~/.fukuii/etc/node.key
 chmod 600 ~/.fukuii/etc/node.key
 ```
 
-If not provided, Fukuii generates one automatically on first start.
+The `generate-key-pairs` command outputs the private key on the first line and the public key (node ID) on the second line. Only the private key is used by Fukuii when starting; the public key line can be used to identify your node to others.
+
+If not provided, Fukuii generates a node key automatically on first start.
 
 ## First Startup
 
@@ -309,7 +312,7 @@ Bootstrap checkpoints are trusted block references at known heights (typically m
 #### Configuration
 
 Bootstrap checkpoints are **enabled by default** and configured in the network chain configuration files:
-- **ETC Mainnet**: Uses major fork blocks (Spiral, Mystique, Magneto, Phoenix)
+- **ETC Mainnet**: Uses major fork blocks (Olympia, Spiral, Mystique, Magneto, Phoenix)
 - **Mordor Testnet**: Uses testnet fork blocks
 
 To disable bootstrap checkpoints and force traditional pivot sync:

@@ -4,8 +4,17 @@ import org.apache.pekko.util.ByteString
 
 import scala.annotation.tailrec
 
+import org.bouncycastle.util.encoders.Hex
+
+import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.domain.SetCodeTransaction
 import com.chipprbots.ethereum.domain.UInt256
+import com.chipprbots.ethereum.rlp
+import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.rlp.RLPValue
+import com.chipprbots.ethereum.rlp.UInt256RLPImplicits._
+import com.chipprbots.ethereum.utils.DebugTrace
 import com.chipprbots.ethereum.utils.Logger
 
 class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
@@ -56,13 +65,34 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
       if (PrecompiledContracts.isDefinedAt(context1))
         PrecompiledContracts.run(context1)
       else {
-        val code = world1.getCode(recipientAddr)
+        val code = resolveCode(world1, recipientAddr)
         val env = ExecEnv(context1, code, ownerAddr)
 
+        // EIP-7702: If code was resolved from a delegation, warm the delegation target
+        val delegationTarget = try {
+          SetCodeTransaction.parseDelegation(world1.getCode(recipientAddr))
+        } catch {
+          case _: Exception => None
+        }
         val initialState: PS = ProgramState(this, context1, env)
-        exec(initialState).toResult
+        val warmState = delegationTarget match {
+          case Some(target) => initialState.addAccessedAddress(target)
+          case None => initialState
+        }
+        exec(warmState).toResult
       }
     }
+
+  /** EIP-7702: Resolve delegation code one level deep. If the account has a delegation prefix (0xef0100), load the
+    * target's code instead.
+    */
+  private def resolveCode(world: W, addr: Address): ByteString = {
+    val code = world.getCode(addr)
+    SetCodeTransaction.parseDelegation(code) match {
+      case Some(target) => world.getCode(target)
+      case None         => code
+    }
+  }
 
   /** Contract creation - Λ function in YP salt is used to create contract by CREATE2 opcode. See
     * https://github.com/ethereum/EIPs/blob/master/EIPS/eip-1014.md
@@ -85,6 +115,23 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
           invalidCallResult(context, Set.empty, Set.empty).copy(error = Some(InitCodeSizeLimit), gasRemaining = 0),
           Address(0)
         )
+      }
+
+      if (DebugTrace.enabledForBlock(context.blockHeader.number)) {
+        val callerAccountNonce = context.world.getAccount(context.callerAddr).map(_.nonce)
+        callerAccountNonce.foreach { n =>
+          val nonceForCreate = n - 1
+          // Address must be encoded as a single RLP string (20 bytes), not as a Seq[Byte].
+          val rlpPreimage =
+            rlp.encode(RLPList(RLPValue(context.callerAddr.bytes.toArray), nonceForCreate.toRLPEncodable))
+          val hash = kec256(rlpPreimage)
+          val derived = Address(hash)
+          log.info(
+            s"TRACE_CREATE_ADDR block=${context.blockHeader.number} caller=${context.callerAddr} " +
+              s"callerNonce=$n nonceForCreate=$nonceForCreate rlp=${Hex.toHexString(rlpPreimage.toArray)} " +
+              s"hash=${Hex.toHexString(hash.toArray)} derived=$derived"
+          )
+        }
       }
 
       val newAddress = salt
@@ -135,6 +182,10 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
         log.trace(
           s"$opCode | pc: $pc | depth: ${env.callDepth} | gasUsed: ${state.gas - gas} | gas: $gas | stack: $stack"
         )
+        // Opcode-level tracing for targeted debugging
+        if (DebugTrace.enabledForBlock(state.env.blockHeader.number) && state.env.callDepth == 0) {
+          System.err.println(s"[EVM] pc=${state.pc} op=$opCode gas=${state.gas} -> gasAfter=$gas depth=${env.callDepth}")
+        }
         if (newState.halted)
           newState
         else
@@ -175,33 +226,54 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
     maxCodeSizeExceeded
   }
 
-  private def saveNewContract(context: PC, address: Address, result: PR, config: EvmConfig): PR =
-    if (result.error.isDefined) {
-      if (result.error.contains(RevertOccurs)) result else result.copy(gasRemaining = 0)
-    } else {
-      val contractCode = result.returnData
-      val codeDepositCost = config.calcCodeDepositCost(contractCode)
+  private def saveNewContract(context: PC, address: Address, result: PR, config: EvmConfig): PR = {
+    val tracing = DebugTrace.enabledForBlock(context.blockHeader.number)
 
-      val maxCodeSizeExceeded = exceedsMaxContractSize(context, config, contractCode)
-      val codeStoreOutOfGas = result.gasRemaining < codeDepositCost
-      // EIP-3541: Reject new contracts starting with 0xEF byte
-      val startsWithEF = config.eip3541Enabled && contractCode.nonEmpty && contractCode.head == 0xef.toByte
-
-      if (startsWithEF) {
-        // EIP-3541: Code starting with 0xEF byte causes exceptional abort
-        result.copy(error = Some(InvalidCode), gasRemaining = 0)
-      } else if (maxCodeSizeExceeded || (codeStoreOutOfGas && config.exceptionalFailedCodeDeposit)) {
-        // Code size too big or code storage causes out-of-gas with exceptionalFailedCodeDeposit enabled
-        result.copy(error = Some(OutOfGas), gasRemaining = 0)
-      } else if (codeStoreOutOfGas && !config.exceptionalFailedCodeDeposit) {
-        // Code storage causes out-of-gas with exceptionalFailedCodeDeposit disabled
-        result
+    val out: PR =
+      if (result.error.isDefined) {
+        if (result.error.contains(RevertOccurs)) result else result.copy(gasRemaining = 0)
       } else {
-        // Code storage succeeded
-        result.copy(
-          gasRemaining = result.gasRemaining - codeDepositCost,
-          world = result.world.saveCode(address, result.returnData)
-        )
+        val contractCode = result.returnData
+        val codeDepositCost = config.calcCodeDepositCost(contractCode)
+
+        val maxCodeSizeExceeded = exceedsMaxContractSize(context, config, contractCode)
+        val codeStoreOutOfGas = result.gasRemaining < codeDepositCost
+        // EIP-3541: Reject new contracts starting with 0xEF byte
+        val startsWithEF = config.eip3541Enabled && contractCode.nonEmpty && contractCode.head == 0xef.toByte
+
+        if (startsWithEF) {
+          // EIP-3541: Code starting with 0xEF byte causes exceptional abort
+          result.copy(error = Some(InvalidCode), gasRemaining = 0)
+        } else if (maxCodeSizeExceeded || (codeStoreOutOfGas && config.exceptionalFailedCodeDeposit)) {
+          // Code size too big or code storage causes out-of-gas with exceptionalFailedCodeDeposit enabled
+          result.copy(error = Some(OutOfGas), gasRemaining = 0)
+        } else if (codeStoreOutOfGas && !config.exceptionalFailedCodeDeposit) {
+          // Code storage causes out-of-gas with exceptionalFailedCodeDeposit disabled
+          result
+        } else {
+          // Code storage succeeded
+          result.copy(
+            gasRemaining = result.gasRemaining - codeDepositCost,
+            world = result.world.saveCode(address, result.returnData)
+          )
+        }
       }
+
+    if (tracing) {
+      val contractCodeSize = result.returnData.size
+      val codeDepositCost = config.calcCodeDepositCost(result.returnData)
+      val maxCodeSizeExceeded = exceedsMaxContractSize(context, config, result.returnData)
+      val codeStoreOutOfGas = result.gasRemaining < codeDepositCost
+      log.info(
+        s"TRACE_CREATE block=${context.blockHeader.number} caller=${context.callerAddr} " +
+          s"newAddress=$address initcodeSize=${context.inputData.size} runtimeCodeSize=$contractCodeSize " +
+          s"gasBeforeDeposit=${result.gasRemaining} codeDepositCost=$codeDepositCost " +
+          s"gasAfter=${out.gasRemaining} maxCodeSizeExceeded=$maxCodeSizeExceeded " +
+          s"codeStoreOutOfGas=$codeStoreOutOfGas exceptionalFailedCodeDeposit=${config.exceptionalFailedCodeDeposit} " +
+          s"errorBefore=${result.error.map(_.toString)} errorAfter=${out.error.map(_.toString)}"
+      )
     }
+
+    out
+  }
 }

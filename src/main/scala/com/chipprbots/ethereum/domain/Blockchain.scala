@@ -2,8 +2,6 @@ package com.chipprbots.ethereum.domain
 
 import org.apache.pekko.util.ByteString
 
-import scala.annotation.tailrec
-
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.storage._
 import com.chipprbots.ethereum.domain
@@ -130,14 +128,12 @@ class BlockchainImpl(
     }
   }
 
-  // scalastyle:off method.length
   private def removeBlock(block: Block): Unit = {
     val blockHash = block.hash
 
     log.debug(s"Trying to remove block ${block.idTag}")
 
     val txList = block.body.transactionList
-    val latestCheckpointNumber = blockchainReader.getLatestCheckpointBlockNumber()
 
     val blockNumberMappingUpdates =
       if (blockchainReader.getHashByBlockNumber(blockchainReader.getBestBranch(), block.number).contains(blockHash))
@@ -146,34 +142,11 @@ class BlockchainImpl(
 
     val potentialNewBestBlockNumber: BigInt = (block.number - 1).max(0)
     val potentialNewBestBlockHash: ByteString = block.header.parentHash
-    val newLatestCheckpointNumber: BigInt =
-      if (block.hasCheckpoint && block.number == latestCheckpointNumber) {
-        findPreviousCheckpointBlockNumber(block.number, block.number)
-      } else latestCheckpointNumber
 
-    /*
-      This two below updates are an exception to the rule of only updating the best blocks when persisting the node
-      cache.
-      They are required in case we are removing a block that's marked on db as the best (or as the last checkpoint),
-      to keep it's consistency, as it will no longer be the best block (nor the last checkpoint).
-
-      This updates can't be done if the conditions are false as we might not have the associated mpt nodes, so falling
-      into the case of having an incomplete best block and so an inconsistent db
-     */
     val bestBlockNumberUpdates =
       if (appStateStorage.getBestBlockNumber() > potentialNewBestBlockNumber)
         appStateStorage.putBestBlockInfo(BlockInfo(potentialNewBestBlockHash, potentialNewBestBlockNumber))
       else appStateStorage.emptyBatchUpdate
-    val latestCheckpointNumberUpdates =
-      if (appStateStorage.getLatestCheckpointBlockNumber() > newLatestCheckpointNumber)
-        appStateStorage.putLatestCheckpointBlockNumber(newLatestCheckpointNumber)
-      else appStateStorage.emptyBatchUpdate
-
-    log.debug(
-      "Persisting app info data into database. Persisted block number is {}. Persisted checkpoint number is {}",
-      potentialNewBestBlockNumber,
-      newLatestCheckpointNumber
-    )
 
     blockHeadersStorage
       .remove(blockHash)
@@ -183,38 +156,14 @@ class BlockchainImpl(
       .and(removeTxsLocations(txList))
       .and(blockNumberMappingUpdates)
       .and(bestBlockNumberUpdates)
-      .and(latestCheckpointNumberUpdates)
       .commit()
 
     log.debug(
-      "Removed block with hash {}. New best block number - {}, new best checkpoint block number - {}",
+      "Removed block with hash {}. New best block number - {}",
       ByteStringUtils.hash2string(blockHash),
-      potentialNewBestBlockNumber,
-      newLatestCheckpointNumber
+      potentialNewBestBlockNumber
     )
   }
-  // scalastyle:on method.length
-
-  /** Recursive function which try to find the previous checkpoint by traversing blocks from top to the bottom. In case
-    * of finding the checkpoint block number, the function will finish the job and return result
-    */
-  @tailrec
-  private def findPreviousCheckpointBlockNumber(
-      blockNumberToCheck: BigInt,
-      latestCheckpointBlockNumber: BigInt
-  ): BigInt =
-    if (blockNumberToCheck > 0) {
-      val maybePreviousCheckpointBlockNumber = for {
-        currentBlock <- blockchainReader.getBlockByNumber(blockchainReader.getBestBranch(), blockNumberToCheck)
-        if currentBlock.hasCheckpoint &&
-          currentBlock.number < latestCheckpointBlockNumber
-      } yield currentBlock.number
-
-      maybePreviousCheckpointBlockNumber match {
-        case Some(previousCheckpointBlockNumber) => previousCheckpointBlockNumber
-        case None => findPreviousCheckpointBlockNumber(blockNumberToCheck - 1, latestCheckpointBlockNumber)
-      }
-    } else 0
 
   private def removeTxsLocations(stxs: Seq[SignedTransaction]): DataSourceBatchUpdate =
     stxs.map(_.hash).foldLeft(transactionMappingStorage.emptyBatchUpdate) { case (updates, hash) =>

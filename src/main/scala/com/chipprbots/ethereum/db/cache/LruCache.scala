@@ -9,7 +9,7 @@ import com.google.common.cache
 import com.google.common.cache.CacheBuilder
 import com.google.common.cache.RemovalNotification
 
-import com.chipprbots.ethereum.utils.Config.NodeCacheConfig
+import com.chipprbots.ethereum.utils.NodeCacheConfig
 
 class LruCache[K <: AnyRef, V <: AnyRef](
     config: NodeCacheConfig,

@@ -13,8 +13,8 @@ package com.chipprbots.ethereum.network.p2p.messages
   *
   * All message implementations are inherited from ETH66 and ETH67, except for the removed messages.
   *
-  * Note: For backward compatibility with some core-geth nodes, the NewPooledTransactionHashes decoder
-  * (inherited from ETH67) supports both the enhanced format and the legacy ETH65 format.
+  * Note: For backward compatibility with some core-geth nodes, the NewPooledTransactionHashes decoder (inherited from
+  * ETH67) supports both the enhanced format and the legacy ETH65 format.
   *
   * For state synchronization on ETH68+, use the SNAP/1 protocol as a satellite protocol.
   */

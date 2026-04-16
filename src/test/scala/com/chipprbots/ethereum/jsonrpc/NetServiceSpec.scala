@@ -6,6 +6,7 @@ import java.util.concurrent.atomic.AtomicReference
 import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
 import cats.effect.unsafe.IORuntime
 
@@ -16,6 +17,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.NormalPatience
+import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.jsonrpc.NetService._
 import com.chipprbots.ethereum.network.Peer
@@ -59,6 +61,158 @@ class NetServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with No
     netService.version(VersionRequest()).unsafeRunSync() shouldBe Right(VersionResponse("42"))
   }
 
+  it should "return node info with enode when listening" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    val response = netService.nodeInfo(NodeInfoRequest()).unsafeRunSync()
+    response.isRight shouldBe true
+    val info = response.toOption.get
+    val expectedId = nodeStatusRef.get().nodeId.map("%02x".format(_)).mkString
+    info.id shouldBe expectedId
+    info.listening shouldBe true
+    info.enode shouldBe defined
+    info.enode.get should include(expectedId)
+    info.listenAddr shouldBe defined
+    info.listenAddr.get should include(":9000")
+  }
+
+  it should "report not listening when server is offline" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    val current = nodeStatusRef.get()
+    nodeStatusRef.set(current.copy(serverStatus = ServerStatus.NotListening))
+
+    val response = netService.nodeInfo(NodeInfoRequest()).unsafeRunSync()
+    val expectedId = current.nodeId.map("%02x".format(_)).mkString
+    response shouldBe Right(
+      NodeInfoResponse(
+        id = expectedId,
+        enode = None,
+        listenAddr = None,
+        listening = false
+      )
+    )
+  }
+
+  // Enhanced peer management tests
+  it should "list all peers with detailed information" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    val resF: Future[Either[JsonRpcError, ListPeersResponse]] = netService
+      .listPeers(ListPeersRequest())
+      .unsafeToFuture()
+
+    peerManager.expectMsg(PeerManagerActor.GetPeers)
+    peerManager.reply(
+      PeerManagerActor.Peers(
+        Map(
+          Peer(
+            PeerId("peer1"),
+            new InetSocketAddress("192.168.1.1", 30303),
+            testRef,
+            false,
+            nodeId = Some(ByteString("abcd1234"))
+          ) -> PeerActor.Status.Handshaked,
+          Peer(
+            PeerId("peer2"),
+            new InetSocketAddress("192.168.1.2", 30303),
+            testRef,
+            true
+          ) -> PeerActor.Status.Connecting
+        )
+      )
+    )
+
+    val result = resF.futureValue
+    result.isRight shouldBe true
+    val peers = result.toOption.get.peers
+    peers should have size 2
+    peers.exists(_.id == "peer1") shouldBe true
+    peers.exists(_.incomingConnection == true) shouldBe true
+  }
+
+  it should "disconnect a peer by id" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    val resF: Future[Either[JsonRpcError, DisconnectPeerResponse]] = netService
+      .disconnectPeer(DisconnectPeerRequest("peer1"))
+      .unsafeToFuture()
+
+    peerManager.expectMsg(PeerManagerActor.DisconnectPeerById(PeerId("peer1")))
+    peerManager.reply(PeerManagerActor.DisconnectPeerResponse(disconnected = true))
+
+    resF.futureValue shouldBe Right(DisconnectPeerResponse(success = true))
+  }
+
+  it should "handle disconnect peer failure" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    val resF: Future[Either[JsonRpcError, DisconnectPeerResponse]] = netService
+      .disconnectPeer(DisconnectPeerRequest("nonexistent"))
+      .unsafeToFuture()
+
+    peerManager.expectMsg(PeerManagerActor.DisconnectPeerById(PeerId("nonexistent")))
+    peerManager.reply(PeerManagerActor.DisconnectPeerResponse(disconnected = false))
+
+    resF.futureValue shouldBe Right(DisconnectPeerResponse(success = false))
+  }
+
+  it should "connect to a new peer" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    val uri = "enode://abcd1234@192.168.1.100:30303"
+    val result = netService.connectToPeer(ConnectToPeerRequest(uri)).unsafeRunSync()
+
+    result.isRight shouldBe true
+    result.toOption.get.success shouldBe true
+    peerManager.expectMsgClass(classOf[PeerManagerActor.ConnectToPeer])
+  }
+
+  it should "reject invalid peer URI" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    // Using a URI with invalid characters that will throw URISyntaxException
+    val result = netService.connectToPeer(ConnectToPeerRequest("enode://not valid uri")).unsafeRunSync()
+
+    result.isLeft shouldBe true
+  }
+
+  // Blacklist management tests
+  it should "list blacklisted peers" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    // Note: Directly adding to blacklist here since we're testing the listing functionality
+    // which queries the blacklist directly. The add/remove operations are tested separately.
+    import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
+    blacklist.add(PeerManagerActor.PeerAddress("192.168.1.100"), 60.seconds, BlacklistReason.UselessPeer)
+    blacklist.add(PeerManagerActor.PeerAddress("192.168.1.101"), 120.seconds, BlacklistReason.UselessPeer)
+
+    val result = netService.listBlacklistedPeers(ListBlacklistedPeersRequest()).unsafeRunSync()
+
+    result.isRight shouldBe true
+    val blacklistedPeers = result.toOption.get.blacklistedPeers
+    blacklistedPeers should have size 2
+    blacklistedPeers.exists(_.id == "192.168.1.100") shouldBe true
+    blacklistedPeers.exists(_.id == "192.168.1.101") shouldBe true
+  }
+
+  it should "add peer to blacklist with custom duration" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    val resF: Future[Either[JsonRpcError, AddToBlacklistResponse]] = netService
+      .addToBlacklist(AddToBlacklistRequest("192.168.1.200", Some(300), "Test reason"))
+      .unsafeToFuture()
+
+    peerManager.expectMsgClass(classOf[PeerManagerActor.AddToBlacklistRequest])
+    peerManager.reply(PeerManagerActor.AddToBlacklistResponse(added = true))
+
+    resF.futureValue shouldBe Right(AddToBlacklistResponse(added = true))
+  }
+
+  it should "add peer to permanent blacklist when duration is None" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    val resF: Future[Either[JsonRpcError, AddToBlacklistResponse]] = netService
+      .addToBlacklist(AddToBlacklistRequest("192.168.1.201", None, "Permanent ban"))
+      .unsafeToFuture()
+
+    peerManager.expectMsgClass(classOf[PeerManagerActor.AddToBlacklistRequest])
+    peerManager.reply(PeerManagerActor.AddToBlacklistResponse(added = true))
+
+    resF.futureValue shouldBe Right(AddToBlacklistResponse(added = true))
+  }
+
+  it should "remove peer from blacklist" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    val resF: Future[Either[JsonRpcError, RemoveFromBlacklistResponse]] = netService
+      .removeFromBlacklist(RemoveFromBlacklistRequest("192.168.1.100"))
+      .unsafeToFuture()
+
+    peerManager.expectMsgClass(classOf[PeerManagerActor.RemoveFromBlacklistRequest])
+    peerManager.reply(PeerManagerActor.RemoveFromBlacklistResponse(removed = true))
+
+    resF.futureValue shouldBe Right(RemoveFromBlacklistResponse(removed = true))
+  }
+
   trait TestSetup {
     implicit val system: ActorSystem = ActorSystem("Testsystem")
 
@@ -66,12 +220,24 @@ class NetServiceSpec extends AnyFlatSpec with Matchers with ScalaFutures with No
 
     val peerManager: TestProbe = TestProbe()
 
-    val nodeStatus: NodeStatus = NodeStatus(
-      crypto.generateKeyPair(secureRandom),
-      ServerStatus.Listening(new InetSocketAddress(9000)),
-      discoveryStatus = ServerStatus.NotListening
+    val blacklist = CacheBasedBlacklist.empty(100)
+
+    private val nodeKey = crypto.generateKeyPair(secureRandom)
+    val nodeStatusRef: AtomicReference[NodeStatus] = new AtomicReference[
+      NodeStatus
+    ](
+      NodeStatus(
+        nodeKey,
+        ServerStatus.Listening(new InetSocketAddress(9000)),
+        discoveryStatus = ServerStatus.NotListening
+      )
     )
     val netService =
-      new NetService(new AtomicReference[NodeStatus](nodeStatus), peerManager.ref, NetServiceConfig(5.seconds))
+      new NetService(
+        nodeStatusRef,
+        peerManager.ref,
+        blacklist,
+        NetServiceConfig(5.seconds)
+      )
   }
 }

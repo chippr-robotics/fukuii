@@ -16,6 +16,8 @@ import scala.util.Failure
 import scala.util.Random
 import scala.util.Success
 
+import org.bouncycastle.util.encoders.Hex
+
 import com.chipprbots.scalanet.discovery.crypto.PublicKey
 import com.chipprbots.scalanet.discovery.ethereum.v4
 import com.chipprbots.scalanet.discovery.ethereum.{Node => ENode}
@@ -110,7 +112,10 @@ class PeerDiscoveryManager(
           context.become(started(discovery, release))
 
         case Left(ex) =>
-          log.debug("Failed to start peer discovery: {}", ex.getMessage)
+          log.warning(
+            "Failed to start peer discovery; will keep running without discovery (static/known nodes only).",
+            ex
+          )
           context.become(init)
       }
   }
@@ -138,7 +143,7 @@ class PeerDiscoveryManager(
           stopDiscoveryService(release)
 
         case Left(ex) =>
-          log.debug("Failed to start peer discovery: {}", ex.getMessage)
+          log.warning("Failed to start peer discovery while stopping; discovery will remain disabled.", ex)
           context.become(init)
       }
 
@@ -191,6 +196,7 @@ class PeerDiscoveryManager(
     maybeDiscoveredNodes
       .map(_ ++ alreadyDiscoveredNodes)
       .map(_.filterNot(isLocalNode))
+      .flatTap(nodes => IO(log.debug("Discovered nodes snapshot ({} total) sent to {}", nodes.size, recipient.path)))
       .map(DiscoveredNodesInfo(_))
   }
 
@@ -205,7 +211,8 @@ class PeerDiscoveryManager(
   ): Unit = maybeRandomNodes.foreach { consumer =>
     pipeToRecipient[RandomNodeInfo](recipient) {
       consumer.take(1).compile.lastOrError.flatMap { node =>
-        IO.pure(RandomNodeInfo(node))
+        IO(log.debug("Random node candidate {} delivered to {}", formatNodeForLogs(node), recipient.path))
+          .as(RandomNodeInfo(node))
       }
     }
   }
@@ -242,6 +249,11 @@ class PeerDiscoveryManager(
 
   def isLocalNode(node: Node): Boolean =
     node.id == localNodeId
+
+  private def formatNodeForLogs(node: Node): String = {
+    val id = Hex.toHexString(node.id.take(6).toArray)
+    s"${com.chipprbots.ethereum.network.getHostName(node.addr)}:${node.tcpPort}/$id"
+  }
 
   def randomNodeId: ENode.Id = {
     // We could use `DiscoveryService.lookupRandom` which generates a random public key,

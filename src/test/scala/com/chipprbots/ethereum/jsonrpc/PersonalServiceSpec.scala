@@ -35,16 +35,13 @@ import com.chipprbots.ethereum.keystore.KeyStore
 import com.chipprbots.ethereum.keystore.KeyStore.DecryptionFailed
 import com.chipprbots.ethereum.keystore.KeyStore.IOError
 import com.chipprbots.ethereum.keystore.Wallet
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager._
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ForkBlockNumbers
 import com.chipprbots.ethereum.utils.MonetaryPolicyConfig
 import com.chipprbots.ethereum.utils.TxPoolConfig
-import scala.concurrent.Future
-import scala.concurrent.Future
-import scala.concurrent.Future
-import scala.concurrent.Future
 import scala.concurrent.Future
 
 class PersonalServiceSpec
@@ -398,6 +395,54 @@ class PersonalServiceSpec
     txPool.expectMsg(AddOrOverrideTransaction(chainSpecificStx))
   }
 
+  it should "return NodeNotFound when sending transaction during sync (state unavailable)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
+    (keyStore.unlockAccount _)
+      .expects(address, passphrase)
+      .returning(Right(wallet))
+
+    (blockchainReader.getBestBlockNumber _).expects().returning(1234)
+    (blockchainReader.getAccount _)
+      .expects(*, address, BigInt(1234))
+      .throwing(new MissingNodeException(ByteString(new Array[Byte](32))))
+
+    val req: SendTransactionWithPassphraseRequest = SendTransactionWithPassphraseRequest(tx, passphrase)
+    val res: Future[Either[JsonRpcError, SendTransactionWithPassphraseResponse]] =
+      personal.sendTransaction(req).unsafeToFuture()
+
+    txPool.expectMsg(GetPendingTransactions)
+    txPool.reply(PendingTransactionsResponse(Nil))
+
+    res.futureValue shouldEqual Left(JsonRpcError.NodeNotFound)
+  }
+
+  it should "return NodeNotFound when sending transaction with unlocked account during sync" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
+    (keyStore.unlockAccount _)
+      .expects(address, passphrase)
+      .returning(Right(wallet))
+
+    personal.unlockAccount(UnlockAccountRequest(address, passphrase, None)).unsafeRunSync()
+
+    (blockchainReader.getBestBlockNumber _).expects().returning(1234)
+    (blockchainReader.getAccount _)
+      .expects(*, address, BigInt(1234))
+      .throwing(new MissingNodeException(ByteString(new Array[Byte](32))))
+
+    val req: SendTransactionRequest = SendTransactionRequest(tx)
+    val res: Future[Either[JsonRpcError, SendTransactionResponse]] =
+      personal.sendTransaction(req).unsafeToFuture()
+
+    txPool.expectMsg(GetPendingTransactions)
+    txPool.reply(PendingTransactionsResponse(Nil))
+
+    res.futureValue shouldEqual Left(JsonRpcError.NodeNotFound)
+  }
+
   it should "return an error when importing a duplicated key" taggedAs (UnitTest, RPCTest) in new TestSetup {
     (keyStore.importPrivateKey _).expects(prvKey, passphrase).returning(Left(KeyStore.DuplicateKeySaved))
 
@@ -440,7 +485,7 @@ class PersonalServiceSpec
     val nonce = 7
     val txValue = 128000
 
-    val chainId: Byte = 0x03.toByte
+    val chainId: BigInt = 0x03
     val forkBlockNumbers: ForkBlockNumbers = ForkBlockNumbers.Empty.copy(
       eip155BlockNumber = 12345,
       eip161BlockNumber = 0,
@@ -457,9 +502,7 @@ class PersonalServiceSpec
       atlantisBlockNumber = 0,
       aghartaBlockNumber = 0,
       phoenixBlockNumber = 0,
-      petersburgBlockNumber = 0,
-      ecip1098BlockNumber = 0,
-      ecip1097BlockNumber = 0
+      petersburgBlockNumber = 0
     )
 
     val wallet: Wallet = Wallet(address, prvKey)
@@ -487,7 +530,7 @@ class PersonalServiceSpec
         blockchainReader,
         txPool.ref,
         txPoolConfig,
-        new BlockchainConfigBuilder {
+        new BlockchainConfigBuilder with com.chipprbots.ethereum.TestInstanceConfigProvider {
           override def blockchainConfig: BlockchainConfig = BlockchainConfig(
             chainId = chainId,
             // unused
@@ -501,8 +544,7 @@ class PersonalServiceSpec
             daoForkConfig = None,
             bootstrapNodes = Set(),
             gasTieBreaker = false,
-            ethCompatibleStorage = true,
-            treasuryAddress = Address(0)
+            ethCompatibleStorage = true
           )
         }
       )

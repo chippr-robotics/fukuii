@@ -130,9 +130,19 @@ class FrameCodec(private val secrets: Secrets) extends Logger {
 
       dec.processBytes(headBuffer, 0, 16, headBuffer, 0)
 
-      var bodySize: Int = headBuffer(0)
+      // Security: mask with 0xff to prevent sign extension from signed Byte
+      var bodySize: Int = headBuffer(0) & 0xff
       bodySize = (bodySize << 8) + (headBuffer(1) & 0xff)
       bodySize = (bodySize << 8) + (headBuffer(2) & 0xff)
+
+      // Security: defense-in-depth frame body size limit (CVE-2026-26313)
+      // Frame headers are MAC-protected so only authenticated peers can reach this,
+      // but enforce an explicit upper bound matching MaxDecompressedLength
+      if (bodySize <= 0 || bodySize > MessageCodec.MaxDecompressedLength) {
+        throw new IOException(
+          s"Invalid frame body size: $bodySize (max=${MessageCodec.MaxDecompressedLength})"
+        )
+      }
 
       val rlpList = rlp.decode[Seq[Int]](headBuffer.drop(3))
       val protocol = rlpList.headOption.getOrElse(

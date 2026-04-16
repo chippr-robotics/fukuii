@@ -7,7 +7,9 @@ import org.scalatest.wordspec.AnyWordSpec
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.Fixtures
-import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.crypto.ECDSASignature
+import com.chipprbots.ethereum.domain.TransactionWithAccessList
+import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.network.p2p.EthereumMessageDecoder
 import com.chipprbots.ethereum.network.p2p.NetworkMessageDecoder
@@ -15,11 +17,9 @@ import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages._
 import com.chipprbots.ethereum.network.p2p.messages.ETH61.BlockHashesFromNumber
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol._
-import com.chipprbots.ethereum.testing.Tags._
 
 class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyChecks with Matchers {
 
-  // TODO: add tests for messages from ETH63
   "Wire Protocol" when {
 
     "encoding and decoding Hello" should {
@@ -63,6 +63,22 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
         val msg = SignedTransactions(Fixtures.Blocks.Block3125369.body.transactionList)
         verify(msg, (m: SignedTransactions) => m.toBytes, Codes.SignedTransactionsCode, Capability.ETH63)
       }
+
+      "return same result for typed transaction wire encoding" in {
+        val typedTx = TransactionWithAccessList(
+          chainId = 1,
+          nonce = 1,
+          gasPrice = 1,
+          gasLimit = 21000,
+          receivingAddress = None,
+          value = 0,
+          payload = ByteString.empty,
+          accessList = Nil
+        )
+        val signedTypedTx = SignedTransaction(typedTx, ECDSASignature(r = 1, s = 2, v = 1))
+        val msg = SignedTransactions(Seq(signedTypedTx))
+        verify(msg, (m: SignedTransactions) => m.toBytes, Codes.SignedTransactionsCode, Capability.ETH63)
+      }
     }
 
     "encoding and decoding NewBlock" should {
@@ -82,22 +98,6 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
     }
   }
 
-  "ETC64" when {
-    "encoding and decoding Status" should {
-      "return same result for Status v64" in {
-        val msg = ETC64.Status(1, 2, ChainWeight(2, 5), ByteString("HASH"), ByteString("HASH2"))
-        verify(msg, (m: ETC64.Status) => m.toBytes, Codes.StatusCode, Capability.ETC64)
-      }
-    }
-
-    "encoding and decoding NewBlock" should {
-      "return same result for NewBlock v64" in {
-        val msg = ETC64.NewBlock(Fixtures.Blocks.Block3125369.block, ChainWeight(2323, 21))
-        verify(msg, (m: ETC64.NewBlock) => m.toBytes, Codes.NewBlockCode, Capability.ETC64)
-      }
-    }
-  }
-
   "ETH63" when {
     val version = Capability.ETH63
     "encoding and decoding Status" should {
@@ -111,8 +111,8 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
       // (e.g., 128 -> [0x00, 0x80] instead of [0x80]). This tests the fix using bigIntToUnsignedByteArray.
       "handle values >= 128 correctly (two's complement edge case)" in {
         val msg = Status(
-          protocolVersion = 128,  // Tests high bit in single byte
-          networkId = 256,        // Tests value requiring 2 bytes
+          protocolVersion = 128, // Tests high bit in single byte
+          networkId = 256, // Tests value requiring 2 bytes
           totalDifficulty = BigInt("8000000000000000", 16), // Tests high bit in large value
           bestHash = ByteString("HASH"),
           genesisHash = ByteString("HASH2")
@@ -134,8 +134,8 @@ class MessagesSerializationSpec extends AnyWordSpec with ScalaCheckPropertyCheck
       // Test with values >= 128 to verify RLP encoding handles high-bit values correctly
       "handle values >= 128 correctly (two's complement edge case)" in {
         val msg = ETH64.Status(
-          protocolVersion = 128,  // Tests high bit in single byte
-          networkId = 256,        // Tests value requiring 2 bytes
+          protocolVersion = 128, // Tests high bit in single byte
+          networkId = 256, // Tests value requiring 2 bytes
           totalDifficulty = BigInt("8000000000000000", 16), // Tests high bit in large value
           bestHash = ByteString("HASH"),
           genesisHash = ByteString("HASH2"),

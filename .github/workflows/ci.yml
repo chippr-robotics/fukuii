@@ -6,6 +6,11 @@ on:
       - main
       - master
       - develop
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - '.github/workflows/docs-*.yml'
+      - '.github/workflows/gh-pages.yml'
   pull_request:
     branches:
       - main
@@ -14,6 +19,11 @@ on:
 
 permissions:
   contents: read
+
+# Cancel in-progress runs for the same PR/branch
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -48,19 +58,18 @@ jobs:
       
       - name: Set up SBT
         run: |
-          echo "deb https://repo.scala-sbt.org/scalasbt/debian all main" | sudo tee /etc/apt/sources.list.d/sbt.list
-          echo "deb https://repo.scala-sbt.org/scalasbt/debian /" | sudo tee /etc/apt/sources.list.d/sbt_old.list
-          curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" | sudo apt-key add
+          curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" | sudo gpg --dearmor -o /usr/share/keyrings/scalasbt-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/scalasbt-archive-keyring.gpg] https://repo.scala-sbt.org/scalasbt/debian all main" | sudo tee /etc/apt/sources.list.d/sbt.list
           sudo apt-get update
           sudo apt-get install sbt
       
-      - name: Compile all modules
-        run: sbt compile-all
+      - name: Check formatting
+        run: sbt scalafmtCheckAll
         env:
           FUKUII_DEV: true
-      
-      - name: Auto-format code
-        run: sbt scalafmtAll
+
+      - name: Compile all modules
+        run: sbt compile-all
         env:
           FUKUII_DEV: true
       
@@ -80,7 +89,6 @@ jobs:
         timeout-minutes: 10
       
       - name: Run Standard Tests with Coverage (Tier 2)
-        if: github.event_name == 'push'
         run: |
           echo "=========================================="
           echo "Running Standard Tests with Coverage (< 30 minutes)"
@@ -119,7 +127,7 @@ jobs:
       - name: Run Ethereum/Tests Integration Tests
         run: |
           echo "Running ethereum/tests integration test suite..."
-          sbt "IntegrationTest / testOnly *SimpleEthereumTest *BlockchainTestsSpec" || true
+          sbt "IntegrationTest / testOnly *SimpleEthereumTest *BlockchainTestsSpec"
           
           echo ""
           echo "=== Ethereum/Tests Integration Results ==="
@@ -130,7 +138,7 @@ jobs:
         timeout-minutes: 10
       
       - name: Upload coverage reports to Codecov
-        if: always() && github.event_name == 'push'
+        if: always()
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -143,7 +151,7 @@ jobs:
           verbose: true
       
       - name: Upload coverage artifacts
-        if: always() && github.event_name == 'push'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-reports-jdk21-scala-3.3.4

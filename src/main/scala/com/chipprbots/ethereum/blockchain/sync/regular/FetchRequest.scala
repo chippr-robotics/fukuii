@@ -17,6 +17,7 @@ import com.chipprbots.ethereum.blockchain.sync.PeersClient.NoSuitablePeer
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.Request
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.RequestFailed
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.utils.FunctorOps._
@@ -30,8 +31,23 @@ trait FetchRequest[A] {
 
   implicit val timeout: Timeout = syncConfig.peerResponseTimeout + 2.second // some margin for actor communication
 
-  def makeRequest(request: Request[_], responseFallback: A): IO[A] = {
-    log.debug("Making request to peers client: {}", request.message.getClass.getSimpleName)
+  /** Makes a request with peer switching on failure.
+    *
+    * When a peer fails, it is added to the triedPeers set and the next request will exclude it (Besu pattern). When all
+    * peers are exhausted, exponential backoff is applied before retrying (go-ethereum grace period pattern).
+    */
+  def makeRequest(
+      request: Request[_],
+      responseFallback: A,
+      triedPeers: Set[PeerId] = Set.empty,
+      retryCount: Int = 0
+  ): IO[A] = {
+    log.debug(
+      "Making request to peers client: {} (tried: {}, retry: {})",
+      request.message.getClass.getSimpleName,
+      triedPeers.size,
+      retryCount
+    )
     IO
       .fromFuture(IO(peersClient ? request))
       .tap { result =>
@@ -42,7 +58,7 @@ trait FetchRequest[A] {
           case RequestFailed(peer, reason) =>
             log.debug("Request failed from peer {} ({}): {}", peer.id, peer.remoteAddress, reason)
           case NoSuitablePeer =>
-            log.debug("No suitable peer available for request - will retry")
+            log.debug("No suitable peer available for request - will retry with backoff")
           case Failure(cause) =>
             log.debug("Request resulted in failure: {} - {}", cause.getClass.getSimpleName, cause.getMessage)
           case _ =>
@@ -50,7 +66,7 @@ trait FetchRequest[A] {
         }
         IO.unit
       }
-      .flatMap(handleRequestResult(responseFallback))
+      .flatMap(handleRequestResult(responseFallback, retryCount))
       .handleError { error =>
         log.debug("Unexpected error while doing a request: {}", error.getMessage, error)
         responseFallback
@@ -64,14 +80,25 @@ trait FetchRequest[A] {
     case _ => ()
   }
 
-  def handleRequestResult(fallback: A)(msg: Any): IO[A] =
+  def handleRequestResult(fallback: A, retryCount: Int = 0)(msg: Any): IO[A] =
     msg match {
       case failed: RequestFailed =>
-        log.debug("Request failed due to {} from peer {}, using fallback", failed.reason, failed.peer.id)
-        IO.pure(fallback)
+        val delay = retryBackoffDelay(retryCount)
+        log.debug(
+          "Request failed from peer {}, applying {}ms backoff before retry (attempt {})",
+          failed.peer.id,
+          delay.toMillis,
+          retryCount + 1
+        )
+        IO.pure(fallback).delayBy(delay)
       case NoSuitablePeer =>
-        log.debug("No suitable peer available, retrying after {}", syncConfig.syncRetryInterval)
-        IO.pure(fallback).delayBy(syncConfig.syncRetryInterval)
+        val delay = retryBackoffDelay(retryCount)
+        log.debug(
+          "No suitable peer available, applying {}ms backoff before retry (attempt {})",
+          delay.toMillis,
+          retryCount + 1
+        )
+        IO.pure(fallback).delayBy(delay)
       case Failure(cause) =>
         log.debug("Unexpected error on the request result: {}", cause.getMessage, cause)
         IO.pure(fallback)
@@ -79,4 +106,13 @@ trait FetchRequest[A] {
         log.debug("Successfully received response from peer {} - type: {}", peer.id, msg.getClass.getSimpleName)
         IO.pure(makeAdaptedMessage(peer, msg))
     }
+
+  /** Computes exponential backoff delay: min(syncRetryInterval * 2^retryCount, maxRetryDelay) */
+  private def retryBackoffDelay(retryCount: Int): FiniteDuration = {
+    val base = syncConfig.syncRetryInterval
+    val maxDelay = syncConfig.maxRetryDelay
+    val multiplier = math.pow(2.0, retryCount.toDouble).toLong
+    val delay = base * multiplier
+    if (delay > maxDelay) maxDelay else delay
+  }
 }

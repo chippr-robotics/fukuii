@@ -107,7 +107,7 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers {
     val lines = rendererNoProgress.render(state, width, height)
     val output = lines.map(_.toString).mkString("\n")
 
-    output should not include "Sync Progress"
+    (output should not).include("Sync Progress")
   }
 
   it should "include runtime section with uptime" taggedAs (UnitTest) in {
@@ -182,7 +182,7 @@ class TuiRendererSpec extends AnyFlatSpec with Matchers {
     val lines = rendererNoSettings.render(state, width, height)
     val output = lines.map(_.toString).mkString("\n")
 
-    output should not include "NODE SETTINGS"
+    (output should not).include("NODE SETTINGS")
   }
 
   it should "create renderer with default config" taggedAs (UnitTest) in {
