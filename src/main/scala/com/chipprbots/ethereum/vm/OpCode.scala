@@ -974,6 +974,23 @@ case object LOG3 extends LogOp(0xa3)
 case object LOG4 extends LogOp(0xa4)
 
 abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.G_create) {
+  // Override execute() to pass the pre-computed gas cost to exec() via state.opcodeGasCost,
+  // avoiding the duplicate gas calculation that CreateOp.exec() previously performed (EC-243).
+  override def execute[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
+    if (!availableInContext(state))
+      state.withError(OpCodeNotAvailableInStaticContext(code.toByte))
+    else if (state.stack.size < delta)
+      state.withError(StackUnderflow)
+    else if (state.stack.size - delta + alpha > state.stack.maxSize)
+      state.withError(StackOverflow)
+    else {
+      val gas: BigInt = calcGas(state)
+      if (gas > state.gas)
+        state.copy(gas = 0).withError(OutOfGas)
+      else
+        exec(state.copy(opcodeGasCost = gas)).spendGas(gas)
+    }
+
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] = {
     val (Seq(endowment, inOffset, inSize), stack1) = state.stack.pop(3)
 
@@ -984,9 +1001,8 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
       return state.withStack(stack1.push(UInt256.Zero)).withError(InitCodeSizeLimit).step()
     }
 
-    // FIXME: to avoid calculating this twice, we could adjust state.gas prior to execution in OpCode#execute
-    // not sure how this would affect other opcodes [EC-243]
-    val availableGas = state.gas - (baseGasFn(state.config.feeSchedule) + varGas(state))
+    // Gas cost already computed by OpCode.execute() and stored in state.opcodeGasCost
+    val availableGas = state.gas - state.opcodeGasCost
     val startGas = state.config.gasCap(availableGas)
     val (initCode, memory1) = state.memory.load(inOffset, inSize)
     val world1 = state.world.increaseNonce(state.ownAddress)
