@@ -82,8 +82,10 @@ class BlockExecution(
         worldAfterReward <- Either
           .catchOnly[MPTException](blockPreparator.payBlockReward(block, execResult.worldState))
           .leftMap(BlockExecutionError.MPTError.apply)
+        // EIP-4895: Process beacon chain withdrawals (Shanghai+)
+        worldAfterWithdrawals = processWithdrawals(block, worldAfterReward)
         // Prague: Process system calls for withdrawal/consolidation requests
-        worldAfterSystemCalls = processPragueSystemCalls(block, worldAfterReward)
+        worldAfterSystemCalls = processPragueSystemCalls(block, worldAfterWithdrawals)
         // State root hash needs to be up-to-date for validateBlockAfterExecution
         worldPersisted = InMemoryWorldStateProxy.persistState(worldAfterSystemCalls)
       } yield execResult.copy(worldState = worldPersisted)
@@ -296,6 +298,27 @@ class BlockExecution(
       }
 
     go(List.empty[BlockData], blocks, parentChainWeight)
+  }
+
+  /** EIP-4895: Process beacon chain withdrawals (Shanghai+).
+    * Each withdrawal credits `amount * 1 Gwei` to the target address.
+    * No gas is charged. Creates the account if it doesn't exist.
+    */
+  private def processWithdrawals(
+      block: Block,
+      world: InMemoryWorldStateProxy
+  ): InMemoryWorldStateProxy = {
+    block.body.withdrawals match {
+      case Some(withdrawals) if withdrawals.nonEmpty =>
+        val GweiToWei = BigInt("1000000000")
+        withdrawals.foldLeft(world) { (w, withdrawal) =>
+          val weiAmount = UInt256(withdrawal.amount * GweiToWei)
+          val address = withdrawal.address
+          val account = w.getAccount(address).getOrElse(w.getEmptyAccount)
+          w.saveAccount(address, account.increaseBalance(weiAmount))
+        }
+      case _ => world
+    }
   }
 
   /** Prague: Execute system calls for withdrawal and consolidation request processing.
