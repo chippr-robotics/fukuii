@@ -9,8 +9,6 @@ import org.apache.pekko.util.ByteString
 
 import com.typesafe.config.ConfigFactory
 
-import com.chipprbots.ethereum.utils.InstanceConfigProvider
-
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 import cats.implicits._
@@ -686,6 +684,7 @@ trait AdminServiceBuilder {
   this: PeerManagerActorBuilder
     with NodeStatusBuilder
     with BlockchainBuilder
+    with BlockchainConfigBuilder
     with InstanceConfigProvider =>
 
   lazy val blockedIPRegistry: BlockedIPRegistry = new BlockedIPRegistry(Set.empty)
@@ -694,6 +693,7 @@ trait AdminServiceBuilder {
     nodeStatusHolder,
     peerManager,
     blockchainReader,
+    blockchainConfig,
     instanceConfig.config.getConfig("network.rpc.net").getDuration("peer-manager-timeout").toMillis.millis,
     instanceConfig.config.getString("datadir"),
     blockedIPRegistry
