@@ -3,7 +3,8 @@ package com.chipprbots.ethereum.jsonrpc
 import java.net.InetSocketAddress
 import java.util.concurrent.atomic.AtomicReference
 
-import cats.effect.IO
+import org.apache.pekko.util.ByteString
+
 import cats.effect.unsafe.IORuntime
 
 import org.scalatest.flatspec.AnyFlatSpec
@@ -11,8 +12,12 @@ import org.scalatest.matchers.should.Matchers
 
 import scala.concurrent.duration._
 
+import com.chipprbots.ethereum.Fixtures
+import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.branch.EmptyBranch
 import com.chipprbots.ethereum.network.BlockedIPRegistry
 import com.chipprbots.ethereum.testing.Tags._
+import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.NodeStatus
 import com.chipprbots.ethereum.utils.ServerStatus
 
@@ -39,6 +44,23 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers {
     info.ports should contain key "listener"
   }
 
+  it should "return protocols.eth with genesis, head, difficulty, network" taggedAs UnitTest in new TestSetup {
+    val result = service.nodeInfo(AdminService.AdminNodeInfoRequest()).unsafeRunSync()
+    val info   = result.toOption.get
+    info.protocols should contain key "eth"
+    val eth = info.protocols("eth")
+    eth.genesis should startWith("0x")
+    eth.head should startWith("0x")
+    eth.difficulty should startWith("0x")
+    eth.network shouldBe Config.blockchains.blockchainConfig.networkId
+  }
+
+  it should "return activeFork as a non-empty string" taggedAs UnitTest in new TestSetup {
+    val result = service.nodeInfo(AdminService.AdminNodeInfoRequest()).unsafeRunSync()
+    val info   = result.toOption.get
+    info.activeFork should not be empty
+  }
+
   it should "return minimal info when server is not listening" taggedAs UnitTest in new TestSetup {
     val notListeningStatus = NodeStatus(
       com.chipprbots.ethereum.crypto.generateKeyPair(new java.security.SecureRandom),
@@ -46,7 +68,15 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers {
       ServerStatus.NotListening
     )
     val holder = new AtomicReference(notListeningStatus)
-    val svc = new AdminService(holder, null, null, 5.seconds, "/tmp", new BlockedIPRegistry(Set.empty))
+    val svc = new AdminService(
+      holder,
+      null,
+      stubBlockchainReader,
+      Config.blockchains.blockchainConfig,
+      5.seconds,
+      "/tmp",
+      new BlockedIPRegistry(Set.empty)
+    )
     val result = svc.nodeInfo(AdminService.AdminNodeInfoRequest()).unsafeRunSync()
 
     val info = result.toOption.get
@@ -97,16 +127,24 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers {
   }
 
   trait TestSetup {
-    val keyPair = com.chipprbots.ethereum.crypto.generateKeyPair(new java.security.SecureRandom)
+    val keyPair    = com.chipprbots.ethereum.crypto.generateKeyPair(new java.security.SecureRandom)
     val listenAddr = new InetSocketAddress("127.0.0.1", 30305)
     val nodeStatus = NodeStatus(keyPair, ServerStatus.Listening(listenAddr), ServerStatus.NotListening)
     val nodeStatusHolder = new AtomicReference(nodeStatus)
     val registry = new BlockedIPRegistry(Set.empty)
 
+    /** Minimal BlockchainReader stub — only overrides the three methods used by nodeInfo. */
+    val stubBlockchainReader: BlockchainReader = new BlockchainReader(null, null, null, null, null, null, null) {
+      override val genesisHeader = Fixtures.Blocks.Block3125369.header
+      override def getBestBranch() = EmptyBranch
+      override def getChainWeightByHash(hash: ByteString) = None
+    }
+
     val service = new AdminService(
       nodeStatusHolder,
       null, // peerManager — not used in unit tests (admin_peers / admin_addPeer / admin_removePeer need actor)
-      null, // blockchainReader — not used in unit tests
+      stubBlockchainReader,
+      Config.blockchains.blockchainConfig,
       5.seconds,
       "/tmp/test-datadir",
       registry
