@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.jsonrpc
 import org.json4s.JsonAST
 import org.json4s.JsonAST.JArray
 import org.json4s.JsonAST.JBool
+import org.json4s.JsonAST.JLong
 import org.json4s.JsonAST.JNull
 import org.json4s.JsonAST.JObject
 import org.json4s.JsonAST.JString
@@ -26,7 +27,15 @@ object AdminJsonMethodsImplicits extends JsonMethodsImplicits {
           ("listenAddr" -> t.listenAddr.map(JString(_)).getOrElse(JNull)) ~
           ("name" -> t.name) ~
           ("ports" -> JObject(t.ports.toList.map { case (k, v) => k -> org.json4s.JsonAST.JInt(v) })) ~
-          ("protocols" -> JObject(t.protocols.toList.map { case (k, v) => k -> JString(v) }))
+          ("protocols" -> JObject(t.protocols.toList.map { case (k, eth) =>
+            k -> JObject(
+              "difficulty" -> JString(eth.difficulty),
+              "genesis"    -> JString(eth.genesis),
+              "head"       -> JString(eth.head),
+              "network"    -> JLong(eth.network)
+            )
+          })) ~
+          ("activeFork" -> t.activeFork)
     }
 
   implicit val admin_peers: NoParamsMethodDecoder[AdminPeersRequest] with JsonEncoder[AdminPeersResponse] =

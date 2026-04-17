@@ -71,6 +71,12 @@ class PeerManagerActor(
     */
   private var peerStatusCache: Map[PeerId, PeerActor.Status] = Map.empty
 
+  /** Peers that should always remain connected. On disconnect, a reconnect is scheduled after 30s.
+    * Keyed by hex node ID (the userInfo portion of the enode URI), matching PeerId.value for handshaked peers.
+    * Mirrors Besu's DefaultP2PNetwork.maintainedPeers set.
+    */
+  private var maintainedPeersByNodeId: Map[String, URI] = Map.empty
+
   implicit class ConnectedPeersOps(connectedPeers: ConnectedPeers) {
 
     /** Number of new connections the node should try to open at any given time. */
@@ -248,6 +254,16 @@ class PeerManagerActor(
 
     case ConnectToPeer(uri) =>
       connectWith(uri, connectedPeers)
+
+    case AddMaintainedPeer(uri) =>
+      val nodeId  = uri.getUserInfo
+      val wasAdded = !maintainedPeersByNodeId.contains(nodeId)
+      maintainedPeersByNodeId = maintainedPeersByNodeId + (nodeId -> uri)
+      sender() ! AddMaintainedPeerResponse(wasAdded)
+      connectWith(uri, connectedPeers)
+
+    case RemoveMaintainedPeer(nodeId) =>
+      maintainedPeersByNodeId = maintainedPeersByNodeId - nodeId
   }
 
   private def getBlacklistDuration(reason: Long): FiniteDuration = {
@@ -381,6 +397,11 @@ class PeerManagerActor(
       terminatedPeersIds.foreach { peerId =>
         peerStatusCache = peerStatusCache - peerId
         peerEventBus ! Publish(PeerEvent.PeerDisconnected(peerId))
+        // Reconnect maintained peers — mirrors Besu's checkMaintainedConnectionPeers scheduler.
+        maintainedPeersByNodeId.get(peerId.value) foreach { uri =>
+          log.debug("Maintained peer {} disconnected — scheduling reconnect in 30s", uri)
+          context.system.scheduler.scheduleOnce(30.seconds, self, ConnectToPeer(uri))(context.dispatcher)
+        }
       }
       // Try to replace a lost connection with another one.
       if (newConnectedPeers.outgoingConnectionDemand > 0) {
@@ -675,6 +696,14 @@ object PeerManagerActor {
 
   case class RemoveFromBlacklistRequest(address: String)
   case class RemoveFromBlacklistResponse(removed: Boolean)
+
+  /** Besu alignment: admin_addPeer / admin_removePeer maintained-peers set.
+    * AddMaintainedPeer returns wasAdded=false if the peer was already in the set (duplicate call).
+    * RemoveMaintainedPeer removes from the set by hex node ID (enode userInfo).
+    */
+  case class AddMaintainedPeer(uri: URI)
+  case class AddMaintainedPeerResponse(wasAdded: Boolean)
+  case class RemoveMaintainedPeer(nodeId: String)
 
   /** Default blacklist duration when none specified (permanent blacklist). Set to 365 days as a practical "permanent"
     * duration.
