@@ -108,6 +108,48 @@ class RocksDbDataSource(
     } finally dbLock.writeLock().unlock()
   }
 
+  /** ReadOptions for range scans with fillCache=false to avoid polluting the block cache.
+    * Mirrors Besu's BonsaiWorldStateKeyValueStorage tailing iterator behaviour for flat DB walks.
+    * Regular point reads use the default readOptions with cache enabled.
+    */
+  private lazy val scanReadOptions: ReadOptions = {
+    val opts = new ReadOptions()
+    opts.setVerifyChecksums(rocksDbConfig.verifyChecksums)
+    opts.setFillCache(false)
+    opts
+  }
+
+  /** Seek-based range scan starting from startKey (inclusive).
+    * Uses fillCache=false to avoid evicting hot data from the block cache
+    * during large sequential scans (mirrors Besu's streamFromKey pattern).
+    *
+    * Returns an fs2 Stream of (key, value) pairs in sorted key order.
+    * The iterator is resource-managed and closes when the stream completes.
+    */
+  def seekFrom(
+      namespace: Namespace,
+      startKey: Array[Byte]
+  ): Stream[IO, Either[IterationError, (Array[Byte], Array[Byte])]] = {
+    val iterResource = Resource.fromAutoCloseable(
+      IO(db.newIterator(handles(namespace), scanReadOptions))
+    )
+    Stream.resource(iterResource).flatMap { it =>
+      Stream
+        .eval(IO(it.seek(startKey)))
+        .flatMap { _ =>
+          Stream.repeatEval(for {
+            isValid <- IO(it.isValid)
+            item <- if (isValid) IO(Right((it.key(), it.value()))) else IO.raiseError(IterationFinished)
+            _ <- IO(it.next())
+          } yield item)
+        }
+        .handleErrorWith {
+          case IterationFinished => Stream.empty
+          case ex                => Stream.emit(Left(IterationError(ex)))
+        }
+    }
+  }
+
   private def dbIterator: Resource[IO, RocksIterator] =
     Resource.fromAutoCloseable(IO(db.newIterator()))
 

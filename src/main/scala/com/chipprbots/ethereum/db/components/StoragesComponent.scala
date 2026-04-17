@@ -36,6 +36,8 @@ trait StoragesComponent {
 
     val flatSlotStorage: FlatSlotStorage
 
+    val flatAccountStorage: FlatAccountStorage
+
     val pruningMode: PruningMode
 
   }
