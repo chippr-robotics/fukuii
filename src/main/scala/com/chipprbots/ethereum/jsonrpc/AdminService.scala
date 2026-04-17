@@ -22,16 +22,30 @@ import org.slf4j.LoggerFactory
 import com.chipprbots.ethereum.domain.Block.BlockDec
 import com.chipprbots.ethereum.domain.Block.BlockEnc
 import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.branch.BestBranch
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps._
 import com.chipprbots.ethereum.network.BlockedIPRegistry
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.rlp.RLPImplicits._
+import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.utils.ForkBlockNumbers
 import com.chipprbots.ethereum.utils.Hex
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.utils.NodeStatus
 import com.chipprbots.ethereum.utils.ServerStatus
 
 object AdminService {
+
+  /** Besu alignment: protocols.eth sub-object in admin_nodeInfo.
+    * Mirrors Besu's EthProtocolStatus: difficulty (hex), genesis hash (0x-prefixed hex), head hash (0x-prefixed hex),
+    * network ID.
+    */
+  case class EthProtocolInfo(
+      difficulty: String,
+      genesis: String,
+      head: String,
+      network: Long
+  )
 
   case class AdminNodeInfoRequest()
   case class AdminNodeInfoResponse(
@@ -41,7 +55,8 @@ object AdminService {
       listenAddr: Option[String],
       name: String,
       ports: Map[String, Int],
-      protocols: Map[String, String]
+      protocols: Map[String, EthProtocolInfo],
+      activeFork: String
   )
 
   case class AdminPeersRequest()
@@ -91,6 +106,7 @@ class AdminService(
     nodeStatusHolder: AtomicReference[NodeStatus],
     peerManager: ActorRef,
     blockchainReader: BlockchainReader,
+    blockchainConfig: BlockchainConfig,
     peerManagerTimeout: FiniteDuration,
     datadir: String,
     blockedIPRegistry: BlockedIPRegistry
@@ -99,43 +115,90 @@ class AdminService(
 
   implicit private val timeout: Timeout = Timeout(peerManagerTimeout)
 
-  /** Besu AdminNodeInfo: enode string, id (unprefixed hex), ip, listenAddr, name, ports, protocols.
-    * Divergence from Besu: no NatService (NAT traversal), no ProtocolSchedule hardforkId, no ENR.
-    * Fukuii reads live state from nodeStatusHolder which mirrors Besu's peerNetwork.getLocalEnode().
+  /** Returns the canonical ECIP-1066 fork name active at the given block number.
+    * Chain-agnostic: uses ForkBlockNumbers from the loaded blockchainConfig, so it produces the correct name for both
+    * ETC mainnet and Mordor testnet without conditional logic. Forks set to Long.MaxValue (not yet activated, e.g.
+    * Olympia TBD) are excluded by the <= blockNumber filter. Mirrors Besu's
+    * protocolSchedule.getByBlockHeader().getHardforkId() intent.
+    */
+  private def activeForkName(blockNumber: BigInt, forks: ForkBlockNumbers): String =
+    List(
+      forks.olympiaBlockNumber                -> "Olympia",
+      forks.spiralBlockNumber                 -> "Spiral",
+      forks.mystiqueBlockNumber               -> "Mystique",
+      forks.magnetoBlockNumber                -> "Magneto",
+      forks.ecip1099BlockNumber               -> "Thanos",
+      forks.phoenixBlockNumber                -> "Phoenix",
+      forks.aghartaBlockNumber                -> "Agharta",
+      forks.atlantisBlockNumber               -> "Atlantis",
+      forks.difficultyBombRemovalBlockNumber  -> "Defuse Difficulty Bomb",
+      forks.difficultyBombContinueBlockNumber -> "Gotham",
+      forks.difficultyBombPauseBlockNumber    -> "Die Hard",
+      forks.eip150BlockNumber                 -> "Gas Reprice",
+      forks.homesteadBlockNumber              -> "Homestead",
+      forks.frontierBlockNumber               -> "Frontier"
+    ).filter(_._1 <= blockNumber)
+      .maxByOption(_._1)
+      .map(_._2)
+      .getOrElse("Frontier")
+
+  /** Besu AdminNodeInfo: enode string, id (unprefixed hex), ip, listenAddr, name, ports, protocols.eth, activeFork.
+    * protocols.eth mirrors Besu's EthProtocolStatus: difficulty (hex), genesis, head, networkId.
+    * activeFork mirrors Besu's protocolSchedule.getByBlockHeader().getHardforkId().
+    * Remaining divergences: no NatService (NAT IP), no ENR (discovery layer injection pending).
     */
   def nodeInfo(req: AdminNodeInfoRequest): ServiceResponse[AdminNodeInfoResponse] = IO.pure {
     val status = nodeStatusHolder.get()
     val nodeId = Hex.toHexString(status.nodeId)
+
+    val genesisHash = "0x" + Hex.toHexString(blockchainReader.genesisHeader.hash.toArray)
+    val (headHash, headNumber) = blockchainReader.getBestBranch() match {
+      case BestBranch(h, n) => (h, n)
+      case _                => (org.apache.pekko.util.ByteString.empty, BigInt(0))
+    }
+    val headHex   = "0x" + Hex.toHexString(headHash.toArray)
+    val totalDiff = blockchainReader.getChainWeightByHash(headHash)
+      .map(w => "0x" + w.totalDifficulty.toString(16))
+      .getOrElse("0x0")
+    val ethInfo = EthProtocolInfo(
+      difficulty = totalDiff,
+      genesis    = genesisHash,
+      head       = headHex,
+      network    = blockchainConfig.networkId
+    )
+    val fork = activeForkName(headNumber, blockchainConfig.forkBlockNumbers)
 
     status.serverStatus match {
       case ServerStatus.Listening(address) =>
         val host = Option(address.getAddress)
           .map(com.chipprbots.ethereum.network.getHostName)
           .getOrElse(address.getHostString)
-        val port      = address.getPort
+        val port       = address.getPort
         val listenAddr = s"$host:$port"
         val enode      = s"enode://$nodeId@$listenAddr"
         Right(
           AdminNodeInfoResponse(
-            enode = Some(enode),
-            id = nodeId,
-            ip = Some(host),
+            enode      = Some(enode),
+            id         = nodeId,
+            ip         = Some(host),
             listenAddr = Some(listenAddr),
-            name = "fukuii/v0.1",
-            ports = Map("listener" -> port, "discovery" -> port),
-            protocols = Map("eth" -> "68")
+            name       = "fukuii/v0.1",
+            ports      = Map("listener" -> port, "discovery" -> port),
+            protocols  = Map("eth" -> ethInfo),
+            activeFork = fork
           )
         )
       case _ =>
         Right(
           AdminNodeInfoResponse(
-            enode = None,
-            id = nodeId,
-            ip = None,
+            enode      = None,
+            id         = nodeId,
+            ip         = None,
             listenAddr = None,
-            name = "fukuii/v0.1",
-            ports = Map.empty,
-            protocols = Map("eth" -> "68")
+            name       = "fukuii/v0.1",
+            ports      = Map.empty,
+            protocols  = Map("eth" -> ethInfo),
+            activeFork = fork
           )
         )
     }
@@ -164,23 +227,28 @@ class AdminService(
       }
 
   /** Besu AdminAddPeer: parses enode → DefaultPeer → peerNetwork.addMaintainedConnectionPeer(peer) → boolean.
-    * Divergence: Fukuii has no maintainedPeers set; sends ConnectToPeer to actor (fire-and-forget).
-    * Returns true if URI is valid and message dispatched. Static persistence (survive restarts) in feat/network-autoblocker.
+    * Returns wasAdded=true if the peer was new to the maintained set (false for duplicate calls — aligned with Besu).
+    * PeerManagerActor tracks the maintained set and schedules reconnects on disconnect.
     */
-  def addPeer(req: AdminAddPeerRequest): ServiceResponse[AdminAddPeerResponse] = IO {
+  def addPeer(req: AdminAddPeerRequest): ServiceResponse[AdminAddPeerResponse] =
     try {
       val uri = new URI(req.enodeUrl)
-      peerManager ! PeerManagerActor.ConnectToPeer(uri)
-      Right(AdminAddPeerResponse(true))
+      peerManager
+        .askFor[PeerManagerActor.AddMaintainedPeerResponse](PeerManagerActor.AddMaintainedPeer(uri))
+        .map(r => Right(AdminAddPeerResponse(r.wasAdded)))
+        .handleError { ex =>
+          log.error(s"Failed to add peer: ${req.enodeUrl}", ex)
+          Right(AdminAddPeerResponse(false))
+        }
     } catch {
       case ex: Exception =>
         log.error(s"Failed to parse enode URL: ${req.enodeUrl}", ex)
-        Right(AdminAddPeerResponse(false))
+        IO.pure(Right(AdminAddPeerResponse(false)))
     }
-  }
 
   /** Besu AdminRemovePeer: peerNetwork.removeMaintainedConnectionPeer(peer) → boolean (wasRemoved).
-    * Divergence: Fukuii asks GetPeers, finds by nodeId, sends DisconnectPeerById. Returns true if found.
+    * Removes from the maintained set (prevents auto-reconnect) AND disconnects the live connection if present.
+    * Returns true if a live peer was found and disconnected; false if the peer was only in the maintained set.
     */
   def removePeer(req: AdminRemovePeerRequest): ServiceResponse[AdminRemovePeerResponse] =
     peerManager
@@ -192,6 +260,8 @@ class AdminService(
           targetNodeId match {
             case None => Right(AdminRemovePeerResponse(false))
             case Some(targetId) =>
+              // Always remove from maintained set to prevent auto-reconnect
+              peerManager ! PeerManagerActor.RemoveMaintainedPeer(targetId)
               val matchingPeer = peersResult.peers.keys.find { peer =>
                 peer.nodeId.exists(nid => Hex.toHexString(nid.toArray).toLowerCase == targetId)
               }
@@ -216,7 +286,9 @@ class AdminService(
 
   /** Besu AdminChangeLogLevel: validates level ∈ {OFF,ERROR,WARN,INFO,DEBUG,TRACE,ALL}.
     * If filters present: set each named logger's level. If no filters: set root logger.
-    * Besu: LogConfigurator.setLevel(logFilter, logLevel). Fukuii: Logback API directly (same backend).
+    * Besu uses Log4j2 (org.apache.logging.log4j.core via LogConfigurator). Fukuii uses Logback
+    * (ch.qos.logback.classic). Different backends for each project's ecosystem; runtime behaviour
+    * (dynamic per-logger level changes via SLF4J) is equivalent.
     */
   def changeLogLevel(req: AdminChangeLogLevelRequest): ServiceResponse[AdminChangeLogLevelResponse] = IO {
     if (!ValidLogLevels.contains(req.level)) {
