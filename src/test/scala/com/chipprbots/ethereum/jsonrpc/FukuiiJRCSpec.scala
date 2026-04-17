@@ -82,8 +82,6 @@ class FukuiiJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory
         mcpService,
         ProofServiceDummy,
         null: EthSimulateService,
-        null: AdminService,
-        null: TxPoolService,
         config
       )
 
