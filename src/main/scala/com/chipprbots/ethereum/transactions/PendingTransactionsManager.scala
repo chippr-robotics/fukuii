@@ -66,7 +66,11 @@ object PendingTransactionsManager {
 
   case class RemoveTransactions(signedTransactions: Seq[SignedTransaction])
 
-  case class PendingTransaction(stx: SignedTransactionWithSender, addTimestamp: Long)
+  case class PendingTransaction(
+      stx: SignedTransactionWithSender,
+      addTimestamp: Long,
+      receivedFromLocalSource: Boolean = false
+  )
 
   case object ClearPendingTransactions
 }
@@ -199,7 +203,7 @@ class PendingTransactionsManager(
 
       val timestamp = System.currentTimeMillis()
       val newPendingTx = SignedTransactionWithSender(newStx, newStxSender)
-      pendingTransactions.put(newStx.hash, PendingTransaction(newPendingTx, timestamp))
+      pendingTransactions.put(newStx.hash, PendingTransaction(newPendingTx, timestamp, receivedFromLocalSource = true))
       updatePendingNonces(Seq(newPendingTx))
 
       val peers = connectedPeers.values.toSeq
