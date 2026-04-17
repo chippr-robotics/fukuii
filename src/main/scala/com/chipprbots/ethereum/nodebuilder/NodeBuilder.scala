@@ -674,10 +674,29 @@ trait ApisBuilder extends ApisBase {
     val Test = "test"
     val Iele = "iele"
     val Qa = "qa"
+    val Admin = "admin"
   }
 
   import Apis._
-  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa)
+  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa, Admin)
+}
+
+trait AdminServiceBuilder {
+  this: PeerManagerActorBuilder
+    with NodeStatusBuilder
+    with BlockchainBuilder
+    with InstanceConfigProvider =>
+
+  lazy val blockedIPRegistry: BlockedIPRegistry = new BlockedIPRegistry(Set.empty)
+
+  lazy val adminService: AdminService = new AdminService(
+    nodeStatusHolder,
+    peerManager,
+    blockchainReader,
+    instanceConfig.config.getConfig("network.rpc.net").getDuration("peer-manager-timeout").toMillis.millis,
+    instanceConfig.config.getString("datadir"),
+    blockedIPRegistry
+  )
 }
 
 trait JSONRpcConfigBuilder {
@@ -703,7 +722,8 @@ trait JSONRpcControllerBuilder {
     with JSONRpcConfigBuilder
     with QaServiceBuilder
     with FukuiiServiceBuilder
-    with McpServiceBuilder =>
+    with McpServiceBuilder
+    with AdminServiceBuilder =>
 
   protected def testService: Option[TestService] = None
 
@@ -725,6 +745,7 @@ trait JSONRpcControllerBuilder {
       mcpService,
       ethProofService,
       ethSimulateService,
+      adminService,
       jsonRpcConfig
     )
 }
@@ -1017,6 +1038,7 @@ trait Node
     with QaServiceBuilder
     with FukuiiServiceBuilder
     with McpServiceBuilder
+    with AdminServiceBuilder
     with KeyStoreBuilder
     with ApisBuilder
     with JSONRpcConfigBuilder

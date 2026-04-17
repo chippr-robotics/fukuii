@@ -160,6 +160,7 @@ class QaJRCSpec
         mcpService,
         ProofServiceDummy,
         null: EthSimulateService,
+        null: AdminService,
         config
       )
 
