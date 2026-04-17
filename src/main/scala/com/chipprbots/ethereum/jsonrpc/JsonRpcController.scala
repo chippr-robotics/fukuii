@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.jsonrpc.ProofService.GetProofResponse
 import com.chipprbots.ethereum.jsonrpc.EthSimulateService._
 import com.chipprbots.ethereum.jsonrpc.TestService._
 import com.chipprbots.ethereum.jsonrpc.Web3Service._
+import com.chipprbots.ethereum.jsonrpc.AdminService._
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
 import com.chipprbots.ethereum.nodebuilder.ApisBuilder
@@ -48,11 +49,13 @@ case class JsonRpcController(
     mcpService: McpService,
     proofService: ProofService,
     ethSimulateService: EthSimulateService,
+    adminService: AdminService,
     override val config: JsonRpcConfig
 ) extends ApisBuilder
     with Logger
     with JsonRpcBaseController {
 
+  import AdminJsonMethodsImplicits._
   import DebugJsonMethodsImplicits._
   import EthJsonMethodsImplicits._
   import EthBlocksJsonMethodsImplicits._
@@ -79,7 +82,8 @@ case class JsonRpcController(
     Apis.Debug -> handleDebugRequest,
     Apis.Test -> handleTestRequest,
     Apis.Iele -> handleIeleRequest,
-    Apis.Qa -> handleQARequest
+    Apis.Qa -> handleQARequest,
+    Apis.Admin -> handleAdminRequest
   )
 
   override def enabledApis: Seq[String] = config.apis :+ Apis.Rpc // RPC enabled by default
@@ -391,6 +395,31 @@ case class JsonRpcController(
   private def handleQARequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "qa_mineBlocks", _, _) =>
       handle[QAService.MineBlocksRequest, QAService.MineBlocksResponse](qaService.mineBlocks, req)
+  }
+
+  private def handleAdminRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
+    case req @ JsonRpcRequest(_, "admin_nodeInfo", _, _) =>
+      handle[AdminNodeInfoRequest, AdminNodeInfoResponse](adminService.nodeInfo, req)
+    case req @ JsonRpcRequest(_, "admin_peers", _, _) =>
+      handle[AdminPeersRequest, AdminPeersResponse](adminService.peers, req)
+    case req @ JsonRpcRequest(_, "admin_addPeer", _, _) =>
+      handle[AdminAddPeerRequest, AdminAddPeerResponse](adminService.addPeer, req)
+    case req @ JsonRpcRequest(_, "admin_removePeer", _, _) =>
+      handle[AdminRemovePeerRequest, AdminRemovePeerResponse](adminService.removePeer, req)
+    case req @ JsonRpcRequest(_, "admin_changeLogLevel", _, _) =>
+      handle[AdminChangeLogLevelRequest, AdminChangeLogLevelResponse](adminService.changeLogLevel, req)
+    case req @ JsonRpcRequest(_, "admin_datadir", _, _) =>
+      handle[AdminDatadirRequest, AdminDatadirResponse](adminService.getDatadir, req)
+    case req @ JsonRpcRequest(_, "admin_exportChain", _, _) =>
+      handle[AdminExportChainRequest, AdminExportChainResponse](adminService.exportChain, req)
+    case req @ JsonRpcRequest(_, "admin_importChain", _, _) =>
+      handle[AdminImportChainRequest, AdminImportChainResponse](adminService.importChain, req)
+    case req @ JsonRpcRequest(_, "admin_blockIP", _, _) =>
+      handle[AdminBlockIPRequest, AdminBlockIPResponse](adminService.blockIP, req)
+    case req @ JsonRpcRequest(_, "admin_unblockIP", _, _) =>
+      handle[AdminUnblockIPRequest, AdminUnblockIPResponse](adminService.unblockIP, req)
+    case req @ JsonRpcRequest(_, "admin_listBlockedIPs", _, _) =>
+      handle[AdminListBlockedIPsRequest, AdminListBlockedIPsResponse](adminService.listBlockedIPs, req)
   }
 
   private def handleRpcRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
