@@ -2,8 +2,6 @@ package com.chipprbots.ethereum.jsonrpc
 
 import org.apache.pekko.actor.ActorRef
 
-import cats.effect.IO
-
 import scala.concurrent.duration.FiniteDuration
 
 import com.chipprbots.ethereum.domain.Address
