@@ -675,10 +675,11 @@ trait ApisBuilder extends ApisBase {
     val Iele = "iele"
     val Qa = "qa"
     val Admin = "admin"
+    val TxPool = "txpool"
   }
 
   import Apis._
-  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa, Admin)
+  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa, Admin, TxPool)
 }
 
 trait AdminServiceBuilder {
@@ -696,6 +697,16 @@ trait AdminServiceBuilder {
     instanceConfig.config.getConfig("network.rpc.net").getDuration("peer-manager-timeout").toMillis.millis,
     instanceConfig.config.getString("datadir"),
     blockedIPRegistry
+  )
+}
+
+trait TxPoolServiceBuilder {
+  this: PendingTransactionsManagerBuilder with TxPoolConfigBuilder =>
+
+  lazy val txPoolService: TxPoolService = new TxPoolService(
+    pendingTransactionsManager,
+    txPoolConfig.getTransactionFromPoolTimeout,
+    txPoolConfig
   )
 }
 
@@ -723,7 +734,8 @@ trait JSONRpcControllerBuilder {
     with QaServiceBuilder
     with FukuiiServiceBuilder
     with McpServiceBuilder
-    with AdminServiceBuilder =>
+    with AdminServiceBuilder
+    with TxPoolServiceBuilder =>
 
   protected def testService: Option[TestService] = None
 
@@ -746,6 +758,7 @@ trait JSONRpcControllerBuilder {
       ethProofService,
       ethSimulateService,
       adminService,
+      txPoolService,
       jsonRpcConfig
     )
 }
@@ -1039,6 +1052,7 @@ trait Node
     with FukuiiServiceBuilder
     with McpServiceBuilder
     with AdminServiceBuilder
+    with TxPoolServiceBuilder
     with KeyStoreBuilder
     with ApisBuilder
     with JSONRpcConfigBuilder
