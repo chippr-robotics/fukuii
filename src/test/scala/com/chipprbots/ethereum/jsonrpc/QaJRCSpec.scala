@@ -161,6 +161,7 @@ class QaJRCSpec
         ProofServiceDummy,
         null: EthSimulateService,
         null: AdminService,
+        null: TxPoolService,
         config
       )
 

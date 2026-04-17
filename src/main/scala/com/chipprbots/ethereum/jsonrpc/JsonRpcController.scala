@@ -27,6 +27,7 @@ import com.chipprbots.ethereum.jsonrpc.EthSimulateService._
 import com.chipprbots.ethereum.jsonrpc.TestService._
 import com.chipprbots.ethereum.jsonrpc.Web3Service._
 import com.chipprbots.ethereum.jsonrpc.AdminService._
+import com.chipprbots.ethereum.jsonrpc.TxPoolService._
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
 import com.chipprbots.ethereum.nodebuilder.ApisBuilder
@@ -50,12 +51,14 @@ case class JsonRpcController(
     proofService: ProofService,
     ethSimulateService: EthSimulateService,
     adminService: AdminService,
+    txPoolService: TxPoolService,
     override val config: JsonRpcConfig
 ) extends ApisBuilder
     with Logger
     with JsonRpcBaseController {
 
   import AdminJsonMethodsImplicits._
+  import TxPoolJsonMethodsImplicits._
   import DebugJsonMethodsImplicits._
   import EthJsonMethodsImplicits._
   import EthBlocksJsonMethodsImplicits._
@@ -83,7 +86,8 @@ case class JsonRpcController(
     Apis.Test -> handleTestRequest,
     Apis.Iele -> handleIeleRequest,
     Apis.Qa -> handleQARequest,
-    Apis.Admin -> handleAdminRequest
+    Apis.Admin -> handleAdminRequest,
+    Apis.TxPool -> handleTxPoolRequest
   )
 
   override def enabledApis: Seq[String] = config.apis :+ Apis.Rpc // RPC enabled by default
@@ -420,6 +424,18 @@ case class JsonRpcController(
       handle[AdminUnblockIPRequest, AdminUnblockIPResponse](adminService.unblockIP, req)
     case req @ JsonRpcRequest(_, "admin_listBlockedIPs", _, _) =>
       handle[AdminListBlockedIPsRequest, AdminListBlockedIPsResponse](adminService.listBlockedIPs, req)
+  }
+
+  private def handleTxPoolRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
+    case req @ JsonRpcRequest(_, "txpool_besuTransactions", _, _) =>
+      handle[TxPoolBesuTransactionsRequest, TxPoolBesuTransactionsResponse](txPoolService.besuTransactions, req)
+    case req @ JsonRpcRequest(_, "txpool_besuStatistics", _, _) =>
+      handle[TxPoolBesuStatisticsRequest, TxPoolBesuStatisticsResponse](txPoolService.besuStatistics, req)
+    case req @ JsonRpcRequest(_, "txpool_besuPendingTransactions", _, _) =>
+      handle[TxPoolBesuPendingTransactionsRequest, TxPoolBesuPendingTransactionsResponse](
+        txPoolService.besuPendingTransactions,
+        req
+      )
   }
 
   private def handleRpcRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
