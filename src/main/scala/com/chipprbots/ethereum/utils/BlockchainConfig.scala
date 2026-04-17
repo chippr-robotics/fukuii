@@ -29,7 +29,8 @@ object NetworkType {
 case class ForkTimestamps(
     shanghaiTimestamp: Option[Long] = None,
     cancunTimestamp: Option[Long] = None,
-    pragueTimestamp: Option[Long] = None
+    pragueTimestamp: Option[Long] = None,
+    osakaTimestamp: Option[Long] = None
 )
 
 case class BlockchainConfig(
@@ -65,6 +66,10 @@ case class BlockchainConfig(
 
   def isPragueTimestamp(timestamp: Long): Boolean =
     forkTimestamps.pragueTimestamp.exists(ts => timestamp >= ts)
+
+  def isOsakaTimestamp(timestamp: Long): Boolean =
+    forkTimestamps.osakaTimestamp.exists(ts => timestamp >= ts)
+
   def withUpdatedForkBlocks(update: (ForkBlockNumbers) => ForkBlockNumbers): BlockchainConfig =
     copy(forkBlockNumbers = update(forkBlockNumbers))
 }
@@ -213,7 +218,8 @@ object BlockchainConfig {
     val forkTimestamps: ForkTimestamps = ForkTimestamps(
       shanghaiTimestamp = Try(blockchainConfig.getLong("shanghai-timestamp")).toOption,
       cancunTimestamp = Try(blockchainConfig.getLong("cancun-timestamp")).toOption,
-      pragueTimestamp = Try(blockchainConfig.getLong("prague-timestamp")).toOption
+      pragueTimestamp = Try(blockchainConfig.getLong("prague-timestamp")).toOption,
+      osakaTimestamp = Try(blockchainConfig.getLong("osaka-timestamp")).toOption
     )
 
     val messConfig: MESSConfig = Try {

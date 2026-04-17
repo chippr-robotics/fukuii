@@ -242,7 +242,24 @@ class EngineApiService(
       val blockExistsByHash = headHeader.isDefined
       val isGenesis = forkChoiceState.headBlockHash == blockchainReader.getBlockHeaderByNumber(0).map(_.hash).getOrElse(ByteString.empty)
 
-      if (blockExistsByHash && !blockFullyStored && !isGenesis) {
+      // Validate safe/finalized hashes FIRST, before any SYNCING shortcut.
+      // Per Engine API spec 5.4: safeBlockHash and finalizedBlockHash must be ancestors of headBlockHash.
+      // If either is unknown or not an ancestor → -38002 invalid forkchoice state.
+      val safeHash = forkChoiceState.safeBlockHash
+      val finalizedHash = forkChoiceState.finalizedBlockHash
+      val safeUnknown = safeHash != zeroHash && blockchainReader.getBlockHeaderByHash(safeHash).isEmpty
+      val finalizedUnknown = finalizedHash != zeroHash && blockchainReader.getBlockHeaderByHash(finalizedHash).isEmpty
+      if (safeUnknown || finalizedUnknown) {
+        val msg = if (safeUnknown) "unknown safe block hash" else "unknown finalized block hash"
+        EngineApiMetrics.recordForkchoiceUpdated("INVALID")
+        Left(msg)
+      } else if (headHeader.isDefined && !isAncestorOrEqual(safeHash, forkChoiceState.headBlockHash, zeroHash)) {
+        EngineApiMetrics.recordForkchoiceUpdated("INVALID")
+        Left("invalid forkchoice state: safe block is not an ancestor of head")
+      } else if (headHeader.isDefined && !isAncestorOrEqual(finalizedHash, forkChoiceState.headBlockHash, zeroHash)) {
+        EngineApiMetrics.recordForkchoiceUpdated("INVALID")
+        Left("invalid forkchoice state: finalized block is not an ancestor of head")
+      } else if (blockExistsByHash && !blockFullyStored && !isGenesis) {
         // Block stored by hash only (ACCEPTED) — not fully validated
         EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
         Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing)))
@@ -256,39 +273,26 @@ class EngineApiService(
 
       case Right(()) => {
 
-        // Validate safe/finalized block hashes: if non-zero, they must be known blocks
-        val safeHash = forkChoiceState.safeBlockHash
-        val finalizedHash = forkChoiceState.finalizedBlockHash
-        val safeUnknown = safeHash != zeroHash && blockchainReader.getBlockHeaderByHash(safeHash).isEmpty
-        val finalizedUnknown = finalizedHash != zeroHash && blockchainReader.getBlockHeaderByHash(finalizedHash).isEmpty
-        if (safeUnknown || finalizedUnknown) {
-          val msg = if (safeUnknown) "unknown safe block hash" else "unknown finalized block hash"
-          EngineApiMetrics.recordForkchoiceUpdated("INVALID")
-          Left(msg)
-        } else {
+        // Ancestry already validated above; proceed with payload attributes check
+        {
 
-        // Validate payload attributes if present
-        val invalidAttrs: Option[ForkchoiceUpdatedResponse] = payloadAttributes.flatMap { attrs =>
-          if (attrs.timestamp == 0) {
-            Some(ForkchoiceUpdatedResponse(
-              payloadStatus = PayloadStatusV1(Invalid,
-                latestValidHash = Some(forkChoiceState.headBlockHash),
-                validationError = Some("invalid payload attributes: zero timestamp"))))
-          } else {
-            val parentHeader = blockchainReader.getBlockHeaderByHash(forkChoiceState.headBlockHash)
-            parentHeader.flatMap { parent =>
-              if (attrs.timestamp <= parent.unixTimestamp) {
-                Some(ForkchoiceUpdatedResponse(
-                  payloadStatus = PayloadStatusV1(Invalid,
-                    latestValidHash = Some(forkChoiceState.headBlockHash),
-                    validationError = Some("invalid payload attributes: timestamp too low"))))
-              } else None
+        // Validate payload attributes if present. Per Engine API spec, invalid payload
+        // attributes (zero or parent-relative timestamp) yield JSON-RPC -38003, NOT a
+        // PayloadStatus.INVALID. We tunnel the condition up via Left with a marker prefix
+        // so the controller can map it to the correct error code.
+        val invalidAttrsMsg: Option[String] = payloadAttributes.flatMap { attrs =>
+          if (attrs.timestamp == 0) Some("invalid payload attributes: zero timestamp")
+          else {
+            blockchainReader.getBlockHeaderByHash(forkChoiceState.headBlockHash).flatMap { parent =>
+              if (attrs.timestamp <= parent.unixTimestamp)
+                Some("invalid payload attributes: timestamp too low")
+              else None
             }
           }
         }
-        if (invalidAttrs.isDefined) {
+        if (invalidAttrsMsg.isDefined) {
           EngineApiMetrics.recordForkchoiceUpdated("INVALID")
-          Right(invalidAttrs.get)
+          Left("ATTR:" + invalidAttrsMsg.get)
         } else {
 
         val payloadId = payloadAttributes.map { attrs =>
@@ -456,6 +460,32 @@ class EngineApiService(
     )
     log.info(s"exchangeCapabilities: CL supports ${clCapabilities.size} methods, we support ${supported.size}")
     supported
+  }
+
+  /** Walks back from `descendant`'s header chain up to 8192 blocks checking whether `ancestor` appears.
+    * Zero hash is treated as "not present" and short-circuits to true (ancestor disabled).
+    * Used by forkchoiceUpdated to verify safe/finalized are ancestors of head per Engine API spec §5.4.
+    */
+  private def isAncestorOrEqual(ancestor: ByteString, descendant: ByteString, zeroHash: ByteString): Boolean = {
+    if (ancestor == zeroHash) true
+    else if (ancestor == descendant) true
+    else {
+      var cursor: ByteString = descendant
+      var steps = 0
+      val maxWalk = 8192
+      var found = false
+      while (!found && steps < maxWalk && cursor != zeroHash) {
+        blockchainReader.getBlockHeaderByHash(cursor) match {
+          case Some(h) =>
+            if (h.parentHash == ancestor) { found = true }
+            else { cursor = h.parentHash; steps += 1 }
+          case None =>
+            // Missing ancestor data — assume not present rather than loop forever
+            cursor = zeroHash
+        }
+      }
+      found
+    }
   }
 
   /** engine_getPayloadBodiesByHashV1: look up a block body by hash. Returns (rawTransactions, encodedWithdrawals) or
@@ -642,6 +672,17 @@ object BlobGasUtils {
     */
   def getBlobGasPrice(excessBlobGas: BigInt): BigInt =
     fakeExponential(MIN_BLOB_BASE_FEE, excessBlobGas, BLOB_BASE_FEE_UPDATE_FRACTION)
+
+  /** EIP-7918: Osaka blob base fee floored by execution gas cost.
+    * Prevents blob base fee from decoupling from execution fee market.
+    * Formula (Osaka spec): blob_base_fee = max(current_blob_fee, (blob_base_fee_update_fraction * block_base_fee) / (gas_per_blob * MAX_BLOBS_PER_BLOCK))
+    * Simplified conservative floor: max(current, block_base_fee / CEILING_RATIO).
+    */
+  def getBlobGasPriceOsaka(excessBlobGas: BigInt, blockBaseFee: BigInt): BigInt = {
+    val base = fakeExponential(MIN_BLOB_BASE_FEE, excessBlobGas, BLOB_BASE_FEE_UPDATE_FRACTION)
+    val floor = blockBaseFee / BigInt(8) // conservative: blob_fee ≥ base_fee / 8
+    base.max(floor).max(MIN_BLOB_BASE_FEE)
+  }
 
   /** fake_exponential: approximates factor * e^(numerator / denominator) using Taylor expansion.
     * Per EIP-4844 spec.

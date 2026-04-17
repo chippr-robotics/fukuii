@@ -70,6 +70,9 @@ object PrecompiledContracts {
     KzgPointEvalAddr -> KzgPointEvaluation
   )
 
+  /** ETC Olympia precompiles: BLS12-381 suite (EIP-2537). Does NOT include P256VERIFY —
+    * EIP-7951 activates at Osaka timestamp on ETH chains, not at Olympia block on ETC.
+    */
   val olympiaContracts: Map[Address, PrecompiledContract] = cancunContracts ++ Map(
     BlsG1AddAddr -> BlsG1Add,
     BlsG1MultiExpAddr -> BlsG1MultiExp,
@@ -77,7 +80,11 @@ object PrecompiledContracts {
     BlsG2MultiExpAddr -> BlsG2MultiExp,
     BlsPairingAddr -> BlsPairing,
     BlsMapG1Addr -> BlsMapG1,
-    BlsMapG2Addr -> BlsMapG2,
+    BlsMapG2Addr -> BlsMapG2
+  )
+
+  /** EIP-7951 P256VERIFY activates at Osaka timestamp on ETH chains. */
+  val osakaContracts: Map[Address, PrecompiledContract] = olympiaContracts ++ Map(
     P256VerifyAddr -> P256Verify
   )
 
@@ -123,8 +130,12 @@ object PrecompiledContracts {
     val etcFork = context.evmConfig.blockchainConfig.etcForkForBlockNumber(context.blockHeader.number)
     // Post-Cancun detection: check if block header has blob gas fields
     val isCancun = context.blockHeader.blobGasUsed.isDefined || context.blockHeader.excessBlobGas.isDefined
+    // EIP-7951 P256VERIFY activates at Osaka timestamp on ETH chains
+    val isOsaka = context.evmConfig.blockchainConfig.isOsakaTimestamp(context.blockHeader.unixTimestamp)
 
-    if (etcFork >= EtcForks.Olympia) {
+    if (isOsaka) {
+      osakaContracts
+    } else if (etcFork >= EtcForks.Olympia) {
       olympiaContracts
     } else if (isCancun) {
       cancunContracts
@@ -239,9 +250,18 @@ object PrecompiledContracts {
         context: ProgramContext[W, S]
     ): ProgramResult[W, S] = {
       val etcFork = context.evmConfig.blockchainConfig.etcForkForBlockNumber(context.blockHeader.number)
+      val ethFork = context.evmConfig.blockchainConfig.ethForkForBlockNumber(context.blockHeader.number)
+      val isOsaka = context.evmConfig.blockchainConfig.isOsakaTimestamp(context.blockHeader.unixTimestamp)
+      val isEthereum = context.evmConfig.blockchainConfig.isEthereum
+      // EIP-7823 (MODEXP input bounds, 1024-byte max) activates at:
+      //   - ETH Osaka timestamp (per execution-specs prague → EIP-2565, osaka → EIP-7823/7883)
+      //   - ETC Olympia (ECIP-1121) on actual ETC chains
+      // On ETH chains we MUST NOT use etcFork as a proxy — hive maps London→olympiaBlockNumber,
+      // so etcFork >= Olympia is true but EIP-7823 is not yet active pre-Osaka.
+      val useEip7823 = isOsaka || (etcFork >= EtcForks.Olympia && !isEthereum)
 
-      // EIP-7823: Post-Olympia, reject inputs with operand lengths > 1024 bytes
-      if (etcFork >= EtcForks.Olympia) {
+      // EIP-7823: reject inputs with operand lengths > 1024 bytes
+      if (useEip7823) {
         val baseLength = getLength(context.inputData, 0)
         val expLength = getLength(context.inputData, 1)
         val modLength = getLength(context.inputData, 2)
@@ -261,7 +281,24 @@ object PrecompiledContracts {
         }
       }
 
-      super.run(context)
+      // EIP-7883: gas cost routing. On ETH chains, EIP-7883 activates at Osaka timestamp
+      // (Prague keeps EIP-2565 per execution-specs); on ETC, it activates at Olympia.
+      // Hive maps London→olympiaBlockNumber, which we must ignore on ETH to avoid firing
+      // EIP-7883 pre-Osaka.
+      val g = gasWithOsaka(context.inputData, etcFork, ethFork, isOsaka, isEthereum)
+      val (result, error, gasRemaining): (ByteString, Option[ProgramError], BigInt) = (
+        if (g <= context.startGas)
+          exec(context.inputData) match {
+            case Some(returnData) => (returnData, None, context.startGas - g)
+            case None             => (ByteString.empty, Some(PreCompiledContractFail), BigInt(0))
+          }
+        else
+          (ByteString.empty, Some(OutOfGas), BigInt(0))
+      ): @unchecked
+
+      ProgramResult(
+        result, gasRemaining, context.world, Set.empty, Nil, Nil, 0, error, Set.empty, Set.empty
+      )
     }
 
     def exec(inputData: ByteString): Option[ByteString] = {
@@ -287,7 +324,17 @@ object PrecompiledContracts {
       Some(ByteString(ByteUtils.bigIntegerToBytes(result.bigInteger, modLength)))
     }
 
-    def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = {
+    def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt =
+      gasWithOsaka(inputData, etcFork, ethFork, eip7883Active = false, isEthereum = false)
+
+    /** Variant that takes an explicit EIP-7883 activation flag AND distinguishes
+      * ETC Olympia from ETH London (both mapped to `olympiaBlockNumber` by hive).
+      * EIP-7883 activates on ETC Olympia (ECIP-1121) OR ETH Osaka+ (per execution-specs).
+      * Prague keeps EIP-2565. Never fires on plain ETH London just because hive sets
+      * olympiaBlockNumber there.
+      */
+    def gasWithOsaka(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork,
+        eip7883Active: Boolean, isEthereum: Boolean): BigInt = {
       val baseLength = getLength(inputData, 0)
       val expLength = getLength(inputData, 1)
       val modLength = getLength(inputData, 2)
@@ -298,7 +345,9 @@ object PrecompiledContracts {
           safeAdd(safeAdd(totalLengthBytes, baseLength), expLength)
         )
 
-      if (etcFork >= EtcForks.Olympia)
+      val useEip7883 = eip7883Active || (etcFork >= EtcForks.Olympia && !isEthereum)
+
+      if (useEip7883)
         PostEIP7883Cost.calculate(baseLength, modLength, expLength, expBytes)
       else if (ethFork >= EthForks.Berlin || etcFork >= EtcForks.Magneto)
         PostEIP2565Cost.calculate(baseLength, modLength, expLength, expBytes)

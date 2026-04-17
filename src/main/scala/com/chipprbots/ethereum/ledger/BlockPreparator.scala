@@ -389,9 +389,16 @@ class BlockPreparator(
         s"gasToRefundBase=$totalGasToRefundBase executionGas=$executionGasBase")
     }
 
-    // EIP-7623: Floor calldata gas — ensure gas charged is at least the floor data cost
-    val isOlympiaActivated = blockHeader.number >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
-    val executionGasToPayToMiner = if (isOlympiaActivated) {
+    // EIP-7623 activation:
+    //   - ETH: Prague timestamp
+    //   - ETC: Olympia block (ECIP-1121)
+    // Do NOT use `blockHeader.number >= olympiaBlockNumber` alone — hive maps London→olympiaBlockNumber
+    // on ETH test chains, which would apply the floor pre-Prague.
+    val eip7623Active =
+      blockchainConfig.isPragueTimestamp(blockHeader.unixTimestamp) ||
+        (blockchainConfig.networkType == com.chipprbots.ethereum.utils.NetworkType.ETC &&
+          blockHeader.number >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber)
+    val executionGasToPayToMiner = if (eip7623Active) {
       executionGasBase.max(BlockPreparator.calcFloorDataGas(stx.tx.payload))
     } else {
       executionGasBase

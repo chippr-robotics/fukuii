@@ -159,7 +159,7 @@ class GenesisDataLoader(
               .getOrElse(blockchainConfig.accountStartNonce),
             balance = genesisAccount.balance,
             codeHash = genesisAccount.code.fold(Account.EmptyCodeHash)(codeValue => crypto.kec256(codeValue)),
-            storageRoot = genesisAccount.storage.fold(Account.EmptyStorageRootHash)(computeStorageRootHash)
+            storageRoot = genesisAccount.storage.fold(Account.EmptyStorageRootHash)(computeStorageRootHash(_, storage))
           )
         )
         .getRootHash
@@ -167,10 +167,14 @@ class GenesisDataLoader(
     }
   }
 
-  private def computeStorageRootHash(storage: Map[UInt256, UInt256]): ByteString = {
+  /** Compute the storage MPT root for a genesis account AND persist its trie nodes so the EVM
+    * can read them at runtime. Previously this used an ephemeral DataSource, causing every
+    * genesis-deployed contract with storage to throw MPTException on first SLOAD.
+    */
+  private def computeStorageRootHash(storage: Map[UInt256, UInt256], sharedStorage: MptStorage): ByteString = {
     val emptyTrie = EthereumUInt256Mpt.storageMpt(
       ByteString(MerklePatriciaTrie.EmptyRootHash),
-      new SerializingMptStorage(new ArchiveNodeStorage(new NodeStorage(EphemDataSource())))
+      sharedStorage
     )
 
     val storageTrie = storage.foldLeft(emptyTrie) {

@@ -51,6 +51,12 @@ object EvmConfig {
         feeSchedule = new FeeSchedule.PragueFeeSchedule  // EIP-7623: increased calldata costs
       )
     }
+    if (blockchainConfig.isOsakaTimestamp(timestamp)) {
+      config = config.copy(
+        feeSchedule = new FeeSchedule.OsakaFeeSchedule,
+        opCodeList = OsakaOpCodes   // EIP-7939: CLZ opcode
+      )
+    }
     config
   }
 
@@ -104,6 +110,7 @@ object EvmConfig {
   val MagnetoOpCodes: OpCodeList = PhoenixOpCodes
   val SpiralOpCodes: OpCodeList = OpCodeList(OpCodes.SpiralOpCodes)
   val OlympiaOpCodes: OpCodeList = OpCodeList(OpCodes.OlympiaOpCodes)
+  val OsakaOpCodes: OpCodeList = OpCodeList(OpCodes.OsakaOpCodes)
 
   val FrontierConfigBuilder: EvmConfigBuilder = config =>
     EvmConfig(
@@ -439,13 +446,16 @@ object FeeSchedule {
 
   class OlympiaFeeSchedule extends MystiqueFeeSchedule
 
-  /** EIP-7623: Prague increases calldata gas costs to reduce max block size.
-    * Zero bytes: 4 → 10, Non-zero bytes: 16 → 40
+  /** Prague fee schedule — EIP-7623 does NOT modify G_txdatazero/G_txdatanonzero (still 4/16).
+    * Instead it adds a calldata floor via `calcFloorDataGas` applied by BlockPreparator as
+    * `max(executionGasBase, 21000 + tokens * 10)`. See BlockPreparator.calcFloorDataGas.
     */
-  class PragueFeeSchedule extends OlympiaFeeSchedule {
-    override val G_txdatazero = 10
-    override val G_txdatanonzero = 40
-  }
+  class PragueFeeSchedule extends OlympiaFeeSchedule
+
+  /** Osaka fee schedule — same as Prague. MODEXP cost doubling (EIP-7883) and input
+    * bounds (EIP-7823) are enforced inside the MODEXP precompile itself, not the fee schedule.
+    */
+  class OsakaFeeSchedule extends PragueFeeSchedule
 }
 
 trait FeeSchedule {

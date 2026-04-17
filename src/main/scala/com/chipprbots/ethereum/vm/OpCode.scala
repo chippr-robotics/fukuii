@@ -161,6 +161,10 @@ object OpCodes {
 
   val OlympiaOpCodes: List[OpCode] =
     List(BASEFEE, BLOBHASH, BLOBBASEFEE, TLOAD, TSTORE, MCOPY) ++ SpiralOpCodes
+
+  /** Osaka (EIP-7939) adds CLZ — count leading zeros. */
+  val OsakaOpCodes: List[OpCode] =
+    CLZ +: OlympiaOpCodes
 }
 
 object OpCode {
@@ -414,6 +418,12 @@ case object SAR extends OpCode(0x1d, 2, 1, _.G_verylow) with ConstGas {
     state.withStack(resultStack).step()
   }
 }
+
+/** EIP-7939: Count Leading Zero bits.
+  * Pops one 256-bit value and pushes the count of leading zero bits (0..256).
+  * For the zero input, result is 256.
+  */
+case object CLZ extends UnaryOp(0x1e, _.G_low)(v => UInt256(256 - v.toBigInt.bitLength)) with ConstGas
 
 case object SHA3 extends OpCode(0x20, 2, 1, _.G_sha3) {
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] = {
