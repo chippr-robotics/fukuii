@@ -13,7 +13,8 @@ object Namespaces {
   val FastSyncStateNamespace: IndexedSeq[Byte] = IndexedSeq[Byte]('f'.toByte)
   val TransactionMappingNamespace: IndexedSeq[Byte] = IndexedSeq[Byte]('l'.toByte)
   val BlockFirstSeenNamespace: IndexedSeq[Byte] = IndexedSeq[Byte]('m'.toByte)
-  val FlatSlotNamespace: IndexedSeq[Byte] = IndexedSeq[Byte]('d'.toByte) // Flat storage slot data
+  val FlatSlotNamespace: IndexedSeq[Byte] = IndexedSeq[Byte]('d'.toByte) // Flat storage slot data (Besu: ACCOUNT_STORAGE_STORAGE)
+  val FlatAccountNamespace: IndexedSeq[Byte] = IndexedSeq[Byte]('a'.toByte) // Flat account data (Besu: ACCOUNT_INFO_STATE, geth 'a' convention)
 
   val nsSeq: Seq[IndexedSeq[Byte]] = Seq(
     ReceiptsNamespace,
@@ -28,6 +29,7 @@ object Namespaces {
     FastSyncStateNamespace,
     TransactionMappingNamespace,
     BlockFirstSeenNamespace,
-    FlatSlotNamespace
+    FlatSlotNamespace,
+    FlatAccountNamespace
   )
 }
