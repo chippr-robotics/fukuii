@@ -19,7 +19,6 @@ import com.chipprbots.ethereum.domain.Withdrawal
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
 import com.chipprbots.ethereum.jsonrpc.JsonRpcResponse
-import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Logger
 
 /** Handles Engine API JSON-RPC methods (engine_* namespace). This controller processes raw JSON requests and delegates
@@ -98,8 +97,6 @@ class EngineApiController(
         }
         var payload = payloadOpt.toOption.get
         val hasWithdrawals = payload.withdrawals.isDefined
-        val hasBlobFields = payload.blobGasUsed.isDefined || payload.excessBlobGas.isDefined
-        val timestamp = payload.timestamp
 
         // Version enforcement: only reject truly incompatible combinations.
         // V1/V2 accept any payload fields (backward compatible).
@@ -116,9 +113,6 @@ class EngineApiController(
         } else {
           // V3+: second param is versionedHashes, third is parentBeaconBlockRoot
           if (version >= 3) {
-            val versionedHashes = params.lift(1).collect { case JArray(items) =>
-              items.collect { case JString(hex) => hexToByteString(hex) }
-            }
             val parentBeaconBlockRoot = params.lift(2).collect { case JString(hex) => hexToByteString(hex) }
             payload = payload.copy(parentBeaconBlockRoot = parentBeaconBlockRoot)
           }
@@ -215,7 +209,7 @@ class EngineApiController(
     }
   }
 
-  private def handleGetPayload(request: JsonRpcRequest, version: Int = 1): IO[JsonRpcResponse] = {
+  private def handleGetPayload(request: JsonRpcRequest, @annotation.unused version: Int = 1): IO[JsonRpcResponse] = {
     val payloadIdHex = request.params match {
       case Some(JArray(List(JString(id)))) => id
       case _ => ""

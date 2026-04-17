@@ -7,14 +7,11 @@ import javax.naming.directory.InitialDirContext
 
 import scala.collection.mutable
 import scala.util.Try
-import scala.util.Success
-import scala.util.Failure
 
 import org.bouncycastle.crypto.params.ECPublicKeyParameters
 import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.crypto
-import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPValue

@@ -16,7 +16,7 @@ class TuiUpdater(
     syncController: Option[Any],
     networkName: String,
     shutdownHook: () => Unit
-)(using _system: ActorSystem)
+)(using @annotation.unused _system: ActorSystem)
     extends Logger:
 
   private var running = false

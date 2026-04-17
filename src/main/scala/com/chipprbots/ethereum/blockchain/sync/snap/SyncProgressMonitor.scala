@@ -6,7 +6,7 @@ import scala.collection.mutable
 
 import com.chipprbots.ethereum.utils.Logger
 
-class SyncProgressMonitor(_scheduler: Scheduler) extends Logger {
+class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logger {
 
   import SNAPSyncController._
 

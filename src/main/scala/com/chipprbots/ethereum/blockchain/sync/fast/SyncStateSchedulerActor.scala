@@ -29,7 +29,6 @@ import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.SyncRespo
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor._
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.mpt.HexPrefix
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
@@ -79,6 +78,7 @@ class SyncStateSchedulerActor(
   private def supportsGetNodeData(capability: Capability): Boolean = capability match {
     case Capability.ETH63 | Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 => true
     case Capability.ETH68                                                                             => false
+    case Capability.ETH69                                                                             => false
     case Capability.SNAP1                                                                             => false
   }
 

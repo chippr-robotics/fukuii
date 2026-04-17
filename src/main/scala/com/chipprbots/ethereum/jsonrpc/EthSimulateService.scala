@@ -19,7 +19,6 @@ import com.chipprbots.ethereum.ledger._
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.rlp
-import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteUtils
 import com.chipprbots.ethereum.utils.Logger
@@ -248,7 +247,7 @@ class EthSimulateService(
       existingRelocations: Map[Address, Address],
       globalGasOffset: BigInt,
       initialWorld: InMemoryWorldStateProxy,
-      simulatedBlockHashes: mutable.Map[BigInt, ByteString]
+      @annotation.unused simulatedBlockHashes: mutable.Map[BigInt, ByteString]
   ): Either[JsonRpcError, (BlockHeader, InMemoryWorldStateProxy, SimulateBlockResult, BigInt)] = {
     var world = initialWorld
 
@@ -449,7 +448,6 @@ class EthSimulateService(
     for ((address, ov) <- overrides) {
       ov.movePrecompileToAddress.foreach { targetAddr =>
         // Check: source must be a known precompile
-        val evmConfig = EvmConfig.forBlock(BigInt(1000000000), Long.MaxValue, blockchainConfig)
         val allPrecompiles = Set(
           Address(1), Address(2), Address(3), Address(4), Address(5),
           Address(6), Address(7), Address(8), Address(9),

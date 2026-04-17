@@ -15,7 +15,6 @@ import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.DaoForkConfig
 import com.chipprbots.ethereum.vm.{EvmConfig, ProgramContext}
 import com.chipprbots.ethereum.utils.Logger
-import com.chipprbots.ethereum.vm.EvmConfig
 
 class BlockExecution(
     blockchain: BlockchainImpl,

@@ -650,15 +650,6 @@ class BlockPreparator(
     }
   }
 
-  /** EIP-7702: Process authorization list, setting delegation codes on authorized accounts. Each authorization is
-    * validated and applied independently; failures are silently skipped.
-    */
-  private def applyAuthorizations(
-      authList: List[SetCodeAuthorization],
-      world: InMemoryWorldStateProxy
-  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
-    applyAuthorizationsWithRefund(authList, world)._1
-
   /** Apply authorizations and return (world, refund) where refund is the gas to refund
     * for existing accounts per geth's EIP-7702 implementation:
     * Intrinsic charges CallNewAccountGas (25000) per auth.

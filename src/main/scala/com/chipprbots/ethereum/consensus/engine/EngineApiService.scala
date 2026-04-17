@@ -10,13 +10,11 @@ import com.chipprbots.ethereum.consensus.engine.PayloadStatus._
 import com.chipprbots.ethereum.consensus.validators.std.MptListValidator
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain._
-import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields._
 import com.chipprbots.ethereum.domain.Withdrawal._
 import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.mpt.ByteArraySerializable
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions._
-import com.chipprbots.ethereum.rlp.rawDecode
 import com.chipprbots.ethereum.rlp.{encode => rlpEncode}
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Logger
@@ -637,7 +635,6 @@ class EngineApiService(
     }
     val withdrawals = body.withdrawals.map { ws =>
       ws.map { w =>
-        import org.json4s.JsonDSL._
         import org.json4s.JValue
         org.json4s.JObject(
           "index" -> org.json4s.JString(s"0x${w.index.toString(16)}"),
@@ -652,8 +649,6 @@ class EngineApiService(
 
   /** Convert an ExecutionPayload into a Block. */
   private def payloadToBlock(payload: ExecutionPayload): Block = {
-    import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.TypedTransaction._
-
     // Decode transactions from raw bytes
     val signedTxs = payload.transactions.map { txBytes =>
       txBytes.toArray.toSignedTransaction

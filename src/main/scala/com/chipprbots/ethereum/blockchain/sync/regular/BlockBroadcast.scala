@@ -49,7 +49,8 @@ class BlockBroadcast(val networkPeerManager: ActorRef) {
 
       val message: MessageSerializable = remoteStatus.capability match {
         case Capability.ETH63 => blockToBroadcast.as63
-        case Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 | Capability.ETH68 =>
+        case Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 | Capability.ETH68 |
+            Capability.ETH69 =>
           blockToBroadcast.as63
         case Capability.SNAP1 =>
           // SNAP is a satellite protocol for state sync, not for block broadcasting

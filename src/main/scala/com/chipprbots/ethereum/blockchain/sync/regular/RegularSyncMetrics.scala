@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 
-import java.util.concurrent.atomic.AtomicLong
-
 import scala.concurrent.duration.NANOSECONDS
 
 import com.google.common.util.concurrent.AtomicDouble

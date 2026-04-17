@@ -23,7 +23,6 @@ import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
-import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.Codes
@@ -32,8 +31,6 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetBlockHeaders.GetBlo
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetBlockBodies.GetBlockBodiesEnc
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetReceipts.GetReceiptsEnc
 import com.chipprbots.ethereum.rlp._
-import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.ReceiptImplicits._
 import com.chipprbots.ethereum.utils.Config.SyncConfig
