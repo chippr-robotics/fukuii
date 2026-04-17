@@ -280,6 +280,8 @@ class FilterManager(
         blockchainReader.getBlockHeaderByHash(hash).map(_.number).getOrElse(bestBlockNumber)
       case BlockParam.Earliest                => 0
       case BlockParam.Latest                  => bestBlockNumber
+      case BlockParam.Safe                    => bestBlockNumber
+      case BlockParam.Finalized               => bestBlockNumber
       case BlockParam.Pending                 => bestBlockNumber
     }
 }

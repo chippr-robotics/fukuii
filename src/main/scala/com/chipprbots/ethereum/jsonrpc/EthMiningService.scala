@@ -19,7 +19,6 @@ import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
 import com.chipprbots.ethereum.consensus.mining.CoinbaseProvider
 import com.chipprbots.ethereum.consensus.mining.Mining
-import com.chipprbots.ethereum.consensus.mining.MiningConfig
 import com.chipprbots.ethereum.consensus.mining.RichMining
 import com.chipprbots.ethereum.consensus.pow.EthashUtils
 import com.chipprbots.ethereum.consensus.pow.miners.MinerProtocol
@@ -84,8 +83,6 @@ class EthMiningService(
 ) extends TransactionPicker {
   import configBuilder._
   import EthMiningService._
-
-  private[this] def fullConsensusConfig = mining.config
 
   val hashRate: ConcurrentMap[ByteString, (BigInt, Date)] = new TrieMap[ByteString, (BigInt, Date)]()
   val lastActive = new AtomicReference[Option[Date]](None)

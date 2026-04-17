@@ -1,29 +1,15 @@
 package com.chipprbots.ethereum.utils
 
-import java.io.File
 import java.net.InetSocketAddress
 
-import org.apache.pekko.util.ByteString
-import org.apache.pekko.util.Timeout
-
 import scala.concurrent.duration._
-import scala.jdk.CollectionConverters._
-import scala.util.Try
 
 import com.typesafe.config.{Config => TypesafeConfig}
 
 import com.chipprbots.ethereum.db.dataSource.RocksDbConfig
-import com.chipprbots.ethereum.db.storage.pruning.ArchivePruning
-import com.chipprbots.ethereum.db.storage.pruning.BasicPruning
-import com.chipprbots.ethereum.db.storage.pruning.InMemoryPruning
-import com.chipprbots.ethereum.db.storage.pruning.PruningMode
-import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.network.PeerManagerActor.FastSyncHostConfiguration
 import com.chipprbots.ethereum.network.PeerManagerActor.PeerConfiguration
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
-import com.chipprbots.ethereum.utils.VmConfig.VmMode
-
-import ConfigUtils._
 
 /** Per-instance configuration for a Fukuii chain instance.
   *

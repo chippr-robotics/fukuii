@@ -11,7 +11,6 @@ import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.nodebuilder.NodeKeyBuilder
 import com.chipprbots.ethereum.nodebuilder.StorageBuilder
 import com.chipprbots.ethereum.nodebuilder.VmBuilder
-import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Logger
 
 trait MiningBuilder {

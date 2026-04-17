@@ -190,7 +190,6 @@ object BlockHeader {
 object BlockHeaderImplicits {
 
   import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-  import com.chipprbots.ethereum.rlp.RLPImplicits._
   import com.chipprbots.ethereum.rlp.RLPValue
   import com.chipprbots.ethereum.utils.ByteUtils
 

@@ -3,8 +3,6 @@ package com.chipprbots.ethereum.jsonrpc
 import org.apache.pekko.util.ByteString
 
 import org.json4s.JsonAST._
-import org.json4s.JsonDSL._
-import org.json4s.DefaultFormats
 import org.json4s.jvalue2monadic
 import org.json4s.jvalue2extractable
 
@@ -122,7 +120,7 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits {
         }
         (obj \ field) match {
           case JObject(fields) =>
-            Some(fields.map { case (keyHex, JString(valueHex)) =>
+            Some(fields.collect { case (keyHex, JString(valueHex)) =>
               (hexToBigInt(keyHex), hexToBigInt(valueHex))
             }.toMap)
           case _ => None
@@ -291,7 +289,7 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits {
         JObject(baseFields ::: chainIdField ::: maxFeeFields ::: accessListField ::: blobFields)
       }
 
-      private def encodeCallResult(cr: SimulateCallResult, blockHash: ByteString, header: BlockHeader): JValue = {
+      private def encodeCallResult(cr: SimulateCallResult, blockHash: ByteString, @annotation.unused _header: BlockHeader): JValue = {
         val baseFields = List(
           "returnData" -> encodeAsHex(cr.returnData),
           "gasUsed" -> encodeAsHex(cr.gasUsed),
