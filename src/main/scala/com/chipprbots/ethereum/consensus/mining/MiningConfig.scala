@@ -4,6 +4,9 @@ import org.apache.pekko.util.ByteString
 
 import com.typesafe.config.{Config => TypesafeConfig}
 
+import scala.concurrent.duration.FiniteDuration
+import scala.jdk.CollectionConverters._
+
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.utils.Logger
@@ -27,7 +30,10 @@ final case class MiningConfig(
     headerExtraData: ByteString, // only used in BlockGenerator
     blockCacheSize: Int, // only used in BlockGenerator
     miningEnabled: Boolean,
-    gasLimitTarget: BigInt
+    gasLimitTarget: BigInt,
+    notifyUrls: Seq[String],
+    staleThreshold: Int,
+    recommitInterval: FiniteDuration
 )
 
 object MiningConfig extends Logger {
@@ -36,9 +42,12 @@ object MiningConfig extends Logger {
     final val Protocol = "protocol"
     final val Coinbase = "coinbase"
     final val HeaderExtraData = "header-extra-data"
-    final val BlockCacheSize = "block-cashe-size"
+    final val BlockCacheSize = "block-cache-size"
     final val MiningEnabled = "mining-enabled"
     final val GasLimitTarget = "gas-limit-target"
+    final val NotifyUrls = "notify-urls"
+    final val StaleThreshold = "stale-threshold"
+    final val RecommitInterval = "recommit-interval"
   }
 
   final val AllowedProtocols: Set[String] = Protocol.KnownProtocolNames
@@ -75,6 +84,16 @@ object MiningConfig extends Logger {
     val gasLimitTarget =
       if (config.hasPath(Keys.GasLimitTarget)) BigInt(config.getLong(Keys.GasLimitTarget))
       else BigInt(8_000_000) // ETC mainnet default
+    val notifyUrls =
+      if (config.hasPath(Keys.NotifyUrls)) config.getStringList(Keys.NotifyUrls).asScala.toSeq
+      else Seq.empty
+    val staleThreshold =
+      if (config.hasPath(Keys.StaleThreshold)) config.getInt(Keys.StaleThreshold)
+      else 7 // core-geth default
+    val recommitInterval =
+      if (config.hasPath(Keys.RecommitInterval))
+        FiniteDuration(config.getDuration(Keys.RecommitInterval).toNanos, "nanos")
+      else FiniteDuration(0, "seconds")
 
     new MiningConfig(
       protocol = protocol,
@@ -82,7 +101,10 @@ object MiningConfig extends Logger {
       headerExtraData = headerExtraData,
       blockCacheSize = blockCacheSize,
       miningEnabled = miningEnabled,
-      gasLimitTarget = gasLimitTarget
+      gasLimitTarget = gasLimitTarget,
+      notifyUrls = notifyUrls,
+      staleThreshold = staleThreshold,
+      recommitInterval = recommitInterval
     )
   }
 }

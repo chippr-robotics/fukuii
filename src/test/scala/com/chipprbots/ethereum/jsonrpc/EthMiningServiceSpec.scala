@@ -21,6 +21,7 @@ import com.chipprbots.ethereum.Mocks.MockValidatorsAlwaysSucceed
 import com.chipprbots.ethereum.NormalPatience
 import com.chipprbots.ethereum.WithActorSystemShutDown
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.consensus.blocks.PendingBlock
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
 import com.chipprbots.ethereum.consensus.mining.CoinbaseProvider
@@ -196,7 +197,7 @@ class EthMiningServiceSpec
     import scala.concurrent.duration._
     val response = Await.result(workFuture, 10.seconds)
 
-    response shouldEqual Right(GetWorkResponse(powHash, seedHash, target))
+    response shouldEqual Right(GetWorkResponse(powHash, seedHash, target, block.header.number))
   }
 
   it should "generate and submit work when generating block for mining with restricted ethash generator" taggedAs (
@@ -338,6 +339,74 @@ class EthMiningServiceSpec
     status2.toOption.get.hashRate shouldEqual BigInt(100)
   }
 
+  // core-geth alignment: GetWork returns 4-element array including block number (work[3])
+  it should "return a 4-element GetWorkResponse including blockNumber" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    (blockGenerator
+      .generateBlock(
+        _: Block,
+        _: Seq[SignedTransaction],
+        _: Address,
+        _: Seq[BlockHeader],
+        _: Option[InMemoryWorldStateProxy]
+      )(_: BlockchainConfig))
+      .expects(parentBlock, *, *, *, *, *)
+      .returning(PendingBlockAndState(PendingBlock(block, Nil), fakeWorld))
+
+    blockchainWriter.save(parentBlock, Nil, ChainWeight.totalDifficultyOnly(parentBlock.header.difficulty), true)
+
+    val workFuture = ethMiningService.getWork(GetWorkRequest()).unsafeToFuture()
+
+    pendingTransactionsManager.expectMsg(PendingTransactionsManager.GetPendingTransactions)
+    pendingTransactionsManager.reply(PendingTransactionsManager.PendingTransactionsResponse(Nil))
+    ommersPool.expectMsg(OmmersPool.GetOmmers(parentBlock.hash))
+    ommersPool.reply(OmmersPool.Ommers(Nil))
+
+    import scala.concurrent.Await
+    import scala.concurrent.duration._
+    val result = Await.result(workFuture, 10.seconds)
+
+    result shouldBe Symbol("right")
+    val workResponse = result.toOption.get
+    workResponse.blockNumber shouldEqual block.header.number
+    workResponse.powHeaderHash should not be empty
+    workResponse.dagSeed should not be empty
+    workResponse.target should not be empty
+  }
+
+  // core-geth alignment: submitWork rejects shares older than staleThreshold blocks
+  it should "reject submitWork when submission is beyond stale threshold" taggedAs (UnitTest, RPCTest) in
+    new TestSetup {
+      override lazy val miningConfig = MiningConfigs.miningConfig.copy(staleThreshold = 0)
+
+      // Save both blocks so best = block.number (1)
+      blockchainWriter.save(parentBlock, Nil, ChainWeight.totalDifficultyOnly(parentBlock.header.difficulty), true)
+      blockchainWriter.save(block, Nil, ChainWeight.totalDifficultyOnly(block.header.difficulty), true)
+
+      // getPrepared returns parentBlock (number=0); best=1; diff=1 > threshold=0 → stale
+      (blockGenerator.getPrepared _).expects(*).returning(Some(PendingBlock(parentBlock, Nil)))
+
+      val result = ethMiningService
+        .submitWork(SubmitWorkRequest(ByteString("nonce"), ByteString(Hex.decode("01" * 32)), ByteString(Hex.decode("01" * 32))))
+        .unsafeRunSync()
+
+      result shouldEqual Right(SubmitWorkResponse(false))
+    }
+
+  // core-geth alignment: submitWork accepts shares within staleThreshold window
+  it should "accept submitWork when submission is within stale threshold" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    // Save parentBlock so best = 0; pending block is at number 1 (ahead of best — not stale)
+    blockchainWriter.save(parentBlock, Nil, ChainWeight.totalDifficultyOnly(parentBlock.header.difficulty), true)
+
+    (blockGenerator.getPrepared _).expects(*).returning(Some(PendingBlock(block, Nil)))
+
+    val result = ethMiningService
+      .submitWork(SubmitWorkRequest(ByteString("nonce"), ByteString(Hex.decode("01" * 32)), ByteString(Hex.decode("01" * 32))))
+      .unsafeRunSync()
+
+    result shouldEqual Right(SubmitWorkResponse(true))
+    syncingController.expectMsgType[SyncProtocol.MinedBlock]
+  }
+
   it should "set and get the etherbase address" taggedAs (UnitTest, RPCTest) in new TestSetup {
     // Get initial coinbase
     val response1: ServiceResponse[GetCoinbaseResponse] = ethMiningService.getCoinbase(GetCoinbaseRequest())
@@ -450,7 +519,8 @@ class EthMiningServiceSpec
       pendingTransactionsManager.ref,
       getTransactionFromPoolTimeout,
       this,
-      coinbaseProvider
+      coinbaseProvider,
+      system
     )
 
     val difficulty = 131072

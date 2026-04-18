@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.consensus.blocks
 
 import org.apache.pekko.util.ByteString
 
+import scala.concurrent.duration._
+
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -73,7 +75,10 @@ class GasLimitCalculationSpec extends AnyFlatSpec with Matchers {
         headerExtraData = ByteString.empty,
         blockCacheSize = 1,
         miningEnabled = false,
-        gasLimitTarget = target
+        gasLimitTarget = target,
+        notifyUrls = Seq.empty,
+        staleThreshold = 7,
+        recommitInterval = 0.seconds
       )
     )
 
