@@ -316,6 +316,13 @@ class PeerManagerActor(
       // Use short blacklist to allow quick reconnection attempts
       case TcpSubsystemError | DisconnectRequested | TimeoutOnReceivingAMessage =>
         peerConfiguration.shortBlacklistDuration
+      // Permanent blacklist for protocol violations.
+      // Besu: PeerDenylistManager.java triggers denylist on BREACH_OF_PROTOCOL and
+      // INCOMPATIBLE_P2P_PROTOCOL_VERSION (maintained peers are exempt in Besu, but we
+      // apply permanent duration here — maintained peers are reconnected anyway via the
+      // Terminated handler regardless of IP blacklist state).
+      case BreachOfProtocol | IncompatibleP2pProtocolVersion | NullNodeIdentityReceived =>
+        DefaultPermanentBlacklistDuration
       case _ => peerConfiguration.longBlacklistDuration
     }
   }
