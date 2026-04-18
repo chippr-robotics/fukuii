@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.jsonrpc
 
 import org.json4s.JsonAST._
 
+import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.jsonrpc.EthTxJsonMethodsImplicits.transactionResponseJsonEncoder
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError.InvalidParams
 import com.chipprbots.ethereum.jsonrpc.TxPoolService._
@@ -94,5 +95,69 @@ object TxPoolJsonMethodsImplicits extends JsonMethodsImplicits {
 
       override def encodeJson(t: TxPoolBesuPendingTransactionsResponse): JValue =
         JArray(t.pendingTransactions.toList.map(tx => transactionResponseJsonEncoder.encodeJson(tx)))
+    }
+
+  // ── Geth-compatible methods ────────────────────────────────────────────────
+
+  implicit val txpool_content
+      : NoParamsMethodDecoder[TxPoolContentRequest] with JsonEncoder[TxPoolContentResponse] =
+    new NoParamsMethodDecoder(TxPoolContentRequest()) with JsonEncoder[TxPoolContentResponse] {
+      override def encodeJson(t: TxPoolContentResponse): JValue = {
+        def encodeNested(m: Map[String, Map[String, TransactionResponse]]): JObject =
+          JObject(m.toList.map { case (sender, byNonce) =>
+            sender -> JObject(byNonce.toList.map { case (nonce, tx) =>
+              nonce -> transactionResponseJsonEncoder.encodeJson(tx)
+            })
+          })
+        JObject("pending" -> encodeNested(t.pending), "queued" -> encodeNested(t.queued))
+      }
+    }
+
+  implicit val txpool_contentFrom
+      : JsonMethodDecoder[TxPoolContentFromRequest] with JsonEncoder[TxPoolContentFromResponse] =
+    new JsonMethodDecoder[TxPoolContentFromRequest]
+      with JsonEncoder[TxPoolContentFromResponse] {
+      override def decodeJson(
+          params: Option[JArray]
+      ): Either[JsonRpcError, TxPoolContentFromRequest] =
+        params match {
+          case Some(JArray(JString(addr) :: _)) =>
+            Right(TxPoolContentFromRequest(Address(addr)))
+          case _ =>
+            Left(InvalidParams())
+        }
+
+      override def encodeJson(t: TxPoolContentFromResponse): JValue = {
+        def encodeFlat(m: Map[String, TransactionResponse]): JObject =
+          JObject(m.toList.map { case (nonce, tx) =>
+            nonce -> transactionResponseJsonEncoder.encodeJson(tx)
+          })
+        JObject("pending" -> encodeFlat(t.pending), "queued" -> encodeFlat(t.queued))
+      }
+    }
+
+  implicit val txpool_status
+      : NoParamsMethodDecoder[TxPoolStatusRequest] with JsonEncoder[TxPoolStatusResponse] =
+    new NoParamsMethodDecoder(TxPoolStatusRequest()) with JsonEncoder[TxPoolStatusResponse] {
+      // core-geth uses hexutil.Uint — serialises as a hex string (e.g. "0x5")
+      override def encodeJson(t: TxPoolStatusResponse): JValue =
+        JObject(
+          "pending" -> JString("0x" + java.lang.Long.toHexString(t.pending)),
+          "queued"  -> JString("0x" + java.lang.Long.toHexString(t.queued))
+        )
+    }
+
+  implicit val txpool_inspect
+      : NoParamsMethodDecoder[TxPoolInspectRequest] with JsonEncoder[TxPoolInspectResponse] =
+    new NoParamsMethodDecoder(TxPoolInspectRequest()) with JsonEncoder[TxPoolInspectResponse] {
+      override def encodeJson(t: TxPoolInspectResponse): JValue = {
+        def encodeNested(m: Map[String, Map[String, String]]): JObject =
+          JObject(m.toList.map { case (sender, byNonce) =>
+            sender -> JObject(byNonce.toList.map { case (nonce, summary) =>
+              nonce -> JString(summary)
+            })
+          })
+        JObject("pending" -> encodeNested(t.pending), "queued" -> encodeNested(t.queued))
+      }
     }
 }
