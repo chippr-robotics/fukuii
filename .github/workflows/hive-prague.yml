@@ -226,17 +226,24 @@ jobs:
           for f in "${sim_logs[@]}"; do
             [ "$f" -nt "$sim_log" ] && sim_log="$f"
           done
-          passed=$(grep -c "PASSED tests/" "$sim_log" || true)
-          failed=$(grep -c "FAILED tests/" "$sim_log" || true)
+          # EELS/consume-engine pytest-xdist format is: `[gwN] [ N/M] VERDICT test-name`
+          # where VERDICT is PASSED, FAILED, or ERROR. The old `grep -c "PASSED tests/"`
+          # pattern matched zero lines (the word "tests/" is after the verdict), which
+          # made every sweep look like "0 passed" regardless of the real result.
+          passed=$(grep -cE "\] PASSED " "$sim_log" || true)
+          failed=$(grep -cE "\] FAILED " "$sim_log" || true)
+          errored=$(grep -cE "\] ERROR " "$sim_log" || true)
           passed=${passed:-0}
           failed=${failed:-0}
-          total=$((passed + failed))
+          errored=${errored:-0}
+          total=$((passed + failed + errored))
           echo "passed=$passed" >> "$GITHUB_OUTPUT"
           echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          echo "errored=$errored" >> "$GITHUB_OUTPUT"
           echo "total=$total" >> "$GITHUB_OUTPUT"
           echo "sim_failed=false" >> "$GITHUB_OUTPUT"
-          printf '### Hive Prague sweep\n\n| | | |\n|--|--|--|\n| passed | %s | |\n| failed | %s | |\n| total | %s | |\n| threshold | %s | |\n' \
-            "$passed" "$failed" "$total" "$PASS_THRESHOLD" >> "$GITHUB_STEP_SUMMARY"
+          printf '### Hive Prague sweep\n\n| | | |\n|--|--|--|\n| passed | %s | |\n| failed | %s | |\n| errored | %s | |\n| total | %s | |\n| threshold | %s | |\n' \
+            "$passed" "$failed" "$errored" "$total" "$PASS_THRESHOLD" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload hive workspace logs
         if: always()
