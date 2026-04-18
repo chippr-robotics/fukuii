@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.network
 
 import java.net.InetSocketAddress
 
+import scala.concurrent.duration._
+
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.actor.Props
 import org.apache.pekko.testkit.TestActorRef
@@ -475,12 +477,12 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
         )
       )
 
-      // Peer should receive request for highest block UNLESS peer is at genesis
-      // When peer is at genesis, no GetBlockHeaders is sent to avoid triggering
-      // disconnect with reason 0x10 (Other) from peers that reject genesis-only nodes
-      if (!peerInfo.isAtGenesis) {
-        peerProbe.expectMsg(PeerActor.SendMessage(GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, false)))
-      }
+      // NetworkPeerManagerActor intentionally does NOT send a GetBlockHeaders on
+      // handshake success — the sync engine pulls what it needs through the
+      // normal PeersClient polling path. Sending unsolicited GetBlockHeaders
+      // deviates from geth's devp2p behavior and caused peers implementing
+      // strict handshake expectations to disconnect with reason 0x10.
+      peerProbe.expectNoMessage(100.millis)
     }
   }
 
