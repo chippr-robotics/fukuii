@@ -75,7 +75,16 @@ jobs:
 
       - name: Install sbt
         run: |
-          curl -L https://github.com/sbt/sbt/releases/download/v1.10.7/sbt-1.10.7.tgz | tar xz -C /tmp
+          set -euxo pipefail
+          # Retry curl — the GitHub→Azure blob redirect occasionally serves a
+          # 92-byte garbage body instead of the tarball, causing tar xz to die
+          # with "not in gzip format". --retry-all-errors handles that.
+          curl -L --fail --retry 5 --retry-delay 5 --retry-all-errors \
+            -o /tmp/sbt.tgz \
+            https://github.com/sbt/sbt/releases/download/v1.10.7/sbt-1.10.7.tgz
+          # Verify the download is an actual gzip tarball before extracting.
+          file /tmp/sbt.tgz
+          tar xz -C /tmp -f /tmp/sbt.tgz
           sudo ln -sf /tmp/sbt/bin/sbt /usr/local/bin/sbt
           sbt --version
 
