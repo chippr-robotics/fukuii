@@ -1,0 +1,47 @@
+name: Hive · consume-rlp
+
+on:
+  push:
+    branches: [main, master, develop]
+    paths:
+      - 'src/**'
+      - 'build.sbt'
+      - 'version.sbt'
+      - 'project/**'
+      - 'hive/**'
+      - '.github/workflows/_hive-sim.yml'
+      - '.github/workflows/hive-consume-rlp.yml'
+  schedule:
+    - cron: '55 4 * * *'
+  workflow_dispatch:
+    inputs:
+      hive_ref:
+        description: 'ethereum/hive git ref'
+        required: false
+        default: 'master'
+      sim_timelimit:
+        description: 'Per-sim timelimit (e.g. 60m)'
+        required: false
+        default: '60m'
+      sim_limit:
+        description: 'Optional --sim.limit regex'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hive-consume-rlp-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+jobs:
+  run:
+    uses: ./.github/workflows/_hive-sim.yml
+    with:
+      sim: ethereum/eels/consume-rlp
+      label: consume-rlp
+      sim_timelimit: ${{ github.event.inputs.sim_timelimit || '60m' }}
+      sim_limit: ${{ github.event.inputs.sim_limit || '' }}
+      sim_buildarg: disable_strict_exception_matching=nimbus-el,fukuii
+      hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}

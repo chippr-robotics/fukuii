@@ -1,0 +1,41 @@
+name: Hive · rpc-compat
+
+on:
+  push:
+    branches: [main, master, develop]
+    paths:
+      - 'src/**'
+      - 'build.sbt'
+      - 'version.sbt'
+      - 'project/**'
+      - 'hive/**'
+      - '.github/workflows/_hive-sim.yml'
+      - '.github/workflows/hive-rpc-compat.yml'
+  schedule:
+    - cron: '15 4 * * *'
+  workflow_dispatch:
+    inputs:
+      hive_ref:
+        description: 'ethereum/hive git ref'
+        required: false
+        default: 'master'
+      sim_timelimit:
+        description: 'Per-sim timelimit (e.g. 40m)'
+        required: false
+        default: '30m'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hive-rpc-compat-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+jobs:
+  run:
+    uses: ./.github/workflows/_hive-sim.yml
+    with:
+      sim: ethereum/rpc-compat
+      label: rpc-compat
+      sim_timelimit: ${{ github.event.inputs.sim_timelimit || '30m' }}
+      hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}
