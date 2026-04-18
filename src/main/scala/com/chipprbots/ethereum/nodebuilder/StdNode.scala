@@ -19,6 +19,7 @@ import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.metrics.MetricsConfig
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.network.ServerActor
+import com.chipprbots.ethereum.network.StaticNodesLoader
 import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
 import com.chipprbots.ethereum.nodebuilder.tooling.PeriodicConsistencyCheck
 import com.chipprbots.ethereum.nodebuilder.tooling.StorageConsistencyChecker
@@ -52,6 +53,7 @@ abstract class BaseNode extends Node {
 
     // Phase 3: P2P networking
     startPeerManager()
+    loadStaticNodes()
     startPortForwarding()
     startServer()
     startDiscoveryManager()
@@ -122,6 +124,23 @@ abstract class BaseNode extends Node {
   }
 
   private[this] def startPeerManager(): Unit = peerManager ! PeerManagerActor.StartConnecting
+
+  /** Load static peer nodes from ${datadir}/static-nodes.json and add each to the maintained-peers set.
+    *
+    * Besu reference: StaticNodesParser.fromPath() → DefaultP2PNetwork adds each to MaintainedPeers.
+    * Static peers are maintained connections: the node will always attempt to reconnect on disconnect.
+    */
+  private[this] def loadStaticNodes(): Unit = {
+    val datadir = instanceConfig.config.getString("datadir")
+    val nodes   = StaticNodesLoader.load(datadir)
+    if (nodes.nonEmpty) {
+      log.info("Loading {} static peer(s) from {}/{}", nodes.size, datadir, StaticNodesLoader.FileName)
+      nodes.foreach { uri =>
+        peerManager ! PeerManagerActor.AddMaintainedPeer(uri)
+        log.debug("Static peer added: {}", uri)
+      }
+    }
+  }
 
   private[this] def startServer(): Unit = server ! ServerActor.StartServer(networkConfig.Server.listenAddress)
 
