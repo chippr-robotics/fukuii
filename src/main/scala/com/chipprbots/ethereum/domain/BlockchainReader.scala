@@ -99,7 +99,7 @@ class BlockchainReader(
     log.debug("Trying to get best block with number {}", bestKnownBlockinfo.number)
     val bestBlock = getBlockByHash(bestKnownBlockinfo.hash)
     if (bestBlock.isEmpty) {
-      log.error(
+      log.warn(
         "Best block {} (number: {}) not found in storage.",
         Hex.toHexString(bestKnownBlockinfo.hash.toArray),
         bestKnownBlockinfo.number
