@@ -102,6 +102,45 @@ object EthJsonMethodsImplicits extends JsonMethodsImplicits {
 
   }
 
+  implicit val eth_createAccessList
+      : JsonMethodDecoder[CreateAccessListRequest] with JsonEncoder[CreateAccessListResponse] =
+    new JsonMethodDecoder[CreateAccessListRequest] with JsonEncoder[CreateAccessListResponse] {
+      def decodeJson(params: Option[JArray]): Either[JsonRpcError, CreateAccessListRequest] =
+        params match {
+          case Some(JArray((txObj: JObject) :: (blockValue: JValue) :: Nil)) =>
+            for {
+              blockParam <- extractBlockParam(blockValue)
+              tx <- extractCall(txObj)
+            } yield CreateAccessListRequest(tx, blockParam)
+          case Some(JArray((txObj: JObject) :: Nil)) =>
+            extractCall(txObj).map(CreateAccessListRequest(_, BlockParam.Latest))
+          case _ => Left(InvalidParams())
+        }
+
+      def encodeJson(t: CreateAccessListResponse): JValue = {
+        val fields = List(
+          "accessList" -> JArray(t.accessList.toList.map { item =>
+            val addr = item("address") match {
+              case a: com.chipprbots.ethereum.domain.Address => encodeAsHex(a.bytes)
+              case other                                     => JString(other.toString)
+            }
+            val keys = item("storageKeys") match {
+              case ks: List[?] =>
+                JArray(ks.map {
+                  case bi: BigInt => JString("0x" + bi.toString(16).reverse.padTo(64, '0').reverse)
+                  case other      => JString(other.toString)
+                })
+              case _ => JArray(Nil)
+            }
+            JObject("address" -> addr, "storageKeys" -> keys)
+          }),
+          "gasUsed" -> encodeAsHex(t.gasUsed)
+        )
+        val errorField = t.error.map(e => "error" -> JString(e)).toList
+        JObject(fields ::: errorField)
+      }
+    }
+
   implicit val eth_sign: JsonMethodDecoder[SignRequest] = new JsonMethodDecoder[SignRequest] {
     override def decodeJson(params: Option[JArray]): Either[JsonRpcError, SignRequest] =
       params match {
@@ -128,15 +167,18 @@ object EthJsonMethodsImplicits extends JsonMethodsImplicits {
       to <- toEitherOpt((obj \ "to").extractOpt[String].map(extractBytes))
       gas <- optionalQuantity(obj \ "gas")
       gasPrice <- optionalQuantity(obj \ "gasPrice")
+      maxFeePerGas <- optionalQuantity(obj \ "maxFeePerGas")
       value <- optionalQuantity(obj \ "value")
       data <- toEitherOpt((obj \ "data").extractOpt[String].map(extractBytes))
+      input <- toEitherOpt((obj \ "input").extractOpt[String].map(extractBytes))
     } yield CallTx(
       from = from,
       to = to,
       gas = gas,
-      gasPrice = gasPrice.getOrElse(0),
+      gasPrice = gasPrice.orElse(maxFeePerGas).getOrElse(0),
       value = value.getOrElse(0),
-      data = data.getOrElse(ByteString(""))
+      data = data.orElse(input).getOrElse(ByteString("")),
+      gasPriceExplicit = gasPrice.isDefined || maxFeePerGas.isDefined
     )
   }
 

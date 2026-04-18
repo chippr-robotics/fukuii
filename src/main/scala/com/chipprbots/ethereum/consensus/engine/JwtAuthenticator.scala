@@ -14,9 +14,8 @@ import org.apache.pekko.http.scaladsl.server.Directives._
 
 import com.chipprbots.ethereum.utils.Logger
 
-/** JWT authentication for the Engine API, per EIP-3675 / execution-apis spec.
-  * Uses HS256 (HMAC-SHA256) with a shared secret.
-  * Tokens are valid for 60 seconds.
+/** JWT authentication for the Engine API, per EIP-3675 / execution-apis spec. Uses HS256 (HMAC-SHA256) with a shared
+  * secret. Tokens are valid for 60 seconds.
   */
 class JwtAuthenticator(secretHex: String) extends Logger {
 
@@ -24,7 +23,7 @@ class JwtAuthenticator(secretHex: String) extends Logger {
   private val MaxClockSkewSeconds = 60L
 
   /** Pekko HTTP directive that validates the JWT bearer token. */
-  def authenticate: Directive1[Unit] = {
+  def authenticate: Directive1[Unit] =
     optionalHeaderValueByType(ClassTag(classOf[Authorization])).flatMap {
       case Some(Authorization(OAuth2BearerToken(token))) =>
         validateToken(token) match {
@@ -37,7 +36,6 @@ class JwtAuthenticator(secretHex: String) extends Logger {
         log.warn("JWT auth: missing Authorization header")
         complete(StatusCodes.Unauthorized, "Missing bearer token")
     }
-  }
 
   private def validateToken(token: String): Either[String, Unit] = {
     val parts = token.split('.')
@@ -100,7 +98,9 @@ object JwtAuthenticator extends Logger {
   def fromFile(path: String): JwtAuthenticator = {
     val secretHex = new String(Files.readAllBytes(Paths.get(path))).trim
     if (secretHex.replaceAll("^0x", "").length < 64) {
-      throw new IllegalArgumentException(s"JWT secret must be at least 32 bytes (64 hex chars), got: ${secretHex.length}")
+      throw new IllegalArgumentException(
+        s"JWT secret must be at least 32 bytes (64 hex chars), got: ${secretHex.length}"
+      )
     }
     log.info(s"Loaded JWT secret from $path")
     new JwtAuthenticator(secretHex)

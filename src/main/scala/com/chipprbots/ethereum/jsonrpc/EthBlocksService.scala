@@ -6,10 +6,13 @@ import cats.effect.IO
 
 import org.bouncycastle.util.encoders.Hex
 
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.mining.Mining
-import com.chipprbots.ethereum.domain.Blockchain
-import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain._
+import com.chipprbots.ethereum.domain.BlockHeaderImplicits.BlockHeaderEnc
 import com.chipprbots.ethereum.ledger.BlockQueue
+import com.chipprbots.ethereum.rlp
+
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
 
@@ -40,14 +43,45 @@ object EthBlocksService {
 
   case class GetUncleCountByBlockHashRequest(blockHash: ByteString)
   case class GetUncleCountByBlockHashResponse(result: BigInt)
+
+  case class GetBlockReceiptsRequest(block: BlockParam)
+  case class GetBlockReceiptsResponse(receipts: Option[Seq[TransactionReceiptResponse]])
+
+  case class FeeHistoryRequest(blockCount: BigInt, newestBlock: BlockParam, rewardPercentiles: Option[Seq[Double]])
+  case class FeeHistoryResponse(
+      oldestBlock: BigInt,
+      baseFeePerGas: Seq[BigInt],
+      gasUsedRatio: Seq[Double],
+      reward: Option[Seq[Seq[BigInt]]],
+      baseFeePerBlobGas: Seq[BigInt],
+      blobGasUsedRatio: Seq[Double]
+  )
+
+  case class MaxPriorityFeePerGasRequest()
+  case class MaxPriorityFeePerGasResponse(maxPriorityFeePerGas: BigInt)
+
+  case class BlobBaseFeeRequest()
+  case class BlobBaseFeeResponse(blobBaseFee: BigInt)
+
+  case class GetRawBlockRequest(block: BlockParam)
+  case class GetRawBlockResponse(rawBlock: Option[ByteString])
+
+  case class GetRawHeaderRequest(block: BlockParam)
+  case class GetRawHeaderResponse(rawHeader: Option[ByteString])
+
+  case class GetRawReceiptsRequest(block: BlockParam)
+  case class GetRawReceiptsResponse(rawReceipts: Option[Seq[ByteString]])
+
 }
 
 class EthBlocksService(
     val blockchain: Blockchain,
     val blockchainReader: BlockchainReader,
     val mining: Mining,
-    val blockQueue: BlockQueue
+    val blockQueue: BlockQueue,
+    private val _forkChoiceManagerOpt: Option[ForkChoiceManager] = None
 ) extends ResolveBlock {
+  final override def forkChoiceManagerOpt: Option[ForkChoiceManager] = _forkChoiceManagerOpt
   import EthBlocksService._
 
   implicit val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
@@ -202,4 +236,106 @@ class EthBlocksService(
           )
       }
     }
+
+  def getBlockReceipts(req: GetBlockReceiptsRequest): ServiceResponse[GetBlockReceiptsResponse] = IO {
+    val result = resolveBlock(req.block).toOption.flatMap { case ResolvedBlock(block, _) =>
+      blockchainReader.getReceiptsByHash(block.header.hash).map { receipts =>
+        var baseLogIndex = 0
+        block.body.transactionList.zip(receipts).zipWithIndex.map { case ((stx, receipt), idx) =>
+          val gasUsed =
+            if (idx == 0) receipt.cumulativeGasUsed
+            else receipt.cumulativeGasUsed - receipts(idx - 1).cumulativeGasUsed
+          val sender = SignedTransaction.getSender(stx).getOrElse(Address(0))
+          val resp = TransactionReceiptResponse(receipt, stx, sender, idx, block.header, gasUsed, baseLogIndex)
+          baseLogIndex += receipt.logs.size
+          resp
+        }
+      }
+    }
+    Right(GetBlockReceiptsResponse(result))
+  }
+
+  def feeHistory(req: FeeHistoryRequest): ServiceResponse[FeeHistoryResponse] = IO {
+    val bestBlock = blockchainReader.getBestBlockNumber()
+    val newestBlockNum = resolveBlock(req.newestBlock).toOption.map(_.block.header.number).getOrElse(bestBlock)
+    val count = req.blockCount.min(1024).toInt
+    val oldestBlock = (newestBlockNum - count + 1).max(0)
+
+    val baseFees = (oldestBlock.toLong to (newestBlockNum + 1).toLong).map { num =>
+      blockchainReader.getBlockHeaderByNumber(num).flatMap(_.baseFee).getOrElse(BigInt(0))
+    }.toSeq
+
+    val gasUsedRatios = (oldestBlock.toLong to newestBlockNum.toLong).map { num =>
+      blockchainReader
+        .getBlockHeaderByNumber(num)
+        .map { h =>
+          if (h.gasLimit > 0) h.gasUsed.toDouble / h.gasLimit.toDouble else 0.0
+        }
+        .getOrElse(0.0)
+    }.toSeq
+
+    val blobBaseFees = (oldestBlock.toLong to (newestBlockNum + 1).toLong).map { num =>
+      blockchainReader.getBlockHeaderByNumber(num).flatMap(_.excessBlobGas).map(_ => BigInt(1)).getOrElse(BigInt(1))
+    }.toSeq
+
+    val blobGasUsedRatios = (oldestBlock.toLong to newestBlockNum.toLong).map { num =>
+      blockchainReader
+        .getBlockHeaderByNumber(num)
+        .flatMap(_.blobGasUsed)
+        .map { used =>
+          if (used > 0) used.toDouble / 786432.0 else 0.0
+        }
+        .getOrElse(0.0)
+    }.toSeq
+
+    val rewards = req.rewardPercentiles.map { _ =>
+      (oldestBlock.toLong to newestBlockNum.toLong).map { _ =>
+        req.rewardPercentiles.getOrElse(Seq.empty).map(_ => BigInt(0))
+      }.toSeq
+    }
+
+    Right(
+      FeeHistoryResponse(
+        oldestBlock = oldestBlock,
+        baseFeePerGas = baseFees,
+        gasUsedRatio = gasUsedRatios,
+        reward = rewards,
+        baseFeePerBlobGas = blobBaseFees,
+        blobGasUsedRatio = blobGasUsedRatios
+      )
+    )
+  }
+
+  def maxPriorityFeePerGas(req: MaxPriorityFeePerGasRequest): ServiceResponse[MaxPriorityFeePerGasResponse] = IO {
+    Right(MaxPriorityFeePerGasResponse(BigInt(1000000000)))
+  }
+
+  def blobBaseFee(req: BlobBaseFeeRequest): ServiceResponse[BlobBaseFeeResponse] = IO {
+    val fee = blockchainReader.getBestBlock().flatMap(_.header.excessBlobGas).map(_ => BigInt(1)).getOrElse(BigInt(1))
+    Right(BlobBaseFeeResponse(fee))
+  }
+
+  def getRawBlock(req: GetRawBlockRequest): ServiceResponse[GetRawBlockResponse] = IO {
+    val raw = resolveBlock(req.block).toOption.map { case ResolvedBlock(block, _) =>
+      ByteString(rlp.encode(block.toRLPEncodable))
+    }
+    Right(GetRawBlockResponse(raw))
+  }
+
+  def getRawHeader(req: GetRawHeaderRequest): ServiceResponse[GetRawHeaderResponse] = IO {
+    val raw = resolveBlock(req.block).toOption.map { case ResolvedBlock(block, _) =>
+      ByteString(rlp.encode(block.header.toRLPEncodable))
+    }
+    Right(GetRawHeaderResponse(raw))
+  }
+
+  def getRawReceipts(req: GetRawReceiptsRequest): ServiceResponse[GetRawReceiptsResponse] = IO {
+    import com.chipprbots.ethereum.network.p2p.messages.ETH63.ReceiptImplicits.given
+    val raw = resolveBlock(req.block).toOption.flatMap { case ResolvedBlock(block, _) =>
+      blockchainReader.getReceiptsByHash(block.header.hash).map { receipts =>
+        receipts.map(r => ByteString(r.toBytes))
+      }
+    }
+    Right(GetRawReceiptsResponse(raw))
+  }
 }

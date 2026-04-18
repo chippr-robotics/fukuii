@@ -10,8 +10,8 @@ import com.chipprbots.ethereum.utils.Logger
 
 /** Thread-safe manager for CL-driven fork choice (post-Merge Ethereum).
   *
-  * When active, this replaces total-difficulty-based fork choice with CL-driven fork choice.
-  * The CL (Prysm, Lighthouse, etc.) drives the canonical chain via forkchoiceUpdated calls.
+  * When active, this replaces total-difficulty-based fork choice with CL-driven fork choice. The CL (Prysm, Lighthouse,
+  * etc.) drives the canonical chain via forkchoiceUpdated calls.
   */
 class ForkChoiceManager(
     blockchainReader: BlockchainReader,
@@ -33,8 +33,10 @@ class ForkChoiceManager(
 
   /** Apply a new fork choice state from the CL via engine_forkchoiceUpdated.
     *
-    * @param newState the fork choice state from CL
-    * @return Right(()) if valid, Left(error) if head block is unknown
+    * @param newState
+    *   the fork choice state from CL
+    * @return
+    *   Right(()) if valid, Left(error) if head block is unknown
     */
   def applyForkChoiceState(newState: ForkChoiceState): Either[String, Unit] = {
     val headKnown = blockchainReader.getBlockHeaderByHash(newState.headBlockHash).isDefined
@@ -49,8 +51,10 @@ class ForkChoiceManager(
       )
       currentState.set(Some(newState))
 
-      // Persist canonical head to chain storage
+      // Rewrite number→hash mapping for the new canonical branch (no-op if already canonical).
+      // Then persist canonical best-block pointer.
       blockchainReader.getBlockHeaderByHash(newState.headBlockHash).foreach { header =>
+        blockchainWriter.promoteBranchToCanonical(newState.headBlockHash, blockchainReader)
         blockchainWriter.saveBestKnownBlocks(newState.headBlockHash, header.number)
       }
 

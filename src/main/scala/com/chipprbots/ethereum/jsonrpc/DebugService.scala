@@ -25,7 +25,13 @@ object DebugService {
   case class ListPeersInfoResponse(peers: List[PeerInfo])
 }
 
-class DebugService(peerManager: ActorRef, networkPeerManager: ActorRef) {
+/** Non-tracing debug_* RPC methods. `debug_trace*` / `trace_*` live in [[DebugTracingService]] / [[TraceService]]
+  * against the [[com.chipprbots.ethereum.vm.ExecutionTracer]] interface.
+  */
+class DebugService(
+    peerManager: ActorRef,
+    networkPeerManager: ActorRef
+) {
 
   def listPeersInfo(getPeersInfoRequest: ListPeersInfoRequest): ServiceResponse[ListPeersInfoResponse] =
     for {

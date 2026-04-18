@@ -530,7 +530,7 @@ class PersonalServiceSpec
         blockchainReader,
         txPool.ref,
         txPoolConfig,
-        new BlockchainConfigBuilder {
+        new BlockchainConfigBuilder with com.chipprbots.ethereum.TestInstanceConfigProvider {
           override def blockchainConfig: BlockchainConfig = BlockchainConfig(
             chainId = chainId,
             // unused

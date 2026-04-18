@@ -56,7 +56,17 @@ class ConsensusAdapter(
             )
           }
 
-          doBlockPreValidation(block).flatMap {
+          // Skip pre-validation when the block directly extends the current best block.
+          // During sequential sync, each block's parent was just saved by the previous iteration.
+          // doBlockPreValidation runs on a different thread pool (validationScheduler) which can
+          // race with the storage write, causing intermittent HeaderParentNotFoundError.
+          // The consensus.evaluateBranch will validate blocks during execution.
+          val validated = if (bestBlock.header.hash == block.header.parentHash) {
+            IO.pure(Right(BlockExecutionSuccess): Either[ValidationBeforeExecError, BlockExecutionSuccess])
+          } else {
+            doBlockPreValidation(block)
+          }
+          validated.flatMap {
             case Left(error) =>
               IO.pure(BlockImportFailed(error.reason.toString))
             case Right(BlockExecutionSuccess) =>

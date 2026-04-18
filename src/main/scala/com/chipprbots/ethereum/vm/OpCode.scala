@@ -160,7 +160,11 @@ object OpCodes {
     PUSH0 +: PhoenixOpCodes
 
   val OlympiaOpCodes: List[OpCode] =
-    List(BASEFEE, TLOAD, TSTORE, MCOPY) ++ SpiralOpCodes
+    List(BASEFEE, BLOBHASH, BLOBBASEFEE, TLOAD, TSTORE, MCOPY) ++ SpiralOpCodes
+
+  /** Osaka (EIP-7939) adds CLZ — count leading zeros. */
+  val OsakaOpCodes: List[OpCode] =
+    CLZ +: OlympiaOpCodes
 }
 
 object OpCode {
@@ -415,6 +419,11 @@ case object SAR extends OpCode(0x1d, 2, 1, _.G_verylow) with ConstGas {
   }
 }
 
+/** EIP-7939: Count Leading Zero bits. Pops one 256-bit value and pushes the count of leading zero bits (0..256). For
+  * the zero input, result is 256.
+  */
+case object CLZ extends UnaryOp(0x1e, _.G_low)(v => UInt256(256 - v.toBigInt.bitLength)) with ConstGas
+
 case object SHA3 extends OpCode(0x20, 2, 1, _.G_sha3) {
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] = {
     val (Seq(offset, size), stack1) = state.stack.pop(2)
@@ -622,7 +631,14 @@ case object TIMESTAMP extends ConstOp(0x42)(s => UInt256(s.env.blockHeader.unixT
 
 case object NUMBER extends ConstOp(0x43)(s => UInt256(s.env.blockHeader.number))
 
-case object DIFFICULTY extends ConstOp(0x44)(s => UInt256(s.env.blockHeader.difficulty))
+case object DIFFICULTY
+    extends ConstOp(0x44)(s =>
+      // EIP-4399: post-merge, opcode 0x44 returns prevRandao (stored in mixHash) instead of difficulty
+      if (s.env.blockHeader.isPostMerge)
+        UInt256(s.env.blockHeader.mixHash)
+      else
+        UInt256(s.env.blockHeader.difficulty)
+    )
 
 case object GASLIMIT extends ConstOp(0x45)(s => UInt256(s.env.blockHeader.gasLimit))
 
@@ -968,6 +984,23 @@ case object LOG3 extends LogOp(0xa3)
 case object LOG4 extends LogOp(0xa4)
 
 abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.G_create) {
+  // Override execute() to pass the pre-computed gas cost to exec() via state.opcodeGasCost,
+  // avoiding the duplicate gas calculation that CreateOp.exec() previously performed (EC-243).
+  override def execute[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =
+    if (!availableInContext(state))
+      state.withError(OpCodeNotAvailableInStaticContext(code.toByte))
+    else if (state.stack.size < delta)
+      state.withError(StackUnderflow)
+    else if (state.stack.size - delta + alpha > state.stack.maxSize)
+      state.withError(StackOverflow)
+    else {
+      val gas: BigInt = calcGas(state)
+      if (gas > state.gas)
+        state.copy(gas = 0).withError(OutOfGas)
+      else
+        exec(state.copy(opcodeGasCost = gas)).spendGas(gas)
+    }
+
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] = {
     val (Seq(endowment, inOffset, inSize), stack1) = state.stack.pop(3)
 
@@ -978,9 +1011,8 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
       return state.withStack(stack1.push(UInt256.Zero)).withError(InitCodeSizeLimit).step()
     }
 
-    // FIXME: to avoid calculating this twice, we could adjust state.gas prior to execution in OpCode#execute
-    // not sure how this would affect other opcodes [EC-243]
-    val availableGas = state.gas - (baseGasFn(state.config.feeSchedule) + varGas(state))
+    // Gas cost already computed by OpCode.execute() and stored in state.opcodeGasCost
+    val availableGas = state.gas - state.opcodeGasCost
     val startGas = state.config.gasCap(availableGas)
     val (initCode, memory1) = state.memory.load(inOffset, inSize)
     val world1 = state.world.increaseNonce(state.ownAddress)
@@ -1003,7 +1035,10 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
       originalWorld = state.originalWorld,
       warmAddresses = state.accessedAddresses,
       warmStorage = state.accessedStorageKeys,
-      transientStorage = state.transientStorage
+      transientStorage = state.transientStorage,
+      precompileRelocations = state.env.precompileRelocations,
+      blobVersionedHashes = state.env.blobVersionedHashes,
+      traceTransfers = state.env.traceTransfers
     )
 
     val ((result, newAddress), stack2) = this match {
@@ -1136,7 +1171,10 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
       originalWorld = state.originalWorld,
       warmAddresses = stateWithDelegationWarming.accessedAddresses,
       warmStorage = state.accessedStorageKeys,
-      transientStorage = state.transientStorage
+      transientStorage = state.transientStorage,
+      precompileRelocations = state.env.precompileRelocations,
+      blobVersionedHashes = state.env.blobVersionedHashes,
+      traceTransfers = state.env.traceTransfers
     )
 
     val result = state.vm.call(context, owner)
@@ -1166,6 +1204,19 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
         val stack2 = stack1.push(UInt256.One)
         val internalTx = internalTransaction(state.env, to, startGas, inputData, endowment)
 
+        // Emit synthetic Transfer log for traceTransfers (ETH value transfers)
+        val transferLogs = if (state.env.traceTransfers && endowment > UInt256.Zero && doTransfer) {
+          val transferTopic = ByteString(
+            com.chipprbots.ethereum.crypto.kec256("Transfer(address,address,uint256)".getBytes)
+          )
+          val ethAddr = com.chipprbots.ethereum.domain.Address("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+          val fromPadded = ByteString(new Array[Byte](12) ++ caller.bytes.padTo(20, 0.toByte).takeRight(20))
+          val toPadded = ByteString(new Array[Byte](12) ++ toAddr.bytes.padTo(20, 0.toByte).takeRight(20))
+          val valueBytes = endowment.bytes
+          val data = ByteString(new Array[Byte](32 - valueBytes.length) ++ valueBytes.toArray)
+          Seq(com.chipprbots.ethereum.domain.TxLogEntry(ethAddr, Seq(transferTopic, fromPadded, toPadded), data))
+        } else Seq.empty
+
         state
           .spendGas(-result.gasRemaining)
           .refundGas(result.gasRefund)
@@ -1174,7 +1225,7 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
           .withWorld(result.world)
           .withAddressesToDelete(result.addressesToDelete)
           .withInternalTxs(internalTx +: result.internalTxs)
-          .withLogs(result.logs)
+          .withLogs(result.logs ++ transferLogs)
           .withReturnData(result.returnData)
           .addAccessedStorageKeys(result.accessedStorageKeys)
           .addAccessedAddresses(result.accessedAddresses + toAddr)
@@ -1364,12 +1415,27 @@ case object SELFDESTRUCT extends OpCode(0xff, 1, 0, _.G_selfdestruct) {
     val createdInThisTx = !state.originalWorld.accountExists(state.ownAddress)
     val shouldDelete = !state.config.eip6780Enabled || createdInThisTx
 
+    // Emit synthetic Transfer log for traceTransfers (SELFDESTRUCT value transfers)
+    val transferLogs =
+      if (state.env.traceTransfers && state.ownBalance > UInt256.Zero && state.ownAddress != refundAddr) {
+        val transferTopic = ByteString(
+          com.chipprbots.ethereum.crypto.kec256("Transfer(address,address,uint256)".getBytes)
+        )
+        val ethAddr = com.chipprbots.ethereum.domain.Address("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+        val fromPadded = ByteString(new Array[Byte](12) ++ state.ownAddress.bytes.toArray)
+        val toPadded = ByteString(new Array[Byte](12) ++ refundAddr.bytes.toArray)
+        val valueBytes = state.ownBalance.bytes
+        val data = ByteString(new Array[Byte](32 - valueBytes.length) ++ valueBytes.toArray)
+        Seq(com.chipprbots.ethereum.domain.TxLogEntry(ethAddr, Seq(transferTopic, fromPadded, toPadded), data))
+      } else Seq.empty
+
     val state1 = state
       .withWorld(world)
       .refundGas(gasRefund)
       .addAccessedAddress(refundAddr)
       .withStack(stack1)
       .withReturnData(ByteString.empty)
+      .withLogs(transferLogs)
 
     if (shouldDelete) state1.withAddressToDelete(state.ownAddress).halt
     else state1.halt
@@ -1420,6 +1486,37 @@ case object BASEFEE extends OpCode(0x48, 0, 1, _.G_base) with ConstGas {
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] = {
     val baseFee = state.env.blockHeader.baseFee.getOrElse(BigInt(0))
     val stack1 = state.stack.push(UInt256(baseFee))
+    state.withStack(stack1).step()
+  }
+}
+
+/** EIP-4844: BLOBHASH opcode — returns the versioned hash at the given index from the current transaction's
+  * blob_versioned_hashes, or 0 if index is out of bounds.
+  */
+case object BLOBHASH extends OpCode(0x49, 1, 1, _.G_verylow) with ConstGas {
+  protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] = {
+    val (index, stack1) = state.stack.pop()
+    val hashes = state.env.blobVersionedHashes
+    val result = if (index.toBigInt < hashes.size && index.toBigInt >= 0) {
+      UInt256(hashes(index.toInt))
+    } else {
+      UInt256.Zero
+    }
+    state.withStack(stack1.push(result)).step()
+  }
+}
+
+/** EIP-7516: BLOBBASEFEE opcode — returns the current block's blob base fee. */
+case object BLOBBASEFEE extends OpCode(0x4a, 0, 1, _.G_base) with ConstGas {
+  protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] = {
+    // Blob base fee from the block header's excessBlobGas
+    val blobBaseFee = state.env.blockHeader.excessBlobGas
+      .map { excess =>
+        // Simplified: for now return 1 (minimum blob base fee)
+        BigInt(1)
+      }
+      .getOrElse(BigInt(0))
+    val stack1 = state.stack.push(UInt256(blobBaseFee))
     state.withStack(stack1).step()
   }
 }

@@ -29,7 +29,8 @@ inThisBuild(
       Resolver.mavenCentral,
       "Typesafe Releases" at "https://repo.typesafe.com/typesafe/releases/",
       "Sonatype OSS Releases" at "https://oss.sonatype.org/content/repositories/releases/",
-      "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots/"
+      "Sonatype OSS Snapshots" at "https://oss.sonatype.org/content/repositories/snapshots/",
+      "Hyperledger Besu" at "https://hyperledger.jfrog.io/artifactory/besu-maven/"
     )
   )
 )

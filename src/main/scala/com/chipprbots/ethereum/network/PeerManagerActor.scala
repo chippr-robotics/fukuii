@@ -71,11 +71,33 @@ class PeerManagerActor(
     */
   private var peerStatusCache: Map[PeerId, PeerActor.Status] = Map.empty
 
+  /** Peers that should always remain connected. On disconnect, a reconnect is scheduled after 30s. Keyed by hex node ID
+    * (the userInfo portion of the enode URI), matching PeerId.value for handshaked peers. Mirrors Besu's
+    * DefaultP2PNetwork.maintainedPeers set.
+    */
+  private var maintainedPeersByNodeId: Map[String, URI] = Map.empty
+
+  /** Trusted peers bypass the max-peer limit and are always accepted. core-geth reference: p2p/server.go — trusted
+    * map[enode.ID]bool in run loop. Keyed by lowercase hex node ID.
+    */
+  private var trustedPeersByNodeId: Set[String] = Set.empty
+
+  /** Runtime max-outgoing-peers override set by admin_maxPeers. core-geth reference: eth/api_admin.go MaxPeers — sets
+    * handler.maxPeers + p2pServer.MaxPeers.
+    */
+  private var maxOutgoingPeersOverride: Option[Int] = None
+
+  private def effectiveMaxOutgoing: Int =
+    maxOutgoingPeersOverride.getOrElse(peerConfiguration.maxOutgoingPeers)
+
   implicit class ConnectedPeersOps(connectedPeers: ConnectedPeers) {
 
-    /** Number of new connections the node should try to open at any given time. */
+    /** Number of new connections the node should try to open at any given time. Uses effectiveMaxOutgoing so
+      * admin_maxPeers overrides take effect.
+      */
     def outgoingConnectionDemand: Int =
-      PeerManagerActor.outgoingConnectionDemand(connectedPeers, peerConfiguration)
+      if (connectedPeers.outgoingHandshakedPeersCount >= peerConfiguration.minOutgoingPeers) 0
+      else effectiveMaxOutgoing - connectedPeers.outgoingPeersCount
 
     def canConnectTo(node: Node): Boolean = {
       val socketAddress = node.tcpSocketAddress
@@ -248,6 +270,37 @@ class PeerManagerActor(
 
     case ConnectToPeer(uri) =>
       connectWith(uri, connectedPeers)
+
+    case AddMaintainedPeer(uri) =>
+      val nodeId = uri.getUserInfo
+      val wasAdded = !maintainedPeersByNodeId.contains(nodeId)
+      maintainedPeersByNodeId = maintainedPeersByNodeId + (nodeId -> uri)
+      sender() ! AddMaintainedPeerResponse(wasAdded)
+      connectWith(uri, connectedPeers)
+
+    case RemoveMaintainedPeer(nodeId) =>
+      maintainedPeersByNodeId = maintainedPeersByNodeId - nodeId
+
+    // ── Geth-compatible trusted peer / max-peers management ───────────────
+    // core-geth references: node/api.go AddTrustedPeer/RemoveTrustedPeer, eth/api_admin.go MaxPeers
+
+    case AddTrustedPeer(uri) =>
+      val nodeId = uri.getUserInfo.toLowerCase
+      trustedPeersByNodeId = trustedPeersByNodeId + nodeId
+      sender() ! AddTrustedPeerResponse(success = true)
+      // Attempt connection immediately (like AddMaintainedPeer) so the trusted
+      // peer is dialled even if we're currently at the max-peer limit.
+      connectWith(uri, connectedPeers)
+
+    case RemoveTrustedPeer(nodeId) =>
+      // Removes trust but does NOT disconnect the live connection.
+      // core-geth: server.RemoveTrustedPeer does not call removePeer.
+      trustedPeersByNodeId = trustedPeersByNodeId - nodeId.toLowerCase
+      sender() ! RemoveTrustedPeerResponse(success = true)
+
+    case SetMaxPeers(n) =>
+      maxOutgoingPeersOverride = Some(n)
+      sender() ! SetMaxPeersResponse(success = true)
   }
 
   private def getBlacklistDuration(reason: Long): FiniteDuration = {
@@ -262,6 +315,13 @@ class PeerManagerActor(
       // Use short blacklist to allow quick reconnection attempts
       case TcpSubsystemError | DisconnectRequested | TimeoutOnReceivingAMessage =>
         peerConfiguration.shortBlacklistDuration
+      // Permanent blacklist for protocol violations.
+      // Besu: PeerDenylistManager.java triggers denylist on BREACH_OF_PROTOCOL and
+      // INCOMPATIBLE_P2P_PROTOCOL_VERSION (maintained peers are exempt in Besu, but we
+      // apply permanent duration here — maintained peers are reconnected anyway via the
+      // Terminated handler regardless of IP blacklist state).
+      case BreachOfProtocol | IncompatibleP2pProtocolVersion | NullNodeIdentityReceived =>
+        DefaultPermanentBlacklistDuration
       case _ => peerConfiguration.longBlacklistDuration
     }
   }
@@ -289,22 +349,32 @@ class PeerManagerActor(
 
     validConnection match {
       case Right(address) =>
+        log.error(
+          "[HIVE-DEBUG] Accepting incoming connection from {} (pending={}/{})",
+          remoteAddress,
+          connectedPeers.incomingPendingPeersCount,
+          peerConfiguration.maxPendingPeers
+        )
         val (peer, newConnectedPeers) = createPeer(address, incomingConnection = true, connectedPeers)
         peer.ref ! PeerActor.HandleConnection(connection, remoteAddress)
         context.become(listening(newConnectedPeers))
 
       case Left(error) =>
+        log.error("[HIVE-DEBUG] Rejecting incoming connection from {}: {}", remoteAddress, error)
         handleConnectionErrors(error)
     }
   }
 
   private def connectWith(uri: URI, connectedPeers: ConnectedPeers): Unit = {
-    val nodeId = ByteString(Hex.decode(uri.getUserInfo))
+    val nodeIdHex = uri.getUserInfo.toLowerCase
+    val nodeId = ByteString(Hex.decode(nodeIdHex))
     val remoteAddress = new InetSocketAddress(uri.getHost, uri.getPort)
 
     val alreadyConnectedToPeer =
       connectedPeers.hasHandshakedWith(nodeId) || connectedPeers.isConnectionHandled(remoteAddress)
-    val isOutgoingPeersNotMaxValue = connectedPeers.outgoingPeersCount < peerConfiguration.maxOutgoingPeers
+    // Trusted peers bypass the max peer limit (core-geth: trustedConn flag skips maxPeers check)
+    val isTrusted = trustedPeersByNodeId.contains(nodeIdHex)
+    val isOutgoingPeersNotMaxValue = isTrusted || connectedPeers.outgoingPeersCount < effectiveMaxOutgoing
 
     val validConnection = for {
       validHandler <- validateConnection(remoteAddress, OutgoingConnectionAlreadyHandled(uri), !alreadyConnectedToPeer)
@@ -379,6 +449,11 @@ class PeerManagerActor(
       terminatedPeersIds.foreach { peerId =>
         peerStatusCache = peerStatusCache - peerId
         peerEventBus ! Publish(PeerEvent.PeerDisconnected(peerId))
+        // Reconnect maintained peers — mirrors Besu's checkMaintainedConnectionPeers scheduler.
+        maintainedPeersByNodeId.get(peerId.value).foreach { uri =>
+          log.debug("Maintained peer {} disconnected — scheduling reconnect in 30s", uri)
+          context.system.scheduler.scheduleOnce(30.seconds, self, ConnectToPeer(uri))(context.dispatcher)
+        }
       }
       // Try to replace a lost connection with another one.
       if (newConnectedPeers.outgoingConnectionDemand > 0) {
@@ -623,7 +698,7 @@ object PeerManagerActor {
     val waitForChainCheckTimeout: FiniteDuration
     val fastSyncHostConfiguration: FastSyncHostConfiguration
     val rlpxConfiguration: RLPxConfiguration
-    val networkId: Int
+    val networkId: Long
     val p2pVersion: Int
     val updateNodesInitialDelay: FiniteDuration
     val updateNodesInterval: FiniteDuration
@@ -673,6 +748,25 @@ object PeerManagerActor {
 
   case class RemoveFromBlacklistRequest(address: String)
   case class RemoveFromBlacklistResponse(removed: Boolean)
+
+  /** Besu alignment: admin_addPeer / admin_removePeer maintained-peers set. AddMaintainedPeer returns wasAdded=false if
+    * the peer was already in the set (duplicate call). RemoveMaintainedPeer removes from the set by hex node ID (enode
+    * userInfo).
+    */
+  case class AddMaintainedPeer(uri: URI)
+  case class AddMaintainedPeerResponse(wasAdded: Boolean)
+  case class RemoveMaintainedPeer(nodeId: String)
+
+  /** core-geth alignment: admin_addTrustedPeer / admin_removeTrustedPeer / admin_maxPeers. Trusted peers bypass the
+    * max-peer limit and are always accepted. core-geth references: node/api.go AddTrustedPeer/RemoveTrustedPeer,
+    * eth/api_admin.go MaxPeers
+    */
+  case class AddTrustedPeer(uri: URI)
+  case class AddTrustedPeerResponse(success: Boolean)
+  case class RemoveTrustedPeer(nodeId: String)
+  case class RemoveTrustedPeerResponse(success: Boolean)
+  case class SetMaxPeers(n: Int)
+  case class SetMaxPeersResponse(success: Boolean)
 
   /** Default blacklist duration when none specified (permanent blacklist). Set to 365 days as a practical "permanent"
     * duration.

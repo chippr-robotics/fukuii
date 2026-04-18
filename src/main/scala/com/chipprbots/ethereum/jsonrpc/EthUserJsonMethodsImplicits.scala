@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.jsonrpc
 
+import org.apache.pekko.util.ByteString
 import org.json4s.JsonAST._
 
 import com.chipprbots.ethereum.jsonrpc.EthUserService._
@@ -45,15 +46,25 @@ object EthUserJsonMethodsImplicits extends JsonMethodsImplicits {
       def decodeJson(params: Option[JArray]): Either[JsonRpcError, GetStorageAtRequest] =
         params match {
           case Some(JArray((addressStr: JString) :: (positionStr: JString) :: (blockValue: JValue) :: Nil)) =>
-            for {
-              address <- extractAddress(addressStr)
-              position <- extractQuantity(positionStr)
-              block <- extractBlockParam(blockValue)
-            } yield GetStorageAtRequest(address, position, block)
+            val keyHex = positionStr.s.stripPrefix("0x").stripPrefix("0X")
+            if (keyHex.length > 64)
+              Left(InvalidParams(s"""storage key too long (want at most 32 bytes): "${positionStr.s}""""))
+            else
+              for {
+                address <- extractAddress(addressStr)
+                position <- extractQuantity(positionStr)
+                block <- extractBlockParam(blockValue)
+              } yield GetStorageAtRequest(address, position, block)
           case _ => Left(InvalidParams())
         }
 
-      def encodeJson(t: GetStorageAtResponse): JValue = encodeAsHex(t.value)
+      def encodeJson(t: GetStorageAtResponse): JValue = {
+        // eth_getStorageAt returns a full 32-byte zero-padded value per spec
+        val padded = if (t.value.length < 32) {
+          ByteString(new Array[Byte](32 - t.value.length)) ++ t.value
+        } else t.value
+        encodeAsHex(padded)
+      }
     }
 
   implicit val eth_getTransactionCount

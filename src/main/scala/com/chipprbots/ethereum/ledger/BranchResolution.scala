@@ -78,6 +78,11 @@ class BranchResolution(blockchainReader: BlockchainReader) extends Logger {
           } else {
             NewBetterBranch(oldBlocks)
           }
+        } else if (newWeight == oldWeight && newHeaders.nonEmpty && oldBlocks.isEmpty) {
+          // Post-merge: all blocks have difficulty=0, so weight never increases.
+          // If the new branch extends the chain without conflicting (no old blocks to replace),
+          // accept it. This is the normal case for regular sync importing new blocks.
+          NewBetterBranch(Nil)
         } else {
           NoChainSwitch
         }

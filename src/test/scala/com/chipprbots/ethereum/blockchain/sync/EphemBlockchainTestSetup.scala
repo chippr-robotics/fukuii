@@ -9,7 +9,7 @@ import com.chipprbots.ethereum.nodebuilder.PruningConfigBuilder
 
 trait EphemBlockchainTestSetup extends ScenarioSetup {
 
-  trait LocalPruningConfigBuilder extends PruningConfigBuilder {
+  trait LocalPruningConfigBuilder extends PruningConfigBuilder with com.chipprbots.ethereum.TestInstanceConfigProvider {
     override val pruningMode: PruningMode = ArchivePruning
   }
 
@@ -17,9 +17,15 @@ trait EphemBlockchainTestSetup extends ScenarioSetup {
   override lazy val vm: VMImpl = new VMImpl
   override lazy val storagesInstance
       : EphemDataSourceComponent with LocalPruningConfigBuilder with Storages.DefaultStorages =
-    new EphemDataSourceComponent with LocalPruningConfigBuilder with Storages.DefaultStorages
+    new EphemDataSourceComponent
+      with LocalPruningConfigBuilder
+      with Storages.DefaultStorages
+      with com.chipprbots.ethereum.TestInstanceConfigProvider
   // - cake overrides
 
   def getNewStorages: EphemDataSourceComponent with LocalPruningConfigBuilder with Storages.DefaultStorages =
-    new EphemDataSourceComponent with LocalPruningConfigBuilder with Storages.DefaultStorages
+    new EphemDataSourceComponent
+      with LocalPruningConfigBuilder
+      with Storages.DefaultStorages
+      with com.chipprbots.ethereum.TestInstanceConfigProvider
 }

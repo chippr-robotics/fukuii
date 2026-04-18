@@ -1,0 +1,199 @@
+name: Hive Prague Suite
+
+# Runs the ethereum/eels/consume-engine simulator against fukuii for all fork_Prague tests.
+# Gate for PRs to main/develop and for nightly regressions. Fails the build if the pass
+# count drops below a threshold, preventing regressions in Pectra EL compliance.
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+    paths:
+      - 'src/**'
+      - 'build.sbt'
+      - 'version.sbt'
+      - 'project/**'
+      - 'hive/**'
+      - '.github/workflows/hive-prague.yml'
+  workflow_dispatch:
+    inputs:
+      threshold:
+        description: 'Minimum passing test count required'
+        required: false
+        default: '400'
+      timelimit:
+        description: 'sim.timelimit (minutes)'
+        required: false
+        default: '40'
+  schedule:
+    # Nightly regression at 03:00 UTC
+    - cron: '0 3 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hive-prague-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  hive:
+    name: Consume-engine Prague sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    env:
+      PASS_THRESHOLD: ${{ github.event.inputs.threshold || '400' }}
+      SIM_TIMELIMIT: ${{ github.event.inputs.timelimit || '40' }}m
+      HIVE_PARALLELISM: '4'
+
+    steps:
+      - name: Checkout fukuii
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'sbt'
+
+      - name: Cache Coursier
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.ivy2/cache
+            ~/.sbt
+          key: sbt-${{ runner.os }}-${{ hashFiles('**/*.sbt', 'project/**') }}
+          restore-keys: sbt-${{ runner.os }}-
+
+      - name: Install sbt
+        run: |
+          set -euxo pipefail
+          # Retry curl — the GitHub→Azure blob redirect occasionally serves a
+          # 92-byte garbage body instead of the tarball, causing tar xz to die
+          # with "not in gzip format". --retry-all-errors handles that.
+          curl -L --fail --retry 5 --retry-delay 5 --retry-all-errors \
+            -o /tmp/sbt.tgz \
+            https://github.com/sbt/sbt/releases/download/v1.10.7/sbt-1.10.7.tgz
+          # Verify the download is an actual gzip tarball before extracting.
+          file /tmp/sbt.tgz
+          tar xz -C /tmp -f /tmp/sbt.tgz
+          sudo ln -sf /tmp/sbt/bin/sbt /usr/local/bin/sbt
+          sbt --version
+
+      - name: Build fukuii assembly
+        run: sbt -batch assembly
+
+      - name: Tag base Docker image
+        run: |
+          # The hive adapter Dockerfile does `FROM chipprbots/fukuii:latest`, so we build the
+          # base image by copying the just-built assembly into a thin overlay.
+          mkdir -p target/quick-docker
+          cp target/scala-3.3.4/fukuii-assembly-*.jar target/quick-docker/
+          cat > target/quick-docker/Dockerfile <<'DOCKER'
+          FROM eclipse-temurin:21-jre-noble
+          RUN apt-get update && apt-get install -y --no-install-recommends jq curl && rm -rf /var/lib/apt/lists/*
+          WORKDIR /app
+          RUN mkdir -p /app/fukuii/lib /app/data /app/hive-conf
+          COPY fukuii-assembly-*.jar /app/fukuii/lib/fukuii-assembly-0.1.240.jar
+          ENTRYPOINT ["java", "-jar", "/app/fukuii/lib/fukuii-assembly-0.1.240.jar"]
+          DOCKER
+          docker build -t chipprbots/fukuii:latest target/quick-docker/
+
+      - name: Check out hive
+        # Direct git clone instead of actions/checkout: the latter was silently
+        # landing zero files into external/hive (2s step, green check, empty
+        # tree). Include retries + filter=blob:none + diagnostic output so any
+        # transient GitHub/DNS/TLS hiccup self-recovers and a real failure is
+        # actionable next time.
+        run: |
+          set -euxo pipefail
+          mkdir -p external
+
+          for i in 1 2 3 4 5; do
+            rm -rf external/hive
+            if git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 \
+                 clone --depth=1 --filter=blob:none \
+                 https://github.com/ethereum/hive.git external/hive; then
+              break
+            fi
+            echo "Clone attempt $i failed; sleeping before retry..."
+            sleep $((i * 5))
+          done
+
+          if [ ! -d external/hive/.git ]; then
+            echo "::error::Failed to clone ethereum/hive after 5 retries."
+            git --version
+            curl -I https://github.com/ethereum/hive.git || true
+            exit 1
+          fi
+
+          test -f external/hive/hive.go  # fail fast if the clone landed an unexpected layout
+
+      - name: Sync fukuii hive adapter
+        run: |
+          mkdir -p external/hive/clients/fukuii
+          # Source tree path: our adapter lives at hive/fukuii/ in the fukuii repo.
+          # hive is checked out to external/hive so it doesn't shadow our adapter dir.
+          cp -v $GITHUB_WORKSPACE/hive/fukuii/Dockerfile external/hive/clients/fukuii/Dockerfile
+          cp -v $GITHUB_WORKSPACE/hive/fukuii/fukuii.sh external/hive/clients/fukuii/fukuii.sh
+          cp -v $GITHUB_WORKSPACE/hive/fukuii/mapper.jq external/hive/clients/fukuii/mapper.jq
+          cp -v $GITHUB_WORKSPACE/hive/fukuii/enode.sh external/hive/clients/fukuii/enode.sh 2>/dev/null || true
+          cp target/scala-3.3.4/fukuii-assembly-*.jar external/hive/clients/fukuii/
+
+      - name: Build hive
+        working-directory: external/hive
+        run: |
+          go version
+          # ethereum/hive's main binary lives at the repo root (hive.go),
+          # NOT under cmd/hive (which doesn't exist — cmd/ holds hivechain + hiveview).
+          go build -o hive .
+          ./hive --help | head -5
+
+      - name: Run Prague consume-engine sweep
+        working-directory: external/hive
+        run: |
+          ./hive --sim ethereum/eels/consume-engine \
+            --sim.buildarg disable_strict_exception_matching=nimbus-el,fukuii \
+            --client fukuii \
+            --sim.limit '.*fork_Prague.*' \
+            --sim.parallelism $HIVE_PARALLELISM \
+            --sim.timelimit $SIM_TIMELIMIT \
+            --client.checktimelimit=30s \
+            --loglevel 3 \
+            2>&1 | tee hive-run.log
+
+      - name: Tabulate results
+        id: tab
+        working-directory: external/hive
+        run: |
+          sim_log=$(ls -t workspace/logs/*-simulator-*.log | head -1)
+          passed=$(grep -c "PASSED tests/" "$sim_log" || true)
+          failed=$(grep -c "FAILED tests/" "$sim_log" || true)
+          total=$((passed + failed))
+          echo "passed=$passed" >> "$GITHUB_OUTPUT"
+          echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          echo "total=$total" >> "$GITHUB_OUTPUT"
+          printf '### Hive Prague sweep\n\n| | | |\n|--|--|--|\n| passed | %s | |\n| failed | %s | |\n| total | %s | |\n| threshold | %s | |\n' \
+            "$passed" "$failed" "$total" "$PASS_THRESHOLD" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload hive workspace logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hive-workspace-logs
+          path: external/hive/workspace/logs/
+          retention-days: 14
+
+      - name: Fail if under threshold
+        if: ${{ steps.tab.outputs.passed < env.PASS_THRESHOLD }}
+        run: |
+          echo "::error::Hive Prague sweep only passed ${{ steps.tab.outputs.passed }} tests (threshold ${{ env.PASS_THRESHOLD }})."
+          exit 1

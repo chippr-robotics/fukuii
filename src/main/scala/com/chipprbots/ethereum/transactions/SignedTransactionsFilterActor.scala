@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.transactions
 
 import org.apache.pekko.actor.Actor
+import org.apache.pekko.actor.ActorLogging
 import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.Props
 import org.apache.pekko.dispatch.BoundedMessageQueueSemantics
@@ -20,6 +21,7 @@ import com.chipprbots.ethereum.utils.Config
 
 class SignedTransactionsFilterActor(pendingTransactionsManager: ActorRef, peerEventBus: ActorRef)
     extends Actor
+    with ActorLogging
     with RequiresMessageQueue[BoundedMessageQueueSemantics] {
 
   implicit val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
@@ -27,8 +29,15 @@ class SignedTransactionsFilterActor(pendingTransactionsManager: ActorRef, peerEv
   peerEventBus ! Subscribe(MessageClassifier(Set(Codes.SignedTransactionsCode), PeerSelector.AllPeers))
 
   override def receive: Receive = { case MessageFromPeer(SignedTransactions(newTransactions), peerId) =>
-    val correctTransactions = SignedTransactionWithSender.getSignedTransactions(newTransactions)
-    pendingTransactionsManager ! ProperSignedTransactions(correctTransactions.toSet, peerId)
+    // Validate signatures asynchronously to avoid blocking the actor for large batches.
+    // With 2000 txs, synchronous ECDSA recovery takes 24+ seconds, exceeding test timeouts.
+    import scala.concurrent.Future
+    val txs = newTransactions
+    Future {
+      SignedTransactionWithSender.getSignedTransactions(txs)
+    }(context.dispatcher).foreach { correctTransactions =>
+      pendingTransactionsManager ! ProperSignedTransactions(correctTransactions.toSet, peerId)
+    }(context.dispatcher)
   }
 }
 

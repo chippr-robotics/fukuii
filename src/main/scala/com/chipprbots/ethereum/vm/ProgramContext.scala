@@ -21,6 +21,11 @@ object ProgramContext {
     val gasLimit =
       tx.gasLimit - evmConfig.calcTransactionIntrinsicGas(tx.payload, tx.isContractInit, accessList, authListSize)
 
+    val blobHashes = tx match {
+      case blob: BlobTransaction => blob.blobVersionedHashes
+      case _                     => Seq.empty
+    }
+
     ProgramContext(
       callerAddr = senderAddress,
       originAddr = senderAddress,
@@ -38,7 +43,8 @@ object ProgramContext {
       evmConfig = evmConfig,
       originalWorld = world,
       warmAddresses = accessList.map(_.address).toSet,
-      warmStorage = accessList.flatMap(i => i.storageKeys.map((i.address, _))).toSet
+      warmStorage = accessList.flatMap(i => i.storageKeys.map((i.address, _))).toSet,
+      blobVersionedHashes = blobHashes
     )
   }
 }
@@ -104,5 +110,11 @@ case class ProgramContext[W <: WorldStateProxy[W, S], S <: Storage[S]](
     originalWorld: W,
     warmAddresses: Set[Address],
     warmStorage: Set[(Address, BigInt)],
-    transientStorage: Map[(Address, BigInt), BigInt] = Map.empty
+    transientStorage: Map[(Address, BigInt), BigInt] = Map.empty,
+    precompileRelocations: Map[Address, Address] = Map.empty,
+    blobVersionedHashes: Seq[ByteString] = Seq.empty,
+    traceTransfers: Boolean = false,
+    // Optional opcode-level tracer (debug_trace*). None is the fast default; Some
+    // enables per-step capture in the VM exec loop.
+    tracer: Option[ExecutionTracer] = None
 )

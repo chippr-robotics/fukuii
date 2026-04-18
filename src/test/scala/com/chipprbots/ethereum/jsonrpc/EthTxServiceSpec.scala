@@ -380,7 +380,7 @@ class EthTxServiceSpec
     val request: GetTransactionReceiptRequest = GetTransactionReceiptRequest(contractCreatingTransaction.hash)
     val response: ServiceResponse[GetTransactionReceiptResponse] = ethTxService.getTransactionReceipt(request)
 
-    response.unsafeRunSync() shouldEqual Right(
+    response.unsafeRunSync() shouldBe Right(
       GetTransactionReceiptResponse(
         Some(
           TransactionReceiptResponse(
@@ -389,7 +389,8 @@ class EthTxServiceSpec
             signedTransactionSender = contractCreatingTransactionSender,
             transactionIndex = 1,
             blockHeader = Fixtures.Blocks.Block3125369.header,
-            gasUsedByTransaction = gasUsedByTx
+            gasUsedByTransaction = gasUsedByTx,
+            baseLogIndex = 0
           )
         )
       )

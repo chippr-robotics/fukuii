@@ -114,13 +114,18 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
       override val blockCacheSize: Long = 33554432
     }
 
-  sealed trait LocalPruningConfigBuilder extends PruningConfigBuilder {
+  sealed trait LocalPruningConfigBuilder
+      extends PruningConfigBuilder
+      with com.chipprbots.ethereum.TestInstanceConfigProvider {
     override val pruningMode: PruningMode = ArchivePruning
   }
 
   lazy val nodeStatusHolder = new AtomicReference(nodeStatus)
   lazy val storagesInstance: RocksDbDataSourceComponent with LocalPruningConfigBuilder with Storages.DefaultStorages =
-    new RocksDbDataSourceComponent with LocalPruningConfigBuilder with Storages.DefaultStorages {
+    new RocksDbDataSourceComponent
+      with LocalPruningConfigBuilder
+      with Storages.DefaultStorages
+      with com.chipprbots.ethereum.TestInstanceConfigProvider {
       override lazy val dataSource: RocksDbDataSource =
         RocksDbDataSource(getRockDbTestConfig(tempDir.toAbsolutePath.toString), Namespaces.nsSeq)
     }
@@ -178,7 +183,7 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
     override val maxPendingPeers = 5
     override val pruneIncomingPeers = 0
     override val minPruneAge: FiniteDuration = 1.minute
-    override val networkId: Int = 1
+    override val networkId: Long = 1L
     override val p2pVersion: Int = Config.Network.peer.p2pVersion
 
     override val updateNodesInitialDelay: FiniteDuration = 5.seconds
@@ -232,10 +237,28 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
     "etc-peer-manager"
   )
 
+  // Integration-test fake peer — PendingTransactionsManager isn't exercised by the sync harness,
+  // so an actor that discards everything suffices to satisfy the ctor requirement added with the
+  // txpool_* namespace.
+  lazy val pendingTransactionsManagerStub: ActorRef =
+    system.actorOf(
+      org.apache.pekko.actor.Props(new org.apache.pekko.actor.Actor {
+        def receive: Receive = { case _ => () }
+      }),
+      s"pending-txs-stub-${System.nanoTime()}"
+    )
+
   val blockchainHost: ActorRef =
     system.actorOf(
       BlockchainHostActor
-        .props(blockchainReader, storagesInstance.storages.evmCodeStorage, peerConf, peerEventBus, etcPeerManager),
+        .props(
+          blockchainReader,
+          storagesInstance.storages.evmCodeStorage,
+          peerConf,
+          peerEventBus,
+          etcPeerManager,
+          pendingTransactionsManagerStub
+        ),
       "blockchain-host"
     )
 

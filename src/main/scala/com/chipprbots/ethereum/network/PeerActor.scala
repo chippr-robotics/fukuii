@@ -143,13 +143,19 @@ class PeerActor[R <: HandshakeResult](
           }
           handshaker.respondToRequest(msg).foreach(msgToSend => rlpxConnection.sendMessage(msgToSend))
 
-        case RLPxConnectionHandler.MessageReceived(msg) =>
+        case msgReceived @ RLPxConnectionHandler.MessageReceived(msg) =>
           // Processes the received message, cancels the timeout and processes a new message but only if the handshaker
-          // handles the received message
+          // handles the received message. If the handshaker doesn't handle it (returns None), stash
+          // it for delivery after handshake completes — this handles the case where Status and
+          // subsequent messages (e.g. Transactions) arrive in the same TCP segment.
           log.debug("Message received: {} from peer {}", msg, peerAddress)
-          handshaker.applyMessage(msg).foreach { newHandshaker =>
-            timeout.cancel()
-            processHandshakerNextMessage(newHandshaker, remoteNodeId, rlpxConnection, numRetries)
+          handshaker.applyMessage(msg) match {
+            case Some(newHandshaker) =>
+              timeout.cancel()
+              processHandshakerNextMessage(newHandshaker, remoteNodeId, rlpxConnection, numRetries)
+            case None =>
+              log.debug("Stashing message during handshake: {}", msg.getClass.getSimpleName)
+              stash()
           }
           handshaker.respondToRequest(msg).foreach(msgToSend => rlpxConnection.sendMessage(msgToSend))
 
@@ -334,8 +340,32 @@ class PeerActor[R <: HandshakeResult](
         .orElse {
 
           case RLPxConnectionHandler.MessageReceived(message) =>
-            MessageLogger.logMessage(peerId, message)
-            peerEventBus ! Publish(MessageFromPeer(message, peerId))
+            // ETH/69: Validate BlockRangeUpdate — disconnect on invalid
+            message match {
+              case bru: com.chipprbots.ethereum.network.p2p.messages.ETH69.BlockRangeUpdate =>
+                if (
+                  bru.earliestBlock > bru.latestBlock || bru.latestBlockHash == org.apache.pekko.util.ByteString(
+                    new Array[Byte](32)
+                  )
+                ) {
+                  log.warning(
+                    "Invalid BlockRangeUpdate from peer {}: earliest={} > latest={} — disconnecting",
+                    peerId,
+                    bru.earliestBlock,
+                    bru.latestBlock
+                  )
+                  disconnectFromPeer(
+                    rlpxConnection,
+                    com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.Reasons.BreachOfProtocol
+                  )
+                } else {
+                  MessageLogger.logMessage(peerId, message)
+                  peerEventBus ! Publish(MessageFromPeer(message, peerId))
+                }
+              case _ =>
+                MessageLogger.logMessage(peerId, message)
+                peerEventBus ! Publish(MessageFromPeer(message, peerId))
+            }
 
           case DisconnectPeer(reason) =>
             disconnectFromPeer(rlpxConnection, reason)

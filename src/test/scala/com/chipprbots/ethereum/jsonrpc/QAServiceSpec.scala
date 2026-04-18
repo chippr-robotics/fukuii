@@ -48,7 +48,7 @@ class QAServiceSpec
     qaService.mineBlocks(mineBlocksReq).map(_ shouldBe Left(JsonRpcError.InternalError))
   }
 
-  class Fixture extends BlockchainConfigBuilder {
+  class Fixture extends BlockchainConfigBuilder with com.chipprbots.ethereum.TestInstanceConfigProvider {
     protected trait TestMining extends Mining {
       override type Config = EthashConfig
     }

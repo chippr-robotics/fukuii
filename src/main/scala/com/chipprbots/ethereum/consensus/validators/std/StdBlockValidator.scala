@@ -15,8 +15,10 @@ import com.chipprbots.ethereum.utils.ByteUtils.or
 
 object StdBlockValidator extends BlockValidator {
 
-  /** EIP-7934: Max RLP-encoded block size (10 MiB - 2 MiB safety margin). */
-  val BlockRLPSizeCap: Long = 10L * 1024 * 1024 - 2L * 1024 * 1024 // 8,388,608
+  /** EIP-7934: Max RLP-encoded block size (10 MiB exact per spec). Activates at Osaka. Pre-Osaka chains never produce
+    * blocks near this cap in practice, so leaving unconditional is safe.
+    */
+  val BlockRLPSizeCap: Long = 10L * 1024 * 1024 // 10,485,760
 
   /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.transactionsRoot]] matches [[BlockBody.transactionList]]
     * based on validations stated in section 4.4.2 of http://paper.gavwood.com/

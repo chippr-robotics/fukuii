@@ -42,7 +42,7 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
       _ <- validateSignature(stx, blockHeader.number)
       _ <- validateNonce(stx, senderAccount.nonce)
       _ <- validateGasLimitEnoughForIntrinsicGas(stx, blockHeader.number)
-      _ <- validateTxGasLimitCap(stx, blockHeader.number)
+      _ <- validateTxGasLimitCap(stx, blockHeader.number, blockHeader.unixTimestamp)
       _ <- validateAccountHasEnoughGasToPayUpfrontCost(senderAccount.balance, upfrontGasCost)
       _ <- validateBlockHasEnoughGasLimitForTx(stx, accumGasUsed, blockHeader.gasLimit)
     } yield SignedTransactionValid
@@ -221,14 +221,21 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
     if (senderBalance >= upfrontCost) Right(SignedTransactionValid)
     else Left(TransactionSenderCantPayUpfrontCostError(upfrontCost, senderBalance))
 
-  /** EIP-7825: Validates that the transaction gas limit does not exceed the per-tx cap (30M) post-Olympia.
+  /** EIP-7825: Validates that the transaction gas limit does not exceed the per-tx cap (2^24 = 16.77M). Active on ETC
+    * post-Olympia block OR on ETH post-Osaka timestamp.
     */
   private def validateTxGasLimitCap(
       stx: SignedTransaction,
-      blockHeaderNumber: BigInt
+      blockHeaderNumber: BigInt,
+      blockHeaderTimestamp: Long
   )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid] = {
-    val isOlympiaActivated = blockHeaderNumber >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
-    if (isOlympiaActivated && stx.tx.gasLimit > TxGasLimitCap)
+    val isEth = blockchainConfig.networkType == com.chipprbots.ethereum.utils.NetworkType.ETH
+    // EIP-7825 gas cap: ETC enables at Olympia (ECIP-1121 block-based). ETH enables at Osaka
+    // timestamp (per execution-specs — Prague does NOT include EIP-7825). On ETH chains hive
+    // maps London→olympiaBlockNumber, so we must NOT trip the Olympia gate there.
+    val isOlympiaActivated = !isEth && blockHeaderNumber >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+    val isOsakaActivated = blockchainConfig.isOsakaTimestamp(blockHeaderTimestamp)
+    if ((isOlympiaActivated || isOsakaActivated) && stx.tx.gasLimit > TxGasLimitCap)
       Left(TransactionGasLimitExceedsCap(stx.tx.gasLimit, TxGasLimitCap))
     else
       Right(SignedTransactionValid)

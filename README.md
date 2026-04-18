@@ -1,4 +1,4 @@
-## <i>Alpha/Olympia Status</i>: 🟢 2,314 tests passing — [View ETC Handoff](ETC-HANDOFF.md) | [View Olympia Handoff](OLYMPIA-HANDOFF.md)
+## <i>Alpha/Olympia Status</i>: 🟢 2,314 tests passing — [View ETC Handoff](ETC-HANDOFF.md) | [View Olympia Handoff](OLYMPIA-HANDOFF.md) | 🔷 Engine API: Sepolia validated
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/chippr-robotics/fukuii/HEAD/docs/images/fukuii-hex-logo.png" alt="Fukuii Logo" width="400"/>
@@ -11,12 +11,50 @@
 > *Chordodes Fukuii is a parasitic worm that hijacks a mantis, rewires its brain, and drives it toward water. Fukuii hijacks Mantis (IOHK's abandoned Scala ETC client), rewires the codebase, and drives it toward Olympia.*
 
 # ALPHA/OLYMPIA TEST PHASE - DO NOT USE IN PRODUCTION
+
+**Build & quality**
+
 [![CI](https://github.com/chippr-robotics/fukuii/actions/workflows/ci.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/ci.yml)
 [![Docker Build](https://github.com/chippr-robotics/fukuii/actions/workflows/docker.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/docker.yml)
 [![Nightly Build](https://github.com/chippr-robotics/fukuii/actions/workflows/nightly.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/nightly.yml)
+[![Dependency Check](https://github.com/chippr-robotics/fukuii/actions/workflows/dependency-check.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/dependency-check.yml)
 [![codecov](https://codecov.io/gh/chippr-robotics/fukuii/graph/badge.svg)](https://codecov.io/gh/chippr-robotics/fukuii)
 
+**Ethereum compliance — Hive simulators** (each runs independently so failing suites stand out at a glance)
+
+[![Hive · smoke-genesis](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-smoke-genesis.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-smoke-genesis.yml)
+[![Hive · smoke-network](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-smoke-network.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-smoke-network.yml)
+[![Hive · rpc](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-rpc.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-rpc.yml)
+[![Hive · rpc-compat](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-rpc-compat.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-rpc-compat.yml)
+[![Hive · graphql](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-graphql.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-graphql.yml)
+[![Hive · devp2p](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-devp2p.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-devp2p.yml)
+[![Hive · sync](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-sync.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-sync.yml)
+[![Hive · consensus](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-consensus.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-consensus.yml)
+[![Hive · pyspec](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-pyspec.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-pyspec.yml)
+[![Hive · engine](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-engine.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-engine.yml)
+[![Hive · consume-engine](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-consume-engine.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-consume-engine.yml)
+[![Hive · consume-rlp](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-consume-rlp.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-consume-rlp.yml)
+[![Hive Prague Suite](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-prague.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-prague.yml)
+[![Ethereum Tests](https://github.com/chippr-robotics/fukuii/actions/workflows/ethereum-tests-nightly.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/ethereum-tests-nightly.yml)
+
+**Release & docs**
+
+[![Release](https://github.com/chippr-robotics/fukuii/actions/workflows/release.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/release.yml)
+[![Fast Distro](https://github.com/chippr-robotics/fukuii/actions/workflows/fast-distro.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/fast-distro.yml)
+[![Docs Preview](https://github.com/chippr-robotics/fukuii/actions/workflows/docs-preview.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/docs-preview.yml)
+[![GitHub Pages](https://github.com/chippr-robotics/fukuii/actions/workflows/gh-pages.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/gh-pages.yml)
+
+**Project metadata**
+
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Scala](https://img.shields.io/badge/Scala-3.3.4%20LTS-DC322F?logo=scala&logoColor=white)](https://www.scala-lang.org/)
+[![JDK](https://img.shields.io/badge/JDK-21%20LTS-orange?logo=openjdk&logoColor=white)](https://adoptium.net/)
+[![Latest Release](https://img.shields.io/github/v/release/chippr-robotics/fukuii?include_prereleases&sort=semver)](https://github.com/chippr-robotics/fukuii/releases)
+[![Docker Pulls](https://img.shields.io/docker/pulls/chipprbots/fukuii.svg)](https://hub.docker.com/r/chipprbots/fukuii)
+
 Fukuii is a continuation and re‑branding of the Ethereum Classic client previously known as Mantis. Mantis was developed by Input Output (HK) as a Scala client for the Ethereum Classic (ETC) network. This project is an independent fork maintained by Chippr Robotics LLC with the aim of modernising the codebase and ensuring long‑term support.
+
+With the Engine API implementation (V1-V4, through Prague/Electra), Fukuii now operates as a **dual ETC/ETH execution client**. When paired with any Ethereum consensus layer client (Lighthouse, Prysm, Teku, Lodestar, Nimbus), Fukuii can sync and follow Ethereum mainnet and testnets via the standard Engine API protocol. This has been validated on the Sepolia testnet with 21+ EL peers and a Lighthouse consensus layer.
 
 Fukuii retains the robust architecture and ETC compatibility of Mantis while introducing new features, updated dependencies and a streamlined build. This fork has been renamed throughout the code and documentation:
 - Executable scripts are renamed from mantis to fukuii.
@@ -42,6 +80,7 @@ This project uses GitHub Actions for continuous integration and delivery:
 - 🚀 **One-Click Releases**: Automated releases with CHANGELOG, SBOM, and artifacts
 - 📝 **Release Drafter**: Auto-generated release notes from PRs
 - 📊 **Dependency Checks**: Weekly dependency monitoring
+- 🐝 **Hive Compliance**: The full Ethereum Foundation [Hive](https://github.com/ethereum/hive) simulator suite — `smoke-{genesis,network}`, `rpc`, `rpc-compat`, `graphql`, `devp2p`, `sync`, `consensus`, `pyspec`, `engine`, `consume-engine`, `consume-rlp` — is split into one GitHub Actions workflow per simulator (see the badges above) so any single failing suite is immediately visible. Each workflow invokes the shared [`_hive-sim.yml`](.github/workflows/_hive-sim.yml) reusable workflow; [`hive-prague.yml`](.github/workflows/hive-prague.yml) remains the threshold-gated PR check for Pectra-era regressions. Client adapter lives at [`hive/fukuii/`](hive/fukuii).
 
 **Release Automation Features:**
 - Auto-generated CHANGELOG from commit history
@@ -110,6 +149,47 @@ Fukuii is developed with AI-assisted engineering (Claude) as a core methodology 
 Enable MCP by adding `"mcp"` to `fukuii.network.rpc.apis` in your configuration.
 
 See [MCP Documentation](docs/MCP.md) for detailed integration instructions with AI assistants.
+
+### 🔷 Engine API — Dual ETC/ETH Execution
+
+Fukuii implements the Ethereum Engine API (V1-V4), enabling it to operate as a full execution layer client for post-Merge Ethereum networks:
+
+- **Engine API V1-V4**: Complete implementation through Prague/Electra, including `engine_newPayloadV1-V4`, `engine_forkchoiceUpdatedV1-V3`, `engine_getPayloadV1-V4`, `engine_exchangeCapabilities`, `engine_getClientVersionV1`, `engine_getBlobsV1`, and payload body retrieval
+- **Any CL Client**: Pairs with Lighthouse, Prysm, Teku, Lodestar, or Nimbus via JWT-authenticated authrpc port (default 8551)
+- **Optimistic Block Import**: Follows the CL chain tip via checkpoint sync, with automatic fallback to full execution when state is available
+- **Post-Merge Validation**: Block header validation for PoS blocks (difficulty=0, nonce=0, empty ommers, withdrawalsRoot, blobGas, requestsHash)
+- **EIP Support**: EIP-4895 withdrawals, EIP-4844 blob transactions, EIP-4788 beacon root contract, EIP-7685 execution requests, EIP-6122 timestamp ForkID
+
+**Supported ETH Networks:**
+
+| Network | Chain ID | Status |
+|---------|----------|--------|
+| Sepolia | 11155111 | Validated — 21+ EL peers, Lighthouse CL |
+| Ethereum Mainnet | 1 | Configuration available |
+
+**Quick Start (Sepolia with Lighthouse):**
+
+```bash
+cd ops/barad-dur/sepolia
+openssl rand -hex 32 > jwt.hex    # generate JWT secret
+docker compose up -d
+docker compose logs -f fukuii-sepolia   # watch EL
+docker compose logs -f lighthouse       # watch CL
+```
+
+See [`ops/barad-dur/sepolia/`](ops/barad-dur/sepolia/) for the full deployment configuration including Grafana dashboard.
+
+### 🔮 Pluggable Consensus Architecture
+
+The Engine API implementation is the first step toward Fukuii's long-term architecture: a **pluggable consensus, multi-network runtime** with three layers:
+
+1. **fukuii-core** — Consensus-agnostic EVM execution engine, state storage, and JSON-RPC
+2. **fukuii-env** — Per-network chain parameters, genesis, fork schedules, and gas mechanics
+3. **Consensus Module** — Swappable backends: PoW (ETC), Engine API (ETH), PoA, OP-style derivation, ZK verification, or checkpoint-based sidechains (Orbita)
+
+This enables running ETC mainnet, ETH mainnet/testnets, L2 rollups, and application-specific chains from a single codebase. The design draws from ETCDEV's Orbita sidechain proposal (ETC Summit 2018) — an "orbita" is a chain instance within the fukuii runtime.
+
+For the full architectural vision, see [Pluggable Consensus & Multi-Network Architecture](docs/architecture/pluggable-consensus-vision.md).
 
 ## Getting started
 

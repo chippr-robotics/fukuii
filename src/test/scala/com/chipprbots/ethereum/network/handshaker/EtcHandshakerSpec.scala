@@ -327,7 +327,7 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     UnitTest,
     NetworkTest
   ) in new LocalPeerETH63Setup with RemotePeerETH63Setup {
-    val wrongNetworkId: Int = localStatus.networkId + 1
+    val wrongNetworkId: Long = localStatus.networkId + 1
 
     val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] = initHandshakerWithResolver.applyMessage(remoteHello)
     val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =

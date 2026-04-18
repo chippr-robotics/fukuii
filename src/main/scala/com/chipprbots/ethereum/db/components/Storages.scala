@@ -49,12 +49,14 @@ object Storages {
 
       override val flatSlotStorage: FlatSlotStorage = new FlatSlotStorage(dataSource)
 
+      override val flatAccountStorage: FlatAccountStorage = new FlatAccountStorage(dataSource)
+
       override val stateStorage: StateStorage =
         StateStorage(
           pruningMode,
           nodeStorage,
           new LruCache[NodeHash, HeapEntry](
-            Config.InMemoryPruningNodeCacheConfig,
+            Config.inMemoryPruningNodeCacheConfig,
             Some(CachedReferenceCountedStorage.saveOnlyNotificationHandler(nodeStorage))
           )
         )

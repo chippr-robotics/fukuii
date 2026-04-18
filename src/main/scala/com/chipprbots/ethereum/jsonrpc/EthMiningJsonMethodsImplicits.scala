@@ -24,7 +24,8 @@ object EthMiningJsonMethodsImplicits extends JsonMethodsImplicits {
         val powHeaderHash = encodeAsHex(t.powHeaderHash)
         val dagSeed = encodeAsHex(t.dagSeed)
         val target = encodeAsHex(t.target)
-        JArray(List(powHeaderHash, dagSeed, target))
+        val blockNumber = encodeAsHex(t.blockNumber)
+        JArray(List(powHeaderHash, dagSeed, target, blockNumber))
       }
     }
 

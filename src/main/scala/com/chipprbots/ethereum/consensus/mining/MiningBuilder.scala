@@ -11,7 +11,6 @@ import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.nodebuilder.NodeKeyBuilder
 import com.chipprbots.ethereum.nodebuilder.StorageBuilder
 import com.chipprbots.ethereum.nodebuilder.VmBuilder
-import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Logger
 
 trait MiningBuilder {
@@ -32,9 +31,10 @@ trait StdMiningBuilder extends MiningBuilder {
     with BlockchainConfigBuilder
     with MiningConfigBuilder
     with NodeKeyBuilder
+    with com.chipprbots.ethereum.utils.InstanceConfigProvider
     with Logger =>
 
-  private lazy val fukuiiConfig = Config.config
+  private lazy val fukuiiConfig = instanceConfig.config
 
   lazy val coinbaseProvider: CoinbaseProvider = new CoinbaseProvider(miningConfig.coinbase)
 
@@ -50,7 +50,7 @@ trait StdMiningBuilder extends MiningBuilder {
 
     val additionalPoWData: AdditionalPoWProtocolData = miningConfig.protocol match {
       case Protocol.PoW | Protocol.MockedPow | Protocol.EngineApi => NoAdditionalPoWData
-      case Protocol.RestrictedPoW                                  => RestrictedPoWMinerData(nodeKey)
+      case Protocol.RestrictedPoW                                 => RestrictedPoWMinerData(nodeKey)
     }
 
     val mining =
@@ -74,7 +74,7 @@ trait StdMiningBuilder extends MiningBuilder {
     val mining =
       config.protocol match {
         case Protocol.PoW | Protocol.MockedPow | Protocol.RestrictedPoW => buildPoWMining()
-        case Protocol.EngineApi =>
+        case Protocol.EngineApi                                         =>
           // Engine API mode reuses PoW mining infrastructure for block building
           // but skips Ethash sealing (blocks come from CL)
           buildPoWMining()

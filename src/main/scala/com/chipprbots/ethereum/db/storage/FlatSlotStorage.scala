@@ -8,6 +8,7 @@ import fs2.Stream
 
 import com.chipprbots.ethereum.db.dataSource.DataSource
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
+import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError
 
 /** Flat storage for contract storage slots — O(1) reads by (accountHash, slotHash).
@@ -47,6 +48,38 @@ class FlatSlotStorage(val dataSource: DataSource) extends TransactionalKeyValueS
         (accountHash ++ slotHash) -> value
       }
     )
+
+  /** Seek-based range scan for a specific account's storage slots. Seeks to accountHash ++ startSlotHash and returns
+    * (slotHash, value) pairs while the key prefix matches accountHash (32 bytes).
+    *
+    * Mirrors Besu's BonsaiFlatDbStrategy.storageToPairStream — streamFromKey on ACCOUNT_STORAGE_STORAGE with
+    * takeWhile(key.slice(0,32) == accountHash).
+    *
+    * Requires the underlying DataSource to be a RocksDbDataSource.
+    */
+  def seekStorageRange(
+      accountHash: ByteString,
+      startSlotHash: ByteString
+  ): Stream[IO, Either[IterationError, (ByteString, ByteString)]] =
+    dataSource match {
+      case rdb: RocksDbDataSource =>
+        val seekKey = (accountHash ++ startSlotHash).toArray
+        val accountPrefix = accountHash.toArray
+        rdb
+          .seekFrom(namespace, seekKey)
+          .takeWhile {
+            case Right((key, _)) =>
+              key.length >= 32 && java.util.Arrays.equals(key, 0, 32, accountPrefix, 0, 32)
+            case Left(_) => false
+          }
+          .map {
+            case Right((key, value)) =>
+              Right((ByteString.fromArrayUnsafe(key.drop(32)), ByteString.fromArrayUnsafe(value)))
+            case left => left.asInstanceOf[Either[IterationError, (ByteString, ByteString)]]
+          }
+      case _ =>
+        Stream.empty
+    }
 
   override def storageContent: Stream[IO, Either[IterationError, (ByteString, ByteString)]] =
     dataSource.iterate(namespace).map { result =>

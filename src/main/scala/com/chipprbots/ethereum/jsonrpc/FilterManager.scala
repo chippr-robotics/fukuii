@@ -123,7 +123,7 @@ class FilterManager(
   }
 
   private def getLogs(filter: LogFilter, startingBlockNumber: Option[BigInt] = None): Seq[TxLog] = {
-    val bytesToCheckInBloomFilter = filter.address.map(a => Seq(a.bytes)).getOrElse(Nil) ++ filter.topics.flatten
+    val bytesToCheckInBloomFilter = filter.address.map(_.map(_.bytes)).getOrElse(Nil) ++ filter.topics.flatten
 
     @tailrec
     def recur(currentBlockNumber: BigInt, toBlockNumber: BigInt, logsSoFar: Seq[TxLog]): Seq[TxLog] =
@@ -199,33 +199,44 @@ class FilterManager(
   }
 
   private def getLogsFromBlock(filter: LogFilter, block: Block, receipts: Seq[Receipt]): Seq[TxLog] = {
-    val bytesToCheckInBloomFilter = filter.address.map(a => Seq(a.bytes)).getOrElse(Nil) ++ filter.topics.flatten
+    val bytesToCheckInBloomFilter = filter.address.map(_.map(_.bytes)).getOrElse(Nil) ++ filter.topics.flatten
 
+    // Track cumulative logIndex across all transactions in the block
+    var blockLogIndex = 0
     receipts.zipWithIndex.foldLeft(Nil: Seq[TxLog]) { case (logsSoFar, (receipt, txIndex)) =>
-      if (
-        bytesToCheckInBloomFilter.isEmpty || BloomFilter.containsAnyOf(
-          receipt.logsBloomFilter,
-          bytesToCheckInBloomFilter
-        )
-      ) {
-        logsSoFar ++ receipt.logs.zipWithIndex
-          .filter { case (log, _) =>
-            filter.address.forall(_ == log.loggerAddress) && topicsMatch(log.logTopics, filter.topics)
-          }
-          .map { case (log, logIndex) =>
-            val tx = block.body.transactionList(txIndex)
-            TxLog(
-              logIndex = logIndex,
-              transactionIndex = txIndex,
-              transactionHash = tx.hash,
-              blockHash = block.header.hash,
-              blockNumber = block.header.number,
-              address = log.loggerAddress,
-              data = log.data,
-              topics = log.logTopics
-            )
-          }
-      } else logsSoFar
+      val txLogs =
+        if (
+          bytesToCheckInBloomFilter.isEmpty || BloomFilter.containsAnyOf(
+            receipt.logsBloomFilter,
+            bytesToCheckInBloomFilter
+          )
+        ) {
+          receipt.logs.zipWithIndex
+            .map { case (log, localIdx) =>
+              val globalIdx = blockLogIndex + localIdx
+              (log, globalIdx)
+            }
+            .filter { case (log, _) =>
+              filter.address
+                .forall(addrs => addrs.contains(log.loggerAddress)) && topicsMatch(log.logTopics, filter.topics)
+            }
+            .map { case (log, logIndex) =>
+              val tx = block.body.transactionList(txIndex)
+              TxLog(
+                logIndex = logIndex,
+                transactionIndex = txIndex,
+                transactionHash = tx.hash,
+                blockHash = block.header.hash,
+                blockNumber = block.header.number,
+                address = log.loggerAddress,
+                data = log.data,
+                topics = log.logTopics,
+                blockTimestamp = Some(BigInt(block.header.unixTimestamp))
+              )
+            }
+        } else Nil
+      blockLogIndex += receipt.logs.size
+      logsSoFar ++ txLogs
     }
   }
 
@@ -267,9 +278,13 @@ class FilterManager(
   private def resolveBlockNumber(blockParam: BlockParam, bestBlockNumber: BigInt): BigInt =
     blockParam match {
       case BlockParam.WithNumber(blockNumber) => blockNumber
-      case BlockParam.Earliest                => 0
-      case BlockParam.Latest                  => bestBlockNumber
-      case BlockParam.Pending                 => bestBlockNumber
+      case BlockParam.WithHash(hash) =>
+        blockchainReader.getBlockHeaderByHash(hash).map(_.number).getOrElse(bestBlockNumber)
+      case BlockParam.Earliest  => 0
+      case BlockParam.Latest    => bestBlockNumber
+      case BlockParam.Safe      => bestBlockNumber
+      case BlockParam.Finalized => bestBlockNumber
+      case BlockParam.Pending   => bestBlockNumber
     }
 }
 
@@ -300,7 +315,7 @@ object FilterManager {
       override val id: BigInt,
       fromBlock: Option[BlockParam],
       toBlock: Option[BlockParam],
-      address: Option[Address],
+      address: Option[Seq[Address]],
       topics: Seq[Seq[ByteString]]
   ) extends Filter
   case class BlockFilter(override val id: BigInt) extends Filter
@@ -309,7 +324,7 @@ object FilterManager {
   case class NewLogFilter(
       fromBlock: Option[BlockParam],
       toBlock: Option[BlockParam],
-      address: Option[Address],
+      address: Option[Seq[Address]],
       topics: Seq[Seq[ByteString]]
   )
   case object NewBlockFilter
@@ -325,7 +340,7 @@ object FilterManager {
   case class GetLogs(
       fromBlock: Option[BlockParam],
       toBlock: Option[BlockParam],
-      address: Option[Address],
+      address: Option[Seq[Address]],
       topics: Seq[Seq[ByteString]]
   )
 
@@ -337,7 +352,8 @@ object FilterManager {
       blockNumber: BigInt,
       address: Address,
       data: ByteString,
-      topics: Seq[ByteString]
+      topics: Seq[ByteString],
+      blockTimestamp: Option[BigInt] = None
   )
 
   sealed trait FilterChanges

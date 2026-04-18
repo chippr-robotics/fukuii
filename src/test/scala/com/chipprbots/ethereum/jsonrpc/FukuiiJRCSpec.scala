@@ -48,7 +48,8 @@ class FukuiiJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory
     val debugService: DebugService = mock[DebugService]
     val ethService: EthInfoService = mock[EthInfoService]
     val ethMiningService: EthMiningService = mock[EthMiningService]
-    val ethBlocksService: EthBlocksService = mock[EthBlocksService]
+    // MIGRATION: Scala 3 mock cannot infer Option[ForkChoiceManager] type param — use null (fukuii tests don't call eth_blocks methods)
+    val ethBlocksService: EthBlocksService = null
     val ethTxService: EthTxService = mock[EthTxService]
     val ethUserService: EthUserService = mock[EthUserService]
     val ethFilterService: EthFilterService = mock[EthFilterService]
@@ -80,6 +81,11 @@ class FukuiiJRCSpec extends FreeSpecBase with SpecFixtures with AsyncMockFactory
         fukuiiService,
         mcpService,
         ProofServiceDummy,
+        null: EthSimulateService,
+        null: AdminService,
+        null: TxPoolService,
+        null: DebugTracingService,
+        null: TraceService,
         config
       )
 

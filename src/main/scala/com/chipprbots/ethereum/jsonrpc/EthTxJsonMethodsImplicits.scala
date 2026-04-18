@@ -15,8 +15,8 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
   import org.json4s.CustomSerializer
 
   // Manual encoder for TxLog to avoid Scala 3 reflection issues
-  private def encodeTxLog(log: FilterManager.TxLog): JValue =
-    JObject(
+  private def encodeTxLog(log: FilterManager.TxLog): JValue = {
+    val base = List(
       "logIndex" -> encodeAsHex(log.logIndex),
       "transactionIndex" -> encodeAsHex(log.transactionIndex),
       "transactionHash" -> encodeAsHex(log.transactionHash),
@@ -24,8 +24,12 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
       "blockNumber" -> encodeAsHex(log.blockNumber),
       "address" -> encodeAsHex(log.address.bytes),
       "data" -> encodeAsHex(log.data),
-      "topics" -> JArray(log.topics.toList.map(encodeAsHex))
+      "topics" -> JArray(log.topics.toList.map(encodeAsHex)),
+      "removed" -> JBool(false)
     )
+    val tsField = log.blockTimestamp.map(ts => "blockTimestamp" -> encodeAsHex(ts)).toList
+    JObject(base ::: tsField)
+  }
 
   // Custom serializers for json4s Extraction.decompose to work in tests
   implicit val transactionResponseCustomSerializer: CustomSerializer[TransactionResponse] =
@@ -55,8 +59,8 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
       "from" -> encodeAsHex(receipt.from.bytes)
     )
 
-    // Add "to" field only if it's defined (omit for contract creation)
-    val toField = receipt.to.map(addr => "to" -> encodeAsHex(addr.bytes)).toList
+    // "to" is null for contract creation, address for regular transactions
+    val toField = List("to" -> receipt.to.map(addr => encodeAsHex(addr.bytes)).getOrElse(JNull))
 
     // Continue with more fields
     val middleFields = List(
@@ -73,11 +77,19 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
     // Add "status" field only if it's defined (post-Byzantium)
     val statusField = receipt.status.map(s => "status" -> encodeAsHex(s)).toList
 
-    JObject(baseFields ::: toField ::: middleFields ::: rootField ::: statusField)
+    val typeField = receipt.`type`.map(t => "type" -> encodeAsHex(t)).toList
+    val effectiveGasPriceField = receipt.effectiveGasPrice.map(v => "effectiveGasPrice" -> encodeAsHex(v)).toList
+    val blobGasUsedField = receipt.blobGasUsed.map(v => "blobGasUsed" -> encodeAsHex(v)).toList
+    val blobGasPriceField = receipt.blobGasPrice.map(v => "blobGasPrice" -> encodeAsHex(v)).toList
+
+    JObject(
+      baseFields ::: toField ::: middleFields ::: rootField ::: statusField :::
+        typeField ::: effectiveGasPriceField ::: blobGasUsedField ::: blobGasPriceField
+    )
   }
 
   implicit val transactionResponseJsonEncoder: JsonEncoder[TransactionResponse] = { tx =>
-    JObject(
+    val baseFields = List(
       "hash" -> encodeAsHex(tx.hash),
       "nonce" -> encodeAsHex(tx.nonce),
       "blockHash" -> tx.blockHash.map(encodeAsHex).getOrElse(JNull),
@@ -89,6 +101,63 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
       "gasPrice" -> encodeAsHex(tx.gasPrice),
       "gas" -> encodeAsHex(tx.gas),
       "input" -> encodeAsHex(tx.input)
+    )
+
+    val typeField = tx.`type`.map(v => "type" -> encodeAsHex(v)).toList
+    val chainIdField = tx.chainId.map(v => "chainId" -> encodeAsHex(v)).toList
+    val maxFeeField = tx.maxFeePerGas.map(v => "maxFeePerGas" -> encodeAsHex(v)).toList
+    val maxPriorityField = tx.maxPriorityFeePerGas.map(v => "maxPriorityFeePerGas" -> encodeAsHex(v)).toList
+    val accessListField = tx.accessList.map { al =>
+      "accessList" -> JArray(al.toList.map { item =>
+        val addr = item("address") match {
+          case a: com.chipprbots.ethereum.domain.Address => encodeAsHex(a.bytes)
+          case other                                     => JString(other.toString)
+        }
+        val keys = item("storageKeys") match {
+          case ks: List[?] =>
+            JArray(ks.map {
+              case bi: BigInt =>
+                JString("0x" + bi.toString(16).reverse.padTo(64, '0').reverse)
+              case other => JString(other.toString)
+            })
+          case _ => JArray(Nil)
+        }
+        JObject("address" -> addr, "storageKeys" -> keys)
+      })
+    }.toList
+    val maxBlobFeeField = tx.maxFeePerBlobGas.map(v => "maxFeePerBlobGas" -> encodeAsHex(v)).toList
+    val blobHashesField = tx.blobVersionedHashes.map { hashes =>
+      "blobVersionedHashes" -> JArray(hashes.toList.map(encodeAsHex))
+    }.toList
+    val authListField = tx.authorizationList.map { auths =>
+      "authorizationList" -> JArray(auths.toList.map { item =>
+        val addr = item("address") match {
+          case a: com.chipprbots.ethereum.domain.Address => encodeAsHex(a.bytes)
+          case other                                     => JString(other.toString)
+        }
+        JObject(
+          "chainId" -> encodeAsHex(item("chainId").asInstanceOf[BigInt]),
+          "address" -> addr,
+          "nonce" -> encodeAsHex(item("nonce").asInstanceOf[BigInt]),
+          "yParity" -> encodeAsHex(item("yParity").asInstanceOf[BigInt]),
+          "r" -> encodeAsHex(item("r").asInstanceOf[BigInt]),
+          "s" -> encodeAsHex(item("s").asInstanceOf[BigInt])
+        )
+      })
+    }.toList
+
+    val sigFields = List(
+      tx.yParity.map(v => "yParity" -> encodeAsHex(v)),
+      tx.v.map(v => "v" -> encodeAsHex(v)),
+      tx.r.map(v => "r" -> encodeAsHex(v)),
+      tx.s.map(v => "s" -> encodeAsHex(v))
+    ).flatten
+
+    val blockTimestampField = tx.blockTimestamp.map(v => "blockTimestamp" -> encodeAsHex(v)).toList
+
+    JObject(
+      baseFields ::: typeField ::: chainIdField ::: maxFeeField ::: maxPriorityField :::
+        accessListField ::: maxBlobFeeField ::: blobHashesField ::: authListField ::: sigFields ::: blockTimestampField
     )
   }
 

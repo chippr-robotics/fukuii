@@ -129,13 +129,17 @@ class EthTxService(
           if (txIndex == 0) receipt.cumulativeGasUsed
           else receipt.cumulativeGasUsed - receipts(txIndex - 1).cumulativeGasUsed
 
+        // Compute cumulative log index from prior receipts in the block
+        val baseLogIndex = receipts.take(txIndex).map(_.logs.size).sum
+
         TransactionReceiptResponse(
           receipt = receipt,
           stx = stx,
           signedTransactionSender = sender,
           transactionIndex = txIndex,
           blockHeader = header,
-          gasUsedByTransaction = gasUsed
+          gasUsedByTransaction = gasUsed,
+          baseLogIndex = baseLogIndex
         )
       }
 
@@ -185,10 +189,13 @@ class EthTxService(
   def sendRawTransaction(req: SendRawTransactionRequest): ServiceResponse[SendRawTransactionResponse] = {
     import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions.SignedTransactionDec
 
-    Try(req.data.toArray.toSignedTransaction) match {
-      case Success(signedTransaction) =>
+    Try(req.data.toArray.toSignedTransactionWithSidecar) match {
+      case Success((signedTransaction, rawBytesOpt)) =>
         if (SignedTransaction.getSender(signedTransaction).isDefined) {
-          pendingTransactionsManager ! PendingTransactionsManager.AddOrOverrideTransaction(signedTransaction)
+          pendingTransactionsManager ! PendingTransactionsManager.AddOrOverrideTransaction(
+            signedTransaction,
+            rawBytesOpt.map(org.apache.pekko.util.ByteString(_))
+          )
           IO.pure(Right(SendRawTransactionResponse(signedTransaction.hash)))
         } else {
           IO.pure(Left(JsonRpcError.InvalidRequest))

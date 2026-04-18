@@ -18,6 +18,7 @@ object App extends Logger {
     "eth",
     "mordor",
     "sepolia",
+    "hive",
     "bootnode",
     "gorgoroth"
   )
@@ -253,6 +254,13 @@ object App extends Logger {
         }
       // HIBERNATED: vm-server case commented out
       // case Some(`vmServer`)     => VmServerApp.main(argsWithoutModifiers.tail)
+      case Some("runtime") =>
+        log.info("Starting Fukuii multi-instance runtime")
+        val rootConfig = com.typesafe.config.ConfigFactory.load()
+        val runtime = com.chipprbots.ethereum.runtime.FukuiiRuntime.fromConfig(rootConfig)
+        runtime.startAll()
+        // Block until shutdown
+        Runtime.getRuntime.addShutdownHook(new Thread(() => runtime.stopAll()))
       case Some(`faucet`)       => Faucet.main(argsWithoutModifiers.tail)
       case Some(`sigValidator`) => SignatureValidator.main(argsWithoutModifiers.tail)
       case Some(`cli`)          => CliLauncher.main(argsWithoutModifiers.tail)

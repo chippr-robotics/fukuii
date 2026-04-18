@@ -30,7 +30,7 @@ class RlpExtensionVisitor(extensionNode: ExtensionNode) extends ExtensionVisitor
   }
 }
 
-class RlpBranchVisitor(_branchNode: BranchNode) extends BranchVisitor[RLPEncodeable] {
+class RlpBranchVisitor(@annotation.unused _branchNode: BranchNode) extends BranchVisitor[RLPEncodeable] {
 
   var list: List[RLPEncodeable] = List.empty[RLPEncodeable]
 

@@ -10,7 +10,11 @@ import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
 /** EIP-7702: Verify TxAuthTupleGas = 12,500 per authorization tuple. */
-class EIP7702AuthGasSpec extends AnyFlatSpec with Matchers with BlockchainConfigBuilder {
+class EIP7702AuthGasSpec
+    extends AnyFlatSpec
+    with Matchers
+    with BlockchainConfigBuilder
+    with com.chipprbots.ethereum.TestInstanceConfigProvider {
 
   val olympiaBlock: BigInt = 10
 

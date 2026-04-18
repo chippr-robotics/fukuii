@@ -117,6 +117,9 @@
     <!-- Application lifecycle -->
     <logger name="com.chipprbots.ethereum.App" level="INFO" />
     <logger name="com.chipprbots.ethereum.Fukuii" level="INFO" />
+
+    <!-- Engine API (CL-driver): log every newPayload / forkchoice outcome for post-mortem -->
+    <logger name="com.chipprbots.ethereum.consensus.engine" level="INFO" />
     
     <!-- DAG generation progress (important for mining) -->
     <logger name="com.chipprbots.ethereum.consensus.pow.miners.EthashDAGManager" level="INFO" />

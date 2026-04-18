@@ -30,17 +30,45 @@ object EvmConfig {
   /** returns the evm config for a given block, applying timestamp-based fork overrides for post-merge ETH chains.
     */
   def forBlock(blockNumber: BigInt, timestamp: Long, blockchainConfig: BlockchainConfig): EvmConfig = {
-    val base = forBlock(blockNumber, blockchainConfig)
-    // Shanghai and Cancun are timestamp-activated on ETH chains.
-    // Fukuii already has the opcodes for these via Olympia/Spiral — they share the same EVM semantics.
-    // For Cancun, we'd add BLOBHASH/BLOBBASEFEE opcodes when those are implemented in the VM.
-    base
+    var config = forBlock(blockNumber, blockchainConfig)
+    // Apply timestamp-based fork upgrades for ETH chains
+    if (blockchainConfig.isShanghaiTimestamp(timestamp)) {
+      config = config.copy(
+        opCodeList = SpiralOpCodes, // Adds PUSH0 (EIP-3855)
+        eip3651Enabled = true, // Warm COINBASE
+        eip3860Enabled = true // Initcode metering
+      )
+    }
+    if (blockchainConfig.isCancunTimestamp(timestamp)) {
+      config = config.copy(
+        opCodeList = OlympiaOpCodes, // Adds TSTORE/TLOAD/MCOPY/BLOBHASH/BLOBBASEFEE
+        feeSchedule = new FeeSchedule.OlympiaFeeSchedule,
+        eip6780Enabled = true // SELFDESTRUCT restriction
+      )
+    }
+    if (blockchainConfig.isPragueTimestamp(timestamp)) {
+      config = config.copy(
+        feeSchedule = new FeeSchedule.PragueFeeSchedule // EIP-7623: increased calldata costs
+      )
+    }
+    if (blockchainConfig.isOsakaTimestamp(timestamp)) {
+      config = config.copy(
+        feeSchedule = new FeeSchedule.OsakaFeeSchedule,
+        opCodeList = OsakaOpCodes // EIP-7939: CLZ opcode
+      )
+    }
+    config
   }
 
   /** returns the evm config that should be used for given block
     */
   def forBlock(blockNumber: BigInt, blockchainConfig: BlockchainConfigForEvm): EvmConfig = {
-    // FIXME manage etc/eth forks in a more sophisticated way
+    // When ETC-specific forks (Spiral, Mystique) activate AFTER Olympia, the chain follows
+    // standard Ethereum fork schedule where London only activates EIP-1559/3529/3541.
+    // On ETC, Spiral < Olympia in the fork sequence, so Olympia bundles all EIPs.
+    val etcForksDisabled = blockchainConfig.spiralBlockNumber > blockchainConfig.olympiaBlockNumber
+    val olympiaBuilder = if (etcForksDisabled) LondonConfigBuilder else OlympiaConfigBuilder
+
     val transitionBlockToConfigWithPriorityMapping: List[(BigInt, Int, EvmConfigBuilder)] = List(
       (blockchainConfig.frontierBlockNumber, 1, FrontierConfigBuilder),
       (blockchainConfig.homesteadBlockNumber, 2, HomesteadConfigBuilder),
@@ -60,7 +88,7 @@ object EvmConfig {
       (blockchainConfig.berlinBlockNumber, 14, BerlinConfigBuilder),
       (blockchainConfig.mystiqueBlockNumber, 15, MystiqueConfigBuilder),
       (blockchainConfig.spiralBlockNumber, 16, SpiralConfigBuilder),
-      (blockchainConfig.olympiaBlockNumber, 17, OlympiaConfigBuilder)
+      (blockchainConfig.olympiaBlockNumber, 17, olympiaBuilder)
     )
 
     // highest transition block that is less/equal to `blockNumber`
@@ -82,6 +110,7 @@ object EvmConfig {
   val MagnetoOpCodes: OpCodeList = PhoenixOpCodes
   val SpiralOpCodes: OpCodeList = OpCodeList(OpCodes.SpiralOpCodes)
   val OlympiaOpCodes: OpCodeList = OpCodeList(OpCodes.OlympiaOpCodes)
+  val OsakaOpCodes: OpCodeList = OpCodeList(OpCodes.OsakaOpCodes)
 
   val FrontierConfigBuilder: EvmConfigBuilder = config =>
     EvmConfig(
@@ -175,6 +204,15 @@ object EvmConfig {
       eip6049DeprecationEnabled = true
     )
 
+  /** London-only config for ETH chains. Enables EIP-1559/3529/3541 without Shanghai+ EIPs. Used when Olympia block
+    * number differs from Spiral/Mystique (i.e., ETH fork schedule).
+    */
+  val LondonConfigBuilder: EvmConfigBuilder = config =>
+    MagnetoConfigBuilder(config).copy(
+      feeSchedule = new ethereum.vm.FeeSchedule.MystiqueFeeSchedule, // EIP-3529 refund changes
+      eip3541Enabled = true // EIP-3541: reject 0xEF contracts
+    )
+
   val OlympiaConfigBuilder: EvmConfigBuilder = config =>
     SpiralConfigBuilder(config).copy(
       opCodeList = OlympiaOpCodes,
@@ -257,8 +295,9 @@ case class EvmConfig(
       accessList.size * G_access_list_address +
         accessList.map(_.storageKeys.size).sum * G_access_list_storage
 
-    // EIP-7702: Per-authorization tuple gas (TxAuthTupleGas = 12,500)
-    val authListPrice: BigInt = BigInt(authorizationListSize) * BigInt(12500)
+    // EIP-7702: Per-authorization intrinsic gas = CallNewAccountGas (25000) per geth
+    // Geth refunds (25000 - 12500 = 12500) if account exists (capped at gasUsed/5)
+    val authListPrice: BigInt = BigInt(authorizationListSize) * BigInt(25000)
 
     val initCodeCost: BigInt = if (isContractCreation) calcInitCodeCost(txData) else BigInt(0)
 
@@ -406,6 +445,17 @@ object FeeSchedule {
   }
 
   class OlympiaFeeSchedule extends MystiqueFeeSchedule
+
+  /** Prague fee schedule — EIP-7623 does NOT modify G_txdatazero/G_txdatanonzero (still 4/16). Instead it adds a
+    * calldata floor via `calcFloorDataGas` applied by BlockPreparator as `max(executionGasBase, 21000 + tokens * 10)`.
+    * See BlockPreparator.calcFloorDataGas.
+    */
+  class PragueFeeSchedule extends OlympiaFeeSchedule
+
+  /** Osaka fee schedule — same as Prague. MODEXP cost doubling (EIP-7883) and input bounds (EIP-7823) are enforced
+    * inside the MODEXP precompile itself, not the fee schedule.
+    */
+  class OsakaFeeSchedule extends PragueFeeSchedule
 }
 
 trait FeeSchedule {

@@ -94,7 +94,12 @@ class QaJRCSpec
 
   // SCALA 3 MIGRATION: Changed TestSetup from trait with self-type to class
   // that receives mocks from the outer class via constructor-like pattern
-  class TestSetup extends JRCMatchers with ByteGenerators with BlockchainConfigBuilder with ApisBuilder {
+  class TestSetup
+      extends JRCMatchers
+      with ByteGenerators
+      with BlockchainConfigBuilder
+      with ApisBuilder
+      with com.chipprbots.ethereum.TestInstanceConfigProvider {
     def config: JsonRpcConfig = JsonRpcConfig(Config.config, available)
 
     val appStateStorage: AppStateStorage = mock[AppStateStorage]
@@ -117,7 +122,8 @@ class QaJRCSpec
     val debugService: DebugService = mock[DebugService]
     val ethService: EthInfoService = mock[EthInfoService]
     val ethMiningService: EthMiningService = mock[EthMiningService]
-    val ethBlocksService: EthBlocksService = mock[EthBlocksService]
+    // MIGRATION: Scala 3 mock cannot infer Option[ForkChoiceManager] type param — use null (QA tests don't call eth_blocks methods)
+    val ethBlocksService: EthBlocksService = null
     val ethTxService: EthTxService = mock[EthTxService]
     val ethUserService: EthUserService = mock[EthUserService]
     val ethFilterService: EthFilterService = mock[EthFilterService]
@@ -153,6 +159,11 @@ class QaJRCSpec
         fukuiiService,
         mcpService,
         ProofServiceDummy,
+        null: EthSimulateService,
+        null: AdminService,
+        null: TxPoolService,
+        null: DebugTracingService,
+        null: TraceService,
         config
       )
 

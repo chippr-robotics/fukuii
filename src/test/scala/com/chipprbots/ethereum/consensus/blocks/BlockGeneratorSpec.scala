@@ -591,6 +591,7 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with Logger {
       new GenesisDataLoader(
         blockchainReader,
         blockchainWriter,
+        storagesInstance.storages.evmCodeStorage,
         storagesInstance.storages.stateStorage
       )
     genesisDataLoader.loadGenesisData()

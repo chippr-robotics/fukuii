@@ -94,7 +94,8 @@ case class ProgramState[W <: WorldStateProxy[W, S], S <: Storage[S]](
     originalWorld: W,
     accessedAddresses: Set[Address],
     accessedStorageKeys: Set[(Address, BigInt)],
-    transientStorage: Map[(Address, BigInt), BigInt] = Map.empty
+    transientStorage: Map[(Address, BigInt), BigInt] = Map.empty,
+    opcodeGasCost: BigInt = 0
 ) {
 
   def config: EvmConfig = env.evmConfig

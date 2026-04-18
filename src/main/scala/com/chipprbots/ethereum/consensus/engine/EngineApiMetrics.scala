@@ -4,8 +4,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 import com.chipprbots.ethereum.metrics.MetricsContainer
 
-/** Prometheus metrics for Engine API interactions.
-  * Exposed via /metrics endpoint for Grafana dashboards.
+/** Prometheus metrics for Engine API interactions. Exposed via /metrics endpoint for Grafana dashboards.
   */
 object EngineApiMetrics extends MetricsContainer {
 

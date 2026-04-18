@@ -19,6 +19,7 @@ import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.metrics.MetricsConfig
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.network.ServerActor
+import com.chipprbots.ethereum.network.StaticNodesLoader
 import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
 import com.chipprbots.ethereum.nodebuilder.tooling.PeriodicConsistencyCheck
 import com.chipprbots.ethereum.nodebuilder.tooling.StorageConsistencyChecker
@@ -38,48 +39,44 @@ abstract class BaseNode extends Node {
   private var tuiUpdater: Option[TuiUpdater] = None
 
   def start(): Unit = {
+    // Phase 1: Essential initialization (must complete before anything else)
     startMetricsClient()
-
     fixDatabase()
-
     loadGenesisData()
+    importChainData() // Must complete before APIs so queries return chain data
 
-    runDBConsistencyCheck()
-
-    startPeerManager()
-
-    startPortForwarding()
-
-    startServer()
-
-    startSyncController()
-
-    startMining()
-
-    startDiscoveryManager()
-
+    // Phase 2: API servers (user-facing, ready as early as possible)
     startJsonRpcHttpServer()
-
+    startJsonRpcWsServer()
     startJsonRpcIpcServer()
-
     startEngineApiServer()
 
-    startPeriodicDBConsistencyCheck()
+    // Phase 3: P2P networking
+    startPeerManager()
+    loadStaticNodes()
+    startPortForwarding()
+    startServer()
+    startDiscoveryManager()
 
+    // Phase 5: Background work
+    startSyncController()
+    startMining()
+
+    // Phase 6: Non-critical maintenance
+    runDBConsistencyCheck()
+    startPeriodicDBConsistencyCheck()
     startTuiUpdater()
   }
 
   private[this] def startMetricsClient(): Unit = {
-    val rootConfig = com.typesafe.config.ConfigFactory.load()
-    val fukuiiConfig = rootConfig.getConfig("fukuii")
-    val metricsConfig = MetricsConfig(fukuiiConfig)
-    Metrics.configure(metricsConfig) match {
+    val metricsConfig = MetricsConfig(instanceConfig.config)
+    Metrics.configure(metricsConfig, instanceConfig.instanceId) match {
       case Success(_) =>
         log.info("Metrics started")
 
         if (metricsConfig.enabled) {
           val snapSyncEnabled =
-            Try(fukuiiConfig.getConfig("sync").getBoolean("do-snap-sync")).getOrElse(false)
+            Try(instanceConfig.config.getConfig("sync").getBoolean("do-snap-sync")).getOrElse(false)
 
           if (snapSyncEnabled) {
             // Ensure app_snapsync_* series exist even before SNAP sync starts.
@@ -94,6 +91,15 @@ abstract class BaseNode extends Node {
     if (!Config.testmode) {
       genesisDataLoader.loadGenesisData()
     }
+
+  private[this] def importChainData(): Unit = {
+    val chainFile = scala.util.Try(instanceConfig.config.getString("import-chain-file")).toOption
+    chainFile.foreach { path =>
+      log.info(s"Importing chain data from: $path")
+      val (imported, skipped, failed) = chainImporter.importChainFile(path)
+      log.info(s"Chain import: $imported imported, $skipped skipped, $failed failed")
+    }
+  }
 
   private[this] def runDBConsistencyCheck(): Unit = {
     // Skip consistency check after SNAP sync — block headers 0..pivot don't exist yet.
@@ -119,6 +125,23 @@ abstract class BaseNode extends Node {
 
   private[this] def startPeerManager(): Unit = peerManager ! PeerManagerActor.StartConnecting
 
+  /** Load static peer nodes from ${datadir}/static-nodes.json and add each to the maintained-peers set.
+    *
+    * Besu reference: StaticNodesParser.fromPath() → DefaultP2PNetwork adds each to MaintainedPeers. Static peers are
+    * maintained connections: the node will always attempt to reconnect on disconnect.
+    */
+  private[this] def loadStaticNodes(): Unit = {
+    val datadir = instanceConfig.config.getString("datadir")
+    val nodes = StaticNodesLoader.load(datadir)
+    if (nodes.nonEmpty) {
+      log.info("Loading {} static peer(s) from {}/{}", nodes.size, datadir, StaticNodesLoader.FileName)
+      nodes.foreach { uri =>
+        peerManager ! PeerManagerActor.AddMaintainedPeer(uri)
+        log.debug("Static peer added: {}", uri)
+      }
+    }
+  }
+
   private[this] def startServer(): Unit = server ! ServerActor.StartServer(networkConfig.Server.listenAddress)
 
   private[this] def startSyncController(): Unit = syncController ! SyncProtocol.Start
@@ -134,13 +157,24 @@ abstract class BaseNode extends Node {
       case _                                                              => // Nothing
     }
 
+  private[this] def startJsonRpcWsServer(): Unit =
+    if (jsonRpcConfig.wsServerConfig.enabled) jsonRpcWsServer.run()
+
   private[this] def startJsonRpcIpcServer(): Unit =
     if (jsonRpcConfig.ipcServerConfig.enabled) jsonRpcIpcServer.run()
 
   private[this] def startEngineApiServer(): Unit =
     maybeEngineApiServer.foreach { server =>
-      server.start()
-      log.info(s"Engine API server started on ${engineApiConfig.interface}:${engineApiConfig.port}")
+      try {
+        val binding = scala.concurrent.Await.result(
+          server.start(),
+          scala.concurrent.duration.Duration(10, "seconds")
+        )
+        log.info(s"Engine API server bound to ${binding.localAddress}")
+      } catch {
+        case ex: Exception =>
+          log.error(s"Engine API server failed to start on ${engineApiConfig.interface}:${engineApiConfig.port}", ex)
+      }
     }
 
   def startPeriodicDBConsistencyCheck(): Unit =
@@ -152,7 +186,7 @@ abstract class BaseNode extends Node {
           storagesInstance.storages.blockHeadersStorage,
           shutdown
         ),
-        "PeriodicDBConsistencyCheck"
+        s"PeriodicDBConsistencyCheck_${instanceConfig.instanceId}"
       )
 
   private[this] def startTuiUpdater(): Unit = {
@@ -218,4 +252,9 @@ abstract class BaseNode extends Node {
   }
 }
 
-class StdNode extends BaseNode with StdMiningBuilder
+class StdNode(
+    _instanceConfig: com.chipprbots.ethereum.utils.InstanceConfig = com.chipprbots.ethereum.utils.Config
+) extends BaseNode
+    with StdMiningBuilder {
+  override lazy val instanceConfig: com.chipprbots.ethereum.utils.InstanceConfig = _instanceConfig
+}

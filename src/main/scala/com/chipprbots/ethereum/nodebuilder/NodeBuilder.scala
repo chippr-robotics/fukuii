@@ -21,7 +21,7 @@ import scala.util.Try
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 
-import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader
+import com.chipprbots.ethereum.blockchain.data.{ChainImporter, GenesisDataLoader}
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.BlockchainHostActor
 import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
@@ -67,64 +67,81 @@ import com.chipprbots.ethereum.utils._
 
 // scalastyle:off number.of.types
 trait BlockchainConfigBuilder {
-  protected lazy val initBlockchainConfig = Config.blockchains.blockchainConfig
+  self: InstanceConfigProvider =>
+  protected lazy val initBlockchainConfig = instanceConfig.blockchains.blockchainConfig
   implicit def blockchainConfig: BlockchainConfig = initBlockchainConfig
 }
 
 trait VmConfigBuilder {
-  lazy val vmConfig: VmConfig = VmConfig(Config.config)
+  self: InstanceConfigProvider =>
+  lazy val vmConfig: VmConfig = VmConfig(instanceConfig.config)
 }
 
 trait SyncConfigBuilder {
-  lazy val syncConfig: SyncConfig = SyncConfig(Config.config)
+  self: InstanceConfigProvider =>
+  lazy val syncConfig: SyncConfig = SyncConfig(instanceConfig.config)
 }
 
 trait TxPoolConfigBuilder {
-  lazy val txPoolConfig: TxPoolConfig = TxPoolConfig(Config.config)
+  self: InstanceConfigProvider =>
+  lazy val txPoolConfig: TxPoolConfig = TxPoolConfig(instanceConfig.config)
 }
 
 trait FilterConfigBuilder {
-  lazy val filterConfig: FilterConfig = FilterConfig(Config.config)
+  self: InstanceConfigProvider =>
+  lazy val filterConfig: FilterConfig = FilterConfig(instanceConfig.config)
 }
 
 trait KeyStoreConfigBuilder {
-  lazy val keyStoreConfig: KeyStoreConfig = KeyStoreConfig(Config.config)
+  self: InstanceConfigProvider =>
+  lazy val keyStoreConfig: KeyStoreConfig = KeyStoreConfig(instanceConfig.config)
 }
 
 trait NodeKeyBuilder {
-  self: SecureRandomBuilder =>
-  lazy val nodeKey: AsymmetricCipherKeyPair = loadAsymmetricCipherKeyPair(Config.nodeKeyFile, secureRandom)
+  self: SecureRandomBuilder with InstanceConfigProvider =>
+  lazy val nodeKey: AsymmetricCipherKeyPair = loadAsymmetricCipherKeyPair(instanceConfig.nodeKeyFile, secureRandom)
 }
 
 trait AsyncConfigBuilder {
-  val asyncConfig: AsyncConfig = AsyncConfig(Config.config)
+  self: InstanceConfigProvider =>
+  val asyncConfig: AsyncConfig = AsyncConfig(instanceConfig.config)
 }
 
 trait ActorSystemBuilder {
-  implicit lazy val system: ActorSystem = ActorSystem("fukuii_system", ConfigFactory.load())
+  self: InstanceConfigProvider =>
+  implicit lazy val system: ActorSystem = ActorSystem(s"fukuii_${instanceConfig.instanceId}", ConfigFactory.load())
 }
 
 trait PruningConfigBuilder extends PruningModeComponent {
-  override val pruningMode: PruningMode = PruningConfig(Config.config).mode
+  self: InstanceConfigProvider =>
+  override val pruningMode: PruningMode = PruningConfig(instanceConfig.config).mode
 }
 
 trait StorageBuilder {
+  self: InstanceConfigProvider =>
   lazy val storagesInstance: DataSourceComponent with StoragesComponent with PruningModeComponent =
-    Config.Db.dataSource match {
-      case "rocksdb" => new RocksDbDataSourceComponent with PruningConfigBuilder with Storages.DefaultStorages
+    instanceConfig.Db.dataSource match {
+      case "rocksdb" =>
+        new RocksDbDataSourceComponent
+          with PruningConfigBuilder
+          with Storages.DefaultStorages
+          with InstanceConfigProvider {
+          override def instanceConfig: InstanceConfig = self.instanceConfig
+        }
     }
 }
 
 trait DiscoveryConfigBuilder extends BlockchainConfigBuilder {
+  self: InstanceConfigProvider =>
   lazy val discoveryConfig: DiscoveryConfig =
-    DiscoveryConfig(Config.config, blockchainConfig.bootstrapNodes, blockchainConfig.dnsDiscoveryDomains)
+    DiscoveryConfig(instanceConfig.config, blockchainConfig.bootstrapNodes, blockchainConfig.dnsDiscoveryDomains)
 }
 
 trait KnownNodesManagerBuilder {
-  self: ActorSystemBuilder with StorageBuilder =>
+  self: ActorSystemBuilder with StorageBuilder with InstanceConfigProvider =>
 
   lazy val knownNodesManagerConfig: KnownNodesManager.KnownNodesManagerConfig =
-    KnownNodesManager.KnownNodesManagerConfig(Config.config)
+    KnownNodesManager.KnownNodesManagerConfig(instanceConfig.config)
 
   lazy val knownNodesManager: ActorRef = system.actorOf(
     KnownNodesManager.props(knownNodesManagerConfig, storagesInstance.storages.knownNodesStorage),
@@ -137,7 +154,8 @@ trait PeerDiscoveryManagerBuilder {
     with NodeStatusBuilder
     with DiscoveryConfigBuilder
     with DiscoveryServiceBuilder
-    with StorageBuilder =>
+    with StorageBuilder
+    with InstanceConfigProvider =>
 
   implicit lazy val ioRuntime: IORuntime = IORuntime.global
 
@@ -148,11 +166,11 @@ trait PeerDiscoveryManagerBuilder {
       storagesInstance.storages.knownNodesStorage,
       discoveryServiceResource(
         discoveryConfig,
-        tcpPort = Config.Network.Server.port,
+        tcpPort = instanceConfig.Network.Server.port,
         nodeStatusHolder,
         storagesInstance.storages.knownNodesStorage
       ),
-      randomNodeBufferSize = Config.Network.peer.maxOutgoingPeers
+      randomNodeBufferSize = instanceConfig.Network.peer.maxOutgoingPeers
     ),
     "peer-discovery-manager"
   )
@@ -217,6 +235,9 @@ trait ConsensusBuilder {
       blockExecution
     )
 
+  lazy val chainImporter: ChainImporter =
+    new ChainImporter(blockchainReader, blockchainWriter, blockExecution)
+
   lazy val consensusAdapter: ConsensusAdapter =
     new ConsensusAdapter(
       consensus,
@@ -270,7 +291,7 @@ trait PeerEventBusBuilder {
 }
 
 trait PeerStatisticsBuilder {
-  self: ActorSystemBuilder with PeerEventBusBuilder =>
+  self: ActorSystemBuilder with PeerEventBusBuilder with InstanceConfigProvider =>
 
   implicit val clock: Clock = Clock.systemUTC()
 
@@ -279,8 +300,8 @@ trait PeerStatisticsBuilder {
       peerEventBus,
       // `slotCount * slotDuration` should be set so that it's at least as long
       // as any client of the `PeerStatisticsActor` requires.
-      slotDuration = Config.Network.peer.statSlotDuration,
-      slotCount = Config.Network.peer.statSlotCount
+      slotDuration = instanceConfig.Network.peer.statSlotDuration,
+      slotCount = instanceConfig.Network.peer.statSlotCount
     ),
     "peer-statistics"
   )
@@ -297,14 +318,15 @@ trait PeerManagerActorBuilder {
     with StorageBuilder
     with KnownNodesManagerBuilder
     with PeerStatisticsBuilder
-    with BlacklistBuilder =>
+    with BlacklistBuilder
+    with InstanceConfigProvider =>
 
-  lazy val peerConfiguration: PeerConfiguration = Config.Network.peer
+  lazy val peerConfiguration: PeerConfiguration = instanceConfig.Network.peer
 
   lazy val peerManager: ActorRef = system.actorOf(
     PeerManagerActor.props(
       peerDiscoveryManager,
-      Config.Network.peer,
+      instanceConfig.Network.peer,
       peerEventBus,
       knownNodesManager,
       peerStatistics,
@@ -312,7 +334,7 @@ trait PeerManagerActorBuilder {
       authHandshaker,
       discoveryConfig,
       blacklist,
-      Config.supportedCapabilities
+      instanceConfig.supportedCapabilities
     ),
     "peer-manager"
   )
@@ -340,7 +362,8 @@ trait BlockchainHostBuilder {
     with StorageBuilder
     with PeerManagerActorBuilder
     with NetworkPeerManagerActorBuilder
-    with PeerEventBusBuilder =>
+    with PeerEventBusBuilder
+    with PendingTransactionsManagerBuilder =>
 
   val blockchainHost: ActorRef = system.actorOf(
     BlockchainHostActor.props(
@@ -348,7 +371,8 @@ trait BlockchainHostBuilder {
       storagesInstance.storages.evmCodeStorage,
       peerConfiguration,
       peerEventBus,
-      networkPeerManager
+      networkPeerManager,
+      pendingTransactionsManager
     ),
     "blockchain-host"
   )
@@ -357,9 +381,13 @@ trait BlockchainHostBuilder {
 
 trait ServerActorBuilder {
 
-  self: ActorSystemBuilder with NodeStatusBuilder with BlockchainBuilder with PeerManagerActorBuilder =>
+  self: ActorSystemBuilder
+    with NodeStatusBuilder
+    with BlockchainBuilder
+    with PeerManagerActorBuilder
+    with InstanceConfigProvider =>
 
-  lazy val networkConfig: Config.Network.type = Config.Network
+  lazy val networkConfig = instanceConfig.Network
 
   lazy val server: ActorRef = system.actorOf(ServerActor.props(nodeStatusHolder, peerManager), "server")
 
@@ -370,9 +398,9 @@ trait Web3ServiceBuilder {
 }
 
 trait NetServiceBuilder {
-  this: PeerManagerActorBuilder with NodeStatusBuilder with BlacklistBuilder =>
+  this: PeerManagerActorBuilder with NodeStatusBuilder with BlacklistBuilder with InstanceConfigProvider =>
 
-  lazy val netServiceConfig: NetServiceConfig = NetServiceConfig(Config.config)
+  lazy val netServiceConfig: NetServiceConfig = NetServiceConfig(instanceConfig.config)
 
   lazy val netService = new NetService(nodeStatusHolder, peerManager, blacklist, netServiceConfig)
 }
@@ -386,10 +414,21 @@ object PendingTransactionsManagerBuilder {
       with PeerManagerActorBuilder
       with NetworkPeerManagerActorBuilder
       with PeerEventBusBuilder
-      with TxPoolConfigBuilder =>
+      with TxPoolConfigBuilder
+      with BlockchainBuilder
+      with StorageBuilder =>
 
     lazy val pendingTransactionsManager: ActorRef =
-      system.actorOf(PendingTransactionsManager.props(txPoolConfig, peerManager, networkPeerManager, peerEventBus))
+      system.actorOf(
+        PendingTransactionsManager.props(
+          txPoolConfig,
+          peerManager,
+          networkPeerManager,
+          peerEventBus,
+          blockchainReader,
+          storagesInstance.storages.stateStorage
+        )
+      )
   }
 }
 
@@ -457,7 +496,8 @@ trait EthInfoServiceBuilder {
     with StxLedgerBuilder
     with KeyStoreBuilder
     with SyncControllerBuilder
-    with AsyncConfigBuilder =>
+    with AsyncConfigBuilder
+    with InstanceConfigProvider =>
 
   lazy val ethInfoService = new EthInfoService(
     blockchain,
@@ -467,8 +507,21 @@ trait EthInfoServiceBuilder {
     stxLedger,
     keyStore,
     syncController,
-    Capability.best(Config.supportedCapabilities),
+    Capability.best(instanceConfig.supportedCapabilities),
     asyncConfig.askTimeout
+  )
+}
+
+trait EthSimulateServiceBuilder {
+  self: StorageBuilder with BlockchainBuilder with BlockchainConfigBuilder with MiningBuilder =>
+
+  lazy val ethSimulateService = new com.chipprbots.ethereum.jsonrpc.EthSimulateService(
+    blockchain,
+    blockchainReader,
+    storagesInstance.storages.evmCodeStorage,
+    mining.blockPreparator,
+    mining,
+    blockchainConfig
   )
 }
 
@@ -480,7 +533,8 @@ trait EthMiningServiceBuilder {
     with OmmersPoolBuilder
     with SyncControllerBuilder
     with PendingTransactionsManagerBuilder
-    with TxPoolConfigBuilder =>
+    with TxPoolConfigBuilder
+    with ActorSystemBuilder =>
 
   lazy val ethMiningService = new EthMiningService(
     blockchainReader,
@@ -491,7 +545,8 @@ trait EthMiningServiceBuilder {
     pendingTransactionsManager,
     txPoolConfig.getTransactionFromPoolTimeout,
     this,
-    coinbaseProvider
+    coinbaseProvider,
+    system
   )
 }
 trait EthTxServiceBuilder {
@@ -514,7 +569,11 @@ trait EthTxServiceBuilder {
 trait EthBlocksServiceBuilder {
   self: BlockchainBuilder with MiningBuilder with BlockQueueBuilder =>
 
-  lazy val ethBlocksService = new EthBlocksService(blockchain, blockchainReader, mining, blockQueue)
+  /** Override in subtraits that have access to ForkChoiceManager (e.g. EngineApiBuilder) */
+  def forkChoiceManagerForRpc: Option[com.chipprbots.ethereum.consensus.engine.ForkChoiceManager] = None
+
+  lazy val ethBlocksService =
+    new EthBlocksService(blockchain, blockchainReader, mining, blockQueue, forkChoiceManagerForRpc)
 }
 
 trait EthUserServiceBuilder {
@@ -530,11 +589,12 @@ trait EthUserServiceBuilder {
 }
 
 trait EthFilterServiceBuilder {
-  self: FilterManagerBuilder with FilterConfigBuilder =>
+  self: FilterManagerBuilder with FilterConfigBuilder with BlockchainBuilder =>
 
   lazy val ethFilterService = new EthFilterService(
     filterManager,
-    filterConfig
+    filterConfig,
+    blockchainReader
   )
 }
 
@@ -611,23 +671,85 @@ trait ApisBuilder extends ApisBase {
     val Test = "test"
     val Iele = "iele"
     val Qa = "qa"
+    val Admin = "admin"
+    val TxPool = "txpool"
+    val Trace = "trace"
+    val Subscribe = "subscribe"
   }
 
   import Apis._
-  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa)
+  override def available: List[String] =
+    List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa, Admin, TxPool, Trace, Subscribe)
+}
+
+trait AdminServiceBuilder {
+  this: PeerManagerActorBuilder
+    with NodeStatusBuilder
+    with BlockchainBuilder
+    with BlockchainConfigBuilder
+    with InstanceConfigProvider =>
+
+  lazy val blockedIPRegistry: BlockedIPRegistry = new BlockedIPRegistry(Set.empty)
+
+  lazy val adminService: AdminService = new AdminService(
+    nodeStatusHolder,
+    peerManager,
+    blockchainReader,
+    blockchainConfig,
+    instanceConfig.config.getConfig("network.rpc.net").getDuration("peer-manager-timeout").toMillis.millis,
+    instanceConfig.config.getString("datadir"),
+    blockedIPRegistry
+  )
+}
+
+trait TxPoolServiceBuilder {
+  this: PendingTransactionsManagerBuilder with TxPoolConfigBuilder =>
+
+  lazy val txPoolService: TxPoolService = new TxPoolService(
+    pendingTransactionsManager,
+    txPoolConfig.getTransactionFromPoolTimeout,
+    txPoolConfig
+  )
+}
+
+trait DebugTracingServiceBuilder {
+  this: BlockchainBuilder with StxLedgerBuilder with StorageBuilder with MiningBuilder =>
+
+  lazy val debugTracingService: com.chipprbots.ethereum.jsonrpc.DebugTracingService =
+    new com.chipprbots.ethereum.jsonrpc.DebugTracingService(
+      blockchain,
+      blockchainReader,
+      mining,
+      stxLedger,
+      storagesInstance.storages.transactionMappingStorage
+    )
+}
+
+trait TraceServiceBuilder {
+  this: BlockchainBuilder with StxLedgerBuilder with StorageBuilder with MiningBuilder =>
+
+  lazy val traceService: com.chipprbots.ethereum.jsonrpc.TraceService =
+    new com.chipprbots.ethereum.jsonrpc.TraceService(
+      blockchain,
+      blockchainReader,
+      mining,
+      stxLedger,
+      storagesInstance.storages.transactionMappingStorage
+    )
 }
 
 trait JSONRpcConfigBuilder {
-  self: ApisBuilder =>
+  self: ApisBuilder with InstanceConfigProvider =>
 
   lazy val availableApis: List[String] = available
-  lazy val jsonRpcConfig: JsonRpcConfig = JsonRpcConfig(Config.config, availableApis)
+  lazy val jsonRpcConfig: JsonRpcConfig = JsonRpcConfig(instanceConfig.config, availableApis)
 }
 
 trait JSONRpcControllerBuilder {
   this: Web3ServiceBuilder
     with EthInfoServiceBuilder
     with EthProofServiceBuilder
+    with EthSimulateServiceBuilder
     with EthMiningServiceBuilder
     with EthBlocksServiceBuilder
     with EthTxServiceBuilder
@@ -639,7 +761,11 @@ trait JSONRpcControllerBuilder {
     with JSONRpcConfigBuilder
     with QaServiceBuilder
     with FukuiiServiceBuilder
-    with McpServiceBuilder =>
+    with McpServiceBuilder
+    with AdminServiceBuilder
+    with TxPoolServiceBuilder
+    with DebugTracingServiceBuilder
+    with TraceServiceBuilder =>
 
   protected def testService: Option[TestService] = None
 
@@ -660,6 +786,11 @@ trait JSONRpcControllerBuilder {
       fukuiiService,
       mcpService,
       ethProofService,
+      ethSimulateService,
+      adminService,
+      txPoolService,
+      debugTracingService,
+      traceService,
       jsonRpcConfig
     )
 }
@@ -681,13 +812,20 @@ trait JSONRpcHealthcheckerBuilder {
 }
 
 trait EngineApiBuilder {
-  self: ActorSystemBuilder with BlockchainBuilder with BlockchainConfigBuilder with ConsensusBuilder with StorageBuilder with MiningBuilder =>
+  self: ActorSystemBuilder
+    with BlockchainBuilder
+    with BlockchainConfigBuilder
+    with ConsensusBuilder
+    with StorageBuilder
+    with MiningBuilder
+    with PendingTransactionsManagerBuilder
+    with InstanceConfigProvider
+    with JSONRpcControllerBuilder =>
 
   import com.chipprbots.ethereum.consensus.engine._
 
   lazy val engineApiConfig: EngineApiHttpServer.Config = {
-    val rootConfig = com.typesafe.config.ConfigFactory.load()
-    val engineConf = scala.util.Try(rootConfig.getConfig("fukuii.network.engine-api")).toOption
+    val engineConf = scala.util.Try(instanceConfig.config.getConfig("network.engine-api")).toOption
     EngineApiHttpServer.Config(
       enabled = engineConf.flatMap(c => scala.util.Try(c.getBoolean("enabled")).toOption).getOrElse(false),
       interface = engineConf.flatMap(c => scala.util.Try(c.getString("interface")).toOption).getOrElse("localhost"),
@@ -702,12 +840,15 @@ trait EngineApiBuilder {
     blockchainReader,
     blockchainWriter,
     blockExecution,
-    forkChoiceManager
+    forkChoiceManager,
+    mining,
+    storagesInstance.storages.evmCodeStorage,
+    pendingTransactionsManager
   )(blockchainConfig)
 
-  lazy val engineApiController: EngineApiController = new EngineApiController(engineApiService)
+  lazy val engineApiController: EngineApiController = new EngineApiController(engineApiService, Some(jsonRpcController))
 
-  lazy val maybeEngineApiServer: Option[EngineApiHttpServer] = {
+  lazy val maybeEngineApiServer: Option[EngineApiHttpServer] =
     if (engineApiConfig.enabled) {
       val jwtAuth = engineApiConfig.jwtSecretPath match {
         case Some(path) => JwtAuthenticator.fromFile(path)
@@ -715,7 +856,6 @@ trait EngineApiBuilder {
       }
       Some(new EngineApiHttpServer(engineApiController, jwtAuth, engineApiConfig))
     } else None
-  }
 }
 
 trait JSONRpcHttpServerBuilder {
@@ -740,6 +880,27 @@ trait JSONRpcIpcServerBuilder {
   self: ActorSystemBuilder with JSONRpcControllerBuilder with JSONRpcConfigBuilder =>
 
   lazy val jsonRpcIpcServer = new JsonRpcIpcServer(jsonRpcController, jsonRpcConfig.ipcServerConfig)
+}
+
+trait SubscriptionManagerBuilder {
+  self: ActorSystemBuilder with BlockchainBuilder =>
+
+  lazy val subscriptionManager: ActorRef =
+    system.actorOf(
+      com.chipprbots.ethereum.jsonrpc.SubscriptionManager.props(blockchainReader),
+      "subscription-manager"
+    )
+}
+
+trait JSONRpcWsServerBuilder {
+  self: ActorSystemBuilder with JSONRpcControllerBuilder with JSONRpcConfigBuilder with SubscriptionManagerBuilder =>
+
+  lazy val jsonRpcWsServer: com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer =
+    new com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer(
+      jsonRpcController,
+      subscriptionManager,
+      jsonRpcConfig.wsServerConfig
+    )(system)
 }
 
 trait OmmersPoolBuilder {
@@ -822,17 +983,17 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder {
 }
 
 trait PortForwardingBuilder {
-  self: DiscoveryConfigBuilder =>
+  self: DiscoveryConfigBuilder with InstanceConfigProvider =>
 
   implicit lazy val ioRuntime: IORuntime = IORuntime.global
 
   // protected for testing purposes - allows test fixtures to override with mock implementation
   protected lazy val portForwarding: IO[IO[Unit]] = PortForwarder
     .openPorts(
-      Seq(Config.Network.Server.port),
+      Seq(instanceConfig.Network.Server.port),
       Seq(discoveryConfig.port).filter(_ => discoveryConfig.discoveryEnabled)
     )
-    .whenA(Config.Network.automaticPortForwarding)
+    .whenA(instanceConfig.Network.automaticPortForwarding)
     .allocated
     .map(_._2)
 
@@ -865,12 +1026,12 @@ trait PortForwardingBuilder {
 }
 
 trait ShutdownHookBuilder {
-  self: Logger =>
+  self: Logger with InstanceConfigProvider =>
   def shutdown: () => Unit = () => {
     /* No default behaviour during shutdown. */
   }
 
-  lazy val shutdownTimeoutDuration: Duration = Config.shutdownTimeout
+  lazy val shutdownTimeoutDuration: Duration = instanceConfig.shutdownTimeout
 
   Runtime.getRuntime.addShutdownHook(new Thread() {
     override def run(): Unit =
@@ -887,7 +1048,9 @@ trait ShutdownHookBuilder {
     }
 }
 
-object ShutdownHookBuilder extends ShutdownHookBuilder with Logger
+object ShutdownHookBuilder extends ShutdownHookBuilder with Logger with InstanceConfigProvider {
+  override def instanceConfig: InstanceConfig = Config
+}
 
 trait GenesisDataLoaderBuilder {
   self: BlockchainBuilder with StorageBuilder =>
@@ -896,6 +1059,7 @@ trait GenesisDataLoaderBuilder {
     new GenesisDataLoader(
       blockchainReader,
       blockchainWriter,
+      storagesInstance.storages.evmCodeStorage,
       storagesInstance.storages.stateStorage
     )
 
@@ -909,7 +1073,8 @@ trait GenesisDataLoaderBuilder {
   *   [[com.chipprbots.ethereum.consensus.mining.MiningConfigBuilder ConsensusConfigBuilder]]
   */
 trait Node
-    extends SecureRandomBuilder
+    extends InstanceConfigProvider
+    with SecureRandomBuilder
     with NodeKeyBuilder
     with ActorSystemBuilder
     with StorageBuilder
@@ -927,6 +1092,7 @@ trait Node
     with Web3ServiceBuilder
     with EthInfoServiceBuilder
     with EthProofServiceBuilder
+    with EthSimulateServiceBuilder
     with EthMiningServiceBuilder
     with EthBlocksServiceBuilder
     with EthTxServiceBuilder
@@ -938,6 +1104,10 @@ trait Node
     with QaServiceBuilder
     with FukuiiServiceBuilder
     with McpServiceBuilder
+    with AdminServiceBuilder
+    with TxPoolServiceBuilder
+    with DebugTracingServiceBuilder
+    with TraceServiceBuilder
     with KeyStoreBuilder
     with ApisBuilder
     with JSONRpcConfigBuilder
@@ -946,6 +1116,8 @@ trait Node
     with SSLContextBuilder
     with JSONRpcHttpServerBuilder
     with JSONRpcIpcServerBuilder
+    with SubscriptionManagerBuilder
+    with JSONRpcWsServerBuilder
     with EngineApiBuilder
     with ShutdownHookBuilder
     with Logger
@@ -978,4 +1150,8 @@ trait Node
     with BlacklistBuilder {
   // Resolve conflicting ioRuntime from PeerDiscoveryManagerBuilder and PortForwardingBuilder
   implicit override lazy val ioRuntime: IORuntime = IORuntime.global
+
+  // Wire ForkChoiceManager to RPC services for "safe"/"finalized" block tag resolution
+  override def forkChoiceManagerForRpc: Option[com.chipprbots.ethereum.consensus.engine.ForkChoiceManager] =
+    Some(forkChoiceManager)
 }

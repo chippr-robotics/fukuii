@@ -13,7 +13,7 @@ import com.chipprbots.ethereum.domain.{Block, BlockBody, BlockHeader, Blockchain
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
-import com.chipprbots.ethereum.utils.{Config, Hex, Logger}
+import com.chipprbots.ethereum.utils.{Config, Hex}
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
@@ -2387,7 +2387,6 @@ class SNAPSyncController(
 
   // Track consecutive account stall pivot refreshes to detect truly unrecoverable situations.
   private var consecutiveAccountStallRefreshes: Int = 0
-  private val maxAccountStallRefreshes: Int = 10 // 10 refreshes × 10min threshold = ~100 min before giving up
 
   private def maybeRestartIfAccountStagnant(progress: actors.AccountRangeStats): Unit = {
     if (currentPhase != AccountRangeSync) return

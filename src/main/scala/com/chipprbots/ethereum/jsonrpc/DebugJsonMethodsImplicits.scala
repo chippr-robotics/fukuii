@@ -1,8 +1,6 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import org.json4s.JsonAST.JArray
-import org.json4s.JsonAST.JString
-import org.json4s.JsonAST.JValue
+import org.json4s.JsonAST.{JArray, JString, JValue}
 
 import com.chipprbots.ethereum.jsonrpc.DebugService.ListPeersInfoRequest
 import com.chipprbots.ethereum.jsonrpc.DebugService.ListPeersInfoResponse
@@ -10,6 +8,9 @@ import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodCodec
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder.NoParamsMethodDecoder
 
+/** JSON codecs for non-tracing debug_* methods. `debug_trace*` codecs live in [[DebugTracingJsonMethodsImplicits]]
+  * against the [[com.chipprbots.ethereum.vm.ExecutionTracer]] services.
+  */
 object DebugJsonMethodsImplicits extends JsonMethodsImplicits {
 
   implicit val debug_listPeersInfo: JsonMethodCodec[ListPeersInfoRequest, ListPeersInfoResponse] =

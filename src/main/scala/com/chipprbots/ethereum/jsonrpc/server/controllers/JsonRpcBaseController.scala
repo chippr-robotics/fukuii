@@ -24,6 +24,7 @@ import com.chipprbots.ethereum.jsonrpc.NodeJsonRpcHealthChecker.JsonRpcHealthCon
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.JsonRpcHttpServerConfig
+import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer.JsonRpcWsServerConfig
 import com.chipprbots.ethereum.jsonrpc.server.ipc.JsonRpcIpcServer.JsonRpcIpcServerConfig
 import com.chipprbots.ethereum.utils.Logger
 
@@ -124,6 +125,7 @@ object JsonRpcBaseController {
     def accountTransactionsMaxBlocks: Int
     def minerActiveTimeout: FiniteDuration
     def httpServerConfig: JsonRpcHttpServerConfig
+    def wsServerConfig: JsonRpcWsServerConfig
     def ipcServerConfig: JsonRpcIpcServerConfig
     def healthConfig: JsonRpcHealthConfig
   }
@@ -148,6 +150,7 @@ object JsonRpcBaseController {
         override def minerActiveTimeout: FiniteDuration = rpcConfig.getDuration("miner-active-timeout").toMillis.millis
 
         override val httpServerConfig: JsonRpcHttpServerConfig = JsonRpcHttpServerConfig(fukuiiConfig)
+        override val wsServerConfig: JsonRpcWsServerConfig = JsonRpcWsServerConfig(fukuiiConfig)
         override val ipcServerConfig: JsonRpcIpcServerConfig = JsonRpcIpcServerConfig(fukuiiConfig)
         override val healthConfig: JsonRpcHealthConfig = JsonRpcHealthConfig(rpcConfig)
       }

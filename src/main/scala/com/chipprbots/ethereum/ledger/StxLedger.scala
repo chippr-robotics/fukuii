@@ -11,6 +11,7 @@ import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.domain.Transaction
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.vm.EvmConfig
+import com.chipprbots.ethereum.vm.ExecutionTracer
 
 class StxLedger(
     blockchain: BlockchainImpl,
@@ -25,6 +26,17 @@ class StxLedger(
       stx: SignedTransactionWithSender,
       blockHeader: BlockHeader,
       world: Option[InMemoryWorldStateProxy]
+  ): TxResult = simulateTransactionWithTracer(stx, blockHeader, world, tracer = None)
+
+  /** Like `simulateTransaction` but threads an optional EVM tracer into the run. Used by `debug_traceTransaction` /
+    * `debug_traceCall` to capture per-opcode structLog entries. The sim still honors world / blockHeader so the trace
+    * reflects post-block state (historical replay needs archive mode — TODO).
+    */
+  def simulateTransactionWithTracer(
+      stx: SignedTransactionWithSender,
+      blockHeader: BlockHeader,
+      world: Option[InMemoryWorldStateProxy],
+      tracer: Option[ExecutionTracer]
   ): TxResult = {
     val tx = stx.tx
 
@@ -49,10 +61,91 @@ class StxLedger(
       }
 
     val worldForTx = blockPreparator.updateSenderAccountBeforeExecution(tx, senderAddress, world2)
-    val result = blockPreparator.runVM(tx, senderAddress, blockHeader, worldForTx)
+    val result = blockPreparator.runVM(tx, senderAddress, blockHeader, worldForTx, tracer)
     val totalGasToRefund = blockPreparator.calcTotalGasToRefund(tx, result, blockHeader.number)
 
     TxResult(result.world, tx.tx.gasLimit - totalGasToRefund, result.logs, result.returnData, result.error)
+  }
+
+  /** Like [[simulateTransaction]] but attaches a tracer and fires the tx-level lifecycle hooks.
+    *
+    * Besu reference: DebugTraceTransaction.java — creates DebugOperationTracer, passes via processTracing core-geth
+    * reference: eth/tracers/api.go traceTx() — wraps evm.Config.Tracer, calls CaptureStart/CaptureEnd
+    *
+    * Caller is responsible for selecting the tracer and extracting [[tracer.getResult]] afterwards.
+    */
+  def simulateTransactionWithTracer(
+      stx: SignedTransactionWithSender,
+      blockHeader: BlockHeader,
+      world: Option[InMemoryWorldStateProxy],
+      tracer: ExecutionTracer
+  ): TxResult = {
+    val tx = stx.tx
+
+    val world1 = world.getOrElse(
+      InMemoryWorldStateProxy(
+        evmCodeStorage = evmCodeStorage,
+        mptStorage = blockchain.getReadOnlyMptStorage(),
+        getBlockHashByNumber = (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
+        accountStartNonce = blockchainConfig.accountStartNonce,
+        stateRootHash = blockHeader.stateRoot,
+        noEmptyAccounts = EvmConfig.forBlock(blockHeader.number, blockchainConfig).noEmptyAccounts,
+        ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
+      )
+    )
+
+    val senderAddress = stx.senderAddress
+    val world2 =
+      if (world1.getAccount(senderAddress).isEmpty)
+        world1.saveAccount(senderAddress, Account.empty(blockchainConfig.accountStartNonce))
+      else
+        world1
+
+    val worldForTx = blockPreparator.updateSenderAccountBeforeExecution(tx, senderAddress, world2)
+    tracer.onTxStart(senderAddress, tx.tx.receivingAddress, tx.tx.gasLimit, tx.tx.value, tx.tx.payload)
+    val result = blockPreparator.runVMWithTracer(tx, senderAddress, blockHeader, worldForTx, tracer)
+    val totalGasToRefund = blockPreparator.calcTotalGasToRefund(tx, result, blockHeader.number)
+    val gasUsed = tx.tx.gasLimit - totalGasToRefund
+    tracer.onTxEnd(gasUsed, result.returnData, result.error.map(_.toString))
+
+    TxResult(result.world, gasUsed, result.logs, result.returnData, result.error)
+  }
+
+  /** Advances a world state through prior transactions in a block to reach the state just before transaction at
+    * [[txIndex]]. Used by [[DebugTracingService]] and [[TraceService]] for historical trace replay.
+    *
+    * Besu reference: BlockReplay.beforeTransactionInBlock() — replays all transactions up to target index core-geth
+    * reference: eth/tracers/api.go computeTxEnv() — builds state via ApplyMessage for each prior tx
+    *
+    * @param blockHeader
+    *   block header containing the transactions
+    * @param txs
+    *   all transactions in the block with recovered sender addresses
+    * @param txIndex
+    *   index of the target transaction (0-based); returns parent state if 0
+    * @param parentStateRoot
+    *   state root of the parent block (baseline)
+    * @return
+    *   world state at the point just before txs(txIndex) executes
+    */
+  def advanceWorldToTx(
+      blockHeader: BlockHeader,
+      txs: Seq[SignedTransactionWithSender],
+      txIndex: Int,
+      parentStateRoot: org.apache.pekko.util.ByteString
+  ): InMemoryWorldStateProxy = {
+    val world0 = InMemoryWorldStateProxy(
+      evmCodeStorage = evmCodeStorage,
+      mptStorage = blockchain.getReadOnlyMptStorage(),
+      getBlockHashByNumber = (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
+      accountStartNonce = blockchainConfig.accountStartNonce,
+      stateRootHash = parentStateRoot,
+      noEmptyAccounts = EvmConfig.forBlock(blockHeader.number, blockchainConfig).noEmptyAccounts,
+      ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
+    )
+    (0 until txIndex).foldLeft(world0) { (world, i) =>
+      simulateTransaction(txs(i), blockHeader, Some(world)).worldState
+    }
   }
 
   def binarySearchGasEstimation(

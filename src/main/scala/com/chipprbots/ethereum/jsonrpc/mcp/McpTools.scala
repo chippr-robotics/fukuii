@@ -36,9 +36,13 @@ object NodeInfoTool {
 
   def execute(deps: McpDependencies): IO[String] = {
     val networkName =
-      if (deps.blockchainConfig.chainId == BigInt(61)) "ETC Mainnet"
-      else if (deps.blockchainConfig.chainId == BigInt(63)) "Mordor Testnet"
-      else s"Chain ${deps.blockchainConfig.chainId}"
+      deps.blockchainConfig.chainId match {
+        case id if id == BigInt(1)        => "Ethereum Mainnet"
+        case id if id == BigInt(61)       => "ETC Mainnet"
+        case id if id == BigInt(63)       => "Mordor Testnet"
+        case id if id == BigInt(11155111) => "Sepolia Testnet"
+        case id                           => s"Chain $id"
+      }
     IO.pure(s"""Fukuii Node Information:
       |  Version: ${BuildInfo.version}
       |  Scala Version: ${BuildInfo.scalaVersion}
@@ -105,10 +109,13 @@ object BlockchainInfoTool {
       .map(h => ByteStringUtils.hash2string(h.hash))
       .getOrElse("unknown")
     s"""Blockchain Information:
-      |  Network: ${
-        if (deps.blockchainConfig.chainId == BigInt(61)) "Ethereum Classic (ETC)"
-        else s"Chain ${deps.blockchainConfig.chainId}"
-      }
+      |  Network: ${deps.blockchainConfig.chainId match {
+        case id if id == BigInt(1)        => "Ethereum Mainnet"
+        case id if id == BigInt(61)       => "Ethereum Classic (ETC)"
+        case id if id == BigInt(63)       => "Mordor Testnet (ETC)"
+        case id if id == BigInt(11155111) => "Sepolia Testnet (ETH)"
+        case id                           => s"Chain $id"
+      }}
       |  Best Block Number: $bestBlockNum
       |  Best Block Hash: $bestHash
       |  Chain ID: ${deps.blockchainConfig.chainId}
