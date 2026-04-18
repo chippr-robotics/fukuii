@@ -96,7 +96,7 @@ abstract class BlockGeneratorSkeleton(
     val block = Block(header, body)
 
     blockPreparator.prepareBlock(evmCodeStorage, block, parent.header, initialWorldStateBeforeExecution) match {
-      case PreparedBlock(prepareBlock, BlockResult(_, gasUsed, receipts), stateRoot, updatedWorld) =>
+      case PreparedBlock(prepareBlock, BlockResult(_, gasUsed, receipts, _), stateRoot, updatedWorld) =>
         val receiptsLogs: Seq[Array[Byte]] =
           BloomFilter.EmptyBloomFilter.toArray +: receipts.map(_.logsBloomFilter.toArray)
         val bloomFilter = ByteString(or(receiptsLogs: _*))

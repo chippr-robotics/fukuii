@@ -170,22 +170,26 @@ class BlockPreparator(
       senderAddress: Address,
       blockHeader: BlockHeader,
       world: InMemoryWorldStateProxy
-  ): InMemoryWorldStateProxy = stx.tx match {
+  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy = stx.tx match {
     case bt: com.chipprbots.ethereum.domain.BlobTransaction =>
       val blobGasUsed = BigInt(bt.blobVersionedHashes.size) * BigInt(131072)
-      // Compute blob base fee from header's excessBlobGas
-      val blobBaseFee = blockHeader.excessBlobGas.map(computeBlobBaseFee).getOrElse(BigInt(1))
+      // Compute blob base fee from header's excessBlobGas using fork-correct update fraction.
+      val blobBaseFee = blockHeader.excessBlobGas
+        .map(eg => computeBlobBaseFee(eg, blockHeader.unixTimestamp))
+        .getOrElse(BigInt(1))
       val blobGasCost = blobGasUsed * blobBaseFee
       val account = world.getGuaranteedAccount(senderAddress)
       world.saveAccount(senderAddress, account.increaseBalance(UInt256(-blobGasCost)))
     case _ => world
   }
 
-  /** Compute the blob base fee from excessBlobGas per EIP-4844 */
-  private def computeBlobBaseFee(excessBlobGas: BigInt): BigInt = {
-    // fake_exponential(MIN_BLOB_BASE_FEE=1, excess_blob_gas, BLOB_BASE_FEE_UPDATE_FRACTION=3338477)
+  /** Compute the blob base fee from excessBlobGas per EIP-4844, with EIP-7691 Prague bump. */
+  private def computeBlobBaseFee(excessBlobGas: BigInt, blockTimestamp: Long)(implicit blockchainConfig: BlockchainConfig): BigInt = {
     val minBlobBaseFee = BigInt(1)
-    val updateFraction = BigInt(3338477)
+    // EIP-7691 (Prague): BLOB_BASE_FEE_UPDATE_FRACTION bumped from 3338477 → 5007716.
+    val updateFraction =
+      if (blockchainConfig.isPragueTimestamp(blockTimestamp)) BigInt(5007716)
+      else BigInt(3338477)
     if (excessBlobGas == 0) minBlobBaseFee
     else {
       // Simplified: baseFee = minBlobBaseFee * e^(excessBlobGas / updateFraction)
@@ -211,7 +215,8 @@ class BlockPreparator(
       stx: SignedTransaction,
       senderAddress: Address,
       blockHeader: BlockHeader,
-      world: InMemoryWorldStateProxy
+      world: InMemoryWorldStateProxy,
+      tracer: Option[com.chipprbots.ethereum.vm.tracing.Tracer] = None
   )(implicit blockchainConfig: BlockchainConfig): PR = {
     val evmConfig = EvmConfig.forBlock(blockHeader.number, blockHeader.unixTimestamp, blockchainConfig)
     val context: PC = ProgramContext(stx, blockHeader, senderAddress, world, evmConfig)
@@ -222,6 +227,7 @@ class BlockPreparator(
         ctx = ctx.copy(precompileRelocations = _simulatePrecompileRelocations)
       if (_simulateTraceTransfers)
         ctx = ctx.copy(traceTransfers = true)
+      if (tracer.isDefined) ctx = ctx.copy(tracer = tracer)
       ctx
     }
     vm.run(contextWithSimFlags)
@@ -599,7 +605,7 @@ class BlockPreparator(
     val prepared = executePreparedTransactions(block.body.transactionList, initialWorld, block.header)
 
     prepared match {
-      case (execResult @ BlockResult(resultingWorldStateProxy, _, _), txExecuted) =>
+      case (execResult @ BlockResult(resultingWorldStateProxy, _, _, _), txExecuted) =>
         val worldToPersist = payBlockReward(block, resultingWorldStateProxy)
         val worldPersisted = InMemoryWorldStateProxy.persistState(worldToPersist)
         PreparedBlock(

@@ -111,6 +111,7 @@ class GenesisDataLoader(
 
     log.debug(s"Prepared genesis header: $header")
 
+
     blockchainReader.getBlockHeaderByNumber(0) match {
       case Some(existingGenesisHeader) if existingGenesisHeader.hash == header.hash =>
         log.debug("Genesis data already in the database")
@@ -197,10 +198,13 @@ class GenesisDataLoader(
 
     val extraFields = if (blockchainConfig.isPragueTimestamp(genesisTimestamp)) {
       val emptyRequestsHash = ByteString(java.security.MessageDigest.getInstance("SHA-256").digest(Array.empty[Byte]))
-      BlockHeader.HeaderExtraFields.HefPostPrague(baseFee, emptyWithdrawalsRoot, BigInt(0), BigInt(0),
+      BlockHeader.HeaderExtraFields.HefPostPrague(baseFee, emptyWithdrawalsRoot,
+        parseOptQuantity(genesisData.blobGasUsed), parseOptQuantity(genesisData.excessBlobGas),
         zeros(hashLength), emptyRequestsHash)
     } else if (blockchainConfig.isCancunTimestamp(genesisTimestamp)) {
-      BlockHeader.HeaderExtraFields.HefPostCancun(baseFee, emptyWithdrawalsRoot, BigInt(0), BigInt(0), zeros(hashLength))
+      BlockHeader.HeaderExtraFields.HefPostCancun(baseFee, emptyWithdrawalsRoot,
+        parseOptQuantity(genesisData.blobGasUsed), parseOptQuantity(genesisData.excessBlobGas),
+        zeros(hashLength))
     } else if (blockchainConfig.isShanghaiTimestamp(genesisTimestamp)) {
       BlockHeader.HeaderExtraFields.HefPostShanghai(baseFee, emptyWithdrawalsRoot)
     } else if (blockchainConfig.forkBlockNumbers.olympiaBlockNumber == 0) {
@@ -233,6 +237,14 @@ class GenesisDataLoader(
   private def padToEightBytes(bs: ByteString): ByteString = {
     if (bs.length >= 8) bs
     else ByteString(new Array[Byte](8 - bs.length) ++ bs.toArray)
+  }
+
+  /** Parse an optional hex-prefixed quantity (per eth_getBlockByNumber spec). */
+  private def parseOptQuantity(v: Option[String]): BigInt = v match {
+    case Some(s) =>
+      val stripped = s.replace("0x", "")
+      if (stripped.isEmpty) BigInt(0) else BigInt(stripped, 16)
+    case None => BigInt(0)
   }
 
   private def zeros(length: Int) =

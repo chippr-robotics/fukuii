@@ -23,5 +23,7 @@ case class GenesisData(
     coinbase: ByteString,
     timestamp: String,
     alloc: Map[String, GenesisAccount],
-    baseFeePerGas: Option[String] = None
+    baseFeePerGas: Option[String] = None,
+    excessBlobGas: Option[String] = None,
+    blobGasUsed: Option[String] = None
 )

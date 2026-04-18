@@ -24,7 +24,8 @@ object ExecEnv {
       evmConfig,
       context.precompileRelocations,
       context.blobVersionedHashes,
-      context.traceTransfers
+      context.traceTransfers,
+      context.tracer
     )
   }
 }
@@ -67,5 +68,6 @@ case class ExecEnv(
     evmConfig: EvmConfig,
     precompileRelocations: Map[Address, Address] = Map.empty,
     blobVersionedHashes: Seq[ByteString] = Seq.empty,
-    traceTransfers: Boolean = false
+    traceTransfers: Boolean = false,
+    tracer: Option[com.chipprbots.ethereum.vm.tracing.Tracer] = None
 )

@@ -467,9 +467,17 @@ trait FilterManagerBuilder {
 }
 
 trait DebugServiceBuilder {
-  self: NetworkPeerManagerActorBuilder with PeerManagerActorBuilder =>
+  self: NetworkPeerManagerActorBuilder with PeerManagerActorBuilder
+    with BlockchainBuilder with StorageBuilder with StxLedgerBuilder
+    with BlockchainConfigBuilder =>
 
-  lazy val debugService = new DebugService(peerManager, networkPeerManager)
+  lazy val debugService = new DebugService(
+    peerManager,
+    networkPeerManager,
+    blockchainReader,
+    stxLedger,
+    storagesInstance.storages.transactionMappingStorage
+  )(blockchainConfig)
 }
 
 trait EthProofServiceBuilder {

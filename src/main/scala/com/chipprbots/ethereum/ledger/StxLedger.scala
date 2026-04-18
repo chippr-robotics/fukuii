@@ -25,6 +25,18 @@ class StxLedger(
       stx: SignedTransactionWithSender,
       blockHeader: BlockHeader,
       world: Option[InMemoryWorldStateProxy]
+  ): TxResult = simulateTransactionWithTracer(stx, blockHeader, world, tracer = None)
+
+  /** Like `simulateTransaction` but threads an optional EVM tracer into the run. Used by
+    * `debug_traceTransaction` / `debug_traceCall` to capture per-opcode structLog entries.
+    * The sim still honors world / blockHeader so the trace reflects post-block state
+    * (historical replay needs archive mode — TODO).
+    */
+  def simulateTransactionWithTracer(
+      stx: SignedTransactionWithSender,
+      blockHeader: BlockHeader,
+      world: Option[InMemoryWorldStateProxy],
+      tracer: Option[com.chipprbots.ethereum.vm.tracing.Tracer]
   ): TxResult = {
     val tx = stx.tx
 
@@ -49,7 +61,7 @@ class StxLedger(
       }
 
     val worldForTx = blockPreparator.updateSenderAccountBeforeExecution(tx, senderAddress, world2)
-    val result = blockPreparator.runVM(tx, senderAddress, blockHeader, worldForTx)
+    val result = blockPreparator.runVM(tx, senderAddress, blockHeader, worldForTx, tracer)
     val totalGasToRefund = blockPreparator.calcTotalGasToRefund(tx, result, blockHeader.number)
 
     TxResult(result.world, tx.tx.gasLimit - totalGasToRefund, result.logs, result.returnData, result.error)
