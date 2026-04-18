@@ -233,7 +233,7 @@ class EngineApiController(
               "executionPayload" -> payload,
               "blockValue" -> JString(computeBlockValue(block))
             )
-          case _ => // V3, V4: add blobsBundle + shouldOverrideBuilder
+          case 3 =>
             JObject(
               "executionPayload" -> payload,
               "blockValue" -> JString(computeBlockValue(block)),
@@ -243,6 +243,21 @@ class EngineApiController(
                 "blobs" -> JArray(Nil)
               ),
               "shouldOverrideBuilder" -> JBool(false)
+            )
+          case _ => // V4+: add executionRequests (EIP-7685)
+            val executionRequests = engineApiService.getPayloadExecutionRequests(payloadId)
+            JObject(
+              "executionPayload" -> payload,
+              "blockValue" -> JString(computeBlockValue(block)),
+              "blobsBundle" -> JObject(
+                "commitments" -> JArray(Nil),
+                "proofs" -> JArray(Nil),
+                "blobs" -> JArray(Nil)
+              ),
+              "shouldOverrideBuilder" -> JBool(false),
+              "executionRequests" -> JArray(
+                executionRequests.toList.map(r => JString(byteStringToHex(r)))
+              )
             )
         }
         JsonRpcResponse("2.0", Some(result), None, reqId(request))

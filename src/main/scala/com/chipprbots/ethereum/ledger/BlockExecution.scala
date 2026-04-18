@@ -78,6 +78,18 @@ class BlockExecution(
       (result.receipts, result.gasUsed, result.worldState.stateRootHash)
     }
 
+  /** Proposer-mode execution. Runs all Prague preambles (EIP-4788, EIP-2935), transactions,
+    * withdrawals, and system calls (EIP-7002/7251), collects deposit requests (EIP-6110),
+    * and returns the full BlockResult with receipts + executionRequests populated. No
+    * pre- or post-execution validation against the header is performed — caller is
+    * responsible for filling in header fields (stateRoot, receiptsRoot, gasUsed,
+    * requestsHash, etc.) from the result.
+    */
+  def executeForProposer(
+      block: Block
+  )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockResult] =
+    executeBlock(block)
+
   /** Executes a block (executes transactions and pays rewards) */
   private def executeBlock(
       block: Block
