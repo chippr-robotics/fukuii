@@ -20,8 +20,8 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers {
       |network.rpc.http.port = 8546
       |network.rpc.ws.enabled = false
       |network.rpc.ws.port = 8552
-      |network.peer.min-outgoing-peers = 1
-      |network.peer.max-outgoing-peers = 25
+      |network.rpc.engine.enabled = false
+      |network.rpc.engine.port = 8551
       |""".stripMargin
 
   private def cfg(overrides: String) =
@@ -49,7 +49,7 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers {
     )
     errors should have size 1
     errors.head should include("30303")
-    errors.head should include("P2P")
+    errors.head should include("multiple times")
   }
 
   it should "report error when WS port equals P2P port" taggedAs UnitTest in {
@@ -58,7 +58,7 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers {
     )
     errors should have size 1
     errors.head should include("30303")
-    errors.head should include("P2P")
+    errors.head should include("multiple times")
   }
 
   it should "report error when HTTP and WS ports are equal and both enabled" taggedAs UnitTest in {
@@ -69,20 +69,29 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers {
       )
     )
     errors.exists(_.contains("9999")) shouldBe true
+    errors.exists(_.contains("multiple times")) shouldBe true
   }
 
-  it should "not report HTTP/P2P port conflict when HTTP is disabled" taggedAs UnitTest in {
+  it should "not report conflict when HTTP port equals P2P port but HTTP is disabled" taggedAs UnitTest in {
     val errors = ConfigValidator.validate(
       cfg("network.rpc.http.enabled = false\nnetwork.rpc.http.port = 30303")
     )
     errors shouldBe empty
   }
 
-  it should "not report WS/P2P port conflict when WS is disabled" taggedAs UnitTest in {
+  it should "not report conflict when WS port equals P2P port but WS is disabled" taggedAs UnitTest in {
     val errors = ConfigValidator.validate(
       cfg("network.rpc.ws.enabled = false\nnetwork.rpc.ws.port = 30303")
     )
     errors shouldBe empty
+  }
+
+  it should "report error when Engine API port equals P2P port" taggedAs UnitTest in {
+    val errors = ConfigValidator.validate(
+      cfg("network.rpc.engine.enabled = true\nnetwork.rpc.engine.port = 30303")
+    )
+    errors should have size 1
+    errors.head should include("30303")
   }
 
   it should "accumulate multiple errors" taggedAs UnitTest in {
