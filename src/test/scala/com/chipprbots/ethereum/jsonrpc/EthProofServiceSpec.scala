@@ -28,7 +28,6 @@ import com.chipprbots.ethereum.jsonrpc.ProofService.StorageProofKey
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.defaultByteArraySerializable
 import com.chipprbots.ethereum.nodebuilder.ApisBuilder
-import com.chipprbots.ethereum.rlp.RLPValue
 import com.chipprbots.ethereum.testing.Tags._
 
 class EthProofServiceSpec
@@ -113,7 +112,7 @@ class EthProofServiceSpec
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
-        ByteString(accountProof.accountProof.head) shouldBe ByteString(rlp.encode(RLPValue(mpt.getRootHash)))
+        ByteString(crypto.kec256(accountProof.accountProof.head.toArray)) shouldBe ByteString(mpt.getRootHash)
         accountProof.balance shouldBe balance.toBigInt
         accountProof.codeHash shouldBe account.codeHash
         accountProof.nonce shouldBe UInt256(nonce)
@@ -141,7 +140,7 @@ class EthProofServiceSpec
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
-        ByteString(accountProof.accountProof.head) shouldBe ByteString(rlp.encode(RLPValue(mpt.getRootHash)))
+        ByteString(crypto.kec256(accountProof.accountProof.head.toArray)) shouldBe ByteString(mpt.getRootHash)
         accountProof.balance shouldBe balance.toBigInt
         accountProof.codeHash shouldBe account.codeHash
         accountProof.nonce shouldBe UInt256(nonce)
@@ -170,7 +169,7 @@ class EthProofServiceSpec
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
-        ByteString(accountProof.accountProof.head) shouldBe ByteString(rlp.encode(RLPValue(mpt.getRootHash)))
+        ByteString(crypto.kec256(accountProof.accountProof.head.toArray)) shouldBe ByteString(mpt.getRootHash)
         accountProof.balance shouldBe balance.toBigInt
         accountProof.codeHash shouldBe account.codeHash
         accountProof.nonce shouldBe UInt256(nonce)
@@ -201,7 +200,7 @@ class EthProofServiceSpec
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
-        ByteString(accountProof.accountProof.head) shouldBe ByteString(rlp.encode(RLPValue(mpt.getRootHash)))
+        ByteString(crypto.kec256(accountProof.accountProof.head.toArray)) shouldBe ByteString(mpt.getRootHash)
         accountProof.balance shouldBe balance.toBigInt
         accountProof.codeHash shouldBe account.codeHash
         accountProof.nonce shouldBe UInt256(nonce)
@@ -226,7 +225,7 @@ class EthProofServiceSpec
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
-        ByteString(accountProof.accountProof.head) shouldBe ByteString(rlp.encode(RLPValue(mpt.getRootHash)))
+        ByteString(crypto.kec256(accountProof.accountProof.head.toArray)) shouldBe ByteString(mpt.getRootHash)
         accountProof.balance shouldBe balance.toBigInt
         accountProof.codeHash shouldBe account.codeHash
         accountProof.nonce shouldBe UInt256(nonce)
