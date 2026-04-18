@@ -49,10 +49,21 @@ trait JsonMethodsImplicits {
   protected def extractAddress(input: String): Either[JsonRpcError, Address] =
     Try(Address(input)).toEither.left.map(_ => InvalidAddress)
 
-  protected def extractDurationQuantity(input: JValue): Either[JsonRpcError, Duration] = for {
-    quantity <- extractQuantity(input)
-    duration <- getDuration(quantity)
-  } yield duration
+  protected def extractDurationQuantity(input: JValue): Either[JsonRpcError, Duration] = {
+    // personal_unlockAccount's duration parameter is a plain decimal integer per
+    // Parity/web3j convention, not a hex-encoded JSON-RPC QUANTITY. Accept
+    // decimal JString (what the test and most clients send) as well as JInt.
+    // Reserve the standard extractQuantity hex path for 0x-prefixed strings
+    // only, so callers passing an actual hex duration still work.
+    val quantity: Either[JsonRpcError, BigInt] = input match {
+      case JInt(n)                                                => Right(n)
+      case JString(s) if s.startsWith("0x") || s.startsWith("0X") => extractQuantity(input)
+      case JString(s) =>
+        Try(BigInt(s)).toEither.left.map(_ => InvalidParams("Invalid method parameters"))
+      case _ => Left(InvalidParams("Invalid method parameters"))
+    }
+    quantity.flatMap(getDuration)
+  }
 
   private def getDuration(value: BigInt): Either[JsonRpcError, Duration] =
     Either.cond(
@@ -314,7 +325,14 @@ object JsonMethodsImplicits extends JsonMethodsImplicits {
       def decodeJson(params: Option[JArray]): Either[JsonRpcError, ImportRawKeyRequest] =
         params match {
           case Some(JArray(JString(key) :: JString(passphrase) :: _)) =>
-            extractBytes(key).map(ImportRawKeyRequest(_, passphrase))
+            // personal_importRawKey accepts the private key as plain hex per
+            // Parity / web3j / geth convention (the `0x` prefix is optional,
+            // unlike general JSON-RPC DATA values). `decode` itself strips the
+            // prefix if present, so this wrapper just bypasses the
+            // "requires 0x" guard in extractBytes.
+            Try(ByteString(decode(key))).toEither.left
+              .map(_ => InvalidParams())
+              .map(ImportRawKeyRequest(_, passphrase))
           case _ =>
             Left(InvalidParams())
         }
