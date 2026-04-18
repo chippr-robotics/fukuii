@@ -453,8 +453,8 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     val requestSender: TestProbe = TestProbe()
 
     // Peers as stored by NetworkPeerManagerActor after handshake — capability is populated from remoteStatus
-    val peer1WithCapability: Peer    = peer1.copy(negotiatedCapability = Some(Capability.ETH63))
-    val peer2WithCapability: Peer    = peer2.copy(negotiatedCapability = Some(Capability.ETH63))
+    val peer1WithCapability: Peer = peer1.copy(negotiatedCapability = Some(Capability.ETH63))
+    val peer2WithCapability: Peer = peer2.copy(negotiatedCapability = Some(Capability.ETH63))
     val freshPeerWithCapability: Peer = freshPeer.copy(negotiatedCapability = Some(Capability.ETH63))
 
     val baseBlockHeader = Fixtures.Blocks.Block3125369.header

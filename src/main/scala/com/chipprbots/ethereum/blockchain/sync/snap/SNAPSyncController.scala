@@ -2505,15 +2505,20 @@ class SNAPSyncController(
         // If any of these are missing when SnapSyncDone=true, regular sync fails
         // on startup (branch resolution finds no chain weight, no best block hash).
         // go-ethereum writes pivot + state atomically; we do the same.
-        appStateStorage.snapSyncDone()
+        appStateStorage
+          .snapSyncDone()
           .and(blockchainWriter.storeBlock(Block(pivotHeader, BlockBody.empty)))
-          .and(blockchainWriter.storeChainWeight(
-            pivotHash,
-            ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty)
-          ))
-          .and(appStateStorage.putBestBlockInfo(
-            com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash, pivot)
-          ))
+          .and(
+            blockchainWriter.storeChainWeight(
+              pivotHash,
+              ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty)
+            )
+          )
+          .and(
+            appStateStorage.putBestBlockInfo(
+              com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash, pivot)
+            )
+          )
           .commit()
 
         log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.take(8).toHex})")
@@ -2521,7 +2526,8 @@ class SNAPSyncController(
       case None =>
         // Fallback: shouldn't happen since PivotHeaderBootstrap stored the header
         log.warning(s"Pivot header for block $pivot not found in storage — setting best block number only")
-        appStateStorage.snapSyncDone()
+        appStateStorage
+          .snapSyncDone()
           .and(appStateStorage.putBestBlockNumber(pivot))
           .commit()
     }

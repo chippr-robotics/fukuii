@@ -187,8 +187,8 @@ trait DiscoveryServiceBuilder extends Logger {
               tcpPort = 0
             ),
           config = v4Config,
-          onSendFailure = autoBlocker.map { ab =>
-            (addr: InetMultiAddress) => ab.recordUdpFailure(addr.inetSocketAddress.getAddress.getHostAddress)
+          onSendFailure = autoBlocker.map { ab => (addr: InetMultiAddress) =>
+            ab.recordUdpFailure(addr.inetSocketAddress.getAddress.getHostAddress)
           }
         )
       }

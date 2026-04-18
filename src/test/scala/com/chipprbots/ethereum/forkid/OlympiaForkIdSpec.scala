@@ -22,11 +22,10 @@ import com.chipprbots.ethereum.testing.Tags._
 // scalastyle:off magic.number
 /** Verifies ForkId computation and peer validation at the Olympia fork boundary.
   *
-  * Tests that ForkId correctly transitions when Olympia activates, and that
-  * ForkIdValidator properly accepts/rejects peers based on fork compatibility.
+  * Tests that ForkId correctly transitions when Olympia activates, and that ForkIdValidator properly accepts/rejects
+  * peers based on fork compatibility.
   *
-  * Reference: EIP-2124 (Fork Identifier), all 5 reference clients implement this.
-  * Fukuii H-015 backlog item.
+  * Reference: EIP-2124 (Fork Identifier), all 5 reference clients implement this. Fukuii H-015 backlog item.
   */
 class OlympiaForkIdSpec extends AnyFlatSpec with Matchers {
 
@@ -295,7 +294,7 @@ class OlympiaForkIdSpec extends AnyFlatSpec with Matchers {
     configWithOlympiaPlaceholder.withUpdatedForkBlocks(_.copy(olympiaBlockNumber = OlympiaBlock))
 
   // Wrap ForkId.create to use List[BigInt] directly (matching the private test API pattern)
-  private implicit class ForkIdCreateWithList(obj: ForkId.type) {
+  implicit private class ForkIdCreateWithList(obj: ForkId.type) {
     def create(genesis: ByteString, forks: List[BigInt])(head: BigInt): ForkId =
       ForkIdHelper.create(genesis, forks)(head)
   }

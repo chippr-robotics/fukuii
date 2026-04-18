@@ -671,7 +671,6 @@ object PrecompiledContracts {
       if (inputData.isEmpty || inputData.length % pairSize != 0) None
       else Bls12381.g1MultiExp(inputData.toArray).map(ByteString(_))
 
-
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = {
       val k = inputData.length / pairSize
       if (k == 0) BigInt(0)
@@ -694,7 +693,6 @@ object PrecompiledContracts {
       if (inputData.isEmpty || inputData.length % pairSize != 0) None
       else Bls12381.g2MultiExp(inputData.toArray).map(ByteString(_))
 
-
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = {
       val k = inputData.length / pairSize
       if (k == 0) BigInt(0)
@@ -708,7 +706,6 @@ object PrecompiledContracts {
     def exec(inputData: ByteString): Option[ByteString] =
       if (inputData.isEmpty || inputData.length % pairSize != 0) None
       else Bls12381.pairing(inputData.toArray).map(ByteString(_))
-
 
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = {
       val k = inputData.length / pairSize

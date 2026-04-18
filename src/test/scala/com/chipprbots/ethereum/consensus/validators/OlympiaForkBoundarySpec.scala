@@ -20,11 +20,11 @@ import com.chipprbots.ethereum.testing.Tags._
 // scalastyle:off magic.number
 /** Validates block header acceptance/rejection at the Olympia fork boundary (block N-1, N, N+1).
   *
-  * Tests the interaction between validateExtraFields() and validateBaseFee() in
-  * BlockHeaderValidatorSkeleton for the EIP-1559 activation transition.
+  * Tests the interaction between validateExtraFields() and validateBaseFee() in BlockHeaderValidatorSkeleton for the
+  * EIP-1559 activation transition.
   *
-  * Reference: All 5 reference clients (go-ethereum, core-geth, Besu, Erigon, Nethermind)
-  * enforce baseFee presence/absence at fork boundaries. Fukuii H-014 backlog item.
+  * Reference: All 5 reference clients (go-ethereum, core-geth, Besu, Erigon, Nethermind) enforce baseFee
+  * presence/absence at fork boundaries. Fukuii H-014 backlog item.
   */
 class OlympiaForkBoundarySpec extends AnyFlatSpec with Matchers {
 

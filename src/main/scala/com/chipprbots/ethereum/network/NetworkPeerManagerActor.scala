@@ -408,7 +408,6 @@ class NetworkPeerManagerActor(
       return
     }
 
-
     peerWithInfo.foreach { pwi =>
       val emptyResponse = AccountRange(
         requestId = msg.requestId,
@@ -442,7 +441,6 @@ class NetworkPeerManagerActor(
       peerWithInfo.foreach(_.peer.ref ! PeerActor.SendMessage(StorageRanges(msg.requestId, Seq.empty, Seq.empty)))
       return
     }
-
 
     peerWithInfo.foreach { pwi =>
       val emptyResponse = StorageRanges(
@@ -478,7 +476,6 @@ class NetworkPeerManagerActor(
       return
     }
 
-
     peerWithInfo.foreach { pwi =>
       val emptyResponse = TrieNodes(
         requestId = msg.requestId,
@@ -511,7 +508,6 @@ class NetworkPeerManagerActor(
       peerWithInfo.foreach(_.peer.ref ! PeerActor.SendMessage(ByteCodes(msg.requestId, Seq.empty)))
       return
     }
-
 
     peerWithInfo.foreach { pwi =>
       val emptyResponse = ByteCodes(

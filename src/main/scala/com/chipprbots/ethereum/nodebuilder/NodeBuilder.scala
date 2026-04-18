@@ -156,15 +156,17 @@ trait AutoBlockerBuilder {
 
   lazy val autoBlocker: Option[AutoBlocker] =
     if (discoveryConfig.autoBlock.enabled)
-      Some(new AutoBlocker(
-        blockedIPRegistry,
-        system.scheduler,
-        system.dispatcher,
-        discoveryConfig.autoBlock.udpFailureThreshold,
-        discoveryConfig.autoBlock.udpFailureWindow,
-        discoveryConfig.autoBlock.udpBlockDuration,
-        discoveryConfig.autoBlock.hardFailureBlockDuration
-      ))
+      Some(
+        new AutoBlocker(
+          blockedIPRegistry,
+          system.scheduler,
+          system.dispatcher,
+          discoveryConfig.autoBlock.udpFailureThreshold,
+          discoveryConfig.autoBlock.udpFailureWindow,
+          discoveryConfig.autoBlock.udpBlockDuration,
+          discoveryConfig.autoBlock.hardFailureBlockDuration
+        )
+      )
     else None
 }
 

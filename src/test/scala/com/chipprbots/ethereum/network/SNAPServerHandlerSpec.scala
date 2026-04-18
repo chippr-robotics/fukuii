@@ -30,8 +30,8 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.Config
 
-/** Tests for the SNAP server-side handlers in NetworkPeerManagerActor:
-  * handleGetByteCodes, handleGetAccountRange, handleGetStorageRanges, handleGetTrieNodes.
+/** Tests for the SNAP server-side handlers in NetworkPeerManagerActor: handleGetByteCodes, handleGetAccountRange,
+  * handleGetStorageRanges, handleGetTrieNodes.
   */
 class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
 
@@ -62,7 +62,7 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
   it should "skip unknown code hashes" taggedAs (UnitTest, NetworkTest) in new TestSetup {
     val code1 = ByteString(Array.fill(100)(0x60.toByte))
     val hash1 = kec256(code1)
-    val unknownHash = ByteString(Array.fill(32)(0xFF.toByte))
+    val unknownHash = ByteString(Array.fill(32)(0xff.toByte))
 
     evmCodeStorage.put(hash1, code1).commit()
 
@@ -107,7 +107,11 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
 
   it should "return empty when no EvmCodeStorage available" taggedAs (UnitTest, NetworkTest) in new TestSetupNoStorage {
     peersInfoHolder ! MessageFromPeer(
-      GetByteCodes(requestId = BigInt(4), hashes = Seq(ByteString(Array.fill(32)(0xAA.toByte))), responseBytes = BigInt(2 * 1024 * 1024)),
+      GetByteCodes(
+        requestId = BigInt(4),
+        hashes = Seq(ByteString(Array.fill(32)(0xaa.toByte))),
+        responseBytes = BigInt(2 * 1024 * 1024)
+      ),
       peer1.id
     )
 
@@ -118,14 +122,17 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
 
   // ===== GetAccountRange =====
 
-  "handleGetAccountRange" should "return empty response when FlatAccountStorage uses non-RocksDB backend" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+  "handleGetAccountRange" should "return empty response when FlatAccountStorage uses non-RocksDB backend" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
     // EphemDataSource is not RocksDB, so seekFrom returns Stream.empty
     peersInfoHolder ! MessageFromPeer(
       GetAccountRange(
         requestId = BigInt(10),
         rootHash = ByteString(Array.fill(32)(0x11.toByte)),
         startingHash = ByteString(Array.fill(32)(0x00.toByte)),
-        limitHash = ByteString(Array.fill(32)(0xFF.toByte)),
+        limitHash = ByteString(Array.fill(32)(0xff.toByte)),
         responseBytes = BigInt(2 * 1024 * 1024)
       ),
       peer1.id
@@ -138,13 +145,16 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
     accountRange.proof shouldBe empty
   }
 
-  it should "return empty when no FlatAccountStorage available" taggedAs (UnitTest, NetworkTest) in new TestSetupNoStorage {
+  it should "return empty when no FlatAccountStorage available" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetupNoStorage {
     peersInfoHolder ! MessageFromPeer(
       GetAccountRange(
         requestId = BigInt(11),
         rootHash = ByteString(Array.fill(32)(0x11.toByte)),
         startingHash = ByteString(Array.fill(32)(0x00.toByte)),
-        limitHash = ByteString(Array.fill(32)(0xFF.toByte)),
+        limitHash = ByteString(Array.fill(32)(0xff.toByte)),
         responseBytes = BigInt(2 * 1024 * 1024)
       ),
       peer1.id
@@ -157,8 +167,11 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
 
   // ===== GetStorageRanges =====
 
-  "handleGetStorageRanges" should "return empty slots when FlatSlotStorage uses non-RocksDB backend" taggedAs (UnitTest, NetworkTest) in new TestSetup {
-    val accountHash = ByteString(Array.fill(32)(0xAA.toByte))
+  "handleGetStorageRanges" should "return empty slots when FlatSlotStorage uses non-RocksDB backend" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    val accountHash = ByteString(Array.fill(32)(0xaa.toByte))
 
     peersInfoHolder ! MessageFromPeer(
       GetStorageRanges(
@@ -166,7 +179,7 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
         rootHash = ByteString(Array.fill(32)(0x11.toByte)),
         accountHashes = Seq(accountHash),
         startingHash = ByteString(Array.fill(32)(0x00.toByte)),
-        limitHash = ByteString(Array.fill(32)(0xFF.toByte)),
+        limitHash = ByteString(Array.fill(32)(0xff.toByte)),
         responseBytes = BigInt(2 * 1024 * 1024)
       ),
       peer1.id
@@ -180,14 +193,17 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
     storageRanges.slots.head shouldBe empty
   }
 
-  it should "return empty when no FlatSlotStorage available" taggedAs (UnitTest, NetworkTest) in new TestSetupNoStorage {
+  it should "return empty when no FlatSlotStorage available" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetupNoStorage {
     peersInfoHolder ! MessageFromPeer(
       GetStorageRanges(
         requestId = BigInt(21),
         rootHash = ByteString(Array.fill(32)(0x11.toByte)),
-        accountHashes = Seq(ByteString(Array.fill(32)(0xAA.toByte))),
+        accountHashes = Seq(ByteString(Array.fill(32)(0xaa.toByte))),
         startingHash = ByteString(Array.fill(32)(0x00.toByte)),
-        limitHash = ByteString(Array.fill(32)(0xFF.toByte)),
+        limitHash = ByteString(Array.fill(32)(0xff.toByte)),
         responseBytes = BigInt(2 * 1024 * 1024)
       ),
       peer1.id
@@ -200,7 +216,10 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
 
   // ===== GetTrieNodes =====
 
-  "handleGetTrieNodes" should "return empty when no NodeStorage available" taggedAs (UnitTest, NetworkTest) in new TestSetupNoStorage {
+  "handleGetTrieNodes" should "return empty when no NodeStorage available" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetupNoStorage {
     peersInfoHolder ! MessageFromPeer(
       GetTrieNodes(
         requestId = BigInt(30),
@@ -304,7 +323,8 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
     )
 
     val peer1Probe: TestProbe = TestProbe()
-    val peer1: Peer = Peer(PeerId("peer1"), new InetSocketAddress("127.0.0.1", 1), peer1Probe.ref, false, nodeId = Some(fakeNodeId))
+    val peer1: Peer =
+      Peer(PeerId("peer1"), new InetSocketAddress("127.0.0.1", 1), peer1Probe.ref, false, nodeId = Some(fakeNodeId))
 
     // Register peer
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
@@ -335,7 +355,8 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
       )
       peerProbe.expectMsg(
         PeerActor.SendMessage(
-          com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, false)
+          com.chipprbots.ethereum.network.p2p.messages.ETH62
+            .GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, false)
         )
       )
     }
@@ -388,7 +409,8 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
     )
 
     val peer1Probe: TestProbe = TestProbe()
-    val peer1: Peer = Peer(PeerId("peer1"), new InetSocketAddress("127.0.0.1", 1), peer1Probe.ref, false, nodeId = Some(fakeNodeId))
+    val peer1: Peer =
+      Peer(PeerId("peer1"), new InetSocketAddress("127.0.0.1", 1), peer1Probe.ref, false, nodeId = Some(fakeNodeId))
 
     // Register peer
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
@@ -416,7 +438,8 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
     )
     peer1Probe.expectMsg(
       PeerActor.SendMessage(
-        com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders(Right(peer1Info.remoteStatus.bestHash), 1, 0, false)
+        com.chipprbots.ethereum.network.p2p.messages.ETH62
+          .GetBlockHeaders(Right(peer1Info.remoteStatus.bestHash), 1, 0, false)
       )
     )
   }
