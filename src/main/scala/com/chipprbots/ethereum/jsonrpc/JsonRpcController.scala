@@ -446,6 +446,15 @@ case class JsonRpcController(
         txPoolService.besuPendingTransactions,
         req
       )
+    // ── Geth-compatible methods ────────────────────────────────────────────
+    case req @ JsonRpcRequest(_, "txpool_content", _, _) =>
+      handle[TxPoolContentRequest, TxPoolContentResponse](txPoolService.content, req)
+    case req @ JsonRpcRequest(_, "txpool_contentFrom", _, _) =>
+      handle[TxPoolContentFromRequest, TxPoolContentFromResponse](txPoolService.contentFrom, req)
+    case req @ JsonRpcRequest(_, "txpool_status", _, _) =>
+      handle[TxPoolStatusRequest, TxPoolStatusResponse](txPoolService.status, req)
+    case req @ JsonRpcRequest(_, "txpool_inspect", _, _) =>
+      handle[TxPoolInspectRequest, TxPoolInspectResponse](txPoolService.inspect, req)
   }
 
   private def handleRpcRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
