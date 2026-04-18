@@ -165,6 +165,33 @@ class DebugTracingServiceSpec
       result.isRight shouldBe true
     }
 
+  // ── intermediateRoots ────────────────────────────────────────────────────────
+
+  "DebugTracingService.intermediateRoots" should
+    "return InvalidParams when block is not found" taggedAs (UnitTest, RPCTest) in new TestSetup {
+      import com.chipprbots.ethereum.jsonrpc.DebugTracingService.IntermediateRootsRequest
+      val result = service
+        .intermediateRoots(IntermediateRootsRequest(block.header.hash))
+        .unsafeRunSync()
+      result.isLeft shouldBe true
+      result.left.get.message should include("Block not found")
+    }
+
+  it should "return empty list for a block with no transactions" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    import com.chipprbots.ethereum.jsonrpc.DebugTracingService.{IntermediateRootsRequest, IntermediateRootsResponse}
+    val emptyBlock = block.copy(body = block.body.copy(transactionList = Seq.empty))
+    blockchainWriter.storeBlock(emptyBlock).commit()
+    storagesInstance.storages.blockHeadersStorage
+      .put(emptyBlock.header.parentHash, emptyBlock.header.copy(number = emptyBlock.header.number - 1))
+      .commit()
+
+    val result = service
+      .intermediateRoots(IntermediateRootsRequest(emptyBlock.header.hash))
+      .unsafeRunSync()
+
+    result shouldBe Right(IntermediateRootsResponse(Seq.empty))
+  }
+
   // ── TestSetup ────────────────────────────────────────────────────────────────
 
   class TestSetup(implicit system: ActorSystem) extends EphemBlockchainTestSetup {

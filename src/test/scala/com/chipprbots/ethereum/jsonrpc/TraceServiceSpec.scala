@@ -178,6 +178,43 @@ class TraceServiceSpec
       result.isRight shouldBe true
     }
 
+  // ── traceFilter ──────────────────────────────────────────────────────────────
+
+  "TraceService.traceFilter" should
+    "return InvalidParams when fromBlock is after toBlock" taggedAs (UnitTest, RPCTest) in new TestSetup {
+      val emptyBlock  = block.copy(body = block.body.copy(transactionList = Seq.empty))
+      // parentBlock gets a different hash because number changed in the header
+      val parentBlock = emptyBlock.copy(header = emptyBlock.header.copy(number = emptyBlock.header.number - 1))
+      blockchainWriter.storeBlock(emptyBlock).commit()
+      blockchainWriter.storeBlock(parentBlock).commit()
+
+      val result = service
+        .traceFilter(TraceFilterRequest(
+          fromBlock = BlockParam.WithHash(emptyBlock.header.hash),   // N = 3125369
+          toBlock   = BlockParam.WithHash(parentBlock.header.hash)   // N-1 = 3125368
+        ))
+        .unsafeRunSync()
+
+      result shouldBe Left(JsonRpcError.InvalidParams("fromBlock must be <= toBlock"))
+    }
+
+  it should "return empty trace list for a block with no transactions" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    val emptyBlock = block.copy(body = block.body.copy(transactionList = Seq.empty))
+    blockchainWriter.save(emptyBlock, Nil, ChainWeight.totalDifficultyOnly(emptyBlock.header.difficulty), saveAsBestBlock = true)
+    storagesInstance.storages.blockHeadersStorage
+      .put(emptyBlock.header.parentHash, emptyBlock.header.copy(number = emptyBlock.header.number - 1))
+      .commit()
+
+    val result = service
+      .traceFilter(TraceFilterRequest(
+        fromBlock = BlockParam.Latest,
+        toBlock   = BlockParam.Latest
+      ))
+      .unsafeRunSync()
+
+    result shouldBe Right(TraceFilterResponse(Seq.empty))
+  }
+
   // ── TestSetup ────────────────────────────────────────────────────────────────
 
   class TestSetup(implicit system: ActorSystem) extends EphemBlockchainTestSetup {
