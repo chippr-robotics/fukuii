@@ -325,8 +325,14 @@ class BlockPreparator(
   private[ledger] def pay(address: Address, value: UInt256, withTouch: Boolean)(
       world: InMemoryWorldStateProxy
   )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
-    if (value == UInt256.Zero || world.isZeroValueTransferToNonExistentAccount(address, value)) {
+    // EIP-161: zero-value transfers to non-existent accounts are a no-op (they
+    // must not materialise the account). All other zero-value payments still
+    // count as touches when withTouch=true — an existing empty account that
+    // receives one becomes a deletion candidate via deleteEmptyTouchedAccounts.
+    if (world.isZeroValueTransferToNonExistentAccount(address, value)) {
       world
+    } else if (value == UInt256.Zero) {
+      if (withTouch) world.touchAccounts(address) else world
     } else {
       val savedWorld = increaseAccountBalance(address, value)(world)
       if (withTouch) savedWorld.touchAccounts(address) else savedWorld
