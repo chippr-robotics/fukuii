@@ -52,6 +52,8 @@ case class JsonRpcController(
     ethSimulateService: EthSimulateService,
     adminService: AdminService,
     txPoolService: TxPoolService,
+    debugTracingService: DebugTracingService,
+    traceService: TraceService,
     override val config: JsonRpcConfig
 ) extends ApisBuilder
     with Logger
@@ -82,12 +84,13 @@ case class JsonRpcController(
     Apis.Fukuii -> handleFukuiiRequest,
     Apis.Mcp -> handleMcpRequest,
     Apis.Rpc -> handleRpcRequest,
-    Apis.Debug -> handleDebugRequest,
+    Apis.Debug -> (handleDebugRequest orElse handleDebugTracingRequest),
     Apis.Test -> handleTestRequest,
     Apis.Iele -> handleIeleRequest,
     Apis.Qa -> handleQARequest,
     Apis.Admin -> handleAdminRequest,
-    Apis.TxPool -> handleTxPoolRequest
+    Apis.TxPool -> handleTxPoolRequest,
+    Apis.Trace -> handleTraceRequest
   )
 
   override def enabledApis: Seq[String] = config.apis :+ Apis.Rpc // RPC enabled by default
@@ -303,6 +306,68 @@ case class JsonRpcController(
         r => debugService.traceBlockByNumber(r.blockNumber).map(_.map(lst =>
           DebugJsonMethodsImplicits.TraceBlockResponse(lst))), req
       )(DebugJsonMethodsImplicits.debug_traceBlockByNumber, DebugJsonMethodsImplicits.debug_traceBlockByNumber)
+  }
+
+  private def handleDebugTracingRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
+    import DebugTracingService.{
+      TraceTransactionRequest  => DTxReq,  TraceTransactionResponse  => DTxResp,
+      TraceCallRequest         => DCallReq, TraceCallResponse         => DCallResp,
+      TraceCallManyRequest     => DManyReq, TraceCallManyResponse     => DManyResp,
+      TraceBlockByHashRequest  => DBlkHashReq, TraceBlockByHashResponse  => DBlkHashResp,
+      TraceBlockByNumberRequest => DBlkNumReq, TraceBlockByNumberResponse => DBlkNumResp
+    }
+    import DebugTracingJsonMethodsImplicits.{
+      debug_traceTransaction => dTx, debug_traceCall => dCall,
+      debug_traceCallMany => dMany, debug_traceBlockByHash => dHash,
+      debug_traceBlockByNumber => dNum
+    }
+    ({
+      case req @ JsonRpcRequest(_, "debug_traceTransaction", _, _) =>
+        handle[DTxReq, DTxResp](debugTracingService.traceTransaction, req)(dTx, dTx)
+      case req @ JsonRpcRequest(_, "debug_traceCall", _, _) =>
+        handle[DCallReq, DCallResp](debugTracingService.traceCall, req)(dCall, dCall)
+      case req @ JsonRpcRequest(_, "debug_traceCallMany", _, _) =>
+        handle[DManyReq, DManyResp](debugTracingService.traceCallMany, req)(dMany, dMany)
+      case req @ JsonRpcRequest(_, "debug_traceBlockByHash", _, _) =>
+        handle[DBlkHashReq, DBlkHashResp](debugTracingService.traceBlockByHash, req)(dHash, dHash)
+      case req @ JsonRpcRequest(_, "debug_traceBlockByNumber", _, _) =>
+        handle[DBlkNumReq, DBlkNumResp](debugTracingService.traceBlockByNumber, req)(dNum, dNum)
+    }: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]])
+  }
+
+  private def handleTraceRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] =
+    handleTraceRequestImpl
+
+  private def handleTraceRequestImpl: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
+    import TraceJsonMethodsImplicits._
+    // Use explicit implicits via summon to sidestep the ambiguity with DebugTracingService types
+    val tTx       = TraceJsonMethodsImplicits.trace_transaction
+    val tBlock    = TraceJsonMethodsImplicits.trace_block
+    val tReplay   = TraceJsonMethodsImplicits.trace_replayTransaction
+    val tReplBlk  = TraceJsonMethodsImplicits.trace_replayBlockTransactions
+    val tCall     = TraceJsonMethodsImplicits.trace_call
+    val tCallMany = TraceJsonMethodsImplicits.trace_callMany
+
+    {
+      case req @ JsonRpcRequest(_, "trace_transaction", _, _) =>
+        handle[TraceService.TraceTransactionRequest, TraceService.TraceTransactionResponse](
+          traceService.traceTransaction, req)(tTx, tTx)
+      case req @ JsonRpcRequest(_, "trace_block", _, _) =>
+        handle[TraceService.TraceBlockRequest, TraceService.TraceBlockResponse](
+          traceService.traceBlock, req)(tBlock, tBlock)
+      case req @ JsonRpcRequest(_, "trace_replayTransaction", _, _) =>
+        handle[TraceService.TraceReplayTransactionRequest, TraceService.TraceReplayTransactionResponse](
+          traceService.replayTransaction, req)(tReplay, tReplay)
+      case req @ JsonRpcRequest(_, "trace_replayBlockTransactions", _, _) =>
+        handle[TraceService.TraceReplayBlockTransactionsRequest, TraceService.TraceReplayBlockTransactionsResponse](
+          traceService.replayBlockTransactions, req)(tReplBlk, tReplBlk)
+      case req @ JsonRpcRequest(_, "trace_call", _, _) =>
+        handle[TraceService.TraceCallRequest, TraceService.TraceCallResponse](
+          traceService.traceCall, req)(tCall, tCall)
+      case req @ JsonRpcRequest(_, "trace_callMany", _, _) =>
+        handle[TraceService.TraceCallManyRequest, TraceService.TraceCallManyResponse](
+          traceService.traceCallMany, req)(tCallMany, tCallMany)
+    }
   }
 
   private def handleTestRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] =

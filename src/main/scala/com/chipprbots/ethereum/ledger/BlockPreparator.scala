@@ -264,6 +264,33 @@ class BlockPreparator(
     vm.run(contextWithSimFlags)
   }
 
+  /** Like [[runVM]] but uses a one-off VM instance with the given [[ExecutionTracer]] attached.
+    * Called by [[StxLedger.simulateTransactionWithTracer]] for debug_traceTransaction / trace_call etc.
+    *
+    * Besu reference: DebugTraceTransaction.java — creates DebugOperationTracer, passes to TransactionSimulator
+    * core-geth reference: eth/tracers/api.go traceTx() — wraps evm.Config.Tracer
+    */
+  private[ledger] def runVMWithTracer(
+      stx: SignedTransaction,
+      senderAddress: Address,
+      blockHeader: BlockHeader,
+      world: InMemoryWorldStateProxy,
+      tracer: ExecutionTracer
+  )(implicit blockchainConfig: BlockchainConfig): PR = {
+    val tracerVm = new VMImpl(Some(tracer))
+    val evmConfig = EvmConfig.forBlock(blockHeader.number, blockHeader.unixTimestamp, blockchainConfig)
+    val context: PC = ProgramContext(stx, blockHeader, senderAddress, world, evmConfig)
+    val contextWithSimFlags = {
+      var ctx = context
+      if (_simulatePrecompileRelocations.nonEmpty)
+        ctx = ctx.copy(precompileRelocations = _simulatePrecompileRelocations)
+      if (_simulateTraceTransfers)
+        ctx = ctx.copy(traceTransfers = true)
+      ctx
+    }
+    tracerVm.run(contextWithSimFlags)
+  }
+
   /** Calculate total gas to be refunded See YP, eq (72)
     *
     * EIP-3529: Changes max refund from gasUsed / 2 to gasUsed / 5
