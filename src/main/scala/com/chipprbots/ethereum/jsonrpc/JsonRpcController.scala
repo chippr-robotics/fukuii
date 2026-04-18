@@ -424,6 +424,16 @@ case class JsonRpcController(
       handle[AdminUnblockIPRequest, AdminUnblockIPResponse](adminService.unblockIP, req)
     case req @ JsonRpcRequest(_, "admin_listBlockedIPs", _, _) =>
       handle[AdminListBlockedIPsRequest, AdminListBlockedIPsResponse](adminService.listBlockedIPs, req)
+    // ── Geth-compatible methods ──────────────────────────────────────────
+    case req @ JsonRpcRequest(_, "admin_addTrustedPeer", _, _) =>
+      handle[AdminAddTrustedPeerRequest, AdminAddTrustedPeerResponse](adminService.addTrustedPeer, req)
+    case req @ JsonRpcRequest(_, "admin_removeTrustedPeer", _, _) =>
+      handle[AdminRemoveTrustedPeerRequest, AdminRemoveTrustedPeerResponse](
+        adminService.removeTrustedPeer,
+        req
+      )
+    case req @ JsonRpcRequest(_, "admin_maxPeers", _, _) =>
+      handle[AdminMaxPeersRequest, AdminMaxPeersResponse](adminService.maxPeers, req)
   }
 
   private def handleTxPoolRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
