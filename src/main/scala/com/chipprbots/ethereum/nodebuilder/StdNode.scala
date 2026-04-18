@@ -102,11 +102,11 @@ abstract class BaseNode extends Node {
   }
 
   private[this] def runDBConsistencyCheck(): Unit = {
-    // Skip consistency check after SNAP sync — block headers 0..pivot don't exist yet.
-    // SNAP sync only stores the pivot block header; earlier headers are downloaded
-    // incrementally during regular sync's block-by-block import.
-    if (storagesInstance.storages.appStateStorage.isSnapSyncDone()) {
-      log.info("Skipping DB consistency check: SNAP sync stores only pivot block header, not full header chain")
+    // Skip consistency check if SNAP sync was ever started — block headers 0..pivot don't
+    // exist yet during recovery, and the chain download fills them in incrementally.
+    // Using pivot block as signal covers both in-progress and completed SNAP sync.
+    if (storagesInstance.storages.appStateStorage.getSnapSyncPivotBlock().isDefined) {
+      log.info("Skipping DB consistency check: SNAP sync in progress or complete — full header chain not yet available")
       return
     }
     // Skip consistency check in Engine API mode — optimistic imports store blocks
