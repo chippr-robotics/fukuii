@@ -36,15 +36,24 @@ object Fukuii extends Logger {
       printBanner()
     }
 
+    log.info("Fukuii app {}", Config.clientVersion)
+    log.info("Using network {}", Config.blockchains.network)
+
+    NodeStatusReporter.report()
+    MilestoneLog.logMilestones(Config.blockchains.blockchainConfig.forkBlockNumbers)
+
+    val configErrors = ConfigValidator.validate(Config.config)
+    if (configErrors.nonEmpty) {
+      configErrors.foreach(err => log.error("Configuration error: {}", err))
+      System.exit(1)
+    }
+
     val node =
       if (Config.testmode) {
         log.info("Starting Fukuii in test mode")
         deleteRocksDBFiles()
         new TestNode
       } else new StdNode
-
-    log.info("Fukuii app {}", Config.clientVersion)
-    log.info("Using network {}", Config.blockchains.network)
 
     // Update TUI with network info
     tui.foreach { ui =>
