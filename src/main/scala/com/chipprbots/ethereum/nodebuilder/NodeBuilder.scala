@@ -1,5 +1,6 @@
 package com.chipprbots.ethereum.nodebuilder
 
+import java.net.URI
 import java.time.Clock
 import java.util.concurrent.atomic.AtomicReference
 
@@ -174,7 +175,8 @@ trait PeerDiscoveryManagerBuilder {
     with DiscoveryConfigBuilder
     with DiscoveryServiceBuilder
     with AutoBlockerBuilder
-    with StorageBuilder =>
+    with StorageBuilder
+    with InstanceConfigProvider =>
 
   implicit lazy val ioRuntime: IORuntime = IORuntime.global
 
@@ -344,6 +346,12 @@ trait PeerManagerActorBuilder {
 
   lazy val peerConfiguration: PeerConfiguration = instanceConfig.Network.peer
 
+  lazy val blockedIPRegistry: BlockedIPRegistry =
+    new BlockedIPRegistry(discoveryConfig.blockedIPs)
+
+  lazy val staticNodeUris: Set[URI] =
+    StaticNodesLoader.load(instanceConfig.config.getString("datadir")).toSet
+
   lazy val peerManager: ActorRef = system.actorOf(
     PeerManagerActor.props(
       peerDiscoveryManager,
@@ -405,7 +413,7 @@ trait BlockchainHostBuilder {
       peerConfiguration,
       peerEventBus,
       networkPeerManager,
-      pendingTransactionsManager
+      Some(pendingTransactionsManager)
     ),
     "blockchain-host"
   )
@@ -721,8 +729,6 @@ trait AdminServiceBuilder {
     with BlockchainBuilder
     with BlockchainConfigBuilder
     with InstanceConfigProvider =>
-
-  lazy val blockedIPRegistry: BlockedIPRegistry = new BlockedIPRegistry(Set.empty)
 
   lazy val adminService: AdminService = new AdminService(
     nodeStatusHolder,

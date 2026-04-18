@@ -9,6 +9,7 @@ import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor._
+import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.PeerActor.DisconnectPeer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent._
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
@@ -21,6 +22,7 @@ import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
+import com.chipprbots.ethereum.network.p2p.messages.ETH62
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.NewBlockHashes
 import com.chipprbots.ethereum.network.p2p.messages.ETH66
@@ -29,6 +31,8 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH64
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
+import org.bouncycastle.util.encoders.Hex
+
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
@@ -51,6 +55,7 @@ class NetworkPeerManagerActor(
   private[network] type PeersWithInfo = Map[PeerId, PeerWithInfo]
 
   // Maximum length for hex string in debug logs (to avoid very long log lines)
+  private val MaxHexLogLength = 256
 
   // Mutable reference to SNAPSyncController that can be set after initialization
   private var snapSyncControllerOpt: Option[ActorRef] = initialSnapSyncControllerOpt
@@ -177,8 +182,9 @@ class NetworkPeerManagerActor(
       // (geth does not send unsolicited GetBlockHeaders after Status exchange).
       // For ETH69+, latestBlock/latestBlockHash are already in the Status message.
       // For ETH64+, ForkId in Status provides fork validation without needing block headers.
-      NetworkMetrics.registerAddHandshakedPeer(peer)
-      context.become(handleMessages(peersWithInfo + (peer.id -> PeerWithInfo(peer, peerInfo))))
+      val peerWithCapability = peer.copy(negotiatedCapability = Some(peerInfo.remoteStatus.capability))
+      NetworkMetrics.registerAddHandshakedPeer(peerWithCapability)
+      context.become(handleMessages(peersWithInfo + (peer.id -> PeerWithInfo(peerWithCapability, peerInfo))))
 
     case PeerDisconnected(peerId) if peersWithInfo.contains(peerId) =>
       peerEventBusActor ! Unsubscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peerId)))
