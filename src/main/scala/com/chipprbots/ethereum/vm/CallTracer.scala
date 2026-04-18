@@ -127,8 +127,8 @@ class CallTracer(onlyTopCall: Boolean = false) extends ExecutionTracer {
     var obj: JObject = ("type" -> frame.opCode) ~
       ("from" -> encodeAddress(frame.from)) ~
       ("to" -> encodeAddress(frame.to)) ~
-      ("gas" -> JInt(frame.gas.bigInteger)) ~
-      ("gasUsed" -> JInt(frame.gasUsed.bigInteger))
+      ("gas" -> JString("0x" + frame.gas.toString(16))) ~
+      ("gasUsed" -> JString("0x" + frame.gasUsed.toString(16)))
 
     if (frame.opCode == "CALL" || frame.opCode == "CREATE" || frame.opCode == "CREATE2") {
       obj = obj ~ ("value" -> encodeHex(frame.value))
