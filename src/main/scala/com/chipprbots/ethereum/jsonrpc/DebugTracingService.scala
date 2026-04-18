@@ -307,19 +307,20 @@ class DebugTracingService(
         parentHeader <- blockchainReader.getBlockHeaderByHash(block.header.parentHash)
           .toRight(JsonRpcError.InvalidParams("Parent block header not found"))
         stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
-        roots = {
-          // Chain world states tx-by-tx and capture state root after each finalization.
-          // On tx error: return partial result (same as core-geth — errors on canon blocks are rare).
-          var currentWorld = stxLedger.advanceWorldToTx(block.header, stxs, 0, parentHeader.stateRoot)
-          val rootBuf = scala.collection.mutable.ArrayBuffer[ByteString]()
-          stxs.foreach { stx =>
-            val txResult = stxLedger.simulateTransaction(stx, block.header, Some(currentWorld))
-            // stateRootHash computes the MPT root of the in-memory trie (equivalent to IntermediateRoot)
-            rootBuf += txResult.worldState.stateRootHash
-            currentWorld = txResult.worldState
+        roots = if (stxs.isEmpty) Seq.empty
+          else {
+            // Chain world states tx-by-tx and capture state root after each finalization.
+            // On tx error: return partial result (same as core-geth — errors on canon blocks are rare).
+            var currentWorld = stxLedger.advanceWorldToTx(block.header, stxs, 0, parentHeader.stateRoot)
+            val rootBuf = scala.collection.mutable.ArrayBuffer[ByteString]()
+            stxs.foreach { stx =>
+              val txResult = stxLedger.simulateTransaction(stx, block.header, Some(currentWorld))
+              // stateRootHash computes the MPT root of the in-memory trie (equivalent to IntermediateRoot)
+              rootBuf += txResult.worldState.stateRootHash
+              currentWorld = txResult.worldState
+            }
+            rootBuf.toSeq
           }
-          rootBuf.toSeq
-        }
       } yield IntermediateRootsResponse(roots)
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
