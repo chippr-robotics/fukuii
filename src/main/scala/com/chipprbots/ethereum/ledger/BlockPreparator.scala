@@ -215,7 +215,8 @@ class BlockPreparator(
       stx: SignedTransaction,
       senderAddress: Address,
       blockHeader: BlockHeader,
-      world: InMemoryWorldStateProxy
+      world: InMemoryWorldStateProxy,
+      tracer: Option[com.chipprbots.ethereum.vm.tracing.Tracer] = None
   )(implicit blockchainConfig: BlockchainConfig): PR = {
     val evmConfig = EvmConfig.forBlock(blockHeader.number, blockHeader.unixTimestamp, blockchainConfig)
     val context: PC = ProgramContext(stx, blockHeader, senderAddress, world, evmConfig)
@@ -226,6 +227,7 @@ class BlockPreparator(
         ctx = ctx.copy(precompileRelocations = _simulatePrecompileRelocations)
       if (_simulateTraceTransfers)
         ctx = ctx.copy(traceTransfers = true)
+      if (tracer.isDefined) ctx = ctx.copy(tracer = tracer)
       ctx
     }
     vm.run(contextWithSimFlags)

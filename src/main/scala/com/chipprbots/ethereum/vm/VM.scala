@@ -180,6 +180,26 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
     val byte = state.program.getByte(state.pc)
     state.config.byteToOpCode.get(byte) match {
       case Some(opCode) =>
+        // Per-opcode tracer callback (debug_trace*). Cheap when no tracer is attached —
+        // the Option check short-circuits; only active traces pay for the stack/memory
+        // snapshots.
+        state.env.tracer.foreach { tracer =>
+          val stackSnapshot = state.stack.toSeq
+          val memorySnapshot = state.memory.load(com.chipprbots.ethereum.domain.UInt256(0),
+            com.chipprbots.ethereum.domain.UInt256(state.memory.size))._1
+          tracer.onOpcode(
+            pc = state.pc,
+            op = opCode.toString,
+            gas = state.gas,
+            gasCost = BigInt(0), // filled by diff after execute
+            depth = state.env.callDepth,
+            stack = stackSnapshot,
+            memory = memorySnapshot,
+            storage = Map.empty, // structlog doesn't emit full storage per op by default
+            returnData = state.returnData,
+            error = None
+          )
+        }
         val newState = opCode.execute(state)
         import newState._
         log.trace(

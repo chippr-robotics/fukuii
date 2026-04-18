@@ -113,5 +113,8 @@ case class ProgramContext[W <: WorldStateProxy[W, S], S <: Storage[S]](
     transientStorage: Map[(Address, BigInt), BigInt] = Map.empty,
     precompileRelocations: Map[Address, Address] = Map.empty,
     blobVersionedHashes: Seq[ByteString] = Seq.empty,
-    traceTransfers: Boolean = false
+    traceTransfers: Boolean = false,
+    // Optional opcode-level tracer (debug_trace*). None is the fast default; Some
+    // enables per-step capture in the VM exec loop.
+    tracer: Option[com.chipprbots.ethereum.vm.tracing.Tracer] = None
 )
