@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.jsonrpc
 import org.json4s.JsonAST._
 import org.json4s.JsonDSL._
 
+import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.jsonrpc.EthJsonMethodsImplicits.extractCall
 import com.chipprbots.ethereum.jsonrpc.TraceService._
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
@@ -146,7 +147,50 @@ object TraceJsonMethodsImplicits extends JsonMethodsImplicits {
         JArray(t.results.toList)
     }
 
+  implicit val trace_filter: JsonMethodCodec[TraceFilterRequest, TraceFilterResponse] =
+    new JsonMethodCodec[TraceFilterRequest, TraceFilterResponse] {
+
+      override def decodeJson(params: Option[JArray]): Either[JsonRpcError, TraceFilterRequest] =
+        params match {
+          case Some(JArray((filterObj: JObject) :: _)) =>
+            val fields = filterObj.obj.toMap
+            for {
+              fromBlock <- fields.get("fromBlock")
+                .map(extractBlockParam)
+                .getOrElse(Right(BlockParam.Earliest))
+              toBlock <- fields.get("toBlock")
+                .map(extractBlockParam)
+                .getOrElse(Right(BlockParam.Latest))
+              fromAddress <- decodeAddressList(fields.get("fromAddress"))
+              toAddress   <- decodeAddressList(fields.get("toAddress"))
+              after  = fields.get("after").collect { case JInt(n) => n.toInt }
+              count  = fields.get("count").collect { case JInt(n) => n.toInt }
+            } yield TraceFilterRequest(fromBlock, toBlock, fromAddress, toAddress, after, count)
+          case None | Some(JArray(Nil)) =>
+            Right(TraceFilterRequest(BlockParam.Earliest, BlockParam.Latest))
+          case _ =>
+            Left(JsonRpcError.InvalidParams())
+        }
+
+      override def encodeJson(t: TraceFilterResponse): JValue =
+        JArray(t.traces.toList)
+    }
+
   // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+  /** Decodes an optional address list field: string or array of strings. */
+  private def decodeAddressList(fieldOpt: Option[JValue]): Either[JsonRpcError, Seq[Address]] =
+    fieldOpt match {
+      case None | Some(JNull) | Some(JNothing) => Right(Nil)
+      case Some(JString(s)) =>
+        extractAddress(s).map(Seq(_))
+      case Some(JArray(items)) =>
+        val decoded = items.collect { case JString(s) => extractAddress(s) }
+        decoded.foldRight[Either[JsonRpcError, List[Address]]](Right(Nil)) {
+          (e, acc) => for { h <- e; t <- acc } yield h :: t
+        }
+      case _ => Left(JsonRpcError.InvalidParams("fromAddress/toAddress must be string or array"))
+    }
 
   /** Decodes a trace options array: ["trace"], ["trace","vmTrace"], etc.
     *

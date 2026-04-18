@@ -75,6 +75,16 @@ object DebugTracingService {
 
   case class TraceBlockByNumberRequest(block: BlockParam, config: TraceConfig = TraceConfig())
   case class TraceBlockByNumberResponse(results: Seq[JValue])
+
+  /** debug_intermediateRoots params — block hash, optional trace config (ignored for root computation). */
+  case class IntermediateRootsRequest(blockHash: ByteString, config: TraceConfig = TraceConfig())
+  case class IntermediateRootsResponse(roots: Seq[ByteString])
+
+  /** debug_traceChain params — block range + optional tracer config.
+    * Only valid over WebSocket (method returns a subscription ID).
+    */
+  case class TraceChainRequest(fromBlock: BlockParam, toBlock: BlockParam, config: TraceConfig = TraceConfig())
+  case class TraceChainBlockResult(block: BigInt, blockHash: ByteString, traces: Seq[JValue])
 }
 
 class DebugTracingService(
@@ -272,6 +282,85 @@ class DebugTracingService(
           enableMemory  = !config.disableMemory,
           enableStorage = !config.disableStorage
         )
+    }
+
+  /** Implements debug_intermediateRoots.
+    *
+    * core-geth reference: eth/tracers/api.go IntermediateRoots() — for each tx in block, execute
+    *   it and call statedb.IntermediateRoot(deleteEmptyObjects) to get the state root after that tx.
+    *   Returns [] if block is genesis. Returns partial list if a tx errors (non-fatal per geth).
+    *
+    * Besu: no direct equivalent — this is a geth/ETC-specific debug method.
+    *
+    * Algorithm:
+    *   1. Resolve block by hash (also check bad-block store — not implemented, skip)
+    *   2. Get parent block state root
+    *   3. For each tx: simulate → capture worldState.stateRootHash (equivalent to statedb.IntermediateRoot)
+    *   4. Return list of ByteString roots (one per tx)
+    */
+  def intermediateRoots(req: IntermediateRootsRequest): ServiceResponse[IntermediateRootsResponse] =
+    IO {
+      for {
+        block  <- blockchainReader.getBlockByHash(req.blockHash)
+          .toRight(JsonRpcError.InvalidParams(s"Block not found for hash ${req.blockHash.toHex}"))
+        _ <- Either.cond(block.header.number > 0, (), JsonRpcError.InvalidParams("Genesis block is not traceable"))
+        parentHeader <- blockchainReader.getBlockHeaderByHash(block.header.parentHash)
+          .toRight(JsonRpcError.InvalidParams("Parent block header not found"))
+        stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
+        roots = {
+          // Chain world states tx-by-tx and capture state root after each finalization.
+          // On tx error: return partial result (same as core-geth — errors on canon blocks are rare).
+          var currentWorld = stxLedger.advanceWorldToTx(block.header, stxs, 0, parentHeader.stateRoot)
+          val rootBuf = scala.collection.mutable.ArrayBuffer[ByteString]()
+          stxs.foreach { stx =>
+            val txResult = stxLedger.simulateTransaction(stx, block.header, Some(currentWorld))
+            // stateRootHash computes the MPT root of the in-memory trie (equivalent to IntermediateRoot)
+            rootBuf += txResult.worldState.stateRootHash
+            currentWorld = txResult.worldState
+          }
+          rootBuf.toSeq
+        }
+      } yield IntermediateRootsResponse(roots)
+    }.recover { case _: MissingNodeException =>
+      Left(JsonRpcError.NodeNotFound)
+    }
+
+  /** Returns traced results for all blocks in [fromBlock+1, toBlock], one entry per block.
+    * Used by debug_traceChain (streaming via WebSocket).
+    *
+    * core-geth reference: eth/tracers/api.go traceChain() — parallel goroutines per block.
+    * We use sequential execution here to avoid concurrent world-state access.
+    */
+  def traceChainBlockRange(
+      fromBlock: BlockParam,
+      toBlock: BlockParam,
+      config: TraceConfig
+  ): IO[Either[JsonRpcError, Seq[TraceChainBlockResult]]] =
+    IO {
+      for {
+        fromResolved <- resolveBlock(fromBlock)
+        toResolved   <- resolveBlock(toBlock)
+        fromNum       = fromResolved.block.header.number.toLong
+        toNum         = toResolved.block.header.number.toLong
+        _ <- Either.cond(toNum > fromNum, (), JsonRpcError.InvalidParams("end block must come after start block"))
+        results = ((fromNum + 1) to toNum).flatMap { blockNum =>
+          val branch = blockchainReader.getBestBranch()
+          blockchainReader.getBlockByNumber(branch, blockNum).flatMap { block =>
+            blockchainReader.getBlockHeaderByHash(block.header.parentHash).map { parentHeader =>
+              val stxs   = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
+              val traces = stxs.zipWithIndex.map { case (stx, txIndex) =>
+                val world  = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot)
+                val tracer = selectTracer(config, Some(world))
+                stxLedger.simulateTransactionWithTracer(stx, block.header, Some(world), tracer)
+                tracer.getResult
+              }
+              TraceChainBlockResult(block.header.number, block.header.hash, traces)
+            }
+          }
+        }
+      } yield results
+    }.recover { case _: MissingNodeException =>
+      Left(JsonRpcError.NodeNotFound)
     }
 
   /** Builds a synthetic SignedTransactionWithSender from a CallTx (used in traceCall). */
