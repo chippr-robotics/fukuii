@@ -191,6 +191,7 @@ jobs:
           ./hive --help | head -5
 
       - name: Run simulator
+        id: sim
         working-directory: external/hive
         env:
           SIM: ${{ inputs.sim }}
@@ -198,8 +199,14 @@ jobs:
           SIM_BUILDARG: ${{ inputs.sim_buildarg }}
           SIM_TIMELIMIT: ${{ inputs.sim_timelimit }}
           PARALLELISM: ${{ inputs.parallelism }}
+        # Do not inherit GitHub's default `-e -o pipefail` — hive returns
+        # non-zero for a wide range of per-sim outcomes (test failures,
+        # client timeouts, flaky docker pulls) and the tabulate step below
+        # is what produces the signal we actually care about: the
+        # passed/failed count from the simulator log. Any hive catastrophic
+        # failure is surfaced in the step summary and the uploaded logs.
+        shell: bash --noprofile --norc {0}
         run: |
-          set -euxo pipefail
           args=(
             --sim "$SIM"
             --client fukuii
@@ -208,13 +215,14 @@ jobs:
             --client.checktimelimit=60s
             --loglevel 3
           )
-          if [ -n "$SIM_LIMIT" ]; then
-            args+=(--sim.limit "$SIM_LIMIT")
-          fi
-          if [ -n "$SIM_BUILDARG" ]; then
-            args+=(--sim.buildarg "$SIM_BUILDARG")
-          fi
+          [ -n "$SIM_LIMIT" ]   && args+=(--sim.limit   "$SIM_LIMIT")
+          [ -n "$SIM_BUILDARG" ] && args+=(--sim.buildarg "$SIM_BUILDARG")
+
           ./hive "${args[@]}" 2>&1 | tee hive-run.log
+          hive_exit=${PIPESTATUS[0]}
+          echo "hive_exit=${hive_exit}" >> "$GITHUB_OUTPUT"
+          echo "Hive exited with code ${hive_exit}"
+          exit 0
 
       - name: Tabulate results
         id: tab
@@ -224,8 +232,9 @@ jobs:
           LABEL: ${{ inputs.label }}
           SIM: ${{ inputs.sim }}
           THRESHOLD: ${{ inputs.pass_threshold }}
+          HIVE_EXIT: ${{ steps.sim.outputs.hive_exit }}
         run: |
-          set -euxo pipefail
+          set -uxo pipefail
           sim_log=$(ls -t workspace/logs/*-simulator-*.log 2>/dev/null | head -1 || true)
           if [ -z "$sim_log" ]; then
             passed=0
@@ -241,10 +250,34 @@ jobs:
           {
             echo "### Hive · ${LABEL} (\`${SIM}\`)"
             echo
-            echo "| passed | failed | total | threshold |"
-            echo "|-------:|-------:|------:|----------:|"
-            echo "| ${passed} | ${failed} | ${total} | ${THRESHOLD} |"
+            echo "| passed | failed | total | threshold | hive exit |"
+            echo "|-------:|-------:|------:|----------:|----------:|"
+            echo "| ${passed} | ${failed} | ${total} | ${THRESHOLD} | ${HIVE_EXIT:-?} |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+          # When no simulator log exists, hive died before launching the sim —
+          # dump the tail of the hive stdout so the PR check can show why.
+          if [ -z "$sim_log" ]; then
+            {
+              echo
+              echo "**No simulator log produced.** Tail of \`hive-run.log\`:"
+              echo
+              echo '```'
+              tail -n 80 hive-run.log 2>/dev/null || echo "(hive-run.log missing)"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$failed" -gt 0 ]; then
+            {
+              echo
+              echo "<details><summary>First 20 FAILED tests</summary>"
+              echo
+              echo '```'
+              grep "FAILED tests/" "$sim_log" | head -20
+              echo '```'
+              echo
+              echo "</details>"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload simulator logs
         if: always()
