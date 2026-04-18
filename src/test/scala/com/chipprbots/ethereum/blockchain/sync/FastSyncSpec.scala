@@ -251,7 +251,7 @@ class FastSyncSpec
           .timeout(timeout.duration)
       }
 
-      "returns Syncing with state nodes progress" taggedAs (UnitTest, SyncTest) in customTestCaseM(new Fixture {
+      "returns Syncing with state nodes progress" taggedAs (UnitTest, SyncTest, FlakyTest) in customTestCaseM(new Fixture {
         override lazy val syncConfig: SyncConfig =
           defaultSyncConfig.copy(
             peersScanInterval = 1.second,

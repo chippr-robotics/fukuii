@@ -560,8 +560,20 @@ class SNAPSyncController(
       log.warning("All healing peers stateless — refreshing pivot in-place for healing")
       refreshPivotInPlace("all healing peers stateless")
 
-    case StateHealingComplete =>
-      log.info("Healing coordinator idle (no pending tasks, no active requests).")
+    case actors.Messages.HealingStagnated(healed, pending) if currentPhase == StateHealing =>
+      log.warning(
+        s"[HEAL-STAGNATED] Healing stagnated after $healed nodes — $pending tasks unresolvable. " +
+          "Refreshing pivot to retry healing with a fresh state root."
+      )
+      trieNodeHealingCoordinator.foreach(context.stop)
+      trieNodeHealingCoordinator = None
+      refreshPivotInPlace("healing-stagnated")
+
+    case PersistHealingQueue(pending, _) =>
+      log.debug(s"[HEAL-PERSIST] ${pending.size} pending nodes (persistence not implemented on this branch — discarding)")
+
+    case StateHealingComplete(abandonedNodes, totalHealed) =>
+      log.info(s"State healing complete [abandonedNodes=$abandonedNodes, healed=$totalHealed].")
       if (trieWalkInProgress) {
         // A trie walk is already running — its result will determine next step
         log.info("Trie walk in progress, waiting for result...")
@@ -2672,8 +2684,9 @@ object SNAPSyncController {
       codeHashes: Seq[ByteString],
       storageTasks: Seq[StorageTask]
   )
-  case object StateHealingComplete
+  case class StateHealingComplete(abandonedNodes: Int, totalHealed: Int)
   case object HealingAllPeersStateless
+  case class PersistHealingQueue(pending: Seq[(Seq[ByteString], ByteString)], force: Boolean = false)
   case object StateValidationComplete
   case object GetProgress
 
