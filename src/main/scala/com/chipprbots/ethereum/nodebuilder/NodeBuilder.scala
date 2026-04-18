@@ -675,10 +675,11 @@ trait ApisBuilder extends ApisBase {
     val Admin = "admin"
     val TxPool = "txpool"
     val Trace = "trace"
+    val Subscribe = "subscribe"
   }
 
   import Apis._
-  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa, Admin, TxPool, Trace)
+  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa, Admin, TxPool, Trace, Subscribe)
 }
 
 trait AdminServiceBuilder {
@@ -885,6 +886,30 @@ trait JSONRpcIpcServerBuilder {
   self: ActorSystemBuilder with JSONRpcControllerBuilder with JSONRpcConfigBuilder =>
 
   lazy val jsonRpcIpcServer = new JsonRpcIpcServer(jsonRpcController, jsonRpcConfig.ipcServerConfig)
+}
+
+trait SubscriptionManagerBuilder {
+  self: ActorSystemBuilder with BlockchainBuilder =>
+
+  lazy val subscriptionManager: ActorRef =
+    system.actorOf(
+      com.chipprbots.ethereum.jsonrpc.SubscriptionManager.props(blockchainReader),
+      "subscription-manager"
+    )
+}
+
+trait JSONRpcWsServerBuilder {
+  self: ActorSystemBuilder
+    with JSONRpcControllerBuilder
+    with JSONRpcConfigBuilder
+    with SubscriptionManagerBuilder =>
+
+  lazy val jsonRpcWsServer: com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer =
+    new com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer(
+      jsonRpcController,
+      subscriptionManager,
+      jsonRpcConfig.wsServerConfig
+    )(system)
 }
 
 trait OmmersPoolBuilder {
@@ -1100,6 +1125,8 @@ trait Node
     with SSLContextBuilder
     with JSONRpcHttpServerBuilder
     with JSONRpcIpcServerBuilder
+    with SubscriptionManagerBuilder
+    with JSONRpcWsServerBuilder
     with EngineApiBuilder
     with ShutdownHookBuilder
     with Logger

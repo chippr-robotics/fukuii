@@ -70,7 +70,7 @@ class JsonRpcControllerSpec
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
-    response should haveError(JsonRpcError.InvalidParams("Invalid method parameters"))
+    response should haveError(JsonRpcError.InvalidParams("invalid argument: hex string without 0x prefix"))
   }
 
   it should "handle clientVersion request" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
@@ -117,6 +117,7 @@ class JsonRpcControllerSpec
       override val accountTransactionsMaxBlocks = 50000
       override def minerActiveTimeout: FiniteDuration = ???
       override def httpServerConfig: JsonRpcHttpServer.JsonRpcHttpServerConfig = ???
+      override def wsServerConfig: com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer.JsonRpcWsServerConfig = ???
       override def ipcServerConfig: JsonRpcIpcServer.JsonRpcIpcServerConfig = ???
       override def healthConfig: NodeJsonRpcHealthChecker.JsonRpcHealthConfig = ???
     }

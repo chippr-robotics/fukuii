@@ -46,6 +46,7 @@ abstract class BaseNode extends Node {
 
     // Phase 2: API servers (user-facing, ready as early as possible)
     startJsonRpcHttpServer()
+    startJsonRpcWsServer()
     startJsonRpcIpcServer()
     startEngineApiServer()
 
@@ -136,6 +137,9 @@ abstract class BaseNode extends Node {
       case Left(error) if jsonRpcConfig.httpServerConfig.enabled          => log.error(error)
       case _                                                              => // Nothing
     }
+
+  private[this] def startJsonRpcWsServer(): Unit =
+    if (jsonRpcConfig.wsServerConfig.enabled) jsonRpcWsServer.run()
 
   private[this] def startJsonRpcIpcServer(): Unit =
     if (jsonRpcConfig.ipcServerConfig.enabled) jsonRpcIpcServer.run()

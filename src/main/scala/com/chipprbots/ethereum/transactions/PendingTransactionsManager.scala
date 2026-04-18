@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor
+import com.chipprbots.ethereum.jsonrpc.NewPendingTransaction
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETH66
@@ -177,6 +178,7 @@ class PendingTransactionsManager(
         val timestamp = System.currentTimeMillis()
         transactionsToAdd.foreach(t => pendingTransactions.put(t.tx.hash, PendingTransaction(t, timestamp)))
         updatePendingNonces(transactionsToAdd)
+        transactionsToAdd.foreach(t => context.system.eventStream.publish(NewPendingTransaction(t)))
         val peers = connectedPeers.values.toSeq
         if (peers.nonEmpty) {
           self ! NotifyPeers(transactionsToAdd.toSeq, peers)
@@ -205,6 +207,7 @@ class PendingTransactionsManager(
       val newPendingTx = SignedTransactionWithSender(newStx, newStxSender)
       pendingTransactions.put(newStx.hash, PendingTransaction(newPendingTx, timestamp, receivedFromLocalSource = true))
       updatePendingNonces(Seq(newPendingTx))
+      context.system.eventStream.publish(NewPendingTransaction(newPendingTx))
 
       val peers = connectedPeers.values.toSeq
       if (peers.nonEmpty) {
