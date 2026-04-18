@@ -9,13 +9,11 @@ import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
-/** EIP-7702: intrinsic gas is `PER_EMPTY_ACCOUNT_COST` (25,000) per authorization
-  * tuple. A `REFUND_PER_EXISTING_ACCOUNT` (12,500) is returned during execution
-  * for each auth whose target account already exists, capped at gasUsed/5. This
-  * test covers the intrinsic side only; refund accounting is covered elsewhere.
+/** EIP-7702: intrinsic gas is `PER_EMPTY_ACCOUNT_COST` (25,000) per authorization tuple. A
+  * `REFUND_PER_EXISTING_ACCOUNT` (12,500) is returned during execution for each auth whose target account already
+  * exists, capped at gasUsed/5. This test covers the intrinsic side only; refund accounting is covered elsewhere.
   *
-  * See EELS prague/transactions.py `calculate_intrinsic_cost` and
-  * eips.ethereum.org/EIPS/eip-7702 (final).
+  * See EELS prague/transactions.py `calculate_intrinsic_cost` and eips.ethereum.org/EIPS/eip-7702 (final).
   */
 class EIP7702AuthGasSpec
     extends AnyFlatSpec

@@ -276,8 +276,7 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
 
       // Now the second headers request should fire.
       val refForAnswerSecondHeaderReq: org.apache.pekko.actor.ActorRef = peersClient.expectMsgPF() {
-        case PeersClient.Request(msg: ETH66GetBlockHeaders, _, _)
-            if msg.block == Left(secondBlocksBatch.head.number) =>
+        case PeersClient.Request(msg: ETH66GetBlockHeaders, _, _) if msg.block == Left(secondBlocksBatch.head.number) =>
           peersClient.lastSender
       }
       val secondGetBlockHeadersResponse: ETH66BlockHeaders = ETH66BlockHeaders(0, secondBlocksBatch.map(_.header))
