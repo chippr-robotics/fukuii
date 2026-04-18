@@ -197,8 +197,6 @@ class PendingTransactionsManager(
         if (peers.nonEmpty) {
           self ! NotifyPeers(transactionsToAdd.toSeq, peers)
         }
-        // Announce validated tx hashes to ALL connected peers via NewPooledTransactionHashes
-        announceNewTxHashes(transactionsToAdd)
       }
 
     case AddOrOverrideTransaction(newStx, blobRawBytesOpt) =>
@@ -222,7 +220,6 @@ class PendingTransactionsManager(
       pendingTransactions.put(newStx.hash, PendingTransaction(newPendingTx, timestamp, receivedFromLocalSource = true))
       updatePendingNonces(Seq(newPendingTx))
       context.system.eventStream.publish(NewPendingTransaction(newPendingTx))
-
       val peers = connectedPeers.values.toSeq
       if (peers.nonEmpty) {
         self ! NotifyPeers(Seq(newPendingTx), peers)
