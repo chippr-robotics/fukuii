@@ -37,7 +37,7 @@ class StxLedger(
       stx: SignedTransactionWithSender,
       blockHeader: BlockHeader,
       world: Option[InMemoryWorldStateProxy],
-      tracer: Option[com.chipprbots.ethereum.vm.tracing.Tracer]
+      tracer: Option[ExecutionTracer]
   ): TxResult = {
     val tx = stx.tx
 

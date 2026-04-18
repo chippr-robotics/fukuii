@@ -116,5 +116,5 @@ case class ProgramContext[W <: WorldStateProxy[W, S], S <: Storage[S]](
     traceTransfers: Boolean = false,
     // Optional opcode-level tracer (debug_trace*). None is the fast default; Some
     // enables per-step capture in the VM exec loop.
-    tracer: Option[com.chipprbots.ethereum.vm.tracing.Tracer] = None
+    tracer: Option[ExecutionTracer] = None
 )

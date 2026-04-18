@@ -293,19 +293,7 @@ case class JsonRpcController(
       handle[GetRawReceiptsRequest, GetRawReceiptsResponse](ethBlocksService.getRawReceipts, req)
     case req @ JsonRpcRequest(_, "debug_getRawTransaction", _, _) =>
       handle[GetTransactionByHashRequest, RawTransactionResponse](ethTxService.getRawTransactionByHash, req)
-    case req @ JsonRpcRequest(_, "debug_traceTransaction", _, _) =>
-      handle[DebugService.TraceTransactionRequest, DebugService.TraceTransactionResponse](
-        debugService.traceTransaction, req)
-    case req @ JsonRpcRequest(_, "debug_traceBlockByHash", _, _) =>
-      handle[DebugJsonMethodsImplicits.TraceBlockByHashRequest, DebugJsonMethodsImplicits.TraceBlockResponse](
-        r => debugService.traceBlockByHash(r.blockHash).map(_.map(lst =>
-          DebugJsonMethodsImplicits.TraceBlockResponse(lst))), req
-      )(DebugJsonMethodsImplicits.debug_traceBlockByHash, DebugJsonMethodsImplicits.debug_traceBlockByHash)
-    case req @ JsonRpcRequest(_, "debug_traceBlockByNumber", _, _) =>
-      handle[DebugJsonMethodsImplicits.TraceBlockByNumberRequest, DebugJsonMethodsImplicits.TraceBlockResponse](
-        r => debugService.traceBlockByNumber(r.blockNumber).map(_.map(lst =>
-          DebugJsonMethodsImplicits.TraceBlockResponse(lst))), req
-      )(DebugJsonMethodsImplicits.debug_traceBlockByNumber, DebugJsonMethodsImplicits.debug_traceBlockByNumber)
+    // debug_trace* methods routed to DebugTracingService via handleDebugTracingRequest.
   }
 
   private def handleDebugTracingRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {

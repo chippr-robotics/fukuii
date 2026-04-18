@@ -203,28 +203,12 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
     val byte = state.program.getByte(state.pc)
     state.config.byteToOpCode.get(byte) match {
       case Some(opCode) =>
-        // Snapshot pre-execute gas so we can report real gasCost per step. Cheap when no
-        // tracer is attached — the Option check short-circuits.
-        val traceGasBefore = state.gas
         val newState = opCode.execute(state)
-        state.env.tracer.foreach { tracer =>
-          val stackSnapshot = state.stack.toSeq
-          val memorySnapshot = state.memory.load(com.chipprbots.ethereum.domain.UInt256(0),
-            com.chipprbots.ethereum.domain.UInt256(state.memory.size))._1
-          tracer.onOpcode(
-            pc = state.pc,
-            op = opCode.toString,
-            gas = traceGasBefore,
-            gasCost = traceGasBefore - newState.gas,
-            depth = state.env.callDepth,
-            stack = stackSnapshot,
-            memory = memorySnapshot,
-            storage = Map.empty, // structlog doesn't emit full storage per op by default
-            returnData = state.returnData,
-            error = newState.error.map(_.toString)
-          )
-        }
+        // Per-opcode hook. VM-level `tracer` and the tracer carried in state.env.tracer
+        // may both be set (VM ctor vs. per-context wiring); fire both so consumers wired
+        // either way observe the step.
         tracer.foreach(_.onStep(opCode, state, newState))
+        state.env.tracer.foreach(_.onStep(opCode, state, newState))
         import newState._
         log.trace(
           s"$opCode | pc: $pc | depth: ${env.callDepth} | gasUsed: ${state.gas - gas} | gas: $gas | stack: $stack"

@@ -247,7 +247,7 @@ class BlockPreparator(
       senderAddress: Address,
       blockHeader: BlockHeader,
       world: InMemoryWorldStateProxy,
-      tracer: Option[com.chipprbots.ethereum.vm.tracing.Tracer] = None
+      tracer: Option[com.chipprbots.ethereum.vm.ExecutionTracer] = None
   )(implicit blockchainConfig: BlockchainConfig): PR = {
     val evmConfig = EvmConfig.forBlock(blockHeader.number, blockHeader.unixTimestamp, blockchainConfig)
     val context: PC = ProgramContext(stx, blockHeader, senderAddress, world, evmConfig)
