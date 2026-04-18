@@ -35,7 +35,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # Create non-root user and necessary directories.
 # Pin uid/gid to 1000 so BuildKit cache mounts can be owned by this user
 # (BuildKit cache grammar resolves uid= at build time; it can't read /etc/passwd).
-RUN groupadd -g 1000 fukuii && \
+# Ubuntu Noble's base image ships with a default `ubuntu` user at uid 1000;
+# remove it first so we own that slot.
+RUN (userdel -rf ubuntu 2>/dev/null || true) && \
+    (groupdel ubuntu 2>/dev/null || true) && \
+    groupadd -g 1000 fukuii && \
     useradd -u 1000 -g 1000 -m --home-dir=/home/fukuii --shell=/bin/bash fukuii && \
     mkdir -p /home/fukuii/.cache/sbt /home/fukuii/.ivy2 /home/fukuii/.sbt && \
     chown -R fukuii:fukuii /home/fukuii
