@@ -12,6 +12,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.mpt.HashNode
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.testing.{PeerTestHelpers, TestMptStorage}
 
@@ -153,11 +154,14 @@ class TrieNodeHealingCoordinatorSpec
       )
     )
 
+    // Pre-populate the stateRoot so ARCH-ROOT-SEED skips it (node already in storage)
+    storage.putNode(HashNode(stateRoot.toArray))
+
     coordinator ! Messages.StartTrieNodeHealing(stateRoot)
     coordinator ! Messages.HealingCheckCompletion
 
     // Should complete immediately if no nodes to heal
-    snapSyncController.expectMsg(3.seconds, SNAPSyncController.StateHealingComplete)
+    snapSyncController.expectMsgType[SNAPSyncController.StateHealingComplete](3.seconds)
   }
 
   it should "handle task failures" taggedAs UnitTest in {
