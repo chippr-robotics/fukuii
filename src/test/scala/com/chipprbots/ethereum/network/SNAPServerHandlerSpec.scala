@@ -263,8 +263,6 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
     storagesInstance.storages.appStateStorage.snapSyncDone().commit()
 
     val evmCodeStorage = storagesInstance.storages.evmCodeStorage
-    val flatAccountStorage = storagesInstance.storages.flatAccountStorage
-    val flatSlotStorage = storagesInstance.storages.flatSlotStorage
     val testNodeStorage = storagesInstance.storages.nodeStorage
 
     val peerManager: TestProbe = TestProbe()
@@ -276,11 +274,7 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
           peerManager.ref,
           peerEventBus.ref,
           storagesInstance.storages.appStateStorage,
-          Some(forkResolver),
-          evmCodeStorage = Some(evmCodeStorage),
-          nodeStorage = Some(testNodeStorage),
-          flatAccountStorage = Some(flatAccountStorage),
-          flatSlotStorage = Some(flatSlotStorage)
+          Some(forkResolver)
         )
       )
     )
@@ -360,11 +354,7 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
           peerManager.ref,
           peerEventBus.ref,
           storagesInstance.storages.appStateStorage,
-          Some(forkResolver),
-          evmCodeStorage = None,
-          nodeStorage = None,
-          flatAccountStorage = None,
-          flatSlotStorage = None
+          Some(forkResolver)
         )
       )
     )

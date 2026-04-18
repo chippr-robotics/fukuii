@@ -358,8 +358,7 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
           storagesInstance.storages.evmCodeStorage,
           peerConf,
           peerEventBus.ref,
-          networkPeerManager.ref,
-          ActorRef.noSender
+          networkPeerManager.ref
         )
       )
     )
