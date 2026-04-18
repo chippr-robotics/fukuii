@@ -117,7 +117,8 @@ class JsonRpcControllerSpec
       override val accountTransactionsMaxBlocks = 50000
       override def minerActiveTimeout: FiniteDuration = ???
       override def httpServerConfig: JsonRpcHttpServer.JsonRpcHttpServerConfig = ???
-      override def wsServerConfig: com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer.JsonRpcWsServerConfig = ???
+      override def wsServerConfig: com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer.JsonRpcWsServerConfig =
+        ???
       override def ipcServerConfig: JsonRpcIpcServer.JsonRpcIpcServerConfig = ???
       override def healthConfig: NodeJsonRpcHealthChecker.JsonRpcHealthConfig = ???
     }

@@ -29,30 +29,32 @@ import com.chipprbots.ethereum.vm.StructLogTracer
   *
   * Besu reference: ethereum/api/src/main/java/org/hyperledger/besu/ethereum/api/jsonrpc/internal/methods/
   *   - DebugTraceTransaction.java — debug_traceTransaction
-  *   - DebugTraceBlock.java        — debug_traceBlock (by hash)
+  *   - DebugTraceBlock.java — debug_traceBlock (by hash)
   *   - DebugTraceBlockByNumber.java — debug_traceBlockByNumber
-  *   - DebugTraceCall.java          — debug_traceCall
+  *   - DebugTraceCall.java — debug_traceCall
   *
   * core-geth reference: eth/tracers/api.go
-  *   - traceTx()               — debug_traceTransaction
-  *   - traceBlock()            — debug_traceBlockByHash / debug_traceBlockByNumber
-  *   - TraceCall()             — debug_traceCall
-  *   - TraceCallMany()         — debug_traceCallMany
+  *   - traceTx() — debug_traceTransaction
+  *   - traceBlock() — debug_traceBlockByHash / debug_traceBlockByNumber
+  *   - TraceCall() — debug_traceCall
+  *   - TraceCallMany() — debug_traceCallMany
   *
-  * Tracer selection follows core-geth convention:
-  *   config.tracer absent or ""  → StructLogTracer (default, opcode-level structLog)
-  *   config.tracer = "callTracer"     → CallTracer (nested call tree)
-  *   config.tracer = "prestateTracer" → PrestateTracer (pre-tx state snapshot)
-  *   any other string                 → unsupported; return error
+  * Tracer selection follows core-geth convention: config.tracer absent or "" → StructLogTracer (default, opcode-level
+  * structLog) config.tracer = "callTracer" → CallTracer (nested call tree) config.tracer = "prestateTracer" →
+  * PrestateTracer (pre-tx state snapshot) any other string → unsupported; return error
   */
 object DebugTracingService {
 
   /** Tracer configuration, mirroring go-ethereum tracers.TraceConfig.
     *
-    * @param tracer         optional named tracer; absent → default StructLogTracer
-    * @param disableStorage suppress storage snapshots per step (StructLogTracer only)
-    * @param disableMemory  suppress memory snapshots per step (StructLogTracer only)
-    * @param disableStack   suppress stack snapshots per step (unused; StructLogTracer always records stack)
+    * @param tracer
+    *   optional named tracer; absent → default StructLogTracer
+    * @param disableStorage
+    *   suppress storage snapshots per step (StructLogTracer only)
+    * @param disableMemory
+    *   suppress memory snapshots per step (StructLogTracer only)
+    * @param disableStack
+    *   suppress stack snapshots per step (unused; StructLogTracer always records stack)
     */
   case class TraceConfig(
       tracer: Option[String] = None,
@@ -80,8 +82,8 @@ object DebugTracingService {
   case class IntermediateRootsRequest(blockHash: ByteString, config: TraceConfig = TraceConfig())
   case class IntermediateRootsResponse(roots: Seq[ByteString])
 
-  /** debug_traceChain params — block range + optional tracer config.
-    * Only valid over WebSocket (method returns a subscription ID).
+  /** debug_traceChain params — block range + optional tracer config. Only valid over WebSocket (method returns a
+    * subscription ID).
     */
   case class TraceChainRequest(fromBlock: BlockParam, toBlock: BlockParam, config: TraceConfig = TraceConfig())
   case class TraceChainBlockResult(block: BigInt, blockHash: ByteString, traces: Seq[JValue])
@@ -102,26 +104,27 @@ class DebugTracingService(
   /** Implements debug_traceTransaction.
     *
     * Besu reference: DebugTraceTransaction.java — looks up block, replays prior txs via
-    *   BlockReplay.beforeTransactionInBlock(), then runs the target tx with DebugOperationTracer.
+    * BlockReplay.beforeTransactionInBlock(), then runs the target tx with DebugOperationTracer.
     *
     * core-geth reference: api.go TraceTransaction() → traceTx().
     *
     * Algorithm:
-    *   1. Look up block containing txHash via TransactionMappingStorage
-    *   2. Recover senders for all txs in block
-    *   3. Advance world state to txIndex via advanceWorldToTx (replay of prior txs)
-    *   4. Run the target tx with the chosen tracer
-    *   5. Return tracer.getResult
+    *   1. Look up block containing txHash via TransactionMappingStorage 2. Recover senders for all txs in block 3.
+    *      Advance world state to txIndex via advanceWorldToTx (replay of prior txs) 4. Run the target tx with the
+    *      chosen tracer 5. Return tracer.getResult
     */
   def traceTransaction(req: TraceTransactionRequest): ServiceResponse[TraceTransactionResponse] =
     IO {
       for {
-        location <- transactionMappingStorage.get(req.txHash)
+        location <- transactionMappingStorage
+          .get(req.txHash)
           .toRight(JsonRpcError.InvalidParams("Transaction not found"))
         TransactionLocation(blockHash, txIndex) = location
-        block <- blockchainReader.getBlockByHash(blockHash)
+        block <- blockchainReader
+          .getBlockByHash(blockHash)
           .toRight(JsonRpcError.InvalidParams(s"Block not found for hash ${blockHash.toHex}"))
-        parentHeader <- blockchainReader.getBlockHeaderByHash(block.header.parentHash)
+        parentHeader <- blockchainReader
+          .getBlockHeaderByHash(block.header.parentHash)
           .toRight(JsonRpcError.InvalidParams("Parent block not found"))
         stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
         _ <- Either.cond(
@@ -140,8 +143,8 @@ class DebugTracingService(
 
   /** Implements debug_traceCall.
     *
-    * Besu reference: DebugTraceCall.java — uses BlockReplay to obtain world state at the given
-    *   block tag, constructs a synthetic SignedTransactionWithSender, then calls processTracing.
+    * Besu reference: DebugTraceCall.java — uses BlockReplay to obtain world state at the given block tag, constructs a
+    * synthetic SignedTransactionWithSender, then calls processTracing.
     *
     * core-geth reference: api.go TraceCall() → traceTx().
     */
@@ -160,8 +163,8 @@ class DebugTracingService(
 
   /** Implements debug_traceCallMany.
     *
-    * core-geth reference: api.go TraceCallMany() — executes a list of (call, traceConfig) pairs
-    *   sequentially against the same block context, threading world state between calls.
+    * core-geth reference: api.go TraceCallMany() — executes a list of (call, traceConfig) pairs sequentially against
+    * the same block context, threading world state between calls.
     *
     * Besu does not implement this method; core-geth alignment only.
     */
@@ -173,12 +176,14 @@ class DebugTracingService(
         // Execute calls sequentially. World state is not threaded (each call sees
         // the block's state), matching core-geth TraceCallMany behaviour.
         val results: Seq[JValue] = req.calls.map { case (callTx, config) =>
-          buildCallTx(callTx, resolved.block).map { stx =>
-            val world  = resolved.pendingState
-            val tracer = selectTracer(config, world)
-            stxLedger.simulateTransactionWithTracer(stx, resolved.block.header, world, tracer)
-            tracer.getResult
-          }.getOrElse(org.json4s.JNull)
+          buildCallTx(callTx, resolved.block)
+            .map { stx =>
+              val world = resolved.pendingState
+              val tracer = selectTracer(config, world)
+              stxLedger.simulateTransactionWithTracer(stx, resolved.block.header, world, tracer)
+              tracer.getResult
+            }
+            .getOrElse(org.json4s.JNull)
         }
         TraceCallManyResponse(results)
       }
@@ -188,15 +193,16 @@ class DebugTracingService(
 
   /** Implements debug_traceBlockByHash.
     *
-    * Besu reference: DebugTraceBlock.java — iterates block transactions, for each one
-    *   calls BlockReplay.beforeTransactionInBlock() then processTracing.
+    * Besu reference: DebugTraceBlock.java — iterates block transactions, for each one calls
+    * BlockReplay.beforeTransactionInBlock() then processTracing.
     *
     * core-geth reference: api.go traceBlock() — calls traceTx() per transaction.
     */
   def traceBlockByHash(req: TraceBlockByHashRequest): ServiceResponse[TraceBlockByHashResponse] =
     IO {
       for {
-        block <- blockchainReader.getBlockByHash(req.blockHash)
+        block <- blockchainReader
+          .getBlockByHash(req.blockHash)
           .toRight(JsonRpcError.InvalidParams(s"Block not found for hash ${req.blockHash.toHex}"))
         result <- traceAllTxsInBlock(block, req.config)
       } yield TraceBlockByHashResponse(result)
@@ -224,16 +230,17 @@ class DebugTracingService(
 
   /** Replays all transactions in a block, returning one trace result per tx.
     *
-    * Each tx is traced independently with a fresh tracer, using advanceWorldToTx to
-    * reproduce the exact world state the tx saw on-chain.
+    * Each tx is traced independently with a fresh tracer, using advanceWorldToTx to reproduce the exact world state the
+    * tx saw on-chain.
     */
   private def traceAllTxsInBlock(block: Block, config: TraceConfig): Either[JsonRpcError, Seq[JValue]] =
-    blockchainReader.getBlockHeaderByHash(block.header.parentHash)
+    blockchainReader
+      .getBlockHeaderByHash(block.header.parentHash)
       .toRight(JsonRpcError.InvalidParams("Parent block header not found"))
       .map { parentHeader =>
         val stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
         stxs.zipWithIndex.map { case (stx, txIndex) =>
-          val world  = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot)
+          val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot)
           val tracer = selectTracer(config, Some(world))
           stxLedger.simulateTransactionWithTracer(stx, block.header, Some(world), tracer)
           tracer.getResult
@@ -244,11 +251,13 @@ class DebugTracingService(
     *
     * core-geth reference: tracers/tracers.go — defaultTracer, "callTracer", "prestateTracer".
     *
-    * StructLogTracer is the default (absent or empty tracer name), matching Besu and core-geth.
-    * PrestateTracer requires a pre-execution world snapshot; supply via the preWorld param.
+    * StructLogTracer is the default (absent or empty tracer name), matching Besu and core-geth. PrestateTracer requires
+    * a pre-execution world snapshot; supply via the preWorld param.
     *
-    * @param config    trace configuration selecting the tracer type
-    * @param preWorld  pre-execution world state (required for prestateTracer, ignored otherwise)
+    * @param config
+    *   trace configuration selecting the tracer type
+    * @param preWorld
+    *   pre-execution world state (required for prestateTracer, ignored otherwise)
     */
   private def selectTracer(
       config: TraceConfig,
@@ -257,7 +266,7 @@ class DebugTracingService(
     config.tracer.filterNot(_.isEmpty) match {
       case None | Some("structLogger") =>
         new StructLogTracer(
-          enableMemory  = !config.disableMemory,
+          enableMemory = !config.disableMemory,
           enableStorage = !config.disableStorage
         )
       case Some("callTracer") =>
@@ -272,42 +281,44 @@ class DebugTracingService(
             ](world)
           case None =>
             new StructLogTracer(
-              enableMemory  = !config.disableMemory,
+              enableMemory = !config.disableMemory,
               enableStorage = !config.disableStorage
             )
         }
       case Some(_) =>
         // Unsupported tracer name — fall back to StructLogTracer
         new StructLogTracer(
-          enableMemory  = !config.disableMemory,
+          enableMemory = !config.disableMemory,
           enableStorage = !config.disableStorage
         )
     }
 
   /** Implements debug_intermediateRoots.
     *
-    * core-geth reference: eth/tracers/api.go IntermediateRoots() — for each tx in block, execute
-    *   it and call statedb.IntermediateRoot(deleteEmptyObjects) to get the state root after that tx.
-    *   Returns [] if block is genesis. Returns partial list if a tx errors (non-fatal per geth).
+    * core-geth reference: eth/tracers/api.go IntermediateRoots() — for each tx in block, execute it and call
+    * statedb.IntermediateRoot(deleteEmptyObjects) to get the state root after that tx. Returns [] if block is genesis.
+    * Returns partial list if a tx errors (non-fatal per geth).
     *
     * Besu: no direct equivalent — this is a geth/ETC-specific debug method.
     *
     * Algorithm:
-    *   1. Resolve block by hash (also check bad-block store — not implemented, skip)
-    *   2. Get parent block state root
-    *   3. For each tx: simulate → capture worldState.stateRootHash (equivalent to statedb.IntermediateRoot)
-    *   4. Return list of ByteString roots (one per tx)
+    *   1. Resolve block by hash (also check bad-block store — not implemented, skip) 2. Get parent block state root 3.
+    *      For each tx: simulate → capture worldState.stateRootHash (equivalent to statedb.IntermediateRoot) 4. Return
+    *      list of ByteString roots (one per tx)
     */
   def intermediateRoots(req: IntermediateRootsRequest): ServiceResponse[IntermediateRootsResponse] =
     IO {
       for {
-        block  <- blockchainReader.getBlockByHash(req.blockHash)
+        block <- blockchainReader
+          .getBlockByHash(req.blockHash)
           .toRight(JsonRpcError.InvalidParams(s"Block not found for hash ${req.blockHash.toHex}"))
         _ <- Either.cond(block.header.number > 0, (), JsonRpcError.InvalidParams("Genesis block is not traceable"))
-        parentHeader <- blockchainReader.getBlockHeaderByHash(block.header.parentHash)
+        parentHeader <- blockchainReader
+          .getBlockHeaderByHash(block.header.parentHash)
           .toRight(JsonRpcError.InvalidParams("Parent block header not found"))
         stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
-        roots = if (stxs.isEmpty) Seq.empty
+        roots =
+          if (stxs.isEmpty) Seq.empty
           else {
             // Chain world states tx-by-tx and capture state root after each finalization.
             // On tx error: return partial result (same as core-geth — errors on canon blocks are rare).
@@ -326,11 +337,11 @@ class DebugTracingService(
       Left(JsonRpcError.NodeNotFound)
     }
 
-  /** Returns traced results for all blocks in [fromBlock+1, toBlock], one entry per block.
-    * Used by debug_traceChain (streaming via WebSocket).
+  /** Returns traced results for all blocks in [fromBlock+1, toBlock], one entry per block. Used by debug_traceChain
+    * (streaming via WebSocket).
     *
-    * core-geth reference: eth/tracers/api.go traceChain() — parallel goroutines per block.
-    * We use sequential execution here to avoid concurrent world-state access.
+    * core-geth reference: eth/tracers/api.go traceChain() — parallel goroutines per block. We use sequential execution
+    * here to avoid concurrent world-state access.
     */
   def traceChainBlockRange(
       fromBlock: BlockParam,
@@ -340,17 +351,17 @@ class DebugTracingService(
     IO {
       for {
         fromResolved <- resolveBlock(fromBlock)
-        toResolved   <- resolveBlock(toBlock)
-        fromNum       = fromResolved.block.header.number.toLong
-        toNum         = toResolved.block.header.number.toLong
+        toResolved <- resolveBlock(toBlock)
+        fromNum = fromResolved.block.header.number.toLong
+        toNum = toResolved.block.header.number.toLong
         _ <- Either.cond(toNum > fromNum, (), JsonRpcError.InvalidParams("end block must come after start block"))
         results = ((fromNum + 1) to toNum).flatMap { blockNum =>
           val branch = blockchainReader.getBestBranch()
           blockchainReader.getBlockByNumber(branch, blockNum).flatMap { block =>
             blockchainReader.getBlockHeaderByHash(block.header.parentHash).map { parentHeader =>
-              val stxs   = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
+              val stxs = SignedTransactionWithSender.getSignedTransactions(block.body.transactionList)
               val traces = stxs.zipWithIndex.map { case (stx, txIndex) =>
-                val world  = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot)
+                val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader.stateRoot)
                 val tracer = selectTracer(config, Some(world))
                 stxLedger.simulateTransactionWithTracer(stx, block.header, Some(world), tracer)
                 tracer.getResult

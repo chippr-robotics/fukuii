@@ -33,11 +33,10 @@ import com.chipprbots.ethereum.testing.Tags._
 
 /** Unit tests for SubscriptionManager actor.
   *
-  * Besu reference:
-  *   ethereum/api/.../websocket/subscription/SubscriptionManager.java
-  *   ethereum/api/.../websocket/subscription/blockheaders/NewBlockHeadersSubscriptionService.java
-  *   ethereum/api/.../websocket/subscription/pending/PendingTransactionSubscriptionService.java
-  *   ethereum/api/.../websocket/subscription/logs/LogsSubscriptionService.java
+  * Besu reference: ethereum/api/.../websocket/subscription/SubscriptionManager.java
+  * ethereum/api/.../websocket/subscription/blockheaders/NewBlockHeadersSubscriptionService.java
+  * ethereum/api/.../websocket/subscription/pending/PendingTransactionSubscriptionService.java
+  * ethereum/api/.../websocket/subscription/logs/LogsSubscriptionService.java
   *
   * Tests cover: connection lifecycle, subscribe/unsubscribe, push notification dispatch.
   */
@@ -173,10 +172,14 @@ class SubscriptionManagerSpec
     val connId = "conn-unsub"
 
     mgr ! RegisterConnection(connId, queue)
-    val subId = Await.result(
-      (mgr ? Subscribe(connId, "newHeads", None)).mapTo[SubscribeResponse],
-      5.seconds
-    ).result.toOption.get
+    val subId = Await
+      .result(
+        (mgr ? Subscribe(connId, "newHeads", None)).mapTo[SubscribeResponse],
+        5.seconds
+      )
+      .result
+      .toOption
+      .get
 
     val resp = Await.result(
       (mgr ? Unsubscribe(connId, subId)).mapTo[UnsubscribeResponse],
@@ -192,10 +195,14 @@ class SubscriptionManagerSpec
 
     mgr ! RegisterConnection("conn-a", queue1)
     mgr ! RegisterConnection("conn-b", queue2)
-    val subId = Await.result(
-      (mgr ? Subscribe("conn-a", "newHeads", None)).mapTo[SubscribeResponse],
-      5.seconds
-    ).result.toOption.get
+    val subId = Await
+      .result(
+        (mgr ? Subscribe("conn-a", "newHeads", None)).mapTo[SubscribeResponse],
+        5.seconds
+      )
+      .result
+      .toOption
+      .get
 
     // conn-b trying to unsubscribe conn-a's subscription
     val resp = Await.result(

@@ -11,19 +11,16 @@ import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodCodec
 /** JSON-RPC codecs for the debug_trace* family of methods.
   *
   * Besu reference: ethereum/api/src/main/java/org/hyperledger/besu/ethereum/api/jsonrpc/internal/methods/
-  *   - DebugTraceTransaction.java  — debug_traceTransaction
-  *   - DebugTraceBlock.java        — debug_traceBlockByHash
+  *   - DebugTraceTransaction.java — debug_traceTransaction
+  *   - DebugTraceBlock.java — debug_traceBlockByHash
   *   - DebugTraceBlockByNumber.java — debug_traceBlockByNumber
-  *   - DebugTraceCall.java          — debug_traceCall
+  *   - DebugTraceCall.java — debug_traceCall
   *
   * core-geth reference: internal/ethapi/api.go (TraceCallMany), eth/tracers/api.go
   *
-  * Parameter format:
-  *   debug_traceTransaction(txHash [, traceConfig])
-  *   debug_traceCall(callObj, blockParam [, traceConfig])
-  *   debug_traceCallMany([{callObj, traceConfig},...], blockParam)
-  *   debug_traceBlockByHash(blockHash [, traceConfig])
-  *   debug_traceBlockByNumber(blockParam [, traceConfig])
+  * Parameter format: debug_traceTransaction(txHash [, traceConfig]) debug_traceCall(callObj, blockParam [,
+  * traceConfig]) debug_traceCallMany([{callObj, traceConfig},...], blockParam) debug_traceBlockByHash(blockHash [,
+  * traceConfig]) debug_traceBlockByNumber(blockParam [, traceConfig])
   */
 object DebugTracingJsonMethodsImplicits extends JsonMethodsImplicits {
 
@@ -49,8 +46,8 @@ object DebugTracingJsonMethodsImplicits extends JsonMethodsImplicits {
         params match {
           case Some(JArray((txObj: JObject) :: blockParam :: rest)) =>
             for {
-              tx     <- extractCall(txObj)
-              block  <- extractBlockParam(blockParam)
+              tx <- extractCall(txObj)
+              block <- extractBlockParam(blockParam)
               config <- extractTraceConfig(rest.headOption)
             } yield TraceCallRequest(tx, block, config)
           case Some(JArray((txObj: JObject) :: Nil)) =>
@@ -75,7 +72,7 @@ object DebugTracingJsonMethodsImplicits extends JsonMethodsImplicits {
                 val decoded = callList.map {
                   case JArray((txObj: JObject) :: rest) =>
                     for {
-                      tx     <- extractCall(txObj)
+                      tx <- extractCall(txObj)
                       config <- extractTraceConfig(rest.headOption)
                     } yield (tx, config)
                   case _ =>
@@ -100,7 +97,7 @@ object DebugTracingJsonMethodsImplicits extends JsonMethodsImplicits {
           case Some(JArray(JString(hash) :: rest)) =>
             for {
               blockHash <- extractBytes(hash)
-              config    <- extractTraceConfig(rest.headOption)
+              config <- extractTraceConfig(rest.headOption)
             } yield TraceBlockByHashRequest(blockHash, config)
           case _ =>
             Left(JsonRpcError.InvalidParams())
@@ -116,7 +113,7 @@ object DebugTracingJsonMethodsImplicits extends JsonMethodsImplicits {
         params match {
           case Some(JArray(blockParam :: rest)) =>
             for {
-              block  <- extractBlockParam(blockParam)
+              block <- extractBlockParam(blockParam)
               config <- extractTraceConfig(rest.headOption)
             } yield TraceBlockByNumberRequest(block, config)
           case _ =>
@@ -147,8 +144,8 @@ object DebugTracingJsonMethodsImplicits extends JsonMethodsImplicits {
         params match {
           case Some(JArray(fromParam :: toParam :: rest)) =>
             for {
-              from   <- extractBlockParam(fromParam)
-              to     <- extractBlockParam(toParam)
+              from <- extractBlockParam(fromParam)
+              to <- extractBlockParam(toParam)
               config <- extractTraceConfig(rest.headOption)
             } yield TraceChainRequest(from, to, config)
           case _ =>
@@ -158,23 +155,19 @@ object DebugTracingJsonMethodsImplicits extends JsonMethodsImplicits {
       override def encodeJson(t: Seq[TraceChainBlockResult]): JValue =
         JArray(t.map { r =>
           JObject(
-            "block"     -> JString("0x" + r.block.toString(16)),
+            "block" -> JString("0x" + r.block.toString(16)),
             "blockHash" -> JString("0x" + org.bouncycastle.util.encoders.Hex.toHexString(r.blockHash.toArray)),
-            "traces"    -> JArray(r.traces.toList)
+            "traces" -> JArray(r.traces.toList)
           )
         }.toList)
     }
 
   // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-  /** Decodes an optional TraceConfig from a JSON object parameter.
-    * Absent or JNull → default TraceConfig().
+  /** Decodes an optional TraceConfig from a JSON object parameter. Absent or JNull → default TraceConfig().
     *
-    * Besu/core-geth traceConfig fields:
-    *   tracer:          string  (named tracer, e.g. "callTracer")
-    *   disableStorage:  boolean
-    *   disableMemory:   boolean
-    *   disableStack:    boolean
+    * Besu/core-geth traceConfig fields: tracer: string (named tracer, e.g. "callTracer") disableStorage: boolean
+    * disableMemory: boolean disableStack: boolean
     */
   def extractTraceConfig(param: Option[JValue]): Either[JsonRpcError, TraceConfig] =
     param match {
@@ -184,8 +177,8 @@ object DebugTracingJsonMethodsImplicits extends JsonMethodsImplicits {
         val map = fields.toMap
         val tracer = map.get("tracer").collect { case JString(s) => s }
         val disableStorage = map.get("disableStorage").collect { case JBool(b) => b }.getOrElse(false)
-        val disableMemory  = map.get("disableMemory").collect { case JBool(b) => b }.getOrElse(false)
-        val disableStack   = map.get("disableStack").collect { case JBool(b) => b }.getOrElse(false)
+        val disableMemory = map.get("disableMemory").collect { case JBool(b) => b }.getOrElse(false)
+        val disableStack = map.get("disableStack").collect { case JBool(b) => b }.getOrElse(false)
         Right(TraceConfig(tracer, disableStorage, disableMemory, disableStack))
       case _ =>
         Right(TraceConfig()) // ignore unknown forms

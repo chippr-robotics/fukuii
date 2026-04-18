@@ -23,7 +23,7 @@ object ProgramContext {
 
     val blobHashes = tx match {
       case blob: BlobTransaction => blob.blobVersionedHashes
-      case _ => Seq.empty
+      case _                     => Seq.empty
     }
 
     ProgramContext(

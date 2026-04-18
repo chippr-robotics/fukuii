@@ -102,7 +102,8 @@ object EthJsonMethodsImplicits extends JsonMethodsImplicits {
 
   }
 
-  implicit val eth_createAccessList: JsonMethodDecoder[CreateAccessListRequest] with JsonEncoder[CreateAccessListResponse] =
+  implicit val eth_createAccessList
+      : JsonMethodDecoder[CreateAccessListRequest] with JsonEncoder[CreateAccessListResponse] =
     new JsonMethodDecoder[CreateAccessListRequest] with JsonEncoder[CreateAccessListResponse] {
       def decodeJson(params: Option[JArray]): Either[JsonRpcError, CreateAccessListRequest] =
         params match {
@@ -121,13 +122,14 @@ object EthJsonMethodsImplicits extends JsonMethodsImplicits {
           "accessList" -> JArray(t.accessList.toList.map { item =>
             val addr = item("address") match {
               case a: com.chipprbots.ethereum.domain.Address => encodeAsHex(a.bytes)
-              case other => JString(other.toString)
+              case other                                     => JString(other.toString)
             }
             val keys = item("storageKeys") match {
-              case ks: List[?] => JArray(ks.map {
-                case bi: BigInt => JString("0x" + bi.toString(16).reverse.padTo(64, '0').reverse)
-                case other => JString(other.toString)
-              })
+              case ks: List[?] =>
+                JArray(ks.map {
+                  case bi: BigInt => JString("0x" + bi.toString(16).reverse.padTo(64, '0').reverse)
+                  case other      => JString(other.toString)
+                })
               case _ => JArray(Nil)
             }
             JObject("address" -> addr, "storageKeys" -> keys)

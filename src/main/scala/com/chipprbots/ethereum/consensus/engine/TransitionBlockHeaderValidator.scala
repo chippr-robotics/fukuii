@@ -10,11 +10,11 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 
 /** Hybrid validator for Engine API chains that transition from PoW to PoS.
   *
-  * Pre-merge blocks (difficulty > 0) are validated with standard PoW rules (Ethash).
-  * Post-merge blocks (difficulty == 0) are validated with post-merge rules (no PoW).
+  * Pre-merge blocks (difficulty > 0) are validated with standard PoW rules (Ethash). Post-merge blocks (difficulty ==
+  * 0) are validated with post-merge rules (no PoW).
   *
-  * This is the correct validator for any chain that starts with PoW mining and
-  * transitions to CL-driven consensus at a terminal total difficulty.
+  * This is the correct validator for any chain that starts with PoW mining and transitions to CL-driven consensus at a
+  * terminal total difficulty.
   */
 object TransitionBlockHeaderValidator extends BlockHeaderValidator {
 

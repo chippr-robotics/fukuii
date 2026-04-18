@@ -13,8 +13,8 @@ import com.chipprbots.ethereum.utils.Hex
 
 /** Native prestateTracer matching go-ethereum's eth/tracers/native/prestate.go.
   *
-  * Besu reference: StateTraceGenerator generates state diffs; this tracer also supports
-  * go-ethereum's pre-state snapshot mode.
+  * Besu reference: StateTraceGenerator generates state diffs; this tracer also supports go-ethereum's pre-state
+  * snapshot mode.
   *
   * Default mode — returns pre-transaction state for all touched accounts:
   * {{{
@@ -26,21 +26,22 @@ import com.chipprbots.ethereum.utils.Hex
   * { "pre": { "0xaddr": { ... } }, "post": { "0xaddr": { ... } } }
   * }}}
   *
-  * @param preWorld  world state snapshot before transaction execution
-  * @param diffMode  when true, return {pre, post} diff instead of just prestate
+  * @param preWorld
+  *   world state snapshot before transaction execution
+  * @param diffMode
+  *   when true, return {pre, post} diff instead of just prestate
   */
 class PrestateTracer[W <: WorldStateProxy[W, S], S <: Storage[S]](
     val preWorld: W,
     diffMode: Boolean = false
 ) extends ExecutionTracer {
 
-  private val touchedAddresses   = mutable.LinkedHashSet[Address]()
+  private val touchedAddresses = mutable.LinkedHashSet[Address]()
   private val touchedStorageKeys = mutable.HashMap[Address, mutable.LinkedHashSet[UInt256]]()
   private var postWorld: Option[W] = None
 
-  def setPostWorld(world: W): Unit = {
+  def setPostWorld(world: W): Unit =
     postWorld = Some(world)
-  }
 
   override def onTxStart(from: Address, to: Option[Address], gas: BigInt, value: BigInt, input: ByteString): Unit = {
     touchedAddresses += from
@@ -69,7 +70,7 @@ class PrestateTracer[W <: WorldStateProxy[W, S], S <: Storage[S]](
       val stack = prevState.stack
       if (stack.size >= 1) {
         val addr = prevState.env.ownerAddr
-        val key  = stack.toSeq.head
+        val key = stack.toSeq.head
         touchedAddresses += addr
         touchedStorageKeys.getOrElseUpdate(addr, mutable.LinkedHashSet.empty) += key
       }
@@ -92,7 +93,7 @@ class PrestateTracer[W <: WorldStateProxy[W, S], S <: Storage[S]](
     }
   }
 
-  override def getResult: JValue = {
+  override def getResult: JValue =
     if (diffMode) {
       postWorld match {
         case Some(pw) => encodeDiff(pw)
@@ -101,7 +102,6 @@ class PrestateTracer[W <: WorldStateProxy[W, S], S <: Storage[S]](
     } else {
       encodePrestate()
     }
-  }
 
   private def encodePrestate(): JValue = {
     val fields = touchedAddresses.toList.flatMap { addr =>
@@ -114,12 +114,12 @@ class PrestateTracer[W <: WorldStateProxy[W, S], S <: Storage[S]](
   }
 
   private def encodeDiff(pw: W): JValue = {
-    val preFields  = mutable.ListBuffer[JField]()
+    val preFields = mutable.ListBuffer[JField]()
     val postFields = mutable.ListBuffer[JField]()
 
     touchedAddresses.foreach { addr =>
-      val addrHex     = "0x" + Hex.toHexString(addr.bytes.toArray)
-      val preAccount  = preWorld.getAccount(addr)
+      val addrHex = "0x" + Hex.toHexString(addr.bytes.toArray)
+      val preAccount = preWorld.getAccount(addr)
       val postAccount = pw.getAccount(addr)
 
       preAccount.foreach { acc =>
@@ -128,7 +128,7 @@ class PrestateTracer[W <: WorldStateProxy[W, S], S <: Storage[S]](
 
       postAccount.foreach { postAcc =>
         val preAcc = preAccount.getOrElse(com.chipprbots.ethereum.domain.Account.empty(0))
-        val diff   = encodeAccountDiff(addr, preAcc, postAcc, pw)
+        val diff = encodeAccountDiff(addr, preAcc, postAcc, pw)
         if (diff != JNothing) {
           postFields += JField(addrHex, diff)
         }
@@ -185,7 +185,7 @@ class PrestateTracer[W <: WorldStateProxy[W, S], S <: Storage[S]](
       fields :+= JField("nonce", JInt(postAcc.nonce.bigInteger))
     }
 
-    val preCode  = preWorld.getCode(addr)
+    val preCode = preWorld.getCode(addr)
     val postCode = pw.getCode(addr)
     if (preCode != postCode && postCode.nonEmpty) {
       fields :+= JField("code", JString("0x" + Hex.toHexString(postCode.toArray)))
@@ -193,10 +193,10 @@ class PrestateTracer[W <: WorldStateProxy[W, S], S <: Storage[S]](
 
     val storageKeys = touchedStorageKeys.getOrElse(addr, Set.empty)
     if (storageKeys.nonEmpty) {
-      val preStorage  = preWorld.getStorage(addr)
+      val preStorage = preWorld.getStorage(addr)
       val postStorage = pw.getStorage(addr)
       val storageFields = storageKeys.toList.flatMap { key =>
-        val preVal  = preStorage.load(key.toBigInt)
+        val preVal = preStorage.load(key.toBigInt)
         val postVal = postStorage.load(key.toBigInt)
         if (preVal != postVal) {
           val keyHex = "0x" + key.toBigInt.toString(16).reverse.padTo(64, '0').reverse

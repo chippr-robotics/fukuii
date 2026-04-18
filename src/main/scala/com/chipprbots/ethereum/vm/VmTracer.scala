@@ -35,11 +35,11 @@ import com.chipprbots.ethereum.utils.Hex
   * }
   * }}}
   *
-  * Frame stack mirrors the call depth. onCallEnter pushes a new frame; onCallExit encodes it
-  * and attaches it as the `sub` field on the triggering CALL/CREATE op in the parent frame.
+  * Frame stack mirrors the call depth. onCallEnter pushes a new frame; onCallExit encodes it and attaches it as the
+  * `sub` field on the triggering CALL/CREATE op in the parent frame.
   *
-  * Divergence from Besu: VmTraceGenerator post-processes TraceFrames; this tracer streams
-  * during execution. Semantically equivalent for standard use cases.
+  * Divergence from Besu: VmTraceGenerator post-processes TraceFrames; this tracer streams during execution.
+  * Semantically equivalent for standard use cases.
   */
 class VmTracer extends ExecutionTracer {
 
@@ -53,12 +53,12 @@ class VmTracer extends ExecutionTracer {
       cost: BigInt,
       exUsed: BigInt,
       exPush: Seq[BigInt],
-      exMem: Option[(BigInt, ByteString)],  // (offset, data written)
-      exStore: Option[(BigInt, BigInt)],     // (key, value written)
+      exMem: Option[(BigInt, ByteString)], // (offset, data written)
+      exStore: Option[(BigInt, BigInt)], // (key, value written)
       var sub: Option[JValue] = None
   )
 
-  private val frameStack              = mutable.Stack[VmFrame]()
+  private val frameStack = mutable.Stack[VmFrame]()
   private var rootFrame: Option[VmFrame] = None
 
   override def onTxStart(from: Address, to: Option[Address], gas: BigInt, value: BigInt, input: ByteString): Unit = {
@@ -79,7 +79,7 @@ class VmTracer extends ExecutionTracer {
       frame.code = prevState.env.program.code
     }
 
-    val cost   = prevState.gas - nextState.gas
+    val cost = prevState.gas - nextState.gas
     val exUsed = nextState.gas
 
     val exPush: Seq[BigInt] =
@@ -91,11 +91,11 @@ class VmTracer extends ExecutionTracer {
     val exMem: Option[(BigInt, ByteString)] = opCode match {
       case MSTORE if prevState.stack.size >= 2 =>
         val offset = prevState.stack.toSeq.head
-        val data   = nextState.memory.load(offset, UInt256(32))._1
+        val data = nextState.memory.load(offset, UInt256(32))._1
         Some((offset.toBigInt, data))
       case MSTORE8 if prevState.stack.size >= 2 =>
         val offset = prevState.stack.toSeq.head
-        val data   = nextState.memory.load(offset, UInt256(1))._1
+        val data = nextState.memory.load(offset, UInt256(1))._1
         Some((offset.toBigInt, data))
       case _ =>
         None
@@ -104,18 +104,18 @@ class VmTracer extends ExecutionTracer {
     val exStore: Option[(BigInt, BigInt)] = opCode match {
       case SSTORE if prevState.stack.size >= 2 =>
         val key = prevState.stack.toSeq(0).toBigInt
-        val v   = prevState.stack.toSeq(1).toBigInt
+        val v = prevState.stack.toSeq(1).toBigInt
         Some((key, v))
       case _ =>
         None
     }
 
     frame.ops += VmOp(
-      pc      = prevState.pc,
-      cost    = cost,
-      exUsed  = exUsed,
-      exPush  = exPush,
-      exMem   = exMem,
+      pc = prevState.pc,
+      cost = cost,
+      exUsed = exUsed,
+      exPush = exPush,
+      exMem = exMem,
       exStore = exStore
     )
   }
@@ -134,7 +134,7 @@ class VmTracer extends ExecutionTracer {
 
   override def onCallExit(gasUsed: BigInt, output: ByteString, error: Option[String]): Unit = {
     if (frameStack.size <= 1) return
-    val frame   = frameStack.pop()
+    val frame = frameStack.pop()
     val encoded = encodeFrame(frame)
     if (frameStack.nonEmpty && frameStack.top.ops.nonEmpty) {
       frameStack.top.ops.last.sub = Some(encoded)
@@ -152,13 +152,17 @@ class VmTracer extends ExecutionTracer {
 
   private def encodeOp(op: VmOp): JValue = {
     val ex: JValue =
-      ("mem" -> op.exMem.map { case (off, data) =>
-        ("data" -> encodeHexBytes(data)) ~ ("off" -> JInt(off.bigInteger))
-      }.getOrElse(JNull: JValue)) ~
+      ("mem" -> op.exMem
+        .map { case (off, data) =>
+          ("data" -> encodeHexBytes(data)) ~ ("off" -> JInt(off.bigInteger))
+        }
+        .getOrElse(JNull: JValue)) ~
         ("push" -> JArray(op.exPush.map(v => JString("0x" + v.toString(16))).toList)) ~
-        ("store" -> op.exStore.map { case (k, v) =>
-          ("key" -> JString("0x" + k.toString(16))) ~ ("val" -> JString("0x" + v.toString(16)))
-        }.getOrElse(JNull: JValue)) ~
+        ("store" -> op.exStore
+          .map { case (k, v) =>
+            ("key" -> JString("0x" + k.toString(16))) ~ ("val" -> JString("0x" + v.toString(16)))
+          }
+          .getOrElse(JNull: JValue)) ~
         ("used" -> JInt(op.exUsed.bigInteger))
 
     ("cost" -> JInt(op.cost.bigInteger)) ~

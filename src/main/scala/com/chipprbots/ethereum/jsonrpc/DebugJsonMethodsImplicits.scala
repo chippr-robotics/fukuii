@@ -8,8 +8,8 @@ import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodCodec
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodDecoder.NoParamsMethodDecoder
 
-/** JSON codecs for non-tracing debug_* methods. `debug_trace*` codecs live in
-  * [[DebugTracingJsonMethodsImplicits]] against the [[com.chipprbots.ethereum.vm.ExecutionTracer]] services.
+/** JSON codecs for non-tracing debug_* methods. `debug_trace*` codecs live in [[DebugTracingJsonMethodsImplicits]]
+  * against the [[com.chipprbots.ethereum.vm.ExecutionTracer]] services.
   */
 object DebugJsonMethodsImplicits extends JsonMethodsImplicits {
 

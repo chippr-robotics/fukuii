@@ -55,10 +55,16 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
   private[vm] def call(context: PC, ownerAddr: Address): PR = {
     val isSubCall = context.callDepth > 0
     if (isSubCall)
-      tracer.foreach(_.onCallEnter(
-        callTypeName(context), context.callerAddr,
-        context.recipientAddr.getOrElse(Address(0)), context.startGas, context.endowment, context.inputData
-      ))
+      tracer.foreach(
+        _.onCallEnter(
+          callTypeName(context),
+          context.callerAddr,
+          context.recipientAddr.getOrElse(Address(0)),
+          context.startGas,
+          context.endowment,
+          context.inputData
+        )
+      )
     val result =
       if (!isValidCall(context))
         invalidCallResult(context, Set.empty, Set.empty)
@@ -78,11 +84,12 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
           val env = ExecEnv(context1, code, ownerAddr)
 
           // EIP-7702: If code was resolved from a delegation, warm the delegation target
-          val delegationTarget = try {
-            SetCodeTransaction.parseDelegation(world1.getCode(recipientAddr))
-          } catch {
-            case _: Exception => None
-          }
+          val delegationTarget =
+            try
+              SetCodeTransaction.parseDelegation(world1.getCode(recipientAddr))
+            catch {
+              case _: Exception => None
+            }
           val initialState: PS = ProgramState(this, context1, env)
           val warmState = delegationTarget match {
             case Some(target) => initialState.addAccessedAddress(target)
@@ -92,7 +99,9 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
         }
       }
     if (isSubCall)
-      tracer.foreach(_.onCallExit(context.startGas - result.gasRemaining, result.returnData, result.error.map(_.toString)))
+      tracer.foreach(
+        _.onCallExit(context.startGas - result.gasRemaining, result.returnData, result.error.map(_.toString))
+      )
     result
   }
 
@@ -115,10 +124,11 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
       salt: Option[UInt256] = None
   ): (PR, Address) = {
     val isSubCall = context.callDepth > 0
-    val opName    = if (salt.isDefined) "CREATE2" else "CREATE"
+    val opName = if (salt.isDefined) "CREATE2" else "CREATE"
     if (isSubCall)
-      tracer.foreach(_.onCallEnter(opName, context.callerAddr, Address(0),
-        context.startGas, context.endowment, context.inputData))
+      tracer.foreach(
+        _.onCallEnter(opName, context.callerAddr, Address(0), context.startGas, context.endowment, context.inputData)
+      )
     val (result, newAddress) =
       if (!isValidCall(context))
         (invalidCallResult(context, Set.empty, Set.empty), Address(0))
@@ -194,7 +204,9 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
         (newContractResult, contractAddr)
       }
     if (isSubCall)
-      tracer.foreach(_.onCallExit(context.startGas - result.gasRemaining, result.returnData, result.error.map(_.toString)))
+      tracer.foreach(
+        _.onCallExit(context.startGas - result.gasRemaining, result.returnData, result.error.map(_.toString))
+      )
     (result, newAddress)
   }
 
@@ -215,7 +227,9 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
         )
         // Opcode-level tracing for targeted debugging
         if (DebugTrace.enabledForBlock(state.env.blockHeader.number) && state.env.callDepth == 0) {
-          System.err.println(s"[EVM] pc=${state.pc} op=$opCode gas=${state.gas} -> gasAfter=$gas depth=${env.callDepth}")
+          System.err.println(
+            s"[EVM] pc=${state.pc} op=$opCode gas=${state.gas} -> gasAfter=$gas depth=${env.callDepth}"
+          )
         }
         if (newState.halted)
           newState
@@ -227,9 +241,9 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
     }
   }
 
-  /** Derives the EVM opcode name for a sub-call from its ProgramContext.
-    * All four CALL variants reach VM.call() via the same method but differ in staticCtx/doTransfer/endowment
-    * (verified against OpCode.scala CallOp.exec() lines ~1125-1143).
+  /** Derives the EVM opcode name for a sub-call from its ProgramContext. All four CALL variants reach VM.call() via the
+    * same method but differ in staticCtx/doTransfer/endowment (verified against OpCode.scala CallOp.exec() lines
+    * ~1125-1143).
     */
   private def callTypeName(context: PC): String =
     if (context.staticCtx) "STATICCALL"

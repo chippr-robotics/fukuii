@@ -5,8 +5,8 @@ import com.chipprbots.ethereum.utils.Logger
 
 /** Logs fork milestone activations at node startup.
   *
-  * Besu reference: ProtocolScheduleBuilder.java — `LOG.info("Protocol schedule created with milestones: {}", ...)`
-  * Only activated forks (block number != Long.MaxValue) are included in the output.
+  * Besu reference: ProtocolScheduleBuilder.java — `LOG.info("Protocol schedule created with milestones: {}", ...)` Only
+  * activated forks (block number != Long.MaxValue) are included in the output.
   */
 object MilestoneLog extends Logger {
 
@@ -20,29 +20,29 @@ object MilestoneLog extends Logger {
   }
 
   private def namedMilestones(f: ForkBlockNumbers): Seq[(String, BigInt)] = Seq(
-    "Frontier"                  -> f.frontierBlockNumber,
-    "Homestead"                 -> f.homesteadBlockNumber,
-    "EIP-106"                   -> f.eip106BlockNumber,
-    "EIP-150"                   -> f.eip150BlockNumber,
-    "EIP-155"                   -> f.eip155BlockNumber,
-    "EIP-160"                   -> f.eip160BlockNumber,
-    "EIP-161"                   -> f.eip161BlockNumber,
-    "DiffBomb-Pause"            -> f.difficultyBombPauseBlockNumber,
-    "DiffBomb-Continue"         -> f.difficultyBombContinueBlockNumber,
-    "DiffBomb-Removal"          -> f.difficultyBombRemovalBlockNumber,
-    "Byzantium"                 -> f.byzantiumBlockNumber,
-    "Constantinople"            -> f.constantinopleBlockNumber,
-    "Istanbul"                  -> f.istanbulBlockNumber,
-    "Atlantis"                  -> f.atlantisBlockNumber,
-    "Agharta"                   -> f.aghartaBlockNumber,
-    "Phoenix"                   -> f.phoenixBlockNumber,
-    "Petersburg"                -> f.petersburgBlockNumber,
-    "ECIP-1099"                 -> f.ecip1099BlockNumber,
-    "Muir Glacier"              -> f.muirGlacierBlockNumber,
-    "Magneto"                   -> f.magnetoBlockNumber,
-    "Berlin"                    -> f.berlinBlockNumber,
-    "Mystique"                  -> f.mystiqueBlockNumber,
-    "Spiral"                    -> f.spiralBlockNumber,
-    "Olympia"                   -> f.olympiaBlockNumber
+    "Frontier" -> f.frontierBlockNumber,
+    "Homestead" -> f.homesteadBlockNumber,
+    "EIP-106" -> f.eip106BlockNumber,
+    "EIP-150" -> f.eip150BlockNumber,
+    "EIP-155" -> f.eip155BlockNumber,
+    "EIP-160" -> f.eip160BlockNumber,
+    "EIP-161" -> f.eip161BlockNumber,
+    "DiffBomb-Pause" -> f.difficultyBombPauseBlockNumber,
+    "DiffBomb-Continue" -> f.difficultyBombContinueBlockNumber,
+    "DiffBomb-Removal" -> f.difficultyBombRemovalBlockNumber,
+    "Byzantium" -> f.byzantiumBlockNumber,
+    "Constantinople" -> f.constantinopleBlockNumber,
+    "Istanbul" -> f.istanbulBlockNumber,
+    "Atlantis" -> f.atlantisBlockNumber,
+    "Agharta" -> f.aghartaBlockNumber,
+    "Phoenix" -> f.phoenixBlockNumber,
+    "Petersburg" -> f.petersburgBlockNumber,
+    "ECIP-1099" -> f.ecip1099BlockNumber,
+    "Muir Glacier" -> f.muirGlacierBlockNumber,
+    "Magneto" -> f.magnetoBlockNumber,
+    "Berlin" -> f.berlinBlockNumber,
+    "Mystique" -> f.mystiqueBlockNumber,
+    "Spiral" -> f.spiralBlockNumber,
+    "Olympia" -> f.olympiaBlockNumber
   )
 }

@@ -29,23 +29,32 @@ trait ResolveBlock {
     blockParam match {
       case BlockParam.WithNumber(blockNumber) =>
         getBlock(blockNumber) match {
-          case Right(block) => Right(ResolvedBlock(block, pendingState = None))
+          case Right(block)                                       => Right(ResolvedBlock(block, pendingState = None))
           case Left(_) if blockNumber > BigInt(Long.MaxValue) / 2 =>
             // Large number that doesn't match a block — try interpreting as a block hash
             val hashBytes = org.apache.pekko.util.ByteString(
-              com.chipprbots.ethereum.utils.ByteUtils.bigIntToUnsignedByteArray(blockNumber).reverse.padTo(32, 0.toByte).reverse)
+              com.chipprbots.ethereum.utils.ByteUtils
+                .bigIntToUnsignedByteArray(blockNumber)
+                .reverse
+                .padTo(32, 0.toByte)
+                .reverse
+            )
             getBlockByHash(hashBytes).map(ResolvedBlock(_, pendingState = None))
           case left => left.map(ResolvedBlock(_, pendingState = None))
         }
       case BlockParam.WithHash(hash) => getBlockByHash(hash).map(ResolvedBlock(_, pendingState = None))
-      case BlockParam.Earliest                => getBlock(0).map(ResolvedBlock(_, pendingState = None))
-      case BlockParam.Latest                  => getLatestBlock().map(ResolvedBlock(_, pendingState = None))
+      case BlockParam.Earliest       => getBlock(0).map(ResolvedBlock(_, pendingState = None))
+      case BlockParam.Latest         => getLatestBlock().map(ResolvedBlock(_, pendingState = None))
       case BlockParam.Safe =>
-        forkChoiceManagerOpt.flatMap(_.getSafeBlockHash).flatMap(h => blockchainReader.getBlockByHash(h))
+        forkChoiceManagerOpt
+          .flatMap(_.getSafeBlockHash)
+          .flatMap(h => blockchainReader.getBlockByHash(h))
           .map(b => Right(ResolvedBlock(b, pendingState = None)))
           .getOrElse(Left(JsonRpcError.InvalidParams("safe block not available")))
       case BlockParam.Finalized =>
-        forkChoiceManagerOpt.flatMap(_.getFinalizedBlockHash).flatMap(h => blockchainReader.getBlockByHash(h))
+        forkChoiceManagerOpt
+          .flatMap(_.getFinalizedBlockHash)
+          .flatMap(h => blockchainReader.getBlockByHash(h))
           .map(b => Right(ResolvedBlock(b, pendingState = None)))
           .getOrElse(Left(JsonRpcError.InvalidParams("finalized block not available")))
       case BlockParam.Pending =>

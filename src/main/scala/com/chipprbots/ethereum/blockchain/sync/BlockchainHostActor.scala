@@ -56,8 +56,13 @@ class BlockchainHostActor(
   implicit val timeout: Timeout = Timeout(3.seconds)
 
   private val requestMsgsCodes =
-    Set(Codes.GetNodeDataCode, Codes.GetReceiptsCode, Codes.GetBlockBodiesCode, Codes.GetBlockHeadersCode,
-      Codes.GetPooledTransactionsCode)
+    Set(
+      Codes.GetNodeDataCode,
+      Codes.GetReceiptsCode,
+      Codes.GetBlockBodiesCode,
+      Codes.GetBlockHeadersCode,
+      Codes.GetPooledTransactionsCode
+    )
   peerEventBusActor ! Subscribe(MessageClassifier(requestMsgsCodes, PeerSelector.AllPeers))
 
   override def receive: Receive = { case MessageFromPeer(message, peerId) =>
@@ -73,7 +78,11 @@ class BlockchainHostActor(
     }
   }
 
-  private def handleGetPooledTransactions(txHashes: Seq[ByteString], requestIdOpt: Option[BigInt], peerId: com.chipprbots.ethereum.network.PeerId): Unit = {
+  private def handleGetPooledTransactions(
+      txHashes: Seq[ByteString],
+      requestIdOpt: Option[BigInt],
+      peerId: com.chipprbots.ethereum.network.PeerId
+  ): Unit = {
     val hashSet = txHashes.toSet
     (pendingTransactionsManager ? PendingTransactionsManager.GetPendingTransactions)
       .mapTo[PendingTransactionsResponse]
@@ -85,7 +94,7 @@ class BlockchainHostActor(
         val matchingBlobBytes = response.blobTxNetworkBytes.filter { case (hash, _) => hashSet.contains(hash) }
         val responseMsg: MessageSerializable = requestIdOpt match {
           case Some(requestId) => ETH66.PooledTransactions(requestId, matchingTxs, blobTxRawBytes = matchingBlobBytes)
-          case None => com.chipprbots.ethereum.network.p2p.messages.ETH65.PooledTransactions(matchingTxs)
+          case None            => com.chipprbots.ethereum.network.p2p.messages.ETH65.PooledTransactions(matchingTxs)
         }
         networkPeerManagerActor ! NetworkPeerManagerActor.SendMessage(responseMsg, peerId)
       }

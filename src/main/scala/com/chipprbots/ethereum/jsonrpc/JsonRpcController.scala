@@ -84,7 +84,7 @@ case class JsonRpcController(
     Apis.Fukuii -> handleFukuiiRequest,
     Apis.Mcp -> handleMcpRequest,
     Apis.Rpc -> handleRpcRequest,
-    Apis.Debug -> (handleDebugRequest orElse handleDebugTracingRequest),
+    Apis.Debug -> (handleDebugRequest.orElse(handleDebugTracingRequest)),
     Apis.Test -> handleTestRequest,
     Apis.Iele -> handleIeleRequest,
     Apis.Qa -> handleQARequest,
@@ -279,7 +279,9 @@ case class JsonRpcController(
       handle[CreateAccessListRequest, CreateAccessListResponse](ethInfoService.createAccessList, req)
     case req @ JsonRpcRequest(_, "eth_simulateV1", _, _) =>
       handle[EthSimulateRequest, EthSimulateResponse](ethSimulateService.ethSimulate, req)(
-        EthSimulateJsonMethodsImplicits.eth_simulateV1, EthSimulateJsonMethodsImplicits.eth_simulateV1)
+        EthSimulateJsonMethodsImplicits.eth_simulateV1,
+        EthSimulateJsonMethodsImplicits.eth_simulateV1
+      )
   }
 
   private def handleDebugRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
@@ -298,19 +300,29 @@ case class JsonRpcController(
 
   private def handleDebugTracingRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     import DebugTracingService.{
-      TraceTransactionRequest   => DTxReq,     TraceTransactionResponse   => DTxResp,
-      TraceCallRequest          => DCallReq,   TraceCallResponse          => DCallResp,
-      TraceCallManyRequest      => DManyReq,   TraceCallManyResponse      => DManyResp,
-      TraceBlockByHashRequest   => DBlkHashReq, TraceBlockByHashResponse  => DBlkHashResp,
-      TraceBlockByNumberRequest => DBlkNumReq,  TraceBlockByNumberResponse => DBlkNumResp,
-      IntermediateRootsRequest  => DRootsReq,  IntermediateRootsResponse  => DRootsResp,
-      TraceChainRequest         => DChainReq,  TraceChainBlockResult      => DChainResult
+      TraceTransactionRequest => DTxReq,
+      TraceTransactionResponse => DTxResp,
+      TraceCallRequest => DCallReq,
+      TraceCallResponse => DCallResp,
+      TraceCallManyRequest => DManyReq,
+      TraceCallManyResponse => DManyResp,
+      TraceBlockByHashRequest => DBlkHashReq,
+      TraceBlockByHashResponse => DBlkHashResp,
+      TraceBlockByNumberRequest => DBlkNumReq,
+      TraceBlockByNumberResponse => DBlkNumResp,
+      IntermediateRootsRequest => DRootsReq,
+      IntermediateRootsResponse => DRootsResp,
+      TraceChainRequest => DChainReq,
+      TraceChainBlockResult => DChainResult
     }
     import DebugTracingJsonMethodsImplicits.{
-      debug_traceTransaction   => dTx,    debug_traceCall         => dCall,
-      debug_traceCallMany      => dMany,  debug_traceBlockByHash  => dHash,
+      debug_traceTransaction => dTx,
+      debug_traceCall => dCall,
+      debug_traceCallMany => dMany,
+      debug_traceBlockByHash => dHash,
       debug_traceBlockByNumber => dNum,
-      debug_intermediateRoots  => dRoots, debug_traceChain        => dChain
+      debug_intermediateRoots => dRoots,
+      debug_traceChain => dChain
     }
     ({
       case req @ JsonRpcRequest(_, "debug_traceTransaction", _, _) =>
@@ -338,36 +350,47 @@ case class JsonRpcController(
 
   private def handleTraceRequestImpl: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     // Use explicit implicits to sidestep the ambiguity with DebugTracingService types
-    val tTx       = TraceJsonMethodsImplicits.trace_transaction
-    val tBlock    = TraceJsonMethodsImplicits.trace_block
-    val tReplay   = TraceJsonMethodsImplicits.trace_replayTransaction
-    val tReplBlk  = TraceJsonMethodsImplicits.trace_replayBlockTransactions
-    val tCall     = TraceJsonMethodsImplicits.trace_call
+    val tTx = TraceJsonMethodsImplicits.trace_transaction
+    val tBlock = TraceJsonMethodsImplicits.trace_block
+    val tReplay = TraceJsonMethodsImplicits.trace_replayTransaction
+    val tReplBlk = TraceJsonMethodsImplicits.trace_replayBlockTransactions
+    val tCall = TraceJsonMethodsImplicits.trace_call
     val tCallMany = TraceJsonMethodsImplicits.trace_callMany
-    val tFilter   = TraceJsonMethodsImplicits.trace_filter
+    val tFilter = TraceJsonMethodsImplicits.trace_filter
 
     {
       case req @ JsonRpcRequest(_, "trace_transaction", _, _) =>
         handle[TraceService.TraceTransactionRequest, TraceService.TraceTransactionResponse](
-          traceService.traceTransaction, req)(tTx, tTx)
+          traceService.traceTransaction,
+          req
+        )(tTx, tTx)
       case req @ JsonRpcRequest(_, "trace_block", _, _) =>
-        handle[TraceService.TraceBlockRequest, TraceService.TraceBlockResponse](
-          traceService.traceBlock, req)(tBlock, tBlock)
+        handle[TraceService.TraceBlockRequest, TraceService.TraceBlockResponse](traceService.traceBlock, req)(
+          tBlock,
+          tBlock
+        )
       case req @ JsonRpcRequest(_, "trace_replayTransaction", _, _) =>
         handle[TraceService.TraceReplayTransactionRequest, TraceService.TraceReplayTransactionResponse](
-          traceService.replayTransaction, req)(tReplay, tReplay)
+          traceService.replayTransaction,
+          req
+        )(tReplay, tReplay)
       case req @ JsonRpcRequest(_, "trace_replayBlockTransactions", _, _) =>
         handle[TraceService.TraceReplayBlockTransactionsRequest, TraceService.TraceReplayBlockTransactionsResponse](
-          traceService.replayBlockTransactions, req)(tReplBlk, tReplBlk)
+          traceService.replayBlockTransactions,
+          req
+        )(tReplBlk, tReplBlk)
       case req @ JsonRpcRequest(_, "trace_call", _, _) =>
-        handle[TraceService.TraceCallRequest, TraceService.TraceCallResponse](
-          traceService.traceCall, req)(tCall, tCall)
+        handle[TraceService.TraceCallRequest, TraceService.TraceCallResponse](traceService.traceCall, req)(tCall, tCall)
       case req @ JsonRpcRequest(_, "trace_callMany", _, _) =>
-        handle[TraceService.TraceCallManyRequest, TraceService.TraceCallManyResponse](
-          traceService.traceCallMany, req)(tCallMany, tCallMany)
+        handle[TraceService.TraceCallManyRequest, TraceService.TraceCallManyResponse](traceService.traceCallMany, req)(
+          tCallMany,
+          tCallMany
+        )
       case req @ JsonRpcRequest(_, "trace_filter", _, _) =>
-        handle[TraceService.TraceFilterRequest, TraceService.TraceFilterResponse](
-          traceService.traceFilter, req)(tFilter, tFilter)
+        handle[TraceService.TraceFilterRequest, TraceService.TraceFilterResponse](traceService.traceFilter, req)(
+          tFilter,
+          tFilter
+        )
     }
   }
 

@@ -13,22 +13,21 @@ import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.IterationError
 
 /** Flat storage for accounts — O(1) reads by keccak256(address).
   *
-  * Stores RLP-encoded Account(nonce, balance, storageRoot, codeHash) keyed by
-  * keccak256(address) (32 bytes) in a dedicated RocksDB column family.
+  * Stores RLP-encoded Account(nonce, balance, storageRoot, codeHash) keyed by keccak256(address) (32 bytes) in a
+  * dedicated RocksDB column family.
   *
-  * Mirrors Besu's BonsaiFullFlatDbStrategy.getFlatAccount:
-  *   storage.get(ACCOUNT_INFO_STATE, accountHash.getBytes()) → RLP(account)
+  * Mirrors Besu's BonsaiFullFlatDbStrategy.getFlatAccount: storage.get(ACCOUNT_INFO_STATE, accountHash.getBytes()) →
+  * RLP(account)
   *
-  * Key: keccak256(address) — 32 bytes (matches Besu ACCOUNT_INFO_STATE column)
-  * Value: RLP-encoded StateTrieAccountValue
+  * Key: keccak256(address) — 32 bytes (matches Besu ACCOUNT_INFO_STATE column) Value: RLP-encoded StateTrieAccountValue
   *
   * Benefits:
   *   - O(1) account reads during EVM execution and RPC serving
   *   - Fast SNAP peer serving of GetAccountRange (sequential seek-based scan)
   *   - Efficient state iteration for eth_getBalance, eth_getProof
   *
-  * The MPT-based state trie is still maintained for Merkle proof generation and
-  * state root computation. Flat storage is a read/write optimisation layer.
+  * The MPT-based state trie is still maintained for Merkle proof generation and state root computation. Flat storage is
+  * a read/write optimisation layer.
   */
 class FlatAccountStorage(val dataSource: DataSource) extends TransactionalKeyValueStorage[ByteString, ByteString] {
   val namespace: IndexedSeq[Byte] = Namespaces.FlatAccountNamespace
@@ -39,23 +38,22 @@ class FlatAccountStorage(val dataSource: DataSource) extends TransactionalKeyVal
 
   /** Look up an account by its hashed address. O(1) RocksDB read.
     *
-    * Besu reference: BonsaiFullFlatDbStrategy.getFlatAccount —
-    *   storage.get(ACCOUNT_INFO_STATE, accountHash.getBytes().toArrayUnsafe())
+    * Besu reference: BonsaiFullFlatDbStrategy.getFlatAccount — storage.get(ACCOUNT_INFO_STATE,
+    * accountHash.getBytes().toArrayUnsafe())
     */
   def getAccount(addressHash: ByteString): Option[ByteString] =
     get(addressHash)
 
-  /** Bulk write accounts in one batch (for SNAP sync and block import).
-    * Returns a DataSourceBatchUpdate that must be `.commit()`ed.
+  /** Bulk write accounts in one batch (for SNAP sync and block import). Returns a DataSourceBatchUpdate that must be
+    * `.commit()`ed.
     */
   def putAccountsBatch(accounts: Seq[(ByteString, ByteString)]): DataSourceBatchUpdate =
     update(Nil, accounts)
 
-  /** Seek-based range scan starting from startHash (inclusive).
-    * Returns ordered (addressHash, rlpAccount) pairs.
+  /** Seek-based range scan starting from startHash (inclusive). Returns ordered (addressHash, rlpAccount) pairs.
     *
-    * Mirrors Besu's BonsaiFlatDbStrategy.accountsToPairStream —
-    *   storage.streamFromKey(ACCOUNT_INFO_STATE, startKeyHash.toArrayUnsafe())
+    * Mirrors Besu's BonsaiFlatDbStrategy.accountsToPairStream — storage.streamFromKey(ACCOUNT_INFO_STATE,
+    * startKeyHash.toArrayUnsafe())
     *
     * Requires the underlying DataSource to be a RocksDbDataSource.
     */

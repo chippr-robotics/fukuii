@@ -221,8 +221,8 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
     if (senderBalance >= upfrontCost) Right(SignedTransactionValid)
     else Left(TransactionSenderCantPayUpfrontCostError(upfrontCost, senderBalance))
 
-  /** EIP-7825: Validates that the transaction gas limit does not exceed the per-tx cap (2^24 = 16.77M).
-    * Active on ETC post-Olympia block OR on ETH post-Osaka timestamp.
+  /** EIP-7825: Validates that the transaction gas limit does not exceed the per-tx cap (2^24 = 16.77M). Active on ETC
+    * post-Olympia block OR on ETH post-Osaka timestamp.
     */
   private def validateTxGasLimitCap(
       stx: SignedTransaction,

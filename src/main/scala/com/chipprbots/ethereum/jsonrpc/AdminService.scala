@@ -36,9 +36,8 @@ import com.chipprbots.ethereum.utils.ServerStatus
 
 object AdminService {
 
-  /** Besu alignment: protocols.eth sub-object in admin_nodeInfo.
-    * Mirrors Besu's EthProtocolStatus: difficulty (hex), genesis hash (0x-prefixed hex), head hash (0x-prefixed hex),
-    * network ID.
+  /** Besu alignment: protocols.eth sub-object in admin_nodeInfo. Mirrors Besu's EthProtocolStatus: difficulty (hex),
+    * genesis hash (0x-prefixed hex), head hash (0x-prefixed hex), network ID.
     */
   case class EthProtocolInfo(
       difficulty: String,
@@ -99,8 +98,8 @@ object AdminService {
   case class AdminListBlockedIPsRequest()
   case class AdminListBlockedIPsResponse(ips: List[String])
 
-  /** core-geth: admin_addTrustedPeer / admin_removeTrustedPeer — always returns true on success.
-    * core-geth reference: node/api.go AddTrustedPeer / RemoveTrustedPeer
+  /** core-geth: admin_addTrustedPeer / admin_removeTrustedPeer — always returns true on success. core-geth reference:
+    * node/api.go AddTrustedPeer / RemoveTrustedPeer
     */
   case class AdminAddTrustedPeerRequest(enodeUrl: String)
   case class AdminAddTrustedPeerResponse(success: Boolean)
@@ -108,8 +107,8 @@ object AdminService {
   case class AdminRemoveTrustedPeerRequest(enodeUrl: String)
   case class AdminRemoveTrustedPeerResponse(success: Boolean)
 
-  /** core-geth: admin_maxPeers — sets max connected peers at runtime, returns true on success.
-    * core-geth reference: eth/api_admin.go MaxPeers
+  /** core-geth: admin_maxPeers — sets max connected peers at runtime, returns true on success. core-geth reference:
+    * eth/api_admin.go MaxPeers
     */
   case class AdminMaxPeersRequest(maxPeers: Int)
   case class AdminMaxPeersResponse(success: Boolean)
@@ -130,37 +129,36 @@ class AdminService(
 
   implicit private val timeout: Timeout = Timeout(peerManagerTimeout)
 
-  /** Returns the canonical ECIP-1066 fork name active at the given block number.
-    * Chain-agnostic: uses ForkBlockNumbers from the loaded blockchainConfig, so it produces the correct name for both
-    * ETC mainnet and Mordor testnet without conditional logic. Forks set to Long.MaxValue (not yet activated, e.g.
-    * Olympia TBD) are excluded by the <= blockNumber filter. Mirrors Besu's
-    * protocolSchedule.getByBlockHeader().getHardforkId() intent.
+  /** Returns the canonical ECIP-1066 fork name active at the given block number. Chain-agnostic: uses ForkBlockNumbers
+    * from the loaded blockchainConfig, so it produces the correct name for both ETC mainnet and Mordor testnet without
+    * conditional logic. Forks set to Long.MaxValue (not yet activated, e.g. Olympia TBD) are excluded by the <=
+    * blockNumber filter. Mirrors Besu's protocolSchedule.getByBlockHeader().getHardforkId() intent.
     */
   private def activeForkName(blockNumber: BigInt, forks: ForkBlockNumbers): String =
     List(
-      forks.olympiaBlockNumber                -> "Olympia",
-      forks.spiralBlockNumber                 -> "Spiral",
-      forks.mystiqueBlockNumber               -> "Mystique",
-      forks.magnetoBlockNumber                -> "Magneto",
-      forks.ecip1099BlockNumber               -> "Thanos",
-      forks.phoenixBlockNumber                -> "Phoenix",
-      forks.aghartaBlockNumber                -> "Agharta",
-      forks.atlantisBlockNumber               -> "Atlantis",
-      forks.difficultyBombRemovalBlockNumber  -> "Defuse Difficulty Bomb",
+      forks.olympiaBlockNumber -> "Olympia",
+      forks.spiralBlockNumber -> "Spiral",
+      forks.mystiqueBlockNumber -> "Mystique",
+      forks.magnetoBlockNumber -> "Magneto",
+      forks.ecip1099BlockNumber -> "Thanos",
+      forks.phoenixBlockNumber -> "Phoenix",
+      forks.aghartaBlockNumber -> "Agharta",
+      forks.atlantisBlockNumber -> "Atlantis",
+      forks.difficultyBombRemovalBlockNumber -> "Defuse Difficulty Bomb",
       forks.difficultyBombContinueBlockNumber -> "Gotham",
-      forks.difficultyBombPauseBlockNumber    -> "Die Hard",
-      forks.eip150BlockNumber                 -> "Gas Reprice",
-      forks.homesteadBlockNumber              -> "Homestead",
-      forks.frontierBlockNumber               -> "Frontier"
+      forks.difficultyBombPauseBlockNumber -> "Die Hard",
+      forks.eip150BlockNumber -> "Gas Reprice",
+      forks.homesteadBlockNumber -> "Homestead",
+      forks.frontierBlockNumber -> "Frontier"
     ).filter(_._1 <= blockNumber)
       .maxByOption(_._1)
       .map(_._2)
       .getOrElse("Frontier")
 
   /** Besu AdminNodeInfo: enode string, id (unprefixed hex), ip, listenAddr, name, ports, protocols.eth, activeFork.
-    * protocols.eth mirrors Besu's EthProtocolStatus: difficulty (hex), genesis, head, networkId.
-    * activeFork mirrors Besu's protocolSchedule.getByBlockHeader().getHardforkId().
-    * Remaining divergences: no NatService (NAT IP), no ENR (discovery layer injection pending).
+    * protocols.eth mirrors Besu's EthProtocolStatus: difficulty (hex), genesis, head, networkId. activeFork mirrors
+    * Besu's protocolSchedule.getByBlockHeader().getHardforkId(). Remaining divergences: no NatService (NAT IP), no ENR
+    * (discovery layer injection pending).
     */
   def nodeInfo(req: AdminNodeInfoRequest): ServiceResponse[AdminNodeInfoResponse] = IO.pure {
     val status = nodeStatusHolder.get()
@@ -171,15 +169,16 @@ class AdminService(
       case BestBranch(h, n) => (h, n)
       case _                => (org.apache.pekko.util.ByteString.empty, BigInt(0))
     }
-    val headHex   = "0x" + Hex.toHexString(headHash.toArray)
-    val totalDiff = blockchainReader.getChainWeightByHash(headHash)
+    val headHex = "0x" + Hex.toHexString(headHash.toArray)
+    val totalDiff = blockchainReader
+      .getChainWeightByHash(headHash)
       .map(w => "0x" + w.totalDifficulty.toString(16))
       .getOrElse("0x0")
     val ethInfo = EthProtocolInfo(
       difficulty = totalDiff,
-      genesis    = genesisHash,
-      head       = headHex,
-      network    = blockchainConfig.networkId
+      genesis = genesisHash,
+      head = headHex,
+      network = blockchainConfig.networkId
     )
     val fork = activeForkName(headNumber, blockchainConfig.forkBlockNumbers)
 
@@ -188,39 +187,39 @@ class AdminService(
         val host = Option(address.getAddress)
           .map(com.chipprbots.ethereum.network.getHostName)
           .getOrElse(address.getHostString)
-        val port       = address.getPort
+        val port = address.getPort
         val listenAddr = s"$host:$port"
-        val enode      = s"enode://$nodeId@$listenAddr"
+        val enode = s"enode://$nodeId@$listenAddr"
         Right(
           AdminNodeInfoResponse(
-            enode      = Some(enode),
-            id         = nodeId,
-            ip         = Some(host),
+            enode = Some(enode),
+            id = nodeId,
+            ip = Some(host),
             listenAddr = Some(listenAddr),
-            name       = "fukuii/v0.1",
-            ports      = Map("listener" -> port, "discovery" -> port),
-            protocols  = Map("eth" -> ethInfo),
+            name = "fukuii/v0.1",
+            ports = Map("listener" -> port, "discovery" -> port),
+            protocols = Map("eth" -> ethInfo),
             activeFork = fork
           )
         )
       case _ =>
         Right(
           AdminNodeInfoResponse(
-            enode      = None,
-            id         = nodeId,
-            ip         = None,
+            enode = None,
+            id = nodeId,
+            ip = None,
             listenAddr = None,
-            name       = "fukuii/v0.1",
-            ports      = Map.empty,
-            protocols  = Map("eth" -> ethInfo),
+            name = "fukuii/v0.1",
+            ports = Map.empty,
+            protocols = Map("eth" -> ethInfo),
             activeFork = fork
           )
         )
     }
   }
 
-  /** Besu AdminPeers: streams ethPeers.streamAllPeers() → PeerResult.fromEthPeer.
-    * Divergence: Fukuii asks PeerManagerActor.GetPeers instead (actor-based P2P, no EthPeers).
+  /** Besu AdminPeers: streams ethPeers.streamAllPeers() → PeerResult.fromEthPeer. Divergence: Fukuii asks
+    * PeerManagerActor.GetPeers instead (actor-based P2P, no EthPeers).
     */
   def peers(req: AdminPeersRequest): ServiceResponse[AdminPeersResponse] =
     peerManager
@@ -241,8 +240,8 @@ class AdminService(
         Right(AdminPeersResponse(Seq.empty))
       }
 
-  /** Besu AdminAddPeer: parses enode → DefaultPeer → peerNetwork.addMaintainedConnectionPeer(peer) → boolean.
-    * Returns wasAdded=true if the peer was new to the maintained set (false for duplicate calls — aligned with Besu).
+  /** Besu AdminAddPeer: parses enode → DefaultPeer → peerNetwork.addMaintainedConnectionPeer(peer) → boolean. Returns
+    * wasAdded=true if the peer was new to the maintained set (false for duplicate calls — aligned with Besu).
     * PeerManagerActor tracks the maintained set and schedules reconnects on disconnect.
     */
   def addPeer(req: AdminAddPeerRequest): ServiceResponse[AdminAddPeerResponse] =
@@ -261,19 +260,19 @@ class AdminService(
         IO.pure(Right(AdminAddPeerResponse(false)))
     }
 
-  /** Besu AdminRemovePeer: peerNetwork.removeMaintainedConnectionPeer(peer) → boolean (wasRemoved).
-    * Removes from the maintained set (prevents auto-reconnect) AND disconnects the live connection if present.
-    * Returns true if a live peer was found and disconnected; false if the peer was only in the maintained set.
+  /** Besu AdminRemovePeer: peerNetwork.removeMaintainedConnectionPeer(peer) → boolean (wasRemoved). Removes from the
+    * maintained set (prevents auto-reconnect) AND disconnects the live connection if present. Returns true if a live
+    * peer was found and disconnected; false if the peer was only in the maintained set.
     */
   def removePeer(req: AdminRemovePeerRequest): ServiceResponse[AdminRemovePeerResponse] =
     peerManager
       .askFor[PeerManagerActor.Peers](PeerManagerActor.GetPeers)
       .map { peersResult =>
         try {
-          val uri          = new URI(req.enodeUrl)
+          val uri = new URI(req.enodeUrl)
           val targetNodeId = Option(uri.getUserInfo).map(_.toLowerCase)
           targetNodeId match {
-            case None => Right(AdminRemovePeerResponse(false))
+            case None           => Right(AdminRemovePeerResponse(false))
             case Some(targetId) =>
               // Always remove from maintained set to prevent auto-reconnect
               peerManager ! PeerManagerActor.RemoveMaintainedPeer(targetId)
@@ -299,23 +298,22 @@ class AdminService(
         Right(AdminRemovePeerResponse(false))
       }
 
-  /** Besu AdminChangeLogLevel: validates level ∈ {OFF,ERROR,WARN,INFO,DEBUG,TRACE,ALL}.
-    * If filters present: set each named logger's level. If no filters: set root logger.
-    * Besu uses Log4j2 (org.apache.logging.log4j.core via LogConfigurator). Fukuii uses Logback
-    * (ch.qos.logback.classic). Different backends for each project's ecosystem; runtime behaviour
-    * (dynamic per-logger level changes via SLF4J) is equivalent.
+  /** Besu AdminChangeLogLevel: validates level ∈ {OFF,ERROR,WARN,INFO,DEBUG,TRACE,ALL}. If filters present: set each
+    * named logger's level. If no filters: set root logger. Besu uses Log4j2 (org.apache.logging.log4j.core via
+    * LogConfigurator). Fukuii uses Logback (ch.qos.logback.classic). Different backends for each project's ecosystem;
+    * runtime behaviour (dynamic per-logger level changes via SLF4J) is equivalent.
     */
   def changeLogLevel(req: AdminChangeLogLevelRequest): ServiceResponse[AdminChangeLogLevelResponse] = IO {
     if (!ValidLogLevels.contains(req.level)) {
       Left(JsonRpcError.InvalidParams(s"Invalid log level: ${req.level}"))
     } else {
       try {
-        val ctx        = LoggerFactory.getILoggerFactory.asInstanceOf[LoggerContext]
-        val level      = Level.toLevel(req.level)
+        val ctx = LoggerFactory.getILoggerFactory.asInstanceOf[LoggerContext]
+        val level = Level.toLevel(req.level)
         val logFilters = req.logFilters.getOrElse(List(""))
         logFilters.foreach { filter =>
           val loggerName = if (filter.isEmpty) org.slf4j.Logger.ROOT_LOGGER_NAME else filter
-          val logger     = ctx.getLogger(loggerName)
+          val logger = ctx.getLogger(loggerName)
           log.debug(s"Setting $loggerName logging level to ${req.level}")
           logger.setLevel(level)
         }
@@ -334,15 +332,15 @@ class AdminService(
   def exportChain(req: AdminExportChainRequest): ServiceResponse[AdminExportChainResponse] = IO {
     try {
       val first = req.first.getOrElse(BigInt(0))
-      val last  = req.last.getOrElse(blockchainReader.getBestBlockNumber())
-      val out   = new BufferedOutputStream(new FileOutputStream(req.file))
+      val last = req.last.getOrElse(blockchainReader.getBestBlockNumber())
+      val out = new BufferedOutputStream(new FileOutputStream(req.file))
       try {
         var i = first
         while (i <= last) {
           blockchainReader.getBlockHeaderByNumber(i).foreach { header =>
             blockchainReader.getBlockByHash(header.hash).foreach { block =>
               val bytes: Array[Byte] = block.toBytes
-              val lenBuf             = ByteBuffer.allocate(4).putInt(bytes.length).array()
+              val lenBuf = ByteBuffer.allocate(4).putInt(bytes.length).array()
               out.write(lenBuf)
               out.write(bytes)
             }
@@ -352,9 +350,7 @@ class AdminService(
         out.flush()
         log.info(s"Exported blocks $first to $last to ${req.file}")
         Right(AdminExportChainResponse(true))
-      } finally {
-        out.close()
-      }
+      } finally out.close()
     } catch {
       case ex: Exception =>
         log.error(s"Failed to export chain to ${req.file}", ex)
@@ -366,12 +362,12 @@ class AdminService(
     try {
       val in = new FileInputStream(req.file)
       try {
-        var count  = 0
+        var count = 0
         val lenBuf = new Array[Byte](4)
         while (in.read(lenBuf) == 4) {
-          val len        = ByteBuffer.wrap(lenBuf).getInt
+          val len = ByteBuffer.wrap(lenBuf).getInt
           val blockBytes = new Array[Byte](len)
-          var read       = 0
+          var read = 0
           while (read < len) {
             val n = in.read(blockBytes, read, len - read)
             if (n == -1) throw new java.io.EOFException("Unexpected end of file")
@@ -383,9 +379,7 @@ class AdminService(
         }
         log.info(s"Imported $count blocks from ${req.file}")
         Right(AdminImportChainResponse(true))
-      } finally {
-        in.close()
-      }
+      } finally in.close()
     } catch {
       case ex: Exception =>
         log.error(s"Failed to import chain from ${req.file}", ex)
@@ -409,8 +403,8 @@ class AdminService(
     Right(AdminListBlockedIPsResponse(blockedIPRegistry.all.toList.sorted))
   }
 
-  /** core-geth admin_addTrustedPeer: adds peer to trusted set (bypasses max-peer limit).
-    * Always returns true — mirrors core-geth node/api.go AddTrustedPeer returning (true, nil).
+  /** core-geth admin_addTrustedPeer: adds peer to trusted set (bypasses max-peer limit). Always returns true — mirrors
+    * core-geth node/api.go AddTrustedPeer returning (true, nil).
     */
   def addTrustedPeer(req: AdminAddTrustedPeerRequest): ServiceResponse[AdminAddTrustedPeerResponse] =
     try {
@@ -428,12 +422,12 @@ class AdminService(
         IO.pure(Right(AdminAddTrustedPeerResponse(false)))
     }
 
-  /** core-geth admin_removeTrustedPeer: removes from trusted set; does NOT disconnect.
-    * Always returns true — mirrors core-geth node/api.go RemoveTrustedPeer returning (true, nil).
+  /** core-geth admin_removeTrustedPeer: removes from trusted set; does NOT disconnect. Always returns true — mirrors
+    * core-geth node/api.go RemoveTrustedPeer returning (true, nil).
     */
   def removeTrustedPeer(req: AdminRemoveTrustedPeerRequest): ServiceResponse[AdminRemoveTrustedPeerResponse] =
     try {
-      val uri          = new URI(req.enodeUrl)
+      val uri = new URI(req.enodeUrl)
       val targetNodeId = Option(uri.getUserInfo).map(_.toLowerCase).getOrElse("")
       peerManager
         .askFor[PeerManagerActor.RemoveTrustedPeerResponse](
@@ -450,8 +444,8 @@ class AdminService(
         IO.pure(Right(AdminRemoveTrustedPeerResponse(false)))
     }
 
-  /** core-geth admin_maxPeers: sets max connected peers at runtime.
-    * core-geth reference: eth/api_admin.go MaxPeers — sets handler.maxPeers + p2pServer.MaxPeers.
+  /** core-geth admin_maxPeers: sets max connected peers at runtime. core-geth reference: eth/api_admin.go MaxPeers —
+    * sets handler.maxPeers + p2pServer.MaxPeers.
     */
   def maxPeers(req: AdminMaxPeersRequest): ServiceResponse[AdminMaxPeersResponse] =
     peerManager

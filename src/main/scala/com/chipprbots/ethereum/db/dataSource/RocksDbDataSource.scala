@@ -108,9 +108,9 @@ class RocksDbDataSource(
     } finally dbLock.writeLock().unlock()
   }
 
-  /** ReadOptions for range scans with fillCache=false to avoid polluting the block cache.
-    * Mirrors Besu's BonsaiWorldStateKeyValueStorage tailing iterator behaviour for flat DB walks.
-    * Regular point reads use the default readOptions with cache enabled.
+  /** ReadOptions for range scans with fillCache=false to avoid polluting the block cache. Mirrors Besu's
+    * BonsaiWorldStateKeyValueStorage tailing iterator behaviour for flat DB walks. Regular point reads use the default
+    * readOptions with cache enabled.
     */
   private lazy val scanReadOptions: ReadOptions = {
     val opts = new ReadOptions()
@@ -119,12 +119,11 @@ class RocksDbDataSource(
     opts
   }
 
-  /** Seek-based range scan starting from startKey (inclusive).
-    * Uses fillCache=false to avoid evicting hot data from the block cache
-    * during large sequential scans (mirrors Besu's streamFromKey pattern).
+  /** Seek-based range scan starting from startKey (inclusive). Uses fillCache=false to avoid evicting hot data from the
+    * block cache during large sequential scans (mirrors Besu's streamFromKey pattern).
     *
-    * Returns an fs2 Stream of (key, value) pairs in sorted key order.
-    * The iterator is resource-managed and closes when the stream completes.
+    * Returns an fs2 Stream of (key, value) pairs in sorted key order. The iterator is resource-managed and closes when
+    * the stream completes.
     */
   def seekFrom(
       namespace: Namespace,

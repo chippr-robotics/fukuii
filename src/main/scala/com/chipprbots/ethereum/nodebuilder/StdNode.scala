@@ -127,12 +127,12 @@ abstract class BaseNode extends Node {
 
   /** Load static peer nodes from ${datadir}/static-nodes.json and add each to the maintained-peers set.
     *
-    * Besu reference: StaticNodesParser.fromPath() → DefaultP2PNetwork adds each to MaintainedPeers.
-    * Static peers are maintained connections: the node will always attempt to reconnect on disconnect.
+    * Besu reference: StaticNodesParser.fromPath() → DefaultP2PNetwork adds each to MaintainedPeers. Static peers are
+    * maintained connections: the node will always attempt to reconnect on disconnect.
     */
   private[this] def loadStaticNodes(): Unit = {
     val datadir = instanceConfig.config.getString("datadir")
-    val nodes   = StaticNodesLoader.load(datadir)
+    val nodes = StaticNodesLoader.load(datadir)
     if (nodes.nonEmpty) {
       log.info("Loading {} static peer(s) from {}/{}", nodes.size, datadir, StaticNodesLoader.FileName)
       nodes.foreach { uri =>

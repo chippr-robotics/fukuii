@@ -386,21 +386,28 @@ class EthMiningServiceSpec
       (blockGenerator.getPrepared _).expects(*).returning(Some(PendingBlock(parentBlock, Nil)))
 
       val result = ethMiningService
-        .submitWork(SubmitWorkRequest(ByteString("nonce"), ByteString(Hex.decode("01" * 32)), ByteString(Hex.decode("01" * 32))))
+        .submitWork(
+          SubmitWorkRequest(ByteString("nonce"), ByteString(Hex.decode("01" * 32)), ByteString(Hex.decode("01" * 32)))
+        )
         .unsafeRunSync()
 
       result shouldEqual Right(SubmitWorkResponse(false))
     }
 
   // core-geth alignment: submitWork accepts shares within staleThreshold window
-  it should "accept submitWork when submission is within stale threshold" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "accept submitWork when submission is within stale threshold" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     // Save parentBlock so best = 0; pending block is at number 1 (ahead of best — not stale)
     blockchainWriter.save(parentBlock, Nil, ChainWeight.totalDifficultyOnly(parentBlock.header.difficulty), true)
 
     (blockGenerator.getPrepared _).expects(*).returning(Some(PendingBlock(block, Nil)))
 
     val result = ethMiningService
-      .submitWork(SubmitWorkRequest(ByteString("nonce"), ByteString(Hex.decode("01" * 32)), ByteString(Hex.decode("01" * 32))))
+      .submitWork(
+        SubmitWorkRequest(ByteString("nonce"), ByteString(Hex.decode("01" * 32)), ByteString(Hex.decode("01" * 32)))
+      )
       .unsafeRunSync()
 
     result shouldEqual Right(SubmitWorkResponse(true))

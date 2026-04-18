@@ -30,9 +30,8 @@ import com.chipprbots.ethereum.vm.ExecutionTracer
 
 /** Unit tests for TraceService.
   *
-  * Besu reference: TraceTransaction.java, TraceBlock.java,
-  *   TraceReplayTransaction.java, TraceReplayBlockTransactions.java,
-  *   TraceCall.java, TraceCallMany.java
+  * Besu reference: TraceTransaction.java, TraceBlock.java, TraceReplayTransaction.java,
+  * TraceReplayBlockTransactions.java, TraceCall.java, TraceCallMany.java
   *
   * core-geth reference: eth/tracers/api.go
   */
@@ -63,7 +62,7 @@ class TraceServiceSpec
 
   it should "return flat trace array for a valid transaction" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val txHash: ByteString = block.body.transactionList.head.hash
-    val txIndex             = 0
+    val txIndex = 0
 
     blockchainWriter.storeBlock(block).commit()
     storagesInstance.storages.blockHeadersStorage
@@ -72,7 +71,15 @@ class TraceServiceSpec
 
     (txMappingStorage.get _).expects(txHash).returning(Some(TransactionLocation(block.header.hash, txIndex)))
     (mockLedger.advanceWorldToTx _).expects(*, *, *, *).returning(mockWorld)
-    (mockLedger.simulateTransactionWithTracer(_: SignedTransactionWithSender, _: BlockHeader, _: Option[InMemoryWorldStateProxy], _: ExecutionTracer)).expects(*, *, *, *).returning(null.asInstanceOf[TxResult])
+    (mockLedger
+      .simulateTransactionWithTracer(
+        _: SignedTransactionWithSender,
+        _: BlockHeader,
+        _: Option[InMemoryWorldStateProxy],
+        _: ExecutionTracer
+      ))
+      .expects(*, *, *, *)
+      .returning(null.asInstanceOf[TxResult])
 
     val result = service
       .traceTransaction(TraceTransactionRequest(txHash))
@@ -114,7 +121,7 @@ class TraceServiceSpec
 
   it should "return a replay result with trace option enabled" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val txHash: ByteString = block.body.transactionList.head.hash
-    val txIndex             = 0
+    val txIndex = 0
 
     blockchainWriter.storeBlock(block).commit()
     storagesInstance.storages.blockHeadersStorage
@@ -123,7 +130,16 @@ class TraceServiceSpec
 
     (txMappingStorage.get _).expects(txHash).returning(Some(TransactionLocation(block.header.hash, txIndex)))
     (mockLedger.advanceWorldToTx _).expects(*, *, *, *).returning(mockWorld)
-    (mockLedger.simulateTransactionWithTracer(_: SignedTransactionWithSender, _: BlockHeader, _: Option[InMemoryWorldStateProxy], _: ExecutionTracer)).expects(*, *, *, *).returning(null.asInstanceOf[TxResult]).anyNumberOfTimes()
+    (mockLedger
+      .simulateTransactionWithTracer(
+        _: SignedTransactionWithSender,
+        _: BlockHeader,
+        _: Option[InMemoryWorldStateProxy],
+        _: ExecutionTracer
+      ))
+      .expects(*, *, *, *)
+      .returning(null.asInstanceOf[TxResult])
+      .anyNumberOfTimes()
 
     val result = service
       .replayTransaction(TraceReplayTransactionRequest(txHash, TraceOptions(trace = true)))
@@ -159,9 +175,22 @@ class TraceServiceSpec
 
   "TraceService.traceCall" should
     "return a call trace result for the latest block" taggedAs (UnitTest, RPCTest) in new TestSetup {
-      blockchainWriter.save(block, Nil, ChainWeight.totalDifficultyOnly(block.header.difficulty), saveAsBestBlock = true)
+      blockchainWriter.save(
+        block,
+        Nil,
+        ChainWeight.totalDifficultyOnly(block.header.difficulty),
+        saveAsBestBlock = true
+      )
 
-      (mockLedger.simulateTransactionWithTracer(_: SignedTransactionWithSender, _: BlockHeader, _: Option[InMemoryWorldStateProxy], _: ExecutionTracer)).expects(*, *, *, *).returning(null.asInstanceOf[TxResult])
+      (mockLedger
+        .simulateTransactionWithTracer(
+          _: SignedTransactionWithSender,
+          _: BlockHeader,
+          _: Option[InMemoryWorldStateProxy],
+          _: ExecutionTracer
+        ))
+        .expects(*, *, *, *)
+        .returning(null.asInstanceOf[TxResult])
 
       val callTx = EthInfoService.CallTx(
         from = None,
@@ -182,17 +211,19 @@ class TraceServiceSpec
 
   "TraceService.traceFilter" should
     "return InvalidParams when fromBlock is after toBlock" taggedAs (UnitTest, RPCTest) in new TestSetup {
-      val emptyBlock  = block.copy(body = block.body.copy(transactionList = Seq.empty))
+      val emptyBlock = block.copy(body = block.body.copy(transactionList = Seq.empty))
       // parentBlock gets a different hash because number changed in the header
       val parentBlock = emptyBlock.copy(header = emptyBlock.header.copy(number = emptyBlock.header.number - 1))
       blockchainWriter.storeBlock(emptyBlock).commit()
       blockchainWriter.storeBlock(parentBlock).commit()
 
       val result = service
-        .traceFilter(TraceFilterRequest(
-          fromBlock = BlockParam.WithHash(emptyBlock.header.hash),   // N = 3125369
-          toBlock   = BlockParam.WithHash(parentBlock.header.hash)   // N-1 = 3125368
-        ))
+        .traceFilter(
+          TraceFilterRequest(
+            fromBlock = BlockParam.WithHash(emptyBlock.header.hash), // N = 3125369
+            toBlock = BlockParam.WithHash(parentBlock.header.hash) // N-1 = 3125368
+          )
+        )
         .unsafeRunSync()
 
       result shouldBe Left(JsonRpcError.InvalidParams("fromBlock must be <= toBlock"))
@@ -200,16 +231,23 @@ class TraceServiceSpec
 
   it should "return empty trace list for a block with no transactions" taggedAs (UnitTest, RPCTest) in new TestSetup {
     val emptyBlock = block.copy(body = block.body.copy(transactionList = Seq.empty))
-    blockchainWriter.save(emptyBlock, Nil, ChainWeight.totalDifficultyOnly(emptyBlock.header.difficulty), saveAsBestBlock = true)
+    blockchainWriter.save(
+      emptyBlock,
+      Nil,
+      ChainWeight.totalDifficultyOnly(emptyBlock.header.difficulty),
+      saveAsBestBlock = true
+    )
     storagesInstance.storages.blockHeadersStorage
       .put(emptyBlock.header.parentHash, emptyBlock.header.copy(number = emptyBlock.header.number - 1))
       .commit()
 
     val result = service
-      .traceFilter(TraceFilterRequest(
-        fromBlock = BlockParam.Latest,
-        toBlock   = BlockParam.Latest
-      ))
+      .traceFilter(
+        TraceFilterRequest(
+          fromBlock = BlockParam.Latest,
+          toBlock = BlockParam.Latest
+        )
+      )
       .unsafeRunSync()
 
     result shouldBe Right(TraceFilterResponse(Seq.empty))
@@ -221,7 +259,7 @@ class TraceServiceSpec
 
     val block: Block = Block(Fixtures.Blocks.Block3125369.header, Fixtures.Blocks.Block3125369.body)
 
-    val mockLedger: StxLedger              = mock[StxLedger]
+    val mockLedger: StxLedger = mock[StxLedger]
     val txMappingStorage: TransactionMappingStorage = mock[TransactionMappingStorage]
     val mockWorld = null.asInstanceOf[com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy]
 

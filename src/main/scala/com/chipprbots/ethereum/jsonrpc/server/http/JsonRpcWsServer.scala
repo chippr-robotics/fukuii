@@ -38,17 +38,16 @@ import com.chipprbots.ethereum.utils.Logger
 
 /** WebSocket JSON-RPC server.
   *
-  * Besu reference:
-  *   ethereum/api/.../websocket/WebSocketService.java  — WS connection lifecycle
-  *   ethereum/api/.../websocket/WebSocketMessageHandler.java — message routing
-  *   ethereum/api/.../websocket/methods/EthSubscribe.java — eth_subscribe handler
-  *   ethereum/api/.../websocket/methods/EthUnsubscribe.java — eth_unsubscribe handler
+  * Besu reference: ethereum/api/.../websocket/WebSocketService.java — WS connection lifecycle
+  * ethereum/api/.../websocket/WebSocketMessageHandler.java — message routing
+  * ethereum/api/.../websocket/methods/EthSubscribe.java — eth_subscribe handler
+  * ethereum/api/.../websocket/methods/EthUnsubscribe.java — eth_unsubscribe handler
   *
-  * Besu uses Vert.x HTTP server + WebSocketHandler. We use Pekko HTTP's handleWebSocketMessages
-  * directive which maps naturally to the same flow: incoming messages → route → outgoing messages.
+  * Besu uses Vert.x HTTP server + WebSocketHandler. We use Pekko HTTP's handleWebSocketMessages directive which maps
+  * naturally to the same flow: incoming messages → route → outgoing messages.
   *
-  * eth_subscribe / eth_unsubscribe are routed directly to SubscriptionManager.
-  * All other JSON-RPC methods are forwarded to jsonRpcController.handleRequest().
+  * eth_subscribe / eth_unsubscribe are routed directly to SubscriptionManager. All other JSON-RPC methods are forwarded
+  * to jsonRpcController.handleRequest().
   */
 class JsonRpcWsServer(
     jsonRpcController: JsonRpcBaseController,
@@ -74,7 +73,7 @@ class JsonRpcWsServer(
   def run(): Unit = {
     val bindingF = Http(system).newServerAt(config.interface, config.port).bind(route)
     bindingF.onComplete {
-      case Success(b) => log.info(s"JSON RPC WS server listening on ${b.localAddress}")
+      case Success(b)  => log.info(s"JSON RPC WS server listening on ${b.localAddress}")
       case Failure(ex) => log.error("Cannot start JSON RPC WS server", ex)
     }
   }
@@ -118,13 +117,15 @@ class JsonRpcWsServer(
     def errorResponse(id: JValue, code: Int, message: String): String = {
       val resp = JObject(
         "jsonrpc" -> JString("2.0"),
-        "id"      -> id,
-        "error"   -> JObject("code" -> JInt(code), "message" -> JString(message))
+        "id" -> id,
+        "error" -> JObject("code" -> JInt(code), "message" -> JString(message))
       )
       compact(render(resp))
     }
 
-    val parsed = try { Some(parse(text)) } catch { case _: Exception => None }
+    val parsed =
+      try Some(parse(text))
+      catch { case _: Exception => None }
     parsed match {
       case None =>
         sendResponse(errorResponse(JNull, -32700, "Parse error"))
@@ -141,11 +142,11 @@ class JsonRpcWsServer(
           case "eth_subscribe" =>
             val subType = params.flatMap {
               case JArray(JString(t) :: _) => Some(t)
-              case _ => None
+              case _                       => None
             }
             val subParams = params.flatMap {
               case JArray(_ :: p :: _) => Some(p)
-              case _ => None
+              case _                   => None
             }
             subType match {
               case None =>
@@ -154,11 +155,17 @@ class JsonRpcWsServer(
                 (subscriptionManager ? Subscribe(connId, t, subParams)).foreach {
                   case SubscribeResponse(Right(subId)) =>
                     val hex = "0x" + subId.toHexString
-                    sendResponse(compact(render(JObject(
-                      "jsonrpc" -> JString("2.0"),
-                      "id"      -> id,
-                      "result"  -> JString(hex)
-                    ))))
+                    sendResponse(
+                      compact(
+                        render(
+                          JObject(
+                            "jsonrpc" -> JString("2.0"),
+                            "id" -> id,
+                            "result" -> JString(hex)
+                          )
+                        )
+                      )
+                    )
                   case SubscribeResponse(Left(err)) =>
                     sendResponse(errorResponse(id, -32602, err))
                   case _ =>
@@ -170,7 +177,8 @@ class JsonRpcWsServer(
             val subIdOpt = params.flatMap {
               case JArray(JString(s) :: _) =>
                 val hex = s.stripPrefix("0x").stripPrefix("0X")
-                try { Some(java.lang.Long.parseLong(hex, 16)) } catch { case _: Exception => None }
+                try Some(java.lang.Long.parseLong(hex, 16))
+                catch { case _: Exception => None }
               case _ => None
             }
             subIdOpt match {
@@ -179,11 +187,17 @@ class JsonRpcWsServer(
               case Some(subId) =>
                 (subscriptionManager ? Unsubscribe(connId, subId)).foreach {
                   case UnsubscribeResponse(found) =>
-                    sendResponse(compact(render(JObject(
-                      "jsonrpc" -> JString("2.0"),
-                      "id"      -> id,
-                      "result"  -> JBool(found)
-                    ))))
+                    sendResponse(
+                      compact(
+                        render(
+                          JObject(
+                            "jsonrpc" -> JString("2.0"),
+                            "id" -> id,
+                            "result" -> JBool(found)
+                          )
+                        )
+                      )
+                    )
                   case _ =>
                     sendResponse(errorResponse(id, -32603, "Internal error"))
                 }
@@ -194,9 +208,10 @@ class JsonRpcWsServer(
 
           case _ =>
             // All other JSON-RPC methods: delegate to standard controller
-            val requestOpt = try {
-              Some(json.extract[JsonRpcRequest])
-            } catch { case _: Exception => None }
+            val requestOpt =
+              try
+                Some(json.extract[JsonRpcRequest])
+              catch { case _: Exception => None }
             requestOpt match {
               case None =>
                 sendResponse(errorResponse(id, -32600, "Invalid request"))

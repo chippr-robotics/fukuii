@@ -29,11 +29,12 @@ import com.chipprbots.ethereum.utils.Hex
   * }
   * }}}
   *
-  * Besu reference: FlatTraceGenerator produces OpenEthereum flat trace format (different schema).
-  * This tracer matches go-ethereum's callTracer nested call tree format, which is the standard
-  * for debug_traceTransaction with {tracer: "callTracer"}.
+  * Besu reference: FlatTraceGenerator produces OpenEthereum flat trace format (different schema). This tracer matches
+  * go-ethereum's callTracer nested call tree format, which is the standard for debug_traceTransaction with {tracer:
+  * "callTracer"}.
   *
-  * @param onlyTopCall when true, only capture the top-level call (skip sub-calls)
+  * @param onlyTopCall
+  *   when true, only capture the top-level call (skip sub-calls)
   */
 class CallTracer(onlyTopCall: Boolean = false) extends ExecutionTracer {
 
@@ -51,7 +52,7 @@ class CallTracer(onlyTopCall: Boolean = false) extends ExecutionTracer {
       calls: mutable.ArrayBuffer[CallFrame] = mutable.ArrayBuffer.empty
   )
 
-  private val callStack             = mutable.Stack[CallFrame]()
+  private val callStack = mutable.Stack[CallFrame]()
   private var rootFrame: Option[CallFrame] = None
 
   override def onTxStart(from: Address, to: Option[Address], gas: BigInt, value: BigInt, input: ByteString): Unit = {
@@ -68,7 +69,7 @@ class CallTracer(onlyTopCall: Boolean = false) extends ExecutionTracer {
     rootFrame = Some(frame)
   }
 
-  override def onTxEnd(gasUsed: BigInt, output: ByteString, error: Option[String]): Unit = {
+  override def onTxEnd(gasUsed: BigInt, output: ByteString, error: Option[String]): Unit =
     if (callStack.nonEmpty) {
       val frame = callStack.pop()
       frame.gasUsed = gasUsed
@@ -78,7 +79,6 @@ class CallTracer(onlyTopCall: Boolean = false) extends ExecutionTracer {
         frame.revertReason = parseRevertReason(output)
       }
     }
-  }
 
   override def onCallEnter(
       opCode: String,
@@ -158,8 +158,7 @@ class CallTracer(onlyTopCall: Boolean = false) extends ExecutionTracer {
     if (bs.isEmpty) JString("0x")
     else JString("0x" + Hex.toHexString(bs.toArray))
 
-  /** Parse Solidity revert reason from ABI-encoded error data.
-    * Format: 0x08c379a0 + offset + length + utf8 string
+  /** Parse Solidity revert reason from ABI-encoded error data. Format: 0x08c379a0 + offset + length + utf8 string
     */
   private def parseRevertReason(data: ByteString): Option[String] = {
     if (data.length < 68) return None

@@ -6,16 +6,16 @@ import com.chipprbots.ethereum.metrics.MetricsContainer
 
 /** Prometheus metrics for PoW mining operations. Exposed via /metrics endpoint for Grafana dashboards.
   *
-  * Mirrors the pattern established by EngineApiMetrics for the Engine API side.
-  * core-geth reference: consensus/ethash/ethash.go hashrate metrics.Meter (lines 579-823)
+  * Mirrors the pattern established by EngineApiMetrics for the Engine API side. core-geth reference:
+  * consensus/ethash/ethash.go hashrate metrics.Meter (lines 579-823)
   */
 object PoWMiningMetrics extends MetricsContainer {
 
-  private val _workRequestsTotal  = new AtomicLong(0)
-  private val _blocksMinedTotal   = new AtomicLong(0)
-  private val _staleSharesTotal   = new AtomicLong(0)
-  private val _currentHashrate    = new AtomicLong(0)
-  private val _lastBlockMinedAt   = new AtomicLong(0)
+  private val _workRequestsTotal = new AtomicLong(0)
+  private val _blocksMinedTotal = new AtomicLong(0)
+  private val _staleSharesTotal = new AtomicLong(0)
+  private val _currentHashrate = new AtomicLong(0)
+  private val _lastBlockMinedAt = new AtomicLong(0)
   private val _lastMiningDurationMs = new AtomicLong(0)
 
   // Note: Metrics.mkName adds "app_" prefix, so "pow_foo" becomes "app_pow_foo" in Prometheus

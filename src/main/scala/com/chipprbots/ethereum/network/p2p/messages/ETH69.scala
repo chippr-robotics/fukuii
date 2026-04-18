@@ -13,15 +13,14 @@ import com.chipprbots.ethereum.utils.ByteUtils
 /** ETH/69 protocol (EIP-7642) — restructured Status, simplified receipts, BlockRangeUpdate.
   *
   * Key changes from ETH/68:
-  * - Status message: removes totalDifficulty, reorders fields, adds earliestBlock/latestBlock
-  * - Receipt encoding: removes bloom filter, uses flat RLP list with explicit tx-type field
-  * - New BlockRangeUpdate (0x11) notification message
-  * - All other messages (GetBlockHeaders, BlockHeaders, etc.) unchanged from ETH/68
+  *   - Status message: removes totalDifficulty, reorders fields, adds earliestBlock/latestBlock
+  *   - Receipt encoding: removes bloom filter, uses flat RLP list with explicit tx-type field
+  *   - New BlockRangeUpdate (0x11) notification message
+  *   - All other messages (GetBlockHeaders, BlockHeaders, etc.) unchanged from ETH/68
   */
 object ETH69 {
 
-  /** ETH/69 Status message.
-    * RLP: [version, networkId, genesis, forkId, earliestBlock, latestBlock, latestBlockHash]
+  /** ETH/69 Status message. RLP: [version, networkId, genesis, forkId, earliestBlock, latestBlock, latestBlockHash]
     */
   case class Status(
       protocolVersion: Int,
@@ -85,9 +84,8 @@ object ETH69 {
     }
   }
 
-  /** BlockRangeUpdate notification (0x11).
-    * Sent when peer's available block range changes. No request-id.
-    * RLP: [earliestBlock, latestBlock, latestBlockHash]
+  /** BlockRangeUpdate notification (0x11). Sent when peer's available block range changes. No request-id. RLP:
+    * [earliestBlock, latestBlock, latestBlockHash]
     */
   case class BlockRangeUpdate(
       earliestBlock: BigInt,

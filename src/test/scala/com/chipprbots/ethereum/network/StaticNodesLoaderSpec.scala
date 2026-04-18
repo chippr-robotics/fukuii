@@ -11,8 +11,7 @@ import com.chipprbots.ethereum.testing.Tags._
 
 /** Unit tests for StaticNodesLoader.
   *
-  * Besu reference: StaticNodesParser.java (fromPath / readEnodesFromPath / decodeString)
-  * Behaviour traced:
+  * Besu reference: StaticNodesParser.java (fromPath / readEnodesFromPath / decodeString) Behaviour traced:
   *   - Missing file → empty Seq (not an error)
   *   - Empty file or empty array → empty Seq
   *   - Valid enode URLs → URI objects with scheme="enode", userInfo=pubkey, host, port
@@ -70,8 +69,8 @@ class StaticNodesLoaderSpec extends AnyFlatSpec with Matchers {
       val result = StaticNodesLoader.load(dir)
       result should have size 1
       result.head.getScheme shouldBe "enode"
-      result.head.getHost   shouldBe "127.0.0.1"
-      result.head.getPort   shouldBe 30303
+      result.head.getHost shouldBe "127.0.0.1"
+      result.head.getPort shouldBe 30303
     }
   }
 
@@ -81,7 +80,7 @@ class StaticNodesLoaderSpec extends AnyFlatSpec with Matchers {
       Files.write(dir.resolve(StaticNodesLoader.FileName), json.getBytes("UTF-8"))
       val result = StaticNodesLoader.load(dir)
       result should have size 2
-      result.map(_.getHost) should contain allOf ("127.0.0.1", "10.0.0.1")
+      (result.map(_.getHost) should contain).allOf("127.0.0.1", "10.0.0.1")
     }
   }
 

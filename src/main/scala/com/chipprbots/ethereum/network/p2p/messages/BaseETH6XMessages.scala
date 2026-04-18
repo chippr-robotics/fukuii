@@ -230,10 +230,10 @@ object BaseETH6XMessages {
         var i = 0
         val items = encodables match {
           case indexed: IndexedSeq[RLPEncodeable] => indexed
-          case other => other.toIndexedSeq
+          case other                              => other.toIndexedSeq
         }
         val len = items.size
-        while (i < len) {
+        while (i < len)
           items(i) match {
             case RLPValue(v) if v.isValidTransactionType && i + 1 < len =>
               items(i + 1) match {
@@ -263,7 +263,6 @@ object BaseETH6XMessages {
               result += other
               i += 1
           }
-        }
         result.toSeq
       }
     }
@@ -642,9 +641,8 @@ object BaseETH6XMessages {
         }).toSignedTransaction
       }
 
-      /** Decode a signed transaction, preserving raw bytes for network-wrapped blob txs.
-        * Returns (SignedTransaction, Some(rawBytes)) if the tx was a Type-3 blob tx in
-        * network-wrapped form, otherwise (SignedTransaction, None).
+      /** Decode a signed transaction, preserving raw bytes for network-wrapped blob txs. Returns (SignedTransaction,
+        * Some(rawBytes)) if the tx was a Type-3 blob tx in network-wrapped form, otherwise (SignedTransaction, None).
         */
       def toSignedTransactionWithSidecar: (SignedTransaction, Option[Array[Byte]]) = {
         val first = bytes(0)

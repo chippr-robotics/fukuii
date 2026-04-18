@@ -14,27 +14,24 @@ object TxPoolJsonMethodsImplicits extends JsonMethodsImplicits {
 
   implicit val txpool_besuTransactions
       : NoParamsMethodDecoder[TxPoolBesuTransactionsRequest] with JsonEncoder[TxPoolBesuTransactionsResponse] =
-    new NoParamsMethodDecoder(TxPoolBesuTransactionsRequest())
-      with JsonEncoder[TxPoolBesuTransactionsResponse] {
+    new NoParamsMethodDecoder(TxPoolBesuTransactionsRequest()) with JsonEncoder[TxPoolBesuTransactionsResponse] {
       override def encodeJson(t: TxPoolBesuTransactionsResponse): JValue =
         JArray(t.pendingTransactions.toList.map(tx => transactionResponseJsonEncoder.encodeJson(tx)))
     }
 
   implicit val txpool_besuStatistics
       : NoParamsMethodDecoder[TxPoolBesuStatisticsRequest] with JsonEncoder[TxPoolBesuStatisticsResponse] =
-    new NoParamsMethodDecoder(TxPoolBesuStatisticsRequest())
-      with JsonEncoder[TxPoolBesuStatisticsResponse] {
+    new NoParamsMethodDecoder(TxPoolBesuStatisticsRequest()) with JsonEncoder[TxPoolBesuStatisticsResponse] {
       override def encodeJson(t: TxPoolBesuStatisticsResponse): JValue =
         JObject(
-          "maxSize"     -> JLong(t.maxSize),
-          "localCount"  -> JLong(t.localCount),
+          "maxSize" -> JLong(t.maxSize),
+          "localCount" -> JLong(t.localCount),
           "remoteCount" -> JLong(t.remoteCount)
         )
     }
 
-  implicit val txpool_besuPendingTransactions
-      : JsonMethodDecoder[TxPoolBesuPendingTransactionsRequest]
-        with JsonEncoder[TxPoolBesuPendingTransactionsResponse] =
+  implicit val txpool_besuPendingTransactions: JsonMethodDecoder[TxPoolBesuPendingTransactionsRequest]
+    with JsonEncoder[TxPoolBesuPendingTransactionsResponse] =
     new JsonMethodDecoder[TxPoolBesuPendingTransactionsRequest]
       with JsonEncoder[TxPoolBesuPendingTransactionsResponse] {
 
@@ -75,7 +72,8 @@ object TxPoolJsonMethodsImplicits extends JsonMethodsImplicits {
         * }}}
         *
         * Unknown fields and unknown predicates are silently ignored (matches Besu's
-        * @JsonIgnoreProperties(ignoreUnknown = true) on PendingTransactionsParams).
+        * @JsonIgnoreProperties(ignoreUnknown
+        *   \= true) on PendingTransactionsParams).
         */
       private def decodeFilterParams(obj: JObject): TxPoolBesuPendingTransactionsParams = {
         val filters = obj.obj.flatMap {
@@ -99,8 +97,7 @@ object TxPoolJsonMethodsImplicits extends JsonMethodsImplicits {
 
   // ── Geth-compatible methods ────────────────────────────────────────────────
 
-  implicit val txpool_content
-      : NoParamsMethodDecoder[TxPoolContentRequest] with JsonEncoder[TxPoolContentResponse] =
+  implicit val txpool_content: NoParamsMethodDecoder[TxPoolContentRequest] with JsonEncoder[TxPoolContentResponse] =
     new NoParamsMethodDecoder(TxPoolContentRequest()) with JsonEncoder[TxPoolContentResponse] {
       override def encodeJson(t: TxPoolContentResponse): JValue = {
         def encodeNested(m: Map[String, Map[String, TransactionResponse]]): JObject =
@@ -115,8 +112,7 @@ object TxPoolJsonMethodsImplicits extends JsonMethodsImplicits {
 
   implicit val txpool_contentFrom
       : JsonMethodDecoder[TxPoolContentFromRequest] with JsonEncoder[TxPoolContentFromResponse] =
-    new JsonMethodDecoder[TxPoolContentFromRequest]
-      with JsonEncoder[TxPoolContentFromResponse] {
+    new JsonMethodDecoder[TxPoolContentFromRequest] with JsonEncoder[TxPoolContentFromResponse] {
       override def decodeJson(
           params: Option[JArray]
       ): Either[JsonRpcError, TxPoolContentFromRequest] =
@@ -136,19 +132,17 @@ object TxPoolJsonMethodsImplicits extends JsonMethodsImplicits {
       }
     }
 
-  implicit val txpool_status
-      : NoParamsMethodDecoder[TxPoolStatusRequest] with JsonEncoder[TxPoolStatusResponse] =
+  implicit val txpool_status: NoParamsMethodDecoder[TxPoolStatusRequest] with JsonEncoder[TxPoolStatusResponse] =
     new NoParamsMethodDecoder(TxPoolStatusRequest()) with JsonEncoder[TxPoolStatusResponse] {
       // core-geth uses hexutil.Uint — serialises as a hex string (e.g. "0x5")
       override def encodeJson(t: TxPoolStatusResponse): JValue =
         JObject(
           "pending" -> JString("0x" + java.lang.Long.toHexString(t.pending)),
-          "queued"  -> JString("0x" + java.lang.Long.toHexString(t.queued))
+          "queued" -> JString("0x" + java.lang.Long.toHexString(t.queued))
         )
     }
 
-  implicit val txpool_inspect
-      : NoParamsMethodDecoder[TxPoolInspectRequest] with JsonEncoder[TxPoolInspectResponse] =
+  implicit val txpool_inspect: NoParamsMethodDecoder[TxPoolInspectRequest] with JsonEncoder[TxPoolInspectResponse] =
     new NoParamsMethodDecoder(TxPoolInspectRequest()) with JsonEncoder[TxPoolInspectResponse] {
       override def encodeJson(t: TxPoolInspectResponse): JValue = {
         def encodeNested(m: Map[String, Map[String, String]]): JObject =

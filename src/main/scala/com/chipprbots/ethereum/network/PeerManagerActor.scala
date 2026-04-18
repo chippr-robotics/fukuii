@@ -71,20 +71,19 @@ class PeerManagerActor(
     */
   private var peerStatusCache: Map[PeerId, PeerActor.Status] = Map.empty
 
-  /** Peers that should always remain connected. On disconnect, a reconnect is scheduled after 30s.
-    * Keyed by hex node ID (the userInfo portion of the enode URI), matching PeerId.value for handshaked peers.
-    * Mirrors Besu's DefaultP2PNetwork.maintainedPeers set.
+  /** Peers that should always remain connected. On disconnect, a reconnect is scheduled after 30s. Keyed by hex node ID
+    * (the userInfo portion of the enode URI), matching PeerId.value for handshaked peers. Mirrors Besu's
+    * DefaultP2PNetwork.maintainedPeers set.
     */
   private var maintainedPeersByNodeId: Map[String, URI] = Map.empty
 
-  /** Trusted peers bypass the max-peer limit and are always accepted.
-    * core-geth reference: p2p/server.go — trusted map[enode.ID]bool in run loop.
-    * Keyed by lowercase hex node ID.
+  /** Trusted peers bypass the max-peer limit and are always accepted. core-geth reference: p2p/server.go — trusted
+    * map[enode.ID]bool in run loop. Keyed by lowercase hex node ID.
     */
   private var trustedPeersByNodeId: Set[String] = Set.empty
 
-  /** Runtime max-outgoing-peers override set by admin_maxPeers.
-    * core-geth reference: eth/api_admin.go MaxPeers — sets handler.maxPeers + p2pServer.MaxPeers.
+  /** Runtime max-outgoing-peers override set by admin_maxPeers. core-geth reference: eth/api_admin.go MaxPeers — sets
+    * handler.maxPeers + p2pServer.MaxPeers.
     */
   private var maxOutgoingPeersOverride: Option[Int] = None
 
@@ -93,8 +92,8 @@ class PeerManagerActor(
 
   implicit class ConnectedPeersOps(connectedPeers: ConnectedPeers) {
 
-    /** Number of new connections the node should try to open at any given time.
-      * Uses effectiveMaxOutgoing so admin_maxPeers overrides take effect.
+    /** Number of new connections the node should try to open at any given time. Uses effectiveMaxOutgoing so
+      * admin_maxPeers overrides take effect.
       */
     def outgoingConnectionDemand: Int =
       if (connectedPeers.outgoingHandshakedPeersCount >= peerConfiguration.minOutgoingPeers) 0
@@ -273,7 +272,7 @@ class PeerManagerActor(
       connectWith(uri, connectedPeers)
 
     case AddMaintainedPeer(uri) =>
-      val nodeId  = uri.getUserInfo
+      val nodeId = uri.getUserInfo
       val wasAdded = !maintainedPeersByNodeId.contains(nodeId)
       maintainedPeersByNodeId = maintainedPeersByNodeId + (nodeId -> uri)
       sender() ! AddMaintainedPeerResponse(wasAdded)
@@ -350,7 +349,12 @@ class PeerManagerActor(
 
     validConnection match {
       case Right(address) =>
-        log.error("[HIVE-DEBUG] Accepting incoming connection from {} (pending={}/{})", remoteAddress, connectedPeers.incomingPendingPeersCount, peerConfiguration.maxPendingPeers)
+        log.error(
+          "[HIVE-DEBUG] Accepting incoming connection from {} (pending={}/{})",
+          remoteAddress,
+          connectedPeers.incomingPendingPeersCount,
+          peerConfiguration.maxPendingPeers
+        )
         val (peer, newConnectedPeers) = createPeer(address, incomingConnection = true, connectedPeers)
         peer.ref ! PeerActor.HandleConnection(connection, remoteAddress)
         context.become(listening(newConnectedPeers))
@@ -362,8 +366,8 @@ class PeerManagerActor(
   }
 
   private def connectWith(uri: URI, connectedPeers: ConnectedPeers): Unit = {
-    val nodeIdHex     = uri.getUserInfo.toLowerCase
-    val nodeId        = ByteString(Hex.decode(nodeIdHex))
+    val nodeIdHex = uri.getUserInfo.toLowerCase
+    val nodeId = ByteString(Hex.decode(nodeIdHex))
     val remoteAddress = new InetSocketAddress(uri.getHost, uri.getPort)
 
     val alreadyConnectedToPeer =
@@ -446,7 +450,7 @@ class PeerManagerActor(
         peerStatusCache = peerStatusCache - peerId
         peerEventBus ! Publish(PeerEvent.PeerDisconnected(peerId))
         // Reconnect maintained peers — mirrors Besu's checkMaintainedConnectionPeers scheduler.
-        maintainedPeersByNodeId.get(peerId.value) foreach { uri =>
+        maintainedPeersByNodeId.get(peerId.value).foreach { uri =>
           log.debug("Maintained peer {} disconnected — scheduling reconnect in 30s", uri)
           context.system.scheduler.scheduleOnce(30.seconds, self, ConnectToPeer(uri))(context.dispatcher)
         }
@@ -745,17 +749,17 @@ object PeerManagerActor {
   case class RemoveFromBlacklistRequest(address: String)
   case class RemoveFromBlacklistResponse(removed: Boolean)
 
-  /** Besu alignment: admin_addPeer / admin_removePeer maintained-peers set.
-    * AddMaintainedPeer returns wasAdded=false if the peer was already in the set (duplicate call).
-    * RemoveMaintainedPeer removes from the set by hex node ID (enode userInfo).
+  /** Besu alignment: admin_addPeer / admin_removePeer maintained-peers set. AddMaintainedPeer returns wasAdded=false if
+    * the peer was already in the set (duplicate call). RemoveMaintainedPeer removes from the set by hex node ID (enode
+    * userInfo).
     */
   case class AddMaintainedPeer(uri: URI)
   case class AddMaintainedPeerResponse(wasAdded: Boolean)
   case class RemoveMaintainedPeer(nodeId: String)
 
-  /** core-geth alignment: admin_addTrustedPeer / admin_removeTrustedPeer / admin_maxPeers.
-    * Trusted peers bypass the max-peer limit and are always accepted.
-    * core-geth references: node/api.go AddTrustedPeer/RemoveTrustedPeer, eth/api_admin.go MaxPeers
+  /** core-geth alignment: admin_addTrustedPeer / admin_removeTrustedPeer / admin_maxPeers. Trusted peers bypass the
+    * max-peer limit and are always accepted. core-geth references: node/api.go AddTrustedPeer/RemoveTrustedPeer,
+    * eth/api_admin.go MaxPeers
     */
   case class AddTrustedPeer(uri: URI)
   case class AddTrustedPeerResponse(success: Boolean)

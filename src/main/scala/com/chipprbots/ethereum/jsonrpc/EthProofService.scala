@@ -232,13 +232,14 @@ class EthProofService(
     blockParam match {
       case BlockParam.WithNumber(blockNumber) => getBlock(blockNumber).map(ResolvedBlock(_, pendingState = None))
       case BlockParam.WithHash(hash) =>
-        blockchainReader.getBlockByHash(hash)
+        blockchainReader
+          .getBlockByHash(hash)
           .toRight(JsonRpcError.InvalidParams("Block not found for hash"))
           .map(ResolvedBlock(_, pendingState = None))
-      case BlockParam.Earliest                => getBlock(0).map(ResolvedBlock(_, pendingState = None))
-      case BlockParam.Latest                  => getLatestBlock().map(ResolvedBlock(_, pendingState = None))
-      case BlockParam.Safe                    => getLatestBlock().map(ResolvedBlock(_, pendingState = None))
-      case BlockParam.Finalized               => getLatestBlock().map(ResolvedBlock(_, pendingState = None))
+      case BlockParam.Earliest  => getBlock(0).map(ResolvedBlock(_, pendingState = None))
+      case BlockParam.Latest    => getLatestBlock().map(ResolvedBlock(_, pendingState = None))
+      case BlockParam.Safe      => getLatestBlock().map(ResolvedBlock(_, pendingState = None))
+      case BlockParam.Finalized => getLatestBlock().map(ResolvedBlock(_, pendingState = None))
       case BlockParam.Pending =>
         blockGenerator.getPendingBlockAndState
           .map(pb => ResolvedBlock(pb.pendingBlock.block, pendingState = Some(pb.worldState)))

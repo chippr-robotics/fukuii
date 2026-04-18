@@ -419,9 +419,16 @@ object PendingTransactionsManagerBuilder {
       with StorageBuilder =>
 
     lazy val pendingTransactionsManager: ActorRef =
-      system.actorOf(PendingTransactionsManager.props(
-        txPoolConfig, peerManager, networkPeerManager, peerEventBus,
-        blockchainReader, storagesInstance.storages.stateStorage))
+      system.actorOf(
+        PendingTransactionsManager.props(
+          txPoolConfig,
+          peerManager,
+          networkPeerManager,
+          peerEventBus,
+          blockchainReader,
+          storagesInstance.storages.stateStorage
+        )
+      )
   }
 }
 
@@ -506,10 +513,7 @@ trait EthInfoServiceBuilder {
 }
 
 trait EthSimulateServiceBuilder {
-  self: StorageBuilder
-    with BlockchainBuilder
-    with BlockchainConfigBuilder
-    with MiningBuilder =>
+  self: StorageBuilder with BlockchainBuilder with BlockchainConfigBuilder with MiningBuilder =>
 
   lazy val ethSimulateService = new com.chipprbots.ethereum.jsonrpc.EthSimulateService(
     blockchain,
@@ -568,7 +572,8 @@ trait EthBlocksServiceBuilder {
   /** Override in subtraits that have access to ForkChoiceManager (e.g. EngineApiBuilder) */
   def forkChoiceManagerForRpc: Option[com.chipprbots.ethereum.consensus.engine.ForkChoiceManager] = None
 
-  lazy val ethBlocksService = new EthBlocksService(blockchain, blockchainReader, mining, blockQueue, forkChoiceManagerForRpc)
+  lazy val ethBlocksService =
+    new EthBlocksService(blockchain, blockchainReader, mining, blockQueue, forkChoiceManagerForRpc)
 }
 
 trait EthUserServiceBuilder {
@@ -673,7 +678,8 @@ trait ApisBuilder extends ApisBase {
   }
 
   import Apis._
-  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa, Admin, TxPool, Trace, Subscribe)
+  override def available: List[String] =
+    List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa, Admin, TxPool, Trace, Subscribe)
 }
 
 trait AdminServiceBuilder {
@@ -707,10 +713,7 @@ trait TxPoolServiceBuilder {
 }
 
 trait DebugTracingServiceBuilder {
-  this: BlockchainBuilder
-    with StxLedgerBuilder
-    with StorageBuilder
-    with MiningBuilder =>
+  this: BlockchainBuilder with StxLedgerBuilder with StorageBuilder with MiningBuilder =>
 
   lazy val debugTracingService: com.chipprbots.ethereum.jsonrpc.DebugTracingService =
     new com.chipprbots.ethereum.jsonrpc.DebugTracingService(
@@ -723,10 +726,7 @@ trait DebugTracingServiceBuilder {
 }
 
 trait TraceServiceBuilder {
-  this: BlockchainBuilder
-    with StxLedgerBuilder
-    with StorageBuilder
-    with MiningBuilder =>
+  this: BlockchainBuilder with StxLedgerBuilder with StorageBuilder with MiningBuilder =>
 
   lazy val traceService: com.chipprbots.ethereum.jsonrpc.TraceService =
     new com.chipprbots.ethereum.jsonrpc.TraceService(
@@ -893,10 +893,7 @@ trait SubscriptionManagerBuilder {
 }
 
 trait JSONRpcWsServerBuilder {
-  self: ActorSystemBuilder
-    with JSONRpcControllerBuilder
-    with JSONRpcConfigBuilder
-    with SubscriptionManagerBuilder =>
+  self: ActorSystemBuilder with JSONRpcControllerBuilder with JSONRpcConfigBuilder with SubscriptionManagerBuilder =>
 
   lazy val jsonRpcWsServer: com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer =
     new com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer(

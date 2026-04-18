@@ -26,7 +26,7 @@ import com.chipprbots.ethereum.utils.TxPoolConfig
 /** Unit tests for TxPoolService.
   *
   * Besu reference: TxPoolBesuTransactions, TxPoolBesuStatistics, TxPoolBesuPendingTransactions,
-  *   PendingTransactionFilter, PendingTransactionsParams
+  * PendingTransactionFilter, PendingTransactionsParams
   */
 class TxPoolServiceSpec
     extends TestKit(ActorSystem("TxPoolServiceSpec"))
@@ -40,9 +40,9 @@ class TxPoolServiceSpec
   implicit val runtime: IORuntime = IORuntime.global
 
   val txPoolConfig: TxPoolConfig = new TxPoolConfig {
-    val txPoolSize: Int                              = 4096
+    val txPoolSize: Int = 4096
     val pendingTxManagerQueryTimeout: FiniteDuration = 5.seconds
-    val transactionTimeout: FiniteDuration           = 2.hours
+    val transactionTimeout: FiniteDuration = 2.hours
     val getTransactionFromPoolTimeout: FiniteDuration = 5.seconds
   }
 
@@ -61,7 +61,7 @@ class TxPoolServiceSpec
   }
 
   trait TestSetup {
-    val probe   = TestProbe()
+    val probe = TestProbe()
     val service = new TxPoolService(probe.ref, 5.seconds, txPoolConfig)
   }
 
@@ -102,14 +102,14 @@ class TxPoolServiceSpec
     val result = future.futureValue
     result shouldBe a[Right[_, _]]
     val stats = result.toOption.get
-    stats.maxSize     shouldBe 4096L
-    stats.localCount  shouldBe 0L
+    stats.maxSize shouldBe 4096L
+    stats.localCount shouldBe 0L
     stats.remoteCount shouldBe 4L
   }
 
   it should "count local txs (receivedFromLocalSource=true) separately from remote" taggedAs UnitTest in new TestSetup {
     // 1 local (via AddOrOverrideTransaction), 3 remote (via AddTransactions)
-    val localPt  = makePendingTx(txList.head, local = true)
+    val localPt = makePendingTx(txList.head, local = true)
     val remotePts = txList.tail.map(makePendingTx(_))
 
     val future = service.besuStatistics(TxPoolBesuStatisticsRequest()).unsafeToFuture()
@@ -120,8 +120,8 @@ class TxPoolServiceSpec
     val result = future.futureValue
     result shouldBe a[Right[_, _]]
     val stats = result.toOption.get
-    stats.maxSize     shouldBe 4096L
-    stats.localCount  shouldBe 1L
+    stats.maxSize shouldBe 4096L
+    stats.localCount shouldBe 1L
     stats.remoteCount shouldBe 3L
   }
 
@@ -300,7 +300,7 @@ class TxPoolServiceSpec
   // ── contentFrom (geth-compat) ────────────────────────────────────────────────
 
   "TxPoolService.contentFrom" should "return only txs from the requested sender" taggedAs UnitTest in new TestSetup {
-    val pts    = txList.map(makePendingTx(_))
+    val pts = txList.map(makePendingTx(_))
     val target = pts.head.stx.senderAddress
 
     val future = service.contentFrom(TxPoolContentFromRequest(target)).unsafeToFuture()
@@ -321,7 +321,7 @@ class TxPoolServiceSpec
 
   it should "return empty maps for an address not in the pool" taggedAs UnitTest in new TestSetup {
     import com.chipprbots.ethereum.domain.Address
-    val pts    = txList.map(makePendingTx(_))
+    val pts = txList.map(makePendingTx(_))
     val absent = Address("0x1234567890123456789012345678901234567890")
 
     val future = service.contentFrom(TxPoolContentFromRequest(absent)).unsafeToFuture()
@@ -372,7 +372,7 @@ class TxPoolServiceSpec
     resp.pending.values.map(_.size).sum shouldBe 4
     // format: "0x<to>: <value> wei + <gas> gas × <gasPrice> wei"
     resp.pending.values.flatMap(_.values).foreach { summary =>
-      summary should (include("wei + ") and include(" gas × ") and include(" wei"))
+      summary should (include("wei + ").and(include(" gas × ")).and(include(" wei")))
     }
   }
 
@@ -394,7 +394,7 @@ class TxPoolServiceSpec
     result shouldBe a[Right[_, _]]
     // Block3125369 txs all have recipients — no "contract creation" in any summary
     result.toOption.get.pending.values.flatMap(_.values).foreach { summary =>
-      summary should not startWith "contract creation"
+      (summary should not).startWith("contract creation")
       summary should startWith("0x")
     }
   }

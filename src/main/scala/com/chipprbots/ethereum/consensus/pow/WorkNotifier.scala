@@ -18,17 +18,14 @@ import com.chipprbots.ethereum.utils.Logger
 
 /** Pushes new PoW work packages to configured HTTP endpoints.
   *
-  * core-geth reference: consensus/ethash/sealer.go notifyWork() (lines 407-447)
-  * Format: POST JSON array ["0xSealhash", "0xSeed", "0xTarget", "0xBlockNumber"]
-  * Async: fire-and-forget; failures are logged, never fatal to the mining loop
+  * core-geth reference: consensus/ethash/sealer.go notifyWork() (lines 407-447) Format: POST JSON array ["0xSealhash",
+  * "0xSeed", "0xTarget", "0xBlockNumber"] Async: fire-and-forget; failures are logged, never fatal to the mining loop
   */
 object WorkNotifier extends Logger {
 
-  /** Work package fields match core-geth sealer.go remote work array:
-    *   work[0] = sealhash (keccak256 of header without nonce)
-    *   work[1] = dagSeed (epoch identifier)
-    *   work[2] = target (2^256 / difficulty, big-endian bytes)
-    *   work[3] = blockNumber (hex-encoded uint64)
+  /** Work package fields match core-geth sealer.go remote work array: work[0] = sealhash (keccak256 of header without
+    * nonce) work[1] = dagSeed (epoch identifier) work[2] = target (2^256 / difficulty, big-endian bytes) work[3] =
+    * blockNumber (hex-encoded uint64)
     */
   final case class WorkPackage(
       powHeaderHash: ByteString,
@@ -37,8 +34,7 @@ object WorkNotifier extends Logger {
       blockNumber: BigInt
   )
 
-  /** Posts the work package to every configured URL.
-    * Each POST is independent; one failure does not affect others.
+  /** Posts the work package to every configured URL. Each POST is independent; one failure does not affect others.
     */
   def notify(urls: Seq[String], work: WorkPackage)(implicit system: ActorSystem): Unit = {
     if (urls.isEmpty) return
@@ -60,13 +56,12 @@ object WorkNotifier extends Logger {
     }
   }
 
-  /** Builds the JSON array body matching core-geth's GetWork wire format.
-    * All values are 0x-prefixed hex strings.
+  /** Builds the JSON array body matching core-geth's GetWork wire format. All values are 0x-prefixed hex strings.
     */
   private def buildJsonBody(work: WorkPackage): String = {
     val sealhash = "0x" + Hex.toHexString(work.powHeaderHash.toArray)
-    val seed     = "0x" + Hex.toHexString(work.dagSeed.toArray)
-    val target   = "0x" + Hex.toHexString(work.target.toArray)
+    val seed = "0x" + Hex.toHexString(work.dagSeed.toArray)
+    val target = "0x" + Hex.toHexString(work.target.toArray)
     val blockNum = "0x" + work.blockNumber.toString(16)
     s"""["$sealhash","$seed","$target","$blockNum"]"""
   }

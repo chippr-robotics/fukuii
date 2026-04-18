@@ -30,8 +30,7 @@ import com.chipprbots.ethereum.vm.ExecutionTracer
 
 /** Unit tests for DebugTracingService.
   *
-  * Besu reference: DebugTraceTransaction.java, DebugTraceBlock.java,
-  *   DebugTraceBlockByNumber.java, DebugTraceCall.java
+  * Besu reference: DebugTraceTransaction.java, DebugTraceBlock.java, DebugTraceBlockByNumber.java, DebugTraceCall.java
   *
   * core-geth reference: eth/tracers/api.go
   */
@@ -64,7 +63,7 @@ class DebugTracingServiceSpec
   it should "return InvalidParams when block hash is not in storage" taggedAs (UnitTest, RPCTest) in
     new TestSetup {
       val txHash: ByteString = block.body.transactionList.head.hash
-      val missingBlockHash   = ByteString(Array.fill(32)(0xee.toByte))
+      val missingBlockHash = ByteString(Array.fill(32)(0xee.toByte))
       (txMappingStorage.get _).expects(txHash).returning(Some(TransactionLocation(missingBlockHash, 0)))
 
       val result = service
@@ -77,7 +76,7 @@ class DebugTracingServiceSpec
   it should "return a trace result for a valid transaction" taggedAs (UnitTest, RPCTest) in
     new TestSetup {
       val txHash: ByteString = block.body.transactionList.head.hash
-      val txIndex             = 0
+      val txIndex = 0
 
       blockchainWriter.storeBlock(block).commit()
       // Inject a parent header at the exact parentHash the block references
@@ -87,7 +86,15 @@ class DebugTracingServiceSpec
 
       (txMappingStorage.get _).expects(txHash).returning(Some(TransactionLocation(block.header.hash, txIndex)))
       (mockLedger.advanceWorldToTx _).expects(*, *, *, *).returning(mockWorld)
-      (mockLedger.simulateTransactionWithTracer(_: SignedTransactionWithSender, _: BlockHeader, _: Option[InMemoryWorldStateProxy], _: ExecutionTracer)).expects(*, *, *, *).returning(null.asInstanceOf[TxResult])
+      (mockLedger
+        .simulateTransactionWithTracer(
+          _: SignedTransactionWithSender,
+          _: BlockHeader,
+          _: Option[InMemoryWorldStateProxy],
+          _: ExecutionTracer
+        ))
+        .expects(*, *, *, *)
+        .returning(null.asInstanceOf[TxResult])
 
       val result = service
         .traceTransaction(TraceTransactionRequest(txHash))
@@ -130,7 +137,12 @@ class DebugTracingServiceSpec
     "return an empty trace list for a block with no transactions" taggedAs (UnitTest, RPCTest) in
     new TestSetup {
       val emptyBlock = block.copy(body = block.body.copy(transactionList = Seq.empty))
-      blockchainWriter.save(emptyBlock, Nil, ChainWeight.totalDifficultyOnly(emptyBlock.header.difficulty), saveAsBestBlock = true)
+      blockchainWriter.save(
+        emptyBlock,
+        Nil,
+        ChainWeight.totalDifficultyOnly(emptyBlock.header.difficulty),
+        saveAsBestBlock = true
+      )
       storagesInstance.storages.blockHeadersStorage
         .put(emptyBlock.header.parentHash, emptyBlock.header.copy(number = emptyBlock.header.number - 1))
         .commit()
@@ -146,9 +158,22 @@ class DebugTracingServiceSpec
 
   "DebugTracingService.traceCall" should
     "return a call trace result for the latest block" taggedAs (UnitTest, RPCTest) in new TestSetup {
-      blockchainWriter.save(block, Nil, ChainWeight.totalDifficultyOnly(block.header.difficulty), saveAsBestBlock = true)
+      blockchainWriter.save(
+        block,
+        Nil,
+        ChainWeight.totalDifficultyOnly(block.header.difficulty),
+        saveAsBestBlock = true
+      )
 
-      (mockLedger.simulateTransactionWithTracer(_: SignedTransactionWithSender, _: BlockHeader, _: Option[InMemoryWorldStateProxy], _: ExecutionTracer)).expects(*, *, *, *).returning(null.asInstanceOf[TxResult])
+      (mockLedger
+        .simulateTransactionWithTracer(
+          _: SignedTransactionWithSender,
+          _: BlockHeader,
+          _: Option[InMemoryWorldStateProxy],
+          _: ExecutionTracer
+        ))
+        .expects(*, *, *, *)
+        .returning(null.asInstanceOf[TxResult])
 
       val callTx = EthInfoService.CallTx(
         from = None,
@@ -198,7 +223,7 @@ class DebugTracingServiceSpec
 
     val block: Block = Block(Fixtures.Blocks.Block3125369.header, Fixtures.Blocks.Block3125369.body)
 
-    val mockLedger: StxLedger              = mock[StxLedger]
+    val mockLedger: StxLedger = mock[StxLedger]
     val txMappingStorage: TransactionMappingStorage = mock[TransactionMappingStorage]
     val mockWorld = null.asInstanceOf[com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy]
 

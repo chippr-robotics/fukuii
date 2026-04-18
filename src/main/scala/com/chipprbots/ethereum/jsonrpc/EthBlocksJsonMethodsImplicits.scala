@@ -70,13 +70,16 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
     // Post-Cancun (EIP-4844) fields
     val blobGasUsedField = block.blobGasUsed.map(v => "blobGasUsed" -> encodeAsHex(v)).toList
     val excessBlobGasField = block.excessBlobGas.map(v => "excessBlobGas" -> encodeAsHex(v)).toList
-    val parentBeaconBlockRootField = block.parentBeaconBlockRoot.map(v => "parentBeaconBlockRoot" -> encodeAsHex(v)).toList
+    val parentBeaconBlockRootField =
+      block.parentBeaconBlockRoot.map(v => "parentBeaconBlockRoot" -> encodeAsHex(v)).toList
 
     // Post-Prague (EIP-7685) fields
     val requestsHashField = block.requestsHash.map(v => "requestsHash" -> encodeAsHex(v)).toList
 
-    JObject(baseFields ::: baseFeeField ::: withdrawalsRootField ::: withdrawalsField :::
-      blobGasUsedField ::: excessBlobGasField ::: parentBeaconBlockRootField ::: requestsHashField)
+    JObject(
+      baseFields ::: baseFeeField ::: withdrawalsRootField ::: withdrawalsField :::
+        blobGasUsedField ::: excessBlobGasField ::: parentBeaconBlockRootField ::: requestsHashField
+    )
   }
 
   // Encoder for BaseBlockResponse (which is typically BlockResponse)
@@ -223,7 +226,8 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
     }
 
   // eth_getBlockReceipts
-  implicit val eth_getBlockReceipts: JsonMethodDecoder[GetBlockReceiptsRequest] with JsonEncoder[GetBlockReceiptsResponse] =
+  implicit val eth_getBlockReceipts
+      : JsonMethodDecoder[GetBlockReceiptsRequest] with JsonEncoder[GetBlockReceiptsResponse] =
     new JsonMethodDecoder[GetBlockReceiptsRequest] with JsonEncoder[GetBlockReceiptsResponse] {
       def decodeJson(params: Option[JArray]): Either[JsonRpcError, GetBlockReceiptsRequest] =
         params match {
@@ -233,9 +237,11 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
         }
 
       def encodeJson(t: GetBlockReceiptsResponse): JValue =
-        t.receipts.map(rs => JArray(rs.toList.map(r =>
-          EthTxJsonMethodsImplicits.transactionReceiptResponseJsonEncoder.encodeJson(r)
-        ))).getOrElse(JNull)
+        t.receipts
+          .map(rs =>
+            JArray(rs.toList.map(r => EthTxJsonMethodsImplicits.transactionReceiptResponseJsonEncoder.encodeJson(r)))
+          )
+          .getOrElse(JNull)
     }
 
   // eth_feeHistory
@@ -252,7 +258,11 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
             for {
               count <- extractQuantity(blockCount)
               block <- extractBlockParam(newestBlock)
-            } yield FeeHistoryRequest(count, block, Some(percentiles.collect { case JDouble(d) => d; case JInt(i) => i.toDouble }))
+            } yield FeeHistoryRequest(
+              count,
+              block,
+              Some(percentiles.collect { case JDouble(d) => d; case JInt(i) => i.toDouble })
+            )
           case _ => Left(InvalidParams())
         }
 
@@ -264,13 +274,15 @@ object EthBlocksJsonMethodsImplicits extends JsonMethodsImplicits {
           "baseFeePerBlobGas" -> JArray(t.baseFeePerBlobGas.toList.map(encodeAsHex)),
           "blobGasUsedRatio" -> JArray(t.blobGasUsedRatio.toList.map(JDouble.apply))
         )
-        val rewardField = t.reward.map(rs => "reward" -> JArray(rs.toList.map(r => JArray(r.toList.map(encodeAsHex))))).toList
+        val rewardField =
+          t.reward.map(rs => "reward" -> JArray(rs.toList.map(r => JArray(r.toList.map(encodeAsHex))))).toList
         JObject(base ::: rewardField)
       }
     }
 
   // eth_maxPriorityFeePerGas
-  implicit val eth_maxPriorityFeePerGas: NoParamsMethodDecoder[MaxPriorityFeePerGasRequest] with JsonEncoder[MaxPriorityFeePerGasResponse] =
+  implicit val eth_maxPriorityFeePerGas
+      : NoParamsMethodDecoder[MaxPriorityFeePerGasRequest] with JsonEncoder[MaxPriorityFeePerGasResponse] =
     new NoParamsMethodDecoder(MaxPriorityFeePerGasRequest()) with JsonEncoder[MaxPriorityFeePerGasResponse] {
       def encodeJson(t: MaxPriorityFeePerGasResponse): JValue = encodeAsHex(t.maxPriorityFeePerGas)
     }

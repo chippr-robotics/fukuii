@@ -344,7 +344,8 @@ object ETH66 {
                   case (Some(vh), Some(cm)) =>
                     val sha256 = java.security.MessageDigest.getInstance("SHA-256")
                     vh.items.zip(cm.items).foreach {
-                      case (RLPValue(expectedHash), RLPValue(commitment)) if expectedHash.length == 32 && commitment.length == 48 =>
+                      case (RLPValue(expectedHash), RLPValue(commitment))
+                          if expectedHash.length == 32 && commitment.length == 48 =>
                         sha256.reset()
                         val computed = sha256.digest(commitment)
                         computed(0) = 0x01.toByte
@@ -362,7 +363,7 @@ object ETH66 {
           val blobTxRawBytesBuilder = Map.newBuilder[ByteString, ByteString]
           val unwrappedItems = typedItems.map {
             case prefixed @ PrefixedRLPEncodable(Transaction.Type03, inner: RLPList)
-              if inner.items.size == 4 && inner.items.head.isInstanceOf[RLPList] =>
+                if inner.items.size == 4 && inner.items.head.isInstanceOf[RLPList] =>
               // Preserve raw bytes: 0x03 || rlp([tx_payload, blobs, commitments, proofs])
               val rawBytes = com.chipprbots.ethereum.rlp.encode(prefixed)
               val unwrapped = PrefixedRLPEncodable(Transaction.Type03, inner.items.head)
@@ -373,9 +374,9 @@ object ETH66 {
           }
           // Compute original wire sizes of each tx item (before unwrapping) for announcement validation
           val originalSizes = rlpList.items.map {
-            case RLPValue(v) => v.length  // typed tx: typeByte + rlp_payload
-            case rl: RLPList => com.chipprbots.ethereum.rlp.encode(rl).length  // legacy tx: RLP-encoded
-            case other => 0
+            case RLPValue(v) => v.length // typed tx: typeByte + rlp_payload
+            case rl: RLPList => com.chipprbots.ethereum.rlp.encode(rl).length // legacy tx: RLP-encoded
+            case other       => 0
           }
           PooledTransactions(
             ByteUtils.bytesToBigInt(requestIdBytes),
@@ -388,9 +389,13 @@ object ETH66 {
     }
   }
 
-  case class PooledTransactions(requestId: BigInt, txs: Seq[SignedTransaction],
+  case class PooledTransactions(
+      requestId: BigInt,
+      txs: Seq[SignedTransaction],
       originalSizes: Seq[Int] = Seq.empty,
-      blobTxRawBytes: Map[ByteString, ByteString] = Map.empty) extends Message with HasRequestId {
+      blobTxRawBytes: Map[ByteString, ByteString] = Map.empty
+  ) extends Message
+      with HasRequestId {
     override def code: Int = Codes.PooledTransactionsCode
 
     override def toString: String =

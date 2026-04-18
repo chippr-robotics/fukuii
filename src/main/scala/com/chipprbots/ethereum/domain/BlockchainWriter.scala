@@ -59,18 +59,20 @@ class BlockchainWriter(
   def storeBlock(block: Block): DataSourceBatchUpdate =
     storeBlockHeader(block.header).and(storeBlockBody(block.header.hash, block.body))
 
-  /** Store block by hash only (no number→hash mapping). Used for optimistic/accepted
-    * blocks that shouldn't appear in eth_getBlockByNumber until fully validated.
+  /** Store block by hash only (no number→hash mapping). Used for optimistic/accepted blocks that shouldn't appear in
+    * eth_getBlockByNumber until fully validated.
     */
   def storeBlockByHashOnly(block: Block): DataSourceBatchUpdate =
-    blockHeadersStorage.put(block.header.hash, block.header)
+    blockHeadersStorage
+      .put(block.header.hash, block.header)
       .and(blockBodiesStorage.put(block.header.hash, block.body))
 
-  /** Remove block header and body stored by hash. Inverse of storeBlockByHashOnly.
-    * Idempotent — no-op if the hash doesn't exist in storage.
+  /** Remove block header and body stored by hash. Inverse of storeBlockByHashOnly. Idempotent — no-op if the hash
+    * doesn't exist in storage.
     */
   def removeBlockByHash(blockHash: ByteString): DataSourceBatchUpdate =
-    blockHeadersStorage.remove(blockHash)
+    blockHeadersStorage
+      .remove(blockHash)
       .and(blockBodiesStorage.remove(blockHash))
 
   def storeBlockHeader(blockHeader: BlockHeader): DataSourceBatchUpdate = {
@@ -87,15 +89,15 @@ class BlockchainWriter(
   ): Unit =
     appStateStorage.putBestBlockInfo(BlockInfo(bestBlockHash, bestBlockNumber)).commit()
 
-  /** Promote a block previously stored by hash only (sidechain) to the canonical chain.
-    * Walks back from `headHash` along parent pointers until it meets the current canonical
-    * chain (i.e. finds a header whose number→hash mapping already points to it) and rewrites
-    * number→hash for every block on the new branch. Receipts are already indexed by hash so
-    * no extra work.
+  /** Promote a block previously stored by hash only (sidechain) to the canonical chain. Walks back from `headHash`
+    * along parent pointers until it meets the current canonical chain (i.e. finds a header whose number→hash mapping
+    * already points to it) and rewrites number→hash for every block on the new branch. Receipts are already indexed by
+    * hash so no extra work.
     *
     * Intended for use by `ForkChoiceManager.applyForkChoiceState` on reorgs.
     *
-    * @return unit; caller is responsible for also updating best-block pointer.
+    * @return
+    *   unit; caller is responsible for also updating best-block pointer.
     */
   def promoteBranchToCanonical(
       headHash: ByteString,

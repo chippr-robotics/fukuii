@@ -300,11 +300,11 @@ class EthInfoService(
     val header = if (!req.tx.gasPriceExplicit && block.block.header.baseFee.isDefined) {
       import BlockHeader.HeaderExtraFields._
       val zeroBaseFeeExtra = block.block.header.extraFields match {
-        case HefPostOlympia(_)               => HefPostOlympia(0)
-        case HefPostShanghai(_, wr)          => HefPostShanghai(0, wr)
-        case HefPostCancun(_, wr, bg, eb, pb) => HefPostCancun(0, wr, bg, eb, pb)
+        case HefPostOlympia(_)                    => HefPostOlympia(0)
+        case HefPostShanghai(_, wr)               => HefPostShanghai(0, wr)
+        case HefPostCancun(_, wr, bg, eb, pb)     => HefPostCancun(0, wr, bg, eb, pb)
         case HefPostPrague(_, wr, bg, eb, pb, rh) => HefPostPrague(0, wr, bg, eb, pb, rh)
-        case other => other
+        case other                                => other
       }
       block.block.header.copy(extraFields = zeroBaseFeeExtra)
     } else block.block.header

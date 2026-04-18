@@ -12,8 +12,8 @@ import com.chipprbots.ethereum.utils.Logger
 
 /** Imports RLP-encoded blocks from a file into the blockchain.
   *
-  * Reads concatenated RLP-encoded blocks (as produced by geth export or hive's chain.rlp),
-  * executes each block through the standard block execution pipeline, and persists the results.
+  * Reads concatenated RLP-encoded blocks (as produced by geth export or hive's chain.rlp), executes each block through
+  * the standard block execution pipeline, and persists the results.
   *
   * This is a synchronous, startup-time operation — not intended for runtime use.
   */
@@ -25,8 +25,10 @@ class ChainImporter(
 
   /** Import all blocks from an RLP chain file.
     *
-    * @param filePath path to the chain.rlp file (concatenated RLP-encoded blocks)
-    * @return (imported, skipped, failed) counts
+    * @param filePath
+    *   path to the chain.rlp file (concatenated RLP-encoded blocks)
+    * @return
+    *   (imported, skipped, failed) counts
     */
   def importChainFile(filePath: String)(implicit blockchainConfig: BlockchainConfig): (Int, Int, Int) = {
     val file = new File(filePath)
@@ -47,11 +49,17 @@ class ChainImporter(
     val genesisOpt = blockchainReader.getBlockHeaderByNumber(0)
     genesisOpt.foreach { genesis =>
       log.error(s"Chain import: genesis hash=${genesis.hashAsHexString}")
-      log.error(s"Chain import: genesis stateRoot=${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(genesis.stateRoot)}")
-      log.error(s"Chain import: genesis difficulty=${genesis.difficulty}, gasLimit=${genesis.gasLimit}, extraData=${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(genesis.extraData)}")
+      log.error(
+        s"Chain import: genesis stateRoot=${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(genesis.stateRoot)}"
+      )
+      log.error(
+        s"Chain import: genesis difficulty=${genesis.difficulty}, gasLimit=${genesis.gasLimit}, extraData=${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(genesis.extraData)}"
+      )
     }
     val firstBlock = blocks.head
-    log.error(s"Chain import: block ${firstBlock.header.number} expects parent=${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(firstBlock.header.parentHash)}")
+    log.error(
+      s"Chain import: block ${firstBlock.header.number} expects parent=${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(firstBlock.header.parentHash)}"
+    )
 
     var imported = 0
     var skipped = 0
@@ -65,8 +73,10 @@ class ChainImporter(
       val alreadyExists = blockchainReader.getBlockHeaderByNumber(blockNum) match {
         case Some(existing) if existing.hash == blockHash => true
         case Some(existing) =>
-          log.warn(s"Chain import: block $blockNum hash mismatch — " +
-            s"existing=${existing.hashAsHexString}, importing=${block.header.hashAsHexString}")
+          log.warn(
+            s"Chain import: block $blockNum hash mismatch — " +
+              s"existing=${existing.hashAsHexString}, importing=${block.header.hashAsHexString}"
+          )
           false
         case None => false
       }
@@ -76,7 +86,8 @@ class ChainImporter(
       } else {
         importBlock(block) match {
           case Right(receipts) =>
-            val parentWeight = blockchainReader.getChainWeightByHash(block.header.parentHash)
+            val parentWeight = blockchainReader
+              .getChainWeightByHash(block.header.parentHash)
               .getOrElse(ChainWeight.zero)
             val newWeight = parentWeight.increase(block.header)
 
@@ -98,7 +109,7 @@ class ChainImporter(
     (imported, skipped, failed)
   }
 
-  private def importBlock(block: Block)(implicit blockchainConfig: BlockchainConfig): Either[Any, Seq[Receipt]] = {
+  private def importBlock(block: Block)(implicit blockchainConfig: BlockchainConfig): Either[Any, Seq[Receipt]] =
     // Execute without pre/post validation — blocks are from a trusted source.
     // Validate stateRoot (proves correct execution), log gas mismatches as warnings.
     blockExecution.executeBlockNoValidation(block).flatMap { case (receipts, gasUsed, stateRootHash) =>
@@ -113,17 +124,23 @@ class ChainImporter(
         log.error(s"Chain import: block ${block.header.number} totalGas: expected=${block.header.gasUsed} got=$gasUsed")
         if (stateMismatch && !gasMismatch) {
           // Gas matches but state doesn't — check EIP-2935 history storage
-          log.error(s"Chain import: block ${block.header.number} STATE MISMATCH with correct gas — checking system state")
+          log.error(
+            s"Chain import: block ${block.header.number} STATE MISMATCH with correct gas — checking system state"
+          )
         }
       }
 
       if (stateMismatch && gasMismatch) {
         // Both state and gas are wrong — real execution error
-        Left(s"stateRoot mismatch: expected ${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(block.header.stateRoot)}" +
-          s" got ${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(stateRootHash)}")
+        Left(
+          s"stateRoot mismatch: expected ${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(block.header.stateRoot)}" +
+            s" got ${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(stateRootHash)}"
+        )
       } else if (stateMismatch) {
-        Left(s"stateRoot mismatch: expected ${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(block.header.stateRoot)}" +
-          s" got ${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(stateRootHash)}")
+        Left(
+          s"stateRoot mismatch: expected ${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(block.header.stateRoot)}" +
+            s" got ${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(stateRootHash)}"
+        )
       } else {
         if (gasMismatch) {
           log.warn(s"Chain import: block ${block.header.number} gas mismatch — state correct, accepting")
@@ -131,14 +148,13 @@ class ChainImporter(
         Right(receipts)
       }
     }
-  }
 
   /** Decode concatenated RLP-encoded blocks from a byte array. */
   private def decodeBlocks(data: Array[Byte]): Seq[Block] = {
     val blocks = scala.collection.mutable.ArrayBuffer.empty[Block]
     var pos = 0
 
-    while (pos < data.length) {
+    while (pos < data.length)
       try {
         val nextPos = nextElementIndex(data, pos)
         val blockBytes = data.slice(pos, nextPos)
@@ -150,7 +166,6 @@ class ChainImporter(
           log.error(s"Chain import: RLP decode error at byte offset $pos", e)
           return blocks.toSeq // return what we decoded so far
       }
-    }
 
     blocks.toSeq
   }
@@ -161,8 +176,6 @@ class ChainImporter(
       val bytes = new Array[Byte](file.length().toInt)
       fis.read(bytes)
       bytes
-    } finally {
-      fis.close()
-    }
+    } finally fis.close()
   }
 }

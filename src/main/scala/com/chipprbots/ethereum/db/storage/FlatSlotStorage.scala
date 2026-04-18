@@ -49,12 +49,11 @@ class FlatSlotStorage(val dataSource: DataSource) extends TransactionalKeyValueS
       }
     )
 
-  /** Seek-based range scan for a specific account's storage slots.
-    * Seeks to accountHash ++ startSlotHash and returns (slotHash, value) pairs
-    * while the key prefix matches accountHash (32 bytes).
+  /** Seek-based range scan for a specific account's storage slots. Seeks to accountHash ++ startSlotHash and returns
+    * (slotHash, value) pairs while the key prefix matches accountHash (32 bytes).
     *
-    * Mirrors Besu's BonsaiFlatDbStrategy.storageToPairStream — streamFromKey on
-    * ACCOUNT_STORAGE_STORAGE with takeWhile(key.slice(0,32) == accountHash).
+    * Mirrors Besu's BonsaiFlatDbStrategy.storageToPairStream — streamFromKey on ACCOUNT_STORAGE_STORAGE with
+    * takeWhile(key.slice(0,32) == accountHash).
     *
     * Requires the underlying DataSource to be a RocksDbDataSource.
     */
@@ -66,7 +65,8 @@ class FlatSlotStorage(val dataSource: DataSource) extends TransactionalKeyValueS
       case rdb: RocksDbDataSource =>
         val seekKey = (accountHash ++ startSlotHash).toArray
         val accountPrefix = accountHash.toArray
-        rdb.seekFrom(namespace, seekKey)
+        rdb
+          .seekFrom(namespace, seekKey)
           .takeWhile {
             case Right((key, _)) =>
               key.length >= 32 && java.util.Arrays.equals(key, 0, 32, accountPrefix, 0, 32)

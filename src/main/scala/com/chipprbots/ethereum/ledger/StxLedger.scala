@@ -28,10 +28,9 @@ class StxLedger(
       world: Option[InMemoryWorldStateProxy]
   ): TxResult = simulateTransactionWithTracer(stx, blockHeader, world, tracer = None)
 
-  /** Like `simulateTransaction` but threads an optional EVM tracer into the run. Used by
-    * `debug_traceTransaction` / `debug_traceCall` to capture per-opcode structLog entries.
-    * The sim still honors world / blockHeader so the trace reflects post-block state
-    * (historical replay needs archive mode — TODO).
+  /** Like `simulateTransaction` but threads an optional EVM tracer into the run. Used by `debug_traceTransaction` /
+    * `debug_traceCall` to capture per-opcode structLog entries. The sim still honors world / blockHeader so the trace
+    * reflects post-block state (historical replay needs archive mode — TODO).
     */
   def simulateTransactionWithTracer(
       stx: SignedTransactionWithSender,
@@ -70,8 +69,8 @@ class StxLedger(
 
   /** Like [[simulateTransaction]] but attaches a tracer and fires the tx-level lifecycle hooks.
     *
-    * Besu reference: DebugTraceTransaction.java — creates DebugOperationTracer, passes via processTracing
-    * core-geth reference: eth/tracers/api.go traceTx() — wraps evm.Config.Tracer, calls CaptureStart/CaptureEnd
+    * Besu reference: DebugTraceTransaction.java — creates DebugOperationTracer, passes via processTracing core-geth
+    * reference: eth/tracers/api.go traceTx() — wraps evm.Config.Tracer, calls CaptureStart/CaptureEnd
     *
     * Caller is responsible for selecting the tracer and extracting [[tracer.getResult]] afterwards.
     */
@@ -112,18 +111,22 @@ class StxLedger(
     TxResult(result.world, gasUsed, result.logs, result.returnData, result.error)
   }
 
-  /** Advances a world state through prior transactions in a block to reach the state
-    * just before transaction at [[txIndex]].  Used by [[DebugTracingService]] and [[TraceService]]
-    * for historical trace replay.
+  /** Advances a world state through prior transactions in a block to reach the state just before transaction at
+    * [[txIndex]]. Used by [[DebugTracingService]] and [[TraceService]] for historical trace replay.
     *
-    * Besu reference: BlockReplay.beforeTransactionInBlock() — replays all transactions up to target index
-    * core-geth reference: eth/tracers/api.go computeTxEnv() — builds state via ApplyMessage for each prior tx
+    * Besu reference: BlockReplay.beforeTransactionInBlock() — replays all transactions up to target index core-geth
+    * reference: eth/tracers/api.go computeTxEnv() — builds state via ApplyMessage for each prior tx
     *
-    * @param blockHeader block header containing the transactions
-    * @param txs         all transactions in the block with recovered sender addresses
-    * @param txIndex     index of the target transaction (0-based); returns parent state if 0
-    * @param parentStateRoot state root of the parent block (baseline)
-    * @return world state at the point just before txs(txIndex) executes
+    * @param blockHeader
+    *   block header containing the transactions
+    * @param txs
+    *   all transactions in the block with recovered sender addresses
+    * @param txIndex
+    *   index of the target transaction (0-based); returns parent state if 0
+    * @param parentStateRoot
+    *   state root of the parent block (baseline)
+    * @return
+    *   world state at the point just before txs(txIndex) executes
     */
   def advanceWorldToTx(
       blockHeader: BlockHeader,

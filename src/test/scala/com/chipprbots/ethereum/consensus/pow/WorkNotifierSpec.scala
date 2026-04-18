@@ -74,8 +74,16 @@ class WorkNotifierSpec
     val received1 = new ConcurrentLinkedQueue[String]()
     val received2 = new ConcurrentLinkedQueue[String]()
 
-    val route1 = post { entity(as[String]) { b => received1.add(b); complete("ok") } }
-    val route2 = post { entity(as[String]) { b => received2.add(b); complete("ok") } }
+    val route1 = post {
+      entity(as[String]) { b =>
+        received1.add(b); complete("ok")
+      }
+    }
+    val route2 = post {
+      entity(as[String]) { b =>
+        received2.add(b); complete("ok")
+      }
+    }
 
     val binding1 = Await.result(Http().newServerAt("127.0.0.1", 0).bind(route1), 5.seconds)
     val binding2 = Await.result(Http().newServerAt("127.0.0.1", 0).bind(route2), 5.seconds)

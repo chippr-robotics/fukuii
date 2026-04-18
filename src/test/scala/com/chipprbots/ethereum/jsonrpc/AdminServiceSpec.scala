@@ -23,9 +23,8 @@ import com.chipprbots.ethereum.utils.ServerStatus
 
 /** Unit tests for AdminService — Besu admin_* namespace.
   *
-  * Besu reference:
-  *   AdminNodeInfo.java, AdminPeers.java, AdminAddPeer.java, AdminRemovePeer.java, AdminChangeLogLevel.java
-  *   DefaultP2PNetwork.java (peer management)
+  * Besu reference: AdminNodeInfo.java, AdminPeers.java, AdminAddPeer.java, AdminRemovePeer.java,
+  * AdminChangeLogLevel.java DefaultP2PNetwork.java (peer management)
   */
 class AdminServiceSpec extends AnyFlatSpec with Matchers {
 
@@ -41,13 +40,13 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers {
     info.id should not be empty
     info.ip shouldBe defined
     info.listenAddr shouldBe defined
-    info.ports should contain key "listener"
+    (info.ports should contain).key("listener")
   }
 
   it should "return protocols.eth with genesis, head, difficulty, network" taggedAs UnitTest in new TestSetup {
     val result = service.nodeInfo(AdminService.AdminNodeInfoRequest()).unsafeRunSync()
-    val info   = result.toOption.get
-    info.protocols should contain key "eth"
+    val info = result.toOption.get
+    (info.protocols should contain).key("eth")
     val eth = info.protocols("eth")
     eth.genesis should startWith("0x")
     eth.head should startWith("0x")
@@ -57,7 +56,7 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers {
 
   it should "return activeFork as a non-empty string" taggedAs UnitTest in new TestSetup {
     val result = service.nodeInfo(AdminService.AdminNodeInfoRequest()).unsafeRunSync()
-    val info   = result.toOption.get
+    val info = result.toOption.get
     info.activeFork should not be empty
   }
 
@@ -91,9 +90,11 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "accept valid log level DEBUG with package filter" taggedAs UnitTest in new TestSetup {
-    val result = service.changeLogLevel(
-      AdminService.AdminChangeLogLevelRequest("DEBUG", Some(List("com.chipprbots")))
-    ).unsafeRunSync()
+    val result = service
+      .changeLogLevel(
+        AdminService.AdminChangeLogLevelRequest("DEBUG", Some(List("com.chipprbots")))
+      )
+      .unsafeRunSync()
     result shouldBe a[Right[_, _]]
   }
 
@@ -127,7 +128,7 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers {
   }
 
   trait TestSetup {
-    val keyPair    = com.chipprbots.ethereum.crypto.generateKeyPair(new java.security.SecureRandom)
+    val keyPair = com.chipprbots.ethereum.crypto.generateKeyPair(new java.security.SecureRandom)
     val listenAddr = new InetSocketAddress("127.0.0.1", 30305)
     val nodeStatus = NodeStatus(keyPair, ServerStatus.Listening(listenAddr), ServerStatus.NotListening)
     val nodeStatusHolder = new AtomicReference(nodeStatus)

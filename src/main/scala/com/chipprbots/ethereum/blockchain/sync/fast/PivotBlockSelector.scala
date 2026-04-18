@@ -181,7 +181,10 @@ class PivotBlockSelector(
           blacklist.add(peerId, blacklistDuration, PivotBlockElectionTimeout)
         }
         peerEventBus ! Unsubscribe()
-        log.warning("Pivot block header receive timeout. Scheduling retry with backoff (attempt {})", pivotRetryState.attempt + 1)
+        log.warning(
+          "Pivot block header receive timeout. Scheduling retry with backoff (attempt {})",
+          pivotRetryState.attempt + 1
+        )
         scheduleRetry()
     }
 
@@ -219,7 +222,10 @@ class PivotBlockSelector(
         )
       } else { // No more peers. Restart the whole process
         peerEventBus ! Unsubscribe()
-        log.warning("Not enough votes for pivot block. Scheduling retry with backoff (attempt {})", pivotRetryState.attempt + 1)
+        log.warning(
+          "Not enough votes for pivot block. Scheduling retry with backoff (attempt {})",
+          pivotRetryState.attempt + 1
+        )
         scheduleRetry()
       }
       // Continue voting

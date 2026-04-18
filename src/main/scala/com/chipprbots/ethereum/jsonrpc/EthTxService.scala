@@ -193,7 +193,9 @@ class EthTxService(
       case Success((signedTransaction, rawBytesOpt)) =>
         if (SignedTransaction.getSender(signedTransaction).isDefined) {
           pendingTransactionsManager ! PendingTransactionsManager.AddOrOverrideTransaction(
-            signedTransaction, rawBytesOpt.map(org.apache.pekko.util.ByteString(_)))
+            signedTransaction,
+            rawBytesOpt.map(org.apache.pekko.util.ByteString(_))
+          )
           IO.pure(Right(SendRawTransactionResponse(signedTransaction.hash)))
         } else {
           IO.pure(Left(JsonRpcError.InvalidRequest))

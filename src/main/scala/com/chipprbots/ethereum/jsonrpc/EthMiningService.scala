@@ -123,7 +123,7 @@ class EthMiningService(
                 pb.block.header.number.toLong,
                 blockchainConfig.forkBlockNumbers.ecip1099BlockNumber.toLong
               )
-            val target    = ByteString((BigInt(2).pow(256) / pb.block.header.difficulty).toByteArray)
+            val target = ByteString((BigInt(2).pow(256) / pb.block.header.difficulty).toByteArray)
             val blockNumber = pb.block.header.number
             val workResponse = GetWorkResponse(powHeaderHash, dagSeed, target, blockNumber)
             val notifyUrls = ethash.config.generic.notifyUrls

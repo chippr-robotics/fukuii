@@ -242,8 +242,9 @@ class EthBlocksService(
       blockchainReader.getReceiptsByHash(block.header.hash).map { receipts =>
         var baseLogIndex = 0
         block.body.transactionList.zip(receipts).zipWithIndex.map { case ((stx, receipt), idx) =>
-          val gasUsed = if (idx == 0) receipt.cumulativeGasUsed
-                        else receipt.cumulativeGasUsed - receipts(idx - 1).cumulativeGasUsed
+          val gasUsed =
+            if (idx == 0) receipt.cumulativeGasUsed
+            else receipt.cumulativeGasUsed - receipts(idx - 1).cumulativeGasUsed
           val sender = SignedTransaction.getSender(stx).getOrElse(Address(0))
           val resp = TransactionReceiptResponse(receipt, stx, sender, idx, block.header, gasUsed, baseLogIndex)
           baseLogIndex += receipt.logs.size
@@ -265,9 +266,12 @@ class EthBlocksService(
     }.toSeq
 
     val gasUsedRatios = (oldestBlock.toLong to newestBlockNum.toLong).map { num =>
-      blockchainReader.getBlockHeaderByNumber(num).map { h =>
-        if (h.gasLimit > 0) h.gasUsed.toDouble / h.gasLimit.toDouble else 0.0
-      }.getOrElse(0.0)
+      blockchainReader
+        .getBlockHeaderByNumber(num)
+        .map { h =>
+          if (h.gasLimit > 0) h.gasUsed.toDouble / h.gasLimit.toDouble else 0.0
+        }
+        .getOrElse(0.0)
     }.toSeq
 
     val blobBaseFees = (oldestBlock.toLong to (newestBlockNum + 1).toLong).map { num =>
@@ -275,9 +279,13 @@ class EthBlocksService(
     }.toSeq
 
     val blobGasUsedRatios = (oldestBlock.toLong to newestBlockNum.toLong).map { num =>
-      blockchainReader.getBlockHeaderByNumber(num).flatMap(_.blobGasUsed).map { used =>
-        if (used > 0) used.toDouble / 786432.0 else 0.0
-      }.getOrElse(0.0)
+      blockchainReader
+        .getBlockHeaderByNumber(num)
+        .flatMap(_.blobGasUsed)
+        .map { used =>
+          if (used > 0) used.toDouble / 786432.0 else 0.0
+        }
+        .getOrElse(0.0)
     }.toSeq
 
     val rewards = req.rewardPercentiles.map { _ =>
@@ -286,14 +294,16 @@ class EthBlocksService(
       }.toSeq
     }
 
-    Right(FeeHistoryResponse(
-      oldestBlock = oldestBlock,
-      baseFeePerGas = baseFees,
-      gasUsedRatio = gasUsedRatios,
-      reward = rewards,
-      baseFeePerBlobGas = blobBaseFees,
-      blobGasUsedRatio = blobGasUsedRatios
-    ))
+    Right(
+      FeeHistoryResponse(
+        oldestBlock = oldestBlock,
+        baseFeePerGas = baseFees,
+        gasUsedRatio = gasUsedRatios,
+        reward = rewards,
+        baseFeePerBlobGas = blobBaseFees,
+        blobGasUsedRatio = blobGasUsedRatios
+      )
+    )
   }
 
   def maxPriorityFeePerGas(req: MaxPriorityFeePerGasRequest): ServiceResponse[MaxPriorityFeePerGasResponse] = IO {

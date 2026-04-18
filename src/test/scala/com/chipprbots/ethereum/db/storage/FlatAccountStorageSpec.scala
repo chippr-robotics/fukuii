@@ -10,13 +10,13 @@ import com.chipprbots.ethereum.testing.Tags._
 
 /** Tests for FlatAccountStorage — O(1) account reads by keccak256(address).
   *
-  * Verified against Besu BonsaiFullFlatDbStrategy.getFlatAccount:
-  *   storage.get(ACCOUNT_INFO_STATE, accountHash.getBytes()) → RLP(account)
+  * Verified against Besu BonsaiFullFlatDbStrategy.getFlatAccount: storage.get(ACCOUNT_INFO_STATE,
+  * accountHash.getBytes()) → RLP(account)
   */
 class FlatAccountStorageSpec extends AnyFlatSpec with Matchers {
 
   "FlatAccountStorage" should "store and retrieve an account by hash" taggedAs UnitTest in new TestSetup {
-    val hash = ByteString(Array.fill(32)(0xAA.toByte))
+    val hash = ByteString(Array.fill(32)(0xaa.toByte))
     val rlpAccount = ByteString(Array.fill(64)(0x01.toByte))
 
     storage.put(hash, rlpAccount).commit()
@@ -24,7 +24,7 @@ class FlatAccountStorageSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "return None for missing hash" taggedAs UnitTest in new TestSetup {
-    val hash = ByteString(Array.fill(32)(0xBB.toByte))
+    val hash = ByteString(Array.fill(32)(0xbb.toByte))
     storage.getAccount(hash) shouldBe None
   }
 
@@ -41,7 +41,7 @@ class FlatAccountStorageSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "overwrite existing account on re-put" taggedAs UnitTest in new TestSetup {
-    val hash = ByteString(Array.fill(32)(0xCC.toByte))
+    val hash = ByteString(Array.fill(32)(0xcc.toByte))
     val v1 = ByteString(Array.fill(64)(0x01.toByte))
     val v2 = ByteString(Array.fill(64)(0x02.toByte))
 
@@ -56,7 +56,7 @@ class FlatAccountStorageSpec extends AnyFlatSpec with Matchers {
     import cats.effect.unsafe.IORuntime
     implicit val runtime: IORuntime = IORuntime.global
 
-    val hash = ByteString(Array.fill(32)(0xAA.toByte))
+    val hash = ByteString(Array.fill(32)(0xaa.toByte))
     val rlpAccount = ByteString(Array.fill(64)(0x01.toByte))
     storage.put(hash, rlpAccount).commit()
 

@@ -82,8 +82,10 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
     val blobGasUsedField = receipt.blobGasUsed.map(v => "blobGasUsed" -> encodeAsHex(v)).toList
     val blobGasPriceField = receipt.blobGasPrice.map(v => "blobGasPrice" -> encodeAsHex(v)).toList
 
-    JObject(baseFields ::: toField ::: middleFields ::: rootField ::: statusField :::
-      typeField ::: effectiveGasPriceField ::: blobGasUsedField ::: blobGasPriceField)
+    JObject(
+      baseFields ::: toField ::: middleFields ::: rootField ::: statusField :::
+        typeField ::: effectiveGasPriceField ::: blobGasUsedField ::: blobGasPriceField
+    )
   }
 
   implicit val transactionResponseJsonEncoder: JsonEncoder[TransactionResponse] = { tx =>
@@ -109,14 +111,15 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
       "accessList" -> JArray(al.toList.map { item =>
         val addr = item("address") match {
           case a: com.chipprbots.ethereum.domain.Address => encodeAsHex(a.bytes)
-          case other => JString(other.toString)
+          case other                                     => JString(other.toString)
         }
         val keys = item("storageKeys") match {
-          case ks: List[?] => JArray(ks.map {
-            case bi: BigInt =>
-              JString("0x" + bi.toString(16).reverse.padTo(64, '0').reverse)
-            case other => JString(other.toString)
-          })
+          case ks: List[?] =>
+            JArray(ks.map {
+              case bi: BigInt =>
+                JString("0x" + bi.toString(16).reverse.padTo(64, '0').reverse)
+              case other => JString(other.toString)
+            })
           case _ => JArray(Nil)
         }
         JObject("address" -> addr, "storageKeys" -> keys)
@@ -130,7 +133,7 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
       "authorizationList" -> JArray(auths.toList.map { item =>
         val addr = item("address") match {
           case a: com.chipprbots.ethereum.domain.Address => encodeAsHex(a.bytes)
-          case other => JString(other.toString)
+          case other                                     => JString(other.toString)
         }
         JObject(
           "chainId" -> encodeAsHex(item("chainId").asInstanceOf[BigInt]),
@@ -152,8 +155,10 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
 
     val blockTimestampField = tx.blockTimestamp.map(v => "blockTimestamp" -> encodeAsHex(v)).toList
 
-    JObject(baseFields ::: typeField ::: chainIdField ::: maxFeeField ::: maxPriorityField :::
-      accessListField ::: maxBlobFeeField ::: blobHashesField ::: authListField ::: sigFields ::: blockTimestampField)
+    JObject(
+      baseFields ::: typeField ::: chainIdField ::: maxFeeField ::: maxPriorityField :::
+        accessListField ::: maxBlobFeeField ::: blobHashesField ::: authListField ::: sigFields ::: blockTimestampField
+    )
   }
 
   implicit val eth_gasPrice: NoParamsMethodDecoder[GetGasPriceRequest] with JsonEncoder[GetGasPriceResponse] =

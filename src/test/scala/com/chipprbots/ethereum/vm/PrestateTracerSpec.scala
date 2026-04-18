@@ -14,7 +14,7 @@ import com.chipprbots.ethereum.domain.UInt256
 class PrestateTracerSpec extends AnyFreeSpec with Matchers {
 
   private val from = Address(0x1234)
-  private val to   = Address(0x5678)
+  private val to = Address(0x5678)
 
   private def worldWith(entries: (Address, Account)*): MockWorldState =
     MockWorldState(accounts = entries.toMap)
@@ -22,8 +22,8 @@ class PrestateTracerSpec extends AnyFreeSpec with Matchers {
   "PrestateTracer" - {
     "default mode should return touched account states" in {
       val account = Account(nonce = 1, balance = UInt256(1000))
-      val world   = worldWith(from -> account)
-      val tracer  = new PrestateTracer[MockWorldState, MockStorage](world)
+      val world = worldWith(from -> account)
+      val tracer = new PrestateTracer[MockWorldState, MockStorage](world)
 
       tracer.onTxStart(from, Some(to), gas = 21000, value = 0, input = ByteString.empty)
 
@@ -35,23 +35,23 @@ class PrestateTracerSpec extends AnyFreeSpec with Matchers {
 
     "default mode should include balance and nonce" in {
       val account = Account(nonce = 5, balance = UInt256(9999))
-      val world   = worldWith(from -> account)
-      val tracer  = new PrestateTracer[MockWorldState, MockStorage](world)
+      val world = worldWith(from -> account)
+      val tracer = new PrestateTracer[MockWorldState, MockStorage](world)
 
       tracer.onTxStart(from, Some(to), gas = 21000, value = 0, input = ByteString.empty)
 
-      val result      = tracer.getResult
-      val obj         = result.asInstanceOf[JObject]
+      val result = tracer.getResult
+      val obj = result.asInstanceOf[JObject]
       val accountJson = obj.obj.head._2
       (accountJson \ "nonce") shouldBe JInt(5)
       (accountJson \ "balance") shouldBe a[JString]
     }
 
     "diffMode should return pre and post objects" in {
-      val preAccount  = Account(nonce = 1, balance = UInt256(1000))
+      val preAccount = Account(nonce = 1, balance = UInt256(1000))
       val postAccount = Account(nonce = 2, balance = UInt256(500))
-      val preWorld    = worldWith(from -> preAccount)
-      val postWorld   = worldWith(from -> postAccount)
+      val preWorld = worldWith(from -> preAccount)
+      val postWorld = worldWith(from -> postAccount)
 
       val tracer = new PrestateTracer[MockWorldState, MockStorage](preWorld, diffMode = true)
       tracer.onTxStart(from, Some(to), gas = 21000, value = 500, input = ByteString.empty)
@@ -63,27 +63,27 @@ class PrestateTracerSpec extends AnyFreeSpec with Matchers {
     }
 
     "diffMode post should only include changed fields" in {
-      val preAccount  = Account(nonce = 1, balance = UInt256(1000))
+      val preAccount = Account(nonce = 1, balance = UInt256(1000))
       val postAccount = Account(nonce = 1, balance = UInt256(500))
-      val preWorld    = worldWith(from -> preAccount)
-      val postWorld   = worldWith(from -> postAccount)
+      val preWorld = worldWith(from -> preAccount)
+      val postWorld = worldWith(from -> postAccount)
 
       val tracer = new PrestateTracer[MockWorldState, MockStorage](preWorld, diffMode = true)
       tracer.onTxStart(from, Some(to), gas = 21000, value = 500, input = ByteString.empty)
       tracer.setPostWorld(postWorld)
 
-      val result      = tracer.getResult
-      val postObj     = result \ "post"
-      val fromHex     = "0x" + com.chipprbots.ethereum.utils.Hex.toHexString(from.bytes.toArray)
+      val result = tracer.getResult
+      val postObj = result \ "post"
+      val fromHex = "0x" + com.chipprbots.ethereum.utils.Hex.toHexString(from.bytes.toArray)
       val accountPost = postObj \ fromHex
       (accountPost \ "balance") shouldBe a[JString]
       (accountPost \ "nonce") shouldBe JNothing
     }
 
     "should track addresses from onCallEnter" in {
-      val inner   = Address(0xabcd)
+      val inner = Address(0xabcd)
       val account = Account(nonce = 0, balance = UInt256(100))
-      val world   = worldWith(from -> account, to -> account, inner -> account)
+      val world = worldWith(from -> account, to -> account, inner -> account)
 
       val tracer = new PrestateTracer[MockWorldState, MockStorage](world)
       tracer.onTxStart(from, Some(to), gas = 100000, value = 0, input = ByteString.empty)
@@ -95,7 +95,7 @@ class PrestateTracerSpec extends AnyFreeSpec with Matchers {
     }
 
     "should omit accounts that don't exist in world" in {
-      val world  = worldWith(from -> Account(nonce = 0, balance = UInt256(100)))
+      val world = worldWith(from -> Account(nonce = 0, balance = UInt256(100)))
       val tracer = new PrestateTracer[MockWorldState, MockStorage](world)
 
       tracer.onTxStart(from, Some(to), gas = 21000, value = 0, input = ByteString.empty)
@@ -106,17 +106,17 @@ class PrestateTracerSpec extends AnyFreeSpec with Matchers {
     }
 
     "diffMode should show newly created accounts in post" in {
-      val preWorld   = worldWith(from -> Account(nonce = 1, balance = UInt256(1000)))
+      val preWorld = worldWith(from -> Account(nonce = 1, balance = UInt256(1000)))
       val newAccount = Account(nonce = 0, balance = UInt256(500))
-      val postWorld  = worldWith(from -> Account(nonce = 2, balance = UInt256(500)), to -> newAccount)
+      val postWorld = worldWith(from -> Account(nonce = 2, balance = UInt256(500)), to -> newAccount)
 
       val tracer = new PrestateTracer[MockWorldState, MockStorage](preWorld, diffMode = true)
       tracer.onTxStart(from, Some(to), gas = 100000, value = 500, input = ByteString.empty)
       tracer.setPostWorld(postWorld)
 
-      val result  = tracer.getResult
+      val result = tracer.getResult
       val postObj = result \ "post"
-      val toHex   = "0x" + com.chipprbots.ethereum.utils.Hex.toHexString(to.bytes.toArray)
+      val toHex = "0x" + com.chipprbots.ethereum.utils.Hex.toHexString(to.bytes.toArray)
       (postObj \ toHex) should not be JNothing
     }
   }
