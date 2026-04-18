@@ -1,0 +1,303 @@
+name: _hive-sim (reusable)
+
+# Reusable workflow for running a single ethereum/hive simulator against the
+# fukuii client. Per-simulator caller workflows (hive-smoke-genesis.yml,
+# hive-rpc.yml, …) invoke this with `uses: ./.github/workflows/_hive-sim.yml`
+# so each has its own workflow name, run history, and badge in the README.
+#
+# Build steps mirror hive-prague.yml so the two pipelines stay in sync:
+#   * sbt assembly -> thin JRE overlay tagged chipprbots/fukuii:latest
+#   * git clone ethereum/hive into external/hive (NOT ./hive — that would
+#     shadow the fukuii adapter dir) with retries + blob:none
+#   * go build -o hive . (ethereum/hive's main binary lives at repo root;
+#     cmd/hive does not exist — cmd/ holds hivechain + hiveview)
+#   * pass/fail counts harvested from the simulator log and posted to the
+#     job summary; optional threshold gate fails the run if under budget.
+
+on:
+  workflow_call:
+    inputs:
+      sim:
+        description: 'Simulator path, e.g. ethereum/rpc or smoke/genesis'
+        required: true
+        type: string
+      label:
+        description: 'Filename-safe label for artifacts and summaries'
+        required: true
+        type: string
+      sim_limit:
+        description: 'Optional regex passed to --sim.limit'
+        required: false
+        type: string
+        default: ''
+      sim_buildarg:
+        description: 'Optional value for --sim.buildarg (e.g. disable_strict_exception_matching=fukuii)'
+        required: false
+        type: string
+        default: ''
+      sim_timelimit:
+        description: 'Value for --sim.timelimit (e.g. 40m, 1h)'
+        required: false
+        type: string
+        default: '40m'
+      parallelism:
+        description: 'Value for --sim.parallelism'
+        required: false
+        type: number
+        default: 4
+      pass_threshold:
+        description: 'Fail the run if passed < threshold (0 = never fail)'
+        required: false
+        type: number
+        default: 0
+      hive_ref:
+        description: 'ethereum/hive git ref to test against'
+        required: false
+        type: string
+        default: 'master'
+    outputs:
+      passed:
+        description: 'Number of simulator tests that passed'
+        value: ${{ jobs.hive.outputs.passed }}
+      failed:
+        description: 'Number of simulator tests that failed'
+        value: ${{ jobs.hive.outputs.failed }}
+      total:
+        description: 'passed + failed'
+        value: ${{ jobs.hive.outputs.total }}
+
+permissions:
+  contents: read
+
+jobs:
+  hive:
+    name: ${{ inputs.label }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    outputs:
+      passed: ${{ steps.tab.outputs.passed }}
+      failed: ${{ steps.tab.outputs.failed }}
+      total: ${{ steps.tab.outputs.total }}
+
+    steps:
+      - name: Checkout fukuii
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'sbt'
+
+      - name: Cache Coursier / Ivy / sbt
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.ivy2/cache
+            ~/.sbt
+          key: sbt-${{ runner.os }}-${{ hashFiles('**/*.sbt', 'project/**') }}
+          restore-keys: sbt-${{ runner.os }}-
+
+      - name: Install sbt
+        run: |
+          set -euxo pipefail
+          # Retry curl — the GitHub->Azure blob redirect occasionally serves a
+          # 92-byte garbage body instead of the tarball, causing tar xz to die
+          # with "not in gzip format". --retry-all-errors handles that.
+          curl -L --fail --retry 5 --retry-delay 5 --retry-all-errors \
+            -o /tmp/sbt.tgz \
+            https://github.com/sbt/sbt/releases/download/v1.10.7/sbt-1.10.7.tgz
+          file /tmp/sbt.tgz
+          tar xz -C /tmp -f /tmp/sbt.tgz
+          sudo ln -sf /tmp/sbt/bin/sbt /usr/local/bin/sbt
+          sbt --version
+
+      - name: Build fukuii assembly
+        run: sbt -batch assembly
+
+      - name: Tag base Docker image
+        run: |
+          # The hive adapter Dockerfile does `FROM chipprbots/fukuii:latest`, so we build the
+          # base image by copying the just-built assembly into a thin overlay.
+          mkdir -p target/quick-docker
+          cp target/scala-3.3.4/fukuii-assembly-*.jar target/quick-docker/
+          cat > target/quick-docker/Dockerfile <<'DOCKER'
+          FROM eclipse-temurin:21-jre-noble
+          RUN apt-get update && apt-get install -y --no-install-recommends jq curl && rm -rf /var/lib/apt/lists/*
+          WORKDIR /app
+          RUN mkdir -p /app/fukuii/lib /app/data /app/hive-conf
+          COPY fukuii-assembly-*.jar /app/fukuii/lib/fukuii-assembly-0.1.240.jar
+          ENTRYPOINT ["java", "-jar", "/app/fukuii/lib/fukuii-assembly-0.1.240.jar"]
+          DOCKER
+          docker build -t chipprbots/fukuii:latest target/quick-docker/
+
+      - name: Check out hive
+        env:
+          HIVE_REF: ${{ inputs.hive_ref }}
+        run: |
+          set -euxo pipefail
+          mkdir -p external
+          for i in 1 2 3 4 5; do
+            rm -rf external/hive
+            if git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 \
+                 clone --depth=1 --filter=blob:none \
+                 https://github.com/ethereum/hive.git external/hive; then
+              break
+            fi
+            echo "Clone attempt $i failed; sleeping before retry..."
+            sleep $((i * 5))
+          done
+          if [ ! -d external/hive/.git ]; then
+            echo "::error::Failed to clone ethereum/hive after 5 retries."
+            git --version
+            curl -I https://github.com/ethereum/hive.git || true
+            exit 1
+          fi
+          # If the caller pinned a specific ref (not master), check it out.
+          if [ -n "$HIVE_REF" ] && [ "$HIVE_REF" != "master" ]; then
+            git -C external/hive fetch --depth=1 origin "$HIVE_REF"
+            git -C external/hive checkout FETCH_HEAD
+          fi
+          test -f external/hive/hive.go
+
+      - name: Sync fukuii hive adapter
+        run: |
+          mkdir -p external/hive/clients/fukuii
+          cp -v "$GITHUB_WORKSPACE/hive/fukuii/Dockerfile" external/hive/clients/fukuii/Dockerfile
+          cp -v "$GITHUB_WORKSPACE/hive/fukuii/fukuii.sh" external/hive/clients/fukuii/fukuii.sh
+          cp -v "$GITHUB_WORKSPACE/hive/fukuii/mapper.jq" external/hive/clients/fukuii/mapper.jq
+          cp -v "$GITHUB_WORKSPACE/hive/fukuii/enode.sh" external/hive/clients/fukuii/enode.sh 2>/dev/null || true
+          cp -v "$GITHUB_WORKSPACE/hive/fukuii/hive.yaml" external/hive/clients/fukuii/hive.yaml 2>/dev/null || true
+          cp target/scala-3.3.4/fukuii-assembly-*.jar external/hive/clients/fukuii/
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Build hive
+        working-directory: external/hive
+        run: |
+          go version
+          # ethereum/hive's main binary lives at the repo root (hive.go),
+          # NOT under cmd/hive.
+          go build -o hive .
+          ./hive --help | head -5
+
+      - name: Run simulator
+        id: sim
+        working-directory: external/hive
+        env:
+          SIM: ${{ inputs.sim }}
+          SIM_LIMIT: ${{ inputs.sim_limit }}
+          SIM_BUILDARG: ${{ inputs.sim_buildarg }}
+          SIM_TIMELIMIT: ${{ inputs.sim_timelimit }}
+          PARALLELISM: ${{ inputs.parallelism }}
+        # Do not inherit GitHub's default `-e -o pipefail` — hive returns
+        # non-zero for a wide range of per-sim outcomes (test failures,
+        # client timeouts, flaky docker pulls) and the tabulate step below
+        # is what produces the signal we actually care about: the
+        # passed/failed count from the simulator log. Any hive catastrophic
+        # failure is surfaced in the step summary and the uploaded logs.
+        shell: bash --noprofile --norc {0}
+        run: |
+          args=(
+            --sim "$SIM"
+            --client fukuii
+            --sim.parallelism "$PARALLELISM"
+            --sim.timelimit "$SIM_TIMELIMIT"
+            --client.checktimelimit=60s
+            --loglevel 3
+          )
+          [ -n "$SIM_LIMIT" ]   && args+=(--sim.limit   "$SIM_LIMIT")
+          [ -n "$SIM_BUILDARG" ] && args+=(--sim.buildarg "$SIM_BUILDARG")
+
+          ./hive "${args[@]}" 2>&1 | tee hive-run.log
+          hive_exit=${PIPESTATUS[0]}
+          echo "hive_exit=${hive_exit}" >> "$GITHUB_OUTPUT"
+          echo "Hive exited with code ${hive_exit}"
+          exit 0
+
+      - name: Tabulate results
+        id: tab
+        if: always()
+        working-directory: external/hive
+        env:
+          LABEL: ${{ inputs.label }}
+          SIM: ${{ inputs.sim }}
+          THRESHOLD: ${{ inputs.pass_threshold }}
+          HIVE_EXIT: ${{ steps.sim.outputs.hive_exit }}
+        run: |
+          set -uxo pipefail
+          sim_log=$(ls -t workspace/logs/*-simulator-*.log 2>/dev/null | head -1 || true)
+          if [ -z "$sim_log" ]; then
+            passed=0
+            failed=0
+          else
+            passed=$(grep -c "PASSED tests/" "$sim_log" || true)
+            failed=$(grep -c "FAILED tests/" "$sim_log" || true)
+          fi
+          total=$((passed + failed))
+          echo "passed=$passed" >> "$GITHUB_OUTPUT"
+          echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          echo "total=$total"  >> "$GITHUB_OUTPUT"
+          {
+            echo "### Hive · ${LABEL} (\`${SIM}\`)"
+            echo
+            echo "| passed | failed | total | threshold | hive exit |"
+            echo "|-------:|-------:|------:|----------:|----------:|"
+            echo "| ${passed} | ${failed} | ${total} | ${THRESHOLD} | ${HIVE_EXIT:-?} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # When no simulator log exists, hive died before launching the sim —
+          # dump the tail of the hive stdout so the PR check can show why.
+          if [ -z "$sim_log" ]; then
+            {
+              echo
+              echo "**No simulator log produced.** Tail of \`hive-run.log\`:"
+              echo
+              echo '```'
+              tail -n 80 hive-run.log 2>/dev/null || echo "(hive-run.log missing)"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$failed" -gt 0 ]; then
+            {
+              echo
+              echo "<details><summary>First 20 FAILED tests</summary>"
+              echo
+              echo '```'
+              grep "FAILED tests/" "$sim_log" | head -20
+              echo '```'
+              echo
+              echo "</details>"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload simulator logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hive-logs-${{ inputs.label }}
+          path: |
+            external/hive/workspace/logs/
+            external/hive/hive-run.log
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Enforce pass threshold
+        if: ${{ inputs.pass_threshold > 0 }}
+        env:
+          PASSED: ${{ steps.tab.outputs.passed }}
+          THRESHOLD: ${{ inputs.pass_threshold }}
+          LABEL: ${{ inputs.label }}
+        run: |
+          if [ "$PASSED" -lt "$THRESHOLD" ]; then
+            echo "::error::Hive ${LABEL} only passed ${PASSED} tests (threshold ${THRESHOLD})."
+            exit 1
+          fi
