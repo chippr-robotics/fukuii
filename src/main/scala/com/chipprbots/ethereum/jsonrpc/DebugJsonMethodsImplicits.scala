@@ -45,22 +45,73 @@ object DebugJsonMethodsImplicits extends JsonMethodsImplicits {
     JObject(fields)
   }
 
-  private def encodeTraceResponse(t: TraceTransactionResponse): JValue = JObject(
-    "gas" -> JInt(t.gas),
-    "failed" -> JBool(t.failed),
-    "returnValue" -> JString(
-      org.bouncycastle.util.encoders.Hex.toHexString(t.returnValue.toArray)),
-    "structLogs" -> JArray(t.structLogs.map(encodeStructLog))
-  )
+  private def encodeAddr(a: com.chipprbots.ethereum.domain.Address): JString =
+    JString("0x" + org.bouncycastle.util.encoders.Hex.toHexString(a.bytes.toArray))
+
+  private def encodeCallFrame(r: com.chipprbots.ethereum.vm.tracing.CallTracerResult): JObject = {
+    var fields: List[(String, JValue)] = List(
+      "type" -> JString(r.callType),
+      "from" -> encodeAddr(r.from),
+      "to" -> encodeAddr(r.to),
+      "value" -> JString("0x" + r.value.toBigInt.toString(16)),
+      "gas" -> JString("0x" + r.gas.toString(16)),
+      "gasUsed" -> JString("0x" + r.gasUsed.toString(16)),
+      "input" -> JString(hex0x(r.input)),
+      "output" -> JString(hex0x(r.output))
+    )
+    r.error.foreach(e => fields = fields :+ ("error" -> JString(e)))
+    if (r.calls.nonEmpty) fields = fields :+ ("calls" -> JArray(r.calls.map(encodeCallFrame)))
+    JObject(fields)
+  }
+
+  private def encodePrestate(r: com.chipprbots.ethereum.vm.tracing.PrestateTracerResult): JObject =
+    JObject(r.touchedAddresses.toList.map { a =>
+      val storageKeys = r.touchedStorage.collect { case (addr, slot) if addr == a => slot }
+      val fields: List[(String, JValue)] =
+        if (storageKeys.nonEmpty)
+          List("storage" -> JObject(storageKeys.toList.map(s =>
+            ("0x" + s.toBigInt.toString(16)) -> JString("0x0"))))
+        else Nil
+      ("0x" + org.bouncycastle.util.encoders.Hex.toHexString(a.bytes.toArray)) -> JObject(fields)
+    })
+
+  private def encodeTraceResponse(t: TraceTransactionResponse): JValue =
+    (t.callTracerResult, t.prestateTracerResult) match {
+      case (Some(call), _) => encodeCallFrame(call)
+      case (_, Some(pre)) => encodePrestate(pre)
+      case _ => JObject(
+        "gas" -> JInt(t.gas),
+        "failed" -> JBool(t.failed),
+        "returnValue" -> JString(
+          org.bouncycastle.util.encoders.Hex.toHexString(t.returnValue.toArray)),
+        "structLogs" -> JArray(t.structLogs.map(encodeStructLog))
+      )
+    }
+
+  /** Parse geth-compatible TraceConfig from the optional second RPC param. */
+  private def parseTraceConfig(obj: JValue): DebugService.TraceConfig = obj match {
+    case JObject(fs) =>
+      def b(name: String): Boolean =
+        fs.collectFirst { case (k, JBool(v)) if k == name => v }.getOrElse(false)
+      val tracer = fs.collectFirst { case ("tracer", JString(s)) => s }
+      DebugService.TraceConfig(
+        disableStack = b("disableStack"),
+        disableMemory = b("disableMemory"),
+        disableStorage = b("disableStorage"),
+        tracer = tracer
+      )
+    case _ => DebugService.TraceConfig()
+  }
 
   implicit val debug_traceTransaction: JsonMethodCodec[TraceTransactionRequest, TraceTransactionResponse] =
     new JsonMethodDecoder[TraceTransactionRequest] with JsonEncoder[TraceTransactionResponse] {
       def decodeJson(params: Option[JArray]): Either[JsonRpcError, TraceTransactionRequest] =
         params match {
-          case Some(JArray(JString(hash) :: _)) =>
+          case Some(JArray(JString(hash) :: rest)) =>
+            val cfg = rest.headOption.map(parseTraceConfig).getOrElse(DebugService.TraceConfig())
             scala.util.Try(ByteString(org.bouncycastle.util.encoders.Hex.decode(hash.stripPrefix("0x"))))
               .toEither.left.map(_ => JsonRpcError.InvalidParams())
-              .map(TraceTransactionRequest.apply)
+              .map(h => TraceTransactionRequest(h, cfg))
           case _ => Left(JsonRpcError.InvalidParams("debug_traceTransaction expects [txHash, ...]"))
         }
       def encodeJson(t: TraceTransactionResponse): JValue = encodeTraceResponse(t)
