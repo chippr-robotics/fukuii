@@ -18,6 +18,8 @@ import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason.InvalidStateResponse
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
+import com.chipprbots.ethereum.blockchain.sync.RetryState
+import com.chipprbots.ethereum.blockchain.sync.RetryStrategy
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg.PeerWithInfo
 import com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler
 import com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.ResponseReceived
@@ -29,7 +31,6 @@ import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.SyncRespo
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateSchedulerActor._
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.mpt.HexPrefix
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
@@ -66,6 +67,17 @@ class SyncStateSchedulerActor(
   private var consecutiveUselessResponses: Int = 0
   private val UselessResponseThreshold: Int = 20
 
+  // Exponential backoff for InvalidStateResponse errors.
+  // Besu: PipelineChainDownloader.PAUSE_AFTER_ERROR_DURATION = 2s.
+  // Prevents spinning on bad state responses; resets to PauseAfterErrorDuration on any success.
+  private var uselessResponseRetryState: RetryState = RetryState(
+    strategy = RetryStrategy(
+      initialDelay = SyncStateSchedulerActor.PauseAfterErrorDuration,
+      maxDelay = 30.seconds,
+      jitterFactor = 0.1
+    )
+  )
+
   /** Check if a capability supports GetNodeData message. GetNodeData is available in ETH63-67 but removed in ETH68 per
     * EIP-4938. SNAP protocol uses different messages (GetAccountRange, etc.) and doesn't support GetNodeData.
     *
@@ -79,6 +91,7 @@ class SyncStateSchedulerActor(
   private def supportsGetNodeData(capability: Capability): Boolean = capability match {
     case Capability.ETH63 | Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 => true
     case Capability.ETH68                                                                             => false
+    case Capability.ETH69                                                                             => false
     case Capability.SNAP1                                                                             => false
   }
 
@@ -243,6 +256,7 @@ class SyncStateSchedulerActor(
     timers.startTimerAtFixedRate(PrintInfoKey, PrintInfo, 30.seconds)
     currentStateRoot = root
     consecutiveUselessResponses = 0
+    uselessResponseRetryState = uselessResponseRetryState.reset
     log.info("Starting state sync to root {} on block {}", ByteStringUtils.hash2string(root), bn)
     // TODO handle case when we already have root i.e state is synced up to this point
     val initState = sync.initState(root).getOrElse {
@@ -418,6 +432,7 @@ class SyncStateSchedulerActor(
 
       case ProcessingResult(Right(ProcessingSuccess(newState, newDownloaderState, newStats))) =>
         consecutiveUselessResponses = 0 // Reset on successful processing
+        uselessResponseRetryState = uselessResponseRetryState.reset
         log.debug(
           "Finished processing mpt node batch. Got {} missing nodes. Missing queue has {} elements",
           newState.numberOfPendingRequests,
@@ -456,6 +471,7 @@ class SyncStateSchedulerActor(
                     consecutiveUselessResponses
                   )
                   consecutiveUselessResponses = 0
+                  uselessResponseRetryState = uselessResponseRetryState.reset
                   handleRestart(
                     currentState.currentSchedulerState,
                     currentState.currentStats,
@@ -463,8 +479,12 @@ class SyncStateSchedulerActor(
                     context.parent
                   )
                 } else {
+                  // Besu: PipelineChainDownloader pauses PAUSE_AFTER_ERROR_DURATION (2s) after failures.
+                  // Use exponential backoff so repeated bad-root responses back off gradually.
+                  val delay = uselessResponseRetryState.nextDelay
+                  uselessResponseRetryState = uselessResponseRetryState.recordAttempt
                   context.become(syncing(currentState.withNewDownloaderState(newDownloaderState)))
-                  self ! Sync
+                  timers.startSingleTimer(SyncKey, Sync, delay)
                 }
               case _ =>
                 context.become(syncing(currentState.withNewDownloaderState(newDownloaderState)))
@@ -488,6 +508,10 @@ class SyncStateSchedulerActor(
 object SyncStateSchedulerActor {
   case object SyncKey
   case object Sync
+
+  // Besu: PipelineChainDownloader.PAUSE_AFTER_ERROR_DURATION = 2s.
+  // Base delay for exponential backoff on InvalidStateResponse errors.
+  val PauseAfterErrorDuration: FiniteDuration = 2.seconds
 
   private def reportStats(
       to: ActorRef,

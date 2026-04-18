@@ -94,7 +94,8 @@ class GenesisDataLoader(
   private def loadGenesisData(genesisJson: String)(implicit blockchainConfig: BlockchainConfig): Try[Unit] = {
     import org.json4s.native.JsonMethods.parse
     import GenesisDataLoader.JsonSerializers.GenesisAccountSerializer
-    implicit val formats: Formats = DefaultFormats + ByteStringJsonSerializer + UInt256JsonSerializer + GenesisAccountSerializer
+    implicit val formats: Formats =
+      DefaultFormats + ByteStringJsonSerializer + UInt256JsonSerializer + GenesisAccountSerializer
     for {
       genesisData <- Try(Extraction.extract[GenesisData](parse(genesisJson)))
       _ <- loadGenesisData(genesisData)
@@ -110,7 +111,6 @@ class GenesisDataLoader(
     val header: BlockHeader = prepareHeader(genesisData, stateMptRootHash)
 
     log.debug(s"Prepared genesis header: $header")
-
 
     blockchainReader.getBlockHeaderByNumber(0) match {
       case Some(existingGenesisHeader) if existingGenesisHeader.hash == header.hash =>
@@ -168,9 +168,9 @@ class GenesisDataLoader(
     }
   }
 
-  /** Compute the storage MPT root for a genesis account AND persist its trie nodes so the EVM
-    * can read them at runtime. Previously this used an ephemeral DataSource, causing every
-    * genesis-deployed contract with storage to throw MPTException on first SLOAD.
+  /** Compute the storage MPT root for a genesis account AND persist its trie nodes so the EVM can read them at runtime.
+    * Previously this used an ephemeral DataSource, causing every genesis-deployed contract with storage to throw
+    * MPTException on first SLOAD.
     */
   private def computeStorageRootHash(storage: Map[UInt256, UInt256], sharedStorage: MptStorage): ByteString = {
     val emptyTrie = EthereumUInt256Mpt.storageMpt(
@@ -191,20 +191,30 @@ class GenesisDataLoader(
   ) = {
     // Determine the fork era for the genesis block based on the genesis timestamp (0)
     val genesisTimestamp = BigInt(genesisData.timestamp.replace("0x", ""), 16).toLong
-    val baseFee = genesisData.baseFeePerGas.map(s => BigInt(s.replace("0x", ""), 16))
+    val baseFee = genesisData.baseFeePerGas
+      .map(s => BigInt(s.replace("0x", ""), 16))
       .getOrElse(BigInt("1000000000")) // EIP-1559 default: 1 Gwei
     // Empty trie root = keccak256(RLP("")) = keccak256(0x80) — NOT keccak of empty list
     val emptyWithdrawalsRoot = ByteString(crypto.kec256(rlp.encode(RLPValue(Array.empty[Byte]))))
 
     val extraFields = if (blockchainConfig.isPragueTimestamp(genesisTimestamp)) {
       val emptyRequestsHash = ByteString(java.security.MessageDigest.getInstance("SHA-256").digest(Array.empty[Byte]))
-      BlockHeader.HeaderExtraFields.HefPostPrague(baseFee, emptyWithdrawalsRoot,
-        parseOptQuantity(genesisData.blobGasUsed), parseOptQuantity(genesisData.excessBlobGas),
-        zeros(hashLength), emptyRequestsHash)
+      BlockHeader.HeaderExtraFields.HefPostPrague(
+        baseFee,
+        emptyWithdrawalsRoot,
+        parseOptQuantity(genesisData.blobGasUsed),
+        parseOptQuantity(genesisData.excessBlobGas),
+        zeros(hashLength),
+        emptyRequestsHash
+      )
     } else if (blockchainConfig.isCancunTimestamp(genesisTimestamp)) {
-      BlockHeader.HeaderExtraFields.HefPostCancun(baseFee, emptyWithdrawalsRoot,
-        parseOptQuantity(genesisData.blobGasUsed), parseOptQuantity(genesisData.excessBlobGas),
-        zeros(hashLength))
+      BlockHeader.HeaderExtraFields.HefPostCancun(
+        baseFee,
+        emptyWithdrawalsRoot,
+        parseOptQuantity(genesisData.blobGasUsed),
+        parseOptQuantity(genesisData.excessBlobGas),
+        zeros(hashLength)
+      )
     } else if (blockchainConfig.isShanghaiTimestamp(genesisTimestamp)) {
       BlockHeader.HeaderExtraFields.HefPostShanghai(baseFee, emptyWithdrawalsRoot)
     } else if (blockchainConfig.forkBlockNumbers.olympiaBlockNumber == 0) {
@@ -234,10 +244,9 @@ class GenesisDataLoader(
   }
 
   /** Ethereum block header nonce is always 8 bytes (uint64). Pad short nonces with leading zeros. */
-  private def padToEightBytes(bs: ByteString): ByteString = {
+  private def padToEightBytes(bs: ByteString): ByteString =
     if (bs.length >= 8) bs
     else ByteString(new Array[Byte](8 - bs.length) ++ bs.toArray)
-  }
 
   /** Parse an optional hex-prefixed quantity (per eth_getBlockByNumber spec). */
   private def parseOptQuantity(v: Option[String]): BigInt = v match {
@@ -304,16 +313,15 @@ object GenesisDataLoader {
     object GenesisAccountSerializer
         extends CustomSerializer[GenesisAccount](_ =>
           (
-            {
-              case JObject(fields) =>
-                val map = fields.toMap
-                GenesisAccount(
-                  precompiled = None,
-                  balance = map.get("balance").map(deserializeUint256String).getOrElse(UInt256.Zero),
-                  code = map.get("code").map(deserializeByteString),
-                  nonce = map.get("nonce").map(deserializeUint256String),
-                  storage = map.get("storage").flatMap(parseStorageMap)
-                )
+            { case JObject(fields) =>
+              val map = fields.toMap
+              GenesisAccount(
+                precompiled = None,
+                balance = map.get("balance").map(deserializeUint256String).getOrElse(UInt256.Zero),
+                code = map.get("code").map(deserializeByteString),
+                nonce = map.get("nonce").map(deserializeUint256String),
+                storage = map.get("storage").flatMap(parseStorageMap)
+              )
             },
             PartialFunction.empty
           )

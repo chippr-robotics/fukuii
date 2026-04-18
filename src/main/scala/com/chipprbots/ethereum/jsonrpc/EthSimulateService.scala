@@ -19,7 +19,6 @@ import com.chipprbots.ethereum.ledger._
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.rlp
-import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteUtils
 import com.chipprbots.ethereum.utils.Logger
@@ -106,7 +105,8 @@ object EthSimulateService {
   val EmptyWithdrawalsRoot: ByteString = EmptyTrieRoot
   // Empty requests hash (Prague) = SHA-256 of empty input
   val EmptyRequestsHash: ByteString = ByteString(
-    java.security.MessageDigest.getInstance("SHA-256").digest(Array.empty[Byte]))
+    java.security.MessageDigest.getInstance("SHA-256").digest(Array.empty[Byte])
+  )
   // Ommers hash for empty uncles list = keccak256(RLP([]))
   val EmptyOmmersHash: ByteString = ByteString(kec256(rlp.encode(rlp.RLPList())))
   // Empty bloom filter
@@ -144,14 +144,17 @@ class EthSimulateService(
   private def doSimulate(req: EthSimulateRequest): Either[JsonRpcError, EthSimulateResponse] = {
     // Validate blockStateCalls count
     if (req.blockStateCalls.size > MaxBlockStateCalls) {
-      return Left(JsonRpcError.SimulateClientLimitExceeded(
-        s"too many block state calls: ${req.blockStateCalls.size} > $MaxBlockStateCalls"))
+      return Left(
+        JsonRpcError.SimulateClientLimitExceeded(
+          s"too many block state calls: ${req.blockStateCalls.size} > $MaxBlockStateCalls"
+        )
+      )
     }
 
     // Resolve base block
     val baseBlock = resolveBlock(req.blockTag) match {
       case Right(resolved) => resolved.block
-      case Left(_) =>
+      case Left(_)         =>
         // Return -32000 for block not found (not -32602)
         return Left(JsonRpcError.LogicError(s"header not found"))
     }
@@ -168,8 +171,8 @@ class EthSimulateService(
     var world = InMemoryWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
       mptStorage = blockchain.getReadOnlyMptStorage(),
-      getBlockHashByNumber = (n: BigInt) =>
-        simulatedBlockHashes.get(n).orElse(blockchainReader.getBlockHeaderByNumber(n).map(_.hash)),
+      getBlockHashByNumber =
+        (n: BigInt) => simulatedBlockHashes.get(n).orElse(blockchainReader.getBlockHeaderByNumber(n).map(_.hash)),
       accountStartNonce = blockchainConfig.accountStartNonce,
       stateRootHash = baseBlock.header.stateRoot,
       noEmptyAccounts = evmConfig.noEmptyAccounts,
@@ -190,8 +193,11 @@ class EthSimulateService(
       prevNum = targetNum
     }
     if (totalBlocks > MaxBlockStateCalls) {
-      return Left(JsonRpcError.SimulateClientLimitExceeded(
-        s"too many blocks (including gaps): $totalBlocks > $MaxBlockStateCalls"))
+      return Left(
+        JsonRpcError.SimulateClientLimitExceeded(
+          s"too many blocks (including gaps): $totalBlocks > $MaxBlockStateCalls"
+        )
+      )
     }
 
     for ((blockStateCall, blockIdx) <- req.blockStateCalls.zipWithIndex) {
@@ -200,9 +206,17 @@ class EthSimulateService(
       // Generate gap-filling empty blocks if the target number is ahead
       while (parentHeader.number + 1 < targetNumber) {
         val gapResult = buildAndFinalizeBlock(
-          parentHeader, None, None, Seq.empty,
-          req.validation, req.traceTransfers, nonceMap, Map.empty, globalAccumGas,
-          world, simulatedBlockHashes
+          parentHeader,
+          None,
+          None,
+          Seq.empty,
+          req.validation,
+          req.traceTransfers,
+          nonceMap,
+          Map.empty,
+          globalAccumGas,
+          world,
+          simulatedBlockHashes
         )
         gapResult match {
           case Left(err) => return Left(err)
@@ -217,10 +231,17 @@ class EthSimulateService(
 
       // Build the actual BSC block
       val bscResult = buildAndFinalizeBlock(
-        parentHeader, blockStateCall.blockOverrides, blockStateCall.stateOverrides,
+        parentHeader,
+        blockStateCall.blockOverrides,
+        blockStateCall.stateOverrides,
         blockStateCall.calls.getOrElse(Seq.empty),
-        req.validation, req.traceTransfers, nonceMap, Map.empty, globalAccumGas,
-        world, simulatedBlockHashes
+        req.validation,
+        req.traceTransfers,
+        nonceMap,
+        Map.empty,
+        globalAccumGas,
+        world,
+        simulatedBlockHashes
       )
       bscResult match {
         case Left(err) => return Left(err)
@@ -248,7 +269,7 @@ class EthSimulateService(
       existingRelocations: Map[Address, Address],
       globalGasOffset: BigInt,
       initialWorld: InMemoryWorldStateProxy,
-      simulatedBlockHashes: mutable.Map[BigInt, ByteString]
+      @annotation.unused simulatedBlockHashes: mutable.Map[BigInt, ByteString]
   ): Either[JsonRpcError, (BlockHeader, InMemoryWorldStateProxy, SimulateBlockResult, BigInt)] = {
     var world = initialWorld
 
@@ -277,10 +298,19 @@ class EthSimulateService(
     }
 
     // Execute calls
-    val execResult = executeCalls(calls, simHeader, world, validation, traceTransfers, nonceMap, precompileRelocations, globalGasOffset)
+    val execResult = executeCalls(
+      calls,
+      simHeader,
+      world,
+      validation,
+      traceTransfers,
+      nonceMap,
+      precompileRelocations,
+      globalGasOffset
+    )
     execResult match {
       case Left(err) => return Left(err)
-      case _ =>
+      case _         =>
     }
     val (newWorld, callResults, txs, txSenders, receipts, gasUsed) = execResult.toOption.get
 
@@ -300,14 +330,14 @@ class EthSimulateService(
     val blobGasUsed = txs.foldLeft(BigInt(0)) { (acc, stx) =>
       stx.tx match {
         case blob: BlobTransaction => acc + BigInt(blob.blobVersionedHashes.size) * BigInt(131072)
-        case _ => acc
+        case _                     => acc
       }
     }
 
     // Build final header with computed roots and blob gas
     val finalExtraFields = simHeader.extraFields match {
       case p: HefPostPrague => p.copy(blobGasUsed = blobGasUsed)
-      case other => other
+      case other            => other
     }
     val finalHeader = simHeader.copy(
       stateRoot = stateRoot,
@@ -321,10 +351,14 @@ class EthSimulateService(
     // Update call results with correct block hash and number
     val blockHash = finalHeader.hash
     val updatedCallResults = callResults.zipWithIndex.map { case (cr, callIdx) =>
-      cr.copy(logs = cr.logs.map(_.copy(
-        blockHash = blockHash,
-        blockNumber = finalHeader.number
-      )))
+      cr.copy(logs =
+        cr.logs.map(
+          _.copy(
+            blockHash = blockHash,
+            blockNumber = finalHeader.number
+          )
+        )
+      )
     }
 
     val body = BlockBody(txs, Nil, Some(Seq.empty))
@@ -345,8 +379,9 @@ class EthSimulateService(
 
       // Validate block number override doesn't go backwards
       if (targetNumber <= prevNumber) {
-        return Left(JsonRpcError.SimulateBlockNumberNotIncreasing(
-          s"block numbers must be in order: $targetNumber <= $prevNumber"))
+        return Left(
+          JsonRpcError.SimulateBlockNumberNotIncreasing(s"block numbers must be in order: $targetNumber <= $prevNumber")
+        )
       }
 
       // Compute the minimum timestamp for the target block number
@@ -357,8 +392,11 @@ class EthSimulateService(
 
       // Explicit timestamp must be strictly greater than previous
       if (timestamp <= prevTimestamp) {
-        return Left(JsonRpcError.SimulateTimestampNotIncreasing(
-          s"block timestamps must be in order: $timestamp <= $prevTimestamp"))
+        return Left(
+          JsonRpcError.SimulateTimestampNotIncreasing(
+            s"block timestamps must be in order: $timestamp <= $prevTimestamp"
+          )
+        )
       }
 
       // Gap-aware: if there are gap blocks AND an explicit timestamp, the timestamp
@@ -366,8 +404,11 @@ class EthSimulateService(
       if (overrides.time.isDefined && gapBlocks > 1) {
         val minTimestamp = prevTimestamp + gapBlocks * 12
         if (timestamp < minTimestamp) {
-          return Left(JsonRpcError.SimulateTimestampNotIncreasing(
-            s"block timestamps must be in order: $timestamp <= ${minTimestamp - 12}"))
+          return Left(
+            JsonRpcError.SimulateTimestampNotIncreasing(
+              s"block timestamps must be in order: $timestamp <= ${minTimestamp - 12}"
+            )
+          )
         }
       }
 
@@ -398,11 +439,22 @@ class EthSimulateService(
     // This handles both pre-merge blocks and fork boundary crossings
     val ts = timestamp.toLong
     val extraFields = if (blockchainConfig.isPragueTimestamp(ts)) {
-      HefPostPrague(baseFee, EmptyWithdrawalsRoot, BigInt(0),
-        parentHeader.excessBlobGas.getOrElse(BigInt(0)), parentBeaconBlockRoot, EmptyRequestsHash)
+      HefPostPrague(
+        baseFee,
+        EmptyWithdrawalsRoot,
+        BigInt(0),
+        parentHeader.excessBlobGas.getOrElse(BigInt(0)),
+        parentBeaconBlockRoot,
+        EmptyRequestsHash
+      )
     } else if (blockchainConfig.isCancunTimestamp(ts)) {
-      HefPostCancun(baseFee, EmptyWithdrawalsRoot, BigInt(0),
-        parentHeader.excessBlobGas.getOrElse(BigInt(0)), parentBeaconBlockRoot)
+      HefPostCancun(
+        baseFee,
+        EmptyWithdrawalsRoot,
+        BigInt(0),
+        parentHeader.excessBlobGas.getOrElse(BigInt(0)),
+        parentBeaconBlockRoot
+      )
     } else if (blockchainConfig.isShanghaiTimestamp(ts)) {
       HefPostShanghai(baseFee, EmptyWithdrawalsRoot)
     } else if (parentHeader.baseFee.isDefined) {
@@ -414,7 +466,7 @@ class EthSimulateService(
     // Pre-merge blocks have non-zero difficulty
     val difficulty = extraFields match {
       case HefEmpty => parentHeader.difficulty // Inherit PoW difficulty
-      case _ => BigInt(0) // Post-merge
+      case _        => BigInt(0) // Post-merge
     }
 
     BlockHeader(
@@ -446,23 +498,33 @@ class EthSimulateService(
     var relocations = existingRelocations
 
     // First pass: validate movePrecompileToAddress
-    for ((address, ov) <- overrides) {
+    for ((address, ov) <- overrides)
       ov.movePrecompileToAddress.foreach { targetAddr =>
         // Check: source must be a known precompile
-        val evmConfig = EvmConfig.forBlock(BigInt(1000000000), Long.MaxValue, blockchainConfig)
         val allPrecompiles = Set(
-          Address(1), Address(2), Address(3), Address(4), Address(5),
-          Address(6), Address(7), Address(8), Address(9),
-          Address(0x0b), Address(0x0c), Address(0x0d), Address(0x0e),
-          Address(0x0f), Address(0x10), Address(0x11), Address(0x100)
+          Address(1),
+          Address(2),
+          Address(3),
+          Address(4),
+          Address(5),
+          Address(6),
+          Address(7),
+          Address(8),
+          Address(9),
+          Address(0x0b),
+          Address(0x0c),
+          Address(0x0d),
+          Address(0x0e),
+          Address(0x0f),
+          Address(0x10),
+          Address(0x11),
+          Address(0x100)
         )
         if (!allPrecompiles.contains(address)) {
-          return Left(JsonRpcError.LogicError(
-            s"account ${address.toString} is not a precompile"))
+          return Left(JsonRpcError.LogicError(s"account ${address.toString} is not a precompile"))
         }
         relocations = relocations + (address -> targetAddr)
       }
-    }
 
     // Second pass: apply overrides
     for ((address, ov) <- overrides) {
@@ -499,18 +561,16 @@ class EthSimulateService(
         // Write the new slots on fresh (empty) storage
         val storage = w.getStorage(address)
         var s = storage
-        for ((key, value) <- slots) {
+        for ((key, value) <- slots)
           s = s.store(key, value)
-        }
         w = w.saveStorage(address, s)
       }
 
       ov.stateDiff.foreach { slots =>
         val storage = w.getStorage(address)
         var s = storage
-        for ((key, value) <- slots) {
+        for ((key, value) <- slots)
           s = s.store(key, value)
-        }
         w = w.saveStorage(address, s)
       }
     }
@@ -526,7 +586,10 @@ class EthSimulateService(
       nonceMap: mutable.Map[Address, BigInt],
       precompileRelocations: Map[Address, Address] = Map.empty,
       globalGasOffset: BigInt = BigInt(0)
-  ): Either[JsonRpcError, (InMemoryWorldStateProxy, Seq[SimulateCallResult], Seq[SignedTransaction], Seq[Address], Seq[Receipt], BigInt)] = {
+  ): Either[
+    JsonRpcError,
+    (InMemoryWorldStateProxy, Seq[SimulateCallResult], Seq[SignedTransaction], Seq[Address], Seq[Receipt], BigInt)
+  ] = {
     var world = initialWorld
     val callResults = mutable.ArrayBuffer[SimulateCallResult]()
     val txs = mutable.ArrayBuffer[SignedTransaction]()
@@ -540,9 +603,7 @@ class EthSimulateService(
 
       // Resolve nonce
       val senderNonce = call.nonce.getOrElse {
-        nonceMap.getOrElseUpdate(sender, {
-          world.getAccount(sender).map(_.nonce.toBigInt).getOrElse(BigInt(0))
-        })
+        nonceMap.getOrElseUpdate(sender, world.getAccount(sender).map(_.nonce.toBigInt).getOrElse(BigInt(0)))
       }
 
       // Build transaction — default gas = min of remaining global 50M pool and remaining block gas
@@ -570,16 +631,22 @@ class EthSimulateService(
       }
       val intrinsicGas = baseGas + calldataGas
       if (call.gas.isDefined && gasLimit < intrinsicGas) {
-        return Left(JsonRpcError.SimulateIntrinsicGasTooLow(
-          s"err: intrinsic gas too low: have $gasLimit, want $intrinsicGas (supplied gas $gasLimit)"))
+        return Left(
+          JsonRpcError.SimulateIntrinsicGasTooLow(
+            s"err: intrinsic gas too low: have $gasLimit, want $intrinsicGas (supplied gas $gasLimit)"
+          )
+        )
       }
 
       // Always check: insufficient funds for value transfer (non-gas)
       {
         val senderBal = world.getAccount(sender).map(_.balance.toBigInt).getOrElse(BigInt(0))
         if (value > 0 && senderBal < value && !validation) {
-          return Left(JsonRpcError.SimulateInsufficientFunds(
-            s"err: insufficient funds for gas * price + value: address ${sender.toString} have $senderBal want $value (supplied gas ${blockHeader.gasLimit})"))
+          return Left(
+            JsonRpcError.SimulateInsufficientFunds(
+              s"err: insufficient funds for gas * price + value: address ${sender.toString} have $senderBal want $value (supplied gas ${blockHeader.gasLimit})"
+            )
+          )
         }
       }
 
@@ -587,33 +654,47 @@ class EthSimulateService(
       if (validation) {
         // Check maxFeePerGas >= baseFee
         if (baseFee > 0 && maxFeePerGas < baseFee && !call.gasPrice.isDefined) {
-          return Left(JsonRpcError.InvalidParams(
-            s"max fee per gas less than block base fee: address ${sender.toString}, maxFeePerGas: $maxFeePerGas, baseFee: $baseFee"))
+          return Left(
+            JsonRpcError.InvalidParams(
+              s"max fee per gas less than block base fee: address ${sender.toString}, maxFeePerGas: $maxFeePerGas, baseFee: $baseFee"
+            )
+          )
         }
 
         // Check nonce
         val expectedNonce = world.getAccount(sender).map(_.nonce.toBigInt).getOrElse(BigInt(0))
         if (call.nonce.isDefined && senderNonce < expectedNonce) {
-          return Left(JsonRpcError.InvalidParams(
-            s"nonce too low: address ${sender.toString}, tx: $senderNonce state: $expectedNonce"))
+          return Left(
+            JsonRpcError.InvalidParams(
+              s"nonce too low: address ${sender.toString}, tx: $senderNonce state: $expectedNonce"
+            )
+          )
         }
         if (call.nonce.isDefined && senderNonce > expectedNonce) {
-          return Left(JsonRpcError.InvalidParams(
-            s"nonce too high: address ${sender.toString}, tx: $senderNonce state: $expectedNonce"))
+          return Left(
+            JsonRpcError.InvalidParams(
+              s"nonce too high: address ${sender.toString}, tx: $senderNonce state: $expectedNonce"
+            )
+          )
         }
 
         // Check balance for gas + value
         val senderAccount = world.getAccount(sender).getOrElse(Account.empty(blockchainConfig.accountStartNonce))
         val upfrontCost = gasLimit * gasPrice + value
         if (senderAccount.balance.toBigInt < upfrontCost) {
-          return Left(JsonRpcError.SimulateInsufficientFunds(
-            s"err: insufficient funds for gas * price + value: address ${sender.toString} have ${senderAccount.balance} want $upfrontCost (supplied gas $gasLimit)"))
+          return Left(
+            JsonRpcError.SimulateInsufficientFunds(
+              s"err: insufficient funds for gas * price + value: address ${sender.toString} have ${senderAccount.balance} want $upfrontCost (supplied gas $gasLimit)"
+            )
+          )
         }
       }
 
       // Determine transaction type: blob (3), legacy (0), or dynamic fee (2, default)
       val isBlob = call.`type`.contains(BigInt(3)) || call.blobVersionedHashes.exists(_.nonEmpty)
-      val isLegacy = call.`type`.contains(BigInt(0)) || (call.gasPrice.isDefined && call.maxFeePerGas.isEmpty && !call.`type`.contains(BigInt(2)) && !isBlob)
+      val isLegacy = call.`type`.contains(
+        BigInt(0)
+      ) || (call.gasPrice.isDefined && call.maxFeePerGas.isEmpty && !call.`type`.contains(BigInt(2)) && !isBlob)
       val tx: Transaction = if (isBlob) {
         BlobTransaction(
           chainId = blockchainConfig.chainId,
@@ -672,7 +753,14 @@ class EthSimulateService(
 
       // Execute transaction
       val TxResult(newWorld, gasUsed, logs, returnData, vmError) =
-        blockPreparator.executeTransactionForSimulation(stx, sender, blockHeader, world, precompileRelocations, traceTransfers)
+        blockPreparator.executeTransactionForSimulation(
+          stx,
+          sender,
+          blockHeader,
+          world,
+          precompileRelocations,
+          traceTransfers
+        )
 
       world = newWorld
 
@@ -696,10 +784,10 @@ class EthSimulateService(
         logs = logs
       )
       val receipt: Receipt = tx match {
-        case _: BlobTransaction => Type03Receipt(legacyReceipt)
+        case _: BlobTransaction           => Type03Receipt(legacyReceipt)
         case _: TransactionWithDynamicFee => Type02Receipt(legacyReceipt)
-        case _: LegacyTransaction => legacyReceipt
-        case _ => legacyReceipt
+        case _: LegacyTransaction         => legacyReceipt
+        case _                            => legacyReceipt
       }
 
       accumGas += gasUsed
@@ -754,15 +842,14 @@ class EthSimulateService(
             gasUsed = gasUsed,
             maxUsedGas = gasUsed,
             logs = Seq.empty,
-            error = Some(SimulateError(3, "execution reverted",
-              if (returnData.nonEmpty) Some(returnData) else None))
+            error = Some(SimulateError(3, "execution reverted", if (returnData.nonEmpty) Some(returnData) else None))
           )
         case Some(err) =>
           // Map VM error names to geth-compatible lowercase messages
           val errMsg = err match {
-            case com.chipprbots.ethereum.vm.OutOfGas => "out of gas"
+            case com.chipprbots.ethereum.vm.OutOfGas            => "out of gas"
             case com.chipprbots.ethereum.vm.InvalidOpCode(code) => s"invalid opcode: 0x${code.toInt.toHexString}"
-            case other => other.toString.toLowerCase
+            case other                                          => other.toString.toLowerCase
           }
           SimulateCallResult(
             status = BigInt(0),
@@ -798,10 +885,13 @@ class EthSimulateService(
         val timestamp = UInt256(blockHeader.unixTimestamp)
         val timestampIdx = timestamp.mod(UInt256(BeaconRootHistoryBufferLength))
         val rootIdx = timestampIdx + UInt256(BeaconRootHistoryBufferLength)
-        val account = world.getAccount(BeaconRootContractAddress)
+        val account = world
+          .getAccount(BeaconRootContractAddress)
           .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
-        val w1 = if (!world.getAccount(BeaconRootContractAddress).isDefined)
-          world.saveAccount(BeaconRootContractAddress, account) else world
+        val w1 =
+          if (!world.getAccount(BeaconRootContractAddress).isDefined)
+            world.saveAccount(BeaconRootContractAddress, account)
+          else world
         val storage = w1.getStorage(BeaconRootContractAddress)
         val s1 = storage.store(timestampIdx.toBigInt, timestamp.toBigInt)
         val s2 = s1.store(rootIdx.toBigInt, UInt256(beaconRoot).toBigInt)
@@ -819,10 +909,12 @@ class EthSimulateService(
     val blockNumber = blockHeader.number
     // Deploy history storage contract if not already deployed
     val w1 = if (world.getCode(HistoryStorageAddress).isEmpty) {
-      val account = world.getAccount(HistoryStorageAddress)
+      val account = world
+        .getAccount(HistoryStorageAddress)
         .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
         .copy(nonce = UInt256(1))
-      world.saveAccount(HistoryStorageAddress, account)
+      world
+        .saveAccount(HistoryStorageAddress, account)
         .saveCode(HistoryStorageAddress, HistoryStorageCode)
     } else world
     // Store parent hash at slot (blockNumber - 1) % HistoryServeWindow
@@ -854,7 +946,7 @@ class EthSimulateService(
     }
   }
 
-  private def computeTransactionsRoot(txs: Seq[SignedTransaction]): ByteString = {
+  private def computeTransactionsRoot(txs: Seq[SignedTransaction]): ByteString =
     if (txs.isEmpty) EmptyMpt
     else {
       val stateStorage = StateStorage.getReadOnlyStorage(EphemDataSource())
@@ -864,9 +956,8 @@ class EthSimulateService(
       )
       ByteString(txs.zipWithIndex.foldLeft(trie)((t, r) => t.put(r._2, r._1)).getRootHash)
     }
-  }
 
-  private def computeReceiptsRoot(receipts: Seq[Receipt]): ByteString = {
+  private def computeReceiptsRoot(receipts: Seq[Receipt]): ByteString =
     if (receipts.isEmpty) EmptyMpt
     else {
       val stateStorage = StateStorage.getReadOnlyStorage(EphemDataSource())
@@ -876,14 +967,12 @@ class EthSimulateService(
       )
       ByteString(receipts.zipWithIndex.foldLeft(trie)((t, r) => t.put(r._2, r._1)).getRootHash)
     }
-  }
 
-  private def computeLogsBloom(receipts: Seq[Receipt]): ByteString = {
+  private def computeLogsBloom(receipts: Seq[Receipt]): ByteString =
     if (receipts.isEmpty) EmptyBloom
     else {
       val blooms = receipts.map(_.logsBloomFilter.toArray)
       ByteString(ByteUtils.or(EmptyBloom.toArray +: blooms: _*))
     }
-  }
 
 }

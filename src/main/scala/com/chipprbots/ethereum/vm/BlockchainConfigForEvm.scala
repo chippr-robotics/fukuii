@@ -53,15 +53,15 @@ case class BlockchainConfigForEvm(
     // which hive also maps to olympiaBlockNumber but must NOT enable EIP-7883 before Osaka.
     isEthereum: Boolean = false
 ) {
-  /** EIP-7623 calldata cost floor — activates at Prague on ETH chains.
-    * Note: EIP-7883/EIP-7823 MODEXP changes activate at Osaka, not Prague (per execution-specs).
+
+  /** EIP-7623 calldata cost floor — activates at Prague on ETH chains. Note: EIP-7883/EIP-7823 MODEXP changes activate
+    * at Osaka, not Prague (per execution-specs).
     */
   def isPragueTimestamp(timestamp: Long): Boolean =
     pragueTimestamp.exists(ts => timestamp >= ts)
 
-  /** EIP-7883 MODEXP gas increase, EIP-7823 MODEXP input bounds, EIP-7951 P256VERIFY,
-    * EIP-7939 CLZ, EIP-7825 tx gas cap, EIP-7934 block RLP size — gated by Osaka timestamp
-    * on ETH chains.
+  /** EIP-7883 MODEXP gas increase, EIP-7823 MODEXP input bounds, EIP-7951 P256VERIFY, EIP-7939 CLZ, EIP-7825 tx gas
+    * cap, EIP-7934 block RLP size — gated by Osaka timestamp on ETH chains.
     */
   def isOsakaTimestamp(timestamp: Long): Boolean =
     osakaTimestamp.exists(ts => timestamp >= ts)

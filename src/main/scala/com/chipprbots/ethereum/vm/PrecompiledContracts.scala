@@ -70,8 +70,8 @@ object PrecompiledContracts {
     KzgPointEvalAddr -> KzgPointEvaluation
   )
 
-  /** ETC Olympia precompiles: BLS12-381 suite (EIP-2537). Does NOT include P256VERIFY —
-    * EIP-7951 activates at Osaka timestamp on ETH chains, not at Olympia block on ETC.
+  /** ETC Olympia precompiles: BLS12-381 suite (EIP-2537). Does NOT include P256VERIFY — EIP-7951 activates at Osaka
+    * timestamp on ETH chains, not at Olympia block on ETC.
     */
   val olympiaContracts: Map[Address, PrecompiledContract] = cancunContracts ++ Map(
     BlsG1AddAddr -> BlsG1Add,
@@ -116,7 +116,7 @@ object PrecompiledContracts {
         val reverseMap = relocations.map(_.swap)
         reverseMap.get(addr) match {
           case Some(originalAddr) => baseContracts.get(originalAddr) // Precompile relocated here
-          case None => baseContracts.get(addr) // Normal precompile check
+          case None               => baseContracts.get(addr) // Normal precompile check
         }
       }
     }
@@ -297,7 +297,16 @@ object PrecompiledContracts {
       ): @unchecked
 
       ProgramResult(
-        result, gasRemaining, context.world, Set.empty, Nil, Nil, 0, error, Set.empty, Set.empty
+        result,
+        gasRemaining,
+        context.world,
+        Set.empty,
+        Nil,
+        Nil,
+        0,
+        error,
+        Set.empty,
+        Set.empty
       )
     }
 
@@ -327,14 +336,18 @@ object PrecompiledContracts {
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt =
       gasWithOsaka(inputData, etcFork, ethFork, eip7883Active = false, isEthereum = false)
 
-    /** Variant that takes an explicit EIP-7883 activation flag AND distinguishes
-      * ETC Olympia from ETH London (both mapped to `olympiaBlockNumber` by hive).
-      * EIP-7883 activates on ETC Olympia (ECIP-1121) OR ETH Osaka+ (per execution-specs).
-      * Prague keeps EIP-2565. Never fires on plain ETH London just because hive sets
+    /** Variant that takes an explicit EIP-7883 activation flag AND distinguishes ETC Olympia from ETH London (both
+      * mapped to `olympiaBlockNumber` by hive). EIP-7883 activates on ETC Olympia (ECIP-1121) OR ETH Osaka+ (per
+      * execution-specs). Prague keeps EIP-2565. Never fires on plain ETH London just because hive sets
       * olympiaBlockNumber there.
       */
-    def gasWithOsaka(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork,
-        eip7883Active: Boolean, isEthereum: Boolean): BigInt = {
+    def gasWithOsaka(
+        inputData: ByteString,
+        etcFork: EtcFork,
+        ethFork: EthFork,
+        eip7883Active: Boolean,
+        isEthereum: Boolean
+    ): BigInt = {
       val baseLength = getLength(inputData, 0)
       val expLength = getLength(inputData, 1)
       val modLength = getLength(inputData, 2)
@@ -643,8 +656,8 @@ object PrecompiledContracts {
   // Uses org.hyperledger.besu:bls12-381 native library (gnark/Constantine backends via JNA).
   // G1MUL/G2MUL removed — MSM at k=1 covers single-point multiplication.
 
-  /** Execute a BLS12-381 operation via the Besu native library.
-    * Returns Some(result) on success, None on error (invalid point, wrong input size, etc.)
+  /** Execute a BLS12-381 operation via the Besu native library. Returns Some(result) on success, None on error (invalid
+    * point, wrong input size, etc.)
     */
   private def blsNativeOp(opByte: Byte, inputData: ByteString): Option[ByteString] = {
     import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
@@ -656,8 +669,13 @@ object PrecompiledContracts {
       val errorLen = new com.sun.jna.ptr.IntByReference(errorBuf.length)
 
       val ret = LibEthPairings.eip2537_perform_operation(
-        opByte, inputData.toArray, inputData.length,
-        resultBuf, resultLen, errorBuf, errorLen
+        opByte,
+        inputData.toArray,
+        inputData.length,
+        resultBuf,
+        resultLen,
+        errorBuf,
+        errorLen
       )
       if (ret == 0) Some(ByteString(resultBuf.take(resultLen.getValue)))
       else None
@@ -731,10 +749,9 @@ object PrecompiledContracts {
     def gas(inputData: ByteString, etcFork: EtcFork, ethFork: EthFork): BigInt = BigInt(23800)
   }
 
-  /** EIP-4844: KZG point evaluation precompile at address 0x0A.
-    * Input: versioned_hash (32) ++ z (32) ++ y (32) ++ commitment (48) ++ proof (48) = 192 bytes
-    * Output: FIELD_ELEMENTS_PER_BLOB (32) ++ BLS_MODULUS (32) = 64 bytes
-    * Gas: 50000
+  /** EIP-4844: KZG point evaluation precompile at address 0x0A. Input: versioned_hash (32) ++ z (32) ++ y (32) ++
+    * commitment (48) ++ proof (48) = 192 bytes Output: FIELD_ELEMENTS_PER_BLOB (32) ++ BLS_MODULUS (32) = 64 bytes Gas:
+    * 50000
     */
   object KzgPointEvaluation extends PrecompiledContract {
     private val KZG_GAS = BigInt(50000)
@@ -780,16 +797,16 @@ object PrecompiledContracts {
         if (!isValid) return None
       } catch {
         case _: Exception =>
-          // If KZG library not loaded or verification fails, try without native library
-          // For now, if the hash and field checks pass, accept the proof
-          // Full KZG verification requires the trusted setup to be loaded
-          // KZG native library not loaded or verification failed — accept if hash checks passed
+        // If KZG library not loaded or verification fails, try without native library
+        // For now, if the hash and field checks pass, accept the proof
+        // Full KZG verification requires the trusted setup to be loaded
+        // KZG native library not loaded or verification failed — accept if hash checks passed
       }
 
       // Return FIELD_ELEMENTS_PER_BLOB ++ BLS_MODULUS as 32-byte big-endian
       val result = ByteString(
         com.chipprbots.ethereum.utils.ByteUtils.padLeft(ByteString(FIELD_ELEMENTS_PER_BLOB.toByteArray), 32).toArray ++
-        com.chipprbots.ethereum.utils.ByteUtils.padLeft(ByteString(BLS_MODULUS.toByteArray), 32).toArray
+          com.chipprbots.ethereum.utils.ByteUtils.padLeft(ByteString(BLS_MODULUS.toByteArray), 32).toArray
       )
       Some(result)
     }

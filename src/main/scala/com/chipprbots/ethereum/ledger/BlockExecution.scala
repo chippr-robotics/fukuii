@@ -15,7 +15,6 @@ import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.DaoForkConfig
 import com.chipprbots.ethereum.vm.{EvmConfig, ProgramContext}
 import com.chipprbots.ethereum.utils.Logger
-import com.chipprbots.ethereum.vm.EvmConfig
 
 class BlockExecution(
     blockchain: BlockchainImpl,
@@ -37,9 +36,9 @@ class BlockExecution(
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, Seq[Receipt]] =
     executeAndValidateBlockFull(block, alreadyValidated).map(_._1)
 
-  /** Variant that also returns the EIP-7685 execution requests derived from block execution
-    * (deposits from receipts + system-call outputs). Used by the Engine API to additionally
-    * verify the header's requestsHash matches what execution actually produced.
+  /** Variant that also returns the EIP-7685 execution requests derived from block execution (deposits from receipts +
+    * system-call outputs). Used by the Engine API to additionally verify the header's requestsHash matches what
+    * execution actually produced.
     */
   def executeAndValidateBlockFull(
       block: Block,
@@ -67,9 +66,8 @@ class BlockExecution(
     blockExecResult
   }
 
-  /** Executes a block without pre/post validation. Returns the execution result
-    * including receipts, gasUsed, and the persisted world state. Used by ChainImporter
-    * for trusted block import where only state correctness matters.
+  /** Executes a block without pre/post validation. Returns the execution result including receipts, gasUsed, and the
+    * persisted world state. Used by ChainImporter for trusted block import where only state correctness matters.
     */
   def executeBlockNoValidation(
       block: Block
@@ -78,12 +76,10 @@ class BlockExecution(
       (result.receipts, result.gasUsed, result.worldState.stateRootHash)
     }
 
-  /** Proposer-mode execution. Runs all Prague preambles (EIP-4788, EIP-2935), transactions,
-    * withdrawals, and system calls (EIP-7002/7251), collects deposit requests (EIP-6110),
-    * and returns the full BlockResult with receipts + executionRequests populated. No
-    * pre- or post-execution validation against the header is performed — caller is
-    * responsible for filling in header fields (stateRoot, receiptsRoot, gasUsed,
-    * requestsHash, etc.) from the result.
+  /** Proposer-mode execution. Runs all Prague preambles (EIP-4788, EIP-2935), transactions, withdrawals, and system
+    * calls (EIP-7002/7251), collects deposit requests (EIP-6110), and returns the full BlockResult with receipts +
+    * executionRequests populated. No pre- or post-execution validation against the header is performed — caller is
+    * responsible for filling in header fields (stateRoot, receiptsRoot, gasUsed, requestsHash, etc.) from the result.
     */
   def executeForProposer(
       block: Block
@@ -235,7 +231,8 @@ class BlockExecution(
     if (!pragueActive && !etcOlympiaActive) return world
     // Only deploy at the FIRST block where it activates
     val isActivationBlock = if (pragueActive) {
-      blockchainReader.getBlockHeaderByHash(block.header.parentHash)
+      blockchainReader
+        .getBlockHeaderByHash(block.header.parentHash)
         .exists(parent => !blockchainConfig.isPragueTimestamp(parent.unixTimestamp))
     } else {
       blockNumber == blockchainConfig.forkBlockNumbers.olympiaBlockNumber
@@ -330,14 +327,13 @@ class BlockExecution(
     go(List.empty[BlockData], blocks, parentChainWeight)
   }
 
-  /** EIP-4895: Process beacon chain withdrawals (Shanghai+).
-    * Each withdrawal credits `amount * 1 Gwei` to the target address.
-    * No gas is charged. Creates the account if it doesn't exist.
+  /** EIP-4895: Process beacon chain withdrawals (Shanghai+). Each withdrawal credits `amount * 1 Gwei` to the target
+    * address. No gas is charged. Creates the account if it doesn't exist.
     */
   private def processWithdrawals(
       block: Block,
       world: InMemoryWorldStateProxy
-  ): InMemoryWorldStateProxy = {
+  ): InMemoryWorldStateProxy =
     block.body.withdrawals match {
       case Some(withdrawals) if withdrawals.nonEmpty =>
         val GweiToWei = BigInt("1000000000")
@@ -349,16 +345,13 @@ class BlockExecution(
         }
       case _ => world
     }
-  }
 
-  /** Prague: Execute system calls for withdrawal and consolidation request processing.
-    * Per EIP-7002 and EIP-7251, the system makes calls to the withdrawal queue and
-    * consolidation queue contracts after all transactions in the block.
+  /** Prague: Execute system calls for withdrawal and consolidation request processing. Per EIP-7002 and EIP-7251, the
+    * system makes calls to the withdrawal queue and consolidation queue contracts after all transactions in the block.
     *
-    * Returns the updated world state AND the typed-request bytes collected from each
-    * system call's return data (used for EIP-7685 requestsHash). The returned Seq is
-    * in EIP-7685 canonical order: [withdrawals_request, consolidations_request].
-    * Deposit requests are collected separately via collectDepositRequests.
+    * Returns the updated world state AND the typed-request bytes collected from each system call's return data (used
+    * for EIP-7685 requestsHash). The returned Seq is in EIP-7685 canonical order: [withdrawals_request,
+    * consolidations_request]. Deposit requests are collected separately via collectDepositRequests.
     */
   private def processPragueSystemCalls(
       block: Block,
@@ -374,9 +367,12 @@ class BlockExecution(
     // EIP-7685: Execute system calls to request contracts and collect output.
     // EIP-6110 DEPOSIT contract has no system call — deposits are parsed from logs.
     // Only EIP-7002 (withdrawals) and EIP-7251 (consolidations) do a SYSTEM_ADDRESS call.
-    for ((queueAddr, requestType) <- Seq(
-           (WithdrawalQueueAddress, WithdrawalRequestType),
-           (ConsolidationQueueAddress, ConsolidationRequestType))) {
+    for (
+      (queueAddr, requestType) <- Seq(
+        (WithdrawalQueueAddress, WithdrawalRequestType),
+        (ConsolidationQueueAddress, ConsolidationRequestType)
+      )
+    ) {
       val code = w.getCode(queueAddr)
       if (code.nonEmpty) {
         val context = ProgramContext[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage](
@@ -411,13 +407,12 @@ class BlockExecution(
     (w, outputs.toSeq)
   }
 
-  /** EIP-6110: Parse `DepositEvent(bytes,bytes,bytes,bytes,bytes)` logs emitted by the
-    * beacon deposit contract during block execution and return one request entry per
-    * deposit. Event ABI: [pubkey(48)->64, withdrawal_credentials(32)->64, amount(8)->32,
-    * signature(96)->128, index(8)->32]. The canonical request body concatenates the raw
-    * fields (pubkey || wc || amount_le || signature || index_le) = 192 bytes; with the
-    * type byte prefix (0x00) that's 193 bytes per deposit.
-    * Returns a single ByteString = 0x00 || concatenated_deposit_data (or empty if none).
+  /** EIP-6110: Parse `DepositEvent(bytes,bytes,bytes,bytes,bytes)` logs emitted by the beacon deposit contract during
+    * block execution and return one request entry per deposit. Event ABI: [pubkey(48)->64,
+    * withdrawal_credentials(32)->64, amount(8)->32, signature(96)->128, index(8)->32]. The canonical request body
+    * concatenates the raw fields (pubkey || wc || amount_le || signature || index_le) = 192 bytes; with the type byte
+    * prefix (0x00) that's 193 bytes per deposit. Returns a single ByteString = 0x00 || concatenated_deposit_data (or
+    * empty if none).
     */
   def collectDepositRequests(receipts: Seq[Receipt]): Option[ByteString] = {
     import BlockExecution._
@@ -439,11 +434,11 @@ class BlockExecution(
       val d = log.data
       if (d.length >= 608) {
         // skip 5x32 offsets = 160
-        val pubkey     = d.slice(160 + 32, 160 + 32 + 48)                            // 48
-        val wc         = d.slice(160 + 96 + 32, 160 + 96 + 32 + 32)                  // 32
-        val amountLE   = d.slice(160 + 96 + 64 + 32, 160 + 96 + 64 + 32 + 8)         // 8
-        val signature  = d.slice(160 + 96 + 64 + 64 + 32, 160 + 96 + 64 + 64 + 32 + 96)  // 96
-        val indexLE    = d.slice(160 + 96 + 64 + 64 + 160 + 32, 160 + 96 + 64 + 64 + 160 + 32 + 8) // 8
+        val pubkey = d.slice(160 + 32, 160 + 32 + 48) // 48
+        val wc = d.slice(160 + 96 + 32, 160 + 96 + 32 + 32) // 32
+        val amountLE = d.slice(160 + 96 + 64 + 32, 160 + 96 + 64 + 32 + 8) // 8
+        val signature = d.slice(160 + 96 + 64 + 64 + 32, 160 + 96 + 64 + 64 + 32 + 96) // 96
+        val indexLE = d.slice(160 + 96 + 64 + 64 + 160 + 32, 160 + 96 + 64 + 64 + 160 + 32 + 8) // 8
         buf ++= pubkey ++= wc ++= amountLE ++= signature ++= indexLE
       }
     }
@@ -451,9 +446,8 @@ class BlockExecution(
     else Some(ByteString(Array(DepositRequestType.toByte)) ++ ByteString(buf.toArray))
   }
 
-  /** EIP-7685: Concatenate per-type request bytes (each = type_byte || data) and compute
-    * sha256(sha256(deposits) ++ sha256(withdrawals) ++ sha256(consolidations)).
-    * Missing types contribute sha256("").
+  /** EIP-7685: Concatenate per-type request bytes (each = type_byte || data) and compute sha256(sha256(deposits) ++
+    * sha256(withdrawals) ++ sha256(consolidations)). Missing types contribute sha256("").
     */
   def computeRequestsHash(deposits: Option[ByteString], systemRequests: Seq[ByteString]): ByteString = {
     import java.security.MessageDigest
@@ -473,21 +467,26 @@ class BlockExecution(
 object BlockExecution {
 
   val SystemAddress: Address = Address("0xfffffffffffffffffffffffffffffffffffffffe")
+
   /** EIP-6110: Deposit contract for on-chain validator deposits */
   val DepositContractAddress: Address = Address("0x00000000219ab540356cBB839Cbe05303d7705Fa")
+
   /** EIP-7002: Withdrawal request queue contract */
   val WithdrawalQueueAddress: Address = Address("0x00000961ef480eb55e80d19ad83579a64c007002")
+
   /** EIP-7251: Consolidation request queue contract */
   val ConsolidationQueueAddress: Address = Address("0x0000bbddc7ce488642fb579f8b00f3a590007251")
 
   /** EIP-7685 request type byte prefixes (canonical ordering). */
-  val DepositRequestType: Int       = 0x00
-  val WithdrawalRequestType: Int    = 0x01
+  val DepositRequestType: Int = 0x00
+  val WithdrawalRequestType: Int = 0x01
   val ConsolidationRequestType: Int = 0x02
 
   /** EIP-6110: keccak256("DepositEvent(bytes,bytes,bytes,bytes,bytes)") topic signature. */
-  val DepositEventSignature: ByteString = ByteString(com.chipprbots.ethereum.crypto
-    .kec256("DepositEvent(bytes,bytes,bytes,bytes,bytes)".getBytes("US-ASCII")))
+  val DepositEventSignature: ByteString = ByteString(
+    com.chipprbots.ethereum.crypto
+      .kec256("DepositEvent(bytes,bytes,bytes,bytes,bytes)".getBytes("US-ASCII"))
+  )
 
   /** EIP-4788: Address of the beacon block root system contract */
   val BeaconRootContractAddress: Address = Address("0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02")

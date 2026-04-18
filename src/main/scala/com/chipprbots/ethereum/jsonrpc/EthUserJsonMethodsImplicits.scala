@@ -49,11 +49,12 @@ object EthUserJsonMethodsImplicits extends JsonMethodsImplicits {
             val keyHex = positionStr.s.stripPrefix("0x").stripPrefix("0X")
             if (keyHex.length > 64)
               Left(InvalidParams(s"""storage key too long (want at most 32 bytes): "${positionStr.s}""""))
-            else for {
-              address <- extractAddress(addressStr)
-              position <- extractQuantity(positionStr)
-              block <- extractBlockParam(blockValue)
-            } yield GetStorageAtRequest(address, position, block)
+            else
+              for {
+                address <- extractAddress(addressStr)
+                position <- extractQuantity(positionStr)
+                block <- extractBlockParam(blockValue)
+              } yield GetStorageAtRequest(address, position, block)
           case _ => Left(InvalidParams())
         }
 

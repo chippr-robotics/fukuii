@@ -32,7 +32,6 @@ import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
-
 /** NetworkPeerManager actor keeps peer state up to date and exposes that information to other components. It subscribes
   * to peer lifecycle events (handshake, disconnection, messages) and routes protocol traffic to the appropriate
   * handlers.
@@ -203,7 +202,7 @@ class NetworkPeerManagerActor(
     * @return
     *   new updated peer info
     */
-  private def handleSentMessage(_message: Message, initialPeerWithInfo: PeerWithInfo): PeerInfo =
+  private def handleSentMessage(@annotation.unused _message: Message, initialPeerWithInfo: PeerWithInfo): PeerInfo =
     initialPeerWithInfo.peerInfo
 
   /** Processes the message and the old peer info and returns the peer info

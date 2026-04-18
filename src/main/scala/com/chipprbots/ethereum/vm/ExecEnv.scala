@@ -69,5 +69,5 @@ case class ExecEnv(
     precompileRelocations: Map[Address, Address] = Map.empty,
     blobVersionedHashes: Seq[ByteString] = Seq.empty,
     traceTransfers: Boolean = false,
-    tracer: Option[com.chipprbots.ethereum.vm.tracing.Tracer] = None
+    tracer: Option[ExecutionTracer] = None
 )

@@ -16,10 +16,11 @@ import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 /** ETH/69 status exchange handler (EIP-7642).
   *
   * Key differences from ETH64-68:
-  * - Status message removes totalDifficulty field
-  * - Status message reorders fields: [version, networkId, genesis, forkId, earliestBlock, latestBlock, latestBlockHash]
-  * - ForkId validation is still performed
-  * - RemoteStatus is constructed without TD (uses latestBlock number instead)
+  *   - Status message removes totalDifficulty field
+  *   - Status message reorders fields: [version, networkId, genesis, forkId, earliestBlock, latestBlock,
+  *     latestBlockHash]
+  *   - ForkId validation is still performed
+  *   - RemoteStatus is constructed without TD (uses latestBlock number instead)
   */
 case class EthNodeStatus69ExchangeState(
     handshakerConfiguration: NetworkHandshakerConfiguration,

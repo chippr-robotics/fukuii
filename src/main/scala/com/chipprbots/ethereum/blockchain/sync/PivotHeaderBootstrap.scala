@@ -29,7 +29,7 @@ final class PivotHeaderBootstrap(
     peersClient: ActorRef,
     blockchainWriter: BlockchainWriter,
     targetBlock: BigInt,
-    syncConfig: SyncConfig,
+    @annotation.unused _syncConfig: SyncConfig,
     scheduler: Scheduler,
     maxAttempts: Int,
     initialRetryDelay: FiniteDuration,

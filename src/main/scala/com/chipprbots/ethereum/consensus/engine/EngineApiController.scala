@@ -19,7 +19,6 @@ import com.chipprbots.ethereum.domain.Withdrawal
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
 import com.chipprbots.ethereum.jsonrpc.JsonRpcResponse
-import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Logger
 
 /** Handles Engine API JSON-RPC methods (engine_* namespace). This controller processes raw JSON requests and delegates
@@ -34,10 +33,10 @@ class EngineApiController(
 
   def handleRequest(request: JsonRpcRequest): IO[JsonRpcResponse] =
     request.method match {
-      case "engine_newPayloadV1" => handleNewPayload(request, version = 1)
-      case "engine_newPayloadV2" => handleNewPayload(request, version = 2)
-      case "engine_newPayloadV3" => handleNewPayload(request, version = 3)
-      case "engine_newPayloadV4" => handleNewPayload(request, version = 4)
+      case "engine_newPayloadV1"        => handleNewPayload(request, version = 1)
+      case "engine_newPayloadV2"        => handleNewPayload(request, version = 2)
+      case "engine_newPayloadV3"        => handleNewPayload(request, version = 3)
+      case "engine_newPayloadV4"        => handleNewPayload(request, version = 4)
       case "engine_forkchoiceUpdatedV1" => handleForkchoiceUpdated(request, version = 1)
       case "engine_forkchoiceUpdatedV2" => handleForkchoiceUpdated(request, version = 2)
       case "engine_forkchoiceUpdatedV3" => handleForkchoiceUpdated(request, version = 3)
@@ -60,13 +59,15 @@ class EngineApiController(
       case method if method.startsWith("eth_") || method.startsWith("net_") || method.startsWith("web3_") =>
         jsonRpcControllerOpt match {
           case Some(ctrl) => ctrl.handleRequest(request)
-          case None =>
+          case None       =>
             // Fallback stubs when JSON-RPC controller is not wired
             method match {
               case "eth_syncing" => IO.pure(JsonRpcResponse("2.0", Some(JBool(false)), None, reqId(request)))
               case "eth_blockNumber" =>
                 val blockNum = engineApiService.getLatestBlockNumber
-                IO.pure(JsonRpcResponse("2.0", Some(JString(s"0x${blockNum.toLong.toHexString}")), None, reqId(request)))
+                IO.pure(
+                  JsonRpcResponse("2.0", Some(JString(s"0x${blockNum.toLong.toHexString}")), None, reqId(request))
+                )
               case _ => IO.pure(JsonRpcResponse("2.0", Some(JNull), None, reqId(request)))
             }
         }
@@ -90,16 +91,26 @@ class EngineApiController(
           case Left(ex) =>
             val msg = Option(ex.getMessage).getOrElse(ex.getClass.getSimpleName)
             System.err.println(s"[ENGINE-API] newPayload v$version decode failure: $msg")
-            return IO.pure(JsonRpcResponse("2.0",
-              Some(encodePayloadStatus(PayloadStatusV1(PayloadStatus.Invalid, latestValidHash = None,
-                validationError = Some(s"malformed payload: $msg")))),
-              None, reqId(request)))
+            return IO.pure(
+              JsonRpcResponse(
+                "2.0",
+                Some(
+                  encodePayloadStatus(
+                    PayloadStatusV1(
+                      PayloadStatus.Invalid,
+                      latestValidHash = None,
+                      validationError = Some(s"malformed payload: $msg")
+                    )
+                  )
+                ),
+                None,
+                reqId(request)
+              )
+            )
           case Right(_) => ()
         }
         var payload = payloadOpt.toOption.get
         val hasWithdrawals = payload.withdrawals.isDefined
-        val hasBlobFields = payload.blobGasUsed.isDefined || payload.excessBlobGas.isDefined
-        val timestamp = payload.timestamp
 
         // Version enforcement: only reject truly incompatible combinations.
         // V1/V2 accept any payload fields (backward compatible).
@@ -111,14 +122,12 @@ class EngineApiController(
         }
 
         if (versionError.isDefined) {
-          IO.pure(JsonRpcResponse("2.0", None,
-            Some(JsonRpcError(UnsupportedFork, versionError.get, None)), reqId(request)))
+          IO.pure(
+            JsonRpcResponse("2.0", None, Some(JsonRpcError(UnsupportedFork, versionError.get, None)), reqId(request))
+          )
         } else {
           // V3+: second param is versionedHashes, third is parentBeaconBlockRoot
           if (version >= 3) {
-            val versionedHashes = params.lift(1).collect { case JArray(items) =>
-              items.collect { case JString(hex) => hexToByteString(hex) }
-            }
             val parentBeaconBlockRoot = params.lift(2).collect { case JString(hex) => hexToByteString(hex) }
             payload = payload.copy(parentBeaconBlockRoot = parentBeaconBlockRoot)
           }
@@ -157,8 +166,14 @@ class EngineApiController(
         decoded match {
           case Left(ex) =>
             val msg = Option(ex.getMessage).getOrElse(ex.getClass.getSimpleName)
-            return IO.pure(JsonRpcResponse("2.0", None,
-              Some(JsonRpcError(-38003, s"malformed forkchoice params: $msg", None)), reqId(request)))
+            return IO.pure(
+              JsonRpcResponse(
+                "2.0",
+                None,
+                Some(JsonRpcError(-38003, s"malformed forkchoice params: $msg", None)),
+                reqId(request)
+              )
+            )
           case Right(_) => ()
         }
         val (fcs, payloadAttrs) = decoded.toOption.get
@@ -171,7 +186,8 @@ class EngineApiController(
         val hasBeaconRoot = payloadAttrs.exists(_.parentBeaconBlockRoot.isDefined)
         val attrTimestamp = payloadAttrs.map(_.timestamp)
         val isCancunTimestamp = attrTimestamp.exists(ts =>
-          com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig.isCancunTimestamp(ts))
+          com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig.isCancunTimestamp(ts)
+        )
 
         val versionError: Option[String] = (version, payloadAttrs) match {
           case (3, Some(_)) if !isCancunTimestamp && hasBeaconRoot =>
@@ -182,16 +198,21 @@ class EngineApiController(
         }
 
         if (versionError.isDefined) {
-          IO.pure(JsonRpcResponse("2.0", None,
-            Some(JsonRpcError(UnsupportedFork, versionError.get, None)), reqId(request)))
+          IO.pure(
+            JsonRpcResponse("2.0", None, Some(JsonRpcError(UnsupportedFork, versionError.get, None)), reqId(request))
+          )
         } else {
           engineApiService.forkchoiceUpdated(fcs, payloadAttrs).map {
             case Right(response) =>
               JsonRpcResponse("2.0", Some(encodeForkchoiceUpdatedResponse(response)), None, reqId(request))
             case Left(errorMsg) if errorMsg.startsWith("ATTR:") =>
               // Invalid payload attributes → -38003 per Engine API spec
-              JsonRpcResponse("2.0", None,
-                Some(JsonRpcError(-38003, errorMsg.stripPrefix("ATTR:"), None)), reqId(request))
+              JsonRpcResponse(
+                "2.0",
+                None,
+                Some(JsonRpcError(-38003, errorMsg.stripPrefix("ATTR:"), None)),
+                reqId(request)
+              )
             case Left(errorMsg) =>
               // Invalid forkchoice state (e.g. unknown safe/finalized hash) → -38002
               JsonRpcResponse("2.0", None, Some(JsonRpcError(-38002, errorMsg, None)), reqId(request))
@@ -215,10 +236,10 @@ class EngineApiController(
     }
   }
 
-  private def handleGetPayload(request: JsonRpcRequest, version: Int = 1): IO[JsonRpcResponse] = {
+  private def handleGetPayload(request: JsonRpcRequest, @annotation.unused version: Int = 1): IO[JsonRpcResponse] = {
     val payloadIdHex = request.params match {
       case Some(JArray(List(JString(id)))) => id
-      case _ => ""
+      case _                               => ""
     }
     val payloadId = hexToByteString(payloadIdHex)
     engineApiService.getPayload(payloadId).map {
@@ -266,17 +287,17 @@ class EngineApiController(
     }
   }
 
-  /** blockValue = sum of (gasUsed_i * (effectiveGasPrice_i - baseFeePerGas)) across txs.
-    * Represents total miner priority-fee revenue for the block.
-    * Without receipts we approximate using per-tx gas limit — tests typically check envelope presence, not exact value.
+  /** blockValue = sum of (gasUsed_i * (effectiveGasPrice_i - baseFeePerGas)) across txs. Represents total miner
+    * priority-fee revenue for the block. Without receipts we approximate using per-tx gas limit — tests typically check
+    * envelope presence, not exact value.
     */
   private def computeBlockValue(block: Block): String = {
     val baseFee = block.header.extraFields match {
-      case BlockHeader.HeaderExtraFields.HefPostOlympia(bf) => bf
-      case BlockHeader.HeaderExtraFields.HefPostShanghai(bf, _) => bf
-      case BlockHeader.HeaderExtraFields.HefPostCancun(bf, _, _, _, _) => bf
+      case BlockHeader.HeaderExtraFields.HefPostOlympia(bf)               => bf
+      case BlockHeader.HeaderExtraFields.HefPostShanghai(bf, _)           => bf
+      case BlockHeader.HeaderExtraFields.HefPostCancun(bf, _, _, _, _)    => bf
       case BlockHeader.HeaderExtraFields.HefPostPrague(bf, _, _, _, _, _) => bf
-      case _ => BigInt(0)
+      case _                                                              => BigInt(0)
     }
     s"0x${BigInt(0).toString(16)}"
     // No receipts available here; return 0x0 which satisfies the envelope schema.
@@ -289,8 +310,9 @@ class EngineApiController(
     def hexQ(n: BigInt): String = s"0x${n.toString(16)}"
 
     val txs = block.body.transactionList.map { stx =>
-      JString("0x" + org.bouncycastle.util.encoders.Hex.toHexString(
-        SignedTransaction.byteArraySerializable.toBytes(stx)))
+      JString(
+        "0x" + org.bouncycastle.util.encoders.Hex.toHexString(SignedTransaction.byteArraySerializable.toBytes(stx))
+      )
     }
     val withdrawals = block.body.withdrawals.map { wds =>
       JArray(wds.map { w =>
@@ -303,11 +325,11 @@ class EngineApiController(
       }.toList)
     }
     val (baseFee, blobGasUsed, excessBlobGas) = header.extraFields match {
-      case BlockHeader.HeaderExtraFields.HefPostOlympia(bf) => (Some(bf), None, None)
-      case BlockHeader.HeaderExtraFields.HefPostShanghai(bf, _) => (Some(bf), None, None)
-      case BlockHeader.HeaderExtraFields.HefPostCancun(bf, _, bgu, ebg, _) => (Some(bf), Some(bgu), Some(ebg))
+      case BlockHeader.HeaderExtraFields.HefPostOlympia(bf)                   => (Some(bf), None, None)
+      case BlockHeader.HeaderExtraFields.HefPostShanghai(bf, _)               => (Some(bf), None, None)
+      case BlockHeader.HeaderExtraFields.HefPostCancun(bf, _, bgu, ebg, _)    => (Some(bf), Some(bgu), Some(ebg))
       case BlockHeader.HeaderExtraFields.HefPostPrague(bf, _, bgu, ebg, _, _) => (Some(bf), Some(bgu), Some(ebg))
-      case _ => (None, None, None)
+      case _                                                                  => (None, None, None)
     }
     val baseFields = List(
       "parentHash" -> JString(hex(header.parentHash)),

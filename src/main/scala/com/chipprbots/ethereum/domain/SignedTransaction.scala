@@ -576,9 +576,9 @@ case class SignedTransactionWithSender(tx: SignedTransaction, senderAddress: Add
 
 object SignedTransactionWithSender {
 
-  /** Validates and recovers senders for a batch of signed transactions.
-    * Performs stateless validation (chain ID, intrinsic gas) before expensive ECDSA recovery.
-    * Uses parallel ECDSA recovery across all CPU cores for large batches (>= 16 txs).
+  /** Validates and recovers senders for a batch of signed transactions. Performs stateless validation (chain ID,
+    * intrinsic gas) before expensive ECDSA recovery. Uses parallel ECDSA recovery across all CPU cores for large
+    * batches (>= 16 txs).
     */
   def getSignedTransactions(
       stxs: Seq[SignedTransaction]
@@ -603,8 +603,8 @@ object SignedTransactionWithSender {
           case sct: SetCodeTransaction => sct.authorizationList.size
           case _                       => 0
         }
-        val intrinsicGas = config.calcTransactionIntrinsicGas(
-          tx.payload, tx.isContractInit, Transaction.accessList(tx), authListSize)
+        val intrinsicGas =
+          config.calcTransactionIntrinsicGas(tx.payload, tx.isContractInit, Transaction.accessList(tx), authListSize)
         tx.gasLimit >= intrinsicGas
       }
     }
@@ -620,9 +620,8 @@ object SignedTransactionWithSender {
     }
   }
 
-  /** Parallel ECDSA sender recovery using cats-effect IO.parTraverseN.
-    * Distributes signature validation across all available CPU cores.
-    * For 2000 txs on 8 cores: ~3s vs ~24s sequential.
+  /** Parallel ECDSA sender recovery using cats-effect IO.parTraverseN. Distributes signature validation across all
+    * available CPU cores. For 2000 txs on 8 cores: ~3s vs ~24s sequential.
     */
   private def getSignedTransactionsParallel(
       stxs: Seq[SignedTransaction]

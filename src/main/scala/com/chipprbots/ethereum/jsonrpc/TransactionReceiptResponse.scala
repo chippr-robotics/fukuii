@@ -102,18 +102,18 @@ object TransactionReceiptResponse {
     }
 
     val txType: BigInt = stx.tx match {
-      case _: LegacyTransaction          => BigInt(0)
-      case _: TransactionWithAccessList   => BigInt(1)
-      case _: TransactionWithDynamicFee   => BigInt(2)
-      case _: BlobTransaction             => BigInt(3)
-      case _: SetCodeTransaction          => BigInt(4)
+      case _: LegacyTransaction         => BigInt(0)
+      case _: TransactionWithAccessList => BigInt(1)
+      case _: TransactionWithDynamicFee => BigInt(2)
+      case _: BlobTransaction           => BigInt(3)
+      case _: SetCodeTransaction        => BigInt(4)
     }
 
     val effectiveGasPrice = Transaction.effectiveGasPrice(stx.tx, blockHeader.baseFee)
 
     val blobGasUsed: Option[BigInt] = stx.tx match {
       case blob: BlobTransaction => Some(BigInt(blob.blobVersionedHashes.size) * BigInt(131072))
-      case _ => None
+      case _                     => None
     }
 
     new TransactionReceiptResponse(

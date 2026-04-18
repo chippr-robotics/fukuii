@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.consensus.mining
 
 import org.apache.pekko.util.ByteString
 
+import scala.concurrent.duration._
+
 import com.chipprbots.ethereum.Timeouts
 import com.chipprbots.ethereum.consensus.pow.EthashConfig
 import com.chipprbots.ethereum.domain.Address
@@ -26,7 +28,10 @@ object MiningConfigs {
     headerExtraData = ByteString.empty,
     blockCacheSize = blockCacheSize,
     miningEnabled = false,
-    gasLimitTarget = BigInt(8_000_000)
+    gasLimitTarget = BigInt(8_000_000),
+    notifyUrls = Seq.empty,
+    staleThreshold = 7,
+    recommitInterval = 0.seconds
   )
 
   final val fullMiningConfig: FullMiningConfig[EthashConfig] = FullMiningConfig(miningConfig, ethashConfig)

@@ -96,8 +96,9 @@ class EthFilterService(
 
     // Validate: blockHash cannot be combined with fromBlock/toBlock
     if (blockHash.isDefined && (fromBlock.isDefined || toBlock.isDefined)) {
-      return cats.effect.IO.pure(Left(JsonRpcError.InvalidParams(
-        "cannot specify both blockHash and fromBlock/toBlock")))
+      return cats.effect.IO.pure(
+        Left(JsonRpcError.InvalidParams("cannot specify both blockHash and fromBlock/toBlock"))
+      )
     }
 
     // Resolve block numbers for range validation
@@ -107,20 +108,17 @@ class EthFilterService(
 
     // Validate: block range must not exceed current head
     if (fromNum > bestBlockNum || toNum > bestBlockNum) {
-      return cats.effect.IO.pure(Left(JsonRpcError.InvalidParams(
-        "block range extends beyond current head block")))
+      return cats.effect.IO.pure(Left(JsonRpcError.InvalidParams("block range extends beyond current head block")))
     }
 
     // Validate: fromBlock must be <= toBlock
     if (fromNum > toNum) {
-      return cats.effect.IO.pure(Left(JsonRpcError.InvalidParams(
-        "invalid block range params")))
+      return cats.effect.IO.pure(Left(JsonRpcError.InvalidParams("invalid block range params")))
     }
 
     // If blockHash specified, resolve to block number and use as from=to
     val (resolvedFrom, resolvedTo) = if (blockHash.isDefined) {
-      val blockNum = blockHash.flatMap(h =>
-        blockchainReader.getBlockByHash(h).map(_.header.number))
+      val blockNum = blockHash.flatMap(h => blockchainReader.getBlockByHash(h).map(_.header.number))
       blockNum match {
         case Some(n) =>
           val bp = Some(BlockParam.WithNumber(n))

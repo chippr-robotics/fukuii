@@ -3,7 +3,6 @@ package com.chipprbots.ethereum.runtime
 import scala.jdk.CollectionConverters._
 import scala.util.Try
 
-import com.typesafe.config.ConfigFactory
 import com.typesafe.config.{Config => TypesafeConfig}
 
 import com.chipprbots.ethereum.utils.InstanceConfig

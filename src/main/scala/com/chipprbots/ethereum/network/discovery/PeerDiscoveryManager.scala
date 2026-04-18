@@ -32,7 +32,7 @@ class PeerDiscoveryManager(
     knownNodesStorage: KnownNodesStorage,
     // The manager only starts the DiscoveryService if discovery is enabled.
     discoveryServiceResource: Resource[IO, v4.DiscoveryService],
-    randomNodeBufferSize: Int,
+    @annotation.unused randomNodeBufferSize: Int,
     runtime: IORuntime
 ) extends Actor
     with ActorLogging {

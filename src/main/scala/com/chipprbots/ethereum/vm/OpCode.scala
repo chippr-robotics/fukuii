@@ -419,9 +419,8 @@ case object SAR extends OpCode(0x1d, 2, 1, _.G_verylow) with ConstGas {
   }
 }
 
-/** EIP-7939: Count Leading Zero bits.
-  * Pops one 256-bit value and pushes the count of leading zero bits (0..256).
-  * For the zero input, result is 256.
+/** EIP-7939: Count Leading Zero bits. Pops one 256-bit value and pushes the count of leading zero bits (0..256). For
+  * the zero input, result is 256.
   */
 case object CLZ extends UnaryOp(0x1e, _.G_low)(v => UInt256(256 - v.toBigInt.bitLength)) with ConstGas
 
@@ -632,13 +631,14 @@ case object TIMESTAMP extends ConstOp(0x42)(s => UInt256(s.env.blockHeader.unixT
 
 case object NUMBER extends ConstOp(0x43)(s => UInt256(s.env.blockHeader.number))
 
-case object DIFFICULTY extends ConstOp(0x44)(s =>
-  // EIP-4399: post-merge, opcode 0x44 returns prevRandao (stored in mixHash) instead of difficulty
-  if (s.env.blockHeader.isPostMerge)
-    UInt256(s.env.blockHeader.mixHash)
-  else
-    UInt256(s.env.blockHeader.difficulty)
-)
+case object DIFFICULTY
+    extends ConstOp(0x44)(s =>
+      // EIP-4399: post-merge, opcode 0x44 returns prevRandao (stored in mixHash) instead of difficulty
+      if (s.env.blockHeader.isPostMerge)
+        UInt256(s.env.blockHeader.mixHash)
+      else
+        UInt256(s.env.blockHeader.difficulty)
+    )
 
 case object GASLIMIT extends ConstOp(0x45)(s => UInt256(s.env.blockHeader.gasLimit))
 
@@ -1206,7 +1206,9 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
 
         // Emit synthetic Transfer log for traceTransfers (ETH value transfers)
         val transferLogs = if (state.env.traceTransfers && endowment > UInt256.Zero && doTransfer) {
-          val transferTopic = ByteString(com.chipprbots.ethereum.crypto.kec256("Transfer(address,address,uint256)".getBytes))
+          val transferTopic = ByteString(
+            com.chipprbots.ethereum.crypto.kec256("Transfer(address,address,uint256)".getBytes)
+          )
           val ethAddr = com.chipprbots.ethereum.domain.Address("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
           val fromPadded = ByteString(new Array[Byte](12) ++ caller.bytes.padTo(20, 0.toByte).takeRight(20))
           val toPadded = ByteString(new Array[Byte](12) ++ toAddr.bytes.padTo(20, 0.toByte).takeRight(20))
@@ -1414,15 +1416,18 @@ case object SELFDESTRUCT extends OpCode(0xff, 1, 0, _.G_selfdestruct) {
     val shouldDelete = !state.config.eip6780Enabled || createdInThisTx
 
     // Emit synthetic Transfer log for traceTransfers (SELFDESTRUCT value transfers)
-    val transferLogs = if (state.env.traceTransfers && state.ownBalance > UInt256.Zero && state.ownAddress != refundAddr) {
-      val transferTopic = ByteString(com.chipprbots.ethereum.crypto.kec256("Transfer(address,address,uint256)".getBytes))
-      val ethAddr = com.chipprbots.ethereum.domain.Address("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
-      val fromPadded = ByteString(new Array[Byte](12) ++ state.ownAddress.bytes.toArray)
-      val toPadded = ByteString(new Array[Byte](12) ++ refundAddr.bytes.toArray)
-      val valueBytes = state.ownBalance.bytes
-      val data = ByteString(new Array[Byte](32 - valueBytes.length) ++ valueBytes.toArray)
-      Seq(com.chipprbots.ethereum.domain.TxLogEntry(ethAddr, Seq(transferTopic, fromPadded, toPadded), data))
-    } else Seq.empty
+    val transferLogs =
+      if (state.env.traceTransfers && state.ownBalance > UInt256.Zero && state.ownAddress != refundAddr) {
+        val transferTopic = ByteString(
+          com.chipprbots.ethereum.crypto.kec256("Transfer(address,address,uint256)".getBytes)
+        )
+        val ethAddr = com.chipprbots.ethereum.domain.Address("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+        val fromPadded = ByteString(new Array[Byte](12) ++ state.ownAddress.bytes.toArray)
+        val toPadded = ByteString(new Array[Byte](12) ++ refundAddr.bytes.toArray)
+        val valueBytes = state.ownBalance.bytes
+        val data = ByteString(new Array[Byte](32 - valueBytes.length) ++ valueBytes.toArray)
+        Seq(com.chipprbots.ethereum.domain.TxLogEntry(ethAddr, Seq(transferTopic, fromPadded, toPadded), data))
+      } else Seq.empty
 
     val state1 = state
       .withWorld(world)
@@ -1485,8 +1490,8 @@ case object BASEFEE extends OpCode(0x48, 0, 1, _.G_base) with ConstGas {
   }
 }
 
-/** EIP-4844: BLOBHASH opcode — returns the versioned hash at the given index from the
-  * current transaction's blob_versioned_hashes, or 0 if index is out of bounds.
+/** EIP-4844: BLOBHASH opcode — returns the versioned hash at the given index from the current transaction's
+  * blob_versioned_hashes, or 0 if index is out of bounds.
   */
 case object BLOBHASH extends OpCode(0x49, 1, 1, _.G_verylow) with ConstGas {
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] = {
@@ -1505,10 +1510,12 @@ case object BLOBHASH extends OpCode(0x49, 1, 1, _.G_verylow) with ConstGas {
 case object BLOBBASEFEE extends OpCode(0x4a, 0, 1, _.G_base) with ConstGas {
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] = {
     // Blob base fee from the block header's excessBlobGas
-    val blobBaseFee = state.env.blockHeader.excessBlobGas.map { excess =>
-      // Simplified: for now return 1 (minimum blob base fee)
-      BigInt(1)
-    }.getOrElse(BigInt(0))
+    val blobBaseFee = state.env.blockHeader.excessBlobGas
+      .map { excess =>
+        // Simplified: for now return 1 (minimum blob base fee)
+        BigInt(1)
+      }
+      .getOrElse(BigInt(0))
     val stack1 = state.stack.push(UInt256(blobBaseFee))
     state.withStack(stack1).step()
   }

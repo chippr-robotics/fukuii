@@ -94,7 +94,7 @@ object Capability {
     capabilities
       .groupBy {
         case ETH63 | ETH64 | ETH65 | ETH66 | ETH67 | ETH68 | ETH69 => "ETH"
-        case SNAP1                                         => "SNAP"
+        case SNAP1                                                 => "SNAP"
       }
       .toList
       .sortBy {
@@ -113,7 +113,7 @@ object Capability {
     */
   def usesRequestId(capability: Capability): Boolean = capability match {
     case ETH66 | ETH67 | ETH68 | ETH69 | SNAP1 => true
-    case _                             => false
+    case _                                     => false
   }
 
   implicit class CapabilityEnc(val msg: Capability) extends RLPSerializable {

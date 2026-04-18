@@ -34,6 +34,7 @@ import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.ommers.OmmersPool.AddOmmers
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.AddUncheckedTransactions
+import com.chipprbots.ethereum.jsonrpc.NewBlockImported
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.RemoveTransactions
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config.SyncConfig
@@ -600,10 +601,12 @@ class BlockImporter(
             val (blocks, weights) = importedBlocksData.map(data => (data.block, data.weight)).unzip
             broadcastBlocks(blocks, weights)
             updateTxPool(importedBlocksData.map(_.block), Seq.empty)
+            blocks.foreach(b => context.system.eventStream.publish(NewBlockImported(b)))
             supervisor ! ProgressProtocol.ImportedBlock(block.number, internally)
           case ChainReorganised(oldBranch, newBranch, weights) =>
             updateTxPool(newBranch, oldBranch)
             broadcastBlocks(newBranch, weights)
+            newBranch.foreach(b => context.system.eventStream.publish(NewBlockImported(b)))
             newBranch.lastOption.foreach(block => supervisor ! ProgressProtocol.ImportedBlock(block.number, internally))
           case BlockImportFailedDueToMissingNode(missingNodeException) if syncConfig.redownloadMissingStateNodes =>
             // state node re-download will be handled when downloading headers

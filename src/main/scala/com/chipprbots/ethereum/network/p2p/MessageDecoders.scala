@@ -483,10 +483,8 @@ object ETH68MessageDecoder extends MessageDecoder {
     }
 }
 
-/** ETH/69 message decoder (EIP-7642).
-  * Uses new Status message format (no TD, has block range).
-  * BlockRangeUpdate (0x11) is a new notification message.
-  * All other messages are the same as ETH/68.
+/** ETH/69 message decoder (EIP-7642). Uses new Status message format (no TD, has block range). BlockRangeUpdate (0x11)
+  * is a new notification message. All other messages are the same as ETH/68.
   */
 object ETH69MessageDecoder extends MessageDecoder {
   import com.chipprbots.ethereum.network.p2p.messages.ETH69.Status._

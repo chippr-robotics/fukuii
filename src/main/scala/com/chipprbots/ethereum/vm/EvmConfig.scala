@@ -34,27 +34,27 @@ object EvmConfig {
     // Apply timestamp-based fork upgrades for ETH chains
     if (blockchainConfig.isShanghaiTimestamp(timestamp)) {
       config = config.copy(
-        opCodeList = SpiralOpCodes,  // Adds PUSH0 (EIP-3855)
-        eip3651Enabled = true,       // Warm COINBASE
-        eip3860Enabled = true        // Initcode metering
+        opCodeList = SpiralOpCodes, // Adds PUSH0 (EIP-3855)
+        eip3651Enabled = true, // Warm COINBASE
+        eip3860Enabled = true // Initcode metering
       )
     }
     if (blockchainConfig.isCancunTimestamp(timestamp)) {
       config = config.copy(
-        opCodeList = OlympiaOpCodes,  // Adds TSTORE/TLOAD/MCOPY/BLOBHASH/BLOBBASEFEE
+        opCodeList = OlympiaOpCodes, // Adds TSTORE/TLOAD/MCOPY/BLOBHASH/BLOBBASEFEE
         feeSchedule = new FeeSchedule.OlympiaFeeSchedule,
-        eip6780Enabled = true         // SELFDESTRUCT restriction
+        eip6780Enabled = true // SELFDESTRUCT restriction
       )
     }
     if (blockchainConfig.isPragueTimestamp(timestamp)) {
       config = config.copy(
-        feeSchedule = new FeeSchedule.PragueFeeSchedule  // EIP-7623: increased calldata costs
+        feeSchedule = new FeeSchedule.PragueFeeSchedule // EIP-7623: increased calldata costs
       )
     }
     if (blockchainConfig.isOsakaTimestamp(timestamp)) {
       config = config.copy(
         feeSchedule = new FeeSchedule.OsakaFeeSchedule,
-        opCodeList = OsakaOpCodes   // EIP-7939: CLZ opcode
+        opCodeList = OsakaOpCodes // EIP-7939: CLZ opcode
       )
     }
     config
@@ -204,8 +204,8 @@ object EvmConfig {
       eip6049DeprecationEnabled = true
     )
 
-  /** London-only config for ETH chains. Enables EIP-1559/3529/3541 without Shanghai+ EIPs.
-    * Used when Olympia block number differs from Spiral/Mystique (i.e., ETH fork schedule).
+  /** London-only config for ETH chains. Enables EIP-1559/3529/3541 without Shanghai+ EIPs. Used when Olympia block
+    * number differs from Spiral/Mystique (i.e., ETH fork schedule).
     */
   val LondonConfigBuilder: EvmConfigBuilder = config =>
     MagnetoConfigBuilder(config).copy(
@@ -446,14 +446,14 @@ object FeeSchedule {
 
   class OlympiaFeeSchedule extends MystiqueFeeSchedule
 
-  /** Prague fee schedule — EIP-7623 does NOT modify G_txdatazero/G_txdatanonzero (still 4/16).
-    * Instead it adds a calldata floor via `calcFloorDataGas` applied by BlockPreparator as
-    * `max(executionGasBase, 21000 + tokens * 10)`. See BlockPreparator.calcFloorDataGas.
+  /** Prague fee schedule — EIP-7623 does NOT modify G_txdatazero/G_txdatanonzero (still 4/16). Instead it adds a
+    * calldata floor via `calcFloorDataGas` applied by BlockPreparator as `max(executionGasBase, 21000 + tokens * 10)`.
+    * See BlockPreparator.calcFloorDataGas.
     */
   class PragueFeeSchedule extends OlympiaFeeSchedule
 
-  /** Osaka fee schedule — same as Prague. MODEXP cost doubling (EIP-7883) and input
-    * bounds (EIP-7823) are enforced inside the MODEXP precompile itself, not the fee schedule.
+  /** Osaka fee schedule — same as Prague. MODEXP cost doubling (EIP-7883) and input bounds (EIP-7823) are enforced
+    * inside the MODEXP precompile itself, not the fee schedule.
     */
   class OsakaFeeSchedule extends PragueFeeSchedule
 }

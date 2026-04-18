@@ -128,7 +128,8 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
     pendingTransactionsManager.ref,
     getTransactionFromPoolTimeout,
     this,
-    coinbaseProvider
+    coinbaseProvider,
+    system
   )
 
   val ethBlocksService = new EthBlocksService(blockchain, blockchainReader, mining, blockQueue)
@@ -186,6 +187,10 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
       mcpService,
       ProofServiceDummy,
       null: EthSimulateService,
+      null: AdminService,
+      null: TxPoolService,
+      null: DebugTracingService,
+      null: TraceService,
       config
     )
 

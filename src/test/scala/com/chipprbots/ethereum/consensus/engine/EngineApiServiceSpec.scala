@@ -32,7 +32,7 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers {
     "reject block with modified stateRoot" taggedAs UnitTest in {
       val validators = MockValidatorsAlwaysSucceed
       val correctStateRoot = ByteString(Array.fill(32)(0x11.toByte))
-      val modifiedStateRoot = ByteString(Array.fill(32)(0xAA.toByte))
+      val modifiedStateRoot = ByteString(Array.fill(32)(0xaa.toByte))
       val header = BlockHeader(
         parentHash = ByteString(new Array[Byte](32)),
         ommersHash = ByteString(new Array[Byte](32)),
@@ -320,7 +320,7 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers {
     "return INVALID_BLOCK_HASH when blockHash doesn't match header" taggedAs UnitTest in new EngineApiTestSetup {
       val (validBlock, _) = buildValidBlock1()
       val payload = blockToPayload(validBlock)
-      val badPayload = payload.copy(blockHash = ByteString(Array.fill(32)(0xFF.toByte)))
+      val badPayload = payload.copy(blockHash = ByteString(Array.fill(32)(0xff.toByte)))
 
       val result = engineApi.newPayload(badPayload).unsafeRunSync()
 

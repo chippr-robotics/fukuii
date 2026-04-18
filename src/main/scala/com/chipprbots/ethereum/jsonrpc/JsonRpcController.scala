@@ -26,6 +26,8 @@ import com.chipprbots.ethereum.jsonrpc.ProofService.GetProofResponse
 import com.chipprbots.ethereum.jsonrpc.EthSimulateService._
 import com.chipprbots.ethereum.jsonrpc.TestService._
 import com.chipprbots.ethereum.jsonrpc.Web3Service._
+import com.chipprbots.ethereum.jsonrpc.AdminService._
+import com.chipprbots.ethereum.jsonrpc.TxPoolService._
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
 import com.chipprbots.ethereum.nodebuilder.ApisBuilder
@@ -48,11 +50,17 @@ case class JsonRpcController(
     mcpService: McpService,
     proofService: ProofService,
     ethSimulateService: EthSimulateService,
+    adminService: AdminService,
+    txPoolService: TxPoolService,
+    debugTracingService: DebugTracingService,
+    traceService: TraceService,
     override val config: JsonRpcConfig
 ) extends ApisBuilder
     with Logger
     with JsonRpcBaseController {
 
+  import AdminJsonMethodsImplicits._
+  import TxPoolJsonMethodsImplicits._
   import DebugJsonMethodsImplicits._
   import EthJsonMethodsImplicits._
   import EthBlocksJsonMethodsImplicits._
@@ -76,10 +84,13 @@ case class JsonRpcController(
     Apis.Fukuii -> handleFukuiiRequest,
     Apis.Mcp -> handleMcpRequest,
     Apis.Rpc -> handleRpcRequest,
-    Apis.Debug -> handleDebugRequest,
+    Apis.Debug -> (handleDebugRequest.orElse(handleDebugTracingRequest)),
     Apis.Test -> handleTestRequest,
     Apis.Iele -> handleIeleRequest,
-    Apis.Qa -> handleQARequest
+    Apis.Qa -> handleQARequest,
+    Apis.Admin -> handleAdminRequest,
+    Apis.TxPool -> handleTxPoolRequest,
+    Apis.Trace -> handleTraceRequest
   )
 
   override def enabledApis: Seq[String] = config.apis :+ Apis.Rpc // RPC enabled by default
@@ -268,7 +279,9 @@ case class JsonRpcController(
       handle[CreateAccessListRequest, CreateAccessListResponse](ethInfoService.createAccessList, req)
     case req @ JsonRpcRequest(_, "eth_simulateV1", _, _) =>
       handle[EthSimulateRequest, EthSimulateResponse](ethSimulateService.ethSimulate, req)(
-        EthSimulateJsonMethodsImplicits.eth_simulateV1, EthSimulateJsonMethodsImplicits.eth_simulateV1)
+        EthSimulateJsonMethodsImplicits.eth_simulateV1,
+        EthSimulateJsonMethodsImplicits.eth_simulateV1
+      )
   }
 
   private def handleDebugRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
@@ -282,19 +295,103 @@ case class JsonRpcController(
       handle[GetRawReceiptsRequest, GetRawReceiptsResponse](ethBlocksService.getRawReceipts, req)
     case req @ JsonRpcRequest(_, "debug_getRawTransaction", _, _) =>
       handle[GetTransactionByHashRequest, RawTransactionResponse](ethTxService.getRawTransactionByHash, req)
-    case req @ JsonRpcRequest(_, "debug_traceTransaction", _, _) =>
-      handle[DebugService.TraceTransactionRequest, DebugService.TraceTransactionResponse](
-        debugService.traceTransaction, req)
-    case req @ JsonRpcRequest(_, "debug_traceBlockByHash", _, _) =>
-      handle[DebugJsonMethodsImplicits.TraceBlockByHashRequest, DebugJsonMethodsImplicits.TraceBlockResponse](
-        r => debugService.traceBlockByHash(r.blockHash).map(_.map(lst =>
-          DebugJsonMethodsImplicits.TraceBlockResponse(lst))), req
-      )(DebugJsonMethodsImplicits.debug_traceBlockByHash, DebugJsonMethodsImplicits.debug_traceBlockByHash)
-    case req @ JsonRpcRequest(_, "debug_traceBlockByNumber", _, _) =>
-      handle[DebugJsonMethodsImplicits.TraceBlockByNumberRequest, DebugJsonMethodsImplicits.TraceBlockResponse](
-        r => debugService.traceBlockByNumber(r.blockNumber).map(_.map(lst =>
-          DebugJsonMethodsImplicits.TraceBlockResponse(lst))), req
-      )(DebugJsonMethodsImplicits.debug_traceBlockByNumber, DebugJsonMethodsImplicits.debug_traceBlockByNumber)
+    // debug_trace* methods routed to DebugTracingService via handleDebugTracingRequest.
+  }
+
+  private def handleDebugTracingRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
+    import DebugTracingService.{
+      TraceTransactionRequest => DTxReq,
+      TraceTransactionResponse => DTxResp,
+      TraceCallRequest => DCallReq,
+      TraceCallResponse => DCallResp,
+      TraceCallManyRequest => DManyReq,
+      TraceCallManyResponse => DManyResp,
+      TraceBlockByHashRequest => DBlkHashReq,
+      TraceBlockByHashResponse => DBlkHashResp,
+      TraceBlockByNumberRequest => DBlkNumReq,
+      TraceBlockByNumberResponse => DBlkNumResp,
+      IntermediateRootsRequest => DRootsReq,
+      IntermediateRootsResponse => DRootsResp,
+      TraceChainRequest => DChainReq,
+      TraceChainBlockResult => DChainResult
+    }
+    import DebugTracingJsonMethodsImplicits.{
+      debug_traceTransaction => dTx,
+      debug_traceCall => dCall,
+      debug_traceCallMany => dMany,
+      debug_traceBlockByHash => dHash,
+      debug_traceBlockByNumber => dNum,
+      debug_intermediateRoots => dRoots,
+      debug_traceChain => dChain
+    }
+    ({
+      case req @ JsonRpcRequest(_, "debug_traceTransaction", _, _) =>
+        handle[DTxReq, DTxResp](debugTracingService.traceTransaction, req)(dTx, dTx)
+      case req @ JsonRpcRequest(_, "debug_traceCall", _, _) =>
+        handle[DCallReq, DCallResp](debugTracingService.traceCall, req)(dCall, dCall)
+      case req @ JsonRpcRequest(_, "debug_traceCallMany", _, _) =>
+        handle[DManyReq, DManyResp](debugTracingService.traceCallMany, req)(dMany, dMany)
+      case req @ JsonRpcRequest(_, "debug_traceBlockByHash", _, _) =>
+        handle[DBlkHashReq, DBlkHashResp](debugTracingService.traceBlockByHash, req)(dHash, dHash)
+      case req @ JsonRpcRequest(_, "debug_traceBlockByNumber", _, _) =>
+        handle[DBlkNumReq, DBlkNumResp](debugTracingService.traceBlockByNumber, req)(dNum, dNum)
+      case req @ JsonRpcRequest(_, "debug_intermediateRoots", _, _) =>
+        handle[DRootsReq, DRootsResp](debugTracingService.intermediateRoots, req)(dRoots, dRoots)
+      case req @ JsonRpcRequest(_, "debug_traceChain", _, _) =>
+        handle[DChainReq, Seq[DChainResult]](
+          r => debugTracingService.traceChainBlockRange(r.fromBlock, r.toBlock, r.config),
+          req
+        )(dChain, dChain)
+    }: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]])
+  }
+
+  private def handleTraceRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] =
+    handleTraceRequestImpl
+
+  private def handleTraceRequestImpl: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
+    // Use explicit implicits to sidestep the ambiguity with DebugTracingService types
+    val tTx = TraceJsonMethodsImplicits.trace_transaction
+    val tBlock = TraceJsonMethodsImplicits.trace_block
+    val tReplay = TraceJsonMethodsImplicits.trace_replayTransaction
+    val tReplBlk = TraceJsonMethodsImplicits.trace_replayBlockTransactions
+    val tCall = TraceJsonMethodsImplicits.trace_call
+    val tCallMany = TraceJsonMethodsImplicits.trace_callMany
+    val tFilter = TraceJsonMethodsImplicits.trace_filter
+
+    {
+      case req @ JsonRpcRequest(_, "trace_transaction", _, _) =>
+        handle[TraceService.TraceTransactionRequest, TraceService.TraceTransactionResponse](
+          traceService.traceTransaction,
+          req
+        )(tTx, tTx)
+      case req @ JsonRpcRequest(_, "trace_block", _, _) =>
+        handle[TraceService.TraceBlockRequest, TraceService.TraceBlockResponse](traceService.traceBlock, req)(
+          tBlock,
+          tBlock
+        )
+      case req @ JsonRpcRequest(_, "trace_replayTransaction", _, _) =>
+        handle[TraceService.TraceReplayTransactionRequest, TraceService.TraceReplayTransactionResponse](
+          traceService.replayTransaction,
+          req
+        )(tReplay, tReplay)
+      case req @ JsonRpcRequest(_, "trace_replayBlockTransactions", _, _) =>
+        handle[TraceService.TraceReplayBlockTransactionsRequest, TraceService.TraceReplayBlockTransactionsResponse](
+          traceService.replayBlockTransactions,
+          req
+        )(tReplBlk, tReplBlk)
+      case req @ JsonRpcRequest(_, "trace_call", _, _) =>
+        handle[TraceService.TraceCallRequest, TraceService.TraceCallResponse](traceService.traceCall, req)(tCall, tCall)
+      case req @ JsonRpcRequest(_, "trace_callMany", _, _) =>
+        handle[TraceService.TraceCallManyRequest, TraceService.TraceCallManyResponse](traceService.traceCallMany, req)(
+          tCallMany,
+          tCallMany
+        )
+      case req @ JsonRpcRequest(_, "trace_filter", _, _) =>
+        handle[TraceService.TraceFilterRequest, TraceService.TraceFilterResponse](traceService.traceFilter, req)(
+          tFilter,
+          tFilter
+        )
+    }
   }
 
   private def handleTestRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] =
@@ -391,6 +488,62 @@ case class JsonRpcController(
   private def handleQARequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "qa_mineBlocks", _, _) =>
       handle[QAService.MineBlocksRequest, QAService.MineBlocksResponse](qaService.mineBlocks, req)
+  }
+
+  private def handleAdminRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
+    case req @ JsonRpcRequest(_, "admin_nodeInfo", _, _) =>
+      handle[AdminNodeInfoRequest, AdminNodeInfoResponse](adminService.nodeInfo, req)
+    case req @ JsonRpcRequest(_, "admin_peers", _, _) =>
+      handle[AdminPeersRequest, AdminPeersResponse](adminService.peers, req)
+    case req @ JsonRpcRequest(_, "admin_addPeer", _, _) =>
+      handle[AdminAddPeerRequest, AdminAddPeerResponse](adminService.addPeer, req)
+    case req @ JsonRpcRequest(_, "admin_removePeer", _, _) =>
+      handle[AdminRemovePeerRequest, AdminRemovePeerResponse](adminService.removePeer, req)
+    case req @ JsonRpcRequest(_, "admin_changeLogLevel", _, _) =>
+      handle[AdminChangeLogLevelRequest, AdminChangeLogLevelResponse](adminService.changeLogLevel, req)
+    case req @ JsonRpcRequest(_, "admin_datadir", _, _) =>
+      handle[AdminDatadirRequest, AdminDatadirResponse](adminService.getDatadir, req)
+    case req @ JsonRpcRequest(_, "admin_exportChain", _, _) =>
+      handle[AdminExportChainRequest, AdminExportChainResponse](adminService.exportChain, req)
+    case req @ JsonRpcRequest(_, "admin_importChain", _, _) =>
+      handle[AdminImportChainRequest, AdminImportChainResponse](adminService.importChain, req)
+    case req @ JsonRpcRequest(_, "admin_blockIP", _, _) =>
+      handle[AdminBlockIPRequest, AdminBlockIPResponse](adminService.blockIP, req)
+    case req @ JsonRpcRequest(_, "admin_unblockIP", _, _) =>
+      handle[AdminUnblockIPRequest, AdminUnblockIPResponse](adminService.unblockIP, req)
+    case req @ JsonRpcRequest(_, "admin_listBlockedIPs", _, _) =>
+      handle[AdminListBlockedIPsRequest, AdminListBlockedIPsResponse](adminService.listBlockedIPs, req)
+    // ── Geth-compatible methods ──────────────────────────────────────────
+    case req @ JsonRpcRequest(_, "admin_addTrustedPeer", _, _) =>
+      handle[AdminAddTrustedPeerRequest, AdminAddTrustedPeerResponse](adminService.addTrustedPeer, req)
+    case req @ JsonRpcRequest(_, "admin_removeTrustedPeer", _, _) =>
+      handle[AdminRemoveTrustedPeerRequest, AdminRemoveTrustedPeerResponse](
+        adminService.removeTrustedPeer,
+        req
+      )
+    case req @ JsonRpcRequest(_, "admin_maxPeers", _, _) =>
+      handle[AdminMaxPeersRequest, AdminMaxPeersResponse](adminService.maxPeers, req)
+  }
+
+  private def handleTxPoolRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
+    case req @ JsonRpcRequest(_, "txpool_besuTransactions", _, _) =>
+      handle[TxPoolBesuTransactionsRequest, TxPoolBesuTransactionsResponse](txPoolService.besuTransactions, req)
+    case req @ JsonRpcRequest(_, "txpool_besuStatistics", _, _) =>
+      handle[TxPoolBesuStatisticsRequest, TxPoolBesuStatisticsResponse](txPoolService.besuStatistics, req)
+    case req @ JsonRpcRequest(_, "txpool_besuPendingTransactions", _, _) =>
+      handle[TxPoolBesuPendingTransactionsRequest, TxPoolBesuPendingTransactionsResponse](
+        txPoolService.besuPendingTransactions,
+        req
+      )
+    // ── Geth-compatible methods ────────────────────────────────────────────
+    case req @ JsonRpcRequest(_, "txpool_content", _, _) =>
+      handle[TxPoolContentRequest, TxPoolContentResponse](txPoolService.content, req)
+    case req @ JsonRpcRequest(_, "txpool_contentFrom", _, _) =>
+      handle[TxPoolContentFromRequest, TxPoolContentFromResponse](txPoolService.contentFrom, req)
+    case req @ JsonRpcRequest(_, "txpool_status", _, _) =>
+      handle[TxPoolStatusRequest, TxPoolStatusResponse](txPoolService.status, req)
+    case req @ JsonRpcRequest(_, "txpool_inspect", _, _) =>
+      handle[TxPoolInspectRequest, TxPoolInspectResponse](txPoolService.inspect, req)
   }
 
   private def handleRpcRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {

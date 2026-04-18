@@ -510,7 +510,12 @@ class RLPxConnectionHandler(
                 )
               )
             case None =>
-              log.error("[Stopping Connection] Unable to negotiate protocol with peer {} — peerCaps=[{}], ourCaps=[{}]", peerId, hello.capabilities.mkString(", "), capabilities.mkString(", "))
+              log.error(
+                "[Stopping Connection] Unable to negotiate protocol with peer {} — peerCaps=[{}], ourCaps=[{}]",
+                peerId,
+                hello.capabilities.mkString(", "),
+                capabilities.mkString(", ")
+              )
               context.parent ! ConnectionFailed
               gracefulStop()
           }
@@ -606,7 +611,8 @@ class RLPxConnectionHandler(
             ex.getMessage
           )
           context.parent ! com.chipprbots.ethereum.network.PeerActor.DisconnectPeer(
-            com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.Reasons.BreachOfProtocol)
+            com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.Reasons.BreachOfProtocol
+          )
         }
       // Let handleConnectionTerminated clean up after TCP connection closes (if closed)
     }

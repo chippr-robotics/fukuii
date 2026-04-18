@@ -9,12 +9,14 @@ import org.apache.pekko.actor.Scheduler
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.ExecutionContext.Implicits.global
-import scala.concurrent.duration.FiniteDuration
+import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason.InvalidPivotBlockElectionResponse
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason.PivotBlockElectionTimeout
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
+import com.chipprbots.ethereum.blockchain.sync.RetryState
+import com.chipprbots.ethereum.blockchain.sync.RetryStrategy
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg.PeerWithInfo
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -56,6 +58,13 @@ class PivotBlockSelector(
   // This is separate from pivotBlockRetryCount which resets after each scheduleRetry call.
   // Configurable via sync.pivot-block-max-total-selection-attempts.
   private val maxTotalSelectionAttempts = syncConfig.pivotBlockMaxTotalSelectionAttempts
+
+  // Exponential backoff across full pivot selection cycles.
+  // Besu: PivotBlockRetriever — SUSPICIOUS_NUMBER_OF_RETRIES = 5 (warn every 5th retry).
+  // Initial delay = startRetryInterval so first retry is unchanged vs. the fixed interval.
+  private var pivotRetryState: RetryState = RetryState(
+    strategy = RetryStrategy(initialDelay = syncConfig.startRetryInterval, maxDelay = 60.seconds, jitterFactor = 0.0)
+  )
 
   override def receive: Receive = idle
 
@@ -122,12 +131,12 @@ class PivotBlockSelector(
       startPivotBlockSelection(electionDetails)
     } else {
       log.debug(
-        "Cannot pick pivot block. Current best block number [{}]. Retrying in [{}]",
+        "Cannot pick pivot block. Current best block number [{}]. Scheduling retry with backoff (attempt {})",
         pivotBlockNumber,
-        startRetryInterval
+        pivotRetryState.attempt + 1
       )
       // Restart the whole process.
-      scheduleRetry(startRetryInterval)
+      scheduleRetry()
     }
   }
 
@@ -172,8 +181,11 @@ class PivotBlockSelector(
           blacklist.add(peerId, blacklistDuration, PivotBlockElectionTimeout)
         }
         peerEventBus ! Unsubscribe()
-        log.warning("Pivot block header receive timeout. Retrying in {}", startRetryInterval)
-        scheduleRetry(startRetryInterval)
+        log.warning(
+          "Pivot block header receive timeout. Scheduling retry with backoff (attempt {})",
+          pivotRetryState.attempt + 1
+        )
+        scheduleRetry()
     }
 
   private def votingProcess(
@@ -210,8 +222,11 @@ class PivotBlockSelector(
         )
       } else { // No more peers. Restart the whole process
         peerEventBus ! Unsubscribe()
-        log.warning("Not enough votes for pivot block. Retrying in {}", startRetryInterval)
-        scheduleRetry(startRetryInterval)
+        log.warning(
+          "Not enough votes for pivot block. Scheduling retry with backoff (attempt {})",
+          pivotRetryState.attempt + 1
+        )
+        scheduleRetry()
       }
       // Continue voting
     } else {
@@ -230,13 +245,23 @@ class PivotBlockSelector(
   private def isPossibleToReachConsensus(peersLeft: Int, bestHeaderVotes: Int): Boolean =
     peersLeft + bestHeaderVotes >= minPeersToChoosePivotBlock
 
-  private def scheduleRetry(interval: FiniteDuration): Unit = {
+  private def scheduleRetry(): Unit = {
     pivotBlockRetryCount = 0
-    scheduler.scheduleOnce(interval, self, SelectPivotBlock)
+    val delay = pivotRetryState.nextDelay
+    pivotRetryState = pivotRetryState.recordAttempt
+    if (pivotRetryState.attempt % PivotBlockSelector.SuspiciousRetryThreshold == 0) {
+      log.warning(
+        "{} pivot block selection retries have failed to obtain a valid pivot block",
+        pivotRetryState.attempt
+      )
+    }
+    log.debug("Scheduling pivot block selection retry in {}", delay)
+    scheduler.scheduleOnce(delay, self, SelectPivotBlock)
     context.become(idle)
   }
 
   private def sendResponseAndCleanup(pivotBlockHeader: BlockHeader): Unit = {
+    pivotRetryState = pivotRetryState.reset
     log.info("Found pivot block: {} hash: {}", pivotBlockHeader.number, pivotBlockHeader.hashAsHexString)
     fastSync ! Result(pivotBlockHeader)
     peerEventBus ! Unsubscribe()
@@ -285,6 +310,10 @@ class PivotBlockSelector(
 }
 
 object PivotBlockSelector {
+  // Besu: PivotBlockRetriever.SUSPICIOUS_NUMBER_OF_RETRIES = 5
+  // Warn every 5th consecutive pivot selection retry cycle.
+  val SuspiciousRetryThreshold: Int = 5
+
   def props(
       networkPeerManager: ActorRef,
       peerEventBus: ActorRef,
