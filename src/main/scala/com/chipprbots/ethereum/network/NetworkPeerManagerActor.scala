@@ -7,6 +7,8 @@ import org.apache.pekko.actor.Props
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor._
 import com.chipprbots.ethereum.network.PeerActor
@@ -45,7 +47,9 @@ class NetworkPeerManagerActor(
     peerEventBusActor: ActorRef,
     appStateStorage: AppStateStorage,
     forkResolverOpt: Option[ForkResolver],
-    initialSnapSyncControllerOpt: Option[ActorRef] = None
+    initialSnapSyncControllerOpt: Option[ActorRef] = None,
+    evmCodeStorageOpt: Option[EvmCodeStorage] = None,
+    flatSlotStorageOpt: Option[FlatSlotStorage] = None
 ) extends Actor
     with ActorLogging {
 
@@ -450,12 +454,15 @@ class NetworkPeerManagerActor(
 
 
     peerWithInfo.foreach { pwi =>
-      val emptyResponse = StorageRanges(
-        requestId = msg.requestId,
-        slots = Seq.empty,
-        proof = Seq.empty
-      )
-      pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+      flatSlotStorageOpt match {
+        case None =>
+          // No flat slot storage available: return completely empty response
+          pwi.peer.ref ! PeerActor.SendMessage(StorageRanges(msg.requestId, Seq.empty, Seq.empty))
+        case Some(_) =>
+          // Flat slot storage present (non-RocksDB backend returns empty per account)
+          val slots = msg.accountHashes.map(_ => Seq.empty[(ByteString, ByteString)])
+          pwi.peer.ref ! PeerActor.SendMessage(StorageRanges(msg.requestId, slots, Seq.empty))
+      }
     }
   }
 
@@ -519,11 +526,21 @@ class NetworkPeerManagerActor(
 
 
     peerWithInfo.foreach { pwi =>
-      val emptyResponse = ByteCodes(
-        requestId = msg.requestId,
-        codes = Seq.empty
-      )
-      pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+      val codes: Seq[ByteString] = evmCodeStorageOpt match {
+        case None => Seq.empty
+        case Some(evmCodeStorage) =>
+          var totalBytes: Long = 0
+          val limit = msg.responseBytes.toLong
+          msg.hashes.flatMap { hash =>
+            evmCodeStorage.get(hash) match {
+              case Some(code) if totalBytes < limit =>
+                totalBytes += code.size
+                Some(code)
+              case _ => None
+            }
+          }
+      }
+      pwi.peer.ref ! PeerActor.SendMessage(ByteCodes(msg.requestId, codes))
     }
   }
 

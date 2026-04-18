@@ -295,9 +295,8 @@ case class EvmConfig(
       accessList.size * G_access_list_address +
         accessList.map(_.storageKeys.size).sum * G_access_list_storage
 
-    // EIP-7702: Per-authorization intrinsic gas = CallNewAccountGas (25000) per geth
-    // Geth refunds (25000 - 12500 = 12500) if account exists (capped at gasUsed/5)
-    val authListPrice: BigInt = BigInt(authorizationListSize) * BigInt(25000)
+    // EIP-7702: Per-authorization intrinsic gas = PER_AUTH_BASE_COST (12500) per EIP spec
+    val authListPrice: BigInt = BigInt(authorizationListSize) * BigInt(12500)
 
     val initCodeCost: BigInt = if (isContractCreation) calcInitCodeCost(txData) else BigInt(0)
 

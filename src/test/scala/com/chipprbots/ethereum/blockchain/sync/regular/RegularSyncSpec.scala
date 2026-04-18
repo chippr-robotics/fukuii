@@ -157,31 +157,33 @@ class RegularSyncSpec
         SyncTest
       ) in sync(
         new Fixture(testSystem) {
-          var blockFetcher: ActorRef = _
-
           regularSync ! SyncProtocol.Start
           peerEventBus.expectMsgClass(classOf[Subscribe])
-          blockFetcher = peerEventBus.sender()
+          // Establish network top (same pattern as "fetch headers and bodies concurrently")
+          peerEventBus.reply(
+            MessageFromPeer(
+              NewBlock(testBlocks.last, ChainWeight(testBlocks.last.number).totalDifficulty),
+              defaultPeer.id
+            )
+          )
 
           peersClient.expectMsgEq(blockHeadersChunkRequest(0))
           peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
 
-          val getBodies: PeersClient.Request[GetBlockBodies] = PeersClient.Request.create(
-            GetBlockBodies(testBlocksChunked.head.headers.map(_.hash)),
-            PeersClient.BestPeer
-          )
-          peersClient.expectMsgEq(getBodies)
-          peersClient.reply(PeersClient.Response(defaultPeer, BlockBodies(testBlocksChunked.head.bodies)))
+          // After cherry-pick, BlockFetcher sends GetBlockBodies([1,2]) AND GetBlockHeaders(block=3)
+          // concurrently. Fish for GetBlockHeaders(block=3) using the Eq instance (ignores requestId),
+          // which also skips any GetBlockBodies that arrive first.
+          peersClient.fishForMsgEq(blockHeadersChunkRequest(1))
+          val nextHeadersSender = peersClient.lastSender
 
-          blockFetcher ! MessageFromPeer(
-            NewBlock(testBlocks.last, ChainWeight.totalDifficultyOnly(testBlocks.last.number).totalDifficulty),
-            defaultPeer.id
+          // Reply with wrong headers (chunk 5 when chunk 1 expected) → BlockFetcher detects
+          // first header number > expected → blacklists peer
+          peersClient.send(
+            nextHeadersSender,
+            PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked(5).headers))
           )
-          peersClient.expectMsgEq(blockHeadersChunkRequest(1))
-          peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked(5).headers)))
-          peersClient.expectMsgPF() {
-            case PeersClient.BlacklistPeer(id, _) if id == defaultPeer.id => true
-          }
+
+          fishForBlacklistPeer(defaultPeer)
         }
       )
 
@@ -438,7 +440,9 @@ class RegularSyncSpec
       })
 
       "retry fetching node if validation failed" in sync(new MissingStateNodeFixture(testSystem) {
-        def fishForFailingBlockNodeRequest(): Boolean = peersClient.fishForSpecificMessage() {
+        // StateNodeFetcher.retryAfterBackoff is hardcoded to 5s per retry (not syncRetryInterval).
+        // Retries arrive at ~5s and ~10s, so each fish needs a 12s timeout.
+        def fishForFailingBlockNodeRequest(): Boolean = peersClient.fishForSpecificMessage(12.seconds) {
           case PeersClient.Request(GetNodeData(hash :: Nil), _, _) if hash == failingBlock.hash => true
         }
 
@@ -773,9 +777,11 @@ class RegularSyncSpec
 
         for {
           _ <- IO {
-            testBlocks.take(6).foreach(setImportResult(_, IO(BlockImportedToTop(Nil))))
+            // Use take(5) so exactly 5 blocks are served — avoids race where block 6 imports
+            // before fishForStatus polls, giving Progress(6,20) instead of Progress(5,20).
+            testBlocks.take(5).foreach(setImportResult(_, IO(BlockImportedToTop(Nil))))
 
-            peersClient.setAutoPilot(new PeersClientAutoPilot(testBlocks.take(6)))
+            peersClient.setAutoPilot(new PeersClientAutoPilot(testBlocks.take(5)))
 
             regularSync ! SyncProtocol.Start
 

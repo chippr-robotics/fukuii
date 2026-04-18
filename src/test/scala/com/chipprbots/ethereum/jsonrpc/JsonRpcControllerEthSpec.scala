@@ -298,7 +298,8 @@ class JsonRpcControllerEthSpec
         List(
           JString(headerPowHash),
           JString(seed),
-          JString(target)
+          JString(target),
+          JString("0x2")
         )
       )
     )
@@ -335,7 +336,8 @@ class JsonRpcControllerEthSpec
         List(
           JString(headerPowHash),
           JString(seed),
-          JString(target)
+          JString(target),
+          JString("0x2")
         )
       )
     )
@@ -588,7 +590,9 @@ class JsonRpcControllerEthSpec
     )
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
-    response should haveResult(JString("0x" + Hex.toHexString(ByteString("response").toArray[Byte])))
+    // eth_getStorageAt returns 32-byte zero-padded slot value (EIP-1474)
+    val paddedResponse = Array.fill[Byte](32 - ByteString("response").length)(0) ++ ByteString("response").toArray[Byte]
+    response should haveResult(JString("0x" + Hex.toHexString(paddedResponse)))
   }
 
   it should "eth_sign" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
@@ -735,7 +739,8 @@ class JsonRpcControllerEthSpec
             "blockNumber" -> JString("0x63"),
             "address" -> JString("0x0000000000000000000000000000000000123456"),
             "data" -> JString("0xff33"),
-            "topics" -> JArray(List(JString("0x33"), JString("0x55")))
+            "topics" -> JArray(List(JString("0x33"), JString("0x55"))),
+            "removed" -> JBool(false)
           )
         )
       )
@@ -802,6 +807,7 @@ class JsonRpcControllerEthSpec
 
     // then
     response should haveObjectResult(
+      "address" -> JString("0x7f0d15c7faae65896648c8273b6d7e43f58fa842"),
       "accountProof" -> JArray(
         List(
           JString("0x1234")
@@ -934,7 +940,8 @@ class JsonRpcControllerEthSpec
             "blockNumber" -> JString("0x63"),
             "address" -> JString("0x0000000000000000000000000000000000123456"),
             "data" -> JString("0xff33"),
-            "topics" -> JArray(List(JString("0x33"), JString("0x55")))
+            "topics" -> JArray(List(JString("0x33"), JString("0x55"))),
+            "removed" -> JBool(false)
           )
         )
       )

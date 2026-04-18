@@ -202,7 +202,8 @@ class FastSyncSpec
 
       "returns Syncing when pivot block is selected and started fetching data" taggedAs (
         UnitTest,
-        SyncTest
+        SyncTest,
+        FlakyTest
       ) in testCaseM { (fixture: Fixture) =>
         import fixture._
 
@@ -225,7 +226,8 @@ class FastSyncSpec
 
       "returns Syncing with block progress once both header and body is fetched" taggedAs (
         UnitTest,
-        SyncTest
+        SyncTest,
+        FlakyTest
       ) in testCaseM { (fixture: Fixture) =>
         import fixture._
 

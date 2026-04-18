@@ -410,6 +410,14 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
 
   class OnTopFixture(system: ActorSystem) extends RegularSyncFixture(system) {
 
+    // Override blockHeadersPerRequest = 3 so that the last batch of testBlocks (blocks 19-20)
+    // has 2 headers < 3 = no cherry-pick. Without this, the cherry-pick in BlockFetcher bumps
+    // knownTop to 21 after the last full batch, leaving isOnTop = false permanently.
+    override lazy val syncConfig: SyncConfig = defaultSyncConfig.copy(
+      blockHeadersPerRequest = 3,
+      blockBodiesPerRequest = 3
+    )
+
     val newBlock: Block = BlockHelpers.generateBlock(testBlocks.last)
 
     override lazy val consensusAdapter: ConsensusAdapter = stub[ConsensusAdapter]

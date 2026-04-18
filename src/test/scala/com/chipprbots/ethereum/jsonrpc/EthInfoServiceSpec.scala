@@ -136,6 +136,18 @@ class EthServiceSpec
     blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number)
 
     val estimatedGas: BigInt = BigInt(123)
+    // estimateGas first runs a revert pre-check via simulateTransaction before binary search
+    val worldStateProxy: InMemoryWorldStateProxy = InMemoryWorldStateProxy(
+      storagesInstance.storages.evmCodeStorage,
+      blockchain.getBackingMptStorage(-1),
+      (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
+      UInt256.Zero,
+      ByteString.empty,
+      noEmptyAccounts = false,
+      ethCompatibleStorage = true
+    )
+    val simCheckResult: TxResult = TxResult(worldStateProxy, 0, Nil, ByteString.empty, None)
+    (stxLedger.simulateTransaction _).expects(*, *, *).returning(simCheckResult)
     (stxLedger.binarySearchGasEstimation _).expects(*, *, *).returning(estimatedGas)
 
     val tx: CallTx = CallTx(

@@ -326,7 +326,7 @@ class BlockPreparator(
       world: InMemoryWorldStateProxy
   )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
     if (value == UInt256.Zero || world.isZeroValueTransferToNonExistentAccount(address, value)) {
-      world
+      if (withTouch) world.touchAccounts(address) else world
     } else {
       val savedWorld = increaseAccountBalance(address, value)(world)
       if (withTouch) savedWorld.touchAccounts(address) else savedWorld

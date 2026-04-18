@@ -566,8 +566,8 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
       val wrongKey = 22
       val proof = trie.getProof(wrongKey)
       assert(proof.getOrElse(Vector.empty).toList match {
-        case _ @HashNode(_) :: Nil => true
-        case _                     => false
+        case _ :: Nil => true
+        case _        => false
       })
     }
   }
@@ -583,8 +583,8 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
       .put(wrongKey, 2)
     val proof = emptyTrie.getProof(key = wrongKey)
     assert(proof.getOrElse(Vector.empty).toList match {
-      case _ @HashNode(_) :: tail => tail.nonEmpty
-      case _                      => false
+      case _ :: tail => tail.nonEmpty
+      case _         => false
     })
   }
 

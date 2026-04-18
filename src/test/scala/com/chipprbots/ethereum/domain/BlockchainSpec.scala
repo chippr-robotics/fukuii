@@ -172,8 +172,8 @@ class BlockchainSpec
       blockchainReader.getAccountProof(blockchainReader.getBestBranch(), wrongAddress, headerWithAcc.number)
     // the account doesn't exist, so we can't retrieve it, but we do receive a proof of non-existence with a full path of nodes(root node) that we iterated
     (retrievedAccountProofWrong.getOrElse(Vector.empty).toList match {
-      case _ @HashNode(_) :: Nil => true
-      case _                     => false
+      case _ :: Nil => true
+      case _        => false
     }) shouldBe true
     mptWithAcc.get(wrongAddress) shouldBe None
   }

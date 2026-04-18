@@ -303,9 +303,9 @@ class AdversarialForkBoundarySpec extends AnyFlatSpec with Matchers {
     val err1 = validate(noBaseFeeAtFork, lastPreOlympia).left.getOrElse(null)
     err1.toString should include("HeaderExtraFieldsError")
 
-    // Case 2: Fork block with wrong baseFee → HeaderBaseFeeError
+    // Case 2: Fork block with wrong baseFee → HeaderBaseFeeError (toString: INVALID_BASE_FEE_PER_GAS)
     val wrongBaseFee = makeChild(lastPreOlympia, baseFee = Some(999))
     val err2 = validate(wrongBaseFee, lastPreOlympia).left.getOrElse(null)
-    err2.toString should include("HeaderBaseFeeError")
+    err2.toString should include("INVALID_BASE_FEE_PER_GAS")
   }
 }
