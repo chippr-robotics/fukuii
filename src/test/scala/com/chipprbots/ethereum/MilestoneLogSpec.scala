@@ -9,15 +9,15 @@ import com.chipprbots.ethereum.utils.ForkBlockNumbers
 // scalastyle:off magic.number
 class MilestoneLogSpec extends AnyFlatSpec with Matchers {
 
-  "MilestoneLog.formatMilestones" should "show 'none configured' when all blocks are Long.MaxValue" taggedAs UnitTest in {
+  "MilestoneLog.formatMilestones" should "show '[]' when all blocks are Long.MaxValue" taggedAs UnitTest in {
     val empty = ForkBlockNumbers.Empty.copy(frontierBlockNumber = Long.MaxValue)
-    MilestoneLog.formatMilestones(empty) shouldBe "none configured"
+    MilestoneLog.formatMilestones(empty) shouldBe "[]"
   }
 
   it should "include Frontier when set to 0" taggedAs UnitTest in {
     val forks = ForkBlockNumbers.Empty
     val result = MilestoneLog.formatMilestones(forks)
-    result should include("Frontier@0")
+    result should include("Frontier:0")
   }
 
   it should "omit forks set to Long.MaxValue" taggedAs UnitTest in {
@@ -30,7 +30,14 @@ class MilestoneLogSpec extends AnyFlatSpec with Matchers {
   it should "include Olympia when activated" taggedAs UnitTest in {
     val forks = ForkBlockNumbers.Empty.copy(olympiaBlockNumber = BigInt(30_000_000))
     val result = MilestoneLog.formatMilestones(forks)
-    result should include("Olympia@30000000")
+    result should include("Olympia:30000000")
+  }
+
+  it should "wrap output in brackets (Besu format)" taggedAs UnitTest in {
+    val forks = ForkBlockNumbers.Empty
+    val result = MilestoneLog.formatMilestones(forks)
+    result should startWith("[")
+    result should endWith("]")
   }
 
   it should "list milestones in order" taggedAs UnitTest in {
@@ -76,9 +83,9 @@ class MilestoneLogSpec extends AnyFlatSpec with Matchers {
       olympiaBlockNumber              = Long.MaxValue  // pending
     )
     val result = MilestoneLog.formatMilestones(forks)
-    result should include("Frontier@0")
-    result should include("Homestead@1150000")
-    result should include("Spiral@19250000")
+    result should include("Frontier:0")
+    result should include("Homestead:1150000")
+    result should include("Spiral:19250000")
     result should not include "Olympia"   // not activated
     result should not include "Muir Glacier" // not activated
   }

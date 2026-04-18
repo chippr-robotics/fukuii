@@ -15,8 +15,8 @@ object MilestoneLog extends Logger {
 
   private[ethereum] def formatMilestones(forkBlockNumbers: ForkBlockNumbers): String = {
     val active = namedMilestones(forkBlockNumbers).filter { case (_, block) => block != Long.MaxValue }
-    if (active.isEmpty) "none configured"
-    else active.map { case (name, block) => s"$name@$block" }.mkString(", ")
+    if (active.isEmpty) "[]"
+    else active.map { case (name, block) => s"$name:$block" }.mkString("[", ", ", "]")
   }
 
   private def namedMilestones(f: ForkBlockNumbers): Seq[(String, BigInt)] = Seq(
