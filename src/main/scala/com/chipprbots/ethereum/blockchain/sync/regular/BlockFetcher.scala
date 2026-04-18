@@ -473,6 +473,21 @@ class BlockFetcher(
         notAtTop
       }
       .filter { state =>
+        // Don't prefetch the next header batch while the current batch still has
+        // pending bodies to download. Issuing GetBlockBodies + GetBlockHeaders in
+        // parallel inflates peer round-trips and caused nondeterministic message
+        // ordering in tests that asserted on message sequence. Once bodies land
+        // and waitingHeaders drains, the next fetchBlocks pass reissues headers
+        // using the knownTop bump applied in the ReceivedHeaders handler.
+        val bodiesDrained = state.waitingHeaders.isEmpty
+        if (!bodiesDrained)
+          log.debug(
+            "Skipping header prefetch: {} waiting headers still need bodies",
+            state.waitingHeaders.size
+          )
+        bodiesDrained
+      }
+      .filter { state =>
         val hasSpace = !state.hasReachedSize(syncConfig.maxFetcherQueueSize)
         if (!hasSpace)
           log.debug(

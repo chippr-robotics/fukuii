@@ -254,30 +254,14 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
 
       handleFirstBlockBatchHeaders()
 
-      // Second headers request with response pending
-      val secondGetBlockHeadersRequest: ETH66GetBlockHeaders = ETH66GetBlockHeaders(
-        0,
-        Left(secondBlocksBatch.head.number),
-        syncConfig.blockHeadersPerRequest,
-        skip = 0,
-        reverse = false
-      )
-
-      val msgs: Seq[(ETH66GetBlockHeaders | ETH66GetBlockBodies, org.apache.pekko.actor.ActorRef)] =
-        peersClient.receiveWhile() {
-          // Save the reference to respond to the ask pattern on fetcher
-          case PeersClient.Request(msg: ETH66GetBlockHeaders, _, _)
-              if msg.block == Left(secondBlocksBatch.head.number) =>
-            (msg, peersClient.lastSender)
-          // First bodies request (ETH66 format)
-          case PeersClient.Request(msg: ETH66GetBlockBodies, _, _) if msg.hashes == firstBlocksBatch.map(_.hash) =>
-            (msg, peersClient.lastSender)
-        }
-
-      val (refForAnswerSecondHeaderReq, refForAnswerFirstBodiesReq) = msgs match {
-        case Seq((msg1: ETH66GetBlockHeaders, s1), (msg2: ETH66GetBlockBodies, s2)) => (s1, s2)
-        case Seq((msg2: ETH66GetBlockBodies, s2), (msg1: ETH66GetBlockHeaders, s1)) => (s1, s2)
-        case _ => fail("missing body or header request")
+      // BlockFetcher defers the next headers prefetch until the current batch's
+      // bodies land (see BlockFetcher.tryFetchHeaders). So after the first
+      // headers response, only the first bodies request is pending — not a
+      // parallel headers prefetch. Save its sender ref so we can delay the
+      // response until after InternalLastBlockImport is observed.
+      val refForAnswerFirstBodiesReq: org.apache.pekko.actor.ActorRef = peersClient.expectMsgPF() {
+        case PeersClient.Request(msg: ETH66GetBlockBodies, _, _) if msg.hashes == firstBlocksBatch.map(_.hash) =>
+          peersClient.lastSender
       }
 
       // Block 16 is mined (we could have reached this stage due to invalidation messages sent to the fetcher)
@@ -285,17 +269,19 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
       val minedBlockNumber = minedBlock.number
       blockFetcher ! InternalLastBlockImport(minedBlockNumber)
 
-      // Answer pending requests: first block bodies request + second block headers request
-      val secondGetBlockHeadersResponse: ETH66BlockHeaders = ETH66BlockHeaders(0, secondBlocksBatch.map(_.header))
-      peersClient.send(refForAnswerSecondHeaderReq, PeersClient.Response(fakePeer, secondGetBlockHeadersResponse))
-
+      // Answer the first bodies request; this should drain waitingHeaders and
+      // allow BlockFetcher to prefetch the next batch of headers.
       val firstGetBlockBodiesResponse: ETH66BlockBodies = ETH66BlockBodies(0, firstBlocksBatch.map(_.body))
       peersClient.send(refForAnswerFirstBodiesReq, PeersClient.Response(fakePeer, firstGetBlockBodiesResponse))
 
-      // Third headers request with response pending
-      peersClient.expectMsgPF() { case PeersClient.Request(msg: ETH66GetBlockHeaders, _, _) =>
-        peersClient.lastSender
+      // Now the second headers request should fire.
+      val refForAnswerSecondHeaderReq: org.apache.pekko.actor.ActorRef = peersClient.expectMsgPF() {
+        case PeersClient.Request(msg: ETH66GetBlockHeaders, _, _)
+            if msg.block == Left(secondBlocksBatch.head.number) =>
+          peersClient.lastSender
       }
+      val secondGetBlockHeadersResponse: ETH66BlockHeaders = ETH66BlockHeaders(0, secondBlocksBatch.map(_.header))
+      peersClient.send(refForAnswerSecondHeaderReq, PeersClient.Response(fakePeer, secondGetBlockHeadersResponse))
 
       // Second bodies request (ETH66 format)
       val refForAnswerSecondBodiesReq: org.apache.pekko.actor.ActorRef = peersClient.expectMsgPF() {
