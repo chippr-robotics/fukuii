@@ -36,6 +36,7 @@ import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.network.BlockedIPRegistry
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.PeerActor.ConnectTo
@@ -700,7 +701,9 @@ class PeerManagerSpec
           peerFactory,
           discoveryConfig,
           blacklist,
-          Some(testScheduler)
+          new BlockedIPRegistry(Set.empty),
+          staticNodes = Set.empty,
+          externalSchedulerOpt = Some(testScheduler)
         )
       )
     )(system)
