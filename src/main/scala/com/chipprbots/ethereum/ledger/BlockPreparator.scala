@@ -147,7 +147,9 @@ class BlockPreparator(
     UInt256(calculateUpfrontGas(tx) + tx.value)
 
   /** Increments account nonce by 1 stated in YP equation (69) and Pays the upfront Tx gas calculated as TxGasPrice *
-    * TxGasLimit from balance. YP equation (68)
+    * TxGasLimit from balance. YP equation (68). Per EIP-4844, blob-gas cost is ALSO part of
+    * the upfront cost deducted before VM execution (so BALANCE/SELFBALANCE opcodes within
+    * the tx see the correct post-upfront sender balance).
     *
     * @param stx
     * @param worldStateProxy
@@ -156,10 +158,39 @@ class BlockPreparator(
   private[ledger] def updateSenderAccountBeforeExecution(
       stx: SignedTransaction,
       senderAddress: Address,
+      worldStateProxy: InMemoryWorldStateProxy,
+      blockHeader: BlockHeader
+  )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy = {
+    val account = worldStateProxy.getGuaranteedAccount(senderAddress)
+    val blobGasCost = stx.tx match {
+      case bt: com.chipprbots.ethereum.domain.BlobTransaction =>
+        val blobGasUsed = BigInt(bt.blobVersionedHashes.size) * BigInt(131072)
+        val blobBaseFee = blockHeader.excessBlobGas
+          .map(eg => computeBlobBaseFee(eg, blockHeader.unixTimestamp))
+          .getOrElse(BigInt(1))
+        blobGasUsed * blobBaseFee
+      case _ => BigInt(0)
+    }
+    val upfrontTotal = calculateUpfrontGas(stx.tx).toBigInt + blobGasCost
+    worldStateProxy.saveAccount(
+      senderAddress,
+      account.increaseBalance(UInt256(-upfrontTotal)).increaseNonce()
+    )
+  }
+
+  /** Legacy 3-arg overload — kept for callers that don't have a BlockHeader in scope
+    * (e.g. EthSimulateService). Blob-gas is zero for them.
+    */
+  private[ledger] def updateSenderAccountBeforeExecution(
+      stx: SignedTransaction,
+      senderAddress: Address,
       worldStateProxy: InMemoryWorldStateProxy
   ): InMemoryWorldStateProxy = {
     val account = worldStateProxy.getGuaranteedAccount(senderAddress)
-    worldStateProxy.saveAccount(senderAddress, account.increaseBalance(-calculateUpfrontGas(stx.tx)).increaseNonce())
+    worldStateProxy.saveAccount(
+      senderAddress,
+      account.increaseBalance(-calculateUpfrontGas(stx.tx)).increaseNonce()
+    )
   }
 
   /** EIP-4844: Deduct blob gas cost from sender after execution.
@@ -355,7 +386,7 @@ class BlockPreparator(
     val gasPrice = UInt256(Transaction.effectiveGasPrice(stx.tx, blockHeader.baseFee))
     val gasLimit = stx.tx.gasLimit
 
-    val checkpointWorldState = updateSenderAccountBeforeExecution(stx, senderAddress, world)
+    val checkpointWorldState = updateSenderAccountBeforeExecution(stx, senderAddress, world, blockHeader)
 
     // EIP-7702: Process authorization list for Type-4 transactions before VM execution
     // Track refund for existing accounts (geth refunds CallNewAccountGas - TxAuthTupleGas per existing account)
@@ -424,8 +455,10 @@ class BlockPreparator(
 
     val worldAfterPayments = refundGasFn.andThen(payMinerForGasFn)(resultWithErrorHandling.world)
 
-    // EIP-4844: Deduct blob gas cost (burned, not paid to miner)
-    val worldAfterBlobGas = deductBlobGas(stx, senderAddress, blockHeader, worldAfterPayments)
+    // EIP-4844 blob gas cost is charged UPFRONT in updateSenderAccountBeforeExecution
+    // (so BALANCE/SELFBALANCE within the VM see the correct post-upfront value). No
+    // post-execution deduction needed here — would double-charge.
+    val worldAfterBlobGas = worldAfterPayments
 
     val deleteAccountsFn = deleteAccounts(resultWithErrorHandling.addressesToDelete) _
     val deleteTouchedAccountsFn = deleteEmptyTouchedAccounts _

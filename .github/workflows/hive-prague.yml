@@ -1,0 +1,165 @@
+name: Hive Prague Suite
+
+# Runs the ethereum/eels/consume-engine simulator against fukuii for all fork_Prague tests.
+# Gate for PRs to main/develop and for nightly regressions. Fails the build if the pass
+# count drops below a threshold, preventing regressions in Pectra EL compliance.
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+    paths:
+      - 'src/**'
+      - 'build.sbt'
+      - 'version.sbt'
+      - 'project/**'
+      - 'hive/**'
+      - '.github/workflows/hive-prague.yml'
+  workflow_dispatch:
+    inputs:
+      threshold:
+        description: 'Minimum passing test count required'
+        required: false
+        default: '400'
+      timelimit:
+        description: 'sim.timelimit (minutes)'
+        required: false
+        default: '40'
+  schedule:
+    # Nightly regression at 03:00 UTC
+    - cron: '0 3 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hive-prague-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  hive:
+    name: Consume-engine Prague sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    env:
+      PASS_THRESHOLD: ${{ github.event.inputs.threshold || '400' }}
+      SIM_TIMELIMIT: ${{ github.event.inputs.timelimit || '40' }}m
+      HIVE_PARALLELISM: '4'
+
+    steps:
+      - name: Checkout fukuii
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'sbt'
+
+      - name: Cache Coursier
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.ivy2/cache
+            ~/.sbt
+          key: sbt-${{ runner.os }}-${{ hashFiles('**/*.sbt', 'project/**') }}
+          restore-keys: sbt-${{ runner.os }}-
+
+      - name: Install sbt
+        run: |
+          curl -L https://github.com/sbt/sbt/releases/download/v1.10.7/sbt-1.10.7.tgz | tar xz -C /tmp
+          sudo ln -sf /tmp/sbt/bin/sbt /usr/local/bin/sbt
+          sbt --version
+
+      - name: Build fukuii assembly
+        run: sbt -batch assembly
+
+      - name: Tag base Docker image
+        run: |
+          # The hive adapter Dockerfile does `FROM chipprbots/fukuii:latest`, so we build the
+          # base image by copying the just-built assembly into a thin overlay.
+          mkdir -p target/quick-docker
+          cp target/scala-3.3.4/fukuii-assembly-*.jar target/quick-docker/
+          cat > target/quick-docker/Dockerfile <<'DOCKER'
+          FROM eclipse-temurin:21-jre-noble
+          RUN apt-get update && apt-get install -y --no-install-recommends jq curl && rm -rf /var/lib/apt/lists/*
+          WORKDIR /app
+          RUN mkdir -p /app/fukuii/lib /app/data /app/hive-conf
+          COPY fukuii-assembly-*.jar /app/fukuii/lib/fukuii-assembly-0.1.240.jar
+          ENTRYPOINT ["java", "-jar", "/app/fukuii/lib/fukuii-assembly-0.1.240.jar"]
+          DOCKER
+          docker build -t chipprbots/fukuii:latest target/quick-docker/
+
+      - name: Check out hive
+        uses: actions/checkout@v4
+        with:
+          repository: ethereum/hive
+          path: hive
+          fetch-depth: 1
+
+      - name: Sync fukuii hive adapter
+        run: |
+          mkdir -p hive/clients/fukuii
+          cp hive/fukuii/* hive/clients/fukuii/ || true
+          # Source tree path: our adapter lives at hive/fukuii/ in the fukuii repo.
+          cp -v $GITHUB_WORKSPACE/hive/fukuii/Dockerfile hive/clients/fukuii/Dockerfile
+          cp -v $GITHUB_WORKSPACE/hive/fukuii/fukuii.sh hive/clients/fukuii/fukuii.sh
+          cp -v $GITHUB_WORKSPACE/hive/fukuii/mapper.jq hive/clients/fukuii/mapper.jq
+          cp -v $GITHUB_WORKSPACE/hive/fukuii/enode.sh hive/clients/fukuii/enode.sh 2>/dev/null || true
+          cp target/scala-3.3.4/fukuii-assembly-*.jar hive/clients/fukuii/
+
+      - name: Build hive
+        working-directory: hive
+        run: |
+          go version
+          go build ./cmd/hive
+          ./hive --help | head -5
+
+      - name: Run Prague consume-engine sweep
+        working-directory: hive
+        run: |
+          ./hive --sim ethereum/eels/consume-engine \
+            --sim.buildarg disable_strict_exception_matching=nimbus-el,fukuii \
+            --client fukuii \
+            --sim.limit '.*fork_Prague.*' \
+            --sim.parallelism $HIVE_PARALLELISM \
+            --sim.timelimit $SIM_TIMELIMIT \
+            --client.checktimelimit=30s \
+            --loglevel 3 \
+            2>&1 | tee hive-run.log
+
+      - name: Tabulate results
+        id: tab
+        working-directory: hive
+        run: |
+          sim_log=$(ls -t workspace/logs/*-simulator-*.log | head -1)
+          passed=$(grep -c "PASSED tests/" "$sim_log" || true)
+          failed=$(grep -c "FAILED tests/" "$sim_log" || true)
+          total=$((passed + failed))
+          echo "passed=$passed" >> "$GITHUB_OUTPUT"
+          echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          echo "total=$total" >> "$GITHUB_OUTPUT"
+          printf '### Hive Prague sweep\n\n| | | |\n|--|--|--|\n| passed | %s | |\n| failed | %s | |\n| total | %s | |\n| threshold | %s | |\n' \
+            "$passed" "$failed" "$total" "$PASS_THRESHOLD" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload hive workspace logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hive-workspace-logs
+          path: hive/workspace/logs/
+          retention-days: 14
+
+      - name: Fail if under threshold
+        if: ${{ steps.tab.outputs.passed < env.PASS_THRESHOLD }}
+        run: |
+          echo "::error::Hive Prague sweep only passed ${{ steps.tab.outputs.passed }} tests (threshold ${{ env.PASS_THRESHOLD }})."
+          exit 1
