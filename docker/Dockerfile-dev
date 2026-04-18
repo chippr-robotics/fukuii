@@ -32,9 +32,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && \
     apt-get install -y sbt
 
-# Create non-root user and necessary directories (no hard-coded uid/gid)
-RUN groupadd -r fukuii && \
-    useradd -r -g fukuii --home-dir=/home/fukuii --shell=/bin/bash fukuii && \
+# Create non-root user and necessary directories.
+# Pin uid/gid to 1000 so BuildKit cache mounts can be owned by this user
+# (BuildKit cache grammar resolves uid= at build time; it can't read /etc/passwd).
+RUN groupadd -g 1000 fukuii && \
+    useradd -u 1000 -g 1000 -m --home-dir=/home/fukuii --shell=/bin/bash fukuii && \
     mkdir -p /home/fukuii/.cache/sbt /home/fukuii/.ivy2 /home/fukuii/.sbt && \
     chown -R fukuii:fukuii /home/fukuii
 
@@ -42,10 +44,11 @@ USER fukuii
 WORKDIR /home/fukuii
 ENV USER=fukuii
 
-# Pre-warm SBT by running a simple command
-RUN --mount=type=cache,target=/home/fukuii/.ivy2 \
-    --mount=type=cache,target=/home/fukuii/.sbt \
-    --mount=type=cache,target=/home/fukuii/.cache \
+# Pre-warm SBT by running a simple command. uid/gid match the fukuii user
+# so the cache mount is writable by sbt (otherwise it's root-owned → EACCES).
+RUN --mount=type=cache,target=/home/fukuii/.ivy2,uid=1000,gid=1000 \
+    --mount=type=cache,target=/home/fukuii/.sbt,uid=1000,gid=1000 \
+    --mount=type=cache,target=/home/fukuii/.cache,uid=1000,gid=1000 \
     sbt -version
 
 CMD ["/bin/bash"]
