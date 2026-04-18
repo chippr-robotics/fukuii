@@ -102,29 +102,29 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ethereum/hive
-          path: hive
+          path: external/hive
           fetch-depth: 1
 
       - name: Sync fukuii hive adapter
         run: |
-          mkdir -p hive/clients/fukuii
-          cp hive/fukuii/* hive/clients/fukuii/ || true
+          mkdir -p external/hive/clients/fukuii
           # Source tree path: our adapter lives at hive/fukuii/ in the fukuii repo.
-          cp -v $GITHUB_WORKSPACE/hive/fukuii/Dockerfile hive/clients/fukuii/Dockerfile
-          cp -v $GITHUB_WORKSPACE/hive/fukuii/fukuii.sh hive/clients/fukuii/fukuii.sh
-          cp -v $GITHUB_WORKSPACE/hive/fukuii/mapper.jq hive/clients/fukuii/mapper.jq
-          cp -v $GITHUB_WORKSPACE/hive/fukuii/enode.sh hive/clients/fukuii/enode.sh 2>/dev/null || true
-          cp target/scala-3.3.4/fukuii-assembly-*.jar hive/clients/fukuii/
+          # hive is checked out to external/hive so it doesn't shadow our adapter dir.
+          cp -v $GITHUB_WORKSPACE/hive/fukuii/Dockerfile external/hive/clients/fukuii/Dockerfile
+          cp -v $GITHUB_WORKSPACE/hive/fukuii/fukuii.sh external/hive/clients/fukuii/fukuii.sh
+          cp -v $GITHUB_WORKSPACE/hive/fukuii/mapper.jq external/hive/clients/fukuii/mapper.jq
+          cp -v $GITHUB_WORKSPACE/hive/fukuii/enode.sh external/hive/clients/fukuii/enode.sh 2>/dev/null || true
+          cp target/scala-3.3.4/fukuii-assembly-*.jar external/hive/clients/fukuii/
 
       - name: Build hive
-        working-directory: hive
+        working-directory: external/hive
         run: |
           go version
           go build ./cmd/hive
           ./hive --help | head -5
 
       - name: Run Prague consume-engine sweep
-        working-directory: hive
+        working-directory: external/hive
         run: |
           ./hive --sim ethereum/eels/consume-engine \
             --sim.buildarg disable_strict_exception_matching=nimbus-el,fukuii \
@@ -138,7 +138,7 @@ jobs:
 
       - name: Tabulate results
         id: tab
-        working-directory: hive
+        working-directory: external/hive
         run: |
           sim_log=$(ls -t workspace/logs/*-simulator-*.log | head -1)
           passed=$(grep -c "PASSED tests/" "$sim_log" || true)
@@ -155,7 +155,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: hive-workspace-logs
-          path: hive/workspace/logs/
+          path: external/hive/workspace/logs/
           retention-days: 14
 
       - name: Fail if under threshold
