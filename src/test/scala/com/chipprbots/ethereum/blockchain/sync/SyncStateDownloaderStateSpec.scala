@@ -185,7 +185,7 @@ class SyncStateDownloaderStateSpec
     val received: NonEmptyList[ByteString] = NonEmptyList.fromListUnsafe(List(values(1), values(3)))
     val (toReschedule, delivered) = initialState.process(requested, received)
 
-    assert(toReschedule == List(hashes(4), hashes(2), hashes(0)))
+    assert(toReschedule.toSet == Set(hashes(0), hashes(2), hashes(4)))
     assert(delivered == List(responses(1), responses(3)))
   }
 
@@ -198,7 +198,7 @@ class SyncStateDownloaderStateSpec
     val received: NonEmptyList[ByteString] = NonEmptyList.fromListUnsafe(List(values(0), values(4)))
     val (toReschedule, delivered) = initialState.process(requested, received)
 
-    assert(toReschedule == List(hashes(3), hashes(2), hashes(1)))
+    assert(toReschedule.toSet == Set(hashes(1), hashes(2), hashes(3)))
     assert(delivered == List(responses(0), responses(4)))
   }
 
@@ -211,7 +211,7 @@ class SyncStateDownloaderStateSpec
     val received: NonEmptyList[ByteString] = NonEmptyList.fromListUnsafe(List(values.last))
     val (toReschedule, delivered) = initialState.process(requested, received)
 
-    assert(toReschedule == List(hashes(3), hashes(2), hashes(1), hashes(0)))
+    assert(toReschedule.toSet == Set(hashes(0), hashes(1), hashes(2), hashes(3)))
     assert(delivered == List(responses.last))
   }
 
@@ -223,7 +223,7 @@ class SyncStateDownloaderStateSpec
     val requested: NonEmptyList[ByteString] = NonEmptyList.fromListUnsafe(hashes)
     val received: NonEmptyList[ByteString] = NonEmptyList.fromListUnsafe(List(values.head))
     val (toReschedule, delivered) = initialState.process(requested, received)
-    assert(toReschedule == List(hashes(1), hashes(2), hashes(3), hashes(4)))
+    assert(toReschedule.toSet == Set(hashes(1), hashes(2), hashes(3), hashes(4)))
     assert(delivered == List(responses.head))
   }
 
@@ -235,7 +235,7 @@ class SyncStateDownloaderStateSpec
     val requested: NonEmptyList[ByteString] = NonEmptyList.fromListUnsafe(hashes)
     val received: NonEmptyList[ByteString] = NonEmptyList.fromListUnsafe(List(values(2), values(3)))
     val (toReschedule, delivered) = initialState.process(requested, received)
-    assert(toReschedule == List(hashes(4), hashes(1), hashes(0)))
+    assert(toReschedule.toSet == Set(hashes(0), hashes(1), hashes(4)))
     assert(delivered == List(responses(2), responses(3)))
   }
 

@@ -9,6 +9,8 @@ import org.apache.pekko.actor.Props
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor._
 import com.chipprbots.ethereum.network.PeerActor.DisconnectPeer
@@ -45,7 +47,7 @@ class NetworkPeerManagerActor(
     appStateStorage: AppStateStorage,
     forkResolverOpt: Option[ForkResolver],
     initialSnapSyncControllerOpt: Option[ActorRef] = None,
-    evmCodeStorage: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
+    evmCodeStorageOpt: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
     mptStorageOpt: Option[com.chipprbots.ethereum.db.storage.MptStorage] = None,
     blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader] = None
 ) extends Actor
@@ -639,7 +641,7 @@ class NetworkPeerManagerActor(
     val response: ByteCodes =
       try {
         val maxBytes = msg.responseBytes.toInt.max(0)
-        val codes: Seq[ByteString] = evmCodeStorage match {
+        val codes: Seq[ByteString] = evmCodeStorageOpt match {
           case Some(storage) =>
             val collected = scala.collection.mutable.ListBuffer.empty[ByteString]
             var totalBytes = 0
@@ -865,7 +867,7 @@ object NetworkPeerManagerActor {
       appStateStorage: AppStateStorage,
       forkResolverOpt: Option[ForkResolver],
       snapSyncControllerOpt: Option[ActorRef] = None,
-      evmCodeStorage: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
+      evmCodeStorageOpt: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
       mptStorageOpt: Option[com.chipprbots.ethereum.db.storage.MptStorage] = None,
       blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader] = None
   ): Props =
@@ -876,7 +878,7 @@ object NetworkPeerManagerActor {
         appStateStorage,
         forkResolverOpt,
         snapSyncControllerOpt,
-        evmCodeStorage,
+        evmCodeStorageOpt,
         mptStorageOpt,
         blockchainReader
       )
