@@ -77,11 +77,28 @@ class PeerManagerActor(
     */
   private var maintainedPeersByNodeId: Map[String, URI] = Map.empty
 
+  /** Trusted peers bypass the max-peer limit and are always accepted.
+    * core-geth reference: p2p/server.go — trusted map[enode.ID]bool in run loop.
+    * Keyed by lowercase hex node ID.
+    */
+  private var trustedPeersByNodeId: Set[String] = Set.empty
+
+  /** Runtime max-outgoing-peers override set by admin_maxPeers.
+    * core-geth reference: eth/api_admin.go MaxPeers — sets handler.maxPeers + p2pServer.MaxPeers.
+    */
+  private var maxOutgoingPeersOverride: Option[Int] = None
+
+  private def effectiveMaxOutgoing: Int =
+    maxOutgoingPeersOverride.getOrElse(peerConfiguration.maxOutgoingPeers)
+
   implicit class ConnectedPeersOps(connectedPeers: ConnectedPeers) {
 
-    /** Number of new connections the node should try to open at any given time. */
+    /** Number of new connections the node should try to open at any given time.
+      * Uses effectiveMaxOutgoing so admin_maxPeers overrides take effect.
+      */
     def outgoingConnectionDemand: Int =
-      PeerManagerActor.outgoingConnectionDemand(connectedPeers, peerConfiguration)
+      if (connectedPeers.outgoingHandshakedPeersCount >= peerConfiguration.minOutgoingPeers) 0
+      else effectiveMaxOutgoing - connectedPeers.outgoingPeersCount
 
     def canConnectTo(node: Node): Boolean = {
       val socketAddress = node.tcpSocketAddress
@@ -264,6 +281,27 @@ class PeerManagerActor(
 
     case RemoveMaintainedPeer(nodeId) =>
       maintainedPeersByNodeId = maintainedPeersByNodeId - nodeId
+
+    // ── Geth-compatible trusted peer / max-peers management ───────────────
+    // core-geth references: node/api.go AddTrustedPeer/RemoveTrustedPeer, eth/api_admin.go MaxPeers
+
+    case AddTrustedPeer(uri) =>
+      val nodeId = uri.getUserInfo.toLowerCase
+      trustedPeersByNodeId = trustedPeersByNodeId + nodeId
+      sender() ! AddTrustedPeerResponse(success = true)
+      // Attempt connection immediately (like AddMaintainedPeer) so the trusted
+      // peer is dialled even if we're currently at the max-peer limit.
+      connectWith(uri, connectedPeers)
+
+    case RemoveTrustedPeer(nodeId) =>
+      // Removes trust but does NOT disconnect the live connection.
+      // core-geth: server.RemoveTrustedPeer does not call removePeer.
+      trustedPeersByNodeId = trustedPeersByNodeId - nodeId.toLowerCase
+      sender() ! RemoveTrustedPeerResponse(success = true)
+
+    case SetMaxPeers(n) =>
+      maxOutgoingPeersOverride = Some(n)
+      sender() ! SetMaxPeersResponse(success = true)
   }
 
   private def getBlacklistDuration(reason: Long): FiniteDuration = {
@@ -317,12 +355,15 @@ class PeerManagerActor(
   }
 
   private def connectWith(uri: URI, connectedPeers: ConnectedPeers): Unit = {
-    val nodeId = ByteString(Hex.decode(uri.getUserInfo))
+    val nodeIdHex     = uri.getUserInfo.toLowerCase
+    val nodeId        = ByteString(Hex.decode(nodeIdHex))
     val remoteAddress = new InetSocketAddress(uri.getHost, uri.getPort)
 
     val alreadyConnectedToPeer =
       connectedPeers.hasHandshakedWith(nodeId) || connectedPeers.isConnectionHandled(remoteAddress)
-    val isOutgoingPeersNotMaxValue = connectedPeers.outgoingPeersCount < peerConfiguration.maxOutgoingPeers
+    // Trusted peers bypass the max peer limit (core-geth: trustedConn flag skips maxPeers check)
+    val isTrusted = trustedPeersByNodeId.contains(nodeIdHex)
+    val isOutgoingPeersNotMaxValue = isTrusted || connectedPeers.outgoingPeersCount < effectiveMaxOutgoing
 
     val validConnection = for {
       validHandler <- validateConnection(remoteAddress, OutgoingConnectionAlreadyHandled(uri), !alreadyConnectedToPeer)
@@ -704,6 +745,17 @@ object PeerManagerActor {
   case class AddMaintainedPeer(uri: URI)
   case class AddMaintainedPeerResponse(wasAdded: Boolean)
   case class RemoveMaintainedPeer(nodeId: String)
+
+  /** core-geth alignment: admin_addTrustedPeer / admin_removeTrustedPeer / admin_maxPeers.
+    * Trusted peers bypass the max-peer limit and are always accepted.
+    * core-geth references: node/api.go AddTrustedPeer/RemoveTrustedPeer, eth/api_admin.go MaxPeers
+    */
+  case class AddTrustedPeer(uri: URI)
+  case class AddTrustedPeerResponse(success: Boolean)
+  case class RemoveTrustedPeer(nodeId: String)
+  case class RemoveTrustedPeerResponse(success: Boolean)
+  case class SetMaxPeers(n: Int)
+  case class SetMaxPeersResponse(success: Boolean)
 
   /** Default blacklist duration when none specified (permanent blacklist). Set to 365 days as a practical "permanent"
     * duration.

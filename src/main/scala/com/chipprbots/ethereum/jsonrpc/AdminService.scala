@@ -99,6 +99,21 @@ object AdminService {
   case class AdminListBlockedIPsRequest()
   case class AdminListBlockedIPsResponse(ips: List[String])
 
+  /** core-geth: admin_addTrustedPeer / admin_removeTrustedPeer — always returns true on success.
+    * core-geth reference: node/api.go AddTrustedPeer / RemoveTrustedPeer
+    */
+  case class AdminAddTrustedPeerRequest(enodeUrl: String)
+  case class AdminAddTrustedPeerResponse(success: Boolean)
+
+  case class AdminRemoveTrustedPeerRequest(enodeUrl: String)
+  case class AdminRemoveTrustedPeerResponse(success: Boolean)
+
+  /** core-geth: admin_maxPeers — sets max connected peers at runtime, returns true on success.
+    * core-geth reference: eth/api_admin.go MaxPeers
+    */
+  case class AdminMaxPeersRequest(maxPeers: Int)
+  case class AdminMaxPeersResponse(success: Boolean)
+
   private val ValidLogLevels = Set("OFF", "ERROR", "WARN", "INFO", "DEBUG", "TRACE", "ALL")
 }
 
@@ -393,4 +408,57 @@ class AdminService(
   def listBlockedIPs(req: AdminListBlockedIPsRequest): ServiceResponse[AdminListBlockedIPsResponse] = IO {
     Right(AdminListBlockedIPsResponse(blockedIPRegistry.all.toList.sorted))
   }
+
+  /** core-geth admin_addTrustedPeer: adds peer to trusted set (bypasses max-peer limit).
+    * Always returns true — mirrors core-geth node/api.go AddTrustedPeer returning (true, nil).
+    */
+  def addTrustedPeer(req: AdminAddTrustedPeerRequest): ServiceResponse[AdminAddTrustedPeerResponse] =
+    try {
+      val uri = new URI(req.enodeUrl)
+      peerManager
+        .askFor[PeerManagerActor.AddTrustedPeerResponse](PeerManagerActor.AddTrustedPeer(uri))
+        .map(r => Right(AdminAddTrustedPeerResponse(r.success)))
+        .handleError { ex =>
+          log.error(s"Failed to add trusted peer: ${req.enodeUrl}", ex)
+          Right(AdminAddTrustedPeerResponse(false))
+        }
+    } catch {
+      case ex: Exception =>
+        log.error(s"Failed to parse enode URL: ${req.enodeUrl}", ex)
+        IO.pure(Right(AdminAddTrustedPeerResponse(false)))
+    }
+
+  /** core-geth admin_removeTrustedPeer: removes from trusted set; does NOT disconnect.
+    * Always returns true — mirrors core-geth node/api.go RemoveTrustedPeer returning (true, nil).
+    */
+  def removeTrustedPeer(req: AdminRemoveTrustedPeerRequest): ServiceResponse[AdminRemoveTrustedPeerResponse] =
+    try {
+      val uri          = new URI(req.enodeUrl)
+      val targetNodeId = Option(uri.getUserInfo).map(_.toLowerCase).getOrElse("")
+      peerManager
+        .askFor[PeerManagerActor.RemoveTrustedPeerResponse](
+          PeerManagerActor.RemoveTrustedPeer(targetNodeId)
+        )
+        .map(r => Right(AdminRemoveTrustedPeerResponse(r.success)))
+        .handleError { ex =>
+          log.error(s"Failed to remove trusted peer: ${req.enodeUrl}", ex)
+          Right(AdminRemoveTrustedPeerResponse(false))
+        }
+    } catch {
+      case ex: Exception =>
+        log.error(s"Failed to parse enode URL: ${req.enodeUrl}", ex)
+        IO.pure(Right(AdminRemoveTrustedPeerResponse(false)))
+    }
+
+  /** core-geth admin_maxPeers: sets max connected peers at runtime.
+    * core-geth reference: eth/api_admin.go MaxPeers — sets handler.maxPeers + p2pServer.MaxPeers.
+    */
+  def maxPeers(req: AdminMaxPeersRequest): ServiceResponse[AdminMaxPeersResponse] =
+    peerManager
+      .askFor[PeerManagerActor.SetMaxPeersResponse](PeerManagerActor.SetMaxPeers(req.maxPeers))
+      .map(r => Right(AdminMaxPeersResponse(r.success)))
+      .handleError { ex =>
+        log.error(s"Failed to set max peers to ${req.maxPeers}", ex)
+        Right(AdminMaxPeersResponse(false))
+      }
 }
