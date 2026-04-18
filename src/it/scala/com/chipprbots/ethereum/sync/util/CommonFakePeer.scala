@@ -241,9 +241,12 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
   // so an actor that discards everything suffices to satisfy the ctor requirement added with the
   // txpool_* namespace.
   lazy val pendingTransactionsManagerStub: ActorRef =
-    system.actorOf(org.apache.pekko.actor.Props(new org.apache.pekko.actor.Actor {
-      def receive: Receive = { case _ => () }
-    }), s"pending-txs-stub-${System.nanoTime()}")
+    system.actorOf(
+      org.apache.pekko.actor.Props(new org.apache.pekko.actor.Actor {
+        def receive: Receive = { case _ => () }
+      }),
+      s"pending-txs-stub-${System.nanoTime()}"
+    )
 
   val blockchainHost: ActorRef =
     system.actorOf(

@@ -99,11 +99,13 @@ jobs:
           docker build -t chipprbots/fukuii:latest target/quick-docker/
 
       - name: Check out hive
-        uses: actions/checkout@v4
-        with:
-          repository: ethereum/hive
-          path: external/hive
-          fetch-depth: 1
+        # Using a direct git clone instead of actions/checkout because the latter
+        # was silently landing zero files into external/hive despite returning success.
+        # Go build then failed with "external/hive/cmd/hive: directory not found".
+        run: |
+          mkdir -p external
+          git clone --depth=1 https://github.com/ethereum/hive.git external/hive
+          test -d external/hive/cmd/hive  # fail fast if the checkout was a no-op
 
       - name: Sync fukuii hive adapter
         run: |
