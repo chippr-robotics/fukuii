@@ -18,10 +18,15 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionLocation
 import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.jsonrpc.TraceService._
+import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ledger.StxLedger
+import com.chipprbots.ethereum.ledger.TxResult
 import com.chipprbots.ethereum.testing.Tags._
+import com.chipprbots.ethereum.vm.ExecutionTracer
 
 /** Unit tests for TraceService.
   *
@@ -67,7 +72,7 @@ class TraceServiceSpec
 
     (txMappingStorage.get _).expects(txHash).returning(Some(TransactionLocation(block.header.hash, txIndex)))
     (mockLedger.advanceWorldToTx _).expects(*, *, *, *).returning(mockWorld)
-    (mockLedger.simulateTransactionWithTracer _).expects(*, *, *, *).returning(null.asInstanceOf[com.chipprbots.ethereum.ledger.TxResult])
+    (mockLedger.simulateTransactionWithTracer(_: SignedTransactionWithSender, _: BlockHeader, _: Option[InMemoryWorldStateProxy], _: ExecutionTracer)).expects(*, *, *, *).returning(null.asInstanceOf[TxResult])
 
     val result = service
       .traceTransaction(TraceTransactionRequest(txHash))
@@ -118,7 +123,7 @@ class TraceServiceSpec
 
     (txMappingStorage.get _).expects(txHash).returning(Some(TransactionLocation(block.header.hash, txIndex)))
     (mockLedger.advanceWorldToTx _).expects(*, *, *, *).returning(mockWorld)
-    (mockLedger.simulateTransactionWithTracer _).expects(*, *, *, *).returning(null.asInstanceOf[com.chipprbots.ethereum.ledger.TxResult]).anyNumberOfTimes()
+    (mockLedger.simulateTransactionWithTracer(_: SignedTransactionWithSender, _: BlockHeader, _: Option[InMemoryWorldStateProxy], _: ExecutionTracer)).expects(*, *, *, *).returning(null.asInstanceOf[TxResult]).anyNumberOfTimes()
 
     val result = service
       .replayTransaction(TraceReplayTransactionRequest(txHash, TraceOptions(trace = true)))
@@ -156,7 +161,7 @@ class TraceServiceSpec
     "return a call trace result for the latest block" taggedAs (UnitTest, RPCTest) in new TestSetup {
       blockchainWriter.save(block, Nil, ChainWeight.totalDifficultyOnly(block.header.difficulty), saveAsBestBlock = true)
 
-      (mockLedger.simulateTransactionWithTracer _).expects(*, *, *, *).returning(null.asInstanceOf[com.chipprbots.ethereum.ledger.TxResult])
+      (mockLedger.simulateTransactionWithTracer(_: SignedTransactionWithSender, _: BlockHeader, _: Option[InMemoryWorldStateProxy], _: ExecutionTracer)).expects(*, *, *, *).returning(null.asInstanceOf[TxResult])
 
       val callTx = EthInfoService.CallTx(
         from = None,
