@@ -127,6 +127,44 @@ object DebugTracingJsonMethodsImplicits extends JsonMethodsImplicits {
         JArray(t.results.toList)
     }
 
+  implicit val debug_intermediateRoots: JsonMethodCodec[IntermediateRootsRequest, IntermediateRootsResponse] =
+    new JsonMethodCodec[IntermediateRootsRequest, IntermediateRootsResponse] {
+      override def decodeJson(params: Option[JArray]): Either[JsonRpcError, IntermediateRootsRequest] =
+        params match {
+          case Some(JArray(JString(hash) :: _)) =>
+            extractBytes(hash).map(IntermediateRootsRequest(_))
+          case _ =>
+            Left(JsonRpcError.InvalidParams())
+        }
+
+      override def encodeJson(t: IntermediateRootsResponse): JValue =
+        JArray(t.roots.map(h => JString("0x" + org.bouncycastle.util.encoders.Hex.toHexString(h.toArray))).toList)
+    }
+
+  implicit val debug_traceChain: JsonMethodCodec[TraceChainRequest, Seq[TraceChainBlockResult]] =
+    new JsonMethodCodec[TraceChainRequest, Seq[TraceChainBlockResult]] {
+      override def decodeJson(params: Option[JArray]): Either[JsonRpcError, TraceChainRequest] =
+        params match {
+          case Some(JArray(fromParam :: toParam :: rest)) =>
+            for {
+              from   <- extractBlockParam(fromParam)
+              to     <- extractBlockParam(toParam)
+              config <- extractTraceConfig(rest.headOption)
+            } yield TraceChainRequest(from, to, config)
+          case _ =>
+            Left(JsonRpcError.InvalidParams())
+        }
+
+      override def encodeJson(t: Seq[TraceChainBlockResult]): JValue =
+        JArray(t.map { r =>
+          JObject(
+            "block"     -> JString("0x" + r.block.toString(16)),
+            "blockHash" -> JString("0x" + org.bouncycastle.util.encoders.Hex.toHexString(r.blockHash.toArray)),
+            "traces"    -> JArray(r.traces.toList)
+          )
+        }.toList)
+    }
+
   // ─── Helpers ──────────────────────────────────────────────────────────────────
 
   /** Decodes an optional TraceConfig from a JSON object parameter.

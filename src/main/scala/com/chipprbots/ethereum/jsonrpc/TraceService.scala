@@ -77,6 +77,27 @@ object TraceService {
 
   case class TraceCallManyRequest(calls: Seq[(EthInfoService.CallTx, TraceOptions)], block: BlockParam)
   case class TraceCallManyResponse(results: Seq[JValue])
+
+  /** trace_filter params — matches Besu FilterParameter + Parity/OpenEthereum filter spec.
+    *
+    * Besu reference: FilterParameter.java + TraceFilter.java
+    *   - fromBlock / toBlock: block range (inclusive on both ends)
+    *   - fromAddress / toAddress: address filters; empty list = no filter (AND semantics)
+    *   - after: skip first N matching traces (offset for pagination)
+    *   - count: return at most N matching traces (limit for pagination)
+    *   - maxRange: guarded by MaxTraceFilterRange constant
+    */
+  case class TraceFilterRequest(
+      fromBlock: BlockParam,
+      toBlock: BlockParam,
+      fromAddress: Seq[Address] = Nil,
+      toAddress: Seq[Address] = Nil,
+      after: Option[Int] = None,
+      count: Option[Int] = None
+  )
+  case class TraceFilterResponse(traces: Seq[JValue])
+
+  val MaxTraceFilterRange: Long = 1000L
 }
 
 class TraceService(
@@ -370,6 +391,78 @@ class TraceService(
 
     walk(root, Nil)
     buf.toSeq
+  }
+
+  /** Implements trace_filter.
+    *
+    * Besu reference: TraceFilter.java — iterates block range, produces flat Parity traces per block,
+    *   applies fromAddress/toAddress filters, respects after/count pagination, guards maxRange.
+    *
+    * core-geth reference: api_parity.go Filter() → TraceChain() (streaming); we use Besu's
+    *   synchronous collection approach to keep HTTP semantics simple.
+    *
+    * Algorithm:
+    *   1. Resolve fromBlock / toBlock to block numbers
+    *   2. Validate range: fromBlock <= toBlock, range <= MaxTraceFilterRange
+    *   3. For each block in range: get flat traces via traceAllTxsFlat, apply address filters
+    *   4. Apply pagination (after = offset, count = limit)
+    */
+  def traceFilter(req: TraceFilterRequest): ServiceResponse[TraceFilterResponse] =
+    IO {
+      for {
+        fromResolved <- resolveBlock(req.fromBlock)
+        toResolved   <- resolveBlock(req.toBlock)
+        fromNum       = fromResolved.block.header.number.toLong
+        toNum         = toResolved.block.header.number.toLong
+        _ <- Either.cond(fromNum <= toNum, (), JsonRpcError.InvalidParams("fromBlock must be <= toBlock"))
+        _ <- Either.cond(
+          toNum - fromNum <= MaxTraceFilterRange,
+          (),
+          JsonRpcError.InvalidParams(s"Requested range exceeds max of $MaxTraceFilterRange blocks")
+        )
+        allTraces = (fromNum to toNum).flatMap { blockNum =>
+          if (blockNum == 0) Nil  // skip genesis — no parent state
+          else {
+            val branch = blockchainReader.getBestBranch()
+            blockchainReader.getBlockByNumber(branch, blockNum)
+              .flatMap { block =>
+                blockchainReader.getBlockHeaderByHash(block.header.parentHash).map { parentHeader =>
+                  val flat = traceAllTxsFlat(block, parentHeader.stateRoot)
+                  applyAddressFilter(flat, req.fromAddress, req.toAddress)
+                }
+              }
+              .getOrElse(Nil)
+          }
+        }
+        paginatedTraces = {
+          val afterN = req.after.getOrElse(0)
+          val countN = req.count.getOrElse(allTraces.length)
+          allTraces.slice(afterN, afterN + countN)
+        }
+      } yield TraceFilterResponse(paginatedTraces)
+    }.recover { case _: MissingNodeException =>
+      Left(JsonRpcError.NodeNotFound)
+    }
+
+  /** Applies fromAddress/toAddress filters to a flat trace sequence.
+    *
+    * Besu reference: TraceFlatTransactionStep.java — both filters are AND semantics;
+    *   an empty list means "no filter" (all traces pass).
+    */
+  private def applyAddressFilter(
+      traces: Seq[JValue],
+      fromAddrs: Seq[Address],
+      toAddrs: Seq[Address]
+  ): Seq[JValue] = {
+    if (fromAddrs.isEmpty && toAddrs.isEmpty) traces
+    else traces.filter { trace =>
+      val action   = trace \ "action"
+      val fromHex  = (action \ "from") match { case JString(s) => s.toLowerCase; case _ => "" }
+      val toHex    = (action \ "to")   match { case JString(s) => s.toLowerCase; case _ => "" }
+      val fromOk   = fromAddrs.isEmpty || fromAddrs.exists(a => fromHex == "0x" + a.toString.toLowerCase)
+      val toOk     = toAddrs.isEmpty   || toAddrs.exists(a => toHex   == "0x" + a.toString.toLowerCase)
+      fromOk && toOk
+    }
   }
 
   /** Builds a synthetic SignedTransactionWithSender from a CallTx (used in traceCall). */
