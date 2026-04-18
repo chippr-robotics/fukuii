@@ -126,7 +126,7 @@ jobs:
             exit 1
           fi
 
-          test -d external/hive/cmd/hive  # fail fast if the clone landed an unexpected layout
+          test -f external/hive/hive.go  # fail fast if the clone landed an unexpected layout
 
       - name: Sync fukuii hive adapter
         run: |
@@ -143,7 +143,9 @@ jobs:
         working-directory: external/hive
         run: |
           go version
-          go build ./cmd/hive
+          # ethereum/hive's main binary lives at the repo root (hive.go),
+          # NOT under cmd/hive (which doesn't exist — cmd/ holds hivechain + hiveview).
+          go build -o hive .
           ./hive --help | head -5
 
       - name: Run Prague consume-engine sweep
