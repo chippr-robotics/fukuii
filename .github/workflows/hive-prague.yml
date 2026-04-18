@@ -157,30 +157,82 @@ jobs:
           go build -o hive .
           ./hive --help | head -5
 
+      - name: Resolve execution-spec-tests fixtures URL
+        id: fixtures
+        env:
+          # GITHUB_TOKEN lifts anonymous API rate limits (60/hr) to 1000/hr,
+          # which matters because the consume-cache step inside the simulator
+          # image calls api.github.com unauthenticated and gets rate-limited
+          # to death on shared CI egress IPs — pytest catches the HTTPError
+          # and exits 3 (INTERNAL_ERROR). We resolve the URL here (authed)
+          # and inject it via --sim.buildarg fixtures=<url> so the inner
+          # Dockerfile's `consume cache --input "$FIXTURES"` takes the
+          # direct-URL code path and skips the API entirely.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Pin explicitly — we want reproducibility over "latest" surprises.
+          FIXTURES_TAG='v5.4.0'
+          FIXTURES_URL="https://github.com/ethereum/execution-spec-tests/releases/download/${FIXTURES_TAG}/fixtures_stable.tar.gz"
+
+          # Sanity-check the asset exists (authenticated → no rate-limit).
+          gh api -H 'Accept: application/vnd.github+json' \
+            "repos/ethereum/execution-spec-tests/releases/tags/${FIXTURES_TAG}" \
+            --jq '.assets[] | select(.name == "fixtures_stable.tar.gz") | .browser_download_url' \
+            | grep -qx "$FIXTURES_URL"
+
+          echo "url=$FIXTURES_URL" >> "$GITHUB_OUTPUT"
+          echo "Resolved fixtures URL: $FIXTURES_URL"
+
       - name: Run Prague consume-engine sweep
         working-directory: external/hive
         run: |
+          # --docker.buildoutput streams docker-build stderr through hive,
+          # so any future simulator-build regression is diagnosable from
+          # the Actions log directly instead of guessing at exit codes.
           ./hive --sim ethereum/eels/consume-engine \
+            --sim.buildarg fixtures='${{ steps.fixtures.outputs.url }}' \
             --sim.buildarg disable_strict_exception_matching=nimbus-el,fukuii \
             --client fukuii \
             --sim.limit '.*fork_Prague.*' \
             --sim.parallelism $HIVE_PARALLELISM \
             --sim.timelimit $SIM_TIMELIMIT \
             --client.checktimelimit=30s \
+            --docker.buildoutput \
             --loglevel 3 \
             2>&1 | tee hive-run.log
 
       - name: Tabulate results
         id: tab
+        if: always()
         working-directory: external/hive
         run: |
-          sim_log=$(ls -t workspace/logs/*-simulator-*.log | head -1)
+          # Distinguish simulator-build failure (no logs) from test failures.
+          shopt -s nullglob
+          sim_logs=(workspace/logs/*-simulator-*.log)
+          if [ "${#sim_logs[@]}" -eq 0 ]; then
+            echo "::error::No simulator log found — the consume-engine image likely failed to build. Check the 'Run Prague consume-engine sweep' step for the docker-build stderr."
+            echo "passed=0" >> "$GITHUB_OUTPUT"
+            echo "failed=0" >> "$GITHUB_OUTPUT"
+            echo "total=0" >> "$GITHUB_OUTPUT"
+            echo "sim_failed=true" >> "$GITHUB_OUTPUT"
+            printf '### Hive Prague sweep\n\n**Simulator failed to build.** No test log produced.\n' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          sim_log="${sim_logs[0]}"
+          # Pick newest by mtime if multiple logs exist.
+          for f in "${sim_logs[@]}"; do
+            [ "$f" -nt "$sim_log" ] && sim_log="$f"
+          done
           passed=$(grep -c "PASSED tests/" "$sim_log" || true)
           failed=$(grep -c "FAILED tests/" "$sim_log" || true)
+          passed=${passed:-0}
+          failed=${failed:-0}
           total=$((passed + failed))
           echo "passed=$passed" >> "$GITHUB_OUTPUT"
           echo "failed=$failed" >> "$GITHUB_OUTPUT"
           echo "total=$total" >> "$GITHUB_OUTPUT"
+          echo "sim_failed=false" >> "$GITHUB_OUTPUT"
           printf '### Hive Prague sweep\n\n| | | |\n|--|--|--|\n| passed | %s | |\n| failed | %s | |\n| total | %s | |\n| threshold | %s | |\n' \
             "$passed" "$failed" "$total" "$PASS_THRESHOLD" >> "$GITHUB_STEP_SUMMARY"
 
@@ -192,8 +244,14 @@ jobs:
           path: external/hive/workspace/logs/
           retention-days: 14
 
+      - name: Fail if simulator did not build
+        if: ${{ steps.tab.outputs.sim_failed == 'true' }}
+        run: |
+          echo "::error::consume-engine simulator image failed to build — no tests ran."
+          exit 1
+
       - name: Fail if under threshold
-        if: ${{ steps.tab.outputs.passed < env.PASS_THRESHOLD }}
+        if: ${{ steps.tab.outputs.sim_failed == 'false' && steps.tab.outputs.passed < env.PASS_THRESHOLD }}
         run: |
           echo "::error::Hive Prague sweep only passed ${{ steps.tab.outputs.passed }} tests (threshold ${{ env.PASS_THRESHOLD }})."
           exit 1
