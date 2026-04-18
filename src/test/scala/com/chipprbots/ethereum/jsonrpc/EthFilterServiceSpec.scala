@@ -18,15 +18,10 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.NormalPatience
 import com.chipprbots.ethereum.Timeouts
 import com.chipprbots.ethereum.WithActorSystemShutDown
+import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.jsonrpc.EthFilterService._
 import com.chipprbots.ethereum.jsonrpc.{FilterManager => FM}
 import com.chipprbots.ethereum.utils.FilterConfig
-import scala.concurrent.Future
-import scala.concurrent.Future
-import scala.concurrent.Future
-import scala.concurrent.Future
-import scala.concurrent.Future
-import scala.concurrent.Future
 import scala.concurrent.Future
 import com.chipprbots.ethereum.testing.Tags._
 
@@ -94,7 +89,8 @@ class EthFilterServiceSpec
     res.futureValue shouldEqual Right(GetFilterLogsResponse(logs))
   }
 
-  it should "handle getLogs request" taggedAs (UnitTest, RPCTest, DisabledTest) in new TestSetup {
+  it should "handle getLogs request" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    (mockBlockchainReader.getBestBlockNumber _).when().returns(BigInt(100))
     val filter: Filter = Filter(None, None, None, Seq.empty)
     val res: Future[Either[JsonRpcError, GetLogsResponse]] =
       ethFilterService.getLogs(GetLogsRequest(filter)).unsafeToFuture()
@@ -110,11 +106,12 @@ class EthFilterServiceSpec
       override val filterTimeout: FiniteDuration = Timeouts.normalTimeout
       override val filterManagerQueryTimeout: FiniteDuration = Timeouts.normalTimeout
     }
+    val mockBlockchainReader: BlockchainReader = stub[BlockchainReader]
 
     lazy val ethFilterService = new EthFilterService(
       filterManager.ref,
       filterConfig,
-      null.asInstanceOf[com.chipprbots.ethereum.domain.BlockchainReader]
+      mockBlockchainReader
     )
   }
 }
