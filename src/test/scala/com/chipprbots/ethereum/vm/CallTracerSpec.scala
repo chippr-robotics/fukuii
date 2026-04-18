@@ -27,8 +27,8 @@ class CallTracerSpec extends AnyFreeSpec with Matchers {
       (result \ "type") shouldBe JString("CALL")
       (result \ "from") shouldBe a[JString]
       (result \ "to") shouldBe a[JString]
-      (result \ "gas") shouldBe JInt(21000)
-      (result \ "gasUsed") shouldBe JInt(21000)
+      (result \ "gas") shouldBe JString("0x5208")
+      (result \ "gasUsed") shouldBe JString("0x5208")
       (result \ "input") shouldBe a[JString]
       (result \ "output") shouldBe a[JString]
     }
@@ -58,7 +58,7 @@ class CallTracerSpec extends AnyFreeSpec with Matchers {
       val callArray = calls.asInstanceOf[JArray].arr
       callArray should have size 1
       (callArray.head \ "type") shouldBe JString("STATICCALL")
-      (callArray.head \ "gasUsed") shouldBe JInt(10000)
+      (callArray.head \ "gasUsed") shouldBe JString("0x2710")
     }
 
     "should skip sub-calls when onlyTopCall is true" in {
@@ -84,15 +84,15 @@ class CallTracerSpec extends AnyFreeSpec with Matchers {
       (result \ "error") shouldBe JString("out of gas")
     }
 
-    "should encode gas as decimal integer, not hex" in {
+    "should encode gas and gasUsed as hex strings matching core-geth callFrameMarshaling" in {
       val tracer = new CallTracer()
 
       tracer.onTxStart(from, Some(to), gas = 1000000, value = 0, input = input)
       tracer.onTxEnd(gasUsed = 500000, output = output, error = None)
 
       val result = tracer.getResult
-      (result \ "gas") shouldBe JInt(1000000)
-      (result \ "gasUsed") shouldBe JInt(500000)
+      (result \ "gas") shouldBe JString("0xf4240")
+      (result \ "gasUsed") shouldBe JString("0x7a120")
     }
 
     "should omit value for STATICCALL and DELEGATECALL" in {
