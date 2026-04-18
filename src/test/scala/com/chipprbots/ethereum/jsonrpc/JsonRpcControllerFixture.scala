@@ -188,6 +188,8 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
       null: EthSimulateService,
       null: AdminService,
       null: TxPoolService,
+      null: DebugTracingService,
+      null: TraceService,
       config
     )
 

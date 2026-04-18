@@ -674,10 +674,11 @@ trait ApisBuilder extends ApisBase {
     val Qa = "qa"
     val Admin = "admin"
     val TxPool = "txpool"
+    val Trace = "trace"
   }
 
   import Apis._
-  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa, Admin, TxPool)
+  override def available: List[String] = List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa, Admin, TxPool, Trace)
 }
 
 trait AdminServiceBuilder {
@@ -710,6 +711,38 @@ trait TxPoolServiceBuilder {
   )
 }
 
+trait DebugTracingServiceBuilder {
+  this: BlockchainBuilder
+    with StxLedgerBuilder
+    with StorageBuilder
+    with MiningBuilder =>
+
+  lazy val debugTracingService: com.chipprbots.ethereum.jsonrpc.DebugTracingService =
+    new com.chipprbots.ethereum.jsonrpc.DebugTracingService(
+      blockchain,
+      blockchainReader,
+      mining,
+      stxLedger,
+      storagesInstance.storages.transactionMappingStorage
+    )
+}
+
+trait TraceServiceBuilder {
+  this: BlockchainBuilder
+    with StxLedgerBuilder
+    with StorageBuilder
+    with MiningBuilder =>
+
+  lazy val traceService: com.chipprbots.ethereum.jsonrpc.TraceService =
+    new com.chipprbots.ethereum.jsonrpc.TraceService(
+      blockchain,
+      blockchainReader,
+      mining,
+      stxLedger,
+      storagesInstance.storages.transactionMappingStorage
+    )
+}
+
 trait JSONRpcConfigBuilder {
   self: ApisBuilder with InstanceConfigProvider =>
 
@@ -735,7 +768,9 @@ trait JSONRpcControllerBuilder {
     with FukuiiServiceBuilder
     with McpServiceBuilder
     with AdminServiceBuilder
-    with TxPoolServiceBuilder =>
+    with TxPoolServiceBuilder
+    with DebugTracingServiceBuilder
+    with TraceServiceBuilder =>
 
   protected def testService: Option[TestService] = None
 
@@ -759,6 +794,8 @@ trait JSONRpcControllerBuilder {
       ethSimulateService,
       adminService,
       txPoolService,
+      debugTracingService,
+      traceService,
       jsonRpcConfig
     )
 }
@@ -1053,6 +1090,8 @@ trait Node
     with McpServiceBuilder
     with AdminServiceBuilder
     with TxPoolServiceBuilder
+    with DebugTracingServiceBuilder
+    with TraceServiceBuilder
     with KeyStoreBuilder
     with ApisBuilder
     with JSONRpcConfigBuilder
