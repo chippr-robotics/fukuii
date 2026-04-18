@@ -5,6 +5,7 @@ import java.util.Date
 import java.util.concurrent.atomic.AtomicReference
 
 import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.util.ByteString
 import org.apache.pekko.util.Timeout
 
@@ -18,6 +19,8 @@ import scala.concurrent.duration.FiniteDuration
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
 import com.chipprbots.ethereum.consensus.mining.CoinbaseProvider
+import com.chipprbots.ethereum.consensus.pow.PoWMiningMetrics
+import com.chipprbots.ethereum.consensus.pow.WorkNotifier
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.consensus.mining.RichMining
 import com.chipprbots.ethereum.consensus.pow.EthashUtils
@@ -38,7 +41,7 @@ object EthMiningService {
   case class GetMiningResponse(isMining: Boolean)
 
   case class GetWorkRequest()
-  case class GetWorkResponse(powHeaderHash: ByteString, dagSeed: ByteString, target: ByteString)
+  case class GetWorkResponse(powHeaderHash: ByteString, dagSeed: ByteString, target: ByteString, blockNumber: BigInt)
 
   case class SubmitWorkRequest(nonce: ByteString, powHeaderHash: ByteString, mixHash: ByteString)
   case class SubmitWorkResponse(success: Boolean)
@@ -79,7 +82,8 @@ class EthMiningService(
     val pendingTransactionsManager: ActorRef,
     val getTransactionFromPoolTimeout: FiniteDuration,
     configBuilder: BlockchainConfigBuilder,
-    coinbaseProvider: CoinbaseProvider
+    coinbaseProvider: CoinbaseProvider,
+    system: ActorSystem
 ) extends TransactionPicker {
   import configBuilder._
   import EthMiningService._
@@ -100,6 +104,7 @@ class EthMiningService(
 
   def getWork(req: GetWorkRequest): ServiceResponse[GetWorkResponse] =
     mining.ifEthash { ethash =>
+      PoWMiningMetrics.recordGetWork()
       reportActive()
       blockchainReader.getBestBlock() match {
         case Some(block) =>
@@ -112,17 +117,23 @@ class EthMiningService(
               ommers.headers,
               None
             )
-            Right(
-              GetWorkResponse(
-                powHeaderHash = ByteString(kec256(BlockHeader.getEncodedWithoutNonce(pb.block.header))),
-                dagSeed = EthashUtils
-                  .seed(
-                    pb.block.header.number.toLong,
-                    blockchainConfig.forkBlockNumbers.ecip1099BlockNumber.toLong
-                  ),
-                target = ByteString((BigInt(2).pow(256) / pb.block.header.difficulty).toByteArray)
+            val powHeaderHash = ByteString(kec256(BlockHeader.getEncodedWithoutNonce(pb.block.header)))
+            val dagSeed = EthashUtils
+              .seed(
+                pb.block.header.number.toLong,
+                blockchainConfig.forkBlockNumbers.ecip1099BlockNumber.toLong
               )
-            )
+            val target    = ByteString((BigInt(2).pow(256) / pb.block.header.difficulty).toByteArray)
+            val blockNumber = pb.block.header.number
+            val workResponse = GetWorkResponse(powHeaderHash, dagSeed, target, blockNumber)
+            val notifyUrls = ethash.config.generic.notifyUrls
+            if (notifyUrls.nonEmpty) {
+              WorkNotifier.notify(
+                notifyUrls,
+                WorkNotifier.WorkPackage(powHeaderHash, dagSeed, target, blockNumber)
+              )(system)
+            }
+            Right(workResponse)
           }
         case None =>
           log.error("Getting current best block failed")
@@ -135,12 +146,27 @@ class EthMiningService(
       reportActive()
       IO {
         ethash.blockGenerator.getPrepared(req.powHeaderHash) match {
-          case Some(pendingBlock) if blockchainReader.getBestBlockNumber() <= pendingBlock.block.header.number =>
-            import pendingBlock._
-            syncingController ! SyncProtocol.MinedBlock(
-              block.copy(header = block.header.copy(nonce = req.nonce, mixHash = req.mixHash))
-            )
-            Right(SubmitWorkResponse(true))
+          case Some(pendingBlock) =>
+            val bestBlockNum = blockchainReader.getBestBlockNumber()
+            val staleThreshold = ethash.config.generic.staleThreshold
+            // core-geth reference: consensus/ethash/sealer.go staleThreshold check
+            if (bestBlockNum - pendingBlock.block.header.number > staleThreshold) {
+              log.debug(
+                "Rejecting stale work submission for block {}, current best {}, threshold {}",
+                pendingBlock.block.header.number,
+                bestBlockNum,
+                staleThreshold
+              )
+              PoWMiningMetrics.recordStaleShare()
+              Right(SubmitWorkResponse(false))
+            } else {
+              import pendingBlock._
+              syncingController ! SyncProtocol.MinedBlock(
+                block.copy(header = block.header.copy(nonce = req.nonce, mixHash = req.mixHash))
+              )
+              PoWMiningMetrics.recordBlockMined(0L) // duration tracked at coordinator level
+              Right(SubmitWorkResponse(true))
+            }
           case _ =>
             Right(SubmitWorkResponse(false))
         }
@@ -156,6 +182,7 @@ class EthMiningService(
       val now = new Date
       removeObsoleteHashrates(now)
       hashRate.put(req.id, req.hashRate -> now)
+      PoWMiningMetrics.updateHashrate(hashRate.map { case (_, (hr, _)) => hr }.sum)
       SubmitHashRateResponse(true)
     }
 

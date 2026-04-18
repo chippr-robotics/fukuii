@@ -537,7 +537,8 @@ trait EthMiningServiceBuilder {
     with OmmersPoolBuilder
     with SyncControllerBuilder
     with PendingTransactionsManagerBuilder
-    with TxPoolConfigBuilder =>
+    with TxPoolConfigBuilder
+    with ActorSystemBuilder =>
 
   lazy val ethMiningService = new EthMiningService(
     blockchainReader,
@@ -548,7 +549,8 @@ trait EthMiningServiceBuilder {
     pendingTransactionsManager,
     txPoolConfig.getTransactionFromPoolTimeout,
     this,
-    coinbaseProvider
+    coinbaseProvider,
+    system
   )
 }
 trait EthTxServiceBuilder {
