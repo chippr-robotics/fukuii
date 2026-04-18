@@ -68,7 +68,7 @@ class EngineApiService(
 
     if (block.header.hash != payload.blockHash) {
       System.err.println(
-        s"[ENGINE-API] newPayload #${payload.blockNumber}: INVALID_BLOCK_HASH " +
+          s"[ENGINE-API] newPayload #${payload.blockNumber}: INVALID_BLOCK_HASH " +
           s"computed=${block.header.hashAsHexString} payload=${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(payload.blockHash)}"
       )
       invalidBlocks.put(payload.blockHash, zeroHash)
@@ -105,14 +105,22 @@ class EngineApiService(
           val limit = parent.gasLimit / 1024
           if (diff >= limit && block.header.gasLimit != parent.gasLimit)
             Some(s"invalid gas limit change: diff=$diff exceeds bound=$limit")
-          // EIP-4844: Validate excessBlobGas against parent
+          // EIP-4844: Validate excessBlobGas against parent.
+          // EIP-7691 (Prague) raises TARGET_BLOB_GAS_PER_BLOCK from 3 to 6 blobs — pass the
+          // right target based on the CHILD block's fork timestamp (child is the one being
+          // validated; parent may precede Prague activation).
           else if (block.header.excessBlobGas.isDefined) {
             val parentExcess = parent.excessBlobGas.getOrElse(BigInt(0))
             val parentUsed = parent.blobGasUsed.getOrElse(BigInt(0))
-            val expectedExcess = BlobGasUtils.calcExcessBlobGas(parentExcess, parentUsed)
+            val target =
+              if (blockchainConfig.isPragueTimestamp(block.header.unixTimestamp))
+                BlobGasUtils.PRAGUE_TARGET_BLOB_GAS
+              else BlobGasUtils.CANCUN_TARGET_BLOB_GAS
+            val expectedExcess = BlobGasUtils.calcExcessBlobGas(parentExcess, parentUsed, target)
             val actual = block.header.excessBlobGas.get
             if (actual != expectedExcess)
-              Some(s"invalid excess blob gas: expected $expectedExcess got $actual")
+              // Include canonical EEST exception name so the test framework's mapper matches.
+              Some(s"INCORRECT_EXCESS_BLOB_GAS: expected $expectedExcess got $actual")
             else {
               // Validate blobGasUsed: count blob txs * GAS_PER_BLOB
               val blobTxCount = block.body.transactionList.collect {
@@ -122,7 +130,7 @@ class EngineApiService(
               val expectedBlobGas = BigInt(blobTxCount) * BlobGasUtils.GAS_PER_BLOB
               val actualBlobGas = block.header.blobGasUsed.getOrElse(BigInt(0))
               if (actualBlobGas != expectedBlobGas)
-                Some(s"invalid blob gas used: expected $expectedBlobGas got $actualBlobGas")
+                Some(s"INCORRECT_BLOB_GAS_USED: expected $expectedBlobGas got $actualBlobGas")
               else None
             }
           }
@@ -138,24 +146,57 @@ class EngineApiService(
           validationError = Some(headerInvalid.get))
       } else {
 
+      // Tracks the tx-level reason for an execution failure so we can surface it in
+      // PayloadStatus.validationError (for EEST exception mapping, e.g.
+      // INSUFFICIENT_ACCOUNT_FUNDS, NONCE_MISMATCH_TOO_LOW).
+      val executionErrorReason = new java.util.concurrent.atomic.AtomicReference[Option[String]](None)
       val executionResult = if (parentKnown) {
         try
-          blockExecution.executeAndValidateBlock(block, alreadyValidated = true) match {
-            case Right(receipts) =>
-              blockchainWriter.storeBlock(block).commit()
+          blockExecution.executeAndValidateBlockFull(block, alreadyValidated = true) match {
+            case Right((receipts, derivedRequests)) =>
+              // EIP-7685: Per Engine API spec, verify the CL-supplied executionRequests match
+              // what block execution actually produced. Mismatch → INVALID (e.g. CL attempted
+              // to inject a deposit/withdrawal request that the execution layer didn't emit).
+              val suppliedRequests = payload.executionRequests.getOrElse(Nil)
+              val requestsMismatch =
+                blockchainConfig.isPragueTimestamp(block.header.unixTimestamp) &&
+                  suppliedRequests != derivedRequests
+              if (requestsMismatch) {
+                val lvh = parentHeader.map(_.hash).getOrElse(zeroHash)
+                invalidBlocks.put(payload.blockHash, lvh)
+                blockchainWriter.removeBlockByHash(payload.blockHash).commit()
+                executionErrorReason.set(Some(
+                  s"INVALID_REQUESTS: executionRequests mismatch " +
+                    s"(supplied=${suppliedRequests.size}, derived=${derivedRequests.size})"))
+                System.err.println(
+                  s"[ENGINE-API] newPayload #${payload.blockNumber}: INVALID_REQUESTS")
+                Some(false)
+              } else {
+              // Detect whether this payload extends canonical (parent == current best) or is a
+              // sidechain. For canonical-extending payloads we write number→hash; for sidechains
+              // we store by-hash-only so later forkchoiceUpdated can promote via
+              // ForkChoiceManager.promoteBranchToCanonical.
+              val extendsCanonical = parentHeader.exists { p =>
+                blockchainReader.getBlockHeaderByNumber(p.number).exists(_.hash == p.hash)
+              }
+              if (extendsCanonical) blockchainWriter.storeBlock(block).commit()
+              else blockchainWriter.storeBlockByHashOnly(block).commit()
               blockchainWriter.storeReceipts(block.header.hash, receipts).commit()
               System.err.println(
-                s"[ENGINE-API] newPayload #${payload.blockNumber}: EXECUTED OK " +
-                  s"(${block.body.numberOfTxs} txs, headerStateRoot=${block.header.stateRoot.take(8).map("%02x".format(_)).mkString}...)"
+          s"[ENGINE-API] newPayload #${payload.blockNumber}: EXECUTED OK " +
+                  s"(${block.body.numberOfTxs} txs, sidechain=${!extendsCanonical}, " +
+                  s"requests=${derivedRequests.size}, " +
+                  s"headerStateRoot=${block.header.stateRoot.take(8).map("%02x".format(_)).mkString}...)"
               )
               Some(true) // fully executed
+              }
             case Left(error) =>
               error match {
                 case com.chipprbots.ethereum.ledger.BlockExecutionError.MPTError(_) |
                     com.chipprbots.ethereum.ledger.BlockExecutionError.MissingParentError =>
                   // Missing state — can't validate, return SYNCING
                   System.err.println(
-                    s"[ENGINE-API] newPayload #${payload.blockNumber}: missing state, SYNCING"
+          s"[ENGINE-API] newPayload #${payload.blockNumber}: missing state, SYNCING"
                   )
                   None
                 case _ =>
@@ -163,8 +204,9 @@ class EngineApiService(
                   val lvh = parentHeader.map(_.hash).getOrElse(zeroHash)
                   invalidBlocks.put(payload.blockHash, lvh)
                   blockchainWriter.removeBlockByHash(payload.blockHash).commit()
+                  executionErrorReason.set(Some(error.reason.toString))
                   System.err.println(
-                    s"[ENGINE-API] newPayload #${payload.blockNumber}: INVALID: ${error.reason}"
+          s"[ENGINE-API] newPayload #${payload.blockNumber}: INVALID: ${error.reason}"
                   )
                   Some(false)
               }
@@ -173,12 +215,12 @@ class EngineApiService(
           case e: com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException =>
             // Missing state nodes — can't execute, return SYNCING
             System.err.println(
-              s"[ENGINE-API] newPayload #${payload.blockNumber}: MPT error, SYNCING"
+          s"[ENGINE-API] newPayload #${payload.blockNumber}: MPT error, SYNCING"
             )
             None
           case e: Exception =>
             System.err.println(
-              s"[ENGINE-API] newPayload #${payload.blockNumber}: error: ${e.getMessage}, SYNCING"
+          s"[ENGINE-API] newPayload #${payload.blockNumber}: error: ${e.getMessage}, SYNCING"
             )
             None
         }
@@ -196,14 +238,15 @@ class EngineApiService(
           // Execution failed — block is invalid. latestValidHash was stored in invalidBlocks above.
           val latestValid = Option(invalidBlocks.get(payload.blockHash))
           EngineApiMetrics.recordNewPayload("INVALID", payload.blockNumber.toLong, payload.timestamp)
-          PayloadStatusV1(Invalid, latestValidHash = latestValid, validationError = Some("block execution failed"))
+          PayloadStatusV1(Invalid, latestValidHash = latestValid,
+            validationError = Some(executionErrorReason.get().getOrElse("block execution failed")))
 
         case None =>
           // Parent unknown — store block BY HASH ONLY (not by number) so it doesn't
           // appear in eth_getBlockByNumber but can be deduped by hash.
           blockchainWriter.storeBlockByHashOnly(block).commit()
           System.err.println(
-            s"[ENGINE-API] newPayload #${payload.blockNumber}: ACCEPTED (parent unknown)"
+          s"[ENGINE-API] newPayload #${payload.blockNumber}: ACCEPTED (parent unknown)"
           )
           EngineApiMetrics.recordNewPayload("ACCEPTED", payload.blockNumber.toLong, payload.timestamp)
           PayloadStatusV1(Accepted)
@@ -259,8 +302,10 @@ class EngineApiService(
       } else if (headHeader.isDefined && !isAncestorOrEqual(finalizedHash, forkChoiceState.headBlockHash, zeroHash)) {
         EngineApiMetrics.recordForkchoiceUpdated("INVALID")
         Left("invalid forkchoice state: finalized block is not an ancestor of head")
-      } else if (blockExistsByHash && !blockFullyStored && !isGenesis) {
-        // Block stored by hash only (ACCEPTED) — not fully validated
+      } else if (blockExistsByHash && !blockFullyStored && !isGenesis &&
+          // executed sidechains have receipts stored; parent-unknown ACCEPTED blocks do not.
+          blockchainReader.getReceiptsByHash(forkChoiceState.headBlockHash).isEmpty) {
+        // Block stored by hash only AND never executed (parent unknown ACCEPTED) — not fully validated
         EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
         Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing)))
       } else {
@@ -651,9 +696,11 @@ object BlobGasUtils {
   val PRAGUE_TARGET_BLOB_GAS: BigInt = BigInt(786432)   // 6 * 131072
   val PRAGUE_MAX_BLOB_GAS: BigInt = BigInt(1179648)     // 9 * 131072
 
-  // Default to Cancun values
+  // Default (Cancun) values
   val TARGET_BLOB_GAS_PER_BLOCK: BigInt = CANCUN_TARGET_BLOB_GAS
   val BLOB_BASE_FEE_UPDATE_FRACTION: BigInt = BigInt(3338477)
+  // EIP-7691 (Prague): BLOB_BASE_FEE_UPDATE_FRACTION bumped to scale with 9-blob MAX.
+  val PRAGUE_BLOB_BASE_FEE_UPDATE_FRACTION: BigInt = BigInt(5007716)
   val MIN_BLOB_BASE_FEE: BigInt = BigInt(1)
 
   /** Calculate excess blob gas for a block from its parent's excess and used blob gas.

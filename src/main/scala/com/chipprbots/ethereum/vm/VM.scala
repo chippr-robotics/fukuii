@@ -138,10 +138,13 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]] extends Logger {
         .map(s => context.world.create2Address(context.callerAddr, s, context.inputData))
         .getOrElse(context.world.createAddress(context.callerAddr))
 
-      // EIP-684
-      // Need to check for conflicts before initialising account (initialisation set account codehash and storage root
-      // to empty values.
-      val conflict = context.world.nonEmptyCodeOrNonceAccount(newAddress)
+      // EIP-684: revert a CREATE if the target address already has non-empty code/nonce.
+      // EIP-7610 (Prague+): additionally revert if the address has non-empty storage.
+      val isPrague = context.evmConfig.blockchainConfig.isPragueTimestamp(context.blockHeader.unixTimestamp) ||
+        context.evmConfig.blockchainConfig.isOsakaTimestamp(context.blockHeader.unixTimestamp)
+      val conflict =
+        if (isPrague) context.world.nonEmptyCodeOrNonceOrStorageAccount(newAddress)
+        else context.world.nonEmptyCodeOrNonceAccount(newAddress)
 
       /** Specification of https://eips.ethereum.org/EIPS/eip-1283 states, that `originalValue` should be taken from
         * world which is left after `a reversion happens on the current transaction`, so in current scope

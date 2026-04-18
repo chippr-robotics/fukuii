@@ -87,6 +87,46 @@ class BlockchainWriter(
   ): Unit =
     appStateStorage.putBestBlockInfo(BlockInfo(bestBlockHash, bestBlockNumber)).commit()
 
+  /** Promote a block previously stored by hash only (sidechain) to the canonical chain.
+    * Walks back from `headHash` along parent pointers until it meets the current canonical
+    * chain (i.e. finds a header whose number→hash mapping already points to it) and rewrites
+    * number→hash for every block on the new branch. Receipts are already indexed by hash so
+    * no extra work.
+    *
+    * Intended for use by `ForkChoiceManager.applyForkChoiceState` on reorgs.
+    *
+    * @return unit; caller is responsible for also updating best-block pointer.
+    */
+  def promoteBranchToCanonical(
+      headHash: ByteString,
+      reader: com.chipprbots.ethereum.domain.BlockchainReader
+  ): Unit = {
+    var cursor: Option[ByteString] = Some(headHash)
+    val buf = scala.collection.mutable.ListBuffer.empty[(BigInt, ByteString)]
+    while (cursor.isDefined) {
+      val hash = cursor.get
+      reader.getBlockHeaderByHash(hash) match {
+        case None => cursor = None
+        case Some(header) =>
+          val canonicalHashAtNumber = reader.getBlockHeaderByNumber(header.number).map(_.hash)
+          if (canonicalHashAtNumber.contains(hash)) {
+            // reached existing canonical ancestor — stop
+            cursor = None
+          } else {
+            buf += ((header.number, hash))
+            if (header.number == 0) cursor = None
+            else cursor = Some(header.parentHash)
+          }
+      }
+    }
+    if (buf.nonEmpty) {
+      val batch = buf.foldLeft(blockNumberMappingStorage.emptyBatchUpdate) { case (acc, (num, hash)) =>
+        acc.and(blockNumberMappingStorage.put(num, hash))
+      }
+      batch.commit()
+    }
+  }
+
   private def saveBlockNumberMapping(number: BigInt, hash: ByteString): DataSourceBatchUpdate =
     blockNumberMappingStorage.put(number, hash)
 

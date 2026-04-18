@@ -164,6 +164,15 @@ trait WorldStateProxy[WS <: WorldStateProxy[WS, S], S <: Storage[S]] { self: WS 
   def nonEmptyCodeOrNonceAccount(address: Address): Boolean =
     getAccount(address).exists(_.nonEmptyCodeOrNonce(accountStartNonce))
 
+  /** EIP-7610 (Prague): a create at `address` must revert if the account has non-empty code,
+    * non-zero nonce, OR non-empty storage. Extends EIP-684 which checked only code+nonce.
+    */
+  def nonEmptyCodeOrNonceOrStorageAccount(address: Address): Boolean =
+    getAccount(address).exists { acc =>
+      acc.nonEmptyCodeOrNonce(accountStartNonce) ||
+        acc.storageRoot != com.chipprbots.ethereum.domain.Account.EmptyStorageRootHash
+    }
+
   def isZeroValueTransferToNonExistentAccount(address: Address, value: UInt256): Boolean =
     noEmptyAccounts && value == UInt256(0) && !accountExists(address)
 }

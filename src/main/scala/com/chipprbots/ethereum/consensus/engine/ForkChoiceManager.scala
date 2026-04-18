@@ -51,8 +51,10 @@ class ForkChoiceManager(
       )
       currentState.set(Some(newState))
 
-      // Persist canonical head to chain storage
+      // Rewrite number→hash mapping for the new canonical branch (no-op if already canonical).
+      // Then persist canonical best-block pointer.
       blockchainReader.getBlockHeaderByHash(newState.headBlockHash).foreach { header =>
+        blockchainWriter.promoteBranchToCanonical(newState.headBlockHash, blockchainReader)
         blockchainWriter.saveBestKnownBlocks(newState.headBlockHash, header.number)
       }
 

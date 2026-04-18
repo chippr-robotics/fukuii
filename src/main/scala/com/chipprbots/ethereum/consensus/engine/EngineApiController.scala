@@ -81,7 +81,22 @@ class EngineApiController(
     val params = request.params.map(_.arr).getOrElse(Nil)
     params.headOption match {
       case Some(payloadJson: JObject) =>
-        var payload = decodeExecutionPayload(payloadJson)
+        // Per Engine API spec, newPayload* must never raise a JSON-RPC error on a malformed or
+        // deliberately-invalid payload; it must return a PayloadStatus with status=INVALID and
+        // validationError describing the problem. hive's engine-withdrawals and engine-api
+        // modified-payload tests rely on this.
+        val payloadOpt = scala.util.Try(decodeExecutionPayload(payloadJson)).toEither
+        payloadOpt match {
+          case Left(ex) =>
+            val msg = Option(ex.getMessage).getOrElse(ex.getClass.getSimpleName)
+            System.err.println(s"[ENGINE-API] newPayload v$version decode failure: $msg")
+            return IO.pure(JsonRpcResponse("2.0",
+              Some(encodePayloadStatus(PayloadStatusV1(PayloadStatus.Invalid, latestValidHash = None,
+                validationError = Some(s"malformed payload: $msg")))),
+              None, reqId(request)))
+          case Right(_) => ()
+        }
+        var payload = payloadOpt.toOption.get
         val hasWithdrawals = payload.withdrawals.isDefined
         val hasBlobFields = payload.blobGasUsed.isDefined || payload.excessBlobGas.isDefined
         val timestamp = payload.timestamp
@@ -131,8 +146,22 @@ class EngineApiController(
     val params = request.params.map(_.arr).getOrElse(Nil)
     params.headOption match {
       case Some(fcsJson: JObject) =>
-        val fcs = decodeForkChoiceState(fcsJson)
-        val payloadAttrs = params.lift(1).collect { case obj: JObject => decodePayloadAttributes(obj) }
+        // Per Engine API spec, a malformed forkchoice state or payload attributes must not raise
+        // a JSON-RPC error from the decoder; decoding errors come back as -38003 (invalid
+        // payload attributes).
+        val decoded = scala.util.Try {
+          val fcs = decodeForkChoiceState(fcsJson)
+          val payloadAttrs = params.lift(1).collect { case obj: JObject => decodePayloadAttributes(obj) }
+          (fcs, payloadAttrs)
+        }.toEither
+        decoded match {
+          case Left(ex) =>
+            val msg = Option(ex.getMessage).getOrElse(ex.getClass.getSimpleName)
+            return IO.pure(JsonRpcResponse("2.0", None,
+              Some(JsonRpcError(-38003, s"malformed forkchoice params: $msg", None)), reqId(request)))
+          case Right(_) => ()
+        }
+        val (fcs, payloadAttrs) = decoded.toOption.get
 
         // Version enforcement for forkchoiceUpdated:
         // V3: requires parentBeaconBlockRoot in payload attributes (Cancun+)
