@@ -60,7 +60,7 @@ object ByteCodeTask {
     * hashes per request (512KB / 24KB max contract size * 4 = 85). Besu defaults to 84-168. Sending 1,000 wastes
     * overhead since most go unserved. Aligned with geth client-side norm for complete responses per request.
     */
-  val DEFAULT_BATCH_SIZE = 85
+  val DEFAULT_BATCH_SIZE = 84
 
   /** Create bytecode tasks from a list of contract accounts
     *
