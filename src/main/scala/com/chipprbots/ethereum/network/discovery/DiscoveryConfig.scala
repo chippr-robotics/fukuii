@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.network.discovery
 
 import scala.concurrent.duration._
+import scala.jdk.CollectionConverters._
 
 import com.chipprbots.ethereum.utils.ConfigUtils
 import com.chipprbots.ethereum.utils.Logger

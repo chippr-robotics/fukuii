@@ -9,6 +9,7 @@ import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor._
+import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.PeerActor.DisconnectPeer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent._
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
@@ -21,6 +22,7 @@ import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
+import com.chipprbots.ethereum.network.p2p.messages.ETH62
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.NewBlockHashes
 import com.chipprbots.ethereum.network.p2p.messages.ETH66
@@ -29,6 +31,8 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH64
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
+import org.bouncycastle.util.encoders.Hex
+
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
@@ -48,6 +52,7 @@ class NetworkPeerManagerActor(
   private[network] type PeersWithInfo = Map[PeerId, PeerWithInfo]
 
   // Maximum length for hex string in debug logs (to avoid very long log lines)
+  private val MaxHexLogLength = 256
 
   // Mutable reference to SNAPSyncController that can be set after initialization
   private var snapSyncControllerOpt: Option[ActorRef] = initialSnapSyncControllerOpt
@@ -166,9 +171,9 @@ class NetworkPeerManagerActor(
         val usesRequestId = Capability.usesRequestId(peerInfo.remoteStatus.capability)
         val getBlockHeadersMsg: MessageSerializable =
           if (usesRequestId)
-            ETH66GetBlockHeaders(ETH66.nextRequestId, Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
+            ETH66.GetBlockHeaders(ETH66.nextRequestId, Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
           else
-            ETH62GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
+            ETH62.GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, reverse = false)
 
         // Debug: Log the raw RLP-encoded message bytes for protocol analysis
         if (log.isDebugEnabled) {
@@ -187,7 +192,7 @@ class NetworkPeerManagerActor(
           usesRequestId,
           ByteStringUtils.hash2string(peerInfo.remoteStatus.bestHash)
         )
-        peer.ref ! SendMessage(getBlockHeadersMsg)
+        peer.ref ! PeerActor.SendMessage(getBlockHeadersMsg)
       }
       // SNAP probe is deferred until we receive BlockHeaders response — we need the
       // header's stateRoot (not bestHash which is a block hash) for GetAccountRange.
