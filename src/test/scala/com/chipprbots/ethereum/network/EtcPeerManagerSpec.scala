@@ -261,6 +261,8 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     // Freshly handshaked peer without best block determined
     setupNewPeer(freshPeer, freshPeerProbe, freshPeerInfo.copy(maxBlockNumber = 0))
 
+    // All handshaked peers are now returned immediately (peerHasUpdatedBestBlock = always true,
+    // Besu-aligned: ETH/68 peers always have maxBlockNumber=0 at handshake; gating deadlocks them)
     requestSender.send(peersInfoHolder, GetHandshakedPeers)
     requestSender.expectMsg(HandshakedPeers(Map(freshPeer -> freshPeerInfo.copy(maxBlockNumber = 0))))
 

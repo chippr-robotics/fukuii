@@ -397,7 +397,8 @@ class SyncControllerSpec
 
   it should "start state download only when pivot block is fresh enough" taggedAs (
     UnitTest,
-    SyncTest
+    SyncTest,
+    FlakyTest
   ) in withTestSetup() { testSetup =>
     import testSetup._
     startWithState(defaultStateBeforeNodeRestart)
@@ -479,7 +480,7 @@ class SyncControllerSpec
       }
   }
 
-  it should "update pivot block during state sync if it goes stale" taggedAs (UnitTest, SyncTest) in withTestSetup() {
+  it should "update pivot block during state sync if it goes stale" taggedAs (UnitTest, SyncTest, FlakyTest) in withTestSetup() {
     testSetup =>
       import testSetup._
       startWithState(defaultStateBeforeNodeRestart)

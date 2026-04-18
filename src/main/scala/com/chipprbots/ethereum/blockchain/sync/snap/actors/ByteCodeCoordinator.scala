@@ -236,6 +236,7 @@ class ByteCodeCoordinator(
       result match {
         case Right(count) =>
           bytecodesDownloaded += count
+          consecutiveTaskFailures = 0
           log.info(s"Bytecode task completed: $count codes")
           checkCompletion()
         case Left(error) =>
@@ -244,7 +245,6 @@ class ByteCodeCoordinator(
       }
 
     case ByteCodeTaskFailed(requestId, error) =>
-      // Re-queue the task
       activeTasks.remove(requestId).foreach { active =>
         val task = active.task
         val worker = active.worker
