@@ -11,6 +11,16 @@ on:
       - 'hive/**'
       - '.github/workflows/_hive-sim.yml'
       - '.github/workflows/hive-consensus.yml'
+  pull_request:
+    branches: [main, master, develop]
+    paths:
+      - 'src/**'
+      - 'build.sbt'
+      - 'version.sbt'
+      - 'project/**'
+      - 'hive/**'
+      - '.github/workflows/_hive-sim.yml'
+      - '.github/workflows/hive-consensus.yml'
   schedule:
     - cron: '35 4 * * *'
   workflow_dispatch:

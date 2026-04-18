@@ -15,6 +15,16 @@ on:
       - 'hive/**'
       - '.github/workflows/_hive-sim.yml'
       - '.github/workflows/hive-consume-engine.yml'
+  pull_request:
+    branches: [main, master, develop]
+    paths:
+      - 'src/**'
+      - 'build.sbt'
+      - 'version.sbt'
+      - 'project/**'
+      - 'hive/**'
+      - '.github/workflows/_hive-sim.yml'
+      - '.github/workflows/hive-consume-engine.yml'
   schedule:
     - cron: '50 4 * * *'
   workflow_dispatch:
