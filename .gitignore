@@ -100,3 +100,6 @@ run-*.sh
 !run-classic.sh
 !run-mordor.sh
 
+# Transient hive workspace — matches _hive-sim.yml layout
+external/
+
