@@ -89,9 +89,6 @@ class SNAPSyncController(
 
   private val progressMonitor = new SyncProgressMonitor(scheduler)
 
-  // Failure tracking for fallback to fast sync
-  private var criticalFailureCount: Int = 0
-
   // Retry counter for validation failures to prevent infinite loops
   private var validationRetryCount: Int = 0
   private val MaxValidationRetries = 3
@@ -262,7 +259,8 @@ class SNAPSyncController(
     case EvictNonSnapPeers =>
       evictNonSnapPeers()
 
-    // Snap capability grace period check: if still no snap/1 peers, fall back to fast sync
+    // Snap capability grace period check: reschedule if no snap/1 peers found yet.
+    // Besu-aligned: never fall back to fast sync. Keep waiting indefinitely for SNAP peers.
     case CheckSnapCapability =>
       val snapPeerCount = peersToDownloadFrom.count { case (_, p) =>
         p.peerInfo.remoteStatus.supportsSnap
@@ -274,8 +272,13 @@ class SNAPSyncController(
         )
         stateRoot.foreach(launchAccountRangeWorkers(_, effectiveConcurrency))
       } else {
-        log.warning("No snap-capable peers found after grace period. Falling back to fast sync.")
-        fallbackToFastSync()
+        // Besu-aligned: no fallback to fast sync. Reschedule and keep waiting for SNAP peers.
+        val gracePeriod = snapSyncConfig.snapCapabilityGracePeriod
+        log.warning(
+          s"No snap-capable peers found after grace period. " +
+          s"Rescheduling check in ${gracePeriod.toSeconds}s (Besu-aligned: no fallback)."
+        )
+        snapCapabilityCheckTask = Some(scheduler.scheduleOnce(gracePeriod, self, CheckSnapCapability)(ec))
       }
 
     // Periodic request triggers
@@ -413,17 +416,14 @@ class SNAPSyncController(
             consecutivePivotRefreshes = 0 // Reset — accounts completing IS progress
             refreshPivotInPlace(reason)
           } else {
-            // Accounts still in progress — full restart is acceptable
-            // but preserve range progress (existing preservedRangeProgress mechanism)
+            // Accounts still in progress — Besu-aligned: no fallback, no critical failure tracking.
+            // Besu persists indefinitely. Reset counter and refresh pivot.
             log.warning(
-              s"$consecutivePivotRefreshes consecutive pivot refreshes without progress. " +
-                "Peers likely lack snapshot databases."
+              s"$consecutivePivotRefreshes consecutive stateless pivot refreshes during account sync. " +
+                "Besu-aligned: resetting counter and refreshing pivot (no fallback to fast sync)."
             )
-            if (recordCriticalFailure(s"$consecutivePivotRefreshes consecutive stateless pivot refreshes")) {
-              fallbackToFastSync()
-            } else {
-              restartSnapSync(s"consecutive stateless pivots ($consecutivePivotRefreshes): $reason")
-            }
+            consecutivePivotRefreshes = 0
+            refreshPivotInPlace(reason)
           }
         } else {
           refreshPivotInPlace(reason)
@@ -1000,16 +1000,13 @@ class SNAPSyncController(
     case PivotBootstrapFailed(reason) =>
       log.warning(s"Pivot header bootstrap failed during initial startup: $reason")
       bootstrapRetryCount += 1
-      if (checkBootstrapRetryTimeout(s"bootstrap failed: $reason")) {
-        // checkBootstrapRetryTimeout already called fallbackToFastSync()
-      } else {
-        val delay = bootstrapRetryDelay
-        log.info(s"Retrying SNAP sync start in $delay (attempt $bootstrapRetryCount)")
-        bootstrapCheckTask.foreach(_.cancel())
-        bootstrapCheckTask = Some(
-          scheduler.scheduleOnce(delay)(self ! RetrySnapSyncStart)(ec)
-        )
-      }
+      checkBootstrapRetryTimeout(s"bootstrap failed: $reason")
+      val delay = bootstrapRetryDelay
+      log.info(s"Retrying SNAP sync start in $delay (attempt $bootstrapRetryCount)")
+      bootstrapCheckTask.foreach(_.cancel())
+      bootstrapCheckTask = Some(
+        scheduler.scheduleOnce(delay)(self ! RetrySnapSyncStart)(ec)
+      )
 
     // SNAP peer eviction runs during bootstrap to free slots for SNAP-capable peers
     case EvictNonSnapPeers =>
@@ -1344,8 +1341,9 @@ class SNAPSyncController(
           context.become(syncing)
 
         case None =>
-          log.error("Genesis block header not available - cannot start SNAP sync")
-          context.parent ! FallbackToFastSync
+          // Besu-aligned: genesis not available is a transient startup error; retry instead of falling back.
+          log.error("Genesis block header not available — retrying SNAP sync start in 5s (Besu-aligned: no fallback)")
+          scheduler.scheduleOnce(5.seconds, self, Start)(ec)
       }
       return
     }
@@ -1495,80 +1493,18 @@ class SNAPSyncController(
     math.min(delaySeconds, BootstrapRetryMaxDelay.toSeconds).seconds
   }
 
-  /** Check if bootstrap retry has exceeded the maximum count. If so, falls back to fast sync. */
-  private def checkBootstrapRetryTimeout(context: String): Boolean =
+  /** Check if bootstrap retry has exceeded the maximum count.
+    * Besu-aligned: never fall back to fast sync. Reset counter and keep retrying indefinitely.
+    */
+  private def checkBootstrapRetryTimeout(context: String): Boolean = {
     if (bootstrapRetryCount >= MaxBootstrapRetries) {
       log.warning(
-        s"No peers found after $bootstrapRetryCount bootstrap retries ($context). Falling back to fast sync."
+        s"Reached max bootstrap retries ($bootstrapRetryCount, $context) — " +
+        "Besu-aligned: resetting counter and continuing to retry (no fallback to fast sync)."
       )
-      fallbackToFastSync()
-      true
-    } else {
-      if (bootstrapRetryCount > 0 && bootstrapRetryCount % 5 == 0) {
-        log.info(
-          s"Bootstrap retry diagnostics ($context): " +
-            s"attempt=$bootstrapRetryCount/$MaxBootstrapRetries, " +
-            s"handshakedPeers=${handshakedPeers.size}, " +
-            s"snapCapable=${handshakedPeers.values.count(_.peerInfo.remoteStatus.supportsSnap)}"
-        )
-      }
-      false
+      bootstrapRetryCount = 0
     }
-
-  /** Record a critical failure and check if we should fallback to fast sync. Critical failures are those that indicate
-    * SNAP sync cannot proceed.
-    *
-    * @param reason
-    *   Description of the failure
-    * @return
-    *   true if we should fallback to fast sync
-    */
-  private def recordCriticalFailure(reason: String): Boolean = {
-    criticalFailureCount += 1
-    log.warning(s"Critical SNAP sync failure ($criticalFailureCount/${snapSyncConfig.maxSnapSyncFailures}): $reason")
-
-    if (criticalFailureCount >= snapSyncConfig.maxSnapSyncFailures) {
-      log.error(s"SNAP sync failed ${criticalFailureCount} times, falling back to fast sync")
-      true
-    } else {
-      false
-    }
-  }
-
-  /** Trigger fallback to fast sync due to repeated SNAP sync failures */
-  private def fallbackToFastSync(): Unit = {
-    // Set phase to Completed FIRST to prevent aroundReceive guards (which check currentPhase)
-    // from re-triggering stagnation checks while we're tearing down.
-    currentPhase = Completed
-
-    log.warning("Triggering fallback to fast sync due to repeated SNAP sync failures")
-
-    // Cancel all scheduled tasks
-    accountRangeRequestTask.foreach(_.cancel())
-    bytecodeRequestTask.foreach(_.cancel())
-    storageRangeRequestTask.foreach(_.cancel())
-    healingRequestTask.foreach(_.cancel())
-    pivotStalenessCheckTask.foreach(_.cancel())
-    snapCapabilityCheckTask.foreach(_.cancel())
-    snapPeerEvictionTask.foreach(_.cancel())
-
-    // Stop progress monitoring
-    progressMonitor.stopPeriodicLogging()
-
-    // Clear persisted SNAP progress — fast sync will start fresh
-    appStateStorage.putSnapSyncProgress("").commit()
-    appStateStorage.putSnapSyncAccountsComplete(false).commit()
-    appStateStorage.putSnapSyncStorageFilePath("").commit()
-    preservedRangeProgress = Map.empty
-    preservedAtPivotBlock = None
-
-    // Stop chain downloader
-    chainDownloader.foreach(context.stop)
-    chainDownloader = None
-
-    // Notify parent controller to switch to fast sync
-    context.parent ! FallbackToFastSync
-    context.become(completed)
+    false // never signal fallback
   }
 
   /** Evict non-SNAP outgoing peers when SNAP peer count is below threshold.
@@ -2868,13 +2804,11 @@ case class SNAPSyncConfig(
     stateValidationEnabled: Boolean = true,
     maxRetries: Int = 3,
     timeout: FiniteDuration = 10.seconds,
-    maxSnapSyncFailures: Int = 5, // Max failures before fallback to fast sync
-    // Grace period after bootstrap to wait for snap/1-capable peers before falling back.
-    // If no connected peer advertises snap/1 within this window, fall back to fast sync.
+    // Grace period after bootstrap to wait for snap/1-capable peers before rescheduling.
+    // Besu-aligned: no fallback to fast sync — reschedule indefinitely until snap peers appear.
     snapCapabilityGracePeriod: FiniteDuration = 30.seconds,
     // Account stagnation timeout: if no account range tasks complete within this window,
-    // record a critical failure (may trigger fallback). Reduced from 15 minutes to catch
-    // non-snap peers faster.
+    // Besu-aligned: stall triggers in-place pivot refresh only, never fallback.
     accountStagnationTimeout: FiniteDuration = 10.minutes,
     maxInFlightPerPeer: Int = 5,
     accountTrieFlushThreshold: Int = 50000,
@@ -2920,10 +2854,6 @@ object SNAPSyncConfig {
       stateValidationEnabled = snapConfig.getBoolean("state-validation-enabled"),
       maxRetries = snapConfig.getInt("max-retries"),
       timeout = snapConfig.getDuration("timeout").toMillis.millis,
-      maxSnapSyncFailures =
-        if (snapConfig.hasPath("max-snap-sync-failures"))
-          snapConfig.getInt("max-snap-sync-failures")
-        else 5,
       snapCapabilityGracePeriod =
         if (snapConfig.hasPath("snap-capability-grace-period"))
           snapConfig.getDuration("snap-capability-grace-period").toMillis.millis
