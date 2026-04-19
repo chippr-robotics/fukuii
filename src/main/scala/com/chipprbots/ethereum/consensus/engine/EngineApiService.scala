@@ -423,6 +423,7 @@ class EngineApiService(
 
                     // Determine which fork is active at the proposed block's timestamp so we emit
                     // the correct HeaderExtraFields variant and header fields.
+                    val isShanghai = blockchainConfig.isShanghaiTimestamp(attrs.timestamp)
                     val isCancun = blockchainConfig.isCancunTimestamp(attrs.timestamp)
                     val isPrague = blockchainConfig.isPragueTimestamp(attrs.timestamp)
                     val withdrawals: Seq[com.chipprbots.ethereum.domain.Withdrawal] =
@@ -465,8 +466,15 @@ class EngineApiService(
                           childExcessBlobGas,
                           parentBeaconBlockRoot
                         )
-                      else
+                      else if (isShanghai)
                         HefPostShanghai(baseFee, computedWithdrawalsRoot)
+                      else
+                        // Paris (post-merge, pre-Shanghai): HefPostOlympia holds only baseFee.
+                        // Using HefPostShanghai here breaks the blockHash round-trip: getPayloadV1
+                        // returns a payload with no withdrawals field, and newPayloadV1 reconstructs
+                        // the header as HefPostOlympia — different RLP, different hash, so every
+                        // Paris payload we build fails its own newPayload round-trip.
+                        HefPostOlympia(baseFee)
 
                     // Build post-merge header with skeleton (difficulty=0 so payBlockReward skips PoW rewards)
                     val blockNumber = parent.header.number + 1

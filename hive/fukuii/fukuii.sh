@@ -123,8 +123,8 @@ if [ -n "$HIVE_MINER" ]; then
 fi
 
 exec java \
-    -Xmx2g \
-    -Xms512m \
+    -Xmx1g \
+    -Xms256m \
     -Xss4M \
     -XX:+UseG1GC \
     $FLAGS \
