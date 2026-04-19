@@ -111,19 +111,34 @@ class EngineApiController(
         }
         var payload = payloadOpt.toOption.get
         val hasWithdrawals = payload.withdrawals.isDefined
+        val blockchainConfig = com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
+        val isShanghaiPayload = blockchainConfig.isShanghaiTimestamp(payload.timestamp)
+        val isCancunPayload = blockchainConfig.isCancunTimestamp(payload.timestamp)
 
-        // Version enforcement: only reject truly incompatible combinations.
-        // V1/V2 accept any payload fields (backward compatible).
-        // V3 requires withdrawals (Cancun payloads always have them).
-        val versionError: Option[String] = version match {
+        // Version enforcement on payload shape (not on method-of-fork — that's -38005).
+        // Hive withdrawals suite expects -32602 (InvalidParamsError) for shape mismatches:
+        //   newPayloadV1: timestamp < shanghai,  withdrawals absent
+        //   newPayloadV2: pre-OR-post-Shanghai,  withdrawals present iff post-Shanghai
+        //   newPayloadV3: timestamp ≥ cancun,    withdrawals present
+        val InvalidParams = -32602
+        val versionError: Option[(Int, String)] = version match {
           case 3 if !hasWithdrawals =>
-            Some("newPayloadV3 requires withdrawals field")
+            Some(UnsupportedFork -> "newPayloadV3 requires withdrawals field")
+          case 2 if isShanghaiPayload && !hasWithdrawals =>
+            Some(InvalidParams -> "newPayloadV2 post-Shanghai payload must include withdrawals")
+          case 2 if !isShanghaiPayload && hasWithdrawals =>
+            Some(InvalidParams -> "newPayloadV2 pre-Shanghai payload must not include withdrawals")
+          case 1 if hasWithdrawals =>
+            Some(InvalidParams -> "newPayloadV1 must not include withdrawals")
+          case 1 if isShanghaiPayload =>
+            Some(UnsupportedFork -> "newPayloadV1 cannot be used post-Shanghai, use V2")
           case _ => None
         }
 
         if (versionError.isDefined) {
+          val (code, msg) = versionError.get
           IO.pure(
-            JsonRpcResponse("2.0", None, Some(JsonRpcError(UnsupportedFork, versionError.get, None)), reqId(request))
+            JsonRpcResponse("2.0", None, Some(JsonRpcError(code, msg, None)), reqId(request))
           )
         } else {
           // V3+: params[1] is expectedBlobVersionedHashes, params[2] is parentBeaconBlockRoot.
@@ -199,37 +214,42 @@ class EngineApiController(
         val isShanghaiTimestamp = attrTimestamp.exists(blockchainConfig.isShanghaiTimestamp)
         val isCancunTimestamp = attrTimestamp.exists(blockchainConfig.isCancunTimestamp)
 
-        // Engine API version matrix:
-        //   V1: timestamp < shanghai,  withdrawals absent,  beaconRoot absent
-        //   V2: shanghai ≤ ts < cancun, withdrawals present, beaconRoot absent
-        //   V3: timestamp ≥ cancun,     withdrawals present, beaconRoot present
-        // The hive withdrawals suite ("Sent shanghai fcu using PayloadAttributesV1, error is
-        // expected") fails every test that doesn't enforce this.
-        val versionError: Option[String] = (version, payloadAttrs) match {
+        // Engine API version matrix. -38005 UNSUPPORTED_FORK only when the RPC method itself is
+        // wrong for the current fork; -38003 INVALID_PAYLOAD_ATTRIBUTES for attribute-shape
+        // violations. V2 is permissive — it accepts V1-shape attrs pre-Shanghai. The hive
+        // withdrawals suite checks exact codes.
+        //   V1: timestamp < shanghai (hard error if post-Shanghai),        withdrawals absent
+        //   V2: accepts pre-Shanghai (V1-shape) OR post-Shanghai (V2-shape), beaconRoot absent
+        //   V3: timestamp ≥ cancun,                                         withdrawals + beaconRoot present
+        val InvalidAttrs = -38003
+        val versionError: Option[(Int, String)] = (version, payloadAttrs) match {
           case (3, Some(_)) if !isCancunTimestamp && hasBeaconRoot =>
-            Some("forkchoiceUpdatedV3 with beacon root before Cancun activation")
+            Some(UnsupportedFork -> "forkchoiceUpdatedV3 with beacon root before Cancun activation")
           case (v, Some(_)) if v < 3 && isCancunTimestamp =>
-            Some(s"forkchoiceUpdatedV$v cannot be used post-Cancun, use V3")
+            Some(UnsupportedFork -> s"forkchoiceUpdatedV$v cannot be used post-Cancun, use V3")
           case (1, Some(_)) if isShanghaiTimestamp =>
-            Some("forkchoiceUpdatedV1 cannot be used post-Shanghai, use V2")
+            Some(UnsupportedFork -> "forkchoiceUpdatedV1 cannot be used post-Shanghai, use V2")
           case (1, Some(_)) if hasWithdrawals =>
-            Some("forkchoiceUpdatedV1 attrs must not include withdrawals")
-          case (2, Some(_)) if isShanghaiTimestamp && !hasWithdrawals =>
-            Some("forkchoiceUpdatedV2 attrs must include withdrawals post-Shanghai")
+            Some(InvalidAttrs -> "forkchoiceUpdatedV1 attrs must not include withdrawals")
+          // V2 pre-Shanghai: V1-shape attrs are OK; withdrawals field is NOT allowed.
           case (2, Some(_)) if !isShanghaiTimestamp && hasWithdrawals =>
-            Some("forkchoiceUpdatedV2 attrs must not include withdrawals pre-Shanghai")
+            Some(InvalidAttrs -> "forkchoiceUpdatedV2 attrs must not include withdrawals pre-Shanghai")
+          // V2 post-Shanghai: withdrawals field is required.
+          case (2, Some(_)) if isShanghaiTimestamp && !hasWithdrawals =>
+            Some(InvalidAttrs -> "forkchoiceUpdatedV2 attrs must include withdrawals post-Shanghai")
           case (2, Some(_)) if hasBeaconRoot =>
-            Some("forkchoiceUpdatedV2 attrs must not include parentBeaconBlockRoot")
+            Some(InvalidAttrs -> "forkchoiceUpdatedV2 attrs must not include parentBeaconBlockRoot")
           case (3, Some(_)) if !hasWithdrawals =>
-            Some("forkchoiceUpdatedV3 attrs must include withdrawals")
+            Some(InvalidAttrs -> "forkchoiceUpdatedV3 attrs must include withdrawals")
           case (3, Some(_)) if isCancunTimestamp && !hasBeaconRoot =>
-            Some("forkchoiceUpdatedV3 attrs must include parentBeaconBlockRoot post-Cancun")
+            Some(InvalidAttrs -> "forkchoiceUpdatedV3 attrs must include parentBeaconBlockRoot post-Cancun")
           case _ => None
         }
 
         if (versionError.isDefined) {
+          val (code, msg) = versionError.get
           IO.pure(
-            JsonRpcResponse("2.0", None, Some(JsonRpcError(UnsupportedFork, versionError.get, None)), reqId(request))
+            JsonRpcResponse("2.0", None, Some(JsonRpcError(code, msg, None)), reqId(request))
           )
         } else {
           engineApiService.forkchoiceUpdated(fcs, payloadAttrs).map {

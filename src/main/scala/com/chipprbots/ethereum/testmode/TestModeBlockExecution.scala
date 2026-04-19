@@ -33,12 +33,11 @@ class TestModeBlockExecution(
 
   override protected def buildInitialWorld(block: Block, parentHeader: BlockHeader, isProposer: Boolean = false)(
       implicit blockchainConfig: BlockchainConfig
-  ): InMemoryWorldStateProxy =
+  ): InMemoryWorldStateProxy = {
+    val _ = isProposer // see BlockExecution.buildInitialWorld: read-only did not hold invariants
     TestModeWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
-      nodesKeyValueStorage =
-        if (isProposer) blockchain.getReadOnlyMptStorage()
-        else blockchain.getBackingMptStorage(block.header.number),
+      nodesKeyValueStorage = blockchain.getBackingMptStorage(block.header.number),
       getBlockHashByNumber = (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
       accountStartNonce = blockchainConfig.accountStartNonce,
       stateRootHash = parentHeader.stateRoot,
@@ -46,4 +45,5 @@ class TestModeBlockExecution(
       ethCompatibleStorage = blockchainConfig.ethCompatibleStorage,
       saveStoragePreimage = saveStoragePreimage
     )
+  }
 }

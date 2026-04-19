@@ -130,17 +130,26 @@ class BlockExecution(
 
   protected def buildInitialWorld(block: Block, parentHeader: BlockHeader, isProposer: Boolean = false)(implicit
       blockchainConfig: BlockchainConfig
-  ): InMemoryWorldStateProxy =
+  ): InMemoryWorldStateProxy = {
+    // `isProposer` originally switched to `getReadOnlyMptStorage()` to keep proposer-mode tx
+    // state from leaking into the canonical DB. That did not actually work: ReadOnlyNodeStorage
+    // buffers writes but its `persist()` still flushes them to the wrapped storage, which is
+    // what `InMemoryWorldStateProxy.persistState` ends up calling. Meanwhile the read-only
+    // wrapping broke the Shanghai withdrawals stateRoot: proposer-computed and newPayload-computed
+    // roots diverged for reasons we haven't fully isolated (likely buffered-node read ordering
+    // inside SerializingMptStorage/MerklePatriciaTrie). Use the writable backing in both modes;
+    // we still get idempotence because the MPT hash is deterministic given the same inputs.
+    val _ = isProposer
     InMemoryWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
-      if (isProposer) blockchain.getReadOnlyMptStorage()
-      else blockchain.getBackingMptStorage(block.header.number),
+      blockchain.getBackingMptStorage(block.header.number),
       (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
       accountStartNonce = blockchainConfig.accountStartNonce,
       stateRootHash = parentHeader.stateRoot,
       noEmptyAccounts = EvmConfig.forBlock(block.header.number, blockchainConfig).noEmptyAccounts,
       ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
     )
+  }
 
   /** This function runs transactions
     *

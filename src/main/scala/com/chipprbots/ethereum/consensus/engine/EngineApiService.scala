@@ -528,31 +528,27 @@ class EngineApiService(
                     val body = BlockBody(pendingTxs.toList, Nil, withdrawals = attrs.withdrawals)
                     val skeletonBlock = Block(header, body)
 
-                    // Execute full Prague flow (preambles + txs + withdrawals + system calls + deposit collection).
-                    // Fall back to BlockPreparator.prepareBlock (tx-only) for pre-Prague so we don't
-                    // needlessly touch the Prague system contracts.
+                    // Route EVERY post-merge proposer build through executeForProposer (which
+                    // goes through BlockExecution.executeBlock — txs, payBlockReward, withdrawals
+                    // via processWithdrawals, Prague system calls, then persistState).
+                    // The previous `if (isPrague) …  else BlockPreparator.prepareBlock` branch
+                    // was broken for Shanghai/Cancun: BlockPreparator.prepareBlock does NOT call
+                    // processWithdrawals, so the proposer-built header contained a stateRoot that
+                    // did not reflect the withdrawals — every withdrawals hive test came back with
+                    // "Block has invalid state root hash" on its own payload round-trip.
+                    // executeBlock early-returns cleanly on pre-Prague (processPragueSystemCalls
+                    // is a no-op outside Prague), so there's nothing to lose by using it always.
                     import com.chipprbots.ethereum.consensus.validators.std.MptListValidator.intByteArraySerializable
                     import com.chipprbots.ethereum.ledger.BloomFilter
                     import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
                     import com.chipprbots.ethereum.domain.Receipt
                     val (receipts, gasUsedTotal, finalStateRoot, executionRequests) =
-                      if (isPrague) {
-                        blockExecution.executeForProposer(skeletonBlock) match {
-                          case Right(result) =>
-                            (result.receipts, result.gasUsed, result.worldState.stateRootHash, result.executionRequests)
-                          case Left(err) =>
-                            log.error("Proposer-mode Prague execution failed: {}", err)
-                            (Seq.empty[Receipt], BigInt(0), parent.header.stateRoot, Seq.empty[ByteString])
-                        }
-                      } else {
-                        val prepared = mining.blockPreparator
-                          .prepareBlock(evmCodeStorage, skeletonBlock, parent.header, None)
-                        (
-                          prepared.blockResult.receipts,
-                          prepared.blockResult.gasUsed,
-                          prepared.stateRootHash,
-                          Seq.empty[ByteString]
-                        )
+                      blockExecution.executeForProposer(skeletonBlock) match {
+                        case Right(result) =>
+                          (result.receipts, result.gasUsed, result.worldState.stateRootHash, result.executionRequests)
+                        case Left(err) =>
+                          log.error("Proposer-mode execution failed: {}", err)
+                          (Seq.empty[Receipt], BigInt(0), parent.header.stateRoot, Seq.empty[ByteString])
                       }
 
                     val receiptsLogs = BloomFilter.EmptyBloomFilter.toArray +: receipts.map(_.logsBloomFilter.toArray)
@@ -654,7 +650,11 @@ class EngineApiService(
 
   /** engine_getPayloadV1/V2/V3/V4 — Return a previously built payload by ID. */
   def getPayload(payloadId: ByteString): IO[Either[String, Block]] = IO {
-    Option(pendingPayloads.remove(payloadId)) match {
+    // Do NOT remove: the engine-api spec allows the CL to call getPayload multiple times for
+    // the same id (e.g. first getPayloadV1 then getPayloadV2 for the same payload, as the
+    // hive engine-withdrawals "Withdrawals Fork on Block N" tests do). Removing on the first
+    // read makes any follow-up call fail with "Payload not available".
+    Option(pendingPayloads.get(payloadId)) match {
       case Some(block) => Right(block)
       case None        => Left("Payload not available")
     }
