@@ -193,16 +193,37 @@ class EngineApiController(
         // Post-Cancun timestamp: V2 without beacon root → UnsupportedFork
         // Pre-Cancun timestamp: V3 with beacon root → UnsupportedFork
         val hasBeaconRoot = payloadAttrs.exists(_.parentBeaconBlockRoot.isDefined)
+        val hasWithdrawals = payloadAttrs.exists(_.withdrawals.isDefined)
         val attrTimestamp = payloadAttrs.map(_.timestamp)
-        val isCancunTimestamp = attrTimestamp.exists(ts =>
-          com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig.isCancunTimestamp(ts)
-        )
+        val blockchainConfig = com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
+        val isShanghaiTimestamp = attrTimestamp.exists(blockchainConfig.isShanghaiTimestamp)
+        val isCancunTimestamp = attrTimestamp.exists(blockchainConfig.isCancunTimestamp)
 
+        // Engine API version matrix:
+        //   V1: timestamp < shanghai,  withdrawals absent,  beaconRoot absent
+        //   V2: shanghai ≤ ts < cancun, withdrawals present, beaconRoot absent
+        //   V3: timestamp ≥ cancun,     withdrawals present, beaconRoot present
+        // The hive withdrawals suite ("Sent shanghai fcu using PayloadAttributesV1, error is
+        // expected") fails every test that doesn't enforce this.
         val versionError: Option[String] = (version, payloadAttrs) match {
           case (3, Some(_)) if !isCancunTimestamp && hasBeaconRoot =>
             Some("forkchoiceUpdatedV3 with beacon root before Cancun activation")
           case (v, Some(_)) if v < 3 && isCancunTimestamp =>
             Some(s"forkchoiceUpdatedV$v cannot be used post-Cancun, use V3")
+          case (1, Some(_)) if isShanghaiTimestamp =>
+            Some("forkchoiceUpdatedV1 cannot be used post-Shanghai, use V2")
+          case (1, Some(_)) if hasWithdrawals =>
+            Some("forkchoiceUpdatedV1 attrs must not include withdrawals")
+          case (2, Some(_)) if isShanghaiTimestamp && !hasWithdrawals =>
+            Some("forkchoiceUpdatedV2 attrs must include withdrawals post-Shanghai")
+          case (2, Some(_)) if !isShanghaiTimestamp && hasWithdrawals =>
+            Some("forkchoiceUpdatedV2 attrs must not include withdrawals pre-Shanghai")
+          case (2, Some(_)) if hasBeaconRoot =>
+            Some("forkchoiceUpdatedV2 attrs must not include parentBeaconBlockRoot")
+          case (3, Some(_)) if !hasWithdrawals =>
+            Some("forkchoiceUpdatedV3 attrs must include withdrawals")
+          case (3, Some(_)) if isCancunTimestamp && !hasBeaconRoot =>
+            Some("forkchoiceUpdatedV3 attrs must include parentBeaconBlockRoot post-Cancun")
           case _ => None
         }
 
