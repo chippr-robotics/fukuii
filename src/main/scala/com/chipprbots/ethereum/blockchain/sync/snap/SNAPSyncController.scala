@@ -571,11 +571,20 @@ class SNAPSyncController(
       log.info(s"Storage range sync complete. ByteCode: $bytecodePhaseComplete, Accounts: $accountsComplete")
       checkAllDownloadsComplete()
 
-    case HealingAllPeersStateless if currentPhase == StateHealing =>
+    // Sender-guards on all healing coordinator messages: Pekko context.stop is async — old
+    // coordinator instances continue processing their mailbox after context.stop() is called.
+    // Only the CURRENT coordinator (trieNodeHealingCoordinator.contains(sender())) may trigger
+    // state transitions. Stale messages from stopped coordinators are logged and dropped.
+    case HealingAllPeersStateless
+        if currentPhase == StateHealing && trieNodeHealingCoordinator.contains(sender()) =>
       log.warning("All healing peers stateless — refreshing pivot in-place for healing")
       refreshPivotInPlace("all healing peers stateless")
 
-    case actors.Messages.HealingStagnated(healed, pending) if currentPhase == StateHealing =>
+    case HealingAllPeersStateless if currentPhase == StateHealing =>
+      log.debug(s"Ignoring HealingAllPeersStateless from non-current coordinator (${sender().path.name})")
+
+    case actors.Messages.HealingStagnated(healed, pending)
+        if currentPhase == StateHealing && trieNodeHealingCoordinator.contains(sender()) =>
       log.warning(
         s"[HEAL-STAGNATED] Healing stagnated after $healed nodes — $pending tasks unresolvable. " +
           "Refreshing pivot to retry healing with a fresh state root."
@@ -584,10 +593,14 @@ class SNAPSyncController(
       trieNodeHealingCoordinator = None
       refreshPivotInPlace("healing-stagnated")
 
+    case actors.Messages.HealingStagnated(_, _) if currentPhase == StateHealing =>
+      log.debug(s"Ignoring HealingStagnated from non-current coordinator (${sender().path.name})")
+
     case PersistHealingQueue(pending, _) =>
       log.debug(s"[HEAL-PERSIST] ${pending.size} pending nodes (persistence not implemented on this branch — discarding)")
 
-    case StateHealingComplete(abandonedNodes, totalHealed) =>
+    case StateHealingComplete(abandonedNodes, totalHealed)
+        if trieNodeHealingCoordinator.contains(sender()) =>
       log.info(s"State healing complete [abandonedNodes=$abandonedNodes, healed=$totalHealed].")
       if (trieWalkInProgress) {
         // A trie walk is already running — its result will determine next step
@@ -596,6 +609,9 @@ class SNAPSyncController(
         // No walk in progress — start one to check for deeper missing nodes
         startTrieWalk()
       }
+
+    case StateHealingComplete(_, _) =>
+      log.debug(s"Ignoring StateHealingComplete from non-current coordinator (${sender().path.name})")
 
     case TrieWalkResult(missingNodes) if currentPhase == StateHealing =>
       trieWalkInProgress = false
