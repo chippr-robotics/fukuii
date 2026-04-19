@@ -2463,14 +2463,10 @@ class SNAPSyncController(
         chainDownloader = None
         finalizeSnapSync(pivot)
       } else {
-        // If chain download is still running, boost its concurrency and wait
+        // If chain download is still running, wait for it
+        // Besu-aligned D14: no concurrency boost — single concurrency throughout.
         if (!chainDownloadComplete && chainDownloader.isDefined) {
-          log.info("SNAP state sync complete, boosting chain download concurrency and waiting for completion...")
-          chainDownloader.foreach(
-            _ ! ChainDownloader.BoostConcurrency(
-              snapSyncConfig.chainDownloadBoostedConcurrentRequests
-            )
-          )
+          log.info("SNAP state sync complete, waiting for chain download to finish...")
           currentPhase = ChainDownloadCompletion
           progressMonitor.startPhase(ChainDownloadCompletion)
           context.become(waitingForChainDownload)
@@ -2753,7 +2749,7 @@ case class SNAPSyncConfig(
     accountMinResponseBytes: Int = 102400,
     chainDownloadEnabled: Boolean = true,
     chainDownloadMaxConcurrentRequests: Int = 2,
-    chainDownloadBoostedConcurrentRequests: Int = 16,
+    // Besu-aligned D14: no boosted concurrency mode. Single concurrency throughout.
     chainDownloadTimeout: FiniteDuration = 10.seconds,
     minSnapPeers: Int = 3,
     snapPeerEvictionInterval: FiniteDuration = 15.seconds,
@@ -2823,10 +2819,7 @@ object SNAPSyncConfig {
         if (snapConfig.hasPath("chain-download-max-concurrent-requests"))
           snapConfig.getInt("chain-download-max-concurrent-requests")
         else 2,
-      chainDownloadBoostedConcurrentRequests =
-        if (snapConfig.hasPath("chain-download-boosted-concurrent-requests"))
-          snapConfig.getInt("chain-download-boosted-concurrent-requests")
-        else 16,
+      // Besu-aligned D14: chainDownloadBoostedConcurrentRequests removed.
       chainDownloadTimeout =
         if (snapConfig.hasPath("chain-download-timeout"))
           snapConfig.getDuration("chain-download-timeout").toMillis.millis

@@ -84,7 +84,7 @@ class ChainDownloader(
   private var receiptsDownloaded: BigInt = 0
   private var lastLogTime: Long = 0
 
-  // Concurrency — starts conservative during SNAP state sync, boosted after state completes
+  // Besu-aligned D14: single concurrency throughout (no boost mode after state sync).
   private var maxConcurrentRequests: Int = initialMaxConcurrentRequests
 
   // Dispatch timer
@@ -118,9 +118,6 @@ class ChainDownloader(
         scheduleDispatch()
         context.become(downloading)
       }
-
-    case BoostConcurrency(n) =>
-      boostConcurrency(n)
 
     case GetProgress =>
       sender() ! Progress(headersDownloaded, bodiesDownloaded, receiptsDownloaded, targetBlock)
@@ -158,10 +155,6 @@ class ChainDownloader(
       )
       dispatchTask.foreach(_.cancel())
       context.become(idle)
-
-    case BoostConcurrency(n) =>
-      boostConcurrency(n)
-      dispatchRequests() // Immediately use the new slots
 
     case GetProgress =>
       sender() ! Progress(headersDownloaded, bodiesDownloaded, receiptsDownloaded, targetBlock)
@@ -576,13 +569,7 @@ class ChainDownloader(
     best
   }
 
-  private def boostConcurrency(n: Int): Unit = {
-    val prev = maxConcurrentRequests
-    maxConcurrentRequests = n
-    log.info("Chain download concurrency boosted: {} -> {} (state sync complete, all peers available)", prev, n)
-    // Reschedule dispatch at faster interval — 2s was conservative to avoid SNAP contention
-    scheduleDispatch(200.millis)
-  }
+  // boostConcurrency() removed: Besu-aligned D14 (no boost mode).
 
   private def scheduleDispatch(interval: FiniteDuration = 2.seconds): Unit = {
     dispatchTask.foreach(_.cancel())
@@ -604,7 +591,7 @@ object ChainDownloader {
   case object Resume
   case object Stop
   case object Done
-  case class BoostConcurrency(maxConcurrent: Int)
+  // BoostConcurrency removed: Besu-aligned D14 (no boost mode, single concurrency throughout).
   case object GetProgress
   case class Progress(
       headersDownloaded: BigInt,
