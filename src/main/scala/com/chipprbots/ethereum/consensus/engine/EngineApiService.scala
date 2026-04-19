@@ -187,6 +187,14 @@ class EngineApiService(
                   if (extendsCanonical) blockchainWriter.storeBlock(block).commit()
                   else blockchainWriter.storeBlockByHashOnly(block).commit()
                   blockchainWriter.storeReceipts(block.header.hash, receipts).commit()
+                  // Remove applied txs from the pending pool. Without this, the next proposer-mode
+                  // build (engine_forkchoiceUpdated + attrs → getPayload) re-includes the same txs,
+                  // and their nonces collide with the now-canonical state — every EmptyTxs=False
+                  // hive test ends up with NONCE_MISMATCH_TOO_LOW instead of the expected field
+                  // mismatch. Mirrors what BlockImporter does on non-engine block import.
+                  if (block.body.transactionList.nonEmpty && pendingTransactionsManager != null)
+                    pendingTransactionsManager ! com.chipprbots.ethereum.transactions.PendingTransactionsManager
+                      .RemoveTransactions(block.body.transactionList)
                   System.err.println(
                     s"[ENGINE-API] newPayload #${payload.blockNumber}: EXECUTED OK " +
                       s"(${block.body.numberOfTxs} txs, sidechain=${!extendsCanonical}, " +
