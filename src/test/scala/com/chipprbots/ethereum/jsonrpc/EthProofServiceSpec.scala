@@ -113,7 +113,10 @@ class EthProofServiceSpec
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
-        ByteString(accountProof.accountProof.head) shouldBe ByteString(rlp.encode(RLPValue(mpt.getRootHash)))
+        // The root proof element is now the full resolved node (since fix
+        // 0596810a9), so compare via keccak256(first-element) against the trie's
+        // root hash rather than the old raw-hash-reference encoding.
+        ByteString(crypto.kec256(accountProof.accountProof.head.toArray[Byte])) shouldBe ByteString(mpt.getRootHash)
         accountProof.balance shouldBe balance.toBigInt
         accountProof.codeHash shouldBe account.codeHash
         accountProof.nonce shouldBe UInt256(nonce)
@@ -141,7 +144,10 @@ class EthProofServiceSpec
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
-        ByteString(accountProof.accountProof.head) shouldBe ByteString(rlp.encode(RLPValue(mpt.getRootHash)))
+        // The root proof element is now the full resolved node (since fix
+        // 0596810a9), so compare via keccak256(first-element) against the trie's
+        // root hash rather than the old raw-hash-reference encoding.
+        ByteString(crypto.kec256(accountProof.accountProof.head.toArray[Byte])) shouldBe ByteString(mpt.getRootHash)
         accountProof.balance shouldBe balance.toBigInt
         accountProof.codeHash shouldBe account.codeHash
         accountProof.nonce shouldBe UInt256(nonce)
@@ -170,7 +176,10 @@ class EthProofServiceSpec
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
-        ByteString(accountProof.accountProof.head) shouldBe ByteString(rlp.encode(RLPValue(mpt.getRootHash)))
+        // The root proof element is now the full resolved node (since fix
+        // 0596810a9), so compare via keccak256(first-element) against the trie's
+        // root hash rather than the old raw-hash-reference encoding.
+        ByteString(crypto.kec256(accountProof.accountProof.head.toArray[Byte])) shouldBe ByteString(mpt.getRootHash)
         accountProof.balance shouldBe balance.toBigInt
         accountProof.codeHash shouldBe account.codeHash
         accountProof.nonce shouldBe UInt256(nonce)
@@ -201,7 +210,10 @@ class EthProofServiceSpec
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
-        ByteString(accountProof.accountProof.head) shouldBe ByteString(rlp.encode(RLPValue(mpt.getRootHash)))
+        // The root proof element is now the full resolved node (since fix
+        // 0596810a9), so compare via keccak256(first-element) against the trie's
+        // root hash rather than the old raw-hash-reference encoding.
+        ByteString(crypto.kec256(accountProof.accountProof.head.toArray[Byte])) shouldBe ByteString(mpt.getRootHash)
         accountProof.balance shouldBe balance.toBigInt
         accountProof.codeHash shouldBe account.codeHash
         accountProof.nonce shouldBe UInt256(nonce)
@@ -226,7 +238,10 @@ class EthProofServiceSpec
         accountProof.accountProof.foreach { p =>
           p should not be empty
         }
-        ByteString(accountProof.accountProof.head) shouldBe ByteString(rlp.encode(RLPValue(mpt.getRootHash)))
+        // The root proof element is now the full resolved node (since fix
+        // 0596810a9), so compare via keccak256(first-element) against the trie's
+        // root hash rather than the old raw-hash-reference encoding.
+        ByteString(crypto.kec256(accountProof.accountProof.head.toArray[Byte])) shouldBe ByteString(mpt.getRootHash)
         accountProof.balance shouldBe balance.toBigInt
         accountProof.codeHash shouldBe account.codeHash
         accountProof.nonce shouldBe UInt256(nonce)

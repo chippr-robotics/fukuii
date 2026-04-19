@@ -34,6 +34,7 @@ import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.network.PeerManagerActor.Peers
 import com.chipprbots.ethereum.network.handshaker.Handshaker.HandshakeResult
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions
+import com.chipprbots.ethereum.network.p2p.messages.ETH67
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager._
 import com.chipprbots.ethereum.transactions.SignedTransactionsFilterActor.ProperSignedTransactions
@@ -196,17 +197,27 @@ class PendingTransactionsManagerSpec
   }
 
   it should "broadcast received pending transactions to other peers" taggedAs (UnitTest) in new TestSetup {
+    // PendingTransactionsManager now tracks peers via PeerHandshakeSuccessful
+    // events. When a tx lands it announces the hashes (ETH/67
+    // NewPooledTransactionHashes) to every connected peer rather than
+    // pushing the full tx body — peers pull the body via GetPooledTransactions.
+    pendingTransactionsManager ! PeerEvent.PeerHandshakeSuccessful(peer1, new HandshakeResult {})
+    pendingTransactionsManager ! PeerEvent.PeerHandshakeSuccessful(peer2, new HandshakeResult {})
+    pendingTransactionsManager ! PeerEvent.PeerHandshakeSuccessful(peer3, new HandshakeResult {})
+
     val stx: SignedTransactionWithSender = newStx()
     pendingTransactionsManager ! AddTransactions(stx)
 
-    peerManager.expectMsg(PeerManagerActor.GetPeers)
-    peerManager.reply(Peers(Map(peer1 -> Handshaked, peer2 -> Handshaked, peer3 -> Handshaked)))
-
-    etcPeerManager.expectMsgAllOf(
-      NetworkPeerManagerActor.SendMessage(SignedTransactions(Seq(stx.tx)), peer1.id),
-      NetworkPeerManagerActor.SendMessage(SignedTransactions(Seq(stx.tx)), peer2.id),
-      NetworkPeerManagerActor.SendMessage(SignedTransactions(Seq(stx.tx)), peer3.id)
-    )
+    val announcements: Seq[SendMessage] =
+      etcPeerManager.receiveWhile(Timeouts.normalTimeout, messages = 3) {
+        case m @ NetworkPeerManagerActor.SendMessage(enc, _)
+            if enc.underlyingMsg.isInstanceOf[ETH67.NewPooledTransactionHashes] =>
+          m
+      }
+    announcements.map(_.peerId).toSet shouldBe Set(peer1.id, peer2.id, peer3.id)
+    announcements.foreach { a =>
+      a.message.underlyingMsg.asInstanceOf[ETH67.NewPooledTransactionHashes].hashes shouldBe Seq(stx.tx.hash)
+    }
 
     val pendingTxs: PendingTransactionsResponse =
       (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse].futureValue
@@ -214,34 +225,41 @@ class PendingTransactionsManagerSpec
   }
 
   it should "notify other peers about received transactions and handle removal" taggedAs (UnitTest) in new TestSetup {
+    pendingTransactionsManager ! PeerEvent.PeerHandshakeSuccessful(peer1, new HandshakeResult {})
+    pendingTransactionsManager ! PeerEvent.PeerHandshakeSuccessful(peer2, new HandshakeResult {})
+    pendingTransactionsManager ! PeerEvent.PeerHandshakeSuccessful(peer3, new HandshakeResult {})
+
     val tx1: Seq[SignedTransactionWithSender] = Seq.fill(10)(newStx())
     val msg1 = tx1.toSet
     pendingTransactionsManager ! ProperSignedTransactions(msg1, peer1.id)
-    peerManager.expectMsg(PeerManagerActor.GetPeers)
-    peerManager.reply(Peers(Map(peer1 -> Handshaked, peer2 -> Handshaked, peer3 -> Handshaked)))
 
-    val resps1: Seq[SendMessage] = etcPeerManager.expectMsgAllConformingOf(
-      classOf[NetworkPeerManagerActor.SendMessage],
-      classOf[NetworkPeerManagerActor.SendMessage]
-    )
-
-    resps1.map(_.peerId) should contain.allOf(peer2.id, peer3.id)
-    resps1.map(_.message.underlyingMsg).foreach { case SignedTransactions(txs) => txs.toSet shouldEqual msg1.map(_.tx) }
-    etcPeerManager.expectNoMessage()
+    // AddTransactions fires both a NotifyPeers (filtered per-peer via
+    // isTxKnown) and an announceNewTxHashes (to every connected peer), so
+    // each tx batch reaches peer1/2/3 via NewPooledTransactionHashes (ETH/67).
+    // Drain until no more messages arrive within shortTimeout.
+    val resps1: Seq[SendMessage] = etcPeerManager.receiveWhile(Timeouts.normalTimeout) {
+      case m: NetworkPeerManagerActor.SendMessage => m
+    }
+    (resps1.map(_.peerId).toSet should contain).allOf(peer2.id, peer3.id)
+    resps1.map(_.message.underlyingMsg).foreach {
+      case ETH67.NewPooledTransactionHashes(_, _, hashes) => hashes.toSet shouldEqual msg1.map(_.tx.hash)
+      case SignedTransactions(txs)                        => txs.toSet shouldEqual msg1.map(_.tx)
+      case other                                          => fail(s"Unexpected message: $other")
+    }
 
     val tx2: Seq[SignedTransactionWithSender] = Seq.fill(5)(newStx())
     val msg2 = tx2.toSet
     pendingTransactionsManager ! ProperSignedTransactions(msg2, peer2.id)
-    peerManager.expectMsg(PeerManagerActor.GetPeers)
-    peerManager.reply(Peers(Map(peer1 -> Handshaked, peer2 -> Handshaked, peer3 -> Handshaked)))
 
-    val resps2: Seq[SendMessage] = etcPeerManager.expectMsgAllConformingOf(
-      classOf[NetworkPeerManagerActor.SendMessage],
-      classOf[NetworkPeerManagerActor.SendMessage]
-    )
-    resps2.map(_.peerId) should contain.allOf(peer1.id, peer3.id)
-    resps2.map(_.message.underlyingMsg).foreach { case SignedTransactions(txs) => txs.toSet shouldEqual msg2.map(_.tx) }
-    etcPeerManager.expectNoMessage()
+    val resps2: Seq[SendMessage] = etcPeerManager.receiveWhile(Timeouts.normalTimeout) {
+      case m: NetworkPeerManagerActor.SendMessage => m
+    }
+    (resps2.map(_.peerId).toSet should contain).allOf(peer1.id, peer3.id)
+    resps2.map(_.message.underlyingMsg).foreach {
+      case ETH67.NewPooledTransactionHashes(_, _, hashes) => hashes.toSet shouldEqual msg2.map(_.tx.hash)
+      case SignedTransactions(txs)                        => txs.toSet shouldEqual msg2.map(_.tx)
+      case other                                          => fail(s"Unexpected message: $other")
+    }
 
     pendingTransactionsManager ! RemoveTransactions(tx1.dropRight(4).map(_.tx))
     pendingTransactionsManager ! RemoveTransactions(tx2.drop(2).map(_.tx))
@@ -253,6 +271,10 @@ class PendingTransactionsManagerSpec
   }
 
   it should "not add pending transaction again when it was removed while waiting for peers" taggedAs (UnitTest) in new TestSetup {
+    // Previously the broadcast path was deferred until the peer manager replied
+    // to GetPeers; the test removed the tx before the reply arrived and verified
+    // nothing was sent. With the event-driven peer tracking, we reproduce the
+    // same invariant by removing the tx before any peer handshake is observed.
     val msg1: Set[SignedTransactionWithSender] = Set(newStx(1))
     pendingTransactionsManager ! ProperSignedTransactions(msg1, peer1.id)
 
@@ -264,8 +286,10 @@ class PendingTransactionsManagerSpec
 
     pendingTransactionsManager ! RemoveTransactions(msg1.map(_.tx).toSeq)
 
-    peerManager.expectMsg(PeerManagerActor.GetPeers)
-    peerManager.reply(Peers(Map(peer1 -> Handshaked, peer2 -> Handshaked, peer3 -> Handshaked)))
+    // No broadcast should follow since the tx is gone by the time peers show up.
+    pendingTransactionsManager ! PeerEvent.PeerHandshakeSuccessful(peer1, new HandshakeResult {})
+    pendingTransactionsManager ! PeerEvent.PeerHandshakeSuccessful(peer2, new HandshakeResult {})
+    pendingTransactionsManager ! PeerEvent.PeerHandshakeSuccessful(peer3, new HandshakeResult {})
 
     etcPeerManager.expectNoMessage()
 
@@ -281,17 +305,11 @@ class PendingTransactionsManagerSpec
     val otherTx: SignedTransactionWithSender = newStx(1, tx, keyPair2)
     val overrideTx: SignedTransactionWithSender = newStx(1, tx.copy(value = 2 * tx.value), keyPair1)
 
+    pendingTransactionsManager ! PeerEvent.PeerHandshakeSuccessful(peer1, new HandshakeResult {})
+
     pendingTransactionsManager ! AddOrOverrideTransaction(firstTx.tx)
-    peerManager.expectMsg(PeerManagerActor.GetPeers)
-    peerManager.reply(Peers(Map(peer1 -> Handshaked)))
-
     pendingTransactionsManager ! AddOrOverrideTransaction(otherTx.tx)
-    peerManager.expectMsg(PeerManagerActor.GetPeers)
-    peerManager.reply(Peers(Map(peer1 -> Handshaked)))
-
     pendingTransactionsManager ! AddOrOverrideTransaction(overrideTx.tx)
-    peerManager.expectMsg(PeerManagerActor.GetPeers)
-    peerManager.reply(Peers(Map(peer1 -> Handshaked)))
 
     eventually {
       val pendingTxs: Seq[PendingTransaction] = (pendingTransactionsManager ? GetPendingTransactions)
@@ -302,24 +320,45 @@ class PendingTransactionsManagerSpec
       pendingTxs.map(_.stx).toSet shouldEqual Set(overrideTx, otherTx)
     }
 
-    // overriden TX will still be broadcast to peers
-    etcPeerManager.expectMsgAllOf(
-      NetworkPeerManagerActor.SendMessage(SignedTransactions(List(firstTx.tx)), peer1.id),
-      NetworkPeerManagerActor.SendMessage(SignedTransactions(List(otherTx.tx)), peer1.id),
-      NetworkPeerManagerActor.SendMessage(SignedTransactions(List(overrideTx.tx)), peer1.id)
-    )
+    // AddOrOverride queues a NotifyPeers self-message whose broadcast list is
+    // filtered to txs still in the pool when processed. Because AddOrOverride
+    // processes in-order but NotifyPeers is deferred, firstTx gets invalidated
+    // (by overrideTx) before its announce fires, so only otherTx and
+    // overrideTx reach peer1. Both land as NewPooledTransactionHashes (ETH/67).
+    val announces: Seq[SendMessage] = etcPeerManager.receiveWhile(Timeouts.normalTimeout, messages = 3) {
+      case m: NetworkPeerManagerActor.SendMessage => m
+    }
+    announces.foreach(_.peerId shouldBe peer1.id)
+    val announcedHashes = announces
+      .flatMap(_.message.underlyingMsg match {
+        case ETH67.NewPooledTransactionHashes(_, _, hashes) => hashes
+        case SignedTransactions(txs)                        => txs.map(_.hash)
+        case _                                              => Nil
+      })
+      .toSet
+    (announcedHashes should contain).allOf(otherTx.tx.hash, overrideTx.tx.hash)
+    announcedHashes shouldNot contain(firstTx.tx.hash)
   }
 
   it should "broadcast pending transactions to newly connected peers" taggedAs (UnitTest) in new TestSetup {
+    // When a peer handshakes after the pool already holds transactions, the
+    // manager should immediately replay them to that peer — the original intent
+    // of this test. With the event-driven tracking the flow is: add tx (no
+    // peers → no broadcast), then a handshake arrives → replay.
     val stx: SignedTransactionWithSender = newStx()
     pendingTransactionsManager ! AddTransactions(stx)
 
-    peerManager.expectMsg(PeerManagerActor.GetPeers)
-    peerManager.reply(Peers(Map.empty))
-
     pendingTransactionsManager ! PeerEvent.PeerHandshakeSuccessful(peer1, new HandshakeResult {})
 
-    etcPeerManager.expectMsgAllOf(NetworkPeerManagerActor.SendMessage(SignedTransactions(Seq(stx.tx)), peer1.id))
+    // On handshake the pool replays its current contents to the new peer as a
+    // NewPooledTransactionHashes announce; the peer pulls bodies on demand.
+    val replayed = etcPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage]
+    replayed.peerId shouldBe peer1.id
+    replayed.message.underlyingMsg match {
+      case ETH67.NewPooledTransactionHashes(_, _, hashes) => hashes shouldBe Seq(stx.tx.hash)
+      case SignedTransactions(txs)                        => txs shouldBe Seq(stx.tx)
+      case other                                          => fail(s"Unexpected: $other")
+    }
   }
 
   it should "remove transaction on timeout" taggedAs (UnitTest) in new TestSetup {

@@ -74,18 +74,20 @@ jobs:
           restore-keys: sbt-${{ runner.os }}-
 
       - name: Install sbt
+        # Install from repo.scala-sbt.org rather than GitHub releases. The
+        # github.com/sbt/sbt/releases/download redirect goes to an Azure blob
+        # store that's been intermittently 504-ing lately, taking the whole
+        # workflow down before hive even starts. The scala-sbt.org debian repo
+        # is served by a separate CDN and has been reliable — same install
+        # path we already use in docker/Dockerfile-dev.
         run: |
           set -euxo pipefail
-          # Retry curl — the GitHub→Azure blob redirect occasionally serves a
-          # 92-byte garbage body instead of the tarball, causing tar xz to die
-          # with "not in gzip format". --retry-all-errors handles that.
-          curl -L --fail --retry 5 --retry-delay 5 --retry-all-errors \
-            -o /tmp/sbt.tgz \
-            https://github.com/sbt/sbt/releases/download/v1.10.7/sbt-1.10.7.tgz
-          # Verify the download is an actual gzip tarball before extracting.
-          file /tmp/sbt.tgz
-          tar xz -C /tmp -f /tmp/sbt.tgz
-          sudo ln -sf /tmp/sbt/bin/sbt /usr/local/bin/sbt
+          curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" \
+            | sudo gpg --dearmor -o /usr/share/keyrings/sbt-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/sbt-archive-keyring.gpg] https://repo.scala-sbt.org/scalasbt/debian all main" \
+            | sudo tee /etc/apt/sources.list.d/sbt.list
+          sudo apt-get update
+          sudo apt-get install -y sbt
           sbt --version
 
       - name: Build fukuii assembly
@@ -157,32 +159,91 @@ jobs:
           go build -o hive .
           ./hive --help | head -5
 
+      - name: Resolve execution-spec-tests fixtures URL
+        id: fixtures
+        env:
+          # GITHUB_TOKEN lifts anonymous API rate limits (60/hr) to 1000/hr,
+          # which matters because the consume-cache step inside the simulator
+          # image calls api.github.com unauthenticated and gets rate-limited
+          # to death on shared CI egress IPs — pytest catches the HTTPError
+          # and exits 3 (INTERNAL_ERROR). We resolve the URL here (authed)
+          # and inject it via --sim.buildarg fixtures=<url> so the inner
+          # Dockerfile's `consume cache --input "$FIXTURES"` takes the
+          # direct-URL code path and skips the API entirely.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Pin explicitly — we want reproducibility over "latest" surprises.
+          FIXTURES_TAG='v5.4.0'
+          FIXTURES_URL="https://github.com/ethereum/execution-spec-tests/releases/download/${FIXTURES_TAG}/fixtures_stable.tar.gz"
+
+          # Sanity-check the asset exists (authenticated → no rate-limit).
+          gh api -H 'Accept: application/vnd.github+json' \
+            "repos/ethereum/execution-spec-tests/releases/tags/${FIXTURES_TAG}" \
+            --jq '.assets[] | select(.name == "fixtures_stable.tar.gz") | .browser_download_url' \
+            | grep -qx "$FIXTURES_URL"
+
+          echo "url=$FIXTURES_URL" >> "$GITHUB_OUTPUT"
+          echo "Resolved fixtures URL: $FIXTURES_URL"
+
       - name: Run Prague consume-engine sweep
         working-directory: external/hive
         run: |
+          # --docker.buildoutput streams docker-build stderr through hive,
+          # so any future simulator-build regression is diagnosable from
+          # the Actions log directly instead of guessing at exit codes.
           ./hive --sim ethereum/eels/consume-engine \
+            --sim.buildarg fixtures='${{ steps.fixtures.outputs.url }}' \
             --sim.buildarg disable_strict_exception_matching=nimbus-el,fukuii \
             --client fukuii \
             --sim.limit '.*fork_Prague.*' \
             --sim.parallelism $HIVE_PARALLELISM \
             --sim.timelimit $SIM_TIMELIMIT \
             --client.checktimelimit=30s \
+            --docker.buildoutput \
             --loglevel 3 \
             2>&1 | tee hive-run.log
 
       - name: Tabulate results
         id: tab
+        if: always()
         working-directory: external/hive
         run: |
-          sim_log=$(ls -t workspace/logs/*-simulator-*.log | head -1)
-          passed=$(grep -c "PASSED tests/" "$sim_log" || true)
-          failed=$(grep -c "FAILED tests/" "$sim_log" || true)
-          total=$((passed + failed))
+          # Distinguish simulator-build failure (no logs) from test failures.
+          shopt -s nullglob
+          sim_logs=(workspace/logs/*-simulator-*.log)
+          if [ "${#sim_logs[@]}" -eq 0 ]; then
+            echo "::error::No simulator log found — the consume-engine image likely failed to build. Check the 'Run Prague consume-engine sweep' step for the docker-build stderr."
+            echo "passed=0" >> "$GITHUB_OUTPUT"
+            echo "failed=0" >> "$GITHUB_OUTPUT"
+            echo "total=0" >> "$GITHUB_OUTPUT"
+            echo "sim_failed=true" >> "$GITHUB_OUTPUT"
+            printf '### Hive Prague sweep\n\n**Simulator failed to build.** No test log produced.\n' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          sim_log="${sim_logs[0]}"
+          # Pick newest by mtime if multiple logs exist.
+          for f in "${sim_logs[@]}"; do
+            [ "$f" -nt "$sim_log" ] && sim_log="$f"
+          done
+          # EELS/consume-engine pytest-xdist format is: `[gwN] [ N/M] VERDICT test-name`
+          # where VERDICT is PASSED, FAILED, or ERROR. The old `grep -c "PASSED tests/"`
+          # pattern matched zero lines (the word "tests/" is after the verdict), which
+          # made every sweep look like "0 passed" regardless of the real result.
+          passed=$(grep -cE "\] PASSED " "$sim_log" || true)
+          failed=$(grep -cE "\] FAILED " "$sim_log" || true)
+          errored=$(grep -cE "\] ERROR " "$sim_log" || true)
+          passed=${passed:-0}
+          failed=${failed:-0}
+          errored=${errored:-0}
+          total=$((passed + failed + errored))
           echo "passed=$passed" >> "$GITHUB_OUTPUT"
           echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          echo "errored=$errored" >> "$GITHUB_OUTPUT"
           echo "total=$total" >> "$GITHUB_OUTPUT"
-          printf '### Hive Prague sweep\n\n| | | |\n|--|--|--|\n| passed | %s | |\n| failed | %s | |\n| total | %s | |\n| threshold | %s | |\n' \
-            "$passed" "$failed" "$total" "$PASS_THRESHOLD" >> "$GITHUB_STEP_SUMMARY"
+          echo "sim_failed=false" >> "$GITHUB_OUTPUT"
+          printf '### Hive Prague sweep\n\n| | | |\n|--|--|--|\n| passed | %s | |\n| failed | %s | |\n| errored | %s | |\n| total | %s | |\n| threshold | %s | |\n' \
+            "$passed" "$failed" "$errored" "$total" "$PASS_THRESHOLD" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload hive workspace logs
         if: always()
@@ -192,8 +253,14 @@ jobs:
           path: external/hive/workspace/logs/
           retention-days: 14
 
+      - name: Fail if simulator did not build
+        if: ${{ steps.tab.outputs.sim_failed == 'true' }}
+        run: |
+          echo "::error::consume-engine simulator image failed to build — no tests ran."
+          exit 1
+
       - name: Fail if under threshold
-        if: ${{ steps.tab.outputs.passed < env.PASS_THRESHOLD }}
+        if: ${{ steps.tab.outputs.sim_failed == 'false' && steps.tab.outputs.passed < env.PASS_THRESHOLD }}
         run: |
           echo "::error::Hive Prague sweep only passed ${{ steps.tab.outputs.passed }} tests (threshold ${{ env.PASS_THRESHOLD }})."
           exit 1

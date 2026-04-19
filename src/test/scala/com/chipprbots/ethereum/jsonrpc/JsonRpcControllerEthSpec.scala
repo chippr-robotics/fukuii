@@ -269,16 +269,9 @@ class JsonRpcControllerEthSpec
     val headerPowHash: String = s"0x${Hex.toHexString(kec256(BlockHeader.getEncodedWithoutNonce(blockHeader)))}"
 
     blockchainWriter.save(parentBlock, Nil, ChainWeight.zero.increase(parentBlock.header), true)
-    (blockGenerator
-      .generateBlock(
-        _: Block,
-        _: Seq[SignedTransaction],
-        _: Address,
-        _: Seq[BlockHeader],
-        _: Option[InMemoryWorldStateProxy]
-      )(_: BlockchainConfig))
-      .expects(parentBlock, *, *, *, *, *)
-      .returns(PendingBlockAndState(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil), fakeWorld))
+    blockGenerator.setGenerateBlockResult(
+      PendingBlockAndState(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil), fakeWorld)
+    )
 
     // Set up AutoPilot to respond immediately when messages are received
     pendingTransactionsManager.setAutoPilot(simpleAutoPilot { case PendingTransactionsManager.GetPendingTransactions =>
@@ -293,12 +286,16 @@ class JsonRpcControllerEthSpec
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
 
+    // eth_getWork returns [powhash, seed, target, blockNumber] — the trailing
+    // block-number element matches geth's implementation (added recently so
+    // mining pools can detect pivots).
     response should haveResult(
       JArray(
         List(
           JString(headerPowHash),
           JString(seed),
-          JString(target)
+          JString(target),
+          JString("0x2")
         )
       )
     )
@@ -314,28 +311,25 @@ class JsonRpcControllerEthSpec
     val headerPowHash: String = s"0x${Hex.toHexString(kec256(BlockHeader.getEncodedWithoutNonce(blockHeader)))}"
 
     blockchainWriter.save(parentBlock, Nil, ChainWeight.zero.increase(parentBlock.header), true)
-    (blockGenerator
-      .generateBlock(
-        _: Block,
-        _: Seq[SignedTransaction],
-        _: Address,
-        _: Seq[BlockHeader],
-        _: Option[InMemoryWorldStateProxy]
-      )(_: BlockchainConfig))
-      .expects(parentBlock, *, *, *, *, *)
-      .returns(PendingBlockAndState(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil), fakeWorld))
+    blockGenerator.setGenerateBlockResult(
+      PendingBlockAndState(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil), fakeWorld)
+    )
 
     // Don't set up AutoPilot - let the actors timeout and verify error handling returns empty lists
     val request: JsonRpcRequest = newJsonRpcRequest("eth_getWork")
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
 
+    // eth_getWork returns [powhash, seed, target, blockNumber] — the trailing
+    // block-number element matches geth's implementation (added recently so
+    // mining pools can detect pivots).
     response should haveResult(
       JArray(
         List(
           JString(headerPowHash),
           JString(seed),
-          JString(target)
+          JString(target),
+          JString("0x2")
         )
       )
     )
@@ -347,9 +341,11 @@ class JsonRpcControllerEthSpec
     val mixHash: String = s"""0x${"01" * 32}"""
     val headerPowHash: String = "02" * 32
 
-    (blockGenerator.getPrepared _)
-      .expects(ByteString(Hex.decode(headerPowHash)))
-      .returns(Some(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil)))
+    blockGenerator.getPreparedFn = { hash =>
+      if (hash == ByteString(Hex.decode(headerPowHash)))
+        Some(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil))
+      else None
+    }
 
     val request: JsonRpcRequest = newJsonRpcRequest(
       "eth_submitWork",
@@ -588,7 +584,11 @@ class JsonRpcControllerEthSpec
     )
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
-    response should haveResult(JString("0x" + Hex.toHexString(ByteString("response").toArray[Byte])))
+    // eth_getStorageAt's result is a 32-byte storage slot value; short values
+    // are left-padded with zeros per the JSON-RPC DATA convention.
+    val raw = ByteString("response").toArray[Byte]
+    val padded = Array.fill[Byte](32 - raw.length)(0) ++ raw
+    response should haveResult(JString("0x" + Hex.toHexString(padded)))
   }
 
   it should "eth_sign" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
@@ -724,6 +724,8 @@ class JsonRpcControllerEthSpec
       newJsonRpcRequest("eth_getFilterChanges", List(JString("0x1")))
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
+    // `removed` is required by the eth_getLogs/eth_getFilterChanges JSON-RPC
+    // spec (defaults to false for current-chain logs; true for reorged-out logs).
     response should haveResult(
       JArray(
         List(
@@ -735,7 +737,8 @@ class JsonRpcControllerEthSpec
             "blockNumber" -> JString("0x63"),
             "address" -> JString("0x0000000000000000000000000000000000123456"),
             "data" -> JString("0xff33"),
-            "topics" -> JArray(List(JString("0x33"), JString("0x55")))
+            "topics" -> JArray(List(JString("0x33"), JString("0x55"))),
+            "removed" -> JBool(false)
           )
         )
       )
@@ -800,8 +803,9 @@ class JsonRpcControllerEthSpec
     // when
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
 
-    // then
+    // then — EIP-1186 requires the account `address` in the proof response.
     response should haveObjectResult(
+      "address" -> JString(address.toLowerCase),
       "accountProof" -> JArray(
         List(
           JString("0x1234")
@@ -923,6 +927,8 @@ class JsonRpcControllerEthSpec
     )
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
+    // `removed` is required by the eth_getLogs/eth_getFilterChanges JSON-RPC
+    // spec (defaults to false for current-chain logs; true for reorged-out logs).
     response should haveResult(
       JArray(
         List(
@@ -934,7 +940,8 @@ class JsonRpcControllerEthSpec
             "blockNumber" -> JString("0x63"),
             "address" -> JString("0x0000000000000000000000000000000000123456"),
             "data" -> JString("0xff33"),
-            "topics" -> JArray(List(JString("0x33"), JString("0x55")))
+            "topics" -> JArray(List(JString("0x33"), JString("0x55"))),
+            "removed" -> JBool(false)
           )
         )
       )

@@ -427,6 +427,10 @@ class JsonRpcControllerEthLegacyTransactionSpec
     )
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
+    // The receipt encoder now emits the full JSON-RPC shape: `to: null` is
+    // serialised explicitly for contract-creation receipts, and each log carries
+    // `removed` (false for current-chain logs). Both fields are required by the
+    // `eth_getTransactionReceipt` JSON schema.
     response should haveResult(
       JObject(
         JField("transactionHash", JString("0x" + "23" * 32)),
@@ -434,6 +438,7 @@ class JsonRpcControllerEthLegacyTransactionSpec
         JField("blockNumber", JString("0x2fb079")),
         JField("blockHash", JString("0x" + Hex.toHexString(Fixtures.Blocks.Block3125369.header.hash.toArray[Byte]))),
         JField("from", JString("0x0000000000000000000000000000000000000001")),
+        JField("to", JNull),
         JField("cumulativeGasUsed", JString("0x1a4")),
         JField("gasUsed", JString("0x2a")),
         JField("contractAddress", JString("0x000000000000000000000000000000000000002a")),
@@ -452,7 +457,8 @@ class JsonRpcControllerEthLegacyTransactionSpec
                 JField("blockNumber", JString("0x2fb079")),
                 JField("address", JString("0x000000000000000000000000000000000000002a")),
                 JField("data", JString("0x" + "43" * 32)),
-                JField("topics", JArray(List(JString("0x" + "44" * 32), JString("0x" + "45" * 32))))
+                JField("topics", JArray(List(JString("0x" + "44" * 32), JString("0x" + "45" * 32)))),
+                JField("removed", JBool(false))
               )
             )
           )
@@ -511,6 +517,9 @@ class JsonRpcControllerEthLegacyTransactionSpec
     )
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
+    // Pre-byzantium receipts carry `root` instead of `status`; otherwise the
+    // shape matches post-byzantium (explicit `to: null` for contract creation,
+    // `removed` on every log).
     response should haveResult(
       JObject(
         JField("transactionHash", JString("0x" + "23" * 32)),
@@ -518,6 +527,7 @@ class JsonRpcControllerEthLegacyTransactionSpec
         JField("blockNumber", JString("0x2fb079")),
         JField("blockHash", JString("0x" + Hex.toHexString(Fixtures.Blocks.Block3125369.header.hash.toArray[Byte]))),
         JField("from", JString("0x0000000000000000000000000000000000000001")),
+        JField("to", JNull),
         JField("cumulativeGasUsed", JString("0x1a4")),
         JField("gasUsed", JString("0x2a")),
         JField("contractAddress", JString("0x000000000000000000000000000000000000002a")),
@@ -536,7 +546,8 @@ class JsonRpcControllerEthLegacyTransactionSpec
                 JField("blockNumber", JString("0x2fb079")),
                 JField("address", JString("0x000000000000000000000000000000000000002a")),
                 JField("data", JString("0x" + "43" * 32)),
-                JField("topics", JArray(List(JString("0x" + "44" * 32), JString("0x" + "45" * 32))))
+                JField("topics", JArray(List(JString("0x" + "44" * 32), JString("0x" + "45" * 32)))),
+                JField("removed", JBool(false))
               )
             )
           )

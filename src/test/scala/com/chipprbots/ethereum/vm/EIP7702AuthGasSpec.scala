@@ -9,7 +9,12 @@ import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
-/** EIP-7702: Verify TxAuthTupleGas = 12,500 per authorization tuple. */
+/** EIP-7702: intrinsic gas is `PER_EMPTY_ACCOUNT_COST` (25,000) per authorization tuple. A
+  * `REFUND_PER_EXISTING_ACCOUNT` (12,500) is returned during execution for each auth whose target account already
+  * exists, capped at gasUsed/5. This test covers the intrinsic side only; refund accounting is covered elsewhere.
+  *
+  * See EELS prague/transactions.py `calculate_intrinsic_cost` and eips.ethereum.org/EIPS/eip-7702 (final).
+  */
 class EIP7702AuthGasSpec
     extends AnyFlatSpec
     with Matchers
@@ -26,10 +31,10 @@ class EIP7702AuthGasSpec
 
   val emptyPayload: ByteString = ByteString.empty
 
-  "EIP-7702 auth tuple gas" should "be 12500 per authorization" taggedAs (OlympiaTest, VMTest) in {
+  "EIP-7702 auth tuple gas" should "be 25000 per authorization" taggedAs (OlympiaTest, VMTest) in {
     val gasWithAuth = evmConfig.calcTransactionIntrinsicGas(emptyPayload, isContractCreation = false, Nil, 1)
     val gasWithoutAuth = evmConfig.calcTransactionIntrinsicGas(emptyPayload, isContractCreation = false, Nil, 0)
-    (gasWithAuth - gasWithoutAuth) shouldBe BigInt(12500)
+    (gasWithAuth - gasWithoutAuth) shouldBe BigInt(25000)
   }
 
   it should "scale linearly with authorization list size" taggedAs (OlympiaTest, VMTest) in {
@@ -37,8 +42,8 @@ class EIP7702AuthGasSpec
     val gas1 = evmConfig.calcTransactionIntrinsicGas(emptyPayload, isContractCreation = false, Nil, 1)
     val gas3 = evmConfig.calcTransactionIntrinsicGas(emptyPayload, isContractCreation = false, Nil, 3)
 
-    (gas1 - gas0) shouldBe BigInt(12500)
-    (gas3 - gas0) shouldBe BigInt(37500)
+    (gas1 - gas0) shouldBe BigInt(25000)
+    (gas3 - gas0) shouldBe BigInt(75000)
   }
 
   it should "combine with access list and calldata costs" taggedAs (OlympiaTest, VMTest) in {
@@ -50,10 +55,10 @@ class EIP7702AuthGasSpec
     val gasBase = evmConfig.calcTransactionIntrinsicGas(emptyPayload, isContractCreation = false, Nil, 0)
     val gasFull = evmConfig.calcTransactionIntrinsicGas(payload, isContractCreation = false, accessList, 2)
 
-    // Full = base + calldata(100 * 16) + accessList(1 addr * 2400 + 2 keys * 1900) + auth(2 * 12500)
+    // Full = base + calldata(100 * 16) + accessList(1 addr * 2400 + 2 keys * 1900) + auth(2 * 25000)
     val calldataCost = BigInt(100) * 16 // G_txdatanonzero = 16
     val accessListCost = BigInt(2400) + BigInt(2) * 1900 // 1 addr + 2 keys
-    val authCost = BigInt(2) * 12500
+    val authCost = BigInt(2) * 25000
 
     gasFull shouldBe (gasBase + calldataCost + accessListCost + authCost)
   }

@@ -124,7 +124,6 @@ class RegularSyncSpec
         regularSync ! SyncProtocol.Start
 
         peerEventBus.expectMsgClass(classOf[Subscribe])
-        // It's weird that we're using block number for total difficulty but I'm too scared to fight this dragon
         peerEventBus.reply(
           MessageFromPeer(
             NewBlock(testBlocks.last, ChainWeight(testBlocks.last.number).totalDifficulty),
@@ -166,21 +165,30 @@ class RegularSyncSpec
           peersClient.expectMsgEq(blockHeadersChunkRequest(0))
           peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
 
-          val getBodies: PeersClient.Request[GetBlockBodies] = PeersClient.Request.create(
-            GetBlockBodies(testBlocksChunked.head.headers.map(_.hash)),
-            PeersClient.BestPeer
-          )
-          peersClient.expectMsgEq(getBodies)
-          peersClient.reply(PeersClient.Response(defaultPeer, BlockBodies(testBlocksChunked.head.bodies)))
+          // Full-sized first batch bumps knownTop, so the fetcher emits the
+          // bodies request AND the next-chunk headers prefetch in parallel.
+          // Capture each sender so we can reply to the right one later.
+          var bodiesSender: org.apache.pekko.actor.ActorRef = null
+          var nextHeadersSender: org.apache.pekko.actor.ActorRef = null
+          def classifyNext(): Unit = peersClient.expectMsgPF() {
+            case PeersClient.Request(msg: ETH66GetBlockBodies, _, _)
+                if msg.hashes == testBlocksChunked.head.headers.map(_.hash) =>
+              bodiesSender = peersClient.lastSender
+            case PeersClient.Request(_: ETH66GetBlockHeaders, _, _) =>
+              nextHeadersSender = peersClient.lastSender
+          }
+          classifyNext()
+          classifyNext()
+
+          bodiesSender ! PeersClient.Response(defaultPeer, BlockBodies(testBlocksChunked.head.bodies))
 
           blockFetcher ! MessageFromPeer(
             NewBlock(testBlocks.last, ChainWeight.totalDifficultyOnly(testBlocks.last.number).totalDifficulty),
             defaultPeer.id
           )
-          peersClient.expectMsgEq(blockHeadersChunkRequest(1))
-          peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked(5).headers)))
-          peersClient.expectMsgPF() {
-            case PeersClient.BlacklistPeer(id, _) if id == defaultPeer.id => true
+          nextHeadersSender ! PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked(5).headers))
+          peersClient.fishForSpecificMessage() {
+            case PeersClient.BlacklistPeer(id, _) if id == defaultPeer.id => ()
           }
         }
       )

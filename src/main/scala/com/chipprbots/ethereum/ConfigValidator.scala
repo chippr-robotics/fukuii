@@ -44,13 +44,24 @@ object ConfigValidator extends Logger {
           errors += s"Port number '$port' has been specified multiple times. Please review the supplied configuration. ($label)"
       }
 
+    def getBool(path: String, default: Boolean): Boolean =
+      scala.util.Try(config.getBoolean(path)).getOrElse(default)
+
+    def getInt(path: String, default: Int): Int =
+      scala.util.Try(config.getInt(path)).getOrElse(default)
+
     val p2pPort = config.getConfig("network.server-address").getInt("port")
-    val httpEnabled = config.getBoolean("network.rpc.http.enabled")
-    val httpPort = config.getInt("network.rpc.http.port")
-    val wsEnabled = config.getBoolean("network.rpc.ws.enabled")
-    val wsPort = config.getInt("network.rpc.ws.port")
-    val engineEnabled = config.getBoolean("network.rpc.engine.enabled")
-    val enginePort = config.getInt("network.rpc.engine.port")
+    val httpEnabled = getBool("network.rpc.http.enabled", default = false)
+    val httpPort = getInt("network.rpc.http.port", default = 0)
+    val wsEnabled = getBool("network.rpc.ws.enabled", default = false)
+    val wsPort = getInt("network.rpc.ws.port", default = 0)
+    // Engine API lives at network.engine-api (a sibling of network.rpc, not
+    // a child of it) — matches NodeBuilder.engineApiConfig and the key that
+    // hive/fukuii/fukuii.sh sets via `-Dfukuii.network.engine-api.*`. The
+    // previous `network.rpc.engine.*` path did not exist in any config file,
+    // so startup threw ConfigException$Missing and every hive test errored.
+    val engineEnabled = getBool("network.engine-api.enabled", default = false)
+    val enginePort = getInt("network.engine-api.port", default = 0)
 
     addIfEnabled(p2pPort, enabled = true, "P2P")
     addIfEnabled(httpPort, httpEnabled, "JSON-RPC HTTP")
