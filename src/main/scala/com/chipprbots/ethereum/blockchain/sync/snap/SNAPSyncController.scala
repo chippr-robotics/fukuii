@@ -2111,11 +2111,12 @@ class SNAPSyncController(
                   s"Root node missing after $validationRetryCount validation attempts. " +
                     s"Proceeding to regular sync — missing nodes will be fetched on-demand during block execution."
                 )
-                // Skip validation and proceed: mark SNAP done, start regular sync.
-                // With deferred merkleization, the root node was never built from flat data.
-                // Regular sync's StateNodeFetcher will retrieve it via GetTrieNodes when needed.
-                appStateStorage.snapSyncDone().commit()
-                context.parent ! Done
+                // Finalize SNAP sync properly so regular sync has a valid best block anchor.
+                // The bare snapSyncDone().commit() path was missing the pivot block body, chain
+                // weight, and BestBlockInfo hash — causing ConsensusAdapter.getBestBlock() to
+                // return None on every block import attempt. finalizeSnapSync() stores all of
+                // them atomically (H-013) before sending Done to SyncController.
+                finalizeSnapSync(pivot)
               } else {
                 log.error(s"Root node is missing (retry attempt $validationRetryCount of $MaxValidationRetries)")
                 log.info("Retrying validation after brief delay...")
