@@ -44,6 +44,12 @@ class EngineApiService(
   // EIP-7685 executionRequests associated with each payloadId, returned by getPayloadV4.
   private val pendingPayloadRequests =
     new java.util.concurrent.ConcurrentHashMap[ByteString, Seq[ByteString]]()
+  // Receipts produced while building each payload. Used by engine_getPayloadV2+ to compute the
+  // `blockValue` field (sum of priority-fee revenue) per EIP-3675 V2 envelope spec. Without this
+  // the envelope returns blockValue=0x0 and the hive engine-withdrawals "GetPayloadV2 Block
+  // Value" test fails with want=N, got=0.
+  private val pendingPayloadReceipts =
+    new java.util.concurrent.ConcurrentHashMap[ByteString, Seq[com.chipprbots.ethereum.domain.Receipt]]()
 
   /** Blocks that returned INVALID via newPayload. Maps blockHash → latestValidHash. forkchoiceUpdated should not accept
     * these as head. Children of invalid blocks inherit the latestValidHash of their invalid parent.
@@ -68,12 +74,27 @@ class EngineApiService(
 
     if (block.header.hash != payload.blockHash) {
       System.err.println(
-        s"[ENGINE-API] newPayload #${payload.blockNumber}: INVALID_BLOCK_HASH " +
+        s"[ENGINE-API] newPayload #${payload.blockNumber}: block-hash mismatch " +
           s"computed=${block.header.hashAsHexString} payload=${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(payload.blockHash)}"
       )
-      invalidBlocks.put(payload.blockHash, zeroHash)
+      // Per EIP-3675: INVALID_BLOCK_HASH is only appropriate when we cannot attribute the
+      // corruption to a known-valid ancestor. If the parent IS known, the hive framework
+      // expects INVALID with latestValidHash = parent.hash (not null), because the corruption
+      // is diagnostically about THIS block, not about whether we have ancestors at all.
+      val parentOpt = blockchainReader.getBlockHeaderByHash(payload.parentHash)
       blockchainWriter.removeBlockByHash(payload.blockHash).commit()
-      PayloadStatusV1(InvalidBlockHash("block hash mismatch"))
+      parentOpt match {
+        case Some(parent) =>
+          invalidBlocks.put(payload.blockHash, parent.hash)
+          PayloadStatusV1(
+            Invalid,
+            latestValidHash = Some(parent.hash),
+            validationError = Some("block hash mismatch")
+          )
+        case None =>
+          invalidBlocks.put(payload.blockHash, zeroHash)
+          PayloadStatusV1(InvalidBlockHash("block hash mismatch"))
+      }
     } else if (
       blockchainReader.getBlockHeaderByHash(payload.blockHash).exists { h =>
         blockchainReader.getBlockHeaderByNumber(h.number).exists(_.hash == payload.blockHash)
@@ -616,6 +637,8 @@ class EngineApiService(
                     pendingPayloads.put(id, payload)
                     // Also stash executionRequests so getPayloadV4 can emit them.
                     if (executionRequests.nonEmpty) pendingPayloadRequests.put(id, executionRequests)
+                    // Stash receipts so getPayloadV2+ can compute the blockValue envelope field.
+                    if (receipts.nonEmpty) pendingPayloadReceipts.put(id, receipts)
                     log.info(
                       "Built payload {} for block {} (baseFee={}, parent={}, fork={}, requests={})",
                       id.toArray.map("%02x".format(_)).mkString,
@@ -666,6 +689,13 @@ class EngineApiService(
     */
   def getPayloadExecutionRequests(payloadId: ByteString): Seq[ByteString] =
     Option(pendingPayloadRequests.remove(payloadId)).getOrElse(Nil)
+
+  /** Receipts produced while building this payload. Used by engine_getPayloadV2+ to compute the
+    * `blockValue` envelope field. `get` (not `remove`) because the CL may call getPayloadV1 and
+    * then getPayloadV2 for the same id (hive withdrawals tests rely on this).
+    */
+  def getPayloadReceipts(payloadId: ByteString): Seq[com.chipprbots.ethereum.domain.Receipt] =
+    Option(pendingPayloadReceipts.get(payloadId)).getOrElse(Nil)
 
   /** engine_exchangeCapabilities — return supported Engine API methods. */
   def exchangeCapabilities(clCapabilities: Seq[String]): IO[Seq[String]] = IO {

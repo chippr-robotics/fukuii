@@ -317,15 +317,34 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers {
       result.latestValidHash shouldBe Some(validBlock.header.hash)
     }
 
-    "return INVALID_BLOCK_HASH when blockHash doesn't match header" taggedAs UnitTest in new EngineApiTestSetup {
-      val (validBlock, _) = buildValidBlock1()
-      val payload = blockToPayload(validBlock)
-      val badPayload = payload.copy(blockHash = ByteString(Array.fill(32)(0xff.toByte)))
+    "return INVALID with parent.hash when blockHash doesn't match header and parent is known" taggedAs UnitTest in
+      new EngineApiTestSetup {
+        // Per EIP-3675 and the hive "Corrupted Block Hash Payload" test: when the parent is
+        // known we must distinguish this block from "we have no ancestry at all" — hive expects
+        // INVALID with latestValidHash = parent.hash, not INVALID_BLOCK_HASH with null.
+        val (validBlock, _) = buildValidBlock1()
+        val payload = blockToPayload(validBlock)
+        val badPayload = payload.copy(blockHash = ByteString(Array.fill(32)(0xff.toByte)))
 
-      val result = engineApi.newPayload(badPayload).unsafeRunSync()
+        val result = engineApi.newPayload(badPayload).unsafeRunSync()
 
-      result.status shouldBe a[InvalidBlockHash]
-    }
+        result.status shouldBe Invalid
+        result.latestValidHash shouldBe Some(genesisHeader.hash)
+      }
+
+    "return INVALID_BLOCK_HASH when blockHash doesn't match AND parent is unknown" taggedAs UnitTest in
+      new EngineApiTestSetup {
+        val (validBlock, _) = buildValidBlock1()
+        val payload = blockToPayload(validBlock)
+        val badPayload = payload.copy(
+          parentHash = ByteString(kec256(Array[Byte](9, 9, 9))),
+          blockHash = ByteString(Array.fill(32)(0xff.toByte))
+        )
+
+        val result = engineApi.newPayload(badPayload).unsafeRunSync()
+
+        result.status shouldBe a[InvalidBlockHash]
+      }
 
     "return INVALID for block with modified stateRoot" taggedAs UnitTest in new EngineApiTestSetup {
       val (validBlock, _) = buildValidBlock1()
