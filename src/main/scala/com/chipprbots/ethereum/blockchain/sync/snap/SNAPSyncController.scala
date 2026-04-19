@@ -780,26 +780,19 @@ class SNAPSyncController(
       currentPhase = StateHealing
 
       // Besu alignment: startTrieHeal() calls pivotBlockSelector.switchToNewPivotBlock()
-      // before seeding healing. After a multi-day ETC account download, the pivot block
-      // is tens of thousands of blocks behind head — outside every SNAP peer's serve window.
-      // Check staleness now; if stale, defer startStateHealing() until the fresh pivot
-      // header arrives via BootstrapComplete → completePivotRefreshWithStateRoot().
+      // UNCONDITIONALLY before seeding healing. No staleness check — always refresh.
+      // The pivot from refreshPivotInPlace() comes from the NETWORK (networkBest - offset),
+      // not from local chain download progress. This ensures healing always starts from a
+      // root within the SNAP serve window (~64 blocks from head).
       val currentPivot = pivotBlock.getOrElse(BigInt(0))
-      val isStale = currentNetworkBestFromSnapPeers()
-        .exists(_ - currentPivot > PivotWindowValidity)
-
-      if (isStale) {
-        log.info(
-          s"Pre-healing pivot switch: pivot $currentPivot is stale (outside SNAP serve window). " +
-            s"Refreshing to fresh pivot before seeding healing " +
-            s"(mirrors Besu startTrieHeal → switchToNewPivotBlock)."
-        )
-        refreshPivotInPlace("pre-healing pivot switch")
-        // startStateHealing() called from completePivotRefreshWithStateRoot()
-        // when currentPhase == StateHealing && trieNodeHealingCoordinator.isEmpty
-      } else {
-        startStateHealing()
-      }
+      log.info(
+        s"Pre-healing pivot switch: refreshing from pivot $currentPivot to network head " +
+          s"before seeding healing coordinator " +
+          s"(mirrors Besu startTrieHeal → switchToNewPivotBlock unconditionally)."
+      )
+      refreshPivotInPlace("pre-healing pivot switch")
+      // startStateHealing() called from completePivotRefreshWithStateRoot()
+      // when currentPhase == StateHealing && trieNodeHealingCoordinator.isEmpty
     }
 
   def bootstrapping: Receive = handlePeerListMessagesWithBootstrapReactivity.orElse {
