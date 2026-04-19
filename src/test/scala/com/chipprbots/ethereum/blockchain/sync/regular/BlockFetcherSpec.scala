@@ -369,24 +369,11 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
       BlockHelpers.generateChain(syncConfig.blockHeadersPerRequest, FixtureBlocks.Genesis.block)
 
     // Saved senders for the two parallel follow-ups BlockFetcher emits after
-    // the first headers response: the prefetch GetBlockHeaders(block=11, ...)
-    // and the first GetBlockBodies. Populated by handleFirstBlockBatchHeaders
-    // so downstream steps (handleFirstBlockBatchBodies, or a test's own
-    // body-handling logic) can pick up the pending bodies request directly
-    // instead of re-pulling it from the probe.
+    // the first headers response: GetBlockBodies and GetBlockHeaders(block=
+    // last+1) prefetch. Their mailbox order isn't guaranteed.
     var prefetchHeadersSender: Option[org.apache.pekko.actor.ActorRef] = None
     var pendingBodiesSender: Option[org.apache.pekko.actor.ActorRef] = None
 
-    // Fetcher request for headers - using ETH66 format (current implementation)
-    // Note: requestId is dynamically generated to fix core-geth compatibility (request IDs must be
-    // unique and non-zero for proper request/response correlation in ETH66+ protocol).
-    //
-    // After we respond to the initial headers request, BlockFetcher fires TWO
-    // follow-ups in parallel: GetBlockBodies (for the just-received headers)
-    // AND GetBlockHeaders(block=11) (prefetch — the full-sized response
-    // bumped knownTop, see ReceivedHeaders in BlockFetcher.scala). Their
-    // mailbox order isn't guaranteed, so classify both up front and stash
-    // their senders — the rest of the test can consume them in any order.
     def handleFirstBlockBatchHeaders(): Unit = {
       val requestId = peersClient.expectMsgPF() {
         case PeersClient.Request(msg: ETH66GetBlockHeaders, _, _) if msg.block == Left(1) => msg.requestId
@@ -405,12 +392,6 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
       classifyNext()
     }
 
-    // First bodies request - responds via the sender ref captured by
-    // handleFirstBlockBatchHeaders. Tests that need the body-processing to
-    // finish before the next step (e.g. blockProviders populated for
-    // InvalidateBlocksFrom → BlacklistPeer) should `awaitCond` on the actor
-    // state or issue a `PickBlocks` request and wait for the reply — the
-    // ask-pattern forwarding hop for the response is async.
     def handleFirstBlockBatchBodies(): Unit = {
       val sender = pendingBodiesSender.getOrElse(
         fail("Expected GetBlockBodies sender captured by handleFirstBlockBatchHeaders")
@@ -418,14 +399,11 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
       sender ! PeersClient.Response(fakePeer, ETH66BlockBodies(0, firstBlocksBatch.map(_.body)))
     }
 
-    /** Synchronise on BlockFetcher having finished processing the bodies response before the test takes its next step.
-      * The ask-pattern hop on the bodies response is async — without this wait, InvalidateBlocksFrom may overtake the
-      * response and find empty blockProviders, and the expected BlacklistPeer never fires.
-      *
-      * Uses Thread.sleep — simple and reliable in test-only code. A structural alternative would need visibility into
-      * the actor's internal state.
+    /** Synchronise on BlockFetcher having finished processing the bodies response.
+      * 1s is well above observed CI latency for a single message hop; short sleep
+      * keeps local runs fast.
       */
-    def awaitBodiesProcessed(): Unit = Thread.sleep(200L)
+    def awaitBodiesProcessed(): Unit = Thread.sleep(1000L)
 
     def handleFirstBlockBatch(): Unit = {
       handleFirstBlockBatchHeaders()

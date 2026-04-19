@@ -120,15 +120,7 @@ class RegularSyncSpec
     }
 
     "fetching blocks" should {
-      // Note: BlockFetcher used to issue GetBlockBodies and the next-chunk
-      // GetBlockHeaders in parallel after a full-sized header batch landed,
-      // which is what this test originally verified. Under the current
-      // serial-batch scheduling (next headers prefetch is deferred until the
-      // pending bodies drain — see BlockFetcher.tryFetchHeaders), only the
-      // bodies request fires; the next headers request arrives after the
-      // bodies response. The invariant the test asserts is now: bodies
-      // request fires after the first header batch is received.
-      "fetch bodies after first header batch" taggedAs (UnitTest, SyncTest) in sync(new Fixture(testSystem) {
+      "fetch headers and bodies concurrently" taggedAs (UnitTest, SyncTest) in sync(new Fixture(testSystem) {
         regularSync ! SyncProtocol.Start
 
         peerEventBus.expectMsgClass(classOf[Subscribe])
@@ -141,7 +133,8 @@ class RegularSyncSpec
 
         peersClient.expectMsgEq(blockHeadersChunkRequest(0))
         peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
-        peersClient.expectMsgEq(
+        peersClient.expectMsgAllOfEq(
+          blockHeadersChunkRequest(1),
           PeersClient.Request.create(GetBlockBodies(testBlocksChunked.head.hashes), PeersClient.BestPeer)
         )
       })
@@ -172,21 +165,30 @@ class RegularSyncSpec
           peersClient.expectMsgEq(blockHeadersChunkRequest(0))
           peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
 
-          val getBodies: PeersClient.Request[GetBlockBodies] = PeersClient.Request.create(
-            GetBlockBodies(testBlocksChunked.head.headers.map(_.hash)),
-            PeersClient.BestPeer
-          )
-          peersClient.expectMsgEq(getBodies)
-          peersClient.reply(PeersClient.Response(defaultPeer, BlockBodies(testBlocksChunked.head.bodies)))
+          // Full-sized first batch bumps knownTop, so the fetcher emits the
+          // bodies request AND the next-chunk headers prefetch in parallel.
+          // Capture each sender so we can reply to the right one later.
+          var bodiesSender: org.apache.pekko.actor.ActorRef = null
+          var nextHeadersSender: org.apache.pekko.actor.ActorRef = null
+          def classifyNext(): Unit = peersClient.expectMsgPF() {
+            case PeersClient.Request(msg: ETH66GetBlockBodies, _, _)
+                if msg.hashes == testBlocksChunked.head.headers.map(_.hash) =>
+              bodiesSender = peersClient.lastSender
+            case PeersClient.Request(_: ETH66GetBlockHeaders, _, _) =>
+              nextHeadersSender = peersClient.lastSender
+          }
+          classifyNext()
+          classifyNext()
+
+          bodiesSender ! PeersClient.Response(defaultPeer, BlockBodies(testBlocksChunked.head.bodies))
 
           blockFetcher ! MessageFromPeer(
             NewBlock(testBlocks.last, ChainWeight.totalDifficultyOnly(testBlocks.last.number).totalDifficulty),
             defaultPeer.id
           )
-          peersClient.expectMsgEq(blockHeadersChunkRequest(1))
-          peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked(5).headers)))
-          peersClient.expectMsgPF() {
-            case PeersClient.BlacklistPeer(id, _) if id == defaultPeer.id => true
+          nextHeadersSender ! PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked(5).headers))
+          peersClient.fishForSpecificMessage() {
+            case PeersClient.BlacklistPeer(id, _) if id == defaultPeer.id => ()
           }
         }
       )
