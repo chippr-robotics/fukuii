@@ -1,6 +1,6 @@
 # Fukuii Documentation
 
-Welcome to the official documentation for **Fukuii**, an Ethereum Classic client written in Scala 3.
+Welcome to the official documentation for **Fukuii**, an EVM-compliant Ethereum execution layer (EL) client written in Scala 3, with pluggable consensus.
 
 <div class="grid cards" markdown>
 
@@ -40,12 +40,15 @@ Welcome to the official documentation for **Fukuii**, an Ethereum Classic client
 
 ## What is Fukuii?
 
-Fukuii is a high-performance Ethereum Classic (ETC) client built with Scala 3. It provides:
+Fukuii is an EVM-compliant execution layer client built with Scala 3. Originating as a fork of Mantis for Ethereum Classic, it has evolved into a general-purpose EVM engine that participates in any consensus model via a pluggable three-layer architecture (`fukuii-core` / `fukuii-env` / consensus module — see [Pluggable Consensus Vision](architecture/pluggable-consensus-vision.md)). It provides:
 
-- **Full node operation** — Sync and validate the Ethereum Classic blockchain
-- **JSON-RPC API** — Standard Ethereum JSON-RPC interface for dApp integration
-- **Docker support** — Production-ready container images with signed releases
-- **Comprehensive monitoring** — Prometheus metrics and Grafana dashboards
+- **Dual PoW/PoS operation** — Native Ethash mining for Ethereum Classic and Mordor, plus Engine API V1–V4 (through Prague/Electra) for post-Merge Ethereum networks paired with any CL client (Lighthouse, Prysm, Teku, Lodestar, Nimbus)
+- **Full EVM through Prague/Electra** — All mainstream EIPs supported, including EIP-1559, EIP-3855 (PUSH0), EIP-4844 (blob transactions), EIP-4895 (withdrawals), EIP-4788 (beacon root), EIP-7685 (execution requests), plus ETC's ECIP-1066 hard-fork schedule through Olympia (ECIP-1111/1112/1121)
+- **Multi-mode sync** — SNAP, fast, and regular sync for PoW chains; optimistic block import via Engine API for PoS chains
+- **JSON-RPC API** — `eth_*`, `net_*`, `web3_*`, `debug_*`, `trace_*`, `admin_*`, `txpool_*`, `personal_*`, `engine_*` (authrpc), plus MCP 2025-11-25 for agentic AI control
+- **Hive-verified compliance** — Full Ethereum Foundation Hive simulator suite (`smoke`, `rpc`, `graphql`, `devp2p`, `sync`, `consensus`, `pyspec`, `engine`, `consume-engine`, `consume-rlp`) runs per-simulator in CI
+- **Docker support** — Production-ready container images with signed releases and SLSA provenance
+- **Comprehensive monitoring** — Prometheus metrics, Grafana dashboards, health/readiness endpoints
 
 ## Quick Links
 
@@ -56,17 +59,20 @@ Fukuii is a high-performance Ethereum Classic (ETC) client built with Scala 3. I
 | Configure my node | [Node Configuration](runbooks/node-configuration.md) |
 | Secure my node | [Security Runbook](runbooks/security.md) |
 | Understand the architecture | [Architecture Overview](architecture/architecture-overview.md) |
+| Understand the pluggable-consensus design | [Pluggable Consensus Vision](architecture/pluggable-consensus-vision.md) |
 | Use the JSON-RPC API | [API Reference](api/JSON_RPC_API_REFERENCE.md) |
+| Run as an Engine API execution layer | [API Reference — Engine API section](api/README.md) |
 | Contribute code | [Contributing Guide](development/contributing.md) |
 | Test compatibility | [Gorgoroth Network Testing](testing/GORGOROTH_COMPATIBILITY_TESTING.md) |
 
 ## Supported Networks
 
-| Network | Chain ID | Description |
-|---------|----------|-------------|
-| Ethereum Classic | 61 | ETC mainnet |
-| Mordor | 63 | ETC testnet |
-| Ethereum | 1 | ETH mainnet (limited support) |
+| Network | Chain ID | Consensus | Status |
+|---------|----------|-----------|--------|
+| Ethereum Classic | 61 | PoW (Ethash) | Full sync (SNAP / fast / regular) |
+| Mordor | 63 | PoW (Ethash) | Full sync (SNAP / fast / regular) |
+| Sepolia | 11155111 | PoS (Engine API) | Validated — 21+ EL peers, Lighthouse CL |
+| Ethereum Mainnet | 1 | PoS (Engine API) | Configuration available |
 
 ## Documentation Organization
 

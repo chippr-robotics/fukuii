@@ -17,73 +17,94 @@
 
 ## Introduction
 
-Fukuii is an Ethereum Classic (ETC) client written in Scala. It is a continuation and re-branding of the Mantis client originally developed by Input Output (HK). Fukuii is maintained by Chippr Robotics LLC with the aim of modernizing the codebase, ensuring long-term support, and providing a robust, scalable implementation of the Ethereum Classic protocol.
+Fukuii is an EVM-compliant Ethereum execution layer (EL) client written in Scala 3. It originated as a continuation and re-branding of the Mantis client (Input Output HK) for Ethereum Classic, and is now maintained by Chippr Robotics LLC as a general-purpose EVM engine capable of driving multiple networks through a pluggable consensus architecture. Fukuii retains native PoW/Ethash support for Ethereum Classic while operating as a full post-Merge execution layer for Ethereum mainnet and testnets via the Engine API (V1–V4, through Prague/Electra) when paired with any standard consensus-layer client (Lighthouse, Prysm, Teku, Lodestar, Nimbus).
 
-This document provides a comprehensive overview of Fukuii's current architecture, identifying major systems, subsystems, and their interactions. It serves as a reference for developers, architects, and contributors to understand the system's design and structure.
+This document provides a comprehensive overview of Fukuii's current architecture, identifying major systems, subsystems, and their interactions. It serves as a reference for developers, architects, and contributors to understand the system's design and structure. The longer-term direction — a three-layer `fukuii-core` / `fukuii-env` / consensus-module split — is described in the [Pluggable Consensus Vision](pluggable-consensus-vision.md).
 
 ## System Overview
 
-Fukuii is a full-featured Ethereum Classic node implementation that:
+Fukuii is a full EVM execution layer implementation that:
 
-- **Maintains the blockchain**: Stores and validates blocks, headers, and transaction data
-- **Executes transactions**: Runs the Ethereum Virtual Machine (EVM) to execute smart contracts
-- **Synchronizes with the network**: Downloads blocks from peers and stays synchronized with the blockchain
-- **Mines blocks**: Supports Proof of Work (PoW) mining using Ethash algorithm
-- **Provides JSON-RPC API**: Exposes standard Ethereum JSON-RPC endpoints for client applications
-- **Manages peer connections**: Discovers, connects to, and communicates with other nodes on the network
+- **Maintains an EVM blockchain**: Stores and validates blocks, headers, receipts, and transaction data for ETC or any Engine-API-driven network
+- **Executes the EVM through Prague/Electra**: Runs the Ethereum Virtual Machine with support for EIP-1559 (base fee), EIP-3855 (PUSH0), EIP-4844 (blob transactions), EIP-4895 (withdrawals), EIP-4788 (beacon root), EIP-7685 (execution requests), EIP-1153 (transient storage), and the full ECIP-1066 ETC fork schedule through Olympia
+- **Synchronizes with the network**: SNAP / fast / regular sync over devp2p for PoW chains; optimistic block import via Engine API `engine_newPayload` for PoS chains
+- **Supports pluggable consensus**: Ethash PoW for ETC mainnet and Mordor; Engine API-driven PoS for Ethereum mainnet and Sepolia; architected for future PoA, OP-style derivation, ZK verification, and checkpoint-based sidechains
+- **Provides JSON-RPC API**: Exposes standard Ethereum JSON-RPC (`eth_*`, `net_*`, `web3_*`, `debug_*`, `trace_*`, `admin_*`, `txpool_*`, `personal_*`) plus the Engine API (`engine_*` on JWT-authenticated authrpc, default port 8551) and MCP 2025-11-25 for agentic AI control
+- **Manages peer connections**: Discovers, connects to, and communicates with other nodes via RLPx over devp2p, with `eth/63`, `eth/66`, `eth/68`, and `snap/1` capability support
+
+### Supported Networks
+
+| Network          | Chain ID  | Consensus        | Status                                      |
+|------------------|-----------|------------------|---------------------------------------------|
+| Ethereum Classic | 61        | PoW (Ethash)     | Full sync (SNAP / fast / regular)           |
+| Mordor           | 63        | PoW (Ethash)     | Full sync (SNAP / fast / regular)           |
+| Sepolia          | 11155111  | PoS (Engine API) | Validated — 21+ EL peers, Lighthouse CL     |
+| Ethereum Mainnet | 1         | PoS (Engine API) | Configuration available                     |
 
 ## High-Level Architecture
 
-Fukuii follows a modular, layered architecture built on the Actor model using Akka. The system can be visualized as follows:
+Fukuii follows a modular, layered architecture built on the Actor model using Apache Pekko (Scala 3 compatible fork of Akka). The system can be visualized as follows:
 
 ```mermaid
 graph TB
     subgraph "External Interfaces"
-        JSONRPC[JSON-RPC API<br/>HTTP/IPC]
+        JSONRPC[JSON-RPC API<br/>HTTP / WS / IPC]
+        ENGINE[Engine API<br/>authrpc 8551 JWT]
         CLI[Command Line Interface]
-        P2P[P2P Network Layer]
+        P2P[P2P Network Layer<br/>devp2p / RLPx]
     end
-    
+
+    subgraph "External Peers"
+        CL[Consensus Layer Client<br/>Lighthouse / Prysm / Teku / Lodestar / Nimbus]
+        ELPEERS[EL Peers<br/>eth/63 · eth/66 · eth/68 · snap/1]
+    end
+
     subgraph "Application Layer"
         APP[App Entry Point<br/>Fukuii.scala]
         NODE[Node Builder<br/>StdNode/TestNode]
     end
-    
+
     subgraph "Core Systems"
         BLOCKCHAIN[Blockchain System]
-        CONSENSUS[Consensus System]
+        CONSENSUS[Consensus System<br/>Pluggable: PoW / Engine API]
         NETWORK[Network System]
         LEDGER[Ledger System]
         VM[Virtual Machine]
     end
-    
+
     subgraph "Supporting Systems"
         DB[Database Layer]
         CRYPTO[Cryptography]
         KEYSTORE[Keystore]
         METRICS[Metrics & Monitoring]
     end
-    
+
+    CL --> ENGINE
+    ELPEERS --> P2P
+
     JSONRPC --> APP
+    ENGINE --> APP
+    ENGINE --> LEDGER
+    ENGINE --> BLOCKCHAIN
     CLI --> APP
     P2P --> NETWORK
-    
+
     APP --> NODE
     NODE --> BLOCKCHAIN
     NODE --> CONSENSUS
     NODE --> NETWORK
     NODE --> LEDGER
-    
+
     BLOCKCHAIN --> DB
     LEDGER --> VM
     LEDGER --> DB
     CONSENSUS --> BLOCKCHAIN
     NETWORK --> P2P
-    
+
     VM --> CRYPTO
     LEDGER --> CRYPTO
     KEYSTORE --> CRYPTO
-    
+
     BLOCKCHAIN --> METRICS
     NETWORK --> METRICS
 ```
@@ -195,7 +216,7 @@ graph TB
 
 **Location:** `com.chipprbots.ethereum.consensus`
 
-The Consensus system implements the rules for achieving agreement on the blockchain state.
+The Consensus system implements the rules for achieving agreement on the blockchain state. Consensus in Fukuii is **pluggable**: the engine supports Ethash PoW natively (for ETC mainnet and Mordor) and delegates to an external consensus-layer client via the Engine API for post-Merge PoS networks (Ethereum mainnet, Sepolia). The longer-term three-layer architecture — `fukuii-core` (execution) / `fukuii-env` (chain parameters) / consensus module — is described in the [Pluggable Consensus Vision](pluggable-consensus-vision.md).
 
 ```mermaid
 graph TB
@@ -442,6 +463,11 @@ graph TB
             WEB3[Web3 Service]
             PERSONAL[Personal Service]
             DEBUG[Debug Service]
+            TRACE[Trace Service]
+            TXPOOL[Txpool Service]
+            ADMIN[Admin Service]
+            ENGINESVC[Engine Service<br/>authrpc 8551 JWT]
+            MCP[MCP Service<br/>MCP 2025-11-25]
             TEST[Test Service]
             FUKUII[Fukuii Service]
         end
@@ -461,6 +487,11 @@ graph TB
     CTRL --> WEB3
     CTRL --> PERSONAL
     CTRL --> DEBUG
+    CTRL --> TRACE
+    CTRL --> TXPOOL
+    CTRL --> ADMIN
+    CTRL --> ENGINESVC
+    CTRL --> MCP
     CTRL --> TEST
     CTRL --> FUKUII
     
@@ -473,16 +504,54 @@ graph TB
 - **Eth Service**: Core Ethereum RPC methods
   - Block queries (eth_getBlockByNumber, eth_getBlockByHash)
   - Transaction submission (eth_sendRawTransaction)
-  - State queries (eth_getBalance, eth_getCode, eth_call)
-  - Mining methods (eth_getWork, eth_submitWork)
-  
-- **Personal Service**: Account management
-- **Net Service**: Network information
+  - State queries (eth_getBalance, eth_getCode, eth_call, eth_getProof)
+  - Fee history (eth_feeHistory, eth_maxPriorityFeePerGas, eth_blobBaseFee)
+  - Mining methods (eth_getWork, eth_submitWork) — PoW chains only
+
+- **Net Service**: Network information and peer management
 - **Web3 Service**: Client version and utilities
-- **Debug Service**: Debugging utilities
+- **Debug Service**: Raw block / header / receipt / transaction access, `debug_traceTransaction`, `debug_traceCall`, intermediate-root inspection
+- **Trace Service**: Geth-style `trace_transaction`, `trace_block`, `trace_call`, `trace_filter` for EVM-level introspection
+- **Txpool Service**: `txpool_status`, `txpool_content`, `txpool_inspect` mempool views
+- **Admin Service**: Peer manipulation (`addPeer`, `removePeer`), datadir query, log-level control, chain import/export
+- **Engine Service**: post-Merge CL/EL interface (see "Engine API / Consensus Layer Integration" below)
+- **MCP Service**: Model Context Protocol 2025-11-25 — 15 tools, 9 resources, guided prompts for agentic AI clients
+- **Personal Service**: Account management
 - **Test Service**: Testing utilities (test mode only)
 
-### 9. Database System
+### 9. Engine API / Consensus Layer Integration
+
+**Location:** `com.chipprbots.ethereum.consensus.engine`
+
+The Engine API is the standardized interface between an execution layer (EL) and a consensus layer (CL) for post-Merge Ethereum networks. Fukuii implements Engine API V1 through V4 (Prague/Electra), enabling it to operate as a full execution layer paired with any CL client. This is the primary seam that makes Fukuii a general-purpose EVM runtime rather than an ETC-specific client — see [Pluggable Consensus Vision](pluggable-consensus-vision.md).
+
+**Key Components:**
+- **EngineApiService**: core request handling for all `engine_*` methods
+- **EngineApiController**: JSON-RPC routing on the authrpc port
+- **ForkChoiceManager**: maintains head / safe / finalized pointers from the CL
+- **PostMergeBlockHeaderValidator**: PoS-era header rules (difficulty=0, nonce=0, empty ommers)
+- **TransitionBlockHeaderValidator**: merge-transition block validation
+- **JwtAuthenticator**: RFC 7519 JWT authentication for authrpc requests
+
+**Implemented Methods:**
+- `engine_newPayloadV1`–`V4` — validate and execute a CL-built payload (with EIP-4844 blob gas tracking and EIP-7685 execution-requests validation in V3/V4)
+- `engine_forkchoiceUpdatedV1`–`V3` — update head / safe / finalized pointers, optionally start payload building
+- `engine_getPayloadV1`–`V4` — return a locally built payload
+- `engine_exchangeCapabilities` — capability negotiation
+- `engine_getClientVersionV1` — client identity
+- `engine_getBlobsV1` — blob retrieval for EIP-4844
+- `engine_getPayloadBodiesByHashV1` / `engine_getPayloadBodiesByRangeV1` — payload body lookup
+
+**Bind & lifecycle:** the authrpc server binds **synchronously** with a 10-second timeout at node startup — the node fails loudly rather than silently if the port is unavailable. Default port: 8551. See the [Startup Sequence](#system-overview) notes in the project README for full detail.
+
+**Operational semantics:**
+- **Optimistic block import**: when `engine_newPayload` arrives with an unknown parent, the payload is accepted as `SYNCING` and imported once the state becomes available, supporting checkpoint-sync-style operation where the CL supplies the chain tip
+- **Post-Merge validation**: PoS headers are validated for `difficulty = 0`, `nonce = 0`, empty ommers, presence of `withdrawalsRoot` (EIP-4895), `blobGasUsed` / `excessBlobGas` (EIP-4844), and `requestsHash` (EIP-7685)
+- **EIP support**: EIP-3651 (warm COINBASE), EIP-4895 (withdrawals), EIP-4844 (blob transactions), EIP-4788 (beacon root contract), EIP-7685 (execution requests), EIP-6122 (timestamp ForkID), EIP-1153 (transient storage), EIP-5656 (MCOPY)
+
+The feature-level summary of Engine API capabilities, along with `ops/barad-dur/sepolia/` deployment instructions for pairing with Lighthouse, is maintained in the project [`README.md`](../../README.md).
+
+### 10. Database System
 
 **Location:** `com.chipprbots.ethereum.db`
 
@@ -766,8 +835,10 @@ sequenceDiagram
 - **RocksDB**: Embedded key-value store for blockchain data
 
 ### Networking
-- **Akka IO**: Low-level networking
-- **UDP/TCP**: Network protocols
+- **Apache Pekko IO** (`pekko-io`): Low-level TCP/UDP networking
+- **Pekko HTTP 1.1.0**: HTTP server for JSON-RPC and Engine API (authrpc)
+- **Engine API / CL integration**: JWT-authenticated `engine_*` interface (default port 8551) for pairing with any consensus-layer client
+- **UDP/TCP**: Network protocols (UDP for peer discovery, TCP for RLPx/devp2p)
 
 ### Cryptography
 - **Bouncy Castle**: Cryptographic primitives
@@ -812,16 +883,18 @@ This section documents significant architectural decisions made during the devel
 - Requires rebranding throughout codebase
 - Enables independent development and modernization
 
-### ADL-002: Actor-Based Architecture with Akka
+### ADL-002: Actor-Based Architecture (Apache Pekko, migrated from Akka)
 
-**Date:** Historical (inherited from Mantis)  
-**Status:** Accepted  
-**Context:** Ethereum nodes require high concurrency and need to handle multiple simultaneous operations (network I/O, block processing, mining, RPC requests).  
-**Decision:** Use Akka actor model for concurrency management.  
+**Date:** Historical (inherited from Mantis); migrated to Pekko 2024/2025
+**Status:** Accepted
+**Context:** Ethereum nodes require high concurrency and need to handle multiple simultaneous operations (network I/O, block processing, mining, RPC requests). The original Mantis codebase used Akka; Akka's change of licensing model and lack of Scala 3 support prompted migration to its community fork, Apache Pekko.
+**Decision:** Use the actor model for concurrency management, now running on Apache Pekko 1.1.2 (Pekko HTTP 1.1.0) rather than Akka.
 **Consequences:**
 - Clear separation of concerns through actors
 - Natural message-passing for async operations
 - Built-in supervision and fault tolerance
+- Scala 3 compatibility via Pekko
+- Dedicated `sync-dispatcher` isolates all sync actors from the default dispatcher, preventing JSON-RPC/TCP I/O starvation during heavy sync load — any sync actor child must be created with `.withDispatcher("sync-dispatcher")`
 - Learning curve for contributors unfamiliar with actors
 - Some complexity in tracking message flows
 
@@ -847,7 +920,7 @@ This section documents significant architectural decisions made during the devel
 **Consequences:**
 - Strong type system catches errors at compile time
 - Functional programming paradigms for safer code
-- Excellent concurrency support with Akka
+- Excellent concurrency support with Apache Pekko
 - JVM ecosystem and tooling
 - Slower compilation times compared to some languages
 - Smaller contributor pool than mainstream languages
@@ -878,6 +951,19 @@ This section documents significant architectural decisions made during the devel
 - Improved network security
 
 **See:** [Full VM-002 documentation](../adr/vm/VM-002-eip-3529-implementation.md)
+
+### ADL-006: Engine API as the Pluggable-Consensus Seam
+
+**Date:** 2025
+**Status:** Accepted
+**Context:** Fukuii's original consensus was ETC-specific (Ethash PoW). Adopting the Ethereum Engine API — the standard EL/CL boundary since the Merge — gives the execution engine a well-defined seam over which any consensus driver can be connected, without forking or rewriting the EVM core.
+**Decision:** Implement Engine API V1–V4 (through Prague/Electra) as the primary consensus-driver interface, and treat it as the architectural boundary for the three-layer `fukuii-core` / `fukuii-env` / consensus-module design described in [pluggable-consensus-vision.md](pluggable-consensus-vision.md).
+**Consequences:**
+- Fukuii operates as a full EVM execution layer for post-Merge Ethereum networks paired with any CL client (Lighthouse, Prysm, Teku, Lodestar, Nimbus)
+- Sepolia validated with 21+ EL peers and a Lighthouse CL; Ethereum mainnet configuration is available
+- ETC PoW (Ethash) is retained as a first-class consensus module, not a special case
+- Opens the door to future consensus modules: PoA/Clique, OP-style derivation, ZK proof verification, and checkpoint-based sidechains (Orbita)
+- Introduces an additional attack surface (JWT-authenticated authrpc); requires operators to manage and protect the shared JWT secret
 
 ---
 

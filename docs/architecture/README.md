@@ -1,13 +1,13 @@
 # Architecture Documentation
 
-This directory contains architectural documentation for the Fukuii Ethereum Classic client.
+This directory contains architectural documentation for the Fukuii EVM execution layer (EL) client — a Scala 3 Ethereum execution engine that supports PoW (Ethash) for Ethereum Classic and Engine API-driven PoS for post-Merge Ethereum networks under a pluggable consensus architecture.
 
 ## Contents
 
 ### Architecture Overview
-- **[Architecture Overview](architecture-overview.md)** - High-level system architecture and component interactions
+- **[Architecture Overview](architecture-overview.md)** - High-level system architecture and component interactions, including the Engine API / Consensus Layer Integration subsystem
 - **[Architecture Diagrams](ARCHITECTURE_DIAGRAMS.md)** - C4 architecture diagrams and visual representations
-- **[Pluggable Consensus Vision](pluggable-consensus-vision.md)** - Three-layer architecture for multi-network support with Orbita sidechains
+- **[Pluggable Consensus Vision](pluggable-consensus-vision.md)** - Three-layer `fukuii-core` / `fukuii-env` / consensus-module architecture for multi-network support with Orbita sidechains
 
 ### User Interfaces
 - **[Console UI](console-ui.md)** - Console user interface design and implementation
