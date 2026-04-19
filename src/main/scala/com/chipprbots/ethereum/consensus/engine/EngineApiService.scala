@@ -50,6 +50,18 @@ class EngineApiService(
   // Value" test fails with want=N, got=0.
   private val pendingPayloadReceipts =
     new java.util.concurrent.ConcurrentHashMap[ByteString, Seq[com.chipprbots.ethereum.domain.Receipt]]()
+  // EIP-4844 blob sidecars (blobs, commitments, proofs) for each payload's blob txs. The hive
+  // engine-cancun suite's VerifyBlobBundle asserts (a) matching counts, (b) byte-equality
+  // against the sidecars the test submitted via eth_sendRawTransaction. We capture sidecars
+  // during the proposer's GetPendingTransactions call and hand them to engine_getPayloadV3's
+  // blobsBundle envelope.
+  case class BlobsBundleData(
+      blobs: Seq[ByteString],
+      commitments: Seq[ByteString],
+      proofs: Seq[ByteString]
+  )
+  private val pendingPayloadBlobsBundle =
+    new java.util.concurrent.ConcurrentHashMap[ByteString, BlobsBundleData]()
 
   /** Blocks that returned INVALID via newPayload. Maps blockHash → latestValidHash. forkchoiceUpdated should not accept
     * these as head. Children of invalid blocks inherit the latestValidHash of their invalid parent.
@@ -432,8 +444,10 @@ class EngineApiService(
                         if (parentBaseFee - delta < 0) BigInt(0) else parentBaseFee - delta
                       }
 
-                    // Fetch pending transactions from the tx pool, filtering by chain ID
-                    val pendingTxs: Seq[SignedTransaction] =
+                    // Fetch pending transactions from the tx pool, filtering by chain ID.
+                    // Also capture the network-wrapped raw bytes for EIP-4844 blob txs so
+                    // engine_getPayloadV3 can emit them in the blobsBundle envelope.
+                    val (pendingTxs, blobTxRawBytesFromPool): (Seq[SignedTransaction], Map[ByteString, ByteString]) =
                       try {
                         import com.chipprbots.ethereum.transactions.PendingTransactionsManager._
                         val future =
@@ -451,12 +465,34 @@ class EngineApiService(
                           txChainId.forall(_ == expectedChainId)
                         }
                         if (txs.nonEmpty) log.info("Payload includes {} pending transactions", txs.size)
-                        txs
+                        (txs, response.blobTxNetworkBytes)
                       } catch {
                         case e: Exception =>
                           log.error("Failed to fetch pending txs: {}", e.getMessage)
-                          Seq.empty
+                          (Seq.empty[SignedTransaction], Map.empty[ByteString, ByteString])
                       }
+
+                    // EIP-4844 / EIP-7691: cap blob-gas included in the payload at the fork's
+                    // MAX_BLOB_GAS_PER_BLOCK (6 blobs Cancun, 9 blobs Prague). Without this cap
+                    // the proposer packs every pool blob tx into one block and getPayloadV3's
+                    // blobsBundle grows past the test's `ExpectedIncludedBlobCount`.
+                    val pendingTxsForBlock = {
+                      val maxBlobGas =
+                        if (blockchainConfig.isPragueTimestamp(attrs.timestamp))
+                          BlobGasUtils.PRAGUE_MAX_BLOB_GAS
+                        else BlobGasUtils.CANCUN_MAX_BLOB_GAS
+                      pendingTxs.foldLeft((Seq.empty[SignedTransaction], BigInt(0))) {
+                        case ((kept, blobGas), stx) =>
+                          stx.tx match {
+                            case b: com.chipprbots.ethereum.domain.BlobTransaction =>
+                              val add = BigInt(b.blobVersionedHashes.size) * BlobGasUtils.GAS_PER_BLOB
+                              if (blobGas + add <= maxBlobGas) (kept :+ stx, blobGas + add)
+                              else (kept, blobGas) // skip this blob tx, smaller ones later may still fit
+                            case _ =>
+                              (kept :+ stx, blobGas)
+                          }
+                      }._1
+                    }
 
                     val emptyWithdrawalsRoot = ByteString(
                       kec256(
@@ -546,7 +582,7 @@ class EngineApiService(
                       nonce = ByteString(new Array[Byte](8)),
                       extraFields = initialExtraFields
                     )
-                    val body = BlockBody(pendingTxs.toList, Nil, withdrawals = attrs.withdrawals)
+                    val body = BlockBody(pendingTxsForBlock.toList, Nil, withdrawals = attrs.withdrawals)
                     val skeletonBlock = Block(header, body)
 
                     // Route EVERY post-merge proposer build through executeForProposer (which
@@ -639,6 +675,12 @@ class EngineApiService(
                     if (executionRequests.nonEmpty) pendingPayloadRequests.put(id, executionRequests)
                     // Stash receipts so getPayloadV2+ can compute the blockValue envelope field.
                     if (receipts.nonEmpty) pendingPayloadReceipts.put(id, receipts)
+                    // EIP-4844: collect the blob sidecars for every blob tx in the built payload
+                    // so engine_getPayloadV3 can emit the blobsBundle envelope. Without this the
+                    // envelope has empty arrays while the payload body has blob txs; the hive
+                    // engine-cancun VerifyBlobBundle step fails with "expected N blob, got 0".
+                    val bundle = buildBlobsBundle(payload.body.transactionList, blobTxRawBytesFromPool)
+                    if (bundle.blobs.nonEmpty) pendingPayloadBlobsBundle.put(id, bundle)
                     log.info(
                       "Built payload {} for block {} (baseFee={}, parent={}, fork={}, requests={})",
                       id.toArray.map("%02x".format(_)).mkString,
@@ -696,6 +738,49 @@ class EngineApiService(
     */
   def getPayloadReceipts(payloadId: ByteString): Seq[com.chipprbots.ethereum.domain.Receipt] =
     Option(pendingPayloadReceipts.get(payloadId)).getOrElse(Nil)
+
+  /** EIP-4844 sidecars for the blob txs included in this payload, for engine_getPayloadV3's
+    * blobsBundle envelope. Empty when the payload has no blob txs.
+    */
+  def getPayloadBlobsBundle(payloadId: ByteString): BlobsBundleData =
+    Option(pendingPayloadBlobsBundle.get(payloadId)).getOrElse(BlobsBundleData(Nil, Nil, Nil))
+
+  /** Parse the EIP-4844 network-wrapped raw bytes (`0x03 || rlp([tx_payload, blobs, commitments,
+    * proofs])`) the pool captured for each blob tx, and return the concatenated sidecars for
+    * every blob tx actually included in the built payload, in payload order.
+    */
+  private def buildBlobsBundle(
+      txs: Seq[SignedTransaction],
+      blobTxRawBytes: Map[ByteString, ByteString]
+  ): BlobsBundleData = {
+    import com.chipprbots.ethereum.rlp.{rawDecode, RLPList, RLPValue}
+    val blobTxHashes = txs.collect {
+      case stx if stx.tx.isInstanceOf[com.chipprbots.ethereum.domain.BlobTransaction] => stx.hash
+    }
+    val allBlobs = Seq.newBuilder[ByteString]
+    val allCommitments = Seq.newBuilder[ByteString]
+    val allProofs = Seq.newBuilder[ByteString]
+    blobTxHashes.foreach { h =>
+      blobTxRawBytes.get(h) match {
+        case Some(raw) if raw.length > 1 && raw(0) == 0x03 =>
+          try {
+            rawDecode(raw.toArray.drop(1)) match {
+              case RLPList(_, blobs: RLPList, commitments: RLPList, proofs: RLPList) =>
+                blobs.items.foreach { case RLPValue(b) => allBlobs += ByteString(b); case _ => }
+                commitments.items.foreach { case RLPValue(c) => allCommitments += ByteString(c); case _ => }
+                proofs.items.foreach { case RLPValue(p) => allProofs += ByteString(p); case _ => }
+              case _ =>
+                log.warn("Blob tx {} sidecar RLP shape unexpected; skipping", h.toArray.map("%02x".format(_)).mkString)
+            }
+          } catch {
+            case e: Exception =>
+              log.warn("Failed to decode blob tx {} sidecar: {}", h.toArray.map("%02x".format(_)).mkString, e.getMessage)
+          }
+        case _ => // tx from network / historical — we didn't store a sidecar
+      }
+    }
+    BlobsBundleData(allBlobs.result(), allCommitments.result(), allProofs.result())
+  }
 
   /** engine_exchangeCapabilities — return supported Engine API methods. */
   def exchangeCapabilities(clCapabilities: Seq[String]): IO[Seq[String]] = IO {

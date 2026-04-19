@@ -300,6 +300,14 @@ class EngineApiController(
         // blockValue depends on receipts (effectiveGasPrice per tx). Fetch once so V2/V3/V4 share.
         lazy val receipts = engineApiService.getPayloadReceipts(payloadId)
         lazy val blockValueHex = computeBlockValue(block, receipts)
+        lazy val blobsBundleJson: JObject = {
+          val bundle = engineApiService.getPayloadBlobsBundle(payloadId)
+          JObject(
+            "commitments" -> JArray(bundle.commitments.toList.map(c => JString(byteStringToHex(c)))),
+            "proofs" -> JArray(bundle.proofs.toList.map(p => JString(byteStringToHex(p)))),
+            "blobs" -> JArray(bundle.blobs.toList.map(b => JString(byteStringToHex(b))))
+          )
+        }
         val result: JValue = version match {
           case 1 => payload
           case 2 =>
@@ -311,11 +319,7 @@ class EngineApiController(
             JObject(
               "executionPayload" -> payload,
               "blockValue" -> JString(blockValueHex),
-              "blobsBundle" -> JObject(
-                "commitments" -> JArray(Nil),
-                "proofs" -> JArray(Nil),
-                "blobs" -> JArray(Nil)
-              ),
+              "blobsBundle" -> blobsBundleJson,
               "shouldOverrideBuilder" -> JBool(false)
             )
           case _ => // V4+: add executionRequests (EIP-7685)
@@ -323,11 +327,7 @@ class EngineApiController(
             JObject(
               "executionPayload" -> payload,
               "blockValue" -> JString(blockValueHex),
-              "blobsBundle" -> JObject(
-                "commitments" -> JArray(Nil),
-                "proofs" -> JArray(Nil),
-                "blobs" -> JArray(Nil)
-              ),
+              "blobsBundle" -> blobsBundleJson,
               "shouldOverrideBuilder" -> JBool(false),
               "executionRequests" -> JArray(
                 executionRequests.toList.map(r => JString(byteStringToHex(r)))
