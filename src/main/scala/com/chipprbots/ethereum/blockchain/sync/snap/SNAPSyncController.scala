@@ -532,10 +532,9 @@ class SNAPSyncController(
         currentPhase = ByteCodeAndStorageSync
         progressMonitor.startPhase(ByteCodeAndStorageSync)
 
-        // Redistribute per-peer budget: accounts done, give storage+bytecode more bandwidth.
-        // Global budget remains 5 per peer: storage=3, bytecode=2.
-        storageRangeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(3))
-        bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(2))
+        // Besu-aligned D11: 1 request per peer for all coordinators.
+        storageRangeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(1))
+        bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(1))
 
         // Cancel account stagnation checks (no longer relevant)
         accountStagnationCheckTask.foreach(_.cancel()); accountStagnationCheckTask = None
@@ -554,13 +553,12 @@ class SNAPSyncController(
       log.info(
         s"ByteCode sync complete ($downloaded bytecodes). Storage: $storagePhaseComplete, Accounts: $accountsComplete"
       )
-      // Bytecode done — give storage the full per-peer budget (was 3/5, now 5/5).
-      // On peer-limited networks (Mordor: ~10 peers), this nearly doubles storage throughput.
+      // Besu-aligned D11: keep 1 req/peer even after bytecode completes.
       if (!storagePhaseComplete) {
         storageRangeCoordinator.foreach { coord =>
-          coord ! actors.Messages.UpdateMaxInFlightPerPeer(snapSyncConfig.maxInFlightPerPeer)
+          coord ! actors.Messages.UpdateMaxInFlightPerPeer(1)
           log.info(
-            s"Storage per-peer budget boosted to ${snapSyncConfig.maxInFlightPerPeer} (bytecode complete, full budget)"
+            "Storage per-peer budget remains 1 (Besu-aligned D11: no pipelining)"
           )
         }
       }
@@ -1090,7 +1088,7 @@ class SNAPSyncController(
                     maxInFlightRequests = snapSyncConfig.storageConcurrency,
                     requestTimeout = snapSyncConfig.timeout,
                     snapSyncController = self,
-                    initialMaxInFlightPerPeer = 3, // Recovery: accounts done, storage gets 3 of 5 per-peer budget
+                    initialMaxInFlightPerPeer = 1, // Besu-aligned D11: 1 request per peer, no pipelining
                     initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
                     minResponseBytes = snapSyncConfig.storageMinResponseBytes,
                     deferredMerkleization = snapSyncConfig.deferredMerkleization
@@ -1104,8 +1102,8 @@ class SNAPSyncController(
               scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestStorageRanges)(ec)
             )
 
-            // Recovery budget: accounts done, bytecode=2, storage=3 (total 5 per peer)
-            bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(2))
+            // Besu-aligned D11: 1 request per peer, no pipelining.
+            bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(1))
 
             // Stream storage tasks from persisted file if available
             savedStoragePath.foreach { pathStr =>
@@ -1665,7 +1663,7 @@ class SNAPSyncController(
             snapSyncController = self,
             resumeProgress = resumeProgress,
             initialMaxInFlightPerPeer =
-              5, // Full per-peer budget during AccountRangeSync (storage+bytecode deferred to 0)
+              1, // Besu-aligned D11: 1 request per peer, no pipelining
             trieFlushThreshold = snapSyncConfig.accountTrieFlushThreshold,
             initialResponseBytes = snapSyncConfig.accountInitialResponseBytes,
             minResponseBytes = snapSyncConfig.accountMinResponseBytes
@@ -1953,10 +1951,10 @@ class SNAPSyncController(
         )
       )
 
-      // Start the coordinator — give healing full per-peer budget (accounts/storage/bytecode done)
+      // Start the coordinator — Besu-aligned D11: 1 request per peer, no pipelining.
       trieNodeHealingCoordinator.foreach { coordinator =>
         coordinator ! actors.Messages.StartTrieNodeHealing(root)
-        coordinator ! actors.Messages.UpdateMaxInFlightPerPeer(5)
+        coordinator ! actors.Messages.UpdateMaxInFlightPerPeer(1)
       }
 
       // Periodically send peer availability notifications
@@ -2277,9 +2275,8 @@ class SNAPSyncController(
     //   (b) Post-pivot restart (Gap 2): coordinator was stopped, pivot refreshed,
     //       healing must restart with the fresh stateRoot.
     //
-    //   (c) Normal in-healing pivot refresh (existing behavior): coordinator is alive —
-    //       trieNodeHealingCoordinator.isDefined, so this branch is skipped entirely.
-    //       HealingPivotRefreshed message sent above already handles this case.
+    //   (c) This case no longer exists: coordinator is always hard-restarted (Besu D10 alignment)
+    //       via the stop at L2249-2253 above, so trieNodeHealingCoordinator is always None here.
     if (currentPhase == StateHealing && trieNodeHealingCoordinator.isEmpty) {
       log.info(
         s"Restarting healing coordinator with fresh pivot=$newPivotBlock " +
@@ -2750,7 +2747,7 @@ case class SNAPSyncConfig(
     // Account stagnation timeout: if no account range tasks complete within this window,
     // Besu-aligned: stall triggers in-place pivot refresh only, never fallback.
     accountStagnationTimeout: FiniteDuration = 10.minutes,
-    maxInFlightPerPeer: Int = 5,
+    maxInFlightPerPeer: Int = 1, // Besu-aligned D11: 1 request per peer, no pipelining
     accountTrieFlushThreshold: Int = 50000,
     accountInitialResponseBytes: Int = 524288,
     accountMinResponseBytes: Int = 102400,

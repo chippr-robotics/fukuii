@@ -68,7 +68,7 @@ class TrieNodeHealingCoordinator(
 
   // Concurrency: per-peer limit (like StorageRangeCoordinator) + global safety cap
   private val maxConcurrentRequests = concurrency
-  private var maxInFlightPerPeer: Int = 5
+  private var maxInFlightPerPeer: Int = 1 // Besu-aligned D11: 1 request per peer, no pipelining
 
   // Statistics
   private var totalNodesHealed: Int = 0

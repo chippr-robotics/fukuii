@@ -50,7 +50,7 @@ class StorageRangeCoordinator(
     maxInFlightRequests: Int,
     requestTimeout: FiniteDuration,
     snapSyncController: ActorRef,
-    initialMaxInFlightPerPeer: Int = 5,
+    initialMaxInFlightPerPeer: Int = 1, // Besu-aligned D11: 1 request per peer, no pipelining
     configInitialResponseBytes: Int = 1048576,
     configMinResponseBytes: Int = 131072,
     deferredMerkleization: Boolean = true
@@ -1096,7 +1096,7 @@ object StorageRangeCoordinator {
       maxInFlightRequests: Int,
       requestTimeout: FiniteDuration,
       snapSyncController: ActorRef,
-      initialMaxInFlightPerPeer: Int = 5,
+      initialMaxInFlightPerPeer: Int = 1, // Besu-aligned D11: 1 request per peer, no pipelining
       initialResponseBytes: Int = 1048576,
       minResponseBytes: Int = 131072,
       deferredMerkleization: Boolean = true
