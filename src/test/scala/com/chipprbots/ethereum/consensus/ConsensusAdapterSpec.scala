@@ -296,7 +296,7 @@ class ConsensusAdapterSpec
       .returning(Left(HeaderParentNotFoundError))
 
     whenReady(consensusAdapter.evaluateBranchBlock(newBlock).unsafeToFuture())(
-      _ shouldEqual BlockImportFailed("HeaderParentNotFoundError")
+      _ shouldEqual BlockImportFailed("UNKNOWN_PARENT: parent header not found")
     )
   }
 

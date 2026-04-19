@@ -800,8 +800,9 @@ class JsonRpcControllerEthSpec
     // when
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
 
-    // then
+    // then — EIP-1186 requires the account `address` in the proof response.
     response should haveObjectResult(
+      "address" -> JString(address.toLowerCase),
       "accountProof" -> JArray(
         List(
           JString("0x1234")
