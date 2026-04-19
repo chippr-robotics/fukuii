@@ -80,22 +80,29 @@ class BlockExecution(
     * calls (EIP-7002/7251), collects deposit requests (EIP-6110), and returns the full BlockResult with receipts +
     * executionRequests populated. No pre- or post-execution validation against the header is performed — caller is
     * responsible for filling in header fields (stateRoot, receiptsRoot, gasUsed, requestsHash, etc.) from the result.
+    *
+    * Executes against a read-only-backed WorldStateProxy so tx effects do NOT persist to RocksDB. A proposer block is
+    * speculative until the CL promotes it via `forkchoiceUpdated(head=hash(block))`; leaking its state would cause a
+    * subsequent `newPayload` for the same slot (e.g. a tampered sibling) to fail with stale nonces / balances instead
+    * of the expected stateRoot / receiptsRoot mismatch. Matches the read-only pattern used by `eth_call`,
+    * `eth_estimateGas`, and `debug_traceTransaction`.
     */
   def executeForProposer(
       block: Block
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockResult] =
-    executeBlock(block)
+    executeBlock(block, isProposer = true)
 
   /** Executes a block (executes transactions and pays rewards) */
   private def executeBlock(
-      block: Block
+      block: Block,
+      isProposer: Boolean = false
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockResult] =
     try
       for {
         parentHeader <- blockchainReader
           .getBlockHeaderByHash(block.header.parentHash)
           .toRight(MissingParentError) // Should not never occur because validated earlier
-        initialWorld = buildInitialWorld(block, parentHeader)
+        initialWorld = buildInitialWorld(block, parentHeader, isProposer)
         execResult <- executeBlockTransactions(block, initialWorld)
         worldAfterReward <- Either
           .catchOnly[MPTException](blockPreparator.payBlockReward(block, execResult.worldState))
@@ -109,7 +116,9 @@ class BlockExecution(
         worldAfterSystemCalls = systemCallResult._1
         systemRequests = systemCallResult._2
         depositRequest = collectDepositRequests(execResult.receipts)
-        // State root hash needs to be up-to-date for validateBlockAfterExecution
+        // State root hash needs to be up-to-date for validateBlockAfterExecution. In proposer mode the
+        // backing MPT storage is read-only, so persistState computes the trie hash in-memory without
+        // writing to RocksDB — exactly what we want for a speculative payload.
         worldPersisted = InMemoryWorldStateProxy.persistState(worldAfterSystemCalls)
       } yield execResult.copy(
         worldState = worldPersisted,
@@ -119,12 +128,13 @@ class BlockExecution(
       case e: MPTException => Left(BlockExecutionError.MPTError(e))
     }
 
-  protected def buildInitialWorld(block: Block, parentHeader: BlockHeader)(implicit
+  protected def buildInitialWorld(block: Block, parentHeader: BlockHeader, isProposer: Boolean = false)(implicit
       blockchainConfig: BlockchainConfig
   ): InMemoryWorldStateProxy =
     InMemoryWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
-      blockchain.getBackingMptStorage(block.header.number),
+      if (isProposer) blockchain.getReadOnlyMptStorage()
+      else blockchain.getBackingMptStorage(block.header.number),
       (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
       accountStartNonce = blockchainConfig.accountStartNonce,
       stateRootHash = parentHeader.stateRoot,

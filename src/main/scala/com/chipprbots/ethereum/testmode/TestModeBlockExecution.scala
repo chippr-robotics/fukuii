@@ -31,12 +31,14 @@ class TestModeBlockExecution(
       blockValidation
     ) {
 
-  override protected def buildInitialWorld(block: Block, parentHeader: BlockHeader)(implicit
-      blockchainConfig: BlockchainConfig
+  override protected def buildInitialWorld(block: Block, parentHeader: BlockHeader, isProposer: Boolean = false)(
+      implicit blockchainConfig: BlockchainConfig
   ): InMemoryWorldStateProxy =
     TestModeWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
-      nodesKeyValueStorage = blockchain.getBackingMptStorage(block.header.number),
+      nodesKeyValueStorage =
+        if (isProposer) blockchain.getReadOnlyMptStorage()
+        else blockchain.getBackingMptStorage(block.header.number),
       getBlockHashByNumber = (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
       accountStartNonce = blockchainConfig.accountStartNonce,
       stateRootHash = parentHeader.stateRoot,

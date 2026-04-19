@@ -616,9 +616,64 @@ class BlockExecutionSpec
       }
     }
 
+    "executeForProposer" should {
+
+      "not persist state changes to the backing MPT storage" taggedAs UnitTest in new BlockExecutionTestSetup {
+        // Regression: Engine API forkchoiceUpdated payload-build path used to commit tx effects to
+        // RocksDB. A subsequent newPayload for a tampered sibling block would then fail with
+        // NONCE_MISMATCH_TOO_LOW instead of the expected stateRoot/receiptsRoot mismatch.
+        // executeForProposer must run against read-only MPT storage so no writes reach the DB.
+
+        val validBlockBodyWithTxs: BlockBody = validBlockBodyWithNoTxs.copy(
+          transactionList = Seq(validStxSignedByOrigin)
+        )
+        val block = Block(validBlockHeader, validBlockBodyWithTxs)
+
+        val nonceBefore = readOnceAtParent.getAccount(originAddress).map(_.nonce.toBigInt).getOrElse(BigInt(-1))
+
+        val result = blockExecution.executeForProposer(block)
+        assert(result.isRight, s"executeForProposer failed: $result")
+
+        // Origin nonce must be unchanged in committed state — proposer build is ephemeral.
+        val nonceAfter = readOnceAtParent.getAccount(originAddress).map(_.nonce.toBigInt).getOrElse(BigInt(-1))
+
+        nonceAfter shouldBe nonceBefore
+      }
+
+      "be idempotent — calling twice with the same block produces the same stateRoot" taggedAs UnitTest in
+        new BlockExecutionTestSetup {
+          // If state leaked between calls, the second executeForProposer would see a post-tx nonce
+          // and return a different stateRoot (or fail outright with NONCE_MISMATCH_TOO_LOW).
+          val validBlockBodyWithTxs: BlockBody = validBlockBodyWithNoTxs.copy(
+            transactionList = Seq(validStxSignedByOrigin)
+          )
+          val block = Block(validBlockHeader, validBlockBodyWithTxs)
+
+          val firstResult = blockExecution.executeForProposer(block)
+          val secondResult = blockExecution.executeForProposer(block)
+
+          assert(firstResult.isRight && secondResult.isRight)
+          firstResult.toOption.get.worldState.stateRootHash shouldBe
+            secondResult.toOption.get.worldState.stateRootHash
+        }
+
+    }
+
   }
 
   trait BlockExecutionTestSetup extends BlockchainSetup {
+    /** Read-only view of the account trie rooted at the parent block's stateRoot. */
+    def readOnceAtParent: InMemoryWorldStateProxy =
+      InMemoryWorldStateProxy(
+        evmCodeStorage = blockchainStorages.evmCodeStorage,
+        mptStorage = blockchain.getReadOnlyMptStorage(),
+        getBlockHashByNumber = (n: BigInt) => blockchainReader.getBlockHeaderByNumber(n).map(_.hash),
+        accountStartNonce = blockchainConfig.accountStartNonce,
+        stateRootHash = validBlockParentHeader.stateRoot,
+        noEmptyAccounts = false,
+        ethCompatibleStorage = true
+      )
+
 
     override lazy val blockValidation =
       new BlockValidation(mining, blockchainReader, BlockQueue(blockchainReader, syncConfig))
