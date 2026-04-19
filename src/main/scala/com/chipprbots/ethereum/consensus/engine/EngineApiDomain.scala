@@ -30,6 +30,10 @@ case class ExecutionPayload(
     excessBlobGas: Option[BigInt] = None,
     // Cancun+ (passed as separate newPayload param, not in payload object)
     parentBeaconBlockRoot: Option[ByteString] = None,
+    // EIP-4844 (V3+, passed as separate newPayload param at index 1). Each entry is the
+    // `SHA256(kzg_commitment)` of a blob; must equal the concatenation of every blob tx's
+    // `blobVersionedHashes` in this payload, in order. None when the CL is a pre-Cancun client.
+    expectedBlobVersionedHashes: Option[Seq[ByteString]] = None,
     // Prague/Electra+ (EIP-7685, passed as separate newPayload param)
     executionRequests: Option[Seq[ByteString]] = None
 )

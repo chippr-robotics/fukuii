@@ -126,10 +126,19 @@ class EngineApiController(
             JsonRpcResponse("2.0", None, Some(JsonRpcError(UnsupportedFork, versionError.get, None)), reqId(request))
           )
         } else {
-          // V3+: second param is versionedHashes, third is parentBeaconBlockRoot
+          // V3+: params[1] is expectedBlobVersionedHashes, params[2] is parentBeaconBlockRoot.
+          // Previously we skipped params[1] entirely, which silently dropped the EIP-4844
+          // versioned-hash check the CL relies on — every "NewPayloadV3 Versioned Hashes"
+          // hive test passed the payload regardless of what the CL claimed to have seen.
           if (version >= 3) {
+            val expectedBlobVersionedHashes = params.lift(1).collect { case JArray(items) =>
+              items.collect { case JString(hex) => hexToByteString(hex) }
+            }
             val parentBeaconBlockRoot = params.lift(2).collect { case JString(hex) => hexToByteString(hex) }
-            payload = payload.copy(parentBeaconBlockRoot = parentBeaconBlockRoot)
+            payload = payload.copy(
+              expectedBlobVersionedHashes = expectedBlobVersionedHashes,
+              parentBeaconBlockRoot = parentBeaconBlockRoot
+            )
           }
 
           // V4: fourth param is executionRequests (EIP-7685)

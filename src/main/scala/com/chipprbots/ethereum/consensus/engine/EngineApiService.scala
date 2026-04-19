@@ -141,12 +141,31 @@ class EngineApiService(
           } else None
         }
       }
-      if (headerInvalid.isDefined) {
+      // EIP-4844 (newPayloadV3): the CL declares which versioned hashes it expects this
+      // payload to carry. Derive our own ordered list from the payload's blob txs and
+      // compare. Mismatch ⇒ INVALID (same response shape as an INCORRECT_* header error).
+      val versionedHashesInvalid: Option[String] = payload.expectedBlobVersionedHashes.flatMap { expected =>
+        val payloadHashes: Seq[ByteString] =
+          block.body.transactionList.flatMap {
+            case stx if stx.tx.isInstanceOf[com.chipprbots.ethereum.domain.BlobTransaction] =>
+              stx.tx.asInstanceOf[com.chipprbots.ethereum.domain.BlobTransaction].blobVersionedHashes
+            case _ => Nil
+          }
+        if (expected == payloadHashes) None
+        else
+          Some(
+            s"INVALID_VERSIONED_HASHES: expected ${expected.length} got ${payloadHashes.length} (first mismatch at index " +
+              expected.zip(payloadHashes).indexWhere { case (e, p) => e != p } + ")"
+          )
+      }
+
+      val preExecError = headerInvalid.orElse(versionedHashesInvalid)
+      if (preExecError.isDefined) {
         val latestValid = parentHeader.map(_.hash).getOrElse(zeroHash)
         invalidBlocks.put(payload.blockHash, latestValid)
         blockchainWriter.removeBlockByHash(payload.blockHash).commit()
         EngineApiMetrics.recordNewPayload("INVALID", payload.blockNumber.toLong, payload.timestamp)
-        PayloadStatusV1(Invalid, latestValidHash = Some(latestValid), validationError = Some(headerInvalid.get))
+        PayloadStatusV1(Invalid, latestValidHash = Some(latestValid), validationError = Some(preExecError.get))
       } else {
 
         // Tracks the tx-level reason for an execution failure so we can surface it in
