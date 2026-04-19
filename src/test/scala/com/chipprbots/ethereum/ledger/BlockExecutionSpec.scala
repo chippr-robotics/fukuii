@@ -659,6 +659,52 @@ class BlockExecutionSpec
 
     }
 
+    "EIP-4895 withdrawal processing" should {
+
+      "credit the withdrawal amount exactly once per block" taggedAs UnitTest in new BlockExecutionTestSetup {
+        // Regression: processWithdrawals used to run twice — once inside BlockPreparator.payBlockReward
+        // for post-merge blocks, and again in BlockExecution.executeBlock after payBlockReward
+        // returned. Every withdrawal credited 2× Gwei → 2× Wei, state root diverged, and the
+        // ethereum/engine-withdrawals hive suite stuck at 1/35. Check exactly-once semantics by
+        // calling payBlockReward (which for post-merge must be a no-op) and confirming the
+        // withdrawal recipient's balance has not changed under it.
+        val recipient = Address(ByteString(Array.fill[Byte](20)(0x42.toByte)))
+        val withdrawal = com.chipprbots.ethereum.domain.Withdrawal(
+          index = BigInt(0),
+          validatorIndex = BigInt(0),
+          address = recipient,
+          amount = BigInt(1) // 1 Gwei
+        )
+
+        // Build a post-merge header (difficulty=0, baseFee set → isPostMerge = true)
+        val postMergeHeader = validBlockParentHeader.copy(
+          parentHash = validBlockParentHeader.hash,
+          number = validBlockParentHeader.number + 1,
+          difficulty = 0,
+          extraFields = com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostShanghai(
+            baseFee = BigInt(1000000000),
+            withdrawalsRoot = com.chipprbots.ethereum.domain.BlockHeader.EmptyMpt
+          )
+        )
+        val block = Block(
+          postMergeHeader,
+          BlockBody(transactionList = Nil, uncleNodesList = Nil, withdrawals = Some(Seq(withdrawal)))
+        )
+
+        val world = readOnceAtParent
+        val balanceBefore = world.getAccount(recipient).map(_.balance.toBigInt).getOrElse(BigInt(0))
+
+        // payBlockReward on a post-merge block must now be a no-op — withdrawals are applied
+        // by BlockExecution after payBlockReward returns.
+        val worldAfter = mining.blockPreparator.payBlockReward(block, world)
+        val balanceAfterReward =
+          worldAfter.getAccount(recipient).map(_.balance.toBigInt).getOrElse(BigInt(0))
+
+        balanceAfterReward shouldBe balanceBefore
+      }
+
+    }
+
   }
 
   trait BlockExecutionTestSetup extends BlockchainSetup {
