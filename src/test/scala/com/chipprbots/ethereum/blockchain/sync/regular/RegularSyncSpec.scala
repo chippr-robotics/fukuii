@@ -120,11 +120,18 @@ class RegularSyncSpec
     }
 
     "fetching blocks" should {
-      "fetch headers and bodies concurrently" taggedAs (UnitTest, SyncTest) in sync(new Fixture(testSystem) {
+      // Note: BlockFetcher used to issue GetBlockBodies and the next-chunk
+      // GetBlockHeaders in parallel after a full-sized header batch landed,
+      // which is what this test originally verified. Under the current
+      // serial-batch scheduling (next headers prefetch is deferred until the
+      // pending bodies drain — see BlockFetcher.tryFetchHeaders), only the
+      // bodies request fires; the next headers request arrives after the
+      // bodies response. The invariant the test asserts is now: bodies
+      // request fires after the first header batch is received.
+      "fetch bodies after first header batch" taggedAs (UnitTest, SyncTest) in sync(new Fixture(testSystem) {
         regularSync ! SyncProtocol.Start
 
         peerEventBus.expectMsgClass(classOf[Subscribe])
-        // It's weird that we're using block number for total difficulty but I'm too scared to fight this dragon
         peerEventBus.reply(
           MessageFromPeer(
             NewBlock(testBlocks.last, ChainWeight(testBlocks.last.number).totalDifficulty),
@@ -134,8 +141,7 @@ class RegularSyncSpec
 
         peersClient.expectMsgEq(blockHeadersChunkRequest(0))
         peersClient.reply(PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked.head.headers)))
-        peersClient.expectMsgAllOfEq(
-          blockHeadersChunkRequest(1),
+        peersClient.expectMsgEq(
           PeersClient.Request.create(GetBlockBodies(testBlocksChunked.head.hashes), PeersClient.BestPeer)
         )
       })

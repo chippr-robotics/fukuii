@@ -16,10 +16,17 @@ import org.scalamock.scalatest.MockFactory
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.Timeouts
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.consensus.blocks.BlockTimestampProvider
+import com.chipprbots.ethereum.consensus.blocks.DefaultBlockTimestampProvider
+import com.chipprbots.ethereum.consensus.blocks.PendingBlock
+import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
 import com.chipprbots.ethereum.consensus.mining.CoinbaseProvider
 import com.chipprbots.ethereum.consensus.mining.MiningConfigs
 import com.chipprbots.ethereum.consensus.mining.TestMining
+import com.chipprbots.ethereum.consensus.pow.blocks._
 import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
+import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.consensus.pow.validators.ValidatorsExecutor
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -66,7 +73,63 @@ class JsonRpcControllerFixture(implicit system: ActorSystem, mockFactory: org.sc
     encodeAsHex(RawTransactionCodec.asRawTransaction(x))
 
   val version = Config.clientVersion
-  val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
+
+  /** Hand-rolled stub for PoWBlockGenerator. ScalaMock 6.0.0's macro under Scala 3 can't generate mock$generateBlock$1
+    * for the 5-params-plus-implicit signature inherited from BlockGenerator[X = Ommers]; swapping in a configurable
+    * plain class makes the affected tests deterministic without pulling in Mockito.
+    *
+    * Tests that need to feed a particular `generateBlock` result call `blockGenerator.setGenerateBlockResult(...)` or
+    * assign to `blockGenerator.generateBlockFn` directly.
+    */
+  class StubPoWBlockGenerator extends PoWBlockGenerator {
+    @volatile var generateBlockFn: (
+        Block,
+        Seq[SignedTransaction],
+        Address,
+        Ommers,
+        Option[InMemoryWorldStateProxy],
+        BlockchainConfig
+    ) => PendingBlockAndState =
+      (_, _, _, _, _, _) =>
+        throw new IllegalStateException(
+          "StubPoWBlockGenerator.generateBlock called without setGenerateBlockResult"
+        )
+
+    @volatile var getPreparedFn: ByteString => Option[PendingBlock] = _ => None
+
+    @volatile var prepared: List[PendingBlockAndState] = Nil
+
+    def setGenerateBlockResult(result: => PendingBlockAndState): Unit =
+      generateBlockFn = (_, _, _, _, _, _) => result
+
+    override def emptyX: Ommers = Nil
+
+    override def getPrepared(powHeaderHash: ByteString): Option[PendingBlock] =
+      getPreparedFn(powHeaderHash)
+
+    override def getPendingBlock: Option[PendingBlock] = prepared.headOption.map(_.pendingBlock)
+
+    override def getPendingBlockAndState: Option[PendingBlockAndState] = prepared.headOption
+
+    override def generateBlock(
+        parent: Block,
+        transactions: Seq[SignedTransaction],
+        beneficiary: Address,
+        x: Ommers,
+        initialWorldStateBeforeExecution: Option[InMemoryWorldStateProxy]
+    )(implicit blockchainConfig: BlockchainConfig): PendingBlockAndState = {
+      val result =
+        generateBlockFn(parent, transactions, beneficiary, x, initialWorldStateBeforeExecution, blockchainConfig)
+      prepared = result :: prepared
+      result
+    }
+
+    override def blockTimestampProvider: BlockTimestampProvider = DefaultBlockTimestampProvider
+
+    override def withBlockTimestampProvider(blockTimestampProvider: BlockTimestampProvider): PoWBlockGenerator = this
+  }
+
+  val blockGenerator: StubPoWBlockGenerator = new StubPoWBlockGenerator
 
   val syncingController: TestProbe = TestProbe()
 

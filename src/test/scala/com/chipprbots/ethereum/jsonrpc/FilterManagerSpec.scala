@@ -149,7 +149,8 @@ class FilterManagerSpec
       blockNumber = bh2.number,
       address = Address(0x1234),
       data = ByteString(Hex.decode("99aaff")),
-      topics = logs2.head.logTopics
+      topics = logs2.head.logTopics,
+      blockTimestamp = Some(bh2.unixTimestamp)
     )
 
     // same best block, no new logs
@@ -353,7 +354,8 @@ class FilterManagerSpec
       blockNumber = bh.number,
       address = Address(0x1234),
       data = ByteString(Hex.decode("99aaff")),
-      topics = logs.head.logTopics
+      topics = logs.head.logTopics,
+      blockTimestamp = Some(bh.unixTimestamp)
     )
 
     logsResp.logs(1) shouldBe FilterManager.TxLog(
@@ -364,7 +366,8 @@ class FilterManagerSpec
       blockNumber = block2.header.number,
       address = Address(0x1234),
       data = ByteString(Hex.decode("99aaff")),
-      topics = logs2.head.logTopics
+      topics = logs2.head.logTopics,
+      blockTimestamp = Some(block2.header.unixTimestamp)
     )
   }
 

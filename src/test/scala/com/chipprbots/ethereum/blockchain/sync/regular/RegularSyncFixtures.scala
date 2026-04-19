@@ -439,7 +439,11 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
         }
       }
 
-    peersClient.setAutoPilot(new PeersClientAutoPilot)
+    // Include newBlock in the autopilot's block list so that tests which send
+    // NewBlock(newBlock) through BlockFetcher can satisfy the follow-up
+    // header/body fetch (newBlock.number = testBlocks.last.number + 1, so by
+    // default testBlocks alone wouldn't cover it).
+    peersClient.setAutoPilot(new PeersClientAutoPilot(testBlocks :+ newBlock))
 
     // Set up AutoPilot for ommersPool to respond to GetOmmers messages
     ommersPool.setAutoPilot(new AutoPilot {

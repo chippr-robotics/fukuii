@@ -20,8 +20,8 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers {
       |network.rpc.http.port = 8546
       |network.rpc.ws.enabled = false
       |network.rpc.ws.port = 8552
-      |network.rpc.engine.enabled = false
-      |network.rpc.engine.port = 8551
+      |network.engine-api.enabled = false
+      |network.engine-api.port = 8551
       |""".stripMargin
 
   private def cfg(overrides: String) =
@@ -88,7 +88,7 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers {
 
   it should "report error when Engine API port equals P2P port" taggedAs UnitTest in {
     val errors = ConfigValidator.validate(
-      cfg("network.rpc.engine.enabled = true\nnetwork.rpc.engine.port = 30303")
+      cfg("network.engine-api.enabled = true\nnetwork.engine-api.port = 30303")
     )
     errors should have size 1
     errors.head should include("30303")

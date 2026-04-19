@@ -269,16 +269,9 @@ class JsonRpcControllerEthSpec
     val headerPowHash: String = s"0x${Hex.toHexString(kec256(BlockHeader.getEncodedWithoutNonce(blockHeader)))}"
 
     blockchainWriter.save(parentBlock, Nil, ChainWeight.zero.increase(parentBlock.header), true)
-    (blockGenerator
-      .generateBlock(
-        _: Block,
-        _: Seq[SignedTransaction],
-        _: Address,
-        _: Seq[BlockHeader],
-        _: Option[InMemoryWorldStateProxy]
-      )(_: BlockchainConfig))
-      .expects(parentBlock, *, *, *, *, *)
-      .returns(PendingBlockAndState(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil), fakeWorld))
+    blockGenerator.setGenerateBlockResult(
+      PendingBlockAndState(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil), fakeWorld)
+    )
 
     // Set up AutoPilot to respond immediately when messages are received
     pendingTransactionsManager.setAutoPilot(simpleAutoPilot { case PendingTransactionsManager.GetPendingTransactions =>
@@ -293,12 +286,16 @@ class JsonRpcControllerEthSpec
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
 
+    // eth_getWork returns [powhash, seed, target, blockNumber] — the trailing
+    // block-number element matches geth's implementation (added recently so
+    // mining pools can detect pivots).
     response should haveResult(
       JArray(
         List(
           JString(headerPowHash),
           JString(seed),
-          JString(target)
+          JString(target),
+          JString("0x2")
         )
       )
     )
@@ -314,28 +311,25 @@ class JsonRpcControllerEthSpec
     val headerPowHash: String = s"0x${Hex.toHexString(kec256(BlockHeader.getEncodedWithoutNonce(blockHeader)))}"
 
     blockchainWriter.save(parentBlock, Nil, ChainWeight.zero.increase(parentBlock.header), true)
-    (blockGenerator
-      .generateBlock(
-        _: Block,
-        _: Seq[SignedTransaction],
-        _: Address,
-        _: Seq[BlockHeader],
-        _: Option[InMemoryWorldStateProxy]
-      )(_: BlockchainConfig))
-      .expects(parentBlock, *, *, *, *, *)
-      .returns(PendingBlockAndState(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil), fakeWorld))
+    blockGenerator.setGenerateBlockResult(
+      PendingBlockAndState(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil), fakeWorld)
+    )
 
     // Don't set up AutoPilot - let the actors timeout and verify error handling returns empty lists
     val request: JsonRpcRequest = newJsonRpcRequest("eth_getWork")
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
 
+    // eth_getWork returns [powhash, seed, target, blockNumber] — the trailing
+    // block-number element matches geth's implementation (added recently so
+    // mining pools can detect pivots).
     response should haveResult(
       JArray(
         List(
           JString(headerPowHash),
           JString(seed),
-          JString(target)
+          JString(target),
+          JString("0x2")
         )
       )
     )
@@ -347,9 +341,11 @@ class JsonRpcControllerEthSpec
     val mixHash: String = s"""0x${"01" * 32}"""
     val headerPowHash: String = "02" * 32
 
-    (blockGenerator.getPrepared _)
-      .expects(ByteString(Hex.decode(headerPowHash)))
-      .returns(Some(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil)))
+    blockGenerator.getPreparedFn = { hash =>
+      if (hash == ByteString(Hex.decode(headerPowHash)))
+        Some(PendingBlock(Block(blockHeader, BlockBody(Nil, Nil)), Nil))
+      else None
+    }
 
     val request: JsonRpcRequest = newJsonRpcRequest(
       "eth_submitWork",

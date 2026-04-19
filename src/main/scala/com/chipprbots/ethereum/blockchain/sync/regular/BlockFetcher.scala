@@ -473,12 +473,13 @@ class BlockFetcher(
         notAtTop
       }
       .filter { state =>
-        // Don't prefetch the next header batch while the current batch still has
-        // pending bodies to download. Issuing GetBlockBodies + GetBlockHeaders in
-        // parallel inflates peer round-trips and caused nondeterministic message
-        // ordering in tests that asserted on message sequence. Once bodies land
-        // and waitingHeaders drains, the next fetchBlocks pass reissues headers
-        // using the knownTop bump applied in the ReceivedHeaders handler.
+        // Defer the next-batch header prefetch until the current batch's
+        // bodies have landed (waitingHeaders drains). Issuing GetBlockBodies
+        // and GetBlockHeaders in parallel when we JUST bumped knownTop turns
+        // the mailbox ordering non-deterministic and makes the bodies
+        // response race with any synchronous follow-ups from the test. Once
+        // bodies land, the next fetchBlocks pass reissues headers against
+        // the updated knownTop.
         val bodiesDrained = state.waitingHeaders.isEmpty
         if (!bodiesDrained)
           log.debug(
