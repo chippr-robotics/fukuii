@@ -588,7 +588,11 @@ class JsonRpcControllerEthSpec
     )
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
-    response should haveResult(JString("0x" + Hex.toHexString(ByteString("response").toArray[Byte])))
+    // eth_getStorageAt's result is a 32-byte storage slot value; short values
+    // are left-padded with zeros per the JSON-RPC DATA convention.
+    val raw = ByteString("response").toArray[Byte]
+    val padded = Array.fill[Byte](32 - raw.length)(0) ++ raw
+    response should haveResult(JString("0x" + Hex.toHexString(padded)))
   }
 
   it should "eth_sign" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
@@ -724,6 +728,8 @@ class JsonRpcControllerEthSpec
       newJsonRpcRequest("eth_getFilterChanges", List(JString("0x1")))
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
+    // `removed` is required by the eth_getLogs/eth_getFilterChanges JSON-RPC
+    // spec (defaults to false for current-chain logs; true for reorged-out logs).
     response should haveResult(
       JArray(
         List(
@@ -735,7 +741,8 @@ class JsonRpcControllerEthSpec
             "blockNumber" -> JString("0x63"),
             "address" -> JString("0x0000000000000000000000000000000000123456"),
             "data" -> JString("0xff33"),
-            "topics" -> JArray(List(JString("0x33"), JString("0x55")))
+            "topics" -> JArray(List(JString("0x33"), JString("0x55"))),
+            "removed" -> JBool(false)
           )
         )
       )
@@ -924,6 +931,8 @@ class JsonRpcControllerEthSpec
     )
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(request).unsafeRunSync()
+    // `removed` is required by the eth_getLogs/eth_getFilterChanges JSON-RPC
+    // spec (defaults to false for current-chain logs; true for reorged-out logs).
     response should haveResult(
       JArray(
         List(
@@ -935,7 +944,8 @@ class JsonRpcControllerEthSpec
             "blockNumber" -> JString("0x63"),
             "address" -> JString("0x0000000000000000000000000000000000123456"),
             "data" -> JString("0xff33"),
-            "topics" -> JArray(List(JString("0x33"), JString("0x55")))
+            "topics" -> JArray(List(JString("0x33"), JString("0x55"))),
+            "removed" -> JBool(false)
           )
         )
       )
