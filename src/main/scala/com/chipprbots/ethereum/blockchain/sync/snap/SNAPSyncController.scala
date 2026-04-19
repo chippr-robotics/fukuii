@@ -583,18 +583,8 @@ class SNAPSyncController(
     case HealingAllPeersStateless if currentPhase == StateHealing =>
       log.debug(s"Ignoring HealingAllPeersStateless from non-current coordinator (${sender().path.name})")
 
-    case actors.Messages.HealingStagnated(healed, pending)
-        if currentPhase == StateHealing && trieNodeHealingCoordinator.contains(sender()) =>
-      log.warning(
-        s"[HEAL-STAGNATED] Healing stagnated after $healed nodes — $pending tasks unresolvable. " +
-          "Refreshing pivot to retry healing with a fresh state root."
-      )
-      trieNodeHealingCoordinator.foreach(context.stop)
-      trieNodeHealingCoordinator = None
-      refreshPivotInPlace("healing-stagnated")
-
-    case actors.Messages.HealingStagnated(_, _) if currentPhase == StateHealing =>
-      log.debug(s"Ignoring HealingStagnated from non-current coordinator (${sender().path.name})")
+    // HealingStagnated is no longer sent (Besu-aligned: no stagnation watchdog in TrieNodeHealingCoordinator).
+    // Handler removed in april-besu-alignment D7.
 
     case PersistHealingQueue(pending, _) =>
       log.debug(s"[HEAL-PERSIST] ${pending.size} pending nodes (persistence not implemented on this branch — discarding)")
@@ -2284,8 +2274,8 @@ class SNAPSyncController(
     //   (a) Pre-healing pivot switch (Gap 1): coordinator was never created because
     //       checkAllDownloadsComplete() deferred startStateHealing() above.
     //
-    //   (b) Post-stagnation restart (Gap 2): coordinator was stopped by the HealingStagnated
-    //       handler, pivot refreshed, healing must restart with the fresh stateRoot.
+    //   (b) Post-pivot restart (Gap 2): coordinator was stopped, pivot refreshed,
+    //       healing must restart with the fresh stateRoot.
     //
     //   (c) Normal in-healing pivot refresh (existing behavior): coordinator is alive —
     //       trieNodeHealingCoordinator.isDefined, so this branch is skipped entirely.
@@ -2299,58 +2289,8 @@ class SNAPSyncController(
     }
   }
 
-  private def restartSnapSync(reason: String): Unit = {
-    log.warning(s"Restarting SNAP sync with a fresher pivot: $reason")
-
-    // Clear any pending pivot refresh (we're doing a full restart instead)
-    pendingPivotRefresh = None
-
-    // NOTE: do NOT reset consecutivePivotRefreshes here. restartSnapSync is often called
-    // from refreshPivotInPlace when no new pivot is available, which means the counter would
-    // reset on every failed cycle and never reach the threshold. The counter only resets on
-    // actual account download progress (ProgressAccountsSynced) or at startSnapSync().
-
-    // Cancel periodic phase request ticks
-    accountRangeRequestTask.foreach(_.cancel()); accountRangeRequestTask = None
-    bytecodeRequestTask.foreach(_.cancel()); bytecodeRequestTask = None
-    storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
-    accountStagnationCheckTask.foreach(_.cancel()); accountStagnationCheckTask = None
-    storageStagnationCheckTask.foreach(_.cancel()); storageStagnationCheckTask = None
-    healingRequestTask.foreach(_.cancel()); healingRequestTask = None
-    bootstrapCheckTask.foreach(_.cancel()); bootstrapCheckTask = None
-    pivotBootstrapRetryTask.foreach(_.cancel()); pivotBootstrapRetryTask = None
-    rateTrackerTuneTask.foreach(_.cancel()); rateTrackerTuneTask = None
-
-    // Stop coordinators so we don't double-run phases
-    accountRangeCoordinator.foreach(context.stop); accountRangeCoordinator = None
-    bytecodeCoordinator.foreach(context.stop); bytecodeCoordinator = None
-    storageRangeCoordinator.foreach(context.stop); storageRangeCoordinator = None
-    trieNodeHealingCoordinator.foreach(context.stop); trieNodeHealingCoordinator = None
-
-    // Clear inflight request timeouts and internal phase state
-    requestTracker.clear()
-
-    // Clear concurrent download state and recovery data
-    accountsComplete = false
-    bytecodePhaseComplete = false
-    storagePhaseComplete = false
-    appStateStorage.putSnapSyncAccountsComplete(false).commit()
-    appStateStorage.putSnapSyncStorageFilePath("").commit()
-
-    // Reset pivot/state root and storage so a new selection is committed
-    pivotBlock = None
-    stateRoot = None
-    mptStorage = None
-    currentPhase = Idle
-    coordinatorGeneration += 1
-
-    // Reset progress counters so logs/ETA reflect the new attempt
-    progressMonitor.reset()
-
-    // Re-run pivot selection/bootstrap with the latest visible peer set
-    context.become(idle)
-    startSnapSync()
-  }
+  // restartSnapSync() removed: Besu-aligned (D7). Besu never does a full restart from stagnation.
+  // All pivot updates use refreshPivotInPlace() instead.
 
   /** Trigger healing by re-running the trie walk with path tracking. Called from validateState() when missing nodes are
     * discovered. The passed hashes are just an indicator — we re-walk to get proper paths for GetTrieNodes.

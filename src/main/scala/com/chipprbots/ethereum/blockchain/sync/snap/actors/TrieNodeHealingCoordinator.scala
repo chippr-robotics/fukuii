@@ -56,16 +56,6 @@ class TrieNodeHealingCoordinator(
   // Global stagnation detection: if no nodes healed for this duration, declare
   // healing complete with a warning. Prevents infinite loops when all peers lack
   // GetTrieNodes support (ETH68 networks). Regular sync fetches missing nodes on-demand.
-  private var lastHealedAtMs: Long = System.currentTimeMillis()
-  private val healingStagnationTimeoutMs: Long = 5 * 60 * 1000 // 5 minutes
-
-  // Pivot refresh stall detection: tracks when pivotRefreshRequested was set and when
-  // dispatch or responses last occurred, enabling the periodic HealingStagnationCheck to
-  // detect and recover from controller-side retry failures (Bug 1 defense-in-depth).
-  private var pivotRefreshRequestedAtMs: Long = 0L
-  private var lastDispatchOrResponseMs: Long = System.currentTimeMillis()
-  private val noActivityTimeoutMs: Long = 120_000L        // 2 min: ghost-peer detection (matches StorageRangeCoordinator)
-  private val pivotRefreshStallTimeoutMs: Long = 600_000L // 10 min: re-trigger if controller retry is stuck
 
   // Active request tracking: maps requestId -> (tasks, peer, requestedBytes, sentAtMs)
   private case class ActiveRequest(
@@ -86,10 +76,7 @@ class TrieNodeHealingCoordinator(
   private val startTime = System.currentTimeMillis()
   private var lastProgressLogAt: Long = 0   // for 500-node interval progress log
   private val ProgressLogInterval: Long = 500
-  private var lastPulseHealedCount: Int = 0 // for 2-min stagnation-check velocity
-  // FIX-STAGNATION-LIMIT: Track consecutive 2-min HEAL-PULSE cycles with zero new healed nodes.
-  private var consecutiveStagnations: Int = 0
-  private val MaxConsecutiveStagnations: Int = 3
+  private var lastPulseHealedCount: Int = 0 // for 2-min HEAL-PULSE velocity logging
   // Rolling 60s window for recent throughput (matches controller's SyncProgressMonitor pattern)
   private val recentHistory: mutable.Queue[(Long, Long)] = mutable.Queue.empty
   private val RecentWindowMs: Long = 60_000
@@ -259,11 +246,9 @@ class TrieNodeHealingCoordinator(
         s"[HEAL] Root ${Hex.toHexString(root.take(8).toArray)} seeded with empty path — " +
         s"inline child discovery will populate the work queue top-down (Besu-aligned)"
       )
-      lastHealedAtMs = System.currentTimeMillis()
 
     case QueueMissingNodes(nodes) =>
       log.info(s"[HEAL-RESUME] Received ${nodes.size} persisted missing nodes from prior session")
-      lastHealedAtMs = System.currentTimeMillis() // reset stagnation timer at start of each healing round
       queueNodes(nodes)
       // Immediately dispatch to any known available peers
       tryRedispatchPendingTasks()
@@ -330,9 +315,6 @@ class TrieNodeHealingCoordinator(
       activeRequests.keys.foreach(requestTracker.completeRequest(_, 0))
       activeRequests.clear()
       pivotRefreshRequested = false
-      pivotRefreshRequestedAtMs = 0L
-      // Reset stagnation counter on pivot refresh — fresh root, fresh start.
-      consecutiveStagnations = 0
       lastPulseHealedCount = totalNodesHealed // start fresh velocity window post-refresh
       // Post-refresh cooldown: peers need time to sync to new root before we dispatch.
       // Without this, immediate dispatch → all stateless → another HealingAllPeersStateless → tight loop.
@@ -436,81 +418,15 @@ class TrieNodeHealingCoordinator(
       sender() ! stats
 
     case HealingStagnationCheck =>
-      val now = System.currentTimeMillis()
-      // Compute recent throughput over the last 2 min (since last stagnation check)
+      // Besu-aligned: no stagnation escalation. Pure diagnostic pulse logging.
+      // Besu has zero stagnation watchdogs — SnapWorldDownloadState.markAsStalled() is a TODO no-op.
       val recentHealed = totalNodesHealed - lastPulseHealedCount
-      val idleSec = (now - lastDispatchOrResponseMs) / 1000
       log.info(
         s"[HEAL-PULSE] healed=$totalNodesHealed total, +$recentHealed last 2min | " +
         s"pending=${pendingTasks.size} active=${activeRequests.size} peers=${knownAvailablePeers.size} | " +
-        s"idleFor=${idleSec}s pivotRefreshPending=$pivotRefreshRequested"
+        s"pivotRefreshPending=$pivotRefreshRequested"
       )
       lastPulseHealedCount = totalNodesHealed
-
-      // FIX-STAGNATION-LIMIT: Track consecutive zero-progress cycles. After MaxConsecutiveStagnations,
-      // notify controller to restart healing with a fresh pivot. Prevents permanent stuck state when
-      // the healing root is too stale for peers to serve (e.g. after a long walk).
-      if (recentHealed == 0 && pendingTasks.nonEmpty && !pivotRefreshRequested) {
-        consecutiveStagnations += 1
-        log.warning(
-          s"[HEAL-STAGNATION] Zero progress in last 2min — stagnation $consecutiveStagnations/$MaxConsecutiveStagnations. " +
-          s"healed=$totalNodesHealed pending=${pendingTasks.size} peers=${knownAvailablePeers.size}"
-        )
-        if (consecutiveStagnations >= MaxConsecutiveStagnations) {
-          log.warning(
-            s"[HEAL-STAGNATION] $MaxConsecutiveStagnations consecutive zero-progress cycles — " +
-            s"notifying controller to restart healing with fresh pivot"
-          )
-          snapSyncController ! HealingStagnated(totalNodesHealed.toLong, pendingTasks.size.toLong)
-          consecutiveStagnations = 0 // reset to avoid re-firing immediately
-        }
-      } else if (recentHealed > 0) {
-        consecutiveStagnations = 0
-      }
-
-      // 1. Detect pivot refresh stall: pivotRefreshRequested set but unresolved for >10min.
-      // Defense-in-depth — normally Bug 1 fix (RetryPivotRefresh handling StateHealing) resolves it.
-      if (pivotRefreshRequested && pivotRefreshRequestedAtMs > 0 &&
-          (now - pivotRefreshRequestedAtMs) > pivotRefreshStallTimeoutMs) {
-        log.warning(
-          s"[HEAL-STALL] Pivot refresh has been pending for ${(now - pivotRefreshRequestedAtMs) / 60000}min " +
-          s"without resolution. Re-triggering — controller retry may be stuck."
-        )
-        // Reset all stateless state and re-request so the controller gets another HealingAllPeersStateless
-        pivotRefreshRequested = false
-        pivotRefreshRequestedAtMs = 0L
-        statelessPeers.clear()
-        peerCooldownUntilMs.clear()
-        val allStillStateless = knownAvailablePeers.nonEmpty &&
-          knownAvailablePeers.forall(p => statelessPeers.contains(p.id.value))
-        if (allStillStateless || knownAvailablePeers.isEmpty) {
-          pivotRefreshRequested = true
-          pivotRefreshRequestedAtMs = now
-          log.warning("[HEAL-STALL] Still no capable peers after reset — re-sending HealingAllPeersStateless")
-          snapSyncController ! SNAPSyncController.HealingAllPeersStateless
-        } else {
-          tryRedispatchPendingTasks()
-        }
-      }
-
-      // 2. Detect no-activity stall from ghost peers (present in knownAvailablePeers but disconnected).
-      // If tasks are pending but no dispatch/response has occurred for 2min and dispatch is not blocked,
-      // the remaining peers are likely disconnected ghosts — mark stateless to trigger pivot refresh.
-      if (!pivotRefreshRequested && pendingTasks.nonEmpty && activeRequests.isEmpty &&
-          knownAvailablePeers.nonEmpty &&
-          (now - lastDispatchOrResponseMs) > noActivityTimeoutMs) {
-        log.warning(
-          s"[HEAL-STALL] No healing activity for ${(now - lastDispatchOrResponseMs) / 1000}s " +
-          s"with ${pendingTasks.size} pending tasks and ${knownAvailablePeers.size} known peers. " +
-          s"Assuming ghost connections — marking all peers stateless to trigger pivot refresh."
-        )
-        knownAvailablePeers.foreach(p => statelessPeers.add(p.id.value))
-        if (!pivotRefreshRequested) {
-          pivotRefreshRequested = true
-          pivotRefreshRequestedAtMs = now
-          snapSyncController ! SNAPSyncController.HealingAllPeersStateless
-        }
-      }
   }
 
   private def queueNodes(pathsAndHashes: Seq[(Seq[ByteString], ByteString)]): Unit = {
@@ -630,8 +546,6 @@ class TrieNodeHealingCoordinator(
       s"Requested ${batch.size} trie nodes from peer ${peer.id.value} " +
         s"(reqId=$requestId, responseBytes=$responseBytes, pending=${pendingTasks.size})"
     )
-    lastDispatchOrResponseMs = System.currentTimeMillis()
-
     Some(requestId)
   }
 
@@ -700,7 +614,6 @@ class TrieNodeHealingCoordinator(
     completedTaskCount += healedCount
     activeRequests.remove(requestId)
     requestTracker.completeRequest(requestId, nodes.size.max(1))
-    lastDispatchOrResponseMs = System.currentTimeMillis()
 
     // Update healing throttle (geth msgrate alignment)
     val elapsedMs = System.currentTimeMillis() - activeReq.sentAtMs
@@ -709,9 +622,8 @@ class TrieNodeHealingCoordinator(
     // Adaptive byte budget + stateless tracking
     if (healedCount > 0) {
       adjustResponseBytesOnSuccess(peer, requestedBytes, BigInt(receivedBytes))
-      // Successful response — clear stateless marking and reset stagnation timer
+      // Successful response — clear stateless marking
       statelessPeers -= peer.id.value
-      lastHealedAtMs = System.currentTimeMillis()
     } else {
       adjustResponseBytesOnFailure(peer, "empty healing response")
       recordPeerCooldown(peer, "empty healing response")
@@ -726,7 +638,6 @@ class TrieNodeHealingCoordinator(
         // Check if all known peers are stateless — request pivot refresh
         if (statelessPeers.size >= knownAvailablePeers.size && knownAvailablePeers.nonEmpty && !pivotRefreshRequested) {
           pivotRefreshRequested = true
-          pivotRefreshRequestedAtMs = System.currentTimeMillis()
           log.warning(
             s"All ${statelessPeers.size} peers stateless for healing root " +
               s"${Hex.toHexString(stateRoot.take(4).toArray)}. Requesting pivot refresh."
@@ -788,23 +699,8 @@ class TrieNodeHealingCoordinator(
         (if (abandoned > 0) s", abandoned $abandoned" else ""))
     }
 
-    // Besu alignment: no mass-abandonment in timeout handler.
-    // Besu (AbstractRetryingPeerTask) retries per-task up to MAX_RETRIES=4, but never mass-abandons
-    // tasks in a timeout handler. Besu only clears pendingTrieNodeRequests via reloadTrieHeal(),
-    // which fires ONLY when isNewPivotBlockFound || isBlockchainCaughtUp
-    // (SnapWorldDownloadState.java line 483) — not from stagnation timers.
-    // Mass-abandonment here bypasses HealingAllPeersStateless → pivot refresh, which is the
-    // correct escalation path when peers can't serve the current root.
-    // HealingStagnationCheck watchdog (every 2 min) sends HealingAllPeersStateless when all
-    // peers are stateless, triggering a pivot refresh to a root peers CAN serve.
-    val stagnantMs = System.currentTimeMillis() - lastHealedAtMs
-    if (stagnantMs > healingStagnationTimeoutMs && pendingTasks.nonEmpty) {
-      log.warning(
-        s"Healing stagnation (${stagnantMs / 1000}s no progress, ${pendingTasks.size} tasks pending). " +
-          s"Waiting for peer availability or pivot refresh — tasks preserved (Besu-aligned, no mass-abandon)."
-      )
-    }
-
+    // Besu-aligned: no mass-abandonment on timeout. Per-task retry via maxRetriesPerTask=4 only.
+    // Peers that exhaust retries are implicitly excluded via blacklistDuration on their tasks.
     tryRedispatchPendingTasks()
     self ! HealingCheckCompletion
   }
