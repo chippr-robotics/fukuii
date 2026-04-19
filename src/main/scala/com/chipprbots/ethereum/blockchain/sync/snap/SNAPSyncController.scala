@@ -465,9 +465,9 @@ class SNAPSyncController(
 
     case RetryPivotRefresh =>
       pivotBootstrapRetryTask = None
-      if (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync) {
-        log.info("Retrying pivot refresh after bootstrap failure...")
-        refreshPivotInPlace("retry after bootstrap failure")
+      if (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync || currentPhase == StateHealing) {
+        log.info(s"Retrying pivot refresh (phase=$currentPhase)...")
+        refreshPivotInPlace("retry pivot refresh")
       } else {
         log.info(s"Skipping pivot refresh retry — phase=$currentPhase no longer needs it")
       }
