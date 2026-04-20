@@ -109,6 +109,13 @@ class TrieNodeHealingCoordinator(
   // When all known peers have failed on root, HealingAllPeersStateless fires (pivot refresh).
   // Mirrors Besu's WORLD_STATE_ROOT_NOT_AVAILABLE signal from TrieNodeHealingStep.
   private val peersFailedOnRoot = mutable.Set[String]()
+  // Per-task peer exclusion — mirrors Besu AbstractRetryingSwitchingPeerTask.triedPeers.
+  // Maps task hash → set of peer IDs that have already been tried for that hash.
+  // Prevents a node from being assigned to the same peer repeatedly when other peers
+  // haven't tried it yet. Cleared on pivot refresh (coordinator is recreated on pivot
+  // switch, so field starts fresh automatically; explicit clear in HealingPivotRefreshed
+  // for safety).
+  private val triedPeersForTask = mutable.HashMap.empty[ByteString, mutable.Set[String]]
   private var pivotRefreshRequested: Boolean = false
   // Post-pivot-refresh cooldown: prevents immediate re-dispatch before peers sync to new root.
   // Without this, all peers return empty → stateless → another HealingAllPeersStateless → tight loop.
@@ -284,6 +291,7 @@ class TrieNodeHealingCoordinator(
       statelessPeers.clear()
       peersFailedOnRoot.clear() // new root — all peers get a fresh chance on the new root
       peerCooldownUntilMs.clear()
+      triedPeersForTask.clear() // new root — all peers get fresh chance per task
       // Besu-aligned D12: no peerResponseBytesTarget to clear.
       // Cancel active requests (they're for the old root)
       activeRequests.keys.foreach(requestTracker.completeRequest(_, 0))
@@ -485,17 +493,46 @@ class TrieNodeHealingCoordinator(
     }
 
     val effectiveBatch = effectiveBatchSize
-    // DFS priority queue: dequeue in priority order (root=priority 0 always first per Besu ordering).
-    // Root node has priority=0 which is the minimum — always dispatched first without explicit sorting.
-    val batch = (0 until effectiveBatch.min(pendingTasks.size)).map(_ => pendingTasks.dequeue())
-    // Remove dispatched hashes from dedup set (they'll be re-added if re-queued on failure)
-    batch.foreach(e => pendingHashSet -= e.hash)
+    // DFS priority queue with per-task peer exclusion (Besu AbstractRetryingSwitchingPeerTask.triedPeers).
+    // Dequeue up to effectiveBatch tasks that this peer hasn't tried yet.
+    // Tasks already tried by this peer are skipped and re-enqueued for other peers to handle.
+    val batch   = mutable.Buffer.empty[HealingEntry]
+    val skipped = mutable.Buffer.empty[HealingEntry]
+    while (batch.size < effectiveBatch && pendingTasks.nonEmpty) {
+      val task = pendingTasks.dequeue()
+      pendingHashSet -= task.hash
+      val peersTriedForHash = triedPeersForTask.getOrElse(task.hash, Set.empty[String])
+      if (!peersTriedForHash.contains(peer.id.value)) {
+        batch += task
+      } else {
+        // This peer has already tried this hash. Check if ALL known peers have tried it.
+        // If so, reset (Besu: triedPeers.retainAll(failedPeers) → allows non-failed retry).
+        // We clear completely since we don't track failed vs tried separately at this level.
+        val allTried = knownAvailablePeers.map(_.id.value).forall(peersTriedForHash.contains)
+        if (allTried) {
+          triedPeersForTask.remove(task.hash)
+          batch += task
+        } else {
+          skipped += task
+        }
+      }
+    }
+    // Re-enqueue skipped tasks (other peers will dispatch them)
+    skipped.foreach { task =>
+      pendingTasks += task
+      pendingHashSet += task.hash
+    }
+    if (batch.isEmpty) return None // No dispatchable tasks for this peer right now
+    // Record this peer as tried for each dispatched hash
+    batch.foreach { task =>
+      triedPeersForTask.getOrElseUpdate(task.hash, mutable.Set.empty) += peer.id.value
+    }
 
     val requestId = requestTracker.generateRequestId()
     val responseBytes = requestResponseBytes // Besu-aligned D12: fixed size, no per-peer ratcheting
 
     // Build the paths list for GetTrieNodes — each entry's pathset is a Seq[ByteString]
-    val paths = batch.map(_.pathset)
+    val paths = batch.map(_.pathset).toSeq
 
     val request = GetTrieNodes(
       requestId = requestId,
@@ -504,13 +541,14 @@ class TrieNodeHealingCoordinator(
       responseBytes = responseBytes
     )
 
-    activeRequests(requestId) = ActiveRequest(batch, peer, responseBytes)
+    val batchSeq = batch.toSeq
+    activeRequests(requestId) = ActiveRequest(batchSeq, peer, responseBytes)
 
     // Besu RequestDataStep.java: orTimeout(10, TimeUnit.SECONDS) for all request types.
     // Aligned floor: 10s (was 30s). Ceiling: 30s (was 60s). Slow peers released faster.
     val healingTimeout = requestTracker.rateTracker.targetTimeout().max(10.seconds).min(30.seconds)
     requestTracker.trackRequest(requestId, peer, SNAPRequestTracker.RequestType.GetTrieNodes, healingTimeout) {
-      handleTimeout(requestId, batch, peer)
+      handleTimeout(requestId, batchSeq, peer)
     }
 
     import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes.GetTrieNodesEnc
@@ -550,6 +588,7 @@ class TrieNodeHealingCoordinator(
         // Valid node — store directly by hash
         rawNodeBuffer += ((nodeHash, nodeData.toArray))
         discoverMissingChildren(nodeData, task)
+        triedPeersForTask.remove(task.hash) // healed — no more per-task tracking needed
         healedCount += 1
         totalNodesHealed += 1
         receivedBytes += nodeData.length
