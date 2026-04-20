@@ -633,17 +633,37 @@ class SNAPSyncController(
       } else {
         consecutiveUnproductiveHealingRounds += 1
         if (consecutiveUnproductiveHealingRounds >= maxUnproductiveHealingRounds) {
-          log.warning(
-            s"Healing stagnation: ${missingNodes.size} missing nodes persist after " +
-              s"$consecutiveUnproductiveHealingRounds consecutive rounds with no progress. " +
-              s"Proceeding to validation — regular sync will recover missing nodes on-demand."
-          )
-          consecutiveUnproductiveHealingRounds = 0
-          pivotStalenessCheckTask.foreach(_.cancel())
-          pivotStalenessCheckTask = None
-          progressMonitor.startPhase(StateValidation)
-          currentPhase = StateValidation
-          validateState()
+          // Besu alignment: markAsStalled() is a no-op for healing — Besu never proceeds to
+          // finalization while nodes are still missing. We mirror this for the state root:
+          // if the root is among the missing nodes, it cannot be recovered by regular sync
+          // on-demand (unlike interior nodes). Force a pivot refresh instead of finalizing.
+          val rootMissing = stateRoot.exists(root => missingNodes.exists { case (_, hash) => hash == root })
+          if (rootMissing) {
+            log.warning(
+              s"[HEAL-STAGNATION] State root is among ${missingNodes.size} unhealed nodes after " +
+                s"$consecutiveUnproductiveHealingRounds rounds — cannot proceed to finalization. " +
+                s"Triggering pivot refresh (Besu: markAsStalled no-op → reloadTrieHeal on new pivot)."
+            )
+            consecutiveUnproductiveHealingRounds = 0
+            healingPivotRefreshes += 1
+            if (healingPivotRefreshes >= MaxHealingPivotRefreshes) {
+              attemptHealingFallbackToStateDownloadPivot()
+            } else {
+              refreshPivotInPlace(s"healing-stagnation-root-missing ($healingPivotRefreshes/$MaxHealingPivotRefreshes)")
+            }
+          } else {
+            log.warning(
+              s"Healing stagnation: ${missingNodes.size} non-root missing nodes persist after " +
+                s"$consecutiveUnproductiveHealingRounds consecutive rounds with no progress. " +
+                s"Proceeding to validation — regular sync will recover missing nodes on-demand."
+            )
+            consecutiveUnproductiveHealingRounds = 0
+            pivotStalenessCheckTask.foreach(_.cancel())
+            pivotStalenessCheckTask = None
+            progressMonitor.startPhase(StateValidation)
+            currentPhase = StateValidation
+            validateState()
+          }
         } else {
           log.info(
             s"Trie walk found ${missingNodes.size} missing nodes — queuing for healing " +
@@ -2237,6 +2257,7 @@ class SNAPSyncController(
         trieNodeHealingCoordinator.foreach(context.stop)
         trieNodeHealingCoordinator = None
         trieWalkInProgress = false
+        consecutiveUnproductiveHealingRounds = 0
         startStateHealing()
       }
       return
@@ -2272,6 +2293,7 @@ class SNAPSyncController(
       trieNodeHealingCoordinator.foreach(context.stop)
       trieNodeHealingCoordinator = None
       trieWalkInProgress = false
+      consecutiveUnproductiveHealingRounds = 0 // New pivot = new root, reset stagnation counter
     }
     // Chain download target extends to the new pivot (chain data is canonical, never invalidated)
     if (chainDownloader.isDefined) {
