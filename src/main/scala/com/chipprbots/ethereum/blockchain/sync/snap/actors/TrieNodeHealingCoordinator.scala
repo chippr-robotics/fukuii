@@ -699,14 +699,17 @@ class TrieNodeHealingCoordinator(
           pendingTasks += resetEntry
           pendingHashSet += resetEntry.hash
           requeued += 1
-          // Treat a timeout-exhausted peer the same as an empty-response peer for the root node.
-          // This ensures HealingAllPeersStateless fires when all peers fail on the root.
+          // A timeout is transient — mark the peer session-stateless (cleared on reconnect) but do NOT
+          // add to statelessRemoteAddresses. That set permanently blocks the IP from HealingPeerAvailable
+          // even after reconnect, preventing the peer from serving interior nodes. A peer that times out
+          // on the root can still serve interior nodes — Besu never permanently excludes by IP for timeouts.
+          // statelessRemoteAddresses is reserved for peers that explicitly return EMPTY for a root-containing
+          // batch (handleResponse path), indicating they definitively lack the root.
           if (!peer.isStatic) {
             statelessPeers += peer.id.value
-            statelessRemoteAddresses += peer.remoteAddress.toString
             log.info(
-              s"[HEAL-ROOT-RETRY] Peer ${peer.id.value} marked stateless for root after $maxRetriesPerTask timeouts " +
-                s"(${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
+              s"[HEAL-ROOT-RETRY] Peer ${peer.id.value} session-stateless for root after $maxRetriesPerTask timeouts " +
+                s"(${statelessPeers.size}/${knownAvailablePeers.size} stateless) — IP not permanently blocked (timeout is transient)"
             )
             if (statelessPeers.size >= knownAvailablePeers.size && knownAvailablePeers.nonEmpty && !pivotRefreshRequested) {
               pivotRefreshRequested = true
