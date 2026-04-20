@@ -288,14 +288,11 @@ class EngineApiService(
                   if (extendsCanonical) blockchainWriter.storeBlock(block).commit()
                   else blockchainWriter.storeBlockByHashOnly(block).commit()
                   blockchainWriter.storeReceipts(block.header.hash, receipts).commit()
-                  // Remove applied txs from the pending pool. Without this, the next proposer-mode
-                  // build (engine_forkchoiceUpdated + attrs → getPayload) re-includes the same txs,
-                  // and their nonces collide with the now-canonical state — every EmptyTxs=False
-                  // hive test ends up with NONCE_MISMATCH_TOO_LOW instead of the expected field
-                  // mismatch. Mirrors what BlockImporter does on non-engine block import.
-                  if (block.body.transactionList.nonEmpty && pendingTransactionsManager != null)
-                    pendingTransactionsManager ! com.chipprbots.ethereum.transactions.PendingTransactionsManager
-                      .RemoveTransactions(block.body.transactionList)
+                  // NB: do NOT remove txs from the pool here. A newPayload'd block is stored
+                  // but not yet canonical (no FCU has advanced bestBlock); the same txs must
+                  // remain available for an alternative sibling payload on the same parent
+                  // (hive 'Sidechain Reorg' test). Pool removal happens in forkchoiceUpdated
+                  // once the block is promoted.
                   System.err.println(
                     s"[ENGINE-API] newPayload #${payload.blockNumber}: EXECUTED OK " +
                       s"(${block.body.numberOfTxs} txs, sidechain=${!extendsCanonical}, " +
@@ -458,7 +455,17 @@ class EngineApiService(
             Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing)))
 
           case Right(()) =>
-            // Ancestry already validated above; proceed with payload attributes check
+            // Ancestry already validated above. FCU has now advanced best-block; purge the
+            // head block's txs from the mempool so the next proposer build doesn't re-queue
+            // them (would otherwise cause NONCE_MISMATCH_TOO_LOW). Walks back from head to
+            // the prior best to cover multi-block forkchoice jumps.
+            if (pendingTransactionsManager != null) {
+              blockchainReader.getBlockByHash(forkChoiceState.headBlockHash).foreach { headBlock =>
+                if (headBlock.body.transactionList.nonEmpty)
+                  pendingTransactionsManager ! com.chipprbots.ethereum.transactions.PendingTransactionsManager
+                    .RemoveTransactions(headBlock.body.transactionList)
+              }
+            }
 
             // Validate payload attributes if present. Per Engine API spec, invalid payload
             // attributes (zero or parent-relative timestamp) yield JSON-RPC -38003, NOT a
