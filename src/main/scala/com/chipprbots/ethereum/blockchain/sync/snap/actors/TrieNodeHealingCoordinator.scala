@@ -125,7 +125,7 @@ class TrieNodeHealingCoordinator(
 
   // Peer cooldown
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
-  private val peerCooldownDefault = 30.seconds
+  private val peerCooldownDefault = 10.seconds // 30s was too aggressive for ETC's sparse peer set
 
   private def isPeerCoolingDown(peer: Peer): Boolean =
     peerCooldownUntilMs.get(peer.id.value).exists(_ > System.currentTimeMillis())
@@ -616,15 +616,28 @@ class TrieNodeHealingCoordinator(
       statelessPeers -= peer.id.value
     } else {
       recordPeerCooldown(peer, "empty healing response")
-      // Mark peer stateless for current root (geth-aligned) — skip for static peers
+      // Besu-aligned: only mark statelessRemoteAddresses (persist across reconnects) when the
+      // state root itself was in the failed batch. Interior node failures just get a cooldown —
+      // permanently blocking a peer for non-root empty responses starves the healing queue when
+      // the ETC peer set is sparse (Attempt 29: active=0, pending=3376 after 3 peers returned
+      // empty on non-root batches and were locked out by the HealingPeerAvailable guard).
       if (!peer.isStatic) {
-        statelessPeers += peer.id.value
-        statelessRemoteAddresses += peer.remoteAddress.toString // persist across reconnects
-        log.info(
-          s"Peer ${peer.id.value}@${peer.remoteAddress} marked stateless for healing root " +
-            s"${Hex.toHexString(stateRoot.take(4).toArray)} (${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
-        )
-        // Check if all known peers are stateless — request pivot refresh
+        val rootInBatch = tasksForRequest.exists(_.hash == stateRoot)
+        statelessPeers += peer.id.value // session-level: evicted on reconnect via HealingPeerAvailable
+        if (rootInBatch) {
+          // Root node not served — persist across reconnects (matches handleTimeout behavior)
+          statelessRemoteAddresses += peer.remoteAddress.toString
+          log.info(
+            s"Peer ${peer.id.value}@${peer.remoteAddress} marked stateless for healing root " +
+              s"${Hex.toHexString(stateRoot.take(4).toArray)} (root in empty batch, ${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
+          )
+        } else {
+          log.debug(
+            s"Peer ${peer.id.value} returned empty for non-root batch — cooldown only, not permanently stateless"
+          )
+        }
+        // Request pivot refresh when all known peers are stateless (session-level).
+        // Non-root failures count too: if every peer returns empty on everything, a new pivot is warranted.
         if (statelessPeers.size >= knownAvailablePeers.size && knownAvailablePeers.nonEmpty && !pivotRefreshRequested) {
           pivotRefreshRequested = true
           log.warning(
