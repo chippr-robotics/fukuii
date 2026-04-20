@@ -487,12 +487,27 @@ class EngineApiService(
             } else {
 
               val payloadId = payloadAttributes.map { attrs =>
-                // Generate a payload ID from the attributes (deterministic)
+                // Deterministic payload ID MUST be unique for every distinct attribute
+                // combination — hive 'Unique Payload ID' test sends FCUs differing only in
+                // a single withdrawal field or beaconRoot and expects the IDs to differ.
+                // Include withdrawals + beaconRoot in the hash.
+                val withdrawalBytes: Array[Byte] =
+                  attrs.withdrawals.toSeq.flatMap { ws =>
+                    ws.flatMap { w =>
+                      w.index.toByteArray.toSeq ++
+                        w.validatorIndex.toByteArray.toSeq ++
+                        w.address.bytes.toArray.toSeq ++
+                        w.amount.toByteArray.toSeq
+                    }
+                  }.toArray
+                val beaconRootBytes = attrs.parentBeaconBlockRoot.map(_.toArray).getOrElse(Array.emptyByteArray)
                 val idBytes = kec256(
                   forkChoiceState.headBlockHash.toArray ++
                     BigInt(attrs.timestamp).toByteArray ++
                     attrs.prevRandao.toArray ++
-                    attrs.suggestedFeeRecipient.bytes.toArray
+                    attrs.suggestedFeeRecipient.bytes.toArray ++
+                    withdrawalBytes ++
+                    beaconRootBytes
                 )
                 val id = ByteString(idBytes.take(8))
 
