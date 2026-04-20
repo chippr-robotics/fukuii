@@ -205,10 +205,13 @@ class EthTxService(
           IO.pure(Left(JsonRpcError.InvalidRequest))
         } else {
           // EIP-3860 (Shanghai+): reject contract-creation txs whose initcode exceeds the
-          // per-EVM-config maximum. Derived from the CURRENT chain tip's fork state, so
-          // we don't admit post-Shanghai-illegal txs into the pool when we're post-Shanghai.
-          val bestNum = blockchainReader.getBestBlockNumber()
-          val evmConfig = com.chipprbots.ethereum.vm.EvmConfig.forBlock(bestNum, blockchainConfig)
+          // per-EVM-config maximum. Derived from the CURRENT chain tip's fork state. Must
+          // use the timestamp-aware forBlock variant — Shanghai activates by timestamp on
+          // post-merge chains, not block number.
+          val tip = blockchainReader.getBestBlock().map(_.header)
+          val bestNum = tip.map(_.number).getOrElse(blockchainReader.getBestBlockNumber())
+          val ts = tip.map(_.unixTimestamp).getOrElse(0L)
+          val evmConfig = com.chipprbots.ethereum.vm.EvmConfig.forBlock(bestNum, ts, blockchainConfig)
           val tx = signedTransaction.tx
           val initCodeTooLarge =
             tx.isContractInit &&
