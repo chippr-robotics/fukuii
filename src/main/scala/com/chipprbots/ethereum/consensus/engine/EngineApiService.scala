@@ -141,10 +141,13 @@ class EngineApiService(
       }
     }) {
       // VersionedHashes mismatch: INVALID per EIP-4844 with latestValidHash=parent.hash.
-      // Record in invalidBlocks so a subsequent forkchoiceUpdated(head=this) short-circuits
-      // to INVALID (preventing the "unknown safe block hash" detour).
+      // Do NOT add to invalidBlocks — the mismatch is between the CL-supplied
+      // `expectedBlobVersionedHashes` argument and the payload's actual blob txs, not a
+      // property of the block itself. A later newPayload call with the SAME blockHash but
+      // matching versioned hashes must be accepted as VALID (hive 'Invalid NewPayload,
+      // VersionedHashes, Syncing=True' sends exactly that pattern and then expects FCU to
+      // return VALID, not 'head block was previously invalidated').
       val lvh = blockchainReader.getBlockHeaderByHash(payload.parentHash).map(_.hash).getOrElse(zeroHash)
-      markInvalidRecursive(payload.blockHash, lvh)
       PayloadStatusV1(Invalid, latestValidHash = Some(lvh), validationError = Some("INVALID_VERSIONED_HASHES"))
     } else if (
       blockchainReader.getBlockHeaderByHash(payload.blockHash).exists { h =>
