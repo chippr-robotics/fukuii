@@ -545,7 +545,7 @@ class EngineApiService(
                           (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse]
                         val response = Await.result(future, 3.seconds)
                         val expectedChainId = blockchainConfig.chainId
-                        val txs = response.pendingTransactions.map(_.stx.tx).filter { stx =>
+                        val filtered = response.pendingTransactions.map(_.stx.tx).filter { stx =>
                           val txChainId: Option[BigInt] = stx.tx match {
                             case t: com.chipprbots.ethereum.domain.TransactionWithAccessList => Some(t.chainId)
                             case t: com.chipprbots.ethereum.domain.TransactionWithDynamicFee => Some(t.chainId)
@@ -554,6 +554,15 @@ class EngineApiService(
                             case _ => None // legacy txs don't have explicit chainID
                           }
                           txChainId.forall(_ == expectedChainId)
+                        }
+                        // Sort by (sender, nonce) so execution processes each sender's txs
+                        // in nonce order. The pool returns them in arrival order — a blob-tx
+                        // producer like hive's NewPayloadV3 tests sends nonces N, N+1, ...,
+                        // and without this sort execution hits NONCE_MISMATCH_TOO_HIGH when
+                        // tx with nonce N+2 runs before nonce N.
+                        val txs = filtered.sortBy { stx =>
+                          val sender = SignedTransaction.getSender(stx).map(_.bytes.toArray.toSeq).getOrElse(Seq.empty)
+                          (sender, stx.tx.nonce)
                         }
                         if (txs.nonEmpty) log.info("Payload includes {} pending transactions", txs.size)
                         (txs, response.blobTxNetworkBytes)
