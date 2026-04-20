@@ -94,7 +94,28 @@ object SnapServer extends Logger {
   /** Range walker — yields (keyHash, leafValue) pairs whose key falls in
     * [originNibbles, limitNibbles] (inclusive on both ends), traversing the trie in key
     * order. Caller stops consuming when their byte budget is exceeded.
+    *
+    * Pruning: for a partial nibble prefix `p` of length L, the minimum reachable full key
+    * is `p ++ 0×(N-L)` and the maximum is `p ++ F×(N-L)` (where N is the full key length
+    * in nibbles, 64 for an account hash). We skip a subtree only when its max < origin
+    * OR its min > limit.
     */
+  private val FullKeyNibbles = 64
+
+  private def maxKeyWith(prefix: Array[Byte]): Array[Byte] =
+    prefix ++ Array.fill(math.max(0, FullKeyNibbles - prefix.length))(15.toByte)
+
+  private def minKeyWith(prefix: Array[Byte]): Array[Byte] =
+    prefix ++ Array.fill(math.max(0, FullKeyNibbles - prefix.length))(0.toByte)
+
+  private def subtreeIntersectsRange(
+      prefix: Array[Byte],
+      originNibbles: Array[Byte],
+      limitNibbles: Array[Byte]
+  ): Boolean =
+    cmpNibbles(maxKeyWith(prefix), originNibbles) >= 0 &&
+      cmpNibbles(minKeyWith(prefix), limitNibbles) <= 0
+
   private def walkRange(
       root: MptNode,
       storage: MptStorage,
@@ -103,13 +124,7 @@ object SnapServer extends Logger {
   ): Iterator[(ByteString, ByteString)] = {
 
     def descend(node: MptNode, prefix: Array[Byte]): Iterator[(ByteString, ByteString)] = {
-      // Cull entire subtrees outside the range. If the nibble path "prefix" cannot
-      // possibly extend to a key in [origin, limit], skip the subtree.
-      val cmpHigh = cmpNibbles(prefix, limitNibbles)
-      // If prefix is strictly longer than limit and limit is a strict prefix of prefix,
-      // we're already past — but cmpNibbles handles the simple case below.
-      if (cmpHigh > 0) {
-        // prefix > limit: nothing in this subtree can be <= limit
+      if (!subtreeIntersectsRange(prefix, originNibbles, limitNibbles)) {
         Iterator.empty
       } else {
         resolve(node, storage) match {
@@ -139,18 +154,12 @@ object SnapServer extends Logger {
                 } else Iterator.empty
               case None => Iterator.empty
             }
-            // Walk children 0..15 in nibble order, but only those that could contain
-            // a key in the range.
+            // Walk children 0..15 in nibble order, recursing into subtrees that could
+            // still contain keys in the range. The prune check happens inside descend().
             val childIters = (0 until 16).iterator.flatMap { nibble =>
-              val childPrefix = prefix :+ nibble.toByte
-              if (cmpNibbles(childPrefix, originNibbles ++ Array.fill(originNibbles.length)(15.toByte)) > 0 &&
-                  cmpNibbles(childPrefix, limitNibbles) > 0) {
-                Iterator.empty
-              } else if (children(nibble) == NullNode) {
-                Iterator.empty
-              } else {
-                descend(children(nibble), childPrefix)
-              }
+              val child = children(nibble)
+              if (child == NullNode) Iterator.empty
+              else descend(child, prefix :+ nibble.toByte)
             }
             termIter ++ childIters
 
