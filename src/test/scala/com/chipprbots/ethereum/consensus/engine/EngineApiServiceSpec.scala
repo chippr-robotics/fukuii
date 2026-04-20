@@ -317,19 +317,20 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers {
       result.latestValidHash shouldBe Some(validBlock.header.hash)
     }
 
-    "return INVALID with parent.hash when blockHash doesn't match header and parent is known" taggedAs UnitTest in
+    "return INVALID_BLOCK_HASH with null latestValidHash on hash mismatch" taggedAs UnitTest in
       new EngineApiTestSetup {
-        // Per EIP-3675 and the hive "Corrupted Block Hash Payload" test: when the parent is
-        // known we must distinguish this block from "we have no ancestry at all" — hive expects
-        // INVALID with latestValidHash = parent.hash, not INVALID_BLOCK_HASH with null.
+        // engine-API spec: hash mismatch is a structural integrity error — return
+        // INVALID_BLOCK_HASH with latestValidHash=null regardless of whether the parent
+        // is known. The corruption is in the payload envelope, not attributable to a
+        // specific ancestor. This aligns with hive "Bad Hash on NewPayload" tests.
         val (validBlock, _) = buildValidBlock1()
         val payload = blockToPayload(validBlock)
         val badPayload = payload.copy(blockHash = ByteString(Array.fill(32)(0xff.toByte)))
 
         val result = engineApi.newPayload(badPayload).unsafeRunSync()
 
-        result.status shouldBe Invalid
-        result.latestValidHash shouldBe Some(genesisHeader.hash)
+        result.status shouldBe a[InvalidBlockHash]
+        result.latestValidHash shouldBe None
       }
 
     "return INVALID_BLOCK_HASH when blockHash doesn't match AND parent is unknown" taggedAs UnitTest in

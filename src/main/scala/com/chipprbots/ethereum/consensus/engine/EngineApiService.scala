@@ -112,24 +112,12 @@ class EngineApiService(
         s"[ENGINE-API] newPayload #${payload.blockNumber}: block-hash mismatch " +
           s"computed=${block.header.hashAsHexString} payload=${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(payload.blockHash)}"
       )
-      // Per EIP-3675: INVALID_BLOCK_HASH is only appropriate when we cannot attribute the
-      // corruption to a known-valid ancestor. If the parent IS known, the hive framework
-      // expects INVALID with latestValidHash = parent.hash (not null), because the corruption
-      // is diagnostically about THIS block, not about whether we have ancestors at all.
-      val parentOpt = blockchainReader.getBlockHeaderByHash(payload.parentHash)
+      // Per engine-API spec + hive tests: hash mismatch always returns INVALID_BLOCK_HASH
+      // with latestValidHash = null. The block hash check is a structural / integrity
+      // check — we cannot attribute the error to a specific ancestor because the payload
+      // itself is corrupted. Do NOT store the block and do NOT surface a parent.hash.
       blockchainWriter.removeBlockByHash(payload.blockHash).commit()
-      parentOpt match {
-        case Some(parent) =>
-          markInvalidRecursive(payload.blockHash, parent.hash)
-          PayloadStatusV1(
-            Invalid,
-            latestValidHash = Some(parent.hash),
-            validationError = Some("block hash mismatch")
-          )
-        case None =>
-          markInvalidRecursive(payload.blockHash, zeroHash)
-          PayloadStatusV1(InvalidBlockHash("block hash mismatch"))
-      }
+      PayloadStatusV1(InvalidBlockHash("block hash mismatch"))
     } else if ({
       // EIP-4844 versioned-hash check must run BEFORE the "already stored" dedup. The hive
       // "NewPayloadV3 Versioned Hashes, Non-Empty Hashes" tests call newPayloadV3 twice for
