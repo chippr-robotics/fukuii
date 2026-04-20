@@ -120,7 +120,19 @@ class EthBlocksService(
     val blockOpt = blockchainReader.getBlockByHash(blockHash).orElse(blockQueue.getBlockByHash(blockHash))
     val weight = blockchainReader.getChainWeightByHash(blockHash).orElse(blockQueue.getChainWeightByHash(blockHash))
 
-    val blockResponseOpt = blockOpt.map(block => BlockResponse(block, weight, fullTxs = fullTxs))
+    // Hide engine-API optimistic blocks (ACCEPTED with unknown parent, stored via
+    // storeBlockByHashOnly) — they skip the number→hash mapping and haven't been executed.
+    // Exposing them via eth_getBlockByHash breaks hive's "Invalid NewPayload, ParentHash" test,
+    // which expects the altered payload to NOT be queryable. A block is "exposed" if either
+    // (a) it lives at its advertised number in the canonical index, or (b) it's a known
+    // sidechain (has receipts stored, i.e. was fully executed on the fork-choice sidechain path).
+    val isExposed = blockOpt.exists { b =>
+      blockchainReader.getBlockHeaderByNumber(b.header.number).exists(_.hash == b.header.hash) ||
+      blockchainReader.getReceiptsByHash(b.header.hash).isDefined
+    }
+    val blockResponseOpt =
+      if (!isExposed) None
+      else blockOpt.map(block => BlockResponse(block, weight, fullTxs = fullTxs))
     Right(BlockByBlockHashResponse(blockResponseOpt))
   }
 

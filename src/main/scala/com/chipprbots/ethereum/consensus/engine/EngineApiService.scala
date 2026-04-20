@@ -117,7 +117,12 @@ class EngineApiService(
       // the engine MUST return INVALID (not INVALID_BLOCK_HASH). V1 accepts either; returning
       // INVALID universally is compliant with all versions. latestValidHash must be null —
       // the corruption is in the payload itself, not attributable to any specific ancestor.
-      blockchainWriter.removeBlockByHash(payload.blockHash).commit()
+      //
+      // Do NOT call removeBlockByHash here: payload.blockHash can collide with a legitimate
+      // block (the hive "ParentHash equals BlockHash on NewPayload" test sets blockHash =
+      // parentHash, which is the real parent's hash). Removing it would delete the parent.
+      // We never stored anything under payload.blockHash in this call, so there is nothing
+      // safe and correct to remove.
       PayloadStatusV1(Invalid, latestValidHash = None, validationError = Some("block hash mismatch"))
     } else if ({
       // EIP-4844 versioned-hash check must run BEFORE the "already stored" dedup. The hive
@@ -236,7 +241,17 @@ class EngineApiService(
         // PayloadStatus.validationError (for EEST exception mapping, e.g.
         // INSUFFICIENT_ACCOUNT_FUNDS, NONCE_MISMATCH_TOO_LOW).
         val executionErrorReason = new java.util.concurrent.atomic.AtomicReference[Option[String]](None)
-        val executionResult = if (parentKnown) {
+
+        // Parent is "validated" iff it's canonical (has a number→hash mapping to itself) or
+        // it's a known sidechain that we executed (has receipts stored). A parent we only
+        // know by hash (via storeBlockByHashOnly, i.e. optimistic accept with unknown grand-
+        // parent) has unverified ancestry, and a child built on it must NOT be claimed as
+        // VALID — hive's "Invalid NewPayload, ParentHash" test expects ACCEPTED/SYNCING.
+        val parentValidated = parentHeader.exists { p =>
+          blockchainReader.getBlockHeaderByNumber(p.number).exists(_.hash == p.hash) ||
+          blockchainReader.getReceiptsByHash(p.hash).isDefined
+        }
+        val executionResult = if (parentKnown && parentValidated) {
           try
             blockExecution.executeAndValidateBlockFull(block, alreadyValidated = true) match {
               case Right((receipts, derivedRequests)) =>
@@ -341,8 +356,9 @@ class EngineApiService(
             )
 
           case None =>
-            // Parent unknown — store block BY HASH ONLY (not by number) so it doesn't
-            // appear in eth_getBlockByNumber but can be deduped by hash.
+            // Parent unknown OR parent known but unvalidated (optimistic chain). Store by
+            // hash only so the block doesn't appear in eth_getBlockByNumber / eth_getBlock-
+            // ByHash, but can be deduped and retroactively invalidated later.
             blockchainWriter.storeBlockByHashOnly(block).commit()
             // Record parent→child so that if the (still-unknown) ancestor chain is later
             // revealed as INVALID, we can retroactively invalidate this block too. Required
