@@ -101,11 +101,14 @@ class TrieNodeHealingCoordinator(
   // Dedup set for pending tasks — prevents the same missing node from being queued multiple times
   private val pendingHashSet = mutable.Set[ByteString]()
 
-  // Stateless peer tracking (geth-aligned: peers that return empty TrieNodes for current root)
+  // Session-level stateless tracking. Cleared on HealingPeerAvailable eviction (~1s).
+  // Controls immediate dispatch eligibility; real cooldown is peerCooldownUntilMs (10s).
   private val statelessPeers = mutable.Set[String]()
-  // Persistent stateless tracking by remote address — survives peer reconnect with new session ID.
-  // Non-static peers that return empty GetTrieNodes are blocked even after reconnection.
-  private val statelessRemoteAddresses = mutable.Set[String]()
+  // Persistent root-failure tracking — survives HealingPeerAvailable ticks, cleared only on
+  // pivot refresh. Tracks which peer IDs have exhausted their retries on the root node specifically.
+  // When all known peers have failed on root, HealingAllPeersStateless fires (pivot refresh).
+  // Mirrors Besu's WORLD_STATE_ROOT_NOT_AVAILABLE signal from TrieNodeHealingStep.
+  private val peersFailedOnRoot = mutable.Set[String]()
   private var pivotRefreshRequested: Boolean = false
   // Post-pivot-refresh cooldown: prevents immediate re-dispatch before peers sync to new root.
   // Without this, all peers return empty → stateless → another HealingAllPeersStateless → tight loop.
@@ -238,21 +241,14 @@ class TrieNodeHealingCoordinator(
       self ! HealingCheckCompletion
 
     case HealingPeerAvailable(peer) =>
-      // Skip if this remote address has been marked stateless — blocks reconnected dead peers
-      if (statelessRemoteAddresses.contains(peer.remoteAddress.toString)) {
-        log.debug(
-          s"[HEALING] Skipping ${peer.remoteAddress} — address known stateless (prior GetTrieNodes failure)"
-        )
-      } else {
-        // Evict stale entry for same physical node (reconnection creates new PeerId).
-        // Also clean up stale session-ID entries from statelessPeers and cooldown map.
-        val evicted = knownAvailablePeers.filter(_.remoteAddress == peer.remoteAddress)
-        statelessPeers --= evicted.map(_.id.value)
-        peerCooldownUntilMs --= evicted.map(_.id.value)
-        knownAvailablePeers.filterInPlace(_.remoteAddress != peer.remoteAddress)
-        knownAvailablePeers += peer
-        dispatchIfPossible(peer)
-      }
+      // Besu-aligned: no persistent IP-level blocking. Evict stale entry for same physical
+      // node (reconnection creates new PeerId) and re-admit unconditionally.
+      val evicted = knownAvailablePeers.filter(_.remoteAddress == peer.remoteAddress)
+      statelessPeers --= evicted.map(_.id.value)
+      peerCooldownUntilMs --= evicted.map(_.id.value)
+      knownAvailablePeers.filterInPlace(_.remoteAddress != peer.remoteAddress)
+      knownAvailablePeers += peer
+      dispatchIfPossible(peer)
 
     case UpdateMaxInFlightPerPeer(newLimit) =>
       if (newLimit != maxInFlightPerPeer) {
@@ -286,7 +282,7 @@ class TrieNodeHealingCoordinator(
       pendingTasks.clear()
       pendingHashSet.clear()
       statelessPeers.clear()
-      statelessRemoteAddresses.clear() // new root — peers that failed old root may serve new one
+      peersFailedOnRoot.clear() // new root — all peers get a fresh chance on the new root
       peerCooldownUntilMs.clear()
       // Besu-aligned D12: no peerResponseBytesTarget to clear.
       // Cancel active requests (they're for the old root)
@@ -610,44 +606,32 @@ class TrieNodeHealingCoordinator(
     val elapsedMs = System.currentTimeMillis() - activeReq.sentAtMs
     updateHealThrottle(healedCount, elapsedMs)
 
-    // Stateless tracking (Besu-aligned D12: no adaptive byte budget, fixed request size)
+    // Besu-aligned peer tracking: no persistent IP-level blocking.
+    // Successful response clears session-stateless marking. Empty response:
+    //   - 10s cooldown (recordPeerCooldown)
+    //   - session-level statelessPeers entry (cleared on next HealingPeerAvailable eviction)
+    //   - if root was in the batch: peersFailedOnRoot (persistent, mirrors WORLD_STATE_ROOT_NOT_AVAILABLE)
+    //   - pivot refresh when all known peers have failed on root (peersFailedOnRoot saturates)
     if (healedCount > 0) {
-      // Successful response — clear stateless marking
       statelessPeers -= peer.id.value
     } else {
       recordPeerCooldown(peer, "empty healing response")
-      // Besu-aligned: only mark statelessRemoteAddresses (persist across reconnects) when the
-      // state root itself was in the failed batch. Interior node failures just get a cooldown —
-      // permanently blocking a peer for non-root empty responses starves the healing queue when
-      // the ETC peer set is sparse (Attempt 29: active=0, pending=3376 after 3 peers returned
-      // empty on non-root batches and were locked out by the HealingPeerAvailable guard).
-      if (!peer.isStatic) {
-        val rootInBatch = tasksForRequest.exists(_.hash == stateRoot)
-        statelessPeers += peer.id.value // session-level: evicted on reconnect via HealingPeerAvailable
-        if (rootInBatch) {
-          // Root node not served — persist across reconnects (matches handleTimeout behavior)
-          statelessRemoteAddresses += peer.remoteAddress.toString
-          log.info(
-            s"Peer ${peer.id.value}@${peer.remoteAddress} marked stateless for healing root " +
-              s"${Hex.toHexString(stateRoot.take(4).toArray)} (root in empty batch, ${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
-          )
-        } else {
-          log.debug(
-            s"Peer ${peer.id.value} returned empty for non-root batch — cooldown only, not permanently stateless"
-          )
-        }
-        // Request pivot refresh when all known peers are stateless (session-level).
-        // Non-root failures count too: if every peer returns empty on everything, a new pivot is warranted.
-        if (statelessPeers.size >= knownAvailablePeers.size && knownAvailablePeers.nonEmpty && !pivotRefreshRequested) {
-          pivotRefreshRequested = true
-          log.warning(
-            s"All ${statelessPeers.size} peers stateless for healing root " +
-              s"${Hex.toHexString(stateRoot.take(4).toArray)}. Requesting pivot refresh."
-          )
-          snapSyncController ! SNAPSyncController.HealingAllPeersStateless
-        }
-      } else {
-        log.debug(s"[STATIC] Skipping stateless marking for static peer ${peer.remoteAddress} (healing)")
+      statelessPeers += peer.id.value
+      val rootInBatch = tasksForRequest.exists(_.hash == stateRoot)
+      if (rootInBatch) peersFailedOnRoot += peer.id.value
+      log.debug(
+        s"Peer ${peer.id.value} returned empty batch (${nodes.size} requested, rootInBatch=$rootInBatch) — " +
+          s"cooldown + session-stateless (${statelessPeers.size}/${knownAvailablePeers.size})"
+      )
+      // Pivot refresh: fire when all known peers have failed on root specifically.
+      // Using peersFailedOnRoot (persistent) rather than statelessPeers (ephemeral) for reliability.
+      if (peersFailedOnRoot.size >= knownAvailablePeers.size && knownAvailablePeers.nonEmpty && !pivotRefreshRequested) {
+        pivotRefreshRequested = true
+        log.warning(
+          s"All ${peersFailedOnRoot.size} peers failed on root " +
+            s"${Hex.toHexString(stateRoot.take(4).toArray)} — requesting pivot refresh."
+        )
+        snapSyncController ! SNAPSyncController.HealingAllPeersStateless
       }
     }
 
@@ -699,22 +683,21 @@ class TrieNodeHealingCoordinator(
           pendingTasks += resetEntry
           pendingHashSet += resetEntry.hash
           requeued += 1
-          // A timeout is transient — mark the peer session-stateless (cleared on reconnect) but do NOT
-          // add to statelessRemoteAddresses. That set permanently blocks the IP from HealingPeerAvailable
-          // even after reconnect, preventing the peer from serving interior nodes. A peer that times out
-          // on the root can still serve interior nodes — Besu never permanently excludes by IP for timeouts.
-          // statelessRemoteAddresses is reserved for peers that explicitly return EMPTY for a root-containing
-          // batch (handleResponse path), indicating they definitively lack the root.
+          // Timeout is transient — session-level block + cooldown only (Besu: no IP-level ban).
+          // Also track this peer in peersFailedOnRoot (persistent across HealingPeerAvailable ticks,
+          // cleared only on pivot refresh). When ALL known peers have failed on root, trigger pivot
+          // refresh — mirrors Besu's WORLD_STATE_ROOT_NOT_AVAILABLE signal from TrieNodeHealingStep.
           if (!peer.isStatic) {
             statelessPeers += peer.id.value
+            peersFailedOnRoot += peer.id.value
             log.info(
-              s"[HEAL-ROOT-RETRY] Peer ${peer.id.value} session-stateless for root after $maxRetriesPerTask timeouts " +
-                s"(${statelessPeers.size}/${knownAvailablePeers.size} stateless) — IP not permanently blocked (timeout is transient)"
+              s"[HEAL-ROOT-RETRY] Peer ${peer.id.value} exhausted $maxRetriesPerTask timeouts on root " +
+                s"(${peersFailedOnRoot.size}/${knownAvailablePeers.size} peers failed on root)"
             )
-            if (statelessPeers.size >= knownAvailablePeers.size && knownAvailablePeers.nonEmpty && !pivotRefreshRequested) {
+            if (peersFailedOnRoot.size >= knownAvailablePeers.size && knownAvailablePeers.nonEmpty && !pivotRefreshRequested) {
               pivotRefreshRequested = true
               log.warning(
-                s"[HEAL-ROOT-RETRY] All ${statelessPeers.size} peers exhausted on root " +
+                s"[HEAL-ROOT-RETRY] All ${peersFailedOnRoot.size} peers exhausted on root " +
                   s"${Hex.toHexString(stateRoot.take(4).toArray)} — requesting pivot refresh."
               )
               snapSyncController ! SNAPSyncController.HealingAllPeersStateless
@@ -751,7 +734,6 @@ class TrieNodeHealingCoordinator(
     val eligiblePeers = knownAvailablePeers.toList
       .filterNot(isPeerCoolingDown)
       .filterNot(p => statelessPeers.contains(p.id.value))
-      .filterNot(p => statelessRemoteAddresses.contains(p.remoteAddress.toString))
     if (eligiblePeers.isEmpty) {
       log.debug(
         s"[REDISPATCH] No eligible peers — ${knownAvailablePeers.size} known, " +
