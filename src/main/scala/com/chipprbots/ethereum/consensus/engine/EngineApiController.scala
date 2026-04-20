@@ -295,8 +295,14 @@ class EngineApiController(
           // overlay the version error. UnsupportedFork (-38005) does not apply forkchoice —
           // the CL called the wrong method entirely.
           if (code == InvalidAttrs) {
-            engineApiService.forkchoiceUpdated(fcs, None).map { _ =>
-              JsonRpcResponse("2.0", None, Some(JsonRpcError(code, msg, None)), reqId(request))
+            // If head is unknown (syncing), return SYNCING payload status without the
+            // attrs error — validation presupposes a known head. Hive's 'Invalid
+            // PayloadAttributes, Missing BeaconRoot, Syncing=True' expects no error.
+            engineApiService.forkchoiceUpdated(fcs, None).map {
+              case Right(response) if response.payloadStatus.status == PayloadStatus.Syncing =>
+                JsonRpcResponse("2.0", Some(encodeForkchoiceUpdatedResponse(response)), None, reqId(request))
+              case _ =>
+                JsonRpcResponse("2.0", None, Some(JsonRpcError(code, msg, None)), reqId(request))
             }
           } else {
             IO.pure(
