@@ -119,6 +119,10 @@ class TrieNodeHealingCoordinator(
   // HW1 self-feeding: tracks total missing trie children discovered across all healed nodes
   private var childrenDiscoveredTotal: Int = 0
 
+  // D4 root-retry: cumulative count of times the state root node has exhausted per-peer retries.
+  // The state root cannot be recovered by regular sync on-demand — never permanently abandon it.
+  private var rootFetchFailures: Int = 0
+
   // Peer cooldown
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
   private val peerCooldownDefault = 30.seconds
@@ -289,6 +293,7 @@ class TrieNodeHealingCoordinator(
       activeRequests.keys.foreach(requestTracker.completeRequest(_, 0))
       activeRequests.clear()
       pivotRefreshRequested = false
+      rootFetchFailures = 0 // new root — reset failure counter
       lastPulseHealedCount = totalNodesHealed // start fresh velocity window post-refresh
       // Post-refresh cooldown: peers need time to sync to new root before we dispatch.
       // Without this, immediate dispatch → all stateless → another HealingAllPeersStateless → tight loop.
@@ -565,13 +570,26 @@ class TrieNodeHealingCoordinator(
         // and the node can never be healed regardless of how many pivot refreshes occur.
         val updated = task.copy(retries = task.retries + 1)
         if (updated.retries >= maxRetriesPerTask) {
-          abandonedTaskCount += 1
-          log.warning(
-            s"Giving up on trie node ${Hex.toHexString(task.hash.take(4).toArray)} after " +
-              s"$maxRetriesPerTask consecutive hash mismatches " +
-              s"(got ${Hex.toHexString(nodeHash.take(4).toArray)}). " +
-              s"Node not present in current trie — deferring to state validation."
-          )
+          if (task.hash == stateRoot) {
+            // D4 — never permanently abandon the state root node, even on hash mismatches.
+            rootFetchFailures += 1
+            log.warning(
+              s"[HEAL-ROOT-RETRY] Root node ${Hex.toHexString(stateRoot.take(4).toArray)} hash mismatch after " +
+                s"$maxRetriesPerTask attempts (got ${Hex.toHexString(nodeHash.take(4).toArray)}). " +
+                s"Re-queuing with reset retries (cumulative root failures: $rootFetchFailures)."
+            )
+            val resetEntry = task.copy(retries = 0)
+            pendingTasks += resetEntry
+            pendingHashSet += resetEntry.hash
+          } else {
+            abandonedTaskCount += 1
+            log.warning(
+              s"Giving up on trie node ${Hex.toHexString(task.hash.take(4).toArray)} after " +
+                s"$maxRetriesPerTask consecutive hash mismatches " +
+                s"(got ${Hex.toHexString(nodeHash.take(4).toArray)}). " +
+                s"Node not present in current trie — deferring to state validation."
+            )
+          }
         } else {
           pendingTasks += updated
         }
@@ -653,12 +671,47 @@ class TrieNodeHealingCoordinator(
     tasks.foreach { task =>
       val updated = task.copy(retries = task.retries + 1)
       if (updated.retries >= maxRetriesPerTask) {
-        abandoned += 1
-        abandonedTaskCount += 1
-        log.warning(
-          s"Giving up on trie node ${Hex.toHexString(task.hash.take(4).toArray)} after $maxRetriesPerTask retries. " +
-            s"Deferring to state validation phase — node will be re-discovered and fetched during trie walk."
-        )
+        if (task.hash == stateRoot) {
+          // D4 — never permanently abandon the state root node.
+          // The root cannot be recovered by regular sync on-demand — without it no block can execute.
+          // Re-queue with reset retries. Mark the timed-out peer stateless so HealingAllPeersStateless
+          // fires when all peers have exhausted root fetch attempts, triggering a pivot refresh.
+          rootFetchFailures += 1
+          log.warning(
+            s"[HEAL-ROOT-RETRY] Root node ${Hex.toHexString(stateRoot.take(4).toArray)} timed out " +
+              s"$maxRetriesPerTask times on peer ${peer.id.value} " +
+              s"(cumulative root failures: $rootFetchFailures). Re-queuing — root is never abandoned (Besu D4)."
+          )
+          val resetEntry = task.copy(retries = 0)
+          pendingTasks += resetEntry
+          pendingHashSet += resetEntry.hash
+          requeued += 1
+          // Treat a timeout-exhausted peer the same as an empty-response peer for the root node.
+          // This ensures HealingAllPeersStateless fires when all peers fail on the root.
+          if (!peer.isStatic) {
+            statelessPeers += peer.id.value
+            statelessRemoteAddresses += peer.remoteAddress.toString
+            log.info(
+              s"[HEAL-ROOT-RETRY] Peer ${peer.id.value} marked stateless for root after $maxRetriesPerTask timeouts " +
+                s"(${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
+            )
+            if (statelessPeers.size >= knownAvailablePeers.size && knownAvailablePeers.nonEmpty && !pivotRefreshRequested) {
+              pivotRefreshRequested = true
+              log.warning(
+                s"[HEAL-ROOT-RETRY] All ${statelessPeers.size} peers exhausted on root " +
+                  s"${Hex.toHexString(stateRoot.take(4).toArray)} — requesting pivot refresh."
+              )
+              snapSyncController ! SNAPSyncController.HealingAllPeersStateless
+            }
+          }
+        } else {
+          abandoned += 1
+          abandonedTaskCount += 1
+          log.warning(
+            s"Giving up on trie node ${Hex.toHexString(task.hash.take(4).toArray)} after $maxRetriesPerTask retries. " +
+              s"Deferring to state validation phase — node will be re-discovered and fetched during trie walk."
+          )
+        }
       } else {
         pendingTasks += updated
         requeued += 1

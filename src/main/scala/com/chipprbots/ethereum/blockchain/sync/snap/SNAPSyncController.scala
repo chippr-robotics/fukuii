@@ -112,6 +112,17 @@ class SNAPSyncController(
   private var consecutivePivotRefreshes: Int = 0
   private val MaxConsecutivePivotRefreshes = 3
 
+  // Healing pivot refresh counter: tracks consecutive pivots where all peers fail to serve
+  // the root node during healing. After MaxHealingPivotRefreshes, fall back to the
+  // state-download pivot (whose state IS in the DB) instead of cycling indefinitely.
+  private var healingPivotRefreshes: Int = 0
+  private val MaxHealingPivotRefreshes = 6
+
+  // The pivot used for the actual state download (account/storage ranges).
+  // Saved before the pre-healing pivot switch so we can fall back to it if the
+  // new pivot's root is unservable by the current ETC SNAP peer set.
+  private var stateDownloadPivot: Option[BigInt] = None
+
   // Pending pivot refresh: when refreshPivotInPlace() needs a header from a peer,
   // it requests a bootstrap and stores the pending pivot here. When BootstrapComplete
   // arrives in the syncing state, the refresh is completed.
@@ -377,6 +388,7 @@ class SNAPSyncController(
     case ProgressNodesHealed(count) =>
       progressMonitor.incrementNodesHealed(count)
       consecutiveUnproductiveHealingRounds = 0 // Reset — healing made progress
+      if (count > 0) healingPivotRefreshes = 0  // Root was served — reset healing fallback counter
 
     case ProgressAccountEstimate(estimatedTotal) =>
       progressMonitor.updateEstimates(accounts = estimatedTotal)
@@ -575,8 +587,15 @@ class SNAPSyncController(
     // state transitions. Stale messages from stopped coordinators are logged and dropped.
     case HealingAllPeersStateless
         if currentPhase == StateHealing && trieNodeHealingCoordinator.contains(sender()) =>
-      log.warning("All healing peers stateless — refreshing pivot in-place for healing")
-      refreshPivotInPlace("all healing peers stateless")
+      healingPivotRefreshes += 1
+      log.warning(
+        s"All healing peers stateless — pivot refresh $healingPivotRefreshes/$MaxHealingPivotRefreshes"
+      )
+      if (healingPivotRefreshes >= MaxHealingPivotRefreshes) {
+        attemptHealingFallbackToStateDownloadPivot()
+      } else {
+        refreshPivotInPlace("all healing peers stateless")
+      }
 
     case HealingAllPeersStateless if currentPhase == StateHealing =>
       log.debug(s"Ignoring HealingAllPeersStateless from non-current coordinator (${sender().path.name})")
@@ -797,10 +816,14 @@ class SNAPSyncController(
       // not from local chain download progress. This ensures healing always starts from a
       // root within the SNAP serve window (~64 blocks from head).
       val currentPivot = pivotBlock.getOrElse(BigInt(0))
+      // Save the state-download pivot before switching — used as fallback if the new pivot's
+      // root is unservable by the ETC SNAP peer set after MaxHealingPivotRefreshes attempts.
+      stateDownloadPivot = pivotBlock
       log.info(
         s"Pre-healing pivot switch: refreshing from pivot $currentPivot to network head " +
           s"before seeding healing coordinator " +
-          s"(mirrors Besu startTrieHeal → switchToNewPivotBlock unconditionally)."
+          s"(mirrors Besu startTrieHeal → switchToNewPivotBlock unconditionally). " +
+          s"State-download pivot saved for fallback: $currentPivot"
       )
       refreshPivotInPlace("pre-healing pivot switch")
       // startStateHealing() called from completePivotRefreshWithStateRoot()
@@ -1934,6 +1957,7 @@ class SNAPSyncController(
 
       val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
 
+      coordinatorGeneration += 1
       trieNodeHealingCoordinator = Some(
         context.actorOf(
           actors.TrieNodeHealingCoordinator
@@ -2446,6 +2470,50 @@ class SNAPSyncController(
     lastAccountProgressMs = System.currentTimeMillis()
     refreshPivotInPlace(s"account stall: $context")
   }
+
+  /** After MaxHealingPivotRefreshes consecutive pivot refreshes all fail to serve the root node,
+    * attempt to finalize at the state-download pivot whose state IS in the MPT DB.
+    * This is the last-resort path when the ETC SNAP peer set cannot serve any recent pivot's root.
+    */
+  private def attemptHealingFallbackToStateDownloadPivot(): Unit =
+    stateDownloadPivot match {
+      case Some(savedPivot) =>
+        blockchainReader.getBlockHeaderByNumber(savedPivot) match {
+          case Some(header) =>
+            val readonlyMpt = stateStorage.getReadOnlyStorage
+            val rootExists =
+              try { readonlyMpt.get(header.stateRoot.toArray); true }
+              catch { case _: Exception => false }
+            if (rootExists) {
+              log.warning(
+                s"[HEAL-FALLBACK] Root unservable after $MaxHealingPivotRefreshes pivot refreshes. " +
+                  s"Falling back to state-download pivot $savedPivot " +
+                  s"(root ${header.stateRoot.take(4).toArray.map("%02x".format(_)).mkString} IS in DB). " +
+                  s"Regular sync will start from $savedPivot with valid state."
+              )
+              pivotBlock = Some(savedPivot)
+              finalizeSnapSync(savedPivot)
+            } else {
+              log.warning(
+                s"[HEAL-FALLBACK] State-download pivot $savedPivot root also missing. " +
+                  s"Resetting heal counter and retrying pivot refresh."
+              )
+              healingPivotRefreshes = 0
+              refreshPivotInPlace("heal fallback — state-download root missing, retrying")
+            }
+          case None =>
+            log.warning(
+              s"[HEAL-FALLBACK] State-download pivot $savedPivot header not found. " +
+                s"Resetting heal counter and retrying pivot refresh."
+            )
+            healingPivotRefreshes = 0
+            refreshPivotInPlace("heal fallback — state-download pivot header missing")
+        }
+      case None =>
+        log.warning("[HEAL-FALLBACK] No state-download pivot recorded. Resetting counter and retrying.")
+        healingPivotRefreshes = 0
+        refreshPivotInPlace("heal fallback — no saved pivot")
+    }
 
   private def completeSnapSync(): Unit =
     pivotBlock.foreach { pivot =>
