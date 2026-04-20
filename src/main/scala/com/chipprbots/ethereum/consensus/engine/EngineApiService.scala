@@ -452,25 +452,7 @@ class EngineApiService(
         Left("invalid forkchoice state: finalized block is not an ancestor of head")
       } else {
 
-        // Validate payload attributes BEFORE applying forkchoice. Per Engine API spec +
-        // hive 'Invalid PayloadAttributes' test: when we reject the FCU with -38003, the
-        // forkchoice state must NOT be applied (HeaderByNumber should still reflect the
-        // prior head). Moving the attrs-check above applyForkChoiceState keeps that
-        // invariant.
-        val invalidAttrsMsg: Option[String] = payloadAttributes.flatMap { attrs =>
-          if (attrs.timestamp == 0) Some("invalid payload attributes: zero timestamp")
-          else {
-            blockchainReader.getBlockHeaderByHash(forkChoiceState.headBlockHash).flatMap { parent =>
-              if (attrs.timestamp <= parent.unixTimestamp)
-                Some("invalid payload attributes: timestamp too low")
-              else None
-            }
-          }
-        }
-        if (invalidAttrsMsg.isDefined) {
-          EngineApiMetrics.recordForkchoiceUpdated("INVALID")
-          Left("ATTR:" + invalidAttrsMsg.get)
-        } else forkChoiceManager.applyForkChoiceState(forkChoiceState) match {
+        forkChoiceManager.applyForkChoiceState(forkChoiceState) match {
           case Left(_) =>
             // Head not known — return SYNCING so CL knows we need newPayload
             EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
@@ -488,7 +470,24 @@ class EngineApiService(
               }
             }
 
-            {
+            // Validate payload attributes AFTER applying forkchoice — per engine-API spec
+            // step ordering (apply forkchoiceState, THEN check attrs) and hive's
+            // 'Invalid PayloadAttributes' test, which asserts the forkchoice IS applied
+            // even when attrs are rejected with -38003.
+            val invalidAttrsMsg: Option[String] = payloadAttributes.flatMap { attrs =>
+              if (attrs.timestamp == 0) Some("invalid payload attributes: zero timestamp")
+              else {
+                blockchainReader.getBlockHeaderByHash(forkChoiceState.headBlockHash).flatMap { parent =>
+                  if (attrs.timestamp <= parent.unixTimestamp)
+                    Some("invalid payload attributes: timestamp too low")
+                  else None
+                }
+              }
+            }
+            if (invalidAttrsMsg.isDefined) {
+              EngineApiMetrics.recordForkchoiceUpdated("INVALID")
+              Left("ATTR:" + invalidAttrsMsg.get)
+            } else {
 
               val payloadId = payloadAttributes.map { attrs =>
                 // Deterministic payload ID MUST be unique for every distinct attribute
