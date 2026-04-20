@@ -355,7 +355,8 @@ trait NetworkPeerManagerActorBuilder {
         peerEventBus,
         storagesInstance.storages.appStateStorage,
         forkResolverOpt,
-        evmCodeStorage = Some(storagesInstance.storages.evmCodeStorage)
+        evmCodeStorage = Some(storagesInstance.storages.evmCodeStorage),
+        mptStorageOpt = Some(storagesInstance.storages.stateStorage.getReadOnlyStorage)
       ),
     "network-peer-manager"
   )

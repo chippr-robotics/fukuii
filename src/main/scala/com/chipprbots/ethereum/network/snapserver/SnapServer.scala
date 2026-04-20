@@ -1,0 +1,432 @@
+package com.chipprbots.ethereum.network.snapserver
+
+import org.apache.pekko.util.ByteString
+
+import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.mpt._
+import com.chipprbots.ethereum.network.p2p.messages.SNAP._
+import com.chipprbots.ethereum.rlp
+import com.chipprbots.ethereum.utils.Logger
+
+/** Server-side SNAP/1 helpers — Merkle Patricia Trie range traversal and Merkle proof
+  * generation for incoming `GetAccountRange`, `GetStorageRanges`, and `GetTrieNodes`
+  * requests from peers.
+  *
+  * The traversal walks the trie in nibble (key) order and yields `(keyHash, valueRLP)`
+  * pairs strictly between the requested `[origin, limit]` bounds, stopping once the
+  * accumulated response size exceeds `responseBytes` (per SNAP/1 spec, the server may
+  * truncate the response prefix early — but must always emit at least one item if any
+  * exists in the range).
+  *
+  * For each non-empty range we also emit a proof: the path from the root to the first
+  * returned key, and (if more than one item is emitted) the path from the root to the
+  * last returned key. These let the requester rebuild a partial trie and verify the
+  * range is contiguous against the claimed root hash.
+  */
+object SnapServer extends Logger {
+
+  /** Convert a 32-byte hash into its 64-nibble key path. */
+  def hashToNibbles(hash: ByteString): Array[Byte] = {
+    val out = new Array[Byte](hash.size * 2)
+    var i = 0
+    while (i < hash.size) {
+      val b = hash(i) & 0xff
+      out(i * 2) = ((b >>> 4) & 0x0f).toByte
+      out(i * 2 + 1) = (b & 0x0f).toByte
+      i += 1
+    }
+    out
+  }
+
+  /** Convert a 64-nibble key path back to a 32-byte hash. Returns None if length is odd. */
+  def nibblesToHash(nibbles: Array[Byte]): Option[ByteString] = {
+    if (nibbles.length % 2 != 0) None
+    else {
+      val out = new Array[Byte](nibbles.length / 2)
+      var i = 0
+      while (i < out.length) {
+        out(i) = (((nibbles(i * 2) & 0x0f) << 4) | (nibbles(i * 2 + 1) & 0x0f)).toByte
+        i += 1
+      }
+      Some(ByteString(out))
+    }
+  }
+
+  /** Compare two nibble arrays lexicographically (treating each nibble as a digit 0..15). */
+  private def cmpNibbles(a: Array[Byte], b: Array[Byte]): Int = {
+    val len = math.min(a.length, b.length)
+    var i = 0
+    while (i < len) {
+      val cmp = (a(i) & 0xff) - (b(i) & 0xff)
+      if (cmp != 0) return cmp
+      i += 1
+    }
+    a.length - b.length
+  }
+
+  private def isEmptyRoot(root: ByteString): Boolean =
+    root.toArray.sameElements(MerklePatriciaTrie.EmptyRootHash)
+
+  /** Resolve a node (which may be a HashNode pointer) into its concrete form. */
+  private def resolve(node: MptNode, storage: MptStorage): MptNode = node match {
+    case HashNode(hash) =>
+      try storage.get(hash)
+      catch { case _: Throwable => NullNode }
+    case other => other
+  }
+
+  /** Read the root node of a trie by its hash. Returns NullNode if missing. */
+  private def fetchRootNode(rootHash: ByteString, storage: MptStorage): MptNode =
+    try storage.get(rootHash.toArray)
+    catch { case _: Throwable => NullNode }
+
+  /** RLP-encode a node and emit its keccak256 hash + encoded bytes. Used when collecting
+    * proof nodes — peers verify by re-hashing each proof node and matching against
+    * parent references.
+    */
+  private def encodeNodeWithHash(node: MptNode): (ByteString, ByteString) = {
+    val encoded = MptTraversals.encodeNode(node)
+    val hash = ByteString(kec256(encoded))
+    (hash, ByteString(encoded))
+  }
+
+  /** Range walker — yields (keyHash, leafValue) pairs whose key falls in
+    * [originNibbles, limitNibbles] (inclusive on both ends), traversing the trie in key
+    * order. Caller stops consuming when their byte budget is exceeded.
+    */
+  private def walkRange(
+      root: MptNode,
+      storage: MptStorage,
+      originNibbles: Array[Byte],
+      limitNibbles: Array[Byte]
+  ): Iterator[(ByteString, ByteString)] = {
+
+    def descend(node: MptNode, prefix: Array[Byte]): Iterator[(ByteString, ByteString)] = {
+      // Cull entire subtrees outside the range. If the nibble path "prefix" cannot
+      // possibly extend to a key in [origin, limit], skip the subtree.
+      val cmpHigh = cmpNibbles(prefix, limitNibbles)
+      // If prefix is strictly longer than limit and limit is a strict prefix of prefix,
+      // we're already past — but cmpNibbles handles the simple case below.
+      if (cmpHigh > 0) {
+        // prefix > limit: nothing in this subtree can be <= limit
+        Iterator.empty
+      } else {
+        resolve(node, storage) match {
+          case NullNode => Iterator.empty
+
+          case LeafNode(key, value, _, _, _) =>
+            val fullKey = prefix ++ key.toArray
+            if (cmpNibbles(fullKey, originNibbles) >= 0 && cmpNibbles(fullKey, limitNibbles) <= 0) {
+              nibblesToHash(fullKey) match {
+                case Some(h) => Iterator.single((h, value))
+                case None    => Iterator.empty
+              }
+            } else Iterator.empty
+
+          case ExtensionNode(sharedKey, next, _, _, _) =>
+            val newPrefix = prefix ++ sharedKey.toArray
+            descend(next, newPrefix)
+
+          case BranchNode(children, terminator, _, _, _) =>
+            val termIter: Iterator[(ByteString, ByteString)] = terminator match {
+              case Some(value) =>
+                if (cmpNibbles(prefix, originNibbles) >= 0 && cmpNibbles(prefix, limitNibbles) <= 0) {
+                  nibblesToHash(prefix) match {
+                    case Some(h) => Iterator.single((h, value))
+                    case None    => Iterator.empty
+                  }
+                } else Iterator.empty
+              case None => Iterator.empty
+            }
+            // Walk children 0..15 in nibble order, but only those that could contain
+            // a key in the range.
+            val childIters = (0 until 16).iterator.flatMap { nibble =>
+              val childPrefix = prefix :+ nibble.toByte
+              if (cmpNibbles(childPrefix, originNibbles ++ Array.fill(originNibbles.length)(15.toByte)) > 0 &&
+                  cmpNibbles(childPrefix, limitNibbles) > 0) {
+                Iterator.empty
+              } else if (children(nibble) == NullNode) {
+                Iterator.empty
+              } else {
+                descend(children(nibble), childPrefix)
+              }
+            }
+            termIter ++ childIters
+
+          case _: HashNode => Iterator.empty // resolve() above prevents reaching here
+        }
+      }
+    }
+
+    descend(root, Array.emptyByteArray)
+  }
+
+  /** Collect the proof path for a given key — the nodes traversed from root to the leaf
+    * (or the deepest reachable node along the path if the key is absent). The proof is
+    * returned as a sequence of RLP-encoded MPT nodes (with each node's keccak hash
+    * available to the caller for de-duplication).
+    */
+  private def proofFor(
+      root: MptNode,
+      storage: MptStorage,
+      keyNibbles: Array[Byte]
+  ): Seq[ByteString] = {
+    val acc = scala.collection.mutable.ArrayBuffer.empty[ByteString]
+
+    def descend(node: MptNode, remaining: Array[Byte]): Unit = {
+      val resolved = resolve(node, storage)
+      resolved match {
+        case NullNode => ()
+        case _ =>
+          acc += ByteString(MptTraversals.encodeNode(resolved))
+          resolved match {
+            case LeafNode(_, _, _, _, _) => ()
+            case ExtensionNode(sharedKey, next, _, _, _) =>
+              val sk = sharedKey.toArray
+              if (remaining.length >= sk.length && remaining.take(sk.length).sameElements(sk)) {
+                descend(next, remaining.drop(sk.length))
+              }
+            case BranchNode(children, _, _, _, _) =>
+              if (remaining.nonEmpty) {
+                val nibble = remaining(0) & 0x0f
+                val child = children(nibble)
+                if (child != NullNode) descend(child, remaining.drop(1))
+              }
+            case _ => ()
+          }
+      }
+    }
+
+    descend(root, keyNibbles)
+    acc.toSeq
+  }
+
+  /** Build an `AccountRange` response by walking the state trie at `rootHash` between
+    * `startingHash` and `limitHash`, emitting accounts whose RLP totals up to (but
+    * generally not exceeding) `responseBytes`. Always emits at least one account if any
+    * fall in the range.
+    */
+  def serveAccountRange(
+      requestId: BigInt,
+      rootHash: ByteString,
+      startingHash: ByteString,
+      limitHash: ByteString,
+      responseBytes: BigInt,
+      storage: MptStorage
+  ): AccountRange = {
+    if (isEmptyRoot(rootHash)) return AccountRange(requestId, Seq.empty, Seq.empty)
+
+    val rootNode = fetchRootNode(rootHash, storage)
+    if (rootNode == NullNode) {
+      log.debug("SNAP serveAccountRange: root {} not in storage", rootHash.take(4))
+      return AccountRange(requestId, Seq.empty, Seq.empty)
+    }
+
+    val originNibbles = hashToNibbles(startingHash)
+    val limitNibbles = hashToNibbles(limitHash)
+    val maxBytes = math.max(responseBytes.toInt, 0)
+
+    import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits._
+    val collected = scala.collection.mutable.ArrayBuffer.empty[(ByteString, com.chipprbots.ethereum.domain.Account)]
+    var accumulated = 0
+    val it = walkRange(rootNode, storage, originNibbles, limitNibbles)
+    while (it.hasNext && (accumulated < maxBytes || collected.isEmpty)) {
+      val (keyHash, accountRlp) = it.next()
+      val account = accountRlp.toArray.toAccount
+      collected += ((keyHash, account))
+      accumulated += keyHash.size + accountRlp.size + 4
+    }
+
+    // Build proof: path to the first account (or to startingHash if none in range), and
+    // path to the last account if more than one was emitted.
+    val proof: Seq[ByteString] = {
+      val firstKey = collected.headOption.map(_._1).getOrElse(startingHash)
+      val lastKey = collected.lastOption.map(_._1).getOrElse(startingHash)
+      val firstProof = proofFor(rootNode, storage, hashToNibbles(firstKey))
+      if (firstKey == lastKey) firstProof
+      else firstProof ++ proofFor(rootNode, storage, hashToNibbles(lastKey))
+    }
+    // De-duplicate proof nodes (some appear on both paths).
+    val dedupedProof = proof.distinct
+
+    AccountRange(requestId, collected.toSeq, dedupedProof)
+  }
+
+  /** Build a `StorageRanges` response — for each account, walk the per-account storage
+    * trie between `startingHash` and `limitHash`. Only the first account's range is
+    * proved (per SNAP/1 spec — subsequent accounts are returned in full, no proof).
+    */
+  def serveStorageRanges(
+      requestId: BigInt,
+      rootHash: ByteString,
+      accountHashes: Seq[ByteString],
+      startingHash: ByteString,
+      limitHash: ByteString,
+      responseBytes: BigInt,
+      storage: MptStorage,
+      accountRoot: ByteString => Option[ByteString]
+  ): StorageRanges = {
+    if (isEmptyRoot(rootHash)) return StorageRanges(requestId, Seq.empty, Seq.empty)
+
+    val maxBytes = math.max(responseBytes.toInt, 0)
+    var accumulated = 0
+    val perAccount = scala.collection.mutable.ArrayBuffer.empty[Seq[(ByteString, ByteString)]]
+    var firstProof: Seq[ByteString] = Seq.empty
+    var done = false
+    val it = accountHashes.iterator
+    while (it.hasNext && !done) {
+      val accountHash = it.next()
+      accountRoot(accountHash) match {
+        case None =>
+          // Account or its storage root unknown — skip.
+          perAccount += Seq.empty
+        case Some(storageRoot) =>
+          if (isEmptyRoot(storageRoot)) {
+            perAccount += Seq.empty
+          } else {
+            val rootNode = fetchRootNode(storageRoot, storage)
+            if (rootNode == NullNode) {
+              perAccount += Seq.empty
+            } else {
+              // First account uses the requested [start, limit] range; subsequent
+              // accounts are returned in FULL.
+              val (originN, limitN) =
+                if (perAccount.isEmpty)
+                  (hashToNibbles(startingHash), hashToNibbles(limitHash))
+                else
+                  (
+                    hashToNibbles(ByteString(new Array[Byte](32))),
+                    hashToNibbles(ByteString(Array.fill[Byte](32)(0xff.toByte)))
+                  )
+              val collected = scala.collection.mutable.ArrayBuffer.empty[(ByteString, ByteString)]
+              val rangeIt = walkRange(rootNode, storage, originN, limitN)
+              while (rangeIt.hasNext && (accumulated < maxBytes || (perAccount.isEmpty && collected.isEmpty))) {
+                val (k, v) = rangeIt.next()
+                collected += ((k, v))
+                accumulated += k.size + v.size + 4
+              }
+              if (perAccount.isEmpty)
+                firstProof = {
+                  val first = collected.headOption.map(_._1).getOrElse(startingHash)
+                  val last = collected.lastOption.map(_._1).getOrElse(startingHash)
+                  val pf = proofFor(rootNode, storage, hashToNibbles(first))
+                  val pl = if (first == last) pf else pf ++ proofFor(rootNode, storage, hashToNibbles(last))
+                  pl.distinct
+                }
+              perAccount += collected.toSeq
+              if (accumulated >= maxBytes) done = true
+            }
+          }
+      }
+    }
+
+    StorageRanges(requestId, perAccount.toSeq, firstProof)
+  }
+
+  /** Build a `TrieNodes` response — look up each requested HP-encoded path from `rootHash`
+    * and return the raw RLP-encoded node found at that path. Missing nodes yield empty
+    * bytes per SNAP/1 spec.
+    */
+  def serveTrieNodes(
+      requestId: BigInt,
+      rootHash: ByteString,
+      paths: Seq[Seq[ByteString]],
+      responseBytes: BigInt,
+      storage: MptStorage
+  ): TrieNodes = {
+    val maxBytes = math.max(responseBytes.toInt, 0)
+    var accumulated: Int = 0
+
+    val rootNode = fetchRootNode(rootHash, storage)
+    val collected = scala.collection.mutable.ArrayBuffer.empty[ByteString]
+
+    if (rootNode == NullNode) {
+      // Root not found — return one empty entry per request, truncated to budget.
+      var idx = 0
+      while (idx < paths.size && (accumulated < maxBytes || collected.isEmpty)) {
+        collected += ByteString.empty
+        accumulated = accumulated + 1
+        idx += 1
+      }
+    } else {
+      var idx = 0
+      while (idx < paths.size && (accumulated < maxBytes || collected.isEmpty)) {
+        val pathSet = paths(idx)
+        // Single-element paths reference an account-trie node. Multi-element paths
+        // reference storage-trie nodes inside an account — not yet implemented.
+        if (pathSet.size == 1) {
+          val keyBytes = pathSet.head.toArray
+          val nibbles = decodeHpPath(keyBytes)
+          collectNodeAtPath(rootNode, storage, nibbles) match {
+            case Some(enc) =>
+              collected += enc
+              accumulated = accumulated + enc.size
+            case None =>
+              collected += ByteString.empty
+              accumulated = accumulated + 1
+          }
+        } else {
+          collected += ByteString.empty
+          accumulated = accumulated + 1
+        }
+        idx += 1
+      }
+    }
+
+    TrieNodes(requestId, collected.toSeq)
+  }
+
+  /** Decode an HP-encoded (Hex Prefix, EIP-2 / yellow-paper) path back to its nibble
+    * representation. Drops the leaf/extension flag bit.
+    */
+  private def decodeHpPath(bytes: Array[Byte]): Array[Byte] = {
+    if (bytes.isEmpty) return Array.emptyByteArray
+    val firstByte = bytes(0) & 0xff
+    val oddLen = (firstByte & 0x10) != 0
+    val skipFirst = if (oddLen) 0 else 1
+    val firstNibble = if (oddLen) Array((firstByte & 0x0f).toByte) else Array.empty[Byte]
+    val rest = bytes.drop(1).flatMap { b =>
+      Array(((b >>> 4) & 0x0f).toByte, (b & 0x0f).toByte)
+    }
+    firstNibble ++ rest.drop(skipFirst - 1).take(rest.length - (skipFirst - 1))
+  }
+
+  /** Walk the trie following `nibbles` and return the encoded node found at that exact
+    * path (as a raw MPT node), or None if the path doesn't terminate cleanly at a node.
+    */
+  private def collectNodeAtPath(
+      root: MptNode,
+      storage: MptStorage,
+      nibbles: Array[Byte]
+  ): Option[ByteString] = {
+
+    def descend(node: MptNode, remaining: Array[Byte]): Option[ByteString] = {
+      val resolved = resolve(node, storage)
+      if (remaining.isEmpty) {
+        Some(ByteString(MptTraversals.encodeNode(resolved)))
+      } else {
+        resolved match {
+          case NullNode => None
+          case LeafNode(key, _, _, _, _) =>
+            val k = key.toArray
+            if (remaining.sameElements(k)) Some(ByteString(MptTraversals.encodeNode(resolved)))
+            else None
+          case ExtensionNode(sharedKey, next, _, _, _) =>
+            val sk = sharedKey.toArray
+            if (remaining.length >= sk.length && remaining.take(sk.length).sameElements(sk))
+              descend(next, remaining.drop(sk.length))
+            else None
+          case BranchNode(children, _, _, _, _) =>
+            val nibble = remaining(0) & 0x0f
+            val child = children(nibble)
+            if (child == NullNode) None
+            else descend(child, remaining.drop(1))
+          case _: HashNode => None // resolve handles
+        }
+      }
+    }
+
+    descend(root, nibbles)
+  }
+}
