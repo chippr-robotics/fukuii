@@ -491,6 +491,10 @@ class SyncController(
         // may differ from the pivot block header's stateRoot. The trie nodes are stored under
         // the finalized root's hash, but the pivot header references the original (now orphaned) root.
         // Fix: substitute the finalized root into the pivot block header.
+        // If no valid root can be found (neither pivot nor finalized root exists in the MPT DB),
+        // the SnapSyncDone flag was written for a pivot whose state was never downloaded — clear it
+        // and restart SNAP sync so healing runs against a valid state root.
+        var snapRestartNeeded = false
         bestBlockHeader.foreach { header =>
           val mptStorage = stateStorage.getReadOnlyStorage
           val pivotRootExists =
@@ -521,22 +525,52 @@ class SyncController(
                   )
                   val updatedHeader = header.copy(stateRoot = fRoot)
                   blockchainWriter.storeBlockHeader(updatedHeader).commit()
+                } else {
+                  log.warning(
+                    "Pivot state root {} MISSING and finalized root {} also MISSING — " +
+                      "SnapSyncDone was set for a pivot whose state was never downloaded. " +
+                      "Clearing SnapSyncDone to re-run SNAP sync healing.",
+                    header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString,
+                    fRoot.take(8).toArray.map("%02x".format(_)).mkString
+                  )
+                  snapRestartNeeded = true
                 }
               case None =>
-                log.error(
-                  "Pivot state root {} MISSING and no finalized root stored! " +
-                    "Database is in an unrecoverable state — clear data and re-sync.",
+                log.warning(
+                  "Pivot state root {} MISSING and no finalized root stored — " +
+                    "SnapSyncDone was set for a pivot whose state was never downloaded " +
+                    "(likely due to pre-healing pivot switch advancing bestBlock ahead of downloaded state). " +
+                    "Clearing SnapSyncDone to re-run SNAP sync healing.",
                   header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString
                 )
+                snapRestartNeeded = true
             }
           }
         }
-        val needBytecode = !appStateStorage.isBytecodeRecoveryDone()
-        val needStorage = !appStateStorage.isStorageRecoveryDone()
-        if (needBytecode || needStorage) {
-          startRecovery(needBytecode, needStorage)
+        if (snapRestartNeeded) {
+          appStateStorage.clearSnapSyncDone().commit()
+          startSnapSync()
         } else {
-          startRegularSync()
+          // Besu alignment: healing is mandatory before sync is complete.
+          // If SnapSyncDone was set by the old deferred-merkleization path (which skipped healing),
+          // clear the flag and re-enter SNAPSyncController so healing runs now.
+          val snapCfg = loadSnapSyncConfig()
+          if (!snapCfg.deferredMerkleization) {
+            log.warning(
+              "SnapSyncDone=true but deferred-merkleization=false — healing was skipped by a " +
+                "previous run. Clearing SnapSyncDone and re-entering SNAP sync for trie healing."
+            )
+            appStateStorage.clearSnapSyncDone().commit()
+            startSnapSync()
+          } else {
+            val needBytecode = !appStateStorage.isBytecodeRecoveryDone()
+            val needStorage = !appStateStorage.isStorageRecoveryDone()
+            if (needBytecode || needStorage) {
+              startRecovery(needBytecode, needStorage)
+            } else {
+              startRegularSync()
+            }
+          }
         }
       case (_, false, false, true) =>
         startFastSync()
