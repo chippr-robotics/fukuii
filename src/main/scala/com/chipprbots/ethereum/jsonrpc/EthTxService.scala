@@ -191,14 +191,35 @@ class EthTxService(
 
     Try(req.data.toArray.toSignedTransactionWithSidecar) match {
       case Success((signedTransaction, rawBytesOpt)) =>
-        if (SignedTransaction.getSender(signedTransaction).isDefined) {
-          pendingTransactionsManager ! PendingTransactionsManager.AddOrOverrideTransaction(
-            signedTransaction,
-            rawBytesOpt.map(org.apache.pekko.util.ByteString(_))
-          )
-          IO.pure(Right(SendRawTransactionResponse(signedTransaction.hash)))
-        } else {
+        if (SignedTransaction.getSender(signedTransaction).isEmpty) {
           IO.pure(Left(JsonRpcError.InvalidRequest))
+        } else {
+          // EIP-3860 (Shanghai+): reject contract-creation txs whose initcode exceeds the
+          // per-EVM-config maximum. Derived from the CURRENT chain tip's fork state, so
+          // we don't admit post-Shanghai-illegal txs into the pool when we're post-Shanghai.
+          val bestNum = blockchainReader.getBestBlockNumber()
+          val evmConfig = com.chipprbots.ethereum.vm.EvmConfig.forBlock(bestNum, blockchainConfig)
+          val tx = signedTransaction.tx
+          val initCodeTooLarge =
+            tx.isContractInit &&
+              evmConfig.eip3860Enabled &&
+              evmConfig.maxInitCodeSize.exists(max => tx.payload.size > max)
+          if (initCodeTooLarge) {
+            IO.pure(
+              Left(
+                JsonRpcError.InvalidParams(
+                  s"INITCODE_SIZE_EXCEEDED: initcode size ${tx.payload.size} exceeds max " +
+                    s"${evmConfig.maxInitCodeSize.getOrElse(BigInt(0))}"
+                )
+              )
+            )
+          } else {
+            pendingTransactionsManager ! PendingTransactionsManager.AddOrOverrideTransaction(
+              signedTransaction,
+              rawBytesOpt.map(org.apache.pekko.util.ByteString(_))
+            )
+            IO.pure(Right(SendRawTransactionResponse(signedTransaction.hash)))
+          }
         }
       case Failure(_) =>
         IO.pure(Left(JsonRpcError.InvalidRequest))
