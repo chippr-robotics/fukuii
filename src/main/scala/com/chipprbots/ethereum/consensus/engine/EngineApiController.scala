@@ -123,13 +123,26 @@ class EngineApiController(
         val InvalidParams = -32602
         // Per engine-api spec and hive's engine-cancun / engine-withdrawals suites:
         //   -32602 (Invalid params): payload shape is wrong for the RPC version (e.g.
-        //     V3 called pre-Cancun, V2 payload missing withdrawals post-Shanghai)
-        //   -38005 (Unsupported fork): the RPC method itself is not for this fork family
+        //     V3 called pre-Cancun with V1-shape payload missing all Cancun fields)
+        //   -38005 (Unsupported fork): method is wrong for the fork — applies when the
+        //     payload IS shaped for Cancun (all Cancun fields present, even if zero) but
+        //     timestamp is pre-Cancun, OR when V1/V2 is called for a Cancun payload.
+        //
+        // For V3 pre-Cancun we have to distinguish the two cases:
+        //   - payload has all Cancun fields (blobGasUsed + excessBlobGas present) → -38005
+        //     (the CL sent a valid Cancun-shape payload to the wrong fork)
+        //   - at least one Cancun field is nil → -32602 (params shape wrong for method)
+        val hasAllCancunFields =
+          payload.blobGasUsed.isDefined && payload.excessBlobGas.isDefined
         val versionError: Option[(Int, String)] = version match {
+          case 3 if !isCancunPayload && hasAllCancunFields =>
+            Some(UnsupportedFork -> "newPayloadV3 cannot be used pre-Cancun")
           case 3 if !isCancunPayload =>
             Some(InvalidParams -> "newPayloadV3 cannot be used pre-Cancun, use V2")
           case 3 if !hasWithdrawals =>
             Some(InvalidParams -> "newPayloadV3 requires withdrawals field")
+          case 3 if !hasAllCancunFields =>
+            Some(InvalidParams -> "newPayloadV3 requires blobGasUsed and excessBlobGas")
           case 2 if isCancunPayload =>
             Some(UnsupportedFork -> "newPayloadV2 cannot be used post-Cancun, use V3")
           case 2 if isShanghaiPayload && !hasWithdrawals =>

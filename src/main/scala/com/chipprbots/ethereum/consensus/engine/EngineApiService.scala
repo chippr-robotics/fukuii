@@ -67,7 +67,30 @@ class EngineApiService(
     * these as head. Children of invalid blocks inherit the latestValidHash of their invalid parent.
     */
   private val invalidBlocks = new java.util.concurrent.ConcurrentHashMap[ByteString, ByteString]()
+  // Index of optimistically-accepted (by-hash-only) blocks, keyed by parentHash → set of child
+  // hashes. Used to recursively invalidate descendants when an ancestor is later revealed as
+  // INVALID. The hive "Invalid Missing Ancestor Syncing ReOrg" family (24 tests) hangs without
+  // this because the test waits up to its internal timeout for our client to detect the invalid
+  // chain through an optimistically-accepted descendant.
+  private val acceptedChildrenByParent =
+    new java.util.concurrent.ConcurrentHashMap[ByteString, java.util.Set[ByteString]]()
   private val zeroHash = ByteString(new Array[Byte](32))
+
+  /** Mark `hash` as INVALID and recursively invalidate every optimistically-accepted descendant.
+    * All descendants inherit the same `latestValidHash`.
+    */
+  private def markInvalidRecursive(hash: ByteString, lvh: ByteString): Unit = {
+    invalidBlocks.put(hash, lvh)
+    val children = Option(acceptedChildrenByParent.remove(hash))
+    children.foreach { set =>
+      val iter = set.iterator()
+      while (iter.hasNext) {
+        val child = iter.next()
+        blockchainWriter.removeBlockByHash(child).commit()
+        markInvalidRecursive(child, lvh)
+      }
+    }
+  }
 
   /** Return the latest block number from the blockchain storage. */
   def getLatestBlockNumber: BigInt =
@@ -97,16 +120,35 @@ class EngineApiService(
       blockchainWriter.removeBlockByHash(payload.blockHash).commit()
       parentOpt match {
         case Some(parent) =>
-          invalidBlocks.put(payload.blockHash, parent.hash)
+          markInvalidRecursive(payload.blockHash, parent.hash)
           PayloadStatusV1(
             Invalid,
             latestValidHash = Some(parent.hash),
             validationError = Some("block hash mismatch")
           )
         case None =>
-          invalidBlocks.put(payload.blockHash, zeroHash)
+          markInvalidRecursive(payload.blockHash, zeroHash)
           PayloadStatusV1(InvalidBlockHash("block hash mismatch"))
       }
+    } else if ({
+      // EIP-4844 versioned-hash check must run BEFORE the "already stored" dedup. The hive
+      // "NewPayloadV3 Versioned Hashes, Non-Empty Hashes" tests call newPayloadV3 twice for
+      // the same payload — once with matching hashes (expected VALID, block gets stored),
+      // and again with tampered hashes (expected INVALID). Without this early check the
+      // tampered second call hits the dedup branch and silently returns VALID.
+      payload.expectedBlobVersionedHashes.exists { expected =>
+        val payloadHashes: Seq[ByteString] =
+          block.body.transactionList.flatMap {
+            case stx if stx.tx.isInstanceOf[com.chipprbots.ethereum.domain.BlobTransaction] =>
+              stx.tx.asInstanceOf[com.chipprbots.ethereum.domain.BlobTransaction].blobVersionedHashes
+            case _ => Nil
+          }
+        expected != payloadHashes
+      }
+    }) {
+      // VersionedHashes mismatch: INVALID per EIP-4844 with latestValidHash=parent.hash.
+      val lvh = blockchainReader.getBlockHeaderByHash(payload.parentHash).map(_.hash).getOrElse(zeroHash)
+      PayloadStatusV1(Invalid, latestValidHash = Some(lvh), validationError = Some("INVALID_VERSIONED_HASHES"))
     } else if (
       blockchainReader.getBlockHeaderByHash(payload.blockHash).exists { h =>
         blockchainReader.getBlockHeaderByNumber(h.number).exists(_.hash == payload.blockHash)
@@ -118,8 +160,8 @@ class EngineApiService(
       // Parent was previously marked INVALID — child inherits invalidity.
       // Propagate the parent's latestValidHash (the last valid ancestor).
       val propagatedLvh = invalidBlocks.get(payload.parentHash) // non-null: containsKey guard
-      invalidBlocks.put(payload.blockHash, propagatedLvh)
       blockchainWriter.removeBlockByHash(payload.blockHash).commit()
+      markInvalidRecursive(payload.blockHash, propagatedLvh)
       EngineApiMetrics.recordNewPayload("INVALID", payload.blockNumber.toLong, payload.timestamp)
       PayloadStatusV1(
         Invalid,
@@ -195,8 +237,8 @@ class EngineApiService(
       val preExecError = headerInvalid.orElse(versionedHashesInvalid)
       if (preExecError.isDefined) {
         val latestValid = parentHeader.map(_.hash).getOrElse(zeroHash)
-        invalidBlocks.put(payload.blockHash, latestValid)
         blockchainWriter.removeBlockByHash(payload.blockHash).commit()
+        markInvalidRecursive(payload.blockHash, latestValid)
         EngineApiMetrics.recordNewPayload("INVALID", payload.blockNumber.toLong, payload.timestamp)
         PayloadStatusV1(Invalid, latestValidHash = Some(latestValid), validationError = Some(preExecError.get))
       } else {
@@ -218,8 +260,8 @@ class EngineApiService(
                     suppliedRequests != derivedRequests
                 if (requestsMismatch) {
                   val lvh = parentHeader.map(_.hash).getOrElse(zeroHash)
-                  invalidBlocks.put(payload.blockHash, lvh)
                   blockchainWriter.removeBlockByHash(payload.blockHash).commit()
+                  markInvalidRecursive(payload.blockHash, lvh)
                   executionErrorReason.set(
                     Some(
                       s"INVALID_REQUESTS: executionRequests mismatch " +
@@ -267,8 +309,8 @@ class EngineApiService(
                   case _ =>
                     // Genuine validation failure (wrong stateRoot, gasUsed, receipts, etc.)
                     val lvh = parentHeader.map(_.hash).getOrElse(zeroHash)
-                    invalidBlocks.put(payload.blockHash, lvh)
                     blockchainWriter.removeBlockByHash(payload.blockHash).commit()
+                    markInvalidRecursive(payload.blockHash, lvh)
                     executionErrorReason.set(Some(error.reason.toString))
                     System.err.println(
                       s"[ENGINE-API] newPayload #${payload.blockNumber}: INVALID: ${error.reason}"
@@ -313,6 +355,13 @@ class EngineApiService(
             // Parent unknown — store block BY HASH ONLY (not by number) so it doesn't
             // appear in eth_getBlockByNumber but can be deduped by hash.
             blockchainWriter.storeBlockByHashOnly(block).commit()
+            // Record parent→child so that if the (still-unknown) ancestor chain is later
+            // revealed as INVALID, we can retroactively invalidate this block too. Required
+            // by hive's "Invalid Missing Ancestor Syncing ReOrg" tests.
+            acceptedChildrenByParent.computeIfAbsent(
+              payload.parentHash,
+              _ => java.util.concurrent.ConcurrentHashMap.newKeySet[ByteString]()
+            ).add(payload.blockHash)
             System.err.println(
               s"[ENGINE-API] newPayload #${payload.blockNumber}: ACCEPTED (parent unknown)"
             )
