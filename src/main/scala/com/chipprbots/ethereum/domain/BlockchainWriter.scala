@@ -122,8 +122,19 @@ class BlockchainWriter(
       }
     }
     if (buf.nonEmpty) {
+      // Rewrite number→hash AND tx-location for every block on the newly canonical branch.
+      // Without the tx-location rewrite, eth_getTransactionReceipt returns the old (now
+      // sidechain) block via the stale mapping — hive's 'Transaction Re-Org, Re-Org to
+      // Different Block' checks that the receipt reflects the new canonical block.
       val batch = buf.foldLeft(blockNumberMappingStorage.emptyBatchUpdate) { case (acc, (num, hash)) =>
-        acc.and(blockNumberMappingStorage.put(num, hash))
+        val withNumberMapping = acc.and(blockNumberMappingStorage.put(num, hash))
+        reader.getBlockBodyByHash(hash) match {
+          case Some(body) =>
+            body.transactionList.zipWithIndex.foldLeft(withNumberMapping) { case (a, (tx, idx)) =>
+              a.and(transactionMappingStorage.put(tx.hash, TransactionLocation(hash, idx)))
+            }
+          case None => withNumberMapping
+        }
       }
       batch.commit()
     }

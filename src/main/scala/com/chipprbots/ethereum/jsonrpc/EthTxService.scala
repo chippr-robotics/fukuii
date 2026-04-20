@@ -117,6 +117,16 @@ class EthTxService(
       val result: Option[TransactionReceiptResponse] = for {
         TransactionLocation(blockHash, txIndex) <- transactionMappingStorage.get(req.txHash)
         Block(header, body) <- blockchainReader.getBlockByHash(blockHash)
+        // Only surface receipts for CANONICAL transactions. Under engine-API, a block
+        // may be stored (with receipts + tx-location mapping) immediately after newPayload
+        // but not promoted to canonical until a subsequent forkchoiceUpdated — hive's
+        // 'Transaction Re-Org' test expects eth_getTransactionReceipt to return nil
+        // in that window. Require BOTH (a) the block lives at its number in the canonical
+        // index, AND (b) its number is <= the client's best-block pointer (i.e. FCU has
+        // advanced past it). (a) alone is true right after newPayload's storeBlock but
+        // (b) flips only when the subsequent FCU updates saveBestKnownBlocks.
+        _ <- blockchainReader.getBlockHeaderByNumber(header.number).filter(_.hash == blockHash)
+        bestNum = blockchainReader.getBestBlockNumber() if header.number <= bestNum
         stx <- body.transactionList.lift(txIndex)
         receipts <- blockchainReader.getReceiptsByHash(blockHash)
         receipt: Receipt <- receipts.lift(txIndex)
@@ -191,14 +201,38 @@ class EthTxService(
 
     Try(req.data.toArray.toSignedTransactionWithSidecar) match {
       case Success((signedTransaction, rawBytesOpt)) =>
-        if (SignedTransaction.getSender(signedTransaction).isDefined) {
-          pendingTransactionsManager ! PendingTransactionsManager.AddOrOverrideTransaction(
-            signedTransaction,
-            rawBytesOpt.map(org.apache.pekko.util.ByteString(_))
-          )
-          IO.pure(Right(SendRawTransactionResponse(signedTransaction.hash)))
-        } else {
+        if (SignedTransaction.getSender(signedTransaction).isEmpty) {
           IO.pure(Left(JsonRpcError.InvalidRequest))
+        } else {
+          // EIP-3860 (Shanghai+): reject contract-creation txs whose initcode exceeds the
+          // per-EVM-config maximum. Derived from the CURRENT chain tip's fork state. Must
+          // use the timestamp-aware forBlock variant — Shanghai activates by timestamp on
+          // post-merge chains, not block number.
+          val tip = blockchainReader.getBestBlock().map(_.header)
+          val bestNum = tip.map(_.number).getOrElse(blockchainReader.getBestBlockNumber())
+          val ts = tip.map(_.unixTimestamp).getOrElse(0L)
+          val evmConfig = com.chipprbots.ethereum.vm.EvmConfig.forBlock(bestNum, ts, blockchainConfig)
+          val tx = signedTransaction.tx
+          val initCodeTooLarge =
+            tx.isContractInit &&
+              evmConfig.eip3860Enabled &&
+              evmConfig.maxInitCodeSize.exists(max => tx.payload.size > max)
+          if (initCodeTooLarge) {
+            IO.pure(
+              Left(
+                JsonRpcError.InvalidParams(
+                  s"INITCODE_SIZE_EXCEEDED: initcode size ${tx.payload.size} exceeds max " +
+                    s"${evmConfig.maxInitCodeSize.getOrElse(BigInt(0))}"
+                )
+              )
+            )
+          } else {
+            pendingTransactionsManager ! PendingTransactionsManager.AddOrOverrideTransaction(
+              signedTransaction,
+              rawBytesOpt.map(org.apache.pekko.util.ByteString(_))
+            )
+            IO.pure(Right(SendRawTransactionResponse(signedTransaction.hash)))
+          }
         }
       case Failure(_) =>
         IO.pure(Left(JsonRpcError.InvalidRequest))
