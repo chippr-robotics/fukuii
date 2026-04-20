@@ -548,10 +548,31 @@ class EngineApiController(
       }
       .getOrElse(BigInt(0))
 
-    val bodies = (0L until count.toLong.min(1024L)).map { offset =>
-      engineApiService.getPayloadBodyByNumber(start + offset).map(encodePayloadBody).getOrElse(JNull)
-    }.toList
-    IO.pure(JsonRpcResponse("2.0", Some(JArray(bodies)), None, reqId(request)))
+    // Spec: start<1 or count<1 → -32602 invalid params.
+    if (start < 1 || count < 1) {
+      IO.pure(
+        JsonRpcResponse(
+          "2.0",
+          None,
+          Some(com.chipprbots.ethereum.jsonrpc.JsonRpcError.InvalidParams("start and count must be >= 1")),
+          reqId(request)
+        )
+      )
+    } else {
+      // Spec: truncate the response at the latest known canonical block — do NOT emit
+      // trailing nulls for numbers past the tip. Hive's GetPayloadBodiesByRange test
+      // checks the array length against min(count, latest-start+1).
+      val latest = engineApiService.getLatestBlockNumber
+      if (start > latest) {
+        IO.pure(JsonRpcResponse("2.0", Some(JArray(Nil)), None, reqId(request)))
+      } else {
+        val effectiveCount = count.min(latest - start + 1).min(1024)
+        val bodies = (0L until effectiveCount.toLong).map { offset =>
+          engineApiService.getPayloadBodyByNumber(start + offset).map(encodePayloadBody).getOrElse(JNull)
+        }.toList
+        IO.pure(JsonRpcResponse("2.0", Some(JArray(bodies)), None, reqId(request)))
+      }
+    }
   }
 
   private def encodePayloadBody(body: (Seq[ByteString], Option[Seq[org.json4s.JValue]])): JValue = {
