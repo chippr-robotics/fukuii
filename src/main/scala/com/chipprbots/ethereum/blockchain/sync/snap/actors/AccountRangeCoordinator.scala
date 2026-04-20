@@ -260,7 +260,7 @@ class AccountRangeCoordinator(
 
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
-  private val peerCooldownDefault = 30.seconds
+  private val peerCooldownDefault = 10.seconds // 30s was inconsistent with Healing (10s) and Storage (10s)
 
   private def isPeerCoolingDown(peer: Peer): Boolean =
     peerCooldownUntilMs.get(peer.id.value).exists(_ > System.currentTimeMillis())
