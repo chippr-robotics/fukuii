@@ -376,6 +376,10 @@ class EthTxServiceSpec
         )
       )
       .commit()
+    // eth_getTransactionReceipt now requires the block to be on the canonical chain
+    // (block.number <= bestBlockNumber). Promote the fixture block to best so the
+    // receipt surfaces — mirrors what ChainImporter/BlockImporter do on real imports.
+    blockchainWriter.saveBestKnownBlocks(blockWithTx.header.hash, blockWithTx.header.number)
 
     val request: GetTransactionReceiptRequest = GetTransactionReceiptRequest(contractCreatingTransaction.hash)
     val response: ServiceResponse[GetTransactionReceiptResponse] = ethTxService.getTransactionReceipt(request)

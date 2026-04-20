@@ -117,6 +117,16 @@ class EthTxService(
       val result: Option[TransactionReceiptResponse] = for {
         TransactionLocation(blockHash, txIndex) <- transactionMappingStorage.get(req.txHash)
         Block(header, body) <- blockchainReader.getBlockByHash(blockHash)
+        // Only surface receipts for CANONICAL transactions. Under engine-API, a block
+        // may be stored (with receipts + tx-location mapping) immediately after newPayload
+        // but not promoted to canonical until a subsequent forkchoiceUpdated — hive's
+        // 'Transaction Re-Org' test expects eth_getTransactionReceipt to return nil
+        // in that window. Require BOTH (a) the block lives at its number in the canonical
+        // index, AND (b) its number is <= the client's best-block pointer (i.e. FCU has
+        // advanced past it). (a) alone is true right after newPayload's storeBlock but
+        // (b) flips only when the subsequent FCU updates saveBestKnownBlocks.
+        _ <- blockchainReader.getBlockHeaderByNumber(header.number).filter(_.hash == blockHash)
+        bestNum = blockchainReader.getBestBlockNumber() if header.number <= bestNum
         stx <- body.transactionList.lift(txIndex)
         receipts <- blockchainReader.getReceiptsByHash(blockHash)
         receipt: Receipt <- receipts.lift(txIndex)
