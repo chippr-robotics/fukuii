@@ -121,9 +121,17 @@ class EngineApiController(
         //   newPayloadV2: pre-OR-post-Shanghai,  withdrawals present iff post-Shanghai
         //   newPayloadV3: timestamp ≥ cancun,    withdrawals present
         val InvalidParams = -32602
+        // Per engine-api spec and hive's engine-cancun / engine-withdrawals suites:
+        //   -32602 (Invalid params): payload shape is wrong for the RPC version (e.g.
+        //     V3 called pre-Cancun, V2 payload missing withdrawals post-Shanghai)
+        //   -38005 (Unsupported fork): the RPC method itself is not for this fork family
         val versionError: Option[(Int, String)] = version match {
+          case 3 if !isCancunPayload =>
+            Some(InvalidParams -> "newPayloadV3 cannot be used pre-Cancun, use V2")
           case 3 if !hasWithdrawals =>
-            Some(UnsupportedFork -> "newPayloadV3 requires withdrawals field")
+            Some(InvalidParams -> "newPayloadV3 requires withdrawals field")
+          case 2 if isCancunPayload =>
+            Some(UnsupportedFork -> "newPayloadV2 cannot be used post-Cancun, use V3")
           case 2 if isShanghaiPayload && !hasWithdrawals =>
             Some(InvalidParams -> "newPayloadV2 post-Shanghai payload must include withdrawals")
           case 2 if !isShanghaiPayload && hasWithdrawals =>
@@ -225,6 +233,10 @@ class EngineApiController(
         val versionError: Option[(Int, String)] = (version, payloadAttrs) match {
           case (3, Some(_)) if !isCancunTimestamp && hasBeaconRoot =>
             Some(UnsupportedFork -> "forkchoiceUpdatedV3 with beacon root before Cancun activation")
+          case (2, Some(_)) if isCancunTimestamp =>
+            // hive expects -38003 INVALID_PAYLOAD_ATTRIBUTES when V2 attrs are sent post-Cancun
+            // (specifically the "ForkchoiceUpdatedV2 To Request Cancun Payload" tests).
+            Some(InvalidAttrs -> "forkchoiceUpdatedV2 cannot be used post-Cancun, use V3")
           case (v, Some(_)) if v < 3 && isCancunTimestamp =>
             Some(UnsupportedFork -> s"forkchoiceUpdatedV$v cannot be used post-Cancun, use V3")
           case (1, Some(_)) if isShanghaiTimestamp =>
@@ -286,7 +298,7 @@ class EngineApiController(
     }
   }
 
-  private def handleGetPayload(request: JsonRpcRequest, @annotation.unused version: Int = 1): IO[JsonRpcResponse] = {
+  private def handleGetPayload(request: JsonRpcRequest, version: Int = 1): IO[JsonRpcResponse] = {
     val payloadIdHex = request.params match {
       case Some(JArray(List(JString(id)))) => id
       case _                               => ""
@@ -294,6 +306,24 @@ class EngineApiController(
     val payloadId = hexToByteString(payloadIdHex)
     engineApiService.getPayload(payloadId).map {
       case Right(block) =>
+        // Validate the RPC version matches the payload's fork timestamp. Hive's
+        // "GetPayloadV2 To Request Cancun Payload" and "GetPayloadV3 To Request Shanghai
+        // Payload" tests exercise this — V2 for a Cancun-ts payload and V3 for a
+        // Shanghai-ts payload must both return -38005 UNSUPPORTED_FORK.
+        val cfg = com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
+        val ts = block.header.unixTimestamp
+        val isCancunPayload = cfg.isCancunTimestamp(ts)
+        val isShanghaiPayload = cfg.isShanghaiTimestamp(ts)
+        val forkError: Option[String] = version match {
+          case 2 if isCancunPayload => Some("getPayloadV2 cannot return a Cancun payload; use V3")
+          case 3 if !isCancunPayload => Some("getPayloadV3 can only return Cancun-or-later payloads")
+          case 1 if isShanghaiPayload => Some("getPayloadV1 cannot return a Shanghai-or-later payload; use V2")
+          case _ => None
+        }
+        forkError match {
+          case Some(msg) =>
+            JsonRpcResponse("2.0", None, Some(JsonRpcError(UnsupportedFork, msg, None)), reqId(request))
+          case None =>
         val payload = blockToExecutionPayload(block)
         // V1 returns bare ExecutionPayload.
         // V2+ wraps it in ExecutionPayloadEnvelope per Engine API spec.
@@ -335,6 +365,7 @@ class EngineApiController(
             )
         }
         JsonRpcResponse("2.0", Some(result), None, reqId(request))
+        }
       case Left(err) =>
         JsonRpcResponse("2.0", None, Some(JsonRpcError(-38001, err, None)), reqId(request))
     }
