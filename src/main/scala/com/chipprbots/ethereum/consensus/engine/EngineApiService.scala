@@ -141,7 +141,10 @@ class EngineApiService(
       }
     }) {
       // VersionedHashes mismatch: INVALID per EIP-4844 with latestValidHash=parent.hash.
+      // Record in invalidBlocks so a subsequent forkchoiceUpdated(head=this) short-circuits
+      // to INVALID (preventing the "unknown safe block hash" detour).
       val lvh = blockchainReader.getBlockHeaderByHash(payload.parentHash).map(_.hash).getOrElse(zeroHash)
+      markInvalidRecursive(payload.blockHash, lvh)
       PayloadStatusV1(Invalid, latestValidHash = Some(lvh), validationError = Some("INVALID_VERSIONED_HASHES"))
     } else if (
       blockchainReader.getBlockHeaderByHash(payload.blockHash).exists { h =>
@@ -415,14 +418,20 @@ class EngineApiService(
         .map(_.hash)
         .getOrElse(ByteString.empty)
 
-      // Validate safe/finalized hashes FIRST, before any SYNCING shortcut.
-      // Per Engine API spec 5.4: safeBlockHash and finalizedBlockHash must be ancestors of headBlockHash.
-      // If either is unknown or not an ancestor → -38002 invalid forkchoice state.
+      // Per Engine API spec 5.4 + hive "In-Order Consecutive Payload Execution": if the
+      // head itself is unknown, return SYNCING first — we can't meaningfully validate
+      // safe/finalized ancestry against a head we don't have. The safe/finalized unknown
+      // checks are only -38002 errors once we KNOW the head; otherwise the CL is still
+      // driving us to sync and the correct response is SYNCING.
       val safeHash = forkChoiceState.safeBlockHash
       val finalizedHash = forkChoiceState.finalizedBlockHash
       val safeUnknown = safeHash != zeroHash && blockchainReader.getBlockHeaderByHash(safeHash).isEmpty
       val finalizedUnknown = finalizedHash != zeroHash && blockchainReader.getBlockHeaderByHash(finalizedHash).isEmpty
-      if (safeUnknown || finalizedUnknown) {
+      if (!blockExistsByHash && !isGenesis) {
+        // Head unknown — client is still syncing to this head
+        EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
+        Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing)))
+      } else if (safeUnknown || finalizedUnknown) {
         val msg = if (safeUnknown) "unknown safe block hash" else "unknown finalized block hash"
         EngineApiMetrics.recordForkchoiceUpdated("INVALID")
         Left(msg)
