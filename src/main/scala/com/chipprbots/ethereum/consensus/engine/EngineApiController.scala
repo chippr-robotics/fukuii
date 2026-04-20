@@ -148,6 +148,11 @@ class EngineApiController(
           // `NewPayloadV3 After Cancun, Nil Beacon Root` variant exercises this.
           case 3 if params.lift(2).forall(_ == org.json4s.JNull) =>
             Some(InvalidParams -> "newPayloadV3 requires parentBeaconBlockRoot")
+          // V3 also requires a non-null expectedBlobVersionedHashes array (params[1]).
+          // Hive 'NewPayloadV3 Versioned Hashes, Nil Hashes' sends null here and expects
+          // -32602 rather than VALID/ACCEPTED.
+          case 3 if params.lift(1).forall(_ == org.json4s.JNull) =>
+            Some(InvalidParams -> "newPayloadV3 requires expectedBlobVersionedHashes")
           case 2 if isCancunPayload =>
             Some(UnsupportedFork -> "newPayloadV2 cannot be used post-Cancun, use V3")
           case 2 if isShanghaiPayload && !hasWithdrawals =>
