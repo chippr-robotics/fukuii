@@ -143,6 +143,11 @@ class EngineApiController(
             Some(InvalidParams -> "newPayloadV3 requires withdrawals field")
           case 3 if !hasAllCancunFields =>
             Some(InvalidParams -> "newPayloadV3 requires blobGasUsed and excessBlobGas")
+          // V3 requires the parentBeaconBlockRoot third param; we parse it after this check but
+          // the expected rejection code for missing is -32602. The test framework's
+          // `NewPayloadV3 After Cancun, Nil Beacon Root` variant exercises this.
+          case 3 if params.lift(2).forall(_ == org.json4s.JNull) =>
+            Some(InvalidParams -> "newPayloadV3 requires parentBeaconBlockRoot")
           case 2 if isCancunPayload =>
             Some(UnsupportedFork -> "newPayloadV2 cannot be used post-Cancun, use V3")
           case 2 if isShanghaiPayload && !hasWithdrawals =>
@@ -246,11 +251,16 @@ class EngineApiController(
         val versionError: Option[(Int, String)] = (version, payloadAttrs) match {
           case (3, Some(_)) if !isCancunTimestamp && hasBeaconRoot =>
             Some(UnsupportedFork -> "forkchoiceUpdatedV3 with beacon root before Cancun activation")
+          case (2, Some(_)) if isCancunTimestamp && hasBeaconRoot =>
+            // V2 attrs are NOT supposed to carry a beacon root. If the CL still sends one at
+            // a Cancun timestamp it's an attribute-shape error → -38003. (hive "Non-Null
+            // Beacon Root" variant)
+            Some(InvalidAttrs -> "forkchoiceUpdatedV2 attrs must not include parentBeaconBlockRoot")
           case (2, Some(_)) if isCancunTimestamp =>
-            // hive expects -38003 INVALID_PAYLOAD_ATTRIBUTES when V2 attrs are sent post-Cancun
-            // (specifically the "ForkchoiceUpdatedV2 To Request Cancun Payload" tests).
-            Some(InvalidAttrs -> "forkchoiceUpdatedV2 cannot be used post-Cancun, use V3")
-          case (v, Some(_)) if v < 3 && isCancunTimestamp =>
+            // V2 attrs without beacon root, post-Cancun → wrong method for this fork. hive
+            // "Missing Beacon Root" variant expects -38005 UNSUPPORTED_FORK.
+            Some(UnsupportedFork -> "forkchoiceUpdatedV2 cannot be used post-Cancun, use V3")
+          case (v, Some(_)) if v < 2 && isCancunTimestamp =>
             Some(UnsupportedFork -> s"forkchoiceUpdatedV$v cannot be used post-Cancun, use V3")
           case (1, Some(_)) if isShanghaiTimestamp =>
             Some(UnsupportedFork -> "forkchoiceUpdatedV1 cannot be used post-Shanghai, use V2")
