@@ -357,8 +357,6 @@ class NetworkPeerManagerActor(
       peerId: PeerId,
       peerWithInfo: Option[PeerWithInfo]
   ): Unit = {
-    // Note: This is an optional server-side implementation
-    // Fukuii primarily acts as a client, so we log and ignore for now
     log.debug(
       s"Received GetAccountRange request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, start=${msg.startingHash.take(4).toHex}, limit=${msg.limitHash.take(4).toHex}, bytes=${msg.responseBytes}"
     )
@@ -492,7 +490,15 @@ object NetworkPeerManagerActor {
     SNAP.Codes.AccountRangeCode,
     SNAP.Codes.StorageRangesCode,
     SNAP.Codes.TrieNodesCode,
-    SNAP.Codes.ByteCodesCode
+    SNAP.Codes.ByteCodesCode,
+    // SNAP protocol request codes — incoming requests we serve as a SNAP server.
+    // Hive's devp2p snap suite (and any peer that decides to fetch state from us)
+    // sends these. Subscribing here is required for handleGet*Range/Codes/TrieNodes
+    // to fire.
+    SNAP.Codes.GetAccountRangeCode,
+    SNAP.Codes.GetStorageRangesCode,
+    SNAP.Codes.GetTrieNodesCode,
+    SNAP.Codes.GetByteCodesCode
   )
 
   /** RemoteStatus was created to decouple status information from protocol status messages (they are different versions
