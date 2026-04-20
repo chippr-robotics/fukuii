@@ -283,9 +283,21 @@ class EngineApiController(
 
         if (versionError.isDefined) {
           val (code, msg) = versionError.get
-          IO.pure(
-            JsonRpcResponse("2.0", None, Some(JsonRpcError(code, msg, None)), reqId(request))
-          )
+          // Per engine-API step ordering (apply forkchoiceState, THEN validate attrs):
+          // InvalidAttrs errors STILL require the forkchoice to be applied first. Hive
+          // 'Invalid PayloadAttributes, Missing BeaconRoot' asserts HeaderByNumber reflects
+          // the new head even on -38003. Forward an attrs-less FCU to the service, then
+          // overlay the version error. UnsupportedFork (-38005) does not apply forkchoice —
+          // the CL called the wrong method entirely.
+          if (code == InvalidAttrs) {
+            engineApiService.forkchoiceUpdated(fcs, None).map { _ =>
+              JsonRpcResponse("2.0", None, Some(JsonRpcError(code, msg, None)), reqId(request))
+            }
+          } else {
+            IO.pure(
+              JsonRpcResponse("2.0", None, Some(JsonRpcError(code, msg, None)), reqId(request))
+            )
+          }
         } else {
           engineApiService.forkchoiceUpdated(fcs, payloadAttrs).map {
             case Right(response) =>
