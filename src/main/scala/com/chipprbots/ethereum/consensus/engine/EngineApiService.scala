@@ -448,17 +448,34 @@ class EngineApiService(
         Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing)))
       } else {
 
-        forkChoiceManager.applyForkChoiceState(forkChoiceState) match {
+        // Validate payload attributes BEFORE applying forkchoice. Per Engine API spec +
+        // hive 'Invalid PayloadAttributes' test: when we reject the FCU with -38003, the
+        // forkchoice state must NOT be applied (HeaderByNumber should still reflect the
+        // prior head). Moving the attrs-check above applyForkChoiceState keeps that
+        // invariant.
+        val invalidAttrsMsg: Option[String] = payloadAttributes.flatMap { attrs =>
+          if (attrs.timestamp == 0) Some("invalid payload attributes: zero timestamp")
+          else {
+            blockchainReader.getBlockHeaderByHash(forkChoiceState.headBlockHash).flatMap { parent =>
+              if (attrs.timestamp <= parent.unixTimestamp)
+                Some("invalid payload attributes: timestamp too low")
+              else None
+            }
+          }
+        }
+        if (invalidAttrsMsg.isDefined) {
+          EngineApiMetrics.recordForkchoiceUpdated("INVALID")
+          Left("ATTR:" + invalidAttrsMsg.get)
+        } else forkChoiceManager.applyForkChoiceState(forkChoiceState) match {
           case Left(_) =>
             // Head not known — return SYNCING so CL knows we need newPayload
             EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
             Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing)))
 
           case Right(()) =>
-            // Ancestry already validated above. FCU has now advanced best-block; purge the
-            // head block's txs from the mempool so the next proposer build doesn't re-queue
-            // them (would otherwise cause NONCE_MISMATCH_TOO_LOW). Walks back from head to
-            // the prior best to cover multi-block forkchoice jumps.
+            // FCU has advanced best-block; purge the head block's txs from the mempool
+            // so the next proposer build doesn't re-queue them (would cause
+            // NONCE_MISMATCH_TOO_LOW).
             if (pendingTransactionsManager != null) {
               blockchainReader.getBlockByHash(forkChoiceState.headBlockHash).foreach { headBlock =>
                 if (headBlock.body.transactionList.nonEmpty)
@@ -467,24 +484,7 @@ class EngineApiService(
               }
             }
 
-            // Validate payload attributes if present. Per Engine API spec, invalid payload
-            // attributes (zero or parent-relative timestamp) yield JSON-RPC -38003, NOT a
-            // PayloadStatus.INVALID. We tunnel the condition up via Left with a marker prefix
-            // so the controller can map it to the correct error code.
-            val invalidAttrsMsg: Option[String] = payloadAttributes.flatMap { attrs =>
-              if (attrs.timestamp == 0) Some("invalid payload attributes: zero timestamp")
-              else {
-                blockchainReader.getBlockHeaderByHash(forkChoiceState.headBlockHash).flatMap { parent =>
-                  if (attrs.timestamp <= parent.unixTimestamp)
-                    Some("invalid payload attributes: timestamp too low")
-                  else None
-                }
-              }
-            }
-            if (invalidAttrsMsg.isDefined) {
-              EngineApiMetrics.recordForkchoiceUpdated("INVALID")
-              Left("ATTR:" + invalidAttrsMsg.get)
-            } else {
+            {
 
               val payloadId = payloadAttributes.map { attrs =>
                 // Deterministic payload ID MUST be unique for every distinct attribute
