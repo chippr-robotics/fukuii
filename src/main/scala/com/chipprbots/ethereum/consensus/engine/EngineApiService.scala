@@ -424,8 +424,20 @@ class EngineApiService(
       val finalizedHash = forkChoiceState.finalizedBlockHash
       val safeUnknown = safeHash != zeroHash && blockchainReader.getBlockHeaderByHash(safeHash).isEmpty
       val finalizedUnknown = finalizedHash != zeroHash && blockchainReader.getBlockHeaderByHash(finalizedHash).isEmpty
+      // Head-known-but-unvalidated: the block was stored optimistically (storeBlockByHashOnly,
+      // no receipts, no canonical number mapping) because its parent chain isn't traceable.
+      // In this state we're still syncing, so ALL status flavors — including safe/finalized
+      // unknown — should yield SYNCING, not -38002. Hive's 'Invalid NewPayload, *VersionedHashes,
+      // Syncing=True' tests rely on this.
+      val headOptimistic =
+        blockExistsByHash && !blockFullyStored && !isGenesis &&
+          blockchainReader.getReceiptsByHash(forkChoiceState.headBlockHash).isEmpty
+
       if (!blockExistsByHash && !isGenesis) {
         // Head unknown — client is still syncing to this head
+        EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
+        Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing)))
+      } else if (headOptimistic) {
         EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
         Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing)))
       } else if (safeUnknown || finalizedUnknown) {
@@ -438,14 +450,6 @@ class EngineApiService(
       } else if (headHeader.isDefined && !isAncestorOrEqual(finalizedHash, forkChoiceState.headBlockHash, zeroHash)) {
         EngineApiMetrics.recordForkchoiceUpdated("INVALID")
         Left("invalid forkchoice state: finalized block is not an ancestor of head")
-      } else if (
-        blockExistsByHash && !blockFullyStored && !isGenesis &&
-        // executed sidechains have receipts stored; parent-unknown ACCEPTED blocks do not.
-        blockchainReader.getReceiptsByHash(forkChoiceState.headBlockHash).isEmpty
-      ) {
-        // Block stored by hash only AND never executed (parent unknown ACCEPTED) — not fully validated
-        EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
-        Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing)))
       } else {
 
         // Validate payload attributes BEFORE applying forkchoice. Per Engine API spec +
