@@ -112,12 +112,13 @@ class EngineApiService(
         s"[ENGINE-API] newPayload #${payload.blockNumber}: block-hash mismatch " +
           s"computed=${block.header.hashAsHexString} payload=${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(payload.blockHash)}"
       )
-      // Per engine-API spec + hive tests: hash mismatch always returns INVALID_BLOCK_HASH
-      // with latestValidHash = null. The block hash check is a structural / integrity
-      // check — we cannot attribute the error to a specific ancestor because the payload
-      // itself is corrupted. Do NOT store the block and do NOT surface a parent.hash.
+      // Hash mismatch: integrity error of the payload envelope. Per execution-apis PR #338
+      // (https://github.com/ethereum/execution-apis/pull/338), starting from Shanghai (V2+)
+      // the engine MUST return INVALID (not INVALID_BLOCK_HASH). V1 accepts either; returning
+      // INVALID universally is compliant with all versions. latestValidHash must be null —
+      // the corruption is in the payload itself, not attributable to any specific ancestor.
       blockchainWriter.removeBlockByHash(payload.blockHash).commit()
-      PayloadStatusV1(InvalidBlockHash("block hash mismatch"))
+      PayloadStatusV1(Invalid, latestValidHash = None, validationError = Some("block hash mismatch"))
     } else if ({
       // EIP-4844 versioned-hash check must run BEFORE the "already stored" dedup. The hive
       // "NewPayloadV3 Versioned Hashes, Non-Empty Hashes" tests call newPayloadV3 twice for

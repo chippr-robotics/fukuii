@@ -317,23 +317,23 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers {
       result.latestValidHash shouldBe Some(validBlock.header.hash)
     }
 
-    "return INVALID_BLOCK_HASH with null latestValidHash on hash mismatch" taggedAs UnitTest in
+    "return INVALID with null latestValidHash on hash mismatch (parent known)" taggedAs UnitTest in
       new EngineApiTestSetup {
-        // engine-API spec: hash mismatch is a structural integrity error — return
-        // INVALID_BLOCK_HASH with latestValidHash=null regardless of whether the parent
-        // is known. The corruption is in the payload envelope, not attributable to a
-        // specific ancestor. This aligns with hive "Bad Hash on NewPayload" tests.
+        // Per execution-apis PR #338 (Shanghai+): hash mismatch returns INVALID (not
+        // INVALID_BLOCK_HASH) with latestValidHash=null. The corruption is in the
+        // payload envelope, not attributable to a specific ancestor. Aligns with hive
+        // "Bad Hash on NewPayload" tests.
         val (validBlock, _) = buildValidBlock1()
         val payload = blockToPayload(validBlock)
         val badPayload = payload.copy(blockHash = ByteString(Array.fill(32)(0xff.toByte)))
 
         val result = engineApi.newPayload(badPayload).unsafeRunSync()
 
-        result.status shouldBe a[InvalidBlockHash]
+        result.status shouldBe Invalid
         result.latestValidHash shouldBe None
       }
 
-    "return INVALID_BLOCK_HASH when blockHash doesn't match AND parent is unknown" taggedAs UnitTest in
+    "return INVALID with null latestValidHash on hash mismatch (parent unknown)" taggedAs UnitTest in
       new EngineApiTestSetup {
         val (validBlock, _) = buildValidBlock1()
         val payload = blockToPayload(validBlock)
@@ -344,7 +344,8 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers {
 
         val result = engineApi.newPayload(badPayload).unsafeRunSync()
 
-        result.status shouldBe a[InvalidBlockHash]
+        result.status shouldBe Invalid
+        result.latestValidHash shouldBe None
       }
 
     "return INVALID for block with modified stateRoot" taggedAs UnitTest in new EngineApiTestSetup {
