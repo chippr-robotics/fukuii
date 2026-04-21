@@ -388,7 +388,7 @@ trait NetworkPeerManagerActorBuilder {
         peerEventBus,
         storagesInstance.storages.appStateStorage,
         forkResolverOpt,
-        evmCodeStorage = Some(storagesInstance.storages.evmCodeStorage),
+        evmCodeStorageOpt = Some(storagesInstance.storages.evmCodeStorage),
         mptStorageOpt = Some(storagesInstance.storages.stateStorage.getReadOnlyStorage),
         blockchainReader = Some(blockchainReader)
       ),
