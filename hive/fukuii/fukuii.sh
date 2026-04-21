@@ -110,8 +110,13 @@ FLAGS="$FLAGS -Dfukuii.network.server-address.port=30303"
 FLAGS="$FLAGS -Dfukuii.network.discovery.interface=0.0.0.0"
 FLAGS="$FLAGS -Dfukuii.network.discovery.port=30303"
 
-# Chain import
-[ -f "/chain.rlp" ] && FLAGS="$FLAGS -Dfukuii.import-chain-file=/chain.rlp"
+# Chain import — prefer /chain.rlp, otherwise concatenate /blocks/*.rlp (consensus sim).
+if [ -f "/chain.rlp" ]; then
+    FLAGS="$FLAGS -Dfukuii.import-chain-file=/chain.rlp"
+elif ls /blocks/*.rlp >/dev/null 2>&1; then
+    cat /blocks/*.rlp > /chain.rlp
+    FLAGS="$FLAGS -Dfukuii.import-chain-file=/chain.rlp"
+fi
 
 # Bootnode — write to static-nodes.json in the datadir so the node dials it directly.
 # HOCON arrays can't be populated via -D system properties, so file is the reliable path.
