@@ -5,6 +5,7 @@ import cats.effect.SyncIO
 import com.chipprbots.ethereum.forkid.Connect
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.forkid.ForkIdValidator
+import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.p2p.Message
@@ -29,8 +30,8 @@ case class EthNodeStatus64ExchangeState(
       status.protocolVersion,
       status.networkId,
       status.totalDifficulty,
-      status.bestHash,
-      status.genesisHash,
+      status.bestHash.toHex,
+      status.genesisHash.toHex,
       status.forkId
     )
 
@@ -46,7 +47,7 @@ case class EthNodeStatus64ExchangeState(
     log.info(
       "STATUS_EXCHANGE: Local state - bestBlock={}, genesisHash={}, localForkId={}",
       localBestBlock,
-      localGenesisHash,
+      localGenesisHash.toHex,
       localForkId
     )
 
@@ -63,8 +64,8 @@ case class EthNodeStatus64ExchangeState(
     } else if (status.genesisHash != localGenesisHash) {
       log.warn(
         "STATUS_EXCHANGE: Peer genesis hash mismatch! Local: {}, Remote: {} - disconnecting peer",
-        localGenesisHash,
-        status.genesisHash
+        localGenesisHash.toHex,
+        status.genesisHash.toHex
       )
       DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
     } else {
@@ -147,8 +148,8 @@ case class EthNodeStatus64ExchangeState(
       status.networkId,
       status.totalDifficulty,
       bestBlockNumber,
-      bestBlockHeader.hash,
-      genesisHash,
+      bestBlockHeader.hash.toHex,
+      genesisHash.toHex,
       forkId
     )
 

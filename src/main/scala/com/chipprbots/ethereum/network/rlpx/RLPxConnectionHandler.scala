@@ -260,7 +260,7 @@ class RLPxConnectionHandler(
         else CanonicalEthBase
 
       val snapBaseStr = peerSnapBase.map(b => s"0x${b.toHexString}").getOrElse("<disabled>")
-      log.info(
+      log.debug(
         s"INBOUND_CAP_OFFSETS: peer=$peerId clientId=${hello.clientId} snapFirst=$snapFirst " +
           s"peerEthBase=0x${peerEthBase.toHexString} peerSnapBase=$snapBaseStr"
       )
@@ -731,10 +731,8 @@ class RLPxConnectionHandler(
                   msg.code.toHexString
                 )
 
-                // High-signal receive logging for SNAP traffic (request/response visibility).
-                // This stays INFO so it shows up even when other receive logs are DEBUG.
                 if (msg.code >= CanonicalSnapBase && msg.code < CanonicalSnapBase + CanonicalSnapSize) {
-                  log.info(
+                  log.debug(
                     "RECV_SNAP_MSG: peer={}, msg[{}] {}",
                     peerId,
                     idx,
@@ -804,9 +802,8 @@ class RLPxConnectionHandler(
 
       val out = messageCodec.encodeMessage(serializableToEncode)
 
-      // Enhanced logging for GetBlockHeaders debugging
       val msgType = messageToSend.underlyingMsg.getClass.getSimpleName
-      log.info(
+      log.debug(
         "SEND_MSG: peer={}, type={}, codes={}, seqNum={}",
         peerId,
         msgType,
