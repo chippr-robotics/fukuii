@@ -276,7 +276,7 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
           storagesInstance.storages.appStateStorage,
           Some(forkResolver),
           evmCodeStorageOpt = Some(evmCodeStorage),
-          flatSlotStorageOpt = Some(storagesInstance.storages.flatSlotStorage)
+          mptStorageOpt = Some(storagesInstance.storages.stateStorage.getReadOnlyStorage)
         )
       )
     )
