@@ -121,9 +121,23 @@ class StateNodeFetcher(
     requester
       .collect { stateNodeRequester =>
         if (nodes.isEmpty) {
-          log.warn("SNAP TrieNodes response was empty, retrying")
+          val newCount = stateNodeRequester.snapEmptyCount + 1
+          if (newCount >= SnapFallbackThreshold) {
+            log.warn(
+              "SNAP GetTrieNodes returned empty {} consecutive times for node {}, switching to GetNodeData fallback",
+              newCount,
+              stateNodeRequester.hash.take(4).toArray.map("%02x".format(_)).mkString
+            )
+            // Clear paths so next request uses GetNodeData instead of SNAP.
+            // GetNodeData fetches by hash from the raw KV store — a peer may have the node
+            // even if they've pruned the specific state root context that SNAP needs.
+            requester = Some(stateNodeRequester.copy(snapEmptyCount = 0, paths = None))
+          } else {
+            log.warn("SNAP TrieNodes response was empty ({}/{}), retrying", newCount, SnapFallbackThreshold)
+            requester = Some(stateNodeRequester.copy(snapEmptyCount = newCount))
+          }
           peersClient ! BlacklistPeer(peer.id, BlacklistReason.EmptyStateNodeResponse)
-          retryAfterBackoff(stateNodeRequester)
+          retryAfterBackoff(requester.get)
           Behaviors.same[StateNodeFetcherCommand]
         } else {
           // Multi-depth request: scan all returned nodes for one matching the target hash.
@@ -216,10 +230,16 @@ object StateNodeFetcher {
   case object RetryStateNodeRequest extends StateNodeFetcherCommand
   final private case class AdaptedMessage[T <: Message](peer: Peer, msg: T) extends StateNodeFetcherCommand
 
+  // After this many consecutive empty SNAP TrieNodes responses, fall back to GetNodeData.
+  // GetNodeData fetches by hash regardless of state root — useful when SNAP peers have pruned
+  // the specific historical state root but still hold the raw node bytes in their KV store.
+  val SnapFallbackThreshold: Int = 5
+
   final case class StateNodeRequester(
       hash: ByteString,
       replyTo: ClassicActorRef,
       stateRoot: Option[ByteString] = None,
-      paths: Option[Seq[Seq[ByteString]]] = None
+      paths: Option[Seq[Seq[ByteString]]] = None,
+      snapEmptyCount: Int = 0
   )
 }
