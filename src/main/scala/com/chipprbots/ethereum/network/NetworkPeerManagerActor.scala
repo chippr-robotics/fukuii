@@ -385,24 +385,38 @@ class NetworkPeerManagerActor(
     }
   }
 
+  // Cache of recent canonical state roots, refreshed lazily when the chain advances. The
+  // 128-block window matches go-ethereum's snap-serve policy and avoids 128 RocksDB reads
+  // per inbound SNAP request — critical when the hive snap simulator fires dozens of
+  // back-to-back GetAccountRange calls at us.
+  private var freshRootCache: scala.collection.mutable.Set[ByteString] = scala.collection.mutable.Set.empty
+  private var freshRootCacheTip: BigInt = BigInt(-1)
+
+  private def refreshFreshRootCache(reader: com.chipprbots.ethereum.domain.BlockchainReader): Unit = {
+    val tip = reader.getBestBlockNumber()
+    if (tip != freshRootCacheTip) {
+      val window = BigInt(128)
+      val from = (tip - window).max(BigInt(0))
+      val newCache = scala.collection.mutable.Set.empty[ByteString]
+      var n = tip
+      while (n >= from) {
+        reader.getBlockHeaderByNumber(n).foreach(h => newCache += h.stateRoot)
+        n = n - 1
+      }
+      freshRootCache = newCache
+      freshRootCacheTip = tip
+    }
+  }
+
   /** Per SNAP/1: nodes only need to serve state for "recent" roots — geth uses a 128-block
-    * window. Scan the last 128 canonical block headers and accept the request only when
-    * the requested rootHash matches one of them. Returns true (serve) if blockchainReader
-    * isn't injected (best-effort fallback for non-test paths).
+    * window. Looks up the requested rootHash in a cached set of recent canonical state
+    * roots. Returns true (serve) if blockchainReader isn't injected.
     */
   private def isStateRootFresh(rootHash: ByteString): Boolean = blockchainReader match {
     case None => true
     case Some(reader) =>
-      val tip = reader.getBestBlockNumber()
-      val window = BigInt(128)
-      val from = (tip - window).max(BigInt(0))
-      var n = tip
-      while (n >= from) {
-        val matchFound = reader.getBlockHeaderByNumber(n).exists(_.stateRoot == rootHash)
-        if (matchFound) return true
-        n = n - 1
-      }
-      false
+      refreshFreshRootCache(reader)
+      freshRootCache.contains(rootHash)
   }
 
   /** Handle incoming GetStorageRanges request from a peer (server-side)
