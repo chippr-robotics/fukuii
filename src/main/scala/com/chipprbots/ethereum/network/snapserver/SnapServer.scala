@@ -137,13 +137,19 @@ object SnapServer extends Logger {
   private def minKeyWith(prefix: Array[Byte]): Array[Byte] =
     prefix ++ Array.fill(math.max(0, FullKeyNibbles - prefix.length))(0.toByte)
 
+  /** Subtree-prune predicate. We only skip subtrees that lie strictly BELOW `origin`
+    * (i.e. their max key is < origin). Subtrees ABOVE `limit` are intentionally not
+    * pruned — the visitor's stop-on-`>=limit` rule needs to see the first leaf past the
+    * limit (geth's serveAccountRange does the same: it iterates past the limit,
+    * `break`s after emitting one). Limit-side pruning would cut off that extra leaf
+    * and undercount in any range whose first available key extends past `limit`.
+    */
   private def subtreeIntersectsRange(
       prefix: Array[Byte],
       originNibbles: Array[Byte],
-      limitNibbles: Array[Byte]
+      @scala.annotation.unused limitNibbles: Array[Byte]
   ): Boolean =
-    cmpNibbles(maxKeyWith(prefix), originNibbles) >= 0 &&
-      cmpNibbles(minKeyWith(prefix), limitNibbles) <= 0
+    cmpNibbles(maxKeyWith(prefix), originNibbles) >= 0
 
   /** Visit-style range walker — calls `visit(keyHash, valueRLP)` for every leaf whose key
     * falls in `[origin, limit]`, traversing the trie in key order. The visitor returns
