@@ -4,9 +4,14 @@ import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt._
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.rlp
+import com.chipprbots.ethereum.rlp.RLPEncodeable
+import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.rlp.RLPValue
+import com.chipprbots.ethereum.utils.ByteUtils
 import com.chipprbots.ethereum.utils.Logger
 
 /** Server-side SNAP/1 helpers — Merkle Patricia Trie range traversal and Merkle proof
@@ -81,6 +86,30 @@ object SnapServer extends Logger {
     try storage.get(rootHash.toArray)
     catch { case _: Throwable => NullNode }
 
+  /** Slim-account RLP element per geth's snap protocol convention: the storageRoot and
+    * codeHash fields are encoded as empty bytes when they equal the canonical empty-trie
+    * root and empty-code hash respectively. Saves ~64 bytes per EOA — critical for the
+    * SNAP byte-budget which counts the leaf body length toward the soft response limit.
+    *
+    * Our `AccountImplicits.toAccount` decoder already normalises empty bytes back to the
+    * canonical defaults, so round-trips are lossless across our own and geth's clients.
+    *
+    * Returns the parsed RLP element so callers can either embed it (in `AccountRange`'s
+    * RLP envelope) or serialise it (`rlp.encode(toSlimAccountRlp(...))`) for byte-budget
+    * accounting.
+    */
+  def toSlimAccountRlp(account: Account): RLPList = {
+    val nonceRlp: RLPEncodeable = RLPValue(ByteUtils.bigIntToUnsignedByteArray(account.nonce))
+    val balanceRlp: RLPEncodeable = RLPValue(ByteUtils.bigIntToUnsignedByteArray(account.balance))
+    val srRlp: RLPEncodeable =
+      if (account.storageRoot == Account.EmptyStorageRootHash) RLPValue(Array.emptyByteArray)
+      else RLPValue(account.storageRoot.toArray)
+    val chRlp: RLPEncodeable =
+      if (account.codeHash == Account.EmptyCodeHash) RLPValue(Array.emptyByteArray)
+      else RLPValue(account.codeHash.toArray)
+    RLPList(nonceRlp, balanceRlp, srRlp, chRlp)
+  }
+
   /** RLP-encode a node and emit its keccak256 hash + encoded bytes. Used when collecting
     * proof nodes — peers verify by re-hashing each proof node and matching against
     * parent references.
@@ -108,67 +137,93 @@ object SnapServer extends Logger {
   private def minKeyWith(prefix: Array[Byte]): Array[Byte] =
     prefix ++ Array.fill(math.max(0, FullKeyNibbles - prefix.length))(0.toByte)
 
+  /** Subtree-prune predicate. We only skip subtrees that lie strictly BELOW `origin`
+    * (i.e. their max key is < origin). Subtrees ABOVE `limit` are intentionally not
+    * pruned — the visitor's stop-on-`>=limit` rule needs to see the first leaf past the
+    * limit (geth's serveAccountRange does the same: it iterates past the limit,
+    * `break`s after emitting one). Limit-side pruning would cut off that extra leaf
+    * and undercount in any range whose first available key extends past `limit`.
+    */
   private def subtreeIntersectsRange(
       prefix: Array[Byte],
       originNibbles: Array[Byte],
-      limitNibbles: Array[Byte]
+      @scala.annotation.unused limitNibbles: Array[Byte]
   ): Boolean =
-    cmpNibbles(maxKeyWith(prefix), originNibbles) >= 0 &&
-      cmpNibbles(minKeyWith(prefix), limitNibbles) <= 0
+    cmpNibbles(maxKeyWith(prefix), originNibbles) >= 0
 
+  /** Visit-style range walker — calls `visit(keyHash, valueRLP)` for every leaf whose key
+    * falls in `[origin, limit]`, traversing the trie in key order. The visitor returns
+    * `true` to continue or `false` to stop the walk early (used by the byte-budget gate).
+    *
+    * Iterative-style traversal via direct recursion (no Iterator.flatMap chain) — much
+    * cheaper than the previous lazy iterator construction when the chain depth is 64.
+    */
+  private def walkRangeVisit(
+      root: MptNode,
+      storage: MptStorage,
+      originNibbles: Array[Byte],
+      limitNibbles: Array[Byte]
+  )(visit: (ByteString, ByteString) => Boolean): Unit = {
+    var stop = false
+
+    def descend(node: MptNode, prefix: Array[Byte]): Unit = {
+      if (stop) return
+      if (!subtreeIntersectsRange(prefix, originNibbles, limitNibbles)) return
+      resolve(node, storage) match {
+        case NullNode => ()
+        case LeafNode(key, value, _, _, _) =>
+          // Geth semantics (eth/protocols/snap/handler.go:304-322): emit any leaf
+          // whose key is `>= origin`, then `break` after emitting one with key
+          // `>= limit`. This naturally handles the single-key (start == limit) case
+          // (returns the matching leaf, then stops) and the "first at-or-after"
+          // semantics for keys that don't exist.
+          val fullKey = prefix ++ key.toArray
+          if (cmpNibbles(fullKey, originNibbles) >= 0) {
+            nibblesToHash(fullKey).foreach { h =>
+              val keep = visit(h, value)
+              val pastLimit = cmpNibbles(fullKey, limitNibbles) >= 0
+              if (!keep || pastLimit) stop = true
+            }
+          }
+        case ExtensionNode(sharedKey, next, _, _, _) =>
+          descend(next, prefix ++ sharedKey.toArray)
+        case BranchNode(children, terminator, _, _, _) =>
+          terminator.foreach { value =>
+            if (cmpNibbles(prefix, originNibbles) >= 0) {
+              nibblesToHash(prefix).foreach { h =>
+                val keep = visit(h, value)
+                val pastLimit = cmpNibbles(prefix, limitNibbles) >= 0
+                if (!keep || pastLimit) stop = true
+              }
+            }
+          }
+          var nibble = 0
+          while (nibble < 16 && !stop) {
+            val child = children(nibble)
+            if (child != NullNode) descend(child, prefix :+ nibble.toByte)
+            nibble += 1
+          }
+        case _: HashNode => () // resolve() above prevents reaching here
+      }
+    }
+
+    descend(root, Array.emptyByteArray)
+  }
+
+  /** Compatibility wrapper retained for callers that want an Iterator. Internally uses
+    * the visit-style walker but materialises results into a buffer first.
+    */
   private def walkRange(
       root: MptNode,
       storage: MptStorage,
       originNibbles: Array[Byte],
       limitNibbles: Array[Byte]
   ): Iterator[(ByteString, ByteString)] = {
-
-    def descend(node: MptNode, prefix: Array[Byte]): Iterator[(ByteString, ByteString)] = {
-      if (!subtreeIntersectsRange(prefix, originNibbles, limitNibbles)) {
-        Iterator.empty
-      } else {
-        resolve(node, storage) match {
-          case NullNode => Iterator.empty
-
-          case LeafNode(key, value, _, _, _) =>
-            val fullKey = prefix ++ key.toArray
-            if (cmpNibbles(fullKey, originNibbles) >= 0 && cmpNibbles(fullKey, limitNibbles) <= 0) {
-              nibblesToHash(fullKey) match {
-                case Some(h) => Iterator.single((h, value))
-                case None    => Iterator.empty
-              }
-            } else Iterator.empty
-
-          case ExtensionNode(sharedKey, next, _, _, _) =>
-            val newPrefix = prefix ++ sharedKey.toArray
-            descend(next, newPrefix)
-
-          case BranchNode(children, terminator, _, _, _) =>
-            val termIter: Iterator[(ByteString, ByteString)] = terminator match {
-              case Some(value) =>
-                if (cmpNibbles(prefix, originNibbles) >= 0 && cmpNibbles(prefix, limitNibbles) <= 0) {
-                  nibblesToHash(prefix) match {
-                    case Some(h) => Iterator.single((h, value))
-                    case None    => Iterator.empty
-                  }
-                } else Iterator.empty
-              case None => Iterator.empty
-            }
-            // Walk children 0..15 in nibble order, recursing into subtrees that could
-            // still contain keys in the range. The prune check happens inside descend().
-            val childIters = (0 until 16).iterator.flatMap { nibble =>
-              val child = children(nibble)
-              if (child == NullNode) Iterator.empty
-              else descend(child, prefix :+ nibble.toByte)
-            }
-            termIter ++ childIters
-
-          case _: HashNode => Iterator.empty // resolve() above prevents reaching here
-        }
-      }
+    val buf = scala.collection.mutable.ArrayBuffer.empty[(ByteString, ByteString)]
+    walkRangeVisit(root, storage, originNibbles, limitNibbles) { (h, v) =>
+      buf += ((h, v)); true
     }
-
-    descend(root, Array.emptyByteArray)
+    buf.iterator
   }
 
   /** Collect the proof path for a given key — the nodes traversed from root to the leaf
@@ -232,10 +287,11 @@ object SnapServer extends Logger {
       return AccountRange(requestId, Seq.empty, Seq.empty)
     }
 
-    // SNAP "wrong-order" handling: when startingHash > limitHash hive's tests expect us to
-    // return the FIRST available key at/after `startingHash`. We detect the inversion
-    // here and force a single-item cap below; the walker temporarily widens `limit` to
-    // FF…FF so the first matching key is reachable.
+    // SNAP "wrong-order" handling: when startingHash > limitHash hive's tests expect us
+    // to return the FIRST available key at/after `startingHash`. With the geth-style
+    // emit-on->=origin / stop-on->=limit semantics now in place, widening `limit` to
+    // FF…FF gets us "first key at-or-after start" naturally — the walker emits one then
+    // stops because the next key is >= origin >= limit.
     val isReversed = {
       val s = startingHash.toArray
       val l = limitHash.toArray
@@ -250,25 +306,25 @@ object SnapServer extends Logger {
     val effectiveLimit = if (isReversed) ByteString(Array.fill[Byte](32)(0xff.toByte)) else limitHash
     val originNibbles = hashToNibbles(startingHash)
     val limitNibbles = hashToNibbles(effectiveLimit)
-    // Effective byte budget. For wrong-order requests, hive expects exactly one item back,
-    // so cap at the size of a single account (hash + ~70 bytes = 102) — the walker will
-    // emit one and stop.
-    val maxBytes =
-      if (isReversed) 110
-      else math.max(responseBytes.toInt, 0)
+    val maxBytes = math.max(responseBytes.toInt, 0)
 
     import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits._
     val collected = scala.collection.mutable.ArrayBuffer.empty[(ByteString, com.chipprbots.ethereum.domain.Account)]
     var accumulated = 0
-    val it = walkRange(rootNode, storage, originNibbles, limitNibbles)
-    // Match go-ethereum's accounting: only the hash + leaf bytes count toward the budget,
-    // not the per-item RLP envelope overhead. Proofs aren't counted either (they're a
-    // separate header in the response message).
-    while (it.hasNext && (accumulated < maxBytes || collected.isEmpty)) {
-      val (keyHash, accountRlp) = it.next()
+    // Visit-style walk: visitor returns false to stop traversal as soon as the byte
+    // budget is hit. Match go-ethereum's accounting: only (hash + slim-leaf bytes) count
+    // toward the budget — slim format is what we'll emit on the wire (see
+    // `toSlimAccountRlp`). Proofs aren't counted (they're a separate response header).
+    walkRangeVisit(rootNode, storage, originNibbles, limitNibbles) { (keyHash, accountRlp) =>
       val account = accountRlp.toArray.toAccount
+      val slimSize = rlp.encode(toSlimAccountRlp(account)).length
       collected += ((keyHash, account))
-      accumulated += keyHash.size + accountRlp.size
+      accumulated += keyHash.size + slimSize
+      // Wrong-order requests: stop after a single item. Otherwise continue while under
+      // budget; the first item is always emitted (the visitor only sees this branch
+      // after we add to `collected`).
+      if (isReversed) false
+      else accumulated < maxBytes
     }
 
     // Build proof: path to the first account (or to startingHash if none in range), and
@@ -386,28 +442,101 @@ object SnapServer extends Logger {
       var idx = 0
       while (idx < paths.size && (accumulated < maxBytes || collected.isEmpty)) {
         val pathSet = paths(idx)
-        // Single-element paths reference an account-trie node. Multi-element paths
-        // reference storage-trie nodes inside an account — not yet implemented.
         if (pathSet.size == 1) {
-          val keyBytes = pathSet.head.toArray
-          val nibbles = decodeHpPath(keyBytes)
+          // Single-element path: account-trie node lookup.
+          val nibbles = decodeHpPath(pathSet.head.toArray)
           collectNodeAtPath(rootNode, storage, nibbles) match {
             case Some(enc) =>
-              collected += enc
-              accumulated = accumulated + enc.size
+              collected += enc; accumulated += enc.size
             case None =>
-              collected += ByteString.empty
-              accumulated = accumulated + 1
+              collected += ByteString.empty; accumulated += 1
           }
-        } else {
-          collected += ByteString.empty
-          accumulated = accumulated + 1
+        } else if (pathSet.size >= 2) {
+          // Multi-element path per geth handler.go:521-577 — pathSet(0) is the
+          // account-trie path; pathSet(1..) are storage-trie paths inside that
+          // account's storage trie. We resolve the account first, then walk each
+          // storage path against `account.storageRoot` (same MptStorage works since
+          // trie nodes are content-addressed by keccak256 hash).
+          val accountNibbles = decodeHpPath(pathSet.head.toArray)
+          val storageNibblesList = pathSet.tail
+          resolveLeafAccount(rootNode, storage, accountNibbles) match {
+            case Some(account) if account.storageRoot != Account.EmptyStorageRootHash =>
+              val storageRootNode = fetchRootNode(account.storageRoot, storage)
+              if (storageRootNode == NullNode) {
+                storageNibblesList.foreach { _ =>
+                  collected += ByteString.empty; accumulated += 1
+                }
+              } else {
+                storageNibblesList.foreach { storagePath =>
+                  if (accumulated < maxBytes || collected.isEmpty) {
+                    val sn = decodeHpPath(storagePath.toArray)
+                    collectNodeAtPath(storageRootNode, storage, sn) match {
+                      case Some(enc) =>
+                        collected += enc; accumulated += enc.size
+                      case None =>
+                        collected += ByteString.empty; accumulated += 1
+                    }
+                  }
+                }
+              }
+            case _ =>
+              // Account missing or empty storage — emit one empty entry per storage
+              // path (per geth: an empty bytes entry signals "no node here").
+              storageNibblesList.foreach { _ =>
+                collected += ByteString.empty; accumulated += 1
+              }
+          }
         }
         idx += 1
       }
     }
 
     TrieNodes(requestId, collected.toSeq)
+  }
+
+  /** Walk the state trie following `nibbles` to a leaf and decode that leaf's value as
+    * an `Account`. Returns None if the path doesn't terminate at a leaf or the leaf
+    * isn't a valid account RLP.
+    */
+  private def resolveLeafAccount(
+      root: MptNode,
+      storage: MptStorage,
+      nibbles: Array[Byte]
+  ): Option[Account] = {
+    import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits._
+
+    def descend(node: MptNode, remaining: Array[Byte]): Option[Account] = {
+      val resolved = resolve(node, storage)
+      resolved match {
+        case NullNode => None
+        case LeafNode(key, value, _, _, _) =>
+          val k = key.toArray
+          if (remaining.sameElements(k)) {
+            try Some(value.toArray.toAccount)
+            catch { case _: Throwable => None }
+          } else None
+        case ExtensionNode(sharedKey, next, _, _, _) =>
+          val sk = sharedKey.toArray
+          if (remaining.length >= sk.length && remaining.take(sk.length).sameElements(sk))
+            descend(next, remaining.drop(sk.length))
+          else None
+        case BranchNode(children, terminator, _, _, _) =>
+          if (remaining.isEmpty) {
+            // The account sits in the branch terminator slot.
+            terminator.flatMap { v =>
+              try Some(v.toArray.toAccount)
+              catch { case _: Throwable => None }
+            }
+          } else {
+            val nibble = remaining(0) & 0x0f
+            val child = children(nibble)
+            if (child == NullNode) None else descend(child, remaining.drop(1))
+          }
+        case _: HashNode => None
+      }
+    }
+
+    descend(root, nibbles)
   }
 
   /** Decode an HP-encoded (Hex Prefix, EIP-2 / yellow-paper) path back to its nibble

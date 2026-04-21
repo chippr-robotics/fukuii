@@ -161,14 +161,17 @@ object SNAP {
       override def code: Int = Codes.AccountRangeCode
       override def toRLPEncodable: RLPEncodeable = {
         import msg._
-        // Encode accounts as list of [hash, body] pairs
+        // Per geth's snap protocol: encode each account body in SLIM format
+        // (storageRoot/codeHash empty when default). Saves ~64 bytes per EOA — critical
+        // for byte-budget-constrained responses. Decoder normalises empties back to
+        // canonical defaults so round-trips are lossless.
         val accountsList = accounts.map { case (hash, account) =>
+          val slimRlp = com.chipprbots.ethereum.network.snapserver.SnapServer.toSlimAccountRlp(account)
           RLPList(
             RLPValue(hash.toArray[Byte]),
-            account.toRLPEncodable
+            slimRlp
           )
         }
-        // Encode proof as list of byte arrays
         val proofList = proof.map(p => RLPValue(p.toArray[Byte]))
 
         RLPList(
