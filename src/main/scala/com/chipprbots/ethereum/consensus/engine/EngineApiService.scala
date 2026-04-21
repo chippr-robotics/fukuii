@@ -1116,6 +1116,26 @@ object BlobGasUtils {
   def getBlobGasPrice(excessBlobGas: BigInt): BigInt =
     fakeExponential(MIN_BLOB_BASE_FEE, excessBlobGas, BLOB_BASE_FEE_UPDATE_FRACTION)
 
+  /** Fork-aware blob gas price. Prague (EIP-7691) raises the update fraction. */
+  def getBlobGasPrice(
+      excessBlobGas: BigInt,
+      blockTimestamp: Long,
+      blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig
+  ): BigInt = {
+    val fraction =
+      if (blockchainConfig.isPragueTimestamp(blockTimestamp)) PRAGUE_BLOB_BASE_FEE_UPDATE_FRACTION
+      else BLOB_BASE_FEE_UPDATE_FRACTION
+    fakeExponential(MIN_BLOB_BASE_FEE, excessBlobGas, fraction)
+  }
+
+  /** Fork-aware MAX_BLOB_GAS_PER_BLOCK. */
+  def maxBlobGasPerBlock(
+      blockTimestamp: Long,
+      blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig
+  ): BigInt =
+    if (blockchainConfig.isPragueTimestamp(blockTimestamp)) PRAGUE_MAX_BLOB_GAS
+    else CANCUN_MAX_BLOB_GAS
+
   /** EIP-7918: Osaka blob base fee floored by execution gas cost. Prevents blob base fee from decoupling from execution
     * fee market. Formula (Osaka spec): blob_base_fee = max(current_blob_fee, (blob_base_fee_update_fraction *
     * block_base_fee) / (gas_per_blob * MAX_BLOBS_PER_BLOCK)) Simplified conservative floor: max(current, block_base_fee

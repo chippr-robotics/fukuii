@@ -71,7 +71,7 @@ object TransactionReceiptResponse {
       blockHeader: BlockHeader,
       gasUsedByTransaction: BigInt,
       baseLogIndex: Int
-  ): TransactionReceiptResponse = {
+  )(implicit blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig): TransactionReceiptResponse = {
     val contractAddress = if (stx.tx.isContractInit) {
       // do not subtract 1 from nonce because in transaction we have nonce of account before transaction execution
       val hash = kec256(
@@ -133,8 +133,13 @@ object TransactionReceiptResponse {
       `type` = Some(txType),
       effectiveGasPrice = Some(effectiveGasPrice),
       blobGasUsed = blobGasUsed,
-      // blobGasPrice only for blob (type 3) transactions
-      blobGasPrice = blobGasUsed.flatMap(_ => blockHeader.excessBlobGas.map(_ => BigInt(1))),
+      // blobGasPrice only for blob (type 3) transactions — fake_exponential of excessBlobGas
+      blobGasPrice = blobGasUsed.flatMap(_ =>
+        blockHeader.excessBlobGas.map(eg =>
+          com.chipprbots.ethereum.consensus.engine.BlobGasUtils
+            .getBlobGasPrice(eg, blockHeader.unixTimestamp, blockchainConfig)
+        )
+      ),
       blockTimestamp = Some(BigInt(blockHeader.unixTimestamp))
     )
   }
