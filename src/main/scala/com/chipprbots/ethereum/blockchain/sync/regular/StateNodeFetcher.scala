@@ -130,7 +130,7 @@ class StateNodeFetcher(
           val matchingNode = nodes.find(n => kec256(n) == stateNodeRequester.hash)
           matchingNode match {
             case Some(nodeData) =>
-              log.info(
+              log.debug(
                 "Successfully fetched missing state node via SNAP GetTrieNodes ({} nodes in response)",
                 nodes.size
               )
@@ -174,7 +174,7 @@ class StateNodeFetcher(
     }
 
   private def sendGetTrieNodes(root: ByteString, pathGroups: Seq[Seq[ByteString]]): Unit = {
-    log.info(
+    log.debug(
       "Requesting missing state node via SNAP GetTrieNodes ({} path groups, root={})",
       pathGroups.size,
       root.take(4).toArray.map("%02x".format(_)).mkString
