@@ -552,7 +552,19 @@ class BlockPreparator(
         Right(BlockResult(worldState = world, gasUsed = acumGas, receipts = acumReceipts))
 
       case Seq(stx, otherStxs @ _*) =>
-        val upfrontCost = calculateUpfrontCost(stx.tx)
+        // EIP-4844: upfront balance check must include blob-gas cost too —
+        // otherwise a sender pre-funded with exactly gasLimit*maxFee + blobCost
+        // passes the check but underflows when the upfront deduction runs.
+        val blobGasCost = stx.tx match {
+          case bt: com.chipprbots.ethereum.domain.BlobTransaction =>
+            val blobGasUsed = BigInt(bt.blobVersionedHashes.size) * BigInt(131072)
+            val blobBaseFee = blockHeader.excessBlobGas
+              .map(eg => computeBlobBaseFee(eg, blockHeader.unixTimestamp))
+              .getOrElse(BigInt(1))
+            blobGasUsed * blobBaseFee
+          case _ => BigInt(0)
+        }
+        val upfrontCost = UInt256(calculateUpfrontCost(stx.tx).toBigInt + blobGasCost)
         val senderAddress = SignedTransaction.getSender(stx)
 
         val accountDataOpt = senderAddress
