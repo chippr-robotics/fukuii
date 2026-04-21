@@ -43,9 +43,43 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
       _ <- validateNonce(stx, senderAccount.nonce)
       _ <- validateGasLimitEnoughForIntrinsicGas(stx, blockHeader.number)
       _ <- validateTxGasLimitCap(stx, blockHeader.number, blockHeader.unixTimestamp)
+      _ <- validateMaxFeeAgainstBaseFee(stx, blockHeader)
       _ <- validateAccountHasEnoughGasToPayUpfrontCost(senderAccount.balance, upfrontGasCost)
       _ <- validateBlockHasEnoughGasLimitForTx(stx, accumGasUsed, blockHeader.gasLimit)
     } yield SignedTransactionValid
+
+  /** EIP-1559: reject txs whose maxFeePerGas cannot cover the block's baseFee, and reject txs
+    * where maxPriorityFeePerGas > maxFeePerGas. Applies to all dynamic-fee transaction
+    * variants (type 2 / 3 / 4). Legacy and Type-1 txs are post-paid at tx.gasPrice.
+    */
+  private def validateMaxFeeAgainstBaseFee(
+      stx: SignedTransaction,
+      blockHeader: BlockHeader
+  ): Either[SignedTransactionError, SignedTransactionValid] = {
+    val feeFields: Option[(BigInt, BigInt)] = stx.tx match {
+      case dyn: com.chipprbots.ethereum.domain.TransactionWithDynamicFee =>
+        Some((dyn.maxFeePerGas, dyn.maxPriorityFeePerGas))
+      case bt: com.chipprbots.ethereum.domain.BlobTransaction =>
+        Some((bt.maxFeePerGas, bt.maxPriorityFeePerGas))
+      case sct: com.chipprbots.ethereum.domain.SetCodeTransaction =>
+        Some((sct.maxFeePerGas, sct.maxPriorityFeePerGas))
+      case _ => None
+    }
+    feeFields match {
+      case None => Right(SignedTransactionValid)
+      case Some((maxFee, prio)) =>
+        val baseFee = blockHeader.baseFee.getOrElse(BigInt(0))
+        if (prio > maxFee)
+          Left(TransactionSyntaxError(s"maxPriorityFeePerGas ($prio) > maxFeePerGas ($maxFee)"))
+        else if (maxFee < baseFee)
+          Left(
+            TransactionSyntaxError(
+              s"INSUFFICIENT_MAX_FEE_PER_GAS: maxFeePerGas ($maxFee) < baseFee ($baseFee)"
+            )
+          )
+        else Right(SignedTransactionValid)
+    }
+  }
 
   /** Validates if the transaction is syntactically valid (lengths of the transaction fields are correct)
     *
