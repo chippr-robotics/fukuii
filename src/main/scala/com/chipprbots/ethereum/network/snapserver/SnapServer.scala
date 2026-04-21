@@ -256,11 +256,14 @@ object SnapServer extends Logger {
     val collected = scala.collection.mutable.ArrayBuffer.empty[(ByteString, com.chipprbots.ethereum.domain.Account)]
     var accumulated = 0
     val it = walkRange(rootNode, storage, originNibbles, limitNibbles)
+    // Match go-ethereum's accounting: only the hash + leaf bytes count toward the budget,
+    // not the per-item RLP envelope overhead. Proofs aren't counted either (they're a
+    // separate header in the response message).
     while (it.hasNext && (accumulated < maxBytes || collected.isEmpty)) {
       val (keyHash, accountRlp) = it.next()
       val account = accountRlp.toArray.toAccount
       collected += ((keyHash, account))
-      accumulated += keyHash.size + accountRlp.size + 4
+      accumulated += keyHash.size + accountRlp.size
     }
 
     // Build proof: path to the first account (or to startingHash if none in range), and
