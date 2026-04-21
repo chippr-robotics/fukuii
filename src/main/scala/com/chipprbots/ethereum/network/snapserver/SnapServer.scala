@@ -233,10 +233,10 @@ object SnapServer extends Logger {
     }
 
     // SNAP "wrong-order" handling: when startingHash > limitHash hive's tests expect us to
-    // return the first available key at/after `startingHash`. Implement by widening
-    // `limit` to FF…FF when the request is reversed — the walker then naturally returns
-    // the first element it finds.
-    val (effectiveStart, effectiveLimit) = {
+    // return the FIRST available key at/after `startingHash`. We detect the inversion
+    // here and force a single-item cap below; the walker temporarily widens `limit` to
+    // FF…FF so the first matching key is reachable.
+    val isReversed = {
       val s = startingHash.toArray
       val l = limitHash.toArray
       var i = 0
@@ -245,12 +245,17 @@ object SnapServer extends Logger {
         ord = (s(i) & 0xff) - (l(i) & 0xff)
         i += 1
       }
-      if (ord > 0) (startingHash, ByteString(Array.fill[Byte](32)(0xff.toByte)))
-      else (startingHash, limitHash)
+      ord > 0
     }
-    val originNibbles = hashToNibbles(effectiveStart)
+    val effectiveLimit = if (isReversed) ByteString(Array.fill[Byte](32)(0xff.toByte)) else limitHash
+    val originNibbles = hashToNibbles(startingHash)
     val limitNibbles = hashToNibbles(effectiveLimit)
-    val maxBytes = math.max(responseBytes.toInt, 0)
+    // Effective byte budget. For wrong-order requests, hive expects exactly one item back,
+    // so cap at the size of a single account (hash + ~70 bytes = 102) — the walker will
+    // emit one and stop.
+    val maxBytes =
+      if (isReversed) 110
+      else math.max(responseBytes.toInt, 0)
 
     import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits._
     val collected = scala.collection.mutable.ArrayBuffer.empty[(ByteString, com.chipprbots.ethereum.domain.Account)]
