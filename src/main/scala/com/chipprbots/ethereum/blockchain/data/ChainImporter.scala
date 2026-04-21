@@ -5,6 +5,7 @@ import java.io.{File, FileInputStream}
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.domain.Block.BlockDec
 import com.chipprbots.ethereum.ledger.BlockExecution
+import com.chipprbots.ethereum.ledger.BlockValidation
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.nextElementIndex
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -20,7 +21,8 @@ import com.chipprbots.ethereum.utils.Logger
 class ChainImporter(
     blockchainReader: BlockchainReader,
     blockchainWriter: BlockchainWriter,
-    blockExecution: BlockExecution
+    blockExecution: BlockExecution,
+    blockValidation: BlockValidation
 ) extends Logger {
 
   /** Import all blocks from an RLP chain file.
@@ -110,43 +112,24 @@ class ChainImporter(
   }
 
   private def importBlock(block: Block)(implicit blockchainConfig: BlockchainConfig): Either[Any, Seq[Receipt]] =
-    // Execute without pre/post validation — blocks are from a trusted source.
-    // Validate stateRoot (proves correct execution), log gas mismatches as warnings.
-    blockExecution.executeBlockNoValidation(block).flatMap { case (receipts, gasUsed, stateRootHash) =>
-      val gasMismatch = block.header.gasUsed != gasUsed
-      val stateMismatch = block.header.stateRoot != stateRootHash
-
-      if (gasMismatch || stateMismatch) {
-        // Per-tx cumulative gas for debugging
-        receipts.zipWithIndex.foreach { case (r, i) =>
-          log.error(s"Chain import: block ${block.header.number} tx[$i] cumulativeGas=${r.cumulativeGasUsed}")
+    // Validate header/body pre-execution (ommers, difficulty, nonce, withdrawals/blob fields, etc.),
+    // then execute, then validate post-execution (gasUsed, receiptsRoot, stateRoot).
+    // Invalid blocks are rejected and the previous chain head is preserved.
+    blockValidation.validateBlockBeforeExecution(block) match {
+      case Left(err) =>
+        Left(s"pre-execution validation failed: $err")
+      case Right(_) =>
+        blockExecution.executeBlockNoValidation(block).flatMap { case (receipts, gasUsed, stateRootHash) =>
+          blockValidation.validateBlockAfterExecution(block, stateRootHash, receipts, gasUsed) match {
+            case Left(err) =>
+              receipts.zipWithIndex.foreach { case (r, i) =>
+                log.error(s"Chain import: block ${block.header.number} tx[$i] cumulativeGas=${r.cumulativeGasUsed}")
+              }
+              Left(s"post-execution validation failed: $err")
+            case Right(_) =>
+              Right(receipts)
+          }
         }
-        log.error(s"Chain import: block ${block.header.number} totalGas: expected=${block.header.gasUsed} got=$gasUsed")
-        if (stateMismatch && !gasMismatch) {
-          // Gas matches but state doesn't — check EIP-2935 history storage
-          log.error(
-            s"Chain import: block ${block.header.number} STATE MISMATCH with correct gas — checking system state"
-          )
-        }
-      }
-
-      if (stateMismatch && gasMismatch) {
-        // Both state and gas are wrong — real execution error
-        Left(
-          s"stateRoot mismatch: expected ${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(block.header.stateRoot)}" +
-            s" got ${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(stateRootHash)}"
-        )
-      } else if (stateMismatch) {
-        Left(
-          s"stateRoot mismatch: expected ${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(block.header.stateRoot)}" +
-            s" got ${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(stateRootHash)}"
-        )
-      } else {
-        if (gasMismatch) {
-          log.warn(s"Chain import: block ${block.header.number} gas mismatch — state correct, accepting")
-        }
-        Right(receipts)
-      }
     }
 
   /** Decode concatenated RLP-encoded blocks from a byte array. */
