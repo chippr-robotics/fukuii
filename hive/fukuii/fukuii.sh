@@ -137,10 +137,12 @@ if [ -n "$HIVE_MINER" ]; then
 fi
 
 exec java \
-    -Xmx1g \
-    -Xms256m \
-    -Xss4M \
+    -Xmx512m \
+    -Xms128m \
+    -Xss2M \
     -XX:+UseG1GC \
+    -XX:MaxMetaspaceSize=256m \
+    -XX:+ExitOnOutOfMemoryError \
     $FLAGS \
     -jar /app/fukuii/lib/fukuii-assembly-0.1.240.jar \
     hive
