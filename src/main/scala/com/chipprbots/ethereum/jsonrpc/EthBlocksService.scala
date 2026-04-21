@@ -338,7 +338,13 @@ class EthBlocksService(
   }
 
   def blobBaseFee(req: BlobBaseFeeRequest): ServiceResponse[BlobBaseFeeResponse] = IO {
-    val fee = blockchainReader.getBestBlock().flatMap(_.header.excessBlobGas).map(_ => BigInt(1)).getOrElse(BigInt(1))
+    val fee = blockchainReader
+      .getBestBlock()
+      .flatMap(b => b.header.excessBlobGas.map(eg => (eg, b.header.unixTimestamp)))
+      .map { case (eg, ts) =>
+        com.chipprbots.ethereum.consensus.engine.BlobGasUtils.getBlobGasPrice(eg, ts, blockchainConfig)
+      }
+      .getOrElse(BigInt(0))
     Right(BlobBaseFeeResponse(fee))
   }
 
