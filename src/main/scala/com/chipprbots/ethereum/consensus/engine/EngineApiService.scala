@@ -179,6 +179,8 @@ class EngineApiService(
           Some(s"invalid block number: expected ${parent.number + 1} got ${block.header.number}")
         else if (block.header.unixTimestamp <= parent.unixTimestamp)
           Some(s"invalid timestamp: ${block.header.unixTimestamp} <= parent ${parent.unixTimestamp}")
+        else if (block.header.gasLimit < BigInt(5000))
+          Some(s"gas limit below minimum: ${block.header.gasLimit} < 5000")
         else {
           // EIP-1559 gas limit bounds: |gasLimit - parent.gasLimit| < parent.gasLimit / 1024
           val diff = (block.header.gasLimit - parent.gasLimit).abs
