@@ -99,9 +99,15 @@ if [ "$TTD" != "$MAX" ]; then
     FLAGS="$FLAGS -Dfukuii.network.engine-api.jwt-secret-path=$JWT_SECRET_FILE"
     FLAGS="$FLAGS -Dfukuii.mining.protocol=engine-api"
 else
-    # PoW chain — no engine API; 'pow' is Fukuii's name for the Ethash miner
+    # PoW chain — no engine API. Tests that use SealEngine=NoProof set
+    # HIVE_SKIP_POW; honor it by switching to the non-validating 'mocked'
+    # protocol so headers with fake Ethash seals aren't rejected.
     FLAGS="$FLAGS -Dfukuii.network.engine-api.enabled=false"
-    FLAGS="$FLAGS -Dfukuii.mining.protocol=pow"
+    if [ -n "$HIVE_SKIP_POW" ]; then
+        FLAGS="$FLAGS -Dfukuii.mining.protocol=mocked"
+    else
+        FLAGS="$FLAGS -Dfukuii.mining.protocol=pow"
+    fi
 fi
 
 # P2P
