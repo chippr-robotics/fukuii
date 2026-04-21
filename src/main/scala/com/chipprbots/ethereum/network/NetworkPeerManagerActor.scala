@@ -848,7 +848,7 @@ object NetworkPeerManagerActor {
         appStateStorage,
         forkResolverOpt,
         snapSyncControllerOpt,
-        evmCodeStorage,
+        evmCodeStorageOpt,
         mptStorageOpt,
         blockchainReader
       )
