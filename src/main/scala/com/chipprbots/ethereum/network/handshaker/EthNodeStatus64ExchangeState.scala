@@ -50,7 +50,17 @@ case class EthNodeStatus64ExchangeState(
       localForkId
     )
 
-    if (status.genesisHash != localGenesisHash) {
+    // D15: Besu EthProtocolManager.handleStatusMessage() checks networkId first.
+    // ETH/64+ handshaker was missing this check — nodes with wrong networkId (e.g. PulseChain=369)
+    // but matching genesis hash were accepted, polluting the SNAP peer pool.
+    if (status.networkId != peerConfiguration.networkId) {
+      log.warn(
+        "STATUS_EXCHANGE: NetworkId mismatch! Local: {}, Remote: {} - disconnecting (Besu: SUBPROTOCOL_TRIGGERED_MISMATCHED_NETWORK)",
+        peerConfiguration.networkId,
+        status.networkId
+      )
+      DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
+    } else if (status.genesisHash != localGenesisHash) {
       log.warn(
         "STATUS_EXCHANGE: Peer genesis hash mismatch! Local: {}, Remote: {} - disconnecting peer",
         localGenesisHash,
