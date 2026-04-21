@@ -536,6 +536,10 @@ class SyncController(
         if (needBytecode || needStorage) {
           startRecovery(needBytecode, needStorage)
         } else {
+          // SnapSyncDone=true means finalizeSnapSync() ran, which is only called after healing
+          // completes with abandonedNodes==0. The old deferred-merkleization guard that cleared
+          // this flag is removed: deferred-merkleization is no longer used and that code path
+          // caused SnapSyncDone to be erased on every restart, restarting SNAP sync from scratch.
           startRegularSync()
         }
       case (_, false, false, true) =>
