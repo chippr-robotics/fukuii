@@ -725,7 +725,7 @@ class TrieNodeHealingCoordinator(
       if (newCount >= SnapTimeoutDisconnectThreshold) {
         log.warning(
           s"[HEAL-REPUTATION] Peer $peerId accumulated $newCount consecutive GetTrieNodes timeouts " +
-            s"— disconnecting (Besu PeerReputation.TIMEOUT_THRESHOLD=$SnapTimeoutDisconnectThreshold)"
+            s"— disconnecting (threshold=$SnapTimeoutDisconnectThreshold)"
         )
         consecutiveGetTrieNodeTimeouts.remove(peerId)
         knownAvailablePeers.retain(_.id.value != peerId)

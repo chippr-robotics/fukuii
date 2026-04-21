@@ -50,7 +50,7 @@ case class EthNodeStatus69ExchangeState(
     // D15: Besu EthProtocolManager.handleStatusMessage() checks networkId first.
     if (status.networkId != peerConfiguration.networkId) {
       log.warn(
-        "ETH69_STATUS: NetworkId mismatch! Local: {}, Remote: {} - disconnecting (D15)",
+        "ETH69_STATUS: NetworkId mismatch! Local: {}, Remote: {} - disconnecting",
         peerConfiguration.networkId,
         status.networkId
       )
@@ -70,7 +70,7 @@ case class EthNodeStatus69ExchangeState(
             status.forkId
           )
       } yield {
-        log.info("ETH69_STATUS: ForkId validation result: {}", validationResult)
+        log.debug("ETH69_STATUS: ForkId validation result: {}", validationResult)
         validationResult match {
           case Connect =>
             log.info("ETH69_STATUS: ForkId validation passed - accepting peer")

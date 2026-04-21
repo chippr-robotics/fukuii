@@ -44,7 +44,7 @@ case class EthNodeStatus64ExchangeState(
     val localBestTimestamp = if (storedTimestamp == 0L) System.currentTimeMillis() / 1000 else storedTimestamp
     val localForkId = ForkId.create(localGenesisHash, blockchainConfig)(localBestBlock, localBestTimestamp)
 
-    log.info(
+    log.debug(
       "STATUS_EXCHANGE: Local state - bestBlock={}, genesisHash={}, localForkId={}",
       localBestBlock,
       localGenesisHash.toHex,
@@ -56,7 +56,7 @@ case class EthNodeStatus64ExchangeState(
     // but matching genesis hash were accepted, polluting the SNAP peer pool.
     if (status.networkId != peerConfiguration.networkId) {
       log.warn(
-        "STATUS_EXCHANGE: NetworkId mismatch! Local: {}, Remote: {} - disconnecting (D15)",
+        "STATUS_EXCHANGE: NetworkId mismatch! Local: {}, Remote: {} - disconnecting",
         peerConfiguration.networkId,
         status.networkId
       )
@@ -76,7 +76,7 @@ case class EthNodeStatus64ExchangeState(
             status.forkId
           )
       } yield {
-        log.info("STATUS_EXCHANGE: ForkId validation result: {}", validationResult)
+        log.debug("STATUS_EXCHANGE: ForkId validation result: {}", validationResult)
         validationResult match {
           case Connect =>
             // EIP-2124: ForkId validation replaces the fork block exchange for ETH64+

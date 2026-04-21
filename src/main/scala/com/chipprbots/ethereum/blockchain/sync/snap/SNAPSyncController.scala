@@ -618,8 +618,7 @@ class SNAPSyncController(
       // When abandonedNodes==0, every referenced trie node is in storage — skip all validation.
       if (abandonedNodes == 0) {
         log.info(
-          s"[D17] Healing complete with 0 abandoned nodes (healed=$totalHealed) — " +
-            "skipping validation walk, finalizing SNAP sync directly (Besu-aligned)"
+          s"Healing complete with 0 abandoned nodes (healed=$totalHealed) — finalizing SNAP sync"
         )
         pivotStalenessCheckTask.foreach(_.cancel())
         pivotStalenessCheckTask = None
