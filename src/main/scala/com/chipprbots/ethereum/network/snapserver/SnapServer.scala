@@ -430,13 +430,7 @@ object SnapServer extends Logger {
     val collected = scala.collection.mutable.ArrayBuffer.empty[ByteString]
 
     if (rootNode == NullNode) {
-      // Root not found — return one empty entry per request, truncated to budget.
-      var idx = 0
-      while (idx < paths.size && (accumulated < maxBytes || collected.isEmpty)) {
-        collected += ByteString.empty
-        accumulated = accumulated + 1
-        idx += 1
-      }
+      // Root not found — return empty list (no entries), per go-ethereum handler.go behaviour.
     } else {
       var idx = 0
       while (idx < paths.size && (accumulated < maxBytes || collected.isEmpty)) {
