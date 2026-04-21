@@ -366,7 +366,7 @@ class NetworkPeerManagerActor(
 
     peerWithInfo.foreach { pwi =>
       val response = mptStorageOpt match {
-        case Some(storage) =>
+        case Some(storage) if isStateRootFresh(msg.rootHash) =>
           com.chipprbots.ethereum.network.snapserver.SnapServer.serveAccountRange(
             requestId = msg.requestId,
             rootHash = msg.rootHash,
@@ -375,11 +375,34 @@ class NetworkPeerManagerActor(
             responseBytes = msg.responseBytes,
             storage = storage
           )
-        case None =>
+        case _ =>
+          // Per SNAP/1: respond with empty when state root isn't within the recent
+          // window we can serve. Hive's "Test 11" sends genesis stateRoot (older than
+          // 127 blocks) and expects an empty response.
           AccountRange(msg.requestId, Seq.empty, Seq.empty)
       }
       pwi.peer.ref ! PeerActor.SendMessage(response)
     }
+  }
+
+  /** Per SNAP/1: nodes only need to serve state for "recent" roots — geth uses a 128-block
+    * window. Scan the last 128 canonical block headers and accept the request only when
+    * the requested rootHash matches one of them. Returns true (serve) if blockchainReader
+    * isn't injected (best-effort fallback for non-test paths).
+    */
+  private def isStateRootFresh(rootHash: ByteString): Boolean = blockchainReader match {
+    case None => true
+    case Some(reader) =>
+      val tip = reader.getBestBlockNumber()
+      val window = BigInt(128)
+      val from = (tip - window).max(BigInt(0))
+      var n = tip
+      while (n >= from) {
+        val matchFound = reader.getBlockHeaderByNumber(n).exists(_.stateRoot == rootHash)
+        if (matchFound) return true
+        n = n - 1
+      }
+      false
   }
 
   /** Handle incoming GetStorageRanges request from a peer (server-side)
@@ -750,7 +773,8 @@ object NetworkPeerManagerActor {
       forkResolverOpt: Option[ForkResolver],
       snapSyncControllerOpt: Option[ActorRef] = None,
       evmCodeStorage: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
-      mptStorageOpt: Option[com.chipprbots.ethereum.db.storage.MptStorage] = None
+      mptStorageOpt: Option[com.chipprbots.ethereum.db.storage.MptStorage] = None,
+      blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader] = None
   ): Props =
     Props(
       new NetworkPeerManagerActor(
@@ -760,7 +784,8 @@ object NetworkPeerManagerActor {
         forkResolverOpt,
         snapSyncControllerOpt,
         evmCodeStorage,
-        mptStorageOpt
+        mptStorageOpt,
+        blockchainReader
       )
     )
 }

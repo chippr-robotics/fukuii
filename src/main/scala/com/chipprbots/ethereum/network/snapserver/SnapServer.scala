@@ -232,8 +232,24 @@ object SnapServer extends Logger {
       return AccountRange(requestId, Seq.empty, Seq.empty)
     }
 
-    val originNibbles = hashToNibbles(startingHash)
-    val limitNibbles = hashToNibbles(limitHash)
+    // SNAP "wrong-order" handling: when startingHash > limitHash hive's tests expect us to
+    // return the first available key at/after `startingHash`. Implement by widening
+    // `limit` to FF…FF when the request is reversed — the walker then naturally returns
+    // the first element it finds.
+    val (effectiveStart, effectiveLimit) = {
+      val s = startingHash.toArray
+      val l = limitHash.toArray
+      var i = 0
+      var ord = 0
+      while (i < s.length && i < l.length && ord == 0) {
+        ord = (s(i) & 0xff) - (l(i) & 0xff)
+        i += 1
+      }
+      if (ord > 0) (startingHash, ByteString(Array.fill[Byte](32)(0xff.toByte)))
+      else (startingHash, limitHash)
+    }
+    val originNibbles = hashToNibbles(effectiveStart)
+    val limitNibbles = hashToNibbles(effectiveLimit)
     val maxBytes = math.max(responseBytes.toInt, 0)
 
     import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits._
