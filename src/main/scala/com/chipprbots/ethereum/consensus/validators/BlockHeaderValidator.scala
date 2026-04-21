@@ -58,6 +58,9 @@ object BlockHeaderError {
   case class HeaderBaseFeeError(msg: String) extends BlockHeaderError {
     override def toString: String = s"INVALID_BASE_FEE_PER_GAS: $msg"
   }
+  case class HeaderBlobGasError(msg: String) extends BlockHeaderError {
+    override def toString: String = s"INVALID_BLOB_GAS: $msg"
+  }
   case class HeaderUnexpectedError(msg: String) extends BlockHeaderError
   // Post-merge validation errors
   case class PostMergeNonceError(nonce: org.apache.pekko.util.ByteString) extends BlockHeaderError
