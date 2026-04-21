@@ -13,7 +13,9 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.{GetTrieNodes, TrieNodes}
+import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 
 /** TrieNodeHealingCoordinator manages the healing phase of SNAP sync.
   *
@@ -116,6 +118,13 @@ class TrieNodeHealingCoordinator(
   // switch, so field starts fresh automatically; explicit clear in HealingPivotRefreshed
   // for safety).
   private val triedPeersForTask = mutable.HashMap.empty[ByteString, mutable.Set[String]]
+  // Besu-aligned PeerReputation: consecutive GetTrieNodes timeout counter per peer.
+  // After SnapTimeoutDisconnectThreshold consecutive timeouts, disconnect the peer.
+  // Mirrors Besu PeerReputation.recordRequestTimeout() with TIMEOUT_THRESHOLD=5.
+  // Resets to 0 on any successful GetTrieNodes response (Besu: recordUsefulResponse).
+  // Cleared on pivot refresh. Static peers (configured SNAP servers) are exempt.
+  private val consecutiveGetTrieNodeTimeouts = mutable.HashMap.empty[String, Int]
+  private val SnapTimeoutDisconnectThreshold = 5
   private var pivotRefreshRequested: Boolean = false
   // Post-pivot-refresh cooldown: prevents immediate re-dispatch before peers sync to new root.
   // Without this, all peers return empty → stateless → another HealingAllPeersStateless → tight loop.
@@ -292,6 +301,7 @@ class TrieNodeHealingCoordinator(
       peersFailedOnRoot.clear() // new root — all peers get a fresh chance on the new root
       peerCooldownUntilMs.clear()
       triedPeersForTask.clear() // new root — all peers get fresh chance per task
+      consecutiveGetTrieNodeTimeouts.clear() // new root — reset all peer reputation counts
       // Besu-aligned D12: no peerResponseBytesTarget to clear.
       // Cancel active requests (they're for the old root)
       activeRequests.keys.foreach(requestTracker.completeRequest(_, 0))
@@ -653,6 +663,8 @@ class TrieNodeHealingCoordinator(
     //   - pivot refresh when all known peers have failed on root (peersFailedOnRoot saturates)
     if (healedCount > 0) {
       statelessPeers -= peer.id.value
+      // Besu PeerReputation.recordUsefulResponse(): reset consecutive timeout counter on success.
+      consecutiveGetTrieNodeTimeouts.remove(peer.id.value)
     } else {
       recordPeerCooldown(peer, "empty healing response")
       statelessPeers += peer.id.value
@@ -699,6 +711,24 @@ class TrieNodeHealingCoordinator(
 
     activeRequests.remove(requestId)
     recordPeerCooldown(peer, "request timeout")
+    // Besu PeerReputation: accumulate consecutive timeout count; disconnect on threshold.
+    // Mirrors PeerReputation.recordRequestTimeout() with TIMEOUT_THRESHOLD=5.
+    // PulseChain/ETH-mainnet nodes time out on every GetTrieNodes — evict them promptly.
+    if (!peer.isStatic) {
+      val peerId = peer.id.value
+      val newCount = consecutiveGetTrieNodeTimeouts.getOrElse(peerId, 0) + 1
+      consecutiveGetTrieNodeTimeouts(peerId) = newCount
+      if (newCount >= SnapTimeoutDisconnectThreshold) {
+        log.warning(
+          s"[HEAL-REPUTATION] Peer $peerId accumulated $newCount consecutive GetTrieNodes timeouts " +
+            s"— disconnecting (Besu PeerReputation.TIMEOUT_THRESHOLD=$SnapTimeoutDisconnectThreshold)"
+        )
+        consecutiveGetTrieNodeTimeouts.remove(peerId)
+        knownAvailablePeers.retain(_.id.value != peerId)
+        peersFailedOnRoot -= peerId
+        peer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.UselessPeer)
+      }
+    }
     // Besu-aligned D12: no adaptive byte budget ratcheting on timeout.
 
     // Increment retry count and skip exhausted tasks
