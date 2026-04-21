@@ -41,7 +41,10 @@ class NetworkPeerManagerActor(
     peerEventBusActor: ActorRef,
     appStateStorage: AppStateStorage,
     forkResolverOpt: Option[ForkResolver],
-    initialSnapSyncControllerOpt: Option[ActorRef] = None
+    initialSnapSyncControllerOpt: Option[ActorRef] = None,
+    evmCodeStorage: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
+    mptStorageOpt: Option[com.chipprbots.ethereum.db.storage.MptStorage] = None,
+    blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader] = None
 ) extends Actor
     with ActorLogging {
 
@@ -357,27 +360,63 @@ class NetworkPeerManagerActor(
       peerId: PeerId,
       peerWithInfo: Option[PeerWithInfo]
   ): Unit = {
-    // Note: This is an optional server-side implementation
-    // Fukuii primarily acts as a client, so we log and ignore for now
     log.debug(
       s"Received GetAccountRange request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, start=${msg.startingHash.take(4).toHex}, limit=${msg.limitHash.take(4).toHex}, bytes=${msg.responseBytes}"
     )
 
-    // TODO: Implement server-side account range retrieval
-    // 1. Verify we have the requested state root
-    // 2. Retrieve accounts from startingHash to limitHash (up to responseBytes)
-    // 3. Generate Merkle proofs for the range
-    // 4. Send AccountRange response
-
-    // For now, send an empty response to indicate we don't serve SNAP data
     peerWithInfo.foreach { pwi =>
-      val emptyResponse = AccountRange(
-        requestId = msg.requestId,
-        accounts = Seq.empty,
-        proof = Seq.empty
-      )
-      pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+      val response = mptStorageOpt match {
+        case Some(storage) if isStateRootFresh(msg.rootHash) =>
+          com.chipprbots.ethereum.network.snapserver.SnapServer.serveAccountRange(
+            requestId = msg.requestId,
+            rootHash = msg.rootHash,
+            startingHash = msg.startingHash,
+            limitHash = msg.limitHash,
+            responseBytes = msg.responseBytes,
+            storage = storage
+          )
+        case _ =>
+          // Per SNAP/1: respond with empty when state root isn't within the recent
+          // window we can serve. Hive's "Test 11" sends genesis stateRoot (older than
+          // 127 blocks) and expects an empty response.
+          AccountRange(msg.requestId, Seq.empty, Seq.empty)
+      }
+      pwi.peer.ref ! PeerActor.SendMessage(response)
     }
+  }
+
+  // Cache of recent canonical state roots, refreshed lazily when the chain advances. The
+  // 128-block window matches go-ethereum's snap-serve policy and avoids 128 RocksDB reads
+  // per inbound SNAP request — critical when the hive snap simulator fires dozens of
+  // back-to-back GetAccountRange calls at us.
+  private var freshRootCache: scala.collection.mutable.Set[ByteString] = scala.collection.mutable.Set.empty
+  private var freshRootCacheTip: BigInt = BigInt(-1)
+
+  private def refreshFreshRootCache(reader: com.chipprbots.ethereum.domain.BlockchainReader): Unit = {
+    val tip = reader.getBestBlockNumber()
+    if (tip != freshRootCacheTip) {
+      val window = BigInt(128)
+      val from = (tip - window).max(BigInt(0))
+      val newCache = scala.collection.mutable.Set.empty[ByteString]
+      var n = tip
+      while (n >= from) {
+        reader.getBlockHeaderByNumber(n).foreach(h => newCache += h.stateRoot)
+        n = n - 1
+      }
+      freshRootCache = newCache
+      freshRootCacheTip = tip
+    }
+  }
+
+  /** Per SNAP/1: nodes only need to serve state for "recent" roots — geth uses a 128-block
+    * window. Looks up the requested rootHash in a cached set of recent canonical state
+    * roots. Returns true (serve) if blockchainReader isn't injected.
+    */
+  private def isStateRootFresh(rootHash: ByteString): Boolean = blockchainReader match {
+    case None => true
+    case Some(reader) =>
+      refreshFreshRootCache(reader)
+      freshRootCache.contains(rootHash)
   }
 
   /** Handle incoming GetStorageRanges request from a peer (server-side)
@@ -398,20 +437,75 @@ class NetworkPeerManagerActor(
       s"Received GetStorageRanges request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, accounts=${msg.accountHashes.size}, start=${msg.startingHash.take(4).toHex}, limit=${msg.limitHash.take(4).toHex}, bytes=${msg.responseBytes}"
     )
 
-    // TODO: Implement server-side storage range retrieval
-    // 1. Verify we have the requested state root
-    // 2. For each account, retrieve storage slots from startingHash to limitHash
-    // 3. Generate Merkle proofs for each account's storage
-    // 4. Send StorageRanges response
-
-    // For now, send an empty response
     peerWithInfo.foreach { pwi =>
-      val emptyResponse = StorageRanges(
-        requestId = msg.requestId,
-        slots = Seq.empty,
-        proof = Seq.empty
-      )
-      pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+      val response = mptStorageOpt match {
+        case Some(storage) =>
+          // Per-account storage roots come from looking up each account in the state trie.
+          // Here we resolve via blockchainReader's ability to fetch the account at the
+          // canonical state root — but the SNAP request specifies an arbitrary state root.
+          // Approximation: walk the account trie at msg.rootHash to find each account's
+          // storageRoot. Since this is only on the server-serve path, simple fallback:
+          // look up each account via SnapServer using msg.rootHash.
+          import com.chipprbots.ethereum.network.snapserver.SnapServer
+          import com.chipprbots.ethereum.mpt.{MerklePatriciaTrie, MptTraversals, NullNode}
+          val accountRoot: ByteString => Option[ByteString] = { accountHash =>
+            // walk the state trie at msg.rootHash to find this account, return storageRoot
+            val nibbles = SnapServer.hashToNibbles(accountHash)
+            // crude lookup: traverse from root following nibbles, return the leaf's account.storageRoot
+            // We can use the existing MerklePatriciaTrie API for lookup.
+            try {
+              val stateRoot =
+                if (msg.rootHash.toArray.sameElements(MerklePatriciaTrie.EmptyRootHash)) None
+                else Some(msg.rootHash.toArray)
+              stateRoot.flatMap { sr =>
+                val rootNode = storage.get(sr)
+                if (rootNode == NullNode) None
+                else {
+                  // find leaf matching nibbles
+                  def find(node: com.chipprbots.ethereum.mpt.MptNode, rem: Array[Byte]): Option[ByteString] = {
+                    val resolved = node match {
+                      case h: com.chipprbots.ethereum.mpt.HashNode => storage.get(h.hashNode)
+                      case other                                   => other
+                    }
+                    resolved match {
+                      case com.chipprbots.ethereum.mpt.LeafNode(key, value, _, _, _) =>
+                        if (rem.sameElements(key.toArray)) {
+                          import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits._
+                          val acct = value.toArray.toAccount
+                          Some(acct.storageRoot)
+                        } else None
+                      case com.chipprbots.ethereum.mpt.ExtensionNode(sk, next, _, _, _) =>
+                        if (rem.length >= sk.length && rem.take(sk.length).sameElements(sk.toArray))
+                          find(next, rem.drop(sk.length))
+                        else None
+                      case com.chipprbots.ethereum.mpt.BranchNode(children, _, _, _, _) =>
+                        if (rem.isEmpty) None
+                        else {
+                          val ch = children(rem(0) & 0x0f)
+                          if (ch == NullNode) None else find(ch, rem.drop(1))
+                        }
+                      case _ => None
+                    }
+                  }
+                  find(rootNode, nibbles)
+                }
+              }
+            } catch { case _: Throwable => None }
+          }
+          SnapServer.serveStorageRanges(
+            requestId = msg.requestId,
+            rootHash = msg.rootHash,
+            accountHashes = msg.accountHashes,
+            startingHash = msg.startingHash,
+            limitHash = msg.limitHash,
+            responseBytes = msg.responseBytes,
+            storage = storage,
+            accountRoot = accountRoot
+          )
+        case None =>
+          StorageRanges(msg.requestId, Seq.empty, Seq.empty)
+      }
+      pwi.peer.ref ! PeerActor.SendMessage(response)
     }
   }
 
@@ -433,18 +527,20 @@ class NetworkPeerManagerActor(
       s"Received GetTrieNodes request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, paths=${msg.paths.size}, bytes=${msg.responseBytes}"
     )
 
-    // TODO: Implement server-side trie node retrieval
-    // 1. Verify we have the requested state root
-    // 2. For each path, retrieve the trie node
-    // 3. Send TrieNodes response
-
-    // For now, send an empty response
     peerWithInfo.foreach { pwi =>
-      val emptyResponse = TrieNodes(
-        requestId = msg.requestId,
-        nodes = Seq.empty
-      )
-      pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+      val response = mptStorageOpt match {
+        case Some(storage) =>
+          com.chipprbots.ethereum.network.snapserver.SnapServer.serveTrieNodes(
+            requestId = msg.requestId,
+            rootHash = msg.rootHash,
+            paths = msg.paths,
+            responseBytes = msg.responseBytes,
+            storage = storage
+          )
+        case None =>
+          TrieNodes(msg.requestId, Seq.empty)
+      }
+      pwi.peer.ref ! PeerActor.SendMessage(response)
     }
   }
 
@@ -466,17 +562,29 @@ class NetworkPeerManagerActor(
       s"Received GetByteCodes request from peer $peerId: requestId=${msg.requestId}, hashes=${msg.hashes.size}, bytes=${msg.responseBytes}"
     )
 
-    // TODO: Implement server-side bytecode retrieval
-    // 1. For each code hash, retrieve the bytecode from EvmCodeStorage
-    // 2. Send ByteCodes response (up to responseBytes limit)
-
-    // For now, send an empty response
     peerWithInfo.foreach { pwi =>
-      val emptyResponse = ByteCodes(
-        requestId = msg.requestId,
-        codes = Seq.empty
-      )
-      pwi.peer.ref ! PeerActor.SendMessage(emptyResponse)
+      // Look up each requested code hash in EvmCodeStorage. Stop accumulating when we
+      // would exceed the peer's responseBytes soft limit (per SNAP/1 spec, the server
+      // is allowed to truncate the response prefix early — proofs aren't needed for
+      // bytecodes since each code is keyed by its keccak256 hash).
+      val maxBytes = msg.responseBytes.toInt.max(0)
+      val codes: Seq[ByteString] = evmCodeStorage match {
+        case Some(storage) =>
+          val collected = scala.collection.mutable.ListBuffer.empty[ByteString]
+          var totalBytes = 0
+          val it = msg.hashes.iterator
+          while (it.hasNext && (totalBytes < maxBytes || collected.isEmpty)) {
+            val codeHash = it.next()
+            storage.get(codeHash).foreach { code =>
+              collected += code
+              totalBytes += code.size
+            }
+          }
+          collected.toList
+        case None => Seq.empty
+      }
+      val response = ByteCodes(requestId = msg.requestId, codes = codes)
+      pwi.peer.ref ! PeerActor.SendMessage(response)
     }
   }
 
@@ -492,7 +600,15 @@ object NetworkPeerManagerActor {
     SNAP.Codes.AccountRangeCode,
     SNAP.Codes.StorageRangesCode,
     SNAP.Codes.TrieNodesCode,
-    SNAP.Codes.ByteCodesCode
+    SNAP.Codes.ByteCodesCode,
+    // SNAP protocol request codes — incoming requests we serve as a SNAP server.
+    // Hive's devp2p snap suite (and any peer that decides to fetch state from us)
+    // sends these. Subscribing here is required for handleGet*Range/Codes/TrieNodes
+    // to fire.
+    SNAP.Codes.GetAccountRangeCode,
+    SNAP.Codes.GetStorageRangesCode,
+    SNAP.Codes.GetTrieNodesCode,
+    SNAP.Codes.GetByteCodesCode
   )
 
   /** RemoteStatus was created to decouple status information from protocol status messages (they are different versions
@@ -669,7 +785,10 @@ object NetworkPeerManagerActor {
       peerEventBusActor: ActorRef,
       appStateStorage: AppStateStorage,
       forkResolverOpt: Option[ForkResolver],
-      snapSyncControllerOpt: Option[ActorRef] = None
+      snapSyncControllerOpt: Option[ActorRef] = None,
+      evmCodeStorage: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
+      mptStorageOpt: Option[com.chipprbots.ethereum.db.storage.MptStorage] = None,
+      blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader] = None
   ): Props =
     Props(
       new NetworkPeerManagerActor(
@@ -677,7 +796,10 @@ object NetworkPeerManagerActor {
         peerEventBusActor,
         appStateStorage,
         forkResolverOpt,
-        snapSyncControllerOpt
+        snapSyncControllerOpt,
+        evmCodeStorage,
+        mptStorageOpt,
+        blockchainReader
       )
     )
 }

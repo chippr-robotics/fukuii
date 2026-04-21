@@ -346,11 +346,20 @@ trait NetworkPeerManagerActorBuilder {
     with PeerManagerActorBuilder
     with PeerEventBusBuilder
     with ForkResolverBuilder
-    with StorageBuilder =>
+    with StorageBuilder
+    with BlockchainBuilder =>
 
   lazy val networkPeerManager: ActorRef = system.actorOf(
     NetworkPeerManagerActor
-      .props(peerManager, peerEventBus, storagesInstance.storages.appStateStorage, forkResolverOpt),
+      .props(
+        peerManager,
+        peerEventBus,
+        storagesInstance.storages.appStateStorage,
+        forkResolverOpt,
+        evmCodeStorage = Some(storagesInstance.storages.evmCodeStorage),
+        mptStorageOpt = Some(storagesInstance.storages.stateStorage.getReadOnlyStorage),
+        blockchainReader = Some(blockchainReader)
+      ),
     "network-peer-manager"
   )
 
