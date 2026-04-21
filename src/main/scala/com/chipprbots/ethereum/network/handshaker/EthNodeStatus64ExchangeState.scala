@@ -56,7 +56,7 @@ case class EthNodeStatus64ExchangeState(
     // but matching genesis hash were accepted, polluting the SNAP peer pool.
     if (status.networkId != peerConfiguration.networkId) {
       log.warn(
-        "STATUS_EXCHANGE: NetworkId mismatch! Local: {}, Remote: {} - disconnecting (Besu: SUBPROTOCOL_TRIGGERED_MISMATCHED_NETWORK)",
+        "STATUS_EXCHANGE: NetworkId mismatch! Local: {}, Remote: {} - disconnecting (D15)",
         peerConfiguration.networkId,
         status.networkId
       )

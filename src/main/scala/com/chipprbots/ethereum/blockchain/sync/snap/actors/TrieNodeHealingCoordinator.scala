@@ -243,6 +243,10 @@ class TrieNodeHealingCoordinator(
         s"[HEAL] Root ${Hex.toHexString(root.take(8).toArray)} seeded with empty path — " +
         s"inline child discovery will populate the work queue top-down (Besu-aligned)"
       )
+      // If root was already in storage (queueNodes skipped it), pendingTasks=0 and
+      // activeRequests=0 immediately. Without this, HealingCheckCompletion is never sent
+      // and the coordinator waits indefinitely for a response that never comes.
+      self ! HealingCheckCompletion
 
     case QueueMissingNodes(nodes) =>
       log.info(s"[HEAL-RESUME] Received ${nodes.size} persisted missing nodes from prior session")

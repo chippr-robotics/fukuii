@@ -50,7 +50,7 @@ case class EthNodeStatus69ExchangeState(
     // D15: Besu EthProtocolManager.handleStatusMessage() checks networkId first.
     if (status.networkId != peerConfiguration.networkId) {
       log.warn(
-        "ETH69_STATUS: NetworkId mismatch! Local: {}, Remote: {} - disconnecting (Besu: SUBPROTOCOL_TRIGGERED_MISMATCHED_NETWORK)",
+        "ETH69_STATUS: NetworkId mismatch! Local: {}, Remote: {} - disconnecting (D15)",
         peerConfiguration.networkId,
         status.networkId
       )
