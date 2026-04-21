@@ -362,7 +362,7 @@ class PeerManagerActor(
     validConnection match {
       case Right(address) =>
         log.debug(
-          "[P2P] Accepting incoming connection from {} (pending={}/{})",
+          "Accepting incoming connection from {} (pending={}/{})",
           remoteAddress,
           connectedPeers.incomingPendingPeersCount,
           peerConfiguration.maxPendingPeers
@@ -372,7 +372,7 @@ class PeerManagerActor(
         context.become(listening(newConnectedPeers))
 
       case Left(error) =>
-        log.debug("[P2P] Rejecting incoming connection from {}: {}", remoteAddress, error)
+        log.debug("Rejecting incoming connection from {}: {}", remoteAddress, error)
         handleConnectionErrors(error)
     }
   }
