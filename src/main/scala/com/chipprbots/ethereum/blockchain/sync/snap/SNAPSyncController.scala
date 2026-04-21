@@ -609,11 +609,26 @@ class SNAPSyncController(
     case StateHealingComplete(abandonedNodes, totalHealed)
         if trieNodeHealingCoordinator.contains(sender()) =>
       log.info(s"State healing complete [abandonedNodes=$abandonedNodes, healed=$totalHealed].")
-      if (trieWalkInProgress) {
+      // D17 (Besu alignment): Besu finalizes SNAP sync immediately after healing with no
+      // post-healing validation trie walk. SnapWorldDownloadState.onSnapServerDown() /
+      // TrieNodeHealingStep just calls worldStateDownloadState.checkCompletion() which
+      // calls onAllTrieNodeHealingRequestsComplete() → triggers finalization directly.
+      // fukuii's 3-pass validation (findMissingNodesWithPaths + validateAccountTrie +
+      // validateAllStorageTries) has no Besu counterpart and takes 30+ minutes on mainnet.
+      // When abandonedNodes==0, every referenced trie node is in storage — skip all validation.
+      if (abandonedNodes == 0) {
+        log.info(
+          s"[D17] Healing complete with 0 abandoned nodes (healed=$totalHealed) — " +
+            "skipping validation walk, finalizing SNAP sync directly (Besu-aligned)"
+        )
+        pivotStalenessCheckTask.foreach(_.cancel())
+        pivotStalenessCheckTask = None
+        pivotBlock.foreach(finalizeSnapSync)
+      } else if (trieWalkInProgress) {
         // A trie walk is already running — its result will determine next step
         log.info("Trie walk in progress, waiting for result...")
       } else {
-        // No walk in progress — start one to check for deeper missing nodes
+        // abandonedNodes > 0: some nodes couldn't be healed — run the walk to find stragglers
         startTrieWalk()
       }
 
