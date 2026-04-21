@@ -456,7 +456,14 @@ class BlockPreparator(
     }
     val totalGasToRefund = gasLimit - executionGasToPayToMiner
 
-    val refundGasFn = pay(senderAddress, (totalGasToRefund * gasPrice).toUInt256, withTouch = false) _
+    // Upfront charge was gasLimit * tx.gasPrice (= maxFeePerGas for EIP-1559).
+    // For legacy/Type-1 txs effectiveGasPrice == tx.gasPrice, so this matches
+    // (gasLimit - executionGas) * gasPrice. For EIP-1559/4844/7702 txs the
+    // refund also needs to return gasLimit * (maxFeePerGas - effectiveGasPrice)
+    // so the sender only pays executionGas * effectiveGasPrice net.
+    val maxFeeOverpay = UInt256(stx.tx.gasPrice) - gasPrice
+    val refundAmount = (totalGasToRefund * gasPrice) + (UInt256(gasLimit) * maxFeeOverpay)
+    val refundGasFn = pay(senderAddress, refundAmount.toUInt256, withTouch = false) _
     // EIP-1559: miner receives only the priority fee (effectiveGasPrice - baseFee).
     // The baseFee portion is burned on ETH chains, or credited to treasury on ETC (ECIP-1111).
     val minerGasPrice = blockHeader.baseFee match {
