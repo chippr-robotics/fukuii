@@ -99,9 +99,9 @@ if [ "$TTD" != "$MAX" ]; then
     FLAGS="$FLAGS -Dfukuii.network.engine-api.jwt-secret-path=$JWT_SECRET_FILE"
     FLAGS="$FLAGS -Dfukuii.mining.protocol=engine-api"
 else
-    # PoW chain — no engine API, use ethash mining
+    # PoW chain — no engine API; 'pow' is Fukuii's name for the Ethash miner
     FLAGS="$FLAGS -Dfukuii.network.engine-api.enabled=false"
-    FLAGS="$FLAGS -Dfukuii.mining.protocol=ethash"
+    FLAGS="$FLAGS -Dfukuii.mining.protocol=pow"
 fi
 
 # P2P
