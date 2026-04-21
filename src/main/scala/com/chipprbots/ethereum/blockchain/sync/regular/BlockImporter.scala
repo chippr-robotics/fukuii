@@ -381,6 +381,94 @@ class BlockImporter(
     }
   }
 
+  /** Walk the account state trie at stateRoot to find the HP-encoded nibble path for
+    * the missing storage node targetHash. Returns path group(s) for GetTrieNodes, or None.
+    * Falls back to empty path (storage root request) at the call site.
+    */
+  private def walkStoragePath(
+      stateRoot: ByteString,
+      accountHash: ByteString,
+      targetHash: ByteString
+  ): Option[Seq[Seq[ByteString]]] =
+    try {
+      val mptStorage = stateStorage.getReadOnlyStorage
+      if (mptStorage == null) return None
+      val accountNibbles = HexPrefix.bytesToNibbles(accountHash.toArray)
+      findAccountStorageRoot(mptStorage, stateRoot, accountNibbles, 0).flatMap { storageRoot =>
+        val visits = new java.util.concurrent.atomic.AtomicInteger(0)
+        try {
+          if (storageRoot == targetHash) {
+            val rootPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+            Some(Seq(Seq(accountHash, rootPath)))
+          } else {
+            val storageRootNode = mptStorage.get(storageRoot.toArray)
+            findInStorageTrie(storageRootNode, mptStorage, Array.empty[Byte], accountHash, targetHash, visits)
+              .map(path => Seq(path))
+          }
+        } catch {
+          case e: MissingNodeException if ByteString(e.hash) == targetHash =>
+            val rootPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+            Some(Seq(Seq(accountHash, rootPath)))
+          case _: Exception => None
+        }
+      }
+    } catch {
+      case _: Exception => None
+    }
+
+  private def findAccountStorageRoot(
+      storage: com.chipprbots.ethereum.db.storage.MptStorage,
+      nodeHash: ByteString,
+      accountNibbles: Array[Byte],
+      offset: Int
+  ): Option[ByteString] =
+    try {
+      val node = storage.get(nodeHash.toArray)
+      findStorageRootInNode(storage, node, accountNibbles, offset)
+    } catch { case _: Exception => None }
+
+  private def findStorageRootInNode(
+      storage: com.chipprbots.ethereum.db.storage.MptStorage,
+      node: MptNode,
+      accountNibbles: Array[Byte],
+      offset: Int
+  ): Option[ByteString] = {
+    import com.chipprbots.ethereum.domain.Account.accountSerializer
+    node match {
+      case ext: ExtensionNode =>
+        val sharedKey = ext.sharedKey.toArray
+        val remaining = accountNibbles.drop(offset)
+        if (remaining.length >= sharedKey.length && remaining.take(sharedKey.length).sameElements(sharedKey)) {
+          val newOffset = offset + sharedKey.length
+          ext.next match {
+            case hash: HashNode => findAccountStorageRoot(storage, ByteString(hash.hash), accountNibbles, newOffset)
+            case nextNode       => findStorageRootInNode(storage, nextNode, accountNibbles, newOffset)
+          }
+        } else None
+
+      case branch: BranchNode if offset < accountNibbles.length =>
+        val childIdx = accountNibbles(offset)
+        branch.children(childIdx) match {
+          case hash: HashNode => findAccountStorageRoot(storage, ByteString(hash.hash), accountNibbles, offset + 1)
+          case childNode      => findStorageRootInNode(storage, childNode, accountNibbles, offset + 1)
+        }
+
+      case leaf: LeafNode =>
+        try {
+          val account = accountSerializer.fromBytes(leaf.value.toArray)
+          if (account.storageRoot != com.chipprbots.ethereum.domain.Account.EmptyStorageRootHash)
+            Some(account.storageRoot)
+          else None
+        } catch { case _: Exception => None }
+
+      case hash: HashNode =>
+        findAccountStorageRoot(storage, ByteString(hash.hash), accountNibbles, offset)
+
+      case NullNode => None
+      case _        => None
+    }
+  }
+
   private def start(): Unit = {
     log.info("Starting Regular Sync, current best block is {}", bestKnownBlockNumber)
     fetcher ! BlockFetcher.Start(self, bestKnownBlockNumber)
@@ -478,14 +566,19 @@ class BlockImporter(
                       log.warning("Failed to get parent state root during node recovery: {}", ex.getMessage); None
                   }
                 val accountHash = kec256(e.accountAddress)
-                val emptyPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-                val paths = Some(Seq(Seq(accountHash, emptyPath)))
+                val paths: Option[Seq[Seq[ByteString]]] = parentStateRoot.flatMap { root =>
+                  walkStoragePath(root, accountHash, e.hash)
+                }.orElse {
+                  // Fallback: request storage root (covers case where root itself is missing)
+                  val emptyStoragePath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+                  Some(Seq(Seq(accountHash, emptyStoragePath)))
+                }
                 log.info(
-                  "Missing storage node {} for account {} during import of block {}, stateRoot={}",
+                  "Missing storage node {} for account {} during import of block {}, pathFound={}",
                   ByteStringUtils.hash2string(e.hash),
                   ByteStringUtils.hash2string(e.accountAddress),
                   failedBlock.number,
-                  parentStateRoot.map(ByteStringUtils.hash2string)
+                  paths.isDefined
                 )
                 fetcher ! BlockFetcher.FetchStateNode(e.hash, self, parentStateRoot, paths)
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
