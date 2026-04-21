@@ -113,8 +113,11 @@ FLAGS="$FLAGS -Dfukuii.network.discovery.port=30303"
 # Chain import
 [ -f "/chain.rlp" ] && FLAGS="$FLAGS -Dfukuii.import-chain-file=/chain.rlp"
 
-# Bootnode
-[ -n "$HIVE_BOOTNODE" ] && FLAGS="$FLAGS -Dfukuii.network.peer.bootstrap-nodes.0=$HIVE_BOOTNODE"
+# Bootnode — write to static-nodes.json in the datadir so the node dials it directly.
+# HOCON arrays can't be populated via -D system properties, so file is the reliable path.
+if [ -n "$HIVE_BOOTNODE" ]; then
+    echo "[\"$HIVE_BOOTNODE\"]" > "$DATADIR/static-nodes.json"
+fi
 
 # Mining
 if [ -n "$HIVE_MINER" ]; then
