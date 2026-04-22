@@ -99,15 +99,12 @@ if [ "$TTD" != "$MAX" ]; then
     FLAGS="$FLAGS -Dfukuii.network.engine-api.jwt-secret-path=$JWT_SECRET_FILE"
     FLAGS="$FLAGS -Dfukuii.mining.protocol=engine-api"
 else
-    # PoW chain — no engine API. Tests that use SealEngine=NoProof set
-    # HIVE_SKIP_POW; honor it by switching to the non-validating 'mocked'
-    # protocol so headers with fake Ethash seals aren't rejected.
+    # PoW chain — no engine API. Hive-generated chains always use fake
+    # Ethash seals (HIVE_SKIP_POW honours the explicit signal; rpc-compat
+    # and other sims don't set it but still feed us bogus seals), so use
+    # the non-validating 'mocked' protocol unconditionally in hive mode.
     FLAGS="$FLAGS -Dfukuii.network.engine-api.enabled=false"
-    if [ -n "$HIVE_SKIP_POW" ]; then
-        FLAGS="$FLAGS -Dfukuii.mining.protocol=mocked"
-    else
-        FLAGS="$FLAGS -Dfukuii.mining.protocol=pow"
-    fi
+    FLAGS="$FLAGS -Dfukuii.mining.protocol=mocked"
 fi
 
 # P2P
