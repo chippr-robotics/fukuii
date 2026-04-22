@@ -195,6 +195,16 @@ object Messages {
     */
   case class HealingPivotRefreshed(newStateRoot: ByteString) extends TrieNodeHealingCoordinatorMessage
 
+  /** Sent by SNAPSyncController when the current pivot has advanced beyond the SNAP serve window (peers have pruned it).
+    * Coordinator stops immediately, reporting current healed count, so controller can restart healing with a fresh pivot.
+    */
+  case object HealingForceComplete extends TrieNodeHealingCoordinatorMessage
+
+  /** Sent by TrieNodeHealingCoordinator to SNAPSyncController when trie healing has stagnated (no progress for
+    * MaxConsecutiveStagnations × stagnation-check-interval). Controller should restart healing with a fresh pivot.
+    */
+  case class HealingStagnated(healed: Long, pending: Long)
+
   sealed trait TrieNodeHealingWorkerMessage
   case class FetchTrieNodes(task: HealingTask, peer: Peer) extends TrieNodeHealingWorkerMessage
   case class TrieNodesResponseMsg(response: TrieNodes) extends TrieNodeHealingWorkerMessage
