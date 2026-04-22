@@ -56,7 +56,7 @@ class AccountRangeCoordinator(
     concurrency: Int,
     snapSyncController: ActorRef,
     resumeProgress: Map[ByteString, ByteString] = Map.empty,
-    initialMaxInFlightPerPeer: Int = 5,
+    initialMaxInFlightPerPeer: Int = 1, // Besu-aligned D11: 1 request per peer, no pipelining
     trieFlushThreshold: Int = 50000,
     initialResponseBytesConfig: Int = 524288,
     minResponseBytesConfig: Int = 102400
@@ -1112,7 +1112,7 @@ object AccountRangeCoordinator {
       concurrency: Int,
       snapSyncController: ActorRef,
       resumeProgress: Map[ByteString, ByteString] = Map.empty,
-      initialMaxInFlightPerPeer: Int = 5,
+      initialMaxInFlightPerPeer: Int = 1, // Besu-aligned D11: 1 request per peer, no pipelining
       trieFlushThreshold: Int = 50000,
       initialResponseBytes: Int = 524288,
       minResponseBytes: Int = 102400

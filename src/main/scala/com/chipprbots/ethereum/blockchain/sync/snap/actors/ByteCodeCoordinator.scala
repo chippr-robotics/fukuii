@@ -563,8 +563,8 @@ object ByteCodeCoordinator {
       baseEmpty = 2.seconds,
       baseTimeout = 10.seconds,
       baseInvalid = 15.seconds,
-      // Increase per-peer concurrency (Besu caps peer-wide outstanding at 5; this keeps us competitive).
-      maxInFlightPerPeer = 5,
+      // Besu-aligned D11: 1 request per peer, no pipelining.
+      maxInFlightPerPeer = 1,
       max = 2.minutes,
       exponentCap = 10
     )
