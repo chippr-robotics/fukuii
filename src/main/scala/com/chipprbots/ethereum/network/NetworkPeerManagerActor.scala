@@ -469,50 +469,49 @@ class NetworkPeerManagerActor(
           // storageRoot. Since this is only on the server-serve path, simple fallback:
           // look up each account via SnapServer using msg.rootHash.
           import com.chipprbots.ethereum.network.snapserver.SnapServer
-          import com.chipprbots.ethereum.mpt.{MerklePatriciaTrie, MptTraversals, NullNode}
-          val accountRoot: ByteString => Option[ByteString] = { accountHash =>
-            // walk the state trie at msg.rootHash to find this account, return storageRoot
-            val nibbles = SnapServer.hashToNibbles(accountHash)
-            // crude lookup: traverse from root following nibbles, return the leaf's account.storageRoot
-            // We can use the existing MerklePatriciaTrie API for lookup.
+          import com.chipprbots.ethereum.mpt.{MerklePatriciaTrie, NullNode}
+          // Resolve the state-trie root ONCE per request. The per-account closure
+          // reuses this resolved node instead of re-fetching on every call.
+          val stateRootNodeOpt: Option[com.chipprbots.ethereum.mpt.MptNode] =
             try {
-              val stateRoot =
-                if (msg.rootHash.toArray.sameElements(MerklePatriciaTrie.EmptyRootHash)) None
-                else Some(msg.rootHash.toArray)
-              stateRoot.flatMap { sr =>
-                val rootNode = storage.get(sr)
-                if (rootNode == NullNode) None
-                else {
-                  // find leaf matching nibbles
-                  def find(node: com.chipprbots.ethereum.mpt.MptNode, rem: Array[Byte]): Option[ByteString] = {
-                    val resolved = node match {
-                      case h: com.chipprbots.ethereum.mpt.HashNode => storage.get(h.hashNode)
-                      case other                                   => other
-                    }
-                    resolved match {
-                      case com.chipprbots.ethereum.mpt.LeafNode(key, value, _, _, _) =>
-                        if (rem.sameElements(key.toArray)) {
-                          import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits._
-                          val acct = value.toArray.toAccount
-                          Some(acct.storageRoot)
-                        } else None
-                      case com.chipprbots.ethereum.mpt.ExtensionNode(sk, next, _, _, _) =>
-                        if (rem.length >= sk.length && rem.take(sk.length).sameElements(sk.toArray))
-                          find(next, rem.drop(sk.length))
-                        else None
-                      case com.chipprbots.ethereum.mpt.BranchNode(children, _, _, _, _) =>
-                        if (rem.isEmpty) None
-                        else {
-                          val ch = children(rem(0) & 0x0f)
-                          if (ch == NullNode) None else find(ch, rem.drop(1))
-                        }
-                      case _ => None
-                    }
-                  }
-                  find(rootNode, nibbles)
-                }
+              if (msg.rootHash.toArray.sameElements(MerklePatriciaTrie.EmptyRootHash)) None
+              else {
+                val node = storage.get(msg.rootHash.toArray)
+                if (node == NullNode) None else Some(node)
               }
             } catch { case _: Throwable => None }
+          val accountRoot: ByteString => Option[ByteString] = { accountHash =>
+            val nibbles = SnapServer.hashToNibbles(accountHash)
+            try
+              stateRootNodeOpt.flatMap { rootNode =>
+                def find(node: com.chipprbots.ethereum.mpt.MptNode, rem: Array[Byte]): Option[ByteString] = {
+                  val resolved = node match {
+                    case h: com.chipprbots.ethereum.mpt.HashNode => storage.get(h.hashNode)
+                    case other                                   => other
+                  }
+                  resolved match {
+                    case com.chipprbots.ethereum.mpt.LeafNode(key, value, _, _, _) =>
+                      if (rem.sameElements(key.toArray)) {
+                        import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits._
+                        val acct = value.toArray.toAccount
+                        Some(acct.storageRoot)
+                      } else None
+                    case com.chipprbots.ethereum.mpt.ExtensionNode(sk, next, _, _, _) =>
+                      if (rem.length >= sk.length && rem.take(sk.length).sameElements(sk.toArray))
+                        find(next, rem.drop(sk.length))
+                      else None
+                    case com.chipprbots.ethereum.mpt.BranchNode(children, _, _, _, _) =>
+                      if (rem.isEmpty) None
+                      else {
+                        val ch = children(rem(0) & 0x0f)
+                        if (ch == NullNode) None else find(ch, rem.drop(1))
+                      }
+                    case _ => None
+                  }
+                }
+                find(rootNode, nibbles)
+              }
+            catch { case _: Throwable => None }
           }
           try
             SnapServer.serveStorageRanges(
