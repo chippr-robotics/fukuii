@@ -361,77 +361,81 @@ class EngineApiController(
         val isCancunPayload = cfg.isCancunTimestamp(ts)
         val isShanghaiPayload = cfg.isShanghaiTimestamp(ts)
         val forkError: Option[String] = version match {
-          case 2 if isCancunPayload => Some("getPayloadV2 cannot return a Cancun payload; use V3")
-          case 3 if !isCancunPayload => Some("getPayloadV3 can only return Cancun-or-later payloads")
+          case 2 if isCancunPayload   => Some("getPayloadV2 cannot return a Cancun payload; use V3")
+          case 3 if !isCancunPayload  => Some("getPayloadV3 can only return Cancun-or-later payloads")
           case 1 if isShanghaiPayload => Some("getPayloadV1 cannot return a Shanghai-or-later payload; use V2")
-          case _ => None
+          case _                      => None
         }
         forkError match {
           case Some(msg) =>
             JsonRpcResponse("2.0", None, Some(JsonRpcError(UnsupportedFork, msg, None)), reqId(request))
           case None =>
-        val payload = blockToExecutionPayload(block)
-        // V1 returns bare ExecutionPayload.
-        // V2+ wraps it in ExecutionPayloadEnvelope per Engine API spec.
-        // blockValue depends on receipts (effectiveGasPrice per tx). Fetch once so V2/V3/V4 share.
-        lazy val receipts = engineApiService.getPayloadReceipts(payloadId)
-        lazy val blockValueHex = computeBlockValue(block, receipts)
-        lazy val blobsBundleJson: JObject = {
-          val bundle = engineApiService.getPayloadBlobsBundle(payloadId)
-          JObject(
-            "commitments" -> JArray(bundle.commitments.toList.map(c => JString(byteStringToHex(c)))),
-            "proofs" -> JArray(bundle.proofs.toList.map(p => JString(byteStringToHex(p)))),
-            "blobs" -> JArray(bundle.blobs.toList.map(b => JString(byteStringToHex(b))))
-          )
-        }
-        val result: JValue = version match {
-          case 1 => payload
-          case 2 =>
-            JObject(
-              "executionPayload" -> payload,
-              "blockValue" -> JString(blockValueHex)
-            )
-          case 3 =>
-            JObject(
-              "executionPayload" -> payload,
-              "blockValue" -> JString(blockValueHex),
-              "blobsBundle" -> blobsBundleJson,
-              "shouldOverrideBuilder" -> JBool(false)
-            )
-          case _ => // V4+: add executionRequests (EIP-7685)
-            val executionRequests = engineApiService.getPayloadExecutionRequests(payloadId)
-            JObject(
-              "executionPayload" -> payload,
-              "blockValue" -> JString(blockValueHex),
-              "blobsBundle" -> blobsBundleJson,
-              "shouldOverrideBuilder" -> JBool(false),
-              "executionRequests" -> JArray(
-                executionRequests.toList.map(r => JString(byteStringToHex(r)))
+            val payload = blockToExecutionPayload(block)
+            // V1 returns bare ExecutionPayload.
+            // V2+ wraps it in ExecutionPayloadEnvelope per Engine API spec.
+            // blockValue depends on receipts (effectiveGasPrice per tx). Fetch once so V2/V3/V4 share.
+            lazy val receipts = engineApiService.getPayloadReceipts(payloadId)
+            lazy val blockValueHex = computeBlockValue(block, receipts)
+            lazy val blobsBundleJson: JObject = {
+              val bundle = engineApiService.getPayloadBlobsBundle(payloadId)
+              JObject(
+                "commitments" -> JArray(bundle.commitments.toList.map(c => JString(byteStringToHex(c)))),
+                "proofs" -> JArray(bundle.proofs.toList.map(p => JString(byteStringToHex(p)))),
+                "blobs" -> JArray(bundle.blobs.toList.map(b => JString(byteStringToHex(b))))
               )
-            )
-        }
-        JsonRpcResponse("2.0", Some(result), None, reqId(request))
+            }
+            val result: JValue = version match {
+              case 1 => payload
+              case 2 =>
+                JObject(
+                  "executionPayload" -> payload,
+                  "blockValue" -> JString(blockValueHex)
+                )
+              case 3 =>
+                JObject(
+                  "executionPayload" -> payload,
+                  "blockValue" -> JString(blockValueHex),
+                  "blobsBundle" -> blobsBundleJson,
+                  "shouldOverrideBuilder" -> JBool(false)
+                )
+              case _ => // V4+: add executionRequests (EIP-7685)
+                val executionRequests = engineApiService.getPayloadExecutionRequests(payloadId)
+                JObject(
+                  "executionPayload" -> payload,
+                  "blockValue" -> JString(blockValueHex),
+                  "blobsBundle" -> blobsBundleJson,
+                  "shouldOverrideBuilder" -> JBool(false),
+                  "executionRequests" -> JArray(
+                    executionRequests.toList.map(r => JString(byteStringToHex(r)))
+                  )
+                )
+            }
+            JsonRpcResponse("2.0", Some(result), None, reqId(request))
         }
       case Left(err) =>
         JsonRpcResponse("2.0", None, Some(JsonRpcError(-38001, err, None)), reqId(request))
     }
   }
 
-  /** blockValue = Σ gasUsedByTx_i × (effectiveGasPrice_i − baseFeePerGas). Miner's priority-fee
-    * revenue for the block. Per EIP-3675 V2 envelope, this is what the CL reads to pick the
-    * highest-value payload across builders.
+  /** blockValue = Σ gasUsedByTx_i × (effectiveGasPrice_i − baseFeePerGas). Miner's priority-fee revenue for the block.
+    * Per EIP-3675 V2 envelope, this is what the CL reads to pick the highest-value payload across builders.
     *
     * For each tx:
-    *   - gasUsedByTx = receipt.cumulativeGas − previousReceipt.cumulativeGas (since receipts
-    *     record CUMULATIVE gas, not per-tx).
-    *   - effectiveGasPrice = for legacy / access-list txs: tx.gasPrice. For EIP-1559 / blob:
-    *     min(maxFeePerGas, baseFee + maxPriorityFeePerGas).
+    *   - gasUsedByTx = receipt.cumulativeGas − previousReceipt.cumulativeGas (since receipts record CUMULATIVE gas, not
+    *     per-tx).
+    *   - effectiveGasPrice = for legacy / access-list txs: tx.gasPrice. For EIP-1559 / blob: min(maxFeePerGas, baseFee
+    *     + maxPriorityFeePerGas).
     */
   private def computeBlockValue(
       block: Block,
       receipts: Seq[com.chipprbots.ethereum.domain.Receipt]
   ): String = {
-    import com.chipprbots.ethereum.domain.{TransactionWithAccessList, TransactionWithDynamicFee, BlobTransaction, SetCodeTransaction}
+    import com.chipprbots.ethereum.domain.{
+      TransactionWithAccessList,
+      TransactionWithDynamicFee,
+      BlobTransaction,
+      SetCodeTransaction
+    }
     val baseFee = block.header.extraFields match {
       case BlockHeader.HeaderExtraFields.HefPostOlympia(bf)               => bf
       case BlockHeader.HeaderExtraFields.HefPostShanghai(bf, _)           => bf
@@ -442,20 +446,28 @@ class EngineApiController(
     if (receipts.isEmpty) return "0x0"
     val txs = block.body.transactionList
     // derive per-tx gas used from cumulative deltas
-    val gasUsedPerTx: Seq[BigInt] = receipts.map(_.cumulativeGasUsed).scanLeft(BigInt(0)) { (prev, cum) =>
-      cum
-    }.sliding(2, 1).collect { case Seq(prev, cur) => cur - prev }.toSeq
-    val totalPriorityFee: BigInt = txs.zip(gasUsedPerTx).map { case (stx, gasUsed) =>
-      val effectiveGasPrice: BigInt = stx.tx match {
-        case t: TransactionWithDynamicFee => (baseFee + t.maxPriorityFeePerGas).min(t.maxFeePerGas)
-        case t: BlobTransaction           => (baseFee + t.maxPriorityFeePerGas).min(t.maxFeePerGas)
-        case t: SetCodeTransaction        => (baseFee + t.maxPriorityFeePerGas).min(t.maxFeePerGas)
-        case t: TransactionWithAccessList => t.gasPrice
-        case _                            => stx.tx.gasPrice
+    val gasUsedPerTx: Seq[BigInt] = receipts
+      .map(_.cumulativeGasUsed)
+      .scanLeft(BigInt(0)) { (prev, cum) =>
+        cum
       }
-      val priorityPerGas = (effectiveGasPrice - baseFee).max(0)
-      gasUsed * priorityPerGas
-    }.sum
+      .sliding(2, 1)
+      .collect { case Seq(prev, cur) => cur - prev }
+      .toSeq
+    val totalPriorityFee: BigInt = txs
+      .zip(gasUsedPerTx)
+      .map { case (stx, gasUsed) =>
+        val effectiveGasPrice: BigInt = stx.tx match {
+          case t: TransactionWithDynamicFee => (baseFee + t.maxPriorityFeePerGas).min(t.maxFeePerGas)
+          case t: BlobTransaction           => (baseFee + t.maxPriorityFeePerGas).min(t.maxFeePerGas)
+          case t: SetCodeTransaction        => (baseFee + t.maxPriorityFeePerGas).min(t.maxFeePerGas)
+          case t: TransactionWithAccessList => t.gasPrice
+          case _                            => stx.tx.gasPrice
+        }
+        val priorityPerGas = (effectiveGasPrice - baseFee).max(0)
+        gasUsed * priorityPerGas
+      }
+      .sum
     s"0x${totalPriorityFee.toString(16)}"
   }
 

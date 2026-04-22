@@ -126,10 +126,10 @@ class RLPxConnectionHandler(
     private val CanonicalSnapBase = 0x30
     private val CanonicalSnapSize = 0x08
 
-    /** Wire-space size of the peer's ETH protocol — varies by version. ETH/66-68 have 17
-      * codes (0x00..0x10). ETH/69 adds BlockRangeUpdate at 0x11, for 18 codes. Getting this
-      * wrong shifts the peer's SNAP base by one and every subsequent SNAP message decodes
-      * against the adjacent canonical code (e.g. GetStorageRanges mis-decoded as StorageRanges).
+    /** Wire-space size of the peer's ETH protocol — varies by version. ETH/66-68 have 17 codes (0x00..0x10). ETH/69
+      * adds BlockRangeUpdate at 0x11, for 18 codes. Getting this wrong shifts the peer's SNAP base by one and every
+      * subsequent SNAP message decodes against the adjacent canonical code (e.g. GetStorageRanges mis-decoded as
+      * StorageRanges).
       */
     private def ethWireSizeFor(cap: Capability): Int = cap match {
       case Capability.ETH69 => 0x12

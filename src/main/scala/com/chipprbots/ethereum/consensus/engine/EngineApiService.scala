@@ -76,8 +76,8 @@ class EngineApiService(
     new java.util.concurrent.ConcurrentHashMap[ByteString, java.util.Set[ByteString]]()
   private val zeroHash = ByteString(new Array[Byte](32))
 
-  /** Mark `hash` as INVALID and recursively invalidate every optimistically-accepted descendant.
-    * All descendants inherit the same `latestValidHash`.
+  /** Mark `hash` as INVALID and recursively invalidate every optimistically-accepted descendant. All descendants
+    * inherit the same `latestValidHash`.
     */
   private def markInvalidRecursive(hash: ByteString, lvh: ByteString): Unit = {
     invalidBlocks.put(hash, lvh)
@@ -368,10 +368,12 @@ class EngineApiService(
             // Record parent→child so that if the (still-unknown) ancestor chain is later
             // revealed as INVALID, we can retroactively invalidate this block too. Required
             // by hive's "Invalid Missing Ancestor Syncing ReOrg" tests.
-            acceptedChildrenByParent.computeIfAbsent(
-              payload.parentHash,
-              _ => java.util.concurrent.ConcurrentHashMap.newKeySet[ByteString]()
-            ).add(payload.blockHash)
+            acceptedChildrenByParent
+              .computeIfAbsent(
+                payload.parentHash,
+                _ => java.util.concurrent.ConcurrentHashMap.newKeySet[ByteString]()
+              )
+              .add(payload.blockHash)
             System.err.println(
               s"[ENGINE-API] newPayload #${payload.blockNumber}: ACCEPTED (parent unknown)"
             )
@@ -583,8 +585,8 @@ class EngineApiService(
                         if (blockchainConfig.isPragueTimestamp(attrs.timestamp))
                           BlobGasUtils.PRAGUE_MAX_BLOB_GAS
                         else BlobGasUtils.CANCUN_MAX_BLOB_GAS
-                      pendingTxs.foldLeft((Seq.empty[SignedTransaction], BigInt(0))) {
-                        case ((kept, blobGas), stx) =>
+                      pendingTxs
+                        .foldLeft((Seq.empty[SignedTransaction], BigInt(0))) { case ((kept, blobGas), stx) =>
                           stx.tx match {
                             case b: com.chipprbots.ethereum.domain.BlobTransaction =>
                               val add = BigInt(b.blobVersionedHashes.size) * BlobGasUtils.GAS_PER_BLOB
@@ -593,7 +595,8 @@ class EngineApiService(
                             case _ =>
                               (kept :+ stx, blobGas)
                           }
-                      }._1
+                        }
+                        ._1
                     }
 
                     val emptyWithdrawalsRoot = ByteString(
@@ -834,22 +837,22 @@ class EngineApiService(
   def getPayloadExecutionRequests(payloadId: ByteString): Seq[ByteString] =
     Option(pendingPayloadRequests.remove(payloadId)).getOrElse(Nil)
 
-  /** Receipts produced while building this payload. Used by engine_getPayloadV2+ to compute the
-    * `blockValue` envelope field. `get` (not `remove`) because the CL may call getPayloadV1 and
-    * then getPayloadV2 for the same id (hive withdrawals tests rely on this).
+  /** Receipts produced while building this payload. Used by engine_getPayloadV2+ to compute the `blockValue` envelope
+    * field. `get` (not `remove`) because the CL may call getPayloadV1 and then getPayloadV2 for the same id (hive
+    * withdrawals tests rely on this).
     */
   def getPayloadReceipts(payloadId: ByteString): Seq[com.chipprbots.ethereum.domain.Receipt] =
     Option(pendingPayloadReceipts.get(payloadId)).getOrElse(Nil)
 
-  /** EIP-4844 sidecars for the blob txs included in this payload, for engine_getPayloadV3's
-    * blobsBundle envelope. Empty when the payload has no blob txs.
+  /** EIP-4844 sidecars for the blob txs included in this payload, for engine_getPayloadV3's blobsBundle envelope. Empty
+    * when the payload has no blob txs.
     */
   def getPayloadBlobsBundle(payloadId: ByteString): BlobsBundleData =
     Option(pendingPayloadBlobsBundle.get(payloadId)).getOrElse(BlobsBundleData(Nil, Nil, Nil))
 
-  /** Parse the EIP-4844 network-wrapped raw bytes (`0x03 || rlp([tx_payload, blobs, commitments,
-    * proofs])`) the pool captured for each blob tx, and return the concatenated sidecars for
-    * every blob tx actually included in the built payload, in payload order.
+  /** Parse the EIP-4844 network-wrapped raw bytes (`0x03 || rlp([tx_payload, blobs, commitments, proofs])`) the pool
+    * captured for each blob tx, and return the concatenated sidecars for every blob tx actually included in the built
+    * payload, in payload order.
     */
   private def buildBlobsBundle(
       txs: Seq[SignedTransaction],
@@ -865,7 +868,7 @@ class EngineApiService(
     blobTxHashes.foreach { h =>
       blobTxRawBytes.get(h) match {
         case Some(raw) if raw.length > 1 && raw(0) == 0x03 =>
-          try {
+          try
             rawDecode(raw.toArray.drop(1)) match {
               case RLPList(_, blobs: RLPList, commitments: RLPList, proofs: RLPList) =>
                 blobs.items.foreach { case RLPValue(b) => allBlobs += ByteString(b); case _ => }
@@ -874,9 +877,13 @@ class EngineApiService(
               case _ =>
                 log.warn("Blob tx {} sidecar RLP shape unexpected; skipping", h.toArray.map("%02x".format(_)).mkString)
             }
-          } catch {
+          catch {
             case e: Exception =>
-              log.warn("Failed to decode blob tx {} sidecar: {}", h.toArray.map("%02x".format(_)).mkString, e.getMessage)
+              log.warn(
+                "Failed to decode blob tx {} sidecar: {}",
+                h.toArray.map("%02x".format(_)).mkString,
+                e.getMessage
+              )
           }
         case _ => // tx from network / historical — we didn't store a sidecar
       }

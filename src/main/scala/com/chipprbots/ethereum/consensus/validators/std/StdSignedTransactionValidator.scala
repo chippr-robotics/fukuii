@@ -48,9 +48,9 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
       _ <- validateBlockHasEnoughGasLimitForTx(stx, accumGasUsed, blockHeader.gasLimit)
     } yield SignedTransactionValid
 
-  /** EIP-1559: reject txs whose maxFeePerGas cannot cover the block's baseFee, and reject txs
-    * where maxPriorityFeePerGas > maxFeePerGas. Applies to all dynamic-fee transaction
-    * variants (type 2 / 3 / 4). Legacy and Type-1 txs are post-paid at tx.gasPrice.
+  /** EIP-1559: reject txs whose maxFeePerGas cannot cover the block's baseFee, and reject txs where
+    * maxPriorityFeePerGas > maxFeePerGas. Applies to all dynamic-fee transaction variants (type 2 / 3 / 4). Legacy and
+    * Type-1 txs are post-paid at tx.gasPrice.
     */
   private def validateMaxFeeAgainstBaseFee(
       stx: SignedTransaction,

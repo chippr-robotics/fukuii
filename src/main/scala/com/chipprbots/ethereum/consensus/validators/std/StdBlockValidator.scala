@@ -145,8 +145,8 @@ object StdBlockValidator extends BlockValidator {
   }
 
   /** EIP-4895: if the header declares a withdrawalsRoot, it must equal the trie root computed from
-    * block.body.withdrawals (indexed like transactions/receipts). Pre-Shanghai headers have no
-    * withdrawalsRoot and no withdrawals in the body — no-op.
+    * block.body.withdrawals (indexed like transactions/receipts). Pre-Shanghai headers have no withdrawalsRoot and no
+    * withdrawals in the body — no-op.
     */
   private def validateWithdrawalsRoot(block: Block): Either[BlockError, BlockValid] =
     block.header.withdrawalsRoot match {
