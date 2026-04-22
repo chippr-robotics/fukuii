@@ -46,6 +46,12 @@ object Dependencies {
     )
   }
 
+  // Sangria GraphQL (EIP-1767 execution-layer GraphQL endpoint)
+  val sangria: Seq[ModuleID] = Seq(
+    "org.sangria-graphql" %% "sangria" % "4.2.5",
+    "org.sangria-graphql" %% "sangria-circe" % "1.3.2"
+  )
+
   val boopickle = Seq("io.suzaku" %% "boopickle" % "1.4.0") // Updated for Scala 3 support
 
   val rocksDb = Seq(

@@ -258,6 +258,7 @@ lazy val node = {
       Dependencies.network,
       Dependencies.prometheus,
       Dependencies.rocksDb,
+      Dependencies.sangria,
       Dependencies.scaffeine,
       Dependencies.scopt,
       Dependencies.testing

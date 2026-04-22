@@ -11,6 +11,7 @@ import scala.util.Failure
 import scala.util.Success
 
 import com.chipprbots.ethereum.jsonrpc.JsonRpcHealthChecker
+import com.chipprbots.ethereum.jsonrpc.graphql.GraphQLService
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.JsonRpcHttpServerConfig
 import com.chipprbots.ethereum.security.SSLError
@@ -20,7 +21,8 @@ class SecureJsonRpcHttpServer(
     val jsonRpcController: JsonRpcBaseController,
     val jsonRpcHealthChecker: JsonRpcHealthChecker,
     val config: JsonRpcHttpServerConfig,
-    getSSLContext: () => Either[SSLError, SSLContext]
+    getSSLContext: () => Either[SSLError, SSLContext],
+    override val graphQLService: Option[GraphQLService] = None
 )(implicit val actorSystem: ActorSystem)
     extends JsonRpcHttpServer
     with Logger {

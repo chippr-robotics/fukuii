@@ -8,6 +8,7 @@ import scala.util.Failure
 import scala.util.Success
 
 import com.chipprbots.ethereum.jsonrpc._
+import com.chipprbots.ethereum.jsonrpc.graphql.GraphQLService
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.JsonRpcHttpServerConfig
 import com.chipprbots.ethereum.utils.Logger
@@ -15,7 +16,8 @@ import com.chipprbots.ethereum.utils.Logger
 class InsecureJsonRpcHttpServer(
     val jsonRpcController: JsonRpcBaseController,
     val jsonRpcHealthChecker: JsonRpcHealthChecker,
-    val config: JsonRpcHttpServerConfig
+    val config: JsonRpcHttpServerConfig,
+    override val graphQLService: Option[GraphQLService] = None
 )(implicit val actorSystem: ActorSystem)
     extends JsonRpcHttpServer
     with Logger {

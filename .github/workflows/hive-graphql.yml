@@ -47,5 +47,10 @@ jobs:
     with:
       sim: ethereum/graphql
       label: graphql
+      # parallelism=1: the graphql suite's `pending` / `sendRawTransaction` tests are
+      # order-sensitive. With parallelism>1, test 35 (graphql_pending) races tests 34 /
+      # 36 / 38 at the mempool and flakes based on scheduling. Serial execution gives
+      # the same deterministic pool view geth sees.
+      parallelism: 1
       sim_timelimit: ${{ github.event.inputs.sim_timelimit || '20m' }}
       hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}
