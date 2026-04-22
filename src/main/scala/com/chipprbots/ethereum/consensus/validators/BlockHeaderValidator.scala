@@ -43,6 +43,7 @@ object BlockHeaderError {
   case object HeaderTimestampError extends BlockHeaderError {
     override def toString: String = "TIMESTAMP_OLDER_THAN_PARENT: header timestamp must be greater than parent"
   }
+  case object HeaderFutureTimestampError extends BlockHeaderError
   case object HeaderDifficultyError extends BlockHeaderError
   case object HeaderGasUsedError extends BlockHeaderError {
     override def toString: String = "GAS_USED_EXCEEDS_GAS_LIMIT: header gas used exceeds gas limit"

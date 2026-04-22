@@ -88,8 +88,10 @@ class EthashBlockHeaderValidatorSpec
     forAll(longGen) { timestamp =>
       val blockHeader = validBlockHeader.copy(unixTimestamp = timestamp)
       val validateResult = PoWBlockHeaderValidator.validate(blockHeader, validParent.header)
+      val nowEpoch = java.time.Instant.now().getEpochSecond
       timestamp match {
         case t if t <= validParentBlockHeader.unixTimestamp => assert(validateResult == Left(HeaderTimestampError))
+        case t if t > nowEpoch + 15                        => assert(validateResult == Left(HeaderFutureTimestampError))
         case validBlockHeader.unixTimestamp                 => assert(validateResult == Right(BlockHeaderValid))
         case _                                              => assert(validateResult == Left(HeaderDifficultyError))
       }
