@@ -188,8 +188,16 @@ class EthTxService(
         .flatMap(_.body.transactionList)
         .map(_.tx.gasPrice)
       if (gasPrice.nonEmpty) {
-        val avgGasPrice = gasPrice.sum / gasPrice.length
-        Right(GetGasPriceResponse(avgGasPrice))
+        // Median, not mean. A single Type-2 / blob tx with `maxFeePerGas = 1 gwei` reads out
+        // through `tx.gasPrice` as ~10^9, which drags the arithmetic mean into the tens of
+        // millions and fails hive's graphql test 07 (accepts 0x10 or 0x1 — both low). geth
+        // and besu both use the median of the recent-blocks sample for the same reason.
+        val sorted   = gasPrice.sorted
+        val midIndex = sorted.length / 2
+        val median   = if (sorted.length % 2 == 0 && sorted.length >= 2)
+          (sorted(midIndex - 1) + sorted(midIndex)) / 2
+        else sorted(midIndex)
+        Right(GetGasPriceResponse(median))
       } else {
         Right(GetGasPriceResponse(0))
       }

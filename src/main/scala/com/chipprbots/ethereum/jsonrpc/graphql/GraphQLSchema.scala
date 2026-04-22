@@ -162,11 +162,13 @@ object GraphQLSchema {
       case other => other.gasPrice - baseFee.getOrElse(BigInt(0))
     }
 
-  private def txStatus(r: Receipt): Long =
+  /** `null` for pre-Byzantium receipts (which store a state root instead of a status byte —
+    * see EIP-658). Hive test 30 expects `status: null` for a Frontier-era transaction. */
+  private def txStatus(r: Receipt): Option[Long] =
     r.postTransactionStateHash match {
-      case SuccessOutcome  => 1L
-      case FailureOutcome  => 0L
-      case HashOutcome(_)  => 1L // pre-byzantium: no status field in receipt; treat state root as success
+      case SuccessOutcome => Some(1L)
+      case FailureOutcome => Some(0L)
+      case HashOutcome(_) => None
     }
 
   private def receiptBundle(ctx: GraphQLContext, gtx: GTransaction): Option[GReceiptBundle] =
@@ -269,12 +271,20 @@ object GraphQLSchema {
   // Convert a CallData input map to EthInfoService.CallTx.
   private def toCallTx(m: Map[String, Any]): EthInfoService.CallTx = {
     val from     = m.get("from").flatMap(asOption[ByteString])
-    val to       = m.get("to").flatMap(asOption[ByteString])
+    val toRaw    = m.get("to").flatMap(asOption[ByteString])
     val gas      = m.get("gas").flatMap(asOption[Long]).map(BigInt(_))
     val gasPrice = m.get("gasPrice").flatMap(asOption[BigInt]).getOrElse(BigInt(0))
     val maxFee   = m.get("maxFeePerGas").flatMap(asOption[BigInt])
     val value    = m.get("value").flatMap(asOption[BigInt]).getOrElse(BigInt(0))
     val data     = m.get("data").flatMap(asOption[ByteString]).getOrElse(ByteString.empty)
+    // When the caller omits `to` AND provides no payload, treat the call as a zero-value
+    // no-op transfer to the zero address — that's what geth returns for hive's
+    // `pending.estimateGas(data: {})` test (expected 0x5208 = 21000, the plain-transfer
+    // intrinsic gas cost). Only trigger contract-creation semantics when the caller
+    // actually supplied initcode via `data`.
+    val to =
+      if (toRaw.isEmpty && data.isEmpty) Some(ByteString(new Array[Byte](20)))
+      else toRaw
     // If dynamic fee fields are present but no legacy gasPrice, synthesise the legacy field to
     // maxFeePerGas so the existing stxLedger.simulateTransaction path can run unchanged.
     val effectiveGasPrice = if (m.get("gasPrice").flatMap(asOption[BigInt]).isDefined) gasPrice else maxFee.getOrElse(gasPrice)
@@ -505,7 +515,7 @@ object GraphQLSchema {
         Field(
           "status",
           OptionType(LongType),
-          resolve = c => receiptBundle(c.ctx, c.value).map(rb => txStatus(rb.receipt))
+          resolve = c => receiptBundle(c.ctx, c.value).flatMap(rb => txStatus(rb.receipt))
         ),
         Field(
           "gasUsed",
@@ -881,7 +891,19 @@ object GraphQLSchema {
               throw GraphQLDataFetchingError.invalidParams("block")
             case (Some(n), None) =>
               val bn = BigInt(n)
-              reader.getBlockByNumber(reader.getBestBranch(), bn) match {
+              // Prefer the canonical-branch path (checks the tip), but fall back to the raw
+              // number→hash index so blocks stored beyond the best-block pointer (e.g. a
+              // post-Cancun block in the hive graphql fixture, which we deliberately don't
+              // advance the head into) remain queryable by number.
+              val blockOpt = reader
+                .getBlockByNumber(reader.getBestBranch(), bn)
+                .orElse {
+                  for {
+                    header <- reader.getBlockHeaderByNumber(bn)
+                    body   <- reader.getBlockBodyByHash(header.hash)
+                  } yield Block(header, body)
+                }
+              blockOpt match {
                 case Some(b) => Some(buildGBlock(c.ctx, b))
                 case None    =>
                   // Hive test 17: numeric block that doesn't exist yields "Block number N was not found".
@@ -1069,14 +1091,49 @@ object GraphQLSchema {
         Bytes32Type,
         arguments = List(RawDataArg),
         resolve = { c =>
-          val req = com.chipprbots.ethereum.jsonrpc.EthTxService.SendRawTransactionRequest(c.arg(RawDataArg))
-          c.ctx.ethTxService
-            .sendRawTransaction(req)
-            .map {
-              case Right(resp) => resp.transactionHash
-              case Left(err)   => throw GraphQLUserError(err.message)
-            }
-            .unsafeToFuture()
+          import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions.SignedTransactionDec
+
+          val raw = c.arg(RawDataArg)
+          // Parse and classify errors locally so hive sees the right errorCode / message. The
+          // underlying EthTxService returns `InvalidRequest` for every failure mode, which loses
+          // the distinction between decode/signature errors (Invalid params, -32602) and
+          // per-sender validity errors (Nonce too low, -32001).
+          val parsed = scala.util.Try(raw.toArray.toSignedTransactionWithSidecar).toOption
+          parsed match {
+            case None =>
+              throw GraphQLDataFetchingError.invalidParams("sendRawTransaction")
+            case Some((stx, _)) =>
+              val senderOpt = SignedTransaction.getSender(stx)
+              if (senderOpt.isEmpty)
+                throw GraphQLDataFetchingError.invalidParams("sendRawTransaction")
+
+              val sender = senderOpt.get
+              val reader = c.ctx.blockchainReader
+              val bestNum = reader.getBestBlockNumber()
+              val currentNonce =
+                try
+                  reader
+                    .getAccount(reader.getBestBranch(), sender, bestNum)
+                    .map(_.nonce.toBigInt)
+                    .getOrElse(c.ctx.blockchainConfig.accountStartNonce.toBigInt)
+                catch {
+                  case _: MissingNodeException => c.ctx.blockchainConfig.accountStartNonce.toBigInt
+                }
+
+              if (stx.tx.nonce < currentNonce)
+                throw GraphQLDataFetchingError.nonceTooLow("sendRawTransaction")
+
+              // Forward to the pool via the existing service. Any remaining failure path from
+              // EthTxService (e.g. EIP-3860 initcode-too-large) surfaces as Invalid params.
+              val req = com.chipprbots.ethereum.jsonrpc.EthTxService.SendRawTransactionRequest(raw)
+              c.ctx.ethTxService
+                .sendRawTransaction(req)
+                .map {
+                  case Right(resp) => resp.transactionHash
+                  case Left(_)     => throw GraphQLDataFetchingError.invalidParams("sendRawTransaction")
+                }
+                .unsafeToFuture()
+          }
         }
       )
     )
