@@ -38,9 +38,6 @@ class ServerActor(nodeStatusHolder: AtomicReference[NodeStatus], peerManager: Ac
   def waitingForBindingResult: Receive = {
     case Bound(localAddress) =>
       val nodeStatus = nodeStatusHolder.get()
-      // Resolve the address to advertise in enode URL and to peers.
-      // When bound to an unspecified address (:: or 0.0.0.0), peers cannot dial back using
-      // that address — fall back to the configured advertised-address or InetAddress.getLocalHost.
       val advertisedHost: InetAddress = advertisedAddressOverride.getOrElse {
         if (localAddress.getAddress.isAnyLocalAddress) InetAddress.getLocalHost
         else localAddress.getAddress

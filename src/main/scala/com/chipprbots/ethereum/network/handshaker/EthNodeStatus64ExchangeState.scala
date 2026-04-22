@@ -50,8 +50,6 @@ case class EthNodeStatus64ExchangeState(
       localForkId
     )
 
-    // ETH/64+ handshaker was missing networkId check — nodes with wrong networkId (e.g. PulseChain=369)
-    // but matching genesis hash were accepted, polluting the SNAP peer pool.
     if (status.networkId != peerConfiguration.networkId) {
       log.warn(
         "STATUS_EXCHANGE: NetworkId mismatch! Local: {}, Remote: {} - disconnecting (SUBPROTOCOL_TRIGGERED_MISMATCHED_NETWORK)",

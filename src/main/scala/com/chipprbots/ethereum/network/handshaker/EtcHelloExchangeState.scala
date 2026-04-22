@@ -108,7 +108,7 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
     val listenPort = nodeStatus.serverStatus match {
       case ServerStatus.Listening(address) => address.getPort
       case ServerStatus.NotListening       =>
-        log.warn("Server not yet listening when constructing Hello — using configured port {}", Config.Network.Server.port)
+        log.debug("Server not yet listening when constructing Hello — using configured port {}", Config.Network.Server.port)
         Config.Network.Server.port
     }
     Hello(
