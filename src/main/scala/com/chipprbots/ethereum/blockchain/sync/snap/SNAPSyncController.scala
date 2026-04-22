@@ -87,6 +87,13 @@ class SNAPSyncController(
   private var bytecodePhaseComplete: Boolean = false
   private var storagePhaseComplete: Boolean = false
 
+  // Force-complete flags — prevent stagnation timer from re-firing after force-complete is sent.
+  // storageForceCompleted closes the race window between ForceCompleteStorage dispatch and
+  // StorageRangeSyncComplete arrival (storagePhaseComplete is still false in that window).
+  // bytecodeForceCompleted prevents re-polling/re-triggering after ForceCompleteByteCode is sent.
+  private var storageForceCompleted: Boolean = false
+  private var bytecodeForceCompleted: Boolean = false
+
   private val progressMonitor = new SyncProgressMonitor(scheduler)
 
   // Retry counter for validation failures to prevent infinite loops
@@ -221,10 +228,14 @@ class SNAPSyncController(
   private val DownloadStagnationCheckInterval: FiniteDuration = 30.seconds
   private val StorageStagnationThreshold: FiniteDuration = 20.minutes
   private val AccountStagnationThreshold: FiniteDuration = snapSyncConfig.accountStagnationTimeout
+  // If bytecodes show no progress for this long, force-complete and let healing recover missing code.
+  private val BytecodeStagnationThreshold: FiniteDuration = 5.minutes
   private var lastStorageProgressMs: Long = System.currentTimeMillis()
   private var lastAccountProgressMs: Long = System.currentTimeMillis()
   private var lastAccountTasksCompleted: Int = 0
   private var lastAccountsDownloaded: Long = 0
+  private var lastBytecodeProgressCount: Long = 0
+  private var lastBytecodeProgressMs: Long = System.currentTimeMillis()
 
   override def preStart(): Unit = {
     log.info("SNAP Sync Controller initialized")
@@ -553,6 +564,8 @@ class SNAPSyncController(
 
         // Start storage stagnation watchdog now that accounts are done
         lastStorageProgressMs = System.currentTimeMillis()
+        lastBytecodeProgressMs = System.currentTimeMillis()
+        lastBytecodeProgressCount = 0
         scheduleStagnationChecks()
 
         checkAllDownloadsComplete()
@@ -745,6 +758,7 @@ class SNAPSyncController(
   private case object CheckDownloadStagnation
   private case class AccountCoordinatorProgress(progress: actors.AccountRangeStats)
   private case class StorageCoordinatorProgress(stats: actors.StorageRangeCoordinator.SyncStatistics)
+  private case class ByteCodeCoordinatorProgress(progress: actors.Messages.ByteCodeProgress)
 
   private def scheduleStagnationChecks(): Unit = {
     accountStagnationCheckTask.foreach(_.cancel())
@@ -765,6 +779,9 @@ class SNAPSyncController(
     * it doesn't (all peers stateless again). Waiting another 20 minutes just delays the inevitable force-complete.
     */
   private def maybeRestartIfStorageStagnant(stats: actors.StorageRangeCoordinator.SyncStatistics): Unit = {
+    // Already force-completed — don't re-fire. Closes the race window between ForceCompleteStorage
+    // dispatch and StorageRangeSyncComplete arrival (storagePhaseComplete still false in that window).
+    if (storageForceCompleted) return
     if (currentPhase != ByteCodeAndStorageSync) return
 
     // If coordinator responded with real stats, check if work remains.
@@ -785,8 +802,12 @@ class SNAPSyncController(
           s"Storage coordinator reports 0 pending/0 active but never sent StorageRangeSyncComplete " +
             s"(stalled ${stalledForMs / 1000}s). Trie construction likely stuck. Force-completing."
         )
+        storageForceCompleted = true
         storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
-        storageStagnationCheckTask.foreach(_.cancel()); storageStagnationCheckTask = None
+        // accountStagnationCheckTask holds the unified stagnation timer (scheduleStagnationChecks()
+        // stores it there for both account and storage phases). storageStagnationCheckTask is never
+        // assigned in scheduleStagnationChecks() so cancelling it is always a no-op.
+        accountStagnationCheckTask.foreach(_.cancel()); accountStagnationCheckTask = None
         storageRangeCoordinator.foreach(_ ! actors.Messages.ForceCompleteStorage)
       }
       return
@@ -817,8 +838,9 @@ class SNAPSyncController(
         s"Storage sync stalled after pivot refresh: no progress for ${stalledForMs / 1000}s. " +
           s"Promoting to healing phase (preserving downloaded state)."
       )
+      storageForceCompleted = true
       storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
-      storageStagnationCheckTask.foreach(_.cancel()); storageStagnationCheckTask = None
+      accountStagnationCheckTask.foreach(_.cancel()); accountStagnationCheckTask = None
       storageRangeCoordinator.foreach(_ ! actors.Messages.ForceCompleteStorage)
     }
   }
@@ -844,6 +866,12 @@ class SNAPSyncController(
         log.info("All state downloads complete (accounts + bytecodes + storage). Starting healing...")
       }
       currentPhase = StateHealing
+
+      // Release bytecode coordinator and its worker children now that downloads are complete.
+      // ByteCodeCoordinator is never stopped by ByteCodeSyncComplete alone, so we stop it
+      // explicitly here to clean up worker child actors.
+      bytecodeCoordinator.foreach(context.stop)
+      bytecodeCoordinator = None
 
       // Besu alignment: startTrieHeal() calls pivotBlockSelector.switchToNewPivotBlock()
       // UNCONDITIONALLY before seeding healing. No staleness check — always refresh.
@@ -1107,6 +1135,10 @@ class SNAPSyncController(
             accountsComplete = true
             bytecodePhaseComplete = false
             storagePhaseComplete = false
+            storageForceCompleted = false
+            bytecodeForceCompleted = false
+            lastBytecodeProgressCount = 0
+            lastBytecodeProgressMs = System.currentTimeMillis()
 
             log.info(s"Recovery: resuming bytecodes + storage sync from pivot $pivot (drift=$drift blocks)")
 
@@ -1925,6 +1957,20 @@ class SNAPSyncController(
               }
               .pipeTo(self)
           }
+          // Also poll bytecode coordinator so we can detect stagnation there.
+          // If bytecodes stall (peers cooling down, workers timing out), ByteCodeSyncComplete
+          // is never sent and healing is blocked forever without this check.
+          if (!bytecodePhaseComplete && !bytecodeForceCompleted) {
+            bytecodeCoordinator.foreach { coordinator =>
+              (coordinator ? actors.Messages.ByteCodeGetProgress)
+                .mapTo[actors.Messages.ByteCodeProgress]
+                .map(ByteCodeCoordinatorProgress.apply)
+                .recover { case _ =>
+                  ByteCodeCoordinatorProgress(actors.Messages.ByteCodeProgress(0.0, lastBytecodeProgressCount, 0L))
+                }
+                .pipeTo(self)
+            }
+          }
         case _ => // No stagnation check needed in other phases
       }
       super.aroundReceive(receive, msg)
@@ -1943,6 +1989,24 @@ class SNAPSyncController(
           s"refreshAttempted=$storageStagnationRefreshAttempted"
       )
       maybeRestartIfStorageStagnant(stats)
+      super.aroundReceive(receive, msg)
+
+    case ByteCodeCoordinatorProgress(progress) if currentPhase == ByteCodeAndStorageSync =>
+      if (progress.bytecodesDownloaded > lastBytecodeProgressCount) {
+        lastBytecodeProgressCount = progress.bytecodesDownloaded
+        lastBytecodeProgressMs = System.currentTimeMillis()
+      } else {
+        val stalledMs = System.currentTimeMillis() - lastBytecodeProgressMs
+        if (stalledMs > BytecodeStagnationThreshold.toMillis && !bytecodeForceCompleted) {
+          log.warning(
+            s"Bytecode sync stalled for ${stalledMs / 1000}s with no progress " +
+              s"(${progress.bytecodesDownloaded} downloaded, threshold=${BytecodeStagnationThreshold.toSeconds}s). " +
+              s"Force-completing (healing will recover missing code)."
+          )
+          bytecodeForceCompleted = true
+          bytecodeCoordinator.foreach(_ ! actors.Messages.ForceCompleteByteCode)
+        }
+      }
       super.aroundReceive(receive, msg)
 
     case _ =>
