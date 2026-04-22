@@ -113,7 +113,8 @@ class SNAPSyncController(
 
   // Consecutive pivot refresh counter: when all peers are repeatedly stateless after
   // pivot refreshes, it strongly indicates no peer has a snapshot database. Each
-  // PivotStateUnservable increments this; any successful account download resets it.
+  // PivotStateUnservable increments this; any successful state download (accounts,
+  // storage slots, or bytecodes) resets it.
   // After MaxConsecutivePivotRefreshes, we record a critical failure to accelerate
   // fallback to fast sync instead of cycling pivots for 75+ minutes.
   private var consecutivePivotRefreshes: Int = 0
@@ -385,6 +386,7 @@ class SNAPSyncController(
 
     case ProgressBytecodesDownloaded(count) =>
       progressMonitor.incrementBytecodesDownloaded(count)
+      if (count > 0) consecutivePivotRefreshes = 0 // Bytecodes downloading = SNAP is working
 
     case ProgressStorageSlotsSynced(count) =>
       progressMonitor.incrementStorageSlotsSynced(count)
@@ -394,6 +396,7 @@ class SNAPSyncController(
       if (count > 10) {
         lastStorageProgressMs = System.currentTimeMillis()
         if (count > 100) storageStagnationRefreshAttempted = false
+        consecutivePivotRefreshes = 0 // Storage downloads confirm SNAP is working
       }
 
     case ProgressNodesHealed(count) =>
