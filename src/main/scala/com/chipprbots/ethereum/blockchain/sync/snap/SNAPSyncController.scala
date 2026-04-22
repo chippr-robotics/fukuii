@@ -1908,15 +1908,26 @@ class SNAPSyncController(
     storageRangeCoordinator.foreach { coordinator =>
       val pivot = pivotBlock.getOrElse(BigInt(0))
 
+      // maxBlockNumber==0 means "not yet known" for ETH/68 peers (no block number in ETH/68 Status).
+      // Include them as candidates — if they can't serve the range they'll respond with an error.
+      // Aligned with Besu: SNAP peer selection is isServingSnap() AND estimatedChainHeight >= pivot,
+      // but ETH/68 peers with unknown height (0) are still attempted before their first header fetch.
       val snapPeers = peersToDownloadFrom.collect {
         case (peerId, peerWithInfo)
-            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
+            if peerWithInfo.peerInfo.remoteStatus.supportsSnap &&
+              (peerWithInfo.peerInfo.maxBlockNumber == 0 || peerWithInfo.peerInfo.maxBlockNumber >= pivot) =>
           peerWithInfo.peer
       }
 
       SNAPSyncMetrics.setSnapCapablePeers(snapPeers.size)
 
       if (snapPeers.isEmpty) {
+        if (log.isDebugEnabled) {
+          val peerDump = peersToDownloadFrom.values.take(5).map { p =>
+            s"${p.peer.remoteAddress}: snap=${p.peerInfo.remoteStatus.supportsSnap}, maxBlock=${p.peerInfo.maxBlockNumber}"
+          }.mkString(", ")
+          log.debug(s"peersToDownloadFrom (${peersToDownloadFrom.size} total): $peerDump")
+        }
         log.info(s"No SNAP-capable peers at or above pivot $pivot available for storage range requests")
       } else {
         snapPeers.foreach { peer =>

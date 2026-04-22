@@ -249,7 +249,12 @@ class AdminService(
       val uri = new URI(req.enodeUrl)
       peerManager
         .askFor[PeerManagerActor.AddMaintainedPeerResponse](PeerManagerActor.AddMaintainedPeer(uri))
-        .map(r => Right(AdminAddPeerResponse(r.wasAdded)))
+        .map { r =>
+          if (!r.wasAdded) {
+            log.info(s"admin_addPeer: peer already in maintained set, URI updated: ${req.enodeUrl}")
+          }
+          Right(AdminAddPeerResponse(r.wasAdded))
+        }
         .handleError { ex =>
           log.error(s"Failed to add peer: ${req.enodeUrl}", ex)
           Right(AdminAddPeerResponse(false))
