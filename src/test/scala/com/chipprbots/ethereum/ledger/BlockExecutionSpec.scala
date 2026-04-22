@@ -708,6 +708,7 @@ class BlockExecutionSpec
   }
 
   trait BlockExecutionTestSetup extends BlockchainSetup {
+
     /** Read-only view of the account trie rooted at the parent block's stateRoot. */
     def readOnceAtParent: InMemoryWorldStateProxy =
       InMemoryWorldStateProxy(
@@ -719,7 +720,6 @@ class BlockExecutionSpec
         noEmptyAccounts = false,
         ethCompatibleStorage = true
       )
-
 
     override lazy val blockValidation =
       new BlockValidation(mining, blockchainReader, BlockQueue(blockchainReader, syncConfig))

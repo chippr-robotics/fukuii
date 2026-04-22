@@ -18,17 +18,15 @@ import com.chipprbots.ethereum.utils.ByteUtils
   *
   * See: https://github.com/ethereum/devp2p/blob/master/caps/snap.md
   *
-  * Message codes: SNAP defines relative codes 0x00-0x07 per the spec. On the wire, each
-  * capability occupies a contiguous block allocated by Hello capability order. For ETH+SNAP
-  * peers, SNAP starts right after ETH's code range. Wire offsets therefore depend on the
-  * negotiated ETH version: ETH/66-68 reserve 17 codes (0x10-0x20), ETH/69 reserves 18
-  * (0x10-0x21 including BlockRangeUpdate at rel 0x11). Peer SNAP wire base is computed in
-  * RLPxConnectionHandler based on negotiated eth cap.
+  * Message codes: SNAP defines relative codes 0x00-0x07 per the spec. On the wire, each capability occupies a
+  * contiguous block allocated by Hello capability order. For ETH+SNAP peers, SNAP starts right after ETH's code range.
+  * Wire offsets therefore depend on the negotiated ETH version: ETH/66-68 reserve 17 codes (0x10-0x20), ETH/69 reserves
+  * 18 (0x10-0x21 including BlockRangeUpdate at rel 0x11). Peer SNAP wire base is computed in RLPxConnectionHandler
+  * based on negotiated eth cap.
   *
-  * Canonical codes (internal to this codebase) live at 0x30-0x37. The 0x30 offset leaves
-  * room for ETH/69's full range AND avoids a historical collision with ETH/69's
-  * BlockRangeUpdate (canonical 0x10+0x11 = 0x21), which would have aliased onto the old
-  * SnapProtocolOffset=0x21 and caused SNAP's GetAccountRange to decode as BlockRangeUpdate.
+  * Canonical codes (internal to this codebase) live at 0x30-0x37. The 0x30 offset leaves room for ETH/69's full range
+  * AND avoids a historical collision with ETH/69's BlockRangeUpdate (canonical 0x10+0x11 = 0x21), which would have
+  * aliased onto the old SnapProtocolOffset=0x21 and caused SNAP's GetAccountRange to decode as BlockRangeUpdate.
   */
 object SNAP {
 
