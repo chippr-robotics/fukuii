@@ -2449,32 +2449,17 @@ class SNAPSyncController(
 
   private def completeSnapSync(): Unit =
     pivotBlock.foreach { pivot =>
-      if (snapSyncConfig.deferredMerkleization) {
-        // With deferred merkleization, don't wait for chain download to finish.
-        // Downloading 24M+ block headers/bodies/receipts from genesis takes days and
-        // blocks the node from syncing new blocks. Regular sync will handle chain data
-        // from the pivot forward. Historical chain data can be backfilled later.
-        log.info(
-          "Deferred merkleization enabled — skipping chain download wait. " +
-            "Finalizing SNAP sync immediately to start regular sync from pivot."
-        )
-        // Stop the chain downloader — regular sync handles blocks from pivot onward
-        chainDownloader.foreach(context.stop)
-        chainDownloader = None
-        finalizeSnapSync(pivot)
-      } else {
-        // If chain download is still running, wait for it
-        // Besu-aligned D14: no concurrency boost — single concurrency throughout.
-        if (!chainDownloadComplete && chainDownloader.isDefined) {
-          log.info("SNAP state sync complete, waiting for chain download to finish...")
-          currentPhase = ChainDownloadCompletion
-          progressMonitor.startPhase(ChainDownloadCompletion)
-          context.become(waitingForChainDownload)
-          return
-        }
-
-        finalizeSnapSync(pivot)
-      }
+      // Besu-aligned D2: pivot header was stored by updateBestBlockForPivot during bootstrap.
+      // finalizeSnapSync only requires getBlockHeaderByNumber(pivot) — available immediately.
+      // Do NOT wait for chain download to complete (genesis→pivot = ~22M blocks = days).
+      // Regular sync handles blocks from pivot forward. Chain downloader is stopped by
+      // finalizeSnapSync. This matches Besu's isBlockchainBehind() pattern: once the pivot
+      // header is available, the node is not "behind" and can proceed to regular sync.
+      log.info(
+        s"SNAP state sync complete. Finalizing SNAP sync at pivot $pivot " +
+          "(Besu-aligned D2: no chain download wait — pivot header available from bootstrap)."
+      )
+      finalizeSnapSync(pivot)
     }
 
   /** Final SNAP sync completion — called when both state sync and chain download are done. */
@@ -2525,7 +2510,13 @@ class SNAPSyncController(
     context.parent ! Done
   }
 
-  /** Waiting for parallel chain download to finish after SNAP state sync completed. */
+  /** Waiting for parallel chain download to finish after SNAP state sync completed.
+    *
+    * NOTE (Besu-aligned D2): completeSnapSync() no longer enters this state.
+    * finalizeSnapSync() is called immediately when SNAP state sync completes,
+    * without waiting for chain download. This state is retained for compatibility
+    * with any external callers but should never be entered in normal operation.
+    */
   def waitingForChainDownload: Receive = handlePeerListMessagesWithRateTracking.orElse {
     case ChainDownloader.Done =>
       log.info("Parallel chain download complete. Finalizing SNAP sync.")
