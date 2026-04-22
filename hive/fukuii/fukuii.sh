@@ -98,6 +98,8 @@ if [ "$TTD" != "$MAX" ]; then
     FLAGS="$FLAGS -Dfukuii.network.engine-api.port=8551"
     FLAGS="$FLAGS -Dfukuii.network.engine-api.jwt-secret-path=$JWT_SECRET_FILE"
     FLAGS="$FLAGS -Dfukuii.mining.protocol=engine-api"
+    # Hive pre-merge blocks ship with fake Ethash seals; skip PoW header check.
+    FLAGS="$FLAGS -Dfukuii.mining.skip-pow-validation=true"
 else
     # PoW chain — no engine API. Hive-generated chains always use fake
     # Ethash seals (HIVE_SKIP_POW honours the explicit signal; rpc-compat

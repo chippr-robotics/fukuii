@@ -217,8 +217,17 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
     if (blockHeader.gasLimit > MaxGasLimit)
       Left(HeaderGasLimitError)
     else {
-      val gasLimitDiff = (blockHeader.gasLimit - parentHeader.gasLimit).abs
-      val gasLimitDiffLimit = parentHeader.gasLimit / GasLimitBoundDivisor
+      // EIP-1559: at the London (Olympia in fukuii's naming) activation block the
+      // gas limit doubles (parent.gasLimit * ElasticityMultiplier). The 1/1024 bound
+      // is relaxed only for that one transition block.
+      val isLondonActivation =
+        blockHeader.number == blockchainConfig.forkBlockNumbers.olympiaBlockNumber &&
+          parentHeader.baseFee.isEmpty &&
+          blockHeader.baseFee.isDefined
+      val effectiveParentLimit =
+        if (isLondonActivation) parentHeader.gasLimit * 2 else parentHeader.gasLimit
+      val gasLimitDiff = (blockHeader.gasLimit - effectiveParentLimit).abs
+      val gasLimitDiffLimit = effectiveParentLimit / GasLimitBoundDivisor
       if (gasLimitDiff < gasLimitDiffLimit && blockHeader.gasLimit >= MinGasLimit)
         Right(BlockHeaderValid)
       else
