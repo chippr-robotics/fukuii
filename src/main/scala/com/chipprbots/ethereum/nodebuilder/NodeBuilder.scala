@@ -867,6 +867,48 @@ trait EngineApiBuilder {
     } else None
 }
 
+trait GraphQLServiceBuilder {
+  self: BlockchainBuilder
+    with BlockchainConfigBuilder
+    with MiningBuilder
+    with StorageBuilder
+    with EthBlocksServiceBuilder
+    with EthTxServiceBuilder
+    with EthInfoServiceBuilder
+    with EthUserServiceBuilder
+    with EthFilterServiceBuilder
+    with ActorSystemBuilder =>
+
+  private lazy val graphQLConfig: com.chipprbots.ethereum.utils.GraphQLConfig =
+    com.chipprbots.ethereum.utils.GraphQLConfig(com.chipprbots.ethereum.utils.Config.config)
+
+  lazy val maybeGraphQLService: Option[com.chipprbots.ethereum.jsonrpc.graphql.GraphQLService] =
+    if (!graphQLConfig.enabled) None
+    else {
+      implicit val ec: scala.concurrent.ExecutionContext = system.dispatcher
+      implicit val runtime: cats.effect.unsafe.IORuntime  = cats.effect.unsafe.IORuntime.global
+      val ctx = com.chipprbots.ethereum.jsonrpc.graphql.GraphQLContext(
+        blockchain = blockchain,
+        blockchainReader = blockchainReader,
+        mining = mining,
+        evmCodeStorage = storagesInstance.storages.evmCodeStorage,
+        blockchainConfig = blockchainConfig,
+        ethBlocksService = ethBlocksService,
+        ethTxService = ethTxService,
+        ethInfoService = ethInfoService,
+        ethUserService = ethUserService,
+        ethFilterService = ethFilterService
+      )
+      Some(
+        new com.chipprbots.ethereum.jsonrpc.graphql.GraphQLService(
+          ctx,
+          maxQueryDepth = graphQLConfig.maxQueryDepth,
+          executionTimeout = graphQLConfig.executionTimeout
+        )
+      )
+    }
+}
+
 trait JSONRpcHttpServerBuilder {
   self: ActorSystemBuilder
     with BlockchainBuilder
@@ -874,14 +916,16 @@ trait JSONRpcHttpServerBuilder {
     with JSONRpcHealthcheckerBuilder
     with SecureRandomBuilder
     with JSONRpcConfigBuilder
-    with SSLContextBuilder =>
+    with SSLContextBuilder
+    with GraphQLServiceBuilder =>
 
   lazy val maybeJsonRpcHttpServer: Either[String, JsonRpcHttpServer] =
     JsonRpcHttpServer(
       jsonRpcController,
       jsonRpcHealthChecker,
       jsonRpcConfig.httpServerConfig,
-      () => sslContext("fukuii.network.rpc.http")
+      () => sslContext("fukuii.network.rpc.http"),
+      maybeGraphQLService
     )
 }
 
@@ -1123,6 +1167,7 @@ trait Node
     with JSONRpcHealthcheckerBuilder
     with JSONRpcControllerBuilder
     with SSLContextBuilder
+    with GraphQLServiceBuilder
     with JSONRpcHttpServerBuilder
     with JSONRpcIpcServerBuilder
     with SubscriptionManagerBuilder

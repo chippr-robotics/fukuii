@@ -208,6 +208,33 @@ object KeyStoreConfig {
     }
 }
 
+/** GraphQL endpoint config — EIP-1767 `/graphql` mounted on the JSON-RPC HTTP port. */
+trait GraphQLConfig {
+  val enabled: Boolean
+  val maxQueryDepth: Int
+  val executionTimeout: FiniteDuration
+}
+
+object GraphQLConfig {
+  def apply(etcClientConfig: TypesafeConfig): GraphQLConfig = {
+    val path = "network.rpc.graphql"
+    // Default to enabled when the block is absent so users pick up the feature transparently.
+    val cfg =
+      if (etcClientConfig.hasPath(path)) etcClientConfig.getConfig(path)
+      else ConfigFactory.empty()
+
+    new GraphQLConfig {
+      val enabled: Boolean =
+        if (cfg.hasPath("enabled")) cfg.getBoolean("enabled") else true
+      val maxQueryDepth: Int =
+        if (cfg.hasPath("max-query-depth")) cfg.getInt("max-query-depth") else 20
+      val executionTimeout: FiniteDuration =
+        if (cfg.hasPath("execution-timeout")) cfg.getDuration("execution-timeout").toMillis.millis
+        else 30.seconds
+    }
+  }
+}
+
 trait FilterConfig {
   val filterTimeout: FiniteDuration
   val filterManagerQueryTimeout: FiniteDuration
