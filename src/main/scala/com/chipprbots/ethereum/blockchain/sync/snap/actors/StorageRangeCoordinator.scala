@@ -68,7 +68,7 @@ class StorageRangeCoordinator(
   // Task management
   private val tasks = mutable.Queue[StorageTask]()
   private val activeTasks =
-    mutable.Map[BigInt, (Peer, Seq[StorageTask], BigInt)]() // requestId -> (peer, tasks, requestedBytes)
+    mutable.Map[BigInt, (Peer, Seq[StorageTask], BigInt, ByteString)]() // requestId -> (peer, tasks, requestedBytes, dispatchRoot)
   private val completedTasks = mutable.ArrayBuffer[StorageTask]()
 
   // Track consecutive timeouts per peer. When a peer hits the threshold, it's marked stateless.
@@ -534,7 +534,7 @@ class StorageRangeCoordinator(
       // Cancel all in-flight requests: their responses are for the old root and will
       // contaminate stateless detection if processed. Re-queue tasks for the new root.
       val cancelledCount = activeTasks.size
-      activeTasks.values.foreach { case (_, batchTasks, _) =>
+      activeTasks.values.foreach { case (_, batchTasks, _, _) =>
         batchTasks.foreach { task =>
           task.pending = false
           tasks.enqueue(task)
@@ -684,7 +684,7 @@ class StorageRangeCoordinator(
     )
 
     batchTasks.foreach(_.pending = true)
-    activeTasks.put(requestId, (peer, batchTasks, requestedBytes))
+    activeTasks.put(requestId, (peer, batchTasks, requestedBytes, stateRoot))
 
     requestTracker.trackRequest(
       requestId,
@@ -728,7 +728,7 @@ class StorageRangeCoordinator(
               case None =>
                 log.warning(s"No active tasks for request ID ${response.requestId}")
 
-              case Some((peer, batchTasks, requestedBytes)) =>
+              case Some((peer, batchTasks, requestedBytes, _)) =>
                 processStorageRanges(peer, batchTasks, requestedBytes, validResponse)
             }
         }
@@ -924,18 +924,28 @@ class StorageRangeCoordinator(
     proofVerifiers.getOrElseUpdate(storageRoot, MerkleProofVerifier(storageRoot))
 
   private def handleTimeout(requestId: BigInt): Unit = {
-    activeTasks.remove(requestId).foreach { case (peer, batchTasks, _) =>
+    activeTasks.remove(requestId).foreach { case (peer, batchTasks, _, dispatchRoot) =>
       log.warning(s"Storage range request timeout for ${batchTasks.size} accounts from peer ${peer.id.value}")
       recordPeerCooldown(peer, "request timeout")
       // Besu-aligned D12: no adaptive byte budget ratcheting.
 
-      // Track consecutive timeouts — on ETC mainnet, peers silently stop responding when
-      // the snap serve window expires. After N consecutive timeouts, treat as stateless.
-      val count = peerConsecutiveTimeouts.getOrElse(peer.id.value, 0) + 1
-      peerConsecutiveTimeouts.update(peer.id.value, count)
-      if (count >= consecutiveTimeoutThreshold) {
-        log.info(s"Peer ${peer.id.value} hit $count consecutive storage timeouts — treating as stateless")
-        markPeerStateless(peer)
+      // Besu-aligned: only count timeouts toward stateless detection for the CURRENT root.
+      // After pivot refresh, requests dispatched under the old root time out harmlessly —
+      // they don't mean the peer can't serve the new root.
+      // Equivalent to Besu's SnapSyncProcessState.isExpired() check in CompleteTaskStep.
+      // Matches AccountRangeCoordinator's BUG-17 guard (task.rootHash == stateRoot).
+      if (dispatchRoot == stateRoot) {
+        val count = peerConsecutiveTimeouts.getOrElse(peer.id.value, 0) + 1
+        peerConsecutiveTimeouts.update(peer.id.value, count)
+        if (count >= consecutiveTimeoutThreshold) {
+          log.info(s"Peer ${peer.id.value} hit $count consecutive storage timeouts — treating as stateless")
+          markPeerStateless(peer)
+        }
+      } else {
+        log.info(
+          s"Ignoring timeout from stale-root storage request " +
+            s"(dispatch root ${dispatchRoot.take(4).toHex} != current ${stateRoot.take(4).toHex})"
+        )
       }
 
       batchTasks.foreach { task =>
