@@ -140,8 +140,14 @@ class SNAPSyncController(
   private case object CheckSnapCapability
   private case object TuneRateTracker
   private case object EvictNonSnapPeers
+  private case object CheckPivotStaleness
   private var snapCapabilityCheckTask: Option[Cancellable] = None
   private var snapPeerEvictionTask: Option[Cancellable] = None
+  private var pivotStalenessCheckTask: Option[Cancellable] = None
+
+  // Besu DynamicPivotBlockSelector.java constants
+  private val PivotWindowValidity: Int = 126  // blocks behind chain tip before pivot switch
+  private val PivotCheckInterval: FiniteDuration = 60.seconds
 
   /** Like handlePeerListMessagesWithRateTracking, but also reactively triggers a bootstrap retry when new SNAP-capable
     * peers arrive during the bootstrapping state. Without this, the node waits for the full exponential backoff timer
@@ -225,6 +231,7 @@ class SNAPSyncController(
     accountStagnationCheckTask.foreach(_.cancel())
     storageStagnationCheckTask.foreach(_.cancel())
     healingRequestTask.foreach(_.cancel())
+    pivotStalenessCheckTask.foreach(_.cancel())
     bootstrapCheckTask.foreach(_.cancel())
     pivotBootstrapRetryTask.foreach(_.cancel())
     snapCapabilityCheckTask.foreach(_.cancel())
@@ -587,6 +594,8 @@ class SNAPSyncController(
       if (missingNodes.isEmpty) {
         log.info("Trie walk found no missing nodes — healing complete!")
         consecutiveUnproductiveHealingRounds = 0
+        pivotStalenessCheckTask.foreach(_.cancel())
+        pivotStalenessCheckTask = None
         progressMonitor.startPhase(StateValidation)
         currentPhase = StateValidation
         validateState()
@@ -599,6 +608,8 @@ class SNAPSyncController(
               s"Proceeding to validation — regular sync will recover missing nodes on-demand."
           )
           consecutiveUnproductiveHealingRounds = 0
+          pivotStalenessCheckTask.foreach(_.cancel())
+          pivotStalenessCheckTask = None
           progressMonitor.startPhase(StateValidation)
           currentPhase = StateValidation
           validateState()
@@ -626,6 +637,20 @@ class SNAPSyncController(
       scheduler.scheduleOnce(5.seconds) {
         self ! ScheduledTrieWalk
       }(ec)
+
+    // Besu DynamicPivotBlockSelector: every 60s check if pivot drifted >126 blocks behind chain tip.
+    case CheckPivotStaleness if currentPhase == StateHealing =>
+      val currentPivot = pivotBlock.getOrElse(BigInt(0))
+      currentNetworkBestFromSnapPeers().foreach { networkBest =>
+        val pivotAge = networkBest - currentPivot
+        if (pivotAge > PivotWindowValidity) {
+          log.info(
+            s"[PIVOT-STALENESS] Pivot $currentPivot is $pivotAge blocks behind network head $networkBest " +
+              s"(threshold: $PivotWindowValidity). Refreshing pivot."
+          )
+          refreshPivotInPlace("pivot-staleness-check")
+        }
+      }
 
     case StateValidationComplete =>
       log.info("State validation complete. SNAP sync finished!")
@@ -1484,6 +1509,7 @@ class SNAPSyncController(
     bytecodeRequestTask.foreach(_.cancel())
     storageRangeRequestTask.foreach(_.cancel())
     healingRequestTask.foreach(_.cancel())
+    pivotStalenessCheckTask.foreach(_.cancel())
     snapCapabilityCheckTask.foreach(_.cancel())
     snapPeerEvictionTask.foreach(_.cancel())
 
@@ -1975,6 +2001,18 @@ class SNAPSyncController(
           1.second,
           self,
           RequestTrieNodeHealing
+        )(ec)
+      )
+
+      // Besu DynamicPivotBlockSelector: 60s periodic staleness check during healing.
+      // If pivot drifts >126 blocks behind chain tip, refresh pivot in-place.
+      pivotStalenessCheckTask.foreach(_.cancel())
+      pivotStalenessCheckTask = Some(
+        scheduler.scheduleWithFixedDelay(
+          PivotCheckInterval,
+          PivotCheckInterval,
+          self,
+          CheckPivotStaleness
         )(ec)
       )
 
@@ -2750,14 +2788,14 @@ case class SNAPSyncConfig(
     maxPivotStalenessBlocks: Long = 4096,
     accountConcurrency: Int = 16,
     storageConcurrency: Int = 16,
-    storageBatchSize: Int = 128,
+    storageBatchSize: Int = 384,
     storageInitialResponseBytes: Int = 1048576,
     storageMinResponseBytes: Int = 131072,
-    healingBatchSize: Int = 16,
+    healingBatchSize: Int = 384,
     healingConcurrency: Int = 16,
     stateValidationEnabled: Boolean = true,
     maxRetries: Int = 3,
-    timeout: FiniteDuration = 30.seconds,
+    timeout: FiniteDuration = 10.seconds,
     maxSnapSyncFailures: Int = 5, // Max failures before fallback to fast sync
     // Grace period after bootstrap to wait for snap/1-capable peers before falling back.
     // If no connected peer advertises snap/1 within this window, fall back to fast sync.
