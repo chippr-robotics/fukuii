@@ -788,28 +788,21 @@ class TrieNodeHealingCoordinator(
         (if (abandoned > 0) s", abandoned $abandoned" else ""))
     }
 
-    // Check global stagnation: no nodes healed for healingStagnationTimeoutMs
+    // Besu alignment: no mass-abandonment in timeout handler.
+    // Besu (AbstractRetryingPeerTask) retries per-task up to MAX_RETRIES=4, but never mass-abandons
+    // tasks in a timeout handler. Besu only clears pendingTrieNodeRequests via reloadTrieHeal(),
+    // which fires ONLY when isNewPivotBlockFound || isBlockchainCaughtUp
+    // (SnapWorldDownloadState.java line 483) — not from stagnation timers.
+    // Mass-abandonment here bypasses HealingAllPeersStateless → pivot refresh, which is the
+    // correct escalation path when peers can't serve the current root.
+    // HealingStagnationCheck watchdog (every 2 min) sends HealingAllPeersStateless when all
+    // peers are stateless, triggering a pivot refresh to a root peers CAN serve.
     val stagnantMs = System.currentTimeMillis() - lastHealedAtMs
     if (stagnantMs > healingStagnationTimeoutMs && pendingTasks.nonEmpty) {
-      val pendingCount = pendingTasks.size
       log.warning(
-        s"Healing stagnation timeout (${stagnantMs / 1000}s, no progress). " +
-          s"Likely cause: peers lack GetTrieNodes support or all peers offline. " +
-          s"Abandoning $pendingCount remaining tasks. Nodes will be re-discovered during state validation trie walk."
+        s"Healing stagnation (${stagnantMs / 1000}s no progress, ${pendingTasks.size} tasks pending). " +
+          s"Waiting for peer availability or pivot refresh — tasks preserved (Besu-aligned, no mass-abandon)."
       )
-      abandonedTaskCount += pendingCount
-      // LOG-ABANDONED-DETAIL: Log root and success rate before persisting abandoned list
-      val stateRootHex = Hex.toHexString(stateRoot.take(8).toArray)
-      log.info(
-        s"[HEAL-ABANDON] Persisting $pendingCount abandoned nodes. " +
-        s"root=$stateRootHex, healed=$totalNodesHealed, abandoned=$abandonedTaskCount"
-      )
-      // Persist the abandoned list before discarding — controller will use it to skip the trie
-      // re-walk and retry healing directly (OPT-H2). force=true bypasses the counter gate.
-      val abandonedSnapshot = pendingTasks.toSeq.map(e => (e.pathset, e.hash))
-      snapSyncController ! SNAPSyncController.PersistHealingQueue(abandonedSnapshot, force = true)
-      pendingTasks.clear()
-      pendingHashSet.clear()
     }
 
     tryRedispatchPendingTasks()
