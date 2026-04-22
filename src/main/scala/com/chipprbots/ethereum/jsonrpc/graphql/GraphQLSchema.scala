@@ -197,6 +197,22 @@ object GraphQLSchema {
       )
     }
 
+  /** For `Pending.transactions` / `Pending.transactionCount`, surface only the lowest-nonce tx
+    * per sender — the one that is "next in line" to be included. The mempool stores every
+    * queued tx (including future-nonce ones), but hive's graphql test 35 expects the geth-style
+    * view where each sender contributes at most one "pending" entry. Mirrors
+    * `eth_pendingTransactions` behaviour in geth / besu.
+    */
+  private def readyPendingTxs(
+      all: Seq[com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransaction]
+  ): Seq[com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransaction] =
+    all
+      .groupBy(_.stx.senderAddress)
+      .values
+      .map(_.minBy(_.stx.tx.tx.nonce))
+      .toSeq
+      .sortBy(_.stx.tx.tx.nonce)
+
   private def logMatches(
       log: TxLogEntry,
       addresses: Seq[ByteString],
@@ -811,7 +827,7 @@ object GraphQLSchema {
             c.ctx.ethTxService
               .ethPendingTransactions(com.chipprbots.ethereum.jsonrpc.EthTxService.EthPendingTransactionsRequest())
               .map {
-                case Right(resp) => resp.pendingTransactions.size.toLong
+                case Right(resp) => readyPendingTxs(resp.pendingTransactions).size.toLong
                 case Left(_)     => 0L
               }
               .unsafeToFuture()
@@ -823,8 +839,9 @@ object GraphQLSchema {
             c.ctx.ethTxService
               .ethPendingTransactions(com.chipprbots.ethereum.jsonrpc.EthTxService.EthPendingTransactionsRequest())
               .map {
-                case Right(resp) => Some(resp.pendingTransactions.map(p => GTransaction(p.stx.tx, None)))
-                case Left(_)     => None
+                case Right(resp) =>
+                  Some(readyPendingTxs(resp.pendingTransactions).map(p => GTransaction(p.stx.tx, None)))
+                case Left(_) => None
               }
               .unsafeToFuture()
         ),
@@ -1125,14 +1142,38 @@ object GraphQLSchema {
 
               // Forward to the pool via the existing service. Any remaining failure path from
               // EthTxService (e.g. EIP-3860 initcode-too-large) surfaces as Invalid params.
+              // Then synchronise: the service sends `AddOrOverrideTransaction` via `tell`, so
+              // the returned hash doesn't guarantee the tx is in the cache yet. hive runs
+              // tests in parallel — `pending.transactions` queried by a concurrent test may
+              // miss a just-submitted tx. Follow the `tell` with an `askFor` on the same
+              // actor; Pekko processes messages in order, so the Get reply confirms the Add
+              // has been committed.
+              // Forward to the pool via the existing service, then synchronise. The service
+              // sends `AddOrOverrideTransaction` via `tell`, so the returned hash alone
+              // doesn't guarantee the tx is in the cache yet. hive runs tests in parallel —
+              // `pending.transactions` from a concurrent test may miss a just-submitted tx.
+              // Follow up with an `askFor` on the same actor; Pekko processes messages in
+              // arrival order, so the Get reply confirms the Add has been committed.
+              import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps._
+              import com.chipprbots.ethereum.transactions.PendingTransactionsManager
+              implicit val askTimeout: org.apache.pekko.util.Timeout =
+                org.apache.pekko.util.Timeout(scala.concurrent.duration.DurationInt(5).seconds)
+
               val req = com.chipprbots.ethereum.jsonrpc.EthTxService.SendRawTransactionRequest(raw)
-              c.ctx.ethTxService
+              val io = c.ctx.ethTxService
                 .sendRawTransaction(req)
-                .map {
-                  case Right(resp) => resp.transactionHash
-                  case Left(_)     => throw GraphQLDataFetchingError.invalidParams("sendRawTransaction")
+                .flatMap {
+                  case Right(resp) =>
+                    c.ctx.ethTxService.pendingTransactionsManager
+                      .askFor[PendingTransactionsManager.PendingTransactionsResponse](
+                        PendingTransactionsManager.GetPendingTransactions
+                      )
+                      .map(_ => resp.transactionHash)
+                      .handleError(_ => resp.transactionHash)
+                  case Left(_) =>
+                    cats.effect.IO.raiseError(GraphQLDataFetchingError.invalidParams("sendRawTransaction"))
                 }
-                .unsafeToFuture()
+              io.unsafeToFuture()
           }
         }
       )
