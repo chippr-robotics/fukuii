@@ -22,15 +22,14 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
       healingBatchSize = 16,
       stateValidationEnabled = true,
       maxRetries = 3,
-      timeout = 30.seconds,
-      maxSnapSyncFailures = 5
+      timeout = 30.seconds
     )
 
     config.enabled shouldBe true
     config.pivotBlockOffset shouldBe 1024
     config.accountConcurrency shouldBe 16
     config.maxRetries shouldBe 3
-    config.maxSnapSyncFailures shouldBe 5
+    // maxSnapSyncFailures removed in Besu-aligned D4 (no fallback to fast sync)
   }
 
   it should "have sensible defaults" taggedAs UnitTest in {
@@ -41,7 +40,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     config.accountConcurrency should be > 0
     config.storageConcurrency should be > 0
     config.healingBatchSize should be > 0
-    config.maxSnapSyncFailures should be > 0
+    config.maxRetries should be > 0
   }
 
   "SyncProgress" should "format progress string correctly" taggedAs UnitTest in {
