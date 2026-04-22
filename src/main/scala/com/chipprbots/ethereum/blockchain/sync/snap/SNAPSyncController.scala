@@ -231,6 +231,12 @@ class SNAPSyncController(
   private val AccountStagnationThreshold: FiniteDuration = snapSyncConfig.accountStagnationTimeout
   // If bytecodes show no progress for this long, force-complete and let healing recover missing code.
   private val BytecodeStagnationThreshold: FiniteDuration = 5.minutes
+  // Tail-stuck detection: when only a small number of storage accounts remain and no progress has
+  // been made, these accounts are almost certainly unservable by any peer (very large contracts
+  // whose storage trie exceeds per-request limits). Route to trie healing immediately rather than
+  // waiting the full StorageStagnationThreshold.
+  private val TailThreshold: Int = 1000
+  private val TailStagnationMs: Long = 5.minutes.toMillis
   private var lastStorageProgressMs: Long = System.currentTimeMillis()
   private var lastAccountProgressMs: Long = System.currentTimeMillis()
   private var lastAccountTasksCompleted: Int = 0
@@ -437,7 +443,7 @@ class SNAPSyncController(
             // refreshed in-place. Refresh pivot for storage coordinator only.
             log.warning(
               s"$consecutivePivotRefreshes consecutive unservable pivots during bytecode/storage. " +
-                "Refreshing in-place (preserving accounts)."
+                "Refreshing in-place (preserving accounts). Stagnation watchdog is the real escape hatch."
             )
             consecutivePivotRefreshes = 0 // Reset — accounts completing IS progress
             refreshPivotInPlace(reason)
@@ -819,6 +825,24 @@ class SNAPSyncController(
 
     val now = System.currentTimeMillis()
     val stalledForMs = now - lastStorageProgressMs
+
+    // Tail-stuck fast path: a small residual of accounts has been unservable for TailStagnationMs.
+    // These are typically very large contracts whose storage trie exceeds per-request timeout limits.
+    // No peer on any pivot can serve them — force-complete immediately to let trie healing recover them.
+    val isTailStuck = stats.tasksPending > 0 &&
+      stats.tasksPending < TailThreshold &&
+      stalledForMs >= TailStagnationMs
+    if (isTailStuck) {
+      log.warning(
+        s"Tail-stuck: ${stats.tasksPending} storage tasks unservable for ${stalledForMs / 1000}s. " +
+          "Force-completing to trie healing phase."
+      )
+      storageForceCompleted = true
+      storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
+      accountStagnationCheckTask.foreach(_.cancel()); accountStagnationCheckTask = None
+      storageRangeCoordinator.foreach(_ ! actors.Messages.ForceCompleteStorage)
+      return
+    }
 
     if (!storageStagnationRefreshAttempted) {
       // First stall: needs full threshold before triggering
