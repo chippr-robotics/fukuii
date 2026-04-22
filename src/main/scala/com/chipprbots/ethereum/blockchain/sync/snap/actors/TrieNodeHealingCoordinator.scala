@@ -112,38 +112,12 @@ class TrieNodeHealingCoordinator(
   private var postRefreshCooldownUntilMs: Long = 0L
   private val postRefreshCooldownMs: Long = 10_000L // 10s (matches StorageRangeCoordinator)
 
-  // Per-peer adaptive byte budgeting
-  private val minResponseBytes: BigInt = 50 * 1024
-  private val maxResponseBytes: BigInt = 2 * 1024 * 1024
-  private val initialResponseBytes: BigInt = 512 * 1024
-  private val increaseFactor: Double = 1.25
-  private val decreaseFactor: Double = 0.5
-
-  private val peerResponseBytesTarget = mutable.Map.empty[String, BigInt]
+  // Besu-aligned D12: fixed request size, no per-peer adaptive ratcheting.
+  // Besu uses a fixed REQUEST_SIZE in RequestDataStep.java with no per-peer tracking.
+  private val requestResponseBytes: BigInt = 512 * 1024
 
   // HW1 self-feeding: tracks total missing trie children discovered across all healed nodes
   private var childrenDiscoveredTotal: Int = 0
-
-  private def responseBytesTargetFor(peer: Peer): BigInt =
-    peerResponseBytesTarget
-      .getOrElseUpdate(peer.id.value, initialResponseBytes)
-      .max(minResponseBytes)
-      .min(maxResponseBytes)
-
-  private def adjustResponseBytesOnSuccess(peer: Peer, requested: BigInt, received: BigInt): Unit =
-    if (requested > 0 && received * 10 >= requested * 9 && requested < maxResponseBytes) {
-      val next = (requested.toDouble * increaseFactor).toLong
-      peerResponseBytesTarget.update(peer.id.value, BigInt(next).min(maxResponseBytes))
-    }
-
-  private def adjustResponseBytesOnFailure(peer: Peer, reason: String): Unit = {
-    val cur = responseBytesTargetFor(peer)
-    val next = (cur.toDouble * decreaseFactor).toLong
-    peerResponseBytesTarget.update(peer.id.value, BigInt(next).max(minResponseBytes))
-    log.debug(
-      s"Reducing healing responseBytes target for peer ${peer.id.value}: $cur -> ${peerResponseBytesTarget(peer.id.value)} ($reason)"
-    )
-  }
 
   // Peer cooldown
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
@@ -310,7 +284,7 @@ class TrieNodeHealingCoordinator(
       statelessPeers.clear()
       statelessRemoteAddresses.clear() // new root — peers that failed old root may serve new one
       peerCooldownUntilMs.clear()
-      peerResponseBytesTarget.clear()
+      // Besu-aligned D12: no peerResponseBytesTarget to clear.
       // Cancel active requests (they're for the old root)
       activeRequests.keys.foreach(requestTracker.completeRequest(_, 0))
       activeRequests.clear()
@@ -517,7 +491,7 @@ class TrieNodeHealingCoordinator(
     batch.foreach(e => pendingHashSet -= e.hash)
 
     val requestId = requestTracker.generateRequestId()
-    val responseBytes = responseBytesTargetFor(peer)
+    val responseBytes = requestResponseBytes // Besu-aligned D12: fixed size, no per-peer ratcheting
 
     // Build the paths list for GetTrieNodes — each entry's pathset is a Seq[ByteString]
     val paths = batch.map(_.pathset)
@@ -564,7 +538,6 @@ class TrieNodeHealingCoordinator(
 
     val tasksForRequest = activeReq.tasks
     val peer = activeReq.peer
-    val requestedBytes = activeReq.requestedBytes
 
     var healedCount = 0
     var receivedBytes: Long = 0
@@ -619,13 +592,11 @@ class TrieNodeHealingCoordinator(
     val elapsedMs = System.currentTimeMillis() - activeReq.sentAtMs
     updateHealThrottle(healedCount, elapsedMs)
 
-    // Adaptive byte budget + stateless tracking
+    // Stateless tracking (Besu-aligned D12: no adaptive byte budget, fixed request size)
     if (healedCount > 0) {
-      adjustResponseBytesOnSuccess(peer, requestedBytes, BigInt(receivedBytes))
       // Successful response — clear stateless marking
       statelessPeers -= peer.id.value
     } else {
-      adjustResponseBytesOnFailure(peer, "empty healing response")
       recordPeerCooldown(peer, "empty healing response")
       // Mark peer stateless for current root (geth-aligned) — skip for static peers
       if (!peer.isStatic) {
@@ -674,7 +645,7 @@ class TrieNodeHealingCoordinator(
 
     activeRequests.remove(requestId)
     recordPeerCooldown(peer, "request timeout")
-    adjustResponseBytesOnFailure(peer, "request timeout")
+    // Besu-aligned D12: no adaptive byte budget ratcheting on timeout.
 
     // Increment retry count and skip exhausted tasks
     var requeued = 0
