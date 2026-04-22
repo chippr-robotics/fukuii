@@ -77,23 +77,22 @@ class StateNodeFetcher(
         // Backoff before retrying to prevent flooding peers with requests.
         // Without this, each failure immediately spawns a new request while old PeerRequestHandler
         // actors are still alive waiting for timeout — creating unbounded request multiplication.
-        requester.foreach { req =>
-          context.scheduleOnce(
-            5.seconds,
-            context.self,
-            StateNodeFetcher.FetchStateNode(req.hash, req.replyTo, req.stateRoot, req.paths)
-          )
-        }
+        // Use InternalRetry so we re-use the existing requester (preserving snapEmptyCount/paths).
+        context.scheduleOnce(5.seconds, context.self, StateNodeFetcher.InternalRetry)
         Behaviors.same
+
+      case StateNodeFetcher.InternalRetry if requester.isDefined =>
+        // Re-issue the request using current requester state (snapEmptyCount and paths preserved).
+        requester.foreach(req => requestStateNode(req.hash, req.stateRoot, req.paths))
+        Behaviors.same
+
       case _ => Behaviors.unhandled
     }
 
-  private def retryAfterBackoff(req: StateNodeRequester): Unit =
-    context.scheduleOnce(
-      5.seconds,
-      context.self,
-      StateNodeFetcher.FetchStateNode(req.hash, req.replyTo, req.stateRoot, req.paths)
-    )
+  // Schedule a retry that preserves the current requester state (including snapEmptyCount and
+  // any updated paths). Must NOT schedule FetchStateNode — that rebuilds requester from scratch.
+  private def retryAfterBackoff(): Unit =
+    context.scheduleOnce(5.seconds, context.self, StateNodeFetcher.InternalRetry)
 
   private def handleNodeDataValues(peer: Peer, values: Seq[ByteString]): Behavior[StateNodeFetcherCommand] =
     requester
@@ -107,7 +106,7 @@ class StateNodeFetcher(
           case Left(err) =>
             log.debug("State node validation failed with {}", err.description)
             peersClient ! BlacklistPeer(peer.id, err)
-            retryAfterBackoff(stateNodeRequester)
+            retryAfterBackoff()
             Behaviors.same[StateNodeFetcherCommand]
           case Right(node) =>
             stateNodeRequester.replyTo ! FetchedStateNode(NodeData(node))
@@ -137,7 +136,7 @@ class StateNodeFetcher(
             requester = Some(stateNodeRequester.copy(snapEmptyCount = newCount))
           }
           peersClient ! BlacklistPeer(peer.id, BlacklistReason.EmptyStateNodeResponse)
-          retryAfterBackoff(requester.get)
+          retryAfterBackoff()
           Behaviors.same[StateNodeFetcherCommand]
         } else {
           // Multi-depth request: scan all returned nodes for one matching the target hash.
@@ -154,7 +153,7 @@ class StateNodeFetcher(
             case None =>
               log.warn("SNAP TrieNodes: got {} nodes but none matched target hash, retrying", nodes.size)
               peersClient ! BlacklistPeer(peer.id, BlacklistReason.WrongStateNodeResponse)
-              retryAfterBackoff(stateNodeRequester)
+              retryAfterBackoff()
               Behaviors.same[StateNodeFetcherCommand]
           }
         }
@@ -228,6 +227,9 @@ object StateNodeFetcher {
       networkHead: BigInt = BigInt(0)
   ) extends StateNodeFetcherCommand
   case object RetryStateNodeRequest extends StateNodeFetcherCommand
+  // Internal retry: re-issues request from current requester state (preserves snapEmptyCount/paths).
+  // Use this instead of scheduling FetchStateNode, which rebuilds requester from scratch.
+  case object InternalRetry extends StateNodeFetcherCommand
   final private case class AdaptedMessage[T <: Message](peer: Peer, msg: T) extends StateNodeFetcherCommand
 
   // After this many consecutive empty SNAP TrieNodes responses, fall back to GetNodeData.
