@@ -157,7 +157,7 @@ class ByteCodeCoordinator(
       log.info("Pivot refreshed — clearing bytecode peer cooldowns")
       peerFailureCounts.clear()
       peerCooldownUntilMillis.clear()
-      // Besu-aligned D12: no peerResponseBytesTarget to clear.
+    // Besu-aligned D12: no peerResponseBytesTarget to clear.
 
     case PeerAvailable(peer) =>
       if (isPeerCoolingDown(peer)) {

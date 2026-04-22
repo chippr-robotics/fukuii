@@ -11,8 +11,8 @@ import com.chipprbots.ethereum.testing.Tags._
 
 class AutoBlockerSpec extends AnyFlatSpec with Matchers {
 
-  /** Scheduler that records scheduled tasks but does NOT execute them automatically.
-    * Invoke `runAll()` to fire all pending tasks (simulates time passing).
+  /** Scheduler that records scheduled tasks but does NOT execute them automatically. Invoke `runAll()` to fire all
+    * pending tasks (simulates time passing).
     */
   class ManualScheduler extends Scheduler {
     private var pending: List[Runnable] = Nil
@@ -24,7 +24,7 @@ class AutoBlockerSpec extends AnyFlatSpec with Matchers {
     ): org.apache.pekko.actor.Cancellable = {
       pending = runnable :: pending
       new org.apache.pekko.actor.Cancellable {
-        def cancel(): Boolean    = { pending = pending.filterNot(_ eq runnable); true }
+        def cancel(): Boolean = { pending = pending.filterNot(_ eq runnable); true }
         def isCancelled: Boolean = false
       }
     }
@@ -52,7 +52,7 @@ class AutoBlockerSpec extends AnyFlatSpec with Matchers {
       hardBlock: FiniteDuration = 60.minutes,
       initialIPs: Set[String] = Set.empty
   ): (AutoBlocker, BlockedIPRegistry, ManualScheduler) = {
-    val registry  = new BlockedIPRegistry(initialIPs)
+    val registry = new BlockedIPRegistry(initialIPs)
     val scheduler = new ManualScheduler
     val blocker = new AutoBlocker(
       registry,

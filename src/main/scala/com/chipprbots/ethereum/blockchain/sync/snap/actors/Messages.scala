@@ -195,8 +195,9 @@ object Messages {
     */
   case class HealingPivotRefreshed(newStateRoot: ByteString) extends TrieNodeHealingCoordinatorMessage
 
-  /** Sent by SNAPSyncController when the current pivot has advanced beyond the SNAP serve window (peers have pruned it).
-    * Coordinator stops immediately, reporting current healed count, so controller can restart healing with a fresh pivot.
+  /** Sent by SNAPSyncController when the current pivot has advanced beyond the SNAP serve window (peers have pruned
+    * it). Coordinator stops immediately, reporting current healed count, so controller can restart healing with a fresh
+    * pivot.
     */
   case object HealingForceComplete extends TrieNodeHealingCoordinatorMessage
 

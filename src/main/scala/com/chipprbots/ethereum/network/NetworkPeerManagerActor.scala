@@ -416,7 +416,6 @@ class NetworkPeerManagerActor(
       return
     }
 
-
     peerWithInfo.foreach { pwi =>
       val response = mptStorageOpt match {
         case Some(storage) if isStateRootFresh(msg.rootHash) =>
@@ -461,9 +460,9 @@ class NetworkPeerManagerActor(
     }
   }
 
-  /** Per SNAP/1: nodes only need to serve state for "recent" roots — geth uses a 128-block
-    * window. Looks up the requested rootHash in a cached set of recent canonical state
-    * roots. Returns true (serve) if blockchainReader isn't injected.
+  /** Per SNAP/1: nodes only need to serve state for "recent" roots — geth uses a 128-block window. Looks up the
+    * requested rootHash in a cached set of recent canonical state roots. Returns true (serve) if blockchainReader isn't
+    * injected.
     */
   private def isStateRootFresh(rootHash: ByteString): Boolean = blockchainReader match {
     case None => true
@@ -495,7 +494,6 @@ class NetworkPeerManagerActor(
       peerWithInfo.foreach(_.peer.ref ! PeerActor.SendMessage(StorageRanges(msg.requestId, Seq.empty, Seq.empty)))
       return
     }
-
 
     peerWithInfo.foreach { pwi =>
       val response = mptStorageOpt match {
@@ -593,7 +591,6 @@ class NetworkPeerManagerActor(
       return
     }
 
-
     peerWithInfo.foreach { pwi =>
       val response = mptStorageOpt match {
         case Some(storage) =>
@@ -634,7 +631,6 @@ class NetworkPeerManagerActor(
       peerWithInfo.foreach(_.peer.ref ! PeerActor.SendMessage(ByteCodes(msg.requestId, Seq.empty)))
       return
     }
-
 
     peerWithInfo.foreach { pwi =>
       // Look up each requested code hash in EvmCodeStorage. Stop accumulating when we

@@ -58,7 +58,13 @@ object Bls12381 extends Logger {
     val errorLen = new com.sun.jna.ptr.IntByReference(0)
 
     val rc = LibGnarkEIP2537.eip2537_perform_operation(
-      opId, input, input.length, result, resultLen, error, errorLen
+      opId,
+      input,
+      input.length,
+      result,
+      resultLen,
+      error,
+      errorLen
     )
 
     if (rc == 0) Some(java.util.Arrays.copyOf(result, resultLen.getValue))

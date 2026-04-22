@@ -14,20 +14,17 @@ import com.chipprbots.ethereum.rlp.RLPValue
 import com.chipprbots.ethereum.utils.ByteUtils
 import com.chipprbots.ethereum.utils.Logger
 
-/** Server-side SNAP/1 helpers — Merkle Patricia Trie range traversal and Merkle proof
-  * generation for incoming `GetAccountRange`, `GetStorageRanges`, and `GetTrieNodes`
-  * requests from peers.
+/** Server-side SNAP/1 helpers — Merkle Patricia Trie range traversal and Merkle proof generation for incoming
+  * `GetAccountRange`, `GetStorageRanges`, and `GetTrieNodes` requests from peers.
   *
-  * The traversal walks the trie in nibble (key) order and yields `(keyHash, valueRLP)`
-  * pairs strictly between the requested `[origin, limit]` bounds, stopping once the
-  * accumulated response size exceeds `responseBytes` (per SNAP/1 spec, the server may
-  * truncate the response prefix early — but must always emit at least one item if any
-  * exists in the range).
+  * The traversal walks the trie in nibble (key) order and yields `(keyHash, valueRLP)` pairs strictly between the
+  * requested `[origin, limit]` bounds, stopping once the accumulated response size exceeds `responseBytes` (per SNAP/1
+  * spec, the server may truncate the response prefix early — but must always emit at least one item if any exists in
+  * the range).
   *
-  * For each non-empty range we also emit a proof: the path from the root to the first
-  * returned key, and (if more than one item is emitted) the path from the root to the
-  * last returned key. These let the requester rebuild a partial trie and verify the
-  * range is contiguous against the claimed root hash.
+  * For each non-empty range we also emit a proof: the path from the root to the first returned key, and (if more than
+  * one item is emitted) the path from the root to the last returned key. These let the requester rebuild a partial trie
+  * and verify the range is contiguous against the claimed root hash.
   */
 object SnapServer extends Logger {
 
@@ -45,7 +42,7 @@ object SnapServer extends Logger {
   }
 
   /** Convert a 64-nibble key path back to a 32-byte hash. Returns None if length is odd. */
-  def nibblesToHash(nibbles: Array[Byte]): Option[ByteString] = {
+  def nibblesToHash(nibbles: Array[Byte]): Option[ByteString] =
     if (nibbles.length % 2 != 0) None
     else {
       val out = new Array[Byte](nibbles.length / 2)
@@ -56,7 +53,6 @@ object SnapServer extends Logger {
       }
       Some(ByteString(out))
     }
-  }
 
   /** Compare two nibble arrays lexicographically (treating each nibble as a digit 0..15). */
   private def cmpNibbles(a: Array[Byte], b: Array[Byte]): Int = {
@@ -86,17 +82,15 @@ object SnapServer extends Logger {
     try storage.get(rootHash.toArray)
     catch { case _: Throwable => NullNode }
 
-  /** Slim-account RLP element per geth's snap protocol convention: the storageRoot and
-    * codeHash fields are encoded as empty bytes when they equal the canonical empty-trie
-    * root and empty-code hash respectively. Saves ~64 bytes per EOA — critical for the
-    * SNAP byte-budget which counts the leaf body length toward the soft response limit.
+  /** Slim-account RLP element per geth's snap protocol convention: the storageRoot and codeHash fields are encoded as
+    * empty bytes when they equal the canonical empty-trie root and empty-code hash respectively. Saves ~64 bytes per
+    * EOA — critical for the SNAP byte-budget which counts the leaf body length toward the soft response limit.
     *
-    * Our `AccountImplicits.toAccount` decoder already normalises empty bytes back to the
-    * canonical defaults, so round-trips are lossless across our own and geth's clients.
+    * Our `AccountImplicits.toAccount` decoder already normalises empty bytes back to the canonical defaults, so
+    * round-trips are lossless across our own and geth's clients.
     *
-    * Returns the parsed RLP element so callers can either embed it (in `AccountRange`'s
-    * RLP envelope) or serialise it (`rlp.encode(toSlimAccountRlp(...))`) for byte-budget
-    * accounting.
+    * Returns the parsed RLP element so callers can either embed it (in `AccountRange`'s RLP envelope) or serialise it
+    * (`rlp.encode(toSlimAccountRlp(...))`) for byte-budget accounting.
     */
   def toSlimAccountRlp(account: Account): RLPList = {
     val nonceRlp: RLPEncodeable = RLPValue(ByteUtils.bigIntToUnsignedByteArray(account.nonce))
@@ -110,9 +104,8 @@ object SnapServer extends Logger {
     RLPList(nonceRlp, balanceRlp, srRlp, chRlp)
   }
 
-  /** RLP-encode a node and emit its keccak256 hash + encoded bytes. Used when collecting
-    * proof nodes — peers verify by re-hashing each proof node and matching against
-    * parent references.
+  /** RLP-encode a node and emit its keccak256 hash + encoded bytes. Used when collecting proof nodes — peers verify by
+    * re-hashing each proof node and matching against parent references.
     */
   private def encodeNodeWithHash(node: MptNode): (ByteString, ByteString) = {
     val encoded = MptTraversals.encodeNode(node)
@@ -120,14 +113,12 @@ object SnapServer extends Logger {
     (hash, ByteString(encoded))
   }
 
-  /** Range walker — yields (keyHash, leafValue) pairs whose key falls in
-    * [originNibbles, limitNibbles] (inclusive on both ends), traversing the trie in key
-    * order. Caller stops consuming when their byte budget is exceeded.
+  /** Range walker — yields (keyHash, leafValue) pairs whose key falls in [originNibbles, limitNibbles] (inclusive on
+    * both ends), traversing the trie in key order. Caller stops consuming when their byte budget is exceeded.
     *
-    * Pruning: for a partial nibble prefix `p` of length L, the minimum reachable full key
-    * is `p ++ 0×(N-L)` and the maximum is `p ++ F×(N-L)` (where N is the full key length
-    * in nibbles, 64 for an account hash). We skip a subtree only when its max < origin
-    * OR its min > limit.
+    * Pruning: for a partial nibble prefix `p` of length L, the minimum reachable full key is `p ++ 0×(N-L)` and the
+    * maximum is `p ++ F×(N-L)` (where N is the full key length in nibbles, 64 for an account hash). We skip a subtree
+    * only when its max < origin OR its min > limit.
     */
   private val FullKeyNibbles = 64
 
@@ -137,12 +128,11 @@ object SnapServer extends Logger {
   private def minKeyWith(prefix: Array[Byte]): Array[Byte] =
     prefix ++ Array.fill(math.max(0, FullKeyNibbles - prefix.length))(0.toByte)
 
-  /** Subtree-prune predicate. We only skip subtrees that lie strictly BELOW `origin`
-    * (i.e. their max key is < origin). Subtrees ABOVE `limit` are intentionally not
-    * pruned — the visitor's stop-on-`>=limit` rule needs to see the first leaf past the
-    * limit (geth's serveAccountRange does the same: it iterates past the limit,
-    * `break`s after emitting one). Limit-side pruning would cut off that extra leaf
-    * and undercount in any range whose first available key extends past `limit`.
+  /** Subtree-prune predicate. We only skip subtrees that lie strictly BELOW `origin` (i.e. their max key is < origin).
+    * Subtrees ABOVE `limit` are intentionally not pruned — the visitor's stop-on-`>=limit` rule needs to see the first
+    * leaf past the limit (geth's serveAccountRange does the same: it iterates past the limit, `break`s after emitting
+    * one). Limit-side pruning would cut off that extra leaf and undercount in any range whose first available key
+    * extends past `limit`.
     */
   private def subtreeIntersectsRange(
       prefix: Array[Byte],
@@ -151,12 +141,12 @@ object SnapServer extends Logger {
   ): Boolean =
     cmpNibbles(maxKeyWith(prefix), originNibbles) >= 0
 
-  /** Visit-style range walker — calls `visit(keyHash, valueRLP)` for every leaf whose key
-    * falls in `[origin, limit]`, traversing the trie in key order. The visitor returns
-    * `true` to continue or `false` to stop the walk early (used by the byte-budget gate).
+  /** Visit-style range walker — calls `visit(keyHash, valueRLP)` for every leaf whose key falls in `[origin, limit]`,
+    * traversing the trie in key order. The visitor returns `true` to continue or `false` to stop the walk early (used
+    * by the byte-budget gate).
     *
-    * Iterative-style traversal via direct recursion (no Iterator.flatMap chain) — much
-    * cheaper than the previous lazy iterator construction when the chain depth is 64.
+    * Iterative-style traversal via direct recursion (no Iterator.flatMap chain) — much cheaper than the previous lazy
+    * iterator construction when the chain depth is 64.
     */
   private def walkRangeVisit(
       root: MptNode,
@@ -170,7 +160,7 @@ object SnapServer extends Logger {
       if (stop) return
       if (!subtreeIntersectsRange(prefix, originNibbles, limitNibbles)) return
       resolve(node, storage) match {
-        case NullNode => ()
+        case NullNode                      => ()
         case LeafNode(key, value, _, _, _) =>
           // Geth semantics (eth/protocols/snap/handler.go:304-322): emit any leaf
           // whose key is `>= origin`, then `break` after emitting one with key
@@ -210,8 +200,8 @@ object SnapServer extends Logger {
     descend(root, Array.emptyByteArray)
   }
 
-  /** Compatibility wrapper retained for callers that want an Iterator. Internally uses
-    * the visit-style walker but materialises results into a buffer first.
+  /** Compatibility wrapper retained for callers that want an Iterator. Internally uses the visit-style walker but
+    * materialises results into a buffer first.
     */
   private def walkRange(
       root: MptNode,
@@ -226,10 +216,9 @@ object SnapServer extends Logger {
     buf.iterator
   }
 
-  /** Collect the proof path for a given key — the nodes traversed from root to the leaf
-    * (or the deepest reachable node along the path if the key is absent). The proof is
-    * returned as a sequence of RLP-encoded MPT nodes (with each node's keccak hash
-    * available to the caller for de-duplication).
+  /** Collect the proof path for a given key — the nodes traversed from root to the leaf (or the deepest reachable node
+    * along the path if the key is absent). The proof is returned as a sequence of RLP-encoded MPT nodes (with each
+    * node's keccak hash available to the caller for de-duplication).
     */
   private def proofFor(
       root: MptNode,
@@ -266,10 +255,9 @@ object SnapServer extends Logger {
     acc.toSeq
   }
 
-  /** Build an `AccountRange` response by walking the state trie at `rootHash` between
-    * `startingHash` and `limitHash`, emitting accounts whose RLP totals up to (but
-    * generally not exceeding) `responseBytes`. Always emits at least one account if any
-    * fall in the range.
+  /** Build an `AccountRange` response by walking the state trie at `rootHash` between `startingHash` and `limitHash`,
+    * emitting accounts whose RLP totals up to (but generally not exceeding) `responseBytes`. Always emits at least one
+    * account if any fall in the range.
     */
   def serveAccountRange(
       requestId: BigInt,
@@ -342,9 +330,9 @@ object SnapServer extends Logger {
     AccountRange(requestId, collected.toSeq, dedupedProof)
   }
 
-  /** Build a `StorageRanges` response — for each account, walk the per-account storage
-    * trie between `startingHash` and `limitHash`. Only the first account's range is
-    * proved (per SNAP/1 spec — subsequent accounts are returned in full, no proof).
+  /** Build a `StorageRanges` response — for each account, walk the per-account storage trie between `startingHash` and
+    * `limitHash`. Only the first account's range is proved (per SNAP/1 spec — subsequent accounts are returned in full,
+    * no proof).
     */
   def serveStorageRanges(
       requestId: BigInt,
@@ -413,9 +401,8 @@ object SnapServer extends Logger {
     StorageRanges(requestId, perAccount.toSeq, firstProof)
   }
 
-  /** Build a `TrieNodes` response — look up each requested HP-encoded path from `rootHash`
-    * and return the raw RLP-encoded node found at that path. Missing nodes yield empty
-    * bytes per SNAP/1 spec.
+  /** Build a `TrieNodes` response — look up each requested HP-encoded path from `rootHash` and return the raw
+    * RLP-encoded node found at that path. Missing nodes yield empty bytes per SNAP/1 spec.
     */
   def serveTrieNodes(
       requestId: BigInt,
@@ -488,9 +475,8 @@ object SnapServer extends Logger {
     TrieNodes(requestId, collected.toSeq)
   }
 
-  /** Walk the state trie following `nibbles` to a leaf and decode that leaf's value as
-    * an `Account`. Returns None if the path doesn't terminate at a leaf or the leaf
-    * isn't a valid account RLP.
+  /** Walk the state trie following `nibbles` to a leaf and decode that leaf's value as an `Account`. Returns None if
+    * the path doesn't terminate at a leaf or the leaf isn't a valid account RLP.
     */
   private def resolveLeafAccount(
       root: MptNode,
@@ -533,8 +519,8 @@ object SnapServer extends Logger {
     descend(root, nibbles)
   }
 
-  /** Decode an HP-encoded (Hex Prefix, EIP-2 / yellow-paper) path back to its nibble
-    * representation. Drops the leaf/extension flag bit.
+  /** Decode an HP-encoded (Hex Prefix, EIP-2 / yellow-paper) path back to its nibble representation. Drops the
+    * leaf/extension flag bit.
     */
   private def decodeHpPath(bytes: Array[Byte]): Array[Byte] = {
     if (bytes.isEmpty) return Array.emptyByteArray
@@ -548,8 +534,8 @@ object SnapServer extends Logger {
     firstNibble ++ rest.drop(skipFirst - 1).take(rest.length - (skipFirst - 1))
   }
 
-  /** Walk the trie following `nibbles` and return the encoded node found at that exact
-    * path (as a raw MPT node), or None if the path doesn't terminate cleanly at a node.
+  /** Walk the trie following `nibbles` and return the encoded node found at that exact path (as a raw MPT node), or
+    * None if the path doesn't terminate cleanly at a node.
     */
   private def collectNodeAtPath(
       root: MptNode,

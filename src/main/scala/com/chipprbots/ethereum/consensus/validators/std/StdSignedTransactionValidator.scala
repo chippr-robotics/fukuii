@@ -49,9 +49,9 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
       _ <- validateBlockHasEnoughGasLimitForTx(stx, accumGasUsed, blockHeader.gasLimit)
     } yield SignedTransactionValid
 
-  /** EIP-1559: reject txs whose maxFeePerGas cannot cover the block's baseFee, and reject txs
-    * where maxPriorityFeePerGas > maxFeePerGas. Applies to all dynamic-fee transaction
-    * variants (type 2 / 3 / 4). Legacy and Type-1 txs are post-paid at tx.gasPrice.
+  /** EIP-1559: reject txs whose maxFeePerGas cannot cover the block's baseFee, and reject txs where
+    * maxPriorityFeePerGas > maxFeePerGas. Applies to all dynamic-fee transaction variants (type 2 / 3 / 4). Legacy and
+    * Type-1 txs are post-paid at tx.gasPrice.
     */
   private def validateMaxFeeAgainstBaseFee(
       stx: SignedTransaction,
@@ -116,11 +116,11 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
       Right(SignedTransactionValid)
   }
 
-  /** Validates that the transaction type is supported at the given block number.
-    * Follows the core-geth pattern: reject typed transactions before their activation fork.
-    * - Type 1 (EIP-2930 AccessList): requires Magneto/Berlin
-    * - Type 2 (EIP-1559 DynamicFee): requires Olympia
-    * - Type 4 (EIP-7702 SetCode): requires Olympia
+  /** Validates that the transaction type is supported at the given block number. Follows the core-geth pattern: reject
+    * typed transactions before their activation fork.
+    *   - Type 1 (EIP-2930 AccessList): requires Magneto/Berlin
+    *   - Type 2 (EIP-1559 DynamicFee): requires Olympia
+    *   - Type 4 (EIP-7702 SetCode): requires Olympia
     */
   private def validateTransactionType(
       stx: SignedTransaction,

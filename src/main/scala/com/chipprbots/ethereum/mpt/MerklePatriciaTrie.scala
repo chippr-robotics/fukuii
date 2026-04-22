@@ -152,10 +152,13 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
     // Besu ProofVisitor.java:64 — root is always included in proof (proof of non-existence)
     result.map { proof =>
       if (proof.nonEmpty) proof
-      else rootNode.map {
-        case hash: HashNode => Vector(getFromHash(hash.hashNode, nodeStorage))
-        case root           => Vector(root)
-      }.getOrElse(Vector.empty)
+      else
+        rootNode
+          .map {
+            case hash: HashNode => Vector(getFromHash(hash.hashNode, nodeStorage))
+            case root           => Vector(root)
+          }
+          .getOrElse(Vector.empty)
     }
   }
 

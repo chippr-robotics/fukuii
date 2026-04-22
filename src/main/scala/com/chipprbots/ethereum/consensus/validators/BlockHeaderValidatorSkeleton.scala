@@ -64,8 +64,8 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
       _ <- validateEvenMore(blockHeader)
     } yield BlockHeaderValid
 
-  /** EIP-4844 / EIP-7691: validate blobGasUsed ≤ MAX_BLOB_GAS_PER_BLOCK, is a multiple of GAS_PER_BLOB,
-    * and excessBlobGas equals calcExcessBlobGas(parent). Runs only when the header declares blob fields.
+  /** EIP-4844 / EIP-7691: validate blobGasUsed ≤ MAX_BLOB_GAS_PER_BLOCK, is a multiple of GAS_PER_BLOB, and
+    * excessBlobGas equals calcExcessBlobGas(parent). Runs only when the header declares blob fields.
     */
   private def validateBlobGasAgainstParent(
       blockHeader: BlockHeader,
@@ -154,8 +154,8 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
     * @return
     *   BlockHeader if valid, an [[HeaderTimestampError]] otherwise
     */
-  /** Maximum number of seconds a block timestamp can be ahead of wall-clock time.
-    * Matches go-ethereum's allowedFutureBlockTimeSeconds (15s).
+  /** Maximum number of seconds a block timestamp can be ahead of wall-clock time. Matches go-ethereum's
+    * allowedFutureBlockTimeSeconds (15s).
     */
   private val AllowedFutureBlockTimeSeconds: Long = 15
 

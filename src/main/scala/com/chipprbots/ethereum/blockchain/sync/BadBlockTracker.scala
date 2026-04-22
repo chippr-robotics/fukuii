@@ -8,15 +8,13 @@ import scala.concurrent.duration._
 
 /** Tracks known-bad block hashes to short-circuit validation on re-encounter.
   *
-  * Modeled after core-geth's BadHashes map (10 entries). When a block fails validation,
-  * its hash is recorded so future encounters from other peers are rejected immediately
-  * without re-running full validation. Each entry also tracks the peer that first sent it
-  * and the error reason.
+  * Modeled after core-geth's BadHashes map (10 entries). When a block fails validation, its hash is recorded so future
+  * encounters from other peers are rejected immediately without re-running full validation. Each entry also tracks the
+  * peer that first sent it and the error reason.
   *
   * Thread-safe: backed by Caffeine concurrent cache.
   *
-  * Reference: core-geth `headerchain.go:318` BadHashes map,
-  *            go-ethereum `core/block_validator.go` bad block tracking
+  * Reference: core-geth `headerchain.go:318` BadHashes map, go-ethereum `core/block_validator.go` bad block tracking
   */
 class BadBlockTracker(maxEntries: Int = 128, ttl: FiniteDuration = 1.hour) {
 
