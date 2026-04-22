@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.faucet.jsonrpc.FaucetJsonRpcController
 import com.chipprbots.ethereum.healthcheck.HealthcheckResponse
 import com.chipprbots.ethereum.healthcheck.HealthcheckResult
 import com.chipprbots.ethereum.jsonrpc._
+import com.chipprbots.ethereum.jsonrpc.graphql.GraphQLService
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.JsonRpcHttpServerConfig
@@ -40,6 +41,9 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
   val jsonRpcController: JsonRpcBaseController
   val jsonRpcHealthChecker: JsonRpcHealthChecker
   val config: JsonRpcHttpServerConfig
+
+  /** Optional GraphQL endpoint, mounted at `POST /graphql` when defined. */
+  val graphQLService: Option[GraphQLService] = None
 
   implicit val runtime: IORuntime = IORuntime.global
   implicit val serialization: Serialization.type = native.Serialization
@@ -78,6 +82,24 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
         handleHealthcheck()
       } ~ (path("buildinfo") & pathEndOrSingleSlash & get) {
         handleBuildInfo()
+      } ~ path("graphql") {
+        post {
+          graphQLService match {
+            case Some(svc) =>
+              extractStrictEntity(5.seconds) { entity =>
+                val body = entity.data.utf8String
+                handleGraphQL(svc, body)
+              }
+            case None =>
+              complete(
+                HttpResponse(
+                  status = StatusCodes.NotFound,
+                  entity =
+                    HttpEntity(ContentTypes.`application/json`, """{"errors":[{"message":"graphql disabled"}]}""")
+                )
+              )
+          }
+        }
       } ~ (pathEndOrSingleSlash & post) {
         // TODO: maybe rate-limit this one too?
         entity(as[JsonRpcRequest]) {
@@ -169,6 +191,29 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
     complete(httpResponseF.unsafeToFuture()(runtime))
   }
 
+  private def handleGraphQL(svc: GraphQLService, body: String): StandardRoute = {
+    GraphQLService.parseJsonBody(body) match {
+      case Left(msg) =>
+        val escaped = msg.replace("\\", "\\\\").replace("\"", "\\\"")
+        val errJson = s"""{"errors":[{"message":"$escaped"}]}"""
+        complete(HttpResponse(StatusCodes.BadRequest, entity = HttpEntity(ContentTypes.`application/json`, errJson)))
+      case Right(req) =>
+        val fut = svc
+          .execute(req.query, req.variables, req.operationName)
+          .map { case (statusCode, json) =>
+            val httpStatus = statusCode match {
+              case 200 => StatusCodes.OK
+              case 400 => StatusCodes.BadRequest
+              case 500 => StatusCodes.InternalServerError
+              case _   => StatusCodes.OK
+            }
+            HttpResponse(httpStatus, entity = HttpEntity(ContentTypes.`application/json`, json.noSpaces))
+          }
+          .unsafeToFuture()
+        complete(fut)
+    }
+  }
+
   private def handleBuildInfo(): StandardRoute = {
     val buildInfo = Serialization.writePretty(BuildInfo.toMap)(DefaultFormats)
     complete(
@@ -187,13 +232,17 @@ object JsonRpcHttpServer extends Logger {
       jsonRpcController: JsonRpcBaseController,
       jsonRpcHealthchecker: JsonRpcHealthChecker,
       config: JsonRpcHttpServerConfig,
-      fSslContext: () => Either[SSLError, SSLContext]
+      fSslContext: () => Either[SSLError, SSLContext],
+      graphQLService: Option[GraphQLService] = None
   )(implicit actorSystem: ActorSystem): Either[String, JsonRpcHttpServer] =
     config.mode match {
-      case "http" => Right(new InsecureJsonRpcHttpServer(jsonRpcController, jsonRpcHealthchecker, config)(actorSystem))
+      case "http" =>
+        Right(
+          new InsecureJsonRpcHttpServer(jsonRpcController, jsonRpcHealthchecker, config, graphQLService)(actorSystem)
+        )
       case "https" =>
         Right(
-          new SecureJsonRpcHttpServer(jsonRpcController, jsonRpcHealthchecker, config, fSslContext)(
+          new SecureJsonRpcHttpServer(jsonRpcController, jsonRpcHealthchecker, config, fSslContext, graphQLService)(
             actorSystem
           )
         )
