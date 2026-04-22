@@ -58,6 +58,23 @@ class NetworkPeerManagerActor(
   // Subscribe to the event of any peer getting handshaked
   peerEventBusActor ! Subscribe(PeerHandshaked)
 
+  // Subscribe globally to SNAP request codes. The hive devp2p snap test client sends
+  // GetAccountRange/etc immediately after the RLPx hello, BEFORE the ETH-status exchange
+  // (and therefore before PeerHandshakeSuccessful fires and the per-peer subscription is
+  // installed). Without a global subscription those early requests get dropped by the
+  // event bus and the test peer times out waiting for a reply.
+  peerEventBusActor ! Subscribe(
+    MessageClassifier(
+      Set(
+        SNAP.Codes.GetAccountRangeCode,
+        SNAP.Codes.GetStorageRangesCode,
+        SNAP.Codes.GetTrieNodesCode,
+        SNAP.Codes.GetByteCodesCode
+      ),
+      PeerSelector.AllPeers
+    )
+  )
+
   override def receive: Receive = handleMessages(Map.empty)
 
   /** Processes both messages for updating the information about each peer and for requesting this information
@@ -114,25 +131,26 @@ class NetworkPeerManagerActor(
     */
   private def handlePeersInfoEvents(peersWithInfo: PeersWithInfo): Receive = {
 
+    // SNAP request messages are served via peerManagerActor.SendMessage by peerId, so
+    // they don't require the peer to be in peersWithInfo. The hive devp2p snap test
+    // client fires GetAccountRange right after the RLPx hello, before our ETH-status
+    // exchange completes, so the per-peer subscription isn't yet in place — handle
+    // them ahead of the peersWithInfo guard so they reach the server-side handlers.
+    case MessageFromPeer(msg: GetAccountRange, peerId) =>
+      handleGetAccountRange(msg, peerId, peersWithInfo.get(peerId))
+    case MessageFromPeer(msg: GetStorageRanges, peerId) =>
+      handleGetStorageRanges(msg, peerId, peersWithInfo.get(peerId))
+    case MessageFromPeer(msg: GetTrieNodes, peerId) =>
+      handleGetTrieNodes(msg, peerId, peersWithInfo.get(peerId))
+    case MessageFromPeer(msg: GetByteCodes, peerId) =>
+      handleGetByteCodes(msg, peerId, peersWithInfo.get(peerId))
+
     case MessageFromPeer(message, peerId) if peersWithInfo.contains(peerId) =>
-      // Route SNAP protocol messages to SNAPSyncController
+      // Route SNAP protocol responses (from peers we're syncing from) to SNAPSyncController
       message match {
         case msg @ (_: AccountRange | _: StorageRanges | _: TrieNodes | _: ByteCodes) =>
           log.debug("Routing {} message to SNAPSyncController from peer {}", msg.getClass.getSimpleName, peerId)
           snapSyncControllerOpt.foreach(_ ! msg)
-
-        // Handle incoming SNAP request messages (server-side)
-        case msg: GetAccountRange =>
-          handleGetAccountRange(msg, peerId, peersWithInfo.get(peerId))
-
-        case msg: GetStorageRanges =>
-          handleGetStorageRanges(msg, peerId, peersWithInfo.get(peerId))
-
-        case msg: GetTrieNodes =>
-          handleGetTrieNodes(msg, peerId, peersWithInfo.get(peerId))
-
-        case msg: GetByteCodes =>
-          handleGetByteCodes(msg, peerId, peersWithInfo.get(peerId))
 
         case _ => // ETH protocol messages - no special routing needed
       }
@@ -364,31 +382,29 @@ class NetworkPeerManagerActor(
       s"Received GetAccountRange request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, start=${msg.startingHash.take(4).toHex}, limit=${msg.limitHash.take(4).toHex}, bytes=${msg.responseBytes}"
     )
 
-    peerWithInfo.foreach { pwi =>
-      val response: AccountRange = try {
-        mptStorageOpt match {
-          case Some(storage) if isStateRootFresh(msg.rootHash) =>
-            com.chipprbots.ethereum.network.snapserver.SnapServer.serveAccountRange(
-              requestId = msg.requestId,
-              rootHash = msg.rootHash,
-              startingHash = msg.startingHash,
-              limitHash = msg.limitHash,
-              responseBytes = msg.responseBytes,
-              storage = storage
-            )
-          case _ =>
-            // Per SNAP/1: respond with empty when state root isn't within the recent
-            // window we can serve. Hive's "Test 11" sends genesis stateRoot (older than
-            // 127 blocks) and expects an empty response.
-            AccountRange(msg.requestId, Seq.empty, Seq.empty)
-        }
-      } catch {
-        case t: Throwable =>
-          log.error(s"serveAccountRange threw for peer $peerId (requestId=${msg.requestId}): ${t.getClass.getName}: ${t.getMessage}")
+    // Route reply via peerManagerActor.SendMessage so it works whether or not the peer is
+    // already in PeersWithInfo (early SNAP requests can arrive before ETH-status exchange).
+    val _ = peerWithInfo
+    val response: AccountRange = try {
+      mptStorageOpt match {
+        case Some(storage) if isStateRootFresh(msg.rootHash) =>
+          com.chipprbots.ethereum.network.snapserver.SnapServer.serveAccountRange(
+            requestId = msg.requestId,
+            rootHash = msg.rootHash,
+            startingHash = msg.startingHash,
+            limitHash = msg.limitHash,
+            responseBytes = msg.responseBytes,
+            storage = storage
+          )
+        case _ =>
           AccountRange(msg.requestId, Seq.empty, Seq.empty)
       }
-      pwi.peer.ref ! PeerActor.SendMessage(response)
+    } catch {
+      case t: Throwable =>
+        log.error(s"serveAccountRange threw for peer $peerId (requestId=${msg.requestId}): ${t.getClass.getName}: ${t.getMessage}")
+        AccountRange(msg.requestId, Seq.empty, Seq.empty)
     }
+    peerManagerActor ! PeerManagerActor.SendMessage(response, peerId)
   }
 
   // Cache of recent canonical state roots, refreshed lazily when the chain advances. The
@@ -443,8 +459,8 @@ class NetworkPeerManagerActor(
       s"Received GetStorageRanges request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, accounts=${msg.accountHashes.size}, start=${msg.startingHash.take(4).toHex}, limit=${msg.limitHash.take(4).toHex}, bytes=${msg.responseBytes}"
     )
 
-    peerWithInfo.foreach { pwi =>
-      val response = mptStorageOpt match {
+    val _ = peerWithInfo
+    val response = mptStorageOpt match {
         case Some(storage) =>
           // Per-account storage roots come from looking up each account in the state trie.
           // Here we resolve via blockchainReader's ability to fetch the account at the
@@ -518,9 +534,8 @@ class NetworkPeerManagerActor(
           }
         case None =>
           StorageRanges(msg.requestId, Seq.empty, Seq.empty)
-      }
-      pwi.peer.ref ! PeerActor.SendMessage(response)
     }
+    peerManagerActor ! PeerManagerActor.SendMessage(response, peerId)
   }
 
   /** Handle incoming GetTrieNodes request from a peer (server-side)
@@ -541,27 +556,26 @@ class NetworkPeerManagerActor(
       s"Received GetTrieNodes request from peer $peerId: requestId=${msg.requestId}, root=${msg.rootHash.take(4).toHex}, paths=${msg.paths.size}, bytes=${msg.responseBytes}"
     )
 
-    peerWithInfo.foreach { pwi =>
-      val response: TrieNodes = try {
-        mptStorageOpt match {
-          case Some(storage) =>
-            com.chipprbots.ethereum.network.snapserver.SnapServer.serveTrieNodes(
-              requestId = msg.requestId,
-              rootHash = msg.rootHash,
-              paths = msg.paths,
-              responseBytes = msg.responseBytes,
-              storage = storage
-            )
-          case None =>
-            TrieNodes(msg.requestId, Seq.empty)
-        }
-      } catch {
-        case t: Throwable =>
-          log.error(s"serveTrieNodes threw for peer $peerId (requestId=${msg.requestId}): ${t.getClass.getName}: ${t.getMessage}")
+    val _ = peerWithInfo
+    val response: TrieNodes = try {
+      mptStorageOpt match {
+        case Some(storage) =>
+          com.chipprbots.ethereum.network.snapserver.SnapServer.serveTrieNodes(
+            requestId = msg.requestId,
+            rootHash = msg.rootHash,
+            paths = msg.paths,
+            responseBytes = msg.responseBytes,
+            storage = storage
+          )
+        case None =>
           TrieNodes(msg.requestId, Seq.empty)
       }
-      pwi.peer.ref ! PeerActor.SendMessage(response)
+    } catch {
+      case t: Throwable =>
+        log.error(s"serveTrieNodes threw for peer $peerId (requestId=${msg.requestId}): ${t.getClass.getName}: ${t.getMessage}")
+        TrieNodes(msg.requestId, Seq.empty)
     }
+    peerManagerActor ! PeerManagerActor.SendMessage(response, peerId)
   }
 
   /** Handle incoming GetByteCodes request from a peer (server-side)
@@ -582,36 +596,31 @@ class NetworkPeerManagerActor(
       s"Received GetByteCodes request from peer $peerId: requestId=${msg.requestId}, hashes=${msg.hashes.size}, bytes=${msg.responseBytes}"
     )
 
-    peerWithInfo.foreach { pwi =>
-      val response: ByteCodes = try {
-        // Look up each requested code hash in EvmCodeStorage. Stop accumulating when we
-        // would exceed the peer's responseBytes soft limit (per SNAP/1 spec, the server
-        // is allowed to truncate the response prefix early — proofs aren't needed for
-        // bytecodes since each code is keyed by its keccak256 hash).
-        val maxBytes = msg.responseBytes.toInt.max(0)
-        val codes: Seq[ByteString] = evmCodeStorage match {
-          case Some(storage) =>
-            val collected = scala.collection.mutable.ListBuffer.empty[ByteString]
-            var totalBytes = 0
-            val it = msg.hashes.iterator
-            while (it.hasNext && (totalBytes < maxBytes || collected.isEmpty)) {
-              val codeHash = it.next()
-              storage.get(codeHash).foreach { code =>
-                collected += code
-                totalBytes += code.size
-              }
+    val _ = peerWithInfo
+    val response: ByteCodes = try {
+      val maxBytes = msg.responseBytes.toInt.max(0)
+      val codes: Seq[ByteString] = evmCodeStorage match {
+        case Some(storage) =>
+          val collected = scala.collection.mutable.ListBuffer.empty[ByteString]
+          var totalBytes = 0
+          val it = msg.hashes.iterator
+          while (it.hasNext && (totalBytes < maxBytes || collected.isEmpty)) {
+            val codeHash = it.next()
+            storage.get(codeHash).foreach { code =>
+              collected += code
+              totalBytes += code.size
             }
-            collected.toList
-          case None => Seq.empty
-        }
-        ByteCodes(requestId = msg.requestId, codes = codes)
-      } catch {
-        case t: Throwable =>
-          log.error(s"serveByteCodes threw for peer $peerId (requestId=${msg.requestId}): ${t.getClass.getName}: ${t.getMessage}")
-          ByteCodes(msg.requestId, Seq.empty)
+          }
+          collected.toList
+        case None => Seq.empty
       }
-      pwi.peer.ref ! PeerActor.SendMessage(response)
+      ByteCodes(requestId = msg.requestId, codes = codes)
+    } catch {
+      case t: Throwable =>
+        log.error(s"serveByteCodes threw for peer $peerId (requestId=${msg.requestId}): ${t.getClass.getName}: ${t.getMessage}")
+        ByteCodes(msg.requestId, Seq.empty)
     }
+    peerManagerActor ! PeerManagerActor.SendMessage(response, peerId)
   }
 
 }

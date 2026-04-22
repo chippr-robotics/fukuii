@@ -93,14 +93,13 @@ class ChainImporter(
               .getOrElse(ChainWeight.zero)
             val newWeight = parentWeight.increase(block.header)
 
-            // Post-Cancun (EIP-4844) blocks in the chain file don't carry their blob sidecars
-            // (KZG commitments + proofs live on the network layer only). go-ethereum rejects
-            // these during `geth import` for that reason, so the ethereum/graphql hive chain
-            // fixture treats block 33 (Shanghai) as the last imported "head" even though the
-            // file ends with a Cancun block. Match that: store the block so queries by number
-            // still work, but don't advance the best-block pointer into the Cancun region.
-            val isPostCancunBlock = block.header.blobGasUsed.isDefined
-            blockchainWriter.save(block, receipts, newWeight, saveAsBestBlock = !isPostCancunBlock)
+            // Post-Cancun (EIP-4844) blocks carrying blob transactions need KZG sidecars
+            // to be re-executed, and chain.rlp doesn't ship them. go-ethereum's `geth import`
+            // rejects such blocks; we keep them in the DB (so queries by number work) but
+            // don't advance the best-block pointer into the gap. A Cancun block with
+            // blobGasUsed == 0 has no blob txs, so sidecars aren't needed — advance as usual.
+            val hasBlobTxs = block.header.blobGasUsed.exists(_ > 0)
+            blockchainWriter.save(block, receipts, newWeight, saveAsBestBlock = !hasBlobTxs)
             imported += 1
 
             if (imported % 10 == 0 || blockNum == blocks.last.header.number) {

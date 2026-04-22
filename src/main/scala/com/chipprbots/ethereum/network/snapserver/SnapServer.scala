@@ -327,14 +327,23 @@ object SnapServer extends Logger {
       else accumulated < maxBytes
     }
 
-    // Build proof: path to the first account (or to startingHash if none in range), and
-    // path to the last account if more than one was emitted.
+    // Build proof per SNAP/1 spec (geth eth/protocols/snap/handler.go:336-356):
+    //   - Left bound proof: path to startingHash (regardless of whether a leaf exists at that
+    //     key). This proves the gap between startingHash and the first emitted leaf — the
+    //     client uses it to verify the response is the contiguous left edge.
+    //   - Right bound proof: path to the last emitted key, but only when at least one account
+    //     was emitted AND the response was truncated (otherwise the right edge is implicit).
+    //   - When zero accounts emitted, only the left-bound proof is sent.
     val proof: Seq[ByteString] = {
-      val firstKey = collected.headOption.map(_._1).getOrElse(startingHash)
-      val lastKey = collected.lastOption.map(_._1).getOrElse(startingHash)
-      val firstProof = proofFor(rootNode, storage, hashToNibbles(firstKey))
-      if (firstKey == lastKey) firstProof
-      else firstProof ++ proofFor(rootNode, storage, hashToNibbles(lastKey))
+      val leftProof = proofFor(rootNode, storage, hashToNibbles(startingHash))
+      collected.lastOption match {
+        case None => leftProof // empty range — left proof alone proves absence
+        case Some((lastKey, _)) =>
+          val lastNibbles = hashToNibbles(lastKey)
+          val startNibbles = hashToNibbles(startingHash)
+          if (lastNibbles.sameElements(startNibbles)) leftProof
+          else leftProof ++ proofFor(rootNode, storage, lastNibbles)
+      }
     }
     // De-duplicate proof nodes (some appear on both paths).
     val dedupedProof = proof.distinct
