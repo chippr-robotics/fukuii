@@ -1009,7 +1009,7 @@ class SNAPSyncController(
     if (appStateStorage.isSnapSyncAccountsComplete()) {
       val savedPivot = appStateStorage.getSnapSyncPivotBlock()
       val savedRootOpt = appStateStorage.getSnapSyncStateRoot()
-      val savedStoragePath = appStateStorage.getSnapSyncStorageFilePath()
+      val savedStoragePath = appStateStorage.getSnapSyncStorageFilePath().filter(_.nonEmpty)
 
       (savedPivot, savedRootOpt) match {
         case (Some(pivot), Some(rootBs)) if pivot > 0 =>
@@ -1122,8 +1122,15 @@ class SNAPSyncController(
                     } finally raf.close()
                     totalTasks
                   }
+                  .recover { case ex: Exception =>
+                    log.warning(s"Recovery: failed to stream storage tasks from $filePath: ${ex.getMessage}")
+                    -1
+                  }
                   .foreach { count =>
-                    log.info(s"Recovery: streamed $count storage tasks from ${filePath}")
+                    if (count >= 0)
+                      log.info(s"Recovery: streamed $count storage tasks from ${filePath}")
+                    else
+                      log.warning(s"Recovery: storage file read failed, proceeding without storage tasks from $filePath")
                     // Signal no more tasks — sentinel allows completion
                     coordinator ! actors.Messages.NoMoreStorageTasks
                   }
