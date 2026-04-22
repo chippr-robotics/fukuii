@@ -107,6 +107,12 @@ object Messages {
   case object ByteCodeGetProgress extends ByteCodeCoordinatorMessage
   case object ByteCodeCheckCompletion extends ByteCodeCoordinatorMessage
 
+  /** Force bytecode sync to complete immediately, abandoning pending/active tasks.
+    * Sent by SNAPSyncController when bytecode phase stagnates with no progress for
+    * BytecodeStagnationThreshold. Healing will recover any missing code.
+    */
+  case object ForceCompleteByteCode extends ByteCodeCoordinatorMessage
+
   sealed trait ByteCodeWorkerMessage
   case class FetchByteCodes(task: ByteCodeTask, peer: Peer) extends ByteCodeWorkerMessage
   case class ByteCodeWorkerFetchTask(task: ByteCodeTask, peer: Peer, requestId: BigInt, maxResponseSize: BigInt)

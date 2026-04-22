@@ -244,6 +244,21 @@ class ByteCodeCoordinator(
     case ByteCodeCheckCompletion =>
       checkCompletion()
 
+    case ForceCompleteByteCode =>
+      val abandonedPending = pendingTasks.size
+      val abandonedActive = activeTasks.size
+      log.warning(
+        s"Force-completing bytecode sync: abandoning $abandonedPending pending tasks, " +
+        s"$abandonedActive active tasks (healing will recover missing code)"
+      )
+      // Stop in-flight workers so they don't linger as orphans after activeTasks is cleared.
+      // Pekko child stop is async but safe — any in-flight messages to stopped actors are dead-lettered.
+      activeTasks.values.foreach(a => context.stop(a.worker))
+      activeTasks.clear()
+      pendingTasks.clear()
+      noMoreTasksExpected = true
+      checkCompletion()
+
     case ByteCodeGetProgress =>
       val total = completedTasks.size + activeTasks.size + pendingTasks.size
       val progress = if (total == 0) 1.0 else completedTasks.size.toDouble / total
