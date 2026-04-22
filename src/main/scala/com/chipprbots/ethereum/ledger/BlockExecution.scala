@@ -357,10 +357,16 @@ class BlockExecution(
       case Some(withdrawals) if withdrawals.nonEmpty =>
         val GweiToWei = BigInt("1000000000")
         withdrawals.foldLeft(world) { (w, withdrawal) =>
-          val weiAmount = UInt256(withdrawal.amount * GweiToWei)
-          val address = withdrawal.address
-          val account = w.getAccount(address).getOrElse(w.getEmptyAccount)
-          w.saveAccount(address, account.increaseBalance(weiAmount))
+          // EIP-4895: amount-0 withdrawals must NOT touch the target account —
+          // creating/saving an empty account here diverges from every other EL
+          // client's state root for any block containing a zero-amount withdrawal.
+          if (withdrawal.amount == 0) w
+          else {
+            val weiAmount = UInt256(withdrawal.amount * GweiToWei)
+            val address = withdrawal.address
+            val account = w.getAccount(address).getOrElse(w.getEmptyAccount)
+            w.saveAccount(address, account.increaseBalance(weiAmount))
+          }
         }
       case _ => world
     }

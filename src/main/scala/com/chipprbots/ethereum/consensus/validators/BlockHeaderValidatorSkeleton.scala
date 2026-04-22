@@ -58,8 +58,37 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
       _ <- validateNumber(blockHeader, parentHeader)
       _ <- validateExtraFields(blockHeader)
       _ <- validateBaseFee(blockHeader, parentHeader)
+      _ <- validateBlobGasAgainstParent(blockHeader, parentHeader)
       _ <- validateEvenMore(blockHeader)
     } yield BlockHeaderValid
+
+  /** EIP-4844 / EIP-7691: validate blobGasUsed ≤ MAX_BLOB_GAS_PER_BLOCK, is a multiple of GAS_PER_BLOB,
+    * and excessBlobGas equals calcExcessBlobGas(parent). Runs only when the header declares blob fields.
+    */
+  private def validateBlobGasAgainstParent(
+      blockHeader: BlockHeader,
+      parentHeader: BlockHeader
+  )(implicit blockchainConfig: BlockchainConfig): Either[BlockHeaderError, BlockHeaderValid] = {
+    import com.chipprbots.ethereum.consensus.engine.BlobGasUtils
+    (blockHeader.blobGasUsed, blockHeader.excessBlobGas) match {
+      case (Some(used), Some(excess)) =>
+        val maxBlobGas = BlobGasUtils.maxBlobGasPerBlock(blockHeader.unixTimestamp, blockchainConfig)
+        val target =
+          if (blockchainConfig.isPragueTimestamp(blockHeader.unixTimestamp)) BlobGasUtils.PRAGUE_TARGET_BLOB_GAS
+          else BlobGasUtils.CANCUN_TARGET_BLOB_GAS
+        val parentExcess = parentHeader.excessBlobGas.getOrElse(BigInt(0))
+        val parentUsed = parentHeader.blobGasUsed.getOrElse(BigInt(0))
+        val expectedExcess = BlobGasUtils.calcExcessBlobGas(parentExcess, parentUsed, target)
+        if (used > maxBlobGas)
+          Left(HeaderBlobGasError(s"blobGasUsed $used exceeds max $maxBlobGas"))
+        else if (used % BlobGasUtils.GAS_PER_BLOB != 0)
+          Left(HeaderBlobGasError(s"blobGasUsed $used is not a multiple of GAS_PER_BLOB"))
+        else if (excess != expectedExcess)
+          Left(HeaderBlobGasError(s"INCORRECT_EXCESS_BLOB_GAS: expected $expectedExcess got $excess"))
+        else Right(BlockHeaderValid)
+      case _ => Right(BlockHeaderValid)
+    }
+  }
 
   /** This method allows validate a BlockHeader (stated on section 4.4.4 of http://paper.gavwood.com/).
     *
@@ -183,11 +212,22 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
       blockHeader: BlockHeader,
       parentHeader: BlockHeader
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockHeaderError, BlockHeaderValid] =
-    if (blockHeader.gasLimit > MaxGasLimit && blockHeader.number >= blockchainConfig.forkBlockNumbers.eip106BlockNumber)
+    // 2^63 - 1 is the protocol-wide gasLimit cap (cannot fit in an int64). It applies
+    // regardless of EIP-106 activation — any block with gasLimit >= 2^63 is malformed.
+    if (blockHeader.gasLimit > MaxGasLimit)
       Left(HeaderGasLimitError)
     else {
-      val gasLimitDiff = (blockHeader.gasLimit - parentHeader.gasLimit).abs
-      val gasLimitDiffLimit = parentHeader.gasLimit / GasLimitBoundDivisor
+      // EIP-1559: at the London (Olympia in fukuii's naming) activation block the
+      // gas limit doubles (parent.gasLimit * ElasticityMultiplier). The 1/1024 bound
+      // is relaxed only for that one transition block.
+      val isLondonActivation =
+        blockHeader.number == blockchainConfig.forkBlockNumbers.olympiaBlockNumber &&
+          parentHeader.baseFee.isEmpty &&
+          blockHeader.baseFee.isDefined
+      val effectiveParentLimit =
+        if (isLondonActivation) parentHeader.gasLimit * 2 else parentHeader.gasLimit
+      val gasLimitDiff = (blockHeader.gasLimit - effectiveParentLimit).abs
+      val gasLimitDiffLimit = effectiveParentLimit / GasLimitBoundDivisor
       if (gasLimitDiff < gasLimitDiffLimit && blockHeader.gasLimit >= MinGasLimit)
         Right(BlockHeaderValid)
       else

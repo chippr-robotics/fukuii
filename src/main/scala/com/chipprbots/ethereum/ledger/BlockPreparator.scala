@@ -456,7 +456,14 @@ class BlockPreparator(
     }
     val totalGasToRefund = gasLimit - executionGasToPayToMiner
 
-    val refundGasFn = pay(senderAddress, (totalGasToRefund * gasPrice).toUInt256, withTouch = false) _
+    // Upfront charge was gasLimit * tx.gasPrice (= maxFeePerGas for EIP-1559).
+    // For legacy/Type-1 txs effectiveGasPrice == tx.gasPrice, so this matches
+    // (gasLimit - executionGas) * gasPrice. For EIP-1559/4844/7702 txs the
+    // refund also needs to return gasLimit * (maxFeePerGas - effectiveGasPrice)
+    // so the sender only pays executionGas * effectiveGasPrice net.
+    val maxFeeOverpay = UInt256(stx.tx.gasPrice) - gasPrice
+    val refundAmount = (totalGasToRefund * gasPrice) + (UInt256(gasLimit) * maxFeeOverpay)
+    val refundGasFn = pay(senderAddress, refundAmount.toUInt256, withTouch = false) _
     // EIP-1559: miner receives only the priority fee (effectiveGasPrice - baseFee).
     // The baseFee portion is burned on ETH chains, or credited to treasury on ETC (ECIP-1111).
     val minerGasPrice = blockHeader.baseFee match {
@@ -545,7 +552,19 @@ class BlockPreparator(
         Right(BlockResult(worldState = world, gasUsed = acumGas, receipts = acumReceipts))
 
       case Seq(stx, otherStxs @ _*) =>
-        val upfrontCost = calculateUpfrontCost(stx.tx)
+        // EIP-4844: upfront balance check must include blob-gas cost too —
+        // otherwise a sender pre-funded with exactly gasLimit*maxFee + blobCost
+        // passes the check but underflows when the upfront deduction runs.
+        val blobGasCost = stx.tx match {
+          case bt: com.chipprbots.ethereum.domain.BlobTransaction =>
+            val blobGasUsed = BigInt(bt.blobVersionedHashes.size) * BigInt(131072)
+            val blobBaseFee = blockHeader.excessBlobGas
+              .map(eg => computeBlobBaseFee(eg, blockHeader.unixTimestamp))
+              .getOrElse(BigInt(1))
+            blobGasUsed * blobBaseFee
+          case _ => BigInt(0)
+        }
+        val upfrontCost = UInt256(calculateUpfrontCost(stx.tx).toBigInt + blobGasCost)
         val senderAddress = SignedTransaction.getSender(stx)
 
         val accountDataOpt = senderAddress

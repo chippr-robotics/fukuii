@@ -74,8 +74,14 @@ object Block {
     import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.TypedTransaction.given
     def toBlock: Block = rawDecode(bytes) match {
       case RLPList(header: RLPList, stx: RLPList, uncles: RLPList) =>
+        val decodedHeader = header.toBlockHeader
+        // EIP-4895: a header that declares a withdrawalsRoot must be paired with a
+        // withdrawals field in the block body. A 3-item RLP with a Shanghai+ header
+        // is malformed — reject rather than silently treating the body as pre-Shanghai.
+        if (decodedHeader.withdrawalsRoot.isDefined)
+          throw new RuntimeException("Cannot decode block: Shanghai+ header requires withdrawals in body")
         Block(
-          header.toBlockHeader,
+          decodedHeader,
           BlockBody(
             stx.items.toTypedRLPEncodables.map(_.toSignedTransaction),
             uncles.items.map(_.toBlockHeader)

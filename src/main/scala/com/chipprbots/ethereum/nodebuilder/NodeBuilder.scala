@@ -236,7 +236,7 @@ trait ConsensusBuilder {
     )
 
   lazy val chainImporter: ChainImporter =
-    new ChainImporter(blockchainReader, blockchainWriter, blockExecution)
+    new ChainImporter(blockchainReader, blockchainWriter, blockExecution, blockValidation)
 
   lazy val consensusAdapter: ConsensusAdapter =
     new ConsensusAdapter(
