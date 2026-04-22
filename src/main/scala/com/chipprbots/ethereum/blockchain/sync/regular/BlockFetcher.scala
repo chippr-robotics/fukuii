@@ -24,6 +24,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.Awaitin
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.AwaitingHeadersToBeIgnored
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.HeadersNotFormingSeq
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.HeadersNotMatchingReadyBlocks
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.HeadersNotMatchingWaitingHeaders
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter.ImportNewBlock
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync.ProgressProtocol
 import com.chipprbots.ethereum.consensus.validators.BlockValidator
@@ -212,6 +213,19 @@ class BlockFetcher(
                 log.debug(
                   "Header validation failed: headers do not match ready blocks. Ready blocks: {}, Headers first: {}",
                   state.readyBlocks.lastOption.map(_.number),
+                  headers.headOption.map(_.number)
+                )
+                peersClient ! BlacklistPeer(peer.id, BlacklistReason.UnrequestedHeaders)
+                state.withHeaderFetchReceived
+              case Left(HeadersNotMatchingWaitingHeaders) =>
+                log.debug(
+                  "Dismissed received headers due to: {} (peer: {})",
+                  HeadersNotMatchingWaitingHeaders.description,
+                  peer.id
+                )
+                log.debug(
+                  "Header validation failed: headers do not chain to waiting headers. Last waiting: {}, Headers first: {}",
+                  state.waitingHeaders.lastOption.map(_.number),
                   headers.headOption.map(_.number)
                 )
                 peersClient ! BlacklistPeer(peer.id, BlacklistReason.UnrequestedHeaders)

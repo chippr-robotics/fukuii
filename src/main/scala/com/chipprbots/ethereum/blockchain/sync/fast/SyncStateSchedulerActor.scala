@@ -177,11 +177,10 @@ class SyncStateSchedulerActor(
     val useSnap = peerUsesSnap(request.peer)
     val timeout = rateTracker.targetTimeout()
     log.debug(
-      "Requesting {} nodes from peer {} via {} (requestId={}, timeout={}s)",
+      "Requesting {} nodes from peer {} via {} (timeout={}s)",
       request.nodes.size,
       request.peer.id,
       if (useSnap) "GetTrieNodes" else "GetNodeData",
-      request.requestId,
       timeout.toSeconds
     )
 
@@ -256,9 +255,11 @@ class SyncStateSchedulerActor(
       // TrieNodes returns raw node bytes — wrap them as NodeData values.
       log.debug("Received {} state nodes via GetTrieNodes in {} ms", trieNodes.nodes.size, timeTaken)
       FastSyncMetrics.setMptStateDownloadTime(timeTaken)
-      context.unwatch(sender())
+      val handlerRefSnap = sender()
+      context.unwatch(handlerRefSnap)
+      val snapRequestId = handlerToRequestId.remove(handlerRefSnap).getOrElse(-1L)
       val asNodeData = NodeData(trieNodes.nodes.toList)
-      self ! RequestData(asNodeData, peer)
+      self ! RequestData(asNodeData, peer, snapRequestId)
 
     case PeerRequestHandler.RequestFailed(peer, reason) =>
       val handlerRef = sender()

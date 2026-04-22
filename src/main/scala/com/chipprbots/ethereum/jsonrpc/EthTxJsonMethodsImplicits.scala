@@ -24,8 +24,7 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
       "blockNumber" -> encodeAsHex(log.blockNumber),
       "address" -> encodeAsHex(log.address.bytes),
       "data" -> encodeAsHex(log.data),
-      "topics" -> JArray(log.topics.toList.map(encodeAsHex)),
-      "removed" -> JBool(false)
+      "topics" -> JArray(log.topics.toList.map(encodeAsHex))
     )
     val tsField = log.blockTimestamp.map(ts => "blockTimestamp" -> encodeAsHex(ts)).toList
     JObject(base ::: tsField)
@@ -59,8 +58,8 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
       "from" -> encodeAsHex(receipt.from.bytes)
     )
 
-    // "to" is null for contract creation, address for regular transactions
-    val toField = List("to" -> receipt.to.map(addr => encodeAsHex(addr.bytes)).getOrElse(JNull))
+    // "to" is present for regular transactions, omitted for contract creation
+    val toField = receipt.to.map(addr => List("to" -> encodeAsHex(addr.bytes))).getOrElse(Nil)
 
     // Continue with more fields
     val middleFields = List(

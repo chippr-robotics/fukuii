@@ -2488,9 +2488,6 @@ class SNAPSyncController(
 
   /** Final SNAP sync completion — called when both state sync and chain download are done. */
   private def finalizeSnapSync(pivot: BigInt): Unit = {
-    chainDownloadTimeoutTask.foreach(_.cancel())
-    chainDownloadTimeoutTask = None
-
     // Look up the pivot header so we can store a complete "best block" anchor.
     // RegularSync's BranchResolution needs: header, body, number→hash mapping,
     // ChainWeight, and BestBlockInfo (hash + number) to accept blocks that chain

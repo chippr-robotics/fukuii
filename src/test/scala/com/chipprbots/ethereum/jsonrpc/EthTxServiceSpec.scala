@@ -394,7 +394,7 @@ class EthTxServiceSpec
             transactionIndex = 1,
             blockHeader = Fixtures.Blocks.Block3125369.header,
             gasUsedByTransaction = gasUsedByTx,
-            baseLogIndex = 0
+            baseLogIndex = 1 // fakeReceipt (txIndex=0) has 1 log, so global log index for txIndex=1 starts at 1
           )
         )
       )

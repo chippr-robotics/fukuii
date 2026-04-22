@@ -48,8 +48,8 @@ class JsonRpcControllerPersonalSpec
     QuantitiesSerializer + UnformattedDataJsonSerializer
 
   it should "personal_importRawKey" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    val key = "7a44789ed3cd85861c0bbf9693c7e1de1862dd4396c390147ecf1275099c6e6f"
-    val keyBytes: ByteString = ByteString(Hex.decode(key))
+    val key = "0x7a44789ed3cd85861c0bbf9693c7e1de1862dd4396c390147ecf1275099c6e6f"
+    val keyBytes: ByteString = ByteString(Hex.decode(key.drop(2)))
     val addr: Address = Address("0x00000000000000000000000000000000000000ff")
     val pass = "aaa"
 
@@ -105,7 +105,7 @@ class JsonRpcControllerPersonalSpec
   ) in new JsonRpcControllerFixture {
     val address: Address = Address(42)
     val pass = "aaa"
-    val dur = "1"
+    val dur = "0x1"
     val params: List[JString] = JString(address.toString) :: JString(pass) :: JString(dur) :: Nil
 
     personalService.unlockAccountFn = _ => IO.pure(Right(UnlockAccountResponse(true)))
@@ -128,7 +128,7 @@ class JsonRpcControllerPersonalSpec
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("personal_unlockAccount", params)
     val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
-    response should haveError(JsonRpcError(-32602, "Invalid method parameters", None))
+    response should haveError(JsonRpcError(-32602, "invalid argument: hex string without 0x prefix", None))
 
     val dur2 = Long.MaxValue
     val params2: List[JValue] = JString(address.toString) :: JString(pass) :: JInt(dur2) :: Nil

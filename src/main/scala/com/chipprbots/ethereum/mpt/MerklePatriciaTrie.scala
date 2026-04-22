@@ -117,8 +117,8 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
     * @throws com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
     *   if there is any inconsistency in how the trie is build.
     */
-  def getProof(key: K): Option[Vector[MptNode]] =
-    pathTraverse[Vector[MptNode]](Vector.empty, mkKeyNibbles(key)) { case (acc, node) =>
+  def getProof(key: K): Option[Vector[MptNode]] = {
+    val result = pathTraverse[Vector[MptNode]](Vector.empty, mkKeyNibbles(key)) { case (acc, node) =>
       node match {
         case Some(hash: HashNode) =>
           // Resolve hash references to actual nodes for the proof
@@ -128,6 +128,15 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
         case _ => acc
       }
     }
+    // Besu ProofVisitor.java:64 — root is always included in proof (proof of non-existence)
+    result.map { proof =>
+      if (proof.nonEmpty) proof
+      else rootNode.map {
+        case hash: HashNode => Vector(getFromHash(hash.hashNode, nodeStorage))
+        case root           => Vector(root)
+      }.getOrElse(Vector.empty)
+    }
+  }
 
   /** Traverse given path from the root to value and accumulate data. Only nodes which are significant for searching for
     * value are taken into account.
