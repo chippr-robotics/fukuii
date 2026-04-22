@@ -247,9 +247,14 @@ class PeerActor[R <: HandshakeResult](
         case Some(uri) =>
           context.parent ! PeerClosedConnection(peerAddress.getHostString, Disconnect.Reasons.Other)
           knownNodesManager ! KnownNodesManager.RemoveKnownNode(uri)
-          stopActor(rlpxConnection, status)
+          // TCP already closed remotely — no need for the gracefulStop PoisonPill delay
+          // (normally used to let a Disconnect wire message flush). Stop immediately so
+          // PeerManagerActor decrements its handshaked count, freeing the slot for
+          // new incoming peers. Matters in test environments (hive) where many
+          // short-lived connections arrive rapidly.
+          context.stop(self)
         case None =>
-          stopActor(rlpxConnection, status)
+          context.stop(self)
       }
   }
 
