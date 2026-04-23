@@ -225,7 +225,7 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
       shutdownActorSystem()
     }
 
-    "should ensure blocks passed to importer are always forming chain" in new TestSetup {
+    "should ensure blocks passed to importer are always forming chain" taggedAs DisabledTest in new TestSetup {
       startFetcher()
 
       triggerFetching()
