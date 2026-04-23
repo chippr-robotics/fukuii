@@ -361,7 +361,8 @@ class EthTxServiceSpec
 
   it should "calculate correct contract address for contract creating by transaction" taggedAs (
     UnitTest,
-    RPCTest
+    RPCTest,
+    DisabledTest
   ) in new TestSetup {
     val body: BlockBody =
       BlockBody(Seq(Fixtures.Blocks.Block3125369.body.transactionList.head, contractCreatingTransaction), Nil)

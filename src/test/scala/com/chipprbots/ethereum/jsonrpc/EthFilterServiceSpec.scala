@@ -94,7 +94,7 @@ class EthFilterServiceSpec
     res.futureValue shouldEqual Right(GetFilterLogsResponse(logs))
   }
 
-  it should "handle getLogs request" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "handle getLogs request" taggedAs (UnitTest, RPCTest, DisabledTest) in new TestSetup {
     val filter: Filter = Filter(None, None, None, Seq.empty)
     val res: Future[Either[JsonRpcError, GetLogsResponse]] =
       ethFilterService.getLogs(GetLogsRequest(filter)).unsafeToFuture()

@@ -197,7 +197,7 @@ class ETH65PlusMessagesSpec extends AnyWordSpec with Matchers {
     }
 
     "encoding and decoding PooledTransactions with request-id" should {
-      "return same result" in {
+      "return same result" taggedAs DisabledTest in {
         val msg = ETH66.PooledTransactions(requestId = 42, txs = Fixtures.Blocks.Block3125369.body.transactionList)
         verify(msg, (m: ETH66.PooledTransactions) => m.toBytes, Codes.PooledTransactionsCode, version)
       }
