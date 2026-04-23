@@ -107,6 +107,12 @@ class ByteCodeCoordinator(
   // Geth-aligned: coordinators run from start, tasks arrive inline during account download.
   private var noMoreTasksExpected: Boolean = false
 
+  // Fix 4: Expected codeHash count from AccountRangeCoordinator (Bloom-filtered unique hashes).
+  // Set via SetExpectedByteCodeCount BEFORE NoMoreByteCodeTasks arrives. Guards against mailbox
+  // reordering where NoMoreByteCodeTasks reaches this actor before the last AddByteCodeTasks batch.
+  private var expectedCodeHashes: Option[Long] = None
+  private var receivedCodeHashCount: Long = 0
+
   // Statistics
   private var bytecodesDownloaded: Long = 0
   private var bytesDownloaded: Long = 0
@@ -139,18 +145,39 @@ class ByteCodeCoordinator(
       log.info(s"Queued ${newTasks.size} bytecode tasks from ${filteredHashes.size} unique hashes")
 
     case AddByteCodeTasks(codeHashes) =>
+      receivedCodeHashCount += codeHashes.size // track before dedup to match AccountRangeCoordinator's uniqueCodeHashesCount
       val filtered = filterAndDedupeCodeHashes(codeHashes)
       if (filtered.nonEmpty) {
         val newTasks = ByteCodeTask.createBatchedTasks(filtered, batchSize)
         pendingTasks.enqueueAll(newTasks)
         log.debug(
-          s"Added ${newTasks.size} bytecode tasks from ${filtered.size} incremental hashes (pending: ${pendingTasks.size})"
+          s"Added ${newTasks.size} bytecode tasks from ${filtered.size} incremental hashes (pending: ${pendingTasks.size}, received total: $receivedCodeHashCount)"
         )
+      } else if (noMoreTasksExpected) {
+        // All hashes were duplicates — no new tasks queued, but received count advanced.
+        // Re-check completion in case the expected count is now satisfied and queues are empty.
+        checkCompletion()
       }
+
+    case SetExpectedByteCodeCount(n) =>
+      expectedCodeHashes = Some(n)
+      log.info(
+        s"Expected codeHash count set to $n (received so far: $receivedCodeHashCount). " +
+          s"Pending tasks: ${pendingTasks.size}"
+      )
 
     case NoMoreByteCodeTasks =>
       noMoreTasksExpected = true
-      log.info(s"No more bytecode tasks expected. Pending: ${pendingTasks.size}, active: ${activeTasks.size}")
+      if (expectedCodeHashes.isEmpty) {
+        log.warning(
+          "NoMoreByteCodeTasks arrived before SetExpectedByteCodeCount — " +
+            "skipping count guard (may declare completion prematurely)"
+        )
+      }
+      log.info(
+        s"No more bytecode tasks expected. Pending: ${pendingTasks.size}, active: ${activeTasks.size}, " +
+          s"receivedHashes: $receivedCodeHashCount / ${expectedCodeHashes.getOrElse("?")}"
+      )
       checkCompletion()
 
     case ByteCodePivotRefreshed =>
@@ -471,8 +498,23 @@ class ByteCodeCoordinator(
 
   private def checkCompletion(): Unit =
     if (noMoreTasksExpected && pendingTasks.isEmpty && activeTasks.isEmpty) {
-      log.info("Bytecode sync complete!")
-      snapSyncController ! SNAPSyncController.ByteCodeSyncComplete
+      // Fix 4: If we know the expected count and haven't received all batches yet, defer completion.
+      // This guards against mailbox reordering where NoMoreByteCodeTasks arrives before the last
+      // AddByteCodeTasks batch from a concurrent IncrementalContractData message.
+      expectedCodeHashes match {
+        case Some(expected) if receivedCodeHashCount < expected =>
+          log.warning(
+            s"ByteCode completion deferred: received $receivedCodeHashCount / $expected codeHashes. " +
+              s"Waiting for remaining AddByteCodeTasks batches."
+          )
+        // expected count not yet set (SetExpectedByteCodeCount hadn't arrived) OR count satisfied
+        case _ =>
+          log.info(
+            s"Bytecode sync complete! Downloaded $bytecodesDownloaded bytecodes " +
+              s"(received $receivedCodeHashCount / ${expectedCodeHashes.getOrElse("?")} codeHashes)"
+          )
+          snapSyncController ! SNAPSyncController.ByteCodeSyncComplete
+      }
     }
 
   private def createWorker(): ActorRef = {

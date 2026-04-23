@@ -462,7 +462,7 @@ class AccountRangeCoordinator(
         // Signal controller IMMEDIATELY so storage+bytecode phases can start in parallel
         // with trie finalization. These phases don't need the finalized account trie —
         // they operate on their own state roots. This saves 50s-25min of serial blocking.
-        snapSyncController ! SNAPSyncController.AccountRangeSyncComplete
+        snapSyncController ! SNAPSyncController.AccountRangeSyncComplete(uniqueCodeHashesCount)
 
         log.info(s"Starting async trie finalization for $accountsDownloaded accounts...")
         // Notify controller so progress monitor shows finalization status
