@@ -2,7 +2,7 @@
 
 This document provides a comprehensive analysis of fukuii's JSON-RPC implementation compared to the Ethereum JSON-RPC specification.
 
-> **Note:** This analysis was written before the MCP namespace was added (Nov 2025). See [RPC Endpoint Inventory](./RPC_ENDPOINT_INVENTORY.md) for the current 97-endpoint catalog.
+> **Note:** This analysis was written before the MCP namespace was added (Nov 2025). See [JSON-RPC API Reference](./JSON_RPC_API_REFERENCE.md) for the current endpoint catalog.
 
 **Date**: 2025-11-24
 **Purpose**: Identify gaps in JSON-RPC endpoint coverage and plan for MCP server integration
