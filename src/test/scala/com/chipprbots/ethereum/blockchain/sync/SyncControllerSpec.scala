@@ -16,6 +16,7 @@ import com.typesafe.config.ConfigFactory
 import org.bouncycastle.util.encoders.Hex
 import org.scalamock.scalatest.MockFactory
 import org.scalatest.BeforeAndAfter
+import org.scalatest.OptionValues
 import org.scalatest.concurrent.Eventually
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -73,6 +74,7 @@ import com.chipprbots.ethereum.utils.Config.SyncConfig
 class SyncControllerSpec
     extends AnyFlatSpec
     with Matchers
+    with OptionValues
     with BeforeAndAfter
     with MockFactory
     with Eventually
@@ -91,7 +93,7 @@ class SyncControllerSpec
 
     eventually {
       someTimePasses()
-      val syncState = storagesInstance.storages.fastSyncStateStorage.getSyncState().get
+      val syncState = storagesInstance.storages.fastSyncStateStorage.getSyncState().value
       syncState.bestBlockHeaderNumber shouldBe 0
       syncState.pivotBlock == defaultPivotBlockHeader
     }
@@ -197,7 +199,7 @@ class SyncControllerSpec
 
     eventually {
       someTimePasses()
-      val syncState = storagesInstance.storages.fastSyncStateStorage.getSyncState().get
+      val syncState = storagesInstance.storages.fastSyncStateStorage.getSyncState().value
       syncState.bestBlockHeaderNumber shouldBe (defaultStateBeforeNodeRestart.bestBlockHeaderNumber - syncConfig.fastSyncBlockValidationN)
       syncState.nextBlockToFullyValidate shouldBe (defaultStateBeforeNodeRestart.bestBlockHeaderNumber - syncConfig.fastSyncBlockValidationN + 1)
       syncState.blockBodiesQueue.isEmpty shouldBe true
@@ -246,7 +248,7 @@ class SyncControllerSpec
 
     eventually {
       someTimePasses()
-      val syncState = storagesInstance.storages.fastSyncStateStorage.getSyncState().get
+      val syncState = storagesInstance.storages.fastSyncStateStorage.getSyncState().value
       val invalidBlockNumber = defaultStateBeforeNodeRestart.bestBlockHeaderNumber + 9
 
       // Header validation failed at header number 399510
@@ -284,7 +286,7 @@ class SyncControllerSpec
 
       eventually {
         someTimePasses()
-        storagesInstance.storages.fastSyncStateStorage.getSyncState().get.pivotBlock shouldBe defaultPivotBlockHeader
+        storagesInstance.storages.fastSyncStateStorage.getSyncState().value.pivotBlock shouldBe defaultPivotBlockHeader
       }
 
       // even though we receive this future headers fast sync should finish
@@ -335,7 +337,7 @@ class SyncControllerSpec
 
     eventually {
       littleTimePasses()
-      storagesInstance.storages.fastSyncStateStorage.getSyncState().get.pivotBlock shouldBe defaultPivotBlockHeader
+      storagesInstance.storages.fastSyncStateStorage.getSyncState().value.pivotBlock shouldBe defaultPivotBlockHeader
       assert(blacklist.isBlacklisted(peer2.id))
     }
 
@@ -346,7 +348,7 @@ class SyncControllerSpec
 
     eventually {
       someTimePasses()
-      val syncState = storagesInstance.storages.fastSyncStateStorage.getSyncState().get
+      val syncState = storagesInstance.storages.fastSyncStateStorage.getSyncState().value
       syncState.pivotBlock shouldBe newPivot
       syncState.safeDownloadTarget shouldEqual newPivot.number + syncConfig.fastSyncBlockValidationX
       syncState.blockBodiesQueue.isEmpty shouldBe true
@@ -385,14 +387,14 @@ class SyncControllerSpec
 
     eventually {
       someTimePasses()
-      storagesInstance.storages.fastSyncStateStorage.getSyncState().get.pivotBlockUpdateFailures shouldBe 1
+      storagesInstance.storages.fastSyncStateStorage.getSyncState().value.pivotBlockUpdateFailures shouldBe 1
     }
 
     pilot.updateAutoPilot(freshHandshakedPeers, freshHeader, BlockchainData(newBlocks), onlyPivot = true)
 
     eventually {
       someTimePasses()
-      storagesInstance.storages.fastSyncStateStorage.getSyncState().get.pivotBlock shouldBe defaultPivotBlockHeader
+      storagesInstance.storages.fastSyncStateStorage.getSyncState().value.pivotBlock shouldBe defaultPivotBlockHeader
     }
   }
 
@@ -418,7 +420,7 @@ class SyncControllerSpec
       someTimePasses()
       storagesInstance.storages.fastSyncStateStorage
         .getSyncState()
-        .get
+        .value
         .bestBlockHeaderNumber shouldBe freshHeader.number + syncConfig.fastSyncBlockValidationX
     }
 
@@ -433,7 +435,7 @@ class SyncControllerSpec
       someTimePasses()
       storagesInstance.storages.fastSyncStateStorage
         .getSyncState()
-        .get
+        .value
         .bestBlockHeaderNumber shouldBe freshHeader1.number + syncConfig.fastSyncBlockValidationX
     }
 
@@ -503,7 +505,7 @@ class SyncControllerSpec
       // choose first pivot and as it is fresh enough start state sync
       eventually {
         someTimePasses()
-        val syncState = storagesInstance.storages.fastSyncStateStorage.getSyncState().get
+        val syncState = storagesInstance.storages.fastSyncStateStorage.getSyncState().value
         syncState.isBlockchainWorkFinished shouldBe true
         syncState.updatingPivotBlock shouldBe false
         stateDownloadStarted shouldBe true
@@ -522,7 +524,7 @@ class SyncControllerSpec
       // sync to new pivot
       eventually {
         someTimePasses()
-        val syncState = storagesInstance.storages.fastSyncStateStorage.getSyncState().get
+        val syncState = storagesInstance.storages.fastSyncStateStorage.getSyncState().value
         syncState.pivotBlock shouldBe newPivot
       }
 
@@ -658,7 +660,10 @@ class SyncControllerSpec
           case SendMessage(msg: ETH66GetBlockHeadersEnc, peer) =>
             val underlyingMessage = msg.underlyingMsg
             val requestId = underlyingMessage.requestId
-            val requestedBlockNumber = underlyingMessage.block.swap.toOption.get
+            val requestedBlockNumber = underlyingMessage.block match {
+              case Left(n)  => n
+              case Right(_) => fail("expected block number, got hash")
+            }
             if (requestedBlockNumber == pivotHeader.number) {
               // pivot block
               sender ! MessageFromPeer(ETH66BlockHeaders(requestId, Seq(pivotHeader)), peer)
@@ -671,7 +676,10 @@ class SyncControllerSpec
           // Handle ETH62 GetBlockHeaders (without requestId)
           case SendMessage(msg: ETH62GetBlockHeadersEnc, peer) =>
             val underlyingMessage = msg.underlyingMsg
-            val requestedBlockNumber = underlyingMessage.block.swap.toOption.get
+            val requestedBlockNumber = underlyingMessage.block match {
+              case Left(n)  => n
+              case Right(_) => fail("expected block number, got hash")
+            }
             if (requestedBlockNumber == pivotHeader.number) {
               // pivot block
               sender ! MessageFromPeer(ETH62BlockHeaders(Seq(pivotHeader)), peer)
@@ -785,7 +793,10 @@ class SyncControllerSpec
         underlyingMessage: ETH66GetBlockHeaders,
         blockchainData: BlockchainData
     ): Seq[BlockHeader] = {
-      val start = underlyingMessage.block.swap.toOption.get
+      val start = underlyingMessage.block match {
+        case Left(n)  => n
+        case Right(_) => fail("expected block number, got hash")
+      }
       val stop = start + underlyingMessage.maxHeaders * (underlyingMessage.skip + 1)
 
       (start until stop)
@@ -798,7 +809,10 @@ class SyncControllerSpec
         underlyingMessage: ETH62GetBlockHeaders,
         blockchainData: BlockchainData
     ): Seq[BlockHeader] = {
-      val start = underlyingMessage.block.swap.toOption.get
+      val start = underlyingMessage.block match {
+        case Left(n)  => n
+        case Right(_) => fail("expected block number, got hash")
+      }
       val stop = start + underlyingMessage.maxHeaders * (underlyingMessage.skip + 1)
 
       (start until stop)
