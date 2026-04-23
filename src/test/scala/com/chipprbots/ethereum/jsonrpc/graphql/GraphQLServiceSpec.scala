@@ -122,8 +122,7 @@ class GraphQLServiceSpec
   }
 
   // -------------------------------------------------------------------------
-  abstract class GraphQLTestSetup(val maxDepth: Int = GraphQLSchema.MaxQueryDepth)
-      extends EphemBlockchainTestSetup {
+  abstract class GraphQLTestSetup(val maxDepth: Int = GraphQLSchema.MaxQueryDepth) extends EphemBlockchainTestSetup {
 
     // Mining — needed by resolveBlock(Pending) path. The tests here don't exercise the
     // Pending branch, so the mock's default return is sufficient.

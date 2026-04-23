@@ -60,7 +60,10 @@ class GraphQLHttpRouteSpec extends AnyFlatSpec with Matchers with ScalatestRoute
   implicit val routeTestTimeout: org.apache.pekko.http.scaladsl.testkit.RouteTestTimeout =
     org.apache.pekko.http.scaladsl.testkit.RouteTestTimeout(30.seconds)
 
-  it should "respond with 200 and JSON body to a well-formed POST /graphql" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "respond with 200 and JSON body to a well-formed POST /graphql" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup {
     val body =
       """{"query":"{ chainID }"}"""
     val req = HttpRequest(
@@ -99,7 +102,9 @@ class GraphQLHttpRouteSpec extends AnyFlatSpec with Matchers with ScalatestRoute
     }
   }
 
-  it should "return 404 when GraphQL is disabled" taggedAs (UnitTest, RPCTest) in new TestSetup(graphQLEnabled = false) {
+  it should "return 404 when GraphQL is disabled" taggedAs (UnitTest, RPCTest) in new TestSetup(graphQLEnabled =
+    false
+  ) {
     val body = """{"query":"{ chainID }"}"""
     val req = HttpRequest(
       method = HttpMethods.POST,
@@ -120,7 +125,8 @@ class GraphQLHttpRouteSpec extends AnyFlatSpec with Matchers with ScalatestRoute
     override lazy val mining: TestMining = buildTestMining().withBlockGenerator(blockGenerator)
     override lazy val miningConfig = MiningConfigs.miningConfig
 
-    @annotation.unused val appStateStorage: AppStateStorage = mock[AppStateStorage]
+    @annotation.unused
+    val appStateStorage: AppStateStorage = mock[AppStateStorage]
     override lazy val stxLedger: StxLedger = mock[StxLedger]
     val keyStore: KeyStore = mock[KeyStore]
     val syncProbe = TestProbe()

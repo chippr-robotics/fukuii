@@ -20,9 +20,9 @@ import com.chipprbots.ethereum.utils.Logger
 
 /** Executes GraphQL queries against the Fukuii `GraphQLSchema`.
   *
-  * Bridges Sangria's `Future`-based executor into cats-effect `IO` so call sites match the
-  * JSON-RPC handlers. Returns `(statusCode, jsonBody)` — geth returns 400 when the response has
-  * any errors, 200 otherwise. Hive testcases rely on this.
+  * Bridges Sangria's `Future`-based executor into cats-effect `IO` so call sites match the JSON-RPC handlers. Returns
+  * `(statusCode, jsonBody)` — geth returns 400 when the response has any errors, 200 otherwise. Hive testcases rely on
+  * this.
   */
 class GraphQLService(
     graphQLContext: GraphQLContext,
@@ -35,8 +35,8 @@ class GraphQLService(
 
   private val depthReducer = QueryReducer.rejectMaxDepth[GraphQLContext](maxQueryDepth)
 
-  /** Parse + validate + execute a GraphQL request, returning the JSON response body and a
-    * preferred HTTP status code (200 for success, 400 for query errors).
+  /** Parse + validate + execute a GraphQL request, returning the JSON response body and a preferred HTTP status code
+    * (200 for success, 400 for query errors).
     */
   def execute(query: String, variables: Option[Json], operationName: Option[String]): IO[(Int, Json)] = {
     val parsed: Either[Json, Document] = QueryParser.parse(query) match {
@@ -75,8 +75,9 @@ class GraphQLService(
     }
   }
 
-  /** Geth returns 400 whenever a GraphQL response has a non-empty `errors` array, regardless of
-    * whether the query parsed successfully. Hive testcases rely on this. */
+  /** Geth returns 400 whenever a GraphQL response has a non-empty `errors` array, regardless of whether the query
+    * parsed successfully. Hive testcases rely on this.
+    */
   private def statusForResult(json: Json): Int =
     json.hcursor.downField("errors").focus.flatMap(_.asArray) match {
       case Some(arr) if arr.nonEmpty => 400
@@ -99,9 +100,9 @@ class GraphQLService(
     *     }
     *   }]
     * }}}
-    * Resolvers throw [[GraphQLDataFetchingError]] to control the `errorCode` / `errorMessage`
-    * extensions. Any other throwable gets wrapped as a generic DataFetchingException so hive
-    * testcases matching on the `extensions.classification` string still pass.
+    * Resolvers throw [[GraphQLDataFetchingError]] to control the `errorCode` / `errorMessage` extensions. Any other
+    * throwable gets wrapped as a generic DataFetchingException so hive testcases matching on the
+    * `extensions.classification` string still pass.
     */
   private val graphQLExceptionHandler: sangria.execution.ExceptionHandler =
     sangria.execution.ExceptionHandler {
@@ -121,9 +122,9 @@ class GraphQLService(
       errorMessage: Option[String]
   ): HandledException = {
     val classificationField = Vector("classification" -> m.scalarNode("DataFetchingException", "String", Set.empty))
-    val codeField           = errorCode.map(c => "errorCode" -> m.scalarNode(c, "Int", Set.empty)).toVector
-    val msgField            = errorMessage.map(em => "errorMessage" -> m.scalarNode(em, "String", Set.empty)).toVector
-    val fields              = classificationField ++ codeField ++ msgField
+    val codeField = errorCode.map(c => "errorCode" -> m.scalarNode(c, "Int", Set.empty)).toVector
+    val msgField = errorMessage.map(em => "errorMessage" -> m.scalarNode(em, "String", Set.empty)).toVector
+    val fields = classificationField ++ codeField ++ msgField
     HandledException(
       reason,
       additionalFields = fields.toMap,
@@ -150,7 +151,7 @@ object GraphQLService {
           case Left(e) => Left(s"missing 'query' field: ${e.message}")
           case Right(q) =>
             val variables = cursor.downField("variables").focus.filterNot(_.isNull)
-            val opName    = cursor.get[String]("operationName").toOption.filter(_.nonEmpty)
+            val opName = cursor.get[String]("operationName").toOption.filter(_.nonEmpty)
             Right(GraphQLRequest(q, variables, opName))
         }
     }
