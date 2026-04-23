@@ -48,7 +48,7 @@ case class EthNodeStatus69ExchangeState(
     val localGenesisHash = blockchainReader.genesisHeader.hash
 
     if (status.networkId != peerConfiguration.networkId) {
-      log.warn(
+      log.debug(
         "ETH69_STATUS: NetworkId mismatch! Local: {}, Remote: {} - disconnecting (SUBPROTOCOL_TRIGGERED_MISMATCHED_NETWORK)",
         peerConfiguration.networkId,
         status.networkId

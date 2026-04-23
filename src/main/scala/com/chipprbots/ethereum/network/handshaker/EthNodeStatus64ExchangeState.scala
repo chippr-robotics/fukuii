@@ -52,7 +52,7 @@ case class EthNodeStatus64ExchangeState(
     )
 
     if (status.networkId != peerConfiguration.networkId) {
-      log.warn(
+      log.debug(
         "STATUS_EXCHANGE: NetworkId mismatch! Local: {}, Remote: {} - disconnecting (SUBPROTOCOL_TRIGGERED_MISMATCHED_NETWORK)",
         peerConfiguration.networkId,
         status.networkId

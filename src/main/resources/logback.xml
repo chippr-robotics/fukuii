@@ -129,6 +129,9 @@
     
     <!-- Sync status and lifecycle (high-level status only) -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.SyncController" level="INFO" />
+    <!-- Post-SNAP recovery actors (package .blockchain.sync, not .snap.actors — must be explicit) -->
+    <logger name="com.chipprbots.ethereum.blockchain.sync.BytecodeRecoveryActor" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.StorageRecoveryActor" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.fast.FastSync" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.regular.RegularSync" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController" level="INFO" />
@@ -169,7 +172,7 @@
     
     <!-- Network handshaking - protocol handshake details -->
     <logger name="com.chipprbots.ethereum.network.handshaker" level="INFO" />
-    <logger name="com.chipprbots.ethereum.network.handshaker.EtcHelloExchangeState" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.network.handshaker.EtcHelloExchangeState" level="WARN" />
     <logger name="com.chipprbots.ethereum.network.handshaker.EthNodeStatus64ExchangeState" level="INFO" />
     <logger name="com.chipprbots.ethereum.network.handshaker.EthNodeStatus63ExchangeState" level="ERROR" />
     <logger name="com.chipprbots.ethereum.network.handshaker.EtcForkBlockExchangeState" level="ERROR" />
