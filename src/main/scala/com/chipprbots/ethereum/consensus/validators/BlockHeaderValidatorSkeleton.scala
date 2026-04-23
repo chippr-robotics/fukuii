@@ -154,8 +154,8 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
     * @return
     *   BlockHeader if valid, an [[HeaderTimestampError]] otherwise
     */
-  /** Maximum number of seconds a block timestamp can be ahead of wall-clock time.
-    * Matches go-ethereum's allowedFutureBlockTimeSeconds (15s).
+  /** Maximum number of seconds a block timestamp can be ahead of wall-clock time. Matches go-ethereum's
+    * allowedFutureBlockTimeSeconds (15s).
     */
   private val AllowedFutureBlockTimeSeconds: Long = 15
 

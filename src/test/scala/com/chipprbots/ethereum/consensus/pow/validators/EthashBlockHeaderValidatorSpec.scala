@@ -91,9 +91,9 @@ class EthashBlockHeaderValidatorSpec
       val nowEpoch = java.time.Instant.now().getEpochSecond
       timestamp match {
         case t if t <= validParentBlockHeader.unixTimestamp => assert(validateResult == Left(HeaderTimestampError))
-        case t if t > nowEpoch + 15                        => assert(validateResult == Left(HeaderFutureTimestampError))
-        case validBlockHeader.unixTimestamp                 => assert(validateResult == Right(BlockHeaderValid))
-        case _                                              => assert(validateResult == Left(HeaderDifficultyError))
+        case t if t > nowEpoch + 15         => assert(validateResult == Left(HeaderFutureTimestampError))
+        case validBlockHeader.unixTimestamp => assert(validateResult == Right(BlockHeaderValid))
+        case _                              => assert(validateResult == Left(HeaderDifficultyError))
       }
     }
   }

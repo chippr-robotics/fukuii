@@ -157,7 +157,7 @@ class ByteCodeCoordinator(
       log.info("Pivot refreshed — clearing bytecode peer cooldowns")
       peerFailureCounts.clear()
       peerCooldownUntilMillis.clear()
-      // Besu-aligned D12: no peerResponseBytesTarget to clear.
+    // Besu-aligned D12: no peerResponseBytesTarget to clear.
 
     case PeerAvailable(peer) =>
       if (isPeerCoolingDown(peer)) {
@@ -222,7 +222,7 @@ class ByteCodeCoordinator(
       val abandonedActive = activeTasks.size
       log.warning(
         s"Force-completing bytecode sync: abandoning $abandonedPending pending tasks, " +
-        s"$abandonedActive active tasks (healing will recover missing code)"
+          s"$abandonedActive active tasks (healing will recover missing code)"
       )
       // Stop in-flight workers so they don't linger as orphans after activeTasks is cleared.
       // Pekko child stop is async but safe — any in-flight messages to stopped actors are dead-lettered.

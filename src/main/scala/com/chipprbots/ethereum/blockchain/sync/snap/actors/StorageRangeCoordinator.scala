@@ -68,7 +68,10 @@ class StorageRangeCoordinator(
   // Task management
   private val tasks = mutable.Queue[StorageTask]()
   private val activeTasks =
-    mutable.Map[BigInt, (Peer, Seq[StorageTask], BigInt, ByteString)]() // requestId -> (peer, tasks, requestedBytes, dispatchRoot)
+    mutable.Map[
+      BigInt,
+      (Peer, Seq[StorageTask], BigInt, ByteString)
+    ]() // requestId -> (peer, tasks, requestedBytes, dispatchRoot)
   private val completedTasks = mutable.ArrayBuffer[StorageTask]()
 
   // Track consecutive timeouts per peer. When a peer hits the threshold, it's marked stateless.

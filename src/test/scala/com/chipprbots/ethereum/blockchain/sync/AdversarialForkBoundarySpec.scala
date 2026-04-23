@@ -21,12 +21,11 @@ import com.chipprbots.ethereum.testing.Tags._
 // scalastyle:off magic.number
 /** Tests adversarial scenarios at the Olympia fork boundary.
   *
-  * Verifies that malicious or buggy peers sending invalid blocks around the fork boundary
-  * are detected and rejected with appropriate error types. Also tests BadBlockTracker for
-  * known-bad block hash caching.
+  * Verifies that malicious or buggy peers sending invalid blocks around the fork boundary are detected and rejected
+  * with appropriate error types. Also tests BadBlockTracker for known-bad block hash caching.
   *
-  * Reference: core-geth BadHashes map, go-ethereum block_validator.go,
-  * Erigon stage_headers.go bad block tracking. Fukuii H-016 backlog item.
+  * Reference: core-geth BadHashes map, go-ethereum block_validator.go, Erigon stage_headers.go bad block tracking.
+  * Fukuii H-016 backlog item.
   */
 class AdversarialForkBoundarySpec extends AnyFlatSpec with Matchers {
 
@@ -207,7 +206,8 @@ class AdversarialForkBoundarySpec extends AnyFlatSpec with Matchers {
     // Adversary sends post-Olympia block with gasUsed > gasLimit
     val lastPreOlympia = makeChild(preOlympiaParent)
     val forkBlock = makeChild(lastPreOlympia, baseFee = Some(BaseFeeCalculator.InitialBaseFee))
-    val adversarialBlock = makeChild(forkBlock,
+    val adversarialBlock = makeChild(
+      forkBlock,
       baseFee = Some(BaseFeeCalculator.calcBaseFee(forkBlock, blockchainConfig)),
       gasUsed = GasLimit + 1 // Exceeds gas limit
     )

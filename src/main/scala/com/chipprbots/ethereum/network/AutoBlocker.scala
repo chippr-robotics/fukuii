@@ -9,15 +9,15 @@ import scala.concurrent.duration._
 import org.apache.pekko.actor.Scheduler
 import org.slf4j.LoggerFactory
 
-/** Automatically blocks IPs that exhibit disruptive behavior, matching besu's PeerDenylistManager
-  * pattern. Bridges failure events from the network stack to BlockedIPRegistry.
+/** Automatically blocks IPs that exhibit disruptive behavior, matching besu's PeerDenylistManager pattern. Bridges
+  * failure events from the network stack to BlockedIPRegistry.
   *
   * Two signal types:
   *   - Soft (UDP send failures): tracked with threshold + time window. 3 failures in 5 min → 30 min block.
   *   - Hard (protocol violations): blocked immediately for 60 min.
   *
-  * All blocks are temporary and auto-expire. State is in-memory only — consistent with
-  * BlockedIPRegistry's existing design.
+  * All blocks are temporary and auto-expire. State is in-memory only — consistent with BlockedIPRegistry's existing
+  * design.
   */
 class AutoBlocker(
     registry: BlockedIPRegistry,
@@ -56,25 +56,30 @@ class AutoBlocker(
         s"Auto-blocked $ip after $count UDP send failures within ${udpWindow.toSeconds}s window. " +
           s"Block expires in ${udpBlockDuration.toMinutes}min."
       )
-      scheduler.scheduleOnce(udpBlockDuration, () => {
-        registry.unblock(ip)
-        udpFailures.remove(ip)
-        log.info(s"Auto-unblocked $ip after ${udpBlockDuration.toMinutes}min UDP decay.")
-      })(executionContext)
+      scheduler.scheduleOnce(
+        udpBlockDuration,
+        () => {
+          registry.unblock(ip)
+          udpFailures.remove(ip)
+          log.info(s"Auto-unblocked $ip after ${udpBlockDuration.toMinutes}min UDP decay.")
+        }
+      )(executionContext)
     }
   }
 
   /** Called on hard protocol violations (e.g. IncompatibleP2pProtocolVersion). Blocks immediately. */
-  def recordHardFailure(ip: String, reason: String): Unit = {
+  def recordHardFailure(ip: String, reason: String): Unit =
     if (!registry.isBlocked(ip)) {
       registry.block(ip)
       log.warn(
         s"Auto-blocked $ip: $reason. Block expires in ${hardFailureBlockDuration.toMinutes}min."
       )
-      scheduler.scheduleOnce(hardFailureBlockDuration, () => {
-        registry.unblock(ip)
-        log.info(s"Auto-unblocked $ip after ${hardFailureBlockDuration.toMinutes}min (hard failure decay).")
-      })(executionContext)
+      scheduler.scheduleOnce(
+        hardFailureBlockDuration,
+        () => {
+          registry.unblock(ip)
+          log.info(s"Auto-unblocked $ip after ${hardFailureBlockDuration.toMinutes}min (hard failure decay).")
+        }
+      )(executionContext)
     }
-  }
 }

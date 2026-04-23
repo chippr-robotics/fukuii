@@ -162,7 +162,7 @@ class SNAPSyncController(
   private var pivotStalenessCheckTask: Option[Cancellable] = None
 
   // Besu DynamicPivotBlockSelector.java constants
-  private val PivotWindowValidity: Int = 126  // blocks behind chain tip before pivot switch
+  private val PivotWindowValidity: Int = 126 // blocks behind chain tip before pivot switch
   private val PivotCheckInterval: FiniteDuration = 60.seconds
 
   /** Like handlePeerListMessagesWithRateTracking, but also reactively triggers a bootstrap retry when new SNAP-capable
@@ -305,7 +305,7 @@ class SNAPSyncController(
         val gracePeriod = snapSyncConfig.snapCapabilityGracePeriod
         log.warning(
           s"No snap-capable peers found after grace period. " +
-          s"Rescheduling check in ${gracePeriod.toSeconds}s (Besu-aligned: no fallback)."
+            s"Rescheduling check in ${gracePeriod.toSeconds}s (Besu-aligned: no fallback)."
         )
         snapCapabilityCheckTask = Some(scheduler.scheduleOnce(gracePeriod, self, CheckSnapCapability)(ec))
       }
@@ -408,7 +408,7 @@ class SNAPSyncController(
     case ProgressNodesHealed(count) =>
       progressMonitor.incrementNodesHealed(count)
       consecutiveUnproductiveHealingRounds = 0 // Reset — healing made progress
-      if (count > 0) healingPivotRefreshes = 0  // Root was served — reset healing fallback counter
+      if (count > 0) healingPivotRefreshes = 0 // Root was served — reset healing fallback counter
 
     case ProgressAccountEstimate(estimatedTotal) =>
       progressMonitor.updateEstimates(accounts = estimatedTotal)
@@ -607,8 +607,7 @@ class SNAPSyncController(
     // coordinator instances continue processing their mailbox after context.stop() is called.
     // Only the CURRENT coordinator (trieNodeHealingCoordinator.contains(sender())) may trigger
     // state transitions. Stale messages from stopped coordinators are logged and dropped.
-    case HealingAllPeersStateless
-        if currentPhase == StateHealing && trieNodeHealingCoordinator.contains(sender()) =>
+    case HealingAllPeersStateless if currentPhase == StateHealing && trieNodeHealingCoordinator.contains(sender()) =>
       healingPivotRefreshes += 1
       log.warning(
         s"All healing peers stateless — pivot refresh $healingPivotRefreshes/$MaxHealingPivotRefreshes"
@@ -626,10 +625,11 @@ class SNAPSyncController(
     // Handler removed in april-besu-alignment D7.
 
     case PersistHealingQueue(pending, _) =>
-      log.debug(s"[HEAL-PERSIST] ${pending.size} pending nodes (persistence not implemented on this branch — discarding)")
+      log.debug(
+        s"[HEAL-PERSIST] ${pending.size} pending nodes (persistence not implemented on this branch — discarding)"
+      )
 
-    case StateHealingComplete(abandonedNodes, totalHealed)
-        if trieNodeHealingCoordinator.contains(sender()) =>
+    case StateHealingComplete(abandonedNodes, totalHealed) if trieNodeHealingCoordinator.contains(sender()) =>
       log.info(s"State healing complete [abandonedNodes=$abandonedNodes, healed=$totalHealed].")
       // D17 (Besu alignment): Besu finalizes SNAP sync immediately after healing with no
       // post-healing validation trie walk. SnapWorldDownloadState.onSnapServerDown() /
@@ -1264,7 +1264,9 @@ class SNAPSyncController(
                     if (count >= 0)
                       log.info(s"Recovery: streamed $count storage tasks from ${filePath}")
                     else
-                      log.warning(s"Recovery: storage file read failed, proceeding without storage tasks from $filePath")
+                      log.warning(
+                        s"Recovery: storage file read failed, proceeding without storage tasks from $filePath"
+                      )
                     // Signal no more tasks — sentinel allows completion
                     coordinator ! actors.Messages.NoMoreStorageTasks
                   }
@@ -1598,14 +1600,14 @@ class SNAPSyncController(
     math.min(delaySeconds, BootstrapRetryMaxDelay.toSeconds).seconds
   }
 
-  /** Check if bootstrap retry has exceeded the maximum count.
-    * Besu-aligned: never fall back to fast sync. Reset counter and keep retrying indefinitely.
+  /** Check if bootstrap retry has exceeded the maximum count. Besu-aligned: never fall back to fast sync. Reset counter
+    * and keep retrying indefinitely.
     */
   private def checkBootstrapRetryTimeout(context: String): Boolean = {
     if (bootstrapRetryCount >= MaxBootstrapRetries) {
       log.warning(
         s"Reached max bootstrap retries ($bootstrapRetryCount, $context) — " +
-        "Besu-aligned: resetting counter and continuing to retry (no fallback to fast sync)."
+          "Besu-aligned: resetting counter and continuing to retry (no fallback to fast sync)."
       )
       bootstrapRetryCount = 0
     }
@@ -1779,8 +1781,7 @@ class SNAPSyncController(
             concurrency = effectiveConcurrency,
             snapSyncController = self,
             resumeProgress = resumeProgress,
-            initialMaxInFlightPerPeer =
-              1, // Besu-aligned D11: 1 request per peer, no pipelining
+            initialMaxInFlightPerPeer = 1, // Besu-aligned D11: 1 request per peer, no pipelining
             trieFlushThreshold = snapSyncConfig.accountTrieFlushThreshold,
             initialResponseBytes = snapSyncConfig.accountInitialResponseBytes,
             minResponseBytes = snapSyncConfig.accountMinResponseBytes
@@ -1947,9 +1948,12 @@ class SNAPSyncController(
 
       if (snapPeers.isEmpty) {
         if (log.isDebugEnabled) {
-          val peerDump = peersToDownloadFrom.values.take(5).map { p =>
-            s"${p.peer.remoteAddress}: snap=${p.peerInfo.remoteStatus.supportsSnap}, maxBlock=${p.peerInfo.maxBlockNumber}"
-          }.mkString(", ")
+          val peerDump = peersToDownloadFrom.values
+            .take(5)
+            .map { p =>
+              s"${p.peer.remoteAddress}: snap=${p.peerInfo.remoteStatus.supportsSnap}, maxBlock=${p.peerInfo.maxBlockNumber}"
+            }
+            .mkString(", ")
           log.debug(s"peersToDownloadFrom (${peersToDownloadFrom.size} total): $peerDump")
         }
         log.info(s"No SNAP-capable peers at or above pivot $pivot available for storage range requests")
@@ -2610,9 +2614,9 @@ class SNAPSyncController(
     refreshPivotInPlace(s"account stall: $context")
   }
 
-  /** After MaxHealingPivotRefreshes consecutive pivot refreshes all fail to serve the root node,
-    * attempt to finalize at the state-download pivot whose state IS in the MPT DB.
-    * This is the last-resort path when the ETC SNAP peer set cannot serve any recent pivot's root.
+  /** After MaxHealingPivotRefreshes consecutive pivot refreshes all fail to serve the root node, attempt to finalize at
+    * the state-download pivot whose state IS in the MPT DB. This is the last-resort path when the ETC SNAP peer set
+    * cannot serve any recent pivot's root.
     */
   private def attemptHealingFallbackToStateDownloadPivot(): Unit =
     stateDownloadPivot match {
@@ -2685,15 +2689,20 @@ class SNAPSyncController(
         // If any of these are missing when SnapSyncDone=true, regular sync fails
         // on startup (branch resolution finds no chain weight, no best block hash).
         // go-ethereum writes pivot + state atomically; we do the same.
-        appStateStorage.snapSyncDone()
+        appStateStorage
+          .snapSyncDone()
           .and(blockchainWriter.storeBlock(Block(pivotHeader, BlockBody.empty)))
-          .and(blockchainWriter.storeChainWeight(
-            pivotHash,
-            ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty)
-          ))
-          .and(appStateStorage.putBestBlockInfo(
-            com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash, pivot)
-          ))
+          .and(
+            blockchainWriter.storeChainWeight(
+              pivotHash,
+              ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty)
+            )
+          )
+          .and(
+            appStateStorage.putBestBlockInfo(
+              com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash, pivot)
+            )
+          )
           .commit()
 
         log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.take(8).toHex})")
@@ -2701,7 +2710,8 @@ class SNAPSyncController(
       case None =>
         // Fallback: shouldn't happen since PivotHeaderBootstrap stored the header
         log.warning(s"Pivot header for block $pivot not found in storage — setting best block number only")
-        appStateStorage.snapSyncDone()
+        appStateStorage
+          .snapSyncDone()
           .and(appStateStorage.putBestBlockNumber(pivot))
           .commit()
     }
@@ -2719,10 +2729,9 @@ class SNAPSyncController(
 
   /** Waiting for parallel chain download to finish after SNAP state sync completed.
     *
-    * NOTE (Besu-aligned D2): completeSnapSync() no longer enters this state.
-    * finalizeSnapSync() is called immediately when SNAP state sync completes,
-    * without waiting for chain download. This state is retained for compatibility
-    * with any external callers but should never be entered in normal operation.
+    * NOTE (Besu-aligned D2): completeSnapSync() no longer enters this state. finalizeSnapSync() is called immediately
+    * when SNAP state sync completes, without waiting for chain download. This state is retained for compatibility with
+    * any external callers but should never be entered in normal operation.
     */
   def waitingForChainDownload: Receive = handlePeerListMessagesWithRateTracking.orElse {
     case ChainDownloader.Done =>

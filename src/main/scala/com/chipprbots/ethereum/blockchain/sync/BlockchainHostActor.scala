@@ -76,8 +76,8 @@ class BlockchainHostActor(
     }
   }
 
-  /** Handles ETH65 and ETH66 GetPooledTransactions requests by looking up the requested hashes in the tx pool.
-    * Response is sent asynchronously via networkPeerManagerActor once the pool responds.
+  /** Handles ETH65 and ETH66 GetPooledTransactions requests by looking up the requested hashes in the tx pool. Response
+    * is sent asynchronously via networkPeerManagerActor once the pool responds.
     */
   private def handlePooledTransactionsRequest(message: Message, peerId: PeerId): Unit = message match {
     case msg: ETH65.GetPooledTransactions =>

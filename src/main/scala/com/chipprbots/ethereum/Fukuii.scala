@@ -84,7 +84,7 @@ object Fukuii extends Logger {
     import java.nio.file.{Files, Paths, StandardOpenOption}
     import scala.util.Try
 
-    val logsDir  = Try(Config.config.getString("logging.logs-dir")).getOrElse("./logs")
+    val logsDir = Try(Config.config.getString("logging.logs-dir")).getOrElse("./logs")
     val logsFile = Try(Config.config.getString("logging.logs-file")).getOrElse("fukuii")
 
     val paths = Seq(
@@ -94,8 +94,9 @@ object Fukuii extends Logger {
 
     paths.foreach { path =>
       if (Files.exists(path)) {
-        Try(Files.write(path, Array.emptyByteArray, StandardOpenOption.TRUNCATE_EXISTING))
-          .failed.foreach(e => log.warn("Failed to truncate log file {}: {}", path, e.getMessage))
+        Try(Files.write(path, Array.emptyByteArray, StandardOpenOption.TRUNCATE_EXISTING)).failed.foreach(e =>
+          log.warn("Failed to truncate log file {}: {}", path, e.getMessage)
+        )
       }
     }
     log.info("Log files truncated on startup")
