@@ -191,7 +191,7 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
     complete(httpResponseF.unsafeToFuture()(runtime))
   }
 
-  private def handleGraphQL(svc: GraphQLService, body: String): StandardRoute = {
+  private def handleGraphQL(svc: GraphQLService, body: String): StandardRoute =
     GraphQLService.parseJsonBody(body) match {
       case Left(msg) =>
         val escaped = msg.replace("\\", "\\\\").replace("\"", "\\\"")
@@ -212,7 +212,6 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
           .unsafeToFuture()
         complete(fut)
     }
-  }
 
   private def handleBuildInfo(): StandardRoute = {
     val buildInfo = Serialization.writePretty(BuildInfo.toMap)(DefaultFormats)

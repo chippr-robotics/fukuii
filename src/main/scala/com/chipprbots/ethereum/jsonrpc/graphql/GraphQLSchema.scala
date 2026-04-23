@@ -65,12 +65,12 @@ object GraphQLSchema {
   // Guard: query depth limit (matches geth/graphql/service.go:33).
   val MaxQueryDepth: Int = 20
 
-  private implicit val ioRuntime: IORuntime = IORuntime.global
+  implicit private val ioRuntime: IORuntime = IORuntime.global
 
   // SignedTransaction.getSender needs an implicit BlockchainConfig (for EIP-155 chainId
   // extraction from the v signature field). We inherit from the global Config — same pattern
   // as EthTxService and TransactionResponse.
-  private implicit val blockchainConfigImplicit: com.chipprbots.ethereum.utils.BlockchainConfig =
+  implicit private val blockchainConfigImplicit: com.chipprbots.ethereum.utils.BlockchainConfig =
     com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
 
   // ---------------------------------------------------------------------------
@@ -109,11 +109,11 @@ object GraphQLSchema {
   }
 
   private def txType(tx: Transaction): Long = tx match {
-    case _: LegacyTransaction          => 0L
-    case _: TransactionWithAccessList  => 1L
-    case _: TransactionWithDynamicFee  => 2L
-    case _: BlobTransaction            => 3L
-    case _: SetCodeTransaction         => 4L
+    case _: LegacyTransaction         => 0L
+    case _: TransactionWithAccessList => 1L
+    case _: TransactionWithDynamicFee => 2L
+    case _: BlobTransaction           => 3L
+    case _: SetCodeTransaction        => 4L
   }
 
   private def txAccessList(tx: Transaction): Option[List[AccessListItem]] = tx match {
@@ -162,8 +162,9 @@ object GraphQLSchema {
       case other => other.gasPrice - baseFee.getOrElse(BigInt(0))
     }
 
-  /** `null` for pre-Byzantium receipts (which store a state root instead of a status byte —
-    * see EIP-658). Hive test 30 expects `status: null` for a Frontier-era transaction. */
+  /** `null` for pre-Byzantium receipts (which store a state root instead of a status byte — see EIP-658). Hive test 30
+    * expects `status: null` for a Frontier-era transaction.
+    */
   private def txStatus(r: Receipt): Option[Long] =
     r.postTransactionStateHash match {
       case SuccessOutcome => Some(1L)
@@ -197,11 +198,10 @@ object GraphQLSchema {
       )
     }
 
-  /** For `Pending.transactions` / `Pending.transactionCount`, surface only the lowest-nonce tx
-    * per sender — the one that is "next in line" to be included. The mempool stores every
-    * queued tx (including future-nonce ones), but hive's graphql test 35 expects the geth-style
-    * view where each sender contributes at most one "pending" entry. Mirrors
-    * `eth_pendingTransactions` behaviour in geth / besu.
+  /** For `Pending.transactions` / `Pending.transactionCount`, surface only the lowest-nonce tx per sender — the one
+    * that is "next in line" to be included. The mempool stores every queued tx (including future-nonce ones), but
+    * hive's graphql test 35 expects the geth-style view where each sender contributes at most one "pending" entry.
+    * Mirrors `eth_pendingTransactions` behaviour in geth / besu.
     */
   private def readyPendingTxs(
       all: Seq[com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransaction]
@@ -270,29 +270,29 @@ object GraphQLSchema {
   )
 
   // Common arguments — explicit result types needed for Scala 3 FromInput derivation.
-  private val BlockNumberArg: Argument[Option[Long]]       = Argument("block", OptionInputType(LongType))
-  private val NumberArg: Argument[Option[Long]]            = Argument("number", OptionInputType(LongType))
-  private val HashArg: Argument[Option[ByteString]]        = Argument("hash", OptionInputType(Bytes32Type))
-  private val AddressArg: Argument[ByteString]             = Argument("address", AddressType)
-  private val SlotArg: Argument[ByteString]                = Argument("slot", Bytes32Type)
-  private val IndexArg: Argument[Long]                     = Argument("index", LongType)
-  private val FromArg: Argument[Option[Long]]              = Argument("from", OptionInputType(LongType))
-  private val ToArg: Argument[Option[Long]]                = Argument("to", OptionInputType(LongType))
-  private val CallDataArg: Argument[Map[String, Any]]      = Argument("data", CallDataInputType)
-  private val BlockFilterArg: Argument[Map[String, Any]]   = Argument("filter", BlockFilterCriteriaInputType)
-  private val FilterArg: Argument[Map[String, Any]]        = Argument("filter", FilterCriteriaInputType)
-  private val TxHashArg: Argument[ByteString]              = Argument("hash", Bytes32Type)
-  private val RawDataArg: Argument[ByteString]             = Argument("data", BytesType)
+  private val BlockNumberArg: Argument[Option[Long]] = Argument("block", OptionInputType(LongType))
+  private val NumberArg: Argument[Option[Long]] = Argument("number", OptionInputType(LongType))
+  private val HashArg: Argument[Option[ByteString]] = Argument("hash", OptionInputType(Bytes32Type))
+  private val AddressArg: Argument[ByteString] = Argument("address", AddressType)
+  private val SlotArg: Argument[ByteString] = Argument("slot", Bytes32Type)
+  private val IndexArg: Argument[Long] = Argument("index", LongType)
+  private val FromArg: Argument[Option[Long]] = Argument("from", OptionInputType(LongType))
+  private val ToArg: Argument[Option[Long]] = Argument("to", OptionInputType(LongType))
+  private val CallDataArg: Argument[Map[String, Any]] = Argument("data", CallDataInputType)
+  private val BlockFilterArg: Argument[Map[String, Any]] = Argument("filter", BlockFilterCriteriaInputType)
+  private val FilterArg: Argument[Map[String, Any]] = Argument("filter", FilterCriteriaInputType)
+  private val TxHashArg: Argument[ByteString] = Argument("hash", Bytes32Type)
+  private val RawDataArg: Argument[ByteString] = Argument("data", BytesType)
 
   // Convert a CallData input map to EthInfoService.CallTx.
   private def toCallTx(m: Map[String, Any]): EthInfoService.CallTx = {
-    val from     = m.get("from").flatMap(asOption[ByteString])
-    val toRaw    = m.get("to").flatMap(asOption[ByteString])
-    val gas      = m.get("gas").flatMap(asOption[Long]).map(BigInt(_))
+    val from = m.get("from").flatMap(asOption[ByteString])
+    val toRaw = m.get("to").flatMap(asOption[ByteString])
+    val gas = m.get("gas").flatMap(asOption[Long]).map(BigInt(_))
     val gasPrice = m.get("gasPrice").flatMap(asOption[BigInt]).getOrElse(BigInt(0))
-    val maxFee   = m.get("maxFeePerGas").flatMap(asOption[BigInt])
-    val value    = m.get("value").flatMap(asOption[BigInt]).getOrElse(BigInt(0))
-    val data     = m.get("data").flatMap(asOption[ByteString]).getOrElse(ByteString.empty)
+    val maxFee = m.get("maxFeePerGas").flatMap(asOption[BigInt])
+    val value = m.get("value").flatMap(asOption[BigInt]).getOrElse(BigInt(0))
+    val data = m.get("data").flatMap(asOption[ByteString]).getOrElse(ByteString.empty)
     // When the caller omits `to` AND provides no payload, treat the call as a zero-value
     // no-op transfer to the zero address — that's what geth returns for hive's
     // `pending.estimateGas(data: {})` test (expected 0x5208 = 21000, the plain-transfer
@@ -303,7 +303,8 @@ object GraphQLSchema {
       else toRaw
     // If dynamic fee fields are present but no legacy gasPrice, synthesise the legacy field to
     // maxFeePerGas so the existing stxLedger.simulateTransaction path can run unchanged.
-    val effectiveGasPrice = if (m.get("gasPrice").flatMap(asOption[BigInt]).isDefined) gasPrice else maxFee.getOrElse(gasPrice)
+    val effectiveGasPrice =
+      if (m.get("gasPrice").flatMap(asOption[BigInt]).isDefined) gasPrice else maxFee.getOrElse(gasPrice)
     EthInfoService.CallTx(
       from = from,
       to = to,
@@ -316,10 +317,10 @@ object GraphQLSchema {
   }
 
   private def asOption[A](v: Any): Option[A] = v match {
-    case null       => None
-    case None       => None
-    case Some(x)    => Some(x.asInstanceOf[A])
-    case other      => Some(other.asInstanceOf[A])
+    case null    => None
+    case None    => None
+    case Some(x) => Some(x.asInstanceOf[A])
+    case other   => Some(other.asInstanceOf[A])
   }
 
   // ---------------------------------------------------------------------------
@@ -462,7 +463,9 @@ object GraphQLSchema {
             val blockNum = c.arg(BlockNumberArg) match {
               case Some(n) => BigInt(n)
               case None =>
-                c.value.parent.blockInfo.map(_.block.header.number).getOrElse(c.ctx.blockchainReader.getBestBlockNumber())
+                c.value.parent.blockInfo
+                  .map(_.block.header.number)
+                  .getOrElse(c.ctx.blockchainReader.getBestBlockNumber())
             }
             GAccount(c.value.log.loggerAddress.bytes, blockNum)
           }
@@ -546,8 +549,8 @@ object GraphQLSchema {
         Field(
           "effectiveGasPrice",
           OptionType(BigIntType),
-          resolve = c =>
-            c.value.blockInfo.map(bi => Transaction.effectiveGasPrice(c.value.stx.tx, bi.block.header.baseFee))
+          resolve =
+            c => c.value.blockInfo.map(bi => Transaction.effectiveGasPrice(c.value.stx.tx, bi.block.header.baseFee))
         ),
         Field(
           "blobGasUsed",
@@ -564,7 +567,7 @@ object GraphQLSchema {
           OptionType(BigIntType),
           resolve = c =>
             for {
-              bi  <- c.value.blockInfo
+              bi <- c.value.blockInfo
               ebg <- bi.block.header.excessBlobGas
             } yield BlobGasUtils.getBlobGasPrice(ebg, bi.block.header.unixTimestamp, c.ctx.blockchainConfig)
         ),
@@ -604,7 +607,8 @@ object GraphQLSchema {
         Field(
           "rawReceipt",
           BytesType,
-          resolve = c => receiptBundle(c.ctx, c.value).map(rb => rlpEncodeReceipt(rb.receipt)).getOrElse(ByteString.empty)
+          resolve =
+            c => receiptBundle(c.ctx, c.value).map(rb => rlpEncodeReceipt(rb.receipt)).getOrElse(ByteString.empty)
         ),
         Field(
           "blobVersionedHashes",
@@ -627,19 +631,24 @@ object GraphQLSchema {
         Field(
           "parent",
           OptionType(BlockType),
-          resolve = c =>
-            c.ctx.blockchainReader.getBlockByHash(c.value.header.parentHash).map(b => buildGBlock(c.ctx, b))
+          resolve =
+            c => c.ctx.blockchainReader.getBlockByHash(c.value.header.parentHash).map(b => buildGBlock(c.ctx, b))
         ),
         Field("nonce", BytesType, resolve = _.value.header.nonce),
         Field("transactionsRoot", Bytes32Type, resolve = _.value.header.transactionsRoot),
-        Field("transactionCount", OptionType(LongType), resolve = c => Some(c.value.block.body.transactionList.size.toLong)),
+        Field(
+          "transactionCount",
+          OptionType(LongType),
+          resolve = c => Some(c.value.block.body.transactionList.size.toLong)
+        ),
         Field("stateRoot", Bytes32Type, resolve = _.value.header.stateRoot),
         Field("receiptsRoot", Bytes32Type, resolve = _.value.header.receiptsRoot),
         Field(
           "miner",
           AccountType,
           arguments = List(BlockNumberArg),
-          resolve = c => GAccount(c.value.header.beneficiary, c.arg(BlockNumberArg).map(BigInt(_)).getOrElse(c.value.number))
+          resolve =
+            c => GAccount(c.value.header.beneficiary, c.arg(BlockNumberArg).map(BigInt(_)).getOrElse(c.value.number))
         ),
         Field("extraData", BytesType, resolve = _.value.header.extraData),
         Field("gasLimit", LongType, resolve = _.value.header.gasLimit.toLong),
@@ -663,7 +672,11 @@ object GraphQLSchema {
         Field("logsBloom", BytesType, resolve = _.value.header.logsBloom),
         Field("mixHash", Bytes32Type, resolve = _.value.header.mixHash),
         Field("difficulty", BigIntType, resolve = _.value.header.difficulty),
-        Field("totalDifficulty", BigIntType, resolve = c => c.value.totalDifficulty.getOrElse(c.value.header.difficulty)),
+        Field(
+          "totalDifficulty",
+          BigIntType,
+          resolve = c => c.value.totalDifficulty.getOrElse(c.value.header.difficulty)
+        ),
         Field(
           "ommerCount",
           OptionType(LongType),
@@ -767,18 +780,16 @@ object GraphQLSchema {
             val io = c.ctx.ethInfoService.call(req)
             val estGasIo = c.ctx.ethInfoService.estimateGas(req)
             val fut: Future[Option[GCallResult]] = (for {
-              callE   <- io
-              gasE    <- estGasIo
-            } yield {
-              (callE, gasE) match {
-                case (Right(resp), Right(gasResp)) =>
-                  Some(GCallResult(resp.returnData, gasResp.gas.toLong, 1L))
-                case (Right(resp), Left(_)) =>
-                  Some(GCallResult(resp.returnData, 0L, 1L))
-                case (Left(err), _) if err.code == 3 => // execution reverted
-                  Some(GCallResult(ByteString.empty, 0L, 0L))
-                case _ => None
-              }
+              callE <- io
+              gasE <- estGasIo
+            } yield (callE, gasE) match {
+              case (Right(resp), Right(gasResp)) =>
+                Some(GCallResult(resp.returnData, gasResp.gas.toLong, 1L))
+              case (Right(resp), Left(_)) =>
+                Some(GCallResult(resp.returnData, 0L, 1L))
+              case (Left(err), _) if err.code == 3 => // execution reverted
+                Some(GCallResult(ByteString.empty, 0L, 0L))
+              case _ => None
             }).unsafeToFuture()
             fut
           }
@@ -857,15 +868,15 @@ object GraphQLSchema {
           arguments = List(CallDataArg),
           resolve = { c =>
             val callTx = toCallTx(c.arg(CallDataArg))
-            val req    = EthInfoService.CallRequest(callTx, BlockParam.Pending)
+            val req = EthInfoService.CallRequest(callTx, BlockParam.Pending)
             val fut = (for {
               callE <- c.ctx.ethInfoService.call(req)
-              gasE  <- c.ctx.ethInfoService.estimateGas(req)
+              gasE <- c.ctx.ethInfoService.estimateGas(req)
             } yield (callE, gasE) match {
-              case (Right(resp), Right(gasResp)) => Some(GCallResult(resp.returnData, gasResp.gas.toLong, 1L))
-              case (Right(resp), Left(_))        => Some(GCallResult(resp.returnData, 0L, 1L))
+              case (Right(resp), Right(gasResp))   => Some(GCallResult(resp.returnData, gasResp.gas.toLong, 1L))
+              case (Right(resp), Left(_))          => Some(GCallResult(resp.returnData, 0L, 1L))
               case (Left(err), _) if err.code == 3 => Some(GCallResult(ByteString.empty, 0L, 0L))
-              case _                             => None
+              case _                               => None
             }).unsafeToFuture()
             fut
           }
@@ -876,7 +887,7 @@ object GraphQLSchema {
           arguments = List(CallDataArg),
           resolve = { c =>
             val callTx = toCallTx(c.arg(CallDataArg))
-            val req    = EthInfoService.CallRequest(callTx, BlockParam.Pending)
+            val req = EthInfoService.CallRequest(callTx, BlockParam.Pending)
             c.ctx.ethInfoService
               .estimateGas(req)
               .map {
@@ -917,7 +928,7 @@ object GraphQLSchema {
                 .orElse {
                   for {
                     header <- reader.getBlockHeaderByNumber(bn)
-                    body   <- reader.getBlockBodyByHash(header.hash)
+                    body <- reader.getBlockBodyByHash(header.hash)
                   } yield Block(header, body)
                 }
               blockOpt match {
@@ -929,7 +940,7 @@ object GraphQLSchema {
             case (None, Some(h)) =>
               reader.getBlockByHash(h) match {
                 case Some(b) => Some(buildGBlock(c.ctx, b))
-                case None    =>
+                case None =>
                   val hex = "0x" + h.toArray.map("%02x".format(_)).mkString
                   throw GraphQLDataFetchingError.notFound("block", s"Block hash $hex was not found")
               }
@@ -946,7 +957,7 @@ object GraphQLSchema {
           val reader = c.ctx.blockchainReader
           val best = reader.getBestBlockNumber()
           val from = c.arg(FromArg).map(BigInt(_)).getOrElse(BigInt(0))
-          val to   = c.arg(ToArg).map(BigInt(_)).getOrElse(best)
+          val to = c.arg(ToArg).map(BigInt(_)).getOrElse(best)
           // Hive test 43 (byWrongRange): `to < from` is Invalid params, not an empty list.
           if (to < from) throw GraphQLDataFetchingError.invalidParams("blocks")
           val count = (to - from + 1).min(MaxBlocksPerRange).toInt
@@ -1003,7 +1014,7 @@ object GraphQLSchema {
         resolve = { c =>
           val m = c.arg(FilterArg)
           val fromBlock = m.get("fromBlock").flatMap(asOption[Long]).map(BigInt(_))
-          val toBlock   = m.get("toBlock").flatMap(asOption[Long]).map(BigInt(_))
+          val toBlock = m.get("toBlock").flatMap(asOption[Long]).map(BigInt(_))
           val addrs: Seq[ByteString] =
             m.get("addresses").flatMap(asOption[Vector[ByteString]]).getOrElse(Vector.empty)
           val topics: Seq[Seq[ByteString]] =
@@ -1076,7 +1087,9 @@ object GraphQLSchema {
             .syncing(com.chipprbots.ethereum.jsonrpc.EthInfoService.SyncingRequest())
             .map {
               case Right(resp) =>
-                resp.syncStatus.map(s => GSyncState(s.startingBlock.toLong, s.currentBlock.toLong, s.highestBlock.toLong))
+                resp.syncStatus.map(s =>
+                  GSyncState(s.startingBlock.toLong, s.currentBlock.toLong, s.highestBlock.toLong)
+                )
               case Left(_) => None
             }
             .unsafeToFuture()
@@ -1191,16 +1204,16 @@ object GraphQLSchema {
   )
 }
 
-/** User-facing error thrown from resolvers. Sangria renders these without the stack trace and
-  * exposes the message to the GraphQL client. */
+/** User-facing error thrown from resolvers. Sangria renders these without the stack trace and exposes the message to
+  * the GraphQL client.
+  */
 final case class GraphQLUserError(msg: String) extends Exception(msg) with sangria.execution.UserFacingError
 
 /** DataFetchingException emitted in the geth-compatible format hive testcases expect.
   *
-  * The constructed `message` matches graphql-java's format: `Exception while fetching data
-  * (/<path>) : <reason>`. The `errorCode` and `errorMessage` optional fields map to
-  * `extensions.errorCode` / `extensions.errorMessage` per the JSON-RPC error convention. See
-  * `src/test/resources/graphql-errors.md` for the expected shapes.
+  * The constructed `message` matches graphql-java's format: `Exception while fetching data (/<path>) : <reason>`. The
+  * `errorCode` and `errorMessage` optional fields map to `extensions.errorCode` / `extensions.errorMessage` per the
+  * JSON-RPC error convention. See `src/test/resources/graphql-errors.md` for the expected shapes.
   */
 final case class GraphQLDataFetchingError(
     fieldPath: String,
@@ -1218,12 +1231,13 @@ object GraphQLDataFetchingError {
 
   /** JSON-RPC error codes that hive testcases expect to flow through `extensions.errorCode`. */
   object Codes {
-    val InvalidParams: Int  = -32602
-    val NonceTooLow: Int    = -32001
+    val InvalidParams: Int = -32602
+    val NonceTooLow: Int = -32001
   }
 
-  /** "Invalid params" — EIP-1474 / JSON-RPC -32602. Used when the query mixes incompatible args
-    * (e.g. both `number` and `hash` on `block`) or when a numeric arg is out of range. */
+  /** "Invalid params" — EIP-1474 / JSON-RPC -32602. Used when the query mixes incompatible args (e.g. both `number` and
+    * `hash` on `block`) or when a numeric arg is out of range.
+    */
   def invalidParams(fieldPath: String): GraphQLDataFetchingError =
     GraphQLDataFetchingError(
       fieldPath,
@@ -1232,13 +1246,14 @@ object GraphQLDataFetchingError {
       errorMessage = Some("Invalid params")
     )
 
-  /** Object not found — plain DataFetchingException (no `errorCode`). Hive's test 15
-    * (byHashInvalid) expects exactly this shape for unknown block hashes. */
+  /** Object not found — plain DataFetchingException (no `errorCode`). Hive's test 15 (byHashInvalid) expects exactly
+    * this shape for unknown block hashes.
+    */
   def notFound(fieldPath: String, reason: String): GraphQLDataFetchingError =
     GraphQLDataFetchingError(fieldPath, reason, errorCode = None, errorMessage = None)
 
-  /** "Nonce too low" — EIP-1474 -32001. Used by `sendRawTransaction` when the account nonce has
-    * already been consumed. */
+  /** "Nonce too low" — EIP-1474 -32001. Used by `sendRawTransaction` when the account nonce has already been consumed.
+    */
   def nonceTooLow(fieldPath: String): GraphQLDataFetchingError =
     GraphQLDataFetchingError(
       fieldPath,

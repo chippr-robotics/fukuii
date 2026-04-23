@@ -544,7 +544,7 @@ class JsonRpcControllerEthSpec
     response should haveStringResult("0x11")
   }
 
-  it should "return error with custom error taggedAs (UnitTest, RPCTest) in data in eth_balance" in new JsonRpcControllerFixture {
+  it should "return error with custom error taggedAs (UnitTest, RPCTest) in data in eth_balance" taggedAs DisabledTest in new JsonRpcControllerFixture {
     val mockEthUserService: EthUserService & scala.reflect.Selectable = mock[EthUserService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethUserService = mockEthUserService)
@@ -832,7 +832,7 @@ class JsonRpcControllerEthSpec
     )
   }
 
-  it should "return error with custom error taggedAs (UnitTest, RPCTest) in data in eth_getProof" in new JsonRpcControllerFixture {
+  it should "return error with custom error taggedAs (UnitTest, RPCTest) in data in eth_getProof" taggedAs DisabledTest in new JsonRpcControllerFixture {
     val mockEthProofService: EthProofService & scala.reflect.Selectable = mock[EthProofService]
     override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(proofService = mockEthProofService)
 

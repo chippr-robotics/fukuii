@@ -37,10 +37,12 @@ object GraphQLScalars {
   def toHexBigInt(n: BigInt): String = {
     // EIP-1767 canonical: no leading zeroes, with "0x0" for zero.
     val raw = n.toString(16)
-    "0x" + (if (raw == "0") "0" else raw.dropWhile(_ == '0') match {
-      case ""    => "0"
-      case other => other
-    })
+    "0x" + (if (raw == "0") "0"
+            else
+              raw.dropWhile(_ == '0') match {
+                case ""    => "0"
+                case other => other
+              })
   }
 
   def toHexLong(n: Long): String = toHexBigInt(BigInt(n))

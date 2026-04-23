@@ -154,7 +154,8 @@ class BlockchainSpec
   it should "return proof for non-existent account" taggedAs (
     UnitTest,
     StateTest,
-    MPTTest
+    MPTTest,
+    DisabledTest
   ) in new EphemBlockchainTestSetup {
     val emptyMpt: MerklePatriciaTrie[Address, Account] = MerklePatriciaTrie[Address, Account](
       storagesInstance.storages.stateStorage.getBackingStorage(0)

@@ -54,7 +54,6 @@ curl -X POST http://localhost:8546 \
 ## Additional Resources
 
 - **[JSON-RPC API Reference (Text)](./JSON_RPC_API_REFERENCE.md)**: Detailed text documentation
-- **[RPC Endpoint Inventory](./RPC_ENDPOINT_INVENTORY.md)**: Complete catalog with safety classifications
 - **[Insomnia Workspace Guide](./INSOMNIA_WORKSPACE_GUIDE.md)**: How to use the Insomnia collection
 - **[API Overview](./README.md)**: Getting started with the API
 

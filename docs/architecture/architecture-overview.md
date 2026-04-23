@@ -549,7 +549,7 @@ The Engine API is the standardized interface between an execution layer (EL) and
 - **Post-Merge validation**: PoS headers are validated for `difficulty = 0`, `nonce = 0`, empty ommers, presence of `withdrawalsRoot` (EIP-4895), `blobGasUsed` / `excessBlobGas` (EIP-4844), and `requestsHash` (EIP-7685)
 - **EIP support**: EIP-3651 (warm COINBASE), EIP-4895 (withdrawals), EIP-4844 (blob transactions), EIP-4788 (beacon root contract), EIP-7685 (execution requests), EIP-6122 (timestamp ForkID), EIP-1153 (transient storage), EIP-5656 (MCOPY)
 
-The feature-level summary of Engine API capabilities, along with `ops/barad-dur/sepolia/` deployment instructions for pairing with Lighthouse, is maintained in the project [`README.md`](../../README.md).
+The feature-level summary of Engine API capabilities, along with `ops/barad-dur/sepolia/` deployment instructions for pairing with Lighthouse, is maintained in the project [`README.md`](https://github.com/chippr-robotics/fukuii/blob/develop/README.md).
 
 ### 10. Database System
 

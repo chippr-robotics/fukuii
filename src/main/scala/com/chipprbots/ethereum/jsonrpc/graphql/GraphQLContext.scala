@@ -4,7 +4,15 @@ import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
-import com.chipprbots.ethereum.domain.{Block, BlockHeader, Blockchain, BlockchainReader, Receipt, SignedTransaction, TxLogEntry}
+import com.chipprbots.ethereum.domain.{
+  Block,
+  BlockHeader,
+  Blockchain,
+  BlockchainReader,
+  Receipt,
+  SignedTransaction,
+  TxLogEntry
+}
 import com.chipprbots.ethereum.jsonrpc.EthBlocksService
 import com.chipprbots.ethereum.jsonrpc.EthFilterService
 import com.chipprbots.ethereum.jsonrpc.EthInfoService
@@ -29,9 +37,9 @@ case class GraphQLContext(
     ethFilterService: EthFilterService
 )
 
-/** GraphQL wrappers that carry a bit more context than the bare domain type — for example a
-  * transaction needs to know its own block to resolve `block`/`status`/`gasUsed`, and a log needs to
-  * know its parent transaction plus its ordinal position.
+/** GraphQL wrappers that carry a bit more context than the bare domain type — for example a transaction needs to know
+  * its own block to resolve `block`/`status`/`gasUsed`, and a log needs to know its parent transaction plus its ordinal
+  * position.
   */
 object GraphQLTypes {
 

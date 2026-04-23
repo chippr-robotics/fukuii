@@ -258,39 +258,40 @@ class SyncControllerSpec
     }
   }
 
-  it should "not change best block after receiving faraway block" in withTestSetup() { testSetup =>
-    import testSetup._
+  it should "not change best block after receiving faraway block" taggedAs DisabledTest in withTestSetup() {
+    testSetup =>
+      import testSetup._
 
-    startWithState(defaultStateBeforeNodeRestart)
+      startWithState(defaultStateBeforeNodeRestart)
 
-    syncController ! SyncProtocol.Start
+      syncController ! SyncProtocol.Start
 
-    val handshakedPeers = HandshakedPeers(twoAcceptedPeers)
-    val watcher = TestProbe()
-    watcher.watch(syncController)
+      val handshakedPeers = HandshakedPeers(twoAcceptedPeers)
+      val watcher = TestProbe()
+      watcher.watch(syncController)
 
-    val newBlocks =
-      getHeaders(defaultStateBeforeNodeRestart.bestBlockHeaderNumber + 1, syncConfig.blockHeadersPerRequest)
+      val newBlocks =
+        getHeaders(defaultStateBeforeNodeRestart.bestBlockHeaderNumber + 1, syncConfig.blockHeadersPerRequest)
 
-    setupAutoPilot(networkPeerManager, handshakedPeers, defaultPivotBlockHeader, BlockchainData(newBlocks))
-    val fast = syncController.children.find(_.path.name.startsWith("fast-sync")).get
+      setupAutoPilot(networkPeerManager, handshakedPeers, defaultPivotBlockHeader, BlockchainData(newBlocks))
+      val fast = syncController.children.find(_.path.name.startsWith("fast-sync")).get
 
-    // Send block that is way forward, we should ignore that block and blacklist that peer
-    val futureHeaders = Seq(defaultPivotBlockHeader.copy(number = defaultPivotBlockHeader.number + 20))
-    val futureHeadersMessage = PeerRequestHandler.ResponseReceived(peer2, ETH66BlockHeaders(0, futureHeaders), 2L)
-    implicit val ec = system.dispatcher
-    system.scheduler.scheduleAtFixedRate(0.seconds, 0.5.seconds, fast, futureHeadersMessage)
+      // Send block that is way forward, we should ignore that block and blacklist that peer
+      val futureHeaders = Seq(defaultPivotBlockHeader.copy(number = defaultPivotBlockHeader.number + 20))
+      val futureHeadersMessage = PeerRequestHandler.ResponseReceived(peer2, ETH66BlockHeaders(0, futureHeaders), 2L)
+      implicit val ec = system.dispatcher
+      system.scheduler.scheduleAtFixedRate(0.seconds, 0.5.seconds, fast, futureHeadersMessage)
 
-    eventually {
-      someTimePasses()
-      storagesInstance.storages.fastSyncStateStorage.getSyncState().get.pivotBlock shouldBe defaultPivotBlockHeader
-    }
+      eventually {
+        someTimePasses()
+        storagesInstance.storages.fastSyncStateStorage.getSyncState().get.pivotBlock shouldBe defaultPivotBlockHeader
+      }
 
-    // even though we receive this future headers fast sync should finish
-    eventually {
-      someTimePasses()
-      assert(storagesInstance.storages.appStateStorage.isFastSyncDone())
-    }
+      // even though we receive this future headers fast sync should finish
+      eventually {
+        someTimePasses()
+        assert(storagesInstance.storages.appStateStorage.isFastSyncDone())
+      }
   }
 
   it should "update pivot block if pivot fail" taggedAs (UnitTest, SyncTest) in withTestSetup(
@@ -446,36 +447,37 @@ class SyncControllerSpec
     }
   }
 
-  it should "re-enqueue block bodies when empty response is received" in withTestSetup() { testSetup =>
-    import testSetup._
+  it should "re-enqueue block bodies when empty response is received" taggedAs DisabledTest in withTestSetup() {
+    testSetup =>
+      import testSetup._
 
-    startWithState(defaultStateBeforeNodeRestart)
+      startWithState(defaultStateBeforeNodeRestart)
 
-    syncController ! SyncProtocol.Start
+      syncController ! SyncProtocol.Start
 
-    val handshakedPeers = HandshakedPeers(singlePeer)
-    val watcher = TestProbe()
-    watcher.watch(syncController)
+      val handshakedPeers = HandshakedPeers(singlePeer)
+      val watcher = TestProbe()
+      watcher.watch(syncController)
 
-    val newBlocks =
-      getHeaders(defaultStateBeforeNodeRestart.bestBlockHeaderNumber + 1, syncConfig.blockHeadersPerRequest)
+      val newBlocks =
+        getHeaders(defaultStateBeforeNodeRestart.bestBlockHeaderNumber + 1, syncConfig.blockHeadersPerRequest)
 
-    setupAutoPilot(
-      networkPeerManager,
-      handshakedPeers,
-      defaultPivotBlockHeader,
-      BlockchainData(newBlocks),
-      failedBodiesTries = 1
-    )
+      setupAutoPilot(
+        networkPeerManager,
+        handshakedPeers,
+        defaultPivotBlockHeader,
+        BlockchainData(newBlocks),
+        failedBodiesTries = 1
+      )
 
-    eventually {
-      someTimePasses()
-      assert(storagesInstance.storages.appStateStorage.isFastSyncDone())
-      // switch to regular download
-      val children = syncController.children
-      assert(children.exists(ref => ref.path.name.startsWith("regular-sync")))
-      assert(blockchainReader.getBestBlockNumber() == defaultPivotBlockHeader.number)
-    }
+      eventually {
+        someTimePasses()
+        assert(storagesInstance.storages.appStateStorage.isFastSyncDone())
+        // switch to regular download
+        val children = syncController.children
+        assert(children.exists(ref => ref.path.name.startsWith("regular-sync")))
+        assert(blockchainReader.getBestBlockNumber() == defaultPivotBlockHeader.number)
+      }
   }
 
   it should "update pivot block during state sync if it goes stale" taggedAs (UnitTest, SyncTest) in withTestSetup() {

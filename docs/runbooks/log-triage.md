@@ -685,7 +685,6 @@ When investigating an issue:
 - [Peering](peering.md) - Network and peer-related logs
 - [Disk Management](disk-management.md) - Database and storage logs
 - [Known Issues](known-issues.md) - Common log patterns and solutions
-- [Investigation Reports](../investigation/README.md) - Detailed analysis of production incidents and operational issues
 
 ### Example Analysis Reports
 
