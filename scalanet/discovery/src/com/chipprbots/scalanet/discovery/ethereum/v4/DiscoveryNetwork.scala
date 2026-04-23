@@ -105,7 +105,7 @@ object DiscoveryNetwork {
                   .recover {
                     case ex: TimeoutException =>
                     case NonFatal(ex) =>
-                      logger.error(s"Error handling channel from ${channel.to}: $ex")
+                      logger.warn(s"[Discovery] Malformed packet from ${channel.to}: ${ex.getClass.getSimpleName}: ${ex.getMessage}")
                   }
                   .start.void
 

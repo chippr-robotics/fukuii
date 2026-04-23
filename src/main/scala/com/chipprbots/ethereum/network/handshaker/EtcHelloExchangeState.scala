@@ -88,7 +88,7 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
         )
         EthNodeStatus64ExchangeState(handshakerConfiguration, negotiated, supportsSnap, peerCapabilities)
       case _ =>
-        log.warn(
+        log.debug(
           "PROTOCOL_NEGOTIATION_FAILED: clientId={}, peerCaps=[{}], ourCaps=[{}], reason=IncompatibleP2pProtocolVersion",
           hello.clientId,
           peerCapabilities.mkString(", "),
