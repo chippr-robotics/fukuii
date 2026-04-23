@@ -54,6 +54,7 @@ trait TestSyncConfig extends SyncConfigBuilder with com.chipprbots.ethereum.Test
     maxRetryDelay = 30.seconds,
     maxBodyFetchRetries = 10,
     maxSnapFastCycleTransitions = 3,
+    snapPeerWaitTimeoutSeconds = 120,
     useBootstrapCheckpoints = false,
     bootstrapCheckpoints = Seq.empty
   )

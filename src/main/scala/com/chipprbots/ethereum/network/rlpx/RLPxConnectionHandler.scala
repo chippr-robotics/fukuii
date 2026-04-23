@@ -365,8 +365,8 @@ class RLPxConnectionHandler(
               processHandshakeResult(result, remainingData)
 
             case Failure(ex) =>
-              log.error(
-                "[HIVE-DEBUG] Auth handshake FAILED for peer {} - both pre-EIP8 and EIP-8 decode failed: {}",
+              log.debug(
+                "[RLPx] Auth handshake FAILED for peer {} - both pre-EIP8 and EIP-8 decode failed: {}",
                 peerId,
                 ex.getMessage
               )
