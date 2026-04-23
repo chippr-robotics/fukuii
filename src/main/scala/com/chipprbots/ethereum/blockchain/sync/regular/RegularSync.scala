@@ -84,6 +84,11 @@ class RegularSync(
       "block-importer"
     )
 
+  // Catch-up milestone tracking (not part of ProgressState — logging concern only)
+  private val CatchUpMilestoneInterval: Long = 100_000L
+  private var lastMilestoneBlock: BigInt = 0
+  private var loggedFollowMode: Boolean = false
+
   val printFetcherSchedule: Cancellable =
     scheduler.scheduleWithFixedDelay(
       syncConfig.printStatusInterval,
@@ -98,7 +103,10 @@ class RegularSync(
 
   def running(progressState: ProgressState): Receive = {
     case SyncProtocol.Start =>
-      log.info("Starting regular sync")
+      log.info("=" * 70)
+      log.info(s"=== Fukuii Regular Sync — ${java.time.Instant.now()} ===")
+      log.info(s"=== Starting from block ${progressState.currentBlock} → following chain head ===")
+      log.info("=" * 70)
       importer ! BlockImporter.Start
     case SyncProtocol.MinedBlock(block) =>
       log.info(s"Block mined [number = {}, hash = {}]", block.number, block.header.hashAsHexString)
@@ -126,6 +134,23 @@ class RegularSync(
       RegularSyncMetrics.incrementBlocksImported()
       if (internally) {
         fetcher ! InternalLastBlockImport(blockNumber)
+      }
+      // Catch-up mode: log every CatchUpMilestoneInterval blocks
+      val bestKnown = progressState.bestKnownNetworkBlock
+      val isCatchingUp = bestKnown > 0 && bestKnown - blockNumber > 1000
+      if (isCatchingUp) {
+        if ((blockNumber - lastMilestoneBlock) >= CatchUpMilestoneInterval || lastMilestoneBlock == 0) {
+          val blocksRemaining = bestKnown - blockNumber
+          log.info(
+            s"[REGULAR] Catch-up progress: block $blockNumber/$bestKnown " +
+              s"(${(blockNumber * 100 / bestKnown).toInt}%), $blocksRemaining blocks remaining"
+          )
+          lastMilestoneBlock = blockNumber
+          loggedFollowMode = false
+        }
+      } else if (!loggedFollowMode && bestKnown > 0) {
+        log.info(s"[REGULAR] Reached chain head at block $blockNumber. Switching to follow mode.")
+        loggedFollowMode = true
       }
       context.become(running(newState))
   }

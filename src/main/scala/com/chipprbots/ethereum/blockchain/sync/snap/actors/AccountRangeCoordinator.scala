@@ -199,6 +199,12 @@ class AccountRangeCoordinator(
   private def inFlightForPeer(peer: Peer): Int =
     activeTasks.values.count(_._3.id == peer.id)
 
+  // Tiered milestone progress: 1% steps in first/last 10%, 5% steps through the middle.
+  // 0% logged at start, 100% logged at completion (explicit boundaries).
+  private val AccountMilestones: Seq[Int] =
+    Seq(0) ++ (1 to 10) ++ (15 to 90 by 5) ++ (91 to 99) ++ Seq(100)
+  private var lastLoggedAccountMilestonePct: Int = -1
+
   // Statistics
   private var accountsDownloaded: Long = 0
   private var bytesDownloaded: Long = 0
@@ -308,6 +314,8 @@ class AccountRangeCoordinator(
     } else {
       log.info(s"AccountRangeCoordinator starting with $concurrency workers")
     }
+    log.info(s"[ACCOUNT] 0% — starting account download across $concurrency parallel ranges")
+    lastLoggedAccountMilestonePct = 0
     // If all tasks were already completed, report completion immediately
     if (pendingTasks.isEmpty && activeTasks.isEmpty) {
       import context.dispatcher
@@ -360,7 +368,7 @@ class AccountRangeCoordinator(
     case AccountRangeResponseMsg(response) =>
       activeTasks.get(response.requestId) match {
         case None =>
-          log.debug(s"Received AccountRange response for unknown or completed request ${response.requestId}")
+          log.debug(s"Received AccountRange response for requestId=${response.requestId} (no longer tracked — already completed or timed out). Discarding.")
 
         case Some((_, worker, _)) =>
           // Forward to the specific worker that owns this requestId so it can validate/complete the request.
@@ -457,14 +465,16 @@ class AccountRangeCoordinator(
         snapSyncController ! SNAPSyncController.ProgressAccountEstimate(est)
       }
       if (isComplete) {
-        log.info("Account range sync complete!")
+        log.info("=" * 60)
+        log.info(s"PHASE: Account download complete — $accountsDownloaded accounts")
+        log.info("=" * 60)
 
         // Signal controller IMMEDIATELY so storage+bytecode phases can start in parallel
         // with trie finalization. These phases don't need the finalized account trie —
         // they operate on their own state roots. This saves 50s-25min of serial blocking.
         snapSyncController ! SNAPSyncController.AccountRangeSyncComplete(uniqueCodeHashesCount)
 
-        log.info(s"Starting async trie finalization for $accountsDownloaded accounts...")
+        log.info(s"Computing account trie root hash for $accountsDownloaded accounts (validates proof consistency against pivot state root). Running async to allow storage/bytecode phases to proceed.")
         // Notify controller so progress monitor shows finalization status
         snapSyncController ! SNAPSyncController.ProgressAccountsFinalizingTrie
         // Switch to finalizing state so no message can touch the trie during flush
@@ -761,7 +771,13 @@ class AccountRangeCoordinator(
       .filterNot(isPeerStateless)
       .filterNot(isPeerCoolingDown)
       .toList
-    if (eligiblePeers.isEmpty) return
+    if (eligiblePeers.isEmpty) {
+      log.debug(
+        s"[ACCOUNT-REDISPATCH] No eligible peers — ${knownAvailablePeers.size} known, " +
+          s"${statelessPeers.size} stateless. pending: ${pendingTasks.size}"
+      )
+      return
+    }
 
     for (peer <- eligiblePeers if pendingTasks.nonEmpty)
       dispatchIfPossible(peer)
@@ -792,6 +808,14 @@ class AccountRangeCoordinator(
       // Report incremental progress so the stagnation watchdog sees activity
       accountsDownloaded += chunk.size
       snapSyncController ! SNAPSyncController.ProgressAccountsSynced(chunk.size.toLong)
+
+      // Milestone progress log (1% steps near boundaries, 5% in middle)
+      val totalPct = (consumedKeyspace * 100 / totalKeyspace).toInt
+      val nextMilestone = AccountMilestones.find(m => m > lastLoggedAccountMilestonePct && totalPct >= m)
+      nextMilestone.foreach { m =>
+        log.info(s"[ACCOUNT] $m% — $accountsDownloaded accounts ($m% keyspace consumed)")
+        lastLoggedAccountMilestonePct = m
+      }
 
       // Periodic progress log (every 100K accounts) to show download rate without per-chunk noise
       if (accountsDownloaded - lastProgressLogAt >= ProgressLogInterval) {

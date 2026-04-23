@@ -145,6 +145,7 @@ class SNAPSyncController(
   private var healingRequestTask: Option[Cancellable] = None
   private var storageStagnationRefreshAttempted: Boolean = false
   private var trieWalkInProgress: Boolean = false
+  private var walkPivotRefreshSuppressLogged: Boolean = false // dedup flag: suppress repeated "walk in progress, deferring" messages
   private var consecutiveUnproductiveHealingRounds: Int = 0
   private val maxUnproductiveHealingRounds: Int =
     3 // After 3 rounds of finding same missing nodes with 0 healed, skip to validation
@@ -245,8 +246,11 @@ class SNAPSyncController(
   private var lastBytecodeProgressMs: Long = System.currentTimeMillis()
 
   override def preStart(): Unit = {
-    log.info("SNAP Sync Controller initialized")
+    log.info("=" * 60)
+    log.info("=== Fukuii SNAP Sync ===")
+    log.info("=" * 60)
     progressMonitor.startPeriodicLogging()
+    scheduler.scheduleOnce(60.seconds, self, ActorLivenessProbe)(context.dispatcher)
   }
 
   override def postStop(): Unit = {
@@ -427,8 +431,9 @@ class SNAPSyncController(
       // are ~99.9% valid across pivot changes) and avoids the download-stall-restart loop.
       val now = System.currentTimeMillis()
       if (now - lastPivotRestartMs < MinPivotRestartInterval.toMillis) {
-        log.warning(
-          s"Ignoring PivotStateUnservable due to restart guard " +
+        val elapsed = (now - lastPivotRestartMs) / 1000
+        log.debug(
+          s"Ignoring PivotStateUnservable — rate-limited ${elapsed}s ago " +
             s"(phase=$currentPhase, emptyResponses=$emptyResponses, reason=$reason)"
         )
       } else if (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync) {
@@ -502,6 +507,13 @@ class SNAPSyncController(
       pivotBootstrapRetryTask = Some(
         scheduler.scheduleOnce(60.seconds, self, RetryPivotRefresh)(context.dispatcher)
       )
+
+    case ActorLivenessProbe =>
+      log.info(
+        s"[ACTOR-ALIVE] phase=$currentPhase trieWalkInProgress=$trieWalkInProgress " +
+          s"consecutiveUnproductiveHealingRounds=$consecutiveUnproductiveHealingRounds"
+      )
+      scheduler.scheduleOnce(60.seconds, self, ActorLivenessProbe)(context.dispatcher)
 
     case RetryPivotRefresh =>
       pivotBootstrapRetryTask = None
@@ -664,6 +676,7 @@ class SNAPSyncController(
 
     case TrieWalkResult(missingNodes) if currentPhase == StateHealing =>
       trieWalkInProgress = false
+      walkPivotRefreshSuppressLogged = false // walk finished — allow next stale-pivot log
       if (missingNodes.isEmpty) {
         log.info("Trie walk found no missing nodes — healing complete!")
         consecutiveUnproductiveHealingRounds = 0
@@ -707,9 +720,10 @@ class SNAPSyncController(
             validateState()
           }
         } else {
+          val walkRound = consecutiveUnproductiveHealingRounds
+          val walkLabel = if (walkRound == 0) "initial walk" else s"round $walkRound/$maxUnproductiveHealingRounds"
           log.info(
-            s"Trie walk found ${missingNodes.size} missing nodes — queuing for healing " +
-              s"(round $consecutiveUnproductiveHealingRounds/$maxUnproductiveHealingRounds)"
+            s"Trie walk found ${missingNodes.size} missing nodes — queuing for healing ($walkLabel)"
           )
           trieNodeHealingCoordinator.foreach { coordinator =>
             coordinator ! actors.Messages.QueueMissingNodes(missingNodes)
@@ -726,6 +740,7 @@ class SNAPSyncController(
 
     case TrieWalkFailed(error) if currentPhase == StateHealing =>
       trieWalkInProgress = false
+      walkPivotRefreshSuppressLogged = false
       log.error(s"Trie walk failed: $error. Retrying after delay...")
       scheduler.scheduleOnce(5.seconds) {
         self ! ScheduledTrieWalk
@@ -737,11 +752,21 @@ class SNAPSyncController(
       currentNetworkBestFromSnapPeers().foreach { networkBest =>
         val pivotAge = networkBest - currentPivot
         if (pivotAge > PivotWindowValidity) {
-          log.info(
-            s"[PIVOT-STALENESS] Pivot $currentPivot is $pivotAge blocks behind network head $networkBest " +
-              s"(threshold: $PivotWindowValidity). Refreshing pivot."
-          )
-          refreshPivotInPlace("pivot-staleness-check")
+          if (trieWalkInProgress) {
+            if (!walkPivotRefreshSuppressLogged) {
+              log.debug(
+                s"[PIVOT-STALENESS] Pivot $currentPivot is $pivotAge blocks stale but trie walk is in progress — deferring refresh"
+              )
+              walkPivotRefreshSuppressLogged = true
+            }
+          } else {
+            walkPivotRefreshSuppressLogged = false
+            log.info(
+              s"[PIVOT-STALENESS] Pivot $currentPivot is $pivotAge blocks behind network head $networkBest " +
+                s"(threshold: $PivotWindowValidity). Refreshing pivot."
+            )
+            refreshPivotInPlace("pivot-staleness-check")
+          }
         }
       }
 
@@ -889,6 +914,9 @@ class SNAPSyncController(
       // Besu alignment: healing is always required before SNAP sync is considered complete.
       // The deferred-merkleization path (which skipped healing) has been removed — it caused
       // SnapSyncDone to be persisted before trie nodes were present, breaking regular sync.
+      log.info("=" * 60)
+      log.info("PHASE: State downloads complete — starting healing")
+      log.info("=" * 60)
       if (snapSyncConfig.deferredMerkleization) {
         log.warning(
           "All state downloads complete. deferred-merkleization=true is set but healing is " +
@@ -1148,14 +1176,14 @@ class SNAPSyncController(
 
       (savedPivot, savedRootOpt) match {
         case (Some(pivot), Some(rootBs)) if pivot > 0 =>
-          log.info(s"Recovery: accounts previously completed at pivot $pivot. Checking freshness...")
+          log.info(s"[SNAP-RECOVERY] Accounts previously completed at pivot $pivot. Checking freshness...")
 
           // Check if pivot is still fresh enough
           val networkBest = currentNetworkBestFromSnapPeers().getOrElse(BigInt(0))
           val drift = if (networkBest > 0) (networkBest - pivot).abs else BigInt(0)
           if (networkBest > 0 && drift > snapSyncConfig.maxPivotStalenessBlocks) {
             log.warning(
-              s"Recovery: pivot $pivot drifted $drift blocks from network best $networkBest. " +
+              s"[SNAP-RECOVERY] Pivot $pivot drifted $drift blocks from network best $networkBest. " +
                 "Clearing accounts-complete flag and restarting fresh."
             )
             appStateStorage.putSnapSyncAccountsComplete(false).commit()
@@ -1172,7 +1200,7 @@ class SNAPSyncController(
             lastBytecodeProgressCount = 0
             lastBytecodeProgressMs = System.currentTimeMillis()
 
-            log.info(s"Recovery: resuming bytecodes + storage sync from pivot $pivot (drift=$drift blocks)")
+            log.info(s"[SNAP-RECOVERY] Resuming bytecodes + storage sync from pivot $pivot (drift=$drift blocks)")
 
             // Create bytecode coordinator (will receive NoMore immediately since we have no new accounts)
             val storage = getOrCreateMptStorage(pivot)
@@ -1262,26 +1290,26 @@ class SNAPSyncController(
                     totalTasks
                   }
                   .recover { case ex: Exception =>
-                    log.warning(s"Recovery: failed to stream storage tasks from $filePath: ${ex.getMessage}")
+                    log.warning(s"[SNAP-RECOVERY] Failed to stream storage tasks from $filePath: ${ex.getMessage}")
                     -1
                   }
                   .foreach { count =>
                     if (count >= 0)
-                      log.info(s"Recovery: streamed $count storage tasks from ${filePath}")
+                      log.info(s"[SNAP-RECOVERY] Streamed $count storage tasks from ${filePath}")
                     else
                       log.warning(
-                        s"Recovery: storage file read failed, proceeding without storage tasks from $filePath"
+                        s"[SNAP-RECOVERY] Storage file read failed, proceeding without storage tasks from $filePath"
                       )
                     // Signal no more tasks — sentinel allows completion
                     coordinator ! actors.Messages.NoMoreStorageTasks
                   }
               } else {
-                log.warning(s"Recovery: storage file $filePath not found. Sending NoMore immediately.")
+                log.warning(s"[SNAP-RECOVERY] Storage file $filePath not found. Sending NoMore immediately.")
                 storageRangeCoordinator.foreach(_ ! actors.Messages.NoMoreStorageTasks)
               }
             }
             if (savedStoragePath.isEmpty) {
-              log.warning("Recovery: no storage file path persisted. Sending NoMore immediately.")
+              log.warning("[SNAP-RECOVERY] No storage file path persisted. Sending NoMore immediately.")
               storageRangeCoordinator.foreach(_ ! actors.Messages.NoMoreStorageTasks)
             }
 
@@ -1302,9 +1330,22 @@ class SNAPSyncController(
             return
           }
         case _ =>
-          log.warning("Recovery: accounts-complete flag set but missing pivot/root. Clearing and restarting fresh.")
+          log.warning("[SNAP-RECOVERY] Accounts-complete flag set but missing pivot/root. Clearing and restarting fresh.")
           appStateStorage.putSnapSyncAccountsComplete(false).commit()
       }
+    }
+
+    // [SNAP-STATE] Log persisted state at startup for visibility into previous session progress
+    {
+      val savedPivot = appStateStorage.getSnapSyncPivotBlock()
+      val snapDone = appStateStorage.isSnapSyncDone()
+      val accountsDone = appStateStorage.isSnapSyncAccountsComplete()
+      val bootstrapTarget = appStateStorage.getSnapSyncBootstrapTarget()
+      log.info(
+        s"[SNAP-STATE] DB state at startup: pivot=${savedPivot.getOrElse("none")}, " +
+          s"snapDone=$snapDone, accountsComplete=$accountsDone, " +
+          s"bootstrapTarget=${bootstrapTarget.getOrElse("none")}"
+      )
     }
 
     // Check if there's an interrupted bootstrap to resume
@@ -2080,8 +2121,12 @@ class SNAPSyncController(
           validator.findMissingNodesWithPaths(root)
         }(ec)
         .foreach {
-          case Right(missingNodes) => selfRef ! TrieWalkResult(missingNodes)
-          case Left(error)         => selfRef ! TrieWalkFailed(error)
+          case Right(missingNodes) =>
+            log.info(s"[WALK-FUTURE] Walk threads done: ${missingNodes.size} missing node(s) — sending TrieWalkResult")
+            selfRef ! TrieWalkResult(missingNodes)
+          case Left(error) =>
+            log.error(s"[WALK-FUTURE] Walk threads returned error: $error — sending TrieWalkFailed")
+            selfRef ! TrieWalkFailed(error)
         }(ec)
     }
   }
@@ -2096,6 +2141,9 @@ class SNAPSyncController(
     }
 
     trieWalkInProgress = false // Reset for fresh healing phase
+    log.info("=" * 60)
+    log.info("PHASE: Trie node healing starting")
+    log.info("=" * 60)
     log.info(s"Starting state healing with batch size ${snapSyncConfig.healingBatchSize}")
 
     stateRoot.foreach { root =>
@@ -2710,6 +2758,9 @@ class SNAPSyncController(
           )
           .commit()
 
+        log.info("=" * 60)
+        log.info(s"PHASE: SNAP sync complete at block $pivot")
+        log.info("=" * 60)
         log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.take(8).toHex})")
 
       case None =>
@@ -2887,6 +2938,8 @@ object SNAPSyncController {
   case class PersistHealingQueue(pending: Seq[(Seq[ByteString], ByteString)], force: Boolean = false)
   case object StateValidationComplete
   case object GetProgress
+  // Periodic actor liveness probe — fires every 60s independent of walk state.
+  private case object ActorLivenessProbe
 
   /** Signal from coordinators that the current pivot/stateRoot is likely not serveable by peers.
     *

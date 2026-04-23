@@ -117,6 +117,12 @@ class ByteCodeCoordinator(
   // Statistics
   private var bytecodesDownloaded: Long = 0
   private var bytesDownloaded: Long = 0
+  private var totalCodeHashesQueued: Long = 0
+
+  // Milestone progress tracking
+  private val BytecodeMilestones: Seq[Int] =
+    Seq(0) ++ (1 to 10) ++ (15 to 90 by 5) ++ (91 to 99) ++ Seq(100)
+  private var lastLoggedBytecodeMilestonePct: Int = -1
 
   // Besu-aligned D12: fixed request size, no per-peer adaptive ratcheting.
   private val requestResponseBytes: BigInt = 512 * 1024
@@ -138,7 +144,9 @@ class ByteCodeCoordinator(
 
   override def receive: Receive = {
     case StartByteCodeSync(codeHashes) =>
-      log.info(s"Starting bytecode sync for ${codeHashes.size} unique codeHashes")
+      totalCodeHashesQueued += codeHashes.size
+      log.info(s"[BYTECODE] 0% — starting bytecode sync for ${codeHashes.size} unique codeHashes")
+      lastLoggedBytecodeMilestonePct = 0
 
       val filteredHashes = filterAndDedupeCodeHashes(codeHashes)
       val newTasks = ByteCodeTask.createBatchedTasks(filteredHashes, batchSize)
@@ -147,6 +155,7 @@ class ByteCodeCoordinator(
 
     case AddByteCodeTasks(codeHashes) =>
       receivedCodeHashCount += codeHashes.size // track before dedup to match AccountRangeCoordinator's uniqueCodeHashesCount
+      totalCodeHashesQueued += codeHashes.size
       val filtered = filterAndDedupeCodeHashes(codeHashes)
       if (filtered.nonEmpty) {
         val newTasks = ByteCodeTask.createBatchedTasks(filtered, batchSize)
@@ -176,7 +185,7 @@ class ByteCodeCoordinator(
         )
       }
       log.info(
-        s"No more bytecode tasks expected. Pending: ${pendingTasks.size}, active: ${activeTasks.size}, " +
+        s"[BYTECODE] All code hashes received — pending: ${pendingTasks.size}, active: ${activeTasks.size}, " +
           s"receivedHashes: $receivedCodeHashCount / ${expectedCodeHashes.getOrElse("?")}"
       )
       checkCompletion()
@@ -321,6 +330,12 @@ class ByteCodeCoordinator(
   private def tryRedispatchPendingTasks(): Unit = {
     if (pendingTasks.isEmpty) return
     val eligiblePeers = knownAvailablePeers.filterNot(isPeerCoolingDown).toList
+    if (eligiblePeers.isEmpty) {
+      log.debug(
+        s"[BYTECODE-REDISPATCH] No eligible peers — ${knownAvailablePeers.size} known. pending: ${pendingTasks.size}"
+      )
+      return
+    }
     for (peer <- eligiblePeers if pendingTasks.nonEmpty)
       dispatchIfPossible(peer)
   }
@@ -328,7 +343,7 @@ class ByteCodeCoordinator(
   private def handleByteCodesResponse(response: ByteCodes): Unit = {
     activeTasks.get(response.requestId) match {
       case None =>
-        log.debug(s"Received ByteCodes response for unknown or completed request ${response.requestId}")
+        log.debug(s"Received ByteCodes response for requestId=${response.requestId} (no longer tracked — already completed or timed out). Discarding.")
 
       case Some(active) =>
         val task = active.task
@@ -404,8 +419,8 @@ class ByteCodeCoordinator(
                   }
                   if (exhausted.nonEmpty) {
                     log.warning(
-                      s"Skipping ${exhausted.size} bytecode hashes after $maxFailuresPerHash failures each " +
-                        s"(no peer could serve them). Sample: ${exhausted.take(3).map(_.take(4).toArray.map("%02x".format(_)).mkString).mkString(", ")}"
+                      s"Skipping ${exhausted.size} non-executable bytecode hashes after $maxFailuresPerHash failures each " +
+                        s"(no peer could serve them — likely selfdestruct or empty contracts). Sample: ${exhausted.take(3).map(_.take(4).toArray.map("%02x".format(_)).mkString).mkString(", ")}"
                     )
                     exhausted.foreach(hashFailureCounts.remove)
                   }
@@ -422,6 +437,16 @@ class ByteCodeCoordinator(
                 bytecodesDownloaded += bytecodeCount
                 snapSyncController ! SNAPSyncController.ProgressBytecodesDownloaded(bytecodeCount.toLong)
                 bytesDownloaded += response.codes.map(_.size.toLong).sum
+
+                // Milestone progress (based on noMoreTasksExpected + queued total)
+                if (noMoreTasksExpected && totalCodeHashesQueued > 0) {
+                  val pct = (bytecodesDownloaded * 100 / totalCodeHashesQueued).toInt
+                  val nextMilestone = BytecodeMilestones.find(m => m > lastLoggedBytecodeMilestonePct && pct >= m)
+                  nextMilestone.foreach { m =>
+                    log.info(s"[BYTECODE] $m% — $bytecodesDownloaded/$totalCodeHashesQueued bytecodes downloaded")
+                    lastLoggedBytecodeMilestonePct = m
+                  }
+                }
 
                 // Only mark the task completed if nothing remains; large batches may be partially served due to bytes.
                 task.pending = false

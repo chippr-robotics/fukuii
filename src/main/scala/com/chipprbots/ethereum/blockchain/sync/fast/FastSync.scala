@@ -97,6 +97,9 @@ class FastSync(
   }
 
   def start(): Unit = {
+    log.info("=" * 70)
+    log.info(s"=== Fukuii Fast Sync — ${java.time.Instant.now()} ===")
+    log.info("=" * 70)
     log.info("Trying to start block synchronization (fast mode)")
     fastSyncStateStorage.getSyncState() match {
       case Some(syncState) => startWithState(syncState)
@@ -263,8 +266,8 @@ class FastSync(
         processSyncing()
       case SyncStateSchedulerActor.NetworkIncompatible =>
         log.warning(
-          "State scheduler reports no ETH63-67 peers available (ETH68-only network). " +
-            "Fast sync cannot use GetNodeData. Requesting fallback to SNAP sync."
+          "ETH63/64 GetNodeData unavailable — network appears ETH68-only (no peers serving state trie). " +
+            "Fast sync cannot proceed without state trie access. Falling back to SNAP sync."
         )
         cleanup()
         context.become(idle)
@@ -956,10 +959,9 @@ class FastSync(
         !stateSyncStarted && !syncState.stateSyncFinished && notInTheMiddleOfUpdate &&
         syncState.pivotBlock.stateRoot != ByteString(MerklePatriciaTrie.EmptyRootHash)
       ) {
-        log.info(
-          "Starting state download in parallel with block download for pivot block {}",
-          syncState.pivotBlock.number
-        )
+        log.info("=" * 60)
+        log.info(s"PHASE: Fast Sync state download — pivot ${syncState.pivotBlock.number}, root ${ByteStringUtils.hash2string(syncState.pivotBlock.stateRoot)}")
+        log.info("=" * 60)
         stateSyncStarted = true
         stateSyncRestartRequested = false
         syncStateScheduler ! StartSyncingTo(syncState.pivotBlock.stateRoot, syncState.pivotBlock.number)
@@ -1031,8 +1033,9 @@ class FastSync(
     def finish(): Unit = {
       val totalTime = totalMinutesTaken()
       FastSyncMetrics.setFastSyncTotalTimeGauge(totalTime.toDouble)
-      log.info("Total time taken for FastSync was {} minutes", totalTime)
-      log.info("Block synchronization in fast mode finished, switching to regular mode")
+      log.info("=" * 60)
+      log.info(s"PHASE: Fast Sync complete → Switching to Regular Sync (${totalTime}m elapsed)")
+      log.info("=" * 60)
 
       // We have downloaded to target + fastSyncBlockValidationX, se we must discard those last blocks
       discardLastBlocks(syncState.safeDownloadTarget, syncConfig.fastSyncBlockValidationX - 1)

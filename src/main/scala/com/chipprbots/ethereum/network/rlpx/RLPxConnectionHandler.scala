@@ -323,7 +323,7 @@ class RLPxConnectionHandler(
     }
 
     val handleConnectionTerminated: Receive = { case Terminated(`connection`) =>
-      log.debug("[Stopping Connection] TCP connection actor terminated for peer {}", peerId)
+      log.info("[RLPx] TCP actor terminated for peer {}", peerId)
       context.parent ! ConnectionFailed
       gracefulStop()
     }
@@ -448,8 +448,8 @@ class RLPxConnectionHandler(
     }
 
     def handleTimeout: Receive = { case AuthHandshakeTimeout =>
-      log.error(
-        "[Stopping Connection] Auth handshake timeout for peer {} after {}ms",
+      log.warning(
+        "[RLPx] Auth handshake timeout for peer {} after {}ms",
         peerId,
         rlpxConfiguration.waitForHandshakeTimeout.toMillis
       )
@@ -470,7 +470,7 @@ class RLPxConnectionHandler(
           extractHello(extractor(secrets), remainingData)
 
         case AuthHandshakeError =>
-          log.error("[Stopping Connection] Auth handshake FAILED for peer {}", peerId)
+          log.warning("[RLPx] Auth handshake FAILED for peer {} — likely incompatible RLPx version or wrong node key", peerId)
           context.parent ! ConnectionFailed
           gracefulStop()
       }
@@ -550,8 +550,8 @@ class RLPxConnectionHandler(
                 )
               )
             case None =>
-              log.error(
-                "[Stopping Connection] Unable to negotiate protocol with peer {} — peerCaps=[{}], ourCaps=[{}]",
+              log.warning(
+                "[RLPx] No common protocol with peer {} — capability negotiation failed (peerCaps=[{}], ourCaps=[{}])",
                 peerId,
                 hello.capabilities.mkString(", "),
                 capabilities.mkString(", ")
@@ -858,10 +858,11 @@ class RLPxConnectionHandler(
 
     def handleConnectionClosed: Receive = { case msg: ConnectionClosed =>
       if (msg.isPeerClosed) {
-        log.debug("[Stopping Connection] Connection with {} closed by peer", peerId)
-      }
-      if (msg.isErrorClosed) {
-        log.debug("[Stopping Connection] Connection with {} closed because of error {}", peerId, msg.getErrorCause)
+        log.info("[RLPx] Peer {} closed connection (peer-initiated)", peerId)
+      } else if (msg.isErrorClosed) {
+        log.warning("[RLPx] Connection with {} closed due to error: {}", peerId, msg.getErrorCause)
+      } else {
+        log.info("[RLPx] Connection with {} closed ({})", peerId, msg.getClass.getSimpleName)
       }
 
       gracefulStop()
