@@ -17,7 +17,7 @@ import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor._
-import com.chipprbots.ethereum.network.PeerActor.SendMessage
+import com.chipprbots.ethereum.network.PeerManagerActor.{SendMessage => PeerMgrSendMessage}
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerHandshakeSuccessful
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
@@ -51,7 +51,8 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
       peer1.id
     )
 
-    val response = peer1Probe.expectMsgType[SendMessage](5.seconds)
+    val response = peerManager.expectMsgType[PeerMgrSendMessage](5.seconds)
+    response.peerId shouldBe peer1.id
     val byteCodes = response.message.asInstanceOf[MessageSerializableImplicit[ByteCodes]].msg
     byteCodes.requestId shouldBe BigInt(1)
     byteCodes.codes should have size 2
@@ -71,7 +72,7 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
       peer1.id
     )
 
-    val response = peer1Probe.expectMsgType[SendMessage](5.seconds)
+    val response = peerManager.expectMsgType[PeerMgrSendMessage](5.seconds)
     val byteCodes = response.message.asInstanceOf[MessageSerializableImplicit[ByteCodes]].msg
     byteCodes.codes should have size 1
     byteCodes.codes.head shouldBe code1
@@ -97,7 +98,7 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
       peer1.id
     )
 
-    val response = peer1Probe.expectMsgType[SendMessage](5.seconds)
+    val response = peerManager.expectMsgType[PeerMgrSendMessage](5.seconds)
     val byteCodes = response.message.asInstanceOf[MessageSerializableImplicit[ByteCodes]].msg
     // Handler uses strict < comparison: stops when totalBytes >= limit
     // First code: 500 < 800, add it (total=500). Second: 500 < 800-500=300? No, check is totalBytes(500) < 800, yes. total=1000.
@@ -115,7 +116,7 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
       peer1.id
     )
 
-    val response = peer1Probe.expectMsgType[SendMessage](5.seconds)
+    val response = peerManager.expectMsgType[PeerMgrSendMessage](5.seconds)
     val byteCodes = response.message.asInstanceOf[MessageSerializableImplicit[ByteCodes]].msg
     byteCodes.codes shouldBe empty
   }
@@ -138,7 +139,7 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
       peer1.id
     )
 
-    val response = peer1Probe.expectMsgType[SendMessage](5.seconds)
+    val response = peerManager.expectMsgType[PeerMgrSendMessage](5.seconds)
     val accountRange = response.message.asInstanceOf[MessageSerializableImplicit[AccountRange]].msg
     accountRange.requestId shouldBe BigInt(10)
     accountRange.accounts shouldBe empty
@@ -160,7 +161,7 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
       peer1.id
     )
 
-    val response = peer1Probe.expectMsgType[SendMessage](5.seconds)
+    val response = peerManager.expectMsgType[PeerMgrSendMessage](5.seconds)
     val accountRange = response.message.asInstanceOf[MessageSerializableImplicit[AccountRange]].msg
     accountRange.accounts shouldBe empty
   }
@@ -185,7 +186,7 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
       peer1.id
     )
 
-    val response = peer1Probe.expectMsgType[SendMessage](5.seconds)
+    val response = peerManager.expectMsgType[PeerMgrSendMessage](5.seconds)
     val storageRanges = response.message.asInstanceOf[MessageSerializableImplicit[StorageRanges]].msg
     storageRanges.requestId shouldBe BigInt(20)
     // With non-RocksDB, seekStorageRange returns empty, so each account gets empty Seq
@@ -209,7 +210,7 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
       peer1.id
     )
 
-    val response = peer1Probe.expectMsgType[SendMessage](5.seconds)
+    val response = peerManager.expectMsgType[PeerMgrSendMessage](5.seconds)
     val storageRanges = response.message.asInstanceOf[MessageSerializableImplicit[StorageRanges]].msg
     storageRanges.slots shouldBe empty
   }
@@ -230,7 +231,7 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
       peer1.id
     )
 
-    val response = peer1Probe.expectMsgType[SendMessage](5.seconds)
+    val response = peerManager.expectMsgType[PeerMgrSendMessage](5.seconds)
     val trieNodes = response.message.asInstanceOf[MessageSerializableImplicit[TrieNodes]].msg
     trieNodes.requestId shouldBe BigInt(30)
     trieNodes.nodes shouldBe empty
@@ -247,7 +248,7 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
       peer1.id
     )
 
-    val response = peer1Probe.expectMsgType[SendMessage](5.seconds)
+    val response = peerManager.expectMsgType[PeerMgrSendMessage](5.seconds)
     val trieNodes = response.message.asInstanceOf[MessageSerializableImplicit[TrieNodes]].msg
     trieNodes.nodes shouldBe empty
   }
@@ -263,7 +264,7 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
       peer1.id
     )
 
-    val response = peer1Probe.expectMsgType[SendMessage](5.seconds)
+    val response = peerManager.expectMsgType[PeerMgrSendMessage](5.seconds)
     val trieNodes = response.message.asInstanceOf[MessageSerializableImplicit[TrieNodes]].msg
     trieNodes.nodes shouldBe empty
   }
@@ -322,8 +323,21 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
     val peer1: Peer =
       Peer(PeerId("peer1"), new InetSocketAddress("127.0.0.1", 1), peer1Probe.ref, false, nodeId = Some(fakeNodeId))
 
-    // Register peer
+    // Register peer: consume global SNAP subscribe from constructor, then per-peer subscriptions
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+    peerEventBus.expectMsg(
+      Subscribe(
+        MessageClassifier(
+          Set(
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccountRangeCode,
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetStorageRangesCode,
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetTrieNodesCode,
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode
+          ),
+          PeerSelector.AllPeers
+        )
+      )
+    )
     setupPeer(peer1, peer1Probe, peer1Info)
 
     def setupPeer(peer: Peer, peerProbe: TestProbe, peerInfo: PeerInfo): Unit = {
@@ -347,12 +361,6 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
             ),
             PeerSelector.WithId(peer.id)
           )
-        )
-      )
-      peerProbe.expectMsg(
-        PeerActor.SendMessage(
-          com.chipprbots.ethereum.network.p2p.messages.ETH62
-            .GetBlockHeaders(Right(peerInfo.remoteStatus.bestHash), 1, 0, false)
         )
       )
     }
@@ -404,8 +412,21 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
     val peer1: Peer =
       Peer(PeerId("peer1"), new InetSocketAddress("127.0.0.1", 1), peer1Probe.ref, false, nodeId = Some(fakeNodeId))
 
-    // Register peer
+    // Register peer: consume global SNAP subscribe from constructor, then per-peer subscriptions
     peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+    peerEventBus.expectMsg(
+      Subscribe(
+        MessageClassifier(
+          Set(
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccountRangeCode,
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetStorageRangesCode,
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetTrieNodesCode,
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode
+          ),
+          PeerSelector.AllPeers
+        )
+      )
+    )
     peersInfoHolder ! PeerHandshakeSuccessful(peer1, peer1Info)
     peerEventBus.expectMsg(Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer1.id))))
     peerEventBus.expectMsg(
@@ -426,12 +447,6 @@ class SNAPServerHandlerSpec extends AnyFlatSpec with Matchers {
           ),
           PeerSelector.WithId(peer1.id)
         )
-      )
-    )
-    peer1Probe.expectMsg(
-      PeerActor.SendMessage(
-        com.chipprbots.ethereum.network.p2p.messages.ETH62
-          .GetBlockHeaders(Right(peer1Info.remoteStatus.bestHash), 1, 0, false)
       )
     )
   }

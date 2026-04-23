@@ -11,11 +11,9 @@ import com.chipprbots.ethereum.testing.Tags._
 /** EIP-7934: Verify block RLP size cap validation. */
 class BlockRLPSizeCapSpec extends AnyFlatSpec with Matchers {
 
-  // EIP-7934 final: MAX_RLP_BLOCK_SIZE = 10 MiB exact. An earlier draft had
-  // "10 MiB − 2 MiB headroom" (= 8 MiB) which is what this assertion originally
-  // encoded. The spec settled on a clean 10 MiB cap, so we match that.
-  "BlockRLPSizeCap constant" should "be 10485760 (10 MiB per EIP-7934)" taggedAs (OlympiaTest, ConsensusTest) in {
-    StdBlockValidator.BlockRLPSizeCap shouldBe 10485760L
+  // ETC adapts the Ethereum 10 MiB cap (EIP-7934) down to 8 MiB to match ETC's lower gas limits.
+  "BlockRLPSizeCap constant" should "be 8388608 (8 MiB, ETC adaptation of EIP-7934)" taggedAs (OlympiaTest, ConsensusTest) in {
+    StdBlockValidator.BlockRLPSizeCap shouldBe 8_388_608L
   }
 
   "validateHeaderAndBody" should "pass for normal blocks" taggedAs (OlympiaTest, ConsensusTest) in {

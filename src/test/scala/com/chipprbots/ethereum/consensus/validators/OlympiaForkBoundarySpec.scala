@@ -66,6 +66,7 @@ class OlympiaForkBoundarySpec extends AnyFlatSpec with Matchers {
   )
 
   private val GasLimit: BigInt = 8000000
+  private val ForkGasLimit: BigInt = GasLimit * 2 // EIP-1559 activation: effectiveParentLimit = parent * 2
   private val GasUsed: BigInt = 4000000 // 50% of gas limit = exactly at target
 
   // Pre-Olympia parent (block N-2): no baseFee, HefEmpty
@@ -150,8 +151,8 @@ class OlympiaForkBoundarySpec extends AnyFlatSpec with Matchers {
     val lastPreOlympia = makeChild(preOlympiaParent)
     lastPreOlympia.number shouldBe OlympiaBlock - 1
 
-    // Fork block N must have baseFee = InitialBaseFee (1 gwei)
-    val forkBlock = makeChild(lastPreOlympia, baseFee = Some(BaseFeeCalculator.InitialBaseFee))
+    // Fork block N must have baseFee = InitialBaseFee (1 gwei) and gasLimit = 2× parent (EIP-1559 transition)
+    val forkBlock = makeChild(lastPreOlympia, baseFee = Some(BaseFeeCalculator.InitialBaseFee), gasLimit = ForkGasLimit)
     forkBlock.number shouldBe OlympiaBlock
 
     validate(forkBlock, lastPreOlympia) shouldBe Right(BlockHeaderValid)
@@ -178,7 +179,7 @@ class OlympiaForkBoundarySpec extends AnyFlatSpec with Matchers {
   ) in {
     val lastPreOlympia = makeChild(preOlympiaParent)
     // Wrong baseFee: 2 gwei instead of 1 gwei
-    val invalidForkBlock = makeChild(lastPreOlympia, baseFee = Some(2000000000))
+    val invalidForkBlock = makeChild(lastPreOlympia, baseFee = Some(2000000000), gasLimit = ForkGasLimit)
     invalidForkBlock.number shouldBe OlympiaBlock
 
     val result = validate(invalidForkBlock, lastPreOlympia)

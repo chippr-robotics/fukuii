@@ -128,7 +128,7 @@ class JsonRpcControllerPersonalSpec
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("personal_unlockAccount", params)
     val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
 
-    response should haveError(JsonRpcError(-32602, "invalid argument: hex string without 0x prefix", None))
+    response should haveError(JsonRpcError(-32602, "Invalid method parameters", None))
 
     val dur2 = Long.MaxValue
     val params2: List[JValue] = JString(address.toString) :: JString(pass) :: JInt(dur2) :: Nil

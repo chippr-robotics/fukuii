@@ -65,6 +65,7 @@ class AdversarialForkBoundarySpec extends AnyFlatSpec with Matchers {
   )
 
   private val GasLimit: BigInt = 8000000
+  private val ForkGasLimit: BigInt = GasLimit * 2 // EIP-1559 activation: effectiveParentLimit = parent * 2
   private val GasUsed: BigInt = 4000000
 
   private val preOlympiaParent = BlockHeader(
@@ -152,7 +153,7 @@ class AdversarialForkBoundarySpec extends AnyFlatSpec with Matchers {
   ) in {
     // Adversary sends fork block with extremely high baseFee to manipulate gas pricing
     val lastPreOlympia = makeChild(preOlympiaParent)
-    val adversarialBlock = makeChild(lastPreOlympia, baseFee = Some(BigInt("1000000000000000000"))) // 1 ETH
+    val adversarialBlock = makeChild(lastPreOlympia, baseFee = Some(BigInt("1000000000000000000")), gasLimit = ForkGasLimit) // 1 ETH
     adversarialBlock.number shouldBe OlympiaBlock
 
     val result = validate(adversarialBlock, lastPreOlympia)
@@ -186,7 +187,7 @@ class AdversarialForkBoundarySpec extends AnyFlatSpec with Matchers {
     // Adversary creates a consistent-looking chain but with wrong initial baseFee
     val lastPreOlympia = makeChild(preOlympiaParent)
     val wrongInitialFee = BaseFeeCalculator.InitialBaseFee * 2
-    val fakeForkBlock = makeChild(lastPreOlympia, baseFee = Some(wrongInitialFee))
+    val fakeForkBlock = makeChild(lastPreOlympia, baseFee = Some(wrongInitialFee), gasLimit = ForkGasLimit)
 
     // Fork block itself is rejected
     validate(fakeForkBlock, lastPreOlympia).isLeft shouldBe true
@@ -304,7 +305,7 @@ class AdversarialForkBoundarySpec extends AnyFlatSpec with Matchers {
     err1.toString should include("HeaderExtraFieldsError")
 
     // Case 2: Fork block with wrong baseFee → HeaderBaseFeeError (toString: INVALID_BASE_FEE_PER_GAS)
-    val wrongBaseFee = makeChild(lastPreOlympia, baseFee = Some(999))
+    val wrongBaseFee = makeChild(lastPreOlympia, baseFee = Some(999), gasLimit = ForkGasLimit)
     val err2 = validate(wrongBaseFee, lastPreOlympia).left.getOrElse(null)
     err2.toString should include("INVALID_BASE_FEE_PER_GAS")
   }
