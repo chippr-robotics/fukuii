@@ -328,7 +328,9 @@ class ByteCodeCoordinator(
 
             // Spec violation or malicious peer - back off harder than empty responses.
             recordPeerCooldown(peer, cooldownConfig.baseInvalid, s"invalid ByteCodes: $error")
-            adjustResponseBytesTargetOnFailure(peer, s"invalid response: $error")
+            // Besu-aligned D12: no adaptive byte budget ratcheting.
+            // BUG-BC1: forward to worker so it can cancel the 30s timeout and return to idle.
+            worker ! ByteCodesResponseMsg(response)
             markWorkerIdle(worker)
             checkCompletion()
 
@@ -344,7 +346,9 @@ class ByteCodeCoordinator(
                 // Storage failure isn't necessarily the peer's fault, but to be a good neighbor
                 // (and avoid tight loops), briefly cool down this peer.
                 recordPeerCooldown(peer, cooldownConfig.baseTimeout, s"local store failed: $error")
-                adjustResponseBytesTargetOnFailure(peer, s"local store failed: $error")
+                // Besu-aligned D12: no adaptive byte budget ratcheting.
+                // BUG-BC1: forward to worker so it can cancel the 30s timeout and return to idle.
+                worker ! ByteCodesResponseMsg(response)
                 markWorkerIdle(worker)
                 checkCompletion()
 
@@ -409,6 +413,8 @@ class ByteCodeCoordinator(
                 }
 
                 activeTasks.remove(response.requestId)
+                // BUG-BC1: forward to worker so it can cancel the 30s timeout and return to idle.
+                worker ! ByteCodesResponseMsg(response)
                 markWorkerIdle(worker)
 
                 log.info(
