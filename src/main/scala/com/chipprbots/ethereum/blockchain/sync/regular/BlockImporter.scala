@@ -125,6 +125,22 @@ class BlockImporter(
   private def resolvingMissingNode(blocksToRetry: NonEmptyList[Block], blockImportType: BlockImportType)(
       state: ImporterState
   ): Receive = {
+    case BlockFetcher.FetchedStateNode(nodeData) if nodeData.values.isEmpty =>
+      // StateNodeFetcher exhausted all retries (Besu: MaxRetriesReachedException). Signal clean
+      // skip rather than looping forever — invalidate the block so the fetcher moves past it.
+      log.error(
+        "State node recovery failed after max retries for block {} — skipping block",
+        blocksToRetry.head.number
+      )
+      fetcher ! BlockFetcher.InvalidateBlocksFrom(
+        blocksToRetry.head.number,
+        "state node unrecoverable after max retries",
+        shouldBlacklist = false
+      )
+      context.setReceiveTimeout(syncConfig.syncRetryInterval)
+      self ! PickBlocks
+      context.become(running(state))
+
     case BlockFetcher.FetchedStateNode(nodeData) =>
       val node = nodeData.values.head
       val hash = kec256(node)
@@ -211,15 +227,17 @@ class BlockImporter(
                       log.warning("Failed to get parent state root during node recovery: {}", ex.getMessage); None
                   }
                 val accountHash = kec256(e.accountAddress)
-                val paths: Option[Seq[Seq[ByteString]]] = e.location.map { loc =>
-                  Seq(Seq(loc))
-                }.orElse {
-                  // Location unavailable (pre-location node) — request at nibble prefix depths 1-16.
-                  val nibbles = accountHash.toArray.flatMap(b => Array(((b >> 4) & 0xf).toByte, (b & 0xf).toByte))
-                  Some((1 to 16).map { depth =>
-                    Seq(ByteString(HexPrefix.encode(nibbles.take(depth), isLeaf = false)))
-                  })
-                }
+                val paths: Option[Seq[Seq[ByteString]]] = e.location
+                  .map { loc =>
+                    Seq(Seq(loc))
+                  }
+                  .orElse {
+                    // Location unavailable (pre-location node) — request at nibble prefix depths 1-16.
+                    val nibbles = accountHash.toArray.flatMap(b => Array(((b >> 4) & 0xf).toByte, (b & 0xf).toByte))
+                    Some((1 to 16).map { depth =>
+                      Seq(ByteString(HexPrefix.encode(nibbles.take(depth), isLeaf = false)))
+                    })
+                  }
                 log.info(
                   "Missing account trie node {} for account {} during import of block {}, pathFound={}",
                   ByteStringUtils.hash2string(e.hash),
@@ -240,12 +258,14 @@ class BlockImporter(
                       log.warning("Failed to get parent state root during node recovery: {}", ex.getMessage); None
                   }
                 val accountHash = kec256(e.accountAddress)
-                val paths: Option[Seq[Seq[ByteString]]] = e.location.map { loc =>
-                  Seq(Seq(accountHash, loc))
-                }.orElse {
-                  val emptyStoragePath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-                  Some(Seq(Seq(accountHash, emptyStoragePath)))
-                }
+                val paths: Option[Seq[Seq[ByteString]]] = e.location
+                  .map { loc =>
+                    Seq(Seq(accountHash, loc))
+                  }
+                  .orElse {
+                    val emptyStoragePath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+                    Some(Seq(Seq(accountHash, emptyStoragePath)))
+                  }
                 log.info(
                   "Missing storage node {} for account {} during import of block {}, pathFound={}",
                   ByteStringUtils.hash2string(e.hash),
@@ -508,8 +528,11 @@ class BlockImporter(
       context.setReceiveTimeout(syncConfig.syncRetryInterval)
       running
     case ResolvingMissingNode(blocksToRetry) =>
-      // Give ample time for the SNAP GetTrieNodes fetch to complete
-      context.setReceiveTimeout(30.seconds)
+      // Allow up to 5 minutes for StateNodeFetcher to exhaust its 4 retries at 5s backoff each.
+      // 30s was too short — it triggered ReceiveTimeout before retries completed, causing
+      // importBlocks to re-run, re-detect the missing node, and send a new FetchStateNode
+      // while the old pipeToSelf callbacks were still in-flight (request multiplication).
+      context.setReceiveTimeout(5.minutes)
       resolvingMissingNode(blocksToRetry, blockImportType)
     case ResolvingBranch(from) =>
       context.setReceiveTimeout(syncConfig.syncRetryInterval)
