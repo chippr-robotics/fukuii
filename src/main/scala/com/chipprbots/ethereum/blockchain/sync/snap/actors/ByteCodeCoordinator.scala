@@ -56,6 +56,7 @@ class ByteCodeCoordinator(
 
   private val peerFailureCounts = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
   private val peerCooldownUntilMillis = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Long]
+  private val knownAvailablePeers = mutable.Set[Peer]()
 
   private def nowMillis: Long = System.currentTimeMillis()
 
@@ -184,21 +185,25 @@ class ByteCodeCoordinator(
       log.info("Pivot refreshed — clearing bytecode peer cooldowns")
       peerFailureCounts.clear()
       peerCooldownUntilMillis.clear()
-      peerResponseBytesTarget.clear()
+      knownAvailablePeers.clear()
 
     case PeerAvailable(peer) =>
+      val evicted0 = knownAvailablePeers.filter(_.remoteAddress == peer.remoteAddress)
+      knownAvailablePeers --= evicted0
+      knownAvailablePeers += peer
       if (isPeerCoolingDown(peer)) {
         log.debug(s"Ignoring PeerAvailable(${peer.id.value}) due to cooldown")
       } else {
-        // Dispatch tasks to available peer
         dispatchIfPossible(peer)
       }
 
     case ByteCodePeerAvailable(peer) =>
+      val evicted1 = knownAvailablePeers.filter(_.remoteAddress == peer.remoteAddress)
+      knownAvailablePeers --= evicted1
+      knownAvailablePeers += peer
       if (isPeerCoolingDown(peer)) {
         log.debug(s"Ignoring ByteCodePeerAvailable(${peer.id.value}) due to cooldown")
       } else {
-        // Same as PeerAvailable - dispatch tasks to available peer
         dispatchIfPossible(peer)
       }
 
@@ -299,8 +304,8 @@ class ByteCodeCoordinator(
     */
   private def tryRedispatchPendingTasks(): Unit = {
     if (pendingTasks.isEmpty) return
-    val knownPeers = activeTasks.values.map(_.peer).toSet
-    for (peer <- knownPeers if pendingTasks.nonEmpty && !isPeerCoolingDown(peer))
+    val eligiblePeers = knownAvailablePeers.filterNot(isPeerCoolingDown).toList
+    for (peer <- eligiblePeers if pendingTasks.nonEmpty)
       dispatchIfPossible(peer)
   }
 
