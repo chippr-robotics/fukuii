@@ -262,6 +262,10 @@ class StorageRangeCoordinator(
   // Geth-aligned: coordinators run from start, tasks arrive inline during account download.
   private var noMoreTasksExpected: Boolean = false
 
+  // Large storage pipeline: maximum number of parallel sub-ranges to split a continuation into.
+  // Besu: RangeManager.generateRanges() uses a similar approach. Capped at 8 to avoid explosion.
+  private val MaxLargeStorageSplits: Int = 8
+
   // Statistics
   private var slotsDownloaded: Long = 0
   private var bytesDownloaded: Long = 0
@@ -982,9 +986,26 @@ class StorageRangeCoordinator(
 
             if (needsContinuation) {
               val lastSlot = accountSlots.last._1
-              val continuationTask = StorageTask.createContinuation(task, lastSlot)
-              this.tasks.enqueue(continuationTask)
-              log.debug(s"Created continuation task for account ${task.accountString} (partial range, proof present)")
+              // fetchLargeStorageDataPipeline: split the remaining range into parallel sub-ranges.
+              // Besu: RangeManager.generateRanges(missingRightElement, endKeyHash, nbRanges).
+              // More sub-ranges → more peer parallelism → prevents tail-stuck on large-storage contracts.
+              val remainingStart = StorageTask.incrementHash32Public(lastSlot)
+              val remainingEnd = task.last
+              val numSplits = math.max(1, math.min(activePeerCount(), MaxLargeStorageSplits))
+              val subRanges = splitHashRange(remainingStart, remainingEnd, numSplits)
+              subRanges.foreach { case (subStart, subEnd) =>
+                // Create fresh task (don't copy runtime state — pending/done/slots/proof must start clean)
+                this.tasks.enqueue(StorageTask(task.accountHash, task.storageRoot, subStart, subEnd))
+              }
+              if (numSplits > 1) {
+                log.info(
+                  s"LARGE_STORAGE: split remaining range into $numSplits sub-ranges for account ${task.accountString}"
+                )
+              } else {
+                log.debug(
+                  s"Created continuation task for account ${task.accountString} (partial range, proof present)"
+                )
+              }
 
               // Per-account memory limit: flush large accounts incrementally
               maybeFlushLargeAccount(task.accountHash)
@@ -1122,6 +1143,51 @@ class StorageRangeCoordinator(
     val until = System.currentTimeMillis() + peerCooldownDefault.toMillis
     peerCooldownUntilMs.put(peer.id.value, until)
     log.debug(s"Cooling down peer ${peer.id.value} for ${peerCooldownDefault.toSeconds}s: $reason")
+  }
+
+  /** Count of eligible (non-stateless, non-cooling-down) peers. Used to size parallel sub-range splits. */
+  private def activePeerCount(): Int =
+    knownAvailablePeers.count(p => !isPeerStateless(p) && !isPeerCoolingDown(p)).max(1)
+
+  /** Split the hash range [start, end] into n equal sub-ranges.
+    *
+    * Implements the fetchLargeStorageDataPipeline pattern from Besu (RangeManager.generateRanges): when a storage
+    * response is partial (proof present), split the remaining range into multiple parallel sub-ranges. Each sub-range
+    * can be served by a different peer, breaking the sequential-continuation bottleneck that causes tail-stuck stalls.
+    *
+    * @param start
+    *   32-byte start hash (inclusive)
+    * @param end
+    *   32-byte end hash (inclusive)
+    * @param n
+    *   number of sub-ranges to create
+    * @return
+    *   sequence of (subStart, subEnd) pairs, each pair covering 1/n of the range
+    */
+  private def splitHashRange(start: ByteString, end: ByteString, n: Int): Seq[(ByteString, ByteString)] = {
+    require(start.length == 32 && end.length == 32, "splitHashRange requires 32-byte hashes")
+    val startBig = BigInt(1, start.toArray) // unsigned big-endian
+    val endBig = BigInt(1, end.toArray)
+
+    if (n <= 1 || startBig >= endBig) return Seq((start, end))
+
+    val rangeSize = endBig - startBig + 1
+    val subSize = rangeSize / n
+    if (subSize == 0) return Seq((start, end)) // range too narrow to split meaningfully
+
+    (0 until n).map { i =>
+      val subStart = startBig + BigInt(i) * subSize
+      val subEnd = if (i == n - 1) endBig else startBig + BigInt(i + 1) * subSize - 1
+      (bigIntTo32Bytes(subStart), bigIntTo32Bytes(subEnd))
+    }
+  }
+
+  /** Encode a BigInt as a 32-byte big-endian ByteString (unsigned, left-padded with zeros). */
+  private def bigIntTo32Bytes(n: BigInt): ByteString = {
+    val raw = n.toByteArray // two's complement, may have leading 0x00 sign byte
+    val trimmed = if (raw.head == 0) raw.tail else raw // strip sign byte if present
+    if (trimmed.length == 32) ByteString(trimmed)
+    else ByteString(Array.fill(32 - trimmed.length)(0.toByte) ++ trimmed)
   }
 }
 

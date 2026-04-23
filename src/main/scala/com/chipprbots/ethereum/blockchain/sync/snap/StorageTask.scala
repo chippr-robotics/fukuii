@@ -123,6 +123,9 @@ object StorageTask {
       last = original.last
     )
 
+  /** Exposed for use by StorageRangeCoordinator's large-storage range splitting. */
+  def incrementHash32Public(hash: ByteString): ByteString = incrementHash32(hash)
+
   private def incrementHash32(hash: ByteString): ByteString = {
     require(hash.length == 32, s"Expected 32-byte hash, got ${hash.length}")
     val bytes = hash.toArray

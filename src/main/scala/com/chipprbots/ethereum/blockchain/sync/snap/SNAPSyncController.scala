@@ -475,12 +475,14 @@ class SNAPSyncController(
         storageRangeCoordinator.foreach(_ ! actors.Messages.AddStorageTasks(storageTasks))
       }
 
-    case AccountRangeSyncComplete =>
+    case AccountRangeSyncComplete(totalCodeHashes) =>
       if (accountsComplete) {
         log.info("Ignoring duplicate AccountRangeSyncComplete")
       } else {
         accountsComplete = true
-        log.info("Account range sync complete. Signaling NoMore to bytecode/storage coordinators.")
+        log.info(
+          s"Account range sync complete ($totalCodeHashes unique codeHashes). Signaling NoMore to bytecode/storage coordinators."
+        )
 
         // Persist accounts-complete flag for crash recovery (Step 7)
         appStateStorage.putSnapSyncAccountsComplete(true).commit()
@@ -509,6 +511,9 @@ class SNAPSyncController(
         // Reset consecutive pivot refreshes — account completion IS progress
         consecutivePivotRefreshes = 0
 
+        // Signal expected count BEFORE the sentinel — ByteCodeCoordinator uses this to verify
+        // it has received all AddByteCodeTasks batches before declaring completion (Fix 4 guard).
+        bytecodeCoordinator.foreach(_ ! actors.Messages.SetExpectedByteCodeCount(totalCodeHashes))
         // Signal that no more work will arrive (sentinel pattern — prevents premature completion)
         bytecodeCoordinator.foreach(_ ! actors.Messages.NoMoreByteCodeTasks)
         storageRangeCoordinator.foreach(_ ! actors.Messages.NoMoreStorageTasks)
@@ -2670,7 +2675,14 @@ object SNAPSyncController {
       reason: String
   ) // Signal from SyncController that pivot header bootstrap exhausted retries
   private case object RetrySnapSyncStart // Internal message to retry SNAP sync start after bootstrap
-  case object AccountRangeSyncComplete
+  /** Sent by AccountRangeCoordinator when account range download is fully complete.
+    *
+    * @param totalCodeHashes
+    *   number of unique codeHashes dispatched during account download (Bloom-filtered). Forwarded to
+    *   ByteCodeCoordinator as SetExpectedByteCodeCount so it can verify receipt of all AddByteCodeTasks batches before
+    *   declaring completion.
+    */
+  case class AccountRangeSyncComplete(totalCodeHashes: Long)
   case object ByteCodeSyncComplete
   case object StorageRangeSyncComplete
 

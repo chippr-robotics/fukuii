@@ -96,6 +96,17 @@ object Messages {
     */
   case object NoMoreByteCodeTasks extends ByteCodeCoordinatorMessage
 
+  /** Set the total number of unique codeHashes dispatched during account download.
+    *
+    * Sent immediately before NoMoreByteCodeTasks. Allows ByteCodeCoordinator to verify it has received all
+    * AddByteCodeTasks batches before declaring completion — guards against mailbox reordering between
+    * AccountRangeCoordinator → SNAPSyncController → ByteCodeCoordinator.
+    *
+    * @param totalCodeHashes
+    *   count from AccountRangeCoordinator.uniqueCodeHashesCount (Bloom-filtered unique hashes)
+    */
+  case class SetExpectedByteCodeCount(totalCodeHashes: Long) extends ByteCodeCoordinatorMessage
+
   /** Sent by SNAPSyncController when a fresher pivot has been selected. Bytecodes are content-addressed (hash-keyed) so
     * pivot changes don't invalidate them, but the coordinator should clear stale peer tracking.
     */
