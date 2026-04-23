@@ -886,7 +886,7 @@ trait GraphQLServiceBuilder {
     if (!graphQLConfig.enabled) None
     else {
       implicit val ec: scala.concurrent.ExecutionContext = system.dispatcher
-      implicit val runtime: cats.effect.unsafe.IORuntime  = cats.effect.unsafe.IORuntime.global
+      implicit val runtime: cats.effect.unsafe.IORuntime = cats.effect.unsafe.IORuntime.global
       val ctx = com.chipprbots.ethereum.jsonrpc.graphql.GraphQLContext(
         blockchain = blockchain,
         blockchainReader = blockchainReader,
