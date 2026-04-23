@@ -21,14 +21,6 @@ Welcome to the Fukuii JSON-RPC API documentation. This directory contains compre
    - Best practices for API usage
    - **Use this for**: Learning the API, integrating clients, reference lookup
 
-3. **[RPC Endpoint Inventory](./RPC_ENDPOINT_INVENTORY.md)** 🆕
-   - Comprehensive catalog of all 97 RPC endpoints
-   - Organized by namespace with safety classifications
-   - MCP coverage analysis
-   - Production readiness indicators
-   - Priority gaps for agent control
-   - **Use this for**: Complete RPC endpoint reference, MCP planning
-
 3. **[JSON-RPC Coverage Analysis](./JSON_RPC_COVERAGE_ANALYSIS.md)**
    - Comprehensive gap analysis vs Ethereum specification
    - Implementation status by namespace
@@ -46,15 +38,7 @@ Welcome to the Fukuii JSON-RPC API documentation. This directory contains compre
    - Implementation timeline and success metrics
    - **Use this for**: Understanding MCP strategy, stakeholder communication
 
-5. **[MCP Enhancement Plan](./MCP_ENHANCEMENT_PLAN.md)** 🆕
-   - Complete roadmap for agent-controlled node management
-   - 6-phase implementation plan (12-16 weeks)
-   - 45+ new tools, 20+ resources, 15+ prompts
-   - Security considerations and acceptance criteria
-   - Testing strategy and documentation requirements
-   - **Use this for**: Implementing complete agent control, detailed planning
-
-6. **[MCP Integration Guide](./MCP_INTEGRATION_GUIDE.md)**
+5. **[MCP Integration Guide](./MCP_INTEGRATION_GUIDE.md)**
    - Architecture for Model Context Protocol server
    - Resource and tool definitions
    - Security considerations and authentication

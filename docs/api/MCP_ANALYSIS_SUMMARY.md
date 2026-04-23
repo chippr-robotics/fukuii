@@ -469,8 +469,6 @@ This analysis demonstrates that Fukuii has a solid foundation for MCP integratio
 
 ## Related Documents
 
-- **[RPC_ENDPOINT_INVENTORY.md](./RPC_ENDPOINT_INVENTORY.md)** - Complete catalog of all RPC endpoints
-- **[MCP_ENHANCEMENT_PLAN.md](./MCP_ENHANCEMENT_PLAN.md)** - Detailed implementation roadmap
 - **[MCP_INTEGRATION_GUIDE.md](./MCP_INTEGRATION_GUIDE.md)** - Existing MCP integration documentation
 - **[JSON_RPC_API_REFERENCE.md](./JSON_RPC_API_REFERENCE.md)** - Complete RPC API reference
 - **[MCP.md](../MCP.md)** - MCP overview and usage
