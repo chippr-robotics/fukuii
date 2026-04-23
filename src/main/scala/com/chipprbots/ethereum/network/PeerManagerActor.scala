@@ -349,8 +349,8 @@ class PeerManagerActor(
 
     validConnection match {
       case Right(address) =>
-        log.error(
-          "[HIVE-DEBUG] Accepting incoming connection from {} (pending={}/{})",
+        log.debug(
+          "Accepting incoming connection from {} (pending={}/{})",
           remoteAddress,
           connectedPeers.incomingPendingPeersCount,
           peerConfiguration.maxPendingPeers
@@ -360,7 +360,7 @@ class PeerManagerActor(
         context.become(listening(newConnectedPeers))
 
       case Left(error) =>
-        log.error("[HIVE-DEBUG] Rejecting incoming connection from {}: {}", remoteAddress, error)
+        log.debug("Rejecting incoming connection from {}: {}", remoteAddress, error)
         handleConnectionErrors(error)
     }
   }
