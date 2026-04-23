@@ -216,8 +216,10 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     // Freshly handshaked peer without best block determined
     setupNewPeer(freshPeer, freshPeerProbe, freshPeerInfo.copy(maxBlockNumber = 0))
 
+    // All handshaked peers are now returned immediately (peerHasUpdatedBestBlock = always true,
+    // Besu-aligned: ETH/68 peers always have maxBlockNumber=0 at handshake; gating deadlocks them)
     requestSender.send(peersInfoHolder, GetHandshakedPeers)
-    requestSender.expectMsg(HandshakedPeers(Map.empty))
+    requestSender.expectMsg(HandshakedPeers(Map(freshPeer -> freshPeerInfo.copy(maxBlockNumber = 0))))
 
     val newMaxBlock: BigInt = freshPeerInfo.maxBlockNumber + 1
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = newMaxBlock)
@@ -423,19 +425,19 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
 
     val peer1Probe: TestProbe = TestProbe()
     val peer1: Peer =
-      Peer(PeerId("peer1"), new InetSocketAddress("127.0.0.1", 1), peer1Probe.ref, false, nodeId = Some(fakeNodeId))
+      Peer(PeerId("peer1"), new InetSocketAddress("127.0.0.1", 1), peer1Probe.ref, false, nodeId = Some(fakeNodeId), negotiatedCapability = Some(Capability.ETH63))
     val peer1Info: PeerInfo = initialPeerInfo.withForkAccepted(false)
     val peer2Probe: TestProbe = TestProbe()
     val peer2: Peer =
-      Peer(PeerId("peer2"), new InetSocketAddress("127.0.0.1", 2), peer2Probe.ref, false, nodeId = Some(fakeNodeId))
+      Peer(PeerId("peer2"), new InetSocketAddress("127.0.0.1", 2), peer2Probe.ref, false, nodeId = Some(fakeNodeId), negotiatedCapability = Some(Capability.ETH63))
     val peer2Info: PeerInfo = initialPeerInfo.withForkAccepted(false)
     val peer3Probe: TestProbe = TestProbe()
     val peer3: Peer =
-      Peer(PeerId("peer3"), new InetSocketAddress("127.0.0.1", 3), peer3Probe.ref, false, nodeId = Some(fakeNodeId))
+      Peer(PeerId("peer3"), new InetSocketAddress("127.0.0.1", 3), peer3Probe.ref, false, nodeId = Some(fakeNodeId), negotiatedCapability = Some(Capability.ETH63))
 
     val freshPeerProbe: TestProbe = TestProbe()
     val freshPeer: Peer =
-      Peer(PeerId(""), new InetSocketAddress("127.0.0.1", 4), freshPeerProbe.ref, false, nodeId = Some(fakeNodeId))
+      Peer(PeerId(""), new InetSocketAddress("127.0.0.1", 4), freshPeerProbe.ref, false, nodeId = Some(fakeNodeId), negotiatedCapability = Some(Capability.ETH63))
     val freshPeerInfo: PeerInfo = initialPeerInfo.withForkAccepted(false)
 
     val peerManager: TestProbe = TestProbe()
