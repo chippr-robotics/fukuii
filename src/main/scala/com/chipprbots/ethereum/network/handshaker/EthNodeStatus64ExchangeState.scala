@@ -25,7 +25,7 @@ case class EthNodeStatus64ExchangeState(
 
   def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = { case status: ETH64.Status =>
     import ForkIdValidator.syncIoLogger
-    log.info(
+    log.debug(
       "STATUS_EXCHANGE: Received status from peer - protocolVersion={}, networkId={}, totalDifficulty={}, bestHash={}, genesisHash={}, forkId={}",
       status.protocolVersion,
       status.networkId,
@@ -44,7 +44,7 @@ case class EthNodeStatus64ExchangeState(
     val localBestTimestamp = if (storedTimestamp == 0L) System.currentTimeMillis() / 1000 else storedTimestamp
     val localForkId = ForkId.create(localGenesisHash, blockchainConfig)(localBestBlock, localBestTimestamp)
 
-    log.info(
+    log.debug(
       "STATUS_EXCHANGE: Local state - bestBlock={}, genesisHash={}, localForkId={}",
       localBestBlock,
       localGenesisHash.toHex,
@@ -73,13 +73,13 @@ case class EthNodeStatus64ExchangeState(
             status.forkId
           )
       } yield {
-        log.info("STATUS_EXCHANGE: ForkId validation result: {}", validationResult)
+        log.debug("STATUS_EXCHANGE: ForkId validation result: {}", validationResult)
         validationResult match {
           case Connect =>
             // EIP-2124: ForkId validation replaces the fork block exchange for ETH64+
             // When ForkId validation passes, we go directly to connected state
             // without needing to do the old-style fork block handshake
-            log.info(
+            log.debug(
               "STATUS_EXCHANGE: ForkId validation passed - accepting peer connection (skipping fork block exchange per EIP-2124)"
             )
             ConnectedState(
@@ -139,7 +139,7 @@ case class EthNodeStatus64ExchangeState(
       forkId = forkId
     )
 
-    log.info(
+    log.debug(
       "STATUS_EXCHANGE: Sending status - protocolVersion={}, networkId={}, totalDifficulty={}, bestBlock={}, bestHash={}, genesisHash={}, forkId={}",
       status.protocolVersion,
       status.networkId,

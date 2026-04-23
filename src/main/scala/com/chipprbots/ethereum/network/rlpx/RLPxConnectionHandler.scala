@@ -108,7 +108,7 @@ class RLPxConnectionHandler(
       context.become(new ConnectedHandler(connection).waitingForAuthHandshakeResponse(handshaker, timeout))
 
     case CommandFailed(_: Connect) =>
-      log.error("[Stopping Connection] TCP connection to {} failed for peer {}", uri, peerId)
+      log.warning("[RLPx] TCP connection failed to {} for peer {}", uri, peerId)
       context.parent ! ConnectionFailed
       gracefulStop()
   }
@@ -323,7 +323,7 @@ class RLPxConnectionHandler(
     }
 
     val handleConnectionTerminated: Receive = { case Terminated(`connection`) =>
-      log.info("[RLPx] TCP actor terminated for peer {}", peerId)
+      log.debug("[RLPx] TCP actor terminated for peer {}", peerId)
       context.parent ! ConnectionFailed
       gracefulStop()
     }
@@ -460,7 +460,7 @@ class RLPxConnectionHandler(
     def processHandshakeResult(result: AuthHandshakeResult, remainingData: ByteString): Unit =
       result match {
         case AuthHandshakeSuccess(secrets, remotePubKey) =>
-          log.info("[RLPx] Auth handshake SUCCESS for peer {}, establishing secure connection", peerId)
+          log.debug("[RLPx] Auth handshake SUCCESS for peer {}, establishing secure connection", peerId)
           context.parent ! ConnectionEstablished(remotePubKey)
           // following the specification at https://github.com/ethereum/devp2p/blob/master/rlpx.md#initial-handshake
           // point 6 indicates that the next messages needs to be initial 'Hello'
@@ -540,7 +540,7 @@ class RLPxConnectionHandler(
           messageCodecOpt match {
             case Some((messageCodec, inboundTranslator)) =>
               registerMessageCodec(messageCodec)
-              log.info("[RLPx] Connection FULLY ESTABLISHED with peer {}, entering handshaked state", peerId)
+              log.debug("[RLPx] Connection FULLY ESTABLISHED with peer {}, entering handshaked state", peerId)
               context.become(
                 handshaked(
                   messageCodec,

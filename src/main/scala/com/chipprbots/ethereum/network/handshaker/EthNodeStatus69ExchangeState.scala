@@ -34,7 +34,7 @@ case class EthNodeStatus69ExchangeState(
 
   def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = { case status: ETH69.Status =>
     import ForkIdValidator.syncIoLogger
-    log.info(
+    log.debug(
       "ETH69_STATUS: Received - protocolVersion={}, networkId={}, genesis={}, forkId={}, earliest={}, latest={}, latestHash={}",
       status.protocolVersion,
       status.networkId,
@@ -69,10 +69,10 @@ case class EthNodeStatus69ExchangeState(
             status.forkId
           )
       } yield {
-        log.info("ETH69_STATUS: ForkId validation result: {}", validationResult)
+        log.debug("ETH69_STATUS: ForkId validation result: {}", validationResult)
         validationResult match {
           case Connect =>
-            log.info("ETH69_STATUS: ForkId validation passed - accepting peer")
+            log.debug("ETH69_STATUS: ForkId validation passed - accepting peer")
             ConnectedState(
               PeerInfo.withForkAccepted(
                 RemoteStatus.fromETH69Status(status, negotiatedCapability, supportsSnap, peerCapabilities)
@@ -107,7 +107,7 @@ case class EthNodeStatus69ExchangeState(
       latestBlockHash = bestBlockHeader.hash
     )
 
-    log.info(
+    log.debug(
       "ETH69_STATUS: Sending - networkId={}, genesis={}, forkId={}, earliest={}, latest={}, latestHash={}",
       status.networkId,
       genesisHash.toHex,
