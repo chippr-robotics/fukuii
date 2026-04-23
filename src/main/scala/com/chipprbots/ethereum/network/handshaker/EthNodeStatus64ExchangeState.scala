@@ -50,7 +50,14 @@ case class EthNodeStatus64ExchangeState(
       localForkId
     )
 
-    if (status.genesisHash != localGenesisHash) {
+    if (status.networkId != peerConfiguration.networkId) {
+      log.warn(
+        "STATUS_EXCHANGE: NetworkId mismatch! Local: {}, Remote: {} - disconnecting (SUBPROTOCOL_TRIGGERED_MISMATCHED_NETWORK)",
+        peerConfiguration.networkId,
+        status.networkId
+      )
+      DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
+    } else if (status.genesisHash != localGenesisHash) {
       log.warn(
         "STATUS_EXCHANGE: Peer genesis hash mismatch! Local: {}, Remote: {} - disconnecting peer",
         localGenesisHash,

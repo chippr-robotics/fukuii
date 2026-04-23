@@ -523,8 +523,8 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     val localHello: Hello = Hello(
       p2pVersion = EtcHelloExchangeState.P2pVersion,
       clientId = Config.clientId,
-      capabilities = Config.supportedCapabilities, // Use actual supported capabilities from Config
-      listenPort = 0, // Local node not listening
+      capabilities = Config.supportedCapabilities,
+      listenPort = Config.Network.Server.port,
       nodeId = ByteString(nodeStatus.nodeId)
     )
 

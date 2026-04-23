@@ -46,7 +46,14 @@ case class EthNodeStatus69ExchangeState(
 
     val localGenesisHash = blockchainReader.genesisHeader.hash
 
-    if (status.genesisHash != localGenesisHash) {
+    if (status.networkId != peerConfiguration.networkId) {
+      log.warn(
+        "ETH69_STATUS: NetworkId mismatch! Local: {}, Remote: {} - disconnecting (SUBPROTOCOL_TRIGGERED_MISMATCHED_NETWORK)",
+        peerConfiguration.networkId,
+        status.networkId
+      )
+      DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
+    } else if (status.genesisHash != localGenesisHash) {
       log.warn(
         "ETH69_STATUS: Genesis hash mismatch! Local: {}, Remote: {} - disconnecting",
         localGenesisHash,

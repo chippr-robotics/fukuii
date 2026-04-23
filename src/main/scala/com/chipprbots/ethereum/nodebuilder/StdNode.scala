@@ -52,10 +52,10 @@ abstract class BaseNode extends Node {
     startEngineApiServer()
 
     // Phase 3: P2P networking
-    startPeerManager()
+    startServer()
     loadStaticNodes()
     startPortForwarding()
-    startServer()
+    startPeerManager()
     startDiscoveryManager()
 
     // Phase 5: Background work
@@ -142,7 +142,10 @@ abstract class BaseNode extends Node {
     }
   }
 
-  private[this] def startServer(): Unit = server ! ServerActor.StartServer(networkConfig.Server.listenAddress)
+  private[this] def startServer(): Unit = server ! ServerActor.StartServer(
+    networkConfig.Server.listenAddress,
+    networkConfig.Server.advertisedAddress.map(java.net.InetAddress.getByName)
+  )
 
   private[this] def startSyncController(): Unit = syncController ! SyncProtocol.Start
 
