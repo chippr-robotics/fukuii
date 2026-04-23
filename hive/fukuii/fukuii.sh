@@ -98,10 +98,15 @@ if [ "$TTD" != "$MAX" ]; then
     FLAGS="$FLAGS -Dfukuii.network.engine-api.port=8551"
     FLAGS="$FLAGS -Dfukuii.network.engine-api.jwt-secret-path=$JWT_SECRET_FILE"
     FLAGS="$FLAGS -Dfukuii.mining.protocol=engine-api"
+    # Hive pre-merge blocks ship with fake Ethash seals; skip PoW header check.
+    FLAGS="$FLAGS -Dfukuii.mining.skip-pow-validation=true"
 else
-    # PoW chain — no engine API, use ethash mining
+    # PoW chain — no engine API. Hive-generated chains always use fake
+    # Ethash seals (HIVE_SKIP_POW honours the explicit signal; rpc-compat
+    # and other sims don't set it but still feed us bogus seals), so use
+    # the non-validating 'mocked' protocol unconditionally in hive mode.
     FLAGS="$FLAGS -Dfukuii.network.engine-api.enabled=false"
-    FLAGS="$FLAGS -Dfukuii.mining.protocol=ethash"
+    FLAGS="$FLAGS -Dfukuii.mining.protocol=mocked"
 fi
 
 # P2P
@@ -110,11 +115,19 @@ FLAGS="$FLAGS -Dfukuii.network.server-address.port=30303"
 FLAGS="$FLAGS -Dfukuii.network.discovery.interface=0.0.0.0"
 FLAGS="$FLAGS -Dfukuii.network.discovery.port=30303"
 
-# Chain import
-[ -f "/chain.rlp" ] && FLAGS="$FLAGS -Dfukuii.import-chain-file=/chain.rlp"
+# Chain import — prefer /chain.rlp, otherwise concatenate /blocks/*.rlp (consensus sim).
+if [ -f "/chain.rlp" ]; then
+    FLAGS="$FLAGS -Dfukuii.import-chain-file=/chain.rlp"
+elif ls /blocks/*.rlp >/dev/null 2>&1; then
+    cat /blocks/*.rlp > /chain.rlp
+    FLAGS="$FLAGS -Dfukuii.import-chain-file=/chain.rlp"
+fi
 
-# Bootnode
-[ -n "$HIVE_BOOTNODE" ] && FLAGS="$FLAGS -Dfukuii.network.peer.bootstrap-nodes.0=$HIVE_BOOTNODE"
+# Bootnode — write to static-nodes.json in the datadir so the node dials it directly.
+# HOCON arrays can't be populated via -D system properties, so file is the reliable path.
+if [ -n "$HIVE_BOOTNODE" ]; then
+    echo "[\"$HIVE_BOOTNODE\"]" > "$DATADIR/static-nodes.json"
+fi
 
 # Mining
 if [ -n "$HIVE_MINER" ]; then
@@ -123,10 +136,12 @@ if [ -n "$HIVE_MINER" ]; then
 fi
 
 exec java \
-    -Xmx2g \
-    -Xms512m \
-    -Xss4M \
+    -Xmx512m \
+    -Xms128m \
+    -Xss2M \
     -XX:+UseG1GC \
+    -XX:MaxMetaspaceSize=256m \
+    -XX:+ExitOnOutOfMemoryError \
     $FLAGS \
     -jar /app/fukuii/lib/fukuii-assembly-0.1.240.jar \
     hive

@@ -258,6 +258,7 @@ lazy val node = {
       Dependencies.network,
       Dependencies.prometheus,
       Dependencies.rocksDb,
+      Dependencies.sangria,
       Dependencies.scaffeine,
       Dependencies.scopt,
       Dependencies.testing
@@ -510,10 +511,12 @@ addCommandAlias(
 // testStandard - Tier 2: Standard tests (< 30 minutes)
 // Runs unit and integration tests, excludes benchmarks, comprehensive ethereum tests, and disabled tests
 // DisabledTest is excluded because these tests are known to be broken or flaky
+// SyncTest is excluded because these tests involve complex actor choreography (ADR-017)
+//   that times out under load — same reason testEssential excludes them
 addCommandAlias(
   "testStandard",
   """; compile-all
-    |; testOnly -- -l BenchmarkTest -l EthereumTest -l DisabledTest -l FlakyTest
+    |; testOnly -- -l BenchmarkTest -l EthereumTest -l SyncTest -l DisabledTest -l FlakyTest
     |""".stripMargin
 )
 

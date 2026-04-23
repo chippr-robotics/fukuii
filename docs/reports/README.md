@@ -24,7 +24,6 @@ This directory contains test reports, implementation summaries, and analysis doc
 ## Related Documentation
 
 - [Testing Documentation](../testing/README.md) - Testing guides and strategies
-- [Investigation Reports](../investigation/README.md) - Detailed failure analysis
 
 ## Report Organization
 

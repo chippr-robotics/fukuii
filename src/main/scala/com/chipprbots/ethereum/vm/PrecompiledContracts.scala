@@ -130,12 +130,19 @@ object PrecompiledContracts {
     val etcFork = context.evmConfig.blockchainConfig.etcForkForBlockNumber(context.blockHeader.number)
     // Post-Cancun detection: check if block header has blob gas fields
     val isCancun = context.blockHeader.blobGasUsed.isDefined || context.blockHeader.excessBlobGas.isDefined
+    // EIP-2537 BLS12-381 precompiles activate at Prague timestamp on ETH chains
+    val isPrague = context.evmConfig.blockchainConfig.isPragueTimestamp(context.blockHeader.unixTimestamp)
     // EIP-7951 P256VERIFY activates at Osaka timestamp on ETH chains
     val isOsaka = context.evmConfig.blockchainConfig.isOsakaTimestamp(context.blockHeader.unixTimestamp)
 
     if (isOsaka) {
       osakaContracts
     } else if (etcFork >= EtcForks.Olympia) {
+      olympiaContracts
+    } else if (isPrague) {
+      // EIP-2537 adds BLS12-381 precompiles at 0x0b-0x11 on ETH Prague.
+      // The olympiaContracts set already contains exactly this superset
+      // (Cancun KZG + BLS12-381), without Osaka's P256VERIFY.
       olympiaContracts
     } else if (isCancun) {
       cancunContracts

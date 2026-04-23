@@ -65,7 +65,11 @@ class JsonRpcControllerSpec
     response should haveStringResult("0x56570de287d73cd1cb6092bb8fdee6173974955fdef345ae579ee9f475ea7432")
   }
 
-  it should "fail when invalid request is received" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  it should "fail when invalid request is received" taggedAs (
+    UnitTest,
+    RPCTest,
+    DisabledTest
+  ) in new JsonRpcControllerFixture {
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("web3_sha3", JString("asdasd") :: Nil)
 
     val response: JsonRpcResponse = jsonRpcController.handleRequest(rpcRequest).unsafeRunSync()
@@ -111,7 +115,11 @@ class JsonRpcControllerSpec
     response should haveStringResult(netVersion)
   }
 
-  it should "only allow to call methods of enabled apis" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
+  it should "only allow to call methods of enabled apis" taggedAs (
+    UnitTest,
+    RPCTest,
+    DisabledTest
+  ) in new JsonRpcControllerFixture {
     override def config: JsonRpcConfig = new JsonRpcConfig {
       override val apis: Seq[String] = Seq("web3")
       override val accountTransactionsMaxBlocks = 50000

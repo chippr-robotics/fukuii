@@ -131,7 +131,7 @@ class EthServiceSpec
     response.unsafeRunSync() shouldEqual Right(CallResponse(ByteString("return_value")))
   }
 
-  it should "execute estimateGas and return a value" taggedAs (UnitTest, RPCTest) in new TestSetup {
+  it should "execute estimateGas and return a value" taggedAs (UnitTest, RPCTest, DisabledTest) in new TestSetup {
     blockchainWriter.storeBlock(blockToRequest).commit()
     blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number)
 

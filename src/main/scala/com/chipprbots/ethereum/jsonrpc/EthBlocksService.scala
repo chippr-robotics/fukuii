@@ -120,7 +120,19 @@ class EthBlocksService(
     val blockOpt = blockchainReader.getBlockByHash(blockHash).orElse(blockQueue.getBlockByHash(blockHash))
     val weight = blockchainReader.getChainWeightByHash(blockHash).orElse(blockQueue.getChainWeightByHash(blockHash))
 
-    val blockResponseOpt = blockOpt.map(block => BlockResponse(block, weight, fullTxs = fullTxs))
+    // Hide engine-API optimistic blocks (ACCEPTED with unknown parent, stored via
+    // storeBlockByHashOnly) — they skip the number→hash mapping and haven't been executed.
+    // Exposing them via eth_getBlockByHash breaks hive's "Invalid NewPayload, ParentHash" test,
+    // which expects the altered payload to NOT be queryable. A block is "exposed" if either
+    // (a) it lives at its advertised number in the canonical index, or (b) it's a known
+    // sidechain (has receipts stored, i.e. was fully executed on the fork-choice sidechain path).
+    val isExposed = blockOpt.exists { b =>
+      blockchainReader.getBlockHeaderByNumber(b.header.number).exists(_.hash == b.header.hash) ||
+      blockchainReader.getReceiptsByHash(b.header.hash).isDefined
+    }
+    val blockResponseOpt =
+      if (!isExposed) None
+      else blockOpt.map(block => BlockResponse(block, weight, fullTxs = fullTxs))
     Right(BlockByBlockHashResponse(blockResponseOpt))
   }
 
@@ -275,15 +287,30 @@ class EthBlocksService(
     }.toSeq
 
     val blobBaseFees = (oldestBlock.toLong to (newestBlockNum + 1).toLong).map { num =>
-      blockchainReader.getBlockHeaderByNumber(num).flatMap(_.excessBlobGas).map(_ => BigInt(1)).getOrElse(BigInt(1))
+      blockchainReader
+        .getBlockHeaderByNumber(num)
+        .map { h =>
+          h.excessBlobGas
+            .map(eg =>
+              com.chipprbots.ethereum.consensus.engine.BlobGasUtils
+                .getBlobGasPrice(eg, h.unixTimestamp, blockchainConfig)
+            )
+            .getOrElse(BigInt(0))
+        }
+        .getOrElse(BigInt(0))
     }.toSeq
 
     val blobGasUsedRatios = (oldestBlock.toLong to newestBlockNum.toLong).map { num =>
       blockchainReader
         .getBlockHeaderByNumber(num)
-        .flatMap(_.blobGasUsed)
-        .map { used =>
-          if (used > 0) used.toDouble / 786432.0 else 0.0
+        .map { h =>
+          h.blobGasUsed
+            .map { used =>
+              val max = com.chipprbots.ethereum.consensus.engine.BlobGasUtils
+                .maxBlobGasPerBlock(h.unixTimestamp, blockchainConfig)
+              if (used > 0 && max > 0) used.toDouble / max.toDouble else 0.0
+            }
+            .getOrElse(0.0)
         }
         .getOrElse(0.0)
     }.toSeq
@@ -311,7 +338,13 @@ class EthBlocksService(
   }
 
   def blobBaseFee(req: BlobBaseFeeRequest): ServiceResponse[BlobBaseFeeResponse] = IO {
-    val fee = blockchainReader.getBestBlock().flatMap(_.header.excessBlobGas).map(_ => BigInt(1)).getOrElse(BigInt(1))
+    val fee = blockchainReader
+      .getBestBlock()
+      .flatMap(b => b.header.excessBlobGas.map(eg => (eg, b.header.unixTimestamp)))
+      .map { case (eg, ts) =>
+        com.chipprbots.ethereum.consensus.engine.BlobGasUtils.getBlobGasPrice(eg, ts, blockchainConfig)
+      }
+      .getOrElse(BigInt(0))
     Right(BlobBaseFeeResponse(fee))
   }
 

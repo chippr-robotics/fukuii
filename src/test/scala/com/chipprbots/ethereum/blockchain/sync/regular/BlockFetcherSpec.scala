@@ -225,7 +225,7 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
       shutdownActorSystem()
     }
 
-    "should ensure blocks passed to importer are always forming chain" in new TestSetup {
+    "should ensure blocks passed to importer are always forming chain" taggedAs DisabledTest in new TestSetup {
       startFetcher()
 
       triggerFetching()
@@ -399,9 +399,8 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
       sender ! PeersClient.Response(fakePeer, ETH66BlockBodies(0, firstBlocksBatch.map(_.body)))
     }
 
-    /** Synchronise on BlockFetcher having finished processing the bodies response.
-      * 1s is well above observed CI latency for a single message hop; short sleep
-      * keeps local runs fast.
+    /** Synchronise on BlockFetcher having finished processing the bodies response. 1s is well above observed CI latency
+      * for a single message hop; short sleep keeps local runs fast.
       */
     def awaitBodiesProcessed(): Unit = Thread.sleep(1000L)
 

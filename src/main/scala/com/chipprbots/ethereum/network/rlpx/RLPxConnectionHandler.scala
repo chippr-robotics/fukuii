@@ -116,14 +116,32 @@ class RLPxConnectionHandler(
   class ConnectedHandler(connection: ActorRef) {
 
     // Canonical bases used by this codebase's message models/decoders.
-    // ETH messages: 0x10..0x20 (17 codes: 0x00..0x10 relative)
-    // SNAP messages (canonical): 0x21..0x28 (8 codes: 0x00..0x07 relative)
+    // ETH messages: 0x10..0x21 (up to 18 codes for ETH/69's BlockRangeUpdate)
+    // SNAP messages (canonical): 0x30..0x37 (8 codes: 0x00..0x07 relative)
+    // SNAP must start clear of ETH/69's max canonical code to avoid a decoder
+    // chain collision between BlockRangeUpdate (canonical 0x21) and SNAP's
+    // GetAccountRange — which used to share the same code in our canonical space.
     private val CanonicalEthBase = 0x10
     private val CanonicalEthSize = 0x11
-    private val CanonicalSnapBase = 0x21
+    private val CanonicalSnapBase = 0x30
     private val CanonicalSnapSize = 0x08
 
-    private case class InboundTranslator(peerEthBase: Int, peerSnapBase: Option[Int], snapFirst: Boolean) {
+    /** Wire-space size of the peer's ETH protocol — varies by version. ETH/66-68 have 17 codes (0x00..0x10). ETH/69
+      * adds BlockRangeUpdate at 0x11, for 18 codes. Getting this wrong shifts the peer's SNAP base by one and every
+      * subsequent SNAP message decodes against the adjacent canonical code (e.g. GetStorageRanges mis-decoded as
+      * StorageRanges).
+      */
+    private def ethWireSizeFor(cap: Capability): Int = cap match {
+      case Capability.ETH69 => 0x12
+      case _                => CanonicalEthSize
+    }
+
+    private case class InboundTranslator(
+        peerEthBase: Int,
+        peerEthSize: Int,
+        peerSnapBase: Option[Int],
+        snapFirst: Boolean
+    ) {
       def translateType(messageType: Int): Int =
         if (messageType < CanonicalEthBase) {
           messageType
@@ -133,7 +151,7 @@ class RLPxConnectionHandler(
               val rel = messageType - snapBase
               CanonicalSnapBase + rel
             case _ =>
-              if (messageType >= peerEthBase && messageType < peerEthBase + CanonicalEthSize) {
+              if (messageType >= peerEthBase && messageType < peerEthBase + peerEthSize) {
                 val rel = messageType - peerEthBase
                 CanonicalEthBase + rel
               } else {
@@ -146,8 +164,8 @@ class RLPxConnectionHandler(
         *
         * Canonical space assumptions in this codebase:
         *   - P2P/WireProtocol: < 0x10 (unchanged)
-        *   - ETH: 0x10..0x20
-        *   - SNAP: 0x21..0x28
+        *   - ETH: 0x10..0x21
+        *   - SNAP: 0x30..0x37
         *
         * On the wire, ETH/SNAP bases depend on the peer's capability ordering.
         */
@@ -221,12 +239,25 @@ class RLPxConnectionHandler(
       }
 
       val snapFirst = supportsSnap && snapIndex >= 0 && ethIndex >= 0 && snapIndex < ethIndex
+      // Cap offsets: devp2p reserves 0x00..0x0F (16 codes). Subsequent capabilities are
+      // allocated contiguously in Hello.capabilities order. The peer's ETH wire size
+      // depends on the negotiated ETH version — ETH/66-68 have 17 codes, ETH/69 has 18.
+      // Getting that size wrong shifts every subsequent SNAP wire offset by one and
+      // causes SNAP messages to decode against the wrong canonical code.
+      val ethOnlyPeer = ethIndex >= 0 && snapIndex < 0
+      val snapOnlyPeer = snapIndex >= 0 && ethIndex < 0
+      val peerEthWireSize = ethWireSizeFor(negotiatedEth)
+
       val peerSnapBase =
         if (!supportsSnap) None
+        else if (snapOnlyPeer) Some(CanonicalEthBase)
         else if (snapFirst) Some(CanonicalEthBase)
-        else Some(CanonicalEthBase + CanonicalEthSize)
+        else Some(CanonicalEthBase + peerEthWireSize)
 
-      val peerEthBase = if (snapFirst) CanonicalEthBase + CanonicalSnapSize else CanonicalEthBase
+      val peerEthBase =
+        if (ethOnlyPeer || !supportsSnap) CanonicalEthBase
+        else if (snapFirst) CanonicalEthBase + CanonicalSnapSize
+        else CanonicalEthBase
 
       val snapBaseStr = peerSnapBase.map(b => s"0x${b.toHexString}").getOrElse("<disabled>")
       log.info(
@@ -234,7 +265,12 @@ class RLPxConnectionHandler(
           s"peerEthBase=0x${peerEthBase.toHexString} peerSnapBase=$snapBaseStr"
       )
 
-      InboundTranslator(peerEthBase = peerEthBase, peerSnapBase = peerSnapBase, snapFirst = snapFirst)
+      InboundTranslator(
+        peerEthBase = peerEthBase,
+        peerEthSize = peerEthWireSize,
+        peerSnapBase = peerSnapBase,
+        snapFirst = snapFirst
+      )
     }
 
     private var helloAckPending: Boolean = false
@@ -482,8 +518,12 @@ class RLPxConnectionHandler(
         cancellableAckTimeout: Option[CancellableAckTimeout] = None,
         seqNumber: Int = 0
     ): Unit =
-      extractor.readHello(data) match {
-        case Some((hello, restFrames)) =>
+      Try(extractor.readHello(data)) match {
+        case Failure(err) =>
+          log.warning("[RLPx] Malformed Hello from peer {}: {} — disconnecting", peerId, err.getMessage)
+          context.parent ! ConnectionFailed
+          gracefulStop()
+        case Success(Some((hello, restFrames))) =>
           log.debug(
             "[RLPx] Extracted Hello message from peer {}, protocol version: {}, capabilities: {}",
             peerId,
@@ -519,8 +559,8 @@ class RLPxConnectionHandler(
               context.parent ! ConnectionFailed
               gracefulStop()
           }
-        case None =>
-          log.warning("[RLPx] Did not find 'Hello' in message from peer {}, continuing to await", peerId)
+        case Success(None) =>
+          log.debug("[RLPx] Did not find 'Hello' in message from peer {}, continuing to await", peerId)
           context.become(awaitInitialHello(extractor, cancellableAckTimeout, seqNumber))
       }
 

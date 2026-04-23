@@ -18,33 +18,26 @@ import com.chipprbots.ethereum.utils.ByteUtils
   *
   * See: https://github.com/ethereum/devp2p/blob/master/caps/snap.md
   *
-  * Message codes (wire protocol): SNAP is a satellite protocol that follows ETH in capability negotiation. ETH/68 uses
-  * codes 0x10-0x20, so SNAP/1 starts at 0x21.
+  * Message codes: SNAP defines relative codes 0x00-0x07 per the spec. On the wire, each capability occupies a
+  * contiguous block allocated by Hello capability order. For ETH+SNAP peers, SNAP starts right after ETH's code range.
+  * Wire offsets therefore depend on the negotiated ETH version: ETH/66-68 reserve 17 codes (0x10-0x20), ETH/69 reserves
+  * 18 (0x10-0x21 including BlockRangeUpdate at rel 0x11). Peer SNAP wire base is computed in RLPxConnectionHandler
+  * based on negotiated eth cap.
   *
-  * Wire codes:
-  *   - 0x21: GetAccountRange
-  *   - 0x22: AccountRange
-  *   - 0x23: GetStorageRanges
-  *   - 0x24: StorageRanges
-  *   - 0x25: GetByteCodes
-  *   - 0x26: ByteCodes
-  *   - 0x27: GetTrieNodes
-  *   - 0x28: TrieNodes
-  *
-  * Note: The SNAP spec defines these as 0x00-0x07, but on the wire they are offset by 0x21 to follow ETH protocol
-  * messages. This matches coregeth and besu implementations.
+  * Canonical codes (internal to this codebase) live at 0x30-0x37. The 0x30 offset leaves room for ETH/69's full range
+  * AND avoids a historical collision with ETH/69's BlockRangeUpdate (canonical 0x10+0x11 = 0x21), which would have
+  * aliased onto the old SnapProtocolOffset=0x21 and caused SNAP's GetAccountRange to decode as BlockRangeUpdate.
   */
 object SNAP {
 
-  /** SNAP protocol offset
-    *
-    * SNAP/1 is a satellite protocol that runs alongside ETH/68. According to the devp2p spec, each capability gets its
-    * own message ID space. ETH/68 occupies codes 0x10-0x20, so SNAP/1 starts at 0x21.
-    *
-    * This matches the behavior in coregeth and besu where SNAP messages are sent with absolute wire codes, not relative
-    * codes.
-    */
-  val SnapProtocolOffset = 0x21
+  /** Canonical SNAP offset used by this codebase's decoder chain. */
+  // Canonical SNAP offset. Must leave room for the largest ETH protocol version's
+  // message set — ETH/66-68 use 17 codes (0x10..0x20), ETH/69 uses 18 (adds
+  // BlockRangeUpdate at 0x11 canonical). If the SNAP base sits at 0x21, SNAP's
+  // GetAccountRange (rel 0x00) collides with ETH/69's BlockRangeUpdate (0x10 + 0x11)
+  // in our canonical decoder chain. Offset 0x30 keeps SNAP comfortably clear and
+  // leaves slack for any future ETH extensions.
+  val SnapProtocolOffset = 0x30
 
   /** Message codes for SNAP/1 protocol
     *
@@ -52,14 +45,14 @@ object SNAP {
     * (relative to the protocol), on the wire they must be offset to follow ETH protocol messages.
     */
   object Codes {
-    val GetAccountRangeCode: Int = SnapProtocolOffset + 0x00 // 0x21
-    val AccountRangeCode: Int = SnapProtocolOffset + 0x01 // 0x22
-    val GetStorageRangesCode: Int = SnapProtocolOffset + 0x02 // 0x23
-    val StorageRangesCode: Int = SnapProtocolOffset + 0x03 // 0x24
-    val GetByteCodesCode: Int = SnapProtocolOffset + 0x04 // 0x25
-    val ByteCodesCode: Int = SnapProtocolOffset + 0x05 // 0x26
-    val GetTrieNodesCode: Int = SnapProtocolOffset + 0x06 // 0x27
-    val TrieNodesCode: Int = SnapProtocolOffset + 0x07 // 0x28
+    val GetAccountRangeCode: Int = SnapProtocolOffset + 0x00 // 0x30
+    val AccountRangeCode: Int = SnapProtocolOffset + 0x01 // 0x31
+    val GetStorageRangesCode: Int = SnapProtocolOffset + 0x02 // 0x32
+    val StorageRangesCode: Int = SnapProtocolOffset + 0x03 // 0x33
+    val GetByteCodesCode: Int = SnapProtocolOffset + 0x04 // 0x34
+    val ByteCodesCode: Int = SnapProtocolOffset + 0x05 // 0x35
+    val GetTrieNodesCode: Int = SnapProtocolOffset + 0x06 // 0x36
+    val TrieNodesCode: Int = SnapProtocolOffset + 0x07 // 0x37
   }
 
   /** GetAccountRange message (0x00)
@@ -166,14 +159,17 @@ object SNAP {
       override def code: Int = Codes.AccountRangeCode
       override def toRLPEncodable: RLPEncodeable = {
         import msg._
-        // Encode accounts as list of [hash, body] pairs
+        // Per geth's snap protocol: encode each account body in SLIM format
+        // (storageRoot/codeHash empty when default). Saves ~64 bytes per EOA — critical
+        // for byte-budget-constrained responses. Decoder normalises empties back to
+        // canonical defaults so round-trips are lossless.
         val accountsList = accounts.map { case (hash, account) =>
+          val slimRlp = com.chipprbots.ethereum.network.snapserver.SnapServer.toSlimAccountRlp(account)
           RLPList(
             RLPValue(hash.toArray[Byte]),
-            account.toRLPEncodable
+            slimRlp
           )
         }
-        // Encode proof as list of byte arrays
         val proofList = proof.map(p => RLPValue(p.toArray[Byte]))
 
         RLPList(

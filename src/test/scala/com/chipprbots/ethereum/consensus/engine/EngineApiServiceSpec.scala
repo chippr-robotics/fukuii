@@ -317,15 +317,36 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers {
       result.latestValidHash shouldBe Some(validBlock.header.hash)
     }
 
-    "return INVALID_BLOCK_HASH when blockHash doesn't match header" taggedAs UnitTest in new EngineApiTestSetup {
-      val (validBlock, _) = buildValidBlock1()
-      val payload = blockToPayload(validBlock)
-      val badPayload = payload.copy(blockHash = ByteString(Array.fill(32)(0xff.toByte)))
+    "return INVALID with null latestValidHash on hash mismatch (parent known)" taggedAs UnitTest in
+      new EngineApiTestSetup {
+        // Per execution-apis PR #338 (Shanghai+): hash mismatch returns INVALID (not
+        // INVALID_BLOCK_HASH) with latestValidHash=null. The corruption is in the
+        // payload envelope, not attributable to a specific ancestor. Aligns with hive
+        // "Bad Hash on NewPayload" tests.
+        val (validBlock, _) = buildValidBlock1()
+        val payload = blockToPayload(validBlock)
+        val badPayload = payload.copy(blockHash = ByteString(Array.fill(32)(0xff.toByte)))
 
-      val result = engineApi.newPayload(badPayload).unsafeRunSync()
+        val result = engineApi.newPayload(badPayload).unsafeRunSync()
 
-      result.status shouldBe a[InvalidBlockHash]
-    }
+        result.status shouldBe Invalid
+        result.latestValidHash shouldBe None
+      }
+
+    "return INVALID with null latestValidHash on hash mismatch (parent unknown)" taggedAs UnitTest in
+      new EngineApiTestSetup {
+        val (validBlock, _) = buildValidBlock1()
+        val payload = blockToPayload(validBlock)
+        val badPayload = payload.copy(
+          parentHash = ByteString(kec256(Array[Byte](9, 9, 9))),
+          blockHash = ByteString(Array.fill(32)(0xff.toByte))
+        )
+
+        val result = engineApi.newPayload(badPayload).unsafeRunSync()
+
+        result.status shouldBe Invalid
+        result.latestValidHash shouldBe None
+      }
 
     "return INVALID for block with modified stateRoot" taggedAs UnitTest in new EngineApiTestSetup {
       val (validBlock, _) = buildValidBlock1()
@@ -346,6 +367,28 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers {
       result.latestValidHash shouldBe Some(genesisHeader.hash)
       result.validationError should not be empty
     }
+
+    "return INVALID when newPayloadV3 expectedBlobVersionedHashes mismatches payload txs" taggedAs UnitTest in
+      new EngineApiTestSetup {
+        // EIP-4844 / Engine API V3: the CL passes expectedBlobVersionedHashes as the 2nd param
+        // to engine_newPayloadV3; the EL must compare the CL's list against the concatenation
+        // of every blob tx's blobVersionedHashes in the payload and reject on mismatch. The
+        // payload built here has no blob txs (derived list is empty), but we declare a single
+        // expected hash — so the comparison must fail and return INVALID with
+        // latestValidHash = parent.hash.
+        val (validBlock, _) = buildValidBlock1()
+        val payload = blockToPayload(validBlock)
+        val fakeHash = ByteString(kec256(Array[Byte](0xde.toByte, 0xad.toByte, 0xbe.toByte, 0xef.toByte)))
+        val payloadWithMismatchedHashes = payload.copy(
+          expectedBlobVersionedHashes = Some(Seq(fakeHash))
+        )
+
+        val result = engineApi.newPayload(payloadWithMismatchedHashes).unsafeRunSync()
+
+        result.status shouldBe Invalid
+        result.latestValidHash shouldBe Some(genesisHeader.hash)
+        result.validationError.getOrElse("") should include("INVALID_VERSIONED_HASHES")
+      }
 
     "return INVALID for block with modified gasUsed" taggedAs UnitTest in new EngineApiTestSetup {
       val (validBlock, _) = buildValidBlock1()

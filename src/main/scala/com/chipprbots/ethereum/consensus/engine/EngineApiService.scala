@@ -44,12 +44,53 @@ class EngineApiService(
   // EIP-7685 executionRequests associated with each payloadId, returned by getPayloadV4.
   private val pendingPayloadRequests =
     new java.util.concurrent.ConcurrentHashMap[ByteString, Seq[ByteString]]()
+  // Receipts produced while building each payload. Used by engine_getPayloadV2+ to compute the
+  // `blockValue` field (sum of priority-fee revenue) per EIP-3675 V2 envelope spec. Without this
+  // the envelope returns blockValue=0x0 and the hive engine-withdrawals "GetPayloadV2 Block
+  // Value" test fails with want=N, got=0.
+  private val pendingPayloadReceipts =
+    new java.util.concurrent.ConcurrentHashMap[ByteString, Seq[com.chipprbots.ethereum.domain.Receipt]]()
+  // EIP-4844 blob sidecars (blobs, commitments, proofs) for each payload's blob txs. The hive
+  // engine-cancun suite's VerifyBlobBundle asserts (a) matching counts, (b) byte-equality
+  // against the sidecars the test submitted via eth_sendRawTransaction. We capture sidecars
+  // during the proposer's GetPendingTransactions call and hand them to engine_getPayloadV3's
+  // blobsBundle envelope.
+  case class BlobsBundleData(
+      blobs: Seq[ByteString],
+      commitments: Seq[ByteString],
+      proofs: Seq[ByteString]
+  )
+  private val pendingPayloadBlobsBundle =
+    new java.util.concurrent.ConcurrentHashMap[ByteString, BlobsBundleData]()
 
   /** Blocks that returned INVALID via newPayload. Maps blockHash → latestValidHash. forkchoiceUpdated should not accept
     * these as head. Children of invalid blocks inherit the latestValidHash of their invalid parent.
     */
   private val invalidBlocks = new java.util.concurrent.ConcurrentHashMap[ByteString, ByteString]()
+  // Index of optimistically-accepted (by-hash-only) blocks, keyed by parentHash → set of child
+  // hashes. Used to recursively invalidate descendants when an ancestor is later revealed as
+  // INVALID. The hive "Invalid Missing Ancestor Syncing ReOrg" family (24 tests) hangs without
+  // this because the test waits up to its internal timeout for our client to detect the invalid
+  // chain through an optimistically-accepted descendant.
+  private val acceptedChildrenByParent =
+    new java.util.concurrent.ConcurrentHashMap[ByteString, java.util.Set[ByteString]]()
   private val zeroHash = ByteString(new Array[Byte](32))
+
+  /** Mark `hash` as INVALID and recursively invalidate every optimistically-accepted descendant. All descendants
+    * inherit the same `latestValidHash`.
+    */
+  private def markInvalidRecursive(hash: ByteString, lvh: ByteString): Unit = {
+    invalidBlocks.put(hash, lvh)
+    val children = Option(acceptedChildrenByParent.remove(hash))
+    children.foreach { set =>
+      val iter = set.iterator()
+      while (iter.hasNext) {
+        val child = iter.next()
+        blockchainWriter.removeBlockByHash(child).commit()
+        markInvalidRecursive(child, lvh)
+      }
+    }
+  }
 
   /** Return the latest block number from the blockchain storage. */
   def getLatestBlockNumber: BigInt =
@@ -68,12 +109,46 @@ class EngineApiService(
 
     if (block.header.hash != payload.blockHash) {
       System.err.println(
-        s"[ENGINE-API] newPayload #${payload.blockNumber}: INVALID_BLOCK_HASH " +
+        s"[ENGINE-API] newPayload #${payload.blockNumber}: block-hash mismatch " +
           s"computed=${block.header.hashAsHexString} payload=${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(payload.blockHash)}"
       )
-      invalidBlocks.put(payload.blockHash, zeroHash)
-      blockchainWriter.removeBlockByHash(payload.blockHash).commit()
-      PayloadStatusV1(InvalidBlockHash("block hash mismatch"))
+      // Hash mismatch: integrity error of the payload envelope. Per execution-apis PR #338
+      // (https://github.com/ethereum/execution-apis/pull/338), starting from Shanghai (V2+)
+      // the engine MUST return INVALID (not INVALID_BLOCK_HASH). V1 accepts either; returning
+      // INVALID universally is compliant with all versions. latestValidHash must be null —
+      // the corruption is in the payload itself, not attributable to any specific ancestor.
+      //
+      // Do NOT call removeBlockByHash here: payload.blockHash can collide with a legitimate
+      // block (the hive "ParentHash equals BlockHash on NewPayload" test sets blockHash =
+      // parentHash, which is the real parent's hash). Removing it would delete the parent.
+      // We never stored anything under payload.blockHash in this call, so there is nothing
+      // safe and correct to remove.
+      PayloadStatusV1(Invalid, latestValidHash = None, validationError = Some("block hash mismatch"))
+    } else if ({
+      // EIP-4844 versioned-hash check must run BEFORE the "already stored" dedup. The hive
+      // "NewPayloadV3 Versioned Hashes, Non-Empty Hashes" tests call newPayloadV3 twice for
+      // the same payload — once with matching hashes (expected VALID, block gets stored),
+      // and again with tampered hashes (expected INVALID). Without this early check the
+      // tampered second call hits the dedup branch and silently returns VALID.
+      payload.expectedBlobVersionedHashes.exists { expected =>
+        val payloadHashes: Seq[ByteString] =
+          block.body.transactionList.flatMap {
+            case stx if stx.tx.isInstanceOf[com.chipprbots.ethereum.domain.BlobTransaction] =>
+              stx.tx.asInstanceOf[com.chipprbots.ethereum.domain.BlobTransaction].blobVersionedHashes
+            case _ => Nil
+          }
+        expected != payloadHashes
+      }
+    }) {
+      // VersionedHashes mismatch: INVALID per EIP-4844 with latestValidHash=parent.hash.
+      // Do NOT add to invalidBlocks — the mismatch is between the CL-supplied
+      // `expectedBlobVersionedHashes` argument and the payload's actual blob txs, not a
+      // property of the block itself. A later newPayload call with the SAME blockHash but
+      // matching versioned hashes must be accepted as VALID (hive 'Invalid NewPayload,
+      // VersionedHashes, Syncing=True' sends exactly that pattern and then expects FCU to
+      // return VALID, not 'head block was previously invalidated').
+      val lvh = blockchainReader.getBlockHeaderByHash(payload.parentHash).map(_.hash).getOrElse(zeroHash)
+      PayloadStatusV1(Invalid, latestValidHash = Some(lvh), validationError = Some("INVALID_VERSIONED_HASHES"))
     } else if (
       blockchainReader.getBlockHeaderByHash(payload.blockHash).exists { h =>
         blockchainReader.getBlockHeaderByNumber(h.number).exists(_.hash == payload.blockHash)
@@ -85,8 +160,8 @@ class EngineApiService(
       // Parent was previously marked INVALID — child inherits invalidity.
       // Propagate the parent's latestValidHash (the last valid ancestor).
       val propagatedLvh = invalidBlocks.get(payload.parentHash) // non-null: containsKey guard
-      invalidBlocks.put(payload.blockHash, propagatedLvh)
       blockchainWriter.removeBlockByHash(payload.blockHash).commit()
+      markInvalidRecursive(payload.blockHash, propagatedLvh)
       EngineApiMetrics.recordNewPayload("INVALID", payload.blockNumber.toLong, payload.timestamp)
       PayloadStatusV1(
         Invalid,
@@ -104,6 +179,8 @@ class EngineApiService(
           Some(s"invalid block number: expected ${parent.number + 1} got ${block.header.number}")
         else if (block.header.unixTimestamp <= parent.unixTimestamp)
           Some(s"invalid timestamp: ${block.header.unixTimestamp} <= parent ${parent.unixTimestamp}")
+        else if (block.header.gasLimit < BigInt(5000))
+          Some(s"gas limit below minimum: ${block.header.gasLimit} < 5000")
         else {
           // EIP-1559 gas limit bounds: |gasLimit - parent.gasLimit| < parent.gasLimit / 1024
           val diff = (block.header.gasLimit - parent.gasLimit).abs
@@ -141,19 +218,48 @@ class EngineApiService(
           } else None
         }
       }
-      if (headerInvalid.isDefined) {
+      // EIP-4844 (newPayloadV3): the CL declares which versioned hashes it expects this
+      // payload to carry. Derive our own ordered list from the payload's blob txs and
+      // compare. Mismatch ⇒ INVALID (same response shape as an INCORRECT_* header error).
+      val versionedHashesInvalid: Option[String] = payload.expectedBlobVersionedHashes.flatMap { expected =>
+        val payloadHashes: Seq[ByteString] =
+          block.body.transactionList.flatMap {
+            case stx if stx.tx.isInstanceOf[com.chipprbots.ethereum.domain.BlobTransaction] =>
+              stx.tx.asInstanceOf[com.chipprbots.ethereum.domain.BlobTransaction].blobVersionedHashes
+            case _ => Nil
+          }
+        if (expected == payloadHashes) None
+        else
+          Some(
+            s"INVALID_VERSIONED_HASHES: expected ${expected.length} got ${payloadHashes.length} (first mismatch at index " +
+              expected.zip(payloadHashes).indexWhere { case (e, p) => e != p } + ")"
+          )
+      }
+
+      val preExecError = headerInvalid.orElse(versionedHashesInvalid)
+      if (preExecError.isDefined) {
         val latestValid = parentHeader.map(_.hash).getOrElse(zeroHash)
-        invalidBlocks.put(payload.blockHash, latestValid)
         blockchainWriter.removeBlockByHash(payload.blockHash).commit()
+        markInvalidRecursive(payload.blockHash, latestValid)
         EngineApiMetrics.recordNewPayload("INVALID", payload.blockNumber.toLong, payload.timestamp)
-        PayloadStatusV1(Invalid, latestValidHash = Some(latestValid), validationError = Some(headerInvalid.get))
+        PayloadStatusV1(Invalid, latestValidHash = Some(latestValid), validationError = Some(preExecError.get))
       } else {
 
         // Tracks the tx-level reason for an execution failure so we can surface it in
         // PayloadStatus.validationError (for EEST exception mapping, e.g.
         // INSUFFICIENT_ACCOUNT_FUNDS, NONCE_MISMATCH_TOO_LOW).
         val executionErrorReason = new java.util.concurrent.atomic.AtomicReference[Option[String]](None)
-        val executionResult = if (parentKnown) {
+
+        // Parent is "validated" iff it's canonical (has a number→hash mapping to itself) or
+        // it's a known sidechain that we executed (has receipts stored). A parent we only
+        // know by hash (via storeBlockByHashOnly, i.e. optimistic accept with unknown grand-
+        // parent) has unverified ancestry, and a child built on it must NOT be claimed as
+        // VALID — hive's "Invalid NewPayload, ParentHash" test expects ACCEPTED/SYNCING.
+        val parentValidated = parentHeader.exists { p =>
+          blockchainReader.getBlockHeaderByNumber(p.number).exists(_.hash == p.hash) ||
+          blockchainReader.getReceiptsByHash(p.hash).isDefined
+        }
+        val executionResult = if (parentKnown && parentValidated) {
           try
             blockExecution.executeAndValidateBlockFull(block, alreadyValidated = true) match {
               case Right((receipts, derivedRequests)) =>
@@ -166,8 +272,8 @@ class EngineApiService(
                     suppliedRequests != derivedRequests
                 if (requestsMismatch) {
                   val lvh = parentHeader.map(_.hash).getOrElse(zeroHash)
-                  invalidBlocks.put(payload.blockHash, lvh)
                   blockchainWriter.removeBlockByHash(payload.blockHash).commit()
+                  markInvalidRecursive(payload.blockHash, lvh)
                   executionErrorReason.set(
                     Some(
                       s"INVALID_REQUESTS: executionRequests mismatch " +
@@ -187,6 +293,11 @@ class EngineApiService(
                   if (extendsCanonical) blockchainWriter.storeBlock(block).commit()
                   else blockchainWriter.storeBlockByHashOnly(block).commit()
                   blockchainWriter.storeReceipts(block.header.hash, receipts).commit()
+                  // NB: do NOT remove txs from the pool here. A newPayload'd block is stored
+                  // but not yet canonical (no FCU has advanced bestBlock); the same txs must
+                  // remain available for an alternative sibling payload on the same parent
+                  // (hive 'Sidechain Reorg' test). Pool removal happens in forkchoiceUpdated
+                  // once the block is promoted.
                   System.err.println(
                     s"[ENGINE-API] newPayload #${payload.blockNumber}: EXECUTED OK " +
                       s"(${block.body.numberOfTxs} txs, sidechain=${!extendsCanonical}, " +
@@ -207,8 +318,8 @@ class EngineApiService(
                   case _ =>
                     // Genuine validation failure (wrong stateRoot, gasUsed, receipts, etc.)
                     val lvh = parentHeader.map(_.hash).getOrElse(zeroHash)
-                    invalidBlocks.put(payload.blockHash, lvh)
                     blockchainWriter.removeBlockByHash(payload.blockHash).commit()
+                    markInvalidRecursive(payload.blockHash, lvh)
                     executionErrorReason.set(Some(error.reason.toString))
                     System.err.println(
                       s"[ENGINE-API] newPayload #${payload.blockNumber}: INVALID: ${error.reason}"
@@ -250,9 +361,19 @@ class EngineApiService(
             )
 
           case None =>
-            // Parent unknown — store block BY HASH ONLY (not by number) so it doesn't
-            // appear in eth_getBlockByNumber but can be deduped by hash.
+            // Parent unknown OR parent known but unvalidated (optimistic chain). Store by
+            // hash only so the block doesn't appear in eth_getBlockByNumber / eth_getBlock-
+            // ByHash, but can be deduped and retroactively invalidated later.
             blockchainWriter.storeBlockByHashOnly(block).commit()
+            // Record parent→child so that if the (still-unknown) ancestor chain is later
+            // revealed as INVALID, we can retroactively invalidate this block too. Required
+            // by hive's "Invalid Missing Ancestor Syncing ReOrg" tests.
+            acceptedChildrenByParent
+              .computeIfAbsent(
+                payload.parentHash,
+                _ => java.util.concurrent.ConcurrentHashMap.newKeySet[ByteString]()
+              )
+              .add(payload.blockHash)
             System.err.println(
               s"[ENGINE-API] newPayload #${payload.blockNumber}: ACCEPTED (parent unknown)"
             )
@@ -301,14 +422,32 @@ class EngineApiService(
         .map(_.hash)
         .getOrElse(ByteString.empty)
 
-      // Validate safe/finalized hashes FIRST, before any SYNCING shortcut.
-      // Per Engine API spec 5.4: safeBlockHash and finalizedBlockHash must be ancestors of headBlockHash.
-      // If either is unknown or not an ancestor → -38002 invalid forkchoice state.
+      // Per Engine API spec 5.4 + hive "In-Order Consecutive Payload Execution": if the
+      // head itself is unknown, return SYNCING first — we can't meaningfully validate
+      // safe/finalized ancestry against a head we don't have. The safe/finalized unknown
+      // checks are only -38002 errors once we KNOW the head; otherwise the CL is still
+      // driving us to sync and the correct response is SYNCING.
       val safeHash = forkChoiceState.safeBlockHash
       val finalizedHash = forkChoiceState.finalizedBlockHash
       val safeUnknown = safeHash != zeroHash && blockchainReader.getBlockHeaderByHash(safeHash).isEmpty
       val finalizedUnknown = finalizedHash != zeroHash && blockchainReader.getBlockHeaderByHash(finalizedHash).isEmpty
-      if (safeUnknown || finalizedUnknown) {
+      // Head-known-but-unvalidated: the block was stored optimistically (storeBlockByHashOnly,
+      // no receipts, no canonical number mapping) because its parent chain isn't traceable.
+      // In this state we're still syncing, so ALL status flavors — including safe/finalized
+      // unknown — should yield SYNCING, not -38002. Hive's 'Invalid NewPayload, *VersionedHashes,
+      // Syncing=True' tests rely on this.
+      val headOptimistic =
+        blockExistsByHash && !blockFullyStored && !isGenesis &&
+          blockchainReader.getReceiptsByHash(forkChoiceState.headBlockHash).isEmpty
+
+      if (!blockExistsByHash && !isGenesis) {
+        // Head unknown — client is still syncing to this head
+        EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
+        Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing)))
+      } else if (headOptimistic) {
+        EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
+        Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing)))
+      } else if (safeUnknown || finalizedUnknown) {
         val msg = if (safeUnknown) "unknown safe block hash" else "unknown finalized block hash"
         EngineApiMetrics.recordForkchoiceUpdated("INVALID")
         Left(msg)
@@ -318,14 +457,6 @@ class EngineApiService(
       } else if (headHeader.isDefined && !isAncestorOrEqual(finalizedHash, forkChoiceState.headBlockHash, zeroHash)) {
         EngineApiMetrics.recordForkchoiceUpdated("INVALID")
         Left("invalid forkchoice state: finalized block is not an ancestor of head")
-      } else if (
-        blockExistsByHash && !blockFullyStored && !isGenesis &&
-        // executed sidechains have receipts stored; parent-unknown ACCEPTED blocks do not.
-        blockchainReader.getReceiptsByHash(forkChoiceState.headBlockHash).isEmpty
-      ) {
-        // Block stored by hash only AND never executed (parent unknown ACCEPTED) — not fully validated
-        EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
-        Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing)))
       } else {
 
         forkChoiceManager.applyForkChoiceState(forkChoiceState) match {
@@ -335,12 +466,21 @@ class EngineApiService(
             Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing)))
 
           case Right(()) =>
-            // Ancestry already validated above; proceed with payload attributes check
+            // FCU has advanced best-block; purge the head block's txs from the mempool
+            // so the next proposer build doesn't re-queue them (would cause
+            // NONCE_MISMATCH_TOO_LOW).
+            if (pendingTransactionsManager != null) {
+              blockchainReader.getBlockByHash(forkChoiceState.headBlockHash).foreach { headBlock =>
+                if (headBlock.body.transactionList.nonEmpty)
+                  pendingTransactionsManager ! com.chipprbots.ethereum.transactions.PendingTransactionsManager
+                    .RemoveTransactions(headBlock.body.transactionList)
+              }
+            }
 
-            // Validate payload attributes if present. Per Engine API spec, invalid payload
-            // attributes (zero or parent-relative timestamp) yield JSON-RPC -38003, NOT a
-            // PayloadStatus.INVALID. We tunnel the condition up via Left with a marker prefix
-            // so the controller can map it to the correct error code.
+            // Validate payload attributes AFTER applying forkchoice — per engine-API spec
+            // step ordering (apply forkchoiceState, THEN check attrs) and hive's
+            // 'Invalid PayloadAttributes' test, which asserts the forkchoice IS applied
+            // even when attrs are rejected with -38003.
             val invalidAttrsMsg: Option[String] = payloadAttributes.flatMap { attrs =>
               if (attrs.timestamp == 0) Some("invalid payload attributes: zero timestamp")
               else {
@@ -357,12 +497,27 @@ class EngineApiService(
             } else {
 
               val payloadId = payloadAttributes.map { attrs =>
-                // Generate a payload ID from the attributes (deterministic)
+                // Deterministic payload ID MUST be unique for every distinct attribute
+                // combination — hive 'Unique Payload ID' test sends FCUs differing only in
+                // a single withdrawal field or beaconRoot and expects the IDs to differ.
+                // Include withdrawals + beaconRoot in the hash.
+                val withdrawalBytes: Array[Byte] =
+                  attrs.withdrawals.toSeq.flatMap { ws =>
+                    ws.flatMap { w =>
+                      w.index.toByteArray.toSeq ++
+                        w.validatorIndex.toByteArray.toSeq ++
+                        w.address.bytes.toArray.toSeq ++
+                        w.amount.toByteArray.toSeq
+                    }
+                  }.toArray
+                val beaconRootBytes = attrs.parentBeaconBlockRoot.map(_.toArray).getOrElse(Array.emptyByteArray)
                 val idBytes = kec256(
                   forkChoiceState.headBlockHash.toArray ++
                     BigInt(attrs.timestamp).toByteArray ++
                     attrs.prevRandao.toArray ++
-                    attrs.suggestedFeeRecipient.bytes.toArray
+                    attrs.suggestedFeeRecipient.bytes.toArray ++
+                    withdrawalBytes ++
+                    beaconRootBytes
                 )
                 val id = ByteString(idBytes.take(8))
 
@@ -384,15 +539,17 @@ class EngineApiService(
                         if (parentBaseFee - delta < 0) BigInt(0) else parentBaseFee - delta
                       }
 
-                    // Fetch pending transactions from the tx pool, filtering by chain ID
-                    val pendingTxs: Seq[SignedTransaction] =
+                    // Fetch pending transactions from the tx pool, filtering by chain ID.
+                    // Also capture the network-wrapped raw bytes for EIP-4844 blob txs so
+                    // engine_getPayloadV3 can emit them in the blobsBundle envelope.
+                    val (pendingTxs, blobTxRawBytesFromPool): (Seq[SignedTransaction], Map[ByteString, ByteString]) =
                       try {
                         import com.chipprbots.ethereum.transactions.PendingTransactionsManager._
                         val future =
                           (pendingTransactionsManager ? GetPendingTransactions).mapTo[PendingTransactionsResponse]
                         val response = Await.result(future, 3.seconds)
                         val expectedChainId = blockchainConfig.chainId
-                        val txs = response.pendingTransactions.map(_.stx.tx).filter { stx =>
+                        val filtered = response.pendingTransactions.map(_.stx.tx).filter { stx =>
                           val txChainId: Option[BigInt] = stx.tx match {
                             case t: com.chipprbots.ethereum.domain.TransactionWithAccessList => Some(t.chainId)
                             case t: com.chipprbots.ethereum.domain.TransactionWithDynamicFee => Some(t.chainId)
@@ -402,13 +559,45 @@ class EngineApiService(
                           }
                           txChainId.forall(_ == expectedChainId)
                         }
+                        // Sort by (sender, nonce) so execution processes each sender's txs
+                        // in nonce order. The pool returns them in arrival order — a blob-tx
+                        // producer like hive's NewPayloadV3 tests sends nonces N, N+1, ...,
+                        // and without this sort execution hits NONCE_MISMATCH_TOO_HIGH when
+                        // tx with nonce N+2 runs before nonce N.
+                        val txs = filtered.sortBy { stx =>
+                          val sender = SignedTransaction.getSender(stx).map(_.bytes.toArray.toSeq).getOrElse(Seq.empty)
+                          (sender, stx.tx.nonce)
+                        }
                         if (txs.nonEmpty) log.info("Payload includes {} pending transactions", txs.size)
-                        txs
+                        (txs, response.blobTxNetworkBytes)
                       } catch {
                         case e: Exception =>
                           log.error("Failed to fetch pending txs: {}", e.getMessage)
-                          Seq.empty
+                          (Seq.empty[SignedTransaction], Map.empty[ByteString, ByteString])
                       }
+
+                    // EIP-4844 / EIP-7691: cap blob-gas included in the payload at the fork's
+                    // MAX_BLOB_GAS_PER_BLOCK (6 blobs Cancun, 9 blobs Prague). Without this cap
+                    // the proposer packs every pool blob tx into one block and getPayloadV3's
+                    // blobsBundle grows past the test's `ExpectedIncludedBlobCount`.
+                    val pendingTxsForBlock = {
+                      val maxBlobGas =
+                        if (blockchainConfig.isPragueTimestamp(attrs.timestamp))
+                          BlobGasUtils.PRAGUE_MAX_BLOB_GAS
+                        else BlobGasUtils.CANCUN_MAX_BLOB_GAS
+                      pendingTxs
+                        .foldLeft((Seq.empty[SignedTransaction], BigInt(0))) { case ((kept, blobGas), stx) =>
+                          stx.tx match {
+                            case b: com.chipprbots.ethereum.domain.BlobTransaction =>
+                              val add = BigInt(b.blobVersionedHashes.size) * BlobGasUtils.GAS_PER_BLOB
+                              if (blobGas + add <= maxBlobGas) (kept :+ stx, blobGas + add)
+                              else (kept, blobGas) // skip this blob tx, smaller ones later may still fit
+                            case _ =>
+                              (kept :+ stx, blobGas)
+                          }
+                        }
+                        ._1
+                    }
 
                     val emptyWithdrawalsRoot = ByteString(
                       kec256(
@@ -423,6 +612,7 @@ class EngineApiService(
 
                     // Determine which fork is active at the proposed block's timestamp so we emit
                     // the correct HeaderExtraFields variant and header fields.
+                    val isShanghai = blockchainConfig.isShanghaiTimestamp(attrs.timestamp)
                     val isCancun = blockchainConfig.isCancunTimestamp(attrs.timestamp)
                     val isPrague = blockchainConfig.isPragueTimestamp(attrs.timestamp)
                     val withdrawals: Seq[com.chipprbots.ethereum.domain.Withdrawal] =
@@ -465,8 +655,15 @@ class EngineApiService(
                           childExcessBlobGas,
                           parentBeaconBlockRoot
                         )
-                      else
+                      else if (isShanghai)
                         HefPostShanghai(baseFee, computedWithdrawalsRoot)
+                      else
+                        // Paris (post-merge, pre-Shanghai): HefPostOlympia holds only baseFee.
+                        // Using HefPostShanghai here breaks the blockHash round-trip: getPayloadV1
+                        // returns a payload with no withdrawals field, and newPayloadV1 reconstructs
+                        // the header as HefPostOlympia — different RLP, different hash, so every
+                        // Paris payload we build fails its own newPayload round-trip.
+                        HefPostOlympia(baseFee)
 
                     // Build post-merge header with skeleton (difficulty=0 so payBlockReward skips PoW rewards)
                     val blockNumber = parent.header.number + 1
@@ -490,34 +687,30 @@ class EngineApiService(
                       nonce = ByteString(new Array[Byte](8)),
                       extraFields = initialExtraFields
                     )
-                    val body = BlockBody(pendingTxs.toList, Nil, withdrawals = attrs.withdrawals)
+                    val body = BlockBody(pendingTxsForBlock.toList, Nil, withdrawals = attrs.withdrawals)
                     val skeletonBlock = Block(header, body)
 
-                    // Execute full Prague flow (preambles + txs + withdrawals + system calls + deposit collection).
-                    // Fall back to BlockPreparator.prepareBlock (tx-only) for pre-Prague so we don't
-                    // needlessly touch the Prague system contracts.
+                    // Route EVERY post-merge proposer build through executeForProposer (which
+                    // goes through BlockExecution.executeBlock — txs, payBlockReward, withdrawals
+                    // via processWithdrawals, Prague system calls, then persistState).
+                    // The previous `if (isPrague) …  else BlockPreparator.prepareBlock` branch
+                    // was broken for Shanghai/Cancun: BlockPreparator.prepareBlock does NOT call
+                    // processWithdrawals, so the proposer-built header contained a stateRoot that
+                    // did not reflect the withdrawals — every withdrawals hive test came back with
+                    // "Block has invalid state root hash" on its own payload round-trip.
+                    // executeBlock early-returns cleanly on pre-Prague (processPragueSystemCalls
+                    // is a no-op outside Prague), so there's nothing to lose by using it always.
                     import com.chipprbots.ethereum.consensus.validators.std.MptListValidator.intByteArraySerializable
                     import com.chipprbots.ethereum.ledger.BloomFilter
                     import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
                     import com.chipprbots.ethereum.domain.Receipt
                     val (receipts, gasUsedTotal, finalStateRoot, executionRequests) =
-                      if (isPrague) {
-                        blockExecution.executeForProposer(skeletonBlock) match {
-                          case Right(result) =>
-                            (result.receipts, result.gasUsed, result.worldState.stateRootHash, result.executionRequests)
-                          case Left(err) =>
-                            log.error("Proposer-mode Prague execution failed: {}", err)
-                            (Seq.empty[Receipt], BigInt(0), parent.header.stateRoot, Seq.empty[ByteString])
-                        }
-                      } else {
-                        val prepared = mining.blockPreparator
-                          .prepareBlock(evmCodeStorage, skeletonBlock, parent.header, None)
-                        (
-                          prepared.blockResult.receipts,
-                          prepared.blockResult.gasUsed,
-                          prepared.stateRootHash,
-                          Seq.empty[ByteString]
-                        )
+                      blockExecution.executeForProposer(skeletonBlock) match {
+                        case Right(result) =>
+                          (result.receipts, result.gasUsed, result.worldState.stateRootHash, result.executionRequests)
+                        case Left(err) =>
+                          log.error("Proposer-mode execution failed: {}", err)
+                          (Seq.empty[Receipt], BigInt(0), parent.header.stateRoot, Seq.empty[ByteString])
                       }
 
                     val receiptsLogs = BloomFilter.EmptyBloomFilter.toArray +: receipts.map(_.logsBloomFilter.toArray)
@@ -585,6 +778,14 @@ class EngineApiService(
                     pendingPayloads.put(id, payload)
                     // Also stash executionRequests so getPayloadV4 can emit them.
                     if (executionRequests.nonEmpty) pendingPayloadRequests.put(id, executionRequests)
+                    // Stash receipts so getPayloadV2+ can compute the blockValue envelope field.
+                    if (receipts.nonEmpty) pendingPayloadReceipts.put(id, receipts)
+                    // EIP-4844: collect the blob sidecars for every blob tx in the built payload
+                    // so engine_getPayloadV3 can emit the blobsBundle envelope. Without this the
+                    // envelope has empty arrays while the payload body has blob txs; the hive
+                    // engine-cancun VerifyBlobBundle step fails with "expected N blob, got 0".
+                    val bundle = buildBlobsBundle(payload.body.transactionList, blobTxRawBytesFromPool)
+                    if (bundle.blobs.nonEmpty) pendingPayloadBlobsBundle.put(id, bundle)
                     log.info(
                       "Built payload {} for block {} (baseFee={}, parent={}, fork={}, requests={})",
                       id.toArray.map("%02x".format(_)).mkString,
@@ -619,7 +820,11 @@ class EngineApiService(
 
   /** engine_getPayloadV1/V2/V3/V4 — Return a previously built payload by ID. */
   def getPayload(payloadId: ByteString): IO[Either[String, Block]] = IO {
-    Option(pendingPayloads.remove(payloadId)) match {
+    // Do NOT remove: the engine-api spec allows the CL to call getPayload multiple times for
+    // the same id (e.g. first getPayloadV1 then getPayloadV2 for the same payload, as the
+    // hive engine-withdrawals "Withdrawals Fork on Block N" tests do). Removing on the first
+    // read makes any follow-up call fail with "Payload not available".
+    Option(pendingPayloads.get(payloadId)) match {
       case Some(block) => Right(block)
       case None        => Left("Payload not available")
     }
@@ -631,6 +836,60 @@ class EngineApiService(
     */
   def getPayloadExecutionRequests(payloadId: ByteString): Seq[ByteString] =
     Option(pendingPayloadRequests.remove(payloadId)).getOrElse(Nil)
+
+  /** Receipts produced while building this payload. Used by engine_getPayloadV2+ to compute the `blockValue` envelope
+    * field. `get` (not `remove`) because the CL may call getPayloadV1 and then getPayloadV2 for the same id (hive
+    * withdrawals tests rely on this).
+    */
+  def getPayloadReceipts(payloadId: ByteString): Seq[com.chipprbots.ethereum.domain.Receipt] =
+    Option(pendingPayloadReceipts.get(payloadId)).getOrElse(Nil)
+
+  /** EIP-4844 sidecars for the blob txs included in this payload, for engine_getPayloadV3's blobsBundle envelope. Empty
+    * when the payload has no blob txs.
+    */
+  def getPayloadBlobsBundle(payloadId: ByteString): BlobsBundleData =
+    Option(pendingPayloadBlobsBundle.get(payloadId)).getOrElse(BlobsBundleData(Nil, Nil, Nil))
+
+  /** Parse the EIP-4844 network-wrapped raw bytes (`0x03 || rlp([tx_payload, blobs, commitments, proofs])`) the pool
+    * captured for each blob tx, and return the concatenated sidecars for every blob tx actually included in the built
+    * payload, in payload order.
+    */
+  private def buildBlobsBundle(
+      txs: Seq[SignedTransaction],
+      blobTxRawBytes: Map[ByteString, ByteString]
+  ): BlobsBundleData = {
+    import com.chipprbots.ethereum.rlp.{rawDecode, RLPList, RLPValue}
+    val blobTxHashes = txs.collect {
+      case stx if stx.tx.isInstanceOf[com.chipprbots.ethereum.domain.BlobTransaction] => stx.hash
+    }
+    val allBlobs = Seq.newBuilder[ByteString]
+    val allCommitments = Seq.newBuilder[ByteString]
+    val allProofs = Seq.newBuilder[ByteString]
+    blobTxHashes.foreach { h =>
+      blobTxRawBytes.get(h) match {
+        case Some(raw) if raw.length > 1 && raw(0) == 0x03 =>
+          try
+            rawDecode(raw.toArray.drop(1)) match {
+              case RLPList(_, blobs: RLPList, commitments: RLPList, proofs: RLPList) =>
+                blobs.items.foreach { case RLPValue(b) => allBlobs += ByteString(b); case _ => }
+                commitments.items.foreach { case RLPValue(c) => allCommitments += ByteString(c); case _ => }
+                proofs.items.foreach { case RLPValue(p) => allProofs += ByteString(p); case _ => }
+              case _ =>
+                log.warn("Blob tx {} sidecar RLP shape unexpected; skipping", h.toArray.map("%02x".format(_)).mkString)
+            }
+          catch {
+            case e: Exception =>
+              log.warn(
+                "Failed to decode blob tx {} sidecar: {}",
+                h.toArray.map("%02x".format(_)).mkString,
+                e.getMessage
+              )
+          }
+        case _ => // tx from network / historical — we didn't store a sidecar
+      }
+    }
+    BlobsBundleData(allBlobs.result(), allCommitments.result(), allProofs.result())
+  }
 
   /** engine_exchangeCapabilities — return supported Engine API methods. */
   def exchangeCapabilities(clCapabilities: Seq[String]): IO[Seq[String]] = IO {
@@ -865,6 +1124,26 @@ object BlobGasUtils {
     */
   def getBlobGasPrice(excessBlobGas: BigInt): BigInt =
     fakeExponential(MIN_BLOB_BASE_FEE, excessBlobGas, BLOB_BASE_FEE_UPDATE_FRACTION)
+
+  /** Fork-aware blob gas price. Prague (EIP-7691) raises the update fraction. */
+  def getBlobGasPrice(
+      excessBlobGas: BigInt,
+      blockTimestamp: Long,
+      blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig
+  ): BigInt = {
+    val fraction =
+      if (blockchainConfig.isPragueTimestamp(blockTimestamp)) PRAGUE_BLOB_BASE_FEE_UPDATE_FRACTION
+      else BLOB_BASE_FEE_UPDATE_FRACTION
+    fakeExponential(MIN_BLOB_BASE_FEE, excessBlobGas, fraction)
+  }
+
+  /** Fork-aware MAX_BLOB_GAS_PER_BLOCK. */
+  def maxBlobGasPerBlock(
+      blockTimestamp: Long,
+      blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig
+  ): BigInt =
+    if (blockchainConfig.isPragueTimestamp(blockTimestamp)) PRAGUE_MAX_BLOB_GAS
+    else CANCUN_MAX_BLOB_GAS
 
   /** EIP-7918: Osaka blob base fee floored by execution gas cost. Prevents blob base fee from decoupling from execution
     * fee market. Formula (Osaka spec): blob_base_fee = max(current_blob_fee, (blob_base_fee_update_fraction *

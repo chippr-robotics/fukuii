@@ -28,7 +28,7 @@ sbt test
 |----------|-------------|
 | [JSON-RPC Reference](../api/JSON_RPC_API_REFERENCE.md) | 77 documented methods |
 | [Coverage Analysis](../api/JSON_RPC_COVERAGE_ANALYSIS.md) | Gap analysis vs specification |
-| [MCP Integration](../../MCP.md) | Model Context Protocol tools and resources |
+| [MCP Integration](../MCP.md) | Model Context Protocol tools and resources |
 
 ## Development Commands
 

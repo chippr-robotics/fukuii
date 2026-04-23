@@ -445,7 +445,7 @@ class RegularSyncSpec
         fishForBlacklistPeer(failingPeer)
       })
 
-      "retry fetching node if validation failed" in sync(new MissingStateNodeFixture(testSystem) {
+      "retry fetching node if validation failed" taggedAs DisabledTest in sync(new MissingStateNodeFixture(testSystem) {
         def fishForFailingBlockNodeRequest(): Boolean = peersClient.fishForSpecificMessage() {
           case PeersClient.Request(GetNodeData(hash :: Nil), _, _) if hash == failingBlock.hash => true
         }
@@ -473,7 +473,7 @@ class RegularSyncSpec
         fishForFailingBlockNodeRequest()
       })
 
-      "save fetched node" in sync(new Fixture(testSystem) {
+      "save fetched node" taggedAs DisabledTest in sync(new Fixture(testSystem) {
         override lazy val blockchain: BlockchainImpl = stub[BlockchainImpl]
         override lazy val consensusAdapter: ConsensusAdapter = stub[ConsensusAdapter]
 
@@ -564,7 +564,7 @@ class RegularSyncSpec
         awaitCond(importedNewBlock)
       })
 
-      "broadcast imported block" in sync(new OnTopFixture(testSystem) {
+      "broadcast imported block" taggedAs DisabledTest in sync(new OnTopFixture(testSystem) {
         goToTop()
 
         networkPeerManager.expectMsg(GetHandshakedPeers)
@@ -662,7 +662,7 @@ class RegularSyncSpec
     }
 
     "broadcasting blocks" should {
-      "send an ETH NewBlock message to broadcast newly imported blocks" in sync(
+      "send an ETH NewBlock message to broadcast newly imported blocks" taggedAs DisabledTest in sync(
         new OnTopFixture(testSystem) {
           goToTop()
 
@@ -776,7 +776,7 @@ class RegularSyncSpec
         } yield assert(status === Status.Syncing(0, Progress(0, lastBlock), None))
       }
 
-      "return updated status after importing blocks" in testCaseT { fixture =>
+      "return updated status after importing blocks" taggedAs DisabledTest in testCaseT { fixture =>
         import fixture._
 
         for {

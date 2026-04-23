@@ -10,7 +10,12 @@ import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.domain.SignedTransaction
+import com.chipprbots.ethereum.domain.Withdrawal
+import com.chipprbots.ethereum.domain.Withdrawal.WithdrawalBytesDec
+import com.chipprbots.ethereum.domain.Withdrawal.WithdrawalEnc
 import com.chipprbots.ethereum.ledger.BloomFilter
+import com.chipprbots.ethereum.mpt.ByteArraySerializable
+import com.chipprbots.ethereum.rlp.{encode => rlpEncode}
 import com.chipprbots.ethereum.utils.ByteUtils.or
 
 object StdBlockValidator extends BlockValidator {
@@ -135,8 +140,41 @@ object StdBlockValidator extends BlockValidator {
       _ <- validateTransactionRoot(block)
       _ <- validateOmmersHash(block)
       _ <- validateBlockRLPSize(block)
+      _ <- validateWithdrawalsRoot(block)
     } yield BlockValid
   }
+
+  /** EIP-4895: if the header declares a withdrawalsRoot, it must equal the trie root computed from
+    * block.body.withdrawals (indexed like transactions/receipts). Pre-Shanghai headers have no withdrawalsRoot and no
+    * withdrawals in the body — no-op.
+    */
+  private def validateWithdrawalsRoot(block: Block): Either[BlockError, BlockValid] =
+    block.header.withdrawalsRoot match {
+      case None => Right(BlockValid)
+      case Some(expectedRoot) =>
+        val withdrawals = block.body.withdrawals.getOrElse(Seq.empty)
+        val computedRoot = computeWithdrawalsRoot(withdrawals)
+        if (computedRoot == expectedRoot) Right(BlockValid)
+        else Left(BlockWithdrawalsRootError)
+    }
+
+  private def computeWithdrawalsRoot(withdrawals: Seq[Withdrawal]): ByteString =
+    if (withdrawals.isEmpty) {
+      BlockHeader.EmptyMpt
+    } else {
+      val serializable = new ByteArraySerializable[Withdrawal] {
+        override def fromBytes(bytes: Array[Byte]): Withdrawal = WithdrawalBytesDec(bytes).toWithdrawal
+        override def toBytes(input: Withdrawal): Array[Byte] = rlpEncode(WithdrawalEnc(input).toRLPEncodable)
+      }
+      val stateStorage = com.chipprbots.ethereum.db.storage.StateStorage.getReadOnlyStorage(
+        com.chipprbots.ethereum.db.dataSource.EphemDataSource()
+      )
+      val trie = com.chipprbots.ethereum.mpt.MerklePatriciaTrie[Int, Withdrawal](
+        source = stateStorage
+      )(MptListValidator.intByteArraySerializable, serializable)
+      val root = withdrawals.zipWithIndex.foldLeft(trie)((t, r) => t.put(r._2, r._1)).getRootHash
+      ByteString(root)
+    }
 
   /** This method allows validations of the block with its associated receipts. It only perfoms the following
     * validations (stated on section 4.4.2 of http://paper.gavwood.com/):
@@ -165,6 +203,8 @@ object StdBlockValidator extends BlockValidator {
   case object BlockReceiptsHashError extends BlockError
 
   case object BlockLogBloomError extends BlockError
+
+  case object BlockWithdrawalsRootError extends BlockError
 
   case class BlockRLPSizeError(size: Long, cap: Long) extends BlockError
 

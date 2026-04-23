@@ -80,22 +80,29 @@ class BlockExecution(
     * calls (EIP-7002/7251), collects deposit requests (EIP-6110), and returns the full BlockResult with receipts +
     * executionRequests populated. No pre- or post-execution validation against the header is performed — caller is
     * responsible for filling in header fields (stateRoot, receiptsRoot, gasUsed, requestsHash, etc.) from the result.
+    *
+    * Executes against a read-only-backed WorldStateProxy so tx effects do NOT persist to RocksDB. A proposer block is
+    * speculative until the CL promotes it via `forkchoiceUpdated(head=hash(block))`; leaking its state would cause a
+    * subsequent `newPayload` for the same slot (e.g. a tampered sibling) to fail with stale nonces / balances instead
+    * of the expected stateRoot / receiptsRoot mismatch. Matches the read-only pattern used by `eth_call`,
+    * `eth_estimateGas`, and `debug_traceTransaction`.
     */
   def executeForProposer(
       block: Block
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockResult] =
-    executeBlock(block)
+    executeBlock(block, isProposer = true)
 
   /** Executes a block (executes transactions and pays rewards) */
   private def executeBlock(
-      block: Block
+      block: Block,
+      isProposer: Boolean = false
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockResult] =
     try
       for {
         parentHeader <- blockchainReader
           .getBlockHeaderByHash(block.header.parentHash)
           .toRight(MissingParentError) // Should not never occur because validated earlier
-        initialWorld = buildInitialWorld(block, parentHeader)
+        initialWorld = buildInitialWorld(block, parentHeader, isProposer)
         execResult <- executeBlockTransactions(block, initialWorld)
         worldAfterReward <- Either
           .catchOnly[MPTException](blockPreparator.payBlockReward(block, execResult.worldState))
@@ -109,7 +116,9 @@ class BlockExecution(
         worldAfterSystemCalls = systemCallResult._1
         systemRequests = systemCallResult._2
         depositRequest = collectDepositRequests(execResult.receipts)
-        // State root hash needs to be up-to-date for validateBlockAfterExecution
+        // State root hash needs to be up-to-date for validateBlockAfterExecution. In proposer mode the
+        // backing MPT storage is read-only, so persistState computes the trie hash in-memory without
+        // writing to RocksDB — exactly what we want for a speculative payload.
         worldPersisted = InMemoryWorldStateProxy.persistState(worldAfterSystemCalls)
       } yield execResult.copy(
         worldState = worldPersisted,
@@ -119,9 +128,18 @@ class BlockExecution(
       case e: MPTException => Left(BlockExecutionError.MPTError(e))
     }
 
-  protected def buildInitialWorld(block: Block, parentHeader: BlockHeader)(implicit
+  protected def buildInitialWorld(block: Block, parentHeader: BlockHeader, isProposer: Boolean = false)(implicit
       blockchainConfig: BlockchainConfig
-  ): InMemoryWorldStateProxy =
+  ): InMemoryWorldStateProxy = {
+    // `isProposer` originally switched to `getReadOnlyMptStorage()` to keep proposer-mode tx
+    // state from leaking into the canonical DB. That did not actually work: ReadOnlyNodeStorage
+    // buffers writes but its `persist()` still flushes them to the wrapped storage, which is
+    // what `InMemoryWorldStateProxy.persistState` ends up calling. Meanwhile the read-only
+    // wrapping broke the Shanghai withdrawals stateRoot: proposer-computed and newPayload-computed
+    // roots diverged for reasons we haven't fully isolated (likely buffered-node read ordering
+    // inside SerializingMptStorage/MerklePatriciaTrie). Use the writable backing in both modes;
+    // we still get idempotence because the MPT hash is deterministic given the same inputs.
+    val _ = isProposer
     InMemoryWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
       blockchain.getBackingMptStorage(block.header.number),
@@ -131,6 +149,7 @@ class BlockExecution(
       noEmptyAccounts = EvmConfig.forBlock(block.header.number, blockchainConfig).noEmptyAccounts,
       ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
     )
+  }
 
   /** This function runs transactions
     *
@@ -338,10 +357,16 @@ class BlockExecution(
       case Some(withdrawals) if withdrawals.nonEmpty =>
         val GweiToWei = BigInt("1000000000")
         withdrawals.foldLeft(world) { (w, withdrawal) =>
-          val weiAmount = UInt256(withdrawal.amount * GweiToWei)
-          val address = withdrawal.address
-          val account = w.getAccount(address).getOrElse(w.getEmptyAccount)
-          w.saveAccount(address, account.increaseBalance(weiAmount))
+          // EIP-4895: amount-0 withdrawals must NOT touch the target account —
+          // creating/saving an empty account here diverges from every other EL
+          // client's state root for any block containing a zero-amount withdrawal.
+          if (withdrawal.amount == 0) w
+          else {
+            val weiAmount = UInt256(withdrawal.amount * GweiToWei)
+            val address = withdrawal.address
+            val account = w.getAccount(address).getOrElse(w.getEmptyAccount)
+            w.saveAccount(address, account.increaseBalance(weiAmount))
+          }
         }
       case _ => world
     }

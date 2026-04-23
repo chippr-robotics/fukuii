@@ -41,7 +41,7 @@ import com.chipprbots.ethereum.utils.Config
 class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
 
   it should "start with the peers initial info as provided" taggedAs (UnitTest, NetworkTest) in new TestSetup {
-    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+    expectInitialSubscriptions()
     setupNewPeer(peer1, peer1Probe, peer1Info)
     setupNewPeer(peer2, peer2Probe, peer2Info)
 
@@ -59,7 +59,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "update max peer when receiving new block ETH63" taggedAs (UnitTest, NetworkTest) in new TestSetup {
-    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+    expectInitialSubscriptions()
     setupNewPeer(peer1, peer1Probe, peer1Info)
 
     // given
@@ -83,7 +83,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "update max peer when receiving block header" taggedAs (UnitTest, NetworkTest) in new TestSetup {
-    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+    expectInitialSubscriptions()
     setupNewPeer(peer1, peer1Probe, peer1Info)
 
     // given
@@ -104,7 +104,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "update max peer when receiving new block hashes" taggedAs (UnitTest, NetworkTest) in new TestSetup {
-    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+    expectInitialSubscriptions()
     setupNewPeer(peer1, peer1Probe, peer1Info)
 
     // given
@@ -125,7 +125,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     UnitTest,
     NetworkTest
   ) in new TestSetup {
-    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+    expectInitialSubscriptions()
     setupNewPeer(peer1, peer1Probe, peer1Info)
 
     // given
@@ -142,7 +142,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "update the fork accepted when receiving the fork block" taggedAs (UnitTest, NetworkTest) in new TestSetup {
-    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+    expectInitialSubscriptions()
     setupNewPeer(peer1, peer1Probe, peer1Info)
 
     // given
@@ -157,7 +157,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "disconnect from a peer with different fork block" taggedAs (UnitTest, NetworkTest) in new TestSetup {
-    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+    expectInitialSubscriptions()
     setupNewPeer(peer1, peer1Probe, peer1Info)
 
     // given
@@ -174,7 +174,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "remove peers information when a peers is disconnected" taggedAs (UnitTest, NetworkTest) in new TestSetup {
-    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+    expectInitialSubscriptions()
 
     setupNewPeer(peer1, peer1Probe, peer1Info)
     setupNewPeer(peer2, peer2Probe, peer2Info)
@@ -212,7 +212,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     UnitTest,
     NetworkTest
   ) in new TestSetup {
-    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+    expectInitialSubscriptions()
     // Freshly handshaked peer without best block determined
     setupNewPeer(freshPeer, freshPeerProbe, freshPeerInfo.copy(maxBlockNumber = 0))
 
@@ -236,7 +236,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     UnitTest,
     NetworkTest
   ) in new TestSetup {
-    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+    expectInitialSubscriptions()
 
     val genesisInfo: PeerInfo = createGenesisPeerInfo()
 
@@ -259,7 +259,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     UnitTest,
     NetworkTest
   ) in new TestSetup {
-    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+    expectInitialSubscriptions()
 
     // Create a peer at genesis (bestHash == genesisHash)
     val genesisInfo: PeerInfo = createGenesisPeerInfo()
@@ -280,7 +280,12 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
             com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.AccountRangeCode,
             com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.StorageRangesCode,
             com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.TrieNodesCode,
-            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.ByteCodesCode
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.ByteCodesCode,
+            // SNAP protocol request codes — server-side serving
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccountRangeCode,
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetStorageRangesCode,
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetTrieNodesCode,
+            com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode
           ),
           PeerSelector.WithId(peer1.id)
         )
@@ -300,7 +305,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     UnitTest,
     NetworkTest
   ) in new TestSetupWithSnapSync {
-    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+    expectInitialSubscriptions()
 
     // Register SNAP sync controller
     peersInfoHolder ! RegisterSnapSyncController(snapSyncController.ref)
@@ -350,7 +355,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     UnitTest,
     NetworkTest
   ) in new TestSetup {
-    peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+    expectInitialSubscriptions()
 
     // Setup a peer without registering SNAP sync controller
     setupNewPeer(peer1, peer1Probe, peer1Info)
@@ -453,6 +458,28 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     val baseBlockBody: BlockBody = BlockBody(Nil, Nil)
     val baseBlock: Block = Block(baseBlockHeader, baseBlockBody)
 
+    // NetworkPeerManagerActor subscribes at construction to (1) PeerHandshaked, and
+    // (2) a global MessageClassifier for SNAP request codes so that hive test peers
+    // — which fire GetAccountRange immediately after Hello, before PeerHandshakeSuccessful
+    // — still reach the handler. Tests that expect the initial subscriptions must
+    // consume both.
+    def expectInitialSubscriptions(): Unit = {
+      peerEventBus.expectMsg(Subscribe(PeerHandshaked))
+      peerEventBus.expectMsg(
+        Subscribe(
+          MessageClassifier(
+            Set(
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccountRangeCode,
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetStorageRangesCode,
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetTrieNodesCode,
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode
+            ),
+            PeerSelector.AllPeers
+          )
+        )
+      )
+    }
+
     def setupNewPeer(peer: Peer, peerProbe: TestProbe, peerInfo: PeerInfo): Unit = {
 
       peersInfoHolder ! PeerHandshakeSuccessful(peer, peerInfo)
@@ -470,7 +497,12 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
               com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.AccountRangeCode,
               com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.StorageRangesCode,
               com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.TrieNodesCode,
-              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.ByteCodesCode
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.ByteCodesCode,
+              // SNAP protocol request codes — server-side serving
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetAccountRangeCode,
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetStorageRangesCode,
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetTrieNodesCode,
+              com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.GetByteCodesCode
             ),
             PeerSelector.WithId(peer.id)
           )

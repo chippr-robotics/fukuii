@@ -252,10 +252,6 @@ nav:
       - historical/README.md
       - Migration History: historical/MIGRATION_HISTORY.md
       - Ethereum Tests Migration: historical/ETHEREUM_TESTS_MIGRATION.md
-    - Investigation:
-      - FastSync Timeout: investigation/FASTSYNC_TIMEOUT_INVESTIGATION.md
-      - Contract Test Failure: investigation/CONTRACT_TEST_FAILURE_ANALYSIS.md
-      - Integration Tests: investigation/INTEGRATION_TEST_CLASSIFICATION.md
     - Analysis:
       - EIP-2124 Implementation: analysis/EIP-2124_IMPLEMENTATION_ANALYSIS.md
       - RLPx Handshake Analysis: analysis/RLPX_HANDSHAKE_AND_MESSAGE_ENCODING_ANALYSIS.md
@@ -269,8 +265,6 @@ nav:
       - reports/README.md
       - Network Test Report: reports/NETWORK_TEST_REPORT.md
       - Implementation Complete: reports/IMPLEMENTATION_COMPLETE.md
-    - Announcements:
-      - Gorgoroth Trials: announcements/gorgoroth-trials-announcement.md
     - Tools:
       - tools/README.md
       - Configuration Wizard: tools/configuration-wizard.md

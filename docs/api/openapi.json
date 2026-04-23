@@ -7065,6 +7065,186 @@
           }
         }
       }
+    },
+    "/checkpointing_getLatestBlock": {
+      "post": {
+        "tags": [
+          "Checkpointing"
+        ],
+        "summary": "checkpointing_getLatestBlock",
+        "description": "Get latest checkpoint block",
+        "operationId": "checkpointing_getLatestBlock",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "jsonrpc",
+                  "method",
+                  "params",
+                  "id"
+                ],
+                "properties": {
+                  "jsonrpc": {
+                    "type": "string",
+                    "enum": [
+                      "2.0"
+                    ],
+                    "example": "2.0"
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "checkpointing_getLatestBlock"
+                    ],
+                    "example": "checkpointing_getLatestBlock"
+                  },
+                  "params": {
+                    "type": "array",
+                    "items": {},
+                    "example": [
+                      5
+                    ]
+                  },
+                  "id": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ],
+                    "example": 1
+                  }
+                }
+              },
+              "example": {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "checkpointing_getLatestBlock",
+                "params": [
+                  5
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JSONRPCResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - Invalid JSON-RPC request"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/checkpointing_pushCheckpoint": {
+      "post": {
+        "tags": [
+          "Checkpointing"
+        ],
+        "summary": "checkpointing_pushCheckpoint",
+        "description": "Push checkpoint with signatures",
+        "operationId": "checkpointing_pushCheckpoint",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "jsonrpc",
+                  "method",
+                  "params",
+                  "id"
+                ],
+                "properties": {
+                  "jsonrpc": {
+                    "type": "string",
+                    "enum": [
+                      "2.0"
+                    ],
+                    "example": "2.0"
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "checkpointing_pushCheckpoint"
+                    ],
+                    "example": "checkpointing_pushCheckpoint"
+                  },
+                  "params": {
+                    "type": "array",
+                    "items": {},
+                    "example": [
+                      "0x...blockHash...",
+                      [
+                        "0x...signature1...",
+                        "0x...signature2..."
+                      ]
+                    ]
+                  },
+                  "id": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ],
+                    "example": 1
+                  }
+                }
+              },
+              "example": {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "checkpointing_pushCheckpoint",
+                "params": [
+                  "0x...blockHash...",
+                  [
+                    "0x...signature1...",
+                    "0x...signature2..."
+                  ]
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JSONRPCResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - Invalid JSON-RPC request"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
     }
   },
   "components": {
