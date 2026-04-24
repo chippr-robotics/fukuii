@@ -67,8 +67,7 @@ class JsonRpcControllerSpec
 
   it should "fail when invalid request is received" taggedAs (
     UnitTest,
-    RPCTest,
-    DisabledTest
+    RPCTest
   ) in new JsonRpcControllerFixture {
     val rpcRequest: JsonRpcRequest = newJsonRpcRequest("web3_sha3", JString("asdasd") :: Nil)
 
@@ -117,8 +116,7 @@ class JsonRpcControllerSpec
 
   it should "only allow to call methods of enabled apis" taggedAs (
     UnitTest,
-    RPCTest,
-    DisabledTest
+    RPCTest
   ) in new JsonRpcControllerFixture {
     override def config: JsonRpcConfig = new JsonRpcConfig {
       override val apis: Seq[String] = Seq("web3")
