@@ -359,6 +359,10 @@ class EthTxServiceSpec
     )
   }
 
+  // TODO: investigate TxLog field drift — actual logIndex=1 vs expected=0, and topics container
+  // type changed from List to Vector. Unrelated to the "contract address" semantic the test
+  // title advertises; it's an assertion-shape issue inherited from a prior test refactor.
+  // Separate PR from the Bucket-A scala-mock un-silence.
   it should "calculate correct contract address for contract creating by transaction" taggedAs (
     UnitTest,
     RPCTest,

@@ -94,10 +94,19 @@ class EthFilterServiceSpec
     res.futureValue shouldEqual Right(GetFilterLogsResponse(logs))
   }
 
-  it should "handle getLogs request" taggedAs (UnitTest, RPCTest, DisabledTest) in new TestSetup {
+  it should "handle getLogs request" taggedAs (UnitTest, RPCTest) in new TestSetup {
+    // `getLogs` queries `blockchainReader.getBestBlockNumber()` to validate the range ceiling.
+    // The default TestSetup passes a null BlockchainReader (fine for tests that go straight to
+    // FilterManager), so this test needs its own service with a mocked reader.
+    val blockchainReaderMock: com.chipprbots.ethereum.domain.BlockchainReader =
+      mock[com.chipprbots.ethereum.domain.BlockchainReader]
+    (() => blockchainReaderMock.getBestBlockNumber()).expects().returning(BigInt(100)).anyNumberOfTimes()
+
+    val localService = new EthFilterService(filterManager.ref, filterConfig, blockchainReaderMock)
+
     val filter: Filter = Filter(None, None, None, Seq.empty)
     val res: Future[Either[JsonRpcError, GetLogsResponse]] =
-      ethFilterService.getLogs(GetLogsRequest(filter)).unsafeToFuture()
+      localService.getLogs(GetLogsRequest(filter)).unsafeToFuture()
     filterManager.expectMsg(FM.GetLogs(None, None, None, Seq.empty))
     val logs: FM.LogFilterLogs = FM.LogFilterLogs(Seq.empty)
     filterManager.reply(logs)
