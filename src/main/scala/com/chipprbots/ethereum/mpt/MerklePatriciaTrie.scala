@@ -109,25 +109,76 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
       case _ => None
     }.flatten
 
-  /** Get the proof associated with the key passed, if there exists one.
+  /** Get the Merkle proof for `key`, supporting both inclusion and non-inclusion proofs.
     *
-    * @param key
-    * @return
-    *   Option object with proof if there exists one.
+    * Inclusion (`key` is present): returns every node on the path from the root down to (and including) the `LeafNode`
+    * carrying the value. A verifier can re-hash the sequence to confirm the value against the trie root.
+    *
+    * Non-inclusion (`key` is absent): returns every node visited on the walk before termination — the last node proves
+    * why the lookup stopped (a LeafNode with a different key, an ExtensionNode with an incompatible shared prefix, or a
+    * BranchNode whose relevant child slot is NullNode). Per EIP-1186 this is the "walked-path proof of absence" that
+    * proof-of-state-at-block RPC clients expect.
+    *
+    * Returns `None` only when the trie has no root at all (empty trie). A present-but-absent key on a non-empty trie
+    * always returns `Some(nonEmptyPath)`.
+    *
     * @throws com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
-    *   if there is any inconsistency in how the trie is build.
+    *   if there is any inconsistency in how the trie is built.
     */
   def getProof(key: K): Option[Vector[MptNode]] =
-    pathTraverse[Vector[MptNode]](Vector.empty, mkKeyNibbles(key)) { case (acc, node) =>
-      node match {
-        case Some(hash: HashNode) =>
-          // Resolve hash references to actual nodes for the proof
-          acc :+ getFromHash(hash.hashNode, nodeStorage)
-        case Some(nextNode @ (_: BranchNode | _: ExtensionNode | _: LeafNode)) =>
-          acc :+ nextNode
-        case _ => acc
-      }
+    rootNode.map { root =>
+      collectProof(Vector.empty, resolveIfHash(root), mkKeyNibbles(key))
     }
+
+  @tailrec
+  private def collectProof(
+      acc: Vector[MptNode],
+      node: MptNode,
+      searchKey: Array[Byte]
+  ): Vector[MptNode] =
+    node match {
+      case leaf: LeafNode =>
+        // Always include the leaf: either it's a match (inclusion proof) or it's the divergent
+        // leaf found at this position (proof of absence on a trie shaped like {k1 -> v}).
+        acc :+ leaf
+
+      case ext @ ExtensionNode(sharedKey, _, _, _, _) =>
+        val withExt = acc :+ ext
+        if (
+          searchKey.length >= sharedKey.length && sharedKey.toArray[Byte].sameElements(searchKey.take(sharedKey.length))
+        ) {
+          collectProof(withExt, resolveIfHash(ext.next), searchKey.drop(sharedKey.length))
+        } else {
+          // Shared prefix mismatch: extension itself is the proof of non-inclusion.
+          withExt
+        }
+
+      case branch: BranchNode =>
+        val withBranch = acc :+ branch
+        if (searchKey.isEmpty) {
+          // Key bottomed out at a branch: the branch terminator (or lack thereof) is the answer.
+          withBranch
+        } else {
+          branch.children(searchKey(0)) match {
+            case NullNode =>
+              // Relevant child slot is null — branch is the proof of non-inclusion.
+              withBranch
+            case child =>
+              collectProof(withBranch, resolveIfHash(child), searchKey.drop(1))
+          }
+        }
+
+      case HashNode(bytes) =>
+        collectProof(acc, getFromHash(bytes, nodeStorage), searchKey)
+
+      case NullNode =>
+        acc
+    }
+
+  private def resolveIfHash(node: MptNode): MptNode = node match {
+    case HashNode(bytes) => getFromHash(bytes, nodeStorage)
+    case other           => other
+  }
 
   /** Traverse given path from the root to value and accumulate data. Only nodes which are significant for searching for
     * value are taken into account.

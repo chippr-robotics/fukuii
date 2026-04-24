@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Account.accountSerializer
 import com.chipprbots.ethereum.mpt.HashNode
+import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.proof.MptProofVerifier
 import com.chipprbots.ethereum.proof.ProofVerifyResult.ValidProof
@@ -154,8 +155,7 @@ class BlockchainSpec
   it should "return proof for non-existent account" taggedAs (
     UnitTest,
     StateTest,
-    MPTTest,
-    DisabledTest
+    MPTTest
   ) in new EphemBlockchainTestSetup {
     val emptyMpt: MerklePatriciaTrie[Address, Account] = MerklePatriciaTrie[Address, Account](
       storagesInstance.storages.stateStorage.getBackingStorage(0)
@@ -171,11 +171,17 @@ class BlockchainSpec
     val wrongAddress: Address = Address(666)
     val retrievedAccountProofWrong: Option[Vector[MptNode]] =
       blockchainReader.getAccountProof(blockchainReader.getBestBranch(), wrongAddress, headerWithAcc.number)
-    // the account doesn't exist, so we can't retrieve it, but we do receive a proof of non-existence with a full path of nodes(root node) that we iterated
-    (retrievedAccountProofWrong.getOrElse(Vector.empty).toList match {
-      case _ @HashNode(_) :: Nil => true
-      case _                     => false
-    }) shouldBe true
+
+    // EIP-1186 proof of non-inclusion: the account doesn't exist, but we still receive a
+    // non-empty walk — every node visited on the way to the divergence. In this trie the
+    // sole entry is `Address(42)`, so the root resolves directly to a LeafNode whose key
+    // doesn't match our wrongAddress; that leaf is the termination point and the proof.
+    val proof = retrievedAccountProofWrong.getOrElse(Vector.empty)
+    proof should not be empty
+    proof.last match {
+      case _: LeafNode => succeed
+      case other       => fail(s"Expected terminal LeafNode in proof-of-absence, got $other")
+    }
     mptWithAcc.get(wrongAddress) shouldBe None
   }
 
