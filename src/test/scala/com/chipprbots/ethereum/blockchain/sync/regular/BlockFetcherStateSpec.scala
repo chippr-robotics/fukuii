@@ -80,5 +80,47 @@ class BlockFetcherStateSpec
         assert(result.map(_.waitingHeaders) === Left(HeadersNotMatchingReadyBlocks))
       }
     }
+
+    // Bug 31: stale-tip recovery — fast-sync→regular-sync handoff left the fetcher's
+    // queue state unable to chain onto any peer's response. The fetcher blacklisted
+    // every peer forever with zero self-heal. The counter below is the signal used by
+    // BlockFetcher to trigger a rewind via InvalidateBlocksFrom.
+    "tracking consecutive header rejections for stale-tip recovery (Bug 31)" should {
+      "start the counter at zero on initial state" in {
+        BlockFetcherState.initial(importer, validators.blockValidator, 100).consecutiveHeaderRejections shouldBe 0
+      }
+
+      "increment the counter via recordHeaderRejection" in {
+        val initial = BlockFetcherState.initial(importer, validators.blockValidator, 100)
+        initial
+          .recordHeaderRejection()
+          .recordHeaderRejection()
+          .recordHeaderRejection()
+          .consecutiveHeaderRejections shouldBe 3
+      }
+
+      "reset the counter to zero after a successful appendHeaders" in {
+        val stale = BlockFetcherState
+          .initial(importer, validators.blockValidator, 0)
+          .recordHeaderRejection()
+          .recordHeaderRejection()
+        stale.consecutiveHeaderRejections shouldBe 2
+
+        val Right(recovered) = stale.appendHeaders(blocks.map(_.header))
+        recovered.consecutiveHeaderRejections shouldBe 0
+      }
+
+      "cross the rewind threshold when consecutive rejections reach the limit" in {
+        val state = BlockFetcherState.initial(importer, validators.blockValidator, 100)
+        state.shouldRewindOnRejections(3) shouldBe false
+        state.recordHeaderRejection().shouldRewindOnRejections(3) shouldBe false
+        state.recordHeaderRejection().recordHeaderRejection().shouldRewindOnRejections(3) shouldBe false
+        state
+          .recordHeaderRejection()
+          .recordHeaderRejection()
+          .recordHeaderRejection()
+          .shouldRewindOnRejections(3) shouldBe true
+      }
+    }
   }
 }

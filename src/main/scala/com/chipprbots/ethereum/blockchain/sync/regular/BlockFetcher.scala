@@ -192,34 +192,38 @@ class BlockFetcher(
                 state.lastBlock
               )
             }
-            state.appendHeaders(headers) match {
+            val afterAppend = state.appendHeaders(headers) match {
               case Left(HeadersNotFormingSeq) =>
-                log.debug("Dismissed received headers due to: {} (peer: {})", HeadersNotFormingSeq.description, peer.id)
-                log.debug(
-                  "Header validation failed: headers do not form a sequence. First: {}, Last: {}, Count: {}",
+                log.info(
+                  "Dismissed received headers: {} (peer={}, first={}, last={}, count={})",
+                  HeadersNotFormingSeq.description,
+                  peer.id,
                   headers.headOption.map(_.number),
                   headers.lastOption.map(_.number),
                   headers.size
                 )
-                peersClient ! BlacklistPeer(peer.id, BlacklistReason.UnrequestedHeaders)
-                state.withHeaderFetchReceived
+                peersClient ! BlacklistPeer(peer.id, BlacklistReason.HeadersNotFormingChain)
+                state.withHeaderFetchReceived.recordHeaderRejection()
               case Left(HeadersNotMatchingReadyBlocks) =>
-                log.debug(
-                  "Dismissed received headers due to: {} (peer: {})",
+                log.info(
+                  "Dismissed received headers: {} (peer={}, readyTip={}, respFirst={})",
                   HeadersNotMatchingReadyBlocks.description,
-                  peer.id
-                )
-                log.debug(
-                  "Header validation failed: headers do not match ready blocks. Ready blocks: {}, Headers first: {}",
+                  peer.id,
                   state.readyBlocks.lastOption.map(_.number),
                   headers.headOption.map(_.number)
                 )
-                peersClient ! BlacklistPeer(peer.id, BlacklistReason.UnrequestedHeaders)
-                state.withHeaderFetchReceived
+                peersClient ! BlacklistPeer(peer.id, BlacklistReason.HeadersDontExtendReadyBlocks)
+                state.withHeaderFetchReceived.recordHeaderRejection()
               case Left(err) =>
-                log.debug("Dismissed received headers due to: {} (peer: {})", err, peer.id)
-                log.debug("Header validation error details: {}", err.description)
-                state.withHeaderFetchReceived
+                log.info(
+                  "Dismissed received headers: {} (peer={}, waitingTip={}, respFirst={})",
+                  err.description,
+                  peer.id,
+                  state.waitingHeaders.lastOption.map(_.number),
+                  headers.headOption.map(_.number)
+                )
+                peersClient ! BlacklistPeer(peer.id, BlacklistReason.HeadersDontExtendWaitingQueue)
+                state.withHeaderFetchReceived.recordHeaderRejection()
               case Right(updatedState) =>
                 log.debug(
                   "Successfully validated and appended {} headers. New waiting headers count: {}",
@@ -234,6 +238,23 @@ class BlockFetcher(
                 } else updatedState
                 finalState.withHeaderFetchReceived
             }
+
+            // Stale-tip recovery (Bug 31): when enough independent peers reject our queue
+            // state in a row, assume the waitingHeaders/readyBlocks tip is orphaned and
+            // rewind. Without this, the fetcher loops forever on a poisoned seed state —
+            // notably observed on the fast-sync → regular-sync handoff.
+            if (afterAppend.shouldRewindOnRejections(BlockFetcher.HeaderRejectionRewindThreshold)) {
+              val rewindTarget = (afterAppend.lastBlock - BlockFetcher.HeaderRejectionRewindBlocks).max(0)
+              log.warn(
+                "Stale chain tip detected: {} consecutive header rejections across peers. " +
+                  "Rewinding from block {} to block {} to recover.",
+                afterAppend.consecutiveHeaderRejections,
+                afterAppend.lastBlock,
+                rewindTarget
+              )
+              val (_, rewoundState) = afterAppend.invalidateBlocksFrom(rewindTarget, None)
+              rewoundState.copy(consecutiveHeaderRejections = 0)
+            } else afterAppend
           }
         fetchBlocks(newState)
 
@@ -543,6 +564,18 @@ class BlockFetcher(
 }
 
 object BlockFetcher {
+
+  /** Number of consecutive header-rejection peers required before we conclude the queue state is stale and trigger an
+    * InvalidateBlocksFrom rewind (Bug 31 recovery). With 3, we avoid churning on a single buggy peer but still catch
+    * every "all peers reject" scenario well before the 60s blacklist cooldown completes on the first peer.
+    */
+  val HeaderRejectionRewindThreshold: Int = 3
+
+  /** How far back from `lastBlock` to rewind when stale-tip recovery fires. One batch of headers is enough to land us
+    * at a block that ALL peers still have cached, even in the presence of short reorgs.
+    */
+  val HeaderRejectionRewindBlocks: Int = 128
+
   def apply(
       peersClient: ClassicActorRef,
       peerEventBus: ClassicActorRef,
