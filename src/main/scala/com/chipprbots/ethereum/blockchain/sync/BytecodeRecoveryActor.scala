@@ -82,7 +82,7 @@ class BytecodeRecoveryActor(
       }
   }
 
-  private def downloading(coordinator: ActorRef, expectedCount: Int): Receive = {
+  private def downloading(coordinator: ActorRef, expectedCount: Int, downloadedCount: Long = 0L): Receive = {
     case snap.actors.Messages.ByteCodePeerAvailable(peer) =>
       coordinator ! snap.actors.Messages.ByteCodePeerAvailable(peer)
 
@@ -92,8 +92,12 @@ class BytecodeRecoveryActor(
       syncController ! RecoveryComplete
       context.stop(self)
 
-    case snap.SNAPSyncController.ProgressBytecodesDownloaded(_) =>
-    // Ignore progress updates
+    case snap.SNAPSyncController.ProgressBytecodesDownloaded(count) =>
+      val newTotal = downloadedCount + count
+      val pct = if (expectedCount > 0) (newTotal * 100L / expectedCount) else 0L
+      if (newTotal % 1000 == 0 || newTotal == expectedCount)
+        log.info(s"Bytecode recovery download: $newTotal / $expectedCount (${pct}%)")
+      context.become(downloading(coordinator, expectedCount, newTotal))
 
     case msg => coordinator.forward(msg) // Forward SNAP protocol responses to coordinator
   }
@@ -107,12 +111,16 @@ class BytecodeRecoveryActor(
     val seen = mutable.HashSet.empty[ByteString]
     var accountCount = 0L
     var contractCount = 0L
+    val scanStart = System.currentTimeMillis()
 
     val onLeaf: LeafNode => Unit = { leafNode =>
       accountCount += 1
       if (accountCount % 1_000_000 == 0) {
+        val elapsedSec = (System.currentTimeMillis() - scanStart) / 1000.0
+        val rate = if (elapsedSec > 0) (accountCount / elapsedSec).toLong else 0L
         log.info(
-          s"Bytecode recovery scan: $accountCount accounts, $contractCount contracts, ${missing.size} missing"
+          s"Bytecode recovery scan: $accountCount accounts, $contractCount contracts, ${missing.size} missing" +
+            s" (${elapsedSec.toInt}s elapsed, ${rate}/s)"
         )
       }
 

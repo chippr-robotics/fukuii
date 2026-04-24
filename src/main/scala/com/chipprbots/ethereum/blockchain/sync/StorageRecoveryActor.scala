@@ -123,11 +123,8 @@ class StorageRecoveryActor(
       }
   }
 
-  private def downloading(coordinator: ActorRef, expectedCount: Int): Receive = {
-    // A strictly-increasing counter is more robust than a wall-clock timestamp:
-    // System.currentTimeMillis() can collide if two progress updates land in the same
-    // ms (then the CheckAbandon equality check would false-fire), and wall-clock jumps
-    // would make stalledForSeconds misleading. Counter + nanoTime covers both axes.
+  private def downloading(coordinator: ActorRef, expectedCount: Int, downloadedCount: Long = 0L): Receive = {
+    // A strictly-increasing counter is more robust than a wall-clock timestamp.
     var progressSeq = 0L
     var lastProgressNanos = System.nanoTime()
     var unservableCount = 0
@@ -160,8 +157,13 @@ class StorageRecoveryActor(
         syncController ! RecoveryComplete
         context.stop(self)
 
-      case SNAPSyncController.ProgressStorageSlotsSynced(_) =>
+      case SNAPSyncController.ProgressStorageSlotsSynced(count) =>
+        val newTotal = downloadedCount + count
+        val pct = if (expectedCount > 0) (newTotal * 100L / expectedCount) else 0L
+        if (newTotal % 1000 == 0 || newTotal == expectedCount)
+          log.info(s"Storage recovery download: $newTotal / $expectedCount (${pct}%)")
         recordProgress()
+        context.become(downloading(coordinator, expectedCount, newTotal))
 
       // Bug 30b: coordinator reports every peer stateless for the stored pivot root. In SNAP
       // sync this would trigger `refreshPivotInPlace` on the controller; the recovery path has
@@ -216,13 +218,17 @@ class StorageRecoveryActor(
     var accountCount = 0L
     var contractCount = 0L
     var checkedCount = 0L
+    val scanStart = System.currentTimeMillis()
 
     val onLeaf: (ByteString, LeafNode) => Unit = { (accountHash, leafNode) =>
       accountCount += 1
       if (accountCount % 1_000_000 == 0) {
+        val elapsedSec = (System.currentTimeMillis() - scanStart) / 1000.0
+        val rate = if (elapsedSec > 0) (accountCount / elapsedSec).toLong else 0L
         log.info(
           s"Storage recovery scan: $accountCount accounts, $contractCount contracts, " +
-            s"$checkedCount checked, ${missing.size} missing"
+            s"$checkedCount checked, ${missing.size} missing" +
+            s" (${elapsedSec.toInt}s elapsed, ${rate}/s)"
         )
       }
 
