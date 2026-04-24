@@ -15,13 +15,11 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Account.accountSerializer
-import com.chipprbots.ethereum.mpt.HashNode
 import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
+import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.proof.MptProofVerifier
 import com.chipprbots.ethereum.proof.ProofVerifyResult.ValidProof
-import com.chipprbots.ethereum.mpt.MptNode
-import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.testing.Tags._
 
@@ -176,7 +174,10 @@ class BlockchainSpec
     // non-empty walk — every node visited on the way to the divergence. In this trie the
     // sole entry is `Address(42)`, so the root resolves directly to a LeafNode whose key
     // doesn't match our wrongAddress; that leaf is the termination point and the proof.
-    val proof = retrievedAccountProofWrong.getOrElse(Vector.empty)
+    // Assert the Option is defined explicitly so a regression back to `None` fails with a
+    // clear message rather than an empty-vector assertion further down.
+    retrievedAccountProofWrong shouldBe defined
+    val proof = retrievedAccountProofWrong.get
     proof should not be empty
     proof.last match {
       case _: LeafNode => succeed
