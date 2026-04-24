@@ -75,6 +75,8 @@ services:
       # P2P networking — TCP + UDP on same port (standard geth convention)
       - "30305:30303/tcp"
       - "30305:30303/udp"
+      # Prometheus metrics (for grafana dashboard)
+      - "9098:9095"
     volumes:
       # Configuration files
       - ./conf/etc.conf:/app/conf/etc.conf:ro
@@ -110,6 +112,9 @@ services:
       - "-XX:MaxGCPauseMillis=200"
       - "-Dconfig.file=/app/conf/etc.conf"
       - "-Dfukuii.datadir=/app/data"
+      - "-Dfukuii.network.rpc.http.port=8545"
+      - "-Dfukuii.metrics.enabled=true"
+      - "-Dfukuii.metrics.port=9095"
       - "-Dlogback.configurationFile=/app/conf/logback.xml"
       - "-Dfukuii.trace.block=${FUKUII_TRACE_BLOCK:-}"
       - "-Dfukuii.trace.tx=${FUKUII_TRACE_TX:-}"

@@ -1,0 +1,308 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {"type": "grafana", "uid": "-- Grafana --"},
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      },
+      {
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "enable": true,
+        "expr": "changes(app_snapsync_phase_current_gauge{instance=~\"$instance\"}[1m]) > 0",
+        "iconColor": "orange",
+        "name": "Phase Transition",
+        "step": "1m",
+        "titleFormat": "Phase change",
+        "useValueForTime": false
+      }
+    ]
+  },
+  "description": "SNAP sync phase progression and per-phase throughput.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {"asDropdown": false, "icon": "external link", "includeVars": true, "keepTime": true, "tags": ["fukuii"], "targetBlank": false, "title": "Fukuii dashboards", "type": "dashboards"}
+  ],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Current Phase",
+      "id": 1,
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "app_snapsync_phase_current_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {"type": "value", "options": {
+              "0": {"text": "Idle", "color": "grey"},
+              "1": {"text": "AccountRange", "color": "blue"},
+              "3": {"text": "ByteCode + Storage", "color": "purple"},
+              "5": {"text": "Healing", "color": "yellow"},
+              "6": {"text": "Validation", "color": "orange"},
+              "7": {"text": "Chain Download", "color": "cyan"},
+              "8": {"text": "Completed", "color": "green"}
+            }}
+          ],
+          "color": {"mode": "fixed", "fixedColor": "blue"}
+        }
+      },
+      "options": {"colorMode": "background", "graphMode": "none", "textMode": "value_and_name", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Time in Phase",
+      "id": 2,
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "app_snapsync_phase_time_seconds_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 600},
+            {"color": "orange", "value": 1800}
+          ]}
+        }
+      },
+      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value_and_name", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Total Sync Time",
+      "id": 3,
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "app_snapsync_totaltime_minutes_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"unit": "m", "color": {"mode": "fixed", "fixedColor": "light-blue"}}},
+      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value_and_name", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Pivot Block",
+      "id": 4,
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "app_snapsync_pivot_block_number_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "semi-dark-purple"}}},
+      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value_and_name", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "gauge",
+      "title": "Accounts Progress",
+      "id": 10,
+      "gridPos": {"h": 7, "w": 6, "x": 0, "y": 5},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "100 * app_snapsync_accounts_synced_gauge{instance=~\"$instance\"} / clamp_min(app_snapsync_accounts_estimated_total_gauge{instance=~\"$instance\"}, 1)", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}, {"color": "green", "value": 100}]}
+        }
+      },
+      "options": {"orientation": "auto", "showThresholdLabels": false, "showThresholdMarkers": true, "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "gauge",
+      "title": "Bytecodes Progress",
+      "id": 11,
+      "gridPos": {"h": 7, "w": 6, "x": 6, "y": 5},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "100 * app_snapsync_bytecodes_downloaded_gauge{instance=~\"$instance\"} / clamp_min(app_snapsync_bytecodes_estimated_total_gauge{instance=~\"$instance\"}, 1)", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "thresholds": {"mode": "absolute", "steps": [{"color": "purple", "value": null}, {"color": "green", "value": 100}]}
+        }
+      },
+      "options": {"orientation": "auto", "showThresholdMarkers": true, "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "gauge",
+      "title": "Storage Slots Progress",
+      "id": 12,
+      "gridPos": {"h": 7, "w": 6, "x": 12, "y": 5},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "100 * app_snapsync_storage_slots_synced_gauge{instance=~\"$instance\"} / clamp_min(app_snapsync_storage_slots_estimated_total_gauge{instance=~\"$instance\"}, 1)", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "thresholds": {"mode": "absolute", "steps": [{"color": "orange", "value": null}, {"color": "green", "value": 100}]}
+        }
+      },
+      "options": {"orientation": "auto", "showThresholdMarkers": true, "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Nodes Healed",
+      "id": 13,
+      "gridPos": {"h": 7, "w": 6, "x": 18, "y": 5},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "app_snapsync_healing_nodes_healed_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "yellow"}}},
+      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value_and_name", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Accounts Synced (cumulative)",
+      "id": 20,
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "app_snapsync_accounts_synced_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}} synced"},
+        {"expr": "app_snapsync_accounts_estimated_total_gauge{instance=~\"$instance\"}", "refId": "B", "legendFormat": "{{instance}} estimated"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Throughput — Accounts / Bytecodes / Storage / Healing (recent)",
+      "id": 21,
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "app_snapsync_accounts_throughput_recent_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}} accounts/s"},
+        {"expr": "app_snapsync_bytecodes_throughput_recent_gauge{instance=~\"$instance\"}", "refId": "B", "legendFormat": "{{instance}} bytecodes/s"},
+        {"expr": "app_snapsync_storage_throughput_recent_gauge{instance=~\"$instance\"}", "refId": "C", "legendFormat": "{{instance}} storage/s"},
+        {"expr": "app_snapsync_healing_throughput_recent_gauge{instance=~\"$instance\"}", "refId": "D", "legendFormat": "{{instance}} healing/s"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5}}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Recent vs Overall Throughput (Accounts)",
+      "id": 22,
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 20},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "app_snapsync_accounts_throughput_recent_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}} recent"},
+        {"expr": "app_snapsync_accounts_throughput_overall_gauge{instance=~\"$instance\"}", "refId": "B", "legendFormat": "{{instance}} overall"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Recent vs Overall Throughput (Storage slots)",
+      "id": 23,
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 20},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "app_snapsync_storage_throughput_recent_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}} recent"},
+        {"expr": "app_snapsync_storage_throughput_overall_gauge{instance=~\"$instance\"}", "refId": "B", "legendFormat": "{{instance}} overall"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Recent vs Overall Throughput (Healing)",
+      "id": 24,
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 20},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "app_snapsync_healing_throughput_recent_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}} recent"},
+        {"expr": "app_snapsync_healing_throughput_overall_gauge{instance=~\"$instance\"}", "refId": "B", "legendFormat": "{{instance}} overall"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Request Health — timeouts / retries / failures",
+      "id": 30,
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 27},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "rate(app_snapsync_requests_timeouts_total{instance=~\"$instance\"}[1m])", "refId": "A", "legendFormat": "{{instance}} timeouts"},
+        {"expr": "rate(app_snapsync_requests_retries_total{instance=~\"$instance\"}[1m])", "refId": "B", "legendFormat": "{{instance}} retries"},
+        {"expr": "rate(app_snapsync_accounts_requests_failed_total{instance=~\"$instance\"}[1m])", "refId": "C", "legendFormat": "{{instance}} account fails"},
+        {"expr": "rate(app_snapsync_bytecodes_requests_failed_total{instance=~\"$instance\"}[1m])", "refId": "D", "legendFormat": "{{instance}} bytecode fails"},
+        {"expr": "rate(app_snapsync_storage_requests_failed_total{instance=~\"$instance\"}[1m])", "refId": "E", "legendFormat": "{{instance}} storage fails"},
+        {"expr": "rate(app_snapsync_healing_requests_failed_total{instance=~\"$instance\"}[1m])", "refId": "F", "legendFormat": "{{instance}} healing fails"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Data Integrity — proofs / validation / missing nodes",
+      "id": 31,
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 27},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "rate(app_snapsync_proofs_invalid_total{instance=~\"$instance\"}[1m])", "refId": "A", "legendFormat": "{{instance}} invalid proofs"},
+        {"expr": "rate(app_snapsync_validation_failures_total{instance=~\"$instance\"}[1m])", "refId": "B", "legendFormat": "{{instance}} validation fails"},
+        {"expr": "rate(app_snapsync_responses_malformed_total{instance=~\"$instance\"}[1m])", "refId": "C", "legendFormat": "{{instance}} malformed"},
+        {"expr": "app_snapsync_validation_missing_nodes_gauge{instance=~\"$instance\"}", "refId": "D", "legendFormat": "{{instance}} missing nodes"},
+        {"expr": "rate(app_snapsync_errors_total{instance=~\"$instance\"}[1m])", "refId": "E", "legendFormat": "{{instance}} errors"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Peers — SNAP-capable, handshaked, blacklisted",
+      "id": 40,
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 34},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "app_snapsync_peers_capable_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}} snap-capable"},
+        {"expr": "app_network_peers_outgoing_handshaked_gauge{instance=~\"$instance\"}", "refId": "B", "legendFormat": "{{instance}} outgoing"},
+        {"expr": "app_network_peers_incoming_handshaked_gauge{instance=~\"$instance\"}", "refId": "C", "legendFormat": "{{instance}} incoming"},
+        {"expr": "app_network_peers_blacklisted_gauge{instance=~\"$instance\"}", "refId": "D", "legendFormat": "{{instance}} blacklisted"},
+        {"expr": "rate(app_snapsync_peers_blacklisted_total{instance=~\"$instance\"}[1m])", "refId": "E", "legendFormat": "{{instance}} snap bl rate"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Request Latency — max download timer (s)",
+      "id": 41,
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 34},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "app_snapsync_accounts_download_timer_seconds_max{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}} accounts"},
+        {"expr": "app_snapsync_bytecodes_download_timer_seconds_max{instance=~\"$instance\"}", "refId": "B", "legendFormat": "{{instance}} bytecodes"},
+        {"expr": "app_snapsync_storage_download_timer_seconds_max{instance=~\"$instance\"}", "refId": "C", "legendFormat": "{{instance}} storage"},
+        {"expr": "app_snapsync_healing_timer_seconds_max{instance=~\"$instance\"}", "refId": "D", "legendFormat": "{{instance}} healing"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["fukuii", "snap", "sync"],
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "label": "Instance",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": {"query": "label_values(up{job=~\".*fukuii.*\"}, instance)", "refId": "Prometheus-instance-Variable-Query"},
+        "refresh": 1,
+        "sort": 1,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {"selected": false, "text": "All", "value": "$__all"},
+        "options": [],
+        "hide": 0
+      }
+    ]
+  },
+  "time": {"from": "now-30m", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "Fukuii SNAP Sync",
+  "uid": "fukuii-snap-sync",
+  "version": 1,
+  "weekStart": ""
+}
