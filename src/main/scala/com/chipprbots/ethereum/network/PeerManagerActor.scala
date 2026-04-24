@@ -660,6 +660,17 @@ object PeerManagerActor {
   }
   // scalastyle:on parameter.number
 
+  /** Sanitize an InetSocketAddress string for use as a Pekko actor path element. Pekko only allows ASCII letters/digits
+    * and -_.*$+:@&=,!~'; in path elements. IPv6 brackets ([2a01:4f8::2]) and DNS-failure placeholders (<unresolved>)
+    * otherwise crash PeerManagerActor with InvalidActorNameException.
+    */
+  private[network] def sanitizeActorPathElement(raw: String): String = {
+    val validSymbols = "-_.*$+:@&=,!~';"
+    raw.filterNot(_ == '/').map { c =>
+      if (c.isLetterOrDigit || validSymbols.contains(c)) c else '_'
+    }
+  }
+
   def peerFactory[R <: HandshakeResult](
       config: PeerConfiguration,
       eventBus: ActorRef,
@@ -668,14 +679,7 @@ object PeerManagerActor {
       authHandshaker: AuthHandshaker,
       capabilities: List[Capability]
   ): (ActorContext, InetSocketAddress, Boolean) => ActorRef = { (ctx, address, incomingConnection) =>
-    // Sanitize address for use as Pekko actor path element.
-    // IPv6 addresses contain brackets (e.g. [2a01:4f8::2]:30303) which are illegal
-    // in actor paths. Replace all non-allowed characters to prevent
-    // InvalidActorNameException from crashing PeerManagerActor.
-    val id: String = address.toString.filterNot(_ == '/').map {
-      case '[' | ']' => '_'
-      case c         => c
-    }
+    val id: String = sanitizeActorPathElement(address.toString)
     val props = PeerActor.props(
       address,
       config,

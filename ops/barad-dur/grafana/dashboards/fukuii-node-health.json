@@ -1,0 +1,310 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {"type": "grafana", "uid": "-- Grafana --"},
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "At-a-glance node health: is it up, is it syncing, are peers connected, is the JVM healthy.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {"asDropdown": false, "icon": "external link", "includeVars": true, "keepTime": true, "tags": ["fukuii"], "targetBlank": false, "title": "Fukuii dashboards", "type": "dashboards"}
+  ],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Node Up",
+      "id": 1,
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "up{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {"type": "value", "options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}}
+          ],
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+        }
+      },
+      "options": {"colorMode": "background", "graphMode": "none", "textMode": "value_and_name", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Current Block",
+      "id": 2,
+      "gridPos": {"h": 4, "w": 5, "x": 4, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "app_regularsync_block_current_number_gauge{instance=~\"$instance\"} or app_fastsync_block_bestFullBlock_number_gauge{instance=~\"$instance\"} or app_sync_block_number_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "light-blue"}, "decimals": 0}},
+      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value_and_name", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Best Known Block",
+      "id": 3,
+      "gridPos": {"h": 4, "w": 5, "x": 9, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "app_regularsync_block_bestKnown_number_gauge{instance=~\"$instance\"} or app_fastsync_block_pivotBlock_number_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "semi-dark-purple"}, "decimals": 0}},
+      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value_and_name", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Blocks Behind",
+      "id": 4,
+      "gridPos": {"h": 4, "w": 5, "x": 14, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "clamp_min((app_regularsync_block_bestKnown_number_gauge{instance=~\"$instance\"} or app_fastsync_block_pivotBlock_number_gauge{instance=~\"$instance\"}) - (app_regularsync_block_current_number_gauge{instance=~\"$instance\"} or app_fastsync_block_bestFullBlock_number_gauge{instance=~\"$instance\"}), 0)", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short", "decimals": 0,
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 16},
+            {"color": "orange", "value": 128},
+            {"color": "red", "value": 1024}
+          ]}
+        }
+      },
+      "options": {"colorMode": "background", "graphMode": "area", "textMode": "value_and_name", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Handshaked Peers",
+      "id": 5,
+      "gridPos": {"h": 4, "w": 5, "x": 19, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "app_network_peers_outgoing_handshaked_gauge{instance=~\"$instance\"} + app_network_peers_incoming_handshaked_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short", "decimals": 0,
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "red", "value": null},
+            {"color": "orange", "value": 1},
+            {"color": "yellow", "value": 3},
+            {"color": "green", "value": 5}
+          ]}
+        }
+      },
+      "options": {"colorMode": "background", "graphMode": "area", "textMode": "value_and_name", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Block height over time",
+      "id": 10,
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "app_regularsync_block_current_number_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}} current (regular)"},
+        {"expr": "app_regularsync_block_bestKnown_number_gauge{instance=~\"$instance\"}", "refId": "B", "legendFormat": "{{instance}} best known"},
+        {"expr": "app_sync_block_number_gauge{instance=~\"$instance\"}", "refId": "C", "legendFormat": "{{instance}} last executed"},
+        {"expr": "app_fastsync_block_bestFullBlock_number_gauge{instance=~\"$instance\"}", "refId": "D", "legendFormat": "{{instance}} fast-sync best"},
+        {"expr": "app_fastsync_block_bestHeader_number_gauge{instance=~\"$instance\"}", "refId": "E", "legendFormat": "{{instance}} fast-sync headers"},
+        {"expr": "app_fastsync_block_pivotBlock_number_gauge{instance=~\"$instance\"}", "refId": "F", "legendFormat": "{{instance}} fast-sync pivot"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5}}},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Import rate (blocks/sec)",
+      "id": 11,
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "rate(app_regularsync_blocks_imported_total{instance=~\"$instance\"}[1m])", "refId": "A", "legendFormat": "{{instance}} 1m"},
+        {"expr": "rate(app_regularsync_blocks_imported_total{instance=~\"$instance\"}[5m])", "refId": "B", "legendFormat": "{{instance}} 5m"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}}},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max", "mean"]}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Peers",
+      "id": 20,
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "app_network_peers_outgoing_handshaked_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}} outgoing"},
+        {"expr": "app_network_peers_incoming_handshaked_gauge{instance=~\"$instance\"}", "refId": "B", "legendFormat": "{{instance}} incoming"},
+        {"expr": "app_network_peers_pending_gauge{instance=~\"$instance\"}", "refId": "C", "legendFormat": "{{instance}} pending"},
+        {"expr": "app_network_discovery_foundPeers_gauge{instance=~\"$instance\"}", "refId": "D", "legendFormat": "{{instance}} discovery"},
+        {"expr": "app_network_peers_blacklisted_gauge{instance=~\"$instance\"}", "refId": "E", "legendFormat": "{{instance}} blacklisted"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5}}},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Network message rate",
+      "id": 21,
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum by (instance) (rate(app_network_messages_sent_counter_total{instance=~\"$instance\"}[1m]))", "refId": "A", "legendFormat": "{{instance}} sent/s"},
+        {"expr": "sum by (instance) (rate(app_network_messages_received_counter_total{instance=~\"$instance\"}[1m]))", "refId": "B", "legendFormat": "{{instance}} received/s"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Block time (seconds between parent blocks)",
+      "id": 30,
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 19},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "app_sync_block_timeBetweenParent_seconds_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Transactions per block",
+      "id": 31,
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 19},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "app_sync_block_transactions_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}} tx"},
+        {"expr": "app_sync_block_uncles_gauge{instance=~\"$instance\"}", "refId": "B", "legendFormat": "{{instance}} uncles"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5}}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Gas per block",
+      "id": 32,
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 19},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "app_sync_block_gasUsed_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}} used"},
+        {"expr": "app_sync_block_gasLimit_gauge{instance=~\"$instance\"}", "refId": "B", "legendFormat": "{{instance}} limit"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5}}}
+    },
+    {
+      "type": "timeseries",
+      "title": "JVM heap (bytes used vs committed)",
+      "id": 40,
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 26},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "jvm_memory_bytes_used{area=\"heap\",instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}} used"},
+        {"expr": "jvm_memory_bytes_committed{area=\"heap\",instance=~\"$instance\"}", "refId": "B", "legendFormat": "{{instance}} committed"},
+        {"expr": "jvm_memory_bytes_max{area=\"heap\",instance=~\"$instance\"}", "refId": "C", "legendFormat": "{{instance}} max"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "bytes", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5}}},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}}
+    },
+    {
+      "type": "timeseries",
+      "title": "GC time (s/s — fraction of CPU in GC)",
+      "id": 41,
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 26},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "rate(jvm_gc_collection_seconds_sum{instance=~\"$instance\"}[1m])", "refId": "A", "legendFormat": "{{instance}} {{gc}}"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "max": 1, "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Errors / validation failures (rate/s)",
+      "id": 50,
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 33},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "rate(app_snapsync_errors_total{instance=~\"$instance\"}[1m])", "refId": "A", "legendFormat": "{{instance}} snap errors"},
+        {"expr": "rate(app_snapsync_validation_failures_total{instance=~\"$instance\"}[1m])", "refId": "B", "legendFormat": "{{instance}} snap validation"},
+        {"expr": "rate(app_snapsync_requests_timeouts_total{instance=~\"$instance\"}[1m])", "refId": "C", "legendFormat": "{{instance}} snap timeouts"},
+        {"expr": "rate(app_network_peers_blacklisted_regularSyncGroup_counter_total{instance=~\"$instance\"}[1m])", "refId": "D", "legendFormat": "{{instance}} blacklist rate"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}}}
+    },
+    {
+      "type": "stat",
+      "title": "JVM threads",
+      "id": 51,
+      "gridPos": {"h": 6, "w": 6, "x": 12, "y": 33},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "jvm_threads_current{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}} current"},
+        {"expr": "jvm_threads_deadlocked{instance=~\"$instance\"}", "refId": "B", "legendFormat": "{{instance}} DEADLOCKED"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}
+        },
+        "overrides": [
+          {"matcher": {"id": "byFrameRefID", "options": "A"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "light-blue"}}]}
+        ]
+      },
+      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value_and_name", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "SNAP phase",
+      "id": 52,
+      "gridPos": {"h": 6, "w": 6, "x": 18, "y": 33},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "app_snapsync_phase_current_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {"type": "value", "options": {
+              "0": {"text": "Idle", "color": "grey"},
+              "1": {"text": "AccountRange", "color": "blue"},
+              "3": {"text": "ByteCode+Storage", "color": "purple"},
+              "5": {"text": "Healing", "color": "yellow"},
+              "6": {"text": "Validation", "color": "orange"},
+              "7": {"text": "Chain", "color": "cyan"},
+              "8": {"text": "Completed", "color": "green"}
+            }}
+          ]
+        }
+      },
+      "options": {"colorMode": "background", "graphMode": "none", "textMode": "value_and_name", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["fukuii", "health", "overview"],
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "label": "Instance",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": {"query": "label_values(up{job=~\".*fukuii.*\"}, instance)", "refId": "Prometheus-instance-Variable-Query"},
+        "refresh": 1,
+        "sort": 1,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {"selected": false, "text": "All", "value": "$__all"},
+        "options": [],
+        "hide": 0
+      }
+    ]
+  },
+  "time": {"from": "now-30m", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "Fukuii Node Health",
+  "uid": "fukuii-node-health",
+  "version": 1,
+  "weekStart": ""
+}

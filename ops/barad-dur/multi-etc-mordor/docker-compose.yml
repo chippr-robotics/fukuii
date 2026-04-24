@@ -1,0 +1,58 @@
+# Multi-Network Fukuii: ETC mainnet + Mordor testnet in a single process.
+#
+# Usage:
+#   docker compose -f ops/barad-dur/multi-etc-mordor/docker-compose.yml up -d
+#
+# Data mounts reuse existing directories so progress from the previous
+# single-instance runs continues without re-syncing.
+
+networks:
+  multi-etc-mordor-net:
+    driver: bridge
+
+volumes:
+  # Reuse the Mordor data volume from the cirith-ungol harness (in-place).
+  cirith-ungol_fukuii-cirith-ungol-data:
+    external: true
+
+services:
+  fukuii-multi:
+    image: ${FUKUII_IMAGE:-chipprbots/fukuii:latest}
+    container_name: fukuii-multi
+    restart: unless-stopped
+    ports:
+      # ETC mainnet
+      - "8545:8545"          # JSON-RPC HTTP
+      - "30303:30303/tcp"    # P2P TCP
+      - "30303:30303/udp"    # P2P Discovery
+      - "9095:9095"          # Metrics
+      # Mordor testnet
+      - "8547:8547"          # JSON-RPC HTTP
+      - "30304:30304/tcp"    # P2P TCP
+      - "30304:30304/udp"    # P2P Discovery
+      - "9096:9096"          # Metrics
+    volumes:
+      # ETC data carries over from fukuii-primary harness.
+      - /chipprbots/blockchain/chain-data/etc/fukuii-primary:/app/data/etc
+      # Mordor data carries over from cirith-ungol named volume.
+      - cirith-ungol_fukuii-cirith-ungol-data:/app/data/mordor
+      # Multi-instance runtime config
+      - ./conf/multi-network.conf:/app/conf/multi-network.conf:ro
+    command:
+      - "-Xmx8g"
+      - "-Xms2g"
+      - "-Xss10M"
+      - "-XX:+UseG1GC"
+      - "-XX:MaxGCPauseMillis=200"
+      - "-Dconfig.file=/app/conf/multi-network.conf"
+      - "-jar"
+      - "/app/fukuii/lib/fukuii-assembly-0.1.240.jar"
+      - "runtime"
+    networks:
+      - multi-etc-mordor-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8545/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 180s

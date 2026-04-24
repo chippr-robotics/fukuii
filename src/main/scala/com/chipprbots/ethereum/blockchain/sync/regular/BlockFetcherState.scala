@@ -49,7 +49,13 @@ case class BlockFetcherState(
     fetchingBodiesState: FetchingBodiesState,
     lastBlock: BigInt,
     knownTop: BigInt,
-    blockProviders: Map[BigInt, PeerId]
+    blockProviders: Map[BigInt, PeerId],
+    // Count of consecutive header-fetch rejections since the last successful appendHeaders.
+    // Bumps on every peer response that fails chain-validation; resets on any successful
+    // append. Used by BlockFetcher to detect "stale tip" situations (all peers consistently
+    // reject — Bug 31) and trigger a rewind via InvalidateBlocksFrom so we can recover
+    // instead of looping on the same poisoned queue state indefinitely.
+    consecutiveHeaderRejections: Int = 0
 ) {
 
   def isFetching: Boolean = isFetchingHeaders || isFetchingBodies
@@ -85,9 +91,25 @@ case class BlockFetcherState(
       val lastNumber = HeadersSeq.lastNumber(validHeaders)
       withPossibleNewTopAt(lastNumber)
         .copy(
-          waitingHeaders = waitingHeaders ++ validHeaders
+          waitingHeaders = waitingHeaders ++ validHeaders,
+          // Any successful append clears the consecutive-rejection counter
+          consecutiveHeaderRejections = 0
         )
     }
+
+  /** Record that a header-fetch response was rejected by validation. Incremented on every rejection; reset to 0 by
+    * appendHeaders on success. The threshold at which BlockFetcher should trigger a stale-tip recovery is
+    * [[BlockFetcher.HeaderRejectionRewindThreshold]].
+    */
+  def recordHeaderRejection(): BlockFetcherState =
+    copy(consecutiveHeaderRejections = consecutiveHeaderRejections + 1)
+
+  /** True when enough independent peers have rejected the current queue state to conclude our waitingHeaders /
+    * readyBlocks tip is stale (e.g. orphaned after a tip reorg, or seeded wrong at the fast-sync → regular-sync
+    * handoff). Caller should rewind with [[InvalidateBlocksFrom]] and refresh from storage.
+    */
+  def shouldRewindOnRejections(threshold: Int): Boolean =
+    consecutiveHeaderRejections >= threshold
 
   /** Validates received headers consistency and their compatibility with the state
     */

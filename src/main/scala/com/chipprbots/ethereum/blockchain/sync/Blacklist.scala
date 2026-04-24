@@ -293,6 +293,21 @@ object Blacklist {
       val reasonType: BlacklistReasonType = UnrequestedHeadersType
       val description: String = "Received unrequested headers"
     }
+    // Specific reasons that previously all folded into UnrequestedHeaders. The name there is
+    // misleading — these cases are responses we DID request, they just fail chain validation
+    // relative to our current queue state. Split out so diagnosis is possible from logs alone.
+    case object HeadersNotFormingChain extends BlacklistReason {
+      val reasonType: BlacklistReasonType = UnrequestedHeadersType
+      val description: String = "Received headers do not form an internal parent->child chain"
+    }
+    case object HeadersDontExtendReadyBlocks extends BlacklistReason {
+      val reasonType: BlacklistReasonType = UnrequestedHeadersType
+      val description: String = "Received headers do not extend our last ready block (possible stale tip)"
+    }
+    case object HeadersDontExtendWaitingQueue extends BlacklistReason {
+      val reasonType: BlacklistReasonType = UnrequestedHeadersType
+      val description: String = "Received headers do not extend our waiting-headers queue (possible reorg)"
+    }
     final case class RegularSyncRequestFailed(error: String) extends BlacklistReason {
       val reasonType: BlacklistReasonType = RegularSyncRequestFailedType
       val description: String = s"Request failed with error: $error"

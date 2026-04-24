@@ -2773,7 +2773,11 @@ case class SNAPSyncConfig(
     minSnapPeers: Int = 3,
     snapPeerEvictionInterval: FiniteDuration = 15.seconds,
     maxEvictionsPerCycle: Int = 3,
-    deferredMerkleization: Boolean = true
+    deferredMerkleization: Boolean = true,
+    // Bug 30b: post-SNAP storage recovery can't refresh the pivot root. If every peer
+    // rejects the saved root for this long with no slot progress, abandon recovery and
+    // let regular sync's on-demand GetTrieNodes pick up missing subtrees.
+    storageRecoveryAbandonTimeout: FiniteDuration = 10.minutes
 )
 
 object SNAPSyncConfig {
@@ -2865,7 +2869,11 @@ object SNAPSyncConfig {
       deferredMerkleization =
         if (snapConfig.hasPath("deferred-merkleization"))
           snapConfig.getBoolean("deferred-merkleization")
-        else true
+        else true,
+      storageRecoveryAbandonTimeout =
+        if (snapConfig.hasPath("storage-recovery-abandon-timeout"))
+          snapConfig.getDuration("storage-recovery-abandon-timeout").toMillis.millis
+        else 10.minutes
     )
   }
 }
