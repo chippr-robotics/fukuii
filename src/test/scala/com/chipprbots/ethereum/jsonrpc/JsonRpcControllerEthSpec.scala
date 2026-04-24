@@ -544,7 +544,7 @@ class JsonRpcControllerEthSpec
     response should haveStringResult("0x11")
   }
 
-  it should "return error with custom error data in eth_balance" taggedAs (
+  it should "return error with custom error data in eth_getBalance" taggedAs (
     UnitTest,
     RPCTest
   ) in new JsonRpcControllerFixture {
