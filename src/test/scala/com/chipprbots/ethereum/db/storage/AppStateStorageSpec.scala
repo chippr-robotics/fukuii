@@ -98,6 +98,39 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
       val storage = newAppStateStorage()
       assert(storage.getSnapSyncProgress().isEmpty)
     }
+
+    // Bug 28: the DB consistency check in StdNode.runDBConsistencyCheck depends on this
+    // helper. Locking its semantics so a future refactor can't silently revert.
+    "report SNAP sync in-progress only when progress is persisted but not yet done" taggedAs (
+      UnitTest,
+      DatabaseTest
+    ) in new Fixtures {
+      val storage = newAppStateStorage()
+
+      // Empty storage — neither in-progress nor done.
+      assert(!storage.isSnapSyncInProgress())
+      assert(!storage.isSnapSyncDone())
+
+      // Progress persisted but not done — in-progress.
+      storage.putSnapSyncProgress("""{"phase":"AccountRangeSync","accountsSynced":500}""").commit()
+      assert(storage.isSnapSyncInProgress())
+      assert(!storage.isSnapSyncDone())
+
+      // Marked done (progress may still be present; done-ness wins).
+      storage.snapSyncDone().commit()
+      assert(!storage.isSnapSyncInProgress())
+      assert(storage.isSnapSyncDone())
+    }
+
+    "not report in-progress when SNAP has finished (progress absent, done set)" taggedAs (
+      UnitTest,
+      DatabaseTest
+    ) in new Fixtures {
+      val storage = newAppStateStorage()
+      storage.snapSyncDone().commit()
+      assert(!storage.isSnapSyncInProgress())
+      assert(storage.isSnapSyncDone())
+    }
   }
 
   trait Fixtures {

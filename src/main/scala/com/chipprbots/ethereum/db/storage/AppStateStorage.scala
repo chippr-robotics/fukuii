@@ -113,6 +113,16 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def snapSyncDone(): DataSourceBatchUpdate =
     put(Keys.SnapSyncDone, true.toString)
 
+  /** True when SNAP sync has persisted progress but has not yet completed — i.e., the node is mid-SNAP.
+    *
+    * In this state `AppStateStorage.bestBlock` is set to the pivot block number whose header is stored, but the full
+    * block body is never persisted, and headers 0..pivot don't exist either. Phase-5 DB consistency checks must skip:
+    * they would see "best block hash not in block storage" and falsely conclude the DB is corrupt. See
+    * bug28_db_consistency_check_kills_snap_resume.md.
+    */
+  def isSnapSyncInProgress(): Boolean =
+    getSnapSyncProgress().isDefined && !isSnapSyncDone()
+
   /** Check if bytecode recovery scan has completed (Bug 20 hardening) */
   def isBytecodeRecoveryDone(): Boolean =
     get(Keys.BytecodeRecoveryDone).exists(_.toBoolean)

@@ -43,13 +43,22 @@ case class PeriodicConsistencyCheck(
   import PeriodicConsistencyCheck._
 
   def check(): Behavior[ConsistencyCheck] = Behaviors.receiveMessage { case Tick =>
-    log.debug("Running a storageConsistency check")
-    StorageConsistencyChecker.checkStorageConsistency(
-      appStateStorage.getBestBlockNumber(),
-      blockNumberMappingStorage,
-      blockHeadersStorage,
-      shutdown
-    )(log)
+    // Match the skip conditions in StdNode.runDBConsistencyCheck: the post-SNAP best block
+    // points to a pivot header without the full 0..pivot chain, and the mid-SNAP state is
+    // even more partial (Bug 28). Both would misfire the shutdown.
+    if (appStateStorage.isSnapSyncDone()) {
+      log.debug("Skipping periodic consistency check: SNAP sync stores only pivot block header")
+    } else if (appStateStorage.isSnapSyncInProgress()) {
+      log.debug("Skipping periodic consistency check: SNAP sync in progress")
+    } else {
+      log.debug("Running a storageConsistency check")
+      StorageConsistencyChecker.checkStorageConsistency(
+        appStateStorage.getBestBlockNumber(),
+        blockNumberMappingStorage,
+        blockHeadersStorage,
+        shutdown
+      )(log)
+    }
     tick(timers)
     Behaviors.same
   }
