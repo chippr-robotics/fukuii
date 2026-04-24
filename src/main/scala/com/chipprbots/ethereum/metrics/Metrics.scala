@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.metrics
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 
+import scala.jdk.CollectionConverters._
 import scala.util.Try
 
 import io.micrometer.core.instrument._
@@ -111,11 +112,13 @@ object Metrics {
           metrics.start()
           // First instance also becomes the default
           val becameDefault = defaultRef.compareAndSet(defaultMetrics, metrics)
-          if (!becameDefault && instances.size() > 1) {
-            val otherId = scala.jdk.CollectionConverters
-              .MapHasAsScala(instances)
-              .asScala
-              .collectFirst { case (id, _) if id != instanceId => id }
+          if (!becameDefault) {
+            // Identify the owner of `defaultRef` — that's the instance whose writes the shared
+            // registry actually reflects. `instances` may have other entries too (3+-way
+            // multi-instance), but the default-owner is the one operators need to know about.
+            val activeDefault = defaultRef.get()
+            val ownerId = instances.asScala
+              .collectFirst { case (id, m) if m eq activeDefault => id }
               .getOrElse("<unknown>")
             log.warn(
               "Metrics registered for instance '{}' on port {}, but samples are written to the " +
@@ -125,7 +128,7 @@ object Metrics {
                 "refactor lands.",
               instanceId,
               config.port.toString,
-              otherId
+              ownerId
             )
           }
         } else {
