@@ -140,9 +140,46 @@ object StdBlockValidator extends BlockValidator {
       _ <- validateTransactionRoot(block)
       _ <- validateOmmersHash(block)
       _ <- validateBlockRLPSize(block)
+      _ <- validateWithdrawalsPresence(block)
+      _ <- validateWithdrawalsOrdering(block)
       _ <- validateWithdrawalsRoot(block)
     } yield BlockValid
   }
+
+  /** EIP-4895: pre-Shanghai blocks (header.withdrawalsRoot = None) MUST NOT attach a withdrawals field to the body.
+    *
+    * Note this rejects `Some(Seq.empty)` as well as `Some(nonEmpty)` — `Block.BlockEnc` serialises `body.withdrawals`
+    * by *presence*, so `Some(Seq.empty)` still produces a 4-item block RLP that's structurally a Shanghai-era encoding
+    * even though no withdrawals are carried. A pre-Shanghai block must RLP-encode as a 3-item list, which means
+    * `body.withdrawals = None`.
+    *
+    * The reverse case (Shanghai header + no withdrawals field in body) is caught during RLP decoding in
+    * `Block.BlockDec.toBlock`.
+    */
+  private def validateWithdrawalsPresence(block: Block): Either[BlockError, BlockValid] =
+    (block.header.withdrawalsRoot, block.body.withdrawals) match {
+      case (None, Some(_)) => Left(BlockWithdrawalsOrphanedError)
+      case _               => Right(BlockValid)
+    }
+
+  /** EIP-4895: withdrawals within a block must have strictly increasing `index` values. The beacon chain assigns
+    * indices globally and they drain in order, so a block that reorders or duplicates indices is invalid regardless of
+    * whether the declared `withdrawalsRoot` happens to match the (mis-ordered) trie.
+    *
+    * Without this check a malicious producer can pair any out-of-order withdrawal list with its own trie root and the
+    * block-level root comparison in [[validateWithdrawalsRoot]] will still pass — the root is computed over the same
+    * bad order, so it matches itself.
+    */
+  private def validateWithdrawalsOrdering(block: Block): Either[BlockError, BlockValid] =
+    block.body.withdrawals match {
+      case None                                              => Right(BlockValid)
+      case Some(ws) if ws.size < 2                           => Right(BlockValid)
+      case Some(ws) if isStrictlyIncreasing(ws.map(_.index)) => Right(BlockValid)
+      case Some(_)                                           => Left(BlockWithdrawalsIndexError)
+    }
+
+  private def isStrictlyIncreasing(values: Seq[BigInt]): Boolean =
+    values.zip(values.tail).forall { case (a, b) => a < b }
 
   /** EIP-4895: if the header declares a withdrawalsRoot, it must equal the trie root computed from
     * block.body.withdrawals (indexed like transactions/receipts). Pre-Shanghai headers have no withdrawalsRoot and no
@@ -205,6 +242,12 @@ object StdBlockValidator extends BlockValidator {
   case object BlockLogBloomError extends BlockError
 
   case object BlockWithdrawalsRootError extends BlockError
+
+  /** EIP-4895: body carries withdrawals but the header did not reserve a withdrawalsRoot (pre-Shanghai header). */
+  case object BlockWithdrawalsOrphanedError extends BlockError
+
+  /** EIP-4895: within-block withdrawal indices must be strictly increasing. */
+  case object BlockWithdrawalsIndexError extends BlockError
 
   case class BlockRLPSizeError(size: Long, cap: Long) extends BlockError
 
