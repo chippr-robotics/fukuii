@@ -77,6 +77,12 @@ class PeerManagerActor(
     */
   private var maintainedPeersByNodeId: Map[String, URI] = Map.empty
 
+  /** Consecutive reconnect failure count per maintained peer (D5).
+    * Used for exponential backoff: delay = min(30s, 1s << attempt).
+    * Reset to 0 on successful handshake.
+    */
+  private var maintainedPeerReconnectAttempts: Map[String, Int] = Map.empty
+
   /** Trusted peers bypass the max-peer limit and are always accepted. core-geth reference: p2p/server.go — trusted
     * map[enode.ID]bool in run loop. Keyed by lowercase hex node ID.
     */
@@ -449,10 +455,17 @@ class PeerManagerActor(
       terminatedPeersIds.foreach { peerId =>
         peerStatusCache = peerStatusCache - peerId
         peerEventBus ! Publish(PeerEvent.PeerDisconnected(peerId))
-        // Reconnect maintained peers — mirrors Besu's checkMaintainedConnectionPeers scheduler.
+        // Reconnect maintained peers with exponential backoff (D5).
+        // Besu DefaultP2PNetwork uses exponential: 1s → 2s → 4s → ... → 30s cap.
+        // Fixed 30s was too long on fast-cycling connections; too short on persistent failures.
         maintainedPeersByNodeId.get(peerId.value).foreach { uri =>
-          log.debug("Maintained peer {} disconnected — scheduling reconnect in 30s", uri)
-          context.system.scheduler.scheduleOnce(30.seconds, self, ConnectToPeer(uri))(context.dispatcher)
+          val nodeId = peerId.value
+          val attempt = maintainedPeerReconnectAttempts.getOrElse(nodeId, 0)
+          val delaySecs = math.min(30, 1 << attempt) // 1s, 2s, 4s, 8s, 16s, 30s (cap)
+          val delay = scala.concurrent.duration.Duration(delaySecs, java.util.concurrent.TimeUnit.SECONDS)
+          maintainedPeerReconnectAttempts = maintainedPeerReconnectAttempts + (nodeId -> (attempt + 1))
+          log.debug("Maintained peer {} disconnected — scheduling reconnect in {}s (attempt #{})", uri, delaySecs, attempt + 1)
+          context.system.scheduler.scheduleOnce(delay, self, ConnectToPeer(uri))(context.dispatcher)
         }
       }
       // Try to replace a lost connection with another one.
@@ -482,6 +495,8 @@ class PeerManagerActor(
         context.become(listening(connectedPeers))
       } else {
         peerStatusCache = peerStatusCache + (handshakedPeer.id -> PeerActor.Status.Handshaked)
+        // Reset backoff counter on successful handshake (D5)
+        maintainedPeerReconnectAttempts = maintainedPeerReconnectAttempts - handshakedPeer.id.value
         context.become(listening(connectedPeers.promotePeerToHandshaked(handshakedPeer)))
       }
   }

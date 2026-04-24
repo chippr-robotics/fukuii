@@ -64,6 +64,12 @@ case class EthNodeStatus64ExchangeState(
         status.genesisHash
       )
       DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
+    } else if (status.totalDifficulty > BigInt(10).pow(26)) {
+      log.warn(
+        "STATUS_EXCHANGE: Peer advertising impossibly high totalDifficulty {} — disconnecting (spoofed/invalid peer)",
+        status.totalDifficulty
+      )
+      DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
     } else {
       (for {
         validationResult <-

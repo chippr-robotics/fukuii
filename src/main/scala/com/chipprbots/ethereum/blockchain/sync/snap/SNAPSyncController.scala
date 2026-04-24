@@ -1066,7 +1066,10 @@ class SNAPSyncController(
     // Step 7: Check for accounts-complete recovery (process crash during bytecode/storage phase).
     // If accounts were previously completed and the pivot is still fresh, skip account download
     // and only re-run bytecodes + storage from the persisted storage file.
-    if (appStateStorage.isSnapSyncAccountsComplete()) {
+    // D3 (H-017): Wrap in try-catch — corrupt checkpoint from a hard crash/power loss causes
+    // deserialization errors that would kill the actor. Explicit reset to fresh state is safer
+    // than crashing, since the next attempt will rebuild from scratch.
+    try if (appStateStorage.isSnapSyncAccountsComplete()) {
       val savedPivot = appStateStorage.getSnapSyncPivotBlock()
       val savedRootOpt = appStateStorage.getSnapSyncStateRoot()
       val savedStoragePath = appStateStorage.getSnapSyncStorageFilePath().filter(_.nonEmpty)
@@ -1224,6 +1227,15 @@ class SNAPSyncController(
           log.warning("Recovery: accounts-complete flag set but missing pivot/root. Clearing and restarting fresh.")
           appStateStorage.putSnapSyncAccountsComplete(false).commit()
       }
+    } catch {
+      case ex: Exception =>
+        log.error(
+          ex,
+          "[SNAP-RECOVERY] Exception reading checkpoint state — likely corrupt from hard shutdown. " +
+            "Clearing accounts-complete flag and starting fresh."
+        )
+        try appStateStorage.putSnapSyncAccountsComplete(false).commit()
+        catch { case _: Exception => () }
     }
 
     // Check if there's an interrupted bootstrap to resume
