@@ -151,6 +151,11 @@ class BlockchainSpec
     }
   }
 
+  // TODO: MerklePatriciaTrie.getProof(absentKey) currently returns Vector() instead of the
+  // walked-path proof-of-absence that EIP-1186 requires. Test was DisabledTest under
+  // 17c0fcb1d for "cache-field equality" — but when un-silenced the failure is
+  // "Vector() was empty" at the expected `HashNode(_) :: Nil` assertion, which points at
+  // real MPT proof-of-absence semantics, not test-infra. Separate investigation.
   it should "return proof for non-existent account" taggedAs (
     UnitTest,
     StateTest,
