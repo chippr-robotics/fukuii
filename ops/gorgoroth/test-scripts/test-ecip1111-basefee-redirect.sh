@@ -16,6 +16,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/test-helpers.sh"
+source "$SCRIPT_DIR/olympia-config.sh"
 require_tools curl jq
 
 echo "=== ECIP-1111 BaseFee Redirect Test (Olympia) ==="
@@ -23,7 +24,7 @@ echo "Verifies baseFee goes to ECIP-1112 Treasury Address (not burned, not 80/20
 echo ""
 
 # Configuration
-ECIP1112_TREASURY_ADDRESS="${TREASURY_ADDRESS:-0xd6165F3aF4281037bce810621F62B43077Fb0e37}"
+ECIP1112_TREASURY_ADDRESS="${TREASURY_ADDRESS:-$OLYMPIA_TREASURY_ADDRESS}"
 DEV_ACCOUNT="${DEV_ACCOUNT:-0x3b0952fB8eAAC74E56E176102eBA70BAB1C81537}"
 DEV_KEY="${DEV_KEY:-}"  # Must be set externally for tx signing
 
