@@ -426,7 +426,6 @@ class BlockImporter(
         errorOpt match {
           case None => Running
           case Some(err) =>
-            log.error("Block import error {}", err)
             val notImportedBlocks = blocks.drop(importedBlocks.size)
 
             err match {

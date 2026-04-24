@@ -216,7 +216,7 @@
     
     <!-- SNAP sync internals -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap" level="ERROR" />
-    <!-- SNAP sync actors (AccountRangeCoordinator, workers) — INFO for milestone visibility -->
+    <!-- SNAP sync actors — INFO shows coordinator milestone progress (account %, storage %, bytecode %) -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.actors" level="INFO" />
     <!-- Chain download progress — must be explicit, not inherited from snap (ERROR) -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader" level="INFO" />
