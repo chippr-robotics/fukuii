@@ -25,7 +25,7 @@ echo ""
 
 # Configuration
 ECIP1112_TREASURY_ADDRESS="${TREASURY_ADDRESS:-$OLYMPIA_TREASURY_ADDRESS}"
-DEV_ACCOUNT="${DEV_ACCOUNT:-0x3b0952fB8eAAC74E56E176102eBA70BAB1C81537}"
+DEV_ACCOUNT="${DEV_ACCOUNT:-}"  # set via env: DEV_ACCOUNT=0x... ./test-ecip1111-basefee-redirect.sh
 DEV_KEY="${DEV_KEY:-}"  # Must be set externally for tx signing
 
 # Detect running nodes

@@ -100,3 +100,6 @@ run-*.sh
 !run-classic.sh
 !run-mordor.sh
 
+# Internal / local-environment docs (not for upstream)
+.local/
+
