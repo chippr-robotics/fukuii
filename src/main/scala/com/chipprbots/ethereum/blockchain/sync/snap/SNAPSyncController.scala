@@ -145,6 +145,7 @@ class SNAPSyncController(
   private var healingRequestTask: Option[Cancellable] = None
   private var storageStagnationRefreshAttempted: Boolean = false
   private var trieWalkInProgress: Boolean = false
+  private var walkStartedAt: Option[java.time.Instant] = None // set when walk launches, cleared on result; used for hung-walk detection (A7)
   private var walkPivotRefreshSuppressLogged: Boolean = false // dedup flag: suppress repeated "walk in progress, deferring" messages
   private var consecutiveUnproductiveHealingRounds: Int = 0
   private val maxUnproductiveHealingRounds: Int =
@@ -674,10 +675,23 @@ class SNAPSyncController(
     case StateHealingComplete(_, _) =>
       log.debug(s"Ignoring StateHealingComplete from non-current coordinator (${sender().path.name})")
 
-    case TrieWalkResult(missingNodes) if currentPhase == StateHealing =>
+    case TrieWalkResult(missingNodes, walkedRoot) if currentPhase == StateHealing =>
       trieWalkInProgress = false
+      walkStartedAt = None
       walkPivotRefreshSuppressLogged = false // walk finished — allow next stale-pivot log
-      if (missingNodes.isEmpty) {
+      // Discard results from walks that completed after a pivot change (BUG-W1/W2).
+      // April-confluence uses async Futures for walks; a walk launched on pivot N can complete
+      // after pivot changes to N+1. Without this guard, stale missing nodes queue against the
+      // wrong root and can trigger premature StateValidationComplete.
+      val currentRoot = stateRoot.getOrElse(ByteString.empty)
+      if (walkedRoot != currentRoot) {
+        log.info(
+          s"[WALK-FUTURE] Discarding stale walk result: walked=${walkedRoot.take(4).map("%02x".format(_)).mkString} " +
+            s"current=${currentRoot.take(4).map("%02x".format(_)).mkString} — walk ran against old pivot, re-launching"
+        )
+        // Re-launch walk against the current root immediately
+        startTrieWalk()
+      } else if (missingNodes.isEmpty) {
         log.info("Trie walk found no missing nodes — healing complete!")
         consecutiveUnproductiveHealingRounds = 0
         pivotStalenessCheckTask.foreach(_.cancel())
@@ -725,13 +739,25 @@ class SNAPSyncController(
           log.info(
             s"Trie walk found ${missingNodes.size} missing nodes — queuing for healing ($walkLabel)"
           )
-          trieNodeHealingCoordinator.foreach { coordinator =>
-            coordinator ! actors.Messages.QueueMissingNodes(missingNodes)
+          // A4 (BUG-HEAL1): Explicitly handle coordinator None — Option.foreach silently drops
+          // nodes when coordinator is None (actor model race: walk completes before coordinator
+          // initializes). Log and retry rather than silently losing missing nodes.
+          trieNodeHealingCoordinator match {
+            case Some(coordinator) =>
+              coordinator ! actors.Messages.QueueMissingNodes(missingNodes)
+            case None =>
+              log.warning(
+                s"[SNAP-HEALING] TrieWalkResult arrived but healing coordinator is None — " +
+                  s"${missingNodes.size} missing nodes would be dropped. Re-scheduling walk to retry."
+              )
+              scheduler.scheduleOnce(5.seconds, self, ScheduledTrieWalk)(ec)
           }
           // Schedule next overlapping trie walk — don't wait for healing to complete
-          scheduler.scheduleOnce(2.minutes) {
-            self ! ScheduledTrieWalk
-          }(ec)
+          trieNodeHealingCoordinator.foreach { _ =>
+            scheduler.scheduleOnce(2.minutes) {
+              self ! ScheduledTrieWalk
+            }(ec)
+          }
         }
       }
 
@@ -740,6 +766,7 @@ class SNAPSyncController(
 
     case TrieWalkFailed(error) if currentPhase == StateHealing =>
       trieWalkInProgress = false
+      walkStartedAt = None
       walkPivotRefreshSuppressLogged = false
       log.error(s"Trie walk failed: $error. Retrying after delay...")
       scheduler.scheduleOnce(5.seconds) {
@@ -749,6 +776,22 @@ class SNAPSyncController(
     // Besu DynamicPivotBlockSelector: every 60s check if pivot drifted >126 blocks behind chain tip.
     case CheckPivotStaleness if currentPhase == StateHealing =>
       val currentPivot = pivotBlock.getOrElse(BigInt(0))
+      // A7 (BUG-H3): detect hung walk — if trieWalkInProgress has been true for longer than
+      // WalkHangTimeout, the walk Future is likely stuck (GC pause, I/O stall, or deadlock).
+      // In this case, force-reset walk state so pivot staleness recovery can proceed.
+      // Besu uses threadpool workers (no async Future) so this problem doesn't arise there.
+      val walkIsHung = trieWalkInProgress && walkStartedAt.exists { started =>
+        java.time.Duration.between(started, java.time.Instant.now()).toMinutes >= 30
+      }
+      if (walkIsHung) {
+        log.warning(
+          s"[WALK-HUNG] Trie walk has been running for >30 minutes — presumed hung. " +
+            s"Resetting trieWalkInProgress and allowing pivot staleness check to proceed."
+        )
+        trieWalkInProgress = false
+        walkStartedAt = None
+        walkPivotRefreshSuppressLogged = false
+      }
       currentNetworkBestFromSnapPeers().foreach { networkBest =>
         val pivotAge = networkBest - currentPivot
         if (pivotAge > PivotWindowValidity) {
@@ -2101,8 +2144,10 @@ class SNAPSyncController(
       super.aroundReceive(receive, msg)
   }
 
-  // Internal message for async trie walk result
-  private case class TrieWalkResult(missingNodes: Seq[(Seq[ByteString], ByteString)])
+  // Internal message for async trie walk result.
+  // walkedRoot records the pivot state root this walk was launched against.
+  // The handler discards results from walks that completed after a pivot change (BUG-W1/W2).
+  private case class TrieWalkResult(missingNodes: Seq[(Seq[ByteString], ByteString)], walkedRoot: ByteString)
   private case class TrieWalkFailed(error: String)
   private case object ScheduledTrieWalk
 
@@ -2111,10 +2156,14 @@ class SNAPSyncController(
     if (trieWalkInProgress) return
     if (currentPhase != StateHealing) return
     trieWalkInProgress = true
+    walkStartedAt = Some(java.time.Instant.now())
     stateRoot.foreach { root =>
       log.info("Starting trie walk to discover missing nodes for healing...")
       val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
       val selfRef = self
+      // Capture the root this walk is running against. The walk runs on a separate thread
+      // and may complete after a pivot change — the actor uses walkedRoot to discard stale results.
+      val launchedForRoot = root
       scala.concurrent
         .Future {
           val validator = new StateValidator(storage)
@@ -2123,7 +2172,7 @@ class SNAPSyncController(
         .foreach {
           case Right(missingNodes) =>
             log.info(s"[WALK-FUTURE] Walk threads done: ${missingNodes.size} missing node(s) — sending TrieWalkResult")
-            selfRef ! TrieWalkResult(missingNodes)
+            selfRef ! TrieWalkResult(missingNodes, launchedForRoot)
           case Left(error) =>
             log.error(s"[WALK-FUTURE] Walk threads returned error: $error — sending TrieWalkFailed")
             selfRef ! TrieWalkFailed(error)
@@ -2139,6 +2188,18 @@ class SNAPSyncController(
       log.warning("startStateHealing called but healing coordinator already exists — ignoring duplicate")
       return
     }
+
+    // Cancel all download-phase schedulers before entering healing (BUG-W5).
+    // These fire every 1s and trigger CheckPivotStaleness → pivot staleness restart
+    // at ~13-14 min into healing if left running. They have no useful work to do once
+    // account/bytecode/storage download phases are complete.
+    accountRangeRequestTask.foreach(_.cancel())
+    accountRangeRequestTask = None
+    bytecodeRequestTask.foreach(_.cancel())
+    bytecodeRequestTask = None
+    storageRangeRequestTask.foreach(_.cancel())
+    storageRangeRequestTask = None
+    log.debug("[SNAP-HEALING] Cancelled download-phase schedulers (accountRange/bytecode/storage) on StateHealing entry")
 
     trieWalkInProgress = false // Reset for fresh healing phase
     log.info("=" * 60)
@@ -2515,18 +2576,9 @@ class SNAPSyncController(
   private def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit = {
     log.info(s"Validation found ${missingNodes.size} missing nodes — re-running trie walk with paths for healing")
     currentPhase = StateHealing
-    stateRoot.foreach { root =>
-      val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
-      scala.concurrent
-        .Future {
-          val validator = new StateValidator(storage)
-          validator.findMissingNodesWithPaths(root)
-        }(ec)
-        .foreach {
-          case Right(nodes) => self ! TrieWalkResult(nodes)
-          case Left(error)  => self ! TrieWalkFailed(error)
-        }(ec)
-    }
+    // Re-use startTrieWalk() so trieWalkInProgress, walkStartedAt, and walkedRoot tracking
+    // all apply correctly (A1/A2/A7 guards). The walk will send TrieWalkResult back to self.
+    startTrieWalk()
   }
 
   /** Convert SNAP sync progress to SyncProtocol.Status for eth_syncing RPC endpoint.
