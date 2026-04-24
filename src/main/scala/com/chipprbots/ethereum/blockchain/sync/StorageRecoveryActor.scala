@@ -1,10 +1,11 @@
 package com.chipprbots.ethereum.blockchain.sync
 
-import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props}
+import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Cancellable, Props}
 import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
 import scala.concurrent.Future
+import scala.concurrent.duration._
 
 import scala.util.{Success, Failure}
 
@@ -109,20 +110,82 @@ class StorageRecoveryActor(
       }
   }
 
+  /** Seconds without any storage-slot progress after which we declare the recovery dead-in-the-water and abandon to
+    * regular sync. The SNAP serve window is ~128 blocks (~28 min on ETC / ~25 min on ETH); once exceeded, every peer
+    * rejects our saved pivot root and `PivotStateUnservable` fires in a loop. Pivot-refresh isn't wired into the
+    * recovery path (unlike SNAP), so the only way out is to stop trying and let regular sync's on-demand `GetTrieNodes`
+    * fetch the missing subtrees.
+    */
+  private val RecoveryAbandonAfter: FiniteDuration = 10.minutes
+
   private def downloading(coordinator: ActorRef, expectedCount: Int): Receive = {
-    case actors.Messages.StoragePeerAvailable(peer) =>
-      coordinator ! actors.Messages.StoragePeerAvailable(peer)
+    var lastProgressMs = System.currentTimeMillis()
+    var unservableCount = 0
+    var abandonTimer: Option[Cancellable] = None
 
-    case SNAPSyncController.StorageRangeSyncComplete =>
-      log.info(s"Storage recovery complete: downloaded storage for $expectedCount contracts")
-      appStateStorage.storageRecoveryDone().commit()
-      syncController ! RecoveryComplete
-      context.stop(self)
+    def recordProgress(): Unit = {
+      lastProgressMs = System.currentTimeMillis()
+      unservableCount = 0
+      abandonTimer.foreach(_.cancel())
+      abandonTimer = None
+    }
 
-    case SNAPSyncController.ProgressStorageSlotsSynced(_) =>
-    // Ignore progress updates
+    def scheduleAbandonCheck(): Unit = {
+      abandonTimer.foreach(_.cancel())
+      abandonTimer = Some(
+        context.system.scheduler.scheduleOnce(RecoveryAbandonAfter, self, CheckAbandon(lastProgressMs))
+      )
+    }
 
-    case msg => coordinator.forward(msg) // Forward SNAP protocol responses to coordinator
+    {
+      case actors.Messages.StoragePeerAvailable(peer) =>
+        coordinator ! actors.Messages.StoragePeerAvailable(peer)
+
+      case SNAPSyncController.StorageRangeSyncComplete =>
+        log.info(s"Storage recovery complete: downloaded storage for $expectedCount contracts")
+        abandonTimer.foreach(_.cancel())
+        appStateStorage.storageRecoveryDone().commit()
+        syncController ! RecoveryComplete
+        context.stop(self)
+
+      case SNAPSyncController.ProgressStorageSlotsSynced(_) =>
+        recordProgress()
+
+      // Bug 30b: coordinator reports every peer stateless for the stored pivot root. In SNAP
+      // sync this would trigger `refreshPivotInPlace` on the controller; the recovery path has
+      // no equivalent. Instead of looping forever, count the events and bail out after
+      // `RecoveryAbandonAfter` of zero slot progress. Regular sync will subsequently fetch
+      // missing trie subtrees on-demand via GetTrieNodes when block execution reaches them.
+      case _: SNAPSyncController.PivotStateUnservable =>
+        unservableCount += 1
+        log.info(
+          "Storage recovery: coordinator reports stored pivot root unservable ({} events, " +
+            "no progress for {}s). Will abandon after {}s if this persists.",
+          unservableCount,
+          (System.currentTimeMillis() - lastProgressMs) / 1000,
+          RecoveryAbandonAfter.toSeconds
+        )
+        if (abandonTimer.isEmpty) scheduleAbandonCheck()
+
+      case CheckAbandon(progressAtSchedule) =>
+        if (progressAtSchedule == lastProgressMs) {
+          log.warning(
+            "Storage recovery abandoned: no slot progress for {}s against stored pivot root after {} " +
+              "unservable events. Regular sync will fetch remaining contract storage on-demand via " +
+              "GetTrieNodes when block execution needs it.",
+            RecoveryAbandonAfter.toSeconds,
+            unservableCount
+          )
+          appStateStorage.storageRecoveryDone().commit()
+          syncController ! RecoveryComplete
+          context.stop(self)
+        } else {
+          // Progress happened between scheduling and firing — reset.
+          abandonTimer = None
+        }
+
+      case msg => coordinator.forward(msg) // Forward SNAP protocol responses to coordinator
+    }
   }
 
   /** Walk the state trie and collect (accountHash, storageRoot) for contracts whose storage tries are missing from
@@ -190,6 +253,10 @@ class StorageRecoveryActor(
 object StorageRecoveryActor {
   private case object StartScan
   private case class ScanResult(missingStorage: Seq[(ByteString, ByteString)])
+  // Delayed self-ping used by Bug 30b abandon path. Carries the progress timestamp that was
+  // current when the timer was armed; if the actor's current lastProgressMs still matches on
+  // fire, nothing has moved in the interim and we give up.
+  private case class CheckAbandon(progressAtSchedule: Long)
 
   /** Sent to SyncController when recovery is complete (or skipped) */
   case object RecoveryComplete
