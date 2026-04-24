@@ -102,11 +102,21 @@ abstract class BaseNode extends Node {
   }
 
   private[this] def runDBConsistencyCheck(): Unit = {
+    val appState = storagesInstance.storages.appStateStorage
     // Skip consistency check after SNAP sync — block headers 0..pivot don't exist yet.
     // SNAP sync only stores the pivot block header; earlier headers are downloaded
     // incrementally during regular sync's block-by-block import.
-    if (storagesInstance.storages.appStateStorage.isSnapSyncDone()) {
+    if (appState.isSnapSyncDone()) {
       log.info("Skipping DB consistency check: SNAP sync stores only pivot block header, not full header chain")
+      return
+    }
+    // Bug 28: Skip when SNAP is mid-sync. AppStateStorage.bestBlock holds the pivot number
+    // whose header we have, but the block body was never persisted and the 0..pivot chain is
+    // incomplete. The consistency checker would see "best block hash not in block storage",
+    // log "Database seems to be in inconsistent state", and call shutdown — turning a recoverable
+    // mid-SNAP restart into an unrecoverable wipe-and-resync.
+    if (appState.isSnapSyncInProgress()) {
+      log.info("Skipping DB consistency check: SNAP sync in progress (pivot header only, no full chain yet)")
       return
     }
     // Skip consistency check in Engine API mode — optimistic imports store blocks
@@ -116,7 +126,7 @@ abstract class BaseNode extends Node {
       return
     }
     StorageConsistencyChecker.checkStorageConsistency(
-      storagesInstance.storages.appStateStorage.getBestBlockNumber(),
+      appState.getBestBlockNumber(),
       storagesInstance.storages.blockNumberMappingStorage,
       storagesInstance.storages.blockHeadersStorage,
       shutdown
@@ -187,7 +197,8 @@ abstract class BaseNode extends Node {
           storagesInstance.storages.appStateStorage,
           storagesInstance.storages.blockNumberMappingStorage,
           storagesInstance.storages.blockHeadersStorage,
-          shutdown
+          shutdown,
+          engineApiConfig.enabled
         ),
         s"PeriodicDBConsistencyCheck_${instanceConfig.instanceId}"
       )
