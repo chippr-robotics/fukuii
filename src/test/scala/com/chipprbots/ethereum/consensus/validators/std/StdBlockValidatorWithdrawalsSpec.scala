@@ -52,12 +52,15 @@ class StdBlockValidatorWithdrawalsSpec extends AnyFlatSpec with Matchers {
       StdBlockValidator.validateHeaderAndBody(preShanghaiHeader, preShanghaiBody) shouldBe Right(BlockValid)
     }
 
-  it should "accept a pre-Shanghai header paired with explicitly-empty body.withdrawals" taggedAs (
+  it should "reject a pre-Shanghai header paired with explicitly-empty body.withdrawals" taggedAs (
     UnitTest,
     ConsensusTest
   ) in {
+    // Block.BlockEnc serialises body.withdrawals by presence, so Some(Seq.empty) still produces a
+    // 4-item block RLP — structurally a Shanghai-era encoding. A pre-Shanghai header therefore
+    // requires body.withdrawals = None, not Some(Seq.empty).
     val body = preShanghaiBody.copy(withdrawals = Some(Seq.empty))
-    StdBlockValidator.validateHeaderAndBody(preShanghaiHeader, body) shouldBe Right(BlockValid)
+    StdBlockValidator.validateHeaderAndBody(preShanghaiHeader, body) shouldBe Left(BlockWithdrawalsOrphanedError)
   }
 
   it should "reject a pre-Shanghai header paired with non-empty body.withdrawals (orphaned withdrawals)" taggedAs (
@@ -102,10 +105,13 @@ class StdBlockValidatorWithdrawalsSpec extends AnyFlatSpec with Matchers {
     result shouldBe Left(BlockWithdrawalsIndexError)
   }
 
-  it should "accept a single-withdrawal body against a correct Shanghai root" taggedAs (UnitTest, ConsensusTest) in {
-    // When withdrawals.size < 2, ordering is vacuously OK. Root comparison still runs; we
-    // rely on the validator itself to compute + accept the root, so we feed it an empty Seq
-    // which computes to BlockHeader.EmptyMpt (the canonical empty-trie root).
+  it should "accept a Shanghai block whose body declares explicitly-empty withdrawals matching the EmptyMpt root" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    // Valid "no withdrawals in this block" case: the Shanghai header declares EmptyMpt as the
+    // withdrawalsRoot, the body declares Some(Seq.empty) to match the 4-item RLP shape, and
+    // `computeWithdrawalsRoot(Seq.empty) == EmptyMpt`. Ordering is vacuously OK (<2 entries).
     val body = preShanghaiBody.copy(withdrawals = Some(Seq.empty))
     val headerWithEmptyRoot = preShanghaiHeader.copy(
       extraFields = HefPostShanghai(BigInt(0), BlockHeader.EmptyMpt)

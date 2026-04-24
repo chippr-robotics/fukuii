@@ -146,15 +146,20 @@ object StdBlockValidator extends BlockValidator {
     } yield BlockValid
   }
 
-  /** EIP-4895: pre-Shanghai blocks (header.withdrawalsRoot = None) MUST NOT carry any withdrawals in the body. If
-    * `body.withdrawals` is non-empty without a header slot reserving space for them, the block is malformed and must be
-    * rejected. The reverse case (Shanghai header + no withdrawals in body) is caught during RLP decoding in
+  /** EIP-4895: pre-Shanghai blocks (header.withdrawalsRoot = None) MUST NOT attach a withdrawals field to the body.
+    *
+    * Note this rejects `Some(Seq.empty)` as well as `Some(nonEmpty)` — `Block.BlockEnc` serialises `body.withdrawals`
+    * by *presence*, so `Some(Seq.empty)` still produces a 4-item block RLP that's structurally a Shanghai-era encoding
+    * even though no withdrawals are carried. A pre-Shanghai block must RLP-encode as a 3-item list, which means
+    * `body.withdrawals = None`.
+    *
+    * The reverse case (Shanghai header + no withdrawals field in body) is caught during RLP decoding in
     * `Block.BlockDec.toBlock`.
     */
   private def validateWithdrawalsPresence(block: Block): Either[BlockError, BlockValid] =
     (block.header.withdrawalsRoot, block.body.withdrawals) match {
-      case (None, Some(ws)) if ws.nonEmpty => Left(BlockWithdrawalsOrphanedError)
-      case _                               => Right(BlockValid)
+      case (None, Some(_)) => Left(BlockWithdrawalsOrphanedError)
+      case _               => Right(BlockValid)
     }
 
   /** EIP-4895: withdrawals within a block must have strictly increasing `index` values. The beacon chain assigns
