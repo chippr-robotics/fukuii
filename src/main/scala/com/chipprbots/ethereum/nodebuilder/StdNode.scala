@@ -197,7 +197,8 @@ abstract class BaseNode extends Node {
           storagesInstance.storages.appStateStorage,
           storagesInstance.storages.blockNumberMappingStorage,
           storagesInstance.storages.blockHeadersStorage,
-          shutdown
+          shutdown,
+          engineApiConfig.enabled
         ),
         s"PeriodicDBConsistencyCheck_${instanceConfig.instanceId}"
       )

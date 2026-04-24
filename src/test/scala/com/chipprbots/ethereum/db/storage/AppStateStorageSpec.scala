@@ -131,6 +131,30 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
       assert(!storage.isSnapSyncInProgress())
       assert(storage.isSnapSyncDone())
     }
+
+    // Bug 28 early-window scenario (Copilot feedback): between pivot selection and the first
+    // `AccountRangeProgress` write, only SnapSyncPivotBlock / SnapSyncStateRoot are set. If a
+    // restart lands in this window, the consistency check must still skip — otherwise the
+    // mis-shutdown returns.
+    "report SNAP sync in-progress as soon as the pivot block is persisted (pre-progress window)" taggedAs (
+      UnitTest,
+      DatabaseTest
+    ) in new Fixtures {
+      val storage = newAppStateStorage()
+      storage.putSnapSyncPivotBlock(BigInt(123456)).commit()
+      assert(storage.isSnapSyncInProgress())
+      assert(!storage.isSnapSyncDone())
+    }
+
+    "report SNAP sync in-progress as soon as the pivot state-root is persisted" taggedAs (
+      UnitTest,
+      DatabaseTest
+    ) in new Fixtures {
+      val storage = newAppStateStorage()
+      storage.putSnapSyncStateRoot(ByteString(Array.fill[Byte](32)(0xab.toByte))).commit()
+      assert(storage.isSnapSyncInProgress())
+      assert(!storage.isSnapSyncDone())
+    }
   }
 
   trait Fixtures {
