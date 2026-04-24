@@ -660,9 +660,8 @@ object PeerManagerActor {
   }
   // scalastyle:on parameter.number
 
-  /** Sanitize an InetSocketAddress string for use as a Pekko actor path element.
-    * Pekko only allows ASCII letters/digits and -_.*$+:@&=,!~'; in path elements.
-    * IPv6 brackets ([2a01:4f8::2]) and DNS-failure placeholders (<unresolved>)
+  /** Sanitize an InetSocketAddress string for use as a Pekko actor path element. Pekko only allows ASCII letters/digits
+    * and -_.*$+:@&=,!~'; in path elements. IPv6 brackets ([2a01:4f8::2]) and DNS-failure placeholders (<unresolved>)
     * otherwise crash PeerManagerActor with InvalidActorNameException.
     */
   private[network] def sanitizeActorPathElement(raw: String): String = {
