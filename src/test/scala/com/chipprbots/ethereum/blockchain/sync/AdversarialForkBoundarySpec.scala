@@ -153,7 +153,8 @@ class AdversarialForkBoundarySpec extends AnyFlatSpec with Matchers {
   ) in {
     // Adversary sends fork block with extremely high baseFee to manipulate gas pricing
     val lastPreOlympia = makeChild(preOlympiaParent)
-    val adversarialBlock = makeChild(lastPreOlympia, baseFee = Some(BigInt("1000000000000000000")), gasLimit = ForkGasLimit) // 1 ETH
+    val adversarialBlock =
+      makeChild(lastPreOlympia, baseFee = Some(BigInt("1000000000000000000")), gasLimit = ForkGasLimit) // 1 ETH
     adversarialBlock.number shouldBe OlympiaBlock
 
     val result = validate(adversarialBlock, lastPreOlympia)

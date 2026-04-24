@@ -92,14 +92,13 @@ class NetworkPeerManagerActor(
   def handleMessages(peersWithInfo: PeersWithInfo): Receive =
     handleCommonMessages(peersWithInfo).orElse(handlePeersInfoEvents(peersWithInfo))
 
-  private def peerHasUpdatedBestBlock(peerInfo: PeerInfo): Boolean = {
+  private def peerHasUpdatedBestBlock(peerInfo: PeerInfo): Boolean =
     // Besu-aligned: no chain-state gate at handshake time. ETH/68 Status carries only TD (no
     // block number), so maxBlockNumber=0 for all ETH/68 peers at handshake. Excluding them
     // deadlocks peer acquisition — they can never receive GetBlockHeaders to update their
     // maxBlockNumber. Consumers (SyncController.runningRecovery, SNAPSyncController) do their
     // own supportsSnap filtering.
     true
-  }
 
   /** Processes both messages for sending messages and for requesting peer information
     *

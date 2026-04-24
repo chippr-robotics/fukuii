@@ -368,7 +368,9 @@ class AccountRangeCoordinator(
     case AccountRangeResponseMsg(response) =>
       activeTasks.get(response.requestId) match {
         case None =>
-          log.debug(s"Received AccountRange response for requestId=${response.requestId} (no longer tracked — already completed or timed out). Discarding.")
+          log.debug(
+            s"Received AccountRange response for requestId=${response.requestId} (no longer tracked — already completed or timed out). Discarding."
+          )
 
         case Some((_, worker, _)) =>
           // Forward to the specific worker that owns this requestId so it can validate/complete the request.
@@ -474,7 +476,9 @@ class AccountRangeCoordinator(
         // they operate on their own state roots. This saves 50s-25min of serial blocking.
         snapSyncController ! SNAPSyncController.AccountRangeSyncComplete(uniqueCodeHashesCount)
 
-        log.info(s"Computing account trie root hash for $accountsDownloaded accounts (validates proof consistency against pivot state root). Running async to allow storage/bytecode phases to proceed.")
+        log.info(
+          s"Computing account trie root hash for $accountsDownloaded accounts (validates proof consistency against pivot state root). Running async to allow storage/bytecode phases to proceed."
+        )
         // Notify controller so progress monitor shows finalization status
         snapSyncController ! SNAPSyncController.ProgressAccountsFinalizingTrie
         // Switch to finalizing state so no message can touch the trie during flush

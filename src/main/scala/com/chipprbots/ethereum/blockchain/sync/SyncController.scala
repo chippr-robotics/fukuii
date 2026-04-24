@@ -779,8 +779,14 @@ class SyncController(
         startRegularSync()
       } else {
         context.become(
-          runningRecovery(bytecodeActor = None, storageActor, bytecodeComplete = true, storageComplete, peerPoller,
-            recoveryStartTime)
+          runningRecovery(
+            bytecodeActor = None,
+            storageActor,
+            bytecodeComplete = true,
+            storageComplete,
+            peerPoller,
+            recoveryStartTime
+          )
         )
       }
 
@@ -795,8 +801,14 @@ class SyncController(
         startRegularSync()
       } else {
         context.become(
-          runningRecovery(bytecodeActor, storageActor = None, bytecodeComplete, storageComplete = true, peerPoller,
-            recoveryStartTime)
+          runningRecovery(
+            bytecodeActor,
+            storageActor = None,
+            bytecodeComplete,
+            storageComplete = true,
+            peerPoller,
+            recoveryStartTime
+          )
         )
       }
 

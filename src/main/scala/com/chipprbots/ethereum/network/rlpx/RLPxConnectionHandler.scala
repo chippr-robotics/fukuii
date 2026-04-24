@@ -470,7 +470,10 @@ class RLPxConnectionHandler(
           extractHello(extractor(secrets), remainingData)
 
         case AuthHandshakeError =>
-          log.warning("[RLPx] Auth handshake FAILED for peer {} — likely incompatible RLPx version or wrong node key", peerId)
+          log.warning(
+            "[RLPx] Auth handshake FAILED for peer {} — likely incompatible RLPx version or wrong node key",
+            peerId
+          )
           context.parent ! ConnectionFailed
           gracefulStop()
       }

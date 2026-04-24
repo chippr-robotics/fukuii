@@ -474,8 +474,10 @@ class StorageRangeCoordinator(
       }
 
     case UpdateMaxInFlightPerPeer(newLimit) =>
-      log.info(s"Adjusting storage per-peer concurrency: $maxInFlightPerPeer -> $newLimit " +
-        s"(${if (newLimit > maxInFlightPerPeer) "increasing" else "decreasing"} to match available SNAP peers)")
+      log.info(
+        s"Adjusting storage per-peer concurrency: $maxInFlightPerPeer -> $newLimit " +
+          s"(${if (newLimit > maxInFlightPerPeer) "increasing" else "decreasing"} to match available SNAP peers)"
+      )
       maxInFlightPerPeer = newLimit
       if (newLimit > 0) tryRedispatchPendingTasks()
 

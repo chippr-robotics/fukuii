@@ -960,7 +960,9 @@ class FastSync(
         syncState.pivotBlock.stateRoot != ByteString(MerklePatriciaTrie.EmptyRootHash)
       ) {
         log.info("=" * 60)
-        log.info(s"PHASE: Fast Sync state download — pivot ${syncState.pivotBlock.number}, root ${ByteStringUtils.hash2string(syncState.pivotBlock.stateRoot)}")
+        log.info(
+          s"PHASE: Fast Sync state download — pivot ${syncState.pivotBlock.number}, root ${ByteStringUtils.hash2string(syncState.pivotBlock.stateRoot)}"
+        )
         log.info("=" * 60)
         stateSyncStarted = true
         stateSyncRestartRequested = false

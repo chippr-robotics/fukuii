@@ -343,7 +343,9 @@ class ByteCodeCoordinator(
   private def handleByteCodesResponse(response: ByteCodes): Unit = {
     activeTasks.get(response.requestId) match {
       case None =>
-        log.debug(s"Received ByteCodes response for requestId=${response.requestId} (no longer tracked — already completed or timed out). Discarding.")
+        log.debug(
+          s"Received ByteCodes response for requestId=${response.requestId} (no longer tracked — already completed or timed out). Discarding."
+        )
 
       case Some(active) =>
         val task = active.task

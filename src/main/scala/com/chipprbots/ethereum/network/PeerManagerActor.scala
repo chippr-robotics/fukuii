@@ -80,9 +80,8 @@ class PeerManagerActor(
     */
   private var maintainedPeersByNodeId: Map[String, URI] = Map.empty
 
-  /** Consecutive reconnect failure count per maintained peer (D5).
-    * Used for exponential backoff: delay = min(30s, 1s << attempt).
-    * Reset to 0 on successful handshake.
+  /** Consecutive reconnect failure count per maintained peer (D5). Used for exponential backoff: delay = min(30s, 1s <<
+    * attempt). Reset to 0 on successful handshake.
     */
   private var maintainedPeerReconnectAttempts: Map[String, Int] = Map.empty
 
@@ -470,7 +469,12 @@ class PeerManagerActor(
           val delaySecs = math.min(30, 1 << attempt) // 1s, 2s, 4s, 8s, 16s, 30s (cap)
           val delay = scala.concurrent.duration.Duration(delaySecs, java.util.concurrent.TimeUnit.SECONDS)
           maintainedPeerReconnectAttempts = maintainedPeerReconnectAttempts + (nodeId -> (attempt + 1))
-          log.debug("Maintained peer {} disconnected — scheduling reconnect in {}s (attempt #{})", uri, delaySecs, attempt + 1)
+          log.debug(
+            "Maintained peer {} disconnected — scheduling reconnect in {}s (attempt #{})",
+            uri,
+            delaySecs,
+            attempt + 1
+          )
           context.system.scheduler.scheduleOnce(delay, self, ConnectToPeer(uri))(context.dispatcher)
         }
       }
