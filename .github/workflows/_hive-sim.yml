@@ -232,6 +232,12 @@ jobs:
         id: tab
         if: always()
         working-directory: external/hive
+        # Override the default GitHub Actions shell (`bash -e`) with plain
+        # `bash` so a single non-zero command (e.g. jq parsing an unexpected
+        # JSON shape) doesn't abort tabulation entirely. The script handles
+        # errors explicitly with `|| true` and value defaults; we WANT it to
+        # always emit a summary row even when individual parses fail.
+        shell: bash
         env:
           LABEL: ${{ inputs.label }}
           SIM: ${{ inputs.sim }}
@@ -250,44 +256,82 @@ jobs:
           passed=0
           failed=0
           json_count=0
+
+          # Extract pass=true and pass=false counts in a single jq pass per
+          # file, with `?` operators and `// 0` defaults so unexpected schema
+          # shapes (null testCases, missing summaryResult, array vs object,
+          # etc) yield zeros rather than aborting the script.
+          jq_query='
+            (try ([.testCases | to_entries[]?
+                   | .value.summaryResult.pass]) // [])
+            | { p: (map(select(. == true))  | length),
+                f: (map(select(. == false)) | length) }
+            | "\(.p) \(.f)"
+          '
+
           for jf in workspace/logs/*.json; do
+            # Only count files that look like hive suite results.
             jq -e 'has("testCases")' "$jf" >/dev/null 2>&1 || continue
+
+            line=$(jq -r "$jq_query" "$jf" 2>/dev/null || echo "0 0")
+            read -r p f <<< "${line:-0 0}"
+            [[ "$p" =~ ^[0-9]+$ ]] || p=0
+            [[ "$f" =~ ^[0-9]+$ ]] || f=0
+
             json_count=$((json_count + 1))
-            p=$(jq '[.testCases | to_entries[] | select(.value.summaryResult.pass == true)]  | length' "$jf")
-            f=$(jq '[.testCases | to_entries[] | select(.value.summaryResult.pass == false)] | length' "$jf")
             passed=$((passed + p))
             failed=$((failed + f))
           done
 
+          # Pick newest simulator log via a bash glob (with nullglob set
+          # above, an empty match yields an empty array). DON'T use
+          # `ls -t pattern` — under nullglob the unmatched pattern expands
+          # to nothing and `ls -t` lists the current directory instead,
+          # picking up garbage.
+          sim_log=""
+          sim_logs=(workspace/logs/*-simulator-*.log)
+          if [ ${#sim_logs[@]} -gt 0 ]; then
+            sim_log="${sim_logs[0]}"
+            for f in "${sim_logs[@]}"; do
+              [ "$f" -nt "$sim_log" ] && sim_log="$f"
+            done
+          fi
+
           # Fallback: if no JSON results parsed (e.g. simulator died before
           # writing them), grep the simulator log against the union of common
           # verdict patterns: pytest-xdist (`[gwN] PASSED `), classic hive
-          # (`PASSED tests/`), and go-test (`--- PASS:`).
-          sim_log=$(ls -t workspace/logs/*-simulator-*.log 2>/dev/null | head -1 || true)
+          # (`PASSED tests/`), and go-test (`--- PASS:`). Use `|| true`, NOT
+          # `|| echo 0` — `grep -c` already prints `0` on no-match (exit 1),
+          # and the echo would append a second `0`, producing the literal
+          # string "0\n0" that breaks subsequent arithmetic.
           if [ "$json_count" -eq 0 ] && [ -n "$sim_log" ]; then
             passed=$(grep -cE '(\] PASSED |PASSED tests/|--- PASS:)' "$sim_log" 2>/dev/null || true)
             failed=$(grep -cE '(\] FAILED |FAILED tests/|--- FAIL:)' "$sim_log" 2>/dev/null || true)
-            passed=${passed:-0}
-            failed=${failed:-0}
+            [[ "$passed" =~ ^[0-9]+$ ]] || passed=0
+            [[ "$failed" =~ ^[0-9]+$ ]] || failed=0
           fi
 
           total=$((passed + failed))
-          echo "passed=$passed"           >> "$GITHUB_OUTPUT"
-          echo "failed=$failed"           >> "$GITHUB_OUTPUT"
-          echo "total=$total"             >> "$GITHUB_OUTPUT"
-          echo "json_count=$json_count"   >> "$GITHUB_OUTPUT"
+          {
+            echo "passed=$passed"
+            echo "failed=$failed"
+            echo "total=$total"
+            echo "json_count=$json_count"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$json_count" -gt 0 ]; then
+            src="${json_count} JSON result(s)"
+          elif [ -n "$sim_log" ]; then
+            src="grep fallback"
+          else
+            src="(none)"
+          fi
+
           {
             echo "### Hive · ${LABEL} (\`${SIM}\`)"
             echo
             echo "| passed | failed | total | threshold | hive exit | source |"
             echo "|-------:|-------:|------:|----------:|----------:|:-------|"
-            if [ "$json_count" -gt 0 ]; then
-              src="${json_count} JSON results"
-            elif [ -n "$sim_log" ]; then
-              src="grep fallback"
-            else
-              src="(none)"
-            fi
             echo "| ${passed} | ${failed} | ${total} | ${THRESHOLD} | ${HIVE_EXIT:-?} | ${src} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -302,7 +346,7 @@ jobs:
               tail -n 80 hive-run.log 2>/dev/null || echo "(hive-run.log missing)"
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$total" -eq 0 ]; then
+          elif [ "$total" -eq 0 ] && [ -n "$sim_log" ]; then
             {
               echo
               echo "**Simulator produced no test results.** Tail of simulator log:"
@@ -317,12 +361,15 @@ jobs:
               echo "<details><summary>First 20 FAILED tests</summary>"
               echo
               echo '```'
-              grep -E '(\] FAILED |FAILED tests/|--- FAIL:)' "$sim_log" | head -20
+              grep -E '(\] FAILED |FAILED tests/|--- FAIL:)' "$sim_log" | head -20 || true
               echo '```'
               echo
               echo "</details>"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
+
+          # Always succeed — the threshold gate runs as a separate step.
+          exit 0
 
       - name: Upload simulator logs
         if: always()
