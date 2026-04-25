@@ -1,6 +1,5 @@
 package com.chipprbots.scalanet.kademlia
 
-import com.chipprbots.scalanet.kademlia.KRouter.NodeRecord
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Gen
 import scodec.bits.BitVector
@@ -63,14 +62,4 @@ object Generators {
 
   def aRandomBitVector(bitLength: Int = defaultBitLength): BitVector =
     BitVector.bits(Range(0, bitLength).map(_ => Random.nextBoolean()))
-
-  def aRandomNodeRecord(
-      bitLength: Int = defaultBitLength
-  ): NodeRecord[String] = {
-    NodeRecord(
-      id = aRandomBitVector(bitLength),
-      routingAddress = Random.alphanumeric.take(4).mkString,
-      messagingAddress = Random.alphanumeric.take(4).mkString
-    )
-  }
 }

@@ -1,8 +1,5 @@
 package com.chipprbots.scalanet.kademlia
 
-import cats.Order
-
-import com.chipprbots.scalanet.kademlia.KRouter.NodeRecord
 import scodec.bits.BitVector
 
 class XorOrdering(val base: BitVector) extends Ordering[BitVector] {
@@ -53,14 +50,3 @@ object XorOrdering {
   }
 }
 
-object XorNodeOrdering {
-  def apply[A](base: BitVector): Ordering[NodeRecord[A]] =
-    XorOrdering[NodeRecord[A], BitVector](_.id)(base)
-}
-
-class XorNodeOrder[A](val base: BitVector) extends Order[NodeRecord[A]] {
-  val xorNodeOrdering: Ordering[NodeRecord[A]] = XorNodeOrdering[A](base)
-
-  override def compare(lhs: NodeRecord[A], rhs: NodeRecord[A]): Int =
-    xorNodeOrdering.compare(lhs, rhs)
-}

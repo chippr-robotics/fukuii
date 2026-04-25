@@ -12,10 +12,12 @@ import scala.util.Random
 
 class PacketSpec extends AnyFlatSpec with Matchers {
 
-  import DefaultCodecs._
-  implicit val sigalg: SigAlg = new MockSigAlg()
+  // Bring DefaultCodecs' given instances (like Codec[Payload]) into scope. In
+  // Scala 3 wildcard imports do NOT carry given/implicit instances by default.
+  import DefaultCodecs.{given, *}
 
-  implicit val packetCodec = Packet.packetCodec(allowDecodeOverMaxPacketSize = false)
+  implicit val sigalg: SigAlg = new MockSigAlg()
+  implicit val packetCodec: Codec[Packet] = Packet.packetCodec(allowDecodeOverMaxPacketSize = false)
 
   val MaxPacketBytesSize = Packet.MaxPacketBitsSize / 8
   val MacBytesSize = Packet.MacBitsSize / 8
@@ -39,7 +41,7 @@ class PacketSpec extends AnyFlatSpec with Matchers {
       data = nBytesAsBits(dataBytesSize)
     )
 
-  def expectFailure(msg: String)(attempt: Attempt[_]) = {
+  def expectFailure(msg: String)(attempt: Attempt[?]): org.scalatest.Assertion = {
     attempt match {
       case Attempt.Successful(_) => fail(s"Expected to fail with $msg; got success.")
       case Attempt.Failure(err) => err.messageWithContext shouldBe msg
@@ -49,49 +51,49 @@ class PacketSpec extends AnyFlatSpec with Matchers {
   behavior of "encode"
 
   it should "succeed on a random packet within size limits" in {
-    Codec.encode(randomPacket()).isSuccessful shouldBe true
+    Codec[Packet].encode(randomPacket()).isSuccessful shouldBe true
   }
 
   it should "fail if data exceeds the maximum size" in {
     expectFailure("Encoded packet exceeded maximum size.") {
-      Codec.encode(randomPacket(dataBytesSize = MaxDataBytesSize + 1))
+      Codec[Packet].encode(randomPacket(dataBytesSize = MaxDataBytesSize + 1))
     }
   }
 
   it should "fail if the hash has wrong size" in {
     expectFailure("Unexpected hash size.") {
-      Codec.encode(randomPacket(hashBytesSize = MacBytesSize * 2))
+      Codec[Packet].encode(randomPacket(hashBytesSize = MacBytesSize * 2))
     }
   }
 
   it should "fail if the signature has wrong size" in {
     expectFailure("Unexpected signature size.") {
-      Codec.encode(randomPacket(sigBytesSize = SigBytesSize - 1))
+      Codec[Packet].encode(randomPacket(sigBytesSize = SigBytesSize - 1))
     }
   }
 
   behavior of "decode"
 
   it should "succeed with a packet size within the allowed maximum" in {
-    Codec.decode[Packet](nBytesAsBits(MaxPacketBytesSize)).isSuccessful shouldBe true
+    Codec[Packet].decode(nBytesAsBits(MaxPacketBytesSize)).isSuccessful shouldBe true
   }
 
   it should "fail if the data exceeds the maximum size" in {
     expectFailure("Packet to decode exceeds maximum size.") {
-      Codec.decode[Packet](nBytesAsBits(MaxPacketBytesSize + 1))
+      Codec[Packet].decode(nBytesAsBits(MaxPacketBytesSize + 1))
     }
   }
 
   it should "optionally allow the data to exceed the maximum size" in {
     val permissiblePacketCodec: Codec[Packet] = Packet.packetCodec(allowDecodeOverMaxPacketSize = true)
-    Codec.decode[Packet](nBytesAsBits(MaxPacketBytesSize * 2))(permissiblePacketCodec).isSuccessful shouldBe true
+    permissiblePacketCodec.decode(nBytesAsBits(MaxPacketBytesSize * 2)).isSuccessful shouldBe true
   }
 
   it should "fail if there's less data than the hash size" in {
     expectFailure(
       s"Hash: cannot acquire ${Packet.MacBitsSize} bits from a vector that contains ${Packet.MacBitsSize - 8} bits"
     ) {
-      Codec.decode[Packet](nBytesAsBits(MacBytesSize - 1))
+      Codec[Packet].decode(nBytesAsBits(MacBytesSize - 1))
     }
   }
 
@@ -99,7 +101,7 @@ class PacketSpec extends AnyFlatSpec with Matchers {
     expectFailure(
       s"Signature: cannot acquire ${Packet.SigBitsSize} bits from a vector that contains ${Packet.SigBitsSize - 8} bits"
     ) {
-      Codec.decode[Packet](nBytesAsBits(MacBytesSize + SigBytesSize - 1))
+      Codec[Packet].decode(nBytesAsBits(MacBytesSize + SigBytesSize - 1))
     }
   }
 
@@ -109,14 +111,15 @@ class PacketSpec extends AnyFlatSpec with Matchers {
       expiration = System.currentTimeMillis
     )
     val privateKey = PrivateKey(nBytesAsBits(sigalg.PrivateKeyBytesSize))
-    val publicKey = PublicKey(privateKey) // This is how the MockSignature will recover it.
+    // Mock recovery: PublicKey == PrivateKey raw bits, so we can compare them.
+    val publicKey = PublicKey(privateKey.value)
     val packet = Packet.pack(payload, privateKey).require
   }
 
   behavior of "pack"
 
   it should "serialize the payload into the data" in new PackFixture {
-    packet.data shouldBe Codec.encode[Payload](payload).require
+    packet.data shouldBe Codec[Payload].encode(payload).require
     Codec[Payload].decodeValue(packet.data).require shouldBe payload
   }
 
@@ -125,7 +128,7 @@ class PacketSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "calculate the hash based on the signature and the data" in new PackFixture {
-    packet.hash shouldBe Keccak256(packet.signature ++ packet.data)
+    packet.hash shouldBe Keccak256(packet.signature.value ++ packet.data)
   }
 
   behavior of "unpack"
@@ -147,12 +150,12 @@ class PacketSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "fail if the signature is incorrect" in new PackFixture {
-    implicit val sigalg = new MockSigAlg {
+    implicit val sigalg: SigAlg = new MockSigAlg {
       override def recoverPublicKey(signature: Signature, data: BitVector): Attempt[PublicKey] =
         Attempt.failure(Err("Invalid signature."))
     }
     val randomSig = Signature(nBytesAsBits(32))
-    val corrupt = packet.copy(signature = randomSig, hash = Keccak256(randomSig ++ packet.data))
+    val corrupt = packet.copy(signature = randomSig, hash = Keccak256(randomSig.value ++ packet.data))
 
     expectFailure("Invalid signature.") {
       Packet.unpack(corrupt)
