@@ -516,6 +516,9 @@ class SNAPSyncController(
         // Transition to ByteCodeAndStorageSync for status reporting and stagnation checks
         currentPhase = ByteCodeAndStorageSync
         progressMonitor.startPhase(ByteCodeAndStorageSync)
+        // Resume chain download now that account range sync is complete.
+        // ChainDownloader was paused during AccountRangeSync to avoid TCP connection cycling.
+        chainDownloader.foreach(_ ! ChainDownloader.Resume)
 
         // Redistribute per-peer budget: accounts done, give storage+bytecode more bandwidth.
         // Global budget remains 5 per peer: storage=3, bytecode=2.
@@ -1591,6 +1594,10 @@ class SNAPSyncController(
     // Start parallel chain download (headers, bodies, receipts from genesis to pivot)
     // Follows the Geth/Nethermind pattern of overlapping chain + state download.
     startChainDownloader()
+    // Pause chain download during AccountRangeSync. ChainDownloader sends pipelined
+    // GetBlockHeaders/GetBlockBodies requests that cycle TCP connections every 6-10s,
+    // preventing 30s SNAP account range requests from completing. Resumes on AccountRangeSyncComplete.
+    chainDownloader.foreach(_ ! ChainDownloader.Pause)
   }
 
   private def launchAccountRangeWorkers(rootHash: ByteString, concurrency: Int = -1): Unit = {
@@ -2226,11 +2233,17 @@ class SNAPSyncController(
     // Chain download target extends to the new pivot (chain data is canonical, never invalidated)
     if (chainDownloader.isDefined) {
       chainDownloader.foreach(_ ! ChainDownloader.UpdateTarget(newPivotBlock))
-      // Resume chain download if it was paused during pivot header bootstrap
-      chainDownloader.foreach(_ ! ChainDownloader.Resume)
+      // Only resume if not in AccountRangeSync — during account range download,
+      // ChainDownloader is intentionally paused to prevent TCP connection cycling.
+      if (currentPhase != AccountRangeSync) {
+        chainDownloader.foreach(_ ! ChainDownloader.Resume)
+      }
     } else {
       // Start chain downloader if not yet started (e.g. pivot was 0 at initial bootstrap)
       startChainDownloader()
+      if (currentPhase == AccountRangeSync) {
+        chainDownloader.foreach(_ ! ChainDownloader.Pause)
+      }
     }
 
     // Reset account stagnation timer during pivot refresh recovery.
