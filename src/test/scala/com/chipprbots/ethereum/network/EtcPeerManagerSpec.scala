@@ -276,6 +276,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
             Codes.BlockHeadersCode,
             Codes.NewBlockCode,
             Codes.NewBlockHashesCode,
+            Codes.BlockRangeUpdateCode,
             // SNAP protocol response codes
             com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.AccountRangeCode,
             com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.StorageRangesCode,
@@ -493,6 +494,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
               Codes.BlockHeadersCode,
               Codes.NewBlockCode,
               Codes.NewBlockHashesCode,
+              Codes.BlockRangeUpdateCode,
               // SNAP protocol response codes
               com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.AccountRangeCode,
               com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.StorageRangesCode,
