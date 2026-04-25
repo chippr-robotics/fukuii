@@ -493,7 +493,15 @@ object StaticUDPPeerGroup extends StrictLogging {
         } else {
           IO.unit
         }
-        packet = new DatagramPacket(Unpooled.wrappedBuffer(asBuffer), remoteAddress, localAddress)
+        // Netty's 3-arg DatagramPacket sets the sender address. Passing
+        // `localAddress` (which is the bind address `0.0.0.0:30303` for a wildcard
+        // bind) confuses Netty's NIO driver: under strict source-routing it'll
+        // try to set the source IP to 0.0.0.0 and the kernel rejects (or worse,
+        // sends the packet with sender 0.0.0.0 and the receiver discards it).
+        // Letting Netty default to `null` makes the kernel pick the correct
+        // outgoing interface (the docker bridge IP for hive runs). This is
+        // what unblocks discv4 Ping/Basic and the rest of the discv4 suite.
+        packet = new DatagramPacket(Unpooled.wrappedBuffer(asBuffer), remoteAddress)
         _ <- toTask(nettyChannel.writeAndFlush(packet)).handleErrorWith {
           case ex: IOException =>
             // Log the actual IOException to help diagnose the real problem
