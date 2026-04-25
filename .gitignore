@@ -75,6 +75,9 @@ SCRATCH.md
 *.scratch.*
 *.draft.*
 
+# Local working directory (session notes, reference reports, attempt logs)
+local/
+
 # Secrets & credentials
 .env
 .env.*
