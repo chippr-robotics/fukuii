@@ -2488,7 +2488,8 @@ class SNAPSyncController(
 
   /** Final SNAP sync completion — called when both state sync and chain download are done. */
   private def finalizeSnapSync(pivot: BigInt): Unit = {
-    appStateStorage.snapSyncDone().commit()
+    chainDownloadTimeoutTask.foreach(_.cancel())
+    chainDownloadTimeoutTask = None
 
     // Look up the pivot header so we can store a complete "best block" anchor.
     // RegularSync's BranchResolution needs: header, body, number→hash mapping,
@@ -2497,31 +2498,22 @@ class SNAPSyncController(
     blockchainReader.getBlockHeaderByNumber(pivot) match {
       case Some(pivotHeader) =>
         val pivotHash = pivotHeader.hash
-
-        // Store the full block (header + empty body) so getBlockByHash(pivotHash) returns
-        // a Block AND the number→hash mapping is written. PivotHeaderBootstrap already stored
-        // the header, but storeBlock ensures the mapping is present even if the header was
-        // stored by a different code path during pivot refresh.
-        blockchainWriter.storeBlock(Block(pivotHeader, BlockBody.empty)).commit()
-
-        // Store a ChainWeight so compareBranch() can evaluate new blocks.
-        // We estimate totalDifficulty ≈ difficulty × blockNumber. This doesn't need
-        // to be exact — it just needs to exist so branch resolution doesn't error,
-        // and subsequent blocks will accumulate from this baseline.
         val estimatedTotalDifficulty = pivotHeader.difficulty * pivot
-        blockchainWriter
-          .storeChainWeight(
+
+        // H-013: Atomic finalization — commit SnapSyncDone marker together with
+        // pivot block, chain weight, and best block info in a single batch.
+        // If any of these are missing when SnapSyncDone=true, regular sync fails
+        // on startup (branch resolution finds no chain weight, no best block hash).
+        // go-ethereum writes pivot + state atomically; we do the same.
+        appStateStorage.snapSyncDone()
+          .and(blockchainWriter.storeBlock(Block(pivotHeader, BlockBody.empty)))
+          .and(blockchainWriter.storeChainWeight(
             pivotHash,
             ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty)
-          )
-          .commit()
-
-        // Set best block info with BOTH hash and number (putBestBlockNumber only
-        // sets the number, leaving getBestBlockInfo().hash empty).
-        appStateStorage
-          .putBestBlockInfo(
+          ))
+          .and(appStateStorage.putBestBlockInfo(
             com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash, pivot)
-          )
+          ))
           .commit()
 
         log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.take(8).toHex})")
@@ -2529,7 +2521,9 @@ class SNAPSyncController(
       case None =>
         // Fallback: shouldn't happen since PivotHeaderBootstrap stored the header
         log.warning(s"Pivot header for block $pivot not found in storage — setting best block number only")
-        appStateStorage.putBestBlockNumber(pivot).commit()
+        appStateStorage.snapSyncDone()
+          .and(appStateStorage.putBestBlockNumber(pivot))
+          .commit()
     }
 
     // Stop chain downloader if still running
