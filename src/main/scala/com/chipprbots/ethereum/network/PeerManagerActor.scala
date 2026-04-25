@@ -82,6 +82,12 @@ class PeerManagerActor(
     */
   private var trustedPeersByNodeId: Set[String] = Set.empty
 
+  /** Tracks outbound peer actors that were spawned for maintained peers but have not yet completed the ETH handshake.
+    * When a Terminated fires with no matching PeerId in connectedPeers (pre-handshake death), this map identifies the
+    * URI so the reconnect timer can be scheduled. Cleared on successful handshake or actor termination.
+    */
+  private val pendingMaintainedConnections: mutable.Map[ActorRef, URI] = mutable.Map.empty
+
   /** Runtime max-outgoing-peers override set by admin_maxPeers. core-geth reference: eth/api_admin.go MaxPeers — sets
     * handler.maxPeers + p2pServer.MaxPeers.
     */
@@ -391,6 +397,9 @@ class PeerManagerActor(
       case Right(address) =>
         val (peer, newConnectedPeers) = createPeer(address, incomingConnection = false, connectedPeers)
         peer.ref ! PeerActor.ConnectTo(uri)
+        if (maintainedPeersByNodeId.values.exists(_ == uri)) {
+          pendingMaintainedConnections(peer.ref) = uri
+        }
         context.become(listening(newConnectedPeers))
 
       case Left(error) => handleConnectionErrors(error)
@@ -451,6 +460,18 @@ class PeerManagerActor(
       }
 
     case Terminated(ref) =>
+      // Pre-handshake path: if a maintained peer's TCP actor dies before the ETH handshake
+      // completes, no PeerId was assigned — the post-handshake reconnect path won't fire.
+      pendingMaintainedConnections.remove(ref).foreach { uri =>
+        log.debug(
+          "Maintained peer {} TCP connection failed pre-handshake — scheduling retry in {}",
+          uri,
+          peerConfiguration.connectRetryDelay
+        )
+        context.system.scheduler.scheduleOnce(peerConfiguration.connectRetryDelay, self, ConnectToPeer(uri))(
+          context.dispatcher
+        )
+      }
       val (terminatedPeersIds, newConnectedPeers) = connectedPeers.removeTerminatedPeer(ref)
       terminatedPeersIds.foreach { peerId =>
         peerStatusCache = peerStatusCache - peerId
@@ -490,6 +511,7 @@ class PeerManagerActor(
         // Keep the current connectedPeers state; the Terminated message will clean up the peer
         context.become(listening(connectedPeers))
       } else {
+        pendingMaintainedConnections.remove(handshakedPeer.ref)
         peerStatusCache = peerStatusCache + (handshakedPeer.id -> PeerActor.Status.Handshaked)
         context.become(listening(connectedPeers.promotePeerToHandshaked(handshakedPeer)))
       }
