@@ -1139,8 +1139,18 @@ class SNAPSyncController(
           log.info(s"Bootstrap target $bootstrapTarget already reached (current block: $bestBlockNumber)")
           appStateStorage.clearSnapSyncBootstrapTarget().commit()
           // Continue to normal SNAP sync logic below
+        } else if (appStateStorage.getSnapSyncPivotBlock().exists(_ > 0) && !appStateStorage.isSnapSyncAccountsComplete()) {
+          // A previous SNAP session completed bootstrap (pivot block stored) but was killed during
+          // account download. The bootstrapTarget is stale — the pivot header is no longer reachable
+          // from snap servers (>96 blocks ago). Clear it so fresh pivot selection runs.
+          log.warning(
+            s"[SNAP] Stale bootstrapTarget=$bootstrapTarget: prev pivot=${appStateStorage.getSnapSyncPivotBlock().get}, " +
+              s"accountsComplete=false. Clearing stale target for fresh pivot selection."
+          )
+          appStateStorage.clearSnapSyncBootstrapTarget().commit()
+          // Fall through to normal SNAP pivot selection
         } else {
-          // Resume interrupted bootstrap
+          // Resume interrupted bootstrap (bootstrap genuinely in progress, no pivot yet stored)
           log.info(s"Resuming interrupted bootstrap: current block $bestBlockNumber / target $bootstrapTarget")
           context.parent ! StartRegularSyncBootstrap(bootstrapTarget)
           context.become(bootstrapping)
