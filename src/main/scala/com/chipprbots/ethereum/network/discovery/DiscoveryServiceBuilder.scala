@@ -47,6 +47,32 @@ trait DiscoveryServiceBuilder extends Logger {
     implicit val payloadCodec = RLPCodecs.payloadCodec
     implicit val enrContentCodec: Codec[Content] = RLPCodecs.codecFromRLPCodec(RLPCodecs.enrContentRLPCodec)
 
+    // Warm up the discv4 packet pack/unpack path eagerly. The first invocation
+    // pays ~100 ms in JIT/class-loading + Bouncy Castle ECDSA provider init +
+    // scodec RLP codec materialisation. By driving a synthetic Ping through the
+    // codec during startup we move that cost into the (un-timed) init window
+    // instead of paying it on the first incoming Ping — which the hive devp2p
+    // suite tests against a 300 ms reply deadline.
+    locally {
+      import com.chipprbots.scalanet.discovery.ethereum.v4.Payload
+      import com.chipprbots.scalanet.discovery.ethereum.Node
+      import java.net.InetAddress
+      val dummyAddr = Node.Address(InetAddress.getLoopbackAddress, udpPort = 0, tcpPort = 0)
+      val dummyPing: Payload =
+        Payload.Ping(version = 4, from = dummyAddr, to = dummyAddr, expiration = 0L, enrSeq = None)
+      // Pack uses the local private key; unpack recovers it from the signature.
+      // Both code paths are exercised; if anything throws, we don't propagate
+      // the error — discovery still works, we just lose the warmup benefit.
+      try
+        v4.Packet.pack(dummyPing, privateKey).toOption.foreach { packet =>
+          val _ = v4.Packet.unpack(packet)
+        }
+      catch {
+        case scala.util.control.NonFatal(ex) =>
+          log.warn(s"discv4 codec warmup failed (non-fatal): ${ex.getMessage}")
+      }
+    }
+
     val resource = for {
       host <- Resource.eval {
         getExternalAddress(discoveryConfig)
