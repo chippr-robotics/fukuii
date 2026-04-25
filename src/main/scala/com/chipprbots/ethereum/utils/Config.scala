@@ -74,6 +74,7 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
       maxRetryDelay: FiniteDuration,
       maxBodyFetchRetries: Int,
       maxSnapFastCycleTransitions: Int,
+      snapPeerWaitTimeoutSeconds: Int,
       useBootstrapCheckpoints: Boolean,
       bootstrapCheckpoints: Seq[(BigInt, String)] // (blockNumber, blockHash)
   )
@@ -147,6 +148,10 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
           if (syncConfig.hasPath("max-snap-fast-cycle-transitions"))
             syncConfig.getInt("max-snap-fast-cycle-transitions")
           else 3,
+        snapPeerWaitTimeoutSeconds =
+          if (syncConfig.hasPath("snap-peer-wait-timeout-seconds"))
+            syncConfig.getInt("snap-peer-wait-timeout-seconds")
+          else 120,
         useBootstrapCheckpoints =
           if (syncConfig.hasPath("use-bootstrap-checkpoints"))
             syncConfig.getBoolean("use-bootstrap-checkpoints")
