@@ -641,8 +641,10 @@ class RLPxConnectionHandler(
           // reduce our ability to maintain connections with diverse peer implementations.
         } else {
           // For other decoding errors (truly malformed RLP, structure mismatches, etc.),
-          // send proper Disconnect to remote peer before closing connection
-          log.error(
+          // send proper Disconnect to remote peer before closing connection.
+          // Warning (not error): disconnect behavior is correct, this is just peer protocol variance
+          // (e.g., ETH69 peers sending 8-field Status when we expect 7 fields).
+          log.warning(
             "DECODE_ERROR: Cannot decode message from {} - disconnecting. Error: {}",
             peerId,
             ex.getMessage
