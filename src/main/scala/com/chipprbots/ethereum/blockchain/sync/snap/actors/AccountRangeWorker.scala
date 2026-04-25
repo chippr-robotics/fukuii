@@ -143,6 +143,16 @@ class AccountRangeWorker(
           log.debug(s"Timeout for old or unknown request $reqId")
       }
 
+    case WorkerPeerDisconnected(peerId) =>
+      currentTask match {
+        case Some((task, peer, reqId)) if peer.id.value == peerId =>
+          log.info(s"Peer $peerId disconnected during request $reqId — re-queuing task immediately")
+          coordinator ! TaskFailed(reqId, "Peer disconnected")
+          currentTask = None
+          context.become(idle)
+        case _ => // Task is using a different peer; ignore
+      }
+
     case FetchAccountRange(task, peer, _, _) =>
       log.warning("Worker is busy, cannot accept new task")
       coordinator ! TaskFailed(0, "Worker busy")

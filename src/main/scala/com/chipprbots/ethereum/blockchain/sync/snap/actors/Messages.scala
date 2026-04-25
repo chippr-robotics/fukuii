@@ -68,6 +68,13 @@ object Messages {
       isTaskRangeComplete: Boolean
   ) extends AccountRangeCoordinatorMessage
 
+  /** Sent by SNAPSyncController when a peer disconnects. Coordinator immediately cancels in-flight
+    * requests for that peer and re-queues tasks, rather than waiting 30s for the worker timeout.
+    * Also resets the consecutive-timeout counter so a transient disconnect doesn't count toward
+    * the stateless threshold.
+    */
+  case class PeerUnavailable(peerId: String) extends AccountRangeCoordinatorMessage
+
   sealed trait AccountRangeWorkerMessage
   case class FetchAccountRange(
       task: AccountTask,
@@ -77,6 +84,10 @@ object Messages {
   ) extends AccountRangeWorkerMessage
   case class AccountRangeResponseMsg(response: AccountRange) extends AccountRangeWorkerMessage
   case class RequestTimeout(requestId: BigInt) extends AccountRangeWorkerMessage
+  /** Sent by AccountRangeCoordinator when the peer assigned to this worker disconnects.
+    * Worker immediately fails the in-flight request without waiting for the 30s timeout.
+    */
+  case class WorkerPeerDisconnected(peerId: String) extends AccountRangeWorkerMessage
 
   // ========================================
   // ByteCode Messages

@@ -446,6 +446,23 @@ class AccountRangeCoordinator(
         dispatchIfPossible(peer)
       }
 
+    case PeerUnavailable(peerId) =>
+      // Remove the peer and reset its consecutive-timeout counter so that network-level
+      // disconnects don't accumulate toward the stateless threshold (Bug-W8).
+      knownAvailablePeers.find(_.id.value == peerId).foreach(knownAvailablePeers -= _)
+      peerConsecutiveTimeouts.remove(peerId)
+      peerCooldownUntilMs.remove(peerId)
+
+      // Immediately cancel any in-flight request to this peer so the worker returns to idle
+      // without waiting 30 seconds for the timeout to fire.
+      val inFlight = activeTasks.collect {
+        case (reqId, (_, worker, peer)) if peer.id.value == peerId => (reqId, worker)
+      }.toSeq
+      inFlight.foreach { case (reqId, worker) =>
+        worker ! WorkerPeerDisconnected(peerId)
+        log.debug(s"Sent WorkerPeerDisconnected for reqId=$reqId to worker ${worker.path.name} (peer $peerId disconnected)")
+      }
+
     case UpdateMaxInFlightPerPeer(newLimit) =>
       log.info(s"AccountRange per-peer budget: $maxInFlightPerPeer -> $newLimit")
       maxInFlightPerPeer = newLimit
@@ -774,9 +791,9 @@ class AccountRangeCoordinator(
       task.rootHash = stateRoot
       pendingTasks.enqueue(task)
 
-      // Apply cooldown and reduce byte budget for failing peers (unless stateless-marked,
-      // which already blocks them from dispatch)
-      if (!reason.contains("Missing proof for empty account range")) {
+      // Apply cooldown for protocol failures; skip for network-level disconnects since the peer
+      // is already gone and will reconnect fresh (no point cooling down a gone peer).
+      if (!reason.contains("Missing proof for empty account range") && !reason.contains("Peer disconnected")) {
         recordPeerCooldown(peer, reason)
         adjustResponseBytesOnFailure(peer, reason)
       }
