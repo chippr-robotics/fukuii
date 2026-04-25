@@ -5,6 +5,7 @@ import cats.effect.SyncIO
 import com.chipprbots.ethereum.forkid.Connect
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.forkid.ForkIdValidator
+import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.p2p.Message
@@ -33,21 +34,21 @@ case class EthNodeStatus69ExchangeState(
 
   def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = { case status: ETH69.Status =>
     import ForkIdValidator.syncIoLogger
-    log.info(
+    log.debug(
       "ETH69_STATUS: Received - protocolVersion={}, networkId={}, genesis={}, forkId={}, earliest={}, latest={}, latestHash={}",
       status.protocolVersion,
       status.networkId,
-      status.genesisHash,
+      status.genesisHash.toHex,
       status.forkId,
       status.earliestBlock,
       status.latestBlock,
-      status.latestBlockHash
+      status.latestBlockHash.toHex
     )
 
     val localGenesisHash = blockchainReader.genesisHeader.hash
 
     if (status.networkId != peerConfiguration.networkId) {
-      log.warn(
+      log.debug(
         "ETH69_STATUS: NetworkId mismatch! Local: {}, Remote: {} - disconnecting (SUBPROTOCOL_TRIGGERED_MISMATCHED_NETWORK)",
         peerConfiguration.networkId,
         status.networkId
@@ -56,8 +57,8 @@ case class EthNodeStatus69ExchangeState(
     } else if (status.genesisHash != localGenesisHash) {
       log.warn(
         "ETH69_STATUS: Genesis hash mismatch! Local: {}, Remote: {} - disconnecting",
-        localGenesisHash,
-        status.genesisHash
+        localGenesisHash.toHex,
+        status.genesisHash.toHex
       )
       DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
     } else {
@@ -68,10 +69,10 @@ case class EthNodeStatus69ExchangeState(
             status.forkId
           )
       } yield {
-        log.info("ETH69_STATUS: ForkId validation result: {}", validationResult)
+        log.debug("ETH69_STATUS: ForkId validation result: {}", validationResult)
         validationResult match {
           case Connect =>
-            log.info("ETH69_STATUS: ForkId validation passed - accepting peer")
+            log.debug("ETH69_STATUS: ForkId validation passed - accepting peer")
             ConnectedState(
               PeerInfo.withForkAccepted(
                 RemoteStatus.fromETH69Status(status, negotiatedCapability, supportsSnap, peerCapabilities)
@@ -106,14 +107,14 @@ case class EthNodeStatus69ExchangeState(
       latestBlockHash = bestBlockHeader.hash
     )
 
-    log.info(
+    log.debug(
       "ETH69_STATUS: Sending - networkId={}, genesis={}, forkId={}, earliest={}, latest={}, latestHash={}",
       status.networkId,
-      genesisHash,
+      genesisHash.toHex,
       forkId,
       status.earliestBlock,
       status.latestBlock,
-      bestBlockHeader.hash
+      bestBlockHeader.hash.toHex
     )
 
     status

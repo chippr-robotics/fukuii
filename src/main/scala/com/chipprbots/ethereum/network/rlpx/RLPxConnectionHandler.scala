@@ -108,7 +108,7 @@ class RLPxConnectionHandler(
       context.become(new ConnectedHandler(connection).waitingForAuthHandshakeResponse(handshaker, timeout))
 
     case CommandFailed(_: Connect) =>
-      log.error("[Stopping Connection] TCP connection to {} failed for peer {}", uri, peerId)
+      log.warning("[RLPx] TCP connection failed to {} for peer {}", uri, peerId)
       context.parent ! ConnectionFailed
       gracefulStop()
   }
@@ -260,7 +260,7 @@ class RLPxConnectionHandler(
         else CanonicalEthBase
 
       val snapBaseStr = peerSnapBase.map(b => s"0x${b.toHexString}").getOrElse("<disabled>")
-      log.info(
+      log.debug(
         s"INBOUND_CAP_OFFSETS: peer=$peerId clientId=${hello.clientId} snapFirst=$snapFirst " +
           s"peerEthBase=0x${peerEthBase.toHexString} peerSnapBase=$snapBaseStr"
       )
@@ -323,7 +323,7 @@ class RLPxConnectionHandler(
     }
 
     val handleConnectionTerminated: Receive = { case Terminated(`connection`) =>
-      log.debug("[Stopping Connection] TCP connection actor terminated for peer {}", peerId)
+      log.debug("[RLPx] TCP actor terminated for peer {}", peerId)
       context.parent ! ConnectionFailed
       gracefulStop()
     }
@@ -460,7 +460,7 @@ class RLPxConnectionHandler(
     def processHandshakeResult(result: AuthHandshakeResult, remainingData: ByteString): Unit =
       result match {
         case AuthHandshakeSuccess(secrets, remotePubKey) =>
-          log.info("[RLPx] Auth handshake SUCCESS for peer {}, establishing secure connection", peerId)
+          log.debug("[RLPx] Auth handshake SUCCESS for peer {}, establishing secure connection", peerId)
           context.parent ! ConnectionEstablished(remotePubKey)
           // following the specification at https://github.com/ethereum/devp2p/blob/master/rlpx.md#initial-handshake
           // point 6 indicates that the next messages needs to be initial 'Hello'
@@ -540,7 +540,7 @@ class RLPxConnectionHandler(
           messageCodecOpt match {
             case Some((messageCodec, inboundTranslator)) =>
               registerMessageCodec(messageCodec)
-              log.info("[RLPx] Connection FULLY ESTABLISHED with peer {}, entering handshaked state", peerId)
+              log.debug("[RLPx] Connection FULLY ESTABLISHED with peer {}, entering handshaked state", peerId)
               context.become(
                 handshaked(
                   messageCodec,
@@ -731,10 +731,8 @@ class RLPxConnectionHandler(
                   msg.code.toHexString
                 )
 
-                // High-signal receive logging for SNAP traffic (request/response visibility).
-                // This stays INFO so it shows up even when other receive logs are DEBUG.
                 if (msg.code >= CanonicalSnapBase && msg.code < CanonicalSnapBase + CanonicalSnapSize) {
-                  log.info(
+                  log.debug(
                     "RECV_SNAP_MSG: peer={}, msg[{}] {}",
                     peerId,
                     idx,
@@ -804,9 +802,8 @@ class RLPxConnectionHandler(
 
       val out = messageCodec.encodeMessage(serializableToEncode)
 
-      // Enhanced logging for GetBlockHeaders debugging
       val msgType = messageToSend.underlyingMsg.getClass.getSimpleName
-      log.info(
+      log.debug(
         "SEND_MSG: peer={}, type={}, codes={}, seqNum={}",
         peerId,
         msgType,
@@ -861,10 +858,11 @@ class RLPxConnectionHandler(
 
     def handleConnectionClosed: Receive = { case msg: ConnectionClosed =>
       if (msg.isPeerClosed) {
-        log.debug("[Stopping Connection] Connection with {} closed by peer", peerId)
-      }
-      if (msg.isErrorClosed) {
-        log.debug("[Stopping Connection] Connection with {} closed because of error {}", peerId, msg.getErrorCause)
+        log.debug("[RLPx] Peer {} closed connection (peer-initiated)", peerId)
+      } else if (msg.isErrorClosed) {
+        log.warning("[RLPx] Connection with {} closed due to error: {}", peerId, msg.getErrorCause)
+      } else {
+        log.debug("[RLPx] Connection with {} closed ({})", peerId, msg.getClass.getSimpleName)
       }
 
       gracefulStop()

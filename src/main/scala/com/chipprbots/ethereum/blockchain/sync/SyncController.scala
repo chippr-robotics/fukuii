@@ -474,7 +474,7 @@ class SyncController(
         // It will fall back to fast sync if needed
         startSnapSync()
       case (true, _, true, _) =>
-        log.warning("do-snap-sync is true but SNAP sync already completed")
+        log.info("do-snap-sync is true but SNAP sync already completed — proceeding to SNAP recovery")
         // Diagnostic: log stored SNAP sync state root vs pivot block state root
         val snapStateRoot = appStateStorage.getSnapSyncStateRoot()
         val bestBlockNum = appStateStorage.getBestBlockNumber()
