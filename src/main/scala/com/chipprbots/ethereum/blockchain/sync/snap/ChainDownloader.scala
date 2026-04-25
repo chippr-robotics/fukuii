@@ -7,6 +7,7 @@ import org.apache.pekko.actor.Props
 import org.apache.pekko.actor.Scheduler
 import org.apache.pekko.util.ByteString
 
+import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 
@@ -70,8 +71,8 @@ class ChainDownloader(
   private var paused = false
 
   // Queues of block hashes needing bodies/receipts
-  private var bodiesQueue: Vector[ByteString] = Vector.empty
-  private var receiptsQueue: Vector[ByteString] = Vector.empty
+  private val bodiesQueue: mutable.ArrayDeque[ByteString] = mutable.ArrayDeque.empty
+  private val receiptsQueue: mutable.ArrayDeque[ByteString] = mutable.ArrayDeque.empty
 
   // Track in-flight requests to limit concurrency
   private var headerRequestPeers: Set[PeerId] = Set.empty
@@ -84,7 +85,7 @@ class ChainDownloader(
   private var receiptsDownloaded: BigInt = 0
   private var lastLogTime: Long = 0
 
-  // Concurrency — starts conservative during SNAP state sync, boosted after state completes
+  // Besu-aligned D14: single concurrency throughout (no boost mode after state sync).
   private var maxConcurrentRequests: Int = initialMaxConcurrentRequests
 
   // Dispatch timer
@@ -118,9 +119,6 @@ class ChainDownloader(
         scheduleDispatch()
         context.become(downloading)
       }
-
-    case BoostConcurrency(n) =>
-      boostConcurrency(n)
 
     case GetProgress =>
       sender() ! Progress(headersDownloaded, bodiesDownloaded, receiptsDownloaded, targetBlock)
@@ -158,10 +156,6 @@ class ChainDownloader(
       )
       dispatchTask.foreach(_.cancel())
       context.become(idle)
-
-    case BoostConcurrency(n) =>
-      boostConcurrency(n)
-      dispatchRequests() // Immediately use the new slots
 
     case GetProgress =>
       sender() ! Progress(headersDownloaded, bodiesDownloaded, receiptsDownloaded, targetBlock)
@@ -309,10 +303,10 @@ class ChainDownloader(
   }
 
   private def requestBodies(peer: Peer): Unit = {
-    val batch = bodiesQueue.take(syncConfig.blockBodiesPerRequest)
+    val batch = bodiesQueue.take(syncConfig.blockBodiesPerRequest).toVector
     if (batch.isEmpty) return
 
-    bodiesQueue = bodiesQueue.drop(batch.size)
+    bodiesQueue.dropInPlace(batch.size)
 
     val requestMsg = ETH66.GetBlockBodies(ETH66.nextRequestId, batch)
 
@@ -333,10 +327,10 @@ class ChainDownloader(
   }
 
   private def requestReceipts(peer: Peer): Unit = {
-    val batch = receiptsQueue.take(syncConfig.receiptsPerRequest)
+    val batch = receiptsQueue.take(syncConfig.receiptsPerRequest).toVector
     if (batch.isEmpty) return
 
-    receiptsQueue = receiptsQueue.drop(batch.size)
+    receiptsQueue.dropInPlace(batch.size)
 
     val requestMsg = ETH66.GetReceipts(ETH66.nextRequestId, batch)
 
@@ -410,8 +404,8 @@ class ChainDownloader(
           .and(blockchainWriter.storeChainWeight(header.hash, parentWeight.increase(header)))
           .commit()
 
-        bodiesQueue :+= header.hash
-        receiptsQueue :+= header.hash
+        bodiesQueue += header.hash
+        receiptsQueue += header.hash
         prevHash = Some(header.hash)
         validCount += 1
       } else {
@@ -436,7 +430,7 @@ class ChainDownloader(
   private def handleBodies(peer: Peer, requestedHashes: Seq[ByteString], bodies: Seq[BlockBody]): Unit = {
     if (bodies.isEmpty) {
       // Re-queue the hashes
-      bodiesQueue = requestedHashes.toVector ++ bodiesQueue
+      bodiesQueue.prependAll(requestedHashes)
       blacklist.add(
         peer.id,
         syncConfig.blacklistDuration,
@@ -457,7 +451,7 @@ class ChainDownloader(
     // Re-queue any remaining hashes that weren't served
     val remaining = requestedHashes.drop(bodies.size)
     if (remaining.nonEmpty) {
-      bodiesQueue = remaining.toVector ++ bodiesQueue
+      bodiesQueue.prependAll(remaining)
     }
   }
 
@@ -471,7 +465,7 @@ class ChainDownloader(
     val hashStrings = requestedHashes.map(h => s"0x${h.toArray.map("%02x".format(_)).mkString}")
     val receiptsRlp = eth66Receipts.receiptsForBlocks
     if (receiptsRlp.items.isEmpty) {
-      receiptsQueue = requestedHashes.toVector ++ receiptsQueue
+      receiptsQueue.prependAll(requestedHashes)
       blacklist.add(peer.id, syncConfig.blacklistDuration, EmptyReceipts(hashStrings))
       return
     }
@@ -503,12 +497,12 @@ class ChainDownloader(
       // Re-queue remaining
       val remaining = requestedHashes.drop(receiptsByBlock.size)
       if (remaining.nonEmpty) {
-        receiptsQueue = remaining.toVector ++ receiptsQueue
+        receiptsQueue.prependAll(remaining)
       }
     } catch {
       case ex: Exception =>
         log.warning("Chain download: failed to decode receipts from peer {}: {}", peer.id, ex.getMessage)
-        receiptsQueue = requestedHashes.toVector ++ receiptsQueue
+        receiptsQueue.prependAll(requestedHashes)
         blacklist.add(
           peer.id,
           syncConfig.blacklistDuration,
@@ -563,10 +557,10 @@ class ChainDownloader(
       blockchainReader.getBlockHeaderByNumber(i) match {
         case Some(header) =>
           if (blockchainReader.getBlockBodyByHash(header.hash).isEmpty) {
-            bodiesQueue :+= header.hash
+            bodiesQueue += header.hash
           }
           if (blockchainReader.getReceiptsByHash(header.hash).isEmpty) {
-            receiptsQueue :+= header.hash
+            receiptsQueue += header.hash
           }
         case None => // shouldn't happen
       }
@@ -576,13 +570,7 @@ class ChainDownloader(
     best
   }
 
-  private def boostConcurrency(n: Int): Unit = {
-    val prev = maxConcurrentRequests
-    maxConcurrentRequests = n
-    log.info("Chain download concurrency boosted: {} -> {} (state sync complete, all peers available)", prev, n)
-    // Reschedule dispatch at faster interval — 2s was conservative to avoid SNAP contention
-    scheduleDispatch(200.millis)
-  }
+  // boostConcurrency() removed: Besu-aligned D14 (no boost mode).
 
   private def scheduleDispatch(interval: FiniteDuration = 2.seconds): Unit = {
     dispatchTask.foreach(_.cancel())
@@ -604,7 +592,7 @@ object ChainDownloader {
   case object Resume
   case object Stop
   case object Done
-  case class BoostConcurrency(maxConcurrent: Int)
+  // BoostConcurrency removed: Besu-aligned D14 (no boost mode, single concurrency throughout).
   case object GetProgress
   case class Progress(
       headersDownloaded: BigInt,

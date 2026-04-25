@@ -56,7 +56,7 @@ class AccountRangeCoordinator(
     concurrency: Int,
     snapSyncController: ActorRef,
     resumeProgress: Map[ByteString, ByteString] = Map.empty,
-    initialMaxInFlightPerPeer: Int = 5,
+    initialMaxInFlightPerPeer: Int = 1, // Besu-aligned D11: 1 request per peer, no pipelining
     trieFlushThreshold: Int = 50000,
     initialResponseBytesConfig: Int = 524288,
     minResponseBytesConfig: Int = 102400
@@ -248,37 +248,9 @@ class AccountRangeCoordinator(
   private def activePeerCount: Int =
     knownAvailablePeers.count(p => !isPeerStateless(p) && !isPeerCoolingDown(p)).max(1)
 
-  // Per-peer adaptive byte budgeting (ported from StorageRangeCoordinator).
-  // Geth's snap handler supports up to 2MB responses. Starting at 512KB and probing upward
-  // on responsive peers, scaling down on failures.
-  private val minResponseBytes: BigInt = BigInt(minResponseBytesConfig)
-  private val maxResponseBytes: BigInt = 2 * 1024 * 1024 // 2MB ceiling (Geth handler limit)
-  private val initialResponseBytes: BigInt = BigInt(initialResponseBytesConfig)
-  private val increaseFactor: Double = 1.25 // Scale up when 90%+ fill
-  private val decreaseFactor: Double = 0.5 // Scale down on failure/empty
-
-  private val peerResponseBytesTarget = mutable.Map.empty[String, BigInt]
-
-  private def responseBytesTargetFor(peer: Peer): BigInt =
-    peerResponseBytesTarget
-      .getOrElseUpdate(peer.id.value, initialResponseBytes)
-      .max(minResponseBytes)
-      .min(maxResponseBytes)
-
-  private def adjustResponseBytesOnSuccess(peer: Peer, requested: BigInt, received: BigInt): Unit =
-    if (requested > 0 && received * 10 >= requested * 9 && requested < maxResponseBytes) {
-      val next = (requested.toDouble * increaseFactor).toLong
-      peerResponseBytesTarget.update(peer.id.value, BigInt(next).min(maxResponseBytes))
-    }
-
-  private def adjustResponseBytesOnFailure(peer: Peer, reason: String): Unit = {
-    val cur = responseBytesTargetFor(peer)
-    val next = (cur.toDouble * decreaseFactor).toLong
-    peerResponseBytesTarget.update(peer.id.value, BigInt(next).max(minResponseBytes))
-    log.debug(
-      s"Reducing account responseBytes target for peer ${peer.id.value}: $cur -> ${peerResponseBytesTarget(peer.id.value)} ($reason)"
-    )
-  }
+  // Besu-aligned D12: fixed request size, no per-peer adaptive ratcheting.
+  // Use the config value directly as a fixed request size.
+  private val requestResponseBytes: BigInt = BigInt(initialResponseBytesConfig)
 
   // Track consecutive timeouts per peer. When a peer hits the threshold, it's marked stateless.
   // This handles the case where ETC mainnet peers silently stop responding (timeout) when
@@ -410,8 +382,7 @@ class AccountRangeCoordinator(
       statelessPeers.clear()
       pivotRefreshRequested = false
 
-      // Clear per-peer adaptive state (new root = new response characteristics)
-      peerResponseBytesTarget.clear()
+      // Besu-aligned D12: no per-peer adaptive state to clear (fixed request size).
       peerCooldownUntilMs.clear()
       peerConsecutiveTimeouts.clear()
       // Note: do NOT reset consecutiveUnproductiveRefreshes here.
@@ -625,7 +596,7 @@ class AccountRangeCoordinator(
 
     val requestId = requestTracker.generateRequestId()
     activeTasks.put(requestId, (task, worker, peer))
-    val responseBytes = responseBytesTargetFor(peer)
+    val responseBytes = requestResponseBytes // Besu-aligned D12: fixed size, no per-peer ratcheting
 
     worker ! FetchAccountRange(task, peer, requestId, responseBytes)
   }
@@ -649,12 +620,10 @@ class AccountRangeCoordinator(
       result match {
         case Right((accountCount, accounts, _)) =>
           log.info(
-            s"Task completed successfully: $accountCount accounts (responseBytes=${responseBytesTargetFor(peer)})"
+            s"Task completed successfully: $accountCount accounts (responseBytes=$requestResponseBytes)"
           )
 
-          // Adjust adaptive byte budget — estimate received bytes from account count
-          val estimatedBytes = BigInt(accountCount * 100) // ~100 bytes per account (hash + RLP)
-          adjustResponseBytesOnSuccess(peer, responseBytesTargetFor(peer), estimatedBytes)
+          // Besu-aligned D12: no adaptive byte budget ratcheting.
 
           // Reset consecutive timeout counter — peer is responsive
           peerConsecutiveTimeouts.remove(peer.id.value)
@@ -778,7 +747,7 @@ class AccountRangeCoordinator(
       // which already blocks them from dispatch)
       if (!reason.contains("Missing proof for empty account range")) {
         recordPeerCooldown(peer, reason)
-        adjustResponseBytesOnFailure(peer, reason)
+        // Besu-aligned D12: no adaptive byte budget ratcheting.
       }
     }
     // Re-dispatch re-queued tasks to any known available peer that isn't stateless.
@@ -1112,7 +1081,7 @@ object AccountRangeCoordinator {
       concurrency: Int,
       snapSyncController: ActorRef,
       resumeProgress: Map[ByteString, ByteString] = Map.empty,
-      initialMaxInFlightPerPeer: Int = 5,
+      initialMaxInFlightPerPeer: Int = 1, // Besu-aligned D11: 1 request per peer, no pipelining
       trieFlushThreshold: Int = 50000,
       initialResponseBytes: Int = 524288,
       minResponseBytes: Int = 102400

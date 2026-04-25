@@ -50,7 +50,7 @@ class StorageRangeCoordinator(
     maxInFlightRequests: Int,
     requestTimeout: FiniteDuration,
     snapSyncController: ActorRef,
-    initialMaxInFlightPerPeer: Int = 5,
+    initialMaxInFlightPerPeer: Int = 1, // Besu-aligned D11: 1 request per peer, no pipelining
     configInitialResponseBytes: Int = 1048576,
     configMinResponseBytes: Int = 131072,
     deferredMerkleization: Boolean = true
@@ -102,13 +102,6 @@ class StorageRangeCoordinator(
   private val minRefreshIntervalMs: Long = 60000L // 1 minute minimum between refreshes
   private val maxRefreshIntervalMs: Long = 300000L // 5 minutes maximum backoff
 
-  // No-activity timeout: detects stalls caused by "ghost" peers in knownAvailablePeers
-  // that disconnected without being removed and thus never get marked stateless.
-  // When tasks are pending, nothing is in-flight, and no dispatch/response has occurred
-  // for this duration, we treat it as all-stateless and request a pivot refresh.
-  private var lastDispatchOrResponseMs: Long = System.currentTimeMillis()
-  private val noActivityTimeoutMs: Long = 120000L // 2 minutes
-
   // Post-pivot-refresh cooldown: after a pivot refresh, peers need time to sync to the new root.
   // Dispatching immediately causes all peers to return empty → marked stateless → another pivot
   // refresh → infinite tight loop. This cooldown prevents ALL dispatch paths (tryRedispatchPendingTasks,
@@ -132,43 +125,14 @@ class StorageRangeCoordinator(
   }
 
   private def maybeRequestPivotRefresh(): Unit = {
+    // Besu-aligned: only trigger pivot refresh when ALL known peers are stateless.
+    // No time-based stagnation trigger — Besu has no equivalent stagnation watchdog.
     if (pivotRefreshRequested) return
     val allStateless = knownAvailablePeers.nonEmpty &&
       knownAvailablePeers.forall(p => statelessPeers.contains(p.id.value))
 
-    // Secondary trigger: tasks pending but no dispatch/response activity for 2 minutes.
-    // Catches "ghost" peers that remain in knownAvailablePeers after disconnecting
-    // without being marked stateless (preventing allStateless from ever being true).
-    // Note: activeTasks may be non-empty if requests to ghost peers never time out
-    // (SNAPRequestTracker timeouts are poll-based, not scheduled), so we check
-    // activity time regardless of in-flight count.
-    val now = System.currentTimeMillis()
-    val dispatchStalled = !allStateless && tasks.nonEmpty &&
-      (now - lastDispatchOrResponseMs) > noActivityTimeoutMs
-
-    if (dispatchStalled) {
-      log.warning(
-        s"Storage dispatch stalled: ${tasks.size} pending, ${activeTasks.size} active, " +
-          s"no activity for ${(now - lastDispatchOrResponseMs) / 1000}s. " +
-          s"Peers: ${knownAvailablePeers.size} known, ${statelessPeers.size} stateless. " +
-          s"Marking remaining peers as stateless (likely disconnected)."
-      )
-      knownAvailablePeers.foreach(p => statelessPeers.add(p.id.value))
-      // Re-queue any stale in-flight tasks from ghost peers
-      if (activeTasks.nonEmpty) {
-        val staleCount = activeTasks.size
-        activeTasks.values.foreach { case (_, batchTasks, _) =>
-          batchTasks.foreach { task =>
-            task.pending = false
-            tasks.enqueue(task)
-          }
-        }
-        activeTasks.clear()
-        log.info(s"Re-queued $staleCount stale in-flight requests from ghost peers")
-      }
-    }
-
-    if (allStateless || dispatchStalled) {
+    if (allStateless) {
+      val now = System.currentTimeMillis()
       val backoffMs = math.min(
         maxRefreshIntervalMs,
         minRefreshIntervalMs * (1L << math.min(consecutiveUnproductiveRefreshes, 3))
@@ -204,42 +168,7 @@ class StorageRangeCoordinator(
     }
   }
 
-  // Per-peer adaptive batch size: tracks which peers support multi-account batching.
-  // Starts at maxAccountsPerBatch, ratchets down on empty batched responses, scales back up
-  // on successful packed responses. This allows recovery from transient issues rather than
-  // permanently degrading to batch=1 for the lifetime of the sync.
-  private val peerBatchSize = mutable.Map.empty[String, Int]
-  private val peerBatchSuccessStreak = mutable.Map.empty[String, Int]
-  private val batchRecoveryStreak = 3 // Consecutive successes before scaling up
-
-  private def batchSizeFor(peer: Peer): Int =
-    peerBatchSize.getOrElseUpdate(peer.id.value, maxAccountsPerBatch)
-
-  private def reduceBatchSize(peer: Peer): Unit = {
-    peerBatchSize.update(peer.id.value, 1)
-    peerBatchSuccessStreak.remove(peer.id.value)
-  }
-
-  /** Scale batch size back up after consecutive successful packed responses. Doubles the batch size per peer, capped at
-    * maxAccountsPerBatch.
-    */
-  private def maybeIncreaseBatchSize(peer: Peer, servedCount: Int, requestedCount: Int): Unit =
-    // Only count as "packed" if the response served most of the requested accounts
-    if (requestedCount > 1 && servedCount >= requestedCount / 2) {
-      val streak = peerBatchSuccessStreak.getOrElse(peer.id.value, 0) + 1
-      peerBatchSuccessStreak.update(peer.id.value, streak)
-      if (streak >= batchRecoveryStreak) {
-        val current = batchSizeFor(peer)
-        val next = math.min(current * 2, maxAccountsPerBatch)
-        if (next > current) {
-          peerBatchSize.update(peer.id.value, next)
-          peerBatchSuccessStreak.update(peer.id.value, 0)
-          log.info(
-            s"Peer ${peer.id.value} batch size increased: $current -> $next (after $streak consecutive successes)"
-          )
-        }
-      }
-    }
+  // Besu-aligned D12: fixed batch size (maxAccountsPerBatch from config), no per-peer adaptation.
 
   // Track last known available peers so we can re-dispatch after task failures
   // without waiting for the next StoragePeerAvailable message.
@@ -267,37 +196,8 @@ class StorageRangeCoordinator(
   private var bytesDownloaded: Long = 0
   private val startTime = System.currentTimeMillis()
 
-  // Per-peer adaptive byte budgeting (ported from ByteCodeCoordinator).
-  // Geth's snap handler supports up to 2MB responses. Starting at 512KB and probing upward
-  // on responsive peers, scaling down on failures.
-  private val minResponseBytes: BigInt = configMinResponseBytes // Configurable floor (avoid excessive small requests)
-  private val maxResponseBytes: BigInt = 2 * 1024 * 1024 // 2MB ceiling (Geth handler limit)
-  private val initialResponseBytes: BigInt = configInitialResponseBytes // Configurable starting point
-  private val increaseFactor: Double = 1.25 // Scale up when 90%+ fill
-  private val decreaseFactor: Double = 0.5 // Scale down on failure/empty
-
-  private val peerResponseBytesTarget = mutable.Map.empty[String, BigInt]
-
-  private def responseBytesTargetFor(peer: Peer): BigInt =
-    peerResponseBytesTarget
-      .getOrElseUpdate(peer.id.value, initialResponseBytes)
-      .max(minResponseBytes)
-      .min(maxResponseBytes)
-
-  private def adjustResponseBytesOnSuccess(peer: Peer, requested: BigInt, received: BigInt): Unit =
-    if (requested > 0 && received * 10 >= requested * 9 && requested < maxResponseBytes) {
-      val next = (requested.toDouble * increaseFactor).toLong
-      peerResponseBytesTarget.update(peer.id.value, BigInt(next).min(maxResponseBytes))
-    }
-
-  private def adjustResponseBytesOnFailure(peer: Peer, reason: String): Unit = {
-    val cur = responseBytesTargetFor(peer)
-    val next = (cur.toDouble * decreaseFactor).toLong
-    peerResponseBytesTarget.update(peer.id.value, BigInt(next).max(minResponseBytes))
-    log.debug(
-      s"Reducing storage responseBytes target for peer ${peer.id.value}: $cur -> ${peerResponseBytesTarget(peer.id.value)} ($reason)"
-    )
-  }
+  // Besu-aligned D12: fixed request size from config, no per-peer adaptive ratcheting.
+  private val requestResponseBytes: BigInt = BigInt(configInitialResponseBytes)
 
   // ========================================
   // Two-phase storage: raw slot buffering + deferred trie construction
@@ -645,15 +545,12 @@ class StorageRangeCoordinator(
         log.info(s"Cancelled $cancelledCount in-flight storage requests (stale root)")
       }
 
-      // Clear all per-peer adaptive state — fresh start with new root
+      // Clear per-peer state — fresh start with new root
       statelessPeers.clear()
       pivotRefreshRequested = false
-      lastDispatchOrResponseMs = System.currentTimeMillis()
       peerCooldownUntilMs.clear()
       peerConsecutiveTimeouts.clear()
-      peerBatchSize.clear()
-      peerBatchSuccessStreak.clear()
-      peerResponseBytesTarget.clear()
+      // Besu-aligned D12: no per-peer batch size or response byte maps to clear.
       emptyResponsesByTask.clear()
       proofVerifiers.clear()
 
@@ -752,7 +649,8 @@ class StorageRangeCoordinator(
     val max = ByteString(Array.fill(32)(0xff.toByte))
     def isInitialRange(t: StorageTask): Boolean = t.next == min && t.last == max
 
-    val peerBatch = batchSizeFor(peer)
+    // Besu-aligned D12: fixed batch size (maxAccountsPerBatch from config), no per-peer adaptation.
+    val peerBatch = maxAccountsPerBatch
 
     // snap/1 origin/limit semantics apply to the first account only. To avoid incorrect continuation
     // behavior, only batch tasks that request the initial full range.
@@ -771,7 +669,7 @@ class StorageRangeCoordinator(
       return None
     }
 
-    val requestedBytes = responseBytesTargetFor(peer)
+    val requestedBytes = requestResponseBytes // Besu-aligned D12: fixed size, no per-peer ratcheting
     val requestId = requestTracker.generateRequestId()
     val accountHashes = batchTasks.map(_.accountHash)
     val firstTask = batchTasks.head
@@ -811,8 +709,6 @@ class StorageRangeCoordinator(
     import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetStorageRanges.GetStorageRangesEnc
     val messageSerializable: MessageSerializable = new GetStorageRangesEnc(request)
     networkPeerManager ! NetworkPeerManagerActor.SendMessage(messageSerializable, peer.id)
-    lastDispatchOrResponseMs = System.currentTimeMillis()
-
     Some(requestId)
   }
 
@@ -859,16 +755,7 @@ class StorageRangeCoordinator(
     )
 
     if (servedCount == 0) {
-      // Per-peer batch reduction: only reduce for the specific peer that failed
-      if (tasks.size > 1 && batchSizeFor(peer) > 1) {
-        log.info(
-          s"Received empty StorageRanges for a batched request from peer ${peer.id.value} (accounts=${tasks.size}); " +
-            s"falling back to single-account requests for this peer"
-        )
-        reduceBatchSize(peer)
-      }
-
-      adjustResponseBytesOnFailure(peer, "empty response")
+      // Besu-aligned D12: no per-peer batch size or response byte ratcheting.
 
       // Track empties per task to avoid re-queueing forever.
       // If the same task yields empty responses repeatedly, skip it with a loud warning.
@@ -915,10 +802,8 @@ class StorageRangeCoordinator(
     statelessPeers.remove(peer.id.value)
     peerConsecutiveTimeouts.remove(peer.id.value)
     consecutiveUnproductiveRefreshes = 0
-    lastDispatchOrResponseMs = System.currentTimeMillis()
 
-    // Adaptive batch scaling: track successes for this peer, scale up after consecutive packed responses
-    maybeIncreaseBatchSize(peer, servedCount, tasks.size)
+    // Besu-aligned D12: no adaptive batch scaling.
 
     // Clear empty-response counters for tasks that are now being served.
     tasks.foreach { task =>
@@ -936,7 +821,6 @@ class StorageRangeCoordinator(
       }
     }
 
-    // Track total received bytes across all served tasks for adaptive byte budgeting
     var totalReceivedBytes: Long = 0
 
     servedTasks.zipWithIndex.foreach { case (task, idx) =>
@@ -955,7 +839,7 @@ class StorageRangeCoordinator(
         case Left(error) =>
           log.warning(s"Storage proof verification failed for account ${task.accountString}: $error")
           recordPeerCooldown(peer, s"verification failed: $error")
-          adjustResponseBytesOnFailure(peer, s"verification failed: $error")
+          // Besu-aligned D12: no adaptive byte budget ratcheting.
           task.pending = false
           this.tasks.enqueue(task)
 
@@ -1027,10 +911,7 @@ class StorageRangeCoordinator(
       }
     }
 
-    // Adjust per-peer byte budget based on total received bytes
-    if (totalReceivedBytes > 0) {
-      adjustResponseBytesOnSuccess(peer, requestedBytes, BigInt(totalReceivedBytes))
-    }
+    // Besu-aligned D12: no adaptive byte budget adjustment.
 
     // Check completion after processing all served tasks
     self ! StorageCheckCompletion
@@ -1046,7 +927,7 @@ class StorageRangeCoordinator(
     activeTasks.remove(requestId).foreach { case (peer, batchTasks, _) =>
       log.warning(s"Storage range request timeout for ${batchTasks.size} accounts from peer ${peer.id.value}")
       recordPeerCooldown(peer, "request timeout")
-      adjustResponseBytesOnFailure(peer, "request timeout")
+      // Besu-aligned D12: no adaptive byte budget ratcheting.
 
       // Track consecutive timeouts — on ETC mainnet, peers silently stop responding when
       // the snap serve window expires. After N consecutive timeouts, treat as stateless.
@@ -1136,7 +1017,7 @@ object StorageRangeCoordinator {
       maxInFlightRequests: Int,
       requestTimeout: FiniteDuration,
       snapSyncController: ActorRef,
-      initialMaxInFlightPerPeer: Int = 5,
+      initialMaxInFlightPerPeer: Int = 1, // Besu-aligned D11: 1 request per peer, no pipelining
       initialResponseBytes: Int = 1048576,
       minResponseBytes: Int = 131072,
       deferredMerkleization: Boolean = true

@@ -111,35 +111,8 @@ class ByteCodeCoordinator(
   private var bytecodesDownloaded: Long = 0
   private var bytesDownloaded: Long = 0
 
-  // ByteCodes request tuning (Nethermind-style): use a per-peer dynamic byte budget, clamped hard to 2 MiB.
-  // We send many hashes and rely on the peer-side `responseBytes` soft limit to bound work.
-  private val minResponseBytes: BigInt = 50 * 1024
-  private val maxResponseBytes: BigInt = 2 * 1024 * 1024
-  private val initialResponseBytes: BigInt = 512 * 1024
-  private val increaseFactor: Double = 1.25
-  private val decreaseFactor: Double = 0.5
-
-  private val peerResponseBytesTarget = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, BigInt]
-
-  private def responseBytesTargetFor(peer: Peer): BigInt =
-    peerResponseBytesTarget.getOrElseUpdate(peer.id, initialResponseBytes).max(minResponseBytes).min(maxResponseBytes)
-
-  private def adjustResponseBytesTargetOnSuccess(peer: Peer, requested: BigInt, received: BigInt): Unit =
-    // If we appear to be filling the current budget, try increasing (up to clamp).
-    // This mimics Nethermind's approach of probing larger budgets on responsive peers.
-    if (requested > 0 && received * 10 >= requested * 9 && requested < maxResponseBytes) {
-      val next = (requested.toDouble * increaseFactor).toLong
-      peerResponseBytesTarget.update(peer.id, BigInt(next).min(maxResponseBytes).max(minResponseBytes))
-    }
-
-  private def adjustResponseBytesTargetOnFailure(peer: Peer, reason: String): Unit = {
-    val cur = responseBytesTargetFor(peer)
-    val next = (cur.toDouble * decreaseFactor).toLong
-    peerResponseBytesTarget.update(peer.id, BigInt(next).max(minResponseBytes))
-    log.debug(
-      s"Reducing ByteCodes responseBytes target for peer ${peer.id.value}: $cur -> ${peerResponseBytesTarget(peer.id)} ($reason)"
-    )
-  }
+  // Besu-aligned D12: fixed request size, no per-peer adaptive ratcheting.
+  private val requestResponseBytes: BigInt = 512 * 1024
 
   private def inFlightForPeer(peer: Peer): Int =
     activeTasks.values.count(_.peer.id == peer.id)
@@ -184,7 +157,7 @@ class ByteCodeCoordinator(
       log.info("Pivot refreshed — clearing bytecode peer cooldowns")
       peerFailureCounts.clear()
       peerCooldownUntilMillis.clear()
-      peerResponseBytesTarget.clear()
+      // Besu-aligned D12: no peerResponseBytesTarget to clear.
 
     case PeerAvailable(peer) =>
       if (isPeerCoolingDown(peer)) {
@@ -236,7 +209,7 @@ class ByteCodeCoordinator(
         task.pending = false
         pendingTasks.enqueue(task)
         recordPeerCooldown(peer, cooldownConfig.baseTimeout, s"request failed: $error")
-        adjustResponseBytesTargetOnFailure(peer, s"request failed: $error")
+        // Besu-aligned D12: no adaptive byte budget ratcheting.
         markWorkerIdle(worker)
       }
       checkCompletion()
@@ -259,7 +232,7 @@ class ByteCodeCoordinator(
     val task = pendingTasks.dequeue()
     val requestId = requestTracker.generateRequestId()
 
-    val requestedBytes = responseBytesTargetFor(peer)
+    val requestedBytes = requestResponseBytes // Besu-aligned D12: fixed size, no per-peer ratcheting
 
     task.pending = true
     activeTasks.put(
@@ -328,7 +301,7 @@ class ByteCodeCoordinator(
 
             // Spec violation or malicious peer - back off harder than empty responses.
             recordPeerCooldown(peer, cooldownConfig.baseInvalid, s"invalid ByteCodes: $error")
-            adjustResponseBytesTargetOnFailure(peer, s"invalid response: $error")
+            // Besu-aligned D12: no adaptive byte budget ratcheting.
             markWorkerIdle(worker)
             checkCompletion()
 
@@ -344,7 +317,7 @@ class ByteCodeCoordinator(
                 // Storage failure isn't necessarily the peer's fault, but to be a good neighbor
                 // (and avoid tight loops), briefly cool down this peer.
                 recordPeerCooldown(peer, cooldownConfig.baseTimeout, s"local store failed: $error")
-                adjustResponseBytesTargetOnFailure(peer, s"local store failed: $error")
+                // Besu-aligned D12: no adaptive byte budget ratcheting.
                 markWorkerIdle(worker)
                 checkCompletion()
 
@@ -352,11 +325,9 @@ class ByteCodeCoordinator(
                 val remainingHashes = task.codeHashes.filterNot(validated.matchedHashes.contains)
 
                 val receivedBytes: BigInt = BigInt(response.codes.map(_.size.toLong).sum)
-                // Update per-peer budget based on observed response size.
-                adjustResponseBytesTargetOnSuccess(peer, requested = requestedBytes, received = receivedBytes)
+                // Besu-aligned D12: fixed request size, no adaptive ratcheting.
                 log.debug(
-                  s"ByteCodes tuning: peer=${peer.id.value} requestedBytes=$requestedBytes receivedBytes=$receivedBytes " +
-                    s"elapsedMs=$elapsedMillis newTarget=${responseBytesTargetFor(peer)}"
+                  s"ByteCodes response: peer=${peer.id.value} requestedBytes=$requestedBytes receivedBytes=$receivedBytes elapsedMs=$elapsedMillis"
                 )
 
                 // Backoff behavior:
@@ -563,8 +534,8 @@ object ByteCodeCoordinator {
       baseEmpty = 2.seconds,
       baseTimeout = 10.seconds,
       baseInvalid = 15.seconds,
-      // Increase per-peer concurrency (Besu caps peer-wide outstanding at 5; this keeps us competitive).
-      maxInFlightPerPeer = 5,
+      // Besu-aligned D11: 1 request per peer, no pipelining.
+      maxInFlightPerPeer = 1,
       max = 2.minutes,
       exponentCap = 10
     )
