@@ -74,7 +74,13 @@ object DiscoveryNetwork {
       // Sent in pings; some clients use the the TCP port in the `from` so it should be accurate.
       localNodeAddress: Node.Address,
       toNodeAddress: A => Node.Address,
-      config: DiscoveryConfig
+      config: DiscoveryConfig,
+      // When the optional sync fast-path responds to a Ping, it marks the Ping
+      // hash here so this async pipeline skips its own Pong send and avoids
+      // emitting a duplicate. Pass `Discv4SyncResponder.PingDedup` shared with
+      // the responder, or a no-op `PingDedup` instance when the fast-path is
+      // not in use (asynchronous pipeline becomes the sole Pong source).
+      pingDedup: Discv4SyncResponder.PingDedup = new Discv4SyncResponder.PingDedup
   )(implicit codec: Codec[Payload], sigalg: SigAlg, temporal: Temporal[IO]): IO[DiscoveryNetwork[A]] = IO {
     new DiscoveryNetwork[A] with LazyLogging {
 
@@ -172,11 +178,26 @@ object DiscoveryNetwork {
         val caller = Peer(remotePublicKey, channel.to)
 
         payload match {
-          case Ping(_, _, to, _, maybeRemoteEnrSeq) =>
+          case Ping(_, _, _, _, maybeRemoteEnrSeq) =>
+            // Pong.to per discv4.md is "the address from which the packet was
+            // received" — i.e., the SENDER's address as we observed it on the
+            // wire — NOT a copy of Ping.to (which is the address of US, the
+            // recipient). Hive's discv4 simulator validates this and rejects
+            // any Pong whose `to` field doesn't match its own UDP source.
+            val pongTo = toNodeAddress(channel.to)
             maybeRespond {
               handler.ping(caller)(maybeRemoteEnrSeq)
             } { maybeLocalEnrSeq =>
-              channel.send(Pong(to, hash, 0, maybeLocalEnrSeq)).void
+              // Skip the Pong send if the sync fast-path already answered
+              // this Ping — keeps us at exactly one Pong on the wire per Ping
+              // (spec compliance: hive's simulator counts and rejects duplicates).
+              // `handler.ping` ran above for its bookkeeping side-effects, so the
+              // bonding pipeline is unaffected by the deduplication.
+              if (pingDedup.isAlreadyResponded(hash)) {
+                IO(logger.debug(s"discv4 async-pong skipped — sync fast-path already responded for ${channel.to}"))
+              } else {
+                channel.send(Pong(pongTo, hash, 0, maybeLocalEnrSeq)).void
+              }
             }
 
           case FindNode(target, expiration) =>

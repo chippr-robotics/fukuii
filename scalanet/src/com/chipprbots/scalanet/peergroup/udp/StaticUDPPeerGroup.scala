@@ -281,6 +281,39 @@ class StaticUDPPeerGroup[M] private (
                         val remoteAddress = datagram.sender
                         try {
                           logger.debug(s"Server channel at $localAddress read message from $remoteAddress")
+                          // Read the incoming bytes once; both the sync responder and the
+                          // async decode path share this view. `nioBuffer` is a window over
+                          // the netty ByteBuf — it shares storage but advances independently.
+                          val incomingBits = BitVector(datagram.content.nioBuffer)
+
+                          // Sync fast-path: if the configured responder produces reply bytes,
+                          // write them back on this same netty thread before yielding to the
+                          // async pipeline. The pipeline still runs for bonding/kademlia
+                          // bookkeeping; we just don't wait on cats-effect to send the reply.
+                          // The responder is contract-bound not to throw, but defend anyway.
+                          val maybeReply: Option[BitVector] =
+                            try config.syncResponder(remoteAddress, incomingBits)
+                            catch {
+                              case NonFatal(ex) =>
+                                logger.warn(
+                                  s"Sync responder threw for $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
+                                )
+                                None
+                            }
+                          maybeReply.foreach { replyBits =>
+                            try {
+                              val replyBuf = Unpooled.wrappedBuffer(replyBits.toByteBuffer)
+                              val replyPacket = new DatagramPacket(replyBuf, remoteAddress)
+                              ctx.writeAndFlush(replyPacket)
+                              ()
+                            } catch {
+                              case NonFatal(ex) =>
+                                logger.warn(
+                                  s"Sync responder write failed for $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
+                                )
+                            }
+                          }
+
                           handleMessage(remoteAddress, tryDecodeDatagram(datagram))
                         } catch {
                           case NonFatal(ex) =>
@@ -367,17 +400,42 @@ class StaticUDPPeerGroup[M] private (
 }
 
 object StaticUDPPeerGroup extends StrictLogging {
+  /** Synchronous fast-path responder. Invoked on the netty event-loop thread for every
+    * inbound datagram BEFORE the async cats-effect channel-replication path runs. If it
+    * returns `Some(replyBits)`, those bytes are written back to the sender via
+    * `writeAndFlush` on the same netty thread — no fiber hop, no compute-pool scheduling.
+    *
+    * The async path STILL runs after, so any side-effects (bonding, kademlia bookkeeping)
+    * still happen normally. The sync path just gets the response out the door fast.
+    *
+    * Used by the discv4 layer to send `Pong` replies inside hive's 300 ms `waitTime`
+    * deadline that the cats-effect IO scheduler can't meet under load (~600 ms observed
+    * end-to-end with structural fixes alone).
+    *
+    * Implementations MUST be fast (< 5 ms) and MUST NOT throw — any exception is caught
+    * by the peer group and the responder is treated as having returned None.
+    */
+  type SyncResponder = (InetSocketAddress, BitVector) => Option[BitVector]
+
+  /** Default no-op responder — always defers to the async path. */
+  val NoSyncResponder: SyncResponder = (_, _) => None
+
   case class Config(
       bindAddress: InetSocketAddress,
       processAddress: InetMultiAddress,
       // Maximum number of messages in the queue associated with the channel; 0 means unlimited.
       channelCapacity: Int,
       // Maximum size of an incoming message; 0 means the maximum 64KiB is allocated for each message.
-      receiveBufferSizeBytes: Int
+      receiveBufferSizeBytes: Int,
+      // Optional synchronous response hook; see `SyncResponder`.
+      // No default here because Scala 3 forbids overloaded `apply` methods that
+      // each carry default args. Callers either pass `NoSyncResponder` explicitly
+      // or use the simpler bind-address-only companion `apply` below.
+      syncResponder: SyncResponder
   )
   object Config {
     def apply(bindAddress: InetSocketAddress, channelCapacity: Int = 0, receiveBufferSizeBytes: Int = 0): Config =
-      Config(bindAddress, InetMultiAddress(bindAddress), channelCapacity, receiveBufferSizeBytes)
+      Config(bindAddress, InetMultiAddress(bindAddress), channelCapacity, receiveBufferSizeBytes, NoSyncResponder)
   }
 
   private type ChannelAlloc[M] = (ChannelImpl[M], Release)
