@@ -1,6 +1,8 @@
 package com.chipprbots.scalanet.discovery.ethereum.v4
 
 import java.net.InetSocketAddress
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 import scala.util.control.NonFatal
@@ -36,6 +38,18 @@ import scodec.bits.BitVector
   */
 object Discv4SyncResponder extends LazyLogging {
 
+  /** Default global rate: 200 sync responses/second, burst 100.
+    *
+    * Tuned for legitimate hive-style bursts (≤16 Pings in ~22 ms intervals all
+    * served from the burst budget) while capping sustained ECDSA cost on the
+    * single netty event-loop thread. ECDSA sign/verify is ~3–5 ms each, so
+    * 200/sec × 10 ms ≈ 100% of one thread at the sustained rate. Above that
+    * the responder returns None and the async path handles the Ping (slowly,
+    * but on a different thread pool).
+    */
+  private val DefaultTokensPerSecond = 200
+  private val DefaultMaxBurst = 100
+
   /** Build a SyncResponder for discv4 Ping → Pong.
     *
     * @param privateKey local node's secp256k1 private key, used to sign Pong
@@ -44,25 +58,79 @@ object Discv4SyncResponder extends LazyLogging {
     * @param localEnrSeqRef supplier of the local ENR seq number; pass an
     *        `AtomicReference[Option[Long]]` so the discovery service can update it
     *        as the ENR rotates without re-allocating the responder
+    * @param rateLimiter optional override of the default token-bucket. Pass a custom
+    *        instance to tune the global sync-path budget (e.g., disable for tests).
     */
   def apply(
       privateKey: PrivateKey,
       expirationSeconds: Long,
       maxClockDriftSeconds: Long,
-      localEnrSeqRef: AtomicReference[Option[Long]]
+      localEnrSeqRef: AtomicReference[Option[Long]],
+      rateLimiter: RateLimiter = new RateLimiter(DefaultTokensPerSecond, DefaultMaxBurst)
   )(implicit
       payloadCodec: Codec[Payload],
       packetCodec: Codec[Packet],
       sigalg: SigAlg
   ): StaticUDPPeerGroup.SyncResponder = (sender: InetSocketAddress, incomingBits: BitVector) => {
-    try respond(sender, incomingBits, privateKey, expirationSeconds, maxClockDriftSeconds, localEnrSeqRef)
-    catch {
-      case NonFatal(ex) =>
-        logger.warn(
-          s"discv4 sync-fastpath: unexpected error producing Pong for $sender: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
-        )
-        None
+    if (!rateLimiter.tryAcquire()) {
+      // Rate-limited: drop the sync-path response and let the async path take over.
+      // Logged at debug to avoid noise under sustained traffic; the warn logger fires
+      // on actual responder errors, not on intentional rate-limit drops.
+      logger.debug(s"discv4 sync-fastpath: rate-limited request from $sender")
+      None
+    } else {
+      try respond(sender, incomingBits, privateKey, expirationSeconds, maxClockDriftSeconds, localEnrSeqRef)
+      catch {
+        case NonFatal(ex) =>
+          logger.warn(
+            s"discv4 sync-fastpath: unexpected error producing Pong for $sender: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
+          )
+          None
+      }
     }
+  }
+
+  /** Token-bucket rate limiter for the sync-path responder.
+    *
+    * Bounds the netty event-loop thread cost under flood. Tokens are replenished
+    * lazily on each call (no scheduled task), so the cost of the limiter itself
+    * is just a few atomic CAS ops — well below the ECDSA cost it gates.
+    *
+    * `tryAcquire()` is wait-free and safe to call from any thread, but in this
+    * codebase it's only ever called from the single netty event-loop thread, so
+    * contention is effectively zero.
+    */
+  class RateLimiter(tokensPerSecond: Int, maxBurst: Int) {
+    require(tokensPerSecond > 0, "tokensPerSecond must be positive")
+    require(maxBurst > 0, "maxBurst must be positive")
+
+    private val tokens = new AtomicInteger(maxBurst)
+    private val lastRefillNanos = new AtomicLong(System.nanoTime())
+    private val nanosPerToken: Long = 1_000_000_000L / tokensPerSecond.toLong
+
+    def tryAcquire(): Boolean = {
+      // Lazy refill — top up the bucket based on elapsed wall-clock time.
+      val now = System.nanoTime()
+      val last = lastRefillNanos.get()
+      val elapsed = now - last
+      if (elapsed >= nanosPerToken) {
+        val toAdd = (elapsed / nanosPerToken).toInt
+        if (toAdd > 0 && lastRefillNanos.compareAndSet(last, now)) {
+          tokens.updateAndGet(t => math.min(t + toAdd, maxBurst))
+        }
+      }
+      // Try to consume a token. Loop on contention; in practice this runs on
+      // a single netty thread so the CAS rarely fails.
+      var t = tokens.get()
+      while (t > 0) {
+        if (tokens.compareAndSet(t, t - 1)) return true
+        t = tokens.get()
+      }
+      false
+    }
+
+    /** Test/diag accessor — current available tokens. Volatile read, may be stale. */
+    private[v4] def availableTokens: Int = tokens.get()
   }
 
   private def respond(

@@ -146,4 +146,45 @@ class Discv4SyncResponderSpec extends AnyFlatSpec with Matchers {
     val corrupt = pingPacket.copy(hash = Hash(BitVector(corruptHashBytes)))
     responder(sender, encodePacket(corrupt)) shouldBe None
   }
+
+  it should "drop sync-path responses once the global rate limit is exhausted" taggedAs (UnitTest, NetworkTest) in {
+    // Tight rate limit: 1 token/sec, burst 2. Three Pings in quick succession —
+    // first two consume the burst, third hits the empty bucket and falls through.
+    val (_, privateKey) = freshKeyPair
+    val limiter = new Discv4SyncResponder.RateLimiter(tokensPerSecond = 1, maxBurst = 2)
+    val responder = Discv4SyncResponder(
+      privateKey = privateKey,
+      expirationSeconds = expirationSeconds,
+      maxClockDriftSeconds = maxClockDriftSeconds,
+      localEnrSeqRef = new java.util.concurrent.atomic.AtomicReference[Option[Long]](None),
+      rateLimiter = limiter
+    )
+
+    def freshPingBits(): BitVector = {
+      val ping = Payload.Ping(
+        version = 4,
+        from = makeAddress(31000),
+        to = makeAddress(31002),
+        expiration = System.currentTimeMillis() / 1000 + expirationSeconds,
+        enrSeq = None
+      )
+      encodePacket(Packet.pack(ping, privateKey).require)
+    }
+
+    // Burst of 2 — both should be served.
+    responder(sender, freshPingBits()) should not be empty
+    responder(sender, freshPingBits()) should not be empty
+
+    // Third within the same second — bucket empty, sync path drops.
+    responder(sender, freshPingBits()) shouldBe None
+  }
+
+  it should "refill rate-limit tokens lazily based on elapsed time" taggedAs (UnitTest, NetworkTest) in {
+    // 100 tokens/sec → 1 token per 10 ms. Burst of 1.
+    val limiter = new Discv4SyncResponder.RateLimiter(tokensPerSecond = 100, maxBurst = 1)
+    limiter.tryAcquire() shouldBe true
+    limiter.tryAcquire() shouldBe false
+    Thread.sleep(20) // wait for at least 1 token to refill
+    limiter.tryAcquire() shouldBe true
+  }
 }
