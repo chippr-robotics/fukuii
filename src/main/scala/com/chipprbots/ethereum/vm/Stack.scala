@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.vm
 
+import scala.collection.immutable.ArraySeq
+
 import com.chipprbots.ethereum.domain.UInt256
 
 object Stack {
@@ -9,7 +11,7 @@ object Stack {
   val DefaultMaxSize = 1024
 
   def empty(maxSize: Int = DefaultMaxSize): Stack =
-    new Stack(Vector(), maxSize)
+    new Stack(ArraySeq.empty, maxSize)
 }
 
 //TODO: consider a List with head being top of the stack (DUP,SWAP go at most the depth of 16)
@@ -17,11 +19,11 @@ object Stack {
   * overflow and underflow errors. Any operations that trascend given stack bounds will return the stack unchanged. Pop
   * will always return zeroes in such case.
   */
-class Stack private (private val underlying: Vector[UInt256], val maxSize: Int) {
+class Stack private (private val underlying: ArraySeq[UInt256], val maxSize: Int) {
 
   def pop(): (UInt256, Stack) = underlying.lastOption match {
     case Some(word) =>
-      val updated = underlying.dropRight(1)
+      val updated = underlying.init
       (word, copy(updated))
 
     case None =>
@@ -102,6 +104,6 @@ class Stack private (private val underlying: Vector[UInt256], val maxSize: Int) 
   override def toString: String =
     underlying.reverse.mkString("Stack(", ",", ")")
 
-  private def copy(updated: Vector[UInt256]): Stack =
+  private def copy(updated: ArraySeq[UInt256]): Stack =
     new Stack(updated, maxSize)
 }
