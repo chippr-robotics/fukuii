@@ -67,6 +67,9 @@ class StorageRangeCoordinator(
 
   // Task management
   private val tasks = mutable.Queue[StorageTask]()
+  // Dedup gate: (accountHash, next) uniquely identifies a pending task. Prevents duplicate
+  // enqueues when a timeout re-queues a batch that was already re-queued by another in-flight timeout.
+  private val pendingTaskKeys = mutable.Set[(ByteString, ByteString)]()
   private val activeTasks =
     mutable.Map[BigInt, (Peer, Seq[StorageTask], BigInt, ByteString)]() // requestId -> (peer, tasks, requestedBytes, dispatchRoot)
   private val completedTasks = mutable.ArrayBuffer[StorageTask]()
@@ -122,6 +125,12 @@ class StorageRangeCoordinator(
   private var postRefreshCooldownUntilMs: Long = 0
   private val postRefreshCooldownMs: Long = 10000L // 10 seconds after pivot refresh
 
+  // Consecutive idle dispatch checks: counts how many times tryRedispatchPendingTasks() found tasks
+  // pending but zero eligible peers AND zero active requests. At threshold, requests pivot refresh
+  // as an escape — same pattern as TrieNodeHealingCoordinator's BUG-M3 fix.
+  private var storageIdleChecks: Int = 0
+  private val storageIdleEscapeThreshold: Int = 5
+
   private def isPostRefreshCooldownActive: Boolean =
     System.currentTimeMillis() < postRefreshCooldownUntilMs
 
@@ -163,7 +172,7 @@ class StorageRangeCoordinator(
       // Re-queue any stale in-flight tasks from ghost peers
       if (activeTasks.nonEmpty) {
         val staleCount = activeTasks.size
-        activeTasks.values.foreach { case (_, batchTasks, _) =>
+        activeTasks.values.foreach { case (_, batchTasks, _, _) =>
           batchTasks.foreach { task =>
             task.pending = false
             tasks.enqueue(task)
@@ -764,13 +773,17 @@ class StorageRangeCoordinator(
     // snap/1 origin/limit semantics apply to the first account only. To avoid incorrect continuation
     // behavior, only batch tasks that request the initial full range.
     val first = tasks.dequeue()
+    pendingTaskKeys -= ((first.accountHash, first.next))
     val batchTasks: Seq[StorageTask] =
       if (!isInitialRange(first) || peerBatch <= 1) {
         Seq(first)
       } else {
         val buf = mutable.ArrayBuffer[StorageTask](first)
-        while (buf.size < peerBatch && tasks.nonEmpty && isInitialRange(tasks.front))
-          buf += tasks.dequeue()
+        while (buf.size < peerBatch && tasks.nonEmpty && isInitialRange(tasks.front)) {
+          val t = tasks.dequeue()
+          pendingTaskKeys -= ((t.accountHash, t.next))
+          buf += t
+        }
         buf.toSeq
       }
 
@@ -1087,7 +1100,11 @@ class StorageRangeCoordinator(
 
       batchTasks.foreach { task =>
         task.pending = false
-        tasks.enqueue(task)
+        val key = (task.accountHash, task.next)
+        if (!pendingTaskKeys.contains(key)) {
+          pendingTaskKeys += key
+          tasks.enqueue(task)
+        }
       }
 
       if (forcedComplete) self ! ForceCompleteStorage
@@ -1115,7 +1132,22 @@ class StorageRangeCoordinator(
     val eligiblePeers = knownAvailablePeers
       .filterNot(p => isPeerStateless(p) || isPeerCoolingDown(p))
       .toList
-    if (eligiblePeers.isEmpty) return
+    if (eligiblePeers.isEmpty) {
+      if (tasks.nonEmpty && activeTasks.isEmpty) {
+        storageIdleChecks += 1
+        if (storageIdleChecks >= storageIdleEscapeThreshold) {
+          log.warning(
+            s"[STORAGE] No eligible peers for $storageIdleChecks consecutive redispatch checks with " +
+              s"${tasks.size} pending tasks and no active requests — requesting pivot refresh"
+          )
+          storageIdleChecks = 0
+          maybeRequestPivotRefresh()
+        }
+      }
+      return
+    } else {
+      storageIdleChecks = 0
+    }
 
     for (peer <- eligiblePeers if tasks.nonEmpty)
       dispatchIfPossible(peer)
