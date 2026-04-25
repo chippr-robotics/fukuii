@@ -82,20 +82,20 @@ jobs:
 
     steps:
       - name: Checkout fukuii
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
           fetch-depth: 1
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '21'
           cache: 'sbt'
 
       - name: Cache Coursier / Ivy / sbt
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cache/coursier
@@ -177,9 +177,13 @@ jobs:
           cp target/scala-3.3.4/fukuii-assembly-*.jar external/hive/clients/fukuii/
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: 'stable'
+          # We build hive from external/hive (cloned at runtime); this repo has
+          # no go.sum, so disable the default dependency cache to silence the
+          # "Dependencies file is not found … go.sum" warning.
+          cache: false
 
       - name: Build hive
         working-directory: external/hive
@@ -234,45 +238,86 @@ jobs:
           THRESHOLD: ${{ inputs.pass_threshold }}
           HIVE_EXIT: ${{ steps.sim.outputs.hive_exit }}
         run: |
-          set -uxo pipefail
+          set -uo pipefail
+          shopt -s nullglob
+
+          # Hive writes structured per-suite results to workspace/logs/*.json
+          # (each contains a `testCases` map; cases have `summaryResult.pass`).
+          # The simulator stdout log format varies wildly between simulators —
+          # devp2p, rpc, sync, consensus, EELS pytest-xdist, etc all use
+          # different verdict strings — so grepping the log is unreliable and
+          # was producing 0/0 even when tests ran. JSON is canonical.
+          passed=0
+          failed=0
+          json_count=0
+          for jf in workspace/logs/*.json; do
+            jq -e 'has("testCases")' "$jf" >/dev/null 2>&1 || continue
+            json_count=$((json_count + 1))
+            p=$(jq '[.testCases | to_entries[] | select(.value.summaryResult.pass == true)]  | length' "$jf")
+            f=$(jq '[.testCases | to_entries[] | select(.value.summaryResult.pass == false)] | length' "$jf")
+            passed=$((passed + p))
+            failed=$((failed + f))
+          done
+
+          # Fallback: if no JSON results parsed (e.g. simulator died before
+          # writing them), grep the simulator log against the union of common
+          # verdict patterns: pytest-xdist (`[gwN] PASSED `), classic hive
+          # (`PASSED tests/`), and go-test (`--- PASS:`).
           sim_log=$(ls -t workspace/logs/*-simulator-*.log 2>/dev/null | head -1 || true)
-          if [ -z "$sim_log" ]; then
-            passed=0
-            failed=0
-          else
-            passed=$(grep -c "PASSED tests/" "$sim_log" || true)
-            failed=$(grep -c "FAILED tests/" "$sim_log" || true)
+          if [ "$json_count" -eq 0 ] && [ -n "$sim_log" ]; then
+            passed=$(grep -cE '(\] PASSED |PASSED tests/|--- PASS:)' "$sim_log" 2>/dev/null || true)
+            failed=$(grep -cE '(\] FAILED |FAILED tests/|--- FAIL:)' "$sim_log" 2>/dev/null || true)
+            passed=${passed:-0}
+            failed=${failed:-0}
           fi
+
           total=$((passed + failed))
-          echo "passed=$passed" >> "$GITHUB_OUTPUT"
-          echo "failed=$failed" >> "$GITHUB_OUTPUT"
-          echo "total=$total"  >> "$GITHUB_OUTPUT"
+          echo "passed=$passed"           >> "$GITHUB_OUTPUT"
+          echo "failed=$failed"           >> "$GITHUB_OUTPUT"
+          echo "total=$total"             >> "$GITHUB_OUTPUT"
+          echo "json_count=$json_count"   >> "$GITHUB_OUTPUT"
           {
             echo "### Hive · ${LABEL} (\`${SIM}\`)"
             echo
-            echo "| passed | failed | total | threshold | hive exit |"
-            echo "|-------:|-------:|------:|----------:|----------:|"
-            echo "| ${passed} | ${failed} | ${total} | ${THRESHOLD} | ${HIVE_EXIT:-?} |"
+            echo "| passed | failed | total | threshold | hive exit | source |"
+            echo "|-------:|-------:|------:|----------:|----------:|:-------|"
+            if [ "$json_count" -gt 0 ]; then
+              src="${json_count} JSON results"
+            elif [ -n "$sim_log" ]; then
+              src="grep fallback"
+            else
+              src="(none)"
+            fi
+            echo "| ${passed} | ${failed} | ${total} | ${THRESHOLD} | ${HIVE_EXIT:-?} | ${src} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          # When no simulator log exists, hive died before launching the sim —
-          # dump the tail of the hive stdout so the PR check can show why.
-          if [ -z "$sim_log" ]; then
+          # Diagnostics: surface tail of the relevant log when results look
+          # suspicious so the failure is actionable from the PR check page.
+          if [ -z "$sim_log" ] && [ "$json_count" -eq 0 ]; then
             {
               echo
-              echo "**No simulator log produced.** Tail of \`hive-run.log\`:"
+              echo "**No simulator log or JSON results produced.** Tail of \`hive-run.log\`:"
               echo
               echo '```'
               tail -n 80 hive-run.log 2>/dev/null || echo "(hive-run.log missing)"
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$failed" -gt 0 ]; then
+          elif [ "$total" -eq 0 ]; then
+            {
+              echo
+              echo "**Simulator produced no test results.** Tail of simulator log:"
+              echo
+              echo '```'
+              tail -n 80 "$sim_log" 2>/dev/null || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$failed" -gt 0 ] && [ -n "$sim_log" ]; then
             {
               echo
               echo "<details><summary>First 20 FAILED tests</summary>"
               echo
               echo '```'
-              grep "FAILED tests/" "$sim_log" | head -20
+              grep -E '(\] FAILED |FAILED tests/|--- FAIL:)' "$sim_log" | head -20
               echo '```'
               echo
               echo "</details>"
@@ -281,7 +326,7 @@ jobs:
 
       - name: Upload simulator logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: hive-logs-${{ inputs.label }}
           path: |
