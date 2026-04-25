@@ -86,14 +86,12 @@ class NetworkPeerManagerActor(
     handleCommonMessages(peersWithInfo).orElse(handlePeersInfoEvents(peersWithInfo))
 
   private def peerHasUpdatedBestBlock(peerInfo: PeerInfo): Boolean = {
-    val peerBestBlockIsItsGenesisBlock = peerInfo.bestBlockHash == peerInfo.remoteStatus.genesisHash
-    // ETH/68 SNAP peers have no block number at handshake (ETH/68 Status carries only TD, not block height).
-    // Include them immediately so they reach peersToDownloadFrom — otherwise they never receive
-    // GetBlockHeaders, maxBlockNumber never updates, and SNAP storage sync deadlocks permanently.
-    // Aligned with Besu: no peerHasUpdatedBestBlock gate; all handshaked peers enter the pool.
-    peerBestBlockIsItsGenesisBlock ||
-    peerInfo.remoteStatus.supportsSnap ||
-    (!peerBestBlockIsItsGenesisBlock && peerInfo.maxBlockNumber > 0)
+    // Besu-aligned: no chain-state gate at handshake time. ETH/68 Status carries only TD (no
+    // block number), so maxBlockNumber=0 for all ETH/68 peers at handshake. Excluding them
+    // deadlocks peer acquisition — they can never receive GetBlockHeaders to update their
+    // maxBlockNumber. Consumers (SyncController.runningRecovery, SNAPSyncController) do their
+    // own supportsSnap filtering.
+    true
   }
 
   /** Processes both messages for sending messages and for requesting peer information
