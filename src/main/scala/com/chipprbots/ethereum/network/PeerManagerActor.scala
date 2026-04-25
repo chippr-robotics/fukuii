@@ -259,11 +259,17 @@ class PeerManagerActor(
 
   private def handleConnections(connectedPeers: ConnectedPeers): Receive = {
     case PeerClosedConnection(peerAddress, reason) =>
-      blacklist.add(
-        PeerAddress(peerAddress),
-        getBlacklistDuration(reason),
-        Blacklist.BlacklistReason.getP2PBlacklistReasonByDescription(Disconnect.reasonToString(reason))
-      )
+      val isMaintainedPeer = connectedPeers.peers.values
+        .find(_.remoteAddress.getHostString == peerAddress)
+        .flatMap(_.nodeId)
+        .exists(nid => maintainedPeersByNodeId.contains(Hex.toHexString(nid.toArray)))
+      if (!isMaintainedPeer) {
+        blacklist.add(
+          PeerAddress(peerAddress),
+          getBlacklistDuration(reason),
+          Blacklist.BlacklistReason.getP2PBlacklistReasonByDescription(Disconnect.reasonToString(reason))
+        )
+      }
 
     case HandlePeerConnection(connection, remoteAddress) =>
       handleConnection(connection, remoteAddress, connectedPeers)
