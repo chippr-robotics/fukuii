@@ -8,23 +8,23 @@ This guide covers building Fukuii from source for development or custom builds.
 
 | Software | Version | Purpose |
 |----------|---------|---------|
-| JDK | 21 | Runtime and build |
+| JDK | 25 | Runtime and build |
 | sbt | 1.10.7+ | Scala build tool |
 | Git | Any | Version control |
 
-### Install JDK 21
+### Install JDK 25
 
 === "Ubuntu/Debian"
 
     ```bash
     sudo apt-get update
-    sudo apt-get install openjdk-21-jdk
+    sudo apt-get install openjdk-25-jdk
     ```
 
 === "macOS"
 
     ```bash
-    brew install openjdk@21
+    brew install openjdk@25
     ```
 
 === "Windows"
@@ -35,7 +35,7 @@ Verify installation:
 
 ```bash
 java -version
-# Should show: openjdk version "21.x.x"
+# Should show: openjdk version "25.x.x"
 ```
 
 ### Install sbt
@@ -105,7 +105,7 @@ The distribution is created at: `target/universal/fukuii-<version>.zip`
 sbt assembly
 ```
 
-The JAR is created at: `target/scala-3.3.4/fukuii-assembly-<version>.jar`
+The JAR is created at: `target/scala-3.3.7/fukuii-assembly-<version>.jar`
 
 ## Run from Source
 
@@ -202,7 +202,7 @@ Increase heap size in `.jvmopts`:
 
 ### Compilation Errors
 
-Ensure you're using JDK 21:
+Ensure you're using JDK 25:
 
 ```bash
 java -version

@@ -1378,7 +1378,7 @@ curl -X POST http://localhost:8546 \
 {
   "jsonrpc": "2.0",
   "id": 1,
-  "result": "Fukuii/v1.1.0/linux-amd64/scala3.3.4"
+  "result": "Fukuii/v1.1.0/linux-amd64/scala3.3.7"
 }
 ```
 

@@ -2,7 +2,7 @@
 # Development image for Fukuii builds
 # This image includes JDK and SBT for development and CI/CD
 
-FROM eclipse-temurin:21-jdk-noble
+FROM eclipse-temurin:25-jdk-noble
 
 # OCI labels for container metadata
 LABEL org.opencontainers.image.title="Fukuii Development Image"

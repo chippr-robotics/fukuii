@@ -235,7 +235,7 @@ val isRegression = KPIBaselines.Validation.isRegression(actual, baseline)
 sbt testCoverage
 
 # View HTML report
-open target/scala-3.3.4/scoverage-report/index.html
+open target/scala-3.3.7/scoverage-report/index.html
 ```
 
 ## Monitoring and Alerting

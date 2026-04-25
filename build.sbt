@@ -44,7 +44,7 @@ crossPaths := true
 // patch for error on 'early-semver' problems
 ThisBuild / evictionErrorLevel := Level.Info
 
-val `scala-3` = "3.3.4" // Scala 3 LTS version
+val `scala-3` = "3.3.7" // Scala 3 LTS version
 val supportedScalaVersions = List(`scala-3`) // Scala 3 only
 
 // Base scalac options

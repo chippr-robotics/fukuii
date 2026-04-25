@@ -11,7 +11,7 @@ fukuii/
 ├── CHANGELOG.md                 # Release history
 ├── CONTRIBUTING.md              # Contribution guidelines
 ├── .claude/CLAUDE.md            # Claude Code project instructions (sync bugs, test tiers, boundaries)
-├── build.sbt                    # SBT build definition (Scala 3.3.4, JDK 21)
+├── build.sbt                    # SBT build definition (Scala 3.3.7, JDK 25)
 ├── version.sbt                  # Version: 0.1.240
 │
 ├── src/                         # Scala source code

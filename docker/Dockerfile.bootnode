@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.4
 # Multi-stage Dockerfile for Fukuii Ethereum Client - Bootnode
 # Pre-configured as a bootnode with high peer capacity and in-memory pruning
-FROM eclipse-temurin:21-jdk-noble AS builder
+FROM eclipse-temurin:25-jdk-noble AS builder
 
 # Install required build tools including SBT
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -55,7 +55,7 @@ RUN cd target/universal && \
     mv "$DIST_DIR" /fukuii-dist
 
 # Stage 2: Runtime stage using slim JRE
-FROM eclipse-temurin:21-jre-noble
+FROM eclipse-temurin:25-jre-noble
 
 # OCI labels for container metadata
 LABEL org.opencontainers.image.title="Fukuii Ethereum Client - Bootnode"
