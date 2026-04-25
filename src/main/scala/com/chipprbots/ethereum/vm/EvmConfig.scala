@@ -295,11 +295,8 @@ case class EvmConfig(
       accessList.size * G_access_list_address +
         accessList.map(_.storageKeys.size).sum * G_access_list_storage
 
-    // EIP-7702: intrinsic gas charges PER_EMPTY_ACCOUNT_COST (25000) per auth
-    // tuple up-front. During execution, REFUND_PER_EXISTING_ACCOUNT (12500) is
-    // returned for each tuple whose target account already exists (capped at
-    // gasUsed/5). Spec: EELS prague/transactions.py calculate_intrinsic_cost.
-    val authListPrice: BigInt = BigInt(authorizationListSize) * BigInt(25000)
+    // EIP-7702: Per-authorization intrinsic gas = PER_AUTH_BASE_COST (12500) per EIP spec
+    val authListPrice: BigInt = BigInt(authorizationListSize) * BigInt(12500)
 
     val initCodeCost: BigInt = if (isContractCreation) calcInitCodeCost(txData) else BigInt(0)
 
