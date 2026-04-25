@@ -2,7 +2,7 @@
 
 ## Quick Setup
 
-**Prerequisites:** JDK 21, sbt 1.10.7+, Git
+**Prerequisites:** JDK 25, sbt 1.10.7+, Git
 
 ```bash
 git clone https://github.com/chippr-robotics/fukuii.git

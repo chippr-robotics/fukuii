@@ -1,7 +1,7 @@
 # Fukuii - Ethereum Classic Client
 
 **Status:** ALPHA — active bug-hunting and stabilization | OLYMPIA hard fork implementation (ECIP-1111/1112/1121)
-**Language:** Scala 3.3.4 LTS on JDK 21 LTS
+**Language:** Scala 3.3.7 LTS on JDK 25 LTS
 **Build:** sbt 1.10.7
 **License:** Apache 2.0
 **Origin:** Fork of Mantis (IOHK), maintained by Chippr Robotics LLC
@@ -37,7 +37,7 @@ java -Xmx4g \
   -Dfukuii.network.rpc.http.port=8553 \
   -Dfukuii.network.server-address.port=30305 \
   -Dfukuii.network.discovery.port=30305 \
-  -jar target/scala-3.3.4/fukuii-assembly-0.1.240.jar mordor
+  -jar target/scala-3.3.7/fukuii-assembly-0.1.240.jar mordor
 
 # ETC mainnet (fast sync only)
 java -Xmx4g \
@@ -49,7 +49,7 @@ java -Xmx4g \
   -Dfukuii.network.discovery.port=30305 \
   -Dfukuii.sync.do-fast-sync=true \
   -Dfukuii.sync.do-snap-sync=false \
-  -jar target/scala-3.3.4/fukuii-assembly-0.1.240.jar etc
+  -jar target/scala-3.3.7/fukuii-assembly-0.1.240.jar etc
 
 # ETC mainnet (SNAP sync)
 java -Xmx4g \
@@ -61,7 +61,7 @@ java -Xmx4g \
   -Dfukuii.network.discovery.port=30305 \
   -Dfukuii.sync.do-fast-sync=true \
   -Dfukuii.sync.do-snap-sync=true \
-  -jar target/scala-3.3.4/fukuii-assembly-0.1.240.jar etc
+  -jar target/scala-3.3.7/fukuii-assembly-0.1.240.jar etc
 ```
 
 Config path: `-Dfukuii.<key>=<value>` (HOCON, namespaced under `fukuii`)
@@ -72,7 +72,7 @@ Import pre-built chain data (RLP-encoded blocks) at startup:
 ```bash
 java -Xmx4g \
   -Dfukuii.import-chain-file=/path/to/chain.rlp \
-  -jar target/scala-3.3.4/fukuii-assembly-0.1.240.jar mordor
+  -jar target/scala-3.3.7/fukuii-assembly-0.1.240.jar mordor
 ```
 
 Blocks are executed through the standard block validation + execution pipeline and persisted with receipts and chain weight. Used by hive test framework and for bootstrapping from exported chain data.

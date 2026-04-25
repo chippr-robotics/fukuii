@@ -2,11 +2,11 @@
 # Run Fukuii on ETC mainnet (chain ID 61)
 # Ports: 8551 (HTTP), 30305 (P2P)
 # Config overrides default ports for multi-client setup
-# Requires: sbt assembly (builds target/scala-3.3.4/fukuii-assembly-*.jar)
+# Requires: sbt assembly (builds target/scala-3.3.7/fukuii-assembly-*.jar)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-JAR="$SCRIPT_DIR/target/scala-3.3.4/fukuii-assembly-0.1.240.jar"
+JAR="$SCRIPT_DIR/target/scala-3.3.7/fukuii-assembly-0.1.240.jar"
 if [ ! -f "$JAR" ]; then
   echo "ERROR: JAR not found at $JAR" >&2
   echo "Run 'sbt assembly' first." >&2

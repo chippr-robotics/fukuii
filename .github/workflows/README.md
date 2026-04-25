@@ -33,13 +33,13 @@ This directory contains the GitHub Actions workflows for continuous integration,
 **Purpose:** Ensures code quality and tests pass before merging
 
 **Matrix Build:**
-- **JDK Version:** 21
+- **JDK Version:** 25
 - **Operating System:** ubuntu-latest
 - **Caching:** Coursier, Ivy, and SBT for faster builds
 
 **Steps:**
 1. Checks out code with submodules
-2. Sets up Java (21) with Temurin distribution
+2. Sets up Java (25) with Temurin distribution
 3. Configures Coursier and Ivy caching
 4. Installs SBT
 5. Compiles all modules (bytes, crypto, rlp, node)

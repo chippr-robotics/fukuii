@@ -47,8 +47,8 @@
 **Project metadata**
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Scala](https://img.shields.io/badge/Scala-3.3.4%20LTS-DC322F?logo=scala&logoColor=white)](https://www.scala-lang.org/)
-[![JDK](https://img.shields.io/badge/JDK-21%20LTS-orange?logo=openjdk&logoColor=white)](https://adoptium.net/)
+[![Scala](https://img.shields.io/badge/Scala-3.3.7%20LTS-DC322F?logo=scala&logoColor=white)](https://www.scala-lang.org/)
+[![JDK](https://img.shields.io/badge/JDK-25%20LTS-orange?logo=openjdk&logoColor=white)](https://adoptium.net/)
 [![Latest Release](https://img.shields.io/github/v/release/chippr-robotics/fukuii?include_prereleases&sort=semver)](https://github.com/chippr-robotics/fukuii/releases)
 [![Docker Pulls](https://img.shields.io/docker/pulls/chipprbots/fukuii.svg)](https://hub.docker.com/r/chipprbots/fukuii)
 
@@ -117,7 +117,7 @@ See [CON-002: Bootstrap Checkpoints](docs/adr/consensus/CON-002-bootstrap-checkp
 
 ### 🛡️ Production-Ready
 
-- **Scala 3.3.4 (LTS)** and **JDK 21 (LTS)** for long-term stability
+- **Scala 3.3.7 (LTS)** and **JDK 25 (LTS)** for long-term stability
 - **Apache Pekko** actor system for reliable concurrency
 - **Full ECIP-1066 Compliance**: Implements all 14 ETC hard forks from Frontier through Spiral (block 19,250,000), including Magneto (ECIP-1103), Mystique (ECIP-1104), and Spiral (ECIP-1109), plus Olympia (ECIP-1111/1112/1121)
 - **2,314 Tests Passing**: Comprehensive unit, integration, and blockchain test suite
@@ -290,7 +290,7 @@ The fastest way to start developing is using GitHub Codespaces, which provides a
 
 1. Click the green "Code" button on the repository page
 2. Select "Open with Codespaces"
-3. Wait for the environment to initialize (automatically installs JDK 21, SBT, and Scala)
+3. Wait for the environment to initialize (automatically installs JDK 25, SBT, and Scala)
 
 See [.devcontainer/README.md](.devcontainer/README.md) for more details.
 
@@ -298,13 +298,13 @@ See [.devcontainer/README.md](.devcontainer/README.md) for more details.
 
 To build Fukuii from source locally you will need:
 
-- **JDK 21**
+- **JDK 25**
 - **sbt** (Scala build tool, version 1.10.7+)
 - **Python** (for certain auxiliary scripts)
 
 ### Scala Version Support
 
-Fukuii is built with **Scala 3.3.4 (LTS)**, providing modern language features, improved type inference, and better performance.
+Fukuii is built with **Scala 3.3.7 (LTS)**, providing modern language features, improved type inference, and better performance.
 
 ### Building the client
 
@@ -490,7 +490,7 @@ Prometheus metrics + Grafana dashboards provide deep visibility into sync phases
 
 ## Development and Future Plans
 
-**Technology Stack**: This project uses **Scala 3.3.4 (LTS)** and **JDK 21 (LTS)** as the primary and only supported versions. The migration from Scala 2.13 to Scala 3 and JDK 17 to JDK 21 was completed in October 2025, including:
+**Technology Stack**: This project uses **Scala 3.3.7 (LTS)** and **JDK 25 (LTS)** as the primary and only supported versions. The migration from Scala 2.13 to Scala 3 and JDK 17 to JDK 21 was completed in October 2025, with a subsequent upgrade to Scala 3.3.7 and JDK 25 LTS, including:
 - ✅ Migration from Akka to Apache Pekko (Scala 3 compatible)
 - ✅ Migration from Monix to Cats Effect 3 IO
 - ✅ Migration from Shapeless to native Scala 3 derivation
