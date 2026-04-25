@@ -463,8 +463,11 @@ class PeerManagerActor(
       context.become(listening(newConnectedPeers))
 
     case PeerEvent.PeerHandshakeSuccessful(handshakedPeer, _) =>
+      val isMaintained = handshakedPeer.nodeId.exists(nid =>
+        maintainedPeersByNodeId.contains(Hex.toHexString(nid.toArray))
+      )
       if (
-        handshakedPeer.incomingConnection && connectedPeers.incomingHandshakedPeersCount >= peerConfiguration.maxIncomingPeers
+        handshakedPeer.incomingConnection && connectedPeers.incomingHandshakedPeersCount >= peerConfiguration.maxIncomingPeers && !isMaintained
       ) {
         handshakedPeer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.TooManyPeers)
 
