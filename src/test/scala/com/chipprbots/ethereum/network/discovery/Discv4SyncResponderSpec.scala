@@ -40,9 +40,10 @@ class Discv4SyncResponderSpec extends AnyFlatSpec with Matchers {
 
   private def buildResponder(
       privateKey: com.chipprbots.scalanet.discovery.crypto.PrivateKey,
-      enrSeqRef: AtomicReference[Option[Long]] = new AtomicReference(None)
+      enrSeqRef: AtomicReference[Option[Long]] = new AtomicReference(None),
+      dedup: Discv4SyncResponder.PingDedup = new Discv4SyncResponder.PingDedup
   ) =
-    Discv4SyncResponder(privateKey, expirationSeconds, maxClockDriftSeconds, enrSeqRef)
+    Discv4SyncResponder(privateKey, expirationSeconds, maxClockDriftSeconds, enrSeqRef, dedup)
 
   behavior.of("Discv4SyncResponder")
 
@@ -70,7 +71,11 @@ class Discv4SyncResponderSpec extends AnyFlatSpec with Matchers {
     replyPayload shouldBe a[Payload.Pong]
     val pong = replyPayload.asInstanceOf[Payload.Pong]
     pong.pingHash shouldBe pingPacket.hash
-    pong.to shouldBe pingTo
+    // Per discv4.md, Pong.to is "the address from which the packet was received" —
+    // i.e., the SENDER's address, NOT a copy of Ping.to.
+    pong.to.ip shouldBe sender.getAddress
+    pong.to.udpPort shouldBe sender.getPort
+    pong.to.tcpPort shouldBe 0
     pong.expiration should be > (System.currentTimeMillis() / 1000)
     pong.enrSeq shouldBe None
   }
@@ -157,6 +162,7 @@ class Discv4SyncResponderSpec extends AnyFlatSpec with Matchers {
       expirationSeconds = expirationSeconds,
       maxClockDriftSeconds = maxClockDriftSeconds,
       localEnrSeqRef = new java.util.concurrent.atomic.AtomicReference[Option[Long]](None),
+      dedup = new Discv4SyncResponder.PingDedup,
       rateLimiter = limiter
     )
 
@@ -186,5 +192,24 @@ class Discv4SyncResponderSpec extends AnyFlatSpec with Matchers {
     limiter.tryAcquire() shouldBe false
     Thread.sleep(20) // wait for at least 1 token to refill
     limiter.tryAcquire() shouldBe true
+  }
+
+  it should "mark Ping hashes in PingDedup so the async pipeline skips its Pong" taggedAs (UnitTest, NetworkTest) in {
+    val (_, privateKey) = freshKeyPair
+    val dedup = new Discv4SyncResponder.PingDedup
+    val responder = buildResponder(privateKey, dedup = dedup)
+
+    val ping = Payload.Ping(
+      version = 4,
+      from = makeAddress(31000),
+      to = makeAddress(31002),
+      expiration = System.currentTimeMillis() / 1000 + expirationSeconds,
+      enrSeq = None
+    )
+    val pingPacket = Packet.pack(ping, privateKey).require
+
+    dedup.isAlreadyResponded(pingPacket.hash) shouldBe false
+    responder(sender, encodePacket(pingPacket)) should not be empty
+    dedup.isAlreadyResponded(pingPacket.hash) shouldBe true
   }
 }

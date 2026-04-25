@@ -104,14 +104,20 @@ trait DiscoveryServiceBuilder extends Logger {
       // the DiscoveryService.stateRef so the seq stays in sync with ENR
       // rotations is a follow-up. Most discv4 hive tests don't check seq.
       localEnrSeqRef = new AtomicReference[Option[Long]](None)
+      // Shared dedup state between the sync responder and the async pipeline.
+      // The sync path marks every Ping it answers; the async pipeline checks
+      // before sending its own Pong so we don't emit duplicates on the wire
+      // (hive's discv4 simulator counts and rejects duplicate Pongs).
+      pingDedup = new v4.Discv4SyncResponder.PingDedup
       syncResponder = v4.Discv4SyncResponder(
         privateKey = privateKey,
         expirationSeconds = discoveryConfig.messageExpiration.toSeconds,
         maxClockDriftSeconds = discoveryConfig.maxClockDrift.toSeconds,
-        localEnrSeqRef = localEnrSeqRef
+        localEnrSeqRef = localEnrSeqRef,
+        dedup = pingDedup
       )
       udpConfig = makeUdpConfig(discoveryConfig, host, syncResponder)
-      network <- makeDiscoveryNetwork(privateKey, localNode, v4Config, udpConfig)
+      network <- makeDiscoveryNetwork(privateKey, localNode, v4Config, udpConfig, pingDedup)
       service <- makeDiscoveryService(privateKey, localNode, v4Config, network)
       _ <- Resource.eval {
         setDiscoveryStatus(nodeStatusHolder, ServerStatus.Listening(udpConfig.bindAddress))
@@ -218,7 +224,8 @@ trait DiscoveryServiceBuilder extends Logger {
       privateKey: PrivateKey,
       localNode: ENode,
       v4Config: v4.DiscoveryConfig,
-      udpConfig: StaticUDPPeerGroup.Config
+      udpConfig: StaticUDPPeerGroup.Config,
+      pingDedup: v4.Discv4SyncResponder.PingDedup
   )(implicit
       payloadCodec: Codec[v4.Payload],
       packetCodec: Codec[v4.Packet],
@@ -237,7 +244,8 @@ trait DiscoveryServiceBuilder extends Logger {
               udpPort = address.inetSocketAddress.getPort,
               tcpPort = 0
             ),
-          config = v4Config
+          config = v4Config,
+          pingDedup = pingDedup
         )
       }
     } yield network

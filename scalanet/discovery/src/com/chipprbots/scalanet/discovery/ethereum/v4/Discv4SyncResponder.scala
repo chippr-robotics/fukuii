@@ -1,6 +1,7 @@
 package com.chipprbots.scalanet.discovery.ethereum.v4
 
 import java.net.InetSocketAddress
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
@@ -9,6 +10,7 @@ import scala.util.control.NonFatal
 
 import com.chipprbots.scalanet.discovery.crypto.PrivateKey
 import com.chipprbots.scalanet.discovery.crypto.SigAlg
+import com.chipprbots.scalanet.discovery.hash.Hash
 import com.chipprbots.scalanet.peergroup.udp.StaticUDPPeerGroup
 import com.typesafe.scalalogging.LazyLogging
 import scodec.Codec
@@ -50,6 +52,42 @@ object Discv4SyncResponder extends LazyLogging {
   private val DefaultTokensPerSecond = 200
   private val DefaultMaxBurst = 100
 
+  /** TTL after which a recently-responded Ping hash is considered stale and pruned
+    * from the dedup set. Set well above the round-trip time so the async path's
+    * Ping handler still sees the hash, but short enough that map memory stays bounded.
+    */
+  private val DedupTtlMillis = 10_000L
+
+  /** Cache size cap before we sweep entries older than the TTL. */
+  private val DedupSweepThreshold = 4_096
+
+  /** Tracks Ping hashes the sync responder has just answered, so the async path
+    * can skip its own Pong send and avoid the duplicate. The map is shared with
+    * `DiscoveryNetwork` (which calls `dedupMarkSent` after sending Pong via the
+    * sync path, and `dedupCheckSent` before sending via the async path).
+    *
+    * Entries are pruned lazily on insert when the map exceeds DedupSweepThreshold.
+    */
+  class PingDedup {
+    private val responded = new ConcurrentHashMap[Hash, java.lang.Long](2048)
+
+    /** Mark the given Ping hash as having been responded-to via the sync path. */
+    def markSent(pingHash: Hash): Unit = {
+      val now = System.currentTimeMillis()
+      responded.put(pingHash, java.lang.Long.valueOf(now))
+      if (responded.size > DedupSweepThreshold) {
+        val cutoff = now - DedupTtlMillis
+        responded.entrySet.removeIf(e => e.getValue < cutoff)
+      }
+    }
+
+    /** Returns true if the Ping hash was responded-to recently (within TTL). */
+    def isAlreadyResponded(pingHash: Hash): Boolean = {
+      val ts = responded.get(pingHash)
+      ts != null && (System.currentTimeMillis() - ts) < DedupTtlMillis
+    }
+  }
+
   /** Build a SyncResponder for discv4 Ping → Pong.
     *
     * @param privateKey local node's secp256k1 private key, used to sign Pong
@@ -58,6 +96,10 @@ object Discv4SyncResponder extends LazyLogging {
     * @param localEnrSeqRef supplier of the local ENR seq number; pass an
     *        `AtomicReference[Option[Long]]` so the discovery service can update it
     *        as the ENR rotates without re-allocating the responder
+    * @param dedup shared dedup state — every Ping the sync path answers is
+    *        marked here so DiscoveryNetwork's async pipeline can skip the
+    *        duplicate Pong it would otherwise send. Must be the same instance
+    *        passed to DiscoveryNetwork.
     * @param rateLimiter optional override of the default token-bucket. Pass a custom
     *        instance to tune the global sync-path budget (e.g., disable for tests).
     */
@@ -66,6 +108,7 @@ object Discv4SyncResponder extends LazyLogging {
       expirationSeconds: Long,
       maxClockDriftSeconds: Long,
       localEnrSeqRef: AtomicReference[Option[Long]],
+      dedup: PingDedup,
       rateLimiter: RateLimiter = new RateLimiter(DefaultTokensPerSecond, DefaultMaxBurst)
   )(implicit
       payloadCodec: Codec[Payload],
@@ -79,7 +122,7 @@ object Discv4SyncResponder extends LazyLogging {
       logger.debug(s"discv4 sync-fastpath: rate-limited request from $sender")
       None
     } else {
-      try respond(sender, incomingBits, privateKey, expirationSeconds, maxClockDriftSeconds, localEnrSeqRef)
+      try respond(sender, incomingBits, privateKey, expirationSeconds, maxClockDriftSeconds, localEnrSeqRef, dedup)
       catch {
         case NonFatal(ex) =>
           logger.warn(
@@ -139,7 +182,8 @@ object Discv4SyncResponder extends LazyLogging {
       privateKey: PrivateKey,
       expirationSeconds: Long,
       maxClockDriftSeconds: Long,
-      localEnrSeqRef: AtomicReference[Option[Long]]
+      localEnrSeqRef: AtomicReference[Option[Long]],
+      dedup: PingDedup
   )(implicit
       payloadCodec: Codec[Payload],
       packetCodec: Codec[Packet],
@@ -161,14 +205,26 @@ object Discv4SyncResponder extends LazyLogging {
           // Expired — let the async path log and drop.
           None
         } else {
+          // Pong.to per discv4.md is "the address from which the packet was
+          // received" — i.e., the SENDER's address as seen by us, NOT a copy
+          // of Ping.to (which is the address of US, the recipient). Hive's
+          // simulator validates this and rejects the Pong otherwise.
+          val pongTo = com.chipprbots.scalanet.discovery.ethereum.Node.Address(
+            ip = sender.getAddress,
+            udpPort = sender.getPort,
+            tcpPort = 0
+          )
           val pong = Payload.Pong(
-            to = ping.to,
+            to = pongTo,
             pingHash = packet.hash,
             expiration = nowSeconds + expirationSeconds,
             enrSeq = localEnrSeqRef.get()
           )
           Packet.pack(pong, privateKey).toOption.flatMap { pongPacket =>
             packetCodec.encode(pongPacket).toOption.map { pongBits =>
+              // Record the Ping hash so DiscoveryNetwork's async path skips
+              // its own Pong send for this hash.
+              dedup.markSent(packet.hash)
               logger.debug(s"discv4 sync-fastpath: replied to Ping from $sender")
               pongBits
             }
