@@ -125,6 +125,11 @@ class TrieNodeHealingCoordinator(
   // Cleared on pivot refresh. Static peers (configured SNAP servers) are exempt.
   private val consecutiveGetTrieNodeTimeouts = mutable.HashMap.empty[String, Int]
   private val SnapTimeoutDisconnectThreshold = 5
+  // Global consecutive-timeout give-up: if ALL dispatched requests keep timing out with no
+  // successful responses, the coordinator is making zero progress (ETC SNAP peers not serving
+  // old pivot state). After this many consecutive timeouts across all peers, force-complete.
+  private var globalConsecutiveTimeouts: Int = 0
+  private val MaxGlobalConsecutiveTimeouts: Int = 20
   private var pivotRefreshRequested: Boolean = false
   // Post-pivot-refresh cooldown: prevents immediate re-dispatch before peers sync to new root.
   // Without this, all peers return empty → stateless → another HealingAllPeersStateless → tight loop.
@@ -669,6 +674,7 @@ class TrieNodeHealingCoordinator(
       statelessPeers -= peer.id.value
       // Besu PeerReputation.recordUsefulResponse(): reset consecutive timeout counter on success.
       consecutiveGetTrieNodeTimeouts.remove(peer.id.value)
+      globalConsecutiveTimeouts = 0
     } else {
       recordPeerCooldown(peer, "empty healing response")
       statelessPeers += peer.id.value
@@ -793,6 +799,17 @@ class TrieNodeHealingCoordinator(
     if (requeued > 0) {
       log.info(s"Re-queued $requeued timed-out healing tasks (pending: ${pendingTasks.size})" +
         (if (abandoned > 0) s", abandoned $abandoned" else ""))
+    }
+
+    globalConsecutiveTimeouts += 1
+    if (globalConsecutiveTimeouts >= MaxGlobalConsecutiveTimeouts) {
+      log.warning(
+        s"Force-completing healing coordinator after $globalConsecutiveTimeouts consecutive timeouts " +
+          s"(${pendingTasks.size} pending, $totalNodesHealed healed) — " +
+          s"ETC SNAP peers not serving pivot state. Missing nodes deferred to import-time recovery."
+      )
+      self ! HealingForceComplete
+      return
     }
 
     // Besu-aligned: no mass-abandonment on timeout. Per-task retry via maxRetriesPerTask=4 only.
