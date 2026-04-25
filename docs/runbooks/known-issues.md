@@ -589,13 +589,13 @@ Add to `.jvmopts`:
 -XX:InitiatingHeapOccupancyPercent=45
 ```
 
-**Or use ZGC** (JDK 21+, for large heaps and low latency):
+**Or use ZGC** (JDK 25+, for large heaps and low latency):
 ```
 -XX:+UseZGC
 -XX:ZCollectionInterval=30
 ```
 
-**Or use Shenandoah GC** (JDK 21+, alternative low-pause collector):
+**Or use Shenandoah GC** (JDK 25+, alternative low-pause collector):
 ```
 -XX:+UseShenandoahGC
 ```
@@ -705,7 +705,7 @@ ERROR [JVM] - UnsupportedClassVersionError
 
 #### Root Cause
 
-- Wrong JVM version (Fukuii requires JDK 21)
+- Wrong JVM version (Fukuii requires JDK 25)
 - Multiple JVM installations causing confusion
 
 #### Workaround
@@ -713,7 +713,7 @@ ERROR [JVM] - UnsupportedClassVersionError
 ```bash
 # Check current Java version
 java -version
-# Should show: openjdk version "21.x.x" or similar
+# Should show: openjdk version "25.x.x" or similar
 
 # Check which Java is being used
 which java
@@ -722,15 +722,15 @@ update-alternatives --display java
 
 #### Permanent Fix
 
-**Install JDK 21**:
+**Install JDK 25**:
 ```bash
 # Ubuntu/Debian
 sudo apt-get update
-sudo apt-get install openjdk-21-jdk
+sudo apt-get install openjdk-25-jdk
 
 # Set as default
 sudo update-alternatives --config java
-# Select JDK 21
+# Select JDK 25
 
 # Verify
 java -version
@@ -738,7 +738,7 @@ java -version
 
 **Explicitly set JAVA_HOME** (in startup script or environment):
 ```bash
-export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+export JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64
 export PATH=$JAVA_HOME/bin:$PATH
 ```
 
@@ -746,7 +746,7 @@ export PATH=$JAVA_HOME/bin:$PATH
 
 #### Status
 
-**Fixed**: Ensure JDK 21 is installed and used.
+**Fixed**: Ensure JDK 25 is installed and used.
 
 ---
 

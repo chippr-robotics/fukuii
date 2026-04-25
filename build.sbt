@@ -44,7 +44,7 @@ crossPaths := true
 // patch for error on 'early-semver' problems
 ThisBuild / evictionErrorLevel := Level.Info
 
-val `scala-3` = "3.3.4" // Scala 3 LTS version
+val `scala-3` = "3.3.7" // Scala 3 LTS version
 val supportedScalaVersions = List(`scala-3`) // Scala 3 only
 
 // Base scalac options
@@ -544,7 +544,7 @@ addCommandAlias("testMPT", "testOnly -- -n MPTTest")
 addCommandAlias("testEthereum", "testOnly -- -n EthereumTest")
 
 // Scapegoat configuration for Scala 3
-(ThisBuild / scapegoatVersion) := "3.1.4"
+(ThisBuild / scapegoatVersion) := "3.3.4"
 scapegoatReports := Seq("xml", "html")
 scapegoatConsoleOutput := false
 scapegoatDisabledInspections := Seq("UnsafeTraversableMethods")
