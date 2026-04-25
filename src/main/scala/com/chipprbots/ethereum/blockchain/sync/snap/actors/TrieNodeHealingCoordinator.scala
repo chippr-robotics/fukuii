@@ -146,6 +146,10 @@ class TrieNodeHealingCoordinator(
   // D4 root-retry: cumulative count of times the state root node has exhausted per-peer retries.
   // The state root cannot be recovered by regular sync on-demand — never permanently abandon it.
   private var rootFetchFailures: Int = 0
+  // Stagnation escalation: consecutive HealingStagnationCheck ticks where pendingTasks.nonEmpty
+  // but activeRequests.isEmpty. After 5 ticks (10 minutes), force-complete healing to avoid
+  // indefinite stall when all SNAP peers disconnect and no new ones connect.
+  private var consecutiveIdleChecks: Int = 0
 
   // Peer cooldown
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
@@ -420,8 +424,6 @@ class TrieNodeHealingCoordinator(
       sender() ! stats
 
     case HealingStagnationCheck =>
-      // Besu-aligned: no stagnation escalation. Pure diagnostic pulse logging.
-      // Besu has zero stagnation watchdogs — SnapWorldDownloadState.markAsStalled() is a TODO no-op.
       val recentHealed = totalNodesHealed - lastPulseHealedCount
       log.info(
         s"[HEAL-PULSE] healed=$totalNodesHealed total, +$recentHealed last 2min | " +
@@ -429,6 +431,24 @@ class TrieNodeHealingCoordinator(
         s"pivotRefreshPending=$pivotRefreshRequested"
       )
       lastPulseHealedCount = totalNodesHealed
+
+      // Escalation: if work is pending but zero requests are active, all SNAP peers may have
+      // disconnected. Besu's markAsStalled() is a TODO no-op, but Besu still counts non-progressing
+      // requests toward a 1000-request threshold. Fukuii has no request count here, so we use
+      // consecutive idle ticks (each 2 minutes) as a proxy.
+      if (pendingTasks.nonEmpty && activeRequests.isEmpty && !pivotRefreshRequested) {
+        consecutiveIdleChecks += 1
+        if (consecutiveIdleChecks >= 5) {
+          log.warning(
+            s"[HEAL] No active requests for ${consecutiveIdleChecks * 2} minutes with " +
+              s"${pendingTasks.size} pending tasks and ${knownAvailablePeers.size} known peers. " +
+              s"Forcing healing completion — missing nodes deferred to import-time recovery."
+          )
+          self ! HealingForceComplete
+        }
+      } else {
+        consecutiveIdleChecks = 0
+      }
   }
 
   private def queueNodes(pathsAndHashes: Seq[(Seq[ByteString], ByteString)]): Unit = {
@@ -646,6 +666,7 @@ class TrieNodeHealingCoordinator(
           }
         } else {
           pendingTasks += updated
+          pendingHashSet += updated.hash
         }
       }
     }
@@ -654,6 +675,7 @@ class TrieNodeHealingCoordinator(
     val unmatchedTasks = tasksForRequest.drop(nodes.size)
     unmatchedTasks.foreach { task =>
       pendingTasks += task
+      pendingHashSet += task.hash
     }
 
     completedTaskCount += healedCount
@@ -792,6 +814,7 @@ class TrieNodeHealingCoordinator(
         }
       } else {
         pendingTasks += updated
+        pendingHashSet += updated.hash
         requeued += 1
       }
     }
@@ -950,6 +973,13 @@ class TrieNodeHealingCoordinator(
                   s"[HEAL-LEAF] Seeded storage trie root ${Hex.toHexString(account.storageRoot.take(4).toArray)} " +
                   s"for account ${Hex.toHexString(accountHashBytes.take(4))}"
                 )
+              } else {
+                log.warning(
+                  s"[HEAL-LEAF] Unexpected nibble path length ${allNibbles.length} at account leaf (expected 64) — " +
+                    s"storage root ${Hex.toHexString(account.storageRoot.take(4).toArray)} not seeded. " +
+                    s"Full trie walk will be required."
+                )
+                abandonedTaskCount += 1
               }
             }
           }
@@ -969,8 +999,10 @@ class TrieNodeHealingCoordinator(
       }
     } catch {
       case NonFatal(e) =>
-        log.debug(s"[HEAL] Cannot decode healed node for child discovery: ${e.getMessage}. Skipping incremental discovery — full trie walk will find these nodes.")
-        // Non-fatal — healing still works via final validation walk as safety net
+        log.warning(
+          s"[HEAL] Cannot decode healed node ${Hex.toHexString(parentEntry.hash.take(4).toArray)} for child discovery: ${e.getMessage}. " +
+            s"Subtree excluded from inline discovery — full trie walk required for these nodes."
+        )
     }
   }
 
