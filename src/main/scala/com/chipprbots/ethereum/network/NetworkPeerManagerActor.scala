@@ -25,6 +25,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.NewBlockHashes
 import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
+import com.chipprbots.ethereum.network.p2p.messages.ETH69
 import com.chipprbots.ethereum.network.p2p.messages.ETH64
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
@@ -360,6 +361,8 @@ class NetworkPeerManagerActor(
         update(Seq((m.block.header.number, m.block.header.hash)))
       case m: NewBlockHashes =>
         update(m.hashes.map(h => (h.number, h.hash)))
+      case m: ETH69.BlockRangeUpdate =>
+        update(Seq((m.latestBlock, m.latestBlockHash)))
       case _ => initialPeerInfo
     }
   }
@@ -639,6 +642,7 @@ object NetworkPeerManagerActor {
     Codes.BlockHeadersCode,
     Codes.NewBlockCode,
     Codes.NewBlockHashesCode,
+    Codes.BlockRangeUpdateCode, // ETH/69: update peer height when block range changes
     // SNAP protocol response codes (responses we receive from peers)
     SNAP.Codes.AccountRangeCode,
     SNAP.Codes.StorageRangesCode,
