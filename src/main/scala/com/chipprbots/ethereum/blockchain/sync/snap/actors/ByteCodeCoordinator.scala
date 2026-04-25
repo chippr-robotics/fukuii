@@ -218,7 +218,9 @@ class ByteCodeCoordinator(
       log.info("Pivot refreshed — clearing bytecode peer cooldowns")
       peerFailureCounts.clear()
       peerCooldownUntilMillis.clear()
-      knownAvailablePeers.clear()
+      // knownAvailablePeers intentionally NOT cleared: bytecodes are content-addressed,
+      // not root-specific. Clearing would stall dispatch until peers re-advertise.
+    // Besu-aligned D12: no peerResponseBytesTarget to clear.
 
     case PeerAvailable(peer) =>
       val evicted0 = knownAvailablePeers.filter(_.remoteAddress == peer.remoteAddress)
