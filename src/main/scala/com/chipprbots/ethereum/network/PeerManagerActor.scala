@@ -47,7 +47,10 @@ class PeerManagerActor(
     peerFactory: (ActorContext, InetSocketAddress, Boolean) => ActorRef,
     discoveryConfig: DiscoveryConfig,
     val blacklist: Blacklist,
-    externalSchedulerOpt: Option[Scheduler] = None
+    blockedIPRegistry: BlockedIPRegistry,
+    staticNodes: Set[URI] = Set.empty,
+    externalSchedulerOpt: Option[Scheduler] = None,
+    autoBlocker: Option[AutoBlocker] = None
 ) extends Actor
     with ActorLogging
     with Stash {
@@ -76,6 +79,18 @@ class PeerManagerActor(
     * DefaultP2PNetwork.maintainedPeers set.
     */
   private var maintainedPeersByNodeId: Map[String, URI] = Map.empty
+
+  /** Consecutive reconnect failure count per maintained peer (D5). Used for exponential backoff: delay = min(30s, 1s <<
+    * attempt). Reset to 0 on successful handshake.
+    */
+  private var maintainedPeerReconnectAttempts: Map[String, Int] = Map.empty
+
+  /** ActorRef → URI for outbound connections that have not yet completed the ETH handshake. When a Terminated fires
+    * for a ref still in this map, the connection died pre-handshake — no PeerId was assigned, so the standard
+    * maintainedPeersByNodeId lookup in the Terminated handler never fires. We use this map to detect maintained peers
+    * that need to be retried after a pre-handshake failure.
+    */
+  private val pendingConnections: mutable.Map[ActorRef, URI] = mutable.Map.empty
 
   /** Trusted peers bypass the max-peer limit and are always accepted. core-geth reference: p2p/server.go — trusted
     * map[enode.ID]bool in run loop. Keyed by lowercase hex node ID.
@@ -264,6 +279,9 @@ class PeerManagerActor(
         getBlacklistDuration(reason),
         Blacklist.BlacklistReason.getP2PBlacklistReasonByDescription(Disconnect.reasonToString(reason))
       )
+      if (reason == Disconnect.Reasons.IncompatibleP2pProtocolVersion) {
+        autoBlocker.foreach(_.recordHardFailure(peerAddress, "IncompatibleP2pProtocolVersion"))
+      }
 
     case HandlePeerConnection(connection, remoteAddress) =>
       handleConnection(connection, remoteAddress, connectedPeers)
@@ -385,6 +403,7 @@ class PeerManagerActor(
       case Right(address) =>
         val (peer, newConnectedPeers) = createPeer(address, incomingConnection = false, connectedPeers)
         peer.ref ! PeerActor.ConnectTo(uri)
+        pendingConnections(peer.ref) = uri
         context.become(listening(newConnectedPeers))
 
       case Left(error) => handleConnectionErrors(error)
@@ -455,6 +474,25 @@ class PeerManagerActor(
           context.system.scheduler.scheduleOnce(30.seconds, self, ConnectToPeer(uri))(context.dispatcher)
         }
       }
+      // Pre-handshake failure: the peer actor died before completing the ETH handshake so
+      // removeTerminatedPeer returned no PeerId and the maintained-peer retry above never fired.
+      // Check pendingConnections and retry if this was a maintained peer.
+      pendingConnections.remove(ref).foreach { uri =>
+        val nodeId = uri.getUserInfo
+        if (maintainedPeersByNodeId.contains(nodeId)) {
+          val attempt = maintainedPeerReconnectAttempts.getOrElse(nodeId, 0)
+          val delaySecs = math.min(30, 1 << attempt)
+          val delay = scala.concurrent.duration.Duration(delaySecs, java.util.concurrent.TimeUnit.SECONDS)
+          maintainedPeerReconnectAttempts = maintainedPeerReconnectAttempts + (nodeId -> (attempt + 1))
+          log.info(
+            "Maintained peer {} failed pre-handshake — retrying in {}s (attempt #{})",
+            uri,
+            delaySecs,
+            attempt + 1
+          )
+          context.system.scheduler.scheduleOnce(delay, self, ConnectToPeer(uri))(context.dispatcher)
+        }
+      }
       // Try to replace a lost connection with another one.
       if (newConnectedPeers.outgoingConnectionDemand > 0) {
         peerDiscoveryManager ! PeerDiscoveryManager.GetRandomNodeInfo
@@ -482,6 +520,10 @@ class PeerManagerActor(
         context.become(listening(connectedPeers))
       } else {
         peerStatusCache = peerStatusCache + (handshakedPeer.id -> PeerActor.Status.Handshaked)
+        // Reset backoff counter on successful handshake (D5)
+        maintainedPeerReconnectAttempts = maintainedPeerReconnectAttempts - handshakedPeer.id.value
+        // Handshake completed — peer is now tracked by PeerId, no longer pending
+        pendingConnections.remove(handshakedPeer.ref)
         context.become(listening(connectedPeers.promotePeerToHandshaked(handshakedPeer)))
       }
   }
@@ -633,7 +675,10 @@ object PeerManagerActor {
       authHandshaker: AuthHandshaker,
       discoveryConfig: DiscoveryConfig,
       blacklist: Blacklist,
-      capabilities: List[Capability]
+      capabilities: List[Capability],
+      blockedIPRegistry: BlockedIPRegistry,
+      staticNodes: Set[URI] = Set.empty,
+      autoBlocker: Option[AutoBlocker] = None
   ): Props = {
     val factory: (ActorContext, InetSocketAddress, Boolean) => ActorRef =
       peerFactory(
@@ -654,7 +699,10 @@ object PeerManagerActor {
         peerStatistics,
         peerFactory = factory,
         discoveryConfig,
-        blacklist
+        blacklist,
+        blockedIPRegistry,
+        staticNodes,
+        autoBlocker = autoBlocker
       )
     )
   }
