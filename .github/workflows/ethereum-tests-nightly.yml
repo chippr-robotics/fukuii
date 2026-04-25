@@ -17,20 +17,20 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
           fetch-depth: 0
-      
+
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '21'
           cache: 'sbt'
-      
+
       - name: Cache Coursier
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cache/coursier
@@ -131,7 +131,7 @@ jobs:
       
       - name: Upload Test Logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ethereum-tests-nightly-logs-${{ github.run_number }}
           path: |
@@ -143,7 +143,7 @@ jobs:
       
       - name: Upload Test Reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ethereum-tests-nightly-reports-${{ github.run_number }}
           path: |
