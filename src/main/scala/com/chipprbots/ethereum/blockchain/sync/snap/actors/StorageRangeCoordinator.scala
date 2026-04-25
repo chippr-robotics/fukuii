@@ -77,6 +77,12 @@ class StorageRangeCoordinator(
   private val peerConsecutiveTimeouts = mutable.Map[String, Int]()
   private val consecutiveTimeoutThreshold = 3 // Mark stateless after 3 consecutive timeouts
 
+  // Global consecutive timeout counter: triggers ForceComplete when no progress is made across
+  // N consecutive handleTimeout calls (e.g. ETC mainnet peers advertising SNAP/1 but never
+  // serving storage data). Resets to zero on any successful slot download.
+  private var consecutiveTimeouts = 0
+  private val maxConsecutiveTimeouts = 20
+
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
   // This is separate from stateless peer detection — cooldowns are short and per-error-type.
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
@@ -570,6 +576,7 @@ class StorageRangeCoordinator(
       result match {
         case Right(count) =>
           slotsDownloaded += count
+          consecutiveTimeouts = 0
           log.info(s"Storage task completed: $count slots")
           self ! StorageCheckCompletion
         case Left(error) =>
@@ -1043,6 +1050,7 @@ class StorageRangeCoordinator(
     proofVerifiers.getOrElseUpdate(storageRoot, MerkleProofVerifier(storageRoot))
 
   private def handleTimeout(requestId: BigInt): Unit = {
+    var forcedComplete = false
     activeTasks.remove(requestId).foreach { case (peer, batchTasks, _, dispatchRoot) =>
       log.warning(s"Storage range request timeout for ${batchTasks.size} accounts from peer ${peer.id.value}")
       recordPeerCooldown(peer, "request timeout")
@@ -1060,6 +1068,16 @@ class StorageRangeCoordinator(
           log.info(s"Peer ${peer.id.value} hit $count consecutive storage timeouts — treating as stateless")
           markPeerStateless(peer)
         }
+
+        consecutiveTimeouts += 1
+        if (consecutiveTimeouts >= maxConsecutiveTimeouts) {
+          log.warning(
+            s"Force-completing storage coordinator after $consecutiveTimeouts consecutive timeouts " +
+              s"(no progress) — SNAP peers not serving data. " +
+              s"Missing storage will be recovered per-block during import."
+          )
+          forcedComplete = true
+        }
       } else {
         log.info(
           s"Ignoring timeout from stale-root storage request " +
@@ -1071,9 +1089,13 @@ class StorageRangeCoordinator(
         task.pending = false
         tasks.enqueue(task)
       }
+
+      if (forcedComplete) self ! ForceCompleteStorage
     }
-    // Re-dispatch re-queued tasks to any known available peer that isn't stateless or on cooldown.
-    tryRedispatchPendingTasks()
+    if (!forcedComplete) {
+      // Re-dispatch re-queued tasks to any known available peer that isn't stateless or on cooldown.
+      tryRedispatchPendingTasks()
+    }
   }
 
   /** Dispatch up to maxInFlightPerPeer requests to a single peer (pipelining). */
