@@ -85,6 +85,12 @@ class ByteCodeCoordinator(
   private val hashFailureCounts = mutable.Map.empty[ByteString, Int]
   private val maxFailuresPerHash: Int = 10
 
+  // Consecutive task failure tracking: triggers ForceComplete when no progress is made across
+  // N consecutive ByteCodeTaskFailed messages (e.g. ETC mainnet peers advertising SNAP/1 but
+  // never serving data). Resets to zero on any successful download.
+  private var consecutiveTaskFailures = 0
+  private val maxConsecutiveTaskFailures = 20
+
   // Task management
   private val pendingTasks = mutable.Queue[ByteCodeTask]()
   final private case class ActiveByteCodeRequest(
@@ -251,6 +257,7 @@ class ByteCodeCoordinator(
       result match {
         case Right(count) =>
           bytecodesDownloaded += count
+          consecutiveTaskFailures = 0
           log.info(s"Bytecode task completed: $count codes")
           checkCompletion()
         case Left(error) =>
@@ -259,17 +266,30 @@ class ByteCodeCoordinator(
       }
 
     case ByteCodeTaskFailed(requestId, error) =>
-      // Re-queue the task
       activeTasks.remove(requestId).foreach { active =>
         val task = active.task
         val worker = active.worker
         val peer = active.peer
-        log.warning(s"Re-queuing bytecode task after failure: $error")
-        task.pending = false
-        pendingTasks.enqueue(task)
-        recordPeerCooldown(peer, cooldownConfig.baseTimeout, s"request failed: $error")
-        adjustResponseBytesTargetOnFailure(peer, s"request failed: $error")
-        markWorkerIdle(worker)
+        consecutiveTaskFailures += 1
+        if (consecutiveTaskFailures >= maxConsecutiveTaskFailures) {
+          log.warning(
+            s"Force-completing bytecode coordinator after $consecutiveTaskFailures consecutive task failures " +
+              s"(no progress) — SNAP peers not serving data. " +
+              s"Missing bytecodes will be recovered per-block during import."
+          )
+          recordPeerCooldown(peer, cooldownConfig.baseTimeout, s"request failed: $error")
+          markWorkerIdle(worker)
+          self ! ForceCompleteByteCode
+        } else {
+          log.warning(
+            s"Re-queuing bytecode task after failure: $error ($consecutiveTaskFailures/$maxConsecutiveTaskFailures)"
+          )
+          task.pending = false
+          pendingTasks.enqueue(task)
+          recordPeerCooldown(peer, cooldownConfig.baseTimeout, s"request failed: $error")
+          // Besu-aligned D12: no adaptive byte budget ratcheting.
+          markWorkerIdle(worker)
+        }
       }
       checkCompletion()
 
