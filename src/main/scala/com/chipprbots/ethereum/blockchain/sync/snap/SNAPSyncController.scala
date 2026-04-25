@@ -114,6 +114,11 @@ class SNAPSyncController(
   // fallback to fast sync instead of cycling pivots for 75+ minutes.
   private var consecutivePivotRefreshes: Int = 0
   private val MaxConsecutivePivotRefreshes = 3
+  // Timestamp of the first PivotStateUnservable in the current stateless window.
+  // Only escalate consecutivePivotRefreshes after the grace period (10 min) to allow
+  // snap servers time to build their snapshot after sync completes.
+  private var firstStatelessTimestampMs: Option[Long] = None
+  private val StatelessGracePeriodMs = 10 * 60 * 1000L // 10 minutes
 
   // Pending pivot refresh: when refreshPivotInPlace() needs a header from a peer,
   // it requests a bootstrap and stores the pending pivot here. When BootstrapComplete
@@ -209,6 +214,7 @@ class SNAPSyncController(
   private val AccountStagnationThreshold: FiniteDuration = snapSyncConfig.accountStagnationTimeout
   private var lastStorageProgressMs: Long = System.currentTimeMillis()
   private var lastAccountProgressMs: Long = System.currentTimeMillis()
+  private var lastNoSnapPeersLogMs: Long = 0L
   private var lastAccountTasksCompleted: Int = 0
   private var lastAccountsDownloaded: Long = 0
 
@@ -313,7 +319,10 @@ class SNAPSyncController(
     case ProgressAccountsSynced(count) =>
       progressMonitor.incrementAccountsSynced(count)
       // Real account downloads mean SNAP is making progress — reset the pivot refresh counter.
-      if (count > 0) consecutivePivotRefreshes = 0
+      if (count > 0) {
+        consecutivePivotRefreshes = 0
+        firstStatelessTimestampMs = None
+      }
 
     case actors.Messages.AccountRangeProgress(progress) =>
       preservedRangeProgress = progress
@@ -391,8 +400,25 @@ class SNAPSyncController(
         )
       } else if (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync) {
         lastPivotRestartMs = now
-        consecutivePivotRefreshes += 1
-        log.info(s"Consecutive stateless pivot refreshes: $consecutivePivotRefreshes/$MaxConsecutivePivotRefreshes")
+        // Apply grace period before escalating: snap servers may still be building their snapshot
+        // (e.g., after fast/regular sync completes). Only count as a "consecutive pivot refresh"
+        // after the condition has persisted for StatelessGracePeriodMs (10 min).
+        val elapsedMs = firstStatelessTimestampMs.map(now - _).getOrElse(0L)
+        if (firstStatelessTimestampMs.isEmpty) {
+          firstStatelessTimestampMs = Some(now)
+          log.warning(
+            s"First PivotStateUnservable for root ${rootHash.take(4).map("%02x".format(_)).mkString} " +
+              s"(phase=$currentPhase, reason=$reason). Grace period: ${StatelessGracePeriodMs / 60000}min."
+          )
+        } else if (elapsedMs < StatelessGracePeriodMs) {
+          log.info(
+            s"PivotStateUnservable (${elapsedMs / 1000}s / ${StatelessGracePeriodMs / 1000}s grace). " +
+              s"Waiting for snap servers to build snapshot. reason=$reason"
+          )
+        } else {
+          consecutivePivotRefreshes += 1
+          log.info(s"Consecutive stateless pivot refreshes: $consecutivePivotRefreshes/$MaxConsecutivePivotRefreshes")
+        }
         if (consecutivePivotRefreshes >= MaxConsecutivePivotRefreshes) {
           if (accountsComplete) {
             // Geth/Besu aligned: NEVER restart after accounts complete.
@@ -404,6 +430,7 @@ class SNAPSyncController(
                 "Refreshing in-place (preserving accounts)."
             )
             consecutivePivotRefreshes = 0 // Reset — accounts completing IS progress
+            firstStatelessTimestampMs = None
             refreshPivotInPlace(reason)
           } else {
             // Accounts still in progress — full restart is acceptable
@@ -508,6 +535,7 @@ class SNAPSyncController(
 
         // Reset consecutive pivot refreshes — account completion IS progress
         consecutivePivotRefreshes = 0
+        firstStatelessTimestampMs = None
 
         // Signal that no more work will arrive (sentinel pattern — prevents premature completion)
         bytecodeCoordinator.foreach(_ ! actors.Messages.NoMoreByteCodeTasks)
@@ -516,6 +544,9 @@ class SNAPSyncController(
         // Transition to ByteCodeAndStorageSync for status reporting and stagnation checks
         currentPhase = ByteCodeAndStorageSync
         progressMonitor.startPhase(ByteCodeAndStorageSync)
+        // Resume chain download now that account range sync is complete.
+        // ChainDownloader was paused during AccountRangeSync to avoid TCP connection cycling.
+        chainDownloader.foreach(_ ! ChainDownloader.Resume)
 
         // Redistribute per-peer budget: accounts done, give storage+bytecode more bandwidth.
         // Global budget remains 5 per peer: storage=3, bytecode=2.
@@ -978,14 +1009,29 @@ class SNAPSyncController(
         case (Some(pivot), Some(rootBs)) if pivot > 0 =>
           log.info(s"Recovery: accounts previously completed at pivot $pivot. Checking freshness...")
 
-          // Check if pivot is still fresh enough
+          // Check if pivot is still within the snap server's snapshot window (~128 blocks).
+          // Snap servers prune state older than ~128 blocks, so we use 96 as a safety margin.
+          // Besu alignment: restart fresh when no peers (can't verify) or pivot is stale.
+          val snapWindowBlocks = 96L
           val networkBest = currentNetworkBestFromSnapPeers().getOrElse(BigInt(0))
-          val drift = if (networkBest > 0) (networkBest - pivot).abs else BigInt(0)
-          if (networkBest > 0 && drift > snapSyncConfig.maxPivotStalenessBlocks) {
+          val shouldClear = if (networkBest == 0) {
             log.warning(
-              s"Recovery: pivot $pivot drifted $drift blocks from network best $networkBest. " +
-                "Clearing accounts-complete flag and restarting fresh."
+              s"Recovery: pivot $pivot found but no SNAP peers available to verify freshness. " +
+                "Clearing accounts-complete flag and restarting fresh to avoid stale pivot."
             )
+            true
+          } else {
+            val drift = (networkBest - pivot).abs
+            if (drift > snapWindowBlocks) {
+              log.warning(
+                s"Recovery: pivot $pivot is $drift blocks from network best $networkBest " +
+                  s"(> snap window $snapWindowBlocks). State root likely pruned by snap servers. " +
+                  "Clearing accounts-complete flag and restarting fresh."
+              )
+              true
+            } else false
+          }
+          if (shouldClear) {
             appStateStorage.putSnapSyncAccountsComplete(false).commit()
             // Fall through to normal startup
           } else {
@@ -996,7 +1042,8 @@ class SNAPSyncController(
             bytecodePhaseComplete = false
             storagePhaseComplete = false
 
-            log.info(s"Recovery: resuming bytecodes + storage sync from pivot $pivot (drift=$drift blocks)")
+            val drift = (networkBest - pivot).abs
+            log.info(s"Recovery: resuming bytecodes + storage sync from pivot $pivot (drift=$drift blocks, within snap window)")
 
             // Create bytecode coordinator (will receive NoMore immediately since we have no new accounts)
             val storage = getOrCreateMptStorage(pivot)
@@ -1591,6 +1638,10 @@ class SNAPSyncController(
     // Start parallel chain download (headers, bodies, receipts from genesis to pivot)
     // Follows the Geth/Nethermind pattern of overlapping chain + state download.
     startChainDownloader()
+    // Pause chain download during AccountRangeSync. ChainDownloader sends pipelined
+    // GetBlockHeaders/GetBlockBodies requests that cycle TCP connections every 6-10s,
+    // preventing 30s SNAP account range requests from completing. Resumes on AccountRangeSyncComplete.
+    chainDownloader.foreach(_ ! ChainDownloader.Pause)
   }
 
   private def launchAccountRangeWorkers(rootHash: ByteString, concurrency: Int = -1): Unit = {
@@ -1767,11 +1818,11 @@ class SNAPSyncController(
   private def requestAccountRanges(): Unit =
     // Notify coordinator of available peers
     accountRangeCoordinator.foreach { coordinator =>
-      val pivot = pivotBlock.getOrElse(BigInt(0))
-
+      // Besu-aligned: filter by isServingSnap only, no height filter.
+      // Height-based filtering is only needed for pivot SELECTION; for data download,
+      // peers slightly below pivot height may still have the snap snapshot.
       val snapPeers = peersToDownloadFrom.collect {
-        case (_, peerWithInfo)
-            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
+        case (_, peerWithInfo) if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
           peerWithInfo.peer
       }
 
@@ -1814,16 +1865,20 @@ class SNAPSyncController(
     storageRangeCoordinator.foreach { coordinator =>
       val pivot = pivotBlock.getOrElse(BigInt(0))
 
+      // Besu-aligned: filter by isServingSnap only, no height filter.
       val snapPeers = peersToDownloadFrom.collect {
-        case (peerId, peerWithInfo)
-            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
+        case (_, peerWithInfo) if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
           peerWithInfo.peer
       }
 
       SNAPSyncMetrics.setSnapCapablePeers(snapPeers.size)
 
       if (snapPeers.isEmpty) {
-        log.info(s"No SNAP-capable peers at or above pivot $pivot available for storage range requests")
+        val nowMs = System.currentTimeMillis()
+        if (nowMs - lastNoSnapPeersLogMs > 30000) {
+          log.info(s"No SNAP-capable peers available for storage range requests (pivot=$pivot)")
+          lastNoSnapPeersLogMs = nowMs
+        }
       } else {
         snapPeers.foreach { peer =>
           coordinator ! actors.Messages.StoragePeerAvailable(peer)
@@ -2226,11 +2281,17 @@ class SNAPSyncController(
     // Chain download target extends to the new pivot (chain data is canonical, never invalidated)
     if (chainDownloader.isDefined) {
       chainDownloader.foreach(_ ! ChainDownloader.UpdateTarget(newPivotBlock))
-      // Resume chain download if it was paused during pivot header bootstrap
-      chainDownloader.foreach(_ ! ChainDownloader.Resume)
+      // Only resume if not in AccountRangeSync — during account range download,
+      // ChainDownloader is intentionally paused to prevent TCP connection cycling.
+      if (currentPhase != AccountRangeSync) {
+        chainDownloader.foreach(_ ! ChainDownloader.Resume)
+      }
     } else {
       // Start chain downloader if not yet started (e.g. pivot was 0 at initial bootstrap)
       startChainDownloader()
+      if (currentPhase == AccountRangeSync) {
+        chainDownloader.foreach(_ ! ChainDownloader.Pause)
+      }
     }
 
     // Reset account stagnation timer during pivot refresh recovery.
@@ -2479,10 +2540,9 @@ class SNAPSyncController(
           currentPhase = ChainDownloadCompletion
           progressMonitor.startPhase(ChainDownloadCompletion)
           context.become(waitingForChainDownload)
-          return
+        } else {
+          finalizeSnapSync(pivot)
         }
-
-        finalizeSnapSync(pivot)
       }
     }
 
