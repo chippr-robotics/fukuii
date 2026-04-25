@@ -160,7 +160,7 @@
     <logger name="com.chipprbots.ethereum.network" level="ERROR" />
     <logger name="com.chipprbots.ethereum.network.PeerActor" level="ERROR" />
     <logger name="com.chipprbots.ethereum.network.PeerManagerActor" level="ERROR" />
-    <logger name="com.chipprbots.ethereum.network.NetworkPeerManagerActor" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.network.NetworkPeerManagerActor" level="INFO" />
     <logger name="com.chipprbots.ethereum.network.ServerActor" level="INFO" />
     <logger name="com.chipprbots.ethereum.network.KnownNodesManager" level="ERROR" />
     <logger name="com.chipprbots.ethereum.network.PeerScoringManager" level="ERROR" />
@@ -171,9 +171,9 @@
     <logger name="com.chipprbots.ethereum.network.discovery.StaticNodesLoader" level="ERROR" />
     
     <!-- Network handshaking - protocol handshake details -->
-    <logger name="com.chipprbots.ethereum.network.handshaker" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network.handshaker" level="WARN" />
     <logger name="com.chipprbots.ethereum.network.handshaker.EtcHelloExchangeState" level="WARN" />
-    <logger name="com.chipprbots.ethereum.network.handshaker.EthNodeStatus64ExchangeState" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network.handshaker.EthNodeStatus64ExchangeState" level="WARN" />
     <logger name="com.chipprbots.ethereum.network.handshaker.EthNodeStatus63ExchangeState" level="ERROR" />
     <logger name="com.chipprbots.ethereum.network.handshaker.EtcForkBlockExchangeState" level="ERROR" />
     <logger name="com.chipprbots.ethereum.network.handshaker.EtcNodeStatusExchangeState" level="ERROR" />
@@ -191,7 +191,7 @@
     <!-- SYNC INTERNALS (ERROR only - detailed sync operations)             -->
     <!-- =================================================================== -->
     <!-- Peer list management and blacklist -->
-    <logger name="com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler" level="DEBUG" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler" level="WARN" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.PeersClient" level="ERROR" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg" level="ERROR" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.Blacklist" level="INFO" />
@@ -216,8 +216,10 @@
     
     <!-- SNAP sync internals -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap" level="ERROR" />
-    <!-- SNAP sync actors (AccountRangeCoordinator, workers) — INFO for optimization visibility -->
+    <!-- SNAP sync actors (AccountRangeCoordinator, workers) — INFO for milestone visibility -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.actors" level="INFO" />
+    <!-- Chain download progress — must be explicit, not inherited from snap (ERROR) -->
+    <logger name="com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.AccountRangeDownloader" level="ERROR" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.StorageRangeDownloader" level="ERROR" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.TrieNodeHealer" level="ERROR" />

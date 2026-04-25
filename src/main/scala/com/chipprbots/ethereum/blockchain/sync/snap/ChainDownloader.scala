@@ -269,7 +269,7 @@ class ChainDownloader(
 
     // Log progress periodically
     val now = System.currentTimeMillis()
-    if (now - lastLogTime > 30000) {
+    if (now - lastLogTime > 60000) {
       lastLogTime = now
       val pct = if (targetBlock > 0) (bestHeaderNumber * 100 / targetBlock).toInt else 0
       log.info(

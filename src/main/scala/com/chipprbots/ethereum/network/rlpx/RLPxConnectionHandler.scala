@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.network.rlpx
 
 import java.net.InetSocketAddress
 import java.net.URI
+import java.util.concurrent.atomic.AtomicInteger
 
 import org.apache.pekko.actor._
 import org.apache.pekko.io.IO
@@ -108,7 +109,7 @@ class RLPxConnectionHandler(
       context.become(new ConnectedHandler(connection).waitingForAuthHandshakeResponse(handshaker, timeout))
 
     case CommandFailed(_: Connect) =>
-      log.warning("[RLPx] TCP connection failed to {} for peer {}", uri, peerId)
+      RLPxConnectionHandler.tcpFailedCount.incrementAndGet()
       context.parent ! ConnectionFailed
       gracefulStop()
   }
@@ -448,11 +449,7 @@ class RLPxConnectionHandler(
     }
 
     def handleTimeout: Receive = { case AuthHandshakeTimeout =>
-      log.error(
-        "[Stopping Connection] Auth handshake timeout for peer {} after {}ms",
-        peerId,
-        rlpxConfiguration.waitForHandshakeTimeout.toMillis
-      )
+      RLPxConnectionHandler.authTimeoutCount.incrementAndGet()
       context.parent ! ConnectionFailed
       gracefulStop()
     }
@@ -574,7 +571,7 @@ class RLPxConnectionHandler(
         val supportsSnap =
           capabilities.contains(Capability.SNAP1) && hello.capabilities.contains(Capability.SNAP1)
         if (supportsSnap) {
-          log.info("[RLPx] SNAP/1 capability enabled for peer {}", peerId)
+          RLPxConnectionHandler.snapCapabilityCount.incrementAndGet()
         }
         val inboundTranslator = computeInboundTranslator(hello, negotiated, supportsSnap)
         (
@@ -860,7 +857,7 @@ class RLPxConnectionHandler(
       if (msg.isPeerClosed) {
         log.debug("[RLPx] Peer {} closed connection (peer-initiated)", peerId)
       } else if (msg.isErrorClosed) {
-        log.warning("[RLPx] Connection with {} closed due to error: {}", peerId, msg.getErrorCause)
+        RLPxConnectionHandler.connectionResetCount.incrementAndGet()
       } else {
         log.debug("[RLPx] Connection with {} closed ({})", peerId, msg.getClass.getSimpleName)
       }
@@ -871,6 +868,12 @@ class RLPxConnectionHandler(
 }
 
 object RLPxConnectionHandler {
+  // Shared counters accumulated per-connection, read+reset by NetworkPeerManagerActor every 60s
+  val snapCapabilityCount  = new AtomicInteger(0)
+  val connectionResetCount = new AtomicInteger(0)
+  val authTimeoutCount     = new AtomicInteger(0)
+  val tcpFailedCount       = new AtomicInteger(0)
+
   def props(
       capabilities: List[Capability],
       authHandshaker: AuthHandshaker,

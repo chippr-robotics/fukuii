@@ -6,6 +6,10 @@ import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.Props
 import org.apache.pekko.util.ByteString
 
+import scala.concurrent.duration.*
+
+import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler
+
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor._
@@ -55,8 +59,14 @@ class NetworkPeerManagerActor(
   // Mutable reference to SNAPSyncController that can be set after initialization
   private var snapSyncControllerOpt: Option[ActorRef] = initialSnapSyncControllerOpt
 
+  private var emptyHeaderResponses: Int = 0
+
   // Subscribe to the event of any peer getting handshaked
   peerEventBusActor ! Subscribe(PeerHandshaked)
+
+  context.system.scheduler.scheduleAtFixedRate(
+    60.seconds, 60.seconds, self, NetworkPeerManagerActor.LogNetworkSummary
+  )(context.dispatcher)
 
   // Subscribe globally to SNAP request codes. The hive devp2p snap test client sends
   // GetAccountRange/etc immediately after the RLPx hello, BEFORE the ETH-status exchange
@@ -96,6 +106,18 @@ class NetworkPeerManagerActor(
     *   which has the peer and peer information for each handshaked peer (identified by it's id)
     */
   private def handleCommonMessages(peersWithInfo: PeersWithInfo): Receive = {
+    case NetworkPeerManagerActor.LogNetworkSummary =>
+      val snapNegotiated  = RLPxConnectionHandler.snapCapabilityCount.getAndSet(0)
+      val resets          = RLPxConnectionHandler.connectionResetCount.getAndSet(0)
+      val authTimeouts    = RLPxConnectionHandler.authTimeoutCount.getAndSet(0)
+      val tcpFailed       = RLPxConnectionHandler.tcpFailedCount.getAndSet(0)
+      val emptyHeaders    = emptyHeaderResponses; emptyHeaderResponses = 0
+      val total           = peersWithInfo.size
+      val snapPeers       = peersWithInfo.values.count(_.peerInfo.remoteStatus.supportsSnap)
+      log.info(
+        s"Network [60s]: active=$total peers ($snapPeers snap-capable), +$snapNegotiated SNAP, +$resets resets, +$authTimeouts auth-timeouts, +$tcpFailed tcp-failed, +$emptyHeaders empty-headers"
+      )
+
     case GetHandshakedPeers =>
       // Provide only peers which already responded to request for best block hash, and theirs best block hash is different
       // form their genesis block
@@ -236,23 +258,29 @@ class NetworkPeerManagerActor(
     *   new updated peer info
     */
   private def handleReceivedMessage(message: Message, initialPeerWithInfo: PeerWithInfo): PeerInfo = {
-    // Log received BlockHeaders for debugging GetBlockHeaders response tracking
+    // Log received BlockHeaders — only non-empty responses at INFO; empty ones at DEBUG
     message match {
       case m: ETH62BlockHeaders =>
-        log.info(
-          "RECV_BLOCKHEADERS: peer={}, count={}, blockNumbers={}",
-          initialPeerWithInfo.peer.id,
-          m.headers.size,
-          m.headers.take(5).map(_.number).mkString(", ") + (if (m.headers.size > 5) "..." else "")
-        )
+        if (m.headers.nonEmpty)
+          log.info(
+            "RECV_BLOCKHEADERS: peer={}, count={}, blockNumbers={}",
+            initialPeerWithInfo.peer.id,
+            m.headers.size,
+            m.headers.take(5).map(_.number).mkString(", ") + (if (m.headers.size > 5) "..." else "")
+          )
+        else
+          emptyHeaderResponses += 1
       case m: ETH66BlockHeaders =>
-        log.info(
-          "RECV_BLOCKHEADERS: peer={}, requestId={}, count={}, blockNumbers={}",
-          initialPeerWithInfo.peer.id,
-          m.requestId,
-          m.headers.size,
-          m.headers.take(5).map(_.number).mkString(", ") + (if (m.headers.size > 5) "..." else "")
-        )
+        if (m.headers.nonEmpty)
+          log.info(
+            "RECV_BLOCKHEADERS: peer={}, requestId={}, count={}, blockNumbers={}",
+            initialPeerWithInfo.peer.id,
+            m.requestId,
+            m.headers.size,
+            m.headers.take(5).map(_.number).mkString(", ") + (if (m.headers.size > 5) "..." else "")
+          )
+        else
+          emptyHeaderResponses += 1
       case _ => // Don't log other message types at INFO level
     }
 
@@ -634,6 +662,8 @@ class NetworkPeerManagerActor(
 }
 
 object NetworkPeerManagerActor {
+
+  private[network] case object LogNetworkSummary
 
   val msgCodesWithInfo: Set[Int] = Set(
     Codes.BlockHeadersCode,
