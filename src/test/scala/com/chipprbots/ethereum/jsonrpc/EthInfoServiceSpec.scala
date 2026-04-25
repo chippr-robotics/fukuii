@@ -131,9 +131,23 @@ class EthServiceSpec
     response.unsafeRunSync() shouldEqual Right(CallResponse(ByteString("return_value")))
   }
 
-  it should "execute estimateGas and return a value" taggedAs (UnitTest, RPCTest, DisabledTest) in new TestSetup {
+  it should "execute estimateGas and return a value" taggedAs (UnitTest, RPCTest) in new TestSetup {
     blockchainWriter.storeBlock(blockToRequest).commit()
     blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number)
+
+    // `estimateGas` now runs a revert-check simulateTransaction FIRST, then a
+    // binarySearchGasEstimation if the tx doesn't revert. Stub both halves.
+    val worldStateProxy: InMemoryWorldStateProxy = InMemoryWorldStateProxy(
+      storagesInstance.storages.evmCodeStorage,
+      blockchain.getBackingMptStorage(-1),
+      (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash),
+      UInt256.Zero,
+      ByteString.empty,
+      noEmptyAccounts = false,
+      ethCompatibleStorage = true
+    )
+    val nonRevertResult: TxResult = TxResult(worldStateProxy, 123, Nil, ByteString.empty, None)
+    (stxLedger.simulateTransaction _).expects(*, *, *).returning(nonRevertResult)
 
     val estimatedGas: BigInt = BigInt(123)
     (stxLedger.binarySearchGasEstimation _).expects(*, *, *).returning(estimatedGas)

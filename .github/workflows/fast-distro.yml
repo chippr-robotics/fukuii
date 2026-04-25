@@ -25,20 +25,20 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
           fetch-depth: 0
-      
+
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '21'
           cache: 'sbt'
-      
+
       - name: Cache Coursier
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cache/coursier
@@ -118,7 +118,7 @@ jobs:
           ls -lh fast-distro-artifacts/
       
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: fukuii-fast-distro-${{ steps.prepare.outputs.timestamp }}
           path: fast-distro-artifacts/*
@@ -127,7 +127,7 @@ jobs:
       
       - name: Create nightly release
         if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_type == 'nightly')
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: nightly-${{ steps.prepare.outputs.timestamp }}
           name: Nightly Build ${{ steps.prepare.outputs.timestamp }}

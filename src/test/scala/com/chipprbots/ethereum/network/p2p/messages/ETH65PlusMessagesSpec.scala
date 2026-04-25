@@ -197,9 +197,24 @@ class ETH65PlusMessagesSpec extends AnyWordSpec with Matchers {
     }
 
     "encoding and decoding PooledTransactions with request-id" should {
-      "return same result" taggedAs DisabledTest in {
+      "return same result" in {
+        // PooledTransactions carries two decoder-only accounting fields (originalSizes and
+        // blobTxRawBytes) populated by the RLP decoder from the incoming wire bytes. When
+        // we construct the "input" message in code they default to empty, so a strict
+        // round-trip equality check fails on those fields even though the payload matches.
+        // Compare only the semantic fields (requestId + txs) and confirm the decoded message
+        // re-encodes to the same bytes.
         val msg = ETH66.PooledTransactions(requestId = 42, txs = Fixtures.Blocks.Block3125369.body.transactionList)
-        verify(msg, (m: ETH66.PooledTransactions) => m.toBytes, Codes.PooledTransactionsCode, version)
+        val encoded = msg.toBytes
+        val decodedEither = messageDecoder(version).fromBytes(Codes.PooledTransactionsCode, encoded)
+        decodedEither match {
+          case Right(decoded: ETH66.PooledTransactions) =>
+            decoded.requestId shouldEqual msg.requestId
+            decoded.txs shouldEqual msg.txs
+            // Re-encoding the decoded form reproduces the bytes — round-trip is payload-stable.
+            decoded.toBytes.toSeq shouldEqual encoded.toSeq
+          case other => fail(s"Expected Right(PooledTransactions), got $other")
+        }
       }
     }
 
