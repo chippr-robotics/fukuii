@@ -86,10 +86,11 @@ class NetworkPeerManagerActor(
   def handleMessages(peersWithInfo: PeersWithInfo): Receive =
     handleCommonMessages(peersWithInfo).orElse(handlePeersInfoEvents(peersWithInfo))
 
-  private def peerHasUpdatedBestBlock(peerInfo: PeerInfo): Boolean = {
-    val peerBestBlockIsItsGenesisBlock = peerInfo.bestBlockHash == peerInfo.remoteStatus.genesisHash
-    peerBestBlockIsItsGenesisBlock || (!peerBestBlockIsItsGenesisBlock && peerInfo.maxBlockNumber > 0)
-  }
+  private def peerHasUpdatedBestBlock(@annotation.unused peerInfo: PeerInfo): Boolean =
+    // All handshaked peers are usable. go-ethereum has no equivalent gate (eth/peerset.go all()
+    // returns all peers unconditionally). ETH/69 peers carry latestBlock in Status; ETH/68 peers
+    // carry bestHash. Both are sufficient to identify the peer as having chain state.
+    true
 
   /** Processes both messages for sending messages and for requesting peer information
     *
