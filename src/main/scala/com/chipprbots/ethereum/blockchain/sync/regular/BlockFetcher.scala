@@ -214,16 +214,19 @@ class BlockFetcher(
                 )
                 peersClient ! BlacklistPeer(peer.id, BlacklistReason.HeadersDontExtendReadyBlocks)
                 state.withHeaderFetchReceived.recordHeaderRejection()
-              case Left(err) =>
-                log.info(
-                  "Dismissed received headers: {} (peer={}, waitingTip={}, respFirst={})",
-                  err.description,
-                  peer.id,
+              case Left(HeadersNotMatchingWaitingHeaders) =>
+                log.debug(
+                  "Dismissed received headers due to: {} (peer: {})",
+                  HeadersNotMatchingWaitingHeaders.description,
+                  peer.id
+                )
+                log.debug(
+                  "Header validation failed: headers do not chain to waiting headers. Last waiting: {}, Headers first: {}",
                   state.waitingHeaders.lastOption.map(_.number),
                   headers.headOption.map(_.number)
                 )
-                peersClient ! BlacklistPeer(peer.id, BlacklistReason.HeadersDontExtendWaitingQueue)
-                state.withHeaderFetchReceived.recordHeaderRejection()
+                peersClient ! BlacklistPeer(peer.id, BlacklistReason.UnrequestedHeaders)
+                state.withHeaderFetchReceived
               case Right(updatedState) =>
                 log.debug(
                   "Successfully validated and appended {} headers. New waiting headers count: {}",
