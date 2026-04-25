@@ -544,7 +544,7 @@ addCommandAlias("testMPT", "testOnly -- -n MPTTest")
 addCommandAlias("testEthereum", "testOnly -- -n EthereumTest")
 
 // Scapegoat configuration for Scala 3
-(ThisBuild / scapegoatVersion) := "3.1.4"
+(ThisBuild / scapegoatVersion) := "3.3.4"
 scapegoatReports := Seq("xml", "html")
 scapegoatConsoleOutput := false
 scapegoatDisabledInspections := Seq("UnsafeTraversableMethods")
