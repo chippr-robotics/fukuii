@@ -544,13 +544,16 @@ class PeerManagerActor(
   ): ConnectedPeers = {
     val pruneCount = PeerManagerActor.numberOfIncomingConnectionsToPrune(connectedPeers, peerConfiguration)
     val now = System.currentTimeMillis
+    val excludedNodeIds =
+      (maintainedPeersByNodeId.keySet ++ trustedPeersByNodeId).map(hex => ByteString(Hex.decode(hex)))
     val (peersToPrune, prunedConnectedPeers) =
       connectedPeers.prunePeers(
         incoming = true,
         minAge = peerConfiguration.minPruneAge,
         numPeers = pruneCount,
         priority = prunePriority(stats, now),
-        currentTimeMillis = now
+        currentTimeMillis = now,
+        excludedNodeIds = excludedNodeIds
       )
 
     peersToPrune.foreach { peer =>
