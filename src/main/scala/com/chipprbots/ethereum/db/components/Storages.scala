@@ -38,7 +38,11 @@ object Storages {
       override val chainWeightStorage: ChainWeightStorage =
         new ChainWeightStorage(dataSource)
 
-      override val appStateStorage: AppStateStorage = new AppStateStorage(dataSource)
+      override val appStateStorage: AppStateStorage = {
+        val storage = new AppStateStorage(dataSource)
+        storage.verifyOrReset()
+        storage
+      }
 
       override val transactionMappingStorage: TransactionMappingStorage = new TransactionMappingStorage(dataSource)
 
