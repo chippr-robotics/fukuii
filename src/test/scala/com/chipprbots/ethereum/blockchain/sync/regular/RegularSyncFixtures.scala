@@ -41,6 +41,7 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
+import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.MessageClassifier
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
@@ -439,11 +440,7 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
         }
       }
 
-    // Include newBlock in the autopilot's block list so that tests which send
-    // NewBlock(newBlock) through BlockFetcher can satisfy the follow-up
-    // header/body fetch (newBlock.number = testBlocks.last.number + 1, so by
-    // default testBlocks alone wouldn't cover it).
-    peersClient.setAutoPilot(new PeersClientAutoPilot(testBlocks :+ newBlock))
+    peersClient.setAutoPilot(new PeersClientAutoPilot(testBlocks))
 
     // Set up AutoPilot for ommersPool to respond to GetOmmers messages
     ommersPool.setAutoPilot(new AutoPilot {
@@ -466,7 +463,10 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
     })
 
     def waitForSubscription(): Unit = {
-      peerEventBus.expectMsgClass(classOf[Subscribe])
+      peerEventBus.fishForMessage(max = 5.seconds) {
+        case Subscribe(MessageClassifier(_, _)) => true
+        case _                                  => false
+      }
       blockFetcher = peerEventBus.sender()
     }
 
