@@ -205,7 +205,7 @@ class SNAPSyncController(
   // Threshold must be generous enough to allow large chains to complete within the SNAP serve window.
   // Unified stagnation watchdog thresholds — one check interval, phase-specific thresholds
   private val DownloadStagnationCheckInterval: FiniteDuration = 30.seconds
-  private val StorageStagnationThreshold: FiniteDuration = 20.minutes
+  private val StorageStagnationThreshold: FiniteDuration = 10.minutes
   private val AccountStagnationThreshold: FiniteDuration = snapSyncConfig.accountStagnationTimeout
   private var lastStorageProgressMs: Long = System.currentTimeMillis()
   private var lastAccountProgressMs: Long = System.currentTimeMillis()
@@ -786,16 +786,20 @@ class SNAPSyncController(
         currentNetworkBestFromSnapPeers(bootstrapPivot) match {
           case Some(networkBest) if networkBest > 0 =>
             val delta = networkBest - pivot
-            if (delta > snapSyncConfig.maxPivotStalenessBlocks) {
+            // Use the snap serve window (PivotWindowValidity = 126 blocks) as the threshold.
+            // maxPivotStalenessBlocks (default 4096) is far too loose — snap servers prune
+            // state older than ~128 blocks, so a 300-block-stale pivot from a JAR rebuild
+            // would pass the old check and waste 60s on failed account range requests.
+            if (delta > PivotWindowValidity) {
               log.warning(
                 s"Bootstrapped pivot $pivot is now $delta blocks behind current network best $networkBest; " +
-                  s"exceeds maxPivotStaleness=${snapSyncConfig.maxPivotStalenessBlocks}. Re-selecting a fresher pivot."
+                  s"exceeds snap serve window ($PivotWindowValidity blocks). Re-selecting a fresher pivot."
               )
               true
             } else {
               log.info(
                 s"Bootstrapped pivot freshness: pivot=$pivot, networkBest=$networkBest, delta=$delta, " +
-                  s"maxPivotStaleness=${snapSyncConfig.maxPivotStalenessBlocks}"
+                  s"within snap serve window ($PivotWindowValidity blocks)"
               )
               false
             }
@@ -1135,8 +1139,18 @@ class SNAPSyncController(
           log.info(s"Bootstrap target $bootstrapTarget already reached (current block: $bestBlockNumber)")
           appStateStorage.clearSnapSyncBootstrapTarget().commit()
           // Continue to normal SNAP sync logic below
+        } else if (appStateStorage.getSnapSyncPivotBlock().exists(_ > 0) && !appStateStorage.isSnapSyncAccountsComplete()) {
+          // A previous SNAP session completed bootstrap (pivot block stored) but was killed during
+          // account download. The bootstrapTarget is stale — the pivot header is no longer reachable
+          // from snap servers (>96 blocks ago). Clear it so fresh pivot selection runs.
+          log.warning(
+            s"[SNAP] Stale bootstrapTarget=$bootstrapTarget: prev pivot=${appStateStorage.getSnapSyncPivotBlock().get}, " +
+              s"accountsComplete=false. Clearing stale target for fresh pivot selection."
+          )
+          appStateStorage.clearSnapSyncBootstrapTarget().commit()
+          // Fall through to normal SNAP pivot selection
         } else {
-          // Resume interrupted bootstrap
+          // Resume interrupted bootstrap (bootstrap genuinely in progress, no pivot yet stored)
           log.info(s"Resuming interrupted bootstrap: current block $bestBlockNumber / target $bootstrapTarget")
           context.parent ! StartRegularSyncBootstrap(bootstrapTarget)
           context.become(bootstrapping)

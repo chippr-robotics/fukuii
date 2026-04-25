@@ -125,6 +125,26 @@ class BlockImporter(
   private def resolvingMissingNode(blocksToRetry: NonEmptyList[Block], blockImportType: BlockImportType)(
       state: ImporterState
   ): Receive = {
+    case BlockFetcher.FetchedStateNode(nodeData) if nodeData.values.isEmpty =>
+      // StateNodeFetcher exhausted all retries (Besu: MaxRetriesReachedException). The missing
+      // state node (likely contract bytecode) is not served by any current peer. Back off 5
+      // minutes before retrying — this gives state healing time to complete and avoids a tight
+      // retry loop that burns CPU and logs with no progress.
+      log.error(
+        "State node recovery failed after max retries for block {} — backing off {}s before retry",
+        blocksToRetry.head.number,
+        5.minutes.toSeconds
+      )
+      fetcher ! BlockFetcher.InvalidateBlocksFrom(
+        blocksToRetry.head.number,
+        "state node unrecoverable after max retries",
+        shouldBlacklist = false
+      )
+      // 5-minute backoff: ReceiveTimeout in running state fires PickBlocks.
+      // Do NOT self ! PickBlocks here — that would immediately retry the same block.
+      context.setReceiveTimeout(5.minutes)
+      context.become(running(state))
+
     case BlockFetcher.FetchedStateNode(nodeData) =>
       val node = nodeData.values.head
       val hash = kec256(node)

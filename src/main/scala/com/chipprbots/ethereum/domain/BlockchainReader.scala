@@ -14,6 +14,8 @@ import com.chipprbots.ethereum.domain.branch.Branch
 import com.chipprbots.ethereum.domain.branch.EmptyBranch
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MptNode
+import scala.util.Try
+
 import com.chipprbots.ethereum.utils.Hex
 import com.chipprbots.ethereum.utils.Logger
 
@@ -45,7 +47,7 @@ class BlockchainReader(
     *   [[com.chipprbots.ethereum.domain.BlockBody]] if found
     */
   def getBlockBodyByHash(hash: ByteString): Option[BlockBody] =
-    blockBodiesStorage.get(hash)
+    Try(blockBodiesStorage.get(hash)).getOrElse(None)
 
   /** Allows to query for a block based on it's hash
     *

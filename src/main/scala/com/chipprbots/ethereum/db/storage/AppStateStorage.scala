@@ -296,6 +296,32 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   /** Store the finalized account trie root hash from finalizeTrie(). */
   def putSnapSyncFinalizedRoot(root: ByteString): DataSourceBatchUpdate =
     put(Keys.SnapSyncFinalizedRoot, Hex.toHexString(root.toArray))
+
+  /** Verify app state is readable on startup; clear all keys if corrupt.
+    * Called once during storage initialization before any actor reads app state.
+    */
+  def verifyOrReset(): Unit = {
+    try {
+      get(Keys.BestBlockNumber)
+      get(Keys.FastSyncDone)
+      get(Keys.SnapSyncDone)
+    } catch {
+      case ex: Exception =>
+        System.err.println(
+          s"[AppStateStorage] Corrupt app state detected (${ex.getMessage}) — clearing all keys, starting fresh"
+        )
+        val allKeys = Seq(
+          Keys.BestBlockNumber, Keys.BestBlockHash, Keys.FastSyncDone,
+          Keys.FastSyncCooldownUntilMillis, Keys.EstimatedHighestBlock,
+          Keys.SyncStartingBlock, Keys.BootstrapPivotBlock, Keys.BootstrapPivotBlockHash,
+          Keys.SnapSyncDone, Keys.SnapSyncPivotBlock, Keys.SnapSyncStateRoot,
+          Keys.SnapSyncProgress, Keys.SnapSyncBootstrapTarget, Keys.SnapFastCycleCount,
+          Keys.BytecodeRecoveryDone, Keys.StorageRecoveryDone, Keys.SnapSyncAccountsComplete,
+          Keys.SnapSyncCodeHashesPath, Keys.SnapSyncStorageFilePath, Keys.SnapSyncFinalizedRoot
+        )
+        allKeys.map(remove).reduce(_.and(_)).commit()
+    }
+  }
 }
 
 object AppStateStorage {

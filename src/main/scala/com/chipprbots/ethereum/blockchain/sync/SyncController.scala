@@ -7,6 +7,9 @@ import org.apache.pekko.actor.PoisonPill
 import org.apache.pekko.actor.Props
 import org.apache.pekko.actor.Scheduler
 
+import java.time.Instant
+import java.time.Duration as JavaDuration
+
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
 
@@ -536,6 +539,10 @@ class SyncController(
         if (needBytecode || needStorage) {
           startRecovery(needBytecode, needStorage)
         } else {
+          // SnapSyncDone=true means finalizeSnapSync() ran, which is only called after healing
+          // completes with abandonedNodes==0. The old deferred-merkleization guard that cleared
+          // this flag is removed: deferred-merkleization is no longer used and that code path
+          // caused SnapSyncDone to be erased on every restart, restarting SNAP sync from scratch.
           startRegularSync()
         }
       case (_, false, false, true) =>
@@ -719,7 +726,8 @@ class SyncController(
             storageActor = storageActor,
             bytecodeComplete = !needBytecode,
             storageComplete = !needStorage,
-            peerPoller = peerPoller
+            peerPoller = peerPoller,
+            recoveryStartTime = Instant.now()
           )
         )
 
@@ -736,7 +744,8 @@ class SyncController(
       storageActor: Option[ActorRef],
       bytecodeComplete: Boolean,
       storageComplete: Boolean,
-      peerPoller: org.apache.pekko.actor.Cancellable = org.apache.pekko.actor.Cancellable.alreadyCancelled
+      peerPoller: org.apache.pekko.actor.Cancellable = org.apache.pekko.actor.Cancellable.alreadyCancelled,
+      recoveryStartTime: Instant = Instant.now()
   ): Receive = {
     case BytecodeRecoveryActor.RecoveryComplete =>
       log.info(s"Bytecode recovery complete. Storage complete: $storageComplete")
@@ -749,7 +758,8 @@ class SyncController(
         startRegularSync()
       } else {
         context.become(
-          runningRecovery(bytecodeActor = None, storageActor, bytecodeComplete = true, storageComplete, peerPoller)
+          runningRecovery(bytecodeActor = None, storageActor, bytecodeComplete = true, storageComplete, peerPoller,
+            recoveryStartTime)
         )
       }
 
@@ -764,7 +774,8 @@ class SyncController(
         startRegularSync()
       } else {
         context.become(
-          runningRecovery(bytecodeActor, storageActor = None, bytecodeComplete, storageComplete = true, peerPoller)
+          runningRecovery(bytecodeActor, storageActor = None, bytecodeComplete, storageComplete = true, peerPoller,
+            recoveryStartTime)
         )
       }
 
@@ -778,6 +789,22 @@ class SyncController(
           bytecodeActor.foreach(_ ! snap.actors.Messages.ByteCodePeerAvailable(peer))
           storageActor.foreach(_ ! snap.actors.Messages.StoragePeerAvailable(peer))
         }
+      } else if (
+        JavaDuration.between(recoveryStartTime, Instant.now()).toSeconds > syncConfig.snapPeerWaitTimeoutSeconds
+      ) {
+        log.warning(
+          "No SNAP peers found after {}s — ETC mainnet may have no SNAP-capable peers yet. " +
+            "Skipping SNAP recovery and proceeding to regular sync. Missing bytecodes/storage will " +
+            "be caught and recovered on a per-block basis during import.",
+          syncConfig.snapPeerWaitTimeoutSeconds
+        )
+        if (!bytecodeComplete) appStateStorage.bytecodeRecoveryDone().commit()
+        if (!storageComplete) appStateStorage.storageRecoveryDone().commit()
+        peerPoller.cancel()
+        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
+          context.system.deadLetters
+        )
+        startRegularSync()
       }
 
     case msg =>
