@@ -531,12 +531,25 @@ class SyncController(
             }
           }
         }
-        val needBytecode = !appStateStorage.isBytecodeRecoveryDone()
-        val needStorage = !appStateStorage.isStorageRecoveryDone()
-        if (needBytecode || needStorage) {
-          startRecovery(needBytecode, needStorage)
+        // Besu alignment: healing is mandatory before sync is complete.
+        // If SnapSyncDone was set by the old deferred-merkleization path (which skipped healing),
+        // clear the flag and re-enter SNAPSyncController so healing runs now.
+        val snapCfg = loadSnapSyncConfig()
+        if (!snapCfg.deferredMerkleization) {
+          log.warning(
+            "SnapSyncDone=true but deferred-merkleization=false — healing was skipped by a " +
+              "previous run. Clearing SnapSyncDone and re-entering SNAP sync for trie healing."
+          )
+          appStateStorage.clearSnapSyncDone().commit()
+          startSnapSync()
         } else {
-          startRegularSync()
+          val needBytecode = !appStateStorage.isBytecodeRecoveryDone()
+          val needStorage = !appStateStorage.isStorageRecoveryDone()
+          if (needBytecode || needStorage) {
+            startRecovery(needBytecode, needStorage)
+          } else {
+            startRegularSync()
+          }
         }
       case (_, false, false, true) =>
         startFastSync()

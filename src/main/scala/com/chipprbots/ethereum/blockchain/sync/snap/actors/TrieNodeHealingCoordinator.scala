@@ -38,20 +38,34 @@ class TrieNodeHealingCoordinator(
   import Messages._
 
   // Task management — each task has a pathset (for GetTrieNodes) and a hash (for verification)
-  private case class HealingEntry(pathset: Seq[ByteString], hash: ByteString, retries: Int = 0)
-  private var pendingTasks: Seq[HealingEntry] = Seq.empty
+  // depth + priority enable DFS traversal: priority = parentPriority * 16 + childIndex (Besu InMemoryTasksPriorityQueues)
+  private case class HealingEntry(pathset: Seq[ByteString], hash: ByteString, retries: Int = 0, depth: Int = 0, priority: Long = 0L)
+  // DFS priority queue: min-priority first (root=0, leftmost child first), depth DESC breaks ties.
+  // Besu uses a min-heap over (priority, -depth). This keeps the working set O(depth×16) ≈ 1K entries vs BFS O(N).
+  private val pendingTasks: mutable.PriorityQueue[HealingEntry] =
+    mutable.PriorityQueue.empty[HealingEntry](Ordering.by(e => (-e.priority, e.depth)))
   private var completedTaskCount: Int = 0
   private var abandonedTaskCount: Int = 0
 
   // Per-task retry limit: after this many timeouts/failures, skip the task.
-  // At ~6s per timeout cycle, 20 retries = ~2 minutes of trying per node.
-  private val maxRetriesPerTask: Int = 20
+  // Aligned with Besu MAX_RETRIES=4 (RetryingGetTrieNodeFromPeerTask.java).
+  // 4 retries × 60s timeout = 4 min max per node before abandonment.
+  // Prior value of 20 locked all workers for 20 min on unserviceable nodes (BUG-HEAL-11).
+  private val maxRetriesPerTask: Int = 4
 
   // Global stagnation detection: if no nodes healed for this duration, declare
   // healing complete with a warning. Prevents infinite loops when all peers lack
   // GetTrieNodes support (ETH68 networks). Regular sync fetches missing nodes on-demand.
   private var lastHealedAtMs: Long = System.currentTimeMillis()
   private val healingStagnationTimeoutMs: Long = 5 * 60 * 1000 // 5 minutes
+
+  // Pivot refresh stall detection: tracks when pivotRefreshRequested was set and when
+  // dispatch or responses last occurred, enabling the periodic HealingStagnationCheck to
+  // detect and recover from controller-side retry failures (Bug 1 defense-in-depth).
+  private var pivotRefreshRequestedAtMs: Long = 0L
+  private var lastDispatchOrResponseMs: Long = System.currentTimeMillis()
+  private val noActivityTimeoutMs: Long = 120_000L        // 2 min: ghost-peer detection (matches StorageRangeCoordinator)
+  private val pivotRefreshStallTimeoutMs: Long = 600_000L // 10 min: re-trigger if controller retry is stuck
 
   // Active request tracking: maps requestId -> (tasks, peer, requestedBytes, sentAtMs)
   private case class ActiveRequest(
@@ -70,6 +84,15 @@ class TrieNodeHealingCoordinator(
   private var totalNodesHealed: Int = 0
   private var totalBytesReceived: Long = 0
   private val startTime = System.currentTimeMillis()
+  private var lastProgressLogAt: Long = 0   // for 500-node interval progress log
+  private val ProgressLogInterval: Long = 500
+  private var lastPulseHealedCount: Int = 0 // for 2-min stagnation-check velocity
+  // FIX-STAGNATION-LIMIT: Track consecutive 2-min HEAL-PULSE cycles with zero new healed nodes.
+  private var consecutiveStagnations: Int = 0
+  private val MaxConsecutiveStagnations: Int = 3
+  // Rolling 60s window for recent throughput (matches controller's SyncProgressMonitor pattern)
+  private val recentHistory: mutable.Queue[(Long, Long)] = mutable.Queue.empty
+  private val RecentWindowMs: Long = 60_000
 
   // Adaptive healing throttle (geth p2p/msgrate alignment)
   // When pending nodes exceed 2× the processing rate, throttle increases (slow down requests).
@@ -93,7 +116,14 @@ class TrieNodeHealingCoordinator(
 
   // Stateless peer tracking (geth-aligned: peers that return empty TrieNodes for current root)
   private val statelessPeers = mutable.Set[String]()
+  // Persistent stateless tracking by remote address — survives peer reconnect with new session ID.
+  // Non-static peers that return empty GetTrieNodes are blocked even after reconnection.
+  private val statelessRemoteAddresses = mutable.Set[String]()
   private var pivotRefreshRequested: Boolean = false
+  // Post-pivot-refresh cooldown: prevents immediate re-dispatch before peers sync to new root.
+  // Without this, all peers return empty → stateless → another HealingAllPeersStateless → tight loop.
+  private var postRefreshCooldownUntilMs: Long = 0L
+  private val postRefreshCooldownMs: Long = 10_000L // 10s (matches StorageRangeCoordinator)
 
   // Per-peer adaptive byte budgeting
   private val minResponseBytes: BigInt = 50 * 1024
@@ -103,6 +133,9 @@ class TrieNodeHealingCoordinator(
   private val decreaseFactor: Double = 0.5
 
   private val peerResponseBytesTarget = mutable.Map.empty[String, BigInt]
+
+  // HW1 self-feeding: tracks total missing trie children discovered across all healed nodes
+  private var childrenDiscoveredTotal: Int = 0
 
   private def responseBytesTargetFor(peer: Peer): BigInt =
     peerResponseBytesTarget
@@ -133,9 +166,12 @@ class TrieNodeHealingCoordinator(
     peerCooldownUntilMs.get(peer.id.value).exists(_ > System.currentTimeMillis())
 
   private def recordPeerCooldown(peer: Peer, reason: String): Unit = {
-    val until = System.currentTimeMillis() + peerCooldownDefault.toMillis
+    // OPT-P5: Static peers (core-geth, Besu configured as static) get a shorter cooldown —
+    // trusted infrastructure should be re-tried sooner after transient failures.
+    val cooldown = if (peer.isStatic) 5.seconds else peerCooldownDefault
+    val until = System.currentTimeMillis() + cooldown.toMillis
     peerCooldownUntilMs.put(peer.id.value, until)
-    log.debug(s"Cooling down peer ${peer.id.value} for ${peerCooldownDefault.toSeconds}s: $reason")
+    log.debug(s"Cooling down peer ${peer.id.value} for ${cooldown.toSeconds}s (static=${peer.isStatic}): $reason")
   }
 
   /** Count in-flight requests for a given peer (pipelining support). */
@@ -145,14 +181,20 @@ class TrieNodeHealingCoordinator(
   /** Dispatch up to maxInFlightPerPeer requests to a single peer (pipelining). */
   private def dispatchIfPossible(peer: Peer): Unit = {
     if (pivotRefreshRequested) return
+    val nowMs = System.currentTimeMillis()
+    if (nowMs < postRefreshCooldownUntilMs) {
+      log.debug(s"[HEAL] Dispatch to ${peer.id.value} deferred — post-refresh cooldown (${(postRefreshCooldownUntilMs - nowMs) / 1000}s remaining)")
+      return
+    }
     if (statelessPeers.contains(peer.id.value)) return
     if (isPeerCoolingDown(peer)) return
     var inflight = inFlightForPeer(peer)
-    while (pendingTasks.nonEmpty && inflight < maxInFlightPerPeer && activeRequests.size < maxConcurrentRequests)
+    while (pendingTasks.nonEmpty && inflight < maxInFlightPerPeer && activeRequests.size < maxConcurrentRequests) {
       requestNextBatch(peer) match {
         case Some(_) => inflight += 1
         case None    => return
       }
+    }
   }
 
   // Batched raw node storage: accumulate nodes and flush asynchronously
@@ -162,6 +204,8 @@ class TrieNodeHealingCoordinator(
 
   // Internal message for async flush completion
   private case class FlushComplete(count: Int)
+  // Periodic stagnation and no-activity check (every 2 minutes)
+  private case object HealingStagnationCheck
 
   /** Synchronous flush — used only for final completion flush (small buffer, safe to block). */
   private def flushRawNodesSync(): Unit =
@@ -190,8 +234,11 @@ class TrieNodeHealingCoordinator(
       }(context.dispatcher).foreach(n => selfRef ! FlushComplete(n))(context.dispatcher)
     }
 
-  override def preStart(): Unit =
+  override def preStart(): Unit = {
     log.info(s"TrieNodeHealingCoordinator starting (concurrency=$concurrency)")
+    import context.dispatcher
+    context.system.scheduler.scheduleWithFixedDelay(2.minutes, 2.minutes, self, HealingStagnationCheck)
+  }
 
   override val supervisorStrategy: SupervisorStrategy =
     OneForOneStrategy(maxNrOfRetries = 3, withinTimeRange = 1.minute) { case _: Exception =>
@@ -202,42 +249,124 @@ class TrieNodeHealingCoordinator(
   override def receive: Receive = {
     case StartTrieNodeHealing(root) =>
       log.info(s"Starting trie node healing for state root ${Hex.toHexString(root.take(8).toArray)}")
+      // ARCH-ROOT-SEED: Seed immediately with root node (Besu-style top-down discovery).
+      // Prior: waited 50+ min for walk results. Now: healing starts instantly.
+      // When root is healed, discoverMissingChildren() discovers all children inline.
+      // Walk becomes validation-only — its results remain additive (dedup prevents duplicates).
+      val emptyPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+      queueNodes(Seq((Seq(emptyPath), root)))
+      log.info(
+        s"[HEAL] Root ${Hex.toHexString(root.take(8).toArray)} seeded with empty path — " +
+        s"inline child discovery will populate the work queue top-down (Besu-aligned)"
+      )
+      lastHealedAtMs = System.currentTimeMillis()
 
     case QueueMissingNodes(nodes) =>
-      log.info(s"Queuing ${nodes.size} missing nodes for healing")
+      log.info(s"[HEAL-RESUME] Received ${nodes.size} persisted missing nodes from prior session")
+      lastHealedAtMs = System.currentTimeMillis() // reset stagnation timer at start of each healing round
       queueNodes(nodes)
       // Immediately dispatch to any known available peers
       tryRedispatchPendingTasks()
+      if (pendingTasks.isEmpty)
+        log.info(
+          s"[HEAL] All ${nodes.size} resumed nodes already present in trie DB — " +
+            s"no network requests needed, proceeding to trie walk"
+        )
+      self ! HealingCheckCompletion
 
     case HealingPeerAvailable(peer) =>
-      // Evict stale entry for same physical node (reconnection creates new PeerId)
-      knownAvailablePeers.filterInPlace(_.remoteAddress != peer.remoteAddress)
-      knownAvailablePeers += peer
-      dispatchIfPossible(peer)
+      // Skip if this remote address has been marked stateless — blocks reconnected dead peers
+      if (statelessRemoteAddresses.contains(peer.remoteAddress.toString)) {
+        log.debug(
+          s"[HEALING] Skipping ${peer.remoteAddress} — address known stateless (prior GetTrieNodes failure)"
+        )
+      } else {
+        // Evict stale entry for same physical node (reconnection creates new PeerId).
+        // Also clean up stale session-ID entries from statelessPeers and cooldown map.
+        val evicted = knownAvailablePeers.filter(_.remoteAddress == peer.remoteAddress)
+        statelessPeers --= evicted.map(_.id.value)
+        peerCooldownUntilMs --= evicted.map(_.id.value)
+        knownAvailablePeers.filterInPlace(_.remoteAddress != peer.remoteAddress)
+        knownAvailablePeers += peer
+        dispatchIfPossible(peer)
+      }
 
     case UpdateMaxInFlightPerPeer(newLimit) =>
-      log.info(s"Healing per-peer budget: $maxInFlightPerPeer -> $newLimit")
-      maxInFlightPerPeer = newLimit
-      if (newLimit > 0) tryRedispatchPendingTasks()
+      if (newLimit != maxInFlightPerPeer) {
+        val wasLimit = maxInFlightPerPeer
+        log.info(s"Healing per-peer budget: $maxInFlightPerPeer -> $newLimit")
+        maxInFlightPerPeer = newLimit
+        // LOG-BUDGET-ZERO: Warn when budget drops to 1 — indicates high timeout rate
+        if (newLimit <= 1 && wasLimit > 1) {
+          log.warning(
+            s"[HEAL-BUDGET] In-flight budget dropped to $newLimit/peer — high timeout rate detected. " +
+            s"healed=$totalNodesHealed pending=${pendingTasks.size}"
+          )
+        }
+        if (newLimit > 0) tryRedispatchPendingTasks()
+      }
 
     case HealingPivotRefreshed(newStateRoot) =>
       val oldRoot = Hex.toHexString(stateRoot.take(4).toArray)
       val newRootHex = Hex.toHexString(newStateRoot.take(4).toArray)
       log.info(
         s"Healing pivot refreshed: $oldRoot -> $newRootHex. " +
-          s"Clearing ${pendingTasks.size} pending tasks, ${statelessPeers.size} stateless peers."
+          s"Clearing ${pendingTasks.size} pending tasks + ${pendingHashSet.size} hashes " +
+          s"(aligned to Besu reloadTrieHeal: clear all, reseed from new root). " +
+          s"Clearing ${statelessPeers.size} stateless peers."
       )
       stateRoot = newStateRoot
-      flushRawNodesSync() // Flush any buffered nodes before clearing state
-      pendingTasks = Seq.empty // Will be re-populated by trie walk from controller
+      flushRawNodesSync() // Flush any buffered nodes before pivot switch
+      // Besu SnapWorldDownloadState.reloadTrieHeal(): pendingTrieNodeRequests.clear() + startTrieHeal()
+      // ARCH-ROOT-SEED (already committed) immediately re-seeds the new root, so there is no
+      // empty-queue window — BUG-H3's original concern no longer applies.
+      pendingTasks.clear()
       pendingHashSet.clear()
       statelessPeers.clear()
+      statelessRemoteAddresses.clear() // new root — peers that failed old root may serve new one
       peerCooldownUntilMs.clear()
       peerResponseBytesTarget.clear()
       // Cancel active requests (they're for the old root)
       activeRequests.keys.foreach(requestTracker.completeRequest(_, 0))
       activeRequests.clear()
       pivotRefreshRequested = false
+      pivotRefreshRequestedAtMs = 0L
+      // Reset stagnation counter on pivot refresh — fresh root, fresh start.
+      consecutiveStagnations = 0
+      lastPulseHealedCount = totalNodesHealed // start fresh velocity window post-refresh
+      // Post-refresh cooldown: peers need time to sync to new root before we dispatch.
+      // Without this, immediate dispatch → all stateless → another HealingAllPeersStateless → tight loop.
+      postRefreshCooldownUntilMs = System.currentTimeMillis() + postRefreshCooldownMs
+      log.info(s"Post-refresh cooldown active for ${postRefreshCooldownMs / 1000}s — waiting for peers to sync to new root")
+      // ARCH-PIVOT-RESEED: Re-seed with new root for top-down discovery of new trie.
+      // ARCH-ROOT-SEED ensures healing starts from root within the cooldown window.
+      val pivotReseedPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+      if (!pendingHashSet.contains(newStateRoot) && !isNodeInStorage(newStateRoot)) {
+        pendingTasks += HealingEntry(Seq(pivotReseedPath), newStateRoot)
+        pendingHashSet += newStateRoot
+        log.info(
+          s"[HEAL] Re-seeded with new root ${Hex.toHexString(newStateRoot.take(4).toArray)} " +
+          s"(pending: ${pendingTasks.size})"
+        )
+      } else {
+        log.info(s"[HEAL] New root already in storage or pending — skipping pivot reseed")
+      }
+
+    case HealingForceComplete =>
+      log.warning(
+        s"[HEAL-FORCE-COMPLETE] Pivot advanced beyond SNAP serve window — " +
+        s"clearing ${pendingTasks.size} pending tasks + ${activeRequests.size} in-flight. " +
+        s"Signaling completion with $totalNodesHealed healed nodes."
+      )
+      // Cancel all in-flight requests
+      activeRequests.keys.foreach(requestTracker.completeRequest(_, 0))
+      activeRequests.clear()
+      // Clear pending queue — these paths are for a root peers have pruned
+      pendingTasks.clear()
+      pendingHashSet.clear()
+      // Signal completion with 0 abandoned (fresh coordinator + walk will start for new root)
+      snapSyncController ! SNAPSyncController.StateHealingComplete(0, totalNodesHealed, 0L)
+      context.stop(self)
 
     case TrieNodesResponseMsg(response) =>
       handleResponse(response)
@@ -245,6 +374,9 @@ class TrieNodeHealingCoordinator(
     case FlushComplete(count) =>
       flushing = false
       log.info(s"Async flush complete: $count healed nodes written to disk (total: $totalNodesHealed)")
+      // Snapshot pending queue for crash recovery (piggybacks on existing flush cadence)
+      val snapshot = pendingTasks.iterator.filter(_ != null).map(e => (e.pathset, e.hash)).toSeq
+      snapSyncController ! SNAPSyncController.PersistHealingQueue(snapshot)
       // Check if buffer filled up again during the flush
       if (rawNodeBuffer.size >= rawFlushThreshold) {
         flushRawNodesAsync()
@@ -255,7 +387,18 @@ class TrieNodeHealingCoordinator(
       result match {
         case Right(count) =>
           totalNodesHealed += count
-          log.info(s"Healing task completed: $count nodes")
+          log.info(s"Healing task completed: $count nodes (total: $totalNodesHealed, pending: ${pendingTasks.size})")
+          // Periodic progress summary (every 5K nodes)
+          if (totalNodesHealed - lastProgressLogAt >= ProgressLogInterval) {
+            val rate = calculateNodesPerSecond()
+            val activeTaskCount = activeRequests.values.map(_.tasks.size).sum
+            log.info(
+              s"Healing progress: $totalNodesHealed nodes (${"%.1f".format(totalBytesReceived / 1048576.0)} MB) " +
+                s"(${pendingTasks.size} pending, $activeTaskCount active, " +
+                s"${"%.0f".format(rate)} nodes/sec)"
+            )
+            lastProgressLogAt = totalNodesHealed
+          }
           self ! HealingCheckCompletion
         case Left(error) =>
           log.warning(s"Healing task failed: $error")
@@ -264,10 +407,18 @@ class TrieNodeHealingCoordinator(
     case HealingCheckCompletion =>
       if (isComplete && !flushing) {
         flushRawNodesSync()
-        val abandonedStr =
-          if (abandonedTaskCount > 0) s" ($abandonedTaskCount abandoned — regular sync will recover)" else ""
-        log.info(s"Healing round complete: $totalNodesHealed total nodes healed$abandonedStr. Notifying controller.")
-        snapSyncController ! SNAPSyncController.StateHealingComplete
+        val abandonedStr = if (abandonedTaskCount > 0) s" ($abandonedTaskCount abandoned — deferred to state validation)" else ""
+        log.info(
+          s"Healing complete: $totalNodesHealed nodes healed in " +
+            s"${(System.currentTimeMillis() - startTime) / 1000}s " +
+            s"(${"%.1f".format(totalBytesReceived / 1048576.0)}MB received)$abandonedStr. " +
+            s"Signalling controller to begin state validation trie walk."
+        )
+        snapSyncController ! SNAPSyncController.StateHealingComplete(abandonedTaskCount, totalNodesHealed, pendingTasks.size.toLong)
+      } else if (!isComplete) {
+        log.debug(
+          s"[HEAL-CHECK] pending=${pendingTasks.size} active=${activeRequests.size} flushing=$flushing"
+        )
       }
 
     case HealingGetProgress =>
@@ -283,18 +434,105 @@ class TrieNodeHealingCoordinator(
         progress = calculateProgress()
       )
       sender() ! stats
+
+    case HealingStagnationCheck =>
+      val now = System.currentTimeMillis()
+      // Compute recent throughput over the last 2 min (since last stagnation check)
+      val recentHealed = totalNodesHealed - lastPulseHealedCount
+      val idleSec = (now - lastDispatchOrResponseMs) / 1000
+      log.info(
+        s"[HEAL-PULSE] healed=$totalNodesHealed total, +$recentHealed last 2min | " +
+        s"pending=${pendingTasks.size} active=${activeRequests.size} peers=${knownAvailablePeers.size} | " +
+        s"idleFor=${idleSec}s pivotRefreshPending=$pivotRefreshRequested"
+      )
+      lastPulseHealedCount = totalNodesHealed
+
+      // FIX-STAGNATION-LIMIT: Track consecutive zero-progress cycles. After MaxConsecutiveStagnations,
+      // notify controller to restart healing with a fresh pivot. Prevents permanent stuck state when
+      // the healing root is too stale for peers to serve (e.g. after a long walk).
+      if (recentHealed == 0 && pendingTasks.nonEmpty && !pivotRefreshRequested) {
+        consecutiveStagnations += 1
+        log.warning(
+          s"[HEAL-STAGNATION] Zero progress in last 2min — stagnation $consecutiveStagnations/$MaxConsecutiveStagnations. " +
+          s"healed=$totalNodesHealed pending=${pendingTasks.size} peers=${knownAvailablePeers.size}"
+        )
+        if (consecutiveStagnations >= MaxConsecutiveStagnations) {
+          log.warning(
+            s"[HEAL-STAGNATION] $MaxConsecutiveStagnations consecutive zero-progress cycles — " +
+            s"notifying controller to restart healing with fresh pivot"
+          )
+          snapSyncController ! HealingStagnated(totalNodesHealed.toLong, pendingTasks.size.toLong)
+          consecutiveStagnations = 0 // reset to avoid re-firing immediately
+        }
+      } else if (recentHealed > 0) {
+        consecutiveStagnations = 0
+      }
+
+      // 1. Detect pivot refresh stall: pivotRefreshRequested set but unresolved for >10min.
+      // Defense-in-depth — normally Bug 1 fix (RetryPivotRefresh handling StateHealing) resolves it.
+      if (pivotRefreshRequested && pivotRefreshRequestedAtMs > 0 &&
+          (now - pivotRefreshRequestedAtMs) > pivotRefreshStallTimeoutMs) {
+        log.warning(
+          s"[HEAL-STALL] Pivot refresh has been pending for ${(now - pivotRefreshRequestedAtMs) / 60000}min " +
+          s"without resolution. Re-triggering — controller retry may be stuck."
+        )
+        // Reset all stateless state and re-request so the controller gets another HealingAllPeersStateless
+        pivotRefreshRequested = false
+        pivotRefreshRequestedAtMs = 0L
+        statelessPeers.clear()
+        peerCooldownUntilMs.clear()
+        val allStillStateless = knownAvailablePeers.nonEmpty &&
+          knownAvailablePeers.forall(p => statelessPeers.contains(p.id.value))
+        if (allStillStateless || knownAvailablePeers.isEmpty) {
+          pivotRefreshRequested = true
+          pivotRefreshRequestedAtMs = now
+          log.warning("[HEAL-STALL] Still no capable peers after reset — re-sending HealingAllPeersStateless")
+          snapSyncController ! SNAPSyncController.HealingAllPeersStateless
+        } else {
+          tryRedispatchPendingTasks()
+        }
+      }
+
+      // 2. Detect no-activity stall from ghost peers (present in knownAvailablePeers but disconnected).
+      // If tasks are pending but no dispatch/response has occurred for 2min and dispatch is not blocked,
+      // the remaining peers are likely disconnected ghosts — mark stateless to trigger pivot refresh.
+      if (!pivotRefreshRequested && pendingTasks.nonEmpty && activeRequests.isEmpty &&
+          knownAvailablePeers.nonEmpty &&
+          (now - lastDispatchOrResponseMs) > noActivityTimeoutMs) {
+        log.warning(
+          s"[HEAL-STALL] No healing activity for ${(now - lastDispatchOrResponseMs) / 1000}s " +
+          s"with ${pendingTasks.size} pending tasks and ${knownAvailablePeers.size} known peers. " +
+          s"Assuming ghost connections — marking all peers stateless to trigger pivot refresh."
+        )
+        knownAvailablePeers.foreach(p => statelessPeers.add(p.id.value))
+        if (!pivotRefreshRequested) {
+          pivotRefreshRequested = true
+          pivotRefreshRequestedAtMs = now
+          snapSyncController ! SNAPSyncController.HealingAllPeersStateless
+        }
+      }
   }
 
   private def queueNodes(pathsAndHashes: Seq[(Seq[ByteString], ByteString)]): Unit = {
+    var skippedExisting = 0
     val entries = pathsAndHashes.collect {
       case (pathset, hash) if !pendingHashSet.contains(hash) =>
-        pendingHashSet += hash
-        HealingEntry(pathset = pathset, hash = hash)
-    }
-    val deduped = pathsAndHashes.size - entries.size
-    pendingTasks = pendingTasks ++ entries
+        // R5 fix: Check if the node already exists in storage (downloaded during account/storage phase).
+        // mptStorage.get() throws MissingRootNodeException for missing nodes — fast O(1) RocksDB lookup.
+        val alreadyExists = try { mptStorage.get(hash.toArray); true } catch { case _: Exception => false }
+        if (alreadyExists) {
+          skippedExisting += 1
+          None
+        } else {
+          pendingHashSet += hash
+          Some(HealingEntry(pathset = pathset, hash = hash))
+        }
+    }.flatten
+    val deduped = pathsAndHashes.size - entries.size - skippedExisting
+    pendingTasks ++= entries
     val dedupStr = if (deduped > 0) s" ($deduped duplicates filtered)" else ""
-    log.info(s"Queued ${entries.size} nodes for healing$dedupStr. Total pending: ${pendingTasks.size}")
+    val existsStr = if (skippedExisting > 0) s" ($skippedExisting already in storage)" else ""
+    log.info(s"Queued ${entries.size} nodes for healing$dedupStr$existsStr. Total pending: ${pendingTasks.size}")
   }
 
   /** Update healing rate EMA and adjust throttle (geth p2p/msgrate alignment).
@@ -356,8 +594,9 @@ class TrieNodeHealingCoordinator(
     }
 
     val effectiveBatch = effectiveBatchSize
-    val batch = pendingTasks.take(effectiveBatch)
-    pendingTasks = pendingTasks.drop(effectiveBatch)
+    // DFS priority queue: dequeue in priority order (root=priority 0 always first per Besu ordering).
+    // Root node has priority=0 which is the minimum — always dispatched first without explicit sorting.
+    val batch = (0 until effectiveBatch.min(pendingTasks.size)).map(_ => pendingTasks.dequeue())
     // Remove dispatched hashes from dedup set (they'll be re-added if re-queued on failure)
     batch.foreach(e => pendingHashSet -= e.hash)
 
@@ -376,7 +615,10 @@ class TrieNodeHealingCoordinator(
 
     activeRequests(requestId) = ActiveRequest(batch, peer, responseBytes)
 
-    requestTracker.trackRequest(requestId, peer, SNAPRequestTracker.RequestType.GetTrieNodes) {
+    // Besu RequestDataStep.java: orTimeout(10, TimeUnit.SECONDS) for all request types.
+    // Aligned floor: 10s (was 30s). Ceiling: 30s (was 60s). Slow peers released faster.
+    val healingTimeout = requestTracker.rateTracker.targetTimeout().max(10.seconds).min(30.seconds)
+    requestTracker.trackRequest(requestId, peer, SNAPRequestTracker.RequestType.GetTrieNodes, healingTimeout) {
       handleTimeout(requestId, batch, peer)
     }
 
@@ -388,6 +630,7 @@ class TrieNodeHealingCoordinator(
       s"Requested ${batch.size} trie nodes from peer ${peer.id.value} " +
         s"(reqId=$requestId, responseBytes=$responseBytes, pending=${pendingTasks.size})"
     )
+    lastDispatchOrResponseMs = System.currentTimeMillis()
 
     Some(requestId)
   }
@@ -401,7 +644,7 @@ class TrieNodeHealingCoordinator(
     val activeReq = activeRequests.get(requestId) match {
       case Some(req) => req
       case None =>
-        log.warning(s"No active healing request found for requestId=$requestId")
+        log.debug(s"Received orphaned TrieNodes response (reqId=$requestId). Request was already cancelled (timeout or pivot refresh). Discarding stale response.")
         return
     }
 
@@ -418,6 +661,7 @@ class TrieNodeHealingCoordinator(
       if (nodeHash == task.hash) {
         // Valid node — store directly by hash
         rawNodeBuffer += ((nodeHash, nodeData.toArray))
+        discoverMissingChildren(nodeData, task)
         healedCount += 1
         totalNodesHealed += 1
         receivedBytes += nodeData.length
@@ -427,20 +671,36 @@ class TrieNodeHealingCoordinator(
           s"Node hash mismatch: expected ${Hex.toHexString(task.hash.take(4).toArray)}, " +
             s"got ${Hex.toHexString(nodeHash.take(4).toArray)}"
         )
-        // Re-queue this task for retry
-        pendingTasks = pendingTasks :+ task
+        // Re-queue with incremented retry count — abandon after maxRetriesPerTask mismatches.
+        // Without this, a ghost node from a prior session's HEAL-RESUME queue (whose path no
+        // longer exists in the current trie) causes an infinite loop: peers return the nearest
+        // ancestor (the root) for non-existent paths, the mismatch re-queues without progress,
+        // and the node can never be healed regardless of how many pivot refreshes occur.
+        val updated = task.copy(retries = task.retries + 1)
+        if (updated.retries >= maxRetriesPerTask) {
+          abandonedTaskCount += 1
+          log.warning(
+            s"Giving up on trie node ${Hex.toHexString(task.hash.take(4).toArray)} after " +
+              s"$maxRetriesPerTask consecutive hash mismatches " +
+              s"(got ${Hex.toHexString(nodeHash.take(4).toArray)}). " +
+              s"Node not present in current trie — deferring to state validation."
+          )
+        } else {
+          pendingTasks += updated
+        }
       }
     }
 
     // Re-queue unmatched tasks (server returned fewer nodes than requested)
     val unmatchedTasks = tasksForRequest.drop(nodes.size)
     unmatchedTasks.foreach { task =>
-      pendingTasks = pendingTasks :+ task
+      pendingTasks += task
     }
 
     completedTaskCount += healedCount
     activeRequests.remove(requestId)
     requestTracker.completeRequest(requestId, nodes.size.max(1))
+    lastDispatchOrResponseMs = System.currentTimeMillis()
 
     // Update healing throttle (geth msgrate alignment)
     val elapsedMs = System.currentTimeMillis() - activeReq.sentAtMs
@@ -455,27 +715,32 @@ class TrieNodeHealingCoordinator(
     } else {
       adjustResponseBytesOnFailure(peer, "empty healing response")
       recordPeerCooldown(peer, "empty healing response")
-      // Mark peer stateless for current root (geth-aligned)
-      statelessPeers += peer.id.value
-      log.info(
-        s"Peer ${peer.id.value} marked stateless for healing root " +
-          s"${Hex.toHexString(stateRoot.take(4).toArray)} (${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
-      )
-      // Check if all known peers are stateless — request pivot refresh
-      if (statelessPeers.size >= knownAvailablePeers.size && knownAvailablePeers.nonEmpty && !pivotRefreshRequested) {
-        pivotRefreshRequested = true
-        log.warning(
-          s"All ${statelessPeers.size} peers stateless for healing root " +
-            s"${Hex.toHexString(stateRoot.take(4).toArray)}. Requesting pivot refresh."
+      // Mark peer stateless for current root (geth-aligned) — skip for static peers
+      if (!peer.isStatic) {
+        statelessPeers += peer.id.value
+        statelessRemoteAddresses += peer.remoteAddress.toString // persist across reconnects
+        log.info(
+          s"Peer ${peer.id.value}@${peer.remoteAddress} marked stateless for healing root " +
+            s"${Hex.toHexString(stateRoot.take(4).toArray)} (${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
         )
-        snapSyncController ! SNAPSyncController.HealingAllPeersStateless
+        // Check if all known peers are stateless — request pivot refresh
+        if (statelessPeers.size >= knownAvailablePeers.size && knownAvailablePeers.nonEmpty && !pivotRefreshRequested) {
+          pivotRefreshRequested = true
+          pivotRefreshRequestedAtMs = System.currentTimeMillis()
+          log.warning(
+            s"All ${statelessPeers.size} peers stateless for healing root " +
+              s"${Hex.toHexString(stateRoot.take(4).toArray)}. Requesting pivot refresh."
+          )
+          snapSyncController ! SNAPSyncController.HealingAllPeersStateless
+        }
+      } else {
+        log.debug(s"[STATIC] Skipping stateless marking for static peer ${peer.remoteAddress} (healing)")
       }
     }
 
     log.info(
-      s"Healed $healedCount/${nodes.size} trie nodes from peer ${peer.id.value} " +
-        s"(total: $totalNodesHealed, pending: ${pendingTasks.size}, active: ${activeRequests.size} reqs, " +
-        s"responseBytes=${responseBytesTargetFor(peer)})"
+      s"Healed $healedCount of ${nodes.size} requested trie nodes from ${peer.id.value}. " +
+        s"Cumulative: $totalNodesHealed healed, ${pendingTasks.size} pending, ${activeRequests.size} in-flight"
     )
 
     if (healedCount > 0) {
@@ -496,6 +761,14 @@ class TrieNodeHealingCoordinator(
   private def handleTimeout(requestId: BigInt, tasks: Seq[HealingEntry], peer: Peer): Unit = {
     log.warning(s"Healing request timed out: reqId=$requestId, tasks=${tasks.size}, peer=${peer.id.value}")
 
+    // Guard against stale timeouts from a previous coordinator generation (same ActorRef path
+    // after Pekko restart). Re-queuing unknown tasks would inflate pendingTasks with work the
+    // current instance never dispatched, triggering false force-complete on the new instance.
+    if (!activeRequests.contains(requestId)) {
+      log.debug(s"Ignoring stale timeout for reqId=$requestId (not in activeRequests — from previous generation)")
+      return
+    }
+
     activeRequests.remove(requestId)
     recordPeerCooldown(peer, "request timeout")
     adjustResponseBytesOnFailure(peer, "request timeout")
@@ -509,21 +782,18 @@ class TrieNodeHealingCoordinator(
         abandoned += 1
         abandonedTaskCount += 1
         log.warning(
-          s"Abandoning healing task after ${updated.retries} retries: " +
-            s"hash=${Hex.toHexString(task.hash.take(4).toArray)} " +
-            s"(regular sync will fetch on-demand)"
+          s"Giving up on trie node ${Hex.toHexString(task.hash.take(4).toArray)} after $maxRetriesPerTask retries. " +
+            s"Deferring to state validation phase — node will be re-discovered and fetched during trie walk."
         )
       } else {
-        pendingTasks = pendingTasks :+ updated
+        pendingTasks += updated
         requeued += 1
       }
     }
 
     if (requeued > 0) {
-      log.info(
-        s"Re-queued $requeued timed-out healing tasks (pending: ${pendingTasks.size})" +
-          (if (abandoned > 0) s", abandoned $abandoned" else "")
-      )
+      log.info(s"Re-queued $requeued timed-out healing tasks (pending: ${pendingTasks.size})" +
+        (if (abandoned > 0) s", abandoned $abandoned" else ""))
     }
 
     // Check global stagnation: no nodes healed for healingStagnationTimeoutMs
@@ -531,12 +801,22 @@ class TrieNodeHealingCoordinator(
     if (stagnantMs > healingStagnationTimeoutMs && pendingTasks.nonEmpty) {
       val pendingCount = pendingTasks.size
       log.warning(
-        s"Healing stagnation detected: no nodes healed in ${stagnantMs / 1000}s. " +
-          s"Abandoning $pendingCount remaining tasks. " +
-          s"Regular sync will fetch missing nodes on-demand via GetTrieNodes."
+        s"Healing stagnation timeout (${stagnantMs / 1000}s, no progress). " +
+          s"Likely cause: peers lack GetTrieNodes support or all peers offline. " +
+          s"Abandoning $pendingCount remaining tasks. Nodes will be re-discovered during state validation trie walk."
       )
       abandonedTaskCount += pendingCount
-      pendingTasks = Seq.empty
+      // LOG-ABANDONED-DETAIL: Log root and success rate before persisting abandoned list
+      val stateRootHex = Hex.toHexString(stateRoot.take(8).toArray)
+      log.info(
+        s"[HEAL-ABANDON] Persisting $pendingCount abandoned nodes. " +
+        s"root=$stateRootHex, healed=$totalNodesHealed, abandoned=$abandonedTaskCount"
+      )
+      // Persist the abandoned list before discarding — controller will use it to skip the trie
+      // re-walk and retry healing directly (OPT-H2). force=true bypasses the counter gate.
+      val abandonedSnapshot = pendingTasks.toSeq.map(e => (e.pathset, e.hash))
+      snapSyncController ! SNAPSyncController.PersistHealingQueue(abandonedSnapshot, force = true)
+      pendingTasks.clear()
       pendingHashSet.clear()
     }
 
@@ -550,7 +830,14 @@ class TrieNodeHealingCoordinator(
     val eligiblePeers = knownAvailablePeers.toList
       .filterNot(isPeerCoolingDown)
       .filterNot(p => statelessPeers.contains(p.id.value))
-    if (eligiblePeers.isEmpty) return
+      .filterNot(p => statelessRemoteAddresses.contains(p.remoteAddress.toString))
+    if (eligiblePeers.isEmpty) {
+      log.debug(
+        s"[REDISPATCH] No eligible peers — ${knownAvailablePeers.size} known, " +
+          s"${statelessPeers.size} stateless, rest cooling down. pending: ${pendingTasks.size}"
+      )
+      return
+    }
 
     for (peer <- eligiblePeers if pendingTasks.nonEmpty)
       dispatchIfPossible(peer)
@@ -563,15 +850,139 @@ class TrieNodeHealingCoordinator(
     else completedTaskCount.toDouble / total
   }
 
+  /** Recent nodes/sec using 60s rolling window. Falls back to overall average when insufficient data. */
   private def calculateNodesPerSecond(): Double = {
-    val elapsedSec = (System.currentTimeMillis() - startTime) / 1000.0
-    if (elapsedSec > 0) totalNodesHealed / elapsedSec else 0.0
+    val now = System.currentTimeMillis()
+    recentHistory.enqueue((now, totalNodesHealed.toLong))
+    while (recentHistory.nonEmpty && now - recentHistory.head._1 > RecentWindowMs)
+      recentHistory.dequeue()
+    if (recentHistory.size >= 2) {
+      val oldest = recentHistory.head
+      val timeDiff = (now - oldest._1) / 1000.0
+      val countDiff = totalNodesHealed - oldest._2
+      if (timeDiff > 0) countDiff / timeDiff else 0.0
+    } else {
+      // Fallback to overall average
+      val elapsedSec = (now - startTime) / 1000.0
+      if (elapsedSec > 0) totalNodesHealed / elapsedSec else 0.0
+    }
   }
 
+  /** Recent KB/sec using overall average (bytes not tracked in rolling window). */
   private def calculateKilobytesPerSecond(): Double = {
     val elapsedSec = (System.currentTimeMillis() - startTime) / 1000.0
     if (elapsedSec > 0) (totalBytesReceived / 1024.0) / elapsedSec else 0.0
   }
+
+  /** Decode a healed node and queue any missing children for healing.
+    * Makes healing self-feeding: each healed node expands the work queue without
+    * requiring a full periodic trie walk (geth trie.Sync scheduler alignment).
+    */
+  private def discoverMissingChildren(nodeData: ByteString, parentEntry: HealingEntry): Unit = {
+    import com.chipprbots.ethereum.mpt.{MptTraversals, BranchNode, ExtensionNode, HashNode, LeafNode}
+    import com.chipprbots.ethereum.mpt.HexPrefix
+    import com.chipprbots.ethereum.domain.Account
+    import scala.util.control.NonFatal
+
+    val pathset = parentEntry.pathset
+    if (pathset.isEmpty) return
+
+    try {
+      val decoded = MptTraversals.decodeNode(nodeData.toArray)
+      val parentCompact = pathset.last.toArray
+      val parentNibbles = HexPrefix.decode(parentCompact)._1
+      val isStorageTrie = pathset.size > 1  // Seq(accountHash, path) vs Seq(path)
+
+      val newEntries = mutable.Buffer.empty[HealingEntry]
+
+      decoded match {
+        case branch: BranchNode =>
+          // DFS priority: child i of parent gets priority = parentPriority * 16 + i (Besu TrieNodeHealingRequest)
+          for (i <- 0 until 16) {
+            branch.children(i) match {
+              case hash: HashNode =>
+                val childHash = ByteString(hash.hashNode)
+                if (!pendingHashSet.contains(childHash) && !isNodeInStorage(childHash)) {
+                  val childNibbles = parentNibbles :+ i.toByte
+                  val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
+                  val childPathset = if (isStorageTrie) Seq(pathset.head, childCompact) else Seq(childCompact)
+                  newEntries += HealingEntry(childPathset, childHash,
+                    depth = parentEntry.depth + 1,
+                    priority = parentEntry.priority * 16 + i)
+                }
+              case _ => // Inline-encoded or null — already resolved
+            }
+          }
+
+        case ext: ExtensionNode =>
+          // Extension has a single child; treat as index 0 for priority inheritance
+          ext.next match {
+            case hash: HashNode =>
+              val childHash = ByteString(hash.hashNode)
+              if (!pendingHashSet.contains(childHash) && !isNodeInStorage(childHash)) {
+                // ext.sharedKey is already HP-decoded nibbles (ByteString of nibble bytes)
+                val childNibbles = parentNibbles ++ ext.sharedKey.toArray
+                val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
+                val childPathset = if (isStorageTrie) Seq(pathset.head, childCompact) else Seq(childCompact)
+                newEntries += HealingEntry(childPathset, childHash,
+                  depth = parentEntry.depth + 1,
+                  priority = parentEntry.priority * 16)
+              }
+            case _ => // Already inline-encoded — no missing child
+          }
+
+        case leaf: LeafNode if !isStorageTrie =>
+          // ARCH-LEAF-SEED: Account trie leaf — decode account value, seed storage trie if needed.
+          // Besu equivalent: getChildRequests() → getStorageTrieNodeRequests() on account leaf values.
+          // leaf.key contains HP-decoded nibbles for this leaf's remaining path segment.
+          Account(leaf.value).foreach { account =>
+            if (account.storageRoot != Account.EmptyStorageRootHash &&
+                !pendingHashSet.contains(account.storageRoot) &&
+                !isNodeInStorage(account.storageRoot)) {
+              // Reconstruct 32-byte account address hash from the full nibble path.
+              // In the account trie, path from root to leaf = keccak256(address) as 64 nibbles.
+              val leafNibbles = leaf.key.toArray  // remaining nibbles for this leaf's path segment
+              val allNibbles  = parentNibbles ++ leafNibbles
+              if (allNibbles.length == 64) {
+                val accountHashBytes = allNibbles.grouped(2).map { g =>
+                  ((g(0) << 4) | g(1)).toByte
+                }.toArray
+                val accountHash      = ByteString(accountHashBytes)
+                val emptyStoragePath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+                // Storage trie root inherits account's priority; depth=0 (new trie)
+                newEntries += HealingEntry(Seq(accountHash, emptyStoragePath), account.storageRoot,
+                  depth = 0,
+                  priority = parentEntry.priority)
+                log.debug(
+                  s"[HEAL-LEAF] Seeded storage trie root ${Hex.toHexString(account.storageRoot.take(4).toArray)} " +
+                  s"for account ${Hex.toHexString(accountHashBytes.take(4))}"
+                )
+              }
+            }
+          }
+
+        case _ => // storage trie LeafNode, NullNode, HashNode — no children to discover
+      }
+
+      if (newEntries.nonEmpty) {
+        newEntries.foreach(e => pendingHashSet += e.hash)
+        pendingTasks ++= newEntries
+        childrenDiscoveredTotal += newEntries.size
+        if (childrenDiscoveredTotal % 100 == 0 || childrenDiscoveredTotal <= 20)
+          log.info(
+            s"[HEAL] Missing trie children queued: $childrenDiscoveredTotal total " +
+              s"(+${newEntries.size} from this node, pending: ${pendingTasks.size})"
+          )
+      }
+    } catch {
+      case NonFatal(e) =>
+        log.debug(s"[HEAL] Cannot decode healed node for child discovery: ${e.getMessage}. Skipping incremental discovery — full trie walk will find these nodes.")
+        // Non-fatal — healing still works via final validation walk as safety net
+    }
+  }
+
+  private def isNodeInStorage(hash: ByteString): Boolean =
+    try { mptStorage.get(hash.toArray); true } catch { case _: Exception => false }
 
   private def isComplete: Boolean =
     pendingTasks.isEmpty && activeRequests.isEmpty
