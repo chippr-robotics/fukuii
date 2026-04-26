@@ -99,8 +99,8 @@ class BlockchainReader(
     log.debug("Trying to get best block with number {}", bestKnownBlockinfo.number)
     val bestBlock = getBlockByHash(bestKnownBlockinfo.hash)
     if (bestBlock.isEmpty) {
-      log.error(
-        "Best block {} (number: {}) not found in storage.",
+      log.debug(
+        "Best block {} (number: {}) not found in storage — expected during SNAP sync (pivot header only).",
         Hex.toHexString(bestKnownBlockinfo.hash.toArray),
         bestKnownBlockinfo.number
       )
