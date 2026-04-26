@@ -86,14 +86,15 @@ case class ConnectedPeers(
       numPeers: Int,
       priority: PeerId => Double = _ => 0.0,
       incoming: Boolean = true,
-      currentTimeMillis: Long = System.currentTimeMillis
+      currentTimeMillis: Long = System.currentTimeMillis,
+      excludedNodeIds: Set[ByteString] = Set.empty
   ): (Seq[Peer], ConnectedPeers) = {
     val ageThreshold = currentTimeMillis - minAge.toMillis
     if (lastPruneTimestamp > ageThreshold || numPeers == 0) {
       // Protect against hostile takeovers by limiting the frequency of pruning.
       (Seq.empty, this)
     } else {
-      val candidates = handshakedPeers.values.filter(canPrune(incoming, ageThreshold)).toSeq
+      val candidates = handshakedPeers.values.filter(canPrune(incoming, ageThreshold, excludedNodeIds)).toSeq
 
       val toPrune = candidates.sortBy(peer => priority(peer.id)).take(numPeers)
 
@@ -108,10 +109,13 @@ case class ConnectedPeers(
     }
   }
 
-  private def canPrune(incoming: Boolean, minCreateTimeMillis: Long)(peer: Peer): Boolean =
+  private def canPrune(incoming: Boolean, minCreateTimeMillis: Long, excludedNodeIds: Set[ByteString])(
+      peer: Peer
+  ): Boolean =
     peer.incomingConnection == incoming &&
       peer.createTimeMillis <= minCreateTimeMillis &&
-      !pruningPeers.contains(peer.id)
+      !pruningPeers.contains(peer.id) &&
+      peer.nodeId.forall(nid => !excludedNodeIds.contains(nid))
 }
 
 object ConnectedPeers {
