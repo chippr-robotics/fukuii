@@ -51,14 +51,14 @@ case class EthNodeStatus64ExchangeState(
     )
 
     if (status.networkId != peerConfiguration.networkId) {
-      log.warn(
+      log.debug(
         "STATUS_EXCHANGE: NetworkId mismatch! Local: {}, Remote: {} - disconnecting (SUBPROTOCOL_TRIGGERED_MISMATCHED_NETWORK)",
         peerConfiguration.networkId,
         status.networkId
       )
       DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
     } else if (status.genesisHash != localGenesisHash) {
-      log.warn(
+      log.debug(
         "STATUS_EXCHANGE: Peer genesis hash mismatch! Local: {}, Remote: {} - disconnecting peer",
         localGenesisHash,
         status.genesisHash
@@ -72,12 +72,9 @@ case class EthNodeStatus64ExchangeState(
             status.forkId
           )
       } yield {
-        log.info("STATUS_EXCHANGE: ForkId validation result: {}", validationResult)
+        log.debug("STATUS_EXCHANGE: ForkId validation result: {}", validationResult)
         validationResult match {
           case Connect =>
-            // EIP-2124: ForkId validation replaces the fork block exchange for ETH64+
-            // When ForkId validation passes, we go directly to connected state
-            // without needing to do the old-style fork block handshake
             log.info(
               "STATUS_EXCHANGE: ForkId validation passed - accepting peer connection (skipping fork block exchange per EIP-2124)"
             )
@@ -85,7 +82,7 @@ case class EthNodeStatus64ExchangeState(
               PeerInfo.withForkAccepted(RemoteStatus(status, negotiatedCapability, supportsSnap, peerCapabilities))
             )
           case other =>
-            log.warn(
+            log.debug(
               "STATUS_EXCHANGE: ForkId validation failed with result: {} - disconnecting peer as UselessPeer. Local ForkId: {}, Remote ForkId: {}",
               other,
               localForkId,
