@@ -167,6 +167,14 @@ object Discv5SyncResponder extends LazyLogging {
   private val DefaultTokensPerSecond = 100
   private val DefaultMaxBurst = 50
 
+  /** Delay applied to the post-handshake ping-back so it doesn't race the
+    * synchronous response back to the same peer. Hive's `Ping` and
+    * `PingMultiIP` tests interrogate fukuii in tight ~300 ms reqresp cycles
+    * and treat any unsolicited Ping interleaved with the response as a
+    * protocol violation; `FindnodeResults` waits 60 seconds for the bond
+    * signal so a 1-second delay is well within the budget. */
+  private val PingBackDelayMillis: Long = 1000L
+
   // ---- Handler interface --------------------------------------------------
 
   /** Side-effect-free handler the responder calls into to fetch local state.
@@ -192,6 +200,14 @@ object Discv5SyncResponder extends LazyLogging {
 
   // ---- The responder factory ----------------------------------------------
 
+  /** Side-channel sender for unsolicited outbound packets. Set by the wiring
+    * layer once the underlying UDP peer group exists. The `delayMillis`
+    * argument lets the responder request a fire-and-forget delay before the
+    * UDP write — used for the post-handshake ping-back so it doesn't race
+    * the immediate response back to the same peer. Multi-packet replies
+    * (e.g. chunked NODES) pass `0` and go out as soon as netty can flush. */
+  type OutboundSender = (InetSocketAddress, ByteVector, Long) => Unit
+
   def apply(
       privateKey: PrivateKey,
       localNodeId: ByteVector,
@@ -199,9 +215,11 @@ object Discv5SyncResponder extends LazyLogging {
       sessions: Session.SessionCache,
       challenges: ChallengeCache,
       bystanders: BystanderEnrTable,
+      outboundSenderRef: AtomicReference[Option[OutboundSender]] = new AtomicReference(None),
       rateLimiter: RateLimiter = new RateLimiter(DefaultTokensPerSecond, DefaultMaxBurst)
   )(implicit
       payloadCodec: Codec[Payload],
+      enrCodec: Codec[EthereumNodeRecord],
       sigalg: SigAlg
   ): StaticUDPPeerGroup.SyncResponder = (sender: InetSocketAddress, incomingBits: BitVector) => {
     if (!rateLimiter.tryAcquire()) {
@@ -209,7 +227,18 @@ object Discv5SyncResponder extends LazyLogging {
       StaticUDPPeerGroup.SyncResult.Pass
     } else {
       val maybeReply: Option[BitVector] =
-        try respond(sender, incomingBits, privateKey, localNodeId, handler, sessions, challenges, bystanders)
+        try
+          respond(
+            sender,
+            incomingBits,
+            privateKey,
+            localNodeId,
+            handler,
+            sessions,
+            challenges,
+            bystanders,
+            outboundSenderRef
+          )
         catch {
           case NonFatal(ex) =>
             logger.warn(
@@ -251,9 +280,11 @@ object Discv5SyncResponder extends LazyLogging {
       handler: Handler,
       sessions: Session.SessionCache,
       challenges: ChallengeCache,
-      bystanders: BystanderEnrTable
+      bystanders: BystanderEnrTable,
+      outboundSenderRef: AtomicReference[Option[OutboundSender]]
   )(implicit
       payloadCodec: Codec[Payload],
+      enrCodec: Codec[EthereumNodeRecord],
       sigalg: SigAlg
   ): Option[BitVector] = {
     val incoming = incomingBits.toByteVector
@@ -262,10 +293,31 @@ object Discv5SyncResponder extends LazyLogging {
 
     pkt match {
       case msg: Packet.MessagePacket =>
-        handleMessage(sender, msg, incoming, privateKey, localNodeId, handler, sessions, challenges)
+        handleMessage(
+          sender,
+          msg,
+          incoming,
+          privateKey,
+          localNodeId,
+          handler,
+          sessions,
+          challenges,
+          outboundSenderRef
+        )
 
       case hs: Packet.HandshakePacket =>
-        handleHandshake(sender, hs, incoming, privateKey, localNodeId, handler, sessions, challenges, bystanders)
+        handleHandshake(
+          sender,
+          hs,
+          incoming,
+          privateKey,
+          localNodeId,
+          handler,
+          sessions,
+          challenges,
+          bystanders,
+          outboundSenderRef
+        )
 
       case _: Packet.WhoareyouPacket =>
         // The peer is challenging us — they don't know our node id. The
@@ -287,7 +339,8 @@ object Discv5SyncResponder extends LazyLogging {
       localNodeId: ByteVector,
       handler: Handler,
       sessions: Session.SessionCache,
-      challenges: ChallengeCache
+      challenges: ChallengeCache,
+      outboundSenderRef: AtomicReference[Option[OutboundSender]]
   )(implicit
       payloadCodec: Codec[Payload],
       sigalg: SigAlg
@@ -304,14 +357,8 @@ object Discv5SyncResponder extends LazyLogging {
         Session.decrypt(session.keys.readKey, msg.header.nonce, msg.messageCiphertext, aad).toOption.flatMap {
           plaintext =>
             payloadCodec.decode(plaintext.bits).toOption.map(_.value).flatMap { payload =>
-              dispatchRequest(payload, sender, msg.header.srcId, handler).flatMap { responsePayload =>
-                buildEncryptedReply(
-                  destNodeId = msg.header.srcId,
-                  srcNodeId = localNodeId,
-                  session = session,
-                  payload = responsePayload
-                )
-              }
+              val responses = dispatchRequest(payload, sender, msg.header.srcId, handler)
+              sendReplies(responses, sender, msg.header.srcId, localNodeId, session, outboundSenderRef)
             }
         }
 
@@ -340,7 +387,6 @@ object Discv5SyncResponder extends LazyLogging {
     // PingHandshakeInterrupted (a.k.a. HandshakeResend) test asserts.
     val (idNonce, challengeData, wireBytes) = challenges.get(sid) match {
       case Some(existing) =>
-        logger.debug(s"discv5 sync-fastpath: resending pending WHOAREYOU to $sender")
         (existing.idNonce, existing.challengeBytes, existing.wireBytes)
       case None =>
         val newIdNonce = Session.randomIdNonce
@@ -388,9 +434,11 @@ object Discv5SyncResponder extends LazyLogging {
       handler: Handler,
       sessions: Session.SessionCache,
       challenges: ChallengeCache,
-      bystanders: BystanderEnrTable
+      bystanders: BystanderEnrTable,
+      outboundSenderRef: AtomicReference[Option[OutboundSender]]
   )(implicit
       payloadCodec: Codec[Payload],
+      enrCodec: Codec[EthereumNodeRecord],
       sigalg: SigAlg
   ): Option[BitVector] = {
     // Look up the WHOAREYOU we sent. The handshake packet's `header.nonce`
@@ -460,38 +508,113 @@ object Discv5SyncResponder extends LazyLogging {
     val payload = payloadCodec.decode(plaintext.bits).toOption.map(_.value).orNull
     if (payload == null) return None
 
-    // If the peer included an ENR record in the handshake auth, stash it
-    // as a bystander for future findNode responses (TestFindnodeResults).
-    // For now we don't decode the ENR record — tracking just the nodeId
-    // satisfies the existence check. A future enhancement could parse it
-    // for the actual record_seq comparison.
-
-    dispatchRequest(payload, sender, hs.header.srcId, handler).flatMap { responsePayload =>
-      buildEncryptedReply(
-        destNodeId = hs.header.srcId,
-        srcNodeId = localNodeId,
-        session = session,
-        payload = responsePayload
-      )
+    // If the peer included an ENR record in the handshake auth, decode it and
+    // stash in the bystander table. The findNode handler reads from this table
+    // for non-zero distances, so populating it makes future FINDNODE responses
+    // include the bonded peer (hive's `FindnodeResults`).
+    hs.header.record.foreach { recordBytes =>
+      enrCodec.decode(recordBytes.bits).toOption.map(_.value) match {
+        case Some(enr) => bystanders.add(hs.header.srcId, enr)
+        case None      =>
+          logger.debug(s"discv5 sync-fastpath: handshake from $sender included an ENR we couldn't decode")
+      }
     }
+
+    // PING the peer back so they know we recognise them as a fully-bonded
+    // peer. Hive's `FindnodeResults` uses this signal to mark a bystander as
+    // "added to remote table". Only do this when the inbound was a Ping —
+    // for TalkRequest / Findnode handshakes the peer doesn't expect (and
+    // doesn't tolerate) an unsolicited Ping interleaved with the response.
+    // Fire-and-forget; we don't track the response (the async pipeline does,
+    // when wired up).
+    if (payload.isInstanceOf[Payload.Ping]) {
+      outboundSenderRef.get.foreach { send =>
+        val pingPayload = Payload.Ping(
+          requestId = Payload.randomRequestId(),
+          enrSeq = handler.localEnrSeq
+        )
+        buildEncryptedReply(
+          destNodeId = hs.header.srcId,
+          srcNodeId = localNodeId,
+          session = session,
+          payload = pingPayload
+        ).foreach { pingBits =>
+          try send(sender, pingBits.toByteVector, PingBackDelayMillis)
+          catch {
+            case NonFatal(ex) =>
+              logger.debug(s"discv5 sync-fastpath: ping-back to $sender failed: ${ex.getClass.getSimpleName}")
+          }
+        }
+      }
+    }
+
+    val responses = dispatchRequest(payload, sender, hs.header.srcId, handler)
+    sendReplies(responses, sender, hs.header.srcId, localNodeId, session, outboundSenderRef)
+  }
+
+  // ---- Reply dispatch -----------------------------------------------------
+
+  /** Build encrypted bytes for each response payload and dispatch them: the
+    * first goes back via the synchronous Reply (returned as `Some(bits)`),
+    * any additional payloads are sent fire-and-forget via the outbound
+    * sender. This is how a multi-packet NODES response gets delivered when
+    * the result set wouldn't fit in one wire packet. */
+  private def sendReplies(
+      responses: List[Payload],
+      peerAddr: InetSocketAddress,
+      peerNodeId: ByteVector,
+      localNodeId: ByteVector,
+      session: Session.Session,
+      outboundSenderRef: AtomicReference[Option[OutboundSender]]
+  )(implicit payloadCodec: Codec[Payload]): Option[BitVector] = responses match {
+    case Nil => None
+    case head :: tail =>
+      val firstReply = buildEncryptedReply(peerNodeId, localNodeId, session, head)
+      // Send tail (if any) via outbound sender. If the sender ref isn't set
+      // yet (peer group not initialised), the extra packets are silently
+      // dropped — same fate as the ping-back when wiring is incomplete.
+      if (tail.nonEmpty) {
+        outboundSenderRef.get.foreach { send =>
+          tail.foreach { p =>
+            buildEncryptedReply(peerNodeId, localNodeId, session, p).foreach { bits =>
+              try send(peerAddr, bits.toByteVector, 0L)
+              catch {
+                case NonFatal(ex) =>
+                  logger.debug(s"discv5 sync-fastpath: extra reply to $peerAddr failed: ${ex.getClass.getSimpleName}")
+              }
+            }
+          }
+        }
+      }
+      firstReply
   }
 
   // ---- Request dispatch ---------------------------------------------------
 
-  /** Build the response payload for an incoming decrypted request. Returns
-    * None if the message type isn't a request (e.g., we received a Pong;
-    * the async pipeline correlates those by request id). */
+  /** Per-message ENR cap for NODES responses. Discv5 lets the responder split
+    * a NODES reply across multiple packets (the `total` field carries the
+    * count); each packet must fit under the 1280-byte wire-form limit after
+    * encryption. ENRs are roughly ~150-300 bytes RLP-encoded, so 3 per packet
+    * matches geth's choice and keeps us comfortably under the cap. */
+  private val MaxEnrsPerNodes: Int = 3
+
+  /** Build the response payloads for an incoming decrypted request. Returns
+    * the empty list if the message type isn't a request (e.g. we received a
+    * Pong; the async pipeline correlates those by request id). For FINDNODE,
+    * returns multiple NODES payloads when the result set wouldn't fit in a
+    * single packet. The caller sends the head via the synchronous Reply and
+    * the tail via the outbound sender. */
   private def dispatchRequest(
       payload: Payload,
       sender: InetSocketAddress,
       peerNodeId: ByteVector,
       handler: Handler
-  ): Option[Payload] = payload match {
+  ): List[Payload] = payload match {
 
     case ping: Payload.Ping =>
       val recipientIp =
         ByteVector.view(sender.getAddress.getAddress) // 4 or 16 bytes raw
-      Some(
+      List(
         Payload.Pong(
           requestId = ping.requestId,
           enrSeq = handler.localEnrSeq,
@@ -502,19 +625,21 @@ object Discv5SyncResponder extends LazyLogging {
 
     case fn: Payload.FindNode =>
       val nodes = handler.findNodes(fn.distances)
-      Some(Payload.Nodes(requestId = fn.requestId, total = 1, enrs = nodes))
+      // Spec: split into multiple NODES messages when needed; each carries
+      // the same `total` so the peer knows how many to wait for. An empty
+      // result is still a single NODES message with `total=1` and no enrs.
+      val chunks = if (nodes.isEmpty) List(List.empty[EthereumNodeRecord]) else nodes.grouped(MaxEnrsPerNodes).toList
+      val total = chunks.size
+      chunks.map(chunk => Payload.Nodes(requestId = fn.requestId, total = total, enrs = chunk))
 
     case tq: Payload.TalkRequest =>
       // Per spec, an empty message is the valid "I don't support this
       // protocol" reply. Hive's TalkRequest test expects exactly that.
-      Some(Payload.TalkResponse(requestId = tq.requestId, message = ByteVector.empty))
+      List(Payload.TalkResponse(requestId = tq.requestId, message = ByteVector.empty))
 
-    case _: Payload.Pong =>
-      None // responses are correlated by the async pipeline
-    case _: Payload.Nodes =>
-      None
-    case _: Payload.TalkResponse =>
-      None
+    case _: Payload.Pong       => Nil // responses are correlated by the async pipeline
+    case _: Payload.Nodes      => Nil
+    case _: Payload.TalkResponse => Nil
   }
 
   /** Reconstruct the unmasked `iv || static-header || authdata` region used
