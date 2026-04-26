@@ -16,8 +16,8 @@ import com.chipprbots.ethereum.rpcTest.Tags.MainNet
   * Requires a fukuii node synced to Mordor and listening on the configured RPC URL.
   * Tests Olympia EIP activation, baseFee behavior, and pre/post-fork chain state.
   *
-  * Mordor Olympia activation: block 15,800,850
-  * Treasury: 0xd6165F3aF4281037bce810621F62B43077Fb0e37
+  * Fork block and treasury address are read from test.conf (mordor-olympia-fork-block,
+  * mordor-olympia-treasury-address) — update that file when activation block is decided.
   *
   * Run with: sbt "rpcTest:testOnly *MordorOlympiaSpec"
   */
@@ -26,10 +26,10 @@ class MordorOlympiaSpec extends AnyFlatSpec with Matchers {
   val testConfig: RpcTestConfig = RpcTestConfig("test.conf")
   val service: Web3j = Web3j.build(new HttpService(testConfig.fukuiiUrl))
 
-  // Mordor constants
+  // Mordor constants — activation block and treasury read from test.conf
   val MordorChainId: BigInteger = BigInteger.valueOf(63)
-  val OlympiaForkBlock: Long = 15800850L
-  val TreasuryAddress: String = "0xcfe1e0ecbff745e6c800ff980178a8ddef94bee2"
+  val OlympiaForkBlock: Long = testConfig.mordorOlympiaForkBlock
+  val TreasuryAddress: String = testConfig.mordorOlympiaTreasuryAddress
   val Eip2935ContractAddress: String = "0x0000f90827f1c53a10cb7a02335b175320002935"
 
   private def skipIfNotMordor(): Unit = {

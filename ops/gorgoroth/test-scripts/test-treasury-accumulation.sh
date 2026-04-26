@@ -6,6 +6,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/test-helpers.sh"
+source "$SCRIPT_DIR/olympia-config.sh"
 require_tools curl jq
 
 echo "=== ECIP-1111 Treasury Accumulation Test (Olympia) ==="
@@ -13,7 +14,7 @@ echo "Verifying baseFee accumulation in treasury address..."
 echo ""
 
 # Configuration
-TREASURY_ADDRESS="${TREASURY_ADDRESS:-0xd6165F3aF4281037bce810621F62B43077Fb0e37}"
+TREASURY_ADDRESS="${TREASURY_ADDRESS:-$OLYMPIA_TREASURY_ADDRESS}"
 WAIT_BLOCKS=${WAIT_BLOCKS:-10}
 POLL_INTERVAL=${POLL_INTERVAL:-15}
 
