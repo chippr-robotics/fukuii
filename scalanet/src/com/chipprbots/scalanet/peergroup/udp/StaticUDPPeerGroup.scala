@@ -286,35 +286,48 @@ class StaticUDPPeerGroup[M] private (
                           // the netty ByteBuf — it shares storage but advances independently.
                           val incomingBits = BitVector(datagram.content.nioBuffer)
 
-                          // Sync fast-path: if the configured responder produces reply bytes,
-                          // write them back on this same netty thread before yielding to the
-                          // async pipeline. The pipeline still runs for bonding/kademlia
-                          // bookkeeping; we just don't wait on cats-effect to send the reply.
-                          // The responder is contract-bound not to throw, but defend anyway.
-                          val maybeReply: Option[BitVector] =
+                          // Sync fast-path: dispatch to the configured responder.
+                          // The 3-state result decides whether to write a reply
+                          // and whether to fall through to the async path.
+                          val syncResult: StaticUDPPeerGroup.SyncResult =
                             try config.syncResponder(remoteAddress, incomingBits)
                             catch {
                               case NonFatal(ex) =>
                                 logger.warn(
                                   s"Sync responder threw for $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
                                 )
-                                None
+                                StaticUDPPeerGroup.SyncResult.Pass
                             }
-                          maybeReply.foreach { replyBits =>
-                            try {
-                              val replyBuf = Unpooled.wrappedBuffer(replyBits.toByteBuffer)
-                              val replyPacket = new DatagramPacket(replyBuf, remoteAddress)
-                              ctx.writeAndFlush(replyPacket)
-                              ()
-                            } catch {
-                              case NonFatal(ex) =>
-                                logger.warn(
-                                  s"Sync responder write failed for $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
-                                )
-                            }
-                          }
+                          syncResult match {
+                            case StaticUDPPeerGroup.SyncResult.Reply(replyBits) =>
+                              try {
+                                val replyBuf = Unpooled.wrappedBuffer(replyBits.toByteBuffer)
+                                val replyPacket = new DatagramPacket(replyBuf, remoteAddress)
+                                ctx.writeAndFlush(replyPacket)
+                                ()
+                              } catch {
+                                case NonFatal(ex) =>
+                                  logger.warn(
+                                    s"Sync responder write failed for $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
+                                  )
+                              }
+                              // Reply also runs the async path — the v4 dedup
+                              // pattern relies on async-side bookkeeping while
+                              // sync answers fast.
+                              handleMessage(remoteAddress, tryDecodeDatagram(datagram))
 
-                          handleMessage(remoteAddress, tryDecodeDatagram(datagram))
+                            case StaticUDPPeerGroup.SyncResult.Stop =>
+                              // Claimed via side channel (e.g. v5 demuxer
+                              // pushed to a v5 queue). Suppress the default
+                              // v4 async path to avoid DecodingError noise on
+                              // v5-shaped bytes that v4's codec won't parse.
+                              ()
+
+                            case StaticUDPPeerGroup.SyncResult.Pass =>
+                              // Not claimed — fall through to the async path
+                              // for the v4 codec (existing default behavior).
+                              handleMessage(remoteAddress, tryDecodeDatagram(datagram))
+                          }
                         } catch {
                           case NonFatal(ex) =>
                             handleError(remoteAddress, ex)
@@ -401,24 +414,63 @@ class StaticUDPPeerGroup[M] private (
 
 object StaticUDPPeerGroup extends StrictLogging {
   /** Synchronous fast-path responder. Invoked on the netty event-loop thread for every
-    * inbound datagram BEFORE the async cats-effect channel-replication path runs. If it
-    * returns `Some(replyBits)`, those bytes are written back to the sender via
-    * `writeAndFlush` on the same netty thread — no fiber hop, no compute-pool scheduling.
+    * inbound datagram BEFORE the async cats-effect channel-replication path runs.
     *
-    * The async path STILL runs after, so any side-effects (bonding, kademlia bookkeeping)
-    * still happen normally. The sync path just gets the response out the door fast.
+    * The return type is a 3-state ADT:
+    *   - [[SyncResult.Pass]]:        not handled — fall through to the async path
+    *                                  (existing v4 default; async also runs after).
+    *   - [[SyncResult.Reply(bytes)]]: write `bytes` back to the sender on the netty
+    *                                  thread, AND continue to the async path. This
+    *                                  keeps the v4 dedup pattern working — the sync
+    *                                  responder writes the Pong fast and the async
+    *                                  path still runs for bonding bookkeeping while
+    *                                  skipping its own duplicate Pong via dedup.
+    *   - [[SyncResult.Stop]]:        the responder claimed the packet by side
+    *                                  channel (e.g. a demuxer pushed bytes to a v5
+    *                                  dispatch queue). Suppress the default async
+    *                                  decode path so we don't emit DecodingError
+    *                                  noise on v5-shaped bytes.
     *
-    * Used by the discv4 layer to send `Pong` replies inside hive's 300 ms `waitTime`
-    * deadline that the cats-effect IO scheduler can't meet under load (~600 ms observed
-    * end-to-end with structural fixes alone).
+    * Used by the discv4 layer to send `Pong` replies inside hive's 300 ms
+    * `waitTime` deadline that the cats-effect IO scheduler can't meet under load.
+    * Used by the discv5 demuxer to route discv5 packets to a side-channel queue
+    * for the v5 async pipeline without polluting the v4 codec's error stream.
     *
-    * Implementations MUST be fast (< 5 ms) and MUST NOT throw — any exception is caught
-    * by the peer group and the responder is treated as having returned None.
+    * Implementations MUST be fast (< 5 ms) and MUST NOT throw — any exception is
+    * caught by the peer group and treated as [[SyncResult.Pass]].
     */
-  type SyncResponder = (InetSocketAddress, BitVector) => Option[BitVector]
+  type SyncResponder = (InetSocketAddress, BitVector) => SyncResult
 
-  /** Default no-op responder — always defers to the async path. */
-  val NoSyncResponder: SyncResponder = (_, _) => None
+  sealed trait SyncResult
+  object SyncResult {
+
+    /** Not handled — continue with the async path. Default v4 behavior. */
+    case object Pass extends SyncResult
+
+    /** Claimed with a reply written back to the sender, AND the async path
+      * still runs after (for v4 bonding/kademlia bookkeeping). */
+    final case class Reply(bytes: BitVector) extends SyncResult
+
+    /** Claimed with no reply, AND the async path is suppressed. The responder
+      * either completed handling via a side channel (v5 demuxer pushing to
+      * a separate queue) or deliberately silenced the packet (negative tests). */
+    case object Stop extends SyncResult
+  }
+
+  /** Default no-op responder — always passes to the async path. */
+  val NoSyncResponder: SyncResponder = (_, _) => SyncResult.Pass
+
+  /** Compose a list of [[SyncResponder]]s. Each is tried in order; the first
+    * non-`Pass` result wins. If all return `Pass`, the chain returns `Pass`. */
+  def chainResponders(responders: SyncResponder*): SyncResponder =
+    (sender, bits) => {
+      var result: SyncResult = SyncResult.Pass
+      val it = responders.iterator
+      while (it.hasNext && result == SyncResult.Pass) {
+        result = it.next()(sender, bits)
+      }
+      result
+    }
 
   case class Config(
       bindAddress: InetSocketAddress,

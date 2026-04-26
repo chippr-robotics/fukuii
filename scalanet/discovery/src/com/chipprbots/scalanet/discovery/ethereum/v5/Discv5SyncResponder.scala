@@ -193,18 +193,40 @@ object Discv5SyncResponder extends LazyLogging {
   ): StaticUDPPeerGroup.SyncResponder = (sender: InetSocketAddress, incomingBits: BitVector) => {
     if (!rateLimiter.tryAcquire()) {
       logger.debug(s"discv5 sync-fastpath: rate-limited request from $sender")
-      None
+      StaticUDPPeerGroup.SyncResult.Pass
     } else {
-      try respond(sender, incomingBits, privateKey, localNodeId, handler, sessions, challenges, bystanders)
-      catch {
-        case NonFatal(ex) =>
-          logger.warn(
-            s"discv5 sync-fastpath: error handling packet from $sender: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
-          )
-          None
+      val maybeReply: Option[BitVector] =
+        try respond(sender, incomingBits, privateKey, localNodeId, handler, sessions, challenges, bystanders)
+        catch {
+          case NonFatal(ex) =>
+            logger.warn(
+              s"discv5 sync-fastpath: error handling packet from $sender: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
+            )
+            None
+        }
+      // The discv5 sync responder claims any v5-shaped packet that decodes
+      // under the local node id mask — even if it produces no reply (e.g. the
+      // peer sent a Pong correlated by the async pipeline). That keeps v5
+      // bytes out of the v4 codec's error stream. v5 packets that we DON'T
+      // recognize at the wire level (mask mismatch) return None and fall
+      // through to v4 as a regular Pass.
+      maybeReply match {
+        case Some(bits) => StaticUDPPeerGroup.SyncResult.Reply(bits)
+        case None       =>
+          // Did `respond` see a v5-shaped packet at all? If yes, claim it
+          // silently with `Stop`; if no, pass through.
+          val isV5 = isDiscv5Packet(incomingBits.toByteVector, localNodeId)
+          if (isV5) StaticUDPPeerGroup.SyncResult.Stop
+          else StaticUDPPeerGroup.SyncResult.Pass
       }
     }
   }
+
+  /** Cheap peek to decide whether a packet is a discv5 packet under our mask
+    * — used by [[apply]] to choose between [[StaticUDPPeerGroup.SyncResult.Stop]]
+    * and `Pass` when there's no synchronous reply to send. */
+  private def isDiscv5Packet(bytes: ByteVector, localNodeId: ByteVector): Boolean =
+    Packet.decode(bytes, localNodeId).isSuccessful
 
   // ---- Core dispatch ------------------------------------------------------
 

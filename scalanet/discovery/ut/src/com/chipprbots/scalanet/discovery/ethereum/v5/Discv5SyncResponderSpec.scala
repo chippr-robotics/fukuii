@@ -6,6 +6,7 @@ import com.chipprbots.scalanet.discovery.crypto.{PrivateKey, PublicKey, SigAlg, 
 import com.chipprbots.scalanet.discovery.ethereum.{EthereumNodeRecord, Node}
 import com.chipprbots.scalanet.discovery.ethereum.v4.mocks.MockSigAlg
 import com.chipprbots.scalanet.discovery.ethereum.codecs.DefaultCodecs
+import com.chipprbots.scalanet.peergroup.udp.StaticUDPPeerGroup
 import scodec.{Attempt, Codec, DecodeResult, Err}
 import scodec.bits.{BitVector, ByteVector}
 
@@ -134,10 +135,16 @@ class Discv5SyncResponderSpec extends AnyFlatSpec with Matchers {
 
   behavior.of("Discv5SyncResponder")
 
-  it should "reject non-discv5 bytes (mask mismatch) and return None" in {
+  /** Extract reply bytes from [[StaticUDPPeerGroup.SyncResult.Reply]], or fail. */
+  private def replyBitsOf(result: StaticUDPPeerGroup.SyncResult): BitVector = result match {
+    case StaticUDPPeerGroup.SyncResult.Reply(bits) => bits
+    case other => fail(s"expected SyncResult.Reply, got $other")
+  }
+
+  it should "Pass non-discv5 bytes (mask mismatch) so v4 codec can try" in {
     val (responder, _, _, _) = freshResponder()
     val junk = BitVector(Array.fill[Byte](80)(0))
-    responder(sender, junk) shouldBe None
+    responder(sender, junk) shouldBe StaticUDPPeerGroup.SyncResult.Pass
   }
 
   it should "respond to a no-session MessagePacket with a WHOAREYOU and stash a pending challenge" in {
@@ -158,11 +165,10 @@ class Discv5SyncResponderSpec extends AnyFlatSpec with Matchers {
     )
     val incomingBytes = Packet.encode(msgPkt, localNodeId).require
 
-    val reply = responder(sender, incomingBytes.bits)
-    reply should not be empty
+    val replyBits = replyBitsOf(responder(sender, incomingBytes.bits))
 
     // Decode the reply — it should be a WHOAREYOU under the peer's node id mask.
-    val replyPkt = Packet.decode(reply.get.toByteVector, peerNodeId).require
+    val replyPkt = Packet.decode(replyBits.toByteVector, peerNodeId).require
     replyPkt shouldBe a[Packet.WhoareyouPacket]
     val whoPkt = replyPkt.asInstanceOf[Packet.WhoareyouPacket]
     whoPkt.header.nonce shouldBe triggerNonce // echoed back per spec
@@ -171,15 +177,12 @@ class Discv5SyncResponderSpec extends AnyFlatSpec with Matchers {
     challenges.get(triggerNonce) should not be empty
   }
 
-  it should "return None for incoming WhoareyouPacket (handled by async path)" in {
+  it should "Stop on incoming WhoareyouPacket so the v4 codec doesn't see v5 bytes" in {
     val (responder, _, _, _) = freshResponder()
 
     val (_, peerPriv) = sigalg.newKeyPair
     val peerNodeId = Session.nodeIdFromPublicKey(sigalg.toPublicKey(peerPriv).value.bytes)
 
-    // Peer challenges us — they don't know our session yet, so they'd send a
-    // WHOAREYOU. From our side, this means "you should initiate a handshake
-    // with me" — only the async path handles outbound handshakes.
     val whoPkt = Packet.WhoareyouPacket(
       header = Packet.Header.Whoareyou(
         iv = Packet.randomIv,
@@ -189,7 +192,10 @@ class Discv5SyncResponderSpec extends AnyFlatSpec with Matchers {
       )
     )
     val incomingBytes = Packet.encode(whoPkt, localNodeId).require
-    responder(sender, incomingBytes.bits) shouldBe None
+    // Sync responder claims the v5-shaped packet (Stop) — outbound handshake
+    // initiation is the async pipeline's job, but we don't pollute v4's
+    // codec with bytes it can't decode.
+    responder(sender, incomingBytes.bits) shouldBe StaticUDPPeerGroup.SyncResult.Stop
   }
 
   it should "respond to a MessagePacket with an existing session by encrypting the response" in {
@@ -227,18 +233,17 @@ class Discv5SyncResponderSpec extends AnyFlatSpec with Matchers {
     val ct = Session.encrypt(sharedKey, nonce, pingBytes, aad).get
     val incoming = (aad ++ ct).bits
 
-    val reply = responder(sender, incoming)
-    reply should not be empty
+    val replyBits = replyBitsOf(responder(sender, incoming))
 
     // The reply should decode under the peer's nodeId mask as a MessagePacket.
-    val replyPkt = Packet.decode(reply.get.toByteVector, peerNodeId).require
+    val replyPkt = Packet.decode(replyBits.toByteVector, peerNodeId).require
     replyPkt shouldBe a[Packet.MessagePacket]
     val replyMsg = replyPkt.asInstanceOf[Packet.MessagePacket]
 
     // Decrypt the response using the same shared key.
     val replyMaskedRegionEnd =
       Packet.MaskingIVSize + Packet.StaticHeaderSize + replyMsg.header.authData.size.toInt
-    val replyAad = reply.get.toByteVector.take(replyMaskedRegionEnd.toLong)
+    val replyAad = replyBits.toByteVector.take(replyMaskedRegionEnd.toLong)
     val responseBytes =
       Session.decrypt(sharedKey, replyMsg.header.nonce, replyMsg.messageCiphertext, replyAad).get
 
@@ -279,9 +284,8 @@ class Discv5SyncResponderSpec extends AnyFlatSpec with Matchers {
     )
     val incoming = Packet.encode(msgPkt, localNodeId).require.bits
 
-    val reply = responder(differentSender, incoming)
-    reply should not be empty
-    val replyPkt = Packet.decode(reply.get.toByteVector, peerNodeId).require
+    val replyBits = replyBitsOf(responder(differentSender, incoming))
+    val replyPkt = Packet.decode(replyBits.toByteVector, peerNodeId).require
     replyPkt shouldBe a[Packet.WhoareyouPacket] // session miss → fresh WHOAREYOU
   }
 
@@ -326,10 +330,10 @@ class Discv5SyncResponderSpec extends AnyFlatSpec with Matchers {
       Packet.encode(msg, localNodeId).require.bits
     }
 
-    // 2 tokens in burst → 2 succeed
-    responder(sender, freshMessage()) should not be empty
-    responder(sender, freshMessage()) should not be empty
-    // 3rd consumes empty bucket → drops
-    responder(sender, freshMessage()) shouldBe None
+    // 2 tokens in burst → 2 succeed (Reply for the sync WHOAREYOU)
+    replyBitsOf(responder(sender, freshMessage()))
+    replyBitsOf(responder(sender, freshMessage()))
+    // 3rd consumes empty bucket → falls through to async (Pass)
+    responder(sender, freshMessage()) shouldBe StaticUDPPeerGroup.SyncResult.Pass
   }
 }
