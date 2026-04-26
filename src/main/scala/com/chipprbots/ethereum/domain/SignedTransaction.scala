@@ -583,9 +583,33 @@ object SignedTransactionWithSender {
   def getSignedTransactions(
       stxs: Seq[SignedTransaction]
   )(implicit blockchainConfig: BlockchainConfig): Seq[SignedTransactionWithSender] = {
-    import com.chipprbots.ethereum.vm.EvmConfig
     // Cheap stateless pre-filters before expensive ECDSA recovery
-    val validated = stxs.filter { stx =>
+    val validated = getStatelessValidTransactions(stxs)
+
+    if (validated.size < 16) {
+      // Small batch: sequential to avoid overhead
+      recoverSenders(validated)
+    } else {
+      // Large batch: parallel ECDSA recovery across all cores
+      getSignedTransactionsParallel(validated)
+    }
+  }
+
+  /** Same validation as [[getSignedTransactions]], but sender recovery runs on the caller's thread. This is used by
+    * upstream batch schedulers that already provide parallelism and need deterministic chunk admission order.
+    */
+  def getSignedTransactionsSequential(
+      stxs: Seq[SignedTransaction]
+  )(implicit blockchainConfig: BlockchainConfig): Seq[SignedTransactionWithSender] =
+    recoverSenders(getStatelessValidTransactions(stxs))
+
+  def getStatelessValidTransactions(
+      stxs: Seq[SignedTransaction]
+  )(implicit blockchainConfig: BlockchainConfig): Seq[SignedTransaction] = {
+    import com.chipprbots.ethereum.vm.EvmConfig
+    val config = EvmConfig.forBlock(blockchainConfig.forkBlockNumbers.olympiaBlockNumber, blockchainConfig)
+
+    stxs.filter { stx =>
       val tx = stx.tx
       // 1. Chain ID validation for typed transactions (EIP-2930+)
       val chainIdValid = tx match {
@@ -598,7 +622,6 @@ object SignedTransactionWithSender {
       if (!chainIdValid) false
       else {
         // 2. Intrinsic gas validation — reject txs with gas below minimum
-        val config = EvmConfig.forBlock(blockchainConfig.forkBlockNumbers.olympiaBlockNumber, blockchainConfig)
         val authListSize = tx match {
           case sct: SetCodeTransaction => sct.authorizationList.size
           case _                       => 0
@@ -608,29 +631,26 @@ object SignedTransactionWithSender {
         tx.gasLimit >= intrinsicGas
       }
     }
-
-    if (validated.size < 16) {
-      // Small batch: sequential to avoid overhead
-      validated.flatMap { stx =>
-        SignedTransaction.getSender(stx).map(addr => SignedTransactionWithSender(stx, addr))
-      }
-    } else {
-      // Large batch: parallel ECDSA recovery across all cores
-      getSignedTransactionsParallel(validated)
-    }
   }
 
+  private def recoverSenders(
+      stxs: Seq[SignedTransaction]
+  )(implicit blockchainConfig: BlockchainConfig): Seq[SignedTransactionWithSender] =
+    stxs.flatMap { stx =>
+      SignedTransaction.getSender(stx).map(addr => SignedTransactionWithSender(stx, addr))
+    }
+
   /** Parallel ECDSA sender recovery using cats-effect IO.parTraverseN. Distributes signature validation across all
-    * available CPU cores. For 2000 txs on 8 cores: ~3s vs ~24s sequential.
+    * available CPU cores, using one fiber per batch rather than per transaction to keep scheduler overhead low during
+    * devp2p LargeTxRequest-style bursts.
     */
   private def getSignedTransactionsParallel(
       stxs: Seq[SignedTransaction]
   )(implicit blockchainConfig: BlockchainConfig): Seq[SignedTransactionWithSender] = {
-    val parallelism = Runtime.getRuntime.availableProcessors
-    IO.parTraverseN(parallelism)(stxs.toList) { stx =>
-      IO {
-        SignedTransaction.getSender(stx).map(addr => SignedTransactionWithSender(stx, addr))
-      }
+    val batches = stxs.grouped(SignedTransaction.batchSize).toVector
+    val parallelism = math.min(Runtime.getRuntime.availableProcessors, batches.size).max(1)
+    IO.parTraverseN(parallelism)(batches) { batch =>
+      IO(recoverSenders(batch))
     }.map(_.flatten)
       .unsafeRunSync()(IORuntime.global)
   }

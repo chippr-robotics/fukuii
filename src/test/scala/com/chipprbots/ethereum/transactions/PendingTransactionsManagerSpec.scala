@@ -233,9 +233,9 @@ class PendingTransactionsManagerSpec
     val msg1 = tx1.toSet
     pendingTransactionsManager ! ProperSignedTransactions(msg1, peer1.id)
 
-    // AddTransactions fires both a NotifyPeers (filtered per-peer via
-    // isTxKnown) and an announceNewTxHashes (to every connected peer), so
-    // each tx batch reaches peer1/2/3 via NewPooledTransactionHashes (ETH/67).
+    // AddTransactions queues a NotifyPeers broadcast, filtered per peer through
+    // isTxKnown, so received txs are announced only to peers that don't already
+    // know them.
     // Drain until no more messages arrive within shortTimeout.
     val resps1: Seq[SendMessage] = etcPeerManager.receiveWhile(Timeouts.normalTimeout) {
       case m: NetworkPeerManagerActor.SendMessage => m

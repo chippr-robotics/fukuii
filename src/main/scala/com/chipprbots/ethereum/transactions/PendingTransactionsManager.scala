@@ -61,6 +61,8 @@ object PendingTransactionsManager {
 
   case class AddUncheckedTransactions(signedTransactions: Seq[SignedTransaction])
 
+  case class AnnounceTransactions(signedTransactions: Seq[SignedTransaction], peerId: PeerId)
+
   object AddTransactions {
     def apply(txs: SignedTransactionWithSender*): AddTransactions = AddTransactions(txs.toSet)
   }
@@ -181,6 +183,10 @@ class PendingTransactionsManager(
       val validTxs = SignedTransactionWithSender.getSignedTransactions(transactions)
       self ! AddTransactions(validTxs.toSet)
 
+    case AnnounceTransactions(signedTransactions, peerId) =>
+      signedTransactions.foreach(tx => setTxKnown(tx, peerId))
+      notifyPeersOfTransactions(signedTransactions, connectedPeers.values.toSeq)
+
     case AddTransactions(signedTransactions) =>
       pendingTransactions.cleanUp()
       val stxs = pendingTransactions.asMap().values().asScala.map(_.stx).toSet
@@ -197,8 +203,6 @@ class PendingTransactionsManager(
         if (peers.nonEmpty) {
           self ! NotifyPeers(transactionsToAdd.toSeq, peers)
         }
-        // Announce validated tx hashes to ALL connected peers via NewPooledTransactionHashes
-        announceNewTxHashes(transactionsToAdd)
       }
 
     case AddOrOverrideTransaction(newStx, blobRawBytesOpt) =>
@@ -238,29 +242,9 @@ class PendingTransactionsManager(
       val pendingTxMap = pendingTransactions.asMap()
       val stillPending = signedTransactions
         .filter(stx => pendingTxMap.containsKey(stx.tx.hash)) // signed transactions that are still pending
+        .map(_.tx)
 
-      peers.foreach { peer =>
-        val txsToNotify = stillPending.filterNot(stx => isTxKnown(stx.tx, peer.id))
-        if (txsToNotify.nonEmpty) {
-          // Use NewPooledTransactionHashes (ETH/68 spec) instead of full SignedTransactions.
-          // Peers can request full txs via GetPooledTransactions if interested.
-          import com.chipprbots.ethereum.domain._
-          val hashes = txsToNotify.map(_.tx.hash)
-          val types = txsToNotify.map { stx =>
-            stx.tx.tx match {
-              case _: LegacyTransaction         => 0.toByte
-              case _: TransactionWithAccessList => Transaction.Type01
-              case _: TransactionWithDynamicFee => Transaction.Type02
-              case _: BlobTransaction           => Transaction.Type03
-              case _: SetCodeTransaction        => Transaction.Type04
-            }
-          }
-          val sizes = txsToNotify.map(stx => BigInt(SignedTransaction.byteArraySerializable.toBytes(stx.tx).length))
-          val announcement = ETH67.NewPooledTransactionHashes(types, sizes, hashes)
-          networkPeerManager ! NetworkPeerManagerActor.SendMessage(announcement, peer.id)
-          txsToNotify.foreach(stx => setTxKnown(stx.tx, peer.id))
-        }
-      }
+      notifyPeersOfTransactions(stillPending, peers)
 
     // ETH67+ NewPooledTransactionHashes — request unknown tx hashes via GetPooledTransactions
     case com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
@@ -353,25 +337,30 @@ class PendingTransactionsManager(
       blobTxNetworkBytes = Map.empty
   }
 
-  /** Announce validated transaction hashes to all connected peers via NewPooledTransactionHashes (ETH/68 spec). */
-  private def announceNewTxHashes(txs: Set[SignedTransactionWithSender]): Unit = {
-    if (txs.isEmpty) return
+  /** Announce transaction hashes to connected peers via NewPooledTransactionHashes. */
+  private def notifyPeersOfTransactions(txs: Seq[SignedTransaction], peers: Seq[Peer]): Unit = {
+    if (txs.isEmpty || peers.isEmpty) return
     import com.chipprbots.ethereum.domain._
-    val txSeq = txs.toSeq
-    val hashes = txSeq.map(_.tx.hash)
-    val types = txSeq.map { stx =>
-      stx.tx.tx match {
-        case _: LegacyTransaction         => 0.toByte
-        case _: TransactionWithAccessList => Transaction.Type01
-        case _: TransactionWithDynamicFee => Transaction.Type02
-        case _: BlobTransaction           => Transaction.Type03
-        case _: SetCodeTransaction        => Transaction.Type04
+
+    val txSeq = txs.groupBy(_.hash).values.map(_.head).toSeq
+    peers.foreach { peer =>
+      val txsToNotify = txSeq.filterNot(stx => isTxKnown(stx, peer.id))
+      if (txsToNotify.nonEmpty) {
+        val hashes = txsToNotify.map(_.hash)
+        val types = txsToNotify.map { stx =>
+          stx.tx match {
+            case _: LegacyTransaction         => 0.toByte
+            case _: TransactionWithAccessList => Transaction.Type01
+            case _: TransactionWithDynamicFee => Transaction.Type02
+            case _: BlobTransaction           => Transaction.Type03
+            case _: SetCodeTransaction        => Transaction.Type04
+          }
+        }
+        val sizes = txsToNotify.map(stx => BigInt(SignedTransaction.byteArraySerializable.toBytes(stx).length))
+        val announcement = ETH67.NewPooledTransactionHashes(types, sizes, hashes)
+        networkPeerManager ! NetworkPeerManagerActor.SendMessage(announcement, peer.id)
+        txsToNotify.foreach(stx => setTxKnown(stx, peer.id))
       }
-    }
-    val sizes = txSeq.map(stx => BigInt(SignedTransaction.byteArraySerializable.toBytes(stx.tx).length))
-    val announcement = ETH67.NewPooledTransactionHashes(types, sizes, hashes)
-    connectedPeers.values.foreach { peer =>
-      networkPeerManager ! NetworkPeerManagerActor.SendMessage(announcement, peer.id)
     }
   }
 
@@ -410,10 +399,16 @@ class PendingTransactionsManager(
             Account.accountSerializer
           )
 
+          val accountsBySender = afterPendingNonceCheck
+            .map(_.senderAddress)
+            .map { senderAddress =>
+              val addressHash = com.chipprbots.ethereum.crypto.kec256(senderAddress.toArray)
+              senderAddress -> stateTrie.get(addressHash)
+            }
+            .toMap
+
           afterPendingNonceCheck.filter { stx =>
-            val addressHash = com.chipprbots.ethereum.crypto.kec256(stx.senderAddress.toArray)
-            val accountOpt = stateTrie.get(addressHash)
-            accountOpt.exists { account =>
+            accountsBySender.get(stx.senderAddress).flatten.exists { account =>
               val tx = stx.tx.tx
               val nonceValid = tx.nonce >= account.nonce.toBigInt && tx.nonce < account.nonce.toBigInt + 1024
               val maxGasCost = tx.gasLimit * tx.gasPrice
