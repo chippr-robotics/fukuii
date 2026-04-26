@@ -290,15 +290,17 @@ trait DiscoveryServiceBuilder extends Logger {
       _ <- Resource.eval {
         IO {
           v5OutboundSenderRef.set(
-            Some((addr: java.net.InetSocketAddress, bytes: scodec.bits.ByteVector, delayMillis: Long) => {
+            Some { (addr: java.net.InetSocketAddress, bytes: scodec.bits.ByteVector, delayMillis: Long) =>
               // Each call optionally schedules a delay before the UDP write
               // — only the post-handshake ping-back asks for one (so it
               // doesn't race the synchronous Pong); chunked NODES replies
               // pass 0 and are written immediately.
               val send = peerGroup.sendRaw(addr, bytes)
-              val task = if (delayMillis > 0) IO.sleep(scala.concurrent.duration.FiniteDuration(delayMillis, "ms")) *> send else send
+              val task =
+                if (delayMillis > 0) IO.sleep(scala.concurrent.duration.FiniteDuration(delayMillis, "ms")) *> send
+                else send
               task.unsafeRunAndForget()(runtime)
-            })
+            }
           )
         }
       }
