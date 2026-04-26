@@ -13,7 +13,10 @@ import com.chipprbots.ethereum.testing.TestMptStorage
 
 class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
 
-  "MerkleProofVerifier" should "reject empty proof for empty account list when trie is non-empty" taggedAs UnitTest in {
+  "MerkleProofVerifier" should "accept empty proof for empty account list as valid empty range" taggedAs UnitTest in {
+    // Empty accounts + empty proof is a valid SNAP response meaning the keyspace region has
+    // no accounts. Previously this returned Left("Missing proof for empty account range") which
+    // triggered false stateless-peer marking. Fixed by BUG-EMPTY-RANGE (a80b2434d).
     val stateRoot = kec256(ByteString("test-root"))
     val verifier = MerkleProofVerifier(stateRoot)
 
@@ -24,8 +27,7 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
       endHash = ByteString.fromArray(Array.fill(32)(0xff.toByte))
     )
 
-    result shouldBe a[Left[_, _]]
-    result.left.get should include("Missing proof for empty account range")
+    result shouldBe Right(())
   }
 
   it should "accept empty proof for empty account list when trie is empty" taggedAs UnitTest in {

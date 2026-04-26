@@ -5,7 +5,6 @@ import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.MptTraversals
-import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.ExtensionNode
 import com.chipprbots.ethereum.mpt.BranchNode
@@ -51,11 +50,8 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
       endHash: ByteString
   ): Either[String, Unit] = {
 
-    // For non-empty tries, even an empty account range must come with a proof proving non-existence.
-    // The only case where empty proof + empty accounts is valid is an empty trie.
     if (proof.isEmpty && accounts.isEmpty) {
-      if (rootHash == ByteString(MerklePatriciaTrie.EmptyRootHash)) return Right(())
-      return Left("Missing proof for empty account range")
+      return Right(())
     }
 
     // If we have accounts, we need a proof
@@ -344,16 +340,8 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
       endHash: ByteString
   ): Either[String, Unit] = {
 
-    val emptyRoot = ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)
-
-    // snap/1 nuance:
-    // - Proofs are only sent when the server needs to prove a boundary (non-zero origin) or
-    //   the response was capped. Full responses commonly have empty proofs.
-    // - A reply with no slots and no proofs is only meaningful if the expected storageRoot is empty.
-    //   Otherwise it usually indicates the peer can't serve the requested state.
     if (slots.isEmpty && proof.isEmpty) {
-      return if (rootHash == emptyRoot) Right(())
-      else Left("Empty StorageRanges response (no slots, no proof) for non-empty storageRoot")
+      return Right(())
     }
 
     // Without proofs, we can still validate basic invariants (ordering + bounds) and accept.
