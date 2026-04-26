@@ -84,6 +84,19 @@ class ByteCodeCoordinator(
   private val hashFailureCounts = mutable.Map.empty[ByteString, Int]
   private val maxFailuresPerHash: Int = 10
 
+  // Track known available peers for redispatch when activeTasks is empty.
+  // tryRedispatchPendingTasks() previously derived peers from activeTasks.values, leaving it
+  // unable to dispatch when activeTasks was empty (all peers in cooldown). This caused an
+  // unnecessary 2-minute stall window after simultaneous peer failures.
+  // Deduped by remoteAddress — same pattern as TrieNodeHealingCoordinator.
+  private val knownAvailablePeers = mutable.Set[Peer]()
+
+  // Consecutive task failure guard: if all peers repeatedly fail with no progress,
+  // force-complete bytecode sync rather than hanging indefinitely. Threshold 100 matches
+  // april-confluence production tuning. Missing bytecodes are recovered per-block during import.
+  private var consecutiveTaskFailures: Int = 0
+  private val maxConsecutiveTaskFailures: Int = 100
+
   // Task management
   private val pendingTasks = mutable.Queue[ByteCodeTask]()
   final private case class ActiveByteCodeRequest(
@@ -185,20 +198,24 @@ class ByteCodeCoordinator(
       peerFailureCounts.clear()
       peerCooldownUntilMillis.clear()
       peerResponseBytesTarget.clear()
+      knownAvailablePeers.clear()
+      consecutiveTaskFailures = 0
 
     case PeerAvailable(peer) =>
+      knownAvailablePeers.filterInPlace(_.remoteAddress != peer.remoteAddress)
+      knownAvailablePeers += peer
       if (isPeerCoolingDown(peer)) {
         log.debug(s"Ignoring PeerAvailable(${peer.id.value}) due to cooldown")
       } else {
-        // Dispatch tasks to available peer
         dispatchIfPossible(peer)
       }
 
     case ByteCodePeerAvailable(peer) =>
+      knownAvailablePeers.filterInPlace(_.remoteAddress != peer.remoteAddress)
+      knownAvailablePeers += peer
       if (isPeerCoolingDown(peer)) {
         log.debug(s"Ignoring ByteCodePeerAvailable(${peer.id.value}) due to cooldown")
       } else {
-        // Same as PeerAvailable - dispatch tasks to available peer
         dispatchIfPossible(peer)
       }
 
@@ -238,6 +255,15 @@ class ByteCodeCoordinator(
         recordPeerCooldown(peer, cooldownConfig.baseTimeout, s"request failed: $error")
         adjustResponseBytesTargetOnFailure(peer, s"request failed: $error")
         markWorkerIdle(worker)
+        consecutiveTaskFailures += 1
+        if (consecutiveTaskFailures >= maxConsecutiveTaskFailures) {
+          log.warning(
+            s"Force-completing bytecode coordinator after $consecutiveTaskFailures consecutive " +
+              s"task failures — SNAP peers not serving data. " +
+              s"Missing bytecodes deferred to import-time recovery."
+          )
+          noMoreTasksExpected = true
+        }
       }
       checkCompletion()
 
@@ -294,13 +320,15 @@ class ByteCodeCoordinator(
     }
   }
 
-  /** Re-dispatch pending tasks to peers known from active requests. Called after budget increase to avoid waiting for
-    * the next 1-second PeerAvailable tick.
+  /** Re-dispatch pending tasks to all known peers. Includes both peers with active tasks and
+    * known available peers from PeerAvailable events — handles the activeTasks=empty case
+    * that previously blocked dispatch after simultaneous peer cooldowns.
     */
   private def tryRedispatchPendingTasks(): Unit = {
     if (pendingTasks.isEmpty) return
-    val knownPeers = activeTasks.values.map(_.peer).toSet
-    for (peer <- knownPeers if pendingTasks.nonEmpty && !isPeerCoolingDown(peer))
+    val peersFromActive = activeTasks.values.map(_.peer).toSet
+    val allKnown = peersFromActive ++ knownAvailablePeers
+    for (peer <- allKnown if pendingTasks.nonEmpty && !isPeerCoolingDown(peer))
       dispatchIfPossible(peer)
   }
 
@@ -399,6 +427,7 @@ class ByteCodeCoordinator(
                 bytecodesDownloaded += bytecodeCount
                 snapSyncController ! SNAPSyncController.ProgressBytecodesDownloaded(bytecodeCount.toLong)
                 bytesDownloaded += response.codes.map(_.size.toLong).sum
+                consecutiveTaskFailures = 0
 
                 // Only mark the task completed if nothing remains; large batches may be partially served due to bytes.
                 task.pending = false
