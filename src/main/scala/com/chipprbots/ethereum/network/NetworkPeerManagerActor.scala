@@ -57,6 +57,8 @@ class NetworkPeerManagerActor(
   // Mutable reference to SNAPSyncController that can be set after initialization
   private var snapSyncControllerOpt: Option[ActorRef] = initialSnapSyncControllerOpt
 
+  private var emptyHeaderResponses: Int = 0
+
   // 60s network summary — read+reset RLPx counters and log one aggregate line
   context.system.scheduler.scheduleWithFixedDelay(60.seconds, 60.seconds, self, NetworkPeerManagerActor.LogNetworkSummary)(context.dispatcher)
 
@@ -130,16 +132,14 @@ class NetworkPeerManagerActor(
 
     case NetworkPeerManagerActor.LogNetworkSummary =>
       import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler
-      val tcpFailed   = RLPxConnectionHandler.tcpFailedCount.getAndSet(0)
-      val authFailed  = RLPxConnectionHandler.authFailedCount.getAndSet(0)
-      val authTimeout = RLPxConnectionHandler.authTimeoutCount.getAndSet(0)
-      val active      = peersWithInfo.size
+      val tcpFailed    = RLPxConnectionHandler.tcpFailedCount.getAndSet(0)
+      val authFailed   = RLPxConnectionHandler.authFailedCount.getAndSet(0)
+      val authTimeout  = RLPxConnectionHandler.authTimeoutCount.getAndSet(0)
+      val emptyHeaders = emptyHeaderResponses; emptyHeaderResponses = 0
+      val active       = peersWithInfo.size
+      val snapPeers    = peersWithInfo.values.count(_.peerInfo.remoteStatus.supportsSnap)
       log.info(
-        "Network [60s]: active={} peers, +{} tcp-failed, +{} auth-failed, +{} auth-timeout",
-        active,
-        tcpFailed,
-        authFailed,
-        authTimeout
+        s"Network [60s]: active=$active peers ($snapPeers snap-capable), +$tcpFailed tcp-failed, +$authFailed auth-failed, +$authTimeout auth-timeout, +$emptyHeaders empty-headers"
       )
   }
 
@@ -255,24 +255,30 @@ class NetworkPeerManagerActor(
     *   new updated peer info
     */
   private def handleReceivedMessage(message: Message, initialPeerWithInfo: PeerWithInfo): PeerInfo = {
-    // Log received BlockHeaders for debugging GetBlockHeaders response tracking
+    // Log non-empty BlockHeaders at debug; count empty responses for 60s summary
     message match {
       case m: ETH62BlockHeaders =>
-        log.debug(
-          "RECV_BLOCKHEADERS: peer={}, count={}, blockNumbers={}",
-          initialPeerWithInfo.peer.id,
-          m.headers.size,
-          m.headers.take(5).map(_.number).mkString(", ") + (if (m.headers.size > 5) "..." else "")
-        )
+        if (m.headers.nonEmpty)
+          log.debug(
+            "RECV_BLOCKHEADERS: peer={}, count={}, blockNumbers={}",
+            initialPeerWithInfo.peer.id,
+            m.headers.size,
+            m.headers.take(5).map(_.number).mkString(", ") + (if (m.headers.size > 5) "..." else "")
+          )
+        else
+          emptyHeaderResponses += 1
       case m: ETH66BlockHeaders =>
-        log.debug(
-          "RECV_BLOCKHEADERS: peer={}, requestId={}, count={}, blockNumbers={}",
-          initialPeerWithInfo.peer.id,
-          m.requestId,
-          m.headers.size,
-          m.headers.take(5).map(_.number).mkString(", ") + (if (m.headers.size > 5) "..." else "")
-        )
-      case _ => // Don't log other message types at INFO level
+        if (m.headers.nonEmpty)
+          log.debug(
+            "RECV_BLOCKHEADERS: peer={}, requestId={}, count={}, blockNumbers={}",
+            initialPeerWithInfo.peer.id,
+            m.requestId,
+            m.headers.size,
+            m.headers.take(5).map(_.number).mkString(", ") + (if (m.headers.size > 5) "..." else "")
+          )
+        else
+          emptyHeaderResponses += 1
+      case _ => // Don't log other message types
     }
 
     (updateChainWeight(message) _)
