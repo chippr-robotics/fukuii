@@ -4,17 +4,20 @@ import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props, Scheduler}
 import org.apache.pekko.pattern.ask
 import org.apache.pekko.util.Timeout
 
+import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainWriter
+import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.ETH62
 import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.{
   BestPeer,
   BestSnapPeer,
+  ExcludingPeers,
   NoSuitablePeer,
   Request,
   RequestFailed
@@ -42,6 +45,10 @@ final class PivotHeaderBootstrap(
   import PivotHeaderBootstrap._
 
   private var attempt: Int = 0
+
+  // Peers that disconnected mid-request during this bootstrap session. Excluded from selection
+  // until all peers have failed (reset), preventing tight reconnect loops (e.g. besu cycling every ~15s).
+  private val failedPeers: mutable.Set[PeerId] = mutable.Set.empty
 
   private def currentRetryDelay: FiniteDuration = {
     // Exponential backoff: initialRetryDelay * 2^(attempt-1), capped at maxRetryDelay
@@ -90,49 +97,72 @@ final class PivotHeaderBootstrap(
       val delay = currentRetryDelay
       log.info("Scheduling pivot header retry in {} (attempt {}/{})", delay, attempt, maxAttempts)
       scheduler.scheduleOnce(delay, self, Fetch)(context.dispatcher)
+
+    case RetryExcluding(failedPeer, reason) =>
+      failedPeers += failedPeer.id
+      log.warning(
+        "Pivot header peer {} failed — excluded for this bootstrap session ({} peers excluded). Reason: {}",
+        failedPeer.id.value.take(16),
+        failedPeers.size,
+        reason
+      )
+      self ! Retry(reason)
   }
 
   private def fetchOnce(): Unit = {
     val msg = ETH66.GetBlockHeaders(ETH66.nextRequestId, Left(targetBlock), maxHeaders = 1, skip = 0, reverse = false)
 
-    // Prefer SNAP-capable peers (they're more likely to have recent headers).
-    // If no SNAP peer is available, fall back to any peer.
-    val selector = if (preferSnapPeers) BestSnapPeer else BestPeer
-    val req = Request[ETH66.GetBlockHeaders](msg, selector, (m: ETH66.GetBlockHeaders) => m)
+    // When peers have failed previously, exclude them. Otherwise prefer SNAP-capable peers
+    // (they're more likely to have recent headers). Fall back to any peer if no SNAP available.
+    val primarySelector =
+      if (failedPeers.nonEmpty) ExcludingPeers(failedPeers.toSet)
+      else if (preferSnapPeers) BestSnapPeer
+      else BestPeer
+
+    val req = Request[ETH66.GetBlockHeaders](msg, primarySelector, (m: ETH66.GetBlockHeaders) => m)
 
     (peersClient ? req)
       .flatMap {
+        case NoSuitablePeer if failedPeers.nonEmpty =>
+          // All non-excluded peers exhausted — reset exclusion list and retry with full pool
+          log.info(
+            "No peer available after excluding {} failed peers — resetting exclusion list",
+            failedPeers.size
+          )
+          failedPeers.clear()
+          val retryMsg =
+            ETH66.GetBlockHeaders(ETH66.nextRequestId, Left(targetBlock), maxHeaders = 1, skip = 0, reverse = false)
+          val retrySelector = if (preferSnapPeers) BestSnapPeer else BestPeer
+          peersClient ? Request[ETH66.GetBlockHeaders](retryMsg, retrySelector, (m: ETH66.GetBlockHeaders) => m)
         case NoSuitablePeer if preferSnapPeers =>
-          // No SNAP peer available — try any peer as fallback
+          // No SNAP peer available — fall back to any peer
           log.debug("No SNAP-capable peer for pivot header, falling back to BestPeer")
           val fallbackMsg =
             ETH66.GetBlockHeaders(ETH66.nextRequestId, Left(targetBlock), maxHeaders = 1, skip = 0, reverse = false)
-          val fallbackReq = Request[ETH66.GetBlockHeaders](fallbackMsg, BestPeer, (m: ETH66.GetBlockHeaders) => m)
-          peersClient ? fallbackReq
+          peersClient ? Request[ETH66.GetBlockHeaders](fallbackMsg, BestPeer, (m: ETH66.GetBlockHeaders) => m)
         case other =>
           scala.concurrent.Future.successful(other)
       }
-      .map {
+      .foreach {
         case PeersClient.Response(_, eth66: ETH66BlockHeaders) =>
-          eth66.headers.headOption
+          eth66.headers.headOption match {
+            case Some(header) if header.number == targetBlock => self ! Fetched(header)
+            case Some(header) => self ! Retry(s"received header number ${header.number} != target $targetBlock")
+            case None         => self ! Retry("empty headers response")
+          }
         case PeersClient.Response(_, eth62: ETH62.BlockHeaders) =>
-          eth62.headers.headOption
+          eth62.headers.headOption match {
+            case Some(header) if header.number == targetBlock => self ! Fetched(header)
+            case Some(header) => self ! Retry(s"received header number ${header.number} != target $targetBlock")
+            case None         => self ! Retry("empty headers response")
+          }
         case NoSuitablePeer =>
-          None
-        case RequestFailed(_, reason) =>
-          log.warning("Pivot header request failed: {}", reason)
-          None
+          self ! Retry("no suitable peer")
+        case RequestFailed(failedPeer, reason) =>
+          self ! RetryExcluding(failedPeer, s"request failed: $reason")
         case other =>
           log.debug("Unexpected pivot header response: {}", other)
-          None
-      }
-      .foreach {
-        case Some(header) if header.number == targetBlock =>
-          self ! Fetched(header)
-        case Some(header) =>
-          self ! Retry(s"received header number ${header.number} != target $targetBlock")
-        case None =>
-          self ! Retry("no header returned")
+          self ! Retry("unexpected response")
       }
   }
 }
@@ -165,6 +195,7 @@ object PivotHeaderBootstrap {
 
   private case object Fetch
   final private case class Retry(reason: String)
+  final private case class RetryExcluding(peer: com.chipprbots.ethereum.network.Peer, reason: String)
   final private case class Fetched(header: BlockHeader)
 
   final case class Completed(targetBlock: BigInt, header: BlockHeader)
