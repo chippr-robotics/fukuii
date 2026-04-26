@@ -86,6 +86,28 @@ class StaticUDPPeerGroup[M] private (
       clientChannels <- clientChannelsRef.get
     } yield serverChannels.size + clientChannels.values.map(_.size).sum
 
+  /** Send raw bytes to a remote address, bypassing the typed `Codec[M]`.
+    * Used by side-channel consumers (e.g. the discv5 async pipeline) that
+    * own their own framing and need to write back without going through
+    * the v4 packet encoding path.
+    *
+    * Fire-and-forget at the IO level — the netty `writeAndFlush` is async.
+    * Errors are surfaced as IO failures.
+    */
+  def sendRaw(remoteAddress: InetSocketAddress, bytes: scodec.bits.ByteVector): IO[Unit] =
+    raiseIfShutdown >> IO {
+      boundChannelOpt match {
+        case Some(channel) if channel.isActive =>
+          val buf = io.netty.buffer.Unpooled.wrappedBuffer(bytes.toByteBuffer)
+          val packet = new io.netty.channel.socket.DatagramPacket(buf, remoteAddress)
+          val _ = channel.writeAndFlush(packet)
+        case Some(_) =>
+          throw new IOException(s"Channel inactive; cannot send to $remoteAddress")
+        case None =>
+          throw new IllegalStateException("UDP server channel not initialized")
+      }
+    }
+
   private val raiseIfShutdown =
     isShutdownRef.get
       .ifM(IO.raiseError(new IllegalStateException("The peer group has already been shut down.")), IO.unit)
