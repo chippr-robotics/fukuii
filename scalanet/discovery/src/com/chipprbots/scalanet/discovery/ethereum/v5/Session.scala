@@ -252,33 +252,38 @@ object Session {
 
   // ---- Session cache ------------------------------------------------------
 
-  trait SessionCache {
-    def get(id: SessionId): IO[Option[Session]]
-    def put(id: SessionId, session: Session): IO[Unit]
-    def remove(id: SessionId): IO[Unit]
-    def size: IO[Int]
-  }
+  /** In-memory cache of established sessions, keyed on `(nodeId, addr)`.
+    *
+    * Synchronous primitives (no IO wrapping) so the netty-thread sync
+    * responder can hit the cache without an IO trampoline; an `IO`
+    * counterpart is provided for the async pipeline.
+    *
+    * Eviction is lazy — on insert, entries older than `maxAgeMillis` are
+    * pruned. Bounded memory under sustained load.
+    */
+  class SessionCache(maxAgeMillis: Long = 60L * 60 * 1000) {
+    import java.util.concurrent.ConcurrentHashMap
+    private val map = new ConcurrentHashMap[SessionId, Session]()
 
-  object SessionCache {
+    def get(id: SessionId): Option[Session] = Option(map.get(id))
 
-    /** A simple in-memory cache backed by a [[Ref]]. Eviction policy is
-      * "drop entries older than `maxAgeMillis`" applied lazily on insert. */
-    def apply(maxAgeMillis: Long = 60L * 60 * 1000): IO[SessionCache] =
-      Ref[IO].of(Map.empty[SessionId, Session]).map { ref =>
-        new SessionCache {
-          override def get(id: SessionId): IO[Option[Session]] = ref.get.map(_.get(id))
-
-          override def put(id: SessionId, session: Session): IO[Unit] =
-            ref.update { current =>
-              val now = System.currentTimeMillis()
-              val pruned = current.filter { case (_, s) => now - s.lastSeenMillis < maxAgeMillis }
-              pruned + (id -> session)
-            }
-
-          override def remove(id: SessionId): IO[Unit] = ref.update(_ - id)
-
-          override def size: IO[Int] = ref.get.map(_.size)
-        }
+    def put(id: SessionId, session: Session): Unit = {
+      val now = System.currentTimeMillis()
+      // Lazy prune — bounded work per insert.
+      if (map.size > 4096) {
+        val cutoff = now - maxAgeMillis
+        map.entrySet.removeIf(e => e.getValue.lastSeenMillis < cutoff)
       }
+      val _ = map.put(id, session)
+    }
+
+    def remove(id: SessionId): Unit = { val _ = map.remove(id) }
+
+    def size: Int = map.size
+
+    // IO wrappers for the async pipeline.
+    def getIO(id: SessionId): IO[Option[Session]] = IO(get(id))
+    def putIO(id: SessionId, session: Session): IO[Unit] = IO(put(id, session))
+    def removeIO(id: SessionId): IO[Unit] = IO(remove(id))
   }
 }
