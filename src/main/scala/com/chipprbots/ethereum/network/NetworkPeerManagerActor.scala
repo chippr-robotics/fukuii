@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.network
 
+import scala.concurrent.duration._
+
 import org.apache.pekko.actor.Actor
 import org.apache.pekko.actor.ActorLogging
 import org.apache.pekko.actor.ActorRef
@@ -54,6 +56,9 @@ class NetworkPeerManagerActor(
 
   // Mutable reference to SNAPSyncController that can be set after initialization
   private var snapSyncControllerOpt: Option[ActorRef] = initialSnapSyncControllerOpt
+
+  // 60s network summary — read+reset RLPx counters and log one aggregate line
+  context.system.scheduler.scheduleWithFixedDelay(60.seconds, 60.seconds, self, NetworkPeerManagerActor.LogNetworkSummary)(context.dispatcher)
 
   // Subscribe to the event of any peer getting handshaked
   peerEventBusActor ! Subscribe(PeerHandshaked)
@@ -122,6 +127,20 @@ class NetworkPeerManagerActor(
       val newPeersWithInfo = updatePeersWithInfo(peersWithInfo, peerId, message.underlyingMsg, handleSentMessage)
       peerManagerActor ! PeerManagerActor.SendMessage(message, peerId)
       context.become(handleMessages(newPeersWithInfo))
+
+    case NetworkPeerManagerActor.LogNetworkSummary =>
+      import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler
+      val tcpFailed   = RLPxConnectionHandler.tcpFailedCount.getAndSet(0)
+      val authFailed  = RLPxConnectionHandler.authFailedCount.getAndSet(0)
+      val authTimeout = RLPxConnectionHandler.authTimeoutCount.getAndSet(0)
+      val active      = peersWithInfo.size
+      log.info(
+        "Network [60s]: active={} peers, +{} tcp-failed, +{} auth-failed, +{} auth-timeout",
+        active,
+        tcpFailed,
+        authFailed,
+        authTimeout
+      )
   }
 
   /** Processes events and updating the information about each peer
@@ -160,7 +179,7 @@ class NetworkPeerManagerActor(
       context.become(handleMessages(newPeersWithInfo))
 
     case PeerHandshakeSuccessful(peer, peerInfo: PeerInfo) =>
-      log.info(
+      log.debug(
         "PEER_HANDSHAKE_SUCCESS: Peer {} handshake successful. Capability: {}, BestHash: {}, TotalDifficulty: {}",
         peer.id,
         peerInfo.remoteStatus.capability,
@@ -239,14 +258,14 @@ class NetworkPeerManagerActor(
     // Log received BlockHeaders for debugging GetBlockHeaders response tracking
     message match {
       case m: ETH62BlockHeaders =>
-        log.info(
+        log.debug(
           "RECV_BLOCKHEADERS: peer={}, count={}, blockNumbers={}",
           initialPeerWithInfo.peer.id,
           m.headers.size,
           m.headers.take(5).map(_.number).mkString(", ") + (if (m.headers.size > 5) "..." else "")
         )
       case m: ETH66BlockHeaders =>
-        log.info(
+        log.debug(
           "RECV_BLOCKHEADERS: peer={}, requestId={}, count={}, blockNumbers={}",
           initialPeerWithInfo.peer.id,
           m.requestId,
@@ -811,6 +830,7 @@ object NetworkPeerManagerActor {
   private[network] case class PeerWithInfo(peer: Peer, peerInfo: PeerInfo)
 
   case object GetHandshakedPeers
+  private[network] case object LogNetworkSummary
 
   case class HandshakedPeers(peers: Map[Peer, PeerInfo])
 
