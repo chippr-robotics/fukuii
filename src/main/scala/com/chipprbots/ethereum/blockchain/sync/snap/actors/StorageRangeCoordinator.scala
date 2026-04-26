@@ -77,6 +77,11 @@ class StorageRangeCoordinator(
   private val peerConsecutiveTimeouts = mutable.Map[String, Int]()
   private val consecutiveTimeoutThreshold = 3 // Mark stateless after 3 consecutive timeouts
 
+  // Global consecutive task failure counter: triggers ForceCompleteStorage when all SNAP peers
+  // stop serving storage data. Resets to zero on any successful slot download.
+  private var consecutiveTaskFailures: Int = 0
+  private val maxConsecutiveTaskFailures: Int = 100
+
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
   // This is separate from stateless peer detection — cooldowns are short and per-error-type.
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
@@ -570,6 +575,7 @@ class StorageRangeCoordinator(
       result match {
         case Right(count) =>
           slotsDownloaded += count
+          consecutiveTaskFailures = 0
           log.info(s"Storage task completed: $count slots")
           self ! StorageCheckCompletion
         case Left(error) =>
@@ -1060,6 +1066,16 @@ class StorageRangeCoordinator(
       batchTasks.foreach { task =>
         task.pending = false
         tasks.enqueue(task)
+      }
+
+      consecutiveTaskFailures += 1
+      if (consecutiveTaskFailures >= maxConsecutiveTaskFailures) {
+        log.warning(
+          s"Force-completing storage coordinator after $consecutiveTaskFailures consecutive " +
+            s"task failures — SNAP peers not serving storage data. " +
+            s"Missing storage deferred to healing phase."
+        )
+        self ! ForceCompleteStorage
       }
     }
     // Re-dispatch re-queued tasks to any known available peer that isn't stateless or on cooldown.
