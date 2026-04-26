@@ -451,6 +451,23 @@ class AccountRangeCoordinator(
       maxInFlightPerPeer = newLimit
       if (newLimit > 0) tryRedispatchPendingTasks()
 
+    case PeerUnavailable(peerId) =>
+      // Peer disconnected — remove from available set, reset its timeout counter so network-level
+      // disconnects don't accumulate toward the stateless threshold. Then immediately cancel any
+      // in-flight request to this peer so workers return to idle without waiting for 30s timeout.
+      // go-ethereum eth/protocols/snap/sync.go:1621 (revertRequests) and Besu
+      // AbstractRetryingPeerTask.java:158 both treat disconnect as transient re-queue, not failure.
+      knownAvailablePeers.find(_.id.value == peerId).foreach(knownAvailablePeers -= _)
+      peerConsecutiveTimeouts.remove(peerId)
+      peerCooldownUntilMs.remove(peerId)
+      val inFlight = activeTasks.collect {
+        case (reqId, (_, worker, peer)) if peer.id.value == peerId => (reqId, worker)
+      }.toSeq
+      if (inFlight.nonEmpty) {
+        log.debug(s"Peer $peerId disconnected — cancelling ${inFlight.size} in-flight request(s)")
+        inFlight.foreach { case (_, worker) => worker ! WorkerPeerDisconnected(peerId) }
+      }
+
     case TaskComplete(requestId, result) =>
       handleTaskComplete(requestId, result)
 
@@ -774,9 +791,9 @@ class AccountRangeCoordinator(
       task.rootHash = stateRoot
       pendingTasks.enqueue(task)
 
-      // Apply cooldown and reduce byte budget for failing peers (unless stateless-marked,
-      // which already blocks them from dispatch)
-      if (!reason.contains("Missing proof for empty account range")) {
+      // Apply cooldown and reduce byte budget for protocol failures; skip for network-level
+      // disconnects since the peer is already gone and will reconnect fresh.
+      if (!reason.contains("Missing proof for empty account range") && !reason.contains("Peer disconnected")) {
         recordPeerCooldown(peer, reason)
         adjustResponseBytesOnFailure(peer, reason)
       }
