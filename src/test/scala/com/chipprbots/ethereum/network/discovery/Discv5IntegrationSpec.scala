@@ -139,10 +139,13 @@ class Discv5IntegrationSpec extends AnyFlatSpec with Matchers {
         ByteVector(v5.Packet.Flag.Message) ++
         nonce ++
         ByteVector.fromInt(nodeIdA.size.toInt, v5.Packet.AuthSizeSize)
-    val masked = v5.Packet.aesCtrMask(nodeIdB, iv, staticHeader ++ nodeIdA)
-    val aad = iv ++ masked
+    // Per discv5-wire.md the GCM AAD is the UNMASKED `iv || static-header
+    // || authdata`. The wire form has the static-header + authdata masked,
+    // but both peers feed the unmasked form into AES-GCM.
+    val aad = iv ++ staticHeader ++ nodeIdA
     val ct = v5.Session.encrypt(sharedKey, nonce, plaintext, aad).get
-    val incoming = (aad ++ ct).bits
+    val masked = v5.Packet.aesCtrMask(nodeIdB, iv, staticHeader ++ nodeIdA)
+    val incoming = (iv ++ masked ++ ct).bits
 
     // B sync-respond
     val result = responderB(sender, incoming)
@@ -156,9 +159,15 @@ class Discv5IntegrationSpec extends AnyFlatSpec with Matchers {
     replyPkt shouldBe a[v5.Packet.MessagePacket]
     val replyMsg = replyPkt.asInstanceOf[v5.Packet.MessagePacket]
 
-    val replyMaskedRegionEnd =
-      v5.Packet.MaskingIVSize + v5.Packet.StaticHeaderSize + replyMsg.header.authData.size.toInt
-    val replyAad = replyBits.toByteVector.take(replyMaskedRegionEnd.toLong)
+    // Reconstruct the unmasked AAD from the decoded header (mirrors what the
+    // responder does internally — `Packet.decode` already unmasks).
+    val replyStaticHeader =
+      v5.Packet.ProtocolId ++
+        ByteVector.fromInt(v5.Packet.Version, v5.Packet.VersionSize) ++
+        ByteVector(v5.Packet.Flag.Message) ++
+        replyMsg.header.nonce ++
+        ByteVector.fromInt(replyMsg.header.authData.size.toInt, v5.Packet.AuthSizeSize)
+    val replyAad = replyMsg.header.iv ++ replyStaticHeader ++ replyMsg.header.authData
     val responseBytes =
       v5.Session.decrypt(sharedKey, replyMsg.header.nonce, replyMsg.messageCiphertext, replyAad).get
     val response = v5PayloadCodec.decode(responseBytes.bits).require.value
