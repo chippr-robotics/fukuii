@@ -53,6 +53,16 @@ class TrieNodeHealingCoordinator(
   private var lastHealedAtMs: Long = System.currentTimeMillis()
   private val healingStagnationTimeoutMs: Long = 5 * 60 * 1000 // 5 minutes
 
+  // Periodic idle stagnation escalation: fires even when no requests are active.
+  // The per-timeout stagnation check at handleTimeout() requires a live request to time out;
+  // if pendingTasks is non-empty but activeRequests is empty (all peers cooling down),
+  // healing can stall silently. After 5 consecutive 2-minute ticks with no active requests
+  // and no progress (10 minutes total), force-complete healing.
+  // Reference: Besu markAsStalled() is a TODO no-op; this is a fukuii-specific liveness guarantee.
+  private case object HealingStagnationCheck
+  private var consecutiveIdleChecks: Int = 0
+  private var lastPulseHealedCount: Int = 0
+
   // Active request tracking: maps requestId -> (tasks, peer, requestedBytes, sentAtMs)
   private case class ActiveRequest(
       tasks: Seq[HealingEntry],
@@ -190,8 +200,12 @@ class TrieNodeHealingCoordinator(
       }(context.dispatcher).foreach(n => selfRef ! FlushComplete(n))(context.dispatcher)
     }
 
-  override def preStart(): Unit =
+  override def preStart(): Unit = {
     log.info(s"TrieNodeHealingCoordinator starting (concurrency=$concurrency)")
+    context.system.scheduler.scheduleWithFixedDelay(2.minutes, 2.minutes, self, HealingStagnationCheck)(
+      context.dispatcher
+    )
+  }
 
   override val supervisorStrategy: SupervisorStrategy =
     OneForOneStrategy(maxNrOfRetries = 3, withinTimeRange = 1.minute) { case _: Exception =>
@@ -238,6 +252,8 @@ class TrieNodeHealingCoordinator(
       activeRequests.keys.foreach(requestTracker.completeRequest(_, 0))
       activeRequests.clear()
       pivotRefreshRequested = false
+      consecutiveIdleChecks = 0
+      lastPulseHealedCount = totalNodesHealed
 
     case TrieNodesResponseMsg(response) =>
       handleResponse(response)
@@ -268,6 +284,35 @@ class TrieNodeHealingCoordinator(
           if (abandonedTaskCount > 0) s" ($abandonedTaskCount abandoned — regular sync will recover)" else ""
         log.info(s"Healing round complete: $totalNodesHealed total nodes healed$abandonedStr. Notifying controller.")
         snapSyncController ! SNAPSyncController.StateHealingComplete
+      }
+
+    case HealingStagnationCheck =>
+      val recentHealed = totalNodesHealed - lastPulseHealedCount
+      log.info(
+        s"[HEAL-PULSE] healed=$totalNodesHealed (+$recentHealed last 2min) | " +
+          s"pending=${pendingTasks.size} active=${activeRequests.size} peers=${knownAvailablePeers.size} | " +
+          s"pivotRefreshPending=$pivotRefreshRequested"
+      )
+      lastPulseHealedCount = totalNodesHealed
+
+      if (pendingTasks.nonEmpty && activeRequests.isEmpty && !pivotRefreshRequested) {
+        consecutiveIdleChecks += 1
+        if (consecutiveIdleChecks >= 5) {
+          val pendingCount = pendingTasks.size
+          log.warning(
+            s"[HEAL] No active requests for ${consecutiveIdleChecks * 2} minutes with " +
+              s"$pendingCount pending tasks and ${knownAvailablePeers.size} known peers. " +
+              s"Forcing healing completion — missing nodes deferred to import-time recovery."
+          )
+          abandonedTaskCount += pendingCount
+          pendingTasks = Seq.empty
+          pendingHashSet.clear()
+          self ! HealingCheckCompletion
+        } else {
+          tryRedispatchPendingTasks()
+        }
+      } else {
+        consecutiveIdleChecks = 0
       }
 
     case HealingGetProgress =>
@@ -427,7 +472,9 @@ class TrieNodeHealingCoordinator(
           s"Node hash mismatch: expected ${Hex.toHexString(task.hash.take(4).toArray)}, " +
             s"got ${Hex.toHexString(nodeHash.take(4).toArray)}"
         )
-        // Re-queue this task for retry
+        // Re-queue this task for retry and restore to dedup set so QueueMissingNodes
+        // doesn't add a duplicate entry for the same hash (BUG-H1 fix)
+        pendingHashSet += task.hash
         pendingTasks = pendingTasks :+ task
       }
     }
@@ -435,6 +482,7 @@ class TrieNodeHealingCoordinator(
     // Re-queue unmatched tasks (server returned fewer nodes than requested)
     val unmatchedTasks = tasksForRequest.drop(nodes.size)
     unmatchedTasks.foreach { task =>
+      pendingHashSet += task.hash
       pendingTasks = pendingTasks :+ task
     }
 
@@ -514,6 +562,7 @@ class TrieNodeHealingCoordinator(
             s"(regular sync will fetch on-demand)"
         )
       } else {
+        pendingHashSet += updated.hash
         pendingTasks = pendingTasks :+ updated
         requeued += 1
       }
