@@ -129,6 +129,14 @@ class Secp256k1SigAlg extends SigAlg with SecureRandomBuilder {
     Attempt.fromOption(maybePublicKey, Err("Failed to recover the public key from the signature."))
   }
 
+  override def recoverPublicKeyFromHash(signature: Signature, messageHash: BitVector): Attempt[PublicKey] = {
+    val maybePublicKey = toECDSASignatures(signature).flatMap { sig =>
+      sig.publicKey(messageHash.toByteArray).map(toPublicKey)
+    }.headOption
+
+    Attempt.fromOption(maybePublicKey, Err("Failed to recover the public key from the signature hash."))
+  }
+
   override def toPublicKey(privateKey: PrivateKey): PublicKey = {
     val publicKeyBytes = crypto.pubKeyFromPrvKey(privateKey.value.toByteArray)
     toPublicKey(publicKeyBytes)

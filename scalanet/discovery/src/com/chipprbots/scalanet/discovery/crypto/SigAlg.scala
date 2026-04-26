@@ -27,6 +27,13 @@ trait SigAlg {
     */
   def recoverPublicKey(signature: Signature, data: BitVector): Attempt[PublicKey]
 
+  /** Recover the public key from a signature when the message hash has already
+    * been computed by the caller. Discv5 specifies the signature is over a
+    * pre-computed `sha256(...)` hash, so callers must skip the implicit
+    * keccak step that [[recoverPublicKey]] applies to its `data` argument.
+    */
+  def recoverPublicKeyFromHash(signature: Signature, messageHash: BitVector): Attempt[PublicKey]
+
   /** Produce the public key based on the private key. */
   def toPublicKey(privateKey: PrivateKey): PublicKey
 

@@ -274,6 +274,12 @@ object Session {
         val cutoff = now - maxAgeMillis
         map.entrySet.removeIf(e => e.getValue.lastSeenMillis < cutoff)
       }
+      // Per discv5 spec, only one session per peer at a time. When a peer
+      // bonds from a new address, any prior session bound to the same nodeId
+      // on a different address is invalidated — re-probing from the old
+      // address must trigger a fresh WHOAREYOU. Hive's PingMultiIP relies on
+      // exactly this behavior.
+      map.entrySet.removeIf(e => e.getKey.nodeId == id.nodeId && e.getKey != id)
       val _ = map.put(id, session)
     }
 

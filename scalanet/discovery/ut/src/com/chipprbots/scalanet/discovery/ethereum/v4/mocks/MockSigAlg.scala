@@ -46,6 +46,11 @@ class MockSigAlg extends SigAlg {
     Attempt.successful(PublicKey(xor(signature.value, data).take(PublicKeyBytesSize * 8)))
   }
 
+  // Mock doesn't actually hash anything in `recoverPublicKey`, so the
+  // hash-already-computed variant is just an alias for the normal path.
+  override def recoverPublicKeyFromHash(signature: Signature, messageHash: BitVector): Attempt[PublicKey] =
+    recoverPublicKey(signature, messageHash)
+
   override def toPublicKey(privateKey: PrivateKey): PublicKey =
     PublicKey(privateKey.value)
 

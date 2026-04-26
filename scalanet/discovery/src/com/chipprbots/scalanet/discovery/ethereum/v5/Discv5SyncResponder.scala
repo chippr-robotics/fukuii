@@ -42,31 +42,44 @@ object Discv5SyncResponder extends LazyLogging {
 
   // ---- Caches ------------------------------------------------------------
 
-  /** In-flight WHOAREYOU challenges we sent. Keyed on the `nonce` of the
-    * MessagePacket that triggered the WHOAREYOU — that nonce is what the
-    * peer's handshake packet echoes back. The `challengeBytes` field is the
-    * entire WHOAREYOU packet bytes; that's what HKDF uses as salt. */
+  /** In-flight WHOAREYOU challenges we sent. Keyed on `(srcId, peerAddr)` so
+    * the follow-up handshake — whose own `header.nonce` is a fresh GCM nonce
+    * unrelated to the trigger — is matched back to the right challenge.
+    *
+    * Two forms of the WHOAREYOU bytes are stored:
+    *   - `challengeBytes`: the spec-defined `masking-iv || unmasked
+    *     static-header || unmasked authdata`, used as the HKDF salt for
+    *     session-key derivation and the input to the id-nonce signature
+    *     hash. Both peers compute this from their own view of the WHOAREYOU
+    *     after unmasking.
+    *   - `wireBytes`: the encoded wire-form (with masked region) — used to
+    *     re-send the same challenge if the peer retransmits the trigger
+    *     packet (HandshakeResend semantics).
+    *
+    * `triggerNonce` is the inbound message's nonce the WHOAREYOU echoed
+    * back; reused when the peer retries the same packet. */
   final case class PendingChallenge(
       idNonce: ByteVector,
       challengeBytes: ByteVector,
-      peerAddr: InetSocketAddress,
+      wireBytes: ByteVector,
+      triggerNonce: ByteVector,
       sentAtMillis: Long
   )
 
   class ChallengeCache(maxAgeMillis: Long = 30_000L) {
-    private val map = new ConcurrentHashMap[ByteVector, PendingChallenge]()
+    private val map = new ConcurrentHashMap[Session.SessionId, PendingChallenge]()
 
-    def get(triggerNonce: ByteVector): Option[PendingChallenge] = Option(map.get(triggerNonce))
+    def get(key: Session.SessionId): Option[PendingChallenge] = Option(map.get(key))
 
-    def put(triggerNonce: ByteVector, ch: PendingChallenge): Unit = {
+    def put(key: Session.SessionId, ch: PendingChallenge): Unit = {
       if (map.size > 1024) {
         val cutoff = System.currentTimeMillis() - maxAgeMillis
         map.entrySet.removeIf(e => e.getValue.sentAtMillis < cutoff)
       }
-      val _ = map.put(triggerNonce, ch)
+      val _ = map.put(key, ch)
     }
 
-    def remove(triggerNonce: ByteVector): Unit = { val _ = map.remove(triggerNonce) }
+    def remove(key: Session.SessionId): Unit = { val _ = map.remove(key) }
   }
 
   /** ENRs we've seen in incoming handshakes. Used to satisfy hive's
@@ -282,11 +295,11 @@ object Discv5SyncResponder extends LazyLogging {
     val sid = Session.SessionId(msg.header.srcId, sender)
     sessions.get(sid) match {
       case Some(session) =>
-        // AAD per discv5-wire.md: the bytes from the start of the masked
-        // header to the end of the auth-data — i.e. the masked region as it
-        // appears on the wire (including the IV at the front).
-        val maskedRegionEnd = Packet.MaskingIVSize + Packet.StaticHeaderSize + msg.header.authData.size.toInt
-        val aad = rawIncoming.take(maskedRegionEnd.toLong)
+        // AAD per discv5-wire.md is the UNMASKED `masking-iv || static-header
+        // || authdata`. Geth unmasks in place before passing to AES-GCM; we
+        // never mutate the rawIncoming, so we reconstruct the unmasked region
+        // from the decoded header instead.
+        val aad = unmaskedHeaderRegion(msg.header.iv, Packet.Flag.Message, msg.header.nonce, msg.header.authData)
 
         Session.decrypt(session.keys.readKey, msg.header.nonce, msg.messageCiphertext, aad).toOption.flatMap {
           plaintext =>
@@ -317,26 +330,51 @@ object Discv5SyncResponder extends LazyLogging {
       localNodeId: ByteVector,
       challenges: ChallengeCache
   ): Option[BitVector] = {
-    val idNonce = Session.randomIdNonce
-    val whoPkt = Packet.WhoareyouPacket(
-      Packet.Header.Whoareyou(
-        iv = Packet.randomIv,
-        nonce = triggerNonce,
-        idNonce = idNonce,
-        recordSeq = 0L
-      )
-    )
-    Packet.encode(whoPkt, destNodeId).toOption.map { encoded =>
-      // Stash for handshake verification. The handshake packet's nonce will
-      // be different, but its auth-data carries the original message nonce
-      // implicitly (the handshake's own nonce is a fresh GCM nonce; geth's
-      // verification looks the challenge up by the outer trigger nonce).
-      challenges.put(
-        triggerNonce,
-        PendingChallenge(idNonce, encoded, sender, System.currentTimeMillis())
-      )
-      encoded.bits
+    val sid = Session.SessionId(destNodeId, sender)
+    // If we already have a pending challenge for this peer, resend it
+    // verbatim. Geth does this so the peer can complete handshake under the
+    // challenge they already saw — even if they re-sent (a different) Ping
+    // before the handshake finished. The peer signs over the challenge bytes,
+    // not the trigger nonce, so the trigger field of the resent WHOAREYOU is
+    // intentionally the original ping's nonce. This is the behavior hive's
+    // PingHandshakeInterrupted (a.k.a. HandshakeResend) test asserts.
+    val (idNonce, challengeData, wireBytes) = challenges.get(sid) match {
+      case Some(existing) =>
+        logger.debug(s"discv5 sync-fastpath: resending pending WHOAREYOU to $sender")
+        (existing.idNonce, existing.challengeBytes, existing.wireBytes)
+      case None =>
+        val newIdNonce = Session.randomIdNonce
+        val iv = Packet.randomIv
+        val whoPkt = Packet.WhoareyouPacket(
+          Packet.Header.Whoareyou(
+            iv = iv,
+            nonce = triggerNonce,
+            idNonce = newIdNonce,
+            recordSeq = 0L
+          )
+        )
+        // The spec defines `challenge-data = masking-iv || static-header || authdata`
+        // — i.e. the UNMASKED form of the static header + auth-data, not the
+        // wire-form (which has them masked). The peer recomputes this same
+        // unmasked form by unmasking the WHOAREYOU it received. We need to
+        // sign / HKDF-salt over the same bytes for the handshake to verify.
+        val staticHeader =
+          Packet.ProtocolId ++
+            ByteVector.fromInt(Packet.Version, Packet.VersionSize) ++
+            ByteVector(Packet.Flag.Whoareyou) ++
+            triggerNonce ++
+            ByteVector.fromInt(whoPkt.header.authData.size.toInt, Packet.AuthSizeSize)
+        val cdata = iv ++ staticHeader ++ whoPkt.header.authData
+        Packet.encode(whoPkt, destNodeId).toOption match {
+          case Some(encoded) => (newIdNonce, cdata, encoded)
+          case None          => return None
+        }
     }
+    challenges.put(
+      sid,
+      PendingChallenge(idNonce, challengeData, wireBytes, triggerNonce, System.currentTimeMillis())
+    )
+    Some(wireBytes.bits)
   }
 
   // ---- HandshakePacket: verify, derive session, respond -------------------
@@ -355,22 +393,19 @@ object Discv5SyncResponder extends LazyLogging {
       payloadCodec: Codec[Payload],
       sigalg: SigAlg
   ): Option[BitVector] = {
-    // Look up the WHOAREYOU we sent. Geth keys this on the trigger nonce —
-    // the handshake's outer nonce is fresh, but the handshake's auth-data
-    // implicitly proves knowledge of the WHOAREYOU's idNonce by signing
-    // a hash that includes our challenge bytes.
-    //
-    // For our simpler model, we look up by the handshake's nonce field.
-    // If geth doesn't echo the trigger nonce there, this lookup will miss
-    // and we fall back to "no challenge known" — and the handshake fails
-    // verification. Real-world traffic will always have a recent challenge
-    // available; the timeout window is 30 seconds.
-    val challenge = challenges.get(hs.header.nonce).orNull
+    // Look up the WHOAREYOU we sent. The handshake packet's `header.nonce`
+    // is a fresh GCM nonce for the handshake's own encrypted payload — it
+    // does NOT echo the trigger nonce. So we key on `(srcId, peerAddr)`,
+    // mirroring how the session cache itself is keyed. The handshake proves
+    // knowledge of the challenge implicitly by signing a hash that includes
+    // the WHOAREYOU bytes (`Session.idNonceHash`).
+    val sid = Session.SessionId(hs.header.srcId, sender)
+    val challenge = challenges.get(sid).orNull
     if (challenge == null) {
       logger.debug(s"discv5 sync-fastpath: handshake from $sender with no matching challenge")
       return None
     }
-    val _ = challenges.remove(hs.header.nonce)
+    val _ = challenges.remove(sid)
 
     // Verify the ID signature: sigalg.verify(peerPubkey, idNonceHash, signature).
     // The peer's pubkey is derived from the ENR record they included
@@ -380,15 +415,16 @@ object Discv5SyncResponder extends LazyLogging {
     val ephPubkey = hs.header.ephemeralPubkey
     val expectedHash = Session.idNonceHash(challenge.challengeBytes, ephPubkey, localNodeId)
 
-    // Recover the peer's pubkey from the ID-signature. discv5 signatures
-    // are 64 bytes (recovery ID stripped), so we can't use the standard
-    // ECDSA recovery directly — the recovery byte is needed. For now we
-    // try both possible recovery IDs (0x00 and 0x01) and verify which
-    // hashes to the claimed srcId.
+    // Recover the peer's pubkey from the ID-signature. Discv5 signatures
+    // are 64 bytes (recovery ID stripped). We try both possible recovery IDs
+    // (0x00 and 0x01) and pick the one that yields a pubkey whose nodeID
+    // matches the handshake's srcId. We use the hash-already-computed variant
+    // since the discv5 signing input is already `sha256(...)` per spec —
+    // the keccak step in [[SigAlg.recoverPublicKey]] would double-hash.
     val sig64 = hs.header.idSignature.toArray
     val candidates: List[PublicKey] = List(0.toByte, 1.toByte).flatMap { recId =>
       val sig65 = sig64 :+ recId
-      sigalg.recoverPublicKey(Signature(BitVector(sig65)), expectedHash.bits).toOption
+      sigalg.recoverPublicKeyFromHash(Signature(BitVector(sig65)), expectedHash.bits).toOption
     }
     val peerPubkeyOpt = candidates.find { pk =>
       Session.nodeIdFromPublicKey(pk.value.bytes) == hs.header.srcId
@@ -409,12 +445,12 @@ object Discv5SyncResponder extends LazyLogging {
     ).flip
 
     val session = Session.Session(keys, lastSeenMillis = System.currentTimeMillis())
-    val sid = Session.SessionId(hs.header.srcId, sender)
     sessions.put(sid, session)
 
-    // Decrypt the embedded message under the new session.
-    val maskedRegionEnd = Packet.MaskingIVSize + Packet.StaticHeaderSize + hs.header.authData.size.toInt
-    val aad = rawIncoming.take(maskedRegionEnd.toLong)
+    // Decrypt the embedded message under the new session. AAD is the unmasked
+    // `iv || static-header || authdata` (geth unmasks in place; we
+    // reconstruct from the decoded header).
+    val aad = unmaskedHeaderRegion(hs.header.iv, Packet.Flag.Handshake, hs.header.nonce, hs.header.authData)
     val plaintext = Session.decrypt(keys.readKey, hs.header.nonce, hs.messageCiphertext, aad).toOption.orNull
     if (plaintext == null) {
       logger.debug(s"discv5 sync-fastpath: handshake message decrypt failed for $sender")
@@ -481,6 +517,25 @@ object Discv5SyncResponder extends LazyLogging {
       None
   }
 
+  /** Reconstruct the unmasked `iv || static-header || authdata` region used
+    * as AES-GCM AAD per discv5-wire.md. `Packet.decode` already unmasks these
+    * fields into the [[Packet.Header]] structure, so we re-serialize from the
+    * decoded values rather than touching the raw incoming buffer. */
+  private def unmaskedHeaderRegion(
+      iv: ByteVector,
+      flag: Byte,
+      nonce: ByteVector,
+      authData: ByteVector
+  ): ByteVector = {
+    val staticHeader =
+      Packet.ProtocolId ++
+        ByteVector.fromInt(Packet.Version, Packet.VersionSize) ++
+        ByteVector(flag) ++
+        nonce ++
+        ByteVector.fromInt(authData.size.toInt, Packet.AuthSizeSize)
+    iv ++ staticHeader ++ authData
+  }
+
   // ---- Encrypted reply construction ---------------------------------------
 
   private def buildEncryptedReply(
@@ -497,8 +552,10 @@ object Discv5SyncResponder extends LazyLogging {
     val nonce = Packet.randomNonce
     val iv = Packet.randomIv
 
-    // Build the masked region first so we can use it as AAD for the GCM
-    // encryption. Static header + auth-data, then mask, then prepend IV.
+    // AAD per spec is the UNMASKED `iv || static-header || authdata`. The
+    // wire form has the static-header + authdata masked, but both peers feed
+    // the unmasked form into AES-GCM. We compute the AAD first, then build
+    // the wire form by masking the static-header+authdata portion.
     val authData = srcNodeId
     val staticHeader =
       Packet.ProtocolId ++
@@ -506,13 +563,13 @@ object Discv5SyncResponder extends LazyLogging {
         ByteVector(Packet.Flag.Message) ++
         nonce ++
         ByteVector.fromInt(authData.size.toInt, Packet.AuthSizeSize)
-    val masked = Packet.aesCtrMask(destNodeId, iv, staticHeader ++ authData)
-    val aad = iv ++ masked
+    val aad = iv ++ staticHeader ++ authData
 
     val ct = Session.encrypt(session.keys.writeKey, nonce, plaintext, aad).toOption.orNull
     if (ct == null) return None
 
-    Some((aad ++ ct).bits)
+    val masked = Packet.aesCtrMask(destNodeId, iv, staticHeader ++ authData)
+    Some((iv ++ masked ++ ct).bits)
   }
 
   // Lazy bridge for ConcurrentHashMap.values iteration.
