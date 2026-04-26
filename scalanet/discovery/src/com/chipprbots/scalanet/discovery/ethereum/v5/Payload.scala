@@ -1,134 +1,102 @@
 package com.chipprbots.scalanet.discovery.ethereum.v5
 
-import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord
-import scodec.bits.ByteVector
 import java.security.SecureRandom
 
-/** Discovery v5 protocol messages from https://github.com/ethereum/devp2p/blob/master/discv5/discv5-wire.md
+import scodec.bits.ByteVector
+
+import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord
+
+/** Discovery v5 application-layer messages per discv5-wire.md.
   *
-  * Message types in Discovery v5:
-  * - PING (0x01): Liveness check
-  * - PONG (0x02): Response to PING
-  * - FINDNODE (0x03): Request for nodes
-  * - NODES (0x04): Response containing node records
-  * - TALKREQ (0x05): Application-level request
-  * - TALKRESP (0x06): Response to TALKREQ
-  * - REGTOPIC (0x07): Register interest in topic (optional)
-  * - TICKET (0x08): Ticket for topic registration (optional)
-  * - REGCONFIRMATION (0x09): Confirmation of topic registration (optional)
-  * - TOPICQUERY (0x0A): Query for topic (optional)
+  * The wire form prepends a one-byte message-type discriminator followed by
+  * the RLP-encoded fields. The actual RLP codec lives in fukuii main
+  * (`com.chipprbots.ethereum.network.discovery.codecs.V5RLPCodecs`) so that
+  * scalanet stays free of the fukuii RLP dependency, mirroring the v4 split.
+  *
+  * Topic-discovery messages (`regtopic`/`ticket`/`regconfirmation`/
+  * `topicquery`) are explicitly OUT of scope: geth removed them from
+  * production in v1.16.4 and the discv5 spec marks them "optional, ongoing
+  * research". They can be added back when there's a real implementation;
+  * stubs would just be dead code.
   */
 sealed trait Payload {
   def messageType: Byte
+  def requestId: ByteVector
 }
 
 object Payload {
+
+  // The request-id is variable-length (1–8 bytes) per spec — *not* fixed 8.
+  // Geth's framework rejects requests with reqId > 8 bytes with
+  // ErrInvalidReqID; that's what makes hive's `PingLargeRequestID` test pass.
+  val MaxRequestIdSize: Int = 8
+
   sealed trait Request extends Payload
   sealed trait Response extends Payload
-  
-  /** PING message (0x01) - liveness check and ENR sequence update */
-  case class Ping(
-    requestId: ByteVector,  // 8 bytes - random request ID
-    enrSeq: Long            // Sender's current ENR sequence number
-  ) extends Request {
-    override def messageType: Byte = MessageType.Ping
-    require(requestId.size == 8, "requestId must be 8 bytes")
+
+  /** PING — liveness check + announce ENR sequence number. */
+  final case class Ping(requestId: ByteVector, enrSeq: Long) extends Request {
+    require(requestId.size <= MaxRequestIdSize.toLong, s"requestId must be ≤ $MaxRequestIdSize bytes")
+    val messageType: Byte = MessageType.Ping
   }
-  
-  /** PONG message (0x02) - response to PING */
-  case class Pong(
-    requestId: ByteVector,  // 8 bytes - echo of request ID from PING
-    enrSeq: Long,           // Sender's current ENR sequence number
-    recipientIP: ByteVector, // Recipient's IP address as seen by sender
-    recipientPort: Int      // Recipient's UDP port
+
+  /** PONG — response to PING. `recipientIp` is raw 4 or 16 bytes (the spec
+    * does not RLP-encode an outer length prefix on the IP — it's the IP's
+    * own bytes), `recipientPort` is the sender's UDP port as we observed it. */
+  final case class Pong(
+      requestId: ByteVector,
+      enrSeq: Long,
+      recipientIp: ByteVector,
+      recipientPort: Int
   ) extends Response {
-    override def messageType: Byte = MessageType.Pong
-    require(requestId.size == 8, "requestId must be 8 bytes")
+    require(requestId.size <= MaxRequestIdSize.toLong, s"requestId must be ≤ $MaxRequestIdSize bytes")
+    require(
+      recipientIp.size == 4L || recipientIp.size == 16L,
+      s"recipientIp must be 4 (IPv4) or 16 (IPv6) bytes, got ${recipientIp.size}"
+    )
+    val messageType: Byte = MessageType.Pong
   }
-  
-  /** FINDNODE message (0x03) - request nodes at given distances */
-  case class FindNode(
-    requestId: ByteVector,  // 8 bytes - random request ID
-    distances: List[Int]    // List of distances (0-256) to query
-  ) extends Request {
-    override def messageType: Byte = MessageType.FindNode
-    require(requestId.size == 8, "requestId must be 8 bytes")
-    require(distances.forall(d => d >= 0 && d <= 256), "distances must be in range [0, 256]")
+
+  /** FINDNODE — request ENRs at the given log-distances from our ID. */
+  final case class FindNode(requestId: ByteVector, distances: List[Int]) extends Request {
+    require(requestId.size <= MaxRequestIdSize.toLong, s"requestId must be ≤ $MaxRequestIdSize bytes")
+    require(distances.forall(d => d >= 0 && d <= 256), "distances must be in [0, 256]")
+    val messageType: Byte = MessageType.FindNode
   }
-  
-  /** NODES message (0x04) - response containing ENRs */
-  case class Nodes(
-    requestId: ByteVector,  // 8 bytes - echo of request ID from FINDNODE
-    total: Int,             // Total number of NODES messages in response
-    enrs: List[EthereumNodeRecord] // Node records
+
+  /** NODES — paginated response carrying ENRs for FINDNODE. `total` is the
+    * number of NODES messages this response will be split across; clients
+    * collect that many before completing the request. */
+  final case class Nodes(
+      requestId: ByteVector,
+      total: Int,
+      enrs: List[EthereumNodeRecord]
   ) extends Response {
-    override def messageType: Byte = MessageType.Nodes
-    require(requestId.size == 8, "requestId must be 8 bytes")
-    require(total > 0, "total must be positive")
+    require(requestId.size <= MaxRequestIdSize.toLong, s"requestId must be ≤ $MaxRequestIdSize bytes")
+    require(total >= 1, "total must be ≥ 1")
+    val messageType: Byte = MessageType.Nodes
   }
-  
-  /** TALKREQ message (0x05) - application-level request */
-  case class TalkRequest(
-    requestId: ByteVector,  // 8 bytes - random request ID
-    protocol: ByteVector,   // Protocol identifier
-    request: ByteVector     // Protocol-specific request data
+
+  /** TALKREQ — application-layer request piggybacked on discv5. */
+  final case class TalkRequest(
+      requestId: ByteVector,
+      protocol: ByteVector,
+      message: ByteVector
   ) extends Request {
-    override def messageType: Byte = MessageType.TalkReq
-    require(requestId.size == 8, "requestId must be 8 bytes")
+    require(requestId.size <= MaxRequestIdSize.toLong, s"requestId must be ≤ $MaxRequestIdSize bytes")
+    val messageType: Byte = MessageType.TalkReq
   }
-  
-  /** TALKRESP message (0x06) - response to TALKREQ */
-  case class TalkResponse(
-    requestId: ByteVector,  // 8 bytes - echo of request ID from TALKREQ
-    response: ByteVector    // Protocol-specific response data
-  ) extends Response {
-    override def messageType: Byte = MessageType.TalkResp
-    require(requestId.size == 8, "requestId must be 8 bytes")
+
+  /** TALKRESP — response to TALKREQ. Empty `message` is a valid "I don't
+    * support this protocol" reply per spec; that's also what hive's
+    * `TalkRequest` test expects. */
+  final case class TalkResponse(requestId: ByteVector, message: ByteVector) extends Response {
+    require(requestId.size <= MaxRequestIdSize.toLong, s"requestId must be ≤ $MaxRequestIdSize bytes")
+    val messageType: Byte = MessageType.TalkResp
   }
-  
-  /** REGTOPIC message (0x07) - register interest in a topic (optional) */
-  case class RegTopic(
-    requestId: ByteVector,  // 8 bytes - random request ID
-    topic: ByteVector,      // 32 bytes - topic hash
-    enr: EthereumNodeRecord, // Sender's ENR
-    ticket: ByteVector      // Registration ticket
-  ) extends Request {
-    override def messageType: Byte = MessageType.RegTopic
-    require(requestId.size == 8, "requestId must be 8 bytes")
-    require(topic.size == 32, "topic must be 32 bytes")
-  }
-  
-  /** TICKET message (0x08) - ticket for topic registration (optional) */
-  case class Ticket(
-    requestId: ByteVector,  // 8 bytes - echo of request ID
-    ticket: ByteVector,     // Ticket data
-    waitTime: Int           // Wait time in seconds
-  ) extends Response {
-    override def messageType: Byte = MessageType.Ticket
-    require(requestId.size == 8, "requestId must be 8 bytes")
-  }
-  
-  /** REGCONFIRMATION message (0x09) - confirmation of topic registration (optional) */
-  case class RegConfirmation(
-    requestId: ByteVector,  // 8 bytes - echo of request ID
-    topic: ByteVector       // 32 bytes - confirmed topic
-  ) extends Response {
-    override def messageType: Byte = MessageType.RegConfirmation
-    require(requestId.size == 8, "requestId must be 8 bytes")
-    require(topic.size == 32, "topic must be 32 bytes")
-  }
-  
-  /** TOPICQUERY message (0x0A) - query for nodes registered to topic (optional) */
-  case class TopicQuery(
-    requestId: ByteVector,  // 8 bytes - random request ID
-    topic: ByteVector       // 32 bytes - topic to query
-  ) extends Request {
-    override def messageType: Byte = MessageType.TopicQuery
-    require(requestId.size == 8, "requestId must be 8 bytes")
-    require(topic.size == 32, "topic must be 32 bytes")
-  }
-  
-  /** Message type identifiers */
+
+  // ---- Type tags ----------------------------------------------------------
+
   object MessageType {
     val Ping: Byte = 0x01
     val Pong: Byte = 0x02
@@ -136,20 +104,15 @@ object Payload {
     val Nodes: Byte = 0x04
     val TalkReq: Byte = 0x05
     val TalkResp: Byte = 0x06
-    val RegTopic: Byte = 0x07
-    val Ticket: Byte = 0x08
-    val RegConfirmation: Byte = 0x09
-    val TopicQuery: Byte = 0x0A
-    
-    def isValid(msgType: Byte): Boolean = 
-      msgType >= 0x01 && msgType <= 0x0A
   }
-  
-  /** Generate a random 8-byte request ID */
-  def randomRequestId: ByteVector = {
-    val bytes = Array.ofDim[Byte](8)
-    val random = new SecureRandom()
-    random.nextBytes(bytes)
+
+  // ---- Helpers ------------------------------------------------------------
+
+  /** Generate a random request-id of the given size (1–8 bytes). */
+  def randomRequestId(size: Int = MaxRequestIdSize): ByteVector = {
+    require(size >= 1 && size <= MaxRequestIdSize, s"requestId size must be in [1, $MaxRequestIdSize]")
+    val bytes = Array.ofDim[Byte](size)
+    new SecureRandom().nextBytes(bytes)
     ByteVector.view(bytes)
   }
 }

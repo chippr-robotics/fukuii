@@ -10,6 +10,7 @@ import com.chipprbots.scalanet.discovery.ethereum.v4.Discv4SyncResponder
 import com.chipprbots.scalanet.discovery.ethereum.v4.Packet
 import com.chipprbots.scalanet.discovery.ethereum.v4.Payload
 import com.chipprbots.scalanet.discovery.hash.Hash
+import com.chipprbots.scalanet.peergroup.udp.StaticUDPPeerGroup
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import scodec.Codec
@@ -24,6 +25,12 @@ class Discv4SyncResponderSpec extends AnyFlatSpec with Matchers {
   implicit val sigalg: SigAlg = new Secp256k1SigAlg
   implicit val packetCodec: Codec[Packet] = Packet.packetCodec(allowDecodeOverMaxPacketSize = true)
   implicit val payloadCodec: Codec[Payload] = RLPCodecs.payloadCodec
+
+  /** Extract reply bytes from a [[StaticUDPPeerGroup.SyncResult.Reply]], or fail. */
+  private def replyBitsOf(result: StaticUDPPeerGroup.SyncResult): BitVector = result match {
+    case StaticUDPPeerGroup.SyncResult.Reply(bits) => bits
+    case other                                     => fail(s"expected SyncResult.Reply, got $other")
+  }
 
   private val sender = new InetSocketAddress(InetAddress.getByName("127.0.0.1"), 31000)
 
@@ -63,10 +70,8 @@ class Discv4SyncResponderSpec extends AnyFlatSpec with Matchers {
     val pingPacket = Packet.pack(ping, privateKey).require
     val incomingBits = encodePacket(pingPacket)
 
-    val maybeReply = responder(sender, incomingBits)
-    maybeReply should not be empty
-
-    val replyPacket = packetCodec.decode(maybeReply.get).require.value
+    val replyBits = replyBitsOf(responder(sender, incomingBits))
+    val replyPacket = packetCodec.decode(replyBits).require.value
     val (replyPayload, _) = Packet.unpack(replyPacket).require
     replyPayload shouldBe a[Payload.Pong]
     val pong = replyPayload.asInstanceOf[Payload.Pong]
@@ -93,13 +98,13 @@ class Discv4SyncResponderSpec extends AnyFlatSpec with Matchers {
       enrSeq = None
     )
     val pingPacket = Packet.pack(ping, privateKey).require
-    val replyBits = responder(sender, encodePacket(pingPacket)).get
+    val replyBits = replyBitsOf(responder(sender, encodePacket(pingPacket)))
     val replyPacket = packetCodec.decode(replyBits).require.value
     val pong = Packet.unpack(replyPacket).require._1.asInstanceOf[Payload.Pong]
     pong.enrSeq shouldBe Some(42L)
   }
 
-  it should "return None for an expired Ping" taggedAs (UnitTest, NetworkTest) in {
+  it should "return Pass for an expired Ping" taggedAs (UnitTest, NetworkTest) in {
     val (_, privateKey) = freshKeyPair
     val responder = buildResponder(privateKey)
 
@@ -111,10 +116,10 @@ class Discv4SyncResponderSpec extends AnyFlatSpec with Matchers {
       enrSeq = None
     )
     val expiredPacket = Packet.pack(expiredPing, privateKey).require
-    responder(sender, encodePacket(expiredPacket)) shouldBe None
+    responder(sender, encodePacket(expiredPacket)) shouldBe StaticUDPPeerGroup.SyncResult.Pass
   }
 
-  it should "return None for a non-Ping payload (FindNode)" taggedAs (UnitTest, NetworkTest) in {
+  it should "return Pass for a non-Ping payload (FindNode)" taggedAs (UnitTest, NetworkTest) in {
     val (_, privateKey) = freshKeyPair
     val (otherPub, _) = freshKeyPair
     val responder = buildResponder(privateKey)
@@ -124,17 +129,17 @@ class Discv4SyncResponderSpec extends AnyFlatSpec with Matchers {
       expiration = System.currentTimeMillis() / 1000 + expirationSeconds
     )
     val findNodePacket = Packet.pack(findNode, privateKey).require
-    responder(sender, encodePacket(findNodePacket)) shouldBe None
+    responder(sender, encodePacket(findNodePacket)) shouldBe StaticUDPPeerGroup.SyncResult.Pass
   }
 
-  it should "return None for malformed bytes" taggedAs (UnitTest, NetworkTest) in {
+  it should "return Pass for malformed bytes" taggedAs (UnitTest, NetworkTest) in {
     val (_, privateKey) = freshKeyPair
     val responder = buildResponder(privateKey)
     val tooShort = BitVector(Array.ofDim[Byte](16))
-    responder(sender, tooShort) shouldBe None
+    responder(sender, tooShort) shouldBe StaticUDPPeerGroup.SyncResult.Pass
   }
 
-  it should "return None for bytes that decode but fail unpack (corrupt hash)" taggedAs (UnitTest, NetworkTest) in {
+  it should "return Pass for bytes that decode but fail unpack (corrupt hash)" taggedAs (UnitTest, NetworkTest) in {
     val (_, privateKey) = freshKeyPair
     val responder = buildResponder(privateKey)
 
@@ -149,7 +154,7 @@ class Discv4SyncResponderSpec extends AnyFlatSpec with Matchers {
     val corruptHashBytes = Array.ofDim[Byte](32)
     new java.util.Random(1).nextBytes(corruptHashBytes)
     val corrupt = pingPacket.copy(hash = Hash(BitVector(corruptHashBytes)))
-    responder(sender, encodePacket(corrupt)) shouldBe None
+    responder(sender, encodePacket(corrupt)) shouldBe StaticUDPPeerGroup.SyncResult.Pass
   }
 
   it should "drop sync-path responses once the global rate limit is exhausted" taggedAs (UnitTest, NetworkTest) in {
@@ -178,11 +183,11 @@ class Discv4SyncResponderSpec extends AnyFlatSpec with Matchers {
     }
 
     // Burst of 2 — both should be served.
-    responder(sender, freshPingBits()) should not be empty
-    responder(sender, freshPingBits()) should not be empty
+    replyBitsOf(responder(sender, freshPingBits()))
+    replyBitsOf(responder(sender, freshPingBits()))
 
     // Third within the same second — bucket empty, sync path drops.
-    responder(sender, freshPingBits()) shouldBe None
+    responder(sender, freshPingBits()) shouldBe StaticUDPPeerGroup.SyncResult.Pass
   }
 
   it should "refill rate-limit tokens lazily based on elapsed time" taggedAs (UnitTest, NetworkTest) in {
@@ -209,7 +214,7 @@ class Discv4SyncResponderSpec extends AnyFlatSpec with Matchers {
     val pingPacket = Packet.pack(ping, privateKey).require
 
     dedup.isAlreadyResponded(pingPacket.hash) shouldBe false
-    responder(sender, encodePacket(pingPacket)) should not be empty
+    replyBitsOf(responder(sender, encodePacket(pingPacket)))
     dedup.isAlreadyResponded(pingPacket.hash) shouldBe true
   }
 }

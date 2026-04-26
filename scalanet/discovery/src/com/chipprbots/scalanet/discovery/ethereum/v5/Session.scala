@@ -1,244 +1,289 @@
 package com.chipprbots.scalanet.discovery.ethereum.v5
 
+import java.net.InetSocketAddress
+import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.spec.{GCMParameterSpec, SecretKeySpec}
-import org.bouncycastle.crypto.digests.SHA256Digest
-import org.bouncycastle.crypto.generators.HKDFBytesGenerator
-import org.bouncycastle.crypto.params.HKDFParameters
-import scodec.bits.ByteVector
-import scala.util.Try
+
 import cats.effect.{IO, Ref}
 import cats.implicits._
-import com.chipprbots.scalanet.discovery.hash.Keccak256
-import java.security.SecureRandom
+import org.bouncycastle.asn1.sec.SECNamedCurves
+import org.bouncycastle.crypto.agreement.ECDHBasicAgreement
+import org.bouncycastle.crypto.digests.SHA256Digest
+import org.bouncycastle.crypto.generators.HKDFBytesGenerator
+import org.bouncycastle.crypto.params.{ECDomainParameters, ECPrivateKeyParameters, ECPublicKeyParameters, HKDFParameters}
+import org.bouncycastle.jcajce.provider.digest.SHA256
+import scodec.bits.ByteVector
 
-/** Session management for Discovery v5
-  * 
-  * Sessions provide encrypted communication between peers using:
-  * - ECDH for key exchange
-  * - HKDF for key derivation
-  * - AES-GCM for encryption/decryption
+import scala.util.Try
+
+import com.chipprbots.scalanet.discovery.hash.Keccak256
+
+/** discv5 session crypto per discv5-wire.md.
+  *
+  * Three core primitives:
+  *   - [[ecdh]]: 33-byte compressed shared secret over secp256k1
+  *   - [[deriveKeys]]: HKDF-SHA256 with `IKM = ecdh`, `salt = challenge bytes`,
+  *     `info = "discovery v5 key agreement" ++ initiatorId ++ recipientId`,
+  *     output 32 bytes split into `(writeKey, readKey)`. The recipient flips
+  *     the pair on its side via [[Session.flip]].
+  *   - [[idNonceHash]]: `sha256("discovery v5 identity proof" || challenge ||
+  *     ephPubkey || destID)`. The hash is the input to ECDSA when proving
+  *     the initiator's identity in the handshake.
+  *
+  * Plus AES-128-GCM helpers used to encrypt/decrypt the per-message ciphertext.
+  *
+  * Session state is keyed on `(NodeId, InetSocketAddress)` so that the same
+  * peer probing from a new IP correctly hits a session miss and triggers a
+  * fresh WHOAREYOU — required for hive's `PingMultiIP` test.
   */
 object Session {
-  
-  /** Session keys derived from handshake */
-  case class SessionKeys(
-    initiatorKey: ByteVector,
-    recipientKey: ByteVector,
-    authRespKey: ByteVector
-  ) {
-    require(initiatorKey.size == 16, "initiatorKey must be 16 bytes")
-    require(recipientKey.size == 16, "recipientKey must be 16 bytes")
-    require(authRespKey.size == 16, "authRespKey must be 16 bytes")
+
+  // ---- Constants ----------------------------------------------------------
+
+  val AesKeySize: Int = 16
+  val GcmNonceSize: Int = 12
+  val GcmTagBits: Int = 128
+  val SharedSecretSize: Int = 33 // compressed point: prefix byte + 32-byte X
+  val IdNonceSize: Int = 16
+  val NodeIdSize: Int = 32
+
+  private val KeyAgreementInfo: ByteVector =
+    ByteVector.view("discovery v5 key agreement".getBytes("US-ASCII"))
+
+  private val IdProofTag: ByteVector =
+    ByteVector.view("discovery v5 identity proof".getBytes("US-ASCII"))
+
+  // ---- Session keys + cache key types ------------------------------------
+
+  /** Session keys derived from a completed handshake. The initiator's
+    * `writeKey` equals the recipient's `readKey` and vice versa, so [[flip]]
+    * gives the recipient-side view. */
+  final case class Keys(writeKey: ByteVector, readKey: ByteVector) {
+    require(writeKey.size == AesKeySize.toLong, s"writeKey must be $AesKeySize bytes")
+    require(readKey.size == AesKeySize.toLong, s"readKey must be $AesKeySize bytes")
+    def flip: Keys = Keys(writeKey = readKey, readKey = writeKey)
   }
-  
-  /** Active session with a peer */
-  case class ActiveSession(
-    keys: SessionKeys,
-    localNodeId: ByteVector,
-    remoteNodeId: ByteVector,
-    isInitiator: Boolean  // True if this node initiated the handshake
+
+  /** A live session with a peer. The peer is identified by `(nodeId, addr)`
+    * — same nodeId from a new addr is treated as a session miss per spec. */
+  final case class Session(
+      keys: Keys,
+      lastSeenMillis: Long
   )
-  
-  /** Derive session keys using HKDF
-    * 
-    * @param ephemeralKey The shared secret from ECDH
-    * @param localNodeId Local node ID (32 bytes)
-    * @param remoteNodeId Remote node ID (32 bytes)
-    * @param idNonce The challenge nonce from WHOAREYOU (16 bytes)
-    * @return Session keys
+
+  /** Map key for [[SessionCache]]. */
+  final case class SessionId(nodeId: ByteVector, addr: InetSocketAddress)
+
+  // ---- HKDF key derivation ------------------------------------------------
+
+  /** Derive (writeKey, readKey) for the *initiator*. The recipient should
+    * call this same function and then [[Keys.flip]] the result.
+    *
+    * @param ephemeralPrivate the initiator's freshly-generated private key (32 bytes)
+    * @param peerPublic       the recipient's public key (64 bytes uncompressed)
+    * @param initiatorNodeId  the initiator's node id (32 bytes)
+    * @param recipientNodeId  the recipient's node id (32 bytes)
+    * @param challengeBytes   the entire WHOAREYOU packet bytes (the
+    *                         "challenge data") — used as the HKDF salt.
     */
   def deriveKeys(
-    ephemeralKey: ByteVector,
-    localNodeId: ByteVector,
-    remoteNodeId: ByteVector,
-    idNonce: ByteVector
-  ): SessionKeys = {
-    require(localNodeId.size == 32, "localNodeId must be 32 bytes")
-    require(remoteNodeId.size == 32, "remoteNodeId must be 32 bytes")
-    require(idNonce.size == 16, "idNonce must be 16 bytes")
-    
-    // Combine IDs for key material
-    val info = (localNodeId ++ remoteNodeId ++ idNonce).toArray
-    
-    // Use HKDF to derive keys
+      ephemeralPrivate: ByteVector,
+      peerPublic: ByteVector,
+      initiatorNodeId: ByteVector,
+      recipientNodeId: ByteVector,
+      challengeBytes: ByteVector
+  ): Keys = {
+    require(initiatorNodeId.size == NodeIdSize.toLong, s"initiatorNodeId must be $NodeIdSize bytes")
+    require(recipientNodeId.size == NodeIdSize.toLong, s"recipientNodeId must be $NodeIdSize bytes")
+
+    val sharedSecret = ecdh(ephemeralPrivate, peerPublic)
+    val info = KeyAgreementInfo ++ initiatorNodeId ++ recipientNodeId
+
     val hkdf = new HKDFBytesGenerator(new SHA256Digest())
-    val params = new HKDFParameters(ephemeralKey.toArray, null, info)
-    hkdf.init(params)
-    
-    // Derive three 16-byte keys
-    val initiatorKey = new Array[Byte](16)
-    val recipientKey = new Array[Byte](16)
-    val authRespKey = new Array[Byte](16)
-    
-    hkdf.generateBytes(initiatorKey, 0, 16)
-    hkdf.generateBytes(recipientKey, 0, 16)
-    hkdf.generateBytes(authRespKey, 0, 16)
-    
-    SessionKeys(
-      ByteVector.view(initiatorKey),
-      ByteVector.view(recipientKey),
-      ByteVector.view(authRespKey)
+    hkdf.init(new HKDFParameters(sharedSecret.toArray, challengeBytes.toArray, info.toArray))
+
+    val out = new Array[Byte](AesKeySize * 2)
+    hkdf.generateBytes(out, 0, out.length)
+
+    Keys(
+      writeKey = ByteVector.view(out, 0, AesKeySize),
+      readKey = ByteVector.view(out, AesKeySize, AesKeySize)
     )
   }
-  
-  /** Encrypt message data using AES-128-GCM
-    * 
-    * @param key The encryption key (16 bytes)
-    * @param nonce The nonce/IV (12 bytes)
-    * @param plaintext The data to encrypt
-    * @param authData Additional authenticated data
-    * @return Encrypted ciphertext with authentication tag
+
+  // ---- ID-nonce hash + signature ------------------------------------------
+
+  /** The hash whose ECDSA signature appears in the handshake's auth-data,
+    * proving the initiator owns the public key that derived their nodeID. */
+  def idNonceHash(
+      challengeBytes: ByteVector,
+      ephemeralPubkey: ByteVector,
+      destNodeId: ByteVector
+  ): ByteVector = {
+    require(destNodeId.size == NodeIdSize.toLong, s"destNodeId must be $NodeIdSize bytes")
+    val md = new SHA256.Digest()
+    md.update(IdProofTag.toArray)
+    md.update(challengeBytes.toArray)
+    md.update(ephemeralPubkey.toArray)
+    md.update(destNodeId.toArray)
+    ByteVector.view(md.digest())
+  }
+
+  // ---- ECDH (compressed shared secret) ------------------------------------
+
+  /** secp256k1 ECDH agreement returning a 33-byte compressed point.
+    *
+    * geth's reference implementation: scalar-multiply the peer's pubkey by
+    * our private scalar, then encode the resulting point as `prefix || X`
+    * where `prefix = 0x02` if Y is even, `0x03` if Y is odd.
+    *
+    * Accepts either compressed (33 bytes, prefix `0x02`/`0x03` + X) or
+    * uncompressed (64 bytes, X || Y) peer pubkey — discv5 wire form is
+    * compressed but v4 callers may still pass 64-byte uncompressed keys.
+    *
+    * @param privateKey our 32-byte secp256k1 private scalar
+    * @param peerPublic peer's pubkey, 33-byte compressed or 64-byte uncompressed
     */
-  def encrypt(
-    key: ByteVector,
-    nonce: ByteVector,
-    plaintext: ByteVector,
-    authData: ByteVector
-  ): Try[ByteVector] = Try {
-    require(key.size == 16, "key must be 16 bytes for AES-128")
-    require(nonce.size == 12, "nonce must be 12 bytes for GCM")
-    
-    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-    val keySpec = new SecretKeySpec(key.toArray, "AES")
-    val gcmSpec = new GCMParameterSpec(128, nonce.toArray) // 128-bit auth tag
-    
-    cipher.init(Cipher.ENCRYPT_MODE, keySpec, gcmSpec)
-    
-    // Add additional authenticated data
-    if (authData.nonEmpty) {
-      cipher.updateAAD(authData.toArray)
-    }
-    
-    val ciphertext = cipher.doFinal(plaintext.toArray)
-    ByteVector.view(ciphertext)
-  }
-  
-  /** Decrypt message data using AES-128-GCM
-    * 
-    * @param key The decryption key (16 bytes)
-    * @param nonce The nonce/IV (12 bytes)
-    * @param ciphertext The encrypted data (includes auth tag)
-    * @param authData Additional authenticated data
-    * @return Decrypted plaintext
-    */
-  def decrypt(
-    key: ByteVector,
-    nonce: ByteVector,
-    ciphertext: ByteVector,
-    authData: ByteVector
-  ): Try[ByteVector] = Try {
-    require(key.size == 16, "key must be 16 bytes for AES-128")
-    require(nonce.size == 12, "nonce must be 12 bytes for GCM")
-    
-    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-    val keySpec = new SecretKeySpec(key.toArray, "AES")
-    val gcmSpec = new GCMParameterSpec(128, nonce.toArray) // 128-bit auth tag
-    
-    cipher.init(Cipher.DECRYPT_MODE, keySpec, gcmSpec)
-    
-    // Add additional authenticated data
-    if (authData.nonEmpty) {
-      cipher.updateAAD(authData.toArray)
-    }
-    
-    val plaintext = cipher.doFinal(ciphertext.toArray)
-    ByteVector.view(plaintext)
-  }
-  
-  /** Generate a random ID nonce for WHOAREYOU challenge */
-  def randomIdNonce: ByteVector = {
-    val bytes = Array.ofDim[Byte](16)
-    val random = new SecureRandom()
-    random.nextBytes(bytes)
-    ByteVector.view(bytes)
-  }
-  
-  /** Compute node ID from public key using keccak256 */
-  def nodeIdFromPublicKey(publicKey: ByteVector): ByteVector = {
-    require(publicKey.size == 64, "publicKey must be 64 bytes (uncompressed)")
-    val hash = Keccak256(publicKey.bits)
-    hash.value.bytes
-  }
-  
-  /** Perform ECDH key exchange using secp256k1
-    * 
-    * @param privateKey Local private key (32 bytes)
-    * @param publicKey Remote public key (64 bytes uncompressed)
-    * @return Shared secret (32 bytes)
-    */
-  def performECDH(privateKey: ByteVector, publicKey: ByteVector): ByteVector = {
-    require(privateKey.size == 32, "privateKey must be 32 bytes")
-    require(publicKey.size == 64, "publicKey must be 64 bytes (uncompressed)")
-    
-    // Use BouncyCastle for ECDH
-    import org.bouncycastle.crypto.agreement.ECDHBasicAgreement
-    import org.bouncycastle.crypto.params.{ECPrivateKeyParameters, ECPublicKeyParameters}
-    import org.bouncycastle.asn1.sec.SECNamedCurves
-    import org.bouncycastle.math.ec.ECCurve
-    
+  def ecdh(privateKey: ByteVector, peerPublic: ByteVector): ByteVector = {
+    require(privateKey.size == 32L, s"privateKey must be 32 bytes, got ${privateKey.size}")
+    require(
+      peerPublic.size == 33L || peerPublic.size == 64L,
+      s"peerPublic must be 33 (compressed) or 64 (uncompressed) bytes, got ${peerPublic.size}"
+    )
+
     val curveParams = SECNamedCurves.getByName("secp256k1")
-    val curve = new org.bouncycastle.crypto.params.ECDomainParameters(
+    val domain = new ECDomainParameters(
       curveParams.getCurve,
       curveParams.getG,
       curveParams.getN,
       curveParams.getH
     )
-    
-    // Convert private key bytes to EC private key
-    val privKeyBigInt = BigInt(1, privateKey.toArray)
-    val privKeyParams = new ECPrivateKeyParameters(privKeyBigInt.bigInteger, curve)
-    
-    // Convert public key bytes to EC public key point
-    // Public key is 64 bytes (x||y), prepend 0x04 for uncompressed format
-    val pubKeyBytes = (0x04.toByte +: publicKey.toArray)
-    val pubKeyPoint = curve.getCurve.decodePoint(pubKeyBytes)
-    val pubKeyParams = new ECPublicKeyParameters(pubKeyPoint, curve)
-    
-    // Perform ECDH
-    val agreement = new ECDHBasicAgreement()
-    agreement.init(privKeyParams)
-    val sharedSecret = agreement.calculateAgreement(pubKeyParams)
-    
-    // Convert to 32-byte ByteVector
-    val secretBytes = sharedSecret.toByteArray
-    // Ensure it's exactly 32 bytes (pad or trim if necessary)
-    val normalized = if (secretBytes.length < 32) {
-      Array.ofDim[Byte](32 - secretBytes.length) ++ secretBytes
-    } else if (secretBytes.length > 32) {
-      secretBytes.takeRight(32)
+
+    val pubBytes =
+      if (peerPublic.size == 33L) peerPublic.toArray
+      else (0x04.toByte +: peerPublic.toArray)
+    val pubPoint = domain.getCurve.decodePoint(pubBytes)
+
+    val privScalar = BigInt(1, privateKey.toArray).bigInteger
+    val sharedPoint = pubPoint.multiply(privScalar).normalize()
+
+    val xBytes = sharedPoint.getAffineXCoord.getEncoded
+    require(xBytes.length == 32, s"shared X coord should be 32 bytes, got ${xBytes.length}")
+    val yIsOdd = sharedPoint.getAffineYCoord.toBigInteger.testBit(0)
+    val prefix: Byte = if (yIsOdd) 0x03.toByte else 0x02.toByte
+    ByteVector(prefix +: xBytes)
+  }
+
+  // ---- AES-GCM encrypt / decrypt ------------------------------------------
+
+  def encrypt(
+      key: ByteVector,
+      nonce: ByteVector,
+      plaintext: ByteVector,
+      aad: ByteVector
+  ): Try[ByteVector] = Try {
+    require(key.size == AesKeySize.toLong, s"key must be $AesKeySize bytes")
+    require(nonce.size == GcmNonceSize.toLong, s"nonce must be $GcmNonceSize bytes")
+    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+    cipher.init(
+      Cipher.ENCRYPT_MODE,
+      new SecretKeySpec(key.toArray, "AES"),
+      new GCMParameterSpec(GcmTagBits, nonce.toArray)
+    )
+    if (aad.nonEmpty) cipher.updateAAD(aad.toArray)
+    ByteVector.view(cipher.doFinal(plaintext.toArray))
+  }
+
+  def decrypt(
+      key: ByteVector,
+      nonce: ByteVector,
+      ciphertext: ByteVector,
+      aad: ByteVector
+  ): Try[ByteVector] = Try {
+    require(key.size == AesKeySize.toLong, s"key must be $AesKeySize bytes")
+    require(nonce.size == GcmNonceSize.toLong, s"nonce must be $GcmNonceSize bytes")
+    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+    cipher.init(
+      Cipher.DECRYPT_MODE,
+      new SecretKeySpec(key.toArray, "AES"),
+      new GCMParameterSpec(GcmTagBits, nonce.toArray)
+    )
+    if (aad.nonEmpty) cipher.updateAAD(aad.toArray)
+    ByteVector.view(cipher.doFinal(ciphertext.toArray))
+  }
+
+  // ---- Random helpers ------------------------------------------------------
+
+  def randomIdNonce: ByteVector = {
+    val bytes = Array.ofDim[Byte](IdNonceSize)
+    new SecureRandom().nextBytes(bytes)
+    ByteVector.view(bytes)
+  }
+
+  /** Compute the discv5 node ID for a public key — keccak256(pubkey64). */
+  def nodeIdFromPublicKey(publicKey: ByteVector): ByteVector = {
+    require(publicKey.size == 64L, s"publicKey must be 64 bytes uncompressed, got ${publicKey.size}")
+    Keccak256(publicKey.bits).value.bytes
+  }
+
+  /** Derive a secp256k1 public key from a private scalar.
+    *
+    * @param privateKey 32-byte secp256k1 private scalar
+    * @param compressed if true, return 33-byte compressed form; else 64-byte
+    *                   uncompressed (X || Y, no `0x04` prefix)
+    */
+  def pubFromPriv(privateKey: ByteVector, compressed: Boolean = true): ByteVector = {
+    require(privateKey.size == 32L, s"privateKey must be 32 bytes, got ${privateKey.size}")
+    val curveParams = SECNamedCurves.getByName("secp256k1")
+    val privScalar = BigInt(1, privateKey.toArray).bigInteger
+    val pubPoint = curveParams.getG.multiply(privScalar).normalize()
+    if (compressed) {
+      val xBytes = pubPoint.getAffineXCoord.getEncoded
+      val yIsOdd = pubPoint.getAffineYCoord.toBigInteger.testBit(0)
+      val prefix: Byte = if (yIsOdd) 0x03.toByte else 0x02.toByte
+      ByteVector(prefix +: xBytes)
     } else {
-      secretBytes
+      val xBytes = pubPoint.getAffineXCoord.getEncoded
+      val yBytes = pubPoint.getAffineYCoord.getEncoded
+      ByteVector.view(xBytes ++ yBytes)
     }
-    
-    ByteVector.view(normalized)
   }
-  
-  /** Session cache to store active sessions with peers */
-  trait SessionCache {
-    def get(nodeId: ByteVector): IO[Option[ActiveSession]]
-    def put(nodeId: ByteVector, session: ActiveSession): IO[Unit]
-    def remove(nodeId: ByteVector): IO[Unit]
-    def clear: IO[Unit]
-  }
-  
-  /** In-memory session cache implementation */
-  object SessionCache {
-    def apply(): IO[SessionCache] = 
-      Ref[IO].of(Map.empty[ByteVector, ActiveSession]).map { ref =>
-        new SessionCache {
-          override def get(nodeId: ByteVector): IO[Option[ActiveSession]] =
-            ref.get.map(_.get(nodeId))
-            
-          override def put(nodeId: ByteVector, session: ActiveSession): IO[Unit] =
-            ref.update(_ + (nodeId -> session))
-            
-          override def remove(nodeId: ByteVector): IO[Unit] =
-            ref.update(_ - nodeId)
-            
-          override def clear: IO[Unit] =
-            ref.set(Map.empty)
-        }
+
+  // ---- Session cache ------------------------------------------------------
+
+  /** In-memory cache of established sessions, keyed on `(nodeId, addr)`.
+    *
+    * Synchronous primitives (no IO wrapping) so the netty-thread sync
+    * responder can hit the cache without an IO trampoline; an `IO`
+    * counterpart is provided for the async pipeline.
+    *
+    * Eviction is lazy — on insert, entries older than `maxAgeMillis` are
+    * pruned. Bounded memory under sustained load.
+    */
+  class SessionCache(maxAgeMillis: Long = 60L * 60 * 1000) {
+    import java.util.concurrent.ConcurrentHashMap
+    private val map = new ConcurrentHashMap[SessionId, Session]()
+
+    def get(id: SessionId): Option[Session] = Option(map.get(id))
+
+    def put(id: SessionId, session: Session): Unit = {
+      val now = System.currentTimeMillis()
+      // Lazy prune — bounded work per insert.
+      if (map.size > 4096) {
+        val cutoff = now - maxAgeMillis
+        map.entrySet.removeIf(e => e.getValue.lastSeenMillis < cutoff)
       }
+      val _ = map.put(id, session)
+    }
+
+    def remove(id: SessionId): Unit = { val _ = map.remove(id) }
+
+    def size: Int = map.size
+
+    // IO wrappers for the async pipeline.
+    def getIO(id: SessionId): IO[Option[Session]] = IO(get(id))
+    def putIO(id: SessionId, session: Session): IO[Unit] = IO(put(id, session))
+    def removeIO(id: SessionId): IO[Unit] = IO(remove(id))
   }
 }
