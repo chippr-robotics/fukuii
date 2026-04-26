@@ -14,9 +14,8 @@ import com.chipprbots.ethereum.testing.Tags._
   *   - Variable-length requestId (1–8 bytes); >8 must be rejected
   *   - recipientIp is raw 4 (IPv4) or 16 (IPv6) bytes — no length prefix
   *
-  * geth's `framework.go` rejects requests with `len(reqId) > 8` via
-  * `ErrInvalidReqID`; that's what makes hive's `PingLargeRequestID`
-  * test pass.
+  * geth's `framework.go` rejects requests with `len(reqId) > 8` via `ErrInvalidReqID`; that's what makes hive's
+  * `PingLargeRequestID` test pass.
   */
 class V5RLPCodecsSpec extends AnyFlatSpec with Matchers {
 
@@ -93,7 +92,10 @@ class V5RLPCodecsSpec extends AnyFlatSpec with Matchers {
     roundTrip(tq) shouldBe tq
   }
 
-  it should "round-trip TalkResponse with an empty message (the spec's 'unknown protocol' reply)" taggedAs (UnitTest, NetworkTest) in {
+  it should "round-trip TalkResponse with an empty message (the spec's 'unknown protocol' reply)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
     val tr = Payload.TalkResponse(
       requestId = ByteVector.fromValidHex("00000006"),
       message = ByteVector.empty

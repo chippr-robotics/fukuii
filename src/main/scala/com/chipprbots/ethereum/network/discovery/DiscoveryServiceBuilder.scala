@@ -289,21 +289,19 @@ trait DiscoveryServiceBuilder extends Logger {
     } yield network
 
   /** Build the v5 synchronous responder. Wires:
-    *   - [[v5.Discv5SyncResponder]] for inbound packet handling on the netty
-    *     event-loop thread (sub-300ms hive deadline)
-    *   - Shared [[v5.Session.SessionCache]] / [[v5.Discv5SyncResponder.ChallengeCache]]
-    *     / [[v5.Discv5SyncResponder.BystanderEnrTable]] for cross-cutting state
-    *   - A `Handler` whose `findNodes` reads from the bystander table — so as
-    *     the async discovery service populates the table, the sync responder
-    *     immediately starts returning real ENRs to FINDNODE requests
+    *   - [[v5.Discv5SyncResponder]] for inbound packet handling on the netty event-loop thread (sub-300ms hive
+    *     deadline)
+    *   - Shared [[v5.Session.SessionCache]] / [[v5.Discv5SyncResponder.ChallengeCache]] /
+    *     [[v5.Discv5SyncResponder.BystanderEnrTable]] for cross-cutting state
+    *   - A `Handler` whose `findNodes` reads from the bystander table — so as the async discovery service populates the
+    *     table, the sync responder immediately starts returning real ENRs to FINDNODE requests
     *
-    * The active discovery service ([[v5.DiscoveryService]]) is constructed
-    * separately by [[buildV5DiscoveryService]] using the same caches.
+    * The active discovery service ([[v5.DiscoveryService]]) is constructed separately by [[buildV5DiscoveryService]]
+    * using the same caches.
     *
-    * Returns the responder wrapped in [[V5DemuxResponder]] for the future
-    * v5 dispatch queue side-channel — currently None (transparent forwarder)
-    * because the `DiscoveryNetwork.startHandling` consumer that would read
-    * from the queue isn't started in this minimal build path.
+    * Returns the responder wrapped in [[V5DemuxResponder]] for the future v5 dispatch queue side-channel — currently
+    * None (transparent forwarder) because the `DiscoveryNetwork.startHandling` consumer that would read from the queue
+    * isn't started in this minimal build path.
     */
   private def buildV5SyncResponder(
       privateKey: PrivateKey,

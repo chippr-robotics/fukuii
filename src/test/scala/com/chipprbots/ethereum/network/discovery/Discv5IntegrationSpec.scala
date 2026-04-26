@@ -22,13 +22,11 @@ import scodec.bits.{BitVector, ByteVector}
 import com.chipprbots.ethereum.network.discovery.codecs.V5RLPCodecs
 import com.chipprbots.ethereum.testing.Tags._
 
-/** End-to-end integration test: two real StaticUDPPeerGroup instances on
-  * loopback exchange a discv5 PING/WHOAREYOU/HANDSHAKE/PONG flow using the
-  * production V5RLPCodecs + Discv5SyncResponder.
+/** End-to-end integration test: two real StaticUDPPeerGroup instances on loopback exchange a discv5
+  * PING/WHOAREYOU/HANDSHAKE/PONG flow using the production V5RLPCodecs + Discv5SyncResponder.
   *
-  * Verifies that the wire layer + sync responder + codec compose correctly
-  * over real UDP. Lives in fukuii main (not scalanet) because it exercises
-  * the production V5RLPCodecs that lives here.
+  * Verifies that the wire layer + sync responder + codec compose correctly over real UDP. Lives in fukuii main (not
+  * scalanet) because it exercises the production V5RLPCodecs that lives here.
   */
 class Discv5IntegrationSpec extends AnyFlatSpec with Matchers {
 
@@ -89,7 +87,10 @@ class Discv5IntegrationSpec extends AnyFlatSpec with Matchers {
 
   behavior.of("Discv5 end-to-end")
 
-  it should "compose Packet + V5RLPCodecs round-trip a Ping → Pong via the real codec" taggedAs (UnitTest, NetworkTest) in {
+  it should "compose Packet + V5RLPCodecs round-trip a Ping → Pong via the real codec" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
     // Doesn't need real UDP — exercises the codec composition only.
     val (pubA, privA) = sigalg.newKeyPair
     val (pubB, privB) = sigalg.newKeyPair
@@ -169,7 +170,10 @@ class Discv5IntegrationSpec extends AnyFlatSpec with Matchers {
     pong.recipientPort shouldBe sender.getPort
   }
 
-  it should "build the V5DemuxResponder + chained responder shape used by DiscoveryServiceBuilder" taggedAs (UnitTest, NetworkTest) in {
+  it should "build the V5DemuxResponder + chained responder shape used by DiscoveryServiceBuilder" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
     val (_, priv) = sigalg.newKeyPair
     val nodeIdLocal = v5.Session.nodeIdFromPublicKey(sigalg.toPublicKey(priv).value.bytes)
     val localNode = makeNode(priv, 30303)
@@ -199,7 +203,7 @@ class Discv5IntegrationSpec extends AnyFlatSpec with Matchers {
     val incomingBytes = v5.Packet.encode(msgPkt, nodeIdLocal).require.bits
     chain(sender, incomingBytes) match {
       case StaticUDPPeerGroup.SyncResult.Reply(_) => succeed
-      case other => fail(s"expected v5 Reply, got $other")
+      case other                                  => fail(s"expected v5 Reply, got $other")
     }
   }
 }

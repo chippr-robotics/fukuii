@@ -21,12 +21,11 @@ import com.chipprbots.ethereum.rlp.RLPValue
 /** RLP codecs for discv5 [[Payload]] types per
   * https://github.com/ethereum/devp2p/blob/master/discv5/discv5-wire.md#protocol-messages.
   *
-  * The wire form is `messageType (1 byte) || RLP-encoded fields`. The
-  * `messageType` discriminator is one of:
-  *   0x01 PING, 0x02 PONG, 0x03 FINDNODE, 0x04 NODES, 0x05 TALKREQ, 0x06 TALKRESP
+  * The wire form is `messageType (1 byte) || RLP-encoded fields`. The `messageType` discriminator is one of: 0x01 PING,
+  * 0x02 PONG, 0x03 FINDNODE, 0x04 NODES, 0x05 TALKREQ, 0x06 TALKRESP
   *
-  * The codec lives in fukuii main rather than scalanet because RLP is part
-  * of the fukuii ethereum dependency tree — same split as v4.
+  * The codec lives in fukuii main rather than scalanet because RLP is part of the fukuii ethereum dependency tree —
+  * same split as v4.
   */
 object V5RLPCodecs extends V5ContentCodecs with V5PayloadCodecs {
 
@@ -46,8 +45,9 @@ object V5RLPCodecs extends V5ContentCodecs with V5PayloadCodecs {
 
 trait V5ContentCodecs {
 
-  /** RLP codec for a `ByteVector`. v5 packs `recipientIp` (raw 4 or 16 bytes)
-    * and `requestId` (raw 1–8 bytes) directly as RLP byte strings. */
+  /** RLP codec for a `ByteVector`. v5 packs `recipientIp` (raw 4 or 16 bytes) and `requestId` (raw 1–8 bytes) directly
+    * as RLP byte strings.
+    */
   given byteVectorRLPCodec: RLPCodec[ByteVector] =
     summon[RLPCodec[Array[Byte]]].xmap(ByteVector.view(_), _.toArray)
 
@@ -188,9 +188,9 @@ trait V5PayloadCodecs { self: V5ContentCodecs =>
 
   // --- Top-level discriminator ---------------------------------------------
 
-  /** Encode/decode `Payload` with the leading message-type byte. The codec
-    * is the bridge between fukuii main (where this lives) and scalanet
-    * (where Payload itself is defined). */
+  /** Encode/decode `Payload` with the leading message-type byte. The codec is the bridge between fukuii main (where
+    * this lives) and scalanet (where Payload itself is defined).
+    */
   given payloadCodec: Codec[Payload] = Codec[Payload](
     (payload: Payload) => {
       val (msgType, body) = payload match {
@@ -212,13 +212,13 @@ trait V5PayloadCodecs { self: V5ContentCodecs =>
 
           val attempt: Try[Payload] = Try {
             msgType match {
-              case Payload.MessageType.Ping         => rlp.decode[Payload.Ping](body)
-              case Payload.MessageType.Pong         => rlp.decode[Payload.Pong](body)
-              case Payload.MessageType.FindNode     => rlp.decode[Payload.FindNode](body)
-              case Payload.MessageType.Nodes        => rlp.decode[Payload.Nodes](body)
-              case Payload.MessageType.TalkReq      => rlp.decode[Payload.TalkRequest](body)
-              case Payload.MessageType.TalkResp     => rlp.decode[Payload.TalkResponse](body)
-              case other                            =>
+              case Payload.MessageType.Ping     => rlp.decode[Payload.Ping](body)
+              case Payload.MessageType.Pong     => rlp.decode[Payload.Pong](body)
+              case Payload.MessageType.FindNode => rlp.decode[Payload.FindNode](body)
+              case Payload.MessageType.Nodes    => rlp.decode[Payload.Nodes](body)
+              case Payload.MessageType.TalkReq  => rlp.decode[Payload.TalkRequest](body)
+              case Payload.MessageType.TalkResp => rlp.decode[Payload.TalkResponse](body)
+              case other =>
                 throw new RuntimeException(s"unknown discv5 message type: 0x${(other & 0xff).toHexString}")
             }
           }

@@ -29,7 +29,7 @@ class Discv4SyncResponderSpec extends AnyFlatSpec with Matchers {
   /** Extract reply bytes from a [[StaticUDPPeerGroup.SyncResult.Reply]], or fail. */
   private def replyBitsOf(result: StaticUDPPeerGroup.SyncResult): BitVector = result match {
     case StaticUDPPeerGroup.SyncResult.Reply(bits) => bits
-    case other => fail(s"expected SyncResult.Reply, got $other")
+    case other                                     => fail(s"expected SyncResult.Reply, got $other")
   }
 
   private val sender = new InetSocketAddress(InetAddress.getByName("127.0.0.1"), 31000)
