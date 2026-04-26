@@ -145,17 +145,27 @@ trait DiscoveryServiceBuilder extends Logger {
         )
         .require
       v5EnrRef = new AtomicReference[EthereumNodeRecord](v5InitialEnr)
+      // The sync responder needs a way to send unsolicited UDP packets back to
+      // a peer (after a handshake completes, fukuii pings the peer to confirm
+      // bonding — this is what hive's `FindnodeResults` waits for). We can't
+      // pass the peer group's `sendRaw` directly because the responder is
+      // constructed BEFORE the peer group. Instead, we hand the responder an
+      // AtomicReference that the wiring in [[makeDiscoveryNetwork]] populates
+      // once the peer group exists.
+      v5OutboundSenderRef =
+        new AtomicReference[Option[v5.Discv5SyncResponder.OutboundSender]](None)
       v5Responder = buildV5SyncResponder(
         privateKey,
         localNode,
         v5SessionCache,
         v5ChallengeCache,
         v5BystanderTable,
-        v5EnrRef
+        v5EnrRef,
+        v5OutboundSenderRef
       )
       chainedResponder = StaticUDPPeerGroup.chainResponders(v5Responder, v4SyncResponder)
       udpConfig = makeUdpConfig(discoveryConfig, host, chainedResponder)
-      network <- makeDiscoveryNetwork(privateKey, localNode, v4Config, udpConfig, pingDedup)
+      network <- makeDiscoveryNetwork(privateKey, localNode, v4Config, udpConfig, pingDedup, v5OutboundSenderRef)
       service <- makeDiscoveryService(privateKey, localNode, v4Config, network)
       _ <- Resource.eval {
         setDiscoveryStatus(nodeStatusHolder, ServerStatus.Listening(udpConfig.bindAddress))
@@ -263,14 +273,37 @@ trait DiscoveryServiceBuilder extends Logger {
       localNode: ENode,
       v4Config: v4.DiscoveryConfig,
       udpConfig: StaticUDPPeerGroup.Config,
-      pingDedup: v4.Discv4SyncResponder.PingDedup
+      pingDedup: v4.Discv4SyncResponder.PingDedup,
+      v5OutboundSenderRef: AtomicReference[Option[v5.Discv5SyncResponder.OutboundSender]]
   )(implicit
       payloadCodec: Codec[v4.Payload],
       packetCodec: Codec[v4.Packet],
-      sigalg: SigAlg
+      sigalg: SigAlg,
+      runtime: IORuntime
   ): Resource[IO, v4.DiscoveryNetwork[InetMultiAddress]] =
     for {
       peerGroup <- StaticUDPPeerGroup[v4.Packet](udpConfig)
+      // Now that the peer group exists, populate the outbound sender so the v5
+      // sync responder can send post-handshake ping-backs through this UDP
+      // channel. Fire-and-forget at the IO level — the netty `writeAndFlush`
+      // is async and we don't await it on the netty event-loop thread.
+      _ <- Resource.eval {
+        IO {
+          v5OutboundSenderRef.set(
+            Some { (addr: java.net.InetSocketAddress, bytes: scodec.bits.ByteVector, delayMillis: Long) =>
+              // Each call optionally schedules a delay before the UDP write
+              // — only the post-handshake ping-back asks for one (so it
+              // doesn't race the synchronous Pong); chunked NODES replies
+              // pass 0 and are written immediately.
+              val send = peerGroup.sendRaw(addr, bytes)
+              val task =
+                if (delayMillis > 0) IO.sleep(scala.concurrent.duration.FiniteDuration(delayMillis, "ms")) *> send
+                else send
+              task.unsafeRunAndForget()(runtime)
+            }
+          )
+        }
+      }
       network <- Resource.eval {
         v4.DiscoveryNetwork[InetMultiAddress](
           peerGroup = peerGroup,
@@ -309,12 +342,15 @@ trait DiscoveryServiceBuilder extends Logger {
       sessions: v5.Session.SessionCache,
       challenges: v5.Discv5SyncResponder.ChallengeCache,
       bystanders: v5.Discv5SyncResponder.BystanderEnrTable,
-      enrRef: AtomicReference[EthereumNodeRecord]
+      enrRef: AtomicReference[EthereumNodeRecord],
+      outboundSenderRef: AtomicReference[Option[v5.Discv5SyncResponder.OutboundSender]]
   )(implicit
       sigalg: SigAlg,
       runtime: IORuntime
   ): StaticUDPPeerGroup.SyncResponder = {
+    import V5RLPCodecs.codecFromRLPCodec
     implicit val v5PayloadCodec: Codec[v5.Payload] = V5RLPCodecs.payloadCodec
+    implicit val v5EnrCodec: Codec[EthereumNodeRecord] = codecFromRLPCodec(V5RLPCodecs.enrRLPCodec)
 
     val localPubBytes = localNode.id.value.bytes
     val localNodeId = v5.Session.nodeIdFromPublicKey(localPubBytes)
@@ -340,7 +376,8 @@ trait DiscoveryServiceBuilder extends Logger {
       handler = handler,
       sessions = sessions,
       challenges = challenges,
-      bystanders = bystanders
+      bystanders = bystanders,
+      outboundSenderRef = outboundSenderRef
     )
     V5DemuxResponder(responder, queue = None)
   }
