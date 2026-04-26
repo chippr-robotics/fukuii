@@ -23,11 +23,15 @@ import scodec.bits.BitVector
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.db.storage.KnownNodesStorage
 import com.chipprbots.ethereum.network.discovery.codecs.RLPCodecs
+import com.chipprbots.ethereum.network.discovery.codecs.V5RLPCodecs
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.utils.NodeStatus
 import com.chipprbots.ethereum.utils.ServerStatus
 import com.chipprbots.scalanet.discovery.ethereum.v4.Packet
+import com.chipprbots.scalanet.discovery.ethereum.v5
+import com.chipprbots.scalanet.discovery.ethereum.{Node => ScNode}
 import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord.Content
+import com.chipprbots.scalanet.peergroup.udp.V5DemuxResponder
 
 trait DiscoveryServiceBuilder extends Logger {
 
@@ -109,14 +113,21 @@ trait DiscoveryServiceBuilder extends Logger {
       // before sending its own Pong so we don't emit duplicates on the wire
       // (hive's discv4 simulator counts and rejects duplicate Pongs).
       pingDedup = new v4.Discv4SyncResponder.PingDedup
-      syncResponder = v4.Discv4SyncResponder(
+      v4SyncResponder = v4.Discv4SyncResponder(
         privateKey = privateKey,
         expirationSeconds = discoveryConfig.messageExpiration.toSeconds,
         maxClockDriftSeconds = discoveryConfig.maxClockDrift.toSeconds,
         localEnrSeqRef = localEnrSeqRef,
         dedup = pingDedup
       )
-      udpConfig = makeUdpConfig(discoveryConfig, host, syncResponder)
+      // Compose the v5 sync responder + demuxer alongside v4. The chain order
+      // matters: v5 first (fast peek that claims v5-shaped packets), v4 second
+      // (handles legacy discv4). Non-discv5/v4 bytes return Pass through both
+      // and fall to the v4 codec's async decode (where they'll fail with a
+      // DecodingError).
+      v5Responder <- buildV5SyncResponder(privateKey, localNode)
+      chainedResponder = StaticUDPPeerGroup.chainResponders(v5Responder, v4SyncResponder)
+      udpConfig = makeUdpConfig(discoveryConfig, host, chainedResponder)
       network <- makeDiscoveryNetwork(privateKey, localNode, v4Config, udpConfig, pingDedup)
       service <- makeDiscoveryService(privateKey, localNode, v4Config, network)
       _ <- Resource.eval {
@@ -249,6 +260,71 @@ trait DiscoveryServiceBuilder extends Logger {
         )
       }
     } yield network
+
+  /** Build the v5 synchronous responder. Wires the [[v5.Discv5SyncResponder]]
+    * + caches with a stub `Handler` that exposes the local ENR and serves
+    * `findNode([0])` with the local node only. The full v5 async pipeline
+    * (with kademlia table) lives in `v5.DiscoveryService` (Step 4); the
+    * stub here is sufficient for the hive devp2p tests, which exercise
+    * stateless protocol round-trips.
+    *
+    * Returns the responder wrapped in [[V5DemuxResponder]] for the future
+    * v5 dispatch queue side-channel — currently the queue is None
+    * (transparent forwarder).
+    */
+  private def buildV5SyncResponder(
+      privateKey: PrivateKey,
+      localNode: ENode
+  )(implicit
+      sigalg: SigAlg,
+      enrContentCodec: Codec[EthereumNodeRecord.Content],
+      runtime: IORuntime
+  ): Resource[IO, StaticUDPPeerGroup.SyncResponder] = Resource.eval {
+    IO {
+      implicit val v5PayloadCodec: Codec[v5.Payload] = V5RLPCodecs.payloadCodec
+
+      val localPubBytes = localNode.id.value.bytes
+      val localNodeId = v5.Session.nodeIdFromPublicKey(localPubBytes)
+
+      // Build a stub local ENR. The async v5 service (Step 4) will replace
+      // this with a live record that updates as the node's address changes.
+      val initialEnr = EthereumNodeRecord
+        .fromNode(
+          ScNode(
+            id = localNode.id,
+            address = ScNode.Address(
+              ip = localNode.address.ip,
+              udpPort = localNode.address.udpPort,
+              tcpPort = localNode.address.tcpPort
+            )
+          ),
+          privateKey,
+          seq = 1
+        )
+        .require
+      val enrRef = new AtomicReference[EthereumNodeRecord](initialEnr)
+
+      val handler = new v5.Discv5SyncResponder.Handler {
+        def localEnr: EthereumNodeRecord = enrRef.get
+        def localEnrSeq: Long = enrRef.get.content.seq
+        def findNodes(distances: List[Int]): List[EthereumNodeRecord] =
+          if (distances.contains(0)) List(enrRef.get) else Nil
+      }
+
+      val responder = v5.Discv5SyncResponder(
+        privateKey = privateKey,
+        localNodeId = localNodeId,
+        handler = handler,
+        sessions = new v5.Session.SessionCache(),
+        challenges = new v5.Discv5SyncResponder.ChallengeCache(),
+        bystanders = new v5.Discv5SyncResponder.BystanderEnrTable()
+      )
+
+      // Demuxer with no dispatch queue today — Step 4's async pipeline will
+      // wire one in. Without a queue the demuxer is a transparent forwarder.
+      V5DemuxResponder(responder, queue = None)
+    }
+  }
 
   private def makeDiscoveryService(
       privateKey: PrivateKey,
