@@ -55,6 +55,16 @@ on:
         required: false
         type: string
         default: 'master'
+      clients:
+        description: |
+          Comma-separated list of hive client names to test (e.g. "fukuii"
+          or "fukuii,go-ethereum,besu"). Defaults to fukuii alone for the
+          single-client compliance suites. Sync-style sims override this
+          to bring in geth/besu so we exercise cross-client interop instead
+          of fukuii-vs-fukuii self-tests.
+        required: false
+        type: string
+        default: 'fukuii'
     outputs:
       passed:
         description: 'Number of simulator tests that passed'
@@ -203,6 +213,7 @@ jobs:
           SIM_BUILDARG: ${{ inputs.sim_buildarg }}
           SIM_TIMELIMIT: ${{ inputs.sim_timelimit }}
           PARALLELISM: ${{ inputs.parallelism }}
+          CLIENTS: ${{ inputs.clients }}
         # Do not inherit GitHub's default `-e -o pipefail` — hive returns
         # non-zero for a wide range of per-sim outcomes (test failures,
         # client timeouts, flaky docker pulls) and the tabulate step below
@@ -213,7 +224,7 @@ jobs:
         run: |
           args=(
             --sim "$SIM"
-            --client fukuii
+            --client "$CLIENTS"
             --sim.parallelism "$PARALLELISM"
             --sim.timelimit "$SIM_TIMELIMIT"
             --client.checktimelimit=60s

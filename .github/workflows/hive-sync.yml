@@ -49,3 +49,8 @@ jobs:
       label: sync
       sim_timelimit: ${{ github.event.inputs.sim_timelimit || '40m' }}
       hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}
+      # Cross-client sync: each listed client takes a turn as the source and
+      # every client (including itself) is tested as a sink against it. With
+      # `fukuii,go-ethereum,besu` we get fukuii↔geth and fukuii↔besu interop
+      # in addition to the (less informative) fukuii↔fukuii self-test.
+      clients: 'fukuii,go-ethereum,besu'
