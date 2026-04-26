@@ -124,8 +124,35 @@ trait DiscoveryServiceBuilder extends Logger {
       // matters: v5 first (fast peek that claims v5-shaped packets), v4 second
       // (handles legacy discv4). Non-discv5/v4 bytes return Pass through both
       // and fall to the v4 codec's async decode (where they'll fail with a
-      // DecodingError).
-      v5Responder <- buildV5SyncResponder(privateKey, localNode)
+      // DecodingError). The v5 caches here are shared with the (future-wired)
+      // `v5.DiscoveryService` so populated bystander ENRs surface in
+      // FINDNODE responses immediately.
+      v5SessionCache = new v5.Session.SessionCache()
+      v5ChallengeCache = new v5.Discv5SyncResponder.ChallengeCache()
+      v5BystanderTable = new v5.Discv5SyncResponder.BystanderEnrTable()
+      v5InitialEnr = EthereumNodeRecord
+        .fromNode(
+          ScNode(
+            id = localNode.id,
+            address = ScNode.Address(
+              ip = localNode.address.ip,
+              udpPort = localNode.address.udpPort,
+              tcpPort = localNode.address.tcpPort
+            )
+          ),
+          privateKey,
+          seq = 1
+        )
+        .require
+      v5EnrRef = new AtomicReference[EthereumNodeRecord](v5InitialEnr)
+      v5Responder = buildV5SyncResponder(
+        privateKey,
+        localNode,
+        v5SessionCache,
+        v5ChallengeCache,
+        v5BystanderTable,
+        v5EnrRef
+      )
       chainedResponder = StaticUDPPeerGroup.chainResponders(v5Responder, v4SyncResponder)
       udpConfig = makeUdpConfig(discoveryConfig, host, chainedResponder)
       network <- makeDiscoveryNetwork(privateKey, localNode, v4Config, udpConfig, pingDedup)
@@ -261,69 +288,63 @@ trait DiscoveryServiceBuilder extends Logger {
       }
     } yield network
 
-  /** Build the v5 synchronous responder. Wires the [[v5.Discv5SyncResponder]]
-    * + caches with a stub `Handler` that exposes the local ENR and serves
-    * `findNode([0])` with the local node only. The full v5 async pipeline
-    * (with kademlia table) lives in `v5.DiscoveryService` (Step 4); the
-    * stub here is sufficient for the hive devp2p tests, which exercise
-    * stateless protocol round-trips.
+  /** Build the v5 synchronous responder. Wires:
+    *   - [[v5.Discv5SyncResponder]] for inbound packet handling on the netty
+    *     event-loop thread (sub-300ms hive deadline)
+    *   - Shared [[v5.Session.SessionCache]] / [[v5.Discv5SyncResponder.ChallengeCache]]
+    *     / [[v5.Discv5SyncResponder.BystanderEnrTable]] for cross-cutting state
+    *   - A `Handler` whose `findNodes` reads from the bystander table — so as
+    *     the async discovery service populates the table, the sync responder
+    *     immediately starts returning real ENRs to FINDNODE requests
+    *
+    * The active discovery service ([[v5.DiscoveryService]]) is constructed
+    * separately by [[buildV5DiscoveryService]] using the same caches.
     *
     * Returns the responder wrapped in [[V5DemuxResponder]] for the future
-    * v5 dispatch queue side-channel — currently the queue is None
-    * (transparent forwarder).
+    * v5 dispatch queue side-channel — currently None (transparent forwarder)
+    * because the `DiscoveryNetwork.startHandling` consumer that would read
+    * from the queue isn't started in this minimal build path.
     */
   private def buildV5SyncResponder(
       privateKey: PrivateKey,
-      localNode: ENode
+      localNode: ENode,
+      sessions: v5.Session.SessionCache,
+      challenges: v5.Discv5SyncResponder.ChallengeCache,
+      bystanders: v5.Discv5SyncResponder.BystanderEnrTable,
+      enrRef: AtomicReference[EthereumNodeRecord]
   )(implicit
       sigalg: SigAlg,
-      enrContentCodec: Codec[EthereumNodeRecord.Content],
       runtime: IORuntime
-  ): Resource[IO, StaticUDPPeerGroup.SyncResponder] = Resource.eval {
-    IO {
-      implicit val v5PayloadCodec: Codec[v5.Payload] = V5RLPCodecs.payloadCodec
+  ): StaticUDPPeerGroup.SyncResponder = {
+    implicit val v5PayloadCodec: Codec[v5.Payload] = V5RLPCodecs.payloadCodec
 
-      val localPubBytes = localNode.id.value.bytes
-      val localNodeId = v5.Session.nodeIdFromPublicKey(localPubBytes)
+    val localPubBytes = localNode.id.value.bytes
+    val localNodeId = v5.Session.nodeIdFromPublicKey(localPubBytes)
 
-      // Build a stub local ENR. The async v5 service (Step 4) will replace
-      // this with a live record that updates as the node's address changes.
-      val initialEnr = EthereumNodeRecord
-        .fromNode(
-          ScNode(
-            id = localNode.id,
-            address = ScNode.Address(
-              ip = localNode.address.ip,
-              udpPort = localNode.address.udpPort,
-              tcpPort = localNode.address.tcpPort
-            )
-          ),
-          privateKey,
-          seq = 1
-        )
-        .require
-      val enrRef = new AtomicReference[EthereumNodeRecord](initialEnr)
-
-      val handler = new v5.Discv5SyncResponder.Handler {
-        def localEnr: EthereumNodeRecord = enrRef.get
-        def localEnrSeq: Long = enrRef.get.content.seq
-        def findNodes(distances: List[Int]): List[EthereumNodeRecord] =
-          if (distances.contains(0)) List(enrRef.get) else Nil
+    val handler = new v5.Discv5SyncResponder.Handler {
+      def localEnr: EthereumNodeRecord = enrRef.get
+      def localEnrSeq: Long = enrRef.get.content.seq
+      def findNodes(distances: List[Int]): List[EthereumNodeRecord] = {
+        // Pull every distance the peer asked about from the bystander table;
+        // distance=0 yields the local ENR explicitly.
+        val builder = List.newBuilder[EthereumNodeRecord]
+        distances.foreach { d =>
+          if (d == 0) builder += enrRef.get
+          else builder ++= bystanders.atDistance(localNodeId, d)
+        }
+        builder.result()
       }
-
-      val responder = v5.Discv5SyncResponder(
-        privateKey = privateKey,
-        localNodeId = localNodeId,
-        handler = handler,
-        sessions = new v5.Session.SessionCache(),
-        challenges = new v5.Discv5SyncResponder.ChallengeCache(),
-        bystanders = new v5.Discv5SyncResponder.BystanderEnrTable()
-      )
-
-      // Demuxer with no dispatch queue today — Step 4's async pipeline will
-      // wire one in. Without a queue the demuxer is a transparent forwarder.
-      V5DemuxResponder(responder, queue = None)
     }
+
+    val responder = v5.Discv5SyncResponder(
+      privateKey = privateKey,
+      localNodeId = localNodeId,
+      handler = handler,
+      sessions = sessions,
+      challenges = challenges,
+      bystanders = bystanders
+    )
+    V5DemuxResponder(responder, queue = None)
   }
 
   private def makeDiscoveryService(
