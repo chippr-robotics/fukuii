@@ -15,6 +15,7 @@ import java.net.InetSocketAddress
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 
+import org.scalatest.Assertion
 import org.scalatest.flatspec.AsyncFlatSpec
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.Inspectors
@@ -26,7 +27,9 @@ import java.net.InetAddress
 class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenPropertyChecks {
   import DiscoveryService.{State, BondingResults}
   import DiscoveryServiceSpec._
-  import DefaultCodecs._
+  // Bring DefaultCodecs' given instances (Codec[Content], etc.) into scope.
+  // Scala 3 wildcard imports do NOT carry given/implicit instances by default.
+  import DefaultCodecs.{given, *}
 
   def test(fixture: Fixture) =
     fixture.test.timeout(15.seconds).unsafeToFuture()
@@ -294,8 +297,8 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
         time0 <- service.currentTimeMillis
         bonding <- service.bond(remotePeer).start
         // Simulating a Ping from the remote.
-        _ <- service.completePing(remotePeer).delayExecution(50.millis)
-        bonded <- bonding.join
+        _ <- service.completePing(remotePeer).delayBy(50.millis)
+        bonded <- bonding.joinWithNever
         time1 <- service.currentTimeMillis
       } yield {
         bonded shouldBe true
@@ -381,22 +384,20 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
 
   it should "only initiate one fetch at a time" in test {
     new Fixture {
-      val callCount = AtomicInt(0)
+      val callCount = new java.util.concurrent.atomic.AtomicInteger(0)
 
       override lazy val rpc = unimplementedRPC.copy(
         ping = _ => _ => IO.pure(Some(None)),
         enrRequest = _ =>
           _ =>
             IO.delay {
-              callCount.increment()
+              callCount.incrementAndGet()
               Some(remoteENR)
             }.delayBy(100.millis) // Delay so the first is still running when the second is started.
       )
 
       override val test = for {
-        _ <- IO.parSequenceUnordered(
-          List.fill(5)(service.fetchEnr(remotePeer))
-        )
+        _ <- List.fill(5)(service.fetchEnr(remotePeer)).parSequence
       } yield {
         callCount.get() shouldBe 1
       }
@@ -425,7 +426,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
     new Fixture {
       override lazy val rpc = unimplementedRPC.copy(
         ping = _ => _ => IO.pure(Some(None)),
-        enrRequest = _ => _ => IO.pure(Some(remoteENR.copy(signature = Signature(remoteENR.signature.reverse))))
+        enrRequest = _ => _ => IO.pure(Some(remoteENR.copy(signature = Signature(remoteENR.signature.value.reverse))))
       )
       override val test = for {
         _ <- stateRef.update(_.withEnrAndAddress(remotePeer, remoteENR, remoteNode.address))
@@ -467,7 +468,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
     override lazy val remoteENR = {
       val attrs = maybeRemoteNetwork.flatMap(NetworkId(_).toAttr).toList
       EthereumNodeRecord
-        .fromNode(remoteNode, remotePrivateKey, seq = 1, attrs: _*)
+        .fromNode(remoteNode, remotePrivateKey, seq = 1, attrs*)
         .require
     }
 
@@ -514,7 +515,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
     // These will share the same k-bucket.
     def makePeerInFirstBucket: (Peer[InetSocketAddress], EthereumNodeRecord, Node.Address) = {
       val (publicKey, privateKey) = sigalg.newKeyPair
-      if (Node.kademliaId(publicKey)(0) == Node.kademliaId(localPublicKey)(0))
+      if (Node.kademliaId(publicKey).value(0) == Node.kademliaId(localPublicKey).value(0))
         makePeerInFirstBucket
       else {
         val address = aRandomAddress()
@@ -765,7 +766,7 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
       val targetId = Node.kademliaId(targetPublicKey)
       val expectedNodes = allNodes
         .map(_._1)
-        .sortBy(node => Xor.d(node.kademliaId, targetId))
+        .sortBy(node => Xor.d(node.kademliaId.value, targetId.value))
         .take(config.kademliaBucketSize)
 
       override val test = for {
@@ -1117,7 +1118,9 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
 }
 
 object DiscoveryServiceSpec {
-  import DefaultCodecs._
+  // Bring DefaultCodecs' given instances (Codec[Content], etc.) into scope.
+  // Scala 3 wildcard imports do NOT carry given/implicit instances by default.
+  import DefaultCodecs.{given, *}
   import com.chipprbots.scalanet.discovery.crypto.SigAlg
 
   implicit val sigalg: SigAlg = new MockSigAlg()

@@ -27,12 +27,14 @@ class MockSigAlg extends SigAlg {
     val bytes = Array.ofDim[Byte](PrivateKeyBytesSize)
     Random.nextBytes(bytes)
     val privateKey = PrivateKey(BitVector(bytes))
-    val publicKey = PublicKey(privateKey)
+    // Use the underlying BitVector to construct the PublicKey — the opaque type
+    // wrapper means we can't pass `privateKey` directly to `PublicKey(...)`.
+    val publicKey = PublicKey(privateKey.value)
     publicKey -> privateKey
   }
 
   override def sign(privateKey: PrivateKey, data: BitVector): Signature =
-    Signature(xor(privateKey, data))
+    Signature(xor(privateKey.value, data))
 
   override def removeRecoveryId(signature: Signature): Signature =
     signature
@@ -41,7 +43,7 @@ class MockSigAlg extends SigAlg {
     publicKey == recoverPublicKey(signature, data).require
 
   override def recoverPublicKey(signature: Signature, data: BitVector): Attempt[PublicKey] = {
-    Attempt.successful(PublicKey(xor(signature, data).take(PublicKeyBytesSize * 8)))
+    Attempt.successful(PublicKey(xor(signature.value, data).take(PublicKeyBytesSize * 8)))
   }
 
   override def toPublicKey(privateKey: PrivateKey): PublicKey =

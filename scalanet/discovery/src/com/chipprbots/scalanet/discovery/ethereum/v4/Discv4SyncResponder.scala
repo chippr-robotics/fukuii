@@ -116,20 +116,24 @@ object Discv4SyncResponder extends LazyLogging {
       sigalg: SigAlg
   ): StaticUDPPeerGroup.SyncResponder = (sender: InetSocketAddress, incomingBits: BitVector) => {
     if (!rateLimiter.tryAcquire()) {
-      // Rate-limited: drop the sync-path response and let the async path take over.
-      // Logged at debug to avoid noise under sustained traffic; the warn logger fires
-      // on actual responder errors, not on intentional rate-limit drops.
       logger.debug(s"discv4 sync-fastpath: rate-limited request from $sender")
-      None
+      StaticUDPPeerGroup.SyncResult.Pass
     } else {
-      try respond(sender, incomingBits, privateKey, expirationSeconds, maxClockDriftSeconds, localEnrSeqRef, dedup)
-      catch {
-        case NonFatal(ex) =>
-          logger.warn(
-            s"discv4 sync-fastpath: unexpected error producing Pong for $sender: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
-          )
-          None
-      }
+      val maybeReply: Option[BitVector] =
+        try respond(sender, incomingBits, privateKey, expirationSeconds, maxClockDriftSeconds, localEnrSeqRef, dedup)
+        catch {
+          case NonFatal(ex) =>
+            logger.warn(
+              s"discv4 sync-fastpath: unexpected error producing Pong for $sender: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
+            )
+            None
+        }
+      // v4 sync responder always either replies (Pong) or passes back to the
+      // async path (so async-path bookkeeping can run unchanged). It never
+      // claims silently — that's a v5-demuxer pattern.
+      maybeReply.fold[StaticUDPPeerGroup.SyncResult](StaticUDPPeerGroup.SyncResult.Pass)(
+        bits => StaticUDPPeerGroup.SyncResult.Reply(bits)
+      )
     }
   }
 
