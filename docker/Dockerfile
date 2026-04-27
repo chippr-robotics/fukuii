@@ -41,20 +41,25 @@ RUN --mount=type=cache,target=/root/.ivy2 \
 # Copy source code
 COPY . /build
 
-# Build distribution
+# Build distribution AND fat assembly JAR in a single sbt invocation so they
+# share the compile cache and JVM startup. The dist gives us the launcher
+# script + dependency JARs; the assembly JAR is what compose files and the
+# hive adapter run via `java -jar`.
 # Note: Submodules are already initialized by the GitHub Actions checkout step
 # or should be initialized manually before building (git submodule update --init --recursive)
 RUN --mount=type=cache,target=/root/.ivy2 \
     --mount=type=cache,target=/root/.sbt \
     --mount=type=cache,target=/root/.cache \
-    sbt dist
+    sbt assembly dist
 
-# Extract the distribution zip
+# Extract the distribution zip and drop the assembly JAR alongside the dist
+# libs so the runtime stage has both layouts available under /fukuii-dist.
 RUN cd target/universal && \
     DIST_FILE=$(ls fukuii-*.zip | head -1) && \
     unzip "$DIST_FILE" && \
     DIST_DIR=$(ls -d fukuii-*/ | head -1) && \
-    mv "$DIST_DIR" /fukuii-dist
+    mv "$DIST_DIR" /fukuii-dist && \
+    cp /build/target/scala-*/fukuii-assembly-*.jar /fukuii-dist/lib/
 
 # Stage 2: Runtime stage using slim JRE
 FROM eclipse-temurin:25-jre-noble
