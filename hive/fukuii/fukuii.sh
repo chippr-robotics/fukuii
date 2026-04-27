@@ -143,5 +143,5 @@ exec java \
     -XX:MaxMetaspaceSize=256m \
     -XX:+ExitOnOutOfMemoryError \
     $FLAGS \
-    -jar /app/fukuii/lib/fukuii-assembly-0.1.240.jar \
+    -jar /app/fukuii/lib/fukuii-assembly.jar \
     hive

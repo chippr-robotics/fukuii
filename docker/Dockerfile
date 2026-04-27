@@ -41,20 +41,25 @@ RUN --mount=type=cache,target=/root/.ivy2 \
 # Copy source code
 COPY . /build
 
-# Build distribution
+# Build distribution AND fat assembly JAR in a single sbt invocation so they
+# share the compile cache and JVM startup. The dist gives us the launcher
+# script + dependency JARs; the assembly JAR is what compose files and the
+# hive adapter run via `java -jar`.
 # Note: Submodules are already initialized by the GitHub Actions checkout step
 # or should be initialized manually before building (git submodule update --init --recursive)
 RUN --mount=type=cache,target=/root/.ivy2 \
     --mount=type=cache,target=/root/.sbt \
     --mount=type=cache,target=/root/.cache \
-    sbt dist
+    sbt assembly dist
 
-# Extract the distribution zip
+# Extract the distribution zip and drop the assembly JAR alongside the dist
+# libs so the runtime stage has both layouts available under /fukuii-dist.
 RUN cd target/universal && \
     DIST_FILE=$(ls fukuii-*.zip | head -1) && \
     unzip "$DIST_FILE" && \
     DIST_DIR=$(ls -d fukuii-*/ | head -1) && \
-    mv "$DIST_DIR" /fukuii-dist
+    mv "$DIST_DIR" /fukuii-dist && \
+    cp /build/target/scala-*/fukuii-assembly-*.jar /fukuii-dist/lib/
 
 # Stage 2: Runtime stage using slim JRE
 FROM eclipse-temurin:25-jre-noble
@@ -79,6 +84,15 @@ COPY --from=builder --chown=fukuii:fukuii /fukuii-dist /app/fukuii
 # Copy default configuration files to /app/conf for easy user override
 # Users can mount their own config files at /app/conf to override defaults
 COPY --from=builder --chown=fukuii:fukuii /fukuii-dist/conf /app/conf
+
+# Stable, version-agnostic symlink for the assembly JAR. Compose files,
+# hive adapters, and any other consumer should reference this path —
+# never the versioned filename — so a version bump doesn't require a
+# coordinated edit across every downstream config.
+RUN cd /app/fukuii/lib && \
+    ln -sf "$(ls fukuii-assembly-*.jar | head -1)" fukuii-assembly.jar && \
+    basename "$(readlink -f fukuii-assembly.jar)" \
+      | sed -E 's/^fukuii-assembly-(.*)\.jar$/fukuii-\1/' > /version.txt
 
 # Create healthcheck script
 RUN echo '#!/bin/bash\n\

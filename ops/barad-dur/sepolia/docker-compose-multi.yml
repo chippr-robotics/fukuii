@@ -40,7 +40,7 @@ services:
       - "-XX:MaxGCPauseMillis=200"
       - "-Dconfig.file=/app/conf/multi-network.conf"
       - "-jar"
-      - "/app/fukuii/lib/fukuii-assembly-0.1.240.jar"
+      - "/app/fukuii/lib/fukuii-assembly.jar"
       - "runtime"
     networks:
       - sepolia-network

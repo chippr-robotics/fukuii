@@ -1,21 +1,16 @@
 name: Release
 
 on:
-  workflow_call:
-    inputs:
-      version:
-        required: true
-        type: string
-        description: 'Version to release (e.g., 0.1.240)'
-      release_tier:
-        required: false
-        type: string
-        default: 'patch'
-        description: 'Release tier: patch (JAR+ZIP only) or full (+ Docker, signing, SBOM)'
+  # Triggered by auto-version.yml via `gh workflow run` after a version
+  # bump+tag, and available for manual dispatch from the Actions UI.
+  # NOTE: do NOT add `workflow_call:` here — chaining release.yml as a
+  # reusable workflow caused persistent `startup_failure` (the SLSA
+  # generator reference in the chain failed GitHub's startup-time
+  # validation, leaving 0 jobs created and no log surfaced via API).
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (e.g., 0.1.240)'
+        description: 'Version to release (e.g., 0.1.241)'
         required: true
         type: string
       release_tier:

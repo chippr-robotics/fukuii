@@ -119,7 +119,7 @@ services:
       - "-Dfukuii.trace.block=${FUKUII_TRACE_BLOCK:-}"
       - "-Dfukuii.trace.tx=${FUKUII_TRACE_TX:-}"
       - "-jar"
-      - "/app/fukuii/lib/fukuii-assembly-0.1.240.jar"
+      - "/app/fukuii/lib/fukuii-assembly.jar"
       - "mordor"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8545/health"]
