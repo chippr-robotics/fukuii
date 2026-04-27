@@ -51,6 +51,10 @@ jobs:
       hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}
       # Cross-client sync: each listed client takes a turn as the source and
       # every client (including itself) is tested as a sink against it. With
-      # `fukuii,go-ethereum,besu` we get fukuii↔geth and fukuii↔besu interop
-      # in addition to the (less informative) fukuii↔fukuii self-test.
-      clients: 'fukuii,go-ethereum,besu'
+      # `fukuii,go-ethereum,nethermind` we get fukuii↔geth and fukuii↔nethermind
+      # interop in addition to the (less informative) fukuii↔fukuii self-test.
+      # besu was tried first but its sink config requires `--Sync min peers: 5`
+      # and hive only provides 1 peer, so every besu-sink test deadlocks at the
+      # peer-count check — masking real interop issues. nethermind has no such
+      # constraint.
+      clients: 'fukuii,go-ethereum,nethermind'
