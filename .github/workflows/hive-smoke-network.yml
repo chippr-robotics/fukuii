@@ -1,18 +1,8 @@
 name: Hive · smoke-network
 
 on:
-  push:
-    branches: [main, master, develop]
-    paths:
-      - 'src/**'
-      - 'build.sbt'
-      - 'version.sbt'
-      - 'project/**'
-      - 'hive/**'
-      - '.github/workflows/_hive-sim.yml'
-      - '.github/workflows/hive-smoke-network.yml'
   pull_request:
-    branches: [main, master, develop]
+    branches: [main, master]
     paths:
       - 'src/**'
       - 'build.sbt'
@@ -21,8 +11,6 @@ on:
       - 'hive/**'
       - '.github/workflows/_hive-sim.yml'
       - '.github/workflows/hive-smoke-network.yml'
-  schedule:
-    - cron: '5 4 * * *'
   workflow_dispatch:
     inputs:
       hive_ref:
@@ -39,7 +27,7 @@ permissions:
 
 concurrency:
   group: hive-smoke-network-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   run:

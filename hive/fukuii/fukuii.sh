@@ -33,6 +33,7 @@ TTD=${HIVE_TERMINAL_TOTAL_DIFFICULTY:-$MAX}
 SHANGHAI_TS=${HIVE_SHANGHAI_TIMESTAMP:-}
 CANCUN_TS=${HIVE_CANCUN_TIMESTAMP:-}
 PRAGUE_TS=${HIVE_PRAGUE_TIMESTAMP:-}
+OSAKA_TS=${HIVE_OSAKA_TIMESTAMP:-}
 
 # ==============================================================================
 # Genesis: convert geth format to Fukuii format
@@ -84,6 +85,7 @@ FLAGS="$FLAGS -Dfukuii.blockchains.hive.terminal-total-difficulty=$TTD"
 [ -n "$SHANGHAI_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.shanghai-timestamp=$SHANGHAI_TS"
 [ -n "$CANCUN_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.cancun-timestamp=$CANCUN_TS"
 [ -n "$PRAGUE_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.prague-timestamp=$PRAGUE_TS"
+[ -n "$OSAKA_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.osaka-timestamp=$OSAKA_TS"
 
 # RPC
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.enabled=true"

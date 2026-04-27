@@ -1,22 +1,13 @@
 name: Hive · consume-engine
 
 # Unfiltered consume-engine sweep (all forks).
-# hive-prague.yml runs a narrower fork_Prague-only sweep with a pass threshold
-# as the PR gate; this workflow is the broad nightly + on-push companion.
+# hive-prague.yml and hive-osaka.yml run narrower per-fork sweeps with their
+# own pass thresholds; this workflow is the broad cross-fork companion.
+# Long-running (~60min); restricted to main-bound PRs + manual dispatch only.
 
 on:
-  push:
-    branches: [main, master, develop]
-    paths:
-      - 'src/**'
-      - 'build.sbt'
-      - 'version.sbt'
-      - 'project/**'
-      - 'hive/**'
-      - '.github/workflows/_hive-sim.yml'
-      - '.github/workflows/hive-consume-engine.yml'
   pull_request:
-    branches: [main, master, develop]
+    branches: [main, master]
     paths:
       - 'src/**'
       - 'build.sbt'
@@ -25,8 +16,6 @@ on:
       - 'hive/**'
       - '.github/workflows/_hive-sim.yml'
       - '.github/workflows/hive-consume-engine.yml'
-  schedule:
-    - cron: '50 4 * * *'
   workflow_dispatch:
     inputs:
       hive_ref:
@@ -47,7 +36,7 @@ permissions:
 
 concurrency:
   group: hive-consume-engine-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   run:
