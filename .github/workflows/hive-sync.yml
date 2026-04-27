@@ -63,3 +63,11 @@ jobs:
       # have nothing to do with fukuii (and we have no leverage to fix);
       # surfacing them in the summary is useful, gating on them is not.
       gate_pattern: 'fukuii'
+      # The sync simulator gives each test a hard-coded 60s budget for the
+      # sink to fully sync 3000 blocks. With parallelism=4 on a 2-core
+      # GitHub runner, four EL JVMs (fukuii + geth + nethermind + a 4th)
+      # warm up concurrently and contend for CPU during the critical first
+      # ~10s of startup, blowing the 60s budget on flaky tests like
+      # `sync fukuii from go-ethereum`. parallelism=2 makes total runtime
+      # 2× longer but eliminates the timeout flakes.
+      parallelism: 2
