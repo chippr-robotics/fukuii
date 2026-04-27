@@ -12,10 +12,9 @@ import com.chipprbots.ethereum.rlp.RLPValue
 
 /** Verifies BlockBody wire encoding follows EIP-2718 framing for typed transactions.
   *
-  * Regression: typed-tx items previously serialized as raw `typeByte || rlp(payload)` (a
-  * PrefixedRLPEncodable in the tx list). go-ethereum and besu re-request bodies forever when
-  * they see this — the items don't decode as a list of byte strings. The correct framing wraps
-  * the typed envelope in an RLP byte string: `RLPValue(typeByte || rlp(payload))`.
+  * Regression: typed-tx items previously serialized as raw `typeByte || rlp(payload)` (a PrefixedRLPEncodable in the tx
+  * list). go-ethereum and besu re-request bodies forever when they see this — the items don't decode as a list of byte
+  * strings. The correct framing wraps the typed envelope in an RLP byte string: `RLPValue(typeByte || rlp(payload))`.
   */
 class BlockBodyWireFormatSpec extends AnyFlatSpec with Matchers {
 
