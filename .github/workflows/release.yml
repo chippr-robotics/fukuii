@@ -363,18 +363,17 @@ jobs:
           echo "  ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 
-  generate-slsa-provenance:
-    name: Generate SLSA Provenance
-    if: inputs.release_tier == 'full'
-    needs: [create-release, build-and-push-image]
-    permissions:
-      actions: read
-      id-token: write
-      contents: write
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@5a775b367a56d5bd118a224a811bba288150a563 # v1.10.0
-    with:
-      image: ghcr.io/chippr-robotics/fukuii
-      digest: ${{ needs.build-and-push-image.outputs.image-digest }}
-      registry-username: ${{ github.actor }}
-    secrets:
-      registry-password: ${{ secrets.GITHUB_TOKEN }}
+  # SLSA provenance generation removed (2026-04-27) — the slsa-framework
+  # reusable workflow reference was causing GitHub's startup-time
+  # validation to reject release.yml itself, even though the job was
+  # gated on `if: inputs.release_tier == 'full'`. GitHub loads referenced
+  # reusable workflows when parsing the calling workflow, regardless of
+  # job-level conditionals; if that load fails, the parent workflow goes
+  # into `startup_failure` with 0 jobs created and no log surfaced. That
+  # blocked every release run since 2025-12-29.
+  #
+  # Cosign image signing in build-and-push-image still provides a
+  # baseline supply-chain attestation. To re-introduce SLSA provenance,
+  # validate the slsa-framework pin in an isolated test workflow first
+  # (e.g., a single-job dispatchable .yml that calls the reusable
+  # workflow alone) before adding back here.
