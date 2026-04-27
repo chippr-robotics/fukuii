@@ -220,19 +220,37 @@ jobs:
 
           cat release_notes.md
 
-      - name: Create GitHub Release
+      # Create the release as a *draft* with assets, then publish it in
+      # the next step. This is the supported pattern for repos with
+      # GitHub's Immutable Releases enabled — once a release is
+      # published, asset uploads are forbidden, so attempting `draft:
+      # false` here fails after some files upload (action-gh-release
+      # uploads the release record first, then assets).
+      - name: Create GitHub Release (draft)
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ inputs.version }}
           name: v${{ inputs.version }}
           body_path: release_notes.md
-          draft: false
+          draft: true
           prerelease: ${{ inputs.release_tier != 'full' }}
           files: |
             release-artifacts/*
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Flip the draft to published. This atomically commits the release
+      # + its uploaded assets, satisfying the immutable-releases
+      # invariant. Downstream automation that watches `release.published`
+      # fires from this point.
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release edit "v${{ inputs.version }}" --draft=false
+          echo "Published v${{ inputs.version }}"
 
       - name: Update milestone
         if: inputs.release_tier == 'full'
