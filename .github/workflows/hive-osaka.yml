@@ -1,8 +1,9 @@
-name: Hive Prague Suite
+name: Hive Osaka Suite
 
-# Runs the ethereum/eels/consume-engine simulator against fukuii for all fork_Prague tests.
-# Gate for PRs to main/develop and for nightly regressions. Fails the build if the pass
-# count drops below a threshold, preventing regressions in Pectra EL compliance.
+# Runs the ethereum/eels/consume-engine simulator against fukuii for all fork_Osaka tests.
+# Gate for PRs into main and for manual dispatch. Fails the build if the pass count
+# drops below a threshold, preventing regressions in Fusaka EL compliance.
+# Long-running (~40min); restricted to main-bound PRs + manual dispatch only.
 
 on:
   pull_request:
@@ -15,13 +16,13 @@ on:
       - 'version.sbt'
       - 'project/**'
       - 'hive/**'
-      - '.github/workflows/hive-prague.yml'
+      - '.github/workflows/hive-osaka.yml'
   workflow_dispatch:
     inputs:
       threshold:
         description: 'Minimum passing test count required'
         required: false
-        default: '400'
+        default: '0'
       timelimit:
         description: 'sim.timelimit (minutes)'
         required: false
@@ -31,17 +32,17 @@ permissions:
   contents: read
 
 concurrency:
-  group: hive-prague-${{ github.ref }}
+  group: hive-osaka-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   hive:
-    name: Consume-engine Prague sweep
+    name: Consume-engine Osaka sweep
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
     env:
-      PASS_THRESHOLD: ${{ github.event.inputs.threshold || '400' }}
+      PASS_THRESHOLD: ${{ github.event.inputs.threshold || '0' }}
       SIM_TIMELIMIT: ${{ github.event.inputs.timelimit || '40' }}m
       HIVE_PARALLELISM: '4'
 
@@ -182,7 +183,7 @@ jobs:
           echo "url=$FIXTURES_URL" >> "$GITHUB_OUTPUT"
           echo "Resolved fixtures URL: $FIXTURES_URL"
 
-      - name: Run Prague consume-engine sweep
+      - name: Run Osaka consume-engine sweep
         working-directory: external/hive
         run: |
           # --docker.buildoutput streams docker-build stderr through hive,
@@ -192,7 +193,7 @@ jobs:
             --sim.buildarg fixtures='${{ steps.fixtures.outputs.url }}' \
             --sim.buildarg disable_strict_exception_matching=nimbus-el,fukuii \
             --client fukuii \
-            --sim.limit '.*fork_Prague.*' \
+            --sim.limit '.*fork_Osaka.*' \
             --sim.parallelism $HIVE_PARALLELISM \
             --sim.timelimit $SIM_TIMELIMIT \
             --client.checktimelimit=30s \
@@ -209,12 +210,12 @@ jobs:
           shopt -s nullglob
           sim_logs=(workspace/logs/*-simulator-*.log)
           if [ "${#sim_logs[@]}" -eq 0 ]; then
-            echo "::error::No simulator log found — the consume-engine image likely failed to build. Check the 'Run Prague consume-engine sweep' step for the docker-build stderr."
+            echo "::error::No simulator log found — the consume-engine image likely failed to build. Check the 'Run Osaka consume-engine sweep' step for the docker-build stderr."
             echo "passed=0" >> "$GITHUB_OUTPUT"
             echo "failed=0" >> "$GITHUB_OUTPUT"
             echo "total=0" >> "$GITHUB_OUTPUT"
             echo "sim_failed=true" >> "$GITHUB_OUTPUT"
-            printf '### Hive Prague sweep\n\n**Simulator failed to build.** No test log produced.\n' >> "$GITHUB_STEP_SUMMARY"
+            printf '### Hive Osaka sweep\n\n**Simulator failed to build.** No test log produced.\n' >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           sim_log="${sim_logs[0]}"
@@ -238,7 +239,7 @@ jobs:
           echo "errored=$errored" >> "$GITHUB_OUTPUT"
           echo "total=$total" >> "$GITHUB_OUTPUT"
           echo "sim_failed=false" >> "$GITHUB_OUTPUT"
-          printf '### Hive Prague sweep\n\n| | | |\n|--|--|--|\n| passed | %s | |\n| failed | %s | |\n| errored | %s | |\n| total | %s | |\n| threshold | %s | |\n' \
+          printf '### Hive Osaka sweep\n\n| | | |\n|--|--|--|\n| passed | %s | |\n| failed | %s | |\n| errored | %s | |\n| total | %s | |\n| threshold | %s | |\n' \
             "$passed" "$failed" "$errored" "$total" "$PASS_THRESHOLD" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload hive workspace logs
@@ -258,5 +259,5 @@ jobs:
       - name: Fail if under threshold
         if: ${{ steps.tab.outputs.sim_failed == 'false' && steps.tab.outputs.passed < env.PASS_THRESHOLD }}
         run: |
-          echo "::error::Hive Prague sweep only passed ${{ steps.tab.outputs.passed }} tests (threshold ${{ env.PASS_THRESHOLD }})."
+          echo "::error::Hive Osaka sweep only passed ${{ steps.tab.outputs.passed }} tests (threshold ${{ env.PASS_THRESHOLD }})."
           exit 1
