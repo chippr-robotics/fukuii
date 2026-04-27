@@ -2098,15 +2098,22 @@ class SNAPSyncController(
               validationRetryCount += 1
 
               if (validationRetryCount > MaxValidationRetries) {
-                log.warning(
-                  s"Root node missing after $validationRetryCount validation attempts. " +
-                    s"Proceeding to regular sync — missing nodes will be fetched on-demand during block execution."
-                )
-                // Skip validation and proceed: mark SNAP done, start regular sync.
-                // With deferred merkleization, the root node was never built from flat data.
-                // Regular sync's StateNodeFetcher will retrieve it via GetTrieNodes when needed.
-                appStateStorage.snapSyncDone().commit()
-                context.parent ! Done
+                // Root node still missing after all retries — state trie is incomplete.
+                // RegularSync cannot recover this: eth/68 peers don't serve GetNodeData, and
+                // local Besu uses BONSAI storage (state diffs, not hash-keyed trie nodes).
+                // Restart SNAP with a fresh pivot rather than handing broken state to RegularSync.
+                val retryMsg = s"root node missing after $validationRetryCount validation retries"
+                if (recordCriticalFailure(retryMsg)) {
+                  log.error("Too many critical SNAP failures — falling back to fast sync")
+                  fallbackToFastSync()
+                } else {
+                  log.warning(
+                    s"Root node missing after $validationRetryCount validation attempts. " +
+                      s"Restarting SNAP sync with a fresh pivot to rebuild the state trie."
+                  )
+                  validationRetryCount = 0
+                  restartSnapSync(retryMsg)
+                }
               } else {
                 log.error(s"Root node is missing (retry attempt $validationRetryCount of $MaxValidationRetries)")
                 log.info("Retrying validation after brief delay...")
