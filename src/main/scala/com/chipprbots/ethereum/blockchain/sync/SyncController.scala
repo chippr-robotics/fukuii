@@ -549,6 +549,15 @@ class SyncController(
       return
     }
 
+    // Recovery flag: -Dfukuii.snap.clearDoneOnStart=true clears SnapSyncDone to re-enter healing.
+    // Use when healing completed prematurely (BUG-006: root mismatch) to resume without a full re-sync.
+    if (doSnapSync && System.getProperty("fukuii.snap.clearDoneOnStart", "false").toBoolean) {
+      if (appStateStorage.isSnapSyncDone()) {
+        log.warning("fukuii.snap.clearDoneOnStart=true: clearing SnapSyncDone to re-enter SNAP healing")
+        appStateStorage.clearSnapSyncDone().commit()
+      }
+    }
+
     (appStateStorage.isSnapSyncDone(), appStateStorage.isFastSyncDone(), doSnapSync, doFastSync) match {
       case (false, _, true, _) =>
         // SNAP sync requested - just start it
