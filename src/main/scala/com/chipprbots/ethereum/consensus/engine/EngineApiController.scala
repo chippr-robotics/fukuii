@@ -19,6 +19,7 @@ import com.chipprbots.ethereum.domain.Withdrawal
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
 import com.chipprbots.ethereum.jsonrpc.JsonRpcResponse
+import com.chipprbots.ethereum.utils.BuildInfo
 import com.chipprbots.ethereum.utils.Logger
 
 /** Handles Engine API JSON-RPC methods (engine_* namespace). This controller processes raw JSON requests and delegates
@@ -528,7 +529,7 @@ class EngineApiController(
         JObject(
           "code" -> JString("FK"),
           "name" -> JString("Fukuii"),
-          "version" -> JString("0.1.240"),
+          "version" -> JString(BuildInfo.version),
           "commit" -> JString(com.chipprbots.ethereum.utils.Config.clientVersion.takeRight(8))
         )
       )

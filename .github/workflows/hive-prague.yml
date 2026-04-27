@@ -104,8 +104,8 @@ jobs:
           RUN apt-get update && apt-get install -y --no-install-recommends jq curl && rm -rf /var/lib/apt/lists/*
           WORKDIR /app
           RUN mkdir -p /app/fukuii/lib /app/data /app/hive-conf
-          COPY fukuii-assembly-*.jar /app/fukuii/lib/fukuii-assembly-0.1.240.jar
-          ENTRYPOINT ["java", "-jar", "/app/fukuii/lib/fukuii-assembly-0.1.240.jar"]
+          COPY fukuii-assembly-*.jar /app/fukuii/lib/fukuii-assembly.jar
+          ENTRYPOINT ["java", "-jar", "/app/fukuii/lib/fukuii-assembly.jar"]
           DOCKER
           docker build -t chipprbots/fukuii:latest target/quick-docker/
 

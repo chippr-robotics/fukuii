@@ -41,7 +41,7 @@ services:
       - "-Dconfig.file=/app/conf/sepolia.conf"
       - "-Dfukuii.datadir=/app/data"
       - "-jar"
-      - "/app/fukuii/lib/fukuii-assembly-0.1.240.jar"
+      - "/app/fukuii/lib/fukuii-assembly.jar"
       - "sepolia"
     networks:
       - sepolia-network

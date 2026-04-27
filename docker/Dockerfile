@@ -80,6 +80,15 @@ COPY --from=builder --chown=fukuii:fukuii /fukuii-dist /app/fukuii
 # Users can mount their own config files at /app/conf to override defaults
 COPY --from=builder --chown=fukuii:fukuii /fukuii-dist/conf /app/conf
 
+# Stable, version-agnostic symlink for the assembly JAR. Compose files,
+# hive adapters, and any other consumer should reference this path —
+# never the versioned filename — so a version bump doesn't require a
+# coordinated edit across every downstream config.
+RUN cd /app/fukuii/lib && \
+    ln -sf "$(ls fukuii-assembly-*.jar | head -1)" fukuii-assembly.jar && \
+    basename "$(readlink -f fukuii-assembly.jar)" \
+      | sed -E 's/^fukuii-assembly-(.*)\.jar$/fukuii-\1/' > /version.txt
+
 # Create healthcheck script
 RUN echo '#!/bin/bash\n\
 # Health check script for Fukuii\n\
