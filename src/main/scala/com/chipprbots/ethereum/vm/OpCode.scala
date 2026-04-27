@@ -1404,16 +1404,25 @@ case object SELFDESTRUCT extends OpCode(0xff, 1, 0, _.G_selfdestruct) {
     val gasRefund: BigInt =
       if (state.addressesToDelete contains state.ownAddress) 0 else state.config.feeSchedule.R_selfdestruct
 
-    val world =
-      if (state.ownAddress == refundAddr)
-        state.world.removeAllEther(state.ownAddress)
-      else
-        state.world.transfer(state.ownAddress, refundAddr, state.ownBalance)
-
     // EIP-6780: Post-Olympia, SELFDESTRUCT only destroys contracts created in the same transaction.
     // Pre-existing contracts only have their balance transferred.
     val createdInThisTx = !state.originalWorld.accountExists(state.ownAddress)
     val shouldDelete = !state.config.eip6780Enabled || createdInThisTx
+
+    // Self-transfer ether handling differs by deletion outcome:
+    //  - shouldDelete: account is wiped at end-of-tx (deleteAccounts), so the balance is destroyed
+    //    regardless. Pre-EIP-6780 always reached here; matched the historical "transfer-to-self
+    //    burns ether" Subtlety. We zero now so intermediate reads (BALANCE within the same tx)
+    //    see 0, matching geth/besu.
+    //  - !shouldDelete (Cancun+ pre-existing contract): balance must be preserved. The "transfer
+    //    self → self" is a no-op in any rational accounting. Required by bcValidBlockTest/
+    //    reentrencySuicide, which calls SELFDESTRUCT(self) and expects the balance to remain.
+    val world =
+      if (state.ownAddress == refundAddr) {
+        if (shouldDelete) state.world.removeAllEther(state.ownAddress)
+        else state.world.touchAccounts(state.ownAddress)
+      } else
+        state.world.transfer(state.ownAddress, refundAddr, state.ownBalance)
 
     // Emit synthetic Transfer log for traceTransfers (SELFDESTRUCT value transfers)
     val transferLogs =
