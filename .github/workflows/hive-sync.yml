@@ -58,3 +58,8 @@ jobs:
       # peer-count check — masking real interop issues. nethermind has no such
       # constraint.
       clients: 'fukuii,go-ethereum,nethermind'
+      # Gate the build on fukuii-touching tests only. Upstream pairs like
+      # geth↔nethermind or nethermind↔nethermind can fail for reasons that
+      # have nothing to do with fukuii (and we have no leverage to fix);
+      # surfacing them in the summary is useful, gating on them is not.
+      gate_pattern: 'fukuii'
