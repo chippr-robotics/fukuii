@@ -618,6 +618,9 @@ class SNAPSyncController(
               s"Proceeding to validation — regular sync will recover missing nodes on-demand."
           )
           consecutiveUnproductiveHealingRounds = 0
+          // Commit current pivot root before transitioning to validation (deferred from refreshPivotInPlace)
+          pivotBlock.foreach(b => appStateStorage.putSnapSyncPivotBlock(b).commit())
+          stateRoot.foreach(r => appStateStorage.putSnapSyncStateRoot(r).commit())
           progressMonitor.startPhase(StateValidation)
           currentPhase = StateValidation
           validateState()
