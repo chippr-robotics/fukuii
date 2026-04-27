@@ -177,8 +177,16 @@ class OlympiaSelfDestructSpec extends AnyWordSpec with Matchers {
 
     "edge cases" should {
 
-      "handle self-destruct to self (removes all ether)" taggedAs (UnitTest, VMTest, OlympiaTest) in {
-        // SELFDESTRUCT to own address
+      "preserve balance on self-destruct to self for pre-existing contract (EIP-6780)" taggedAs (
+        UnitTest,
+        VMTest,
+        OlympiaTest
+      ) in {
+        // SELFDESTRUCT to own address. Per EIP-6780, a pre-existing contract is NOT deleted
+        // and "transfer self → self" is a no-op — balance must be preserved. The hive
+        // bcValidBlockTest/reentrencySuicide_Cancun fixture relies on this; the previous
+        // unconditional `removeAllEther` here burned 3 wei in call #2 of the reentrancy
+        // chain and produced a divergent state root.
         val codeSelfDestructToSelf: Assembly = Assembly(
           PUSH20,
           ownerAddr.bytes,
@@ -201,9 +209,7 @@ class OlympiaSelfDestructSpec extends AnyWordSpec with Matchers {
         val result = vm.run(context)
 
         result.error shouldBe None
-        // Pre-existing: balance sent to self, but since same address, removeAllEther is called
-        result.world.getBalance(ownerAddr) shouldEqual UInt256.Zero
-        // Pre-existing in Olympia: should NOT be deleted
+        result.world.getBalance(ownerAddr) shouldEqual ownerBalance
         result.addressesToDelete should not contain ownerAddr
       }
 
