@@ -40,7 +40,12 @@ java -Xmx4g \
   -jar target/scala-3.3.7/fukuii-assembly-0.1.240.jar mordor
 
 # ETC mainnet (fast sync only)
-java -Xmx4g \
+java -Xmx8g \
+  -XX:+UseG1GC \
+  -XX:MaxGCPauseMillis=200 \
+  -XX:G1HeapRegionSize=16m \
+  -XX:InitiatingHeapOccupancyPercent=40 \
+  -Xlog:gc*:file=/media/dev/2tb/data/blockchain/fukuii/etc/logs/gc.log:time,uptime:filecount=5,filesize=20m \
   -Dfukuii.datadir=/media/dev/2tb/data/blockchain/fukuii/etc \
   -Dfukuii.network=etc \
   -Dfukuii.network.rpc.http.interface=0.0.0.0 \
@@ -52,7 +57,12 @@ java -Xmx4g \
   -jar target/scala-3.3.7/fukuii-assembly-0.1.240.jar etc
 
 # ETC mainnet (SNAP sync)
-java -Xmx4g \
+java -Xmx8g \
+  -XX:+UseG1GC \
+  -XX:MaxGCPauseMillis=200 \
+  -XX:G1HeapRegionSize=16m \
+  -XX:InitiatingHeapOccupancyPercent=40 \
+  -Xlog:gc*:file=/media/dev/2tb/data/blockchain/fukuii/etc/logs/gc.log:time,uptime:filecount=5,filesize=20m \
   -Dfukuii.datadir=/media/dev/2tb/data/blockchain/fukuii/etc \
   -Dfukuii.network=etc \
   -Dfukuii.network.rpc.http.interface=0.0.0.0 \

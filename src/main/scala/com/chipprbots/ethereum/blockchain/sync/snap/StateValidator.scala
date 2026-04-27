@@ -182,147 +182,150 @@ class StateValidator(mptStorage: MptStorage) {
   // Path-tracking trie walk for GetTrieNodes healing
   // ========================================
 
-  /** Find all missing trie nodes with GetTrieNodes-compatible pathsets. */
+  /** Find all missing trie nodes with GetTrieNodes-compatible pathsets.
+    *
+    * Uses iterative BFS queues instead of recursion to avoid StackOverflowError on
+    * large tries (ETC mainnet: ~90M accounts, trie depth up to 64 nibbles).
+    * Each storage trie is walked with its own visited set (independent BFS), matching
+    * the original per-storage-trie isolation.
+    *
+    * Mirrors Besu TrieNodeHealingRequest.getChildRequests() (java:94-125) and
+    * go-ethereum trie/sync.go:ProcessNode() (line 419-448): every retrieved node
+    * enqueues ALL hash-referenced children before moving on.
+    */
   def findMissingNodesWithPaths(stateRoot: ByteString): Either[String, Seq[(Seq[ByteString], ByteString)]] = {
     val result = mutable.ArrayBuffer[(Seq[ByteString], ByteString)]()
 
     try {
       val rootNode = mptStorage.get(stateRoot.toArray)
-      traverseAccountTrieWithPaths(rootNode, mptStorage, Array.empty[Byte], result, mutable.Set.empty)
+      walkAccountTrieBFS(rootNode, result)
       Right(result.toSeq)
     } catch {
-      case e: MerklePatriciaTrie.MissingNodeException =>
+      case _: MerklePatriciaTrie.MissingNodeException =>
         val compactPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-        result += ((Seq(compactPath), e.hash))
+        result += ((Seq(compactPath), stateRoot))
         Right(result.toSeq)
       case e: Exception =>
         Left(s"Trie walk failed: ${e.getMessage}")
     }
   }
 
-  /** Walk the account trie, tracking nibble paths for missing nodes. Also checks storage tries. */
-  private def traverseAccountTrieWithPaths(
-      node: MptNode,
-      storage: MptStorage,
-      currentNibblePath: Array[Byte],
-      result: mutable.ArrayBuffer[(Seq[ByteString], ByteString)],
-      visited: mutable.Set[ByteString]
+  private def walkAccountTrieBFS(
+      rootNode: MptNode,
+      result: mutable.ArrayBuffer[(Seq[ByteString], ByteString)]
   ): Unit = {
     import com.chipprbots.ethereum.domain.Account.accountSerializer
 
-    node match {
-      case leaf: LeafNode =>
-        try {
-          val account = accountSerializer.fromBytes(leaf.value.toArray)
-          if (account.storageRoot != com.chipprbots.ethereum.domain.Account.EmptyStorageRootHash) {
-            val leafKeyNibbles = leaf.key.toArray
-            val fullNibblePath = currentNibblePath ++ leafKeyNibbles
-            val accountHashBytes = HexPrefix.nibblesToBytes(fullNibblePath)
+    // Queue items: (node, nibble-path-so-far)
+    val queue   = mutable.Queue[(MptNode, Array[Byte])]((rootNode, Array.empty))
+    val visited = mutable.Set[ByteString]()
 
-            try {
-              val storageRoot = storage.get(account.storageRoot.toArray)
-              traverseStorageTrieWithPaths(
-                storageRoot,
-                storage,
-                Array.empty[Byte],
-                ByteString(accountHashBytes),
-                result,
-                mutable.Set.empty
-              )
-            } catch {
-              case e: MerklePatriciaTrie.MissingNodeException =>
-                val compactPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-                result += ((Seq(ByteString(accountHashBytes), compactPath), e.hash))
-            }
-          }
-        } catch {
-          case _: Exception => ()
-        }
+    while (queue.nonEmpty) {
+      val (node, nibblePath) = queue.dequeue()
 
-      case ext: ExtensionNode =>
-        val nodeHash = ByteString(ext.hash)
-        if (!visited.contains(nodeHash)) {
-          visited += nodeHash
-          val sharedKeyNibbles = ext.sharedKey.toArray
-          val newPath = currentNibblePath ++ sharedKeyNibbles
-          traverseAccountTrieWithPaths(ext.next, storage, newPath, result, visited)
-        }
+      node match {
+        case NullNode => ()
 
-      case branch: BranchNode =>
-        val nodeHash = ByteString(branch.hash)
-        if (!visited.contains(nodeHash)) {
-          visited += nodeHash
-          for (i <- 0 until 16) {
-            val child = branch.children(i)
-            if (!child.isNull) {
-              val newPath = currentNibblePath :+ i.toByte
-              traverseAccountTrieWithPaths(child, storage, newPath, result, visited)
-            }
-          }
-        }
-
-      case hash: HashNode =>
-        val hashKey = ByteString(hash.hash)
-        if (!visited.contains(hashKey)) {
+        case leaf: LeafNode =>
           try {
-            val resolvedNode = storage.get(hash.hash)
-            traverseAccountTrieWithPaths(resolvedNode, storage, currentNibblePath, result, visited)
-          } catch {
-            case _: MerklePatriciaTrie.MissingNodeException =>
-              val compactPath = ByteString(HexPrefix.encode(currentNibblePath, isLeaf = false))
-              result += ((Seq(compactPath), ByteString(hash.hash)))
-          }
-        }
+            val account = accountSerializer.fromBytes(leaf.value.toArray)
+            if (account.storageRoot != com.chipprbots.ethereum.domain.Account.EmptyStorageRootHash) {
+              val fullNibblePath  = nibblePath ++ leaf.key.toArray
+              val accountHashBytes = HexPrefix.nibblesToBytes(fullNibblePath)
+              try {
+                val storageRoot = mptStorage.get(account.storageRoot.toArray)
+                // Each storage trie gets its own BFS + visited set (independent walk)
+                walkStorageTrieBFS(storageRoot, ByteString(accountHashBytes), result)
+              } catch {
+                case _: MerklePatriciaTrie.MissingNodeException =>
+                  val compactPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+                  result += ((Seq(ByteString(accountHashBytes), compactPath), account.storageRoot))
+              }
+            }
+          } catch { case _: Exception => () }
 
-      case NullNode => ()
+        case ext: ExtensionNode =>
+          val nodeHash = ByteString(ext.hash)
+          if (!visited.contains(nodeHash)) {
+            visited += nodeHash
+            queue.enqueue((ext.next, nibblePath ++ ext.sharedKey.toArray))
+          }
+
+        case branch: BranchNode =>
+          val nodeHash = ByteString(branch.hash)
+          if (!visited.contains(nodeHash)) {
+            visited += nodeHash
+            for (i <- 0 until 16) {
+              val child = branch.children(i)
+              if (!child.isNull)
+                queue.enqueue((child, nibblePath :+ i.toByte))
+            }
+          }
+
+        case hash: HashNode =>
+          // Do NOT add hash.hash to visited here: decodeNode sets cachedHash = lookupKey,
+          // so the resolved node shares the same hash and will add itself when dequeued.
+          // Adding it here would cause the resolved node's branch/extension case to skip itself.
+          val hashKey = ByteString(hash.hash)
+          if (!visited.contains(hashKey)) {
+            try {
+              val resolvedNode = mptStorage.get(hash.hash)
+              queue.enqueue((resolvedNode, nibblePath))
+            } catch {
+              case _: MerklePatriciaTrie.MissingNodeException =>
+                val compactPath = ByteString(HexPrefix.encode(nibblePath, isLeaf = false))
+                result += ((Seq(compactPath), ByteString(hash.hash)))
+            }
+          }
+      }
     }
   }
 
-  /** Walk a storage trie, tracking nibble paths for missing nodes. */
-  private def traverseStorageTrieWithPaths(
-      node: MptNode,
-      storage: MptStorage,
-      currentNibblePath: Array[Byte],
+  private def walkStorageTrieBFS(
+      rootNode: MptNode,
       accountHash: ByteString,
-      result: mutable.ArrayBuffer[(Seq[ByteString], ByteString)],
-      visited: mutable.Set[ByteString]
-  ): Unit =
-    node match {
-      case _: LeafNode | NullNode => ()
+      result: mutable.ArrayBuffer[(Seq[ByteString], ByteString)]
+  ): Unit = {
+    val queue   = mutable.Queue[(MptNode, Array[Byte])]((rootNode, Array.empty))
+    val visited = mutable.Set[ByteString]()
 
-      case ext: ExtensionNode =>
-        val nodeHash = ByteString(ext.hash)
-        if (!visited.contains(nodeHash)) {
-          visited += nodeHash
-          val sharedKeyNibbles = ext.sharedKey.toArray
-          val newPath = currentNibblePath ++ sharedKeyNibbles
-          traverseStorageTrieWithPaths(ext.next, storage, newPath, accountHash, result, visited)
-        }
+    while (queue.nonEmpty) {
+      val (node, nibblePath) = queue.dequeue()
 
-      case branch: BranchNode =>
-        val nodeHash = ByteString(branch.hash)
-        if (!visited.contains(nodeHash)) {
-          visited += nodeHash
-          for (i <- 0 until 16) {
-            val child = branch.children(i)
-            if (!child.isNull) {
-              val newPath = currentNibblePath :+ i.toByte
-              traverseStorageTrieWithPaths(child, storage, newPath, accountHash, result, visited)
+      node match {
+        case _: LeafNode | NullNode => ()
+
+        case ext: ExtensionNode =>
+          val nodeHash = ByteString(ext.hash)
+          if (!visited.contains(nodeHash)) {
+            visited += nodeHash
+            queue.enqueue((ext.next, nibblePath ++ ext.sharedKey.toArray))
+          }
+
+        case branch: BranchNode =>
+          val nodeHash = ByteString(branch.hash)
+          if (!visited.contains(nodeHash)) {
+            visited += nodeHash
+            for (i <- 0 until 16) {
+              val child = branch.children(i)
+              if (!child.isNull)
+                queue.enqueue((child, nibblePath :+ i.toByte))
             }
           }
-        }
 
-      case hash: HashNode =>
-        val hashKey = ByteString(hash.hash)
-        if (!visited.contains(hashKey)) {
-          try {
-            val resolvedNode = storage.get(hash.hash)
-            traverseStorageTrieWithPaths(resolvedNode, storage, currentNibblePath, accountHash, result, visited)
-          } catch {
-            case _: MerklePatriciaTrie.MissingNodeException =>
-              val compactPath = ByteString(HexPrefix.encode(currentNibblePath, isLeaf = false))
-              result += ((Seq(accountHash, compactPath), ByteString(hash.hash)))
+        case hash: HashNode =>
+          val hashKey = ByteString(hash.hash)
+          if (!visited.contains(hashKey)) {
+            try {
+              val resolvedNode = mptStorage.get(hash.hash)
+              queue.enqueue((resolvedNode, nibblePath))
+            } catch {
+              case _: MerklePatriciaTrie.MissingNodeException =>
+                val compactPath = ByteString(HexPrefix.encode(nibblePath, isLeaf = false))
+                result += ((Seq(accountHash, compactPath), ByteString(hash.hash)))
+            }
           }
-        }
+      }
     }
+  }
 }

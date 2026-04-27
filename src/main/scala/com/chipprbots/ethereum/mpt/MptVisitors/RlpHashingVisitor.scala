@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.mpt.MptVisitors
 
 import org.apache.pekko.util.ByteString
 
+import scala.collection.mutable
+
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
 import com.chipprbots.ethereum.mpt.BranchNode
@@ -13,8 +15,10 @@ import com.chipprbots.ethereum.mpt.Node
 import com.chipprbots.ethereum.rlp.RLPEncodeable
 import com.chipprbots.ethereum.rlp.RLPValue
 
+// C1: ArrayBuffer instead of linked-list cons cells — contiguous storage reduces GC object count.
+// Mirrors go-ethereum triedb/hashdb/database.go: Cap() flushes oldest nodes when dirtiesSize > limit.
 class NodeCapper(withUpdates: Boolean) {
-  private var nodesToUpdate = List.empty[(NodeHash, NodeEncoded)]
+  private val nodesToUpdate = mutable.ArrayBuffer.empty[(NodeHash, NodeEncoded)]
 
   def capNode(nodeEncoded: RLPEncodeable, depth: Int): RLPEncodeable =
     if (depth > 0)
@@ -29,13 +33,13 @@ class NodeCapper(withUpdates: Boolean) {
     else {
       val hash = Node.hashFn(asArray)
       if (withUpdates) {
-        nodesToUpdate = (ByteString(hash), asArray) :: nodesToUpdate
+        nodesToUpdate += ((ByteString(hash), asArray))
       }
       RLPValue(hash)
     }
   }
 
-  def getNodesToUpdate: List[(NodeHash, NodeEncoded)] = nodesToUpdate
+  def getNodesToUpdate: Seq[(NodeHash, NodeEncoded)] = nodesToUpdate.toSeq
 }
 
 class RlpHashingVisitor(downstream: MptVisitor[RLPEncodeable], depth: Int, nodeCapper: NodeCapper)

@@ -13,7 +13,12 @@ if [ ! -f "$JAR" ]; then
   exit 1
 fi
 
-exec java -Xmx4g \
+exec java -Xmx8g \
+  -XX:+UseG1GC \
+  -XX:MaxGCPauseMillis=200 \
+  -XX:G1HeapRegionSize=16m \
+  -XX:InitiatingHeapOccupancyPercent=40 \
+  -Xlog:gc*:file=/media/dev/2tb/data/blockchain/fukuii/etc/logs/gc.log:time,uptime:filecount=5,filesize=20m \
   -Dconfig.file="$SCRIPT_DIR/run-classic.conf" \
   -Dfukuii.datadir=/media/dev/2tb/data/blockchain/fukuii/etc \
   -jar "$JAR" etc "$@"

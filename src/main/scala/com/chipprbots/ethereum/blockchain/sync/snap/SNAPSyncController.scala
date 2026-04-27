@@ -127,9 +127,7 @@ class SNAPSyncController(
   private var healingRequestTask: Option[Cancellable] = None
   private var storageStagnationRefreshAttempted: Boolean = false
   private var trieWalkInProgress: Boolean = false
-  private var consecutiveUnproductiveHealingRounds: Int = 0
-  private val maxUnproductiveHealingRounds: Int =
-    3 // After 3 rounds of finding same missing nodes with 0 healed, skip to validation
+  private var healingRoundCount: Int = 0
   private var bootstrapCheckTask: Option[Cancellable] = None
   private var pivotBootstrapRetryTask: Option[Cancellable] = None
   private var rateTrackerTuneTask: Option[Cancellable] = None
@@ -386,7 +384,6 @@ class SNAPSyncController(
 
     case ProgressNodesHealed(count) =>
       progressMonitor.incrementNodesHealed(count)
-      consecutiveUnproductiveHealingRounds = 0 // Reset — healing made progress
 
     case ProgressAccountEstimate(estimatedTotal) =>
       progressMonitor.updateEstimates(accounts = estimatedTotal)
@@ -615,8 +612,8 @@ class SNAPSyncController(
     case TrieWalkResult(missingNodes) if currentPhase == StateHealing =>
       trieWalkInProgress = false
       if (missingNodes.isEmpty) {
-        log.info("Trie walk found no missing nodes — healing complete!")
-        consecutiveUnproductiveHealingRounds = 0
+        log.info("Trie walk found no missing nodes — healing complete after {} rounds!", healingRoundCount)
+        healingRoundCount = 0
         // Commit final pivot root — deferred from refreshPivotInPlace() to prevent BUG-006.
         // AppStateStorage now reflects the root that healing actually completed against.
         for (b <- pivotBlock; r <- stateRoot)
@@ -625,33 +622,21 @@ class SNAPSyncController(
         currentPhase = StateValidation
         validateState()
       } else {
-        consecutiveUnproductiveHealingRounds += 1
-        if (consecutiveUnproductiveHealingRounds >= maxUnproductiveHealingRounds) {
-          log.warning(
-            s"Healing stagnation: ${missingNodes.size} missing nodes persist after " +
-              s"$consecutiveUnproductiveHealingRounds consecutive rounds with no progress. " +
-              s"Proceeding to validation — regular sync will recover missing nodes on-demand."
-          )
-          consecutiveUnproductiveHealingRounds = 0
-          // Commit current pivot root before transitioning to validation (deferred from refreshPivotInPlace)
-          pivotBlock.foreach(b => appStateStorage.putSnapSyncPivotBlock(b).commit())
-          stateRoot.foreach(r => appStateStorage.putSnapSyncStateRoot(r).commit())
-          progressMonitor.startPhase(StateValidation)
-          currentPhase = StateValidation
-          validateState()
-        } else {
-          log.info(
-            s"Trie walk found ${missingNodes.size} missing nodes — queuing for healing " +
-              s"(round $consecutiveUnproductiveHealingRounds/$maxUnproductiveHealingRounds)"
-          )
-          trieNodeHealingCoordinator.foreach { coordinator =>
-            coordinator ! actors.Messages.QueueMissingNodes(missingNodes)
-          }
-          // Schedule next overlapping trie walk — don't wait for healing to complete
-          scheduler.scheduleOnce(2.minutes) {
-            self ! ScheduledTrieWalk
-          }(ec)
+        // A2: Loop indefinitely until Pending==0 — mirrors go-ethereum sync.go:1400
+        // `for len(s.healer.trieTasks) > 0 || s.healer.scheduler.Pending() > 0` and
+        // Besu SnapWorldDownloadState.java:177-185 `allTasksCompleted()` loop with no round cap.
+        // Missing nodes are re-queued; peer scoring (B5) handles unresponsive peers.
+        healingRoundCount += 1
+        log.info(
+          s"Trie walk found ${missingNodes.size} missing nodes — queuing for healing (round $healingRoundCount)"
+        )
+        trieNodeHealingCoordinator.foreach { coordinator =>
+          coordinator ! actors.Messages.QueueMissingNodes(missingNodes)
         }
+        // Schedule next overlapping trie walk — don't wait for healing to complete
+        scheduler.scheduleOnce(2.minutes) {
+          self ! ScheduledTrieWalk
+        }(ec)
       }
 
     case ScheduledTrieWalk if currentPhase == StateHealing =>
@@ -2736,14 +2721,29 @@ class SNAPSyncController(
 
   /** Final SNAP sync completion — called when both state sync and chain download are done. */
   private def finalizeSnapSync(pivot: BigInt): Unit = {
-    appStateStorage.snapSyncDone().commit()
-
     // Look up the pivot header so we can store a complete "best block" anchor.
     // RegularSync's BranchResolution needs: header, body, number→hash mapping,
     // ChainWeight, and BestBlockInfo (hash + number) to accept blocks that chain
     // from the pivot.
     blockchainReader.getBlockHeaderByNumber(pivot) match {
       case Some(pivotHeader) =>
+        // A5: Root match guard — snapStateRoot must equal pivotHeader.stateRoot before
+        // marking sync done. Mirrors Besu SnapWorldDownloadState.saveWorldState() implicit
+        // verification. If they diverge (BUG-008 class), restart SNAP rather than committing
+        // a broken state.
+        appStateStorage.getSnapSyncStateRoot().foreach { snapRoot =>
+          if (snapRoot != pivotHeader.stateRoot) {
+            log.error(
+              "SNAP finalization aborted: snapStateRoot={} != pivotHeader.stateRoot={}. " +
+                "State trie root mismatch — escalating to SyncController for SNAP restart.",
+              snapRoot.toHex,
+              pivotHeader.stateRoot.toHex
+            )
+            context.parent ! SyncProtocol.HealingImpossible
+            return
+          }
+        }
+
         val pivotHash = pivotHeader.hash
 
         // Store the full block (header + empty body) so getBlockByHash(pivotHash) returns
@@ -2771,6 +2771,12 @@ class SNAPSyncController(
             com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash, pivot)
           )
           .commit()
+
+        // D4: snapSyncDone written AFTER pivot header and best-block info are stored.
+        // Pivot data is written first so a crash between writes leaves the node in a
+        // recoverable state (D3 startup gate detects SnapSyncDone=true with unreachable
+        // root and restarts SNAP). Mirrors Besu SnapSyncStatePersistenceManager ordering.
+        appStateStorage.snapSyncDone().commit()
 
         log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.take(8).toHex})")
 
