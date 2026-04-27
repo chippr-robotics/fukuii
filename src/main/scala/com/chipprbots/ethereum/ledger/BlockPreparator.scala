@@ -142,9 +142,14 @@ class BlockPreparator(
     val blobGasCost = stx.tx match {
       case bt: com.chipprbots.ethereum.domain.BlobTransaction =>
         val blobGasUsed = BigInt(bt.blobVersionedHashes.size) * BigInt(131072)
-        val blobBaseFee = blockHeader.excessBlobGas
-          .map(eg => computeBlobBaseFee(eg, blockHeader.unixTimestamp))
-          .getOrElse(BigInt(1))
+        // eth_simulateV1's blockOverrides.blobBaseFee lets the caller force a
+        // specific blob fee that doesn't necessarily match what excessBlobGas
+        // would derive (e.g. blobBaseFee=0 when excessBlobGas=0 would yield 1).
+        val blobBaseFee = _simulateBlobBaseFeeOverride.getOrElse(
+          blockHeader.excessBlobGas
+            .map(eg => computeBlobBaseFee(eg, blockHeader.unixTimestamp))
+            .getOrElse(BigInt(1))
+        )
         blobGasUsed * blobBaseFee
       case _ => BigInt(0)
     }
@@ -386,21 +391,25 @@ class BlockPreparator(
       blockHeader: BlockHeader,
       world: InMemoryWorldStateProxy,
       precompileRelocations: Map[Address, Address] = Map.empty,
-      traceTransfers: Boolean = false
+      traceTransfers: Boolean = false,
+      blobBaseFeeOverride: Option[BigInt] = None
   )(implicit blockchainConfig: BlockchainConfig): TxResult = {
     // Store simulation flags temporarily for runVM to pick up
     _simulatePrecompileRelocations = precompileRelocations
     _simulateTraceTransfers = traceTransfers
+    _simulateBlobBaseFeeOverride = blobBaseFeeOverride
     try executeTransaction(stx, senderAddress, blockHeader, world)
     finally {
       _simulatePrecompileRelocations = Map.empty
       _simulateTraceTransfers = false
+      _simulateBlobBaseFeeOverride = None
     }
   }
 
   // Thread-local-like storage for precompile relocations during simulation
   @volatile private var _simulatePrecompileRelocations: Map[Address, Address] = Map.empty
   @volatile private var _simulateTraceTransfers: Boolean = false
+  @volatile private var _simulateBlobBaseFeeOverride: Option[BigInt] = None
 
   private[ledger] def executeTransaction(
       stx: SignedTransaction,
