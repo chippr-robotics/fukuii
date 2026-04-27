@@ -16,12 +16,12 @@ import com.chipprbots.ethereum.testing.Tags._
 
 /** Direct coverage for EIP-4895 withdrawal-validation additions to `StdBlockValidator`:
   *   - `validateWithdrawalsPresence` — reject body-only withdrawals with a pre-Shanghai header.
-  *   - `validateWithdrawalsOrdering` — reject duplicated or out-of-order withdrawal indices.
+  *   - `validateWithdrawalsRoot` — the body's withdrawals must hash to the header's declared root.
   *
-  * Corresponds to the `InvalidBlocks/bc4895-withdrawals` hive consensus sub-suite — tests that submit malformed
-  * withdrawal blocks and expect rejection. Previously Fukuii accepted any block whose `header.withdrawalsRoot` matched
-  * a trie computed over its own (bad) body, because the root comparison is self-consistent: a mis-ordered body produces
-  * a matching mis-ordered root.
+  * Note: the EL does NOT enforce strict ordering of withdrawal `index` values. Indices are CL-side metadata; the EL
+  * trusts whatever the CL hands it as long as the trie root matches the body. The `bc4895-withdrawals` hive fixtures
+  * (`twoIdenticalIndex`, `differentValidatorToTheSameAddress`, etc.) explicitly exercise this — they ship blocks with
+  * non-monotonic / duplicate indices and `expectException: None`, expecting the block to be accepted.
   */
 class StdBlockValidatorWithdrawalsSpec extends AnyFlatSpec with Matchers {
 
@@ -29,13 +29,6 @@ class StdBlockValidatorWithdrawalsSpec extends AnyFlatSpec with Matchers {
   // Fixtures.Blocks.ValidBlock.body, so the earlier checks in validateHeaderAndBody pass.
   private val preShanghaiHeader: BlockHeader = Fixtures.Blocks.ValidBlock.header
   private val preShanghaiBody = Fixtures.Blocks.ValidBlock.body
-
-  // A dummy Shanghai withdrawals root — the withdrawals root check happens AFTER presence +
-  // ordering, so tests that expect a presence/ordering error don't care what's here.
-  private val dummyRoot: ByteString = ByteString(Hex.decode("00" * 32))
-
-  private def shanghaiHeader(root: ByteString = dummyRoot): BlockHeader =
-    preShanghaiHeader.copy(extraFields = HefPostShanghai(BigInt(0), root))
 
   private val defaultAddr = Address(Hex.decode("4675c7e5baafbffbca748158becba61ef3b0a263"))
 
@@ -70,39 +63,6 @@ class StdBlockValidatorWithdrawalsSpec extends AnyFlatSpec with Matchers {
     val body = preShanghaiBody.copy(withdrawals = Some(Seq(withdrawal(0))))
     val result = StdBlockValidator.validateHeaderAndBody(preShanghaiHeader, body)
     result shouldBe Left(BlockWithdrawalsOrphanedError)
-  }
-
-  it should "reject a Shanghai block whose withdrawals have duplicate indices" taggedAs (
-    UnitTest,
-    ConsensusTest
-  ) in {
-    val bad = Seq(withdrawal(3), withdrawal(3))
-    val body = preShanghaiBody.copy(withdrawals = Some(bad))
-    val result = StdBlockValidator.validateHeaderAndBody(shanghaiHeader(), body)
-    result shouldBe Left(BlockWithdrawalsIndexError)
-  }
-
-  it should "reject a Shanghai block whose withdrawals decrease in index" taggedAs (
-    UnitTest,
-    ConsensusTest
-  ) in {
-    val bad = Seq(withdrawal(5), withdrawal(4))
-    val body = preShanghaiBody.copy(withdrawals = Some(bad))
-    val result = StdBlockValidator.validateHeaderAndBody(shanghaiHeader(), body)
-    result shouldBe Left(BlockWithdrawalsIndexError)
-  }
-
-  it should "run ordering validation before root validation (so a bad root and bad ordering both register as Index)" taggedAs (
-    UnitTest,
-    ConsensusTest
-  ) in {
-    // Header declares the dummy root; body has out-of-order withdrawals. The root comparison
-    // would fail later, but the ordering check should short-circuit first — so the reported
-    // error must be BlockWithdrawalsIndexError, not BlockWithdrawalsRootError.
-    val bad = Seq(withdrawal(10), withdrawal(3))
-    val body = preShanghaiBody.copy(withdrawals = Some(bad))
-    val result = StdBlockValidator.validateHeaderAndBody(shanghaiHeader(dummyRoot), body)
-    result shouldBe Left(BlockWithdrawalsIndexError)
   }
 
   it should "accept a Shanghai block whose body declares explicitly-empty withdrawals matching the EmptyMpt root" taggedAs (

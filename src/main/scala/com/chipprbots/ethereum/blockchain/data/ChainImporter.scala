@@ -93,13 +93,12 @@ class ChainImporter(
               .getOrElse(ChainWeight.zero)
             val newWeight = parentWeight.increase(block.header)
 
-            // Post-Cancun (EIP-4844) blocks carrying blob transactions need KZG sidecars
-            // to be re-executed, and chain.rlp doesn't ship them. go-ethereum's `geth import`
-            // rejects such blocks; we keep them in the DB (so queries by number work) but
-            // don't advance the best-block pointer into the gap. A Cancun block with
-            // blobGasUsed == 0 has no blob txs, so sidecars aren't needed — advance as usual.
-            val hasBlobTxs = block.header.blobGasUsed.exists(_ > 0)
-            blockchainWriter.save(block, receipts, newWeight, saveAsBestBlock = !hasBlobTxs)
+            // Block was fully validated and executed, including all transactions (blob ones
+            // included). Sidecars don't participate in the consensus state transition — they
+            // are network-layer attachments verified separately at gossip time. The hive
+            // consensus / consume-engine fixtures expect head to advance over blob blocks;
+            // mainnet ingestion uses Engine API + sidecar verification, not chain.rlp.
+            blockchainWriter.save(block, receipts, newWeight, saveAsBestBlock = true)
             imported += 1
 
             if (imported % 10 == 0 || blockNum == blocks.last.header.number) {
