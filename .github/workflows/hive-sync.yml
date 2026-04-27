@@ -68,6 +68,11 @@ jobs:
       # GitHub runner, four EL JVMs (fukuii + geth + nethermind + a 4th)
       # warm up concurrently and contend for CPU during the critical first
       # ~10s of startup, blowing the 60s budget on flaky tests like
-      # `sync fukuii from go-ethereum`. parallelism=2 makes total runtime
-      # 2× longer but eliminates the timeout flakes.
-      parallelism: 2
+      # `sync fukuii from go-ethereum`. parallelism=2 cut the worst flakes
+      # but the JVM under JIT warmup is still contending with one other EL
+      # for the 2 cores and occasionally tips past the 60s budget — the
+      # `eth_simulateV1` PR reliably hit this. parallelism=1 fully
+      # serializes the suite (~2× wall time) and gives every fukuii sink
+      # a full core for its 5–10 s JVM warmup, eliminating the timeout
+      # flake without touching the upstream hive 60s timeout.
+      parallelism: 1
