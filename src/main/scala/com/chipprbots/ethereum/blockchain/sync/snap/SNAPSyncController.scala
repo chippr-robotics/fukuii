@@ -559,6 +559,7 @@ class SNAPSyncController(
 
     case ByteCodeSyncComplete if !bytecodePhaseComplete =>
       bytecodePhaseComplete = true
+      appStateStorage.putSnapSyncBytecodeComplete(true).commit()
       progressMonitor.setBytecodeComplete()
       val downloaded = progressMonitor.currentProgress.bytecodesDownloaded
       log.info(
@@ -578,6 +579,7 @@ class SNAPSyncController(
 
     case StorageRangeSyncComplete if !storagePhaseComplete =>
       storagePhaseComplete = true
+      appStateStorage.putSnapSyncStorageComplete(true).commit()
       log.info(s"Storage range sync complete. ByteCode: $bytecodePhaseComplete, Accounts: $accountsComplete")
       checkAllDownloadsComplete()
 
@@ -1015,73 +1017,85 @@ class SNAPSyncController(
               s"Recovery: pivot $pivot drifted $drift blocks from network best $networkBest. " +
                 "Clearing accounts-complete flag and restarting fresh."
             )
-            appStateStorage.putSnapSyncAccountsComplete(false).commit()
+            appStateStorage.putSnapSyncAccountsComplete(false)
+              .and(appStateStorage.putSnapSyncStorageComplete(false))
+              .and(appStateStorage.putSnapSyncBytecodeComplete(false))
+              .commit()
             // Fall through to normal startup
           } else {
             // Pivot is fresh enough — recover bytecodes + storage only
             pivotBlock = Some(pivot)
             stateRoot = Some(rootBs)
             accountsComplete = true
-            bytecodePhaseComplete = false
-            storagePhaseComplete = false
+
+            val storageAlreadyDone  = appStateStorage.isSnapSyncStorageComplete()
+            val bytecodeAlreadyDone = appStateStorage.isSnapSyncBytecodeComplete()
+            storagePhaseComplete  = storageAlreadyDone
+            bytecodePhaseComplete = bytecodeAlreadyDone
+
+            if (storageAlreadyDone)  log.info("Recovery: storage phase already complete — skipping re-download")
+            if (bytecodeAlreadyDone) log.info("Recovery: bytecode phase already complete — skipping re-download")
 
             log.info(s"Recovery: resuming bytecodes + storage sync from pivot $pivot (drift=$drift blocks)")
 
-            // Create bytecode coordinator (will receive NoMore immediately since we have no new accounts)
             val storage = getOrCreateMptStorage(pivot)
             coordinatorGeneration += 1
 
-            bytecodeCoordinator = Some(
-              context.actorOf(
-                actors.ByteCodeCoordinator
-                  .props(
-                    evmCodeStorage = evmCodeStorage,
-                    networkPeerManager = networkPeerManager,
-                    requestTracker = requestTracker,
-                    batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
-                    snapSyncController = self
-                  )
-                  .withDispatcher("sync-dispatcher"),
-                s"bytecode-coordinator-$coordinatorGeneration"
+            if (!bytecodeAlreadyDone) {
+              bytecodeCoordinator = Some(
+                context.actorOf(
+                  actors.ByteCodeCoordinator
+                    .props(
+                      evmCodeStorage = evmCodeStorage,
+                      networkPeerManager = networkPeerManager,
+                      requestTracker = requestTracker,
+                      batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
+                      snapSyncController = self
+                    )
+                    .withDispatcher("sync-dispatcher"),
+                  s"bytecode-coordinator-$coordinatorGeneration"
+                )
               )
-            )
-            bytecodeCoordinator.foreach(_ ! actors.Messages.StartByteCodeSync(Seq.empty))
-            bytecodeRequestTask = Some(
-              scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestByteCodes)(ec, self)
-            )
+              bytecodeCoordinator.foreach(_ ! actors.Messages.StartByteCodeSync(Seq.empty))
+              bytecodeRequestTask = Some(
+                scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestByteCodes)(ec, self)
+              )
+            }
 
-            storageRangeCoordinator = Some(
-              context.actorOf(
-                actors.StorageRangeCoordinator
-                  .props(
-                    stateRoot = rootBs,
-                    networkPeerManager = networkPeerManager,
-                    requestTracker = requestTracker,
-                    mptStorage = storage,
-                    flatSlotStorage = flatSlotStorage,
-                    maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
-                    maxInFlightRequests = snapSyncConfig.storageConcurrency,
-                    requestTimeout = snapSyncConfig.timeout,
-                    snapSyncController = self,
-                    initialMaxInFlightPerPeer = 3, // Recovery: accounts done, storage gets 3 of 5 per-peer budget
-                    initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
-                    minResponseBytes = snapSyncConfig.storageMinResponseBytes,
-                    deferredMerkleization = snapSyncConfig.deferredMerkleization
-                  )
-                  .withDispatcher("sync-dispatcher"),
-                s"storage-range-coordinator-$coordinatorGeneration"
+            if (!storageAlreadyDone) {
+              storageRangeCoordinator = Some(
+                context.actorOf(
+                  actors.StorageRangeCoordinator
+                    .props(
+                      stateRoot = rootBs,
+                      networkPeerManager = networkPeerManager,
+                      requestTracker = requestTracker,
+                      mptStorage = storage,
+                      flatSlotStorage = flatSlotStorage,
+                      maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
+                      maxInFlightRequests = snapSyncConfig.storageConcurrency,
+                      requestTimeout = snapSyncConfig.timeout,
+                      snapSyncController = self,
+                      initialMaxInFlightPerPeer = 3, // Recovery: accounts done, storage gets 3 of 5 per-peer budget
+                      initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
+                      minResponseBytes = snapSyncConfig.storageMinResponseBytes,
+                      deferredMerkleization = snapSyncConfig.deferredMerkleization
+                    )
+                    .withDispatcher("sync-dispatcher"),
+                  s"storage-range-coordinator-$coordinatorGeneration"
+                )
               )
-            )
-            storageRangeCoordinator.foreach(_ ! actors.Messages.StartStorageRangeSync(rootBs))
-            storageRangeRequestTask = Some(
-              scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestStorageRanges)(ec, self)
-            )
+              storageRangeCoordinator.foreach(_ ! actors.Messages.StartStorageRangeSync(rootBs))
+              storageRangeRequestTask = Some(
+                scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestStorageRanges)(ec, self)
+              )
+            }
 
             // Recovery budget: accounts done, bytecode=2, storage=3 (total 5 per peer)
             bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(2))
 
             // Stream storage tasks from persisted file if available
-            savedStoragePath.foreach { pathStr =>
+            if (!storageAlreadyDone) savedStoragePath.foreach { pathStr =>
               val filePath = java.nio.file.Paths.get(pathStr)
               if (java.nio.file.Files.exists(filePath)) {
                 val coordinator = storageRangeCoordinator.get
@@ -1132,7 +1146,7 @@ class SNAPSyncController(
             // Bytecodes: stream codeHashes from persisted file if available. Each entry is 32 bytes
             // (raw keccak256 hash, written by AccountRangeCoordinator.uniqueCodeHashesOut).
             val savedCodeHashesPath = appStateStorage.getSnapSyncCodeHashesPath()
-            savedCodeHashesPath.foreach { pathStr =>
+            if (!bytecodeAlreadyDone) savedCodeHashesPath.foreach { pathStr =>
               val filePath = java.nio.file.Paths.get(pathStr)
               if (java.nio.file.Files.exists(filePath)) {
                 val coordinator = bytecodeCoordinator.get
@@ -1183,11 +1197,16 @@ class SNAPSyncController(
             startChainDownloader()
 
             context.become(syncing)
+            // If both phases were already complete, advance to healing immediately
+            checkAllDownloadsComplete()
             return
           }
         case _ =>
           log.warning("Recovery: accounts-complete flag set but missing pivot/root. Clearing and restarting fresh.")
-          appStateStorage.putSnapSyncAccountsComplete(false).commit()
+          appStateStorage.putSnapSyncAccountsComplete(false)
+            .and(appStateStorage.putSnapSyncStorageComplete(false))
+            .and(appStateStorage.putSnapSyncBytecodeComplete(false))
+            .commit()
       }
     }
 
@@ -1570,7 +1589,10 @@ class SNAPSyncController(
 
     // Clear persisted SNAP progress — fast sync will start fresh
     appStateStorage.putSnapSyncProgress("").commit()
-    appStateStorage.putSnapSyncAccountsComplete(false).commit()
+    appStateStorage.putSnapSyncAccountsComplete(false)
+      .and(appStateStorage.putSnapSyncStorageComplete(false))
+      .and(appStateStorage.putSnapSyncBytecodeComplete(false))
+      .commit()
     appStateStorage.putSnapSyncStorageFilePath("").commit()
     preservedRangeProgress = Map.empty
     preservedAtPivotBlock = None
@@ -2370,7 +2392,10 @@ class SNAPSyncController(
     accountsComplete = false
     bytecodePhaseComplete = false
     storagePhaseComplete = false
-    appStateStorage.putSnapSyncAccountsComplete(false).commit()
+    appStateStorage.putSnapSyncAccountsComplete(false)
+      .and(appStateStorage.putSnapSyncStorageComplete(false))
+      .and(appStateStorage.putSnapSyncBytecodeComplete(false))
+      .commit()
     appStateStorage.putSnapSyncStorageFilePath("").commit()
 
     // Reset pivot/state root and storage so a new selection is committed
