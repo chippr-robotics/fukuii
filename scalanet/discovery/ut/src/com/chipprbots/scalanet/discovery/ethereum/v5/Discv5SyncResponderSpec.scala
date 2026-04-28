@@ -2,10 +2,11 @@ package com.chipprbots.scalanet.discovery.ethereum.v5
 
 import java.net.{InetAddress, InetSocketAddress}
 
-import com.chipprbots.scalanet.discovery.crypto.{PrivateKey, PublicKey, SigAlg, Signature}
+import com.chipprbots.scalanet.discovery.crypto.{PrivateKey, PublicKey, SigAlg}
 import com.chipprbots.scalanet.discovery.ethereum.{EthereumNodeRecord, Node}
 import com.chipprbots.scalanet.discovery.ethereum.v4.mocks.MockSigAlg
 import com.chipprbots.scalanet.discovery.ethereum.codecs.DefaultCodecs
+import com.chipprbots.scalanet.discovery.ethereum.codecs.DefaultCodecs.given
 import com.chipprbots.scalanet.peergroup.udp.StaticUDPPeerGroup
 import scodec.{Attempt, Codec, DecodeResult, Err}
 import scodec.bits.{BitVector, ByteVector}
@@ -96,7 +97,7 @@ class Discv5SyncResponderSpec extends AnyFlatSpec with Matchers {
 
   // Stub local ENR — never actually inspected by responder logic in these tests.
   private val stubLocalEnr: EthereumNodeRecord = {
-    import DefaultCodecs.{given, *}
+    import DefaultCodecs.given
     EthereumNodeRecord
       .fromNode(
         Node(
@@ -174,14 +175,16 @@ class Discv5SyncResponderSpec extends AnyFlatSpec with Matchers {
     whoPkt.header.nonce shouldBe triggerNonce // echoed back per spec
 
     // Challenge must be stashed so a follow-up handshake can be verified.
-    challenges.get(triggerNonce) should not be empty
+    // ChallengeCache keys by SessionId(peerNodeId, senderAddr) — same key the
+    // responder uses internally before/after the WHOAREYOU exchange.
+    challenges.get(Session.SessionId(peerNodeId, sender)) should not be empty
   }
 
   it should "Stop on incoming WhoareyouPacket so the v4 codec doesn't see v5 bytes" in {
     val (responder, _, _, _) = freshResponder()
 
     val (_, peerPriv) = sigalg.newKeyPair
-    val peerNodeId = Session.nodeIdFromPublicKey(sigalg.toPublicKey(peerPriv).value.bytes)
+    val _ = Session.nodeIdFromPublicKey(sigalg.toPublicKey(peerPriv).value.bytes)
 
     val whoPkt = Packet.WhoareyouPacket(
       header = Packet.Header.Whoareyou(
@@ -201,7 +204,7 @@ class Discv5SyncResponderSpec extends AnyFlatSpec with Matchers {
   it should "respond to a MessagePacket with an existing session by encrypting the response" in {
     val (responder, sessions, _, _) = freshResponder()
 
-    val (peerPub, peerPriv) = sigalg.newKeyPair
+    val (peerPub, _) = sigalg.newKeyPair
     val peerNodeId = Session.nodeIdFromPublicKey(peerPub.value.bytes)
 
     // Pre-establish a session as if a prior handshake had succeeded.
