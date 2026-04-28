@@ -29,7 +29,9 @@ object EthereumTestsAdapter {
     * @return
     *   Parsed test suite
     */
-  def loadTestSuite(resourcePath: String)(implicit runtime: IORuntime): IO[BlockchainTestSuite] =
+  def loadTestSuite(
+      resourcePath: String
+  )(implicit @scala.annotation.unused runtime: IORuntime): IO[BlockchainTestSuite] =
     IO {
       val source = Source.fromInputStream(getClass.getResourceAsStream(resourcePath))
       try {

@@ -3,7 +3,6 @@ package com.chipprbots.ethereum
 import cats.effect.Async
 import cats.effect.IO
 import cats.effect.Resource
-import cats.effect.implicits._
 import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.ExecutionContext

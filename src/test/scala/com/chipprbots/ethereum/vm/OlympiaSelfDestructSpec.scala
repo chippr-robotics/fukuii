@@ -45,7 +45,7 @@ class OlympiaSelfDestructSpec extends AnyWordSpec with Matchers {
     val beneficiaryBalance: UInt256 = UInt256(500)
 
     def createContext(
-        code: ByteString,
+        @scala.annotation.unused code: ByteString,
         header: BlockHeader,
         config: EvmConfig,
         world: MockWorldState,

@@ -16,7 +16,6 @@ import cats.effect.Resource
 import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.Future
-import scala.concurrent.duration._
 import scala.math.Ordering.Implicits._
 import scala.util.control.NoStackTrace
 
@@ -282,6 +281,7 @@ class PeerDiscoveryManagerSpec
       val randomNodes: Set[Node] = sampleNodes.take(2)
       val lookupCount = new AtomicInteger(0)
 
+      @scala.annotation.unused
       implicit val nodeOrd: Ordering[ENode] =
         Ordering.by(_.id.value.toByteArray.toSeq)
 

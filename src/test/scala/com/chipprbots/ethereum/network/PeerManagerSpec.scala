@@ -547,7 +547,7 @@ class PeerManagerSpec
   ) in new ConnectedPeersFixture {
     val data: Gen[(ConnectedPeers, List[Peer])] = for {
       connectedPeers <- arbitrary[ConnectedPeers]
-      numIncoming <- Gen.choose(0, peerConfiguration.pruneIncomingPeers)
+      _ <- Gen.choose(0, peerConfiguration.pruneIncomingPeers)
       // Top up to max with new connections
       newIncoming <- Gen.listOfN(
         peerConfiguration.maxIncomingPeers - connectedPeers.incomingHandshakedPeersCount,

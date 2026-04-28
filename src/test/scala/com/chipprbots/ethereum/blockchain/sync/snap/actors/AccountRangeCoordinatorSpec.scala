@@ -12,8 +12,6 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.crypto.kec256
-import com.chipprbots.ethereum.domain.Account
-import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.testing.{PeerTestHelpers, TestMptStorage}
 

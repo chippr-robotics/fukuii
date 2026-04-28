@@ -9,7 +9,6 @@ import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.network.p2p.EthereumMessageDecoder
 import com.chipprbots.ethereum.network.p2p.NetworkMessageDecoder
-import com.chipprbots.ethereum.testing.Tags._
 
 class ETH65PlusMessagesSpec extends AnyWordSpec with Matchers {
 
@@ -261,7 +260,6 @@ class ETH65PlusMessagesSpec extends AnyWordSpec with Matchers {
     "decoding NewPooledTransactionHashes in legacy ETH65 format" should {
       "successfully decode and set default types and sizes" in {
         import com.chipprbots.ethereum.rlp._
-        import com.chipprbots.ethereum.rlp.RLPImplicits._
         import com.chipprbots.ethereum.rlp.RLPImplicits.given
         import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
         import com.chipprbots.ethereum.network.p2p.messages.ETH67.NewPooledTransactionHashes._
@@ -304,7 +302,6 @@ class ETH65PlusMessagesSpec extends AnyWordSpec with Matchers {
     "decoding NewPooledTransactionHashes in legacy ETH65 format" should {
       "successfully decode and set default types and sizes" in {
         import com.chipprbots.ethereum.rlp._
-        import com.chipprbots.ethereum.rlp.RLPImplicits._
         import com.chipprbots.ethereum.rlp.RLPImplicits.given
         import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
         import com.chipprbots.ethereum.network.p2p.messages.ETH67.NewPooledTransactionHashes._

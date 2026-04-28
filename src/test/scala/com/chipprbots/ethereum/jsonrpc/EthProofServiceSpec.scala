@@ -28,7 +28,6 @@ import com.chipprbots.ethereum.jsonrpc.ProofService.StorageProofKey
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.defaultByteArraySerializable
 import com.chipprbots.ethereum.nodebuilder.ApisBuilder
-import com.chipprbots.ethereum.rlp.RLPValue
 import com.chipprbots.ethereum.testing.Tags._
 
 class EthProofServiceSpec

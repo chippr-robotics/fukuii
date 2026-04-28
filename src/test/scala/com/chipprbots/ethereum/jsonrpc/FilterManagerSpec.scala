@@ -34,16 +34,9 @@ import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransaction
 import com.chipprbots.ethereum.utils.FilterConfig
 import com.chipprbots.ethereum.utils.TxPoolConfig
-import com.chipprbots.ethereum.jsonrpc.FilterManager.NewFilterResponse
 import com.chipprbots.ethereum.jsonrpc.FilterManager.LogFilterChanges
-import com.chipprbots.ethereum.jsonrpc.FilterManager.LogFilterChanges
-import com.chipprbots.ethereum.jsonrpc.FilterManager.NewFilterResponse
-import com.chipprbots.ethereum.jsonrpc.FilterManager.NewFilterResponse
 import com.chipprbots.ethereum.jsonrpc.FilterManager.BlockFilterLogs
 import com.chipprbots.ethereum.jsonrpc.FilterManager.BlockFilterChanges
-import com.chipprbots.ethereum.jsonrpc.FilterManager.NewFilterResponse
-import scala.concurrent.Future
-import com.chipprbots.ethereum.jsonrpc.FilterManager.PendingTransactionFilterLogs
 import com.chipprbots.ethereum.jsonrpc.FilterManager.NewFilterResponse
 import scala.concurrent.Future
 import com.chipprbots.ethereum.jsonrpc.FilterManager.PendingTransactionFilterLogs

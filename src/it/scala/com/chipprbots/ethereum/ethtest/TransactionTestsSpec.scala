@@ -105,7 +105,7 @@ class TransactionTestsSpec extends AnyFlatSpec with Matchers {
       case Some(testObject) =>
         // Get the first (and usually only) test case
         testObject.toMap.headOption match {
-          case Some((testName, testData)) =>
+          case Some((_, testData)) =>
             val hasRlp = testData.hcursor.downField("rlp").succeeded
             val hasNetworkData = supportedNetworks.exists { network =>
               testData.hcursor.downField(network).succeeded

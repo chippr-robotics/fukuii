@@ -17,7 +17,6 @@ import com.chipprbots.ethereum.testing.Tags._
 
 class EIP8CodecsSpec extends AnyFlatSpec with Matchers {
 
-  import RLPCodecs._
   import RLPCodecs.given
 
   implicit val packetCodec: Codec[Packet] =

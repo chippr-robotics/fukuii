@@ -10,8 +10,6 @@ import com.chipprbots.ethereum.vm.Fixtures.blockchainConfig
 
 class Push0Spec extends AnyFunSuite with OpCodeTesting with Matchers with ScalaCheckPropertyChecks {
 
-  import MockWorldState.PS
-
   // Use Spiral config which includes PUSH0
   override val config: EvmConfig = EvmConfig.SpiralConfigBuilder(blockchainConfig)
 

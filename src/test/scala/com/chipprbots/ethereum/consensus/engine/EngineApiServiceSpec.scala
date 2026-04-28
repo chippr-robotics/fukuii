@@ -9,17 +9,13 @@ import org.scalatest.wordspec.AnyWordSpec
 
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.consensus.engine.PayloadStatus._
-import com.chipprbots.ethereum.consensus.mining.TestMining
 import com.chipprbots.ethereum.consensus.validators.std.StdValidators
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields._
 import com.chipprbots.ethereum.ledger._
 import com.chipprbots.ethereum.Mocks.MockValidatorsAlwaysSucceed
-import com.chipprbots.ethereum.Mocks.MockVM
 import com.chipprbots.ethereum.testing.Tags._
-
-import BlockHeaderImplicits._
 
 // scalastyle:off magic.number
 class EngineApiServiceSpec extends AnyWordSpec with Matchers {
@@ -277,7 +273,7 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers {
         val randomStateRoot = ByteString(kec256(Array[Byte](1, 2, 3, 4)))
         val modified = payload.copy(stateRoot = randomStateRoot)
         // Recompute blockHash from the modified header
-        val modifiedBlock = engineApi.asInstanceOf[{ def payloadToBlock(p: ExecutionPayload): Block }]
+        val _ = engineApi.asInstanceOf[{ def payloadToBlock(p: ExecutionPayload): Block }]
         // Instead, manually build the header and compute hash
         val header = BlockHeader(
           parentHash = modified.parentHash,

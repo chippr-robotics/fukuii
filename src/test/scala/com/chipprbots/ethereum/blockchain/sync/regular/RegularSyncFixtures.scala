@@ -44,7 +44,6 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
-import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.ETH62._
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData
@@ -230,7 +229,8 @@ trait RegularSyncFixtures { self: Matchers with AsyncMockFactory =>
       def run(sender: ActorRef, msg: Any): AutoPilot =
         overrides(sender).orElse(defaultHandlers(sender)).apply(msg).getOrElse(defaultAutoPilot)
 
-      def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = PartialFunction.empty
+      def overrides(@scala.annotation.unused sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] =
+        PartialFunction.empty
 
       def defaultHandlers(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
         // Handle ETH62 GetBlockHeaders (without requestId)

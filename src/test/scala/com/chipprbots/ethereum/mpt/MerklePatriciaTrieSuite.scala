@@ -523,7 +523,7 @@ class MerklePatriciaTrieSuite extends AnyFunSuite with ScalaCheckPropertyChecks 
     val largeByteString = ByteString((0 until 1000).map(_.toByte).toArray)
     val pruningOffset = 10
 
-    val (stateStorage, nodeStorage, cachedNodeStorage) =
+    val (stateStorage, _, cachedNodeStorage) =
       StateStorage.createTestStateStorage(EphemDataSource(), BasicPruning(40))
 
     val referenceCountBlock0 = stateStorage.getBackingStorage(0)
