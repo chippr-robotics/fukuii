@@ -380,12 +380,12 @@ class RLPxConnectionHandlerSpec
           protocolVersion :: Nil,
           mockHandshaker,
           (
-              frameCodec: FrameCodec,
-              capability: Capability,
-              p2pVersion: Long,
-              clientId: String,
-              compressionPolicy: MessageCodec.CompressionPolicy,
-              supportsSnap: Boolean
+              _: FrameCodec,
+              _: Capability,
+              _: Long,
+              _: String,
+              _: MessageCodec.CompressionPolicy,
+              _: Boolean
           ) => mockMessageCodec,
           rlpxConfiguration,
           _ => mockHelloExtractor

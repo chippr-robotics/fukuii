@@ -21,7 +21,6 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.LongPatience
-import com.chipprbots.ethereum.Timeouts
 import com.chipprbots.ethereum.WithActorSystemShutDown
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
@@ -44,7 +43,6 @@ import com.chipprbots.ethereum.jsonrpc.ProofService.StorageValueProof
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers.OptionNoneToJNullSerializer
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers.QuantitiesSerializer
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers.UnformattedDataJsonSerializer
-import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ommers.OmmersPool
 import com.chipprbots.ethereum.ommers.OmmersPool.Ommers
 import com.chipprbots.ethereum.testing.ActorsTesting.simpleAutoPilot

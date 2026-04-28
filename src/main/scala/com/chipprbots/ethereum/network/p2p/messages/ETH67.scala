@@ -7,7 +7,6 @@ import org.bouncycastle.util.encoders.Hex
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializableImplicit
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
 
@@ -125,7 +124,7 @@ object ETH67 {
                   )
               }
 
-            case other =>
+            case _ =>
               throw new ETH67DecodeException(
                 s"Unexpected RLP structure. Expected [RLPValue, RLPList, RLPList] (ETH67/68) " +
                   s"or RLPList (ETH65 legacy), got: $structureInfo. Hex: $hexDump"

@@ -97,7 +97,7 @@ class StateNodeFetcher(
 
   private def handleNodeDataValues(peer: Peer, values: Seq[ByteString]): Behavior[StateNodeFetcherCommand] =
     requester
-      .collect { stateNodeRequester =>
+      .map { stateNodeRequester =>
         val validatedNode = values
           .asRight[BlacklistReason]
           .ensure(BlacklistReason.EmptyStateNodeResponse)(_.nonEmpty)

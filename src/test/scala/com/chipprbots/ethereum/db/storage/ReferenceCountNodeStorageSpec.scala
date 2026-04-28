@@ -105,7 +105,7 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers {
 
     val storage = new ReferenceCountNodeStorage(nodeStorage, bn = 1)
     val inserted: Seq[(ByteString, Array[Byte])] = insertRangeKeys(4, storage)
-    val (key1, val1) :: (key2, val2) :: (key3, val3) :: (key4, val4) :: Nil = inserted.toList: @unchecked
+    val (key1, val1) :: (key2, val2) :: (key3, val3) :: (key4, _) :: Nil = inserted.toList: @unchecked
 
     storage.remove(key1) // remove key1 at block 1
     storage.remove(key4) // remove key4 at block 1, it should be pruned
@@ -145,7 +145,7 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers {
     val storage = new ReferenceCountNodeStorage(nodeStorage, bn = 1)
 
     val inserted: Seq[(ByteString, Array[Byte])] = insertRangeKeys(4, storage)
-    val (key1, val1) :: (key2, val2) :: xs = inserted.toList: @unchecked
+    val (key1, val1) :: (key2, val2) :: _ = inserted.toList: @unchecked
 
     storage.remove(key1).remove(key2)
 
@@ -168,7 +168,7 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers {
     val storage = new ReferenceCountNodeStorage(nodeStorage, bn = 1)
 
     val inserted: Seq[(ByteString, Array[Byte])] = insertRangeKeys(4, storage)
-    val (key1, val1) :: (key2, val2) :: xs = inserted.toList: @unchecked
+    val (key1, _) :: (key2, _) :: _ = inserted.toList: @unchecked
 
     storage.remove(key1).remove(key2)
 
@@ -205,7 +205,7 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers {
     val storage = new ReferenceCountNodeStorage(cachedNodeStorage, bn = 1)
 
     val inserted: Seq[(ByteString, Array[Byte])] = insertRangeKeys(4, storage)
-    val (key1, val1) :: (key2, val2) :: xs = inserted.toList: @unchecked
+    val (key1, _) :: (key2, _) :: _ = inserted.toList: @unchecked
 
     storage.remove(key1).remove(key2)
 
@@ -273,7 +273,7 @@ class ReferenceCountNodeStorageSpec extends AnyFlatSpec with Matchers {
     val storage = new ReferenceCountNodeStorage(cachedNodeStorage, bn = 1)
 
     val inserted: Seq[(ByteString, Array[Byte])] = insertRangeKeys(4, storage)
-    val (key1, val1) :: (key2, val2) :: xs = inserted.toList: @unchecked
+    val (key1, _) :: (key2, _) :: _ = inserted.toList: @unchecked
 
     storage.remove(key1).remove(key2)
 

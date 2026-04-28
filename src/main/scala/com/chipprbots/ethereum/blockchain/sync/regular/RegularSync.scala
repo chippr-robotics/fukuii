@@ -90,7 +90,7 @@ class RegularSync(
       syncConfig.printStatusInterval,
       fetcher.toClassic,
       BlockFetcher.PrintStatus
-    )(context.dispatcher)
+    )(context.dispatcher, self)
 
   override def receive: Receive = running(
     ProgressState(startedFetching = false, initialBlock = 0, currentBlock = 0, bestKnownNetworkBlock = 0)

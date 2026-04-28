@@ -207,7 +207,7 @@ class EngineApiController(
     }
   }
 
-  private def handleForkchoiceUpdated(request: JsonRpcRequest, version: Int = 1): IO[JsonRpcResponse] = {
+  private def handleForkchoiceUpdated(request: JsonRpcRequest, version: Int): IO[JsonRpcResponse] = {
     val params = request.params.map(_.arr).getOrElse(Nil)
     params.headOption match {
       case Some(fcsJson: JObject) =>
@@ -345,7 +345,7 @@ class EngineApiController(
     }
   }
 
-  private def handleGetPayload(request: JsonRpcRequest, version: Int = 1): IO[JsonRpcResponse] = {
+  private def handleGetPayload(request: JsonRpcRequest, version: Int): IO[JsonRpcResponse] = {
     val payloadIdHex = request.params match {
       case Some(JArray(List(JString(id)))) => id
       case _                               => ""
@@ -449,7 +449,7 @@ class EngineApiController(
     // derive per-tx gas used from cumulative deltas
     val gasUsedPerTx: Seq[BigInt] = receipts
       .map(_.cumulativeGasUsed)
-      .scanLeft(BigInt(0)) { (prev, cum) =>
+      .scanLeft(BigInt(0)) { (_, cum) =>
         cum
       }
       .sliding(2, 1)

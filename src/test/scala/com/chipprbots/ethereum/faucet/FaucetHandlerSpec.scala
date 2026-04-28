@@ -36,7 +36,6 @@ import com.chipprbots.ethereum.jsonrpc.client.RpcClient.ParserError
 import com.chipprbots.ethereum.jsonrpc.client.RpcClient.RpcClientError
 import com.chipprbots.ethereum.keystore.KeyStore.DecryptionFailed
 import com.chipprbots.ethereum.keystore.Wallet
-import com.chipprbots.ethereum.testing.Tags._
 
 class FaucetHandlerSpec
     extends TestKit(ActorSystem("ActorSystem_DebugFaucetHandlerSpec"))

@@ -27,8 +27,6 @@ class EngineApiService(
     blockchainWriter: BlockchainWriter,
     blockExecution: BlockExecution,
     forkChoiceManager: ForkChoiceManager,
-    mining: com.chipprbots.ethereum.consensus.mining.Mining,
-    evmCodeStorage: com.chipprbots.ethereum.db.storage.EvmCodeStorage,
     pendingTransactionsManager: org.apache.pekko.actor.ActorRef
 )(implicit blockchainConfig: BlockchainConfig)
     extends Logger {
@@ -328,7 +326,7 @@ class EngineApiService(
                 }
             }
           catch {
-            case e: com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException =>
+            case _: com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException =>
               // Missing state nodes — can't execute, return SYNCING
               System.err.println(
                 s"[ENGINE-API] newPayload #${payload.blockNumber}: MPT error, SYNCING"

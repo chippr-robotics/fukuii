@@ -219,7 +219,7 @@ class DebugTracingServiceSpec
 
   // ── TestSetup ────────────────────────────────────────────────────────────────
 
-  class TestSetup(implicit system: ActorSystem) extends EphemBlockchainTestSetup {
+  class TestSetup(implicit @scala.annotation.unused system: ActorSystem) extends EphemBlockchainTestSetup {
 
     val block: Block = Block(Fixtures.Blocks.Block3125369.header, Fixtures.Blocks.Block3125369.body)
 

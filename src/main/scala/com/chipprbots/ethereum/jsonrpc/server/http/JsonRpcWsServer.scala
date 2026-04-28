@@ -12,7 +12,6 @@ import org.apache.pekko.http.scaladsl.server.Route
 import org.apache.pekko.stream.Materializer
 import org.apache.pekko.stream.OverflowStrategy
 import org.apache.pekko.stream.scaladsl.Flow
-import org.apache.pekko.stream.scaladsl.Keep
 import org.apache.pekko.stream.scaladsl.Sink
 import org.apache.pekko.stream.scaladsl.Source
 import org.apache.pekko.util.Timeout
@@ -29,8 +28,6 @@ import org.json4s.native.JsonMethods._
 import org.json4s.native.Serialization
 
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
-import com.chipprbots.ethereum.jsonrpc.JsonRpcResponse
-import com.chipprbots.ethereum.jsonrpc.SubscriptionManager
 import com.chipprbots.ethereum.jsonrpc.SubscriptionManager._
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController

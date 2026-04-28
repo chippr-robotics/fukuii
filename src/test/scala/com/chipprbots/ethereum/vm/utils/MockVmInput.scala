@@ -13,7 +13,7 @@ object MockVmInput {
 
   class MockTransaction(
       tx: LegacyTransaction,
-      senderAddress: Address,
+      @scala.annotation.unused senderAddress: Address,
       pointSign: Byte = 0,
       signatureRandom: BigInt = 0,
       signature: BigInt = 0

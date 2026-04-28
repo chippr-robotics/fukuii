@@ -27,7 +27,6 @@ class PeerRateTracker extends Logger {
   // Aggregated state
   private var medianRTT: Long = RttMinEstimateMs // milliseconds
   private var confidence: Double = 0.5
-  private var lastTuneMs: Long = System.currentTimeMillis()
 
   /** Record a measurement after receiving a response from a peer.
     *
@@ -107,11 +106,7 @@ class PeerRateTracker extends Logger {
     * with fixed periods.
     */
   def tune(): Unit = synchronized {
-    val now = System.currentTimeMillis()
-    if (peers.isEmpty) {
-      lastTuneMs = now
-      return
-    }
+    if (peers.isEmpty) return
 
     // Collect RTTs from all peers, sort, and pick geometric-mean index (√N)
     val rtts = peers.values.map(_.roundtripMs).toArray.sorted
@@ -126,7 +121,6 @@ class PeerRateTracker extends Logger {
     confidence = confidence + (1.0 - confidence) / 2.0
     confidence = confidence.max(RttMinConfidence).min(1.0)
 
-    lastTuneMs = now
     log.debug(
       s"PeerRateTracker tuned: medianRTT=${medianRTT}ms, confidence=${"%.3f".format(confidence)}, " +
         s"timeout=${targetTimeout().toSeconds}s, peers=${peers.size}"

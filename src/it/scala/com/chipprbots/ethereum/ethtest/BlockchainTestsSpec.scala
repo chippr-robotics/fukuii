@@ -1,9 +1,6 @@
 package com.chipprbots.ethereum.ethtest
 
-import org.scalatest.flatspec.AnyFlatSpec
-import org.scalatest.matchers.should.Matchers
 import java.io.File
-import scala.io.Source
 
 import com.chipprbots.ethereum.testing.Tags._
 

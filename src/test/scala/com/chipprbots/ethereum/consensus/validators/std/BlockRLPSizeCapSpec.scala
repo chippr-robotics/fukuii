@@ -5,7 +5,6 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator._
-import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.testing.Tags._
 
 /** EIP-7934: Verify block RLP size cap validation. */

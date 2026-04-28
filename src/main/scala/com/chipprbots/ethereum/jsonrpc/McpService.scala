@@ -7,6 +7,7 @@ import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 
+import scala.annotation.unused
 import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext
 
@@ -126,7 +127,7 @@ class McpService(
     transactionMappingStorage
   )
 
-  def initialize(request: McpInitializeRequest): ServiceResponse[McpInitializeResponse] =
+  def initialize(@unused request: McpInitializeRequest): ServiceResponse[McpInitializeResponse] =
     IO.pure(
       Right(
         McpInitializeResponse(
@@ -140,7 +141,7 @@ class McpService(
       )
     )
 
-  def toolsList(request: McpToolsListRequest): ServiceResponse[McpToolsListResponse] = {
+  def toolsList(@unused request: McpToolsListRequest): ServiceResponse[McpToolsListResponse] = {
     import org.json4s.JsonDSL._
 
     val tools = McpToolRegistry.getAllTools().map { toolDef =>
@@ -176,7 +177,7 @@ class McpService(
         )
       }
 
-  def resourcesList(request: McpResourcesListRequest): ServiceResponse[McpResourcesListResponse] = {
+  def resourcesList(@unused request: McpResourcesListRequest): ServiceResponse[McpResourcesListResponse] = {
     val resources = McpResourceRegistry.getAllResources().map { resDef =>
       McpResource(
         uri = resDef.uri,
@@ -209,7 +210,7 @@ class McpService(
         IO.pure(Left(JsonRpcError.InvalidParams(error)))
     }
 
-  def promptsList(request: McpPromptsListRequest): ServiceResponse[McpPromptsListResponse] = {
+  def promptsList(@unused request: McpPromptsListRequest): ServiceResponse[McpPromptsListResponse] = {
     val prompts = McpPromptRegistry.getAllPrompts().map { promptDef =>
       McpPrompt(
         name = promptDef.name,

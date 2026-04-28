@@ -10,9 +10,8 @@ import org.scalatest.matchers.should.Matchers
 
 import scala.concurrent.duration._
 
-import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.Account
-import com.chipprbots.ethereum.network.{Peer, PeerId}
+import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.testing.PeerTestHelpers._
@@ -49,6 +48,7 @@ class SNAPRequestTrackerSpec
     val requestId = tracker.generateRequestId()
     tracker.isPending(requestId) shouldBe false
 
+    @scala.annotation.unused
     var timeoutCalled = false
     tracker.trackRequest(requestId, peer, SNAPRequestTracker.RequestType.GetAccountRange) {
       timeoutCalled = true

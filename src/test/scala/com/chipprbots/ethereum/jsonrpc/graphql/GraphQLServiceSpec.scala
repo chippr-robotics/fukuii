@@ -20,7 +20,6 @@ import org.scalatest.time.Span
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.WithActorSystemShutDown
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
-import com.chipprbots.ethereum.consensus.blocks.PendingBlock
 import com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState
 import com.chipprbots.ethereum.consensus.mining.MiningConfigs
 import com.chipprbots.ethereum.consensus.mining.TestMining

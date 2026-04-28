@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.jsonrpc
 
-import java.time.Duration
-
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.testkit.TestKit
 import org.apache.pekko.util.ByteString
@@ -49,7 +47,6 @@ class JsonRpcControllerPersonalSpec
 
   it should "personal_importRawKey" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val key = "7a44789ed3cd85861c0bbf9693c7e1de1862dd4396c390147ecf1275099c6e6f"
-    val keyBytes: ByteString = ByteString(Hex.decode(key))
     val addr: Address = Address("0x00000000000000000000000000000000000000ff")
     val pass = "aaa"
 

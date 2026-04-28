@@ -22,11 +22,12 @@ import com.chipprbots.ethereum.ledger.StxLedger
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.ledger.BlockExecution.HistoryStorageAddress
+
+import scala.annotation.unused
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.vm.PrecompiledContracts
 
@@ -110,10 +111,10 @@ class EthInfoService(
 
   import EthInfoService._
 
-  def protocolVersion(req: ProtocolVersionRequest): ServiceResponse[ProtocolVersionResponse] =
+  def protocolVersion(@unused req: ProtocolVersionRequest): ServiceResponse[ProtocolVersionResponse] =
     IO.pure(Right(ProtocolVersionResponse(f"0x${capability.version}%x")))
 
-  def chainId(req: ChainIdRequest): ServiceResponse[ChainIdResponse] =
+  def chainId(@unused req: ChainIdRequest): ServiceResponse[ChainIdResponse] =
     IO.pure(Right(ChainIdResponse(blockchainConfig.chainId)))
 
   /** Implements the eth_syncing method that returns syncing information if the node is syncing.
@@ -121,7 +122,7 @@ class EthInfoService(
     * @return
     *   The syncing status if the node is syncing or None if not
     */
-  def syncing(req: SyncingRequest): ServiceResponse[SyncingResponse] =
+  def syncing(@unused req: SyncingRequest): ServiceResponse[SyncingResponse] =
     syncingController
       .askFor(SyncProtocol.GetStatus)(timeout = askTimeout, implicitly[ClassTag[SyncProtocol.Status]])
       .map {
@@ -143,7 +144,7 @@ class EthInfoService(
       }
       .map(_.asRight)
 
-  def config(req: ConfigRequest): ServiceResponse[ConfigResponse] = IO {
+  def config(@unused req: ConfigRequest): ServiceResponse[ConfigResponse] = IO {
     val fbn = blockchainConfig.forkBlockNumbers
     val chainId = blockchainConfig.chainId
 
@@ -196,7 +197,7 @@ class EthInfoService(
     val currentBlock = blockchainReader.getBestBlockNumber()
 
     def toForkConfig(
-        name: String,
+        @unused name: String,
         block: BigInt,
         precompiles: Map[String, Address],
         sysContracts: Map[String, Address]

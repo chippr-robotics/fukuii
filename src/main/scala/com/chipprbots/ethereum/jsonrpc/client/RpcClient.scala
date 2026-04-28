@@ -21,7 +21,6 @@ import scala.concurrent.duration._
 
 import io.circe.Decoder
 import io.circe.Json
-import io.circe.generic.auto._
 import io.circe.parser.parse
 import io.circe.syntax._
 

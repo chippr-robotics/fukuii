@@ -6,6 +6,7 @@ import org.apache.pekko.util.Timeout
 import cats.effect.IO
 import cats.implicits._
 
+import scala.annotation.unused
 import scala.concurrent.duration._
 import scala.collection.immutable.NumericRange
 
@@ -62,12 +63,12 @@ class FukuiiService(
         .map(GetAccountTransactionsResponse(_).asRight)
     }
 
-  def resetFastSync(request: ResetFastSyncRequest): ServiceResponse[ResetFastSyncResponse] =
+  def resetFastSync(@unused request: ResetFastSyncRequest): ServiceResponse[ResetFastSyncResponse] =
     syncController
       .askFor[SyncProtocol.ResetFastSyncResponse](SyncProtocol.ResetFastSync)
       .map(resp => Right(ResetFastSyncResponse(resp.reset)))
 
-  def restartFastSync(request: RestartFastSyncRequest): ServiceResponse[RestartFastSyncResponse] =
+  def restartFastSync(@unused request: RestartFastSyncRequest): ServiceResponse[RestartFastSyncResponse] =
     syncController
       .askFor[SyncProtocol.RestartFastSyncResponse](SyncProtocol.RestartFastSync)
       .map(resp => Right(RestartFastSyncResponse(resp.started, resp.cooldownUntilMillis)))

@@ -42,17 +42,21 @@ object TxPoolJsonMethodsImplicits extends JsonMethodsImplicits {
           case None | Some(JArray(Nil)) =>
             Right(TxPoolBesuPendingTransactionsRequest(None))
           case Some(JArray(limitParam :: rest)) =>
-            val limit = limitParam match {
-              case JInt(n) => Some(n.toInt)
-              case JNull   => None
-              case _       => return Left(InvalidParams())
+            val limitE: Either[JsonRpcError, Option[Int]] = limitParam match {
+              case JInt(n) => Right(Some(n.toInt))
+              case JNull   => Right(None)
+              case _       => Left(InvalidParams())
             }
-            val txParams = rest.headOption.flatMap {
-              case obj: JObject => Some(decodeFilterParams(obj))
-              case JNull        => None
-              case _            => return Left(InvalidParams())
+            val txParamsE: Either[JsonRpcError, Option[TxPoolBesuPendingTransactionsParams]] = rest.headOption match {
+              case None             => Right(None)
+              case Some(JNull)      => Right(None)
+              case Some(o: JObject) => Right(Some(decodeFilterParams(o)))
+              case _                => Left(InvalidParams())
             }
-            Right(TxPoolBesuPendingTransactionsRequest(limit, txParams))
+            for {
+              limit <- limitE
+              txParams <- txParamsE
+            } yield TxPoolBesuPendingTransactionsRequest(limit, txParams)
           case _ =>
             Left(InvalidParams())
         }

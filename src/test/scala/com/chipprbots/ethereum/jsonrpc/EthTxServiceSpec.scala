@@ -28,8 +28,6 @@ import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager._
 import com.chipprbots.ethereum.utils._
 import scala.concurrent.Future
-import scala.concurrent.Future
-import scala.concurrent.Future
 
 class EthTxServiceSpec
     extends TestKit(ActorSystem("EthServiceSpec_ActorSystem"))

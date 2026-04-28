@@ -89,7 +89,7 @@ final class PivotHeaderBootstrap(
       )
       val delay = currentRetryDelay
       log.info("Scheduling pivot header retry in {} (attempt {}/{})", delay, attempt, maxAttempts)
-      scheduler.scheduleOnce(delay, self, Fetch)(context.dispatcher)
+      scheduler.scheduleOnce(delay, self, Fetch)(context.dispatcher, self)
   }
 
   private def fetchOnce(): Unit = {

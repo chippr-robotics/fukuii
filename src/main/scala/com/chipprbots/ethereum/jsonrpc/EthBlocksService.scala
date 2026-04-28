@@ -16,6 +16,8 @@ import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
 
+import scala.annotation.unused
+
 object EthBlocksService {
   case class BestBlockNumberRequest()
   case class BestBlockNumberResponse(bestBlockNumber: BigInt)
@@ -91,7 +93,7 @@ class EthBlocksService(
     * @return
     *   Current block number the client is on.
     */
-  def bestBlockNumber(req: BestBlockNumberRequest): ServiceResponse[BestBlockNumberResponse] = IO {
+  def bestBlockNumber(@unused req: BestBlockNumberRequest): ServiceResponse[BestBlockNumberResponse] = IO {
     Right(BestBlockNumberResponse(blockchainReader.getBestBlockNumber()))
   }
 
@@ -333,11 +335,12 @@ class EthBlocksService(
     )
   }
 
-  def maxPriorityFeePerGas(req: MaxPriorityFeePerGasRequest): ServiceResponse[MaxPriorityFeePerGasResponse] = IO {
-    Right(MaxPriorityFeePerGasResponse(BigInt(1000000000)))
-  }
+  def maxPriorityFeePerGas(@unused req: MaxPriorityFeePerGasRequest): ServiceResponse[MaxPriorityFeePerGasResponse] =
+    IO {
+      Right(MaxPriorityFeePerGasResponse(BigInt(1000000000)))
+    }
 
-  def blobBaseFee(req: BlobBaseFeeRequest): ServiceResponse[BlobBaseFeeResponse] = IO {
+  def blobBaseFee(@unused req: BlobBaseFeeRequest): ServiceResponse[BlobBaseFeeResponse] = IO {
     val fee = blockchainReader
       .getBestBlock()
       .flatMap(b => b.header.excessBlobGas.map(eg => (eg, b.header.unixTimestamp)))

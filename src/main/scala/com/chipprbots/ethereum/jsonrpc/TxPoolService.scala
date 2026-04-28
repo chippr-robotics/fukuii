@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.jsonrpc
 
 import org.apache.pekko.actor.ActorRef
 
+import scala.annotation.unused
 import scala.concurrent.duration.FiniteDuration
 
 import com.chipprbots.ethereum.domain.Address
@@ -99,7 +100,7 @@ class TxPoolService(
     *
     * Besu: TxPoolBesuTransactions wraps getPendingTransactions() in PendingTransactionsResult.
     */
-  def besuTransactions(req: TxPoolBesuTransactionsRequest): ServiceResponse[TxPoolBesuTransactionsResponse] =
+  def besuTransactions(@unused req: TxPoolBesuTransactionsRequest): ServiceResponse[TxPoolBesuTransactionsResponse] =
     getTransactionsFromPool.map { resp =>
       Right(
         TxPoolBesuTransactionsResponse(
@@ -114,7 +115,7 @@ class TxPoolService(
     * submitted via local RPC (AddOrOverrideTransaction path). remoteCount: transactions received from P2P peers
     * (AddTransactions path).
     */
-  def besuStatistics(req: TxPoolBesuStatisticsRequest): ServiceResponse[TxPoolBesuStatisticsResponse] =
+  def besuStatistics(@unused req: TxPoolBesuStatisticsRequest): ServiceResponse[TxPoolBesuStatisticsResponse] =
     getTransactionsFromPool.map { resp =>
       val local = resp.pendingTransactions.count(_.receivedFromLocalSource).toLong
       val remote = resp.pendingTransactions.size.toLong - local
@@ -194,7 +195,7 @@ class TxPoolService(
   /** txpool_content — pending txs grouped by sender address → nonce → TransactionObject. core-geth: TxPoolAPI.Content()
     * — pending[account][nonce] = RPCTransaction
     */
-  def content(req: TxPoolContentRequest): ServiceResponse[TxPoolContentResponse] =
+  def content(@unused req: TxPoolContentRequest): ServiceResponse[TxPoolContentResponse] =
     getTransactionsFromPool.map { resp =>
       val pending = resp.pendingTransactions
         .groupBy(pt => pt.stx.senderAddress.toString)
@@ -219,7 +220,7 @@ class TxPoolService(
   /** txpool_status — hex-encoded count of pending and queued transactions. core-geth: TxPoolAPI.Status() — {"pending":
     * hexutil.Uint(N), "queued": 0}
     */
-  def status(req: TxPoolStatusRequest): ServiceResponse[TxPoolStatusResponse] =
+  def status(@unused req: TxPoolStatusRequest): ServiceResponse[TxPoolStatusResponse] =
     getTransactionsFromPool.map { resp =>
       Right(TxPoolStatusResponse(pending = resp.pendingTransactions.size.toLong, queued = 0L))
     }
@@ -228,7 +229,7 @@ class TxPoolService(
     * gasLimit gas × gasPrice wei" or: "contract creation: value wei + gasLimit gas × gasPrice wei" core-geth:
     * TxPoolAPI.Inspect()
     */
-  def inspect(req: TxPoolInspectRequest): ServiceResponse[TxPoolInspectResponse] =
+  def inspect(@unused req: TxPoolInspectRequest): ServiceResponse[TxPoolInspectResponse] =
     getTransactionsFromPool.map { resp =>
       val pending = resp.pendingTransactions
         .groupBy(pt => pt.stx.senderAddress.toString)

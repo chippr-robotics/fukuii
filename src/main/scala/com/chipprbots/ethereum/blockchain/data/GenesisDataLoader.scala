@@ -21,11 +21,7 @@ import org.json4s.JValue
 import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader.JsonSerializers.ByteStringJsonSerializer
 import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader.JsonSerializers.UInt256JsonSerializer
 import com.chipprbots.ethereum.crypto
-import com.chipprbots.ethereum.db.dataSource.EphemDataSource
-import com.chipprbots.ethereum.db.storage.ArchiveNodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
-import com.chipprbots.ethereum.db.storage.NodeStorage
-import com.chipprbots.ethereum.db.storage.SerializingMptStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.db.storage.StateStorage.GenesisDataLoad
 import com.chipprbots.ethereum.domain._

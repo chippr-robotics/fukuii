@@ -29,7 +29,7 @@ class StateValidator(mptStorage: MptStorage) {
         if (missingNodes.isEmpty) Right(Seq.empty)
         else Right(missingNodes.toSeq)
       } catch {
-        case e: MerklePatriciaTrie.MissingNodeException =>
+        case _: MerklePatriciaTrie.MissingNodeException =>
           Left(s"Missing root node: ${stateRoot.take(8).toHex}")
         case e: Exception =>
           Left(s"Failed to load root node: ${e.getMessage}")

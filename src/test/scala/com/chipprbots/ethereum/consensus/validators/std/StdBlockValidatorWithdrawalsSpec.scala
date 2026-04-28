@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.consensus.validators.std
 
-import org.apache.pekko.util.ByteString
-
 import org.bouncycastle.util.encoders.Hex
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers

@@ -11,7 +11,6 @@ import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
 import com.chipprbots.ethereum.mpt
-import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.{encode => encodeRLP}
 import com.chipprbots.ethereum.utils.ByteUtils.matchingLength
@@ -337,7 +336,7 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
         )
       case 0 =>
         // There is no common prefix between the node which means that we need to replace this leaf node
-        val (temporalBranchNode, maybeNewLeaf) =
+        val (temporalBranchNode, _) =
           if (existingKey.isEmpty) // This node has no key so it should be stored as branch's value
             BranchNode.withValueOnly(storedValue.toArray[Byte]) -> None
           else {
@@ -377,7 +376,7 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
       case 0 =>
         // There is no common prefix with the node which means we have to replace it for a branch node
         val sharedKeyHead = sharedKey(0)
-        val (temporalBranchNode, maybeNewExtNode) =
+        val (temporalBranchNode, _) =
           // Direct extension, we just replace the extension with a branch
           if (sharedKey.length == 1) BranchNode.withSingleChild(sharedKeyHead, next, None) -> None
           else {

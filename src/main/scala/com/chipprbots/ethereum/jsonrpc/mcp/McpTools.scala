@@ -4,6 +4,7 @@ import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 
+import scala.annotation.unused
 import scala.concurrent.ExecutionContext
 import scala.util.Try
 
@@ -15,7 +16,7 @@ import org.json4s.DefaultFormats
 
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.domain.Address
-import com.chipprbots.ethereum.jsonrpc.{AkkaTaskOps, McpDependencies, McpService}
+import com.chipprbots.ethereum.jsonrpc.{AkkaTaskOps, McpDependencies}
 import com.chipprbots.ethereum.jsonrpc.McpService._
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.network.PeerManagerActor
@@ -61,7 +62,7 @@ object NodeStatusTool {
     "Get the current status of the Fukuii node including sync state, peer count, and block numbers"
   )
 
-  def execute(deps: McpDependencies)(implicit timeout: Timeout, ec: ExecutionContext): IO[String] = {
+  def execute(deps: McpDependencies)(implicit timeout: Timeout, @unused ec: ExecutionContext): IO[String] = {
     val syncStatusIO = deps.syncController.askFor[SyncProtocol.Status](SyncProtocol.GetStatus)
     val peersIO = deps.peerManager.askFor[PeerManagerActor.Peers](PeerManagerActor.GetPeers)
 
@@ -73,7 +74,7 @@ object NodeStatusTool {
       val peerCount = peers.peers.size
       val handshakedCount = peers.handshaked.size
       val (syncState, progress) = syncStatus match {
-        case SyncProtocol.Status.Syncing(start, blocks, stateNodes) =>
+        case SyncProtocol.Status.Syncing(start, blocks, _) =>
           val pct =
             if (blocks.target > 0) f"${(blocks.current.toDouble / blocks.target.toDouble * 100)}%.1f%%" else "N/A"
           (s"Syncing (from block $start)", s"Block ${blocks.current}/${blocks.target} ($pct)")
@@ -128,7 +129,7 @@ object SyncStatusTool {
   val name = "mcp_sync_status"
   val description = Some("Get detailed synchronization status including mode, progress, and remaining blocks")
 
-  def execute(deps: McpDependencies)(implicit timeout: Timeout, ec: ExecutionContext): IO[String] =
+  def execute(deps: McpDependencies)(implicit timeout: Timeout, @unused ec: ExecutionContext): IO[String] =
     deps.syncController
       .askFor[SyncProtocol.Status](SyncProtocol.GetStatus)
       .recover { case _ =>
@@ -171,7 +172,7 @@ object PeerListTool {
   val name = "mcp_peer_list"
   val description = Some("List all connected peers with their addresses, status, and connection direction")
 
-  def execute(deps: McpDependencies)(implicit timeout: Timeout, ec: ExecutionContext): IO[String] =
+  def execute(deps: McpDependencies)(implicit timeout: Timeout, @unused ec: ExecutionContext): IO[String] =
     deps.peerManager
       .askFor[PeerManagerActor.Peers](PeerManagerActor.GetPeers)
       .recover { case _ =>

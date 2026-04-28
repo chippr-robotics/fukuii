@@ -11,6 +11,7 @@ import com.chipprbots.ethereum.mpt.ExtensionNode
 import com.chipprbots.ethereum.mpt.BranchNode
 import com.chipprbots.ethereum.mpt.HashNode
 import com.chipprbots.ethereum.utils.Logger
+import scala.annotation.unused
 
 /** Merkle proof verifier for SNAP sync
   *
@@ -47,8 +48,8 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
   def verifyAccountRange(
       accounts: Seq[(ByteString, Account)],
       proof: Seq[ByteString],
-      startHash: ByteString,
-      endHash: ByteString
+      @unused startHash: ByteString,
+      @unused endHash: ByteString
   ): Either[String, Unit] = {
 
     // For non-empty tries, even an empty account range must come with a proof proving non-existence.

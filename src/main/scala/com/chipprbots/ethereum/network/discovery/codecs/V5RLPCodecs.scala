@@ -12,11 +12,9 @@ import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPCodec
 import com.chipprbots.ethereum.rlp.RLPCodec.Ops
 import com.chipprbots.ethereum.rlp.RLPEncoder
-import com.chipprbots.ethereum.rlp.RLPImplicitConversions.toEncodeable
 import com.chipprbots.ethereum.rlp.RLPImplicitDerivations._
-import com.chipprbots.ethereum.rlp.RLPImplicits.{*, given}
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
-import com.chipprbots.ethereum.rlp.RLPValue
 
 /** RLP codecs for discv5 [[Payload]] types per
   * https://github.com/ethereum/devp2p/blob/master/discv5/discv5-wire.md#protocol-messages.
