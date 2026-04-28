@@ -120,7 +120,11 @@ services:
     volumes:
       - ${FUKUII_DATA_DIR:-./data/fukuii}:/app/data
       - ./fukuii-conf-1:/app/conf:ro
-    # Assembly JAR uses java entrypoint directly (not dist launcher)
+    # Override the image entrypoint (`java -jar <jar>`) — that puts -jar
+    # before any flags we add via `command`, which makes the JVM treat all
+    # our -X / -D flags as program args. We need JVM args BEFORE -jar, so
+    # invoke `java` directly here.
+    entrypoint: ["java"]
     command:
       - "-Xmx6g"
       - "-Xms2g"
@@ -147,14 +151,17 @@ services:
     container_name: fukuii-secondary
     restart: unless-stopped
     ports:
-      - "${FUKUII_SECONDARY_RPC_PORT:-8547}:8545"
-      - "${FUKUII_SECONDARY_WS_PORT:-8548}:8546"
+      # Secondary's mordor.conf binds HTTP RPC on container:8546 (not 8545
+      # like the primary), so the host->container map skips 8545 entirely.
+      - "${FUKUII_SECONDARY_RPC_PORT:-8547}:8546"
       - "${FUKUII_SECONDARY_P2P_PORT:-30304}:30304/tcp"
       - "${FUKUII_SECONDARY_DISCOVERY_PORT:-30304}:30304/udp"
       - "${FUKUII_SECONDARY_METRICS_PORT:-9096}:9095"
     volumes:
       - ${FUKUII_SECONDARY_DATA_DIR:-./data/fukuii-secondary}:/app/data
       - ./fukuii-conf-2:/app/conf:ro
+    # See fukuii-primary for the entrypoint-override rationale.
+    entrypoint: ["java"]
     command:
       - "-Xmx3g"
       - "-Xms1g"
