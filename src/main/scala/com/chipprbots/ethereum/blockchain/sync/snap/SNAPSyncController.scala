@@ -301,6 +301,9 @@ class SNAPSyncController(
     case RequestTrieNodeHealing =>
       requestTrieNodeHealing()
 
+    case EnsureSnapServerPeersConnected =>
+      ensureSnapServerPeersConnected()
+
     // Handle SNAP protocol responses
     case msg: AccountRange =>
       log.debug(s"Received AccountRange response: requestId=${msg.requestId}, accounts=${msg.accounts.size}")
@@ -2008,6 +2011,17 @@ class SNAPSyncController(
         )(ec, self)
       )
 
+      // Ensure configured snap-server-peers are connected at healing start, then periodically.
+      // Besu (or any static SNAP server) may disconnect after the storage phase. Reconnecting
+      // guarantees it is in the peer pool when healing dispatches GetTrieNodes requests.
+      ensureSnapServerPeersConnected()
+      scheduler.scheduleWithFixedDelay(
+        30.seconds,
+        30.seconds,
+        self,
+        EnsureSnapServerPeersConnected
+      )(ec)
+
       progressMonitor.startPhase(StateHealing)
 
       // Run initial trie walk asynchronously to discover missing nodes
@@ -2017,6 +2031,7 @@ class SNAPSyncController(
 
   // Internal message for periodic healing requests
   private case object RequestTrieNodeHealing
+  private case object EnsureSnapServerPeersConnected
 
   private def requestTrieNodeHealing(): Unit =
     // Notify coordinator of available peers
@@ -2034,6 +2049,28 @@ class SNAPSyncController(
         }
       }
     }
+
+  /** Reconnect to any configured snap-server-peers that are not currently connected.
+    *
+    * snap-server-peers are static SNAP-serving nodes (e.g. local Besu with
+    * --snapsync-server-enabled) that are the only source of ETC GetTrieNodes responses.
+    * They may disconnect after the storage phase. This method ensures reconnection so they
+    * are in the peer pool when healing dispatches requests.
+    */
+  private def ensureSnapServerPeersConnected(): Unit = {
+    if (snapSyncConfig.snapServerPeers.isEmpty) return
+    val connectedAddresses = peersToDownloadFrom.values.map { p =>
+      (p.peer.remoteAddress.getHostString, p.peer.remoteAddress.getPort)
+    }.toSet
+    snapSyncConfig.snapServerPeers.foreach { uri =>
+      val host = uri.getHost
+      val port = uri.getPort
+      if (!connectedAddresses.contains((host, port))) {
+        log.info(s"snap-server-peer $host:$port not connected — reconnecting")
+        networkPeerManager ! com.chipprbots.ethereum.network.PeerManagerActor.ConnectToPeer(uri)
+      }
+    }
+  }
 
   private def validateState(): Unit = {
     if (!snapSyncConfig.stateValidationEnabled) {
@@ -2820,7 +2857,12 @@ case class SNAPSyncConfig(
     // Bug 30b: post-SNAP storage recovery can't refresh the pivot root. If every peer
     // rejects the saved root for this long with no slot progress, abandon recovery and
     // let regular sync's on-demand GetTrieNodes pick up missing subtrees.
-    storageRecoveryAbandonTimeout: FiniteDuration = 10.minutes
+    storageRecoveryAbandonTimeout: FiniteDuration = 10.minutes,
+    // Static SNAP server peers: addresses to always maintain a connection with during SNAP sync.
+    // Use for local SNAP-serving nodes (e.g. Besu with --snapsync-server-enabled) that may
+    // disconnect after storage phase but are needed for trie node healing.
+    // Format: enode://PUBKEY@HOST:PORT
+    snapServerPeers: List[java.net.URI] = Nil
 )
 
 object SNAPSyncConfig {
@@ -2916,7 +2958,18 @@ object SNAPSyncConfig {
       storageRecoveryAbandonTimeout =
         if (snapConfig.hasPath("storage-recovery-abandon-timeout"))
           snapConfig.getDuration("storage-recovery-abandon-timeout").toMillis.millis
-        else 10.minutes
+        else 10.minutes,
+      snapServerPeers =
+        if (snapConfig.hasPath("snap-server-peers"))
+          snapConfig
+            .getStringList("snap-server-peers")
+            .toArray
+            .toList
+            .flatMap { s =>
+              try Some(new java.net.URI(s.toString))
+              catch { case _: Exception => None }
+            }
+        else Nil
     )
   }
 }
