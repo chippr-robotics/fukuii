@@ -198,7 +198,7 @@ class StateValidator(mptStorage: MptStorage) {
 
     try {
       val rootNode = mptStorage.get(stateRoot.toArray)
-      walkAccountTrieBFS(rootNode, result)
+      walkAccountTrieDFS(rootNode, result)
       Right(result.toSeq)
     } catch {
       case _: MerklePatriciaTrie.MissingNodeException =>
@@ -210,18 +210,21 @@ class StateValidator(mptStorage: MptStorage) {
     }
   }
 
-  private def walkAccountTrieBFS(
+  private def walkAccountTrieDFS(
       rootNode: MptNode,
       result: mutable.ArrayBuffer[(Seq[ByteString], ByteString)]
   ): Unit = {
     import com.chipprbots.ethereum.domain.Account.accountSerializer
 
-    // Queue items: (node, nibble-path-so-far)
-    val queue   = mutable.Queue[(MptNode, Array[Byte])]((rootNode, Array.empty))
+    // Use a stack (DFS) instead of a queue (BFS). DFS uses O(trie_depth) space —
+    // typically 8-9 levels for ETC mainnet — vs O(trie_width) for BFS which can
+    // accumulate millions of BranchNodes simultaneously (OOM on 85.9M account tries).
+    val stack   = mutable.ArrayDeque[(MptNode, Array[Byte])]()
     val visited = mutable.Set[ByteString]()
+    stack.prepend((rootNode, Array.emptyByteArray))
 
-    while (queue.nonEmpty) {
-      val (node, nibblePath) = queue.dequeue()
+    while (stack.nonEmpty) {
+      val (node, nibblePath) = stack.removeHead()
 
       node match {
         case NullNode => ()
@@ -230,12 +233,12 @@ class StateValidator(mptStorage: MptStorage) {
           try {
             val account = accountSerializer.fromBytes(leaf.value.toArray)
             if (account.storageRoot != com.chipprbots.ethereum.domain.Account.EmptyStorageRootHash) {
-              val fullNibblePath  = nibblePath ++ leaf.key.toArray
+              val fullNibblePath   = nibblePath ++ leaf.key.toArray
               val accountHashBytes = HexPrefix.nibblesToBytes(fullNibblePath)
               try {
                 val storageRoot = mptStorage.get(account.storageRoot.toArray)
-                // Each storage trie gets its own BFS + visited set (independent walk)
-                walkStorageTrieBFS(storageRoot, ByteString(accountHashBytes), result)
+                // Each storage trie gets its own DFS + visited set (independent walk)
+                walkStorageTrieDFS(storageRoot, ByteString(accountHashBytes), result)
               } catch {
                 case _: MerklePatriciaTrie.MissingNodeException =>
                   val compactPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
@@ -248,29 +251,30 @@ class StateValidator(mptStorage: MptStorage) {
           val nodeHash = ByteString(ext.hash)
           if (!visited.contains(nodeHash)) {
             visited += nodeHash
-            queue.enqueue((ext.next, nibblePath ++ ext.sharedKey.toArray))
+            stack.prepend((ext.next, nibblePath ++ ext.sharedKey.toArray))
           }
 
         case branch: BranchNode =>
           val nodeHash = ByteString(branch.hash)
           if (!visited.contains(nodeHash)) {
             visited += nodeHash
-            for (i <- 0 until 16) {
+            // Push in reverse order so child 0 is processed first (consistent ordering)
+            for (i <- 15 to 0 by -1) {
               val child = branch.children(i)
               if (!child.isNull)
-                queue.enqueue((child, nibblePath :+ i.toByte))
+                stack.prepend((child, nibblePath :+ i.toByte))
             }
           }
 
         case hash: HashNode =>
           // Do NOT add hash.hash to visited here: decodeNode sets cachedHash = lookupKey,
-          // so the resolved node shares the same hash and will add itself when dequeued.
+          // so the resolved node shares the same hash and will add itself when popped.
           // Adding it here would cause the resolved node's branch/extension case to skip itself.
           val hashKey = ByteString(hash.hash)
           if (!visited.contains(hashKey)) {
             try {
               val resolvedNode = mptStorage.get(hash.hash)
-              queue.enqueue((resolvedNode, nibblePath))
+              stack.prepend((resolvedNode, nibblePath))
             } catch {
               case _: MerklePatriciaTrie.MissingNodeException =>
                 val compactPath = ByteString(HexPrefix.encode(nibblePath, isLeaf = false))
@@ -281,16 +285,17 @@ class StateValidator(mptStorage: MptStorage) {
     }
   }
 
-  private def walkStorageTrieBFS(
+  private def walkStorageTrieDFS(
       rootNode: MptNode,
       accountHash: ByteString,
       result: mutable.ArrayBuffer[(Seq[ByteString], ByteString)]
   ): Unit = {
-    val queue   = mutable.Queue[(MptNode, Array[Byte])]((rootNode, Array.empty))
+    val stack   = mutable.ArrayDeque[(MptNode, Array[Byte])]()
     val visited = mutable.Set[ByteString]()
+    stack.prepend((rootNode, Array.emptyByteArray))
 
-    while (queue.nonEmpty) {
-      val (node, nibblePath) = queue.dequeue()
+    while (stack.nonEmpty) {
+      val (node, nibblePath) = stack.removeHead()
 
       node match {
         case _: LeafNode | NullNode => ()
@@ -299,17 +304,17 @@ class StateValidator(mptStorage: MptStorage) {
           val nodeHash = ByteString(ext.hash)
           if (!visited.contains(nodeHash)) {
             visited += nodeHash
-            queue.enqueue((ext.next, nibblePath ++ ext.sharedKey.toArray))
+            stack.prepend((ext.next, nibblePath ++ ext.sharedKey.toArray))
           }
 
         case branch: BranchNode =>
           val nodeHash = ByteString(branch.hash)
           if (!visited.contains(nodeHash)) {
             visited += nodeHash
-            for (i <- 0 until 16) {
+            for (i <- 15 to 0 by -1) {
               val child = branch.children(i)
               if (!child.isNull)
-                queue.enqueue((child, nibblePath :+ i.toByte))
+                stack.prepend((child, nibblePath :+ i.toByte))
             }
           }
 
@@ -318,7 +323,7 @@ class StateValidator(mptStorage: MptStorage) {
           if (!visited.contains(hashKey)) {
             try {
               val resolvedNode = mptStorage.get(hash.hash)
-              queue.enqueue((resolvedNode, nibblePath))
+              stack.prepend((resolvedNode, nibblePath))
             } catch {
               case _: MerklePatriciaTrie.MissingNodeException =>
                 val compactPath = ByteString(HexPrefix.encode(nibblePath, isLeaf = false))
