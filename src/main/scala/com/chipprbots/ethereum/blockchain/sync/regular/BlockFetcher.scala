@@ -352,10 +352,28 @@ class BlockFetcher(
         log.warn("Received late/duplicate RetryBodiesRequest (not fetching). Clearing state and retrying fetch.")
         fetchBlocks(state)
 
-      case FetchStateNode(hash, replyTo, stateRoot, paths, networkHead) =>
+      case FetchStateNode(hash, replyTo, stateRoot, paths, networkHead, isByteCode) =>
         val head = if (networkHead > 0) networkHead else state.knownTop
-        log.debug("Fetching state node for hash {}, networkHead={}", ByteStringUtils.hash2string(hash), head)
-        stateNodeFetcher ! StateNodeFetcher.FetchStateNode(hash, replyTo, stateRoot, paths, head)
+        log.debug(
+          "Fetching state node for hash {}, networkHead={}, isByteCode={}",
+          ByteStringUtils.hash2string(hash),
+          head,
+          isByteCode
+        )
+        // Forward the latest header stateRoot we've seen as a fallback. SNAP peers prune to ~128
+        // blocks; if the requested parent stateRoot is older than that, every peer returns empty
+        // TrieNodes and StateNodeFetcher exhausts. The recent canonical root IS servable, and
+        // the same nibble path usually still leads to the same content-addressed node.
+        val fallbackRoot = state.recentCanonicalStateRoot.filter(r => !stateRoot.contains(r))
+        stateNodeFetcher ! StateNodeFetcher.FetchStateNode(
+          hash,
+          replyTo,
+          stateRoot,
+          paths,
+          head,
+          isByteCode,
+          fallbackRoot
+        )
         Behaviors.same
 
       case AdaptedMessageFromEventBus(NewBlockHashes(hashes), _) =>
@@ -594,7 +612,12 @@ object BlockFetcher {
       replyTo: ClassicActorRef,
       stateRoot: Option[ByteString] = None,
       paths: Option[Seq[Seq[ByteString]]] = None,
-      networkHead: BigInt = BigInt(0)
+      networkHead: BigInt = BigInt(0),
+      // True when `hash` is a contract codeHash and the recovery should use SNAP GetByteCodes.
+      // False (default) means it's a trie-node hash and should use GetTrieNodes / GetNodeData.
+      // Discriminating here avoids an infinite GetNodeData loop on ETH68-only peer sets, where
+      // GetNodeData was removed but GetByteCodes is still served by every snap-capable peer.
+      isByteCode: Boolean = false
   ) extends FetchCommand
   case object RetryFetchStateNode extends FetchCommand
   final case class PickBlocks(amount: Int, replyTo: ClassicActorRef) extends FetchCommand

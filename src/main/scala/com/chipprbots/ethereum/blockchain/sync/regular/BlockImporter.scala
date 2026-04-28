@@ -17,6 +17,7 @@ import cats.implicits._
 import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
+import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockBroadcast.BlockToBroadcast
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockBroadcasterActor.BroadcastBlocks
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync.ProgressProtocol
@@ -62,6 +63,14 @@ class BlockImporter(
   implicit val runtime: IORuntime = IORuntime.global
 
   context.setReceiveTimeout(syncConfig.syncRetryInterval)
+
+  // Counts consecutive state-node-fetch exhausts since the last successful state-node delivery.
+  // Don't key on block number: branch resolution walks the chain back one block per backoff
+  // cycle (24428221 → 24428220 → ...), so per-block tracking would never reach the threshold.
+  // After [[StuckEscapeThreshold]] consecutive exhausts anywhere, regular sync is deemed
+  // terminally stuck and we signal SyncController to re-trigger SNAP from a recent pivot.
+  private var consecutiveExhausts: Int = 0
+  private var pendingStateNodeHash: Option[ByteString] = None
 
   override def receive: Receive = idle
 
@@ -125,6 +134,47 @@ class BlockImporter(
   private def resolvingMissingNode(blocksToRetry: NonEmptyList[Block], blockImportType: BlockImportType)(
       state: ImporterState
   ): Receive = {
+    case BlockFetcher.FetchedStateNode(nodeData) if nodeData.values.isEmpty =>
+      // StateNodeFetcher exhausted MaxStateNodeFetchRetries on this missing node — no current peer
+      // can serve it via SNAP GetTrieNodes (typical: pivot fell out of the 128-block serve window
+      // on every connected peer).
+      val blockNum = blocksToRetry.head.number
+      consecutiveExhausts += 1
+      val missingHashStr = pendingStateNodeHash.map(ByteStringUtils.hash2string).getOrElse("<unknown>")
+
+      if (consecutiveExhausts >= BlockImporter.StuckEscapeThreshold) {
+        // Multiple consecutive exhausts mean peers genuinely don't have our parent state and
+        // never will (we're far behind their snap-serve window). The only recovery is to re-pivot
+        // via SNAP. Reset our local counter so we don't re-fire if SyncController bounces us back
+        // to regular sync; the SnapFastEscapeHatch handles cycle limits.
+        log.error(
+          "Regular sync stuck on block {} after {} consecutive state-node exhausts (missing {}); requesting SNAP re-sync",
+          blockNum,
+          consecutiveExhausts,
+          missingHashStr
+        )
+        consecutiveExhausts = 0
+        pendingStateNodeHash = None
+        supervisor ! SyncProtocol.RegularSyncStuck(blockNum, missingHashStr)
+        // Don't transition further — SyncController will PoisonPill regular sync.
+      } else {
+        log.error(
+          "State node recovery failed after max retries for block {} (consecutive exhausts: {}/{}) — backing off {}s before retry",
+          blockNum,
+          consecutiveExhausts,
+          BlockImporter.StuckEscapeThreshold,
+          5.minutes.toSeconds
+        )
+        fetcher ! BlockFetcher.InvalidateBlocksFrom(
+          blockNum,
+          "state node unrecoverable after max retries",
+          shouldBlacklist = false
+        )
+        // Don't self ! PickBlocks — that would immediately retry the same block.
+        context.setReceiveTimeout(5.minutes)
+        context.become(running(state))
+      }
+
     case BlockFetcher.FetchedStateNode(nodeData) =>
       val node = nodeData.values.head
       val hash = kec256(node)
@@ -138,6 +188,10 @@ class BlockImporter(
       // and the data is the bytecode. EvmCodeStorage is keyed by codeHash, same as the fetch.
       try evmCodeStorage.put(hash, node).commit()
       catch { case _: Exception => () }
+      // Successful state-node delivery — reset stuck-counter so a later transient failure on a
+      // different block doesn't escalate to SNAP re-sync prematurely.
+      consecutiveExhausts = 0
+      pendingStateNodeHash = None
       importBlocks(blocksToRetry, blockImportType)(state)
 
     case ReceiveTimeout =>
@@ -464,6 +518,7 @@ class BlockImporter(
                   failedBlock.number,
                   paths.isDefined
                 )
+                pendingStateNodeHash = Some(e.hash)
                 fetcher ! BlockFetcher.FetchStateNode(e.hash, self, parentStateRoot, paths)
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
               case e: MissingStorageNodeException =>
@@ -487,6 +542,7 @@ class BlockImporter(
                   failedBlock.number,
                   parentStateRoot.map(ByteStringUtils.hash2string)
                 )
+                pendingStateNodeHash = Some(e.hash)
                 fetcher ! BlockFetcher.FetchStateNode(e.hash, self, parentStateRoot, paths)
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
               case e: MissingNodeException =>
@@ -509,6 +565,7 @@ class BlockImporter(
                   parentStateRoot.map(ByteStringUtils.hash2string),
                   paths.isDefined
                 )
+                pendingStateNodeHash = Some(e.hash)
                 fetcher ! BlockFetcher.FetchStateNode(e.hash, self, parentStateRoot, paths)
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
               case _ if err.toString.contains("Block has invalid gas used") =>
@@ -519,7 +576,7 @@ class BlockImporter(
                 findMissingContractCode(failedBlock) match {
                   case Some(codeHash) =>
                     log.warning(
-                      "Gas mismatch on block {} — missing contract code {}. Fetching via GetNodeData.",
+                      "Gas mismatch on block {} — missing contract code {}. Fetching via SNAP GetByteCodes.",
                       failedBlock.number,
                       ByteStringUtils.hash2string(codeHash)
                     )
@@ -528,7 +585,16 @@ class BlockImporter(
                         Option(blockchainReader.getBlockHeaderByHash(failedBlock.header.parentHash)).flatten
                           .map(_.stateRoot)
                       catch { case _: Exception => None }
-                    fetcher ! BlockFetcher.FetchStateNode(codeHash, self, parentStateRoot, None)
+                    pendingStateNodeHash = Some(codeHash)
+                    // isByteCode=true routes the fetch through SNAP GetByteCodes (works on ETH68+)
+                    // instead of the legacy GetNodeData path (which has no peers on modern networks).
+                    fetcher ! BlockFetcher.FetchStateNode(
+                      codeHash,
+                      self,
+                      parentStateRoot,
+                      paths = None,
+                      isByteCode = true
+                    )
                     ResolvingMissingNode(NonEmptyList(failedBlock, notImportedBlocks.tail))
                   case None =>
                     log.error("Gas mismatch on block {} but no missing contract code found", failedBlock.number)
@@ -754,6 +820,11 @@ class BlockImporter(
 }
 
 object BlockImporter {
+  // After this many consecutive state-node-fetch exhausts on the same block, regular sync
+  // is deemed terminally stuck and we escalate to SNAP re-sync via SyncProtocol.RegularSyncStuck.
+  // 3 × 5-min backoff = ~15 minutes of bounded retry before invoking the escape valve.
+  val StuckEscapeThreshold: Int = 3
+
   // scalastyle:off parameter.number
   def props(
       fetcher: ActorRef,

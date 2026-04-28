@@ -257,6 +257,19 @@ class SyncController(
         handleRestartFastSync()
       case RestartFastSyncNow =>
         doRestartFastSyncNow()
+      case SyncProtocol.RegularSyncStuck(blockNumber, missingHash) =>
+        // Regular sync can't make progress: state-node recovery has exhausted on the same hash
+        // 3+ times. Local parent state is too far behind canonical tip for any peer's snap-serve
+        // window, so trie-node fetches keep returning empty. Only viable recovery is to re-run
+        // SNAP from a recent pivot. Kill regular sync, clear SnapSyncDone, and start SNAP.
+        log.error(
+          "Regular sync stuck on block {} (missing {}). Re-triggering SNAP sync from a recent pivot.",
+          blockNumber,
+          missingHash
+        )
+        regularSync ! PoisonPill
+        appStateStorage.clearSnapSyncDone().commit()
+        startSnapSync()
       case msg =>
         regularSync.forward(msg)
     }

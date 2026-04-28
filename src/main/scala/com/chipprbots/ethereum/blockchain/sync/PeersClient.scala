@@ -34,6 +34,8 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetReceipts => ETH66G
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{NodeData => ETH66NodeData}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{Receipts => ETH66Receipts}
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes
 import com.chipprbots.ethereum.utils.Config.SyncConfig
@@ -242,6 +244,7 @@ class PeersClient(
       case _: GetNodeData           => implicitly[ClassTag[NodeData]]
       case _: ETH66GetNodeData      => implicitly[ClassTag[ETH66NodeData]]
       case _: GetTrieNodes          => implicitly[ClassTag[TrieNodes]]
+      case _: GetByteCodes          => implicitly[ClassTag[ByteCodes]]
     }
 
   private def responseMsgCode[RequestMsg <: Message](requestMsg: RequestMsg): Int =
@@ -252,6 +255,7 @@ class PeersClient(
       case _: GetNodeData                                     => Codes.NodeDataCode
       case _: ETH66GetNodeData                                => Codes.NodeDataCode
       case _: GetTrieNodes                                    => SNAP.Codes.TrieNodesCode
+      case _: GetByteCodes                                    => SNAP.Codes.ByteCodesCode
     }
 
   private def printStatus(requesters: Requesters): Unit = {
