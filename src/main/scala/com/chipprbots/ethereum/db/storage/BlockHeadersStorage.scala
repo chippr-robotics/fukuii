@@ -18,8 +18,6 @@ import com.chipprbots.ethereum.utils.Picklers._
 class BlockHeadersStorage(val dataSource: DataSource)
     extends TransactionalKeyValueStorage[BlockHeaderHash, BlockHeader] {
 
-  import BlockHeadersStorage._
-
   override val namespace: IndexedSeq[Byte] = Namespaces.HeaderNamespace
 
   override def keySerializer: BlockHeaderHash => IndexedSeq[Byte] = _.toIndexedSeq

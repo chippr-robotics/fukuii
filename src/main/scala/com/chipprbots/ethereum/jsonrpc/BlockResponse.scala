@@ -2,8 +2,6 @@ package com.chipprbots.ethereum.jsonrpc
 
 import org.apache.pekko.util.ByteString
 
-import cats.implicits._
-
 import com.chipprbots.ethereum.consensus.pow.RestrictedPoWSigner
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain.Block
@@ -80,8 +78,7 @@ object BlockResponse {
       block: Block,
       weight: Option[ChainWeight] = None,
       fullTxs: Boolean = false,
-      pendingBlock: Boolean = false,
-      coinbase: Option[ByteString] = None
+      pendingBlock: Boolean = false
   ): BlockResponse = {
     val transactions =
       if (fullTxs)

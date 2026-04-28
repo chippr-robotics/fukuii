@@ -2,7 +2,6 @@ package com.chipprbots.ethereum.network.snapserver
 
 import org.apache.pekko.util.ByteString
 
-import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt._
@@ -104,15 +103,6 @@ object SnapServer extends Logger {
     RLPList(nonceRlp, balanceRlp, srRlp, chRlp)
   }
 
-  /** RLP-encode a node and emit its keccak256 hash + encoded bytes. Used when collecting proof nodes — peers verify by
-    * re-hashing each proof node and matching against parent references.
-    */
-  private def encodeNodeWithHash(node: MptNode): (ByteString, ByteString) = {
-    val encoded = MptTraversals.encodeNode(node)
-    val hash = ByteString(kec256(encoded))
-    (hash, ByteString(encoded))
-  }
-
   /** Range walker — yields (keyHash, leafValue) pairs whose key falls in [originNibbles, limitNibbles] (inclusive on
     * both ends), traversing the trie in key order. Caller stops consuming when their byte budget is exceeded.
     *
@@ -124,9 +114,6 @@ object SnapServer extends Logger {
 
   private def maxKeyWith(prefix: Array[Byte]): Array[Byte] =
     prefix ++ Array.fill(math.max(0, FullKeyNibbles - prefix.length))(15.toByte)
-
-  private def minKeyWith(prefix: Array[Byte]): Array[Byte] =
-    prefix ++ Array.fill(math.max(0, FullKeyNibbles - prefix.length))(0.toByte)
 
   /** Subtree-prune predicate. We only skip subtrees that lie strictly BELOW `origin` (i.e. their max key is < origin).
     * Subtrees ABOVE `limit` are intentionally not pruned — the visitor's stop-on-`>=limit` rule needs to see the first

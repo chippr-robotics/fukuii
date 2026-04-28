@@ -161,8 +161,6 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers {
         blockchainWriter,
         blockExec,
         forkChoiceManager,
-        mining,
-        storagesInstance.storages.evmCodeStorage,
         pendingTxManager
       )(blockchainConfig)
 

@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 
+import scala.annotation.unused
 import scala.concurrent.duration.FiniteDuration
 import scala.util.Failure
 import scala.util.Success
@@ -177,7 +178,7 @@ class EthTxService(
       } yield TransactionData(transaction, Some(blockWithTx.header), Some(transactionIndex.toInt))
     }
 
-  def getGetGasPrice(req: GetGasPriceRequest): ServiceResponse[GetGasPriceResponse] = {
+  def getGetGasPrice(@unused req: GetGasPriceRequest): ServiceResponse[GetGasPriceResponse] = {
     val blockDifference = 30
     val bestBlock = blockchainReader.getBestBlockNumber()
 
@@ -305,7 +306,9 @@ class EthTxService(
     * @return
     *   pending transactions
     */
-  def ethPendingTransactions(req: EthPendingTransactionsRequest): ServiceResponse[EthPendingTransactionsResponse] =
+  def ethPendingTransactions(
+      @unused req: EthPendingTransactionsRequest
+  ): ServiceResponse[EthPendingTransactionsResponse] =
     getTransactionsFromPool.map { resp =>
       Right(EthPendingTransactionsResponse(resp.pendingTransactions))
     }

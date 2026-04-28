@@ -5,6 +5,8 @@ import org.apache.pekko.util.ByteString
 import cats.effect.IO
 
 import scala.collection.mutable
+import scala.util.boundary
+import scala.util.boundary.break
 
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.consensus.validators.std.MptListValidator
@@ -141,12 +143,14 @@ class EthSimulateService(
       Left(JsonRpcError.NodeNotFound)
     }
 
-  private def doSimulate(req: EthSimulateRequest): Either[JsonRpcError, EthSimulateResponse] = {
+  private def doSimulate(req: EthSimulateRequest): Either[JsonRpcError, EthSimulateResponse] = boundary {
     // Validate blockStateCalls count
     if (req.blockStateCalls.size > MaxBlockStateCalls) {
-      return Left(
-        JsonRpcError.SimulateClientLimitExceeded(
-          s"too many block state calls: ${req.blockStateCalls.size} > $MaxBlockStateCalls"
+      break(
+        Left(
+          JsonRpcError.SimulateClientLimitExceeded(
+            s"too many block state calls: ${req.blockStateCalls.size} > $MaxBlockStateCalls"
+          )
         )
       )
     }
@@ -156,12 +160,15 @@ class EthSimulateService(
       case Right(resolved) => resolved.block
       case Left(_)         =>
         // Return -32000 for block not found (not -32602)
-        return Left(JsonRpcError.LogicError(s"header not found"))
+        break(Left(JsonRpcError.LogicError(s"header not found")))
     }
 
     // Pre-validate block number/timestamp ordering
     val validationResult = validateBlockOrdering(req.blockStateCalls, baseBlock.header)
-    if (validationResult.isLeft) return validationResult.map(_ => null)
+    validationResult match {
+      case Left(err) => break(Left(err))
+      case _         =>
+    }
 
     // Simulated block hash registry for BLOCKHASH opcode support
     val simulatedBlockHashes = mutable.Map[BigInt, ByteString]()
@@ -197,14 +204,16 @@ class EthSimulateService(
       prevNum = targetNum
     }
     if (totalBlocks > MaxBlockStateCalls) {
-      return Left(
-        JsonRpcError.SimulateClientLimitExceeded(
-          s"too many blocks (including gaps): $totalBlocks > $MaxBlockStateCalls"
+      break(
+        Left(
+          JsonRpcError.SimulateClientLimitExceeded(
+            s"too many blocks (including gaps): $totalBlocks > $MaxBlockStateCalls"
+          )
         )
       )
     }
 
-    for ((blockStateCall, blockIdx) <- req.blockStateCalls.zipWithIndex) {
+    for ((blockStateCall, _) <- req.blockStateCalls.zipWithIndex) {
       val targetNumber = blockStateCall.blockOverrides.flatMap(_.number).getOrElse(parentHeader.number + 1)
 
       // Generate gap-filling empty blocks if the target number is ahead.
@@ -225,7 +234,7 @@ class EthSimulateService(
           simulatedBlockHashes
         )
         gapResult match {
-          case Left(err) => return Left(err)
+          case Left(err) => break(Left(err))
           case Right((gapHeader, gapWorld, gapBlockResult, gapGasUsed)) =>
             blockResults += gapBlockResult
             simulatedBlockHashes(gapHeader.number) = gapHeader.hash
@@ -262,7 +271,7 @@ class EthSimulateService(
         simulatedBlockHashes
       )
       bscResult match {
-        case Left(err) => return Left(err)
+        case Left(err) => break(Left(err))
         case Right((bscHeader, bscWorld, bscBlockResult, bscGasUsed)) =>
           blockResults += bscBlockResult
           simulatedBlockHashes(bscHeader.number) = bscHeader.hash
@@ -288,7 +297,7 @@ class EthSimulateService(
       globalGasOffset: BigInt,
       initialWorld: InMemoryWorldStateProxy,
       @annotation.unused simulatedBlockHashes: mutable.Map[BigInt, ByteString]
-  ): Either[JsonRpcError, (BlockHeader, InMemoryWorldStateProxy, SimulateBlockResult, BigInt)] = {
+  ): Either[JsonRpcError, (BlockHeader, InMemoryWorldStateProxy, SimulateBlockResult, BigInt)] = boundary {
     var world = initialWorld
 
     // Build simulated block header
@@ -311,7 +320,7 @@ class EthSimulateService(
         case Right((newWorld, newRelocations)) =>
           world = newWorld
           precompileRelocations = newRelocations
-        case Left(err) => return Left(err)
+        case Left(err) => break(Left(err))
       }
     }
 
@@ -328,7 +337,7 @@ class EthSimulateService(
       blockOverrides.flatMap(_.blobBaseFee)
     )
     execResult match {
-      case Left(err) => return Left(err)
+      case Left(err) => break(Left(err))
       case _         =>
     }
     val (newWorld, callResults, txs, txSenders, receipts, gasUsed) = execResult.toOption.get
@@ -393,7 +402,7 @@ class EthSimulateService(
 
     // Update call results with correct block hash and number
     val blockHash = finalHeader.hash
-    val updatedCallResults = callResults.zipWithIndex.map { case (cr, callIdx) =>
+    val updatedCallResults = callResults.zipWithIndex.map { case (cr, _) =>
       cr.copy(logs =
         cr.logs.map(
           _.copy(
@@ -417,18 +426,22 @@ class EthSimulateService(
   private def validateBlockOrdering(
       blockStateCalls: Seq[BlockStateCall],
       baseHeader: BlockHeader
-  ): Either[JsonRpcError, Unit] = {
+  ): Either[JsonRpcError, Unit] = boundary {
     var prevNumber = baseHeader.number
     var prevTimestamp = BigInt(baseHeader.unixTimestamp)
 
-    for ((bsc, idx) <- blockStateCalls.zipWithIndex) {
+    for ((bsc, _) <- blockStateCalls.zipWithIndex) {
       val overrides = bsc.blockOverrides.getOrElse(BlockOverrides())
       val targetNumber = overrides.number.getOrElse(prevNumber + 1)
 
       // Validate block number override doesn't go backwards
       if (targetNumber <= prevNumber) {
-        return Left(
-          JsonRpcError.SimulateBlockNumberNotIncreasing(s"block numbers must be in order: $targetNumber <= $prevNumber")
+        break(
+          Left(
+            JsonRpcError.SimulateBlockNumberNotIncreasing(
+              s"block numbers must be in order: $targetNumber <= $prevNumber"
+            )
+          )
         )
       }
 
@@ -440,9 +453,11 @@ class EthSimulateService(
 
       // Explicit timestamp must be strictly greater than previous
       if (timestamp <= prevTimestamp) {
-        return Left(
-          JsonRpcError.SimulateTimestampNotIncreasing(
-            s"block timestamps must be in order: $timestamp <= $prevTimestamp"
+        break(
+          Left(
+            JsonRpcError.SimulateTimestampNotIncreasing(
+              s"block timestamps must be in order: $timestamp <= $prevTimestamp"
+            )
           )
         )
       }
@@ -452,9 +467,11 @@ class EthSimulateService(
       if (overrides.time.isDefined && gapBlocks > 1) {
         val minTimestamp = prevTimestamp + gapBlocks * 12
         if (timestamp < minTimestamp) {
-          return Left(
-            JsonRpcError.SimulateTimestampNotIncreasing(
-              s"block timestamps must be in order: $timestamp <= ${minTimestamp - 12}"
+          break(
+            Left(
+              JsonRpcError.SimulateTimestampNotIncreasing(
+                s"block timestamps must be in order: $timestamp <= ${minTimestamp - 12}"
+              )
             )
           )
         }
@@ -551,7 +568,7 @@ class EthSimulateService(
       world: InMemoryWorldStateProxy,
       overrides: Map[Address, StateOverride],
       existingRelocations: Map[Address, Address]
-  ): Either[JsonRpcError, (InMemoryWorldStateProxy, Map[Address, Address])] = {
+  ): Either[JsonRpcError, (InMemoryWorldStateProxy, Map[Address, Address])] = boundary {
     var w = world
     var relocations = existingRelocations
 
@@ -579,7 +596,7 @@ class EthSimulateService(
     for ((address, ov) <- overrides)
       ov.movePrecompileToAddress.foreach { targetAddr =>
         if (!allPrecompiles.contains(address)) {
-          return Left(JsonRpcError.LogicError(s"account ${address.toString} is not a precompile"))
+          break(Left(JsonRpcError.LogicError(s"account ${address.toString} is not a precompile")))
         }
         pendingMoves += (address -> targetAddr)
       }
@@ -656,13 +673,13 @@ class EthSimulateService(
       validation: Boolean,
       traceTransfers: Boolean,
       nonceMap: mutable.Map[Address, BigInt],
-      precompileRelocations: Map[Address, Address] = Map.empty,
-      globalGasOffset: BigInt = BigInt(0),
-      blobBaseFeeOverride: Option[BigInt] = None
+      precompileRelocations: Map[Address, Address],
+      globalGasOffset: BigInt,
+      blobBaseFeeOverride: Option[BigInt]
   ): Either[
     JsonRpcError,
     (InMemoryWorldStateProxy, Seq[SimulateCallResult], Seq[SignedTransaction], Seq[Address], Seq[Receipt], BigInt)
-  ] = {
+  ] = boundary {
     var world = initialWorld
     val callResults = mutable.ArrayBuffer[SimulateCallResult]()
     val txs = mutable.ArrayBuffer[SignedTransaction]()
@@ -697,7 +714,7 @@ class EthSimulateService(
       // Check nonce overflow (uint64 max) — returns -32603 (InternalError)
       val MaxUint64 = BigInt("18446744073709551615") // 0xffffffffffffffff
       if (senderNonce > MaxUint64 || (validation && senderNonce == MaxUint64)) {
-        return Left(JsonRpcError.InternalError)
+        break(Left(JsonRpcError.InternalError))
       }
 
       // Always check: intrinsic gas
@@ -707,9 +724,11 @@ class EthSimulateService(
       }
       val intrinsicGas = baseGas + calldataGas
       if (call.gas.isDefined && gasLimit < intrinsicGas) {
-        return Left(
-          JsonRpcError.SimulateIntrinsicGasTooLow(
-            s"err: intrinsic gas too low: have $gasLimit, want $intrinsicGas (supplied gas $gasLimit)"
+        break(
+          Left(
+            JsonRpcError.SimulateIntrinsicGasTooLow(
+              s"err: intrinsic gas too low: have $gasLimit, want $intrinsicGas (supplied gas $gasLimit)"
+            )
           )
         )
       }
@@ -718,9 +737,11 @@ class EthSimulateService(
       {
         val senderBal = world.getAccount(sender).map(_.balance.toBigInt).getOrElse(BigInt(0))
         if (value > 0 && senderBal < value && !validation) {
-          return Left(
-            JsonRpcError.SimulateInsufficientFunds(
-              s"err: insufficient funds for gas * price + value: address ${sender.toString} have $senderBal want $value (supplied gas ${blockHeader.gasLimit})"
+          break(
+            Left(
+              JsonRpcError.SimulateInsufficientFunds(
+                s"err: insufficient funds for gas * price + value: address ${sender.toString} have $senderBal want $value (supplied gas ${blockHeader.gasLimit})"
+              )
             )
           )
         }
@@ -730,9 +751,11 @@ class EthSimulateService(
       if (validation) {
         // Check maxFeePerGas >= baseFee
         if (baseFee > 0 && maxFeePerGas < baseFee && !call.gasPrice.isDefined) {
-          return Left(
-            JsonRpcError.InvalidParams(
-              s"max fee per gas less than block base fee: address ${sender.toString}, maxFeePerGas: $maxFeePerGas, baseFee: $baseFee"
+          break(
+            Left(
+              JsonRpcError.InvalidParams(
+                s"max fee per gas less than block base fee: address ${sender.toString}, maxFeePerGas: $maxFeePerGas, baseFee: $baseFee"
+              )
             )
           )
         }
@@ -740,16 +763,20 @@ class EthSimulateService(
         // Check nonce
         val expectedNonce = world.getAccount(sender).map(_.nonce.toBigInt).getOrElse(BigInt(0))
         if (call.nonce.isDefined && senderNonce < expectedNonce) {
-          return Left(
-            JsonRpcError.InvalidParams(
-              s"nonce too low: address ${sender.toString}, tx: $senderNonce state: $expectedNonce"
+          break(
+            Left(
+              JsonRpcError.InvalidParams(
+                s"nonce too low: address ${sender.toString}, tx: $senderNonce state: $expectedNonce"
+              )
             )
           )
         }
         if (call.nonce.isDefined && senderNonce > expectedNonce) {
-          return Left(
-            JsonRpcError.InvalidParams(
-              s"nonce too high: address ${sender.toString}, tx: $senderNonce state: $expectedNonce"
+          break(
+            Left(
+              JsonRpcError.InvalidParams(
+                s"nonce too high: address ${sender.toString}, tx: $senderNonce state: $expectedNonce"
+              )
             )
           )
         }
@@ -758,9 +785,11 @@ class EthSimulateService(
         val senderAccount = world.getAccount(sender).getOrElse(Account.empty(blockchainConfig.accountStartNonce))
         val upfrontCost = gasLimit * gasPrice + value
         if (senderAccount.balance.toBigInt < upfrontCost) {
-          return Left(
-            JsonRpcError.SimulateInsufficientFunds(
-              s"err: insufficient funds for gas * price + value: address ${sender.toString} have ${senderAccount.balance} want $upfrontCost (supplied gas $gasLimit)"
+          break(
+            Left(
+              JsonRpcError.SimulateInsufficientFunds(
+                s"err: insufficient funds for gas * price + value: address ${sender.toString} have ${senderAccount.balance} want $upfrontCost (supplied gas $gasLimit)"
+              )
             )
           )
         }

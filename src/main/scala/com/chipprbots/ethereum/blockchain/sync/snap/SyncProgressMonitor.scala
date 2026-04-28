@@ -39,7 +39,6 @@ class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logg
   private var chainTarget: BigInt = BigInt(0)
 
   // Periodic logging
-  private var lastLogTime: Long = System.currentTimeMillis()
   private var periodicLogTask: Option[Cancellable] = None
 
   // Metrics history for throughput averaging
@@ -96,7 +95,6 @@ class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logg
     chainReceipts = BigInt(0)
     chainTarget = BigInt(0)
     phaseStartTime = System.currentTimeMillis()
-    lastLogTime = System.currentTimeMillis()
     accountsHistory.clear()
     bytecodesHistory.clear()
     slotsHistory.clear()
@@ -209,7 +207,6 @@ class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logg
     val etaStr = calculateETA.map(eta => s", ETA: ${formatETA(eta)}").getOrElse("")
     SNAPSyncMetrics.measure(progress)
     log.info(s"SNAP Sync Progress: ${progress.formattedString}$etaStr")
-    lastLogTime = System.currentTimeMillis()
   }
 
   def currentProgress: SyncProgress = synchronized {

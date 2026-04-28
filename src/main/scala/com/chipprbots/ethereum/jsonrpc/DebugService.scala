@@ -6,6 +6,7 @@ import org.apache.pekko.util.Timeout
 import cats.effect.IO
 import cats.syntax.traverse._
 
+import scala.annotation.unused
 import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps._
@@ -33,7 +34,7 @@ class DebugService(
     networkPeerManager: ActorRef
 ) {
 
-  def listPeersInfo(getPeersInfoRequest: ListPeersInfoRequest): ServiceResponse[ListPeersInfoResponse] =
+  def listPeersInfo(@unused getPeersInfoRequest: ListPeersInfoRequest): ServiceResponse[ListPeersInfoResponse] =
     for {
       ids <- getPeerIds
       peers <- ids.traverse(getPeerInfo)

@@ -1,9 +1,7 @@
 package com.chipprbots.ethereum.network.p2p.messages
 
 import com.chipprbots.ethereum.rlp.RLPEncodeable
-import com.chipprbots.ethereum.rlp.RLPException
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPSerializable

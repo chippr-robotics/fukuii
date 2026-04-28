@@ -5,8 +5,6 @@ import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props}
 import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
-import com.chipprbots.ethereum.network.Peer
-import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 
 /** StorageRangeWorker fetches storage ranges from a peer.
   *
@@ -29,12 +27,10 @@ class StorageRangeWorker(
   import Messages._
 
   private var currentRequestId: Option[BigInt] = None
-  private var currentPeer: Option[Peer] = None
 
   override def receive: Receive = idle
 
   def idle: Receive = { case FetchStorageRanges(_, peer) =>
-    currentPeer = Some(peer)
     // Request work from coordinator by notifying it of peer availability
     coordinator ! StoragePeerAvailable(peer)
     context.become(working)
@@ -48,7 +44,6 @@ class StorageRangeWorker(
       // Forward response to coordinator for processing
       coordinator ! StorageRangesResponseMsg(response)
       currentRequestId = None
-      currentPeer = None
       context.become(idle)
 
     case StorageCheckIdle =>
@@ -63,7 +58,6 @@ class StorageRangeWorker(
           log.warning(s"Storage request $requestId timed out")
           coordinator ! StorageTaskFailed(requestId, "Timeout")
           currentRequestId = None
-          currentPeer = None
           context.become(idle)
         case _ =>
       }

@@ -12,6 +12,7 @@ import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 
+import scala.annotation.unused
 import scala.concurrent.duration.FiniteDuration
 
 import ch.qos.logback.classic.Level
@@ -26,7 +27,6 @@ import com.chipprbots.ethereum.domain.branch.BestBranch
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps._
 import com.chipprbots.ethereum.network.BlockedIPRegistry
 import com.chipprbots.ethereum.network.PeerManagerActor
-import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ForkBlockNumbers
 import com.chipprbots.ethereum.utils.Hex
@@ -160,7 +160,7 @@ class AdminService(
     * Besu's protocolSchedule.getByBlockHeader().getHardforkId(). Remaining divergences: no NatService (NAT IP), no ENR
     * (discovery layer injection pending).
     */
-  def nodeInfo(req: AdminNodeInfoRequest): ServiceResponse[AdminNodeInfoResponse] = IO.pure {
+  def nodeInfo(@unused req: AdminNodeInfoRequest): ServiceResponse[AdminNodeInfoResponse] = IO.pure {
     val status = nodeStatusHolder.get()
     val nodeId = Hex.toHexString(status.nodeId)
 
@@ -221,7 +221,7 @@ class AdminService(
   /** Besu AdminPeers: streams ethPeers.streamAllPeers() → PeerResult.fromEthPeer. Divergence: Fukuii asks
     * PeerManagerActor.GetPeers instead (actor-based P2P, no EthPeers).
     */
-  def peers(req: AdminPeersRequest): ServiceResponse[AdminPeersResponse] =
+  def peers(@unused req: AdminPeersRequest): ServiceResponse[AdminPeersResponse] =
     peerManager
       .askFor[PeerManagerActor.Peers](PeerManagerActor.GetPeers)
       .map { peersResult =>
@@ -326,7 +326,7 @@ class AdminService(
     }
   }
 
-  def getDatadir(req: AdminDatadirRequest): ServiceResponse[AdminDatadirResponse] =
+  def getDatadir(@unused req: AdminDatadirRequest): ServiceResponse[AdminDatadirResponse] =
     IO.pure(Right(AdminDatadirResponse(datadir)))
 
   def exportChain(req: AdminExportChainRequest): ServiceResponse[AdminExportChainResponse] = IO {
@@ -399,7 +399,7 @@ class AdminService(
     Right(AdminUnblockIPResponse(removed))
   }
 
-  def listBlockedIPs(req: AdminListBlockedIPsRequest): ServiceResponse[AdminListBlockedIPsResponse] = IO {
+  def listBlockedIPs(@unused req: AdminListBlockedIPsRequest): ServiceResponse[AdminListBlockedIPsResponse] = IO {
     Right(AdminListBlockedIPsResponse(blockedIPRegistry.all.toList.sorted))
   }
 

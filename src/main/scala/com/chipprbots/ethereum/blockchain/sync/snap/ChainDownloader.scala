@@ -11,7 +11,6 @@ import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
-import com.chipprbots.ethereum.blockchain.sync.Blacklist._
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason._
 import com.chipprbots.ethereum.blockchain.sync.CacheBasedBlacklist
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
@@ -66,7 +65,6 @@ class ChainDownloader(
 
   private var targetBlock: BigInt = 0
   private var bestHeaderNumber: BigInt = 0
-  private var started = false
   private var paused = false
 
   // Queues of block hashes needing bodies/receipts
@@ -95,7 +93,6 @@ class ChainDownloader(
   def idle: Receive = handlePeerListMessages.orElse {
     case Start(target) =>
       targetBlock = target
-      started = true
       // Find where we left off (check what's already stored)
       bestHeaderNumber = findBestStoredHeader()
       log.info(
@@ -112,7 +109,6 @@ class ChainDownloader(
       // Re-start downloading if target was updated after completion (e.g. pivot refreshed from 0 to real block)
       if (newTarget > targetBlock && newTarget > bestHeaderNumber) {
         targetBlock = newTarget
-        started = true
         bestHeaderNumber = findBestStoredHeader()
         log.info("Chain download restarted with new target: {}, resuming from header {}", newTarget, bestHeaderNumber)
         scheduleDispatch()
@@ -397,8 +393,10 @@ class ChainDownloader(
     // Validate parent hash chaining
     var prevHash = blockchainReader.getBlockHeaderByNumber(bestHeaderNumber).map(_.hash)
     var validCount = 0
-
-    for (header <- usable)
+    var aborted = false
+    val it = usable.iterator
+    while (!aborted && it.hasNext) {
+      val header = it.next()
       if (prevHash.exists(_ == header.parentHash)) {
         // Store header + chain weight
         val parentWeight = blockchainReader
@@ -421,13 +419,9 @@ class ChainDownloader(
           peer.id
         )
         blacklist.add(peer.id, syncConfig.blacklistDuration, ErrorInBlockHeaders)
-        // Keep what we validated so far
-        if (validCount > 0) {
-          bestHeaderNumber += validCount
-          headersDownloaded += validCount
-        }
-        return
+        aborted = true
       }
+    }
 
     bestHeaderNumber += validCount
     headersDownloaded += validCount
@@ -587,7 +581,7 @@ class ChainDownloader(
   private def scheduleDispatch(interval: FiniteDuration = 2.seconds): Unit = {
     dispatchTask.foreach(_.cancel())
     dispatchTask = Some(
-      scheduler.scheduleWithFixedDelay(1.second, interval, self, Dispatch)(ec)
+      scheduler.scheduleWithFixedDelay(1.second, interval, self, Dispatch)(ec, self)
     )
   }
 

@@ -4,17 +4,14 @@ import java.util.concurrent.atomic.AtomicLong
 
 import org.apache.pekko.actor.Actor
 import org.apache.pekko.actor.ActorLogging
-import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.Props
 import org.apache.pekko.stream.scaladsl.SourceQueueWithComplete
-import org.apache.pekko.stream.QueueOfferResult
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.ExecutionContext
 
 import org.json4s._
 import org.json4s.native.JsonMethods._
-import org.json4s.native.Serialization
 
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
