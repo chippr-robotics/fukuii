@@ -13,12 +13,19 @@ if [ ! -f "$JAR" ]; then
   exit 1
 fi
 
+# DO NOT pass a network name as a positional arg when using -Dconfig.file.
+# setNetworkConfig() clears config.file when a network arg is present, discarding
+# all run-classic.conf overrides. Network is set inside run-classic.conf.
+# run-classic.conf must use: include classpath("application.conf")
+LOGDIR="$(grep -m1 'datadir' "$SCRIPT_DIR/run-classic.conf" | grep -oP '"/[^"]+"' | tr -d '"')/logs"
+mkdir -p "$LOGDIR"
+
 exec java -Xmx8g \
   -XX:+UseG1GC \
   -XX:MaxGCPauseMillis=200 \
   -XX:G1HeapRegionSize=16m \
   -XX:InitiatingHeapOccupancyPercent=40 \
-  -Xlog:gc*:file=/media/dev/2tb/data/blockchain/fukuii/etc/logs/gc.log:time,uptime:filecount=5,filesize=20m \
+  "-Xlog:gc*:file=$LOGDIR/gc.log:time,uptime:filecount=5,filesize=20m" \
   -Dconfig.file="$SCRIPT_DIR/run-classic.conf" \
-  -Dfukuii.datadir=/media/dev/2tb/data/blockchain/fukuii/etc \
-  -jar "$JAR" etc "$@"
+  -jar "$JAR" "$@" \
+  >> "$LOGDIR/stdout.log" 2>&1
