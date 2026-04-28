@@ -516,6 +516,14 @@ class SNAPSyncController(
                 log.info(s"Persisted storage file path for recovery: ${info.filePath} (${info.count} entries)")
               }
             }
+          (coordinator ? actors.Messages.GetCodeHashesFileInfo)
+            .mapTo[actors.Messages.CodeHashesFileInfoResponse]
+            .foreach { info =>
+              if (info.filePath != null) {
+                appStateStorage.putSnapSyncCodeHashesPath(info.filePath.toString).commit()
+                log.info(s"Persisted codeHashes file path for recovery: ${info.filePath} (${info.count} entries)")
+              }
+            }
         }
 
         // Clear persisted range progress — account phase is done, no need to resume it
@@ -1121,10 +1129,50 @@ class SNAPSyncController(
               storageRangeCoordinator.foreach(_ ! actors.Messages.NoMoreStorageTasks)
             }
 
-            // Bytecodes: with inline dispatch, codeHashes were already sent to the old coordinator.
-            // On recovery, we can't recover those. Send NoMore — the healing phase will catch any
-            // missing bytecodes via trie walk.
-            bytecodeCoordinator.foreach(_ ! actors.Messages.NoMoreByteCodeTasks)
+            // Bytecodes: stream codeHashes from persisted file if available. Each entry is 32 bytes
+            // (raw keccak256 hash, written by AccountRangeCoordinator.uniqueCodeHashesOut).
+            val savedCodeHashesPath = appStateStorage.getSnapSyncCodeHashesPath()
+            savedCodeHashesPath.foreach { pathStr =>
+              val filePath = java.nio.file.Paths.get(pathStr)
+              if (java.nio.file.Files.exists(filePath)) {
+                val coordinator = bytecodeCoordinator.get
+                import context.dispatcher
+                scala.concurrent
+                  .Future {
+                    val raf = new java.io.RandomAccessFile(filePath.toFile, "r")
+                    val buf = new Array[Byte](32)
+                    val batch = new scala.collection.mutable.ArrayBuffer[ByteString](10000)
+                    var totalHashes = 0
+                    try {
+                      while (raf.getFilePointer < raf.length()) {
+                        raf.readFully(buf)
+                        batch += ByteString(java.util.Arrays.copyOf(buf, 32))
+                        if (batch.size >= 10000) {
+                          coordinator ! actors.Messages.AddByteCodeTasks(batch.toSeq)
+                          totalHashes += batch.size
+                          batch.clear()
+                        }
+                      }
+                      if (batch.nonEmpty) {
+                        coordinator ! actors.Messages.AddByteCodeTasks(batch.toSeq)
+                        totalHashes += batch.size
+                      }
+                    } finally raf.close()
+                    totalHashes
+                  }
+                  .foreach { count =>
+                    log.info(s"Recovery: streamed $count codeHashes from ${filePath} for bytecode sync")
+                    coordinator ! actors.Messages.NoMoreByteCodeTasks
+                  }
+              } else {
+                log.warning(s"Recovery: codeHashes file $filePath not found. Sending NoMore immediately.")
+                bytecodeCoordinator.foreach(_ ! actors.Messages.NoMoreByteCodeTasks)
+              }
+            }
+            if (savedCodeHashesPath.isEmpty) {
+              log.warning("Recovery: no codeHashes file path persisted. Sending NoMore immediately.")
+              bytecodeCoordinator.foreach(_ ! actors.Messages.NoMoreByteCodeTasks)
+            }
 
             currentPhase = ByteCodeAndStorageSync
             lastStorageProgressMs = System.currentTimeMillis()

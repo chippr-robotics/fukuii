@@ -495,6 +495,10 @@ class AccountRangeCoordinator(
       contractStorageOut.flush()
       sender() ! StorageFileInfoResponse(contractStorageFile, contractStorageCount)
 
+    case GetCodeHashesFileInfo =>
+      uniqueCodeHashesOut.flush()
+      sender() ! CodeHashesFileInfoResponse(uniqueCodeHashesFile, uniqueCodeHashesCount)
+
     case StoreAccountChunk(task, remaining, totalCount, storedSoFar, isTaskRangeComplete) =>
       handleStoreAccountChunk(task, remaining, totalCount, storedSoFar, isTaskRangeComplete)
 
@@ -577,6 +581,10 @@ class AccountRangeCoordinator(
     case GetStorageFileInfo =>
       contractStorageOut.flush()
       sender() ! StorageFileInfoResponse(contractStorageFile, contractStorageCount)
+
+    case GetCodeHashesFileInfo =>
+      uniqueCodeHashesOut.flush()
+      sender() ! CodeHashesFileInfoResponse(uniqueCodeHashesFile, uniqueCodeHashesCount)
 
     case CheckCompletion =>
     // Already finalizing, ignore
