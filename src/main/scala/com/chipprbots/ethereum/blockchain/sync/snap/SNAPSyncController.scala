@@ -256,7 +256,11 @@ class SNAPSyncController(
 
   def idle: Receive = {
     case Start =>
-      log.info("Starting SNAP sync...")
+      log.info(
+        "Starting SNAP sync (deferredMerkleization={}, stateValidation={})",
+        snapSyncConfig.deferredMerkleization,
+        snapSyncConfig.stateValidationEnabled
+      )
       startSnapSync()
 
     case SyncProtocol.GetStatus =>
