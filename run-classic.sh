@@ -6,7 +6,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-JAR="$SCRIPT_DIR/target/scala-3.3.7/fukuii-assembly-0.1.240.jar"
+JAR="$SCRIPT_DIR/target/scala-3.3.7/fukuii-assembly-0.2.7.jar"
 if [ ! -f "$JAR" ]; then
   echo "ERROR: JAR not found at $JAR" >&2
   echo "Run 'sbt assembly' first." >&2
@@ -20,7 +20,7 @@ fi
 LOGDIR="$(grep -m1 'datadir' "$SCRIPT_DIR/run-classic.conf" | grep -oP '"/[^"]+"' | tr -d '"')/logs"
 mkdir -p "$LOGDIR"
 
-exec java -Xmx8g \
+exec java -Xmx4g \
   -XX:+UseG1GC \
   -XX:MaxGCPauseMillis=200 \
   -XX:G1HeapRegionSize=16m \
