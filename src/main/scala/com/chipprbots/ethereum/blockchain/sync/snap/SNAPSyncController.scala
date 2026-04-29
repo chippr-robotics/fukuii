@@ -767,10 +767,14 @@ class SNAPSyncController(
       bootstrapRetryCount = 0
 
       // Helper: compute current best height from SNAP-capable peers (subject to bootstrapPivot floor).
+      // Peers whose STATUS hasn't arrived yet have maxBlockNumber=0 — exclude them, otherwise
+      // a fresh-startup race returns Some(0) and the caller commits to a genesis pivot before
+      // any real peer height is known.
       def currentNetworkBestFromSnapPeers(bootstrapPivot: BigInt): Option[BigInt] = {
         val snapPeersForPivot =
           peersToDownloadFrom.values.toList
             .filter(_.peerInfo.remoteStatus.supportsSnap)
+            .filter(_.peerInfo.maxBlockNumber > 0)
             .filter(p => bootstrapPivot == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivot)
 
         snapPeersForPivot
@@ -1156,9 +1160,12 @@ class SNAPSyncController(
     // Query SNAP-capable peers to find the highest block in the network.
     // SNAP must NOT start until we have a SNAP-capable peer that is at/above the bootstrap pivot
     // (when configured). Falling back to non-SNAP peers here would select an unreachable state root.
+    // Peers whose STATUS hasn't arrived yet have maxBlockNumber=0 — exclude them, otherwise a
+    // fresh-startup race counts them as "network best=0" → pivot=-64 → genesis fallback.
     val snapPeersForPivot =
       peersToDownloadFrom.values.toList
         .filter(_.peerInfo.remoteStatus.supportsSnap)
+        .filter(_.peerInfo.maxBlockNumber > 0)
         .filter(p => bootstrapPivotBlock == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivotBlock)
 
     val networkBestBlockOpt =
@@ -2088,6 +2095,10 @@ class SNAPSyncController(
     val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
     peersToDownloadFrom.values.toList
       .filter(_.peerInfo.remoteStatus.supportsSnap)
+      // Peers whose STATUS hasn't arrived yet have maxBlockNumber=0 — exclude them, otherwise
+      // a fresh-startup race returns Some(0) and the caller commits to a genesis pivot before
+      // any real peer height is known.
+      .filter(_.peerInfo.maxBlockNumber > 0)
       .filter(p => bootstrapPivotBlock == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivotBlock)
       .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
       .headOption
