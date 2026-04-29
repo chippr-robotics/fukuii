@@ -130,6 +130,10 @@ class SNAPSyncController(
   private var storageStagnationRefreshAttempted: Boolean = false
   private var trieWalkInProgress: Boolean = false
   private var healingRoundCount: Int = 0
+  // Suppress duplicate ConnectToPeer for snap-server-peers for 60s after a send attempt.
+  // Prevents the race where the reconnect timer fires within the 5s peersScanInterval
+  // window after STATUS_EXCHANGE completes (peer in ETH handshake but not yet in handshakedPeers).
+  private val snapServerPeerLastConnectAttemptMs: mutable.Map[String, Long] = mutable.Map.empty
   private var bootstrapCheckTask: Option[Cancellable] = None
   private var pivotBootstrapRetryTask: Option[Cancellable] = None
   private var rateTrackerTuneTask: Option[Cancellable] = None
@@ -611,6 +615,37 @@ class SNAPSyncController(
         startStateHealingWithInterleave()
       }
 
+    // Streaming batch from ongoing trie walk — forward immediately to coordinator for early healing
+    case TrieWalkBatch(missingNodes) if currentPhase == StateHealing =>
+      if (missingNodes.nonEmpty) {
+        log.info(s"Trie walk batch: ${missingNodes.size} missing nodes — queuing for healing")
+        trieNodeHealingCoordinator.foreach { coordinator =>
+          coordinator ! actors.Messages.QueueMissingNodes(missingNodes)
+        }
+      }
+
+    // Streaming walk completed — all batches already sent via TrieWalkBatch
+    case TrieWalkComplete(totalFound) if currentPhase == StateHealing =>
+      trieWalkInProgress = false
+      if (totalFound == 0) {
+        log.info("Trie walk found no missing nodes — healing complete after {} rounds!", healingRoundCount)
+        healingRoundCount = 0
+        pivotBlock.foreach(b => appStateStorage.putSnapSyncPivotBlock(b).commit())
+        stateRoot.foreach(r => appStateStorage.putSnapSyncStateRoot(r).commit())
+        progressMonitor.startPhase(StateValidation)
+        currentPhase = StateValidation
+        validateState()
+      } else {
+        // A2: Loop indefinitely until Pending==0 — mirrors go-ethereum sync.go:1400
+        healingRoundCount += 1
+        log.info(
+          s"Trie walk complete: $totalFound missing nodes queued across batches (round $healingRoundCount)"
+        )
+        scheduler.scheduleOnce(2.minutes) {
+          self ! ScheduledTrieWalk
+        }(ec)
+      }
+
     case TrieWalkResult(missingNodes) if currentPhase == StateHealing =>
       trieWalkInProgress = false
       if (missingNodes.isEmpty) {
@@ -624,10 +659,6 @@ class SNAPSyncController(
         currentPhase = StateValidation
         validateState()
       } else {
-        // A2: Loop indefinitely until Pending==0 — mirrors go-ethereum sync.go:1400
-        // `for len(s.healer.trieTasks) > 0 || s.healer.scheduler.Pending() > 0` and
-        // Besu SnapWorldDownloadState.java:177-185 `allTasksCompleted()` loop with no round cap.
-        // Missing nodes are re-queued; peer scoring (B5) handles unresponsive peers.
         healingRoundCount += 1
         log.info(
           s"Trie walk found ${missingNodes.size} missing nodes — queuing for healing (round $healingRoundCount)"
@@ -635,7 +666,6 @@ class SNAPSyncController(
         trieNodeHealingCoordinator.foreach { coordinator =>
           coordinator ! actors.Messages.QueueMissingNodes(missingNodes)
         }
-        // Schedule next overlapping trie walk — don't wait for healing to complete
         scheduler.scheduleOnce(2.minutes) {
           self ! ScheduledTrieWalk
         }(ec)
@@ -2028,12 +2058,17 @@ class SNAPSyncController(
       super.aroundReceive(receive, msg)
   }
 
-  // Internal message for async trie walk result
+  // Internal messages for async trie walk
   private case class TrieWalkResult(missingNodes: Seq[(Seq[ByteString], ByteString)])
+  private case class TrieWalkBatch(missingNodes: Seq[(Seq[ByteString], ByteString)])
+  private case class TrieWalkComplete(totalFound: Int)
   private case class TrieWalkFailed(error: String)
   private case object ScheduledTrieWalk
 
-  /** Start an async trie walk to discover missing nodes. Guards against concurrent walks. */
+  /** Start an async trie walk to discover missing nodes. Guards against concurrent walks.
+   *  Uses streaming to emit batches as they are found — critical for mainnet-scale tries
+   *  where a full blocking walk can take hours before the coordinator sees any work.
+   */
   private def startTrieWalk(): Unit = {
     if (trieWalkInProgress) return
     if (currentPhase != StateHealing) return
@@ -2045,11 +2080,15 @@ class SNAPSyncController(
       scala.concurrent
         .Future {
           val validator = new StateValidator(storage)
-          validator.findMissingNodesWithPaths(root)
+          validator.findMissingNodesStreaming(
+            root,
+            batchSize = 500,
+            onBatch = { batch => selfRef ! TrieWalkBatch(batch) }
+          )
         }(ec)
         .foreach {
-          case Right(missingNodes) => selfRef ! TrieWalkResult(missingNodes)
-          case Left(error)         => selfRef ! TrieWalkFailed(error)
+          case Right(totalFound) => selfRef ! TrieWalkComplete(totalFound)
+          case Left(error)       => selfRef ! TrieWalkFailed(error)
         }(ec)
     }
   }
@@ -2200,15 +2239,29 @@ class SNAPSyncController(
     */
   private def ensureSnapServerPeersConnected(): Unit = {
     if (snapSyncConfig.snapServerPeers.isEmpty) return
-    val connectedNodeIds = peersToDownloadFrom.values.flatMap(_.peer.nodeId).toSet
+    val connectedNodeIds = handshakedPeers.values.flatMap(_.peer.nodeId).toSet
+    val nowMs = System.currentTimeMillis()
     snapSyncConfig.snapServerPeers.foreach { uri =>
       val configuredNodeId = Try(ByteString(Hex.decode(uri.getUserInfo))).toOption
       val host = uri.getHost
       val port = uri.getPort
+      val key = s"$host:$port"
       val isConnected = configuredNodeId.exists(connectedNodeIds.contains)
-      if (!isConnected) {
-        log.info(s"snap-server-peer $host:$port not connected — reconnecting")
-        networkPeerManager ! com.chipprbots.ethereum.network.PeerManagerActor.ConnectToPeer(uri)
+      if (isConnected) {
+        // Peer confirmed in handshakedPeers — clear suppression so we reconnect promptly if it disconnects later
+        snapServerPeerLastConnectAttemptMs.remove(key)
+      } else {
+        val lastAttemptMs = snapServerPeerLastConnectAttemptMs.getOrElse(key, 0L)
+        val suppressUntilMs = lastAttemptMs + 60_000L
+        if (nowMs >= suppressUntilMs) {
+          log.info(s"snap-server-peer $host:$port not connected — reconnecting")
+          networkPeerManager ! com.chipprbots.ethereum.network.PeerManagerActor.ConnectToPeer(uri)
+          snapServerPeerLastConnectAttemptMs(key) = nowMs
+        } else {
+          log.debug(
+            s"snap-server-peer $host:$port not yet in handshakedPeers — suppressing reconnect for ${(suppressUntilMs - nowMs) / 1000}s (waiting for peersScanInterval)"
+          )
+        }
       }
     }
   }
