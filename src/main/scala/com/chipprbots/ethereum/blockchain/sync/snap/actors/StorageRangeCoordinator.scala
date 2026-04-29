@@ -878,6 +878,33 @@ class StorageRangeCoordinator(
     )
 
     if (servedCount == 0) {
+      // Proof-of-absence: server returned 0 slots WITH proof nodes. Per the snap/1 protocol,
+      // this is a valid cryptographic proof that no slots exist in [startingHash, limitHash]
+      // at the current state root. The account's storage is empty or was modified/cleared
+      // since the original pivot. Healing will validate the final trie.
+      // IMPORTANT: do NOT mark the peer stateless — it served a valid, well-formed response.
+      // Only fall through to stateless marking when proofs == 0 (peer gave us nothing at all).
+      if (response.proof.nonEmpty && tasks.size == 1) {
+        val task = tasks.head
+        task.done = true
+        task.pending = false
+        completedTasks += task
+        log.warning(
+          s"Storage proof-of-absence accepted: account=${task.accountString} " +
+            s"storageRoot=${task.storageRoot.take(4).toHex} range=${task.rangeString} " +
+            s"proofNodes=${response.proof.size} peer=${peer.id.value}. " +
+            s"Account storage empty/changed at current pivot — healing will validate."
+        )
+        // Peer is healthy — clear any penalty state it accumulated.
+        peerConsecutiveTimeouts.remove(peer.id.value)
+        statelessPeers.remove(peer.id.value)
+        lastDispatchOrResponseMs = System.currentTimeMillis()
+        consecutiveUnproductiveRefreshes = 0
+        self ! StorageCheckCompletion
+        dispatchIfPossible(peer)
+        return
+      }
+
       // Per-peer batch reduction: only reduce for the specific peer that failed
       if (tasks.size > 1 && batchSizeFor(peer) > 1) {
         log.info(
