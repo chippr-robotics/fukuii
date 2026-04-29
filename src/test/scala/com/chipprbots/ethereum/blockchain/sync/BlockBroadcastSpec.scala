@@ -190,6 +190,265 @@ class BlockBroadcastSpec
     networkPeerManagerProbe.expectNoMessage()
   }
 
+  // ---- ETH/69 broadcast guard tests ----------------------------------------
+
+  it should "not send a new block to an ETH69 peer when the peer is ahead by block number" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup {
+    // Demonstrates the pre-fix bug: ETH69 chainWeight was a block-number proxy (~20M).
+    // Our new block's actual TD (~10^26) was always > the proxy, so every ETH69 peer
+    // was spammed. After the fix, only block-number comparison is used for ETH69.
+    val peerLatestBlock  = BigInt(20_000_000)
+    val actualTD         = ChainWeight.totalDifficultyOnly(BigInt("100000000000000000000000000"))
+    val eth69Status = RemoteStatus(
+      capability   = Capability.ETH69,
+      networkId    = 1,
+      chainWeight  = actualTD,
+      bestHash     = Fixtures.Blocks.Block3125369.header.hash,
+      genesisHash  = Fixtures.Blocks.Genesis.header.hash,
+      latestBlock  = Some(peerLatestBlock)
+    )
+    val eth69PeerInfo = PeerInfo(
+      remoteStatus   = eth69Status,
+      chainWeight    = actualTD,
+      forkAccepted   = true,
+      maxBlockNumber = peerLatestBlock,
+      bestBlockHash  = eth69Status.bestHash
+    )
+    // Our block is behind the peer — should NOT be sent
+    val blockHeader = baseBlockHeader.copy(number = peerLatestBlock - 100)
+    val ourChainWeight = ChainWeight.totalDifficultyOnly(BigInt("99000000000000000000000000"))
+    val block = Block(blockHeader, BlockBody(Nil, Nil))
+
+    blockBroadcast.broadcastBlock(
+      BlockToBroadcast(block, ourChainWeight),
+      Map(peer.id -> PeerWithInfo(peer, eth69PeerInfo))
+    )
+
+    networkPeerManagerProbe.expectNoMessage()
+  }
+
+  it should "send a new block to an ETH69 peer when our block number is higher" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup {
+    val peerLatestBlock = BigInt(20_000_000)
+    val actualTD        = ChainWeight.totalDifficultyOnly(BigInt("100000000000000000000000000"))
+    val eth69Status = RemoteStatus(
+      capability   = Capability.ETH69,
+      networkId    = 1,
+      chainWeight  = actualTD,
+      bestHash     = Fixtures.Blocks.Block3125369.header.hash,
+      genesisHash  = Fixtures.Blocks.Genesis.header.hash,
+      latestBlock  = Some(peerLatestBlock)
+    )
+    val eth69PeerInfo = PeerInfo(
+      remoteStatus   = eth69Status,
+      chainWeight    = actualTD,
+      forkAccepted   = true,
+      maxBlockNumber = peerLatestBlock,
+      bestBlockHash  = eth69Status.bestHash
+    )
+    // Our block is ahead of the peer — should be sent
+    val blockHeader = baseBlockHeader.copy(number = peerLatestBlock + 1)
+    val newBlockHashes = NewBlockHashes(Seq(ETH62.BlockHash(blockHeader.hash, blockHeader.number)))
+    val ourChainWeight = ChainWeight.totalDifficultyOnly(BigInt("101000000000000000000000000"))
+    val block = Block(blockHeader, BlockBody(Nil, Nil))
+    val newBlockMsg = BaseETH6XMessages.NewBlock(block, ourChainWeight.totalDifficulty)
+
+    blockBroadcast.broadcastBlock(
+      BlockToBroadcast(block, ourChainWeight),
+      Map(peer.id -> PeerWithInfo(peer, eth69PeerInfo))
+    )
+
+    networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(newBlockMsg, peer.id))
+    networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(newBlockHashes, peer.id))
+    networkPeerManagerProbe.expectNoMessage()
+  }
+
+  it should "not send a new block to an ETH69 peer at the same block number even if our actual TD is higher" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup {
+    val peerLatestBlock = BigInt(20_000_000)
+    // Peer has actual TD stored (local lookup succeeded); our new block is at the same number
+    val peerActualTD = ChainWeight.totalDifficultyOnly(BigInt("100000000000000000000000000"))
+    val eth69Status = RemoteStatus(
+      capability   = Capability.ETH69,
+      networkId    = 1,
+      chainWeight  = peerActualTD,
+      bestHash     = Fixtures.Blocks.Block3125369.header.hash,
+      genesisHash  = Fixtures.Blocks.Genesis.header.hash,
+      latestBlock  = Some(peerLatestBlock)
+    )
+    val eth69PeerInfo = PeerInfo(
+      remoteStatus   = eth69Status,
+      chainWeight    = peerActualTD,
+      forkAccepted   = true,
+      maxBlockNumber = peerLatestBlock,
+      bestBlockHash  = eth69Status.bestHash
+    )
+    val blockHeader = baseBlockHeader.copy(number = peerLatestBlock) // same block number
+    val ourChainWeight = ChainWeight.totalDifficultyOnly(BigInt("100000000000000000000000001"))
+    val block = Block(blockHeader, BlockBody(Nil, Nil))
+
+    blockBroadcast.broadcastBlock(
+      BlockToBroadcast(block, ourChainWeight),
+      Map(peer.id -> PeerWithInfo(peer, eth69PeerInfo))
+    )
+
+    networkPeerManagerProbe.expectNoMessage()
+  }
+
+  // ---- Mixed ETH68/ETH69 interaction tests ---------------------------------
+
+  it should "send to ETH68 peer (heavier chain) but NOT ETH69 peer when our block number is lower" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup {
+    // Short-fork scenario: we are one block behind on a heavier chain.
+    // ETH68 peer can see we have a heavier chain (TD comparison). ETH69 peer cannot
+    // because TD comparison is disabled for ETH69 — only block number matters.
+    val sharedBlockNr = BigInt(1000)
+    val peerTD        = ChainWeight.totalDifficultyOnly(BigInt(9999))
+
+    val eth68Status = RemoteStatus(
+      capability   = Capability.ETH68,
+      networkId    = 1,
+      chainWeight  = peerTD,
+      bestHash     = Fixtures.Blocks.Block3125369.header.hash,
+      genesisHash  = Fixtures.Blocks.Genesis.header.hash
+    )
+    val eth68PeerInfo = PeerInfo(
+      remoteStatus   = eth68Status,
+      chainWeight    = peerTD,
+      forkAccepted   = true,
+      maxBlockNumber = sharedBlockNr + 1, // peer is one block ahead
+      bestBlockHash  = eth68Status.bestHash
+    )
+
+    val eth69Status = RemoteStatus(
+      capability   = Capability.ETH69,
+      networkId    = 1,
+      chainWeight  = peerTD,
+      bestHash     = Fixtures.Blocks.Block3125369.header.hash,
+      genesisHash  = Fixtures.Blocks.Genesis.header.hash,
+      latestBlock  = Some(sharedBlockNr + 1) // same position as ETH68 peer
+    )
+    val eth69PeerInfo = PeerInfo(
+      remoteStatus   = eth69Status,
+      chainWeight    = peerTD,
+      forkAccepted   = true,
+      maxBlockNumber = sharedBlockNr + 1,
+      bestBlockHash  = eth69Status.bestHash
+    )
+
+    val peer2Probe = TestProbe()
+    val peer2      = Peer(PeerId("peer2"), new java.net.InetSocketAddress("127.0.0.1", 0), peer2Probe.ref, false)
+
+    // Our block is at sharedBlockNr (behind both peers by 1) but with heavier TD
+    val ourBlockHdr    = baseBlockHeader.copy(number = sharedBlockNr)
+    val ourChainWeight = ChainWeight.totalDifficultyOnly(BigInt(10001)) // heavier than peerTD
+    val ourBlock       = Block(ourBlockHdr, BlockBody(Nil, Nil))
+    val newBlockMsg    = BaseETH6XMessages.NewBlock(ourBlock, ourChainWeight.totalDifficulty)
+    val newBlockHashes = NewBlockHashes(Seq(ETH62.BlockHash(ourBlockHdr.hash, ourBlockHdr.number)))
+
+    blockBroadcast.broadcastBlock(
+      BlockToBroadcast(ourBlock, ourChainWeight),
+      Map(
+        peer.id  -> PeerWithInfo(peer, eth68PeerInfo),
+        peer2.id -> PeerWithInfo(peer2, eth69PeerInfo)
+      )
+    )
+
+    // ETH68 peer: gets both the block body and the hash (only peer in peersWithoutBlock)
+    // sqrt(1) = 1, so they receive the full NewBlock too
+    networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(newBlockMsg, peer.id))
+    networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(newBlockHashes, peer.id))
+    // ETH69 peer: filtered out of peersWithoutBlock entirely — receives nothing
+    networkPeerManagerProbe.expectNoMessage()
+  }
+
+  it should "send to both ETH68 and ETH69 peers when our block number is higher" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup {
+    val peerBlockNr = BigInt(999)
+    val peerTD      = ChainWeight.totalDifficultyOnly(BigInt(9000))
+
+    val eth68Status = RemoteStatus(
+      capability   = Capability.ETH68,
+      networkId    = 1,
+      chainWeight  = peerTD,
+      bestHash     = Fixtures.Blocks.Block3125369.header.hash,
+      genesisHash  = Fixtures.Blocks.Genesis.header.hash
+    )
+    val eth68PeerInfo = PeerInfo(
+      remoteStatus   = eth68Status,
+      chainWeight    = peerTD,
+      forkAccepted   = true,
+      maxBlockNumber = peerBlockNr,
+      bestBlockHash  = eth68Status.bestHash
+    )
+
+    val eth69Status = RemoteStatus(
+      capability   = Capability.ETH69,
+      networkId    = 1,
+      chainWeight  = peerTD,
+      bestHash     = Fixtures.Blocks.Block3125369.header.hash,
+      genesisHash  = Fixtures.Blocks.Genesis.header.hash,
+      latestBlock  = Some(peerBlockNr)
+    )
+    val eth69PeerInfo = PeerInfo(
+      remoteStatus   = eth69Status,
+      chainWeight    = peerTD,
+      forkAccepted   = true,
+      maxBlockNumber = peerBlockNr,
+      bestBlockHash  = eth69Status.bestHash
+    )
+
+    val peer2Probe = TestProbe()
+    val peer2      = Peer(PeerId("peer2"), new java.net.InetSocketAddress("127.0.0.1", 0), peer2Probe.ref, false)
+
+    // Our block is ahead of both peers
+    val ourBlockHdr    = baseBlockHeader.copy(number = peerBlockNr + 1)
+    val ourChainWeight = ChainWeight.totalDifficultyOnly(BigInt(9001))
+    val ourBlock       = Block(ourBlockHdr, BlockBody(Nil, Nil))
+    val newBlockHashes = NewBlockHashes(Seq(ETH62.BlockHash(ourBlockHdr.hash, ourBlockHdr.number)))
+
+    blockBroadcast.broadcastBlock(
+      BlockToBroadcast(ourBlock, ourChainWeight),
+      Map(
+        peer.id  -> PeerWithInfo(peer, eth68PeerInfo),
+        peer2.id -> PeerWithInfo(peer2, eth69PeerInfo)
+      )
+    )
+
+    // With 2 peers: sqrt(2)=1 random peer gets NewBlock, both get NewBlockHashes.
+    // Collect all 3 messages (order non-deterministic for hash messages).
+    import scala.concurrent.duration._
+    val messages = (1 to 3).map(_ => networkPeerManagerProbe.receiveOne(3.seconds)).toSet
+
+    // One NewBlock to either peer
+    messages.count {
+      case NetworkPeerManagerActor.SendMessage(msg, _) if msg.underlyingMsg == ourBlock => false
+      case NetworkPeerManagerActor.SendMessage(msg, _) if msg.underlyingMsg.isInstanceOf[BaseETH6XMessages.NewBlock] => true
+      case _ => false
+    } shouldBe 1
+
+    // NewBlockHashes to both peers
+    val hashRecipients = messages.collect {
+      case NetworkPeerManagerActor.SendMessage(msg, id) if msg.underlyingMsg == newBlockHashes => id
+    }
+    hashRecipients should contain(peer.id)
+    hashRecipients should contain(peer2.id)
+
+    networkPeerManagerProbe.expectNoMessage()
+  }
+
+  // -------------------------------------------------------------------------
+
   class TestSetup(implicit system: ActorSystem) {
     val networkPeerManagerProbe: TestProbe = TestProbe()
 
