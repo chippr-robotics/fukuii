@@ -67,7 +67,8 @@ object ETH69 {
               forkIdRlp: RLPList,
               RLPValue(earliestBlockBytes),
               RLPValue(latestBlockBytes),
-              RLPValue(latestBlockHashBytes)
+              RLPValue(latestBlockHashBytes),
+              _*
             ) =>
           Status(
             protocolVersion = ByteUtils.bytesToBigInt(protocolVersionBytes).toInt,

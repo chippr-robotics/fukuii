@@ -5,6 +5,8 @@ import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext
+import scala.collection.mutable
+import scala.util.Try
 
 import com.chipprbots.ethereum.blockchain.sync.{Blacklist, CacheBasedBlacklist, PeerListSupportNg, SyncProtocol}
 import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage, FlatSlotStorage, MptStorage, StateStorage}
@@ -2034,6 +2036,29 @@ class SNAPSyncController(
         }
       }
     }
+
+  /** Reconnect to any configured snap-server-peers that are not currently connected.
+    *
+    * snap-server-peers are static SNAP-serving nodes (e.g. local Besu with
+    * --snapsync-server-enabled) that are the only source of ETC GetTrieNodes responses.
+    * They may disconnect after the storage phase. This method ensures reconnection so they
+    * are in the peer pool when healing dispatches requests.
+    */
+  private def ensureSnapServerPeersConnected(): Unit = {
+    if (snapSyncConfig.snapServerPeers.isEmpty) return
+    val connectedNodeIds = peersToDownloadFrom.values.flatMap(_.peer.nodeId).toSet
+    snapSyncConfig.snapServerPeers.foreach { uri =>
+      val configuredNodeId = Try(ByteString(Hex.decode(uri.getUserInfo))).toOption
+      val host = uri.getHost
+      val port = uri.getPort
+      val isConnected = configuredNodeId.exists(connectedNodeIds.contains)
+      if (!isConnected) {
+        log.info(s"snap-server-peer $host:$port not connected — reconnecting")
+        networkPeerManager ! com.chipprbots.ethereum.network.PeerManagerActor.ConnectToPeer(uri)
+      }
+    }
+  }
+
 
   private def validateState(): Unit = {
     if (!snapSyncConfig.stateValidationEnabled) {
