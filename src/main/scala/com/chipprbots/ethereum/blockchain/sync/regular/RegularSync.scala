@@ -128,6 +128,17 @@ class RegularSync(
         fetcher ! InternalLastBlockImport(blockNumber)
       }
       context.become(running(newState))
+
+    case msg: SyncProtocol.RegularSyncStuck =>
+      // Forward escape-valve signal to SyncController (our parent). BlockImporter detects this
+      // condition and emits the message; we just relay it up so SyncController can re-trigger
+      // SNAP sync from a recent pivot.
+      log.warning(
+        "Regular sync stuck on block {} (missing {}); forwarding to SyncController for SNAP re-sync",
+        msg.blockNumber,
+        msg.missingHash
+      )
+      context.parent ! msg
   }
 
   override def supervisorStrategy: SupervisorStrategy = AllForOneStrategy()(SupervisorStrategy.defaultDecider)
