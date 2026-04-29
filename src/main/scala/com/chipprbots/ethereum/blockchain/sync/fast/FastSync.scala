@@ -250,7 +250,17 @@ class FastSync(
         // Track high-water mark so resume after a JVM restart doesn't lose the discovered
         // scope. Used by the "95% complete" guard in processSyncing — see comment on
         // SyncState.maxTotalNodesCount.
-        val newMax = math.max(syncState.maxTotalNodesCount, total)
+        //
+        // Bootstrap consideration: legacy persisted SyncState from before maxTotalNodesCount
+        // existed deserializes with maxTotalNodesCount=0. The OLD totalNodesCount field is
+        // still present and reflects the pre-bounce peak, so seed the high-water mark from
+        // it on the first tick after resume — otherwise newMax would be initialized from
+        // the post-restart freshly-walked scope (small) and the very bug this fix targets
+        // would still bite on the first restart after a legacy upgrade.
+        val newMax = math.max(
+          math.max(syncState.maxTotalNodesCount, syncState.totalNodesCount),
+          total
+        )
         syncState = syncState.copy(
           downloadedNodesCount = saved,
           totalNodesCount = total,
