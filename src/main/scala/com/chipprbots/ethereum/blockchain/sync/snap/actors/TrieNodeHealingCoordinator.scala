@@ -38,15 +38,9 @@ class TrieNodeHealingCoordinator(
   import Messages._
 
   // Task management — each task has a pathset (for GetTrieNodes) and a hash (for verification)
-  private case class HealingEntry(pathset: Seq[ByteString], hash: ByteString, retries: Int = 0)
+  private case class HealingEntry(pathset: Seq[ByteString], hash: ByteString)
   private var pendingTasks: Seq[HealingEntry] = Seq.empty
   private var completedTaskCount: Int = 0
-  private var abandonedTaskCount: Int = 0
-
-  // Per-task retry limit: after this many timeouts/failures, skip the task.
-  // Aligned with Besu MAX_RETRIES=4 (RetryingGetTrieNodeFromPeerTask.java).
-  // Prior value of 20 locked all workers for ~20 min on unserviceable nodes (BUG-HEAL-11).
-  private val maxRetriesPerTask: Int = 4
 
   // Global stagnation detection: if no nodes healed for this duration, declare
   // healing complete with a warning. Prevents infinite loops when all peers lack
@@ -334,9 +328,7 @@ class TrieNodeHealingCoordinator(
     case HealingCheckCompletion =>
       if (isComplete && !flushing) {
         flushRawNodesSync()
-        val abandonedStr =
-          if (abandonedTaskCount > 0) s" ($abandonedTaskCount abandoned — regular sync will recover)" else ""
-        log.info(s"Healing round complete: $totalNodesHealed total nodes healed$abandonedStr. Notifying controller.")
+        log.info(s"Healing round complete: $totalNodesHealed total nodes healed. Notifying controller.")
         snapSyncController ! SNAPSyncController.StateHealingComplete
       }
 
@@ -677,31 +669,20 @@ class TrieNodeHealingCoordinator(
       }
     }
 
-    // Increment retry count and skip exhausted tasks
+    // Re-queue all timed-out tasks unconditionally — aligned with go-ethereum and Besu pipeline
+    // behaviour. Both reference clients never permanently abandon nodes: go-ethereum puts them
+    // straight back into trieTasks (no counter); Besu re-queues at the pipeline level after each
+    // RetryingGetTrieNodeFromPeerTask attempt. Permanently unservable nodes are handled by the
+    // stagnation → pivot-refresh path, not a per-node retry cap.
     var requeued = 0
-    var abandoned = 0
     tasks.foreach { task =>
-      val updated = task.copy(retries = task.retries + 1)
-      if (updated.retries >= maxRetriesPerTask) {
-        abandoned += 1
-        abandonedTaskCount += 1
-        log.warning(
-          s"Abandoning healing task after ${updated.retries} retries: " +
-            s"hash=${Hex.toHexString(task.hash.take(4).toArray)} " +
-            s"(regular sync will fetch on-demand)"
-        )
-      } else {
-        pendingHashSet += updated.hash
-        pendingTasks = pendingTasks :+ updated
-        requeued += 1
-      }
+      pendingHashSet += task.hash
+      pendingTasks = pendingTasks :+ task
+      requeued += 1
     }
 
     if (requeued > 0) {
-      log.info(
-        s"Re-queued $requeued timed-out healing tasks (pending: ${pendingTasks.size})" +
-          (if (abandoned > 0) s", abandoned $abandoned" else "")
-      )
+      log.info(s"Re-queued $requeued timed-out healing tasks (pending: ${pendingTasks.size})")
     }
 
     // Check global stagnation: no nodes healed for healingStagnationTimeoutMs.
