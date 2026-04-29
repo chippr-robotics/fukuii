@@ -5,6 +5,8 @@ import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext
+import scala.collection.mutable
+import scala.util.Try
 
 import com.chipprbots.ethereum.blockchain.sync.{Blacklist, CacheBasedBlacklist, PeerListSupportNg, SyncProtocol}
 import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage, FlatSlotStorage, MptStorage, StateStorage}
@@ -2198,13 +2200,13 @@ class SNAPSyncController(
     */
   private def ensureSnapServerPeersConnected(): Unit = {
     if (snapSyncConfig.snapServerPeers.isEmpty) return
-    val connectedAddresses = peersToDownloadFrom.values.map { p =>
-      (p.peer.remoteAddress.getHostString, p.peer.remoteAddress.getPort)
-    }.toSet
+    val connectedNodeIds = peersToDownloadFrom.values.flatMap(_.peer.nodeId).toSet
     snapSyncConfig.snapServerPeers.foreach { uri =>
+      val configuredNodeId = Try(ByteString(Hex.decode(uri.getUserInfo))).toOption
       val host = uri.getHost
       val port = uri.getPort
-      if (!connectedAddresses.contains((host, port))) {
+      val isConnected = configuredNodeId.exists(connectedNodeIds.contains)
+      if (!isConnected) {
         log.info(s"snap-server-peer $host:$port not connected — reconnecting")
         networkPeerManager ! com.chipprbots.ethereum.network.PeerManagerActor.ConnectToPeer(uri)
       }
