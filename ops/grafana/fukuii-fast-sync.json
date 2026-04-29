@@ -126,13 +126,28 @@
     },
     {
       "type": "stat",
-      "title": "Sync Time (min)",
+      "title": "Sync Mode",
       "id": 6,
+      "description": "0=Regular sync (state download done, importing live blocks), 1=Fast sync (still pulling state nodes), 2=SNAP sync (pulling snap account/storage ranges). Derived from gauges: SNAP wins if app_snapsync_phase_current_gauge>0; otherwise Fast if state download incomplete; otherwise Regular.",
       "gridPos": {"h": 4, "w": 4, "x": 20, "y": 0},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "app_fastsync_totaltime_minutes_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}}"}],
-      "fieldConfig": {"defaults": {"unit": "m", "color": {"mode": "fixed", "fixedColor": "light-blue"}}},
-      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+      "targets": [
+        {"expr": "clamp_max((app_snapsync_phase_current_gauge{instance=~\"$instance\"} > bool 0) * 2 + (app_fastsync_state_totalNodes_gauge{instance=~\"$instance\"} > bool app_fastsync_state_downloadedNodes_gauge{instance=~\"$instance\"}) * 1, 2) or vector(0)", "refId": "A", "legendFormat": "{{instance}}"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {"type": "value", "options": {
+              "0": {"text": "Regular", "color": "green"},
+              "1": {"text": "Fast Sync", "color": "blue"},
+              "2": {"text": "SNAP Sync", "color": "purple"}
+            }}
+          ],
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}
+        }
+      },
+      "options": {"colorMode": "background", "graphMode": "none", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
     },
     {
       "type": "timeseries",
@@ -313,6 +328,85 @@
       "targets": [{"expr": "app_network_tried_peers_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}}"}],
       "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "purple"}}},
       "options": {"colorMode": "value", "graphMode": "area", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Pivot Refreshes (last 1h)",
+      "id": 70,
+      "description": "Each fast-sync pivot update bumps app_fastsync_block_pivotBlock_number_gauge. Healthy steady-state during fast sync ≈ 3/h (every ~20 min). 0/h means fast sync isn't refreshing — either it's done or stuck.",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 39},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "changes(app_fastsync_block_pivotBlock_number_gauge{instance=~\"$instance\"}[1h])", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "semi-dark-purple"}}},
+      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Sync Mode Transitions (last 1h)",
+      "id": 71,
+      "description": "Counts changes in the derived sync-mode value over the last hour. 0=stable. ≥1 = fast→regular handoff (good), bug-30 escape valve fired, or stall-watchdog tripped.",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 39},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "changes( ( clamp_max((app_snapsync_phase_current_gauge{instance=~\"$instance\"} > bool 0) * 2 + (app_fastsync_state_totalNodes_gauge{instance=~\"$instance\"} > bool app_fastsync_state_downloadedNodes_gauge{instance=~\"$instance\"}) * 1, 2) or vector(0) )[1h:30s] )", "refId": "A", "legendFormat": "{{instance}}"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 1},
+            {"color": "orange", "value": 3}
+          ]}
+        }
+      },
+      "options": {"colorMode": "background", "graphMode": "none", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Stall Watchdog Trips (last 1h)",
+      "id": 72,
+      "description": "Times the time-based stall watchdog tripped and emitted NetworkIncompatible. Each trip = 2 min of state download making no progress (<100 nodes). Counts log lines via Logback ERROR rate against 'State download stalled' patterns. Will be 0 in normal operation.",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 39},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "increase(logback_appender_total{instance=~\"$instance\",level=\"warn\"}[1h])", "refId": "A", "legendFormat": "{{instance}} warns/1h"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 100},
+            {"color": "orange", "value": 1000}
+          ]}
+        }
+      },
+      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Fast Sync Restart Attempts (last 1h)",
+      "id": 73,
+      "description": "Counts JVM restarts during fast sync — each one is an interruption that resumes from persisted state but loses in-flight progress. Healthy = 0. >2/h indicates memory pressure or graceful shutdown loop.",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 39},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "changes(process_start_time_seconds{job=~\".*fukuii.*\",instance=~\"$instance\"}[1h])", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 1},
+            {"color": "orange", "value": 3},
+            {"color": "red", "value": 6}
+          ]}
+        }
+      },
+      "options": {"colorMode": "background", "graphMode": "none", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
     }
   ],
   "refresh": "10s",
