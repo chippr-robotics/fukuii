@@ -113,10 +113,9 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def snapSyncDone(): DataSourceBatchUpdate =
     put(Keys.SnapSyncDone, true.toString)
 
-  /** Clear the SNAP-sync-done flag. Used by the regular-sync stuck escape valve to force a SNAP
-    * re-sync from a recent pivot when post-SNAP regular sync hits permanently-unfetchable state
-    * nodes (e.g., stuck many blocks behind canonical tip with no peer able to serve our parent
-    * stateRoot).
+  /** Clear the SNAP-sync-done flag. Used by the regular-sync stuck escape valve to force a SNAP re-sync from a recent
+    * pivot when post-SNAP regular sync hits permanently-unfetchable state nodes (e.g., stuck many blocks behind
+    * canonical tip with no peer able to serve our parent stateRoot).
     */
   def clearSnapSyncDone(): DataSourceBatchUpdate =
     remove(Keys.SnapSyncDone)

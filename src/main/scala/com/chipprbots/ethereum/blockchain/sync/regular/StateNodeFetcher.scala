@@ -127,9 +127,9 @@ class StateNodeFetcher(
       case _ => Behaviors.unhandled
     }
 
-  /** Increment attempt counter and either schedule another request or signal exhaustion to the
-    * BlockImporter. Sending an empty FetchedStateNode triggers BlockImporter's 5-minute backoff
-    * handler so the resolvingMissingNode → import-fail → re-fetch loop can't spin indefinitely.
+  /** Increment attempt counter and either schedule another request or signal exhaustion to the BlockImporter. Sending
+    * an empty FetchedStateNode triggers BlockImporter's 5-minute backoff handler so the resolvingMissingNode →
+    * import-fail → re-fetch loop can't spin indefinitely.
     */
   private def retryOrExhaust(req: StateNodeRequester): Unit = {
     val nextAttempt = req.attempts + 1
@@ -230,9 +230,9 @@ class StateNodeFetcher(
       }
       .getOrElse(Behaviors.same)
 
-  /** If the requester still has an unused fallback canonical root, swap it in as the primary
-    * stateRoot and clear the fallback slot (so we only switch once). Returns None when no
-    * fallback is available or it has already been consumed.
+  /** If the requester still has an unused fallback canonical root, swap it in as the primary stateRoot and clear the
+    * fallback slot (so we only switch once). Returns None when no fallback is available or it has already been
+    * consumed.
     */
   private def maybeSwitchToFallbackRoot(req: StateNodeRequester): Option[StateNodeRequester] =
     req.fallbackStateRoot
@@ -331,10 +331,10 @@ class StateNodeFetcher(
     }
   }
 
-  /** Fetch a single contract bytecode by codeHash via SNAP GetByteCodes. Used when post-fast-sync
-    * regular sync hits a "Block has invalid gas used" error and findMissingContractCode identifies
-    * a missing bytecode. SNAP's GetByteCodes is served by every snap-capable peer regardless of
-    * their ETH version, so this works even when the entire peer set is ETH68+ (no GetNodeData).
+  /** Fetch a single contract bytecode by codeHash via SNAP GetByteCodes. Used when post-fast-sync regular sync hits a
+    * "Block has invalid gas used" error and findMissingContractCode identifies a missing bytecode. SNAP's GetByteCodes
+    * is served by every snap-capable peer regardless of their ETH version, so this works even when the entire peer set
+    * is ETH68+ (no GetNodeData).
     */
   private def sendGetByteCodes(codeHash: ByteString): Unit = {
     log.info(
