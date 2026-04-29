@@ -446,6 +446,19 @@ class SyncController(
 
     val nowMillis = System.currentTimeMillis()
 
+    // One-shot operator override. Setting -Dfukuii.reset-fast-sync-done=true on the JVM
+    // command line clears the FastSyncDone flag at startup. Used when a node was wedged
+    // by the pre-fix premature-completion bug — operator can clear the flag once, the
+    // node resumes fast sync to finish state download, then on next normal restart the
+    // flag is back to its real value (set by FastSync.finish()). Cheap, surgical recovery
+    // that doesn't touch chain data.
+    if (System.getProperty("fukuii.reset-fast-sync-done", "false").equalsIgnoreCase("true")) {
+      log.warning(
+        "System property fukuii.reset-fast-sync-done=true — clearing FastSyncDone flag on this startup"
+      )
+      appStateStorage.clearFastSyncDone().commit()
+    }
+
     // Dangling-best-block recovery. If the persisted best-block hash points to a block that
     // isn't actually in storage, the previous sync was interrupted before the canonical tip
     // could be written (e.g. mid-SNAP container restart while account download was incomplete).
@@ -466,6 +479,35 @@ class SyncController(
       )
       appStateStorage.clearSnapSyncDone().commit()
       appStateStorage.clearFastSyncDone().commit()
+    }
+
+    // Incomplete-fast-sync recovery. The fast sync "95% complete" check uses a dynamic
+    // total = downloaded + currently-queued-missing. After a JVM restart the scheduler
+    // re-walks the trie from the pivot root and queues only the newly-discovered missing
+    // frontier; the dynamic total drops to ≈downloaded and the percentage falsely reads
+    // 99%+, so fast sync declares itself done with a partial trie. The persisted SyncState
+    // now tracks `maxTotalNodesCount` (the high-water mark across the run); if downloaded
+    // is far short of that peak and FastSyncDone is set, the prior run finished
+    // prematurely. Clear the flag so this start() routes back to fast sync and finishes
+    // the missing nodes. Without this auto-recovery, the only fix is a manual re-pivot or
+    // wipe — neither of which the node can do "in the wild".
+    if (appStateStorage.isFastSyncDone()) {
+      fastSyncStateStorage.getSyncState().foreach { ss =>
+        val saved = ss.downloadedNodesCount
+        val peak = ss.maxTotalNodesCount
+        if (peak > 1000L && saved.toDouble / peak.toDouble < 0.90) {
+          val pct = (saved.toDouble / peak.toDouble * 100).toInt
+          log.warning(
+            "FastSyncDone is set but persisted SyncState shows trie incomplete: " +
+              "downloaded={} / peak total={} ({}%). Clearing FastSyncDone to resume fast sync " +
+              "and finish state download.",
+            saved,
+            peak,
+            pct
+          )
+          appStateStorage.clearFastSyncDone().commit()
+        }
+      }
     }
 
     appStateStorage.putSyncStartingBlock(appStateStorage.getBestBlockNumber()).commit()
