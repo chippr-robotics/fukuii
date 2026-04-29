@@ -460,11 +460,24 @@ object SnapServer extends Logger {
                     }
                   }
                 }
+              } else {
+                // Storage root not in our DB — emit empty placeholder per path to maintain
+                // positional alignment with the healing coordinator's request pathset.
+                storageNibblesList.foreach { _ =>
+                  if (accumulated < maxBytes || collected.isEmpty) {
+                    collected += ByteString.empty; accumulated += 1
+                  }
+                }
               }
-            // Account missing, empty storage, or storage root unresolvable —
-            // geth does NOT emit placeholders here (handler.go:546-547 breaks
-            // out before appending). Move on to the next pathset entry.
-            case _ => ()
+            // Account missing or has empty storage root — emit empty placeholder per storage
+            // path. geth omits entries here, but we maintain positional alignment so the
+            // healing coordinator's zip(nodes, tasks) doesn't misalign later entries.
+            case _ =>
+              storageNibblesList.foreach { _ =>
+                if (accumulated < maxBytes || collected.isEmpty) {
+                  collected += ByteString.empty; accumulated += 1
+                }
+              }
           }
         }
         idx += 1

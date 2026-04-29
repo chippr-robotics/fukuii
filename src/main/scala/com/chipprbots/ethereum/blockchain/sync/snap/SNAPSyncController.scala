@@ -478,7 +478,7 @@ class SNAPSyncController(
 
     case RetryPivotRefresh =>
       pivotBootstrapRetryTask = None
-      if (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync) {
+      if (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync || currentPhase == StateHealing) {
         log.info("Retrying pivot refresh after bootstrap failure...")
         refreshPivotInPlace("retry after bootstrap failure")
       } else {
@@ -580,14 +580,26 @@ class SNAPSyncController(
       log.warning("All healing peers stateless — refreshing pivot in-place for healing")
       refreshPivotInPlace("all healing peers stateless")
 
+    // FIX-STAGNATION-LIMIT: Coordinator detected no healing progress for MaxConsecutiveStagnations
+    // consecutive 2-min cycles. Refresh pivot — coordinator receives HealingPivotRefreshed,
+    // clears stale tasks + stateless peers, re-seeds new root top-down (Besu-aligned).
+    // Do NOT stop coordinator — refreshPivotInPlace sends HealingPivotRefreshed to it directly.
+    case actors.Messages.HealingStagnated(healed, pending) if currentPhase == StateHealing =>
+      log.warning(
+        s"[HEAL-STAGNATED] Healing stuck: healed=$healed pending=$pending — " +
+        s"refreshing pivot for fresh healing round"
+      )
+      refreshPivotInPlace("healing-stagnated")
+
     case StateHealingComplete =>
-      log.info("Healing coordinator idle (no pending tasks, no active requests).")
+      log.info("Healing coordinator signaled complete (no pending tasks, no active requests).")
       if (trieWalkInProgress) {
         // A trie walk is already running — its result will determine next step
         log.info("Trie walk in progress, waiting for result...")
       } else {
-        // No walk in progress — start one to check for deeper missing nodes
-        startTrieWalk()
+        // ARCH-WALK-HEAL-INTERLEAVE: Start walk with coordinator alive (if still running) or
+        // create a fresh coordinator before the walk so inline discovery can run concurrently.
+        startStateHealingWithInterleave()
       }
 
     case TrieWalkResult(missingNodes) if currentPhase == StateHealing =>
@@ -2001,32 +2013,83 @@ class SNAPSyncController(
         coordinator ! actors.Messages.UpdateMaxInFlightPerPeer(5)
       }
 
-      // Periodically send peer availability notifications
-      healingRequestTask = Some(
-        scheduler.scheduleWithFixedDelay(
-          0.seconds,
-          1.second,
-          self,
-          RequestTrieNodeHealing
-        )(ec, self)
-      )
+      // Periodically send peer availability notifications (cancel any existing scheduler first)
+      startHealingRequestScheduler()
 
-      // Ensure configured snap-server-peers are connected at healing start, then periodically.
-      // Besu (or any static SNAP server) may disconnect after the storage phase. Reconnecting
-      // guarantees it is in the peer pool when healing dispatches GetTrieNodes requests.
-      ensureSnapServerPeersConnected()
+      // Ensure configured snap-server-peers are connected, checked periodically.
+      // Initial delay of 15s gives inbound connections time to complete STATUS exchange and
+      // appear in handshakedPeers (STATUS < 1s + peersScanInterval = 5s) before we ever
+      // send an outbound ConnectToPeer. Firing immediately was causing AlreadyConnected on
+      // go-ethereum: core-geth connects inbound → we immediately dial outbound → both killed.
       scheduler.scheduleWithFixedDelay(
-        30.seconds,
+        15.seconds,
         30.seconds,
         self,
         EnsureSnapServerPeersConnected
       )(ec)
 
       progressMonitor.startPhase(StateHealing)
-
-      // Run initial trie walk asynchronously to discover missing nodes
-      startTrieWalk()
     }
+  }
+
+  /** ARCH-WALK-HEAL-INTERLEAVE: Create a healing coordinator BEFORE starting the trie walk.
+    * Nodes discovered per-subtree (TrieWalkBatch) are fed to the coordinator immediately,
+    * so healing runs in parallel with the walk. With root seeding + discoverMissingChildren,
+    * healing starts instantly from the root — the walk is validation-only.
+    *
+    * If coordinator already exists (e.g. still running after StateHealingComplete), just start
+    * the walk — the coordinator is alive and will receive batch nodes.
+    */
+  private def startStateHealingWithInterleave(): Unit = {
+    if (trieNodeHealingCoordinator.isDefined) {
+      // Coordinator still running — just start the validation walk
+      startTrieWalk()
+    } else {
+      stateRoot match {
+        case Some(root) =>
+          val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
+          trieNodeHealingCoordinator = Some(
+            context.actorOf(
+              actors.TrieNodeHealingCoordinator
+                .props(
+                  stateRoot = root,
+                  networkPeerManager = networkPeerManager,
+                  requestTracker = requestTracker,
+                  mptStorage = storage,
+                  batchSize = snapSyncConfig.healingBatchSize,
+                  snapSyncController = self,
+                  concurrency = snapSyncConfig.healingConcurrency
+                )
+                .withDispatcher("sync-dispatcher"),
+              s"trie-node-healing-coordinator-$coordinatorGeneration"
+            )
+          )
+          trieNodeHealingCoordinator.foreach { coordinator =>
+            coordinator ! actors.Messages.StartTrieNodeHealing(root)
+            coordinator ! actors.Messages.UpdateMaxInFlightPerPeer(5)
+          }
+          startHealingRequestScheduler()
+          log.info(
+            s"[HEAL-INTERLEAVE] Healing coordinator created before walk — " +
+            s"root=${root.take(8).toHex}, generation=$coordinatorGeneration"
+          )
+          startTrieWalk()
+        case None =>
+          log.warning("[HEAL-INTERLEAVE] stateRoot is None — walking only (no coordinator created)")
+          startTrieWalk()
+      }
+    }
+  }
+
+  /** BUG-HEAL-SCHED FIX: Always cancel the existing scheduler before creating a new one.
+    * Multiple code paths create this scheduler; without cancel an orphaned scheduler
+    * fires every 1s in parallel with the new one.
+    */
+  private def startHealingRequestScheduler(): Unit = {
+    healingRequestTask.foreach(_.cancel())
+    healingRequestTask = Some(
+      scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestTrieNodeHealing)(ec, self)
+    )
   }
 
   // Internal message for periodic healing requests
@@ -2302,9 +2365,6 @@ class SNAPSyncController(
     // Then re-walk the trie with the new root to discover missing nodes.
     trieNodeHealingCoordinator.foreach { coordinator =>
       coordinator ! actors.Messages.HealingPivotRefreshed(newStateRoot)
-      // Re-walk trie with new root to populate fresh healing tasks
-      trieWalkInProgress = false // Reset so startTrieWalk() can proceed
-      startTrieWalk()
     }
     // Chain download target extends to the new pivot (chain data is canonical, never invalidated)
     if (chainDownloader.isDefined) {
