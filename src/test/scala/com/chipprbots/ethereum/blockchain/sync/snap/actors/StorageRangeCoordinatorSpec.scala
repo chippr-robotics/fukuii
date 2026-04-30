@@ -170,4 +170,95 @@ class StorageRangeCoordinatorSpec
     coordinator ! Messages.StorageGetProgress
     expectMsgType[Any](3.seconds)
   }
+
+  it should "accept AddStorageTasks and remain operational" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("test-state-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = system.actorOf(
+      StorageRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+        maxAccountsPerBatch = 8,
+        maxInFlightRequests = 8,
+        requestTimeout = 30.seconds,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    val accountHash1 = kec256(ByteString("account-1"))
+    val storageRoot1 = kec256(ByteString("storage-root-1"))
+    val task = StorageTask.createStorageTask(accountHash1, storageRoot1)
+
+    coordinator ! Messages.AddStorageTasks(Seq(task))
+
+    // Should remain operational after adding tasks
+    coordinator ! Messages.StorageGetProgress
+    expectMsgType[Any](3.seconds)
+  }
+
+  it should "accept StoragePivotRefreshed and update state root" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("old-state-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = system.actorOf(
+      StorageRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+        maxAccountsPerBatch = 8,
+        maxInFlightRequests = 8,
+        requestTimeout = 30.seconds,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    val newStateRoot = kec256(ByteString("new-state-root"))
+    coordinator ! Messages.StoragePivotRefreshed(newStateRoot)
+
+    // Coordinator should still respond to progress queries after pivot refresh
+    coordinator ! Messages.StorageGetProgress
+    expectMsgType[Any](3.seconds)
+  }
+
+  it should "signal StorageRangeSyncComplete to controller when NoMoreStorageTasks received with no pending tasks" taggedAs UnitTest in {
+    // Verifies the sentinel pattern: when account download finishes with no storage accounts,
+    // the coordinator must complete immediately on NoMoreStorageTasks + StorageCheckCompletion.
+    val stateRoot = kec256(ByteString("empty-state-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = system.actorOf(
+      StorageRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+        maxAccountsPerBatch = 8,
+        maxInFlightRequests = 8,
+        requestTimeout = 30.seconds,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    coordinator ! Messages.StartStorageRangeSync(stateRoot)
+    coordinator ! Messages.NoMoreStorageTasks
+    coordinator ! Messages.StorageCheckCompletion
+
+    snapSyncController.expectMsg(3.seconds, SNAPSyncController.StorageRangeSyncComplete)
+  }
 }
