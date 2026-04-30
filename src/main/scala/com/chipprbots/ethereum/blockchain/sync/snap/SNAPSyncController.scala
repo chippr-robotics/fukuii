@@ -127,6 +127,10 @@ class SNAPSyncController(
   private var healingRequestTask: Option[Cancellable] = None
   private var storageStagnationRefreshAttempted: Boolean = false
   private var trieWalkInProgress: Boolean = false
+  // Monotonic counter that tags every async walk future. Incremented whenever a new walk is
+  // started (startTrieWalk / triggerHealingForMissingNodes) or the pivot changes during healing.
+  // Messages from a prior epoch carry a stale generation and are discarded on arrival.
+  private var walkGeneration: Long = 0L
   private var healingRoundCount: Int = 0
   private var bootstrapCheckTask: Option[Cancellable] = None
   private var pivotBootstrapRetryTask: Option[Cancellable] = None
@@ -580,49 +584,88 @@ class SNAPSyncController(
         // A trie walk is already running — its result will determine next step
         log.info("Trie walk in progress, waiting for result...")
       } else {
-        // No walk in progress — start one to check for deeper missing nodes
-        startTrieWalk()
+        // ARCH-WALK-HEAL-INTERLEAVE: Start walk with coordinator alive (if still running) or
+        // create a fresh coordinator before the walk so inline discovery can run concurrently.
+        startStateHealingWithInterleave()
       }
 
-    case TrieWalkResult(missingNodes) if currentPhase == StateHealing =>
-      trieWalkInProgress = false
-      if (missingNodes.isEmpty) {
-        log.info("Trie walk found no missing nodes — healing complete after {} rounds!", healingRoundCount)
-        healingRoundCount = 0
-        // Commit final pivot root — deferred from refreshPivotInPlace() to prevent BUG-006.
-        // AppStateStorage now reflects the root that healing actually completed against.
-        pivotBlock.foreach(b => appStateStorage.putSnapSyncPivotBlock(b).commit())
-        stateRoot.foreach(r => appStateStorage.putSnapSyncStateRoot(r).commit())
-        progressMonitor.startPhase(StateValidation)
-        currentPhase = StateValidation
-        validateState()
-      } else {
-        // A2: Loop indefinitely until Pending==0 — mirrors go-ethereum sync.go:1400
-        // `for len(s.healer.trieTasks) > 0 || s.healer.scheduler.Pending() > 0` and
-        // Besu SnapWorldDownloadState.java:177-185 `allTasksCompleted()` loop with no round cap.
-        // Missing nodes are re-queued; peer scoring (B5) handles unresponsive peers.
-        healingRoundCount += 1
-        log.info(
-          s"Trie walk found ${missingNodes.size} missing nodes — queuing for healing (round $healingRoundCount)"
-        )
+    // Streaming batch from ongoing trie walk — forward immediately to coordinator for early healing
+    case TrieWalkBatch(gen, missingNodes) if currentPhase == StateHealing =>
+      if (gen != walkGeneration) {
+        log.debug(s"Discarding stale TrieWalkBatch (epoch $gen, current $walkGeneration)")
+      } else if (missingNodes.nonEmpty) {
+        log.info(s"Trie walk batch: ${missingNodes.size} missing nodes — queuing for healing")
         trieNodeHealingCoordinator.foreach { coordinator =>
           coordinator ! actors.Messages.QueueMissingNodes(missingNodes)
         }
-        // Schedule next overlapping trie walk — don't wait for healing to complete
-        scheduler.scheduleOnce(2.minutes) {
-          self ! ScheduledTrieWalk
-        }(ec)
+      }
+
+    // Streaming walk completed — all batches already sent via TrieWalkBatch
+    case TrieWalkComplete(gen, totalFound) if currentPhase == StateHealing =>
+      if (gen != walkGeneration) {
+        log.debug(s"Discarding stale TrieWalkComplete (epoch $gen, current $walkGeneration)")
+      } else {
+        trieWalkInProgress = false
+        if (totalFound == 0) {
+          log.info("Trie walk found no missing nodes — healing complete after {} rounds!", healingRoundCount)
+          healingRoundCount = 0
+          for (b <- pivotBlock; r <- stateRoot)
+            appStateStorage.putSnapSyncPivotBlock(b).and(appStateStorage.putSnapSyncStateRoot(r)).commit()
+          progressMonitor.startPhase(StateValidation)
+          currentPhase = StateValidation
+          validateState()
+        } else {
+          // A2: Loop indefinitely until Pending==0 — mirrors go-ethereum sync.go:1400
+          healingRoundCount += 1
+          log.info(
+            s"Trie walk complete: $totalFound missing nodes queued across batches (round $healingRoundCount)"
+          )
+          scheduler.scheduleOnce(2.minutes) {
+            self ! ScheduledTrieWalk
+          }(ec)
+        }
+      }
+
+    case TrieWalkResult(gen, missingNodes) if currentPhase == StateHealing =>
+      if (gen != walkGeneration) {
+        log.debug(s"Discarding stale TrieWalkResult (epoch $gen, current $walkGeneration)")
+      } else {
+        trieWalkInProgress = false
+        if (missingNodes.isEmpty) {
+          log.info("Trie walk found no missing nodes — healing complete after {} rounds!", healingRoundCount)
+          healingRoundCount = 0
+          for (b <- pivotBlock; r <- stateRoot)
+            appStateStorage.putSnapSyncPivotBlock(b).and(appStateStorage.putSnapSyncStateRoot(r)).commit()
+          progressMonitor.startPhase(StateValidation)
+          currentPhase = StateValidation
+          validateState()
+        } else {
+          healingRoundCount += 1
+          log.info(
+            s"Trie walk found ${missingNodes.size} missing nodes — queuing for healing (round $healingRoundCount)"
+          )
+          trieNodeHealingCoordinator.foreach { coordinator =>
+            coordinator ! actors.Messages.QueueMissingNodes(missingNodes)
+          }
+          scheduler.scheduleOnce(2.minutes) {
+            self ! ScheduledTrieWalk
+          }(ec)
+        }
       }
 
     case ScheduledTrieWalk if currentPhase == StateHealing =>
       startTrieWalk()
 
-    case TrieWalkFailed(error) if currentPhase == StateHealing =>
-      trieWalkInProgress = false
-      log.error(s"Trie walk failed: $error. Retrying after delay...")
-      scheduler.scheduleOnce(5.seconds) {
-        self ! ScheduledTrieWalk
-      }(ec)
+    case TrieWalkFailed(gen, error) if currentPhase == StateHealing =>
+      if (gen != walkGeneration) {
+        log.debug(s"Discarding stale TrieWalkFailed (epoch $gen, current $walkGeneration)")
+      } else {
+        trieWalkInProgress = false
+        log.error(s"Trie walk failed: $error. Retrying after delay...")
+        scheduler.scheduleOnce(5.seconds) {
+          self ! ScheduledTrieWalk
+        }(ec)
+      }
 
     case StateValidationComplete =>
       log.info("State validation complete. SNAP sync finished!")
@@ -1924,9 +1967,11 @@ class SNAPSyncController(
       super.aroundReceive(receive, msg)
   }
 
-  // Internal message for async trie walk result
-  private case class TrieWalkResult(missingNodes: Seq[(Seq[ByteString], ByteString)])
-  private case class TrieWalkFailed(error: String)
+  // Internal messages for async trie walk — tagged with walkGeneration to discard stale results
+  private case class TrieWalkResult(generation: Long, missingNodes: Seq[(Seq[ByteString], ByteString)])
+  private case class TrieWalkBatch(generation: Long, missingNodes: Seq[(Seq[ByteString], ByteString)])
+  private case class TrieWalkComplete(generation: Long, totalFound: Int)
+  private case class TrieWalkFailed(generation: Long, error: String)
   private case object ScheduledTrieWalk
 
   /** Start an async trie walk to discover missing nodes. Guards against concurrent walks. */
@@ -1934,6 +1979,8 @@ class SNAPSyncController(
     if (trieWalkInProgress) return
     if (currentPhase != StateHealing) return
     trieWalkInProgress = true
+    walkGeneration += 1
+    val thisGen = walkGeneration
     stateRoot.foreach { root =>
       log.info("Starting trie walk to discover missing nodes for healing...")
       val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
@@ -1941,11 +1988,15 @@ class SNAPSyncController(
       scala.concurrent
         .Future {
           val validator = new StateValidator(storage)
-          validator.findMissingNodesWithPaths(root)
+          validator.findMissingNodesStreaming(
+            root,
+            batchSize = 500,
+            onBatch = { batch => selfRef ! TrieWalkBatch(thisGen, batch) }
+          )
         }(ec)
         .foreach {
-          case Right(missingNodes) => selfRef ! TrieWalkResult(missingNodes)
-          case Left(error)         => selfRef ! TrieWalkFailed(error)
+          case Right(totalFound) => selfRef ! TrieWalkComplete(thisGen, totalFound)
+          case Left(error)       => selfRef ! TrieWalkFailed(thisGen, error)
         }(ec)
     }
   }
@@ -1991,20 +2042,66 @@ class SNAPSyncController(
       }
 
       // Periodically send peer availability notifications
-      healingRequestTask = Some(
-        scheduler.scheduleWithFixedDelay(
-          0.seconds,
-          1.second,
-          self,
-          RequestTrieNodeHealing
-        )(ec, self)
-      )
+      startHealingRequestScheduler()
 
       progressMonitor.startPhase(StateHealing)
 
       // Run initial trie walk asynchronously to discover missing nodes
       startTrieWalk()
     }
+  }
+
+  private def startStateHealingWithInterleave(): Unit = {
+    if (trieNodeHealingCoordinator.isDefined) {
+      // Coordinator still running — just start the validation walk
+      startTrieWalk()
+    } else {
+      stateRoot match {
+        case Some(root) =>
+          val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
+          trieNodeHealingCoordinator = Some(
+            context.actorOf(
+              actors.TrieNodeHealingCoordinator
+                .props(
+                  stateRoot = root,
+                  networkPeerManager = networkPeerManager,
+                  requestTracker = requestTracker,
+                  mptStorage = storage,
+                  batchSize = snapSyncConfig.healingBatchSize,
+                  snapSyncController = self,
+                  concurrency = snapSyncConfig.healingConcurrency
+                )
+                .withDispatcher("sync-dispatcher"),
+              s"trie-node-healing-coordinator-$coordinatorGeneration"
+            )
+          )
+          trieNodeHealingCoordinator.foreach { coordinator =>
+            coordinator ! actors.Messages.StartTrieNodeHealing(root)
+            coordinator ! actors.Messages.UpdateMaxInFlightPerPeer(5)
+          }
+          startHealingRequestScheduler()
+          log.info(
+            s"[HEAL-INTERLEAVE] Healing coordinator created before walk — " +
+            s"root=${root.take(8).toHex}, generation=$coordinatorGeneration"
+          )
+          startTrieWalk()
+        case None =>
+          log.warning("[HEAL-INTERLEAVE] stateRoot is None — walking only (no coordinator created)")
+          startTrieWalk()
+      }
+    }
+  }
+
+  private def startHealingRequestScheduler(): Unit = {
+    healingRequestTask.foreach(_.cancel())
+    healingRequestTask = Some(
+      scheduler.scheduleWithFixedDelay(
+        0.seconds,
+        1.second,
+        self,
+        RequestTrieNodeHealing
+      )(ec, self)
+    )
   }
 
   // Internal message for periodic healing requests
@@ -2248,9 +2345,21 @@ class SNAPSyncController(
     // The backing storage was already created for the original pivot block number,
     // but since nodes are keyed by hash, they're valid for any root.
 
-    // Persist new pivot
-    appStateStorage.putSnapSyncPivotBlock(newPivotBlock).commit()
-    appStateStorage.putSnapSyncStateRoot(newStateRoot).commit()
+    // Any in-flight trie walk is now for the old root — invalidate it by bumping the
+    // generation counter. The walk future will complete and send a message tagged with
+    // the old generation, which the handler discards (D1 stale epoch fix).
+    if (trieWalkInProgress) {
+      log.info("Pivot refresh during trie walk — invalidating in-flight walk (stale epoch)")
+      walkGeneration += 1
+      trieWalkInProgress = false
+    }
+
+    // Persist new pivot — but NOT during healing: AppStateStorage is updated only when healing
+    // succeeds (trie walk finds 0 missing nodes). Mid-healing writes cause root mismatch (BUG-006):
+    // the new root is stored before all its nodes are healed, then validateState() sees a mismatch.
+    if (currentPhase != StateHealing) {
+      appStateStorage.putSnapSyncPivotBlock(newPivotBlock).and(appStateStorage.putSnapSyncStateRoot(newStateRoot)).commit()
+    }
     updateBestBlockForPivot(newPivotHeader, newPivotBlock)
     SNAPSyncMetrics.setPivotBlockNumber(newPivotBlock)
 
@@ -2330,6 +2439,9 @@ class SNAPSyncController(
     mptStorage = None
     currentPhase = Idle
     coordinatorGeneration += 1
+    // Invalidate any in-flight trie walk so its stale result is discarded on arrival
+    walkGeneration += 1
+    trieWalkInProgress = false
 
     // Reset progress counters so logs/ETA reflect the new attempt
     progressMonitor.reset()
@@ -2345,6 +2457,8 @@ class SNAPSyncController(
   private def triggerHealingForMissingNodes(missingNodes: Seq[ByteString]): Unit = {
     log.info(s"Validation found ${missingNodes.size} missing nodes — re-running trie walk with paths for healing")
     currentPhase = StateHealing
+    walkGeneration += 1
+    val thisGen = walkGeneration
     stateRoot.foreach { root =>
       val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
       scala.concurrent
@@ -2353,8 +2467,8 @@ class SNAPSyncController(
           validator.findMissingNodesWithPaths(root)
         }(ec)
         .foreach {
-          case Right(nodes) => self ! TrieWalkResult(nodes)
-          case Left(error)  => self ! TrieWalkFailed(error)
+          case Right(nodes) => self ! TrieWalkResult(thisGen, nodes)
+          case Left(error)  => self ! TrieWalkFailed(thisGen, error)
         }(ec)
     }
   }
