@@ -13,11 +13,11 @@ import com.chipprbots.ethereum.rlp.rawDecode
 
 object MptTraversals {
 
-  def collapseTrie(node: MptNode): (HashNode, List[(ByteString, Array[Byte])]) = {
+  def collapseTrie(node: MptNode): (HashNode, Seq[(ByteString, Array[Byte])]) = {
     val nodeCapper = new NodeCapper(withUpdates = true)
     val nodeEncoded = encodeNode(node, Some(nodeCapper))
     val rootHash = ByteString(Node.hashFn(nodeEncoded))
-    (HashNode(rootHash.toArray[Byte]), (rootHash, nodeEncoded) :: nodeCapper.getNodesToUpdate)
+    (HashNode(rootHash.toArray[Byte]), (rootHash, nodeEncoded) +: nodeCapper.getNodesToUpdate)
   }
 
   def parseTrieIntoMemory(rootNode: MptNode, source: MptStorage): MptNode =
