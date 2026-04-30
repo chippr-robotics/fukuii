@@ -370,6 +370,14 @@ class SNAPSyncController(
       progressMonitor.setFinalizingTrie(false)
       log.info("Account range trie finalization complete")
 
+    case AccountTrieFinalizationFailed(error) =>
+      // Root mismatch: the trie we built doesn't hash to the pivot's state root.
+      // This means peers returned empty/wrong data (e.g., snapshot not ready).
+      // Restart with a fresh pivot rather than entering healing with corrupt state.
+      log.error(s"Account trie finalization failed ($error) — restarting SNAP sync with fresh pivot")
+      progressMonitor.setFinalizingTrie(false)
+      restartSnapSync(s"account trie finalization failed: $error")
+
     case ProgressBytecodesDownloaded(count) =>
       progressMonitor.incrementBytecodesDownloaded(count)
 
@@ -2877,6 +2885,7 @@ object SNAPSyncController {
   case object ProgressAccountsFinalizingTrie
   case object ProgressAccountsTrieFinalized
   final case class AccountTrieFinalized(finalizedRoot: ByteString)
+  final case class AccountTrieFinalizationFailed(error: String)
   final case class ProgressBytecodesDownloaded(count: Long)
   final case class ProgressStorageSlotsSynced(count: Long)
   final case class ProgressNodesHealed(count: Long)
