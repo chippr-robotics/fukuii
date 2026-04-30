@@ -217,7 +217,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     setupNewPeer(freshPeer, freshPeerProbe, freshPeerInfo.copy(maxBlockNumber = 0))
 
     requestSender.send(peersInfoHolder, GetHandshakedPeers)
-    requestSender.expectMsg(HandshakedPeers(Map.empty))
+    requestSender.expectMsg(HandshakedPeers(Map(freshPeer -> freshPeerInfo.copy(maxBlockNumber = 0))))
 
     val newMaxBlock: BigInt = freshPeerInfo.maxBlockNumber + 1
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = newMaxBlock)
@@ -276,6 +276,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
             Codes.BlockHeadersCode,
             Codes.NewBlockCode,
             Codes.NewBlockHashesCode,
+            Codes.BlockRangeUpdateCode,
             // SNAP protocol response codes
             com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.AccountRangeCode,
             com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.StorageRangesCode,
@@ -493,6 +494,7 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
               Codes.BlockHeadersCode,
               Codes.NewBlockCode,
               Codes.NewBlockHashesCode,
+              Codes.BlockRangeUpdateCode,
               // SNAP protocol response codes
               com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.AccountRangeCode,
               com.chipprbots.ethereum.network.p2p.messages.SNAP.Codes.StorageRangesCode,

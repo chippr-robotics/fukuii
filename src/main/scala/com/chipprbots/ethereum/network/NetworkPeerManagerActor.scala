@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH62.NewBlockHashes
 import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH64
+import com.chipprbots.ethereum.network.p2p.messages.ETH69
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
@@ -85,10 +86,11 @@ class NetworkPeerManagerActor(
   def handleMessages(peersWithInfo: PeersWithInfo): Receive =
     handleCommonMessages(peersWithInfo).orElse(handlePeersInfoEvents(peersWithInfo))
 
-  private def peerHasUpdatedBestBlock(peerInfo: PeerInfo): Boolean = {
-    val peerBestBlockIsItsGenesisBlock = peerInfo.bestBlockHash == peerInfo.remoteStatus.genesisHash
-    peerBestBlockIsItsGenesisBlock || (!peerBestBlockIsItsGenesisBlock && peerInfo.maxBlockNumber > 0)
-  }
+  private def peerHasUpdatedBestBlock(@annotation.unused peerInfo: PeerInfo): Boolean =
+    // All handshaked peers are usable. go-ethereum has no equivalent gate (eth/peerset.go all()
+    // returns all peers unconditionally). ETH/69 peers carry latestBlock in Status; ETH/68 peers
+    // carry bestHash. Both are sufficient to identify the peer as having chain state.
+    true
 
   /** Processes both messages for sending messages and for requesting peer information
     *
@@ -360,6 +362,8 @@ class NetworkPeerManagerActor(
         update(Seq((m.block.header.number, m.block.header.hash)))
       case m: NewBlockHashes =>
         update(m.hashes.map(h => (h.number, h.hash)))
+      case m: ETH69.BlockRangeUpdate =>
+        update(Seq((m.latestBlock, m.latestBlockHash)))
       case _ => initialPeerInfo
     }
   }
@@ -639,6 +643,7 @@ object NetworkPeerManagerActor {
     Codes.BlockHeadersCode,
     Codes.NewBlockCode,
     Codes.NewBlockHashesCode,
+    Codes.BlockRangeUpdateCode,
     // SNAP protocol response codes (responses we receive from peers)
     SNAP.Codes.AccountRangeCode,
     SNAP.Codes.StorageRangesCode,
