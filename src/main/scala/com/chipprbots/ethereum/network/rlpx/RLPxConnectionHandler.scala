@@ -875,8 +875,8 @@ class RLPxConnectionHandler(
 
 object RLPxConnectionHandler {
   // Per-connection event counters — read+reset every 60s by NetworkPeerManagerActor summary
-  val tcpFailedCount   = new java.util.concurrent.atomic.AtomicInteger(0)
-  val authFailedCount  = new java.util.concurrent.atomic.AtomicInteger(0)
+  val tcpFailedCount = new java.util.concurrent.atomic.AtomicInteger(0)
+  val authFailedCount = new java.util.concurrent.atomic.AtomicInteger(0)
   val authTimeoutCount = new java.util.concurrent.atomic.AtomicInteger(0)
 
   def props(

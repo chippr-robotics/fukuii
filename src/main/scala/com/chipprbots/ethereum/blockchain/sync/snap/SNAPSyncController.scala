@@ -184,7 +184,7 @@ class SNAPSyncController(
               s"but all heights unknown. Scheduling retry in 2s for ETH status exchange to complete."
           )
           bootstrapCheckTask.foreach(_.cancel())
-          bootstrapCheckTask = Some(scheduler.scheduleOnce(2.seconds) { self ! RetrySnapSyncStart }(ec))
+          bootstrapCheckTask = Some(scheduler.scheduleOnce(2.seconds)(self ! RetrySnapSyncStart)(ec))
         }
       }
 
@@ -1274,11 +1274,11 @@ class SNAPSyncController(
                 s"waiting for ETH status exchange. Retrying in $delay (attempt $bootstrapRetryCount)."
             )
             bootstrapCheckTask.foreach(_.cancel())
-            bootstrapCheckTask = Some(scheduler.scheduleOnce(delay) { self ! RetrySnapSyncStart }(ec))
+            bootstrapCheckTask = Some(scheduler.scheduleOnce(delay)(self ! RetrySnapSyncStart)(ec))
             context.become(bootstrapping)
             return
           }
-          // else: ETH/69 peers genuinely confirmed low network height — proceed to genesis sync
+        // else: ETH/69 peers genuinely confirmed low network height — proceed to genesis sync
       }
 
       log.info("=" * 80)

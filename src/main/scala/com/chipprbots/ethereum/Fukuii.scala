@@ -87,8 +87,8 @@ object Fukuii extends Logger {
   private def truncateLogs(): Unit = {
     import scala.util.Try
     val fullConfig = ConfigFactory.load()
-    val logsDir    = Try(fullConfig.getString("logging.logs-dir")).getOrElse("./logs")
-    val logsFile   = Try(fullConfig.getString("logging.logs-file")).getOrElse("fukuii")
+    val logsDir = Try(fullConfig.getString("logging.logs-dir")).getOrElse("./logs")
+    val logsFile = Try(fullConfig.getString("logging.logs-file")).getOrElse("fukuii")
 
     val paths = Seq(
       Paths.get(logsDir).resolve(s"$logsFile.log"),
@@ -97,8 +97,9 @@ object Fukuii extends Logger {
 
     paths.foreach { path =>
       if (Files.exists(path)) {
-        Try(Files.write(path, Array.emptyByteArray, StandardOpenOption.TRUNCATE_EXISTING))
-          .failed.foreach(e => log.warn("Failed to truncate log file {}: {}", path, e.getMessage))
+        Try(Files.write(path, Array.emptyByteArray, StandardOpenOption.TRUNCATE_EXISTING)).failed.foreach(e =>
+          log.warn("Failed to truncate log file {}: {}", path, e.getMessage)
+        )
       }
     }
     log.info("Log files truncated on startup")
