@@ -5,15 +5,13 @@ import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext
-import scala.collection.mutable
 
 import com.chipprbots.ethereum.blockchain.sync.{Blacklist, CacheBasedBlacklist, PeerListSupportNg, SyncProtocol}
 import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage, FlatSlotStorage, MptStorage, StateStorage}
 import com.chipprbots.ethereum.domain.{Block, BlockBody, BlockHeader, BlockchainReader, BlockchainWriter, ChainWeight}
-import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
-import com.chipprbots.ethereum.utils.{Config, Hex}
+import com.chipprbots.ethereum.utils.Hex
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
@@ -186,7 +184,7 @@ class SNAPSyncController(
               s"but all heights unknown. Scheduling retry in 2s for ETH status exchange to complete."
           )
           bootstrapCheckTask.foreach(_.cancel())
-          bootstrapCheckTask = Some(scheduler.scheduleOnce(2.seconds) { self ! RetrySnapSyncStart }(ec))
+          bootstrapCheckTask = Some(scheduler.scheduleOnce(2.seconds)(self ! RetrySnapSyncStart)(ec))
         }
       }
 
@@ -472,7 +470,7 @@ class SNAPSyncController(
       )
       pivotBootstrapRetryTask.foreach(_.cancel())
       pivotBootstrapRetryTask = Some(
-        scheduler.scheduleOnce(60.seconds, self, RetryPivotRefresh)(context.dispatcher)
+        scheduler.scheduleOnce(60.seconds, self, RetryPivotRefresh)(context.dispatcher, self)
       )
 
     case RetryPivotRefresh =>
@@ -667,7 +665,7 @@ class SNAPSyncController(
     storageStagnationCheckTask.foreach(_.cancel())
     val interval = DownloadStagnationCheckInterval
     accountStagnationCheckTask = Some(
-      scheduler.scheduleWithFixedDelay(interval, interval, self, CheckDownloadStagnation)(ec)
+      scheduler.scheduleWithFixedDelay(interval, interval, self, CheckDownloadStagnation)(ec, self)
     )
   }
 
@@ -788,10 +786,14 @@ class SNAPSyncController(
       bootstrapRetryCount = 0
 
       // Helper: compute current best height from SNAP-capable peers (subject to bootstrapPivot floor).
+      // Peers whose STATUS hasn't arrived yet have maxBlockNumber=0 — exclude them, otherwise
+      // a fresh-startup race returns Some(0) and the caller commits to a genesis pivot before
+      // any real peer height is known.
       def currentNetworkBestFromSnapPeers(bootstrapPivot: BigInt): Option[BigInt] = {
         val snapPeersForPivot =
           peersToDownloadFrom.values.toList
             .filter(_.peerInfo.remoteStatus.supportsSnap)
+            .filter(_.peerInfo.maxBlockNumber > 0)
             .filter(p => bootstrapPivot == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivot)
 
         snapPeersForPivot
@@ -1037,7 +1039,7 @@ class SNAPSyncController(
             )
             bytecodeCoordinator.foreach(_ ! actors.Messages.StartByteCodeSync(Seq.empty))
             bytecodeRequestTask = Some(
-              scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestByteCodes)(ec)
+              scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestByteCodes)(ec, self)
             )
 
             storageRangeCoordinator = Some(
@@ -1064,7 +1066,7 @@ class SNAPSyncController(
             )
             storageRangeCoordinator.foreach(_ ! actors.Messages.StartStorageRangeSync(rootBs))
             storageRangeRequestTask = Some(
-              scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestStorageRanges)(ec)
+              scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestStorageRanges)(ec, self)
             )
 
             // Recovery budget: accounts done, bytecode=2, storage=3 (total 5 per peer)
@@ -1177,9 +1179,12 @@ class SNAPSyncController(
     // Query SNAP-capable peers to find the highest block in the network.
     // SNAP must NOT start until we have a SNAP-capable peer that is at/above the bootstrap pivot
     // (when configured). Falling back to non-SNAP peers here would select an unreachable state root.
+    // Peers whose STATUS hasn't arrived yet have maxBlockNumber=0 — exclude them, otherwise a
+    // fresh-startup race counts them as "network best=0" → pivot=-64 → genesis fallback.
     val snapPeersForPivot =
       peersToDownloadFrom.values.toList
         .filter(_.peerInfo.remoteStatus.supportsSnap)
+        .filter(_.peerInfo.maxBlockNumber > 0)
         .filter(p => bootstrapPivotBlock == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivotBlock)
 
     val networkBestBlockOpt =
@@ -1269,11 +1274,11 @@ class SNAPSyncController(
                 s"waiting for ETH status exchange. Retrying in $delay (attempt $bootstrapRetryCount)."
             )
             bootstrapCheckTask.foreach(_.cancel())
-            bootstrapCheckTask = Some(scheduler.scheduleOnce(delay) { self ! RetrySnapSyncStart }(ec))
+            bootstrapCheckTask = Some(scheduler.scheduleOnce(delay)(self ! RetrySnapSyncStart)(ec))
             context.become(bootstrapping)
             return
           }
-          // else: ETH/69 peers genuinely confirmed low network height — proceed to genesis sync
+        // else: ETH/69 peers genuinely confirmed low network height — proceed to genesis sync
       }
 
       log.info("=" * 80)
@@ -1584,7 +1589,7 @@ class SNAPSyncController(
           snapSyncConfig.snapPeerEvictionInterval,
           self,
           EvictNonSnapPeers
-        )(ec)
+        )(ec, self)
       )
       log.info(
         s"SNAP peer eviction started: checking every ${snapSyncConfig.snapPeerEvictionInterval.toSeconds}s, " +
@@ -1606,7 +1611,7 @@ class SNAPSyncController(
       log.warning(s"No peers with snap/1 capability found ($peersToDownloadFrom.size peers connected)")
       log.warning(s"Scheduling snap capability check in ${gracePeriod.toSeconds}s before falling back to fast sync")
       snapCapabilityCheckTask = Some(
-        scheduler.scheduleOnce(gracePeriod, self, CheckSnapCapability)(ec)
+        scheduler.scheduleOnce(gracePeriod, self, CheckSnapCapability)(ec, self)
       )
       return
     }
@@ -1630,7 +1635,7 @@ class SNAPSyncController(
     startChainDownloader()
   }
 
-  private def launchAccountRangeWorkers(rootHash: ByteString, concurrency: Int = -1): Unit = {
+  private def launchAccountRangeWorkers(rootHash: ByteString, concurrency: Int): Unit = {
     val effectiveConcurrency = if (concurrency > 0) concurrency else snapSyncConfig.accountConcurrency
     // Reset stagnation tracking for this phase.
     lastAccountProgressMs = System.currentTimeMillis()
@@ -1719,7 +1724,7 @@ class SNAPSyncController(
         1.second,
         self,
         RequestAccountRanges
-      )(ec)
+      )(ec, self)
     )
 
     scheduleStagnationChecks()
@@ -1727,7 +1732,7 @@ class SNAPSyncController(
     // Schedule periodic rate tracker tuning (geth msgrate alignment: recalculate median RTT every 5s)
     if (rateTrackerTuneTask.isEmpty) {
       rateTrackerTuneTask = Some(
-        scheduler.scheduleWithFixedDelay(5.seconds, 5.seconds, self, TuneRateTracker)(ec)
+        scheduler.scheduleWithFixedDelay(5.seconds, 5.seconds, self, TuneRateTracker)(ec, self)
       )
     }
 
@@ -1752,7 +1757,7 @@ class SNAPSyncController(
       bytecodeCoordinator.foreach(_ ! actors.Messages.StartByteCodeSync(Seq.empty))
 
       bytecodeRequestTask = Some(
-        scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestByteCodes)(ec)
+        scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestByteCodes)(ec, self)
       )
     }
 
@@ -1785,7 +1790,7 @@ class SNAPSyncController(
       storageRangeCoordinator.foreach(_ ! actors.Messages.StartStorageRangeSync(rootHash))
 
       storageRangeRequestTask = Some(
-        scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestStorageRanges)(ec)
+        scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestStorageRanges)(ec, self)
       )
     }
 
@@ -1830,7 +1835,7 @@ class SNAPSyncController(
     // Notify coordinator of available peers
     bytecodeCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
-        case (peerId, peerWithInfo) if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
+        case (_, peerWithInfo) if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
           peerWithInfo.peer
       }
 
@@ -1852,7 +1857,7 @@ class SNAPSyncController(
       val pivot = pivotBlock.getOrElse(BigInt(0))
 
       val snapPeers = peersToDownloadFrom.collect {
-        case (peerId, peerWithInfo)
+        case (_, peerWithInfo)
             if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
           peerWithInfo.peer
       }
@@ -2000,7 +2005,7 @@ class SNAPSyncController(
           1.second,
           self,
           RequestTrieNodeHealing
-        )(ec)
+        )(ec, self)
       )
 
       progressMonitor.startPhase(StateHealing)
@@ -2017,7 +2022,7 @@ class SNAPSyncController(
     // Notify coordinator of available peers
     trieNodeHealingCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
-        case (peerId, peerWithInfo) if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
+        case (_, peerWithInfo) if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
           peerWithInfo.peer
       }
 
@@ -2127,6 +2132,10 @@ class SNAPSyncController(
     val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
     peersToDownloadFrom.values.toList
       .filter(_.peerInfo.remoteStatus.supportsSnap)
+      // Peers whose STATUS hasn't arrived yet have maxBlockNumber=0 — exclude them, otherwise
+      // a fresh-startup race returns Some(0) and the caller commits to a genesis pivot before
+      // any real peer height is known.
+      .filter(_.peerInfo.maxBlockNumber > 0)
       .filter(p => bootstrapPivotBlock == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivotBlock)
       .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
       .headOption
@@ -2161,7 +2170,7 @@ class SNAPSyncController(
       // Restarting can't help with no peers, and it destroys all downloaded trie data.
       pivotBootstrapRetryTask.foreach(_.cancel())
       pivotBootstrapRetryTask = Some(
-        scheduler.scheduleOnce(30.seconds, self, RetryPivotRefresh)(context.dispatcher)
+        scheduler.scheduleOnce(30.seconds, self, RetryPivotRefresh)(context.dispatcher, self)
       )
       return
     }
@@ -2504,21 +2513,18 @@ class SNAPSyncController(
         chainDownloader.foreach(context.stop)
         chainDownloader = None
         finalizeSnapSync(pivot)
-      } else {
-        // If chain download is still running, boost its concurrency and wait
-        if (!chainDownloadComplete && chainDownloader.isDefined) {
-          log.info("SNAP state sync complete, boosting chain download concurrency and waiting for completion...")
-          chainDownloader.foreach(
-            _ ! ChainDownloader.BoostConcurrency(
-              snapSyncConfig.chainDownloadBoostedConcurrentRequests
-            )
+      } else if (!chainDownloadComplete && chainDownloader.isDefined) {
+        // Chain download is still running — boost its concurrency and wait
+        log.info("SNAP state sync complete, boosting chain download concurrency and waiting for completion...")
+        chainDownloader.foreach(
+          _ ! ChainDownloader.BoostConcurrency(
+            snapSyncConfig.chainDownloadBoostedConcurrentRequests
           )
-          currentPhase = ChainDownloadCompletion
-          progressMonitor.startPhase(ChainDownloadCompletion)
-          context.become(waitingForChainDownload)
-          return
-        }
-
+        )
+        currentPhase = ChainDownloadCompletion
+        progressMonitor.startPhase(ChainDownloadCompletion)
+        context.become(waitingForChainDownload)
+      } else {
         finalizeSnapSync(pivot)
       }
     }

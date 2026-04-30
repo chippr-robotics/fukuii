@@ -109,9 +109,10 @@ object PrecompiledContracts {
       val relocations = context.precompileRelocations
       if (relocations.isEmpty) {
         baseContracts.get(addr)
+      } else if (relocations.contains(addr)) {
+        // Address was a precompile source (moved away) — no longer a precompile
+        None
       } else {
-        // If this address was a precompile source (moved away), it's no longer a precompile
-        if (relocations.contains(addr)) return None
         // Check if this address is a relocation target
         val reverseMap = relocations.map(_.swap)
         reverseMap.get(addr) match {

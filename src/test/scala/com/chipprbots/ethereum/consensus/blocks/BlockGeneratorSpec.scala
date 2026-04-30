@@ -22,7 +22,6 @@ import com.chipprbots.ethereum.crypto._
 import com.chipprbots.ethereum.domain.SignedTransaction.FirstByteOfAddress
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.ledger.BlockExecution
-import com.chipprbots.ethereum.ledger.BlockExecutionError.ValidationAfterExecError
 import com.chipprbots.ethereum.ledger.BlockQueue
 import com.chipprbots.ethereum.ledger.BlockValidation
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException

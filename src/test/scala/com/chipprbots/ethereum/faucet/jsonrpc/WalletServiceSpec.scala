@@ -30,8 +30,6 @@ import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTran
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.jsonrpc.client.RpcClient.RpcError
-import com.chipprbots.ethereum.jsonrpc.client.RpcClient.RpcError
-import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
 import com.chipprbots.ethereum.keystore.KeyStore.KeyStoreError
 import com.chipprbots.ethereum.testing.Tags._
 

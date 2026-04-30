@@ -15,7 +15,6 @@ import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializableImplicit
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp._
 import com.chipprbots.ethereum.utils.ByteUtils
@@ -376,7 +375,7 @@ object ETH66 {
           val originalSizes = rlpList.items.map {
             case RLPValue(v) => v.length // typed tx: typeByte + rlp_payload
             case rl: RLPList => com.chipprbots.ethereum.rlp.encode(rl).length // legacy tx: RLP-encoded
-            case other       => 0
+            case _           => 0
           }
           PooledTransactions(
             ByteUtils.bytesToBigInt(requestIdBytes),

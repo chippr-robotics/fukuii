@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum
 
-import java.time.Instant
-
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 

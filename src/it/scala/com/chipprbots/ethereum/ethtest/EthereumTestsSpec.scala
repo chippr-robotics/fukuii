@@ -1,6 +1,5 @@
 package com.chipprbots.ethereum.ethtest
 
-import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -50,7 +49,7 @@ abstract class EthereumTestsSpec extends AnyFlatSpec with Matchers {
     * @param test
     *   Test data
     */
-  def runSingleTest(testName: String, test: BlockchainTest): Unit = {
+  def runSingleTest(@scala.annotation.unused testName: String, test: BlockchainTest): Unit = {
     info(s"  Network: ${test.network}")
     info(s"  Pre-state accounts: ${test.pre.size}")
     info(s"  Blocks to execute: ${test.blocks.size}")

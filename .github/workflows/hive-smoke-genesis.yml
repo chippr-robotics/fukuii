@@ -1,18 +1,8 @@
 name: Hive · smoke-genesis
 
 on:
-  push:
-    branches: [main, master, develop]
-    paths:
-      - 'src/**'
-      - 'build.sbt'
-      - 'version.sbt'
-      - 'project/**'
-      - 'hive/**'
-      - '.github/workflows/_hive-sim.yml'
-      - '.github/workflows/hive-smoke-genesis.yml'
   pull_request:
-    branches: [main, master, develop]
+    branches: [main, master]
     paths:
       - 'src/**'
       - 'build.sbt'
@@ -21,9 +11,6 @@ on:
       - 'hive/**'
       - '.github/workflows/_hive-sim.yml'
       - '.github/workflows/hive-smoke-genesis.yml'
-  schedule:
-    # Nightly 04:00 UTC (one hour after hive-prague).
-    - cron: '0 4 * * *'
   workflow_dispatch:
     inputs:
       hive_ref:
@@ -40,7 +27,7 @@ permissions:
 
 concurrency:
   group: hive-smoke-genesis-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   run:

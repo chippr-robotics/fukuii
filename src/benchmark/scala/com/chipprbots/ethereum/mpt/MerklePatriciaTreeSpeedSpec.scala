@@ -27,7 +27,7 @@ class MerklePatriciaTreeSpeedSpec
     )
     var seed: Array[Byte] = Array.fill(32)(0.toByte)
 
-    val trieResult = (0 until Rounds).foldLeft(emptyTrie) { case (recTrie, i) =>
+    val trieResult = (0 until Rounds).foldLeft(emptyTrie) { case (recTrie, _) =>
       seed = Node.hashFn(seed)
       if (!Symmetric) recTrie.put(seed, seed)
       else {

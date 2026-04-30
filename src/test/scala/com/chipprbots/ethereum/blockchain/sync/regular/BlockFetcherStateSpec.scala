@@ -106,7 +106,7 @@ class BlockFetcherStateSpec
           .recordHeaderRejection()
         stale.consecutiveHeaderRejections shouldBe 2
 
-        val Right(recovered) = stale.appendHeaders(blocks.map(_.header))
+        val Right(recovered) = stale.appendHeaders(blocks.map(_.header)): @unchecked
         recovered.consecutiveHeaderRejections shouldBe 0
       }
 

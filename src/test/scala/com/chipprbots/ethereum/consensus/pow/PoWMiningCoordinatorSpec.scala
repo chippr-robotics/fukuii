@@ -2,7 +2,6 @@ package com.chipprbots.ethereum.consensus.pow
 
 import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.{ActorSystem => ClassicSystem}
-import org.apache.pekko.actor.testkit.typed.LoggingEvent
 import org.apache.pekko.actor.testkit.typed.scaladsl.LoggingTestKit
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.typed

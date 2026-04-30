@@ -55,7 +55,13 @@ case class BlockFetcherState(
     // append. Used by BlockFetcher to detect "stale tip" situations (all peers consistently
     // reject — Bug 31) and trigger a rewind via InvalidateBlocksFrom so we can recover
     // instead of looping on the same poisoned queue state indefinitely.
-    consecutiveHeaderRejections: Int = 0
+    consecutiveHeaderRejections: Int = 0,
+    // stateRoot of the highest header we've seen via appendHeaders. Used by StateNodeFetcher
+    // as a recent-and-servable fallback root when the parent's stateRoot is too old (>~128
+    // blocks behind tip) for any SNAP peer to serve from. Trie nodes are content-addressed,
+    // so the same nibble path against a recent root usually leads to the same node — provided
+    // the account's subtree hasn't been touched in the gap.
+    recentCanonicalStateRoot: Option[ByteString] = None
 ) {
 
   def isFetching: Boolean = isFetchingHeaders || isFetchingBodies
@@ -89,11 +95,13 @@ case class BlockFetcherState(
   def appendHeaders(headers: Seq[BlockHeader]): Either[ValidationErrors, BlockFetcherState] =
     validatedHeaders(headers.sortBy(_.number)).map { validHeaders =>
       val lastNumber = HeadersSeq.lastNumber(validHeaders)
+      val newRecentRoot = validHeaders.lastOption.map(_.stateRoot).orElse(recentCanonicalStateRoot)
       withPossibleNewTopAt(lastNumber)
         .copy(
           waitingHeaders = waitingHeaders ++ validHeaders,
           // Any successful append clears the consecutive-rejection counter
-          consecutiveHeaderRejections = 0
+          consecutiveHeaderRejections = 0,
+          recentCanonicalStateRoot = newRecentRoot
         )
     }
 

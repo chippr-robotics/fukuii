@@ -1,0 +1,262 @@
+{
+  "annotations": { "list": [] },
+  "description": "Engine API detail — every Engine API signal a staking operator can use to debug EL/CL friction.",
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "options": {
+        "content": "<div style=\"text-align:center;padding:8px 0\"><span style=\"font-size:28px;letter-spacing:4px;font-weight:200;color:#b4a7d6\">ENGINE API</span><span style=\"font-size:28px;letter-spacing:4px;font-weight:200;color:#93c47d\"> DETAIL</span><br/><span style=\"font-size:12px;color:#999;letter-spacing:2px\">EL ⇄ CL traffic and latencies</span></div>",
+        "mode": "html"
+      },
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Total newPayload calls received from CL.",
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "#b4a7d6" }, "unit": "none" } },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 3 },
+      "id": 1,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "newPayload total",
+      "type": "stat",
+      "targets": [{ "expr": "app_engine_newpayload_total{instance=\"fukuii-sepolia\"}", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Cumulative VALID payload responses.",
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "#93c47d" }, "unit": "none" } },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 3 },
+      "id": 2,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "VALID",
+      "type": "stat",
+      "targets": [{ "expr": "app_engine_newpayload_valid{instance=\"fukuii-sepolia\"}", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Cumulative SYNCING (parent unknown) responses. Drops to ~0 once EL catches up.",
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "#f6b26b" }, "unit": "none" } },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 3 },
+      "id": 3,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "SYNCING",
+      "type": "stat",
+      "targets": [{ "expr": "app_engine_newpayload_syncing{instance=\"fukuii-sepolia\"}", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Cumulative INVALID. Non-zero is a strong signal of consensus drift or implementation bug.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#93c47d", "value": null }, { "color": "#e06666", "value": 1 }] },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 3 },
+      "id": 4,
+      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "INVALID",
+      "type": "stat",
+      "targets": [{ "expr": "app_engine_newpayload_invalid{instance=\"fukuii-sepolia\"}", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "fcU calls received from CL.",
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "#6fa8dc" }, "unit": "none" } },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 3 },
+      "id": 5,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "forkchoiceUpdated total",
+      "type": "stat",
+      "targets": [{ "expr": "app_engine_forkchoice_total{instance=\"fukuii-sepolia\"}", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Wall-clock seconds since the last payload the EL executed. > slot duration (12s on Sepolia) = falling behind.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#93c47d", "value": null }, { "color": "#f6b26b", "value": 24 }, { "color": "#e06666", "value": 60 }] },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 3 },
+      "id": 6,
+      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Last payload age",
+      "type": "stat",
+      "targets": [{ "expr": "(time() - app_engine_latest_payload_timestamp{instance=\"fukuii-sepolia\"}) and (app_engine_latest_payload_timestamp{instance=\"fukuii-sepolia\"} > 0)", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "newPayload outcome rate, stacked. Healthy = mostly VALID with brief SYNCING bursts during reorgs.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 0, "stacking": { "mode": "normal", "group": "A" } },
+          "unit": "ops"
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "valid" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#93c47d" } }] },
+          { "matcher": { "id": "byName", "options": "syncing" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#f6b26b" } }] },
+          { "matcher": { "id": "byName", "options": "invalid" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#e06666" } }] }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
+      "id": 10,
+      "options": { "legend": { "calcs": ["lastNotNull", "sum"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "title": "newPayload status mix",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(app_engine_newpayload_valid{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "valid", "refId": "A" },
+        { "expr": "rate(app_engine_newpayload_syncing{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "syncing", "refId": "B" },
+        { "expr": "rate(app_engine_newpayload_invalid{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "invalid", "refId": "C" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "fcU outcome rate.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 0, "stacking": { "mode": "normal", "group": "A" } },
+          "unit": "ops"
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "valid" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#93c47d" } }] },
+          { "matcher": { "id": "byName", "options": "syncing" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#f6b26b" } }] }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
+      "id": 11,
+      "options": { "legend": { "calcs": ["lastNotNull", "sum"], "displayMode": "table", "placement": "bottom" } },
+      "title": "forkchoiceUpdated status mix",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(app_engine_forkchoice_valid{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "valid", "refId": "A" },
+        { "expr": "rate(app_engine_forkchoice_syncing{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "syncing", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Average Engine API call latency on the EL (sum/count of the JSON-RPC timer summary, filtered to engine_* methods).",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "id": 20,
+      "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" } },
+      "title": "EL Engine API average latency",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(app_json_rpc_methods_timer_seconds_sum{instance=\"fukuii-sepolia\",method=~\"engine_.*\"}[5m]) / clamp_min(rate(app_json_rpc_methods_timer_seconds_count{instance=\"fukuii-sepolia\",method=~\"engine_.*\"}[5m]), 1e-9)", "legendFormat": "{{method}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Time the CL spends in EL Engine API calls (CL-side histogram). The high tail (p99) is what determines whether you propose blocks on time.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "id": 21,
+      "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" } },
+      "title": "CL → EL request latency p50/p95/p99",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (le, method) (rate(execution_layer_request_times_bucket{job=\"lighthouse-sepolia\"}[5m])))", "legendFormat": "p50 {{method}}", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, sum by (le, method) (rate(execution_layer_request_times_bucket{job=\"lighthouse-sepolia\"}[5m])))", "legendFormat": "p95 {{method}}", "refId": "B" },
+        { "expr": "histogram_quantile(0.99, sum by (le, method) (rate(execution_layer_request_times_bucket{job=\"lighthouse-sepolia\"}[5m])))", "legendFormat": "p99 {{method}}", "refId": "C" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "JSON-RPC method errors and exceptions on the EL.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true },
+          "unit": "ops"
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 23 },
+      "id": 30,
+      "options": { "legend": { "calcs": ["lastNotNull", "sum"], "displayMode": "table", "placement": "bottom" } },
+      "title": "JSON-RPC errors / exceptions (EL)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(app_json_rpc_methods_error_counter_total{instance=\"fukuii-sepolia\"}[5m])", "legendFormat": "error {{method}}", "refId": "A" },
+        { "expr": "rate(app_json_rpc_methods_exception_counter_total{instance=\"fukuii-sepolia\"}[5m])", "legendFormat": "exception {{method}}", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Total Engine API requests per minute, broken out by method.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true },
+          "unit": "ops"
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 23 },
+      "id": 31,
+      "options": { "legend": { "calcs": ["lastNotNull", "sum"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Engine API throughput (per method)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(app_json_rpc_methods_timer_seconds_count{instance=\"fukuii-sepolia\",method=~\"engine_.*\"}[1m])", "legendFormat": "{{method}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Block height the EL has executed via newPayload.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 15, "lineInterpolation": "smooth", "lineWidth": 2, "spanNulls": true },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 30 },
+      "id": 40,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" } },
+      "title": "EL latest payload block over time",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "app_engine_latest_payload_block{instance=\"fukuii-sepolia\"}", "legendFormat": "fukuii payload block", "refId": "A" }
+      ]
+    },
+    {
+      "gridPos": { "h": 2, "w": 24, "x": 0, "y": 37 },
+      "id": 99,
+      "options": {
+        "content": "<div style=\"text-align:center;padding:4px 0\"><span style=\"font-size:10px;color:#666;letter-spacing:3px\">ENGINE API DETAIL</span> <span style=\"color:#555\">|</span> <span style=\"font-size:10px;color:#666\">EL: Fukuii (Sepolia)</span> <span style=\"color:#555\">|</span> <span style=\"font-size:10px;color:#666\">CL: Lighthouse</span></div>",
+        "mode": "html"
+      },
+      "transparent": true,
+      "type": "text"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 37,
+  "style": "dark",
+  "tags": ["fukuii", "engine-api", "sepolia"],
+  "time": { "from": "now-3h", "to": "now" },
+  "title": "Engine API Detail",
+  "uid": "engine-api-detail",
+  "version": 1
+}

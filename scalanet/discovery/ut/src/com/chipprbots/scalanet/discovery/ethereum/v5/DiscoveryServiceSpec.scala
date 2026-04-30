@@ -2,11 +2,10 @@ package com.chipprbots.scalanet.discovery.ethereum.v5
 
 import java.net.{InetAddress, InetSocketAddress}
 import java.util.concurrent.atomic.AtomicReference
-import java.util.concurrent.ConcurrentLinkedQueue
 
 import scala.concurrent.duration._
 
-import cats.effect.{Deferred, IO}
+import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import com.chipprbots.scalanet.discovery.crypto.SigAlg
 import com.chipprbots.scalanet.discovery.ethereum.{EthereumNodeRecord, Node}
@@ -25,7 +24,7 @@ import scodec.bits.{BitVector, ByteVector}
   * tests prove the wiring is correct and the resource lifecycle behaves. */
 class DiscoveryServiceSpec extends AnyFlatSpec with Matchers {
 
-  import DefaultCodecs.{given, *}
+  import DefaultCodecs.given
   given sigalg: SigAlg = new MockSigAlg
 
   /** Stub Codec[Payload] — same shape as the DiscoveryNetworkSpec stub. */
@@ -56,7 +55,7 @@ class DiscoveryServiceSpec extends AnyFlatSpec with Matchers {
   )
   private val localNodeId = Session.nodeIdFromPublicKey(localPub.value.bytes)
 
-  private def buildService(bootstrapNodes: Set[Node] = Set.empty) = {
+  private def buildService(@scala.annotation.unused bootstrapNodes: Set[Node] = Set.empty) = {
     val sessions = new Session.SessionCache()
     val challenges = new Discv5SyncResponder.ChallengeCache()
     val bystanders = new Discv5SyncResponder.BystanderEnrTable()

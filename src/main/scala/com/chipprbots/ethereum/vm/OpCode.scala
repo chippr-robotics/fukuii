@@ -1520,10 +1520,7 @@ case object BLOBBASEFEE extends OpCode(0x4a, 0, 1, _.G_base) with ConstGas {
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] = {
     // Blob base fee from the block header's excessBlobGas
     val blobBaseFee = state.env.blockHeader.excessBlobGas
-      .map { excess =>
-        // Simplified: for now return 1 (minimum blob base fee)
-        BigInt(1)
-      }
+      .map(_ => BigInt(1)) // Simplified: for now return 1 (minimum blob base fee)
       .getOrElse(BigInt(0))
     val stack1 = state.stack.push(UInt256(blobBaseFee))
     state.withStack(stack1).step()

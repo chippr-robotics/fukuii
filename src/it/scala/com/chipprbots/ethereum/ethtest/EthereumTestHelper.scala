@@ -70,7 +70,7 @@ class EthereumTestHelper(using bc: BlockchainConfig) extends ScenarioSetup {
       }
 
       // Get the first block's number to determine which storage to use
-      val firstBlockNumber = parseBigInt(blocks.head.blockHeader.number)
+      val _ = parseBigInt(blocks.head.blockHeader.number)
 
       // Step 1: Setup initial state using the backing storage for block 0
       val mptStorage = blockchain.getBackingMptStorage(0)

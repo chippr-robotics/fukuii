@@ -28,7 +28,7 @@ import scodec.bits.{BitVector, ByteVector}
   */
 class DiscoveryNetworkSpec extends AnyFlatSpec with Matchers {
 
-  import DefaultCodecs.{given, *}
+  import DefaultCodecs.given
   given sigalg: SigAlg = new MockSigAlg
 
   /** Stub Codec[Payload]. Tag byte = message-type discriminator; body holds
@@ -121,7 +121,6 @@ class DiscoveryNetworkSpec extends AnyFlatSpec with Matchers {
 
   private val (localPub, localPriv) = sigalg.newKeyPair
   private val localNodeId = Session.nodeIdFromPublicKey(localPub.value.bytes)
-  private val localAddr = new InetSocketAddress(InetAddress.getByName("127.0.0.1"), 30303)
   private val localNode = Node(
     id = localPub,
     address = Node.Address(InetAddress.getLoopbackAddress, udpPort = 30303, tcpPort = 30303)

@@ -377,8 +377,6 @@ class TxPoolServiceSpec
   }
 
   it should "label contract creation txs correctly" taggedAs UnitTest in new TestSetup {
-    import com.chipprbots.ethereum.domain.Transaction
-    import com.chipprbots.ethereum.domain.SignedTransaction
 
     // Build a contract creation tx (no receivingAddress) using the first Block3125369 tx as template
     // We reuse the fixtures tx but verify the summary branch; the simplest approach is to verify

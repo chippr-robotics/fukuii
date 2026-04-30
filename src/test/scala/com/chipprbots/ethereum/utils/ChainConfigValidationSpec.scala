@@ -89,8 +89,9 @@ class ChainConfigValidationSpec extends AnyFlatSpec with Matchers {
       forks.spiralBlockNumber
     )
 
-    etcForkBlocks.sliding(2).foreach { case List(a, b) =>
-      b should be >= a
+    etcForkBlocks.sliding(2).foreach {
+      case List(a, b) => b should be >= a
+      case _          => ()
     }
   }
 

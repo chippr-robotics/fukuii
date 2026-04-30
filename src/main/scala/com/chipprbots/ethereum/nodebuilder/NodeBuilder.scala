@@ -560,6 +560,7 @@ trait EthMiningServiceBuilder {
 }
 trait EthTxServiceBuilder {
   self: BlockchainBuilder
+    with BlockchainConfigBuilder
     with PendingTransactionsManagerBuilder
     with MiningBuilder
     with TxPoolConfigBuilder
@@ -850,8 +851,6 @@ trait EngineApiBuilder {
     blockchainWriter,
     blockExecution,
     forkChoiceManager,
-    mining,
-    storagesInstance.storages.evmCodeStorage,
     pendingTransactionsManager
   )(blockchainConfig)
 
@@ -966,7 +965,7 @@ trait OmmersPoolBuilder {
 trait VmBuilder {
   self: ActorSystemBuilder with BlockchainConfigBuilder with VmConfigBuilder =>
 
-  lazy val vm: VMImpl = VmSetup.vm(vmConfig, blockchainConfig, testMode = false)
+  lazy val vm: VMImpl = VmSetup.vm(vmConfig)
 }
 
 trait StxLedgerBuilder {

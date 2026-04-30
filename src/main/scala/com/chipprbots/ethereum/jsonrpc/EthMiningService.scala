@@ -12,6 +12,7 @@ import org.apache.pekko.util.Timeout
 import cats.effect.IO
 import cats.syntax.parallel._
 
+import scala.annotation.unused
 import scala.collection.concurrent.TrieMap
 import scala.collection.concurrent.{Map => ConcurrentMap}
 import scala.concurrent.duration.FiniteDuration
@@ -102,7 +103,7 @@ class EthMiningService(
       GetMiningResponse(isMining)
     }
 
-  def getWork(req: GetWorkRequest): ServiceResponse[GetWorkResponse] =
+  def getWork(@unused req: GetWorkRequest): ServiceResponse[GetWorkResponse] =
     mining.ifEthash { ethash =>
       PoWMiningMetrics.recordGetWork()
       reportActive()
@@ -173,7 +174,7 @@ class EthMiningService(
       }
     }(IO.pure(Left(JsonRpcError.MiningIsNotEthash)))
 
-  def getCoinbase(req: GetCoinbaseRequest): ServiceResponse[GetCoinbaseResponse] =
+  def getCoinbase(@unused req: GetCoinbaseRequest): ServiceResponse[GetCoinbaseResponse] =
     IO.pure(Right(GetCoinbaseResponse(coinbaseProvider.get())))
 
   def submitHashRate(req: SubmitHashRateRequest): ServiceResponse[SubmitHashRateResponse] =
@@ -193,7 +194,7 @@ class EthMiningService(
       GetHashRateResponse(hashRate.map { case (_, (hr, _)) => hr }.sum)
     }
 
-  def startMiner(req: StartMinerRequest): ServiceResponse[StartMinerResponse] =
+  def startMiner(@unused req: StartMinerRequest): ServiceResponse[StartMinerResponse] =
     mining.ifEthash[ServiceResponse[StartMinerResponse]] { ethash =>
       IO {
         ethash.sendMiner(MinerProtocol.StartMining)
@@ -202,7 +203,7 @@ class EthMiningService(
       }
     }(IO.pure(Left(JsonRpcError.MiningIsNotEthash)))
 
-  def stopMiner(req: StopMinerRequest): ServiceResponse[StopMinerResponse] =
+  def stopMiner(@unused req: StopMinerRequest): ServiceResponse[StopMinerResponse] =
     mining.ifEthash[ServiceResponse[StopMinerResponse]] { ethash =>
       IO {
         ethash.sendMiner(MinerProtocol.StopMining)

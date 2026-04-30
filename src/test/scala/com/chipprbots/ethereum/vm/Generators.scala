@@ -28,7 +28,7 @@ object Generators extends ObjectGenerators {
     val mod = max - min
     val nBytes = mod.bitLength / 8 + 1
     for {
-      byte <- Arbitrary.arbitrary[Byte]
+      _ <- Arbitrary.arbitrary[Byte]
       bytes <- getByteStringGen(nBytes, nBytes)
       bigInt = (if (mod > 0) BigInt(bytes.toArray).abs % mod else BigInt(0)) + min
     } yield bigInt

@@ -1,9 +1,5 @@
 package com.chipprbots.ethereum.ethtest
 
-import org.scalatest.flatspec.AnyFlatSpec
-import org.scalatest.matchers.should.Matchers
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
-
 import com.chipprbots.ethereum.testing.Tags._
 
 /** Test suite to identify and flag gas calculation discrepancies
@@ -83,7 +79,7 @@ class GasCalculationIssuesSpec extends EthereumTestsSpec {
           info(s"  ACTION REQUIRED: Review gas calculation for PUSH and ADD opcodes in ${test.network}")
           fail(s"Gas calculation mismatch detected - requires code review before proceeding")
 
-        case Right(executionResult) =>
+        case Right(_) =>
           info(s"  ✓ Test passed unexpectedly - gas calculation may have been fixed")
       }
     }

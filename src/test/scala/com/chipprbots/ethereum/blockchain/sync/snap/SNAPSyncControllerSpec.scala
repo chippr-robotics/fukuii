@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
-import org.apache.pekko.util.ByteString
-
 import scala.concurrent.duration._
 
 import org.scalatest.flatspec.AnyFlatSpec
@@ -117,11 +115,11 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     // Test that all message types are defined
     val start = Start
     val done = Done
-    val accountComplete = AccountRangeSyncComplete
-    val bytecodeComplete = ByteCodeSyncComplete
-    val storageComplete = StorageRangeSyncComplete
-    val healingComplete = StateHealingComplete
-    val validationComplete = StateValidationComplete
+    val _ = AccountRangeSyncComplete
+    val _ = ByteCodeSyncComplete
+    val _ = StorageRangeSyncComplete
+    val _ = StateHealingComplete
+    val _ = StateValidationComplete
     val getProgress = GetProgress
     val bootstrapComplete = BootstrapComplete
     val fallback = FallbackToFastSync
@@ -167,7 +165,6 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
 
   "SNAPSyncController" should "provide status for eth_syncing RPC" taggedAs UnitTest in {
     import SNAPSyncController._
-    import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 
     // Verify that SNAP sync phases can be converted to state node progress
     // This is tested indirectly through the currentSyncStatus method

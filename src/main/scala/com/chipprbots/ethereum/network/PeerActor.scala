@@ -28,6 +28,8 @@ import com.chipprbots.ethereum.network.p2p.messages.WireProtocol._
 import com.chipprbots.ethereum.network.rlpx.AuthHandshaker
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
+
+import scala.annotation.unused
 import com.chipprbots.ethereum.utils.Logger
 
 /** Peer actor is responsible for initiating and handling high-level connection with peer. It creates child
@@ -143,7 +145,7 @@ class PeerActor[R <: HandshakeResult](
           }
           handshaker.respondToRequest(msg).foreach(msgToSend => rlpxConnection.sendMessage(msgToSend))
 
-        case msgReceived @ RLPxConnectionHandler.MessageReceived(msg) =>
+        case RLPxConnectionHandler.MessageReceived(msg) =>
           // Processes the received message, cancels the timeout and processes a new message but only if the handshaker
           // handles the received message. If the handshaker doesn't handle it (returns None), stash
           // it for delivery after handshake completes — this handles the case where Status and
@@ -238,7 +240,7 @@ class PeerActor[R <: HandshakeResult](
     sender() ! StatusResponse(Disconnected)
   }
 
-  def handleTerminated(rlpxConnection: RLPxConnection, numRetries: Int, status: Status): Receive = {
+  def handleTerminated(rlpxConnection: RLPxConnection, numRetries: Int, @unused status: Status): Receive = {
     case Terminated(actor) if actor == rlpxConnection.ref =>
       rlpxConnection.uriOpt.foreach(uri => log.debug(s"Underlying rlpx connection with peer ${uri.getUserInfo} closed"))
       rlpxConnection.uriOpt match {

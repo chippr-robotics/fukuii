@@ -12,7 +12,6 @@ import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.consensus.pow.EthashConfig
 import com.chipprbots.ethereum.consensus.pow.miners.MockedMiner.MineBlocks
 import com.chipprbots.ethereum.consensus.pow.miners.MockedMiner.MockedMinerResponses.MiningOrdered
-import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.jsonrpc.QAService._
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.testing.Tags._

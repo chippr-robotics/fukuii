@@ -246,7 +246,26 @@ class FastSync(
     def handleStatus: Receive = {
       case SyncProtocol.GetStatus => sender() ! currentSyncingStatus
       case SyncStateSchedulerActor.StateSyncStats(saved, missing) =>
-        syncState = syncState.copy(downloadedNodesCount = saved, totalNodesCount = saved + missing)
+        val total = saved + missing
+        // Track high-water mark so resume after a JVM restart doesn't lose the discovered
+        // scope. Used by the "95% complete" guard in processSyncing — see comment on
+        // SyncState.maxTotalNodesCount.
+        //
+        // Bootstrap consideration: legacy persisted SyncState from before maxTotalNodesCount
+        // existed deserializes with maxTotalNodesCount=0. The OLD totalNodesCount field is
+        // still present and reflects the pre-bounce peak, so seed the high-water mark from
+        // it on the first tick after resume — otherwise newMax would be initialized from
+        // the post-restart freshly-walked scope (small) and the very bug this fix targets
+        // would still bite on the first restart after a legacy upgrade.
+        val newMax = math.max(
+          math.max(syncState.maxTotalNodesCount, syncState.totalNodesCount),
+          total
+        )
+        syncState = syncState.copy(
+          downloadedNodesCount = saved,
+          totalNodesCount = total,
+          maxTotalNodesCount = newMax
+        )
     }
 
     def receive: Receive = handlePeerListMessages.orElse(handleStatus).orElse(handleRequestFailure).orElse {
@@ -999,18 +1018,28 @@ class FastSync(
       // When blocks are done and state download is mostly complete but can't converge
       // (remaining nodes change every block), declare state done and let regular sync
       // fetch missing nodes on-demand via resolvingMissingNode.
+      //
+      // Compare downloaded against the persisted high-water mark of total — NOT against
+      // the dynamic `total = saved + currently-queued-missing`. After a JVM restart the
+      // scheduler walks the trie from the pivot root and queues only the newly-discovered
+      // missing frontier; the dynamic total drops to ≈saved and the percentage looks like
+      // 99% even when the trie is genuinely 56% incomplete. Using maxTotalNodesCount keeps
+      // the comparison honest across restarts so a node that bounced mid-state-download
+      // resumes correctly instead of declaring itself done with a partial trie.
       if (noBlockchainWorkRemaining && !syncState.stateSyncFinished && stateSyncStarted) {
         val downloaded = FastSyncMetrics.getDownloadedNodes
-        val total = FastSyncMetrics.getTotalNodes
-        val pct = if (total > 0) (downloaded.toDouble / total * 100).toInt else 0
-        if (pct >= 95 && total > 1000) {
+        val dynTotal = FastSyncMetrics.getTotalNodes
+        val effectiveTotal = math.max(dynTotal, syncState.maxTotalNodesCount)
+        val pct = if (effectiveTotal > 0) (downloaded.toDouble / effectiveTotal * 100).toInt else 0
+        if (pct >= 95 && effectiveTotal > 1000) {
           log.info(
-            "State download at {}% ({}/{}) with blocks complete. " +
+            "State download at {}% ({}/{}, peak total {}) with blocks complete. " +
               "Remaining nodes are at the chain tip and change every block. " +
               "Completing fast sync — regular sync will fetch missing nodes on-demand.",
             pct,
             downloaded,
-            total
+            effectiveTotal,
+            syncState.maxTotalNodesCount
           )
           syncState = syncState.copy(stateSyncFinished = true)
         }
@@ -1337,7 +1366,18 @@ object FastSync {
       nextBlockToFullyValidate: BigInt = 1,
       pivotBlockUpdateFailures: Int = 0,
       updatingPivotBlock: Boolean = false,
-      stateSyncFinished: Boolean = false
+      stateSyncFinished: Boolean = false,
+      // High-water mark of totalNodesCount seen during this fast sync run, persisted across
+      // JVM restarts. The dynamic `totalNodesCount` field above is `saved + currently-queued
+      // missing` and resets after a restart (the scheduler walks the trie from the pivot
+      // root and only queues newly-discovered missing nodes). Without a high-water mark, the
+      // "95% complete" check at the end of state download wrongly trips on resume — saved
+      // is the same but total drops to ≈saved, looking like 99%+, and fast sync declares
+      // itself done with a partial trie. The high-water mark preserves the true scope so
+      // that completion only fires when we've genuinely downloaded ≥95% of the discovered
+      // total. Added at the END of the case class for boopickle backward compat with
+      // pre-existing persisted state — deserializes to default 0 from older payloads.
+      maxTotalNodesCount: Long = 0
   ) {
 
     def enqueueBlockBodies(blockBodies: Seq[ByteString]): SyncState =

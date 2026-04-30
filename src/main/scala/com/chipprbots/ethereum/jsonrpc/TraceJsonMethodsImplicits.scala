@@ -1,12 +1,10 @@
 package com.chipprbots.ethereum.jsonrpc
 
 import org.json4s.JsonAST._
-import org.json4s.JsonDSL._
 
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.jsonrpc.EthJsonMethodsImplicits.extractCall
 import com.chipprbots.ethereum.jsonrpc.TraceService._
-import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodCodec
 
 /** JSON-RPC codecs for the trace_* family of methods (Parity/OpenEthereum format).

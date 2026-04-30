@@ -1,9 +1,6 @@
 package com.chipprbots.ethereum.ethtest
 
-import org.scalatest.flatspec.AnyFlatSpec
-import org.scalatest.matchers.should.Matchers
 import java.io.File
-import io.circe._
 import io.circe.parser._
 import scala.io.Source
 import scala.util.Using
@@ -82,6 +79,7 @@ class VMTestsSpec extends EthereumTestsSpec {
   def loadTestSuiteFromFile(filePath: String): BlockchainTestSuite = {
     import cats.effect.unsafe.IORuntime
 
+    @scala.annotation.unused
     given IORuntime = IORuntime.global
 
     val file = new File(filePath)

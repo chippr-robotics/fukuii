@@ -267,7 +267,7 @@ class E2EFastSyncSpec extends FlatSpecBase with Matchers with BeforeAndAfterAll 
         .getOrElse(
           fail("Peer 1 should have a best block after fast sync")
         )
-      val peer2BestBlock = peer2.blockchainReader
+      val _ = peer2.blockchainReader
         .getBestBlock()
         .getOrElse(
           fail("Peer 2 should have a best block")

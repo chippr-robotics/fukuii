@@ -1,14 +1,8 @@
 package com.chipprbots.ethereum.ethtest
 
-import cats.effect.IO
-import cats.effect.unsafe.IORuntime
-import io.circe._
 import io.circe.parser._
 import java.io.File
-import org.scalatest.flatspec.AnyFlatSpec
-import org.scalatest.matchers.should.Matchers
 import scala.io.Source
-import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
 import com.chipprbots.ethereum.testing.Tags._
 

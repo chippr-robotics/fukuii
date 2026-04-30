@@ -320,9 +320,9 @@ class ByteCodeCoordinator(
     }
   }
 
-  /** Re-dispatch pending tasks to all known peers. Includes both peers with active tasks and
-    * known available peers from PeerAvailable events — handles the activeTasks=empty case
-    * that previously blocked dispatch after simultaneous peer cooldowns.
+  /** Re-dispatch pending tasks to all known peers. Includes both peers with active tasks and known available peers from
+    * PeerAvailable events — handles the activeTasks=empty case that previously blocked dispatch after simultaneous peer
+    * cooldowns.
     */
   private def tryRedispatchPendingTasks(): Unit = {
     if (pendingTasks.isEmpty) return

@@ -1,9 +1,6 @@
 package com.chipprbots.ethereum.nodebuilder
 
-import org.apache.pekko.actor.ActorSystem
-
 import com.chipprbots.ethereum.ledger.VMImpl
-import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.utils.VmConfig
 
@@ -14,9 +11,7 @@ object VmSetup extends Logger {
 
   import VmConfig.VmMode._
 
-  def vm(vmConfig: VmConfig, blockchainConfig: BlockchainConfig, testMode: Boolean)(implicit
-      actorSystem: ActorSystem
-  ): VMImpl =
+  def vm(vmConfig: VmConfig): VMImpl =
     vmConfig.mode match {
       case Internal =>
         log.info("Using Fukuii internal VM")

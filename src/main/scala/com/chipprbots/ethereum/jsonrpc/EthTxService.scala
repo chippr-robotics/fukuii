@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 
+import scala.annotation.unused
 import scala.concurrent.duration.FiniteDuration
 import scala.util.Failure
 import scala.util.Success
@@ -22,7 +23,6 @@ import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransaction
 import com.chipprbots.ethereum.transactions.TransactionPicker
 import com.chipprbots.ethereum.utils.BlockchainConfig
-import com.chipprbots.ethereum.utils.Config
 
 object EthTxService {
   case class GetTransactionByHashRequest(txHash: ByteString) // rename to match request
@@ -49,11 +49,16 @@ class EthTxService(
     val pendingTransactionsManager: ActorRef,
     val getTransactionFromPoolTimeout: FiniteDuration,
     transactionMappingStorage: TransactionMappingStorage
-) extends TransactionPicker
+)(implicit val blockchainConfig: BlockchainConfig)
+    extends TransactionPicker
     with ResolveBlock {
   import EthTxService._
-
-  implicit val blockchainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
+  // blockchainConfig is taken as an implicit constructor parameter so multi-instance
+  // runtime callers (NodeBuilder) automatically supply the per-instance config in scope
+  // (see NodeBuilder line 72), instead of every service silently shadowing it with the
+  // global Config.blockchains.blockchainConfig singleton — which yields the FIRST chain's
+  // config and breaks EIP-155 sender recovery for non-default chains (chainId mismatch
+  // → InvalidRequest -32600 on legacy txs).
 
   /** Implements the eth_getRawTransactionByHash - fetch raw transaction data of a transaction with the given hash.
     *
@@ -177,7 +182,7 @@ class EthTxService(
       } yield TransactionData(transaction, Some(blockWithTx.header), Some(transactionIndex.toInt))
     }
 
-  def getGetGasPrice(req: GetGasPriceRequest): ServiceResponse[GetGasPriceResponse] = {
+  def getGetGasPrice(@unused req: GetGasPriceRequest): ServiceResponse[GetGasPriceResponse] = {
     val blockDifference = 30
     val bestBlock = blockchainReader.getBestBlockNumber()
 
@@ -305,7 +310,9 @@ class EthTxService(
     * @return
     *   pending transactions
     */
-  def ethPendingTransactions(req: EthPendingTransactionsRequest): ServiceResponse[EthPendingTransactionsResponse] =
+  def ethPendingTransactions(
+      @unused req: EthPendingTransactionsRequest
+  ): ServiceResponse[EthPendingTransactionsResponse] =
     getTransactionsFromPool.map { resp =>
       Right(EthPendingTransactionsResponse(resp.pendingTransactions))
     }

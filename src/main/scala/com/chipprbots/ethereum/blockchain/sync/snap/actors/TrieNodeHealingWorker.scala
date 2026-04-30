@@ -5,8 +5,6 @@ import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props}
 import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
-import com.chipprbots.ethereum.network.Peer
-import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 
 /** TrieNodeHealingWorker fetches trie nodes from a peer.
   *
@@ -29,12 +27,10 @@ class TrieNodeHealingWorker(
   import Messages._
 
   private var currentRequestId: Option[BigInt] = None
-  private var currentPeer: Option[Peer] = None
 
   override def receive: Receive = idle
 
   def idle: Receive = { case FetchTrieNodes(_, peer) =>
-    currentPeer = Some(peer)
     // Request work from coordinator by notifying it of peer availability
     coordinator ! HealingPeerAvailable(peer)
     context.become(working)
@@ -48,7 +44,6 @@ class TrieNodeHealingWorker(
       // Forward response to coordinator for processing
       coordinator ! TrieNodesResponseMsg(response)
       currentRequestId = None
-      currentPeer = None
       context.become(idle)
 
     case HealingCheckIdle =>
@@ -63,7 +58,6 @@ class TrieNodeHealingWorker(
           log.warning(s"Healing request $requestId timed out")
           coordinator ! HealingTaskFailed(requestId, "Timeout")
           currentRequestId = None
-          currentPeer = None
           context.become(idle)
         case _ =>
       }

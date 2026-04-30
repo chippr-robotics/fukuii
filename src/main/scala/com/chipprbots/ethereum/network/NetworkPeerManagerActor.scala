@@ -61,7 +61,12 @@ class NetworkPeerManagerActor(
   private var emptyHeaderResponses: Int = 0
 
   // 60s network summary — read+reset RLPx counters and log one aggregate line
-  context.system.scheduler.scheduleWithFixedDelay(60.seconds, 60.seconds, self, NetworkPeerManagerActor.LogNetworkSummary)(context.dispatcher)
+  context.system.scheduler.scheduleWithFixedDelay(
+    60.seconds,
+    60.seconds,
+    self,
+    NetworkPeerManagerActor.LogNetworkSummary
+  )(context.dispatcher)
 
   // Subscribe to the event of any peer getting handshaked
   peerEventBusActor ! Subscribe(PeerHandshaked)
@@ -134,12 +139,12 @@ class NetworkPeerManagerActor(
 
     case NetworkPeerManagerActor.LogNetworkSummary =>
       import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler
-      val tcpFailed    = RLPxConnectionHandler.tcpFailedCount.getAndSet(0)
-      val authFailed   = RLPxConnectionHandler.authFailedCount.getAndSet(0)
-      val authTimeout  = RLPxConnectionHandler.authTimeoutCount.getAndSet(0)
+      val tcpFailed = RLPxConnectionHandler.tcpFailedCount.getAndSet(0)
+      val authFailed = RLPxConnectionHandler.authFailedCount.getAndSet(0)
+      val authTimeout = RLPxConnectionHandler.authTimeoutCount.getAndSet(0)
       val emptyHeaders = emptyHeaderResponses; emptyHeaderResponses = 0
-      val active       = peersWithInfo.size
-      val snapPeers    = peersWithInfo.values.count(_.peerInfo.remoteStatus.supportsSnap)
+      val active = peersWithInfo.size
+      val snapPeers = peersWithInfo.values.count(_.peerInfo.remoteStatus.supportsSnap)
       log.info(
         s"Network [60s]: active=$active peers ($snapPeers snap-capable), +$tcpFailed tcp-failed, +$authFailed auth-failed, +$authTimeout auth-timeout, +$emptyHeaders empty-headers"
       )

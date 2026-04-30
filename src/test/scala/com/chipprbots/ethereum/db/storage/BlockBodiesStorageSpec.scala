@@ -1,6 +1,5 @@
 package com.chipprbots.ethereum.db.storage
 
-import org.bouncycastle.util.encoders.Hex
 import org.scalacheck.Gen
 import org.scalatest.wordspec.AnyWordSpec
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks

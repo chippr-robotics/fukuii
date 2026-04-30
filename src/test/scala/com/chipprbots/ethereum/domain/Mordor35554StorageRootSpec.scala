@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.domain
 
-import org.apache.pekko.util.ByteString
-
 import org.bouncycastle.util.encoders.Hex
 import org.scalatest.funsuite.AnyFunSuite
 
