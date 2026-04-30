@@ -6,7 +6,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-JAR="$SCRIPT_DIR/target/scala-3.3.7/fukuii-assembly-0.2.7.jar"
+JAR="$SCRIPT_DIR/target/scala-3.3.7/fukuii-assembly-0.2.9.jar"
 if [ ! -f "$JAR" ]; then
   echo "ERROR: JAR not found at $JAR" >&2
   echo "Run 'sbt assembly' first." >&2

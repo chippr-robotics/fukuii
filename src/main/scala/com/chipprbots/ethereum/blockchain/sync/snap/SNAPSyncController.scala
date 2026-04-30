@@ -2776,6 +2776,8 @@ class SNAPSyncController(
 
   /** Final SNAP sync completion — called when both state sync and chain download are done. */
   private def finalizeSnapSync(pivot: BigInt): Unit = {
+    import scala.util.boundary, boundary.break
+    boundary {
     // Look up the pivot header so we can store a complete "best block" anchor.
     // RegularSync's BranchResolution needs: header, body, number→hash mapping,
     // ChainWeight, and BestBlockInfo (hash + number) to accept blocks that chain
@@ -2795,7 +2797,7 @@ class SNAPSyncController(
               pivotHeader.stateRoot.toHex
             )
             context.parent ! SyncProtocol.HealingImpossible
-            return
+            break()
           }
         }
 
@@ -2850,6 +2852,7 @@ class SNAPSyncController(
 
     context.become(completed)
     context.parent ! Done
+    } // end boundary
   }
 
   /** Waiting for parallel chain download to finish after SNAP state sync completed. */
