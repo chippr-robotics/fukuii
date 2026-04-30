@@ -143,7 +143,7 @@ class StorageRangeCoordinator(
     // (SNAPRequestTracker timeouts are poll-based, not scheduled), so we check
     // activity time regardless of in-flight count.
     val now = System.currentTimeMillis()
-    val dispatchStalled = !allStateless && tasks.nonEmpty &&
+    val dispatchStalled = !allStateless && tasks.nonEmpty && maxInFlightPerPeer > 0 &&
       (now - lastDispatchOrResponseMs) > noActivityTimeoutMs
 
     if (dispatchStalled) {
