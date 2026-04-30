@@ -93,6 +93,17 @@ class ByteCodeWorker(
         case _ =>
       }
 
+    case ByteCodeWorkerRelease(requestId) =>
+      currentTask match {
+        case Some((_, _, reqId)) if reqId == requestId =>
+          requestTracker.completeRequest(requestId)
+          currentTask = None
+          context.become(idle)
+          unstashAll()
+        case _ =>
+          log.debug(s"ByteCodeWorkerRelease for unknown request $requestId, ignoring")
+      }
+
     case _: ByteCodeWorkerFetchTask =>
       // Important: never drop tasks. Coordinator may already have recorded this request as active.
       stash()
