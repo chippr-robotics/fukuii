@@ -108,7 +108,7 @@ class RLPxConnectionHandler(
       context.become(new ConnectedHandler(connection).waitingForAuthHandshakeResponse(handshaker, timeout))
 
     case CommandFailed(_: Connect) =>
-      log.error("[Stopping Connection] TCP connection to {} failed for peer {}", uri, peerId)
+      log.debug("TCP connect to {} failed for peer {}", uri, peerId)
       context.parent ! ConnectionFailed
       gracefulStop()
   }
@@ -362,8 +362,8 @@ class RLPxConnectionHandler(
               processHandshakeResult(result, remainingData)
 
             case Failure(ex) =>
-              log.error(
-                "[HIVE-DEBUG] Auth handshake FAILED for peer {} - both pre-EIP8 and EIP-8 decode failed: {}",
+              log.debug(
+                "Auth handshake decode failed for peer {} (pre-EIP8 and EIP-8): {}",
                 peerId,
                 ex.getMessage
               )
@@ -445,8 +445,8 @@ class RLPxConnectionHandler(
     }
 
     def handleTimeout: Receive = { case AuthHandshakeTimeout =>
-      log.error(
-        "[Stopping Connection] Auth handshake timeout for peer {} after {}ms",
+      log.debug(
+        "Auth handshake timeout for peer {} after {}ms",
         peerId,
         rlpxConfiguration.waitForHandshakeTimeout.toMillis
       )
@@ -467,7 +467,7 @@ class RLPxConnectionHandler(
           extractHello(extractor(secrets), remainingData)
 
         case AuthHandshakeError =>
-          log.error("[Stopping Connection] Auth handshake FAILED for peer {}", peerId)
+          log.debug("Auth handshake failed for peer {}", peerId)
           context.parent ! ConnectionFailed
           gracefulStop()
       }
@@ -503,7 +503,7 @@ class RLPxConnectionHandler(
 
         case AckTimeout(ackSeqNumber) if cancellableAckTimeout.exists(_.seqNumber == ackSeqNumber) =>
           cancellableAckTimeout.foreach(_.cancellable.cancel())
-          log.error("[Stopping Connection] Sending 'Hello' to {} failed", peerId)
+          log.debug("Sending 'Hello' to {} failed", peerId)
           gracefulStop()
         case Received(data) =>
           extractHello(extractor, data, cancellableAckTimeout, seqNumber)
@@ -547,8 +547,8 @@ class RLPxConnectionHandler(
                 )
               )
             case None =>
-              log.error(
-                "[Stopping Connection] Unable to negotiate protocol with peer {} — peerCaps=[{}], ourCaps=[{}]",
+              log.debug(
+                "Unable to negotiate protocol with peer {} — peerCaps=[{}], ourCaps=[{}]",
                 peerId,
                 hello.capabilities.mkString(", "),
                 capabilities.mkString(", ")
@@ -642,8 +642,8 @@ class RLPxConnectionHandler(
         } else {
           // For other decoding errors (truly malformed RLP, structure mismatches, etc.),
           // send proper Disconnect to remote peer before closing connection
-          log.error(
-            "DECODE_ERROR: Cannot decode message from {} - disconnecting. Error: {}",
+          log.warning(
+            "Cannot decode message from {} - disconnecting. Error: {}",
             peerId,
             ex.getMessage
           )
@@ -739,8 +739,8 @@ class RLPxConnectionHandler(
                   )
                 }
               case Left(err) =>
-                log.error(
-                  "RECV_MSG: peer={}, msg[{}] DECODE_ERROR: {}",
+                log.warning(
+                  "RECV_MSG decode error: peer={}, msg[{}]: {}",
                   peerId,
                   idx,
                   err.getMessage
@@ -763,7 +763,7 @@ class RLPxConnectionHandler(
 
         case AckTimeout(ackSeqNumber) if cancellableAckTimeout.exists(_.seqNumber == ackSeqNumber) =>
           cancellableAckTimeout.foreach(_.cancellable.cancel())
-          log.error("[Stopping Connection] SEND_MSG_TIMEOUT: peer={}, seqNum={}", peerId, ackSeqNumber)
+          log.debug("Send timeout: peer={}, seqNum={}", peerId, ackSeqNumber)
           gracefulStop()
       }
 

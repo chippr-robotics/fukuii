@@ -30,7 +30,10 @@ class EngineApiHttpServer(
     extends Logger {
 
   implicit val formats: Formats = DefaultFormats
-  implicit val ec: ExecutionContext = system.dispatcher
+  // Engine API runs on its own dispatcher so a busy default-dispatcher
+  // (e.g. peer-manager flooded with cross-network dialers) can't stall
+  // forkchoiceUpdated / newPayload and push the CL into optimistic mode.
+  implicit val ec: ExecutionContext = system.dispatchers.lookup("engine-api-dispatcher")
   implicit val ioRuntime: IORuntime = IORuntime.global
 
   private var bindingOpt: Option[Http.ServerBinding] = None
