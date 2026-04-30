@@ -174,6 +174,37 @@ class EthashDifficultyCalculatorSpec extends AnyFlatSpec with Matchers with Scal
     diffWithUncles should be > diffNoUncles
   }
 
+  // ===== ECIP-1099 Code Path Coverage (L4/L5) =====
+  // ecip1099BlockNumber in this config is 11,460,000. Tests below use block 15,000,000 (post-ECIP-1099).
+
+  it should "increase difficulty for fast blocks post-ECIP-1099" taggedAs (UnitTest, ConsensusTest) in {
+    val parent = header(number = 15_000_000, difficulty = BigInt("1000000000000"), timestamp = 1000)
+    EthashDifficultyCalculator.calculateDifficulty(15_000_001, 1001L, parent) should be > parent.difficulty
+  }
+
+  it should "not change difficulty near target (13s gap) post-ECIP-1099" taggedAs (UnitTest, ConsensusTest) in {
+    val parent = header(number = 15_000_000, difficulty = BigInt("1000000000000"), timestamp = 1000)
+    val newDiff = EthashDifficultyCalculator.calculateDifficulty(15_000_001, 1013L, parent)
+    // 13s gap: adjustment factor is 0 → difficulty should be approximately equal (within parent/2048 band)
+    val maxDelta = parent.difficulty / 2048
+    (newDiff - parent.difficulty).abs should be <= maxDelta
+  }
+
+  it should "decrease difficulty for slow blocks post-ECIP-1099" taggedAs (UnitTest, ConsensusTest) in {
+    val parent = header(number = 15_000_000, difficulty = BigInt("1000000000000"), timestamp = 1000)
+    EthashDifficultyCalculator.calculateDifficulty(15_000_001, 1030L, parent) should be < parent.difficulty
+  }
+
+  it should "not go below minimum difficulty (131072) post-ECIP-1099" taggedAs (UnitTest, ConsensusTest) in {
+    val parent = header(number = 15_000_000, difficulty = DifficultyCalculator.MinimumDifficulty, timestamp = 1000)
+    val newDiff = EthashDifficultyCalculator.calculateDifficulty(15_000_001, 100_000L, parent)
+    newDiff shouldBe DifficultyCalculator.MinimumDifficulty
+  }
+
+  it should "have MinimumDifficulty constant equal to 131072" taggedAs (UnitTest, ConsensusTest) in {
+    DifficultyCalculator.MinimumDifficulty shouldBe BigInt(131072)
+  }
+
   // ===== DifficultyCalculator Dispatch =====
 
   "DifficultyCalculator" should "use EthashDifficultyCalculator when no powTargetTime" taggedAs (
