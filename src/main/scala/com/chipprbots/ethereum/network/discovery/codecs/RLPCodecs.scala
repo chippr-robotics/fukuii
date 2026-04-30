@@ -24,7 +24,7 @@ import com.chipprbots.ethereum.rlp.RLPEncodeable
 import com.chipprbots.ethereum.rlp.RLPEncoder
 import com.chipprbots.ethereum.rlp.RLPImplicitConversions.toEncodeable
 import com.chipprbots.ethereum.rlp.RLPImplicitDerivations._
-import com.chipprbots.ethereum.rlp.RLPImplicits.{_, given}
+import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPValue
 

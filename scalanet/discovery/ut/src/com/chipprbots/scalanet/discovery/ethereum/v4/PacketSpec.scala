@@ -14,7 +14,7 @@ class PacketSpec extends AnyFlatSpec with Matchers {
 
   // Bring DefaultCodecs' given instances (like Codec[Payload]) into scope. In
   // Scala 3 wildcard imports do NOT carry given/implicit instances by default.
-  import DefaultCodecs.{given, *}
+  import DefaultCodecs.given
 
   implicit val sigalg: SigAlg = new MockSigAlg()
   implicit val packetCodec: Codec[Packet] = Packet.packetCodec(allowDecodeOverMaxPacketSize = false)

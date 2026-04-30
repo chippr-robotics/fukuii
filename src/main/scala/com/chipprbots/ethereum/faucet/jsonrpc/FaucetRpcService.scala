@@ -13,6 +13,8 @@ import com.chipprbots.ethereum.faucet.jsonrpc.FaucetDomain.SendFundsResponse
 import com.chipprbots.ethereum.faucet.jsonrpc.FaucetDomain.StatusRequest
 import com.chipprbots.ethereum.faucet.jsonrpc.FaucetDomain.StatusResponse
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps._
+
+import scala.annotation.unused
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.ServiceResponse
 import com.chipprbots.ethereum.utils.Logger
@@ -34,7 +36,7 @@ class FaucetRpcService(config: FaucetConfig)(implicit system: ActorSystem)
       )
       .recover(handleErrors)
 
-  def status(statusRequest: StatusRequest): ServiceResponse[StatusResponse] =
+  def status(@unused statusRequest: StatusRequest): ServiceResponse[StatusResponse] =
     selectFaucetHandler()
       .flatMap(handler => handler.askFor[Any](FaucetHandlerMsg.Status))
       .map(handleStatusResponse.orElse(handleErrors))

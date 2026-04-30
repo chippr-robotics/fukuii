@@ -491,8 +491,9 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     )
     lazy val nodeStatusHolder = new AtomicReference(nodeStatus)
 
-    class MockNetworkHandshakerConfiguration(pv: List[Capability] = Config.supportedCapabilities)
-        extends NetworkHandshakerConfiguration {
+    class MockNetworkHandshakerConfiguration(
+        @scala.annotation.unused pv: List[Capability] = Config.supportedCapabilities
+    ) extends NetworkHandshakerConfiguration {
       override val forkResolverOpt: Option[ForkResolver] = None
       override val nodeStatusHolder: AtomicReference[NodeStatus] = TestSetup.this.nodeStatusHolder
       override val peerConfiguration: PeerConfiguration = Config.Network.peer

@@ -67,6 +67,18 @@ class SyncStateSchedulerActor(
   private var consecutiveUselessResponses: Int = 0
   private val UselessResponseThreshold: Int = 20
 
+  /** Stall watchdog. The `consecutiveUselessResponses` counter above resets on any `ProcessingSuccess`, so even a
+    * trickle of one good response keeps it pinned at 0 — meaning the existing self-restart never escalates and
+    * `NetworkIncompatible` never fires. This watchdog is the durable escape: if the state download saved-counter
+    * doesn't advance by `StateStallMinProgress` nodes within `StateStallTimeout`, we conclude the peer pool can't serve
+    * our state requests (typical on ETH68-only ETC mainnet) and emit `NetworkIncompatible` to fall back to SNAP — which
+    * the snap-fast-cycle escape hatch eventually drops to regular sync with bug-30 on-demand state recovery via SNAP
+    * `GetTrieNodes` / `GetByteCodes`.
+    */
+  private var stallWatchdog: Option[(Long, Long)] = None // (savedSnapshot, timestampMs)
+  private val StateStallTimeout: FiniteDuration = 2.minutes
+  private val StateStallMinProgress: Long = 100L
+
   // Exponential backoff for InvalidStateResponse errors.
   // Besu: PipelineChainDownloader.PAUSE_AFTER_ERROR_DURATION = 2s.
   // Prevents spinning on bad state responses; resets to PauseAfterErrorDuration on any success.
@@ -341,51 +353,92 @@ class SyncStateSchedulerActor(
     context.become(idle(currentStats.addSaved(currentState.memBatch.size)))
   }
 
+  /** Stall-watchdog hook. Returns true if the watchdog has tripped and emitted NetworkIncompatible — caller should stop
+    * processing the current Sync tick. Snapshots the saved-node count on first call, and on each subsequent call either
+    * advances the snapshot (when progress > MinProgress) or escalates if the timeout elapsed without progress.
+    */
+  private def checkStateStall(currentState: SyncSchedulerActorState): Boolean = {
+    val savedNow = currentState.currentStats.saved
+    val nowMs = System.currentTimeMillis()
+    stallWatchdog match {
+      case None =>
+        stallWatchdog = Some((savedNow, nowMs))
+        false
+      case Some((prevSaved, prevMs)) =>
+        val delta = savedNow - prevSaved
+        val elapsedMs = nowMs - prevMs
+        if (delta >= StateStallMinProgress) {
+          // Real progress — refresh snapshot.
+          stallWatchdog = Some((savedNow, nowMs))
+          false
+        } else if (elapsedMs >= StateStallTimeout.toMillis) {
+          log.warning(
+            "State download stalled: saved={} for {}ms (Δ={} nodes < {}). " +
+              "Peer pool cannot serve our state requests. Emitting NetworkIncompatible to fall back from fast sync.",
+            savedNow,
+            elapsedMs,
+            delta,
+            StateStallMinProgress
+          )
+          context.parent ! NetworkIncompatible
+          context.stop(self)
+          true
+        } else {
+          false
+        }
+    }
+  }
+
   // scalastyle:off cyclomatic.complexity method.length
   def syncing(currentState: SyncSchedulerActorState): Receive =
     handlePeerListMessages.orElse(handleRequestResults).orElse {
       case Sync if currentState.hasRemainingPendingRequests && !currentState.restartHasBeenRequested =>
-        val freePeers = getFreePeers(currentState.currentDownloaderState)
-        (currentState.getRequestToProcess, NonEmptyList.fromList(freePeers)) match {
-          case (Some((nodes, newState)), Some(peers)) =>
-            log.debug(
-              "Got {} peer responses remaining to process, and there are {} idle peers available",
-              newState.numberOfRemainingRequests,
-              peers.size
-            )
-            val (requests, newState1) = newState.assignTasksToPeers(peers, syncConfig.nodesPerRequest)
-            implicit val ec = context.dispatcher
-            requests.foreach(req => requestNodes(req))
-            IO(processNodes(newState1, nodes)).unsafeToFuture().pipeTo(self)
-            context.become(syncing(newState1))
+        if (checkStateStall(currentState)) {
+          // Watchdog tripped, NetworkIncompatible emitted, actor stopping. Skip remaining work.
+          ()
+        } else {
+          val freePeers = getFreePeers(currentState.currentDownloaderState)
+          (currentState.getRequestToProcess, NonEmptyList.fromList(freePeers)) match {
+            case (Some((nodes, newState)), Some(peers)) =>
+              log.debug(
+                "Got {} peer responses remaining to process, and there are {} idle peers available",
+                newState.numberOfRemainingRequests,
+                peers.size
+              )
+              val (requests, newState1) = newState.assignTasksToPeers(peers, syncConfig.nodesPerRequest)
+              implicit val ec = context.dispatcher
+              requests.foreach(req => requestNodes(req))
+              IO(processNodes(newState1, nodes)).unsafeToFuture().pipeTo(self)
+              context.become(syncing(newState1))
 
-          case (Some((nodes, newState)), None) =>
-            log.debug(
-              "Got {} peer responses remaining to process, but there are no idle peers to assign new tasks",
-              newState.numberOfRemainingRequests
-            )
-            // we do not have any peers and cannot assign new tasks, but we can still process remaining requests
-            IO(processNodes(newState, nodes)).unsafeToFuture().pipeTo(self)
-            context.become(syncing(newState))
+            case (Some((nodes, newState)), None) =>
+              log.debug(
+                "Got {} peer responses remaining to process, but there are no idle peers to assign new tasks",
+                newState.numberOfRemainingRequests
+              )
+              // we do not have any peers and cannot assign new tasks, but we can still process remaining requests
+              IO(processNodes(newState, nodes)).unsafeToFuture().pipeTo(self)
+              context.become(syncing(newState))
 
-          case (None, Some(peers)) =>
-            log.debug("There no responses to process, but there are {} free peers to assign new tasks", peers.size)
-            val (requests, newState) = currentState.assignTasksToPeers(peers, syncConfig.nodesPerRequest)
-            requests.foreach(req => requestNodes(req))
-            context.become(syncing(newState.finishProcessing))
+            case (None, Some(peers)) =>
+              log.debug("There no responses to process, but there are {} free peers to assign new tasks", peers.size)
+              val (requests, newState) = currentState.assignTasksToPeers(peers, syncConfig.nodesPerRequest)
+              requests.foreach(req => requestNodes(req))
+              context.become(syncing(newState.finishProcessing))
 
-          case (None, None) =>
-            log.debug(
-              "There no responses to process, and no free peers to assign new tasks. There are" +
-                "{} active requests in flight",
-              currentState.activePeerRequests.size
-            )
-            if (currentState.activePeerRequests.isEmpty) {
-              // we are not processing anything, and there are no free peers and we not waiting for any requests in flight
-              // reschedule sync check
-              timers.startSingleTimer(SyncKey, Sync, syncConfig.syncRetryInterval)
-            }
-            context.become(syncing(currentState.finishProcessing))
+            case (None, None) =>
+              log.debug(
+                "There no responses to process, and no free peers to assign new tasks. There are" +
+                  "{} active requests in flight",
+                currentState.activePeerRequests.size
+              )
+              if (currentState.activePeerRequests.isEmpty) {
+                // we are not processing anything, and there are no free peers and we not waiting for any requests in flight
+                // reschedule sync check
+                timers.startSingleTimer(SyncKey, Sync, syncConfig.syncRetryInterval)
+              }
+              context.become(syncing(currentState.finishProcessing))
+          }
         }
 
       case Sync if currentState.hasRemainingPendingRequests && currentState.restartHasBeenRequested =>

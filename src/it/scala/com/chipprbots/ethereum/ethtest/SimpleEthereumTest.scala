@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.ethtest
 
-import org.scalatest.flatspec.AnyFlatSpec
-import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
 import com.chipprbots.ethereum.testing.Tags._
@@ -54,7 +52,7 @@ class SimpleEthereumTest extends EthereumTestsSpec {
           info(s"  State root: ${world.stateRootHash.toHex}")
 
           // Verify accounts were created
-          test.pre.foreach { case (addressHex, expectedAccount) =>
+          test.pre.foreach { case (addressHex, _) =>
             val address = parseAddress(addressHex)
             val account = world.getAccount(address)
 
@@ -76,7 +74,7 @@ class SimpleEthereumTest extends EthereumTestsSpec {
       info(s"Validating structure of: $testName")
 
       // Validate pre-state
-      test.pre.foreach { case (address, accountState) =>
+      test.pre.foreach { case (_, accountState) =>
         accountState.balance should not be empty
         accountState.nonce should not be empty
       // code and storage can be empty
@@ -90,7 +88,7 @@ class SimpleEthereumTest extends EthereumTestsSpec {
       }
 
       // Validate post-state
-      test.postState.foreach { case (address, accountState) =>
+      test.postState.foreach { case (_, accountState) =>
         accountState.balance should not be empty
         accountState.nonce should not be empty
       }

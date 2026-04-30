@@ -63,7 +63,7 @@ object RegularSyncItSpecUtils {
       val miningConfig: MiningConfig = MiningConfig(Config.config)
       val specificConfig: EthashConfig = pow.EthashConfig(config)
       val fullConfig = FullMiningConfig(miningConfig, specificConfig)
-      val vm = VmSetup.vm(VmConfig(config), blockchainConfig, testMode = false)
+      val vm = VmSetup.vm(VmConfig(config))
       val mining =
         PoWMining(
           vm,

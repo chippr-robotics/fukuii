@@ -479,7 +479,7 @@ class PeerManagerActor(
         // Reconnect maintained peers — mirrors Besu's checkMaintainedConnectionPeers scheduler.
         maintainedPeersByNodeId.get(peerId.value).foreach { uri =>
           log.debug("Maintained peer {} disconnected — scheduling reconnect in 30s", uri)
-          context.system.scheduler.scheduleOnce(30.seconds, self, ConnectToPeer(uri))(context.dispatcher)
+          context.system.scheduler.scheduleOnce(30.seconds, self, ConnectToPeer(uri))(context.dispatcher, self)
         }
       }
       // Try to replace a lost connection with another one.

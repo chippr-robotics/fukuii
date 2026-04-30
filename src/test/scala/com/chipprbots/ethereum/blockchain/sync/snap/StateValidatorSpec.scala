@@ -55,7 +55,7 @@ class StateValidatorSpec extends AnyFlatSpec with Matchers {
     val result = validator.validateAccountTrie(stateRoot)
 
     result match {
-      case Right(missingNodes) =>
+      case Right(_) =>
         // Should detect the root node as missing
         fail("Expected error for missing root, but got Right with nodes")
       case Left(error) =>

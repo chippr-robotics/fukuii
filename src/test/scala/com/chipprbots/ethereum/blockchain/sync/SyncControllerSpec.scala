@@ -48,7 +48,6 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders.{
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{GetBlockHeaders => ETH62GetBlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetNodeData.{GetNodeDataEnc => ETH63GetNodeDataEnc}
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.GetReceipts.{GetReceiptsEnc => ETH63GetReceiptsEnc}
-import com.chipprbots.ethereum.network.p2p.messages.ETH63.{GetNodeData => ETH63GetNodeData}
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.{GetReceipts => ETH63GetReceipts}
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.{NodeData => ETH63NodeData}
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.{Receipts => ETH63Receipts}
@@ -740,7 +739,7 @@ class SyncControllerSpec
             this
 
           // Handle ETH63 GetNodeData (without requestId)
-          case SendMessage(msg: ETH63GetNodeDataEnc, peer) if !onlyPivot =>
+          case SendMessage(_: ETH63GetNodeDataEnc, peer) if !onlyPivot =>
             stateDownloadStarted = true
             if (!failedNodeRequest) {
               sender ! MessageFromPeer(ETH63NodeData(Seq(defaultStateMptLeafWithAccount)), peer)

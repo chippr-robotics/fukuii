@@ -97,7 +97,6 @@ class EthMiningServiceSpec
 
     // Wait for the result
     import scala.concurrent.Await
-    import scala.concurrent.duration._
     Await.result(workFuture, 10.seconds)
 
     val response: ServiceResponse[GetMiningResponse] = ethMiningService.getMining(GetMiningRequest())
@@ -157,7 +156,6 @@ class EthMiningServiceSpec
 
     // Wait for the result
     import scala.concurrent.Await
-    import scala.concurrent.duration._
     Await.result(workFuture, 10.seconds)
 
     // Wait for mining status to expire after timeout
@@ -194,7 +192,6 @@ class EthMiningServiceSpec
 
     // Wait for the result
     import scala.concurrent.Await
-    import scala.concurrent.duration._
     val response = Await.result(workFuture, 10.seconds)
 
     response shouldEqual Right(GetWorkResponse(powHash, seedHash, target, block.header.number))
@@ -362,7 +359,6 @@ class EthMiningServiceSpec
     ommersPool.reply(OmmersPool.Ommers(Nil))
 
     import scala.concurrent.Await
-    import scala.concurrent.duration._
     val result = Await.result(workFuture, 10.seconds)
 
     result shouldBe Symbol("right")
@@ -467,7 +463,6 @@ class EthMiningServiceSpec
 
     // Wait for the result
     import scala.concurrent.Await
-    import scala.concurrent.duration._
     val response = Await.result(workFuture, 10.seconds)
 
     response shouldBe Symbol("right")

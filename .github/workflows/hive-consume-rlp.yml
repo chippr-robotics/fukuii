@@ -1,18 +1,8 @@
 name: Hive · consume-rlp
 
 on:
-  push:
-    branches: [main, master, develop]
-    paths:
-      - 'src/**'
-      - 'build.sbt'
-      - 'version.sbt'
-      - 'project/**'
-      - 'hive/**'
-      - '.github/workflows/_hive-sim.yml'
-      - '.github/workflows/hive-consume-rlp.yml'
   pull_request:
-    branches: [main, master, develop]
+    branches: [main, master]
     paths:
       - 'src/**'
       - 'build.sbt'
@@ -21,8 +11,6 @@ on:
       - 'hive/**'
       - '.github/workflows/_hive-sim.yml'
       - '.github/workflows/hive-consume-rlp.yml'
-  schedule:
-    - cron: '55 4 * * *'
   workflow_dispatch:
     inputs:
       hive_ref:
@@ -43,7 +31,7 @@ permissions:
 
 concurrency:
   group: hive-consume-rlp-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   run:

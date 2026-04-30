@@ -4,6 +4,8 @@ import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 
+import scala.annotation.unused
+
 import com.chipprbots.ethereum.crypto
 import com.chipprbots.ethereum.utils.Config
 
@@ -21,6 +23,6 @@ class Web3Service {
   def sha3(req: Sha3Request): ServiceResponse[Sha3Response] =
     IO(Right(Sha3Response(crypto.kec256(req.data))))
 
-  def clientVersion(req: ClientVersionRequest): ServiceResponse[ClientVersionResponse] =
+  def clientVersion(@unused req: ClientVersionRequest): ServiceResponse[ClientVersionResponse] =
     IO(Right(ClientVersionResponse(Config.clientVersion)))
 }

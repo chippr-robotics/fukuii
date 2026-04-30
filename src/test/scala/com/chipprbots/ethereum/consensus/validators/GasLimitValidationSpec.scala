@@ -8,8 +8,6 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.consensus.difficulty.DifficultyCalculator
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError._
-import com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator._
-import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.utils.BlockchainConfig

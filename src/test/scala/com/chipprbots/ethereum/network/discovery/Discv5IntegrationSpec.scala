@@ -3,17 +3,11 @@ package com.chipprbots.ethereum.network.discovery
 import java.net.{InetAddress, InetSocketAddress}
 import java.util.concurrent.atomic.AtomicReference
 
-import scala.concurrent.duration._
-
-import cats.effect.IO
-import cats.effect.unsafe.implicits.global
-import cats.effect.std.CountDownLatch
 import com.chipprbots.scalanet.discovery.crypto.SigAlg
 import com.chipprbots.scalanet.discovery.ethereum.{EthereumNodeRecord, Node => ScNode}
 import com.chipprbots.scalanet.discovery.ethereum.codecs.DefaultCodecs
 import com.chipprbots.scalanet.discovery.ethereum.{v4, v5}
-import com.chipprbots.scalanet.peergroup.InetMultiAddress
-import com.chipprbots.scalanet.peergroup.udp.{StaticUDPPeerGroup, V5DemuxResponder}
+import com.chipprbots.scalanet.peergroup.udp.StaticUDPPeerGroup
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import scodec.Codec
@@ -30,29 +24,11 @@ import com.chipprbots.ethereum.testing.Tags._
   */
 class Discv5IntegrationSpec extends AnyFlatSpec with Matchers {
 
-  import DefaultCodecs.{given, *}
+  import DefaultCodecs.given
   implicit val sigalg: SigAlg = new Secp256k1SigAlg
   implicit val v5PayloadCodec: Codec[v5.Payload] = V5RLPCodecs.payloadCodec
   // v4 codec needed for StaticUDPPeerGroup type — even though we won't use v4 here.
   implicit val v4PacketCodec: Codec[v4.Packet] = v4.Packet.packetCodec(allowDecodeOverMaxPacketSize = true)
-
-  /** Allocate a random unused UDP port. */
-  private def freePort: Int = {
-    val s = new java.net.DatagramSocket(0)
-    try s.getLocalPort
-    finally s.close()
-  }
-
-  private def makeUdpConfig(port: Int, syncResponder: StaticUDPPeerGroup.SyncResponder): StaticUDPPeerGroup.Config = {
-    val addr = new InetSocketAddress(InetAddress.getLoopbackAddress, port)
-    StaticUDPPeerGroup.Config(
-      bindAddress = addr,
-      processAddress = InetMultiAddress(addr),
-      channelCapacity = 0,
-      receiveBufferSizeBytes = 0,
-      syncResponder = syncResponder
-    )
-  }
 
   private def makeNode(privateKey: com.chipprbots.scalanet.discovery.crypto.PrivateKey, port: Int): ScNode = {
     val pub = sigalg.toPublicKey(privateKey)
@@ -92,7 +68,7 @@ class Discv5IntegrationSpec extends AnyFlatSpec with Matchers {
     NetworkTest
   ) in {
     // Doesn't need real UDP — exercises the codec composition only.
-    val (pubA, privA) = sigalg.newKeyPair
+    val (pubA, _) = sigalg.newKeyPair
     val (pubB, privB) = sigalg.newKeyPair
     val nodeIdA = v5.Session.nodeIdFromPublicKey(pubA.value.bytes)
     val nodeIdB = v5.Session.nodeIdFromPublicKey(pubB.value.bytes)

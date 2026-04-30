@@ -1,113 +1,134 @@
-Introduction
+Fukuii — Scala Ethereum Client (Olympia / post-merge)
+=====================================================
 
-This is Fukuii 0.1.0, a continuation and re-branding of the Ethereum Classic client previously known as Mantis.
+You just unzipped this distribution. This file describes what is in
+the archive, how to launch the node, and where to look for more
+detailed documentation.
 
-Fukuii is based on Mantis 3.2.3 and includes all updates from the previous Mantis releases. 
-This project is an independent fork maintained by Chippr Robotics LLC with the aim of modernizing the codebase and ensuring long-term support.
+The exact version is recorded in the JAR filenames under lib/ — for
+example lib/com.chipprbots.fukuii-0.2.5.jar means this is the 0.2.5
+distribution. Always check there rather than trusting any version
+mentioned below; the launcher scripts and config files are
+version-agnostic, this RELEASE file is not auto-templated.
 
-Fukuii retains the robust architecture and ETC compatibility while introducing new features, updated dependencies, and a streamlined build. The codebase has been renamed throughout:
-
-* Executable scripts are renamed from mantis to fukuii
-* Java/Scala packages under io.iohk have been moved to com.chipprbots
-* Environment variables and configuration keys prefixed with mantis have been changed to fukuii
-
-For more information, see the Fukuii GitHub repository: https://github.com/chippr-robotics/fukuii
-
-Known Issues
-
-* If an RPC request involving the “latest block” is underway at the exact same time a new block is imported, the request may fail. The request can be retried.
-
-New features, V3.2.3:
-
-* Set Sagano target block time to 15s (#989)
-* Remove treasury opt out flag (#980)
-* Update jvmopts to allow more nesting of smart contracts (#987)
-* Move networking and regular sync to cache-based blacklist (#983)
-
-New features, V3.2.2:
-
-Checkpointing ECIP-1097
-* Return only the child of the checkpoint block (#958)
-* [ETCM-389] Move checkpoint creation to the checkpoint service (#955)
-* [ETCM-645] Add test for checkpointing (#931)
-* [ETCM-655] Extend checkpointing_getLatestBlock RPC call with argument for parent checkpointed block (#942)
-
-Several Checkpoint fixes (#930)
-* [FIX] Block fetcher failing test fix (#889)
-* [FIX] Processing checkpoint blocks by fetcher (#866)
-* [ETCM-670] Handling checkpoint older than local best block (#930)
-* [ETCM-675] Delay reorganisation after importing internal checkpoint (#942)
-
-Keccak-256 ECIP 1049
-* [ETCM-746] Added support for PoW with Keccak-256 (ECIP-1049) (#960)
-
-Performance measurement
-* [ETCM-535]Add metrics config in the package build (#898)
-* [ETCM-715] Add new network metric (tried.peers) (#959)
-* [ETCM-571] Add timing metric taken to evaluate a submitted PoW (#932)
-* [ETCM-573] Add timing metrics on block imports (#919)
-* [ETCM-555] Add timing metrics download blocks (headers, bodies and receipts) and MPT nodes.
-* [ETCM-556] Add metric for FastSync total time and update docker-compose Grafana dashboard (#907)
-* [ETCM-528] Block creation metrics (#904)
-
-Other
-* Upgrade rocksdbjni version (#928)
-* [ETCM-468] JSON-RPC getProof for membership (#926)
-* [ETCM-533] JSON-RPC getProof for NON membership (#899)
-* [Chore] Bump scalanet version (#896)
-* [ETCM-129] Scala 2.13 (#875)
-* Include PPoW info in BlockResponse (#867)
-* [ETCM-680] Retesteth in Nix and on CI (#965)
-* [ETCM-697] Implement endpoints for retesteth (#965) (#966)
-
-Improvements
-* [ETCM-739] Refactor BlockFetcher (#976)
-* ETS integration RPC endpoints (#966)
-* ETCM-[165, 166]: Publish the RLP and Crypto libraries to Sonatype (#933 )
-* [ETCM-709] Improve ommers validations (#948)
-* [ETCM-631] Create peerId from node's public key (#957)
-* [ETCM-685] Improve pivot block selection (#949)
-* [ETCM-521] Fast sync integration tests (#944)
-* [ETCM-716] Read block headers to work queue in case of errors (#943)
-* [ETCM-313] and [ETCM-316]: Header skeleton using new branch resolver (#892)
-* [ETCM-689] Update state sync and pivot block selector to use new blacklist (#935)
-* [ETCM-541] UPnP port mapping to aid in peer discovery & connection (#929)
-* [ETCM-531] Cache-based and thread-safe blacklist implementation (#921)
-* [ETCM-147] Use explicitly triggered scheduler for SyncControllerSpec (#916)
-* [ETCM-540] Improve peer discovery algorithm (#903)
-* [ETCM-463] Add PeerStatisticsActor to track message counts (#849)
-* [ETCM-446] Connection limit ranges (#833)
-* [ETCM-448] Json rpc - status code (#836)
-* [ETCM-295] Akka monitoring (#879)
-* [ETCM-674] Added headers consistency with ready blocks (#930)
-* [ETCM-266] Handle lack of twitter util-collection (#873)
-* [ETCM-720] Added tests for mining block on beginning or end of epoch (#950)
-
-Resolved issues
-* [ETCM-797] Implement a correct seed calculation for block validation (#974)
-* [ETCM-732] Handle missing state node in regular sync after fast sync is done (#961)
-* [ETCM-719] Fix calculating of skeleton headers limit (#951)
-* [ETCM-678, 660] Fix for removing chain after the node restart (#940)
-* [ETCM-636] Null pointer in prod on getBestBlock ( #925)
-* [ETCM-626 ] Unsafe use of Option.get causes node desync (#924)
-* [ETCM-546] Fix unsafe usage of maxBy (BlockQueue) (#910)
-* [ETCM-472] Fix missing status code (#10)
-* [FIX] Fix concurrency issue that allowed multiple miners instantiation (#909)
-
-Config
-* Fix the update-nix script (#954)
-* Add Nix Flake (#936)
-* [ETCM-601] Add pub key to allowed miners (#918)
-* [ETCM-480] add /buildinfo to insomnia workspace (#913)
-* More logging in RegularSync and PeersClient (#911)
-* [ETCM-491] Use etc.conf as default config file (#880)
-* [ETCM-493] Increase eth_syncing ask timeout (#878)
+ALPHA / OLYMPIA TEST PHASE — DO NOT USE IN PRODUCTION.
 
 
-Feedback
+Requirements
+------------
 
-Feedback and contributions are welcome through the GitHub repository:
-https://github.com/chippr-robotics/fukuii
+  * JDK 25 (or newer). Earlier JDKs will not start the node.
+  * Linux / macOS / Windows. ~6 GB RAM minimum, more for full mainnet.
+  * Open ports for P2P + RPC (defaults below).
 
-For issues and feature requests, please use GitHub Issues:
-https://github.com/chippr-robotics/fukuii/issues
+
+Layout
+------
+
+  bin/fukuii         Linux / macOS launcher (bash)
+  bin/fukuii.bat     Windows launcher (cmd)
+  bin/fukuii-vm      Auxiliary external-VM launchers (advanced;
+  bin/fukuii-vm.bat  ignore unless you know you need them)
+
+  conf/app.conf      Top-level config; pulls in conf/base/* and is
+                     the file the launchers point java at via
+                     -Dconfig.file. Override values either by editing
+                     this file or by passing -Dfukuii.<key>=<value>
+                     on the command line.
+  conf/base/*        Default settings for network, sync, RPC, etc.
+                     Don't edit; override in app.conf or via -D.
+  conf/etc.conf      Network preset for Ethereum Classic mainnet.
+  conf/mordor.conf   Network preset for ETC's Mordor testnet.
+  conf/eth.conf      Network preset for Ethereum mainnet.
+  conf/sepolia.conf  Network preset for Sepolia testnet.
+  conf/logback.xml   Logging configuration.
+
+  lib/*.jar          Application + dependencies. The launchers put
+                     all of these on the classpath via a wildcard.
+
+  custom-config-example.conf   Annotated example showing every
+                               commonly-overridden setting.
+
+  fukuii_config.txt  Extra JVM flags applied by bin/fukuii.bat.
+                     (-Xss10M by default; add more as needed.)
+
+  RELEASE            This file.
+  LICENSE            Apache 2.0.
+
+
+Quick start
+-----------
+
+Linux / macOS:
+
+  cd fukuii-X.Y.Z
+  bin/fukuii etc           # ETC mainnet, fast sync
+  bin/fukuii mordor        # ETC's Mordor testnet
+  bin/fukuii eth           # Ethereum mainnet (Engine API required)
+
+Windows (cmd or PowerShell):
+
+  cd fukuii-X.Y.Z
+  bin\fukuii.bat etc
+
+Override any config key inline by adding -Dfukuii.<key>=<value>:
+
+  bin/fukuii etc -Dfukuii.datadir=D:\chain-data ^
+                 -Dfukuii.network.rpc.http.port=8545
+
+The first launch creates the data directory (default
+~/.fukuii/<network>) and starts syncing. You can stop the node with
+Ctrl-C; restart picks up where you left off.
+
+
+Default ports
+-------------
+
+  HTTP RPC      8545 (override via fukuii.network.rpc.http.port)
+  WebSocket RPC 8546 (override via fukuii.network.rpc.ws.port)
+  P2P TCP       30303
+  Discovery UDP 30303
+
+If you run alongside another Ethereum client on the same host, set
+all four to non-conflicting values via -D flags.
+
+
+Engine API (post-merge ETH)
+---------------------------
+
+For Ethereum mainnet or Sepolia (post-merge networks), Fukuii needs a
+consensus-layer client (Lighthouse, Prysm, Teku, etc.) over the
+Engine API. Defaults:
+
+  Engine API     8551  (interface 127.0.0.1)
+  JWT secret     auto-generated at first launch under the data dir;
+                 point your CL client at the same file.
+
+  bin/fukuii eth -Dfukuii.network.engine-api.enabled=true ^
+                 -Dfukuii.network.engine-api.jwt-secret-path=...
+
+
+Configuration sources, precedence
+---------------------------------
+
+Highest wins:
+
+  1. -Dfukuii.<key>=<value> on the command line
+  2. The file pointed to by -Dconfig.file (default conf/app.conf)
+  3. Defaults from conf/base/* and the bundled application.conf
+
+See custom-config-example.conf in this directory for the full
+catalogue of settings, with comments.
+
+
+More documentation
+------------------
+
+  Source + docs:    https://github.com/chippr-robotics/fukuii
+  Issues / bugs:    https://github.com/chippr-robotics/fukuii/issues
+  Releases:         https://github.com/chippr-robotics/fukuii/releases
+
+Fukuii is an independent fork of IOHK's Mantis, maintained by Chippr
+Robotics LLC. It tracks Olympia / Ethereum's post-merge protocol
+(EIP-2935, EIP-7702, etc.) on top of Mantis's ETC PoW lineage. See
+the GitHub README for current hard-fork compliance status.

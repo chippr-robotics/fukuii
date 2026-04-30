@@ -22,12 +22,6 @@ import com.chipprbots.ethereum.jsonrpc.EthFilterService._
 import com.chipprbots.ethereum.jsonrpc.{FilterManager => FM}
 import com.chipprbots.ethereum.utils.FilterConfig
 import scala.concurrent.Future
-import scala.concurrent.Future
-import scala.concurrent.Future
-import scala.concurrent.Future
-import scala.concurrent.Future
-import scala.concurrent.Future
-import scala.concurrent.Future
 import com.chipprbots.ethereum.testing.Tags._
 
 class EthFilterServiceSpec

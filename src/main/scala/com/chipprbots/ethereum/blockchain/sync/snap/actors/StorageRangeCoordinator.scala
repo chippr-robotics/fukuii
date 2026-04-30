@@ -846,7 +846,7 @@ class StorageRangeCoordinator(
           case None =>
             log.warning(s"Received response for unknown request ID ${response.requestId}")
 
-          case Some(pendingReq) =>
+          case Some(_) =>
             activeTasks.remove(response.requestId) match {
               case None =>
                 log.warning(s"No active tasks for request ID ${response.requestId}")
@@ -892,7 +892,6 @@ class StorageRangeCoordinator(
       // Track empties per task to avoid re-queueing forever.
       // If the same task yields empty responses repeatedly, skip it with a loud warning.
       var skipped = 0
-      var requeued = 0
       tasks.foreach { task =>
         val key = StorageTaskKey(task.accountHash, task.next, task.last)
         val attempts = emptyResponsesByTask.getOrElse(key, 0) + 1
@@ -908,7 +907,6 @@ class StorageRangeCoordinator(
               s"account=${task.accountHash.toHex} storageRoot=${task.storageRoot.toHex} range=${task.rangeString}"
           )
         } else {
-          requeued += 1
           task.pending = false
           this.tasks.enqueue(task)
           log.debug(

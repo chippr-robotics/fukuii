@@ -4,9 +4,7 @@ import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
 import org.json4s.JsonAST._
-import org.json4s.JsonDSL._
 import org.scalamock.handlers.CallHandler1
-import org.scalamock.scalatest.MockFactory
 import org.scalatest.concurrent.PatienceConfiguration
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
@@ -22,7 +20,6 @@ import com.chipprbots.ethereum.jsonrpc.QAService._
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
 import com.chipprbots.ethereum.nodebuilder.ApisBuilder
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
-import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.Config
 
 class QaJRCSpec

@@ -34,6 +34,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # `gh workflow run release.yml` (final step) calls
+      # POST /actions/workflows/.../dispatches, which the default
+      # GITHUB_TOKEN cannot reach with only `contents: write`. Without
+      # this every auto-version run since PR #1118 has died at the
+      # dispatch step with `HTTP 403: Resource not accessible by
+      # integration`, leaving v0.2.x tags created but no release built.
+      actions: write
     outputs:
       version: ${{ steps.new-version.outputs.version }}
       increment_type: ${{ steps.version-type.outputs.increment_type }}

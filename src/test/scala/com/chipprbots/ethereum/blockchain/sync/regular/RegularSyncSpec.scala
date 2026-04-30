@@ -1,12 +1,8 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 
-import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.ActorSystem
-import org.apache.pekko.actor.typed
-import org.apache.pekko.actor.typed.{ActorRef => TypedActorRef}
 import org.apache.pekko.testkit.TestActor.AutoPilot
 import org.apache.pekko.testkit.TestKit
-import org.apache.pekko.testkit.TestProbe
 import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
@@ -35,7 +31,6 @@ import com.chipprbots.ethereum.blockchain.sync.PeersClient
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
-import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.Start
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits._

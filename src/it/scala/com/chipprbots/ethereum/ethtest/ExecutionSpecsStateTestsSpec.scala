@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.ethtest
 
-import org.scalatest.flatspec.AnyFlatSpec
-import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
 import com.chipprbots.ethereum.testing.Tags._
@@ -117,7 +115,7 @@ class ExecutionSpecsStateTestsSpec extends EthereumTestsSpec {
       suite.tests.foreach { case (testName, test) =>
         val result = executeTest(test)
         result match {
-          case Right(executionResult) =>
+          case Right(_) =>
             info(s"  ✓ State root validated for $testName")
           // State root is computed and validated automatically by executeTest
           case Left(error) =>
@@ -137,7 +135,7 @@ class ExecutionSpecsStateTestsSpec extends EthereumTestsSpec {
     info("Testing contract execution from execution specs...")
     val suite = loadTestSuite("/ethereum-tests/add11.json")
 
-    suite.tests.foreach { case (testName, test) =>
+    suite.tests.foreach { case (_, test) =>
       val result = executeTest(test)
       result shouldBe a[Right[_, _]]
     }
@@ -153,7 +151,7 @@ class ExecutionSpecsStateTestsSpec extends EthereumTestsSpec {
     info("Validating fork-specific behavior from execution specs...")
     val suite = loadTestSuite("/ethereum-tests/add11.json")
 
-    suite.tests.foreach { case (testName, test) =>
+    suite.tests.foreach { case (_, test) =>
       info(s"  Testing fork: ${test.network}")
       val result = executeTest(test)
       result match {
@@ -177,7 +175,7 @@ class ExecutionSpecsStateTestsSpec extends EthereumTestsSpec {
     suite.tests.foreach { case (testName, test) =>
       val result = executeTest(test)
       result match {
-        case Right(executionResult) =>
+        case Right(_) =>
           info(s"  ✓ Account state updated correctly for $testName")
         // Post-state validation is done automatically by executeTest
         case Left(error) =>
@@ -197,7 +195,7 @@ class ExecutionSpecsStateTestsSpec extends EthereumTestsSpec {
 
     tests.foreach { testPath =>
       val suite = loadTestSuite(testPath)
-      suite.tests.foreach { case (testName, test) =>
+      suite.tests.foreach { case (_, test) =>
         val result = executeTest(test)
         result shouldBe a[Right[_, _]]
       }
@@ -234,7 +232,7 @@ class ExecutionSpecsStateTestsSpec extends EthereumTestsSpec {
     info("Testing pre-compiled contracts from execution specs...")
     val suite = loadTestSuite("/ethereum-tests/add11.json")
 
-    suite.tests.foreach { case (testName, test) =>
+    suite.tests.foreach { case (_, test) =>
       val result = executeTest(test)
       result shouldBe a[Right[_, _]]
     }

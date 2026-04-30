@@ -22,10 +22,10 @@ object TestConverter {
     *   Internal Account object
     */
   def toAccount(address: String, state: AccountState): Account = {
-    val addr = Address(ByteString(parseHex(address)))
+    val _ = Address(ByteString(parseHex(address)))
     val balance = UInt256(parseBigInt(state.balance))
     val nonce = UInt256(parseBigInt(state.nonce))
-    val codeHash = if (state.code.isEmpty || state.code == "0x") {
+    val _ = if (state.code.isEmpty || state.code == "0x") {
       Account.EmptyCodeHash
     } else {
       // Code hash will be computed when storing

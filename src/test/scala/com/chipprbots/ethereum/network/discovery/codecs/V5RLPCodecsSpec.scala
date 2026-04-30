@@ -2,7 +2,7 @@ package com.chipprbots.ethereum.network.discovery.codecs
 
 import com.chipprbots.scalanet.discovery.ethereum.v5.Payload
 import scodec.Codec
-import scodec.bits.{BitVector, ByteVector}
+import scodec.bits.ByteVector
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -129,7 +129,6 @@ class V5RLPCodecsSpec extends AnyFlatSpec with Matchers {
     // validation by encoding the malformed bytes ourselves).
     import com.chipprbots.ethereum.rlp
     import com.chipprbots.ethereum.rlp.{RLPEncoder, RLPList}
-    import com.chipprbots.ethereum.rlp.RLPImplicitConversions.toEncodeable
     import com.chipprbots.ethereum.rlp.RLPImplicits.given
 
     val tooLongReqId = ByteVector.fromValidHex("0102030405060708ff") // 9 bytes

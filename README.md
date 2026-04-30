@@ -1,5 +1,3 @@
-## <i>Alpha/Olympia Status</i>: 🟢 2,314 tests passing — [View ETC Handoff](ETC-HANDOFF.md) | [View Olympia Handoff](OLYMPIA-HANDOFF.md) | 🔷 Engine API: Sepolia validated
-
 <div align="center">
   <img src="https://raw.githubusercontent.com/chippr-robotics/fukuii/HEAD/docs/images/fukuii-hex-logo.png" alt="Fukuii Logo" width="400"/>
 </div>

@@ -2,8 +2,6 @@ package com.chipprbots.ethereum.cli
 
 import scala.collection.immutable.ArraySeq
 
-import com.monovore.decline._
-
 //scalastyle:off
 object CliLauncher {
 

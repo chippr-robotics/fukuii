@@ -4,6 +4,7 @@ import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
 
+import scala.annotation.unused
 import scala.concurrent.ExecutionContext
 import scala.util.Try
 
@@ -25,7 +26,7 @@ object NodeStatusResource {
   val description = Some("Current status of the Fukuii node including sync state and peer count")
   val mimeType = Some("application/json")
 
-  def read(deps: McpDependencies)(implicit timeout: Timeout, ec: ExecutionContext): IO[String] = {
+  def read(deps: McpDependencies)(implicit timeout: Timeout, @unused ec: ExecutionContext): IO[String] = {
     val syncStatusIO = deps.syncController.askFor[SyncProtocol.Status](SyncProtocol.GetStatus)
     val peersIO = deps.peerManager.askFor[PeerManagerActor.Peers](PeerManagerActor.GetPeers)
 
@@ -94,7 +95,7 @@ object SyncStatusResource {
   val description = Some("Current blockchain synchronization status and progress")
   val mimeType = Some("application/json")
 
-  def read(deps: McpDependencies)(implicit timeout: Timeout, ec: ExecutionContext): IO[String] =
+  def read(deps: McpDependencies)(implicit timeout: Timeout, @unused ec: ExecutionContext): IO[String] =
     deps.syncController
       .askFor[SyncProtocol.Status](SyncProtocol.GetStatus)
       .recover { case _ =>
@@ -142,7 +143,7 @@ object ConnectedPeersResource {
   val description = Some("List of currently connected peers with addresses and status")
   val mimeType = Some("application/json")
 
-  def read(deps: McpDependencies)(implicit timeout: Timeout, ec: ExecutionContext): IO[String] =
+  def read(deps: McpDependencies)(implicit timeout: Timeout, @unused ec: ExecutionContext): IO[String] =
     deps.peerManager
       .askFor[PeerManagerActor.Peers](PeerManagerActor.GetPeers)
       .recover { case _ =>
@@ -156,7 +157,7 @@ object ConnectedPeersResource {
             case com.chipprbots.ethereum.network.PeerActor.Status.Handshaked     => "handshaked"
             case com.chipprbots.ethereum.network.PeerActor.Status.Connecting     => "connecting"
             case com.chipprbots.ethereum.network.PeerActor.Status.Disconnected   => "disconnected"
-            case s: com.chipprbots.ethereum.network.PeerActor.Status.Handshaking => s"handshaking"
+            case _: com.chipprbots.ethereum.network.PeerActor.Status.Handshaking => "handshaking"
             case _                                                               => "idle"
           }
           s"""    {"id": "${peer.id.value}", "address": "$addr", "direction": "$direction", "status": "$statusStr"}"""
