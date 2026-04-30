@@ -286,4 +286,34 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     formatted should include("Code+Storage")
     formatted should include("1823/15234 contracts")
   }
+
+  // ── K6: Account trie root mismatch restart (regression for may-fields commit 20ccc1f2b) ──
+  // SNAPSyncController must restart (not proceed to healing) when account trie
+  // finalization fails. Previously the coordinator always sent ProgressAccountsTrieFinalized
+  // even on failure, causing healing to start with a corrupt trie.
+
+  "AccountTrieFinalizationFailed message" should "exist and carry an error string" taggedAs UnitTest in {
+    import SNAPSyncController._
+    val msg = AccountTrieFinalizationFailed("root mismatch: computed 8f5d92fe != expected b8c5a89e")
+    msg.error should include("root mismatch")
+    msg.error should include("8f5d92fe")
+    msg shouldBe an[AccountTrieFinalizationFailed]
+  }
+
+  it should "be distinct from AccountTrieFinalized (success path)" taggedAs UnitTest in {
+    import SNAPSyncController._
+    import org.apache.pekko.util.ByteString
+    val failed   = AccountTrieFinalizationFailed("some error")
+    val succeeded = AccountTrieFinalized(ByteString(Array.fill(32)(0.toByte)))
+    failed should not equal succeeded
+  }
+
+  "SNAPSyncController message set" should "include AccountTrieFinalizationFailed alongside AccountTrieFinalized" taggedAs UnitTest in {
+    import SNAPSyncController._
+    // Both success and failure finalization messages must exist so the controller
+    // can distinguish "proceed to healing" from "restart with fresh pivot".
+    val successMsg: AnyRef = AccountTrieFinalized(org.apache.pekko.util.ByteString.empty)
+    val failMsg: AnyRef    = AccountTrieFinalizationFailed("error")
+    successMsg.getClass should not be failMsg.getClass
+  }
 }

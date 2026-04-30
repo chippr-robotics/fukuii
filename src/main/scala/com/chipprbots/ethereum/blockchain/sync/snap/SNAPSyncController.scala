@@ -105,6 +105,13 @@ class SNAPSyncController(
   private var lastPivotRestartMs: Long = 0L
   private val MinPivotRestartInterval: FiniteDuration = 30.seconds
 
+  // Proactive pivot rolling: keep pivot within core-geth's 128-block snapshot window.
+  // ETC network is predominantly core-geth peers; once the pivot ages beyond 128 blocks,
+  // all external peers return accounts=[], proof=[] and only local Besu can serve.
+  // Rolling proactively at 100 blocks preserves all downloaded state (unlike go-ethereum).
+  private var lastProactivePivotBlock: Option[BigInt] = None
+  private val SnapServeWindowBlocks: BigInt = BigInt(100)
+
   // Consecutive pivot refresh counter: when all peers are repeatedly stateless after
   // pivot refreshes, it strongly indicates no peer has a snapshot database. Each
   // PivotStateUnservable increments this; any successful account download resets it.
@@ -1887,6 +1894,27 @@ class SNAPSyncController(
         s"Stagnation check: phase=$currentPhase, stalledMs=${System.currentTimeMillis() - lastStorageProgressMs}"
       )
 
+      // Proactive pivot roll: keep pivot within core-geth's 128-block snapshot window.
+      // Fires when networkHead - pivotBlock > 100 blocks (before the 128-block hard limit).
+      // refreshPivotInPlace() preserves all downloaded accounts — no state discarded.
+      if (
+        (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync) &&
+        pivotBlock.isDefined
+      ) {
+        currentNetworkBestFromSnapPeers().foreach { networkBest =>
+          val pivotAge = networkBest - pivotBlock.get
+          val recentlyRolled = lastProactivePivotBlock.exists(last => (networkBest - last) <= BigInt(32))
+          if (pivotAge > SnapServeWindowBlocks && !recentlyRolled) {
+            log.info(
+              s"[PIVOT-ROLL] Proactive pivot roll: pivot=${pivotBlock.get} network=$networkBest " +
+              s"age=$pivotAge blocks (>$SnapServeWindowBlocks) — refreshing to keep core-geth snapshot window covering pivot"
+            )
+            lastProactivePivotBlock = Some(networkBest)
+            refreshPivotInPlace("proactive pivot roll — pivot aged beyond core-geth snapshot window")
+          }
+        }
+      }
+
       currentPhase match {
         case AccountRangeSync =>
           accountRangeCoordinator.foreach { coordinator =>
@@ -2249,6 +2277,7 @@ class SNAPSyncController(
     // Update internal state
     pivotBlock = Some(newPivotBlock)
     stateRoot = Some(newStateRoot)
+    lastProactivePivotBlock = pivotBlock  // record completed roll so proactive check doesn't immediately re-fire
     // Note: mptStorage stays the same — content-addressed nodes don't need re-tagging.
     // The backing storage was already created for the original pivot block number,
     // but since nodes are keyed by hash, they're valid for any root.
