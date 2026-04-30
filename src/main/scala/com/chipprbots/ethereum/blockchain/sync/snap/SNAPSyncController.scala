@@ -602,6 +602,10 @@ class SNAPSyncController(
       if (missingNodes.isEmpty) {
         log.info("Trie walk found no missing nodes — healing complete!")
         consecutiveUnproductiveHealingRounds = 0
+        // Commit final pivot root — deferred from refreshPivotInPlace() to prevent BUG-006.
+        // AppStateStorage now reflects the root that healing actually completed against.
+        for (b <- pivotBlock; r <- stateRoot)
+          appStateStorage.putSnapSyncPivotBlock(b).and(appStateStorage.putSnapSyncStateRoot(r)).commit()
         progressMonitor.startPhase(StateValidation)
         currentPhase = StateValidation
         validateState()
@@ -846,8 +850,7 @@ class SNAPSyncController(
           } else {
             pivotBlock = Some(targetPivot)
             stateRoot = Some(header.stateRoot)
-            appStateStorage.putSnapSyncPivotBlock(targetPivot).commit()
-            appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
+            appStateStorage.putSnapSyncPivotBlock(targetPivot).and(appStateStorage.putSnapSyncStateRoot(header.stateRoot)).commit()
             updateBestBlockForPivot(header, targetPivot)
 
             SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
@@ -877,8 +880,7 @@ class SNAPSyncController(
                   case Some(header) =>
                     pivotBlock = Some(targetPivot)
                     stateRoot = Some(header.stateRoot)
-                    appStateStorage.putSnapSyncPivotBlock(targetPivot).commit()
-                    appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
+                    appStateStorage.putSnapSyncPivotBlock(targetPivot).and(appStateStorage.putSnapSyncStateRoot(header.stateRoot)).commit()
                     updateBestBlockForPivot(header, targetPivot)
 
                     SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
@@ -1103,6 +1105,7 @@ class SNAPSyncController(
                 scala.concurrent
                   .Future {
                     val emptyRoot = ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)
+                    val zeroHash  = ByteString(new Array[Byte](32))
                     val raf = new java.io.RandomAccessFile(filePath.toFile, "r")
                     val buf = new Array[Byte](64)
                     val batch = new scala.collection.mutable.ArrayBuffer[StorageTask](10000)
@@ -1112,7 +1115,7 @@ class SNAPSyncController(
                         raf.readFully(buf)
                         val accountHash = ByteString(java.util.Arrays.copyOfRange(buf, 0, 32))
                         val storageRoot = ByteString(java.util.Arrays.copyOfRange(buf, 32, 64))
-                        if (storageRoot.nonEmpty && storageRoot != emptyRoot) {
+                        if (accountHash != zeroHash && storageRoot.nonEmpty && storageRoot != emptyRoot) {
                           batch += StorageTask.createStorageTask(accountHash, storageRoot)
                         }
                         if (batch.size >= 10000) {
@@ -1362,8 +1365,7 @@ class SNAPSyncController(
         case Some(genesisHeader) =>
           pivotBlock = Some(BigInt(0))
           stateRoot = Some(genesisHeader.stateRoot)
-          appStateStorage.putSnapSyncPivotBlock(0).commit()
-          appStateStorage.putSnapSyncStateRoot(genesisHeader.stateRoot).commit()
+          appStateStorage.putSnapSyncPivotBlock(0).and(appStateStorage.putSnapSyncStateRoot(genesisHeader.stateRoot)).commit()
           updateBestBlockForPivot(genesisHeader, BigInt(0))
 
           SNAPSyncMetrics.setPivotBlockNumber(0)
@@ -1447,8 +1449,7 @@ class SNAPSyncController(
           // Pivot header is available - proceed with SNAP sync
           pivotBlock = Some(pivotBlockNumber)
           stateRoot = Some(header.stateRoot)
-          appStateStorage.putSnapSyncPivotBlock(pivotBlockNumber).commit()
-          appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
+          appStateStorage.putSnapSyncPivotBlock(pivotBlockNumber).and(appStateStorage.putSnapSyncStateRoot(header.stateRoot)).commit()
           updateBestBlockForPivot(header, pivotBlockNumber)
 
           // Update metrics - pivot block
@@ -2319,9 +2320,12 @@ class SNAPSyncController(
     // The backing storage was already created for the original pivot block number,
     // but since nodes are keyed by hash, they're valid for any root.
 
-    // Persist new pivot
-    appStateStorage.putSnapSyncPivotBlock(newPivotBlock).commit()
-    appStateStorage.putSnapSyncStateRoot(newStateRoot).commit()
+    // Persist new pivot — but NOT during healing: AppStateStorage is updated only when healing
+    // succeeds (trie walk finds 0 missing nodes). Mid-healing writes cause root mismatch (BUG-006):
+    // the new root is stored before all its nodes are healed, then validateState() sees a mismatch.
+    if (currentPhase != StateHealing) {
+      appStateStorage.putSnapSyncPivotBlock(newPivotBlock).and(appStateStorage.putSnapSyncStateRoot(newStateRoot)).commit()
+    }
     updateBestBlockForPivot(newPivotHeader, newPivotBlock)
     SNAPSyncMetrics.setPivotBlockNumber(newPivotBlock)
 
