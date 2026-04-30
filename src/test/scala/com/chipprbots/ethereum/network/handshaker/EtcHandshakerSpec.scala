@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH62.BlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.GetBlockHeaders.GetBlockHeadersEnc
 import com.chipprbots.ethereum.network.p2p.messages.ETH64
+import com.chipprbots.ethereum.network.p2p.messages.ETH69
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Hello.HelloEnc
@@ -289,6 +290,39 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
         // This would fail before the fix - we would incorrectly transition to
         // EtcForkBlockExchangeState and send GetBlockHeaders
         fail(s"Expected direct HandshakeSuccess but got NextMessage(${nextMsg.messageToSend})")
+    }
+  }
+
+  it should "force supportsSnap=true for ETH69 peers even when snap/1 absent from Hello" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new RemotePeerETH69Setup {
+    // EIP-7642 mandates that ETH/69 peers always support snap as a co-protocol.
+    // Peers negotiating ETH/69 never advertise snap/1 separately in Hello.
+    // EtcHelloExchangeState must force supportsSnap=true whenever ETH69 is negotiated.
+    // See: EtcHelloExchangeState.scala line ~81.
+
+    // remoteHello has only Capability.ETH69, no SNAP1
+    val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] =
+      initHandshakerWithoutResolver.applyMessage(remoteHello)
+    assert(handshakerAfterHelloOpt.isDefined)
+
+    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
+      handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
+    assert(handshakerAfterStatusOpt.isDefined)
+
+    handshakerAfterStatusOpt.get.nextMessage match {
+      case Left(HandshakeSuccess(peerInfo)) =>
+        // Core assertion: supportsSnap must be true despite no SNAP1 in Hello
+        peerInfo.remoteStatus.supportsSnap shouldBe true
+        peerInfo.remoteStatus.capability   shouldBe Capability.ETH69
+        peerInfo.forkAccepted              shouldBe true
+
+      case Left(HandshakeFailure(reason)) =>
+        fail(s"Expected HandshakeSuccess but got HandshakeFailure($reason)")
+
+      case Right(nextMsg) =>
+        fail(s"Expected HandshakeSuccess but got next message: ${nextMsg.messageToSend}")
     }
   }
 
@@ -609,5 +643,26 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     )
 
     val remoteStatus: RemoteStatus = RemoteStatus(remoteStatusMsg)
+  }
+
+  trait RemotePeerETH69Setup extends RemotePeerSetup {
+    // ETH/69 peers never advertise snap/1 in Hello — snap is implicit per EIP-7642.
+    val remoteHello: Hello = Hello(
+      p2pVersion   = EtcHelloExchangeState.P2pVersion,
+      clientId     = "remote-peer-eth69",
+      capabilities = Seq(Capability.ETH69),  // No SNAP1
+      listenPort   = remotePort,
+      nodeId       = ByteString(remoteNodeStatus.nodeId)
+    )
+
+    val remoteStatusMsg: ETH69.Status = ETH69.Status(
+      protocolVersion = Capability.ETH69.version,
+      networkId       = Config.Network.peer.networkId,
+      genesisHash     = genesisBlock.header.hash,
+      forkId          = ForkId(0xfc64ec04L, Some(1150000)),
+      earliestBlock   = BigInt(0),
+      latestBlock     = BigInt(1000000),
+      latestBlockHash = genesisBlock.header.hash
+    )
   }
 }
