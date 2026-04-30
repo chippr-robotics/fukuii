@@ -72,6 +72,15 @@ class SyncController(
   // SNAP<->Fast sync bounce cycle counter, persisted across restarts.
   private var snapFastCycleCount: Int = appStateStorage.getSnapFastCycleCount()
 
+  // D1: Circuit breaker for HealingImpossible. After maxHealingRestarts consecutive failures,
+  // back off before re-pivoting. Mirrors Besu PivotSyncDownloader: fixed 5s retry, but ETC peer
+  // pool is smaller so we use exponential backoff (30s base, 5min cap).
+  // Reset to 0 on ImportedBlock milestone (evidence that healing succeeded).
+  private var healingRestartCount: Int = 0
+  private val maxHealingRestarts: Int  = 3
+  private val healingRestartBaseDelay: FiniteDuration  = 30.seconds
+  private val healingRestartMaxDelay: FiniteDuration   = 5.minutes
+
   private def stopSyncChildren(): Unit = {
     // Stop all sync-related child actors. Names may have generation suffixes
     // (e.g. "fast-sync-3") because PoisonPill is async and a new actor can
@@ -230,6 +239,7 @@ class SyncController(
       snapSync ! PoisonPill
       log.info("SNAP sync completed, transitioning to regular sync")
       resetSnapFastCycleCount()
+      healingRestartCount = 0 // D1: fresh SNAP success clears the circuit breaker
       startRegularSync()
 
     case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.FallbackToFastSync =>
@@ -257,6 +267,33 @@ class SyncController(
         handleRestartFastSync()
       case RestartFastSyncNow =>
         doRestartFastSyncNow()
+      case SyncProtocol.HealingImpossible =>
+        // D1: Circuit breaker for repeated healing failures.
+        // Besu: PivotSyncDownloader.handleFailure(StalledDownloadException) → findPivotBlock().
+        // go-ethereum: HasState(head.Root) → false → SnapSync re-enabled.
+        // ETC peer pool is small, so we use exponential backoff after maxHealingRestarts.
+        healingRestartCount += 1
+        appStateStorage.clearSnapSyncDone().commit()
+        regularSync ! PoisonPill
+        if (healingRestartCount <= maxHealingRestarts) {
+          log.warning(
+            "Trie healing impossible (attempt {}/{}) — pivot state root pruned on all peers. " +
+              "Restarting SNAP sync with a fresh current pivot.",
+            healingRestartCount,
+            maxHealingRestarts
+          )
+          startSnapSync()
+        } else {
+          val backoffRaw = healingRestartBaseDelay * math.pow(2.0, (healingRestartCount - maxHealingRestarts).toDouble).toLong
+          val backoff    = if (backoffRaw > healingRestartMaxDelay) healingRestartMaxDelay else backoffRaw
+          log.error(
+            "Trie healing impossible after {} consecutive restarts. " +
+              "Backing off {}s before re-pivoting. All known peers have pruned the pivot state root.",
+            healingRestartCount,
+            backoff.toSeconds
+          )
+          scheduler.scheduleOnce(backoff, self, RestartFastSyncNow)(context.dispatcher)
+        }
       case SyncProtocol.RegularSyncStuck(blockNumber, missingHash) =>
         // Regular sync can't make progress: state-node recovery has exhausted on the same hash
         // 3+ times. Local parent state is too far behind canonical tip for any peer's snap-serve
@@ -402,6 +439,7 @@ class SyncController(
       peersClient ! PoisonPill
       originalSnapSyncRef ! PoisonPill
       resetSnapFastCycleCount()
+      healingRestartCount = 0 // D1: fresh SNAP success clears the circuit breaker
       startRegularSync()
 
     case msg =>
@@ -549,6 +587,15 @@ class SyncController(
       return
     }
 
+    // Recovery flag: -Dfukuii.snap.clearDoneOnStart=true clears SnapSyncDone to re-enter healing.
+    // Use when healing completed prematurely (root mismatch) to resume without a full re-sync.
+    if (doSnapSync && System.getProperty("fukuii.snap.clearDoneOnStart", "false").toBoolean) {
+      if (appStateStorage.isSnapSyncDone()) {
+        log.warning("fukuii.snap.clearDoneOnStart=true: clearing SnapSyncDone to re-enter SNAP healing")
+        appStateStorage.clearSnapSyncDone().commit()
+      }
+    }
+
     (appStateStorage.isSnapSyncDone(), appStateStorage.isFastSyncDone(), doSnapSync, doFastSync) match {
       case (false, _, true, _) =>
         // SNAP sync requested - just start it
@@ -568,50 +615,80 @@ class SyncController(
           bestBlockNum,
           snapStateRoot == pivotStateRoot
         )
-        // After SNAP sync with deferred merkleization + pivot refreshes, the finalized trie root
-        // may differ from the pivot block header's stateRoot. The trie nodes are stored under
-        // the finalized root's hash, but the pivot header references the original (now orphaned) root.
-        // Fix: substitute the finalized root into the pivot block header.
-        bestBlockHeader.foreach { header =>
-          val mptStorage = stateStorage.getReadOnlyStorage
-          val pivotRootExists =
-            try { mptStorage.get(header.stateRoot.toArray); true }
-            catch { case _: Exception => false }
-          log.info(
-            "State root availability check: pivotRoot({})={}",
-            header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString,
-            if (pivotRootExists) "EXISTS" else "MISSING"
-          )
-          if (!pivotRootExists) {
-            val finalizedRoot = appStateStorage.getSnapSyncFinalizedRoot()
-            finalizedRoot match {
-              case Some(fRoot) =>
-                val fRootExists =
-                  try { mptStorage.get(fRoot.toArray); true }
-                  catch { case _: Exception => false }
-                log.info(
-                  "Finalized trie root {} availability: {}",
-                  fRoot.take(8).toArray.map("%02x".format(_)).mkString,
-                  if (fRootExists) "EXISTS" else "MISSING"
-                )
-                if (fRootExists) {
-                  log.warning(
-                    "Substituting finalized trie root {} into pivot block header (replacing missing root {})",
+        // D3: Startup HasState gate — mirrors go-ethereum eth/downloader/syncmode.go:52
+        // (chain.HasState(fullBlock.Root) → re-enable snap sync) and Besu
+        // FullSyncTargetManager.java:60-75 (isWorldStateAvailable → gate entry to full sync).
+        // If the pivot state root is unreachable, clear SnapSyncDone and restart SNAP rather
+        // than entering regular sync against an incomplete trie.
+        val stateRootReachable: Boolean = bestBlockHeader match {
+          case None =>
+            // Can't verify — assume ok (pivot header missing is a separate problem)
+            true
+          case Some(header) =>
+            val mptStorage = stateStorage.getReadOnlyStorage
+            val pivotRootExists =
+              try { mptStorage.get(header.stateRoot.toArray); true }
+              catch { case _: Exception => false }
+            log.info(
+              "State root availability check: pivotRoot({})={}",
+              header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString,
+              if (pivotRootExists) "EXISTS" else "MISSING"
+            )
+            if (pivotRootExists) {
+              true
+            } else {
+              // Pivot root missing — check if a finalized root was stored (from deferred
+              // merkleization / pivot refresh). If it exists, substitute it into the header
+              // and continue (existing recovery path). If not, restart SNAP.
+              val finalizedRoot = appStateStorage.getSnapSyncFinalizedRoot()
+              finalizedRoot match {
+                case Some(fRoot) =>
+                  val fRootExists =
+                    try { mptStorage.get(fRoot.toArray); true }
+                    catch { case _: Exception => false }
+                  log.info(
+                    "Finalized trie root {} availability: {}",
                     fRoot.take(8).toArray.map("%02x".format(_)).mkString,
+                    if (fRootExists) "EXISTS" else "MISSING"
+                  )
+                  if (fRootExists) {
+                    log.warning(
+                      "Substituting finalized trie root {} into pivot block header (replacing missing root {})",
+                      fRoot.take(8).toArray.map("%02x".format(_)).mkString,
+                      header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString
+                    )
+                    val updatedHeader = header.copy(stateRoot = fRoot)
+                    blockchainWriter.storeBlockHeader(updatedHeader).commit()
+                    true
+                  } else {
+                    log.error(
+                      "Pivot state root {} MISSING and finalized root {} also not in storage.",
+                      header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString,
+                      fRoot.take(8).toArray.map("%02x".format(_)).mkString
+                    )
+                    false
+                  }
+                case None =>
+                  log.error(
+                    "Pivot state root {} MISSING and no finalized root stored.",
                     header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString
                   )
-                  val updatedHeader = header.copy(stateRoot = fRoot)
-                  blockchainWriter.storeBlockHeader(updatedHeader).commit()
-                }
-              case None =>
-                log.error(
-                  "Pivot state root {} MISSING and no finalized root stored! " +
-                    "Database is in an unrecoverable state — clear data and re-sync.",
-                  header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString
-                )
+                  false
+              }
             }
-          }
         }
+
+        if (!stateRootReachable) {
+          log.warning(
+            "SnapSyncDone=true but pivot state root is unreachable in storage. " +
+              "Clearing SnapSyncDone and restarting SNAP sync with a fresh pivot. " +
+              "(mirrors go-ethereum chain.HasState gate in eth/downloader/syncmode.go:52)"
+          )
+          appStateStorage.clearSnapSyncDone().commit()
+          startSnapSync()
+          return
+        }
+
         val needBytecode = !appStateStorage.isBytecodeRecoveryDone()
         val needStorage = !appStateStorage.isStorageRecoveryDone()
         if (needBytecode || needStorage) {
@@ -853,7 +930,7 @@ class SyncController(
       networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeers
 
     case com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers(peers) =>
-      val snapPeers = peers.filter { case (_, peerInfo) => peerInfo.remoteStatus.supportsSnap }
+      val snapPeers = peers.filter { case (_, peerInfo) => peerInfo.remoteStatus.supportsSnap && peerInfo.forkAccepted }
       if (snapPeers.nonEmpty) {
         snapPeers.foreach { case (peer, _) =>
           bytecodeActor.foreach(_ ! snap.actors.Messages.ByteCodePeerAvailable(peer))

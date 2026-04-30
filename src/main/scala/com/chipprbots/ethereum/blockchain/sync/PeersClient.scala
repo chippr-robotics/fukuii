@@ -7,11 +7,13 @@ import org.apache.pekko.actor.Cancellable
 import org.apache.pekko.actor.Props
 import org.apache.pekko.actor.Scheduler
 
+import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 import scala.reflect.ClassTag
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg.PeerWithInfo
+import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnected
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
@@ -53,6 +55,20 @@ class PeersClient(
 
   implicit val ec: ExecutionContext = context.dispatcher
 
+  // Tracks GetNodeData capability per peer via observed behavior (not advertised capability).
+  // Shared across all StateNodeFetcher actors so the first failure protects all concurrent requests.
+  private val nodeDataCooldownUntilMs     = mutable.Map.empty[PeerId, Long]
+  private val nodeDataConsecutiveFailures = mutable.Map.empty[PeerId, Int]
+
+  override def handlePeerListMessages: Receive = ({
+    case PeerDisconnected(peerId) =>
+      // Intentionally do NOT clear nodeData cooldown on disconnect. A peer that closes
+      // the connection when asked for GetNodeData (e.g. BONSAI Besu) will immediately
+      // reconnect and repeat the same failure if we reset its state here. The time-based
+      // cooldown must be allowed to expire naturally so the peer stays suppressed.
+      super.handlePeerListMessages(PeerDisconnected(peerId))
+  }: Receive) orElse super.handlePeerListMessages
+
   val statusSchedule: Cancellable =
     scheduler.scheduleWithFixedDelay(syncConfig.printStatusInterval, syncConfig.printStatusInterval, self, PrintStatus)
 
@@ -67,6 +83,12 @@ class PeersClient(
     handlePeerListMessages.orElse {
       case PrintStatus                   => printStatus(requesters: Requesters)
       case BlacklistPeer(peerId, reason) => blacklistIfHandshaked(peerId, syncConfig.blacklistDuration, reason)
+      case RecordNodeDataFailure(peerId) =>
+        val count = nodeDataConsecutiveFailures.getOrElse(peerId, 0) + 1
+        nodeDataConsecutiveFailures(peerId) = count
+        val cooldownMs = if (count >= 3) 3_600_000L else count * 30_000L
+        nodeDataCooldownUntilMs(peerId) = System.currentTimeMillis() + cooldownMs
+        log.debug("Peer {} GetNodeData failure #{} — cooldown {}ms", peerId, count, cooldownMs)
       case Request(message, peerSelector, toSerializable) =>
         val requester = sender()
         log.debug(
@@ -166,16 +188,15 @@ class PeersClient(
         bestPeer(snapPeers, log)
 
       case BestNodeDataPeer =>
-        val nodeDataPeers = peersToDownloadFrom.filter { case (_, peerWithInfo) =>
-          peerWithInfo.peerInfo.remoteStatus.capability match {
-            case Capability.ETH68 => false // ETH68 removed GetNodeData
-            case _                => true
-          }
+        val now = System.currentTimeMillis()
+        val nodeDataPeers = peersToDownloadFrom.filter { case (peerId, _) =>
+          !nodeDataCooldownUntilMs.get(peerId).exists(_ > now)
         }
         log.debug(
-          "Selecting best GetNodeData-capable peer from {} available peers ({} capable)",
+          "Selecting best GetNodeData-capable peer from {} available peers ({} capable, {} on cooldown)",
           peersToDownloadFrom.size,
-          nodeDataPeers.size
+          nodeDataPeers.size,
+          nodeDataCooldownUntilMs.count { case (_, exp) => exp > now }
         )
         bestPeer(nodeDataPeers, log)
 
@@ -188,6 +209,31 @@ class PeersClient(
           filteredPeers.size
         )
         bestPeer(filteredPeers, log)
+
+      case BestSnapPeerExcluding(exclude) =>
+        val snapPeers = peersToDownloadFrom.filter { case (peerId, peerWithInfo) =>
+          !exclude.contains(peerId) && peerWithInfo.peerInfo.remoteStatus.supportsSnap
+        }
+        log.debug(
+          "Selecting best SNAP peer excluding {} tried peers ({} SNAP remaining)",
+          exclude.size,
+          snapPeers.size
+        )
+        bestPeer(snapPeers, log)
+
+      case BestNodeDataPeerExcluding(exclude) =>
+        val now = System.currentTimeMillis()
+        val nodeDataPeers = peersToDownloadFrom.filter { case (peerId, _) =>
+          !exclude.contains(peerId) &&
+          !nodeDataCooldownUntilMs.get(peerId).exists(_ > now)
+        }
+        log.debug(
+          "Selecting best GetNodeData peer excluding {} tried peers ({} capable remaining)",
+          exclude.size,
+          nodeDataPeers.size
+        )
+        bestPeer(nodeDataPeers, log)
+
     }
 
   /** Adapts message format based on peer's negotiated capability. ETH66+ peers use RequestId wrapper, earlier versions
@@ -292,6 +338,7 @@ object PeersClient {
 
   sealed trait PeersClientMessage
   case class BlacklistPeer(peerId: PeerId, reason: BlacklistReason) extends PeersClientMessage
+  case class RecordNodeDataFailure(peerId: PeerId) extends PeersClientMessage
   case class Request[RequestMsg <: Message](
       message: RequestMsg,
       peerSelector: PeerSelector,
@@ -326,6 +373,8 @@ object PeersClient {
   case object BestSnapPeer extends PeerSelector
   case object BestNodeDataPeer extends PeerSelector
   case class ExcludingPeers(exclude: Set[PeerId]) extends PeerSelector
+  case class BestSnapPeerExcluding(exclude: Set[PeerId]) extends PeerSelector
+  case class BestNodeDataPeerExcluding(exclude: Set[PeerId]) extends PeerSelector
 
   def bestPeer(
       peersToDownloadFrom: Map[PeerId, PeerWithInfo],

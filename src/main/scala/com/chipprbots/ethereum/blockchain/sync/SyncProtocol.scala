@@ -19,10 +19,17 @@ object SyncProtocol {
   case object RestartFastSync extends SyncProtocolMsg
   final case class RestartFastSyncResponse(started: Boolean, cooldownUntilMillis: Long) extends SyncProtocolMsg
 
-  /** Signals that regular sync has hit a wall — repeated state-node fetch exhaustion on the same block, with no peer
-    * able to serve our parent stateRoot (typical when the node is many thousands of blocks behind canonical tip and the
-    * snap-serve window of every connected peer has moved far past us). The controller responds by clearing the
-    * SnapSyncDone flag and re-running SNAP sync from a recent pivot, which is the only viable recovery path.
+  /** Sent by RegularSync when trie healing is permanently stuck (GetTrieNodes returns empty from all peers,
+    * meaning the pivot state root has been pruned). SyncController clears SnapSyncDone and restarts SNAP sync
+    * with a fresh current pivot. Mirrors Besu's StalledDownloadException → PivotSyncDownloader.handleFailure().
+    */
+  case object HealingImpossible extends SyncProtocolMsg
+
+  /** Signals that regular sync has hit a wall — repeated state-node fetch exhaustion on the same
+    * block, with no peer able to serve our parent stateRoot (typical when the node is many
+    * thousands of blocks behind canonical tip and the snap-serve window of every connected peer
+    * has moved far past us). The controller responds by clearing the SnapSyncDone flag and
+    * re-running SNAP sync from a recent pivot, which is the only viable recovery path.
     */
   final case class RegularSyncStuck(blockNumber: BigInt, missingHash: String) extends SyncProtocolMsg
 

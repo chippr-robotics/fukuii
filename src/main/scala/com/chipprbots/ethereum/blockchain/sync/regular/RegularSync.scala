@@ -129,6 +129,10 @@ class RegularSync(
       }
       context.become(running(newState))
 
+    case ProgressProtocol.HealingImpossible =>
+      log.error("Trie healing impossible — pivot state root pruned on all peers. Forwarding to SyncController to restart SNAP sync.")
+      context.parent ! SyncProtocol.HealingImpossible
+
     case msg: SyncProtocol.RegularSyncStuck =>
       // Forward escape-valve signal to SyncController (our parent). BlockImporter detects this
       // condition and emits the message; we just relay it up so SyncController can re-trigger
@@ -208,5 +212,8 @@ object RegularSync {
     case class StartingFrom(blockNumber: BigInt) extends ProgressProtocol
     case class GotNewBlock(blockNumber: BigInt) extends ProgressProtocol
     case class ImportedBlock(blockNumber: BigInt, internally: Boolean) extends ProgressProtocol
+    // Sent by BlockImporter when trie healing is permanently stuck (pivot state root pruned on all peers).
+    // RegularSync forwards to SyncController which clears SnapSyncDone and restarts SNAP.
+    case object HealingImpossible extends ProgressProtocol
   }
 }
