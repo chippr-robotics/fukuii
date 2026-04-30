@@ -5,6 +5,7 @@ import cats.effect.SyncIO
 import com.chipprbots.ethereum.forkid.Connect
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.forkid.ForkIdValidator
+import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.p2p.Message
@@ -20,7 +21,8 @@ import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
   *   - Status message reorders fields: [version, networkId, genesis, forkId, earliestBlock, latestBlock,
   *     latestBlockHash]
   *   - ForkId validation is still performed
-  *   - RemoteStatus is constructed without TD (uses latestBlock number instead)
+  *   - TD is recovered from local ChainWeightStorage via latestBlockHash when the peer's block is
+  *     already in our chain; falls back to block-number proxy otherwise
   */
 case class EthNodeStatus69ExchangeState(
     handshakerConfiguration: NetworkHandshakerConfiguration,
@@ -47,14 +49,14 @@ case class EthNodeStatus69ExchangeState(
     val localGenesisHash = blockchainReader.genesisHeader.hash
 
     if (status.networkId != peerConfiguration.networkId) {
-      log.warn(
+      log.debug(
         "ETH69_STATUS: NetworkId mismatch! Local: {}, Remote: {} - disconnecting (SUBPROTOCOL_TRIGGERED_MISMATCHED_NETWORK)",
         peerConfiguration.networkId,
         status.networkId
       )
       DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
     } else if (status.genesisHash != localGenesisHash) {
-      log.warn(
+      log.debug(
         "ETH69_STATUS: Genesis hash mismatch! Local: {}, Remote: {} - disconnecting",
         localGenesisHash,
         status.genesisHash
@@ -68,17 +70,31 @@ case class EthNodeStatus69ExchangeState(
             status.forkId
           )
       } yield {
-        log.info("ETH69_STATUS: ForkId validation result: {}", validationResult)
+        log.debug("ETH69_STATUS: ForkId validation result: {}", validationResult)
         validationResult match {
           case Connect =>
             log.info("ETH69_STATUS: ForkId validation passed - accepting peer")
+            // Look up actual PoW TD from local chain DB using the peer's latestBlockHash.
+            // Succeeds when the peer's block is in our ChainWeightStorage (peer at or behind our tip).
+            // Falls back to block-number proxy when the peer is ahead of us.
+            val resolvedChainWeight: ChainWeight =
+              blockchainReader.getChainWeightByHash(status.latestBlockHash)
+                .getOrElse(ChainWeight.totalDifficultyOnly(status.latestBlock))
+            log.debug(
+              "ETH69_STATUS: chainWeight for peer latestBlockHash {}: {} (localLookup={})",
+              status.latestBlockHash,
+              resolvedChainWeight,
+              blockchainReader.getChainWeightByHash(status.latestBlockHash).isDefined
+            )
             ConnectedState(
               PeerInfo.withForkAccepted(
-                RemoteStatus.fromETH69Status(status, negotiatedCapability, supportsSnap, peerCapabilities)
+                RemoteStatus.fromETH69Status(
+                  status, negotiatedCapability, supportsSnap, peerCapabilities, resolvedChainWeight
+                )
               )
             )
           case other =>
-            log.warn("ETH69_STATUS: ForkId validation failed: {} - disconnecting", other)
+            log.debug("ETH69_STATUS: ForkId validation failed: {} - disconnecting", other)
             DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
         }
       }).unsafeRunSync()
