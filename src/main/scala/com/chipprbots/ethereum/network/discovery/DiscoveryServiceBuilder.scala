@@ -39,7 +39,8 @@ trait DiscoveryServiceBuilder extends Logger {
       discoveryConfig: DiscoveryConfig,
       tcpPort: Int,
       nodeStatusHolder: AtomicReference[NodeStatus],
-      knownNodesStorage: KnownNodesStorage
+      knownNodesStorage: KnownNodesStorage,
+      forkIdTag: Option[ForkIdTag] = None
   )(implicit scheduler: IORuntime): Resource[IO, v4.DiscoveryService] = {
 
     implicit val sigalg = new Secp256k1SigAlg()
@@ -166,7 +167,7 @@ trait DiscoveryServiceBuilder extends Logger {
       chainedResponder = StaticUDPPeerGroup.chainResponders(v5Responder, v4SyncResponder)
       udpConfig = makeUdpConfig(discoveryConfig, host, chainedResponder)
       network <- makeDiscoveryNetwork(privateKey, localNode, v4Config, udpConfig, pingDedup, v5OutboundSenderRef)
-      service <- makeDiscoveryService(privateKey, localNode, v4Config, network)
+      service <- makeDiscoveryService(privateKey, localNode, v4Config, network, forkIdTag)
       _ <- Resource.eval {
         setDiscoveryStatus(nodeStatusHolder, ServerStatus.Listening(udpConfig.bindAddress))
       }
@@ -386,7 +387,8 @@ trait DiscoveryServiceBuilder extends Logger {
       privateKey: PrivateKey,
       localNode: ENode,
       v4Config: v4.DiscoveryConfig,
-      network: v4.DiscoveryNetwork[InetMultiAddress]
+      network: v4.DiscoveryNetwork[InetMultiAddress],
+      forkIdTag: Option[ForkIdTag]
   )(implicit sigalg: SigAlg, enrContentCodec: Codec[EthereumNodeRecord.Content]): Resource[IO, v4.DiscoveryService] =
     v4.DiscoveryService[InetMultiAddress](
       privateKey = privateKey,
@@ -399,6 +401,7 @@ trait DiscoveryServiceBuilder extends Logger {
       // start, and the nodes can be contacted and gradually as they are discovered during the iterative lookup,
       // rather than at the end of the enrollment. Fukuii will also contact its previously persisted peers,
       // from that perspective it doesn't care whether enrollment is over or not.
-      enrollInBackground = true
+      enrollInBackground = true,
+      tags = forkIdTag.toList
     )
 }

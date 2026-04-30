@@ -108,7 +108,8 @@ class RLPxConnectionHandler(
       context.become(new ConnectedHandler(connection).waitingForAuthHandshakeResponse(handshaker, timeout))
 
     case CommandFailed(_: Connect) =>
-      log.error("[Stopping Connection] TCP connection to {} failed for peer {}", uri, peerId)
+      RLPxConnectionHandler.tcpFailedCount.incrementAndGet()
+      log.warning("[Stopping Connection] TCP connection to {} failed for peer {}", uri, peerId)
       context.parent ! ConnectionFailed
       gracefulStop()
   }
@@ -362,8 +363,8 @@ class RLPxConnectionHandler(
               processHandshakeResult(result, remainingData)
 
             case Failure(ex) =>
-              log.error(
-                "[HIVE-DEBUG] Auth handshake FAILED for peer {} - both pre-EIP8 and EIP-8 decode failed: {}",
+              log.debug(
+                "[RLPx] Auth decode failed for peer {} - both pre-EIP8 and EIP-8 failed: {}",
                 peerId,
                 ex.getMessage
               )
@@ -445,7 +446,8 @@ class RLPxConnectionHandler(
     }
 
     def handleTimeout: Receive = { case AuthHandshakeTimeout =>
-      log.error(
+      RLPxConnectionHandler.authTimeoutCount.incrementAndGet()
+      log.warning(
         "[Stopping Connection] Auth handshake timeout for peer {} after {}ms",
         peerId,
         rlpxConfiguration.waitForHandshakeTimeout.toMillis
@@ -457,7 +459,7 @@ class RLPxConnectionHandler(
     def processHandshakeResult(result: AuthHandshakeResult, remainingData: ByteString): Unit =
       result match {
         case AuthHandshakeSuccess(secrets, remotePubKey) =>
-          log.info("[RLPx] Auth handshake SUCCESS for peer {}, establishing secure connection", peerId)
+          log.debug("[RLPx] Auth handshake SUCCESS for peer {}, establishing secure connection", peerId)
           context.parent ! ConnectionEstablished(remotePubKey)
           // following the specification at https://github.com/ethereum/devp2p/blob/master/rlpx.md#initial-handshake
           // point 6 indicates that the next messages needs to be initial 'Hello'
@@ -467,7 +469,8 @@ class RLPxConnectionHandler(
           extractHello(extractor(secrets), remainingData)
 
         case AuthHandshakeError =>
-          log.error("[Stopping Connection] Auth handshake FAILED for peer {}", peerId)
+          RLPxConnectionHandler.authFailedCount.incrementAndGet()
+          log.warning("[Stopping Connection] Auth handshake FAILED for peer {}", peerId)
           context.parent ! ConnectionFailed
           gracefulStop()
       }
@@ -503,7 +506,7 @@ class RLPxConnectionHandler(
 
         case AckTimeout(ackSeqNumber) if cancellableAckTimeout.exists(_.seqNumber == ackSeqNumber) =>
           cancellableAckTimeout.foreach(_.cancellable.cancel())
-          log.error("[Stopping Connection] Sending 'Hello' to {} failed", peerId)
+          log.warning("[Stopping Connection] Sending 'Hello' to {} failed", peerId)
           gracefulStop()
         case Received(data) =>
           extractHello(extractor, data, cancellableAckTimeout, seqNumber)
@@ -537,7 +540,7 @@ class RLPxConnectionHandler(
           messageCodecOpt match {
             case Some((messageCodec, inboundTranslator)) =>
               registerMessageCodec(messageCodec)
-              log.info("[RLPx] Connection FULLY ESTABLISHED with peer {}, entering handshaked state", peerId)
+              log.debug("[RLPx] Connection FULLY ESTABLISHED with peer {}, entering handshaked state", peerId)
               context.become(
                 handshaked(
                   messageCodec,
@@ -641,8 +644,10 @@ class RLPxConnectionHandler(
           // reduce our ability to maintain connections with diverse peer implementations.
         } else {
           // For other decoding errors (truly malformed RLP, structure mismatches, etc.),
-          // send proper Disconnect to remote peer before closing connection
-          log.error(
+          // send proper Disconnect to remote peer before closing connection.
+          // Warning (not error): disconnect behavior is correct, this is peer protocol variance
+          // (e.g., ETH69 peers sending 8-field Status when we expect 7 fields).
+          log.warning(
             "DECODE_ERROR: Cannot decode message from {} - disconnecting. Error: {}",
             peerId,
             ex.getMessage
@@ -739,7 +744,8 @@ class RLPxConnectionHandler(
                   )
                 }
               case Left(err) =>
-                log.error(
+                // go-ethereum: Trace level for decode failures (server.go:939 "Failed p2p handshake")
+                log.debug(
                   "RECV_MSG: peer={}, msg[{}] DECODE_ERROR: {}",
                   peerId,
                   idx,
@@ -763,7 +769,7 @@ class RLPxConnectionHandler(
 
         case AckTimeout(ackSeqNumber) if cancellableAckTimeout.exists(_.seqNumber == ackSeqNumber) =>
           cancellableAckTimeout.foreach(_.cancellable.cancel())
-          log.error("[Stopping Connection] SEND_MSG_TIMEOUT: peer={}, seqNum={}", peerId, ackSeqNumber)
+          log.warning("[Stopping Connection] SEND_MSG_TIMEOUT: peer={}, seqNum={}", peerId, ackSeqNumber)
           gracefulStop()
       }
 
@@ -801,9 +807,8 @@ class RLPxConnectionHandler(
 
       val out = messageCodec.encodeMessage(serializableToEncode)
 
-      // Enhanced logging for GetBlockHeaders debugging
       val msgType = messageToSend.underlyingMsg.getClass.getSimpleName
-      log.info(
+      log.debug(
         "SEND_MSG: peer={}, type={}, codes={}, seqNum={}",
         peerId,
         msgType,
@@ -870,6 +875,11 @@ class RLPxConnectionHandler(
 }
 
 object RLPxConnectionHandler {
+  // Per-connection event counters — read+reset every 60s by NetworkPeerManagerActor summary
+  val tcpFailedCount   = new java.util.concurrent.atomic.AtomicInteger(0)
+  val authFailedCount  = new java.util.concurrent.atomic.AtomicInteger(0)
+  val authTimeoutCount = new java.util.concurrent.atomic.AtomicInteger(0)
+
   def props(
       capabilities: List[Capability],
       authHandshaker: AuthHandshaker,

@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.network
 
+import scala.concurrent.duration._
+
 import org.apache.pekko.actor.Actor
 import org.apache.pekko.actor.ActorLogging
 import org.apache.pekko.actor.ActorRef
@@ -7,6 +9,8 @@ import org.apache.pekko.actor.Props
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor._
 import com.chipprbots.ethereum.network.PeerActor.DisconnectPeer
@@ -26,6 +30,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH62.NewBlockHashes
 import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH64
+import com.chipprbots.ethereum.network.p2p.messages.ETH69
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
@@ -42,7 +47,7 @@ class NetworkPeerManagerActor(
     appStateStorage: AppStateStorage,
     forkResolverOpt: Option[ForkResolver],
     initialSnapSyncControllerOpt: Option[ActorRef] = None,
-    evmCodeStorage: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
+    evmCodeStorageOpt: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
     mptStorageOpt: Option[com.chipprbots.ethereum.db.storage.MptStorage] = None,
     blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader] = None
 ) extends Actor
@@ -54,6 +59,11 @@ class NetworkPeerManagerActor(
 
   // Mutable reference to SNAPSyncController that can be set after initialization
   private var snapSyncControllerOpt: Option[ActorRef] = initialSnapSyncControllerOpt
+
+  private var emptyHeaderResponses: Int = 0
+
+  // 60s network summary — read+reset RLPx counters and log one aggregate line
+  context.system.scheduler.scheduleWithFixedDelay(60.seconds, 60.seconds, self, NetworkPeerManagerActor.LogNetworkSummary)(context.dispatcher)
 
   // Subscribe to the event of any peer getting handshaked
   peerEventBusActor ! Subscribe(PeerHandshaked)
@@ -85,10 +95,11 @@ class NetworkPeerManagerActor(
   def handleMessages(peersWithInfo: PeersWithInfo): Receive =
     handleCommonMessages(peersWithInfo).orElse(handlePeersInfoEvents(peersWithInfo))
 
-  private def peerHasUpdatedBestBlock(peerInfo: PeerInfo): Boolean = {
-    val peerBestBlockIsItsGenesisBlock = peerInfo.bestBlockHash == peerInfo.remoteStatus.genesisHash
-    peerBestBlockIsItsGenesisBlock || (!peerBestBlockIsItsGenesisBlock && peerInfo.maxBlockNumber > 0)
-  }
+  private def peerHasUpdatedBestBlock(@annotation.unused peerInfo: PeerInfo): Boolean =
+    // All handshaked peers are usable. go-ethereum has no equivalent gate (eth/peerset.go all()
+    // returns all peers unconditionally). ETH/69 peers carry latestBlock in Status; ETH/68 peers
+    // carry bestHash. Both are sufficient to identify the peer as having chain state.
+    true
 
   /** Processes both messages for sending messages and for requesting peer information
     *
@@ -122,6 +133,18 @@ class NetworkPeerManagerActor(
       val newPeersWithInfo = updatePeersWithInfo(peersWithInfo, peerId, message.underlyingMsg, handleSentMessage)
       peerManagerActor ! PeerManagerActor.SendMessage(message, peerId)
       context.become(handleMessages(newPeersWithInfo))
+
+    case NetworkPeerManagerActor.LogNetworkSummary =>
+      import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler
+      val tcpFailed    = RLPxConnectionHandler.tcpFailedCount.getAndSet(0)
+      val authFailed   = RLPxConnectionHandler.authFailedCount.getAndSet(0)
+      val authTimeout  = RLPxConnectionHandler.authTimeoutCount.getAndSet(0)
+      val emptyHeaders = emptyHeaderResponses; emptyHeaderResponses = 0
+      val active       = peersWithInfo.size
+      val snapPeers    = peersWithInfo.values.count(_.peerInfo.remoteStatus.supportsSnap)
+      log.info(
+        s"Network [60s]: active=$active peers ($snapPeers snap-capable), +$tcpFailed tcp-failed, +$authFailed auth-failed, +$authTimeout auth-timeout, +$emptyHeaders empty-headers"
+      )
   }
 
   /** Processes events and updating the information about each peer
@@ -160,12 +183,17 @@ class NetworkPeerManagerActor(
       context.become(handleMessages(newPeersWithInfo))
 
     case PeerHandshakeSuccessful(peer, peerInfo: PeerInfo) =>
-      log.info(
-        "PEER_HANDSHAKE_SUCCESS: Peer {} handshake successful. Capability: {}, BestHash: {}, TotalDifficulty: {}",
+      val chainInfoDisplay =
+        if (peerInfo.remoteStatus.capability == com.chipprbots.ethereum.network.p2p.messages.Capability.ETH69)
+          s"latestBlock=${peerInfo.remoteStatus.latestBlock.getOrElse("?")} TD=${peerInfo.remoteStatus.chainWeight.totalDifficulty} (ETH/69, TD from local DB or block-number proxy)"
+        else
+          s"TD=${peerInfo.remoteStatus.chainWeight.totalDifficulty}"
+      log.debug(
+        "PEER_HANDSHAKE_SUCCESS: Peer {} handshake successful. Capability: {}, BestHash: {}, ChainInfo: {}",
         peer.id,
         peerInfo.remoteStatus.capability,
         ByteStringUtils.hash2string(peerInfo.remoteStatus.bestHash),
-        peerInfo.remoteStatus.chainWeight.totalDifficulty
+        chainInfoDisplay
       )
       peerEventBusActor ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)))
       peerEventBusActor ! Subscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)))
@@ -236,24 +264,30 @@ class NetworkPeerManagerActor(
     *   new updated peer info
     */
   private def handleReceivedMessage(message: Message, initialPeerWithInfo: PeerWithInfo): PeerInfo = {
-    // Log received BlockHeaders for debugging GetBlockHeaders response tracking
+    // Log non-empty BlockHeaders at debug; count empty responses for 60s summary
     message match {
       case m: ETH62BlockHeaders =>
-        log.info(
-          "RECV_BLOCKHEADERS: peer={}, count={}, blockNumbers={}",
-          initialPeerWithInfo.peer.id,
-          m.headers.size,
-          m.headers.take(5).map(_.number).mkString(", ") + (if (m.headers.size > 5) "..." else "")
-        )
+        if (m.headers.nonEmpty)
+          log.debug(
+            "RECV_BLOCKHEADERS: peer={}, count={}, blockNumbers={}",
+            initialPeerWithInfo.peer.id,
+            m.headers.size,
+            m.headers.take(5).map(_.number).mkString(", ") + (if (m.headers.size > 5) "..." else "")
+          )
+        else
+          emptyHeaderResponses += 1
       case m: ETH66BlockHeaders =>
-        log.info(
-          "RECV_BLOCKHEADERS: peer={}, requestId={}, count={}, blockNumbers={}",
-          initialPeerWithInfo.peer.id,
-          m.requestId,
-          m.headers.size,
-          m.headers.take(5).map(_.number).mkString(", ") + (if (m.headers.size > 5) "..." else "")
-        )
-      case _ => // Don't log other message types at INFO level
+        if (m.headers.nonEmpty)
+          log.debug(
+            "RECV_BLOCKHEADERS: peer={}, requestId={}, count={}, blockNumbers={}",
+            initialPeerWithInfo.peer.id,
+            m.requestId,
+            m.headers.size,
+            m.headers.take(5).map(_.number).mkString(", ") + (if (m.headers.size > 5) "..." else "")
+          )
+        else
+          emptyHeaderResponses += 1
+      case _ => // Don't log other message types
     }
 
     (updateChainWeight(message) _)
@@ -360,6 +394,8 @@ class NetworkPeerManagerActor(
         update(Seq((m.block.header.number, m.block.header.hash)))
       case m: NewBlockHashes =>
         update(m.hashes.map(h => (h.number, h.hash)))
+      case m: ETH69.BlockRangeUpdate =>
+        update(Seq((m.latestBlock, m.latestBlockHash)))
       case _ => initialPeerInfo
     }
   }
@@ -605,7 +641,7 @@ class NetworkPeerManagerActor(
     val response: ByteCodes =
       try {
         val maxBytes = msg.responseBytes.toInt.max(0)
-        val codes: Seq[ByteString] = evmCodeStorage match {
+        val codes: Seq[ByteString] = evmCodeStorageOpt match {
           case Some(storage) =>
             val collected = scala.collection.mutable.ListBuffer.empty[ByteString]
             var totalBytes = 0
@@ -639,6 +675,7 @@ object NetworkPeerManagerActor {
     Codes.BlockHeadersCode,
     Codes.NewBlockCode,
     Codes.NewBlockHashesCode,
+    Codes.BlockRangeUpdateCode,
     // SNAP protocol response codes (responses we receive from peers)
     SNAP.Codes.AccountRangeCode,
     SNAP.Codes.StorageRangesCode,
@@ -664,7 +701,8 @@ object NetworkPeerManagerActor {
       bestHash: ByteString,
       genesisHash: ByteString,
       supportsSnap: Boolean = false,
-      capabilities: List[Capability] = List.empty
+      capabilities: List[Capability] = List.empty,
+      latestBlock: Option[BigInt] = None
   ) {
     override def toString: String =
       s"RemoteStatus { " +
@@ -675,6 +713,7 @@ object NetworkPeerManagerActor {
         s"genesisHash: ${ByteStringUtils.hash2string(genesisHash)}, " +
         s"supportsSnap: $supportsSnap, " +
         s"capabilities: ${capabilities.mkString("[", ", ", "]")}" +
+        s"latestBlock: $latestBlock" +
         s"}"
   }
 
@@ -733,21 +772,28 @@ object NetworkPeerManagerActor {
         List.empty
       )
 
-    /** ETH/69: no totalDifficulty — use latestBlock number as a proxy for chain weight */
+    /** ETH/69: no totalDifficulty on the wire. Caller provides a resolved ChainWeight — either
+      * looked up from local ChainWeightStorage via latestBlockHash (accurate PoW TD when the
+      * peer's block is already in our chain) or a block-number proxy as fallback.
+      * latestBlock is stored separately so PeerInfo.apply can initialize maxBlockNumber correctly
+      * without conflating it with chainWeight.totalDifficulty.
+      */
     def fromETH69Status(
         status: com.chipprbots.ethereum.network.p2p.messages.ETH69.Status,
         negotiatedCapability: Capability,
         supportsSnap: Boolean,
-        capabilities: List[Capability]
+        capabilities: List[Capability],
+        resolvedChainWeight: ChainWeight
     ): RemoteStatus =
       RemoteStatus(
         negotiatedCapability,
         status.networkId,
-        ChainWeight.totalDifficultyOnly(status.latestBlock), // Use block number as weight proxy
+        resolvedChainWeight,
         status.latestBlockHash,
         status.genesisHash,
         supportsSnap,
-        capabilities
+        capabilities,
+        latestBlock = Some(status.latestBlock)
       )
   }
 
@@ -790,8 +836,8 @@ object NetworkPeerManagerActor {
       // peerHasUpdatedBestBlock filters out new peers before they can exchange any block data.
       val initialMaxBlock: BigInt =
         if (remoteStatus.capability == com.chipprbots.ethereum.network.p2p.messages.Capability.ETH69)
-          remoteStatus.chainWeight.totalDifficulty // ETH/69: latestBlock number stored as TD
-        else BigInt(0) // ETH/64-68: don't confuse TD with block number
+          remoteStatus.latestBlock.getOrElse(BigInt(0)) // ETH/69: block number from Status, stored separately
+        else BigInt(0) // ETH/64-68: maxBlockNumber is updated via peerHasUpdatedBestBlock messages
       PeerInfo(
         remoteStatus,
         remoteStatus.chainWeight,
@@ -811,6 +857,7 @@ object NetworkPeerManagerActor {
   private[network] case class PeerWithInfo(peer: Peer, peerInfo: PeerInfo)
 
   case object GetHandshakedPeers
+  private[network] case object LogNetworkSummary
 
   case class HandshakedPeers(peers: Map[Peer, PeerInfo])
 
@@ -829,7 +876,7 @@ object NetworkPeerManagerActor {
       appStateStorage: AppStateStorage,
       forkResolverOpt: Option[ForkResolver],
       snapSyncControllerOpt: Option[ActorRef] = None,
-      evmCodeStorage: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
+      evmCodeStorageOpt: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
       mptStorageOpt: Option[com.chipprbots.ethereum.db.storage.MptStorage] = None,
       blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader] = None
   ): Props =
@@ -840,7 +887,7 @@ object NetworkPeerManagerActor {
         appStateStorage,
         forkResolverOpt,
         snapSyncControllerOpt,
-        evmCodeStorage,
+        evmCodeStorageOpt,
         mptStorageOpt,
         blockchainReader
       )
