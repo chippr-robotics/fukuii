@@ -276,6 +276,7 @@ class RLPxConnectionHandler(
 
     private var helloAckPending: Boolean = false
     private var helloWriteAcknowledged: Boolean = false
+    private var activeMessageCodec: Option[MessageCodec] = None
 
     private def markHelloAsSent(): Unit = {
       helloAckPending = true
@@ -294,14 +295,16 @@ class RLPxConnectionHandler(
         log.debug("[RLPx] Hello write acknowledged for peer {} - deferring compression enable", peerId)
       }
 
-    private def registerMessageCodec(messageCodec: MessageCodec): Unit =
-      // Enable inbound compression when MessageCodec is registered.
-      // Happens after Hello exchange is complete, matching Core-Geth behavior
+    private def registerMessageCodec(messageCodec: MessageCodec): Unit = {
+      activeMessageCodec = Some(messageCodec)
+      // CRITICAL FIX: Enable inbound compression when MessageCodec is registered
+      // This happens after Hello exchange is complete, matching Core-Geth behavior
       // where SetSnappy is called after doProtoHandshake completes.
       if (helloWriteAcknowledged) {
         messageCodec.enableInboundCompression("handshake-complete")
         log.debug("[RLPx] Enabled inbound compression for peer {} after handshake complete", peerId)
       }
+    }
 
     /** Write a Hello message directly without compression. This is used to handle late Hello messages that arrive after
       * handshake completion, preventing them from being compressed via MessageCodec. Matches HelloCodec.writeHello
@@ -675,8 +678,8 @@ class RLPxConnectionHandler(
         messageCodec: MessageCodec,
         inboundTranslator: InboundTranslator,
         messagesNotSent: Queue[MessageSerializable] = Queue.empty,
-        cancellableAckTimeout: Option[CancellableAckTimeout],
-        seqNumber: Int
+        cancellableAckTimeout: Option[CancellableAckTimeout] = None,
+        seqNumber: Int = 0
     ): Receive =
       handleConnectionTerminated.orElse(handleWriteFailed).orElse(handleConnectionClosed).orElse {
         case SendMessage(h: HelloEnc) =>
@@ -875,8 +878,8 @@ class RLPxConnectionHandler(
 
 object RLPxConnectionHandler {
   // Per-connection event counters — read+reset every 60s by NetworkPeerManagerActor summary
-  val tcpFailedCount = new java.util.concurrent.atomic.AtomicInteger(0)
-  val authFailedCount = new java.util.concurrent.atomic.AtomicInteger(0)
+  val tcpFailedCount   = new java.util.concurrent.atomic.AtomicInteger(0)
+  val authFailedCount  = new java.util.concurrent.atomic.AtomicInteger(0)
   val authTimeoutCount = new java.util.concurrent.atomic.AtomicInteger(0)
 
   def props(
