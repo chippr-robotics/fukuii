@@ -214,6 +214,112 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
       assert(storage.isSnapSyncInProgress())
       assert(!storage.isSnapSyncDone())
     }
+
+    // ---- J10: SNAP phase completion flag round-trips ----------------------------
+
+    "round-trip isSnapSyncAccountsComplete flag" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      assert(!storage.isSnapSyncAccountsComplete())
+      storage.putSnapSyncAccountsComplete(true).commit()
+      assert(storage.isSnapSyncAccountsComplete())
+      storage.putSnapSyncAccountsComplete(false).commit()
+      assert(!storage.isSnapSyncAccountsComplete())
+    }
+
+    "round-trip isSnapSyncStorageComplete flag" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      assert(!storage.isSnapSyncStorageComplete())
+      storage.putSnapSyncStorageComplete(true).commit()
+      assert(storage.isSnapSyncStorageComplete())
+    }
+
+    "round-trip isSnapSyncBytecodeComplete flag" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      assert(!storage.isSnapSyncBytecodeComplete())
+      storage.putSnapSyncBytecodeComplete(true).commit()
+      assert(storage.isSnapSyncBytecodeComplete())
+    }
+
+    "phase completion flags are independent — setting one does not affect the others" taggedAs (
+      UnitTest,
+      DatabaseTest
+    ) in new Fixtures {
+      val storage = newAppStateStorage()
+      storage.putSnapSyncAccountsComplete(true).commit()
+      assert(storage.isSnapSyncAccountsComplete())
+      assert(!storage.isSnapSyncStorageComplete())
+      assert(!storage.isSnapSyncBytecodeComplete())
+
+      storage.putSnapSyncStorageComplete(true).commit()
+      assert(storage.isSnapSyncAccountsComplete())
+      assert(storage.isSnapSyncStorageComplete())
+      assert(!storage.isSnapSyncBytecodeComplete())
+    }
+
+    "persist and retrieve codeHashes file path" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      assert(storage.getSnapSyncCodeHashesPath().isEmpty)
+      storage.putSnapSyncCodeHashesPath("/data/tmp/snap-code-hashes-abc123.bin").commit()
+      assert(storage.getSnapSyncCodeHashesPath() == Some("/data/tmp/snap-code-hashes-abc123.bin"))
+    }
+
+    "persist and retrieve storage file path" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      assert(storage.getSnapSyncStorageFilePath().isEmpty)
+      storage.putSnapSyncStorageFilePath("/data/tmp/contract-storage.bin").commit()
+      assert(storage.getSnapSyncStorageFilePath() == Some("/data/tmp/contract-storage.bin"))
+    }
+
+    "persist and retrieve finalized state root" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage   = newAppStateStorage()
+      val root      = ByteString(Array.fill[Byte](32)(0xde.toByte))
+      assert(storage.getSnapSyncFinalizedRoot().isEmpty)
+      storage.putSnapSyncFinalizedRoot(root).commit()
+      assert(storage.getSnapSyncFinalizedRoot() == Some(root))
+    }
+
+    // J10: full lifecycle regression — models crash-recovery restart detection.
+    // SNAPSyncController uses isSnapSyncInProgress() at startup to determine whether
+    // to resume (resume path) or start fresh (clean path). This test locks the lifecycle
+    // so a storage refactor cannot silently break the recovery guard.
+    "SNAP lifecycle: fresh → pivot → progress → done → cleared" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      val root    = ByteString(Array.fill[Byte](32)(0xca.toByte))
+
+      // Fresh: nothing persisted → not in-progress, not done
+      assert(!storage.isSnapSyncInProgress())
+      assert(!storage.isSnapSyncDone())
+
+      // Pivot chosen (before first AccountRangeProgress message) → in-progress
+      storage.putSnapSyncPivotBlock(BigInt(18_000_000)).commit()
+      assert(storage.isSnapSyncInProgress())
+      assert(!storage.isSnapSyncDone())
+
+      // Progress accumulated — pivot + state-root + progress all present
+      storage.putSnapSyncStateRoot(root).and(
+        storage.putSnapSyncProgress("""{"phase":"AccountRangeSync","accountsSynced":500000}""")
+      ).commit()
+      assert(storage.isSnapSyncInProgress())
+      assert(!storage.isSnapSyncDone())
+
+      // Phase completions written
+      storage.putSnapSyncAccountsComplete(true)
+        .and(storage.putSnapSyncStorageComplete(true))
+        .and(storage.putSnapSyncBytecodeComplete(true))
+        .commit()
+      assert(storage.isSnapSyncInProgress()) // still in-progress until Done flag
+
+      // Healing finishes → SnapSyncDone flag set
+      storage.snapSyncDone().commit()
+      assert(!storage.isSnapSyncInProgress()) // Done wins
+      assert(storage.isSnapSyncDone())
+
+      // Bug-30 escape: clear both Done flags so SyncController re-enters SNAP from scratch
+      storage.clearSnapSyncDone().and(storage.clearFastSyncDone()).commit()
+      assert(!storage.isSnapSyncDone())
+      // pivotBlock + stateRoot still present → still in-progress (resume path, not fresh path)
+      assert(storage.isSnapSyncInProgress())
+    }
   }
 
   trait Fixtures {
