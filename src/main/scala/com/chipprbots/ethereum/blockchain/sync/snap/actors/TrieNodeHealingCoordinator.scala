@@ -105,6 +105,8 @@ class TrieNodeHealingCoordinator(
   // Stateless peer tracking (geth-aligned: peers that return empty TrieNodes for current root)
   private val statelessPeers = mutable.Set[String]()
   private var pivotRefreshRequested: Boolean = false
+  private var pivotRefreshRequestedAt: Long = 0L
+  private val PivotRefreshWatchdogMs: Long = 15.minutes.toMillis
 
   // Consecutive timeout tracking: peers that time out repeatedly are treated as stateless.
   // Timeouts on ETH mainnet peers (which advertise snap/1 but lack ETC state) produce 60s hangs
@@ -340,6 +342,21 @@ class TrieNodeHealingCoordinator(
           s"pivotRefreshPending=$pivotRefreshRequested"
       )
       lastPulseHealedCount = totalNodesHealed
+
+      // BUG-S4 watchdog: if pivotRefreshRequested=true for >15 min, SNAPSyncController is stuck
+      // in refreshPivotInPlace's no-peer retry loop (Path A: 30s interval, HealingPivotRefreshed
+      // never sent). Safe to reset: stateRoot stays valid; stagnation re-fires if still stuck.
+      if (pivotRefreshRequested) {
+        val waitedMs = System.currentTimeMillis() - pivotRefreshRequestedAt
+        if (waitedMs > PivotRefreshWatchdogMs) {
+          log.warning(
+            s"[HEAL] Pivot refresh watchdog: pivotRefreshRequested=true for ${waitedMs / 1000}s — " +
+              s"SNAPSyncController refresh stalled (no-peer retry loop). Resetting and resuming dispatch."
+          )
+          pivotRefreshRequested = false
+          tryRedispatchPendingTasks()
+        }
+      }
 
       // FIX-STAGNATION-LIMIT: Track consecutive zero-progress cycles (independent of active count).
       // After MaxConsecutiveStagnations, notify controller to restart with fresh pivot.
@@ -611,6 +628,7 @@ class TrieNodeHealingCoordinator(
       // Check if all known peers are stateless — request pivot refresh
       if (statelessPeers.size >= knownAvailablePeers.size && knownAvailablePeers.nonEmpty && !pivotRefreshRequested) {
         pivotRefreshRequested = true
+        pivotRefreshRequestedAt = System.currentTimeMillis()
         log.warning(
           s"All ${statelessPeers.size} peers stateless for healing root " +
             s"${Hex.toHexString(stateRoot.take(4).toArray)}. Requesting pivot refresh."
@@ -661,6 +679,7 @@ class TrieNodeHealingCoordinator(
       )
       if (statelessPeers.size >= knownAvailablePeers.size && knownAvailablePeers.nonEmpty && !pivotRefreshRequested) {
         pivotRefreshRequested = true
+        pivotRefreshRequestedAt = System.currentTimeMillis()
         log.warning(
           s"All ${statelessPeers.size} healing peers stateless (via timeouts) for root " +
             s"${Hex.toHexString(stateRoot.take(4).toArray)}. Requesting pivot refresh."
@@ -697,6 +716,7 @@ class TrieNodeHealingCoordinator(
       lastHealedAtMs = System.currentTimeMillis() // prevent re-firing while refresh in flight
       snapSyncController ! actors.Messages.HealingStagnated(totalNodesHealed.toLong, pendingTasks.size.toLong)
       pivotRefreshRequested = true
+      pivotRefreshRequestedAt = System.currentTimeMillis()
     }
 
     tryRedispatchPendingTasks()
