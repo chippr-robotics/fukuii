@@ -226,7 +226,6 @@ class PendingTransactionsManager(
       pendingTransactions.put(newStx.hash, PendingTransaction(newPendingTx, timestamp, receivedFromLocalSource = true))
       updatePendingNonces(Seq(newPendingTx))
       context.system.eventStream.publish(NewPendingTransaction(newPendingTx))
-
       val peers = connectedPeers.values.toSeq
       if (peers.nonEmpty) {
         self ! NotifyPeers(Seq(newPendingTx), peers)

@@ -59,8 +59,8 @@ object EthTxJsonMethodsImplicits extends JsonMethodsImplicits {
       "from" -> encodeAsHex(receipt.from.bytes)
     )
 
-    // "to" is null for contract creation, address for regular transactions
-    val toField = List("to" -> receipt.to.map(addr => encodeAsHex(addr.bytes)).getOrElse(JNull))
+    // "to" is always present: the recipient address for regular txs, JNull for contract creation
+    val toField = receipt.to.map(addr => List("to" -> encodeAsHex(addr.bytes))).getOrElse(List("to" -> JNull))
 
     // Continue with more fields
     val middleFields = List(

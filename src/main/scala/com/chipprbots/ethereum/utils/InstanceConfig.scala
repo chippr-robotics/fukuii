@@ -43,9 +43,6 @@ class InstanceConfig(val config: TypesafeConfig, val instanceId: String = "defau
 
   import com.chipprbots.ethereum.network.p2p.messages.Capability
   val supportedCapabilities: List[Capability] = List(
-    Capability.ETH65,
-    Capability.ETH66,
-    Capability.ETH67,
     Capability.ETH68,
     Capability.ETH69,
     Capability.SNAP1
