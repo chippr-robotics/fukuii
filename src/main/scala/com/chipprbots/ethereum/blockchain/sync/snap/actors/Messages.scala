@@ -30,6 +30,7 @@ object Messages {
       result: Either[String, (Int, Seq[(ByteString, com.chipprbots.ethereum.domain.Account)], Seq[ByteString])]
   ) extends AccountRangeCoordinatorMessage
   case class TaskFailed(requestId: BigInt, reason: String) extends AccountRangeCoordinatorMessage
+  case class PeerUnavailable(peerId: String)               extends AccountRangeCoordinatorMessage
   case object GetProgress extends AccountRangeCoordinatorMessage
   case object GetContractAccounts extends AccountRangeCoordinatorMessage
   case class ContractAccountsResponse(accounts: Seq[(ByteString, ByteString)]) extends AccountRangeCoordinatorMessage
@@ -46,6 +47,10 @@ object Messages {
   /** Request storage file metadata for async streaming. Returns instantly (no file read). */
   case object GetStorageFileInfo extends AccountRangeCoordinatorMessage
   case class StorageFileInfoResponse(filePath: java.nio.file.Path, count: Long)
+
+  /** Request codeHashes file metadata for bytecode recovery. Returns instantly (no file read). */
+  case object GetCodeHashesFileInfo extends AccountRangeCoordinatorMessage
+  case class CodeHashesFileInfoResponse(filePath: java.nio.file.Path, count: Long)
   case object CheckCompletion extends AccountRangeCoordinatorMessage
 
   /** Sent by AccountRangeCoordinator to SNAPSyncController with progress for ALL ranges. Maps range `last` hash →
@@ -76,7 +81,8 @@ object Messages {
       responseBytes: BigInt = BigInt(512 * 1024)
   ) extends AccountRangeWorkerMessage
   case class AccountRangeResponseMsg(response: AccountRange) extends AccountRangeWorkerMessage
-  case class RequestTimeout(requestId: BigInt) extends AccountRangeWorkerMessage
+  case class RequestTimeout(requestId: BigInt)               extends AccountRangeWorkerMessage
+  case class WorkerPeerDisconnected(peerId: String)          extends AccountRangeWorkerMessage
 
   // ========================================
   // ByteCode Messages
@@ -113,6 +119,11 @@ object Messages {
       extends ByteCodeWorkerMessage
   case class ByteCodesResponseMsg(response: ByteCodes) extends ByteCodeWorkerMessage
   case class ByteCodeRequestTimeout(requestId: BigInt) extends ByteCodeWorkerMessage
+
+  /** Sent by ByteCodeCoordinator to ByteCodeWorker after processing the response. Worker cancels
+    * its timeout and transitions from working to idle state without waiting for the 30s timeout.
+    */
+  case class ByteCodeWorkerRelease(requestId: BigInt) extends ByteCodeWorkerMessage
   case class ByteCodeProgress(progress: Double, bytecodesDownloaded: Long, bytesDownloaded: Long)
 
   // ========================================
@@ -194,6 +205,17 @@ object Messages {
     * clears pending tasks and stateless tracking. A new trie walk will re-populate tasks for the new root.
     */
   case class HealingPivotRefreshed(newStateRoot: ByteString) extends TrieNodeHealingCoordinatorMessage
+
+  /** Sent by coordinator after MaxConsecutiveStagnations consecutive 2-min HEAL-PULSE cycles with zero
+    * healed nodes. Controller should stop coordinator, clear walk checkpoint, refresh pivot.
+    */
+  case class HealingStagnated(healed: Long, pending: Long) extends TrieNodeHealingCoordinatorMessage
+
+  /** Sent by SNAPSyncController when pivot advanced beyond SNAP serve window during healing (Besu
+    * reloadTrieHeal pattern). Coordinator abandons pending tasks and signals completion so a fresh
+    * coordinator + walk can start for the new root.
+    */
+  case object HealingForceComplete extends TrieNodeHealingCoordinatorMessage
 
   sealed trait TrieNodeHealingWorkerMessage
   case class FetchTrieNodes(task: HealingTask, peer: Peer) extends TrieNodeHealingWorkerMessage

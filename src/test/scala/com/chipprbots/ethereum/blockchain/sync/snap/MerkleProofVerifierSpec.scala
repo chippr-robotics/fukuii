@@ -13,7 +13,10 @@ import com.chipprbots.ethereum.testing.TestMptStorage
 
 class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
 
-  "MerkleProofVerifier" should "reject empty proof for empty account list when trie is non-empty" taggedAs UnitTest in {
+  "MerkleProofVerifier" should "accept empty proof for empty account list as valid empty range" taggedAs UnitTest in {
+    // Empty accounts + empty proof is a valid SNAP response meaning the keyspace region has
+    // no accounts. Previously this returned Left("Missing proof for empty account range") which
+    // triggered false stateless-peer marking. Fixed by BUG-EMPTY-RANGE (a80b2434d).
     val stateRoot = kec256(ByteString("test-root"))
     val verifier = MerkleProofVerifier(stateRoot)
 
@@ -24,8 +27,7 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
       endHash = ByteString.fromArray(Array.fill(32)(0xff.toByte))
     )
 
-    result shouldBe a[Left[_, _]]
-    result.left.get should include("Missing proof for empty account range")
+    result shouldBe Right(())
   }
 
   it should "accept empty proof for empty account list when trie is empty" taggedAs UnitTest in {
@@ -243,5 +245,131 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
     }
 
     nodes.toSeq
+  }
+
+  // ---- J6: Missing coverage -----------------------------------------------
+
+  it should "reject accounts with missing proof when proof is empty" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("some-root"))
+    val verifier  = MerkleProofVerifier(stateRoot)
+
+    val result = verifier.verifyAccountRange(
+      accounts = Seq(ByteString("addr1") -> Account(nonce = 1, balance = 10)),
+      proof    = Seq.empty,
+      startHash = ByteString.empty,
+      endHash   = ByteString.fromArray(Array.fill(32)(0xff.toByte))
+    )
+
+    result shouldBe a[Left[_, _]]
+    result.left.get should include("Missing proof")
+  }
+
+  it should "reject storage slots that are not monotonically increasing" taggedAs UnitTest in {
+    val storageRoot = kec256(ByteString("storage-root"))
+    val verifier    = MerkleProofVerifier(storageRoot)
+
+    // slot2 < slot1 — out of order
+    val slot1 = ByteString(Array.fill(31)(0x00.toByte) :+ 0x42.toByte)
+    val slot2 = ByteString(Array.fill(31)(0x00.toByte) :+ 0x10.toByte)
+
+    val result = verifier.verifyStorageRange(
+      slots = Seq(slot1 -> ByteString("v1"), slot2 -> ByteString("v2")),
+      proof = Seq.empty,
+      startHash = ByteString.empty,
+      endHash   = ByteString.fromArray(Array.fill(32)(0xff.toByte))
+    )
+
+    result shouldBe a[Left[_, _]]
+    result.left.get should include("monotonic")
+  }
+
+  it should "reject storage slots where first slot is before requested start" taggedAs UnitTest in {
+    val storageRoot = kec256(ByteString("storage-root"))
+    val verifier    = MerkleProofVerifier(storageRoot)
+
+    // startHash = 0x10..., first slot = 0x05... → before start
+    val startHash = ByteString(Array.fill(31)(0x00.toByte) :+ 0x10.toByte)
+    val slot      = ByteString(Array.fill(31)(0x00.toByte) :+ 0x05.toByte)
+
+    val result = verifier.verifyStorageRange(
+      slots     = Seq(slot -> ByteString("v")),
+      proof     = Seq.empty,
+      startHash = startHash,
+      endHash   = ByteString.fromArray(Array.fill(32)(0xff.toByte))
+    )
+
+    result shouldBe a[Left[_, _]]
+    result.left.get should include("before requested start")
+  }
+
+  it should "reject storage slots where last slot is at or after endHash" taggedAs UnitTest in {
+    val storageRoot = kec256(ByteString("storage-root"))
+    val verifier    = MerkleProofVerifier(storageRoot)
+
+    // endHash = 0x80..., last slot = 0x80... → at limit (exclusive upper bound)
+    val endHash = ByteString(Array.fill(31)(0x00.toByte) :+ 0x80.toByte)
+    val slot    = ByteString(Array.fill(31)(0x00.toByte) :+ 0x80.toByte)
+
+    val result = verifier.verifyStorageRange(
+      slots     = Seq(slot -> ByteString("v")),
+      proof     = Seq.empty,
+      startHash = ByteString.empty,
+      endHash   = endHash
+    )
+
+    result shouldBe a[Left[_, _]]
+    result.left.get should include("at/after requested limit")
+  }
+
+  it should "accept storage slots that are monotonically increasing within bounds" taggedAs UnitTest in {
+    val storageRoot = kec256(ByteString("storage-root"))
+    val verifier    = MerkleProofVerifier(storageRoot)
+
+    val slot1 = ByteString(Array.fill(31)(0x00.toByte) :+ 0x10.toByte)
+    val slot2 = ByteString(Array.fill(31)(0x00.toByte) :+ 0x20.toByte)
+    val slot3 = ByteString(Array.fill(31)(0x00.toByte) :+ 0x30.toByte)
+
+    val result = verifier.verifyStorageRange(
+      slots     = Seq(slot1 -> ByteString("v1"), slot2 -> ByteString("v2"), slot3 -> ByteString("v3")),
+      proof     = Seq.empty,
+      startHash = ByteString.empty,
+      endHash   = ByteString.fromArray(Array.fill(32)(0xff.toByte))
+    )
+
+    result shouldBe Right(())
+  }
+
+  it should "accept proof-of-absence for storage range with empty slots and valid proof" taggedAs UnitTest in {
+    val storage     = new TestMptStorage()
+    val storageTrie = MerklePatriciaTrie[ByteString, ByteString](storage)
+    val storageRoot = ByteString(storageTrie.getRootHash)
+    val verifier    = MerkleProofVerifier(storageRoot)
+
+    // Empty trie root → empty proof is valid proof-of-absence
+    val result = verifier.verifyStorageRange(
+      slots     = Seq.empty,
+      proof     = Seq.empty,
+      startHash = ByteString.empty,
+      endHash   = ByteString.fromArray(Array.fill(32)(0xff.toByte))
+    )
+
+    result shouldBe Right(())
+  }
+
+  it should "reject a malformed proof node for storage range" taggedAs UnitTest in {
+    val storageRoot = kec256(ByteString("storage-root"))
+    val verifier    = MerkleProofVerifier(storageRoot)
+
+    val malformedProof = Seq(ByteString("not-valid-rlp-xxxxxxxxxx"))
+    val slot = ByteString(Array.fill(32)(0x10.toByte))
+
+    val result = verifier.verifyStorageRange(
+      slots     = Seq(slot -> ByteString("value")),
+      proof     = malformedProof,
+      startHash = ByteString.empty,
+      endHash   = ByteString.fromArray(Array.fill(32)(0xff.toByte))
+    )
+
+    result shouldBe a[Left[_, _]]
   }
 }

@@ -207,8 +207,19 @@ class AccountRangeCoordinator(
   private val ProgressLogInterval: Long = 100_000 // log every 100K accounts
   private val totalKeyspace: BigInt = BigInt(2).pow(256)
   // Cumulative keyspace consumed: incremented each time a task's `next` advances.
-  // This avoids the jitter from snapshotting in-flight task positions.
-  private var consumedKeyspace: BigInt = BigInt(0)
+  // On restart, derive from restored task positions so progress % and ETA are accurate.
+  private var consumedKeyspace: BigInt = {
+    if (resumeProgress.nonEmpty) {
+      val toBI = (bs: ByteString) => BigInt(1, bs.toArray.padTo(32, 0.toByte))
+      // Re-create pristine tasks to recover original range starts (keyed by `last` boundary).
+      val originalStarts: Map[ByteString, BigInt] =
+        AccountTask.createInitialTasks(initialStateRoot, concurrency).map(t => t.last -> toBI(t.next)).toMap
+      (skippedTasks ++ remainingTasks).foldLeft(BigInt(0)) { (acc, task) =>
+        val orig = originalStarts.getOrElse(task.last, toBI(task.last))
+        acc + (toBI(task.next) - orig).max(BigInt(0))
+      }
+    } else BigInt(0)
+  }
 
   // Contract accounts persisted to temp files to avoid unbounded memory growth.
   // On ETC mainnet ~20% of ~67M accounts are contracts — ~13M entries × 64 bytes each
@@ -451,6 +462,23 @@ class AccountRangeCoordinator(
       maxInFlightPerPeer = newLimit
       if (newLimit > 0) tryRedispatchPendingTasks()
 
+    case PeerUnavailable(peerId) =>
+      // Peer disconnected — remove from available set, reset its timeout counter so network-level
+      // disconnects don't accumulate toward the stateless threshold. Then immediately cancel any
+      // in-flight request to this peer so workers return to idle without waiting for 30s timeout.
+      // go-ethereum eth/protocols/snap/sync.go:1621 (revertRequests) and Besu
+      // AbstractRetryingPeerTask.java:158 both treat disconnect as transient re-queue, not failure.
+      knownAvailablePeers.find(_.id.value == peerId).foreach(knownAvailablePeers -= _)
+      peerConsecutiveTimeouts.remove(peerId)
+      peerCooldownUntilMs.remove(peerId)
+      val inFlight = activeTasks.collect {
+        case (reqId, (_, worker, peer)) if peer.id.value == peerId => (reqId, worker)
+      }.toSeq
+      if (inFlight.nonEmpty) {
+        log.debug(s"Peer $peerId disconnected — cancelling ${inFlight.size} in-flight request(s)")
+        inFlight.foreach { case (_, worker) => worker ! WorkerPeerDisconnected(peerId) }
+      }
+
     case TaskComplete(requestId, result) =>
       handleTaskComplete(requestId, result)
 
@@ -477,6 +505,10 @@ class AccountRangeCoordinator(
     case GetStorageFileInfo =>
       contractStorageOut.flush()
       sender() ! StorageFileInfoResponse(contractStorageFile, contractStorageCount)
+
+    case GetCodeHashesFileInfo =>
+      uniqueCodeHashesOut.flush()
+      sender() ! CodeHashesFileInfoResponse(uniqueCodeHashesFile, uniqueCodeHashesCount)
 
     case StoreAccountChunk(task, remaining, totalCount, storedSoFar, isTaskRangeComplete) =>
       handleStoreAccountChunk(task, remaining, totalCount, storedSoFar, isTaskRangeComplete)
@@ -560,6 +592,10 @@ class AccountRangeCoordinator(
     case GetStorageFileInfo =>
       contractStorageOut.flush()
       sender() ! StorageFileInfoResponse(contractStorageFile, contractStorageCount)
+
+    case GetCodeHashesFileInfo =>
+      uniqueCodeHashesOut.flush()
+      sender() ! CodeHashesFileInfoResponse(uniqueCodeHashesFile, uniqueCodeHashesCount)
 
     case CheckCompletion =>
     // Already finalizing, ignore
@@ -774,9 +810,9 @@ class AccountRangeCoordinator(
       task.rootHash = stateRoot
       pendingTasks.enqueue(task)
 
-      // Apply cooldown and reduce byte budget for failing peers (unless stateless-marked,
-      // which already blocks them from dispatch)
-      if (!reason.contains("Missing proof for empty account range")) {
+      // Apply cooldown and reduce byte budget for protocol failures; skip for network-level
+      // disconnects since the peer is already gone and will reconnect fresh.
+      if (!reason.contains("Missing proof for empty account range") && !reason.contains("Peer disconnected")) {
         recordPeerCooldown(peer, reason)
         adjustResponseBytesOnFailure(peer, reason)
       }
