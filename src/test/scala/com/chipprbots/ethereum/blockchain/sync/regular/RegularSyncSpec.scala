@@ -146,7 +146,7 @@ class RegularSyncSpec
         )
       })
 
-      "blacklist peer which returns headers starting from one with higher number than expected" taggedAs (
+      "not blacklist peer which returns headers not matching current state during reorg" taggedAs (
         UnitTest,
         SyncTest
       ) in sync(
@@ -181,22 +181,30 @@ class RegularSyncSpec
             NewBlock(testBlocks.last, ChainWeight.totalDifficultyOnly(testBlocks.last.number).totalDifficulty),
             defaultPeer.id
           )
+          // Headers from a much later chunk — HeadersNotMatchingWaitingHeaders fires.
+          // The peer is NOT blacklisted: during a reorg, an honest peer on an alternative
+          // chain will return headers that don't extend the local waiting state. Besu
+          // AbstractPeerTask.java distinguishes HeadersNotMatchingExpected (no penalty) from
+          // InvalidHeaders (blacklist). Expect a retry request instead of BlacklistPeer.
           nextHeadersSender ! PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked(5).headers))
           peersClient.fishForSpecificMessage() {
-            case PeersClient.BlacklistPeer(id, _) if id == defaultPeer.id => ()
+            case PeersClient.Request(_: ETH66GetBlockHeaders, _, _) => ()
           }
         }
       )
 
-      "blacklist peer which returns headers not forming a chain" in sync(new Fixture(testSystem) {
+      "not blacklist peer which returns headers not forming a chain" in sync(new Fixture(testSystem) {
+        // HeadersNotFormingSeq: headers don't internally chain (e.g. skipped blocks).
+        // During a reorg an honest peer may send a valid fork segment that doesn't chain
+        // to our expected sequence. No blacklist — just drop and retry.
         regularSync ! SyncProtocol.Start
 
         peersClient.expectMsgEq(blockHeadersChunkRequest(0))
         peersClient.reply(
           PeersClient.Response(defaultPeer, BlockHeaders(testBlocks.headers.filter(_.number % 2 == 0)))
         )
-        peersClient.expectMsgPF() {
-          case PeersClient.BlacklistPeer(id, _) if id == defaultPeer.id => true
+        peersClient.fishForSpecificMessage() {
+          case PeersClient.Request(_: ETH66GetBlockHeaders, _, _) => ()
         }
       })
 
