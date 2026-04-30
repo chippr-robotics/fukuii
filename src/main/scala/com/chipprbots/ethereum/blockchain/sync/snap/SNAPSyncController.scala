@@ -193,6 +193,7 @@ class SNAPSyncController(
     case msg @ com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnected(peerId) =>
       handlePeerListMessages(msg)
       requestTracker.rateTracker.removePeer(peerId.value)
+      accountRangeCoordinator.foreach(_ ! actors.Messages.PeerUnavailable(peerId.value))
   }
 
   /** Wrap handlePeerListMessages to also update the PeerRateTracker when peers connect/disconnect. Tracks previous peer
@@ -215,6 +216,7 @@ class SNAPSyncController(
     case msg @ com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnected(peerId) =>
       handlePeerListMessages(msg) // removes from handshakedPeers
       requestTracker.rateTracker.removePeer(peerId.value)
+      accountRangeCoordinator.foreach(_ ! actors.Messages.PeerUnavailable(peerId.value))
   }
 
   // Storage stagnation watchdog: if storage stops advancing while tasks remain, repivot/restart.
