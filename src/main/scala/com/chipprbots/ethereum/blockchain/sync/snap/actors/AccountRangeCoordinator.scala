@@ -558,12 +558,12 @@ class AccountRangeCoordinator(
 
     case TrieFlushComplete(Left(error)) =>
       log.error(s"Failed to finalize trie: $error")
-      snapSyncController ! SNAPSyncController.ProgressAccountsTrieFinalized
+      snapSyncController ! SNAPSyncController.AccountTrieFinalizationFailed(error)
       context.stop(self)
 
     case Status.Failure(ex) =>
       log.error(ex, s"Trie finalization failed with exception: ${ex.getMessage}")
-      snapSyncController ! SNAPSyncController.ProgressAccountsTrieFinalized
+      snapSyncController ! SNAPSyncController.AccountTrieFinalizationFailed(ex.getMessage)
       context.stop(self)
 
     case _: PeerAvailable =>
