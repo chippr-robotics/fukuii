@@ -2596,14 +2596,32 @@ class SNAPSyncController(
 
   /** Final SNAP sync completion — called when both state sync and chain download are done. */
   private def finalizeSnapSync(pivot: BigInt): Unit = {
-    appStateStorage.snapSyncDone().commit()
-
+    import scala.util.boundary, boundary.break
+    boundary {
     // Look up the pivot header so we can store a complete "best block" anchor.
     // RegularSync's BranchResolution needs: header, body, number→hash mapping,
     // ChainWeight, and BestBlockInfo (hash + number) to accept blocks that chain
     // from the pivot.
     blockchainReader.getBlockHeaderByNumber(pivot) match {
       case Some(pivotHeader) =>
+        // A5: Root match guard — snapStateRoot must equal pivotHeader.stateRoot before
+        // marking sync done. Mirrors Besu SnapWorldDownloadState.saveWorldState() implicit
+        // verification. If they diverge (BUG-008 class), restart SNAP rather than committing
+        // a broken state.
+        appStateStorage.getSnapSyncStateRoot().foreach { snapRoot =>
+          if (snapRoot != pivotHeader.stateRoot) {
+            log.error(
+              "SNAP finalization aborted: snapStateRoot={} != pivotHeader.stateRoot={}. " +
+                "State trie root mismatch — escalating to SyncController for SNAP restart.",
+              snapRoot.toHex,
+              pivotHeader.stateRoot.toHex
+            )
+            context.parent ! SyncProtocol.HealingImpossible
+            break()
+          }
+        }
+
+
         val pivotHash = pivotHeader.hash
 
         // Store the full block (header + empty body) so getBlockByHash(pivotHash) returns
@@ -2649,6 +2667,7 @@ class SNAPSyncController(
 
     context.become(completed)
     context.parent ! Done
+    } // end boundary
   }
 
   /** Waiting for parallel chain download to finish after SNAP state sync completed. */
