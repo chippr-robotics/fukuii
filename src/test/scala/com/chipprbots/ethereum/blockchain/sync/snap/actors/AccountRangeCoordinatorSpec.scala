@@ -214,4 +214,54 @@ class AccountRangeCoordinatorSpec
     progress.progress should be <= 1.0
     progress.elapsedTimeMs should be >= 0L
   }
+
+  // ── K5-ext-a: Empty account range re-queue (fix 2d42eefbd) ──────────────────
+
+  it should "re-queue task and not consume keyspace on empty account range response" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("empty-range-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+
+    val peer = PeerTestHelpers.createTestPeer("empty-range-peer", peerProbe.ref)
+
+    val coordinator = system.actorOf(
+      AccountRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        concurrency = 1,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    coordinator ! Messages.StartAccountRangeSync(stateRoot)
+    coordinator ! Messages.PeerAvailable(peer)
+
+    // Worker dispatches a GetAccountRange — consume to keep the probe clean.
+    // SNAPRequestTracker starts at nextRequestId=1, so the first task is requestId=BigInt(1).
+    networkPeerManager.expectMsgType[Any](3.seconds)
+
+    // Simulate what the AccountRangeWorker sends back when it receives an empty AccountRange:
+    // TaskComplete with accountCount=0 and empty sequences.
+    coordinator ! Messages.TaskComplete(BigInt(1), Right((0, Seq.empty, Seq.empty)))
+
+    // The task must be re-queued: keyspace NOT consumed → progress stays near 0.
+    // This distinguishes the fix from the bug, which would have advanced consumedKeyspace.
+    within(3.seconds) {
+      awaitAssert {
+        coordinator ! Messages.GetProgress
+        val stats = expectMsgType[AccountRangeStats](1.second)
+        stats.progress should be < 0.01       // consumedKeyspace = 0
+        stats.accountsDownloaded shouldBe 0   // no real accounts stored
+        stats.tasksPending should be > 0      // task still in queue
+      }
+    }
+
+    // Sync controller must NOT receive a completion signal (tasks still pending).
+    snapSyncController.expectNoMessage(300.millis)
+  }
 }

@@ -227,7 +227,8 @@ object BlockchainConfig {
       MESSConfig(
         enabled = Try(messConf.getBoolean("enabled")).getOrElse(false),
         activationBlock = Try(BigInt(messConf.getString("ecbp1100-block-number"))).toOption,
-        deactivationBlock = Try(BigInt(messConf.getString("ecbp1100-deactivate-block-number"))).toOption
+        deactivationBlock = Try(BigInt(messConf.getString("ecbp1100-deactivate-block-number"))).toOption,
+        reactivationBlock = Try(BigInt(messConf.getString("ecbp1100-reactivate-block-number"))).toOption
       )
     }.getOrElse(MESSConfig())
 
