@@ -459,7 +459,6 @@ class SyncController(
       appStateStorage.clearFastSyncDone().commit()
     }
 
-
     // Dangling-best-block recovery. If the persisted best-block hash points to a block that
     // isn't actually in storage, the previous sync was interrupted before the canonical tip
     // could be written (e.g. mid-SNAP container restart while account download was incomplete).
@@ -510,7 +509,6 @@ class SyncController(
         }
       }
     }
-
 
     appStateStorage.putSyncStartingBlock(appStateStorage.getBestBlockNumber()).commit()
 
