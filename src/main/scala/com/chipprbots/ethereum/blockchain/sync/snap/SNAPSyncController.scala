@@ -158,22 +158,40 @@ class SNAPSyncController(
       (oldPeerIds -- newPeerIds).foreach { peerId =>
         requestTracker.rateTracker.removePeer(peerId.value)
       }
-      // If we just gained our first SNAP-capable peer(s), cancel the backoff timer and retry immediately.
+      // If we just gained our first SNAP-capable peer(s), trigger a retry.
+      // If any peer already has a known height, retry immediately (heights are ready).
+      // Otherwise schedule a short 2s delay for ETH status exchange to complete before
+      // the retry fires — avoids committing to genesis when heights are merely uninitialized.
       val hasSnapPeers = handshakedPeers.values.exists(_.peerInfo.remoteStatus.supportsSnap)
       if (!hadSnapPeers && hasSnapPeers) {
-        log.info(
-          s"First SNAP-capable peer(s) detected during bootstrap (${handshakedPeers.size} total, " +
-            s"${handshakedPeers.values.count(_.peerInfo.remoteStatus.supportsSnap)} snap). " +
-            s"Cancelling backoff timer and retrying immediately."
-        )
-        bootstrapCheckTask.foreach(_.cancel())
-        bootstrapCheckTask = None
-        self ! RetrySnapSyncStart
+        val anySnapPeerHasHeight = handshakedPeers.values
+          .filter(_.peerInfo.remoteStatus.supportsSnap)
+          .exists(_.peerInfo.maxBlockNumber > 0)
+
+        if (anySnapPeerHasHeight) {
+          log.info(
+            s"First SNAP-capable peer(s) with known height detected (${handshakedPeers.size} total, " +
+              s"${handshakedPeers.values.count(_.peerInfo.remoteStatus.supportsSnap)} snap). " +
+              s"Cancelling backoff timer and retrying immediately."
+          )
+          bootstrapCheckTask.foreach(_.cancel())
+          bootstrapCheckTask = None
+          self ! RetrySnapSyncStart
+        } else {
+          log.info(
+            s"First SNAP-capable peer(s) detected (${handshakedPeers.size} total, " +
+              s"${handshakedPeers.values.count(_.peerInfo.remoteStatus.supportsSnap)} snap) " +
+              s"but all heights unknown. Scheduling retry in 2s for ETH status exchange to complete."
+          )
+          bootstrapCheckTask.foreach(_.cancel())
+          bootstrapCheckTask = Some(scheduler.scheduleOnce(2.seconds)(self ! RetrySnapSyncStart)(ec))
+        }
       }
 
     case msg @ com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnected(peerId) =>
       handlePeerListMessages(msg)
       requestTracker.rateTracker.removePeer(peerId.value)
+      accountRangeCoordinator.foreach(_ ! actors.Messages.PeerUnavailable(peerId.value))
   }
 
   /** Wrap handlePeerListMessages to also update the PeerRateTracker when peers connect/disconnect. Tracks previous peer
@@ -196,6 +214,7 @@ class SNAPSyncController(
     case msg @ com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnected(peerId) =>
       handlePeerListMessages(msg) // removes from handshakedPeers
       requestTracker.rateTracker.removePeer(peerId.value)
+      accountRangeCoordinator.foreach(_ ! actors.Messages.PeerUnavailable(peerId.value))
   }
 
   // Storage stagnation watchdog: if storage stops advancing while tasks remain, repivot/restart.
@@ -1241,7 +1260,25 @@ class SNAPSyncController(
           return
 
         case NetworkPivot =>
-        // proceed with genesis pivot handling below
+          // Guard: if ALL snap peers have maxBlockNumber=0, heights haven't been populated yet.
+          // ETH/63-68 peers initialize to 0 and only update on BlockHeaders/NewBlockHashes.
+          // ETH/69 peers may also show 0 if the remote peer is also initializing.
+          // Treat this as "heights unknown" — retry rather than committing to genesis.
+          // go-ethereum: findBestPeer() requires bestPeer.head > 0 before pivot selection.
+          if (snapPeersForPivot.forall(_.peerInfo.maxBlockNumber == 0)) {
+            bootstrapRetryCount += 1
+            if (checkBootstrapRetryTimeout("snap peers present but all heights unknown")) return
+            val delay = 2.seconds
+            log.info(
+              s"[SNAP] ${snapPeersForPivot.size} snap peer(s) connected but all heights unknown — " +
+                s"waiting for ETH status exchange. Retrying in $delay (attempt $bootstrapRetryCount)."
+            )
+            bootstrapCheckTask.foreach(_.cancel())
+            bootstrapCheckTask = Some(scheduler.scheduleOnce(delay)(self ! RetrySnapSyncStart)(ec))
+            context.become(bootstrapping)
+            return
+          }
+        // else: ETH/69 peers genuinely confirmed low network height — proceed to genesis sync
       }
 
       log.info("=" * 80)

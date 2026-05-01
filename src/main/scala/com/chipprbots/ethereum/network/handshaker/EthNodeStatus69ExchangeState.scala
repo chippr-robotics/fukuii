@@ -47,14 +47,14 @@ case class EthNodeStatus69ExchangeState(
     val localGenesisHash = blockchainReader.genesisHeader.hash
 
     if (status.networkId != peerConfiguration.networkId) {
-      log.warn(
+      log.debug(
         "ETH69_STATUS: NetworkId mismatch! Local: {}, Remote: {} - disconnecting (SUBPROTOCOL_TRIGGERED_MISMATCHED_NETWORK)",
         peerConfiguration.networkId,
         status.networkId
       )
       DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
     } else if (status.genesisHash != localGenesisHash) {
-      log.warn(
+      log.debug(
         "ETH69_STATUS: Genesis hash mismatch! Local: {}, Remote: {} - disconnecting",
         localGenesisHash,
         status.genesisHash
@@ -68,7 +68,7 @@ case class EthNodeStatus69ExchangeState(
             status.forkId
           )
       } yield {
-        log.info("ETH69_STATUS: ForkId validation result: {}", validationResult)
+        log.debug("ETH69_STATUS: ForkId validation result: {}", validationResult)
         validationResult match {
           case Connect =>
             log.info("ETH69_STATUS: ForkId validation passed - accepting peer")
@@ -78,7 +78,7 @@ case class EthNodeStatus69ExchangeState(
               )
             )
           case other =>
-            log.warn("ETH69_STATUS: ForkId validation failed: {} - disconnecting", other)
+            log.debug("ETH69_STATUS: ForkId validation failed: {} - disconnecting", other)
             DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
         }
       }).unsafeRunSync()

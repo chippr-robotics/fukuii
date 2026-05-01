@@ -48,7 +48,7 @@ class PeerRequestHandler[RequestMsg <: Message, ResponseMsg <: Message: ClassTag
   private def timeTakenSoFar(): Long = System.currentTimeMillis() - startTime
 
   override def preStart(): Unit = {
-    log.info(
+    log.debug(
       "PEER_REQUEST: Starting request to peer={}, reqType={}, respCode=0x{}, timeout={}ms",
       peer.id,
       requestMsg.getClass.getSimpleName,
@@ -83,7 +83,7 @@ class PeerRequestHandler[RequestMsg <: Message, ResponseMsg <: Message: ClassTag
 
   def handleResponseMsg(responseMsg: ResponseMsg): Unit = {
     val elapsed = timeTakenSoFar()
-    log.info(
+    log.debug(
       "PEER_REQUEST_SUCCESS: peer={}, reqType={}, respType={}, elapsed={}ms",
       peer.id,
       requestMsg.getClass.getSimpleName,
@@ -97,7 +97,7 @@ class PeerRequestHandler[RequestMsg <: Message, ResponseMsg <: Message: ClassTag
 
   def handleTimeout(): Unit = {
     val elapsed = timeTakenSoFar()
-    log.error(
+    log.warning(
       "PEER_REQUEST_TIMEOUT: peer={}, reqType={}, elapsed={}ms (timeout={}ms)",
       peer.id,
       requestMsg.getClass.getSimpleName,
@@ -110,7 +110,7 @@ class PeerRequestHandler[RequestMsg <: Message, ResponseMsg <: Message: ClassTag
 
   def handleTerminated(): Unit = {
     val elapsed = timeTakenSoFar()
-    log.error(
+    log.warning(
       "PEER_REQUEST_DISCONNECTED: peer={}, reqType={}, elapsed={}ms - connection closed before response",
       peer.id,
       requestMsg.getClass.getSimpleName,

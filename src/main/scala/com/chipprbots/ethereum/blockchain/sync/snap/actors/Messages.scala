@@ -30,6 +30,7 @@ object Messages {
       result: Either[String, (Int, Seq[(ByteString, com.chipprbots.ethereum.domain.Account)], Seq[ByteString])]
   ) extends AccountRangeCoordinatorMessage
   case class TaskFailed(requestId: BigInt, reason: String) extends AccountRangeCoordinatorMessage
+  case class PeerUnavailable(peerId: String) extends AccountRangeCoordinatorMessage
   case object GetProgress extends AccountRangeCoordinatorMessage
   case object GetContractAccounts extends AccountRangeCoordinatorMessage
   case class ContractAccountsResponse(accounts: Seq[(ByteString, ByteString)]) extends AccountRangeCoordinatorMessage
@@ -77,6 +78,7 @@ object Messages {
   ) extends AccountRangeWorkerMessage
   case class AccountRangeResponseMsg(response: AccountRange) extends AccountRangeWorkerMessage
   case class RequestTimeout(requestId: BigInt) extends AccountRangeWorkerMessage
+  case class WorkerPeerDisconnected(peerId: String) extends AccountRangeWorkerMessage
 
   // ========================================
   // ByteCode Messages

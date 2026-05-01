@@ -560,6 +560,7 @@ trait EthMiningServiceBuilder {
 }
 trait EthTxServiceBuilder {
   self: BlockchainBuilder
+    with BlockchainConfigBuilder
     with PendingTransactionsManagerBuilder
     with MiningBuilder
     with TxPoolConfigBuilder

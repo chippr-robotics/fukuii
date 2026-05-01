@@ -304,7 +304,7 @@ object DiscoveryNetwork {
               channel.collectAndFoldResponses(peer.id, config.kademliaTimeout, Vector.empty[Node]) {
                 case Neighbors(nodes, _) => nodes
               } { (acc, nodes) =>
-                val found = (acc ++ nodes).take(config.kademliaBucketSize)
+                val found = (acc ++ nodes.filter(n => n.address.udpPort > 0 && n.address.tcpPort > 0)).take(config.kademliaBucketSize)
                 if (found.size < config.kademliaBucketSize) Left(found) else Right(found)
               }
             }

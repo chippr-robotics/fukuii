@@ -76,7 +76,9 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
         EthNodeStatus63ExchangeState(handshakerConfiguration, supportsSnap, peerCapabilities)
       case Some(Capability.ETH69) =>
         log.debug("PROTOCOL_NEGOTIATED: clientId={}, protocol=eth/69 (EIP-7642)", hello.clientId)
-        EthNodeStatus69ExchangeState(handshakerConfiguration, Capability.ETH69, supportsSnap, peerCapabilities)
+        // ETH/69 mandates SNAP as a co-protocol (EIP-7642). Peers that negotiate ETH/69
+        // never separately advertise snap/1 in Hello — it is implicit. Force supportsSnap=true.
+        EthNodeStatus69ExchangeState(handshakerConfiguration, Capability.ETH69, supportsSnap = true, peerCapabilities)
       case Some(
             negotiated @ (Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 | Capability.ETH68)
           ) =>
