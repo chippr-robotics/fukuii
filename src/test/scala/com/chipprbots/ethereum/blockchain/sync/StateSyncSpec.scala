@@ -149,7 +149,7 @@ class StateSyncSpec
     val initialPeerInfo: PeerInfo = PeerInfo(
       remoteStatus = peerStatus,
       chainWeight = peerStatus.chainWeight,
-      forkAccepted = false,
+      forkAccepted = true,
       maxBlockNumber = Fixtures.Blocks.Block3125369.header.number,
       bestBlockHash = peerStatus.bestHash
     )
