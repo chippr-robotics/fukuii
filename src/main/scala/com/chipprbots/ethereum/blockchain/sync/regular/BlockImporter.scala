@@ -265,14 +265,16 @@ class BlockImporter(
                       log.warning("Failed to get parent state root during node recovery: {}", ex.getMessage); None
                   }
                 val accountHash = kec256(e.accountAddress)
-                val paths: Option[Seq[Seq[ByteString]]] = e.location.map { loc =>
-                  Seq(Seq(loc))
-                }.orElse {
-                  val nibbles = accountHash.toArray.flatMap(b => Array(((b >> 4) & 0xf).toByte, (b & 0xf).toByte))
-                  Some((1 to 16).map { depth =>
-                    Seq(ByteString(HexPrefix.encode(nibbles.take(depth), isLeaf = false)))
-                  })
-                }
+                val paths: Option[Seq[Seq[ByteString]]] = e.location
+                  .map { loc =>
+                    Seq(Seq(loc))
+                  }
+                  .orElse {
+                    val nibbles = accountHash.toArray.flatMap(b => Array(((b >> 4) & 0xf).toByte, (b & 0xf).toByte))
+                    Some((1 to 16).map { depth =>
+                      Seq(ByteString(HexPrefix.encode(nibbles.take(depth), isLeaf = false)))
+                    })
+                  }
                 log.info(
                   "Missing account trie node {} for account {} during import of block {}, locationKnown={}",
                   ByteStringUtils.hash2string(e.hash),
@@ -294,12 +296,14 @@ class BlockImporter(
                       log.warning("Failed to get parent state root during node recovery: {}", ex.getMessage); None
                   }
                 val accountHash = kec256(e.accountAddress)
-                val paths: Option[Seq[Seq[ByteString]]] = e.location.map { loc =>
-                  Seq(Seq(accountHash, loc))
-                }.orElse {
-                  val emptyStoragePath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-                  Some(Seq(Seq(accountHash, emptyStoragePath)))
-                }
+                val paths: Option[Seq[Seq[ByteString]]] = e.location
+                  .map { loc =>
+                    Seq(Seq(accountHash, loc))
+                  }
+                  .orElse {
+                    val emptyStoragePath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+                    Some(Seq(Seq(accountHash, emptyStoragePath)))
+                  }
                 log.info(
                   "Missing storage node {} for account {} during import of block {}, locationKnown={}",
                   ByteStringUtils.hash2string(e.hash),
