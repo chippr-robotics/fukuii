@@ -48,13 +48,15 @@ trait PeerListSupportNg { self: Actor with ActorLogging =>
   }
 
   def peersToDownloadFrom: Map[PeerId, PeerWithInfo] = {
-    val available = handshakedPeers.filterNot { case (peerId, _) =>
-      val isBlacklisted = blacklist.isBlacklisted(peerId)
-      if (isBlacklisted) {
-        log.debug("Peer {} is blacklisted and excluded from download peers", peerId)
+    val available = handshakedPeers
+      .filter { case (_, p) => p.peerInfo.forkAccepted }
+      .filterNot { case (peerId, _) =>
+        val isBlacklisted = blacklist.isBlacklisted(peerId)
+        if (isBlacklisted) {
+          log.debug("Peer {} is blacklisted and excluded from download peers", peerId)
+        }
+        isBlacklisted
       }
-      isBlacklisted
-    }
     log.debug("peersToDownloadFrom: {} available out of {} handshaked peers", available.size, handshakedPeers.size)
     available
   }
