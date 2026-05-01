@@ -194,36 +194,34 @@ class FastSyncSpec
 
       // Pure math — no actor needed. Locks the newMax formula so a refactor cannot silently
       // revert the legacy-SyncState seeding that prevents false-95%-completion on JVM bounce.
-      "high-water mark seeds from totalNodesCount when maxTotalNodesCount=0 (legacy deserialization)" in testCase {
-        _ =>
-          // Old SyncState serialised before maxTotalNodesCount existed: field defaults to 0.
-          // totalNodesCount still holds the pre-bounce peak (5000).  Post-restart the scheduler
-          // walks only the newly-discovered frontier → freshTotal=3000.
-          // newMax must be 5000, not 3000 — otherwise the 95% guard fires too early.
-          val legacyMaxTotal: Long = 0
-          val legacyTotal: Long    = 5000
-          val freshTotal: Long     = 3000
-          val newMax                = math.max(math.max(legacyMaxTotal, legacyTotal), freshTotal)
-          assert(newMax == 5000)
+      "high-water mark seeds from totalNodesCount when maxTotalNodesCount=0 (legacy deserialization)" in testCase { _ =>
+        // Old SyncState serialised before maxTotalNodesCount existed: field defaults to 0.
+        // totalNodesCount still holds the pre-bounce peak (5000).  Post-restart the scheduler
+        // walks only the newly-discovered frontier → freshTotal=3000.
+        // newMax must be 5000, not 3000 — otherwise the 95% guard fires too early.
+        val legacyMaxTotal: Long = 0
+        val legacyTotal: Long = 5000
+        val freshTotal: Long = 3000
+        val newMax = math.max(math.max(legacyMaxTotal, legacyTotal), freshTotal)
+        assert(newMax == 5000)
       }
 
-      "effectiveTotal = max(dynTotal, maxTotalNodesCount) keeps 95% guard honest across JVM restart" in testCase {
-        _ =>
-          // Scenario: 8000-node trie, node bounced mid-download.
-          // downloaded=2900 is genuine progress but dynTotal post-restart drops to 3000
-          // (scheduler walks only the remaining frontier, not the full trie).
-          // Without fix: 2900/3000 = 96% → guard fires → partial trie declared done (BUG).
-          // With fix   : effectiveTotal = max(3000, 8000) = 8000 → 36% → guard silent (CORRECT).
-          val downloaded: Long        = 2900
-          val dynTotal: Long          = 3000
-          val maxTotalNodesCount: Long = 8000
+      "effectiveTotal = max(dynTotal, maxTotalNodesCount) keeps 95% guard honest across JVM restart" in testCase { _ =>
+        // Scenario: 8000-node trie, node bounced mid-download.
+        // downloaded=2900 is genuine progress but dynTotal post-restart drops to 3000
+        // (scheduler walks only the remaining frontier, not the full trie).
+        // Without fix: 2900/3000 = 96% → guard fires → partial trie declared done (BUG).
+        // With fix   : effectiveTotal = max(3000, 8000) = 8000 → 36% → guard silent (CORRECT).
+        val downloaded: Long = 2900
+        val dynTotal: Long = 3000
+        val maxTotalNodesCount: Long = 8000
 
-          val falsePositivePct = (downloaded.toDouble / dynTotal * 100).toInt
-          assert(falsePositivePct >= 95) // confirms old code would have misfired
+        val falsePositivePct = (downloaded.toDouble / dynTotal * 100).toInt
+        assert(falsePositivePct >= 95) // confirms old code would have misfired
 
-          val effectiveTotal = math.max(dynTotal, maxTotalNodesCount)
-          val correctPct     = (downloaded.toDouble / effectiveTotal * 100).toInt
-          assert(correctPct < 95) // fix: guard stays silent
+        val effectiveTotal = math.max(dynTotal, maxTotalNodesCount)
+        val correctPct = (downloaded.toDouble / effectiveTotal * 100).toInt
+        assert(correctPct < 95) // fix: guard stays silent
       }
 
       // Actor test: SyncingHandler.receive handles NetworkIncompatible by calling cleanup() and
@@ -320,15 +318,17 @@ class FastSyncSpec
           .timeout(timeout.duration)
       }
 
-      "returns Syncing with state nodes progress" taggedAs (UnitTest, SyncTest, FlakyTest) in customTestCaseM(new Fixture {
-        override lazy val syncConfig: SyncConfig =
-          defaultSyncConfig.copy(
-            peersScanInterval = 1.second,
-            pivotBlockOffset = 5,
-            fastSyncBlockValidationX = 1,
-            fastSyncThrottle = 1.millis
-          )
-      }) { (fixture: Fixture) =>
+      "returns Syncing with state nodes progress" taggedAs (UnitTest, SyncTest, FlakyTest) in customTestCaseM(
+        new Fixture {
+          override lazy val syncConfig: SyncConfig =
+            defaultSyncConfig.copy(
+              peersScanInterval = 1.second,
+              pivotBlockOffset = 5,
+              fastSyncBlockValidationX = 1,
+              fastSyncThrottle = 1.millis
+            )
+        }
+      ) { (fixture: Fixture) =>
         import fixture._
 
         (for {

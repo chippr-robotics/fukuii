@@ -20,9 +20,9 @@ import com.chipprbots.ethereum.utils.ByteUtils.or
 
 object StdBlockValidator extends BlockValidator {
 
-  /** ECIP adaptation of EIP-7934: Max RLP-encoded block size (8 MiB = 10 MiB - 2 MiB). Activates at Olympia.
-    * ETC adapts the Ethereum 10 MiB cap down to 8 MiB to match ETC's lower gas limits.
-    * Pre-Olympia chains never produce blocks near this cap in practice, so leaving unconditional is safe.
+  /** ECIP adaptation of EIP-7934: Max RLP-encoded block size (8 MiB = 10 MiB - 2 MiB). Activates at Olympia. ETC adapts
+    * the Ethereum 10 MiB cap down to 8 MiB to match ETC's lower gas limits. Pre-Olympia chains never produce blocks
+    * near this cap in practice, so leaving unconditional is safe.
     */
   val BlockRLPSizeCap: Long = 8L * 1024 * 1024 // 8,388,608
 

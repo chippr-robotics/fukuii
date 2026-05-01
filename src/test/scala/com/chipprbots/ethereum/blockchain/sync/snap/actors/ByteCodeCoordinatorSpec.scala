@@ -478,7 +478,7 @@ class ByteCodeCoordinatorSpec
     coordinator ! Messages.UpdateMaxInFlightPerPeer(testCooldownConfig.maxInFlightPerPeer)
 
     val send = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
-    val req  = send.message.asInstanceOf[GetByteCodesEnc].underlyingMsg
+    val req = send.message.asInstanceOf[GetByteCodesEnc].underlyingMsg
     req.hashes shouldEqual Seq(h1)
   }
 
@@ -504,8 +504,8 @@ class ByteCodeCoordinatorSpec
       )
     )
 
-    val realCode   = ByteString("real-bytecode")
-    val realHash   = kec256(realCode)
+    val realCode = ByteString("real-bytecode")
+    val realHash = kec256(realCode)
     val corruptCode = ByteString("corrupted-bytecode-with-wrong-hash")
     // Sanity: corruptCode's hash must not equal realHash
     kec256(corruptCode) should not be realHash

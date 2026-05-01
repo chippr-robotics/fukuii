@@ -11,18 +11,18 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
 
 /** L8 — ECIP-1112 Olympia treasury address configuration tests.
   *
-  * TreasuryBaseFeeSpec covers behavioral correctness (baseFee * gasUsed credited post-Olympia).
-  * This spec covers the config-level address invariants: the treasury address must be set to
-  * the canonical deployed contract on all ETC-family chains.
+  * TreasuryBaseFeeSpec covers behavioral correctness (baseFee * gasUsed credited post-Olympia). This spec covers the
+  * config-level address invariants: the treasury address must be set to the canonical deployed contract on all
+  * ETC-family chains.
   *
-  * Deployed treasury: 0xd6165F3aF4281037bce810621F62B43077Fb0e37
-  * (identical across ETC mainnet and Mordor — cross-chain consistency requirement).
+  * Deployed treasury: 0xd6165F3aF4281037bce810621F62B43077Fb0e37 (identical across ETC mainnet and Mordor — cross-chain
+  * consistency requirement).
   */
 // scalastyle:off magic.number
 class OlympiaTreasurySpec extends AnyFlatSpec with Matchers {
 
-  private val fullConfig   = ConfigFactory.load()
-  private val etcConfig    = BlockchainConfig.fromRawConfig(fullConfig.getConfig("fukuii.blockchains.etc"))
+  private val fullConfig = ConfigFactory.load()
+  private val etcConfig = BlockchainConfig.fromRawConfig(fullConfig.getConfig("fukuii.blockchains.etc"))
   private val mordorConfig = BlockchainConfig.fromRawConfig(fullConfig.getConfig("fukuii.blockchains.mordor"))
 
   // The canonical treasury address deployed on ETC mainnet and Mordor.

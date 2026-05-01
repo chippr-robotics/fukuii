@@ -6,13 +6,11 @@ package com.chipprbots.ethereum.consensus.mess
   *   - Mordor: activate=2,380,000 deactivate=10,400,000
   *   - ETC Mainnet: activate=11,380,000 deactivate=19,250,000
   *
-  * Olympia re-activates MESS on both networks.  Set `reactivationBlock` to the Olympia
-  * block number for each chain once it is finalised; the field is optional so existing
-  * configs without the key keep working unchanged.
+  * Olympia re-activates MESS on both networks. Set `reactivationBlock` to the Olympia block number for each chain once
+  * it is finalised; the field is optional so existing configs without the key keep working unchanged.
   *
   * @param enabled
-  *   Master switch for MESS scoring. Both enabled=true AND the block must be within an
-  *   active window for MESS to apply.
+  *   Master switch for MESS scoring. Both enabled=true AND the block must be within an active window for MESS to apply.
   * @param activationBlock
   *   Block at which the first MESS window opens (inclusive). None means open from block 0.
   * @param deactivationBlock
@@ -29,8 +27,8 @@ case class MESSConfig(
 
   /** True when MESS is active at `blockNumber`.
     *
-    * Active in the first window [activationBlock, deactivationBlock) OR in the Olympia
-    * second window [reactivationBlock, ∞).
+    * Active in the first window [activationBlock, deactivationBlock) OR in the Olympia second window
+    * [reactivationBlock, ∞).
     */
   def isActiveAtBlock(blockNumber: BigInt): Boolean =
     enabled && (firstWindowActive(blockNumber) || reactivationBlock.exists(blockNumber >= _))

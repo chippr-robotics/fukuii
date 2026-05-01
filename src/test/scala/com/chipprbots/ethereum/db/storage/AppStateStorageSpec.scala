@@ -271,8 +271,8 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
     }
 
     "persist and retrieve finalized state root" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
-      val storage   = newAppStateStorage()
-      val root      = ByteString(Array.fill[Byte](32)(0xde.toByte))
+      val storage = newAppStateStorage()
+      val root = ByteString(Array.fill[Byte](32)(0xde.toByte))
       assert(storage.getSnapSyncFinalizedRoot().isEmpty)
       storage.putSnapSyncFinalizedRoot(root).commit()
       assert(storage.getSnapSyncFinalizedRoot() == Some(root))
@@ -284,7 +284,7 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
     // so a storage refactor cannot silently break the recovery guard.
     "SNAP lifecycle: fresh → pivot → progress → done → cleared" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
       val storage = newAppStateStorage()
-      val root    = ByteString(Array.fill[Byte](32)(0xca.toByte))
+      val root = ByteString(Array.fill[Byte](32)(0xca.toByte))
 
       // Fresh: nothing persisted → not in-progress, not done
       assert(!storage.isSnapSyncInProgress())
@@ -296,14 +296,18 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
       assert(!storage.isSnapSyncDone())
 
       // Progress accumulated — pivot + state-root + progress all present
-      storage.putSnapSyncStateRoot(root).and(
-        storage.putSnapSyncProgress("""{"phase":"AccountRangeSync","accountsSynced":500000}""")
-      ).commit()
+      storage
+        .putSnapSyncStateRoot(root)
+        .and(
+          storage.putSnapSyncProgress("""{"phase":"AccountRangeSync","accountsSynced":500000}""")
+        )
+        .commit()
       assert(storage.isSnapSyncInProgress())
       assert(!storage.isSnapSyncDone())
 
       // Phase completions written
-      storage.putSnapSyncAccountsComplete(true)
+      storage
+        .putSnapSyncAccountsComplete(true)
         .and(storage.putSnapSyncStorageComplete(true))
         .and(storage.putSnapSyncBytecodeComplete(true))
         .commit()

@@ -41,14 +41,14 @@ class ByteCodeWorkerSpec
   }
 
   "ByteCodeWorker" should "send GetByteCodes to peer via NetworkPeerManager on ByteCodeWorkerFetchTask" taggedAs UnitTest in {
-    val coordinator        = TestProbe()
+    val coordinator = TestProbe()
     val networkPeerManager = TestProbe()
-    val peerProbe          = TestProbe()
-    val peer               = PeerTestHelpers.createTestPeer("bc-peer-1", peerProbe.ref)
-    val worker             = makeWorker(coordinator, networkPeerManager)
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("bc-peer-1", peerProbe.ref)
+    val worker = makeWorker(coordinator, networkPeerManager)
 
-    val task    = makeTask()
-    val reqId   = BigInt(1)
+    val task = makeTask()
+    val reqId = BigInt(1)
     worker ! Messages.ByteCodeWorkerFetchTask(task, peer, reqId, BigInt(1024 * 1024))
 
     // Worker must have sent GetByteCodes to the network peer manager
@@ -57,21 +57,21 @@ class ByteCodeWorkerSpec
     sendMsg.message shouldBe a[GetByteCodesEnc]
     val encoded = sendMsg.message.asInstanceOf[GetByteCodesEnc]
     encoded.underlyingMsg.requestId shouldBe reqId
-    encoded.underlyingMsg.hashes    shouldBe task.codeHashes
+    encoded.underlyingMsg.hashes shouldBe task.codeHashes
   }
 
   it should "forward ByteCodesResponseMsg to coordinator on happy-path response" taggedAs UnitTest in {
-    val coordinator        = TestProbe()
+    val coordinator = TestProbe()
     val networkPeerManager = TestProbe()
-    val peerProbe          = TestProbe()
-    val peer               = PeerTestHelpers.createTestPeer("bc-peer-2", peerProbe.ref)
-    val worker             = makeWorker(coordinator, networkPeerManager)
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("bc-peer-2", peerProbe.ref)
+    val worker = makeWorker(coordinator, networkPeerManager)
 
     val reqId = BigInt(2)
     worker ! Messages.ByteCodeWorkerFetchTask(makeTask(), peer, reqId, BigInt(1024 * 1024))
     networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](1.second)
 
-    val code     = ByteString("contract bytecode here")
+    val code = ByteString("contract bytecode here")
     val response = ByteCodes(requestId = reqId, codes = Seq(code))
     worker ! Messages.ByteCodesResponseMsg(response)
 
@@ -79,11 +79,11 @@ class ByteCodeWorkerSpec
   }
 
   it should "return to idle after response and process a stashed ByteCodeWorkerFetchTask" taggedAs UnitTest in {
-    val coordinator        = TestProbe()
+    val coordinator = TestProbe()
     val networkPeerManager = TestProbe()
-    val peerProbe          = TestProbe()
-    val peer               = PeerTestHelpers.createTestPeer("bc-peer-3", peerProbe.ref)
-    val worker             = makeWorker(coordinator, networkPeerManager)
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("bc-peer-3", peerProbe.ref)
+    val worker = makeWorker(coordinator, networkPeerManager)
 
     // First task
     val reqId1 = BigInt(3)
@@ -105,11 +105,11 @@ class ByteCodeWorkerSpec
   }
 
   it should "report ByteCodeTaskFailed to coordinator on ByteCodeRequestTimeout" taggedAs UnitTest in {
-    val coordinator        = TestProbe()
+    val coordinator = TestProbe()
     val networkPeerManager = TestProbe()
-    val peerProbe          = TestProbe()
-    val peer               = PeerTestHelpers.createTestPeer("bc-peer-4", peerProbe.ref)
-    val worker             = makeWorker(coordinator, networkPeerManager)
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("bc-peer-4", peerProbe.ref)
+    val worker = makeWorker(coordinator, networkPeerManager)
 
     val reqId = BigInt(5)
     worker ! Messages.ByteCodeWorkerFetchTask(makeTask(), peer, reqId, BigInt(1024 * 1024))
@@ -121,11 +121,11 @@ class ByteCodeWorkerSpec
   }
 
   it should "return to idle after timeout and accept a new ByteCodeWorkerFetchTask" taggedAs UnitTest in {
-    val coordinator        = TestProbe()
+    val coordinator = TestProbe()
     val networkPeerManager = TestProbe()
-    val peerProbe          = TestProbe()
-    val peer               = PeerTestHelpers.createTestPeer("bc-peer-5", peerProbe.ref)
-    val worker             = makeWorker(coordinator, networkPeerManager)
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("bc-peer-5", peerProbe.ref)
+    val worker = makeWorker(coordinator, networkPeerManager)
 
     val reqId1 = BigInt(6)
     worker ! Messages.ByteCodeWorkerFetchTask(makeTask(), peer, reqId1, BigInt(1024 * 1024))
@@ -142,11 +142,11 @@ class ByteCodeWorkerSpec
   }
 
   it should "return to idle on ByteCodeWorkerRelease and unstash queued tasks" taggedAs UnitTest in {
-    val coordinator        = TestProbe()
+    val coordinator = TestProbe()
     val networkPeerManager = TestProbe()
-    val peerProbe          = TestProbe()
-    val peer               = PeerTestHelpers.createTestPeer("bc-peer-6", peerProbe.ref)
-    val worker             = makeWorker(coordinator, networkPeerManager)
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("bc-peer-6", peerProbe.ref)
+    val worker = makeWorker(coordinator, networkPeerManager)
 
     val reqId1 = BigInt(8)
     worker ! Messages.ByteCodeWorkerFetchTask(makeTask(Seq(codeHash1)), peer, reqId1, BigInt(1024 * 1024))
@@ -165,18 +165,18 @@ class ByteCodeWorkerSpec
   }
 
   it should "ignore ByteCodesResponseMsg for mismatched request ID" taggedAs UnitTest in {
-    val coordinator        = TestProbe()
+    val coordinator = TestProbe()
     val networkPeerManager = TestProbe()
-    val peerProbe          = TestProbe()
-    val peer               = PeerTestHelpers.createTestPeer("bc-peer-7", peerProbe.ref)
-    val worker             = makeWorker(coordinator, networkPeerManager)
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("bc-peer-7", peerProbe.ref)
+    val worker = makeWorker(coordinator, networkPeerManager)
 
     val reqId = BigInt(10)
     worker ! Messages.ByteCodeWorkerFetchTask(makeTask(), peer, reqId, BigInt(1024 * 1024))
     networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](1.second)
 
     val wrongReqId = BigInt(999)
-    val response   = ByteCodes(requestId = wrongReqId, codes = Seq.empty)
+    val response = ByteCodes(requestId = wrongReqId, codes = Seq.empty)
     worker ! Messages.ByteCodesResponseMsg(response)
 
     // Coordinator should NOT receive anything for the mismatched response

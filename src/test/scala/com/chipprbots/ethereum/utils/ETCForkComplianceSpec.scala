@@ -24,37 +24,37 @@ import com.chipprbots.ethereum.vm.SHR
 // scalastyle:off magic.number
 /** L2 — ETC fork compliance: verify opcode availability at boundary blocks (N-1 disabled, N enabled).
   *
-  * Pattern adapted from core-geth's etc_fork_compliance_test.go and besu's GenesisConfigClassicTest.
-  * Tests that the EVM opcode set transitions correctly at each ETC hard fork for both mainnet (chainId=61)
-  * and Mordor testnet (chainId=63).
+  * Pattern adapted from core-geth's etc_fork_compliance_test.go and besu's GenesisConfigClassicTest. Tests that the EVM
+  * opcode set transitions correctly at each ETC hard fork for both mainnet (chainId=61) and Mordor testnet
+  * (chainId=63).
   *
-  * Fork → Canonical opcode marker:
-  *   Atlantis  (≈Byzantium)     — REVERT, RETURNDATACOPY
-  *   Agharta   (≈Constantinople) — CREATE2, EXTCODEHASH, SHL/SHR/SAR
-  *   Phoenix   (≈Istanbul)       — CHAINID, SELFBALANCE
-  *   Magneto   (≈Berlin)         — (same opcodes as Phoenix; EIP-2929 access list gas only)
-  *   Mystique  (≈London)         — eip3541Enabled (no new opcodes)
-  *   Spiral    (≈Shanghai)       — PUSH0
-  *   No-fork   — BLOBHASH, BLOBBASEFEE never active on ETC (no Cancun/Osaka EVM)
+  * Fork → Canonical opcode marker: Atlantis (≈Byzantium) — REVERT, RETURNDATACOPY Agharta (≈Constantinople) — CREATE2,
+  * EXTCODEHASH, SHL/SHR/SAR Phoenix (≈Istanbul) — CHAINID, SELFBALANCE Magneto (≈Berlin) — (same opcodes as Phoenix;
+  * EIP-2929 access list gas only) Mystique (≈London) — eip3541Enabled (no new opcodes) Spiral (≈Shanghai) — PUSH0
+  * No-fork — BLOBHASH, BLOBBASEFEE never active on ETC (no Cancun/Osaka EVM)
   *
   * ECIP-1099 (epoch doubling) and ECBP-1100 (MESS) have no opcode markers and are covered separately.
   */
 class ETCForkComplianceSpec extends AnyFlatSpec with Matchers {
 
-  private val fullConfig   = ConfigFactory.load()
-  private val etcConfig    = BlockchainConfig.fromRawConfig(fullConfig.getConfig("fukuii.blockchains.etc"))
+  private val fullConfig = ConfigFactory.load()
+  private val etcConfig = BlockchainConfig.fromRawConfig(fullConfig.getConfig("fukuii.blockchains.etc"))
   private val mordorConfig = BlockchainConfig.fromRawConfig(fullConfig.getConfig("fukuii.blockchains.mordor"))
 
   private def opcodes(blockNumber: BigInt, cfg: BlockchainConfig): Set[OpCode] =
     EvmConfig.forBlock(blockNumber, cfg).opCodes.toSet
 
   private def assertEnabled(cfg: BlockchainConfig, forkName: String, block: BigInt, marker: OpCode): Unit =
-    withClue(s"$forkName opcode ${marker.getClass.getSimpleName.stripSuffix("$")} should be ENABLED at block $block: ") {
+    withClue(
+      s"$forkName opcode ${marker.getClass.getSimpleName.stripSuffix("$")} should be ENABLED at block $block: "
+    ) {
       opcodes(block, cfg) should contain(marker)
     }
 
   private def assertDisabled(cfg: BlockchainConfig, forkName: String, block: BigInt, marker: OpCode): Unit =
-    withClue(s"$forkName opcode ${marker.getClass.getSimpleName.stripSuffix("$")} should be DISABLED at block $block: ") {
+    withClue(
+      s"$forkName opcode ${marker.getClass.getSimpleName.stripSuffix("$")} should be DISABLED at block $block: "
+    ) {
       opcodes(block, cfg) should not contain marker
     }
 

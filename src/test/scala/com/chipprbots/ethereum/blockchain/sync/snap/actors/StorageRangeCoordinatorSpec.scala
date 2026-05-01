@@ -273,12 +273,12 @@ class StorageRangeCoordinatorSpec
     // the coordinator must treat it as a valid cryptographic proof that the account has no
     // storage, complete the task, and NOT mark the peer stateless. The peer must be immediately
     // eligible to receive the next task via dispatchIfPossible().
-    val stateRoot   = kec256(ByteString("proof-of-absence-root"))
-    val storage     = new TestMptStorage()
+    val stateRoot = kec256(ByteString("proof-of-absence-root"))
+    val storage = new TestMptStorage()
     val requestTracker = new SNAPRequestTracker()(system.scheduler)
     val networkPeerManager = TestProbe()
     val snapSyncController = TestProbe()
-    val peerProbe   = TestProbe()
+    val peerProbe = TestProbe()
 
     val peer = PeerTestHelpers.createTestPeer("storage-peer-poa", peerProbe.ref)
 
@@ -295,15 +295,15 @@ class StorageRangeCoordinatorSpec
     // second request is sent only after the first is resolved.
     val coordinator = system.actorOf(
       StorageRangeCoordinator.props(
-        stateRoot              = stateRoot,
-        networkPeerManager     = networkPeerManager.ref,
-        requestTracker         = requestTracker,
-        mptStorage             = storage,
-        flatSlotStorage        = new FlatSlotStorage(EphemDataSource()),
-        maxAccountsPerBatch    = 1,
-        maxInFlightRequests    = 2,
-        requestTimeout         = 30.seconds,
-        snapSyncController     = snapSyncController.ref,
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+        maxAccountsPerBatch = 1,
+        maxInFlightRequests = 2,
+        requestTimeout = 30.seconds,
+        snapSyncController = snapSyncController.ref,
         initialMaxInFlightPerPeer = 1
       )
     )
@@ -314,7 +314,7 @@ class StorageRangeCoordinatorSpec
 
     // Coordinator dispatches task1 to peer
     val send1 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
-    val req1  = send1.message.asInstanceOf[GetStorageRangesEnc].underlyingMsg
+    val req1 = send1.message.asInstanceOf[GetStorageRangesEnc].underlyingMsg
     req1.accountHashes should have size 1
     req1.accountHashes.head shouldEqual account1
 
@@ -326,16 +326,15 @@ class StorageRangeCoordinatorSpec
 
     // Peer is NOT stateless — coordinator immediately pipelines task2 to the same peer
     val send2 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
-    val req2  = send2.message.asInstanceOf[GetStorageRangesEnc].underlyingMsg
+    val req2 = send2.message.asInstanceOf[GetStorageRangesEnc].underlyingMsg
     req2.accountHashes should have size 1
     req2.accountHashes.head shouldEqual account2
 
     // No pivot-refresh stall signal: peer served a valid proof-of-absence response.
     // ProgressStorageContracts is a known-good progress update — filter it out and fail
     // only if a PivotStateUnservable (erroneous stall) slips through.
-    snapSyncController.receiveWhile(300.millis) {
-      case msg: SNAPSyncController.PivotStateUnservable =>
-        fail(s"Unexpected pivot stall after proof-of-absence: $msg")
+    snapSyncController.receiveWhile(300.millis) { case msg: SNAPSyncController.PivotStateUnservable =>
+      fail(s"Unexpected pivot stall after proof-of-absence: $msg")
     }
   }
 
@@ -346,24 +345,24 @@ class StorageRangeCoordinatorSpec
     // During the account-range phase (before any storage tasks arrive), a StorageCheckCompletion
     // tick must be a no-op — not trigger a spurious pivot refresh that aborts the sync.
     val stateRoot = kec256(ByteString("no-stall-root"))
-    val storage   = new TestMptStorage()
+    val storage = new TestMptStorage()
     val requestTracker = new SNAPRequestTracker()(system.scheduler)
     val networkPeerManager = TestProbe()
     val snapSyncController = TestProbe()
-    val peerProbe  = TestProbe()
+    val peerProbe = TestProbe()
 
     val peer = PeerTestHelpers.createTestPeer("storage-peer-nostall", peerProbe.ref)
 
     val coordinator = system.actorOf(
       StorageRangeCoordinator.props(
-        stateRoot          = stateRoot,
+        stateRoot = stateRoot,
         networkPeerManager = networkPeerManager.ref,
-        requestTracker     = requestTracker,
-        mptStorage         = storage,
-        flatSlotStorage    = new FlatSlotStorage(EphemDataSource()),
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
         maxAccountsPerBatch = 1,
         maxInFlightRequests = 1,
-        requestTimeout     = 30.seconds,
+        requestTimeout = 30.seconds,
         snapSyncController = snapSyncController.ref
       )
     )

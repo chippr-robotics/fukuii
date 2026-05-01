@@ -18,9 +18,8 @@ import com.chipprbots.ethereum.utils.ForkTimestamps
 
 /** L1 — EIP-4844 blob (Type-3) transaction rejection on ETC.
   *
-  * ETC does not support EIP-4844 (no Cancun timestamp configured). Blob transactions must be
-  * rejected at the validator layer before any other checks, regardless of block height or the
-  * validity of the transaction's other fields.
+  * ETC does not support EIP-4844 (no Cancun timestamp configured). Blob transactions must be rejected at the validator
+  * layer before any other checks, regardless of block height or the validity of the transaction's other fields.
   */
 class BlobTransactionRejectionSpec extends AnyFlatSpec with Matchers {
 
@@ -104,7 +103,10 @@ class BlobTransactionRejectionSpec extends AnyFlatSpec with Matchers {
   // With cancunTimestamp = 0 the blob check passes; the tx then fails for other
   // reasons (invalid signature — fake bytes), but NOT with the blob-unsupported error.
 
-  it should "pass blob type check when Cancun is active (error is NOT TYPE_3_TX_NOT_SUPPORTED)" taggedAs (UnitTest, ConsensusTest) in {
+  it should "pass blob type check when Cancun is active (error is NOT TYPE_3_TX_NOT_SUPPORTED)" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
     implicit val cancunCfg: BlockchainConfig = blockchainConfig.copy(
       forkTimestamps = blockchainConfig.forkTimestamps.copy(cancunTimestamp = Some(0L))
     )

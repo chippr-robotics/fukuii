@@ -36,11 +36,11 @@ class EIP1559FeeMarketSpec
   )
 
   private val secureRandom = new SecureRandom()
-  private val senderKeys   = crypto.generateKeyPair(secureRandom)
+  private val senderKeys = crypto.generateKeyPair(secureRandom)
   private val senderAccount: Account = Account(nonce = 0, balance = UInt256(BigInt("1000000000000000000000")))
 
-  private val baseFee    = BigInt("10000000000") // 10 gwei
-  private val maxFee     = BigInt("20000000000") // 20 gwei
+  private val baseFee = BigInt("10000000000") // 10 gwei
+  private val maxFee = BigInt("20000000000") // 20 gwei
   private val priorityFee = BigInt("2000000000") // 2 gwei
 
   private val postMystiqueHeader = Fixtures.Blocks.ValidBlock.header.copy(
