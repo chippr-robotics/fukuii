@@ -1838,7 +1838,8 @@ class SNAPSyncController(
     // Notify coordinator of available peers
     bytecodeCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
-        case (_, peerWithInfo) if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.forkAccepted =>
+        case (_, peerWithInfo)
+            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.forkAccepted =>
           peerWithInfo.peer
       }
 
@@ -2026,7 +2027,8 @@ class SNAPSyncController(
     // Notify coordinator of available peers
     trieNodeHealingCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
-        case (_, peerWithInfo) if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.forkAccepted =>
+        case (_, peerWithInfo)
+            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.forkAccepted =>
           peerWithInfo.peer
       }
 

@@ -15,12 +15,12 @@ import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord
 
 class ForkIdTagSpec extends AnyWordSpec with Matchers {
 
-  val config   = blockchains
-  val etcConf  = config.blockchains("etc")
+  val config = blockchains
+  val etcConf = config.blockchains("etc")
   val etcGenesis: ByteString =
     ByteString(BCHex.decode("d4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3"))
 
-  private val ethKey   = EthereumNodeRecord.Keys.key("eth")
+  private val ethKey = EthereumNodeRecord.Keys.key("eth")
   private val dummySig = Signature(BitVector.empty)
 
   private def makeTag(head: BigInt, conf: com.chipprbots.ethereum.utils.BlockchainConfig = etcConf): ForkIdTag =
@@ -89,7 +89,7 @@ class ForkIdTagSpec extends AnyWordSpec with Matchers {
 
     "reject an ENR with malformed eth key bytes" in {
       val badBytes = ByteVector(0xff.toByte, 0xfe.toByte, 0x00.toByte)
-      val enr      = EthereumNodeRecord(dummySig, 0L, ethKey -> badBytes)
+      val enr = EthereumNodeRecord(dummySig, 0L, ethKey -> badBytes)
       makeTag(20000000).toFilter(enr) shouldBe a[Left[_, _]]
     }
   }
