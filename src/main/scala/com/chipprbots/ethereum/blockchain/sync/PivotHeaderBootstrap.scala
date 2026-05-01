@@ -126,6 +126,10 @@ final class PivotHeaderBootstrap(
           log.debug("Unexpected pivot header response: {}", other)
           None
       }
+      .recover { case ex =>
+        log.warning("Pivot header bootstrap ask failed (attempt {}/{}): {}", attempt, maxAttempts, ex.getMessage)
+        None
+      }
       .foreach {
         case Some(header) if header.number == targetBlock =>
           self ! Fetched(header)

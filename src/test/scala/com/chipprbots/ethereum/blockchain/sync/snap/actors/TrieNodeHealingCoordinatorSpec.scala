@@ -153,10 +153,9 @@ class TrieNodeHealingCoordinatorSpec
       )
     )
 
-    coordinator ! Messages.StartTrieNodeHealing(stateRoot)
     coordinator ! Messages.HealingCheckCompletion
 
-    // Should complete immediately if no nodes to heal
+    // An idle coordinator (no pending tasks, no active requests) should complete immediately
     snapSyncController.expectMsg(3.seconds, SNAPSyncController.StateHealingComplete)
   }
 
