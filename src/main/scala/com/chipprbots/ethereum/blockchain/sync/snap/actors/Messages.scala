@@ -47,6 +47,10 @@ object Messages {
   /** Request storage file metadata for async streaming. Returns instantly (no file read). */
   case object GetStorageFileInfo extends AccountRangeCoordinatorMessage
   case class StorageFileInfoResponse(filePath: java.nio.file.Path, count: Long)
+
+  /** Request codeHashes file metadata for bytecode recovery. Returns instantly (no file read). */
+  case object GetCodeHashesFileInfo extends AccountRangeCoordinatorMessage
+  case class CodeHashesFileInfoResponse(filePath: java.nio.file.Path, count: Long)
   case object CheckCompletion extends AccountRangeCoordinatorMessage
 
   /** Sent by AccountRangeCoordinator to SNAPSyncController with progress for ALL ranges. Maps range `last` hash →
@@ -196,6 +200,17 @@ object Messages {
     * clears pending tasks and stateless tracking. A new trie walk will re-populate tasks for the new root.
     */
   case class HealingPivotRefreshed(newStateRoot: ByteString) extends TrieNodeHealingCoordinatorMessage
+
+  /** Sent by coordinator after MaxConsecutiveStagnations consecutive 2-min HEAL-PULSE cycles with zero healed nodes.
+    * Controller should stop coordinator, clear walk checkpoint, refresh pivot.
+    */
+  case class HealingStagnated(healed: Long, pending: Long) extends TrieNodeHealingCoordinatorMessage
+
+  /** Sent by SNAPSyncController when pivot advanced beyond SNAP serve window during healing (Besu reloadTrieHeal
+    * pattern). Coordinator abandons pending tasks and signals completion so a fresh coordinator + walk can start for
+    * the new root.
+    */
+  case object HealingForceComplete extends TrieNodeHealingCoordinatorMessage
 
   sealed trait TrieNodeHealingWorkerMessage
   case class FetchTrieNodes(task: HealingTask, peer: Peer) extends TrieNodeHealingWorkerMessage

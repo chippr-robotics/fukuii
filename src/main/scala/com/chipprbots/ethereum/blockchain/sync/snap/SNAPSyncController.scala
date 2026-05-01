@@ -301,6 +301,9 @@ class SNAPSyncController(
     case RequestTrieNodeHealing =>
       requestTrieNodeHealing()
 
+    case EnsureSnapServerPeersConnected =>
+      ensureSnapServerPeersConnected()
+
     // Handle SNAP protocol responses
     case msg: AccountRange =>
       log.debug(s"Received AccountRange response: requestId=${msg.requestId}, accounts=${msg.accounts.size}")
@@ -475,7 +478,7 @@ class SNAPSyncController(
 
     case RetryPivotRefresh =>
       pivotBootstrapRetryTask = None
-      if (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync) {
+      if (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync || currentPhase == StateHealing) {
         log.info("Retrying pivot refresh after bootstrap failure...")
         refreshPivotInPlace("retry after bootstrap failure")
       } else {
@@ -516,6 +519,14 @@ class SNAPSyncController(
                 log.info(s"Persisted storage file path for recovery: ${info.filePath} (${info.count} entries)")
               }
             }
+          (coordinator ? actors.Messages.GetCodeHashesFileInfo)
+            .mapTo[actors.Messages.CodeHashesFileInfoResponse]
+            .foreach { info =>
+              if (info.filePath != null) {
+                appStateStorage.putSnapSyncCodeHashesPath(info.filePath.toString).commit()
+                log.info(s"Persisted codeHashes file path for recovery: ${info.filePath} (${info.count} entries)")
+              }
+            }
         }
 
         // Clear persisted range progress — account phase is done, no need to resume it
@@ -551,6 +562,7 @@ class SNAPSyncController(
 
     case ByteCodeSyncComplete if !bytecodePhaseComplete =>
       bytecodePhaseComplete = true
+      appStateStorage.putSnapSyncBytecodeComplete(true).commit()
       progressMonitor.setBytecodeComplete()
       val downloaded = progressMonitor.currentProgress.bytecodesDownloaded
       log.info(
@@ -570,6 +582,7 @@ class SNAPSyncController(
 
     case StorageRangeSyncComplete if !storagePhaseComplete =>
       storagePhaseComplete = true
+      appStateStorage.putSnapSyncStorageComplete(true).commit()
       log.info(s"Storage range sync complete. ByteCode: $bytecodePhaseComplete, Accounts: $accountsComplete")
       checkAllDownloadsComplete()
 
@@ -577,14 +590,26 @@ class SNAPSyncController(
       log.warning("All healing peers stateless — refreshing pivot in-place for healing")
       refreshPivotInPlace("all healing peers stateless")
 
+    // FIX-STAGNATION-LIMIT: Coordinator detected no healing progress for MaxConsecutiveStagnations
+    // consecutive 2-min cycles. Refresh pivot — coordinator receives HealingPivotRefreshed,
+    // clears stale tasks + stateless peers, re-seeds new root top-down (Besu-aligned).
+    // Do NOT stop coordinator — refreshPivotInPlace sends HealingPivotRefreshed to it directly.
+    case actors.Messages.HealingStagnated(healed, pending) if currentPhase == StateHealing =>
+      log.warning(
+        s"[HEAL-STAGNATED] Healing stuck: healed=$healed pending=$pending — " +
+          s"refreshing pivot for fresh healing round"
+      )
+      refreshPivotInPlace("healing-stagnated")
+
     case StateHealingComplete =>
-      log.info("Healing coordinator idle (no pending tasks, no active requests).")
+      log.info("Healing coordinator signaled complete (no pending tasks, no active requests).")
       if (trieWalkInProgress) {
         // A trie walk is already running — its result will determine next step
         log.info("Trie walk in progress, waiting for result...")
       } else {
-        // No walk in progress — start one to check for deeper missing nodes
-        startTrieWalk()
+        // ARCH-WALK-HEAL-INTERLEAVE: Start walk with coordinator alive (if still running) or
+        // create a fresh coordinator before the walk so inline discovery can run concurrently.
+        startStateHealingWithInterleave()
       }
 
     case TrieWalkResult(missingNodes) if currentPhase == StateHealing =>
@@ -592,6 +617,10 @@ class SNAPSyncController(
       if (missingNodes.isEmpty) {
         log.info("Trie walk found no missing nodes — healing complete!")
         consecutiveUnproductiveHealingRounds = 0
+        // Commit final pivot root — deferred from refreshPivotInPlace() to prevent BUG-006.
+        // AppStateStorage now reflects the root that healing actually completed against.
+        for (b <- pivotBlock; r <- stateRoot)
+          appStateStorage.putSnapSyncPivotBlock(b).and(appStateStorage.putSnapSyncStateRoot(r)).commit()
         progressMonitor.startPhase(StateValidation)
         currentPhase = StateValidation
         validateState()
@@ -604,6 +633,9 @@ class SNAPSyncController(
               s"Proceeding to validation — regular sync will recover missing nodes on-demand."
           )
           consecutiveUnproductiveHealingRounds = 0
+          // Commit current pivot root before transitioning to validation (deferred from refreshPivotInPlace)
+          pivotBlock.foreach(b => appStateStorage.putSnapSyncPivotBlock(b).commit())
+          stateRoot.foreach(r => appStateStorage.putSnapSyncStateRoot(r).commit())
           progressMonitor.startPhase(StateValidation)
           currentPhase = StateValidation
           validateState()
@@ -790,9 +822,11 @@ class SNAPSyncController(
       // a fresh-startup race returns Some(0) and the caller commits to a genesis pivot before
       // any real peer height is known.
       def currentNetworkBestFromSnapPeers(bootstrapPivot: BigInt): Option[BigInt] = {
+        // Peers whose STATUS hasn't arrived yet have maxBlockNumber=0 — exclude them, otherwise a
+        // fresh-startup race counts them as "network best=0" → pivot=-64 → genesis fallback.
         val snapPeersForPivot =
           peersToDownloadFrom.values.toList
-            .filter(_.peerInfo.remoteStatus.supportsSnap)
+            .filter(p => p.peerInfo.remoteStatus.supportsSnap && p.peerInfo.forkAccepted)
             .filter(_.peerInfo.maxBlockNumber > 0)
             .filter(p => bootstrapPivot == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivot)
 
@@ -836,8 +870,10 @@ class SNAPSyncController(
           } else {
             pivotBlock = Some(targetPivot)
             stateRoot = Some(header.stateRoot)
-            appStateStorage.putSnapSyncPivotBlock(targetPivot).commit()
-            appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
+            appStateStorage
+              .putSnapSyncPivotBlock(targetPivot)
+              .and(appStateStorage.putSnapSyncStateRoot(header.stateRoot))
+              .commit()
             updateBestBlockForPivot(header, targetPivot)
 
             SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
@@ -867,8 +903,10 @@ class SNAPSyncController(
                   case Some(header) =>
                     pivotBlock = Some(targetPivot)
                     stateRoot = Some(header.stateRoot)
-                    appStateStorage.putSnapSyncPivotBlock(targetPivot).commit()
-                    appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
+                    appStateStorage
+                      .putSnapSyncPivotBlock(targetPivot)
+                      .and(appStateStorage.putSnapSyncStateRoot(header.stateRoot))
+                      .commit()
                     updateBestBlockForPivot(header, targetPivot)
 
                     SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
@@ -1007,73 +1045,86 @@ class SNAPSyncController(
               s"Recovery: pivot $pivot drifted $drift blocks from network best $networkBest. " +
                 "Clearing accounts-complete flag and restarting fresh."
             )
-            appStateStorage.putSnapSyncAccountsComplete(false).commit()
+            appStateStorage
+              .putSnapSyncAccountsComplete(false)
+              .and(appStateStorage.putSnapSyncStorageComplete(false))
+              .and(appStateStorage.putSnapSyncBytecodeComplete(false))
+              .commit()
             // Fall through to normal startup
           } else {
             // Pivot is fresh enough — recover bytecodes + storage only
             pivotBlock = Some(pivot)
             stateRoot = Some(rootBs)
             accountsComplete = true
-            bytecodePhaseComplete = false
-            storagePhaseComplete = false
+
+            val storageAlreadyDone = appStateStorage.isSnapSyncStorageComplete()
+            val bytecodeAlreadyDone = appStateStorage.isSnapSyncBytecodeComplete()
+            storagePhaseComplete = storageAlreadyDone
+            bytecodePhaseComplete = bytecodeAlreadyDone
+
+            if (storageAlreadyDone) log.info("Recovery: storage phase already complete — skipping re-download")
+            if (bytecodeAlreadyDone) log.info("Recovery: bytecode phase already complete — skipping re-download")
 
             log.info(s"Recovery: resuming bytecodes + storage sync from pivot $pivot (drift=$drift blocks)")
 
-            // Create bytecode coordinator (will receive NoMore immediately since we have no new accounts)
             val storage = getOrCreateMptStorage(pivot)
             coordinatorGeneration += 1
 
-            bytecodeCoordinator = Some(
-              context.actorOf(
-                actors.ByteCodeCoordinator
-                  .props(
-                    evmCodeStorage = evmCodeStorage,
-                    networkPeerManager = networkPeerManager,
-                    requestTracker = requestTracker,
-                    batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
-                    snapSyncController = self
-                  )
-                  .withDispatcher("sync-dispatcher"),
-                s"bytecode-coordinator-$coordinatorGeneration"
+            if (!bytecodeAlreadyDone) {
+              bytecodeCoordinator = Some(
+                context.actorOf(
+                  actors.ByteCodeCoordinator
+                    .props(
+                      evmCodeStorage = evmCodeStorage,
+                      networkPeerManager = networkPeerManager,
+                      requestTracker = requestTracker,
+                      batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
+                      snapSyncController = self
+                    )
+                    .withDispatcher("sync-dispatcher"),
+                  s"bytecode-coordinator-$coordinatorGeneration"
+                )
               )
-            )
-            bytecodeCoordinator.foreach(_ ! actors.Messages.StartByteCodeSync(Seq.empty))
-            bytecodeRequestTask = Some(
-              scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestByteCodes)(ec, self)
-            )
+              bytecodeCoordinator.foreach(_ ! actors.Messages.StartByteCodeSync(Seq.empty))
+              bytecodeRequestTask = Some(
+                scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestByteCodes)(ec, self)
+              )
+            }
 
-            storageRangeCoordinator = Some(
-              context.actorOf(
-                actors.StorageRangeCoordinator
-                  .props(
-                    stateRoot = rootBs,
-                    networkPeerManager = networkPeerManager,
-                    requestTracker = requestTracker,
-                    mptStorage = storage,
-                    flatSlotStorage = flatSlotStorage,
-                    maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
-                    maxInFlightRequests = snapSyncConfig.storageConcurrency,
-                    requestTimeout = snapSyncConfig.timeout,
-                    snapSyncController = self,
-                    initialMaxInFlightPerPeer = 3, // Recovery: accounts done, storage gets 3 of 5 per-peer budget
-                    initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
-                    minResponseBytes = snapSyncConfig.storageMinResponseBytes,
-                    deferredMerkleization = snapSyncConfig.deferredMerkleization
-                  )
-                  .withDispatcher("sync-dispatcher"),
-                s"storage-range-coordinator-$coordinatorGeneration"
+            if (!storageAlreadyDone) {
+              storageRangeCoordinator = Some(
+                context.actorOf(
+                  actors.StorageRangeCoordinator
+                    .props(
+                      stateRoot = rootBs,
+                      networkPeerManager = networkPeerManager,
+                      requestTracker = requestTracker,
+                      mptStorage = storage,
+                      flatSlotStorage = flatSlotStorage,
+                      maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
+                      maxInFlightRequests = snapSyncConfig.storageConcurrency,
+                      requestTimeout = snapSyncConfig.timeout,
+                      snapSyncController = self,
+                      initialMaxInFlightPerPeer = 3, // Recovery: accounts done, storage gets 3 of 5 per-peer budget
+                      initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
+                      minResponseBytes = snapSyncConfig.storageMinResponseBytes,
+                      deferredMerkleization = snapSyncConfig.deferredMerkleization
+                    )
+                    .withDispatcher("sync-dispatcher"),
+                  s"storage-range-coordinator-$coordinatorGeneration"
+                )
               )
-            )
-            storageRangeCoordinator.foreach(_ ! actors.Messages.StartStorageRangeSync(rootBs))
-            storageRangeRequestTask = Some(
-              scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestStorageRanges)(ec, self)
-            )
+              storageRangeCoordinator.foreach(_ ! actors.Messages.StartStorageRangeSync(rootBs))
+              storageRangeRequestTask = Some(
+                scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestStorageRanges)(ec, self)
+              )
+            }
 
             // Recovery budget: accounts done, bytecode=2, storage=3 (total 5 per peer)
             bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(2))
 
             // Stream storage tasks from persisted file if available
-            savedStoragePath.foreach { pathStr =>
+            if (!storageAlreadyDone) savedStoragePath.foreach { pathStr =>
               val filePath = java.nio.file.Paths.get(pathStr)
               if (java.nio.file.Files.exists(filePath)) {
                 val coordinator = storageRangeCoordinator.get
@@ -1081,6 +1132,7 @@ class SNAPSyncController(
                 scala.concurrent
                   .Future {
                     val emptyRoot = ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)
+                    val zeroHash = ByteString(new Array[Byte](32))
                     val raf = new java.io.RandomAccessFile(filePath.toFile, "r")
                     val buf = new Array[Byte](64)
                     val batch = new scala.collection.mutable.ArrayBuffer[StorageTask](10000)
@@ -1090,7 +1142,7 @@ class SNAPSyncController(
                         raf.readFully(buf)
                         val accountHash = ByteString(java.util.Arrays.copyOfRange(buf, 0, 32))
                         val storageRoot = ByteString(java.util.Arrays.copyOfRange(buf, 32, 64))
-                        if (storageRoot.nonEmpty && storageRoot != emptyRoot) {
+                        if (accountHash != zeroHash && storageRoot.nonEmpty && storageRoot != emptyRoot) {
                           batch += StorageTask.createStorageTask(accountHash, storageRoot)
                         }
                         if (batch.size >= 10000) {
@@ -1121,10 +1173,50 @@ class SNAPSyncController(
               storageRangeCoordinator.foreach(_ ! actors.Messages.NoMoreStorageTasks)
             }
 
-            // Bytecodes: with inline dispatch, codeHashes were already sent to the old coordinator.
-            // On recovery, we can't recover those. Send NoMore — the healing phase will catch any
-            // missing bytecodes via trie walk.
-            bytecodeCoordinator.foreach(_ ! actors.Messages.NoMoreByteCodeTasks)
+            // Bytecodes: stream codeHashes from persisted file if available. Each entry is 32 bytes
+            // (raw keccak256 hash, written by AccountRangeCoordinator.uniqueCodeHashesOut).
+            val savedCodeHashesPath = appStateStorage.getSnapSyncCodeHashesPath()
+            if (!bytecodeAlreadyDone) savedCodeHashesPath.foreach { pathStr =>
+              val filePath = java.nio.file.Paths.get(pathStr)
+              if (java.nio.file.Files.exists(filePath)) {
+                val coordinator = bytecodeCoordinator.get
+                import context.dispatcher
+                scala.concurrent
+                  .Future {
+                    val raf = new java.io.RandomAccessFile(filePath.toFile, "r")
+                    val buf = new Array[Byte](32)
+                    val batch = new scala.collection.mutable.ArrayBuffer[ByteString](10000)
+                    var totalHashes = 0
+                    try {
+                      while (raf.getFilePointer < raf.length()) {
+                        raf.readFully(buf)
+                        batch += ByteString(java.util.Arrays.copyOf(buf, 32))
+                        if (batch.size >= 10000) {
+                          coordinator ! actors.Messages.AddByteCodeTasks(batch.toSeq)
+                          totalHashes += batch.size
+                          batch.clear()
+                        }
+                      }
+                      if (batch.nonEmpty) {
+                        coordinator ! actors.Messages.AddByteCodeTasks(batch.toSeq)
+                        totalHashes += batch.size
+                      }
+                    } finally raf.close()
+                    totalHashes
+                  }
+                  .foreach { count =>
+                    log.info(s"Recovery: streamed $count codeHashes from ${filePath} for bytecode sync")
+                    coordinator ! actors.Messages.NoMoreByteCodeTasks
+                  }
+              } else {
+                log.warning(s"Recovery: codeHashes file $filePath not found. Sending NoMore immediately.")
+                bytecodeCoordinator.foreach(_ ! actors.Messages.NoMoreByteCodeTasks)
+              }
+            }
+            if (savedCodeHashesPath.isEmpty) {
+              log.warning("Recovery: no codeHashes file path persisted. Sending NoMore immediately.")
+              bytecodeCoordinator.foreach(_ ! actors.Messages.NoMoreByteCodeTasks)
+            }
 
             currentPhase = ByteCodeAndStorageSync
             lastStorageProgressMs = System.currentTimeMillis()
@@ -1135,11 +1227,17 @@ class SNAPSyncController(
             startChainDownloader()
 
             context.become(syncing)
+            // If both phases were already complete, advance to healing immediately
+            checkAllDownloadsComplete()
             return
           }
         case _ =>
           log.warning("Recovery: accounts-complete flag set but missing pivot/root. Clearing and restarting fresh.")
-          appStateStorage.putSnapSyncAccountsComplete(false).commit()
+          appStateStorage
+            .putSnapSyncAccountsComplete(false)
+            .and(appStateStorage.putSnapSyncStorageComplete(false))
+            .and(appStateStorage.putSnapSyncBytecodeComplete(false))
+            .commit()
       }
     }
 
@@ -1183,7 +1281,7 @@ class SNAPSyncController(
     // fresh-startup race counts them as "network best=0" → pivot=-64 → genesis fallback.
     val snapPeersForPivot =
       peersToDownloadFrom.values.toList
-        .filter(_.peerInfo.remoteStatus.supportsSnap)
+        .filter(p => p.peerInfo.remoteStatus.supportsSnap && p.peerInfo.forkAccepted)
         .filter(_.peerInfo.maxBlockNumber > 0)
         .filter(p => bootstrapPivotBlock == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivotBlock)
 
@@ -1295,8 +1393,10 @@ class SNAPSyncController(
         case Some(genesisHeader) =>
           pivotBlock = Some(BigInt(0))
           stateRoot = Some(genesisHeader.stateRoot)
-          appStateStorage.putSnapSyncPivotBlock(0).commit()
-          appStateStorage.putSnapSyncStateRoot(genesisHeader.stateRoot).commit()
+          appStateStorage
+            .putSnapSyncPivotBlock(0)
+            .and(appStateStorage.putSnapSyncStateRoot(genesisHeader.stateRoot))
+            .commit()
           updateBestBlockForPivot(genesisHeader, BigInt(0))
 
           SNAPSyncMetrics.setPivotBlockNumber(0)
@@ -1380,8 +1480,10 @@ class SNAPSyncController(
           // Pivot header is available - proceed with SNAP sync
           pivotBlock = Some(pivotBlockNumber)
           stateRoot = Some(header.stateRoot)
-          appStateStorage.putSnapSyncPivotBlock(pivotBlockNumber).commit()
-          appStateStorage.putSnapSyncStateRoot(header.stateRoot).commit()
+          appStateStorage
+            .putSnapSyncPivotBlock(pivotBlockNumber)
+            .and(appStateStorage.putSnapSyncStateRoot(header.stateRoot))
+            .commit()
           updateBestBlockForPivot(header, pivotBlockNumber)
 
           // Update metrics - pivot block
@@ -1522,7 +1624,11 @@ class SNAPSyncController(
 
     // Clear persisted SNAP progress — fast sync will start fresh
     appStateStorage.putSnapSyncProgress("").commit()
-    appStateStorage.putSnapSyncAccountsComplete(false).commit()
+    appStateStorage
+      .putSnapSyncAccountsComplete(false)
+      .and(appStateStorage.putSnapSyncStorageComplete(false))
+      .and(appStateStorage.putSnapSyncBytecodeComplete(false))
+      .commit()
     appStateStorage.putSnapSyncStorageFilePath("").commit()
     preservedRangeProgress = Map.empty
     preservedAtPivotBlock = None
@@ -1813,7 +1919,8 @@ class SNAPSyncController(
 
       val snapPeers = peersToDownloadFrom.collect {
         case (_, peerWithInfo)
-            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
+            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.forkAccepted
+              && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
           peerWithInfo.peer
       }
 
@@ -1835,7 +1942,8 @@ class SNAPSyncController(
     // Notify coordinator of available peers
     bytecodeCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
-        case (_, peerWithInfo) if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
+        case (_, peerWithInfo)
+            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.forkAccepted =>
           peerWithInfo.peer
       }
 
@@ -1858,7 +1966,8 @@ class SNAPSyncController(
 
       val snapPeers = peersToDownloadFrom.collect {
         case (_, peerWithInfo)
-            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
+            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.forkAccepted
+              && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
           peerWithInfo.peer
       }
 
@@ -1998,31 +2107,92 @@ class SNAPSyncController(
         coordinator ! actors.Messages.UpdateMaxInFlightPerPeer(5)
       }
 
-      // Periodically send peer availability notifications
-      healingRequestTask = Some(
-        scheduler.scheduleWithFixedDelay(
-          0.seconds,
-          1.second,
-          self,
-          RequestTrieNodeHealing
-        )(ec, self)
-      )
+      // Periodically send peer availability notifications (cancel any existing scheduler first)
+      startHealingRequestScheduler()
+
+      // Ensure configured snap-server-peers are connected, checked periodically.
+      // Initial delay of 15s gives inbound connections time to complete STATUS exchange and
+      // appear in handshakedPeers (STATUS < 1s + peersScanInterval = 5s) before we ever
+      // send an outbound ConnectToPeer. Firing immediately was causing AlreadyConnected on
+      // go-ethereum: core-geth connects inbound → we immediately dial outbound → both killed.
+      scheduler.scheduleWithFixedDelay(
+        15.seconds,
+        30.seconds,
+        self,
+        EnsureSnapServerPeersConnected
+      )(ec)
 
       progressMonitor.startPhase(StateHealing)
-
-      // Run initial trie walk asynchronously to discover missing nodes
-      startTrieWalk()
     }
+  }
+
+  /** ARCH-WALK-HEAL-INTERLEAVE: Create a healing coordinator BEFORE starting the trie walk. Nodes discovered
+    * per-subtree (TrieWalkBatch) are fed to the coordinator immediately, so healing runs in parallel with the walk.
+    * With root seeding + discoverMissingChildren, healing starts instantly from the root — the walk is validation-only.
+    *
+    * If coordinator already exists (e.g. still running after StateHealingComplete), just start the walk — the
+    * coordinator is alive and will receive batch nodes.
+    */
+  private def startStateHealingWithInterleave(): Unit =
+    if (trieNodeHealingCoordinator.isDefined) {
+      // Coordinator still running — just start the validation walk
+      startTrieWalk()
+    } else {
+      stateRoot match {
+        case Some(root) =>
+          val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
+          trieNodeHealingCoordinator = Some(
+            context.actorOf(
+              actors.TrieNodeHealingCoordinator
+                .props(
+                  stateRoot = root,
+                  networkPeerManager = networkPeerManager,
+                  requestTracker = requestTracker,
+                  mptStorage = storage,
+                  batchSize = snapSyncConfig.healingBatchSize,
+                  snapSyncController = self,
+                  concurrency = snapSyncConfig.healingConcurrency
+                )
+                .withDispatcher("sync-dispatcher"),
+              s"trie-node-healing-coordinator-$coordinatorGeneration"
+            )
+          )
+          trieNodeHealingCoordinator.foreach { coordinator =>
+            coordinator ! actors.Messages.StartTrieNodeHealing(root)
+            coordinator ! actors.Messages.UpdateMaxInFlightPerPeer(5)
+          }
+          startHealingRequestScheduler()
+          log.info(
+            s"[HEAL-INTERLEAVE] Healing coordinator created before walk — " +
+              s"root=${root.take(8).toHex}, generation=$coordinatorGeneration"
+          )
+          startTrieWalk()
+        case None =>
+          log.warning("[HEAL-INTERLEAVE] stateRoot is None — walking only (no coordinator created)")
+          startTrieWalk()
+      }
+    }
+
+  /** BUG-HEAL-SCHED FIX: Always cancel the existing scheduler before creating a new one. Multiple code paths create
+    * this scheduler; without cancel an orphaned scheduler fires every 1s in parallel with the new one.
+    */
+  private def startHealingRequestScheduler(): Unit = {
+    healingRequestTask.foreach(_.cancel())
+    healingRequestTask = Some(
+      scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestTrieNodeHealing)(ec, self)
+    )
   }
 
   // Internal message for periodic healing requests
   private case object RequestTrieNodeHealing
+  private case object EnsureSnapServerPeersConnected
 
   private def requestTrieNodeHealing(): Unit =
     // Notify coordinator of available peers
     trieNodeHealingCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
-        case (_, peerWithInfo) if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
+        case (_, peerWithInfo)
+            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.forkAccepted =>
           peerWithInfo.peer
       }
 
@@ -2034,6 +2204,27 @@ class SNAPSyncController(
         }
       }
     }
+
+  /** Reconnect to any configured snap-server-peers that are not currently connected.
+    *
+    * snap-server-peers are static SNAP-serving nodes (e.g. local Besu with --snapsync-server-enabled) that are the only
+    * source of ETC GetTrieNodes responses. They may disconnect after the storage phase. This method ensures
+    * reconnection so they are in the peer pool when healing dispatches requests.
+    */
+  private def ensureSnapServerPeersConnected(): Unit = {
+    if (snapSyncConfig.snapServerPeers.isEmpty) return
+    val connectedAddresses = peersToDownloadFrom.values.map { p =>
+      (p.peer.remoteAddress.getHostString, p.peer.remoteAddress.getPort)
+    }.toSet
+    snapSyncConfig.snapServerPeers.foreach { uri =>
+      val host = uri.getHost
+      val port = uri.getPort
+      if (!connectedAddresses.contains((host, port))) {
+        log.info(s"snap-server-peer $host:$port not connected — reconnecting")
+        networkPeerManager ! com.chipprbots.ethereum.network.PeerManagerActor.ConnectToPeer(uri)
+      }
+    }
+  }
 
   private def validateState(): Unit = {
     if (!snapSyncConfig.stateValidationEnabled) {
@@ -2130,11 +2321,11 @@ class SNAPSyncController(
 
   private def currentNetworkBestFromSnapPeers(): Option[BigInt] = {
     val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
+    // Peers whose STATUS hasn't arrived yet have maxBlockNumber=0 — exclude them, otherwise
+    // a fresh-startup race returns Some(0) and the caller commits to a genesis pivot before
+    // any real peer height is known.
     peersToDownloadFrom.values.toList
       .filter(_.peerInfo.remoteStatus.supportsSnap)
-      // Peers whose STATUS hasn't arrived yet have maxBlockNumber=0 — exclude them, otherwise
-      // a fresh-startup race returns Some(0) and the caller commits to a genesis pivot before
-      // any real peer height is known.
       .filter(_.peerInfo.maxBlockNumber > 0)
       .filter(p => bootstrapPivotBlock == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivotBlock)
       .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
@@ -2249,9 +2440,15 @@ class SNAPSyncController(
     // The backing storage was already created for the original pivot block number,
     // but since nodes are keyed by hash, they're valid for any root.
 
-    // Persist new pivot
-    appStateStorage.putSnapSyncPivotBlock(newPivotBlock).commit()
-    appStateStorage.putSnapSyncStateRoot(newStateRoot).commit()
+    // Persist new pivot — but NOT during healing: AppStateStorage is updated only when healing
+    // succeeds (trie walk finds 0 missing nodes). Mid-healing writes cause root mismatch (BUG-006):
+    // the new root is stored before all its nodes are healed, then validateState() sees a mismatch.
+    if (currentPhase != StateHealing) {
+      appStateStorage
+        .putSnapSyncPivotBlock(newPivotBlock)
+        .and(appStateStorage.putSnapSyncStateRoot(newStateRoot))
+        .commit()
+    }
     updateBestBlockForPivot(newPivotHeader, newPivotBlock)
     SNAPSyncMetrics.setPivotBlockNumber(newPivotBlock)
 
@@ -2265,9 +2462,6 @@ class SNAPSyncController(
     // Then re-walk the trie with the new root to discover missing nodes.
     trieNodeHealingCoordinator.foreach { coordinator =>
       coordinator ! actors.Messages.HealingPivotRefreshed(newStateRoot)
-      // Re-walk trie with new root to populate fresh healing tasks
-      trieWalkInProgress = false // Reset so startTrieWalk() can proceed
-      startTrieWalk()
     }
     // Chain download target extends to the new pivot (chain data is canonical, never invalidated)
     if (chainDownloader.isDefined) {
@@ -2322,7 +2516,11 @@ class SNAPSyncController(
     accountsComplete = false
     bytecodePhaseComplete = false
     storagePhaseComplete = false
-    appStateStorage.putSnapSyncAccountsComplete(false).commit()
+    appStateStorage
+      .putSnapSyncAccountsComplete(false)
+      .and(appStateStorage.putSnapSyncStorageComplete(false))
+      .and(appStateStorage.putSnapSyncBytecodeComplete(false))
+      .commit()
     appStateStorage.putSnapSyncStorageFilePath("").commit()
 
     // Reset pivot/state root and storage so a new selection is committed
@@ -2820,7 +3018,12 @@ case class SNAPSyncConfig(
     // Bug 30b: post-SNAP storage recovery can't refresh the pivot root. If every peer
     // rejects the saved root for this long with no slot progress, abandon recovery and
     // let regular sync's on-demand GetTrieNodes pick up missing subtrees.
-    storageRecoveryAbandonTimeout: FiniteDuration = 10.minutes
+    storageRecoveryAbandonTimeout: FiniteDuration = 10.minutes,
+    // Static SNAP server peers: addresses to always maintain a connection with during SNAP sync.
+    // Use for local SNAP-serving nodes (e.g. Besu with --snapsync-server-enabled) that may
+    // disconnect after storage phase but are needed for trie node healing.
+    // Format: enode://PUBKEY@HOST:PORT
+    snapServerPeers: List[java.net.URI] = Nil
 )
 
 object SNAPSyncConfig {
@@ -2916,7 +3119,18 @@ object SNAPSyncConfig {
       storageRecoveryAbandonTimeout =
         if (snapConfig.hasPath("storage-recovery-abandon-timeout"))
           snapConfig.getDuration("storage-recovery-abandon-timeout").toMillis.millis
-        else 10.minutes
+        else 10.minutes,
+      snapServerPeers =
+        if (snapConfig.hasPath("snap-server-peers"))
+          snapConfig
+            .getStringList("snap-server-peers")
+            .toArray
+            .toList
+            .flatMap { s =>
+              try Some(new java.net.URI(s.toString))
+              catch { case _: Exception => None }
+            }
+        else Nil
     )
   }
 }

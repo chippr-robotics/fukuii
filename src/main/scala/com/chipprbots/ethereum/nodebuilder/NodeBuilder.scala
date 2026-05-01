@@ -155,6 +155,7 @@ trait PeerDiscoveryManagerBuilder {
     with DiscoveryConfigBuilder
     with DiscoveryServiceBuilder
     with StorageBuilder
+    with BlockchainBuilder
     with InstanceConfigProvider =>
 
   implicit lazy val ioRuntime: IORuntime = IORuntime.global
@@ -168,7 +169,14 @@ trait PeerDiscoveryManagerBuilder {
         discoveryConfig,
         tcpPort = instanceConfig.Network.Server.port,
         nodeStatusHolder,
-        storagesInstance.storages.knownNodesStorage
+        storagesInstance.storages.knownNodesStorage,
+        forkIdTag = Some(
+          new com.chipprbots.ethereum.network.discovery.ForkIdTag(
+            genesisHash = () => blockchainReader.genesisHeader.hash,
+            blockchainConfig = blockchainConfig,
+            currentBestBlock = () => blockchainReader.getBestBlockNumber()
+          )
+        )
       ),
       randomNodeBufferSize = instanceConfig.Network.peer.maxOutgoingPeers
     ),

@@ -206,7 +206,7 @@ class InMemoryWorldStateProxy(
     try accountsStateTrie.get(address)
     catch {
       case e: MissingNodeException =>
-        throw new MissingAccountNodeException(e.hash, address.bytes)
+        throw new MissingAccountNodeException(e.hash, address.bytes, e.location)
     }
 
   override def getEmptyAccount: Account = Account.empty(accountStartNonce)

@@ -853,7 +853,7 @@ class SyncController(
       networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeers
 
     case com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers(peers) =>
-      val snapPeers = peers.filter { case (_, peerInfo) => peerInfo.remoteStatus.supportsSnap }
+      val snapPeers = peers.filter { case (_, peerInfo) => peerInfo.remoteStatus.supportsSnap && peerInfo.forkAccepted }
       if (snapPeers.nonEmpty) {
         snapPeers.foreach { case (peer, _) =>
           bytecodeActor.foreach(_ ! snap.actors.Messages.ByteCodePeerAvailable(peer))
