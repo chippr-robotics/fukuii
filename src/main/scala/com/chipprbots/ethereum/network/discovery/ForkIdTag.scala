@@ -1,9 +1,10 @@
 package com.chipprbots.ethereum.network.discovery
 
+import cats.effect.SyncIO
 import org.apache.pekko.util.ByteString
 import scodec.bits.ByteVector
 
-import com.chipprbots.ethereum.forkid.ForkId
+import com.chipprbots.ethereum.forkid.{Connect, ForkId, ForkIdValidator}
 import com.chipprbots.ethereum.forkid.ForkId._
 import com.chipprbots.ethereum.rlp._
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -12,14 +13,17 @@ import com.chipprbots.scalanet.discovery.ethereum.KeyValueTag
 
 import scala.util.Try
 
-/** ENR-based forkId filter (EIP-2124). Rejects cross-chain peers (Polygon, ETH mainnet, Linea)
- *  before TCP is dialed by reading the `eth` ENR key. Also advertises our chain's current forkId
- *  in our own ENR so compatible peers can pre-filter us.
+/** ENR-based forkId filter (EIP-2124). Rejects peers on incompatible chains before TCP is dialed
+ *  by reading the `eth` ENR key. Network-aware: derives fork ID from the runtime genesis hash and
+ *  the selected network's fork schedule (works correctly on ETC mainnet, Mordor, etc.).
  *
  *  No `eth` key in peer ENR → accept (pre-EIP-2124 node; ETH Status decides).
  *  Incompatible forkHash → reject (removed from routing table, TCP never dialed).
- *  The filter is conservative: when ambiguous (peer ahead or behind on same chain), accept and
- *  let the ETH Status handshake do the authoritative check.
+ *  Ambiguous cases (peer ahead or behind on same chain) → accept; ETH Status does the
+ *  authoritative check.
+ *
+ *  Delegates to [[ForkIdValidator.validatePeer]] for the full three-pass EIP-2124 algorithm
+ *  (same-state, remote-subset, remote-superset) — consistent with the ETH Status handshaker.
  */
 class ForkIdTag(
     genesisHash: () => ByteString,
@@ -42,32 +46,17 @@ class ForkIdTag(
           val rlp = rawDecode(ethBytes.toArray)
           decode[ForkId](rlp)
         }.toEither.left.map(e => s"ENR eth key: cannot decode ForkId: ${e.getMessage}") match {
-          case Left(err)           => Left(err)
-          case Right(remoteForkId) => validateForkId(currentBestBlock(), remoteForkId)
+          case Left(err) => Left(err)
+          case Right(remoteForkId) =>
+            import ForkIdValidator.syncIoLogger
+            ForkIdValidator.validatePeer[SyncIO](genesisHash(), blockchainConfig)(
+              currentBestBlock(),
+              remoteForkId
+            ).unsafeRunSync() match {
+              case Connect => Right(())
+              case other   => Left(s"ENR fork ID incompatible ($other): $remoteForkId")
+            }
         }
-    }
-  }
-
-  private def validateForkId(currentBlock: BigInt, remote: ForkId): Either[String, Unit] = {
-    val local = ForkId.create(genesisHash(), blockchainConfig)(currentBlock)
-    if (local.hash == remote.hash) {
-      Right(())
-    } else {
-      remote.next match {
-        case Some(next) if next > currentBlock =>
-          // Peer is ahead on same chain, announcing an upcoming fork — accept
-          Right(())
-        case _ =>
-          local.next match {
-            case Some(_) =>
-              // We have a future fork; remote may be at an earlier state of our chain — accept, let TCP decide
-              Right(())
-            case None =>
-              Left(
-                s"Incompatible chain: local forkHash=0x${local.hash.toString(16)}, remote forkHash=0x${remote.hash.toString(16)}"
-              )
-          }
-      }
     }
   }
 }
