@@ -15,19 +15,8 @@ trait FastSyncBranchResolver {
   protected def blockchain: Blockchain
   protected def blockchainReader: BlockchainReader
 
-  // TODO: move to [[Blockchain]] and make sure it's atomic
   def discardBlocksAfter(lastValidBlock: BigInt): Unit =
-    discardBlocks(lastValidBlock, blockchainReader.getBestBlockNumber())
-
-  // TODO: move to [[Blockchain]] and make sure it's atomic
-  private def discardBlocks(fromBlock: BigInt, toBlock: BigInt): Unit = {
-    val blocksToBeRemoved = childOf(fromBlock).to(toBlock).reverse.toList
-    blocksToBeRemoved.foreach { toBeRemoved =>
-      blockchainReader
-        .getBlockHeaderByNumber(toBeRemoved)
-        .foreach(header => blockchain.removeBlock(header.hash))
-    }
-  }
+    blockchain.removeBlockRange(from = childOf(lastValidBlock), to = blockchainReader.getBestBlockNumber())
 
 }
 

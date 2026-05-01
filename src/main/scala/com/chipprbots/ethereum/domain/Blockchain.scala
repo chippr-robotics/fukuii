@@ -60,6 +60,12 @@ trait Blockchain {
   def getReadOnlyMptStorage(): MptStorage
 
   def removeBlock(hash: ByteString): Unit
+
+  /** Atomically remove all blocks in the given range (inclusive, descending order).
+    *
+    * All storage operations are batched into a single commit, ensuring no partial removal on crash.
+    */
+  def removeBlockRange(from: BigInt, to: BigInt): Unit
 }
 
 class BlockchainImpl(
@@ -162,6 +168,49 @@ class BlockchainImpl(
       "Removed block with hash {}. New best block number - {}",
       ByteStringUtils.hash2string(blockHash),
       potentialNewBestBlockNumber
+    )
+  }
+
+  override def removeBlockRange(from: BigInt, to: BigInt): Unit = {
+    val blocksToRemove = (to to from.max(1) by -1).flatMap { n =>
+      blockchainReader.getBlockByNumber(blockchainReader.getBestBranch(), n)
+    }
+
+    if (blocksToRemove.isEmpty) return
+
+    val lowestBlock = blocksToRemove.last
+    val newBestBlockNumber = (lowestBlock.number - 1).max(0)
+    val newBestBlockHash = lowestBlock.header.parentHash
+
+    val batchUpdate = blocksToRemove.foldLeft(blockHeadersStorage.emptyBatchUpdate) { case (batch, block) =>
+      val blockHash = block.hash
+      val numberMapping =
+        if (blockchainReader.getHashByBlockNumber(blockchainReader.getBestBranch(), block.number).contains(blockHash))
+          removeBlockNumberMapping(block.number)
+        else blockNumberMappingStorage.emptyBatchUpdate
+
+      batch
+        .and(blockHeadersStorage.remove(blockHash))
+        .and(blockBodiesStorage.remove(blockHash))
+        .and(chainWeightStorage.remove(blockHash))
+        .and(receiptStorage.remove(blockHash))
+        .and(removeTxsLocations(block.body.transactionList))
+        .and(numberMapping)
+    }
+
+    val bestBlockUpdate =
+      if (appStateStorage.getBestBlockNumber() > newBestBlockNumber)
+        appStateStorage.putBestBlockInfo(BlockInfo(newBestBlockHash, newBestBlockNumber))
+      else appStateStorage.emptyBatchUpdate
+
+    batchUpdate.and(bestBlockUpdate).commit()
+
+    log.debug(
+      "Atomically removed {} blocks from {} to {}. New best block number: {}",
+      blocksToRemove.size,
+      from,
+      to,
+      newBestBlockNumber
     )
   }
 
