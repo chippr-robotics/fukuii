@@ -64,9 +64,7 @@ ops/*/captured-logs/
 *.conf.backup.*
 
 # Claude Code
-.claude/SESSION_NOTES.md
-.claude/reports/
-.claude/debug.log
+.claude/
 
 # Planning & internal docs
 SESSION_NOTES.md
@@ -100,6 +98,4 @@ mnemonic.txt
 # Local run configs
 run-*.conf
 run-*.sh
-!run-classic.sh
-!run-mordor.sh
 
