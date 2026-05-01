@@ -805,9 +805,11 @@ class SNAPSyncController(
       // a fresh-startup race returns Some(0) and the caller commits to a genesis pivot before
       // any real peer height is known.
       def currentNetworkBestFromSnapPeers(bootstrapPivot: BigInt): Option[BigInt] = {
+        // Peers whose STATUS hasn't arrived yet have maxBlockNumber=0 — exclude them, otherwise a
+        // fresh-startup race counts them as "network best=0" → pivot=-64 → genesis fallback.
         val snapPeersForPivot =
           peersToDownloadFrom.values.toList
-            .filter(_.peerInfo.remoteStatus.supportsSnap)
+            .filter(p => p.peerInfo.remoteStatus.supportsSnap && p.peerInfo.forkAccepted)
             .filter(_.peerInfo.maxBlockNumber > 0)
             .filter(p => bootstrapPivot == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivot)
 
@@ -1198,7 +1200,7 @@ class SNAPSyncController(
     // fresh-startup race counts them as "network best=0" → pivot=-64 → genesis fallback.
     val snapPeersForPivot =
       peersToDownloadFrom.values.toList
-        .filter(_.peerInfo.remoteStatus.supportsSnap)
+        .filter(p => p.peerInfo.remoteStatus.supportsSnap && p.peerInfo.forkAccepted)
         .filter(_.peerInfo.maxBlockNumber > 0)
         .filter(p => bootstrapPivotBlock == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivotBlock)
 
@@ -1828,7 +1830,8 @@ class SNAPSyncController(
 
       val snapPeers = peersToDownloadFrom.collect {
         case (_, peerWithInfo)
-            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
+            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.forkAccepted
+              && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
           peerWithInfo.peer
       }
 
@@ -1850,7 +1853,8 @@ class SNAPSyncController(
     // Notify coordinator of available peers
     bytecodeCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
-        case (_, peerWithInfo) if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
+        case (_, peerWithInfo)
+            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.forkAccepted =>
           peerWithInfo.peer
       }
 
@@ -1873,7 +1877,8 @@ class SNAPSyncController(
 
       val snapPeers = peersToDownloadFrom.collect {
         case (_, peerWithInfo)
-            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
+            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.forkAccepted
+              && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
           peerWithInfo.peer
       }
 
@@ -2097,7 +2102,8 @@ class SNAPSyncController(
     // Notify coordinator of available peers
     trieNodeHealingCoordinator.foreach { coordinator =>
       val snapPeers = peersToDownloadFrom.collect {
-        case (_, peerWithInfo) if peerWithInfo.peerInfo.remoteStatus.supportsSnap =>
+        case (_, peerWithInfo)
+            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.forkAccepted =>
           peerWithInfo.peer
       }
 
@@ -2226,11 +2232,11 @@ class SNAPSyncController(
 
   private def currentNetworkBestFromSnapPeers(): Option[BigInt] = {
     val bootstrapPivotBlock = appStateStorage.getBootstrapPivotBlock()
+    // Peers whose STATUS hasn't arrived yet have maxBlockNumber=0 — exclude them, otherwise
+    // a fresh-startup race returns Some(0) and the caller commits to a genesis pivot before
+    // any real peer height is known.
     peersToDownloadFrom.values.toList
       .filter(_.peerInfo.remoteStatus.supportsSnap)
-      // Peers whose STATUS hasn't arrived yet have maxBlockNumber=0 — exclude them, otherwise
-      // a fresh-startup race returns Some(0) and the caller commits to a genesis pivot before
-      // any real peer height is known.
       .filter(_.peerInfo.maxBlockNumber > 0)
       .filter(p => bootstrapPivotBlock == 0 || p.peerInfo.maxBlockNumber >= bootstrapPivotBlock)
       .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)

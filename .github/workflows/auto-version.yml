@@ -177,15 +177,25 @@ jobs:
       # `startup_failure` until this change. workflow_dispatch is the one
       # event GITHUB_TOKEN can fire that re-enters the Actions runtime, so
       # the dispatched release run is independent of this job's success.
+      #
+      # Dispatch on the source branch (main/master/develop), NOT on the new
+      # tag. release.yml's checkout step pins to `ref: v${{ inputs.version
+      # }}` explicitly, so the dispatch ref doesn't affect what gets built —
+      # but it DOES decide which branch the run is recorded under, which
+      # drives the workflow status badge. Dispatching on the tag (`--ref
+      # v${NEW_VERSION}`) hid every successful release from the badge for
+      # the default branch, leaving it stuck on stale `startup_failure`
+      # entries from before the SLSA fix.
       - name: Dispatch release workflow
         if: steps.commit-version.outputs.version_changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NEW_VERSION: ${{ steps.new-version.outputs.version }}
           RELEASE_TIER: ${{ steps.version-type.outputs.release_tier }}
+          SOURCE_REF: ${{ github.ref_name }}
         run: |
           gh workflow run release.yml \
-            --ref "v${NEW_VERSION}" \
+            --ref "${SOURCE_REF}" \
             -f "version=${NEW_VERSION}" \
             -f "release_tier=${RELEASE_TIER}"
-          echo "Dispatched release.yml at tag v${NEW_VERSION} (tier=${RELEASE_TIER})"
+          echo "Dispatched release.yml on ${SOURCE_REF} for v${NEW_VERSION} (tier=${RELEASE_TIER})"
