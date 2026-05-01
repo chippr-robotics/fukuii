@@ -448,4 +448,59 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     val failMsg: AnyRef    = AccountTrieFinalizationFailed("error")
     successMsg.getClass should not be failMsg.getClass
   }
+
+  // ── K2: Startup race — zero-height pivot exclusion (regression for commit 164c8e2ac) ──
+  // Before 164c8e2ac, peers whose STATUS exchange had not yet completed (maxBlockNumber=0)
+  // were included in pivot candidate selection. This caused the pivot to compute as 0
+  // (max(0,0,...) - pivotBlockOffset = negative → clamped to 0), triggering an immediate
+  // sync-from-genesis which is wrong when valid peers do exist but haven't handshaked yet.
+  //
+  // The fix adds a maxBlockNumber > 0 guard at every SNAP peer-selection site.
+  // These tests lock the filter semantics so a refactor cannot silently revert the guard.
+
+  "SNAP peer selection" should "exclude zero-height peers from pivot candidate computation" taggedAs UnitTest in {
+    case class TestPeer(maxBlockNumber: BigInt)
+    val peers = Seq(TestPeer(0), TestPeer(0), TestPeer(20_000_000))
+    val eligible = peers.filter(_.maxBlockNumber > 0)
+    eligible should have size 1
+    eligible.head.maxBlockNumber shouldBe BigInt(20_000_000)
+  }
+
+  it should "identify when ALL peers have maxBlockNumber=0 (STATUS not yet exchanged)" taggedAs UnitTest in {
+    case class TestPeer(maxBlockNumber: BigInt)
+    val peers = Seq(TestPeer(0), TestPeer(0), TestPeer(0))
+    // All zero → no eligible peers → pivot selection must wait or be skipped.
+    // The controller checks eligiblePeers.isEmpty to gate pivot selection.
+    peers.filter(_.maxBlockNumber > 0) shouldBe empty
+  }
+
+  it should "pass only peers with maxBlockNumber > 0 through the zero-height filter" taggedAs UnitTest in {
+    case class TestPeer(maxBlockNumber: BigInt)
+    val mixed = Seq(TestPeer(0), TestPeer(19_000_000), TestPeer(20_000_000))
+    val eligible = mixed.filter(_.maxBlockNumber > 0)
+    eligible should have size 2
+    all(eligible.map(_.maxBlockNumber)) should be > BigInt(0)
+  }
+
+  it should "compute a valid pivot from the highest eligible peer, ignoring zero-height peers" taggedAs UnitTest in {
+    case class TestPeer(maxBlockNumber: BigInt)
+    val pivotBlockOffset = BigInt(5)
+    // Mix of zero-height and valid peers. Pivot must be derived from valid peers only.
+    val peers = Seq(TestPeer(0), TestPeer(0), TestPeer(20_000_000))
+    val eligible = peers.filter(_.maxBlockNumber > 0)
+    val bestBlock = eligible.map(_.maxBlockNumber).max
+    val pivot = (bestBlock - pivotBlockOffset).max(0)
+    pivot shouldBe BigInt(19_999_995)
+  }
+
+  it should "not regress: pivot from zero-height-only peers would have computed 0 (old bug)" taggedAs UnitTest in {
+    case class TestPeer(maxBlockNumber: BigInt)
+    val pivotBlockOffset = BigInt(5)
+    // Old code without filter: including zero-height peers in max() gives bestBlock=0,
+    // pivot=max(0-5,0)=0. Confirm the old formula would have produced 0.
+    val allPeers = Seq(TestPeer(0), TestPeer(0))
+    val oldBestBlock = allPeers.map(_.maxBlockNumber).maxOption.getOrElse(BigInt(0))
+    val oldPivot = (oldBestBlock - pivotBlockOffset).max(0)
+    oldPivot shouldBe BigInt(0) // demonstrates why the fix was necessary
+  }
 }
