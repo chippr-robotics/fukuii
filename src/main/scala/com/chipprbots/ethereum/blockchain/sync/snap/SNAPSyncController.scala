@@ -2039,10 +2039,9 @@ class SNAPSyncController(
 
   /** Reconnect to any configured snap-server-peers that are not currently connected.
     *
-    * snap-server-peers are static SNAP-serving nodes (e.g. local Besu with
-    * --snapsync-server-enabled) that are the only source of ETC GetTrieNodes responses.
-    * They may disconnect after the storage phase. This method ensures reconnection so they
-    * are in the peer pool when healing dispatches requests.
+    * snap-server-peers are static SNAP-serving nodes (e.g. local Besu with --snapsync-server-enabled) that are the only
+    * source of ETC GetTrieNodes responses. They may disconnect after the storage phase. This method ensures
+    * reconnection so they are in the peer pool when healing dispatches requests.
     */
   private def ensureSnapServerPeersConnected(): Unit = {
     if (snapSyncConfig.snapServerPeers.isEmpty) return
@@ -2058,7 +2057,6 @@ class SNAPSyncController(
       }
     }
   }
-
 
   private def validateState(): Unit = {
     if (!snapSyncConfig.stateValidationEnabled) {

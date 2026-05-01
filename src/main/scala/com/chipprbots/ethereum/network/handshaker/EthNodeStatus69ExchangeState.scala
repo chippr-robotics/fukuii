@@ -21,8 +21,8 @@ import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
   *   - Status message reorders fields: [version, networkId, genesis, forkId, earliestBlock, latestBlock,
   *     latestBlockHash]
   *   - ForkId validation is still performed
-  *   - TD is recovered from local ChainWeightStorage via latestBlockHash when the peer's block is
-  *     already in our chain; falls back to block-number proxy otherwise
+  *   - TD is recovered from local ChainWeightStorage via latestBlockHash when the peer's block is already in our chain;
+  *     falls back to block-number proxy otherwise
   */
 case class EthNodeStatus69ExchangeState(
     handshakerConfiguration: NetworkHandshakerConfiguration,
@@ -78,7 +78,8 @@ case class EthNodeStatus69ExchangeState(
             // Succeeds when the peer's block is in our ChainWeightStorage (peer at or behind our tip).
             // Falls back to block-number proxy when the peer is ahead of us.
             val resolvedChainWeight: ChainWeight =
-              blockchainReader.getChainWeightByHash(status.latestBlockHash)
+              blockchainReader
+                .getChainWeightByHash(status.latestBlockHash)
                 .getOrElse(ChainWeight.totalDifficultyOnly(status.latestBlock))
             log.debug(
               "ETH69_STATUS: chainWeight for peer latestBlockHash {}: {} (localLookup={})",
@@ -89,7 +90,11 @@ case class EthNodeStatus69ExchangeState(
             ConnectedState(
               PeerInfo.withForkAccepted(
                 RemoteStatus.fromETH69Status(
-                  status, negotiatedCapability, supportsSnap, peerCapabilities, resolvedChainWeight
+                  status,
+                  negotiatedCapability,
+                  supportsSnap,
+                  peerCapabilities,
+                  resolvedChainWeight
                 )
               )
             )
