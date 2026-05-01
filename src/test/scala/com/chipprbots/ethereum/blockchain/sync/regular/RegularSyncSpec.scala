@@ -187,8 +187,8 @@ class RegularSyncSpec
           // AbstractPeerTask.java distinguishes HeadersNotMatchingExpected (no penalty) from
           // InvalidHeaders (blacklist). Expect a retry request instead of BlacklistPeer.
           nextHeadersSender ! PeersClient.Response(defaultPeer, BlockHeaders(testBlocksChunked(5).headers))
-          peersClient.fishForSpecificMessage() {
-            case PeersClient.Request(_: ETH66GetBlockHeaders, _, _) => ()
+          peersClient.fishForSpecificMessage() { case PeersClient.Request(_: ETH66GetBlockHeaders, _, _) =>
+            ()
           }
         }
       )
@@ -203,8 +203,8 @@ class RegularSyncSpec
         peersClient.reply(
           PeersClient.Response(defaultPeer, BlockHeaders(testBlocks.headers.filter(_.number % 2 == 0)))
         )
-        peersClient.fishForSpecificMessage() {
-          case PeersClient.Request(_: ETH66GetBlockHeaders, _, _) => ()
+        peersClient.fishForSpecificMessage() { case PeersClient.Request(_: ETH66GetBlockHeaders, _, _) =>
+          ()
         }
       })
 

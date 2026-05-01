@@ -39,9 +39,10 @@ class AccountTaskSpec extends AnyFlatSpec with Matchers {
   it should "produce non-overlapping contiguous ranges" taggedAs UnitTest in {
     val tasks = AccountTask.createInitialTasks(dummyRoot, concurrency = 16)
     // Each task's `last` equals the next task's `next` (contiguous partition)
-    tasks.sliding(2).foreach { case Seq(prev, next) =>
-      prev.last shouldBe next.next
-    case _ => // single-element window — shouldn't happen with sliding(2) on size > 1
+    tasks.sliding(2).foreach {
+      case Seq(prev, next) =>
+        prev.last shouldBe next.next
+      case _ => // single-element window — shouldn't happen with sliding(2) on size > 1
     }
   }
 

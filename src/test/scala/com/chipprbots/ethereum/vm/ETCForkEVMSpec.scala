@@ -17,30 +17,30 @@ import Fixtures.blockchainConfig
 
 /** L7 — ETC fork-specific EVM semantics: behavioral execution tests.
   *
-  * Complements L2 (opcode availability via opCodes set membership) with
-  * tests that execute bytecode and verify the results.
+  * Complements L2 (opcode availability via opCodes set membership) with tests that execute bytecode and verify the
+  * results.
   *
-  * Fixtures.blockchainConfig uses chainId=0x3d=61 (ETC mainnet).
-  * Fork blocks: Atlantis=0, Agharta=0, Phoenix=600, Mystique=800, Spiral=900, Olympia=1000.
+  * Fixtures.blockchainConfig uses chainId=0x3d=61 (ETC mainnet). Fork blocks: Atlantis=0, Agharta=0, Phoenix=600,
+  * Mystique=800, Spiral=900, Olympia=1000.
   */
 class ETCForkEVMSpec extends AnyWordSpec with Matchers {
 
   // ── EVM configs at representative block heights ───────────────────────────
 
-  val configAtlantis: EvmConfig  = EvmConfig.AtlantisConfigBuilder(blockchainConfig)
-  val configAgharta: EvmConfig   = EvmConfig.AghartaConfigBuilder(blockchainConfig)
-  val configPhoenix: EvmConfig   = EvmConfig.PhoenixConfigBuilder(blockchainConfig)
-  val configMystique: EvmConfig  = EvmConfig.MystiqueConfigBuilder(blockchainConfig)
-  val configSpiral: EvmConfig    = EvmConfig.SpiralConfigBuilder(blockchainConfig)
-  val configOlympia: EvmConfig   = EvmConfig.OlympiaConfigBuilder(blockchainConfig)
+  val configAtlantis: EvmConfig = EvmConfig.AtlantisConfigBuilder(blockchainConfig)
+  val configAgharta: EvmConfig = EvmConfig.AghartaConfigBuilder(blockchainConfig)
+  val configPhoenix: EvmConfig = EvmConfig.PhoenixConfigBuilder(blockchainConfig)
+  val configMystique: EvmConfig = EvmConfig.MystiqueConfigBuilder(blockchainConfig)
+  val configSpiral: EvmConfig = EvmConfig.SpiralConfigBuilder(blockchainConfig)
+  val configOlympia: EvmConfig = EvmConfig.OlympiaConfigBuilder(blockchainConfig)
 
   // ── Block headers at representative heights ───────────────────────────────
 
-  val hdrAtlantis: BlockHeader  = BlockFixtures.ValidBlock.header.copy(number = 0)
-  val hdrPhoenix: BlockHeader   = BlockFixtures.ValidBlock.header.copy(number = Fixtures.PhoenixBlockNumber)
-  val hdrMystique: BlockHeader  = BlockFixtures.ValidBlock.header.copy(number = Fixtures.MystiqueBlockNumber)
-  val hdrSpiral: BlockHeader    = BlockFixtures.ValidBlock.header.copy(number = Fixtures.SpiralBlockNumber)
-  val hdrOlympia: BlockHeader   =
+  val hdrAtlantis: BlockHeader = BlockFixtures.ValidBlock.header.copy(number = 0)
+  val hdrPhoenix: BlockHeader = BlockFixtures.ValidBlock.header.copy(number = Fixtures.PhoenixBlockNumber)
+  val hdrMystique: BlockHeader = BlockFixtures.ValidBlock.header.copy(number = Fixtures.MystiqueBlockNumber)
+  val hdrSpiral: BlockHeader = BlockFixtures.ValidBlock.header.copy(number = Fixtures.SpiralBlockNumber)
+  val hdrOlympia: BlockHeader =
     BlockFixtures.ValidBlock.header.copy(
       number = Fixtures.OlympiaBlockNumber,
       extraFields = HefPostOlympia(BigInt("1000000000")) // 1 Gwei base fee
@@ -48,7 +48,7 @@ class ETCForkEVMSpec extends AnyWordSpec with Matchers {
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
-  val callerAddr: Address   = Address(0xca11e4)
+  val callerAddr: Address = Address(0xca11e4)
   val contractAddr: Address = Address(0xc0de00)
 
   /** Base world: caller and contract both present with small balance. */
@@ -101,9 +101,11 @@ class ETCForkEVMSpec extends AnyWordSpec with Matchers {
 
       "set RevertOccurs error and preserve gas" taggedAs (UnitTest, VMTest) in {
         val code = Assembly(
-          PUSH1, 0, // return size = 0
-          PUSH1, 0, // return offset = 0
-          REVERT    // revert with empty data
+          PUSH1,
+          0, // return size = 0
+          PUSH1,
+          0, // return offset = 0
+          REVERT // revert with empty data
         )
         val result = runCode(code, hdrAtlantis, configAtlantis)
         result.error shouldBe Some(RevertOccurs)
@@ -134,13 +136,18 @@ class ETCForkEVMSpec extends AnyWordSpec with Matchers {
       "shift 2 left by 3 bits to produce 16" taggedAs (UnitTest, VMTest) in {
         // Stack: push value first, then shift amount (shift is TOS for SHL)
         val code = Assembly(
-          PUSH1, 2,  // value
-          PUSH1, 3,  // shift amount (TOS)
+          PUSH1,
+          2, // value
+          PUSH1,
+          3, // shift amount (TOS)
           SHL,
-          PUSH1, 0,
+          PUSH1,
+          0,
           MSTORE,
-          PUSH1, 32,
-          PUSH1, 0,
+          PUSH1,
+          32,
+          PUSH1,
+          0,
           RETURN
         )
         val result = runCode(code, hdrAtlantis, configAgharta)
@@ -153,13 +160,18 @@ class ETCForkEVMSpec extends AnyWordSpec with Matchers {
 
       "shift 16 right by 2 bits to produce 4" taggedAs (UnitTest, VMTest) in {
         val code = Assembly(
-          PUSH1, 16, // value
-          PUSH1, 2,  // shift amount (TOS)
+          PUSH1,
+          16, // value
+          PUSH1,
+          2, // shift amount (TOS)
           SHR,
-          PUSH1, 0,
+          PUSH1,
+          0,
           MSTORE,
-          PUSH1, 32,
-          PUSH1, 0,
+          PUSH1,
+          32,
+          PUSH1,
+          0,
           RETURN
         )
         val result = runCode(code, hdrAtlantis, configAgharta)
@@ -172,13 +184,18 @@ class ETCForkEVMSpec extends AnyWordSpec with Matchers {
 
       "shift a positive value right by 1 bit (same as SHR for positives)" taggedAs (UnitTest, VMTest) in {
         val code = Assembly(
-          PUSH1, 8,  // value
-          PUSH1, 1,  // shift (TOS)
+          PUSH1,
+          8, // value
+          PUSH1,
+          1, // shift (TOS)
           SAR,
-          PUSH1, 0,
+          PUSH1,
+          0,
           MSTORE,
-          PUSH1, 32,
-          PUSH1, 0,
+          PUSH1,
+          32,
+          PUSH1,
+          0,
           RETURN
         )
         val result = runCode(code, hdrAtlantis, configAgharta)
@@ -197,10 +214,13 @@ class ETCForkEVMSpec extends AnyWordSpec with Matchers {
       "return ETC mainnet chain ID (61 = 0x3d)" taggedAs (UnitTest, VMTest) in {
         val code = Assembly(
           CHAINID,
-          PUSH1, 0,
+          PUSH1,
+          0,
           MSTORE,
-          PUSH1, 32,
-          PUSH1, 0,
+          PUSH1,
+          32,
+          PUSH1,
+          0,
           RETURN
         )
         val result = runCode(code, hdrPhoenix, configPhoenix)
@@ -215,10 +235,13 @@ class ETCForkEVMSpec extends AnyWordSpec with Matchers {
         val contractBalance = UInt256(12345)
         val code = Assembly(
           SELFBALANCE,
-          PUSH1, 0,
+          PUSH1,
+          0,
           MSTORE,
-          PUSH1, 32,
-          PUSH1, 0,
+          PUSH1,
+          32,
+          PUSH1,
+          0,
           RETURN
         )
         val result = runCode(code, hdrPhoenix, configPhoenix, contractBalance = contractBalance)
@@ -229,10 +252,13 @@ class ETCForkEVMSpec extends AnyWordSpec with Matchers {
       "return 0 for a contract with no balance" taggedAs (UnitTest, VMTest) in {
         val code = Assembly(
           SELFBALANCE,
-          PUSH1, 0,
+          PUSH1,
+          0,
           MSTORE,
-          PUSH1, 32,
-          PUSH1, 0,
+          PUSH1,
+          32,
+          PUSH1,
+          0,
           RETURN
         )
         val result = runCode(code, hdrPhoenix, configPhoenix, contractBalance = UInt256.Zero)
@@ -251,10 +277,13 @@ class ETCForkEVMSpec extends AnyWordSpec with Matchers {
       "push 0 onto the stack" taggedAs (UnitTest, VMTest) in {
         val code = Assembly(
           PUSH0,
-          PUSH1, 0,
+          PUSH1,
+          0,
           MSTORE,
-          PUSH1, 32,
-          PUSH1, 0,
+          PUSH1,
+          32,
+          PUSH1,
+          0,
           RETURN
         )
         val result = runCode(code, hdrSpiral, configSpiral)
@@ -303,10 +332,13 @@ class ETCForkEVMSpec extends AnyWordSpec with Matchers {
       "return the block's base fee (1 Gwei = 1_000_000_000)" taggedAs (UnitTest, VMTest) in {
         val code = Assembly(
           BASEFEE,
-          PUSH1, 0,
+          PUSH1,
+          0,
           MSTORE,
-          PUSH1, 32,
-          PUSH1, 0,
+          PUSH1,
+          32,
+          PUSH1,
+          0,
           RETURN
         )
         val result = runCode(code, hdrOlympia, configOlympia)

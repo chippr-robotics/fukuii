@@ -57,17 +57,16 @@ class PeersClient(
 
   // Tracks GetNodeData capability per peer via observed behavior (not advertised capability).
   // Shared across all StateNodeFetcher actors so the first failure protects all concurrent requests.
-  private val nodeDataCooldownUntilMs     = mutable.Map.empty[PeerId, Long]
+  private val nodeDataCooldownUntilMs = mutable.Map.empty[PeerId, Long]
   private val nodeDataConsecutiveFailures = mutable.Map.empty[PeerId, Int]
 
-  override def handlePeerListMessages: Receive = ({
-    case PeerDisconnected(peerId) =>
-      // Intentionally do NOT clear nodeData cooldown on disconnect. A peer that closes
-      // the connection when asked for GetNodeData (e.g. BONSAI Besu) will immediately
-      // reconnect and repeat the same failure if we reset its state here. The time-based
-      // cooldown must be allowed to expire naturally so the peer stays suppressed.
-      super.handlePeerListMessages(PeerDisconnected(peerId))
-  }: Receive) orElse super.handlePeerListMessages
+  override def handlePeerListMessages: Receive = ({ case PeerDisconnected(peerId) =>
+    // Intentionally do NOT clear nodeData cooldown on disconnect. A peer that closes
+    // the connection when asked for GetNodeData (e.g. BONSAI Besu) will immediately
+    // reconnect and repeat the same failure if we reset its state here. The time-based
+    // cooldown must be allowed to expire naturally so the peer stays suppressed.
+    super.handlePeerListMessages(PeerDisconnected(peerId))
+  }: Receive).orElse(super.handlePeerListMessages)
 
   val statusSchedule: Cancellable =
     scheduler.scheduleWithFixedDelay(syncConfig.printStatusInterval, syncConfig.printStatusInterval, self, PrintStatus)

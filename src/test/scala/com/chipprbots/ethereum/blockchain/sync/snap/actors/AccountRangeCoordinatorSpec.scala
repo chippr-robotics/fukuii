@@ -255,9 +255,9 @@ class AccountRangeCoordinatorSpec
       awaitAssert {
         coordinator ! Messages.GetProgress
         val stats = expectMsgType[AccountRangeStats](1.second)
-        stats.progress should be < 0.01       // consumedKeyspace = 0
-        stats.accountsDownloaded shouldBe 0   // no real accounts stored
-        stats.tasksPending should be > 0      // task still in queue
+        stats.progress should be < 0.01 // consumedKeyspace = 0
+        stats.accountsDownloaded shouldBe 0 // no real accounts stored
+        stats.tasksPending should be > 0 // task still in queue
       }
     }
 

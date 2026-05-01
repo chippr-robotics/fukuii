@@ -135,16 +135,16 @@ class ChainConfigValidationSpec extends AnyFlatSpec with Matchers {
 // scalastyle:off magic.number
 /** L3 — ETC DAO fork exclusion.
   *
-  * ETC's defining property: it did NOT follow the ETH DAO bailout. The DAO config exists in the chain config
-  * ONLY to anchor the fork ID list (so ETC nodes reject ETH peers). The drain list and refund contract are
-  * absent, meaning no funds are ever moved at block 1,920,000.
+  * ETC's defining property: it did NOT follow the ETH DAO bailout. The DAO config exists in the chain config ONLY to
+  * anchor the fork ID list (so ETC nodes reject ETH peers). The drain list and refund contract are absent, meaning no
+  * funds are ever moved at block 1,920,000.
   *
   * On Mordor there is no DAO config at all.
   */
 class ETCDaoExclusionSpec extends AnyFlatSpec with Matchers {
 
-  private val fullConfig   = ConfigFactory.load()
-  private val etcConfig    = BlockchainConfig.fromRawConfig(fullConfig.getConfig("fukuii.blockchains.etc"))
+  private val fullConfig = ConfigFactory.load()
+  private val etcConfig = BlockchainConfig.fromRawConfig(fullConfig.getConfig("fukuii.blockchains.etc"))
   private val mordorConfig = BlockchainConfig.fromRawConfig(fullConfig.getConfig("fukuii.blockchains.mordor"))
 
   "ETC mainnet DAO config" should "be present (for fork ID tracking)" taggedAs (UnitTest, ConsensusTest) in {

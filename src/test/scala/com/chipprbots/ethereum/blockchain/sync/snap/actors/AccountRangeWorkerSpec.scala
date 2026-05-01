@@ -26,9 +26,9 @@ class AccountRangeWorkerSpec
 
   override def afterAll(): Unit = TestKit.shutdownActorSystem(system)
 
-  private val zeroHash     = ByteString(new Array[Byte](32))
-  private val maxHash      = ByteString(Array.fill(32)(0xff.toByte))
-  private val dummyRoot    = ByteString(Array.fill(32)(0xca.toByte))
+  private val zeroHash = ByteString(new Array[Byte](32))
+  private val maxHash = ByteString(Array.fill(32)(0xff.toByte))
+  private val dummyRoot = ByteString(Array.fill(32)(0xca.toByte))
   private val defaultBytes = BigInt(1024 * 1024)
 
   private def makeTask(root: ByteString = dummyRoot): AccountTask =
@@ -45,11 +45,11 @@ class AccountRangeWorkerSpec
   }
 
   "AccountRangeWorker" should "send GetAccountRange to peer via NetworkPeerManager on FetchAccountRange" taggedAs UnitTest in {
-    val coordinator        = TestProbe()
+    val coordinator = TestProbe()
     val networkPeerManager = TestProbe()
-    val peerProbe          = TestProbe()
-    val peer               = PeerTestHelpers.createTestPeer("ar-peer-1", peerProbe.ref)
-    val worker             = makeWorker(coordinator, networkPeerManager)
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("ar-peer-1", peerProbe.ref)
+    val worker = makeWorker(coordinator, networkPeerManager)
 
     val reqId = BigInt(1)
     worker ! Messages.FetchAccountRange(makeTask(), peer, reqId, defaultBytes)
@@ -58,19 +58,19 @@ class AccountRangeWorkerSpec
     sendMsg.peerId shouldBe peer.id
     sendMsg.message shouldBe a[GetAccountRangeEnc]
     val msg = sendMsg.message.asInstanceOf[GetAccountRangeEnc].underlyingMsg
-    msg.requestId     shouldBe reqId
-    msg.rootHash      shouldBe dummyRoot
+    msg.requestId shouldBe reqId
+    msg.rootHash shouldBe dummyRoot
     msg.responseBytes shouldBe defaultBytes
   }
 
   it should "report TaskComplete to coordinator on empty-range response (valid proof-of-absence)" taggedAs UnitTest in {
     // An empty AccountRange with an empty proof is a valid proof-of-absence.
     // MerkleProofVerifier.verifyAccountRange short-circuits to Right(()) when both are empty.
-    val coordinator        = TestProbe()
+    val coordinator = TestProbe()
     val networkPeerManager = TestProbe()
-    val peerProbe          = TestProbe()
-    val peer               = PeerTestHelpers.createTestPeer("ar-peer-2", peerProbe.ref)
-    val worker             = makeWorker(coordinator, networkPeerManager)
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("ar-peer-2", peerProbe.ref)
+    val worker = makeWorker(coordinator, networkPeerManager)
 
     val reqId = BigInt(2)
     worker ! Messages.FetchAccountRange(makeTask(), peer, reqId, defaultBytes)
@@ -84,17 +84,17 @@ class AccountRangeWorkerSpec
     msg.requestId shouldBe reqId
     msg.result.isRight shouldBe true
     val (count, accounts, proof) = msg.result.toOption.get
-    count    shouldBe 0
+    count shouldBe 0
     accounts shouldBe empty
-    proof    shouldBe empty
+    proof shouldBe empty
   }
 
   it should "report TaskFailed to coordinator on RequestTimeout" taggedAs UnitTest in {
-    val coordinator        = TestProbe()
+    val coordinator = TestProbe()
     val networkPeerManager = TestProbe()
-    val peerProbe          = TestProbe()
-    val peer               = PeerTestHelpers.createTestPeer("ar-peer-3", peerProbe.ref)
-    val worker             = makeWorker(coordinator, networkPeerManager)
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("ar-peer-3", peerProbe.ref)
+    val worker = makeWorker(coordinator, networkPeerManager)
 
     val reqId = BigInt(3)
     worker ! Messages.FetchAccountRange(makeTask(), peer, reqId, defaultBytes)
@@ -104,15 +104,15 @@ class AccountRangeWorkerSpec
 
     val failed = coordinator.expectMsgType[Messages.TaskFailed](1.second)
     failed.requestId shouldBe reqId
-    failed.reason    shouldBe "Request timeout"
+    failed.reason shouldBe "Request timeout"
   }
 
   it should "report TaskFailed to coordinator on WorkerPeerDisconnected" taggedAs UnitTest in {
-    val coordinator        = TestProbe()
+    val coordinator = TestProbe()
     val networkPeerManager = TestProbe()
-    val peerProbe          = TestProbe()
-    val peer               = PeerTestHelpers.createTestPeer("ar-peer-4", peerProbe.ref)
-    val worker             = makeWorker(coordinator, networkPeerManager)
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("ar-peer-4", peerProbe.ref)
+    val worker = makeWorker(coordinator, networkPeerManager)
 
     val reqId = BigInt(4)
     worker ! Messages.FetchAccountRange(makeTask(), peer, reqId, defaultBytes)
@@ -122,15 +122,15 @@ class AccountRangeWorkerSpec
 
     val failed = coordinator.expectMsgType[Messages.TaskFailed](1.second)
     failed.requestId shouldBe reqId
-    failed.reason    shouldBe "Peer disconnected"
+    failed.reason shouldBe "Peer disconnected"
   }
 
   it should "report TaskFailed(0, Worker busy) when FetchAccountRange arrives while already working" taggedAs UnitTest in {
-    val coordinator        = TestProbe()
+    val coordinator = TestProbe()
     val networkPeerManager = TestProbe()
-    val peerProbe          = TestProbe()
-    val peer               = PeerTestHelpers.createTestPeer("ar-peer-5", peerProbe.ref)
-    val worker             = makeWorker(coordinator, networkPeerManager)
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("ar-peer-5", peerProbe.ref)
+    val worker = makeWorker(coordinator, networkPeerManager)
 
     val reqId1 = BigInt(5)
     worker ! Messages.FetchAccountRange(makeTask(), peer, reqId1, defaultBytes)
@@ -142,15 +142,15 @@ class AccountRangeWorkerSpec
 
     val failed = coordinator.expectMsgType[Messages.TaskFailed](1.second)
     failed.requestId shouldBe 0
-    failed.reason    shouldBe "Worker busy"
+    failed.reason shouldBe "Worker busy"
   }
 
   it should "return to idle after timeout and accept a new task" taggedAs UnitTest in {
-    val coordinator        = TestProbe()
+    val coordinator = TestProbe()
     val networkPeerManager = TestProbe()
-    val peerProbe          = TestProbe()
-    val peer               = PeerTestHelpers.createTestPeer("ar-peer-6", peerProbe.ref)
-    val worker             = makeWorker(coordinator, networkPeerManager)
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("ar-peer-6", peerProbe.ref)
+    val worker = makeWorker(coordinator, networkPeerManager)
 
     val reqId1 = BigInt(7)
     worker ! Messages.FetchAccountRange(makeTask(), peer, reqId1, defaultBytes)
@@ -166,11 +166,11 @@ class AccountRangeWorkerSpec
   }
 
   it should "ignore response with mismatched request ID" taggedAs UnitTest in {
-    val coordinator        = TestProbe()
+    val coordinator = TestProbe()
     val networkPeerManager = TestProbe()
-    val peerProbe          = TestProbe()
-    val peer               = PeerTestHelpers.createTestPeer("ar-peer-7", peerProbe.ref)
-    val worker             = makeWorker(coordinator, networkPeerManager)
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("ar-peer-7", peerProbe.ref)
+    val worker = makeWorker(coordinator, networkPeerManager)
 
     val reqId = BigInt(9)
     worker ! Messages.FetchAccountRange(makeTask(), peer, reqId, defaultBytes)

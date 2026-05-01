@@ -259,8 +259,12 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     import SNAPSyncController._
 
     val allPhases: Seq[SyncPhase] = Seq(
-      Idle, AccountRangeSync, ByteCodeAndStorageSync,
-      StateHealing, StateValidation, Completed
+      Idle,
+      AccountRangeSync,
+      ByteCodeAndStorageSync,
+      StateHealing,
+      StateValidation,
+      Completed
     )
     allPhases.distinct.size shouldBe 6
   }
@@ -271,15 +275,19 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     // The canonical SNAP sync pipeline order.  We can't enforce ordering via sealed trait alone,
     // but locking the set of phases here means adding a new phase forces updating this test.
     val canonicalOrder = Seq(
-      Idle, AccountRangeSync, ByteCodeAndStorageSync,
-      StateHealing, StateValidation, Completed
+      Idle,
+      AccountRangeSync,
+      ByteCodeAndStorageSync,
+      StateHealing,
+      StateValidation,
+      Completed
     )
     canonicalOrder.head shouldBe Idle
     canonicalOrder.last shouldBe Completed
-    canonicalOrder(1)   shouldBe AccountRangeSync
-    canonicalOrder(2)   shouldBe ByteCodeAndStorageSync
-    canonicalOrder(3)   shouldBe StateHealing
-    canonicalOrder(4)   shouldBe StateValidation
+    canonicalOrder(1) shouldBe AccountRangeSync
+    canonicalOrder(2) shouldBe ByteCodeAndStorageSync
+    canonicalOrder(3) shouldBe StateHealing
+    canonicalOrder(4) shouldBe StateValidation
   }
 
   it should "include ChainDownloadCompletion as a valid intermediate phase" taggedAs UnitTest in {
@@ -308,13 +316,13 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     // Pivot refresh fires → generation incremented to 1
     val gen1 = invalidate()
     gen1 shouldBe 1L
-    isStale(0L) shouldBe true  // old walk (gen=0) is now stale
+    isStale(0L) shouldBe true // old walk (gen=0) is now stale
     isStale(1L) shouldBe false // new walk (gen=1) is current
 
     // Second pivot refresh → generation=2
     val gen2 = invalidate()
     gen2 shouldBe 2L
-    isStale(1L) shouldBe true  // gen=1 walk is now stale
+    isStale(1L) shouldBe true // gen=1 walk is now stale
     isStale(2L) shouldBe false // gen=2 is current
 
     // Incrementing twice (restartSnapSync + triggerHealingForMissingNodes) still produces distinct values
@@ -335,7 +343,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     val storage = new AppStateStorage(EphemDataSource())
     // No flags set → accounts not complete → start from account download
     storage.isSnapSyncAccountsComplete() shouldBe false
-    storage.isSnapSyncStorageComplete()  shouldBe false
+    storage.isSnapSyncStorageComplete() shouldBe false
     storage.isSnapSyncBytecodeComplete() shouldBe false
   }
 
@@ -348,7 +356,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
 
     storage.isSnapSyncAccountsComplete() shouldBe true
     // Storage and bytecode not yet done → resume at ByteCodeAndStorageSync
-    storage.isSnapSyncStorageComplete()  shouldBe false
+    storage.isSnapSyncStorageComplete() shouldBe false
     storage.isSnapSyncBytecodeComplete() shouldBe false
   }
 
@@ -357,14 +365,15 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     import com.chipprbots.ethereum.db.storage.AppStateStorage
 
     val storage = new AppStateStorage(EphemDataSource())
-    storage.putSnapSyncAccountsComplete(true)
+    storage
+      .putSnapSyncAccountsComplete(true)
       .and(storage.putSnapSyncStorageComplete(true))
       .and(storage.putSnapSyncBytecodeComplete(true))
       .commit()
 
     // All three download phases done → restart enters StateHealing
     storage.isSnapSyncAccountsComplete() shouldBe true
-    storage.isSnapSyncStorageComplete()  shouldBe true
+    storage.isSnapSyncStorageComplete() shouldBe true
     storage.isSnapSyncBytecodeComplete() shouldBe true
     // SnapSyncDone NOT set → healing still needed (sync not complete)
     storage.isSnapSyncDone() shouldBe false
@@ -375,13 +384,14 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     import com.chipprbots.ethereum.db.storage.AppStateStorage
 
     val storage = new AppStateStorage(EphemDataSource())
-    storage.putSnapSyncAccountsComplete(true)
+    storage
+      .putSnapSyncAccountsComplete(true)
       .and(storage.putSnapSyncStorageComplete(true))
       .and(storage.putSnapSyncBytecodeComplete(true))
       .and(storage.snapSyncDone())
       .commit()
 
-    storage.isSnapSyncDone()       shouldBe true
+    storage.isSnapSyncDone() shouldBe true
     storage.isSnapSyncInProgress() shouldBe false // Done wins over in-progress
   }
 
@@ -435,9 +445,9 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
   it should "be distinct from AccountTrieFinalized (success path)" taggedAs UnitTest in {
     import SNAPSyncController._
     import org.apache.pekko.util.ByteString
-    val failed   = AccountTrieFinalizationFailed("some error")
+    val failed = AccountTrieFinalizationFailed("some error")
     val succeeded = AccountTrieFinalized(ByteString(Array.fill(32)(0.toByte)))
-    failed should not equal succeeded
+    (failed should not).equal(succeeded)
   }
 
   "SNAPSyncController message set" should "include AccountTrieFinalizationFailed alongside AccountTrieFinalized" taggedAs UnitTest in {
@@ -445,7 +455,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     // Both success and failure finalization messages must exist so the controller
     // can distinguish "proceed to healing" from "restart with fresh pivot".
     val successMsg: AnyRef = AccountTrieFinalized(org.apache.pekko.util.ByteString.empty)
-    val failMsg: AnyRef    = AccountTrieFinalizationFailed("error")
+    val failMsg: AnyRef = AccountTrieFinalizationFailed("error")
     successMsg.getClass should not be failMsg.getClass
   }
 

@@ -777,11 +777,10 @@ object NetworkPeerManagerActor {
         List.empty
       )
 
-    /** ETH/69: no totalDifficulty on the wire. Caller provides a resolved ChainWeight — either
-      * looked up from local ChainWeightStorage via latestBlockHash (accurate PoW TD when the
-      * peer's block is already in our chain) or a block-number proxy as fallback.
-      * latestBlock is stored separately so PeerInfo.apply can initialize maxBlockNumber correctly
-      * without conflating it with chainWeight.totalDifficulty.
+    /** ETH/69: no totalDifficulty on the wire. Caller provides a resolved ChainWeight — either looked up from local
+      * ChainWeightStorage via latestBlockHash (accurate PoW TD when the peer's block is already in our chain) or a
+      * block-number proxy as fallback. latestBlock is stored separately so PeerInfo.apply can initialize maxBlockNumber
+      * correctly without conflating it with chainWeight.totalDifficulty.
       */
     def fromETH69Status(
         status: com.chipprbots.ethereum.network.p2p.messages.ETH69.Status,

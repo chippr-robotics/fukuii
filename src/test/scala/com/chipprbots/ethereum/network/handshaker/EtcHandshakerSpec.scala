@@ -315,8 +315,8 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
       case Left(HandshakeSuccess(peerInfo)) =>
         // Core assertion: supportsSnap must be true despite no SNAP1 in Hello
         peerInfo.remoteStatus.supportsSnap shouldBe true
-        peerInfo.remoteStatus.capability   shouldBe Capability.ETH69
-        peerInfo.forkAccepted              shouldBe true
+        peerInfo.remoteStatus.capability shouldBe Capability.ETH69
+        peerInfo.forkAccepted shouldBe true
 
       case Left(HandshakeFailure(reason)) =>
         fail(s"Expected HandshakeSuccess but got HandshakeFailure($reason)")
@@ -648,20 +648,20 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
   trait RemotePeerETH69Setup extends RemotePeerSetup {
     // ETH/69 peers never advertise snap/1 in Hello — snap is implicit per EIP-7642.
     val remoteHello: Hello = Hello(
-      p2pVersion   = EtcHelloExchangeState.P2pVersion,
-      clientId     = "remote-peer-eth69",
-      capabilities = Seq(Capability.ETH69),  // No SNAP1
-      listenPort   = remotePort,
-      nodeId       = ByteString(remoteNodeStatus.nodeId)
+      p2pVersion = EtcHelloExchangeState.P2pVersion,
+      clientId = "remote-peer-eth69",
+      capabilities = Seq(Capability.ETH69), // No SNAP1
+      listenPort = remotePort,
+      nodeId = ByteString(remoteNodeStatus.nodeId)
     )
 
     val remoteStatusMsg: ETH69.Status = ETH69.Status(
       protocolVersion = Capability.ETH69.version,
-      networkId       = Config.Network.peer.networkId,
-      genesisHash     = genesisBlock.header.hash,
-      forkId          = ForkId(0xfc64ec04L, Some(1150000)),
-      earliestBlock   = BigInt(0),
-      latestBlock     = BigInt(1000000),
+      networkId = Config.Network.peer.networkId,
+      genesisHash = genesisBlock.header.hash,
+      forkId = ForkId(0xfc64ec04L, Some(1150000)),
+      earliestBlock = BigInt(0),
+      latestBlock = BigInt(1000000),
       latestBlockHash = genesisBlock.header.hash
     )
   }

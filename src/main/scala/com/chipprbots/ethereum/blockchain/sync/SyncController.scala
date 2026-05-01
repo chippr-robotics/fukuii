@@ -244,7 +244,9 @@ class SyncController(
 
     case SyncProtocol.HealingImpossible =>
       snapSync ! PoisonPill
-      log.warning("SNAP finalization aborted (state root mismatch). Clearing SnapSyncDone and restarting SNAP with a fresh pivot.")
+      log.warning(
+        "SNAP finalization aborted (state root mismatch). Clearing SnapSyncDone and restarting SNAP with a fresh pivot."
+      )
       appStateStorage.clearSnapSyncDone().commit()
       startSnapSync()
 

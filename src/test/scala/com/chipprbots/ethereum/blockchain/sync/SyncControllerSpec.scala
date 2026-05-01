@@ -480,66 +480,69 @@ class SyncControllerSpec
       }
   }
 
-  it should "update pivot block during state sync if it goes stale" taggedAs (UnitTest, SyncTest, FlakyTest) in withTestSetup() {
-    testSetup =>
-      import testSetup._
-      startWithState(defaultStateBeforeNodeRestart)
+  it should "update pivot block during state sync if it goes stale" taggedAs (
+    UnitTest,
+    SyncTest,
+    FlakyTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup._
+    startWithState(defaultStateBeforeNodeRestart)
 
-      syncController ! SyncProtocol.Start
+    syncController ! SyncProtocol.Start
 
-      val handshakedPeers = HandshakedPeers(singlePeer)
+    val handshakedPeers = HandshakedPeers(singlePeer)
 
-      val newBlocks =
-        getHeaders(defaultStateBeforeNodeRestart.bestBlockHeaderNumber + 1, 50)
+    val newBlocks =
+      getHeaders(defaultStateBeforeNodeRestart.bestBlockHeaderNumber + 1, 50)
 
-      val pilot = setupAutoPilot(
-        networkPeerManager,
-        handshakedPeers,
-        defaultPivotBlockHeader,
-        BlockchainData(newBlocks),
-        failedNodeRequest = true
-      )
+    val pilot = setupAutoPilot(
+      networkPeerManager,
+      handshakedPeers,
+      defaultPivotBlockHeader,
+      BlockchainData(newBlocks),
+      failedNodeRequest = true
+    )
 
-      // choose first pivot and as it is fresh enough start state sync
-      eventually {
-        someTimePasses()
-        val syncState = storagesInstance.storages.fastSyncStateStorage.getSyncState().get
-        syncState.isBlockchainWorkFinished shouldBe true
-        syncState.updatingPivotBlock shouldBe false
-        stateDownloadStarted shouldBe true
-      }
-      val peerWithBetterBlock = defaultPeer1Info.copy(maxBlockNumber = bestBlock + syncConfig.maxPivotBlockAge)
-      val newHandshakedPeers = HandshakedPeers(Map(peer1 -> peerWithBetterBlock))
-      val newPivot = defaultPivotBlockHeader.copy(number = defaultPivotBlockHeader.number + syncConfig.maxPivotBlockAge)
+    // choose first pivot and as it is fresh enough start state sync
+    eventually {
+      someTimePasses()
+      val syncState = storagesInstance.storages.fastSyncStateStorage.getSyncState().get
+      syncState.isBlockchainWorkFinished shouldBe true
+      syncState.updatingPivotBlock shouldBe false
+      stateDownloadStarted shouldBe true
+    }
+    val peerWithBetterBlock = defaultPeer1Info.copy(maxBlockNumber = bestBlock + syncConfig.maxPivotBlockAge)
+    val newHandshakedPeers = HandshakedPeers(Map(peer1 -> peerWithBetterBlock))
+    val newPivot = defaultPivotBlockHeader.copy(number = defaultPivotBlockHeader.number + syncConfig.maxPivotBlockAge)
 
-      pilot.updateAutoPilot(
-        newHandshakedPeers,
-        newPivot,
-        BlockchainData(newBlocks),
-        failedNodeRequest = true
-      )
+    pilot.updateAutoPilot(
+      newHandshakedPeers,
+      newPivot,
+      BlockchainData(newBlocks),
+      failedNodeRequest = true
+    )
 
-      // sync to new pivot
-      eventually {
-        someTimePasses()
-        val syncState = storagesInstance.storages.fastSyncStateStorage.getSyncState().get
-        syncState.pivotBlock shouldBe newPivot
-      }
+    // sync to new pivot
+    eventually {
+      someTimePasses()
+      val syncState = storagesInstance.storages.fastSyncStateStorage.getSyncState().get
+      syncState.pivotBlock shouldBe newPivot
+    }
 
-      // enable peer to respond with mpt nodes
-      pilot.updateAutoPilot(newHandshakedPeers, newPivot, BlockchainData(newBlocks))
+    // enable peer to respond with mpt nodes
+    pilot.updateAutoPilot(newHandshakedPeers, newPivot, BlockchainData(newBlocks))
 
-      val watcher = TestProbe()
-      watcher.watch(syncController)
+    val watcher = TestProbe()
+    watcher.watch(syncController)
 
-      eventually {
-        someTimePasses()
-        // switch to regular download
-        val children = syncController.children
-        assert(storagesInstance.storages.appStateStorage.isFastSyncDone())
-        assert(children.exists(ref => ref.path.name.startsWith("regular-sync")))
-        assert(blockchainReader.getBestBlockNumber() == newPivot.number)
-      }
+    eventually {
+      someTimePasses()
+      // switch to regular download
+      val children = syncController.children
+      assert(storagesInstance.storages.appStateStorage.isFastSyncDone())
+      assert(children.exists(ref => ref.path.name.startsWith("regular-sync")))
+      assert(blockchainReader.getBestBlockNumber() == newPivot.number)
+    }
   }
 
   class TestSetup(

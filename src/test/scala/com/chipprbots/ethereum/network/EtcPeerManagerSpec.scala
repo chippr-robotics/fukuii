@@ -121,7 +121,10 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     )
   }
 
-  it should "update max peer block when receiving ETH69 BlockRangeUpdate" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+  it should "update max peer block when receiving ETH69 BlockRangeUpdate" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
     // ETH/69 peers send BlockRangeUpdate instead of NewBlock to announce their chain tip.
     // NetworkPeerManagerActor must update peerInfo.maxBlockNumber from BlockRangeUpdate.latestBlock.
     import com.chipprbots.ethereum.network.p2p.messages.ETH69
@@ -129,11 +132,11 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     expectInitialSubscriptions()
     setupNewPeer(peer1, peer1Probe, peer1Info)
 
-    val newLatestBlock     = peer1Info.maxBlockNumber + 7
+    val newLatestBlock = peer1Info.maxBlockNumber + 7
     val newLatestBlockHash = ByteString(Array.fill(32)(0xab.toByte))
-    val blockRangeUpdate   = ETH69.BlockRangeUpdate(
-      earliestBlock   = BigInt(0),
-      latestBlock     = newLatestBlock,
+    val blockRangeUpdate = ETH69.BlockRangeUpdate(
+      earliestBlock = BigInt(0),
+      latestBlock = newLatestBlock,
       latestBlockHash = newLatestBlockHash
     )
 
@@ -145,7 +148,10 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     )
   }
 
-  it should "ignore ETH69 BlockRangeUpdate when latestBlock is not higher than current" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+  it should "ignore ETH69 BlockRangeUpdate when latestBlock is not higher than current" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
     import com.chipprbots.ethereum.network.p2p.messages.ETH69
 
     expectInitialSubscriptions()
@@ -154,8 +160,8 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     // Send a BlockRangeUpdate with a lower block number — peer info should not regress
     val staleLatestBlock = peer1Info.maxBlockNumber - 1
     val blockRangeUpdate = ETH69.BlockRangeUpdate(
-      earliestBlock   = BigInt(0),
-      latestBlock     = staleLatestBlock,
+      earliestBlock = BigInt(0),
+      latestBlock = staleLatestBlock,
       latestBlockHash = ByteString(Array.fill(32)(0xcc.toByte))
     )
 

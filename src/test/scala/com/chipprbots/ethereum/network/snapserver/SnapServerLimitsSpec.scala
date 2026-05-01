@@ -29,14 +29,14 @@ class SnapServerLimitsSpec extends AnyFlatSpec with Matchers {
   // ── helpers ──────────────────────────────────────────────────────────────
 
   private val zeroHash = ByteString(new Array[Byte](32))
-  private val maxHash  = ByteString(Array.fill[Byte](32)(0xff.toByte))
+  private val maxHash = ByteString(Array.fill[Byte](32)(0xff.toByte))
 
   private def buildAccountTrie(
       accounts: Seq[(ByteString, Account)]
   ): (ByteString, TestMptStorage) = {
     val storage = new TestMptStorage()
-    val trie = accounts.foldLeft(MerklePatriciaTrie[ByteString, Account](storage)) {
-      case (t, (key, account)) => t.put(key, account)
+    val trie = accounts.foldLeft(MerklePatriciaTrie[ByteString, Account](storage)) { case (t, (key, account)) =>
+      t.put(key, account)
     }
     (ByteString(trie.getRootHash), storage)
   }
@@ -82,11 +82,11 @@ class SnapServerLimitsSpec extends AnyFlatSpec with Matchers {
   // ── 4s time budget (deadline formula) ────────────────────────────────────
 
   it should "set a deadline approximately 4 seconds in the future" taggedAs UnitTest in {
-    val before   = System.currentTimeMillis()
+    val before = System.currentTimeMillis()
     val deadline = System.currentTimeMillis() + 4000
-    val after    = System.currentTimeMillis()
+    val after = System.currentTimeMillis()
     deadline should be >= before + 4000L
-    deadline should be <= after  + 4001L // tiny slack for two clock reads
+    deadline should be <= after + 4001L // tiny slack for two clock reads
   }
 
   // ── serveAccountRange: first-item guarantee ───────────────────────────────
@@ -97,12 +97,12 @@ class SnapServerLimitsSpec extends AnyFlatSpec with Matchers {
     // checking the budget, so `collected` is non-empty.
     val (rootHash, storage) = buildAccountTrie(defaultAccounts)
     val result = SnapServer.serveAccountRange(
-      requestId     = BigInt(1),
-      rootHash      = rootHash,
-      startingHash  = zeroHash,
-      limitHash     = maxHash,
+      requestId = BigInt(1),
+      rootHash = rootHash,
+      startingHash = zeroHash,
+      limitHash = maxHash,
       responseBytes = BigInt(0),
-      storage       = storage
+      storage = storage
     )
     result.accounts should have size 1
     result.proof should not be empty // proof always present for non-empty range
@@ -111,12 +111,12 @@ class SnapServerLimitsSpec extends AnyFlatSpec with Matchers {
   it should "return all accounts when responseBytes exceeds their total encoded size" taggedAs UnitTest in {
     val (rootHash, storage) = buildAccountTrie(defaultAccounts)
     val result = SnapServer.serveAccountRange(
-      requestId     = BigInt(1),
-      rootHash      = rootHash,
-      startingHash  = zeroHash,
-      limitHash     = maxHash,
+      requestId = BigInt(1),
+      rootHash = rootHash,
+      startingHash = zeroHash,
+      limitHash = maxHash,
       responseBytes = BigInt(2 * 1024 * 1024),
-      storage       = storage
+      storage = storage
     )
     result.accounts should have size defaultAccounts.size
   }
@@ -127,25 +127,25 @@ class SnapServerLimitsSpec extends AnyFlatSpec with Matchers {
     // So the response must have exactly 1 account, not all 5.
     val (rootHash, storage) = buildAccountTrie(defaultAccounts)
     val result = SnapServer.serveAccountRange(
-      requestId     = BigInt(1),
-      rootHash      = rootHash,
-      startingHash  = zeroHash,
-      limitHash     = maxHash,
+      requestId = BigInt(1),
+      rootHash = rootHash,
+      startingHash = zeroHash,
+      limitHash = maxHash,
       responseBytes = BigInt(1),
-      storage       = storage
+      storage = storage
     )
-    result.accounts.size should (be >= 1 and be < defaultAccounts.size)
+    result.accounts.size should ((be >= 1).and(be < defaultAccounts.size))
   }
 
   it should "include a non-empty proof when the response is truncated" taggedAs UnitTest in {
     val (rootHash, storage) = buildAccountTrie(defaultAccounts)
     val result = SnapServer.serveAccountRange(
-      requestId     = BigInt(1),
-      rootHash      = rootHash,
-      startingHash  = zeroHash,
-      limitHash     = maxHash,
+      requestId = BigInt(1),
+      rootHash = rootHash,
+      startingHash = zeroHash,
+      limitHash = maxHash,
       responseBytes = BigInt(1),
-      storage       = storage
+      storage = storage
     )
     // A truncated range MUST carry a proof so the peer can verify the partial range
     // and compute the correct continuation startingHash.
@@ -158,12 +158,12 @@ class SnapServerLimitsSpec extends AnyFlatSpec with Matchers {
     val (rootHash, storage) = buildAccountTrie(defaultAccounts)
     // First request: get a partial result with a small budget
     val firstResult = SnapServer.serveAccountRange(
-      requestId     = BigInt(1),
-      rootHash      = rootHash,
-      startingHash  = zeroHash,
-      limitHash     = maxHash,
+      requestId = BigInt(1),
+      rootHash = rootHash,
+      startingHash = zeroHash,
+      limitHash = maxHash,
       responseBytes = BigInt(1),
-      storage       = storage
+      storage = storage
     )
     firstResult.accounts should not be empty
 
@@ -172,16 +172,16 @@ class SnapServerLimitsSpec extends AnyFlatSpec with Matchers {
     // (in practice the peer increments lastKey by 1; here we just re-request from lastKey
     //  itself which also makes forward progress relative to the 0x00…00 origin)
     val secondResult = SnapServer.serveAccountRange(
-      requestId     = BigInt(2),
-      rootHash      = rootHash,
-      startingHash  = lastKey,
-      limitHash     = maxHash,
+      requestId = BigInt(2),
+      rootHash = rootHash,
+      startingHash = lastKey,
+      limitHash = maxHash,
       responseBytes = BigInt(2 * 1024 * 1024),
-      storage       = storage
+      storage = storage
     )
     // The second request sees at least the last key again (start == key of a leaf → returned)
     // and may see more accounts after it. Combined with first result, all accounts covered.
-    val firstKeys  = firstResult.accounts.map(_._1).toSet
+    val firstKeys = firstResult.accounts.map(_._1).toSet
     val secondKeys = secondResult.accounts.map(_._1).toSet
     (firstKeys ++ secondKeys).size should be >= defaultAccounts.size
   }
@@ -192,15 +192,15 @@ class SnapServerLimitsSpec extends AnyFlatSpec with Matchers {
     val storage = new TestMptStorage()
     val emptyRoot = ByteString(MerklePatriciaTrie.EmptyRootHash)
     val result = SnapServer.serveAccountRange(
-      requestId     = BigInt(1),
-      rootHash      = emptyRoot,
-      startingHash  = zeroHash,
-      limitHash     = maxHash,
+      requestId = BigInt(1),
+      rootHash = emptyRoot,
+      startingHash = zeroHash,
+      limitHash = maxHash,
       responseBytes = BigInt(2 * 1024 * 1024),
-      storage       = storage
+      storage = storage
     )
     result.accounts shouldBe empty
-    result.proof    shouldBe empty
+    result.proof shouldBe empty
   }
 
   // ── serveStorageRanges: 2MB cap applies independently ────────────────────
@@ -212,18 +212,18 @@ class SnapServerLimitsSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "return empty slots for an account whose storage root is unknown" taggedAs UnitTest in {
-    val storage   = new TestMptStorage()
+    val storage = new TestMptStorage()
     val emptyRoot = ByteString(MerklePatriciaTrie.EmptyRootHash)
     val unknownAccountHash = kec256(ByteString("no-such-account"))
     val result = SnapServer.serveStorageRanges(
-      requestId     = BigInt(1),
-      rootHash      = emptyRoot,
+      requestId = BigInt(1),
+      rootHash = emptyRoot,
       accountHashes = Seq(unknownAccountHash),
-      startingHash  = zeroHash,
-      limitHash     = maxHash,
+      startingHash = zeroHash,
+      limitHash = maxHash,
       responseBytes = BigInt(2 * 1024 * 1024),
-      storage       = storage,
-      accountRoot   = _ => None
+      storage = storage,
+      accountRoot = _ => None
     )
     // Empty root → no slots, no proof.
     result.slots shouldBe empty
@@ -233,22 +233,22 @@ class SnapServerLimitsSpec extends AnyFlatSpec with Matchers {
   // ── serveTrieNodes: 2MB cap applies ──────────────────────────────────────
 
   "SnapServer.serveTrieNodes" should "cap responseBytes at 2MB for trie node requests" taggedAs UnitTest in {
-    val twoMB   = 2 * 1024 * 1024
-    val bigReq  = BigInt(100 * 1024 * 1024)
+    val twoMB = 2 * 1024 * 1024
+    val bigReq = BigInt(100 * 1024 * 1024)
     math.min(math.max(bigReq.toInt, 0), twoMB) shouldBe twoMB
   }
 
   it should "return empty entries when root is not in storage" taggedAs UnitTest in {
-    val storage     = new TestMptStorage()
+    val storage = new TestMptStorage()
     val unknownRoot = kec256(ByteString("unknown-root"))
     // Request a single-element pathset — root missing → one empty ByteString returned.
     val emptyHpPath = ByteString(Array[Byte](0x20)) // HP-encoded empty path (leaf flag)
     val result = SnapServer.serveTrieNodes(
-      requestId     = BigInt(1),
-      rootHash      = unknownRoot,
-      paths         = Seq(Seq(emptyHpPath)),
+      requestId = BigInt(1),
+      rootHash = unknownRoot,
+      paths = Seq(Seq(emptyHpPath)),
       responseBytes = BigInt(2 * 1024 * 1024),
-      storage       = storage
+      storage = storage
     )
     result.nodes should have size 1
     result.nodes.head shouldBe empty
@@ -257,14 +257,14 @@ class SnapServerLimitsSpec extends AnyFlatSpec with Matchers {
   it should "return empty response for a zero-element pathset (bad request)" taggedAs UnitTest in {
     // Per SNAP/1 spec (geth handler.go:522-525), a zero-item pathset anywhere in the
     // request is a protocol-level bad request — the ENTIRE response is empty.
-    val storage     = new TestMptStorage()
+    val storage = new TestMptStorage()
     val unknownRoot = kec256(ByteString("bad-req-root"))
     val result = SnapServer.serveTrieNodes(
-      requestId     = BigInt(1),
-      rootHash      = unknownRoot,
-      paths         = Seq(Seq.empty),  // zero-element pathset → bad request
+      requestId = BigInt(1),
+      rootHash = unknownRoot,
+      paths = Seq(Seq.empty), // zero-element pathset → bad request
       responseBytes = BigInt(2 * 1024 * 1024),
-      storage       = storage
+      storage = storage
     )
     result.nodes shouldBe empty
   }

@@ -49,8 +49,8 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
       _ <- validateBlockHasEnoughGasLimitForTx(stx, accumGasUsed, blockHeader.gasLimit)
     } yield SignedTransactionValid
 
-  /** EIP-4844 Type-3 (blob) transactions require Cancun activation. ETC never activates Cancun,
-    * so blob transactions are always rejected on ETC networks.
+  /** EIP-4844 Type-3 (blob) transactions require Cancun activation. ETC never activates Cancun, so blob transactions
+    * are always rejected on ETC networks.
     */
   private def validateBlobTransactionSupport(
       stx: SignedTransaction,
