@@ -130,7 +130,8 @@ class SyncStateSchedulerActor(
     * GetTrieNodes (SNAP).
     *
     * Compatible peers = ETH63-67 OR SNAP-capable. Returns a list where each peer appears once per available pipelining
-    * slot (up to MaxInFlightPerPeer), enabling the existing assignTasksToPeers loop to assign multiple batches per peer.
+    * slot (up to MaxInFlightPerPeer), enabling the existing assignTasksToPeers loop to assign multiple batches per
+    * peer.
     */
   private def getFreePeers(state: DownloaderState): List[Peer] = {
     val (compatiblePeersWithSlots, incompatibleCount) =
@@ -504,7 +505,10 @@ class SyncStateSchedulerActor(
               context.become(syncing(newState))
 
             case (None, Some(peers)) =>
-              log.debug("There no responses to process, but there are {} free peer slots to assign new tasks", peers.size)
+              log.debug(
+                "There no responses to process, but there are {} free peer slots to assign new tasks",
+                peers.size
+              )
               val (requests, newState) = currentState.assignTasksToPeers(peers, syncConfig.nodesPerRequest)
               requests.foreach(req => requestNodes(req))
               context.become(syncing(newState.finishProcessing))
