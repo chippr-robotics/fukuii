@@ -143,9 +143,9 @@ class StateNodeFetcher(
       case _ => Behaviors.unhandled
     }
 
-  /** Increment attempt counter and either schedule another request or signal exhaustion to the
-    * BlockImporter. Sending an empty FetchedStateNode triggers BlockImporter's 5-minute backoff
-    * handler so the resolvingMissingNode → import-fail → re-fetch loop can't spin indefinitely.
+  /** Increment attempt counter and either schedule another request or signal exhaustion to the BlockImporter. Sending
+    * an empty FetchedStateNode triggers BlockImporter's 5-minute backoff handler so the resolvingMissingNode →
+    * import-fail → re-fetch loop can't spin indefinitely.
     */
   private def retryOrExhaust(req: StateNodeRequester): Unit = {
     val nextAttempt = req.attempts + 1
@@ -173,10 +173,15 @@ class StateNodeFetcher(
 
         validatedNode match {
           case Left(err) =>
-            log.debug("State node validation failed with {}, excluding peer {} from next GetNodeData attempt", err.description, peer.id)
+            log.debug(
+              "State node validation failed with {}, excluding peer {} from next GetNodeData attempt",
+              err.description,
+              peer.id
+            )
             peersClient ! RecordNodeDataFailure(peer.id)
             peersClient ! BlacklistPeer(peer.id, err)
-            requester = Some(stateNodeRequester.copy(triedNodeDataPeers = stateNodeRequester.triedNodeDataPeers + peer.id))
+            requester =
+              Some(stateNodeRequester.copy(triedNodeDataPeers = stateNodeRequester.triedNodeDataPeers + peer.id))
             retryOrExhaust(stateNodeRequester)
             Behaviors.same[StateNodeFetcherCommand]
           case Right(node) =>
@@ -252,9 +257,9 @@ class StateNodeFetcher(
       }
       .getOrElse(Behaviors.same)
 
-  /** If the requester still has an unused fallback canonical root, swap it in as the primary
-    * stateRoot and clear the fallback slot (so we only switch once). Returns None when no
-    * fallback is available or it has already been consumed.
+  /** If the requester still has an unused fallback canonical root, swap it in as the primary stateRoot and clear the
+    * fallback slot (so we only switch once). Returns None when no fallback is available or it has already been
+    * consumed.
     */
   private def maybeSwitchToFallbackRoot(req: StateNodeRequester): Option[StateNodeRequester] =
     req.fallbackStateRoot
@@ -324,7 +329,8 @@ class StateNodeFetcher(
           // SNAP-capable peers use BONSAI storage (state diffs, not hash-keyed nodes) and cannot
           // serve GetNodeData. Besu gates SNAP serving on isBonsaiFormat() — all SNAP peers = BONSAI.
           val triedNodeData = requester.map(_.triedNodeDataPeers).getOrElse(Set.empty)
-          val nodeDataSelector = if (triedNodeData.isEmpty) BestNodeDataPeer else BestNodeDataPeerExcluding(triedNodeData)
+          val nodeDataSelector =
+            if (triedNodeData.isEmpty) BestNodeDataPeer else BestNodeDataPeerExcluding(triedNodeData)
           log.debug("Requesting missing state node via GetNodeData (tried {} peers)", triedNodeData.size)
           val resp = makeRequest(
             Request.create(GetNodeData(List(hash)), nodeDataSelector),

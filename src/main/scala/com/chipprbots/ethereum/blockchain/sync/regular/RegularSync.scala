@@ -138,7 +138,9 @@ class RegularSync(
       context.parent ! msg
 
     case ProgressProtocol.HealingImpossible =>
-      log.error("Trie healing impossible — pivot state root pruned on all peers. Forwarding to SyncController to restart SNAP sync.")
+      log.error(
+        "Trie healing impossible — pivot state root pruned on all peers. Forwarding to SyncController to restart SNAP sync."
+      )
       context.parent ! SyncProtocol.HealingImpossible
   }
 

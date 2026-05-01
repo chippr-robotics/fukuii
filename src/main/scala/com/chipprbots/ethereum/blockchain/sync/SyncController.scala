@@ -77,9 +77,9 @@ class SyncController(
   // pool is smaller so we use exponential backoff (30s base, 5min cap).
   // Reset to 0 on ImportedBlock milestone (evidence that healing succeeded).
   private var healingRestartCount: Int = 0
-  private val maxHealingRestarts: Int  = 3
-  private val healingRestartBaseDelay: FiniteDuration  = 30.seconds
-  private val healingRestartMaxDelay: FiniteDuration   = 5.minutes
+  private val maxHealingRestarts: Int = 3
+  private val healingRestartBaseDelay: FiniteDuration = 30.seconds
+  private val healingRestartMaxDelay: FiniteDuration = 5.minutes
 
   private def stopSyncChildren(): Unit = {
     // Stop all sync-related child actors. Names may have generation suffixes
@@ -295,8 +295,9 @@ class SyncController(
           )
           startSnapSync()
         } else {
-          val backoffRaw = healingRestartBaseDelay * math.pow(2.0, (healingRestartCount - maxHealingRestarts).toDouble).toLong
-          val backoff    = if (backoffRaw > healingRestartMaxDelay) healingRestartMaxDelay else backoffRaw
+          val backoffRaw =
+            healingRestartBaseDelay * math.pow(2.0, (healingRestartCount - maxHealingRestarts).toDouble).toLong
+          val backoff = if (backoffRaw > healingRestartMaxDelay) healingRestartMaxDelay else backoffRaw
           log.error(
             "Trie healing impossible after {} consecutive restarts. " +
               "Backing off {}s before re-pivoting. All known peers have pruned the pivot state root.",

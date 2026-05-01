@@ -2059,7 +2059,7 @@ class SNAPSyncController(
     }
   }
 
-  private def startStateHealingWithInterleave(): Unit = {
+  private def startStateHealingWithInterleave(): Unit =
     if (trieNodeHealingCoordinator.isDefined) {
       // Coordinator still running — just start the validation walk
       startTrieWalk()
@@ -2090,7 +2090,7 @@ class SNAPSyncController(
           startHealingRequestScheduler()
           log.info(
             s"[HEAL-INTERLEAVE] Healing coordinator created before walk — " +
-            s"root=${root.take(8).toHex}, generation=$coordinatorGeneration"
+              s"root=${root.take(8).toHex}, generation=$coordinatorGeneration"
           )
           startTrieWalk()
         case None =>
@@ -2098,7 +2098,6 @@ class SNAPSyncController(
           startTrieWalk()
       }
     }
-  }
 
   private def startHealingRequestScheduler(): Unit = {
     healingRequestTask.foreach(_.cancel())
@@ -2366,7 +2365,10 @@ class SNAPSyncController(
     // succeeds (trie walk finds 0 missing nodes). Mid-healing writes cause root mismatch (BUG-006):
     // the new root is stored before all its nodes are healed, then validateState() sees a mismatch.
     if (currentPhase != StateHealing) {
-      appStateStorage.putSnapSyncPivotBlock(newPivotBlock).and(appStateStorage.putSnapSyncStateRoot(newStateRoot)).commit()
+      appStateStorage
+        .putSnapSyncPivotBlock(newPivotBlock)
+        .and(appStateStorage.putSnapSyncStateRoot(newStateRoot))
+        .commit()
     }
     updateBestBlockForPivot(newPivotHeader, newPivotBlock)
     SNAPSyncMetrics.setPivotBlockNumber(newPivotBlock)

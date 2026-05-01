@@ -112,10 +112,11 @@ class BlockImporter(
       // B1: Only reset healingStallCount on a CLEAN import (no state node fetches required).
       // Mirrors Besu WorldDownloadState.requestComplete(madeProgress): resets only when madeProgress==true.
       // A healing-assisted import keeps the stall signal — only truly clean blocks reset it.
-      val newState = if (state.healingNodesFetchedThisBlock == 0)
-        state.notImportingBlocks().branchResolved().healingResolved()
-      else
-        state.notImportingBlocks().branchResolved()
+      val newState =
+        if (state.healingNodesFetchedThisBlock == 0)
+          state.notImportingBlocks().branchResolved().healingResolved()
+        else
+          state.notImportingBlocks().branchResolved()
       val behavior: Behavior = getBehavior(newBehavior, importType)
       if (newBehavior == Running) {
         self ! PickBlocks
