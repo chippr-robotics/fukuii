@@ -207,8 +207,18 @@ class AccountRangeCoordinator(
   private val ProgressLogInterval: Long = 100_000 // log every 100K accounts
   private val totalKeyspace: BigInt = BigInt(2).pow(256)
   // Cumulative keyspace consumed: incremented each time a task's `next` advances.
-  // This avoids the jitter from snapshotting in-flight task positions.
-  private var consumedKeyspace: BigInt = BigInt(0)
+  // On restart, derive from restored task positions so progress % and ETA are accurate.
+  private var consumedKeyspace: BigInt =
+    if (resumeProgress.nonEmpty) {
+      val toBI = (bs: ByteString) => BigInt(1, bs.toArray.padTo(32, 0.toByte))
+      // Re-create pristine tasks to recover original range starts (keyed by `last` boundary).
+      val originalStarts: Map[ByteString, BigInt] =
+        AccountTask.createInitialTasks(initialStateRoot, concurrency).map(t => t.last -> toBI(t.next)).toMap
+      (skippedTasks ++ remainingTasks).foldLeft(BigInt(0)) { (acc, task) =>
+        val orig = originalStarts.getOrElse(task.last, toBI(task.last))
+        acc + (toBI(task.next) - orig).max(BigInt(0))
+      }
+    } else BigInt(0)
 
   // Contract accounts persisted to temp files to avoid unbounded memory growth.
   // On ETC mainnet ~20% of ~67M accounts are contracts — ~13M entries × 64 bytes each
@@ -495,6 +505,10 @@ class AccountRangeCoordinator(
       contractStorageOut.flush()
       sender() ! StorageFileInfoResponse(contractStorageFile, contractStorageCount)
 
+    case GetCodeHashesFileInfo =>
+      uniqueCodeHashesOut.flush()
+      sender() ! CodeHashesFileInfoResponse(uniqueCodeHashesFile, uniqueCodeHashesCount)
+
     case StoreAccountChunk(task, remaining, totalCount, storedSoFar, isTaskRangeComplete) =>
       handleStoreAccountChunk(task, remaining, totalCount, storedSoFar, isTaskRangeComplete)
 
@@ -577,6 +591,10 @@ class AccountRangeCoordinator(
     case GetStorageFileInfo =>
       contractStorageOut.flush()
       sender() ! StorageFileInfoResponse(contractStorageFile, contractStorageCount)
+
+    case GetCodeHashesFileInfo =>
+      uniqueCodeHashesOut.flush()
+      sender() ! CodeHashesFileInfoResponse(uniqueCodeHashesFile, uniqueCodeHashesCount)
 
     case CheckCompletion =>
     // Already finalizing, ignore
