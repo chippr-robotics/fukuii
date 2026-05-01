@@ -242,6 +242,12 @@ class SyncController(
         startFastSync()
       }
 
+    case SyncProtocol.HealingImpossible =>
+      snapSync ! PoisonPill
+      log.warning("SNAP finalization aborted (state root mismatch). Clearing SnapSyncDone and restarting SNAP with a fresh pivot.")
+      appStateStorage.clearSnapSyncDone().commit()
+      startSnapSync()
+
     case SyncProtocol.Status.Progress(_, _) =>
       log.debug("SNAP sync in progress")
 

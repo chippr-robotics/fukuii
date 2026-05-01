@@ -26,13 +26,11 @@ object SyncProtocol {
     */
   final case class RegularSyncStuck(blockNumber: BigInt, missingHash: String) extends SyncProtocolMsg
 
-  /** Signals that regular sync has hit a wall — repeated state-node fetch exhaustion on the same
-    * block, with no peer able to serve our parent stateRoot (typical when the node is many
-    * thousands of blocks behind canonical tip and the snap-serve window of every connected peer
-    * has moved far past us). The controller responds by clearing the SnapSyncDone flag and
-    * re-running SNAP sync from a recent pivot, which is the only viable recovery path.
+  /** Signals that SNAP finalization detected a state root mismatch (snapStateRoot != pivotHeader.stateRoot).
+    * SyncController responds by clearing SnapSyncDone and restarting SNAP with a fresh pivot.
+    * Mirrors Besu BUG-008 class recovery: abort finalization rather than commit a broken state.
     */
-  final case class RegularSyncStuck(blockNumber: BigInt, missingHash: String) extends SyncProtocolMsg
+  case object HealingImpossible extends SyncProtocolMsg
 
   sealed trait Status {
     def syncing: Boolean = this match {
