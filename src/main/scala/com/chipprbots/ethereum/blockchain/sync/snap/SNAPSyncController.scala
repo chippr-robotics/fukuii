@@ -587,7 +587,7 @@ class SNAPSyncController(
     case actors.Messages.HealingStagnated(healed, pending) if currentPhase == StateHealing =>
       log.warning(
         s"[HEAL-STAGNATED] Healing stuck: healed=$healed pending=$pending — " +
-        s"refreshing pivot for fresh healing round"
+          s"refreshing pivot for fresh healing round"
       )
       refreshPivotInPlace("healing-stagnated")
 
@@ -2032,15 +2032,14 @@ class SNAPSyncController(
     }
   }
 
-  /** ARCH-WALK-HEAL-INTERLEAVE: Create a healing coordinator BEFORE starting the trie walk.
-    * Nodes discovered per-subtree (TrieWalkBatch) are fed to the coordinator immediately,
-    * so healing runs in parallel with the walk. With root seeding + discoverMissingChildren,
-    * healing starts instantly from the root — the walk is validation-only.
+  /** ARCH-WALK-HEAL-INTERLEAVE: Create a healing coordinator BEFORE starting the trie walk. Nodes discovered
+    * per-subtree (TrieWalkBatch) are fed to the coordinator immediately, so healing runs in parallel with the walk.
+    * With root seeding + discoverMissingChildren, healing starts instantly from the root — the walk is validation-only.
     *
-    * If coordinator already exists (e.g. still running after StateHealingComplete), just start
-    * the walk — the coordinator is alive and will receive batch nodes.
+    * If coordinator already exists (e.g. still running after StateHealingComplete), just start the walk — the
+    * coordinator is alive and will receive batch nodes.
     */
-  private def startStateHealingWithInterleave(): Unit = {
+  private def startStateHealingWithInterleave(): Unit =
     if (trieNodeHealingCoordinator.isDefined) {
       // Coordinator still running — just start the validation walk
       startTrieWalk()
@@ -2071,7 +2070,7 @@ class SNAPSyncController(
           startHealingRequestScheduler()
           log.info(
             s"[HEAL-INTERLEAVE] Healing coordinator created before walk — " +
-            s"root=${root.take(8).toHex}, generation=$coordinatorGeneration"
+              s"root=${root.take(8).toHex}, generation=$coordinatorGeneration"
           )
           startTrieWalk()
         case None =>
@@ -2079,11 +2078,9 @@ class SNAPSyncController(
           startTrieWalk()
       }
     }
-  }
 
-  /** BUG-HEAL-SCHED FIX: Always cancel the existing scheduler before creating a new one.
-    * Multiple code paths create this scheduler; without cancel an orphaned scheduler
-    * fires every 1s in parallel with the new one.
+  /** BUG-HEAL-SCHED FIX: Always cancel the existing scheduler before creating a new one. Multiple code paths create
+    * this scheduler; without cancel an orphaned scheduler fires every 1s in parallel with the new one.
     */
   private def startHealingRequestScheduler(): Unit = {
     healingRequestTask.foreach(_.cancel())
@@ -2115,10 +2112,9 @@ class SNAPSyncController(
 
   /** Reconnect to any configured snap-server-peers that are not currently connected.
     *
-    * snap-server-peers are static SNAP-serving nodes (e.g. local Besu with
-    * --snapsync-server-enabled) that are the only source of ETC GetTrieNodes responses.
-    * They may disconnect after the storage phase. This method ensures reconnection so they
-    * are in the peer pool when healing dispatches requests.
+    * snap-server-peers are static SNAP-serving nodes (e.g. local Besu with --snapsync-server-enabled) that are the only
+    * source of ETC GetTrieNodes responses. They may disconnect after the storage phase. This method ensures
+    * reconnection so they are in the peer pool when healing dispatches requests.
     */
   private def ensureSnapServerPeersConnected(): Unit = {
     if (snapSyncConfig.snapServerPeers.isEmpty) return

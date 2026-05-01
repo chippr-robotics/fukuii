@@ -233,7 +233,7 @@ class TrieNodeHealingCoordinator(
       queueNodes(Seq((Seq(emptyPath), root)))
       log.info(
         s"[HEAL] Root ${Hex.toHexString(root.take(8).toArray)} seeded — " +
-        s"inline child discovery will populate work queue top-down (Besu-aligned)"
+          s"inline child discovery will populate work queue top-down (Besu-aligned)"
       )
       lastHealedAtMs = System.currentTimeMillis()
 
@@ -257,8 +257,8 @@ class TrieNodeHealingCoordinator(
     case HealingForceComplete =>
       log.warning(
         s"[HEAL-FORCE-COMPLETE] Pivot advanced beyond SNAP serve window — " +
-        s"clearing ${pendingTasks.size} pending tasks + ${activeRequests.size} in-flight. " +
-        s"Signaling completion with $totalNodesHealed healed nodes."
+          s"clearing ${pendingTasks.size} pending tasks + ${activeRequests.size} in-flight. " +
+          s"Signaling completion with $totalNodesHealed healed nodes."
       )
       activeRequests.keys.foreach(requestTracker.completeRequest(_, 0))
       activeRequests.clear()
@@ -299,7 +299,7 @@ class TrieNodeHealingCoordinator(
         pendingHashSet += newStateRoot
         log.info(
           s"[HEAL] Re-seeded with new root ${Hex.toHexString(newStateRoot.take(4).toArray)} " +
-          s"for inline discovery of pivot delta"
+            s"for inline discovery of pivot delta"
         )
       } else {
         log.info(s"[HEAL] New root already in storage or pending — skipping pivot reseed")
@@ -365,12 +365,12 @@ class TrieNodeHealingCoordinator(
         consecutiveStagnations += 1
         log.warning(
           s"[HEAL-STAGNATION] Zero progress in last 2min — stagnation $consecutiveStagnations/$MaxConsecutiveStagnations. " +
-          s"healed=$totalNodesHealed pending=${pendingTasks.size} peers=${knownAvailablePeers.size}"
+            s"healed=$totalNodesHealed pending=${pendingTasks.size} peers=${knownAvailablePeers.size}"
         )
         if (consecutiveStagnations >= MaxConsecutiveStagnations) {
           log.warning(
             s"[HEAL-STAGNATION] $MaxConsecutiveStagnations consecutive zero-progress cycles — " +
-            s"notifying controller to restart healing with fresh pivot"
+              s"notifying controller to restart healing with fresh pivot"
           )
           snapSyncController ! HealingStagnated(totalNodesHealed.toLong, pendingTasks.size.toLong)
           consecutiveStagnations = 0
@@ -755,9 +755,9 @@ class TrieNodeHealingCoordinator(
   private def isComplete: Boolean =
     pendingTasks.isEmpty && activeRequests.isEmpty
 
-  /** Inline child discovery after each healed node — Besu/geth scheduler-driven alignment.
-    * Decodes the healed node, discovers child hashes, checks storage, queues missing children.
-    * Makes healing self-feeding: root → children → grandchildren top-down without trie walk.
+  /** Inline child discovery after each healed node — Besu/geth scheduler-driven alignment. Decodes the healed node,
+    * discovers child hashes, checks storage, queues missing children. Makes healing self-feeding: root → children →
+    * grandchildren top-down without trie walk.
     */
   private def discoverMissingChildren(nodeData: ByteString, pathset: Seq[ByteString]): Unit = {
     import com.chipprbots.ethereum.mpt.{MptTraversals, BranchNode, ExtensionNode, HashNode, LeafNode}
@@ -777,7 +777,7 @@ class TrieNodeHealingCoordinator(
 
       decoded match {
         case branch: BranchNode =>
-          for (i <- 0 until 16) {
+          for (i <- 0 until 16)
             branch.children(i) match {
               case hash: HashNode =>
                 val childHash = ByteString(hash.hashNode)
@@ -789,7 +789,6 @@ class TrieNodeHealingCoordinator(
                 }
               case _ => // Inline-encoded or null — already resolved
             }
-          }
 
         case ext: ExtensionNode =>
           ext.next match {
@@ -808,21 +807,26 @@ class TrieNodeHealingCoordinator(
           // ARCH-LEAF-SEED: Account trie leaf — decode account, seed storage trie if missing.
           // Besu equivalent: getChildRequests() → getStorageTrieNodeRequests() on account leaf values.
           Account(leaf.value).foreach { account =>
-            if (account.storageRoot != Account.EmptyStorageRootHash &&
-                !pendingHashSet.contains(account.storageRoot) &&
-                !isNodeInStorage(account.storageRoot)) {
+            if (
+              account.storageRoot != Account.EmptyStorageRootHash &&
+              !pendingHashSet.contains(account.storageRoot) &&
+              !isNodeInStorage(account.storageRoot)
+            ) {
               val leafNibbles = leaf.key.toArray
-              val allNibbles  = parentNibbles ++ leafNibbles
+              val allNibbles = parentNibbles ++ leafNibbles
               if (allNibbles.length == 64) {
-                val accountHashBytes = allNibbles.grouped(2).map { g =>
-                  ((g(0) << 4) | g(1)).toByte
-                }.toArray
-                val accountHash      = ByteString(accountHashBytes)
+                val accountHashBytes = allNibbles
+                  .grouped(2)
+                  .map { g =>
+                    ((g(0) << 4) | g(1)).toByte
+                  }
+                  .toArray
+                val accountHash = ByteString(accountHashBytes)
                 val emptyStoragePath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
                 newEntries += HealingEntry(Seq(accountHash, emptyStoragePath), account.storageRoot)
                 log.debug(
                   s"[HEAL-LEAF] Seeded storage trie root ${Hex.toHexString(account.storageRoot.take(4).toArray)} " +
-                  s"for account ${Hex.toHexString(accountHashBytes.take(4))}"
+                    s"for account ${Hex.toHexString(accountHashBytes.take(4))}"
                 )
               }
             }
@@ -838,20 +842,21 @@ class TrieNodeHealingCoordinator(
         if (childrenDiscoveredTotal % 100 == 0 || childrenDiscoveredTotal <= 20)
           log.info(
             s"[HEAL-DISCOVER] Inline children queued: $childrenDiscoveredTotal total " +
-            s"(+${newEntries.size} from this node, pending: ${pendingTasks.size})"
+              s"(+${newEntries.size} from this node, pending: ${pendingTasks.size})"
           )
       }
     } catch {
       case NonFatal(e) =>
         log.debug(
           s"[HEAL] Cannot decode healed node for child discovery: ${e.getMessage}. " +
-          s"Skipping — trie walk will find these nodes."
+            s"Skipping — trie walk will find these nodes."
         )
     }
   }
 
   private def isNodeInStorage(hash: ByteString): Boolean =
-    try { mptStorage.get(hash.toArray); true } catch { case _: Exception => false }
+    try { mptStorage.get(hash.toArray); true }
+    catch { case _: Exception => false }
 }
 
 object TrieNodeHealingCoordinator {
