@@ -303,9 +303,9 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
   it should "be distinct from AccountTrieFinalized (success path)" taggedAs UnitTest in {
     import SNAPSyncController._
     import org.apache.pekko.util.ByteString
-    val failed   = AccountTrieFinalizationFailed("some error")
+    val failed = AccountTrieFinalizationFailed("some error")
     val succeeded = AccountTrieFinalized(ByteString(Array.fill(32)(0.toByte)))
-    failed should not equal succeeded
+    (failed should not).equal(succeeded)
   }
 
   "SNAPSyncController message set" should "include AccountTrieFinalizationFailed alongside AccountTrieFinalized" taggedAs UnitTest in {
@@ -313,7 +313,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     // Both success and failure finalization messages must exist so the controller
     // can distinguish "proceed to healing" from "restart with fresh pivot".
     val successMsg: AnyRef = AccountTrieFinalized(org.apache.pekko.util.ByteString.empty)
-    val failMsg: AnyRef    = AccountTrieFinalizationFailed("error")
+    val failMsg: AnyRef = AccountTrieFinalizationFailed("error")
     successMsg.getClass should not be failMsg.getClass
   }
 }

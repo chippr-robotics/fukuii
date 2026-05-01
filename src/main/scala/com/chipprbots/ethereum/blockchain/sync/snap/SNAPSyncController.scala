@@ -1907,7 +1907,7 @@ class SNAPSyncController(
           if (pivotAge > SnapServeWindowBlocks && !recentlyRolled) {
             log.info(
               s"[PIVOT-ROLL] Proactive pivot roll: pivot=${pivotBlock.get} network=$networkBest " +
-              s"age=$pivotAge blocks (>$SnapServeWindowBlocks) — refreshing to keep core-geth snapshot window covering pivot"
+                s"age=$pivotAge blocks (>$SnapServeWindowBlocks) — refreshing to keep core-geth snapshot window covering pivot"
             )
             lastProactivePivotBlock = Some(networkBest)
             refreshPivotInPlace("proactive pivot roll — pivot aged beyond core-geth snapshot window")
@@ -2277,7 +2277,7 @@ class SNAPSyncController(
     // Update internal state
     pivotBlock = Some(newPivotBlock)
     stateRoot = Some(newStateRoot)
-    lastProactivePivotBlock = pivotBlock  // record completed roll so proactive check doesn't immediately re-fire
+    lastProactivePivotBlock = pivotBlock // record completed roll so proactive check doesn't immediately re-fire
     // Note: mptStorage stays the same — content-addressed nodes don't need re-tagging.
     // The backing storage was already created for the original pivot block number,
     // but since nodes are keyed by hash, they're valid for any root.
