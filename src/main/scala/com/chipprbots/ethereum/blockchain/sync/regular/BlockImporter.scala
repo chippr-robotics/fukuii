@@ -88,7 +88,7 @@ class BlockImporter(
 
     case BlockFetcher.PickedBlocks(blocks) =>
       SignedTransaction.retrieveSendersInBackGround(blocks.toList.map(_.body))
-      importBlocks(blocks, DefaultBlockImport)(state)
+      importBlocks(blocks, DefaultBlockImport)(state.resetNodesFetched())
 
     case MinedBlock(block) if !state.importing =>
       importBlock(
@@ -109,7 +109,13 @@ class BlockImporter(
       )(state)
 
     case ImportDone(newBehavior, importType) =>
-      val newState = state.notImportingBlocks().branchResolved()
+      // B1: Only reset healingStallCount on a CLEAN import (no state node fetches required).
+      // Mirrors Besu WorldDownloadState.requestComplete(madeProgress): resets only when madeProgress==true.
+      // A healing-assisted import keeps the stall signal — only truly clean blocks reset it.
+      val newState = if (state.healingNodesFetchedThisBlock == 0)
+        state.notImportingBlocks().branchResolved().healingResolved()
+      else
+        state.notImportingBlocks().branchResolved()
       val behavior: Behavior = getBehavior(newBehavior, importType)
       if (newBehavior == Running) {
         self ! PickBlocks
@@ -135,18 +141,26 @@ class BlockImporter(
       state: ImporterState
   ): Receive = {
     case BlockFetcher.FetchedStateNode(nodeData) if nodeData.values.isEmpty =>
-      // StateNodeFetcher exhausted MaxStateNodeFetchRetries on this missing node — no current peer
-      // can serve it via SNAP GetTrieNodes (typical: pivot fell out of the 128-block serve window
-      // on every connected peer).
+      // StateNodeFetcher exhausted SNAP GetTrieNodes across all peers with no result.
+      // Two escalation paths:
+      //   (1) HealingImpossible: pivot state root pruned on all peers → restart SNAP (Besu pattern)
+      //   (2) RegularSyncStuck: repeated exhausts → SNAP re-sync escape valve
       val blockNum = blocksToRetry.head.number
       consecutiveExhausts += 1
       val missingHashStr = pendingStateNodeHash.map(ByteStringUtils.hash2string).getOrElse("<unknown>")
+      val newStallCount = state.healingStallCount + 1
 
-      if (consecutiveExhausts >= BlockImporter.StuckEscapeThreshold) {
-        // Multiple consecutive exhausts mean peers genuinely don't have our parent state and
-        // never will (we're far behind their snap-serve window). The only recovery is to re-pivot
-        // via SNAP. Reset our local counter so we don't re-fire if SyncController bounces us back
-        // to regular sync; the SnapFastEscapeHatch handles cycle limits.
+      if (newStallCount >= HealingImpossibleThreshold) {
+        log.error(
+          "Trie healing impossible for block {} after {} consecutive failures — " +
+            "GetTrieNodes returns empty from all peers (pivot state root pruned). Escalating to restart SNAP sync.",
+          blockNum,
+          newStallCount
+        )
+        supervisor ! ProgressProtocol.HealingImpossible
+        context.setReceiveTimeout(syncConfig.syncRetryInterval)
+        context.become(running(state.copy(healingStallCount = 0)))
+      } else if (consecutiveExhausts >= BlockImporter.StuckEscapeThreshold) {
         log.error(
           "Regular sync stuck on block {} after {} consecutive state-node exhausts (missing {}); requesting SNAP re-sync",
           blockNum,
@@ -156,11 +170,12 @@ class BlockImporter(
         consecutiveExhausts = 0
         pendingStateNodeHash = None
         supervisor ! SyncProtocol.RegularSyncStuck(blockNum, missingHashStr)
-        // Don't transition further — SyncController will PoisonPill regular sync.
       } else {
         log.error(
-          "State node recovery failed after max retries for block {} (consecutive exhausts: {}/{}) — backing off {}s before retry",
+          "State node recovery failed after max retries for block {} (stall {}/{}, exhausts {}/{}) — backing off {}s before retry",
           blockNum,
+          newStallCount,
+          HealingImpossibleThreshold,
           consecutiveExhausts,
           BlockImporter.StuckEscapeThreshold,
           5.minutes.toSeconds
@@ -170,9 +185,8 @@ class BlockImporter(
           "state node unrecoverable after max retries",
           shouldBlacklist = false
         )
-        // Don't self ! PickBlocks — that would immediately retry the same block.
         context.setReceiveTimeout(5.minutes)
-        context.become(running(state))
+        context.become(running(state.copy(healingStallCount = newStallCount)))
       }
 
     case BlockFetcher.FetchedStateNode(nodeData) =>
@@ -188,11 +202,11 @@ class BlockImporter(
       // and the data is the bytecode. EvmCodeStorage is keyed by codeHash, same as the fetch.
       try evmCodeStorage.put(hash, node).commit()
       catch { case _: Exception => () }
-      // Successful state-node delivery — reset stuck-counter so a later transient failure on a
-      // different block doesn't escalate to SNAP re-sync prematurely.
+      // Successful state-node delivery — reset stuck-counter so a later transient failure
+      // doesn't escalate prematurely. B1: Track that this block needed healing.
       consecutiveExhausts = 0
       pendingStateNodeHash = None
-      importBlocks(blocksToRetry, blockImportType)(state)
+      importBlocks(blocksToRetry, blockImportType)(state.nodesFetched())
 
     case ReceiveTimeout =>
       log.warning("Timed out waiting for missing state node for block {}, retrying import", blocksToRetry.head.number)
@@ -825,6 +839,11 @@ object BlockImporter {
   // 3 × 5-min backoff = ~15 minutes of bounded retry before invoking the escape valve.
   val StuckEscapeThreshold: Int = 3
 
+  // After this many consecutive trie-healing stalls (StateNodeFetcher returned empty from all peers),
+  // escalate HealingImpossible → SyncController → restart SNAP with a fresh current pivot.
+  // Besu: ~100 requestsWithoutProgress → StalledDownloadException → PivotSyncDownloader.handleFailure().
+  val HealingImpossibleThreshold: Int = 2
+
   // scalastyle:off parameter.number
   def props(
       fetcher: ActorRef,
@@ -891,7 +910,9 @@ object BlockImporter {
 
   case class ImporterState(
       importing: Boolean,
-      resolvingBranchFrom: Option[BigInt]
+      resolvingBranchFrom: Option[BigInt],
+      healingStallCount: Int = 0,
+      healingNodesFetchedThisBlock: Int = 0
   ) {
     def importingBlocks(): ImporterState = copy(importing = true)
 
@@ -902,6 +923,14 @@ object BlockImporter {
     def branchResolved(): ImporterState = copy(resolvingBranchFrom = None)
 
     def isResolvingBranch: Boolean = resolvingBranchFrom.isDefined
+
+    def healingStalled(): ImporterState = copy(healingStallCount = healingStallCount + 1)
+
+    def healingResolved(): ImporterState = copy(healingStallCount = 0)
+
+    def nodesFetched(): ImporterState = copy(healingNodesFetchedThisBlock = healingNodesFetchedThisBlock + 1)
+
+    def resetNodesFetched(): ImporterState = copy(healingNodesFetchedThisBlock = 0)
   }
 
   object ImporterState {

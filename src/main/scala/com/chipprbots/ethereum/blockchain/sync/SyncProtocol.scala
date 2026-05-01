@@ -26,6 +26,12 @@ object SyncProtocol {
     */
   final case class RegularSyncStuck(blockNumber: BigInt, missingHash: String) extends SyncProtocolMsg
 
+  /** Sent by RegularSync when trie healing is permanently stuck (GetTrieNodes returns empty from all peers,
+    * meaning the pivot state root has been pruned). SyncController clears SnapSyncDone and restarts SNAP sync
+    * with a fresh current pivot. Mirrors Besu's StalledDownloadException → PivotSyncDownloader.handleFailure().
+    */
+  case object HealingImpossible extends SyncProtocolMsg
+
   sealed trait Status {
     def syncing: Boolean = this match {
       case Status.Syncing(_, _, _) => true
