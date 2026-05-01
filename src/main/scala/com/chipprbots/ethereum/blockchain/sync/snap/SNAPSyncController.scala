@@ -853,7 +853,10 @@ class SNAPSyncController(
           } else {
             pivotBlock = Some(targetPivot)
             stateRoot = Some(header.stateRoot)
-            appStateStorage.putSnapSyncPivotBlock(targetPivot).and(appStateStorage.putSnapSyncStateRoot(header.stateRoot)).commit()
+            appStateStorage
+              .putSnapSyncPivotBlock(targetPivot)
+              .and(appStateStorage.putSnapSyncStateRoot(header.stateRoot))
+              .commit()
             updateBestBlockForPivot(header, targetPivot)
 
             SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
@@ -883,7 +886,10 @@ class SNAPSyncController(
                   case Some(header) =>
                     pivotBlock = Some(targetPivot)
                     stateRoot = Some(header.stateRoot)
-                    appStateStorage.putSnapSyncPivotBlock(targetPivot).and(appStateStorage.putSnapSyncStateRoot(header.stateRoot)).commit()
+                    appStateStorage
+                      .putSnapSyncPivotBlock(targetPivot)
+                      .and(appStateStorage.putSnapSyncStateRoot(header.stateRoot))
+                      .commit()
                     updateBestBlockForPivot(header, targetPivot)
 
                     SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
@@ -1022,7 +1028,8 @@ class SNAPSyncController(
               s"Recovery: pivot $pivot drifted $drift blocks from network best $networkBest. " +
                 "Clearing accounts-complete flag and restarting fresh."
             )
-            appStateStorage.putSnapSyncAccountsComplete(false)
+            appStateStorage
+              .putSnapSyncAccountsComplete(false)
               .and(appStateStorage.putSnapSyncStorageComplete(false))
               .and(appStateStorage.putSnapSyncBytecodeComplete(false))
               .commit()
@@ -1033,12 +1040,12 @@ class SNAPSyncController(
             stateRoot = Some(rootBs)
             accountsComplete = true
 
-            val storageAlreadyDone  = appStateStorage.isSnapSyncStorageComplete()
+            val storageAlreadyDone = appStateStorage.isSnapSyncStorageComplete()
             val bytecodeAlreadyDone = appStateStorage.isSnapSyncBytecodeComplete()
-            storagePhaseComplete  = storageAlreadyDone
+            storagePhaseComplete = storageAlreadyDone
             bytecodePhaseComplete = bytecodeAlreadyDone
 
-            if (storageAlreadyDone)  log.info("Recovery: storage phase already complete — skipping re-download")
+            if (storageAlreadyDone) log.info("Recovery: storage phase already complete — skipping re-download")
             if (bytecodeAlreadyDone) log.info("Recovery: bytecode phase already complete — skipping re-download")
 
             log.info(s"Recovery: resuming bytecodes + storage sync from pivot $pivot (drift=$drift blocks)")
@@ -1108,7 +1115,7 @@ class SNAPSyncController(
                 scala.concurrent
                   .Future {
                     val emptyRoot = ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)
-                    val zeroHash  = ByteString(new Array[Byte](32))
+                    val zeroHash = ByteString(new Array[Byte](32))
                     val raf = new java.io.RandomAccessFile(filePath.toFile, "r")
                     val buf = new Array[Byte](64)
                     val batch = new scala.collection.mutable.ArrayBuffer[StorageTask](10000)
@@ -1209,7 +1216,8 @@ class SNAPSyncController(
           }
         case _ =>
           log.warning("Recovery: accounts-complete flag set but missing pivot/root. Clearing and restarting fresh.")
-          appStateStorage.putSnapSyncAccountsComplete(false)
+          appStateStorage
+            .putSnapSyncAccountsComplete(false)
             .and(appStateStorage.putSnapSyncStorageComplete(false))
             .and(appStateStorage.putSnapSyncBytecodeComplete(false))
             .commit()
@@ -1368,7 +1376,10 @@ class SNAPSyncController(
         case Some(genesisHeader) =>
           pivotBlock = Some(BigInt(0))
           stateRoot = Some(genesisHeader.stateRoot)
-          appStateStorage.putSnapSyncPivotBlock(0).and(appStateStorage.putSnapSyncStateRoot(genesisHeader.stateRoot)).commit()
+          appStateStorage
+            .putSnapSyncPivotBlock(0)
+            .and(appStateStorage.putSnapSyncStateRoot(genesisHeader.stateRoot))
+            .commit()
           updateBestBlockForPivot(genesisHeader, BigInt(0))
 
           SNAPSyncMetrics.setPivotBlockNumber(0)
@@ -1452,7 +1463,10 @@ class SNAPSyncController(
           // Pivot header is available - proceed with SNAP sync
           pivotBlock = Some(pivotBlockNumber)
           stateRoot = Some(header.stateRoot)
-          appStateStorage.putSnapSyncPivotBlock(pivotBlockNumber).and(appStateStorage.putSnapSyncStateRoot(header.stateRoot)).commit()
+          appStateStorage
+            .putSnapSyncPivotBlock(pivotBlockNumber)
+            .and(appStateStorage.putSnapSyncStateRoot(header.stateRoot))
+            .commit()
           updateBestBlockForPivot(header, pivotBlockNumber)
 
           // Update metrics - pivot block
@@ -1593,7 +1607,8 @@ class SNAPSyncController(
 
     // Clear persisted SNAP progress — fast sync will start fresh
     appStateStorage.putSnapSyncProgress("").commit()
-    appStateStorage.putSnapSyncAccountsComplete(false)
+    appStateStorage
+      .putSnapSyncAccountsComplete(false)
       .and(appStateStorage.putSnapSyncStorageComplete(false))
       .and(appStateStorage.putSnapSyncBytecodeComplete(false))
       .commit()
@@ -2327,7 +2342,10 @@ class SNAPSyncController(
     // succeeds (trie walk finds 0 missing nodes). Mid-healing writes cause root mismatch (BUG-006):
     // the new root is stored before all its nodes are healed, then validateState() sees a mismatch.
     if (currentPhase != StateHealing) {
-      appStateStorage.putSnapSyncPivotBlock(newPivotBlock).and(appStateStorage.putSnapSyncStateRoot(newStateRoot)).commit()
+      appStateStorage
+        .putSnapSyncPivotBlock(newPivotBlock)
+        .and(appStateStorage.putSnapSyncStateRoot(newStateRoot))
+        .commit()
     }
     updateBestBlockForPivot(newPivotHeader, newPivotBlock)
     SNAPSyncMetrics.setPivotBlockNumber(newPivotBlock)
@@ -2399,7 +2417,8 @@ class SNAPSyncController(
     accountsComplete = false
     bytecodePhaseComplete = false
     storagePhaseComplete = false
-    appStateStorage.putSnapSyncAccountsComplete(false)
+    appStateStorage
+      .putSnapSyncAccountsComplete(false)
       .and(appStateStorage.putSnapSyncStorageComplete(false))
       .and(appStateStorage.putSnapSyncBytecodeComplete(false))
       .commit()

@@ -208,7 +208,7 @@ class AccountRangeCoordinator(
   private val totalKeyspace: BigInt = BigInt(2).pow(256)
   // Cumulative keyspace consumed: incremented each time a task's `next` advances.
   // On restart, derive from restored task positions so progress % and ETA are accurate.
-  private var consumedKeyspace: BigInt = {
+  private var consumedKeyspace: BigInt =
     if (resumeProgress.nonEmpty) {
       val toBI = (bs: ByteString) => BigInt(1, bs.toArray.padTo(32, 0.toByte))
       // Re-create pristine tasks to recover original range starts (keyed by `last` boundary).
@@ -219,7 +219,6 @@ class AccountRangeCoordinator(
         acc + (toBI(task.next) - orig).max(BigInt(0))
       }
     } else BigInt(0)
-  }
 
   // Contract accounts persisted to temp files to avoid unbounded memory growth.
   // On ETC mainnet ~20% of ~67M accounts are contracts — ~13M entries × 64 bytes each

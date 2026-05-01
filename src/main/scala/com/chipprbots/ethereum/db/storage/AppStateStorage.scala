@@ -343,7 +343,7 @@ object AppStateStorage {
     val BytecodeRecoveryDone = "BytecodeRecoveryDone"
     val StorageRecoveryDone = "StorageRecoveryDone"
     val SnapSyncAccountsComplete = "SnapSyncAccountsComplete"
-    val SnapSyncStorageComplete  = "SnapSyncStorageComplete"
+    val SnapSyncStorageComplete = "SnapSyncStorageComplete"
     val SnapSyncBytecodeComplete = "SnapSyncBytecodeComplete"
     val SnapSyncCodeHashesPath = "SnapSyncCodeHashesPath"
     val SnapSyncStorageFilePath = "SnapSyncStorageFilePath"
