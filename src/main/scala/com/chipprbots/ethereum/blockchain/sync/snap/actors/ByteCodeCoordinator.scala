@@ -194,11 +194,13 @@ class ByteCodeCoordinator(
       checkCompletion()
 
     case ByteCodePivotRefreshed =>
-      log.info("Pivot refreshed — clearing bytecode peer cooldowns")
+      // BUG-S1: Do NOT clear knownAvailablePeers — bytecodes are content-addressed (hash-keyed),
+      // not state-root-dependent, so existing peers can serve them after a pivot refresh.
+      // Clearing the set would force a cold-start re-registration delay.
+      log.info("Pivot refreshed — clearing bytecode peer cooldowns (keeping peer set)")
       peerFailureCounts.clear()
       peerCooldownUntilMillis.clear()
       peerResponseBytesTarget.clear()
-      knownAvailablePeers.clear()
       consecutiveTaskFailures = 0
 
     case PeerAvailable(peer) =>
