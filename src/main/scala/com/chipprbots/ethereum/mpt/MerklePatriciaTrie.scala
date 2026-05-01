@@ -28,22 +28,37 @@ object MerklePatriciaTrie {
 
   class MissingNodeException protected (val hash: ByteString, message: String) extends MPTException(message) {
     def this(hash: ByteString) = this(hash, s"Node not found ${Hex.toHexString(hash.toArray)}, trie is inconsistent")
+    val location: Option[ByteString] = None
+    def withLocation(loc: ByteString): MissingNodeException =
+      new MissingNodeException(hash, message) { override val location: Option[ByteString] = Some(loc) }
   }
 
   class MissingRootNodeException(hash: ByteString)
       extends MissingNodeException(hash, s"Root node not found ${Hex.toHexString(hash.toArray)}")
 
-  class MissingStorageNodeException(hash: ByteString, val accountAddress: ByteString)
-      extends MissingNodeException(
+  class MissingStorageNodeException(
+      hash: ByteString,
+      val accountAddress: ByteString,
+      override val location: Option[ByteString] = None
+  ) extends MissingNodeException(
         hash,
         s"Storage node not found ${Hex.toHexString(hash.toArray)} for account ${Hex.toHexString(accountAddress.toArray)}"
-      )
+      ) {
+    override def withLocation(loc: ByteString): MissingStorageNodeException =
+      new MissingStorageNodeException(hash, accountAddress, Some(loc))
+  }
 
-  class MissingAccountNodeException(hash: ByteString, val accountAddress: ByteString)
-      extends MissingNodeException(
+  class MissingAccountNodeException(
+      hash: ByteString,
+      val accountAddress: ByteString,
+      override val location: Option[ByteString] = None
+  ) extends MissingNodeException(
         hash,
         s"Account trie node not found ${Hex.toHexString(hash.toArray)} while accessing account ${Hex.toHexString(accountAddress.toArray)}"
-      )
+      ) {
+    override def withLocation(loc: ByteString): MissingAccountNodeException =
+      new MissingAccountNodeException(hash, accountAddress, Some(loc))
+  }
 
   val EmptyEncoded: Array[Byte] = encodeRLP(Array.empty[Byte])
   val EmptyRootHash: Array[Byte] = Node.hashFn(EmptyEncoded)
@@ -196,7 +211,13 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
   private def pathTraverse[T](acc: T, searchKey: Array[Byte])(op: (T, Option[MptNode]) => T): Option[T] = {
 
     @tailrec
-    def pathTraverse(acc: T, node: MptNode, searchKey: Array[Byte], op: (T, Option[MptNode]) => T): Option[T] =
+    def pathTraverse(
+        acc: T,
+        node: MptNode,
+        searchKey: Array[Byte],
+        accPath: Array[Byte],
+        op: (T, Option[MptNode]) => T
+    ): Option[T] =
       node match {
         case LeafNode(key, _, _, _, _) =>
           if (key.toArray[Byte].sameElements(searchKey)) Some(op(acc, Some(node))) else Some(op(acc, None))
@@ -204,7 +225,7 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
         case extNode @ ExtensionNode(sharedKey, _, _, _, _) =>
           val (commonKey, remainingKey) = searchKey.splitAt(sharedKey.length)
           if (searchKey.length >= sharedKey.length && (sharedKey.toArray[Byte].sameElements(commonKey))) {
-            pathTraverse(op(acc, Some(node)), extNode.next, remainingKey, op)
+            pathTraverse(op(acc, Some(node)), extNode.next, remainingKey, accPath ++ sharedKey.toArray[Byte], op)
           } else Some(op(acc, None))
 
         case branch: BranchNode =>
@@ -214,11 +235,18 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
               op(acc, Some(node)),
               branch.children(searchKey(0)),
               searchKey.slice(1, searchKey.length),
+              accPath :+ searchKey(0),
               op
             )
 
         case HashNode(bytes) =>
-          pathTraverse(acc, getFromHash(bytes, nodeStorage), searchKey, op)
+          val resolved =
+            try getFromHash(bytes, nodeStorage)
+            catch {
+              case e: MissingNodeException =>
+                throw e.withLocation(ByteString(HexPrefix.encode(accPath, isLeaf = false)))
+            }
+          pathTraverse(acc, resolved, searchKey, accPath, op)
 
         case NullNode =>
           Some(op(acc, None))
@@ -227,10 +255,15 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
     rootNode match {
       case Some(hash: HashNode) =>
         // Resolve root hash to actual node, but don't pre-add — pathTraverse will add it
-        val resolved = getFromHash(hash.hashNode, nodeStorage)
-        pathTraverse(acc, resolved, searchKey, op)
+        val resolved =
+          try getFromHash(hash.hashNode, nodeStorage)
+          catch {
+            case e: MissingNodeException =>
+              throw e.withLocation(ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false)))
+          }
+        pathTraverse(acc, resolved, searchKey, Array.empty, op)
       case Some(root) =>
-        pathTraverse(acc, root, searchKey, op)
+        pathTraverse(acc, root, searchKey, Array.empty, op)
       case None =>
         None
     }
