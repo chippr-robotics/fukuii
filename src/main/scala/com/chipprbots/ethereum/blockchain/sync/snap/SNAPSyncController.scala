@@ -224,7 +224,8 @@ class SNAPSyncController(
   // Threshold must be generous enough to allow large chains to complete within the SNAP serve window.
   // Unified stagnation watchdog thresholds — one check interval, phase-specific thresholds
   private val DownloadStagnationCheckInterval: FiniteDuration = 30.seconds
-  private val StorageStagnationThreshold: FiniteDuration = 10.minutes // CFG-2: 20→10min; second stall force-completes after 30s anyway
+  private val StorageStagnationThreshold: FiniteDuration =
+    10.minutes // CFG-2: 20→10min; second stall force-completes after 30s anyway
   private val AccountStagnationThreshold: FiniteDuration = snapSyncConfig.accountStagnationTimeout
   private var lastStorageProgressMs: Long = System.currentTimeMillis()
   private var lastAccountProgressMs: Long = System.currentTimeMillis()
@@ -1958,10 +1959,10 @@ class SNAPSyncController(
   private case class TrieWalkFailed(error: String)
   private case object ScheduledTrieWalk
 
-  /** Start an async trie walk to discover missing nodes. Guards against concurrent walks.
-   *  Uses streaming to emit batches as they are found — critical for mainnet-scale tries
-   *  where a full blocking walk can take hours before the coordinator sees any work.
-   */
+  /** Start an async trie walk to discover missing nodes. Guards against concurrent walks. Uses streaming to emit
+    * batches as they are found — critical for mainnet-scale tries where a full blocking walk can take hours before the
+    * coordinator sees any work.
+    */
   private def startTrieWalk(): Unit = {
     if (trieWalkInProgress) return
     if (currentPhase != StateHealing) return
@@ -2065,10 +2066,9 @@ class SNAPSyncController(
 
   /** Reconnect to any configured snap-server-peers that are not currently connected.
     *
-    * snap-server-peers are static SNAP-serving nodes (e.g. local Besu with
-    * --snapsync-server-enabled) that are the only source of ETC GetTrieNodes responses.
-    * They may disconnect after the storage phase. This method ensures reconnection so they
-    * are in the peer pool when healing dispatches requests.
+    * snap-server-peers are static SNAP-serving nodes (e.g. local Besu with --snapsync-server-enabled) that are the only
+    * source of ETC GetTrieNodes responses. They may disconnect after the storage phase. This method ensures
+    * reconnection so they are in the peer pool when healing dispatches requests.
     */
   private def ensureSnapServerPeersConnected(): Unit = {
     if (snapSyncConfig.snapServerPeers.isEmpty) return
@@ -2098,7 +2098,6 @@ class SNAPSyncController(
       }
     }
   }
-
 
   private def validateState(): Unit = {
     if (!snapSyncConfig.stateValidationEnabled) {
@@ -2598,75 +2597,74 @@ class SNAPSyncController(
   private def finalizeSnapSync(pivot: BigInt): Unit = {
     import scala.util.boundary, boundary.break
     boundary {
-    // Look up the pivot header so we can store a complete "best block" anchor.
-    // RegularSync's BranchResolution needs: header, body, number→hash mapping,
-    // ChainWeight, and BestBlockInfo (hash + number) to accept blocks that chain
-    // from the pivot.
-    blockchainReader.getBlockHeaderByNumber(pivot) match {
-      case Some(pivotHeader) =>
-        // A5: Root match guard — snapStateRoot must equal pivotHeader.stateRoot before
-        // marking sync done. Mirrors Besu SnapWorldDownloadState.saveWorldState() implicit
-        // verification. If they diverge (BUG-008 class), restart SNAP rather than committing
-        // a broken state.
-        appStateStorage.getSnapSyncStateRoot().foreach { snapRoot =>
-          if (snapRoot != pivotHeader.stateRoot) {
-            log.error(
-              "SNAP finalization aborted: snapStateRoot={} != pivotHeader.stateRoot={}. " +
-                "State trie root mismatch — escalating to SyncController for SNAP restart.",
-              snapRoot.toHex,
-              pivotHeader.stateRoot.toHex
-            )
-            context.parent ! SyncProtocol.HealingImpossible
-            break()
+      // Look up the pivot header so we can store a complete "best block" anchor.
+      // RegularSync's BranchResolution needs: header, body, number→hash mapping,
+      // ChainWeight, and BestBlockInfo (hash + number) to accept blocks that chain
+      // from the pivot.
+      blockchainReader.getBlockHeaderByNumber(pivot) match {
+        case Some(pivotHeader) =>
+          // A5: Root match guard — snapStateRoot must equal pivotHeader.stateRoot before
+          // marking sync done. Mirrors Besu SnapWorldDownloadState.saveWorldState() implicit
+          // verification. If they diverge (BUG-008 class), restart SNAP rather than committing
+          // a broken state.
+          appStateStorage.getSnapSyncStateRoot().foreach { snapRoot =>
+            if (snapRoot != pivotHeader.stateRoot) {
+              log.error(
+                "SNAP finalization aborted: snapStateRoot={} != pivotHeader.stateRoot={}. " +
+                  "State trie root mismatch — escalating to SyncController for SNAP restart.",
+                snapRoot.toHex,
+                pivotHeader.stateRoot.toHex
+              )
+              context.parent ! SyncProtocol.HealingImpossible
+              break()
+            }
           }
-        }
 
+          val pivotHash = pivotHeader.hash
 
-        val pivotHash = pivotHeader.hash
+          // Store the full block (header + empty body) so getBlockByHash(pivotHash) returns
+          // a Block AND the number→hash mapping is written. PivotHeaderBootstrap already stored
+          // the header, but storeBlock ensures the mapping is present even if the header was
+          // stored by a different code path during pivot refresh.
+          blockchainWriter.storeBlock(Block(pivotHeader, BlockBody.empty)).commit()
 
-        // Store the full block (header + empty body) so getBlockByHash(pivotHash) returns
-        // a Block AND the number→hash mapping is written. PivotHeaderBootstrap already stored
-        // the header, but storeBlock ensures the mapping is present even if the header was
-        // stored by a different code path during pivot refresh.
-        blockchainWriter.storeBlock(Block(pivotHeader, BlockBody.empty)).commit()
+          // Store a ChainWeight so compareBranch() can evaluate new blocks.
+          // We estimate totalDifficulty ≈ difficulty × blockNumber. This doesn't need
+          // to be exact — it just needs to exist so branch resolution doesn't error,
+          // and subsequent blocks will accumulate from this baseline.
+          val estimatedTotalDifficulty = pivotHeader.difficulty * pivot
+          blockchainWriter
+            .storeChainWeight(
+              pivotHash,
+              ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty)
+            )
+            .commit()
 
-        // Store a ChainWeight so compareBranch() can evaluate new blocks.
-        // We estimate totalDifficulty ≈ difficulty × blockNumber. This doesn't need
-        // to be exact — it just needs to exist so branch resolution doesn't error,
-        // and subsequent blocks will accumulate from this baseline.
-        val estimatedTotalDifficulty = pivotHeader.difficulty * pivot
-        blockchainWriter
-          .storeChainWeight(
-            pivotHash,
-            ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty)
-          )
-          .commit()
+          // Set best block info with BOTH hash and number (putBestBlockNumber only
+          // sets the number, leaving getBestBlockInfo().hash empty).
+          appStateStorage
+            .putBestBlockInfo(
+              com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash, pivot)
+            )
+            .commit()
 
-        // Set best block info with BOTH hash and number (putBestBlockNumber only
-        // sets the number, leaving getBestBlockInfo().hash empty).
-        appStateStorage
-          .putBestBlockInfo(
-            com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash, pivot)
-          )
-          .commit()
+          log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.take(8).toHex})")
 
-        log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.take(8).toHex})")
+        case None =>
+          // Fallback: shouldn't happen since PivotHeaderBootstrap stored the header
+          log.warning(s"Pivot header for block $pivot not found in storage — setting best block number only")
+          appStateStorage.putBestBlockNumber(pivot).commit()
+      }
 
-      case None =>
-        // Fallback: shouldn't happen since PivotHeaderBootstrap stored the header
-        log.warning(s"Pivot header for block $pivot not found in storage — setting best block number only")
-        appStateStorage.putBestBlockNumber(pivot).commit()
-    }
+      // Stop chain downloader if still running
+      chainDownloader.foreach(context.stop)
+      chainDownloader = None
 
-    // Stop chain downloader if still running
-    chainDownloader.foreach(context.stop)
-    chainDownloader = None
+      progressMonitor.complete()
+      log.info(progressMonitor.currentProgress.toString)
 
-    progressMonitor.complete()
-    log.info(progressMonitor.currentProgress.toString)
-
-    context.become(completed)
-    context.parent ! Done
+      context.become(completed)
+      context.parent ! Done
     } // end boundary
   }
 

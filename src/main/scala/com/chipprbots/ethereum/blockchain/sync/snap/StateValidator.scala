@@ -184,14 +184,12 @@ class StateValidator(mptStorage: MptStorage) {
 
   /** Find all missing trie nodes with GetTrieNodes-compatible pathsets.
     *
-    * Uses iterative BFS queues instead of recursion to avoid StackOverflowError on
-    * large tries (ETC mainnet: ~90M accounts, trie depth up to 64 nibbles).
-    * Each storage trie is walked with its own visited set (independent BFS), matching
-    * the original per-storage-trie isolation.
+    * Uses iterative BFS queues instead of recursion to avoid StackOverflowError on large tries (ETC mainnet: ~90M
+    * accounts, trie depth up to 64 nibbles). Each storage trie is walked with its own visited set (independent BFS),
+    * matching the original per-storage-trie isolation.
     *
-    * Mirrors Besu TrieNodeHealingRequest.getChildRequests() (java:94-125) and
-    * go-ethereum trie/sync.go:ProcessNode() (line 419-448): every retrieved node
-    * enqueues ALL hash-referenced children before moving on.
+    * Mirrors Besu TrieNodeHealingRequest.getChildRequests() (java:94-125) and go-ethereum trie/sync.go:ProcessNode()
+    * (line 419-448): every retrieved node enqueues ALL hash-referenced children before moving on.
     */
   def findMissingNodesWithPaths(stateRoot: ByteString): Either[String, Seq[(Seq[ByteString], ByteString)]] = {
     val result = mutable.ArrayBuffer[(Seq[ByteString], ByteString)]()
@@ -210,26 +208,24 @@ class StateValidator(mptStorage: MptStorage) {
     }
   }
 
-  /** Streaming variant: calls onBatch whenever batchSize missing nodes are found.
-   *  Allows the healing coordinator to start working before the full walk completes —
-   *  critical for mainnet-scale tries where the full walk can take hours.
-   *  Returns total missing nodes found, or Left on fatal error.
-   */
+  /** Streaming variant: calls onBatch whenever batchSize missing nodes are found. Allows the healing coordinator to
+    * start working before the full walk completes — critical for mainnet-scale tries where the full walk can take
+    * hours. Returns total missing nodes found, or Left on fatal error.
+    */
   def findMissingNodesStreaming(
       stateRoot: ByteString,
       batchSize: Int,
       onBatch: Seq[(Seq[ByteString], ByteString)] => Unit
   ): Either[String, Int] = {
-    val result    = mutable.ArrayBuffer[(Seq[ByteString], ByteString)]()
+    val result = mutable.ArrayBuffer[(Seq[ByteString], ByteString)]()
     var totalSent = 0
 
-    val flushIfFull: () => Unit = () => {
+    val flushIfFull: () => Unit = () =>
       if (result.size >= batchSize) {
         onBatch(result.toSeq)
         totalSent += result.size
         result.clear()
       }
-    }
 
     try {
       val rootNode = mptStorage.get(stateRoot.toArray)
@@ -259,7 +255,7 @@ class StateValidator(mptStorage: MptStorage) {
     // Use a stack (DFS) instead of a queue (BFS). DFS uses O(trie_depth) space —
     // typically 8-9 levels for ETC mainnet — vs O(trie_width) for BFS which can
     // accumulate millions of BranchNodes simultaneously (OOM on 85.9M account tries).
-    val stack   = mutable.ArrayDeque[(MptNode, Array[Byte])]()
+    val stack = mutable.ArrayDeque[(MptNode, Array[Byte])]()
     val visited = mutable.Set[ByteString]()
     stack.prepend((rootNode, Array.emptyByteArray))
 
@@ -273,7 +269,7 @@ class StateValidator(mptStorage: MptStorage) {
           try {
             val account = accountSerializer.fromBytes(leaf.value.toArray)
             if (account.storageRoot != com.chipprbots.ethereum.domain.Account.EmptyStorageRootHash) {
-              val fullNibblePath   = nibblePath ++ leaf.key.toArray
+              val fullNibblePath = nibblePath ++ leaf.key.toArray
               val accountHashBytes = HexPrefix.nibblesToBytes(fullNibblePath)
               try {
                 val storageRoot = mptStorage.get(account.storageRoot.toArray)
@@ -333,7 +329,7 @@ class StateValidator(mptStorage: MptStorage) {
       result: mutable.ArrayBuffer[(Seq[ByteString], ByteString)],
       flushIfFull: () => Unit = () => ()
   ): Unit = {
-    val stack   = mutable.ArrayDeque[(MptNode, Array[Byte])]()
+    val stack = mutable.ArrayDeque[(MptNode, Array[Byte])]()
     val visited = mutable.Set[ByteString]()
     stack.prepend((rootNode, Array.emptyByteArray))
 

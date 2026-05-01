@@ -116,8 +116,8 @@ object Messages {
   case class ByteCodesResponseMsg(response: ByteCodes) extends ByteCodeWorkerMessage
   case class ByteCodeRequestTimeout(requestId: BigInt) extends ByteCodeWorkerMessage
 
-  /** Sent by ByteCodeCoordinator to ByteCodeWorker after processing the response. Worker cancels
-    * its timeout and transitions from working to idle state without waiting for the 30s timeout.
+  /** Sent by ByteCodeCoordinator to ByteCodeWorker after processing the response. Worker cancels its timeout and
+    * transitions from working to idle state without waiting for the 30s timeout.
     */
   case class ByteCodeWorkerRelease(requestId: BigInt) extends ByteCodeWorkerMessage
   case class ByteCodeProgress(progress: Double, bytecodesDownloaded: Long, bytesDownloaded: Long)
