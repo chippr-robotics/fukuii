@@ -436,6 +436,52 @@ class ByteCodeCoordinatorSpec
     networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
   }
 
+  // ── K5-ext-b: Peer retention across pivot refresh (BUG-S1 fix 84290a175) ─────
+
+  it should "dispatch new tasks to a peer retained in knownAvailablePeers after ByteCodePivotRefreshed" taggedAs UnitTest in {
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+
+    val peer = PeerTestHelpers.createTestPeer("retained-peer", peerProbe.ref)
+
+    val coordinator = system.actorOf(
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 8,
+        snapSyncController = snapSyncController.ref,
+        cooldownConfig = testCooldownConfig
+      )
+    )
+
+    val h1 = kec256(ByteString("retained-code"))
+
+    // Register peer with no initial tasks → peer enters knownAvailablePeers pool.
+    coordinator ! Messages.StartByteCodeSync(Seq.empty)
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+
+    // Pivot refresh. In the old code knownAvailablePeers was cleared here (BUG-S1).
+    // In the fixed code the peer is retained: bytecodes are content-addressed,
+    // not state-root-dependent, so the peer can serve the same hashes after a pivot.
+    coordinator ! Messages.ByteCodePivotRefreshed
+
+    // Add tasks AFTER the pivot. AddByteCodeTasks queues work but does not call
+    // tryRedispatchPendingTasks(). UpdateMaxInFlightPerPeer is the coordinator-internal
+    // trigger that calls tryRedispatchPendingTasks(), which iterates knownAvailablePeers.
+    // With the BUG-S1 fix the retained peer is found there and dispatch proceeds.
+    // Without the fix (peer cleared) tryRedispatchPendingTasks() finds nobody → timeout.
+    coordinator ! Messages.AddByteCodeTasks(Seq(h1))
+    coordinator ! Messages.UpdateMaxInFlightPerPeer(testCooldownConfig.maxInFlightPerPeer)
+
+    val send = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+    val req  = send.message.asInstanceOf[GetByteCodesEnc].underlyingMsg
+    req.hashes shouldEqual Seq(h1)
+  }
+
   // ---- J9: Corruption detection -----------------------------------------------
 
   it should "reject a bytecode whose kec256 hash is not in the requested list and put peer in cooldown" taggedAs UnitTest in {
