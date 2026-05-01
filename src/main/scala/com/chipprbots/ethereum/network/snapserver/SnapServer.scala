@@ -368,7 +368,7 @@ object SnapServer extends Logger {
                 collected += ((k, v))
                 accumulated += k.size + v.size
                 (accumulated < maxBytes || (isFirst && collected.size == 1)) &&
-                  System.currentTimeMillis() < deadline
+                System.currentTimeMillis() < deadline
               }
               val truncated = accumulated >= maxBytes
               if (isFirst) {
@@ -423,14 +423,18 @@ object SnapServer extends Logger {
     if (rootNode == NullNode) {
       // Root not found — return one empty entry per request, truncated to budget.
       var idx = 0
-      while (idx < paths.size && (accumulated < maxBytes || collected.isEmpty) && System.currentTimeMillis() < deadline) {
+      while (
+        idx < paths.size && (accumulated < maxBytes || collected.isEmpty) && System.currentTimeMillis() < deadline
+      ) {
         collected += ByteString.empty
         accumulated = accumulated + 1
         idx += 1
       }
     } else {
       var idx = 0
-      while (idx < paths.size && (accumulated < maxBytes || collected.isEmpty) && System.currentTimeMillis() < deadline) {
+      while (
+        idx < paths.size && (accumulated < maxBytes || collected.isEmpty) && System.currentTimeMillis() < deadline
+      ) {
         val pathSet = paths(idx)
         if (pathSet.size == 1) {
           // Single-element path: account-trie node lookup (HP-encoded partial path).
