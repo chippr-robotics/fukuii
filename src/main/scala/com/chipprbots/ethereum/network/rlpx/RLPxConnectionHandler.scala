@@ -747,7 +747,8 @@ class RLPxConnectionHandler(
                   )
                 }
               case Left(err) =>
-                log.error(
+                // go-ethereum: Trace level for decode failures (server.go:939 "Failed p2p handshake")
+                log.debug(
                   "RECV_MSG: peer={}, msg[{}] DECODE_ERROR: {}",
                   peerId,
                   idx,

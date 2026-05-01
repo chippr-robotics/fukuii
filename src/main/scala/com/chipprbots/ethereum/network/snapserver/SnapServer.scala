@@ -265,13 +265,14 @@ object SnapServer extends Logger {
     val effectiveLimit = if (isReversed) ByteString(Array.fill[Byte](32)(0xff.toByte)) else limitHash
     val originNibbles = hashToNibbles(startingHash)
     val limitNibbles = hashToNibbles(effectiveLimit)
-    val maxBytes = math.max(responseBytes.toInt, 0)
+    val maxBytes = math.min(math.max(responseBytes.toInt, 0), 2 * 1024 * 1024)
+    val deadline = System.currentTimeMillis() + 4000
 
     import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits._
     val collected = scala.collection.mutable.ArrayBuffer.empty[(ByteString, com.chipprbots.ethereum.domain.Account)]
     var accumulated = 0
     // Visit-style walk: visitor returns false to stop traversal as soon as the byte
-    // budget is hit. Match go-ethereum's accounting: only (hash + slim-leaf bytes) count
+    // budget or time budget is hit. Match go-ethereum's accounting: only (hash + slim-leaf bytes) count
     // toward the budget — slim format is what we'll emit on the wire (see
     // `toSlimAccountRlp`). Proofs aren't counted (they're a separate response header).
     walkRangeVisit(rootNode, storage, originNibbles, limitNibbles) { (keyHash, accountRlp) =>
@@ -283,7 +284,7 @@ object SnapServer extends Logger {
       // budget; the first item is always emitted (the visitor only sees this branch
       // after we add to `collected`).
       if (isReversed) false
-      else accumulated < maxBytes
+      else accumulated < maxBytes && System.currentTimeMillis() < deadline
     }
 
     // Build proof per SNAP/1 spec (geth eth/protocols/snap/handler.go:336-356):
@@ -326,13 +327,14 @@ object SnapServer extends Logger {
   ): StorageRanges = {
     if (isEmptyRoot(rootHash)) return StorageRanges(requestId, Seq.empty, Seq.empty)
 
-    val maxBytes = math.max(responseBytes.toInt, 0)
+    val maxBytes = math.min(math.max(responseBytes.toInt, 0), 2 * 1024 * 1024)
+    val deadline = System.currentTimeMillis() + 4000
     var accumulated = 0
     val perAccount = scala.collection.mutable.ArrayBuffer.empty[Seq[(ByteString, ByteString)]]
     var firstProof: Seq[ByteString] = Seq.empty
     var done = false
     val it = accountHashes.iterator
-    while (it.hasNext && !done) {
+    while (it.hasNext && !done && System.currentTimeMillis() < deadline) {
       val accountHash = it.next()
       accountRoot(accountHash) match {
         case None =>
@@ -365,7 +367,8 @@ object SnapServer extends Logger {
               walkRangeVisit(rootNode, storage, originN, limitN) { (k, v) =>
                 collected += ((k, v))
                 accumulated += k.size + v.size
-                accumulated < maxBytes || (isFirst && collected.size == 1)
+                (accumulated < maxBytes || (isFirst && collected.size == 1)) &&
+                System.currentTimeMillis() < deadline
               }
               val truncated = accumulated >= maxBytes
               if (isFirst) {
@@ -406,7 +409,8 @@ object SnapServer extends Logger {
       responseBytes: BigInt,
       storage: MptStorage
   ): TrieNodes = {
-    val maxBytes = math.max(responseBytes.toInt, 0)
+    val maxBytes = math.min(math.max(responseBytes.toInt, 0), 2 * 1024 * 1024)
+    val deadline = System.currentTimeMillis() + 4000
     var accumulated: Int = 0
 
     // Per geth (handler.go:522-525), a zero-item pathset anywhere in the request
@@ -419,14 +423,18 @@ object SnapServer extends Logger {
     if (rootNode == NullNode) {
       // Root not found — return one empty entry per request, truncated to budget.
       var idx = 0
-      while (idx < paths.size && (accumulated < maxBytes || collected.isEmpty)) {
+      while (
+        idx < paths.size && (accumulated < maxBytes || collected.isEmpty) && System.currentTimeMillis() < deadline
+      ) {
         collected += ByteString.empty
         accumulated = accumulated + 1
         idx += 1
       }
     } else {
       var idx = 0
-      while (idx < paths.size && (accumulated < maxBytes || collected.isEmpty)) {
+      while (
+        idx < paths.size && (accumulated < maxBytes || collected.isEmpty) && System.currentTimeMillis() < deadline
+      ) {
         val pathSet = paths(idx)
         if (pathSet.size == 1) {
           // Single-element path: account-trie node lookup (HP-encoded partial path).
@@ -460,11 +468,24 @@ object SnapServer extends Logger {
                     }
                   }
                 }
+              } else {
+                // Storage root not in our DB — emit empty placeholder per path to maintain
+                // positional alignment with the healing coordinator's request pathset.
+                storageNibblesList.foreach { _ =>
+                  if (accumulated < maxBytes || collected.isEmpty) {
+                    collected += ByteString.empty; accumulated += 1
+                  }
+                }
               }
-            // Account missing, empty storage, or storage root unresolvable —
-            // geth does NOT emit placeholders here (handler.go:546-547 breaks
-            // out before appending). Move on to the next pathset entry.
-            case _ => ()
+            // Account missing or has empty storage root — emit empty placeholder per storage
+            // path. geth omits entries here, but we maintain positional alignment so the
+            // healing coordinator's zip(nodes, tasks) doesn't misalign later entries.
+            case _ =>
+              storageNibblesList.foreach { _ =>
+                if (accumulated < maxBytes || collected.isEmpty) {
+                  collected += ByteString.empty; accumulated += 1
+                }
+              }
           }
         }
         idx += 1
