@@ -176,6 +176,23 @@ object Messages {
       forStateRoot: ByteString
   ) extends StorageRangeCoordinatorMessage
 
+  /** An aggregated flat-slot batch (small-contract writes) finished committing on the storage-writer dispatcher.
+    * `forStateRoot` lets the coordinator drop completion messages from a generation that has since been superseded by a
+    * pivot refresh. The data has already been persisted; the message is just bookkeeping.
+    */
+  private[actors] case class FlatBatchFlushComplete(
+      forStateRoot: ByteString,
+      entryCount: Int,
+      elapsedMs: Long
+  ) extends StorageRangeCoordinatorMessage
+
+  /** Aggregated flat-slot batch failed to commit. Healing phase is expected to re-fetch the missing slots. */
+  private[actors] case class FlatBatchFlushFailed(
+      forStateRoot: ByteString,
+      entryCount: Int,
+      error: String
+  ) extends StorageRangeCoordinatorMessage
+
   // ========================================
   // TrieNodeHealing Messages
   // ========================================
