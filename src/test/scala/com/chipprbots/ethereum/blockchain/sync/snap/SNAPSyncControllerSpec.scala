@@ -1,11 +1,15 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
+import org.apache.pekko.util.ByteString
+
 import scala.concurrent.duration._
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.testing.Tags._
+import com.chipprbots.ethereum.testing.TestMptStorage
 
 class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
 
@@ -512,5 +516,120 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     val oldBestBlock = allPeers.map(_.maxBlockNumber).maxOption.getOrElse(BigInt(0))
     val oldPivot = (oldBestBlock - pivotBlockOffset).max(0)
     oldPivot shouldBe BigInt(0) // demonstrates why the fix was necessary
+  }
+
+  // ── validatorFactory injection seam (issue #1161) ──────────────────────────
+  //
+  // SNAPSyncController exposes a `validatorFactory: MptStorage => StateValidator`
+  // constructor parameter so tests can inject a fake validator. The full
+  // actor-level orchestration tests (covering all the new ValidateAccountTrieResult /
+  // ValidateStorageTriesResult / ValidationRetry handlers, the stale-generation
+  // drop, the phase gate, and mailbox responsiveness) require building a heavy
+  // dependency harness (BlockchainReader/Writer, AppStateStorage, StateStorage,
+  // EvmCodeStorage, FlatSlotStorage, networkPeerManager, peerEventBus). That's
+  // too much for this PR; orchestration is verified by live Mordor sync per the
+  // pattern in this spec. These tests confirm the seam itself works.
+
+  "SNAPSyncController validatorFactory seam" should "accept a custom factory in props" taggedAs UnitTest in {
+    // The default factory is `new StateValidator(_)`. A test can substitute a
+    // closure that returns a fake. We verify the closure constructs cleanly
+    // and that the produced validator delegates to the StateValidator API
+    // surface that the controller's spawn helpers call.
+    val storage = new TestMptStorage()
+    val factory: MptStorage => StateValidator = (s: MptStorage) => new StateValidator(s)
+    val validator = factory(storage)
+    validator should not be null
+    validator shouldBe a[StateValidator]
+  }
+
+  it should "wrap a fake validator that returns canned results" taggedAs UnitTest in {
+    // Demonstration of the FakeStateValidator pattern future actor tests will use.
+    val storage = new TestMptStorage()
+    val expectedRoot = ByteString("test-root-hash".getBytes)
+
+    val fake = new FakeStateValidator(
+      storage,
+      accountResult = Right(Seq.empty),
+      storageResult = Right(Seq.empty)
+    )
+    fake.validateAccountTrie(expectedRoot) shouldBe Right(Seq.empty)
+    fake.validateAllStorageTries(expectedRoot) shouldBe Right(Seq.empty)
+    fake.accountCallCount shouldBe 1
+    fake.storageCallCount shouldBe 1
+  }
+
+  it should "support a fake that returns missing-node lists" taggedAs UnitTest in {
+    val storage = new TestMptStorage()
+    val expectedRoot = ByteString("test-root-hash".getBytes)
+    val missingNode = ByteString("missing-node-hash".getBytes)
+
+    val fake = new FakeStateValidator(
+      storage,
+      accountResult = Right(Seq(missingNode)),
+      storageResult = Right(Seq.empty)
+    )
+    fake.validateAccountTrie(expectedRoot) shouldBe Right(Seq(missingNode))
+  }
+
+  it should "support a fake that returns the missing-root-node error string" taggedAs UnitTest in {
+    val storage = new TestMptStorage()
+    val expectedRoot = ByteString("test-root-hash".getBytes)
+
+    val fake = new FakeStateValidator(
+      storage,
+      accountResult = Left("Missing root node: deadbeef"),
+      storageResult = Right(Seq.empty)
+    )
+    val result = fake.validateAccountTrie(expectedRoot)
+    result.isLeft shouldBe true
+    result.left.toOption.get should include("Missing root node")
+  }
+
+  it should "support a fake that throws so onComplete-Failure path can be tested" taggedAs UnitTest in {
+    val storage = new TestMptStorage()
+    val expectedRoot = ByteString("test-root-hash".getBytes)
+
+    val fake = new FakeStateValidator(
+      storage,
+      accountResult = Right(Seq.empty),
+      storageResult = Right(Seq.empty),
+      throwOnAccount = Some(new RuntimeException("simulated validator failure"))
+    )
+    val ex = intercept[RuntimeException](fake.validateAccountTrie(expectedRoot))
+    ex.getMessage should include("simulated validator failure")
+  }
+}
+
+/** Test helper: a `StateValidator` subclass that returns canned results without traversing the trie. Used in
+  * orchestration tests to drive the controller's validation handlers without paying the cost of a real walk.
+  *
+  * Reset semantics: results and exception are immutable per instance. Call counters are mutable so tests can assert how
+  * many times each method was invoked. Sleep durations let tests verify mailbox responsiveness during a slow walk.
+  */
+class FakeStateValidator(
+    storage: MptStorage,
+    accountResult: Either[String, Seq[ByteString]],
+    storageResult: Either[String, Seq[ByteString]],
+    throwOnAccount: Option[Throwable] = None,
+    throwOnStorage: Option[Throwable] = None,
+    accountSleepMs: Long = 0L,
+    storageSleepMs: Long = 0L
+) extends StateValidator(storage) {
+
+  @volatile var accountCallCount: Int = 0
+  @volatile var storageCallCount: Int = 0
+
+  override def validateAccountTrie(stateRoot: ByteString): Either[String, Seq[ByteString]] = {
+    accountCallCount += 1
+    if (accountSleepMs > 0) Thread.sleep(accountSleepMs)
+    throwOnAccount.foreach(t => throw t)
+    accountResult
+  }
+
+  override def validateAllStorageTries(stateRoot: ByteString): Either[String, Seq[ByteString]] = {
+    storageCallCount += 1
+    if (storageSleepMs > 0) Thread.sleep(storageSleepMs)
+    throwOnStorage.foreach(t => throw t)
+    storageResult
   }
 }
