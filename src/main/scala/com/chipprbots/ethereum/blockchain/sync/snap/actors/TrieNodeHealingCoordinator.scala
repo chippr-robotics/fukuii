@@ -6,6 +6,7 @@ import org.apache.pekko.util.ByteString
 import org.bouncycastle.util.encoders.Hex
 
 import scala.collection.mutable
+import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
@@ -31,17 +32,27 @@ class TrieNodeHealingCoordinator(
     mptStorage: MptStorage,
     batchSize: Int,
     snapSyncController: ActorRef,
-    concurrency: Int
+    concurrency: Int,
+    healingWriterEcOverride: Option[ExecutionContext] = None
 ) extends Actor
     with ActorLogging {
 
   import Messages._
 
-  // Task management — each task has a pathset (for GetTrieNodes) and a hash (for verification)
+  // Task management — each task has a pathset (for GetTrieNodes) and a hash (for verification).
+  // ArrayDeque (circular buffer) gives O(1) amortized head/tail operations. The previous
+  // immutable `Seq` did O(n) on every `:+` and head-drop — quadratic at healing scale.
   private case class HealingEntry(pathset: Seq[ByteString], hash: ByteString, retries: Int = 0)
-  private var pendingTasks: Seq[HealingEntry] = Seq.empty
+  private val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
   private var completedTaskCount: Int = 0
   private var abandonedTaskCount: Int = 0
+
+  /** Dedicated dispatcher for the batched raw-node RocksDB flush. Tests inject their own EC; production looks up
+    * `healing-writer-dispatcher` from the actor system. Keeps the blocking write off `sync-dispatcher` so other sync
+    * actors don't stall during healing-heavy bursts.
+    */
+  private val healingWriterEc: ExecutionContext =
+    healingWriterEcOverride.getOrElse(context.system.dispatchers.lookup("healing-writer-dispatcher"))
 
   // Per-task retry limit: after this many timeouts/failures, skip the task.
   // At ~6s per timeout cycle, 20 retries = ~2 minutes of trying per node.
@@ -173,7 +184,9 @@ class TrieNodeHealingCoordinator(
       log.info(s"Flushed $count healed nodes to disk (total: $totalNodesHealed)")
     }
 
-  /** Async flush — copies buffer, clears it, writes on background thread. */
+  /** Async flush — copies buffer, clears it, writes on the dedicated `healing-writer-dispatcher` so the blocking
+    * RocksDB write doesn't compete with sync actors on `sync-dispatcher`.
+    */
   private def flushRawNodesAsync(): Unit =
     if (rawNodeBuffer.nonEmpty && !flushing) {
       flushing = true
@@ -181,13 +194,14 @@ class TrieNodeHealingCoordinator(
       rawNodeBuffer.clear()
       import scala.concurrent.{Future, blocking}
       val selfRef = self
+      val ec = healingWriterEc
       Future {
         blocking {
           mptStorage.storeRawNodes(nodes)
           mptStorage.persist()
           nodes.size
         }
-      }(context.dispatcher).foreach(n => selfRef ! FlushComplete(n))(context.dispatcher)
+      }(ec).foreach(n => selfRef ! FlushComplete(n))(ec)
     }
 
   override def preStart(): Unit =
@@ -229,7 +243,7 @@ class TrieNodeHealingCoordinator(
       )
       stateRoot = newStateRoot
       flushRawNodesSync() // Flush any buffered nodes before clearing state
-      pendingTasks = Seq.empty // Will be re-populated by trie walk from controller
+      pendingTasks.clear() // Will be re-populated by trie walk from controller
       pendingHashSet.clear()
       statelessPeers.clear()
       peerCooldownUntilMs.clear()
@@ -292,7 +306,7 @@ class TrieNodeHealingCoordinator(
         HealingEntry(pathset = pathset, hash = hash)
     }
     val deduped = pathsAndHashes.size - entries.size
-    pendingTasks = pendingTasks ++ entries
+    pendingTasks ++= entries
     val dedupStr = if (deduped > 0) s" ($deduped duplicates filtered)" else ""
     log.info(s"Queued ${entries.size} nodes for healing$dedupStr. Total pending: ${pendingTasks.size}")
   }
@@ -356,8 +370,9 @@ class TrieNodeHealingCoordinator(
     }
 
     val effectiveBatch = effectiveBatchSize
-    val batch = pendingTasks.take(effectiveBatch)
-    pendingTasks = pendingTasks.drop(effectiveBatch)
+    val takeCount = effectiveBatch.min(pendingTasks.size)
+    val batch: Seq[HealingEntry] = pendingTasks.iterator.take(takeCount).toSeq
+    pendingTasks.dropInPlace(takeCount)
     // Remove dispatched hashes from dedup set (they'll be re-added if re-queued on failure)
     batch.foreach(e => pendingHashSet -= e.hash)
 
@@ -428,14 +443,14 @@ class TrieNodeHealingCoordinator(
             s"got ${Hex.toHexString(nodeHash.take(4).toArray)}"
         )
         // Re-queue this task for retry
-        pendingTasks = pendingTasks :+ task
+        pendingTasks += task
       }
     }
 
     // Re-queue unmatched tasks (server returned fewer nodes than requested)
     val unmatchedTasks = tasksForRequest.drop(nodes.size)
     unmatchedTasks.foreach { task =>
-      pendingTasks = pendingTasks :+ task
+      pendingTasks += task
     }
 
     completedTaskCount += healedCount
@@ -514,7 +529,7 @@ class TrieNodeHealingCoordinator(
             s"(regular sync will fetch on-demand)"
         )
       } else {
-        pendingTasks = pendingTasks :+ updated
+        pendingTasks += updated
         requeued += 1
       }
     }
@@ -536,7 +551,7 @@ class TrieNodeHealingCoordinator(
           s"Regular sync will fetch missing nodes on-demand via GetTrieNodes."
       )
       abandonedTaskCount += pendingCount
-      pendingTasks = Seq.empty
+      pendingTasks.clear()
       pendingHashSet.clear()
     }
 
@@ -585,7 +600,8 @@ object TrieNodeHealingCoordinator {
       mptStorage: MptStorage,
       batchSize: Int,
       snapSyncController: ActorRef,
-      concurrency: Int = 16
+      concurrency: Int = 16,
+      healingWriterEcOverride: Option[ExecutionContext] = None
   ): Props =
     Props(
       new TrieNodeHealingCoordinator(
@@ -595,7 +611,8 @@ object TrieNodeHealingCoordinator {
         mptStorage,
         batchSize,
         snapSyncController,
-        concurrency
+        concurrency,
+        healingWriterEcOverride
       )
     )
 }
