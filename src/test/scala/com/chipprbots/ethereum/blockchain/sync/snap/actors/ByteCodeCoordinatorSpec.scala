@@ -390,4 +390,59 @@ class ByteCodeCoordinatorSpec
     coordinator ! Messages.ByteCodePeerAvailable(peer)
     networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
   }
+
+  // #1164: ForceCompleteByteCodes drains pending+active tasks and reports completion. Without this, a small set of
+  // unservable code hashes could hold the bytecode phase open indefinitely (the existing completion check requires
+  // `pendingTasks.isEmpty && activeTasks.isEmpty` and there's no per-task failure cap).
+  it should "force-complete bytecode sync, abandoning pending tasks (#1164)" taggedAs UnitTest in {
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = system.actorOf(
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 8,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    // Queue a non-trivial set of bytecode hashes. No peer is registered, so they'll sit in pendingTasks
+    // forever — modelling the wedged state where peers can't serve a small unservable subset.
+    val codeHashes = (1 to 10).map(i => kec256(ByteString(s"code$i")))
+    coordinator ! Messages.StartByteCodeSync(codeHashes)
+    coordinator ! Messages.NoMoreByteCodeTasks
+
+    // Without the force-complete, ByteCodeCheckCompletion stays blocked because pendingTasks is non-empty.
+    coordinator ! Messages.ByteCodeCheckCompletion
+    snapSyncController.expectNoMessage(200.millis)
+
+    // Force-complete drains the queue and signals the parent.
+    coordinator ! Messages.ForceCompleteByteCodes
+    snapSyncController.expectMsg(3.seconds, SNAPSyncController.ByteCodeSyncComplete)
+  }
+
+  it should "handle ForceCompleteByteCodes when queues are already empty" taggedAs UnitTest in {
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = system.actorOf(
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 8,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    // Empty queue + ForceCompleteByteCodes: should still emit ByteCodeSyncComplete (idempotent terminal state).
+    coordinator ! Messages.ForceCompleteByteCodes
+    snapSyncController.expectMsg(3.seconds, SNAPSyncController.ByteCodeSyncComplete)
+  }
 }
