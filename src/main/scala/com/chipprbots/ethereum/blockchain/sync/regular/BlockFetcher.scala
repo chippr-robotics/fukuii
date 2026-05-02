@@ -24,6 +24,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.Awaitin
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.AwaitingHeadersToBeIgnored
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.HeadersNotFormingSeq
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.HeadersNotMatchingReadyBlocks
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.HeadersNotMatchingWaitingHeaders
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter.ImportNewBlock
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync.ProgressProtocol
 import com.chipprbots.ethereum.consensus.validators.BlockValidator
