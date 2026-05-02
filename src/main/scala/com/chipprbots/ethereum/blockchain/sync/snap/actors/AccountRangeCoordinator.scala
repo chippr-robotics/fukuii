@@ -8,7 +8,7 @@ import java.io.{BufferedOutputStream, FileOutputStream, RandomAccessFile}
 import java.nio.file.{Files, Path}
 
 import scala.collection.mutable
-import scala.concurrent.{Future, blocking}
+import scala.concurrent.{ExecutionContext, Future, blocking}
 import scala.concurrent.duration._
 import scala.util.{Success, Failure}
 
@@ -59,7 +59,8 @@ class AccountRangeCoordinator(
     initialMaxInFlightPerPeer: Int = 5,
     trieFlushThreshold: Int = 50000,
     initialResponseBytesConfig: Int = 524288,
-    minResponseBytesConfig: Int = 102400
+    minResponseBytesConfig: Int = 102400,
+    accountTrieEcOverride: Option[ExecutionContext] = None
 ) extends Actor
     with ActorLogging {
 
@@ -311,8 +312,22 @@ class AccountRangeCoordinator(
   // bottleneck (50-200ms per flush × 5 concurrent responses = constant blocking).
   private var accountsSinceLastFlush: Long = 0
 
-  // Internal message for async trie finalization result — carries the finalized root hash
-  private case class TrieFlushComplete(result: Either[String, ByteString])
+  // Dedicated dispatcher for trie flush + finalisation. Tests inject their own
+  // `ExecutionContext`; production looks up `account-trie-dispatcher` from `pekko.conf`.
+  // Both `flushTrieToStorage` (50-200ms bursts) and `finalizeTrie` (10+ minutes on
+  // mainnet) run here so they don't tie up `sync-dispatcher` or the global pool.
+  private val accountTrieEc: ExecutionContext =
+    accountTrieEcOverride.getOrElse(context.system.dispatchers.lookup("account-trie-dispatcher"))
+
+  // Generation token. Bumped at every fresh async flush spawn, on `PivotRefreshed`,
+  // and at finalisation. Async result messages carry the generation they were spawned
+  // under and are ignored if it no longer matches — defensive guard so a stale
+  // completion (e.g., from before a state transition) can't apply against the wrong
+  // assumption. Mirrors the validateState() async pattern (PR #1163).
+  // Package-private so unit tests can verify generation behaviour.
+  private[actors] var trieFlushGeneration: Long = 0L
+
+  import AccountRangeCoordinator.{TrieFlushAsyncComplete, TrieFlushAsyncFailed, TrieFlushComplete}
 
   // Deferred-write storage wrapper: makes updateNodesInStorage() a no-op during bulk insertion,
   // keeping all trie nodes in memory. This avoids the per-put collapse (RLP encode + Keccak-256 hash)
@@ -499,24 +514,34 @@ class AccountRangeCoordinator(
         // Switch to finalizing state so no message can touch the trie during flush
         context.become(finalizing)
 
-        // Run the expensive flush (O(n*log(n)) trie collapse + RocksDB write) on a
-        // separate thread to avoid blocking the Pekko dispatcher for 10+ minutes.
+        // Run the expensive flush (O(n*log(n)) trie collapse + RocksDB write) on the
+        // dedicated `account-trie-dispatcher` so it can't squeeze the global pool or
+        // sync-dispatcher. Generation token added defensively (mirrors PR #1163).
+        trieFlushGeneration += 1
+        val gen = trieFlushGeneration
         val selfRef = self
         Future {
           blocking(finalizeTrie())
-        }(scala.concurrent.ExecutionContext.global)
+        }(accountTrieEc)
           .onComplete {
-            case Success(result) => selfRef ! TrieFlushComplete(result)
+            case Success(result) => selfRef ! TrieFlushComplete(gen, result)
             case Failure(ex)     => selfRef ! Status.Failure(ex)
           }(context.dispatcher)
       }
   }
 
   /** Receive state during async trie finalization. The in-memory trie is being collapsed and written to RocksDB on a
-    * background thread. No message should touch stateTrie or deferredStorage during this phase.
+    * background thread. No message should touch stateTrie or deferredStorage during this phase. Package-private so
+    * tests can `become(finalizing)` directly without driving the heavy finalisation work.
     */
-  private def finalizing: Receive = {
-    case TrieFlushComplete(Right(finalizedRoot)) =>
+  private[actors] def finalizing: Receive = {
+    // Stale-generation drop. A completion arriving for a generation that's been bumped
+    // since spawn (e.g., the actor restarted finalisation) is silently ignored — data
+    // is on disk either way, and the in-flight Future can't be cancelled.
+    case TrieFlushComplete(gen, _) if gen != trieFlushGeneration =>
+      log.debug(s"Dropping stale TrieFlushComplete (gen=$gen, current=$trieFlushGeneration)")
+
+    case TrieFlushComplete(_, Right(finalizedRoot)) =>
       log.info(
         "State trie finalized successfully with root {}",
         finalizedRoot.take(8).toArray.map("%02x".format(_)).mkString
@@ -525,7 +550,7 @@ class AccountRangeCoordinator(
       snapSyncController ! SNAPSyncController.ProgressAccountsTrieFinalized
       context.stop(self)
 
-    case TrieFlushComplete(Left(error)) =>
+    case TrieFlushComplete(_, Left(error)) =>
       log.error(s"Failed to finalize trie: $error")
       snapSyncController ! SNAPSyncController.ProgressAccountsTrieFinalized
       context.stop(self)
@@ -844,18 +869,8 @@ class AccountRangeCoordinator(
         // Yield to actor mailbox - other messages (PeerAvailable, responses) process before next chunk
         self ! StoreAccountChunk(task, rest, totalCount, newStored, isTaskRangeComplete)
       } else {
-        // Threshold-based flush: only flush to RocksDB when accumulated nodes exceed threshold.
-        // With pipelining, per-response flushing (50-200ms each) blocks the coordinator
-        // and becomes the throughput bottleneck. Threshold-based flushing amortizes the cost.
-        accountsSinceLastFlush += totalCount
-        if (accountsSinceLastFlush >= trieFlushThreshold) {
-          flushTrieToStorage()
-          accountsSinceLastFlush = 0
-        }
-        log.debug(
-          s"Stored all $totalCount accounts in-memory ($accountsDownloaded total, ${accountsSinceLastFlush} since last flush)"
-        )
-
+        // Mark task done / re-enqueue BEFORE potentially spawning async flush — so the
+        // task tracking is up to date by the time we re-enter `receive` after flushing.
         if (isTaskRangeComplete) {
           task.done = true
           completedTasks += task
@@ -870,8 +885,21 @@ class AccountRangeCoordinator(
           pendingTasks.enqueue(task)
         }
 
-        // Check if all tasks are complete
-        self ! CheckCompletion
+        // Threshold-based flush: only flush to RocksDB when accumulated nodes exceed threshold.
+        // With pipelining, per-response flushing (50-200ms each) blocks the coordinator
+        // and becomes the throughput bottleneck. Threshold-based flushing amortizes the cost.
+        accountsSinceLastFlush += totalCount
+        if (accountsSinceLastFlush >= trieFlushThreshold) {
+          accountsSinceLastFlush = 0
+          spawnFlushTrieAsync()
+          // CheckCompletion is sent from the flush completion handler.
+        } else {
+          log.debug(
+            s"Stored all $totalCount accounts in-memory ($accountsDownloaded total, ${accountsSinceLastFlush} since last flush)"
+          )
+          // Check if all tasks are complete
+          self ! CheckCompletion
+        }
       }
     } catch {
       case e: Exception =>
@@ -886,6 +914,9 @@ class AccountRangeCoordinator(
   /** Flush all in-memory trie nodes to RocksDB in a single batch. This collapses the entire in-memory trie (RLP-encode
     * + Keccak-256 hash all nodes), then writes everything to RocksDB via one WriteBatch. After flush, the trie is
     * rebuilt from the persisted root hash so old in-memory nodes can be garbage collected.
+    *
+    * Used directly only from `finalizeTrie` (where the actor is in `finalizing` and no concurrent puts can race).
+    * Periodic flushes during account download go through `spawnFlushTrieAsync`.
     */
   private def flushTrieToStorage(): Unit =
     deferredStorage.flush().foreach { rootHash =>
@@ -893,6 +924,68 @@ class AccountRangeCoordinator(
       stateTrie = MerklePatriciaTrie[ByteString, Account](rootHash, deferredStorage)
       log.info(s"Flushed trie to storage, root=${rootHash.take(8).map("%02x".format(_)).mkString}...")
     }
+
+  /** Async variant of `flushTrieToStorage` for the periodic-flush path. Switches the actor to the `flushing` receive
+    * state (so no message touches `stateTrie` or `deferredStorage` during the flush), spawns the collapse + RocksDB
+    * write on `account-trie-dispatcher`, then returns to the normal receive on completion. Generation-tagged so a stale
+    * completion (from before a state transition) is dropped.
+    */
+  private def spawnFlushTrieAsync(): Unit = {
+    trieFlushGeneration += 1
+    val gen = trieFlushGeneration
+    context.become(flushing)
+
+    val selfRef = self
+    val storage = deferredStorage
+    Future {
+      blocking {
+        val startMs = System.currentTimeMillis()
+        val rootHash = storage.flush().map(rh => ByteString(rh))
+        val elapsedMs = System.currentTimeMillis() - startMs
+        (rootHash, elapsedMs)
+      }
+    }(accountTrieEc).onComplete {
+      case Success((root, elapsedMs)) =>
+        selfRef ! TrieFlushAsyncComplete(gen, root, elapsedMs)
+      case Failure(ex) =>
+        selfRef ! TrieFlushAsyncFailed(gen, ex.getMessage)
+    }(context.dispatcher)
+  }
+
+  /** Receive state during async periodic trie flush. The flush is collapsing the in-memory trie + writing to RocksDB on
+    * `account-trie-dispatcher`; no message should touch `stateTrie` or `deferredStorage` until it completes. Other
+    * messages (peer availability, AccountRange responses, store-chunk continuations) stay in the mailbox and process in
+    * order once the flush returns to the normal receive. Package-private so tests can drive stale-completion paths.
+    */
+  private[actors] def flushing: Receive = {
+    // Stale-generation drop — happens only if generation got bumped while a flush
+    // was in flight (e.g., transition into finalisation). Data is durable either way.
+    case TrieFlushAsyncComplete(gen, _, _) if gen != trieFlushGeneration =>
+      log.debug(s"Dropping stale TrieFlushAsyncComplete (gen=$gen, current=$trieFlushGeneration)")
+      context.become(receive)
+      self ! CheckCompletion
+
+    case TrieFlushAsyncFailed(gen, _) if gen != trieFlushGeneration =>
+      log.debug(s"Dropping stale TrieFlushAsyncFailed (gen=$gen, current=$trieFlushGeneration)")
+      context.become(receive)
+      self ! CheckCompletion
+
+    case TrieFlushAsyncComplete(_, persistedRoot, elapsedMs) =>
+      persistedRoot.foreach { rootHash =>
+        import com.chipprbots.ethereum.mpt.byteStringSerializer
+        stateTrie = MerklePatriciaTrie[ByteString, Account](rootHash.toArray, deferredStorage)
+        log.info(
+          s"Flushed trie to storage in ${elapsedMs}ms, root=${rootHash.take(8).map("%02x".format(_)).mkString}..."
+        )
+      }
+      context.become(receive)
+      self ! CheckCompletion
+
+    case TrieFlushAsyncFailed(_, error) =>
+      log.error(s"Async trie flush failed: $error. Continuing with in-memory trie; healing will recover.")
+      context.become(receive)
+      self ! CheckCompletion
+  }
 
   /** Identify contract accounts (those with non-empty code hash)
     *
@@ -1104,6 +1197,24 @@ class AccountRangeCoordinator(
 }
 
 object AccountRangeCoordinator {
+
+  /** Async trie-finalisation result. `generation` matches the value of `trieFlushGeneration` at spawn time so stale
+    * completions (after a state transition / restart) can be dropped without applying against the wrong assumption.
+    */
+  private[actors] case class TrieFlushComplete(generation: Long, result: Either[String, ByteString])
+
+  /** Async periodic flush completed. `persistedRoot` is the root hash returned by `deferredStorage.flush()` — used to
+    * rebuild `stateTrie` so old in-memory nodes can be garbage collected.
+    */
+  private[actors] case class TrieFlushAsyncComplete(
+      generation: Long,
+      persistedRoot: Option[ByteString],
+      elapsedMs: Long
+  )
+
+  /** Async periodic flush failed. Healing phase will recover any missing nodes. */
+  private[actors] case class TrieFlushAsyncFailed(generation: Long, error: String)
+
   def props(
       stateRoot: ByteString,
       networkPeerManager: ActorRef,
@@ -1115,7 +1226,8 @@ object AccountRangeCoordinator {
       initialMaxInFlightPerPeer: Int = 5,
       trieFlushThreshold: Int = 50000,
       initialResponseBytes: Int = 524288,
-      minResponseBytes: Int = 102400
+      minResponseBytes: Int = 102400,
+      accountTrieEcOverride: Option[ExecutionContext] = None
   ): Props =
     Props(
       new AccountRangeCoordinator(
@@ -1129,7 +1241,8 @@ object AccountRangeCoordinator {
         initialMaxInFlightPerPeer,
         trieFlushThreshold,
         initialResponseBytes,
-        minResponseBytes
+        minResponseBytes,
+        accountTrieEcOverride
       )
     )
 }
