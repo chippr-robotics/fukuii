@@ -1,12 +1,11 @@
 # Fukuii - Ethereum Classic Client
 
 **Status:** ALPHA — active bug-hunting and stabilization | OLYMPIA hard fork implementation (ECIP-1111/1112/1121)
-**Language:** Scala 3.3.7 LTS on JDK 25 LTS
+**Language:** Scala 3.3.7 LTS on JDK 21 LTS
 **Build:** sbt 1.10.7
 **License:** Apache 2.0
 **Origin:** Fork of Mantis (IOHK), maintained by Chippr Robotics LLC
 **Package:** `com.chipprbots` (renamed from `io.iohk`)
-**Branch:** `alpha` / `olympia` (from upstream `chippr-robotics/fukuii` main)
 
 ---
 
@@ -14,9 +13,9 @@
 
 ```bash
 sbt compile          # Compile (~27s)
-sbt test             # Unit tests (2,309 tests, ~9 min)
+sbt test             # Unit tests (~9 min)
 sbt it:test          # Integration tests
-sbt assembly         # Build fat JAR (~176MB)
+sbt assembly         # Build fat JAR
 sbt scalafmtAll      # Format all code
 sbt pp               # Pre-PR: format + style + tests
 ```
@@ -31,13 +30,13 @@ sbt assembly
 
 # Mordor testnet (fast sync)
 java -Xmx4g \
-  -Dfukuii.datadir=/media/dev/2tb/data/blockchain/fukuii/mordor \
+  -Dfukuii.datadir=<datadir>/mordor \
   -Dfukuii.network=mordor \
   -Dfukuii.network.rpc.http.interface=0.0.0.0 \
   -Dfukuii.network.rpc.http.port=8553 \
   -Dfukuii.network.server-address.port=30305 \
   -Dfukuii.network.discovery.port=30305 \
-  -jar target/scala-3.3.7/fukuii-assembly-0.1.240.jar mordor
+  -jar target/scala-3.3.7/fukuii-assembly-*.jar mordor
 
 # ETC mainnet (fast sync only)
 java -Xmx8g \
@@ -45,8 +44,7 @@ java -Xmx8g \
   -XX:MaxGCPauseMillis=200 \
   -XX:G1HeapRegionSize=16m \
   -XX:InitiatingHeapOccupancyPercent=40 \
-  -Xlog:gc*:file=/media/dev/2tb/data/blockchain/fukuii/etc/logs/gc.log:time,uptime:filecount=5,filesize=20m \
-  -Dfukuii.datadir=/media/dev/2tb/data/blockchain/fukuii/etc \
+  -Dfukuii.datadir=<datadir>/etc \
   -Dfukuii.network=etc \
   -Dfukuii.network.rpc.http.interface=0.0.0.0 \
   -Dfukuii.network.rpc.http.port=8553 \
@@ -54,24 +52,22 @@ java -Xmx8g \
   -Dfukuii.network.discovery.port=30305 \
   -Dfukuii.sync.do-fast-sync=true \
   -Dfukuii.sync.do-snap-sync=false \
-  -jar target/scala-3.3.7/fukuii-assembly-0.1.240.jar etc
+  -jar target/scala-3.3.7/fukuii-assembly-*.jar etc
 
-# ETC mainnet (SNAP sync) — uses run-classic.conf for all overrides
+# ETC mainnet (SNAP sync) — uses a config file for all overrides
 # NOTE: Do NOT pass a network name (etc/mordor) when using -Dconfig.file.
 # App.scala's setNetworkConfig() clears config.file when a network arg is present,
-# discarding all run-classic.conf overrides. The network is set inside run-classic.conf.
-# run-classic.conf MUST use: include classpath("application.conf")
+# discarding all overrides. The network is set inside the config file instead.
+# Config file MUST use: include classpath("application.conf")
 # NOT: include "app.conf" or include classpath("conf/app.conf") — both silently fail
-# when the parent file is loaded from filesystem (TypesafeConfig classpath resolution quirk).
+# when the file is loaded from the filesystem (TypesafeConfig classpath resolution quirk).
 java -Xmx8g \
   -XX:+UseG1GC \
   -XX:MaxGCPauseMillis=200 \
   -XX:G1HeapRegionSize=16m \
   -XX:InitiatingHeapOccupancyPercent=40 \
-  "-Xlog:gc*:file=/media/dev/2tb/data/blockchain/fukuii/etc/logs/gc.log:time,uptime:filecount=5,filesize=20m" \
-  -Dconfig.file=/media/dev/2tb/dev/fukuii/run-classic.conf \
-  -jar target/scala-3.3.7/fukuii-assembly-0.1.240.jar \
-  >> /media/dev/2tb/data/blockchain/fukuii/etc/logs/stdout.log 2>&1 &
+  -Dconfig.file=/path/to/run.conf \
+  -jar target/scala-3.3.7/fukuii-assembly-*.jar
 ```
 
 Config path: `-Dfukuii.<key>=<value>` (HOCON, namespaced under `fukuii`)
@@ -82,7 +78,7 @@ Import pre-built chain data (RLP-encoded blocks) at startup:
 ```bash
 java -Xmx4g \
   -Dfukuii.import-chain-file=/path/to/chain.rlp \
-  -jar target/scala-3.3.7/fukuii-assembly-0.1.240.jar mordor
+  -jar target/scala-3.3.7/fukuii-assembly-*.jar mordor
 ```
 
 Blocks are executed through the standard block validation + execution pipeline and persisted with receipts and chain weight. Used by hive test framework and for bootstrapping from exported chain data.
@@ -162,10 +158,12 @@ bytes/, crypto/, rlp/, scalanet/  # Submodules
 
 ---
 
-## Alpha Bugs Fixed (committed on `alpha` branch)
+## Resolved Issues (SNAP Sync)
+
+The following bugs were identified and fixed during ETC mainnet SNAP sync development. This list provides context for why the code is structured the way it is.
 
 1. **Config cache poisoning** — `ConfigFactory.invalidateCaches()` + fixed HOCON include paths for non-default networks.
-2. **SNAP fallback resilience** — Two code paths to `fallbackToFastSync()`: (a) consecutive pivot refresh counter (6min vs 75min, don't reset in `restartSnapSync()`), (b) bootstrap retry with exponential backoff (2s→60s cap) and 5-minute timeout when no peers found — the `LocalPivot` retry loop was a separate path with no fallback escape.
+2. **SNAP fallback resilience** — Two code paths to `fallbackToFastSync()`: (a) consecutive pivot refresh counter, (b) bootstrap retry with exponential backoff (2s→60s cap) and 5-minute timeout.
 3. **FastSync best block hash** — Track correct best block during sync.
 4. **JSON-RPC error format** — Proper error responses for malformed requests; null id coercion via `getOrElse(JNull)`.
 5. **Actor name collision** — Generation counter for unique actor names on sync restart.
@@ -173,17 +171,17 @@ bytes/, crypto/, rlp/, scalanet/  # Submodules
 7. **MissingNodeException in State RPCs** — `eth_call`, `eth_estimateGas`, `eth_getCode` threw unhandled `MissingNodeException` during sync. Added `.recover` matching the `eth_getBalance` pattern.
 8. **Block body download stall** — Peers timeout on `GetBlockBodies`, retry loop re-queues to same blacklisted peer. Fix: `ExcludingPeers` selector, exponential backoff, `maxBodyFetchRetries` limit.
 9. **net_listPeers timeout** — With 30+ peers, `parTraverse` exceeded 20s RPC timeout. Fix: in-process `peerStatusCache` updated reactively, `GetPeers` returns cached data (<1ms).
-10. **personal_sendTransaction MissingNodeException** — Same pattern as Bug 7, missing in `PersonalService.scala`.
+10. **personal_sendTransaction MissingNodeException** — Same pattern as #7, missing in `PersonalService.scala`.
 11. **SNAP capability check** — Verify snap/1 peer availability before starting account sync, with grace period fallback to fast sync.
 12. **SNAP stagnation watchdog** — Track `accountsDownloaded` as liveness signal (not just task completions), preventing false stagnation on slow ranges.
 13. **SNAP partial range resume** — Preserve `task.next` positions across pivot refreshes via `AccountRangeProgress` message + `postStop()` snapshot. 256-block safety valve.
 14. **SNAP dynamic concurrency** — Cap workers to `min(accountConcurrency, snapPeerCount)` — 1:1 worker-to-snap-peer mapping prevents peer flooding.
 15. **SNAP in-place pivot refresh** — `PivotRefreshed` message updates coordinator's state root without stop/restart, preserving progress seamlessly.
-16. **SNAP stale peer accumulation** — Deduplicate `knownAvailablePeers` by `remoteAddress` on peer reconnection. Prevents inflated `activePeerCount` from stale entries across all 3 coordinators.
-17. **SNAP false stateless after pivot refresh** — `handleTaskFailed` unconditionally marked peers stateless, even when failures came from stale-root in-flight requests after pivot refresh. Added `task.rootHash == stateRoot` guard.
-18. **SNAP OOM** — Three unbounded memory sources during account download: (a) `DeferredWriteMptStorage` held all trie nodes (~420 bytes/account, OOM at 9.5M). Fix: periodic flush after each response batch. (b) `contractAccounts`/`contractStorageAccounts` ArrayBuffers (~45M entries on ETC). Fix: file-backed storage with 64-byte entries, temp files cleaned up on stop. (c) Progress persistence via `AppStateStorage.putSnapSyncProgress` for crash recovery (256-block safety valve).
-19. **Log file resilience** — `ResilientRollingFileAppender` recreates log file if deleted while running. Standard `RollingFileAppender` writes to dangling inode after deletion — logs silently lost.
-20. **SNAP post-download pipeline failures** — Four related failures after account download completes: (a) Phase handoff timeout — 5s ask to read 73.5M contract accounts (4.7GB file) timed out, silently skipping bytecode+storage sync. Fix: Bloom filter dedup (73.5M→2M codeHashes), storage streaming in 10K batches, concurrent bytecode+storage phases, recovery actors. (b) `StorageConsistencyChecker` crash — assumed all headers 0..bestBlock exist; after SNAP only pivot header stored. Skip when `SnapSyncDone=true`. (c) Recovery actors dropped SNAP responses via `case _ => // Ignore`. Added message forwarding + `PollRecoveryPeers` scheduler. (d) State validation short-circuit — `visited` set collision in `MptStorage.decodeNode()` where HashNode and resolved node share same hash, causing traversal to stop at depth 1. Fixed in all 4 trie walk methods; treat unreachable nodes as missing instead of silently swallowing.
+16. **SNAP stale peer accumulation** — Deduplicate `knownAvailablePeers` by `remoteAddress` on peer reconnection.
+17. **SNAP false stateless after pivot refresh** — `handleTaskFailed` unconditionally marked peers stateless on stale-root in-flight failures. Added `task.rootHash == stateRoot` guard.
+18. **SNAP OOM** — Three unbounded memory sources: (a) `DeferredWriteMptStorage` held all trie nodes — periodic flush after each response batch. (b) `contractAccounts`/`contractStorageAccounts` ArrayBuffers — file-backed storage with 64-byte entries. (c) Progress persistence for crash recovery.
+19. **Log file resilience** — `ResilientRollingFileAppender` recreates log file if deleted while running.
+20. **SNAP post-download pipeline failures** — Four related failures: (a) Phase handoff timeout — Bloom filter dedup, storage streaming in 10K batches, concurrent bytecode+storage phases. (b) `StorageConsistencyChecker` crash after SNAP. (c) Recovery actors dropped SNAP responses. (d) State validation short-circuit in `MptStorage.decodeNode()`.
 
 ---
 
@@ -198,20 +196,13 @@ bytes/, crypto/, rlp/, scalanet/  # Submodules
 
 ---
 
-## Research Workflow (CRITICAL — read before any sync/network fix)
+## Research Workflow (for sync/network fixes)
 
-Every networking and sync fix follows this two-step research protocol:
+When fixing a sync or networking bug, follow this protocol before writing any code:
 
-**Step 1 — april-confluence (identify):** Search the `april-confluence` branch for prior
-work on this exact symptom. It contains ~107 commits from ~60 days of real iteration
-against ETC mainnet. Use it to find: what files change, what the root cause is, which
-edge cases exist. **Trust level:** high for bug existence and root cause; medium for
-fix correctness; low for code quality.
+**Step 1 — Search git history:** Check prior commits on this repo for work on the same symptom. Use `git log --grep` with relevant keywords.
 
-**Step 2 — Reference clients (implement):** Read actual source in at least one
-production client before writing any code. Reference clients are the implementation
-authority — they tell you HOW to fix it correctly. When multiple independent clients
-converge on the same pattern, that is industry consensus; follow it.
+**Step 2 — Reference clients (implement):** Read actual source in at least one production client before writing any code. Reference clients are the implementation authority.
 
 **Architectural proximity guide:**
 - JVM concurrency / actor patterns → **Besu first** (Java → Scala, same JVM model)
@@ -219,10 +210,7 @@ converge on the same pattern, that is industry consensus; follow it.
 - High-performance patterns, cancellation → **reth** (Rust async, most modern)
 - ETC chain config (forks, networkId) → **core-geth only** (only production PoW ETC client)
 
-**Convergence signal:** 2+ clients using the same pattern = strong signal. 3+ = industry
-consensus. Divergence = understand the tradeoff before choosing.
-
-Full research protocol and source paths: `./local/context/ITERATION_GUIDE.md`
+**Convergence signal:** 2+ clients using the same pattern = strong signal. 3+ = industry consensus. Divergence = understand the tradeoff before choosing.
 
 ---
 
@@ -249,5 +237,4 @@ Full research protocol and source paths: `./local/context/ITERATION_GUIDE.md`
 - Disable tests in CI
 - Use `sbt run` for long-running node operation (use JAR)
 - Create sync actors without `sync-dispatcher` (causes RPC starvation)
-- Propose or implement a sync/network fix based on april-confluence alone without
-  verifying against at least one reference client source (not summaries — actual code)
+- Propose or implement a sync/network fix without verifying against at least one reference client source
