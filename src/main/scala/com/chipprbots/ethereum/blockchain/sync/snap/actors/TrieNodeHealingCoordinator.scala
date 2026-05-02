@@ -92,8 +92,18 @@ class TrieNodeHealingCoordinator(
 
   private val ThrottleIncrease = 1.33
   private val ThrottleDecrease = 1.25
-  private val MaxThrottle = 16.0
+  // MaxThrottle caps the divisor on `batchSize` (default 32). With MaxThrottle=4 the floor
+  // is 32/4 = 8 paths per GetTrieNodes request, well above the previous floor of 2 that
+  // throttled healing to ~6 nodes/sec on Mordor (issue #1159). The cap is high enough to
+  // brake hard if the disk-flush thread genuinely can't keep up, but doesn't permanently
+  // pin batches at a wire-inefficient size.
+  private val MaxThrottle = 4.0
   private val MinThrottle = 1.0
+  // Throttle up only when the unflushed buffer is genuinely contended — at 80% of the
+  // flush threshold. The previous heuristic (`healPending > 2 * healRate`) compared an
+  // absolute buffer size (max ~1000) against a rate-derived target (~10 at 5 nodes/sec),
+  // which the buffer almost always exceeds, locking healThrottle at MaxThrottle forever.
+  private val ThrottleUpFillRatio = 0.8
   private val RateMeasurementImpact = 0.005 // geometric EMA weight per node
 
   // Track last known available peers for re-dispatch after failures
@@ -468,7 +478,13 @@ class TrieNodeHealingCoordinator(
     val now = System.currentTimeMillis()
     if (now - lastThrottleAdjustMs > 1000) {
       val oldThrottle = healThrottle
-      if (healPending > 2 * healRate) {
+      // Throttle up only when the disk-flush thread is genuinely behind — i.e. the buffer
+      // is filling toward its flush threshold. Comparing buffer fill (an absolute count)
+      // against the rate-derived target was a category error: the buffer almost always
+      // exceeds 2*rate, which locked healThrottle at MaxThrottle and pinned the batch at
+      // batchSize/MaxThrottle paths per request. See issue #1159.
+      val flushBackpressure = healPending > rawFlushThreshold * ThrottleUpFillRatio
+      if (flushBackpressure) {
         healThrottle = (healThrottle * ThrottleIncrease).min(MaxThrottle)
       } else {
         healThrottle = (healThrottle / ThrottleDecrease).max(MinThrottle)
@@ -476,7 +492,7 @@ class TrieNodeHealingCoordinator(
       if (oldThrottle != healThrottle) {
         log.debug(
           f"Healing throttle adjusted: $oldThrottle%.1f -> $healThrottle%.1f " +
-            f"(rate=$healRate%.1f nodes/s, pending=$healPending)"
+            f"(rate=$healRate%.1f nodes/s, bufferFill=$healPending/$rawFlushThreshold, batch=${effectiveBatchSize})"
         )
       }
       lastThrottleAdjustMs = now
