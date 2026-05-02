@@ -39,9 +39,15 @@ class BlockBroadcast(val networkPeerManager: ActorRef) {
     broadcastNewBlockHash(blockToBroadcast, peersWithoutBlock.values.map(_.peer).toSet)
   }
 
-  private def shouldSendNewBlock(newBlock: BlockToBroadcast, peerInfo: PeerInfo): Boolean =
-    newBlock.block.header.number > peerInfo.maxBlockNumber ||
+  private def shouldSendNewBlock(newBlock: BlockToBroadcast, peerInfo: PeerInfo): Boolean = {
+    val blockAhead = newBlock.block.header.number > peerInfo.maxBlockNumber
+    // ETH/69 peers: chainWeight may be actual TD (local lookup) or a block-number proxy (peer
+    // ahead of us). The proxy case makes the TD comparison always true, spamming every ETH69 peer.
+    // Use block-number comparison only for ETH69 — maxBlockNumber is now correct (from latestBlock).
+    val heavierChain = peerInfo.remoteStatus.capability != Capability.ETH69 &&
       newBlock.chainWeight > peerInfo.chainWeight
+    blockAhead || heavierChain
+  }
 
   private def broadcastNewBlock(blockToBroadcast: BlockToBroadcast, peers: Map[PeerId, PeerWithInfo]): Unit =
     obtainRandomPeerSubset(peers.values.map(_.peer).toSet).foreach { peer =>

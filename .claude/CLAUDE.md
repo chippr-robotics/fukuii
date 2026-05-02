@@ -40,7 +40,12 @@ java -Xmx4g \
   -jar target/scala-3.3.7/fukuii-assembly-0.1.240.jar mordor
 
 # ETC mainnet (fast sync only)
-java -Xmx4g \
+java -Xmx8g \
+  -XX:+UseG1GC \
+  -XX:MaxGCPauseMillis=200 \
+  -XX:G1HeapRegionSize=16m \
+  -XX:InitiatingHeapOccupancyPercent=40 \
+  -Xlog:gc*:file=/media/dev/2tb/data/blockchain/fukuii/etc/logs/gc.log:time,uptime:filecount=5,filesize=20m \
   -Dfukuii.datadir=/media/dev/2tb/data/blockchain/fukuii/etc \
   -Dfukuii.network=etc \
   -Dfukuii.network.rpc.http.interface=0.0.0.0 \
@@ -51,17 +56,22 @@ java -Xmx4g \
   -Dfukuii.sync.do-snap-sync=false \
   -jar target/scala-3.3.7/fukuii-assembly-0.1.240.jar etc
 
-# ETC mainnet (SNAP sync)
-java -Xmx4g \
-  -Dfukuii.datadir=/media/dev/2tb/data/blockchain/fukuii/etc \
-  -Dfukuii.network=etc \
-  -Dfukuii.network.rpc.http.interface=0.0.0.0 \
-  -Dfukuii.network.rpc.http.port=8553 \
-  -Dfukuii.network.server-address.port=30305 \
-  -Dfukuii.network.discovery.port=30305 \
-  -Dfukuii.sync.do-fast-sync=true \
-  -Dfukuii.sync.do-snap-sync=true \
-  -jar target/scala-3.3.7/fukuii-assembly-0.1.240.jar etc
+# ETC mainnet (SNAP sync) — uses run-classic.conf for all overrides
+# NOTE: Do NOT pass a network name (etc/mordor) when using -Dconfig.file.
+# App.scala's setNetworkConfig() clears config.file when a network arg is present,
+# discarding all run-classic.conf overrides. The network is set inside run-classic.conf.
+# run-classic.conf MUST use: include classpath("application.conf")
+# NOT: include "app.conf" or include classpath("conf/app.conf") — both silently fail
+# when the parent file is loaded from filesystem (TypesafeConfig classpath resolution quirk).
+java -Xmx8g \
+  -XX:+UseG1GC \
+  -XX:MaxGCPauseMillis=200 \
+  -XX:G1HeapRegionSize=16m \
+  -XX:InitiatingHeapOccupancyPercent=40 \
+  "-Xlog:gc*:file=/media/dev/2tb/data/blockchain/fukuii/etc/logs/gc.log:time,uptime:filecount=5,filesize=20m" \
+  -Dconfig.file=/media/dev/2tb/dev/fukuii/run-classic.conf \
+  -jar target/scala-3.3.7/fukuii-assembly-0.1.240.jar \
+  >> /media/dev/2tb/data/blockchain/fukuii/etc/logs/stdout.log 2>&1 &
 ```
 
 Config path: `-Dfukuii.<key>=<value>` (HOCON, namespaced under `fukuii`)
@@ -188,6 +198,34 @@ bytes/, crypto/, rlp/, scalanet/  # Submodules
 
 ---
 
+## Research Workflow (CRITICAL — read before any sync/network fix)
+
+Every networking and sync fix follows this two-step research protocol:
+
+**Step 1 — april-confluence (identify):** Search the `april-confluence` branch for prior
+work on this exact symptom. It contains ~107 commits from ~60 days of real iteration
+against ETC mainnet. Use it to find: what files change, what the root cause is, which
+edge cases exist. **Trust level:** high for bug existence and root cause; medium for
+fix correctness; low for code quality.
+
+**Step 2 — Reference clients (implement):** Read actual source in at least one
+production client before writing any code. Reference clients are the implementation
+authority — they tell you HOW to fix it correctly. When multiple independent clients
+converge on the same pattern, that is industry consensus; follow it.
+
+**Architectural proximity guide:**
+- JVM concurrency / actor patterns → **Besu first** (Java → Scala, same JVM model)
+- Protocol mechanics, timing constants → **go-ethereum** (canonical ETH)
+- High-performance patterns, cancellation → **reth** (Rust async, most modern)
+- ETC chain config (forks, networkId) → **core-geth only** (only production PoW ETC client)
+
+**Convergence signal:** 2+ clients using the same pattern = strong signal. 3+ = industry
+consensus. Divergence = understand the tradeoff before choosing.
+
+Full research protocol and source paths: `./local/context/ITERATION_GUIDE.md`
+
+---
+
 ## Boundaries
 
 ### Always Do
@@ -196,6 +234,8 @@ bytes/, crypto/, rlp/, scalanet/  # Submodules
 - Use ScalaTest for all tests
 - Add `.withDispatcher("sync-dispatcher")` when creating sync actor children
 - Respect consensus-critical code boundaries (EVM, Ethash, state trie)
+- For any sync/network fix: read reference client source BEFORE proposing implementation
+- Cite the reference client file and behavior in commit messages for non-trivial fixes
 
 ### Ask First
 - Changes to consensus logic
@@ -209,3 +249,5 @@ bytes/, crypto/, rlp/, scalanet/  # Submodules
 - Disable tests in CI
 - Use `sbt run` for long-running node operation (use JAR)
 - Create sync actors without `sync-dispatcher` (causes RPC starvation)
+- Propose or implement a sync/network fix based on april-confluence alone without
+  verifying against at least one reference client source (not summaries — actual code)

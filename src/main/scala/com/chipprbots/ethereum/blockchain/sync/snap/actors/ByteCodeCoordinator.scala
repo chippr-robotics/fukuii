@@ -238,6 +238,7 @@ class ByteCodeCoordinator(
       result match {
         case Right(count) =>
           bytecodesDownloaded += count
+          consecutiveTaskFailures = 0
           log.info(s"Bytecode task completed: $count codes")
           checkCompletion()
         case Left(error) =>
@@ -246,7 +247,6 @@ class ByteCodeCoordinator(
       }
 
     case ByteCodeTaskFailed(requestId, error) =>
-      // Re-queue the task
       activeTasks.remove(requestId).foreach { active =>
         val task = active.task
         val worker = active.worker
@@ -359,6 +359,7 @@ class ByteCodeCoordinator(
             // Spec violation or malicious peer - back off harder than empty responses.
             recordPeerCooldown(peer, cooldownConfig.baseInvalid, s"invalid ByteCodes: $error")
             adjustResponseBytesTargetOnFailure(peer, s"invalid response: $error")
+            worker ! ByteCodeWorkerRelease(response.requestId)
             markWorkerIdle(worker)
             checkCompletion()
 
@@ -375,6 +376,7 @@ class ByteCodeCoordinator(
                 // (and avoid tight loops), briefly cool down this peer.
                 recordPeerCooldown(peer, cooldownConfig.baseTimeout, s"local store failed: $error")
                 adjustResponseBytesTargetOnFailure(peer, s"local store failed: $error")
+                worker ! ByteCodeWorkerRelease(response.requestId)
                 markWorkerIdle(worker)
                 checkCompletion()
 
@@ -440,6 +442,7 @@ class ByteCodeCoordinator(
                 }
 
                 activeTasks.remove(response.requestId)
+                worker ! ByteCodeWorkerRelease(response.requestId)
                 markWorkerIdle(worker)
 
                 log.info(

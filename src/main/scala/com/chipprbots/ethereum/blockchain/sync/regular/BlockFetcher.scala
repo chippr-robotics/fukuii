@@ -24,6 +24,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.Awaitin
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.AwaitingHeadersToBeIgnored
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.HeadersNotFormingSeq
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.HeadersNotMatchingReadyBlocks
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.HeadersNotMatchingWaitingHeaders
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter.ImportNewBlock
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync.ProgressProtocol
 import com.chipprbots.ethereum.consensus.validators.BlockValidator
@@ -202,7 +203,8 @@ class BlockFetcher(
                   headers.lastOption.map(_.number),
                   headers.size
                 )
-                peersClient ! BlacklistPeer(peer.id, BlacklistReason.HeadersNotFormingChain)
+                // No blacklist: valid peers on a different fork branch can trigger this during reorgs.
+                // Only blacklist on cryptographic invalidity (PoW failure, bad signature) — Besu AbstractPeerTask pattern.
                 state.withHeaderFetchReceived.recordHeaderRejection()
               case Left(HeadersNotMatchingReadyBlocks) =>
                 log.info(
@@ -212,18 +214,21 @@ class BlockFetcher(
                   state.readyBlocks.lastOption.map(_.number),
                   headers.headOption.map(_.number)
                 )
-                peersClient ! BlacklistPeer(peer.id, BlacklistReason.HeadersDontExtendReadyBlocks)
+                // No blacklist: during a fork reorg, honest peers on the reorg chain will not extend our ready blocks.
                 state.withHeaderFetchReceived.recordHeaderRejection()
-              case Left(err) =>
-                log.info(
-                  "Dismissed received headers: {} (peer={}, waitingTip={}, respFirst={})",
-                  err.description,
-                  peer.id,
+              case Left(HeadersNotMatchingWaitingHeaders) =>
+                log.debug(
+                  "Dismissed received headers due to: {} (peer: {})",
+                  HeadersNotMatchingWaitingHeaders.description,
+                  peer.id
+                )
+                log.debug(
+                  "Header validation failed: headers do not chain to waiting headers. Last waiting: {}, Headers first: {}",
                   state.waitingHeaders.lastOption.map(_.number),
                   headers.headOption.map(_.number)
                 )
-                peersClient ! BlacklistPeer(peer.id, BlacklistReason.HeadersDontExtendWaitingQueue)
-                state.withHeaderFetchReceived.recordHeaderRejection()
+                // No blacklist: honest peers on an alternative chain head trigger this during reorgs.
+                state.withHeaderFetchReceived
               case Right(updatedState) =>
                 log.debug(
                   "Successfully validated and appended {} headers. New waiting headers count: {}",

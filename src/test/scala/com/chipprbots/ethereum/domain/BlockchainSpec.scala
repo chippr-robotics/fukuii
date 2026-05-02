@@ -177,8 +177,6 @@ class BlockchainSpec
     // non-empty walk — every node visited on the way to the divergence. In this trie the
     // sole entry is `Address(42)`, so the root resolves directly to a LeafNode whose key
     // doesn't match our wrongAddress; that leaf is the termination point and the proof.
-    // Assert the Option is defined explicitly so a regression back to `None` fails with a
-    // clear message rather than an empty-vector assertion further down.
     retrievedAccountProofWrong shouldBe defined
     val proof = retrievedAccountProofWrong.get
     proof should not be empty

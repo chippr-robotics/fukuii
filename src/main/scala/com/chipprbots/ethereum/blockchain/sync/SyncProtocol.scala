@@ -26,6 +26,12 @@ object SyncProtocol {
     */
   final case class RegularSyncStuck(blockNumber: BigInt, missingHash: String) extends SyncProtocolMsg
 
+  /** Signals that SNAP finalization detected a state root mismatch (snapStateRoot != pivotHeader.stateRoot).
+    * SyncController responds by clearing SnapSyncDone and restarting SNAP with a fresh pivot. Mirrors Besu BUG-008
+    * class recovery: abort finalization rather than commit a broken state.
+    */
+  case object HealingImpossible extends SyncProtocolMsg
+
   sealed trait Status {
     def syncing: Boolean = this match {
       case Status.Syncing(_, _, _) => true

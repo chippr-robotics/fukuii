@@ -390,4 +390,151 @@ class ByteCodeCoordinatorSpec
     coordinator ! Messages.ByteCodePeerAvailable(peer)
     networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
   }
+
+  // ---- J7: Peer reputation cleared on pivot refresh ----------------------------
+
+  it should "allow a cooled-down peer to dispatch immediately after ByteCodePivotRefreshed" taggedAs UnitTest in {
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+
+    val peer = PeerTestHelpers.createTestPeer("pivot-peer", peerProbe.ref)
+
+    val coordinator = system.actorOf(
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 8,
+        snapSyncController = snapSyncController.ref,
+        cooldownConfig = testCooldownConfig
+      )
+    )
+
+    val h1 = kec256(ByteString("pivot-code"))
+
+    coordinator ! Messages.StartByteCodeSync(Seq(h1))
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+
+    val send1 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+    val req1 = send1.message.asInstanceOf[GetByteCodesEnc].underlyingMsg
+
+    // Empty response → peer enters cooldown
+    system.actorSelection(coordinator.path / "*") ! Messages.ByteCodesResponseMsg(ByteCodes(req1.requestId, Seq.empty))
+
+    // Verify cooldown is active — same peer should not dispatch immediately
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+    networkPeerManager.expectNoMessage(80.millis)
+
+    // Pivot refresh clears both peerFailureCounts and peerCooldownUntilMillis (BUG-S1 fix)
+    coordinator ! Messages.ByteCodePivotRefreshed
+
+    // Peer should dispatch again immediately (no cooldown wait)
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+  }
+
+  // ── K5-ext-b: Peer retention across pivot refresh (BUG-S1 fix 84290a175) ─────
+
+  it should "dispatch new tasks to a peer retained in knownAvailablePeers after ByteCodePivotRefreshed" taggedAs UnitTest in {
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+
+    val peer = PeerTestHelpers.createTestPeer("retained-peer", peerProbe.ref)
+
+    val coordinator = system.actorOf(
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 8,
+        snapSyncController = snapSyncController.ref,
+        cooldownConfig = testCooldownConfig
+      )
+    )
+
+    val h1 = kec256(ByteString("retained-code"))
+
+    // Register peer with no initial tasks → peer enters knownAvailablePeers pool.
+    coordinator ! Messages.StartByteCodeSync(Seq.empty)
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+
+    // Pivot refresh. In the old code knownAvailablePeers was cleared here (BUG-S1).
+    // In the fixed code the peer is retained: bytecodes are content-addressed,
+    // not state-root-dependent, so the peer can serve the same hashes after a pivot.
+    coordinator ! Messages.ByteCodePivotRefreshed
+
+    // Add tasks AFTER the pivot. AddByteCodeTasks queues work but does not call
+    // tryRedispatchPendingTasks(). UpdateMaxInFlightPerPeer is the coordinator-internal
+    // trigger that calls tryRedispatchPendingTasks(), which iterates knownAvailablePeers.
+    // With the BUG-S1 fix the retained peer is found there and dispatch proceeds.
+    // Without the fix (peer cleared) tryRedispatchPendingTasks() finds nobody → timeout.
+    coordinator ! Messages.AddByteCodeTasks(Seq(h1))
+    coordinator ! Messages.UpdateMaxInFlightPerPeer(testCooldownConfig.maxInFlightPerPeer)
+
+    val send = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+    val req = send.message.asInstanceOf[GetByteCodesEnc].underlyingMsg
+    req.hashes shouldEqual Seq(h1)
+  }
+
+  // ---- J9: Corruption detection -----------------------------------------------
+
+  it should "reject a bytecode whose kec256 hash is not in the requested list and put peer in cooldown" taggedAs UnitTest in {
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+
+    val peer = PeerTestHelpers.createTestPeer("corrupt-peer", peerProbe.ref)
+
+    val coordinator = system.actorOf(
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 8,
+        snapSyncController = snapSyncController.ref,
+        cooldownConfig = testCooldownConfig
+      )
+    )
+
+    val realCode = ByteString("real-bytecode")
+    val realHash = kec256(realCode)
+    val corruptCode = ByteString("corrupted-bytecode-with-wrong-hash")
+    // Sanity: corruptCode's hash must not equal realHash
+    kec256(corruptCode) should not be realHash
+
+    coordinator ! Messages.StartByteCodeSync(Seq(realHash))
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+
+    val send1 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+    val req1 = send1.message.asInstanceOf[GetByteCodesEnc].underlyingMsg
+    req1.hashes shouldEqual Seq(realHash)
+
+    // Respond with a code whose hash != realHash (corrupted / wrong code)
+    system.actorSelection(coordinator.path / "*") ! Messages.ByteCodesResponseMsg(
+      ByteCodes(req1.requestId, Seq(corruptCode))
+    )
+
+    // Corrupted code must NOT be stored
+    within(3.seconds) {
+      awaitAssert(evmCodeStorage.get(realHash) shouldEqual None)
+    }
+
+    // Peer must be in cooldown (invalid response)
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+    networkPeerManager.expectNoMessage(80.millis)
+
+    // After cooldown, task is re-queued and peer dispatches again
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+    val send2 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+    val req2 = send2.message.asInstanceOf[GetByteCodesEnc].underlyingMsg
+    req2.hashes shouldEqual Seq(realHash)
+  }
 }

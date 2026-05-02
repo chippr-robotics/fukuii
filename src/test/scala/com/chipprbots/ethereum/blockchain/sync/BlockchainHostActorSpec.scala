@@ -46,7 +46,13 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
     peerEventBus.expectMsg(
       Subscribe(
         MessageClassifier(
-          Set(Codes.GetNodeDataCode, Codes.GetReceiptsCode, Codes.GetBlockBodiesCode, Codes.GetBlockHeadersCode),
+          Set(
+            Codes.GetPooledTransactionsCode,
+            Codes.GetNodeDataCode,
+            Codes.GetReceiptsCode,
+            Codes.GetBlockBodiesCode,
+            Codes.GetBlockHeadersCode
+          ),
           PeerSelector.AllPeers
         )
       )
@@ -350,6 +356,7 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
 
     val peerEventBus: TestProbe = TestProbe()
     val networkPeerManager: TestProbe = TestProbe()
+    val pendingTxManager: TestProbe = TestProbe()
 
     val blockchainHost: TestActorRef[Nothing] = TestActorRef(
       Props(
@@ -359,7 +366,7 @@ class BlockchainHostActorSpec extends AnyFlatSpec with Matchers {
           peerConf,
           peerEventBus.ref,
           networkPeerManager.ref,
-          ActorRef.noSender
+          pendingTxManager.ref
         )
       )
     )

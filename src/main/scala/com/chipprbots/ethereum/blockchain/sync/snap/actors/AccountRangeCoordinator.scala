@@ -558,12 +558,12 @@ class AccountRangeCoordinator(
 
     case TrieFlushComplete(Left(error)) =>
       log.error(s"Failed to finalize trie: $error")
-      snapSyncController ! SNAPSyncController.ProgressAccountsTrieFinalized
+      snapSyncController ! SNAPSyncController.AccountTrieFinalizationFailed(error)
       context.stop(self)
 
     case Status.Failure(ex) =>
       log.error(ex, s"Trie finalization failed with exception: ${ex.getMessage}")
-      snapSyncController ! SNAPSyncController.ProgressAccountsTrieFinalized
+      snapSyncController ! SNAPSyncController.AccountTrieFinalizationFailed(ex.getMessage)
       context.stop(self)
 
     case _: PeerAvailable =>
@@ -707,15 +707,23 @@ class AccountRangeCoordinator(
           val isTaskDone = updateTaskProgress(task, accounts)
           task.pending = false
 
-          // Update statistics
-          val accountBytes = accounts.map { case (hash, _) =>
-            hash.size + 32 // Rough estimate
-          }.sum
-          bytesDownloaded += accountBytes
+          if (accountCount == 0) {
+            // Empty range response: peer's snapshot may not cover this state root.
+            // Apply cooldown so the task goes to a different peer on re-dispatch.
+            recordPeerCooldown(peer, "empty account range — peer snapshot may not cover this root")
+            pendingTasks.enqueue(task)
+            tryRedispatchPendingTasks()
+          } else {
+            // Update statistics
+            val accountBytes = accounts.map { case (hash, _) =>
+              hash.size + 32 // Rough estimate
+            }.sum
+            bytesDownloaded += accountBytes
 
-          // Start chunked async storage - this yields back to the actor mailbox between chunks
-          // so the coordinator can still process PeerAvailable, AccountRangeResponseMsg, etc.
-          self ! StoreAccountChunk(task, accounts, accountCount, storedSoFar = 0, isTaskRangeComplete = isTaskDone)
+            // Start chunked async storage - this yields back to the actor mailbox between chunks
+            // so the coordinator can still process PeerAvailable, AccountRangeResponseMsg, etc.
+            self ! StoreAccountChunk(task, accounts, accountCount, storedSoFar = 0, isTaskRangeComplete = isTaskDone)
+          }
 
         case Left(error) =>
           log.warning(s"Task completed with error: $error")
@@ -726,10 +734,10 @@ class AccountRangeCoordinator(
     }
 
   private def updateTaskProgress(task: AccountTask, accounts: Seq[(ByteString, Account)]): Boolean = {
-    // If the peer returns no accounts for this segment, we assume the remainder of the interval is empty.
+    // Empty response: can't distinguish "snapshot not ready for this root" from "range genuinely empty".
+    // Return false so handleTaskComplete re-queues to a different peer with a cooldown.
     if (accounts.isEmpty) {
-      consumedKeyspace += task.remainingKeyspace
-      return true
+      return false
     }
 
     val lastHash = accounts.last._1

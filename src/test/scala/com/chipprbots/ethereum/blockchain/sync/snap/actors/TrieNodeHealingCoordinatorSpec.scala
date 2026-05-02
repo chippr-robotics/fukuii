@@ -183,4 +183,87 @@ class TrieNodeHealingCoordinatorSpec
     coordinator ! Messages.HealingGetProgress
     expectMsgType[Any](3.seconds)
   }
+
+  it should "signal StateHealingComplete to controller on HealingForceComplete" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("force-complete-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = system.actorOf(
+      TrieNodeHealingCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        batchSize = 16,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    coordinator ! Messages.HealingForceComplete
+
+    snapSyncController.expectMsg(3.seconds, SNAPSyncController.StateHealingComplete)
+  }
+
+  it should "accept HealingPivotRefreshed and re-seed new root — HealingCheckCompletion deferred" taggedAs UnitTest in {
+    // After pivot refresh the coordinator re-seeds the new root into pendingTasks.
+    // isComplete = pendingTasks.isEmpty && activeRequests.isEmpty = false.
+    // HealingCheckCompletion must therefore NOT signal StateHealingComplete.
+    val stateRoot = kec256(ByteString("old-heal-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = system.actorOf(
+      TrieNodeHealingCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        batchSize = 16,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    val newStateRoot = kec256(ByteString("new-heal-root"))
+    coordinator ! Messages.HealingPivotRefreshed(newStateRoot)
+
+    // The new root is not in storage, so it is added to pendingTasks.
+    // isComplete = false → StateHealingComplete must NOT be sent.
+    coordinator ! Messages.HealingCheckCompletion
+    snapSyncController.expectNoMessage(300.millis)
+
+    // Coordinator remains operational.
+    coordinator ! Messages.HealingGetProgress
+    expectMsgType[Any](3.seconds)
+  }
+
+  it should "not signal StateHealingComplete on HealingCheckCompletion when pending tasks exist" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("pending-tasks-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = system.actorOf(
+      TrieNodeHealingCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        batchSize = 16,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    val nodeHash = kec256(ByteString("missing-node"))
+    coordinator ! Messages.QueueMissingNodes(Seq((Seq(ByteString(Array[Byte](0x00))), nodeHash)))
+
+    // pendingTasks is non-empty → isComplete = false → no StateHealingComplete
+    coordinator ! Messages.HealingCheckCompletion
+    snapSyncController.expectNoMessage(300.millis)
+  }
 }

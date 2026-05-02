@@ -129,4 +129,52 @@ class ChainConfigValidationSpec extends AnyFlatSpec with Matchers {
     mordorConfig.forkBlockNumbers.difficultyBombRemovalBlockNumber shouldBe 0
   }
 }
+
+// scalastyle:on magic.number
+
+// scalastyle:off magic.number
+/** L3 — ETC DAO fork exclusion.
+  *
+  * ETC's defining property: it did NOT follow the ETH DAO bailout. The DAO config exists in the chain config ONLY to
+  * anchor the fork ID list (so ETC nodes reject ETH peers). The drain list and refund contract are absent, meaning no
+  * funds are ever moved at block 1,920,000.
+  *
+  * On Mordor there is no DAO config at all.
+  */
+class ETCDaoExclusionSpec extends AnyFlatSpec with Matchers {
+
+  private val fullConfig = ConfigFactory.load()
+  private val etcConfig = BlockchainConfig.fromRawConfig(fullConfig.getConfig("fukuii.blockchains.etc"))
+  private val mordorConfig = BlockchainConfig.fromRawConfig(fullConfig.getConfig("fukuii.blockchains.mordor"))
+
+  "ETC mainnet DAO config" should "be present (for fork ID tracking)" taggedAs (UnitTest, ConsensusTest) in {
+    etcConfig.daoForkConfig shouldBe defined
+  }
+
+  it should "record fork block number 1,920,000" taggedAs (UnitTest, ConsensusTest) in {
+    etcConfig.daoForkConfig.get.forkBlockNumber shouldBe BigInt(1_920_000)
+  }
+
+  it should "have an empty drain list (no funds moved on ETC)" taggedAs (UnitTest, ConsensusTest) in {
+    etcConfig.daoForkConfig.get.drainList shouldBe empty
+  }
+
+  it should "have no refund contract (no drain destination)" taggedAs (UnitTest, ConsensusTest) in {
+    etcConfig.daoForkConfig.get.refundContract shouldBe None
+  }
+
+  it should "exclude the DAO fork from the fork ID list" taggedAs (UnitTest, ConsensusTest) in {
+    // ETC explicitly rejected the ETH DAO fork — it must NOT appear in fork ID negotiation
+    etcConfig.daoForkConfig.get.includeOnForkIdList shouldBe false
+  }
+
+  it should "have no block extra data for the fork block" taggedAs (UnitTest, ConsensusTest) in {
+    // ETH put 'dao-hard-fork' in extra data; ETC did not
+    etcConfig.daoForkConfig.get.blockExtraData shouldBe None
+  }
+
+  "Mordor DAO config" should "be absent (Mordor has no DAO fork)" taggedAs (UnitTest, ConsensusTest) in {
+    mordorConfig.daoForkConfig shouldBe None
+  }
+}
 // scalastyle:on magic.number

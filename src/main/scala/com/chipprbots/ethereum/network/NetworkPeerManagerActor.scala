@@ -9,6 +9,8 @@ import org.apache.pekko.actor.Props
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor._
 import com.chipprbots.ethereum.network.PeerActor.DisconnectPeer
@@ -45,7 +47,7 @@ class NetworkPeerManagerActor(
     appStateStorage: AppStateStorage,
     forkResolverOpt: Option[ForkResolver],
     initialSnapSyncControllerOpt: Option[ActorRef] = None,
-    evmCodeStorage: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
+    evmCodeStorageOpt: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
     mptStorageOpt: Option[com.chipprbots.ethereum.db.storage.MptStorage] = None,
     blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader] = None
 ) extends Actor
@@ -186,12 +188,17 @@ class NetworkPeerManagerActor(
       context.become(handleMessages(newPeersWithInfo))
 
     case PeerHandshakeSuccessful(peer, peerInfo: PeerInfo) =>
+      val chainInfoDisplay =
+        if (peerInfo.remoteStatus.capability == com.chipprbots.ethereum.network.p2p.messages.Capability.ETH69)
+          s"latestBlock=${peerInfo.remoteStatus.latestBlock.getOrElse("?")} TD=${peerInfo.remoteStatus.chainWeight.totalDifficulty} (ETH/69, TD from local DB or block-number proxy)"
+        else
+          s"TD=${peerInfo.remoteStatus.chainWeight.totalDifficulty}"
       log.debug(
-        "PEER_HANDSHAKE_SUCCESS: Peer {} handshake successful. Capability: {}, BestHash: {}, TotalDifficulty: {}",
+        "PEER_HANDSHAKE_SUCCESS: Peer {} handshake successful. Capability: {}, BestHash: {}, ChainInfo: {}",
         peer.id,
         peerInfo.remoteStatus.capability,
         ByteStringUtils.hash2string(peerInfo.remoteStatus.bestHash),
-        peerInfo.remoteStatus.chainWeight.totalDifficulty
+        chainInfoDisplay
       )
       peerEventBusActor ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)))
       peerEventBusActor ! Subscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)))
@@ -639,7 +646,7 @@ class NetworkPeerManagerActor(
     val response: ByteCodes =
       try {
         val maxBytes = msg.responseBytes.toInt.max(0)
-        val codes: Seq[ByteString] = evmCodeStorage match {
+        val codes: Seq[ByteString] = evmCodeStorageOpt match {
           case Some(storage) =>
             val collected = scala.collection.mutable.ListBuffer.empty[ByteString]
             var totalBytes = 0
@@ -699,7 +706,8 @@ object NetworkPeerManagerActor {
       bestHash: ByteString,
       genesisHash: ByteString,
       supportsSnap: Boolean = false,
-      capabilities: List[Capability] = List.empty
+      capabilities: List[Capability] = List.empty,
+      latestBlock: Option[BigInt] = None
   ) {
     override def toString: String =
       s"RemoteStatus { " +
@@ -710,6 +718,7 @@ object NetworkPeerManagerActor {
         s"genesisHash: ${ByteStringUtils.hash2string(genesisHash)}, " +
         s"supportsSnap: $supportsSnap, " +
         s"capabilities: ${capabilities.mkString("[", ", ", "]")}" +
+        s"latestBlock: $latestBlock" +
         s"}"
   }
 
@@ -768,21 +777,27 @@ object NetworkPeerManagerActor {
         List.empty
       )
 
-    /** ETH/69: no totalDifficulty — use latestBlock number as a proxy for chain weight */
+    /** ETH/69: no totalDifficulty on the wire. Caller provides a resolved ChainWeight — either looked up from local
+      * ChainWeightStorage via latestBlockHash (accurate PoW TD when the peer's block is already in our chain) or a
+      * block-number proxy as fallback. latestBlock is stored separately so PeerInfo.apply can initialize maxBlockNumber
+      * correctly without conflating it with chainWeight.totalDifficulty.
+      */
     def fromETH69Status(
         status: com.chipprbots.ethereum.network.p2p.messages.ETH69.Status,
         negotiatedCapability: Capability,
         supportsSnap: Boolean,
-        capabilities: List[Capability]
+        capabilities: List[Capability],
+        resolvedChainWeight: ChainWeight
     ): RemoteStatus =
       RemoteStatus(
         negotiatedCapability,
         status.networkId,
-        ChainWeight.totalDifficultyOnly(status.latestBlock), // Use block number as weight proxy
+        resolvedChainWeight,
         status.latestBlockHash,
         status.genesisHash,
         supportsSnap,
-        capabilities
+        capabilities,
+        latestBlock = Some(status.latestBlock)
       )
   }
 
@@ -825,8 +840,8 @@ object NetworkPeerManagerActor {
       // peerHasUpdatedBestBlock filters out new peers before they can exchange any block data.
       val initialMaxBlock: BigInt =
         if (remoteStatus.capability == com.chipprbots.ethereum.network.p2p.messages.Capability.ETH69)
-          remoteStatus.chainWeight.totalDifficulty // ETH/69: latestBlock number stored as TD
-        else BigInt(0) // ETH/64-68: don't confuse TD with block number
+          remoteStatus.latestBlock.getOrElse(BigInt(0)) // ETH/69: block number from Status, stored separately
+        else BigInt(0) // ETH/64-68: maxBlockNumber is updated via peerHasUpdatedBestBlock messages
       PeerInfo(
         remoteStatus,
         remoteStatus.chainWeight,
@@ -865,7 +880,7 @@ object NetworkPeerManagerActor {
       appStateStorage: AppStateStorage,
       forkResolverOpt: Option[ForkResolver],
       snapSyncControllerOpt: Option[ActorRef] = None,
-      evmCodeStorage: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
+      evmCodeStorageOpt: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
       mptStorageOpt: Option[com.chipprbots.ethereum.db.storage.MptStorage] = None,
       blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader] = None
   ): Props =
@@ -876,7 +891,7 @@ object NetworkPeerManagerActor {
         appStateStorage,
         forkResolverOpt,
         snapSyncControllerOpt,
-        evmCodeStorage,
+        evmCodeStorageOpt,
         mptStorageOpt,
         blockchainReader
       )

@@ -242,6 +242,14 @@ class SyncController(
         startFastSync()
       }
 
+    case SyncProtocol.HealingImpossible =>
+      snapSync ! PoisonPill
+      log.warning(
+        "SNAP finalization aborted (state root mismatch). Clearing SnapSyncDone and restarting SNAP with a fresh pivot."
+      )
+      appStateStorage.clearSnapSyncDone().commit()
+      startSnapSync()
+
     case SyncProtocol.Status.Progress(_, _) =>
       log.debug("SNAP sync in progress")
 
@@ -547,6 +555,15 @@ class SyncController(
       startRegularSync()
       scheduler.scheduleOnce(delay, self, RestartFastSyncNow)
       return
+    }
+
+    // Recovery flag: -Dfukuii.snap.clearDoneOnStart=true clears SnapSyncDone to re-enter healing.
+    // Use when healing completed prematurely (BUG-006: root mismatch) to resume without a full re-sync.
+    if (doSnapSync && System.getProperty("fukuii.snap.clearDoneOnStart", "false").toBoolean) {
+      if (appStateStorage.isSnapSyncDone()) {
+        log.warning("fukuii.snap.clearDoneOnStart=true: clearing SnapSyncDone to re-enter SNAP healing")
+        appStateStorage.clearSnapSyncDone().commit()
+      }
     }
 
     (appStateStorage.isSnapSyncDone(), appStateStorage.isFastSyncDone(), doSnapSync, doFastSync) match {
