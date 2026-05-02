@@ -85,6 +85,10 @@ class ChainDownloader(
   // Concurrency — starts conservative during SNAP state sync, boosted after state completes
   private var maxConcurrentRequests: Int = initialMaxConcurrentRequests
 
+  // Visible to tests in the same package: lets ChainDownloaderSpec assert YieldToRegularSync clamping
+  // without relying on log-output scraping or reflection.
+  private[snap] def currentMaxConcurrentRequests: Int = maxConcurrentRequests
+
   // Dispatch timer
   private var dispatchTask: Option[org.apache.pekko.actor.Cancellable] = None
 
@@ -585,9 +589,20 @@ class ChainDownloader(
   }
 
   private def yieldToRegularSync(n: Int): Unit = {
+    // Clamp to >=1: zero would wedge dispatch (inFlightCount >= maxConcurrentRequests is immediately
+    // true), preventing any new work from starting and stranding the parent waiting for ChainDownloader.Done
+    // forever. If the operator wants no backfill, they should disable it via chain-download-enabled=false.
+    val clamped = math.max(n, 1)
     val prev = maxConcurrentRequests
-    maxConcurrentRequests = n
-    log.info("Chain download yielding to regular sync: {} -> {} concurrent requests (background backfill)", prev, n)
+    maxConcurrentRequests = clamped
+    if (clamped != n) {
+      log.warning("YieldToRegularSync({}) clamped to {} to prevent dispatch wedge", n, clamped)
+    }
+    log.info(
+      "Chain download yielding to regular sync: {} -> {} concurrent requests (background backfill)",
+      prev,
+      clamped
+    )
     // Slow the dispatch tick so backfill doesn't fight regular sync for the actor mailbox or peers.
     scheduleDispatch(2.seconds)
   }

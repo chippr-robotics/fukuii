@@ -239,6 +239,24 @@ class SNAPSyncController(
     progressMonitor.stopPeriodicLogging()
   }
 
+  /** Stop the SNAP state-sync child coordinators (account/bytecode/storage/healing) and clear their references. They do
+    * not self-stop on completion, so when `SNAPSyncController` is kept alive past `finalizeSnapSync()` for background
+    * chain backfill (#1162), failing to stop them retains completed task buffers, worker actors, and rate trackers for
+    * the entire backfill window. The previous `PoisonPill` to the parent used to clean these up implicitly.
+    *
+    * `chainDownloader` is NOT stopped here — it keeps running in `completedWithBackfill`.
+    */
+  private def stopStateSyncChildren(): Unit = {
+    accountRangeCoordinator.foreach(context.stop)
+    accountRangeCoordinator = None
+    bytecodeCoordinator.foreach(context.stop)
+    bytecodeCoordinator = None
+    storageRangeCoordinator.foreach(context.stop)
+    storageRangeCoordinator = None
+    trieNodeHealingCoordinator.foreach(context.stop)
+    trieNodeHealingCoordinator = None
+  }
+
   override def receive: Receive = idle
 
   def idle: Receive = {
@@ -2535,8 +2553,11 @@ class SNAPSyncController(
     currentPhase = Completed
 
     // Cancel SNAP-only schedules before handing off so eviction tickers / stagnation checks stop
-    // affecting peers while regular sync runs. The chain downloader child is intentionally NOT stopped.
+    // affecting peers while regular sync runs. Stop state-sync child coordinators too — they don't
+    // self-stop on completion and would otherwise retain completed task buffers and worker actors
+    // for the full background-backfill window. The chain downloader child is intentionally NOT stopped.
     stopSnapOnlySchedules()
+    stopStateSyncChildren()
 
     // Phase 1 of the handshake: tell the parent that pivot/state is anchored. Parent starts RegularSync.
     context.parent ! SnapSyncFinalized(pivot)
