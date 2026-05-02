@@ -350,6 +350,9 @@ lazy val node = {
       bashScriptExtraDefines += """addJava "-Dlogback.configurationFile=${app_home}/../conf/logback.xml"""",
       batScriptExtraDefines += """call :add_java "-Dconfig.file=%APP_HOME%\conf\app.conf"""",
       batScriptExtraDefines += """call :add_java "-Dlogback.configurationFile=%APP_HOME%\conf\logback.xml"""",
+      // Keep sbt-native-packager Docker builds on the same supported runtime as the hand-written Dockerfiles.
+      // Without this, the plugin default generated `FROM openjdk:8`, which Docker Hub no longer serves.
+      dockerBaseImage := "eclipse-temurin:25-jre-noble",
       // Use a wildcard classpath ("lib/*") instead of enumerating every
       // jar by name. The default sbt-native-packager behaviour wrote
       // ~12KB of `-cp lib/jar1;lib/jar2;...` into bin/fukuii.bat (147

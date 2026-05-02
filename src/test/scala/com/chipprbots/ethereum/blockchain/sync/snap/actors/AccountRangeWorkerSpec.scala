@@ -12,8 +12,9 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
-import com.chipprbots.ethereum.network.p2p.messages.SNAP.{AccountRange, GetAccountRange}
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.AccountRange
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetAccountRange.GetAccountRangeEnc
+import com.chipprbots.ethereum.mpt.{LeafNode, MptTraversals}
 import com.chipprbots.ethereum.testing.PeerTestHelpers
 import com.chipprbots.ethereum.testing.Tags._
 
@@ -33,6 +34,11 @@ class AccountRangeWorkerSpec
 
   private def makeTask(root: ByteString = dummyRoot): AccountTask =
     AccountTask(next = zeroHash, last = maxHash, rootHash = root)
+
+  private def proofOnlyRange(): (ByteString, Seq[ByteString]) = {
+    val proofNode = LeafNode(ByteString(0x01.toByte), ByteString("value"))
+    ByteString(proofNode.hash) -> Seq(ByteString(MptTraversals.encodeNode(proofNode)))
+  }
 
   private def makeWorker(
       coordinator: TestProbe,
@@ -63,30 +69,46 @@ class AccountRangeWorkerSpec
     msg.responseBytes shouldBe defaultBytes
   }
 
-  it should "report TaskComplete to coordinator on empty-range response (valid proof-of-absence)" taggedAs UnitTest in {
-    // An empty AccountRange with an empty proof is a valid proof-of-absence.
-    // MerkleProofVerifier.verifyAccountRange short-circuits to Right(()) when both are empty.
+  it should "report TaskComplete to coordinator on proof-only empty-range response" taggedAs UnitTest in {
     val coordinator = TestProbe()
     val networkPeerManager = TestProbe()
     val peerProbe = TestProbe()
     val peer = PeerTestHelpers.createTestPeer("ar-peer-2", peerProbe.ref)
     val worker = makeWorker(coordinator, networkPeerManager)
+    val (root, rangeProof) = proofOnlyRange()
 
     val reqId = BigInt(2)
-    worker ! Messages.FetchAccountRange(makeTask(), peer, reqId, defaultBytes)
+    worker ! Messages.FetchAccountRange(makeTask(root), peer, reqId, defaultBytes)
     networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](1.second)
 
-    // Empty accounts + empty proof → valid proof-of-absence
-    val emptyResponse = AccountRange(requestId = reqId, accounts = Seq.empty, proof = Seq.empty)
+    val emptyResponse = AccountRange(requestId = reqId, accounts = Seq.empty, proof = rangeProof)
     worker ! Messages.AccountRangeResponseMsg(emptyResponse)
 
     val msg = coordinator.expectMsgType[Messages.TaskComplete](1.second)
     msg.requestId shouldBe reqId
     msg.result.isRight shouldBe true
-    val (count, accounts, proof) = msg.result.toOption.get
+    val (count, accounts, returnedProof) = msg.result.toOption.get
     count shouldBe 0
     accounts shouldBe empty
-    proof shouldBe empty
+    returnedProof should not be empty
+  }
+
+  it should "report TaskFailed on empty account response without proof for non-empty root" taggedAs UnitTest in {
+    val coordinator = TestProbe()
+    val networkPeerManager = TestProbe()
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("ar-peer-2b", peerProbe.ref)
+    val worker = makeWorker(coordinator, networkPeerManager)
+
+    val reqId = BigInt(20)
+    worker ! Messages.FetchAccountRange(makeTask(), peer, reqId, defaultBytes)
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](1.second)
+
+    worker ! Messages.AccountRangeResponseMsg(AccountRange(requestId = reqId, accounts = Seq.empty, proof = Seq.empty))
+
+    val msg = coordinator.expectMsgType[Messages.TaskFailed](1.second)
+    msg.requestId shouldBe reqId
+    msg.reason should include("Missing proof for empty account range")
   }
 
   it should "report TaskFailed to coordinator on RequestTimeout" taggedAs UnitTest in {

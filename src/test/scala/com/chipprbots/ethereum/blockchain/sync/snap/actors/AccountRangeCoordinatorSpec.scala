@@ -12,6 +12,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.testing.{PeerTestHelpers, TestMptStorage}
 
@@ -215,10 +216,10 @@ class AccountRangeCoordinatorSpec
     progress.elapsedTimeMs should be >= 0L
   }
 
-  // ── K5-ext-a: Empty account range re-queue (fix 2d42eefbd) ──────────────────
+  // ── K5-ext-a: Empty account range completion --------------------------------
 
-  it should "re-queue task and not consume keyspace on empty account range response" taggedAs UnitTest in {
-    val stateRoot = kec256(ByteString("empty-range-root"))
+  it should "complete task on proof-only empty account range response" taggedAs UnitTest in {
+    val stateRoot = ByteString(MerklePatriciaTrie.EmptyRootHash)
     val storage = new TestMptStorage()
     val requestTracker = new SNAPRequestTracker()(system.scheduler)
     val networkPeerManager = TestProbe()
@@ -245,23 +246,10 @@ class AccountRangeCoordinatorSpec
     // SNAPRequestTracker starts at nextRequestId=1, so the first task is requestId=BigInt(1).
     networkPeerManager.expectMsgType[Any](3.seconds)
 
-    // Simulate what the AccountRangeWorker sends back when it receives an empty AccountRange:
-    // TaskComplete with accountCount=0 and empty sequences.
-    coordinator ! Messages.TaskComplete(BigInt(1), Right((0, Seq.empty, Seq.empty)))
+    // Simulate what the AccountRangeWorker sends back when it verifies a proof-only empty AccountRange.
+    coordinator ! Messages.TaskComplete(BigInt(1), Right((0, Seq.empty, Seq(ByteString("boundary-proof")))))
 
-    // The task must be re-queued: keyspace NOT consumed → progress stays near 0.
-    // This distinguishes the fix from the bug, which would have advanced consumedKeyspace.
-    within(3.seconds) {
-      awaitAssert {
-        coordinator ! Messages.GetProgress
-        val stats = expectMsgType[AccountRangeStats](1.second)
-        stats.progress should be < 0.01 // consumedKeyspace = 0
-        stats.accountsDownloaded shouldBe 0 // no real accounts stored
-        stats.tasksPending should be > 0 // task still in queue
-      }
-    }
-
-    // Sync controller must NOT receive a completion signal (tasks still pending).
-    snapSyncController.expectNoMessage(300.millis)
+    snapSyncController.expectMsgType[Messages.AccountRangeProgress](3.seconds)
+    snapSyncController.expectMsg(3.seconds, SNAPSyncController.AccountRangeSyncComplete)
   }
 }

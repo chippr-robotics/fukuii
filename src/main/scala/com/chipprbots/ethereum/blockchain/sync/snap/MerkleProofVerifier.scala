@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.MptTraversals
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.ExtensionNode
 import com.chipprbots.ethereum.mpt.BranchNode
@@ -52,7 +53,10 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
   ): Either[String, Unit] = {
 
     if (proof.isEmpty && accounts.isEmpty) {
-      return Right(())
+      if (rootHash == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
+        return Right(())
+      }
+      return Left("Missing proof for empty account range")
     }
 
     // If we have accounts, we need a proof

@@ -7,17 +7,31 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.Account
-import com.chipprbots.ethereum.mpt.{MerklePatriciaTrie, byteStringSerializer}
+import com.chipprbots.ethereum.mpt.{LeafNode, MerklePatriciaTrie, MptTraversals, byteStringSerializer}
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.testing.TestMptStorage
 
 class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
 
-  "MerkleProofVerifier" should "accept empty proof for empty account list as valid empty range" taggedAs UnitTest in {
-    // Empty accounts + empty proof is a valid SNAP response meaning the keyspace region has
-    // no accounts. Previously this returned Left("Missing proof for empty account range") which
-    // triggered false stateless-peer marking. Fixed by BUG-EMPTY-RANGE (a80b2434d).
+  "MerkleProofVerifier" should "reject empty account reply without proof for non-empty state root" taggedAs UnitTest in {
+    // In snap/1, accounts=0 + proof=0 is a refusal/stateless signal for a non-empty root.
+    // A genuinely exhausted range must carry a boundary proof.
     val stateRoot = kec256(ByteString("test-root"))
+    val verifier = MerkleProofVerifier(stateRoot)
+
+    val result = verifier.verifyAccountRange(
+      accounts = Seq.empty,
+      proof = Seq.empty,
+      startHash = ByteString.empty,
+      endHash = ByteString.fromArray(Array.fill(32)(0xff.toByte))
+    )
+
+    result shouldBe a[Left[_, _]]
+    result.left.get should include("Missing proof for empty account range")
+  }
+
+  it should "accept empty proof for empty account list when trie is empty" taggedAs UnitTest in {
+    val stateRoot = ByteString(MerklePatriciaTrie.EmptyRootHash)
     val verifier = MerkleProofVerifier(stateRoot)
 
     val result = verifier.verifyAccountRange(
@@ -30,14 +44,15 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
     result shouldBe Right(())
   }
 
-  it should "accept empty proof for empty account list when trie is empty" taggedAs UnitTest in {
-    val stateRoot = ByteString(MerklePatriciaTrie.EmptyRootHash)
-    val verifier = MerkleProofVerifier(stateRoot)
+  it should "accept proof-only account range as valid proof of absence" taggedAs UnitTest in {
+    val proofNode = LeafNode(ByteString(0x01.toByte), ByteString("value"))
+    val proof = Seq(ByteString(MptTraversals.encodeNode(proofNode)))
+    val verifier = MerkleProofVerifier(ByteString(proofNode.hash))
 
     val result = verifier.verifyAccountRange(
       accounts = Seq.empty,
-      proof = Seq.empty,
-      startHash = ByteString.empty,
+      proof = proof,
+      startHash = ByteString.fromArray(Array.fill(32)(0x7f.toByte)),
       endHash = ByteString.fromArray(Array.fill(32)(0xff.toByte))
     )
 

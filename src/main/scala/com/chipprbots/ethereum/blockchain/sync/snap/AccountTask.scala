@@ -24,7 +24,12 @@ case class AccountTask(
     var pending: Boolean = false,
     var done: Boolean = false,
     var accounts: Seq[(ByteString, Account)] = Seq.empty,
-    var proof: Seq[ByteString] = Seq.empty
+    var proof: Seq[ByteString] = Seq.empty,
+    // Defensive counter against unbounded re-queue loops. Incremented every time the
+    // coordinator re-queues this task on failure or proof-less empty response. When
+    // it crosses MaxRequeuesPerTask the coordinator escalates via PivotStateUnservable
+    // instead of looping forever.
+    var requeueCount: Int = 0
 ) {
 
   /** Check if this task is completed */

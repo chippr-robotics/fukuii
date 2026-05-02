@@ -682,7 +682,7 @@ class AccountRangeCoordinator(
     activeTasks.remove(requestId).foreach { case (task, worker, peer) =>
       markWorkerIdle(worker)
       result match {
-        case Right((accountCount, accounts, _)) =>
+        case Right((accountCount, accounts, proof)) =>
           log.info(
             s"Task completed successfully: $accountCount accounts (responseBytes=${responseBytesTargetFor(peer)})"
           )
@@ -694,26 +694,33 @@ class AccountRangeCoordinator(
           // Reset consecutive timeout counter — peer is responsive
           peerConsecutiveTimeouts.remove(peer.id.value)
 
-          // Reset pivot refresh backoff on receiving real account data
-          if (accountCount > 0) {
+          // Reset pivot refresh backoff on servable-root evidence: real account data or a boundary proof.
+          if (accountCount > 0 || proof.nonEmpty) {
             consecutiveUnproductiveRefreshes = 0
           }
 
-          // Identify contract accounts
-          identifyContractAccounts(accounts)
-
-          // Update task progress before starting async storage.
-          // This sets task.next so re-queuing (if needed) uses the correct start.
-          val isTaskDone = updateTaskProgress(task, accounts)
           task.pending = false
 
           if (accountCount == 0) {
-            // Empty range response: peer's snapshot may not cover this state root.
-            // Apply cooldown so the task goes to a different peer on re-dispatch.
-            recordPeerCooldown(peer, "empty account range — peer snapshot may not cover this root")
-            pendingTasks.enqueue(task)
-            tryRedispatchPendingTasks()
+            if (proof.nonEmpty || task.rootHash == ByteString(MerklePatriciaTrie.EmptyRootHash)) {
+              completeEmptyTaskRange(task, proofNodes = proof.size)
+              tryRedispatchPendingTasks()
+            } else {
+              // Defensive fallback: the verifier should reject this as a stateless-peer signal.
+              recordPeerCooldown(peer, "empty account range without proof — peer snapshot may not cover this root")
+              requeueOrEscalate(task, "empty range without proof")
+            }
           } else {
+            // Real account data → reset requeue budget (transient failures earlier are now resolved).
+            task.requeueCount = 0
+
+            // Identify contract accounts
+            identifyContractAccounts(accounts)
+
+            // Update task progress before starting async storage.
+            // This sets task.next so re-queuing (if needed) uses the correct start.
+            val isTaskDone = updateTaskProgress(task, accounts)
+
             // Update statistics
             val accountBytes = accounts.map { case (hash, _) =>
               hash.size + 32 // Rough estimate
@@ -729,13 +736,13 @@ class AccountRangeCoordinator(
           log.warning(s"Task completed with error: $error")
           // Re-queue task for retry
           task.pending = false
-          pendingTasks.enqueue(task)
+          requeueOrEscalate(task, s"task completed with error: $error")
       }
     }
 
   private def updateTaskProgress(task: AccountTask, accounts: Seq[(ByteString, Account)]): Boolean = {
-    // Empty response: can't distinguish "snapshot not ready for this root" from "range genuinely empty".
-    // Return false so handleTaskComplete re-queues to a different peer with a cooldown.
+    // Empty responses are handled before this method. A no-proof empty response is a peer refusal; a proof-only empty
+    // response is a valid proof that the requested tail is exhausted.
     if (accounts.isEmpty) {
       return false
     }
@@ -798,7 +805,21 @@ class AccountRangeCoordinator(
   private def isMaxHash(hash: ByteString): Boolean =
     hash.length == 32 && hash.forall(b => (b & 0xff) == 0xff)
 
-  private def handleTaskFailed(requestId: BigInt, reason: String): Unit = {
+  private def completeEmptyTaskRange(task: AccountTask, proofNodes: Int): Unit = {
+    val range = task.rangeString
+    consumedKeyspace += task.remainingKeyspace
+    task.next = task.last
+    task.done = true
+    completedTasks += task
+    log.info(
+      s"Account range COMPLETE: $range by empty proof-of-absence " +
+        s"(proofNodes=$proofNodes, ${completedTasks.size}/$concurrency ranges done, $accountsDownloaded accounts total)"
+    )
+    sendProgressSnapshot()
+    self ! CheckCompletion
+  }
+
+  private def handleTaskFailed(requestId: BigInt, reason: String): Unit =
     activeTasks.remove(requestId).foreach { case (task, worker, peer) =>
       markWorkerIdle(worker)
       // Only mark peer stateless if the task was using the CURRENT root.
@@ -815,7 +836,6 @@ class AccountRangeCoordinator(
       log.warning(s"Task failed: $reason")
       task.pending = false
       task.rootHash = stateRoot
-      pendingTasks.enqueue(task)
 
       // Apply cooldown and reduce byte budget for protocol failures; skip for network-level
       // disconnects since the peer is already gone and will reconnect fresh.
@@ -823,9 +843,36 @@ class AccountRangeCoordinator(
         recordPeerCooldown(peer, reason)
         adjustResponseBytesOnFailure(peer, reason)
       }
+
+      requeueOrEscalate(task, reason)
     }
-    // Re-dispatch re-queued tasks to any known available peer that isn't stateless.
-    // Without this, tasks sit in the queue until the next PeerAvailable message arrives.
+
+  /** Re-queue a task or escalate to the controller after too many consecutive requeues.
+    *
+    * The hard cap is the safety net for cases the proximate fixes miss — a task that keeps failing because every peer
+    * is intermittently stateless, or returns malformed responses, or any other yet-unseen mode that would otherwise
+    * loop forever. Escalation surfaces the problem as PivotStateUnservable, which the controller already escalates to
+    * recordCriticalFailure -> fallbackToFastSync after enough refreshes without progress.
+    */
+  private def requeueOrEscalate(task: AccountTask, reason: String): Unit = {
+    task.requeueCount += 1
+    if (task.requeueCount > AccountRangeCoordinator.MaxRequeuesPerTask) {
+      log.error(
+        s"Account task ${task.rangeString} exhausted requeue budget " +
+          s"(${task.requeueCount} > ${AccountRangeCoordinator.MaxRequeuesPerTask}, last reason: $reason). " +
+          s"Escalating PivotStateUnservable to controller; task will be retried on the next root."
+      )
+      // Reset the counter so the next pivot has a fresh budget; preserve task position.
+      task.requeueCount = 0
+      pendingTasks.enqueue(task)
+      snapSyncController ! PivotStateUnservable(
+        rootHash = stateRoot,
+        reason = s"task ${task.rangeString} hit MaxRequeuesPerTask: $reason",
+        consecutiveEmptyResponses = AccountRangeCoordinator.MaxRequeuesPerTask
+      )
+    } else {
+      pendingTasks.enqueue(task)
+    }
     tryRedispatchPendingTasks()
   }
 
@@ -1147,6 +1194,13 @@ class AccountRangeCoordinator(
 }
 
 object AccountRangeCoordinator {
+
+  /** Hard cap on consecutive re-queues for a single account task before the coordinator escalates to the controller via
+    * `PivotStateUnservable`. The cap is high enough that legitimate transient peer churn (cooldowns, network blips)
+    * won't trip it, but low enough that a wedged trailing range can't loop forever.
+    */
+  val MaxRequeuesPerTask: Int = 8
+
   def props(
       stateRoot: ByteString,
       networkPeerManager: ActorRef,
