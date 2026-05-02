@@ -42,6 +42,29 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     config.maxSnapSyncFailures should be > 0
   }
 
+  // Regression for #1162: chain backfill is decoupled from SNAP completion. The new
+  // `chainBackfillConcurrentRequests` budget controls how many in-flight ETH requests background
+  // backfill is allowed once regular sync has taken over. Default must be small (yield to regular sync).
+  it should "default chainBackfillConcurrentRequests to a small value (yield to regular sync)" taggedAs UnitTest in {
+    val config = SNAPSyncConfig()
+    config.chainBackfillConcurrentRequests should be > 0
+    config.chainBackfillConcurrentRequests should be <= config.chainDownloadBoostedConcurrentRequests
+  }
+
+  // Regression for #1162: SNAPSyncController emits a two-phase handshake — SnapSyncFinalized first,
+  // then Done either immediately or later. SnapSyncFinalized must carry the pivot block number
+  // so SyncController has the context it needs when starting regular sync.
+  "SNAPSyncController.SnapSyncFinalized" should "carry the pivot block number" taggedAs UnitTest in {
+    val msg = SNAPSyncController.SnapSyncFinalized(BigInt(12345))
+    msg.pivot shouldBe BigInt(12345)
+  }
+
+  it should "be distinct from Done" taggedAs UnitTest in {
+    val finalized: Any = SNAPSyncController.SnapSyncFinalized(BigInt(0))
+    val done: Any = SNAPSyncController.Done
+    (finalized should not).equal(done)
+  }
+
   "SyncProgress" should "format progress string correctly" taggedAs UnitTest in {
     import SNAPSyncController._
 

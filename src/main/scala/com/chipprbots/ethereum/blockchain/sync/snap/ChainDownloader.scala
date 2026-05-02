@@ -118,6 +118,9 @@ class ChainDownloader(
     case BoostConcurrency(n) =>
       boostConcurrency(n)
 
+    case YieldToRegularSync(n) =>
+      yieldToRegularSync(n)
+
     case GetProgress =>
       sender() ! Progress(headersDownloaded, bodiesDownloaded, receiptsDownloaded, targetBlock)
   }
@@ -158,6 +161,9 @@ class ChainDownloader(
     case BoostConcurrency(n) =>
       boostConcurrency(n)
       dispatchRequests() // Immediately use the new slots
+
+    case YieldToRegularSync(n) =>
+      yieldToRegularSync(n)
 
     case GetProgress =>
       sender() ! Progress(headersDownloaded, bodiesDownloaded, receiptsDownloaded, targetBlock)
@@ -578,6 +584,14 @@ class ChainDownloader(
     scheduleDispatch(200.millis)
   }
 
+  private def yieldToRegularSync(n: Int): Unit = {
+    val prev = maxConcurrentRequests
+    maxConcurrentRequests = n
+    log.info("Chain download yielding to regular sync: {} -> {} concurrent requests (background backfill)", prev, n)
+    // Slow the dispatch tick so backfill doesn't fight regular sync for the actor mailbox or peers.
+    scheduleDispatch(2.seconds)
+  }
+
   private def scheduleDispatch(interval: FiniteDuration = 2.seconds): Unit = {
     dispatchTask.foreach(_.cancel())
     dispatchTask = Some(
@@ -599,6 +613,9 @@ object ChainDownloader {
   case object Stop
   case object Done
   case class BoostConcurrency(maxConcurrent: Int)
+  // Sent when SNAP state is finalised and regular sync is taking over. Backfill drops to a smaller
+  // concurrency budget so it competes politely for peer slots. Mirrors `BoostConcurrency` but downward.
+  case class YieldToRegularSync(maxConcurrent: Int)
   case object GetProgress
   case class Progress(
       headersDownloaded: BigInt,
