@@ -562,8 +562,12 @@ class AccountRangeCoordinator(
       // #1184: always reset the activity timer — we're starting a fresh phase.
       lastDispatchOrResponseMs = System.currentTimeMillis()
 
-      // Resume dispatching with the fresh root
+      // Resume dispatching with the fresh root. tryRedispatchPendingTasks() guards on
+      // pendingTasks.nonEmpty; also fan out explicitly so peers receive work the moment
+      // tasks arrive from in-flight root-mismatch re-queues — matching go-ethereum's
+      // immediate idle-pool restoration after pivot (sync.go revertAccountRequest).
       tryRedispatchPendingTasks()
+      knownAvailablePeers.filterNot(isPeerStateless).foreach(dispatchIfPossible)
 
     case PeerAvailable(peer) =>
       // Evict stale entry for same physical node (reconnection creates new PeerId).
@@ -774,7 +778,11 @@ class AccountRangeCoordinator(
   }
 
   // Cap total workers to activePeerCount * maxInFlightPerPeer — enough to saturate all peers.
-  private def maxWorkers: Int = concurrency * maxInFlightPerPeer
+  // Dynamic: use current SNAP peer count instead of the creation-time concurrency value, so
+  // coordinators started with 1 peer can scale up to 30 workers when 6 peers arrive post-pivot.
+  // go-ethereum assigns to ALL idle peers simultaneously with no coordinator-level cap.
+  private def maxWorkers: Int =
+    math.max(concurrency, knownAvailablePeers.count(!isPeerStateless(_))) * maxInFlightPerPeer
 
   private def createWorker(): ActorRef = {
     val worker = context.actorOf(

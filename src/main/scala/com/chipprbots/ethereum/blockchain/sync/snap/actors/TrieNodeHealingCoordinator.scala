@@ -278,6 +278,29 @@ class TrieNodeHealingCoordinator(
       knownAvailablePeers += peer
       dispatchIfPossible(peer)
 
+    case HealingPeerUnavailable(peerId) =>
+      // Peer disconnected — remove from available set and immediately re-queue its in-flight
+      // tasks so other peers can pick them up without waiting for the 30s request timeout.
+      // Mirrors AccountRangeCoordinator.PeerUnavailable (go-ethereum revertRequests pattern).
+      knownAvailablePeers.filterInPlace(_.id.value != peerId)
+      peerConsecutiveTimeouts.remove(peerId)
+      val inFlight = activeRequests.filter { case (_, req) => req.peer.id.value == peerId }.keys.toSeq
+      if (inFlight.nonEmpty) {
+        log.debug(s"Peer $peerId disconnected — re-queuing ${inFlight.size} in-flight healing request(s)")
+        inFlight.foreach { reqId =>
+          activeRequests.remove(reqId).foreach { req =>
+            requestTracker.completeRequest(reqId, 0)
+            req.tasks.foreach { task =>
+              if (!pendingHashSet.contains(task.hash)) {
+                pendingHashSet += task.hash
+                pendingTasks = pendingTasks :+ task
+              }
+            }
+          }
+        }
+      }
+      tryRedispatchPendingTasks()
+
     case UpdateMaxInFlightPerPeer(newLimit) =>
       log.info(s"Healing per-peer budget: $maxInFlightPerPeer -> $newLimit")
       maxInFlightPerPeer = newLimit

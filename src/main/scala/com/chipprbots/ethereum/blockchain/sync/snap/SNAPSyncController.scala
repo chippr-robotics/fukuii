@@ -163,6 +163,19 @@ class SNAPSyncController(
   private var lastProactivePivotBlock: Option[BigInt] = None
   private val SnapServeWindowBlocks: BigInt = BigInt(100)
 
+  // Pivot readiness probe: before committing a proactive pivot roll, we probe one peer with
+  // the candidate root. Only if the peer's snapshot is indexed (returns ≥1 account) do we
+  // dispatch PivotRefreshed to coordinators. Otherwise we defer and retry every 30s, letting
+  // coordinators keep downloading on the old root. This eliminates the ~8-minute dead window.
+  private var pivotProbeRequestId: Option[BigInt] = None
+  private var proactiveRollNeedsProbe: Boolean = false // flag: stagnation check → completePivotRefresh
+  private var pendingProbeCommit: Option[(BigInt, BlockHeader, String)] = None // deferred commit args
+  private var lastProbeAttemptMs: Long = 0L
+  private val ProbeCooldownMs: Long = 30_000L // match DownloadStagnationCheckInterval
+  private var probeAttemptCount: Int = 0
+  private val MaxProbeAttempts: Int = 5   // 5 × 30s = 150s max deferral before forced roll
+  private val ZeroPeerStagnationMs: Long = 3 * 60 * 1000L  // 3 min zero-peer short-circuit
+
   // Consecutive pivot refresh counter: when all peers are repeatedly stateless after
   // pivot refreshes, it strongly indicates no peer has a snapshot database. Each
   // PivotStateUnservable increments this; any successful account download resets it.
@@ -198,6 +211,7 @@ class SNAPSyncController(
   private case object CheckSnapCapability
   private case object TuneRateTracker
   private case object EvictNonSnapPeers
+  private case class PivotProbeTimeout(requestId: BigInt)
   private var snapCapabilityCheckTask: Option[Cancellable] = None
   private var snapPeerEvictionTask: Option[Cancellable] = None
 
@@ -252,6 +266,9 @@ class SNAPSyncController(
       handlePeerListMessages(msg)
       requestTracker.rateTracker.removePeer(peerId.value)
       accountRangeCoordinator.foreach(_ ! actors.Messages.PeerUnavailable(peerId.value))
+      storageRangeCoordinator.foreach(_ ! actors.Messages.StoragePeerUnavailable(peerId.value))
+      bytecodeCoordinator.foreach(_ ! actors.Messages.ByteCodePeerUnavailable(peerId.value))
+      trieNodeHealingCoordinator.foreach(_ ! actors.Messages.HealingPeerUnavailable(peerId.value))
   }
 
   /** Wrap handlePeerListMessages to also update the PeerRateTracker when peers connect/disconnect. Tracks previous peer
@@ -275,6 +292,9 @@ class SNAPSyncController(
       handlePeerListMessages(msg) // removes from handshakedPeers
       requestTracker.rateTracker.removePeer(peerId.value)
       accountRangeCoordinator.foreach(_ ! actors.Messages.PeerUnavailable(peerId.value))
+      storageRangeCoordinator.foreach(_ ! actors.Messages.StoragePeerUnavailable(peerId.value))
+      bytecodeCoordinator.foreach(_ ! actors.Messages.ByteCodePeerUnavailable(peerId.value))
+      trieNodeHealingCoordinator.foreach(_ ! actors.Messages.HealingPeerUnavailable(peerId.value))
   }
 
   // Storage stagnation watchdog: if storage stops advancing while tasks remain, repivot/restart.
@@ -406,11 +426,49 @@ class SNAPSyncController(
 
     // Handle SNAP protocol responses
     case msg: AccountRange =>
-      log.debug(s"Received AccountRange response: requestId=${msg.requestId}, accounts=${msg.accounts.size}")
-
-      // Forward to the account range coordinator (it owns the workers).
-      // Forwarding only to this actor's direct children is insufficient because workers are children of coordinators.
-      accountRangeCoordinator.foreach(_ ! actors.Messages.AccountRangeResponseMsg(msg))
+      // Intercept pivot readiness probe responses before forwarding to coordinator.
+      pivotProbeRequestId match {
+        case Some(probeId) if msg.requestId == probeId =>
+          pivotProbeRequestId = None
+          if (msg.accounts.nonEmpty) {
+            pendingProbeCommit.foreach { case (block, header, commitReason) =>
+              pendingProbeCommit = None
+              val attemptsNote = if (probeAttemptCount > 0) s" after $probeAttemptCount prior deferral(s)" else ""
+              log.info(
+                s"[PIVOT-PROBE] Snapshot ready at root ${header.stateRoot.take(4).toHex} block $block$attemptsNote — committing roll"
+              )
+              probeAttemptCount = 0
+              completePivotRefreshWithStateRoot(block, header, commitReason)
+            }
+          } else {
+            probeAttemptCount += 1
+            val commitArgs = pendingProbeCommit
+            pendingProbeCommit = None
+            if (probeAttemptCount >= MaxProbeAttempts) {
+              commitArgs.foreach { case (block, header, commitReason) =>
+                val pivotAge = currentNetworkBestFromSnapPeers().map(_ - block).getOrElse(BigInt(-1))
+                log.warning(
+                  s"[PIVOT-PROBE] Max deferral reached ($MaxProbeAttempts/$MaxProbeAttempts attempts) — " +
+                    s"forcing roll at root ${header.stateRoot.take(4).toHex} block $block (pivotAge≈$pivotAge). " +
+                    s"Snapshot readiness unconfirmed — brief post-roll window may occur."
+                )
+                probeAttemptCount = 0
+                completePivotRefreshWithStateRoot(block, header, s"$commitReason (forced — max probe attempts)")
+              }
+            } else {
+              log.info(
+                s"[PIVOT-PROBE] Snapshot not indexed yet " +
+                  s"(attempt $probeAttemptCount/$MaxProbeAttempts) — " +
+                  s"deferring roll, coordinators unaffected (retry in ${ProbeCooldownMs / 1000}s)"
+              )
+              // lastProbeAttemptMs stays set; next stagnation tick after cooldown will re-probe
+            }
+          }
+        case _ =>
+          log.debug(s"Received AccountRange response: requestId=${msg.requestId}, accounts=${msg.accounts.size}")
+          // Forward to the account range coordinator (it owns the workers).
+          accountRangeCoordinator.foreach(_ ! actors.Messages.AccountRangeResponseMsg(msg))
+      }
 
     case msg: ByteCodes =>
       log.debug(s"Received ByteCodes response: requestId=${msg.requestId}, codes=${msg.codes.size}")
@@ -586,6 +644,33 @@ class SNAPSyncController(
       pivotBootstrapRetryTask = Some(
         scheduler.scheduleOnce(60.seconds, self, RetryPivotRefresh)(context.dispatcher, self)
       )
+
+
+    case PivotProbeTimeout(requestId) =>
+      if (pivotProbeRequestId.contains(requestId)) {
+        probeAttemptCount += 1
+        val commitArgs = pendingProbeCommit
+        pivotProbeRequestId = None
+        pendingProbeCommit = None
+        if (probeAttemptCount >= MaxProbeAttempts) {
+          commitArgs.foreach { case (block, header, commitReason) =>
+            log.warning(
+              s"[PIVOT-PROBE] Max deferral reached after timeout ($MaxProbeAttempts/$MaxProbeAttempts) — " +
+                s"forcing roll at root ${header.stateRoot.take(4).toHex} block $block. " +
+                s"Snapshot readiness unconfirmed — brief post-roll window may occur."
+            )
+            probeAttemptCount = 0
+            completePivotRefreshWithStateRoot(block, header, s"$commitReason (forced — max probe attempts)")
+          }
+        } else {
+          log.info(
+            s"[PIVOT-PROBE] Probe timed out (attempt $probeAttemptCount/$MaxProbeAttempts) — " +
+              s"no response from probe peer, deferring roll (retry in ${ProbeCooldownMs / 1000}s)"
+          )
+          // lastProbeAttemptMs stays set — ProbeCooldownMs enforces a 30s minimum before next retry
+        }
+      }
+
 
     case RetryPivotRefresh =>
       pivotBootstrapRetryTask = None
@@ -2394,16 +2479,38 @@ class SNAPSyncController(
       ) {
         currentNetworkBestFromSnapPeers().foreach { networkBest =>
           val pivotAge = networkBest - pivotBlock.get
-          val recentlyRolled = lastProactivePivotBlock.exists(last => (networkBest - last) <= BigInt(32))
-          if (pivotAge > SnapServeWindowBlocks && !recentlyRolled) {
-            log.info(
-              s"[PIVOT-ROLL] Proactive pivot roll: pivot=${pivotBlock.get} network=$networkBest " +
-                s"age=$pivotAge blocks (>$SnapServeWindowBlocks) — refreshing to keep core-geth snapshot window covering pivot"
-            )
-            lastProactivePivotBlock = Some(networkBest)
-            refreshPivotInPlace("proactive pivot roll — pivot aged beyond core-geth snapshot window")
+          val recentlyRolled = lastProactivePivotBlock.exists(last => (networkBest - last) <= BigInt(50))
+          if (pivotAge > SnapServeWindowBlocks && !recentlyRolled && pivotProbeRequestId.isEmpty) {
+            val now = System.currentTimeMillis
+            if (now - lastProbeAttemptMs >= ProbeCooldownMs) {
+              // Mark that this refresh needs a readiness probe before notifying coordinators.
+              // The probe itself fires inside completePivotRefreshWithStateRoot() once the
+              // header is in hand (either from local storage or peer bootstrap).
+              log.info(
+                s"[PIVOT-ROLL] Proactive pivot roll: pivot=${pivotBlock.get} " +
+                  s"network=$networkBest age=$pivotAge — readiness probe will fire after header fetch"
+              )
+              proactiveRollNeedsProbe = true
+              probeAttemptCount = 0   // fresh probe cycle for this roll
+              lastProbeAttemptMs = now
+              refreshPivotInPlace("proactive pivot roll")
+            }
           }
         }
+      }
+
+      // Short-circuit: if account sync has zero SNAP peers for >3 min, restart immediately
+      // rather than waiting for the full stagnation timeout (~10 min).
+      val snapPeerCount = peersToDownloadFrom.values.count(_.peerInfo.remoteStatus.supportsSnap)
+      val totalPeerCount = peersToDownloadFrom.size
+      val stagnantMs = System.currentTimeMillis() - lastAccountProgressMs
+      if (currentPhase == AccountRangeSync && snapPeerCount == 0 && stagnantMs > ZeroPeerStagnationMs) {
+        log.warning(
+          s"[STAGNATION] Zero SNAP peers for ${stagnantMs / 1000}s during account sync " +
+            s"($totalPeerCount total peers, $snapPeerCount snap-capable) — restarting early " +
+            s"(threshold ${ZeroPeerStagnationMs / 1000}s)"
+        )
+        restartSnapSync("account sync stalled — no SNAP peers")
       }
 
       currentPhase match {
@@ -2642,6 +2749,26 @@ class SNAPSyncController(
         }
       }
     }
+
+  /** Select the best probe target peer for pivot readiness probing.
+    *
+    * Prefers snap-server-peers (configured local clients — Besu, core-geth) because they have archive state and
+    * minimal latency, making them the most reliable probe targets. Falls back to the highest-block SNAP-capable
+    * external peer when no snap-server-peer is connected.
+    */
+  private def bestSnapProbeTarget() = {
+    val snapServerNodeIds = snapSyncConfig.snapServerPeers.flatMap { uri =>
+      Try(ByteString(Hex.decode(uri.getUserInfo))).toOption
+    }.toSet
+    val localPeer =
+      if (snapServerNodeIds.nonEmpty)
+        handshakedPeers.values
+          .find(p => p.peerInfo.remoteStatus.supportsSnap && p.peer.nodeId.exists(snapServerNodeIds.contains))
+          .map(p => (p, "snap-server-peer"))
+      else
+        None
+    localPeer.orElse(getSnapPeerWithHighestBlock.map(p => (p, "external")))
+  }
 
   /** Reconnect to any configured snap-server-peers that are not currently connected.
     *
@@ -2883,6 +3010,47 @@ class SNAPSyncController(
       return
     }
 
+    // Pivot readiness probe: for proactive rolls, verify the new root is indexed on at least
+    // one peer before notifying coordinators. Coordinators continue on the old root uninterrupted
+    // until probe confirms readiness — eliminating the ~8-minute dead window.
+    var deferForProbe = false
+    if (proactiveRollNeedsProbe) {
+      proactiveRollNeedsProbe = false
+      val snapPeerOpt = bestSnapProbeTarget()
+      val totalSnapPeers = peersToDownloadFrom.values.count(_.peerInfo.remoteStatus.supportsSnap)
+      snapPeerOpt match {
+        case Some((peerWithInfo, peerKind)) =>
+          import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+          import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetAccountRange.GetAccountRangeEnc
+          val probeId = requestTracker.generateRequestId()
+          val probe = GetAccountRange(
+            requestId = probeId,
+            rootHash = newStateRoot,
+            startingHash = ByteString(Array.fill[Byte](32)(0)),
+            limitHash = ByteString(Array.fill[Byte](32)(0xff.toByte)),
+            responseBytes = 1024
+          )
+          networkPeerManager ! NetworkPeerManagerActor.SendMessage(new GetAccountRangeEnc(probe), peerWithInfo.peer.id)
+          pivotProbeRequestId = Some(probeId)
+          pendingProbeCommit = Some((newPivotBlock, newPivotHeader, reason))
+          context.system.scheduler.scheduleOnce(15.seconds, self, PivotProbeTimeout(probeId))(context.dispatcher, self)
+          log.info(
+            s"[PIVOT-PROBE] Probing $peerKind ${peerWithInfo.peer.id.value} " +
+              s"($totalSnapPeers snap peers available) " +
+              s"for root ${newStateRoot.take(4).toHex} block $newPivotBlock " +
+              s"pivot=${pivotBlock.getOrElse(0)} — deferring coordinator notification"
+          )
+          deferForProbe = true
+        case None =>
+          log.info(
+            s"[PIVOT-PROBE] No SNAP peers available for readiness probe ($totalSnapPeers total) " +
+              s"— committing proactive roll immediately at root ${newStateRoot.take(4).toHex}"
+          )
+      }
+    }
+    if (deferForProbe) return
+
+
     log.info(s"Pivot refreshed: block $oldPivot -> $newPivotBlock, root $oldRoot -> $newRoot")
 
     // Update internal state
@@ -2893,7 +3061,7 @@ class SNAPSyncController(
     // phase gate above is the primary defense; this is defense-in-depth for
     // any code path that mutates pivot/root from a different phase.
     validationGeneration += 1
-    lastProactivePivotBlock = pivotBlock // record completed roll so proactive check doesn't immediately re-fire
+    lastProactivePivotBlock = pivotBlock.map(_ + 64) // approximate networkBest at roll time; pivotBlock = networkBest-64
     // Note: mptStorage stays the same — content-addressed nodes don't need re-tagging.
     // The backing storage was already created for the original pivot block number,
     // but since nodes are keyed by hash, they're valid for any root.
@@ -2944,6 +3112,11 @@ class SNAPSyncController(
 
     // Clear any pending pivot refresh (we're doing a full restart instead)
     pendingPivotRefresh = None
+    pivotProbeRequestId = None
+    pendingProbeCommit = None
+    proactiveRollNeedsProbe = false
+    probeAttemptCount = 0
+    lastProbeAttemptMs = 0L
 
     // NOTE: do NOT reset consecutivePivotRefreshes here. restartSnapSync is often called
     // from refreshPivotInPlace when no new pivot is available, which means the counter would
