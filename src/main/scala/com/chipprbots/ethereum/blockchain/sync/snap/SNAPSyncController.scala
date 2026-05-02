@@ -28,11 +28,20 @@ class SNAPSyncController(
     val peerEventBus: ActorRef,
     val syncConfig: SyncConfig,
     snapSyncConfig: SNAPSyncConfig,
-    val scheduler: Scheduler
+    val scheduler: Scheduler,
+    // Factory for `StateValidator` so unit tests can inject a fake. Production
+    // default is a thin `new StateValidator(_)` wrapper; tests can supply a
+    // `FakeStateValidator` that returns canned results, delays, or throws.
+    validatorFactory: MptStorage => StateValidator = new StateValidator(_)
 )(implicit ec: ExecutionContext)
     extends Actor
     with ActorLogging
     with PeerListSupportNg {
+
+  // Dedicated dispatcher for the long-running synchronous trie walks inside
+  // `validateState()`. See `pekko.conf` for the rationale.
+  private val snapValidationEc: ExecutionContext =
+    context.system.dispatchers.lookup("snap-validation-dispatcher")
 
   import SNAPSyncController._
 
@@ -96,6 +105,17 @@ class SNAPSyncController(
   private var validationRetryCount: Int = 0
   private val MaxValidationRetries = 3
   private val ValidationRetryDelay = 500.millis
+
+  // Async validation state. `validationInProgress` is the re-entrance guard
+  // for the trie-walk Future. `validationGeneration` is bumped at every
+  // (a) fresh validation spawn, (b) `restartSnapSync`, and (c) post-pivot
+  // mutation in `completePivotRefreshWithStateRoot`, so a long-running Future's
+  // result that arrives after such a transition is dropped on the floor rather
+  // than being applied against the wrong root. Both result-message handlers
+  // and the scheduled `ValidationRetry` carry the generation they were
+  // spawned/scheduled at and only honour matching values.
+  private var validationInProgress: Boolean = false
+  private var validationGeneration: Long = 0L
 
   // Retry counter for bootstrap-to-SNAP transition (exponential backoff: 2s→60s cap, max 10 retries)
   private var bootstrapRetryCount: Int = 0
@@ -311,7 +331,12 @@ class SNAPSyncController(
       requestStorageRanges()
 
     case RequestTrieNodeHealing =>
-      requestTrieNodeHealing()
+      // The 1-s scheduler keeps emitting these even after we transition out of
+      // healing. Once validation is async, these can fire concurrently with
+      // the validation Future and would feed a coordinator that's supposed to
+      // be quiescent. The phase gate is defensive; we also cancel the
+      // scheduler explicitly in `validateState()` callers.
+      if (currentPhase == StateHealing) requestTrieNodeHealing()
 
     case EnsureSnapServerPeersConnected =>
       ensureSnapServerPeersConnected()
@@ -340,7 +365,11 @@ class SNAPSyncController(
       log.debug(s"Received TrieNodes response: requestId=${msg.requestId}, nodes=${msg.nodes.size}")
 
       // Forward to the trie node healing coordinator (it owns the workers).
-      trieNodeHealingCoordinator.foreach(_ ! actors.Messages.TrieNodesResponseMsg(msg))
+      // Don't forward during validation — the healing coordinator has already
+      // signalled complete and any responses still arriving from peers are
+      // late chatter that must not race with the validation walk.
+      if (currentPhase != StateValidation)
+        trieNodeHealingCoordinator.foreach(_ ! actors.Messages.TrieNodesResponseMsg(msg))
 
     case ProgressAccountsSynced(count) =>
       progressMonitor.incrementAccountsSynced(count)
@@ -648,6 +677,11 @@ class SNAPSyncController(
         healingRoundCount = 0
         pivotBlock.foreach(b => appStateStorage.putSnapSyncPivotBlock(b).commit())
         stateRoot.foreach(r => appStateStorage.putSnapSyncStateRoot(r).commit())
+        // Stop the periodic healing-request scheduler before entering validation.
+        // It would otherwise keep firing 1-s ticks against a coordinator that's
+        // signalled complete; the phase gate on RequestTrieNodeHealing handles
+        // any tick already in the mailbox.
+        healingRequestTask.foreach(_.cancel()); healingRequestTask = None
         progressMonitor.startPhase(StateValidation)
         currentPhase = StateValidation
         validateState()
@@ -671,6 +705,9 @@ class SNAPSyncController(
         // AppStateStorage now reflects the root that healing actually completed against.
         for (b <- pivotBlock; r <- stateRoot)
           appStateStorage.putSnapSyncPivotBlock(b).and(appStateStorage.putSnapSyncStateRoot(r)).commit()
+        // Stop the periodic healing-request scheduler before entering validation.
+        // See companion handler above for rationale.
+        healingRequestTask.foreach(_.cancel()); healingRequestTask = None
         progressMonitor.startPhase(StateValidation)
         currentPhase = StateValidation
         validateState()
@@ -700,6 +737,99 @@ class SNAPSyncController(
     case StateValidationComplete =>
       log.info("State validation complete. SNAP sync finished!")
       completeSnapSync()
+
+    // Stale-generation drop. Anything that bumps `validationGeneration`
+    // (restartSnapSync, completePivotRefreshWithStateRoot, fresh validateState
+    // spawn) means an in-flight Future's result is no longer applicable —
+    // ignore quietly without mutating state.
+    case ValidateAccountTrieResult(gen, _, _) if gen != validationGeneration =>
+      log.debug(s"Dropping stale ValidateAccountTrieResult (gen=$gen, current=$validationGeneration)")
+
+    case ValidateStorageTriesResult(gen, _, _) if gen != validationGeneration =>
+      log.debug(s"Dropping stale ValidateStorageTriesResult (gen=$gen, current=$validationGeneration)")
+
+    case ValidationRetry(retryGen) if retryGen != validationGeneration =>
+      log.debug(s"Dropping stale ValidationRetry (gen=$retryGen, current=$validationGeneration)")
+
+    // Account trie validation result handlers. All gated on phase + generation
+    // match. Any state mutation lives only in these handlers (never inside the
+    // Future).
+    case ValidateAccountTrieResult(_, Right(missing), elapsedMs) if currentPhase == StateValidation =>
+      if (missing.isEmpty) {
+        log.info(s"Account trie validation successful - no missing nodes (${elapsedMs}ms)")
+        validationRetryCount = 0
+        // Spawn the storage pass on the same generation; result handlers below.
+        for (root <- stateRoot; pivot <- pivotBlock)
+          spawnStorageValidation(validationGeneration, root, pivot)
+      } else {
+        log.warning(
+          s"Account trie validation found ${missing.size} missing nodes — triggering healing"
+        )
+        validationInProgress = false
+        triggerHealingForMissingNodes(missing)
+      }
+
+    case ValidateAccountTrieResult(_, Left(error), _) if currentPhase == StateValidation =>
+      log.error(s"Account trie validation failed: $error")
+      if (error.contains("Missing root node")) {
+        validationRetryCount += 1
+        // Clear the in-progress flag *before* scheduling the retry. If we left
+        // it set, ValidationRetry would refuse to spawn and the path
+        // deadlocks silently. The retry handler kicks `validateState()` which
+        // bumps the generation again and sets the flag fresh.
+        validationInProgress = false
+        if (validationRetryCount > MaxValidationRetries) {
+          val retryMsg = s"root node missing after $validationRetryCount validation retries"
+          if (recordCriticalFailure(retryMsg)) {
+            log.error("Too many critical SNAP failures — falling back to fast sync")
+            fallbackToFastSync()
+          } else {
+            log.warning(
+              s"Root node missing after $validationRetryCount validation attempts. " +
+                "Restarting SNAP sync with a fresh pivot to rebuild the state trie."
+            )
+            validationRetryCount = 0
+            restartSnapSync(retryMsg)
+          }
+        } else {
+          log.error(s"Root node is missing (retry attempt $validationRetryCount of $MaxValidationRetries)")
+          val gen = validationGeneration
+          // Schedule on context.dispatcher (the actor's own scheduler), not
+          // snapValidationEc — the retry message is cheap and shouldn't be
+          // tied to the long-running pool's lifecycle.
+          scheduler.scheduleOnce(ValidationRetryDelay, self, ValidationRetry(gen))(context.dispatcher)
+        }
+      } else {
+        log.error("Recovering through healing phase")
+        validationInProgress = false
+        currentPhase = StateHealing
+        startStateHealing()
+      }
+
+    // Storage trie validation result handlers.
+    case ValidateStorageTriesResult(_, Right(missing), elapsedMs) if currentPhase == StateValidation =>
+      validationInProgress = false
+      if (missing.isEmpty) {
+        log.info(s"Storage trie validation successful - no missing nodes (${elapsedMs}ms)")
+        log.info("✅ State validation COMPLETE - all tries are intact")
+        self ! StateValidationComplete
+      } else {
+        log.warning(
+          s"Storage trie validation found ${missing.size} missing nodes — triggering healing"
+        )
+        triggerHealingForMissingNodes(missing)
+      }
+
+    case ValidateStorageTriesResult(_, Left(error), _) if currentPhase == StateValidation =>
+      log.error(s"Storage trie validation failed: $error. Recovering through healing phase")
+      validationInProgress = false
+      currentPhase = StateHealing
+      startStateHealing()
+
+    case ValidationRetry(_) if currentPhase == StateValidation =>
+      // Generation was already verified above by the stale-drop handler.
+      // `validateState()` bumps the generation again and spawns a fresh pass.
+      validateState()
 
     // Chain download runs in parallel — track progress and completion
     case ChainDownloader.Progress(h, b, r, t) =>
@@ -2100,6 +2230,21 @@ class SNAPSyncController(
   private case class TrieWalkBatch(missingNodes: Seq[(Seq[ByteString], ByteString)])
   private case class TrieWalkComplete(totalFound: Int)
   private case class TrieWalkFailed(error: String)
+
+  // Async validation messages. `generation` is captured at Future-spawn time
+  // (or schedule time, for ValidationRetry) and matched against
+  // `validationGeneration` in the handler — stale results are dropped.
+  private case class ValidateAccountTrieResult(
+      generation: Long,
+      result: Either[String, Seq[ByteString]],
+      elapsedMs: Long
+  )
+  private case class ValidateStorageTriesResult(
+      generation: Long,
+      result: Either[String, Seq[ByteString]],
+      elapsedMs: Long
+  )
+  private case class ValidationRetry(generation: Long)
   private case object ScheduledTrieWalk
 
   /** Start an async trie walk to discover missing nodes. Guards against concurrent walks. Uses streaming to emit
@@ -2303,103 +2448,66 @@ class SNAPSyncController(
     }
   }
 
+  /** Spawn the account-trie validation walk on the dedicated dispatcher.
+    *
+    * Async: results come back as `ValidateAccountTrieResult(generation, ...)` self-messages so the actor mailbox stays
+    * responsive during the multi-minute walk. `onComplete` (not `.foreach`) ensures every Future outcome — including a
+    * throw inside `validatorFactory(storage)` — produces a message; otherwise the in-progress flag could stick.
+    */
+  private def spawnAccountValidation(generation: Long, expectedRoot: ByteString, pivot: BigInt): Unit = {
+    val storage = getOrCreateMptStorage(pivot)
+    val selfRef = self
+    val start = System.currentTimeMillis()
+    scala.concurrent
+      .Future {
+        val v = validatorFactory(storage)
+        (v.validateAccountTrie(expectedRoot), System.currentTimeMillis() - start)
+      }(snapValidationEc)
+      .onComplete {
+        case scala.util.Success((result, elapsed)) =>
+          selfRef ! ValidateAccountTrieResult(generation, result, elapsed)
+        case scala.util.Failure(e) =>
+          selfRef ! ValidateAccountTrieResult(generation, Left(e.getMessage), -1L)
+      }(snapValidationEc)
+  }
+
+  private def spawnStorageValidation(generation: Long, expectedRoot: ByteString, pivot: BigInt): Unit = {
+    val storage = getOrCreateMptStorage(pivot)
+    val selfRef = self
+    val start = System.currentTimeMillis()
+    scala.concurrent
+      .Future {
+        val v = validatorFactory(storage)
+        (v.validateAllStorageTries(expectedRoot), System.currentTimeMillis() - start)
+      }(snapValidationEc)
+      .onComplete {
+        case scala.util.Success((result, elapsed)) =>
+          selfRef ! ValidateStorageTriesResult(generation, result, elapsed)
+        case scala.util.Failure(e) =>
+          selfRef ! ValidateStorageTriesResult(generation, Left(e.getMessage), -1L)
+      }(snapValidationEc)
+  }
+
   private def validateState(): Unit = {
     if (!snapSyncConfig.stateValidationEnabled) {
       log.info("State validation disabled, skipping...")
       self ! StateValidationComplete
       return
     }
-
-    log.info("Validating state completeness...")
-
+    if (validationInProgress) {
+      log.info("validateState called while validation is already in progress; ignoring")
+      return
+    }
     (stateRoot, pivotBlock) match {
       case (Some(expectedRoot), Some(pivot)) =>
-        log.info(s"Validating state against expected root: ${expectedRoot.take(8).toHex}...")
-
-        // With actor-based coordination, state is persisted directly to MPT storage
-        // No need for finalization - just validate what's in storage
-        val storage = getOrCreateMptStorage(pivot)
-        val validator = new StateValidator(storage)
-
-        val validationStartMs = System.currentTimeMillis()
-
-        // Validate account trie and collect missing nodes
-        validator.validateAccountTrie(expectedRoot) match {
-          case Right(missingAccountNodes) if missingAccountNodes.isEmpty =>
-            val elapsedMs = System.currentTimeMillis() - validationStartMs
-            log.info(s"Account trie validation successful - no missing nodes (${elapsedMs}ms)")
-
-            // Reset validation retry counter on success
-            validationRetryCount = 0
-
-            // Now validate storage tries
-            validator.validateAllStorageTries(expectedRoot) match {
-              case Right(missingStorageNodes) if missingStorageNodes.isEmpty =>
-                val totalMs = System.currentTimeMillis() - validationStartMs
-                log.info(s"Storage trie validation successful - no missing nodes (${totalMs}ms)")
-                log.info("✅ State validation COMPLETE - all tries are intact")
-                self ! StateValidationComplete
-
-              case Right(missingStorageNodes) =>
-                log.warning(s"Storage trie validation found ${missingStorageNodes.size} missing nodes")
-                log.info("Triggering additional healing iteration for missing storage nodes...")
-                triggerHealingForMissingNodes(missingStorageNodes)
-
-              case Left(error) =>
-                log.error(s"Storage trie validation failed: $error")
-                log.error("Attempting to recover through healing phase")
-                // Transition back to healing to attempt recovery
-                currentPhase = StateHealing
-                startStateHealing()
-            }
-
-          case Right(missingAccountNodes) =>
-            log.warning(s"Account trie validation found ${missingAccountNodes.size} missing nodes")
-            log.info("Triggering additional healing iteration for missing account nodes...")
-            triggerHealingForMissingNodes(missingAccountNodes)
-
-          case Left(error) =>
-            log.error(s"Account trie validation failed: $error")
-
-            // Check if this is a root node missing error
-            if (error.contains("Missing root node")) {
-              validationRetryCount += 1
-
-              if (validationRetryCount > MaxValidationRetries) {
-                // Root node still missing after all retries — state trie is incomplete.
-                // RegularSync cannot recover this: eth/68 peers don't serve GetNodeData, and
-                // local Besu uses BONSAI storage (state diffs, not hash-keyed trie nodes).
-                // Restart SNAP with a fresh pivot rather than handing broken state to RegularSync.
-                val retryMsg = s"root node missing after $validationRetryCount validation retries"
-                if (recordCriticalFailure(retryMsg)) {
-                  log.error("Too many critical SNAP failures — falling back to fast sync")
-                  fallbackToFastSync()
-                } else {
-                  log.warning(
-                    s"Root node missing after $validationRetryCount validation attempts. " +
-                      s"Restarting SNAP sync with a fresh pivot to rebuild the state trie."
-                  )
-                  validationRetryCount = 0
-                  restartSnapSync(retryMsg)
-                }
-              } else {
-                log.error(s"Root node is missing (retry attempt $validationRetryCount of $MaxValidationRetries)")
-                log.info("Retrying validation after brief delay...")
-                // Retry validation after a short delay — direct retry, don't loop through healing
-                scheduler.scheduleOnce(ValidationRetryDelay) {
-                  validateState()
-                }(ec)
-              }
-            } else {
-              log.error("Attempting to recover through healing phase")
-              currentPhase = StateHealing
-              startStateHealing()
-            }
-        }
-
+        validationInProgress = true
+        validationGeneration += 1
+        val gen = validationGeneration
+        log.info(s"Validating state against expected root: ${expectedRoot.take(8).toHex} (gen=$gen)")
+        spawnAccountValidation(gen, expectedRoot, pivot)
       case _ =>
-        log.error("Missing state root or pivot block for validation")
-        log.error("Sync cannot complete - missing state root or pivot block")
+        log.error("Missing state root or pivot block for validation — cannot complete sync")
+        validationInProgress = false
     }
   }
 
@@ -2504,6 +2612,20 @@ class SNAPSyncController(
       newPivotHeader: BlockHeader,
       reason: String
   ): Unit = {
+    // Async-validation safety: if a validation Future is in flight, the new
+    // pivot would invalidate its assumptions about (root, pivot). Refuse the
+    // refresh during StateValidation; the validation will run to completion
+    // against the original root and the controller will re-enter healing if
+    // needed. (PivotStateUnservable normally only fires in earlier phases, but
+    // a stray BootstrapComplete from a slow peer can still arrive here.)
+    if (currentPhase == StateValidation) {
+      log.info(
+        s"Ignoring pivot refresh during StateValidation: $reason " +
+          s"(would mutate root from ${stateRoot.map(_.take(4).toHex).getOrElse("none")} to ${newPivotHeader.stateRoot.take(4).toHex})"
+      )
+      return
+    }
+
     val newStateRoot = newPivotHeader.stateRoot
     val oldPivot = pivotBlock.getOrElse(BigInt(0))
     val oldRoot = stateRoot.map(_.take(4).toHex).getOrElse("none")
@@ -2520,6 +2642,11 @@ class SNAPSyncController(
     // Update internal state
     pivotBlock = Some(newPivotBlock)
     stateRoot = Some(newStateRoot)
+    // Bump validationGeneration so any in-flight validation Future's result
+    // is dropped on arrival rather than applied against the stale root. The
+    // phase gate above is the primary defense; this is defense-in-depth for
+    // any code path that mutates pivot/root from a different phase.
+    validationGeneration += 1
     lastProactivePivotBlock = pivotBlock // record completed roll so proactive check doesn't immediately re-fire
     // Note: mptStorage stays the same — content-addressed nodes don't need re-tagging.
     // The backing storage was already created for the original pivot block number,
@@ -2614,6 +2741,11 @@ class SNAPSyncController(
     mptStorage = None
     currentPhase = Idle
     coordinatorGeneration += 1
+    // Bump validation generation so any in-flight validation Future's result
+    // is dropped on arrival. Also clear the in-progress flag — the new sync
+    // attempt starts from scratch, no validation is active.
+    validationGeneration += 1
+    validationInProgress = false
 
     // Reset progress counters so logs/ETA reflect the new attempt
     progressMonitor.reset()
@@ -3088,7 +3220,8 @@ object SNAPSyncController {
       peerEventBus: ActorRef,
       syncConfig: SyncConfig,
       snapSyncConfig: SNAPSyncConfig,
-      scheduler: Scheduler
+      scheduler: Scheduler,
+      validatorFactory: MptStorage => StateValidator = new StateValidator(_)
   )(implicit ec: ExecutionContext): Props =
     Props(
       new SNAPSyncController(
@@ -3102,7 +3235,8 @@ object SNAPSyncController {
         peerEventBus,
         syncConfig,
         snapSyncConfig,
-        scheduler
+        scheduler,
+        validatorFactory
       )
     )
 }
