@@ -107,6 +107,13 @@ object Messages {
   case object ByteCodeGetProgress extends ByteCodeCoordinatorMessage
   case object ByteCodeCheckCompletion extends ByteCodeCoordinatorMessage
 
+  /** Sent by SNAPSyncController when bytecode sync has stagnated and must be force-completed (#1164). Coordinator
+    * abandons remaining pending/active tasks (with an accounting counter), drains the queue, and reports
+    * `ByteCodeSyncComplete`. Mirrors `ForceCompleteStorage`. Missing bytecodes can be recovered post-SNAP via
+    * `BytecodeRecoveryActor`.
+    */
+  case object ForceCompleteByteCodes extends ByteCodeCoordinatorMessage
+
   sealed trait ByteCodeWorkerMessage
   case class FetchByteCodes(task: ByteCodeTask, peer: Peer) extends ByteCodeWorkerMessage
   case class ByteCodeWorkerFetchTask(task: ByteCodeTask, peer: Peer, requestId: BigInt, maxResponseSize: BigInt)
