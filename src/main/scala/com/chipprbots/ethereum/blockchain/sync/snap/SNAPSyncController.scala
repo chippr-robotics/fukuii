@@ -216,7 +216,15 @@ class SNAPSyncController(
   }
 
   override def postStop(): Unit = {
-    // Cancel all scheduled tasks
+    stopSnapOnlySchedules()
+    log.info("SNAP Sync Controller stopped")
+  }
+
+  /** Cancel every SNAP-only scheduled task. Idempotent — Cancellables tolerate double-cancel. Called both at the
+    * lifecycle transition into `completedWithBackfill` (so eviction/tickers don't keep running while regular sync owns
+    * the peer pool) and at `postStop()`.
+    */
+  private def stopSnapOnlySchedules(): Unit = {
     accountRangeRequestTask.foreach(_.cancel())
     bytecodeRequestTask.foreach(_.cancel())
     storageRangeRequestTask.foreach(_.cancel())
@@ -229,8 +237,24 @@ class SNAPSyncController(
     snapPeerEvictionTask.foreach(_.cancel())
     rateTrackerTuneTask.foreach(_.cancel())
     progressMonitor.stopPeriodicLogging()
+  }
 
-    log.info("SNAP Sync Controller stopped")
+  /** Stop the SNAP state-sync child coordinators (account/bytecode/storage/healing) and clear their references. They do
+    * not self-stop on completion, so when `SNAPSyncController` is kept alive past `finalizeSnapSync()` for background
+    * chain backfill (#1162), failing to stop them retains completed task buffers, worker actors, and rate trackers for
+    * the entire backfill window. The previous `PoisonPill` to the parent used to clean these up implicitly.
+    *
+    * `chainDownloader` is NOT stopped here — it keeps running in `completedWithBackfill`.
+    */
+  private def stopStateSyncChildren(): Unit = {
+    accountRangeCoordinator.foreach(context.stop)
+    accountRangeCoordinator = None
+    bytecodeCoordinator.foreach(context.stop)
+    bytecodeCoordinator = None
+    storageRangeCoordinator.foreach(context.stop)
+    storageRangeCoordinator = None
+    trieNodeHealingCoordinator.foreach(context.stop)
+    trieNodeHealingCoordinator = None
   }
 
   override def receive: Receive = idle
@@ -2461,38 +2485,24 @@ class SNAPSyncController(
     refreshPivotInPlace(s"account stall: $context")
   }
 
+  /** State sync + healing + validation finished — anchor the pivot and hand off to regular sync immediately.
+    *
+    * Historical chain backfill (genesis → pivot) is decoupled: we do not block here waiting for it. Instead,
+    * `finalizeSnapSync()` emits `SnapSyncFinalized(pivot)` to the parent (which starts RegularSync) and either:
+    *   - emits `Done` immediately if backfill is disabled or already complete, or
+    *   - keeps the controller alive in `completedWithBackfill` so it can forward `ChainDownloader.Progress` /
+    *     `ChainDownloader.Done` to the parent without blocking forward sync.
+    *
+    * Closes #1162.
+    */
   private def completeSnapSync(): Unit =
-    pivotBlock.foreach { pivot =>
-      if (snapSyncConfig.deferredMerkleization) {
-        // With deferred merkleization, don't wait for chain download to finish.
-        // Downloading 24M+ block headers/bodies/receipts from genesis takes days and
-        // blocks the node from syncing new blocks. Regular sync will handle chain data
-        // from the pivot forward. Historical chain data can be backfilled later.
-        log.info(
-          "Deferred merkleization enabled — skipping chain download wait. " +
-            "Finalizing SNAP sync immediately to start regular sync from pivot."
-        )
-        // Stop the chain downloader — regular sync handles blocks from pivot onward
-        chainDownloader.foreach(context.stop)
-        chainDownloader = None
-        finalizeSnapSync(pivot)
-      } else if (!chainDownloadComplete && chainDownloader.isDefined) {
-        // Chain download is still running — boost its concurrency and wait
-        log.info("SNAP state sync complete, boosting chain download concurrency and waiting for completion...")
-        chainDownloader.foreach(
-          _ ! ChainDownloader.BoostConcurrency(
-            snapSyncConfig.chainDownloadBoostedConcurrentRequests
-          )
-        )
-        currentPhase = ChainDownloadCompletion
-        progressMonitor.startPhase(ChainDownloadCompletion)
-        context.become(waitingForChainDownload)
-      } else {
-        finalizeSnapSync(pivot)
-      }
-    }
+    pivotBlock.foreach(finalizeSnapSync)
 
-  /** Final SNAP sync completion — called when both state sync and chain download are done. */
+  /** Anchor the pivot, mark SNAP state done, and hand off to the parent. Always emits `SnapSyncFinalized(pivot)`. Emits
+    * `Done` either immediately (no backfill in flight) or later from `completedWithBackfill` after
+    * `ChainDownloader.Done` arrives. SNAP-only schedules are cancelled before the handoff so eviction tickers and
+    * stagnation checks don't keep firing while regular sync owns the peer pool.
+    */
   private def finalizeSnapSync(pivot: BigInt): Unit = {
     appStateStorage.snapSyncDone().commit()
 
@@ -2538,32 +2548,67 @@ class SNAPSyncController(
         appStateStorage.putBestBlockNumber(pivot).commit()
     }
 
-    // Stop chain downloader if still running
-    chainDownloader.foreach(context.stop)
-    chainDownloader = None
-
     progressMonitor.complete()
     log.info(progressMonitor.currentProgress.toString)
+    currentPhase = Completed
 
-    context.become(completed)
-    context.parent ! Done
+    // Cancel SNAP-only schedules before handing off so eviction tickers / stagnation checks stop
+    // affecting peers while regular sync runs. Stop state-sync child coordinators too — they don't
+    // self-stop on completion and would otherwise retain completed task buffers and worker actors
+    // for the full background-backfill window. The chain downloader child is intentionally NOT stopped.
+    stopSnapOnlySchedules()
+    stopStateSyncChildren()
+
+    // Phase 1 of the handshake: tell the parent that pivot/state is anchored. Parent starts RegularSync.
+    context.parent ! SnapSyncFinalized(pivot)
+
+    val backfillStillRunning =
+      snapSyncConfig.chainDownloadEnabled && chainDownloader.isDefined && !chainDownloadComplete
+
+    if (backfillStillRunning) {
+      log.info(
+        s"SNAP state finalised at pivot=$pivot. Starting regular sync; chain backfill continues in background."
+      )
+      // Yield peer slots to regular sync — backfill keeps a small budget.
+      chainDownloader.foreach(
+        _ ! ChainDownloader.YieldToRegularSync(snapSyncConfig.chainBackfillConcurrentRequests)
+      )
+      context.become(completedWithBackfill)
+    } else {
+      // No backfill in flight — emit Done immediately. Parent poison-pills this actor.
+      chainDownloader.foreach(context.stop)
+      chainDownloader = None
+      context.become(completed)
+      context.parent ! Done
+    }
   }
 
-  /** Waiting for parallel chain download to finish after SNAP state sync completed. */
-  def waitingForChainDownload: Receive = handlePeerListMessagesWithRateTracking.orElse {
-    case ChainDownloader.Done =>
-      log.info("Parallel chain download complete. Finalizing SNAP sync.")
-      chainDownloadComplete = true
-      pivotBlock.foreach(finalizeSnapSync)
-
+  /** Receive after SNAP state is finalised but `ChainDownloader` is still backfilling history.
+    *
+    * Minimal surface — only what `ChainDownloader` and status RPCs need. SNAP-protocol responses, peer-list messages,
+    * and stagnation checks are no longer relevant; everything else is silently dropped. The actor's sole remaining job
+    * is to propagate `ChainDownloader.Done` to the parent so it can poison-pill us.
+    */
+  def completedWithBackfill: Receive = {
     case ChainDownloader.Progress(h, b, r, t) =>
       progressMonitor.updateChainProgress(h, b, r, t)
 
+    case ChainDownloader.Done =>
+      log.info("Background chain backfill complete; SNAPSyncController shutting down.")
+      chainDownloadComplete = true
+      chainDownloader.foreach(context.stop)
+      chainDownloader = None
+      context.become(completed)
+      context.parent ! Done
+
     case SyncProtocol.GetStatus =>
-      sender() ! currentSyncStatus
+      sender() ! SyncProtocol.Status.SyncDone
 
     case GetProgress =>
       sender() ! progressMonitor.currentProgress
+
+    case _ =>
+    // Stale SNAP messages, leaked tickers, and other noise are silently dropped.
   }
 
   private def startChainDownloader(): Unit = {
@@ -2667,6 +2712,12 @@ object SNAPSyncController {
 
   case object Start
   case object Done
+  // Two-phase handshake with SyncController:
+  //   1. SnapSyncFinalized(pivot) — pivot/state anchored, regular sync can start.
+  //      SyncController starts RegularSync but does NOT poison-pill SNAPSyncController.
+  //   2. Done — backfill complete (or absent/disabled). SyncController poison-pills SNAPSyncController.
+  // Sender always emits the same shape: Finalized first, then Done either immediately or after backfill.
+  final case class SnapSyncFinalized(pivot: BigInt)
   case object FallbackToFastSync // Signal to fallback to fast sync due to repeated failures
   case class StartRegularSyncBootstrap(targetBlock: BigInt) // Request bootstrap from SyncController
   final case class BootstrapComplete(
@@ -2775,6 +2826,9 @@ case class SNAPSyncConfig(
     chainDownloadEnabled: Boolean = true,
     chainDownloadMaxConcurrentRequests: Int = 2,
     chainDownloadBoostedConcurrentRequests: Int = 16,
+    // Concurrency budget for chain backfill once SNAP state is finalised and regular sync has started.
+    // Smaller than `chainDownloadMaxConcurrentRequests` so backfill yields peer slots to regular sync.
+    chainBackfillConcurrentRequests: Int = 2,
     chainDownloadTimeout: FiniteDuration = 10.seconds,
     minSnapPeers: Int = 3,
     snapPeerEvictionInterval: FiniteDuration = 15.seconds,
@@ -2856,6 +2910,10 @@ object SNAPSyncConfig {
         if (snapConfig.hasPath("chain-download-boosted-concurrent-requests"))
           snapConfig.getInt("chain-download-boosted-concurrent-requests")
         else 16,
+      chainBackfillConcurrentRequests =
+        if (snapConfig.hasPath("chain-backfill-concurrent-requests"))
+          snapConfig.getInt("chain-backfill-concurrent-requests")
+        else 2,
       chainDownloadTimeout =
         if (snapConfig.hasPath("chain-download-timeout"))
           snapConfig.getDuration("chain-download-timeout").toMillis.millis

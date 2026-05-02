@@ -6,6 +6,7 @@ import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.PoisonPill
 import org.apache.pekko.actor.Props
 import org.apache.pekko.actor.Scheduler
+import org.apache.pekko.actor.Terminated
 
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
@@ -226,9 +227,21 @@ class SyncController(
 
       context.become(runningPivotHeaderBootstrap(peersClient, headerBootstrap, targetBlock, snapSync))
 
+    case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SnapSyncFinalized(pivot) =>
+      log.info(
+        s"SNAP state finalised at pivot=$pivot. Starting regular sync; chain backfill continues in background."
+      )
+      resetSnapFastCycleCount()
+      val regularSync = startRegularSync()
+      context.watch(snapSync)
+      context.become(runningRegularSyncWithBackfill(regularSync, snapSync))
+
     case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Done =>
+      // Defensive fallback: with the post-#1162 handshake, SnapSyncFinalized always precedes Done,
+      // so this branch should not normally be reached. If it is (e.g., unexpected message ordering),
+      // treat as a legacy "SNAP done" signal.
       snapSync ! PoisonPill
-      log.info("SNAP sync completed, transitioning to regular sync")
+      log.info("SNAP sync completed (legacy Done path), transitioning to regular sync")
       resetSnapFastCycleCount()
       startRegularSync()
 
@@ -277,6 +290,46 @@ class SyncController(
       case msg =>
         regularSync.forward(msg)
     }
+  }
+
+  /** Receive used between `SnapSyncFinalized` and `Done` from the lingering SNAPSyncController.
+    *
+    * Regular sync is the primary owner of peer slots; SNAP backfill runs at low priority in the background. This
+    * Receive lets `SNAPSyncController.Done` arrive (so we can poison-pill the SNAP actor) and intercepts restart paths
+    * so the lingering backfill actor is cleaned up before a new sync mode takes over. Everything else is delegated to
+    * `runningRegularSync(regularSync)`.
+    */
+  def runningRegularSyncWithBackfill(regularSync: ActorRef, snapSync: ActorRef): Receive = {
+    case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Done =>
+      log.info("SNAP background backfill complete; shutting down SNAPSyncController.")
+      context.unwatch(snapSync)
+      snapSync ! PoisonPill
+      context.become(runningRegularSync(regularSync))
+
+    case Terminated(actor) if actor == snapSync =>
+      log.warning("SNAPSyncController died while regular sync was running; chain backfill aborted.")
+      context.become(runningRegularSync(regularSync))
+
+    case msg if isRestartTrigger(msg) =>
+      log.info("Restart triggered while SNAP backfill was running; poison-pilling SNAP backfill actor first.")
+      context.unwatch(snapSync)
+      snapSync ! PoisonPill
+      context.become(runningRegularSync(regularSync))
+      self ! msg // Re-deliver so the new state handles it.
+
+    case msg =>
+      runningRegularSync(regularSync).apply(msg)
+  }
+
+  /** Restart-style messages that mean the current sync strategy is being abandoned. Used by
+    * `runningRegularSyncWithBackfill` to detect when it must terminate the lingering backfill actor before delegating.
+    */
+  private def isRestartTrigger(msg: Any): Boolean = msg match {
+    case SyncProtocol.ResetFastSync       => true
+    case SyncProtocol.RestartFastSync     => true
+    case RestartFastSyncNow               => true
+    case _: SyncProtocol.RegularSyncStuck => true
+    case _                                => false
   }
 
   def runningRegularSyncBootstrap(
@@ -393,6 +446,18 @@ class SyncController(
       if (!checkSnapFastEscapeHatch()) {
         startFastSync()
       }
+
+    case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SnapSyncFinalized(pivot) =>
+      log.info(
+        s"Received SnapSyncFinalized(pivot=$pivot) during pivot header bootstrap. Stopping bootstrap and transitioning to regular sync."
+      )
+      headerBootstrap ! PoisonPill
+      peersClient ! PoisonPill
+      // SNAP finalised mid-bootstrap is an exceptional path; tear down the SNAP actor cleanly
+      // (no chain-backfill watch, since the bootstrap state is already racy).
+      originalSnapSyncRef ! PoisonPill
+      resetSnapFastCycleCount()
+      startRegularSync()
 
     case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Done =>
       log.info(
@@ -696,7 +761,7 @@ class SyncController(
     context.become(runningSnapSync(snapSync))
   }
 
-  def startRegularSync(): Unit = {
+  def startRegularSync(): ActorRef = {
     syncGeneration += 1
     val peersClient =
       context.actorOf(
@@ -729,6 +794,7 @@ class SyncController(
     )
     regularSync ! SyncProtocol.Start
     context.become(runningRegularSync(regularSync))
+    regularSync
   }
 
   def startRecovery(needBytecode: Boolean, needStorage: Boolean): Unit = {
