@@ -80,8 +80,8 @@ class ChainDownloaderSpec
     system.stop(downloader)
   }
 
-  /** Spawn a ChainDownloader for unit-level message-handling tests. The downloader stays in `idle` (no `Start`
-    * sent), so the in-flight queues remain empty and we don't need real blockchain or peer infrastructure.
+  /** Spawn a ChainDownloader for unit-level message-handling tests. The downloader stays in `idle` (no `Start` sent),
+    * so the in-flight queues remain empty and we don't need real blockchain or peer infrastructure.
     */
   private def newDownloader(initialMaxConcurrentRequests: Int): TestActorRef[ChainDownloader] = {
     implicit val ec: ExecutionContext = system.dispatcher
