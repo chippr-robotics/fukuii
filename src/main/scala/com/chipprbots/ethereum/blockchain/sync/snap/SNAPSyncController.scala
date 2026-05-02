@@ -2715,7 +2715,13 @@ class SNAPSyncController(
   }
 
   // Track consecutive account stall pivot refreshes to detect truly unrecoverable situations.
+  // Reset to 0 on real progress (taskProgress || downloadProgress in maybeRestartIfAccountStagnant).
   private var consecutiveAccountStallRefreshes: Int = 0
+
+  // Hard cap so a wedged account phase escalates to FastSync fallback rather than refreshing
+  // forever. Higher than MaxConsecutivePivotRefreshes because account stalls can be transient
+  // (peer churn, slow networks) and the stagnation threshold itself already takes minutes to fire.
+  private val MaxConsecutiveAccountStallRefreshes = 10
 
   private def maybeRestartIfAccountStagnant(progress: actors.AccountRangeStats): Unit = {
     if (currentPhase != AccountRangeSync) return
@@ -2769,9 +2775,23 @@ class SNAPSyncController(
         s"(threshold=${AccountStagnationThreshold.toSeconds}s), accountsDownloaded=${progress.accountsDownloaded}, " +
         s"tasksPending=${progress.tasksPending}, tasksActive=${progress.tasksActive}, snapPeers=$snapPeerCount"
 
+    // After enough refresh attempts without download progress, escalate so the node doesn't
+    // loop forever. recordCriticalFailure already trips fallbackToFastSync at the configured
+    // threshold; if that hasn't tripped yet, fall through to one more in-place refresh.
+    if (consecutiveAccountStallRefreshes > MaxConsecutiveAccountStallRefreshes) {
+      log.error(
+        s"Account stall pivot-refresh budget exhausted " +
+          s"($consecutiveAccountStallRefreshes > $MaxConsecutiveAccountStallRefreshes). $context"
+      )
+      consecutiveAccountStallRefreshes = 0
+      lastAccountProgressMs = System.currentTimeMillis()
+      if (recordCriticalFailure(s"account stall refresh limit exceeded: $context")) {
+        fallbackToFastSync()
+        return
+      }
+    }
+
     // In-place pivot refresh to try to find a serveable root.
-    // Never restart or fallback — restartSnapSync() destroys all downloaded data,
-    // and fast sync doesn't work on ETH68 networks.
     log.warning(
       s"Account stall detected ($context). " +
         s"Refreshing pivot in-place to recover (attempt $consecutiveAccountStallRefreshes). " +

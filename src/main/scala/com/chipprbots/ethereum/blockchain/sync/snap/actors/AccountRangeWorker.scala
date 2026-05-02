@@ -97,8 +97,12 @@ class AccountRangeWorker(
           val validated = requestTracker.validateAccountRange(response)
 
           // Complete the request in tracker (cancel timeout) regardless of validation outcome.
-          // Pass account count for adaptive rate tracking (geth msgrate alignment).
-          requestTracker.completeRequest(reqId, accountCount)
+          // A proof-only empty range is still a served response, not a timeout/failure.
+          val responseItemsForRate =
+            if (accountCount > 0) accountCount
+            else if (response.proof.nonEmpty) 1
+            else 0
+          requestTracker.completeRequest(reqId, responseItemsForRate)
 
           // Verify Merkle proof against the expected pivot state root for this task.
           val proofVerifier = MerkleProofVerifier(task.rootHash)
