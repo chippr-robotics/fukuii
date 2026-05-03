@@ -184,4 +184,87 @@ class ETH69TDSpec extends AnyFlatSpec with Matchers {
     peerInfo.chainWeight.totalDifficulty shouldBe wireTD
     peerInfo.chainWeight.totalDifficulty should be > BigInt(100_000_000L) // clearly not a block number
   }
+
+  // -------------------------------------------------------------------------
+  // EIP-7642 STATUS wire format (#1194)
+  //
+  // Pre-fix: fukuii's ETH/69 STATUS encoded 7 fields with an extra `earliestBlock`
+  // not in the spec. Real-world peers (core-geth/besu running EIP-7642) send 6
+  // fields and fukuii rejected every one with `Cannot decode ETH69.Status`.
+  // Symptom on ETC mainnet: no peer pool, sync wedged. Mordor was unaffected
+  // because its peer pool was dominated by other fukuii instances + ETH/68.
+  //
+  // The fix:
+  //   1. Encoder emits 6 fields per EIP-7642 (no earliestBlock — that info is
+  //      conveyed via the separate BlockRangeUpdate message 0x11).
+  //   2. Decoder accepts both the 6-field spec shape AND the 7-field legacy
+  //      fukuii shape during the transition (so old fukuii peers still work).
+  // -------------------------------------------------------------------------
+
+  it should "encode ETH/69 STATUS as 6 fields per EIP-7642 (no earliestBlock on the wire)" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.network.p2p.messages.ETH69.Status._
+    import com.chipprbots.ethereum.rlp.{RLPList, RLPValue, rawDecode}
+
+    val status = eth69Status(latestBlockNr, latestHash)
+    val encoded: Array[Byte] = new StatusEnc(status).toBytes
+    val decoded = rawDecode(encoded)
+
+    decoded shouldBe a[RLPList]
+    val fields = decoded.asInstanceOf[RLPList].items.toList
+    fields should have size 6 // EIP-7642 spec — NOT 7
+  }
+
+  it should "round-trip through the spec-compliant 6-field wire format" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.network.p2p.messages.ETH69.Status._
+
+    val original = eth69Status(latestBlockNr, latestHash)
+    val encoded: Array[Byte] = new StatusEnc(original).toBytes
+    val decoded = encoded.toETH69Status
+
+    decoded.protocolVersion shouldBe original.protocolVersion
+    decoded.networkId shouldBe original.networkId
+    decoded.genesisHash shouldBe original.genesisHash
+    decoded.forkId shouldBe original.forkId
+    decoded.latestBlock shouldBe original.latestBlock
+    decoded.latestBlockHash shouldBe original.latestBlockHash
+    // earliestBlock is not on the spec wire — decoder defaults to 0.
+    decoded.earliestBlock shouldBe BigInt(0)
+  }
+
+  it should "decode legacy 7-field fukuii STATUS shape (backward compat with pre-#1194 peers)" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.network.p2p.messages.ETH69.Status._
+    import com.chipprbots.ethereum.rlp.{RLPList, RLPValue, encode}
+    import com.chipprbots.ethereum.utils.ByteUtils
+    import com.chipprbots.ethereum.forkid.ForkId._
+
+    // Hand-build the 7-field legacy shape used by fukuii pre-fix.
+    val legacyEarliest = BigInt(42)
+    val legacyRlp = RLPList(
+      RLPValue(ByteUtils.bigIntToUnsignedByteArray(BigInt(Capability.ETH69.version))),
+      RLPValue(ByteUtils.bigIntToUnsignedByteArray(BigInt(1))),
+      RLPValue(genesisHash.toArray[Byte]),
+      dummyForkId.toRLPEncodable,
+      RLPValue(ByteUtils.bigIntToUnsignedByteArray(legacyEarliest)),
+      RLPValue(ByteUtils.bigIntToUnsignedByteArray(latestBlockNr)),
+      RLPValue(latestHash.toArray[Byte])
+    )
+    val legacyBytes: Array[Byte] = encode(legacyRlp)
+
+    val decoded = legacyBytes.toETH69Status
+
+    decoded.networkId shouldBe 1L
+    decoded.latestBlock shouldBe latestBlockNr
+    decoded.latestBlockHash shouldBe latestHash
+    // The 7-field branch DOES preserve earliestBlock from the wire.
+    decoded.earliestBlock shouldBe legacyEarliest
+  }
+
+  it should "reject malformed STATUS payloads with the canonical error message" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.network.p2p.messages.ETH69.Status._
+    import com.chipprbots.ethereum.rlp.{RLPList, RLPValue, encode}
+
+    val garbage: Array[Byte] = encode(RLPList(RLPValue(Array[Byte](0x01)), RLPValue(Array[Byte](0x02))))
+    val ex = intercept[RuntimeException](garbage.toETH69Status)
+    ex.getMessage should include("Cannot decode ETH69.Status")
+  }
 }
