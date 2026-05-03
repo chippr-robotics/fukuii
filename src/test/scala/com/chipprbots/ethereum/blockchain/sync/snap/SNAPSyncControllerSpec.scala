@@ -945,7 +945,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     )
 
     val currentPivot: BigInt = prevPivot + 100
-    val drift                = (currentPivot - prevPivot).abs
+    val drift = (currentPivot - prevPivot).abs
     drift should be <= MaxPreservedPivotDistance
 
     // Controller passes savedProgress to the new coordinator unchanged
@@ -964,7 +964,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     )
 
     val currentPivot: BigInt = prevPivot + 300
-    val drift                = (currentPivot - prevPivot).abs
+    val drift = (currentPivot - prevPivot).abs
     drift should be > MaxPreservedPivotDistance
 
     // Controller discards progress — coordinator restarts each range from task.last

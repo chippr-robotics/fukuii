@@ -19,9 +19,9 @@ import com.chipprbots.ethereum.testing.PeerTestHelpers
 /** A controllable fake SNAP peer for unit and integration tests.
   *
   * Modeled on core-geth `eth/downloader/skeleton_test.go` `skeletonTestPeer`:
-  * - Per-message-type handler hooks injected per-test
-  * - `served` and `dropped` atomics for post-test assertion
-  * - `drop()` to simulate peer disconnect (stops responding)
+  *   - Per-message-type handler hooks injected per-test
+  *   - `served` and `dropped` atomics for post-test assertion
+  *   - `drop()` to simulate peer disconnect (stops responding)
   *
   * Usage:
   * {{{
@@ -93,8 +93,8 @@ object SNAPFakePeer {
   /** Empty AccountRange with a boundary proof — indicates the range is complete (no accounts). */
   private val emptyBoundaryProof: Seq[ByteString] = Seq(ByteString(Array.fill(32)(0xab.toByte)))
 
-  /** Create a normal peer that returns empty AccountRange with proof for any request.
-    * Simulates a peer that serves requests successfully but has no accounts in range.
+  /** Create a normal peer that returns empty AccountRange with proof for any request. Simulates a peer that serves
+    * requests successfully but has no accounts in range.
     */
   def empty(system: ActorSystem, id: String): SNAPFakePeer =
     new SNAPFakePeer(
@@ -115,8 +115,8 @@ object SNAPFakePeer {
       trieNodesHandler = _ => None
     )(system)
 
-  /** Create a peer that returns AccountRange with no proof and no accounts.
-    * Simulates a peer that cannot serve the current root (triggers stateless marking).
+  /** Create a peer that returns AccountRange with no proof and no accounts. Simulates a peer that cannot serve the
+    * current root (triggers stateless marking).
     */
   def proofless(system: ActorSystem, id: String): SNAPFakePeer =
     new SNAPFakePeer(

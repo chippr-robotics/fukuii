@@ -1042,7 +1042,9 @@ class AccountRangeCoordinatorSpec
     // Late AccountRangeResponse arrives at worker (now in idle state) — must be silently dropped;
     // coordinator must NOT receive a second TaskFailed or TaskComplete for this request.
     import com.chipprbots.ethereum.network.p2p.messages.SNAP.AccountRange
-    worker ! Messages.AccountRangeResponseMsg(AccountRange(requestId = BigInt(1), accounts = Seq.empty, proof = Seq.empty))
+    worker ! Messages.AccountRangeResponseMsg(
+      AccountRange(requestId = BigInt(1), accounts = Seq.empty, proof = Seq.empty)
+    )
 
     // The only message the snapSyncController should ever see is nothing (no double completion)
     snapSyncController.expectNoMessage(300.millis)

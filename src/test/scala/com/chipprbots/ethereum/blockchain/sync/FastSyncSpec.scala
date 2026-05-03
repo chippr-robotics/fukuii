@@ -150,10 +150,12 @@ class FastSyncSpec
           _ <- saveGenesis
           _ <- saveTestBlocksWithWeights
           // Subscribe BEFORE startSync so no topic events can be missed under load.
-          // Race: if subscription is set up after onPeersConnected the actor may have
-          // already published to the topic before the subscriber is registered.
-          pivotFiber  <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError.start
+          // Race: IO.start schedules fibers but doesn't guarantee they've subscribed before
+          // Pekko dispatcher threads start processing startSync messages. IO.cede yields the
+          // main fiber so the IO scheduler can run both subscription fibers before we proceed.
+          pivotFiber <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError.start
           blocksFiber <- networkPeerManager.fetchedBlocks.head.compile.lastOrError.start
+          _ <- cats.effect.IO.cede // yield: allow subscription fibers to register before Pekko dispatch
           _ <- startSync
           _ <- networkPeerManager.onPeersConnected
           _ <- pivotFiber.joinWith(cats.effect.IO.raiseError(new RuntimeException("pivot fiber canceled")))
@@ -243,8 +245,9 @@ class FastSyncSpec
           _ <- saveGenesis
           _ <- saveTestBlocksWithWeights
           // Subscribe BEFORE startSync — see companion test for race condition explanation.
-          pivotFiber  <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError.start
+          pivotFiber <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError.start
           blocksFiber <- networkPeerManager.fetchedBlocks.head.compile.lastOrError.start
+          _ <- cats.effect.IO.cede // yield: allow subscription fibers to register before Pekko dispatch
           _ <- startSync
           _ <- networkPeerManager.onPeersConnected
           _ <- pivotFiber.joinWith(cats.effect.IO.raiseError(new RuntimeException("pivot fiber canceled")))

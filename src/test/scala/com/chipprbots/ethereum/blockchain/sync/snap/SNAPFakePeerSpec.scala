@@ -17,8 +17,8 @@ import com.chipprbots.ethereum.testing.Tags._
 
 /** Smoke tests verifying SNAPFakePeer infrastructure works as expected.
   *
-  * These test the test helper itself, not production code. They serve as executable
-  * documentation and as a guard against accidental breakage of the fake peer infrastructure.
+  * These test the test helper itself, not production code. They serve as executable documentation and as a guard
+  * against accidental breakage of the fake peer infrastructure.
   *
   * Model: core-geth eth/downloader/skeleton_test.go skeletonTestPeer usage pattern.
   */
@@ -154,11 +154,13 @@ class SNAPFakePeerSpec
       system,
       "fp-custom-1",
       accountRangeHandler = req =>
-        Some(AccountRange(
-          requestId = req.requestId + 100, // deliberate offset to verify handler was called
-          accounts = Seq.empty,
-          proof = Seq(ByteString("custom-proof"))
-        ))
+        Some(
+          AccountRange(
+            requestId = req.requestId + 100, // deliberate offset to verify handler was called
+            accounts = Seq.empty,
+            proof = Seq(ByteString("custom-proof"))
+          )
+        )
     )
 
     val req = GetAccountRange(
