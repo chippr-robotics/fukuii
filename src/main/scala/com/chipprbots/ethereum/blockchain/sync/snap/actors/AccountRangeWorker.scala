@@ -44,39 +44,42 @@ class AccountRangeWorker(
 
   override def receive: Receive = idle
 
-  def idle: Receive = { case FetchAccountRange(task, peer, requestId, responseBytes) =>
-    log.debug(s"Fetching account range ${task.rangeString} from peer ${peer.id} (responseBytes=$responseBytes)")
+  def idle: Receive = {
+    case _: WorkerRequestCancelled => // #1184: idempotent — already idle, nothing to clear
+    case _: WorkerPeerDisconnected => // No current task, nothing to do
+    case FetchAccountRange(task, peer, requestId, responseBytes) =>
+      log.debug(s"Fetching account range ${task.rangeString} from peer ${peer.id} (responseBytes=$responseBytes)")
 
-    // Send request directly via network peer manager
-    // Create GetAccountRange message
-    val request = GetAccountRange(
-      requestId = requestId,
-      rootHash = task.rootHash,
-      startingHash = task.next,
-      limitHash = task.last,
-      responseBytes = responseBytes
-    )
+      // Send request directly via network peer manager
+      // Create GetAccountRange message
+      val request = GetAccountRange(
+        requestId = requestId,
+        rootHash = task.rootHash,
+        startingHash = task.next,
+        limitHash = task.last,
+        responseBytes = responseBytes
+      )
 
-    // Track the request with adaptive timeout from SNAPRequestTracker / PeerRateTracker
-    // (geth msgrate algorithm). Starts at ~12s for a fresh tracker, converges down as peers
-    // respond — slow peers get pruned faster instead of holding in-flight slots for a full 30s.
-    requestTracker.trackRequest(
-      requestId,
-      peer,
-      SNAPRequestTracker.RequestType.GetAccountRange
-    ) {
-      self ! RequestTimeout(requestId)
-    }
+      // Track the request with adaptive timeout from SNAPRequestTracker / PeerRateTracker
+      // (geth msgrate algorithm). Starts at ~12s for a fresh tracker, converges down as peers
+      // respond — slow peers get pruned faster instead of holding in-flight slots for a full 30s.
+      requestTracker.trackRequest(
+        requestId,
+        peer,
+        SNAPRequestTracker.RequestType.GetAccountRange
+      ) {
+        self ! RequestTimeout(requestId)
+      }
 
-    // Send message to peer
-    import com.chipprbots.ethereum.network.NetworkPeerManagerActor
-    import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetAccountRange.GetAccountRangeEnc
-    import com.chipprbots.ethereum.network.p2p.MessageSerializable
-    val messageSerializable: MessageSerializable = new GetAccountRangeEnc(request)
-    networkPeerManager ! NetworkPeerManagerActor.SendMessage(messageSerializable, peer.id)
+      // Send message to peer
+      import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+      import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetAccountRange.GetAccountRangeEnc
+      import com.chipprbots.ethereum.network.p2p.MessageSerializable
+      val messageSerializable: MessageSerializable = new GetAccountRangeEnc(request)
+      networkPeerManager ! NetworkPeerManagerActor.SendMessage(messageSerializable, peer.id)
 
-    currentTask = Some((task, peer, requestId))
-    context.become(working)
+      currentTask = Some((task, peer, requestId))
+      context.become(working)
   }
 
   def working: Receive = {
@@ -155,6 +158,20 @@ class AccountRangeWorker(
           currentTask = None
           context.become(idle)
         case _ => // Different peer or no task; ignore
+      }
+
+    case WorkerRequestCancelled(reqId) =>
+      // #1184: coordinator drained `activeTasks` and is owning the re-queue itself —
+      // we just clear local state. Do NOT send TaskFailed (coordinator already re-queued).
+      // Match existing tracker-ownership contract: worker owns its tracker entry.
+      // Idempotent: SNAPRequestTracker.completeRequest is safe on already-removed ids.
+      currentTask match {
+        case Some((_, _, currentReqId)) if currentReqId == reqId =>
+          log.debug(s"Worker request $reqId cancelled by coordinator — clearing state")
+          requestTracker.completeRequest(reqId, 0)
+          currentTask = None
+          context.become(idle)
+        case _ => // Different reqId or no current task; ignore
       }
 
     case FetchAccountRange(task, peer, _, _) =>
