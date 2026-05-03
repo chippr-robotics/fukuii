@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.network.snapserver
 
 import org.apache.pekko.util.ByteString
 
+import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt._
@@ -552,6 +553,40 @@ object SnapServer extends Logger {
       Array(((b >>> 4) & 0x0f).toByte, (b & 0x0f).toByte)
     }
     firstNibble ++ rest.drop(skipFirst - 1).take(rest.length - (skipFirst - 1))
+  }
+
+  /** Serve an incoming `GetByteCodes` request (SNAP/1).
+    *
+    * Looks up each requested code hash in `storage`, collecting bytecodes until the 2 MB byte budget is exhausted or
+    * all hashes have been processed. At most 1024 hashes are processed regardless of request size (go-ethereum
+    * `maxCodeLookups` defence). The empty-code hash (`Account.EmptyCodeHash`) is returned as `ByteString.empty`
+    * without a DB lookup, matching go-ethereum's `handlers.go:360-361` special case. Missing hashes are silently
+    * skipped (not inserted as empty placeholders) — there is no positional alignment requirement for bytecodes.
+    */
+  def serveByteCodes(
+      requestId: BigInt,
+      hashes: Seq[ByteString],
+      responseBytes: BigInt,
+      storage: EvmCodeStorage
+  ): ByteCodes = {
+    val twoMB     = 2 * 1024 * 1024
+    val maxBytes  = math.min(math.max(responseBytes.toInt, 0), twoMB)
+    val collected = scala.collection.mutable.ListBuffer.empty[ByteString]
+    var totalBytes = 0
+    val it = hashes.take(1024).iterator
+    while (it.hasNext && (totalBytes < maxBytes || collected.isEmpty)) {
+      val codeHash = it.next()
+      if (codeHash == Account.EmptyCodeHash) {
+        collected += ByteString.empty
+        // empty code contributes 0 bytes; do not count toward budget
+      } else {
+        storage.get(codeHash).foreach { code =>
+          collected += code
+          totalBytes += code.size
+        }
+      }
+    }
+    ByteCodes(requestId = requestId, codes = collected.toList)
   }
 
   /** Walk the trie following `nibbles` and return the encoded node found at that exact path (as a raw MPT node), or
