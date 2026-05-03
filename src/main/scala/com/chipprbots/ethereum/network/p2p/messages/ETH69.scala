@@ -69,17 +69,25 @@ object ETH69 {
 
       /** Decode an ETH/69 STATUS frame.
         *
-        * Tolerant of two shapes for backward compatibility during the rollout:
-        *   1. EIP-7642 spec (6 fields): `[version, networkId, genesis, forkId, latest, latestHash]` 2. Legacy fukuii
-        *      pre-#1194 (7 fields): `[version, networkId, genesis, forkId, earliest, latest, latestHash]` — used by
-        *      older fukuii nodes. Decoded with `earliestBlock` set to its wire value; new fukuii nodes never emit this
-        *      shape.
+        * Tolerant of three shapes during the rollout:
+        *   1. EIP-7642 spec (6 fields, forkId at idx 3): `[version, networkId, genesis, forkId, latest, latestHash]` —
+        *      what core-geth, besu, reth, and post-#1194 fukuii send. 2. Legacy fukuii pre-#1194 (7 fields, forkId at
+        *      idx 3): `[version, networkId, genesis, forkId, earliest, latest, latestHash]` — older fukuii nodes.
+        *      `earliestBlock` preserved from wire. 3. ETH/68-shape on ETH/69 channel (6 fields, forkId at idx 5):
+        *      `[version, networkId, td, bestHash, genesis, forkId]` — peers (often wrong-chain like Holesky) that
+        *      announce ETH/69 capability but emit the older ETH/68 STATUS layout. The decode lets the peer reach the
+        *      genesis-hash check, where they get rejected cleanly with `Useless peer` instead of a noisy `DECODE_ERROR`
+        *      and a churning peer pool. We deliberately drop `totalDifficulty` — ETC PoW TD recovery in the handshaker
+        *      uses local ChainWeightStorage, and `latestBlock = 0` (ETH/68 doesn't carry a block number) is harmless
+        *      because the peer fails on genesis mismatch immediately afterward.
         *
-        * The 6-field path sets `earliestBlock = 0` because the field is not on the wire. Once the network is
-        * unanimously on the spec shape, the 7-field branch can be removed.
+        * The 6-field spec path and the ETH/68 path share field count but differ structurally — the spec has the forkId
+        * RLPList at index 3, ETH/68 has it at index 5. Scala pattern matching distinguishes them via the type at each
+        * position (`RLPList` vs `RLPValue`), so case ordering doesn't matter for correctness; we keep spec first for
+        * readability.
         */
       def toETH69Status: Status = rawDecode(bytes) match {
-        // 6-field EIP-7642 spec shape — what core-geth, besu, reth, and post-#1194 fukuii send.
+        // (1) 6-field EIP-7642 spec shape — what core-geth, besu, reth, and post-#1194 fukuii send.
         case RLPList(
               RLPValue(protocolVersionBytes),
               RLPValue(networkIdBytes),
@@ -97,7 +105,29 @@ object ETH69 {
             latestBlock = ByteUtils.bytesToBigInt(latestBlockBytes),
             latestBlockHash = ByteString(latestBlockHashBytes)
           )
-        // 7-field legacy fukuii shape — kept for backward compat with pre-#1194 nodes.
+        // (3) 6-field ETH/68-shape on ETH/69 channel (forkId at idx 5) — common from wrong-chain peers
+        // (e.g. Holesky-derived testnets) that announce ETH/69 but emit ETH/68 STATUS. We accept the
+        // payload so the genesis check downstream can disconnect them as `Useless peer` instead of
+        // generating noisy `DECODE_ERROR` and churning the peer pool. `totalDifficulty` is dropped on
+        // purpose; ETC TD recovery is handler-side. `latestBlock = 0` is fine — peer fails on genesis next.
+        case RLPList(
+              RLPValue(protocolVersionBytes),
+              RLPValue(networkIdBytes),
+              RLPValue(_totalDifficultyBytes),
+              RLPValue(bestHashBytes),
+              RLPValue(genesisHashBytes),
+              forkIdRlp: RLPList
+            ) =>
+          Status(
+            protocolVersion = ByteUtils.bytesToBigInt(protocolVersionBytes).toInt,
+            networkId = ByteUtils.bytesToBigInt(networkIdBytes).toLong,
+            genesisHash = ByteString(genesisHashBytes),
+            forkId = decode[ForkId](forkIdRlp),
+            earliestBlock = BigInt(0),
+            latestBlock = BigInt(0),
+            latestBlockHash = ByteString(bestHashBytes)
+          )
+        // (2) 7-field legacy fukuii shape — kept for backward compat with pre-#1194 nodes.
         case RLPList(
               RLPValue(protocolVersionBytes),
               RLPValue(networkIdBytes),
