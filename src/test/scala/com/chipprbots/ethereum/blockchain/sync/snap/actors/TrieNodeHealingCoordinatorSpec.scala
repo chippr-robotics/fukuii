@@ -15,6 +15,8 @@ import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.testing.{PeerTestHelpers, TestMptStorage}
 
+import java.nio.ByteBuffer
+
 class TrieNodeHealingCoordinatorSpec
     extends TestKit(ActorSystem("TrieNodeHealingCoordinatorSpec"))
     with ImplicitSender
@@ -265,5 +267,111 @@ class TrieNodeHealingCoordinatorSpec
     // pendingTasks is non-empty → isComplete = false → no StateHealingComplete
     coordinator ! Messages.HealingCheckCompletion
     snapSyncController.expectNoMessage(300.millis)
+  }
+
+  // ========================================
+  // pendingTasks ArrayDeque + dispatcher (issue #1167)
+  // ========================================
+
+  /** Synthesize a unique (pathset, hash) so the dedup set doesn't drop our nodes. */
+  private def fakeHashedNode(seed: Int): (Seq[ByteString], ByteString) = {
+    val hash = kec256(ByteString(s"healing-node-$seed"))
+    // pathset is a Seq[ByteString]; for queueing we just need something distinct.
+    val path = ByteString(ByteBuffer.allocate(4).putInt(seed).array())
+    (Seq(path), hash)
+  }
+
+  it should "absorb a large QueueMissingNodes payload without timing out" taggedAs UnitTest in {
+    // The previous immutable-Seq pendingTasks was O(n) per `:+`. Queueing 50,000 nodes via
+    // appendAll on the new ArrayDeque is O(n) total instead of O(n²).
+    val stateRoot = kec256(ByteString("deque-load-test-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = system.actorOf(
+      TrieNodeHealingCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        batchSize = 64,
+        snapSyncController = snapSyncController.ref,
+        healingWriterEcOverride = Some(system.dispatcher)
+      )
+    )
+
+    val nodeCount = 50000
+    val nodes = (1 to nodeCount).map(fakeHashedNode)
+
+    coordinator ! Messages.StartTrieNodeHealing(stateRoot)
+    val queueStart = System.nanoTime()
+    coordinator ! Messages.QueueMissingNodes(nodes)
+    coordinator ! Messages.HealingGetProgress
+
+    val stats = expectMsgType[HealingStatistics](5.seconds)
+    val elapsedMs = (System.nanoTime() - queueStart) / 1000000L
+
+    // +1 for the root node seeded by StartTrieNodeHealing (Besu-aligned top-down discovery).
+    stats.pendingTasks shouldBe (nodeCount + 1)
+    // Loose ceiling — main signal is that this ran in linear time (O(n²) at this size
+    // would take many seconds even on a fast box). Tighten if it ever flakes.
+    elapsedMs should be < 5000L
+  }
+
+  it should "drain pending tasks in FIFO order across many small QueueMissingNodes calls" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("deque-fifo-test-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = system.actorOf(
+      TrieNodeHealingCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        batchSize = 16,
+        snapSyncController = snapSyncController.ref,
+        healingWriterEcOverride = Some(system.dispatcher)
+      )
+    )
+
+    coordinator ! Messages.StartTrieNodeHealing(stateRoot)
+
+    // Three batches; total 750 nodes queued in O(n) time.
+    val batches = Seq.tabulate(3)(g => (g * 250 until (g + 1) * 250).map(fakeHashedNode))
+    batches.foreach(b => coordinator ! Messages.QueueMissingNodes(b))
+
+    coordinator ! Messages.HealingGetProgress
+    val stats = expectMsgType[HealingStatistics](3.seconds)
+    // +1 for the root node seeded by StartTrieNodeHealing (Besu-aligned top-down discovery).
+    stats.pendingTasks shouldBe 751
+  }
+
+  it should "construct successfully when a healing-writer EC override is supplied" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("ec-override-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = system.actorOf(
+      TrieNodeHealingCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        batchSize = 16,
+        snapSyncController = snapSyncController.ref,
+        healingWriterEcOverride = Some(system.dispatcher)
+      )
+    )
+
+    coordinator should not be null
+    coordinator ! Messages.HealingGetProgress
+    expectMsgType[HealingStatistics](2.seconds)
   }
 }

@@ -1,9 +1,10 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
 import org.apache.pekko.actor.ActorSystem
-import org.apache.pekko.testkit.{TestKit, TestProbe, ImplicitSender}
+import org.apache.pekko.testkit.{TestActorRef, TestKit, TestProbe, ImplicitSender}
 import org.apache.pekko.util.ByteString
 
+import scala.collection.mutable
 import scala.concurrent.duration._
 
 import org.scalatest.BeforeAndAfterAll
@@ -376,5 +377,187 @@ class StorageRangeCoordinatorSpec
     // Neither PivotStateUnservable nor StorageRangeSyncComplete should be sent:
     // tasks.isEmpty → maybeRequestPivotRefresh() not called, isComplete=false (no sentinel)
     snapSyncController.expectNoMessage(300.millis)
+  }
+
+  // ========================================
+  // Flat-batch aggregator (issue #1165)
+  // ========================================
+
+  /** Helper: build a TestActorRef with the override EC and small threshold so flat-batch behaviour is observable
+    * without spinning up the storage-writer-dispatcher.
+    */
+  private def newCoordWithFlatBatch(
+      flatSlotStorage: FlatSlotStorage,
+      threshold: Int,
+      stateRootArg: ByteString = kec256(ByteString("flat-batch-test-root"))
+  ): (TestActorRef[StorageRangeCoordinator], TestProbe) = {
+    val controller = TestProbe()
+    val ref = TestActorRef[StorageRangeCoordinator](
+      StorageRangeCoordinator.props(
+        stateRoot = stateRootArg,
+        networkPeerManager = TestProbe().ref,
+        requestTracker = new SNAPRequestTracker()(system.scheduler),
+        mptStorage = new TestMptStorage(),
+        flatSlotStorage = flatSlotStorage,
+        maxAccountsPerBatch = 8,
+        maxInFlightRequests = 8,
+        requestTimeout = 30.seconds,
+        snapSyncController = controller.ref,
+        flatBatchEntryThreshold = threshold,
+        flatBatchEcOverride = Some(system.dispatcher)
+      )
+    )
+    (ref, controller)
+  }
+
+  /** Helper: synthesize an account-hash + slots payload of `slotsPerAccount` entries. */
+  private def fakeContract(
+      seed: Int,
+      slotsPerAccount: Int
+  ): (ByteString, mutable.ArrayBuffer[(ByteString, ByteString)]) = {
+    val accountHash = kec256(ByteString(s"acct-$seed"))
+    val slots = mutable.ArrayBuffer.empty[(ByteString, ByteString)]
+    var i = 0
+    while (i < slotsPerAccount) {
+      val slotHash = kec256(ByteString(s"slot-$seed-$i"))
+      val slotValue = ByteString(s"value-$seed-$i".getBytes)
+      slots += ((slotHash, slotValue))
+      i += 1
+    }
+    (accountHash, slots)
+  }
+
+  it should "buffer small-contract slots in the accumulator without immediate commit" taggedAs UnitTest in {
+    val flatSlots = new FlatSlotStorage(EphemDataSource())
+    val (coord, _) = newCoordWithFlatBatch(flatSlots, threshold = 100)
+
+    val (accountHash, slots) = fakeContract(seed = 1, slotsPerAccount = 3)
+    coord.underlyingActor.writeSmallContractFlatOnly(accountHash, slots)
+
+    coord.underlyingActor.pendingFlatBatchEntries shouldBe 3
+    coord.underlyingActor.pendingFlatBatchAccounts.size shouldBe 1
+    coord.underlyingActor.inFlightFlatBatches shouldBe 0
+
+    // Nothing was committed — FlatSlotStorage is still empty for our keys.
+    flatSlots.getSlot(accountHash, slots.head._1) shouldBe None
+
+    system.stop(coord)
+  }
+
+  it should "flush exactly once when the threshold is crossed and persist all buffered slots" taggedAs UnitTest in {
+    val flatSlots = new FlatSlotStorage(EphemDataSource())
+    val (coord, _) = newCoordWithFlatBatch(flatSlots, threshold = 5)
+
+    // Three contracts, 2 slots each = 6 total slots, crossing the 5-entry threshold.
+    val contracts = (1 to 3).map(i => fakeContract(seed = i, slotsPerAccount = 2))
+    contracts.foreach { case (h, s) => coord.underlyingActor.writeSmallContractFlatOnly(h, s) }
+
+    // Flush is async on system.dispatcher; the 1-s deadline is generous.
+    awaitAssert(coord.underlyingActor.inFlightFlatBatches shouldBe 0, max = 1.second)
+
+    // After flush, all 6 slots are durable.
+    contracts.foreach { case (accountHash, slots) =>
+      slots.foreach { case (slotHash, value) =>
+        flatSlots.getSlot(accountHash, slotHash) shouldBe Some(value)
+      }
+    }
+
+    // Accumulator was reset.
+    coord.underlyingActor.pendingFlatBatchAccounts shouldBe empty
+    coord.underlyingActor.pendingFlatBatchEntries shouldBe 0
+
+    system.stop(coord)
+  }
+
+  it should "not trigger a flush when accumulator stays below threshold" taggedAs UnitTest in {
+    val flatSlots = new FlatSlotStorage(EphemDataSource())
+    val (coord, _) = newCoordWithFlatBatch(flatSlots, threshold = 1000)
+
+    val (accountHash, slots) = fakeContract(seed = 42, slotsPerAccount = 50)
+    coord.underlyingActor.writeSmallContractFlatOnly(accountHash, slots)
+
+    coord.underlyingActor.pendingFlatBatchEntries shouldBe 50
+    coord.underlyingActor.inFlightFlatBatches shouldBe 0
+    flatSlots.getSlot(accountHash, slots.head._1) shouldBe None
+
+    system.stop(coord)
+  }
+
+  it should "flush remaining accumulator on ForceCompleteStorage" taggedAs UnitTest in {
+    val flatSlots = new FlatSlotStorage(EphemDataSource())
+    val (coord, controller) = newCoordWithFlatBatch(flatSlots, threshold = 1000)
+
+    val (accountHash, slots) = fakeContract(seed = 99, slotsPerAccount = 4)
+    coord.underlyingActor.writeSmallContractFlatOnly(accountHash, slots)
+    coord.underlyingActor.pendingFlatBatchEntries shouldBe 4
+
+    coord ! Messages.ForceCompleteStorage
+
+    awaitAssert(coord.underlyingActor.inFlightFlatBatches shouldBe 0, max = 1.second)
+    slots.foreach { case (slotHash, value) =>
+      flatSlots.getSlot(accountHash, slotHash) shouldBe Some(value)
+    }
+    controller.expectMsg(3.seconds, SNAPSyncController.StorageRangeSyncForceCompleted)
+
+    system.stop(coord)
+  }
+
+  it should "drop bookkeeping for FlatBatchFlushComplete from a stale state root" taggedAs UnitTest in {
+    val flatSlots = new FlatSlotStorage(EphemDataSource())
+    val (coord, _) = newCoordWithFlatBatch(flatSlots, threshold = 1000)
+
+    coord.underlyingActor.inFlightFlatBatches = 1
+    val staleRoot = kec256(ByteString("a-stale-root"))
+
+    coord ! Messages.FlatBatchFlushComplete(staleRoot, entryCount = 7, elapsedMs = 5L)
+
+    coord.underlyingActor.inFlightFlatBatches shouldBe 0
+
+    system.stop(coord)
+  }
+
+  it should "flush the accumulator before mutating stateRoot on StoragePivotRefreshed" taggedAs UnitTest in {
+    val flatSlots = new FlatSlotStorage(EphemDataSource())
+    val oldRoot = kec256(ByteString("old-root"))
+    val newRoot = kec256(ByteString("new-root"))
+    val (coord, _) = newCoordWithFlatBatch(flatSlots, threshold = 1000, stateRootArg = oldRoot)
+
+    // Buffer some data while stateRoot == oldRoot.
+    val (accountHash, slots) = fakeContract(seed = 7, slotsPerAccount = 4)
+    coord.underlyingActor.writeSmallContractFlatOnly(accountHash, slots)
+    coord.underlyingActor.pendingFlatBatchEntries shouldBe 4
+
+    // Pivot refresh: must commit the accumulator THEN advance the root.
+    coord ! Messages.StoragePivotRefreshed(newRoot)
+
+    awaitAssert(coord.underlyingActor.inFlightFlatBatches shouldBe 0, max = 1.second)
+
+    // Data made it to disk despite the pivot refresh.
+    slots.foreach { case (slotHash, value) =>
+      flatSlots.getSlot(accountHash, slotHash) shouldBe Some(value)
+    }
+    coord.underlyingActor.pendingFlatBatchAccounts shouldBe empty
+
+    system.stop(coord)
+  }
+
+  it should "decrement in-flight count on FlatBatchFlushFailed and stay operational" taggedAs UnitTest in {
+    val flatSlots = new FlatSlotStorage(EphemDataSource())
+    val (coord, _) = newCoordWithFlatBatch(flatSlots, threshold = 1000)
+
+    coord.underlyingActor.inFlightFlatBatches = 2
+
+    coord ! Messages.FlatBatchFlushFailed(
+      forStateRoot = kec256(ByteString("flat-batch-test-root")),
+      entryCount = 11,
+      error = "synthetic write failure"
+    )
+
+    coord.underlyingActor.inFlightFlatBatches shouldBe 1
+
+    coord ! Messages.StorageGetProgress
+    expectMsgType[Any](3.seconds)
+
+    system.stop(coord)
   }
 }

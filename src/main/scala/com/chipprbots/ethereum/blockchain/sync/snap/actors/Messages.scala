@@ -113,6 +113,13 @@ object Messages {
   case object ByteCodeGetProgress extends ByteCodeCoordinatorMessage
   case object ByteCodeCheckCompletion extends ByteCodeCoordinatorMessage
 
+  /** Sent by SNAPSyncController when bytecode sync has stagnated and must be force-completed (#1164). Coordinator
+    * abandons remaining pending/active tasks (with an accounting counter), drains the queue, and reports
+    * `ByteCodeSyncComplete`. Mirrors `ForceCompleteStorage`. Missing bytecodes can be recovered post-SNAP via
+    * `BytecodeRecoveryActor`.
+    */
+  case object ForceCompleteByteCodes extends ByteCodeCoordinatorMessage
+
   sealed trait ByteCodeWorkerMessage
   case class FetchByteCodes(task: ByteCodeTask, peer: Peer) extends ByteCodeWorkerMessage
   case class ByteCodeWorkerFetchTask(task: ByteCodeTask, peer: Peer, requestId: BigInt, maxResponseSize: BigInt)
@@ -158,7 +165,7 @@ object Messages {
   case object NoMoreStorageTasks extends StorageRangeCoordinatorMessage
 
   /** Sent by SNAPSyncController when storage sync has stagnated and should promote to healing. Coordinator flushes
-    * deferred writes and reports StorageRangeSyncComplete.
+    * deferred writes and reports StorageRangeSyncForceCompleted so the controller cannot treat the handoff as clean.
     */
   case object ForceCompleteStorage extends StorageRangeCoordinatorMessage
 
@@ -178,6 +185,23 @@ object Messages {
       accountHashes: Seq[ByteString],
       error: String,
       forStateRoot: ByteString
+  ) extends StorageRangeCoordinatorMessage
+
+  /** An aggregated flat-slot batch (small-contract writes) finished committing on the storage-writer dispatcher.
+    * `forStateRoot` lets the coordinator drop completion messages from a generation that has since been superseded by a
+    * pivot refresh. The data has already been persisted; the message is just bookkeeping.
+    */
+  private[actors] case class FlatBatchFlushComplete(
+      forStateRoot: ByteString,
+      entryCount: Int,
+      elapsedMs: Long
+  ) extends StorageRangeCoordinatorMessage
+
+  /** Aggregated flat-slot batch failed to commit. Healing phase is expected to re-fetch the missing slots. */
+  private[actors] case class FlatBatchFlushFailed(
+      forStateRoot: ByteString,
+      entryCount: Int,
+      error: String
   ) extends StorageRangeCoordinatorMessage
 
   // ========================================

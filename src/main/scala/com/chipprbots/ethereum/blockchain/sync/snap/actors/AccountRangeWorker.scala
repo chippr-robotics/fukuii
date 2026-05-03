@@ -2,8 +2,6 @@ package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
 import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props}
 
-import scala.concurrent.duration._
-
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
@@ -59,12 +57,13 @@ class AccountRangeWorker(
       responseBytes = responseBytes
     )
 
-    // Track the request with timeout
+    // Track the request with adaptive timeout from SNAPRequestTracker / PeerRateTracker
+    // (geth msgrate algorithm). Starts at ~12s for a fresh tracker, converges down as peers
+    // respond — slow peers get pruned faster instead of holding in-flight slots for a full 30s.
     requestTracker.trackRequest(
       requestId,
       peer,
-      SNAPRequestTracker.RequestType.GetAccountRange,
-      timeout = 30.seconds
+      SNAPRequestTracker.RequestType.GetAccountRange
     ) {
       self ! RequestTimeout(requestId)
     }
