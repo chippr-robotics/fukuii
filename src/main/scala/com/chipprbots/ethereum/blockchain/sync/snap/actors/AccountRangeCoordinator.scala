@@ -1,6 +1,15 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
-import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props, SupervisorStrategy, OneForOneStrategy, Status}
+import org.apache.pekko.actor.{
+  Actor,
+  ActorLogging,
+  ActorRef,
+  Cancellable,
+  Props,
+  SupervisorStrategy,
+  OneForOneStrategy,
+  Status
+}
 import org.apache.pekko.actor.SupervisorStrategy._
 import org.apache.pekko.util.ByteString
 
@@ -186,19 +195,80 @@ class AccountRangeCoordinator(
   // Priority queue: dequeue the task with the SMALLEST remaining keyspace first.
   // This focuses workers on nearly-complete ranges, ensuring at least some ranges
   // finish before peers stop responding (instead of spreading work evenly across all 16).
-  private val pendingTasks = mutable.PriorityQueue[AccountTask](remainingTasks: _*)(
+  private[actors] val pendingTasks = mutable.PriorityQueue[AccountTask](remainingTasks: _*)(
     Ordering.by[AccountTask, BigInt](_.remainingKeyspace).reverse
   )
-  private val activeTasks = mutable.Map[BigInt, (AccountTask, ActorRef, Peer)]() // requestId -> (task, worker, peer)
+  // requestId -> (task, worker, peer)
+  private[actors] val activeTasks = mutable.Map[BigInt, (AccountTask, ActorRef, Peer)]()
   private val completedTasks = mutable.ArrayBuffer[AccountTask]()
 
   // Worker pool
-  private val workers = mutable.ArrayBuffer[ActorRef]()
-  private val idleWorkers = mutable.LinkedHashSet.empty[ActorRef]
+  private[actors] val workers = mutable.ArrayBuffer[ActorRef]()
+  private[actors] val idleWorkers = mutable.LinkedHashSet.empty[ActorRef]
+
+  // #1184: dispatch-stalled detector — silent peers (no FIN/RST) leave activeTasks slots
+  // held forever; the worker→TaskFailed cascade depends on a response that never arrives.
+  // Track time-of-last-progress and fire `CheckDispatchStalled` periodically; when
+  // `activeTasks.nonEmpty && (now - lastDispatchOrResponseMs) > noActivityTimeoutMs`, drain.
+  // 90 s threshold fires before the controller's 180 s `Account stall detected` watchdog,
+  // so the coordinator self-heals without burning a pivot-refresh budget slot.
+  private[actors] var lastDispatchOrResponseMs: Long = System.currentTimeMillis()
+  private val noActivityTimeoutMs: Long = 90_000L
+  private val dispatchStallCheckInterval: FiniteDuration = 30.seconds
+  private var stallCheckTask: Option[Cancellable] = None
 
   /** Count in-flight requests for a given peer (pipelining support). */
   private def inFlightForPeer(peer: Peer): Int =
     activeTasks.values.count(_._3.id == peer.id)
+
+  /** Drain stale in-flight requests back to the pending queue (#1184). Sends `WorkerRequestCancelled` to each affected
+    * worker — the worker is responsible for cancelling its own `SNAPRequestTracker` entry and resetting `currentTask`,
+    * matching the existing contract on the `RequestTimeout` / `WorkerPeerDisconnected` paths.
+    *
+    *   - `PeerUnavailable` → `peerFilter = Some(peerId)`
+    *   - dispatch-stalled / pivot-refresh / `RecoverStalledAccountTasks` → `peerFilter = None`
+    *
+    * Mirrors `StorageRangeCoordinator.maybeRequestPivotRefresh` (~lines 167-187), extended with
+    * `WorkerRequestCancelled` notification because `AccountRangeWorker` (unlike storage workers) keeps per-request
+    * `currentTask` state. Without the cancel, the drained worker stays in `working` and would reject the next
+    * `FetchAccountRange` with `TaskFailed(0, "Worker busy")`.
+    *
+    * Idempotent: `activeTasks.remove` returns `None` for already-removed slots, so a late `TaskFailed` / `TaskComplete`
+    * arriving after a drain is a safe no-op via the existing `.foreach` pattern in `handleTaskComplete` /
+    * `handleTaskFailed`.
+    *
+    * Caller is responsible for resetting `lastDispatchOrResponseMs` if recovery should also reset the activity timer
+    * regardless of whether any slots were drained (e.g. `PivotRefreshed` and `RecoverStalledAccountTasks` always reset;
+    * `PeerUnavailable` only resets when something was drained).
+    *
+    * @return
+    *   number of slots drained
+    */
+  private def drainActiveTasks(reason: String, peerFilter: Option[String] = None): Int = {
+    val toDrain: Seq[(BigInt, AccountTask, ActorRef, Peer)] = activeTasks.toSeq.collect {
+      case (reqId, (task, worker, peer)) if peerFilter.forall(_ == peer.id.value) =>
+        (reqId, task, worker, peer)
+    }
+    if (toDrain.isEmpty) return 0
+    toDrain.foreach { case (reqId, task, worker, _) =>
+      // 1. Cancel the worker's local state FIRST so it leaves `working` and accepts the
+      //    next FetchAccountRange. The worker calls requestTracker.completeRequest itself,
+      //    matching the existing contract. Pekko preserves coordinator → worker message
+      //    ordering, so any subsequent FetchAccountRange to the same worker arrives strictly
+      //    after this cancellation has been processed.
+      worker ! WorkerRequestCancelled(reqId)
+      // 2. Re-queue the task. Do NOT increment requeueCount — drain is recovery, not a
+      //    per-task failure; bumping would prematurely trip MaxRequeuesPerTask.
+      task.pending = false
+      pendingTasks.enqueue(task)
+      // 3. Mark the worker idle in the coordinator's pool (idempotent).
+      markWorkerIdle(worker)
+      // 4. Remove the slot.
+      activeTasks.remove(reqId)
+    }
+    log.info(s"Re-queued ${toDrain.size} stale in-flight account requests ($reason)")
+    toDrain.size
+  }
 
   // Statistics
   private var accountsDownloaded: Long = 0
@@ -361,14 +431,22 @@ class AccountRangeCoordinator(
     } else {
       log.info(s"AccountRangeCoordinator starting with $concurrency workers")
     }
+    // #1184: schedule the periodic dispatch-stalled detector. Fires every 30 s; the
+    // 90 s `noActivityTimeoutMs` ensures we drain stuck slots before the controller's
+    // 180 s `Account stall detected` watchdog escalates to a pivot refresh.
+    import context.dispatcher
+    stallCheckTask = Some(
+      context.system.scheduler
+        .scheduleAtFixedRate(dispatchStallCheckInterval, dispatchStallCheckInterval, self, CheckDispatchStalled)
+    )
     // If all tasks were already completed, report completion immediately
     if (pendingTasks.isEmpty && activeTasks.isEmpty) {
-      import context.dispatcher
       context.system.scheduler.scheduleOnce(100.millis, self, CheckCompletion)
     }
   }
 
   override def postStop(): Unit = {
+    stallCheckTask.foreach(_.cancel())
     // Send final progress snapshot so controller can resume from saved positions on restart
     sendProgressSnapshot()
     // Close and delete temporary files.
@@ -425,11 +503,11 @@ class AccountRangeCoordinator(
       stateRoot = newStateRoot
       pivotWasRefreshed = true
 
-      // Update all pending tasks to use the new root
+      // #1184: drain unconditionally instead of relying on the worker → TaskFailed cascade
+      // that misses silent peers. Drain BEFORE re-applying the root so all drained tasks
+      // land in pendingTasks first, then pendingTasks.foreach re-tags them to the new root.
+      drainActiveTasks(s"pivot refresh to ${newStateRoot.take(4).toHex}")
       pendingTasks.foreach(_.rootHash = newStateRoot)
-      // Active tasks will fail with root mismatch and get re-queued;
-      // handleTaskFailed will re-enqueue them with the old root, but they'll be
-      // dispatched with the new root on their next attempt.
 
       // Clear stateless tracking — peers can serve the new root
       statelessPeers.clear()
@@ -441,6 +519,9 @@ class AccountRangeCoordinator(
       peerConsecutiveTimeouts.clear()
       // Note: do NOT reset consecutiveUnproductiveRefreshes here.
       // Only reset when we receive real account data (proof the new root is servable).
+
+      // #1184: always reset the activity timer — we're starting a fresh phase.
+      lastDispatchOrResponseMs = System.currentTimeMillis()
 
       // Resume dispatching with the fresh root
       tryRedispatchPendingTasks()
@@ -478,19 +559,45 @@ class AccountRangeCoordinator(
 
     case PeerUnavailable(peerId) =>
       // Peer disconnected — remove from available set, reset its timeout counter so network-level
-      // disconnects don't accumulate toward the stateless threshold. Then immediately cancel any
-      // in-flight request to this peer so workers return to idle without waiting for 30s timeout.
+      // disconnects don't accumulate toward the stateless threshold.
       // go-ethereum eth/protocols/snap/sync.go:1621 (revertRequests) and Besu
       // AbstractRetryingPeerTask.java:158 both treat disconnect as transient re-queue, not failure.
       knownAvailablePeers.find(_.id.value == peerId).foreach(knownAvailablePeers -= _)
       peerConsecutiveTimeouts.remove(peerId)
       peerCooldownUntilMs.remove(peerId)
-      val inFlight = activeTasks.collect {
-        case (reqId, (_, worker, peer)) if peer.id.value == peerId => (reqId, worker)
-      }.toSeq
-      if (inFlight.nonEmpty) {
-        log.debug(s"Peer $peerId disconnected — cancelling ${inFlight.size} in-flight request(s)")
-        inFlight.foreach { case (_, worker) => worker ! WorkerPeerDisconnected(peerId) }
+      // #1184: drain the slots ourselves rather than relying on the worker → TaskFailed
+      // cascade. drainActiveTasks sends WorkerRequestCancelled to each affected worker so they
+      // leave `working` state cleanly and don't reject redispatch with TaskFailed(0, "Worker
+      // busy"). Subsumes the legacy WorkerPeerDisconnected flow.
+      val drained = drainActiveTasks(s"peer $peerId unavailable", Some(peerId))
+      if (drained > 0) {
+        lastDispatchOrResponseMs = System.currentTimeMillis()
+        tryRedispatchPendingTasks()
+      }
+
+    case RecoverStalledAccountTasks =>
+      // #1184: controller-side stall watchdog hook. The controller only sends this when it
+      // already thinks we're stuck, so reset the activity timer unconditionally to give us a
+      // fresh window before the next 180 s tick.
+      drainActiveTasks("controller-side stall recovery")
+      lastDispatchOrResponseMs = System.currentTimeMillis()
+      tryRedispatchPendingTasks()
+
+    case CheckDispatchStalled =>
+      val now = System.currentTimeMillis()
+      val stalled = activeTasks.nonEmpty && (now - lastDispatchOrResponseMs) > noActivityTimeoutMs
+      if (stalled) {
+        val idleSec = (now - lastDispatchOrResponseMs) / 1000
+        log.warning(
+          s"Account dispatch stalled: ${activeTasks.size} active, ${pendingTasks.size} pending, " +
+            s"no activity for ${idleSec}s. Draining stale slots."
+        )
+        drainActiveTasks(s"dispatch stalled (no activity ${idleSec}s)")
+        // Always reset — give dispatch a clean window so the detector doesn't re-fire on the
+        // next 30 s tick. If dispatch can't proceed (no eligible peers) we'll detect that
+        // next time anyway.
+        lastDispatchOrResponseMs = System.currentTimeMillis()
+        tryRedispatchPendingTasks()
       }
 
     case TaskComplete(requestId, result) =>
@@ -688,6 +795,8 @@ class AccountRangeCoordinator(
     val responseBytes = responseBytesTargetFor(peer)
 
     worker ! FetchAccountRange(task, peer, requestId, responseBytes)
+    // #1184: progress signal — used by CheckDispatchStalled.
+    lastDispatchOrResponseMs = System.currentTimeMillis()
   }
 
   // How many accounts to insert per chunk before yielding to the actor mailbox.
@@ -705,6 +814,8 @@ class AccountRangeCoordinator(
       result: Either[String, (Int, Seq[(ByteString, Account)], Seq[ByteString])]
   ): Unit =
     activeTasks.remove(requestId).foreach { case (task, worker, peer) =>
+      // #1184: progress signal — used by CheckDispatchStalled.
+      lastDispatchOrResponseMs = System.currentTimeMillis()
       markWorkerIdle(worker)
       result match {
         case Right((accountCount, accounts, proof)) =>
@@ -846,6 +957,8 @@ class AccountRangeCoordinator(
 
   private def handleTaskFailed(requestId: BigInt, reason: String): Unit =
     activeTasks.remove(requestId).foreach { case (task, worker, peer) =>
+      // #1184: progress signal — used by CheckDispatchStalled.
+      lastDispatchOrResponseMs = System.currentTimeMillis()
       markWorkerIdle(worker)
       // Only mark peer stateless if the task was using the CURRENT root.
       // After pivot refresh, in-flight requests with the OLD root will fail

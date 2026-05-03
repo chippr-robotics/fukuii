@@ -2975,6 +2975,11 @@ class SNAPSyncController(
         s"Account data preserved."
     )
     lastAccountProgressMs = System.currentTimeMillis()
+    // #1184: ask the coordinator to drain `activeTasks` BEFORE the pivot refresh so any
+    // leaked slots are re-queued and visible by the time the resulting `PivotRefreshed`
+    // message arrives. Coordinator-side defensive drains (PeerUnavailable / PivotRefreshed
+    // / CheckDispatchStalled) cover this independently; this is the explicit controller hook.
+    accountRangeCoordinator.foreach(_ ! actors.Messages.RecoverStalledAccountTasks)
     refreshPivotInPlace(s"account stall: $context")
   }
 

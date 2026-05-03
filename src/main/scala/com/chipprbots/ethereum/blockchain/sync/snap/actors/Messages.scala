@@ -64,6 +64,18 @@ object Messages {
     */
   case class PivotRefreshed(newStateRoot: ByteString) extends AccountRangeCoordinatorMessage
 
+  /** Sent by `SNAPSyncController`'s 180 s account-stall watchdog (#1184) to ask the `AccountRangeCoordinator` to drain
+    * `activeTasks` back to `pendingTasks` before the controller's `refreshPivotInPlace` runs. Coordinator-side
+    * defensive drains in `PeerUnavailable` / `PivotRefreshed` / `CheckDispatchStalled` cover this independently; this
+    * message is the explicit controller hook.
+    */
+  case object RecoverStalledAccountTasks extends AccountRangeCoordinatorMessage
+
+  /** Self-message — periodic check for `activeTasks.nonEmpty` + no-activity wedges (#1184). Scheduled from
+    * `AccountRangeCoordinator.preStart` at 30 s intervals via `scheduleAtFixedRate`; cancelled in `postStop`.
+    */
+  private[actors] case object CheckDispatchStalled extends AccountRangeCoordinatorMessage
+
   // Internal message for chunked account storage (avoids blocking the actor for minutes)
   private[actors] case class StoreAccountChunk(
       task: AccountTask,
@@ -83,6 +95,12 @@ object Messages {
   case class AccountRangeResponseMsg(response: AccountRange) extends AccountRangeWorkerMessage
   case class RequestTimeout(requestId: BigInt) extends AccountRangeWorkerMessage
   case class WorkerPeerDisconnected(peerId: String) extends AccountRangeWorkerMessage
+
+  /** Cancellation from coordinator after a `drainActiveTasks` operation (#1184). The worker cancels its own
+    * `SNAPRequestTracker` entry, clears `currentTask`, and returns to `idle` if the request id matches; no `TaskFailed`
+    * is sent back because the coordinator has already re-queued the task. Idempotent: a second cancel is a no-op.
+    */
+  case class WorkerRequestCancelled(requestId: BigInt) extends AccountRangeWorkerMessage
 
   // ========================================
   // ByteCode Messages
