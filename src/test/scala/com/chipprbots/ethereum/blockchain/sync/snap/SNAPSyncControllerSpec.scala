@@ -141,6 +141,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     val _ = AccountRangeSyncComplete
     val _ = ByteCodeSyncComplete
     val _ = StorageRangeSyncComplete
+    val _ = StorageRangeSyncForceCompleted
     val _ = StateHealingComplete
     val _ = StateValidationComplete
     val getProgress = GetProgress
@@ -153,6 +154,24 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     getProgress shouldBe GetProgress
     bootstrapComplete shouldBe BootstrapComplete
     fallback shouldBe FallbackToFastSync
+  }
+
+  it should "skip healing for clean deferred-merkleization downloads only" taggedAs UnitTest in {
+    val config = SNAPSyncConfig(deferredMerkleization = true)
+
+    SNAPSyncController.shouldSkipHealingAfterDownloads(
+      snapSyncConfig = config,
+      storagePhaseForceCompleted = false
+    ) shouldBe true
+  }
+
+  it should "run healing when storage was force-completed even with deferred merkleization" taggedAs UnitTest in {
+    val config = SNAPSyncConfig(deferredMerkleization = true)
+
+    SNAPSyncController.shouldSkipHealingAfterDownloads(
+      snapSyncConfig = config,
+      storagePhaseForceCompleted = true
+    ) shouldBe false
   }
 
   it should "have bootstrap message with target block" taggedAs UnitTest in {

@@ -154,7 +154,7 @@ object Messages {
   case object NoMoreStorageTasks extends StorageRangeCoordinatorMessage
 
   /** Sent by SNAPSyncController when storage sync has stagnated and should promote to healing. Coordinator flushes
-    * deferred writes and reports StorageRangeSyncComplete.
+    * deferred writes and reports StorageRangeSyncForceCompleted so the controller cannot treat the handoff as clean.
     */
   case object ForceCompleteStorage extends StorageRangeCoordinatorMessage
 

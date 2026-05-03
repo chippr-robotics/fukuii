@@ -290,7 +290,7 @@ class StorageRangeCoordinatorSpec
     slots.foreach { case (slotHash, value) =>
       flatSlots.getSlot(accountHash, slotHash) shouldBe Some(value)
     }
-    controller.expectMsg(3.seconds, SNAPSyncController.StorageRangeSyncComplete)
+    controller.expectMsg(3.seconds, SNAPSyncController.StorageRangeSyncForceCompleted)
 
     system.stop(coord)
   }
