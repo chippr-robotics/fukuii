@@ -214,6 +214,111 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
       assert(storage.isSnapSyncInProgress())
       assert(!storage.isSnapSyncDone())
     }
+
+    // ========================================
+    // Backfill cursors (#1169)
+    // ========================================
+
+    "round-trip backfill target / header / body / receipt cursors" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+
+      // Empty storage — every getter returns 0.
+      assert(storage.getBackfillTarget() == 0)
+      assert(storage.getBackfillBestHeader() == 0)
+      assert(storage.getBackfillBestBody() == 0)
+      assert(storage.getBackfillBestReceipt() == 0)
+
+      storage
+        .putBackfillTarget(BigInt(19_250_000))
+        .and(storage.putBackfillBestHeader(BigInt(8_000_000)))
+        .and(storage.putBackfillBestBody(BigInt(7_500_000)))
+        .and(storage.putBackfillBestReceipt(BigInt(7_000_000)))
+        .commit()
+
+      assert(storage.getBackfillTarget() == BigInt(19_250_000))
+      assert(storage.getBackfillBestHeader() == BigInt(8_000_000))
+      assert(storage.getBackfillBestBody() == BigInt(7_500_000))
+      assert(storage.getBackfillBestReceipt() == BigInt(7_000_000))
+    }
+
+    "clearBackfillCursors removes all four backfill keys" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      storage
+        .putBackfillTarget(BigInt(100))
+        .and(storage.putBackfillBestHeader(BigInt(50)))
+        .and(storage.putBackfillBestBody(BigInt(40)))
+        .and(storage.putBackfillBestReceipt(BigInt(30)))
+        .commit()
+
+      storage.clearBackfillCursors().commit()
+
+      assert(storage.getBackfillTarget() == 0)
+      assert(storage.getBackfillBestHeader() == 0)
+      assert(storage.getBackfillBestBody() == 0)
+      assert(storage.getBackfillBestReceipt() == 0)
+    }
+
+    "needsBackfillResume — false when SNAP is not done" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      // Even with cursors set, no SNAP-done flag means no resume.
+      storage.putBackfillTarget(BigInt(100)).commit()
+      assert(!storage.needsBackfillResume())
+    }
+
+    "needsBackfillResume — false when no target was persisted" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      storage.snapSyncDone().commit()
+      assert(!storage.needsBackfillResume())
+    }
+
+    "needsBackfillResume — false when all cursors have reached target" taggedAs (
+      UnitTest,
+      DatabaseTest
+    ) in new Fixtures {
+      val storage = newAppStateStorage()
+      storage.snapSyncDone().commit()
+      val target = BigInt(1000)
+      storage
+        .putBackfillTarget(target)
+        .and(storage.putBackfillBestHeader(target))
+        .and(storage.putBackfillBestBody(target))
+        .and(storage.putBackfillBestReceipt(target))
+        .commit()
+      assert(!storage.needsBackfillResume())
+    }
+
+    "needsBackfillResume — true when any cursor lags target" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage = newAppStateStorage()
+      storage.snapSyncDone().commit()
+      val target = BigInt(1000)
+
+      // Header behind.
+      storage
+        .putBackfillTarget(target)
+        .and(storage.putBackfillBestHeader(BigInt(500)))
+        .and(storage.putBackfillBestBody(target))
+        .and(storage.putBackfillBestReceipt(target))
+        .commit()
+      assert(storage.needsBackfillResume())
+
+      // Now header caught up but body behind.
+      storage
+        .putBackfillBestHeader(target)
+        .and(storage.putBackfillBestBody(BigInt(800)))
+        .commit()
+      assert(storage.needsBackfillResume())
+
+      // Body caught up but receipt behind.
+      storage
+        .putBackfillBestBody(target)
+        .and(storage.putBackfillBestReceipt(BigInt(600)))
+        .commit()
+      assert(storage.needsBackfillResume())
+
+      // All three caught up.
+      storage.putBackfillBestReceipt(target).commit()
+      assert(!storage.needsBackfillResume())
+    }
   }
 
   trait Fixtures {

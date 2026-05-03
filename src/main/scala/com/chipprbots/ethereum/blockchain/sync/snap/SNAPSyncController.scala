@@ -2643,6 +2643,7 @@ class SNAPSyncController(
             .props(
               blockchainReader,
               blockchainWriter,
+              appStateStorage,
               networkPeerManager,
               peerEventBus,
               syncConfig,

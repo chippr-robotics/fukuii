@@ -13,6 +13,8 @@ import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
+import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.testing.Tags._
@@ -80,6 +82,87 @@ class ChainDownloaderSpec
     system.stop(downloader)
   }
 
+  // Issue #1169: persist a BackfillTarget at Start so that a node killed mid-backfill can
+  // resume standalone after restart.
+  it should "persist BackfillTarget on Start so a restart can resume backfill" taggedAs UnitTest in {
+    implicit val ec: ExecutionContext = system.dispatcher
+    val blockchainReader = mock[BlockchainReader]
+    val blockchainWriter = mock[BlockchainWriter]
+    val appStateStorage = new AppStateStorage(EphemDataSource())
+    val networkPeerManager = TestProbe()
+    val peerEventBus = TestProbe()
+
+    // findBestStoredHeader probes block 1; mock it as missing so the binary search falls
+    // through and returns 0 immediately, leaving the actor in `downloading` state.
+    (blockchainReader.getBlockHeaderByNumber _)
+      .expects(BigInt(1))
+      .returning(None)
+      .anyNumberOfTimes()
+
+    appStateStorage.getBackfillTarget() shouldBe BigInt(0)
+
+    val downloader = TestActorRef[ChainDownloader](
+      ChainDownloader.props(
+        blockchainReader = blockchainReader,
+        blockchainWriter = blockchainWriter,
+        appStateStorage = appStateStorage,
+        networkPeerManager = networkPeerManager.ref,
+        peerEventBus = peerEventBus.ref,
+        syncConfig = defaultSyncConfig,
+        scheduler = system.scheduler,
+        maxConcurrentRequests = 4
+      )
+    )
+
+    val target = BigInt(19_250_000)
+    downloader ! ChainDownloader.Start(target)
+
+    appStateStorage.getBackfillTarget() shouldBe target
+
+    system.stop(downloader)
+  }
+
+  // Issue #1169: an UpdateTarget message during the downloading phase persists the bumped
+  // target so a restart resumes against the latest target rather than a stale one.
+  it should "persist a bumped BackfillTarget on UpdateTarget" taggedAs UnitTest in {
+    implicit val ec: ExecutionContext = system.dispatcher
+    val blockchainReader = mock[BlockchainReader]
+    val blockchainWriter = mock[BlockchainWriter]
+    val appStateStorage = new AppStateStorage(EphemDataSource())
+    val networkPeerManager = TestProbe()
+    val peerEventBus = TestProbe()
+
+    (blockchainReader.getBlockHeaderByNumber _)
+      .expects(BigInt(1))
+      .returning(None)
+      .anyNumberOfTimes()
+
+    val downloader = TestActorRef[ChainDownloader](
+      ChainDownloader.props(
+        blockchainReader = blockchainReader,
+        blockchainWriter = blockchainWriter,
+        appStateStorage = appStateStorage,
+        networkPeerManager = networkPeerManager.ref,
+        peerEventBus = peerEventBus.ref,
+        syncConfig = defaultSyncConfig,
+        scheduler = system.scheduler,
+        maxConcurrentRequests = 4
+      )
+    )
+
+    downloader ! ChainDownloader.Start(BigInt(1000))
+    appStateStorage.getBackfillTarget() shouldBe BigInt(1000)
+
+    downloader ! ChainDownloader.UpdateTarget(BigInt(1500))
+    appStateStorage.getBackfillTarget() shouldBe BigInt(1500)
+
+    // A target lower than the current one is ignored.
+    downloader ! ChainDownloader.UpdateTarget(BigInt(1200))
+    appStateStorage.getBackfillTarget() shouldBe BigInt(1500)
+
+    system.stop(downloader)
+  }
+
   /** Spawn a ChainDownloader for unit-level message-handling tests. The downloader stays in `idle` (no `Start` sent),
     * so the in-flight queues remain empty and we don't need real blockchain or peer infrastructure.
     */
@@ -87,12 +170,14 @@ class ChainDownloaderSpec
     implicit val ec: ExecutionContext = system.dispatcher
     val blockchainReader = mock[BlockchainReader]
     val blockchainWriter = mock[BlockchainWriter]
+    val appStateStorage = new AppStateStorage(EphemDataSource())
     val networkPeerManager = TestProbe()
     val peerEventBus = TestProbe()
     TestActorRef[ChainDownloader](
       ChainDownloader.props(
         blockchainReader = blockchainReader,
         blockchainWriter = blockchainWriter,
+        appStateStorage = appStateStorage,
         networkPeerManager = networkPeerManager.ref,
         peerEventBus = peerEventBus.ref,
         syncConfig = defaultSyncConfig,
