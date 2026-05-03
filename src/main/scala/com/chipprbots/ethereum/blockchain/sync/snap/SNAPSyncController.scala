@@ -118,6 +118,13 @@ class SNAPSyncController(
   private var validationInProgress: Boolean = false
   private var validationGeneration: Long = 0L
 
+  // Running total of unique codeHashes streamed in via `IncrementalContractData`. Used to set
+  // `progressMonitor.estimatedTotalBytecodes` so the SNAP-sync dashboard's
+  // `100 * downloaded / clamp_min(estimated_total, 1)` formula has a real denominator. Without
+  // this, `estimated_total` stays at 0, the formula divides by 1 (the clamp floor), and the
+  // dashboard reads `5,239,500%` for a normal in-flight bytecodes count.
+  private var bytecodesEstimatedTotal: Long = 0L
+
   // Retry counter for bootstrap-to-SNAP transition (exponential backoff: 2s→60s cap, max 10 retries)
   private var bootstrapRetryCount: Int = 0
   private val BootstrapRetryBaseDelay = 2.seconds
@@ -563,6 +570,11 @@ class SNAPSyncController(
     case IncrementalContractData(codeHashes, storageTasks) =>
       if (codeHashes.nonEmpty) {
         bytecodeCoordinator.foreach(_ ! actors.Messages.AddByteCodeTasks(codeHashes))
+        // Accumulate the running total of unique codeHashes for the dashboard. `codeHashes` is
+        // already deduplicated upstream (Bloom filter in AccountRangeCoordinator), so summing
+        // batch sizes gives the unique total.
+        bytecodesEstimatedTotal += codeHashes.size
+        progressMonitor.updateEstimates(bytecodes = bytecodesEstimatedTotal)
       }
       if (storageTasks.nonEmpty) {
         storageRangeCoordinator.foreach(_ ! actors.Messages.AddStorageTasks(storageTasks))
@@ -2773,6 +2785,9 @@ class SNAPSyncController(
     bytecodePhaseComplete = false
     storagePhaseComplete = false
     storagePhaseForceCompleted = false
+    // Reset bytecode-estimate counter so it stays in sync with progressMonitor.reset()
+    // (called below). IncrementalContractData will repopulate as accounts are re-identified.
+    bytecodesEstimatedTotal = 0L
     appStateStorage
       .putSnapSyncAccountsComplete(false)
       .and(appStateStorage.putSnapSyncStorageComplete(false))
