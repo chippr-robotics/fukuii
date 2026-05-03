@@ -127,21 +127,10 @@ class RLPxConnectionHandler(
     private val CanonicalSnapBase = 0x30
     private val CanonicalSnapSize = 0x08
 
-    /** Wire-space size of the peer's ETH protocol — varies by version. ETH/66-68 have 17 codes (0x00..0x10). ETH/69
-      * adds BlockRangeUpdate at 0x11, for 18 codes. Getting this wrong shifts the peer's SNAP base by one and every
-      * subsequent SNAP message decodes against the adjacent canonical code (e.g. GetStorageRanges mis-decoded as
-      * StorageRanges).
-      */
-    private def ethWireSizeFor(cap: Capability): Int = cap match {
-      case Capability.ETH69 => 0x12
-      case _                => CanonicalEthSize
-    }
-
     private case class InboundTranslator(
         peerEthBase: Int,
         peerEthSize: Int,
-        peerSnapBase: Option[Int],
-        snapFirst: Boolean
+        peerSnapBase: Option[Int]
     ) {
       def translateType(messageType: Int): Int =
         if (messageType < CanonicalEthBase) {
@@ -226,51 +215,27 @@ class RLPxConnectionHandler(
         negotiatedEth: Capability,
         supportsSnap: Boolean
     ): InboundTranslator = {
-      val peerCaps = hello.capabilities.toList
-      val snapIndex = peerCaps.indexWhere(_ == Capability.SNAP1)
-      val ethIndex = peerCaps.indexWhere(_ == negotiatedEth) match {
-        case -1 =>
-          peerCaps.indexWhere {
-            case Capability.ETH63 | Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 |
-                Capability.ETH68 =>
-              true
-            case _ => false
-          }
-        case idx => idx
-      }
+      // Delegate the actual id-assignment math to the pure helper on the companion object
+      // (testable without an actor). Per devp2p RLPx, shared cap ids are assigned in
+      // alphabetical capability-name order; eth sorts before snap so eth is always at 0x10
+      // when both are negotiated. See `RLPxConnectionHandler.computeCapabilityOffsets` for
+      // the full rationale and the #1189 bug it fixes.
+      val offsets = RLPxConnectionHandler.computeCapabilityOffsets(
+        peerCaps = hello.capabilities.toList,
+        negotiatedEth = negotiatedEth,
+        supportsSnap = supportsSnap
+      )
 
-      val snapFirst = supportsSnap && snapIndex >= 0 && ethIndex >= 0 && snapIndex < ethIndex
-      // Cap offsets: devp2p reserves 0x00..0x0F (16 codes). Subsequent capabilities are
-      // allocated contiguously in Hello.capabilities order. The peer's ETH wire size
-      // depends on the negotiated ETH version — ETH/66-68 have 17 codes, ETH/69 has 18.
-      // Getting that size wrong shifts every subsequent SNAP wire offset by one and
-      // causes SNAP messages to decode against the wrong canonical code.
-      val ethOnlyPeer = ethIndex >= 0 && snapIndex < 0
-      val snapOnlyPeer = snapIndex >= 0 && ethIndex < 0
-      val peerEthWireSize = ethWireSizeFor(negotiatedEth)
-
-      val peerSnapBase =
-        if (!supportsSnap) None
-        else if (snapOnlyPeer) Some(CanonicalEthBase)
-        else if (snapFirst) Some(CanonicalEthBase)
-        else Some(CanonicalEthBase + peerEthWireSize)
-
-      val peerEthBase =
-        if (ethOnlyPeer || !supportsSnap) CanonicalEthBase
-        else if (snapFirst) CanonicalEthBase + CanonicalSnapSize
-        else CanonicalEthBase
-
-      val snapBaseStr = peerSnapBase.map(b => s"0x${b.toHexString}").getOrElse("<disabled>")
+      val snapBaseStr = offsets.peerSnapBase.map(b => s"0x${b.toHexString}").getOrElse("<disabled>")
       log.info(
-        s"INBOUND_CAP_OFFSETS: peer=$peerId clientId=${hello.clientId} snapFirst=$snapFirst " +
-          s"peerEthBase=0x${peerEthBase.toHexString} peerSnapBase=$snapBaseStr"
+        s"INBOUND_CAP_OFFSETS: peer=$peerId clientId=${hello.clientId} " +
+          s"peerEthBase=0x${offsets.peerEthBase.toHexString} peerSnapBase=$snapBaseStr"
       )
 
       InboundTranslator(
-        peerEthBase = peerEthBase,
-        peerEthSize = peerEthWireSize,
-        peerSnapBase = peerSnapBase,
-        snapFirst = snapFirst
+        peerEthBase = offsets.peerEthBase,
+        peerEthSize = offsets.peerEthSize,
+        peerSnapBase = offsets.peerSnapBase
       )
     }
 
@@ -882,6 +847,72 @@ object RLPxConnectionHandler {
   val tcpFailedCount = new java.util.concurrent.atomic.AtomicInteger(0)
   val authFailedCount = new java.util.concurrent.atomic.AtomicInteger(0)
   val authTimeoutCount = new java.util.concurrent.atomic.AtomicInteger(0)
+
+  // Canonical message-id bases for this codebase (used by ConnectedHandler.MessageCodec
+  // and exposed here so the pure offset helper below can be unit-tested without dragging
+  // in actor / inner-class machinery). Keep in sync with `ConnectedHandler.CanonicalEthBase`
+  // / `CanonicalSnapSize` — those private constants exist solely as a lexical convenience
+  // inside the inner class.
+  val CanonicalEthBase: Int = 0x10
+  val CanonicalSnapSize: Int = 0x08
+
+  /** Wire-space size of the peer's ETH protocol. ETH/66-68 have 17 codes (0x00..0x10), ETH/69 adds BlockRangeUpdate at
+    * 0x11 → 18 codes. Getting this wrong shifts the peer's SNAP base by one and every subsequent SNAP message decodes
+    * against the adjacent canonical code.
+    */
+  def ethWireSizeFor(cap: Capability): Int = cap match {
+    case Capability.ETH69 => 0x12
+    case _                => 0x11
+  }
+
+  /** Negotiated wire offsets for the peer's ETH and (optional) SNAP capabilities.
+    *   - `peerEthBase`: wire id where the peer's ETH messages start.
+    *   - `peerEthSize`: number of ETH wire ids reserved (depends on negotiated ETH version).
+    *   - `peerSnapBase`: `Some(base)` when SNAP is negotiated, `None` otherwise.
+    */
+  case class CapabilityOffsets(peerEthBase: Int, peerEthSize: Int, peerSnapBase: Option[Int])
+
+  /** Compute the wire-id offsets the peer is using for ETH and SNAP, given its Hello capability list and the ETH
+    * version we negotiated.
+    *
+    * Per devp2p RLPx spec (https://github.com/ethereum/devp2p/blob/master/rlpx.md#message-id-based-multiplexing):
+    * shared capabilities are assigned wire ids starting from 0x10 in **alphabetical order of capability name**, NOT the
+    * order they appear in the peer's Hello message. The wire-name strings are `"eth"` and `"snap"` (see
+    * `Capability.scala:17-18`); `"eth"` sorts strictly before `"snap"`, so when both capabilities are negotiated, ETH
+    * always gets the lower base (0x10) and SNAP follows at `0x10 + ethSize`.
+    *
+    * Closes #1189: previously the offset derivation used `snapIndex < ethIndex` on `hello.capabilities` order.
+    * Nethermind advertises `snap/1` before `eth/69` in its Hello, which tripped that heuristic into mapping the peer's
+    * eth/69 Status frame (wire id 0x10, `RLPList[7]`) onto canonical SNAP `GetAccountRange` (`RLPList[5]`) — a
+    * structural decode mismatch, and fukuii would `DECODE_ERROR: Cannot decode GetAccountRange ... got RLPList[7]` and
+    * disconnect, breaking Hive sync interop and Mordor/ETC sync from snap-enabled peers.
+    *
+    * Reference clients converge on alphabetical ordering: geth (`p2p/protocol.go matchProtocols`), besu
+    * (`Capability.compareTo`), reth (same).
+    */
+  def computeCapabilityOffsets(
+      peerCaps: List[Capability],
+      negotiatedEth: Capability,
+      supportsSnap: Boolean
+  ): CapabilityOffsets = {
+    val snapPresent = peerCaps.contains(Capability.SNAP1)
+    val ethPresent = peerCaps.exists(_.name == com.chipprbots.ethereum.network.p2p.messages.ProtocolFamily.ETH)
+    val snapOnlyPeer = snapPresent && !ethPresent
+    val peerEthWireSize = ethWireSizeFor(negotiatedEth)
+
+    // Alphabetical: "eth" < "snap" → eth at 0x10 when both negotiated; snap follows at 0x10+ethSize.
+    // Snap-only peer is degenerate (we wouldn't reach here without a negotiated ETH cap) but
+    // covered for completeness — snap takes the 0x10 slot in that case.
+    val peerSnapBase: Option[Int] =
+      if (!supportsSnap) None
+      else if (snapOnlyPeer) Some(CanonicalEthBase)
+      else Some(CanonicalEthBase + peerEthWireSize)
+
+    // peerEthBase is always 0x10 — eth sorts before snap alphabetically, so eth always
+    // gets the lower base. (For a snap-only peer, peerEthBase is unused but this default
+    // is harmless.)
+    CapabilityOffsets(peerEthBase = CanonicalEthBase, peerEthWireSize, peerSnapBase)
+  }
 
   def props(
       capabilities: List[Capability],
