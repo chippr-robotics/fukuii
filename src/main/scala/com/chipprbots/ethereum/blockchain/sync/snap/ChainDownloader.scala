@@ -17,6 +17,7 @@ import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg
 import com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler
 import com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.RequestFailed
 import com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.ResponseReceived
+import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.BlockBody
@@ -46,6 +47,7 @@ import com.chipprbots.ethereum.utils.Config.SyncConfig
 class ChainDownloader(
     blockchainReader: BlockchainReader,
     blockchainWriter: BlockchainWriter,
+    appStateStorage: AppStateStorage,
     val networkPeerManager: ActorRef,
     val peerEventBus: ActorRef,
     val blacklist: Blacklist,
@@ -97,6 +99,8 @@ class ChainDownloader(
   def idle: Receive = handlePeerListMessages.orElse {
     case Start(target) =>
       targetBlock = target
+      // Persist the target so a node restart mid-backfill can resume standalone (#1169).
+      appStateStorage.putBackfillTarget(target).commit()
       // Find where we left off (check what's already stored)
       bestHeaderNumber = findBestStoredHeader()
       log.info(
@@ -113,6 +117,7 @@ class ChainDownloader(
       // Re-start downloading if target was updated after completion (e.g. pivot refreshed from 0 to real block)
       if (newTarget > targetBlock && newTarget > bestHeaderNumber) {
         targetBlock = newTarget
+        appStateStorage.putBackfillTarget(newTarget).commit()
         bestHeaderNumber = findBestStoredHeader()
         log.info("Chain download restarted with new target: {}, resuming from header {}", newTarget, bestHeaderNumber)
         scheduleDispatch()
@@ -150,6 +155,7 @@ class ChainDownloader(
       if (newTarget > targetBlock) {
         log.info("Chain download target updated: {} -> {}", targetBlock, newTarget)
         targetBlock = newTarget
+        appStateStorage.putBackfillTarget(newTarget).commit()
       }
 
     case Stop =>
@@ -408,7 +414,9 @@ class ChainDownloader(
     while (!aborted && it.hasNext) {
       val header = it.next()
       if (prevHash.exists(_ == header.parentHash)) {
-        // Store header + chain weight
+        // Store header + chain weight, atomically advancing the backfill cursor in the same
+        // RocksDB write batch (#1169) so a crash mid-write never leaves the cursor ahead of
+        // the data on disk.
         val parentWeight = blockchainReader
           .getChainWeightByHash(header.parentHash)
           .getOrElse(ChainWeight.totalDifficultyOnly(0))
@@ -416,6 +424,7 @@ class ChainDownloader(
         blockchainWriter
           .storeBlockHeader(header)
           .and(blockchainWriter.storeChainWeight(header.hash, parentWeight.increase(header)))
+          .and(appStateStorage.putBackfillBestHeader(header.number))
           .commit()
 
         bodiesQueue :+= header.hash
@@ -449,11 +458,22 @@ class ChainDownloader(
       return
     }
 
-    // Store received bodies
+    // Store received bodies + atomically advance the body cursor (#1169).
     val received = requestedHashes.zip(bodies)
+    val highestBodyNumber = received
+      .flatMap { case (hash, _) => blockchainReader.getBlockHeaderByHash(hash).map(_.number) }
+      .maxOption
+      .getOrElse(BigInt(0))
+    val cursorUpdate =
+      if (highestBodyNumber > appStateStorage.getBackfillBestBody())
+        appStateStorage.putBackfillBestBody(highestBodyNumber)
+      else
+        appStateStorage.emptyBatchUpdate
+
     received
       .map { case (hash, body) => blockchainWriter.storeBlockBody(hash, body) }
       .reduce(_.and(_))
+      .and(cursorUpdate)
       .commit()
 
     bodiesDownloaded += received.size
@@ -497,9 +517,23 @@ class ChainDownloader(
           .map(_.toReceipt)
       }
 
-      // Store receipts
-      requestedHashes.zip(receiptsByBlock).foreach { case (hash, receipts) =>
-        blockchainWriter.storeReceipts(hash, receipts).commit()
+      // Store receipts. Atomically advance the receipt cursor (#1169) in the same batch as
+      // the highest-numbered receipt write, so a crash mid-write doesn't leave the cursor
+      // ahead of disk.
+      val receiptsByHash = requestedHashes.zip(receiptsByBlock)
+      val highestReceiptNumber = receiptsByHash
+        .flatMap { case (hash, _) => blockchainReader.getBlockHeaderByHash(hash).map(_.number) }
+        .maxOption
+        .getOrElse(BigInt(0))
+
+      receiptsByHash.zipWithIndex.foreach { case ((hash, receipts), idx) =>
+        val storeUpdate = blockchainWriter.storeReceipts(hash, receipts)
+        val withCursor =
+          if (idx == receiptsByHash.size - 1 && highestReceiptNumber > appStateStorage.getBackfillBestReceipt())
+            storeUpdate.and(appStateStorage.putBackfillBestReceipt(highestReceiptNumber))
+          else
+            storeUpdate
+        withCursor.commit()
       }
 
       receiptsDownloaded += receiptsByBlock.size
@@ -536,20 +570,34 @@ class ChainDownloader(
         receiptsDownloaded,
         targetBlock
       )
+      // Clear backfill cursors so the next startup doesn't try to resume a finished backfill (#1169).
+      appStateStorage.clearBackfillCursors().commit()
       dispatchTask.foreach(_.cancel())
       context.parent ! Done
       context.become(idle)
     }
 
   private def findBestStoredHeader(): BigInt = {
-    // Binary search for the highest stored header starting from genesis
-    // The chain may have been partially downloaded in a previous run
-    var low: BigInt = 0
-    var high: BigInt = targetBlock
-    var best: BigInt = 0
+    // Fast skip: trust the persisted cursor when its header is on disk (#1169).
+    // The cursor is updated atomically with each storeBlockHeader commit so it never
+    // overstates progress. We still validate by reading the header at the cursor —
+    // if the cursor was somehow corrupted (manual DB intervention, downgrade), fall
+    // back to the binary search.
+    val cursorHeader = appStateStorage.getBackfillBestHeader()
+    val (low0, best0) =
+      if (cursorHeader > 0 && blockchainReader.getBlockHeaderByNumber(cursorHeader).isDefined)
+        (cursorHeader + 1, cursorHeader)
+      else
+        (BigInt(0), BigInt(0))
 
-    // Quick check: if genesis+1 doesn't exist, start from 0
-    if (blockchainReader.getBlockHeaderByNumber(1).isEmpty) return 0
+    // Quick check: if genesis+1 doesn't exist, start from 0 (only meaningful for fresh runs).
+    if (best0 == 0 && blockchainReader.getBlockHeaderByNumber(1).isEmpty) return 0
+
+    // Binary search above the cursor for the highest stored header. With cursor-fast-skip
+    // this almost always finds `best == cursorHeader` after one probe.
+    var low: BigInt = low0
+    var high: BigInt = targetBlock
+    var best: BigInt = best0
 
     while (low <= high) {
       val mid = (low + high) / 2
@@ -561,18 +609,27 @@ class ChainDownloader(
       }
     }
 
-    // Also rebuild the body/receipt queues for headers we have but bodies/receipts we don't
+    // Rebuild the body/receipt queues for headers we have but bodies/receipts we don't.
+    // Use the body/receipt cursors as the floor so we don't re-walk every header — anything
+    // ≤ those cursors was committed atomically with its body/receipt write and is on disk.
+    val bodyFloor = appStateStorage.getBackfillBestBody()
+    val receiptFloor = appStateStorage.getBackfillBestReceipt()
+
     var i = best
     while (i >= 1) {
-      blockchainReader.getBlockHeaderByNumber(i) match {
-        case Some(header) =>
-          if (blockchainReader.getBlockBodyByHash(header.hash).isEmpty) {
-            bodiesQueue :+= header.hash
-          }
-          if (blockchainReader.getReceiptsByHash(header.hash).isEmpty) {
-            receiptsQueue :+= header.hash
-          }
-        case None => // shouldn't happen
+      val needsBodyCheck = i > bodyFloor
+      val needsReceiptCheck = i > receiptFloor
+      if (needsBodyCheck || needsReceiptCheck) {
+        blockchainReader.getBlockHeaderByNumber(i) match {
+          case Some(header) =>
+            if (needsBodyCheck && blockchainReader.getBlockBodyByHash(header.hash).isEmpty) {
+              bodiesQueue :+= header.hash
+            }
+            if (needsReceiptCheck && blockchainReader.getReceiptsByHash(header.hash).isEmpty) {
+              receiptsQueue :+= header.hash
+            }
+          case None => // shouldn't happen
+        }
       }
       i -= 1
     }
@@ -643,6 +700,7 @@ object ChainDownloader {
   def props(
       blockchainReader: BlockchainReader,
       blockchainWriter: BlockchainWriter,
+      appStateStorage: AppStateStorage,
       networkPeerManager: ActorRef,
       peerEventBus: ActorRef,
       syncConfig: SyncConfig,
@@ -654,6 +712,7 @@ object ChainDownloader {
       new ChainDownloader(
         blockchainReader,
         blockchainWriter,
+        appStateStorage,
         networkPeerManager,
         peerEventBus,
         CacheBasedBlacklist.empty(1000),
