@@ -123,6 +123,9 @@ class ByteCodeCoordinator(
   // Statistics
   private var bytecodesDownloaded: Long = 0
   private var bytesDownloaded: Long = 0
+  // #1164: number of bytecode hashes abandoned via ForceCompleteByteCodes. Surfaced in postStop()
+  // diagnostics so operators can correlate force-completes with later BytecodeRecoveryActor activity.
+  private var bytecodesAbandoned: Long = 0
 
   // ByteCodes request tuning (Nethermind-style): use a per-peer dynamic byte budget, clamped hard to 2 MiB.
   // We send many hashes and rely on the peer-side `responseBytes` soft limit to bound work.
@@ -161,7 +164,10 @@ class ByteCodeCoordinator(
     log.info("ByteCodeCoordinator starting")
 
   override def postStop(): Unit =
-    log.info(s"ByteCodeCoordinator stopped. Downloaded $bytecodesDownloaded bytecodes")
+    log.info(
+      s"ByteCodeCoordinator stopped. Downloaded $bytecodesDownloaded bytecodes" +
+        (if (bytecodesAbandoned > 0) s", abandoned $bytecodesAbandoned via force-complete" else "")
+    )
 
   override val supervisorStrategy: SupervisorStrategy =
     OneForOneStrategy(maxNrOfRetries = 3, withinTimeRange = 1.minute) { case _: Exception =>
@@ -271,6 +277,29 @@ class ByteCodeCoordinator(
 
     case ByteCodeCheckCompletion =>
       checkCompletion()
+
+    case ForceCompleteByteCodes =>
+      // #1164: When bytecode sync stagnates (e.g., a small set of code hashes no peer can serve),
+      // the existing completion check is unreachable because pendingTasks doesn't drain. Mirrors
+      // StorageRangeCoordinator.ForceCompleteStorage. Missing bytecodes can be recovered post-SNAP
+      // via BytecodeRecoveryActor.
+      val abandonedPending = pendingTasks.size
+      val abandonedActive = activeTasks.size
+      val abandonedTotal = abandonedPending + abandonedActive
+      log.warning(
+        s"Force-completing bytecode sync: $bytecodesDownloaded bytecodes downloaded, " +
+          s"abandoning $abandonedTotal remaining tasks ($abandonedPending pending, $abandonedActive active). " +
+          "Missing bytecodes will be recovered post-SNAP via BytecodeRecoveryActor if needed."
+      )
+      bytecodesAbandoned += abandonedTotal
+      pendingTasks.clear()
+      // Mark workers idle so they don't keep dispatching; drop active task tracking.
+      activeTasks.values.foreach(active => markWorkerIdle(active.worker))
+      activeTasks.clear()
+      // Set the sentinel so any late `checkCompletion()` calls also pass cleanly.
+      noMoreTasksExpected = true
+      log.info("Bytecode sync force-completed (promoting to healing/recovery phase)")
+      snapSyncController ! SNAPSyncController.ByteCodeSyncComplete
 
     case ByteCodeGetProgress =>
       val total = completedTasks.size + activeTasks.size + pendingTasks.size

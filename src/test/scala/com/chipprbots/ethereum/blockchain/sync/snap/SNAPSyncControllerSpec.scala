@@ -46,6 +46,29 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     config.maxSnapSyncFailures should be > 0
   }
 
+  // Regression for #1162: chain backfill is decoupled from SNAP completion. The new
+  // `chainBackfillConcurrentRequests` budget controls how many in-flight ETH requests background
+  // backfill is allowed once regular sync has taken over. Default must be small (yield to regular sync).
+  it should "default chainBackfillConcurrentRequests to a small value (yield to regular sync)" taggedAs UnitTest in {
+    val config = SNAPSyncConfig()
+    config.chainBackfillConcurrentRequests should be > 0
+    config.chainBackfillConcurrentRequests should be <= config.chainDownloadBoostedConcurrentRequests
+  }
+
+  // Regression for #1162: SNAPSyncController emits a two-phase handshake — SnapSyncFinalized first,
+  // then Done either immediately or later. SnapSyncFinalized must carry the pivot block number
+  // so SyncController has the context it needs when starting regular sync.
+  "SNAPSyncController.SnapSyncFinalized" should "carry the pivot block number" taggedAs UnitTest in {
+    val msg = SNAPSyncController.SnapSyncFinalized(BigInt(12345))
+    msg.pivot shouldBe BigInt(12345)
+  }
+
+  it should "be distinct from Done" taggedAs UnitTest in {
+    val finalized: Any = SNAPSyncController.SnapSyncFinalized(BigInt(0))
+    val done: Any = SNAPSyncController.Done
+    (finalized should not).equal(done)
+  }
+
   "SyncProgress" should "format progress string correctly" taggedAs UnitTest in {
     import SNAPSyncController._
 
@@ -122,6 +145,7 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     val _ = AccountRangeSyncComplete
     val _ = ByteCodeSyncComplete
     val _ = StorageRangeSyncComplete
+    val _ = StorageRangeSyncForceCompleted
     val _ = StateHealingComplete
     val _ = StateValidationComplete
     val getProgress = GetProgress
@@ -134,6 +158,24 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     getProgress shouldBe GetProgress
     bootstrapComplete shouldBe BootstrapComplete
     fallback shouldBe FallbackToFastSync
+  }
+
+  it should "skip healing for clean deferred-merkleization downloads only" taggedAs UnitTest in {
+    val config = SNAPSyncConfig(deferredMerkleization = true)
+
+    SNAPSyncController.shouldSkipHealingAfterDownloads(
+      snapSyncConfig = config,
+      storagePhaseForceCompleted = false
+    ) shouldBe true
+  }
+
+  it should "run healing when storage was force-completed even with deferred merkleization" taggedAs UnitTest in {
+    val config = SNAPSyncConfig(deferredMerkleization = true)
+
+    SNAPSyncController.shouldSkipHealingAfterDownloads(
+      snapSyncConfig = config,
+      storagePhaseForceCompleted = true
+    ) shouldBe false
   }
 
   it should "have bootstrap message with target block" taggedAs UnitTest in {

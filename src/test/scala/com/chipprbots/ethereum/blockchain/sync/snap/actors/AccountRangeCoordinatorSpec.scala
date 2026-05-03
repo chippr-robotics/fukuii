@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
-import org.apache.pekko.actor.ActorSystem
-import org.apache.pekko.testkit.{TestKit, TestProbe, ImplicitSender}
+import org.apache.pekko.actor.{ActorSystem, Status}
+import org.apache.pekko.testkit.{TestActorRef, TestKit, TestProbe, ImplicitSender}
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
@@ -251,5 +251,130 @@ class AccountRangeCoordinatorSpec
 
     snapSyncController.expectMsgType[Messages.AccountRangeProgress](3.seconds)
     snapSyncController.expectMsg(3.seconds, SNAPSyncController.AccountRangeSyncComplete)
+  }
+
+  // ========================================
+  // Async trie flush + finalisation generation guard (issue #1166)
+  // ========================================
+
+  /** Helper: build a TestActorRef so tests can poke `underlyingActor` state directly and inject `system.dispatcher` as
+    * the trie EC for deterministic timing.
+    */
+  private def newCoordinator(
+      stateRoot: ByteString = kec256(ByteString("trie-async-test-root")),
+      controller: TestProbe = TestProbe()
+  ): TestActorRef[AccountRangeCoordinator] =
+    TestActorRef[AccountRangeCoordinator](
+      AccountRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = TestProbe().ref,
+        requestTracker = new SNAPRequestTracker()(system.scheduler),
+        mptStorage = new TestMptStorage(),
+        concurrency = 4,
+        snapSyncController = controller.ref,
+        accountTrieEcOverride = Some(system.dispatcher)
+      )
+    )
+
+  it should "construct successfully when an account-trie EC override is supplied" taggedAs UnitTest in {
+    val coord = newCoordinator()
+    coord should not be null
+    coord.underlyingActor.trieFlushGeneration shouldBe 0L
+    system.stop(coord)
+  }
+
+  it should "drop a stale TrieFlushComplete (finalisation) silently — no controller messages" taggedAs UnitTest in {
+    val controller = TestProbe()
+    val coord = newCoordinator(controller = controller)
+
+    // Force the actor into the `finalizing` receive without actually running the heavy work.
+    // We simulate post-spawn state: bump the generation and capture it, then bump again so an
+    // arriving TrieFlushComplete with the captured generation looks stale.
+    coord.underlyingActor.trieFlushGeneration = 7L
+    coord.underlyingActor.context.become(coord.underlyingActor.finalizing)
+
+    val staleGen = 5L
+
+    coord ! AccountRangeCoordinator.TrieFlushComplete(staleGen, Right(ByteString("would-be-root")))
+
+    // Stale → controller hears nothing.
+    controller.expectNoMessage(300.millis)
+    coord.underlyingActor.trieFlushGeneration shouldBe 7L
+
+    system.stop(coord)
+  }
+
+  it should "honour a current-generation TrieFlushComplete and notify the controller" taggedAs UnitTest in {
+    val controller = TestProbe()
+    val coord = newCoordinator(controller = controller)
+
+    coord.underlyingActor.trieFlushGeneration = 3L
+    coord.underlyingActor.context.become(coord.underlyingActor.finalizing)
+
+    val rootHash = ByteString(Array.fill[Byte](32)(0x42))
+    coord ! AccountRangeCoordinator.TrieFlushComplete(3L, Right(rootHash))
+
+    controller.expectMsg(2.seconds, SNAPSyncController.AccountTrieFinalized(rootHash))
+    controller.expectMsg(2.seconds, SNAPSyncController.ProgressAccountsTrieFinalized)
+  }
+
+  it should "drop a stale TrieFlushAsyncComplete (periodic flush) and return to normal receive" taggedAs UnitTest in {
+    val controller = TestProbe()
+    val coord = newCoordinator(controller = controller)
+
+    coord.underlyingActor.trieFlushGeneration = 4L
+    coord.underlyingActor.context.become(coord.underlyingActor.flushing)
+
+    val staleGen = 2L
+
+    coord ! AccountRangeCoordinator.TrieFlushAsyncComplete(staleGen, persistedRoot = None, elapsedMs = 5L)
+
+    // The handler self-sends CheckCompletion, which can produce a ProgressAccountEstimate when
+    // tasks exist — for a fresh coordinator with empty tasks no message is emitted.
+    controller.expectNoMessage(300.millis)
+
+    // After dropping the stale completion the actor must be back on the normal receive,
+    // i.e. ready to handle a regular query.
+    coord ! Messages.GetProgress
+    expectMsgType[AccountRangeStats](2.seconds)
+
+    system.stop(coord)
+  }
+
+  it should "drop a stale TrieFlushAsyncFailed and return to normal receive" taggedAs UnitTest in {
+    val controller = TestProbe()
+    val coord = newCoordinator(controller = controller)
+
+    coord.underlyingActor.trieFlushGeneration = 9L
+    coord.underlyingActor.context.become(coord.underlyingActor.flushing)
+
+    coord ! AccountRangeCoordinator.TrieFlushAsyncFailed(generation = 8L, error = "stale failure")
+
+    controller.expectNoMessage(300.millis)
+
+    // Confirm we left `flushing` and are back on normal receive.
+    coord ! Messages.GetProgress
+    expectMsgType[AccountRangeStats](2.seconds)
+
+    system.stop(coord)
+  }
+
+  it should "ignore Status.Failure during finalisation by stopping the actor" taggedAs UnitTest in {
+    val controller = TestProbe()
+    val coord = newCoordinator(controller = controller)
+
+    coord.underlyingActor.trieFlushGeneration = 1L
+    coord.underlyingActor.context.become(coord.underlyingActor.finalizing)
+
+    val watcher = TestProbe()
+    watcher.watch(coord)
+
+    coord ! Status.Failure(new RuntimeException("synthetic failure"))
+
+    // Staging escalates trie-finalisation failures via AccountTrieFinalizationFailed (carries the
+    // exception message so SyncController can decide whether to restart SNAP). The actor still
+    // stops itself on this terminal path.
+    controller.expectMsg(2.seconds, SNAPSyncController.AccountTrieFinalizationFailed("synthetic failure"))
+    watcher.expectTerminated(coord, 2.seconds)
   }
 }

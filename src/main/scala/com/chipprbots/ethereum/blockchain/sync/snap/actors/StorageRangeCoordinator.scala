@@ -5,10 +5,12 @@ import org.apache.pekko.actor.SupervisorStrategy._
 import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
+import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 import scala.math.Ordered.orderingToOrdered
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
+import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.storage.{DeferredWriteMptStorage, FlatSlotStorage, MptStorage}
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -53,7 +55,9 @@ class StorageRangeCoordinator(
     initialMaxInFlightPerPeer: Int = 5,
     configInitialResponseBytes: Int = 1048576,
     configMinResponseBytes: Int = 131072,
-    deferredMerkleization: Boolean = true
+    deferredMerkleization: Boolean = true,
+    flatBatchEntryThreshold: Int = 1000,
+    flatBatchEcOverride: Option[ExecutionContext] = None
 ) extends Actor
     with ActorLogging {
 
@@ -360,6 +364,37 @@ class StorageRangeCoordinator(
     */
   private val smallContractThreshold = 1024
 
+  // ========================================
+  // Aggregated flat-slot writes (small-contract path)
+  // ========================================
+  //
+  // ~95% of ETC contracts hit the small-contract path. Doing a synchronous
+  // RocksDB commit per contract on the actor mailbox produces a commit storm
+  // and starves the coordinator's other work. Instead, accumulate completed
+  // small contracts here and flush them off-thread in batches.
+  //
+  // Stale flushes after a pivot refresh are tagged with the state root they
+  // were aggregated under and dropped at the completion-message handler — the
+  // data is still written (writes are idempotent and any account that
+  // legitimately needs different slot values at a later root will be re-fetched
+  // and overwrite), the bookkeeping just doesn't double-count.
+
+  /** Pending (accountHash, sortedSlots) pairs awaiting flush. Package-private for unit tests. */
+  private[actors] val pendingFlatBatchAccounts =
+    mutable.ArrayBuffer.empty[(ByteString, Seq[(ByteString, ByteString)])]
+
+  /** Total slot entries currently buffered in `pendingFlatBatchAccounts`. Package-private for unit tests. */
+  private[actors] var pendingFlatBatchEntries: Int = 0
+
+  /** Number of in-flight async flat-batch flushes — used to gate completion. Package-private for unit tests. */
+  private[actors] var inFlightFlatBatches: Int = 0
+
+  /** Dedicated dispatcher for flat-batch RocksDB commits. Tests can inject their own ExecutionContext to keep timing
+    * deterministic; production looks up `storage-writer-dispatcher` from the actor system.
+    */
+  private val flatBatchEc: ExecutionContext =
+    flatBatchEcOverride.getOrElse(context.system.dispatchers.lookup("storage-writer-dispatcher"))
+
   /** Bounded thread pool for trie construction — controls RocksDB write pressure. Using 3 threads avoids overwhelming
     * the single-threaded RocksDB compaction while still enabling parallel trie builds. Unbounded Futures on
     * sync-dispatcher caused thread starvation under heavy load.
@@ -375,18 +410,59 @@ class StorageRangeCoordinator(
     )
   private val trieBuilderEc = scala.concurrent.ExecutionContext.fromExecutorService(trieBuilderPool)
 
-  /** Write only to flat storage for small contracts — skip MPT construction. Called synchronously from the actor for
-    * accounts that arrived in a single response with fewer slots than smallContractThreshold. These are ~95% of ETC
-    * contracts. The MPT will be built lazily from flat data during healing or post-sync Merkleization.
+  /** Buffer a small-contract's slots into the aggregated flat-batch accumulator. The actual RocksDB commit is deferred
+    * to `flushPendingFlatBatch()` — called once the accumulator hits `flatBatchEntryThreshold` or at completion — and
+    * runs on `storage-writer-dispatcher` so it doesn't block the coordinator mailbox. ~95% of ETC contracts go through
+    * this path; an inline commit per contract was a hidden RocksDB bottleneck.
     */
-  private def writeSmallContractFlatOnly(
+  private[actors] def writeSmallContractFlatOnly(
       accountHash: ByteString,
       slots: mutable.ArrayBuffer[(ByteString, ByteString)]
   ): Unit = {
-    val sorted = slots.sortBy(_._1)(ByteStringOrdering)
-    flatSlotStorage.putSlotsBatch(accountHash, sorted.toSeq).commit()
+    val sorted = slots.sortBy(_._1)(ByteStringOrdering).toSeq
+    pendingFlatBatchAccounts += ((accountHash, sorted))
+    pendingFlatBatchEntries += sorted.size
     pendingAccountSlots.remove(accountHash)
     totalBufferedSlots -= slots.size
+    if (pendingFlatBatchEntries >= flatBatchEntryThreshold) {
+      flushPendingFlatBatch()
+    }
+  }
+
+  /** Hand the current accumulator off to the storage-writer dispatcher and reset it. The Future builds the combined
+    * `DataSourceBatchUpdate` and commits it in one RocksDB write batch, then notifies the actor with
+    * `FlatBatchFlushComplete` (or `FlatBatchFlushFailed`). The completion message carries `forStateRoot` so the actor
+    * can drop bookkeeping for batches that pre-date a pivot refresh.
+    */
+  private def flushPendingFlatBatch(): Unit = {
+    if (pendingFlatBatchAccounts.isEmpty) return
+    val batchAccounts = pendingFlatBatchAccounts.toList // immutable snapshot
+    val entries = pendingFlatBatchEntries
+    val forStateRoot = stateRoot
+    pendingFlatBatchAccounts.clear()
+    pendingFlatBatchEntries = 0
+    inFlightFlatBatches += 1
+
+    val selfRef = self
+    val storage = flatSlotStorage // capture for Future
+    val ec = flatBatchEc
+    import scala.concurrent.{Future, blocking}
+    Future {
+      blocking {
+        val startMs = System.currentTimeMillis()
+        var combined: DataSourceBatchUpdate = storage.emptyBatchUpdate
+        batchAccounts.foreach { case (accountHash, slots) =>
+          combined = combined.and(storage.putSlotsBatch(accountHash, slots))
+        }
+        combined.commit()
+        System.currentTimeMillis() - startMs
+      }
+    }(ec).onComplete {
+      case scala.util.Success(elapsedMs) =>
+        selfRef ! FlatBatchFlushComplete(forStateRoot, entries, elapsedMs)
+      case scala.util.Failure(e) =>
+        selfRef ! FlatBatchFlushFailed(forStateRoot, entries, e.getMessage)
+    }(ec)
   }
 
   /** Build tries for a batch of complete accounts on a background thread. Sorts slots by key for better trie locality,
@@ -509,6 +585,23 @@ class StorageRangeCoordinator(
 
   /** Shut down the trie builder thread pool when the actor stops. */
   override def postStop(): Unit = {
+    // Best-effort: flush any tail of accumulated small-contract slots synchronously
+    // here so we don't lose data when the actor terminates (force-complete, restart).
+    if (pendingFlatBatchAccounts.nonEmpty) {
+      try {
+        var combined: DataSourceBatchUpdate = flatSlotStorage.emptyBatchUpdate
+        pendingFlatBatchAccounts.foreach { case (accountHash, slots) =>
+          combined = combined.and(flatSlotStorage.putSlotsBatch(accountHash, slots))
+        }
+        combined.commit()
+        log.info(s"postStop: flushed final ${pendingFlatBatchEntries} flat slot entries")
+      } catch {
+        case e: Exception =>
+          log.error(s"postStop: failed to flush final flat batch: ${e.getMessage}")
+      }
+      pendingFlatBatchAccounts.clear()
+      pendingFlatBatchEntries = 0
+    }
     trieBuilderPool.shutdown()
     super.postStop()
   }
@@ -601,6 +694,10 @@ class StorageRangeCoordinator(
       ) {
         flushAllPendingTrieBuilds()
       }
+      // Drain the flat-batch accumulator once no more downloads are coming.
+      if (noMoreTasksExpected && tasks.isEmpty && activeTasks.isEmpty) {
+        flushPendingFlatBatch()
+      }
       if (isComplete) {
         log.info("Storage range sync complete!")
         snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
@@ -620,6 +717,7 @@ class StorageRangeCoordinator(
       // Trigger final trie builds if all downloads are done
       if (tasks.isEmpty && activeTasks.isEmpty) {
         flushAllPendingTrieBuilds()
+        flushPendingFlatBatch()
       }
       if (isComplete) {
         log.info("Storage range sync complete!")
@@ -636,14 +734,23 @@ class StorageRangeCoordinator(
       )
       // Build tries for any fully-downloaded accounts before force-completing
       flushAllPendingTrieBuilds()
+      // Hand off any small-contract slots that are still in the accumulator.
+      flushPendingFlatBatch()
       // Discard partially-downloaded accounts (continuations won't arrive)
       pendingAccountSlots.clear()
       totalBufferedSlots = 0
       log.info("Storage range sync force-completed (promoting to healing phase)")
-      snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
+      snapSyncController ! SNAPSyncController.StorageRangeSyncForceCompleted
 
     case StoragePivotRefreshed(newStateRoot) =>
       log.info(s"Storage pivot refreshed: ${stateRoot.take(4).toHex} -> ${newStateRoot.take(4).toHex}")
+
+      // Flush before mutating `stateRoot` so the off-actor commit is tagged with the OLD root.
+      // The completion message will then arrive when `stateRoot` is the NEW root, take the stale
+      // branch in the handler, and emit the "bookkeeping ignored, data on disk" debug line. Done
+      // before the buffer-clears below so we don't have to coordinate the order with `pendingFlatBatchAccounts`.
+      flushPendingFlatBatch()
+
       stateRoot = newStateRoot
 
       // Cancel all in-flight requests: their responses are for the old root and will
@@ -742,6 +849,28 @@ class StorageRangeCoordinator(
           pendingAccountSlots.remove(hash)
         }
       }
+      self ! StorageCheckCompletion
+
+    case FlatBatchFlushComplete(forStateRoot, entryCount, elapsedMs) =>
+      inFlightFlatBatches = (inFlightFlatBatches - 1).max(0)
+      if (forStateRoot != stateRoot) {
+        log.debug(
+          s"Flat batch flush completed for stale root ${forStateRoot.take(4).toHex} " +
+            s"($entryCount entries) — bookkeeping ignored, data on disk"
+        )
+      } else {
+        val rate = if (elapsedMs > 0) entryCount * 1000L / elapsedMs else entryCount.toLong
+        log.debug(s"Flat batch flushed: $entryCount slots in ${elapsedMs}ms ($rate slots/s)")
+      }
+      // A drained flush may have unblocked completion (NoMore + empty queues).
+      self ! StorageCheckCompletion
+
+    case FlatBatchFlushFailed(forStateRoot, entryCount, error) =>
+      inFlightFlatBatches = (inFlightFlatBatches - 1).max(0)
+      log.error(
+        s"Flat batch flush failed for $entryCount slots " +
+          s"(root ${forStateRoot.take(4).toHex}): $error. Healing phase will recover."
+      )
       self ! StorageCheckCompletion
   }
 
@@ -1175,7 +1304,8 @@ class StorageRangeCoordinator(
 
   private def isComplete: Boolean =
     noMoreTasksExpected && tasks.isEmpty && activeTasks.isEmpty &&
-      accountsReadyForBuild.isEmpty && accountsInTrieConstruction.isEmpty && pendingAccountSlots.isEmpty
+      accountsReadyForBuild.isEmpty && accountsInTrieConstruction.isEmpty && pendingAccountSlots.isEmpty &&
+      pendingFlatBatchAccounts.isEmpty && inFlightFlatBatches == 0
 
   /** Update contract completion counts and send progress to controller. */
   private def updateContractProgress(): Unit = {
@@ -1216,7 +1346,9 @@ object StorageRangeCoordinator {
       initialMaxInFlightPerPeer: Int = 5,
       initialResponseBytes: Int = 1048576,
       minResponseBytes: Int = 131072,
-      deferredMerkleization: Boolean = true
+      deferredMerkleization: Boolean = true,
+      flatBatchEntryThreshold: Int = 1000,
+      flatBatchEcOverride: Option[ExecutionContext] = None
   ): Props =
     Props(
       new StorageRangeCoordinator(
@@ -1232,7 +1364,9 @@ object StorageRangeCoordinator {
         initialMaxInFlightPerPeer,
         configInitialResponseBytes = initialResponseBytes,
         configMinResponseBytes = minResponseBytes,
-        deferredMerkleization = deferredMerkleization
+        deferredMerkleization = deferredMerkleization,
+        flatBatchEntryThreshold = flatBatchEntryThreshold,
+        flatBatchEcOverride = flatBatchEcOverride
       )
     )
 

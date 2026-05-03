@@ -2,8 +2,6 @@ package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
 import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props, Stash}
 
-import scala.concurrent.duration._
-
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -42,12 +40,13 @@ class ByteCodeWorker(
       responseBytes = maxResponseSize
     )
 
-    // Track request with timeout
+    // Track request with adaptive timeout from SNAPRequestTracker / PeerRateTracker.
+    // Starts at ~12s for a fresh tracker; converges down as peers respond so slow peers
+    // get pruned faster instead of holding in-flight slots for a full 30s.
     requestTracker.trackRequest(
       requestId,
       peer,
-      SNAPRequestTracker.RequestType.GetByteCodes,
-      timeout = 30.seconds
+      SNAPRequestTracker.RequestType.GetByteCodes
     ) {
       self ! ByteCodeRequestTimeout(requestId)
     }

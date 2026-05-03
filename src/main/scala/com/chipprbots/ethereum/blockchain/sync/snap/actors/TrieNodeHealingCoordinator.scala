@@ -6,6 +6,7 @@ import org.apache.pekko.util.ByteString
 import org.bouncycastle.util.encoders.Hex
 
 import scala.collection.mutable
+import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
@@ -31,16 +32,31 @@ class TrieNodeHealingCoordinator(
     mptStorage: MptStorage,
     batchSize: Int,
     snapSyncController: ActorRef,
-    concurrency: Int
+    concurrency: Int,
+    healingWriterEcOverride: Option[ExecutionContext] = None
 ) extends Actor
     with ActorLogging {
 
   import Messages._
 
-  // Task management — each task has a pathset (for GetTrieNodes) and a hash (for verification)
-  private case class HealingEntry(pathset: Seq[ByteString], hash: ByteString)
-  private var pendingTasks: Seq[HealingEntry] = Seq.empty
+  // Task management — each task has a pathset (for GetTrieNodes) and a hash (for verification).
+  // ArrayDeque (circular buffer) gives O(1) amortized head/tail operations (#1167). The previous
+  // immutable `Seq` did O(n) on every `:+` and head-drop — quadratic at healing scale.
+  private case class HealingEntry(pathset: Seq[ByteString], hash: ByteString, retries: Int = 0)
+  private val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
   private var completedTaskCount: Int = 0
+  private var abandonedTaskCount: Int = 0
+
+  /** Dedicated dispatcher for the batched raw-node RocksDB flush. Tests inject their own EC; production looks up
+    * `healing-writer-dispatcher` from the actor system. Keeps the blocking write off `sync-dispatcher` so other sync
+    * actors don't stall during healing-heavy bursts.
+    */
+  private val healingWriterEc: ExecutionContext =
+    healingWriterEcOverride.getOrElse(context.system.dispatchers.lookup("healing-writer-dispatcher"))
+
+  // Per-task retry limit: after this many timeouts/failures, skip the task.
+  // At ~6s per timeout cycle, 20 retries = ~2 minutes of trying per node.
+  private val maxRetriesPerTask: Int = 20
 
   // Global stagnation detection: if no nodes healed for this duration, declare
   // healing complete with a warning. Prevents infinite loops when all peers lack
@@ -202,7 +218,9 @@ class TrieNodeHealingCoordinator(
       log.info(s"Flushed $count healed nodes to disk (total: $totalNodesHealed)")
     }
 
-  /** Async flush — copies buffer, clears it, writes on background thread. */
+  /** Async flush — copies buffer, clears it, writes on the dedicated `healing-writer-dispatcher` so the blocking
+    * RocksDB write doesn't compete with sync actors on `sync-dispatcher`.
+    */
   private def flushRawNodesAsync(): Unit =
     if (rawNodeBuffer.nonEmpty && !flushing) {
       flushing = true
@@ -210,13 +228,14 @@ class TrieNodeHealingCoordinator(
       rawNodeBuffer.clear()
       import scala.concurrent.{Future, blocking}
       val selfRef = self
+      val ec = healingWriterEc
       Future {
         blocking {
           mptStorage.storeRawNodes(nodes)
           mptStorage.persist()
           nodes.size
         }
-      }(context.dispatcher).foreach(n => selfRef ! FlushComplete(n))(context.dispatcher)
+      }(ec).foreach(n => selfRef ! FlushComplete(n))(ec)
     }
 
   override def preStart(): Unit = {
@@ -272,7 +291,7 @@ class TrieNodeHealingCoordinator(
       )
       activeRequests.keys.foreach(requestTracker.completeRequest(_, 0))
       activeRequests.clear()
-      pendingTasks = Seq.empty
+      pendingTasks.clear()
       pendingHashSet.clear()
       snapSyncController ! SNAPSyncController.StateHealingComplete
       context.stop(self)
@@ -286,7 +305,7 @@ class TrieNodeHealingCoordinator(
       )
       stateRoot = newStateRoot
       flushRawNodesSync() // Flush any buffered nodes before clearing state
-      pendingTasks = Seq.empty // Will be re-populated by root reseed + inline discovery
+      pendingTasks.clear() // Will be re-populated by root reseed + inline discovery / trie walk from controller
       pendingHashSet.clear()
       statelessPeers.clear()
       peerConsecutiveTimeouts.clear()
@@ -305,7 +324,7 @@ class TrieNodeHealingCoordinator(
       // top-down traversal of the updated trie.
       val pivotReseedPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
       if (!pendingHashSet.contains(newStateRoot) && !isNodeInStorage(newStateRoot)) {
-        pendingTasks = pendingTasks :+ HealingEntry(Seq(pivotReseedPath), newStateRoot)
+        pendingTasks += HealingEntry(Seq(pivotReseedPath), newStateRoot)
         pendingHashSet += newStateRoot
         log.info(
           s"[HEAL] Re-seeded with new root ${Hex.toHexString(newStateRoot.take(4).toArray)} " +
@@ -449,7 +468,7 @@ class TrieNodeHealingCoordinator(
         HealingEntry(pathset = pathset, hash = hash)
     }
     val deduped = pathsAndHashes.size - entries.size
-    pendingTasks = pendingTasks ++ entries
+    pendingTasks ++= entries
     val dedupStr = if (deduped > 0) s" ($deduped duplicates filtered)" else ""
     log.info(s"Queued ${entries.size} nodes for healing$dedupStr. Total pending: ${pendingTasks.size}")
   }
@@ -519,8 +538,9 @@ class TrieNodeHealingCoordinator(
     }
 
     val effectiveBatch = effectiveBatchSize
-    val batch = pendingTasks.take(effectiveBatch)
-    pendingTasks = pendingTasks.drop(effectiveBatch)
+    val takeCount = effectiveBatch.min(pendingTasks.size)
+    val batch: Seq[HealingEntry] = pendingTasks.iterator.take(takeCount).toSeq
+    pendingTasks.dropInPlace(takeCount)
     // Remove dispatched hashes from dedup set (they'll be re-added if re-queued on failure)
     batch.foreach(e => pendingHashSet -= e.hash)
 
@@ -613,7 +633,7 @@ class TrieNodeHealingCoordinator(
     tasksForRequest.foreach { task =>
       if (!healedHashes.contains(task.hash)) {
         pendingHashSet += task.hash
-        pendingTasks = pendingTasks :+ task
+        pendingTasks += task
       }
     }
 
@@ -712,7 +732,7 @@ class TrieNodeHealingCoordinator(
     var requeued = 0
     tasks.foreach { task =>
       pendingHashSet += task.hash
-      pendingTasks = pendingTasks :+ task
+      pendingTasks += task
       requeued += 1
     }
 
@@ -853,7 +873,7 @@ class TrieNodeHealingCoordinator(
 
       if (newEntries.nonEmpty) {
         newEntries.foreach(e => pendingHashSet += e.hash)
-        pendingTasks = pendingTasks ++ newEntries
+        pendingTasks ++= newEntries
         childrenDiscoveredTotal += newEntries.size
         if (childrenDiscoveredTotal % 100 == 0 || childrenDiscoveredTotal <= 20)
           log.info(
@@ -883,7 +903,8 @@ object TrieNodeHealingCoordinator {
       mptStorage: MptStorage,
       batchSize: Int,
       snapSyncController: ActorRef,
-      concurrency: Int = 16
+      concurrency: Int = 16,
+      healingWriterEcOverride: Option[ExecutionContext] = None
   ): Props =
     Props(
       new TrieNodeHealingCoordinator(
@@ -893,7 +914,8 @@ object TrieNodeHealingCoordinator {
         mptStorage,
         batchSize,
         snapSyncController,
-        concurrency
+        concurrency,
+        healingWriterEcOverride
       )
     )
 }

@@ -6,6 +6,7 @@ import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.PoisonPill
 import org.apache.pekko.actor.Props
 import org.apache.pekko.actor.Scheduler
+import org.apache.pekko.actor.Terminated
 
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
@@ -226,9 +227,23 @@ class SyncController(
 
       context.become(runningPivotHeaderBootstrap(peersClient, headerBootstrap, targetBlock, snapSync))
 
+    case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SnapSyncFinalized(pivot) =>
+      log.info(
+        s"SNAP state finalised at pivot=$pivot. Starting regular sync; chain backfill continues in background."
+      )
+      resetSnapFastCycleCount()
+      // SNAPSyncController already owns the live ChainDownloader child via its
+      // `completedWithBackfill` state — don't spawn a duplicate standalone resumer (#1169).
+      val regularSync = startRegularSync(resumeBackfill = false)
+      context.watch(snapSync)
+      context.become(runningRegularSyncWithBackfill(regularSync, snapSync))
+
     case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Done =>
+      // Defensive fallback: with the post-#1162 handshake, SnapSyncFinalized always precedes Done,
+      // so this branch should not normally be reached. If it is (e.g., unexpected message ordering),
+      // treat as a legacy "SNAP done" signal.
       snapSync ! PoisonPill
-      log.info("SNAP sync completed, transitioning to regular sync")
+      log.info("SNAP sync completed (legacy Done path), transitioning to regular sync")
       resetSnapFastCycleCount()
       startRegularSync()
 
@@ -285,6 +300,46 @@ class SyncController(
       case msg =>
         regularSync.forward(msg)
     }
+  }
+
+  /** Receive used between `SnapSyncFinalized` and `Done` from the lingering SNAPSyncController.
+    *
+    * Regular sync is the primary owner of peer slots; SNAP backfill runs at low priority in the background. This
+    * Receive lets `SNAPSyncController.Done` arrive (so we can poison-pill the SNAP actor) and intercepts restart paths
+    * so the lingering backfill actor is cleaned up before a new sync mode takes over. Everything else is delegated to
+    * `runningRegularSync(regularSync)`.
+    */
+  def runningRegularSyncWithBackfill(regularSync: ActorRef, snapSync: ActorRef): Receive = {
+    case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Done =>
+      log.info("SNAP background backfill complete; shutting down SNAPSyncController.")
+      context.unwatch(snapSync)
+      snapSync ! PoisonPill
+      context.become(runningRegularSync(regularSync))
+
+    case Terminated(actor) if actor == snapSync =>
+      log.warning("SNAPSyncController died while regular sync was running; chain backfill aborted.")
+      context.become(runningRegularSync(regularSync))
+
+    case msg if isRestartTrigger(msg) =>
+      log.info("Restart triggered while SNAP backfill was running; poison-pilling SNAP backfill actor first.")
+      context.unwatch(snapSync)
+      snapSync ! PoisonPill
+      context.become(runningRegularSync(regularSync))
+      self ! msg // Re-deliver so the new state handles it.
+
+    case msg =>
+      runningRegularSync(regularSync).apply(msg)
+  }
+
+  /** Restart-style messages that mean the current sync strategy is being abandoned. Used by
+    * `runningRegularSyncWithBackfill` to detect when it must terminate the lingering backfill actor before delegating.
+    */
+  private def isRestartTrigger(msg: Any): Boolean = msg match {
+    case SyncProtocol.ResetFastSync       => true
+    case SyncProtocol.RestartFastSync     => true
+    case RestartFastSyncNow               => true
+    case _: SyncProtocol.RegularSyncStuck => true
+    case _                                => false
   }
 
   def runningRegularSyncBootstrap(
@@ -401,6 +456,18 @@ class SyncController(
       if (!checkSnapFastEscapeHatch()) {
         startFastSync()
       }
+
+    case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SnapSyncFinalized(pivot) =>
+      log.info(
+        s"Received SnapSyncFinalized(pivot=$pivot) during pivot header bootstrap. Stopping bootstrap and transitioning to regular sync."
+      )
+      headerBootstrap ! PoisonPill
+      peersClient ! PoisonPill
+      // SNAP finalised mid-bootstrap is an exceptional path; tear down the SNAP actor cleanly
+      // (no chain-backfill watch, since the bootstrap state is already racy).
+      originalSnapSyncRef ! PoisonPill
+      resetSnapFastCycleCount()
+      startRegularSync()
 
     case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Done =>
       log.info(
@@ -713,7 +780,7 @@ class SyncController(
     context.become(runningSnapSync(snapSync))
   }
 
-  def startRegularSync(): Unit = {
+  def startRegularSync(resumeBackfill: Boolean = true): ActorRef = {
     syncGeneration += 1
     val peersClient =
       context.actorOf(
@@ -746,6 +813,89 @@ class SyncController(
     )
     regularSync ! SyncProtocol.Start
     context.become(runningRegularSync(regularSync))
+    // After SNAP completes, chain backfill (#1162) writes headers / bodies / receipts in the
+    // background. If the node was killed mid-backfill, persisted cursors (#1169) tell us how
+    // far it got — spawn a standalone ChainDownloader to finish the job alongside regular sync.
+    // Suppressed when called from the SnapSyncFinalized path: SNAPSyncController already owns
+    // the live backfill actor in that flow.
+    if (resumeBackfill) maybeStartBackfillResume(regularSync)
+    regularSync
+  }
+
+  /** Spawn a standalone `ChainDownloader` to resume background chain backfill from persisted cursors. No-op when SNAP
+    * has not completed, when no `BackfillTarget` was persisted, or when all cursors have already reached the target.
+    * Issues #1162 (background backfill) + #1169 (resume across restarts).
+    */
+  private def maybeStartBackfillResume(regularSync: ActorRef): Unit =
+    if (appStateStorage.needsBackfillResume()) {
+      val target = appStateStorage.getBackfillTarget()
+      val headerCursor = appStateStorage.getBackfillBestHeader()
+      val bodyCursor = appStateStorage.getBackfillBestBody()
+      val receiptCursor = appStateStorage.getBackfillBestReceipt()
+      log.info(
+        "Resuming background chain backfill: target={}, header={}, body={}, receipt={}",
+        target,
+        headerCursor,
+        bodyCursor,
+        receiptCursor
+      )
+      val snapSyncConfig = loadSnapSyncConfig()
+      syncGeneration += 1
+      import com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader
+      val resumer = context.actorOf(
+        ChainDownloader
+          .props(
+            blockchainReader,
+            blockchainWriter,
+            appStateStorage,
+            networkPeerManager,
+            peerEventBus,
+            syncConfig,
+            scheduler,
+            snapSyncConfig.chainBackfillConcurrentRequests,
+            snapSyncConfig.chainDownloadTimeout
+          )
+          .withDispatcher("sync-dispatcher"),
+        s"backfill-resumer-$syncGeneration"
+      )
+      context.watch(resumer)
+      resumer ! ChainDownloader.Start(target)
+      context.become(runningRegularSyncWithStandaloneBackfill(regularSync, resumer))
+    }
+
+  /** Receive while regular sync runs alongside a standalone backfill resumer (#1169). Mirrors
+    * `runningRegularSyncWithBackfill` but for the post-restart case where we own the backfill actor directly instead of
+    * routing through a lingering `SNAPSyncController`.
+    */
+  def runningRegularSyncWithStandaloneBackfill(regularSync: ActorRef, resumer: ActorRef): Receive = {
+    case com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader.Done =>
+      log.info("Standalone chain backfill resume complete.")
+      context.unwatch(resumer)
+      resumer ! PoisonPill
+      context.become(runningRegularSync(regularSync))
+
+    case progress: com.chipprbots.ethereum.blockchain.sync.snap.ChainDownloader.Progress =>
+      log.debug(
+        "Standalone backfill progress: headers={} bodies={} receipts={} target={}",
+        progress.headersDownloaded,
+        progress.bodiesDownloaded,
+        progress.receiptsDownloaded,
+        progress.targetBlock
+      )
+
+    case Terminated(actor) if actor == resumer =>
+      log.warning("Standalone backfill resumer died; chain backfill aborted (cursors persist for next restart).")
+      context.become(runningRegularSync(regularSync))
+
+    case msg if isRestartTrigger(msg) =>
+      log.info("Restart triggered while standalone backfill was running; poison-pilling backfill resumer first.")
+      context.unwatch(resumer)
+      resumer ! PoisonPill
+      context.become(runningRegularSync(regularSync))
+      self ! msg // Re-deliver so the new state handles it.
+
+    case msg =>
+      runningRegularSync(regularSync).apply(msg)
   }
 
   def startRecovery(needBytecode: Boolean, needStorage: Boolean): Unit = {
