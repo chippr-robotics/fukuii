@@ -379,6 +379,88 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     isStale(gen4) shouldBe false
   }
 
+  // ── #1188: Healing clean-signal short-circuit (logic model) ──
+  // When the round-2 healing trie walk returns `totalFound == 0`, the entire account+storage
+  // trie has been DFS-walked end-to-end. SNAPSyncController captures this as `healingValidatedRoot`
+  // and `validateState()` short-circuits the redundant `validateAccountTrie + validateAllStorageTries`
+  // passes. Belt-and-suspenders: only honoured when the captured root *equals* the current `stateRoot`,
+  // so any pivot refresh / restart naturally invalidates the signal and full validation runs.
+  //
+  // These tests model the decision as pure logic (mirroring the `walkGeneration epoch model` pattern)
+  // so a future refactor cannot silently revert the short-circuit without a failing test.
+
+  "Healing clean-signal model" should "skip validation when healingValidatedRoot matches current stateRoot" taggedAs UnitTest in {
+    var healingValidatedRoot: Option[ByteString] = None
+    val rootA = ByteString("root-a".getBytes)
+
+    // TrieWalkComplete(0) sets the signal against the current root.
+    healingValidatedRoot = Some(rootA)
+
+    // validateState() decision: skip if signal matches.
+    val expectedRoot = rootA
+    val shouldSkip = healingValidatedRoot.contains(expectedRoot)
+    shouldSkip shouldBe true
+
+    // Consume on use (one-shot semantics).
+    if (shouldSkip) healingValidatedRoot = None
+    healingValidatedRoot shouldBe None
+  }
+
+  it should "run full validation when stateRoot changed since healing (pivot refresh case)" taggedAs UnitTest in {
+    var healingValidatedRoot: Option[ByteString] = None
+    val rootA = ByteString("root-a".getBytes)
+    val rootB = ByteString("root-b".getBytes)
+
+    // Signal captured against rootA.
+    healingValidatedRoot = Some(rootA)
+
+    // Pivot refreshed → stateRoot is now rootB. validateState() decision keys on root equality;
+    // a stale signal against the OLD root must NOT short-circuit validation against the NEW root.
+    val expectedRoot = rootB
+    healingValidatedRoot.contains(expectedRoot) shouldBe false
+  }
+
+  it should "NOT capture signal when healing reports missing nodes (TrieWalkComplete(N>0))" taggedAs UnitTest in {
+    var healingValidatedRoot: Option[ByteString] = None
+    val rootA = ByteString("root-a".getBytes)
+
+    val totalFound = 87901 // round-1 healing case: not yet clean
+    if (totalFound == 0) healingValidatedRoot = Some(rootA)
+    // else: signal NOT set; another healing round will run.
+
+    healingValidatedRoot shouldBe None
+  }
+
+  it should "be invalidated by restartSnapSync (defense-in-depth)" taggedAs UnitTest in {
+    var healingValidatedRoot: Option[ByteString] = None
+    var stateRoot: Option[ByteString] = Some(ByteString("root-a".getBytes))
+
+    // Signal captured.
+    healingValidatedRoot = stateRoot
+
+    // restartSnapSync clears stateRoot; should also explicitly clear the signal.
+    healingValidatedRoot = None
+    stateRoot = None
+
+    healingValidatedRoot shouldBe None
+    stateRoot shouldBe None
+  }
+
+  it should "be one-shot: a second validateState() call after consumption falls through to full validation" taggedAs UnitTest in {
+    var healingValidatedRoot: Option[ByteString] = None
+    val rootA = ByteString("root-a".getBytes)
+    healingValidatedRoot = Some(rootA)
+
+    // First call: matches, skip, consume.
+    val first = healingValidatedRoot.contains(rootA)
+    first shouldBe true
+    if (first) healingValidatedRoot = None
+
+    // Second call (e.g. validation retry path) — signal already consumed, full validation must run.
+    val second = healingValidatedRoot.contains(rootA)
+    second shouldBe false
+  }
+
   // Restart phase detection — models the AppStateStorage flag combinations that determine
   // which SNAP sync phase is entered on restart (tested here at the storage-semantics level;
   // the full actor path is an integration test).

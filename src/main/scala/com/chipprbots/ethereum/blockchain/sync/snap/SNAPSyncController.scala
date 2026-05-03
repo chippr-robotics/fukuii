@@ -118,6 +118,16 @@ class SNAPSyncController(
   private var validationInProgress: Boolean = false
   private var validationGeneration: Long = 0L
 
+  // #1188: when the round-2 healing trie walk returns 0 missing, the entire
+  // account+storage trie has just been DFS-walked end-to-end. Capture the root
+  // it was clean against so `validateState()` can short-circuit the redundant
+  // `validateAccountTrie + validateAllStorageTries` passes (which together can
+  // exceed the time of the SNAP download itself on populated states).
+  // Belt-and-suspenders: only honoured when the captured root *equals* the
+  // current `stateRoot`, so any pivot refresh / restart naturally invalidates
+  // the signal and full validation runs.
+  private var healingValidatedRoot: Option[ByteString] = None
+
   // Running total of unique codeHashes streamed in via `IncrementalContractData`. Used to set
   // `progressMonitor.estimatedTotalBytecodes` so the SNAP-sync dashboard's
   // `100 * downloaded / clamp_min(estimated_total, 1)` formula has a real denominator. Without
@@ -724,6 +734,8 @@ class SNAPSyncController(
         healingRoundCount = 0
         pivotBlock.foreach(b => appStateStorage.putSnapSyncPivotBlock(b).commit())
         stateRoot.foreach(r => appStateStorage.putSnapSyncStateRoot(r).commit())
+        // #1188: capture clean signal — the walk just visited every node.
+        healingValidatedRoot = stateRoot
         // Stop the periodic healing-request scheduler before entering validation.
         // It would otherwise keep firing 1-s ticks against a coordinator that's
         // signalled complete; the phase gate on RequestTrieNodeHealing handles
@@ -752,6 +764,8 @@ class SNAPSyncController(
         // AppStateStorage now reflects the root that healing actually completed against.
         for (b <- pivotBlock; r <- stateRoot)
           appStateStorage.putSnapSyncPivotBlock(b).and(appStateStorage.putSnapSyncStateRoot(r)).commit()
+        // #1188: capture clean signal — same as the streaming TrieWalkComplete(0) path.
+        healingValidatedRoot = stateRoot
         // Stop the periodic healing-request scheduler before entering validation.
         // See companion handler above for rationale.
         healingRequestTask.foreach(_.cancel()); healingRequestTask = None
@@ -2556,6 +2570,22 @@ class SNAPSyncController(
     }
     (stateRoot, pivotBlock) match {
       case (Some(expectedRoot), Some(pivot)) =>
+        // #1188: short-circuit when the round-2 healing trie walk just verified the same root.
+        // The walk visits every node in the account trie + every storage trie via DFS — same
+        // work `validateAccountTrie + validateAllStorageTries` would redo. Belt-and-suspenders:
+        // only honoured when captured root *equals* current `stateRoot`, so any pivot refresh
+        // or restart naturally invalidates the signal (root changes → no match → full validation).
+        if (healingValidatedRoot.contains(expectedRoot)) {
+          log.info(
+            s"Skipping redundant state validation — healing trie walk verified the entire " +
+              s"account+storage trie against ${expectedRoot.take(8).toHex} (clean signal)"
+          )
+          // Consume the signal so a re-entry (e.g. after a future healing-recovery cycle that
+          // didn't finish with a clean walk) doesn't reuse a stale positive.
+          healingValidatedRoot = None
+          self ! StateValidationComplete
+          return
+        }
         validationInProgress = true
         validationGeneration += 1
         val gen = validationGeneration
@@ -2788,6 +2818,10 @@ class SNAPSyncController(
     // Reset bytecode-estimate counter so it stays in sync with progressMonitor.reset()
     // (called below). IncrementalContractData will repopulate as accounts are re-identified.
     bytecodesEstimatedTotal = 0L
+    // #1188: invalidate clean-walk signal — the trie we're rebuilding is fresh state.
+    // Root-equality alone would catch this (stateRoot is reset below) but we clear
+    // explicitly so the field doesn't briefly hold a stale positive against a None root.
+    healingValidatedRoot = None
     appStateStorage
       .putSnapSyncAccountsComplete(false)
       .and(appStateStorage.putSnapSyncStorageComplete(false))
