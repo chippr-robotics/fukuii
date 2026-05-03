@@ -267,4 +267,50 @@ class ETH69TDSpec extends AnyFlatSpec with Matchers {
     val ex = intercept[RuntimeException](garbage.toETH69Status)
     ex.getMessage should include("Cannot decode ETH69.Status")
   }
+
+  // Real-world payload from a wrong-chain peer (Holesky-derived testnet) seen on ETC mainnet sync.
+  // Peer announced ETH/69 capability but emitted the ETH/68 STATUS layout
+  //   [version, networkId, totalDifficulty, bestHash, genesis, forkId]
+  // pre-fix this generated `DECODE_ERROR: Cannot decode ETH69.Status` per peer, churning the pool.
+  // Post-fix the decode succeeds; the peer is then rejected at the genesis-hash check downstream
+  // as `Useless peer`, which is the correct behaviour for wrong-chain interop.
+  it should "decode ETH/68-shape STATUS sent on ETH/69 channel by non-spec peers (Holesky-style payload)" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.network.p2p.messages.ETH69.Status._
+    import com.chipprbots.ethereum.rlp.{RLPList, RLPValue, encode}
+    import com.chipprbots.ethereum.utils.ByteUtils
+    import com.chipprbots.ethereum.forkid.ForkId._
+
+    val holeskyGenesis = ByteString(
+      org.bouncycastle.util.encoders.Hex.decode(
+        "b5f7f912443c940f21fd611f12828d75b534364ed9e95ca4e307729a4661bde4"
+      )
+    )
+    val bestHash = ByteString(
+      org.bouncycastle.util.encoders.Hex.decode(
+        "c262e4a9caf4c79696a0333e6cbc15c05d9286715bfbec226568c2d624def352"
+      )
+    )
+    val ethSixtyEightShape = RLPList(
+      RLPValue(ByteUtils.bigIntToUnsignedByteArray(BigInt(69))),
+      RLPValue(ByteUtils.bigIntToUnsignedByteArray(BigInt(806070))), // networkId — non-ETC, peer is wrong chain
+      RLPValue(ByteUtils.bigIntToUnsignedByteArray(BigInt(1))), // totalDifficulty — discarded on decode
+      RLPValue(bestHash.toArray[Byte]),
+      RLPValue(holeskyGenesis.toArray[Byte]),
+      ForkId(0xbcf811L, None).toRLPEncodable
+    )
+    val payload: Array[Byte] = encode(ethSixtyEightShape)
+
+    val decoded = payload.toETH69Status
+
+    // Decode must succeed (the whole point of this PR — no DECODE_ERROR for these peers).
+    decoded.protocolVersion shouldBe 69
+    decoded.networkId shouldBe 806070L
+    // genesis is from position 4 of the ETH/68 layout, NOT position 2 (where ETH/69 spec puts it).
+    decoded.genesisHash shouldBe holeskyGenesis
+    // bestHash from position 3 maps to latestBlockHash so downstream code can examine it.
+    decoded.latestBlockHash shouldBe bestHash
+    // ETH/68 doesn't carry a block number; latestBlock defaults to 0. earliestBlock also 0.
+    decoded.latestBlock shouldBe BigInt(0)
+    decoded.earliestBlock shouldBe BigInt(0)
+  }
 }
