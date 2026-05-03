@@ -204,4 +204,28 @@ class AccountRangeWorkerSpec
 
     coordinator.expectNoMessage(200.millis)
   }
+
+  // Category 2d: late response after timeout — no double completion
+  // Cross-reference: core-geth eth/downloader/downloader_test.go — responses from dropped peers
+  // are silently ignored (dropped atomic flag). AccountRangeWorker achieves the same via idle state.
+  it should "silently drop a late response (correct reqId) that arrives after RequestTimeout" taggedAs UnitTest in {
+    val coordinator = TestProbe()
+    val networkPeerManager = TestProbe()
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("ar-peer-8", peerProbe.ref)
+    val worker = makeWorker(coordinator, networkPeerManager)
+
+    val reqId = BigInt(10)
+    worker ! Messages.FetchAccountRange(makeTask(), peer, reqId, defaultBytes)
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](1.second)
+
+    // Timeout fires — worker sends TaskFailed and transitions to idle
+    worker ! Messages.RequestTimeout(reqId)
+    coordinator.expectMsg(1.second, Messages.TaskFailed(reqId, "Request timeout"))
+
+    // Late response arrives with the correct reqId — worker is now idle (handles only FetchAccountRange)
+    // → message is unhandled/dropped; coordinator receives NO second message
+    worker ! Messages.AccountRangeResponseMsg(AccountRange(requestId = reqId, accounts = Seq.empty, proof = Seq.empty))
+    coordinator.expectNoMessage(200.millis)
+  }
 }

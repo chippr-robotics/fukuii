@@ -293,7 +293,7 @@ class TrieNodeHealingCoordinator(
             req.tasks.foreach { task =>
               if (!pendingHashSet.contains(task.hash)) {
                 pendingHashSet += task.hash
-                pendingTasks = pendingTasks :+ task
+                pendingTasks += task
               }
             }
           }

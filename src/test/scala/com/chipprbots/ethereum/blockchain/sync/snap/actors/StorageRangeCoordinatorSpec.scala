@@ -339,6 +339,162 @@ class StorageRangeCoordinatorSpec
     }
   }
 
+  // ── Category 1d: ForceCompleteStorage escape valve ─────────────────────────
+
+  it should "signal StorageRangeSyncForceCompleted immediately on ForceCompleteStorage even with pending tasks" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("force-complete-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = system.actorOf(
+      StorageRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+        maxAccountsPerBatch = 8,
+        maxInFlightRequests = 4,
+        requestTimeout = 30.seconds,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    // Add tasks that will not be dispatched (no peer)
+    val accountHash = kec256(ByteString("account-force"))
+    val storageRoot = kec256(ByteString("storage-root-force"))
+    val task = StorageTask.createStorageTask(accountHash, storageRoot)
+    coordinator ! Messages.StartStorageRangeSync(stateRoot)
+    coordinator ! Messages.AddStorageTasks(Seq(task))
+
+    // Force completion without a peer — should immediately promote to healing
+    coordinator ! Messages.ForceCompleteStorage
+
+    snapSyncController.expectMsg(3.seconds, SNAPSyncController.StorageRangeSyncForceCompleted)
+  }
+
+  // ── Category 2c / 3b: TrieConstruction stale-root guard ────────────────────
+
+  it should "ignore TrieConstructionComplete with stale forStateRoot after pivot refresh" taggedAs UnitTest in {
+    // Stale trie build completions after a pivot refresh must be silently dropped.
+    // Processing them would update accountsInTrieConstruction for the wrong root.
+    val rootR1 = kec256(ByteString("root-r1-tcc"))
+    val rootR2 = kec256(ByteString("root-r2-tcc"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = system.actorOf(
+      StorageRangeCoordinator.props(
+        stateRoot = rootR1,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+        maxAccountsPerBatch = 8,
+        maxInFlightRequests = 4,
+        requestTimeout = 30.seconds,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    coordinator ! Messages.StartStorageRangeSync(rootR1)
+    coordinator ! Messages.StoragePivotRefreshed(rootR2) // pivot advances
+
+    // TrieConstructionComplete from before the pivot — forStateRoot is the old root
+    val accountHash = kec256(ByteString("account-stale-tcc"))
+    coordinator ! Messages.TrieConstructionComplete(
+      accountHashes = Seq(accountHash),
+      totalSlots = 100,
+      elapsedMs = 50,
+      forStateRoot = rootR1 // stale!
+    )
+
+    // Coordinator must remain alive and not emit StorageRangeSyncComplete spuriously
+    coordinator ! Messages.StorageGetProgress
+    expectMsgType[Any](3.seconds)
+    snapSyncController.expectNoMessage(300.millis)
+  }
+
+  it should "ignore TrieConstructionFailed with stale forStateRoot after pivot refresh" taggedAs UnitTest in {
+    // Stale trie build failures after a pivot refresh must be silently dropped.
+    val rootR1 = kec256(ByteString("root-r1-tcf"))
+    val rootR2 = kec256(ByteString("root-r2-tcf"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = system.actorOf(
+      StorageRangeCoordinator.props(
+        stateRoot = rootR1,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+        maxAccountsPerBatch = 8,
+        maxInFlightRequests = 4,
+        requestTimeout = 30.seconds,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    coordinator ! Messages.StartStorageRangeSync(rootR1)
+    coordinator ! Messages.StoragePivotRefreshed(rootR2) // pivot advances
+
+    val accountHash = kec256(ByteString("account-stale-tcf"))
+    coordinator ! Messages.TrieConstructionFailed(
+      accountHashes = Seq(accountHash),
+      error = "simulated build error",
+      forStateRoot = rootR1 // stale!
+    )
+
+    // Coordinator stays alive, no panic, no spurious completion
+    coordinator ! Messages.StorageGetProgress
+    expectMsgType[Any](3.seconds)
+    snapSyncController.expectNoMessage(300.millis)
+  }
+
+  it should "handle TrieConstructionFailed for current root without crashing" taggedAs UnitTest in {
+    // TrieConstructionFailed for the current root: affected accounts are dropped from
+    // construction tracking. The healing phase recovers them. Coordinator must not crash.
+    val stateRoot = kec256(ByteString("root-tcf-current"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = system.actorOf(
+      StorageRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+        maxAccountsPerBatch = 8,
+        maxInFlightRequests = 4,
+        requestTimeout = 30.seconds,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    coordinator ! Messages.StartStorageRangeSync(stateRoot)
+
+    val accountHash = kec256(ByteString("account-failed-build"))
+    coordinator ! Messages.TrieConstructionFailed(
+      accountHashes = Seq(accountHash),
+      error = "disk full",
+      forStateRoot = stateRoot // current root — real failure
+    )
+
+    // Coordinator stays responsive; healing will recover the missing storage trie
+    coordinator ! Messages.StorageGetProgress
+    expectMsgType[Any](3.seconds)
+  }
+
   // ── K5: No false stall signal when task queue is empty (BUG fix b07c363e9) ─
 
   it should "not emit PivotStateUnservable when no storage tasks are pending" taggedAs UnitTest in {

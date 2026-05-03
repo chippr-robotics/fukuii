@@ -173,8 +173,8 @@ class SNAPSyncController(
   private var lastProbeAttemptMs: Long = 0L
   private val ProbeCooldownMs: Long = 30_000L // match DownloadStagnationCheckInterval
   private var probeAttemptCount: Int = 0
-  private val MaxProbeAttempts: Int = 5   // 5 × 30s = 150s max deferral before forced roll
-  private val ZeroPeerStagnationMs: Long = 3 * 60 * 1000L  // 3 min zero-peer short-circuit
+  private val MaxProbeAttempts: Int = 5 // 5 × 30s = 150s max deferral before forced roll
+  private val ZeroPeerStagnationMs: Long = 3 * 60 * 1000L // 3 min zero-peer short-circuit
 
   // Consecutive pivot refresh counter: when all peers are repeatedly stateless after
   // pivot refreshes, it strongly indicates no peer has a snapshot database. Each
@@ -645,7 +645,6 @@ class SNAPSyncController(
         scheduler.scheduleOnce(60.seconds, self, RetryPivotRefresh)(context.dispatcher, self)
       )
 
-
     case PivotProbeTimeout(requestId) =>
       if (pivotProbeRequestId.contains(requestId)) {
         probeAttemptCount += 1
@@ -670,7 +669,6 @@ class SNAPSyncController(
           // lastProbeAttemptMs stays set — ProbeCooldownMs enforces a 30s minimum before next retry
         }
       }
-
 
     case RetryPivotRefresh =>
       pivotBootstrapRetryTask = None
@@ -2491,7 +2489,7 @@ class SNAPSyncController(
                   s"network=$networkBest age=$pivotAge — readiness probe will fire after header fetch"
               )
               proactiveRollNeedsProbe = true
-              probeAttemptCount = 0   // fresh probe cycle for this roll
+              probeAttemptCount = 0 // fresh probe cycle for this roll
               lastProbeAttemptMs = now
               refreshPivotInPlace("proactive pivot roll")
             }
@@ -2752,9 +2750,9 @@ class SNAPSyncController(
 
   /** Select the best probe target peer for pivot readiness probing.
     *
-    * Prefers snap-server-peers (configured local clients — Besu, core-geth) because they have archive state and
-    * minimal latency, making them the most reliable probe targets. Falls back to the highest-block SNAP-capable
-    * external peer when no snap-server-peer is connected.
+    * Prefers snap-server-peers (configured local clients — Besu, core-geth) because they have archive state and minimal
+    * latency, making them the most reliable probe targets. Falls back to the highest-block SNAP-capable external peer
+    * when no snap-server-peer is connected.
     */
   private def bestSnapProbeTarget() = {
     val snapServerNodeIds = snapSyncConfig.snapServerPeers.flatMap { uri =>
@@ -3050,7 +3048,6 @@ class SNAPSyncController(
     }
     if (deferForProbe) return
 
-
     log.info(s"Pivot refreshed: block $oldPivot -> $newPivotBlock, root $oldRoot -> $newRoot")
 
     // Update internal state
@@ -3061,7 +3058,8 @@ class SNAPSyncController(
     // phase gate above is the primary defense; this is defense-in-depth for
     // any code path that mutates pivot/root from a different phase.
     validationGeneration += 1
-    lastProactivePivotBlock = pivotBlock.map(_ + 64) // approximate networkBest at roll time; pivotBlock = networkBest-64
+    lastProactivePivotBlock =
+      pivotBlock.map(_ + 64) // approximate networkBest at roll time; pivotBlock = networkBest-64
     // Note: mptStorage stays the same — content-addressed nodes don't need re-tagging.
     // The backing storage was already created for the original pivot block number,
     // but since nodes are keyed by hash, they're valid for any root.

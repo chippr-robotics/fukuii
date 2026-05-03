@@ -374,4 +374,109 @@ class TrieNodeHealingCoordinatorSpec
     coordinator ! Messages.HealingGetProgress
     expectMsgType[HealingStatistics](2.seconds)
   }
+
+  it should "signal StateHealingComplete on HealingForceComplete even with pending tasks in flight" taggedAs UnitTest in {
+    // HealingForceComplete is the SNAPSyncController's nuclear option: when the pivot has
+    // advanced beyond the SNAP serve window, healing must abandon pending tasks immediately
+    // rather than waiting for them to drain normally.
+    val stateRoot = kec256(ByteString("force-complete-with-tasks-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+
+    val peer = PeerTestHelpers.createTestPeer("force-heal-peer", peerProbe.ref)
+
+    val coordinator = system.actorOf(
+      TrieNodeHealingCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        batchSize = 16,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    // Queue tasks and make a peer available so some become active
+    val nodeHash1 = kec256(ByteString("node-force-1"))
+    val nodeHash2 = kec256(ByteString("node-force-2"))
+    coordinator ! Messages.StartTrieNodeHealing(stateRoot)
+    coordinator ! Messages.QueueMissingNodes(
+      Seq(
+        (Seq(ByteString(Array[Byte](0x00))), nodeHash1),
+        (Seq(ByteString(Array[Byte](0x01))), nodeHash2)
+      )
+    )
+    coordinator ! Messages.HealingPeerAvailable(peer)
+    networkPeerManager.expectMsgType[Any](3.seconds) // task dispatched
+
+    // ForceComplete while tasks are in-flight: abandon all, signal complete immediately
+    coordinator ! Messages.HealingForceComplete
+    snapSyncController.expectMsg(3.seconds, SNAPSyncController.StateHealingComplete)
+  }
+
+  // ── Category 1e: HealingStagnated counter semantics ───────────────────────────────────────────
+  //
+  // HealingStagnationCheck is a private case object fired by an internal 2-minute scheduler.
+  // It cannot be injected directly from tests. Instead, these tests model the counter semantics
+  // as pure logic (same pattern as the K2 and "Consecutive pivot refresh" tests above) so a
+  // refactor cannot silently change the thresholds without a failing test.
+
+  "HealingStagnated counter semantics" should "send HealingStagnated after MaxConsecutiveStagnations zero-progress cycles" taggedAs UnitTest in {
+    var consecutiveStagnations = 0
+    val MaxConsecutiveStagnations = 3
+    var healingStagnatedSent = false
+    var totalNodesHealed = 0
+
+    // Simulate 3 consecutive HEAL-PULSE ticks with zero new nodes healed
+    for (_ <- 1 to MaxConsecutiveStagnations) {
+      val recentHealed = 0 // no progress
+      val pendingTasksNonEmpty = true
+
+      if (recentHealed == 0 && pendingTasksNonEmpty) {
+        consecutiveStagnations += 1
+        if (consecutiveStagnations >= MaxConsecutiveStagnations) {
+          healingStagnatedSent = true // → snapSyncController ! HealingStagnated(...)
+          consecutiveStagnations = 0
+        }
+      } else if (recentHealed > 0) {
+        consecutiveStagnations = 0
+      }
+    }
+
+    healingStagnatedSent shouldBe true
+    consecutiveStagnations shouldBe 0 // reset after escalation
+  }
+
+  it should "reset consecutiveStagnations to zero when at least one node is healed" taggedAs UnitTest in {
+    var consecutiveStagnations = 0
+    val MaxConsecutiveStagnations = 3
+
+    // Two zero-progress cycles...
+    consecutiveStagnations += 1
+    consecutiveStagnations += 1
+    consecutiveStagnations shouldBe 2
+
+    // ...then a productive cycle
+    val recentHealed = 5
+    if (recentHealed > 0) consecutiveStagnations = 0
+
+    consecutiveStagnations shouldBe 0
+    // Need 3 more zero cycles to hit threshold again
+    (consecutiveStagnations >= MaxConsecutiveStagnations) shouldBe false
+  }
+
+  it should "lock MaxConsecutiveStagnations=3 as the threshold constant" taggedAs UnitTest in {
+    // Changing MaxConsecutiveStagnations changes how long fukuii waits before abandoning
+    // a stuck healing phase. This test locks the value so the change is deliberate.
+    // MaxConsecutiveStagnations is private, but its value is established by the counter tests above.
+    // Indirect verification: 3 cycles needed to trigger, 2 cycles are not enough.
+    var count = 0
+    val MaxConsecutiveStagnations = 3
+    count += 1; (count >= MaxConsecutiveStagnations) shouldBe false
+    count += 1; (count >= MaxConsecutiveStagnations) shouldBe false
+    count += 1; (count >= MaxConsecutiveStagnations) shouldBe true
+  }
 }

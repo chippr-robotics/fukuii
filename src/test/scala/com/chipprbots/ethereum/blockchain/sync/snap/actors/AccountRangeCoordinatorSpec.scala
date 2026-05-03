@@ -14,6 +14,8 @@ import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetAccountRange.GetAccountRangeEnc
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.testing.{PeerTestHelpers, TestMptStorage}
 
@@ -579,6 +581,7 @@ class AccountRangeCoordinatorSpec
 
     // Real coordinator (not the TestActorRef helper — we don't need underlyingActor here).
     val syncController = TestProbe()
+
     val coordinator = system.actorOf(
       AccountRangeCoordinator.props(
         stateRoot = stateRoot,
@@ -734,5 +737,314 @@ class AccountRangeCoordinatorSpec
     sent.peerId.value shouldBe peerB.id.value
 
     system.stop(coord)
+  }
+
+  // ── Category 1a: requeueOrEscalate → PivotStateUnservable ─────────────────
+
+  it should "escalate PivotStateUnservable to controller after MaxRequeuesPerTask+1 consecutive failures" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("requeue-test-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("requeue-peer", peerProbe.ref)
+
+    val coordinator = system.actorOf(
+      AccountRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        concurrency = 1,
+        snapSyncController = snapSyncController.ref,
+        initialMaxInFlightPerPeer = 1
+      )
+    )
+
+    coordinator ! Messages.StartAccountRangeSync(stateRoot)
+    coordinator ! Messages.PeerAvailable(peer)
+
+    // MaxRequeuesPerTask = 8, so the 9th failure (requeueCount > 8) escalates.
+    // Route failures through the worker so it properly transitions to idle before each re-dispatch:
+    //   test → workerRef ! WorkerPeerDisconnected → worker ! TaskFailed("Peer disconnected") → coordinator
+    // This skips cooldown and stateless marking, allowing immediate re-dispatch each iteration.
+    for (_ <- 1 to (AccountRangeCoordinator.MaxRequeuesPerTask + 1)) {
+      networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](2.seconds)
+      val workerRef = networkPeerManager.lastSender
+      workerRef ! Messages.WorkerPeerDisconnected(peer.id.value)
+    }
+
+    snapSyncController.expectMsgType[SNAPSyncController.PivotStateUnservable](2.seconds)
+  }
+
+  // ── Category 3a: task.rootHash guard prevents stale-root stateless marking ─
+
+  it should "not mark peer stateless when TaskFailed arrives for a stale-root in-flight task" taggedAs UnitTest in {
+    val rootR1 = kec256(ByteString("stale-guard-root-r1"))
+    val rootR2 = kec256(ByteString("stale-guard-root-r2"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("stale-guard-peer", peerProbe.ref)
+
+    val coordinator = system.actorOf(
+      AccountRangeCoordinator.props(
+        stateRoot = rootR1,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        concurrency = 1,
+        snapSyncController = snapSyncController.ref,
+        initialMaxInFlightPerPeer = 1
+      )
+    )
+
+    coordinator ! Messages.StartAccountRangeSync(rootR1)
+    coordinator ! Messages.PeerAvailable(peer)
+
+    val sendMsg1 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](2.seconds)
+    val reqId1 = sendMsg1.message.asInstanceOf[GetAccountRangeEnc].underlyingMsg.requestId
+
+    // Pivot refreshes while the task is still in-flight at rootR1
+    coordinator ! Messages.PivotRefreshed(rootR2)
+
+    // Task fails with "Missing proof" — but its rootHash is rootR1 (stale).
+    // The rootHash guard must prevent marking peer as stateless for rootR2.
+    // Sent directly to coordinator so task.rootHash stays at rootR1 (not updated by PivotRefreshed).
+    coordinator ! Messages.TaskFailed(reqId1, "Missing proof for empty account range")
+
+    // Use GetProgress as a synchronization barrier — by the time we get a response, the
+    // coordinator has fully processed the TaskFailed (including any re-dispatch attempts).
+    coordinator ! Messages.GetProgress
+    expectMsgType[AccountRangeStats](2.seconds)
+
+    // PivotStateUnservable must NOT have been sent — peer was not marked stateless for rootR2
+    snapSyncController.expectNoMessage(200.millis)
+  }
+
+  // ── Category 3c: knownAvailablePeers dedup by remoteAddress ──────────────
+
+  it should "replace stale peer entry and clear stateless when PeerAvailable arrives with same address but new ID" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("dedup-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerAProbe = TestProbe()
+    val peerBProbe = TestProbe()
+    // Both peers share the same remoteAddress (127.0.0.1:30303) — simulates reconnection
+    val peerA = PeerTestHelpers.createTestPeer("dedup-peer-A", peerAProbe.ref)
+    val peerB = PeerTestHelpers.createTestPeer("dedup-peer-B", peerBProbe.ref)
+
+    val coordinator = system.actorOf(
+      AccountRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        concurrency = 1,
+        snapSyncController = snapSyncController.ref,
+        initialMaxInFlightPerPeer = 1
+      )
+    )
+
+    coordinator ! Messages.StartAccountRangeSync(stateRoot)
+    coordinator ! Messages.PeerAvailable(peerA)
+
+    val sendMsg1 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](2.seconds)
+    val reqId1 = sendMsg1.message.asInstanceOf[GetAccountRangeEnc].underlyingMsg.requestId
+    val workerRef = networkPeerManager.lastSender
+
+    // peerA returns empty proof → marked stateless → all known peers stateless → PivotStateUnservable
+    coordinator ! Messages.TaskFailed(reqId1, "Missing proof for empty account range")
+    snapSyncController.expectMsgType[SNAPSyncController.PivotStateUnservable](2.seconds)
+
+    // Worker is still in working state (we sent TaskFailed directly, not through the worker).
+    // Idle it via RequestTimeout so the next dispatch succeeds.
+    workerRef ! Messages.RequestTimeout(reqId1)
+    // Barrier: the RequestTimeout causes the worker to send TaskFailed(reqId1, ...) to coordinator,
+    // which is ignored (reqId1 already removed from activeTasks). GetProgress synchronizes.
+    coordinator ! Messages.GetProgress
+    expectMsgType[AccountRangeStats](2.seconds)
+
+    // peerB appears at the same IP:port with a new peer ID (reconnection scenario).
+    // Dedup: peerA evicted from knownAvailablePeers, peerA's stateless entry cleared,
+    // peerB added as a fresh non-stateless peer.
+    coordinator ! Messages.PeerAvailable(peerB)
+
+    // peerB is not stateless → pending task is dispatched to peerB (worker now idle)
+    val sendMsg2 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](2.seconds)
+    sendMsg2.peerId shouldBe peerB.id
+  }
+
+  // ── Category 2a: postStop sends AccountRangeProgress snapshot ─────────────
+
+  it should "send AccountRangeProgress snapshot to controller when stopped" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("poststop-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = system.actorOf(
+      AccountRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        concurrency = 1,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    coordinator ! Messages.StartAccountRangeSync(stateRoot)
+    // Stop the coordinator — postStop() fires and sends AccountRangeProgress
+    system.stop(coordinator)
+
+    val progressMsg = snapSyncController.expectMsgType[Messages.AccountRangeProgress](3.seconds)
+    // concurrency=1 → 1 task → 1 entry in the progress map
+    progressMsg.progress should not be empty
+  }
+
+  // ── Category 1b: PivotRefreshed clears stateless tracking + redispatches ──
+
+  it should "clear stateless tracking and immediately redispatch when pivot is refreshed" taggedAs UnitTest in {
+    val rootR1 = kec256(ByteString("pivot-clear-root-r1"))
+    val rootR2 = kec256(ByteString("pivot-clear-root-r2"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("pivot-clear-peer", peerProbe.ref)
+
+    val coordinator = system.actorOf(
+      AccountRangeCoordinator.props(
+        stateRoot = rootR1,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        concurrency = 1,
+        snapSyncController = snapSyncController.ref,
+        initialMaxInFlightPerPeer = 1
+      )
+    )
+
+    coordinator ! Messages.StartAccountRangeSync(rootR1)
+    coordinator ! Messages.PeerAvailable(peer)
+
+    val sendMsg1 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](2.seconds)
+    val reqId1 = sendMsg1.message.asInstanceOf[GetAccountRangeEnc].underlyingMsg.requestId
+    val workerRef = networkPeerManager.lastSender
+
+    // Peer becomes stateless → coordinator requests pivot refresh from controller
+    coordinator ! Messages.TaskFailed(reqId1, "Missing proof for empty account range")
+    snapSyncController.expectMsgType[SNAPSyncController.PivotStateUnservable](2.seconds)
+
+    // Worker is still in working state — idle it so the next dispatch after PivotRefreshed succeeds.
+    workerRef ! Messages.RequestTimeout(reqId1)
+    coordinator ! Messages.GetProgress
+    expectMsgType[AccountRangeStats](2.seconds)
+
+    // Controller responds with a fresh pivot.
+    // PivotRefreshed clears statelessPeers and immediately calls dispatchIfPossible for each
+    // known peer — work resumes without waiting for another PeerAvailable.
+    coordinator ! Messages.PivotRefreshed(rootR2)
+
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](2.seconds)
+  }
+
+  // -----------------------------------------------------------------------
+  // Category 2e: Peer Disconnect Mid-Flight
+  // -----------------------------------------------------------------------
+  // Cross-reference: core-geth eth/downloader/downloader_test.go dropPeer() pattern —
+  // responses from dropped peers are silently ignored; in-flight tasks return to pending.
+
+  it should "re-queue in-flight task and redispatch to a different peer after PeerUnavailable" taggedAs UnitTest in {
+    val root = kec256(ByteString("disconnect-mid-flight-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe1 = TestProbe()
+    val peerProbe2 = TestProbe()
+    val peer1 = PeerTestHelpers.createTestPeer("disconnect-peer-1", peerProbe1.ref)
+    val peer2 = PeerTestHelpers.createTestPeer("disconnect-peer-2", peerProbe2.ref)
+
+    val coordinator = system.actorOf(
+      AccountRangeCoordinator.props(
+        stateRoot = root,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        concurrency = 1,
+        snapSyncController = snapSyncController.ref,
+        initialMaxInFlightPerPeer = 1
+      )
+    )
+
+    // Peer1 connects → coordinator dispatches task to worker
+    coordinator ! Messages.StartAccountRangeSync(root)
+    coordinator ! Messages.PeerAvailable(peer1)
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](2.seconds)
+    val worker = networkPeerManager.lastSender
+
+    // Peer1 disconnects mid-flight:
+    // coordinator sends WorkerPeerDisconnected to the worker; worker fires TaskFailed back;
+    // coordinator re-queues the task and removes peer1 from knownAvailablePeers.
+    coordinator ! Messages.PeerUnavailable(peer1.id.value)
+
+    // Worker receives WorkerPeerDisconnected and fires TaskFailed("Peer disconnected") to coordinator.
+    // Give the message round-trip time to complete before asserting redispatch.
+    // (No direct assertion on WorkerPeerDisconnected here — it's coordinator → worker internal.)
+
+    // Peer2 becomes available → coordinator re-dispatches the now-pending task to peer2
+    coordinator ! Messages.PeerAvailable(peer2)
+    val redispatch = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+    redispatch.peerId shouldBe peer2.id
+  }
+
+  it should "not fire a second TaskFailed when a late response arrives after RequestTimeout" taggedAs UnitTest in {
+    val root = kec256(ByteString("late-response-guard-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("late-resp-peer", peerProbe.ref)
+
+    val coordinator = system.actorOf(
+      AccountRangeCoordinator.props(
+        stateRoot = root,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        concurrency = 1,
+        snapSyncController = snapSyncController.ref,
+        initialMaxInFlightPerPeer = 1
+      )
+    )
+
+    coordinator ! Messages.StartAccountRangeSync(root)
+    coordinator ! Messages.PeerAvailable(peer)
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](2.seconds)
+    val worker = networkPeerManager.lastSender
+
+    // Worker times out — fires TaskFailed("Request timeout") to coordinator
+    worker ! Messages.RequestTimeout(BigInt(1))
+
+    // Coordinator requeues; controller receives no escalation (not enough retries)
+    snapSyncController.expectNoMessage(300.millis)
+
+    // Late AccountRangeResponse arrives at worker (now in idle state) — must be silently dropped;
+    // coordinator must NOT receive a second TaskFailed or TaskComplete for this request.
+    import com.chipprbots.ethereum.network.p2p.messages.SNAP.AccountRange
+    worker ! Messages.AccountRangeResponseMsg(AccountRange(requestId = BigInt(1), accounts = Seq.empty, proof = Seq.empty))
+
+    // The only message the snapSyncController should ever see is nothing (no double completion)
+    snapSyncController.expectNoMessage(300.millis)
   }
 }
