@@ -725,7 +725,7 @@ class StorageRangeCoordinator(
       pendingAccountSlots.clear()
       totalBufferedSlots = 0
       log.info("Storage range sync force-completed (promoting to healing phase)")
-      snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
+      snapSyncController ! SNAPSyncController.StorageRangeSyncForceCompleted
 
     case StoragePivotRefreshed(newStateRoot) =>
       log.info(s"Storage pivot refreshed: ${stateRoot.take(4).toHex} -> ${newStateRoot.take(4).toHex}")

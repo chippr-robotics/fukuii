@@ -84,6 +84,7 @@ class SNAPSyncController(
   // Concurrent phase completion tracking (all 3 coordinators run in parallel)
   private var bytecodePhaseComplete: Boolean = false
   private var storagePhaseComplete: Boolean = false
+  private var storagePhaseForceCompleted: Boolean = false
 
   private val progressMonitor = new SyncProgressMonitor(scheduler)
 
@@ -575,7 +576,17 @@ class SNAPSyncController(
 
     case StorageRangeSyncComplete if !storagePhaseComplete =>
       storagePhaseComplete = true
+      storagePhaseForceCompleted = false
       log.info(s"Storage range sync complete. ByteCode: $bytecodePhaseComplete, Accounts: $accountsComplete")
+      checkAllDownloadsComplete()
+
+    case StorageRangeSyncForceCompleted if !storagePhaseComplete =>
+      storagePhaseComplete = true
+      storagePhaseForceCompleted = true
+      log.warning(
+        s"Storage range sync was force-completed. ByteCode: $bytecodePhaseComplete, Accounts: $accountsComplete. " +
+          "SNAP will run healing/validation before regular sync handoff."
+      )
       checkAllDownloadsComplete()
 
     case HealingAllPeersStateless if currentPhase == StateHealing =>
@@ -751,7 +762,7 @@ class SNAPSyncController(
       accountsComplete && bytecodePhaseComplete && storagePhaseComplete &&
       currentPhase != StateHealing && currentPhase != ChainDownloadCompletion && currentPhase != Completed
     ) {
-      if (snapSyncConfig.deferredMerkleization) {
+      if (SNAPSyncController.shouldSkipHealingAfterDownloads(snapSyncConfig, storagePhaseForceCompleted)) {
         // With deferred merkleization, trie nodes were never constructed during download —
         // only flat storage was written. A trie walk would find the entire internal trie "missing",
         // taking hours to scan and failing to heal (peers can't serve the full trie via GetTrieNodes).
@@ -766,7 +777,14 @@ class SNAPSyncController(
         )
         completeSnapSync()
       } else {
-        log.info("All state downloads complete (accounts + bytecodes + storage). Starting healing...")
+        if (snapSyncConfig.deferredMerkleization && storagePhaseForceCompleted) {
+          log.warning(
+            "All state downloads reached terminal state, but storage was force-completed with deferred " +
+              "merkleization enabled. Starting healing instead of handing off a state with known holes."
+          )
+        } else {
+          log.info("All state downloads complete (accounts + bytecodes + storage). Starting healing...")
+        }
         currentPhase = StateHealing
         startStateHealing()
       }
@@ -1021,6 +1039,7 @@ class SNAPSyncController(
             accountsComplete = true
             bytecodePhaseComplete = false
             storagePhaseComplete = false
+            storagePhaseForceCompleted = false
 
             log.info(s"Recovery: resuming bytecodes + storage sync from pivot $pivot (drift=$drift blocks)")
 
@@ -1767,7 +1786,8 @@ class SNAPSyncController(
               initialMaxInFlightPerPeer =
                 0, // Defer storage dispatch during AccountRangeSync — prevents false pivot refreshes from stale-root timeouts
               initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
-              minResponseBytes = snapSyncConfig.storageMinResponseBytes
+              minResponseBytes = snapSyncConfig.storageMinResponseBytes,
+              deferredMerkleization = snapSyncConfig.deferredMerkleization
             )
             .withDispatcher("sync-dispatcher"),
           s"storage-range-coordinator-$coordinatorGeneration"
@@ -2309,6 +2329,7 @@ class SNAPSyncController(
     accountsComplete = false
     bytecodePhaseComplete = false
     storagePhaseComplete = false
+    storagePhaseForceCompleted = false
     appStateStorage.putSnapSyncAccountsComplete(false).commit()
     appStateStorage.putSnapSyncStorageFilePath("").commit()
 
@@ -2730,6 +2751,7 @@ object SNAPSyncController {
   case object AccountRangeSyncComplete
   case object ByteCodeSyncComplete
   case object StorageRangeSyncComplete
+  case object StorageRangeSyncForceCompleted
 
   /** Inline contract data dispatched from AccountRangeCoordinator after each account batch. Geth-aligned: bytecodes and
     * storage tasks are populated inline from processAccountResponse(), not queried after account download completes.
@@ -2762,6 +2784,12 @@ object SNAPSyncController {
   final case class ProgressNodesHealed(count: Long)
   final case class ProgressAccountEstimate(estimatedTotal: Long)
   final case class ProgressStorageContracts(completedContracts: Int, totalContracts: Int)
+
+  private[snap] def shouldSkipHealingAfterDownloads(
+      snapSyncConfig: SNAPSyncConfig,
+      storagePhaseForceCompleted: Boolean
+  ): Boolean =
+    snapSyncConfig.deferredMerkleization && !storagePhaseForceCompleted
 
   def props(
       blockchainReader: BlockchainReader,
