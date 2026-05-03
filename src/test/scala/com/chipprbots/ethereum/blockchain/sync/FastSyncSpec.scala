@@ -149,10 +149,15 @@ class FastSyncSpec
         (for {
           _ <- saveGenesis
           _ <- saveTestBlocksWithWeights
+          // Subscribe BEFORE startSync so no topic events can be missed under load.
+          // Race: if subscription is set up after onPeersConnected the actor may have
+          // already published to the topic before the subscriber is registered.
+          pivotFiber  <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError.start
+          blocksFiber <- networkPeerManager.fetchedBlocks.head.compile.lastOrError.start
           _ <- startSync
           _ <- networkPeerManager.onPeersConnected
-          _ <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError
-          _ <- networkPeerManager.fetchedBlocks.head.compile.lastOrError
+          _ <- pivotFiber.joinWith(cats.effect.IO.raiseError(new RuntimeException("pivot fiber canceled")))
+          _ <- blocksFiber.joinWith(cats.effect.IO.raiseError(new RuntimeException("blocks fiber canceled")))
         } yield {
           val peer = testPeers.keys.head
 
@@ -237,10 +242,13 @@ class FastSyncSpec
         (for {
           _ <- saveGenesis
           _ <- saveTestBlocksWithWeights
+          // Subscribe BEFORE startSync — see companion test for race condition explanation.
+          pivotFiber  <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError.start
+          blocksFiber <- networkPeerManager.fetchedBlocks.head.compile.lastOrError.start
           _ <- startSync
           _ <- networkPeerManager.onPeersConnected
-          _ <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError
-          _ <- networkPeerManager.fetchedBlocks.head.compile.lastOrError
+          _ <- pivotFiber.joinWith(cats.effect.IO.raiseError(new RuntimeException("pivot fiber canceled")))
+          _ <- blocksFiber.joinWith(cats.effect.IO.raiseError(new RuntimeException("blocks fiber canceled")))
           _ <- cats.effect.IO {
             val watcher = TestProbe("watchdog-test-probe")
             watcher.watch(fastSync)
