@@ -1047,4 +1047,53 @@ class AccountRangeCoordinatorSpec
     // The only message the snapSyncController should ever see is nothing (no double completion)
     snapSyncController.expectNoMessage(300.millis)
   }
+
+  // ── Category 5c: Peer cooldown (gray-list) — newly-seen vs proven peer ─────
+  // After a transient protocol failure (timeout, bad proof), the peer enters a
+  // 30-second cooldown ("gray list").  Tasks are not dispatched to cooling peers.
+  // This mirrors Monero's peer_list_general gray/white list separation (peers enter
+  // gray on first contact and graduate to white after a successful response).
+  // Reference: AccountRangeCoordinator.scala recordPeerCooldown + peerCooldownDefault
+  // Cross-reference: Monero tests/unit_tests/test_peerlist.cpp peer_list_general.
+
+  it should "not dispatch a task to a peer that is still in cooldown after a timeout failure" taggedAs UnitTest in {
+    val root = kec256(ByteString("cooldown-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe1 = TestProbe()
+    val peerProbe2 = TestProbe()
+    val peer1 = PeerTestHelpers.createTestPeer("cooldown-peer-1", peerProbe1.ref)
+    val peer2 = PeerTestHelpers.createTestPeer("cooldown-peer-2", peerProbe2.ref)
+
+    val coordinator = system.actorOf(
+      AccountRangeCoordinator.props(
+        stateRoot = root,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        concurrency = 2,
+        snapSyncController = snapSyncController.ref,
+        initialMaxInFlightPerPeer = 1
+      )
+    )
+
+    coordinator ! Messages.StartAccountRangeSync(root)
+    coordinator ! Messages.PeerAvailable(peer1)
+
+    val sendMsg1 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](2.seconds)
+    val reqId1 = sendMsg1.message.asInstanceOf[GetAccountRangeEnc].underlyingMsg.requestId
+    val worker1 = networkPeerManager.lastSender
+
+    // peer1 times out — enters cooldown via recordPeerCooldown
+    worker1 ! Messages.RequestTimeout(reqId1)
+
+    // peer2 connects after peer1 enters cooldown
+    coordinator ! Messages.PeerAvailable(peer2)
+
+    // The requeued task should be dispatched to peer2, NOT to the cooling peer1
+    val sendMsg2 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](2.seconds)
+    sendMsg2.peerId shouldBe peer2.id
+  }
 }
