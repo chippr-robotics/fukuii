@@ -147,11 +147,15 @@ class ConsensusAdapterSpec
     val block: Block = getBlock(6, parent = bestBlock.header.hash)
 
     setBlockExists(block, inChain = false, inQueue = false)
+    // After the post-PivotHeaderBootstrap fix, evaluateBranchBlock falls back to
+    // getBestBlockHeader() when the full block isn't available. Both must report
+    // None for the "no best block" scenario.
     (blockchainReader.getBestBlock _).expects().returning(None)
+    (blockchainReader.getBestBlockHeader _).expects().returning(None)
     setChainWeightForBlock(bestBlock, currentWeight)
 
     whenReady(consensusAdapter.evaluateBranchBlock(block).unsafeToFuture())(
-      _ shouldBe BlockImportFailed("Couldn't find the current best block")
+      _ shouldBe BlockImportFailed("Couldn't find the current best block header")
     )
   }
 
