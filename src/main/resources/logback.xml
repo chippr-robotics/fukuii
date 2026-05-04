@@ -126,7 +126,9 @@
     
     <!-- Peer discovery lifecycle (start/stop events only) -->
     <logger name="com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager" level="INFO" />
-    
+    <logger name="com.chipprbots.ethereum.network.discovery.DnsDiscovery" level="INFO" />
+    <logger name="com.chipprbots.ethereum.network.discovery.DiscoveryConfig" level="INFO" />
+
     <!-- Sync status and lifecycle (high-level status only) -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.SyncController" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.fast.FastSync" level="INFO" />
