@@ -66,7 +66,10 @@ object ForkId {
     List(
       config.forkTimestamps.shanghaiTimestamp.map(BigInt(_)),
       config.forkTimestamps.cancunTimestamp.map(BigInt(_)),
-      config.forkTimestamps.pragueTimestamp.map(BigInt(_))
+      config.forkTimestamps.pragueTimestamp.map(BigInt(_)),
+      config.forkTimestamps.osakaTimestamp.map(BigInt(_)),
+      config.forkTimestamps.bpo1Timestamp.map(BigInt(_)),
+      config.forkTimestamps.bpo2Timestamp.map(BigInt(_))
     ).flatten.filterNot(_ == 0).distinct.sorted
 
   implicit class ForkIdEnc(forkId: ForkId) extends RLPSerializable {

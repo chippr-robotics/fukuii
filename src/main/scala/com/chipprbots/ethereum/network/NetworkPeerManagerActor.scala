@@ -193,12 +193,16 @@ class NetworkPeerManagerActor(
           s"latestBlock=${peerInfo.remoteStatus.latestBlock.getOrElse("?")} TD=${peerInfo.remoteStatus.chainWeight.totalDifficulty} (ETH/69, TD from local DB or block-number proxy)"
         else
           s"TD=${peerInfo.remoteStatus.chainWeight.totalDifficulty}"
-      log.debug(
-        "PEER_HANDSHAKE_SUCCESS: Peer {} handshake successful. Capability: {}, BestHash: {}, ChainInfo: {}",
-        peer.id,
-        peerInfo.remoteStatus.capability,
-        ByteStringUtils.hash2string(peerInfo.remoteStatus.bestHash),
-        chainInfoDisplay
+      // INFO-level so operators can see real chain affiliation (networkId, forkId, height,
+      // forkAccepted) of every peer that completes handshake. Critical for diagnosing
+      // bootstrap failures where most inbound peers are wrong-chain DHT noise — the
+      // INBOUND_CAP_OFFSETS log only proves capability negotiation, not chain membership.
+      log.info(
+        s"PEER_HANDSHAKE_SUCCESS: Peer ${peer.id} cap=${peerInfo.remoteStatus.capability} " +
+          s"networkId=${peerInfo.remoteStatus.networkId} " +
+          s"bestHash=${ByteStringUtils.hash2string(peerInfo.remoteStatus.bestHash)} " +
+          s"$chainInfoDisplay forkAccepted=${peerInfo.forkAccepted} " +
+          s"supportsSnap=${peerInfo.remoteStatus.supportsSnap}"
       )
       peerEventBusActor ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)))
       peerEventBusActor ! Subscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)))
