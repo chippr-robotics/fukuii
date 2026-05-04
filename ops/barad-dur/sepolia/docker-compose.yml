@@ -32,6 +32,10 @@ services:
       - ./fukuii-conf:/app/conf:ro
       - ./jwt.hex:/app/jwt/jwt.hex:ro
       - ./fukuii-conf/static-nodes.json:/app/data/static-nodes.json:ro
+    # Override the image's ENTRYPOINT (which hardcodes the versioned JAR path —
+    # frozen at 0.1.240 from the original image build) so we use the unversioned
+    # symlink instead. Mirrors the pattern in the primary docker-compose.yml.
+    entrypoint: ["java"]
     command:
       - "-Xmx4g"
       - "-Xms2g"

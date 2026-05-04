@@ -30,7 +30,9 @@ case class ForkTimestamps(
     shanghaiTimestamp: Option[Long] = None,
     cancunTimestamp: Option[Long] = None,
     pragueTimestamp: Option[Long] = None,
-    osakaTimestamp: Option[Long] = None
+    osakaTimestamp: Option[Long] = None,
+    bpo1Timestamp: Option[Long] = None,
+    bpo2Timestamp: Option[Long] = None
 )
 
 case class BlockchainConfig(
@@ -98,7 +100,12 @@ case class ForkBlockNumbers(
     berlinBlockNumber: BigInt,
     mystiqueBlockNumber: BigInt,
     spiralBlockNumber: BigInt,
-    olympiaBlockNumber: BigInt
+    olympiaBlockNumber: BigInt,
+    // EIP-3675 / Sepolia post-Merge net-split block (1735371). Block-based fork that
+    // must be in the EIP-2124 fork-id checksum chain — go-ethereum's params/config.go
+    // lists this for Sepolia. Without it, our forkId hashes for Shanghai+ are off by
+    // one CRC32 round and ForkIdValidator.checkSuperset rejects all chain-head peers.
+    mergeNetsplitBlockNumber: BigInt = Long.MaxValue
 ) {
   def all: List[BigInt] = this.productIterator.toList.collect { case i: BigInt =>
     i
@@ -130,7 +137,8 @@ object ForkBlockNumbers {
     berlinBlockNumber = Long.MaxValue,
     mystiqueBlockNumber = Long.MaxValue,
     spiralBlockNumber = Long.MaxValue,
-    olympiaBlockNumber = Long.MaxValue
+    olympiaBlockNumber = Long.MaxValue,
+    mergeNetsplitBlockNumber = Long.MaxValue
   )
 }
 
@@ -205,6 +213,8 @@ object BlockchainConfig {
     val spiralBlockNumber: BigInt = BigInt(blockchainConfig.getString("spiral-block-number"))
     val olympiaBlockNumber: BigInt =
       Try(BigInt(blockchainConfig.getString("olympia-block-number"))).getOrElse(BigInt(Long.MaxValue))
+    val mergeNetsplitBlockNumber: BigInt =
+      Try(BigInt(blockchainConfig.getString("merge-netsplit-block-number"))).getOrElse(BigInt(Long.MaxValue))
 
     val treasuryAddress: Address =
       Try(Address(blockchainConfig.getString("treasury-address"))).getOrElse(Address(0))
@@ -219,7 +229,9 @@ object BlockchainConfig {
       shanghaiTimestamp = Try(blockchainConfig.getLong("shanghai-timestamp")).toOption,
       cancunTimestamp = Try(blockchainConfig.getLong("cancun-timestamp")).toOption,
       pragueTimestamp = Try(blockchainConfig.getLong("prague-timestamp")).toOption,
-      osakaTimestamp = Try(blockchainConfig.getLong("osaka-timestamp")).toOption
+      osakaTimestamp = Try(blockchainConfig.getLong("osaka-timestamp")).toOption,
+      bpo1Timestamp = Try(blockchainConfig.getLong("bpo1-timestamp")).toOption,
+      bpo2Timestamp = Try(blockchainConfig.getLong("bpo2-timestamp")).toOption
     )
 
     val messConfig: MESSConfig = Try {
@@ -258,7 +270,8 @@ object BlockchainConfig {
         berlinBlockNumber = berlinBlockNumber,
         mystiqueBlockNumber = mystiqueBlockNumber,
         spiralBlockNumber = spiralBlockNumber,
-        olympiaBlockNumber = olympiaBlockNumber
+        olympiaBlockNumber = olympiaBlockNumber,
+        mergeNetsplitBlockNumber = mergeNetsplitBlockNumber
       ),
       maxCodeSize = maxCodeSize,
       customGenesisFileOpt = customGenesisFileOpt,
