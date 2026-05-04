@@ -79,6 +79,25 @@ class PeersClientSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
     }
   }
 
+  it should "exclude peers stuck at genesis even if their TD is higher" taggedAs (UnitTest, SyncTest) in {
+    // Sepolia/ETC reproducer: bootnode at genesis with the original POW TD (131072)
+    // and a real chain-head peer with a lower TD (e.g. ETH/69 block-number proxy).
+    // Pre-fix #1201: the legacy `bestPeer` selected the genesis peer because
+    // its TD was higher; PivotHeaderBootstrap then asked it for a chain-head
+    // header and got `no header returned`, retrying until exhausted.
+    val genesisOnly = peer1.id -> PeerWithInfo(peer1, peerInfoAtGenesis(td = 17_000_000_000_000_000L.toInt))
+    val chainHead = peer2.id -> PeerWithInfo(peer2, peerInfo(td = 100))
+    PeersClient.bestPeer(Map(genesisOnly, chainHead)) shouldEqual Some(peer2)
+  }
+
+  it should "return None when every available peer is at genesis" taggedAs (UnitTest, SyncTest) in {
+    val onlyGenesis = Map(
+      peer1.id -> PeerWithInfo(peer1, peerInfoAtGenesis(td = 50)),
+      peer2.id -> PeerWithInfo(peer2, peerInfoAtGenesis(td = 200))
+    )
+    PeersClient.bestPeer(onlyGenesis) shouldEqual None
+  }
+
   object Peers {
     implicit val system: ActorSystem = ActorSystem("PeersClient_System")
 
@@ -86,12 +105,17 @@ class PeersClientSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
     val peer2: Peer = Peer(PeerId("peer2"), new InetSocketAddress("127.0.0.1", 2), TestProbe().ref, false)
     val peer3: Peer = Peer(PeerId("peer3"), new InetSocketAddress("127.0.0.1", 3), TestProbe().ref, false)
 
+    // Distinct bestHash and genesisHash so isAtGenesis returns false by default.
+    // Tests that need a genesis-only peer can override via `peerInfoAtGenesis`.
+    private val genesisHash = ByteString("genesis-hash")
+    private val chainHeadHash = ByteString("chain-head-hash")
+
     private val peerStatus = RemoteStatus(
       capability = Capability.ETH63,
       networkId = 1,
       chainWeight = ChainWeight.zero,
-      bestHash = ByteString.empty,
-      genesisHash = ByteString.empty
+      bestHash = chainHeadHash,
+      genesisHash = genesisHash
     )
 
     def peerInfo(td: Int, fork: Boolean = true): PeerInfo =
@@ -100,7 +124,18 @@ class PeersClientSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
         ChainWeight(BigInt(td)),
         forkAccepted = fork,
         maxBlockNumber = 42,
-        bestBlockHash = ByteString.empty
+        bestBlockHash = chainHeadHash
+      )
+
+    /** A peer that has handshaked but is stuck at genesis — bestHash == genesisHash.
+      * Common on Sepolia where bootnodes are fresh-state and on ETC where some peers
+      * advertise SNAP/1 but never advance past genesis. They literally have no chain
+      * data to serve.
+      */
+    def peerInfoAtGenesis(td: Int): PeerInfo =
+      peerInfo(td).copy(
+        remoteStatus = peerStatus.copy(bestHash = genesisHash),
+        bestBlockHash = genesisHash
       )
   }
 }
