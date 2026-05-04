@@ -94,12 +94,6 @@ class PoWMining private (
 
   private[this] val mutex = new Object
 
-  /*
-   * guarantees one miner instance
-   * this should not use a atomic* construct as it has side-effects
-   *
-   * TODO further refactors should focus on extracting two types - one with a miner, one without - based on the config
-   */
   private[this] def startMiningProcess(node: Node, blockCreator: PoWBlockCreator): Unit =
     mutex.synchronized {
       if (minerCoordinatorRef.isEmpty && mockedMinerRef.isEmpty) {

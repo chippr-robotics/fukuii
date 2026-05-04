@@ -687,7 +687,6 @@ trait ApisBuilder extends ApisBase {
     val Debug = "debug"
     val Rpc = "rpc"
     val Test = "test"
-    val Iele = "iele"
     val Qa = "qa"
     val Admin = "admin"
     val TxPool = "txpool"
@@ -697,7 +696,7 @@ trait ApisBuilder extends ApisBase {
 
   import Apis._
   override def available: List[String] =
-    List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Iele, Qa, Admin, TxPool, Trace, Subscribe)
+    List(Eth, Web3, Net, Personal, Fukuii, Mcp, Debug, Test, Qa, Admin, TxPool, Trace, Subscribe)
 }
 
 trait AdminServiceBuilder {

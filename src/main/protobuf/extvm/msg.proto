@@ -4,12 +4,9 @@ package com.chipprbots.ethereum.extvm;
 message Hello {
   string version = 1;
 
-  // A blockchain related configuration for the VM for the entire session.
-  // Currently only Mantis-EVM is supported. Other VMs may ingore this
-  // or may required different configurations.
+  // Blockchain configuration for the VM session.
   oneof config {
     EthereumConfig ethereumConfig = 2;
-    IeleConfig ieleConfig = 3;
   }
 }
 
@@ -23,11 +20,9 @@ message CallContext {
   bytes gasProvided = 6;
   BlockHeader blockHeader = 7;
 
-  // This may be used to override the VM configuration for the session. It used in tests to avoid
-  // re-instantiating VM for each test.
+  // May override VM configuration per call; used in tests to avoid re-instantiating the VM.
   oneof config {
     EthereumConfig ethereumConfig = 8;
-    IeleConfig ieleConfig = 9;
   }
 
   // Support for typed transactions specified by EIP-2718
@@ -75,10 +70,6 @@ message EthereumConfig {
   bytes chainId = 13;
 }
 
-message IeleConfig {
-  bytes danseBlockNumber = 1;
-}
-
 message GetAccount {
   bytes address = 1;
 }
@@ -118,7 +109,6 @@ message Blockhash {
 
 message CallResult {
   bytes returnData = 1;
-  // required for IELE VM
   bytes returnCode = 2;
   bytes gasRemaining = 3;
   bytes gasRefund = 4;

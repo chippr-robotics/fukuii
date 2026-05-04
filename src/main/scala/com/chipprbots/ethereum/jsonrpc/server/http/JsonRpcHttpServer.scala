@@ -101,7 +101,6 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
           }
         }
       } ~ (pathEndOrSingleSlash & post) {
-        // TODO: maybe rate-limit this one too?
         entity(as[JsonRpcRequest]) {
           case statusReq if statusReq.method == FaucetJsonRpcController.Status =>
             handleRequest(statusReq)
@@ -109,8 +108,6 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger {
             rateLimit {
               handleRequest(jsonReq)
             }
-          // TODO: separate paths for single and multiple requests
-          // TODO: to prevent repeated body and json parsing
         } ~ entity(as[Seq[JsonRpcRequest]]) {
           case _ if config.rateLimit.enabled =>
             complete(StatusCodes.MethodNotAllowed, JsonRpcError.MethodNotFound)

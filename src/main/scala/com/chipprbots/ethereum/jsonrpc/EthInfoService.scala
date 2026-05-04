@@ -71,21 +71,8 @@ object EthInfoService {
       gasPriceExplicit: Boolean = false
   )
 
-  case class IeleCallTx(
-      from: Option[ByteString],
-      to: Option[ByteString],
-      gas: Option[BigInt],
-      gasPrice: BigInt,
-      value: BigInt,
-      function: Option[String] = None,
-      arguments: Option[Seq[ByteString]] = None,
-      contractCode: Option[ByteString]
-  )
-
   case class CallRequest(tx: CallTx, block: BlockParam)
   case class CallResponse(returnData: ByteString)
-  case class IeleCallRequest(tx: IeleCallTx, block: BlockParam)
-  case class IeleCallResponse(returnData: Seq[ByteString])
   case class EstimateGasResponse(gas: BigInt)
   case class CreateAccessListRequest(tx: CallTx, block: BlockParam) {
     def toCallRequest: CallRequest = CallRequest(tx, block)
@@ -232,28 +219,6 @@ class EthInfoService(
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
     }
-
-  def ieleCall(req: IeleCallRequest): ServiceResponse[IeleCallResponse] = {
-    import req.tx
-
-    val args = tx.arguments.getOrElse(Nil)
-    val dataEither = (tx.function, tx.contractCode) match {
-      case (Some(function), None)     => Right(rlp.encode(RLPList(function, args)))
-      case (None, Some(contractCode)) => Right(rlp.encode(RLPList(contractCode, args)))
-      case _ => Left(JsonRpcError.InvalidParams("Iele transaction should contain either functionName or contractCode"))
-    }
-
-    dataEither match {
-      case Right(data) =>
-        call(CallRequest(CallTx(tx.from, tx.to, tx.gas, tx.gasPrice, tx.value, ByteString(data)), req.block))
-          .map(_.map { callResponse =>
-            IeleCallResponse(
-              rlp.decode[Seq[ByteString]](callResponse.returnData.toArray[Byte])
-            )
-          })
-      case Left(error) => IO.pure(Left(error))
-    }
-  }
 
   def estimateGas(req: CallRequest): ServiceResponse[EstimateGasResponse] =
     IO {

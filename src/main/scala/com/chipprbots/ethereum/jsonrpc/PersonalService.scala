@@ -56,8 +56,6 @@ object PersonalService {
   case class SendTransactionRequest(tx: TransactionRequest)
   case class SendTransactionResponse(txHash: ByteString)
 
-  case class SendIeleTransactionRequest(tx: IeleTransactionRequest)
-
   case class SignRequest(message: ByteString, address: Address, passphrase: Option[String])
   case class SignResponse(signature: ECDSASignature)
 
@@ -89,7 +87,6 @@ trait PersonalServiceAPI {
       request: SendTransactionWithPassphraseRequest
   ): ServiceResponse[SendTransactionWithPassphraseResponse]
   def sendTransaction(request: SendTransactionRequest): ServiceResponse[SendTransactionResponse]
-  def sendIeleTransaction(request: SendIeleTransactionRequest): ServiceResponse[SendTransactionResponse]
 }
 
 class PersonalService(
@@ -201,27 +198,7 @@ class PersonalService(
       case None => IO.pure(Left(AccountLocked))
     }
 
-  def sendIeleTransaction(request: SendIeleTransactionRequest): ServiceResponse[SendTransactionResponse] = {
-    import request.tx
 
-    val args = tx.arguments.getOrElse(Nil)
-    val dataEither = (tx.function, tx.contractCode) match {
-      case (Some(function), None)     => Right(rlp.encode(RLPList(toEncodeable(function), toEncodeable(args))))
-      case (None, Some(contractCode)) => Right(rlp.encode(RLPList(toEncodeable(contractCode), toEncodeable(args))))
-      case _ => Left(JsonRpcError.InvalidParams("Iele transaction should contain either functionName or contractCode"))
-    }
-
-    dataEither match {
-      case Right(data) =>
-        sendTransaction(
-          SendTransactionRequest(
-            TransactionRequest(tx.from, tx.to, tx.value, tx.gasLimit, tx.gasPrice, tx.nonce, Some(ByteString(data)))
-          )
-        )
-      case Left(error) =>
-        IO.pure(Left(error))
-    }
-  }
 
   private def sendTransaction(request: TransactionRequest, wallet: Wallet): IO[ByteString] = {
     implicit val timeout: Timeout = Timeout(txPoolConfig.pendingTxManagerQueryTimeout)
