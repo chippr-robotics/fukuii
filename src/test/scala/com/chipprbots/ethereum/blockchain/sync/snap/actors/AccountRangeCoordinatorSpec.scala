@@ -612,4 +612,127 @@ class AccountRangeCoordinatorSpec
 
     system.stop(coordinator)
   }
+
+  // ── Snapless peer demotion (refs #1197) ──
+  // ETC mainnet peers running core-geth with `--syncmode full` advertise snap/1 but
+  // their handler returns AccountRangePacket{Accounts:nil, Proof:nil} for every
+  // GetAccountRange because `chain.Snapshots()` is unavailable. Today's
+  // markPeerStateless adds the peer to statelessPeers, but PivotRefreshed clears that
+  // set — so on every pivot refresh the peer cycles back into dispatch, returns
+  // empty again, and the wedge repeats every ~2 minutes. The fix introduces a
+  // separate `snaplessPeers` set that survives PivotRefreshed because the peer's
+  // snapshot won't materialise mid-session.
+
+  it should "mark a peer SNAPLESS on 'Missing proof for empty account range' (#1197)" taggedAs UnitTest in {
+    // handleTaskFailed only calls markPeerStateless when the task's rootHash matches
+    // the coordinator's current stateRoot (otherwise it's a stale-root failure from a
+    // pre-pivot-refresh request, which doesn't reflect on the peer's snapshot state).
+    // Match the coordinator's default newCoordinator() stateRoot so the path is exercised.
+    val stateRoot = kec256(ByteString("trie-async-test-root"))
+    val coord = newCoordinator(stateRoot = stateRoot)
+    val ua = coord.underlyingActor
+    val pendingProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("snapless-peer", pendingProbe.ref)
+
+    seedActiveTask(coord, BigInt(701), peer, rootHash = stateRoot)
+
+    // Drive the empty-with-empty failure path through the public coordinator API.
+    coord ! Messages.TaskFailed(BigInt(701), "Missing proof for empty account range")
+    coord ! Messages.GetProgress
+    expectMsgType[AccountRangeStats](2.seconds) // sequential barrier
+
+    ua.statelessPeers should contain(peer.id)
+    ua.snaplessPeers should contain(peer.id)
+
+    system.stop(coord)
+  }
+
+  it should "leave snaplessPeers untouched on PivotRefreshed (#1197)" taggedAs UnitTest in {
+    val coord = newCoordinator()
+    val ua = coord.underlyingActor
+    val pendingProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("snapless-pivot-peer", pendingProbe.ref)
+
+    // Seed both sets directly (the coordinator-internal effect of an empty-proof failure).
+    ua.statelessPeers.add(peer.id)
+    ua.snaplessPeers.add(peer.id)
+
+    coord ! Messages.PivotRefreshed(kec256(ByteString("post-refresh-root")))
+    coord ! Messages.GetProgress
+    expectMsgType[AccountRangeStats](2.seconds)
+
+    // statelessPeers is for stale-root failures and clears on PivotRefreshed.
+    ua.statelessPeers shouldBe empty
+    // snaplessPeers tracks structural snapshot absence; survives so the peer doesn't
+    // go back into dispatch and immediately re-classify.
+    ua.snaplessPeers should contain(peer.id)
+
+    system.stop(coord)
+  }
+
+  it should "NOT classify a peer as SNAPLESS on Request timeout failures (#1197)" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("trie-async-test-root"))
+    val coord = newCoordinator(stateRoot = stateRoot)
+    val ua = coord.underlyingActor
+    val pendingProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("timeout-only-peer", pendingProbe.ref)
+
+    // Drive 3 consecutive timeouts for one peer (consecutiveTimeoutThreshold default = 3).
+    seedActiveTask(coord, BigInt(801), peer, rootHash = stateRoot)
+    coord ! Messages.TaskFailed(BigInt(801), "Request timeout")
+    seedActiveTask(coord, BigInt(802), peer, rootHash = stateRoot)
+    coord ! Messages.TaskFailed(BigInt(802), "Request timeout")
+    seedActiveTask(coord, BigInt(803), peer, rootHash = stateRoot)
+    coord ! Messages.TaskFailed(BigInt(803), "Request timeout")
+
+    coord ! Messages.GetProgress
+    expectMsgType[AccountRangeStats](2.seconds)
+
+    // After 3 timeouts the peer is stateless (transient root-aging signal) but NOT
+    // snapless — timeout doesn't mean the snapshot tree is missing.
+    ua.statelessPeers should contain(peer.id)
+    ua.snaplessPeers should not contain peer.id
+
+    system.stop(coord)
+  }
+
+  it should "filter snapless peers from PeerAvailable dispatch (#1197)" taggedAs UnitTest in {
+    // The coordinator routes all peer requests through a single networkPeerManager —
+    // verify dispatch by inspecting its mailbox for SendMessage envelopes addressed to
+    // each peer id, rather than per-peer probes.
+    import com.chipprbots.ethereum.network.NetworkPeerManagerActor.SendMessage
+
+    val stateRoot = kec256(ByteString("snapless-dispatch-root"))
+    val networkPeerManager = TestProbe()
+    val syncController = TestProbe()
+    val peerProbeA = TestProbe()
+    val peerProbeB = TestProbe()
+    val peerA = PeerTestHelpers.createTestPeer("snapless-dispatch-a", peerProbeA.ref)
+    val peerB = PeerTestHelpers.createTestPeer("snapless-dispatch-b", peerProbeB.ref)
+
+    val coord = TestActorRef[AccountRangeCoordinator](
+      AccountRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = new SNAPRequestTracker()(system.scheduler),
+        mptStorage = new TestMptStorage(),
+        concurrency = 1, // exactly one initial task → one dispatch
+        snapSyncController = syncController.ref
+      )
+    )
+
+    // Pre-seed peerA as snapless before announcing it. peerB is a normal fresh peer.
+    coord.underlyingActor.snaplessPeers.add(peerA.id)
+
+    coord ! Messages.StartAccountRangeSync(stateRoot)
+    coord ! Messages.PeerAvailable(peerA)
+    coord ! Messages.PeerAvailable(peerB)
+
+    // The dispatch should reach peerB only. We expect at least one SendMessage on the
+    // shared networkPeerManager probe, and its `peerId` must be peerB's, not peerA's.
+    val sent = networkPeerManager.expectMsgType[SendMessage](3.seconds)
+    sent.peerId.value shouldBe peerB.id.value
+
+    system.stop(coord)
+  }
 }

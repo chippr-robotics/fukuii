@@ -84,19 +84,38 @@ class AccountRangeCoordinator(
   private var maxInFlightPerPeer: Int = initialMaxInFlightPerPeer
 
   // Stateless peer tracking: peers that return "Missing proof for empty account range"
-  // are unable to serve the current state root. Unlike the previous exponential cooldown,
-  // this is a binary classification: either a peer can serve the root or it can't.
-  // When ALL known peers become stateless, we request a pivot refresh from the controller.
-  private val statelessPeers = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
+  // OR consecutive timeouts are unable to serve the current state root. Cleared on
+  // PivotRefreshed because the new root may be inside the peer's serve window.
+  // `private[actors]` so AccountRangeCoordinatorSpec can drive the state via TestActorRef.
+  private[actors] val statelessPeers = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
+  // Snapless peer tracking (#1197): peers whose SNAP handler returns
+  // `AccountRangePacket{Accounts: nil, Proof: nil}` indicating `chain.Snapshots()` is
+  // structurally unavailable (typical core-geth `--syncmode full` configuration on ETC
+  // mainnet — see project_eth68_snap_research memory). The peer's snapshot won't
+  // materialize this session, so this set survives PivotRefreshed (root-independent).
+  // Bytecode + trie-node healing coordinators are unaffected — those code paths use
+  // direct DB lookups that don't depend on the snapshot tree.
+  private[actors] val snaplessPeers = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
   private var pivotRefreshRequested = false
   private var pivotWasRefreshed = false
 
   private def isPeerStateless(peer: Peer): Boolean =
     statelessPeers.contains(peer.id)
 
+  private def isPeerSnapless(peer: Peer): Boolean =
+    snaplessPeers.contains(peer.id)
+
   private def markPeerStateless(peer: Peer, reason: String): Unit = {
-    val shouldMark = if (reason.contains("Missing proof for empty account range")) {
-      // Peer explicitly returned empty response — immediately stateless
+    val isEmptyProofSignal = reason.contains("Missing proof for empty account range")
+    val shouldMark = if (isEmptyProofSignal) {
+      // Peer explicitly returned empty response — immediately stateless AND snapless.
+      // The empty-with-empty signal means `chain.Snapshots()` is unavailable on this
+      // peer for any root, not just the current one (#1197).
+      snaplessPeers.add(peer.id)
+      log.info(
+        s"Peer ${peer.id.value} marked SNAPLESS (no snapshot tree) — will skip for " +
+          s"GetAccountRange this session. Bytecode/healing remain available."
+      )
       true
     } else if (reason.contains("Request timeout")) {
       // Peer timed out — track consecutive timeouts.
@@ -127,9 +146,26 @@ class AccountRangeCoordinator(
 
   private def maybeRequestPivotRefresh(): Unit = {
     if (pivotRefreshRequested) return
-    // If all known peers are stateless, the root has aged out of the serve window
-    val allStateless = knownAvailablePeers.nonEmpty &&
-      knownAvailablePeers.forall(p => statelessPeers.contains(p.id))
+    // Snapless peers (no snapshot tree at all) cannot be rescued by a pivot refresh — the
+    // refresh would just yield another empty response from the same peer at the new root.
+    // Compute "all stateless" against the *non-snapless* subset only (#1197).
+    val nonSnapless = knownAvailablePeers.filterNot(p => snaplessPeers.contains(p.id))
+    if (nonSnapless.isEmpty && knownAvailablePeers.nonEmpty) {
+      // Every peer in the pool is snapless. Pivot refresh won't help; the SNAP-range
+      // download is structurally blocked. Log once per snapless-saturation event so an
+      // operator can pivot to fast-sync or wait for a new peer mix.
+      log.warning(
+        s"All ${knownAvailablePeers.size} known peers are SNAPLESS (no snapshot tree). " +
+          "SNAP-range download cannot make progress on this peer pool. Bytecode and " +
+          "trie-node healing remain functional. Consider switching to do-snap-sync=false " +
+          "if this persists."
+      )
+      return
+    }
+    // If all NON-snapless peers are stateless, the current root has aged out of the
+    // serve window — pivot refresh might rescue them.
+    val allStateless = nonSnapless.nonEmpty &&
+      nonSnapless.forall(p => statelessPeers.contains(p.id))
     if (!allStateless) return
 
     // Exponential backoff: don't hammer the controller with rapid refresh requests
@@ -327,7 +363,7 @@ class AccountRangeCoordinator(
     * peer avoids peer flooding.
     */
   private def activePeerCount: Int =
-    knownAvailablePeers.count(p => !isPeerStateless(p) && !isPeerCoolingDown(p)).max(1)
+    knownAvailablePeers.count(p => !isPeerStateless(p) && !isPeerSnapless(p) && !isPeerCoolingDown(p)).max(1)
 
   // Per-peer adaptive byte budgeting (ported from StorageRangeCoordinator).
   // Geth's snap handler supports up to 2MB responses. Starting at 512KB and probing upward
@@ -509,7 +545,10 @@ class AccountRangeCoordinator(
       drainActiveTasks(s"pivot refresh to ${newStateRoot.take(4).toHex}")
       pendingTasks.foreach(_.rootHash = newStateRoot)
 
-      // Clear stateless tracking — peers can serve the new root
+      // Clear stateless tracking — peers can serve the new root.
+      // NOTE: snaplessPeers is INTENTIONALLY NOT cleared here (#1197). A peer with no
+      // snapshot tree won't grow one across a pivot refresh; clearing would just put
+      // them back in dispatch rotation to immediately re-classify and waste a cycle.
       statelessPeers.clear()
       pivotRefreshRequested = false
 
@@ -542,6 +581,8 @@ class AccountRangeCoordinator(
       knownAvailablePeers += peer
       if (isPeerStateless(peer)) {
         log.debug(s"Ignoring PeerAvailable(${peer.id.value}) - peer is stateless for current root")
+      } else if (isPeerSnapless(peer)) {
+        log.debug(s"Ignoring PeerAvailable(${peer.id.value}) - peer is snapless (no snapshot tree)")
       } else if (isPeerCoolingDown(peer)) {
         log.debug(s"Ignoring PeerAvailable(${peer.id.value}) - peer is cooling down")
       } else if (pendingTasks.isEmpty) {
@@ -1018,6 +1059,7 @@ class AccountRangeCoordinator(
     if (pendingTasks.isEmpty) return
     val eligiblePeers = knownAvailablePeers
       .filterNot(isPeerStateless)
+      .filterNot(isPeerSnapless)
       .filterNot(isPeerCoolingDown)
       .toList
     if (eligiblePeers.isEmpty) return
