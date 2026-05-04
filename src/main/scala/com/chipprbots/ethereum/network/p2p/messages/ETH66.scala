@@ -49,12 +49,21 @@ object ETH66 {
 
       override def toRLPEncodable: RLPEncodeable = {
         import msg._
+        // Canonical-RLP integer encoding (Yellow Paper Appendix B): zero MUST be
+        // the empty byte string, not [0x00]. Geth/besu/nethermind reject the
+        // non-canonical [0x00] form for uint64/bool fields and silently drop the
+        // request, returning an empty BlockHeaders response. Root cause of #1201:
+        // skip=0 and reverse=false were both encoded as [0x00] by the implicit
+        // BigInt/Int RLP encoders. Bypass them here — bigIntToUnsignedByteArray
+        // produces empty bytes for zero (canonical form).
+        def num(b: BigInt): RLPValue = RLPValue(ByteUtils.bigIntToUnsignedByteArray(b))
+        val reverseFlag: RLPValue =
+          if (reverse) RLPValue(Array[Byte](1.toByte)) else RLPValue(Array.emptyByteArray)
         val blockQuery = block match {
-          case Left(blockNumber) => RLPList(blockNumber, maxHeaders, skip, if (reverse) 1 else 0)
-          case Right(blockHash)  => RLPList(RLPValue(blockHash.toArray[Byte]), maxHeaders, skip, if (reverse) 1 else 0)
+          case Left(blockNumber) => RLPList(num(blockNumber), num(maxHeaders), num(skip), reverseFlag)
+          case Right(blockHash)  => RLPList(RLPValue(blockHash.toArray[Byte]), num(maxHeaders), num(skip), reverseFlag)
         }
-        // Use bigIntToUnsignedByteArray to properly encode request-id (0 should be empty bytes per RLP spec)
-        RLPList(RLPValue(ByteUtils.bigIntToUnsignedByteArray(requestId)), blockQuery)
+        RLPList(num(requestId), blockQuery)
       }
     }
 
