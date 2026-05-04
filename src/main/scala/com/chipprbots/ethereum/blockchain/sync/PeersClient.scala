@@ -209,6 +209,34 @@ class PeersClient(
         )
         bestPeer(filteredPeers, log)
 
+      case BestPeerWithMinBlock(minBlock) =>
+        // Two-tier selection: peers with known maxBlockNumber >= minBlock are
+        // strictly better than peers with maxBlockNumber == 0 (unknown chain
+        // state). Try the known-good tier first; if empty, fall back to the
+        // unknown tier — which is correct behaviour for ETH/64-68 peers whose
+        // maxBlockNumber stays at 0 because their STATUS doesn't carry a
+        // block number and we don't receive block messages from them post-merge.
+        val knownAheadPeers = peersToDownloadFrom.filter { case (_, peerWithInfo) =>
+          peerWithInfo.peerInfo.maxBlockNumber >= minBlock
+        }
+        if (knownAheadPeers.nonEmpty) {
+          log.debug(
+            "BestPeerWithMinBlock({}): {} peers have known maxBlockNumber >= target",
+            minBlock,
+            knownAheadPeers.size
+          )
+          bestPeer(knownAheadPeers, log)
+        } else {
+          val unknownChainHeadPeers = peersToDownloadFrom.filter { case (_, peerWithInfo) =>
+            peerWithInfo.peerInfo.maxBlockNumber == 0
+          }
+          log.debug(
+            s"BestPeerWithMinBlock($minBlock): no peer with known maxBlockNumber >= target; " +
+              s"falling back to ${unknownChainHeadPeers.size} peer(s) with maxBlockNumber=0 (chain state unknown)"
+          )
+          bestPeer(unknownChainHeadPeers, log)
+        }
+
       case BestSnapPeerExcluding(exclude) =>
         val snapPeers = peersToDownloadFrom.filter { case (peerId, peerWithInfo) =>
           !exclude.contains(peerId) && peerWithInfo.peerInfo.remoteStatus.supportsSnap
@@ -375,29 +403,49 @@ object PeersClient {
   case class BestSnapPeerExcluding(exclude: Set[PeerId]) extends PeerSelector
   case class BestNodeDataPeerExcluding(exclude: Set[PeerId]) extends PeerSelector
 
+  /** Pick a peer whose advertised chain head is at least `minBlock`. Use this
+    * for absolute-block-number requests (e.g. PivotHeaderBootstrap targeting a
+    * specific pivot) where peers behind that height literally have nothing to
+    * return.
+    *
+    * ETH/69 peers report `latestBlock` in STATUS, so `maxBlockNumber` reflects
+    * their true chain head. ETH/64-68 peers don't carry a block number in
+    * STATUS and their `maxBlockNumber` stays at `0` post-merge (no incoming
+    * block messages to update it via `peerHasUpdatedBestBlock`). We therefore
+    * include `maxBlockNumber == 0` peers as a fallback — they MAY have the
+    * block but we can't tell.
+    */
+  case class BestPeerWithMinBlock(minBlock: BigInt) extends PeerSelector
+
   def bestPeer(
       peersToDownloadFrom: Map[PeerId, PeerWithInfo],
       log: org.apache.pekko.event.LoggingAdapter
   ): Option[Peer] = {
     log.debug("Evaluating {} peers to find best peer", peersToDownloadFrom.size)
 
+    // Filter out peers whose bestHash == genesisHash. These peers have nothing to
+    // serve and silently return empty responses to GetBlockHeaders, GetBlockBodies,
+    // GetReceipts etc. — masking sync wedges as transient timeouts.
+    //
+    // Bug #1201 (Sepolia): half the post-fork-fix peer pool was Sepolia bootnodes
+    // sitting at genesis (`bestHash == genesisHash`, TD=131072). PivotHeaderBootstrap's
+    // BestPeer selection round-robined into them and reported "no header returned"
+    // for blocks they literally don't have. forkAccepted=true is necessary but not
+    // sufficient — the peer must also have advanced past genesis.
     val peersToUse = peersToDownloadFrom.values
       .map { case PeerWithInfo(peer, peerInfo) =>
-        val isReady = peerInfo.forkAccepted
+        val isReady = peerInfo.forkAccepted && !peerInfo.isAtGenesis
         log.debug(
-          "Peer {} ({}) - ready: {}, maxBlock: {}",
-          peer.id,
-          peer.remoteAddress,
-          isReady,
-          peerInfo.maxBlockNumber
+          s"Peer ${peer.id} (${peer.remoteAddress}) - ready: $isReady, " +
+            s"maxBlock: ${peerInfo.maxBlockNumber}, atGenesis: ${peerInfo.isAtGenesis}"
         )
         log.debug("Peer {} chainWeight: {}", peer.id, peerInfo.chainWeight)
         (peer, peerInfo, isReady)
       }
-      .collect { case (peer, PeerInfo(_, chainWeight, true, _, _), _) =>
+      .collect { case (peer, peerInfo, true) =>
         log.debug("Peer {} is ready and eligible for selection", peer.id)
-        log.debug("Peer {} chainWeight: {}", peer.id, chainWeight)
-        (peer, chainWeight)
+        log.debug("Peer {} chainWeight: {}", peer.id, peerInfo.chainWeight)
+        (peer, peerInfo.chainWeight)
       }
 
     if (peersToUse.nonEmpty) {
@@ -410,11 +458,13 @@ object PeersClient {
     }
   }
 
-  // Legacy method for backward compatibility
+  // Legacy method for backward compatibility — kept in sync with the logger-aware
+  // overload above: skip forkRejected peers AND skip peers stuck at genesis.
   def bestPeer(peersToDownloadFrom: Map[PeerId, PeerWithInfo]): Option[Peer] = {
     val peersToUse = peersToDownloadFrom.values
-      .collect { case PeerWithInfo(peer, PeerInfo(_, chainWeight, true, _, _)) =>
-        (peer, chainWeight)
+      .collect {
+        case PeerWithInfo(peer, peerInfo) if peerInfo.forkAccepted && !peerInfo.isAtGenesis =>
+          (peer, peerInfo.chainWeight)
       }
 
     if (peersToUse.nonEmpty) {
@@ -423,5 +473,20 @@ object PeersClient {
     } else {
       None
     }
+  }
+
+  /** Static helper mirroring the BestPeerWithMinBlock selector for unit testing. */
+  def bestPeerWithMinBlock(
+      peersToDownloadFrom: Map[PeerId, PeerWithInfo],
+      minBlock: BigInt
+  ): Option[Peer] = {
+    val knownAheadPeers = peersToDownloadFrom.filter { case (_, peerWithInfo) =>
+      peerWithInfo.peerInfo.maxBlockNumber >= minBlock
+    }
+    if (knownAheadPeers.nonEmpty) bestPeer(knownAheadPeers)
+    else
+      bestPeer(peersToDownloadFrom.filter { case (_, peerWithInfo) =>
+        peerWithInfo.peerInfo.maxBlockNumber == 0
+      })
   }
 }
