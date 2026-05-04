@@ -264,7 +264,7 @@ class StateValidator(mptStorage: MptStorage) {
     stack.prepend((rootNode, Array.emptyByteArray))
 
     var lastHeartbeat = System.currentTimeMillis()
-    var nodesVisited  = 0L
+    var nodesVisited = 0L
 
     while (stack.nonEmpty) {
       val (node, nibblePath) = stack.removeHead()

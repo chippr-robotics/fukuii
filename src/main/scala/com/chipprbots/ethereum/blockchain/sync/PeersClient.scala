@@ -248,6 +248,19 @@ class PeersClient(
         )
         bestPeer(snapPeers, log)
 
+      case BestSnapPeerAboveBlock(minBlock) =>
+        val snapPeers = peersToDownloadFrom.filter { case (_, peerWithInfo) =>
+          peerWithInfo.peerInfo.remoteStatus.supportsSnap &&
+          peerWithInfo.peerInfo.maxBlockNumber >= minBlock
+        }
+        log.debug(
+          "Selecting best SNAP peer above block {} from {} SNAP peers ({} eligible)",
+          minBlock,
+          peersToDownloadFrom.count { case (_, p) => p.peerInfo.remoteStatus.supportsSnap },
+          snapPeers.size
+        )
+        bestPeer(snapPeers, log)
+
       case BestNodeDataPeerExcluding(exclude) =>
         val now = System.currentTimeMillis()
         val nodeDataPeers = peersToDownloadFrom.filter { case (peerId, _) =>
@@ -402,6 +415,7 @@ object PeersClient {
   case class ExcludingPeers(exclude: Set[PeerId]) extends PeerSelector
   case class BestSnapPeerExcluding(exclude: Set[PeerId]) extends PeerSelector
   case class BestNodeDataPeerExcluding(exclude: Set[PeerId]) extends PeerSelector
+  case class BestSnapPeerAboveBlock(minBlock: BigInt) extends PeerSelector
 
   /** Pick a peer whose advertised chain head is at least `minBlock`. Use this for absolute-block-number requests (e.g.
     * PivotHeaderBootstrap targeting a specific pivot) where peers behind that height literally have nothing to return.

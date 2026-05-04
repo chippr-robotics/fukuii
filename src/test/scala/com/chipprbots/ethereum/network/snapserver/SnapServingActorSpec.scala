@@ -35,20 +35,16 @@ import com.chipprbots.ethereum.testing.TestMptStorage
 // and sends responses via peerManagerActor.SendMessage, including when the peer is unknown,
 // storage is absent, or the state root falls outside the 128-block freshness window.
 
-class SnapServingActorSpec
-    extends AnyFlatSpec
-    with Matchers
-    with MockFactory
-    with BeforeAndAfterAll {
+class SnapServingActorSpec extends AnyFlatSpec with Matchers with MockFactory with BeforeAndAfterAll {
 
   implicit val system: ActorSystem = ActorSystem("SnapServingActorSpec_System")
 
   override def afterAll(): Unit = { val _ = system.terminate() }
 
-  private val zeroHash  = ByteString(new Array[Byte](32))
-  private val maxHash   = ByteString(Array.fill[Byte](32)(0xff.toByte))
+  private val zeroHash = ByteString(new Array[Byte](32))
+  private val maxHash = ByteString(Array.fill[Byte](32)(0xff.toByte))
   private val bigBudget = BigInt(2 * 1024 * 1024)
-  private val testPeer  = PeerId("snap-serving-test-peer")
+  private val testPeer = PeerId("snap-serving-test-peer")
 
   // Shared appStateStorage: the actor reads nothing from it during SNAP request handling.
   private val appStateStorage = new AppStateStorage(EphemDataSource())
@@ -62,14 +58,14 @@ class SnapServingActorSpec
       blockchainReader: Option[BlockchainReader] = None
   ): ActorRef = TestActorRef(
     NetworkPeerManagerActor.props(
-      peerManagerActor      = peerManager.ref,
-      peerEventBusActor     = peerEventBus.ref,
-      appStateStorage       = appStateStorage,
-      forkResolverOpt       = None,
+      peerManagerActor = peerManager.ref,
+      peerEventBusActor = peerEventBus.ref,
+      appStateStorage = appStateStorage,
+      forkResolverOpt = None,
       snapSyncControllerOpt = None,
-      evmCodeStorageOpt     = evmCodeStorageOpt,
-      mptStorageOpt         = mptStorageOpt,
-      blockchainReader      = blockchainReader
+      evmCodeStorageOpt = evmCodeStorageOpt,
+      mptStorageOpt = mptStorageOpt,
+      blockchainReader = blockchainReader
     )
   )
 
@@ -97,28 +93,28 @@ class SnapServingActorSpec
       UnitTest,
       SyncTest
     ) in {
-    val pm = TestProbe("pm-unknown-peer")
-    val eb = TestProbe("eb-unknown-peer")
-    val (root, storage) = buildAccountTrie(6)
-    val actor = makeActor(pm, eb, mptStorageOpt = Some(storage))
+      val pm = TestProbe("pm-unknown-peer")
+      val eb = TestProbe("eb-unknown-peer")
+      val (root, storage) = buildAccountTrie(6)
+      val actor = makeActor(pm, eb, mptStorageOpt = Some(storage))
 
-    actor ! MessageFromPeer(
-      GetAccountRange(
-        requestId    = BigInt(1),
-        rootHash     = root,
-        startingHash = zeroHash,
-        limitHash    = maxHash,
-        responseBytes = bigBudget
-      ),
-      testPeer
-    )
+      actor ! MessageFromPeer(
+        GetAccountRange(
+          requestId = BigInt(1),
+          rootHash = root,
+          startingHash = zeroHash,
+          limitHash = maxHash,
+          responseBytes = bigBudget
+        ),
+        testPeer
+      )
 
-    val msg = nextSend(pm)
-    msg.peerId shouldBe testPeer
-    val resp = msg.message.underlyingMsg.asInstanceOf[AccountRange]
-    resp.requestId shouldBe BigInt(1)
-    resp.accounts should not be empty
-  }
+      val msg = nextSend(pm)
+      msg.peerId shouldBe testPeer
+      val resp = msg.message.underlyingMsg.asInstanceOf[AccountRange]
+      resp.requestId shouldBe BigInt(1)
+      resp.accounts should not be empty
+    }
 
   // ── Test 2: GetByteCodes + evmCodeStorageOpt=None → empty ByteCodes, no crash ─
 
@@ -151,7 +147,13 @@ class SnapServingActorSpec
     val actor = makeActor(pm, eb, mptStorageOpt = None)
 
     actor ! MessageFromPeer(
-      GetAccountRange(requestId = BigInt(7), rootHash = zeroHash, startingHash = zeroHash, limitHash = maxHash, responseBytes = bigBudget),
+      GetAccountRange(
+        requestId = BigInt(7),
+        rootHash = zeroHash,
+        startingHash = zeroHash,
+        limitHash = maxHash,
+        responseBytes = bigBudget
+      ),
       testPeer
     )
 
@@ -175,7 +177,10 @@ class SnapServingActorSpec
     actor ! MessageFromPeer(GetAccountRange(BigInt(11), zeroHash, zeroHash, maxHash, bigBudget), testPeer)
     nextSend(pm).message.underlyingMsg.asInstanceOf[AccountRange].requestId shouldBe BigInt(11)
 
-    actor ! MessageFromPeer(GetStorageRanges(BigInt(22), zeroHash, Seq(zeroHash), zeroHash, maxHash, bigBudget), testPeer)
+    actor ! MessageFromPeer(
+      GetStorageRanges(BigInt(22), zeroHash, Seq(zeroHash), zeroHash, maxHash, bigBudget),
+      testPeer
+    )
     nextSend(pm).message.underlyingMsg.asInstanceOf[StorageRanges].requestId shouldBe BigInt(22)
 
     actor ! MessageFromPeer(GetByteCodes(BigInt(33), Seq.empty, bigBudget), testPeer)
@@ -214,7 +219,13 @@ class SnapServingActorSpec
     val actor = makeActor(pm, eb, mptStorageOpt = Some(storage), blockchainReader = Some(readerStub))
 
     actor ! MessageFromPeer(
-      GetAccountRange(requestId = BigInt(99), rootHash = staleRoot, startingHash = zeroHash, limitHash = maxHash, responseBytes = bigBudget),
+      GetAccountRange(
+        requestId = BigInt(99),
+        rootHash = staleRoot,
+        startingHash = zeroHash,
+        limitHash = maxHash,
+        responseBytes = bigBudget
+      ),
       testPeer
     )
 

@@ -295,6 +295,10 @@ class PeerActor[R <: HandshakeResult](
           // These disconnect reasons should be reported for blacklisting but don't require
           // removing the node from known nodes (they may be temporary issues)
           context.parent ! PeerClosedConnection(peerAddress.getHostString, d.reason)
+        case AlreadyConnected =>
+          // NB-8: Propagate AlreadyConnected so PeerManagerActor can detect the inbound connection
+          // is already covering this maintained peer and skip the 30s reconnect timer.
+          context.parent ! PeerClosedConnection(peerAddress.getHostString, d.reason)
         case _ => // nothing
       }
       log.debug(s"Received {}. Closing connection with peer ${peerAddress.getHostString}:${peerAddress.getPort}", d)

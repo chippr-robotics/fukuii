@@ -477,9 +477,17 @@ class PeerManagerActor(
         peerStatusCache = peerStatusCache - peerId
         peerEventBus ! Publish(PeerEvent.PeerDisconnected(peerId))
         // Reconnect maintained peers — mirrors Besu's checkMaintainedConnectionPeers scheduler.
+        // NB-8: If an inbound connection from this peer is already in newConnectedPeers (AlreadyConnected
+        // race resolved in our favour), skip the reconnect timer — the inbound covers it.
+        // Fix C: 30s → 5s so we close the gap window when inbound reconnects in ~10s.
         maintainedPeersByNodeId.get(peerId.value).foreach { uri =>
-          log.debug("Maintained peer {} disconnected — scheduling reconnect in 30s", uri)
-          context.system.scheduler.scheduleOnce(30.seconds, self, ConnectToPeer(uri))(context.dispatcher)
+          val nodeIdBytes = ByteString(Hex.decode(peerId.value))
+          if (newConnectedPeers.hasHandshakedWith(nodeIdBytes)) {
+            log.debug("Maintained peer {} already connected via inbound — skipping reconnect", uri)
+          } else {
+            log.debug("Maintained peer {} disconnected — scheduling reconnect in 5s", uri)
+            context.system.scheduler.scheduleOnce(5.seconds, self, ConnectToPeer(uri))(context.dispatcher)
+          }
         }
       }
       // Try to replace a lost connection with another one.

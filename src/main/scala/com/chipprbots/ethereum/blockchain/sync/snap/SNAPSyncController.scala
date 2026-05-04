@@ -208,6 +208,7 @@ class SNAPSyncController(
   private var rateTrackerTuneTask: Option[Cancellable] = None
 
   private case object RetryPivotRefresh
+  private case class RetryBootstrapAtBlock(blockNumber: BigInt)
   private case object CheckSnapCapability
   private case object TuneRateTracker
   private case object EvictNonSnapPeers
@@ -631,19 +632,30 @@ class SNAPSyncController(
           restartSnapSync(s"pivot refresh bootstrap returned no header for $pendingPivot: $reason")
       }
 
-    // Handle pivot header bootstrap failure. The bootstrap exhausted all retries (with exponential
-    // backoff) without fetching the header. Schedule a retry after 60s to give peers time to recover.
+    // Handle pivot header bootstrap failure. Instead of recalculating from network-best (which advances
+    // the pivot to a block peers don't have yet), backtrack by pivotBlockOffset blocks (Besu pattern).
     case PivotBootstrapFailed(reason) if pendingPivotRefresh.isDefined =>
       val (pendingPivot, originalReason) = pendingPivotRefresh.get
       pendingPivotRefresh = None
-      log.warning(
-        s"Pivot header bootstrap failed for block $pendingPivot (reason: $reason, " +
-          s"original: $originalReason). Scheduling retry in 60s."
-      )
       pivotBootstrapRetryTask.foreach(_.cancel())
-      pivotBootstrapRetryTask = Some(
-        scheduler.scheduleOnce(60.seconds, self, RetryPivotRefresh)(context.dispatcher, self)
-      )
+      val backtrackedPivot = pendingPivot - snapSyncConfig.pivotBlockOffset
+      if (backtrackedPivot > 0) {
+        log.warning(
+          s"Pivot header bootstrap failed for block $pendingPivot (reason: $reason, original: $originalReason). " +
+            s"Backtracking pivot to $backtrackedPivot (Besu pattern: decrement by ${snapSyncConfig.pivotBlockOffset})."
+        )
+        pivotBootstrapRetryTask = Some(
+          scheduler.scheduleOnce(5.seconds, self, RetryBootstrapAtBlock(backtrackedPivot))(context.dispatcher, self)
+        )
+      } else {
+        log.warning(
+          s"Pivot header bootstrap failed for block $pendingPivot (reason: $reason). " +
+            s"Backtracked pivot below 0 — falling back to network-best recalculation after 60s."
+        )
+        pivotBootstrapRetryTask = Some(
+          scheduler.scheduleOnce(60.seconds, self, RetryPivotRefresh)(context.dispatcher, self)
+        )
+      }
 
     case PivotProbeTimeout(requestId) =>
       if (pivotProbeRequestId.contains(requestId)) {
@@ -677,6 +689,23 @@ class SNAPSyncController(
         refreshPivotInPlace("retry after bootstrap failure")
       } else {
         log.info(s"Skipping pivot refresh retry — phase=$currentPhase no longer needs it")
+      }
+
+    case RetryBootstrapAtBlock(blockNumber) =>
+      pivotBootstrapRetryTask = None
+      if (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync || currentPhase == StateHealing) {
+        log.info(s"Retrying bootstrap at backtracked block $blockNumber...")
+        blockchainReader.getBlockHeaderByNumber(blockNumber) match {
+          case Some(header) =>
+            completePivotRefreshWithStateRoot(blockNumber, header, "backtracked pivot (local header)")
+          case None =>
+            chainDownloader.foreach(_ ! ChainDownloader.Pause)
+            pendingPivotRefresh = Some((blockNumber, "backtracked pivot"))
+            context.parent ! StartRegularSyncBootstrap(blockNumber)
+            lastAccountProgressMs = System.currentTimeMillis()
+        }
+      } else {
+        log.info(s"Skipping backtracked bootstrap — phase=$currentPhase no longer needs it")
       }
 
     // Geth-aligned: bytecodes and storage are dispatched inline from each account batch.

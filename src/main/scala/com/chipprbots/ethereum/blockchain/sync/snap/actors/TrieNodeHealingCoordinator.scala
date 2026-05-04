@@ -274,10 +274,20 @@ class TrieNodeHealingCoordinator(
       tryRedispatchPendingTasks()
 
     case HealingPeerAvailable(peer) =>
-      // Evict stale entry for same physical node (reconnection creates new PeerId)
-      knownAvailablePeers.filterInPlace(_.remoteAddress != peer.remoteAddress)
-      knownAvailablePeers += peer
-      dispatchIfPossible(peer)
+      // NB-7: Skip peers already in statelessPeers — they returned empty TrieNodes for this root and
+      // will do so again until the pivot refreshes. Re-adding them on every 1s scheduler tick wastes
+      // active request slots and creates a rapid [SNAP/1 enabled] + [stateless] log cycle.
+      if (statelessPeers.contains(peer.id.value)) {
+        log.debug(
+          "Ignoring HealingPeerAvailable for stateless peer {} — will re-admit on next pivot refresh",
+          peer.id.value.take(8)
+        )
+      } else {
+        // Evict stale entry for same physical node (reconnection creates new PeerId)
+        knownAvailablePeers.filterInPlace(_.remoteAddress != peer.remoteAddress)
+        knownAvailablePeers += peer
+        dispatchIfPossible(peer)
+      }
 
     case HealingPeerUnavailable(peerId) =>
       // Peer disconnected — remove from available set and immediately re-queue its in-flight
@@ -430,6 +440,10 @@ class TrieNodeHealingCoordinator(
           )
           snapSyncController ! HealingStagnated(totalNodesHealed.toLong, pendingTasks.size.toLong)
           consecutiveStagnations = 0
+          // NB-11: Suppress further stagnation counting until the pivot refresh arrives (HealingPivotRefreshed
+          // resets this flag). Prevents redundant HealingStagnated fires while bootstrap is in-flight.
+          pivotRefreshRequested = true
+          pivotRefreshRequestedAt = System.currentTimeMillis()
         }
       } else if (recentHealed > 0) {
         consecutiveStagnations = 0
@@ -686,6 +700,9 @@ class TrieNodeHealingCoordinator(
       // and redundant threshold checks when multiple in-flight responses from the same peer all return empty)
       if (!statelessPeers.contains(peer.id.value)) {
         statelessPeers += peer.id.value
+        // NB-7: Evict from knownAvailablePeers immediately so the 1s HealingPeerAvailable scheduler
+        // tick doesn't re-add and re-dispatch to this peer until the next pivot refresh.
+        knownAvailablePeers.filterInPlace(_.id != peer.id)
         log.info(
           s"Peer ${peer.id.value} marked stateless for healing root " +
             s"${Hex.toHexString(stateRoot.take(4).toArray)} (${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
@@ -739,6 +756,9 @@ class TrieNodeHealingCoordinator(
     peerConsecutiveTimeouts.update(peer.id.value, timeoutCount)
     if (timeoutCount >= MaxConsecutiveTimeoutsBeforeStateless && !statelessPeers.contains(peer.id.value)) {
       statelessPeers += peer.id.value
+      // NB-7: Evict from knownAvailablePeers so the 1s scheduler tick doesn't re-add this peer
+      // until the next pivot refresh clears statelessPeers.
+      knownAvailablePeers.filterInPlace(_.id != peer.id)
       log.info(
         s"Peer ${peer.id.value} marked stateless after $timeoutCount consecutive timeouts " +
           s"(${statelessPeers.size}/${knownAvailablePeers.size} stateless)"

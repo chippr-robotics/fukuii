@@ -23,7 +23,10 @@ class DnsDiscoverySpec extends AnyFlatSpec with Matchers {
     info(s"Resolved ${enodes.size} Mordor enode(s)")
   }
 
-  it should "resolve at least 200 enodes from the live ETC mainnet DNS tree" taggedAs (IntegrationTest, NetworkTest) in {
+  it should "resolve at least 200 enodes from the live ETC mainnet DNS tree" taggedAs (
+    IntegrationTest,
+    NetworkTest
+  ) in {
     val enodes = DnsDiscovery.resolveEnodes("all.classic.etcdisco.net")
     enodes.size should be >= 200
     enodes.foreach { enode =>
@@ -38,9 +41,12 @@ class DnsDiscoverySpec extends AnyFlatSpec with Matchers {
   // Regression guard: catches stale domain regression (PR #1200).
   // A stale domain's TXT record still exists so no WARN fires — yield silently drops to 0.
   // This test fails loudly when any configured DNS domain yields 0 peers.
-  it should "yield at least 1 enode from every domain configured in etc-chain.conf" taggedAs (IntegrationTest, NetworkTest) in {
+  it should "yield at least 1 enode from every domain configured in etc-chain.conf" taggedAs (
+    IntegrationTest,
+    NetworkTest
+  ) in {
     val fullConfig = ConfigFactory.load()
-    val etcConfig  = BlockchainConfig.fromRawConfig(fullConfig.getConfig("fukuii.blockchains.etc"))
+    val etcConfig = BlockchainConfig.fromRawConfig(fullConfig.getConfig("fukuii.blockchains.etc"))
     etcConfig.dnsDiscoveryDomains should not be empty
     etcConfig.dnsDiscoveryDomains.foreach { domain =>
       val enodes = DnsDiscovery.resolveEnodes(domain)
