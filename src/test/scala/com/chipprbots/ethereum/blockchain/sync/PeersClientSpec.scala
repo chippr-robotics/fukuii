@@ -114,7 +114,8 @@ class PeersClientSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
     // ETH/64-68 peers post-merge have maxBlockNumber=0 (no STATUS field carries
     // the block number, no incoming block messages to update). They MIGHT have
     // the block; we just don't know. Better to try them than fail outright.
-    val peerUnknown = peer1.id -> PeerWithInfo(peer1, peerInfo(td = 17_000_000_000_000_000L.toInt).copy(maxBlockNumber = 0))
+    val peerUnknown =
+      peer1.id -> PeerWithInfo(peer1, peerInfo(td = 17_000_000_000_000_000L.toInt).copy(maxBlockNumber = 0))
     val peerBehind = peer2.id -> PeerWithInfo(peer2, peerInfo(td = 50).copy(maxBlockNumber = 100))
     val pool = Map(peerUnknown, peerBehind)
     PeersClient.bestPeerWithMinBlock(pool, BigInt(10789531)) shouldEqual Some(peer1)
@@ -149,10 +150,9 @@ class PeersClientSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
         bestBlockHash = chainHeadHash
       )
 
-    /** A peer that has handshaked but is stuck at genesis — bestHash == genesisHash.
-      * Common on Sepolia where bootnodes are fresh-state and on ETC where some peers
-      * advertise SNAP/1 but never advance past genesis. They literally have no chain
-      * data to serve.
+    /** A peer that has handshaked but is stuck at genesis — bestHash == genesisHash. Common on Sepolia where bootnodes
+      * are fresh-state and on ETC where some peers advertise SNAP/1 but never advance past genesis. They literally have
+      * no chain data to serve.
       */
     def peerInfoAtGenesis(td: Int): PeerInfo =
       peerInfo(td).copy(

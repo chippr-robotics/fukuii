@@ -178,6 +178,56 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     ) shouldBe false
   }
 
+  // CL-driven pivot messages (#1207). On post-merge chains the pivot comes from the
+  // consensus layer via engine_forkchoiceUpdated; SNAP must support a hint message and a
+  // by-hash bootstrap variant.
+  "SNAPSyncController.CLPivotHint" should "carry the head hash and optional header" taggedAs UnitTest in {
+    import SNAPSyncController._
+    import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields._
+    import com.chipprbots.ethereum.domain.BlockHeader
+
+    val headHash = ByteString(Array.fill(32)(0x42.toByte))
+    val withoutHeader = CLPivotHint(headHash, None)
+    withoutHeader.headHash shouldBe headHash
+    withoutHeader.knownHeader shouldBe None
+
+    val header = BlockHeader(
+      parentHash = ByteString(new Array[Byte](32)),
+      ommersHash = BlockHeader.EmptyOmmers,
+      beneficiary = ByteString(new Array[Byte](20)),
+      stateRoot = ByteString(Array.fill(32)(0x77.toByte)),
+      transactionsRoot = BlockHeader.EmptyMpt,
+      receiptsRoot = BlockHeader.EmptyMpt,
+      logsBloom = ByteString(new Array[Byte](256)),
+      difficulty = 0,
+      number = 9876543,
+      gasLimit = 30000000,
+      gasUsed = 0,
+      unixTimestamp = 1700000000,
+      extraData = ByteString.empty,
+      mixHash = ByteString(new Array[Byte](32)),
+      nonce = ByteString(new Array[Byte](8)),
+      extraFields = HefPostOlympia(BigInt("1000000000"))
+    )
+    val withHeader = CLPivotHint(headHash, Some(header))
+    withHeader.knownHeader.map(_.number) shouldBe Some(BigInt(9876543))
+  }
+
+  "SNAPSyncController.StartRegularSyncBootstrapByHash" should "carry the head hash" taggedAs UnitTest in {
+    import SNAPSyncController._
+    val headHash = ByteString(Array.fill(32)(0xaa.toByte))
+    val msg = StartRegularSyncBootstrapByHash(headHash)
+    msg.headHash shouldBe headHash
+    msg shouldBe a[StartRegularSyncBootstrapByHash]
+  }
+
+  "PivotSelectionSource.CLDrivenPivot" should "be a distinct value from NetworkPivot/LocalPivot" taggedAs UnitTest in {
+    import SNAPSyncController._
+    val sources: Seq[PivotSelectionSource] = Seq(NetworkPivot, LocalPivot, CLDrivenPivot)
+    sources.distinct.size shouldBe 3
+    CLDrivenPivot.name shouldBe "cl-driven"
+  }
+
   it should "have bootstrap message with target block" taggedAs UnitTest in {
     import SNAPSyncController._
 

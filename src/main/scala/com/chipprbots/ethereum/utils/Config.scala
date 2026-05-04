@@ -75,7 +75,18 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
       maxBodyFetchRetries: Int,
       maxSnapFastCycleTransitions: Int,
       useBootstrapCheckpoints: Boolean,
-      bootstrapCheckpoints: Seq[(BigInt, String)] // (blockNumber, blockHash)
+      bootstrapCheckpoints: Seq[(BigInt, String)], // (blockNumber, blockHash)
+      // Post-merge SNAP behavior. When the chain has TerminalTotalDifficulty configured
+      // (Sepolia, mainnet) the EL must wait for the consensus layer to push a head via
+      // engine_forkchoiceUpdated before SNAP can pick a sane pivot — TD is frozen at
+      // TTD on these chains so peer-best-by-TD is unreliable. If `engineApiRequired` is
+      // true (default for chains with TTD), SNAP waits indefinitely for the CL hint.
+      // If false, SNAP falls back to peer-best-by-block-number after `clWaitTimeout`.
+      // ETC mainnet (TTD = None) is unaffected: the listener is never registered,
+      // `clPivotHint` is never set, and the existing TD-based path runs unchanged.
+      // Closes #1207.
+      engineApiRequired: Boolean,
+      clWaitTimeout: FiniteDuration
   )
 
   object SyncConfig {
@@ -151,6 +162,14 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
           if (syncConfig.hasPath("use-bootstrap-checkpoints"))
             syncConfig.getBoolean("use-bootstrap-checkpoints")
           else false,
+        engineApiRequired =
+          if (syncConfig.hasPath("engine-api-required"))
+            syncConfig.getBoolean("engine-api-required")
+          else true,
+        clWaitTimeout =
+          if (syncConfig.hasPath("cl-wait-timeout"))
+            syncConfig.getDuration("cl-wait-timeout").toMillis.millis
+          else 5.minutes,
         bootstrapCheckpoints = if (syncConfig.hasPath("bootstrap-checkpoints")) {
           import scala.jdk.CollectionConverters._
           syncConfig.getStringList("bootstrap-checkpoints").asScala.toSeq.flatMap { entry =>

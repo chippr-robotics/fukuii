@@ -55,7 +55,9 @@ trait TestSyncConfig extends SyncConfigBuilder with com.chipprbots.ethereum.Test
     maxBodyFetchRetries = 10,
     maxSnapFastCycleTransitions = 3,
     useBootstrapCheckpoints = false,
-    bootstrapCheckpoints = Seq.empty
+    bootstrapCheckpoints = Seq.empty,
+    engineApiRequired = false,
+    clWaitTimeout = 5.minutes
   )
 
   override lazy val syncConfig: SyncConfig = defaultSyncConfig

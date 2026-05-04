@@ -403,17 +403,13 @@ object PeersClient {
   case class BestSnapPeerExcluding(exclude: Set[PeerId]) extends PeerSelector
   case class BestNodeDataPeerExcluding(exclude: Set[PeerId]) extends PeerSelector
 
-  /** Pick a peer whose advertised chain head is at least `minBlock`. Use this
-    * for absolute-block-number requests (e.g. PivotHeaderBootstrap targeting a
-    * specific pivot) where peers behind that height literally have nothing to
-    * return.
+  /** Pick a peer whose advertised chain head is at least `minBlock`. Use this for absolute-block-number requests (e.g.
+    * PivotHeaderBootstrap targeting a specific pivot) where peers behind that height literally have nothing to return.
     *
-    * ETH/69 peers report `latestBlock` in STATUS, so `maxBlockNumber` reflects
-    * their true chain head. ETH/64-68 peers don't carry a block number in
-    * STATUS and their `maxBlockNumber` stays at `0` post-merge (no incoming
-    * block messages to update it via `peerHasUpdatedBestBlock`). We therefore
-    * include `maxBlockNumber == 0` peers as a fallback — they MAY have the
-    * block but we can't tell.
+    * ETH/69 peers report `latestBlock` in STATUS, so `maxBlockNumber` reflects their true chain head. ETH/64-68 peers
+    * don't carry a block number in STATUS and their `maxBlockNumber` stays at `0` post-merge (no incoming block
+    * messages to update it via `peerHasUpdatedBestBlock`). We therefore include `maxBlockNumber == 0` peers as a
+    * fallback — they MAY have the block but we can't tell.
     */
   case class BestPeerWithMinBlock(minBlock: BigInt) extends PeerSelector
 

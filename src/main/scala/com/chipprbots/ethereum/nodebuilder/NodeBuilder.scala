@@ -1014,6 +1014,11 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder {
     with BlacklistBuilder
     with MESSBuilder =>
 
+  /** Override in concrete builders that also mix in [[EngineApiBuilder]] to enable CL-driven SNAP pivot selection.
+    * Defaults to `None` for setups without an Engine API (e.g. ETC mainnet pre-merge wiring). Closes #1207.
+    */
+  def forkChoiceManagerForSync: Option[com.chipprbots.ethereum.consensus.engine.ForkChoiceManager] = None
+
   lazy val syncController: ActorRef = system.actorOf(
     SyncController.props(
       blockchain,
@@ -1035,7 +1040,8 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder {
       blacklist,
       syncConfig,
       this,
-      messConfigOpt
+      messConfigOpt,
+      forkChoiceManagerForSync
     ),
     "sync-controller"
   )
@@ -1214,5 +1220,10 @@ trait Node
 
   // Wire ForkChoiceManager to RPC services for "safe"/"finalized" block tag resolution
   override def forkChoiceManagerForRpc: Option[com.chipprbots.ethereum.consensus.engine.ForkChoiceManager] =
+    Some(forkChoiceManager)
+
+  // Wire ForkChoiceManager to the sync layer so SNAP can pivot off CL-driven heads on
+  // post-merge chains. Closes #1207.
+  override def forkChoiceManagerForSync: Option[com.chipprbots.ethereum.consensus.engine.ForkChoiceManager] =
     Some(forkChoiceManager)
 }

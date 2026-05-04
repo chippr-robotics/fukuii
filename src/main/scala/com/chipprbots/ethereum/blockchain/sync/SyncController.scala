@@ -16,10 +16,12 @@ import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
 import com.chipprbots.ethereum.blockchain.sync.snap.{SNAPSyncController, SNAPSyncConfig}
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.{
   StartRegularSyncBootstrap,
+  StartRegularSyncBootstrapByHash,
   BootstrapComplete,
   PivotBootstrapFailed
 }
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.mess.MESSConfig
 import com.chipprbots.ethereum.consensus.validators.Validators
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -58,6 +60,7 @@ class SyncController(
     syncConfig: SyncConfig,
     configBuilder: BlockchainConfigBuilder,
     messConfig: Option[MESSConfig] = None,
+    forkChoiceManagerOpt: Option[ForkChoiceManager] = None,
     externalSchedulerOpt: Option[Scheduler] = None
 ) extends Actor
     with ActorLogging {
@@ -72,6 +75,37 @@ class SyncController(
 
   // SNAP<->Fast sync bounce cycle counter, persisted across restarts.
   private var snapFastCycleCount: Int = appStateStorage.getSnapFastCycleCount()
+
+  // Latest CL-driven head hint received from ForkChoiceManager. Buffered so that when SNAP
+  // sync starts (which may happen after the CL has already pushed several FCUs), the freshest
+  // head is available as the pivot target. Only populated on post-merge chains where TTD is
+  // configured AND a ForkChoiceManager was supplied — ETC mainnet leaves this `None` forever
+  // and the existing TD-based pivot path is unaffected. Closes #1207.
+  private var latestBeaconHead: Option[ForkChoiceManager.BeaconHead] = None
+
+  // Whether SNAP should consume CL-driven pivot selection. Captured once at construction
+  // because both `syncConfig` and the chain config are stable for the actor's lifetime.
+  private val isPostMergeChain: Boolean = configBuilder.blockchainConfig.terminalTotalDifficulty.isDefined
+  private val clPivotEnabled: Boolean = isPostMergeChain && forkChoiceManagerOpt.isDefined
+
+  override def preStart(): Unit = {
+    super.preStart()
+    if (clPivotEnabled) {
+      forkChoiceManagerOpt.foreach { fcm =>
+        fcm.setListener(self)
+        log.info(
+          "Registered SyncController as ForkChoiceManager listener (post-merge chain TTD={}); " +
+            "SNAP pivot will be CL-driven once first forkchoiceUpdated arrives.",
+          configBuilder.blockchainConfig.terminalTotalDifficulty.get
+        )
+      }
+    }
+  }
+
+  override def postStop(): Unit = {
+    forkChoiceManagerOpt.foreach(_.clearListener())
+    super.postStop()
+  }
 
   private def stopSyncChildren(): Unit = {
     // Stop all sync-related child actors. Names may have generation suffixes
@@ -168,6 +202,9 @@ class SyncController(
       handleRestartFastSync()
     case RestartFastSyncNow =>
       doRestartFastSyncNow()
+    case bh: ForkChoiceManager.BeaconHead =>
+      // Buffer for the eventual SNAP startup; idle predates startSnapSync().
+      handleBeaconHead(bh, snapSyncOpt = None)
   }
 
   def runningFastSync(fastSync: ActorRef): Receive = {
@@ -227,6 +264,35 @@ class SyncController(
 
       context.become(runningPivotHeaderBootstrap(peersClient, headerBootstrap, targetBlock, snapSync))
 
+    case StartRegularSyncBootstrapByHash(headHash) =>
+      // CL-driven bootstrap path (#1207): fetch the head header by hash from peers.
+      // The block number isn't known until the header arrives.
+      log.info(
+        "SNAP requested by-hash pivot header bootstrap for {}",
+        com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(headHash)
+      )
+      bootstrapGeneration += 1
+      val gen = bootstrapGeneration
+      val peersClient =
+        context.actorOf(
+          PeersClient.props(networkPeerManager, peerEventBus, blacklist, syncConfig, scheduler),
+          s"peers-client-bootstrap-$gen"
+        )
+      val headerBootstrap =
+        context.actorOf(
+          PivotHeaderBootstrap
+            .propsByHash(peersClient, blockchainWriter, headHash, syncConfig, scheduler, preferSnapPeers = false),
+          s"pivot-header-bootstrap-$gen"
+        )
+      // We pass `targetBlock = 0` as a placeholder — the bootstrap reply carries the
+      // resolved `header.number`. The runningPivotHeaderBootstrap state's matching on
+      // `block == targetBlock` is bypassed in by-hash mode by using a wildcard handler;
+      // the resolved Completed.targetBlock is preserved when handed to SNAP via
+      // BootstrapComplete.
+      context.become(
+        runningPivotHeaderBootstrap(peersClient, headerBootstrap, targetBlock = BigInt(0), snapSync)
+      )
+
     case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SnapSyncFinalized(pivot) =>
       log.info(
         s"SNAP state finalised at pivot=$pivot. Starting regular sync; chain backfill continues in background."
@@ -267,6 +333,9 @@ class SyncController(
 
     case SyncProtocol.Status.Progress(_, _) =>
       log.debug("SNAP sync in progress")
+
+    case bh: ForkChoiceManager.BeaconHead =>
+      handleBeaconHead(bh, snapSyncOpt = Some(snapSync))
 
     case msg =>
       snapSync.forward(msg)
@@ -398,8 +467,12 @@ class SyncController(
     case RestartFastSyncNow =>
       doRestartFastSyncNow()
 
-    case PivotHeaderBootstrap.Completed(block, header) if block == targetBlock =>
-      log.info(s"Pivot header bootstrap complete for block $targetBlock - notifying SNAP sync")
+    case PivotHeaderBootstrap.Completed(block, header) if block == targetBlock || targetBlock == 0 =>
+      // `targetBlock == 0` is the sentinel for by-hash bootstrap (#1207): the actual
+      // block number is unknown at request time and resolved from the returned header.
+      log.info(
+        s"Pivot header bootstrap complete for block ${header.number} (requested $targetBlock) - notifying SNAP sync"
+      )
       headerBootstrap ! PoisonPill
       peersClient ! PoisonPill
       originalSnapSyncRef ! BootstrapComplete(Some(header))
@@ -479,10 +552,38 @@ class SyncController(
       resetSnapFastCycleCount()
       startRegularSync()
 
+    case bh: ForkChoiceManager.BeaconHead =>
+      handleBeaconHead(bh, snapSyncOpt = Some(originalSnapSyncRef))
+
     case msg =>
       // Forward coordinator and protocol messages to SNAP sync during the brief bootstrap.
       // This keeps coordinators functional while we fetch the pivot header (~1-5 seconds).
       originalSnapSyncRef.forward(msg)
+  }
+
+  /** Buffer the latest CL-driven head and, when SNAP is currently running, forward it as a `CLPivotHint` so the pivot
+    * can be re-anchored on the freshest CL head. Called from the receive handler in every state where a `BeaconHead`
+    * can arrive. No-op on chains without TTD or where `forkChoiceManagerOpt` is `None`.
+    */
+  private def handleBeaconHead(
+      bh: ForkChoiceManager.BeaconHead,
+      snapSyncOpt: Option[ActorRef]
+  ): Unit = {
+    if (!clPivotEnabled) return
+    val isNew = !latestBeaconHead.exists(_.headHash == bh.headHash)
+    latestBeaconHead = Some(bh)
+    if (isNew)
+      log.info(
+        "Received CL-driven beacon head {} (knownHeader={})",
+        com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(bh.headHash),
+        bh.knownHeader.map(_.number).getOrElse("unknown")
+      )
+    snapSyncOpt.foreach { snapSync =>
+      snapSync ! com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.CLPivotHint(
+        bh.headHash,
+        bh.knownHeader
+      )
+    }
   }
 
   /** Check if the SNAP<->Fast bounce cycle count has exceeded the configured threshold. If so, mark both sync modes as
@@ -775,6 +876,19 @@ class SyncController(
 
     // Register SNAPSyncController with NetworkPeerManagerActor for message routing
     networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(snapSync)
+
+    // If a CL-driven head arrived before SNAP started (post-merge chains), prime the new
+    // SNAP actor with it so pivot selection skips the TD-based path entirely.
+    if (clPivotEnabled) {
+      latestBeaconHead.foreach { bh =>
+        log.info(
+          "Priming SNAP sync with buffered CL beacon head {} (knownHeader={})",
+          com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(bh.headHash),
+          bh.knownHeader.map(_.number).getOrElse("unknown")
+        )
+        snapSync ! SNAPSyncController.CLPivotHint(bh.headHash, bh.knownHeader)
+      }
+    }
 
     snapSync ! SNAPSyncController.Start
     context.become(runningSnapSync(snapSync))
@@ -1090,7 +1204,8 @@ object SyncController {
       blacklist: Blacklist,
       syncConfig: SyncConfig,
       configBuilder: BlockchainConfigBuilder,
-      messConfig: Option[MESSConfig] = None
+      messConfig: Option[MESSConfig] = None,
+      forkChoiceManagerOpt: Option[ForkChoiceManager] = None
   ): Props =
     Props(
       new SyncController(
@@ -1113,7 +1228,8 @@ object SyncController {
         blacklist,
         syncConfig,
         configBuilder,
-        messConfig
+        messConfig,
+        forkChoiceManagerOpt
       )
     )
 }
