@@ -77,6 +77,7 @@ class TrieNodeHealingCoordinator(
   // After MaxConsecutiveStagnations, notify controller to restart with fresh pivot.
   private var consecutiveStagnations: Int = 0
   private val MaxConsecutiveStagnations: Int = 3
+  private var trieWalkInProgress: Boolean = false
   // Inline child discovery counter (Besu-aligned scheduler approach)
   private var childrenDiscoveredTotal: Long = 0
 
@@ -386,12 +387,15 @@ class TrieNodeHealingCoordinator(
         snapSyncController ! SNAPSyncController.StateHealingComplete
       }
 
+    case WalkStateChanged(inProgress) =>
+      trieWalkInProgress = inProgress
+
     case HealingStagnationCheck =>
       val recentHealed = totalNodesHealed - lastPulseHealedCount
       log.info(
         s"[HEAL-PULSE] healed=$totalNodesHealed (+$recentHealed last 2min) | " +
           s"pending=${pendingTasks.size} active=${activeRequests.size} peers=${knownAvailablePeers.size} | " +
-          s"pivotRefreshPending=$pivotRefreshRequested"
+          s"walkRunning=$trieWalkInProgress pivotRefreshPending=$pivotRefreshRequested"
       )
       lastPulseHealedCount = totalNodesHealed
 
@@ -678,21 +682,24 @@ class TrieNodeHealingCoordinator(
     } else {
       adjustResponseBytesOnFailure(peer, "empty healing response")
       recordPeerCooldown(peer, "empty healing response")
-      // Mark peer stateless for current root (geth-aligned)
-      statelessPeers += peer.id.value
-      log.info(
-        s"Peer ${peer.id.value} marked stateless for healing root " +
-          s"${Hex.toHexString(stateRoot.take(4).toArray)} (${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
-      )
-      // Check if all known peers are stateless — request pivot refresh
-      if (statelessPeers.size >= knownAvailablePeers.size && knownAvailablePeers.nonEmpty && !pivotRefreshRequested) {
-        pivotRefreshRequested = true
-        pivotRefreshRequestedAt = System.currentTimeMillis()
-        log.warning(
-          s"All ${statelessPeers.size} peers stateless for healing root " +
-            s"${Hex.toHexString(stateRoot.take(4).toArray)}. Requesting pivot refresh."
+      // Mark peer stateless only on first empty response (geth-aligned: guard prevents duplicate logs
+      // and redundant threshold checks when multiple in-flight responses from the same peer all return empty)
+      if (!statelessPeers.contains(peer.id.value)) {
+        statelessPeers += peer.id.value
+        log.info(
+          s"Peer ${peer.id.value} marked stateless for healing root " +
+            s"${Hex.toHexString(stateRoot.take(4).toArray)} (${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
         )
-        snapSyncController ! SNAPSyncController.HealingAllPeersStateless
+        // Check if all known peers are stateless — request pivot refresh
+        if (statelessPeers.size >= knownAvailablePeers.size && knownAvailablePeers.nonEmpty && !pivotRefreshRequested) {
+          pivotRefreshRequested = true
+          pivotRefreshRequestedAt = System.currentTimeMillis()
+          log.warning(
+            s"All ${statelessPeers.size} peers stateless for healing root " +
+              s"${Hex.toHexString(stateRoot.take(4).toArray)}. Requesting pivot refresh."
+          )
+          snapSyncController ! SNAPSyncController.HealingAllPeersStateless
+        }
       }
     }
 

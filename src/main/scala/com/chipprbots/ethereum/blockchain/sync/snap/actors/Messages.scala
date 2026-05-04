@@ -261,6 +261,7 @@ object Messages {
     * the new root.
     */
   case object HealingForceComplete extends TrieNodeHealingCoordinatorMessage
+  case class WalkStateChanged(inProgress: Boolean) extends TrieNodeHealingCoordinatorMessage
 
   sealed trait TrieNodeHealingWorkerMessage
   case class FetchTrieNodes(task: HealingTask, peer: Peer) extends TrieNodeHealingWorkerMessage

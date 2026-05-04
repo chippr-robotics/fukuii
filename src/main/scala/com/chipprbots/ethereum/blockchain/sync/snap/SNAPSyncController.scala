@@ -833,6 +833,7 @@ class SNAPSyncController(
     // Streaming walk completed — all batches already sent via TrieWalkBatch
     case TrieWalkComplete(totalFound) if currentPhase == StateHealing =>
       trieWalkInProgress = false
+      trieNodeHealingCoordinator.foreach(_ ! actors.Messages.WalkStateChanged(false))
       if (totalFound == 0) {
         log.info("Trie walk found no missing nodes — healing complete after {} rounds!", healingRoundCount)
         healingRoundCount = 0
@@ -861,6 +862,7 @@ class SNAPSyncController(
 
     case TrieWalkResult(missingNodes) if currentPhase == StateHealing =>
       trieWalkInProgress = false
+      trieNodeHealingCoordinator.foreach(_ ! actors.Messages.WalkStateChanged(false))
       if (missingNodes.isEmpty) {
         log.info("Trie walk found no missing nodes — healing complete after {} rounds!", healingRoundCount)
         healingRoundCount = 0
@@ -894,6 +896,7 @@ class SNAPSyncController(
 
     case TrieWalkFailed(error) if currentPhase == StateHealing =>
       trieWalkInProgress = false
+      trieNodeHealingCoordinator.foreach(_ ! actors.Messages.WalkStateChanged(false))
       log.error(s"Trie walk failed: $error. Retrying after delay...")
       scheduler.scheduleOnce(5.seconds) {
         self ! ScheduledTrieWalk
@@ -2590,6 +2593,7 @@ class SNAPSyncController(
     if (trieWalkInProgress) return
     if (currentPhase != StateHealing) return
     trieWalkInProgress = true
+    trieNodeHealingCoordinator.foreach(_ ! actors.Messages.WalkStateChanged(true))
     stateRoot.foreach { root =>
       log.info("Starting trie walk to discover missing nodes for healing...")
       val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
