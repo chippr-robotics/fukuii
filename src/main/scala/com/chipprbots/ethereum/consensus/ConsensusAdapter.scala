@@ -41,18 +41,26 @@ class ConsensusAdapter(
 ) extends Logger {
   def evaluateBranchBlock(
       block: Block
-  )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig): IO[BlockImportResult] =
-    blockchainReader.getBestBlock() match {
-      case Some(bestBlock) =>
-        if (isBlockADuplicate(block.header, bestBlock.header.number)) {
+  )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig): IO[BlockImportResult] = {
+    // Resolve the best block's header without requiring its body. Prefer the
+    // full-block lookup (so the existing mock-based tests keep working) and fall
+    // back to header-only when the body isn't persisted — exactly the state right
+    // after PivotHeaderBootstrap completes. Without this fallback, post-bootstrap
+    // imports dead-end on `getBestBlock() == None` and the consumer retries
+    // forever with `BlockImportFailed("Couldn't find the current best block")`.
+    val bestHeaderOpt =
+      blockchainReader.getBestBlock().map(_.header).orElse(blockchainReader.getBestBlockHeader())
+    bestHeaderOpt match {
+      case Some(bestHeader) =>
+        if (isBlockADuplicate(block.header, bestHeader.number)) {
           log.debug("Ignoring duplicated block: {}", block.idTag)
           IO.pure(DuplicateBlock)
         } else {
           // If chain weight lookup fails, treat it as recoverable: log and continue.
-          if (blockchainReader.getChainWeightByHash(bestBlock.header.hash).isEmpty) {
+          if (blockchainReader.getChainWeightByHash(bestHeader.hash).isEmpty) {
             log.warn(
               "Total chain weight for current best block {} is missing — continuing import (test harness may not provide chain weight)",
-              bestBlock.header.hashAsHexString
+              bestHeader.hashAsHexString
             )
           }
 
@@ -61,7 +69,7 @@ class ConsensusAdapter(
           // doBlockPreValidation runs on a different thread pool (validationScheduler) which can
           // race with the storage write, causing intermittent HeaderParentNotFoundError.
           // The consensus.evaluateBranch will validate blocks during execution.
-          val validated = if (bestBlock.header.hash == block.header.parentHash) {
+          val validated = if (bestHeader.hash == block.header.parentHash) {
             IO.pure(Right(BlockExecutionSuccess): Either[ValidationBeforeExecError, BlockExecutionSuccess])
           } else {
             doBlockPreValidation(block)
@@ -70,15 +78,16 @@ class ConsensusAdapter(
             case Left(error) =>
               IO.pure(BlockImportFailed(error.reason.toString))
             case Right(BlockExecutionSuccess) =>
-              enqueueAndGetBranch(block, bestBlock.number)
+              enqueueAndGetBranch(block, bestHeader.number)
                 .map(forwardAndTranslateConsensusResult) // a new branch was created so we give it to consensus
                 .getOrElse(IO.pure(BlockEnqueued)) // the block was not rooted so it was simply enqueued
           }
         }
       case None =>
-        log.error("Couldn't find the current best block")
-        IO.pure(BlockImportFailed("Couldn't find the current best block"))
+        log.error("Couldn't find the current best block header")
+        IO.pure(BlockImportFailed("Couldn't find the current best block header"))
     }
+  }
 
   private def forwardAndTranslateConsensusResult(
       newBranch: NonEmptyList[Block]

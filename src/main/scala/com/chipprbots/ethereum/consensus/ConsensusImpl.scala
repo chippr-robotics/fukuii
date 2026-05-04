@@ -10,6 +10,7 @@ import scala.annotation.tailrec
 
 import com.chipprbots.ethereum.consensus.Consensus._
 import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainImpl
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
@@ -52,18 +53,22 @@ class ConsensusImpl(
   override def evaluateBranch(
       branch: NonEmptyList[Block]
   )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig): IO[ConsensusResult] =
-    blockchainReader.getBestBlock() match {
-      case Some(bestBlock) =>
-        blockchainReader.getChainWeightByHash(bestBlock.header.hash) match {
-          case Some(weight) => handleBranchImport(branch, bestBlock, weight)
-          case None         => returnNoTotalDifficulty(bestBlock)
+    // Try the full-block lookup first (existing mock-based tests rely on it),
+    // then fall back to header-only — that's the state right after PivotHeaderBootstrap
+    // completes. handleBranchImport only consumes header.hash and header.number,
+    // so a header is sufficient. Closes #1201's post-bootstrap follow-up.
+    blockchainReader.getBestBlock().map(_.header).orElse(blockchainReader.getBestBlockHeader()) match {
+      case Some(bestHeader) =>
+        blockchainReader.getChainWeightByHash(bestHeader.hash) match {
+          case Some(weight) => handleBranchImport(branch, bestHeader, weight)
+          case None         => returnNoTotalDifficultyForHeader(bestHeader)
         }
       case None => returnNoBestBlock()
     }
 
   private def handleBranchImport(
       branch: NonEmptyList[Block],
-      currentBestBlock: Block,
+      currentBestHeader: BlockHeader,
       currentBestBlockWeight: ChainWeight
   )(implicit
       blockExecutionScheduler: IORuntime,
@@ -71,11 +76,11 @@ class ConsensusImpl(
   ): IO[ConsensusResult] = {
 
     val consensusResult: IO[ConsensusResult] =
-      if (currentBestBlock.isParentOf(branch.head)) {
+      if (currentBestHeader.hash == branch.head.header.parentHash) {
         IO.delay(importToTop(branch, currentBestBlockWeight)).evalOn(blockExecutionScheduler.compute)
       } else {
         IO
-          .delay(importToNewBranch(branch, currentBestBlock.number, currentBestBlockWeight))
+          .delay(importToNewBranch(branch, currentBestHeader.number, currentBestBlockWeight))
           .evalOn(blockExecutionScheduler.compute)
       }
 
@@ -170,15 +175,18 @@ class ConsensusImpl(
   private def newBranchWeight(newBranch: NonEmptyList[Block], parentWeight: ChainWeight) =
     newBranch.foldLeft(parentWeight)((w, b) => w.increase(b.header))
 
-  private def returnNoTotalDifficulty(bestBlock: Block): IO[ConsensusError] = {
+  private def returnNoTotalDifficulty(bestBlock: Block): IO[ConsensusError] =
+    returnNoTotalDifficultyForHeader(bestBlock.header)
+
+  private def returnNoTotalDifficultyForHeader(bestHeader: BlockHeader): IO[ConsensusError] = {
     log.error(
       "Getting total difficulty for current best block with hash: {} failed",
-      bestBlock.header.hashAsHexString
+      bestHeader.hashAsHexString
     )
     IO.pure(
       ConsensusError(
         Nil,
-        s"Couldn't get total difficulty for current best block with hash: ${bestBlock.header.hashAsHexString}"
+        s"Couldn't get total difficulty for current best block with hash: ${bestHeader.hashAsHexString}"
       )
     )
   }
