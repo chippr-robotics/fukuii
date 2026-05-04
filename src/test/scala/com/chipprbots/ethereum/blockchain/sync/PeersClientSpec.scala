@@ -98,6 +98,28 @@ class PeersClientSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
     PeersClient.bestPeer(onlyGenesis) shouldEqual None
   }
 
+  it should "filter peers by maxBlockNumber for absolute-block requests" taggedAs (UnitTest, SyncTest) in {
+    // Sepolia repro: PivotHeaderBootstrap asks for block 10789531. Among the
+    // peer pool, only peers whose advertised maxBlockNumber is at least the
+    // target should be selected. Peers reporting `latestBlock=9707885` (older
+    // ETH/69 peer behind chain head) literally don't have block 10789531 and
+    // would return an empty headers list — matching the failure in #1201.
+    val peerBehind = peer1.id -> PeerWithInfo(peer1, peerInfo(td = 9707885).copy(maxBlockNumber = 9707885))
+    val peerAhead = peer2.id -> PeerWithInfo(peer2, peerInfo(td = 100).copy(maxBlockNumber = 10789600))
+    val pool = Map(peerBehind, peerAhead)
+    PeersClient.bestPeerWithMinBlock(pool, BigInt(10789531)) shouldEqual Some(peer2)
+  }
+
+  it should "fall back to maxBlockNumber=0 peers when no peer is known to be ahead" taggedAs (UnitTest, SyncTest) in {
+    // ETH/64-68 peers post-merge have maxBlockNumber=0 (no STATUS field carries
+    // the block number, no incoming block messages to update). They MIGHT have
+    // the block; we just don't know. Better to try them than fail outright.
+    val peerUnknown = peer1.id -> PeerWithInfo(peer1, peerInfo(td = 17_000_000_000_000_000L.toInt).copy(maxBlockNumber = 0))
+    val peerBehind = peer2.id -> PeerWithInfo(peer2, peerInfo(td = 50).copy(maxBlockNumber = 100))
+    val pool = Map(peerUnknown, peerBehind)
+    PeersClient.bestPeerWithMinBlock(pool, BigInt(10789531)) shouldEqual Some(peer1)
+  }
+
   object Peers {
     implicit val system: ActorSystem = ActorSystem("PeersClient_System")
 
