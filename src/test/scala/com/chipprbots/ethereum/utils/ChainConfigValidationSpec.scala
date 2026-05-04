@@ -178,3 +178,43 @@ class ETCDaoExclusionSpec extends AnyFlatSpec with Matchers {
   }
 }
 // scalastyle:on magic.number
+
+// scalastyle:off magic.number
+/** Validates that ETC mainnet and Mordor chain configs reference live DNS discovery domains and carry
+  * sufficient static bootstrap nodes. Catches the class of regression where a stale domain is silently
+  * left in config (the domain's TXT record still exists so no WARN fires, but yield drops to 0 peers).
+  *
+  * Reference: PR #1200 — all.classic.blockd.info went stale (0 enodes); switched to all.classic.etcdisco.net
+  * (296 enodes). The failure was silent: TXT record still exists, so DnsDiscovery returned empty set with no log.
+  */
+class EtcDiscoveryConfigSpec extends AnyFlatSpec with Matchers {
+
+  private val fullConfig   = ConfigFactory.load()
+  private val etcConfig    = BlockchainConfig.fromRawConfig(fullConfig.getConfig("fukuii.blockchains.etc"))
+  private val mordorConfig = BlockchainConfig.fromRawConfig(fullConfig.getConfig("fukuii.blockchains.mordor"))
+
+  // ===== ETC Mainnet DNS Discovery =====
+
+  "ETC mainnet config" should "reference the live etcdisco.net discovery domain" taggedAs (UnitTest, NetworkTest) in {
+    etcConfig.dnsDiscoveryDomains should contain("all.classic.etcdisco.net")
+  }
+
+  it should "not reference the stale blockd.info discovery domain" taggedAs (UnitTest, NetworkTest) in {
+    etcConfig.dnsDiscoveryDomains should not contain "all.classic.blockd.info"
+  }
+
+  it should "have at least 30 static bootstrap nodes" taggedAs (UnitTest, NetworkTest) in {
+    etcConfig.bootstrapNodes.size should be >= 30
+  }
+
+  // ===== Mordor DNS Discovery =====
+
+  "Mordor config" should "not reference the stale ETC mainnet blockd.info domain" taggedAs (UnitTest, NetworkTest) in {
+    mordorConfig.dnsDiscoveryDomains should not contain "all.classic.blockd.info"
+  }
+
+  it should "have at least 10 static bootstrap nodes" taggedAs (UnitTest, NetworkTest) in {
+    mordorConfig.bootstrapNodes.size should be >= 10
+  }
+}
+// scalastyle:on magic.number
