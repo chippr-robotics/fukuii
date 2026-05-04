@@ -12,6 +12,8 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.testing.{PeerTestHelpers, TestMptStorage}
 
@@ -428,7 +430,6 @@ class TrieNodeHealingCoordinatorSpec
     var consecutiveStagnations = 0
     val MaxConsecutiveStagnations = 3
     var healingStagnatedSent = false
-    var totalNodesHealed = 0
 
     // Simulate 3 consecutive HEAL-PULSE ticks with zero new nodes healed
     for (_ <- 1 to MaxConsecutiveStagnations) {
@@ -478,5 +479,143 @@ class TrieNodeHealingCoordinatorSpec
     count += 1; (count >= MaxConsecutiveStagnations) shouldBe false
     count += 1; (count >= MaxConsecutiveStagnations) shouldBe false
     count += 1; (count >= MaxConsecutiveStagnations) shouldBe true
+  }
+
+  // ── NB-11: pivotRefreshRequested suppression ─────────────────────────────────────────────────
+  //
+  // HealingStagnationCheck is a private case object — cannot be injected.
+  // These tests model the suppression semantics as pure logic, matching the pattern above.
+
+  it should "suppress further HealingStagnated signals after pivotRefreshRequested is set" taggedAs UnitTest in {
+    var pivotRefreshRequested = false
+    var consecutiveStagnations = 0
+    val MaxConsecutiveStagnations = 3
+    var stagnatedSignals = 0
+
+    def tick(recentHealed: Int, hasPending: Boolean): Unit = {
+      if (!pivotRefreshRequested && recentHealed == 0 && hasPending) {
+        consecutiveStagnations += 1
+        if (consecutiveStagnations >= MaxConsecutiveStagnations) {
+          stagnatedSignals += 1
+          pivotRefreshRequested = true
+          consecutiveStagnations = 0
+        }
+      } else if (recentHealed > 0) {
+        consecutiveStagnations = 0
+      }
+    }
+
+    // First escalation
+    for (_ <- 1 to MaxConsecutiveStagnations) tick(0, hasPending = true)
+    stagnatedSignals shouldBe 1
+    pivotRefreshRequested shouldBe true
+
+    // Additional ticks while pivotRefreshRequested=true must not fire a second signal
+    for (_ <- 1 to MaxConsecutiveStagnations * 2) tick(0, hasPending = true)
+    stagnatedSignals shouldBe 1
+  }
+
+  it should "resume stagnation counting after pivotRefreshRequested is cleared (HealingPivotRefreshed)" taggedAs UnitTest in {
+    var pivotRefreshRequested = false
+    var consecutiveStagnations = 0
+    val MaxConsecutiveStagnations = 3
+    var stagnatedSignals = 0
+
+    def tick(recentHealed: Int, hasPending: Boolean): Unit = {
+      if (!pivotRefreshRequested && recentHealed == 0 && hasPending) {
+        consecutiveStagnations += 1
+        if (consecutiveStagnations >= MaxConsecutiveStagnations) {
+          stagnatedSignals += 1
+          pivotRefreshRequested = true
+          consecutiveStagnations = 0
+        }
+      } else if (recentHealed > 0) {
+        consecutiveStagnations = 0
+      }
+    }
+
+    // First escalation
+    for (_ <- 1 to MaxConsecutiveStagnations) tick(0, hasPending = true)
+    stagnatedSignals shouldBe 1
+
+    // Simulate HealingPivotRefreshed resetting the suppression flag
+    pivotRefreshRequested = false
+    consecutiveStagnations = 0
+
+    // Second escalation cycle should succeed now
+    for (_ <- 1 to MaxConsecutiveStagnations) tick(0, hasPending = true)
+    stagnatedSignals shouldBe 2
+  }
+
+  // ── NB-7: Stateless dispatch gate ────────────────────────────────────────────────────────────
+  //
+  // Actor-level tests: drive via real messages (HealingPeerAvailable + TrieNodesResponseMsg).
+
+  it should "ignore HealingPeerAvailable for a peer already in statelessPeers" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("nb7-stateless-gate-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("stateless-peer", peerProbe.ref)
+
+    val coordinator = system.actorOf(
+      TrieNodeHealingCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        batchSize = 1,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    // Seed a task and dispatch it to the peer
+    coordinator ! Messages.StartTrieNodeHealing(stateRoot)
+    coordinator ! Messages.HealingPeerAvailable(peer)
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+
+    // Empty TrieNodes response (requestId=1 is the first generated) → marks peer stateless
+    coordinator ! Messages.TrieNodesResponseMsg(SNAP.TrieNodes(requestId = 1, nodes = Seq.empty))
+
+    // Second HealingPeerAvailable for the same peer must be silently ignored
+    coordinator ! Messages.HealingPeerAvailable(peer)
+    networkPeerManager.expectNoMessage(300.millis)
+  }
+
+  it should "re-admit a stateless peer after HealingPivotRefreshed clears statelessPeers" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("nb7-readmit-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("readmit-peer", peerProbe.ref)
+
+    val coordinator = system.actorOf(
+      TrieNodeHealingCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        batchSize = 1,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    // Make peer stateless
+    coordinator ! Messages.StartTrieNodeHealing(stateRoot)
+    coordinator ! Messages.HealingPeerAvailable(peer)
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+    coordinator ! Messages.TrieNodesResponseMsg(SNAP.TrieNodes(requestId = 1, nodes = Seq.empty))
+
+    // Pivot refresh: clears statelessPeers and re-seeds new root as pending task
+    val newRoot = kec256(ByteString("nb7-readmit-new-root"))
+    coordinator ! Messages.HealingPivotRefreshed(newRoot)
+
+    // Peer is no longer stateless — HealingPeerAvailable should trigger dispatch for the new root
+    coordinator ! Messages.HealingPeerAvailable(peer)
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
   }
 }

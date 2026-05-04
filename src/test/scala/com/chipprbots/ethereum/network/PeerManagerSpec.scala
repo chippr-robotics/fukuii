@@ -362,6 +362,109 @@ class PeerManagerSpec
     peerAsOutgoingProbe.expectMsg(PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected))
   }
 
+  // ── Suite 5: NB-8 — 5s reconnect + inbound-suppression (Fix-C) ──────────────────────────────
+
+  behavior.of("maintained peer reconnect (NB-8 Fix-C)")
+
+  it should "schedule a 5s reconnect when a maintained peer's outgoing connection terminates" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    val hexNodeId   = "aa" * 64 // 64-byte node ID as 128-char hex
+    val nodeIdBytes = ByteString(Hex.decode(hexNodeId))
+    val maintainedUri = new URI(s"enode://$hexNodeId@127.0.0.5:30303")
+
+    start()
+
+    peerManager ! PeerManagerActor.AddMaintainedPeer(maintainedUri)
+    createdPeers(0).probe.expectMsgType[ConnectTo](3.seconds)
+
+    // Complete ETH handshake so the peer is promoted from pending → handshaked
+    createdPeers(0).probe.reply(
+      PeerEvent.PeerHandshakeSuccessful(
+        Peer(
+          PeerId(hexNodeId),
+          new InetSocketAddress("127.0.0.5", 30303),
+          createdPeers(0).probe.ref,
+          incomingConnection = false,
+          nodeId = Some(nodeIdBytes)
+        ),
+        initialPeerInfo
+      )
+    )
+
+    // Kill the outgoing actor — peerManager receives Terminated and schedules the 5s retry
+    createdPeers(0).probe.ref ! PoisonPill
+
+    // PeerDisconnected is published inside the Terminated handler, so receiving it
+    // guarantees the 5s scheduleOnce has already been registered on testScheduler.
+    peerEventBus.fishForMessage(3.seconds, "waiting for PeerDisconnected") {
+      case Publish(PeerDisconnected(_)) => true
+      case _                            => false
+    }
+
+    testScheduler.timePasses(5.seconds)
+
+    // connectWith should have created a second peer and sent ConnectTo(maintainedUri)
+    createdPeers(1).probe.expectMsgType[ConnectTo](3.seconds).uri shouldBe maintainedUri
+  }
+
+  it should "suppress the 5s reconnect when an inbound from the same nodeId fills the slot before the timer fires" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    val hexNodeId   = "bb" * 64
+    val nodeIdBytes = ByteString(Hex.decode(hexNodeId))
+    val maintainedUri = new URI(s"enode://$hexNodeId@127.0.0.5:30303")
+
+    start()
+
+    // Register and handshake the maintained peer (outgoing)
+    peerManager ! PeerManagerActor.AddMaintainedPeer(maintainedUri)
+    createdPeers(0).probe.expectMsgType[ConnectTo](3.seconds)
+    createdPeers(0).probe.reply(
+      PeerEvent.PeerHandshakeSuccessful(
+        Peer(
+          PeerId(hexNodeId),
+          new InetSocketAddress("127.0.0.5", 30303),
+          createdPeers(0).probe.ref,
+          incomingConnection = false,
+          nodeId = Some(nodeIdBytes)
+        ),
+        initialPeerInfo
+      )
+    )
+
+    // Terminate outgoing → 5s reconnect timer is scheduled inside the Terminated handler
+    createdPeers(0).probe.ref ! PoisonPill
+    peerEventBus.fishForMessage(3.seconds, "waiting for PeerDisconnected") {
+      case Publish(PeerDisconnected(_)) => true
+      case _                            => false
+    }
+
+    // Inbound from the same nodeId arrives before the 5s timer fires
+    peerManager ! PeerManagerActor.HandlePeerConnection(incomingConnection1.ref, incomingPeerAddress1)
+    createdPeers(1).probe.expectMsg(PeerActor.HandleConnection(incomingConnection1.ref, incomingPeerAddress1))
+    createdPeers(1).probe.reply(
+      PeerEvent.PeerHandshakeSuccessful(
+        Peer(
+          PeerId(hexNodeId),
+          incomingPeerAddress1,
+          createdPeers(1).probe.ref,
+          incomingConnection = true,
+          nodeId = Some(nodeIdBytes)
+        ),
+        initialPeerInfo
+      )
+    )
+
+    // Fire the 5s timer — connectWith sees hasHandshakedWith(nodeId)=true and aborts silently
+    testScheduler.timePasses(5.seconds)
+
+    // No third peer should have been created
+    createdPeers.size shouldBe 2
+  }
+
   behavior.of("outgoingConnectionDemand")
 
   it should "try to connect to at least min-outgoing-peers but no more than max-outgoing-peers" taggedAs (
