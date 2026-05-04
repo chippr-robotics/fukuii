@@ -108,13 +108,11 @@ class BlockchainReader(
     bestBlock
   }
 
-  /** Returns the best-block header even when the body isn't stored locally. This is the
-    * common state right after PivotHeaderBootstrap completes for SNAP sync — only the
-    * pivot header is persisted (no body, no receipts) until the SNAP→regular handoff or
-    * post-SNAP block import populates them. Callers that only need the header (e.g.
-    * ConsensusAdapter for branch-resolution) should prefer this over `getBestBlock()`,
-    * which returns None in that state and forces them into a `BlockImportFailed`
-    * retry loop. Closes #1201's post-bootstrap follow-up.
+  /** Returns the best-block header even when the body isn't stored locally. This is the common state right after
+    * PivotHeaderBootstrap completes for SNAP sync — only the pivot header is persisted (no body, no receipts) until the
+    * SNAP→regular handoff or post-SNAP block import populates them. Callers that only need the header (e.g.
+    * ConsensusAdapter for branch-resolution) should prefer this over `getBestBlock()`, which returns None in that state
+    * and forces them into a `BlockImportFailed` retry loop. Closes #1201's post-bootstrap follow-up.
     */
   def getBestBlockHeader(): Option[BlockHeader] = {
     val bestKnownBlockinfo = appStateStorage.getBestBlockInfo()

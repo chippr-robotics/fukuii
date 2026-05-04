@@ -73,6 +73,17 @@ class SNAPSyncController(
   // with still-stopping actors from the previous cycle.
   private var coordinatorGeneration: Long = 0
 
+  // Buffered CL-driven pivot hint. Populated whenever a `CLPivotHint` message arrives
+  // from `SyncController`. Consumed by `startSnapSync()` to skip TD-based pivot selection
+  // on post-merge chains. Only meaningful when `isPostMergeChain == true`. Closes #1207.
+  private var clPivotHint: Option[CLPivotHint] = None
+  private var clHintArrivedAtMs: Option[Long] = None
+
+  // Captured once at construction. ETC mainnet has TTD=None and never goes down the
+  // CL-driven path; Sepolia/mainnet have TTD set and switch off TD-based pivot entirely.
+  private val isPostMergeChain: Boolean =
+    com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig.terminalTotalDifficulty.isDefined
+
   private val requestTracker = new SNAPRequestTracker()(scheduler)
 
   private var currentPhase: SyncPhase = Idle
@@ -335,9 +346,19 @@ class SNAPSyncController(
 
     case SyncProtocol.GetStatus =>
       sender() ! SyncProtocol.Status.NotSyncing
+
+    case hint: CLPivotHint =>
+      handleCLPivotHint(hint, isStarting = false)
   }
 
   def syncing: Receive = handlePeerListMessagesWithRateTracking.orElse {
+    case hint: CLPivotHint =>
+      // CL advanced its head while we're mid-snap. Update the buffer; the proactive
+      // pivot-rolling watcher (geth-style: re-pivot when `head > pivot + 2*offset - 8`)
+      // consumes this on its next tick. We deliberately don't restart the pipeline here
+      // — content-addressed trie nodes are ~99.9% valid across pivot changes.
+      handleCLPivotHint(hint, isStarting = false)
+
     // Periodic rate tracker tuning (geth msgrate alignment)
     case TuneRateTracker =>
       requestTracker.rateTracker.tune()
@@ -1031,6 +1052,13 @@ class SNAPSyncController(
     }
 
   def bootstrapping: Receive = handlePeerListMessagesWithBootstrapReactivity.orElse {
+    case hint: CLPivotHint =>
+      // CL pushed a (potentially newer) head while we were bootstrapping the previous one.
+      // Buffer it; we'll re-evaluate on the next `startSnapSync()` if the in-flight bootstrap
+      // fails or the caller decides to re-pivot. We don't tear down a healthy in-flight
+      // bootstrap mid-stream — the original head is almost always sufficient.
+      handleCLPivotHint(hint, isStarting = false)
+
     case BootstrapComplete(pivotHeaderOpt) =>
       log.info("=" * 80)
       log.info("✅ Bootstrap phase complete - transitioning to SNAP sync")
@@ -1249,6 +1277,33 @@ class SNAPSyncController(
 
     case _ =>
       log.debug("SNAP sync is complete, ignoring messages")
+  }
+
+  /** Buffer a CL-driven head hint and (optionally) react to the change.
+    *
+    * On post-merge chains: the hint's `headHash` becomes the SNAP pivot when `startSnapSync()` runs next. The hint's
+    * `knownHeader`, when present, lets us skip the peer round-trip entirely. When absent, we route through
+    * `StartRegularSyncBootstrapByHash` to fetch the header from a peer.
+    *
+    * On pre-merge chains (TTD = None): we still buffer for diagnostics but don't act — `startSnapSync()` ignores
+    * `clPivotHint` when `!isPostMergeChain`.
+    */
+  private def handleCLPivotHint(hint: CLPivotHint, isStarting: Boolean): Unit = {
+    val isNew = !clPivotHint.exists(_.headHash == hint.headHash)
+    clPivotHint = Some(hint)
+    if (isNew) clHintArrivedAtMs = Some(System.currentTimeMillis())
+    if (isNew) {
+      log.info(
+        "[CL-PIVOT] Received CL-driven head {} (knownHeader={}, postMergeChain={})",
+        com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(hint.headHash),
+        hint.knownHeader.map(_.number).getOrElse("unknown"),
+        isPostMergeChain
+      )
+    }
+    // Reactive starts: if we're already at idle and a hint arrives during operator-driven
+    // startup, the `Start` handler will pick this up. We don't auto-start here because
+    // SyncController's startSnapSync() drives the lifecycle.
+    val _ = isStarting
   }
 
   private def startSnapSync(): Unit = {
@@ -1497,6 +1552,95 @@ class SNAPSyncController(
       // No bootstrap in progress - continue with normal logic
     }
 
+    // CL-wait gate (post-merge chains only). When TTD is configured but no CL hint has
+    // arrived yet, either wait indefinitely (`engine-api-required = true`, default) or
+    // fall back to peer-best-by-block-number after `cl-wait-timeout` elapsed since the
+    // first start attempt. Either way, we must NOT walk into TD-based selection here —
+    // TD is frozen at TTD on post-merge chains and pivot selection produces useless
+    // targets. Closes #1207.
+    if (isPostMergeChain && clPivotHint.isEmpty) {
+      val firstAttemptMs =
+        clHintArrivedAtMs.getOrElse {
+          // Reuse the same timestamp pattern as the hint to keep the wait window stable
+          // across retry calls. We initialise on the first wait attempt.
+          val now = System.currentTimeMillis()
+          if (clHintArrivedAtMs.isEmpty) clHintArrivedAtMs = Some(now)
+          now
+        }
+      val waitedMs = System.currentTimeMillis() - firstAttemptMs
+      if (syncConfig.engineApiRequired || waitedMs < syncConfig.clWaitTimeout.toMillis) {
+        if (bootstrapRetryCount % 10 == 0) {
+          log.info(
+            s"[CL-PIVOT] Post-merge chain (TTD configured), waiting for engine_forkchoiceUpdated " +
+              s"from CL (engineApiRequired=${syncConfig.engineApiRequired}, waited=${waitedMs / 1000}s)"
+          )
+        }
+        bootstrapRetryCount += 1
+        val delay = 5.seconds
+        bootstrapCheckTask.foreach(_.cancel())
+        bootstrapCheckTask = Some(scheduler.scheduleOnce(delay)(self ! RetrySnapSyncStart)(ec))
+        context.become(bootstrapping)
+        return
+      } else {
+        log.warning(
+          s"[CL-PIVOT] cl-wait-timeout elapsed (${syncConfig.clWaitTimeout}); engineApiRequired=false. " +
+            "Falling back to peer-best-by-block-number pivot selection."
+        )
+      }
+      // Fallthrough: engineApiRequired=false and timeout elapsed → continue to TD path below.
+      clHintArrivedAtMs = None // reset so the wait window restarts on next retry
+    }
+
+    // CL-driven pivot path (post-merge chains only). When the consensus layer has pushed a
+    // forkchoiceUpdated, prefer its head over TD-based peer selection. TD on post-merge
+    // chains is frozen at TerminalTotalDifficulty so peer-best-by-TD is unreliable. This
+    // is geth's "BeaconSync" pattern, plumbed via SyncController's BeaconHead listener.
+    // Closes #1207.
+    if (isPostMergeChain && clPivotHint.isDefined) {
+      val hint = clPivotHint.get
+      hint.knownHeader match {
+        case Some(header) =>
+          log.info("=" * 80)
+          log.info("🛰  SNAP pivot from CL forkchoiceUpdated")
+          log.info("=" * 80)
+          log.info(
+            s"CL head: ${header.number} (${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(header.hash)})"
+          )
+          log.info(s"State root: ${header.stateRoot.toHex.take(16)}...")
+          log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
+          log.info("=" * 80)
+
+          pivotBlock = Some(header.number)
+          stateRoot = Some(header.stateRoot)
+          appStateStorage
+            .putSnapSyncPivotBlock(header.number)
+            .and(appStateStorage.putSnapSyncStateRoot(header.stateRoot))
+            .commit()
+          updateBestBlockForPivot(header, header.number)
+
+          SNAPSyncMetrics.setPivotBlockNumber(header.number)
+          bootstrapRetryCount = 0
+
+          currentPhase = AccountRangeSync
+          startAccountRangeSync(header.stateRoot)
+          context.become(syncing)
+          return
+
+        case None =>
+          // CL gave us a head hash but we don't have its header yet. Route through
+          // SyncController to fetch by hash (PivotHeaderBootstrap by-hash mode). The
+          // by-hash bootstrap reply re-enters via `BootstrapComplete(Some(header))`,
+          // and `bootstrapping`'s pivot-staleness check will allow it through (the CL
+          // head is by definition the freshest possible target).
+          log.info(
+            s"[CL-PIVOT] Head ${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(hint.headHash)} known by hash only — requesting by-hash bootstrap"
+          )
+          context.parent ! StartRegularSyncBootstrapByHash(hint.headHash)
+          context.become(bootstrapping)
+          return
+      }
+    }
+
     // Get local and network state for pivot selection
     val localBestBlock = appStateStorage.getBestBlockNumber()
 
@@ -1572,6 +1716,10 @@ class SNAPSyncController(
       // is unknown and treating it as 0 will cause us to request SNAP data for the genesis
       // state root, which most peers won't serve.
       pivotSelectionSource match {
+        case CLDrivenPivot =>
+          // Unreachable: CLDrivenPivot returns earlier in startSnapSync. Defensive no-op.
+          log.warning("Unexpected CLDrivenPivot reaching TD-based pivot path; ignoring")
+          return
         case LocalPivot =>
           bootstrapRetryCount += 1
           if (checkBootstrapRetryTimeout("no peers, network height unknown")) return
@@ -1665,6 +1813,10 @@ class SNAPSyncController(
       // LocalPivot is only used when no peers are available (see match expression above)
       // This check determines whether to retry for peers or transition to regular sync
       pivotSelectionSource match {
+        case CLDrivenPivot =>
+          // Unreachable: CLDrivenPivot returns earlier in startSnapSync. Defensive no-op.
+          log.warning("Unexpected CLDrivenPivot in TD-based pivot-staleness check; ignoring")
+          return
         case LocalPivot =>
           // No peers available - schedule retry with backoff
           bootstrapRetryCount += 1
@@ -1696,6 +1848,10 @@ class SNAPSyncController(
       // to avoid starting SNAP from a stale/reorged or otherwise non-canonical header.
       // This is a header-only bootstrap.
       pivotSelectionSource match {
+        case CLDrivenPivot =>
+          // Unreachable: CLDrivenPivot returns earlier in startSnapSync. Defensive no-op.
+          log.warning("Unexpected CLDrivenPivot in TD pivot-bootstrap branch; ignoring")
+          return
         case NetworkPivot =>
           log.info(s"Fetching pivot header from network for block $pivotBlockNumber before starting SNAP")
           appStateStorage.putSnapSyncBootstrapTarget(pivotBlockNumber).commit()
@@ -1737,6 +1893,10 @@ class SNAPSyncController(
           // but haven't synced that far yet
 
           pivotSelectionSource match {
+            case CLDrivenPivot =>
+              // Unreachable: CLDrivenPivot returns earlier in startSnapSync. Defensive no-op.
+              log.warning("Unexpected CLDrivenPivot in pivot-header-fetch branch; ignoring")
+              return
             case NetworkPivot =>
               // We selected a network-based pivot but don't have the header yet
               // Need to bootstrap/sync to get closer to the pivot
@@ -3282,8 +3442,27 @@ object SNAPSyncController {
     val name = "local"
   }
 
+  /** Pivot supplied by the consensus layer via engine_forkchoiceUpdated. Used on post-merge chains where TD is frozen
+    * at TerminalTotalDifficulty and TD-based selection cannot produce a useful target. Closes #1207.
+    */
+  case object CLDrivenPivot extends PivotSelectionSource {
+    val name = "cl-driven"
+  }
+
   case object Start
   case object Done
+
+  /** Hint from `SyncController` that the consensus layer has pushed a fork-choice update. Carries the head's hash
+    * (always) and the locally-stored header (when present — usually true if a `newPayload` arrived first; can be `None`
+    * if FCU arrived before any `newPayload` for that head, in which case the controller falls back to a by-hash
+    * `StartRegularSyncBootstrap` to fetch the header from peers). Closes #1207.
+    */
+  final case class CLPivotHint(headHash: ByteString, knownHeader: Option[BlockHeader])
+
+  /** Bootstrap-by-hash variant of `StartRegularSyncBootstrap`. Used when the CL drives sync and we know the head hash
+    * but not its block number — `PivotHeaderBootstrap` then fetches by `GetBlockHeaders(Right(hash))`. Closes #1207.
+    */
+  final case class StartRegularSyncBootstrapByHash(headHash: ByteString)
   // Two-phase handshake with SyncController:
   //   1. SnapSyncFinalized(pivot) — pivot/state anchored, regular sync can start.
   //      SyncController starts RegularSync but does NOT poison-pill SNAPSyncController.
