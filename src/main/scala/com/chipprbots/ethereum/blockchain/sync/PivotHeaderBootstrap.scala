@@ -158,23 +158,23 @@ final class PivotHeaderBootstrap(
       }
       .map {
         case PeersClient.Response(peer, eth66: ETH66BlockHeaders) =>
-          (Some(peer), eth66.headers.headOption)
+          (Some(peer), eth66.headers.headOption, false)
         case PeersClient.Response(peer, eth62: ETH62.BlockHeaders) =>
-          (Some(peer), eth62.headers.headOption)
+          (Some(peer), eth62.headers.headOption, false)
         case NoSuitablePeer =>
-          (None, None)
+          (None, None, false)
         case RequestFailed(peer, reason) =>
           log.warning("Pivot header request failed: {}", reason)
-          (Some(peer), None)
+          (Some(peer), None, true)
         case other =>
           log.debug("Unexpected pivot header response: {}", other)
-          (None, None)
+          (None, None, false)
       }
       .recover { case ex =>
         log.warning("Pivot header bootstrap ask failed (attempt {}/{}): {}", attempt, maxAttempts, ex.getMessage)
-        (None, None)
+        (None, None, false)
       }
-      .foreach { case (peerOpt, headerOpt) =>
+      .foreach { case (peerOpt, headerOpt, isFailed) =>
         peerOpt.foreach(p => triedPeers += p.id)
         headerOpt match {
           case Some(header) if matchesTarget(header) =>
@@ -184,10 +184,13 @@ final class PivotHeaderBootstrap(
               s"received header (number=${header.number}, hash=${com.chipprbots.ethereum.utils.ByteStringUtils
                   .hash2string(header.hash)}) doesn't match target $targetDesc"
             )
+          case None if peerOpt.isDefined && isFailed =>
+            // RequestFailed: peer explicitly rejected the request — consume an attempt and rotate.
+            self ! Retry(s"peer ${peerOpt.get.id} request failed")
           case None if peerOpt.isDefined =>
-            // A peer was tried but returned no useful header — almost always a connection
-            // drop (Besu's ~60s reconnect cycle). Use WaitForPeer (no attempt consumed)
-            // so the retry budget isn't drained by transient disconnects.
+            // Empty headers — almost always a connection drop (Besu's ~60s reconnect cycle).
+            // Use WaitForPeer (no attempt consumed) so the retry budget isn't drained by
+            // transient disconnects.
             self ! WaitForPeer
           case None =>
             // NoSuitablePeer — pool empty or all known peers already tried.

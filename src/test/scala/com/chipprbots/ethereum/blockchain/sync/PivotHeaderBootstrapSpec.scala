@@ -100,15 +100,16 @@ class PivotHeaderBootstrapSpec
     parent.expectMsgType[PivotHeaderBootstrap.Failed](3.seconds)
   }
 
-  it should "send Failed after maxAttempts when peer returns an empty headers list" taggedAs (UnitTest, SyncTest) in {
+  it should "not send Failed on empty headers (WaitForPeer issued, no attempt consumed)" taggedAs (UnitTest, SyncTest) in {
     val peersClient = TestProbe()
     val parent = TestProbe()
-    mkBootstrap(peersClient, parent)
+    mkBootstrap(peersClient, parent, waitForPeerDelay = 50.millis)
 
     peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
     peersClient.reply(PeersClient.Response(testPeer, ETH66.BlockHeaders(0, Seq.empty)))
 
-    parent.expectMsgType[PivotHeaderBootstrap.Failed](3.seconds)
+    // Empty headers → WaitForPeer; no attempt consumed → Failed must NOT arrive yet
+    parent.expectNoMessage(200.millis)
   }
 
   it should "send Failed after maxAttempts on RequestFailed" taggedAs (UnitTest, SyncTest) in {
