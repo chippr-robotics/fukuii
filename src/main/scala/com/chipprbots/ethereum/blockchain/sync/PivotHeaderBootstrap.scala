@@ -185,8 +185,10 @@ final class PivotHeaderBootstrap(
                   .hash2string(header.hash)}) doesn't match target $targetDesc"
             )
           case None if peerOpt.isDefined =>
-            // A peer was selected and tried but returned no useful header
-            self ! Retry("no header returned from peer")
+            // A peer was tried but returned no useful header — almost always a connection
+            // drop (Besu's ~60s reconnect cycle). Use WaitForPeer (no attempt consumed)
+            // so the retry budget isn't drained by transient disconnects.
+            self ! WaitForPeer
           case None =>
             // NoSuitablePeer — pool empty or all known peers already tried.
             // Model Besu's waitForPeer(!peersUsed.contains(p)): wait for a fresh peer to connect.

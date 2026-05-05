@@ -1258,11 +1258,17 @@ class SNAPSyncController(
             log.info(s"Local best block: $localBestBlock")
             log.info(s"Using bootstrapped pivot block: $targetPivot")
             log.info(s"State root: ${header.stateRoot.toHex.take(16)}...")
-            log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
             log.info("=" * 80)
 
-            currentPhase = AccountRangeSync
-            startAccountRangeSync(header.stateRoot)
+            if (accountsComplete && storagePhaseComplete && bytecodePhaseComplete) {
+              log.info("All data phases complete — skipping to state healing with fresh pivot")
+              currentPhase = StateHealing
+              startStateHealing()
+            } else {
+              log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
+              currentPhase = AccountRangeSync
+              startAccountRangeSync(header.stateRoot)
+            }
             context.become(syncing)
           }
 
@@ -1291,11 +1297,17 @@ class SNAPSyncController(
                     log.info(s"Local best block: $localBestBlock")
                     log.info(s"Using bootstrapped pivot block: $targetPivot")
                     log.info(s"State root: ${header.stateRoot.toHex.take(16)}...")
-                    log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
                     log.info("=" * 80)
 
-                    currentPhase = AccountRangeSync
-                    startAccountRangeSync(header.stateRoot)
+                    if (accountsComplete && storagePhaseComplete && bytecodePhaseComplete) {
+                      log.info("All data phases complete — skipping to state healing with fresh pivot")
+                      currentPhase = StateHealing
+                      startStateHealing()
+                    } else {
+                      log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
+                      currentPhase = AccountRangeSync
+                      startAccountRangeSync(header.stateRoot)
+                    }
                     context.become(syncing)
 
                   case None =>
@@ -1442,16 +1454,32 @@ class SNAPSyncController(
           val networkBest = currentNetworkBestFromSnapPeers().getOrElse(BigInt(0))
           val drift = if (networkBest > 0) (networkBest - pivot).abs else BigInt(0)
           if (networkBest > 0 && drift > snapSyncConfig.maxPivotStalenessBlocks) {
-            log.warning(
-              s"Recovery: pivot $pivot drifted $drift blocks from network best $networkBest. " +
-                "Clearing accounts-complete flag and restarting fresh."
-            )
-            appStateStorage
-              .putSnapSyncAccountsComplete(false)
-              .and(appStateStorage.putSnapSyncStorageComplete(false))
-              .and(appStateStorage.putSnapSyncBytecodeComplete(false))
-              .commit()
-            // Fall through to normal startup
+            val storageAlreadyDone  = appStateStorage.isSnapSyncStorageComplete()
+            val bytecodeAlreadyDone = appStateStorage.isSnapSyncBytecodeComplete()
+            if (storageAlreadyDone && bytecodeAlreadyDone) {
+              // All data phases complete — content-addressed data is valid across pivot changes.
+              // Match go-ethereum/Besu: do NOT wipe. Bootstrap acquires a fresh pivot and the
+              // BootstrapComplete handler detects all-phases-complete → skips to StateHealing.
+              log.warning(
+                s"Recovery: pivot $pivot drifted $drift blocks, but all phases complete. " +
+                  "Requesting fresh pivot for healing (go-ethereum/Besu behavior)."
+              )
+              accountsComplete      = true
+              storagePhaseComplete  = true
+              bytecodePhaseComplete = true
+              // Leave pivotBlock and stateRoot unset — bootstrap will set them.
+            } else {
+              log.warning(
+                s"Recovery: pivot $pivot drifted $drift blocks from network best $networkBest. " +
+                  "Clearing accounts-complete flag and restarting fresh."
+              )
+              appStateStorage
+                .putSnapSyncAccountsComplete(false)
+                .and(appStateStorage.putSnapSyncStorageComplete(false))
+                .and(appStateStorage.putSnapSyncBytecodeComplete(false))
+                .commit()
+              // Fall through to normal startup
+            }
           } else {
             // Pivot is fresh enough — recover bytecodes + storage only
             pivotBlock = Some(pivot)

@@ -707,8 +707,11 @@ class TrieNodeHealingCoordinator(
           s"Peer ${peer.id.value} marked stateless for healing root " +
             s"${Hex.toHexString(stateRoot.take(4).toArray)} (${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
         )
-        // Check if all known peers are stateless — request pivot refresh
-        if (statelessPeers.size >= knownAvailablePeers.size && knownAvailablePeers.nonEmpty && !pivotRefreshRequested) {
+        // Check if all known peers are stateless — request pivot refresh.
+        // Use statelessPeers.nonEmpty (not knownAvailablePeers.nonEmpty): filterInPlace above
+        // removes this peer from knownAvailablePeers BEFORE the check, so a single-peer set
+        // leaves knownAvailablePeers empty and the old guard silently swallowed the trigger.
+        if (statelessPeers.size >= knownAvailablePeers.size && statelessPeers.nonEmpty && !pivotRefreshRequested) {
           pivotRefreshRequested = true
           pivotRefreshRequestedAt = System.currentTimeMillis()
           log.warning(
@@ -763,7 +766,7 @@ class TrieNodeHealingCoordinator(
         s"Peer ${peer.id.value} marked stateless after $timeoutCount consecutive timeouts " +
           s"(${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
       )
-      if (statelessPeers.size >= knownAvailablePeers.size && knownAvailablePeers.nonEmpty && !pivotRefreshRequested) {
+      if (statelessPeers.size >= knownAvailablePeers.size && statelessPeers.nonEmpty && !pivotRefreshRequested) {
         pivotRefreshRequested = true
         pivotRefreshRequestedAt = System.currentTimeMillis()
         log.warning(
