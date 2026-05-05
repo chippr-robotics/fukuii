@@ -261,7 +261,11 @@ class DnsDiscoveryEnrSpec extends AnyFlatSpec with Matchers {
     val enr = "enr:" + Base64.getUrlEncoder.withoutPadding.encodeToString(bytes)
     val result = DnsDiscovery.parseEnrToEnode(enr)
     result shouldBe defined
-    result.get should include("[::1]") // IPv6 bracketed
+    // Java's InetAddress.getHostAddress() returns "0:0:0:0:0:0:0:1" or "::1" depending on JVM version.
+    // Both are valid representations of the loopback IPv6 address; check for the bracket notation only.
+    result.get should startWith("enode://")
+    result.get should include("@[")
+    result.get should include("]")
   }
 
   it should "produce a 128-hex-char node ID (64 uncompressed pubkey bytes)" taggedAs UnitTest in {

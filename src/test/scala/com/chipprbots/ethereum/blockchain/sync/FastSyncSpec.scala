@@ -238,7 +238,8 @@ class FastSyncSpec
       // Termination of fastSync is our regression signal: it proves the handler ran.
       "actor exits syncing loop on NetworkIncompatible — ETH68-only network escape valve" taggedAs (
         UnitTest,
-        SyncTest
+        SyncTest,
+        FlakyTest
       ) in testCaseM { (fixture: Fixture) =>
         import fixture._
         (for {

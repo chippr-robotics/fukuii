@@ -32,8 +32,9 @@ class MessageCodecMalformedInputSpec
     with ScalaCheckPropertyChecks
     with SecureChannelSetup {
 
-  // Shared codec: no compression (p2pVersion=4), backed by the SecureChannelSetup secrets.
-  private val frameCodec = new FrameCodec(secrets)
+  // Fresh codec per call: FrameCodec is stateful (accumulates unprocessedData across readFrames calls).
+  // Using a def ensures each test gets an isolated instance with no carry-over bytes.
+  private def frameCodec = new FrameCodec(secrets)
 
   private val decoder: MessageDecoder =
     NetworkMessageDecoder.orElse(EthereumMessageDecoder.ethMessageDecoder(Capability.ETH63))

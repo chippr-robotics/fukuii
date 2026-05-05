@@ -135,18 +135,18 @@ final case class PeerScore(
 
   /** Check if peer should be retried despite blacklist history */
   def shouldRetry(currentBlacklistDuration: FiniteDuration): Boolean = {
-    // Exponential penalty based on blacklist count
-    // More blacklists = longer wait before retry
-    // Cap at 1 hour (3600 seconds) to avoid excessive wait times
+    // Exponential penalty based on blacklist count, capped at 1 hour.
+    // Cap the exponent first to avoid Int/Long overflow: 2^30 ≈ 1e9 seconds >> 1h already.
     val maxBackoff = 3600.seconds
-    val penaltyMultiplier = math.pow(2, blacklistCount).toInt
-    val adjustedDuration = (currentBlacklistDuration * penaltyMultiplier).min(maxBackoff)
+    val safeExponent = math.min(blacklistCount, 30)
+    val penaltyFactor = math.pow(2.0, safeExponent.toDouble)
+    val adjustedMs = math.min(currentBlacklistDuration.toMillis * penaltyFactor, maxBackoff.toMillis.toDouble).toLong
 
     lastSeen match {
       case None => true // never blacklisted, can retry
       case Some(timestamp) =>
         val elapsed = java.time.Duration.between(timestamp, Instant.now())
-        elapsed.toMillis >= adjustedDuration.toMillis
+        elapsed.toMillis >= adjustedMs
     }
   }
 }
