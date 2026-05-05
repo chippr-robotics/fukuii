@@ -14,12 +14,13 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
 import com.chipprbots.ethereum.blockchain.sync.PeersClient.{
   BestPeer,
-  BestPeerWithMinBlock,
+  BestPeerWithMinBlockExcluding,
   BestSnapPeer,
   NoSuitablePeer,
   Request,
   RequestFailed
 }
+import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 /** Fetches and persists a single pivot header so SNAP can start without importing blocks.
@@ -42,6 +43,7 @@ final class PivotHeaderBootstrap(
     maxAttempts: Int,
     initialRetryDelay: FiniteDuration,
     maxRetryDelay: FiniteDuration,
+    waitForPeerDelay: FiniteDuration,
     preferSnapPeers: Boolean
 )(implicit ec: ExecutionContext)
     extends Actor
@@ -56,6 +58,8 @@ final class PivotHeaderBootstrap(
   }
 
   private var attempt: Int = 0
+  private val triedPeers: scala.collection.mutable.Set[PeerId] = scala.collection.mutable.Set.empty
+  private var waitCount: Int = 0
 
   private def currentRetryDelay: FiniteDuration = {
     // Exponential backoff: initialRetryDelay * 2^(attempt-1), capped at maxRetryDelay
@@ -106,6 +110,20 @@ final class PivotHeaderBootstrap(
       val delay = currentRetryDelay
       log.info("Scheduling pivot header retry in {} (attempt {}/{})", delay, attempt, maxAttempts)
       scheduler.scheduleOnce(delay, self, Fetch)(context.dispatcher, self)
+
+    case WaitForPeer =>
+      // Models Besu's waitForPeer(!peersUsed.contains(p)) / go-ethereum's idle-loop peer wait.
+      // Does NOT increment `attempt` — starvation waits don't consume the retry budget.
+      waitCount += 1
+      if (waitCount % 4 == 0) {
+        log.warning(
+          "Pivot header bootstrap for {} has been waiting for a fresh peer for ~{}s ({} peer(s) tried so far)",
+          targetDesc,
+          waitCount * waitForPeerDelay.toSeconds,
+          triedPeers.size
+        )
+      }
+      fetchOnce()
   }
 
   private def fetchOnce(): Unit = {
@@ -113,16 +131,14 @@ final class PivotHeaderBootstrap(
     val target: Either[BigInt, ByteString] = targetHash.toRight(targetBlock)
     val msg = ETH66.GetBlockHeaders(ETH66.nextRequestId, target, maxHeaders = 1, skip = 0, reverse = false)
 
-    // Peer selection differs slightly per mode:
-    //   By-number: BestPeerWithMinBlock filters by `peer.maxBlockNumber >= targetBlock`.
-    //   By-hash: we don't know the block number, so the cheapest correct selector is
-    //     BestSnapPeer (typically reporting recent head) or BestPeer (overall best).
-    //     We use BestPeer when not preferSnapPeers since any handshaked peer should
-    //     either have the head or quickly fall back via the retry loop.
+    // Peer selection:
+    //   By-number (standard ETC mainnet path): BestPeerWithMinBlockExcluding rotates through the pool,
+    //     skipping peers already tried this bootstrap run (Besu peersUsed / go-ethereum idle-pool pattern).
+    //   By-hash / preferSnapPeers: unchanged — CL-driven and SNAP paths don't need exclusion.
     val selector =
       if (preferSnapPeers) BestSnapPeer
       else if (byHashMode) BestPeer
-      else BestPeerWithMinBlock(targetBlock)
+      else BestPeerWithMinBlockExcluding(targetBlock, triedPeers.toSet)
     val req = Request[ETH66.GetBlockHeaders](msg, selector, (m: ETH66.GetBlockHeaders) => m)
 
     (peersClient ? req)
@@ -132,7 +148,8 @@ final class PivotHeaderBootstrap(
           log.debug("No SNAP-capable peer for pivot header, falling back")
           val fallbackMsg =
             ETH66.GetBlockHeaders(ETH66.nextRequestId, target, maxHeaders = 1, skip = 0, reverse = false)
-          val fallbackSelector = if (byHashMode) BestPeer else BestPeerWithMinBlock(targetBlock)
+          val fallbackSelector =
+            if (byHashMode) BestPeer else BestPeerWithMinBlockExcluding(targetBlock, triedPeers.toSet)
           val fallbackReq =
             Request[ETH66.GetBlockHeaders](fallbackMsg, fallbackSelector, (m: ETH66.GetBlockHeaders) => m)
           peersClient ? fallbackReq
@@ -140,31 +157,48 @@ final class PivotHeaderBootstrap(
           scala.concurrent.Future.successful(other)
       }
       .map {
-        case PeersClient.Response(_, eth66: ETH66BlockHeaders) =>
-          eth66.headers.headOption
-        case PeersClient.Response(_, eth62: ETH62.BlockHeaders) =>
-          eth62.headers.headOption
+        case PeersClient.Response(peer, eth66: ETH66BlockHeaders) =>
+          (Some(peer), eth66.headers.headOption)
+        case PeersClient.Response(peer, eth62: ETH62.BlockHeaders) =>
+          (Some(peer), eth62.headers.headOption)
         case NoSuitablePeer =>
-          None
-        case RequestFailed(_, reason) =>
+          (None, None)
+        case RequestFailed(peer, reason) =>
           log.warning("Pivot header request failed: {}", reason)
-          None
+          (Some(peer), None)
         case other =>
           log.debug("Unexpected pivot header response: {}", other)
-          None
+          (None, None)
       }
       .recover { case ex =>
         log.warning("Pivot header bootstrap ask failed (attempt {}/{}): {}", attempt, maxAttempts, ex.getMessage)
-        None
+        (None, None)
       }
-      .foreach {
-        case Some(header) if matchesTarget(header) =>
-          self ! Fetched(header)
-        case Some(header) =>
-          self ! Retry(s"received header (number=${header.number}, hash=${com.chipprbots.ethereum.utils.ByteStringUtils
-              .hash2string(header.hash)}) doesn't match target $targetDesc")
-        case None =>
-          self ! Retry("no header returned")
+      .foreach { case (peerOpt, headerOpt) =>
+        peerOpt.foreach(p => triedPeers += p.id)
+        headerOpt match {
+          case Some(header) if matchesTarget(header) =>
+            self ! Fetched(header)
+          case Some(header) =>
+            self ! Retry(
+              s"received header (number=${header.number}, hash=${com.chipprbots.ethereum.utils.ByteStringUtils
+                  .hash2string(header.hash)}) doesn't match target $targetDesc"
+            )
+          case None if peerOpt.isDefined =>
+            // A peer was selected and tried but returned no useful header
+            self ! Retry("no header returned from peer")
+          case None =>
+            // NoSuitablePeer — pool empty or all known peers already tried.
+            // Model Besu's waitForPeer(!peersUsed.contains(p)): wait for a fresh peer to connect.
+            log.info(
+              "Pivot header bootstrap for {}: no eligible peer available ({} tried). " +
+                "Waiting {} for a fresh peer.",
+              targetDesc,
+              triedPeers.size,
+              waitForPeerDelay
+            )
+            scheduler.scheduleOnce(waitForPeerDelay, self, WaitForPeer)(context.dispatcher, self)
+        }
       }
   }
 
@@ -187,6 +221,7 @@ object PivotHeaderBootstrap {
       maxAttempts: Int = 10,
       initialRetryDelay: FiniteDuration = 1.second,
       maxRetryDelay: FiniteDuration = 10.seconds,
+      waitForPeerDelay: FiniteDuration = 30.seconds,
       preferSnapPeers: Boolean = false
   )(implicit ec: ExecutionContext): Props =
     Props(
@@ -200,6 +235,7 @@ object PivotHeaderBootstrap {
         maxAttempts,
         initialRetryDelay,
         maxRetryDelay,
+        waitForPeerDelay,
         preferSnapPeers
       )
     )
@@ -216,6 +252,7 @@ object PivotHeaderBootstrap {
       maxAttempts: Int = 10,
       initialRetryDelay: FiniteDuration = 1.second,
       maxRetryDelay: FiniteDuration = 10.seconds,
+      waitForPeerDelay: FiniteDuration = 30.seconds,
       preferSnapPeers: Boolean = false
   )(implicit ec: ExecutionContext): Props =
     Props(
@@ -229,11 +266,13 @@ object PivotHeaderBootstrap {
         maxAttempts,
         initialRetryDelay,
         maxRetryDelay,
+        waitForPeerDelay,
         preferSnapPeers
       )
     )
 
   private case object Fetch
+  private case object WaitForPeer
   final private case class Retry(reason: String)
   final private case class Fetched(header: BlockHeader)
 

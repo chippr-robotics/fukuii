@@ -20,9 +20,8 @@ import com.chipprbots.scalanet.discovery.ethereum.EthereumNodeRecord
   * CANNOT distinguish an ETC peer from an ETH peer. The forkId (EIP-2124), embedded in the ENR at discovery time, is
   * the ONLY reliable peer filter. These tests verify that:
   *
-  *   1. Mordor's forkId is rejected by ETC mainnet's ForkIdTag (and vice versa)
-  *   2. ETH forkIds are rejected by ETC mainnet's ForkIdTag
-  *   3. The Olympia fork signal state machine transitions correctly through all three states
+  *   1. Mordor's forkId is rejected by ETC mainnet's ForkIdTag (and vice versa) 2. ETH forkIds are rejected by ETC
+  *      mainnet's ForkIdTag 3. The Olympia fork signal state machine transitions correctly through all three states
   */
 class NetworkForkIdFilteringSpec extends AnyWordSpec with Matchers {
 
@@ -110,8 +109,8 @@ class NetworkForkIdFilteringSpec extends AnyWordSpec with Matchers {
   }
 
   private val olympiaConf = etcConf.copy(
-      forkBlockNumbers = etcConf.forkBlockNumbers.copy(olympiaBlockNumber = 30000000)
-    )
+    forkBlockNumbers = etcConf.forkBlockNumbers.copy(olympiaBlockNumber = 30000000)
+  )
 
   "Olympia fork signal state machine" must {
 
@@ -135,8 +134,8 @@ class NetworkForkIdFilteringSpec extends AnyWordSpec with Matchers {
     // ForkId = new Olympia hash, next=None.
     "emit Olympia hash/None when past the Olympia activation block" in {
       val id = ForkId.create(etcGenesisHash, olympiaConf)(30000000)
-      id.hash should not equal 0xbe46d57cL // hash changes at fork
-      id.next shouldBe None                // no upcoming fork known
+      (id.hash should not).equal(0xbe46d57cL) // hash changes at fork
+      id.next shouldBe None // no upcoming fork known
     }
 
     // The filter must reject ETH peers in all three states (regression guard for the Olympia-pending bug).

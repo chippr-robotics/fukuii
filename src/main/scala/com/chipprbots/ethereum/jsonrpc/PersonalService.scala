@@ -198,8 +198,6 @@ class PersonalService(
       case None => IO.pure(Left(AccountLocked))
     }
 
-
-
   private def sendTransaction(request: TransactionRequest, wallet: Wallet): IO[ByteString] = {
     implicit val timeout: Timeout = Timeout(txPoolConfig.pendingTxManagerQueryTimeout)
 

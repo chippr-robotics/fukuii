@@ -517,7 +517,10 @@ class PeerActorSpec
     manager.expectTerminated(peer)
   }
 
-  it should "forward PeerClosedConnection with AlreadyConnected to parent when Disconnect(AlreadyConnected) is received" taggedAs (UnitTest, NetworkTest) in new TestSetup {
+  it should "forward PeerClosedConnection with AlreadyConnected to parent when Disconnect(AlreadyConnected) is received" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
     val parentProbe = TestProbe()
 
     val peerWithParent: TestActorRef[Nothing] = TestActorRef(

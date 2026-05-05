@@ -29,9 +29,9 @@ class PivotHeaderBootstrapSpec
 
   val targetBlock: BigInt = 1000
   val correctHeader: BlockHeader = Fixtures.Blocks.Block3125369.header.copy(number = targetBlock)
-  val wrongHeader: BlockHeader   = Fixtures.Blocks.Block3125369.header.copy(number = BigInt(999))
+  val wrongHeader: BlockHeader = Fixtures.Blocks.Block3125369.header.copy(number = BigInt(999))
 
-  val ds        = EphemDataSource()
+  val ds = EphemDataSource()
   val noopBatch = DataSourceBatchUpdate(ds, Array.empty)
 
   val noopWriter: BlockchainWriter = new BlockchainWriter(null, null, null, null, null, null, null) {
@@ -44,6 +44,7 @@ class PivotHeaderBootstrapSpec
   }
 
   val testPeer: Peer = Peer(PeerId("test-peer"), new InetSocketAddress("127.0.0.1", 9999), TestProbe().ref, false)
+  val testPeer2: Peer = Peer(PeerId("test-peer-2"), new InetSocketAddress("127.0.0.1", 9998), TestProbe().ref, false)
 
   /** Creates a PivotHeaderBootstrap under a wrapper actor that forwards all parent messages to parentProbe. */
   def mkBootstrap(
@@ -52,6 +53,7 @@ class PivotHeaderBootstrapSpec
       writer: BlockchainWriter = noopWriter,
       maxAttempts: Int = 1,
       retryDelay: FiniteDuration = 50.millis,
+      waitForPeerDelay: FiniteDuration = 50.millis,
       preferSnapPeers: Boolean = false
   ): ActorRef = {
     val bootstrapProps = PivotHeaderBootstrap.props(
@@ -63,18 +65,22 @@ class PivotHeaderBootstrapSpec
       maxAttempts = maxAttempts,
       initialRetryDelay = retryDelay,
       maxRetryDelay = retryDelay,
+      waitForPeerDelay = waitForPeerDelay,
       preferSnapPeers = preferSnapPeers
     )(system.dispatcher)
 
     system.actorOf(Props(new Actor {
       override def preStart(): Unit = context.actorOf(bootstrapProps, "phb")
-      override def receive: Receive = { case msg => parentProbe.ref forward msg }
+      override def receive: Receive = { case msg => parentProbe.ref.forward(msg) }
     }))
   }
 
-  "PivotHeaderBootstrap" should "send Completed to parent when peer returns the correct header" taggedAs (UnitTest, SyncTest) in {
+  "PivotHeaderBootstrap" should "send Completed to parent when peer returns the correct header" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
     val peersClient = TestProbe()
-    val parent      = TestProbe()
+    val parent = TestProbe()
     mkBootstrap(peersClient, parent)
 
     peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
@@ -85,7 +91,7 @@ class PivotHeaderBootstrapSpec
 
   it should "send Failed after maxAttempts when peer returns a wrong-number header" taggedAs (UnitTest, SyncTest) in {
     val peersClient = TestProbe()
-    val parent      = TestProbe()
+    val parent = TestProbe()
     mkBootstrap(peersClient, parent)
 
     peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
@@ -96,7 +102,7 @@ class PivotHeaderBootstrapSpec
 
   it should "send Failed after maxAttempts when peer returns an empty headers list" taggedAs (UnitTest, SyncTest) in {
     val peersClient = TestProbe()
-    val parent      = TestProbe()
+    val parent = TestProbe()
     mkBootstrap(peersClient, parent)
 
     peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
@@ -107,7 +113,7 @@ class PivotHeaderBootstrapSpec
 
   it should "send Failed after maxAttempts on RequestFailed" taggedAs (UnitTest, SyncTest) in {
     val peersClient = TestProbe()
-    val parent      = TestProbe()
+    val parent = TestProbe()
     mkBootstrap(peersClient, parent)
 
     peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
@@ -116,9 +122,12 @@ class PivotHeaderBootstrapSpec
     parent.expectMsgType[PivotHeaderBootstrap.Failed](3.seconds)
   }
 
-  it should "fall back to BestPeerWithMinBlock and complete when preferSnapPeers is set but no SNAP peer available" taggedAs (UnitTest, SyncTest) in {
+  it should "fall back to BestPeerWithMinBlock and complete when preferSnapPeers is set but no SNAP peer available" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
     val peersClient = TestProbe()
-    val parent      = TestProbe()
+    val parent = TestProbe()
     mkBootstrap(peersClient, parent, preferSnapPeers = true)
 
     // First request uses BestSnapPeer — no SNAP peer available
@@ -132,14 +141,59 @@ class PivotHeaderBootstrapSpec
     parent.expectMsg(3.seconds, PivotHeaderBootstrap.Completed(targetBlock, correctHeader))
   }
 
-  it should "send Failed to parent when blockchainWriter throws during storeBlockHeader" taggedAs (UnitTest, SyncTest) in {
+  it should "send Failed to parent when blockchainWriter throws during storeBlockHeader" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
     val peersClient = TestProbe()
-    val parent      = TestProbe()
+    val parent = TestProbe()
     mkBootstrap(peersClient, parent, writer = throwingWriter)
 
     peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
     peersClient.reply(PeersClient.Response(testPeer, ETH66.BlockHeaders(0, Seq(correctHeader))))
 
     parent.expectMsgType[PivotHeaderBootstrap.Failed](3.seconds)
+  }
+
+  it should "try a different peer on the second attempt after the first returns a wrong header" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
+    val peersClient = TestProbe()
+    val parent = TestProbe()
+    mkBootstrap(peersClient, parent, maxAttempts = 2)
+
+    // Attempt 1 — testPeer returns wrong header (added to triedPeers)
+    peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
+    peersClient.reply(PeersClient.Response(testPeer, ETH66.BlockHeaders(0, Seq(wrongHeader))))
+
+    // Attempt 2 — testPeer2 (testPeer excluded by BestPeerWithMinBlockExcluding) returns correct header
+    peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
+    peersClient.reply(PeersClient.Response(testPeer2, ETH66.BlockHeaders(0, Seq(correctHeader))))
+
+    parent.expectMsg(3.seconds, PivotHeaderBootstrap.Completed(targetBlock, correctHeader))
+  }
+
+  it should "schedule a WaitForPeer delay without consuming an attempt when pool returns NoSuitablePeer" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
+    val peersClient = TestProbe()
+    val parent = TestProbe()
+    // maxAttempts=1: if WaitForPeer incorrectly consumed an attempt, Failed would arrive during the wait
+    mkBootstrap(peersClient, parent, maxAttempts = 1, waitForPeerDelay = 50.millis)
+
+    // First request returns NoSuitablePeer → WaitForPeer scheduled, NOT Failed
+    peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
+    peersClient.reply(PeersClient.NoSuitablePeer)
+
+    // Must not send Failed during the WaitForPeer window
+    parent.expectNoMessage(200.millis)
+
+    // WaitForPeer fires, bootstrap retries — a fresh peer is now available
+    peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
+    peersClient.reply(PeersClient.Response(testPeer, ETH66.BlockHeaders(0, Seq(correctHeader))))
+
+    parent.expectMsg(3.seconds, PivotHeaderBootstrap.Completed(targetBlock, correctHeader))
   }
 }

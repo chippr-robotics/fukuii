@@ -20,10 +20,39 @@ class DnsDiscoveryEnrSpec extends AnyFlatSpec with Matchers {
   // secp256k1 generator point G in compressed form (33 bytes: 0x02 + x-coordinate).
   // Using G makes every test independent of key generation — it's a canonical valid point.
   private val validCompressedKey: Array[Byte] = Array(
-    0x02, 0x79, 0xbe.toByte, 0x66, 0x7e, 0xf9.toByte, 0xdc.toByte, 0xbb.toByte,
-    0xac.toByte, 0x55, 0xa0.toByte, 0x62, 0x95.toByte, 0xce.toByte, 0x87.toByte, 0x0b,
-    0x07, 0x02, 0x9b.toByte, 0xfc.toByte, 0xdb.toByte, 0x2d, 0xce.toByte, 0x28,
-    0xd9.toByte, 0x59, 0xf2.toByte, 0x81.toByte, 0x5b, 0x16, 0xf8.toByte, 0x17, 0x98.toByte
+    0x02,
+    0x79,
+    0xbe.toByte,
+    0x66,
+    0x7e,
+    0xf9.toByte,
+    0xdc.toByte,
+    0xbb.toByte,
+    0xac.toByte,
+    0x55,
+    0xa0.toByte,
+    0x62,
+    0x95.toByte,
+    0xce.toByte,
+    0x87.toByte,
+    0x0b,
+    0x07,
+    0x02,
+    0x9b.toByte,
+    0xfc.toByte,
+    0xdb.toByte,
+    0x2d,
+    0xce.toByte,
+    0x28,
+    0xd9.toByte,
+    0x59,
+    0xf2.toByte,
+    0x81.toByte,
+    0x5b,
+    0x16,
+    0xf8.toByte,
+    0x17,
+    0x98.toByte
   ).map(_.toByte)
 
   private def buildEnr(
@@ -35,10 +64,13 @@ class DnsDiscoveryEnrSpec extends AnyFlatSpec with Matchers {
   ): String = {
     val base: Seq[RLPEncodeable] = Seq(
       RLPValue(Array.fill(64)(0.toByte)), // signature placeholder
-      RLPValue(Array(0.toByte)),           // seq = 0
-      RLPValue("ip".getBytes("UTF-8")), RLPValue(ip),
-      RLPValue("tcp".getBytes("UTF-8")), RLPValue(tcp),
-      RLPValue("secp256k1".getBytes("UTF-8")), RLPValue(pubkey)
+      RLPValue(Array(0.toByte)), // seq = 0
+      RLPValue("ip".getBytes("UTF-8")),
+      RLPValue(ip),
+      RLPValue("tcp".getBytes("UTF-8")),
+      RLPValue(tcp),
+      RLPValue("secp256k1".getBytes("UTF-8")),
+      RLPValue(pubkey)
     ) ++ udp.fold(Seq.empty[RLPEncodeable]) { u =>
       Seq(RLPValue("udp".getBytes("UTF-8")), RLPValue(u))
     } ++ extraFields
@@ -54,7 +86,7 @@ class DnsDiscoveryEnrSpec extends AnyFlatSpec with Matchers {
     result.get should startWith("enode://")
     result.get should include("@127.0.0.1:8080")
     val nodeId = result.get.stripPrefix("enode://").takeWhile(_ != '@')
-    nodeId should have length 128 // 64 bytes hex-encoded
+    (nodeId should have).length(128) // 64 bytes hex-encoded
   }
 
   it should "produce ?discport suffix when udp port differs from tcp port" taggedAs UnitTest in {
@@ -72,38 +104,50 @@ class DnsDiscoveryEnrSpec extends AnyFlatSpec with Matchers {
     val enr = buildEnr(tcp = port, udp = Some(port))
     val result = DnsDiscovery.parseEnrToEnode(enr)
     result shouldBe defined
-    result.get should not include "discport"
+    (result.get should not).include("discport")
   }
 
   it should "return None when ip field is missing" taggedAs UnitTest in {
-    val bytes = encode(RLPList(
-      RLPValue(Array.fill(64)(0.toByte)),
-      RLPValue(Array(0.toByte)),
-      RLPValue("tcp".getBytes("UTF-8")), RLPValue(Array(0x1f, 0x90.toByte).map(_.toByte)),
-      RLPValue("secp256k1".getBytes("UTF-8")), RLPValue(validCompressedKey)
-    ))
+    val bytes = encode(
+      RLPList(
+        RLPValue(Array.fill(64)(0.toByte)),
+        RLPValue(Array(0.toByte)),
+        RLPValue("tcp".getBytes("UTF-8")),
+        RLPValue(Array(0x1f, 0x90.toByte).map(_.toByte)),
+        RLPValue("secp256k1".getBytes("UTF-8")),
+        RLPValue(validCompressedKey)
+      )
+    )
     val enr = "enr:" + Base64.getUrlEncoder.withoutPadding.encodeToString(bytes)
     DnsDiscovery.parseEnrToEnode(enr) shouldBe None
   }
 
   it should "return None when tcp field is missing" taggedAs UnitTest in {
-    val bytes = encode(RLPList(
-      RLPValue(Array.fill(64)(0.toByte)),
-      RLPValue(Array(0.toByte)),
-      RLPValue("ip".getBytes("UTF-8")), RLPValue(Array(127, 0, 0, 1).map(_.toByte)),
-      RLPValue("secp256k1".getBytes("UTF-8")), RLPValue(validCompressedKey)
-    ))
+    val bytes = encode(
+      RLPList(
+        RLPValue(Array.fill(64)(0.toByte)),
+        RLPValue(Array(0.toByte)),
+        RLPValue("ip".getBytes("UTF-8")),
+        RLPValue(Array(127, 0, 0, 1).map(_.toByte)),
+        RLPValue("secp256k1".getBytes("UTF-8")),
+        RLPValue(validCompressedKey)
+      )
+    )
     val enr = "enr:" + Base64.getUrlEncoder.withoutPadding.encodeToString(bytes)
     DnsDiscovery.parseEnrToEnode(enr) shouldBe None
   }
 
   it should "return None when secp256k1 field is missing" taggedAs UnitTest in {
-    val bytes = encode(RLPList(
-      RLPValue(Array.fill(64)(0.toByte)),
-      RLPValue(Array(0.toByte)),
-      RLPValue("ip".getBytes("UTF-8")), RLPValue(Array(127, 0, 0, 1).map(_.toByte)),
-      RLPValue("tcp".getBytes("UTF-8")), RLPValue(Array(0x1f, 0x90.toByte).map(_.toByte))
-    ))
+    val bytes = encode(
+      RLPList(
+        RLPValue(Array.fill(64)(0.toByte)),
+        RLPValue(Array(0.toByte)),
+        RLPValue("ip".getBytes("UTF-8")),
+        RLPValue(Array(127, 0, 0, 1).map(_.toByte)),
+        RLPValue("tcp".getBytes("UTF-8")),
+        RLPValue(Array(0x1f, 0x90.toByte).map(_.toByte))
+      )
+    )
     val enr = "enr:" + Base64.getUrlEncoder.withoutPadding.encodeToString(bytes)
     DnsDiscovery.parseEnrToEnode(enr) shouldBe None
   }
@@ -138,10 +182,12 @@ class DnsDiscoveryEnrSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "return None for RLP list with fewer than 4 items" taggedAs UnitTest in {
-    val bytes = encode(RLPList(
-      RLPValue(Array.fill(64)(0.toByte)),
-      RLPValue(Array(0.toByte))
-    ))
+    val bytes = encode(
+      RLPList(
+        RLPValue(Array.fill(64)(0.toByte)),
+        RLPValue(Array(0.toByte))
+      )
+    )
     val enr = "enr:" + Base64.getUrlEncoder.withoutPadding.encodeToString(bytes)
     DnsDiscovery.parseEnrToEnode(enr) shouldBe None
   }
@@ -162,42 +208,56 @@ class DnsDiscoveryEnrSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "ignore unknown key-value fields in ENR" taggedAs UnitTest in {
-    val enr = buildEnr(extraFields = Seq(
-      RLPValue("eth".getBytes("UTF-8")),
-      RLPValue(Array(0xDE.toByte, 0xAD.toByte, 0xBE.toByte, 0xEF.toByte))
-    ))
+    val enr = buildEnr(extraFields =
+      Seq(
+        RLPValue("eth".getBytes("UTF-8")),
+        RLPValue(Array(0xde.toByte, 0xad.toByte, 0xbe.toByte, 0xef.toByte))
+      )
+    )
     DnsDiscovery.parseEnrToEnode(enr) shouldBe defined
   }
 
   it should "prefer IPv4 over IPv6 when both present" taggedAs UnitTest in {
     val ipv6Bytes = Array.fill(16)(0.toByte)
     ipv6Bytes(15) = 1.toByte // ::1
-    val bytes = encode(RLPList(
-      RLPValue(Array.fill(64)(0.toByte)),
-      RLPValue(Array(0.toByte)),
-      RLPValue("ip".getBytes("UTF-8")), RLPValue(Array(10, 0, 0, 1).map(_.toByte)),
-      RLPValue("tcp".getBytes("UTF-8")), RLPValue(Array(0x1f, 0x90.toByte).map(_.toByte)),
-      RLPValue("secp256k1".getBytes("UTF-8")), RLPValue(validCompressedKey),
-      RLPValue("ip6".getBytes("UTF-8")), RLPValue(ipv6Bytes),
-      RLPValue("tcp6".getBytes("UTF-8")), RLPValue(Array(0x1f, 0x90.toByte).map(_.toByte))
-    ))
+    val bytes = encode(
+      RLPList(
+        RLPValue(Array.fill(64)(0.toByte)),
+        RLPValue(Array(0.toByte)),
+        RLPValue("ip".getBytes("UTF-8")),
+        RLPValue(Array(10, 0, 0, 1).map(_.toByte)),
+        RLPValue("tcp".getBytes("UTF-8")),
+        RLPValue(Array(0x1f, 0x90.toByte).map(_.toByte)),
+        RLPValue("secp256k1".getBytes("UTF-8")),
+        RLPValue(validCompressedKey),
+        RLPValue("ip6".getBytes("UTF-8")),
+        RLPValue(ipv6Bytes),
+        RLPValue("tcp6".getBytes("UTF-8")),
+        RLPValue(Array(0x1f, 0x90.toByte).map(_.toByte))
+      )
+    )
     val enr = "enr:" + Base64.getUrlEncoder.withoutPadding.encodeToString(bytes)
     val result = DnsDiscovery.parseEnrToEnode(enr)
     result shouldBe defined
     result.get should include("10.0.0.1") // IPv4 wins
-    result.get should not include "::1"
+    (result.get should not).include("::1")
   }
 
   it should "fall back to IPv6 when IPv4 is absent" taggedAs UnitTest in {
     val ipv6Bytes = Array.fill(16)(0.toByte)
     ipv6Bytes(15) = 1.toByte // ::1
-    val bytes = encode(RLPList(
-      RLPValue(Array.fill(64)(0.toByte)),
-      RLPValue(Array(0.toByte)),
-      RLPValue("ip6".getBytes("UTF-8")), RLPValue(ipv6Bytes),
-      RLPValue("tcp6".getBytes("UTF-8")), RLPValue(Array(0x1f, 0x90.toByte).map(_.toByte)),
-      RLPValue("secp256k1".getBytes("UTF-8")), RLPValue(validCompressedKey)
-    ))
+    val bytes = encode(
+      RLPList(
+        RLPValue(Array.fill(64)(0.toByte)),
+        RLPValue(Array(0.toByte)),
+        RLPValue("ip6".getBytes("UTF-8")),
+        RLPValue(ipv6Bytes),
+        RLPValue("tcp6".getBytes("UTF-8")),
+        RLPValue(Array(0x1f, 0x90.toByte).map(_.toByte)),
+        RLPValue("secp256k1".getBytes("UTF-8")),
+        RLPValue(validCompressedKey)
+      )
+    )
     val enr = "enr:" + Base64.getUrlEncoder.withoutPadding.encodeToString(bytes)
     val result = DnsDiscovery.parseEnrToEnode(enr)
     result shouldBe defined
@@ -209,7 +269,7 @@ class DnsDiscoveryEnrSpec extends AnyFlatSpec with Matchers {
     val result = DnsDiscovery.parseEnrToEnode(enr)
     result shouldBe defined
     val nodeId = result.get.stripPrefix("enode://").takeWhile(_ != '@')
-    nodeId should have length 128
-    all(nodeId.toCharArray) should (be >= '0' and be <= 'f') // hex chars
+    (nodeId should have).length(128)
+    all(nodeId.toCharArray) should ((be >= '0').and(be <= 'f')) // hex chars
   }
 }

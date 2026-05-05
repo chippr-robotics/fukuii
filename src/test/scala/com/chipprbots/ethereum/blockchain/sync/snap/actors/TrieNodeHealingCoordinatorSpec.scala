@@ -492,7 +492,7 @@ class TrieNodeHealingCoordinatorSpec
     val MaxConsecutiveStagnations = 3
     var stagnatedSignals = 0
 
-    def tick(recentHealed: Int, hasPending: Boolean): Unit = {
+    def tick(recentHealed: Int, hasPending: Boolean): Unit =
       if (!pivotRefreshRequested && recentHealed == 0 && hasPending) {
         consecutiveStagnations += 1
         if (consecutiveStagnations >= MaxConsecutiveStagnations) {
@@ -503,7 +503,6 @@ class TrieNodeHealingCoordinatorSpec
       } else if (recentHealed > 0) {
         consecutiveStagnations = 0
       }
-    }
 
     // First escalation
     for (_ <- 1 to MaxConsecutiveStagnations) tick(0, hasPending = true)
@@ -521,7 +520,7 @@ class TrieNodeHealingCoordinatorSpec
     val MaxConsecutiveStagnations = 3
     var stagnatedSignals = 0
 
-    def tick(recentHealed: Int, hasPending: Boolean): Unit = {
+    def tick(recentHealed: Int, hasPending: Boolean): Unit =
       if (!pivotRefreshRequested && recentHealed == 0 && hasPending) {
         consecutiveStagnations += 1
         if (consecutiveStagnations >= MaxConsecutiveStagnations) {
@@ -532,7 +531,6 @@ class TrieNodeHealingCoordinatorSpec
       } else if (recentHealed > 0) {
         consecutiveStagnations = 0
       }
-    }
 
     // First escalation
     for (_ <- 1 to MaxConsecutiveStagnations) tick(0, hasPending = true)

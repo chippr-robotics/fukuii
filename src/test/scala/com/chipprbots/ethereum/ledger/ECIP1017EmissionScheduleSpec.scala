@@ -12,14 +12,14 @@ import com.chipprbots.ethereum.utils.MonetaryPolicyConfig
   * naming the networks. These tests are pinned to production config values for ETC mainnet and Mordor testnet, and
   * verify the reward at real fork block heights (Spiral, era transitions) to serve as regression guards.
   *
-  * Reference: ECIP-1017 (ETC monetary policy), core-geth params/config_classic.go (chainId=61),
-  * core-geth params/config_mordor.go (chainId=63).
+  * Reference: ECIP-1017 (ETC monetary policy), core-geth params/config_classic.go (chainId=61), core-geth
+  * params/config_mordor.go (chainId=63).
   *
-  * ETC mainnet production config (from etc-chain.conf):
-  *   eraDuration=5,000,000, reductionRate=0.20, firstEraBlockReward=5 ETC, byzantium=10^18 (disabled)
+  * ETC mainnet production config (from etc-chain.conf): eraDuration=5,000,000, reductionRate=0.20,
+  * firstEraBlockReward=5 ETC, byzantium=10^18 (disabled)
   *
-  * Mordor testnet production config (from mordor-chain.conf):
-  *   eraDuration=2,000,000, reductionRate=0.20, firstEraBlockReward=5 ETC, byzantium=10^18 (disabled)
+  * Mordor testnet production config (from mordor-chain.conf): eraDuration=2,000,000, reductionRate=0.20,
+  * firstEraBlockReward=5 ETC, byzantium=10^18 (disabled)
   */
 class ECIP1017EmissionScheduleSpec extends AnyFlatSpec with Matchers {
 
@@ -50,7 +50,10 @@ class ECIP1017EmissionScheduleSpec extends AnyFlatSpec with Matchers {
   // ETC mainnet era boundaries
   // -----------------------------------------------------------------------
 
-  "ETC mainnet ECIP-1017 emission" should "pay 5 ETC in era 0 (blocks 1-5,000,000)" taggedAs (UnitTest, ConsensusTest) in {
+  "ETC mainnet ECIP-1017 emission" should "pay 5 ETC in era 0 (blocks 1-5,000,000)" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
     val reward5ETC = BigInt("5000000000000000000")
     etcCalc.calculateMiningRewardForBlock(1) shouldBe reward5ETC
     etcCalc.calculateMiningRewardForBlock(5000000) shouldBe reward5ETC
@@ -86,11 +89,11 @@ class ECIP1017EmissionScheduleSpec extends AnyFlatSpec with Matchers {
 
   it should "confirm the era boundary is at the last block of era 0, not the first block" taggedAs
     (UnitTest, ConsensusTest) in {
-    // Block 5,000,000 is still era 0: (5000000 - 1) / 5000000 = 0
-    etcCalc.calculateMiningRewardForBlock(5000000) shouldBe BigInt("5000000000000000000")
-    // Block 5,000,001 is era 1: (5000001 - 1) / 5000000 = 1
-    etcCalc.calculateMiningRewardForBlock(5000001) shouldBe BigInt("4000000000000000000")
-  }
+      // Block 5,000,000 is still era 0: (5000000 - 1) / 5000000 = 0
+      etcCalc.calculateMiningRewardForBlock(5000000) shouldBe BigInt("5000000000000000000")
+      // Block 5,000,001 is era 1: (5000001 - 1) / 5000000 = 1
+      etcCalc.calculateMiningRewardForBlock(5000001) shouldBe BigInt("4000000000000000000")
+    }
 
   // -----------------------------------------------------------------------
   // ETC mainnet uncle inclusion reward (1/32 of block reward)
@@ -114,9 +117,9 @@ class ECIP1017EmissionScheduleSpec extends AnyFlatSpec with Matchers {
 
   "Mordor testnet ECIP-1017 emission" should "pay 5 ETC in era 0 (blocks 1-2,000,000)" taggedAs
     (UnitTest, ConsensusTest) in {
-    mordorCalc.calculateMiningRewardForBlock(1) shouldBe BigInt("5000000000000000000")
-    mordorCalc.calculateMiningRewardForBlock(2000000) shouldBe BigInt("5000000000000000000")
-  }
+      mordorCalc.calculateMiningRewardForBlock(1) shouldBe BigInt("5000000000000000000")
+      mordorCalc.calculateMiningRewardForBlock(2000000) shouldBe BigInt("5000000000000000000")
+    }
 
   it should "pay 4 ETC at the first block of era 1 (block 2,000,001)" taggedAs (UnitTest, ConsensusTest) in {
     mordorCalc.calculateMiningRewardForBlock(2000001) shouldBe BigInt("4000000000000000000")
@@ -143,10 +146,10 @@ class ECIP1017EmissionScheduleSpec extends AnyFlatSpec with Matchers {
 
   "ETC vs Mordor era schedule" should "use different era durations (5M vs 2M blocks)" taggedAs
     (UnitTest, ConsensusTest) in {
-    // Block 3,000,000: ETC still in era 0 (5 ETC), Mordor already in era 1 (4 ETC)
-    etcCalc.calculateMiningRewardForBlock(3000000) shouldBe BigInt("5000000000000000000")
-    mordorCalc.calculateMiningRewardForBlock(3000000) shouldBe BigInt("4000000000000000000")
-  }
+      // Block 3,000,000: ETC still in era 0 (5 ETC), Mordor already in era 1 (4 ETC)
+      etcCalc.calculateMiningRewardForBlock(3000000) shouldBe BigInt("5000000000000000000")
+      mordorCalc.calculateMiningRewardForBlock(3000000) shouldBe BigInt("4000000000000000000")
+    }
 
   it should "converge on the same reward in matching eras" taggedAs (UnitTest, ConsensusTest) in {
     // Both networks use the same reduction ratio — era N reward is the same regardless of eraDuration.

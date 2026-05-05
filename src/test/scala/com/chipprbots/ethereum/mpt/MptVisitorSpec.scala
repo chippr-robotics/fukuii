@@ -49,7 +49,8 @@ class MptVisitorSpec extends AnyFunSuite with ScalaCheckPropertyChecks {
   // Returns (reconstructedKeyBytes → valueBytes) pairs.
   private def walkWithPaths(rootHash: Array[Byte], storage: MptStorage): Seq[(ByteString, ByteString)] = {
     val collected = mutable.ArrayBuffer.empty[(ByteString, ByteString)]
-    val visitor = new PathTrackingLeafWalkVisitor(storage, ByteString(), (path, leaf) => collected += ((path, leaf.value)))
+    val visitor =
+      new PathTrackingLeafWalkVisitor(storage, ByteString(), (path, leaf) => collected += ((path, leaf.value)))
     MptTraversals.dispatch(HashNode(rootHash), visitor)
     collected.toSeq
   }
@@ -104,7 +105,11 @@ class MptVisitorSpec extends AnyFunSuite with ScalaCheckPropertyChecks {
     assert(leaves.size == 16, s"Expected 16 leaves, got ${leaves.size}")
   }
 
-  test("LeafWalkVisitor visits no leaf twice (all visited values are distinct when values are unique)", UnitTest, MPTTest) {
+  test(
+    "LeafWalkVisitor visits no leaf twice (all visited values are distinct when values are unique)",
+    UnitTest,
+    MPTTest
+  ) {
     val storage = freshStorage()
     val entries = (0 until 8).map(i => (Array[Byte](i.toByte, 0x00.toByte), Array[Byte](i.toByte)))
     val trie = entries.foldLeft(freshTrie(storage)) { case (t, (k, v)) => t.put(k, v) }
@@ -128,8 +133,7 @@ class MptVisitorSpec extends AnyFunSuite with ScalaCheckPropertyChecks {
       }
       val leaves = walkLeaves(trie.getRootHash, storage)
       // map keys are distinct so trie has exactly pairs.size entries
-      assert(leaves.size == pairs.size,
-        s"Expected ${pairs.size} leaves, got ${leaves.size}")
+      assert(leaves.size == pairs.size, s"Expected ${pairs.size} leaves, got ${leaves.size}")
     }
   }
 
@@ -152,9 +156,11 @@ class MptVisitorSpec extends AnyFunSuite with ScalaCheckPropertyChecks {
     val paths = walkWithPaths(trie.getRootHash, storage)
     assert(paths.size == 1, s"Expected 1 entry, got ${paths.size}")
     // The visitor converts nibble pairs back to bytes: 0xA||0xB → 0xAB, 0xC||0xD → 0xCD
-    assert(paths.head._1.toArray.sameElements(key),
+    assert(
+      paths.head._1.toArray.sameElements(key),
       s"Key mismatch: expected ${key.map(b => f"$b%02x").mkString}, " +
-        s"got ${paths.head._1.toArray.map(b => f"$b%02x").mkString}")
+        s"got ${paths.head._1.toArray.map(b => f"$b%02x").mkString}"
+    )
     assert(paths.head._2.toArray.sameElements(value))
   }
 
@@ -172,8 +178,7 @@ class MptVisitorSpec extends AnyFunSuite with ScalaCheckPropertyChecks {
 
     val reconstructedKeys = paths.map(_._1.toArray.toSeq).toSet
     val originalKeys = entries.keys.map(_.toSeq).toSet
-    assert(reconstructedKeys == originalKeys,
-      "Reconstructed keys do not match originals")
+    assert(reconstructedKeys == originalKeys, "Reconstructed keys do not match originals")
   }
 
   test("PathTrackingLeafWalkVisitor handles all-zero and all-one byte keys", UnitTest, MPTTest) {
@@ -188,13 +193,15 @@ class MptVisitorSpec extends AnyFunSuite with ScalaCheckPropertyChecks {
   }
 
   test("PathTrackingLeafWalkVisitor reconstructs keys for random inputs (property-based)", UnitTest, MPTTest) {
-    val pairsGen: Gen[Map[Seq[Byte], Seq[Byte]]] = Gen.mapOf(
-      for {
-        // Use fixed-length 2-byte keys so nibble count is always even and reconstruction is unambiguous
-        k <- Gen.listOfN(2, Arbitrary.arbitrary[Byte])
-        v <- Gen.nonEmptyListOf(Arbitrary.arbitrary[Byte])
-      } yield (k, v)
-    ).suchThat(_.nonEmpty)
+    val pairsGen: Gen[Map[Seq[Byte], Seq[Byte]]] = Gen
+      .mapOf(
+        for {
+          // Use fixed-length 2-byte keys so nibble count is always even and reconstruction is unambiguous
+          k <- Gen.listOfN(2, Arbitrary.arbitrary[Byte])
+          v <- Gen.nonEmptyListOf(Arbitrary.arbitrary[Byte])
+        } yield (k, v)
+      )
+      .suchThat(_.nonEmpty)
 
     forAll(pairsGen) { (pairs: Map[Seq[Byte], Seq[Byte]]) =>
       val storage = freshStorage()
@@ -206,8 +213,7 @@ class MptVisitorSpec extends AnyFunSuite with ScalaCheckPropertyChecks {
 
       val reconstructed = paths.map(_._1.toArray.toSeq).toSet
       val expected = pairs.keys.toSet
-      assert(reconstructed == expected,
-        s"Key reconstruction failed. Expected $expected, got $reconstructed")
+      assert(reconstructed == expected, s"Key reconstruction failed. Expected $expected, got $reconstructed")
     }
   }
 }

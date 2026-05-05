@@ -370,7 +370,7 @@ class PeerManagerSpec
     UnitTest,
     NetworkTest
   ) in new TestSetup {
-    val hexNodeId   = "aa" * 64 // 64-byte node ID as 128-char hex
+    val hexNodeId = "aa" * 64 // 64-byte node ID as 128-char hex
     val nodeIdBytes = ByteString(Hex.decode(hexNodeId))
     val maintainedUri = new URI(s"enode://$hexNodeId@127.0.0.5:30303")
 
@@ -413,7 +413,7 @@ class PeerManagerSpec
     UnitTest,
     NetworkTest
   ) in new TestSetup {
-    val hexNodeId   = "bb" * 64
+    val hexNodeId = "bb" * 64
     val nodeIdBytes = ByteString(Hex.decode(hexNodeId))
     val maintainedUri = new URI(s"enode://$hexNodeId@127.0.0.5:30303")
 
