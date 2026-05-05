@@ -47,6 +47,16 @@ object ForkId {
 
   val noFork: BigInt = BigInt("1000000000000000000")
 
+  // Two sentinels mark "fork not activated":
+  //   * 10^18  — the value used in *.chain.conf (`val noFork`)
+  //   * Long.MaxValue — the in-code fallback when the conf key is missing
+  //     (BlockchainConfig.fromRawConfig and ForkBlockNumbers.Empty)
+  // Both must be filtered out of the EIP-2124 fork-id checksum chain.
+  // See ForkBlockNumbers.mergeNetsplitBlockNumber: only sepolia-chain.conf
+  // sets `merge-netsplit-block-number`, so all other chains hit the
+  // Long.MaxValue branch and previously polluted gatherBlockForks.
+  private val maxBlockSentinel: BigInt = BigInt(Long.MaxValue)
+
   def gatherForks(config: BlockchainConfig): List[BigInt] =
     (gatherBlockForks(config) ++ gatherTimestampForks(config)).distinct.sorted
 
@@ -56,7 +66,7 @@ object ForkId {
       else None
     }
     (maybeDaoBlock.toList ++ config.forkBlockNumbers.all)
-      .filterNot(v => v == 0 || v == noFork)
+      .filterNot(v => v == 0 || v == noFork || v == maxBlockSentinel)
       .distinct
       .sorted
   }

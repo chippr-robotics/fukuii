@@ -79,7 +79,17 @@ FLAGS="$FLAGS -Dfukuii.blockchains.hive.istanbul-block-number=$ISTANBUL"
 FLAGS="$FLAGS -Dfukuii.blockchains.hive.muir-glacier-block-number=$MUIRGLACIER"
 FLAGS="$FLAGS -Dfukuii.blockchains.hive.berlin-block-number=$BERLIN"
 FLAGS="$FLAGS -Dfukuii.blockchains.hive.olympia-block-number=$LONDON"
-FLAGS="$FLAGS -Dfukuii.blockchains.hive.terminal-total-difficulty=$TTD"
+
+# Terminal total difficulty: only set when the hive sim explicitly provides one.
+# fukuii's SNAPSyncController treats `terminal-total-difficulty.isDefined` as
+# "post-merge chain" and then waits for engine_forkchoiceUpdated from the CL
+# before picking a SNAP pivot (engine-api-required = true is the sync.conf
+# default — see #1208). Pre-merge hive sims (including ethereum/sync) have no
+# CL, so passing the $MAX sentinel here would wedge the sink at head=0 for the
+# full 60s simulator budget and fail every fukuii-tagged sync sub-test.
+if [ "$TTD" != "$MAX" ]; then
+    FLAGS="$FLAGS -Dfukuii.blockchains.hive.terminal-total-difficulty=$TTD"
+fi
 
 # Timestamp-based forks
 [ -n "$SHANGHAI_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.shanghai-timestamp=$SHANGHAI_TS"
