@@ -238,10 +238,11 @@ class SnapServerLimitsSpec extends AnyFlatSpec with Matchers {
     math.min(math.max(bigReq.toInt, 0), twoMB) shouldBe twoMB
   }
 
-  it should "return empty entries when root is not in storage" taggedAs UnitTest in {
+  it should "return empty response when root is not in storage" taggedAs UnitTest in {
     val storage = new TestMptStorage()
     val unknownRoot = kec256(ByteString("unknown-root"))
-    // Request a single-element pathset — root missing → one empty ByteString returned.
+    // Root missing → sparse empty response (matches go-ethereum handler.go behaviour).
+    // TrieNodeHealingCoordinator matches by keccak256 hash, not position, so sparse is correct.
     val emptyHpPath = ByteString(Array[Byte](0x20)) // HP-encoded empty path (leaf flag)
     val result = SnapServer.serveTrieNodes(
       requestId = BigInt(1),
@@ -250,8 +251,7 @@ class SnapServerLimitsSpec extends AnyFlatSpec with Matchers {
       responseBytes = BigInt(2 * 1024 * 1024),
       storage = storage
     )
-    result.nodes should have size 1
-    result.nodes.head shouldBe empty
+    result.nodes shouldBe empty
   }
 
   it should "return empty response for a zero-element pathset (bad request)" taggedAs UnitTest in {

@@ -266,7 +266,7 @@ object SnapServer extends Logger {
     val effectiveLimit = if (isReversed) ByteString(Array.fill[Byte](32)(0xff.toByte)) else limitHash
     val originNibbles = hashToNibbles(startingHash)
     val limitNibbles = hashToNibbles(effectiveLimit)
-    val maxBytes = math.min(math.max(responseBytes.toInt, 0), 2 * 1024 * 1024)
+    val maxBytes = responseBytes.min(BigInt(2 * 1024 * 1024)).max(BigInt(0)).toInt
     val deadline = System.currentTimeMillis() + 4000
 
     import com.chipprbots.ethereum.network.p2p.messages.ETH63.AccountImplicits._
@@ -328,7 +328,7 @@ object SnapServer extends Logger {
   ): StorageRanges = {
     if (isEmptyRoot(rootHash)) return StorageRanges(requestId, Seq.empty, Seq.empty)
 
-    val maxBytes = math.min(math.max(responseBytes.toInt, 0), 2 * 1024 * 1024)
+    val maxBytes = responseBytes.min(BigInt(2 * 1024 * 1024)).max(BigInt(0)).toInt
     val deadline = System.currentTimeMillis() + 4000
     var accumulated = 0
     val perAccount = scala.collection.mutable.ArrayBuffer.empty[Seq[(ByteString, ByteString)]]
@@ -410,7 +410,7 @@ object SnapServer extends Logger {
       responseBytes: BigInt,
       storage: MptStorage
   ): TrieNodes = {
-    val maxBytes = math.min(math.max(responseBytes.toInt, 0), 2 * 1024 * 1024)
+    val maxBytes = responseBytes.min(BigInt(2 * 1024 * 1024)).max(BigInt(0)).toInt
     val deadline = System.currentTimeMillis() + 4000
     var accumulated: Int = 0
 
@@ -422,15 +422,8 @@ object SnapServer extends Logger {
     val collected = scala.collection.mutable.ArrayBuffer.empty[ByteString]
 
     if (rootNode == NullNode) {
-      // Root not found — return one empty entry per request, truncated to budget.
-      var idx = 0
-      while (
-        idx < paths.size && (accumulated < maxBytes || collected.isEmpty) && System.currentTimeMillis() < deadline
-      ) {
-        collected += ByteString.empty
-        accumulated = accumulated + 1
-        idx += 1
-      }
+      // Root not found — return empty (sparse), matching go-ethereum's handler.go behaviour.
+      return TrieNodes(requestId, Seq.empty)
     } else {
       var idx = 0
       while (
@@ -470,23 +463,12 @@ object SnapServer extends Logger {
                   }
                 }
               } else {
-                // Storage root not in our DB — emit empty placeholder per path to maintain
-                // positional alignment with the healing coordinator's request pathset.
-                storageNibblesList.foreach { _ =>
-                  if (accumulated < maxBytes || collected.isEmpty) {
-                    collected += ByteString.empty; accumulated += 1
-                  }
-                }
+                // Storage root not in our DB — skip (sparse), matching go-ethereum.
+                // TrieNodeHealingCoordinator matches by keccak256 hash, not position,
+                // so sparse responses are handled correctly.
               }
-            // Account missing or has empty storage root — emit empty placeholder per storage
-            // path. geth omits entries here, but we maintain positional alignment so the
-            // healing coordinator's zip(nodes, tasks) doesn't misalign later entries.
+            // Account missing or has no storage — skip (sparse), matching go-ethereum.
             case _ =>
-              storageNibblesList.foreach { _ =>
-                if (accumulated < maxBytes || collected.isEmpty) {
-                  collected += ByteString.empty; accumulated += 1
-                }
-              }
           }
         }
         idx += 1
@@ -569,8 +551,7 @@ object SnapServer extends Logger {
       responseBytes: BigInt,
       storage: EvmCodeStorage
   ): ByteCodes = {
-    val twoMB = 2 * 1024 * 1024
-    val maxBytes = math.min(math.max(responseBytes.toInt, 0), twoMB)
+    val maxBytes = responseBytes.min(BigInt(2 * 1024 * 1024)).max(BigInt(0)).toInt
     val collected = scala.collection.mutable.ListBuffer.empty[ByteString]
     var totalBytes = 0
     val it = hashes.take(1024).iterator

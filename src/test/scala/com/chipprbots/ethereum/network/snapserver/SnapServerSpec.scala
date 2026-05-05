@@ -440,39 +440,34 @@ class SnapServerSpec extends AnyFlatSpec with Matchers {
     kec256(result.nodes.head) shouldEqual storageRoot
   }
 
-  it should "emit empty bytes for all storage paths when the account is missing" taggedAs UnitTest in {
+  it should "return sparse response (no entries) when the account is missing" taggedAs UnitTest in {
     val storage = new TestMptStorage()
     val dummyHash = kec256(ByteString("dummy-account-trie-nodes"))
-    // Non-empty trie avoids the NullNode early-return path (which emits 1 entry per pathset,
-    // not per storage path). With a real root, resolveLeafAccount returns None for the missing
-    // account and emits one empty entry per storage path — which is what we want to verify.
     val (root, _) = buildAccountTrie(Seq(dummyHash -> eoa()), storage)
     val missingAccount = kec256(ByteString("no-such-account"))
-    // Two storage paths requested for a missing account.
+    // Missing account → sparse response (no entries), matching go-ethereum handler.go.
+    // TrieNodeHealingCoordinator matches by keccak256 hash, not position, so this is correct.
     val pathSet = Seq(missingAccount, hpRootPath, hpRootPath)
 
     val result = SnapServer.serveTrieNodes(1, root, Seq(pathSet), bigBudget, storage)
 
-    // Positional alignment: 2 storage paths → 2 empty entries.
-    result.nodes should have size 2
-    result.nodes.foreach(_ shouldBe empty)
+    result.nodes shouldBe empty
   }
 
-  it should "emit empty bytes for individual storage paths that resolve to no node" taggedAs UnitTest in {
+  it should "return sparse response (no entries) for an account with no storage trie" taggedAs UnitTest in {
     val storage = new TestMptStorage()
-    val storageRoot = buildStorageTrie(Seq.empty, storage) // empty storage trie
+    val storageRoot = buildStorageTrie(Seq.empty, storage) // → Account.EmptyStorageRootHash
     val accountHash = kec256(ByteString("empty-storage-account"))
     val account = accountWithStorage(storageRoot)
     val (stateRoot, _) = buildAccountTrie(Seq(accountHash -> account), storage)
 
-    // Ask for a storage trie node at a path that doesn't exist.
+    // Account has EmptyStorageRootHash → guard fires → sparse skip, matching go-ethereum.
     val deepPath = ByteString(Array(0x1f.toByte) ++ Array.fill[Byte](31)(0xaa.toByte))
     val pathSet = Seq(accountHash, deepPath)
 
     val result = SnapServer.serveTrieNodes(1, stateRoot, Seq(pathSet), bigBudget, storage)
 
-    result.nodes should have size 1
-    result.nodes.head shouldBe empty
+    result.nodes shouldBe empty
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

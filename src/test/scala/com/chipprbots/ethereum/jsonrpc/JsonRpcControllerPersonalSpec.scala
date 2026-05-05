@@ -47,7 +47,6 @@ class JsonRpcControllerPersonalSpec
 
   it should "personal_importRawKey" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
     val key = "0x7a44789ed3cd85861c0bbf9693c7e1de1862dd4396c390147ecf1275099c6e6f"
-    val keyBytes: ByteString = ByteString(Hex.decode(key.drop(2)))
     val addr: Address = Address("0x00000000000000000000000000000000000000ff")
     val pass = "aaa"
 
