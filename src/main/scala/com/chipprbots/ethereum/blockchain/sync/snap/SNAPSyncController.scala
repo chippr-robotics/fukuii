@@ -2708,7 +2708,7 @@ class SNAPSyncController(
       // Start the coordinator — give healing full per-peer budget (accounts/storage/bytecode done)
       trieNodeHealingCoordinator.foreach { coordinator =>
         coordinator ! actors.Messages.StartTrieNodeHealing(root)
-        coordinator ! actors.Messages.UpdateMaxInFlightPerPeer(5)
+        coordinator ! actors.Messages.UpdateMaxInFlightPerPeer(snapSyncConfig.healingMaxInFlightPerPeer)
       }
 
       // Periodically send peer availability notifications (cancel any existing scheduler first)
@@ -2763,7 +2763,7 @@ class SNAPSyncController(
           )
           trieNodeHealingCoordinator.foreach { coordinator =>
             coordinator ! actors.Messages.StartTrieNodeHealing(root)
-            coordinator ! actors.Messages.UpdateMaxInFlightPerPeer(5)
+            coordinator ! actors.Messages.UpdateMaxInFlightPerPeer(snapSyncConfig.healingMaxInFlightPerPeer)
           }
           startHealingRequestScheduler()
           log.info(
@@ -3801,6 +3801,7 @@ case class SNAPSyncConfig(
     storageMinResponseBytes: Int = 131072,
     healingBatchSize: Int = 16,
     healingConcurrency: Int = 16,
+    healingMaxInFlightPerPeer: Int = 1,
     stateValidationEnabled: Boolean = true,
     maxRetries: Int = 3,
     timeout: FiniteDuration = 30.seconds,
@@ -3865,6 +3866,10 @@ object SNAPSyncConfig {
         if (snapConfig.hasPath("healing-concurrency"))
           snapConfig.getInt("healing-concurrency")
         else 16,
+      healingMaxInFlightPerPeer =
+        if (snapConfig.hasPath("healing-max-inflight-per-peer"))
+          snapConfig.getInt("healing-max-inflight-per-peer")
+        else 1,
       stateValidationEnabled = snapConfig.getBoolean("state-validation-enabled"),
       maxRetries = snapConfig.getInt("max-retries"),
       timeout = snapConfig.getDuration("timeout").toMillis.millis,
