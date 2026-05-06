@@ -77,6 +77,7 @@ class TrieNodeHealingCoordinator(
   // After MaxConsecutiveStagnations, notify controller to restart with fresh pivot.
   private var consecutiveStagnations: Int = 0
   private val MaxConsecutiveStagnations: Int = 3
+  private var trieWalkInProgress: Boolean = false
   // Inline child discovery counter (Besu-aligned scheduler approach)
   private var childrenDiscoveredTotal: Long = 0
 
@@ -133,12 +134,6 @@ class TrieNodeHealingCoordinator(
   private var pivotRefreshRequested: Boolean = false
   private var pivotRefreshRequestedAt: Long = 0L
   private val PivotRefreshWatchdogMs: Long = 15.minutes.toMillis
-
-  // Consecutive timeout tracking: peers that time out repeatedly are treated as stateless.
-  // Timeouts on ETH mainnet peers (which advertise snap/1 but lack ETC state) produce 60s hangs
-  // without ever returning an empty response — the empty-response path alone is insufficient.
-  private val peerConsecutiveTimeouts = mutable.Map[String, Int]()
-  private val MaxConsecutiveTimeoutsBeforeStateless = 3
 
   // Per-peer adaptive byte budgeting
   private val minResponseBytes: BigInt = 50 * 1024
@@ -273,10 +268,42 @@ class TrieNodeHealingCoordinator(
       tryRedispatchPendingTasks()
 
     case HealingPeerAvailable(peer) =>
-      // Evict stale entry for same physical node (reconnection creates new PeerId)
-      knownAvailablePeers.filterInPlace(_.remoteAddress != peer.remoteAddress)
-      knownAvailablePeers += peer
-      dispatchIfPossible(peer)
+      // NB-7: Skip peers already in statelessPeers — they returned empty TrieNodes for this root and
+      // will do so again until the pivot refreshes. Re-adding them on every 1s scheduler tick wastes
+      // active request slots and creates a rapid [SNAP/1 enabled] + [stateless] log cycle.
+      if (statelessPeers.contains(peer.id.value)) {
+        log.debug(
+          "Ignoring HealingPeerAvailable for stateless peer {} — will re-admit on next pivot refresh",
+          peer.id.value.take(8)
+        )
+      } else {
+        // Evict stale entry for same physical node (reconnection creates new PeerId)
+        knownAvailablePeers.filterInPlace(_.remoteAddress != peer.remoteAddress)
+        knownAvailablePeers += peer
+        dispatchIfPossible(peer)
+      }
+
+    case HealingPeerUnavailable(peerId) =>
+      // Peer disconnected — remove from available set and immediately re-queue its in-flight
+      // tasks so other peers can pick them up without waiting for the 30s request timeout.
+      // Mirrors AccountRangeCoordinator.PeerUnavailable (go-ethereum revertRequests pattern).
+      knownAvailablePeers.filterInPlace(_.id.value != peerId)
+      val inFlight = activeRequests.filter { case (_, req) => req.peer.id.value == peerId }.keys.toSeq
+      if (inFlight.nonEmpty) {
+        log.debug(s"Peer $peerId disconnected — re-queuing ${inFlight.size} in-flight healing request(s)")
+        inFlight.foreach { reqId =>
+          activeRequests.remove(reqId).foreach { req =>
+            requestTracker.completeRequest(reqId, 0)
+            req.tasks.foreach { task =>
+              if (!pendingHashSet.contains(task.hash)) {
+                pendingHashSet += task.hash
+                pendingTasks += task
+              }
+            }
+          }
+        }
+      }
+      tryRedispatchPendingTasks()
 
     case UpdateMaxInFlightPerPeer(newLimit) =>
       log.info(s"Healing per-peer budget: $maxInFlightPerPeer -> $newLimit")
@@ -308,7 +335,6 @@ class TrieNodeHealingCoordinator(
       pendingTasks.clear() // Will be re-populated by root reseed + inline discovery / trie walk from controller
       pendingHashSet.clear()
       statelessPeers.clear()
-      peerConsecutiveTimeouts.clear()
       peerCooldownUntilMs.clear()
       peerResponseBytesTarget.clear()
       // Cancel active requests (they're for the old root)
@@ -363,12 +389,15 @@ class TrieNodeHealingCoordinator(
         snapSyncController ! SNAPSyncController.StateHealingComplete
       }
 
+    case WalkStateChanged(inProgress) =>
+      trieWalkInProgress = inProgress
+
     case HealingStagnationCheck =>
       val recentHealed = totalNodesHealed - lastPulseHealedCount
       log.info(
         s"[HEAL-PULSE] healed=$totalNodesHealed (+$recentHealed last 2min) | " +
           s"pending=${pendingTasks.size} active=${activeRequests.size} peers=${knownAvailablePeers.size} | " +
-          s"pivotRefreshPending=$pivotRefreshRequested"
+          s"walkRunning=$trieWalkInProgress pivotRefreshPending=$pivotRefreshRequested"
       )
       lastPulseHealedCount = totalNodesHealed
 
@@ -403,6 +432,10 @@ class TrieNodeHealingCoordinator(
           )
           snapSyncController ! HealingStagnated(totalNodesHealed.toLong, pendingTasks.size.toLong)
           consecutiveStagnations = 0
+          // NB-11: Suppress further stagnation counting until the pivot refresh arrives (HealingPivotRefreshed
+          // resets this flag). Prevents redundant HealingStagnated fires while bootstrap is in-flight.
+          pivotRefreshRequested = true
+          pivotRefreshRequestedAt = System.currentTimeMillis()
         }
       } else if (recentHealed > 0) {
         consecutiveStagnations = 0
@@ -424,7 +457,6 @@ class TrieNodeHealingCoordinator(
           // Without this clear, eligiblePeers stays empty forever — HealingAllPeersStateless can't
           // fire because fresh peers keep arriving, keeping knownAvailablePeers.size > statelessPeers.size.
           statelessPeers.clear()
-          peerConsecutiveTimeouts.clear()
           peerCooldownUntilMs.clear()
           consecutiveIdleChecks = 0 // Reset so we don't immediately force-complete on the next tick
           log.info(
@@ -650,26 +682,34 @@ class TrieNodeHealingCoordinator(
       adjustResponseBytesOnSuccess(peer, requestedBytes, BigInt(receivedBytes))
       // Successful response — clear stateless marking and reset stagnation timer
       statelessPeers -= peer.id.value
-      peerConsecutiveTimeouts.remove(peer.id.value)
       lastHealedAtMs = System.currentTimeMillis()
     } else {
       adjustResponseBytesOnFailure(peer, "empty healing response")
       recordPeerCooldown(peer, "empty healing response")
-      // Mark peer stateless for current root (geth-aligned)
-      statelessPeers += peer.id.value
-      log.info(
-        s"Peer ${peer.id.value} marked stateless for healing root " +
-          s"${Hex.toHexString(stateRoot.take(4).toArray)} (${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
-      )
-      // Check if all known peers are stateless — request pivot refresh
-      if (statelessPeers.size >= knownAvailablePeers.size && knownAvailablePeers.nonEmpty && !pivotRefreshRequested) {
-        pivotRefreshRequested = true
-        pivotRefreshRequestedAt = System.currentTimeMillis()
-        log.warning(
-          s"All ${statelessPeers.size} peers stateless for healing root " +
-            s"${Hex.toHexString(stateRoot.take(4).toArray)}. Requesting pivot refresh."
+      // Mark peer stateless only on first empty response (geth-aligned: guard prevents duplicate logs
+      // and redundant threshold checks when multiple in-flight responses from the same peer all return empty)
+      if (!statelessPeers.contains(peer.id.value)) {
+        statelessPeers += peer.id.value
+        // NB-7: Evict from knownAvailablePeers immediately so the 1s HealingPeerAvailable scheduler
+        // tick doesn't re-add and re-dispatch to this peer until the next pivot refresh.
+        knownAvailablePeers.filterInPlace(_.id != peer.id)
+        log.info(
+          s"Peer ${peer.id.value} marked stateless for healing root " +
+            s"${Hex.toHexString(stateRoot.take(4).toArray)} (${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
         )
-        snapSyncController ! SNAPSyncController.HealingAllPeersStateless
+        // Check if all known peers are stateless — request pivot refresh.
+        // Use statelessPeers.nonEmpty (not knownAvailablePeers.nonEmpty): filterInPlace above
+        // removes this peer from knownAvailablePeers BEFORE the check, so a single-peer set
+        // leaves knownAvailablePeers empty and the old guard silently swallowed the trigger.
+        if (statelessPeers.size >= knownAvailablePeers.size && statelessPeers.nonEmpty && !pivotRefreshRequested) {
+          pivotRefreshRequested = true
+          pivotRefreshRequestedAt = System.currentTimeMillis()
+          log.warning(
+            s"All ${statelessPeers.size} peers stateless for healing root " +
+              s"${Hex.toHexString(stateRoot.take(4).toArray)}. Requesting pivot refresh."
+          )
+          snapSyncController ! SNAPSyncController.HealingAllPeersStateless
+        }
       }
     }
 
@@ -695,34 +735,14 @@ class TrieNodeHealingCoordinator(
   }
 
   private def handleTimeout(requestId: BigInt, tasks: Seq[HealingEntry], peer: Peer): Unit = {
-    log.warning(s"Healing request timed out: reqId=$requestId, tasks=${tasks.size}, peer=${peer.id.value}")
+    // go-ethereum reference: timeouts rotate tasks back to queue, peer returns to idle — no stateless marking.
+    // (Stateless is only for empty responses.) forkAccepted filter already screens out ETH mainnet peers
+    // that advertise snap/1 but have no ETC state, so the original timeout→stateless rationale no longer applies.
+    log.warning(s"Healing request timed out: reqId=$requestId, tasks=${tasks.size}, peer=${peer.id.value} — re-queuing")
 
     activeRequests.remove(requestId)
     recordPeerCooldown(peer, "request timeout")
     adjustResponseBytesOnFailure(peer, "request timeout")
-
-    // Escalate repeated timeouts to stateless: ETH mainnet peers advertise snap/1 but lack ETC
-    // state and never return an empty response — they simply time out indefinitely. After
-    // MaxConsecutiveTimeoutsBeforeStateless timeouts we treat the peer as stateless, the same as
-    // an empty response, so that HealingAllPeersStateless fires instead of looping forever.
-    val timeoutCount = peerConsecutiveTimeouts.getOrElse(peer.id.value, 0) + 1
-    peerConsecutiveTimeouts.update(peer.id.value, timeoutCount)
-    if (timeoutCount >= MaxConsecutiveTimeoutsBeforeStateless && !statelessPeers.contains(peer.id.value)) {
-      statelessPeers += peer.id.value
-      log.info(
-        s"Peer ${peer.id.value} marked stateless after $timeoutCount consecutive timeouts " +
-          s"(${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
-      )
-      if (statelessPeers.size >= knownAvailablePeers.size && knownAvailablePeers.nonEmpty && !pivotRefreshRequested) {
-        pivotRefreshRequested = true
-        pivotRefreshRequestedAt = System.currentTimeMillis()
-        log.warning(
-          s"All ${statelessPeers.size} healing peers stateless (via timeouts) for root " +
-            s"${Hex.toHexString(stateRoot.take(4).toArray)}. Requesting pivot refresh."
-        )
-        snapSyncController ! SNAPSyncController.HealingAllPeersStateless
-      }
-    }
 
     // Re-queue all timed-out tasks unconditionally — aligned with go-ethereum and Besu pipeline
     // behaviour. Both reference clients never permanently abandon nodes: go-ethereum puts them

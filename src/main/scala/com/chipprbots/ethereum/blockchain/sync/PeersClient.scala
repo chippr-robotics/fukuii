@@ -237,6 +237,31 @@ class PeersClient(
           bestPeer(unknownChainHeadPeers, log)
         }
 
+      case BestPeerWithMinBlockExcluding(minBlock, exclude) =>
+        val eligible = peersToDownloadFrom.filterNot { case (peerId, _) => exclude.contains(peerId) }
+        val knownAheadPeers = eligible.filter { case (_, peerWithInfo) =>
+          peerWithInfo.peerInfo.maxBlockNumber >= minBlock
+        }
+        if (knownAheadPeers.nonEmpty) {
+          log.debug(
+            "BestPeerWithMinBlockExcluding({}): {} eligible after excluding {} tried peer(s)",
+            minBlock,
+            knownAheadPeers.size,
+            exclude.size
+          )
+          bestPeer(knownAheadPeers, log)
+        } else {
+          val unknownHeadPeers = eligible.filter { case (_, peerWithInfo) =>
+            peerWithInfo.peerInfo.maxBlockNumber == 0
+          }
+          log.debug(
+            "BestPeerWithMinBlockExcluding({}): no known-ahead peers after exclusion; {} unknown-chain-state remain",
+            minBlock,
+            unknownHeadPeers.size
+          )
+          bestPeer(unknownHeadPeers, log)
+        }
+
       case BestSnapPeerExcluding(exclude) =>
         val snapPeers = peersToDownloadFrom.filter { case (peerId, peerWithInfo) =>
           !exclude.contains(peerId) && peerWithInfo.peerInfo.remoteStatus.supportsSnap
@@ -413,6 +438,12 @@ object PeersClient {
     */
   case class BestPeerWithMinBlock(minBlock: BigInt) extends PeerSelector
 
+  /** Like BestPeerWithMinBlock but skips peers in `exclude`. Used by PivotHeaderBootstrap to rotate through the peer
+    * pool across attempts, modelling Besu's `waitForPeer((p) -> !peersUsed.contains(p))` predicate and go-ethereum's
+    * idle-pool exclusion in `skeleton.assignTasks()`.
+    */
+  case class BestPeerWithMinBlockExcluding(minBlock: BigInt, exclude: Set[PeerId]) extends PeerSelector
+
   def bestPeer(
       peersToDownloadFrom: Map[PeerId, PeerWithInfo],
       log: org.apache.pekko.event.LoggingAdapter
@@ -484,5 +515,19 @@ object PeersClient {
       bestPeer(peersToDownloadFrom.filter { case (_, peerWithInfo) =>
         peerWithInfo.peerInfo.maxBlockNumber == 0
       })
+  }
+
+  /** Static helper mirroring the BestPeerWithMinBlockExcluding selector for unit testing. */
+  def bestPeerWithMinBlockExcluding(
+      peersToDownloadFrom: Map[PeerId, PeerWithInfo],
+      minBlock: BigInt,
+      exclude: Set[PeerId]
+  ): Option[Peer] = {
+    val eligible = peersToDownloadFrom.filterNot { case (peerId, _) => exclude.contains(peerId) }
+    val knownAheadPeers = eligible.filter { case (_, peerWithInfo) =>
+      peerWithInfo.peerInfo.maxBlockNumber >= minBlock
+    }
+    if (knownAheadPeers.nonEmpty) bestPeer(knownAheadPeers)
+    else bestPeer(eligible.filter { case (_, peerWithInfo) => peerWithInfo.peerInfo.maxBlockNumber == 0 })
   }
 }

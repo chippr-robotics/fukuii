@@ -135,10 +135,6 @@ class PeerActor[R <: HandshakeResult](
         case RLPxConnectionHandler.InitialHelloReceived(msg, _) =>
           // Processes the InitialHelloReceived, cancels the timeout and processes a new message but only if the handshaker
           // handles the received message
-          // TODO pass capability to 'EtcHelloExchangeState'
-          // to pass negotiatedProtocol the PeerActor should be in a "post auth handshake" state
-          // since ConnectionEstablished(remotePubKey) was already received
-          // an ETCAwaitingInitialHelloHandshaker would be an approach
           handshaker.applyMessage(msg).foreach { newHandshaker =>
             timeout.cancel()
             processHandshakerNextMessage(newHandshaker, remoteNodeId, rlpxConnection, numRetries)
@@ -294,6 +290,10 @@ class PeerActor[R <: HandshakeResult](
         case TooManyPeers | TcpSubsystemError | DisconnectRequested | ClientQuitting | TimeoutOnReceivingAMessage =>
           // These disconnect reasons should be reported for blacklisting but don't require
           // removing the node from known nodes (they may be temporary issues)
+          context.parent ! PeerClosedConnection(peerAddress.getHostString, d.reason)
+        case AlreadyConnected =>
+          // NB-8: Propagate AlreadyConnected so PeerManagerActor can detect the inbound connection
+          // is already covering this maintained peer and skip the 30s reconnect timer.
           context.parent ! PeerClosedConnection(peerAddress.getHostString, d.reason)
         case _ => // nothing
       }

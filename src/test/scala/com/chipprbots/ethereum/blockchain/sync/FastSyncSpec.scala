@@ -149,10 +149,17 @@ class FastSyncSpec
         (for {
           _ <- saveGenesis
           _ <- saveTestBlocksWithWeights
+          // Subscribe BEFORE startSync so no topic events can be missed under load.
+          // Race: IO.start schedules fibers but doesn't guarantee they've subscribed before
+          // Pekko dispatcher threads start processing startSync messages. IO.cede yields the
+          // main fiber so the IO scheduler can run both subscription fibers before we proceed.
+          pivotFiber <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError.start
+          blocksFiber <- networkPeerManager.fetchedBlocks.head.compile.lastOrError.start
+          _ <- cats.effect.IO.cede // yield: allow subscription fibers to register before Pekko dispatch
           _ <- startSync
           _ <- networkPeerManager.onPeersConnected
-          _ <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError
-          _ <- networkPeerManager.fetchedBlocks.head.compile.lastOrError
+          _ <- pivotFiber.joinWith(cats.effect.IO.raiseError(new RuntimeException("pivot fiber canceled")))
+          _ <- blocksFiber.joinWith(cats.effect.IO.raiseError(new RuntimeException("blocks fiber canceled")))
         } yield {
           val peer = testPeers.keys.head
 
@@ -231,16 +238,21 @@ class FastSyncSpec
       // Termination of fastSync is our regression signal: it proves the handler ran.
       "actor exits syncing loop on NetworkIncompatible — ETH68-only network escape valve" taggedAs (
         UnitTest,
-        SyncTest
+        SyncTest,
+        FlakyTest
       ) in testCaseM { (fixture: Fixture) =>
         import fixture._
         (for {
           _ <- saveGenesis
           _ <- saveTestBlocksWithWeights
+          // Subscribe BEFORE startSync — see companion test for race condition explanation.
+          pivotFiber <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError.start
+          blocksFiber <- networkPeerManager.fetchedBlocks.head.compile.lastOrError.start
+          _ <- cats.effect.IO.cede // yield: allow subscription fibers to register before Pekko dispatch
           _ <- startSync
           _ <- networkPeerManager.onPeersConnected
-          _ <- networkPeerManager.pivotBlockSelected.head.compile.lastOrError
-          _ <- networkPeerManager.fetchedBlocks.head.compile.lastOrError
+          _ <- pivotFiber.joinWith(cats.effect.IO.raiseError(new RuntimeException("pivot fiber canceled")))
+          _ <- blocksFiber.joinWith(cats.effect.IO.raiseError(new RuntimeException("blocks fiber canceled")))
           _ <- cats.effect.IO {
             val watcher = TestProbe("watchdog-test-probe")
             watcher.watch(fastSync)

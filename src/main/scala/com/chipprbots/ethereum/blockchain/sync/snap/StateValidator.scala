@@ -4,12 +4,16 @@ import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
 
+import org.slf4j.LoggerFactory
+
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.mpt._
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
 class StateValidator(mptStorage: MptStorage) {
+
+  private val log = LoggerFactory.getLogger(classOf[StateValidator])
 
   /** Validate the account trie by traversing it and detecting missing nodes.
     *
@@ -259,8 +263,18 @@ class StateValidator(mptStorage: MptStorage) {
     val visited = mutable.Set[ByteString]()
     stack.prepend((rootNode, Array.emptyByteArray))
 
+    var lastHeartbeat = System.currentTimeMillis()
+    var nodesVisited = 0L
+
     while (stack.nonEmpty) {
       val (node, nibblePath) = stack.removeHead()
+      nodesVisited += 1
+
+      val now = System.currentTimeMillis()
+      if (now - lastHeartbeat >= 60_000L) {
+        log.info(s"[WALK-PULSE] visited=$nodesVisited missing-pending=${result.size} stack=${stack.size}")
+        lastHeartbeat = now
+      }
 
       node match {
         case NullNode => ()

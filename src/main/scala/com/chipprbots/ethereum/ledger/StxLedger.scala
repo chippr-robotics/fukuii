@@ -30,7 +30,7 @@ class StxLedger(
 
   /** Like `simulateTransaction` but threads an optional EVM tracer into the run. Used by `debug_traceTransaction` /
     * `debug_traceCall` to capture per-opcode structLog entries. The sim still honors world / blockHeader so the trace
-    * reflects post-block state (historical replay needs archive mode — TODO).
+    * reflects post-block state (historical replay requires archive mode).
     */
   def simulateTransactionWithTracer(
       stx: SignedTransactionWithSender,

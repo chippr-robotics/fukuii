@@ -94,6 +94,8 @@ keystore/
 *.keystore
 wallet.json
 mnemonic.txt
+etc-static-nodes.json
+etc-node.key
 
 # Local run configs
 run-*.conf

@@ -140,7 +140,7 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
     *   if there is any inconsistency in how the trie is built.
     */
   def getProof(key: K): Option[Vector[MptNode]] = {
-    val result = pathTraverse[Vector[MptNode]](Vector.empty, mkKeyNibbles(key)) { case (acc, node) =>
+    val result = pathTraverse[Vector[MptNode]](Vector.empty, mkKeyNibbles(key), proofMode = true) { case (acc, node) =>
       node match {
         case Some(hash: HashNode) =>
           // Resolve hash references to actual nodes for the proof
@@ -182,7 +182,7 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
     * @return
     *   accumulated data or None if key doesn't exist
     */
-  private def pathTraverse[T](acc: T, searchKey: Array[Byte])(op: (T, Option[MptNode]) => T): Option[T] = {
+  private def pathTraverse[T](acc: T, searchKey: Array[Byte], proofMode: Boolean = false)(op: (T, Option[MptNode]) => T): Option[T] = {
 
     @tailrec
     def pathTraverse(
@@ -193,14 +193,23 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
         op: (T, Option[MptNode]) => T
     ): Option[T] =
       node match {
-        case LeafNode(key, _, _, _, _) =>
-          if (key.toArray[Byte].sameElements(searchKey)) Some(op(acc, Some(node))) else Some(op(acc, None))
+        case leafNode @ LeafNode(key, _, _, _, _) =>
+          // In proofMode (getProof) include the leaf even on key mismatch — the diverging leaf
+          // IS the EIP-1186 proof of absence. In normal mode (get) pass None so the callback
+          // returns None and .flatten produces None, correctly signalling key-not-found.
+          if (key.toArray[Byte].sameElements(searchKey) || proofMode)
+            Some(op(acc, Some(leafNode)))
+          else
+            Some(op(acc, None))
 
         case extNode @ ExtensionNode(sharedKey, _, _, _, _) =>
           val (commonKey, remainingKey) = searchKey.splitAt(sharedKey.length)
           if (searchKey.length >= sharedKey.length && (sharedKey.toArray[Byte].sameElements(commonKey))) {
             pathTraverse(op(acc, Some(node)), extNode.next, remainingKey, accPath ++ sharedKey.toArray[Byte], op)
-          } else Some(op(acc, None))
+          } else if (proofMode)
+            Some(op(acc, Some(node))) // include diverging extension as proof of absence (EIP-1186)
+          else
+            Some(op(acc, None))
 
         case branch: BranchNode =>
           if (searchKey.isEmpty) Some(op(acc, Some(node)))

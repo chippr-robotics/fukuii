@@ -648,25 +648,19 @@ class NetworkPeerManagerActor(
 
     val _ = peerWithInfo
     val response: ByteCodes =
-      try {
-        val maxBytes = msg.responseBytes.toInt.max(0)
-        val codes: Seq[ByteString] = evmCodeStorageOpt match {
+      try
+        evmCodeStorageOpt match {
           case Some(storage) =>
-            val collected = scala.collection.mutable.ListBuffer.empty[ByteString]
-            var totalBytes = 0
-            val it = msg.hashes.iterator
-            while (it.hasNext && (totalBytes < maxBytes || collected.isEmpty)) {
-              val codeHash = it.next()
-              storage.get(codeHash).foreach { code =>
-                collected += code
-                totalBytes += code.size
-              }
-            }
-            collected.toList
-          case None => Seq.empty
+            com.chipprbots.ethereum.network.snapserver.SnapServer.serveByteCodes(
+              requestId = msg.requestId,
+              hashes = msg.hashes,
+              responseBytes = msg.responseBytes,
+              storage = storage
+            )
+          case None =>
+            ByteCodes(msg.requestId, Seq.empty)
         }
-        ByteCodes(requestId = msg.requestId, codes = codes)
-      } catch {
+      catch {
         case t: Throwable =>
           log.error(
             s"serveByteCodes threw for peer $peerId (requestId=${msg.requestId}): ${t.getClass.getName}: ${t.getMessage}"

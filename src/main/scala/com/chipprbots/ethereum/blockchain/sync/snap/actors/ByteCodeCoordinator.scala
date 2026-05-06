@@ -227,6 +227,26 @@ class ByteCodeCoordinator(
         dispatchIfPossible(peer)
       }
 
+    case ByteCodePeerUnavailable(peerId) =>
+      // Peer disconnected — remove from available set and immediately release its in-flight
+      // workers so they can be reassigned to other peers without waiting for 30s timeout.
+      // Mirrors AccountRangeCoordinator.PeerUnavailable (go-ethereum revertRequests pattern).
+      knownAvailablePeers.filterInPlace(_.id.value != peerId)
+      peerCooldownUntilMillis.remove(com.chipprbots.ethereum.network.PeerId(peerId))
+      val inFlight = activeTasks.collect {
+        case (reqId, active) if active.peer.id.value == peerId => (reqId, active.worker, active.task)
+      }.toSeq
+      if (inFlight.nonEmpty) {
+        log.debug(s"Peer $peerId disconnected — re-queuing ${inFlight.size} in-flight bytecode request(s)")
+        inFlight.foreach { case (reqId, worker, task) =>
+          activeTasks.remove(reqId)
+          task.pending = false
+          pendingTasks.enqueue(task)
+          worker ! ByteCodeWorkerRelease(reqId)
+        }
+      }
+      tryRedispatchPendingTasks()
+
     case UpdateMaxInFlightPerPeer(newLimit) =>
       log.info(s"ByteCode per-peer budget: $maxInFlightPerPeer -> $newLimit")
       maxInFlightPerPeer = newLimit

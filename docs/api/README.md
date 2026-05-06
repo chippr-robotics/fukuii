@@ -101,7 +101,6 @@ Fukuii organizes JSON-RPC methods into namespaces:
 | **QA** | 3 | Testing utilities | ❌ Testing only |
 | **FUKUII** | 1 | Custom extensions | ✅ Yes |
 | **TEST** | 7 | Test harness | ❌ Testing only |
-| **IELE** | 2 | IELE VM support | ⚠️ If IELE enabled |
 | **MCP** | 7 | Model Context Protocol | ✅ Yes |
 | **RPC** | 1 | RPC metadata | ✅ Yes |
 | **TOTAL** | 97 | All namespaces | Mixed |

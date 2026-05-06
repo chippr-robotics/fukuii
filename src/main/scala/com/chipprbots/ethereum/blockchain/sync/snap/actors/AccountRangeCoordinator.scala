@@ -151,14 +151,23 @@ class AccountRangeCoordinator(
     // Compute "all stateless" against the *non-snapless* subset only (#1197).
     val nonSnapless = knownAvailablePeers.filterNot(p => snaplessPeers.contains(p.id))
     if (nonSnapless.isEmpty && knownAvailablePeers.nonEmpty) {
-      // Every peer in the pool is snapless. Pivot refresh won't help; the SNAP-range
-      // download is structurally blocked. Log once per snapless-saturation event so an
-      // operator can pivot to fast-sync or wait for a new peer mix.
+      // Every peer in the pool is snapless. A pivot refresh won't recover the SAME peers
+      // (they have no snapshot tree regardless of root), but escalating PivotStateUnservable
+      // lets the controller take action — e.g. disconnect the snapless peer and wait for a
+      // peer with a snapshot tree. Without escalation the coordinator is permanently stuck.
+      pivotRefreshRequested = true
+      lastPivotRefreshTimeMs = System.currentTimeMillis()
+      consecutiveUnproductiveRefreshes += 1
       log.warning(
         s"All ${knownAvailablePeers.size} known peers are SNAPLESS (no snapshot tree). " +
-          "SNAP-range download cannot make progress on this peer pool. Bytecode and " +
-          "trie-node healing remain functional. Consider switching to do-snap-sync=false " +
-          "if this persists."
+          "SNAP-range download cannot make progress on this peer pool. " +
+          s"Requesting pivot refresh from controller (attempt=$consecutiveUnproductiveRefreshes). " +
+          "Bytecode and trie-node healing remain functional."
+      )
+      snapSyncController ! PivotStateUnservable(
+        rootHash = stateRoot,
+        reason = "all peers snapless (no snapshot tree) for AccountRange root",
+        consecutiveEmptyResponses = knownAvailablePeers.size
       )
       return
     }
@@ -562,8 +571,12 @@ class AccountRangeCoordinator(
       // #1184: always reset the activity timer — we're starting a fresh phase.
       lastDispatchOrResponseMs = System.currentTimeMillis()
 
-      // Resume dispatching with the fresh root
+      // Resume dispatching with the fresh root. tryRedispatchPendingTasks() guards on
+      // pendingTasks.nonEmpty; also fan out explicitly so peers receive work the moment
+      // tasks arrive from in-flight root-mismatch re-queues — matching go-ethereum's
+      // immediate idle-pool restoration after pivot (sync.go revertAccountRequest).
       tryRedispatchPendingTasks()
+      knownAvailablePeers.filterNot(isPeerStateless).foreach(dispatchIfPossible)
 
     case PeerAvailable(peer) =>
       // Evict stale entry for same physical node (reconnection creates new PeerId).
@@ -774,7 +787,11 @@ class AccountRangeCoordinator(
   }
 
   // Cap total workers to activePeerCount * maxInFlightPerPeer — enough to saturate all peers.
-  private def maxWorkers: Int = concurrency * maxInFlightPerPeer
+  // Dynamic: use current SNAP peer count instead of the creation-time concurrency value, so
+  // coordinators started with 1 peer can scale up to 30 workers when 6 peers arrive post-pivot.
+  // go-ethereum assigns to ALL idle peers simultaneously with no coordinator-level cap.
+  private def maxWorkers: Int =
+    math.max(concurrency, knownAvailablePeers.count(!isPeerStateless(_))) * maxInFlightPerPeer
 
   private def createWorker(): ActorRef = {
     val worker = context.actorOf(

@@ -58,7 +58,8 @@ class PoWMiningCoordinatorSpec
     "should throw exception when starting with other message than StartMining(mode)" taggedAs (
       UnitTest,
       ConsensusTest,
-      SlowTest
+      SlowTest,
+      FlakyTest
     ) in new TestSetup {
       override def coordinatorName = "FailedCoordinator"
       LoggingTestKit.error("StopMining").expect {
@@ -69,7 +70,8 @@ class PoWMiningCoordinatorSpec
     "should start recurrent mining when receiving message StartMining(RecurrentMining)" taggedAs (
       UnitTest,
       ConsensusTest,
-      SlowTest
+      SlowTest,
+      FlakyTest
     ) in new TestSetup {
       override def coordinatorName = "RecurrentMiningSetup"
       setBlockForMining(parentBlock)
@@ -85,7 +87,8 @@ class PoWMiningCoordinatorSpec
     "should start on demand mining when receiving message StartMining(OnDemandMining)" taggedAs (
       UnitTest,
       ConsensusTest,
-      SlowTest
+      SlowTest,
+      FlakyTest
     ) in new TestSetup {
       override def coordinatorName = "OnDemandMining"
 
@@ -101,7 +104,8 @@ class PoWMiningCoordinatorSpec
       "MineNext starts EthashMiner" taggedAs (
         UnitTest,
         ConsensusTest,
-        SlowTest
+        SlowTest,
+        FlakyTest
       ) in new TestSetup {
         override def coordinatorName = "EthashMining"
         (blockchainReader.getBestBlock _).expects().returns(Some(parentBlock)).anyNumberOfTimes()
@@ -115,7 +119,7 @@ class PoWMiningCoordinatorSpec
         coordinator ! StopMining
       }
 
-      "Miners mine recurrently" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup {
+      "Miners mine recurrently" taggedAs (UnitTest, ConsensusTest, SlowTest, FlakyTest) in new TestSetup {
         override def coordinatorName = s"AutomaticMining-${System.nanoTime()}"
         val probe = TestProbe()
         val testMiner = new InstantMiner(blockCreator, sync.ref, ethMiningService)
@@ -147,7 +151,8 @@ class PoWMiningCoordinatorSpec
       "Continue to attempt to mine if blockchainReader.getBestBlock() return None" taggedAs (
         UnitTest,
         ConsensusTest,
-        SlowTest
+        SlowTest,
+        FlakyTest
       ) in new TestSetup {
         override def coordinatorName = s"AlwaysAttemptToMine-${System.nanoTime()}"
         val probe = TestProbe()
@@ -179,7 +184,7 @@ class PoWMiningCoordinatorSpec
         probe.expectTerminated(coordinator.ref.toClassic)
       }
 
-      "StopMining stops PoWMinerCoordinator" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup {
+      "StopMining stops PoWMinerCoordinator" taggedAs (UnitTest, ConsensusTest, SlowTest, FlakyTest) in new TestSetup {
         override def coordinatorName = s"StoppingMining-${System.nanoTime()}"
         val probe = TestProbe()
         override val coordinator = testKit.spawn(

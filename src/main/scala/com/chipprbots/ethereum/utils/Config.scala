@@ -365,8 +365,6 @@ object BlockchainsConfig extends Logger {
           f.isFile && f.getName.endsWith("-chain.conf")
         }
 
-        // TODO: Future optimization - cache parsed configurations and check file modification
-        // times to avoid re-parsing unchanged files on restart
         chainFiles.flatMap { chainFile =>
           val result = Try {
             val chainName = chainFile.getName.stripSuffix("-chain.conf")
@@ -461,12 +459,10 @@ object VmConfig {
   }
 
   object ExternalConfig {
-    val VmTypeIele = "iele"
-    val VmTypeKevm = "kevm"
     val VmTypeFukuii = "fukuii"
     val VmTypeNone = "none"
 
-    val supportedVmTypes: Set[String] = Set(VmTypeIele, VmTypeKevm, VmTypeFukuii, VmTypeNone)
+    val supportedVmTypes: Set[String] = Set(VmTypeFukuii, VmTypeNone)
   }
 
   case class ExternalConfig(vmType: String, executablePath: Option[String], host: String, port: Int)

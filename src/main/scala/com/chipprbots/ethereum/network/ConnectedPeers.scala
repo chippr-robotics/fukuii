@@ -33,6 +33,9 @@ case class ConnectedPeers(
   def hasHandshakedWith(nodeId: ByteString): Boolean =
     handshakedPeersNodeIds.contains(nodeId)
 
+  def hasIncomingPendingFromHost(host: String): Boolean =
+    incomingPendingPeers.values.exists(_.remoteAddress.getHostString == host)
+
   def incomingPendingPeersCount: Int = incomingPendingPeers.size
   def outgoingPendingPeersCount: Int = outgoingPendingPeers.size
   def pendingPeersCount: Int = incomingPendingPeersCount + outgoingPendingPeersCount

@@ -20,7 +20,6 @@ object ExpiringMap {
   * Map is passive which means it only check for expiration and remove expired element during get function. Duration in
   * all calls is relative to current System.nanoTime()
   */
-//TODO: Make class thread safe
 class ExpiringMap[K, V] private (
     val underlying: mutable.Map[K, ValueWithDuration[V]],
     val defaultRetentionTime: Duration

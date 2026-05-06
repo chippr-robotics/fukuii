@@ -95,7 +95,7 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
     "-no-link-warnings" // Suppress link resolution warnings for F-bounded polymorphism issues
   ),
   scalacOptions ~= (options => if (fukuiiDev) options.filterNot(_ == "-Xfatal-warnings") else options),
-  Test / parallelExecution := true,
+  Test / parallelExecution := false,
   Test / fork := true, // Fork JVM for tests to ensure clean shutdown and avoid resource leak issues
   Test / javaOptions ++= Seq(
     "-Dpekko.coordinated-shutdown.exit-jvm=off", // Prevent CoordinatedShutdown from calling System.exit

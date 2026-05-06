@@ -1,7 +1,9 @@
 # fukuii-extvm-pb
 
-This repository exposes a protobuf based API for integrating Fukuii (originally forked from [Mantis](https://github.com/input-output-hk/mantis)) with external VM implementations (KEVM, IELE)
+Protobuf API for integrating Fukuii with an external VM process.
 
- * **msg.proto** - contains message definitions
- * **VERSION** - specifies the version of the protocol to be included in `Hello` message
+ * **msg.proto** — message definitions for the external VM protocol
+ * **VERSION** — protocol version included in the `Hello` message
 
+External VM support (IELE, KEVM) was experimental in the original Mantis codebase and has been removed.
+Only `vm.mode = "internal"` is supported; the internal EVM is always used.

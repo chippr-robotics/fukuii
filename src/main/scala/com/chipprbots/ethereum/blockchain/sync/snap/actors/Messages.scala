@@ -126,6 +126,7 @@ object Messages {
   case object ByteCodePivotRefreshed extends ByteCodeCoordinatorMessage
 
   case class ByteCodePeerAvailable(peer: Peer) extends ByteCodeCoordinatorMessage
+  case class ByteCodePeerUnavailable(peerId: String) extends ByteCodeCoordinatorMessage
   case class ByteCodeTaskComplete(requestId: BigInt, result: Either[String, Int]) extends ByteCodeCoordinatorMessage
   case class ByteCodeTaskFailed(requestId: BigInt, reason: String) extends ByteCodeCoordinatorMessage
   case object ByteCodeGetProgress extends ByteCodeCoordinatorMessage
@@ -161,6 +162,7 @@ object Messages {
   case class AddStorageTasks(tasks: Seq[StorageTask]) extends StorageRangeCoordinatorMessage
   case class AddStorageTask(task: StorageTask) extends StorageRangeCoordinatorMessage
   case class StoragePeerAvailable(peer: Peer) extends StorageRangeCoordinatorMessage
+  case class StoragePeerUnavailable(peerId: String) extends StorageRangeCoordinatorMessage
   case class StorageTaskComplete(requestId: BigInt, result: Either[String, Int]) extends StorageRangeCoordinatorMessage
   case class StorageTaskFailed(requestId: BigInt, reason: String) extends StorageRangeCoordinatorMessage
   case object StorageGetProgress extends StorageRangeCoordinatorMessage
@@ -237,6 +239,7 @@ object Messages {
     */
   case class QueueMissingNodes(nodes: Seq[(Seq[ByteString], ByteString)]) extends TrieNodeHealingCoordinatorMessage
   case class HealingPeerAvailable(peer: Peer) extends TrieNodeHealingCoordinatorMessage
+  case class HealingPeerUnavailable(peerId: String) extends TrieNodeHealingCoordinatorMessage
   case class HealingTaskComplete(requestId: BigInt, result: Either[String, Int])
       extends TrieNodeHealingCoordinatorMessage
   case class HealingTaskFailed(requestId: BigInt, reason: String) extends TrieNodeHealingCoordinatorMessage
@@ -258,6 +261,7 @@ object Messages {
     * the new root.
     */
   case object HealingForceComplete extends TrieNodeHealingCoordinatorMessage
+  case class WalkStateChanged(inProgress: Boolean) extends TrieNodeHealingCoordinatorMessage
 
   sealed trait TrieNodeHealingWorkerMessage
   case class FetchTrieNodes(task: HealingTask, peer: Peer) extends TrieNodeHealingWorkerMessage

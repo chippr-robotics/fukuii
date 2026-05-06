@@ -665,6 +665,31 @@ class StorageRangeCoordinator(
         dispatchIfPossible(peer)
       }
 
+    case StoragePeerUnavailable(peerId) =>
+      // Peer disconnected — remove from available set and immediately re-queue its in-flight
+      // tasks so other peers can pick them up without waiting for the 30s request timeout.
+      // Mirrors AccountRangeCoordinator.PeerUnavailable (go-ethereum revertRequests pattern).
+      knownAvailablePeers.find(_.id.value == peerId).foreach(knownAvailablePeers -= _)
+      peerConsecutiveTimeouts.remove(peerId)
+      peerCooldownUntilMs.remove(peerId)
+      val inFlight = activeTasks.filter { case (_, (peer, _, _)) => peer.id.value == peerId }.keys.toSeq
+      if (inFlight.nonEmpty) {
+        log.debug(s"Peer $peerId disconnected — re-queuing ${inFlight.size} in-flight storage request(s)")
+        inFlight.foreach { reqId =>
+          activeTasks.remove(reqId).foreach { case (_, batchTasks, _) =>
+            batchTasks.foreach { task =>
+              task.pending = false
+              val key = (task.accountHash, task.next)
+              if (!pendingTaskKeys.contains(key)) {
+                pendingTaskKeys += key
+                tasks.enqueue(task)
+              }
+            }
+          }
+        }
+      }
+      tryRedispatchPendingTasks()
+
     case UpdateMaxInFlightPerPeer(newLimit) =>
       log.info(s"Storage per-peer budget: $maxInFlightPerPeer -> $newLimit")
       maxInFlightPerPeer = newLimit

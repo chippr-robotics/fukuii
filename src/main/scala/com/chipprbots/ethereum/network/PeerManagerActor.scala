@@ -265,10 +265,7 @@ class PeerManagerActor(
 
   private def handleConnections(connectedPeers: ConnectedPeers): Receive = {
     case PeerClosedConnection(peerAddress, reason) =>
-      val isMaintainedPeer = connectedPeers.peers.values
-        .find(_.remoteAddress.getHostString == peerAddress)
-        .flatMap(_.nodeId)
-        .exists(nid => maintainedPeersByNodeId.contains(Hex.toHexString(nid.toArray)))
+      val isMaintainedPeer = maintainedPeersByNodeId.values.exists(_.getHost == peerAddress)
       if (!isMaintainedPeer) {
         blacklist.add(
           PeerAddress(peerAddress),
@@ -383,7 +380,9 @@ class PeerManagerActor(
     val remoteAddress = new InetSocketAddress(uri.getHost, uri.getPort)
 
     val alreadyConnectedToPeer =
-      connectedPeers.hasHandshakedWith(nodeId) || connectedPeers.isConnectionHandled(remoteAddress)
+      connectedPeers.hasHandshakedWith(nodeId) ||
+      connectedPeers.isConnectionHandled(remoteAddress) ||
+      connectedPeers.hasIncomingPendingFromHost(uri.getHost)
     // Trusted peers bypass the max peer limit (core-geth: trustedConn flag skips maxPeers check)
     val isTrusted = trustedPeersByNodeId.contains(nodeIdHex)
     val isOutgoingPeersNotMaxValue = isTrusted || connectedPeers.outgoingPeersCount < effectiveMaxOutgoing
@@ -463,23 +462,37 @@ class PeerManagerActor(
       // Pre-handshake path: if a maintained peer's TCP actor dies before the ETH handshake
       // completes, no PeerId was assigned — the post-handshake reconnect path won't fire.
       pendingMaintainedConnections.remove(ref).foreach { uri =>
-        log.debug(
-          "Maintained peer {} TCP connection failed pre-handshake — scheduling retry in {}",
-          uri,
-          peerConfiguration.connectRetryDelay
-        )
-        context.system.scheduler.scheduleOnce(peerConfiguration.connectRetryDelay, self, ConnectToPeer(uri))(
-          context.dispatcher
-        )
+        val nodeIdHex = uri.getUserInfo.toLowerCase
+        val nodeIdBytes = ByteString(Hex.decode(nodeIdHex))
+        if (connectedPeers.hasHandshakedWith(nodeIdBytes)) {
+          log.debug("Maintained peer {} already connected via inbound — skipping pre-handshake reconnect", uri)
+        } else {
+          log.debug(
+            "Maintained peer {} TCP connection failed pre-handshake — scheduling retry in {}",
+            uri,
+            peerConfiguration.connectRetryDelay
+          )
+          context.system.scheduler.scheduleOnce(peerConfiguration.connectRetryDelay, self, ConnectToPeer(uri))(
+            context.dispatcher
+          )
+        }
       }
       val (terminatedPeersIds, newConnectedPeers) = connectedPeers.removeTerminatedPeer(ref)
       terminatedPeersIds.foreach { peerId =>
         peerStatusCache = peerStatusCache - peerId
         peerEventBus ! Publish(PeerEvent.PeerDisconnected(peerId))
         // Reconnect maintained peers — mirrors Besu's checkMaintainedConnectionPeers scheduler.
+        // NB-8: If an inbound connection from this peer is already in newConnectedPeers (AlreadyConnected
+        // race resolved in our favour), skip the reconnect timer — the inbound covers it.
+        // Fix C: 30s → 5s so we close the gap window when inbound reconnects in ~10s.
         maintainedPeersByNodeId.get(peerId.value).foreach { uri =>
-          log.debug("Maintained peer {} disconnected — scheduling reconnect in 30s", uri)
-          context.system.scheduler.scheduleOnce(30.seconds, self, ConnectToPeer(uri))(context.dispatcher)
+          val nodeIdBytes = ByteString(Hex.decode(peerId.value))
+          if (newConnectedPeers.hasHandshakedWith(nodeIdBytes)) {
+            log.debug("Maintained peer {} already connected via inbound — skipping reconnect", uri)
+          } else {
+            log.debug("Maintained peer {} disconnected — scheduling reconnect in 5s", uri)
+            context.system.scheduler.scheduleOnce(5.seconds, self, ConnectToPeer(uri))(context.dispatcher)
+          }
         }
       }
       // Try to replace a lost connection with another one.

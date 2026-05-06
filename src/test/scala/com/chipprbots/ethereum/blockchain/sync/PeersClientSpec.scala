@@ -121,6 +121,29 @@ class PeersClientSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyC
     PeersClient.bestPeerWithMinBlock(pool, BigInt(10789531)) shouldEqual Some(peer1)
   }
 
+  it should "exclude tried peers from BestPeerWithMinBlockExcluding" taggedAs (UnitTest, SyncTest) in {
+    val peerAhead = peer1.id -> PeerWithInfo(peer1, peerInfo(td = 200).copy(maxBlockNumber = 10_789_600))
+    val peerAlsoAhead = peer2.id -> PeerWithInfo(peer2, peerInfo(td = 100).copy(maxBlockNumber = 10_789_600))
+    // peer1 excluded (already tried) → peer2 selected despite lower TD
+    PeersClient.bestPeerWithMinBlockExcluding(
+      Map(peerAhead, peerAlsoAhead),
+      BigInt(10_789_531),
+      exclude = Set(peer1.id)
+    ) shouldEqual Some(peer2)
+  }
+
+  it should "return None from BestPeerWithMinBlockExcluding when all eligible peers are excluded" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
+    val onlyPeer = peer1.id -> PeerWithInfo(peer1, peerInfo(td = 200).copy(maxBlockNumber = 10_789_600))
+    PeersClient.bestPeerWithMinBlockExcluding(
+      Map(onlyPeer),
+      BigInt(10_789_531),
+      exclude = Set(peer1.id)
+    ) shouldEqual None
+  }
+
   object Peers {
     implicit val system: ActorSystem = ActorSystem("PeersClient_System")
 

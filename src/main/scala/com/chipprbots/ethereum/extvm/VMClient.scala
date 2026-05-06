@@ -24,10 +24,7 @@ class VMClient(externalVmConfig: VmConfig.ExternalConfig, messageHandler: Messag
 
   def sendHello(version: String, blockchainConfig: BlockchainConfig): Unit = {
     val config = BlockchainConfigForEvm(blockchainConfig)
-    val configMsg = externalVmConfig.vmType match {
-      case VmConfig.ExternalConfig.VmTypeIele => msg.Hello.Config.IeleConfig(buildIeleConfigMsg())
-      case _                                  => msg.Hello.Config.EthereumConfig(buildEthereumConfigMsg(config))
-    }
+    val configMsg = msg.Hello.Config.EthereumConfig(buildEthereumConfigMsg(config))
     val helloMsg = msg.Hello(version, configMsg)
     messageHandler.sendMessage(helloMsg)
   }
@@ -157,13 +154,9 @@ class VMClient(externalVmConfig: VmConfig.ExternalConfig, messageHandler: Messag
     import msg.CallContext.Config
     val blockHeader = buildBlockHeaderMsg(ctx.blockHeader)
 
-    val config = externalVmConfig.vmType match {
-      case VmConfig.ExternalConfig.VmTypeIele => Config.IeleConfig(buildIeleConfigMsg()) // always pass config for IELE
-      case VmConfig.ExternalConfig.VmTypeKevm =>
-        Config.EthereumConfig(buildEthereumConfigMsg(ctx.evmConfig.blockchainConfig)) // always pass config for KEVM
-      case _ if testMode => Config.EthereumConfig(buildEthereumConfigMsg(ctx.evmConfig.blockchainConfig))
-      case _             => Config.Empty
-    }
+    val config =
+      if (testMode) Config.EthereumConfig(buildEthereumConfigMsg(ctx.evmConfig.blockchainConfig))
+      else Config.Empty
 
     val txType =
       if (ctx.warmAddresses.isEmpty && ctx.warmStorage.isEmpty) msg.CallContext.TxType.LEGACY
@@ -212,9 +205,6 @@ class VMClient(externalVmConfig: VmConfig.ExternalConfig, messageHandler: Messag
       accountStartNonce = blockchainConfig.accountStartNonce,
       chainId = ByteString(blockchainConfig.chainId)
     )
-
-  private def buildIeleConfigMsg(): msg.IeleConfig =
-    msg.IeleConfig()
 
   private def buildBlockHeaderMsg(header: BlockHeader): msg.BlockHeader =
     msg.BlockHeader(
