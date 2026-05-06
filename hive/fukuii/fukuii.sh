@@ -97,25 +97,6 @@ fi
 [ -n "$PRAGUE_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.prague-timestamp=$PRAGUE_TS"
 [ -n "$OSAKA_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.osaka-timestamp=$OSAKA_TS"
 
-# Sync configuration: hive provides exactly one peer per sink test
-# (HIVE_BOOTNODE → static-nodes.json below). Fukuii's production defaults
-# (sync.conf) target multi-peer networks: SNAP requires a snap-capable peer
-# and fast-sync needs `min-peers-to-choose-pivot-block + margin = 6` voters
-# to elect a pivot. Both wedge under hive's single-peer constraint:
-#   * Suite 1 (`ethereum/sync`) runs geth / nethermind without their SNAP
-#     servers enabled, so fukuii sees zero snap peers, sits in SNAP's
-#     bootstrap-retry loop (5-min default), and the 60s sim budget elapses
-#     before any fall-back kicks in.
-#   * Even after fallback, fast-sync's PivotBlockSelector won't reach quorum
-#     with one voter.
-# Disable SNAP and shrink fast-sync's quorum to 1 peer here. Production
-# settings remain unchanged for non-hive runs.
-FLAGS="$FLAGS -Dfukuii.sync.do-snap-sync=false"
-FLAGS="$FLAGS -Dfukuii.sync.do-fast-sync=true"
-FLAGS="$FLAGS -Dfukuii.sync.min-peers-to-choose-pivot-block=1"
-FLAGS="$FLAGS -Dfukuii.sync.peers-to-choose-pivot-block-margin=0"
-FLAGS="$FLAGS -Dfukuii.sync.peers-to-fetch-from=1"
-
 # RPC
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.enabled=true"
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.interface=0.0.0.0"
