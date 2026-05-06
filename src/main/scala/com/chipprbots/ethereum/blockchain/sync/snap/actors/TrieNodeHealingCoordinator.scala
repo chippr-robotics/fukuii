@@ -135,12 +135,6 @@ class TrieNodeHealingCoordinator(
   private var pivotRefreshRequestedAt: Long = 0L
   private val PivotRefreshWatchdogMs: Long = 15.minutes.toMillis
 
-  // Consecutive timeout tracking: peers that time out repeatedly are treated as stateless.
-  // Timeouts on ETH mainnet peers (which advertise snap/1 but lack ETC state) produce 60s hangs
-  // without ever returning an empty response — the empty-response path alone is insufficient.
-  private val peerConsecutiveTimeouts = mutable.Map[String, Int]()
-  private val MaxConsecutiveTimeoutsBeforeStateless = 3
-
   // Per-peer adaptive byte budgeting
   private val minResponseBytes: BigInt = 50 * 1024
   private val maxResponseBytes: BigInt = 2 * 1024 * 1024
@@ -294,7 +288,6 @@ class TrieNodeHealingCoordinator(
       // tasks so other peers can pick them up without waiting for the 30s request timeout.
       // Mirrors AccountRangeCoordinator.PeerUnavailable (go-ethereum revertRequests pattern).
       knownAvailablePeers.filterInPlace(_.id.value != peerId)
-      peerConsecutiveTimeouts.remove(peerId)
       val inFlight = activeRequests.filter { case (_, req) => req.peer.id.value == peerId }.keys.toSeq
       if (inFlight.nonEmpty) {
         log.debug(s"Peer $peerId disconnected — re-queuing ${inFlight.size} in-flight healing request(s)")
@@ -342,7 +335,6 @@ class TrieNodeHealingCoordinator(
       pendingTasks.clear() // Will be re-populated by root reseed + inline discovery / trie walk from controller
       pendingHashSet.clear()
       statelessPeers.clear()
-      peerConsecutiveTimeouts.clear()
       peerCooldownUntilMs.clear()
       peerResponseBytesTarget.clear()
       // Cancel active requests (they're for the old root)
@@ -465,7 +457,6 @@ class TrieNodeHealingCoordinator(
           // Without this clear, eligiblePeers stays empty forever — HealingAllPeersStateless can't
           // fire because fresh peers keep arriving, keeping knownAvailablePeers.size > statelessPeers.size.
           statelessPeers.clear()
-          peerConsecutiveTimeouts.clear()
           peerCooldownUntilMs.clear()
           consecutiveIdleChecks = 0 // Reset so we don't immediately force-complete on the next tick
           log.info(
@@ -691,7 +682,6 @@ class TrieNodeHealingCoordinator(
       adjustResponseBytesOnSuccess(peer, requestedBytes, BigInt(receivedBytes))
       // Successful response — clear stateless marking and reset stagnation timer
       statelessPeers -= peer.id.value
-      peerConsecutiveTimeouts.remove(peer.id.value)
       lastHealedAtMs = System.currentTimeMillis()
     } else {
       adjustResponseBytesOnFailure(peer, "empty healing response")
@@ -745,37 +735,14 @@ class TrieNodeHealingCoordinator(
   }
 
   private def handleTimeout(requestId: BigInt, tasks: Seq[HealingEntry], peer: Peer): Unit = {
-    log.warning(s"Healing request timed out: reqId=$requestId, tasks=${tasks.size}, peer=${peer.id.value}")
+    // go-ethereum reference: timeouts rotate tasks back to queue, peer returns to idle — no stateless marking.
+    // (Stateless is only for empty responses.) forkAccepted filter already screens out ETH mainnet peers
+    // that advertise snap/1 but have no ETC state, so the original timeout→stateless rationale no longer applies.
+    log.warning(s"Healing request timed out: reqId=$requestId, tasks=${tasks.size}, peer=${peer.id.value} — re-queuing")
 
     activeRequests.remove(requestId)
     recordPeerCooldown(peer, "request timeout")
     adjustResponseBytesOnFailure(peer, "request timeout")
-
-    // Escalate repeated timeouts to stateless: ETH mainnet peers advertise snap/1 but lack ETC
-    // state and never return an empty response — they simply time out indefinitely. After
-    // MaxConsecutiveTimeoutsBeforeStateless timeouts we treat the peer as stateless, the same as
-    // an empty response, so that HealingAllPeersStateless fires instead of looping forever.
-    val timeoutCount = peerConsecutiveTimeouts.getOrElse(peer.id.value, 0) + 1
-    peerConsecutiveTimeouts.update(peer.id.value, timeoutCount)
-    if (timeoutCount >= MaxConsecutiveTimeoutsBeforeStateless && !statelessPeers.contains(peer.id.value)) {
-      statelessPeers += peer.id.value
-      // NB-7: Evict from knownAvailablePeers so the 1s scheduler tick doesn't re-add this peer
-      // until the next pivot refresh clears statelessPeers.
-      knownAvailablePeers.filterInPlace(_.id != peer.id)
-      log.info(
-        s"Peer ${peer.id.value} marked stateless after $timeoutCount consecutive timeouts " +
-          s"(${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
-      )
-      if (statelessPeers.size >= knownAvailablePeers.size && statelessPeers.nonEmpty && !pivotRefreshRequested) {
-        pivotRefreshRequested = true
-        pivotRefreshRequestedAt = System.currentTimeMillis()
-        log.warning(
-          s"All ${statelessPeers.size} healing peers stateless (via timeouts) for root " +
-            s"${Hex.toHexString(stateRoot.take(4).toArray)}. Requesting pivot refresh."
-        )
-        snapSyncController ! SNAPSyncController.HealingAllPeersStateless
-      }
-    }
 
     // Re-queue all timed-out tasks unconditionally — aligned with go-ethereum and Besu pipeline
     // behaviour. Both reference clients never permanently abandon nodes: go-ethereum puts them

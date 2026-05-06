@@ -582,6 +582,51 @@ class TrieNodeHealingCoordinatorSpec
     networkPeerManager.expectNoMessage(300.millis)
   }
 
+  it should "not mark a peer stateless on repeated GetTrieNodes timeouts (go-ethereum: timeouts rotate tasks only)" taggedAs UnitTest in {
+    // Regression guard: old code marked peer stateless after MaxConsecutiveTimeoutsBeforeStateless (3)
+    // timeouts, then fired HealingAllPeersStateless to SNAPSyncController.
+    // New behavior (go-ethereum aligned): timeouts only re-queue tasks — no stateless marking.
+    val stateRoot = kec256(ByteString("nb7-timeout-no-stateless-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("timeout-peer", peerProbe.ref)
+
+    val coordinator = system.actorOf(
+      TrieNodeHealingCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        batchSize = 1,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    coordinator ! Messages.StartTrieNodeHealing(stateRoot) // seeds root as reqId=1
+    // Queue 2 more tasks so 3 requests are dispatched concurrently (default maxInFlightPerPeer=5)
+    coordinator ! Messages.QueueMissingNodes(Seq(
+      (Seq(ByteString(Array[Byte](0x01))), kec256(ByteString("missing-node-2"))),
+      (Seq(ByteString(Array[Byte](0x02))), kec256(ByteString("missing-node-3")))
+    ))
+    coordinator ! Messages.HealingPeerAvailable(peer)
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds) // reqId=1
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds) // reqId=2
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds) // reqId=3
+
+    // Simulate 3 consecutive timeouts for the same peer (one per active request)
+    coordinator ! Messages.HealingRequestTimeout(BigInt(1))
+    coordinator ! Messages.HealingRequestTimeout(BigInt(2))
+    coordinator ! Messages.HealingRequestTimeout(BigInt(3))
+
+    // Key assertion: HealingAllPeersStateless must NOT be sent.
+    // With the old code the 3rd timeout triggered stateless marking → all-peers-stateless →
+    // SNAPSyncController.HealingAllPeersStateless. With the new code this never happens.
+    snapSyncController.expectNoMessage(500.millis)
+  }
+
   it should "re-admit a stateless peer after HealingPivotRefreshed clears statelessPeers" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("nb7-readmit-root"))
     val storage = new TestMptStorage()
