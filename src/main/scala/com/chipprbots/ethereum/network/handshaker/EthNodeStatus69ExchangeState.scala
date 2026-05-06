@@ -111,20 +111,10 @@ case class EthNodeStatus69ExchangeState(
     val bestBlockNumber = blockchainReader.getBestBlockNumber()
     val genesisHash = blockchainReader.genesisHeader.hash
 
-    // Compute ForkId from current block. Per EIP-2124/EIP-6122 the wire forkId
-    // must reflect the local chain state at the head block (head number + head
-    // timestamp). go-ethereum's `forkid.NewID(config, genesis, head, time)` uses
-    // the block's timestamp directly with no wall-clock fallback (eth/protocols/
-    // eth/handler.go). A node at genesis with `unixTimestamp == 0` correctly
-    // advertises `ForkId(genesisCRC, Some(firstFork))` — peers reach Connect
-    // through EIP-2124's checkSubset/checkSuperset rules. Substituting wall-clock
-    // here causes fukuii to advertise a forkId chain its actual chain has not
-    // yet crossed, breaking interop with peers (geth, nethermind) whose own
-    // chain state lags the wall clock — the symptom on hive sync sims where
-    // `sync fukuii from go-ethereum` and `sync fukuii from nethermind` time
-    // out at 60s while `sync fukuii from fukuii` succeeds (both sides share
-    // the wall-clock skew so they happen to agree).
-    val forkId = ForkId.create(genesisHash, blockchainConfig)(bestBlockNumber, bestBlockHeader.unixTimestamp)
+    // Compute ForkId from current block (same as ETH64-68)
+    val forkIdTimestamp =
+      if (bestBlockHeader.unixTimestamp == 0L) System.currentTimeMillis() / 1000 else bestBlockHeader.unixTimestamp
+    val forkId = ForkId.create(genesisHash, blockchainConfig)(bestBlockNumber, forkIdTimestamp)
 
     // ETH/69: no TD, use block range instead
     val status = ETH69.Status(

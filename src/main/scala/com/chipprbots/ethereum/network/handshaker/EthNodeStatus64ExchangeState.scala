@@ -36,11 +36,11 @@ case class EthNodeStatus64ExchangeState(
 
     val localBestBlock = blockchainReader.getBestBlockNumber()
     val localGenesisHash = blockchainReader.genesisHeader.hash
-    // ForkId reflects local chain state at the head block (head number + head
-    // timestamp), per EIP-2124/EIP-6122 and go-ethereum's reference. No
-    // wall-clock substitution — see `createStatusMsg` below for the hive-sync
-    // interop bug that caused.
-    val localBestTimestamp = blockchainReader.getBlockHeaderByNumber(localBestBlock).map(_.unixTimestamp).getOrElse(0L)
+    // Use current system time if best block is genesis (timestamp 0) — this happens at startup
+    // before Engine API imports any blocks. Without this, ForkID incorrectly reports pre-Shanghai
+    // and all post-merge peers reject us.
+    val storedTimestamp = blockchainReader.getBlockHeaderByNumber(localBestBlock).map(_.unixTimestamp).getOrElse(0L)
+    val localBestTimestamp = if (storedTimestamp == 0L) System.currentTimeMillis() / 1000 else storedTimestamp
     val localForkId = ForkId.create(localGenesisHash, blockchainConfig)(localBestBlock, localBestTimestamp)
 
     log.info(
@@ -121,14 +121,10 @@ case class EthNodeStatus64ExchangeState(
     //
     // To align with core-geth: Use actual bestBlockNumber for ForkId calculation.
     val forkIdBlockNumber = bestBlockNumber
-    // Pass the block's timestamp directly. Per EIP-2124/EIP-6122 the wire
-    // forkId must mirror the local chain state at the head block; geth's
-    // `forkid.NewID(config, genesis, head, time)` does no wall-clock substitution.
-    // A node at genesis with `unixTimestamp == 0` correctly advertises
-    // `ForkId(genesisCRC, Some(firstFork))` — checkSubset/checkSuperset on the
-    // peer side reach Connect. See EthNodeStatus69ExchangeState for the
-    // hive-sync interop bug the previous wall-clock fallback caused.
-    val forkId = ForkId.create(genesisHash, blockchainConfig)(forkIdBlockNumber, bestBlockHeader.unixTimestamp)
+    // Use system time when at genesis to correctly advertise post-merge fork status
+    val forkIdTimestamp =
+      if (bestBlockHeader.unixTimestamp == 0L) System.currentTimeMillis() / 1000 else bestBlockHeader.unixTimestamp
+    val forkId = ForkId.create(genesisHash, blockchainConfig)(forkIdBlockNumber, forkIdTimestamp)
 
     val status = ETH64.Status(
       protocolVersion = negotiatedCapability.version,
