@@ -1120,6 +1120,9 @@ class AccountRangeCoordinator(
         } else {
           // Need more requests for the same interval; re-queue with updated `next`.
           pendingTasks.enqueue(task)
+          // Persist partial range position so a crash mid-range resumes from here,
+          // not the beginning of the range (go-ethereum saveSyncStatus() parity).
+          sendProgressSnapshot()
         }
 
         // Threshold-based flush: only flush to RocksDB when accumulated nodes exceed threshold.
