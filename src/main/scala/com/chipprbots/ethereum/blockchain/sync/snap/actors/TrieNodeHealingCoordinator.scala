@@ -42,10 +42,9 @@ class TrieNodeHealingCoordinator(
   // Task management — each task has a pathset (for GetTrieNodes) and a hash (for verification).
   // ArrayDeque (circular buffer) gives O(1) amortized head/tail operations (#1167). The previous
   // immutable `Seq` did O(n) on every `:+` and head-drop — quadratic at healing scale.
-  private case class HealingEntry(pathset: Seq[ByteString], hash: ByteString, retries: Int = 0)
+  private case class HealingEntry(pathset: Seq[ByteString], hash: ByteString)
   private val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
   private var completedTaskCount: Int = 0
-  private var abandonedTaskCount: Int = 0
 
   /** Dedicated dispatcher for the batched raw-node RocksDB flush. Tests inject their own EC; production looks up
     * `healing-writer-dispatcher` from the actor system. Keeps the blocking write off `sync-dispatcher` so other sync
@@ -53,10 +52,6 @@ class TrieNodeHealingCoordinator(
     */
   private val healingWriterEc: ExecutionContext =
     healingWriterEcOverride.getOrElse(context.system.dispatchers.lookup("healing-writer-dispatcher"))
-
-  // Per-task retry limit: after this many timeouts/failures, skip the task.
-  // At ~6s per timeout cycle, 20 retries = ~2 minutes of trying per node.
-  private val maxRetriesPerTask: Int = 20
 
   // Global stagnation detection: if no nodes healed for this duration, declare
   // healing complete with a warning. Prevents infinite loops when all peers lack
@@ -203,6 +198,9 @@ class TrieNodeHealingCoordinator(
   // Internal message for async flush completion
   private case class FlushComplete(count: Int)
 
+  // Internal message for async frontier rebuild completion (crash-recovery BFS)
+  private case class FrontierRebuilt(entries: Seq[HealingEntry])
+
   /** Synchronous flush — used only for final completion flush (small buffer, safe to block). */
   private def flushRawNodesSync(): Unit =
     if (rawNodeBuffer.nonEmpty) {
@@ -248,18 +246,45 @@ class TrieNodeHealingCoordinator(
 
   override def receive: Receive = {
     case StartTrieNodeHealing(root) =>
-      log.info(s"Starting trie node healing for state root ${Hex.toHexString(root.take(8).toArray)}")
-      // ARCH-ROOT-SEED: Seed immediately with root node (Besu-style top-down discovery).
-      // Prior: waited 3+ hours for walk results. Now: healing starts instantly.
-      // When root is healed, discoverMissingChildren() discovers all children inline.
-      // Walk becomes validation-only — its results remain additive (dedup prevents duplicates).
       val emptyPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-      queueNodes(Seq((Seq(emptyPath), root)))
+      if (isNodeInStorage(root)) {
+        // ARCH-HEAL-RESTART: Root already healed — crash/restart mid-healing detected.
+        // Rebuild the frontier by traversing locally-stored trie nodes instead of re-requesting
+        // known nodes from the network (go-ethereum trie.Sync.Missing() analogue).
+        // Recovery cost: O(healed_nodes × local_read) vs O(healed_nodes × network_rtt).
+        log.info(
+          s"[HEAL-RESTART] Root ${Hex.toHexString(root.take(8).toArray)} already in local storage " +
+            s"— rebuilding frontier via local BFS (crash recovery, go-ethereum trie.Sync.Missing() pattern)"
+        )
+        val selfRef = self
+        val ec = healingWriterEc
+        import scala.concurrent.Future
+        Future {
+          val frontier = mutable.Buffer.empty[HealingEntry]
+          val visited = mutable.Set.empty[ByteString]
+          rebuildFrontierBFS(root, Seq(emptyPath), isStor = false, frontier, visited)
+          frontier.toSeq
+        }(ec).foreach(entries => selfRef ! FrontierRebuilt(entries))(ec)
+      } else {
+        // ARCH-ROOT-SEED: Fresh start — seed root and let inline discovery populate the queue.
+        log.info(
+          s"[HEAL] Root ${Hex.toHexString(root.take(8).toArray)} not yet in storage " +
+            s"— seeding root for inline child discovery (Besu-aligned top-down)"
+        )
+        queueNodes(Seq((Seq(emptyPath), root)))
+        lastHealedAtMs = System.currentTimeMillis()
+      }
+
+    case FrontierRebuilt(entries) =>
       log.info(
-        s"[HEAL] Root ${Hex.toHexString(root.take(8).toArray)} seeded — " +
-          s"inline child discovery will populate work queue top-down (Besu-aligned)"
+        s"[HEAL-RESTART] Frontier rebuild complete: ${entries.size} missing nodes identified " +
+          s"— resuming healing from crash-recovery frontier"
       )
+      if (entries.isEmpty)
+        log.warning("[HEAL-RESTART] Frontier is empty after BFS — trie may already be fully healed or storage is corrupt")
+      queueNodes(entries.map(e => (e.pathset, e.hash)))
       lastHealedAtMs = System.currentTimeMillis()
+      tryRedispatchPendingTasks()
 
     case QueueMissingNodes(nodes) =>
       log.info(s"Queuing ${nodes.size} missing nodes for healing")
@@ -810,6 +835,125 @@ class TrieNodeHealingCoordinator(
 
   private def isComplete: Boolean =
     pendingTasks.isEmpty && activeRequests.isEmpty
+
+  /** Rebuild the healing frontier from locally-stored trie nodes after a crash/restart.
+    *
+    * Iterative BFS (avoids stack overflow at trie depth 64). Mirrors go-ethereum's
+    * trie.Sync.Missing() pattern: traverse the locally-stored subtree from the pivot root,
+    * discover children of healed nodes via local reads, and collect missing children as the
+    * frontier. Runs on healingWriterEc (off the actor dispatcher) so the mailbox stays live.
+    *
+    * For each node hash:
+    *   - in local storage  → already healed; decode children and enqueue them
+    *   - not in storage    → missing; add to frontier (pendingTasks on completion)
+    */
+  private def rebuildFrontierBFS(
+      startHash: ByteString,
+      startPathset: Seq[ByteString],
+      isStor: Boolean,
+      frontier: mutable.Buffer[HealingEntry],
+      visited: mutable.Set[ByteString]
+  ): Unit = {
+    import com.chipprbots.ethereum.mpt.{BranchNode, ExtensionNode, HashNode, LeafNode}
+    import com.chipprbots.ethereum.mpt.HexPrefix
+    import com.chipprbots.ethereum.domain.Account
+    import scala.util.control.NonFatal
+
+    val queue = mutable.Queue[(ByteString, Seq[ByteString], Boolean)]()
+    queue.enqueue((startHash, startPathset, isStor))
+    var visitedCount = 0
+    var frontierCount = 0
+
+    while (queue.nonEmpty) {
+      val (hash, pathset, isStorageTrie) = queue.dequeue()
+      if (!visited.contains(hash)) {
+        visited += hash
+        visitedCount += 1
+        if (visitedCount % 10000 == 0)
+          log.info(
+            s"[HEAL-RESTART-BFS] Progress: $visitedCount nodes visited, $frontierCount frontier nodes found, " +
+              s"queue depth ${queue.size}"
+          )
+
+        val nodeOpt = try Some(mptStorage.get(hash.toArray)) catch { case _: Exception => None }
+        nodeOpt match {
+          case None =>
+            // Not in storage — missing node, add to healing frontier
+            frontier += HealingEntry(pathset, hash)
+            frontierCount += 1
+
+          case Some(node) =>
+            // Already healed — traverse children to extend the BFS
+            val compact = pathset.last.toArray
+            val nibbles = HexPrefix.decode(compact)._1
+            try {
+              node match {
+                case branch: BranchNode =>
+                  for (i <- 0 until 16)
+                    branch.children(i) match {
+                      case hashChild: HashNode =>
+                        val childHash = ByteString(hashChild.hashNode)
+                        if (!visited.contains(childHash)) {
+                          val childNibbles = nibbles :+ i.toByte
+                          val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
+                          val childPathset =
+                            if (isStorageTrie) Seq(pathset.head, childCompact) else Seq(childCompact)
+                          queue.enqueue((childHash, childPathset, isStorageTrie))
+                        }
+                      case _ => // inline-encoded child — already resolved
+                    }
+
+                case ext: ExtensionNode =>
+                  ext.next match {
+                    case hashChild: HashNode =>
+                      val childHash = ByteString(hashChild.hashNode)
+                      if (!visited.contains(childHash)) {
+                        val childNibbles = nibbles ++ ext.sharedKey.toArray
+                        val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
+                        val childPathset =
+                          if (isStorageTrie) Seq(pathset.head, childCompact) else Seq(childCompact)
+                        queue.enqueue((childHash, childPathset, isStorageTrie))
+                      }
+                    case _ =>
+                  }
+
+                case leaf: LeafNode if !isStorageTrie =>
+                  // Account trie leaf — seed storage trie root if not yet healed
+                  Account(leaf.value).foreach { account =>
+                    if (
+                      account.storageRoot != Account.EmptyStorageRootHash &&
+                      !visited.contains(account.storageRoot)
+                    ) {
+                      val leafNibbles = leaf.key.toArray
+                      val allNibbles = nibbles ++ leafNibbles
+                      if (allNibbles.length == 64) {
+                        val accountHashBytes =
+                          allNibbles.grouped(2).map(g => ((g(0) << 4) | g(1)).toByte).toArray
+                        val accountHash = ByteString(accountHashBytes)
+                        val emptyStoragePath =
+                          ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+                        queue.enqueue((account.storageRoot, Seq(accountHash, emptyStoragePath), true))
+                      }
+                    }
+                  }
+
+                case _ => // storage trie leaf, NullNode, HashNode inline — no children to traverse
+              }
+            } catch {
+              case NonFatal(e) =>
+                log.debug(
+                  s"[HEAL-RESTART-BFS] Cannot traverse stored node ${Hex.toHexString(hash.take(4).toArray)}: " +
+                    s"${e.getMessage} — skipping"
+                )
+            }
+        }
+      }
+    }
+
+    log.info(
+      s"[HEAL-RESTART-BFS] Complete: $visitedCount nodes traversed, $frontierCount missing nodes in frontier"
+    )
+  }
 
   /** Inline child discovery after each healed node — Besu/geth scheduler-driven alignment. Decodes the healed node,
     * discovers child hashes, checks storage, queues missing children. Makes healing self-feeding: root → children →
