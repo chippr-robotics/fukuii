@@ -118,6 +118,10 @@ class TrieNodeHealingCoordinator(
   private val ThrottleUpFillRatio = 0.8
   private val RateMeasurementImpact = 0.005 // geometric EMA weight per node
 
+  // Crash-recovery DFS: emit frontier in batches so healing starts before traversal completes.
+  // go-ethereum trie.Sync.Missing() alignment — bounded working set rather than full upfront BFS.
+  private val FrontierBatchSize = 1000
+
   // Track last known available peers for re-dispatch after failures
   private val knownAvailablePeers = mutable.Set[Peer]()
 
@@ -254,7 +258,8 @@ class TrieNodeHealingCoordinator(
         // Recovery cost: O(healed_nodes × local_read) vs O(healed_nodes × network_rtt).
         log.info(
           s"[HEAL-RESTART] Root ${Hex.toHexString(root.take(8).toArray)} already in local storage " +
-            s"— rebuilding frontier via local BFS (crash recovery, go-ethereum trie.Sync.Missing() pattern)"
+            s"— rebuilding frontier via local DFS in batches of $FrontierBatchSize " +
+            s"(crash recovery, go-ethereum trie.Sync.Missing() depth-first pattern)"
         )
         val selfRef = self
         val ec = healingWriterEc
@@ -262,9 +267,10 @@ class TrieNodeHealingCoordinator(
         Future {
           val frontier = mutable.Buffer.empty[HealingEntry]
           val visited = mutable.Set.empty[ByteString]
-          rebuildFrontierBFS(root, Seq(emptyPath), isStor = false, frontier, visited)
-          frontier.toSeq
-        }(ec).foreach(entries => selfRef ! FrontierRebuilt(entries))(ec)
+          rebuildFrontierDFS(root, Seq(emptyPath), isStor = false, frontier, visited,
+            batch => selfRef ! FrontierRebuilt(batch))
+          if (frontier.nonEmpty) selfRef ! FrontierRebuilt(frontier.toSeq)
+        }(ec)
       } else {
         // ARCH-ROOT-SEED: Fresh start — seed root and let inline discovery populate the queue.
         log.info(
@@ -838,52 +844,61 @@ class TrieNodeHealingCoordinator(
 
   /** Rebuild the healing frontier from locally-stored trie nodes after a crash/restart.
     *
-    * Iterative BFS (avoids stack overflow at trie depth 64). Mirrors go-ethereum's
-    * trie.Sync.Missing() pattern: traverse the locally-stored subtree from the pivot root,
-    * discover children of healed nodes via local reads, and collect missing children as the
-    * frontier. Runs on healingWriterEc (off the actor dispatcher) so the mailbox stays live.
+    * Iterative DFS (depth-first via ArrayDeque stack). Mirrors go-ethereum trie.Sync's
+    * depth-prioritized queue: drilling deep finds frontier nodes immediately, keeping the
+    * working stack O(depth × branching_factor) ≈ O(1024) rather than the O(frontier_width)
+    * growth that a BFS queue exhibits on ETC mainnet. Runs on healingWriterEc.
     *
     * For each node hash:
-    *   - in local storage  → already healed; decode children and enqueue them
-    *   - not in storage    → missing; add to frontier (pendingTasks on completion)
+    *   - in local storage  → already healed; push children onto the DFS stack
+    *   - not in storage    → missing; buffer and emit via onBatch every FrontierBatchSize entries
+    *
+    * onBatch is called inline whenever the buffer reaches FrontierBatchSize. The caller is
+    * responsible for emitting any remaining buffered entries after this method returns.
     */
-  private def rebuildFrontierBFS(
+  private def rebuildFrontierDFS(
       startHash: ByteString,
       startPathset: Seq[ByteString],
       isStor: Boolean,
       frontier: mutable.Buffer[HealingEntry],
-      visited: mutable.Set[ByteString]
+      visited: mutable.Set[ByteString],
+      onBatch: Seq[HealingEntry] => Unit
   ): Unit = {
     import com.chipprbots.ethereum.mpt.{BranchNode, ExtensionNode, HashNode, LeafNode}
     import com.chipprbots.ethereum.mpt.HexPrefix
     import com.chipprbots.ethereum.domain.Account
     import scala.util.control.NonFatal
 
-    val queue = mutable.Queue[(ByteString, Seq[ByteString], Boolean)]()
-    queue.enqueue((startHash, startPathset, isStor))
+    // DFS stack — bounded to O(depth × branching_factor) ≈ 1024 entries vs BFS O(frontier_width).
+    val stack = mutable.ArrayDeque[(ByteString, Seq[ByteString], Boolean)]()
+    stack.append((startHash, startPathset, isStor))
     var visitedCount = 0
     var frontierCount = 0
 
-    while (queue.nonEmpty) {
-      val (hash, pathset, isStorageTrie) = queue.dequeue()
+    while (stack.nonEmpty) {
+      val (hash, pathset, isStorageTrie) = stack.removeLast()
       if (!visited.contains(hash)) {
         visited += hash
         visitedCount += 1
         if (visitedCount % 10000 == 0)
           log.info(
-            s"[HEAL-RESTART-BFS] Progress: $visitedCount nodes visited, $frontierCount frontier nodes found, " +
-              s"queue depth ${queue.size}"
+            s"[HEAL-RESTART-DFS] Progress: $visitedCount nodes visited, $frontierCount frontier nodes found, " +
+              s"stack depth ${stack.size}"
           )
 
         val nodeOpt = try Some(mptStorage.get(hash.toArray)) catch { case _: Exception => None }
         nodeOpt match {
           case None =>
-            // Not in storage — missing node, add to healing frontier
+            // Not in storage — missing node, buffer for healing
             frontier += HealingEntry(pathset, hash)
             frontierCount += 1
+            if (frontier.size >= FrontierBatchSize) {
+              onBatch(frontier.toSeq)
+              frontier.clear()
+            }
 
           case Some(node) =>
-            // Already healed — traverse children to extend the BFS
+            // Already healed — push children onto the DFS stack
             val compact = pathset.last.toArray
             val nibbles = HexPrefix.decode(compact)._1
             try {
@@ -898,7 +913,7 @@ class TrieNodeHealingCoordinator(
                           val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
                           val childPathset =
                             if (isStorageTrie) Seq(pathset.head, childCompact) else Seq(childCompact)
-                          queue.enqueue((childHash, childPathset, isStorageTrie))
+                          stack.append((childHash, childPathset, isStorageTrie))
                         }
                       case _ => // inline-encoded child — already resolved
                     }
@@ -912,7 +927,7 @@ class TrieNodeHealingCoordinator(
                         val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
                         val childPathset =
                           if (isStorageTrie) Seq(pathset.head, childCompact) else Seq(childCompact)
-                        queue.enqueue((childHash, childPathset, isStorageTrie))
+                        stack.append((childHash, childPathset, isStorageTrie))
                       }
                     case _ =>
                   }
@@ -932,7 +947,7 @@ class TrieNodeHealingCoordinator(
                         val accountHash = ByteString(accountHashBytes)
                         val emptyStoragePath =
                           ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-                        queue.enqueue((account.storageRoot, Seq(accountHash, emptyStoragePath), true))
+                        stack.append((account.storageRoot, Seq(accountHash, emptyStoragePath), true))
                       }
                     }
                   }
@@ -942,7 +957,7 @@ class TrieNodeHealingCoordinator(
             } catch {
               case NonFatal(e) =>
                 log.debug(
-                  s"[HEAL-RESTART-BFS] Cannot traverse stored node ${Hex.toHexString(hash.take(4).toArray)}: " +
+                  s"[HEAL-RESTART-DFS] Cannot traverse stored node ${Hex.toHexString(hash.take(4).toArray)}: " +
                     s"${e.getMessage} — skipping"
                 )
             }
@@ -951,7 +966,7 @@ class TrieNodeHealingCoordinator(
     }
 
     log.info(
-      s"[HEAL-RESTART-BFS] Complete: $visitedCount nodes traversed, $frontierCount missing nodes in frontier"
+      s"[HEAL-RESTART-DFS] Complete: $visitedCount nodes traversed, $frontierCount missing nodes identified"
     )
   }
 
