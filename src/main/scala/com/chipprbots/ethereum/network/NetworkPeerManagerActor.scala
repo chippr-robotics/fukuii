@@ -9,8 +9,6 @@ import org.apache.pekko.actor.Props
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.db.storage.AppStateStorage
-import com.chipprbots.ethereum.db.storage.EvmCodeStorage
-import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor._
 import com.chipprbots.ethereum.network.PeerActor.DisconnectPeer
@@ -56,6 +54,10 @@ class NetworkPeerManagerActor(
   private[network] type PeersWithInfo = Map[PeerId, PeerWithInfo]
 
   // Maximum length for hex string in debug logs (to avoid very long log lines)
+
+  // ETH/69: reject BlockRangeUpdate whose latestBlock is this many blocks beyond local best.
+  // Mirrors go-ethereum's maxFutureBlockTime heuristic translated to block-number space.
+  private val FutureBlockTolerance: BigInt = 100
 
   // Mutable reference to SNAPSyncController that can be set after initialization
   private var snapSyncControllerOpt: Option[ActorRef] = initialSnapSyncControllerOpt
@@ -174,18 +176,43 @@ class NetworkPeerManagerActor(
       handleGetByteCodes(msg, peerId, peersWithInfo.get(peerId))
 
     case MessageFromPeer(message, peerId) if peersWithInfo.contains(peerId) =>
-      // Route SNAP protocol responses (from peers we're syncing from) to SNAPSyncController
-      message match {
-        case msg @ (_: AccountRange | _: StorageRanges | _: TrieNodes | _: ByteCodes) =>
-          log.debug("Routing {} message to SNAPSyncController from peer {}", msg.getClass.getSimpleName, peerId)
-          snapSyncControllerOpt.foreach(_ ! msg)
-
-        case _ => // ETH protocol messages - no special routing needed
+      // ETH/69: future-block validation for BlockRangeUpdate (go-ethereum handler.go alignment).
+      // Disconnect peers that claim a latestBlock far beyond our chain head — likely invalid or
+      // malicious. Lagging peers (latestBlock behind our head) are valid and pass through.
+      val futureBlockDisconnect = message match {
+        case bru: ETH69.BlockRangeUpdate =>
+          val localBest = appStateStorage.getBestBlockNumber()
+          // Only validate future-block when we have a meaningful chain head (> 0).
+          // At genesis/initial sync localBest=0, so any peer block would be rejected —
+          // skip the check until we've actually synced some chain state.
+          if (localBest > 0 && bru.latestBlock > localBest + FutureBlockTolerance) {
+            log.warning(
+              s"BlockRangeUpdate from peer ${peerId.value}: latestBlock=${bru.latestBlock} " +
+                s"is ${bru.latestBlock - localBest} blocks ahead of local best=$localBest " +
+                s"(tolerance=$FutureBlockTolerance). Disconnecting (BreachOfProtocol)."
+            )
+            peersWithInfo(peerId).peer.ref ! DisconnectPeer(Disconnect.Reasons.BreachOfProtocol)
+            true
+          } else false
+        case _ => false
       }
 
-      val newPeersWithInfo = updatePeersWithInfo(peersWithInfo, peerId, message, handleReceivedMessage)
-      NetworkMetrics.ReceivedMessagesCounter.increment()
-      context.become(handleMessages(newPeersWithInfo))
+      if (futureBlockDisconnect) {
+        context.become(handleMessages(peersWithInfo - peerId))
+      } else {
+        // Route SNAP protocol responses (from peers we're syncing from) to SNAPSyncController
+        message match {
+          case msg @ (_: AccountRange | _: StorageRanges | _: TrieNodes | _: ByteCodes) =>
+            log.debug("Routing {} message to SNAPSyncController from peer {}", msg.getClass.getSimpleName, peerId)
+            snapSyncControllerOpt.foreach(_ ! msg)
+
+          case _ => // ETH protocol messages - no special routing needed
+        }
+
+        val newPeersWithInfo = updatePeersWithInfo(peersWithInfo, peerId, message, handleReceivedMessage)
+        NetworkMetrics.ReceivedMessagesCounter.increment()
+        context.become(handleMessages(newPeersWithInfo))
+      }
 
     case PeerHandshakeSuccessful(peer, peerInfo: PeerInfo) =>
       val chainInfoDisplay =
