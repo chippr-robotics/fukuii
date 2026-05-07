@@ -9,6 +9,7 @@ import org.apache.pekko.event.ActorEventBus
 import org.apache.pekko.stream.OverflowStrategy
 import org.apache.pekko.stream.scaladsl.Source
 
+import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MaintainedPeersChanged
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPeer
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnected
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerHandshakeSuccessful
@@ -67,6 +68,7 @@ object PeerEventBusActor {
     case class MessageClassifier(messageCodes: Set[Int], peerSelector: PeerSelector) extends SubscriptionClassifier
     case class PeerDisconnectedClassifier(peerSelector: PeerSelector) extends SubscriptionClassifier
     case object PeerHandshaked extends SubscriptionClassifier
+    case object MaintainedPeersClassifier extends SubscriptionClassifier
   }
 
   sealed trait PeerEvent
@@ -75,6 +77,7 @@ object PeerEventBusActor {
     case class MessageFromPeer(message: Message, peerId: PeerId) extends PeerEvent
     case class PeerDisconnected(peerId: PeerId) extends PeerEvent
     case class PeerHandshakeSuccessful[R <: HandshakeResult](peer: Peer, handshakeResult: R) extends PeerEvent
+    case class MaintainedPeersChanged(nodeIds: Set[String]) extends PeerEvent
   }
 
   case class Subscription(subscriber: ActorRef, classifier: SubscriptionClassifier)
@@ -143,6 +146,10 @@ object PeerEventBusActor {
           }
         case _: PeerHandshakeSuccessful[_] =>
           connectionSubscriptions.collect { case Subscription(subscriber, PeerHandshaked) =>
+            subscriber
+          }
+        case MaintainedPeersChanged(_) =>
+          connectionSubscriptions.collect { case Subscription(subscriber, MaintainedPeersClassifier) =>
             subscriber
           }
       }

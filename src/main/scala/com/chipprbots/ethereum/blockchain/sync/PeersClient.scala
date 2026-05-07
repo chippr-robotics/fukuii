@@ -13,7 +13,10 @@ import scala.reflect.ClassTag
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
 import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg.PeerWithInfo
+import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MaintainedPeersChanged
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnected
+import com.chipprbots.ethereum.network.PeerEventBusActor.Subscribe
+import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.MaintainedPeersClassifier
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
@@ -55,6 +58,12 @@ class PeersClient(
 
   implicit val ec: ExecutionContext = context.dispatcher
 
+  // Besu alignment: PeerDenylistManager.java:56 skips maintained peers at add() call site.
+  // Subscribe at startup so updates are received before any BlacklistPeer message can arrive.
+  peerEventBus ! Subscribe(MaintainedPeersClassifier)
+  private var _maintainedNodeIdHexes: Set[String] = Set.empty
+  override protected def maintainedNodeIdHexes: Set[String] = _maintainedNodeIdHexes
+
   // Tracks GetNodeData capability per peer via observed behavior (not advertised capability).
   // Shared across all StateNodeFetcher actors so the first failure protects all concurrent requests.
   private val nodeDataCooldownUntilMs = mutable.Map.empty[PeerId, Long]
@@ -80,6 +89,9 @@ class PeersClient(
 
   def running(requesters: Requesters): Receive =
     handlePeerListMessages.orElse {
+      case MaintainedPeersChanged(nodeIds) =>
+        _maintainedNodeIdHexes = nodeIds
+        log.debug("Updated maintained peer node IDs: {} peers", nodeIds.size)
       case PrintStatus                   => printStatus(requesters: Requesters)
       case BlacklistPeer(peerId, reason) => blacklistIfHandshaked(peerId, syncConfig.blacklistDuration, reason)
       case RecordNodeDataFailure(peerId) =>

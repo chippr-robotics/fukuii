@@ -75,6 +75,7 @@ SCRATCH.md
 
 # Local working directory (session notes, reference reports, attempt logs)
 local/
+.local/
 
 # Secrets & credentials
 .env

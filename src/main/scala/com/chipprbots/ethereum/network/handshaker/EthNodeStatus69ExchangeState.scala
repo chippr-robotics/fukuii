@@ -74,18 +74,40 @@ case class EthNodeStatus69ExchangeState(
         validationResult match {
           case Connect =>
             log.info("ETH69_STATUS: ForkId validation passed - accepting peer")
-            // Look up actual PoW TD from local chain DB using the peer's latestBlockHash.
+            // Look up actual TD from local chain DB using the peer's latestBlockHash.
             // Succeeds when the peer's block is in our ChainWeightStorage (peer at or behind our tip).
-            // Falls back to block-number proxy when the peer is ahead of us.
+            // Falls back to PoW-scaled estimation for PoW chains, block-number proxy for PoS chains.
             val resolvedChainWeight: ChainWeight =
               blockchainReader
                 .getChainWeightByHash(status.latestBlockHash)
-                .getOrElse(ChainWeight.totalDifficultyOnly(status.latestBlock))
+                .getOrElse {
+                  if (blockchainConfig.terminalTotalDifficulty.isEmpty) {
+                    // PoW chain (ETC mainnet chainId=61, Mordor chainId=63, etc.):
+                    // Scale our own cumulative TD by the peer's block height ratio.
+                    // Keeps the estimate in the correct order of magnitude (~10^21 for ETC)
+                    // rather than the raw block number (~24.5 M), which would cause ETH69 peers
+                    // to always lose BestPeer selection against ETH68 peers sending real PoW TD.
+                    val ourBestHeader = getBestBlockHeader()
+                    val ourBestTD = blockchainReader
+                      .getChainWeightByHash(ourBestHeader.hash)
+                      .map(_.totalDifficulty)
+                      .getOrElse(BigInt(1))
+                    val ourBestNum = blockchainReader.getBestBlockNumber()
+                    val estimatedTD =
+                      if (ourBestNum > 0) ourBestTD * status.latestBlock / ourBestNum
+                      else status.latestBlock
+                    ChainWeight.totalDifficultyOnly(estimatedTD)
+                  } else {
+                    // PoS chain (ETH mainnet, etc.): TD is frozen; block-number is the ordering signal.
+                    ChainWeight.totalDifficultyOnly(status.latestBlock)
+                  }
+                }
             log.debug(
-              "ETH69_STATUS: chainWeight for peer latestBlockHash {}: {} (localLookup={})",
+              "ETH69_STATUS: chainWeight for peer latestBlockHash {}: {} (localLookup={}, powEstimate={})",
               status.latestBlockHash,
               resolvedChainWeight,
-              blockchainReader.getChainWeightByHash(status.latestBlockHash).isDefined
+              blockchainReader.getChainWeightByHash(status.latestBlockHash).isDefined,
+              blockchainConfig.terminalTotalDifficulty.isEmpty
             )
             ConnectedState(
               PeerInfo.withForkAccepted(
