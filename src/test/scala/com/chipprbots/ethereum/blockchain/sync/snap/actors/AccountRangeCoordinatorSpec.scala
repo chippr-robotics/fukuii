@@ -673,14 +673,15 @@ class AccountRangeCoordinatorSpec
     system.stop(coord)
   }
 
-  it should "NOT classify a peer as SNAPLESS on Request timeout failures (#1197)" taggedAs UnitTest in {
+  it should "NOT classify a peer as stateless or snapless on Request timeout failures" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("trie-async-test-root"))
     val coord = newCoordinator(stateRoot = stateRoot)
     val ua = coord.underlyingActor
     val pendingProbe = TestProbe()
     val peer = PeerTestHelpers.createTestPeer("timeout-only-peer", pendingProbe.ref)
 
-    // Drive 3 consecutive timeouts for one peer (consecutiveTimeoutThreshold default = 3).
+    // Drive multiple timeouts — go-ethereum marks stateless only on empty response
+    // (snap/sync.go:2574), never on timeout. Fukuii follows the same rule (Fix-B, run-17).
     seedActiveTask(coord, BigInt(801), peer, rootHash = stateRoot)
     coord ! Messages.TaskFailed(BigInt(801), "Request timeout")
     seedActiveTask(coord, BigInt(802), peer, rootHash = stateRoot)
@@ -691,9 +692,8 @@ class AccountRangeCoordinatorSpec
     coord ! Messages.GetProgress
     expectMsgType[AccountRangeStats](2.seconds)
 
-    // After 3 timeouts the peer is stateless (transient root-aging signal) but NOT
-    // snapless — timeout doesn't mean the snapshot tree is missing.
-    ua.statelessPeers should contain(peer.id)
+    // Timeouts never mark the peer stateless or snapless — only empty responses do.
+    ua.statelessPeers should not contain peer.id
     ua.snaplessPeers should not contain peer.id
 
     system.stop(coord)
