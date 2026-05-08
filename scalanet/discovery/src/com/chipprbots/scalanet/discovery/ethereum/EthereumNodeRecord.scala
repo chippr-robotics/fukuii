@@ -86,6 +86,20 @@ object EthereumNodeRecord {
     }
   }
 
+  /** Encode an unsigned 16-bit port as a canonical big-endian byte vector with no leading
+    * zeros, per EIP-778's RLP rules (matches go-ethereum's `uint16` enr entry).
+    *   - port == 0   → empty byte vector (RLP-canonical zero)
+    *   - port < 256  → single byte
+    *   - else        → exactly 2 bytes (big-endian)
+    *
+    * The legacy `ByteVector.fromInt(port)` form emitted 4 bytes with leading zeros, which
+    * geth's strict RLP decoder rejects → falls back to default 0 → triggers errLowPort.
+    */
+  private def encodePort(port: Int): ByteVector =
+    if (port == 0) ByteVector.empty
+    else if (port < 256) ByteVector(port.toByte)
+    else ByteVector.fromShort(port.toShort)
+
   def fromNode(node: Node, privateKey: PrivateKey, seq: Long, customAttrs: (ByteVector, ByteVector)*)(
       implicit sigalg: SigAlg,
       codec: Codec[Content]
@@ -100,8 +114,14 @@ object EthereumNodeRecord {
       Keys.id -> ByteVector("v4".getBytes(UTF_8)),
       Keys.secp256k1 -> sigalg.compressPublicKey(sigalg.toPublicKey(privateKey)).value.toByteVector,
       ipKey -> ByteVector(node.address.ip.getAddress),
-      tcpKey -> ByteVector.fromInt(node.address.tcpPort),
-      udpKey -> ByteVector.fromInt(node.address.udpPort)
+      // Ports are RLP-canonical big-endian integers (EIP-778) — no leading zeros.
+      // go-ethereum's `enr.UDP` / `enr.TCP` decode to `uint16` with strict RLP and
+      // reject the 4-byte `ByteVector.fromInt` form (it sees leading zeros, fails
+      // canonical-RLP, falls back to default 0, then `Node.UDP() <= 1024` triggers
+      // `errLowPort` which makes geth/besu drop fukuii's NODES responses.
+      // Closes #1221).
+      tcpKey -> encodePort(node.address.tcpPort),
+      udpKey -> encodePort(node.address.udpPort)
     )
 
     // Make sure a custom attribute doesn't overwrite a pre-defined one.
