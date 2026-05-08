@@ -186,24 +186,26 @@ class ETH69TDSpec extends AnyFlatSpec with Matchers {
   }
 
   // -------------------------------------------------------------------------
-  // EIP-7642 STATUS wire format (#1194)
+  // EIP-7642 STATUS wire format
   //
-  // Pre-fix: fukuii's ETH/69 STATUS encoded 7 fields with an extra `earliestBlock`
-  // not in the spec. Real-world peers (core-geth/besu running EIP-7642) send 6
-  // fields and fukuii rejected every one with `Cannot decode ETH69.Status`.
-  // Symptom on ETC mainnet: no peer pool, sync wedged. Mordor was unaffected
-  // because its peer pool was dominated by other fukuii instances + ETH/68.
+  // Both core-geth's `StatusPacket` (eth/protocols/eth/protocol.go) and besu's
+  // `StatusMessage69` encode the canonical 7 fields:
+  //   `[version, networkId, genesis, forkId, earliestBlock, latestBlock, latestBlockHash]`
   //
-  // The fix:
-  //   1. Encoder emits 6 fields per EIP-7642 (no earliestBlock — that info is
-  //      conveyed via the separate BlockRangeUpdate message 0x11).
-  //   2. Decoder accepts both the 6-field spec shape AND the 7-field legacy
-  //      fukuii shape during the transition (so old fukuii peers still work).
+  // PR #1194 erroneously dropped `earliestBlock` based on a misread of EIP-7642 — that
+  // produced a 6-field STATUS that geth rejected with `rlp: input string too long for
+  // uint64, decoding into (eth.StatusPacket).LatestBlock` (geth's decoder reads the
+  // 32-byte `latestBlockHash` into the `LatestBlock` uint64 slot when only 6 fields
+  // arrive). Confirmed in hive's `ethereum/sync` simulator at debug verbosity.
+  //
+  // The current encoder emits the canonical 7 fields. The decoder still accepts the
+  // 6-field legacy shape (for the rollout window where some fukuii peers may still
+  // be running pre-fix builds) and the ETH/68-shape that wrong-chain peers send.
   // -------------------------------------------------------------------------
 
-  it should "encode ETH/69 STATUS as 6 fields per EIP-7642 (no earliestBlock on the wire)" taggedAs UnitTest in {
+  it should "encode ETH/69 STATUS as 7 fields per EIP-7642 (geth/besu canonical)" taggedAs UnitTest in {
     import com.chipprbots.ethereum.network.p2p.messages.ETH69.Status._
-    import com.chipprbots.ethereum.rlp.{RLPList, RLPValue, rawDecode}
+    import com.chipprbots.ethereum.rlp.{RLPList, rawDecode}
 
     val status = eth69Status(latestBlockNr, latestHash)
     val encoded: Array[Byte] = new StatusEnc(status).toBytes
@@ -211,13 +213,13 @@ class ETH69TDSpec extends AnyFlatSpec with Matchers {
 
     decoded shouldBe a[RLPList]
     val fields = decoded.asInstanceOf[RLPList].items.toList
-    fields should have size 6 // EIP-7642 spec — NOT 7
+    fields should have size 7 // canonical layout matches geth StatusPacket / besu StatusMessage69
   }
 
-  it should "round-trip through the spec-compliant 6-field wire format" taggedAs UnitTest in {
+  it should "round-trip through the spec-compliant 7-field wire format" taggedAs UnitTest in {
     import com.chipprbots.ethereum.network.p2p.messages.ETH69.Status._
 
-    val original = eth69Status(latestBlockNr, latestHash)
+    val original = eth69Status(latestBlockNr, latestHash).copy(earliestBlock = BigInt(0))
     val encoded: Array[Byte] = new StatusEnc(original).toBytes
     val decoded = encoded.toETH69Status
 
@@ -225,26 +227,35 @@ class ETH69TDSpec extends AnyFlatSpec with Matchers {
     decoded.networkId shouldBe original.networkId
     decoded.genesisHash shouldBe original.genesisHash
     decoded.forkId shouldBe original.forkId
+    decoded.earliestBlock shouldBe original.earliestBlock
     decoded.latestBlock shouldBe original.latestBlock
     decoded.latestBlockHash shouldBe original.latestBlockHash
-    // earliestBlock is not on the spec wire — decoder defaults to 0.
-    decoded.earliestBlock shouldBe BigInt(0)
   }
 
-  it should "decode legacy 7-field fukuii STATUS shape (backward compat with pre-#1194 peers)" taggedAs UnitTest in {
+  it should "preserve a non-zero earliestBlock through the 7-field round-trip" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.network.p2p.messages.ETH69.Status._
+
+    val original = eth69Status(latestBlockNr, latestHash).copy(earliestBlock = BigInt(123))
+    val encoded: Array[Byte] = new StatusEnc(original).toBytes
+    val decoded = encoded.toETH69Status
+
+    decoded.earliestBlock shouldBe BigInt(123)
+    decoded.latestBlock shouldBe latestBlockNr
+    decoded.latestBlockHash shouldBe latestHash
+  }
+
+  it should "decode legacy 6-field fukuii STATUS shape (backward compat with pre-fix peers)" taggedAs UnitTest in {
     import com.chipprbots.ethereum.network.p2p.messages.ETH69.Status._
     import com.chipprbots.ethereum.rlp.{RLPList, RLPValue, encode}
     import com.chipprbots.ethereum.utils.ByteUtils
     import com.chipprbots.ethereum.forkid.ForkId._
 
-    // Hand-build the 7-field legacy shape used by fukuii pre-fix.
-    val legacyEarliest = BigInt(42)
+    // Hand-build the 6-field legacy shape used by pre-fix fukuii.
     val legacyRlp = RLPList(
       RLPValue(ByteUtils.bigIntToUnsignedByteArray(BigInt(Capability.ETH69.version))),
       RLPValue(ByteUtils.bigIntToUnsignedByteArray(BigInt(1))),
       RLPValue(genesisHash.toArray[Byte]),
       dummyForkId.toRLPEncodable,
-      RLPValue(ByteUtils.bigIntToUnsignedByteArray(legacyEarliest)),
       RLPValue(ByteUtils.bigIntToUnsignedByteArray(latestBlockNr)),
       RLPValue(latestHash.toArray[Byte])
     )
@@ -255,8 +266,8 @@ class ETH69TDSpec extends AnyFlatSpec with Matchers {
     decoded.networkId shouldBe 1L
     decoded.latestBlock shouldBe latestBlockNr
     decoded.latestBlockHash shouldBe latestHash
-    // The 7-field branch DOES preserve earliestBlock from the wire.
-    decoded.earliestBlock shouldBe legacyEarliest
+    // 6-field shape doesn't carry earliestBlock — decoder defaults to 0.
+    decoded.earliestBlock shouldBe BigInt(0)
   }
 
   it should "reject malformed STATUS payloads with the canonical error message" taggedAs UnitTest in {

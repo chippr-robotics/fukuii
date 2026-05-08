@@ -42,7 +42,7 @@ class PeerScoreFeedbackSpec extends AnyFlatSpec with Matchers with ScalaCheckPro
     // Pure all-timeout runs (0/1 vs 0/10) produce identical ratios; mixing in successes makes the
     // degradation visible through the response-rate component.
     val base = (1 to 5).foldLeft(PeerScore.initial)((s, _) => s.recordResponse(1024, latencyMs = 50))
-    val after1Timeout = base.recordTimeout  // ratio: 5/6 ≈ 0.83
+    val after1Timeout = base.recordTimeout // ratio: 5/6 ≈ 0.83
     val after10Timeouts = (1 to 10).foldLeft(base)((s, _) => s.recordTimeout) // ratio: 5/15 ≈ 0.33
     after10Timeouts.score should be < after1Timeout.score
   }

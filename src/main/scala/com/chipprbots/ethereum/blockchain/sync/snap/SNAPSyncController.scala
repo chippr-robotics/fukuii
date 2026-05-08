@@ -1304,7 +1304,9 @@ class SNAPSyncController(
                       currentPhase = StateHealing
                       startStateHealing()
                     } else {
-                      log.info(s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers")
+                      log.info(
+                        s"Beginning fast state sync with ${snapSyncConfig.accountConcurrency} concurrent workers"
+                      )
                       currentPhase = AccountRangeSync
                       startAccountRangeSync(header.stateRoot)
                     }
@@ -1454,7 +1456,7 @@ class SNAPSyncController(
           val networkBest = currentNetworkBestFromSnapPeers().getOrElse(BigInt(0))
           val drift = if (networkBest > 0) (networkBest - pivot).abs else BigInt(0)
           if (networkBest > 0 && drift > snapSyncConfig.maxPivotStalenessBlocks) {
-            val storageAlreadyDone  = appStateStorage.isSnapSyncStorageComplete()
+            val storageAlreadyDone = appStateStorage.isSnapSyncStorageComplete()
             val bytecodeAlreadyDone = appStateStorage.isSnapSyncBytecodeComplete()
             if (storageAlreadyDone && bytecodeAlreadyDone) {
               // All data phases complete — content-addressed data is valid across pivot changes.
@@ -1464,8 +1466,8 @@ class SNAPSyncController(
                 s"Recovery: pivot $pivot drifted $drift blocks, but all phases complete. " +
                   "Requesting fresh pivot for healing (go-ethereum/Besu behavior)."
               )
-              accountsComplete      = true
-              storagePhaseComplete  = true
+              accountsComplete = true
+              storagePhaseComplete = true
               bytecodePhaseComplete = true
               // Leave pivotBlock and stateRoot unset — bootstrap will set them.
             } else {

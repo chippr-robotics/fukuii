@@ -381,8 +381,8 @@ class PeerManagerActor(
 
     val alreadyConnectedToPeer =
       connectedPeers.hasHandshakedWith(nodeId) ||
-      connectedPeers.isConnectionHandled(remoteAddress) ||
-      connectedPeers.hasIncomingPendingFromHost(uri.getHost)
+        connectedPeers.isConnectionHandled(remoteAddress) ||
+        connectedPeers.hasIncomingPendingFromHost(uri.getHost)
     // Trusted peers bypass the max peer limit (core-geth: trustedConn flag skips maxPeers check)
     val isTrusted = trustedPeersByNodeId.contains(nodeIdHex)
     val isOutgoingPeersNotMaxValue = isTrusted || connectedPeers.outgoingPeersCount < effectiveMaxOutgoing
