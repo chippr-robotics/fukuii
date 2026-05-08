@@ -524,13 +524,22 @@ class EngineApiController(
   }
 
   private def handleGetClientVersion(request: JsonRpcRequest): IO[JsonRpcResponse] = {
+    // Per execution-apis spec, `commit` MUST be the canonical short git SHA — pure
+    // hexadecimal characters. Lighthouse's HTTP client validates this and rejects
+    // the response with `InvalidClientVersion("Input must contain only hexadecimal
+    // characters")` on any non-hex char, which then fails engine_upcheck and stalls
+    // the entire CL→EL pipeline. `Config.clientVersion.takeRight(8)` was slicing
+    // into the full client identity string (e.g. "fukuii/v0.5.0-abc1234/linux-amd64/...")
+    // and including slashes / hyphens. Use `BuildInfo.gitHeadCommit` directly —
+    // sbt-buildinfo emits the 7-char abbreviated SHA which is always hex.
+    val commitSha = BuildInfo.gitHeadCommit.filter(c => "0123456789abcdef".indexOf(c.toLower) >= 0)
     val clientVersion = JArray(
       List(
         JObject(
           "code" -> JString("FK"),
           "name" -> JString("Fukuii"),
           "version" -> JString(BuildInfo.version),
-          "commit" -> JString(com.chipprbots.ethereum.utils.Config.clientVersion.takeRight(8))
+          "commit" -> JString(commitSha)
         )
       )
     )
