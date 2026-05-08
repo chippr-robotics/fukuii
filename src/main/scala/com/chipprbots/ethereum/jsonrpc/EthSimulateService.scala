@@ -507,11 +507,14 @@ class EthSimulateService(
     val simulatedExcessBlobGas = {
       val parentExcess = parentHeader.excessBlobGas.getOrElse(BigInt(0))
       val parentUsed = parentHeader.blobGasUsed.getOrElse(BigInt(0))
-      val target =
-        if (blockchainConfig.isPragueTimestamp(ts))
-          com.chipprbots.ethereum.consensus.engine.BlobGasUtils.PRAGUE_TARGET_BLOB_GAS
-        else com.chipprbots.ethereum.consensus.engine.BlobGasUtils.CANCUN_TARGET_BLOB_GAS
-      com.chipprbots.ethereum.consensus.engine.BlobGasUtils.calcExcessBlobGas(parentExcess, parentUsed, target)
+      val parentBaseFee = parentHeader.baseFee.getOrElse(BigInt(0))
+      com.chipprbots.ethereum.consensus.engine.BlobGasUtils.expectedExcessBlobGas(
+        parentExcess,
+        parentUsed,
+        parentBaseFee,
+        ts,
+        blockchainConfig
+      )
     }
     val extraFields = if (blockchainConfig.isPragueTimestamp(ts)) {
       HefPostPrague(
