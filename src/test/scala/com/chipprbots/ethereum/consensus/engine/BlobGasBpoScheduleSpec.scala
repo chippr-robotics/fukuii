@@ -68,16 +68,64 @@ class BlobGasBpoScheduleSpec extends AnyFlatSpec with Matchers {
     BlobGasUtils.maxBlobGasPerBlock(bpo2Ts, cfg) shouldBe BlobGasUtils.BPO2_MAX_BLOB_GAS
   }
 
-  "calcExcessBlobGas" should "produce different excess depending on the active BPO target" in {
-    // Recreates the symptom: parent.excess + parent.used = 21932597 + targetBpo2 (1572864) = 23505461.
-    // With Prague target  (786432):  excess = 23505461 - 786432  = 22719029
-    // With BPO2  target (1572864):  excess = 23505461 - 1572864 = 21932597  (matches geth)
-    val parentExcess = BigInt(21932597)
-    val parentUsed = BlobGasUtils.BPO2_TARGET_BLOB_GAS
-    val excessAtPrague = BlobGasUtils.calcExcessBlobGas(parentExcess, parentUsed, BlobGasUtils.PRAGUE_TARGET_BLOB_GAS)
-    val excessAtBpo2 = BlobGasUtils.calcExcessBlobGas(parentExcess, parentUsed, BlobGasUtils.BPO2_TARGET_BLOB_GAS)
-    excessAtBpo2 should be < excessAtPrague
-    excessAtPrague - excessAtBpo2 shouldBe (BlobGasUtils.BPO2_TARGET_BLOB_GAS - BlobGasUtils.PRAGUE_TARGET_BLOB_GAS)
+  "calcExcessBlobGas" should "match Sepolia canonical chain (BPO2)" in {
+    // Empirical recreate from Sepolia canonical 10817144 → 10817145:
+    //   parent.excess = 8912666, parent.used = 1310720
+    //   child.excess  = 8388378
+    //   target should = (8912666 + 1310720) - 8388378 = 1835008 (14 blobs)
+    val parentExcess = BigInt(8912666)
+    val parentUsed = BigInt(1310720)
+    val expectedChildExcess = BigInt(8388378)
+    val computed =
+      BlobGasUtils.calcExcessBlobGas(parentExcess, parentUsed, BlobGasUtils.BPO2_TARGET_BLOB_GAS)
+    computed shouldBe expectedChildExcess
+  }
+
+  it should "match Sepolia canonical chain (BPO1)" in {
+    // Empirical recreate from Sepolia canonical 0x90FFFF → 0x910000:
+    //   parent.excess = 655360, parent.used = 917504
+    //   child.excess  = 262144
+    //   target should = (655360 + 917504) - 262144 = 1310720 (10 blobs)
+    val parentExcess = BigInt(655360)
+    val parentUsed = BigInt(917504)
+    val expectedChildExcess = BigInt(262144)
+    val computed =
+      BlobGasUtils.calcExcessBlobGas(parentExcess, parentUsed, BlobGasUtils.BPO1_TARGET_BLOB_GAS)
+    computed shouldBe expectedChildExcess
+  }
+
+  "expectedExcessBlobGas (EIP-7918, post-Osaka)" should "match Sepolia canonical when reservePrice > blobPrice" in {
+    // Empirical recreate from Sepolia canonical 10817260 → 10817261 (BPO2 active, low blob price):
+    //   parent: excess=917504  used=1310720  baseFee=~19  (low fee: reservePrice > blobPrice)
+    //   child:  excess=1354410
+    //   EIP-7918 alt formula: parent.excess + parent.used * (max - target) / max
+    //                        = 917504 + 1310720 * (21 - 14) / 21
+    //                        = 917504 + 436906 = 1354410
+    val cfg = withForks(prague = Some(pragueTs), osaka = Some(osakaTs), bpo1 = Some(bpo1Ts), bpo2 = Some(bpo2Ts))
+    val computed = BlobGasUtils.expectedExcessBlobGas(
+      parentExcessBlobGas = BigInt(917504),
+      parentBlobGasUsed = BigInt(1310720),
+      parentBaseFee = BigInt(19), // low base fee — triggers reserve-price branch
+      childTimestamp = bpo2Ts + 100, // after bpo2 activation
+      blockchainConfig = cfg
+    )
+    computed shouldBe BigInt(1354410)
+  }
+
+  it should "fall through to original EIP-4844 formula when reservePrice ≤ blobPrice" in {
+    // Empirical from Sepolia canonical 10817144 → 10817145 (BPO2 active, high parent.excess
+    // → blobPrice ≥ reservePrice, so original formula applies):
+    //   parent: excess=8912666 used=1310720
+    //   child:  excess=8388378  (= 8912666 + 1310720 - 1835008 [BPO2 target])
+    val cfg = withForks(prague = Some(pragueTs), osaka = Some(osakaTs), bpo1 = Some(bpo1Ts), bpo2 = Some(bpo2Ts))
+    val computed = BlobGasUtils.expectedExcessBlobGas(
+      parentExcessBlobGas = BigInt(8912666),
+      parentBlobGasUsed = BigInt(1310720),
+      parentBaseFee = BigInt(20), // baseFee at this height — high parent.excess inflates blobPrice past reserve
+      childTimestamp = bpo2Ts + 100,
+      blockchainConfig = cfg
+    )
+    computed shouldBe BigInt(8388378)
   }
 
   "BlockchainConfig" should "expose isBpo1Timestamp / isBpo2Timestamp predicates" in {

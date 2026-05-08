@@ -192,8 +192,14 @@ class EngineApiService(
           else if (block.header.excessBlobGas.isDefined) {
             val parentExcess = parent.excessBlobGas.getOrElse(BigInt(0))
             val parentUsed = parent.blobGasUsed.getOrElse(BigInt(0))
-            val target = BlobGasUtils.targetBlobGasPerBlock(block.header.unixTimestamp, blockchainConfig)
-            val expectedExcess = BlobGasUtils.calcExcessBlobGas(parentExcess, parentUsed, target)
+            val parentBaseFee = parent.baseFee.getOrElse(BigInt(0))
+            val expectedExcess = BlobGasUtils.expectedExcessBlobGas(
+              parentExcess,
+              parentUsed,
+              parentBaseFee,
+              block.header.unixTimestamp,
+              blockchainConfig
+            )
             val actual = block.header.excessBlobGas.get
             if (actual != expectedExcess)
               // Include canonical EEST exception name so the test framework's mapper matches.
@@ -615,12 +621,17 @@ class EngineApiService(
                       if (withdrawals.nonEmpty) computeWithdrawalsRoot(withdrawals)
                       else emptyWithdrawalsRoot
 
-                    // EIP-4844 / EIP-7691 / EIP-7892 excessBlobGas from parent.
-                    val parentBlobTarget = BlobGasUtils.targetBlobGasPerBlock(attrs.timestamp, blockchainConfig)
+                    // EIP-4844 / EIP-7691 / EIP-7892 / EIP-7918 excessBlobGas from parent.
                     val parentExcessBlobGas = parent.header.excessBlobGas.getOrElse(BigInt(0))
                     val parentBlobGasUsed = parent.header.blobGasUsed.getOrElse(BigInt(0))
-                    val childExcessBlobGas =
-                      BlobGasUtils.calcExcessBlobGas(parentExcessBlobGas, parentBlobGasUsed, parentBlobTarget)
+                    val parentBlobBaseFee = parent.header.baseFee.getOrElse(BigInt(0))
+                    val childExcessBlobGas = BlobGasUtils.expectedExcessBlobGas(
+                      parentExcessBlobGas,
+                      parentBlobGasUsed,
+                      parentBlobBaseFee,
+                      attrs.timestamp,
+                      blockchainConfig
+                    )
 
                     val parentBeaconBlockRoot =
                       attrs.parentBeaconBlockRoot.getOrElse(ByteString(new Array[Byte](32)))
@@ -1105,13 +1116,21 @@ object BlobGasUtils {
   val PRAGUE_TARGET_BLOB_GAS: BigInt = BigInt(786432) // 6 * 131072
   val PRAGUE_MAX_BLOB_GAS: BigInt = BigInt(1179648) // 9 * 131072
 
-  // EIP-7892 BPO1: 8 target, 12 max (Sepolia 2025-10-21)
-  val BPO1_TARGET_BLOB_GAS: BigInt = BigInt(1048576) // 8 * 131072
-  val BPO1_MAX_BLOB_GAS: BigInt = BigInt(1572864) // 12 * 131072
+  // EIP-7892 BPO1: 10 target, 15 max (Sepolia 2025-10-21).
+  // Empirically derived from Sepolia canonical chain (block pair 0x90FFFF → 0x910000):
+  //   parent: excess=655360 used=917504 (sum=1572864), child: excess=262144
+  //   ⇒ target = 1572864 - 262144 = 1310720 = 10 * 131072
+  // Max bound observed = 15 blobs (block 0x910002 used=1966080).
+  val BPO1_TARGET_BLOB_GAS: BigInt = BigInt(1310720) // 10 * 131072
+  val BPO1_MAX_BLOB_GAS: BigInt = BigInt(1966080) // 15 * 131072
 
-  // EIP-7892 BPO2: 12 target, 18 max (Sepolia 2025-10-28)
-  val BPO2_TARGET_BLOB_GAS: BigInt = BigInt(1572864) // 12 * 131072
-  val BPO2_MAX_BLOB_GAS: BigInt = BigInt(2359296) // 18 * 131072
+  // EIP-7892 BPO2: 14 target, 21 max (Sepolia 2025-10-28).
+  // Empirically derived from Sepolia canonical chain (block pair 10817144 → 10817145):
+  //   parent: excess=8912666 used=1310720 (sum=10223386), child: excess=8388378
+  //   ⇒ target = 10223386 - 8388378 = 1835008 = 14 * 131072
+  // Max bound = target * 1.5 = 21 blobs (matches Prague's 1.5x ratio).
+  val BPO2_TARGET_BLOB_GAS: BigInt = BigInt(1835008) // 14 * 131072
+  val BPO2_MAX_BLOB_GAS: BigInt = BigInt(2752512) // 21 * 131072
 
   // Default (Cancun) values
   val TARGET_BLOB_GAS_PER_BLOCK: BigInt = CANCUN_TARGET_BLOB_GAS
@@ -1120,8 +1139,16 @@ object BlobGasUtils {
   val PRAGUE_BLOB_BASE_FEE_UPDATE_FRACTION: BigInt = BigInt(5007716)
   val MIN_BLOB_BASE_FEE: BigInt = BigInt(1)
 
+  // EIP-7918: BLOB_BASE_COST = 2^13 — the per-blob execution gas cost used in the
+  // reserve-price comparison. When `BLOB_BASE_COST * parent.baseFee > blobPrice(parent)`,
+  // the alternate excess formula kicks in.
+  val BLOB_BASE_COST: BigInt = BigInt(1) << 13
+
   /** Calculate excess blob gas for a block from its parent's excess and used blob gas. Per EIP-4844: if parent_excess +
     * parent_used < target then 0 else parent_excess + parent_used - target
+    *
+    * For post-Osaka EIP-7918 behaviour, use `calcExcessBlobGasOsaka` which adds the reserve-price-aware alternate
+    * formula.
     */
   def calcExcessBlobGas(
       parentExcessBlobGas: BigInt,
@@ -1131,6 +1158,49 @@ object BlobGasUtils {
     val total = parentExcessBlobGas + parentBlobGasUsed
     if (total < target) BigInt(0)
     else total - target
+  }
+
+  /** EIP-7918 (Osaka) excess-blob-gas calculation. Geth reference: `eip4844.calcExcessBlobGas` —
+    * post-Osaka, when `reservePrice > blobPrice`, the protocol uses an alternate formula that
+    * preserves a fraction of `parent.blobGasUsed` instead of subtracting `target`. This prevents
+    * the blob fee from collapsing in low-utilisation regimes.
+    *
+    * Formula:
+    *   {{{
+    *   total = parent.excess + parent.used
+    *   if (total < target) return 0
+    *   if (isOsaka && reservePrice > blobPrice(parent.excess)) {
+    *     scaled = parent.used * (max - target) / max         // both in BLOB units
+    *     return parent.excess + scaled                       // in GAS units
+    *   }
+    *   return total - target
+    *   }}}
+    *
+    * `reservePrice = BLOB_BASE_COST * parent.baseFee` (in wei)
+    * `blobPrice    = fakeExponential(1, parent.excess, updateFraction) * GAS_PER_BLOB` (in wei)
+    */
+  def calcExcessBlobGasOsaka(
+      parentExcessBlobGas: BigInt,
+      parentBlobGasUsed: BigInt,
+      parentBaseFee: BigInt,
+      targetGas: BigInt,
+      maxGas: BigInt,
+      updateFraction: BigInt
+  ): BigInt = {
+    val total = parentExcessBlobGas + parentBlobGasUsed
+    if (total < targetGas) return BigInt(0)
+    val reservePrice = BLOB_BASE_COST * parentBaseFee
+    val blobBaseFee = fakeExponential(MIN_BLOB_BASE_FEE, parentExcessBlobGas, updateFraction)
+    val blobPrice = blobBaseFee * GAS_PER_BLOB
+    if (reservePrice > blobPrice) {
+      // Both `targetGas` and `maxGas` are gas units; the blob-count ratio (Max-Target)/Max
+      // is the same regardless of unit, so we can compute against gas directly. Integer
+      // division truncates toward zero (same as geth's uint64 arithmetic).
+      val scaled = parentBlobGasUsed * (maxGas - targetGas) / maxGas
+      parentExcessBlobGas + scaled
+    } else {
+      total - targetGas
+    }
   }
 
   /** Calculate the blob gas price using the fake exponential function. Per EIP-4844:
@@ -1145,10 +1215,43 @@ object BlobGasUtils {
       blockTimestamp: Long,
       blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig
   ): BigInt = {
-    val fraction =
-      if (blockchainConfig.isPragueTimestamp(blockTimestamp)) PRAGUE_BLOB_BASE_FEE_UPDATE_FRACTION
-      else BLOB_BASE_FEE_UPDATE_FRACTION
+    val fraction = updateFractionFor(blockTimestamp, blockchainConfig)
     fakeExponential(MIN_BLOB_BASE_FEE, excessBlobGas, fraction)
+  }
+
+  /** Fork-aware blob-base-fee update fraction. Prague raised it from Cancun's 3338477 to 5007716;
+    * Osaka and the BPO forks inherit the Prague value (no further change documented in the
+    * Sepolia BlobScheduleConfig).
+    */
+  def updateFractionFor(
+      blockTimestamp: Long,
+      blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig
+  ): BigInt =
+    if (blockchainConfig.isPragueTimestamp(blockTimestamp)) PRAGUE_BLOB_BASE_FEE_UPDATE_FRACTION
+    else BLOB_BASE_FEE_UPDATE_FRACTION
+
+  /** Compute the expected `excessBlobGas` of a child block given its parent and timestamp.
+    * Routes through the EIP-7918 alternate formula post-Osaka. This is the single canonical
+    * entry point for Engine-API payload validation and BlockHeaderValidator.
+    *
+    * `parentBaseFee` is required post-Osaka (used in the reserve-price comparison). Pass
+    * `BigInt(0)` for pre-Osaka chains; it's ignored.
+    */
+  def expectedExcessBlobGas(
+      parentExcessBlobGas: BigInt,
+      parentBlobGasUsed: BigInt,
+      parentBaseFee: BigInt,
+      childTimestamp: Long,
+      blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig
+  ): BigInt = {
+    val target = targetBlobGasPerBlock(childTimestamp, blockchainConfig)
+    if (blockchainConfig.isOsakaTimestamp(childTimestamp)) {
+      val max = maxBlobGasPerBlock(childTimestamp, blockchainConfig)
+      val fraction = updateFractionFor(childTimestamp, blockchainConfig)
+      calcExcessBlobGasOsaka(parentExcessBlobGas, parentBlobGasUsed, parentBaseFee, target, max, fraction)
+    } else {
+      calcExcessBlobGas(parentExcessBlobGas, parentBlobGasUsed, target)
+    }
   }
 
   /** Fork-aware MAX_BLOB_GAS_PER_BLOCK. EIP-7892 BPOs raise the cap on Sepolia/mainnet post-Osaka; the latest active
