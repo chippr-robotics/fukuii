@@ -50,7 +50,44 @@ class EngineApiHttpServer(
     ConfigFactory.load("engine-api-system.conf").withFallback(ConfigFactory.load())
   implicit private val system: ActorSystem = ActorSystem("engine-api", systemConfig)
   implicit private val ec: ExecutionContext = system.dispatcher
-  implicit private val ioRuntime: IORuntime = IORuntime.global
+
+  // Dedicated `IORuntime` for Engine API handlers (#1209 follow-up). The previous
+  // `IORuntime.global` was shared across the entire JVM — every cats-effect IO
+  // (sync coordinators, RegularSync, block import, MPT operations, etc.) competed
+  // with Engine API handlers for the same compute pool. On Sepolia bootstrap with
+  // 6+ peer handshakes/sec saturating the work-stealing pool's ~4 cores (cats-effect
+  // default = `availableProcessors`), `engine_exchangeCapabilities` and
+  // `engine_forkchoiceUpdated` requests queued behind sync work and lighthouse's
+  // 8 s client timeout fired first — leaving the EL effectively offline.
+  //
+  // Hive's `ethereum/engine` Paris suite (65 tests) passes 100 % under controlled
+  // load with the shared IORuntime, so the Engine API code path is correct; the
+  // failure is purely resource contention. A dedicated runtime gives Engine API
+  // handlers their own work-stealing pool, mirroring go-ethereum's `n.httpAuth`
+  // separate goroutine pool and reth's `with_tokio_runtime()` auth-server isolation.
+  //
+  // 4 compute threads is sufficient — Lighthouse holds a single keep-alive
+  // connection and pipelines at most a handful of in-flight requests. The blocking
+  // pool stays default-sized because Engine API handlers don't perform blocking I/O
+  // (everything is `IO.delay` over in-memory state or RocksDB which uses its own
+  // thread pool).
+  private val (engineCompute, shutdownCompute) =
+    IORuntime.createWorkStealingComputeThreadPool(threads = 4, threadPrefix = "engine-api-compute")
+  private val (engineBlocking, shutdownBlocking) =
+    IORuntime.createDefaultBlockingExecutionContext(threadPrefix = "engine-api-blocking")
+  private val (engineScheduler, shutdownScheduler) =
+    IORuntime.createDefaultScheduler(threadPrefix = "engine-api-scheduler")
+  implicit private val ioRuntime: IORuntime = IORuntime(
+    compute = engineCompute,
+    blocking = engineBlocking,
+    scheduler = engineScheduler,
+    shutdown = () => {
+      shutdownScheduler()
+      shutdownBlocking()
+      shutdownCompute()
+    },
+    config = cats.effect.unsafe.IORuntimeConfig()
+  )
 
   implicit private val formats: Formats = DefaultFormats
 
@@ -154,18 +191,24 @@ class EngineApiHttpServer(
   /** Unbinds the server and terminates the dedicated ActorSystem. Caller should `Await` if shutdown ordering matters
     * (e.g. before the main node's ActorSystem terminates).
     */
-  def stop(): Future[Unit] =
-    bindingOpt match {
+  def stop(): Future[Unit] = {
+    val terminate = bindingOpt match {
       case Some(binding) =>
         binding.unbind().flatMap { _ =>
           bindingOpt = None
-          log.info("Engine API server stopped — terminating isolated ActorSystem")
+          log.info("Engine API server stopped — terminating isolated ActorSystem + IORuntime")
           system.terminate().map(_ => ())
         }
       case None =>
         // Server never started; still tear down the system to free resources.
         system.terminate().map(_ => ())
     }
+    terminate.map { _ =>
+      // Shut down the dedicated IORuntime pools after the ActorSystem is gone so any
+      // in-flight handler IOs have already drained.
+      ioRuntime.shutdown()
+    }(scala.concurrent.ExecutionContext.parasitic)
+  }
 
   /** Synchronous shutdown convenience for shutdown hooks that don't have an ec available. */
   def stopSync(timeout: FiniteDuration = 10.seconds): Unit =
