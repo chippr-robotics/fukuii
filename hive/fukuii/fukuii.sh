@@ -135,7 +135,7 @@ FLAGS="$FLAGS -Dfukuii.network.discovery.port=30303"
 # below (HIVE_BOOTNODE), so discovery isn't needed to find peers; disabling it
 # sidesteps the parser bug. Underlying scalanet hash-validation regression
 # tracked separately — restore discovery in hive runs once that is fixed.
-FLAGS="$FLAGS -Dfukuii.network.discovery.discovery-enabled=false"
+FLAGS="$FLAGS -Dfukuii.network.discovery.discovery-enabled=true"
 
 # Chain import — prefer /chain.rlp, otherwise concatenate /blocks/*.rlp (consensus sim).
 if [ -f "/chain.rlp" ]; then

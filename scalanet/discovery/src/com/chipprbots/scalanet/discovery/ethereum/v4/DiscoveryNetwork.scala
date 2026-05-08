@@ -204,12 +204,22 @@ object DiscoveryNetwork {
             maybeRespond {
               handler.findNode(caller)(target)
             } { nodes =>
-              nodes
-                .take(config.kademliaBucketSize) // NOTE: Other nodes could use a different setting.
-                .grouped(maxNeighborsPerPacket)
-                .toList
+              // Per discv4 spec and go-ethereum's `handleFindnode`
+              // (eth/p2p/discover/v4_udp.go), a FindNode response is ALWAYS
+              // sent — even an empty Neighbors packet — so the peer's RPC
+              // pipeline doesn't time out. Without this, fresh fukuii nodes
+              // with empty kBuckets silently drop every FindNode, breaking
+              // geth/besu/nethermind discovery walks (#1221) and inbound
+              // peer dials when fukuii is the bootnode/source.
+              val groups =
+                nodes
+                  .take(config.kademliaBucketSize)
+                  .grouped(maxNeighborsPerPacket)
+                  .toList
+              val toSend = if (groups.isEmpty) List(List.empty[Node]) else groups.map(_.toList)
+              toSend
                 .traverse { group =>
-                  channel.send(Neighbors(group.toList, 0))
+                  channel.send(Neighbors(group, 0))
                 }
                 .void
             }
