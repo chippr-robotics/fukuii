@@ -72,6 +72,16 @@ case class BlockchainConfig(
   def isOsakaTimestamp(timestamp: Long): Boolean =
     forkTimestamps.osakaTimestamp.exists(ts => timestamp >= ts)
 
+  /** EIP-7892 Blob Parameter Only (BPO) fork activation. BPOs raise the blob target/max without other consensus
+    * changes. Sepolia activated BPO1 on 2025-10-21.
+    */
+  def isBpo1Timestamp(timestamp: Long): Boolean =
+    forkTimestamps.bpo1Timestamp.exists(ts => timestamp >= ts)
+
+  /** EIP-7892 BPO2: second blob-target bump. Sepolia activated 2025-10-28. */
+  def isBpo2Timestamp(timestamp: Long): Boolean =
+    forkTimestamps.bpo2Timestamp.exists(ts => timestamp >= ts)
+
   def withUpdatedForkBlocks(update: (ForkBlockNumbers) => ForkBlockNumbers): BlockchainConfig =
     copy(forkBlockNumbers = update(forkBlockNumbers))
 }

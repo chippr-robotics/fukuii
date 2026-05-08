@@ -186,16 +186,13 @@ class EngineApiService(
           if (diff >= limit && block.header.gasLimit != parent.gasLimit)
             Some(s"invalid gas limit change: diff=$diff exceeds bound=$limit")
           // EIP-4844: Validate excessBlobGas against parent.
-          // EIP-7691 (Prague) raises TARGET_BLOB_GAS_PER_BLOCK from 3 to 6 blobs — pass the
-          // right target based on the CHILD block's fork timestamp (child is the one being
-          // validated; parent may precede Prague activation).
+          // EIP-7691 (Prague) raises target 3→6 blobs; EIP-7892 BPO1/BPO2 raise it 6→8→12.
+          // Pass the right target based on the CHILD block's fork timestamp (child is the
+          // one being validated; parent may precede the active BPO).
           else if (block.header.excessBlobGas.isDefined) {
             val parentExcess = parent.excessBlobGas.getOrElse(BigInt(0))
             val parentUsed = parent.blobGasUsed.getOrElse(BigInt(0))
-            val target =
-              if (blockchainConfig.isPragueTimestamp(block.header.unixTimestamp))
-                BlobGasUtils.PRAGUE_TARGET_BLOB_GAS
-              else BlobGasUtils.CANCUN_TARGET_BLOB_GAS
+            val target = BlobGasUtils.targetBlobGasPerBlock(block.header.unixTimestamp, blockchainConfig)
             val expectedExcess = BlobGasUtils.calcExcessBlobGas(parentExcess, parentUsed, target)
             val actual = block.header.excessBlobGas.get
             if (actual != expectedExcess)
@@ -579,10 +576,7 @@ class EngineApiService(
                     // the proposer packs every pool blob tx into one block and getPayloadV3's
                     // blobsBundle grows past the test's `ExpectedIncludedBlobCount`.
                     val pendingTxsForBlock = {
-                      val maxBlobGas =
-                        if (blockchainConfig.isPragueTimestamp(attrs.timestamp))
-                          BlobGasUtils.PRAGUE_MAX_BLOB_GAS
-                        else BlobGasUtils.CANCUN_MAX_BLOB_GAS
+                      val maxBlobGas = BlobGasUtils.maxBlobGasPerBlock(attrs.timestamp, blockchainConfig)
                       pendingTxs
                         .foldLeft((Seq.empty[SignedTransaction], BigInt(0))) { case ((kept, blobGas), stx) =>
                           stx.tx match {
@@ -621,10 +615,8 @@ class EngineApiService(
                       if (withdrawals.nonEmpty) computeWithdrawalsRoot(withdrawals)
                       else emptyWithdrawalsRoot
 
-                    // EIP-4844 / EIP-7691 excessBlobGas from parent.
-                    val parentBlobTarget =
-                      if (isPrague) BlobGasUtils.PRAGUE_TARGET_BLOB_GAS
-                      else BlobGasUtils.CANCUN_TARGET_BLOB_GAS
+                    // EIP-4844 / EIP-7691 / EIP-7892 excessBlobGas from parent.
+                    val parentBlobTarget = BlobGasUtils.targetBlobGasPerBlock(attrs.timestamp, blockchainConfig)
                     val parentExcessBlobGas = parent.header.excessBlobGas.getOrElse(BigInt(0))
                     val parentBlobGasUsed = parent.header.blobGasUsed.getOrElse(BigInt(0))
                     val childExcessBlobGas =
@@ -1085,7 +1077,23 @@ class EngineApiService(
     }
 }
 
-/** EIP-4844 / EIP-7691 blob gas computation utilities. */
+/** EIP-4844 / EIP-7691 / EIP-7892 blob gas computation utilities.
+  *
+  * Per-fork blob targets and maxes (EIP-7892 Blob Parameter Only forks):
+  *   - Cancun (EIP-4844): target=3, max=6 blobs
+  *   - Prague (EIP-7691): target=6, max=9 blobs
+  *   - Osaka: target=6, max=9 blobs (no blob change; inherits Prague)
+  *   - BPO1 (EIP-7892): target=8, max=12 blobs
+  *   - BPO2 (EIP-7892): target=12, max=18 blobs
+  *
+  * Sepolia BPO schedule (per geth `params.SepoliaChainConfig.BlobScheduleConfig`):
+  *   - osaka: 2025-10-14 11:36
+  *   - bpo1: 2025-10-21 06:46 (target=8, max=12)
+  *   - bpo2: 2025-10-28 02:36 (target=12, max=18)
+  *
+  * Use the fork-aware `targetBlobGasPerBlock(timestamp, config)` / `maxBlobGasPerBlock(timestamp, config)` for any
+  * blob-gas validation; the static `*_TARGET_BLOB_GAS` / `*_MAX_BLOB_GAS` values are kept only as the ladder rungs.
+  */
 object BlobGasUtils {
   val GAS_PER_BLOB: BigInt = BigInt(131072)
 
@@ -1096,6 +1104,14 @@ object BlobGasUtils {
   // Prague (EIP-7691): 6 target, 9 max
   val PRAGUE_TARGET_BLOB_GAS: BigInt = BigInt(786432) // 6 * 131072
   val PRAGUE_MAX_BLOB_GAS: BigInt = BigInt(1179648) // 9 * 131072
+
+  // EIP-7892 BPO1: 8 target, 12 max (Sepolia 2025-10-21)
+  val BPO1_TARGET_BLOB_GAS: BigInt = BigInt(1048576) // 8 * 131072
+  val BPO1_MAX_BLOB_GAS: BigInt = BigInt(1572864) // 12 * 131072
+
+  // EIP-7892 BPO2: 12 target, 18 max (Sepolia 2025-10-28)
+  val BPO2_TARGET_BLOB_GAS: BigInt = BigInt(1572864) // 12 * 131072
+  val BPO2_MAX_BLOB_GAS: BigInt = BigInt(2359296) // 18 * 131072
 
   // Default (Cancun) values
   val TARGET_BLOB_GAS_PER_BLOCK: BigInt = CANCUN_TARGET_BLOB_GAS
@@ -1135,13 +1151,30 @@ object BlobGasUtils {
     fakeExponential(MIN_BLOB_BASE_FEE, excessBlobGas, fraction)
   }
 
-  /** Fork-aware MAX_BLOB_GAS_PER_BLOCK. */
+  /** Fork-aware MAX_BLOB_GAS_PER_BLOCK. EIP-7892 BPOs raise the cap on Sepolia/mainnet post-Osaka; the latest active
+    * BPO wins.
+    */
   def maxBlobGasPerBlock(
       blockTimestamp: Long,
       blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig
   ): BigInt =
-    if (blockchainConfig.isPragueTimestamp(blockTimestamp)) PRAGUE_MAX_BLOB_GAS
+    if (blockchainConfig.isBpo2Timestamp(blockTimestamp)) BPO2_MAX_BLOB_GAS
+    else if (blockchainConfig.isBpo1Timestamp(blockTimestamp)) BPO1_MAX_BLOB_GAS
+    else if (blockchainConfig.isPragueTimestamp(blockTimestamp)) PRAGUE_MAX_BLOB_GAS
     else CANCUN_MAX_BLOB_GAS
+
+  /** Fork-aware TARGET_BLOB_GAS_PER_BLOCK used by `calcExcessBlobGas` and Engine API payload validation. Without BPO
+    * awareness, post-Osaka Sepolia blocks fail with `INCORRECT_EXCESS_BLOB_GAS` because we'd subtract the Prague target
+    * (6 blobs) instead of the active BPO target (8 or 12 blobs).
+    */
+  def targetBlobGasPerBlock(
+      blockTimestamp: Long,
+      blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig
+  ): BigInt =
+    if (blockchainConfig.isBpo2Timestamp(blockTimestamp)) BPO2_TARGET_BLOB_GAS
+    else if (blockchainConfig.isBpo1Timestamp(blockTimestamp)) BPO1_TARGET_BLOB_GAS
+    else if (blockchainConfig.isPragueTimestamp(blockTimestamp)) PRAGUE_TARGET_BLOB_GAS
+    else CANCUN_TARGET_BLOB_GAS
 
   /** EIP-7918: Osaka blob base fee floored by execution gas cost. Prevents blob base fee from decoupling from execution
     * fee market. Formula (Osaka spec): blob_base_fee = max(current_blob_fee, (blob_base_fee_update_fraction *
