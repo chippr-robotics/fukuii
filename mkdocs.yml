@@ -115,9 +115,11 @@ extra:
 extra_css:
   - stylesheets/extra.css
   - stylesheets/wizard-theme.css
+  - stylesheets/landing.css
 
 extra_javascript:
   - tools/wizard-app.js
+  - javascripts/landing.js
 
 # Navigation structure
 nav:
