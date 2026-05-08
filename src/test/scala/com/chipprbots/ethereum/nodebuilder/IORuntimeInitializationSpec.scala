@@ -152,7 +152,7 @@ class IORuntimeInitializationSpec
 
   it should "validate that non-lazy val would cause initialization issues" taggedAs (UnitTest) in {
     // This test documents the problem: non-lazy vals can be null during mixed trait initialization
-    @volatile var eagerInitOrder = scala.collection.mutable.ListBuffer[String]()
+    val eagerInitOrder = scala.collection.mutable.ListBuffer[String]()
 
     trait EagerBase {
       implicit val ioRuntime: IORuntime = {

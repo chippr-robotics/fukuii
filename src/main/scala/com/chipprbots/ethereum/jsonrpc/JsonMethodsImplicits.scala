@@ -185,8 +185,6 @@ trait JsonMethodsImplicits {
 
 object JsonMethodsImplicits extends JsonMethodsImplicits {
 
-  import JsonRpcError._
-
   implicit val web3_sha3: JsonMethodDecoder[Sha3Request] with JsonEncoder[Sha3Response] =
     new JsonMethodDecoder[Sha3Request] with JsonEncoder[Sha3Response] {
       override def decodeJson(params: Option[JArray]): Either[JsonRpcError, Sha3Request] =

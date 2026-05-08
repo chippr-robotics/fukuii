@@ -41,7 +41,7 @@ This runbook guides you through the initial setup and first-time startup of a Fu
 - docker-compose (optional, for multi-container setups)
 
 **For source/binary deployment:**
-- JDK 21 (OpenJDK or Oracle JDK)
+- JDK 25 (OpenJDK or Oracle JDK)
 - (Optional) Python 3.x for auxiliary scripts
 
 ### Network Requirements
@@ -121,16 +121,16 @@ See the [Codespaces Setup](../development/codespaces.md) for details.
 #### Step 1: Install Dependencies
 
 ```bash
-# Install JDK 21
+# Install JDK 25
 # Ubuntu/Debian:
 sudo apt-get update
-sudo apt-get install openjdk-21-jdk
+sudo apt-get install openjdk-25-jdk
 
 # macOS (using Homebrew):
-brew install openjdk@21
+brew install openjdk@25
 
 # Verify installation
-java -version  # Should show version 21.x
+java -version  # Should show version 25.x
 ```
 
 #### Step 2: Install SBT
@@ -492,7 +492,7 @@ sudo ufw allow 9076/tcp comment "Fukuii P2P"
    ```bash
    java -version
    ```
-   Solution: Install JDK 21
+   Solution: Install JDK 25
 
 4. **Corrupted database**
    

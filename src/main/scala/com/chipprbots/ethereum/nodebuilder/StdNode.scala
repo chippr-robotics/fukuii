@@ -45,18 +45,22 @@ abstract class BaseNode extends Node {
     loadGenesisData()
     importChainData() // Must complete before APIs so queries return chain data
 
-    // Phase 2: API servers (user-facing, ready as early as possible)
-    startJsonRpcHttpServer()
-    startJsonRpcWsServer()
-    startJsonRpcIpcServer()
-    startEngineApiServer()
-
-    // Phase 3: P2P networking
+    // Phase 2: P2P networking — bind discovery + TCP server BEFORE the user-facing
+    // APIs come up. Hive's client readiness check is on the RPC port (8545); if we
+    // bring up RPC first, hive starts probing UDP 30303 (discovery) before our
+    // discovery service has bound. Race is small but real and shows up as
+    // i/o-timeout failures in the discv4 hive suite.
     startServer()
     loadStaticNodes()
     startPortForwarding()
     startPeerManager()
     startDiscoveryManager()
+
+    // Phase 3: API servers (user-facing, ready as early as possible)
+    startJsonRpcHttpServer()
+    startJsonRpcWsServer()
+    startJsonRpcIpcServer()
+    startEngineApiServer()
 
     // Phase 5: Background work
     startSyncController()

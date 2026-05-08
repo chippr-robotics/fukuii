@@ -12,6 +12,8 @@ import com.chipprbots.ethereum.jsonrpc.FilterManager.LogFilterLogs
 import com.chipprbots.ethereum.jsonrpc.{FilterManager => FM}
 import com.chipprbots.ethereum.utils._
 
+import scala.annotation.unused
+
 object EthFilterService {
   case class NewFilterRequest(filter: Filter)
   case class Filter(
@@ -58,14 +60,14 @@ class EthFilterService(
       }
   }
 
-  def newBlockFilter(req: NewBlockFilterRequest): ServiceResponse[NewFilterResponse] =
+  def newBlockFilter(@unused req: NewBlockFilterRequest): ServiceResponse[NewFilterResponse] =
     filterManager
       .askFor[FM.NewFilterResponse](FM.NewBlockFilter)
       .map { resp =>
         Right(NewFilterResponse(resp.id))
       }
 
-  def newPendingTransactionFilter(req: NewPendingTransactionFilterRequest): ServiceResponse[NewFilterResponse] =
+  def newPendingTransactionFilter(@unused req: NewPendingTransactionFilterRequest): ServiceResponse[NewFilterResponse] =
     filterManager
       .askFor[FM.NewFilterResponse](FM.NewPendingTransactionFilter)
       .map { resp =>

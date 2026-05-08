@@ -52,7 +52,7 @@ Get up and running with Fukuii quickly. Choose the installation method that best
 
 === "Source Build"
 
-    - JDK 21 (OpenJDK or Oracle JDK)
+    - JDK 25 (OpenJDK or Oracle JDK)
     - sbt 1.10.7 or later
     - Git
 

@@ -83,7 +83,7 @@ class AccountRangeWorker(
   def working: Receive = {
     case AccountRangeResponseMsg(response) =>
       currentTask match {
-        case Some((task, peer, reqId)) if response.requestId == reqId =>
+        case Some((task, _, reqId)) if response.requestId == reqId =>
           log.debug(
             s"Received AccountRange: reqId=$reqId range=${task.rangeString} " +
               s"start=${task.next.take(4).toHex} limit=${task.last.take(4).toHex} " +
@@ -131,7 +131,7 @@ class AccountRangeWorker(
 
     case RequestTimeout(reqId) =>
       currentTask match {
-        case Some((task, peer, currentReqId)) if currentReqId == reqId =>
+        case Some((_, _, currentReqId)) if currentReqId == reqId =>
           log.warning(s"Request $reqId timed out")
           coordinator ! TaskFailed(reqId, "Request timeout")
 
@@ -141,6 +141,17 @@ class AccountRangeWorker(
 
         case _ =>
           log.debug(s"Timeout for old or unknown request $reqId")
+      }
+
+    case WorkerPeerDisconnected(peerId) =>
+      currentTask match {
+        case Some((_, peer, reqId)) if peer.id.value == peerId =>
+          log.debug(s"Peer $peerId disconnected — re-queuing task immediately (reqId=$reqId)")
+          requestTracker.completeRequest(reqId, 0)
+          coordinator ! TaskFailed(reqId, "Peer disconnected")
+          currentTask = None
+          context.become(idle)
+        case _ => // Different peer or no task; ignore
       }
 
     case FetchAccountRange(task, peer, _, _) =>

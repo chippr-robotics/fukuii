@@ -16,7 +16,7 @@ class KBucketsWithSubnetLimitsSpec extends AnyFlatSpec with Matchers with Inspec
 
   // For the tests I only care about the IP addresses; a 1-to-1 mapping is convenient.
   def fakeNodeId(address: InetAddress): Node.Id =
-    PublicKey(Keccak256(BitVector(address.getAddress)))
+    PublicKey(Keccak256(BitVector(address.getAddress)).value)
 
   def makeNode(address: InetSocketAddress) =
     Node(fakeNodeId(address.getAddress), Node.Address(address.getAddress, address.getPort, address.getPort))

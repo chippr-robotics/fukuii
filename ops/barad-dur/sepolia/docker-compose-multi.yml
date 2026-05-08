@@ -32,6 +32,9 @@ services:
       - /chipprbots/blockchain/chain-data/etc/fukuii-mordor-multi:/app/data/mordor
       - ./fukuii-conf:/app/conf:ro
       - ./jwt.hex:/app/jwt/jwt.hex:ro
+    # Override the in-image entrypoint (which hardcodes a versioned jar name and
+    # ignores our flags). Run java directly so JVM args land before -jar.
+    entrypoint: ["java"]
     command:
       - "-Xmx4g"
       - "-Xms1g"
@@ -40,7 +43,7 @@ services:
       - "-XX:MaxGCPauseMillis=200"
       - "-Dconfig.file=/app/conf/multi-network.conf"
       - "-jar"
-      - "/app/fukuii/lib/fukuii-assembly-0.1.240.jar"
+      - "/app/fukuii/lib/fukuii-assembly.jar"
       - "runtime"
     networks:
       - sepolia-network
@@ -58,6 +61,7 @@ services:
     restart: unless-stopped
     ports:
       - "5052:5052"
+      - "5054:5054"   # Prometheus metrics
       - "9100:9000/tcp"
       - "9100:9000/udp"
     volumes:
@@ -77,6 +81,10 @@ services:
       - "--port=9000"
       - "--target-peers=50"
       - "--checkpoint-sync-url=https://sepolia.beaconstate.info"
+      - "--metrics"
+      - "--metrics-address=0.0.0.0"
+      - "--metrics-port=5054"
+      - "--metrics-allow-origin=*"
     depends_on:
       fukuii-multi:
         condition: service_healthy

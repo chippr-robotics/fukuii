@@ -29,7 +29,6 @@ import com.chipprbots.ethereum.extvm.msg.Code
 import com.chipprbots.ethereum.extvm.msg.GetBlockhash
 import com.chipprbots.ethereum.extvm.msg.Blockhash
 import com.chipprbots.ethereum.extvm.msg.Hello
-import com.chipprbots.ethereum.extvm.msg.{EthereumConfig => MsgEthereumConfig}
 import com.chipprbots.ethereum.testing.Tags._
 
 class VMClientSpec extends AnyFlatSpec with Matchers with MockFactory {

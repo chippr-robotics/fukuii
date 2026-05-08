@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.network
 
+import scala.concurrent.duration._
+
 import org.apache.pekko.actor.Actor
 import org.apache.pekko.actor.ActorLogging
 import org.apache.pekko.actor.ActorRef
@@ -26,6 +28,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH62.NewBlockHashes
 import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH64
+import com.chipprbots.ethereum.network.p2p.messages.ETH69
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
@@ -54,6 +57,16 @@ class NetworkPeerManagerActor(
 
   // Mutable reference to SNAPSyncController that can be set after initialization
   private var snapSyncControllerOpt: Option[ActorRef] = initialSnapSyncControllerOpt
+
+  private var emptyHeaderResponses: Int = 0
+
+  // 60s network summary — read+reset RLPx counters and log one aggregate line
+  context.system.scheduler.scheduleWithFixedDelay(
+    60.seconds,
+    60.seconds,
+    self,
+    NetworkPeerManagerActor.LogNetworkSummary
+  )(context.dispatcher)
 
   // Subscribe to the event of any peer getting handshaked
   peerEventBusActor ! Subscribe(PeerHandshaked)
@@ -85,10 +98,11 @@ class NetworkPeerManagerActor(
   def handleMessages(peersWithInfo: PeersWithInfo): Receive =
     handleCommonMessages(peersWithInfo).orElse(handlePeersInfoEvents(peersWithInfo))
 
-  private def peerHasUpdatedBestBlock(peerInfo: PeerInfo): Boolean = {
-    val peerBestBlockIsItsGenesisBlock = peerInfo.bestBlockHash == peerInfo.remoteStatus.genesisHash
-    peerBestBlockIsItsGenesisBlock || (!peerBestBlockIsItsGenesisBlock && peerInfo.maxBlockNumber > 0)
-  }
+  private def peerHasUpdatedBestBlock(@annotation.unused peerInfo: PeerInfo): Boolean =
+    // All handshaked peers are usable. go-ethereum has no equivalent gate (eth/peerset.go all()
+    // returns all peers unconditionally). ETH/69 peers carry latestBlock in Status; ETH/68 peers
+    // carry bestHash. Both are sufficient to identify the peer as having chain state.
+    true
 
   /** Processes both messages for sending messages and for requesting peer information
     *
@@ -122,6 +136,18 @@ class NetworkPeerManagerActor(
       val newPeersWithInfo = updatePeersWithInfo(peersWithInfo, peerId, message.underlyingMsg, handleSentMessage)
       peerManagerActor ! PeerManagerActor.SendMessage(message, peerId)
       context.become(handleMessages(newPeersWithInfo))
+
+    case NetworkPeerManagerActor.LogNetworkSummary =>
+      import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler
+      val tcpFailed = RLPxConnectionHandler.tcpFailedCount.getAndSet(0)
+      val authFailed = RLPxConnectionHandler.authFailedCount.getAndSet(0)
+      val authTimeout = RLPxConnectionHandler.authTimeoutCount.getAndSet(0)
+      val emptyHeaders = emptyHeaderResponses; emptyHeaderResponses = 0
+      val active = peersWithInfo.size
+      val snapPeers = peersWithInfo.values.count(_.peerInfo.remoteStatus.supportsSnap)
+      log.info(
+        s"Network [60s]: active=$active peers ($snapPeers snap-capable), +$tcpFailed tcp-failed, +$authFailed auth-failed, +$authTimeout auth-timeout, +$emptyHeaders empty-headers"
+      )
   }
 
   /** Processes events and updating the information about each peer
@@ -160,7 +186,7 @@ class NetworkPeerManagerActor(
       context.become(handleMessages(newPeersWithInfo))
 
     case PeerHandshakeSuccessful(peer, peerInfo: PeerInfo) =>
-      log.info(
+      log.debug(
         "PEER_HANDSHAKE_SUCCESS: Peer {} handshake successful. Capability: {}, BestHash: {}, TotalDifficulty: {}",
         peer.id,
         peerInfo.remoteStatus.capability,
@@ -236,24 +262,30 @@ class NetworkPeerManagerActor(
     *   new updated peer info
     */
   private def handleReceivedMessage(message: Message, initialPeerWithInfo: PeerWithInfo): PeerInfo = {
-    // Log received BlockHeaders for debugging GetBlockHeaders response tracking
+    // Log non-empty BlockHeaders at debug; count empty responses for 60s summary
     message match {
       case m: ETH62BlockHeaders =>
-        log.info(
-          "RECV_BLOCKHEADERS: peer={}, count={}, blockNumbers={}",
-          initialPeerWithInfo.peer.id,
-          m.headers.size,
-          m.headers.take(5).map(_.number).mkString(", ") + (if (m.headers.size > 5) "..." else "")
-        )
+        if (m.headers.nonEmpty)
+          log.debug(
+            "RECV_BLOCKHEADERS: peer={}, count={}, blockNumbers={}",
+            initialPeerWithInfo.peer.id,
+            m.headers.size,
+            m.headers.take(5).map(_.number).mkString(", ") + (if (m.headers.size > 5) "..." else "")
+          )
+        else
+          emptyHeaderResponses += 1
       case m: ETH66BlockHeaders =>
-        log.info(
-          "RECV_BLOCKHEADERS: peer={}, requestId={}, count={}, blockNumbers={}",
-          initialPeerWithInfo.peer.id,
-          m.requestId,
-          m.headers.size,
-          m.headers.take(5).map(_.number).mkString(", ") + (if (m.headers.size > 5) "..." else "")
-        )
-      case _ => // Don't log other message types at INFO level
+        if (m.headers.nonEmpty)
+          log.debug(
+            "RECV_BLOCKHEADERS: peer={}, requestId={}, count={}, blockNumbers={}",
+            initialPeerWithInfo.peer.id,
+            m.requestId,
+            m.headers.size,
+            m.headers.take(5).map(_.number).mkString(", ") + (if (m.headers.size > 5) "..." else "")
+          )
+        else
+          emptyHeaderResponses += 1
+      case _ => // Don't log other message types
     }
 
     (updateChainWeight(message) _)
@@ -360,6 +392,8 @@ class NetworkPeerManagerActor(
         update(Seq((m.block.header.number, m.block.header.hash)))
       case m: NewBlockHashes =>
         update(m.hashes.map(h => (h.number, h.hash)))
+      case m: ETH69.BlockRangeUpdate =>
+        update(Seq((m.latestBlock, m.latestBlockHash)))
       case _ => initialPeerInfo
     }
   }
@@ -639,6 +673,7 @@ object NetworkPeerManagerActor {
     Codes.BlockHeadersCode,
     Codes.NewBlockCode,
     Codes.NewBlockHashesCode,
+    Codes.BlockRangeUpdateCode,
     // SNAP protocol response codes (responses we receive from peers)
     SNAP.Codes.AccountRangeCode,
     SNAP.Codes.StorageRangesCode,
@@ -811,6 +846,7 @@ object NetworkPeerManagerActor {
   private[network] case class PeerWithInfo(peer: Peer, peerInfo: PeerInfo)
 
   case object GetHandshakedPeers
+  private[network] case object LogNetworkSummary
 
   case class HandshakedPeers(peers: Map[Peer, PeerInfo])
 

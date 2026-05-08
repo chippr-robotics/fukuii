@@ -1,0 +1,328 @@
+{
+  "annotations": { "list": [] },
+  "description": "Lighthouse beacon-node detail — CL-side health, peers, attestations, store. Pair with the staking-ops dashboard.",
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "options": {
+        "content": "<div style=\"text-align:center;padding:8px 0\"><span style=\"font-size:28px;letter-spacing:4px;font-weight:200;color:#b4a7d6\">LIGHTHOUSE</span><span style=\"font-size:28px;letter-spacing:4px;font-weight:200;color:#93c47d\"> BEACON NODE</span><br/><span style=\"font-size:12px;color:#999;letter-spacing:2px\">consensus layer detail — sepolia</span></div>",
+        "mode": "html"
+      },
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "1 = synced, 0 = syncing.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [{ "options": { "0": { "color": "#e06666", "text": "SYNCING" }, "1": { "color": "#93c47d", "text": "SYNCED" } }, "type": "value" }],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#e06666", "value": null }, { "color": "#93c47d", "value": 1 }] }
+        }
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 3 },
+      "id": 1,
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Sync status",
+      "type": "stat",
+      "targets": [{ "expr": "sync_eth2_synced{job=\"lighthouse-sepolia\"}", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Slots/sec the syncer is currently processing.",
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "#6fa8dc" }, "unit": "none", "decimals": 1 } },
+      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 3 },
+      "id": 2,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Sync speed (slots/s)",
+      "type": "stat",
+      "targets": [{ "expr": "sync_slots_per_second{job=\"lighthouse-sepolia\"}", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "How many slots behind the wall-clock head we are.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#93c47d", "value": null }, { "color": "#f6b26b", "value": 32 }, { "color": "#e06666", "value": 1024 }] },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 8, "y": 3 },
+      "id": 3,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Sync distance (slots)",
+      "type": "stat",
+      "targets": [{ "expr": "slotclock_present_slot{job=\"lighthouse-sepolia\"} - notifier_head_slot{job=\"lighthouse-sepolia\"}", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Estimated time to head at current speed.",
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "#b4a7d6" }, "unit": "s" } },
+      "gridPos": { "h": 5, "w": 4, "x": 12, "y": 3 },
+      "id": 4,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "ETA to head",
+      "type": "stat",
+      "targets": [{ "expr": "(slotclock_present_slot{job=\"lighthouse-sepolia\"} - notifier_head_slot{job=\"lighthouse-sepolia\"}) / clamp_min(sync_slots_per_second{job=\"lighthouse-sepolia\"}, 0.01)", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Total libp2p peers across all gossipsub protocols (sums protocol versions).",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#e06666", "value": null }, { "color": "#f6b26b", "value": 10 }, { "color": "#93c47d", "value": 30 }] },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 3 },
+      "id": 5,
+      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "libp2p peers",
+      "type": "stat",
+      "targets": [{ "expr": "sum(gossipsub_peers_per_protocol{job=\"lighthouse-sepolia\"})", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Active discovery sessions (peer search).",
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "#ffd966" }, "unit": "none" } },
+      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 3 },
+      "id": 6,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "discovery sessions",
+      "type": "stat",
+      "targets": [{ "expr": "discovery_sessions{job=\"lighthouse-sepolia\"}", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Head slot vs wall-clock slot. Diverging lines = falling behind.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 2, "spanNulls": true },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 10,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Slot progress",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "slotclock_present_slot{job=\"lighthouse-sepolia\"}", "legendFormat": "wall-clock", "refId": "A" },
+        { "expr": "notifier_head_slot{job=\"lighthouse-sepolia\"}", "legendFormat": "head", "refId": "B" },
+        { "expr": "beacon_head_state_slot{job=\"lighthouse-sepolia\"}", "legendFormat": "head state", "refId": "C" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Justified and finalized epochs over time. Healthy chains advance both every 32 slots.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 2, "spanNulls": true },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 11,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Justified / finalized",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "beacon_finalized_epoch{job=\"lighthouse-sepolia\"}", "legendFormat": "finalized", "refId": "A" },
+        { "expr": "beacon_current_justified_epoch{job=\"lighthouse-sepolia\"}", "legendFormat": "current justified", "refId": "B" },
+        { "expr": "beacon_previous_justified_epoch{job=\"lighthouse-sepolia\"}", "legendFormat": "previous justified", "refId": "C" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Mesh peer count per protocol — diversity matters.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true, "stacking": { "mode": "normal", "group": "A" } },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 16 },
+      "id": 20,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" } },
+      "title": "gossipsub peers per protocol",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "gossipsub_peers_per_protocol{job=\"lighthouse-sepolia\"}", "legendFormat": "{{protocol}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Mesh peer churn — high churn correlates with poor scoring or unstable network.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true },
+          "unit": "ops"
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 16 },
+      "id": 21,
+      "options": { "legend": { "calcs": ["lastNotNull", "sum"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Mesh peer churn (events/s)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(gossipsub_mesh_peer_inclusion_events{job=\"lighthouse-sepolia\"}[5m])", "legendFormat": "include {{reason}}", "refId": "A" },
+        { "expr": "rate(gossipsub_mesh_peer_churn_events{job=\"lighthouse-sepolia\"}[5m])", "legendFormat": "churn {{reason}}", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Operations sitting in the pool waiting for inclusion.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 23 },
+      "id": 30,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Beacon op pool",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "beacon_op_pool_attestations_total{job=\"lighthouse-sepolia\"}", "legendFormat": "attestations", "refId": "A" },
+        { "expr": "beacon_op_pool_attestation_data_total{job=\"lighthouse-sepolia\"}", "legendFormat": "attestation data", "refId": "B" },
+        { "expr": "beacon_op_pool_sync_contributions_total{job=\"lighthouse-sepolia\"}", "legendFormat": "sync contributions", "refId": "C" },
+        { "expr": "beacon_op_pool_attester_slashings_total{job=\"lighthouse-sepolia\"}", "legendFormat": "attester slashings", "refId": "D" },
+        { "expr": "beacon_op_pool_proposer_slashings_total{job=\"lighthouse-sepolia\"}", "legendFormat": "proposer slashings", "refId": "E" },
+        { "expr": "beacon_op_pool_voluntary_exits_total{job=\"lighthouse-sepolia\"}", "legendFormat": "voluntary exits", "refId": "F" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Sync committee participation per slot — 512 max.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 15, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 23 },
+      "id": 31,
+      "options": { "legend": { "calcs": ["lastNotNull", "min", "mean"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Sync committee per slot",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "beacon_sync_comm_observation_slot_signers{job=\"lighthouse-sepolia\"}", "legendFormat": "signers", "refId": "A" },
+        { "expr": "beacon_sync_comm_observation_slot_aggregators{job=\"lighthouse-sepolia\"}", "legendFormat": "aggregators", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Network bandwidth in/out from libp2p.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true },
+          "unit": "Bps"
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 30 },
+      "id": 40,
+      "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" } },
+      "title": "libp2p bandwidth",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(network_node_bytes_total_received{job=\"lighthouse-sepolia\"}[1m])", "legendFormat": "rx", "refId": "A" },
+        { "expr": "rate(network_node_bytes_total_transmit{job=\"lighthouse-sepolia\"}[1m])", "legendFormat": "tx", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Beacon hot DB and freezer footprint.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 25, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true, "stacking": { "mode": "normal", "group": "A" } },
+          "unit": "bytes"
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 30 },
+      "id": 41,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Store size",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "store_disk_db_size{job=\"lighthouse-sepolia\"}", "legendFormat": "hot DB", "refId": "A" },
+        { "expr": "store_freezer_db_size{job=\"lighthouse-sepolia\"}", "legendFormat": "freezer", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Process CPU and memory.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true }
+        },
+        "overrides": [
+          { "matcher": { "id": "byRegexp", "options": ".*RSS.*" }, "properties": [{ "id": "unit", "value": "bytes" }, { "id": "custom.axisPlacement", "value": "right" }] },
+          { "matcher": { "id": "byRegexp", "options": ".*CPU.*" }, "properties": [{ "id": "unit", "value": "percentunit" }] }
+        ]
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 37 },
+      "id": 50,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Process resources",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(process_cpu_seconds_total{job=\"lighthouse-sepolia\"}[1m])", "legendFormat": "CPU", "refId": "A" },
+        { "expr": "process_resident_memory_bytes{job=\"lighthouse-sepolia\"}", "legendFormat": "RSS", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Disk read/write rate from the host node.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true },
+          "unit": "iops"
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 37 },
+      "id": 51,
+      "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Disk I/O",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(disk_node_reads_total{job=\"lighthouse-sepolia\"}[1m])", "legendFormat": "reads/s", "refId": "A" },
+        { "expr": "rate(disk_node_writes_total{job=\"lighthouse-sepolia\"}[1m])", "legendFormat": "writes/s", "refId": "B" }
+      ]
+    },
+    {
+      "gridPos": { "h": 2, "w": 24, "x": 0, "y": 44 },
+      "id": 99,
+      "options": {
+        "content": "<div style=\"text-align:center;padding:4px 0\"><span style=\"font-size:10px;color:#666;letter-spacing:3px\">LIGHTHOUSE BEACON NODE</span> <span style=\"color:#555\">|</span> <span style=\"font-size:10px;color:#666\">Sepolia CL</span></div>",
+        "mode": "html"
+      },
+      "transparent": true,
+      "type": "text"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 37,
+  "style": "dark",
+  "tags": ["lighthouse", "consensus", "sepolia", "beacon"],
+  "time": { "from": "now-3h", "to": "now" },
+  "title": "Lighthouse Beacon Node",
+  "uid": "lighthouse-beacon",
+  "version": 1
+}

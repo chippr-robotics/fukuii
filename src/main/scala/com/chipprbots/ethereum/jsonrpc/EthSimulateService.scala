@@ -5,6 +5,8 @@ import org.apache.pekko.util.ByteString
 import cats.effect.IO
 
 import scala.collection.mutable
+import scala.util.boundary
+import scala.util.boundary.break
 
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.consensus.validators.std.MptListValidator
@@ -141,12 +143,14 @@ class EthSimulateService(
       Left(JsonRpcError.NodeNotFound)
     }
 
-  private def doSimulate(req: EthSimulateRequest): Either[JsonRpcError, EthSimulateResponse] = {
+  private def doSimulate(req: EthSimulateRequest): Either[JsonRpcError, EthSimulateResponse] = boundary {
     // Validate blockStateCalls count
     if (req.blockStateCalls.size > MaxBlockStateCalls) {
-      return Left(
-        JsonRpcError.SimulateClientLimitExceeded(
-          s"too many block state calls: ${req.blockStateCalls.size} > $MaxBlockStateCalls"
+      break(
+        Left(
+          JsonRpcError.SimulateClientLimitExceeded(
+            s"too many block state calls: ${req.blockStateCalls.size} > $MaxBlockStateCalls"
+          )
         )
       )
     }
@@ -156,12 +160,15 @@ class EthSimulateService(
       case Right(resolved) => resolved.block
       case Left(_)         =>
         // Return -32000 for block not found (not -32602)
-        return Left(JsonRpcError.LogicError(s"header not found"))
+        break(Left(JsonRpcError.LogicError(s"header not found")))
     }
 
     // Pre-validate block number/timestamp ordering
     val validationResult = validateBlockOrdering(req.blockStateCalls, baseBlock.header)
-    if (validationResult.isLeft) return validationResult.map(_ => null)
+    validationResult match {
+      case Left(err) => break(Left(err))
+      case _         =>
+    }
 
     // Simulated block hash registry for BLOCKHASH opcode support
     val simulatedBlockHashes = mutable.Map[BigInt, ByteString]()
@@ -183,6 +190,10 @@ class EthSimulateService(
     val blockResults = mutable.ArrayBuffer[SimulateBlockResult]()
     val nonceMap = mutable.Map[Address, BigInt]() // Track nonces across blocks
     var globalAccumGas = BigInt(0) // Global gas accumulator across all blocks (geth shares the 50M pool)
+    // Once a blockOverride sets feeRecipient, geth keeps it as the default for any
+    // subsequent block in the same simulate request that doesn't override it
+    // (including auto-generated gap blocks).
+    var inheritedFeeRecipient: Option[Address] = None
 
     // Pre-compute total blocks including gap-filling to validate against limit
     var totalBlocks = 0
@@ -193,21 +204,25 @@ class EthSimulateService(
       prevNum = targetNum
     }
     if (totalBlocks > MaxBlockStateCalls) {
-      return Left(
-        JsonRpcError.SimulateClientLimitExceeded(
-          s"too many blocks (including gaps): $totalBlocks > $MaxBlockStateCalls"
+      break(
+        Left(
+          JsonRpcError.SimulateClientLimitExceeded(
+            s"too many blocks (including gaps): $totalBlocks > $MaxBlockStateCalls"
+          )
         )
       )
     }
 
-    for ((blockStateCall, blockIdx) <- req.blockStateCalls.zipWithIndex) {
+    for ((blockStateCall, _) <- req.blockStateCalls.zipWithIndex) {
       val targetNumber = blockStateCall.blockOverrides.flatMap(_.number).getOrElse(parentHeader.number + 1)
 
-      // Generate gap-filling empty blocks if the target number is ahead
+      // Generate gap-filling empty blocks if the target number is ahead.
+      // Gap blocks inherit the persistent feeRecipient if one was set earlier.
       while (parentHeader.number + 1 < targetNumber) {
+        val gapOverrides = inheritedFeeRecipient.map(fr => BlockOverrides(feeRecipient = Some(fr)))
         val gapResult = buildAndFinalizeBlock(
           parentHeader,
-          None,
+          gapOverrides,
           None,
           Seq.empty,
           req.validation,
@@ -219,7 +234,7 @@ class EthSimulateService(
           simulatedBlockHashes
         )
         gapResult match {
-          case Left(err) => return Left(err)
+          case Left(err) => break(Left(err))
           case Right((gapHeader, gapWorld, gapBlockResult, gapGasUsed)) =>
             blockResults += gapBlockResult
             simulatedBlockHashes(gapHeader.number) = gapHeader.hash
@@ -229,10 +244,22 @@ class EthSimulateService(
         }
       }
 
+      // Merge inherited feeRecipient into this block's overrides if not specified.
+      val effectiveOverrides = blockStateCall.blockOverrides match {
+        case Some(ov) =>
+          if (ov.feeRecipient.isEmpty && inheritedFeeRecipient.isDefined)
+            Some(ov.copy(feeRecipient = inheritedFeeRecipient))
+          else Some(ov)
+        case None =>
+          inheritedFeeRecipient.map(fr => BlockOverrides(feeRecipient = Some(fr)))
+      }
+      // Persist any newly set feeRecipient for future blocks.
+      effectiveOverrides.flatMap(_.feeRecipient).foreach(fr => inheritedFeeRecipient = Some(fr))
+
       // Build the actual BSC block
       val bscResult = buildAndFinalizeBlock(
         parentHeader,
-        blockStateCall.blockOverrides,
+        effectiveOverrides,
         blockStateCall.stateOverrides,
         blockStateCall.calls.getOrElse(Seq.empty),
         req.validation,
@@ -244,7 +271,7 @@ class EthSimulateService(
         simulatedBlockHashes
       )
       bscResult match {
-        case Left(err) => return Left(err)
+        case Left(err) => break(Left(err))
         case Right((bscHeader, bscWorld, bscBlockResult, bscGasUsed)) =>
           blockResults += bscBlockResult
           simulatedBlockHashes(bscHeader.number) = bscHeader.hash
@@ -270,7 +297,7 @@ class EthSimulateService(
       globalGasOffset: BigInt,
       initialWorld: InMemoryWorldStateProxy,
       @annotation.unused simulatedBlockHashes: mutable.Map[BigInt, ByteString]
-  ): Either[JsonRpcError, (BlockHeader, InMemoryWorldStateProxy, SimulateBlockResult, BigInt)] = {
+  ): Either[JsonRpcError, (BlockHeader, InMemoryWorldStateProxy, SimulateBlockResult, BigInt)] = boundary {
     var world = initialWorld
 
     // Build simulated block header
@@ -293,11 +320,11 @@ class EthSimulateService(
         case Right((newWorld, newRelocations)) =>
           world = newWorld
           precompileRelocations = newRelocations
-        case Left(err) => return Left(err)
+        case Left(err) => break(Left(err))
       }
     }
 
-    // Execute calls
+    // Execute calls (pass through any blob base fee override from blockOverrides)
     val execResult = executeCalls(
       calls,
       simHeader,
@@ -306,15 +333,40 @@ class EthSimulateService(
       traceTransfers,
       nonceMap,
       precompileRelocations,
-      globalGasOffset
+      globalGasOffset,
+      blockOverrides.flatMap(_.blobBaseFee)
     )
     execResult match {
-      case Left(err) => return Left(err)
+      case Left(err) => break(Left(err))
       case _         =>
     }
     val (newWorld, callResults, txs, txSenders, receipts, gasUsed) = execResult.toOption.get
 
     world = newWorld
+
+    // Pre-merge: pay the static block reward (5/3/2 ETH per Byzantium/Constantinople)
+    // to the miner. Geth's eth_simulateV1 reflects the reward in the simulated
+    // stateRoot, so simulated pre-merge blocks must too. Post-merge blocks have no
+    // reward — execution layer pays nothing, withdrawals come from the CL.
+    val isPreMerge = simHeader.extraFields match {
+      case HefEmpty                                                                     => true
+      case _: HefPostOlympia | _: HefPostShanghai | _: HefPostCancun | _: HefPostPrague => false
+    }
+    if (isPreMerge) {
+      val reward = blockchainConfig.monetaryPolicyConfig.firstEraBlockReward
+      val byzantiumReward = blockchainConfig.monetaryPolicyConfig.firstEraReducedBlockReward
+      val constantinopleReward = blockchainConfig.monetaryPolicyConfig.firstEraConstantinopleReducedBlockReward
+      val n = simHeader.number
+      val byzantium = blockchainConfig.forkBlockNumbers.byzantiumBlockNumber
+      val constantinople = blockchainConfig.forkBlockNumbers.constantinopleBlockNumber
+      val finalReward =
+        if (n >= constantinople) constantinopleReward
+        else if (n >= byzantium) byzantiumReward
+        else reward
+      val minerAddr = Address(simHeader.beneficiary)
+      val acct = world.getAccount(minerAddr).getOrElse(Account.empty(blockchainConfig.accountStartNonce))
+      world = world.saveAccount(minerAddr, acct.increaseBalance(UInt256(finalReward)))
+    }
 
     // Compute Merkle roots
     val transactionsRoot = computeTransactionsRoot(txs)
@@ -350,7 +402,7 @@ class EthSimulateService(
 
     // Update call results with correct block hash and number
     val blockHash = finalHeader.hash
-    val updatedCallResults = callResults.zipWithIndex.map { case (cr, callIdx) =>
+    val updatedCallResults = callResults.zipWithIndex.map { case (cr, _) =>
       cr.copy(logs =
         cr.logs.map(
           _.copy(
@@ -361,7 +413,12 @@ class EthSimulateService(
       )
     }
 
-    val body = BlockBody(txs, Nil, Some(Seq.empty))
+    // Pre-Shanghai blocks have no withdrawals field in the RLP body. Encoding
+    // Some(Seq.empty) adds a 1-byte extra `0xc0` to the body, which throws off
+    // both the reported "size" and the block hash for legacy blocks.
+    val withdrawalsOpt: Option[Seq[com.chipprbots.ethereum.domain.Withdrawal]] =
+      if (finalHeader.withdrawalsRoot.isDefined) Some(Seq.empty) else None
+    val body = BlockBody(txs, Nil, withdrawalsOpt)
     val blockResult = SimulateBlockResult(finalHeader, body, txs, txSenders, updatedCallResults, receipts)
     Right((finalHeader, world, blockResult, gasUsed))
   }
@@ -369,18 +426,22 @@ class EthSimulateService(
   private def validateBlockOrdering(
       blockStateCalls: Seq[BlockStateCall],
       baseHeader: BlockHeader
-  ): Either[JsonRpcError, Unit] = {
+  ): Either[JsonRpcError, Unit] = boundary {
     var prevNumber = baseHeader.number
     var prevTimestamp = BigInt(baseHeader.unixTimestamp)
 
-    for ((bsc, idx) <- blockStateCalls.zipWithIndex) {
+    for ((bsc, _) <- blockStateCalls.zipWithIndex) {
       val overrides = bsc.blockOverrides.getOrElse(BlockOverrides())
       val targetNumber = overrides.number.getOrElse(prevNumber + 1)
 
       // Validate block number override doesn't go backwards
       if (targetNumber <= prevNumber) {
-        return Left(
-          JsonRpcError.SimulateBlockNumberNotIncreasing(s"block numbers must be in order: $targetNumber <= $prevNumber")
+        break(
+          Left(
+            JsonRpcError.SimulateBlockNumberNotIncreasing(
+              s"block numbers must be in order: $targetNumber <= $prevNumber"
+            )
+          )
         )
       }
 
@@ -392,9 +453,11 @@ class EthSimulateService(
 
       // Explicit timestamp must be strictly greater than previous
       if (timestamp <= prevTimestamp) {
-        return Left(
-          JsonRpcError.SimulateTimestampNotIncreasing(
-            s"block timestamps must be in order: $timestamp <= $prevTimestamp"
+        break(
+          Left(
+            JsonRpcError.SimulateTimestampNotIncreasing(
+              s"block timestamps must be in order: $timestamp <= $prevTimestamp"
+            )
           )
         )
       }
@@ -404,9 +467,11 @@ class EthSimulateService(
       if (overrides.time.isDefined && gapBlocks > 1) {
         val minTimestamp = prevTimestamp + gapBlocks * 12
         if (timestamp < minTimestamp) {
-          return Left(
-            JsonRpcError.SimulateTimestampNotIncreasing(
-              s"block timestamps must be in order: $timestamp <= ${minTimestamp - 12}"
+          break(
+            Left(
+              JsonRpcError.SimulateTimestampNotIncreasing(
+                s"block timestamps must be in order: $timestamp <= ${minTimestamp - 12}"
+              )
             )
           )
         }
@@ -503,85 +568,99 @@ class EthSimulateService(
       world: InMemoryWorldStateProxy,
       overrides: Map[Address, StateOverride],
       existingRelocations: Map[Address, Address]
-  ): Either[JsonRpcError, (InMemoryWorldStateProxy, Map[Address, Address])] = {
+  ): Either[JsonRpcError, (InMemoryWorldStateProxy, Map[Address, Address])] = boundary {
     var w = world
     var relocations = existingRelocations
 
-    // First pass: validate movePrecompileToAddress
+    // First pass: validate movePrecompileToAddress and detect collisions
+    val allPrecompiles = Set(
+      Address(1),
+      Address(2),
+      Address(3),
+      Address(4),
+      Address(5),
+      Address(6),
+      Address(7),
+      Address(8),
+      Address(9),
+      Address(0x0b),
+      Address(0x0c),
+      Address(0x0d),
+      Address(0x0e),
+      Address(0x0f),
+      Address(0x10),
+      Address(0x11),
+      Address(0x100)
+    )
+    val pendingMoves = scala.collection.mutable.ArrayBuffer[(Address, Address)]()
     for ((address, ov) <- overrides)
       ov.movePrecompileToAddress.foreach { targetAddr =>
-        // Check: source must be a known precompile
-        val allPrecompiles = Set(
-          Address(1),
-          Address(2),
-          Address(3),
-          Address(4),
-          Address(5),
-          Address(6),
-          Address(7),
-          Address(8),
-          Address(9),
-          Address(0x0b),
-          Address(0x0c),
-          Address(0x0d),
-          Address(0x0e),
-          Address(0x0f),
-          Address(0x10),
-          Address(0x11),
-          Address(0x100)
-        )
         if (!allPrecompiles.contains(address)) {
-          return Left(JsonRpcError.LogicError(s"account ${address.toString} is not a precompile"))
+          break(Left(JsonRpcError.LogicError(s"account ${address.toString} is not a precompile")))
         }
-        relocations = relocations + (address -> targetAddr)
+        pendingMoves += (address -> targetAddr)
       }
+    // Two precompiles moving to the same target is ambiguous — geth silently
+    // drops the colliding moves rather than erroring (matches the
+    // ethSimulate-move-two-accounts-to-same-38023 testdata expected response).
+    val targetCounts = pendingMoves.groupBy(_._2).view.mapValues(_.size).toMap
+    pendingMoves.foreach { case (src, tgt) =>
+      if (targetCounts.getOrElse(tgt, 0) <= 1) relocations = relocations + (src -> tgt)
+    }
 
-    // Second pass: apply overrides
+    // Second pass: apply overrides — only modify state when something other than
+    // movePrecompileToAddress is set; the precompile move is purely a routing
+    // override and must not create empty accounts at precompile source addresses.
     for ((address, ov) <- overrides) {
-      var account = w.getAccount(address).getOrElse(Account.empty(blockchainConfig.accountStartNonce))
+      val hasStateMutation =
+        ov.balance.isDefined || ov.nonce.isDefined || ov.code.isDefined ||
+          ov.state.isDefined || ov.stateDiff.isDefined
+      if (hasStateMutation) {
+        var account = w.getAccount(address).getOrElse(Account.empty(blockchainConfig.accountStartNonce))
 
-      ov.balance.foreach(bal => account = account.copy(balance = UInt256(bal)))
-      ov.nonce.foreach(n => account = account.copy(nonce = UInt256(n)))
+        ov.balance.foreach(bal => account = account.copy(balance = UInt256(bal)))
+        ov.nonce.foreach(n => account = account.copy(nonce = UInt256(n)))
 
-      w = w.saveAccount(address, account)
+        w = w.saveAccount(address, account)
 
-      ov.code.foreach { code =>
-        w = w.saveCode(address, code)
-        // Update the account's codeHash immediately (not just in cache)
-        // This prevents EIP-161 from deleting the account as "empty"
-        val codeHash = if (code.isEmpty) Account.EmptyCodeHash else ByteString(kec256(code.toArray))
-        val acctWithCode = w.getAccount(address).getOrElse(Account.empty(blockchainConfig.accountStartNonce))
-        w = w.saveAccount(address, acctWithCode.copy(codeHash = codeHash))
-      }
-
-      ov.state.foreach { slots =>
-        // Full state replacement: clear all storage, then set specified slots
-        // Persist first so any cached storage changes are committed
-        w = InMemoryWorldStateProxy.persistState(w)
-        // Reset storageRoot to empty and clear storage cache by delete+recreate
-        val currentAcct = w.getAccount(address).getOrElse(Account.empty(blockchainConfig.accountStartNonce))
-        // Delete and re-save account to clear storage cache
-        w = w.deleteAccount(address)
-        w = w.saveAccount(address, currentAcct.copy(storageRoot = Account.EmptyStorageRootHash))
-        // Re-apply code if it was set
-        if (currentAcct.codeHash != Account.EmptyCodeHash) {
-          // Code is in the EVM code storage, re-associate it
-          ov.code.foreach(code => w = w.saveCode(address, code))
+        ov.code.foreach { code =>
+          w = w.saveCode(address, code)
+          // Update the account's codeHash immediately (not just in cache)
+          // This prevents EIP-161 from deleting the account as "empty"
+          val codeHash = if (code.isEmpty) Account.EmptyCodeHash else ByteString(kec256(code.toArray))
+          val acctWithCode = w.getAccount(address).getOrElse(Account.empty(blockchainConfig.accountStartNonce))
+          w = w.saveAccount(address, acctWithCode.copy(codeHash = codeHash))
         }
-        // Write the new slots on fresh (empty) storage
-        val storage = w.getStorage(address)
-        var s = storage
-        for ((key, value) <- slots)
-          s = s.store(key, value)
-        w = w.saveStorage(address, s)
-      }
 
-      ov.stateDiff.foreach { slots =>
-        val storage = w.getStorage(address)
-        var s = storage
-        for ((key, value) <- slots)
-          s = s.store(key, value)
-        w = w.saveStorage(address, s)
+        ov.state.foreach { slots =>
+          // Full state replacement: clear all storage, then set specified slots
+          // Persist first so any cached storage changes are committed
+          w = InMemoryWorldStateProxy.persistState(w)
+          // Reset storageRoot to empty and clear storage cache by delete+recreate
+          val currentAcct = w.getAccount(address).getOrElse(Account.empty(blockchainConfig.accountStartNonce))
+          // Delete and re-save account to clear storage cache
+          w = w.deleteAccount(address)
+          w = w.saveAccount(address, currentAcct.copy(storageRoot = Account.EmptyStorageRootHash))
+          // Re-apply code if it was set
+          if (currentAcct.codeHash != Account.EmptyCodeHash) {
+            // Code is in the EVM code storage, re-associate it
+            ov.code.foreach(code => w = w.saveCode(address, code))
+          }
+          // Write the new slots on fresh (empty) storage
+          val storage = w.getStorage(address)
+          var s = storage
+          for ((key, value) <- slots)
+            s = s.store(key, value)
+          w = w.saveStorage(address, s)
+        }
+
+        ov.stateDiff.foreach { slots =>
+          val storage = w.getStorage(address)
+          var s = storage
+          for ((key, value) <- slots)
+            s = s.store(key, value)
+          w = w.saveStorage(address, s)
+        }
       }
     }
     Right((w, relocations))
@@ -594,12 +673,13 @@ class EthSimulateService(
       validation: Boolean,
       traceTransfers: Boolean,
       nonceMap: mutable.Map[Address, BigInt],
-      precompileRelocations: Map[Address, Address] = Map.empty,
-      globalGasOffset: BigInt = BigInt(0)
+      precompileRelocations: Map[Address, Address],
+      globalGasOffset: BigInt,
+      blobBaseFeeOverride: Option[BigInt]
   ): Either[
     JsonRpcError,
     (InMemoryWorldStateProxy, Seq[SimulateCallResult], Seq[SignedTransaction], Seq[Address], Seq[Receipt], BigInt)
-  ] = {
+  ] = boundary {
     var world = initialWorld
     val callResults = mutable.ArrayBuffer[SimulateCallResult]()
     val txs = mutable.ArrayBuffer[SignedTransaction]()
@@ -607,6 +687,9 @@ class EthSimulateService(
     val receipts = mutable.ArrayBuffer[Receipt]()
     var accumGas = BigInt(0)
     val baseFee = blockHeader.baseFee.getOrElse(BigInt(0))
+    // Block-level logIndex counter — geth numbers logs globally across all calls
+    // in the block, including synthetic Transfer logs emitted for traceTransfers.
+    var globalLogIndex = 0
 
     for ((call, callIdx) <- calls.zipWithIndex) {
       val sender = call.from.getOrElse(Address(0))
@@ -631,7 +714,7 @@ class EthSimulateService(
       // Check nonce overflow (uint64 max) — returns -32603 (InternalError)
       val MaxUint64 = BigInt("18446744073709551615") // 0xffffffffffffffff
       if (senderNonce > MaxUint64 || (validation && senderNonce == MaxUint64)) {
-        return Left(JsonRpcError.InternalError)
+        break(Left(JsonRpcError.InternalError))
       }
 
       // Always check: intrinsic gas
@@ -641,9 +724,11 @@ class EthSimulateService(
       }
       val intrinsicGas = baseGas + calldataGas
       if (call.gas.isDefined && gasLimit < intrinsicGas) {
-        return Left(
-          JsonRpcError.SimulateIntrinsicGasTooLow(
-            s"err: intrinsic gas too low: have $gasLimit, want $intrinsicGas (supplied gas $gasLimit)"
+        break(
+          Left(
+            JsonRpcError.SimulateIntrinsicGasTooLow(
+              s"err: intrinsic gas too low: have $gasLimit, want $intrinsicGas (supplied gas $gasLimit)"
+            )
           )
         )
       }
@@ -652,9 +737,11 @@ class EthSimulateService(
       {
         val senderBal = world.getAccount(sender).map(_.balance.toBigInt).getOrElse(BigInt(0))
         if (value > 0 && senderBal < value && !validation) {
-          return Left(
-            JsonRpcError.SimulateInsufficientFunds(
-              s"err: insufficient funds for gas * price + value: address ${sender.toString} have $senderBal want $value (supplied gas ${blockHeader.gasLimit})"
+          break(
+            Left(
+              JsonRpcError.SimulateInsufficientFunds(
+                s"err: insufficient funds for gas * price + value: address ${sender.toString} have $senderBal want $value (supplied gas ${blockHeader.gasLimit})"
+              )
             )
           )
         }
@@ -664,9 +751,11 @@ class EthSimulateService(
       if (validation) {
         // Check maxFeePerGas >= baseFee
         if (baseFee > 0 && maxFeePerGas < baseFee && !call.gasPrice.isDefined) {
-          return Left(
-            JsonRpcError.InvalidParams(
-              s"max fee per gas less than block base fee: address ${sender.toString}, maxFeePerGas: $maxFeePerGas, baseFee: $baseFee"
+          break(
+            Left(
+              JsonRpcError.InvalidParams(
+                s"max fee per gas less than block base fee: address ${sender.toString}, maxFeePerGas: $maxFeePerGas, baseFee: $baseFee"
+              )
             )
           )
         }
@@ -674,16 +763,20 @@ class EthSimulateService(
         // Check nonce
         val expectedNonce = world.getAccount(sender).map(_.nonce.toBigInt).getOrElse(BigInt(0))
         if (call.nonce.isDefined && senderNonce < expectedNonce) {
-          return Left(
-            JsonRpcError.InvalidParams(
-              s"nonce too low: address ${sender.toString}, tx: $senderNonce state: $expectedNonce"
+          break(
+            Left(
+              JsonRpcError.InvalidParams(
+                s"nonce too low: address ${sender.toString}, tx: $senderNonce state: $expectedNonce"
+              )
             )
           )
         }
         if (call.nonce.isDefined && senderNonce > expectedNonce) {
-          return Left(
-            JsonRpcError.InvalidParams(
-              s"nonce too high: address ${sender.toString}, tx: $senderNonce state: $expectedNonce"
+          break(
+            Left(
+              JsonRpcError.InvalidParams(
+                s"nonce too high: address ${sender.toString}, tx: $senderNonce state: $expectedNonce"
+              )
             )
           )
         }
@@ -692,9 +785,11 @@ class EthSimulateService(
         val senderAccount = world.getAccount(sender).getOrElse(Account.empty(blockchainConfig.accountStartNonce))
         val upfrontCost = gasLimit * gasPrice + value
         if (senderAccount.balance.toBigInt < upfrontCost) {
-          return Left(
-            JsonRpcError.SimulateInsufficientFunds(
-              s"err: insufficient funds for gas * price + value: address ${sender.toString} have ${senderAccount.balance} want $upfrontCost (supplied gas $gasLimit)"
+          break(
+            Left(
+              JsonRpcError.SimulateInsufficientFunds(
+                s"err: insufficient funds for gas * price + value: address ${sender.toString} have ${senderAccount.balance} want $upfrontCost (supplied gas $gasLimit)"
+              )
             )
           )
         }
@@ -769,7 +864,8 @@ class EthSimulateService(
           blockHeader,
           world,
           precompileRelocations,
-          traceTransfers
+          traceTransfers,
+          blobBaseFeeOverride
         )
 
       world = newWorld
@@ -785,13 +881,18 @@ class EthSimulateService(
       // Update nonce tracking
       nonceMap(sender) = (senderNonce + 1) % MaxUint64Plus1
 
-      // Build receipt
+      // EVM logs include synthetic Transfer logs (address 0xeeee...eeee) emitted by
+      // CALL/SELFDESTRUCT when traceTransfers is on. Those are API-only and must NOT
+      // appear in the receipt (they would change logsBloom + receiptsRoot).
+      val realLogs = if (traceTransfers) logs.filter(_.loggerAddress != EthTransferAddress) else logs
+
+      // Build receipt — receipts use real logs only
       val outcome = if (vmError.isDefined) FailureOutcome else SuccessOutcome
       val legacyReceipt = LegacyReceipt(
         postTransactionStateHash = outcome,
         cumulativeGasUsed = accumGas + gasUsed,
-        logsBloomFilter = BloomFilter.create(logs),
-        logs = logs
+        logsBloomFilter = BloomFilter.create(realLogs),
+        logs = realLogs
       )
       val receipt: Receipt = tx match {
         case _: BlobTransaction           => Type03Receipt(legacyReceipt)
@@ -805,11 +906,47 @@ class EthSimulateService(
       senders += sender
       receipts += receipt
 
-      // Build per-call result
-      val txLogs = logs.zipWithIndex.map { case (txLog, logIdx) =>
-        val globalLogIdx = receipts.dropRight(1).map(_.logs.size).sum + logIdx
-        TxLog(
-          logIndex = globalLogIdx,
+      // Build per-call result.
+      //
+      // For traceTransfers: prepend a synthetic top-level Transfer log so the API
+      // sees logIndex first for the outer (tx-initiated) transfer, then later for
+      // the inner CALL-emitted ones. This mirrors geth: the top-level value
+      // transfer is the first synthetic event, intra-call transfers come after in
+      // execution order. The EVM's CALL opcode already emits the inner transfer
+      // logs as part of `logs`.
+      val topLevelTransferLog =
+        if (traceTransfers && value > 0 && vmError.isEmpty)
+          Some(
+            com.chipprbots.ethereum.domain.TxLogEntry(
+              loggerAddress = EthTransferAddress,
+              logTopics = Seq(
+                TransferEventTopic,
+                ByteString(new Array[Byte](12) ++ sender.bytes.toArray),
+                ByteString(new Array[Byte](12) ++ toAddr.map(_.bytes.toArray).getOrElse(new Array[Byte](20)))
+              ),
+              data = {
+                val raw = UInt256(value).bytes
+                ByteString(new Array[Byte](32 - raw.length) ++ raw.toArray)
+              }
+            )
+          )
+        else None
+
+      val apiLogEntries = topLevelTransferLog.toSeq ++ logs
+
+      // Geth's logIndex counter advances by ONE per call that *would have* emitted
+      // a top-level synthetic transfer log (i.e., calls with value > 0 when
+      // traceTransfers is on), even when the call ends in error and produces no
+      // visible logs. This matches the observed behavior in the testdata: a
+      // sequence of failed value-transfers + one successful value-transfer puts
+      // the synthetic log at logIndex == failed-call-count. Real EVM logs from
+      // each call still increment the counter once per emitted entry.
+      val phantomBumps =
+        if (traceTransfers && value > 0 && vmError.isDefined) 1 else 0
+
+      val txLogs = apiLogEntries.map { txLog =>
+        val l = TxLog(
+          logIndex = globalLogIndex,
           transactionIndex = callIdx,
           transactionHash = stx.hash,
           blockHash = ByteString(new Array[Byte](32)), // Placeholder — updated after header finalized
@@ -819,40 +956,29 @@ class EthSimulateService(
           topics = txLog.logTopics,
           blockTimestamp = Some(BigInt(blockHeader.unixTimestamp))
         )
+        globalLogIndex += 1
+        l
       }
+      globalLogIndex += phantomBumps
 
-      // Add trace transfer logs if enabled
-      val allLogs = if (traceTransfers && value > 0 && vmError.isEmpty) {
-        val transferLog = TxLog(
-          logIndex = txLogs.size + receipts.dropRight(1).map(_.logs.size).sum,
-          transactionIndex = callIdx,
-          transactionHash = stx.hash,
-          blockHash = ByteString(new Array[Byte](32)),
-          blockNumber = blockHeader.number,
-          address = EthTransferAddress,
-          data = {
-            val raw = UInt256(value).bytes
-            ByteString(new Array[Byte](32 - raw.length) ++ raw.toArray)
-          },
-          topics = Seq(
-            TransferEventTopic,
-            ByteString(new Array[Byte](12) ++ sender.bytes.toArray),
-            ByteString(new Array[Byte](12) ++ toAddr.map(_.bytes.toArray).getOrElse(new Array[Byte](20)))
-          ),
-          blockTimestamp = Some(BigInt(blockHeader.unixTimestamp))
-        )
-        txLogs :+ transferLog
-      } else txLogs
+      val allLogs = txLogs
 
       val callResult = vmError match {
         case Some(com.chipprbots.ethereum.vm.RevertOccurs) =>
+          // Geth wire format for revert:
+          //   - call.returnData = "0x" (always empty; payload moves into error.data)
+          //   - error.data      = the raw revert payload (always present, even "0x")
+          //   - error.message   = "execution reverted" + ": <decoded>" when payload
+          //                       starts with the Error(string) selector 0x08c379a0.
+          val decoded = decodeErrorString(returnData)
+          val msg = decoded.fold("execution reverted")(s => s"execution reverted: $s")
           SimulateCallResult(
             status = BigInt(0),
-            returnData = returnData,
+            returnData = ByteString.empty,
             gasUsed = gasUsed,
             maxUsedGas = gasUsed,
             logs = Seq.empty,
-            error = Some(SimulateError(3, "execution reverted", if (returnData.nonEmpty) Some(returnData) else None))
+            error = Some(SimulateError(3, msg, Some(returnData)))
           )
         case Some(err) =>
           // Map VM error names to geth-compatible lowercase messages
@@ -984,5 +1110,25 @@ class EthSimulateService(
       val blooms = receipts.map(_.logsBloomFilter.toArray)
       ByteString(ByteUtils.or(EmptyBloom.toArray +: blooms: _*))
     }
+
+  /** ABI-decode the string payload of an `Error(string)` revert (selector 0x08c379a0). Returns None for any other
+    * revert payload (custom errors, raw bytes, etc.) so the caller falls back to the bare "execution reverted" message
+    * — matching geth's behavior.
+    */
+  private def decodeErrorString(returnData: ByteString): Option[String] = {
+    if (returnData.length < 4 + 32 + 32) return None
+    val bytes = returnData.toArray
+    val selector = (bytes(0) & 0xff, bytes(1) & 0xff, bytes(2) & 0xff, bytes(3) & 0xff)
+    if (selector != (0x08, 0xc3, 0x79, 0xa0)) return None
+    // ABI: head[0] = offset (always 0x20 for a single string arg)
+    // head[1] = string length (right-aligned uint256)
+    // head[2..] = string bytes (padded to 32-byte boundary)
+    val payload = bytes.drop(4)
+    val offset = BigInt(1, payload.slice(0, 32))
+    if (offset != 32) return None
+    val length = BigInt(1, payload.slice(32, 64)).toInt
+    if (length < 0 || 64 + length > payload.length) return None
+    scala.util.Try(new String(payload.slice(64, 64 + length), "UTF-8")).toOption
+  }
 
 }

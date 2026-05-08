@@ -28,8 +28,6 @@ import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.network.PeerManagerActor.Peers
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import scala.concurrent.Future
-import scala.concurrent.Future
-import scala.concurrent.Future
 import com.chipprbots.ethereum.testing.Tags._
 
 class DebugServiceSpec

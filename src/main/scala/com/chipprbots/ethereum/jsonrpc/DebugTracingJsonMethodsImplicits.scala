@@ -1,11 +1,9 @@
 package com.chipprbots.ethereum.jsonrpc
 
 import org.json4s.JsonAST._
-import org.json4s.JsonDSL._
 
 import com.chipprbots.ethereum.jsonrpc.DebugTracingService._
 import com.chipprbots.ethereum.jsonrpc.EthJsonMethodsImplicits.extractCall
-import com.chipprbots.ethereum.jsonrpc.serialization.JsonEncoder
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonMethodCodec
 
 /** JSON-RPC codecs for the debug_trace* family of methods.

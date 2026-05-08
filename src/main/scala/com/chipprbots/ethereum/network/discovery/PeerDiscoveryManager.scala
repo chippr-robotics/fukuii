@@ -12,6 +12,7 @@ import cats.effect.IO
 import cats.effect.Resource
 import cats.effect.unsafe.IORuntime
 
+import scala.concurrent.duration._
 import scala.util.Failure
 import scala.util.Random
 import scala.util.Success
@@ -45,10 +46,22 @@ class PeerDiscoveryManager(
 
     // Create a Stream that repeatedly gets random nodes from the discovery service.
     // It will automatically perform further lookups as the items are pulled from it.
+    //
+    // Two safeguards here:
+    //   1) `IO.defer` ensures each iteration constructs a *fresh* IO from
+    //      `service.getRandomNodes` (which generates a new random target keypair
+    //      per call). Without it, `Stream.repeatEval(service.getRandomNodes)`
+    //      evaluates the method exactly once at stream-construction time and
+    //      runs the same captured IO over and over — same target every iteration.
+    //   2) `metered` rate-limits the stream so that even when the discovery
+    //      service has no real peers and `getRandomNodes` returns an empty Set
+    //      (which fs2 short-circuits and immediately demands the next iteration),
+    //      we cap the call rate. Without this, the stream pulls thousands of
+    //      lookups per second, saturates the cats-effect runtime, and starves
+    //      the discv4 server from responding to incoming Pings.
     randomNodes = Stream
-      .repeatEval {
-        service.getRandomNodes
-      }
+      .repeatEval(IO.defer(service.getRandomNodes))
+      .metered(2.seconds)
       .flatMap(ns => Stream.emits(ns.toList))
       .map(toNode)
       .filter(!isLocalNode(_))

@@ -4,7 +4,7 @@
 **Author:** Christopher Mercer (chris-mercer) + Claude Opus 4.6
 **Date:** 2026-03-06
 **Base:** Alpha stabilization (PR #998) — 54 commits, 2,195 tests passing
-**Build:** Scala 3.3.4 LTS, JDK 21, sbt 1.10.7
+**Build:** Scala 3.3.7 LTS, JDK 25, sbt 1.10.7
 **Reference:** `chris-mercer/core-geth` branch `olympia` (25 commits)
 
 ---

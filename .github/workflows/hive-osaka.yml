@@ -1,0 +1,263 @@
+name: Hive Osaka Suite
+
+# Runs the ethereum/eels/consume-engine simulator against fukuii for all fork_Osaka tests.
+# Gate for PRs into main and for manual dispatch. Fails the build if the pass count
+# drops below a threshold, preventing regressions in Fusaka EL compliance.
+# Long-running (~40min); restricted to main-bound PRs + manual dispatch only.
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+    paths:
+      - 'src/**'
+      - 'build.sbt'
+      - 'version.sbt'
+      - 'project/**'
+      - 'hive/**'
+      - '.github/workflows/hive-osaka.yml'
+  workflow_dispatch:
+    inputs:
+      threshold:
+        description: 'Minimum passing test count required'
+        required: false
+        default: '0'
+      timelimit:
+        description: 'sim.timelimit (minutes)'
+        required: false
+        default: '40'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hive-osaka-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  hive:
+    name: Consume-engine Osaka sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    env:
+      PASS_THRESHOLD: ${{ github.event.inputs.threshold || '0' }}
+      SIM_TIMELIMIT: ${{ github.event.inputs.timelimit || '40' }}m
+      HIVE_PARALLELISM: '4'
+
+    steps:
+      - name: Checkout fukuii
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+          cache: 'sbt'
+
+      - name: Cache Coursier
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.ivy2/cache
+            ~/.sbt
+          key: sbt-${{ runner.os }}-${{ hashFiles('**/*.sbt', 'project/**') }}
+          restore-keys: sbt-${{ runner.os }}-
+
+      - name: Install sbt
+        # Install from repo.scala-sbt.org rather than GitHub releases. The
+        # github.com/sbt/sbt/releases/download redirect goes to an Azure blob
+        # store that's been intermittently 504-ing lately, taking the whole
+        # workflow down before hive even starts. The scala-sbt.org debian repo
+        # is served by a separate CDN and has been reliable — same install
+        # path we already use in docker/Dockerfile-dev.
+        run: |
+          set -euxo pipefail
+          curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" \
+            | sudo gpg --dearmor -o /usr/share/keyrings/sbt-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/sbt-archive-keyring.gpg] https://repo.scala-sbt.org/scalasbt/debian all main" \
+            | sudo tee /etc/apt/sources.list.d/sbt.list
+          sudo apt-get update
+          sudo apt-get install -y sbt
+          sbt --version
+
+      - name: Build fukuii assembly
+        run: sbt -batch assembly
+
+      - name: Tag base Docker image
+        run: |
+          # The hive adapter Dockerfile does `FROM chipprbots/fukuii:latest`, so we build the
+          # base image by copying the just-built assembly into a thin overlay.
+          mkdir -p target/quick-docker
+          cp target/scala-3.3.7/fukuii-assembly-*.jar target/quick-docker/
+          cat > target/quick-docker/Dockerfile <<'DOCKER'
+          FROM eclipse-temurin:25-jre-noble
+          RUN apt-get update && apt-get install -y --no-install-recommends jq curl && rm -rf /var/lib/apt/lists/*
+          WORKDIR /app
+          RUN mkdir -p /app/fukuii/lib /app/data /app/hive-conf
+          COPY fukuii-assembly-*.jar /app/fukuii/lib/fukuii-assembly.jar
+          ENTRYPOINT ["java", "-jar", "/app/fukuii/lib/fukuii-assembly.jar"]
+          DOCKER
+          docker build -t chipprbots/fukuii:latest target/quick-docker/
+
+      - name: Check out hive
+        # Direct git clone instead of actions/checkout: the latter was silently
+        # landing zero files into external/hive (2s step, green check, empty
+        # tree). Include retries + filter=blob:none + diagnostic output so any
+        # transient GitHub/DNS/TLS hiccup self-recovers and a real failure is
+        # actionable next time.
+        run: |
+          set -euxo pipefail
+          mkdir -p external
+
+          for i in 1 2 3 4 5; do
+            rm -rf external/hive
+            if git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 \
+                 clone --depth=1 --filter=blob:none \
+                 https://github.com/ethereum/hive.git external/hive; then
+              break
+            fi
+            echo "Clone attempt $i failed; sleeping before retry..."
+            sleep $((i * 5))
+          done
+
+          if [ ! -d external/hive/.git ]; then
+            echo "::error::Failed to clone ethereum/hive after 5 retries."
+            git --version
+            curl -I https://github.com/ethereum/hive.git || true
+            exit 1
+          fi
+
+          test -f external/hive/hive.go  # fail fast if the clone landed an unexpected layout
+
+      - name: Sync fukuii hive adapter
+        run: |
+          mkdir -p external/hive/clients/fukuii
+          # Source tree path: our adapter lives at hive/fukuii/ in the fukuii repo.
+          # hive is checked out to external/hive so it doesn't shadow our adapter dir.
+          cp -v $GITHUB_WORKSPACE/hive/fukuii/Dockerfile external/hive/clients/fukuii/Dockerfile
+          cp -v $GITHUB_WORKSPACE/hive/fukuii/fukuii.sh external/hive/clients/fukuii/fukuii.sh
+          cp -v $GITHUB_WORKSPACE/hive/fukuii/mapper.jq external/hive/clients/fukuii/mapper.jq
+          cp -v $GITHUB_WORKSPACE/hive/fukuii/enode.sh external/hive/clients/fukuii/enode.sh 2>/dev/null || true
+          cp target/scala-3.3.7/fukuii-assembly-*.jar external/hive/clients/fukuii/
+
+      - name: Build hive
+        working-directory: external/hive
+        run: |
+          go version
+          # ethereum/hive's main binary lives at the repo root (hive.go),
+          # NOT under cmd/hive (which doesn't exist — cmd/ holds hivechain + hiveview).
+          go build -o hive .
+          ./hive --help | head -5
+
+      - name: Resolve execution-spec-tests fixtures URL
+        id: fixtures
+        env:
+          # GITHUB_TOKEN lifts anonymous API rate limits (60/hr) to 1000/hr,
+          # which matters because the consume-cache step inside the simulator
+          # image calls api.github.com unauthenticated and gets rate-limited
+          # to death on shared CI egress IPs — pytest catches the HTTPError
+          # and exits 3 (INTERNAL_ERROR). We resolve the URL here (authed)
+          # and inject it via --sim.buildarg fixtures=<url> so the inner
+          # Dockerfile's `consume cache --input "$FIXTURES"` takes the
+          # direct-URL code path and skips the API entirely.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Pin explicitly — we want reproducibility over "latest" surprises.
+          FIXTURES_TAG='v5.4.0'
+          FIXTURES_URL="https://github.com/ethereum/execution-spec-tests/releases/download/${FIXTURES_TAG}/fixtures_stable.tar.gz"
+
+          # Sanity-check the asset exists (authenticated → no rate-limit).
+          gh api -H 'Accept: application/vnd.github+json' \
+            "repos/ethereum/execution-spec-tests/releases/tags/${FIXTURES_TAG}" \
+            --jq '.assets[] | select(.name == "fixtures_stable.tar.gz") | .browser_download_url' \
+            | grep -qx "$FIXTURES_URL"
+
+          echo "url=$FIXTURES_URL" >> "$GITHUB_OUTPUT"
+          echo "Resolved fixtures URL: $FIXTURES_URL"
+
+      - name: Run Osaka consume-engine sweep
+        working-directory: external/hive
+        run: |
+          # --docker.buildoutput streams docker-build stderr through hive,
+          # so any future simulator-build regression is diagnosable from
+          # the Actions log directly instead of guessing at exit codes.
+          ./hive --sim ethereum/eels/consume-engine \
+            --sim.buildarg fixtures='${{ steps.fixtures.outputs.url }}' \
+            --sim.buildarg disable_strict_exception_matching=nimbus-el,fukuii \
+            --client fukuii \
+            --sim.limit '.*fork_Osaka.*' \
+            --sim.parallelism $HIVE_PARALLELISM \
+            --sim.timelimit $SIM_TIMELIMIT \
+            --client.checktimelimit=30s \
+            --docker.buildoutput \
+            --loglevel 3 \
+            2>&1 | tee hive-run.log
+
+      - name: Tabulate results
+        id: tab
+        if: always()
+        working-directory: external/hive
+        run: |
+          # Distinguish simulator-build failure (no logs) from test failures.
+          shopt -s nullglob
+          sim_logs=(workspace/logs/*-simulator-*.log)
+          if [ "${#sim_logs[@]}" -eq 0 ]; then
+            echo "::error::No simulator log found — the consume-engine image likely failed to build. Check the 'Run Osaka consume-engine sweep' step for the docker-build stderr."
+            echo "passed=0" >> "$GITHUB_OUTPUT"
+            echo "failed=0" >> "$GITHUB_OUTPUT"
+            echo "total=0" >> "$GITHUB_OUTPUT"
+            echo "sim_failed=true" >> "$GITHUB_OUTPUT"
+            printf '### Hive Osaka sweep\n\n**Simulator failed to build.** No test log produced.\n' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          sim_log="${sim_logs[0]}"
+          # Pick newest by mtime if multiple logs exist.
+          for f in "${sim_logs[@]}"; do
+            [ "$f" -nt "$sim_log" ] && sim_log="$f"
+          done
+          # EELS/consume-engine pytest-xdist format is: `[gwN] [ N/M] VERDICT test-name`
+          # where VERDICT is PASSED, FAILED, or ERROR. The old `grep -c "PASSED tests/"`
+          # pattern matched zero lines (the word "tests/" is after the verdict), which
+          # made every sweep look like "0 passed" regardless of the real result.
+          passed=$(grep -cE "\] PASSED " "$sim_log" || true)
+          failed=$(grep -cE "\] FAILED " "$sim_log" || true)
+          errored=$(grep -cE "\] ERROR " "$sim_log" || true)
+          passed=${passed:-0}
+          failed=${failed:-0}
+          errored=${errored:-0}
+          total=$((passed + failed + errored))
+          echo "passed=$passed" >> "$GITHUB_OUTPUT"
+          echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          echo "errored=$errored" >> "$GITHUB_OUTPUT"
+          echo "total=$total" >> "$GITHUB_OUTPUT"
+          echo "sim_failed=false" >> "$GITHUB_OUTPUT"
+          printf '### Hive Osaka sweep\n\n| | | |\n|--|--|--|\n| passed | %s | |\n| failed | %s | |\n| errored | %s | |\n| total | %s | |\n| threshold | %s | |\n' \
+            "$passed" "$failed" "$errored" "$total" "$PASS_THRESHOLD" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload hive workspace logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: hive-workspace-logs
+          path: external/hive/workspace/logs/
+          retention-days: 14
+
+      - name: Fail if simulator did not build
+        if: ${{ steps.tab.outputs.sim_failed == 'true' }}
+        run: |
+          echo "::error::consume-engine simulator image failed to build — no tests ran."
+          exit 1
+
+      - name: Fail if under threshold
+        if: ${{ steps.tab.outputs.sim_failed == 'false' && steps.tab.outputs.passed < env.PASS_THRESHOLD }}
+        run: |
+          echo "::error::Hive Osaka sweep only passed ${{ steps.tab.outputs.passed }} tests (threshold ${{ env.PASS_THRESHOLD }})."
+          exit 1

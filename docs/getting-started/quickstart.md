@@ -55,7 +55,7 @@ For development or custom builds.
 
 ### Prerequisites
 
-- JDK 21
+- JDK 25
 - sbt 1.10.7+
 - Git
 

@@ -37,6 +37,65 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
       assert(!newAppStateStorage().isFastSyncDone())
     }
 
+    // Bug 30 escape valve: regular sync stuck on missing state nodes triggers a re-pivot via SNAP.
+    // SyncController clears both *SyncDone flags so start() re-evaluates and enters SNAP rather
+    // than landing in `do-fast-sync is true but fast sync already completed` → regular sync loop.
+    "round-trip clearFastSyncDone — flag is unset after clear" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage: AppStateStorage = newAppStateStorage()
+      storage.fastSyncDone().commit()
+      assert(storage.isFastSyncDone())
+
+      storage.clearFastSyncDone().commit()
+      assert(!storage.isFastSyncDone())
+    }
+
+    "clearFastSyncDone is idempotent on empty storage" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage: AppStateStorage = newAppStateStorage()
+      assert(!storage.isFastSyncDone())
+
+      storage.clearFastSyncDone().commit()
+      assert(!storage.isFastSyncDone())
+    }
+
+    "round-trip clearSnapSyncDone — flag is unset after clear" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage: AppStateStorage = newAppStateStorage()
+      storage.snapSyncDone().commit()
+      assert(storage.isSnapSyncDone())
+
+      storage.clearSnapSyncDone().commit()
+      assert(!storage.isSnapSyncDone())
+    }
+
+    "clearSnapSyncDone is idempotent on empty storage" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage: AppStateStorage = newAppStateStorage()
+      assert(!storage.isSnapSyncDone())
+
+      storage.clearSnapSyncDone().commit()
+      assert(!storage.isSnapSyncDone())
+    }
+
+    // Bug 30 escape valve clears BOTH flags so SyncController.start() re-enters SNAP. Verify
+    // the two clears are independent — clearing one does not affect the other.
+    "clearSnapSyncDone leaves FastSyncDone untouched" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage: AppStateStorage = newAppStateStorage()
+      storage.snapSyncDone().commit()
+      storage.fastSyncDone().commit()
+
+      storage.clearSnapSyncDone().commit()
+      assert(!storage.isSnapSyncDone())
+      assert(storage.isFastSyncDone())
+    }
+
+    "clearFastSyncDone leaves SnapSyncDone untouched" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
+      val storage: AppStateStorage = newAppStateStorage()
+      storage.snapSyncDone().commit()
+      storage.fastSyncDone().commit()
+
+      storage.clearFastSyncDone().commit()
+      assert(storage.isSnapSyncDone())
+      assert(!storage.isFastSyncDone())
+    }
+
     "insert and get estimated highest block properly" taggedAs (UnitTest, DatabaseTest) in new Fixtures {
       forAll(ObjectGenerators.bigIntGen) { estimatedHighestBlock =>
         val storage = newAppStateStorage()

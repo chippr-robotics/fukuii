@@ -1,7 +1,11 @@
 package com.chipprbots.ethereum
 
+import java.nio.file.Files
+import java.nio.file.Paths
+import java.nio.file.StandardOpenOption
 import java.util.logging.LogManager
 
+import com.typesafe.config.ConfigFactory
 import org.rocksdb
 
 import com.chipprbots.ethereum.console.Tui
@@ -14,6 +18,18 @@ import com.chipprbots.ethereum.utils.Logger
 object Fukuii extends Logger {
   def main(args: Array[String]): Unit = {
     LogManager.getLogManager().reset(); // disable java.util.logging, ie. in legacy parts of jupnp
+
+    // Redirect all JVM temp files to the configured tmpdir (defaults to <datadir>/tmp).
+    // Prevents root SSD from filling up during SNAP sync — RocksDB JNI .so extraction,
+    // contract account temp files, and JFR profiles all land on the same volume as the database.
+    val tmpDir = Paths.get(Config.config.getString("tmpdir"))
+    Files.createDirectories(tmpDir)
+    System.setProperty("java.io.tmpdir", tmpDir.toString)
+
+    // Truncate log files so each process starts with a clean log (no stale output from prior runs).
+    // Placed here — after tmpdir is set, before any log.info() call — so the truncation notice
+    // is the first line in each file and nothing from the current process is missed.
+    truncateLogs()
 
     // Check for --tui flag to enable console UI (disabled by default)
     val enableConsoleUI = args.contains("--tui")
@@ -66,6 +82,27 @@ object Fukuii extends Logger {
     Runtime.getRuntime.addShutdownHook(new Thread(() => tui.foreach(_.shutdown())))
 
     node.start()
+  }
+
+  private def truncateLogs(): Unit = {
+    import scala.util.Try
+    val fullConfig = ConfigFactory.load()
+    val logsDir = Try(fullConfig.getString("logging.logs-dir")).getOrElse("./logs")
+    val logsFile = Try(fullConfig.getString("logging.logs-file")).getOrElse("fukuii")
+
+    val paths = Seq(
+      Paths.get(logsDir).resolve(s"$logsFile.log"),
+      Paths.get(logsDir).resolve("milestone.log")
+    )
+
+    paths.foreach { path =>
+      if (Files.exists(path)) {
+        Try(Files.write(path, Array.emptyByteArray, StandardOpenOption.TRUNCATE_EXISTING)).failed.foreach(e =>
+          log.warn("Failed to truncate log file {}: {}", path, e.getMessage)
+        )
+      }
+    }
+    log.info("Log files truncated on startup")
   }
 
   private def deleteRocksDBFiles(): Unit = {

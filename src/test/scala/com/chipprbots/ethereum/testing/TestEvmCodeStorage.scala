@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.testing
 
-import org.apache.pekko.util.ByteString
-
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 

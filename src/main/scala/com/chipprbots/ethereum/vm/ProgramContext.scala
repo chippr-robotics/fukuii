@@ -30,7 +30,14 @@ object ProgramContext {
       callerAddr = senderAddress,
       originAddr = senderAddress,
       recipientAddr = tx.receivingAddress,
-      gasPrice = UInt256(tx.gasPrice),
+      // EIP-1559: the GASPRICE opcode and the sub-call gasPrice plumbing must see
+      // the *effective* gas price (min(maxFeePerGas, baseFee + maxPriorityFeePerGas)),
+      // not the raw `tx.gasPrice` which for Type-2/3/4 returns maxFeePerGas. Surfaces
+      // on BlockchainTests/ValidBlocks/bcEIP1559/burnVerify_Cancun: the contract
+      // stores GASPRICE into a slot whose pre-existing value == baseFee, so the SSTORE
+      // should be a no-op (100 gas) but was being charged as a fresh-slot reset (2900
+      // gas) — the observed +2800 per-tx gas delta.
+      gasPrice = UInt256(Transaction.effectiveGasPrice(tx, blockHeader.baseFee)),
       startGas = gasLimit,
       inputData = tx.payload,
       value = UInt256(tx.value),

@@ -4,7 +4,10 @@ import cats.implicits._
 import com.chipprbots.scalanet.discovery.hash.Hash
 import com.chipprbots.scalanet.discovery.crypto.{PrivateKey, PublicKey, SigAlg, Signature}
 import com.chipprbots.scalanet.discovery.ethereum.{Node, EthereumNodeRecord}
-import com.chipprbots.scalanet.discovery.ethereum.codecs.DefaultCodecs._
+// Bring DefaultCodecs' given instances (Codec[Payload], Codec[Content], etc.)
+// into scope. Scala 3 wildcard imports do NOT carry given/implicit instances
+// by default — explicit `given` is required.
+import com.chipprbots.scalanet.discovery.ethereum.codecs.DefaultCodecs.{given, *}
 import com.chipprbots.scalanet.discovery.ethereum.v4.DiscoveryNetwork.Peer
 import com.chipprbots.scalanet.discovery.ethereum.v4.Payload.Ping
 import com.chipprbots.scalanet.discovery.ethereum.v4.Payload._
@@ -16,9 +19,11 @@ import java.net.InetSocketAddress
 
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
+import org.scalatest.Assertion
 import org.scalatest.flatspec.AsyncFlatSpec
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.Inspectors
+import fs2.Stream
 import scala.concurrent.duration._
 import scala.util.Random
 import scala.util.control.NoStackTrace
@@ -96,7 +101,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
           remotePrivateKey
         )
 
-        maybeRemoteENRSeq <- pinging.join
+        maybeRemoteENRSeq <- pinging.joinWithNever
       } yield {
         maybeRemoteENRSeq shouldBe Some(Some(remoteENRSeq))
       }
@@ -114,14 +119,14 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
         _ <- channel.sendPayloadToSUT(
           Pong(
             toNodeAddress(remoteAddress),
-            pingHash = Hash(packet.hash.reverse),
+            pingHash = Hash(packet.hash.value.reverse),
             expiration = validExpiration,
             enrSeq = None
           ),
           remotePrivateKey
         )
 
-        maybeRemoteENRSeq <- pinging.join
+        maybeRemoteENRSeq <- pinging.joinWithNever
       } yield {
         maybeRemoteENRSeq shouldBe empty
       }
@@ -146,7 +151,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
           remotePrivateKey
         )
 
-        maybeRemoteENRSeq <- pinging.join
+        maybeRemoteENRSeq <- pinging.joinWithNever
       } yield {
         maybeRemoteENRSeq shouldBe empty
       }
@@ -173,7 +178,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
           unexpectedPrivateKey
         )
 
-        maybeRemoteENRSeq <- pinging.join
+        maybeRemoteENRSeq <- pinging.joinWithNever
       } yield {
         maybeRemoteENRSeq shouldBe empty
       }
@@ -228,7 +233,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
           expiration = validExpiration
         )
         _ <- channel.sendPayloadToSUT(response, remotePrivateKey)
-        nodes <- finding.join
+        nodes <- finding.joinWithNever
       } yield {
         nodes shouldBe Some(response.nodes)
       }
@@ -256,9 +261,9 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
 
         _ <- send(randomNodes.take(3))
         _ <- send(randomNodes.drop(3).take(7))
-        _ <- send(randomNodes.drop(10)).delayExecution(config.kademliaTimeout + 50.millis)
+        _ <- send(randomNodes.drop(10)).delayBy(config.kademliaTimeout + 50.millis)
 
-        nodes <- finding.join
+        nodes <- finding.joinWithNever
       } yield {
         nodes shouldBe Some(randomNodes.take(10))
       }
@@ -286,7 +291,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
 
         _ <- randomGroups.traverse(send)
 
-        nodes <- finding.join
+        nodes <- finding.joinWithNever
       } yield {
         nodes should not be empty
         nodes.get should have size config.kademliaBucketSize
@@ -313,7 +318,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
         )
         _ <- channel.sendPayloadToSUT(neighbors, remotePrivateKey)
 
-        nodes <- finding.join
+        nodes <- finding.joinWithNever
       } yield {
         nodes shouldBe empty
       }
@@ -366,7 +371,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
           remotePrivateKey
         )
 
-        maybeENR <- requesting.join
+        maybeENR <- requesting.joinWithNever
       } yield {
         maybeENR shouldBe Some(remoteENR)
       }
@@ -382,13 +387,13 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
         packet = assertPacketReceived(msg)
         _ <- channel.sendPayloadToSUT(
           ENRResponse(
-            requestHash = Hash(packet.hash.reverse),
+            requestHash = Hash(packet.hash.value.reverse),
             enr = remoteENR
           ),
           remotePrivateKey
         )
 
-        maybeENR <- requesting.join
+        maybeENR <- requesting.joinWithNever
       } yield {
         maybeENR shouldBe None
       }
@@ -459,7 +464,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
         _ <- channel.sendPayloadToSUT(ping, remotePrivateKey)
         msg1 <- channel.nextMessageFromSUT()
 
-        _ <- token.cancel
+        _ <- token.complete(()).void
 
         _ <- channel.sendPayloadToSUT(ping, remotePrivateKey)
         msg2 <- channel.nextMessageFromSUT()
@@ -545,10 +550,11 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
         channel <- peerGroup.createServerChannel(from = remoteAddress)
         findNode = FindNode(remotePublicKey, validExpiration)
         packet <- channel.sendPayloadToSUT(findNode, remotePrivateKey)
-        msgs <- Iterant
-          .repeatEvalF(channel.nextMessageFromSUT())
+        msgs <- Stream
+          .repeatEval(channel.nextMessageFromSUT())
           .takeWhile(_.isDefined)
-          .toListL
+          .compile
+          .toList
       } yield {
         // We should receive at least 2 messages because of the packet size limit.
         msgs(0) should not be empty
@@ -556,7 +562,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
 
         Inspectors.forAll(msgs) {
           case Some(MessageReceived(packet)) =>
-            val packetSize = packet.hash.size + packet.signature.size + packet.data.size
+            val packetSize = packet.hash.value.size + packet.signature.value.size + packet.data.size
             assert(packetSize <= Packet.MaxPacketBitsSize)
           case _ =>
         }
@@ -751,7 +757,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers {
       val neighbours = Neighbors(List.fill(n)(randomIPv6Node), expiration = currentTimeSeconds)
       val (_, privateKey) = sigalg.newKeyPair
       val packet = Packet.pack(neighbours, privateKey).require
-      val packetSize = packet.hash.size + packet.signature.size + packet.data.size
+      val packetSize = packet.hash.value.size + packet.signature.value.size + packet.data.size
       packetSize
     }
 
@@ -832,9 +838,7 @@ object DiscoveryNetworkSpec extends Matchers {
     )
 
     lazy val peerGroup: MockPeerGroup[InetSocketAddress, Packet] =
-      new MockPeerGroup(
-        processAddress = localAddress
-      )
+      MockPeerGroup[InetSocketAddress, Packet](processAddress = localAddress).unsafeRunSync()
 
     lazy val network: DiscoveryNetwork[InetSocketAddress] =
       DiscoveryNetwork[InetSocketAddress](

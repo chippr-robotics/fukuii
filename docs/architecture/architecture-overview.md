@@ -825,7 +825,7 @@ sequenceDiagram
 ## Technology Stack
 
 ### Languages & Frameworks
-- **Scala 3.3.4** (LTS): Primary programming language
+- **Scala 3.3.7** (LTS): Primary programming language
 - **Apache Pekko**: Actor-based concurrency framework (Scala 3 compatible fork of Akka)
 - **Cats Effect 3**: Functional effect system
 - **fs2**: Functional streaming library

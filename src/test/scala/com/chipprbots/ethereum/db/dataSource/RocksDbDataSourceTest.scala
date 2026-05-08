@@ -5,11 +5,10 @@ import java.nio.file.Files
 import org.scalatest.flatspec.AnyFlatSpec
 
 import com.chipprbots.ethereum.db.storage.Namespaces
-import com.chipprbots.ethereum.testing.Tags._
 
 class RocksDbDataSourceTest extends AnyFlatSpec with DataSourceTestBehavior {
 
-  private def createDataSource(path: String): RocksDbDataSource = {
+  private def createDataSource(@scala.annotation.unused path: String): RocksDbDataSource = {
     val dbPath: String = Files.createTempDirectory("temp-test-rocksdb").toAbsolutePath.toString
 
     RocksDbDataSource(

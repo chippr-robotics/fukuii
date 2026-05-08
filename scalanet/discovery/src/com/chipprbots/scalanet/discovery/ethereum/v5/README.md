@@ -213,7 +213,7 @@ To complete the implementation:
 
 ## Compatibility
 
-- **Scala**: 3.3.4+
+- **Scala**: 3.3.7+
 - **Cats Effect**: 3.x
 - **BouncyCastle**: 1.82
 - **Scodec**: 2.x

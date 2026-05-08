@@ -15,7 +15,8 @@ COPY mapper.jq /mapper.jq
 COPY enode.sh /hive-bin/enode.sh
 RUN chmod +x /fukuii.sh /hive-bin/enode.sh
 
-RUN echo "fukuii-0.1.240" > /version.txt
+# /version.txt is created by the base image (chipprbots/fukuii:latest) from
+# the actual JAR filename, so a version bump propagates automatically.
 
 EXPOSE 8545 8546 8551 30303 30303/udp
 

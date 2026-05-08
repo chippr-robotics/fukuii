@@ -16,7 +16,6 @@ import com.chipprbots.ethereum.utils.Picklers._
   * block body
   */
 class BlockBodiesStorage(val dataSource: DataSource) extends TransactionalKeyValueStorage[BlockBodyHash, BlockBody] {
-  import BlockBodiesStorage._
 
   override val namespace: IndexedSeq[Byte] = Namespaces.BodyNamespace
 

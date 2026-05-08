@@ -11,6 +11,17 @@ on:
       - '*.md'
       - '.github/workflows/docs-*.yml'
       - '.github/workflows/gh-pages.yml'
+  workflow_dispatch:
+    inputs:
+      increment_type:
+        description: 'Version increment type. Major bumps must be run manually.'
+        required: true
+        type: choice
+        default: major
+        options:
+          - major
+          - minor
+          - patch
 
 # Prevent duplicate runs when PR is merged (push event is sufficient)
 concurrency:
@@ -21,18 +32,24 @@ jobs:
   auto-version:
     name: Auto Increment Version
     runs-on: ubuntu-latest
-    # Only run on push events to avoid duplicate runs
-    if: github.event_name == 'push'
     permissions:
       contents: write
+      # `gh workflow run release.yml` (final step) calls
+      # POST /actions/workflows/.../dispatches, which the default
+      # GITHUB_TOKEN cannot reach with only `contents: write`. Without
+      # this every auto-version run since PR #1118 has died at the
+      # dispatch step with `HTTP 403: Resource not accessible by
+      # integration`, leaving v0.2.x tags created but no release built.
+      actions: write
     outputs:
       version: ${{ steps.new-version.outputs.version }}
       increment_type: ${{ steps.version-type.outputs.increment_type }}
+      release_tier: ${{ steps.version-type.outputs.release_tier }}
       version_changed: ${{ steps.commit-version.outputs.version_changed }}
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -44,20 +61,38 @@ jobs:
 
       - name: Determine version increment type
         id: version-type
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          MANUAL_INCREMENT: ${{ github.event.inputs.increment_type }}
         run: |
-          # Check if this is a milestone (look for milestone in commit message)
-          IS_MILESTONE=false
-
-          # Check commit message for milestone marker
-          git log -1 --pretty=%B | grep -qi "milestone" && IS_MILESTONE=true
-
-          if [ "$IS_MILESTONE" = true ]; then
-            echo "increment_type=full" >> $GITHUB_OUTPUT
-            echo "This is a milestone - will increment by 0.1.0"
+          # Increment policy:
+          #   develop          → patch (0.0.+1)
+          #   main / master    → minor (0.+1.0)
+          #   workflow_dispatch → caller picks (major / minor / patch)
+          # Major bumps are intentionally manual-only — there is no automatic
+          # path to a major version on a push, since major changes always
+          # warrant a deliberate human decision.
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            INC="$MANUAL_INCREMENT"
+          elif [ "$REF" = "refs/heads/main" ] || [ "$REF" = "refs/heads/master" ]; then
+            INC=minor
           else
-            echo "increment_type=patch" >> $GITHUB_OUTPUT
-            echo "Regular commit - will increment by 0.0.1"
+            INC=patch
           fi
+
+          # Map increment type to release tier (which controls release.yml's
+          # artifact set). minor and major get the full pipeline (Docker +
+          # signing + SBOM); patch is JAR/zip only.
+          case "$INC" in
+            major|minor) TIER=full ;;
+            patch)       TIER=patch ;;
+            *) echo "::error::Unknown increment type: $INC"; exit 1 ;;
+          esac
+
+          echo "increment_type=$INC"  >> "$GITHUB_OUTPUT"
+          echo "release_tier=$TIER"   >> "$GITHUB_OUTPUT"
+          echo "Branch ref: $REF / event: $EVENT_NAME → increment=$INC, release_tier=$TIER"
 
       - name: Read current version
         id: current-version
@@ -68,27 +103,33 @@ jobs:
 
       - name: Calculate new version
         id: new-version
+        env:
+          CURRENT: ${{ steps.current-version.outputs.version }}
+          INCREMENT_TYPE: ${{ steps.version-type.outputs.increment_type }}
         run: |
-          CURRENT="${{ steps.current-version.outputs.version }}"
-          INCREMENT_TYPE="${{ steps.version-type.outputs.increment_type }}"
-
           IFS='.' read -ra VERSION_PARTS <<< "$CURRENT"
           MAJOR=${VERSION_PARTS[0]}
           MINOR=${VERSION_PARTS[1]}
           PATCH=${VERSION_PARTS[2]}
 
-          if [ "$INCREMENT_TYPE" = "full" ]; then
-            # Milestone: increment minor version, reset patch
-            MINOR=$((MINOR + 1))
-            PATCH=0
-          else
-            # Regular commit: increment patch version
-            PATCH=$((PATCH + 1))
-          fi
+          case "$INCREMENT_TYPE" in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            patch)
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
 
           NEW_VERSION="$MAJOR.$MINOR.$PATCH"
-          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "New version: $NEW_VERSION"
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "New version: $NEW_VERSION (was $CURRENT, increment=$INCREMENT_TYPE)"
 
       - name: Update version.sbt
         run: |
@@ -129,17 +170,32 @@ jobs:
 
           echo "Created and pushed tag v$NEW_VERSION"
 
-  trigger-release:
-    name: Trigger Release
-    needs: auto-version
-    if: needs.auto-version.outputs.version_changed == 'true'
-    permissions:
-      contents: write
-      packages: write
-      id-token: write
-      actions: read
-    uses: ./.github/workflows/release.yml
-    with:
-      version: ${{ needs.auto-version.outputs.version }}
-      release_tier: ${{ needs.auto-version.outputs.increment_type }}
-    secrets: inherit
+      # Dispatch release.yml via the workflows API. We dispatch instead of
+      # chaining release.yml as a reusable workflow (`uses:`) because that
+      # chain pulled in slsa-github-generator and failed GitHub's startup
+      # validation — every auto-version run since 2026-02-19 was a 0-job
+      # `startup_failure` until this change. workflow_dispatch is the one
+      # event GITHUB_TOKEN can fire that re-enters the Actions runtime, so
+      # the dispatched release run is independent of this job's success.
+      #
+      # Dispatch on the source branch (main/master/develop), NOT on the new
+      # tag. release.yml's checkout step pins to `ref: v${{ inputs.version
+      # }}` explicitly, so the dispatch ref doesn't affect what gets built —
+      # but it DOES decide which branch the run is recorded under, which
+      # drives the workflow status badge. Dispatching on the tag (`--ref
+      # v${NEW_VERSION}`) hid every successful release from the badge for
+      # the default branch, leaving it stuck on stale `startup_failure`
+      # entries from before the SLSA fix.
+      - name: Dispatch release workflow
+        if: steps.commit-version.outputs.version_changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_VERSION: ${{ steps.new-version.outputs.version }}
+          RELEASE_TIER: ${{ steps.version-type.outputs.release_tier }}
+          SOURCE_REF: ${{ github.ref_name }}
+        run: |
+          gh workflow run release.yml \
+            --ref "${SOURCE_REF}" \
+            -f "version=${NEW_VERSION}" \
+            -f "release_tier=${RELEASE_TIER}"
+          echo "Dispatched release.yml on ${SOURCE_REF} for v${NEW_VERSION} (tier=${RELEASE_TIER})"

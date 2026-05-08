@@ -67,6 +67,9 @@ class StorageRangeCoordinator(
 
   // Task management
   private val tasks = mutable.Queue[StorageTask]()
+  // Dedup gate: (accountHash, next) uniquely identifies a pending task. Prevents duplicate
+  // enqueues when concurrent timeout re-queues overlap (two timeouts for the same batch).
+  private val pendingTaskKeys = mutable.Set[(ByteString, ByteString)]()
   private val activeTasks =
     mutable.Map[BigInt, (Peer, Seq[StorageTask], BigInt)]() // requestId -> (peer, tasks, requestedBytes)
   private val completedTasks = mutable.ArrayBuffer[StorageTask]()
@@ -76,6 +79,11 @@ class StorageRangeCoordinator(
   // their snap serve window expires, rather than returning empty responses with proofs.
   private val peerConsecutiveTimeouts = mutable.Map[String, Int]()
   private val consecutiveTimeoutThreshold = 3 // Mark stateless after 3 consecutive timeouts
+
+  // Global consecutive task failure counter: triggers ForceCompleteStorage when all SNAP peers
+  // stop serving storage data. Resets to zero on any successful slot download.
+  private var consecutiveTaskFailures: Int = 0
+  private val maxConsecutiveTaskFailures: Int = 100
 
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
   // This is separate from stateless peer detection — cooldowns are short and per-error-type.
@@ -116,6 +124,12 @@ class StorageRangeCoordinator(
   private var postRefreshCooldownUntilMs: Long = 0
   private val postRefreshCooldownMs: Long = 10000L // 10 seconds after pivot refresh
 
+  // Consecutive idle dispatch checks: counts tryRedispatchPendingTasks() calls where tasks are
+  // pending but zero eligible peers and zero active requests exist. At threshold, requests a
+  // pivot refresh as an escape valve — same pattern as TrieNodeHealingCoordinator BUG-M3 fix.
+  private var storageIdleChecks: Int = 0
+  private val storageIdleEscapeThreshold: Int = 5
+
   private def isPostRefreshCooldownActive: Boolean =
     System.currentTimeMillis() < postRefreshCooldownUntilMs
 
@@ -143,7 +157,7 @@ class StorageRangeCoordinator(
     // (SNAPRequestTracker timeouts are poll-based, not scheduled), so we check
     // activity time regardless of in-flight count.
     val now = System.currentTimeMillis()
-    val dispatchStalled = !allStateless && tasks.nonEmpty &&
+    val dispatchStalled = !allStateless && tasks.nonEmpty && maxInFlightPerPeer > 0 &&
       (now - lastDispatchOrResponseMs) > noActivityTimeoutMs
 
     if (dispatchStalled) {
@@ -570,6 +584,7 @@ class StorageRangeCoordinator(
       result match {
         case Right(count) =>
           slotsDownloaded += count
+          consecutiveTaskFailures = 0
           log.info(s"Storage task completed: $count slots")
           self ! StorageCheckCompletion
         case Left(error) =>
@@ -757,13 +772,17 @@ class StorageRangeCoordinator(
     // snap/1 origin/limit semantics apply to the first account only. To avoid incorrect continuation
     // behavior, only batch tasks that request the initial full range.
     val first = tasks.dequeue()
+    pendingTaskKeys -= ((first.accountHash, first.next))
     val batchTasks: Seq[StorageTask] =
       if (!isInitialRange(first) || peerBatch <= 1) {
         Seq(first)
       } else {
         val buf = mutable.ArrayBuffer[StorageTask](first)
-        while (buf.size < peerBatch && tasks.nonEmpty && isInitialRange(tasks.front))
-          buf += tasks.dequeue()
+        while (buf.size < peerBatch && tasks.nonEmpty && isInitialRange(tasks.front)) {
+          val t = tasks.dequeue()
+          pendingTaskKeys -= ((t.accountHash, t.next))
+          buf += t
+        }
         buf.toSeq
       }
 
@@ -827,7 +846,7 @@ class StorageRangeCoordinator(
           case None =>
             log.warning(s"Received response for unknown request ID ${response.requestId}")
 
-          case Some(pendingReq) =>
+          case Some(_) =>
             activeTasks.remove(response.requestId) match {
               case None =>
                 log.warning(s"No active tasks for request ID ${response.requestId}")
@@ -873,7 +892,6 @@ class StorageRangeCoordinator(
       // Track empties per task to avoid re-queueing forever.
       // If the same task yields empty responses repeatedly, skip it with a loud warning.
       var skipped = 0
-      var requeued = 0
       tasks.foreach { task =>
         val key = StorageTaskKey(task.accountHash, task.next, task.last)
         val attempts = emptyResponsesByTask.getOrElse(key, 0) + 1
@@ -889,7 +907,6 @@ class StorageRangeCoordinator(
               s"account=${task.accountHash.toHex} storageRoot=${task.storageRoot.toHex} range=${task.rangeString}"
           )
         } else {
-          requeued += 1
           task.pending = false
           this.tasks.enqueue(task)
           log.debug(
@@ -1059,7 +1076,21 @@ class StorageRangeCoordinator(
 
       batchTasks.foreach { task =>
         task.pending = false
-        tasks.enqueue(task)
+        val key = (task.accountHash, task.next)
+        if (!pendingTaskKeys.contains(key)) {
+          pendingTaskKeys += key
+          tasks.enqueue(task)
+        }
+      }
+
+      consecutiveTaskFailures += 1
+      if (consecutiveTaskFailures >= maxConsecutiveTaskFailures) {
+        log.warning(
+          s"Force-completing storage coordinator after $consecutiveTaskFailures consecutive " +
+            s"task failures — SNAP peers not serving storage data. " +
+            s"Missing storage deferred to healing phase."
+        )
+        self ! ForceCompleteStorage
       }
     }
     // Re-dispatch re-queued tasks to any known available peer that isn't stateless or on cooldown.
@@ -1083,7 +1114,26 @@ class StorageRangeCoordinator(
     val eligiblePeers = knownAvailablePeers
       .filterNot(p => isPeerStateless(p) || isPeerCoolingDown(p))
       .toList
-    if (eligiblePeers.isEmpty) return
+    if (eligiblePeers.isEmpty) {
+      log.debug(
+        s"[STORAGE-REDISPATCH] No eligible peers — ${knownAvailablePeers.size} known, " +
+          s"${statelessPeers.size} stateless. pending: ${tasks.size}"
+      )
+      if (tasks.nonEmpty && activeTasks.isEmpty) {
+        storageIdleChecks += 1
+        if (storageIdleChecks >= storageIdleEscapeThreshold) {
+          log.warning(
+            s"[STORAGE] No eligible peers for $storageIdleChecks consecutive redispatch checks with " +
+              s"${tasks.size} pending tasks and no active requests — requesting pivot refresh"
+          )
+          storageIdleChecks = 0
+          maybeRequestPivotRefresh()
+        }
+      }
+      return
+    } else {
+      storageIdleChecks = 0
+    }
 
     for (peer <- eligiblePeers if tasks.nonEmpty)
       dispatchIfPossible(peer)

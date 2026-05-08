@@ -4,7 +4,6 @@ import org.apache.pekko.util.ByteString
 
 import cats.data.NonEmptyList
 
-import org.scalacheck.Gen
 import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec

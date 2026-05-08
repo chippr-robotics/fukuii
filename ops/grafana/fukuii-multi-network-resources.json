@@ -1,0 +1,281 @@
+{
+  "annotations": { "list": [] },
+  "description": "Multi-network resources for the fukuii-multi process (Sepolia + Mordor in one JVM). JVM metrics are shared, app_* metrics are per-instance.",
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "options": {
+        "content": "<div style=\"text-align:center;padding:8px 0\"><span style=\"font-size:28px;letter-spacing:4px;font-weight:200;color:#b4a7d6\">FUKUII</span><span style=\"font-size:28px;letter-spacing:4px;font-weight:200;color:#93c47d\"> MULTI-NETWORK</span><span style=\"font-size:28px;letter-spacing:4px;font-weight:200;color:#6fa8dc\"> RESOURCES</span><br/><span style=\"font-size:12px;color:#999;letter-spacing:2px\">one JVM, two chains — process-level + per-instance</span></div>",
+        "mode": "html"
+      },
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "JVM heap used vs max for the shared process.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 25, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true },
+          "unit": "bytes"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 3 },
+      "id": 1,
+      "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" } },
+      "title": "JVM heap (shared)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "jvm_memory_bytes_used{area=\"heap\",instance=\"fukuii-sepolia\"}", "legendFormat": "heap used", "refId": "A" },
+        { "expr": "jvm_memory_bytes_committed{area=\"heap\",instance=\"fukuii-sepolia\"}", "legendFormat": "heap committed", "refId": "B" },
+        { "expr": "jvm_memory_bytes_max{area=\"heap\",instance=\"fukuii-sepolia\"}", "legendFormat": "heap max", "refId": "C" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "G1 generational pool sizes — Eden + Survivor + Old.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 20, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true, "stacking": { "mode": "normal", "group": "A" } },
+          "unit": "bytes"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 3 },
+      "id": 2,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" } },
+      "title": "JVM heap pools (G1)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "jvm_memory_pool_bytes_used{instance=\"fukuii-sepolia\",pool=~\"G1.*\"}", "legendFormat": "{{pool}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "GC time per collector. High Old Gen pause time = heap pressure.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 11 },
+      "id": 10,
+      "options": { "legend": { "calcs": ["lastNotNull", "sum"], "displayMode": "table", "placement": "bottom" } },
+      "title": "GC time per collector",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(jvm_gc_collection_seconds_sum{instance=\"fukuii-sepolia\"}[5m])", "legendFormat": "{{gc}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "GC collection counts per second.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true },
+          "unit": "ops"
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 11 },
+      "id": 11,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" } },
+      "title": "GC collections/s",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(jvm_gc_collection_seconds_count{instance=\"fukuii-sepolia\"}[5m])", "legendFormat": "{{gc}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Threads currently in JVM. Pekko sync-dispatcher + default + validation contexts contribute.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 18 },
+      "id": 20,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" } },
+      "title": "Threads",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "jvm_threads_current{instance=\"fukuii-sepolia\"}", "legendFormat": "current", "refId": "A" },
+        { "expr": "jvm_threads_daemon{instance=\"fukuii-sepolia\"}", "legendFormat": "daemon", "refId": "B" },
+        { "expr": "jvm_threads_peak{instance=\"fukuii-sepolia\"}", "legendFormat": "peak", "refId": "C" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Open file descriptors. Climbing FDs without bound is a leak.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 18 },
+      "id": 21,
+      "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" } },
+      "title": "File descriptors",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "process_open_fds{instance=\"fukuii-sepolia\"}", "legendFormat": "open", "refId": "A" },
+        { "expr": "process_max_fds{instance=\"fukuii-sepolia\"}", "legendFormat": "max", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Process CPU and resident memory.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "RSS" }, "properties": [{ "id": "unit", "value": "bytes" }, { "id": "custom.axisPlacement", "value": "right" }] },
+          { "matcher": { "id": "byName", "options": "CPU" }, "properties": [{ "id": "unit", "value": "percentunit" }] }
+        ]
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 18 },
+      "id": 22,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Process CPU & RSS",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(process_cpu_seconds_total{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "CPU", "refId": "A" },
+        { "expr": "process_resident_memory_bytes{instance=\"fukuii-sepolia\"}", "legendFormat": "RSS", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Block height progress per instance.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 15, "lineInterpolation": "smooth", "lineWidth": 2, "spanNulls": true },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 25 },
+      "id": 30,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Per-instance block height",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "app_engine_latest_payload_block{instance=\"fukuii-sepolia\"}", "legendFormat": "Sepolia (CL-driven)", "refId": "A" },
+        { "expr": "app_regularsync_block_current_number_gauge{instance=\"fukuii-mordor-multi\"}", "legendFormat": "Mordor (regular sync)", "refId": "B" },
+        { "expr": "app_regularsync_block_bestKnown_number_gauge{instance=\"fukuii-mordor-multi\"}", "legendFormat": "Mordor best known", "refId": "C" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Peer counts split by network.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 25 },
+      "id": 31,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Per-instance peer counts",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "app_network_peers_incoming_handshaked_gauge{instance=~\"fukuii-(sepolia|mordor-multi)\"} + app_network_peers_outgoing_handshaked_gauge{instance=~\"fukuii-(sepolia|mordor-multi)\"}", "legendFormat": "{{instance}} handshaked", "refId": "A" },
+        { "expr": "app_network_peers_pending_gauge{instance=~\"fukuii-(sepolia|mordor-multi)\"}", "legendFormat": "{{instance}} pending", "refId": "B" },
+        { "expr": "app_network_discovery_foundPeers_gauge{instance=~\"fukuii-(sepolia|mordor-multi)\"}", "legendFormat": "{{instance}} discovery found", "refId": "C" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Successful JSON-RPC calls per second.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true },
+          "unit": "ops"
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 33 },
+      "id": 40,
+      "options": { "legend": { "calcs": ["lastNotNull", "sum"], "displayMode": "table", "placement": "bottom" } },
+      "title": "JSON-RPC throughput per instance",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(app_json_rpc_methods_success_counter_total{instance=~\"fukuii-(sepolia|mordor-multi)\"}[1m])", "legendFormat": "{{instance}} success", "refId": "A" },
+        { "expr": "rate(app_json_rpc_methods_error_counter_total{instance=~\"fukuii-(sepolia|mordor-multi)\"}[1m])", "legendFormat": "{{instance}} error", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "P2P message rates per instance — a quiet network is a sick network.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true },
+          "unit": "ops"
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 33 },
+      "id": 41,
+      "options": { "legend": { "calcs": ["lastNotNull", "sum"], "displayMode": "table", "placement": "bottom" } },
+      "title": "P2P messages per instance",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(app_network_messages_received_counter_total{instance=~\"fukuii-(sepolia|mordor-multi)\"}[1m])", "legendFormat": "{{instance}} rx", "refId": "A" },
+        { "expr": "rate(app_network_messages_sent_counter_total{instance=~\"fukuii-(sepolia|mordor-multi)\"}[1m])", "legendFormat": "{{instance}} tx", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Peer blacklist rates by group — surge in fastSyncGroup or regularSyncGroup blacklists points to bad sync peers.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true },
+          "unit": "ops"
+        }
+      },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 40 },
+      "id": 50,
+      "options": { "legend": { "calcs": ["lastNotNull", "sum"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Peer blacklist activity",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(app_network_peers_blacklisted_p2pGroup_counter_total{instance=~\"fukuii-(sepolia|mordor-multi)\"}[5m])", "legendFormat": "{{instance}} p2p", "refId": "A" },
+        { "expr": "rate(app_network_peers_blacklisted_fastSyncGroup_counter_total{instance=~\"fukuii-(sepolia|mordor-multi)\"}[5m])", "legendFormat": "{{instance}} fastSync", "refId": "B" },
+        { "expr": "rate(app_network_peers_blacklisted_regularSyncGroup_counter_total{instance=~\"fukuii-(sepolia|mordor-multi)\"}[5m])", "legendFormat": "{{instance}} regularSync", "refId": "C" }
+      ]
+    },
+    {
+      "gridPos": { "h": 2, "w": 24, "x": 0, "y": 47 },
+      "id": 99,
+      "options": {
+        "content": "<div style=\"text-align:center;padding:4px 0\"><span style=\"font-size:10px;color:#666;letter-spacing:3px\">FUKUII MULTI-NETWORK RESOURCES</span> <span style=\"color:#555\">|</span> <span style=\"font-size:10px;color:#666\">JVM shared, app_* per instance</span></div>",
+        "mode": "html"
+      },
+      "transparent": true,
+      "type": "text"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 37,
+  "style": "dark",
+  "tags": ["fukuii", "multi-network", "resources", "jvm"],
+  "time": { "from": "now-3h", "to": "now" },
+  "title": "Fukuii Multi-Network Resources",
+  "uid": "fukuii-multi-resources",
+  "version": 1
+}

@@ -55,6 +55,28 @@ on:
         required: false
         type: string
         default: 'master'
+      clients:
+        description: |
+          Comma-separated list of hive client names to test (e.g. "fukuii"
+          or "fukuii,go-ethereum,nethermind"). Defaults to fukuii alone
+          for the single-client compliance suites. Sync-style sims override
+          this to bring in geth/nethermind so we exercise cross-client
+          interop instead of fukuii-vs-fukuii self-tests.
+        required: false
+        type: string
+        default: 'fukuii'
+      gate_pattern:
+        description: |
+          Optional substring (case-insensitive) used to gate the build on a
+          specific subset of tests. The tabulator counts tests whose name
+          contains this substring separately, and the build fails if any of
+          those tests fail. Defaults to empty (no subset gating). Cross-client
+          sims set this to "fukuii" so upstream geth↔nethermind failures
+          don't pollute the build signal but any fukuii-touching failure
+          does fail the build.
+        required: false
+        type: string
+        default: ''
     outputs:
       passed:
         description: 'Number of simulator tests that passed'
@@ -65,6 +87,12 @@ on:
       total:
         description: 'passed + failed'
         value: ${{ jobs.hive.outputs.total }}
+      gate_passed:
+        description: 'Tests matching gate_pattern that passed (0 if no gate)'
+        value: ${{ jobs.hive.outputs.gate_passed }}
+      gate_failed:
+        description: 'Tests matching gate_pattern that failed (0 if no gate)'
+        value: ${{ jobs.hive.outputs.gate_failed }}
 
 permissions:
   contents: read
@@ -79,23 +107,25 @@ jobs:
       passed: ${{ steps.tab.outputs.passed }}
       failed: ${{ steps.tab.outputs.failed }}
       total: ${{ steps.tab.outputs.total }}
+      gate_passed: ${{ steps.tab.outputs.gate_passed }}
+      gate_failed: ${{ steps.tab.outputs.gate_failed }}
 
     steps:
       - name: Checkout fukuii
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
           fetch-depth: 1
 
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
-          java-version: '21'
+          java-version: '25'
           cache: 'sbt'
 
       - name: Cache Coursier / Ivy / sbt
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cache/coursier
@@ -126,14 +156,14 @@ jobs:
           # The hive adapter Dockerfile does `FROM chipprbots/fukuii:latest`, so we build the
           # base image by copying the just-built assembly into a thin overlay.
           mkdir -p target/quick-docker
-          cp target/scala-3.3.4/fukuii-assembly-*.jar target/quick-docker/
+          cp target/scala-3.3.7/fukuii-assembly-*.jar target/quick-docker/
           cat > target/quick-docker/Dockerfile <<'DOCKER'
-          FROM eclipse-temurin:21-jre-noble
+          FROM eclipse-temurin:25-jre-noble
           RUN apt-get update && apt-get install -y --no-install-recommends jq curl && rm -rf /var/lib/apt/lists/*
           WORKDIR /app
           RUN mkdir -p /app/fukuii/lib /app/data /app/hive-conf
-          COPY fukuii-assembly-*.jar /app/fukuii/lib/fukuii-assembly-0.1.240.jar
-          ENTRYPOINT ["java", "-jar", "/app/fukuii/lib/fukuii-assembly-0.1.240.jar"]
+          COPY fukuii-assembly-*.jar /app/fukuii/lib/fukuii-assembly.jar
+          ENTRYPOINT ["java", "-jar", "/app/fukuii/lib/fukuii-assembly.jar"]
           DOCKER
           docker build -t chipprbots/fukuii:latest target/quick-docker/
 
@@ -174,12 +204,16 @@ jobs:
           cp -v "$GITHUB_WORKSPACE/hive/fukuii/mapper.jq" external/hive/clients/fukuii/mapper.jq
           cp -v "$GITHUB_WORKSPACE/hive/fukuii/enode.sh" external/hive/clients/fukuii/enode.sh 2>/dev/null || true
           cp -v "$GITHUB_WORKSPACE/hive/fukuii/hive.yaml" external/hive/clients/fukuii/hive.yaml 2>/dev/null || true
-          cp target/scala-3.3.4/fukuii-assembly-*.jar external/hive/clients/fukuii/
+          cp target/scala-3.3.7/fukuii-assembly-*.jar external/hive/clients/fukuii/
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: 'stable'
+          # We build hive from external/hive (cloned at runtime); this repo has
+          # no go.sum, so disable the default dependency cache to silence the
+          # "Dependencies file is not found … go.sum" warning.
+          cache: false
 
       - name: Build hive
         working-directory: external/hive
@@ -199,6 +233,7 @@ jobs:
           SIM_BUILDARG: ${{ inputs.sim_buildarg }}
           SIM_TIMELIMIT: ${{ inputs.sim_timelimit }}
           PARALLELISM: ${{ inputs.parallelism }}
+          CLIENTS: ${{ inputs.clients }}
         # Do not inherit GitHub's default `-e -o pipefail` — hive returns
         # non-zero for a wide range of per-sim outcomes (test failures,
         # client timeouts, flaky docker pulls) and the tabulate step below
@@ -209,7 +244,7 @@ jobs:
         run: |
           args=(
             --sim "$SIM"
-            --client fukuii
+            --client "$CLIENTS"
             --sim.parallelism "$PARALLELISM"
             --sim.timelimit "$SIM_TIMELIMIT"
             --client.checktimelimit=60s
@@ -228,60 +263,185 @@ jobs:
         id: tab
         if: always()
         working-directory: external/hive
+        # Override the default GitHub Actions shell (`bash -e`) with plain
+        # `bash` so a single non-zero command (e.g. jq parsing an unexpected
+        # JSON shape) doesn't abort tabulation entirely. The script handles
+        # errors explicitly with `|| true` and value defaults; we WANT it to
+        # always emit a summary row even when individual parses fail.
+        shell: bash
         env:
           LABEL: ${{ inputs.label }}
           SIM: ${{ inputs.sim }}
           THRESHOLD: ${{ inputs.pass_threshold }}
           HIVE_EXIT: ${{ steps.sim.outputs.hive_exit }}
+          GATE_PATTERN: ${{ inputs.gate_pattern }}
         run: |
-          set -uxo pipefail
-          sim_log=$(ls -t workspace/logs/*-simulator-*.log 2>/dev/null | head -1 || true)
-          if [ -z "$sim_log" ]; then
-            passed=0
-            failed=0
-          else
-            passed=$(grep -c "PASSED tests/" "$sim_log" || true)
-            failed=$(grep -c "FAILED tests/" "$sim_log" || true)
+          set -uo pipefail
+          shopt -s nullglob
+
+          # Hive writes structured per-suite results to workspace/logs/*.json
+          # (each contains a `testCases` map; cases have `summaryResult.pass`).
+          # The simulator stdout log format varies wildly between simulators —
+          # devp2p, rpc, sync, consensus, EELS pytest-xdist, etc all use
+          # different verdict strings — so grepping the log is unreliable and
+          # was producing 0/0 even when tests ran. JSON is canonical.
+          passed=0
+          failed=0
+          gate_passed=0
+          gate_failed=0
+          gate_failed_names=""
+          json_count=0
+
+          # Extract pass=true and pass=false counts in a single jq pass per
+          # file, with `?` operators and `// 0` defaults so unexpected schema
+          # shapes (null testCases, missing summaryResult, array vs object,
+          # etc) yield zeros rather than aborting the script.
+          # When $GATE_PATTERN is non-empty, also extract the subset matching
+          # the pattern (case-insensitive substring on the test name) so we
+          # can gate the build on a specific client's tests without letting
+          # upstream client-vs-client failures break the signal.
+          jq_query='
+            def cases: try [.testCases | to_entries[]? | .value] catch [];
+            def matches($p): (.name // "") | ascii_downcase | contains($p | ascii_downcase);
+            (cases | map(.summaryResult.pass)) as $all |
+            (cases | map(select(matches($p))) | map(.summaryResult.pass)) as $sub |
+            (cases | map(select(matches($p)) | select(.summaryResult.pass == false) | .name // "?")) as $failed_names |
+            "\($all | map(select(. == true))  | length) " +
+            "\($all | map(select(. == false)) | length) " +
+            "\($sub | map(select(. == true))  | length) " +
+            "\($sub | map(select(. == false)) | length)\n" +
+            ($failed_names | join("\n"))
+          '
+
+          for jf in workspace/logs/*.json; do
+            # Only count files that look like hive suite results.
+            jq -e 'has("testCases")' "$jf" >/dev/null 2>&1 || continue
+
+            out=$(jq -r --arg p "$GATE_PATTERN" "$jq_query" "$jf" 2>/dev/null || echo "0 0 0 0")
+            counts_line=$(printf '%s\n' "$out" | head -n1)
+            names_block=$(printf '%s\n' "$out" | tail -n +2)
+            read -r p f gp gf <<< "${counts_line:-0 0 0 0}"
+            for v in p f gp gf; do
+              eval "val=\$$v"
+              [[ "$val" =~ ^[0-9]+$ ]] || eval "$v=0"
+            done
+
+            json_count=$((json_count + 1))
+            passed=$((passed + p))
+            failed=$((failed + f))
+            gate_passed=$((gate_passed + gp))
+            gate_failed=$((gate_failed + gf))
+            if [ -n "$names_block" ]; then
+              gate_failed_names="${gate_failed_names}${names_block}"$'\n'
+            fi
+          done
+
+          # Pick newest simulator log via a bash glob (with nullglob set
+          # above, an empty match yields an empty array). DON'T use
+          # `ls -t pattern` — under nullglob the unmatched pattern expands
+          # to nothing and `ls -t` lists the current directory instead,
+          # picking up garbage.
+          sim_log=""
+          sim_logs=(workspace/logs/*-simulator-*.log)
+          if [ ${#sim_logs[@]} -gt 0 ]; then
+            sim_log="${sim_logs[0]}"
+            for f in "${sim_logs[@]}"; do
+              [ "$f" -nt "$sim_log" ] && sim_log="$f"
+            done
           fi
+
+          # Fallback: if no JSON results parsed (e.g. simulator died before
+          # writing them), grep the simulator log against the union of common
+          # verdict patterns: pytest-xdist (`[gwN] PASSED `), classic hive
+          # (`PASSED tests/`), and go-test (`--- PASS:`). Use `|| true`, NOT
+          # `|| echo 0` — `grep -c` already prints `0` on no-match (exit 1),
+          # and the echo would append a second `0`, producing the literal
+          # string "0\n0" that breaks subsequent arithmetic.
+          if [ "$json_count" -eq 0 ] && [ -n "$sim_log" ]; then
+            passed=$(grep -cE '(\] PASSED |PASSED tests/|--- PASS:)' "$sim_log" 2>/dev/null || true)
+            failed=$(grep -cE '(\] FAILED |FAILED tests/|--- FAIL:)' "$sim_log" 2>/dev/null || true)
+            [[ "$passed" =~ ^[0-9]+$ ]] || passed=0
+            [[ "$failed" =~ ^[0-9]+$ ]] || failed=0
+          fi
+
           total=$((passed + failed))
-          echo "passed=$passed" >> "$GITHUB_OUTPUT"
-          echo "failed=$failed" >> "$GITHUB_OUTPUT"
-          echo "total=$total"  >> "$GITHUB_OUTPUT"
+          {
+            echo "passed=$passed"
+            echo "failed=$failed"
+            echo "total=$total"
+            echo "gate_passed=$gate_passed"
+            echo "gate_failed=$gate_failed"
+            echo "json_count=$json_count"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$json_count" -gt 0 ]; then
+            src="${json_count} JSON result(s)"
+          elif [ -n "$sim_log" ]; then
+            src="grep fallback"
+          else
+            src="(none)"
+          fi
+
           {
             echo "### Hive · ${LABEL} (\`${SIM}\`)"
             echo
-            echo "| passed | failed | total | threshold | hive exit |"
-            echo "|-------:|-------:|------:|----------:|----------:|"
-            echo "| ${passed} | ${failed} | ${total} | ${THRESHOLD} | ${HIVE_EXIT:-?} |"
+            echo "| passed | failed | total | threshold | hive exit | source |"
+            echo "|-------:|-------:|------:|----------:|----------:|:-------|"
+            echo "| ${passed} | ${failed} | ${total} | ${THRESHOLD} | ${HIVE_EXIT:-?} | ${src} |"
+            if [ -n "$GATE_PATTERN" ]; then
+              echo
+              echo "Gate (\`${GATE_PATTERN}\`-matching subset): **${gate_passed} passed, ${gate_failed} failed**"
+              if [ "$gate_failed" -gt 0 ]; then
+                echo
+                echo "<details><summary>Failed gate-matching tests</summary>"
+                echo
+                echo '```'
+                printf '%s' "$gate_failed_names" | sed '/^$/d' | sort -u
+                echo '```'
+                echo "</details>"
+              fi
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-          # When no simulator log exists, hive died before launching the sim —
-          # dump the tail of the hive stdout so the PR check can show why.
-          if [ -z "$sim_log" ]; then
+          # Diagnostics: surface tail of the relevant log when results look
+          # suspicious so the failure is actionable from the PR check page.
+          if [ -z "$sim_log" ] && [ "$json_count" -eq 0 ]; then
             {
               echo
-              echo "**No simulator log produced.** Tail of \`hive-run.log\`:"
+              echo "**No simulator log or JSON results produced.** Tail of \`hive-run.log\`:"
               echo
               echo '```'
               tail -n 80 hive-run.log 2>/dev/null || echo "(hive-run.log missing)"
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$failed" -gt 0 ]; then
+          elif [ "$total" -eq 0 ] && [ -n "$sim_log" ]; then
+            {
+              echo
+              echo "**Simulator produced no test results.** Tail of simulator log:"
+              echo
+              echo '```'
+              tail -n 80 "$sim_log" 2>/dev/null || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$failed" -gt 0 ] && [ -n "$sim_log" ]; then
             {
               echo
               echo "<details><summary>First 20 FAILED tests</summary>"
               echo
               echo '```'
-              grep "FAILED tests/" "$sim_log" | head -20
+              grep -E '(\] FAILED |FAILED tests/|--- FAIL:)' "$sim_log" | head -20 || true
               echo '```'
               echo
               echo "</details>"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
+          # Always succeed — the threshold gate runs as a separate step.
+          exit 0
+
       - name: Upload simulator logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: hive-logs-${{ inputs.label }}
           path: |
@@ -299,5 +459,17 @@ jobs:
         run: |
           if [ "$PASSED" -lt "$THRESHOLD" ]; then
             echo "::error::Hive ${LABEL} only passed ${PASSED} tests (threshold ${THRESHOLD})."
+            exit 1
+          fi
+
+      - name: Enforce gate (zero failures in subset)
+        if: ${{ inputs.gate_pattern != '' }}
+        env:
+          GATE_FAILED: ${{ steps.tab.outputs.gate_failed }}
+          GATE_PATTERN: ${{ inputs.gate_pattern }}
+          LABEL: ${{ inputs.label }}
+        run: |
+          if [ "$GATE_FAILED" -gt 0 ]; then
+            echo "::error::Hive ${LABEL} has ${GATE_FAILED} failing test(s) matching gate '${GATE_PATTERN}'."
             exit 1
           fi

@@ -1,0 +1,442 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {"type": "grafana", "uid": "-- Grafana --"},
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      },
+      {
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "enable": true,
+        "expr": "changes(app_fastsync_block_pivotBlock_number_gauge{instance=~\"$instance\"}[1m]) > 0",
+        "iconColor": "purple",
+        "name": "Pivot Update",
+        "step": "1m",
+        "titleFormat": "Pivot updated"
+      },
+      {
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "enable": true,
+        "expr": "changes(process_start_time_seconds{job=~\".*fukuii.*\",instance=~\"$instance\"}[1m]) > 0",
+        "iconColor": "red",
+        "name": "Container Restart",
+        "step": "1m",
+        "titleFormat": "JVM restarted"
+      }
+    ]
+  },
+  "description": "Fukuii fast sync — header/state/block progress, peer health, memory, and bug-30 safety-net activity. Dashboard goes green when state download catches up and the node hits the network tip.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {"asDropdown": false, "icon": "external link", "includeVars": true, "keepTime": true, "tags": ["fukuii"], "targetBlank": false, "title": "Fukuii dashboards", "type": "dashboards"}
+  ],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Best Full Block",
+      "id": 1,
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "app_fastsync_block_bestFullBlock_number_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "blue"}}},
+      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Pivot Block",
+      "id": 2,
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "app_fastsync_block_pivotBlock_number_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "semi-dark-purple"}}},
+      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Blocks Behind Pivot",
+      "id": 3,
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+      "description": "Pivot − bestFullBlock. Should drop to 0 when fast sync finishes the block-import phase. Below 100 = effectively at tip.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "clamp_min(app_fastsync_block_pivotBlock_number_gauge{instance=~\"$instance\"} - app_fastsync_block_bestFullBlock_number_gauge{instance=~\"$instance\"}, 0)", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 100},
+            {"color": "orange", "value": 10000},
+            {"color": "red", "value": 1000000}
+          ]}
+        }
+      },
+      "options": {"colorMode": "background", "graphMode": "none", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "State Download %",
+      "id": 4,
+      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0},
+      "description": "Fast sync transitions to regular sync when state download reaches 100%.",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "100 * app_fastsync_state_downloadedNodes_gauge{instance=~\"$instance\"} / clamp_min(app_fastsync_state_totalNodes_gauge{instance=~\"$instance\"}, 1)", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "blue", "value": null},
+            {"color": "yellow", "value": 50},
+            {"color": "green", "value": 100}
+          ]}
+        }
+      },
+      "options": {"colorMode": "background", "graphMode": "area", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Peers Connected",
+      "id": 5,
+      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "app_network_peers_outgoing_handshaked_gauge{instance=~\"$instance\"} + app_network_peers_incoming_handshaked_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "total"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "red", "value": null},
+            {"color": "orange", "value": 1},
+            {"color": "yellow", "value": 3},
+            {"color": "green", "value": 8}
+          ]}
+        }
+      },
+      "options": {"colorMode": "background", "graphMode": "area", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Sync Mode",
+      "id": 6,
+      "description": "0=Regular sync (state download done, importing live blocks), 1=Fast sync (still pulling state nodes), 2=SNAP sync (pulling snap account/storage ranges). Derived from gauges: SNAP wins if app_snapsync_phase_current_gauge>0; otherwise Fast if state download incomplete; otherwise Regular.",
+      "gridPos": {"h": 4, "w": 4, "x": 20, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "clamp_max((app_snapsync_phase_current_gauge{instance=~\"$instance\"} > bool 0) * 2 + (app_fastsync_state_totalNodes_gauge{instance=~\"$instance\"} > bool app_fastsync_state_downloadedNodes_gauge{instance=~\"$instance\"}) * 1, 2) or vector(0)", "refId": "A", "legendFormat": "{{instance}}"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {"type": "value", "options": {
+              "0": {"text": "Regular", "color": "green"},
+              "1": {"text": "Fast Sync", "color": "blue"},
+              "2": {"text": "SNAP Sync", "color": "purple"}
+            }}
+          ],
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}
+        }
+      },
+      "options": {"colorMode": "background", "graphMode": "none", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Block Headers vs Pivot",
+      "id": 10,
+      "description": "BestHeader catches up to Pivot first; bestFullBlock follows once bodies arrive.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "app_fastsync_block_pivotBlock_number_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}} pivot"},
+        {"expr": "app_fastsync_block_bestHeader_number_gauge{instance=~\"$instance\"}", "refId": "B", "legendFormat": "{{instance}} bestHeader"},
+        {"expr": "app_fastsync_block_bestFullBlock_number_gauge{instance=~\"$instance\"}", "refId": "C", "legendFormat": "{{instance}} bestFullBlock"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5}}},
+      "options": {"legend": {"showLegend": true, "displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "State Download Progress",
+      "id": 11,
+      "description": "downloadedNodes and totalNodes — gap shrinks as the trie is fully discovered AND all nodes are pulled.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "app_fastsync_state_totalNodes_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}} known"},
+        {"expr": "app_fastsync_state_downloadedNodes_gauge{instance=~\"$instance\"}", "refId": "B", "legendFormat": "{{instance}} pulled"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}}},
+      "options": {"legend": {"showLegend": true, "displayMode": "list", "placement": "bottom"}, "tooltip": {"mode": "multi"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Block Headers / sec (rate, 1m)",
+      "id": 20,
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "deriv(app_fastsync_block_bestHeader_number_gauge{instance=~\"$instance\"}[1m])", "refId": "A", "legendFormat": "{{instance}} headers/s"},
+        {"expr": "deriv(app_fastsync_block_bestFullBlock_number_gauge{instance=~\"$instance\"}[1m])", "refId": "B", "legendFormat": "{{instance}} full-blocks/s"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}}}
+    },
+    {
+      "type": "timeseries",
+      "title": "State Nodes / sec (rate, 1m)",
+      "id": 21,
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "deriv(app_fastsync_state_downloadedNodes_gauge{instance=~\"$instance\"}[1m])", "refId": "A", "legendFormat": "{{instance}} nodes/s"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Download Latency (p95)",
+      "id": 22,
+      "description": "Per-request latency for headers, bodies, receipts, state. A spike here often precedes peer churn.",
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "app_fastsync_block_downloadBlockHeaders_timer_seconds_max{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}} headers"},
+        {"expr": "app_fastsync_block_downloadBlockBodies_timer_seconds_max{instance=~\"$instance\"}", "refId": "B", "legendFormat": "{{instance}} bodies"},
+        {"expr": "app_fastsync_block_downloadBlockReceipts_timer_seconds_max{instance=~\"$instance\"}", "refId": "C", "legendFormat": "{{instance}} receipts"},
+        {"expr": "app_fastsync_state_downloadState_timer_seconds_max{instance=~\"$instance\"}", "refId": "D", "legendFormat": "{{instance}} state"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {"drawStyle": "line", "lineWidth": 2}}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Peer Pool",
+      "id": 30,
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 19},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "app_network_peers_outgoing_handshaked_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}} outgoing"},
+        {"expr": "app_network_peers_incoming_handshaked_gauge{instance=~\"$instance\"}", "refId": "B", "legendFormat": "{{instance}} incoming"},
+        {"expr": "app_network_peers_pending_gauge{instance=~\"$instance\"}", "refId": "C", "legendFormat": "{{instance}} pending"},
+        {"expr": "app_network_peers_blacklisted_gauge{instance=~\"$instance\"}", "refId": "D", "legendFormat": "{{instance}} blacklisted"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Blacklist Rate (per group)",
+      "id": 31,
+      "description": "Spikes in fastSyncGroup or p2pGroup blacklists indicate peers misbehaving on sync requests — usually transient.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 19},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "rate(app_network_peers_blacklisted_fastSyncGroup_counter_total{instance=~\"$instance\"}[5m])", "refId": "A", "legendFormat": "{{instance}} fastSync"},
+        {"expr": "rate(app_network_peers_blacklisted_regularSyncGroup_counter_total{instance=~\"$instance\"}[5m])", "refId": "B", "legendFormat": "{{instance}} regularSync"},
+        {"expr": "rate(app_network_peers_blacklisted_p2pGroup_counter_total{instance=~\"$instance\"}[5m])", "refId": "C", "legendFormat": "{{instance}} p2p"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "line", "lineWidth": 2}}}
+    },
+    {
+      "type": "timeseries",
+      "title": "JVM Heap (used vs max)",
+      "id": 40,
+      "description": "Container has a 6 GiB cgroup cap. JVM Xmx=4 GiB; 1.5–2 GiB native overhead (RocksDB block cache, metaspace) is normal. If used+native approaches the cgroup cap, expect auto-restarts.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 27},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum by (instance) (jvm_memory_bytes_used{instance=~\"$instance\"})", "refId": "A", "legendFormat": "{{instance}} heap+nonheap used"},
+        {"expr": "sum by (instance) (jvm_memory_bytes_committed{instance=~\"$instance\"})", "refId": "B", "legendFormat": "{{instance}} committed"},
+        {"expr": "process_resident_memory_bytes{job=~\".*fukuii.*\",instance=~\"$instance\"}", "refId": "C", "legendFormat": "{{instance}} RSS"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "bytes", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Logback Error/Warn Rate",
+      "id": 50,
+      "description": "Log lines per second by level. ERROR rate creeping up usually points at peer issues (RLPx, ENR decode) — these are mostly cosmetic but worth a glance. A burst above ~5/s sustained is unusual.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 27},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "rate(logback_appender_total{instance=~\"$instance\",level=\"error\"}[1m])", "refId": "A", "legendFormat": "{{instance}} ERROR"},
+        {"expr": "rate(logback_appender_total{instance=~\"$instance\",level=\"warn\"}[1m])", "refId": "B", "legendFormat": "{{instance}} WARN"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5}}}
+    },
+    {
+      "type": "stat",
+      "title": "JVM Restarts (last 1h)",
+      "id": 60,
+      "description": "Counts container restarts via process_start_time changes. Each restart pauses sync for ~30s but resumes from persisted state — repeated restarts (>2/h) usually mean memory pressure.",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 35},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "changes(process_start_time_seconds{job=~\".*fukuii.*\",instance=~\"$instance\"}[1h])", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 1},
+            {"color": "orange", "value": 3},
+            {"color": "red", "value": 6}
+          ]}
+        }
+      },
+      "options": {"colorMode": "background", "graphMode": "none", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Process Up",
+      "id": 61,
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 35},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "up{job=~\".*fukuii.*\",instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {"type": "value", "options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}}
+          ]
+        }
+      },
+      "options": {"colorMode": "background", "graphMode": "none", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Discovered Peers",
+      "id": 62,
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 35},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "app_network_discovery_foundPeers_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "blue"}}},
+      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Tried (LRU)",
+      "id": 63,
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 35},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "app_network_tried_peers_gauge{instance=~\"$instance\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "purple"}}},
+      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Pivot Refreshes (last 1h)",
+      "id": 70,
+      "description": "Each fast-sync pivot update bumps app_fastsync_block_pivotBlock_number_gauge. Healthy steady-state during fast sync ≈ 3/h (every ~20 min). 0/h means fast sync isn't refreshing — either it's done or stuck.",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 39},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "changes(app_fastsync_block_pivotBlock_number_gauge{instance=~\"$instance\"}[1h])", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "semi-dark-purple"}}},
+      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Sync Mode Transitions (last 1h)",
+      "id": 71,
+      "description": "Counts changes in the derived sync-mode value over the last hour. 0=stable. ≥1 = fast→regular handoff (good), bug-30 escape valve fired, or stall-watchdog tripped.",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 39},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "changes( ( clamp_max((app_snapsync_phase_current_gauge{instance=~\"$instance\"} > bool 0) * 2 + (app_fastsync_state_totalNodes_gauge{instance=~\"$instance\"} > bool app_fastsync_state_downloadedNodes_gauge{instance=~\"$instance\"}) * 1, 2) or vector(0) )[1h:30s] )", "refId": "A", "legendFormat": "{{instance}}"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 1},
+            {"color": "orange", "value": 3}
+          ]}
+        }
+      },
+      "options": {"colorMode": "background", "graphMode": "none", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Stall Watchdog Trips (last 1h)",
+      "id": 72,
+      "description": "Times the time-based stall watchdog tripped and emitted NetworkIncompatible. Each trip = 2 min of state download making no progress (<100 nodes). Counts log lines via Logback ERROR rate against 'State download stalled' patterns. Will be 0 in normal operation.",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 39},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "increase(logback_appender_total{instance=~\"$instance\",level=\"warn\"}[1h])", "refId": "A", "legendFormat": "{{instance}} warns/1h"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 100},
+            {"color": "orange", "value": 1000}
+          ]}
+        }
+      },
+      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Fast Sync Restart Attempts (last 1h)",
+      "id": 73,
+      "description": "Counts JVM restarts during fast sync — each one is an interruption that resumes from persisted state but loses in-flight progress. Healthy = 0. >2/h indicates memory pressure or graceful shutdown loop.",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 39},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "changes(process_start_time_seconds{job=~\".*fukuii.*\",instance=~\"$instance\"}[1h])", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 1},
+            {"color": "orange", "value": 3},
+            {"color": "red", "value": 6}
+          ]}
+        }
+      },
+      "options": {"colorMode": "background", "graphMode": "none", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["fukuii", "fast", "sync"],
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "label": "Instance",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": {"query": "label_values(up{job=~\".*fukuii.*\"}, instance)", "refId": "Prometheus-instance-Variable-Query"},
+        "refresh": 1,
+        "sort": 1,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {"selected": false, "text": "All", "value": "$__all"},
+        "options": [],
+        "hide": 0
+      }
+    ]
+  },
+  "time": {"from": "now-3h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "Fukuii Fast Sync",
+  "uid": "fukuii-fast-sync",
+  "version": 1,
+  "weekStart": ""
+}

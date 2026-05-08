@@ -5,7 +5,7 @@ import org.apache.pekko.util.ByteString
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-import com.chipprbots.ethereum.domain.{BlockHeader, ChainWeight}
+import com.chipprbots.ethereum.domain.BlockHeader
 
 /** Integration test for MESS (ECIP-1100: Modified Exponential Subjective Scoring).
   *
@@ -18,7 +18,7 @@ class MESSIntegrationSpec extends AnyFlatSpec with Matchers {
       number: BigInt,
       difficulty: BigInt,
       timestamp: Long,
-      hash: ByteString = ByteString.empty
+      @scala.annotation.unused hash: ByteString = ByteString.empty
   ): BlockHeader =
     BlockHeader(
       parentHash = ByteString.empty,

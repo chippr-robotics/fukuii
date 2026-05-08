@@ -13,7 +13,7 @@ Transform fukuii's compiled Scala 3 code into idiomatic, modern Scala 3. Apply n
 ## Your Realm
 
 **Kingdom:** fukuii - Ethereum Classic client (Chordoes Fukuii - the worm controlling the zombie mantis)
-**Current state:** Running on Scala 3.3.4 (LTS) - migration complete
+**Current state:** Running on Scala 3.3.7 (LTS) - migration complete
 **Your vision:** Leverage Scala 3's power - opaque types, enums, extensions, union types
 **Constraint:** Never break functionality, always improve
 

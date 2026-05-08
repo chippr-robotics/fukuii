@@ -27,11 +27,8 @@ import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
-import com.chipprbots.ethereum.network.PeerActor.Status.Handshaked
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
 import com.chipprbots.ethereum.network.PeerId
-import com.chipprbots.ethereum.network.PeerManagerActor
-import com.chipprbots.ethereum.network.PeerManagerActor.Peers
 import com.chipprbots.ethereum.network.handshaker.Handshaker.HandshakeResult
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.SignedTransactions
 import com.chipprbots.ethereum.network.p2p.messages.ETH67
@@ -233,9 +230,9 @@ class PendingTransactionsManagerSpec
     val msg1 = tx1.toSet
     pendingTransactionsManager ! ProperSignedTransactions(msg1, peer1.id)
 
-    // AddTransactions fires both a NotifyPeers (filtered per-peer via
-    // isTxKnown) and an announceNewTxHashes (to every connected peer), so
-    // each tx batch reaches peer1/2/3 via NewPooledTransactionHashes (ETH/67).
+    // AddTransactions queues a NotifyPeers broadcast, filtered per peer through
+    // isTxKnown, so received txs are announced only to peers that don't already
+    // know them.
     // Drain until no more messages arrive within shortTimeout.
     val resps1: Seq[SendMessage] = etcPeerManager.receiveWhile(Timeouts.normalTimeout) {
       case m: NetworkPeerManagerActor.SendMessage => m
@@ -405,7 +402,7 @@ class PendingTransactionsManagerSpec
     val tx: LegacyTransaction = LegacyTransaction(1, 1, 1, Some(Address(42)), 10, ByteString(""))
 
     def newStx(
-        nonce: BigInt = 0,
+        @scala.annotation.unused nonce: BigInt = 0,
         tx: LegacyTransaction = tx,
         keyPair: AsymmetricCipherKeyPair = crypto.generateKeyPair(secureRandom)
     ): SignedTransactionWithSender =

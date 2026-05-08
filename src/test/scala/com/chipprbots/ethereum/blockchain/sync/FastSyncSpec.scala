@@ -278,7 +278,7 @@ class FastSyncSpec
           status <- Stream
             .awakeEvery[IO](10.millis)
             .evalMap(_ => getSyncStatus)
-            .collect { case stat @ Status.Syncing(_, _, Some(stateNodesProgress)) =>
+            .collect { case stat @ Status.Syncing(_, _, Some(_)) =>
               stat
             }
             .head

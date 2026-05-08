@@ -27,33 +27,33 @@ concurrency:
 
 jobs:
   test:
-    name: Test and Build (JDK 21, Scala 3.3.4)
+    name: Test and Build (JDK 25, Scala 3.3.7)
     runs-on: ubuntu-latest
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
           fetch-depth: 0
-      
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
-          java-version: '21'
+          java-version: '25'
           cache: 'sbt'
-      
+
       - name: Cache Coursier
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cache/coursier
             ~/.ivy2/cache
             ~/.sbt
-          key: ${{ runner.os }}-sbt-21-${{ hashFiles('**/build.sbt', '**/build.properties', '**/Dependencies.scala', '**/plugins.sbt') }}
+          key: ${{ runner.os }}-sbt-25-${{ hashFiles('**/build.sbt', '**/build.properties', '**/Dependencies.scala', '**/plugins.sbt') }}
           restore-keys: |
-            ${{ runner.os }}-sbt-21-
+            ${{ runner.os }}-sbt-25-
             ${{ runner.os }}-sbt-
       
       - name: Set up SBT
@@ -139,7 +139,7 @@ jobs:
       
       - name: Upload coverage reports to Codecov
         if: always()
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           # Specify the coverage file locations for scoverage
@@ -152,9 +152,9 @@ jobs:
       
       - name: Upload coverage artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          name: coverage-reports-jdk21-scala-3.3.4
+          name: coverage-reports-jdk25-scala-3.3.7
           path: |
             **/target/scala-*/scoverage-report/**
             **/target/scala-*/scoverage-data/**
@@ -173,9 +173,9 @@ jobs:
       
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          name: test-results-jdk21-scala-3.3.4
+          name: test-results-jdk25-scala-3.3.7
           path: |
             **/target/test-reports/**
             **/target/scala-*/test-classes/**/*.log
@@ -185,9 +185,9 @@ jobs:
       
       - name: Upload ethereum/tests integration results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          name: ethereum-tests-results-jdk21-scala-3.3.4
+          name: ethereum-tests-results-jdk25-scala-3.3.7
           path: |
             **/target/scala-*/it-classes/**/*.log
             /tmp/fukuii-it-test/**/*.log
@@ -195,9 +195,9 @@ jobs:
           if-no-files-found: warn
       
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          name: fukuii-distribution-jdk21-scala-3.3.4
+          name: fukuii-distribution-jdk25-scala-3.3.7
           path: |
             target/universal/*.zip
             **/target/scala-*/*-assembly-*.jar

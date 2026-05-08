@@ -68,6 +68,8 @@ object Dependencies {
     "org.scalatest" %% "scalatest" % "3.2.19" % "it,test", // Updated for Scala 3 support
     "org.scalamock" %% "scalamock" % "6.0.0" % "it,test", // Updated for Scala 3 support
     "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % "test", // Updated for ScalaCheck 1.18
+    "org.scalatestplus" %% "mockito-5-12" % "3.2.19.0" % "it,test", // Mockito for kademlia + scalanet specs
+    "org.mockito" % "mockito-core" % "5.12.0" % "it,test",
     "org.scalacheck" %% "scalacheck" % "1.18.1" % "it,test", // Updated for Scala 3 support
     "com.softwaremill.diffx" %% "diffx-core" % "0.9.0" % "test", // Updated for Scala 3 support
     "com.softwaremill.diffx" %% "diffx-scalatest" % "0.9.0" % "test"

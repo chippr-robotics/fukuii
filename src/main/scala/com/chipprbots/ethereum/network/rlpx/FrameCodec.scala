@@ -16,7 +16,6 @@ import org.bouncycastle.crypto.params.ParametersWithIV
 import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.rlp
-import com.chipprbots.ethereum.rlp.RLPImplicits._
 import com.chipprbots.ethereum.rlp.RLPImplicits.given
 import com.chipprbots.ethereum.utils.Logger
 

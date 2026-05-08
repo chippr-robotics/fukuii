@@ -4,6 +4,8 @@ import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
 
+import scala.annotation.unused
+
 import com.chipprbots.ethereum.consensus.mining.GetBlockHeaderByHash
 import com.chipprbots.ethereum.consensus.mining.GetNBlocksBack
 import com.chipprbots.ethereum.consensus.validators._
@@ -60,7 +62,7 @@ object StdValidators {
       self: Validators,
       block: Block,
       getBlockHeaderByHash: GetBlockHeaderByHash,
-      getNBlocksBack: GetNBlocksBack
+      @unused getNBlocksBack: GetNBlocksBack
   )(implicit blockchainConfig: BlockchainConfig): Either[ValidationBeforeExecError, BlockExecutionSuccess] = {
 
     val header = block.header

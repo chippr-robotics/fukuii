@@ -2,9 +2,12 @@ package com.chipprbots.ethereum.domain
 
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits._
 import com.chipprbots.ethereum.domain.Withdrawal._
+import com.chipprbots.ethereum.rlp.PrefixedRLPEncodable
 import com.chipprbots.ethereum.rlp.RLPEncodeable
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPSerializable
+import com.chipprbots.ethereum.rlp.RLPValue
+import com.chipprbots.ethereum.rlp.encode
 import com.chipprbots.ethereum.rlp.rawDecode
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
@@ -35,8 +38,18 @@ object BlockBody {
       signedTxToRlpEncodable: SignedTransaction => RLPEncodeable,
       blockHeaderToRlpEncodable: BlockHeader => RLPEncodeable
   ): RLPEncodeable = {
+    // EIP-2718: typed transactions in a block body must be encoded as RLP byte strings
+    // (RLPValue(typeByte || rlp(payload))), not as a raw concatenation. PrefixedRLPEncodable
+    // alone serializes as `prefix || rlp(payload)` without the byte-string length prefix,
+    // which breaks cross-client decoding (e.g. go-ethereum re-requests bodies indefinitely).
+    val txItems: Seq[RLPEncodeable] = blockBody.transactionList.map { stx =>
+      signedTxToRlpEncodable(stx) match {
+        case p: PrefixedRLPEncodable => RLPValue(encode(p))
+        case other                   => other
+      }
+    }
     val baseParts: Seq[RLPEncodeable] = Seq(
-      RLPList(blockBody.transactionList.map(signedTxToRlpEncodable): _*),
+      RLPList(txItems: _*),
       RLPList(blockBody.uncleNodesList.map(blockHeaderToRlpEncodable): _*)
     )
     val withdrawalsPart: Seq[RLPEncodeable] = blockBody.withdrawals match {

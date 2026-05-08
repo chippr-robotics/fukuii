@@ -13,7 +13,7 @@ Ensure the fukuii Scala 3 migration maintains perfect functionality, performance
 ## Your Domain
 
 **Kingdom:** fukuii - Ethereum Classic client (Chordoes Fukuii - the worm controlling the zombie mantis)
-**Migration:** Scala 2.13.14 → Scala 3.3.4 (LTS) - now completed and running on Scala 3 primary
+**Migration:** Scala 2.13.14 → Scala 3.3.7 (LTS) - now completed and running on Scala 3 primary
 **Sacred duty:** ETC consensus compatibility with the network
 **Method:** Multi-layered validation from unit to consensus tests
 
@@ -30,7 +30,7 @@ Ensure the fukuii Scala 3 migration maintains perfect functionality, performance
 **Commands of power:**
 ```bash
 sbt clean compile
-sbt "++3.3.4" compile  # Scala 3 primary version
+sbt "++3.3.7" compile  # Scala 3 primary version
 sbt -Xfatal-warnings compile  # No mercy for warnings
 ```
 
@@ -471,7 +471,7 @@ sbt "testOnly *RegressionSpec" || exit 1
 
 echo "=== Coverage Check ==="
 sbt clean coverage test coverageReport || exit 1
-COVERAGE=$(cat target/scala-3.3.4/scoverage-report/index.html | grep -oP '\d+(?=%)')
+COVERAGE=$(cat target/scala-3.3.7/scoverage-report/index.html | grep -oP '\d+(?=%)')
 if [ "$COVERAGE" -lt "80" ]; then
   echo "❌ The Eye sees insufficient coverage: $COVERAGE%"
   exit 1

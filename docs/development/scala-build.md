@@ -8,7 +8,7 @@ This document explains how the Fukuii build works after the Scala 3 migration a
 | --- | --- | --- |
 | JDK | 21 (Temurin) | Runtime/toolchain for Scala 3 and Pekko |
 | sbt | 1.10.7 | Single build driver (no nested builds) |
-| Scala | 3.3.4 (LTS) | Only Scala version compiled in this repo |
+| Scala | 3.3.7 (LTS) | Only Scala version compiled in this repo |
 | scalafmt / scalafix | 2.5.2 / 0.13.0 | Formatting and linting (invoked via sbt) |
 | protobuf (protoc) | >= 3.21 | Generates sources via `sbt-protoc` |
 | solc | 0.8.x | Solidity compiler for `solidityCompile` task |
@@ -29,7 +29,7 @@ root (node)
 
 Each sub-module inherits `commonSettings` defined in `build.sbt`, which sets:
 
-- Scala 3.3.4, fatal warnings disabled when `FUKUII_DEV=true`
+- Scala 3.3.7, fatal warnings disabled when `FUKUII_DEV=true`
 - shared scalac options and test settings
 - scalafix dependencies (organize-imports)
 - cross compilation configs for Integration/Evm/Rpc/Benchmark

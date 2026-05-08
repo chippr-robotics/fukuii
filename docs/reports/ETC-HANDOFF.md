@@ -623,7 +623,7 @@ Removed three WITHDRAWN Mantis-era ECIPs that do not belong in a canonical ECIP-
 git checkout alpha
 sbt compile          # Should complete cleanly
 sbt test             # 2,195 tests, 0 failures
-sbt assembly          # Produces target/scala-3.3.4/fukuii-assembly-0.1.240.jar
+sbt assembly          # Produces target/scala-3.3.7/fukuii-assembly-0.1.240.jar
 ```
 
 ### 2. Mordor Testnet Smoke Test
@@ -634,7 +634,7 @@ java -Xmx4g \
   -Dfukuii.network.rpc.http.port=8553 \
   -Dfukuii.network.server-address.port=30305 \
   -Dfukuii.network.discovery.port=30305 \
-  -jar target/scala-3.3.4/fukuii-assembly-0.1.240.jar mordor
+  -jar target/scala-3.3.7/fukuii-assembly-0.1.240.jar mordor
 ```
 
 **Verify:**

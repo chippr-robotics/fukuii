@@ -42,7 +42,7 @@ This guide provides practical instructions for monitoring Key Performance Indica
 
 **Via GitHub Actions UI**:
 1. Navigate to PR → "Checks" tab
-2. Look for "Test and Build (JDK 21, Scala 3.3.4)" workflow
+2. Look for "Test and Build (JDK 25, Scala 3.3.7)" workflow
 3. Check "Validate KPI Baselines" step (should be ✅)
 4. Review test timing in "Run tests with coverage" step
 

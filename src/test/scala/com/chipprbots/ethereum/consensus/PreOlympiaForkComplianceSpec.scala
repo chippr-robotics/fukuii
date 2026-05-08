@@ -248,10 +248,12 @@ class PreOlympiaForkComplianceSpec extends AnyFlatSpec with Matchers {
 
   it should "have EtcForks enum values in strictly increasing order" taggedAs (UnitTest, ConsensusTest) in {
     val forks = EtcForks.values.toList
-    forks.sliding(2).foreach { case List(a, b) =>
-      withClue(s"$a (${a.id}) should be less than $b (${b.id}): ") {
-        a.id should be < b.id
-      }
+    forks.sliding(2).foreach {
+      case List(a, b) =>
+        withClue(s"$a (${a.id}) should be less than $b (${b.id}): ") {
+          a.id should be < b.id
+        }
+      case _ => ()
     }
   }
 

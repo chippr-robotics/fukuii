@@ -30,9 +30,6 @@ import com.chipprbots.ethereum.vm.Generators.genMultipleNodeData
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.CriticalError
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.ProcessingStatistics
 import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.ResponseProcessingError
-import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.ResponseProcessingError
-import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.ResponseProcessingError
-import com.chipprbots.ethereum.blockchain.sync.fast.SyncStateScheduler.ResponseProcessingError
 import org.scalacheck.Gen
 
 class SyncStateSchedulerSpec

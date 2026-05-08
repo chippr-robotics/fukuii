@@ -32,7 +32,7 @@ if ! command -v sbt &> /dev/null; then
         echo "Installing SBT for Alpine Linux..."
         
         # Install dependencies
-        sudo apk add --no-cache bash curl openjdk21 || true
+        sudo apk add --no-cache bash curl openjdk25 || true
         
         # Download and install SBT
         SBT_VERSION="1.10.7"

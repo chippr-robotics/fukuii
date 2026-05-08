@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.ethtest
 
-import org.scalatest.flatspec.AnyFlatSpec
-import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
 import com.chipprbots.ethereum.testing.Tags._

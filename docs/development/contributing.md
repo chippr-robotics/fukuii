@@ -23,14 +23,14 @@ We are committed to providing a welcoming and inclusive environment for all cont
 
 To contribute to Fukuii, you'll need:
 
-- **JDK 21** - Required for building and running the project
+- **JDK 25** - Required for building and running the project
 - **sbt** - Scala build tool (version 1.10.7 or higher)
 - **Git** - For version control
 - **Optional**: Python (for auxiliary scripts)
 
 ### Scala Version Support
 
-Fukuii is built with **Scala 3.3.4 (LTS)**, the latest long-term support version of Scala 3, providing modern language features, improved type inference, and better tooling support.
+Fukuii is built with **Scala 3.3.7 (LTS)**, the latest long-term support version of Scala 3, providing modern language features, improved type inference, and better tooling support.
 
 ### Setting Up Your Development Environment
 
@@ -128,12 +128,12 @@ sbt testCoverage
 This will:
 1. Enable coverage instrumentation
 2. Run all tests across all modules
-3. Generate coverage reports in `target/scala-3.3.4/scoverage-report/`
+3. Generate coverage reports in `target/scala-3.3.7/scoverage-report/`
 4. Aggregate coverage across all modules
 
 **Coverage reports locations:**
-- HTML report: `target/scala-3.3.4/scoverage-report/index.html`
-- XML report: `target/scala-3.3.4/scoverage-report/cobertura.xml`
+- HTML report: `target/scala-3.3.7/scoverage-report/index.html`
+- XML report: `target/scala-3.3.7/scoverage-report/cobertura.xml`
 
 **Coverage thresholds:**
 - Minimum statement coverage: 70%
@@ -163,7 +163,7 @@ sbt pp
 
 ### Scala 3 Development
 
-Fukuii uses **Scala 3.3.4 (LTS)** and **JDK 21 (LTS)** exclusively. The migration from Scala 2.13 and JDK 17 was completed in October 2025.
+Fukuii uses **Scala 3.3.7 (LTS)** and **JDK 25 (LTS)** exclusively. The migration from Scala 2.13 and JDK 17 was completed in October 2025.
 
 **Key Scala 3 Features in Use:**
 - Native `given`/`using` syntax for implicit parameters
@@ -181,7 +181,7 @@ sbt testAll      # Run all tests
 **Notes:**
 - The project is Scala 3 only (no cross-compilation)
 - All dependencies are Scala 3 compatible
-- CI pipeline tests on Scala 3.3.4 with JDK 21
+- CI pipeline tests on Scala 3.3.7 with JDK 25
 - See [INF-001: Scala 3 Migration](../adr/infrastructure/INF-001-scala-3-migration.md) for the architectural decision
 - See [Migration History](../historical/MIGRATION_HISTORY.md) for details on the completed migration
 
@@ -486,7 +486,7 @@ task
 
 ### Continuous Integration
 
-Our CI pipeline automatically runs on Scala 3.3.4:
+Our CI pipeline automatically runs on Scala 3.3.7:
 - ✅ Compilation (`compile-all`)
 - ✅ Code formatting checks (`formatCheck` - includes scalafmt + scalafix)
 - ✅ Static bug detection (`runScapegoat`)
@@ -600,8 +600,8 @@ See [Agent Labels](https://github.com/chippr-robotics/fukuii/blob/develop/.githu
 
 ### Reminders
 
-- **JDK Compatibility**: Code must work on JDK 21
-- **Scala Version**: Code must compile on Scala 3.3.4 (LTS)
+- **JDK Compatibility**: Code must work on JDK 25
+- **Scala Version**: Code must compile on Scala 3.3.7 (LTS)
 - **Logging**: Use structured logging with appropriate levels (DEBUG, INFO, WARN, ERROR)
 - **Logger Configuration**: Update logback configurations when adding new packages
 - **Rebranding**: This is a rebrand from "Mantis" (IOHK) to "Fukuii" (Chippr Robotics) — update any remaining "mantis" or "io.iohk" references
@@ -634,7 +634,7 @@ See [Agent Labels](https://github.com/chippr-robotics/fukuii/blob/develop/.githu
 2. Add comprehensive tests (unit + integration if needed)
 3. Update documentation (README, scaladoc)
 4. Run formatCheck and linters
-5. Ensure JDK 21 compatibility
+5. Ensure JDK 25 compatibility
 ```
 
 **When refactoring:**
@@ -650,9 +650,9 @@ See [Agent Labels](https://github.com/chippr-robotics/fukuii/blob/develop/.githu
 1. Always use the latest stable versions to avoid future update cycles
 2. Check the GitHub Advisory Database for known vulnerabilities
 3. Verify compatibility with project requirements:
-   - JDK 21 compatibility
-   - Scala 3.3.4 support (primary version)
-4. Test thoroughly on JDK 21
+   - JDK 25 compatibility
+   - Scala 3.3.7 support (primary version)
+4. Test thoroughly on JDK 25
 5. Update version numbers in project/Dependencies.scala
 6. Document any breaking changes or migration steps
 7. Update security-sensitive dependencies (Netty, BouncyCastle, etc.) to latest patch versions
@@ -663,7 +663,7 @@ See [Agent Labels](https://github.com/chippr-robotics/fukuii/blob/develop/.githu
 Before submitting a PR, verify:
 - [ ] `sbt formatCheck` passes
 - [ ] `sbt compile-all` succeeds
-- [ ] `sbt testAll` passes (on JDK 21)
+- [ ] `sbt testAll` passes (on JDK 25)
 - [ ] `sbt "IntegrationTest / test"` passes for integration tests
 - [ ] No new compiler warnings introduced
 - [ ] Documentation updated for user-facing changes

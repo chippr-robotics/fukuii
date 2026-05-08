@@ -1,6 +1,10 @@
 package com.chipprbots.scalanet.discovery.ethereum.v4.mocks
 
-import cats.effect.{Resource, IO, Ref}
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+
+import cats.effect.{IO, Resource}
 import cats.effect.std.Queue
 import com.chipprbots.scalanet.peergroup.PeerGroup
 import com.chipprbots.scalanet.peergroup.PeerGroup.ServerEvent
@@ -26,10 +30,10 @@ class MockPeerGroup[A, M](
     Resource.make(
       for {
         channel <- getOrCreateChannel(to)
-        _ <- IO(channel.refCount.increment())
+        _ <- IO(channel.refCount.incrementAndGet())
       } yield channel
     ) { channel =>
-      IO(channel.refCount.decrement())
+      IO(channel.refCount.decrementAndGet()).void
     }
   }
 
@@ -39,8 +43,8 @@ class MockPeerGroup[A, M](
   def createServerChannel(from: A): IO[MockChannel[A, M]] =
     for {
       channel <- IO(new MockChannel[A, M](processAddress, from))
-      _ <- IO(channel.refCount.increment())
-      event = ChannelCreated(channel, IO(channel.refCount.decrement()))
+      _ <- IO(channel.refCount.incrementAndGet())
+      event = ChannelCreated(channel, IO(channel.refCount.decrementAndGet()).void)
       _ <- serverEventsQueue.offer(event)
     } yield channel
 }
@@ -53,31 +57,33 @@ object MockPeerGroup {
 class MockChannel[A, M](
     override val from: A,
     override val to: A
-)(implicit val s: Scheduler)
-    extends Channel[A, M] {
+) extends Channel[A, M] {
 
   // In lieu of actually closing the channel,
-  // just count how many times t was opened and released.
-  val refCount = AtomicInt(0)
+  // just count how many times it was opened and released.
+  val refCount = new AtomicInteger(0)
 
-  private val messagesFromSUT = ConcurrentQueue[Task].unsafe[ChannelEvent[M]](BufferCapacity.Unbounded())
-  private val messagesToSUT = ConcurrentQueue[Task].unsafe[ChannelEvent[M]](BufferCapacity.Unbounded())
+  // Synchronously-constructible blocking queues — the netty-thread pattern that
+  // monix's `ConcurrentQueue.unsafe(Unbounded)` provided in the original Scala 2
+  // version. Wrapping in IO at the access point keeps the test ergonomics clean.
+  private val messagesFromSUT = new LinkedBlockingQueue[ChannelEvent[M]]()
+  private val messagesToSUT = new LinkedBlockingQueue[ChannelEvent[M]]()
 
   def isClosed: Boolean =
     refCount.get() == 0
 
   // Messages coming from the System Under Test.
   override def sendMessage(message: M): IO[Unit] =
-    messagesFromSUT.offer(MessageReceived(message))
+    IO(messagesFromSUT.put(MessageReceived(message)))
 
-  // Messages consumed by the System Under Test.
+  // Messages consumed by the System Under Test. Blocks until an event arrives.
   override def nextChannelEvent: IO[Option[Channel.ChannelEvent[M]]] =
-    messagesToSUT.poll.map(Some(_))
+    IO.blocking(Some(messagesToSUT.take()))
 
   // Send a message from the test.
   def sendMessageToSUT(message: M): IO[Unit] =
-    messagesToSUT.offer(MessageReceived(message))
+    IO(messagesToSUT.put(MessageReceived(message)))
 
   def nextMessageFromSUT(timeout: FiniteDuration = 250.millis): IO[Option[ChannelEvent[M]]] =
-    messagesFromSUT.poll.map(Some(_)).timeoutTo(timeout, IO.pure(None))
+    IO.blocking(Option(messagesFromSUT.poll(timeout.toMillis, TimeUnit.MILLISECONDS)))
 }

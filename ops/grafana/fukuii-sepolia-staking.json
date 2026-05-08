@@ -1,0 +1,392 @@
+{
+  "annotations": { "list": [] },
+  "description": "Sepolia staking operator dashboard — combined EL (Fukuii) + CL (Lighthouse) view of everything that matters for a validator.",
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "datasource": "Prometheus",
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "options": {
+        "content": "<div style=\"text-align:center;padding:8px 0\"><span style=\"font-size:28px;letter-spacing:4px;font-weight:200;color:#b4a7d6\">SEPOLIA</span><span style=\"font-size:28px;letter-spacing:4px;font-weight:200;color:#93c47d\"> STAKING</span><span style=\"font-size:28px;letter-spacing:4px;font-weight:200;color:#6fa8dc\"> OPERATIONS</span><br/><span style=\"font-size:12px;color:#999;letter-spacing:2px\">fukuii (EL) + lighthouse (CL) — single pane</span></div>",
+        "mode": "html"
+      },
+      "transparent": true,
+      "type": "text"
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Beacon chain sync status. 1 = synced to head, 0 = syncing.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            { "options": { "0": { "color": "#e06666", "text": "SYNCING" }, "1": { "color": "#93c47d", "text": "SYNCED" } }, "type": "value" }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#e06666", "value": null }, { "color": "#93c47d", "value": 1 }] }
+        }
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 3 },
+      "id": 1,
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
+      "title": "CL Sync",
+      "type": "stat",
+      "targets": [{ "expr": "sync_eth2_synced{job=\"lighthouse-sepolia\"}", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "How far behind the beacon chain head we are. Low = healthy, growing = falling behind.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#93c47d", "value": null }, { "color": "#f6b26b", "value": 32 }, { "color": "#e06666", "value": 1024 }] },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 3 },
+      "id": 2,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "CL Sync Distance (slots)",
+      "type": "stat",
+      "targets": [{ "expr": "slotclock_present_slot{job=\"lighthouse-sepolia\"} - notifier_head_slot{job=\"lighthouse-sepolia\"}", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Current beacon chain head slot.",
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "fixed", "fixedColor": "#b4a7d6" }, "unit": "none" }
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 8, "y": 3 },
+      "id": 3,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "CL Head Slot",
+      "type": "stat",
+      "targets": [{ "expr": "notifier_head_slot{job=\"lighthouse-sepolia\"}", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Latest payload block executed by the EL via Engine API newPayload.",
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "#6fa8dc" }, "unit": "none" } },
+      "gridPos": { "h": 5, "w": 4, "x": 12, "y": 3 },
+      "id": 4,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "EL Latest Payload",
+      "type": "stat",
+      "targets": [{ "expr": "app_engine_latest_payload_block{instance=\"fukuii-sepolia\"}", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Wall-clock age of the most recent payload the EL executed. Should stay under one slot (12s); if it climbs the EL is falling behind the CL.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#93c47d", "value": null }, { "color": "#f6b26b", "value": 24 }, { "color": "#e06666", "value": 60 }] },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 3 },
+      "id": 5,
+      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "EL Block Age",
+      "type": "stat",
+      "targets": [{ "expr": "(time() - app_engine_latest_payload_timestamp{instance=\"fukuii-sepolia\"}) and (app_engine_latest_payload_timestamp{instance=\"fukuii-sepolia\"} > 0)", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Active validators in the beacon state.",
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "#ffd966" }, "unit": "none" } },
+      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 3 },
+      "id": 6,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Active Validators",
+      "type": "stat",
+      "targets": [{ "expr": "beacon_head_state_active_validators_total{job=\"lighthouse-sepolia\"}", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Finalized epoch. Should advance every ~6.4 minutes (32 slots).",
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "#93c47d" }, "unit": "none" } },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 8 },
+      "id": 7,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Finalized Epoch",
+      "type": "stat",
+      "targets": [{ "expr": "beacon_finalized_epoch{job=\"lighthouse-sepolia\"}", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Current justified epoch. Lagging finalization by 1 epoch is healthy.",
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "#6fa8dc" }, "unit": "none" } },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 8 },
+      "id": 8,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Justified Epoch",
+      "type": "stat",
+      "targets": [{ "expr": "beacon_current_justified_epoch{job=\"lighthouse-sepolia\"}", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "CL libp2p peers actively in the beacon block mesh — the peers we receive blocks from.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#e06666", "value": null }, { "color": "#f6b26b", "value": 8 }, { "color": "#93c47d", "value": 25 }] },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 8 },
+      "id": 9,
+      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "CL Block Mesh Peers",
+      "type": "stat",
+      "targets": [{ "expr": "sum(block_mesh_peers_per_client{job=\"lighthouse-sepolia\"})", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "EL peers handshaked (incoming + outgoing).",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#e06666", "value": null }, { "color": "#f6b26b", "value": 5 }, { "color": "#93c47d", "value": 15 }] },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 8 },
+      "id": 10,
+      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "EL Peers",
+      "type": "stat",
+      "targets": [{ "expr": "app_network_peers_incoming_handshaked_gauge{instance=\"fukuii-sepolia\"} + app_network_peers_outgoing_handshaked_gauge{instance=\"fukuii-sepolia\"}", "refId": "A" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "newPayload outcomes from the CL. Sustained INVALID is the loudest alarm a staking operator can have.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 0, "stacking": { "mode": "normal", "group": "A" } },
+          "unit": "ops"
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "valid" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#93c47d" } }] },
+          { "matcher": { "id": "byName", "options": "syncing" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#f6b26b" } }] },
+          { "matcher": { "id": "byName", "options": "invalid" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#e06666" } }] }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "id": 20,
+      "options": { "legend": { "calcs": ["lastNotNull", "sum"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "title": "newPayload status mix",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(app_engine_newpayload_valid{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "valid", "refId": "A" },
+        { "expr": "rate(app_engine_newpayload_syncing{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "syncing", "refId": "B" },
+        { "expr": "rate(app_engine_newpayload_invalid{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "invalid", "refId": "C" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Time the CL spends in EL Engine API calls. p99 > 2s means the CL may struggle to publish blocks on time.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "id": 21,
+      "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "title": "CL → EL request latency (Lighthouse)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (le, method) (rate(execution_layer_request_times_bucket{job=\"lighthouse-sepolia\"}[5m])))", "legendFormat": "p50 {{method}}", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, sum by (le, method) (rate(execution_layer_request_times_bucket{job=\"lighthouse-sepolia\"}[5m])))", "legendFormat": "p95 {{method}}", "refId": "B" },
+        { "expr": "histogram_quantile(0.99, sum by (le, method) (rate(execution_layer_request_times_bucket{job=\"lighthouse-sepolia\"}[5m])))", "legendFormat": "p99 {{method}}", "refId": "C" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Block flow: CL head slot vs EL latest payload (left axis is the CL slot, right axis is the EL block number).",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 15, "lineInterpolation": "smooth", "lineWidth": 2, "spanNulls": true }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "EL latest payload" }, "properties": [{ "id": "custom.axisPlacement", "value": "right" }] }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 20 },
+      "id": 30,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Chain progress — CL slot vs EL block",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "notifier_head_slot{job=\"lighthouse-sepolia\"}", "legendFormat": "CL head slot", "refId": "A" },
+        { "expr": "slotclock_present_slot{job=\"lighthouse-sepolia\"}", "legendFormat": "Wall-clock slot", "refId": "B" },
+        { "expr": "app_engine_latest_payload_block{instance=\"fukuii-sepolia\"}", "legendFormat": "EL latest payload", "refId": "C" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Forkchoice updates from CL. Should match newPayload rate plus extra fcU-only refreshes for proposers.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 0, "stacking": { "mode": "normal", "group": "A" } },
+          "unit": "ops"
+        }
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 20 },
+      "id": 31,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" } },
+      "title": "Engine API call rate",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(app_engine_newpayload_total{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "newPayload/s", "refId": "A" },
+        { "expr": "rate(app_engine_forkchoice_total{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "forkchoiceUpdated/s", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Validator participation by epoch — gwei attesting to the target. Drops indicate slot-level network or fork-choice trouble.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 25, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true },
+          "unit": "decgbytes"
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 28 },
+      "id": 40,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Target-attesting balance (gwei progressive)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "beacon_participation_curr_epoch_target_attesting_gwei_progressive_total{job=\"lighthouse-sepolia\"} / 1e18", "legendFormat": "current epoch", "refId": "A" },
+        { "expr": "beacon_participation_prev_epoch_target_attesting_gwei_progressive_total{job=\"lighthouse-sepolia\"} / 1e18", "legendFormat": "previous epoch", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Sync committee participation per slot. 512 = full attendance.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 15, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 28 },
+      "id": 41,
+      "options": { "legend": { "calcs": ["lastNotNull", "min", "mean"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Sync committee per slot",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "beacon_sync_comm_observation_slot_signers{job=\"lighthouse-sepolia\"}", "legendFormat": "signers", "refId": "A" },
+        { "expr": "beacon_sync_comm_observation_slot_aggregators{job=\"lighthouse-sepolia\"}", "legendFormat": "aggregators", "refId": "B" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Mesh peers per CL client implementation — diversity matters for liveness.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true, "stacking": { "mode": "normal", "group": "A" } },
+          "unit": "none"
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 35 },
+      "id": 50,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" } },
+      "title": "CL block-mesh peers per client",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "block_mesh_peers_per_client{job=\"lighthouse-sepolia\"}", "legendFormat": "{{client}}", "refId": "A" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "EL peer counts and churn — sustained blacklist activity points to bad peers or buggy protocol handling.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true }
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 35 },
+      "id": 51,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" } },
+      "title": "EL peers and blacklist",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "app_network_peers_incoming_handshaked_gauge{instance=\"fukuii-sepolia\"}", "legendFormat": "incoming", "refId": "A" },
+        { "expr": "app_network_peers_outgoing_handshaked_gauge{instance=\"fukuii-sepolia\"}", "legendFormat": "outgoing", "refId": "B" },
+        { "expr": "app_network_peers_blacklisted_gauge{instance=\"fukuii-sepolia\"}", "legendFormat": "blacklisted", "refId": "C" },
+        { "expr": "rate(app_network_peers_blacklisted_p2pGroup_counter_total{instance=\"fukuii-sepolia\"}[5m])", "legendFormat": "p2p blacklist/s", "refId": "D" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Resource use across both processes — keep an eye on heap headroom and EL+CL CPU together.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true },
+          "unit": "bytes"
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 42 },
+      "id": 60,
+      "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Memory usage — EL JVM heap + CL RSS",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "jvm_memory_bytes_used{area=\"heap\",instance=\"fukuii-sepolia\"}", "legendFormat": "EL heap used", "refId": "A" },
+        { "expr": "jvm_memory_bytes_max{area=\"heap\",instance=\"fukuii-sepolia\"}", "legendFormat": "EL heap max", "refId": "B" },
+        { "expr": "process_resident_memory_bytes{job=\"lighthouse-sepolia\"}", "legendFormat": "CL RSS", "refId": "C" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "description": "Disk used by the CL store — beacon DB + freezer.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 25, "lineInterpolation": "smooth", "lineWidth": 1, "spanNulls": true, "stacking": { "mode": "normal", "group": "A" } },
+          "unit": "bytes"
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 42 },
+      "id": 61,
+      "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" } },
+      "title": "CL store size",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "store_disk_db_size{job=\"lighthouse-sepolia\"}", "legendFormat": "hot DB", "refId": "A" },
+        { "expr": "store_freezer_db_size{job=\"lighthouse-sepolia\"}", "legendFormat": "freezer", "refId": "B" }
+      ]
+    },
+    {
+      "gridPos": { "h": 2, "w": 24, "x": 0, "y": 49 },
+      "id": 99,
+      "options": {
+        "content": "<div style=\"text-align:center;padding:4px 0\"><span style=\"font-size:10px;color:#666;letter-spacing:3px\">SEPOLIA STAKING OPS</span> <span style=\"color:#555\">|</span> <span style=\"font-size:10px;color:#666\">EL: Fukuii</span> <span style=\"color:#555\">|</span> <span style=\"font-size:10px;color:#666\">CL: Lighthouse</span> <span style=\"color:#555\">|</span> <span style=\"font-size:10px;color:#666\">Chippr Robotics</span></div>",
+        "mode": "html"
+      },
+      "transparent": true,
+      "type": "text"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 37,
+  "style": "dark",
+  "tags": ["fukuii", "sepolia", "staking", "consensus", "engine-api"],
+  "time": { "from": "now-3h", "to": "now" },
+  "title": "Sepolia Staking Operations",
+  "uid": "sepolia-staking-ops",
+  "version": 1
+}

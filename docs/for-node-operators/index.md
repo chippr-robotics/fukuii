@@ -12,14 +12,14 @@ sbt assembly
 java -Xmx4g \
   -Dfukuii.datadir=~/.fukuii/mordor \
   -Dfukuii.network=mordor \
-  -jar target/scala-3.3.4/fukuii-assembly-0.1.240.jar mordor
+  -jar target/scala-3.3.7/fukuii-assembly-0.1.240.jar mordor
 
 # Run on ETC mainnet
 java -Xmx4g \
   -Dfukuii.datadir=~/.fukuii/etc \
   -Dfukuii.network=etc \
   -Dfukuii.sync.do-fast-sync=true \
-  -jar target/scala-3.3.4/fukuii-assembly-0.1.240.jar etc
+  -jar target/scala-3.3.7/fukuii-assembly-0.1.240.jar etc
 ```
 
 ## Runbooks

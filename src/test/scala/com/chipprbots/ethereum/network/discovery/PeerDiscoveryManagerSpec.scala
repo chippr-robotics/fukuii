@@ -16,7 +16,6 @@ import cats.effect.Resource
 import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.Future
-import scala.concurrent.duration._
 import scala.math.Ordering.Implicits._
 import scala.util.control.NoStackTrace
 
@@ -158,10 +157,14 @@ class PeerDiscoveryManagerSpec
         .returning(sampleKnownUris)
         .once()
 
+      // getRandomNodes is wrapped in IO.defer in the manager (PR #1090) so the
+      // mock is only invoked when the random-node stream is pulled. This test
+      // only exercises GetDiscoveredNodesInfo (which uses getNodes), so allow
+      // any call count including zero.
       (() => discoveryService.getRandomNodes)
         .expects()
         .returning(IO(sampleNodes.map(toENode).toSet))
-        .atLeastOnce()
+        .anyNumberOfTimes()
 
       (() => discoveryService.getNodes)
         .expects()
@@ -217,10 +220,14 @@ class PeerDiscoveryManagerSpec
         .returning(sampleKnownUris)
         .once()
 
+      // getRandomNodes is wrapped in IO.defer in the manager (PR #1090) so the
+      // mock is only invoked when the random-node stream is pulled. This test
+      // only exercises GetDiscoveredNodesInfo (which uses getNodes), so allow
+      // any call count including zero.
       (() => discoveryService.getRandomNodes)
         .expects()
         .returning(IO(sampleNodes.map(toENode).toSet))
-        .atLeastOnce()
+        .anyNumberOfTimes()
 
       (() => discoveryService.getNodes)
         .expects()
@@ -245,10 +252,14 @@ class PeerDiscoveryManagerSpec
       override lazy val discoveryConfig: DiscoveryConfig =
         defaultConfig.copy(discoveryEnabled = true, reuseKnownNodes = false)
 
+      // getRandomNodes is wrapped in IO.defer in the manager (PR #1090) so the
+      // mock is only invoked when the random-node stream is pulled. This test
+      // only exercises GetDiscoveredNodesInfo (which uses getNodes), so allow
+      // any call count including zero.
       (() => discoveryService.getRandomNodes)
         .expects()
         .returning(IO.raiseError(new RuntimeException("Oh no!") with NoStackTrace))
-        .atLeastOnce()
+        .anyNumberOfTimes()
 
       (() => discoveryService.getNodes)
         .expects()
@@ -270,6 +281,7 @@ class PeerDiscoveryManagerSpec
       val randomNodes: Set[Node] = sampleNodes.take(2)
       val lookupCount = new AtomicInteger(0)
 
+      @scala.annotation.unused
       implicit val nodeOrd: Ordering[ENode] =
         Ordering.by(_.id.value.toByteArray.toSeq)
 

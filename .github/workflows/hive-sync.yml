@@ -1,18 +1,8 @@
 name: Hive · sync
 
 on:
-  push:
-    branches: [main, master, develop]
-    paths:
-      - 'src/**'
-      - 'build.sbt'
-      - 'version.sbt'
-      - 'project/**'
-      - 'hive/**'
-      - '.github/workflows/_hive-sim.yml'
-      - '.github/workflows/hive-sync.yml'
   pull_request:
-    branches: [main, master, develop]
+    branches: [main, master]
     paths:
       - 'src/**'
       - 'build.sbt'
@@ -21,8 +11,6 @@ on:
       - 'hive/**'
       - '.github/workflows/_hive-sim.yml'
       - '.github/workflows/hive-sync.yml'
-  schedule:
-    - cron: '30 4 * * *'
   workflow_dispatch:
     inputs:
       hive_ref:
@@ -39,7 +27,7 @@ permissions:
 
 concurrency:
   group: hive-sync-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   run:
@@ -49,3 +37,30 @@ jobs:
       label: sync
       sim_timelimit: ${{ github.event.inputs.sim_timelimit || '40m' }}
       hive_ref: ${{ github.event.inputs.hive_ref || 'master' }}
+      # Cross-client sync: each listed client takes a turn as the source and
+      # every client (including itself) is tested as a sink against it. With
+      # `fukuii,go-ethereum,nethermind` we get fukuii↔geth and fukuii↔nethermind
+      # interop in addition to the (less informative) fukuii↔fukuii self-test.
+      # besu was tried first but its sink config requires `--Sync min peers: 5`
+      # and hive only provides 1 peer, so every besu-sink test deadlocks at the
+      # peer-count check — masking real interop issues. nethermind has no such
+      # constraint.
+      clients: 'fukuii,go-ethereum,nethermind'
+      # Gate the build on fukuii-touching tests only. Upstream pairs like
+      # geth↔nethermind or nethermind↔nethermind can fail for reasons that
+      # have nothing to do with fukuii (and we have no leverage to fix);
+      # surfacing them in the summary is useful, gating on them is not.
+      gate_pattern: 'fukuii'
+      # The sync simulator gives each test a hard-coded 60s budget for the
+      # sink to fully sync 3000 blocks. With parallelism=4 on a 2-core
+      # GitHub runner, four EL JVMs (fukuii + geth + nethermind + a 4th)
+      # warm up concurrently and contend for CPU during the critical first
+      # ~10s of startup, blowing the 60s budget on flaky tests like
+      # `sync fukuii from go-ethereum`. parallelism=2 cut the worst flakes
+      # but the JVM under JIT warmup is still contending with one other EL
+      # for the 2 cores and occasionally tips past the 60s budget — the
+      # `eth_simulateV1` PR reliably hit this. parallelism=1 fully
+      # serializes the suite (~2× wall time) and gives every fukuii sink
+      # a full core for its 5–10 s JVM warmup, eliminating the timeout
+      # flake without touching the upstream hive 60s timeout.
+      parallelism: 1

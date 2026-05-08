@@ -142,13 +142,32 @@ class BlockPreparator(
     val blobGasCost = stx.tx match {
       case bt: com.chipprbots.ethereum.domain.BlobTransaction =>
         val blobGasUsed = BigInt(bt.blobVersionedHashes.size) * BigInt(131072)
-        val blobBaseFee = blockHeader.excessBlobGas
-          .map(eg => computeBlobBaseFee(eg, blockHeader.unixTimestamp))
-          .getOrElse(BigInt(1))
+        // eth_simulateV1's blockOverrides.blobBaseFee lets the caller force a
+        // specific blob fee that doesn't necessarily match what excessBlobGas
+        // would derive (e.g. blobBaseFee=0 when excessBlobGas=0 would yield 1).
+        val blobBaseFee = _simulateBlobBaseFeeOverride.getOrElse(
+          blockHeader.excessBlobGas
+            .map(eg => computeBlobBaseFee(eg, blockHeader.unixTimestamp))
+            .getOrElse(BigInt(1))
+        )
         blobGasUsed * blobBaseFee
       case _ => BigInt(0)
     }
-    val upfrontTotal = calculateUpfrontGas(stx.tx).toBigInt + blobGasCost
+    // EIP-1559 / EELS: the pre-execution balance deduction is
+    //   gasLimit * effectiveGasPrice + tx.value + blobGasCost
+    // NOT gasLimit * maxFee. The balance *check* (in validate) still requires
+    // gasLimit * maxFee to be available — that's the reservation — but the
+    // actual amount removed from the sender is only what will ever be spent
+    // at the effective gas price. See EELS prague/transactions.py
+    // `effective_gas_fee = tx.gas * effective_gas_price`.
+    //
+    // Consequence: `BALANCE(sender)` inside the VM sees the post-upfront
+    // balance computed with effectiveGasPrice, matching geth/nethermind.
+    // Surfaces on hive `bcEIP1559/burnVerify_Cancun` which reads BALANCE inside
+    // the contract to verify the burn invariant.
+    val effectiveGasPrice = Transaction.effectiveGasPrice(stx.tx, blockHeader.baseFee)
+    val executionUpfront = stx.tx.gasLimit * effectiveGasPrice
+    val upfrontTotal = executionUpfront + blobGasCost
     worldStateProxy.saveAccount(
       senderAddress,
       account.increaseBalance(UInt256(-upfrontTotal)).increaseNonce()
@@ -372,21 +391,25 @@ class BlockPreparator(
       blockHeader: BlockHeader,
       world: InMemoryWorldStateProxy,
       precompileRelocations: Map[Address, Address] = Map.empty,
-      traceTransfers: Boolean = false
+      traceTransfers: Boolean = false,
+      blobBaseFeeOverride: Option[BigInt] = None
   )(implicit blockchainConfig: BlockchainConfig): TxResult = {
     // Store simulation flags temporarily for runVM to pick up
     _simulatePrecompileRelocations = precompileRelocations
     _simulateTraceTransfers = traceTransfers
+    _simulateBlobBaseFeeOverride = blobBaseFeeOverride
     try executeTransaction(stx, senderAddress, blockHeader, world)
     finally {
       _simulatePrecompileRelocations = Map.empty
       _simulateTraceTransfers = false
+      _simulateBlobBaseFeeOverride = None
     }
   }
 
   // Thread-local-like storage for precompile relocations during simulation
   @volatile private var _simulatePrecompileRelocations: Map[Address, Address] = Map.empty
   @volatile private var _simulateTraceTransfers: Boolean = false
+  @volatile private var _simulateBlobBaseFeeOverride: Option[BigInt] = None
 
   private[ledger] def executeTransaction(
       stx: SignedTransaction,
@@ -456,13 +479,11 @@ class BlockPreparator(
     }
     val totalGasToRefund = gasLimit - executionGasToPayToMiner
 
-    // Upfront charge was gasLimit * tx.gasPrice (= maxFeePerGas for EIP-1559).
-    // For legacy/Type-1 txs effectiveGasPrice == tx.gasPrice, so this matches
-    // (gasLimit - executionGas) * gasPrice. For EIP-1559/4844/7702 txs the
-    // refund also needs to return gasLimit * (maxFeePerGas - effectiveGasPrice)
-    // so the sender only pays executionGas * effectiveGasPrice net.
-    val maxFeeOverpay = UInt256(stx.tx.gasPrice) - gasPrice
-    val refundAmount = (totalGasToRefund * gasPrice) + (UInt256(gasLimit) * maxFeeOverpay)
+    // Upfront in `updateSenderAccountBeforeExecution` is gasLimit * effectiveGasPrice
+    // (post-EIP-1559: NOT maxFeePerGas — see comment there). So the refund only
+    // needs to return the unused portion: (gasLimit - executionGas) * effectiveGasPrice.
+    // No maxFee overpay to undo.
+    val refundAmount = totalGasToRefund * gasPrice
     val refundGasFn = pay(senderAddress, refundAmount.toUInt256, withTouch = false) _
     // EIP-1559: miner receives only the priority fee (effectiveGasPrice - baseFee).
     // The baseFee portion is burned on ETH chains, or credited to treasury on ETC (ECIP-1111).

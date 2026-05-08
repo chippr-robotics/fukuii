@@ -15,8 +15,8 @@ This document establishes performance baselines for critical operations in the F
 - **CPU**: 2 cores (Intel Xeon)
 - **Memory**: 7 GB RAM
 - **Storage**: SSD
-- **JVM**: OpenJDK 21 (Temurin)
-- **Scala**: 3.3.4
+- **JVM**: OpenJDK 25 (Temurin)
+- **Scala**: 3.3.7
 
 ### Benchmark Framework
 - **Tool**: ScalaTest with custom timing utilities

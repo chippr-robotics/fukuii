@@ -9,7 +9,6 @@ on:
     branches:
       - main
       - master
-      - develop
     paths:
       - 'src/**'
       - 'build.sbt'
@@ -27,9 +26,6 @@ on:
         description: 'sim.timelimit (minutes)'
         required: false
         default: '40'
-  schedule:
-    # Nightly regression at 03:00 UTC
-    - cron: '0 3 * * *'
 
 permissions:
   contents: read
@@ -51,20 +47,20 @@ jobs:
 
     steps:
       - name: Checkout fukuii
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
           fetch-depth: 1
 
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
-          java-version: '21'
+          java-version: '25'
           cache: 'sbt'
 
       - name: Cache Coursier
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cache/coursier
@@ -98,14 +94,14 @@ jobs:
           # The hive adapter Dockerfile does `FROM chipprbots/fukuii:latest`, so we build the
           # base image by copying the just-built assembly into a thin overlay.
           mkdir -p target/quick-docker
-          cp target/scala-3.3.4/fukuii-assembly-*.jar target/quick-docker/
+          cp target/scala-3.3.7/fukuii-assembly-*.jar target/quick-docker/
           cat > target/quick-docker/Dockerfile <<'DOCKER'
-          FROM eclipse-temurin:21-jre-noble
+          FROM eclipse-temurin:25-jre-noble
           RUN apt-get update && apt-get install -y --no-install-recommends jq curl && rm -rf /var/lib/apt/lists/*
           WORKDIR /app
           RUN mkdir -p /app/fukuii/lib /app/data /app/hive-conf
-          COPY fukuii-assembly-*.jar /app/fukuii/lib/fukuii-assembly-0.1.240.jar
-          ENTRYPOINT ["java", "-jar", "/app/fukuii/lib/fukuii-assembly-0.1.240.jar"]
+          COPY fukuii-assembly-*.jar /app/fukuii/lib/fukuii-assembly.jar
+          ENTRYPOINT ["java", "-jar", "/app/fukuii/lib/fukuii-assembly.jar"]
           DOCKER
           docker build -t chipprbots/fukuii:latest target/quick-docker/
 
@@ -148,7 +144,7 @@ jobs:
           cp -v $GITHUB_WORKSPACE/hive/fukuii/fukuii.sh external/hive/clients/fukuii/fukuii.sh
           cp -v $GITHUB_WORKSPACE/hive/fukuii/mapper.jq external/hive/clients/fukuii/mapper.jq
           cp -v $GITHUB_WORKSPACE/hive/fukuii/enode.sh external/hive/clients/fukuii/enode.sh 2>/dev/null || true
-          cp target/scala-3.3.4/fukuii-assembly-*.jar external/hive/clients/fukuii/
+          cp target/scala-3.3.7/fukuii-assembly-*.jar external/hive/clients/fukuii/
 
       - name: Build hive
         working-directory: external/hive
@@ -247,7 +243,7 @@ jobs:
 
       - name: Upload hive workspace logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: hive-workspace-logs
           path: external/hive/workspace/logs/

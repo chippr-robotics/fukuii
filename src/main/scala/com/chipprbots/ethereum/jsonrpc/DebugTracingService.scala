@@ -15,7 +15,6 @@ import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
-import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.ledger.StxLedger
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -261,7 +260,7 @@ class DebugTracingService(
     */
   private def selectTracer(
       config: TraceConfig,
-      preWorld: Option[com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy] = None
+      preWorld: Option[com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy]
   ): ExecutionTracer =
     config.tracer.filterNot(_.isEmpty) match {
       case None | Some("structLogger") =>

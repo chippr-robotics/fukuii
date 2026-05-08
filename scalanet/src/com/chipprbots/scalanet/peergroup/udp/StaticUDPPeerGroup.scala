@@ -86,6 +86,28 @@ class StaticUDPPeerGroup[M] private (
       clientChannels <- clientChannelsRef.get
     } yield serverChannels.size + clientChannels.values.map(_.size).sum
 
+  /** Send raw bytes to a remote address, bypassing the typed `Codec[M]`.
+    * Used by side-channel consumers (e.g. the discv5 async pipeline) that
+    * own their own framing and need to write back without going through
+    * the v4 packet encoding path.
+    *
+    * Fire-and-forget at the IO level — the netty `writeAndFlush` is async.
+    * Errors are surfaced as IO failures.
+    */
+  def sendRaw(remoteAddress: InetSocketAddress, bytes: scodec.bits.ByteVector): IO[Unit] =
+    raiseIfShutdown >> IO {
+      boundChannelOpt match {
+        case Some(channel) if channel.isActive =>
+          val buf = io.netty.buffer.Unpooled.wrappedBuffer(bytes.toByteBuffer)
+          val packet = new io.netty.channel.socket.DatagramPacket(buf, remoteAddress)
+          val _ = channel.writeAndFlush(packet)
+        case Some(_) =>
+          throw new IOException(s"Channel inactive; cannot send to $remoteAddress")
+        case None =>
+          throw new IllegalStateException("UDP server channel not initialized")
+      }
+    }
+
   private val raiseIfShutdown =
     isShutdownRef.get
       .ifM(IO.raiseError(new IllegalStateException("The peer group has already been shut down.")), IO.unit)
@@ -281,7 +303,53 @@ class StaticUDPPeerGroup[M] private (
                         val remoteAddress = datagram.sender
                         try {
                           logger.debug(s"Server channel at $localAddress read message from $remoteAddress")
-                          handleMessage(remoteAddress, tryDecodeDatagram(datagram))
+                          // Read the incoming bytes once; both the sync responder and the
+                          // async decode path share this view. `nioBuffer` is a window over
+                          // the netty ByteBuf — it shares storage but advances independently.
+                          val incomingBits = BitVector(datagram.content.nioBuffer)
+
+                          // Sync fast-path: dispatch to the configured responder.
+                          // The 3-state result decides whether to write a reply
+                          // and whether to fall through to the async path.
+                          val syncResult: StaticUDPPeerGroup.SyncResult =
+                            try config.syncResponder(remoteAddress, incomingBits)
+                            catch {
+                              case NonFatal(ex) =>
+                                logger.warn(
+                                  s"Sync responder threw for $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
+                                )
+                                StaticUDPPeerGroup.SyncResult.Pass
+                            }
+                          syncResult match {
+                            case StaticUDPPeerGroup.SyncResult.Reply(replyBits) =>
+                              try {
+                                val replyBuf = Unpooled.wrappedBuffer(replyBits.toByteBuffer)
+                                val replyPacket = new DatagramPacket(replyBuf, remoteAddress)
+                                ctx.writeAndFlush(replyPacket)
+                                ()
+                              } catch {
+                                case NonFatal(ex) =>
+                                  logger.warn(
+                                    s"Sync responder write failed for $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
+                                  )
+                              }
+                              // Reply also runs the async path — the v4 dedup
+                              // pattern relies on async-side bookkeeping while
+                              // sync answers fast.
+                              handleMessage(remoteAddress, tryDecodeDatagram(datagram))
+
+                            case StaticUDPPeerGroup.SyncResult.Stop =>
+                              // Claimed via side channel (e.g. v5 demuxer
+                              // pushed to a v5 queue). Suppress the default
+                              // v4 async path to avoid DecodingError noise on
+                              // v5-shaped bytes that v4's codec won't parse.
+                              ()
+
+                            case StaticUDPPeerGroup.SyncResult.Pass =>
+                              // Not claimed — fall through to the async path
+                              // for the v4 codec (existing default behavior).
+                              handleMessage(remoteAddress, tryDecodeDatagram(datagram))
+                          }
                         } catch {
                           case NonFatal(ex) =>
                             handleError(remoteAddress, ex)
@@ -367,17 +435,81 @@ class StaticUDPPeerGroup[M] private (
 }
 
 object StaticUDPPeerGroup extends StrictLogging {
+  /** Synchronous fast-path responder. Invoked on the netty event-loop thread for every
+    * inbound datagram BEFORE the async cats-effect channel-replication path runs.
+    *
+    * The return type is a 3-state ADT:
+    *   - [[SyncResult.Pass]]:        not handled — fall through to the async path
+    *                                  (existing v4 default; async also runs after).
+    *   - [[SyncResult.Reply(bytes)]]: write `bytes` back to the sender on the netty
+    *                                  thread, AND continue to the async path. This
+    *                                  keeps the v4 dedup pattern working — the sync
+    *                                  responder writes the Pong fast and the async
+    *                                  path still runs for bonding bookkeeping while
+    *                                  skipping its own duplicate Pong via dedup.
+    *   - [[SyncResult.Stop]]:        the responder claimed the packet by side
+    *                                  channel (e.g. a demuxer pushed bytes to a v5
+    *                                  dispatch queue). Suppress the default async
+    *                                  decode path so we don't emit DecodingError
+    *                                  noise on v5-shaped bytes.
+    *
+    * Used by the discv4 layer to send `Pong` replies inside hive's 300 ms
+    * `waitTime` deadline that the cats-effect IO scheduler can't meet under load.
+    * Used by the discv5 demuxer to route discv5 packets to a side-channel queue
+    * for the v5 async pipeline without polluting the v4 codec's error stream.
+    *
+    * Implementations MUST be fast (< 5 ms) and MUST NOT throw — any exception is
+    * caught by the peer group and treated as [[SyncResult.Pass]].
+    */
+  type SyncResponder = (InetSocketAddress, BitVector) => SyncResult
+
+  sealed trait SyncResult
+  object SyncResult {
+
+    /** Not handled — continue with the async path. Default v4 behavior. */
+    case object Pass extends SyncResult
+
+    /** Claimed with a reply written back to the sender, AND the async path
+      * still runs after (for v4 bonding/kademlia bookkeeping). */
+    final case class Reply(bytes: BitVector) extends SyncResult
+
+    /** Claimed with no reply, AND the async path is suppressed. The responder
+      * either completed handling via a side channel (v5 demuxer pushing to
+      * a separate queue) or deliberately silenced the packet (negative tests). */
+    case object Stop extends SyncResult
+  }
+
+  /** Default no-op responder — always passes to the async path. */
+  val NoSyncResponder: SyncResponder = (_, _) => SyncResult.Pass
+
+  /** Compose a list of [[SyncResponder]]s. Each is tried in order; the first
+    * non-`Pass` result wins. If all return `Pass`, the chain returns `Pass`. */
+  def chainResponders(responders: SyncResponder*): SyncResponder =
+    (sender, bits) => {
+      var result: SyncResult = SyncResult.Pass
+      val it = responders.iterator
+      while (it.hasNext && result == SyncResult.Pass) {
+        result = it.next()(sender, bits)
+      }
+      result
+    }
+
   case class Config(
       bindAddress: InetSocketAddress,
       processAddress: InetMultiAddress,
       // Maximum number of messages in the queue associated with the channel; 0 means unlimited.
       channelCapacity: Int,
       // Maximum size of an incoming message; 0 means the maximum 64KiB is allocated for each message.
-      receiveBufferSizeBytes: Int
+      receiveBufferSizeBytes: Int,
+      // Optional synchronous response hook; see `SyncResponder`.
+      // No default here because Scala 3 forbids overloaded `apply` methods that
+      // each carry default args. Callers either pass `NoSyncResponder` explicitly
+      // or use the simpler bind-address-only companion `apply` below.
+      syncResponder: SyncResponder
   )
   object Config {
     def apply(bindAddress: InetSocketAddress, channelCapacity: Int = 0, receiveBufferSizeBytes: Int = 0): Config =
-      Config(bindAddress, InetMultiAddress(bindAddress), channelCapacity, receiveBufferSizeBytes)
+      Config(bindAddress, InetMultiAddress(bindAddress), channelCapacity, receiveBufferSizeBytes, NoSyncResponder)
   }
 
   private type ChannelAlloc[M] = (ChannelImpl[M], Release)
@@ -493,7 +625,15 @@ object StaticUDPPeerGroup extends StrictLogging {
         } else {
           IO.unit
         }
-        packet = new DatagramPacket(Unpooled.wrappedBuffer(asBuffer), remoteAddress, localAddress)
+        // Netty's 3-arg DatagramPacket sets the sender address. Passing
+        // `localAddress` (which is the bind address `0.0.0.0:30303` for a wildcard
+        // bind) confuses Netty's NIO driver: under strict source-routing it'll
+        // try to set the source IP to 0.0.0.0 and the kernel rejects (or worse,
+        // sends the packet with sender 0.0.0.0 and the receiver discards it).
+        // Letting Netty default to `null` makes the kernel pick the correct
+        // outgoing interface (the docker bridge IP for hive runs). This is
+        // what unblocks discv4 Ping/Basic and the rest of the discv4 suite.
+        packet = new DatagramPacket(Unpooled.wrappedBuffer(asBuffer), remoteAddress)
         _ <- toTask(nettyChannel.writeAndFlush(packet)).handleErrorWith {
           case ex: IOException =>
             // Log the actual IOException to help diagnose the real problem

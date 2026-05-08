@@ -15,7 +15,7 @@ Hunt and eliminate all Scala 3 compilation errors in the fukuii Ethereum Classic
 **Kingdom:** fukuii - Ethereum Classic client (Chordoes Fukuii - the worm controlling the zombie mantis)
 **Architecture:** Akka actors, functional patterns, PoW mining
 **Critical domains:** EVM execution, ETC consensus, Ethash mining, cryptography
-**Current state:** Scala 3.3.4 (LTS) - migration complete, now maintaining
+**Current state:** Scala 3.3.7 (LTS) - migration complete, now maintaining
 **Dark target:** Zero compilation errors and warnings in Scala 3
 
 ## The Hunt

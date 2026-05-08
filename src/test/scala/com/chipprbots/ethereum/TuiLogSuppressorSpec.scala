@@ -32,7 +32,7 @@ class TuiLogSuppressorSpec extends AnyFlatSpec with Matchers {
     val suppressor = TuiLogSuppressor()
 
     // First call - result depends on whether console appenders exist
-    val firstResult = suppressor.suppressConsoleLogs()
+    val _ = suppressor.suppressConsoleLogs()
 
     // Second call should also succeed (idempotent - returns true if already suppressed or no appenders)
     val secondResult = suppressor.suppressConsoleLogs()
