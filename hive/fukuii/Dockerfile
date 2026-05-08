@@ -20,7 +20,11 @@ RUN chmod +x /fukuii.sh /hive-bin/enode.sh
 
 EXPOSE 8545 8546 8551 30303 30303/udp
 
-# Check HTTP RPC port — always available regardless of PoW/PoS mode
-ENV HIVE_CHECK_LIVE_PORT=8545
+# Check Engine API authrpc port (8551) — last port to bind during startup.
+# Hive uses this for its TCP-readiness check; once 8551 accepts connections, the
+# sync simulator can POST engine_newPayload immediately without race. Using 8545
+# (JSON-RPC HTTP) caused 0.7–2s connection-refused fast-fails in `ethereum/sync`
+# tests 4/7/8/16 because fukuii's Engine API server binds AFTER JSON-RPC HTTP.
+ENV HIVE_CHECK_LIVE_PORT=8551
 
 ENTRYPOINT ["/fukuii.sh"]
