@@ -607,10 +607,12 @@ class TrieNodeHealingCoordinatorSpec
 
     coordinator ! Messages.StartTrieNodeHealing(stateRoot) // seeds root as reqId=1
     // Queue 2 more tasks so 3 requests are dispatched concurrently (default maxInFlightPerPeer=5)
-    coordinator ! Messages.QueueMissingNodes(Seq(
-      (Seq(ByteString(Array[Byte](0x01))), kec256(ByteString("missing-node-2"))),
-      (Seq(ByteString(Array[Byte](0x02))), kec256(ByteString("missing-node-3")))
-    ))
+    coordinator ! Messages.QueueMissingNodes(
+      Seq(
+        (Seq(ByteString(Array[Byte](0x01))), kec256(ByteString("missing-node-2"))),
+        (Seq(ByteString(Array[Byte](0x02))), kec256(ByteString("missing-node-3")))
+      )
+    )
     coordinator ! Messages.HealingPeerAvailable(peer)
     networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds) // reqId=1
     networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds) // reqId=2

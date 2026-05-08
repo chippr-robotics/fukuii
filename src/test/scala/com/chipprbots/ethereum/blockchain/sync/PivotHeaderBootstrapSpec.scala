@@ -100,7 +100,10 @@ class PivotHeaderBootstrapSpec
     parent.expectMsgType[PivotHeaderBootstrap.Failed](3.seconds)
   }
 
-  it should "not send Failed on empty headers (WaitForPeer issued, no attempt consumed)" taggedAs (UnitTest, SyncTest) in {
+  it should "not send Failed on empty headers (WaitForPeer issued, no attempt consumed)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
     val peersClient = TestProbe()
     val parent = TestProbe()
     mkBootstrap(peersClient, parent, waitForPeerDelay = 50.millis)

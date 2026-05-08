@@ -182,7 +182,9 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
     * @return
     *   accumulated data or None if key doesn't exist
     */
-  private def pathTraverse[T](acc: T, searchKey: Array[Byte], proofMode: Boolean = false)(op: (T, Option[MptNode]) => T): Option[T] = {
+  private def pathTraverse[T](acc: T, searchKey: Array[Byte], proofMode: Boolean = false)(
+      op: (T, Option[MptNode]) => T
+  ): Option[T] = {
 
     @tailrec
     def pathTraverse(
