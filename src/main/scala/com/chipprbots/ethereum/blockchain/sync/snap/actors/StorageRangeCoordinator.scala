@@ -78,12 +78,6 @@ class StorageRangeCoordinator(
     mutable.Map[BigInt, (Peer, Seq[StorageTask], BigInt)]() // requestId -> (peer, tasks, requestedBytes)
   private val completedTasks = mutable.ArrayBuffer[StorageTask]()
 
-  // Track consecutive timeouts per peer. When a peer hits the threshold, it's marked stateless.
-  // This handles the case where ETC mainnet peers silently stop responding (timeout) when
-  // their snap serve window expires, rather than returning empty responses with proofs.
-  private val peerConsecutiveTimeouts = mutable.Map[String, Int]()
-  private val consecutiveTimeoutThreshold = 3 // Mark stateless after 3 consecutive timeouts
-
   // Global consecutive task failure counter: triggers ForceCompleteStorage when all SNAP peers
   // stop serving storage data. Resets to zero on any successful slot download.
   private var consecutiveTaskFailures: Int = 0
@@ -670,7 +664,6 @@ class StorageRangeCoordinator(
       // tasks so other peers can pick them up without waiting for the 30s request timeout.
       // Mirrors AccountRangeCoordinator.PeerUnavailable (go-ethereum revertRequests pattern).
       knownAvailablePeers.find(_.id.value == peerId).foreach(knownAvailablePeers -= _)
-      peerConsecutiveTimeouts.remove(peerId)
       peerCooldownUntilMs.remove(peerId)
       val inFlight = activeTasks.filter { case (_, (peer, _, _)) => peer.id.value == peerId }.keys.toSeq
       if (inFlight.nonEmpty) {
@@ -797,7 +790,6 @@ class StorageRangeCoordinator(
       pivotRefreshRequested = false
       lastDispatchOrResponseMs = System.currentTimeMillis()
       peerCooldownUntilMs.clear()
-      peerConsecutiveTimeouts.clear()
       peerBatchSize.clear()
       peerBatchSuccessStreak.clear()
       peerResponseBytesTarget.clear()
@@ -1050,7 +1042,6 @@ class StorageRangeCoordinator(
             s"Account storage empty/changed at current pivot — healing will validate."
         )
         // Peer is healthy — clear any penalty state it accumulated.
-        peerConsecutiveTimeouts.remove(peer.id.value)
         statelessPeers.remove(peer.id.value)
         lastDispatchOrResponseMs = System.currentTimeMillis()
         consecutiveUnproductiveRefreshes = 0
@@ -1111,7 +1102,6 @@ class StorageRangeCoordinator(
 
     // Non-empty response with actual slot data — clear stateless marking and reset backoff.
     statelessPeers.remove(peer.id.value)
-    peerConsecutiveTimeouts.remove(peer.id.value)
     consecutiveUnproductiveRefreshes = 0
     lastDispatchOrResponseMs = System.currentTimeMillis()
 
@@ -1245,15 +1235,6 @@ class StorageRangeCoordinator(
       log.warning(s"Storage range request timeout for ${batchTasks.size} accounts from peer ${peer.id.value}")
       recordPeerCooldown(peer, "request timeout")
       adjustResponseBytesOnFailure(peer, "request timeout")
-
-      // Track consecutive timeouts — on ETC mainnet, peers silently stop responding when
-      // the snap serve window expires. After N consecutive timeouts, treat as stateless.
-      val count = peerConsecutiveTimeouts.getOrElse(peer.id.value, 0) + 1
-      peerConsecutiveTimeouts.update(peer.id.value, count)
-      if (count >= consecutiveTimeoutThreshold) {
-        log.info(s"Peer ${peer.id.value} hit $count consecutive storage timeouts — treating as stateless")
-        markPeerStateless(peer)
-      }
 
       batchTasks.foreach { task =>
         task.pending = false

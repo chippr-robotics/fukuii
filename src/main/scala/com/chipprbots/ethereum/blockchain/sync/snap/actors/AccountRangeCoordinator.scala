@@ -117,19 +117,6 @@ class AccountRangeCoordinator(
           s"GetAccountRange this session. Bytecode/healing remain available."
       )
       true
-    } else if (reason.contains("Request timeout")) {
-      // Peer timed out — track consecutive timeouts.
-      // On ETC mainnet, peers silently stop responding when the snap serve window expires
-      // rather than returning explicit empty responses. After N consecutive timeouts,
-      // we treat the peer as stateless so pivot refresh can trigger.
-      val count = peerConsecutiveTimeouts.getOrElse(peer.id.value, 0) + 1
-      peerConsecutiveTimeouts.update(peer.id.value, count)
-      if (count >= consecutiveTimeoutThreshold) {
-        log.info(s"Peer ${peer.id.value} hit $count consecutive timeouts — treating as stateless")
-        true
-      } else {
-        false
-      }
     } else {
       false
     }
@@ -406,12 +393,6 @@ class AccountRangeCoordinator(
     )
   }
 
-  // Track consecutive timeouts per peer. When a peer hits the threshold, it's marked stateless.
-  // This handles the case where ETC mainnet peers silently stop responding (timeout) when
-  // their snap serve window expires, rather than returning empty responses with proofs.
-  private val peerConsecutiveTimeouts = mutable.Map[String, Int]()
-  private val consecutiveTimeoutThreshold = 3 // Mark stateless after 3 consecutive timeouts
-
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
   private val peerCooldownDefault = 30.seconds
@@ -564,7 +545,6 @@ class AccountRangeCoordinator(
       // Clear per-peer adaptive state (new root = new response characteristics)
       peerResponseBytesTarget.clear()
       peerCooldownUntilMs.clear()
-      peerConsecutiveTimeouts.clear()
       // Note: do NOT reset consecutiveUnproductiveRefreshes here.
       // Only reset when we receive real account data (proof the new root is servable).
 
@@ -612,12 +592,10 @@ class AccountRangeCoordinator(
       if (newLimit > 0) tryRedispatchPendingTasks()
 
     case PeerUnavailable(peerId) =>
-      // Peer disconnected — remove from available set, reset its timeout counter so network-level
-      // disconnects don't accumulate toward the stateless threshold.
+      // Peer disconnected — remove from available set and re-queue in-flight tasks.
       // go-ethereum eth/protocols/snap/sync.go:1621 (revertRequests) and Besu
       // AbstractRetryingPeerTask.java:158 both treat disconnect as transient re-queue, not failure.
       knownAvailablePeers.find(_.id.value == peerId).foreach(knownAvailablePeers -= _)
-      peerConsecutiveTimeouts.remove(peerId)
       peerCooldownUntilMs.remove(peerId)
       // #1184: drain the slots ourselves rather than relying on the worker → TaskFailed
       // cascade. drainActiveTasks sends WorkerRequestCancelled to each affected worker so they
@@ -885,9 +863,6 @@ class AccountRangeCoordinator(
           val estimatedBytes = BigInt(accountCount * 100) // ~100 bytes per account (hash + RLP)
           adjustResponseBytesOnSuccess(peer, responseBytesTargetFor(peer), estimatedBytes)
 
-          // Reset consecutive timeout counter — peer is responsive
-          peerConsecutiveTimeouts.remove(peer.id.value)
-
           // Reset pivot refresh backoff on servable-root evidence: real account data or a boundary proof.
           if (accountCount > 0 || proof.nonEmpty) {
             consecutiveUnproductiveRefreshes = 0
@@ -1145,6 +1120,9 @@ class AccountRangeCoordinator(
         } else {
           // Need more requests for the same interval; re-queue with updated `next`.
           pendingTasks.enqueue(task)
+          // Persist partial range position so a crash mid-range resumes from here,
+          // not the beginning of the range (go-ethereum saveSyncStatus() parity).
+          sendProgressSnapshot()
         }
 
         // Threshold-based flush: only flush to RocksDB when accumulated nodes exceed threshold.

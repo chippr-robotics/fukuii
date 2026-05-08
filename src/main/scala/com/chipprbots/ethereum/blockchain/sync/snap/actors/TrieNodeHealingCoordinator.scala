@@ -42,10 +42,9 @@ class TrieNodeHealingCoordinator(
   // Task management — each task has a pathset (for GetTrieNodes) and a hash (for verification).
   // ArrayDeque (circular buffer) gives O(1) amortized head/tail operations (#1167). The previous
   // immutable `Seq` did O(n) on every `:+` and head-drop — quadratic at healing scale.
-  private case class HealingEntry(pathset: Seq[ByteString], hash: ByteString, retries: Int = 0)
+  private case class HealingEntry(pathset: Seq[ByteString], hash: ByteString)
   private val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
   private var completedTaskCount: Int = 0
-  private var abandonedTaskCount: Int = 0
 
   /** Dedicated dispatcher for the batched raw-node RocksDB flush. Tests inject their own EC; production looks up
     * `healing-writer-dispatcher` from the actor system. Keeps the blocking write off `sync-dispatcher` so other sync
@@ -53,10 +52,6 @@ class TrieNodeHealingCoordinator(
     */
   private val healingWriterEc: ExecutionContext =
     healingWriterEcOverride.getOrElse(context.system.dispatchers.lookup("healing-writer-dispatcher"))
-
-  // Per-task retry limit: after this many timeouts/failures, skip the task.
-  // At ~6s per timeout cycle, 20 retries = ~2 minutes of trying per node.
-  private val maxRetriesPerTask: Int = 20
 
   // Global stagnation detection: if no nodes healed for this duration, declare
   // healing complete with a warning. Prevents infinite loops when all peers lack
@@ -122,6 +117,10 @@ class TrieNodeHealingCoordinator(
   // which the buffer almost always exceeds, locking healThrottle at MaxThrottle forever.
   private val ThrottleUpFillRatio = 0.8
   private val RateMeasurementImpact = 0.005 // geometric EMA weight per node
+
+  // Crash-recovery DFS: emit frontier in batches so healing starts before traversal completes.
+  // go-ethereum trie.Sync.Missing() alignment — bounded working set rather than full upfront BFS.
+  private val FrontierBatchSize = 1000
 
   // Track last known available peers for re-dispatch after failures
   private val knownAvailablePeers = mutable.Set[Peer]()
@@ -203,6 +202,9 @@ class TrieNodeHealingCoordinator(
   // Internal message for async flush completion
   private case class FlushComplete(count: Int)
 
+  // Internal message for async frontier rebuild completion (crash-recovery BFS)
+  private case class FrontierRebuilt(entries: Seq[HealingEntry])
+
   /** Synchronous flush — used only for final completion flush (small buffer, safe to block). */
   private def flushRawNodesSync(): Unit =
     if (rawNodeBuffer.nonEmpty) {
@@ -248,18 +250,47 @@ class TrieNodeHealingCoordinator(
 
   override def receive: Receive = {
     case StartTrieNodeHealing(root) =>
-      log.info(s"Starting trie node healing for state root ${Hex.toHexString(root.take(8).toArray)}")
-      // ARCH-ROOT-SEED: Seed immediately with root node (Besu-style top-down discovery).
-      // Prior: waited 3+ hours for walk results. Now: healing starts instantly.
-      // When root is healed, discoverMissingChildren() discovers all children inline.
-      // Walk becomes validation-only — its results remain additive (dedup prevents duplicates).
       val emptyPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-      queueNodes(Seq((Seq(emptyPath), root)))
+      if (isNodeInStorage(root)) {
+        // ARCH-HEAL-RESTART: Root already healed — crash/restart mid-healing detected.
+        // Rebuild the frontier by traversing locally-stored trie nodes instead of re-requesting
+        // known nodes from the network (go-ethereum trie.Sync.Missing() analogue).
+        // Recovery cost: O(healed_nodes × local_read) vs O(healed_nodes × network_rtt).
+        log.info(
+          s"[HEAL-RESTART] Root ${Hex.toHexString(root.take(8).toArray)} already in local storage " +
+            s"— rebuilding frontier via local DFS in batches of $FrontierBatchSize " +
+            s"(crash recovery, go-ethereum trie.Sync.Missing() depth-first pattern)"
+        )
+        val selfRef = self
+        val ec = healingWriterEc
+        import scala.concurrent.Future
+        Future {
+          val frontier = mutable.Buffer.empty[HealingEntry]
+          val visited = mutable.Set.empty[ByteString]
+          rebuildFrontierDFS(root, Seq(emptyPath), isStor = false, frontier, visited,
+            batch => selfRef ! FrontierRebuilt(batch))
+          if (frontier.nonEmpty) selfRef ! FrontierRebuilt(frontier.toSeq)
+        }(ec)
+      } else {
+        // ARCH-ROOT-SEED: Fresh start — seed root and let inline discovery populate the queue.
+        log.info(
+          s"[HEAL] Root ${Hex.toHexString(root.take(8).toArray)} not yet in storage " +
+            s"— seeding root for inline child discovery (Besu-aligned top-down)"
+        )
+        queueNodes(Seq((Seq(emptyPath), root)))
+        lastHealedAtMs = System.currentTimeMillis()
+      }
+
+    case FrontierRebuilt(entries) =>
       log.info(
-        s"[HEAL] Root ${Hex.toHexString(root.take(8).toArray)} seeded — " +
-          s"inline child discovery will populate work queue top-down (Besu-aligned)"
+        s"[HEAL-RESTART] Frontier rebuild complete: ${entries.size} missing nodes identified " +
+          s"— resuming healing from crash-recovery frontier"
       )
+      if (entries.isEmpty)
+        log.warning("[HEAL-RESTART] Frontier is empty after BFS — trie may already be fully healed or storage is corrupt")
+      queueNodes(entries.map(e => (e.pathset, e.hash)))
       lastHealedAtMs = System.currentTimeMillis()
+      tryRedispatchPendingTasks()
 
     case QueueMissingNodes(nodes) =>
       log.info(s"Queuing ${nodes.size} missing nodes for healing")
@@ -810,6 +841,134 @@ class TrieNodeHealingCoordinator(
 
   private def isComplete: Boolean =
     pendingTasks.isEmpty && activeRequests.isEmpty
+
+  /** Rebuild the healing frontier from locally-stored trie nodes after a crash/restart.
+    *
+    * Iterative DFS (depth-first via ArrayDeque stack). Mirrors go-ethereum trie.Sync's
+    * depth-prioritized queue: drilling deep finds frontier nodes immediately, keeping the
+    * working stack O(depth × branching_factor) ≈ O(1024) rather than the O(frontier_width)
+    * growth that a BFS queue exhibits on ETC mainnet. Runs on healingWriterEc.
+    *
+    * For each node hash:
+    *   - in local storage  → already healed; push children onto the DFS stack
+    *   - not in storage    → missing; buffer and emit via onBatch every FrontierBatchSize entries
+    *
+    * onBatch is called inline whenever the buffer reaches FrontierBatchSize. The caller is
+    * responsible for emitting any remaining buffered entries after this method returns.
+    */
+  private def rebuildFrontierDFS(
+      startHash: ByteString,
+      startPathset: Seq[ByteString],
+      isStor: Boolean,
+      frontier: mutable.Buffer[HealingEntry],
+      visited: mutable.Set[ByteString],
+      onBatch: Seq[HealingEntry] => Unit
+  ): Unit = {
+    import com.chipprbots.ethereum.mpt.{BranchNode, ExtensionNode, HashNode, LeafNode}
+    import com.chipprbots.ethereum.mpt.HexPrefix
+    import com.chipprbots.ethereum.domain.Account
+    import scala.util.control.NonFatal
+
+    // DFS stack — bounded to O(depth × branching_factor) ≈ 1024 entries vs BFS O(frontier_width).
+    val stack = mutable.ArrayDeque[(ByteString, Seq[ByteString], Boolean)]()
+    stack.append((startHash, startPathset, isStor))
+    var visitedCount = 0
+    var frontierCount = 0
+
+    while (stack.nonEmpty) {
+      val (hash, pathset, isStorageTrie) = stack.removeLast()
+      if (!visited.contains(hash)) {
+        visited += hash
+        visitedCount += 1
+        if (visitedCount % 10000 == 0)
+          log.info(
+            s"[HEAL-RESTART-DFS] Progress: $visitedCount nodes visited, $frontierCount frontier nodes found, " +
+              s"stack depth ${stack.size}"
+          )
+
+        val nodeOpt = try Some(mptStorage.get(hash.toArray)) catch { case _: Exception => None }
+        nodeOpt match {
+          case None =>
+            // Not in storage — missing node, buffer for healing
+            frontier += HealingEntry(pathset, hash)
+            frontierCount += 1
+            if (frontier.size >= FrontierBatchSize) {
+              onBatch(frontier.toSeq)
+              frontier.clear()
+            }
+
+          case Some(node) =>
+            // Already healed — push children onto the DFS stack
+            val compact = pathset.last.toArray
+            val nibbles = HexPrefix.decode(compact)._1
+            try {
+              node match {
+                case branch: BranchNode =>
+                  for (i <- 0 until 16)
+                    branch.children(i) match {
+                      case hashChild: HashNode =>
+                        val childHash = ByteString(hashChild.hashNode)
+                        if (!visited.contains(childHash)) {
+                          val childNibbles = nibbles :+ i.toByte
+                          val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
+                          val childPathset =
+                            if (isStorageTrie) Seq(pathset.head, childCompact) else Seq(childCompact)
+                          stack.append((childHash, childPathset, isStorageTrie))
+                        }
+                      case _ => // inline-encoded child — already resolved
+                    }
+
+                case ext: ExtensionNode =>
+                  ext.next match {
+                    case hashChild: HashNode =>
+                      val childHash = ByteString(hashChild.hashNode)
+                      if (!visited.contains(childHash)) {
+                        val childNibbles = nibbles ++ ext.sharedKey.toArray
+                        val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
+                        val childPathset =
+                          if (isStorageTrie) Seq(pathset.head, childCompact) else Seq(childCompact)
+                        stack.append((childHash, childPathset, isStorageTrie))
+                      }
+                    case _ =>
+                  }
+
+                case leaf: LeafNode if !isStorageTrie =>
+                  // Account trie leaf — seed storage trie root if not yet healed
+                  Account(leaf.value).foreach { account =>
+                    if (
+                      account.storageRoot != Account.EmptyStorageRootHash &&
+                      !visited.contains(account.storageRoot)
+                    ) {
+                      val leafNibbles = leaf.key.toArray
+                      val allNibbles = nibbles ++ leafNibbles
+                      if (allNibbles.length == 64) {
+                        val accountHashBytes =
+                          allNibbles.grouped(2).map(g => ((g(0) << 4) | g(1)).toByte).toArray
+                        val accountHash = ByteString(accountHashBytes)
+                        val emptyStoragePath =
+                          ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+                        stack.append((account.storageRoot, Seq(accountHash, emptyStoragePath), true))
+                      }
+                    }
+                  }
+
+                case _ => // storage trie leaf, NullNode, HashNode inline — no children to traverse
+              }
+            } catch {
+              case NonFatal(e) =>
+                log.debug(
+                  s"[HEAL-RESTART-DFS] Cannot traverse stored node ${Hex.toHexString(hash.take(4).toArray)}: " +
+                    s"${e.getMessage} — skipping"
+                )
+            }
+        }
+      }
+    }
+
+    log.info(
+      s"[HEAL-RESTART-DFS] Complete: $visitedCount nodes traversed, $frontierCount missing nodes identified"
+    )
+  }
 
   /** Inline child discovery after each healed node — Besu/geth scheduler-driven alignment. Decodes the healed node,
     * discovers child hashes, checks storage, queues missing children. Makes healing self-feeding: root → children →

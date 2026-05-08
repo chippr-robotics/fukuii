@@ -8,6 +8,8 @@ import org.apache.pekko.actor.Scheduler
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 
+import org.bouncycastle.util.encoders.Hex
+
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.Peer
@@ -72,17 +74,27 @@ trait PeerListSupportNg { self: Actor with ActorLogging =>
       .sortBy(_.peerInfo.maxBlockNumber)(bigIntReverseOrdering)
       .headOption
 
+  // Overridden in PeersClient to exempt maintained peers (Besu alignment: PeerDenylistManager skips maintained peers).
+  protected def maintainedNodeIdHexes: Set[String] = Set.empty
+
   def blacklistIfHandshaked(peerId: PeerId, duration: FiniteDuration, reason: BlacklistReason): Unit =
     handshakedPeers.get(peerId) match {
       case Some(peerWithInfo) =>
-        log.debug(
-          "Blacklisting peer {} ({}) for {} ms. Reason: {}",
-          peerId,
-          peerWithInfo.peer.remoteAddress,
-          duration.toMillis,
-          reason
-        )
-        blacklist.add(peerId, duration, reason)
+        val isMaintained = peerWithInfo.peer.nodeId.exists { nodeId =>
+          maintainedNodeIdHexes.contains(Hex.toHexString(nodeId.toArray))
+        }
+        if (isMaintained) {
+          log.debug("Skipping blacklist for maintained peer {} (reason: {})", peerId, reason)
+        } else {
+          log.debug(
+            "Blacklisting peer {} ({}) for {} ms. Reason: {}",
+            peerId,
+            peerWithInfo.peer.remoteAddress,
+            duration.toMillis,
+            reason
+          )
+          blacklist.add(peerId, duration, reason)
+        }
       case None =>
         log.debug("Attempted to blacklist non-handshaked peer {}", peerId)
     }

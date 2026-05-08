@@ -564,6 +564,68 @@ class PeerManagerSpec
     createdPeers.size shouldBe 2
   }
 
+  // ── Suite 7: Inbound-wins tiebreaker (Fix-A — run-17 issue A) ─────────────────────────────────
+
+  behavior.of("maintained peer inbound-wins tiebreaker (Fix-A)")
+
+  it should "drop the outbound and keep the inbound when a maintained peer's inbound handshakes while outbound is already handshaked" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    val hexNodeId = "ff" * 64
+    val nodeIdBytes = ByteString(Hex.decode(hexNodeId))
+    val maintainedUri = new URI(s"enode://$hexNodeId@127.0.0.9:30303")
+
+    start()
+
+    // Step 1: outbound initiated for the maintained peer
+    peerManager ! PeerManagerActor.AddMaintainedPeer(maintainedUri)
+    createdPeers(0).probe.expectMsgType[ConnectTo](3.seconds)
+
+    // Step 2: outbound handshakes — enters handshakedPeers
+    createdPeers(0).probe.reply(
+      PeerEvent.PeerHandshakeSuccessful(
+        Peer(
+          PeerId(hexNodeId),
+          new InetSocketAddress("127.0.0.9", 30303),
+          createdPeers(0).probe.ref,
+          incomingConnection = false,
+          nodeId = Some(nodeIdBytes)
+        ),
+        initialPeerInfo
+      )
+    )
+
+    // Step 3: inbound from the same maintained peer host arrives simultaneously
+    val inboundTcp = TestProbe()
+    val inboundAddress = new InetSocketAddress("127.0.0.9", 55555)
+    peerManager ! PeerManagerActor.HandlePeerConnection(inboundTcp.ref, inboundAddress)
+    createdPeers(1).probe.expectMsg(PeerActor.HandleConnection(inboundTcp.ref, inboundAddress))
+
+    // Step 4: inbound handshakes with same nodeId — tiebreaker: inbound wins
+    createdPeers(1).probe.reply(
+      PeerEvent.PeerHandshakeSuccessful(
+        Peer(
+          PeerId(hexNodeId),
+          inboundAddress,
+          createdPeers(1).probe.ref,
+          incomingConnection = true,
+          nodeId = Some(nodeIdBytes)
+        ),
+        initialPeerInfo
+      )
+    )
+
+    // Outbound should receive DisconnectPeer(AlreadyConnected) — inbound wins, outbound dropped
+    createdPeers(0).probe.expectMsg(PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected))
+
+    // After outbound Terminated fires, no new outbound should be scheduled
+    // (maintained peer is now held by the stable inbound)
+    createdPeers(0).probe.ref ! PoisonPill
+    testScheduler.timePasses(peerConfiguration.connectRetryDelay + 1.second)
+    createdPeers.size shouldBe 2
+  }
+
   behavior.of("outgoingConnectionDemand")
 
   it should "try to connect to at least min-outgoing-peers but no more than max-outgoing-peers" taggedAs (

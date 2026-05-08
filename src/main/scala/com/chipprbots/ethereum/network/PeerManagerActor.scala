@@ -285,10 +285,12 @@ class PeerManagerActor(
       val wasAdded = !maintainedPeersByNodeId.contains(nodeId)
       maintainedPeersByNodeId = maintainedPeersByNodeId + (nodeId -> uri)
       sender() ! AddMaintainedPeerResponse(wasAdded)
+      peerEventBus ! Publish(PeerEvent.MaintainedPeersChanged(maintainedPeersByNodeId.keySet))
       connectWith(uri, connectedPeers)
 
     case RemoveMaintainedPeer(nodeId) =>
       maintainedPeersByNodeId = maintainedPeersByNodeId - nodeId
+      peerEventBus ! Publish(PeerEvent.MaintainedPeersChanged(maintainedPeersByNodeId.keySet))
 
     // ── Geth-compatible trusted peer / max-peers management ───────────────
     // core-geth references: node/api.go AddTrustedPeer/RemoveTrustedPeer, eth/api_admin.go MaxPeers
@@ -383,9 +385,11 @@ class PeerManagerActor(
       connectedPeers.hasHandshakedWith(nodeId) ||
         connectedPeers.isConnectionHandled(remoteAddress) ||
         connectedPeers.hasIncomingPendingFromHost(uri.getHost)
-    // Trusted peers bypass the max peer limit (core-geth: trustedConn flag skips maxPeers check)
-    val isTrusted = trustedPeersByNodeId.contains(nodeIdHex)
-    val isOutgoingPeersNotMaxValue = isTrusted || connectedPeers.outgoingPeersCount < effectiveMaxOutgoing
+    // Trusted + maintained peers bypass the max outgoing limit.
+    // Besu: DefaultPeerPrivileges.canExceedConnectionLimits checks maintainedPeers set.
+    // go-ethereum: trustedConn flag skips maxPeers for trusted only; Fukuii extends this to maintained peers.
+    val isMaintainedOrTrusted = trustedPeersByNodeId.contains(nodeIdHex) || maintainedPeersByNodeId.contains(nodeIdHex)
+    val isOutgoingPeersNotMaxValue = isMaintainedOrTrusted || connectedPeers.outgoingPeersCount < effectiveMaxOutgoing
 
     val validConnection = for {
       validHandler <- validateConnection(remoteAddress, OutgoingConnectionAlreadyHandled(uri), !alreadyConnectedToPeer)
@@ -516,12 +520,23 @@ class PeerManagerActor(
         context.become(listening(connectedPeers))
 
       } else if (handshakedPeer.nodeId.exists(connectedPeers.hasHandshakedWith)) {
-        // Even though we do already validations for this, we might have missed it someone tried connecting to us at the
-        // same time as we do
-        log.debug(s"Disconnecting from ${handshakedPeer.remoteAddress} as we are already connected to them")
-        handshakedPeer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected)
-        // Keep the current connectedPeers state; the Terminated message will clean up the peer
-        context.become(listening(connectedPeers))
+        val nodeId = handshakedPeer.nodeId.get
+        val existingOutboundOpt = connectedPeers.peers.values
+          .find(p => p.nodeId.contains(nodeId) && !p.incomingConnection)
+        if (handshakedPeer.incomingConnection && isMaintained && existingOutboundOpt.isDefined) {
+          // Inbound wins for maintained peers — drop the outbound, keep the inbound.
+          // Mirrors go-ethereum's static-pool removal when a peer connects either direction,
+          // preventing core-geth's static-dial timer from firing a new outbound every 30-45s.
+          log.debug("Maintained peer {} inbound wins tiebreak — dropping outbound", handshakedPeer.remoteAddress)
+          existingOutboundOpt.foreach(_.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected))
+          pendingMaintainedConnections.remove(handshakedPeer.ref)
+          peerStatusCache = peerStatusCache + (handshakedPeer.id -> PeerActor.Status.Handshaked)
+          context.become(listening(connectedPeers.promotePeerToHandshaked(handshakedPeer)))
+        } else {
+          log.debug(s"Disconnecting from ${handshakedPeer.remoteAddress} as we are already connected to them")
+          handshakedPeer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected)
+          context.become(listening(connectedPeers))
+        }
       } else {
         pendingMaintainedConnections.remove(handshakedPeer.ref)
         peerStatusCache = peerStatusCache + (handshakedPeer.id -> PeerActor.Status.Handshaked)
