@@ -285,7 +285,9 @@ lazy val node = {
         version,
         scalaVersion,
         sbtVersion,
-        BuildInfoKey.action("gitHeadCommit") { git.gitHeadCommit.?.value.flatten.map(_.take(7)).getOrElse("unknown") },
+        // engine_getClientVersionV1 requires `commit` to be exactly 8 hex chars
+        // (4 bytes per execution-apis spec); 7 trips Lighthouse's length check.
+        BuildInfoKey.action("gitHeadCommit") { git.gitHeadCommit.?.value.flatten.map(_.take(8)).getOrElse("unknown") },
         BuildInfoKey.action("gitCurrentBranch") { 
           val branch = git.gitCurrentBranch.?.value.getOrElse("")
           if (branch != null && branch.nonEmpty) branch else "unknown"
