@@ -442,10 +442,17 @@ class EngineApiService(
           blockchainReader.getReceiptsByHash(forkChoiceState.headBlockHash).isEmpty
 
       if (!blockExistsByHash && !isGenesis) {
-        // Head unknown — client is still syncing to this head
+        // Head unknown — client is still syncing to this head. Notify ForkChoiceManager
+        // anyway so its BeaconHead listener (SyncController) can drive SNAP-sync pivot
+        // selection. Without this, post-merge cold-start hangs forever in CL-PIVOT
+        // wait state because the FCU short-circuits before publishBeaconHead fires.
+        forkChoiceManager.applyForkChoiceState(forkChoiceState)
         EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
         Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing)))
       } else if (headOptimistic) {
+        // Same rationale as the unknown-head case: drive ForkChoiceManager so SNAP sync
+        // can re-pivot on the freshest CL head while we're still optimistically caught up.
+        forkChoiceManager.applyForkChoiceState(forkChoiceState)
         EngineApiMetrics.recordForkchoiceUpdated("SYNCING")
         Right(ForkchoiceUpdatedResponse(payloadStatus = PayloadStatusV1(Syncing)))
       } else if (safeUnknown || finalizedUnknown) {
