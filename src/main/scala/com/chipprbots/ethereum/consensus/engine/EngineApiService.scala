@@ -1137,6 +1137,14 @@ object BlobGasUtils {
   val BLOB_BASE_FEE_UPDATE_FRACTION: BigInt = BigInt(3338477)
   // EIP-7691 (Prague): BLOB_BASE_FEE_UPDATE_FRACTION bumped to scale with 9-blob MAX.
   val PRAGUE_BLOB_BASE_FEE_UPDATE_FRACTION: BigInt = BigInt(5007716)
+  // EIP-7892 BPO1/BPO2 update fractions (geth `params.config.go`
+  // `DefaultBPO{1,2}BlobConfig.UpdateFraction`). These scale with each fork's MAX so the
+  // EIP-7918 reserve-price comparison and the `getBlobGasPrice` exponential give the
+  // right answer post-Osaka. Without them, fukuii uses Prague's smaller fraction →
+  // higher computed `blobPrice` → reservePrice ≤ blobPrice almost always → EIP-7918
+  // alternate branch never triggers and we fall back to EIP-4844, mismatching geth.
+  val BPO1_BLOB_BASE_FEE_UPDATE_FRACTION: BigInt = BigInt(8346193)
+  val BPO2_BLOB_BASE_FEE_UPDATE_FRACTION: BigInt = BigInt(11684671)
   val MIN_BLOB_BASE_FEE: BigInt = BigInt(1)
 
   // EIP-7918: BLOB_BASE_COST = 2^13 — the per-blob execution gas cost used in the
@@ -1219,15 +1227,17 @@ object BlobGasUtils {
     fakeExponential(MIN_BLOB_BASE_FEE, excessBlobGas, fraction)
   }
 
-  /** Fork-aware blob-base-fee update fraction. Prague raised it from Cancun's 3338477 to 5007716;
-    * Osaka and the BPO forks inherit the Prague value (no further change documented in the
-    * Sepolia BlobScheduleConfig).
+  /** Fork-aware blob-base-fee update fraction. Each BPO bumps the fraction proportional to
+    * its MAX, matching geth's `params.config.go` `Default{Cancun,Prague,Osaka,BPO1,BPO2}BlobConfig.UpdateFraction`.
+    * Osaka itself reuses the Prague value (Osaka's blob params are unchanged from Prague).
     */
   def updateFractionFor(
       blockTimestamp: Long,
       blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig
   ): BigInt =
-    if (blockchainConfig.isPragueTimestamp(blockTimestamp)) PRAGUE_BLOB_BASE_FEE_UPDATE_FRACTION
+    if (blockchainConfig.isBpo2Timestamp(blockTimestamp)) BPO2_BLOB_BASE_FEE_UPDATE_FRACTION
+    else if (blockchainConfig.isBpo1Timestamp(blockTimestamp)) BPO1_BLOB_BASE_FEE_UPDATE_FRACTION
+    else if (blockchainConfig.isPragueTimestamp(blockTimestamp)) PRAGUE_BLOB_BASE_FEE_UPDATE_FRACTION
     else BLOB_BASE_FEE_UPDATE_FRACTION
 
   /** Compute the expected `excessBlobGas` of a child block given its parent and timestamp.
