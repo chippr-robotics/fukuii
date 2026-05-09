@@ -128,6 +128,28 @@ class BlobGasBpoScheduleSpec extends AnyFlatSpec with Matchers {
     computed shouldBe BigInt(8388378)
   }
 
+  it should "use BPO2 update fraction so high-excess cases still hit the reserve-price branch" in {
+    // Live Sepolia 2026-05-09 BLOB-DIAG sample: high parent.excess (12.7M) where Prague's
+    // smaller updateFraction (5_007_716) would compute blobPrice ≈ 12 * 131072 = 1_572_864
+    // wei, vs reservePrice = 8192 * 44 = 360_448. Prague fraction → blobPrice > reservePrice
+    // → EIP-7918 branch NOT taken → EIP-4844 formula used → 11_971_190 (wrong).
+    //
+    // Geth uses BPO2's larger updateFraction (11_684_671) where blobPrice ≈ 2 * 131072 =
+    // 262_144 < reservePrice → EIP-7918 alt branch IS taken → 13_107_147 (correct).
+    //
+    // This test pins the BPO2 update fraction selection so a regression to Prague's value
+    // would re-introduce the bug seen on live Sepolia post-#1226 merge.
+    val cfg = withForks(prague = Some(pragueTs), osaka = Some(osakaTs), bpo1 = Some(bpo1Ts), bpo2 = Some(bpo2Ts))
+    val computed = BlobGasUtils.expectedExcessBlobGas(
+      parentExcessBlobGas = BigInt(12757622),
+      parentBlobGasUsed = BigInt(1048576), // 8 blobs
+      parentBaseFee = BigInt(44),
+      childTimestamp = bpo2Ts + 100,
+      blockchainConfig = cfg
+    )
+    computed shouldBe BigInt(13107147)
+  }
+
   "BlockchainConfig" should "expose isBpo1Timestamp / isBpo2Timestamp predicates" in {
     val cfg = withForks(bpo1 = Some(bpo1Ts), bpo2 = Some(bpo2Ts))
     cfg.isBpo1Timestamp(bpo1Ts - 1) shouldBe false
