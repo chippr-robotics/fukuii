@@ -20,6 +20,8 @@ services:
     image: chipprbots/fukuii:latest
     container_name: fukuii-sepolia
     restart: unless-stopped
+    mem_limit: 8g
+    memswap_limit: 8g
     ports:
       - "8555:8545"       # JSON-RPC HTTP
       - "8556:8546"       # JSON-RPC WebSocket
@@ -37,11 +39,13 @@ services:
     # symlink instead. Mirrors the pattern in the primary docker-compose.yml.
     entrypoint: ["java"]
     command:
-      - "-Xmx4g"
+      - "-Xmx6g"
       - "-Xms2g"
       - "-Xss10M"
       - "-XX:+UseG1GC"
       - "-XX:MaxGCPauseMillis=200"
+      - "-XX:+HeapDumpOnOutOfMemoryError"
+      - "-XX:HeapDumpPath=/app/data/logs/heapdump.hprof"
       - "-Dconfig.file=/app/conf/sepolia.conf"
       - "-Dfukuii.datadir=/app/data"
       - "-jar"
