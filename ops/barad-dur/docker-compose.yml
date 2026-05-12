@@ -112,8 +112,8 @@ services:
     image: ${FUKUII_IMAGE:-chipprbots/fukuii:latest}
     container_name: fukuii-primary
     restart: unless-stopped
-    mem_limit: 6g
-    memswap_limit: 6g
+    mem_limit: 8g
+    memswap_limit: 8g
     ports:
       - "${FUKUII_PRIMARY_RPC_PORT:-8545}:8545"       # JSON-RPC HTTP (internal)
       - "${FUKUII_PRIMARY_WS_PORT:-8546}:8546"         # JSON-RPC WebSocket (internal)
@@ -131,11 +131,13 @@ services:
     # invoke `java` directly here.
     entrypoint: ["java"]
     command:
-      - "-Xmx4g"
-      - "-Xms1g"
+      - "-Xmx6g"
+      - "-Xms2g"
       - "-Xss10M"
       - "-XX:+UseG1GC"
       - "-XX:MaxGCPauseMillis=200"
+      - "-XX:+HeapDumpOnOutOfMemoryError"
+      - "-XX:HeapDumpPath=/app/data/logs/heapdump.hprof"
       - "-Dconfig.file=/app/conf/etc.conf"
       - "-Dfukuii.datadir=/app/data"
       - "-jar"
