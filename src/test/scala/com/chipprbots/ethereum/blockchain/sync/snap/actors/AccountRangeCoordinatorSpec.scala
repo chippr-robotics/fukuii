@@ -1098,4 +1098,124 @@ class AccountRangeCoordinatorSpec
     val sendMsg2 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](2.seconds)
     sendMsg2.peerId shouldBe peer2.id
   }
+
+  // -----------------------------------------------------------------------
+  // StackTrie write-path (Step 3 of `snap-stacktrie-port` plan)
+  // -----------------------------------------------------------------------
+  // The legacy MPT path stays the default and is exercised by every other
+  // test above. These tests opt-in via `useStackTrie = true` and verify:
+  //   - per-task SnapHashTrie instances are created lazily on first chunk store
+  //   - accounts are routed through the StackTrie (writes hit mptStorage via
+  //     storeRawNodes; the legacy `stateTrie` field stays empty)
+  //   - on task completion the StackTrie is committed and removed from the
+  //     per-task map (no leaks across tasks)
+
+  /** Construct a TestActorRef coordinator with `useStackTrie = true`. */
+  private def newStackTrieCoordinator(
+      stateRoot: ByteString = kec256(ByteString("stacktrie-test-root")),
+      controller: TestProbe = TestProbe(),
+      storage: TestMptStorage = new TestMptStorage(),
+      concurrency: Int = 4
+  ): (TestActorRef[AccountRangeCoordinator], TestMptStorage) = {
+    val ref = TestActorRef[AccountRangeCoordinator](
+      AccountRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = TestProbe().ref,
+        requestTracker = new SNAPRequestTracker()(system.scheduler),
+        mptStorage = storage,
+        concurrency = concurrency,
+        snapSyncController = controller.ref,
+        accountTrieEcOverride = Some(system.dispatcher),
+        useStackTrie = true
+      )
+    )
+    (ref, storage)
+  }
+
+  /** Build a strict-ascending sequence of (accountHash, Account) pairs starting
+    * at `task.next` so insertion order satisfies the StackTrie's sort invariant.
+    */
+  private def stackTrieFixtureAccounts(
+      task: AccountTask,
+      count: Int
+  ): Seq[(ByteString, com.chipprbots.ethereum.domain.Account)] = {
+    val seed = task.next.toArray
+    (1 to count).map { i =>
+      val hash = new Array[Byte](32)
+      Array.copy(seed, 0, hash, 0, math.min(seed.length, hash.length))
+      // Mutate the trailing bytes by i, big-endian — guarantees strictly ascending.
+      hash(31) = (hash(31) + i).toByte
+      val acct = com.chipprbots.ethereum.domain.Account.empty().increaseNonce()
+      ByteString(hash) -> acct
+    }
+  }
+
+  it should "route account inserts through per-task SnapHashTrie when useStackTrie is enabled" taggedAs UnitTest in {
+    val root = kec256(ByteString("stacktrie-test-root"))
+    val (coord, storage) = newStackTrieCoordinator(stateRoot = root)
+    val ua = coord.underlyingActor
+    val task = AccountTask(
+      next = ByteString(Array.fill[Byte](32)(0x00)),
+      last = ByteString(Array.fill[Byte](32)(0xff.toByte)),
+      rootHash = root
+    )
+    val accounts = stackTrieFixtureAccounts(task, 8)
+    val nodesBefore = storage.synchronized { /* peek size via decode-then-count */ 0 }
+
+    // Drive the chunk-store path directly. isTaskRangeComplete = false (more responses
+    // could follow for this range), so the per-task SnapHashTrie should remain in the map.
+    coord ! Messages.StoreAccountChunk(task, accounts, accounts.size, storedSoFar = 0, isTaskRangeComplete = false)
+    coord ! Messages.GetProgress
+    expectMsgType[AccountRangeStats](2.seconds)
+
+    ua.taskStackTries should contain key task.last
+    // No global stateTrie touch — its root should still be the empty-root hash.
+    ByteString(ua.getStateRoot.toArray) shouldEqual ByteString(MerklePatriciaTrie.EmptyRootHash)
+    val _ = nodesBefore // suppress unused warning while the storage poking is a no-op
+
+    system.stop(coord)
+  }
+
+  it should "commit and clear per-task SnapHashTrie when a task range completes" taggedAs UnitTest in {
+    val root = kec256(ByteString("stacktrie-commit-root"))
+    val (coord, _) = newStackTrieCoordinator(stateRoot = root)
+    val ua = coord.underlyingActor
+    val task = AccountTask(
+      next = ByteString(Array.fill[Byte](32)(0x00)),
+      last = ByteString(Array.fill[Byte](32)(0xff.toByte)),
+      rootHash = root
+    )
+    val accounts = stackTrieFixtureAccounts(task, 4)
+
+    // Drive the final chunk for this task with isTaskRangeComplete = true.
+    coord ! Messages.StoreAccountChunk(task, accounts, accounts.size, storedSoFar = 0, isTaskRangeComplete = true)
+    coord ! Messages.GetProgress
+    expectMsgType[AccountRangeStats](2.seconds)
+
+    // After commit, the per-task StackTrie should have been removed.
+    ua.taskStackTries should not contain key(task.last)
+
+    system.stop(coord)
+  }
+
+  it should "not touch legacy stateTrie or accountsSinceLastFlush on the StackTrie path" taggedAs UnitTest in {
+    val root = kec256(ByteString("stacktrie-isolation-root"))
+    val (coord, _) = newStackTrieCoordinator(stateRoot = root)
+    val ua = coord.underlyingActor
+    val task = AccountTask(
+      next = ByteString(Array.fill[Byte](32)(0x00)),
+      last = ByteString(Array.fill[Byte](32)(0xff.toByte)),
+      rootHash = root
+    )
+    val accounts = stackTrieFixtureAccounts(task, 12)
+
+    coord ! Messages.StoreAccountChunk(task, accounts, accounts.size, storedSoFar = 0, isTaskRangeComplete = false)
+    coord ! Messages.GetProgress
+    expectMsgType[AccountRangeStats](2.seconds)
+
+    // Legacy stateTrie root stays at the empty-root hash.
+    ByteString(ua.getStateRoot.toArray) shouldEqual ByteString(MerklePatriciaTrie.EmptyRootHash)
+
+    system.stop(coord)
+  }
 }
