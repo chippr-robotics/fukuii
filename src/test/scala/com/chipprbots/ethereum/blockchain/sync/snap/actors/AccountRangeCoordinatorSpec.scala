@@ -1218,4 +1218,49 @@ class AccountRangeCoordinatorSpec
 
     system.stop(coord)
   }
+
+  it should "honour resumeProgress on the StackTrie path (Step 6 — restart durability)" taggedAs UnitTest in {
+    // Step 6 of the snap-stacktrie-port plan: verify resume cursors work with
+    // useStackTrie = true. The existing `AccountRangeProgress` →
+    // `putSnapSyncProgress` flow already journals per-task cursors to RocksDB;
+    // on restart, the controller passes `resumeProgress` into the coordinator
+    // and each task's `next` is advanced past where the prior session left off.
+    // For the StackTrie path this is sufficient: SnapHashTrie instances are
+    // re-created from scratch (content-addressed nodes on disk remain valid),
+    // and sort enforcement is satisfied because resumed `next` is monotonically
+    // ascending vs. any prior in-memory state (there is none after restart).
+    val root = kec256(ByteString("stacktrie-resume-root"))
+    // With concurrency = 1 the single AccountTask covers the entire 32-byte
+    // hash space, so its `last` boundary is the maximum 32-byte value.
+    val rangeLast = AccountTask.MaxHash32
+    val resumedNext = ByteString(Array.fill[Byte](32)(0x77.toByte)) // mid-range
+
+    val coord = TestActorRef[AccountRangeCoordinator](
+      AccountRangeCoordinator.props(
+        stateRoot = root,
+        networkPeerManager = TestProbe().ref,
+        requestTracker = new SNAPRequestTracker()(system.scheduler),
+        mptStorage = new TestMptStorage(),
+        concurrency = 1, // single range so we can predict task.last
+        snapSyncController = TestProbe().ref,
+        resumeProgress = Map(rangeLast -> resumedNext),
+        accountTrieEcOverride = Some(system.dispatcher),
+        useStackTrie = true
+      )
+    )
+    val ua = coord.underlyingActor
+
+    // The single range's task.next must have been advanced to `resumedNext`,
+    // not the canonical zero-start; sort-enforcement on the per-task
+    // SnapHashTrie will work because every future insert is > resumedNext.
+    val pending = ua.pendingTasks.toList
+    pending should have size 1
+    pending.head.next shouldEqual resumedNext
+    pending.head.last shouldEqual rangeLast
+
+    // No SnapHashTrie has been instantiated yet (lazy creation on first chunk).
+    ua.taskStackTries shouldBe empty
+
+    system.stop(coord)
+  }
 }
