@@ -57,7 +57,16 @@ class StorageRangeCoordinator(
     configMinResponseBytes: Int = 131072,
     deferredMerkleization: Boolean = true,
     flatBatchEntryThreshold: Int = 1000,
-    flatBatchEcOverride: Option[ExecutionContext] = None
+    flatBatchEcOverride: Option[ExecutionContext] = None,
+    /** Phase 2 of the SNAP rewrite (Step 4 of `snap-stacktrie-port` plan).
+      *
+      * When `true`, per-contract storage tries are built with a streaming
+      * `SnapHashTrie` instead of `MerklePatriciaTrie` + `DeferredWriteMptStorage`.
+      * Each contract's trie is constructed in O(depth) memory rather than
+      * holding the whole trie in memory until flush. Same opt-in semantics as
+      * `AccountRangeCoordinator.useStackTrie`.
+      */
+    useStackTrie: Boolean = false
 ) extends Actor
     with ActorLogging {
 
@@ -485,34 +494,60 @@ class StorageRangeCoordinator(
     val localFlatSlotStorage = flatSlotStorage // capture for Future
     val constructionStateRoot = stateRoot // tag with current pivot root
 
+    val localUseStackTrie = useStackTrie
+
     import scala.concurrent.{Future, blocking}
     Future {
       blocking {
         val startMs = System.currentTimeMillis()
 
-        // Batch-local deferred storage — thread-safe: only this Future writes to it.
-        val batchStorage = new DeferredWriteMptStorage(localMptStorage)
-
         // Flat slot storage: accumulate all (accountHash++slotHash → value) writes
         // for a single atomic batch commit alongside trie nodes.
         var flatBatch = localFlatSlotStorage.emptyBatchUpdate
 
-        accountData.foreach { case (accountHash, slots) =>
-          // Sort by key for better trie locality — sequential keys share prefixes,
-          // reducing node reconstructions during insertion
-          val sortedSlots = slots.sortBy(_._1)(ByteStringOrdering)
-          import com.chipprbots.ethereum.mpt.byteStringSerializer
-          var trie = MerklePatriciaTrie[ByteString, ByteString](batchStorage)
-          sortedSlots.foreach { case (slotHash, slotValue) =>
-            trie = trie.put(slotHash, slotValue)
+        if (localUseStackTrie) {
+          // StackTrie path: one SnapHashTrie per contract, built and committed inline.
+          // To preserve the existing single-RocksDB-batch flush semantics, route all
+          // SnapHashTrie writeBatch callbacks into a shared accumulator and flush once
+          // after every contract in this batch has committed.
+          val accumulated = mutable.ArrayBuffer.empty[(ByteString, Array[Byte])]
+          val accumulator: Seq[(ByteString, Array[Byte])] => Unit = { batch =>
+            accumulated ++= batch
+          }
+          accountData.foreach { case (accountHash, slots) =>
+            val sortedSlots = slots.sortBy(_._1)(ByteStringOrdering)
+            val trie = new com.chipprbots.ethereum.blockchain.sync.snap.SnapHashTrie(accumulator)
+            sortedSlots.foreach { case (slotHash, slotValue) =>
+              trie.update(slotHash.toArray, slotValue.toArray)
+            }
+            val _ = trie.commit()
+            flatBatch = flatBatch.and(localFlatSlotStorage.putSlotsBatch(accountHash, sortedSlots.toSeq))
+          }
+          if (accumulated.nonEmpty) {
+            localMptStorage.storeRawNodes(accumulated.toSeq)
+          }
+        } else {
+          // Legacy MPT path: per-contract MerklePatriciaTrie over a batch-local
+          // DeferredWriteMptStorage. Holds all batch nodes in memory until flush.
+          val batchStorage = new DeferredWriteMptStorage(localMptStorage)
+
+          accountData.foreach { case (accountHash, slots) =>
+            // Sort by key for better trie locality — sequential keys share prefixes,
+            // reducing node reconstructions during insertion
+            val sortedSlots = slots.sortBy(_._1)(ByteStringOrdering)
+            import com.chipprbots.ethereum.mpt.byteStringSerializer
+            var trie = MerklePatriciaTrie[ByteString, ByteString](batchStorage)
+            sortedSlots.foreach { case (slotHash, slotValue) =>
+              trie = trie.put(slotHash, slotValue)
+            }
+
+            // Write to flat storage: accountHash ++ slotHash → slotValue
+            flatBatch = flatBatch.and(localFlatSlotStorage.putSlotsBatch(accountHash, sortedSlots.toSeq))
           }
 
-          // Write to flat storage: accountHash ++ slotHash → slotValue
-          flatBatch = flatBatch.and(localFlatSlotStorage.putSlotsBatch(accountHash, sortedSlots.toSeq))
+          // Flush trie nodes to RocksDB
+          batchStorage.flush()
         }
-
-        // Flush trie nodes to RocksDB
-        batchStorage.flush()
 
         // Commit flat slot writes — single additional RocksDB write batch
         flatBatch.commit()
@@ -1354,7 +1389,8 @@ object StorageRangeCoordinator {
       minResponseBytes: Int = 131072,
       deferredMerkleization: Boolean = true,
       flatBatchEntryThreshold: Int = 1000,
-      flatBatchEcOverride: Option[ExecutionContext] = None
+      flatBatchEcOverride: Option[ExecutionContext] = None,
+      useStackTrie: Boolean = false
   ): Props =
     Props(
       new StorageRangeCoordinator(
@@ -1372,7 +1408,8 @@ object StorageRangeCoordinator {
         configMinResponseBytes = minResponseBytes,
         deferredMerkleization = deferredMerkleization,
         flatBatchEntryThreshold = flatBatchEntryThreshold,
-        flatBatchEcOverride = flatBatchEcOverride
+        flatBatchEcOverride = flatBatchEcOverride,
+        useStackTrie = useStackTrie
       )
     )
 
