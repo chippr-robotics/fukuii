@@ -2991,11 +2991,32 @@ class SNAPSyncController(
   private def refreshPivotInPlace(reason: String): Unit = {
     log.info(s"Refreshing pivot in-place: $reason")
 
-    // Select a new pivot from the current network best
-    val newPivotOpt = currentNetworkBestFromSnapPeers()
-      .map { networkBest =>
-        networkBest - snapSyncConfig.pivotBlockOffset
+    // CL-anchored freshness floor (post-merge chains only). See `pivotPassesFreshnessFloor`
+    // for the regression context. Pre-merge chains (no CL) keep the old behavior because
+    // there is no authoritative "tip" reference.
+    val clHeadNumber: Option[BigInt] =
+      if (isPostMergeChain) clPivotHint.flatMap(_.knownHeader).map(_.number) else None
+
+    val networkBestOpt = currentNetworkBestFromSnapPeers()
+    val newPivotOpt = networkBestOpt
+      .filter { networkBest =>
+        SNAPSyncController.pivotPassesFreshnessFloor(
+          networkBest = networkBest,
+          clHeadNumber = clHeadNumber,
+          maxStaleness = snapSyncConfig.maxPivotStalenessBlocks
+        ) match {
+          case Right(()) => true
+          case Left(floor) =>
+            log.warning(
+              s"Rejecting stale SNAP peer best=$networkBest as pivot — below CL-anchored " +
+                s"freshness floor=$floor (CL head=${clHeadNumber.getOrElse("?")}, " +
+                s"maxPivotStalenessBlocks=${snapSyncConfig.maxPivotStalenessBlocks}). " +
+                "Waiting for a fresher SNAP-capable peer."
+            )
+            false
+        }
       }
+      .map(networkBest => networkBest - snapSyncConfig.pivotBlockOffset)
       .filter(_ > 0)
 
     if (newPivotOpt.isEmpty) {
@@ -3789,6 +3810,38 @@ object SNAPSyncController {
       storagePhaseForceCompleted: Boolean
   ): Boolean =
     snapSyncConfig.deferredMerkleization && !storagePhaseForceCompleted
+
+  /** Freshness gate for `refreshPivotInPlace`: reject candidate pivots whose source peer is
+    * more than `maxStaleness` blocks behind the CL-driven head.
+    *
+    * Background: the post-merge SNAP refresh path used to take `max(snapPeer.maxBlockNumber)`
+    * as the new pivot with no comparison against the actual chain tip. When the only
+    * SNAP-capable peers left in the pool were lagging (e.g. one still reporting block
+    * 10_447_000 while sepolia's CL head was at 10_847_xxx — observed May 13 2026), the
+    * refresh kept picking the stuck-peer's block, then immediately tripped the same-root
+    * fallback and restart. This filter blocks that path: on post-merge chains we know the
+    * authoritative tip (via `clPivotHint`), so we require pivot sources to be within
+    * `maxStaleness` of it. Pre-merge chains pass through unchanged (clHeadNumber=None).
+    *
+    * @param networkBest  the best SNAP peer's maxBlockNumber
+    * @param clHeadNumber the consensus-layer head block number, when available
+    * @param maxStaleness configured `maxPivotStalenessBlocks` (default 4096)
+    * @return Right(()) if the candidate is fresh enough, Left(floor) with the rejected
+    *         freshness floor for diagnostic logging on the call site
+    */
+  private[snap] def pivotPassesFreshnessFloor(
+      networkBest: BigInt,
+      clHeadNumber: Option[BigInt],
+      maxStaleness: Long
+  ): Either[BigInt, Unit] = clHeadNumber match {
+    case Some(clHead) =>
+      val floor = clHead - maxStaleness
+      if (networkBest < floor) Left(floor) else Right(())
+    case None =>
+      // Pre-merge / pre-CL-hint state: no authoritative tip to compare against. Preserve the
+      // legacy "take whatever peer offers" behavior.
+      Right(())
+  }
 
   def props(
       blockchainReader: BlockchainReader,
