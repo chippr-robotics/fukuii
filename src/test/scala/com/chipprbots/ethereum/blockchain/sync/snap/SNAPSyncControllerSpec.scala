@@ -1123,6 +1123,58 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     val ticksBeforeEviction = (10 * 60 * 1000L) / DownloadStagnationCheckIntervalMs
     ticksBeforeEviction shouldBe 20L // 20 ticks per 10-minute window
   }
+
+  // ── pivotPassesFreshnessFloor — regression for the sepolia oscillation ────
+  // refreshPivotInPlace used to take max(snapPeer.maxBlockNumber) verbatim.
+  // When the only SNAP-capable peer in the pool was stuck behind (block
+  // 10_447_000 while sepolia's CL head was at 10_847_xxx), the refresh kept
+  // picking the stuck-peer's block, then immediately tripped the same-root
+  // fallback, then restarted, then re-refreshed back to 10_447_000, ad infinitum.
+  // The freshness-floor filter wired in below stops that path.
+  "pivotPassesFreshnessFloor" should "accept a fresh peer (within maxStaleness of CL head)" taggedAs UnitTest in {
+    SNAPSyncController.pivotPassesFreshnessFloor(
+      networkBest = BigInt(10_847_168),
+      clHeadNumber = Some(BigInt(10_847_413)),
+      maxStaleness = 4096
+    ) shouldBe Right(())
+  }
+
+  it should "reject a stale peer that lags more than maxStaleness behind the CL head" taggedAs UnitTest in {
+    // The exact regression: SNAP peer reporting block 10_447_000 while CL head is at
+    // 10_847_413 — 400K blocks of drift, way past the 4096 staleness window.
+    val networkBest = BigInt(10_447_000)
+    val clHead = BigInt(10_847_413)
+    val maxStaleness = 4096L
+    val expectedFloor = clHead - maxStaleness // 10_843_317
+
+    SNAPSyncController.pivotPassesFreshnessFloor(
+      networkBest = networkBest,
+      clHeadNumber = Some(clHead),
+      maxStaleness = maxStaleness
+    ) shouldBe Left(expectedFloor)
+  }
+
+  it should "accept a peer exactly at the floor (boundary inclusive)" taggedAs UnitTest in {
+    val clHead = BigInt(10_847_413)
+    val maxStaleness = 4096L
+    val onFloor = clHead - maxStaleness // 10_843_317
+
+    SNAPSyncController.pivotPassesFreshnessFloor(
+      networkBest = onFloor,
+      clHeadNumber = Some(clHead),
+      maxStaleness = maxStaleness
+    ) shouldBe Right(())
+  }
+
+  it should "pass through unchanged on the pre-merge path (no CL head)" taggedAs UnitTest in {
+    // ETC mainnet etc. — there is no consensus layer, so no authoritative tip to anchor
+    // against. The filter must be a no-op there to preserve the legacy peer-best-wins path.
+    SNAPSyncController.pivotPassesFreshnessFloor(
+      networkBest = BigInt(0), // even genesis passes when no CL head is known
+      clHeadNumber = None,
+      maxStaleness = 4096L
+    ) shouldBe Right(())
+  }
 }
 
 /** Test helper: a `StateValidator` subclass that returns canned results without traversing the trie. Used in
