@@ -14,14 +14,36 @@ networks:
   sepolia-network:
     driver: bridge
 
+# Shared JVM defaults reused across services. Anchored once here so every
+# fukuii compose service in this file inherits a consistent envelope.
+# Composes in sibling directories should mirror this value — once the runtime
+# image bakes JAVA_TOOL_OPTIONS into ENV (or `application.ini` lands via the
+# proper sbt-native-packager Dockerfile), this block becomes redundant.
+x-fukuii-jvm-defaults: &fukuii-jvm-defaults
+  JAVA_TOOL_OPTIONS: >-
+    -Xmx4g -Xms2g -Xss1M
+    -XX:MaxDirectMemorySize=512M
+    -XX:+UseG1GC -XX:MaxGCPauseMillis=200
+    -XX:+HeapDumpOnOutOfMemoryError
+    -XX:HeapDumpPath=/app/data/logs/heapdump.hprof
+    -XX:+ExitOnOutOfMemoryError
+
 services:
   # Fukuii Execution Layer — Sepolia testnet
   fukuii-sepolia:
     image: chipprbots/fukuii:latest
     container_name: fukuii-sepolia
     restart: unless-stopped
-    mem_limit: 8g
-    memswap_limit: 8g
+    # 4g heap + ~3.5 GB native (RocksDB 512MB block cache, memtables, G1,
+    # DeferredWriteMpt/StackTrie buffers, JNI). 8g cgroup repeatedly OOM-killed
+    # at ~8.37 GB RSS; 10g leaves real headroom. Requires primary stopped on
+    # this 16 GiB host.
+    mem_limit: 10g
+    memswap_limit: 10g
+    # JVM flags live in JAVA_TOOL_OPTIONS (anchor above) — picked up
+    # automatically by the JVM regardless of how it's invoked.
+    environment:
+      <<: *fukuii-jvm-defaults
     ports:
       - "8555:8545"       # JSON-RPC HTTP
       - "8556:8546"       # JSON-RPC WebSocket
@@ -34,18 +56,12 @@ services:
       - ./fukuii-conf:/app/conf:ro
       - ./jwt.hex:/app/jwt/jwt.hex:ro
       - ./fukuii-conf/static-nodes.json:/app/data/static-nodes.json:ro
-    # Override the image's ENTRYPOINT (which hardcodes the versioned JAR path —
-    # frozen at 0.1.240 from the original image build) so we use the unversioned
-    # symlink instead. Mirrors the pattern in the primary docker-compose.yml.
+    # Image ENTRYPOINT is just `java` — overriding here to be explicit so a
+    # future image change (e.g. baking in `-jar`) doesn't silently break the
+    # arg order. JVM tuning itself comes from JAVA_TOOL_OPTIONS, not from
+    # this list.
     entrypoint: ["java"]
     command:
-      - "-Xmx6g"
-      - "-Xms2g"
-      - "-Xss10M"
-      - "-XX:+UseG1GC"
-      - "-XX:MaxGCPauseMillis=200"
-      - "-XX:+HeapDumpOnOutOfMemoryError"
-      - "-XX:HeapDumpPath=/app/data/logs/heapdump.hprof"
       - "-Dconfig.file=/app/conf/sepolia.conf"
       - "-Dfukuii.datadir=/app/data"
       - "-jar"
@@ -84,6 +100,11 @@ services:
       - "--http-port=5052"
       - "--http-allow-origin=*"
       - "--port=9000"
+      # Advertise the externally-reachable port (Docker maps host 9100 → container 9000).
+      # Without these, ENR advertises :9000 which is unreachable from outside the bridge,
+      # so peer-discovery dials never complete and Lighthouse can't sync the head.
+      - "--enr-tcp-port=9100"
+      - "--enr-udp-port=9100"
       - "--target-peers=50"
       - "--checkpoint-sync-url=https://sepolia.beaconstate.info"
     depends_on:
