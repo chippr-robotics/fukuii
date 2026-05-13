@@ -71,6 +71,23 @@ object Messages {
     */
   case object RecoverStalledAccountTasks extends AccountRangeCoordinatorMessage
 
+  /** Sent by `StorageRangeCoordinator` (via `SNAPSyncController`) when its pending-task queue depth crosses a
+    * watermark. `paused = true` is emitted on the high-water transition: AccountRangeCoordinator should stop dispatching
+    * new account-range requests so it stops producing new storage tasks. `paused = false` is emitted on the low-water
+    * transition once the storage queue drains: AccountRangeCoordinator resumes dispatching.
+    *
+    * Workers already in flight continue to completion regardless — this only gates the next-dispatch decision.
+    */
+  case class StorageQueuePressure(paused: Boolean) extends AccountRangeCoordinatorMessage
+
+  /** Same shape as `StorageQueuePressure`, emitted by `ByteCodeCoordinator`. Account-range
+    * completions enqueue both storage tasks AND bytecode tasks, so either downstream coordinator
+    * can independently trigger back-pressure on the account dispatcher. AccountRangeCoordinator
+    * pauses dispatch whenever *any* downstream is over its high-water mark and only resumes once
+    * all sources have released.
+    */
+  case class ByteCodeQueuePressure(paused: Boolean) extends AccountRangeCoordinatorMessage
+
   /** Self-message — periodic check for `activeTasks.nonEmpty` + no-activity wedges (#1184). Scheduled from
     * `AccountRangeCoordinator.preStart` at 30 s intervals via `scheduleAtFixedRate`; cancelled in `postStop`.
     */

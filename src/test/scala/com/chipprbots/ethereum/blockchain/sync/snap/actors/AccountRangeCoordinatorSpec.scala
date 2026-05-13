@@ -1263,4 +1263,89 @@ class AccountRangeCoordinatorSpec
 
     system.stop(coord)
   }
+
+  // ── Storage back-pressure pause/resume (#1232 follow-up) ──────────────────
+  // Account-range download was producing storage tasks faster than peers could
+  // serve them, leading to an unbounded queue and the May 13 sepolia OOM. The
+  // coordinator now obeys a pause/resume signal forwarded from the storage
+  // coordinator via SNAPSyncController.
+  it should "flip storageBackpressureActive on receipt of StorageQueuePressure" taggedAs UnitTest in {
+    val coord = newCoordinator()
+
+    coord.underlyingActor.storageBackpressureActive shouldBe false
+
+    coord ! Messages.StorageQueuePressure(paused = true)
+    awaitAssert(coord.underlyingActor.storageBackpressureActive shouldBe true, 1.second, 50.millis)
+
+    coord ! Messages.StorageQueuePressure(paused = false)
+    awaitAssert(coord.underlyingActor.storageBackpressureActive shouldBe false, 1.second, 50.millis)
+
+    system.stop(coord)
+  }
+
+  it should "skip dispatchIfPossible while storageBackpressureActive is set" taggedAs UnitTest in {
+    val networkPeerManager = TestProbe()
+    val coord = TestActorRef[AccountRangeCoordinator](
+      AccountRangeCoordinator.props(
+        stateRoot = kec256(ByteString("backpressure-dispatch-root")),
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = new SNAPRequestTracker()(system.scheduler),
+        mptStorage = new TestMptStorage(),
+        concurrency = 4,
+        snapSyncController = TestProbe().ref,
+        accountTrieEcOverride = Some(system.dispatcher)
+      )
+    )
+
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("backpressure-peer", peerProbe.ref)
+
+    coord ! Messages.StartAccountRangeSync(kec256(ByteString("backpressure-dispatch-root")))
+
+    // Engage back-pressure BEFORE peer becomes available — the coordinator should accept the
+    // peer but not dispatch any GetAccountRange requests until back-pressure releases.
+    coord ! Messages.StorageQueuePressure(paused = true)
+    coord ! Messages.PeerAvailable(peer)
+
+    networkPeerManager.expectNoMessage(500.millis)
+
+    // Release: the coordinator wakes up and dispatches against the known peer.
+    coord ! Messages.StorageQueuePressure(paused = false)
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](2.seconds)
+  }
+
+  it should "treat storage and bytecode pressure as ANY-of: only release once every source clears" taggedAs UnitTest in {
+    val networkPeerManager = TestProbe()
+    val coord = TestActorRef[AccountRangeCoordinator](
+      AccountRangeCoordinator.props(
+        stateRoot = kec256(ByteString("two-source-backpressure-root")),
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = new SNAPRequestTracker()(system.scheduler),
+        mptStorage = new TestMptStorage(),
+        concurrency = 4,
+        snapSyncController = TestProbe().ref,
+        accountTrieEcOverride = Some(system.dispatcher)
+      )
+    )
+
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("two-source-peer", peerProbe.ref)
+
+    coord ! Messages.StartAccountRangeSync(kec256(ByteString("two-source-backpressure-root")))
+
+    // Engage BOTH sources.
+    coord ! Messages.StorageQueuePressure(paused = true)
+    coord ! Messages.ByteCodeQueuePressure(paused = true)
+    coord ! Messages.PeerAvailable(peer)
+
+    networkPeerManager.expectNoMessage(500.millis)
+
+    // Release storage only — bytecode is still engaged, so dispatch must remain paused.
+    coord ! Messages.StorageQueuePressure(paused = false)
+    networkPeerManager.expectNoMessage(500.millis)
+
+    // Release bytecode — set is now empty, dispatch resumes.
+    coord ! Messages.ByteCodeQueuePressure(paused = false)
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](2.seconds)
+  }
 }

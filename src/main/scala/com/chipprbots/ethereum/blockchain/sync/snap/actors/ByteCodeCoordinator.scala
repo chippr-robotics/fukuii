@@ -44,7 +44,14 @@ class ByteCodeCoordinator(
     requestTracker: SNAPRequestTracker,
     batchSize: Int,
     cooldownConfig: ByteCodeCoordinator.ByteCodePeerCooldownConfig,
-    snapSyncController: ActorRef
+    snapSyncController: ActorRef,
+    // Back-pressure watermarks — mirror the storage coordinator pattern. ByteCodeTask carries the
+    // returned bytecode blob payload on completion, so an unthrottled queue is even more dangerous
+    // here than for storage (a single 24 KB EOF contract × millions of queued tasks would dwarf
+    // the heap). Defaults are lower than storage's 100K/50K because each task batches `batchSize`
+    // (~85) hashes, so a 50K-task queue is effectively ~4M pending hashes.
+    backpressureHighWatermark: Int = 50000,
+    backpressureLowWatermark: Int = 25000
 ) extends Actor
     with ActorLogging {
 
@@ -108,7 +115,19 @@ class ByteCodeCoordinator(
   )
 
   private val activeTasks = mutable.Map.empty[BigInt, ActiveByteCodeRequest] // requestId -> active request
-  private val completedTasks = mutable.ArrayBuffer[ByteCodeTask]()
+
+  // Completion bookkeeping (#1233). Previously `completedTasks: mutable.ArrayBuffer[ByteCodeTask]`
+  // retained the full task object — including `task.bytecodes: Seq[ByteString]`, the actual
+  // downloaded bytecode blobs — forever, just to read `.size` for progress. At ~3M sepolia
+  // codehashes and ~5-10 KB per blob that's ~2-5 GB of retention; on ETH mainnet (~73 M unique
+  // hashes per memory) the same pattern would leak 20-40+ GB. Replaced with a plain Long counter;
+  // blobs are no longer reachable after the per-hash write commits.
+  private var completedTaskCount: Long = 0L
+
+  // Back-pressure state. Set true on the high-water transition; cleared on low-water. Workers
+  // already in flight always continue to completion; only AccountRangeCoordinator dispatch is
+  // gated via the forwarded `ByteCodeQueuePressure` signal.
+  private[actors] var backpressureActive: Boolean = false
 
   // Worker pool
   private val workers = mutable.ArrayBuffer[ActorRef]()
@@ -192,6 +211,9 @@ class ByteCodeCoordinator(
         log.debug(
           s"Added ${newTasks.size} bytecode tasks from ${filtered.size} incremental hashes (pending: ${pendingTasks.size})"
         )
+        // Account-range download is the only path that grows the queue faster than dispatch can
+        // drain it. Mirrors the storage coordinator's pattern (#1233).
+        notifyBackpressureIfChanged()
       }
 
     case NoMoreByteCodeTasks =>
@@ -297,6 +319,9 @@ class ByteCodeCoordinator(
 
     case ByteCodeCheckCompletion =>
       checkCompletion()
+      // Drain side of the back-pressure watermark — release the AccountRangeCoordinator pause
+      // once dispatches + completions have shrunk the queue below the low-water mark.
+      notifyBackpressureIfChanged()
 
     case ForceCompleteByteCodes =>
       // #1164: When bytecode sync stagnates (e.g., a small set of code hashes no peer can serve),
@@ -322,9 +347,33 @@ class ByteCodeCoordinator(
       snapSyncController ! SNAPSyncController.ByteCodeSyncComplete
 
     case ByteCodeGetProgress =>
-      val total = completedTasks.size + activeTasks.size + pendingTasks.size
-      val progress = if (total == 0) 1.0 else completedTasks.size.toDouble / total
+      val total = completedTaskCount + activeTasks.size.toLong + pendingTasks.size.toLong
+      val progress = if (total == 0) 1.0 else completedTaskCount.toDouble / total
       sender() ! ByteCodeProgress(progress, bytecodesDownloaded, bytesDownloaded)
+  }
+
+  /** Emit a ByteCodeBackpressureChanged transition when the pending-task queue depth crosses a
+    * watermark. Forwarded by SNAPSyncController to AccountRangeCoordinator as
+    * `ByteCodeQueuePressure` so account workers stop producing new bytecode tasks during
+    * back-pressure. Mirrors `StorageRangeCoordinator.notifyBackpressureIfChanged` (#1233).
+    */
+  private def notifyBackpressureIfChanged(): Unit = {
+    val pending = pendingTasks.size
+    if (!backpressureActive && pending >= backpressureHighWatermark) {
+      backpressureActive = true
+      log.info(
+        s"ByteCode queue back-pressure ENGAGED at $pending pending tasks (high-water=$backpressureHighWatermark). " +
+          s"Signalling AccountRangeCoordinator to pause dispatch."
+      )
+      snapSyncController ! SNAPSyncController.ByteCodeBackpressureChanged(paused = true)
+    } else if (backpressureActive && pending <= backpressureLowWatermark) {
+      backpressureActive = false
+      log.info(
+        s"ByteCode queue back-pressure RELEASED at $pending pending tasks (low-water=$backpressureLowWatermark). " +
+          s"Signalling AccountRangeCoordinator to resume dispatch."
+      )
+      snapSyncController ! SNAPSyncController.ByteCodeBackpressureChanged(paused = false)
+    }
   }
 
   private def assignTaskToWorker(worker: ActorRef, peer: Peer): Unit = {
@@ -486,8 +535,12 @@ class ByteCodeCoordinator(
                 task.pending = false
                 if (remainingHashes.isEmpty) {
                   task.done = true
-                  task.bytecodes = response.codes
-                  completedTasks += task
+                  // task.bytecodes was assigned to the in-flight task purely so the old buffer
+                  // could retain it; now that we only track a count, we no longer need to attach
+                  // the blob to the task struct — the bytes have already been written via
+                  // evmCodeStorage upstream. Skip the assignment to drop the only retention path
+                  // for the downloaded code blobs (#1233 follow-up).
+                  completedTaskCount += 1L
                 }
 
                 activeTasks.remove(response.requestId)
@@ -659,7 +712,9 @@ object ByteCodeCoordinator {
       requestTracker: SNAPRequestTracker,
       batchSize: Int,
       snapSyncController: ActorRef,
-      cooldownConfig: ByteCodePeerCooldownConfig = ByteCodePeerCooldownConfig.default
+      cooldownConfig: ByteCodePeerCooldownConfig = ByteCodePeerCooldownConfig.default,
+      backpressureHighWatermark: Int = 50000,
+      backpressureLowWatermark: Int = 25000
   ): Props =
     Props(
       new ByteCodeCoordinator(
@@ -668,7 +723,9 @@ object ByteCodeCoordinator {
         requestTracker,
         batchSize,
         cooldownConfig,
-        snapSyncController
+        snapSyncController,
+        backpressureHighWatermark = backpressureHighWatermark,
+        backpressureLowWatermark = backpressureLowWatermark
       )
     )
 }
