@@ -985,6 +985,64 @@ class PeerManagerSpec
     }
   }
 
+  // ── Regression tests for blacklistDurationForDisconnect ────────────────────
+  // Sepolia 2026-05-13: when SNAP-syncing from genesis, ~40+ peers per minute were
+  // sending us Disconnect(UselessPeer) at handshake (they didn't want us as a
+  // counterparty because we had nothing to offer them yet). The old policy mapped
+  // UselessPeer through the `_` wildcard to longBlacklistDuration (30 min) — the
+  // peer pool collapsed to a single peer within ~5 min of startup. The fix moves
+  // UselessPeer into the short-tier alongside `Other`, which already had the
+  // exact same reasoning documented for it. ETC mainnet hit the same wall.
+  import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.Reasons
+  private val ShortDur = 2.minutes
+  private val LongDur = 30.minutes
+
+  "PeerManagerActor.blacklistDurationForDisconnect" should "use short duration for UselessPeer (regression for sepolia peer-pool collapse)" in {
+    PeerManagerActor.blacklistDurationForDisconnect(
+      reason = Reasons.UselessPeer,
+      shortBlacklistDuration = ShortDur,
+      longBlacklistDuration = LongDur
+    ) shouldBe ShortDur
+  }
+
+  it should "use short duration for Other (peer-selection-policy rejection)" in {
+    PeerManagerActor.blacklistDurationForDisconnect(Reasons.Other, ShortDur, LongDur) shouldBe ShortDur
+  }
+
+  it should "use short duration for the other soft-rejection reasons" in {
+    val softReasons = Seq(
+      Reasons.TooManyPeers,
+      Reasons.AlreadyConnected,
+      Reasons.ClientQuitting,
+      Reasons.TcpSubsystemError,
+      Reasons.DisconnectRequested,
+      Reasons.TimeoutOnReceivingAMessage
+    )
+    softReasons.foreach { r =>
+      withClue(s"reason=0x${r.toHexString}: ") {
+        PeerManagerActor.blacklistDurationForDisconnect(r, ShortDur, LongDur) shouldBe ShortDur
+      }
+    }
+  }
+
+  it should "use permanent duration for protocol violations" in {
+    val permanentReasons = Seq(
+      Reasons.BreachOfProtocol,
+      Reasons.IncompatibleP2pProtocolVersion,
+      Reasons.NullNodeIdentityReceived
+    )
+    permanentReasons.foreach { r =>
+      withClue(s"reason=0x${r.toHexString}: ") {
+        PeerManagerActor.blacklistDurationForDisconnect(r, ShortDur, LongDur) shouldBe
+          PeerManagerActor.DefaultPermanentBlacklistDuration
+      }
+    }
+  }
+
+  it should "fall back to long duration for unknown reason codes" in {
+    PeerManagerActor.blacklistDurationForDisconnect(0xff, ShortDur, LongDur) shouldBe LongDur
+  }
+
   implicit val arbPeer: Arbitrary[Peer] = Arbitrary {
     for {
       ip <- Gen.listOfN(4, Gen.choose(0, 255)).map(_.mkString("."))
