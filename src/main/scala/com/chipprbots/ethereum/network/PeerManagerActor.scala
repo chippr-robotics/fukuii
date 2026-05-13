@@ -314,28 +314,12 @@ class PeerManagerActor(
       sender() ! SetMaxPeersResponse(success = true)
   }
 
-  private def getBlacklistDuration(reason: Long): FiniteDuration = {
-    import Disconnect.Reasons._
-    reason match {
-      case TooManyPeers | AlreadyConnected | ClientQuitting => peerConfiguration.shortBlacklistDuration
-      // Use short blacklist for 0x10 (Other) disconnects - these are often due to peer selection
-      // policies (e.g., rejecting nodes at genesis) rather than actual protocol issues.
-      // Peers may be willing to connect later once we've synced past genesis.
-      case Other => peerConfiguration.shortBlacklistDuration
-      // TcpSubsystemError (0x01) may indicate temporary network issues or peer-side problems
-      // Use short blacklist to allow quick reconnection attempts
-      case TcpSubsystemError | DisconnectRequested | TimeoutOnReceivingAMessage =>
-        peerConfiguration.shortBlacklistDuration
-      // Permanent blacklist for protocol violations.
-      // Besu: PeerDenylistManager.java triggers denylist on BREACH_OF_PROTOCOL and
-      // INCOMPATIBLE_P2P_PROTOCOL_VERSION (maintained peers are exempt in Besu, but we
-      // apply permanent duration here — maintained peers are reconnected anyway via the
-      // Terminated handler regardless of IP blacklist state).
-      case BreachOfProtocol | IncompatibleP2pProtocolVersion | NullNodeIdentityReceived =>
-        DefaultPermanentBlacklistDuration
-      case _ => peerConfiguration.longBlacklistDuration
-    }
-  }
+  private def getBlacklistDuration(reason: Long): FiniteDuration =
+    PeerManagerActor.blacklistDurationForDisconnect(
+      reason,
+      shortBlacklistDuration = peerConfiguration.shortBlacklistDuration,
+      longBlacklistDuration = peerConfiguration.longBlacklistDuration
+    )
 
   private def handleConnection(
       connection: ActorRef,
@@ -837,6 +821,41 @@ object PeerManagerActor {
     * duration.
     */
   val DefaultPermanentBlacklistDuration: FiniteDuration = 365.days
+
+  /** Translate an inbound `Disconnect.Reasons.*` code into the blacklist duration we apply when the peer initiated the
+    * disconnect. Extracted from the actor instance so it's directly unit-testable without spinning up a TestActorRef.
+    *
+    * Policy tiers (longest-first for readability):
+    *   - **Permanent** for protocol violations (`BreachOfProtocol`, `IncompatibleP2pProtocolVersion`,
+    *     `NullNodeIdentityReceived`). Besu's PeerDenylistManager does the same.
+    *   - **Short** for soft "peer selection policy" rejections — the peer disconnected us because of how they pick
+    *     counterparties, not because we did anything wrong. Covers `Other`, `UselessPeer`, `TooManyPeers`,
+    *     `AlreadyConnected`, `ClientQuitting`, `TcpSubsystemError`, `DisconnectRequested`,
+    *     `TimeoutOnReceivingAMessage`. Long blacklist on these classes destroys the peer pool during initial sync:
+    *     peers reject us as uninteresting (we're at genesis / mid-SNAP-sync), we IP-blacklist them, and by the time
+    *     they'd accept us again we still can't re-dial. Sepolia 2026-05-13: 100+ peers blacklisted within 5 min,
+    *     pool collapsed to one peer; ETC mainnet has the same pattern.
+    *   - **Long** for anything else (catch-all).
+    *
+    * The classification of `UselessPeer` as a SHORT-tier rejection (was: LONG, via the `_` wildcard) is the substantive
+    * change. `UselessPeer` is a *the-peer-rejected-us* signal, not a protocol violation, and our state is highly
+    * dynamic during initial sync — fast re-dials are the right policy.
+    */
+  private[network] def blacklistDurationForDisconnect(
+      reason: Long,
+      shortBlacklistDuration: FiniteDuration,
+      longBlacklistDuration: FiniteDuration
+  ): FiniteDuration = {
+    import Disconnect.Reasons._
+    reason match {
+      case BreachOfProtocol | IncompatibleP2pProtocolVersion | NullNodeIdentityReceived =>
+        DefaultPermanentBlacklistDuration
+      case TooManyPeers | AlreadyConnected | ClientQuitting | Other | UselessPeer | TcpSubsystemError |
+          DisconnectRequested | TimeoutOnReceivingAMessage =>
+        shortBlacklistDuration
+      case _ => longBlacklistDuration
+    }
+  }
 
   sealed abstract class ConnectionError
 
