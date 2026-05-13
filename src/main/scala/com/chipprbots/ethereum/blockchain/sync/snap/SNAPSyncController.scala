@@ -575,6 +575,11 @@ class SNAPSyncController(
         progressMonitor.updateEstimates(slots = estimatedTotalSlots)
       }
 
+    case StorageBackpressureChanged(paused) =>
+      // Forward the storage coordinator's pause/resume signal to the account coordinator so it
+      // stops dispatching new account-range requests when storage is over its high-water mark.
+      accountRangeCoordinator.foreach(_ ! actors.Messages.StorageQueuePressure(paused))
+
     case PivotStateUnservable(rootHash, reason, emptyResponses) =>
       // When peers can no longer serve the current state root, refresh the pivot in-place
       // instead of restarting. This preserves downloaded trie data (content-addressed nodes
@@ -3758,6 +3763,12 @@ object SNAPSyncController {
   final case class ProgressNodesHealed(count: Long)
   final case class ProgressAccountEstimate(estimatedTotal: Long)
   final case class ProgressStorageContracts(completedContracts: Int, totalContracts: Int)
+
+  /** Sent by `StorageRangeCoordinator` to the controller when its pending-task queue crosses a
+    * watermark. The controller forwards it to `AccountRangeCoordinator` as a `StorageQueuePressure`
+    * message so account workers stop producing new storage tasks during back-pressure. Workers
+    * already in flight always run to completion. */
+  final case class StorageBackpressureChanged(paused: Boolean)
 
   private[snap] def shouldSkipHealingAfterDownloads(
       snapSyncConfig: SNAPSyncConfig,

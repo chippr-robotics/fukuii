@@ -756,4 +756,104 @@ class StorageRangeCoordinatorSpec
 
     system.stop(coordinator)
   }
+
+  // ── Back-pressure on the pending storage-task queue ───────────────────────
+  // Regression coverage for the sepolia OOM (May 13 2026): account-range
+  // download produced storage tasks faster than peers could serve them, growing
+  // the queue to ~2.8M entries before the JVM hit Xmx. The coordinator now emits
+  // StorageBackpressureChanged(paused = true) when the queue crosses the
+  // high-water mark, and StorageBackpressureChanged(paused = false) when it
+  // drains below the low-water mark. SNAPSyncController forwards both to
+  // AccountRangeCoordinator so account workers stop producing new tasks.
+  it should "emit StorageBackpressureChanged when the pending queue crosses watermarks" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("backpressure-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    // Tiny watermarks so the test can drive the transition without enqueuing 100K tasks.
+    val coordinator = system.actorOf(
+      StorageRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+        maxAccountsPerBatch = 8,
+        maxInFlightRequests = 8,
+        requestTimeout = 30.seconds,
+        snapSyncController = snapSyncController.ref,
+        backpressureHighWatermark = 5,
+        backpressureLowWatermark = 2
+      )
+    )
+
+    coordinator ! Messages.StartStorageRangeSync(stateRoot)
+
+    // Build a small batch of tasks, enough to push the queue to 5 entries.
+    val tasks =
+      (1 to 5).map(i =>
+        StorageTask.createStorageTask(
+          accountHash = kec256(ByteString(s"acct-$i")),
+          storageRoot = kec256(ByteString(s"root-$i"))
+        )
+      )
+    coordinator ! Messages.AddStorageTasks(tasks)
+
+    // Crossing the high-water mark triggers a pause signal upward.
+    snapSyncController.expectMsg(3.seconds, SNAPSyncController.StorageBackpressureChanged(paused = true))
+
+    // Re-checking with the same depth must NOT emit another transition (no duplicate signals).
+    coordinator ! Messages.StorageCheckCompletion
+    snapSyncController.expectNoMessage(500.millis)
+  }
+
+  it should "release back-pressure once the queue drains below the low-water mark" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("backpressure-release-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = TestActorRef[StorageRangeCoordinator](
+      StorageRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+        maxAccountsPerBatch = 8,
+        maxInFlightRequests = 8,
+        requestTimeout = 30.seconds,
+        snapSyncController = snapSyncController.ref,
+        backpressureHighWatermark = 5,
+        backpressureLowWatermark = 2
+      )
+    )
+
+    coordinator ! Messages.StartStorageRangeSync(stateRoot)
+
+    // Drive across the high-water mark first.
+    val tasks =
+      (1 to 5).map(i =>
+        StorageTask.createStorageTask(
+          accountHash = kec256(ByteString(s"acct-$i")),
+          storageRoot = kec256(ByteString(s"root-$i"))
+        )
+      )
+    coordinator ! Messages.AddStorageTasks(tasks)
+    snapSyncController.expectMsg(3.seconds, SNAPSyncController.StorageBackpressureChanged(paused = true))
+
+    // Drain the underlying queue to 2 entries (≤ low-water mark) and trigger a check.
+    val underlying = coordinator.underlyingActor
+    val pendingQueue =
+      classOf[StorageRangeCoordinator].getDeclaredFields.find(_.getName == "tasks").get
+    pendingQueue.setAccessible(true)
+    val q = pendingQueue.get(underlying).asInstanceOf[mutable.Queue[StorageTask]]
+    while (q.size > 2) q.dequeue()
+
+    coordinator ! Messages.StorageCheckCompletion
+    snapSyncController.expectMsg(3.seconds, SNAPSyncController.StorageBackpressureChanged(paused = false))
+  }
 }

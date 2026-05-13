@@ -98,6 +98,13 @@ class AccountRangeCoordinator(
   // Part of global per-peer request budgeting (Geth-aligned: total 5 per peer across all coordinators).
   private var maxInFlightPerPeer: Int = initialMaxInFlightPerPeer
 
+  // Storage-queue back-pressure flag (#1232 follow-up). Set true when StorageRangeCoordinator's pending
+  // queue crosses its high-water mark; cleared when it drains below the low-water mark. While set, we
+  // do not start new account-range dispatches — workers already in flight continue to completion so
+  // existing work drains naturally, but we stop producing new storage tasks until the storage queue
+  // catches up. Package-private for AccountRangeCoordinatorSpec to drive directly under TestActorRef.
+  private[actors] var storageBackpressureActive: Boolean = false
+
   // Stateless peer tracking: peers that return "Missing proof for empty account range"
   // OR consecutive timeouts are unable to serve the current state root. Cleared on
   // PivotRefreshed because the new root may be inside the peer's serve window.
@@ -617,6 +624,27 @@ class AccountRangeCoordinator(
       maxInFlightPerPeer = newLimit
       if (newLimit > 0) tryRedispatchPendingTasks()
 
+    case StorageQueuePressure(paused) =>
+      if (paused == storageBackpressureActive) {
+        // Duplicate transition (e.g. spurious resend) — ignore.
+      } else {
+        storageBackpressureActive = paused
+        if (paused) {
+          log.info(
+            "Storage back-pressure ENGAGED — pausing new account-range dispatches. " +
+              s"${pendingTasks.size} pending, ${activeTasks.size} in flight (will complete normally)."
+          )
+        } else {
+          log.info(
+            "Storage back-pressure RELEASED — resuming account-range dispatches. " +
+              s"${pendingTasks.size} pending."
+          )
+          // Re-engage immediately so we don't have to wait for the next PeerAvailable tick.
+          tryRedispatchPendingTasks()
+          knownAvailablePeers.filterNot(isPeerStateless).foreach(dispatchIfPossible)
+        }
+      }
+
     case PeerUnavailable(peerId) =>
       // Peer disconnected — remove from available set and re-queue in-flight tasks.
       // go-ethereum eth/protocols/snap/sync.go:1621 (revertRequests) and Besu
@@ -820,9 +848,14 @@ class AccountRangeCoordinator(
 
   /** Dispatch up to maxInFlightPerPeer tasks to the given peer (pipelining). Mirrors
     * ByteCodeCoordinator.dispatchIfPossible — the proven pattern for SNAP sync.
+    *
+    * No-op while storage back-pressure is active: workers already in flight always run to completion,
+    * so existing work continues to drain, but we stop producing new storage tasks until the storage
+    * coordinator clears its high-water mark.
     */
   private def dispatchIfPossible(peer: Peer): Unit = {
     if (pendingTasks.isEmpty) return
+    if (storageBackpressureActive) return
 
     var inflight = inFlightForPeer(peer)
     while (pendingTasks.nonEmpty && inflight < maxInFlightPerPeer) {

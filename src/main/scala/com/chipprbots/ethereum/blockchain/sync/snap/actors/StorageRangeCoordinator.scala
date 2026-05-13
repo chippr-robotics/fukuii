@@ -66,7 +66,12 @@ class StorageRangeCoordinator(
       * holding the whole trie in memory until flush. Same opt-in semantics as
       * `AccountRangeCoordinator.useStackTrie`.
       */
-    useStackTrie: Boolean = false
+    useStackTrie: Boolean = false,
+    // Back-pressure watermarks — overridable in tests so we don't have to enqueue 100K StorageTasks
+    // just to verify the pause/resume transition. Production defaults match the values quoted in
+    // the design discussion.
+    backpressureHighWatermark: Int = 100000,
+    backpressureLowWatermark: Int = 50000
 ) extends Actor
     with ActorLogging {
 
@@ -85,7 +90,31 @@ class StorageRangeCoordinator(
   private val pendingTaskKeys = mutable.Set[(ByteString, ByteString)]()
   private val activeTasks =
     mutable.Map[BigInt, (Peer, Seq[StorageTask], BigInt)]() // requestId -> (peer, tasks, requestedBytes)
-  private val completedTasks = mutable.ArrayBuffer[StorageTask]()
+
+  // Bookkeeping counters — replace the previously unbounded `completedTasks: ArrayBuffer[StorageTask]`
+  // (which retained every completed StorageTask ref forever and contributed ~4 GB to the May 13 sepolia
+  // OOM at 22M completed tasks). Only the aggregate counts are ever consumed downstream; we don't need
+  // to hold the task structs themselves.
+  private var completedTaskCount: Long = 0L
+  // Unique accounts whose full storage has been written (small-contract flat path) OR whose async
+  // trie construction has finished. Incremented exactly once per account at the "no more
+  // continuations expected" transition, so this is bounded by the number of contracts in the snapshot
+  // rather than the number of range requests issued — replaces the previously unbounded
+  // `completedAccountHashes: Set[ByteString]` and its O(N²) progress-rebuild.
+  private var completedAccountCount: Long = 0L
+
+  // ========================================
+  // Storage Queue Backpressure (#1232 follow-up — sepolia OOM)
+  // ========================================
+  //
+  // AccountRangeCoordinator produces storage tasks as account ranges complete; if SNAP peers stop
+  // serving (or simply can't keep up), this queue grew without bound — 2.8M tasks at the May 13
+  // sepolia OOM. Watermarks below trigger an explicit pause/resume signal that's forwarded to
+  // AccountRangeCoordinator via SNAPSyncController.
+  //
+  // Workers already in flight always complete; only the next-dispatch decision is gated.
+  // (backpressureHighWatermark / backpressureLowWatermark live on the constructor for test override.)
+  private[actors] var backpressureActive: Boolean = false
 
   // Global consecutive task failure counter: triggers ForceCompleteStorage when all SNAP peers
   // stop serving storage data. Resets to zero on any successful slot download.
@@ -105,9 +134,9 @@ class StorageRangeCoordinator(
 
   // Contract completion tracking for progress estimation.
   // totalStorageContracts counts unique contracts added via AddStorageTasks.
-  // completedAccountHashes tracks unique contracts that have been fully synced.
+  // Unique completed accounts are tracked via the bounded `completedAccountCount` counter below
+  // (incremented on the small-contract completion + TrieConstructionComplete paths).
   private var totalStorageContracts: Int = 0
-  private val completedAccountHashes = mutable.Set[ByteString]()
 
   // Pivot refresh backoff: prevents rapid refresh loops when no peers can serve any recent root.
   // After each unproductive refresh (one that doesn't yield real slot data), the backoff interval
@@ -588,6 +617,39 @@ class StorageRangeCoordinator(
       }
     }
 
+  /** Aggregate-counter sink for completed StorageTask objects. Previously this appended into an
+    * unbounded `mutable.ArrayBuffer[StorageTask]` (one of the leak vectors behind the May 13 sepolia
+    * OOM at ~22M completed tasks). All downstream consumers — progress %, SyncStatistics.tasksCompleted,
+    * the completion check — only ever read the count, never the task data itself.
+    */
+  private def recordCompletedTask(task: StorageTask): Unit = {
+    val _ = task // explicitly unused; kept in the signature to make call-site intent unambiguous
+    completedTaskCount += 1L
+  }
+
+  /** Emit a StorageQueuePressure transition if the pending-task queue depth has just crossed a
+    * watermark. Called after every enqueue and dequeue. Forwarded to AccountRangeCoordinator via
+    * SNAPSyncController so account workers stop producing new storage tasks during back-pressure.
+    */
+  private def notifyBackpressureIfChanged(): Unit = {
+    val pending = tasks.size
+    if (!backpressureActive && pending >= backpressureHighWatermark) {
+      backpressureActive = true
+      log.info(
+        s"Storage queue back-pressure ENGAGED at $pending pending tasks (high-water=$backpressureHighWatermark). " +
+          s"Signalling AccountRangeCoordinator to pause dispatch."
+      )
+      snapSyncController ! SNAPSyncController.StorageBackpressureChanged(paused = true)
+    } else if (backpressureActive && pending <= backpressureLowWatermark) {
+      backpressureActive = false
+      log.info(
+        s"Storage queue back-pressure RELEASED at $pending pending tasks (low-water=$backpressureLowWatermark). " +
+          s"Signalling AccountRangeCoordinator to resume dispatch."
+      )
+      snapSyncController ! SNAPSyncController.StorageBackpressureChanged(paused = false)
+    }
+  }
+
   /** Force build all remaining buffered accounts (e.g., on sync completion or force-complete). */
   private def flushAllPendingTrieBuilds(): Unit = {
     val remaining = accountsReadyForBuild.diff(accountsInTrieConstruction).toSeq
@@ -662,6 +724,10 @@ class StorageRangeCoordinator(
       log.info(
         s"Added ${storageTasks.size} storage tasks to queue (total pending: ${tasks.size}, contracts: $totalStorageContracts)"
       )
+      // Account-range completion is the only path that can grow the queue faster than dispatch.
+      // Check watermarks immediately so the AccountRangeCoordinator pause signal goes out before
+      // the next account-range batch lands.
+      notifyBackpressureIfChanged()
 
     case AddStorageTask(task) =>
       tasks.enqueue(task)
@@ -740,6 +806,9 @@ class StorageRangeCoordinator(
     case StorageCheckCompletion =>
       // Update contract completion progress for the progress monitor
       updateContractProgress()
+      // Drain side of the back-pressure watermark — if dispatches and completions have shrunk
+      // the queue below the low-water mark, release AccountRangeCoordinator's pause.
+      notifyBackpressureIfChanged()
       // When all downloads complete, flush remaining buffered accounts for trie construction
       if (
         noMoreTasksExpected && tasks.isEmpty && activeTasks.isEmpty &&
@@ -857,7 +926,7 @@ class StorageRangeCoordinator(
       val stats = StorageRangeCoordinator.SyncStatistics(
         slotsDownloaded = slotsDownloaded,
         bytesDownloaded = bytesDownloaded,
-        tasksCompleted = completedTasks.size,
+        tasksCompleted = completedTaskCount.toInt,
         tasksActive = activeTasks.values.map(_._2.size).sum,
         tasksPending = tasks.size,
         elapsedTimeMs = System.currentTimeMillis() - startTime,
@@ -876,8 +945,8 @@ class StorageRangeCoordinator(
       } else {
         accountHashes.foreach { hash =>
           accountsInTrieConstruction.remove(hash)
-          completedAccountHashes.add(hash)
         }
+        completedAccountCount += accountHashes.size
         val rate = if (elapsedMs > 0) totalSlots * 1000 / elapsedMs else totalSlots
         log.info(
           s"Trie construction complete: ${accountHashes.size} accounts, $totalSlots slots in ${elapsedMs}ms " +
@@ -1069,7 +1138,7 @@ class StorageRangeCoordinator(
         val task = tasks.head
         task.done = true
         task.pending = false
-        completedTasks += task
+        recordCompletedTask(task)
         log.warning(
           s"Storage proof-of-absence accepted: account=${task.accountString} " +
             s"storageRoot=${task.storageRoot.take(4).toHex} range=${task.rangeString} " +
@@ -1108,7 +1177,7 @@ class StorageRangeCoordinator(
           skipped += 1
           task.done = true
           task.pending = false
-          completedTasks += task
+          recordCompletedTask(task)
           log.warning(
             s"Skipping storage task after $attempts empty StorageRanges replies: " +
               s"account=${task.accountHash.toHex} storageRoot=${task.storageRoot.toHex} range=${task.rangeString}"
@@ -1219,7 +1288,7 @@ class StorageRangeCoordinator(
                 // smallContractThreshold: ~95% of ETC contracts have < 1024 slots.
                 // MPT built from flat data in post-download Merkleization pass or healing.
                 writeSmallContractFlatOnly(task.accountHash, slotBuffer)
-                completedAccountHashes.add(task.accountHash)
+                completedAccountCount += 1
                 log.debug(
                   s"Account ${task.accountHash.take(4).toArray.map("%02x".format(_)).mkString}: " +
                     s"flat-only write (${slotBuffer.size} slots" +
@@ -1237,7 +1306,7 @@ class StorageRangeCoordinator(
 
             task.done = true
             task.pending = false
-            completedTasks += task
+            recordCompletedTask(task)
 
             // Check if we should trigger a batch trie build
             maybeStartTrieConstruction()
@@ -1245,7 +1314,7 @@ class StorageRangeCoordinator(
             // No slots to store — mark task done
             task.done = true
             task.pending = false
-            completedTasks += task
+            recordCompletedTask(task)
           }
       }
     }
@@ -1338,9 +1407,9 @@ class StorageRangeCoordinator(
 
   private def progress: Double = {
     val activeCount = activeTasks.values.map(_._2.size).sum
-    val total = completedTasks.size + activeCount + tasks.size
+    val total = completedTaskCount + activeCount + tasks.size
     if (total == 0) 1.0
-    else completedTasks.size.toDouble / total
+    else completedTaskCount.toDouble / total
   }
 
   private def isComplete: Boolean =
@@ -1348,16 +1417,18 @@ class StorageRangeCoordinator(
       accountsReadyForBuild.isEmpty && accountsInTrieConstruction.isEmpty && pendingAccountSlots.isEmpty &&
       pendingFlatBatchAccounts.isEmpty && inFlightFlatBatches == 0
 
-  /** Update contract completion counts and send progress to controller. */
+  /** Update contract completion counts and send progress to controller. The counter is incremented
+    * at the two "account fully done" sites (small-contract flat write + TrieConstructionComplete);
+    * we just broadcast its current value, avoiding the previous O(N) rebuild over completedTasks
+    * that ran on every progress check.
+    */
+  private var lastReportedCompletedAccountCount: Long = 0L
   private def updateContractProgress(): Unit = {
     if (totalStorageContracts <= 0) return
-    // Count unique completed accounts from completedTasks
-    val uniqueCompleted = completedTasks.map(_.accountHash).toSet.size
-    if (uniqueCompleted != completedAccountHashes.size) {
-      completedAccountHashes.clear()
-      completedTasks.foreach(t => completedAccountHashes.add(t.accountHash))
+    if (completedAccountCount != lastReportedCompletedAccountCount) {
+      lastReportedCompletedAccountCount = completedAccountCount
       snapSyncController ! SNAPSyncController.ProgressStorageContracts(
-        completedAccountHashes.size,
+        completedAccountCount.toInt,
         totalStorageContracts
       )
     }
@@ -1390,7 +1461,9 @@ object StorageRangeCoordinator {
       deferredMerkleization: Boolean = true,
       flatBatchEntryThreshold: Int = 1000,
       flatBatchEcOverride: Option[ExecutionContext] = None,
-      useStackTrie: Boolean = false
+      useStackTrie: Boolean = false,
+      backpressureHighWatermark: Int = 100000,
+      backpressureLowWatermark: Int = 50000
   ): Props =
     Props(
       new StorageRangeCoordinator(
@@ -1409,7 +1482,9 @@ object StorageRangeCoordinator {
         deferredMerkleization = deferredMerkleization,
         flatBatchEntryThreshold = flatBatchEntryThreshold,
         flatBatchEcOverride = flatBatchEcOverride,
-        useStackTrie = useStackTrie
+        useStackTrie = useStackTrie,
+        backpressureHighWatermark = backpressureHighWatermark,
+        backpressureLowWatermark = backpressureLowWatermark
       )
     )
 
