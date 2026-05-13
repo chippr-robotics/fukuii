@@ -580,6 +580,12 @@ class SNAPSyncController(
       // stops dispatching new account-range requests when storage is over its high-water mark.
       accountRangeCoordinator.foreach(_ ! actors.Messages.StorageQueuePressure(paused))
 
+    case ByteCodeBackpressureChanged(paused) =>
+      // Same pattern for bytecodes — account-range completions enqueue bytecode tasks (in addition
+      // to storage tasks), so the account coordinator must also pause when the bytecode queue is
+      // over its high-water mark.
+      accountRangeCoordinator.foreach(_ ! actors.Messages.ByteCodeQueuePressure(paused))
+
     case PivotStateUnservable(rootHash, reason, emptyResponses) =>
       // When peers can no longer serve the current state root, refresh the pivot in-place
       // instead of restarting. This preserves downloaded trie data (content-addressed nodes
@@ -3769,6 +3775,14 @@ object SNAPSyncController {
     * message so account workers stop producing new storage tasks during back-pressure. Workers
     * already in flight always run to completion. */
   final case class StorageBackpressureChanged(paused: Boolean)
+
+  /** Sent by `ByteCodeCoordinator` to the controller when its pending-task queue crosses a
+    * watermark. Forwarded to `AccountRangeCoordinator` as `ByteCodeQueuePressure`. Bytecode tasks
+    * are produced by account-range completions (one task per batch of code hashes), so the
+    * pause/resume pattern is the same as storage. AccountRangeCoordinator pauses dispatch if
+    * EITHER downstream coordinator is over its high-water mark.
+    */
+  final case class ByteCodeBackpressureChanged(paused: Boolean)
 
   private[snap] def shouldSkipHealingAfterDownloads(
       snapSyncConfig: SNAPSyncConfig,

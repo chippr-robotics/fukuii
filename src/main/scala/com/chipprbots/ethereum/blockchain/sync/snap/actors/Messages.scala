@@ -80,6 +80,14 @@ object Messages {
     */
   case class StorageQueuePressure(paused: Boolean) extends AccountRangeCoordinatorMessage
 
+  /** Same shape as `StorageQueuePressure`, emitted by `ByteCodeCoordinator`. Account-range
+    * completions enqueue both storage tasks AND bytecode tasks, so either downstream coordinator
+    * can independently trigger back-pressure on the account dispatcher. AccountRangeCoordinator
+    * pauses dispatch whenever *any* downstream is over its high-water mark and only resumes once
+    * all sources have released.
+    */
+  case class ByteCodeQueuePressure(paused: Boolean) extends AccountRangeCoordinatorMessage
+
   /** Self-message — periodic check for `activeTasks.nonEmpty` + no-activity wedges (#1184). Scheduled from
     * `AccountRangeCoordinator.preStart` at 30 s intervals via `scheduleAtFixedRate`; cancelled in `postStop`.
     */

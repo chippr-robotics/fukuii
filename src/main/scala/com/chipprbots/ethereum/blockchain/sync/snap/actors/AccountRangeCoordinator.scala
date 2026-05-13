@@ -98,12 +98,16 @@ class AccountRangeCoordinator(
   // Part of global per-peer request budgeting (Geth-aligned: total 5 per peer across all coordinators).
   private var maxInFlightPerPeer: Int = initialMaxInFlightPerPeer
 
-  // Storage-queue back-pressure flag (#1232 follow-up). Set true when StorageRangeCoordinator's pending
-  // queue crosses its high-water mark; cleared when it drains below the low-water mark. While set, we
-  // do not start new account-range dispatches — workers already in flight continue to completion so
-  // existing work drains naturally, but we stop producing new storage tasks until the storage queue
-  // catches up. Package-private for AccountRangeCoordinatorSpec to drive directly under TestActorRef.
-  private[actors] var storageBackpressureActive: Boolean = false
+  // Downstream-queue back-pressure (#1232 follow-up). Either StorageRangeCoordinator OR
+  // ByteCodeCoordinator can independently signal that its pending queue has crossed the
+  // high-water mark; account-range dispatching must pause whenever ANY downstream is over its
+  // mark, and only resume once they have ALL released. We track each source by name so the two
+  // signals don't interfere — releasing storage shouldn't accidentally unpause when bytecodes are
+  // still over their mark, etc. Package-private for tests.
+  private[actors] val backpressureSources: mutable.Set[String] = mutable.Set.empty[String]
+  private def downstreamBackpressureActive: Boolean = backpressureSources.nonEmpty
+  // Kept for spec compatibility; reflects whether the storage source is currently engaged.
+  private[actors] def storageBackpressureActive: Boolean = backpressureSources.contains("storage")
 
   // Stateless peer tracking: peers that return "Missing proof for empty account range"
   // OR consecutive timeouts are unable to serve the current state root. Cleared on
@@ -625,25 +629,10 @@ class AccountRangeCoordinator(
       if (newLimit > 0) tryRedispatchPendingTasks()
 
     case StorageQueuePressure(paused) =>
-      if (paused == storageBackpressureActive) {
-        // Duplicate transition (e.g. spurious resend) — ignore.
-      } else {
-        storageBackpressureActive = paused
-        if (paused) {
-          log.info(
-            "Storage back-pressure ENGAGED — pausing new account-range dispatches. " +
-              s"${pendingTasks.size} pending, ${activeTasks.size} in flight (will complete normally)."
-          )
-        } else {
-          log.info(
-            "Storage back-pressure RELEASED — resuming account-range dispatches. " +
-              s"${pendingTasks.size} pending."
-          )
-          // Re-engage immediately so we don't have to wait for the next PeerAvailable tick.
-          tryRedispatchPendingTasks()
-          knownAvailablePeers.filterNot(isPeerStateless).foreach(dispatchIfPossible)
-        }
-      }
+      applyBackpressureChange(source = "storage", paused = paused)
+
+    case ByteCodeQueuePressure(paused) =>
+      applyBackpressureChange(source = "bytecode", paused = paused)
 
     case PeerUnavailable(peerId) =>
       // Peer disconnected — remove from available set and re-queue in-flight tasks.
@@ -849,13 +838,14 @@ class AccountRangeCoordinator(
   /** Dispatch up to maxInFlightPerPeer tasks to the given peer (pipelining). Mirrors
     * ByteCodeCoordinator.dispatchIfPossible — the proven pattern for SNAP sync.
     *
-    * No-op while storage back-pressure is active: workers already in flight always run to completion,
-    * so existing work continues to drain, but we stop producing new storage tasks until the storage
-    * coordinator clears its high-water mark.
+    * No-op while any downstream coordinator (storage OR bytecode) is over its high-water mark.
+    * Workers already in flight always run to completion, so existing work continues to drain, but
+    * we stop producing new tasks (which would in turn enqueue more storage / bytecode work) until
+    * every signalling downstream has released.
     */
   private def dispatchIfPossible(peer: Peer): Unit = {
     if (pendingTasks.isEmpty) return
-    if (storageBackpressureActive) return
+    if (downstreamBackpressureActive) return
 
     var inflight = inFlightForPeer(peer)
     while (pendingTasks.nonEmpty && inflight < maxInFlightPerPeer) {
@@ -871,6 +861,35 @@ class AccountRangeCoordinator(
         case None =>
           return
       }
+    }
+  }
+
+  /** Internal: record a back-pressure transition from one named downstream and re-engage dispatch
+    * once every signalling source has released. ANY-OF semantics: pause while at least one source
+    * is engaged; resume only when the set is fully empty.
+    */
+  private def applyBackpressureChange(source: String, paused: Boolean): Unit = {
+    val wasActive = downstreamBackpressureActive
+    if (paused) backpressureSources += source else backpressureSources -= source
+    val nowActive = downstreamBackpressureActive
+    if (wasActive == nowActive) {
+      // Either a duplicate transition for the same source or a partial release that left another
+      // source still engaged. No state change worth logging at INFO.
+      log.debug(
+        s"Back-pressure source '$source' set paused=$paused; active sources now: ${backpressureSources.mkString(",")}"
+      )
+    } else if (nowActive) {
+      log.info(
+        s"Downstream back-pressure ENGAGED (source=$source) — pausing new account-range dispatches. " +
+          s"${pendingTasks.size} pending, ${activeTasks.size} in flight (will complete normally)."
+      )
+    } else {
+      log.info(
+        s"Downstream back-pressure RELEASED (source=$source was the last engaged source) — resuming. " +
+          s"${pendingTasks.size} pending."
+      )
+      tryRedispatchPendingTasks()
+      knownAvailablePeers.filterNot(isPeerStateless).foreach(dispatchIfPossible)
     }
   }
 

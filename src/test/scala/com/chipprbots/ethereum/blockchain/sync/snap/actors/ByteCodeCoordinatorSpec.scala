@@ -594,4 +594,41 @@ class ByteCodeCoordinatorSpec
     coordinator ! Messages.ForceCompleteByteCodes
     snapSyncController.expectMsg(3.seconds, SNAPSyncController.ByteCodeSyncComplete)
   }
+
+  // ── Back-pressure on the pending bytecode-task queue ───────────────────────
+  // Mirrors the storage coordinator's pattern. ByteCodeTask used to retain the
+  // full bytecode blob payload after completion (a separate fix in this PR);
+  // even with that fixed, an unbounded pending queue still leaks task-metadata
+  // memory linearly with chain size. The coordinator now publishes high/low-
+  // water transitions that SNAPSyncController forwards to AccountRangeCoordinator.
+  it should "emit ByteCodeBackpressureChanged when the pending queue crosses watermarks" taggedAs UnitTest in {
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    // Tiny watermarks: high=4, low=2. batchSize=1 so one hash → one task → one queue entry,
+    // letting us drive the transition with a handful of hashes.
+    val coordinator = system.actorOf(
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 1,
+        snapSyncController = snapSyncController.ref,
+        cooldownConfig = testCooldownConfig,
+        backpressureHighWatermark = 4,
+        backpressureLowWatermark = 2
+      )
+    )
+
+    // Queue 4 hashes → 4 tasks → crosses the high-water mark.
+    val hashes = (1 to 4).map(i => kec256(ByteString(s"hash-$i")))
+    coordinator ! Messages.AddByteCodeTasks(hashes)
+    snapSyncController.expectMsg(3.seconds, SNAPSyncController.ByteCodeBackpressureChanged(paused = true))
+
+    // Re-checking at the same depth must NOT emit a duplicate transition.
+    coordinator ! Messages.ByteCodeCheckCompletion
+    snapSyncController.expectNoMessage(500.millis)
+  }
 }
