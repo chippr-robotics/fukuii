@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
+import com.chipprbots.ethereum.network.p2p.messages.ETH62
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.{BlockHeaders => ETH62BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.NewBlockHashes
 import com.chipprbots.ethereum.network.p2p.messages.ETH66
@@ -234,13 +235,41 @@ class NetworkPeerManagerActor(
       peerEventBusActor ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)))
       peerEventBusActor ! Subscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)))
 
-      // Do NOT send unsolicited GetBlockHeaders after handshake.
-      // The sync engine (BlockFetcher/HeadersFetcher) will request headers when needed through
-      // the normal PeersClient polling mechanism. Sending GetBlockHeaders immediately violates
-      // the expected message flow in devp2p protocol tests and is not standard behavior
-      // (geth does not send unsolicited GetBlockHeaders after Status exchange).
-      // For ETH69+, latestBlock/latestBlockHash are already in the Status message.
-      // For ETH64+, ForkId in Status provides fork validation without needing block headers.
+      // Besu-style eager best-block probe.
+      // ETH/64-/68 STATUS carries `bestHash` but not the peer's best block *number* — only
+      // ETH/61 (long gone) and ETH/69 do. Without the number, fast-sync `PivotBlockSelector`
+      // sees `peer.maxBlockNumber == 0`, picks pivot = 0, and never converges (the loop
+      // we hit on Barad-dûr 2026-04-29). Geth resolves this lazily inside the downloader by
+      // probing the chosen peer's bestHash; besu and nethermind do it eagerly the moment
+      // STATUS completes. We follow the eager pattern: one `GetBlockHeaders(bestHash, 1)`
+      // immediately after handshake, the response routes through `updateMaxBlock` via the
+      // existing `BlockHeadersCode` subscription and populates `PeerInfo.maxBlockNumber`.
+      //
+      // Skip the probe for:
+      //  * ETH/69 — STATUS already carries latestBlock (stuffed into chainWeight.totalDifficulty
+      //    by the handshaker), so maxBlockNumber is set on construction.
+      //  * Peers at genesis (`bestHash == genesisHash`) — they're block 0 by definition;
+      //    `peerHasUpdatedBestBlock` already accepts them as `isAtGenesis`.
+      //
+      // Peers that don't reply to the probe simply stay at maxBlockNumber=0 and get filtered
+      // by `peerHasUpdatedBestBlock` — no disconnect, since Mordor peers can be flaky and
+      // we don't want to throw away connections for one missed reply (Bug 26 lesson).
+      if (peerInfo.remoteStatus.capability != Capability.ETH69 && !peerInfo.isAtGenesis) {
+        val bestHash = peerInfo.remoteStatus.bestHash
+        val probe: MessageSerializable =
+          if (Capability.usesRequestId(peerInfo.remoteStatus.capability))
+            ETH66.GetBlockHeaders(ETH66.nextRequestId, Right(bestHash), 1, 0, reverse = false)
+          else
+            ETH62.GetBlockHeaders(Right(bestHash), 1, 0, reverse = false)
+        log.debug(
+          "BEST_BLOCK_PROBE: peer={} cap={} bestHash={} — asking for header at bestHash to discover block number",
+          peer.id,
+          peerInfo.remoteStatus.capability,
+          ByteStringUtils.hash2string(bestHash)
+        )
+        peerManagerActor ! PeerManagerActor.SendMessage(probe, peer.id)
+      }
+
       NetworkMetrics.registerAddHandshakedPeer(peer)
       context.become(handleMessages(peersWithInfo + (peer.id -> PeerWithInfo(peer, peerInfo))))
 

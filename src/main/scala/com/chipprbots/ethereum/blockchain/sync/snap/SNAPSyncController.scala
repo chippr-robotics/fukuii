@@ -313,6 +313,12 @@ class SNAPSyncController(
 
   override def preStart(): Unit = {
     log.info("SNAP Sync Controller initialized")
+    log.info(
+      s"SNAPSyncConfig: useStackTrie=${snapSyncConfig.useStackTrie}, " +
+        s"accountConcurrency=${snapSyncConfig.accountConcurrency}, " +
+        s"storageBatchSize=${snapSyncConfig.storageBatchSize}, " +
+        s"pivotBlockOffset=${snapSyncConfig.pivotBlockOffset}"
+    )
     progressMonitor.startPeriodicLogging()
   }
 
@@ -1540,7 +1546,8 @@ class SNAPSyncController(
                       initialMaxInFlightPerPeer = 3, // Recovery: accounts done, storage gets 3 of 5 per-peer budget
                       initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
                       minResponseBytes = snapSyncConfig.storageMinResponseBytes,
-                      deferredMerkleization = snapSyncConfig.deferredMerkleization
+                      deferredMerkleization = snapSyncConfig.deferredMerkleization,
+                      useStackTrie = snapSyncConfig.useStackTrie
                     )
                     .withDispatcher("sync-dispatcher"),
                   s"storage-range-coordinator-$coordinatorGeneration"
@@ -2350,7 +2357,8 @@ class SNAPSyncController(
               5, // Full per-peer budget during AccountRangeSync (storage+bytecode deferred to 0)
             trieFlushThreshold = snapSyncConfig.accountTrieFlushThreshold,
             initialResponseBytes = snapSyncConfig.accountInitialResponseBytes,
-            minResponseBytes = snapSyncConfig.accountMinResponseBytes
+            minResponseBytes = snapSyncConfig.accountMinResponseBytes,
+            useStackTrie = snapSyncConfig.useStackTrie
           )
           .withDispatcher("sync-dispatcher"),
         s"account-range-coordinator-$coordinatorGeneration"
@@ -2424,7 +2432,8 @@ class SNAPSyncController(
                 0, // Defer storage dispatch during AccountRangeSync — prevents false pivot refreshes from stale-root timeouts
               initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
               minResponseBytes = snapSyncConfig.storageMinResponseBytes,
-              deferredMerkleization = snapSyncConfig.deferredMerkleization
+              deferredMerkleization = snapSyncConfig.deferredMerkleization,
+              useStackTrie = snapSyncConfig.useStackTrie
             )
             .withDispatcher("sync-dispatcher"),
           s"storage-range-coordinator-$coordinatorGeneration"
@@ -3838,7 +3847,20 @@ case class SNAPSyncConfig(
     // Use for local SNAP-serving nodes (e.g. Besu with --snapsync-server-enabled) that may
     // disconnect after storage phase but are needed for trie node healing.
     // Format: enode://PUBKEY@HOST:PORT
-    snapServerPeers: List[java.net.URI] = Nil
+    snapServerPeers: List[java.net.URI] = Nil,
+    /** Phase 2 of the SNAP rewrite (`snap-stacktrie-port` plan).
+      *
+      * When `true`, the SNAP write path uses streaming `SnapHashTrie`
+      * (one per AccountTask, one per storage contract) instead of the legacy
+      * `MerklePatriciaTrie` + `DeferredWriteMptStorage` approach. Memory is
+      * bounded by trie depth rather than account count; the multi-GiB
+      * in-memory pivot trie and its 13.6-minute collapse are eliminated.
+      *
+      * Default `false` — opt in via `sync.snap-sync.use-stack-trie = true`
+      * in sync.conf for testing. Will become the default once Sepolia +
+      * Mordor validation completes (Step 5 of the plan).
+      */
+    useStackTrie: Boolean = false
 )
 
 object SNAPSyncConfig {
@@ -3953,7 +3975,11 @@ object SNAPSyncConfig {
               try Some(new java.net.URI(s.toString))
               catch { case _: Exception => None }
             }
-        else Nil
+        else Nil,
+      useStackTrie =
+        if (snapConfig.hasPath("use-stack-trie"))
+          snapConfig.getBoolean("use-stack-trie")
+        else false
     )
   }
 }

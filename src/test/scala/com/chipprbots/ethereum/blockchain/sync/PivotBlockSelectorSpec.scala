@@ -107,6 +107,32 @@ class PivotBlockSelectorSpec
     expectGetBlockHeadersRequests(Seq(peer1, peer2, peer3), blockNumber = 0)
   }
 
+  it should "skip peers whose maxBlockNumber is still 0 (probe reply not yet arrived)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup {
+    // All three peers have forkAccepted=true but maxBlockNumber=0 — i.e., they
+    // handshaked but their Bug 32 best-block probe hasn't been answered yet.
+    // The selector must NOT pick a pivot from these peers; otherwise it asks for
+    // block 0 (genesis) and loops forever. Mirrors the SNAP-side
+    // `peer.maxBlockNumber > 0` filter.
+    updateHandshakedPeers(
+      HandshakedPeers(
+        threeAcceptedPeers
+          .updated(peer1, threeAcceptedPeers(peer1).copy(maxBlockNumber = 0))
+          .updated(peer2, threeAcceptedPeers(peer2).copy(maxBlockNumber = 0))
+          .updated(peer3, threeAcceptedPeers(peer3).copy(maxBlockNumber = 0))
+      )
+    )
+
+    pivotBlockSelector ! SelectPivotBlock
+
+    // No subscriptions, no GetBlockHeaders, no fastSync ! Result — selector parks.
+    peerMessageBus.expectNoMessage()
+    networkPeerManager.expectNoMessage()
+    fastSync.expectNoMessage()
+  }
+
   it should "retry if there are no enough peers" taggedAs (UnitTest, SyncTest) in new TestSetup {
     updateHandshakedPeers(HandshakedPeers(singlePeer))
 

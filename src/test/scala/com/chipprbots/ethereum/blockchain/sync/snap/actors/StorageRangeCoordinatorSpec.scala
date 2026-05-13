@@ -716,4 +716,44 @@ class StorageRangeCoordinatorSpec
 
     system.stop(coord)
   }
+
+  // -----------------------------------------------------------------------
+  // StackTrie write-path (Step 4 of `snap-stacktrie-port` plan)
+  // -----------------------------------------------------------------------
+  // Verify the coordinator constructs and operates normally with the flag
+  // enabled. The actual per-contract trie-building happens asynchronously on
+  // `trieBuilderEc` (a separate thread pool); end-to-end verification of the
+  // node emissions is exercised by the Sepolia test run that follows Step 5.
+
+  it should "construct successfully with useStackTrie = true" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("storage-stacktrie-construct-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = system.actorOf(
+      StorageRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+        maxAccountsPerBatch = 8,
+        maxInFlightRequests = 8,
+        requestTimeout = 30.seconds,
+        snapSyncController = snapSyncController.ref,
+        useStackTrie = true
+      )
+    )
+
+    coordinator should not be null
+
+    // Smoke: accept the basic lifecycle messages without error.
+    coordinator ! Messages.StartStorageRangeSync(stateRoot)
+    coordinator ! Messages.StorageGetProgress
+    expectMsgType[Any](3.seconds)
+
+    system.stop(coordinator)
+  }
 }
