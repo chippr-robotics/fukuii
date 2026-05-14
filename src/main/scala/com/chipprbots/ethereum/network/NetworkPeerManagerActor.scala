@@ -70,6 +70,17 @@ class NetworkPeerManagerActor(
   // recently — they're already keeping `maxBlockNumber` fresh on their own.
   private val lastBlockSignalMs = scala.collection.mutable.Map.empty[PeerId, Long]
 
+  // Last CL forkchoice head reported by SNAPSyncController. None until first
+  // `UpdateClHead` arrives. Pre-merge chains never set this and the lagging-peer-eviction
+  // loop is a no-op there (correct: ETC mainnet has no consensus layer).
+  private var lastKnownClHead: Option[BigInt] = None
+
+  // First timestamp at which a peer was observed lagging more than `LaggingPeerLagThreshold`
+  // blocks behind `lastKnownClHead`. Used for hysteresis: a peer needs to stay lagging
+  // continuously for `LaggingPeerEvictAfter` before being disconnected. Cleared when the
+  // peer catches up (so a peer that's mid-catch-up doesn't get evicted) or on disconnect.
+  private val laggingPeerSince = scala.collection.mutable.Map.empty[PeerId, Long]
+
   // 60s network summary — read+reset RLPx counters and log one aggregate line
   context.system.scheduler.scheduleWithFixedDelay(
     60.seconds,
@@ -95,6 +106,18 @@ class NetworkPeerManagerActor(
     BestBlockRefreshInterval,
     self,
     NetworkPeerManagerActor.RefreshPeerBestBlocks
+  )(context.dispatcher)
+
+  // Periodic lagging-peer eviction. Peers chronically more than `LaggingPeerLagThreshold`
+  // blocks below the CL head occupy connection slots that fresh peers can't take. Without
+  // eviction the pool decays to whatever ratio of stuck-vs-fresh peers happened to
+  // connect first. Hysteresis (10 min) prevents catching peers that are mid-catch-up.
+  // Pre-merge chains have no `lastKnownClHead` → handler is a no-op.
+  context.system.scheduler.scheduleWithFixedDelay(
+    LaggingPeerCheckInterval,
+    LaggingPeerCheckInterval,
+    self,
+    NetworkPeerManagerActor.CheckLaggingPeers
   )(context.dispatcher)
 
   // Subscribe to the event of any peer getting handshaked
@@ -215,6 +238,58 @@ class NetworkPeerManagerActor(
       }
       if (probed > 0) {
         log.debug(s"BEST_BLOCK_REPROBE: probed $probed/${peersWithInfo.size} peers for current head")
+      }
+
+    case NetworkPeerManagerActor.UpdateClHead(blockNumber) =>
+      // Cheap update from SNAPSyncController. We only act on this in the CheckLaggingPeers
+      // tick, so no need to do anything else here.
+      if (!lastKnownClHead.contains(blockNumber)) {
+        lastKnownClHead = Some(blockNumber)
+      }
+
+    case NetworkPeerManagerActor.CheckLaggingPeers =>
+      lastKnownClHead match {
+        case None =>
+          // Pre-merge chain or CL hasn't connected yet — no authoritative tip to anchor on.
+          ()
+        case Some(clHead) =>
+          val now = System.currentTimeMillis()
+          val poolSize = peersWithInfo.size
+          if (poolSize <= LaggingPeerMinPoolFloor) {
+            // Don't crater the pool on a small network. Better one stale peer than zero peers.
+            log.debug(
+              s"LAGGING_PEER_CHECK: pool=$poolSize <= floor=$LaggingPeerMinPoolFloor — skipping eviction sweep"
+            )
+          } else {
+            val laggingFloor = clHead - LaggingPeerLagThreshold
+            val candidates = peersWithInfo.iterator.flatMap { case (peerId, PeerWithInfo(peer, peerInfo)) =>
+              if (peerInfo.maxBlockNumber > 0 && peerInfo.maxBlockNumber < laggingFloor) {
+                val firstSeen = laggingPeerSince.getOrElseUpdate(peerId, now)
+                val laggedFor = now - firstSeen
+                if (laggedFor >= LaggingPeerEvictAfter.toMillis) Some((peerId, peer, peerInfo, laggedFor))
+                else None
+              } else {
+                // Peer caught up (or never lagged) — reset hysteresis.
+                laggingPeerSince.remove(peerId)
+                None
+              }
+            }.take(LaggingPeerMaxEvictionsPerCycle).toList
+
+            candidates.foreach { case (peerId, peer, peerInfo, laggedFor) =>
+              log.info(
+                s"LAGGING_PEER_EVICT: peer=${peerId.value} maxBlock=${peerInfo.maxBlockNumber} " +
+                  s"(${clHead - peerInfo.maxBlockNumber} behind CL head $clHead) for ${laggedFor / 1000}s " +
+                  s"— disconnecting and blacklisting for $LaggingPeerBlacklistDuration"
+              )
+              peer.ref ! DisconnectPeer(Disconnect.Reasons.UselessPeer)
+              // The PeerManagerActor handles inbound disconnects and applies its own
+              // blacklist via getBlacklistDuration. Our explicit disconnect routes through
+              // the same `PeerClosedConnection` path, so post-#1235 the UselessPeer reason
+              // already maps to shortBlacklistDuration. No additional blacklist.add needed
+              // here — let the existing pipeline do it.
+              laggingPeerSince.remove(peerId)
+            }
+          }
       }
   }
 
@@ -350,6 +425,7 @@ class NetworkPeerManagerActor(
       peerEventBusActor ! Unsubscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peerId)))
       NetworkMetrics.registerRemoveHandshakedPeer(peersWithInfo(peerId).peer)
       lastBlockSignalMs.remove(peerId)
+      laggingPeerSince.remove(peerId)
       context.become(handleMessages(peersWithInfo - peerId))
 
   }
@@ -993,6 +1069,17 @@ object NetworkPeerManagerActor {
   /** Self-message that drives the periodic best-block re-probe loop. */
   private[network] case object RefreshPeerBestBlocks
 
+  /** Self-message that drives the lagging-peer-eviction loop. */
+  private[network] case object CheckLaggingPeers
+
+  /** Sent by `SNAPSyncController` whenever it ingests a new CL forkchoice head. Lets the
+    * peer manager evict chronically-lagging peers (more than `LaggingPeerLagThreshold`
+    * blocks below the CL head) so discovery can refill the connection slot with a fresh
+    * peer. Without this signal the actor has no notion of "actual chain tip" — pre-merge
+    * chains never send it and lagging-peer eviction is correctly disabled.
+    */
+  case class UpdateClHead(blockNumber: BigInt)
+
   /** How often to send each handshaked peer a one-shot `GetBlockHeaders(bestHash, 1)` to
     * refresh `PeerInfo.maxBlockNumber`. Defaults to 5 minutes — small fraction of typical
     * peer connection lifetimes (~30+ min) and small fraction of pivot-refresh cadence.
@@ -1005,6 +1092,33 @@ object NetworkPeerManagerActor {
     * polled within 2.5 minutes regardless of its push cadence.
     */
   private[network] val BlockSignalStaleAfter: FiniteDuration = 150.seconds
+
+  /** Lagging-peer eviction parameters. Together: a peer that has been ≥ 4096 blocks
+    * behind the CL head continuously for 10 minutes is disconnected (and IP-blacklisted
+    * for 2 minutes to prevent immediate re-dial). 4096 matches the pivot freshness floor
+    * default (`snap-sync.max-pivot-staleness-blocks`, see #1234) so the same peer that
+    * fails pivot selection is the one we evict.
+    *
+    * Per-cycle cap of 5 evictions prevents the pool from collapsing if a sweep catches
+    * many peers at once; the 10-minute hysteresis prevents catching peers that are merely
+    * catching up.
+    */
+  private[network] val LaggingPeerCheckInterval: FiniteDuration = 2.minutes
+  private[network] val LaggingPeerEvictAfter: FiniteDuration = 10.minutes
+  private[network] val LaggingPeerLagThreshold: BigInt = BigInt(4096)
+  private[network] val LaggingPeerMaxEvictionsPerCycle: Int = 5
+
+  /** Below this floor of handshaked peers, skip eviction — better to keep a stale peer
+    * than to crater the connection pool on a small network like Mordor.
+    */
+  private[network] val LaggingPeerMinPoolFloor: Int = 5
+
+  /** Brief IP-blacklist applied to the evicted peer so we don't immediately re-dial it
+    * via the same enode + dispatcher loop. 2 minutes matches PR #1235's
+    * shortBlacklistDuration semantics: this is a "you're not interesting right now"
+    * rejection, not a protocol violation.
+    */
+  private[network] val LaggingPeerBlacklistDuration: FiniteDuration = 2.minutes
 
   case class HandshakedPeers(peers: Map[Peer, PeerInfo])
 

@@ -1446,6 +1446,13 @@ class SNAPSyncController(
         isPostMergeChain
       )
     }
+    // Forward the CL head number to the network peer manager so it can run lagging-peer
+    // eviction. Only valid when we know the actual block number (the by-hash bootstrap
+    // variant skips this — `knownHeader` is None — and `NetworkPeerManagerActor` correctly
+    // treats "never updated" as "pre-merge or unknown" → no-op).
+    hint.knownHeader.foreach { header =>
+      networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.UpdateClHead(header.number)
+    }
     // Reactive starts: if we're already at idle and a hint arrives during operator-driven
     // startup, the `Start` handler will pick this up. We don't auto-start here because
     // SyncController's startSnapSync() drives the lifecycle.
