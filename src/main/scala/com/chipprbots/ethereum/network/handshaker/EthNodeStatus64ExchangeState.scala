@@ -98,11 +98,21 @@ case class EthNodeStatus64ExchangeState(
     val bestBlockHeader = getBestBlockHeader()
     val bestBlockNumber = blockchainReader.getBestBlockNumber()
 
+    // ChainWeightStorage isn't populated for blocks reached via SNAP sync (the pivot block
+    // has no upstream PoW chain in our DB to sum difficulties over). On post-merge chains
+    // this never gets backfilled because we don't import pre-merge blocks. Falling back to
+    // ChainWeight.zero is operationally safe: peers use ForkId for compatibility checks
+    // (EIP-2124), not the wire TD field. ETH/64-68 sepolia/mainnet handshakes were 100%
+    // failing here before the fallback. See OOM-investigation 2026-05-14.
     val chainWeight = blockchainReader
       .getChainWeightByHash(bestBlockHeader.hash)
-      .getOrElse(
-        throw new IllegalStateException(s"Chain weight not found for hash ${bestBlockHeader.hash}")
-      )
+      .getOrElse {
+        log.debug(
+          s"Chain weight not stored for best block ${bestBlockHeader.hash} (SNAP-sync state); " +
+            s"advertising ChainWeight.zero in ETH/64-68 STATUS"
+        )
+        com.chipprbots.ethereum.domain.ChainWeight.zero
+      }
 
     val genesisHash = blockchainReader.genesisHeader.hash
 
