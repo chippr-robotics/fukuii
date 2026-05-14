@@ -282,11 +282,21 @@ class NetworkPeerManagerActor(
                   s"— disconnecting and blacklisting for $LaggingPeerBlacklistDuration"
               )
               peer.ref ! DisconnectPeer(Disconnect.Reasons.UselessPeer)
-              // The PeerManagerActor handles inbound disconnects and applies its own
-              // blacklist via getBlacklistDuration. Our explicit disconnect routes through
-              // the same `PeerClosedConnection` path, so post-#1235 the UselessPeer reason
-              // already maps to shortBlacklistDuration. No additional blacklist.add needed
-              // here — let the existing pipeline do it.
+              // PeerClosedConnection will apply a short-tier (2-min) blacklist for UselessPeer
+              // via getBlacklistDuration. That's right for transient rejections, but a peer that
+              // failed our 10-min hysteresis is a *chronic* laggard — re-dialing in 2 min just
+              // restarts the eviction cycle. Schedule a longer override that lands AFTER the
+              // PeerClosedConnection's short-tier add; cache.put replaces by key, so the longer
+              // duration wins.
+              context.system.scheduler.scheduleOnce(
+                LaggingPeerBlacklistOverrideDelay,
+                peerManagerActor,
+                PeerManagerActor.AddToBlacklistRequest(
+                  address = peer.remoteAddress.getHostString,
+                  duration = Some(LaggingPeerBlacklistDuration),
+                  reason = Disconnect.reasonToString(Disconnect.Reasons.UselessPeer)
+                )
+              )(context.dispatcher)
               laggingPeerSince.remove(peerId)
             }
           }
@@ -1119,12 +1129,22 @@ object NetworkPeerManagerActor {
     */
   private[network] val LaggingPeerMinPoolFloor: Int = 2
 
-  /** Brief IP-blacklist applied to the evicted peer so we don't immediately re-dial it
-    * via the same enode + dispatcher loop. 2 minutes matches PR #1235's
-    * shortBlacklistDuration semantics: this is a "you're not interesting right now"
-    * rejection, not a protocol violation.
+  /** IP-blacklist applied to a peer that just failed the 10-minute lagging-peer hysteresis.
+    * Distinct from PR #1235's short-tier UselessPeer mapping (also 2 min): that's right for
+    * transient "rejected by remote" signals, but a peer we *chose* to evict for chronic lag
+    * has already proven it can't keep up. 30 minutes is long enough to break the immediate
+    * re-dial cycle (discovery has time to surface a fresh peer), short enough that a peer
+    * whose operator restarts and resyncs can reconnect within the hour.
     */
-  private[network] val LaggingPeerBlacklistDuration: FiniteDuration = 2.minutes
+  private[network] val LaggingPeerBlacklistDuration: FiniteDuration = 30.minutes
+
+  /** Delay before applying the override blacklist. PeerClosedConnection takes a network
+    * round-trip to propagate; we need the override to land AFTER PeerManagerActor processes
+    * that close path (which applies the short-tier 2-min blacklist), otherwise the short
+    * entry overrides ours. 5 seconds is comfortably above typical disconnect propagation
+    * without delaying the eviction so long that the peer could reconnect first.
+    */
+  private[network] val LaggingPeerBlacklistOverrideDelay: FiniteDuration = 5.seconds
 
   case class HandshakedPeers(peers: Map[Peer, PeerInfo])
 
