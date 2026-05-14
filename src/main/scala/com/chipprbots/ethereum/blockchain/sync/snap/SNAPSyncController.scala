@@ -2472,11 +2472,14 @@ class SNAPSyncController(
       )
     }
 
-    // ByteCode and storage start with budget=0 during account phase (tasks accumulate, dispatch deferred).
-    // During AccountRangeSync: accounts=5, storage=0, bytecode=0 — avoids false pivot refreshes
-    // from stale-root storage timeouts and gives accounts full per-peer bandwidth.
-    bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(0))
-    storageRangeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(0))
+    // ByteCode and storage start with budget=2 each during account phase (per-peer concurrent
+    // limit). On huge chains (sepolia, ETH mainnet) account ranges never fully complete within
+    // a pivot serve window, so the old budget=0 path left storage/bytecode queues to grow until
+    // OOM. PR #1237's strike-counted demotion + PR #1241's backpressure-release-on-pivot make
+    // stale-root timeouts recoverable rather than failure cascades. See PR #1252.
+    // During AccountRangeSync: accounts=5, storage=2, bytecode=2 per peer.
+    bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(2))
+    storageRangeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(2))
 
     progressMonitor.startPhase(AccountRangeSync)
   }
