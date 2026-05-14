@@ -3186,6 +3186,7 @@ class SNAPSyncController(
     }
     updateBestBlockForPivot(newPivotHeader, newPivotBlock)
     SNAPSyncMetrics.setPivotBlockNumber(newPivotBlock)
+    SNAPSyncMetrics.incrementPivotRefreshed()
 
     // Geth-aligned: send refresh signal to ALL active coordinators (all 3 run concurrently)
     accountRangeCoordinator.foreach(_ ! actors.Messages.PivotRefreshed(newStateRoot))

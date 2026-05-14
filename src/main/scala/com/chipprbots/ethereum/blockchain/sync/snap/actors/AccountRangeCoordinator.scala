@@ -1230,6 +1230,7 @@ class AccountRangeCoordinator(
             s"${workers.size} workers/${activePeerCount} peers, " +
             s"${rate} accounts/sec)"
         )
+        com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setAccountActivePeers(activePeerCount)
         lastProgressLogAt = accountsDownloaded
       }
 

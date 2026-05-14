@@ -662,8 +662,10 @@ class StorageRangeCoordinator(
     */
   private def notifyBackpressureIfChanged(): Unit = {
     val pending = tasks.size
+    com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setStorageQueueDepth(pending.toLong)
     if (!backpressureActive && pending >= backpressureHighWatermark) {
       backpressureActive = true
+      com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setStorageBackpressure(true)
       log.info(
         s"Storage queue back-pressure ENGAGED at $pending pending tasks (high-water=$backpressureHighWatermark). " +
           s"Signalling AccountRangeCoordinator to pause dispatch."
@@ -671,6 +673,7 @@ class StorageRangeCoordinator(
       snapSyncController ! SNAPSyncController.StorageBackpressureChanged(paused = true)
     } else if (backpressureActive && pending <= backpressureLowWatermark) {
       backpressureActive = false
+      com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setStorageBackpressure(false)
       log.info(
         s"Storage queue back-pressure RELEASED at $pending pending tasks (low-water=$backpressureLowWatermark). " +
           s"Signalling AccountRangeCoordinator to resume dispatch."
@@ -937,6 +940,7 @@ class StorageRangeCoordinator(
       // notifyBackpressureIfChanged() call from AddStorageTasks will re-engage.
       if (backpressureActive) {
         backpressureActive = false
+        com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setStorageBackpressure(false)
         log.info(
           s"Storage queue back-pressure RELEASED on pivot refresh (queue depth=${tasks.size}). " +
             s"Will re-engage if queue crosses high-water=$backpressureHighWatermark again."
