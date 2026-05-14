@@ -1429,9 +1429,12 @@ class StorageRangeCoordinator(
       }
   }
 
-  // Periodic state-dump cadence — every 5th redispatch (≈ every 2.5 min at 30s tick) emits an
-  // INFO snapshot of pool state. Cheap and answers "why isn't storage draining?" from logs alone.
-  private var redispatchTickCount: Long = 0L
+  // Periodic state-dump cadence — at most one INFO snapshot every 30 seconds. tryRedispatchPendingTasks
+  // can be called many times per second under heavy storage flow (each AddStorageTasks call
+  // chains into it), so modulo-based throttling produced log floods that overflowed the live
+  // monitor pipe; time-based throttling is robust against call-rate spikes.
+  private var lastStateLogMs: Long = 0L
+  private val StateLogIntervalMs: Long = 30_000L
 
   private def tryRedispatchPendingTasks(): Unit = {
     if (tasks.isEmpty) return
@@ -1440,8 +1443,10 @@ class StorageRangeCoordinator(
     val eligiblePeers = knownAvailablePeers
       .filterNot(p => isPeerStateless(p) || isPeerCoolingDown(p))
       .toList
-    redispatchTickCount += 1
-    if (redispatchTickCount % 5 == 0L) {
+    val now = System.currentTimeMillis()
+    val shouldLog = now - lastStateLogMs >= StateLogIntervalMs
+    if (shouldLog) {
+      lastStateLogMs = now
       log.info(
         s"[STORAGE-STATE] pending=${tasks.size} active=${activeTasks.size} " +
           s"workers-known=${knownAvailablePeers.size} stateless=${statelessPeers.size} " +
@@ -1450,11 +1455,13 @@ class StorageRangeCoordinator(
       )
     }
     if (eligiblePeers.isEmpty) {
-      log.info(
-        s"[STORAGE-REDISPATCH] No eligible peers — ${knownAvailablePeers.size} known, " +
-          s"${statelessPeers.size} stateless, " +
-          s"${knownAvailablePeers.count(isPeerCoolingDown)} cooling. pending: ${tasks.size}"
-      )
+      if (shouldLog) {
+        log.info(
+          s"[STORAGE-REDISPATCH] No eligible peers — ${knownAvailablePeers.size} known, " +
+            s"${statelessPeers.size} stateless, " +
+            s"${knownAvailablePeers.count(isPeerCoolingDown)} cooling. pending: ${tasks.size}"
+        )
+      }
       if (tasks.nonEmpty && activeTasks.isEmpty) {
         storageIdleChecks += 1
         if (storageIdleChecks >= storageIdleEscapeThreshold) {

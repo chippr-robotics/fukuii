@@ -411,11 +411,21 @@ class AccountRangeCoordinator(
   // without waiting for the next PeerAvailable message.
   private val knownAvailablePeers = mutable.Set[Peer]()
 
-  /** Number of active (non-stateless, non-cooling-down) snap-capable peers. Used to cap worker count — one worker per
-    * peer avoids peer flooding.
+  /** Number of active (non-stateless, non-snapless, non-cooling-down) snap-capable peers.
+    * Returns the actual count — no floor — so the progress log truthfully reports 0 when
+    * all peers are demoted (the case that drives the account stall). Previously this had
+    * `.max(1)` which masked the stall: progress log said "1 peers" while dispatch was
+    * starving on zero eligible peers. See PR-1 of `this-is-the-same-fluttering-eagle.md`.
     */
   private def activePeerCount: Int =
-    knownAvailablePeers.count(p => !isPeerStateless(p) && !isPeerSnapless(p) && !isPeerCoolingDown(p)).max(1)
+    knownAvailablePeers.count(p => !isPeerStateless(p) && !isPeerSnapless(p) && !isPeerCoolingDown(p))
+
+  // Periodic state-dump cadence — at most one INFO snapshot every 30 seconds. Time-based
+  // throttling (not modulo) so a call-rate spike doesn't overflow the log pipe. Same pattern
+  // as PR #1250's [STORAGE-STATE] (subsequently switched from modulo to time-based for the
+  // same reason).
+  private var lastStateLogMs: Long = 0L
+  private val StateLogIntervalMs: Long = 30_000L
 
   // Per-peer adaptive byte budgeting (ported from StorageRangeCoordinator).
   // Geth's snap handler supports up to 2MB responses. Starting at 512KB and probing upward
@@ -1173,7 +1183,31 @@ class AccountRangeCoordinator(
       .filterNot(isPeerSnapless)
       .filterNot(isPeerCoolingDown)
       .toList
-    if (eligiblePeers.isEmpty) return
+    val now = System.currentTimeMillis()
+    val shouldLog = now - lastStateLogMs >= StateLogIntervalMs
+    if (shouldLog) {
+      lastStateLogMs = now
+      log.info(
+        s"[ACCOUNT-STATE] pending=${pendingTasks.size} active=${activeTasks.size} " +
+          s"workers-known=${knownAvailablePeers.size} stateless=${statelessPeers.size} " +
+          s"snapless=${snaplessPeers.size} cooling=${peerCooldownUntilMs.size} " +
+          s"eligible=${eligiblePeers.size} strikes=${emptyResponseStrikes.size} " +
+          s"maxInflight=$maxInFlightPerPeer root=${stateRoot.take(4).toHex}"
+      )
+    }
+    if (eligiblePeers.isEmpty) {
+      // Promoted from silent return to INFO so the first occurrence per 30s window
+      // is visible. Sharing `shouldLog` with the STATE snapshot above keeps total
+      // log volume from this method ≤ 2 lines / 30 s — robust against call-rate spikes.
+      if (shouldLog) {
+        log.info(
+          s"[ACCOUNT-REDISPATCH] No eligible peers — ${knownAvailablePeers.size} known, " +
+            s"${statelessPeers.size} stateless, ${snaplessPeers.size} snapless, " +
+            s"${peerCooldownUntilMs.size} cooling. pending: ${pendingTasks.size}"
+        )
+      }
+      return
+    }
 
     for (peer <- eligiblePeers if pendingTasks.nonEmpty)
       dispatchIfPossible(peer)
