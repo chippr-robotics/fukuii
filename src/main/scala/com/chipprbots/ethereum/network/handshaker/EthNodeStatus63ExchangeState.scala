@@ -23,11 +23,17 @@ case class EthNodeStatus63ExchangeState(
   override protected def createStatusMsg(): MessageSerializable = {
     val bestBlockHeader = getBestBlockHeader()
 
+    // See EthNodeStatus64ExchangeState — ChainWeightStorage isn't populated post-SNAP-sync
+    // on post-merge chains; fall back to zero rather than throwing and killing the handshake.
     val chainWeight = blockchainReader
       .getChainWeightByHash(bestBlockHeader.hash)
-      .getOrElse(
-        throw new IllegalStateException(s"Chain weight not found for hash ${bestBlockHeader.hash}")
-      )
+      .getOrElse {
+        log.debug(
+          s"Chain weight not stored for best block ${bestBlockHeader.hash} (SNAP-sync state); " +
+            s"advertising ChainWeight.zero in ETH/63 STATUS"
+        )
+        com.chipprbots.ethereum.domain.ChainWeight.zero
+      }
 
     val status = BaseETH6XMessages.Status(
       protocolVersion = Capability.ETH63.version,
