@@ -328,6 +328,12 @@ class PeerManagerActor(
   ): Unit = {
     val alreadyConnectedToPeer = connectedPeers.isConnectionHandled(remoteAddress)
     val isPendingPeersNotMaxValue = connectedPeers.incomingPendingPeersCount < peerConfiguration.maxPendingPeers
+    // Reject inbound dials from blacklisted addresses. Previously the blacklist was only
+    // honored on the outbound (`canConnectTo`) path, so a peer we disconnected for chronic
+    // lag would simply re-dial us inbound seconds later and rejoin the handshaked set —
+    // making PR #1242's 30-min hold ineffective. Sepolia 2026-05-14: same peer IPs
+    // re-connected 25s after being blacklisted for 30 min.
+    val isNotBlacklisted = !blacklist.isBlacklisted(PeerAddress(remoteAddress.getHostString))
 
     val validConnection = for {
       validHandler <- validateConnection(
@@ -339,6 +345,11 @@ class PeerManagerActor(
         validHandler,
         MaxIncomingPendingConnections(connection),
         isPendingPeersNotMaxValue
+      )
+      _ <- validateConnection(
+        validNumber,
+        IncomingConnectionBlacklisted(remoteAddress, connection),
+        isNotBlacklisted
       )
     } yield validNumber
 
@@ -658,6 +669,10 @@ class PeerManagerActor(
       log.debug("Another connection with {} is already opened. Disconnecting", remoteAddress)
       connection ! PoisonPill
 
+    case IncomingConnectionBlacklisted(remoteAddress, connection) =>
+      log.debug("Rejecting incoming connection from blacklisted address {}", remoteAddress)
+      connection ! PoisonPill
+
     case MaxOutgoingConnections =>
       log.debug("Maximum number of connected peers reached")
 
@@ -862,6 +877,8 @@ object PeerManagerActor {
   case class MaxIncomingPendingConnections(connection: ActorRef) extends ConnectionError
 
   case class IncomingConnectionAlreadyHandled(address: InetSocketAddress, connection: ActorRef) extends ConnectionError
+
+  case class IncomingConnectionBlacklisted(address: InetSocketAddress, connection: ActorRef) extends ConnectionError
 
   case object MaxOutgoingConnections extends ConnectionError
 
