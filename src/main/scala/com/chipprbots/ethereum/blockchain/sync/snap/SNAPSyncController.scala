@@ -2446,8 +2446,15 @@ class SNAPSyncController(
               maxInFlightRequests = snapSyncConfig.storageConcurrency,
               requestTimeout = snapSyncConfig.timeout,
               snapSyncController = self,
-              initialMaxInFlightPerPeer =
-                0, // Defer storage dispatch during AccountRangeSync — prevents false pivot refreshes from stale-root timeouts
+              // 2-per-peer during AccountRangeSync. Original design used 0 here to defer storage
+              // dispatch until accounts completed (prevents stale-root timeouts triggering false
+              // pivot refreshes). That assumption breaks on huge chains like sepolia: account
+              // ranges never complete within a pivot serve window, so storage never gets a
+              // non-zero budget and the queue grows unbounded until OOM. PR #1237's strike-counted
+              // stateless detection + PR #1241's backpressure-release-on-pivot now make stale-root
+              // timeouts a recoverable event rather than a failure cascade. Bump default ensures
+              // storage can drain concurrently with account.
+              initialMaxInFlightPerPeer = 2,
               initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
               minResponseBytes = snapSyncConfig.storageMinResponseBytes,
               deferredMerkleization = snapSyncConfig.deferredMerkleization,
