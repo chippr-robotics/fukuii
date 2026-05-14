@@ -626,26 +626,72 @@ class AccountRangeCoordinatorSpec
   // separate `snaplessPeers` set that survives PivotRefreshed because the peer's
   // snapshot won't materialise mid-session.
 
-  it should "mark a peer SNAPLESS on 'Missing proof for empty account range' (#1197)" taggedAs UnitTest in {
-    // handleTaskFailed only calls markPeerStateless when the task's rootHash matches
-    // the coordinator's current stateRoot (otherwise it's a stale-root failure from a
-    // pre-pivot-refresh request, which doesn't reflect on the peer's snapshot state).
-    // Match the coordinator's default newCoordinator() stateRoot so the path is exercised.
+  it should "mark a peer SNAPLESS only after EmptyResponseStrikeThreshold consecutive empty-proof responses (#1197)" taggedAs UnitTest in {
+    // The previous policy promoted on the FIRST empty-proof response, which on sepolia
+    // 2026-05-13 collapsed the snap-peer pool from 3-8 connected → 1 dispatched-to. The
+    // new policy requires 3 consecutive strikes (no intervening successful response) to
+    // mark the peer. Reference clients: geth has no explicit counter (uses throughput
+    // tracking); nethermind uses 5; we pick 3 as a balance.
     val stateRoot = kec256(ByteString("trie-async-test-root"))
     val coord = newCoordinator(stateRoot = stateRoot)
     val ua = coord.underlyingActor
     val pendingProbe = TestProbe()
     val peer = PeerTestHelpers.createTestPeer("snapless-peer", pendingProbe.ref)
 
+    // Strikes 1 and 2 — peer still eligible.
     seedActiveTask(coord, BigInt(701), peer, rootHash = stateRoot)
-
-    // Drive the empty-with-empty failure path through the public coordinator API.
     coord ! Messages.TaskFailed(BigInt(701), "Missing proof for empty account range")
+    seedActiveTask(coord, BigInt(702), peer, rootHash = stateRoot)
+    coord ! Messages.TaskFailed(BigInt(702), "Missing proof for empty account range")
     coord ! Messages.GetProgress
-    expectMsgType[AccountRangeStats](2.seconds) // sequential barrier
+    expectMsgType[AccountRangeStats](2.seconds)
+
+    ua.statelessPeers should not contain peer.id
+    ua.snaplessPeers should not contain peer.id
+    ua.emptyResponseStrikes.get(peer.id) shouldBe Some(2)
+
+    // Strike 3 — promoted to confirmed snapless + stateless.
+    seedActiveTask(coord, BigInt(703), peer, rootHash = stateRoot)
+    coord ! Messages.TaskFailed(BigInt(703), "Missing proof for empty account range")
+    coord ! Messages.GetProgress
+    expectMsgType[AccountRangeStats](2.seconds)
 
     ua.statelessPeers should contain(peer.id)
     ua.snaplessPeers should contain(peer.id)
+
+    system.stop(coord)
+  }
+
+  it should "reset the empty-proof strike counter when a peer returns a useful response" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("trie-async-test-root"))
+    val coord = newCoordinator(stateRoot = stateRoot)
+    val ua = coord.underlyingActor
+    val pendingProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("strike-reset-peer", pendingProbe.ref)
+
+    // Two strikes — not yet promoted.
+    seedActiveTask(coord, BigInt(801), peer, rootHash = stateRoot)
+    coord ! Messages.TaskFailed(BigInt(801), "Missing proof for empty account range")
+    seedActiveTask(coord, BigInt(802), peer, rootHash = stateRoot)
+    coord ! Messages.TaskFailed(BigInt(802), "Missing proof for empty account range")
+    coord ! Messages.GetProgress
+    expectMsgType[AccountRangeStats](2.seconds)
+    ua.emptyResponseStrikes.get(peer.id) shouldBe Some(2)
+
+    // A successful response (proof.nonEmpty branch) resets the counter via recordPeerSuccess.
+    // Easiest way to drive this from the spec is to seed the strike map and call the helper
+    // directly; the production path is the `if (accountCount > 0 || proof.nonEmpty)` branch
+    // in handleTaskComplete.
+    seedActiveTask(coord, BigInt(803), peer, rootHash = stateRoot)
+    coord ! Messages.TaskComplete(
+      BigInt(803),
+      Right((0, Seq.empty, Seq(ByteString("proof-node-bytes")))) // empty accounts + non-empty proof = boundary success
+    )
+    coord ! Messages.GetProgress
+    expectMsgType[AccountRangeStats](2.seconds)
+
+    ua.emptyResponseStrikes.get(peer.id) shouldBe None
+    ua.snaplessPeers should not contain peer.id
 
     system.stop(coord)
   }
