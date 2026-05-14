@@ -2478,14 +2478,14 @@ class SNAPSyncController(
   private case object RequestAccountRanges
 
   private def requestAccountRanges(): Unit =
-    // Notify coordinator of available peers
+    // Notify coordinator of available peers. Filter does NOT require maxBlockNumber >= pivot
+    // for the same reason as requestStorageRanges — stale-tracked-head false negatives starve
+    // the coordinator. Stateless detection on the coordinator (strike-counted) handles peers
+    // that actually can't serve the current pivot's state.
     accountRangeCoordinator.foreach { coordinator =>
-      val pivot = pivotBlock.getOrElse(BigInt(0))
-
       val snapPeers = peersToDownloadFrom.collect {
         case (_, peerWithInfo)
-            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.forkAccepted
-              && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
+            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.forkAccepted =>
           peerWithInfo.peer
       }
 
@@ -2525,21 +2525,30 @@ class SNAPSyncController(
   private case object RequestStorageRanges
 
   private def requestStorageRanges(): Unit =
-    // Notify coordinator of available peers
+    // Notify coordinator of available peers.
+    //
+    // Filter intentionally does NOT require maxBlockNumber >= pivot — that filter was the
+    // cause of the sepolia 2026-05-14 storage stall. Sepolia's pivot advances every ~3 min
+    // (CL-driven) while peer maxBlockNumber only refreshes every 5 min (PR #1238 best-block
+    // re-probe). After ~1 pivot cycle, all peers' tracked block was below the new pivot →
+    // every broadcast filtered them all out → coordinator received no StoragePeerAvailable
+    // → knownAvailablePeers stayed empty → 100K storage tasks pinned forever.
+    //
+    // Stale maxBlockNumber is a *tracking* artifact, not a *capability* statement. The peer
+    // has the same SNAP state regardless of what we believe their head is. If they actually
+    // can't serve our pivot's state, the coordinator's strike-counted stateless detection
+    // catches it (3 strikes → flagged stateless). Same applies to bytecode/account.
     storageRangeCoordinator.foreach { coordinator =>
-      val pivot = pivotBlock.getOrElse(BigInt(0))
-
       val snapPeers = peersToDownloadFrom.collect {
         case (_, peerWithInfo)
-            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.forkAccepted
-              && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
+            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.forkAccepted =>
           peerWithInfo.peer
       }
 
       SNAPSyncMetrics.setSnapCapablePeers(snapPeers.size)
 
       if (snapPeers.isEmpty) {
-        log.info(s"No SNAP-capable peers at or above pivot $pivot available for storage range requests")
+        log.info("No SNAP-capable peers available for storage range requests")
       } else {
         snapPeers.foreach { peer =>
           coordinator ! actors.Messages.StoragePeerAvailable(peer)
