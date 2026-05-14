@@ -1109,9 +1109,15 @@ object NetworkPeerManagerActor {
   private[network] val LaggingPeerMaxEvictionsPerCycle: Int = 5
 
   /** Below this floor of handshaked peers, skip eviction — better to keep a stale peer
-    * than to crater the connection pool on a small network like Mordor.
+    * than to crater the connection pool on a small network. The floor is intentionally
+    * low (2): on thin testnets like sepolia we often see only 3-5 SNAP-capable peers
+    * total, and the lagging-peer pathology is most acute exactly there. A floor of 5
+    * would skip eviction entirely and the stuck peers would never recycle out. Two is
+    * still enough to prevent a single sweep from leaving us peerless mid-sync; the
+    * per-cycle cap of 5 plus the 10-minute hysteresis provide the heavier-weight
+    * safeties.
     */
-  private[network] val LaggingPeerMinPoolFloor: Int = 5
+  private[network] val LaggingPeerMinPoolFloor: Int = 2
 
   /** Brief IP-blacklist applied to the evicted peer so we don't immediately re-dial it
     * via the same enode + dispatcher loop. 2 minutes matches PR #1235's
