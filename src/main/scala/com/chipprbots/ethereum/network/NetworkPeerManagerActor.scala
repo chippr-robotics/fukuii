@@ -281,6 +281,7 @@ class NetworkPeerManagerActor(
                   s"(${clHead - peerInfo.maxBlockNumber} behind CL head $clHead) for ${laggedFor / 1000}s " +
                   s"— disconnecting and blacklisting for $LaggingPeerBlacklistDuration"
               )
+              com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.incrementLaggingPeerEvicted()
               peer.ref ! DisconnectPeer(Disconnect.Reasons.UselessPeer)
               // PeerClosedConnection will apply a short-tier (2-min) blacklist for UselessPeer
               // via getBlacklistDuration. That's right for transient rejections, but a peer that

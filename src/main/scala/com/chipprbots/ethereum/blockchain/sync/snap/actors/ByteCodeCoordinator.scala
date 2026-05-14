@@ -235,6 +235,7 @@ class ByteCodeCoordinator(
       // queue is still above the high-water mark, the next AddByteCodeTasks will re-engage.
       if (backpressureActive) {
         backpressureActive = false
+        com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setByteCodeBackpressure(false)
         log.info(
           s"ByteCode queue back-pressure RELEASED on pivot refresh (queue depth=${pendingTasks.size}). " +
             s"Will re-engage if queue crosses high-water=$backpressureHighWatermark again."
@@ -370,8 +371,10 @@ class ByteCodeCoordinator(
     */
   private def notifyBackpressureIfChanged(): Unit = {
     val pending = pendingTasks.size
+    com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setByteCodeQueueDepth(pending.toLong)
     if (!backpressureActive && pending >= backpressureHighWatermark) {
       backpressureActive = true
+      com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setByteCodeBackpressure(true)
       log.info(
         s"ByteCode queue back-pressure ENGAGED at $pending pending tasks (high-water=$backpressureHighWatermark). " +
           s"Signalling AccountRangeCoordinator to pause dispatch."
@@ -379,6 +382,7 @@ class ByteCodeCoordinator(
       snapSyncController ! SNAPSyncController.ByteCodeBackpressureChanged(paused = true)
     } else if (backpressureActive && pending <= backpressureLowWatermark) {
       backpressureActive = false
+      com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setByteCodeBackpressure(false)
       log.info(
         s"ByteCode queue back-pressure RELEASED at $pending pending tasks (low-water=$backpressureLowWatermark). " +
           s"Signalling AccountRangeCoordinator to resume dispatch."
