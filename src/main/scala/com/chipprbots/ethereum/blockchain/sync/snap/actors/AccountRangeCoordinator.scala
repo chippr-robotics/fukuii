@@ -109,19 +109,37 @@ class AccountRangeCoordinator(
   // Kept for spec compatibility; reflects whether the storage source is currently engaged.
   private[actors] def storageBackpressureActive: Boolean = backpressureSources.contains("storage")
 
-  // Stateless peer tracking: peers that return "Missing proof for empty account range"
-  // OR consecutive timeouts are unable to serve the current state root. Cleared on
-  // PivotRefreshed because the new root may be inside the peer's serve window.
+  // Stateless peer tracking: peers CONFIRMED unable to serve the current state root after
+  // crossing the strike threshold below. Cleared on PivotRefreshed because the new root may
+  // be inside the peer's serve window.
   // `private[actors]` so AccountRangeCoordinatorSpec can drive the state via TestActorRef.
   private[actors] val statelessPeers = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
   // Snapless peer tracking (#1197): peers whose SNAP handler returns
   // `AccountRangePacket{Accounts: nil, Proof: nil}` indicating `chain.Snapshots()` is
-  // structurally unavailable (typical core-geth `--syncmode full` configuration on ETC
-  // mainnet — see project_eth68_snap_research memory). The peer's snapshot won't
-  // materialize this session, so this set survives PivotRefreshed (root-independent).
+  // structurally unavailable. CONFIRMED after EmptyResponseStrikeThreshold consecutive
+  // empty-with-empty-proof signals (no intervening successful response). Survives
+  // PivotRefreshed (root-independent) — see project_eth68_snap_research memory for the
+  // core-geth `--syncmode full` rationale: a peer with no snapshot tree won't grow one.
   // Bytecode + trie-node healing coordinators are unaffected — those code paths use
   // direct DB lookups that don't depend on the snapshot tree.
   private[actors] val snaplessPeers = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
+  // Strike counter for empty-with-empty-proof responses (the only signal that drives
+  // statelessPeers + snaplessPeers entry today). The previous policy promoted a peer on
+  // the FIRST such response, which on sepolia 2026-05-13 carpet-bombed the peer pool
+  // (snapPeers=3 advertised → 1 dispatched-to). Reference clients: geth keeps a single
+  // global statelessPeers and no explicit strikes (uses a throughput/latency tracker);
+  // nethermind uses 5 strikes. We pick 3 — enough to survive a transient empty cycle
+  // (peer warming up after restart, network hiccup) without being so generous that genuinely
+  // useless peers eat the dispatch budget.
+  //
+  // Lifecycle:
+  //   * empty-with-empty-proof from peer → strike++
+  //   * strike >= threshold → enter statelessPeers AND snaplessPeers (confirmed)
+  //   * any successful response from peer → recordPeerSuccess clears strikes
+  //   * PivotRefreshed → clear strikes (peer deserves a clean slate on the new root)
+  //   * PeerUnavailable → clear strikes (and the peer entry from statelessPeers too)
+  private[actors] val emptyResponseStrikes = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
+  private val EmptyResponseStrikeThreshold: Int = 3
   private var pivotRefreshRequested = false
   private var pivotWasRefreshed = false
 
@@ -133,29 +151,41 @@ class AccountRangeCoordinator(
 
   private def markPeerStateless(peer: Peer, reason: String): Unit = {
     val isEmptyProofSignal = reason.contains("Missing proof for empty account range")
-    val shouldMark = if (isEmptyProofSignal) {
-      // Peer explicitly returned empty response — immediately stateless AND snapless.
-      // The empty-with-empty signal means `chain.Snapshots()` is unavailable on this
-      // peer for any root, not just the current one (#1197).
-      snaplessPeers.add(peer.id)
+    if (!isEmptyProofSignal) return
+    // Already-confirmed peers stay confirmed; further strikes are noise.
+    if (snaplessPeers.contains(peer.id)) return
+
+    val priorStrikes = emptyResponseStrikes.getOrElse(peer.id, 0)
+    val strikes = priorStrikes + 1
+    emptyResponseStrikes(peer.id) = strikes
+
+    if (strikes < EmptyResponseStrikeThreshold) {
       log.info(
-        s"Peer ${peer.id.value} marked SNAPLESS (no snapshot tree) — will skip for " +
-          s"GetAccountRange this session. Bytecode/healing remain available."
+        s"Peer ${peer.id.value} empty-proof strike $strikes/$EmptyResponseStrikeThreshold for root " +
+          s"${stateRoot.take(4).toHex} (reason: $reason). Still eligible for dispatch."
       )
-      true
-    } else {
-      false
+      return
     }
 
-    if (shouldMark) {
-      statelessPeers.add(peer.id)
-      log.info(
-        s"Peer ${peer.id.value} marked stateless for root ${stateRoot.take(4).toHex} " +
-          s"(${statelessPeers.size}/${knownAvailablePeers.size} peers stateless)"
-      )
-      maybeRequestPivotRefresh()
-    }
+    // Threshold reached — promote to confirmed snapless + stateless. Snapless is sticky
+    // (root-independent, survives PivotRefreshed per #1197); stateless clears on the next
+    // PivotRefreshed.
+    snaplessPeers.add(peer.id)
+    statelessPeers.add(peer.id)
+    log.info(
+      s"Peer ${peer.id.value} marked SNAPLESS after $strikes consecutive empty-proof responses " +
+        s"— will skip for GetAccountRange this session. Bytecode/healing remain available. " +
+        s"(${statelessPeers.size}/${knownAvailablePeers.size} peers stateless for root ${stateRoot.take(4).toHex})"
+    )
+    maybeRequestPivotRefresh()
   }
+
+  /** Reset the strike counter for a peer that has just produced a useful response (real
+    * accounts OR a boundary proof). Cheap to over-invoke; the goal is "any forward progress
+    * from this peer wipes prior strikes."
+    */
+  private def recordPeerSuccess(peerId: com.chipprbots.ethereum.network.PeerId): Unit =
+    emptyResponseStrikes.remove(peerId)
 
   private def maybeRequestPivotRefresh(): Unit = {
     if (pivotRefreshRequested) return
@@ -576,7 +606,10 @@ class AccountRangeCoordinator(
       // NOTE: snaplessPeers is INTENTIONALLY NOT cleared here (#1197). A peer with no
       // snapshot tree won't grow one across a pivot refresh; clearing would just put
       // them back in dispatch rotation to immediately re-classify and waste a cycle.
+      // Strike counter IS cleared: the new root is a fresh opportunity and a peer with 1-2
+      // strikes deserves another shot.
       statelessPeers.clear()
+      emptyResponseStrikes.clear()
       pivotRefreshRequested = false
 
       // Clear per-peer adaptive state (new root = new response characteristics)
@@ -640,6 +673,11 @@ class AccountRangeCoordinator(
       // AbstractRetryingPeerTask.java:158 both treat disconnect as transient re-queue, not failure.
       knownAvailablePeers.find(_.id.value == peerId).foreach(knownAvailablePeers -= _)
       peerCooldownUntilMs.remove(peerId)
+      // Drop strike counter — a reconnect under the same id should start fresh.
+      knownAvailablePeers.find(_.id.value == peerId).foreach(p => emptyResponseStrikes.remove(p.id))
+      // Note: snaplessPeers entry is preserved per #1197 — if the peer reconnects under a
+      // NEW PeerId, that's handled by PeerAvailable's stale-id-eviction path; same id =
+      // same physical node = same lack-of-snapshot.
       // #1184: drain the slots ourselves rather than relying on the worker → TaskFailed
       // cascade. drainActiveTasks sends WorkerRequestCancelled to each affected worker so they
       // leave `working` state cleanly and don't reject redispatch with TaskFailed(0, "Worker
@@ -944,6 +982,9 @@ class AccountRangeCoordinator(
           // Reset pivot refresh backoff on servable-root evidence: real account data or a boundary proof.
           if (accountCount > 0 || proof.nonEmpty) {
             consecutiveUnproductiveRefreshes = 0
+            // The peer served us a useful response. Wipe any prior empty-proof strikes so
+            // a future transient empty doesn't push a known-good peer over the threshold.
+            recordPeerSuccess(peer.id)
           }
 
           task.pending = false

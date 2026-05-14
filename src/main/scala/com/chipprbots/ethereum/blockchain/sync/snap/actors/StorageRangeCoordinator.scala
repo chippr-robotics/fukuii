@@ -126,10 +126,19 @@ class StorageRangeCoordinator(
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
   private val peerCooldownDefault = 10.seconds
 
-  // Binary stateless peer detection: peers that cannot serve the current state root.
-  // When ALL known peers become stateless, request a pivot refresh from the controller.
-  // This replaces the slow counter-based global backoff (was: 10 empties → 2 min pause).
+  // Stateless peer tracking: peers CONFIRMED unable to serve the current state root after
+  // crossing the strike threshold below. When ALL known peers are stateless, request a
+  // pivot refresh from the controller.
+  // The previous single-failure binary mark caused the same peer-pool collapse pathology
+  // we observed in AccountRangeCoordinator on sepolia 2026-05-13. Strike counting gives
+  // a transient peer hiccup the same recovery path used elsewhere in the codebase.
   private val statelessPeers = mutable.Set[String]()
+  // Strike counter for empty storage-range responses. Mirror of AccountRangeCoordinator's
+  // emptyResponseStrikes: a peer must miss N=3 consecutive empties (no intervening success)
+  // before being marked stateless. Cleared on PivotRefreshed, PeerUnavailable, or any
+  // successful (slot-bearing) response.
+  private val emptyResponseStrikes = mutable.Map.empty[String, Int]
+  private val EmptyResponseStrikeThreshold: Int = 3
   private var pivotRefreshRequested = false
 
   // Contract completion tracking for progress estimation.
@@ -173,13 +182,33 @@ class StorageRangeCoordinator(
     statelessPeers.contains(peer.id.value)
 
   private def markPeerStateless(peer: Peer): Unit = {
-    statelessPeers.add(peer.id.value)
+    val id = peer.id.value
+    // Already-confirmed peers stay confirmed; extra strikes are noise.
+    if (statelessPeers.contains(id)) return
+
+    val priorStrikes = emptyResponseStrikes.getOrElse(id, 0)
+    val strikes = priorStrikes + 1
+    emptyResponseStrikes(id) = strikes
+
+    if (strikes < EmptyResponseStrikeThreshold) {
+      log.info(
+        s"Peer $id empty-storage strike $strikes/$EmptyResponseStrikeThreshold for root " +
+          s"${stateRoot.take(4).toHex}. Still eligible for dispatch."
+      )
+      return
+    }
+
+    statelessPeers.add(id)
     log.info(
-      s"Peer ${peer.id.value} marked stateless for storage root ${stateRoot.take(4).toHex} " +
-        s"(${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
+      s"Peer $id marked stateless after $strikes consecutive empty storage responses for root " +
+        s"${stateRoot.take(4).toHex} (${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
     )
     maybeRequestPivotRefresh()
   }
+
+  /** Reset strike counter when peer produces a useful response. Cheap to over-invoke. */
+  private def recordPeerSuccess(peerId: String): Unit =
+    emptyResponseStrikes.remove(peerId)
 
   private def maybeRequestPivotRefresh(): Unit = {
     if (pivotRefreshRequested) return
@@ -766,6 +795,7 @@ class StorageRangeCoordinator(
       // Mirrors AccountRangeCoordinator.PeerUnavailable (go-ethereum revertRequests pattern).
       knownAvailablePeers.find(_.id.value == peerId).foreach(knownAvailablePeers -= _)
       peerCooldownUntilMs.remove(peerId)
+      emptyResponseStrikes.remove(peerId)
       val inFlight = activeTasks.filter { case (_, (peer, _, _)) => peer.id.value == peerId }.keys.toSeq
       if (inFlight.nonEmpty) {
         log.debug(s"Peer $peerId disconnected — re-queuing ${inFlight.size} in-flight storage request(s)")
@@ -891,6 +921,7 @@ class StorageRangeCoordinator(
 
       // Clear all per-peer adaptive state — fresh start with new root
       statelessPeers.clear()
+      emptyResponseStrikes.clear()
       pivotRefreshRequested = false
       lastDispatchOrResponseMs = System.currentTimeMillis()
       peerCooldownUntilMs.clear()
@@ -1206,6 +1237,7 @@ class StorageRangeCoordinator(
 
     // Non-empty response with actual slot data — clear stateless marking and reset backoff.
     statelessPeers.remove(peer.id.value)
+    recordPeerSuccess(peer.id.value)
     consecutiveUnproductiveRefreshes = 0
     lastDispatchOrResponseMs = System.currentTimeMillis()
 
