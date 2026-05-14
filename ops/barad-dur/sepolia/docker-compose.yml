@@ -21,7 +21,7 @@ networks:
 # proper sbt-native-packager Dockerfile), this block becomes redundant.
 x-fukuii-jvm-defaults: &fukuii-jvm-defaults
   JAVA_TOOL_OPTIONS: >-
-    -Xmx4g -Xms2g -Xss1M
+    -Xmx3g -Xms1g -Xss1M
     -XX:MaxDirectMemorySize=512M
     -XX:+UseG1GC -XX:MaxGCPauseMillis=200
     -XX:+HeapDumpOnOutOfMemoryError
@@ -34,12 +34,14 @@ services:
     image: chipprbots/fukuii:latest
     container_name: fukuii-sepolia
     restart: unless-stopped
-    # 4g heap + ~3.5 GB native (RocksDB 512MB block cache, memtables, G1,
-    # DeferredWriteMpt/StackTrie buffers, JNI). 8g cgroup repeatedly OOM-killed
-    # at ~8.37 GB RSS; 10g leaves real headroom. Requires primary stopped on
-    # this 16 GiB host.
-    mem_limit: 10g
-    memswap_limit: 10g
+    # 3g heap + ~3 GB native (RocksDB 512MB block cache, memtables, G1,
+    # DeferredWriteMpt/StackTrie buffers, JNI). Reduced 4g→3g (2026-05-14) to
+    # cut host-wide RocksDB page-cache churn — systemd-oomd was killing the
+    # GNOME session even though the container itself had headroom (PSI-based
+    # eviction triggered by fukuii's I/O pattern, not actual memory exhaustion).
+    # 8g cgroup gives ~2g native overhead headroom.
+    mem_limit: 8g
+    memswap_limit: 8g
     # JVM flags live in JAVA_TOOL_OPTIONS (anchor above) — picked up
     # automatically by the JVM regardless of how it's invoked.
     environment:
