@@ -100,18 +100,29 @@ case class EthNodeStatus64ExchangeState(
 
     // ChainWeightStorage isn't populated for blocks reached via SNAP sync (the pivot block
     // has no upstream PoW chain in our DB to sum difficulties over). On post-merge chains
-    // this never gets backfilled because we don't import pre-merge blocks. Falling back to
-    // ChainWeight.zero is operationally safe: peers use ForkId for compatibility checks
-    // (EIP-2124), not the wire TD field. ETH/64-68 sepolia/mainnet handshakes were 100%
-    // failing here before the fallback. See OOM-investigation 2026-05-14.
+    // this never gets backfilled because we don't import pre-merge blocks.
+    //
+    // Fallback ladder when chain weight isn't stored:
+    //   1. Post-merge chains (terminalTotalDifficulty defined) → advertise TTD. Peers
+    //      validate roughly that TD >= TTD post-merge; advertising 0 caused mass
+    //      "Useless peer" disconnects on sepolia 2026-05-14 (~15 peers in 8 seconds).
+    //   2. Pre-merge chains (TTD = None) → fall back to ChainWeight.zero. This is the
+    //      old throw-path semantically; the handshake will likely still fail downstream
+    //      on a peer's TD check, but at least we don't crash the PeerActor with an
+    //      uncaught exception.
+    //
+    // ForkId remains the authoritative compat signal (EIP-2124); TD field is advisory.
     val chainWeight = blockchainReader
       .getChainWeightByHash(bestBlockHeader.hash)
       .getOrElse {
+        val ttdFallback = blockchainConfig.terminalTotalDifficulty
+          .map(com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly)
+          .getOrElse(com.chipprbots.ethereum.domain.ChainWeight.zero)
         log.debug(
           s"Chain weight not stored for best block ${bestBlockHeader.hash} (SNAP-sync state); " +
-            s"advertising ChainWeight.zero in ETH/64-68 STATUS"
+            s"advertising fallback TD=${ttdFallback.totalDifficulty} in ETH/64-68 STATUS"
         )
-        com.chipprbots.ethereum.domain.ChainWeight.zero
+        ttdFallback
       }
 
     val genesisHash = blockchainReader.genesisHeader.hash
