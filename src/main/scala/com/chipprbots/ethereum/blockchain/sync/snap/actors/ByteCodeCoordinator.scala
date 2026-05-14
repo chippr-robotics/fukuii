@@ -230,6 +230,17 @@ class ByteCodeCoordinator(
       peerCooldownUntilMillis.clear()
       peerResponseBytesTarget.clear()
       consecutiveTaskFailures = 0
+      // Mirror the storage-side fix (sepolia 2026-05-14 deadlock): if back-pressure was
+      // engaged for the old root, the new root is the right time to release it. If the
+      // queue is still above the high-water mark, the next AddByteCodeTasks will re-engage.
+      if (backpressureActive) {
+        backpressureActive = false
+        log.info(
+          s"ByteCode queue back-pressure RELEASED on pivot refresh (queue depth=${pendingTasks.size}). " +
+            s"Will re-engage if queue crosses high-water=$backpressureHighWatermark again."
+        )
+        snapSyncController ! SNAPSyncController.ByteCodeBackpressureChanged(paused = false)
+      }
 
     case PeerAvailable(peer) =>
       knownAvailablePeers.filterInPlace(_.remoteAddress != peer.remoteAddress)

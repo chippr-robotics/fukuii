@@ -923,6 +923,26 @@ class StorageRangeCoordinator(
       statelessPeers.clear()
       emptyResponseStrikes.clear()
       pivotRefreshRequested = false
+
+      // Force-release storage back-pressure. Observed deadlock on sepolia 2026-05-14:
+      // the queue locks at >100K pending → backpressure ENGAGED → AccountRangeCoordinator
+      // dispatch paused → storage can't drain (no usable peers for current root) →
+      // backpressure never releases (low-water = 50K is unreachable) → account stalls →
+      // 5/5 critical SNAP failures → fallback to FastSync (which is also stuck on sepolia
+      // because peers don't serve GetNodeData on ETH/68+).
+      //
+      // The fix: pivot refresh is the natural recovery moment. New root → maybe new
+      // peers can serve the queued tasks → drain might resume. Let account dispatch
+      // resume; if the queue overflows past the high-water mark again, the next
+      // notifyBackpressureIfChanged() call from AddStorageTasks will re-engage.
+      if (backpressureActive) {
+        backpressureActive = false
+        log.info(
+          s"Storage queue back-pressure RELEASED on pivot refresh (queue depth=${tasks.size}). " +
+            s"Will re-engage if queue crosses high-water=$backpressureHighWatermark again."
+        )
+        snapSyncController ! SNAPSyncController.StorageBackpressureChanged(paused = false)
+      }
       lastDispatchOrResponseMs = System.currentTimeMillis()
       peerCooldownUntilMs.clear()
       peerBatchSize.clear()
