@@ -612,13 +612,25 @@ class AccountRangeCoordinator(
       drainActiveTasks(s"pivot refresh to ${newStateRoot.take(4).toHex}")
       pendingTasks.foreach(_.rootHash = newStateRoot)
 
-      // Clear stateless tracking — peers can serve the new root.
-      // NOTE: snaplessPeers is INTENTIONALLY NOT cleared here (#1197). A peer with no
-      // snapshot tree won't grow one across a pivot refresh; clearing would just put
-      // them back in dispatch rotation to immediately re-classify and waste a cycle.
+      // Clear stateless AND snapless tracking — peers get a fresh slate at the new root.
+      //
+      // Previous policy (PR #1197) intentionally preserved snaplessPeers across pivots:
+      // a peer without a snapshot tree won't grow one within a single sync session, so
+      // clearing was thought to waste a redispatch cycle re-classifying them. That logic
+      // breaks on small peer pools (sepolia's 2-8 SNAP-capable peers): if all peers
+      // accumulate confirmed-snapless across a few pivots, eligible=0 and the account
+      // coordinator stalls indefinitely. Observed sepolia 2026-05-14 (PR #1254
+      // instrumentation): workers-known=3, snapless=2, stateless=2 → eligible=0 → stall.
+      //
+      // Cost of clearing on pivot: peers genuinely without a snap tree get re-tested for
+      // 3 strikes per pivot cycle (≈ 9 dispatched-then-empty responses per peer per pivot).
+      // At sepolia's ~3-min pivot cadence that's ~3 wasted requests / min / lying peer.
+      // Acceptable trade-off vs total stall.
+      //
       // Strike counter IS cleared: the new root is a fresh opportunity and a peer with 1-2
       // strikes deserves another shot.
       statelessPeers.clear()
+      snaplessPeers.clear()
       emptyResponseStrikes.clear()
       pivotRefreshRequested = false
 
