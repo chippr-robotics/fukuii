@@ -3107,8 +3107,26 @@ class SNAPSyncController(
     val newRoot = newStateRoot.take(4).toHex
 
     if (stateRoot.contains(newStateRoot)) {
-      log.warning(s"Pivot refresh: new root $newRoot is same as old. Falling back to full restart.")
-      restartSnapSync(s"pivot refresh produced same root ($newRoot): $reason")
+      // The proposed pivot has the same state root we're already on. That's a no-op, not a
+      // failure: nothing about our sync state needs to change. The previous policy treated it
+      // as fatal and called `restartSnapSync`, which destroys every downloaded account, every
+      // queued storage task, and the entire bytecode set — for *zero* gain, since the state we
+      // would re-download is bit-identical to the state we already have.
+      //
+      // The pathology we observed on sepolia 2026-05-13 (sub-second after PR #1234's freshness
+      // filter accepted a fresh peer): a successful refresh committed root `R` at T=0; eight
+      // seconds later the bootstrap-retry path fired *again*, asked the same fresh peer for the
+      // same pivot, naturally got back the same root `R`, and the old "same root → restart"
+      // branch nuked the entire account-range download we'd just resumed. Net effect:
+      // throughput collapses to zero every time the pivot stabilises.
+      //
+      // The genuine "we're stuck on a stale root" condition that this branch was originally
+      // trying to detect is handled separately by the account/storage stall watchdogs and by
+      // the consecutive-pivot-refresh counter. Treat same-root here as the no-op it is.
+      log.info(
+        s"Pivot refresh requested but new root $newRoot matches the current root — no-op " +
+          s"(pivot=$oldPivot, reason=$reason)"
+      )
       return
     }
 
