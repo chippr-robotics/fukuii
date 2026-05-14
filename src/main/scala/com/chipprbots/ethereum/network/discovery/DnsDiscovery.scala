@@ -11,11 +11,19 @@ import scala.util.Try
 import org.bouncycastle.crypto.params.ECPublicKeyParameters
 import org.bouncycastle.util.encoders.Hex
 
+import cats.effect.SyncIO
+import org.apache.pekko.util.ByteString
+
 import com.chipprbots.ethereum.crypto
+import com.chipprbots.ethereum.forkid.Connect
+import com.chipprbots.ethereum.forkid.ForkId
+import com.chipprbots.ethereum.forkid.ForkIdValidator
 import com.chipprbots.ethereum.rlp
 import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.rlp.RLPValue
+import com.chipprbots.ethereum.rlp.decode
 import com.chipprbots.ethereum.rlp.rawDecode
+import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Logger
 
 /** EIP-1459: DNS-based peer discovery.
@@ -46,10 +54,18 @@ object DnsDiscovery extends Logger {
     *
     * @param domain
     *   DNS domain hosting the ENR tree (e.g., "all.mordor.blockd.info")
+    * @param forkIdFilter
+    *   Optional EIP-2124 fork ID filter. When provided, ENR entries carrying an `eth` key
+    *   with an incompatible fork ID are skipped (no outbound dial attempted). ENRs without
+    *   an `eth` key are accepted optimistically — the wire-protocol STATUS handshake makes
+    *   the authoritative check. Mirrors the logic in [[ForkIdTag]] used by discv4 routing.
     * @return
     *   set of enode:// URL strings, empty on any failure
     */
-  def resolveEnodes(domain: String): Set[String] = {
+  def resolveEnodes(
+      domain: String,
+      forkIdFilter: Option[EnrForkIdFilter] = None
+  ): Set[String] = {
     log.info("DNS_DISCOVERY: Resolving peers from DNS tree: {}", domain)
 
     try {
@@ -63,8 +79,18 @@ object DnsDiscovery extends Logger {
               case Some((enrRoot, _, _)) =>
                 val visited = mutable.Set.empty[String]
                 val enodes = mutable.Set.empty[String]
-                resolveTree(ctx, domain, enrRoot, visited, enodes, depth = 0)
-                log.info("DNS_DISCOVERY: Resolved {} enode(s) from {}", enodes.size, domain)
+                val skipped = mutable.Set.empty[String] // tracking for log only
+                resolveTree(ctx, domain, enrRoot, visited, enodes, skipped, forkIdFilter, depth = 0)
+                if (skipped.nonEmpty) {
+                  log.info(
+                    "DNS_DISCOVERY: Resolved {} enode(s) from {} (skipped {} on fork-ID mismatch)",
+                    enodes.size,
+                    domain,
+                    skipped.size
+                  )
+                } else {
+                  log.info("DNS_DISCOVERY: Resolved {} enode(s) from {}", enodes.size, domain)
+                }
                 enodes.toSet
 
               case None =>
@@ -114,6 +140,8 @@ object DnsDiscovery extends Logger {
       hash: String,
       visited: mutable.Set[String],
       enodes: mutable.Set[String],
+      skipped: mutable.Set[String],
+      forkIdFilter: Option[EnrForkIdFilter],
       depth: Int
   ): Unit = {
     if (depth > MaxDepth || enodes.size >= MaxRecords || visited.contains(hash)) return
@@ -124,13 +152,16 @@ object DnsDiscovery extends Logger {
       case Some(record) if record.startsWith("enrtree-branch:") =>
         val children = record.stripPrefix("enrtree-branch:").split(",").map(_.trim).filter(_.nonEmpty)
         children.foreach { child =>
-          resolveTree(ctx, domain, child, visited, enodes, depth + 1)
+          resolveTree(ctx, domain, child, visited, enodes, skipped, forkIdFilter, depth + 1)
         }
 
       case Some(record) if record.startsWith("enr:") =>
-        parseEnrToEnode(record) match {
-          case Some(enode) => enodes += enode
-          case None        => log.debug("DNS_DISCOVERY: Failed to parse ENR leaf at {}", subdomain)
+        parseEnrToEnode(record, forkIdFilter) match {
+          case Right(enode)        => enodes += enode
+          case Left(reason) if reason.startsWith("fork-id mismatch") =>
+            skipped += subdomain
+          case Left(_) =>
+            log.debug("DNS_DISCOVERY: Failed to parse ENR leaf at {}", subdomain)
         }
 
       case Some(record) if record.startsWith("enrtree://") =>
@@ -149,12 +180,20 @@ object DnsDiscovery extends Logger {
     *
     * ENR format (EIP-778): RLP([signature, seq, k1, v1, k2, v2, ...]) Base64 encoded (URL-safe, no padding) after
     * "enr:" prefix.
+    *
+    * @param forkIdFilter
+    *   When provided, the ENR's `eth` key (EIP-2124) is validated against the local fork ID.
+    *   Returns `Left("fork-id mismatch: ...")` to signal a clean reject (not a parse failure)
+    *   so callers can log it differently.
     */
-  private[discovery] def parseEnrToEnode(enrRecord: String): Option[String] =
+  private[discovery] def parseEnrToEnode(
+      enrRecord: String,
+      forkIdFilter: Option[EnrForkIdFilter] = None
+  ): Either[String, String] =
     try {
       val base64Data = enrRecord.stripPrefix("enr:")
       val bytes = decodeBase64Url(base64Data)
-      if (bytes.isEmpty) return None
+      if (bytes.isEmpty) return Left("empty ENR payload")
 
       val decoded = rawDecode(bytes)
       decoded match {
@@ -162,6 +201,22 @@ object DnsDiscovery extends Logger {
           // items: [signature, seq, key1, val1, key2, val2, ...]
           val kvPairs = list.items.drop(2) // skip signature and seq
           val attrs = parseKVPairs(kvPairs)
+
+          // Fork-ID filter — reject incompatible ENRs before they ever become dial candidates.
+          // ENRs without an `eth` key are accepted optimistically (handshake STATUS will decide).
+          forkIdFilter match {
+            case Some(filter) =>
+              attrs.get("eth").foreach { ethBytes =>
+                val maybeForkId = try Some(decode[ForkId](rawDecode(ethBytes)))
+                catch { case _: Exception => None }
+                maybeForkId.foreach { remoteForkId =>
+                  if (!filter.accepts(remoteForkId)) {
+                    return Left(s"fork-id mismatch: $remoteForkId")
+                  }
+                }
+              }
+            case None =>
+          }
 
           val ipv4Opt = attrs.get("ip").flatMap(parseIp)
           val tcpv4Opt = attrs.get("tcp").map(parsePort)
@@ -178,25 +233,25 @@ object DnsDiscovery extends Logger {
           (ipOpt, tcpOpt, pubkeyOpt) match {
             case (Some(ip), Some(tcpPort), Some(compressedKey)) if tcpPort > 0 =>
               // Decompress secp256k1 public key (33 bytes compressed -> 64 bytes uncompressed, no prefix)
-              val nodeId = decompressToNodeId(compressedKey)
-              nodeId.map { id =>
-                val udpPort = udpOpt.getOrElse(tcpPort)
-                if (udpPort != tcpPort)
-                  s"enode://$id@${formatIp(ip)}:$tcpPort?discport=$udpPort"
-                else
-                  s"enode://$id@${formatIp(ip)}:$tcpPort"
-              }
+              decompressToNodeId(compressedKey)
+                .map { id =>
+                  val udpPort = udpOpt.getOrElse(tcpPort)
+                  if (udpPort != tcpPort)
+                    s"enode://$id@${formatIp(ip)}:$tcpPort?discport=$udpPort"
+                  else
+                    s"enode://$id@${formatIp(ip)}:$tcpPort"
+                }
+                .toRight("invalid secp256k1 pubkey")
 
             case _ =>
-              None // Missing required fields
+              Left("missing ip/tcp/secp256k1 in ENR")
           }
 
-        case _ => None
+        case _ => Left("ENR not an RLP list with >=4 items")
       }
     } catch {
       case ex: Exception =>
-        log.debug("DNS_DISCOVERY: ENR parse error: {}", ex.getMessage)
-        None
+        Left(s"ENR parse error: ${ex.getMessage}")
     }
 
   /** Parse RLP key-value pairs into a map. Keys are UTF-8 strings, values are raw byte arrays. */
@@ -286,6 +341,35 @@ object DnsDiscovery extends Logger {
         log.debug("DNS_DISCOVERY: DNS lookup failed for {}: {}", domain, ex.getMessage)
         None
     }
+
+  /** ENR fork-ID filter used during DNS discovery to skip nodes on incompatible chains.
+    * Mirrors the logic in [[ForkIdTag]] used by discv4 routing-table filtering, but applies
+    * at DNS-resolution time so the rejected ENRs never become dial candidates in the first
+    * place.
+    *
+    * Without this, sepolia's `all.sepolia.ethdisco.net` (or equivalent) tree could include
+    * mis-tagged entries, and on shared infrastructure we observed peers from BSC (networkId
+    * 56), ETH mainnet (1), Core Chain (1116), etc. burning our outbound dial slots before
+    * the wire-protocol STATUS check could reject them. See PR #1249.
+    */
+  class EnrForkIdFilter(
+      genesisHash: () => ByteString,
+      blockchainConfig: BlockchainConfig,
+      currentBestBlock: () => BigInt
+  ) {
+    def accepts(remoteForkId: ForkId): Boolean = {
+      import ForkIdValidator.syncIoLogger
+      ForkIdValidator
+        .validatePeer[SyncIO](genesisHash(), blockchainConfig)(
+          currentBestBlock(),
+          remoteForkId
+        )
+        .unsafeRunSync() match {
+        case Connect => true
+        case _       => false
+      }
+    }
+  }
 
   /** Create a JNDI DNS context with reasonable timeouts. */
   private def createDnsContext(): InitialDirContext = {

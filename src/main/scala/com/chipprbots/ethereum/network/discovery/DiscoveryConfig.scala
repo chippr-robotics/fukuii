@@ -26,7 +26,8 @@ object DiscoveryConfig extends Logger {
   def apply(
       etcClientConfig: com.typesafe.config.Config,
       bootstrapNodes: Set[String],
-      dnsDiscoveryDomains: Seq[String] = Seq.empty
+      dnsDiscoveryDomains: Seq[String] = Seq.empty,
+      enrForkIdFilter: Option[DnsDiscovery.EnrForkIdFilter] = None
   ): DiscoveryConfig = {
     val discoveryConfig = etcClientConfig.getConfig("network.discovery")
 
@@ -38,7 +39,7 @@ object DiscoveryConfig extends Logger {
     val dnsNodes: Set[String] = if (dnsDiscoveryDomains.nonEmpty) {
       log.info(s"Resolving ${dnsDiscoveryDomains.size} DNS discovery domain(s): ${dnsDiscoveryDomains.mkString(", ")}")
       dnsDiscoveryDomains.flatMap { domain =>
-        DnsDiscovery.resolveEnodes(domain)
+        DnsDiscovery.resolveEnodes(domain, enrForkIdFilter)
       }.toSet
     } else {
       Set.empty

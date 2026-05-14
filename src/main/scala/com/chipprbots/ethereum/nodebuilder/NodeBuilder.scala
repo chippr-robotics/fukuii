@@ -131,10 +131,26 @@ trait StorageBuilder {
     }
 }
 
-trait DiscoveryConfigBuilder extends BlockchainConfigBuilder {
-  self: InstanceConfigProvider =>
-  lazy val discoveryConfig: DiscoveryConfig =
-    DiscoveryConfig(instanceConfig.config, blockchainConfig.bootstrapNodes, blockchainConfig.dnsDiscoveryDomains)
+trait DiscoveryConfigBuilder extends BlockchainConfigBuilder with StorageBuilder {
+  self: InstanceConfigProvider with ActorSystemBuilder =>
+  // Built lazily so blockchain storage is initialized before genesisHeader is read.
+  // The filter rejects ENRs with `eth` key fork IDs that don't match the local chain —
+  // stops cross-network peers (BSC, mainnet, etc.) from burning outbound dial slots when
+  // shared DNS trees include mis-tagged entries. See PR #1249. Mirrors ForkIdTag (discv4).
+  lazy val discoveryConfig: DiscoveryConfig = {
+    val reader = com.chipprbots.ethereum.domain.BlockchainReader(storagesInstance.storages)
+    val enrFilter = new com.chipprbots.ethereum.network.discovery.DnsDiscovery.EnrForkIdFilter(
+      genesisHash = () => reader.genesisHeader.hash,
+      blockchainConfig = blockchainConfig,
+      currentBestBlock = () => reader.getBestBlockNumber()
+    )
+    DiscoveryConfig(
+      instanceConfig.config,
+      blockchainConfig.bootstrapNodes,
+      blockchainConfig.dnsDiscoveryDomains,
+      enrForkIdFilter = Some(enrFilter)
+    )
+  }
 }
 
 trait KnownNodesManagerBuilder {
