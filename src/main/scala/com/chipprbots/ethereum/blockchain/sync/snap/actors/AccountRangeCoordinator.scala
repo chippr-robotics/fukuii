@@ -139,7 +139,11 @@ class AccountRangeCoordinator(
   //   * PivotRefreshed → clear strikes (peer deserves a clean slate on the new root)
   //   * PeerUnavailable → clear strikes (and the peer entry from statelessPeers too)
   private[actors] val emptyResponseStrikes = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
-  private val EmptyResponseStrikeThreshold: Int = 3
+  // Raised 3 → 5 on 2026-05-14: even with PR #1255 clearing snapless on PivotRefreshed,
+  // the 3-strike threshold drained sepolia's small peer pool between pivots, producing
+  // eligible=0 stalls within each pivot window. 5 strikes gives peers more rope; mirrors
+  // Nethermind's threshold; lines up with the bumped storage threshold.
+  private val EmptyResponseStrikeThreshold: Int = 5
   private var pivotRefreshRequested = false
   private var pivotWasRefreshed = false
 

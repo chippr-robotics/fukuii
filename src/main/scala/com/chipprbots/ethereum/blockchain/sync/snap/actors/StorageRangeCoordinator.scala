@@ -134,11 +134,18 @@ class StorageRangeCoordinator(
   // a transient peer hiccup the same recovery path used elsewhere in the codebase.
   private val statelessPeers = mutable.Set[String]()
   // Strike counter for empty storage-range responses. Mirror of AccountRangeCoordinator's
-  // emptyResponseStrikes: a peer must miss N=3 consecutive empties (no intervening success)
+  // emptyResponseStrikes: a peer must miss N=5 consecutive empties (no intervening success)
   // before being marked stateless. Cleared on PivotRefreshed, PeerUnavailable, or any
   // successful (slot-bearing) response.
+  //
+  // Threshold raised 3 → 5 on 2026-05-14 after sepolia observation: on small peer pools
+  // (3-8 peers), 3 strikes drains peers into stateless faster than pivot refreshes can
+  // clear them. Result: eligible=0 windows recur every pivot cycle. Mirrors the small-pool
+  // fix shape applied to account (PR-2 / #1255 cleared sticky snapless on PivotRefreshed).
+  // Reference clients use 5 (Nethermind) or unlimited+throughput-tracker (Geth); 3 was
+  // overly aggressive for our policy.
   private val emptyResponseStrikes = mutable.Map.empty[String, Int]
-  private val EmptyResponseStrikeThreshold: Int = 3
+  private val EmptyResponseStrikeThreshold: Int = 5
   private var pivotRefreshRequested = false
 
   // Contract completion tracking for progress estimation.
