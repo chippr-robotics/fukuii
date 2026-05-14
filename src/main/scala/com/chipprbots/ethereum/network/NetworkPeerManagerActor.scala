@@ -65,12 +65,36 @@ class NetworkPeerManagerActor(
 
   private var emptyHeaderResponses: Int = 0
 
+  // Last time we observed each peer pushing or replying with a block-height signal. Used by
+  // the periodic best-block re-probe to skip peers whose ETH/69 `BlockRangeUpdate` arrived
+  // recently — they're already keeping `maxBlockNumber` fresh on their own.
+  private val lastBlockSignalMs = scala.collection.mutable.Map.empty[PeerId, Long]
+
   // 60s network summary — read+reset RLPx counters and log one aggregate line
   context.system.scheduler.scheduleWithFixedDelay(
     60.seconds,
     60.seconds,
     self,
     NetworkPeerManagerActor.LogNetworkSummary
+  )(context.dispatcher)
+
+  // Periodic peer best-block re-probe. The post-handshake eager probe (below) updates
+  // `PeerInfo.maxBlockNumber` once; thereafter only `NewBlock` / `NewBlockHashes` gossip
+  // (dead post-merge) or ETH/69 `BlockRangeUpdate` (only if the remote actively pushes)
+  // keeps it current. Without a periodic refresh, peers freeze at their handshake-time
+  // block forever — breaking the freshness floor (PR #1234), the pivot selection in
+  // `SNAPSyncController.currentNetworkBestFromSnapPeers`, and the chronically-lagging-peer
+  // eviction landing in the next PR.
+  //
+  // Cadence: every 5 minutes. One `GetBlockHeaders(bestHash, 1)` per peer is negligible
+  // bandwidth (peers already serve thousands of SNAP requests in that window). Skip
+  // ETH/69 peers whose `BlockRangeUpdate` arrived within the last `BlockSignalStaleAfter`
+  // window — they're already self-reporting.
+  context.system.scheduler.scheduleWithFixedDelay(
+    BestBlockRefreshInterval,
+    BestBlockRefreshInterval,
+    self,
+    NetworkPeerManagerActor.RefreshPeerBestBlocks
   )(context.dispatcher)
 
   // Subscribe to the event of any peer getting handshaked
@@ -153,6 +177,45 @@ class NetworkPeerManagerActor(
       log.info(
         s"Network [60s]: active=$active peers ($snapPeers snap-capable), +$tcpFailed tcp-failed, +$authFailed auth-failed, +$authTimeout auth-timeout, +$emptyHeaders empty-headers"
       )
+
+    case NetworkPeerManagerActor.RefreshPeerBestBlocks =>
+      // Periodically poll each handshaked peer for its current head. Mirrors the eager
+      // post-handshake probe (in `handlePeersInfoEvents`) but runs every
+      // `BestBlockRefreshInterval` so `PeerInfo.maxBlockNumber` stays current without
+      // depending on NewBlock gossip (dead post-merge) or peer-side BlockRangeUpdate
+      // push. Responses route through the existing BlockHeadersCode subscription back
+      // into `updateMaxBlock` and `withBestBlockData`.
+      val now = System.currentTimeMillis()
+      val refreshStaleAfterMs = BlockSignalStaleAfter.toMillis
+      var probed = 0
+      peersWithInfo.foreach { case (peerId, PeerWithInfo(peer, peerInfo)) =>
+        if (peerInfo.isAtGenesis) {
+          // Genesis peers are block 0 by definition — nothing to refresh.
+        } else {
+          // For ETH/69 peers, skip if the remote pushed a `BlockRangeUpdate` recently.
+          val recentlySignaled = peerInfo.remoteStatus.capability == Capability.ETH69 &&
+            lastBlockSignalMs.get(peerId).exists(t => now - t < refreshStaleAfterMs)
+          if (!recentlySignaled) {
+            val bestHash = peerInfo.remoteStatus.bestHash
+            val probe: MessageSerializable =
+              if (Capability.usesRequestId(peerInfo.remoteStatus.capability))
+                ETH66.GetBlockHeaders(ETH66.nextRequestId, Right(bestHash), 1, 0, reverse = false)
+              else
+                ETH62.GetBlockHeaders(Right(bestHash), 1, 0, reverse = false)
+            log.debug(
+              "BEST_BLOCK_REPROBE: peer={} cap={} maxBlock={} — periodic refresh",
+              peer.id,
+              peerInfo.remoteStatus.capability,
+              peerInfo.maxBlockNumber
+            )
+            peerManagerActor ! PeerManagerActor.SendMessage(probe, peer.id)
+            probed += 1
+          }
+        }
+      }
+      if (probed > 0) {
+        log.debug(s"BEST_BLOCK_REPROBE: probed $probed/${peersWithInfo.size} peers for current head")
+      }
   }
 
   /** Processes events and updating the information about each peer
@@ -208,6 +271,15 @@ class NetworkPeerManagerActor(
             snapSyncControllerOpt.foreach(_ ! msg)
 
           case _ => // ETH protocol messages - no special routing needed
+        }
+
+        // Track per-peer block-height signals so the periodic re-probe (RefreshPeerBestBlocks)
+        // can skip ETH/69 peers that are actively pushing BlockRangeUpdate.
+        message match {
+          case _: ETH69.BlockRangeUpdate | _: ETH62BlockHeaders | _: ETH66BlockHeaders |
+              _: BaseETH6XMessages.NewBlock | _: NewBlockHashes =>
+            lastBlockSignalMs(peerId) = System.currentTimeMillis()
+          case _ => // not a block-height signal
         }
 
         val newPeersWithInfo = updatePeersWithInfo(peersWithInfo, peerId, message, handleReceivedMessage)
@@ -277,6 +349,7 @@ class NetworkPeerManagerActor(
       peerEventBusActor ! Unsubscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peerId)))
       peerEventBusActor ! Unsubscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peerId)))
       NetworkMetrics.registerRemoveHandshakedPeer(peersWithInfo(peerId).peer)
+      lastBlockSignalMs.remove(peerId)
       context.become(handleMessages(peersWithInfo - peerId))
 
   }
@@ -916,6 +989,22 @@ object NetworkPeerManagerActor {
 
   case object GetHandshakedPeers
   private[network] case object LogNetworkSummary
+
+  /** Self-message that drives the periodic best-block re-probe loop. */
+  private[network] case object RefreshPeerBestBlocks
+
+  /** How often to send each handshaked peer a one-shot `GetBlockHeaders(bestHash, 1)` to
+    * refresh `PeerInfo.maxBlockNumber`. Defaults to 5 minutes — small fraction of typical
+    * peer connection lifetimes (~30+ min) and small fraction of pivot-refresh cadence.
+    */
+  private[network] val BestBlockRefreshInterval: FiniteDuration = 5.minutes
+
+  /** Window after which we re-probe an ETH/69 peer even though it has already had a
+    * `BlockRangeUpdate` opportunity. ETH/69 peers that don't actively push BRUs would
+    * otherwise never get re-probed. Half of the re-probe interval so a quiet peer gets
+    * polled within 2.5 minutes regardless of its push cadence.
+    */
+  private[network] val BlockSignalStaleAfter: FiniteDuration = 150.seconds
 
   case class HandshakedPeers(peers: Map[Peer, PeerInfo])
 
