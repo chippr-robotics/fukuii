@@ -1429,6 +1429,10 @@ class StorageRangeCoordinator(
       }
   }
 
+  // Periodic state-dump cadence — every 5th redispatch (≈ every 2.5 min at 30s tick) emits an
+  // INFO snapshot of pool state. Cheap and answers "why isn't storage draining?" from logs alone.
+  private var redispatchTickCount: Long = 0L
+
   private def tryRedispatchPendingTasks(): Unit = {
     if (tasks.isEmpty) return
     if (isPostRefreshCooldownActive) return
@@ -1436,10 +1440,20 @@ class StorageRangeCoordinator(
     val eligiblePeers = knownAvailablePeers
       .filterNot(p => isPeerStateless(p) || isPeerCoolingDown(p))
       .toList
+    redispatchTickCount += 1
+    if (redispatchTickCount % 5 == 0L) {
+      log.info(
+        s"[STORAGE-STATE] pending=${tasks.size} active=${activeTasks.size} " +
+          s"workers-known=${knownAvailablePeers.size} stateless=${statelessPeers.size} " +
+          s"cooling=${knownAvailablePeers.count(isPeerCoolingDown)} eligible=${eligiblePeers.size} " +
+          s"strikes=${emptyResponseStrikes.size} root=${stateRoot.take(4).toHex}"
+      )
+    }
     if (eligiblePeers.isEmpty) {
-      log.debug(
+      log.info(
         s"[STORAGE-REDISPATCH] No eligible peers — ${knownAvailablePeers.size} known, " +
-          s"${statelessPeers.size} stateless. pending: ${tasks.size}"
+          s"${statelessPeers.size} stateless, " +
+          s"${knownAvailablePeers.count(isPeerCoolingDown)} cooling. pending: ${tasks.size}"
       )
       if (tasks.nonEmpty && activeTasks.isEmpty) {
         storageIdleChecks += 1
