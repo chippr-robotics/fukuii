@@ -46,8 +46,14 @@ class CheckpointExporterSpec
       val storageTrie = MerklePatriciaTrie[Array[Byte], Array[Byte]](
         sourceStorages.storages.stateStorage.getBackingStorage(0)
       )
-        .put(crypto.kec256(Hex.decode("0000000000000000000000000000000000000000000000000000000000000001")), Hex.decode("aa"))
-        .put(crypto.kec256(Hex.decode("0000000000000000000000000000000000000000000000000000000000000002")), Hex.decode("bb"))
+        .put(
+          crypto.kec256(Hex.decode("0000000000000000000000000000000000000000000000000000000000000001")),
+          Hex.decode("aa")
+        )
+        .put(
+          crypto.kec256(Hex.decode("0000000000000000000000000000000000000000000000000000000000000002")),
+          Hex.decode("bb")
+        )
       val storageRoot = ByteString(storageTrie.getRootHash)
 
       // Main account trie with three accounts.
@@ -221,8 +227,8 @@ class CheckpointExporterSpec
     val targetReader: BlockchainReader = BlockchainReader(targetStorages.storages)
   }
 
-  /** Source uses BasicPruning so trie nodes go through ReferenceCountNodeStorage's ref-count wrapping
-    * — the path that exposed Bug 33. Target stays ArchivePruning (matches the default `Setup`).
+  /** Source uses BasicPruning so trie nodes go through ReferenceCountNodeStorage's ref-count wrapping — the path that
+    * exposed Bug 33. Target stays ArchivePruning (matches the default `Setup`).
     */
   private trait BasicPruningSetup extends EphemBlockchainTestSetup {
     import com.chipprbots.ethereum.db.components.EphemDataSourceComponent

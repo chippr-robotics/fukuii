@@ -5,21 +5,16 @@ This directory contains test reports, implementation summaries, and analysis doc
 ## Contents
 
 ### Implementation Reports
-- **[Implementation Complete](IMPLEMENTATION_COMPLETE.md)** - Testing tags implementation completion summary
 - **[MESS Implementation Summary](MESS_IMPLEMENTATION_SUMMARY.md)** - Modified Exponential Subjective Scoring implementation
 
-### Test Reports
-- **[Network Test Report](NETWORK_TEST_REPORT.md)** - Comprehensive network testing results
-- **[Network Testing Summary](NETWORK_TESTING_SUMMARY.md)** - Network testing summary
-- **[Testing Tags Verification Summary](TESTING_TAGS_VERIFICATION_SUMMARY.md)** - Test tagging verification results
-
 ### Analysis Reports
-- **[Silent Errors Report](SILENT_ERRORS_REPORT.md)** - Analysis of silent error conditions
 - **[Static Analysis Inventory](STATIC_ANALYSIS_INVENTORY.md)** - Static analysis results and findings
 
-### Phase Reports
-- **[Phase 3 Summary](PHASE_3_SUMMARY.md)** - Phase 3 implementation summary
-- **[Phase 3 CI Integration Summary](PHASE_3_CI_INTEGRATION_SUMMARY.md)** - Phase 3 CI integration details
+### SNAP Sync
+- **[SNAP Resolution](SNAP-Resolution.md)** - SNAP sync resolution notes
+
+### Gorgoroth
+- **[Gorgoroth Trials Announcement](gorgoroth-trials-announcement.md)** - Gorgoroth test network trials
 
 ## Related Documentation
 
@@ -27,8 +22,8 @@ This directory contains test reports, implementation summaries, and analysis doc
 
 ## Report Organization
 
-Reports are organized chronologically and by type:
+Reports are organized by type:
 - **Implementation Reports**: Document completion of major features or migrations
-- **Test Reports**: Results from comprehensive testing efforts
 - **Analysis Reports**: In-depth analysis of issues or system behavior
-- **Phase Reports**: Milestone and phase completion summaries
+- **SNAP Sync**: SNAP sync protocol documentation and resolutions
+- **Gorgoroth**: Private test network documentation

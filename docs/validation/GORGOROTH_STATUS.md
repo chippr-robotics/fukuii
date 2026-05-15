@@ -332,7 +332,6 @@ cd ops/cirith-ungol
 ### Testing Guides
 - [Gorgoroth Compatibility Testing](../testing/GORGOROTH_COMPATIBILITY_TESTING.md) - Detailed test procedures
 - [Cirith Ungol Testing Guide](../testing/CIRITH_UNGOL_TESTING_GUIDE.md) - Real-world sync testing
-- [E2E Testing Guide](../testing/E2E_TESTING_GUIDE.md) - End-to-end testing framework
 
 ### Operations
 

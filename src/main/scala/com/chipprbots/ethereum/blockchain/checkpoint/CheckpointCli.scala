@@ -104,19 +104,23 @@ object CheckpointCli extends Logger {
     exporter.exportArchive(blockNumber, output, gzip = args.gzip)
   }
 
-  /** Minimal cake mix for read-only state access. No actors, no validators, no sync — just storage and BlockchainConfig.
+  /** Minimal cake mix for read-only state access. No actors, no validators, no sync — just storage and
+    * BlockchainConfig.
     */
-  private final class ExportBuilder extends InstanceConfigProvider with BlockchainConfigBuilder {
+  final private class ExportBuilder extends InstanceConfigProvider with BlockchainConfigBuilder {
     override def instanceConfig: InstanceConfig = Config
     lazy val storagesInstance =
-      new RocksDbDataSourceComponent with PruningConfigBuilder with Storages.DefaultStorages with InstanceConfigProvider {
+      new RocksDbDataSourceComponent
+        with PruningConfigBuilder
+        with Storages.DefaultStorages
+        with InstanceConfigProvider {
         override def instanceConfig: InstanceConfig = Config
       }
   }
 
-  private final case class ExportArgs(block: Option[BigInt], output: Path, gzip: Boolean)
+  final private case class ExportArgs(block: Option[BigInt], output: Path, gzip: Boolean)
 
-  private sealed trait Action
+  sealed private trait Action
   private object Action {
     final case class Export(args: ExportArgs) extends Action
   }

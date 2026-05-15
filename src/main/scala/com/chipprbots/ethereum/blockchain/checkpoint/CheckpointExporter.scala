@@ -23,8 +23,8 @@ import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.MptTraversals
 import com.chipprbots.ethereum.mpt.NullNode
 
-/** Produces a `.checkpoint` archive for a specified block by walking the state trie. The resulting file is consumable by
-  * [[CheckpointImporter]].
+/** Produces a `.checkpoint` archive for a specified block by walking the state trie. The resulting file is consumable
+  * by [[CheckpointImporter]].
   *
   * Algorithm:
   *
@@ -35,8 +35,8 @@ import com.chipprbots.ethereum.mpt.NullNode
   *   1. Emit each unique non-empty `codeHash` looked up from `evmCodeStorage`.
   *   1. Close the archive with the CRC32 trailer.
   *
-  * Read-only — does not mutate any storage. The streaming design keeps RAM bounded to ~O(unique hashes seen), not O(trie
-  * size).
+  * Read-only — does not mutate any storage. The streaming design keeps RAM bounded to ~O(unique hashes seen), not
+  * O(trie size).
   */
 final class CheckpointExporter(
     stateStorage: StateStorage,
