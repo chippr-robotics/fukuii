@@ -89,6 +89,16 @@ final class CheckpointExporter(
         output
       )
 
+      def abortLog(err: ExportError): Unit =
+        log.error(
+          "[CHECKPOINT EXPORT] ABORTED after nodes={} bytecodes={}: {}. " +
+            "Archive at {} is incomplete (missing end-of-stream marker + CRC) and unusable.",
+          nodesEmitted,
+          bytecodesEmitted,
+          err,
+          output
+        )
+
       // Phase 1: account trie
       walkTrie(
         rootHash = header.stateRoot,
@@ -109,8 +119,10 @@ final class CheckpointExporter(
             )
         }
       ) match {
-        case Right(_)  => ()
-        case Left(err) => return Left(err)
+        case Right(_) => ()
+        case Left(err) =>
+          abortLog(err)
+          return Left(err)
       }
 
       // Phase 2: per-account storage tries
@@ -136,8 +148,10 @@ final class CheckpointExporter(
                 )
             }
           ) match {
-            case Right(_)  => ()
-            case Left(err) => return Left(err)
+            case Right(_) => ()
+            case Left(err) =>
+              abortLog(err)
+              return Left(err)
           }
         }
       }
@@ -152,7 +166,9 @@ final class CheckpointExporter(
               writer.writeBytecode(ch, code.toArray)
               bytecodesEmitted += 1
             case None =>
-              return Left(MissingBytecode(ch))
+              val err = MissingBytecode(ch)
+              abortLog(err)
+              return Left(err)
           }
         }
       }
