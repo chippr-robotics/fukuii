@@ -10,7 +10,7 @@
 
 **Related ADRs**: ADR-015 (Ethereum/Tests Adapter), ADR-014 (EIP-161 Implementation)
 
-**Verification Report**: See [Testing Tags Verification Report](../../testing/TESTING_TAGS_VERIFICATION_REPORT.md)
+<!-- Verification report removed; see commit history and PR notes for the testing tags implementation review. -->
 
 ## Context
 
