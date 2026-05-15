@@ -72,17 +72,14 @@ class AccountRangeCoordinator(
     accountTrieEcOverride: Option[ExecutionContext] = None,
     /** Phase 2 of the SNAP rewrite (Step 3 of `snap-stacktrie-port` plan).
       *
-      * When `true`, accounts arriving in each `AccountTask` are inserted into
-      * a per-task [[com.chipprbots.ethereum.blockchain.sync.snap.SnapHashTrie]]
-      * (which wraps a streaming `StackTrie`) rather than into the shared
-      * `MerklePatriciaTrie` over `DeferredWriteMptStorage`. The single 4 GiB
-      * in-memory pivot trie and its multi-minute flush are eliminated; memory
-      * is bounded to ~8 MiB write batches per task.
+      * When `true`, accounts arriving in each `AccountTask` are inserted into a per-task
+      * [[com.chipprbots.ethereum.blockchain.sync.snap.SnapHashTrie]] (which wraps a streaming `StackTrie`) rather than
+      * into the shared `MerklePatriciaTrie` over `DeferredWriteMptStorage`. The single 4 GiB in-memory pivot trie and
+      * its multi-minute flush are eliminated; memory is bounded to ~8 MiB write batches per task.
       *
-      * When `false` (default), the legacy MPT-put-then-deferred-flush path is
-      * used unchanged. This gives operators an opt-in migration path; the
-      * legacy path will be removed in Step 5 of the plan once the StackTrie
-      * path is validated on Sepolia + Mordor.
+      * When `false` (default), the legacy MPT-put-then-deferred-flush path is used unchanged. This gives operators an
+      * opt-in migration path; the legacy path will be removed in Step 5 of the plan once the StackTrie path is
+      * validated on Sepolia + Mordor.
       */
     useStackTrie: Boolean = false
 ) extends Actor
@@ -184,9 +181,8 @@ class AccountRangeCoordinator(
     maybeRequestPivotRefresh()
   }
 
-  /** Reset the strike counter for a peer that has just produced a useful response (real
-    * accounts OR a boundary proof). Cheap to over-invoke; the goal is "any forward progress
-    * from this peer wipes prior strikes."
+  /** Reset the strike counter for a peer that has just produced a useful response (real accounts OR a boundary proof).
+    * Cheap to over-invoke; the goal is "any forward progress from this peer wipes prior strikes."
     */
   private def recordPeerSuccess(peerId: com.chipprbots.ethereum.network.PeerId): Unit =
     emptyResponseStrikes.remove(peerId)
@@ -415,10 +411,9 @@ class AccountRangeCoordinator(
   // without waiting for the next PeerAvailable message.
   private val knownAvailablePeers = mutable.Set[Peer]()
 
-  /** Number of active (non-stateless, non-snapless, non-cooling-down) snap-capable peers.
-    * Returns the actual count — no floor — so the progress log truthfully reports 0 when
-    * all peers are demoted (the case that drives the account stall). Previously this had
-    * `.max(1)` which masked the stall: progress log said "1 peers" while dispatch was
+  /** Number of active (non-stateless, non-snapless, non-cooling-down) snap-capable peers. Returns the actual count — no
+    * floor — so the progress log truthfully reports 0 when all peers are demoted (the case that drives the account
+    * stall). Previously this had `.max(1)` which masked the stall: progress log said "1 peers" while dispatch was
     * starving on zero eligible peers. See PR-1 of `this-is-the-same-fluttering-eagle.md`.
     */
   private def activePeerCount: Int =
@@ -902,10 +897,9 @@ class AccountRangeCoordinator(
   /** Dispatch up to maxInFlightPerPeer tasks to the given peer (pipelining). Mirrors
     * ByteCodeCoordinator.dispatchIfPossible — the proven pattern for SNAP sync.
     *
-    * No-op while any downstream coordinator (storage OR bytecode) is over its high-water mark.
-    * Workers already in flight always run to completion, so existing work continues to drain, but
-    * we stop producing new tasks (which would in turn enqueue more storage / bytecode work) until
-    * every signalling downstream has released.
+    * No-op while any downstream coordinator (storage OR bytecode) is over its high-water mark. Workers already in
+    * flight always run to completion, so existing work continues to drain, but we stop producing new tasks (which would
+    * in turn enqueue more storage / bytecode work) until every signalling downstream has released.
     */
   private def dispatchIfPossible(peer: Peer): Unit = {
     if (pendingTasks.isEmpty) return
@@ -928,9 +922,9 @@ class AccountRangeCoordinator(
     }
   }
 
-  /** Internal: record a back-pressure transition from one named downstream and re-engage dispatch
-    * once every signalling source has released. ANY-OF semantics: pause while at least one source
-    * is engaged; resume only when the set is fully empty.
+  /** Internal: record a back-pressure transition from one named downstream and re-engage dispatch once every signalling
+    * source has released. ANY-OF semantics: pause while at least one source is engaged; resume only when the set is
+    * fully empty.
     */
   private def applyBackpressureChange(source: String, paused: Boolean): Unit = {
     val wasActive = downstreamBackpressureActive
@@ -1359,12 +1353,10 @@ class AccountRangeCoordinator(
     }
   }
 
-  /** Get-or-create the per-task `SnapHashTrie` for the StackTrie path. Each
-    * task gets its own streaming trie keyed by `task.last` (the end-of-range
-    * boundary, unique per task). Nodes emitted by the wrapper flush to
-    * `mptStorage` via `storeRawNodes` — which routes through the existing
-    * `FastSyncNodeStorage` and picks up pivot-block-number tagging for
-    * pruning automatically.
+  /** Get-or-create the per-task `SnapHashTrie` for the StackTrie path. Each task gets its own streaming trie keyed by
+    * `task.last` (the end-of-range boundary, unique per task). Nodes emitted by the wrapper flush to `mptStorage` via
+    * `storeRawNodes` — which routes through the existing `FastSyncNodeStorage` and picks up pivot-block-number tagging
+    * for pruning automatically.
     */
   private def getOrCreateTaskStackTrie(task: AccountTask): SnapHashTrie =
     taskStackTries.getOrElseUpdate(
@@ -1379,8 +1371,8 @@ class AccountRangeCoordinator(
     * Used directly only from `finalizeTrie` (where the actor is in `finalizing` and no concurrent puts can race).
     * Periodic flushes during account download go through `spawnFlushTrieAsync`.
     *
-    * NOTE: legacy MPT path only. The StackTrie path flushes per-task at task completion via
-    * `SnapHashTrie.commit()`; no global flush is needed.
+    * NOTE: legacy MPT path only. The StackTrie path flushes per-task at task completion via `SnapHashTrie.commit()`; no
+    * global flush is needed.
     */
   private def flushTrieToStorage(): Unit =
     deferredStorage.flush().foreach { rootHash =>
@@ -1527,7 +1519,9 @@ class AccountRangeCoordinator(
         // finished after its `isTaskRangeComplete` branch was missed).
         if (taskStackTries.nonEmpty) {
           log.warning(s"Finalising ${taskStackTries.size} uncommitted task StackTries (unexpected)")
-          taskStackTries.values.foreach { trie => val _ = trie.commit() }
+          taskStackTries.values.foreach { trie =>
+            val _ = trie.commit()
+          }
           taskStackTries.clear()
         }
         // Use the pivot's claimed root as the "finalized root". With per-task fragments

@@ -102,10 +102,13 @@ case class EthNodeStatus69ExchangeState(
                     ChainWeight.totalDifficultyOnly(status.latestBlock)
                   }
                 }
-            log.debug(
-              "ETH69_STATUS: chainWeight for peer latestBlockHash {}: {} (localLookup={}, powEstimate={})",
-              status.latestBlockHash,
-              resolvedChainWeight,
+            log.info(
+              "ETH69_STATUS: TD resolved - totalDifficulty={}, latestBlock={}, source={} (localLookup={}, powEstimate={})",
+              resolvedChainWeight.totalDifficulty,
+              status.latestBlock,
+              if (blockchainReader.getChainWeightByHash(status.latestBlockHash).isDefined) "DB_LOOKUP"
+              else if (blockchainConfig.terminalTotalDifficulty.isEmpty) "POW_SCALING"
+              else "POS_PROXY",
               blockchainReader.getChainWeightByHash(status.latestBlockHash).isDefined,
               blockchainConfig.terminalTotalDifficulty.isEmpty
             )
@@ -121,7 +124,7 @@ case class EthNodeStatus69ExchangeState(
               )
             )
           case other =>
-            log.debug("ETH69_STATUS: ForkId validation failed: {} - disconnecting", other)
+            log.info("ETH69_STATUS: ForkId validation failed: {} - disconnecting", other)
             DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
         }
       }).unsafeRunSync()

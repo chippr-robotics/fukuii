@@ -55,10 +55,10 @@ object DnsDiscovery extends Logger {
     * @param domain
     *   DNS domain hosting the ENR tree (e.g., "all.mordor.blockd.info")
     * @param forkIdFilter
-    *   Optional EIP-2124 fork ID filter. When provided, ENR entries carrying an `eth` key
-    *   with an incompatible fork ID are skipped (no outbound dial attempted). ENRs without
-    *   an `eth` key are accepted optimistically — the wire-protocol STATUS handshake makes
-    *   the authoritative check. Mirrors the logic in [[ForkIdTag]] used by discv4 routing.
+    *   Optional EIP-2124 fork ID filter. When provided, ENR entries carrying an `eth` key with an incompatible fork ID
+    *   are skipped (no outbound dial attempted). ENRs without an `eth` key are accepted optimistically — the
+    *   wire-protocol STATUS handshake makes the authoritative check. Mirrors the logic in [[ForkIdTag]] used by discv4
+    *   routing.
     * @return
     *   set of enode:// URL strings, empty on any failure
     */
@@ -157,7 +157,7 @@ object DnsDiscovery extends Logger {
 
       case Some(record) if record.startsWith("enr:") =>
         parseEnrToEnode(record, forkIdFilter) match {
-          case Right(enode)        => enodes += enode
+          case Right(enode) => enodes += enode
           case Left(reason) if reason.startsWith("fork-id mismatch") =>
             skipped += subdomain
           case Left(_) =>
@@ -182,9 +182,8 @@ object DnsDiscovery extends Logger {
     * "enr:" prefix.
     *
     * @param forkIdFilter
-    *   When provided, the ENR's `eth` key (EIP-2124) is validated against the local fork ID.
-    *   Returns `Left("fork-id mismatch: ...")` to signal a clean reject (not a parse failure)
-    *   so callers can log it differently.
+    *   When provided, the ENR's `eth` key (EIP-2124) is validated against the local fork ID. Returns `Left("fork-id
+    *   mismatch: ...")` to signal a clean reject (not a parse failure) so callers can log it differently.
     */
   private[discovery] def parseEnrToEnode(
       enrRecord: String,
@@ -207,8 +206,9 @@ object DnsDiscovery extends Logger {
           forkIdFilter match {
             case Some(filter) =>
               attrs.get("eth").foreach { ethBytes =>
-                val maybeForkId = try Some(decode[ForkId](rawDecode(ethBytes)))
-                catch { case _: Exception => None }
+                val maybeForkId =
+                  try Some(decode[ForkId](rawDecode(ethBytes)))
+                  catch { case _: Exception => None }
                 maybeForkId.foreach { remoteForkId =>
                   if (!filter.accepts(remoteForkId)) {
                     return Left(s"fork-id mismatch: $remoteForkId")
@@ -342,15 +342,13 @@ object DnsDiscovery extends Logger {
         None
     }
 
-  /** ENR fork-ID filter used during DNS discovery to skip nodes on incompatible chains.
-    * Mirrors the logic in [[ForkIdTag]] used by discv4 routing-table filtering, but applies
-    * at DNS-resolution time so the rejected ENRs never become dial candidates in the first
-    * place.
+  /** ENR fork-ID filter used during DNS discovery to skip nodes on incompatible chains. Mirrors the logic in
+    * [[ForkIdTag]] used by discv4 routing-table filtering, but applies at DNS-resolution time so the rejected ENRs
+    * never become dial candidates in the first place.
     *
-    * Without this, sepolia's `all.sepolia.ethdisco.net` (or equivalent) tree could include
-    * mis-tagged entries, and on shared infrastructure we observed peers from BSC (networkId
-    * 56), ETH mainnet (1), Core Chain (1116), etc. burning our outbound dial slots before
-    * the wire-protocol STATUS check could reject them. See PR #1249.
+    * Without this, sepolia's `all.sepolia.ethdisco.net` (or equivalent) tree could include mis-tagged entries, and on
+    * shared infrastructure we observed peers from BSC (networkId 56), ETH mainnet (1), Core Chain (1116), etc. burning
+    * our outbound dial slots before the wire-protocol STATUS check could reject them. See PR #1249.
     */
   class EnrForkIdFilter(
       genesisHash: () => ByteString,

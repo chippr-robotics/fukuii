@@ -629,30 +629,34 @@ class AccountRangeCoordinatorSpec
   it should "mark a peer SNAPLESS only after EmptyResponseStrikeThreshold consecutive empty-proof responses (#1197)" taggedAs UnitTest in {
     // The previous policy promoted on the FIRST empty-proof response, which on sepolia
     // 2026-05-13 collapsed the snap-peer pool from 3-8 connected → 1 dispatched-to. The
-    // new policy requires 3 consecutive strikes (no intervening successful response) to
-    // mark the peer. Reference clients: geth has no explicit counter (uses throughput
-    // tracking); nethermind uses 5; we pick 3 as a balance.
+    // new policy requires EmptyResponseStrikeThreshold (5) consecutive strikes before
+    // marking the peer. Mirrors Nethermind's threshold; gives peers more rope on small
+    // testnets where a few transient empty responses are expected.
     val stateRoot = kec256(ByteString("trie-async-test-root"))
     val coord = newCoordinator(stateRoot = stateRoot)
     val ua = coord.underlyingActor
     val pendingProbe = TestProbe()
     val peer = PeerTestHelpers.createTestPeer("snapless-peer", pendingProbe.ref)
 
-    // Strikes 1 and 2 — peer still eligible.
+    // Strikes 1-4 — peer still eligible (below threshold of 5).
     seedActiveTask(coord, BigInt(701), peer, rootHash = stateRoot)
     coord ! Messages.TaskFailed(BigInt(701), "Missing proof for empty account range")
     seedActiveTask(coord, BigInt(702), peer, rootHash = stateRoot)
     coord ! Messages.TaskFailed(BigInt(702), "Missing proof for empty account range")
+    seedActiveTask(coord, BigInt(703), peer, rootHash = stateRoot)
+    coord ! Messages.TaskFailed(BigInt(703), "Missing proof for empty account range")
+    seedActiveTask(coord, BigInt(704), peer, rootHash = stateRoot)
+    coord ! Messages.TaskFailed(BigInt(704), "Missing proof for empty account range")
     coord ! Messages.GetProgress
     expectMsgType[AccountRangeStats](2.seconds)
 
     ua.statelessPeers should not contain peer.id
     ua.snaplessPeers should not contain peer.id
-    ua.emptyResponseStrikes.get(peer.id) shouldBe Some(2)
+    ua.emptyResponseStrikes.get(peer.id) shouldBe Some(4)
 
-    // Strike 3 — promoted to confirmed snapless + stateless.
-    seedActiveTask(coord, BigInt(703), peer, rootHash = stateRoot)
-    coord ! Messages.TaskFailed(BigInt(703), "Missing proof for empty account range")
+    // Strike 5 — promoted to confirmed snapless + stateless.
+    seedActiveTask(coord, BigInt(705), peer, rootHash = stateRoot)
+    coord ! Messages.TaskFailed(BigInt(705), "Missing proof for empty account range")
     coord ! Messages.GetProgress
     expectMsgType[AccountRangeStats](2.seconds)
 
@@ -696,7 +700,12 @@ class AccountRangeCoordinatorSpec
     system.stop(coord)
   }
 
-  it should "leave snaplessPeers untouched on PivotRefreshed (#1197)" taggedAs UnitTest in {
+  it should "clear snaplessPeers on PivotRefreshed (#1255)" taggedAs UnitTest in {
+    // PR #1255 changed the policy: snaplessPeers is now cleared on PivotRefreshed.
+    // Previous PR #1197 preserved it across pivots, but that stalled small peer pools
+    // (sepolia 2026-05-14: eligible=0 when all peers accumulated snapless across pivots).
+    // Clearing gives peers a fresh slate at the new root at the cost of ~5 re-test
+    // dispatches per peer per pivot; acceptable vs indefinite stall.
     val coord = newCoordinator()
     val ua = coord.underlyingActor
     val pendingProbe = TestProbe()
@@ -710,11 +719,9 @@ class AccountRangeCoordinatorSpec
     coord ! Messages.GetProgress
     expectMsgType[AccountRangeStats](2.seconds)
 
-    // statelessPeers is for stale-root failures and clears on PivotRefreshed.
+    // Both statelessPeers and snaplessPeers are cleared on PivotRefreshed (#1255).
     ua.statelessPeers shouldBe empty
-    // snaplessPeers tracks structural snapshot absence; survives so the peer doesn't
-    // go back into dispatch and immediately re-classify.
-    ua.snaplessPeers should contain(peer.id)
+    ua.snaplessPeers shouldBe empty
 
     system.stop(coord)
   }
@@ -885,7 +892,7 @@ class AccountRangeCoordinatorSpec
     val peerA = PeerTestHelpers.createTestPeer("dedup-peer-A", peerAProbe.ref)
     val peerB = PeerTestHelpers.createTestPeer("dedup-peer-B", peerBProbe.ref)
 
-    val coordinator = system.actorOf(
+    val coordinator = TestActorRef[AccountRangeCoordinator](
       AccountRangeCoordinator.props(
         stateRoot = stateRoot,
         networkPeerManager = networkPeerManager.ref,
@@ -896,6 +903,7 @@ class AccountRangeCoordinatorSpec
         initialMaxInFlightPerPeer = 1
       )
     )
+    val ua = coordinator.underlyingActor
 
     coordinator ! Messages.StartAccountRangeSync(stateRoot)
     coordinator ! Messages.PeerAvailable(peerA)
@@ -904,7 +912,12 @@ class AccountRangeCoordinatorSpec
     val reqId1 = sendMsg1.message.asInstanceOf[GetAccountRangeEnc].underlyingMsg.requestId
     val workerRef = networkPeerManager.lastSender
 
-    // peerA returns empty proof → marked stateless → all known peers stateless → PivotStateUnservable
+    // Pre-seed 4 strikes so the next TaskFailed is strike 5 (EmptyResponseStrikeThreshold).
+    // Avoids repeating 4 full request cycles; the coordinator still processes the final
+    // strike normally, marks peerA stateless/snapless, and sends PivotStateUnservable.
+    ua.emptyResponseStrikes(peerA.id) = 4
+
+    // peerA returns empty proof → strike 5 of 5 → marked stateless → PivotStateUnservable
     coordinator ! Messages.TaskFailed(reqId1, "Missing proof for empty account range")
     snapSyncController.expectMsgType[SNAPSyncController.PivotStateUnservable](2.seconds)
 
@@ -967,7 +980,7 @@ class AccountRangeCoordinatorSpec
     val peerProbe = TestProbe()
     val peer = PeerTestHelpers.createTestPeer("pivot-clear-peer", peerProbe.ref)
 
-    val coordinator = system.actorOf(
+    val coordinator = TestActorRef[AccountRangeCoordinator](
       AccountRangeCoordinator.props(
         stateRoot = rootR1,
         networkPeerManager = networkPeerManager.ref,
@@ -978,6 +991,7 @@ class AccountRangeCoordinatorSpec
         initialMaxInFlightPerPeer = 1
       )
     )
+    val ua = coordinator.underlyingActor
 
     coordinator ! Messages.StartAccountRangeSync(rootR1)
     coordinator ! Messages.PeerAvailable(peer)
@@ -986,7 +1000,10 @@ class AccountRangeCoordinatorSpec
     val reqId1 = sendMsg1.message.asInstanceOf[GetAccountRangeEnc].underlyingMsg.requestId
     val workerRef = networkPeerManager.lastSender
 
-    // Peer becomes stateless → coordinator requests pivot refresh from controller
+    // Pre-seed 4 strikes; the next TaskFailed is strike 5 (EmptyResponseStrikeThreshold).
+    ua.emptyResponseStrikes(peer.id) = 4
+
+    // Peer becomes stateless (strike 5 of 5) → coordinator requests pivot refresh
     coordinator ! Messages.TaskFailed(reqId1, "Missing proof for empty account range")
     snapSyncController.expectMsgType[SNAPSyncController.PivotStateUnservable](2.seconds)
 
@@ -1178,8 +1195,8 @@ class AccountRangeCoordinatorSpec
     (ref, storage)
   }
 
-  /** Build a strict-ascending sequence of (accountHash, Account) pairs starting
-    * at `task.next` so insertion order satisfies the StackTrie's sort invariant.
+  /** Build a strict-ascending sequence of (accountHash, Account) pairs starting at `task.next` so insertion order
+    * satisfies the StackTrie's sort invariant.
     */
   private def stackTrieFixtureAccounts(
       task: AccountTask,
@@ -1206,7 +1223,9 @@ class AccountRangeCoordinatorSpec
       rootHash = root
     )
     val accounts = stackTrieFixtureAccounts(task, 8)
-    val nodesBefore = storage.synchronized { /* peek size via decode-then-count */ 0 }
+    val nodesBefore = storage.synchronized { /* peek size via decode-then-count */
+      0
+    }
 
     // Drive the chunk-store path directly. isTaskRangeComplete = false (more responses
     // could follow for this range), so the per-task SnapHashTrie should remain in the map.
@@ -1214,7 +1233,7 @@ class AccountRangeCoordinatorSpec
     coord ! Messages.GetProgress
     expectMsgType[AccountRangeStats](2.seconds)
 
-    ua.taskStackTries should contain key task.last
+    (ua.taskStackTries should contain).key(task.last)
     // No global stateTrie touch — its root should still be the empty-root hash.
     ByteString(ua.getStateRoot.toArray) shouldEqual ByteString(MerklePatriciaTrie.EmptyRootHash)
     val _ = nodesBefore // suppress unused warning while the storage poking is a no-op

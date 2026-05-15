@@ -22,7 +22,6 @@ import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
-import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.Codes
@@ -417,20 +416,31 @@ class ChainDownloader(
         // Store header + chain weight, atomically advancing the backfill cursor in the same
         // RocksDB write batch (#1169) so a crash mid-write never leaves the cursor ahead of
         // the data on disk.
-        val parentWeight = blockchainReader
-          .getChainWeightByHash(header.parentHash)
-          .getOrElse(ChainWeight.totalDifficultyOnly(0))
+        blockchainReader.getChainWeightByHash(header.parentHash) match {
+          case None =>
+            // Parent weight missing means the pivot TD was not seeded for this hash.
+            // Storing TD=0 here would corrupt every subsequent header's accumulated weight.
+            // Abort this batch; the backfill cursor stays at bestHeaderNumber so the next
+            // request will retry from the last committed position.
+            log.warning(
+              "Chain download: parent chain weight missing for block {} parentHash={} — aborting batch (cursor stays at {})",
+              header.number,
+              header.parentHash,
+              bestHeaderNumber
+            )
+            aborted = true
+          case Some(parentWeight) =>
+            blockchainWriter
+              .storeBlockHeader(header)
+              .and(blockchainWriter.storeChainWeight(header.hash, parentWeight.increase(header)))
+              .and(appStateStorage.putBackfillBestHeader(header.number))
+              .commit()
 
-        blockchainWriter
-          .storeBlockHeader(header)
-          .and(blockchainWriter.storeChainWeight(header.hash, parentWeight.increase(header)))
-          .and(appStateStorage.putBackfillBestHeader(header.number))
-          .commit()
-
-        bodiesQueue :+= header.hash
-        receiptsQueue :+= header.hash
-        prevHash = Some(header.hash)
-        validCount += 1
+            bodiesQueue :+= header.hash
+            receiptsQueue :+= header.hash
+            prevHash = Some(header.hash)
+            validCount += 1
+        }
       } else {
         log.warning(
           "Chain download: header {} parent hash mismatch from peer {}",

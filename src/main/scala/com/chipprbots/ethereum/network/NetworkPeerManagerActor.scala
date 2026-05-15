@@ -56,10 +56,6 @@ class NetworkPeerManagerActor(
 
   // Maximum length for hex string in debug logs (to avoid very long log lines)
 
-  // ETH/69: reject BlockRangeUpdate whose latestBlock is this many blocks beyond local best.
-  // Mirrors go-ethereum's maxFutureBlockTime heuristic translated to block-number space.
-  private val FutureBlockTolerance: BigInt = 100
-
   // Mutable reference to SNAPSyncController that can be set after initialization
   private var snapSyncControllerOpt: Option[ActorRef] = initialSnapSyncControllerOpt
 
@@ -262,18 +258,21 @@ class NetworkPeerManagerActor(
             )
           } else {
             val laggingFloor = clHead - LaggingPeerLagThreshold
-            val candidates = peersWithInfo.iterator.flatMap { case (peerId, PeerWithInfo(peer, peerInfo)) =>
-              if (peerInfo.maxBlockNumber > 0 && peerInfo.maxBlockNumber < laggingFloor) {
-                val firstSeen = laggingPeerSince.getOrElseUpdate(peerId, now)
-                val laggedFor = now - firstSeen
-                if (laggedFor >= LaggingPeerEvictAfter.toMillis) Some((peerId, peer, peerInfo, laggedFor))
-                else None
-              } else {
-                // Peer caught up (or never lagged) — reset hysteresis.
-                laggingPeerSince.remove(peerId)
-                None
+            val candidates = peersWithInfo.iterator
+              .flatMap { case (peerId, PeerWithInfo(peer, peerInfo)) =>
+                if (peerInfo.maxBlockNumber > 0 && peerInfo.maxBlockNumber < laggingFloor) {
+                  val firstSeen = laggingPeerSince.getOrElseUpdate(peerId, now)
+                  val laggedFor = now - firstSeen
+                  if (laggedFor >= LaggingPeerEvictAfter.toMillis) Some((peerId, peer, peerInfo, laggedFor))
+                  else None
+                } else {
+                  // Peer caught up (or never lagged) — reset hysteresis.
+                  laggingPeerSince.remove(peerId)
+                  None
+                }
               }
-            }.take(LaggingPeerMaxEvictionsPerCycle).toList
+              .take(LaggingPeerMaxEvictionsPerCycle)
+              .toList
 
             candidates.foreach { case (peerId, peer, peerInfo, laggedFor) =>
               log.info(
@@ -302,6 +301,12 @@ class NetworkPeerManagerActor(
             }
           }
       }
+
+    // SNAPSyncController sends ConnectToPeer to networkPeerManager — forward to PeerManagerActor
+    // which is the only actor that handles it. Without this, the message is silently dropped.
+    case PeerManagerActor.ConnectToPeer(uri) =>
+      log.info("Forwarding ConnectToPeer({}) to PeerManagerActor", uri)
+      peerManagerActor ! PeerManagerActor.ConnectToPeer(uri)
   }
 
   /** Processes events and updating the information about each peer
@@ -326,52 +331,27 @@ class NetworkPeerManagerActor(
       handleGetByteCodes(msg, peerId, peersWithInfo.get(peerId))
 
     case MessageFromPeer(message, peerId) if peersWithInfo.contains(peerId) =>
-      // ETH/69: future-block validation for BlockRangeUpdate (go-ethereum handler.go alignment).
-      // Disconnect peers that claim a latestBlock far beyond our chain head — likely invalid or
-      // malicious. Lagging peers (latestBlock behind our head) are valid and pass through.
-      val futureBlockDisconnect = message match {
-        case bru: ETH69.BlockRangeUpdate =>
-          val localBest = appStateStorage.getBestBlockNumber()
-          // Only validate future-block when we have a meaningful chain head (> 0).
-          // At genesis/initial sync localBest=0, so any peer block would be rejected —
-          // skip the check until we've actually synced some chain state.
-          if (localBest > 0 && bru.latestBlock > localBest + FutureBlockTolerance) {
-            log.warning(
-              s"BlockRangeUpdate from peer ${peerId.value}: latestBlock=${bru.latestBlock} " +
-                s"is ${bru.latestBlock - localBest} blocks ahead of local best=$localBest " +
-                s"(tolerance=$FutureBlockTolerance). Disconnecting (BreachOfProtocol)."
-            )
-            peersWithInfo(peerId).peer.ref ! DisconnectPeer(Disconnect.Reasons.BreachOfProtocol)
-            true
-          } else false
-        case _ => false
+      // Route SNAP protocol responses (from peers we're syncing from) to SNAPSyncController
+      message match {
+        case msg @ (_: AccountRange | _: StorageRanges | _: TrieNodes | _: ByteCodes) =>
+          log.debug("Routing {} message to SNAPSyncController from peer {}", msg.getClass.getSimpleName, peerId)
+          snapSyncControllerOpt.foreach(_ ! msg)
+
+        case _ => // ETH protocol messages - no special routing needed
       }
 
-      if (futureBlockDisconnect) {
-        context.become(handleMessages(peersWithInfo - peerId))
-      } else {
-        // Route SNAP protocol responses (from peers we're syncing from) to SNAPSyncController
-        message match {
-          case msg @ (_: AccountRange | _: StorageRanges | _: TrieNodes | _: ByteCodes) =>
-            log.debug("Routing {} message to SNAPSyncController from peer {}", msg.getClass.getSimpleName, peerId)
-            snapSyncControllerOpt.foreach(_ ! msg)
-
-          case _ => // ETH protocol messages - no special routing needed
-        }
-
-        // Track per-peer block-height signals so the periodic re-probe (RefreshPeerBestBlocks)
-        // can skip ETH/69 peers that are actively pushing BlockRangeUpdate.
-        message match {
-          case _: ETH69.BlockRangeUpdate | _: ETH62BlockHeaders | _: ETH66BlockHeaders |
-              _: BaseETH6XMessages.NewBlock | _: NewBlockHashes =>
-            lastBlockSignalMs(peerId) = System.currentTimeMillis()
-          case _ => // not a block-height signal
-        }
-
-        val newPeersWithInfo = updatePeersWithInfo(peersWithInfo, peerId, message, handleReceivedMessage)
-        NetworkMetrics.ReceivedMessagesCounter.increment()
-        context.become(handleMessages(newPeersWithInfo))
+      // Track per-peer block-height signals so the periodic re-probe (RefreshPeerBestBlocks)
+      // can skip ETH/69 peers that are actively pushing BlockRangeUpdate.
+      message match {
+        case _: ETH69.BlockRangeUpdate | _: ETH62BlockHeaders | _: ETH66BlockHeaders | _: BaseETH6XMessages.NewBlock |
+            _: NewBlockHashes =>
+          lastBlockSignalMs(peerId) = System.currentTimeMillis()
+        case _ => // not a block-height signal
       }
+
+      val newPeersWithInfo = updatePeersWithInfo(peersWithInfo, peerId, message, handleReceivedMessage)
+      NetworkMetrics.ReceivedMessagesCounter.increment()
+      context.become(handleMessages(newPeersWithInfo))
 
     case PeerHandshakeSuccessful(peer, peerInfo: PeerInfo) =>
       val chainInfoDisplay =
@@ -390,48 +370,76 @@ class NetworkPeerManagerActor(
           s"$chainInfoDisplay forkAccepted=${peerInfo.forkAccepted} " +
           s"supportsSnap=${peerInfo.remoteStatus.supportsSnap}"
       )
-      peerEventBusActor ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)))
-      peerEventBusActor ! Subscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)))
-
-      // Besu-style eager best-block probe.
-      // ETH/64-/68 STATUS carries `bestHash` but not the peer's best block *number* — only
-      // ETH/61 (long gone) and ETH/69 do. Without the number, fast-sync `PivotBlockSelector`
-      // sees `peer.maxBlockNumber == 0`, picks pivot = 0, and never converges (the loop
-      // we hit on Barad-dûr 2026-04-29). Geth resolves this lazily inside the downloader by
-      // probing the chosen peer's bestHash; besu and nethermind do it eagerly the moment
-      // STATUS completes. We follow the eager pattern: one `GetBlockHeaders(bestHash, 1)`
-      // immediately after handshake, the response routes through `updateMaxBlock` via the
-      // existing `BlockHeadersCode` subscription and populates `PeerInfo.maxBlockNumber`.
-      //
-      // Skip the probe for:
-      //  * ETH/69 — STATUS already carries latestBlock (stuffed into chainWeight.totalDifficulty
-      //    by the handshaker), so maxBlockNumber is set on construction.
-      //  * Peers at genesis (`bestHash == genesisHash`) — they're block 0 by definition;
-      //    `peerHasUpdatedBestBlock` already accepts them as `isAtGenesis`.
-      //
-      // Peers that don't reply to the probe simply stay at maxBlockNumber=0 and get filtered
-      // by `peerHasUpdatedBestBlock` — no disconnect, since Mordor peers can be flaky and
-      // we don't want to throw away connections for one missed reply (Bug 26 lesson).
-      if (peerInfo.remoteStatus.capability != Capability.ETH69 && !peerInfo.isAtGenesis) {
-        val bestHash = peerInfo.remoteStatus.bestHash
-        val probe: MessageSerializable =
-          if (Capability.usesRequestId(peerInfo.remoteStatus.capability))
-            ETH66.GetBlockHeaders(ETH66.nextRequestId, Right(bestHash), 1, 0, reverse = false)
-          else
-            ETH62.GetBlockHeaders(Right(bestHash), 1, 0, reverse = false)
-        log.debug(
-          "BEST_BLOCK_PROBE: peer={} cap={} bestHash={} — asking for header at bestHash to discover block number",
-          peer.id,
-          peerInfo.remoteStatus.capability,
-          ByteStringUtils.hash2string(bestHash)
+      if (peersWithInfo.contains(peer.id)) {
+        val old = peersWithInfo(peer.id)
+        // Keep the EXISTING entry — don't overwrite with the duplicate.
+        // PeerManagerActor will drop the loser via AlreadyConnected; with the PeerDisconnected
+        // gate fix, the loser's termination no longer evicts the winner. Overwriting here with
+        // the duplicate (which may be the about-to-die loser) would leave a stale ref in
+        // peersWithInfo — mirroring Besu's registerDisconnect guard which only updates
+        // activeConnections when peer.getConnection().equals(connection) (the primary connection).
+        log.warning(
+          s"DUPLICATE_HANDSHAKE_DROPPED: ${peer.id} already in peersWithInfo " +
+            s"(existing=${old.peer.remoteAddress} inbound=${old.peer.incomingConnection}, " +
+            s"duplicate=${peer.remoteAddress} inbound=${peer.incomingConnection}) — " +
+            s"keeping existing entry, duplicate will be dropped by PeerManagerActor"
         )
-        peerManagerActor ! PeerManagerActor.SendMessage(probe, peer.id)
+        // No update to peersWithInfo, no double-count in metrics
+        context.become(handleMessages(peersWithInfo))
+      } else {
+        peerEventBusActor ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)))
+        peerEventBusActor ! Subscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)))
+        // Besu-style eager best-block probe.
+        // ETH/64-/68 STATUS carries `bestHash` but not the peer's best block *number* — only
+        // ETH/61 (long gone) and ETH/69 do. Without the number, fast-sync `PivotBlockSelector`
+        // sees `peer.maxBlockNumber == 0`, picks pivot = 0, and never converges (the loop
+        // we hit on Barad-dûr 2026-04-29). Geth resolves this lazily inside the downloader by
+        // probing the chosen peer's bestHash; besu and nethermind do it eagerly the moment
+        // STATUS completes. We follow the eager pattern: one `GetBlockHeaders(bestHash, 1)`
+        // immediately after handshake, the response routes through `updateMaxBlock` via the
+        // existing `BlockHeadersCode` subscription and populates `PeerInfo.maxBlockNumber`.
+        //
+        // Skip the probe for:
+        //  * ETH/69 — STATUS already carries latestBlock (stuffed into chainWeight.totalDifficulty
+        //    by the handshaker), so maxBlockNumber is set on construction.
+        //  * Peers at genesis (`bestHash == genesisHash`) — they're block 0 by definition;
+        //    `peerHasUpdatedBestBlock` already accepts them as `isAtGenesis`.
+        //
+        // Peers that don't reply to the probe simply stay at maxBlockNumber=0 and get filtered
+        // by `peerHasUpdatedBestBlock` — no disconnect, since Mordor peers can be flaky and
+        // we don't want to throw away connections for one missed reply (Bug 26 lesson).
+        if (peerInfo.remoteStatus.capability != Capability.ETH69 && !peerInfo.isAtGenesis) {
+          val bestHash = peerInfo.remoteStatus.bestHash
+          val probe: MessageSerializable =
+            if (Capability.usesRequestId(peerInfo.remoteStatus.capability))
+              ETH66.GetBlockHeaders(ETH66.nextRequestId, Right(bestHash), 1, 0, reverse = false)
+            else
+              ETH62.GetBlockHeaders(Right(bestHash), 1, 0, reverse = false)
+          log.debug(
+            "BEST_BLOCK_PROBE: peer={} cap={} bestHash={} — asking for header at bestHash to discover block number",
+            peer.id,
+            peerInfo.remoteStatus.capability,
+            ByteStringUtils.hash2string(bestHash)
+          )
+          peerManagerActor ! PeerManagerActor.SendMessage(probe, peer.id)
+        }
+        NetworkMetrics.registerAddHandshakedPeer(peer)
+        context.become(handleMessages(peersWithInfo + (peer.id -> PeerWithInfo(peer, peerInfo))))
       }
 
-      NetworkMetrics.registerAddHandshakedPeer(peer)
-      context.become(handleMessages(peersWithInfo + (peer.id -> PeerWithInfo(peer, peerInfo))))
+    case PeerDisconnected(peerId) if !peersWithInfo.contains(peerId) =>
+      log.debug(
+        "PEER_DISCONNECTED_IGNORED: {} not in peersWithInfo — likely suppressed duplicate or already removed",
+        peerId
+      )
 
     case PeerDisconnected(peerId) if peersWithInfo.contains(peerId) =>
+      val pw = peersWithInfo(peerId)
+      log.info(
+        s"PEER_DISCONNECTED: ${peerId.value} " +
+          s"addr=${pw.peer.remoteAddress} cap=${pw.peerInfo.remoteStatus.capability} " +
+          s"inbound=${pw.peer.incomingConnection}"
+      )
       peerEventBusActor ! Unsubscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peerId)))
       peerEventBusActor ! Unsubscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peerId)))
       NetworkMetrics.registerRemoveHandshakedPeer(peersWithInfo(peerId).peer)
@@ -1083,67 +1091,59 @@ object NetworkPeerManagerActor {
   /** Self-message that drives the lagging-peer-eviction loop. */
   private[network] case object CheckLaggingPeers
 
-  /** Sent by `SNAPSyncController` whenever it ingests a new CL forkchoice head. Lets the
-    * peer manager evict chronically-lagging peers (more than `LaggingPeerLagThreshold`
-    * blocks below the CL head) so discovery can refill the connection slot with a fresh
-    * peer. Without this signal the actor has no notion of "actual chain tip" — pre-merge
-    * chains never send it and lagging-peer eviction is correctly disabled.
+  /** Sent by `SNAPSyncController` whenever it ingests a new CL forkchoice head. Lets the peer manager evict
+    * chronically-lagging peers (more than `LaggingPeerLagThreshold` blocks below the CL head) so discovery can refill
+    * the connection slot with a fresh peer. Without this signal the actor has no notion of "actual chain tip" —
+    * pre-merge chains never send it and lagging-peer eviction is correctly disabled.
     */
   case class UpdateClHead(blockNumber: BigInt)
 
-  /** How often to send each handshaked peer a one-shot `GetBlockHeaders(bestHash, 1)` to
-    * refresh `PeerInfo.maxBlockNumber`. Defaults to 5 minutes — small fraction of typical
-    * peer connection lifetimes (~30+ min) and small fraction of pivot-refresh cadence.
+  /** How often to send each handshaked peer a one-shot `GetBlockHeaders(bestHash, 1)` to refresh
+    * `PeerInfo.maxBlockNumber`. Defaults to 5 minutes — small fraction of typical peer connection lifetimes (~30+ min)
+    * and small fraction of pivot-refresh cadence.
     */
   private[network] val BestBlockRefreshInterval: FiniteDuration = 5.minutes
 
-  /** Window after which we re-probe an ETH/69 peer even though it has already had a
-    * `BlockRangeUpdate` opportunity. ETH/69 peers that don't actively push BRUs would
-    * otherwise never get re-probed. Half of the re-probe interval so a quiet peer gets
-    * polled within 2.5 minutes regardless of its push cadence.
+  /** Window after which we re-probe an ETH/69 peer even though it has already had a `BlockRangeUpdate` opportunity.
+    * ETH/69 peers that don't actively push BRUs would otherwise never get re-probed. Half of the re-probe interval so a
+    * quiet peer gets polled within 2.5 minutes regardless of its push cadence.
     */
   private[network] val BlockSignalStaleAfter: FiniteDuration = 150.seconds
 
-  /** Lagging-peer eviction parameters. Together: a peer that has been ≥ 4096 blocks
-    * behind the CL head continuously for 10 minutes is disconnected (and IP-blacklisted
-    * for 2 minutes to prevent immediate re-dial). 4096 matches the pivot freshness floor
-    * default (`snap-sync.max-pivot-staleness-blocks`, see #1234) so the same peer that
-    * fails pivot selection is the one we evict.
+  /** Lagging-peer eviction parameters. Together: a peer that has been ≥ 4096 blocks behind the CL head continuously for
+    * 10 minutes is disconnected (and IP-blacklisted for 2 minutes to prevent immediate re-dial). 4096 matches the pivot
+    * freshness floor default (`snap-sync.max-pivot-staleness-blocks`, see #1234) so the same peer that fails pivot
+    * selection is the one we evict.
     *
-    * Per-cycle cap of 5 evictions prevents the pool from collapsing if a sweep catches
-    * many peers at once; the 10-minute hysteresis prevents catching peers that are merely
-    * catching up.
+    * Per-cycle cap of 5 evictions prevents the pool from collapsing if a sweep catches many peers at once; the
+    * 10-minute hysteresis prevents catching peers that are merely catching up.
     */
   private[network] val LaggingPeerCheckInterval: FiniteDuration = 2.minutes
   private[network] val LaggingPeerEvictAfter: FiniteDuration = 10.minutes
   private[network] val LaggingPeerLagThreshold: BigInt = BigInt(4096)
   private[network] val LaggingPeerMaxEvictionsPerCycle: Int = 5
 
-  /** Below this floor of handshaked peers, skip eviction — better to keep a stale peer
-    * than to crater the connection pool on a small network. The floor is intentionally
-    * low (2): on thin testnets like sepolia we often see only 3-5 SNAP-capable peers
-    * total, and the lagging-peer pathology is most acute exactly there. A floor of 5
-    * would skip eviction entirely and the stuck peers would never recycle out. Two is
-    * still enough to prevent a single sweep from leaving us peerless mid-sync; the
-    * per-cycle cap of 5 plus the 10-minute hysteresis provide the heavier-weight
+  /** Below this floor of handshaked peers, skip eviction — better to keep a stale peer than to crater the connection
+    * pool on a small network. The floor is intentionally low (2): on thin testnets like sepolia we often see only 3-5
+    * SNAP-capable peers total, and the lagging-peer pathology is most acute exactly there. A floor of 5 would skip
+    * eviction entirely and the stuck peers would never recycle out. Two is still enough to prevent a single sweep from
+    * leaving us peerless mid-sync; the per-cycle cap of 5 plus the 10-minute hysteresis provide the heavier-weight
     * safeties.
     */
   private[network] val LaggingPeerMinPoolFloor: Int = 2
 
-  /** IP-blacklist applied to a peer that just failed the 10-minute lagging-peer hysteresis.
-    * Distinct from PR #1235's short-tier UselessPeer mapping (also 2 min): that's right for
-    * transient "rejected by remote" signals, but a peer we *chose* to evict for chronic lag
-    * has already proven it can't keep up. 30 minutes is long enough to break the immediate
-    * re-dial cycle (discovery has time to surface a fresh peer), short enough that a peer
-    * whose operator restarts and resyncs can reconnect within the hour.
+  /** IP-blacklist applied to a peer that just failed the 10-minute lagging-peer hysteresis. Distinct from PR #1235's
+    * short-tier UselessPeer mapping (also 2 min): that's right for transient "rejected by remote" signals, but a peer
+    * we *chose* to evict for chronic lag has already proven it can't keep up. 30 minutes is long enough to break the
+    * immediate re-dial cycle (discovery has time to surface a fresh peer), short enough that a peer whose operator
+    * restarts and resyncs can reconnect within the hour.
     */
   private[network] val LaggingPeerBlacklistDuration: FiniteDuration = 30.minutes
 
-  /** Delay before applying the override blacklist. PeerClosedConnection takes a network
-    * round-trip to propagate; we need the override to land AFTER PeerManagerActor processes
-    * that close path (which applies the short-tier 2-min blacklist), otherwise the short
-    * entry overrides ours. 5 seconds is comfortably above typical disconnect propagation
-    * without delaying the eviction so long that the peer could reconnect first.
+  /** Delay before applying the override blacklist. PeerClosedConnection takes a network round-trip to propagate; we
+    * need the override to land AFTER PeerManagerActor processes that close path (which applies the short-tier 2-min
+    * blacklist), otherwise the short entry overrides ours. 5 seconds is comfortably above typical disconnect
+    * propagation without delaying the eviction so long that the peer could reconnect first.
     */
   private[network] val LaggingPeerBlacklistOverrideDelay: FiniteDuration = 5.seconds
 
