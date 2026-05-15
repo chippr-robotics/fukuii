@@ -285,6 +285,33 @@ class PeersClient(
         )
         bestPeer(snapPeers, log)
 
+      case BestSnapPeerWithMinBlockExcluding(minBlock, exclude) =>
+        val eligible = peersToDownloadFrom.filter { case (peerId, peerWithInfo) =>
+          !exclude.contains(peerId) && peerWithInfo.peerInfo.remoteStatus.supportsSnap
+        }
+        val knownAheadPeers = eligible.filter { case (_, peerWithInfo) =>
+          peerWithInfo.peerInfo.maxBlockNumber >= minBlock
+        }
+        if (knownAheadPeers.nonEmpty) {
+          log.debug(
+            "BestSnapPeerWithMinBlockExcluding({}): {} SNAP peers at target after excluding {} tried",
+            minBlock,
+            knownAheadPeers.size,
+            exclude.size
+          )
+          bestPeer(knownAheadPeers, log)
+        } else {
+          val unknownHeadPeers = eligible.filter { case (_, peerWithInfo) =>
+            peerWithInfo.peerInfo.maxBlockNumber == 0
+          }
+          log.debug(
+            "BestSnapPeerWithMinBlockExcluding({}): no known-ahead SNAP peers; {} with unknown chain state remain",
+            minBlock,
+            unknownHeadPeers.size
+          )
+          bestPeer(unknownHeadPeers, log)
+        }
+
       case BestNodeDataPeerExcluding(exclude) =>
         val now = System.currentTimeMillis()
         val nodeDataPeers = peersToDownloadFrom.filter { case (peerId, _) =>
@@ -455,6 +482,12 @@ object PeersClient {
     * idle-pool exclusion in `skeleton.assignTasks()`.
     */
   case class BestPeerWithMinBlockExcluding(minBlock: BigInt, exclude: Set[PeerId]) extends PeerSelector
+
+  /** Like BestPeerWithMinBlockExcluding but restricted to SNAP-capable peers. Mirrors Besu's two-stage pivot pattern:
+    * `PivotSelectorFromPeers` pre-filters by `estimatedChainHeight >= pivot`, then `PivotBlockConfirmer` excludes used
+    * peers. Fukuii combines both concerns here since PivotHeaderBootstrap has no upstream height pre-filter.
+    */
+  case class BestSnapPeerWithMinBlockExcluding(minBlock: BigInt, exclude: Set[PeerId]) extends PeerSelector
 
   def bestPeer(
       peersToDownloadFrom: Map[PeerId, PeerWithInfo],

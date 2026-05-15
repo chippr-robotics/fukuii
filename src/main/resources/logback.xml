@@ -158,7 +158,7 @@
     <!-- Network - peer connections and communication -->
     <logger name="com.chipprbots.ethereum.network" level="ERROR" />
     <logger name="com.chipprbots.ethereum.network.PeerActor" level="ERROR" />
-    <logger name="com.chipprbots.ethereum.network.PeerManagerActor" level="ERROR" />
+    <logger name="com.chipprbots.ethereum.network.PeerManagerActor" level="INFO" />
     <logger name="com.chipprbots.ethereum.network.NetworkPeerManagerActor" level="INFO" />
     <logger name="com.chipprbots.ethereum.network.ServerActor" level="INFO" />
     <logger name="com.chipprbots.ethereum.network.KnownNodesManager" level="ERROR" />

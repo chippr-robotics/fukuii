@@ -134,13 +134,42 @@ class PivotHeaderBootstrapSpec
     val parent = TestProbe()
     mkBootstrap(peersClient, parent, preferSnapPeers = true)
 
-    // First request uses BestSnapPeer — no SNAP peer available
-    peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
+    // First request uses BestSnapPeerWithMinBlockExcluding(target, {}) — no SNAP peer available at all
+    val req1 = peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
+    req1.peerSelector shouldBe PeersClient.BestSnapPeerWithMinBlockExcluding(targetBlock, Set.empty)
     peersClient.reply(PeersClient.NoSuitablePeer)
 
-    // Fallback request uses BestPeerWithMinBlock — peer responds with the correct header
+    // Fallback request uses BestPeerWithMinBlockExcluding — peer responds with the correct header
     peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
     peersClient.reply(PeersClient.Response(testPeer, ETH66.BlockHeaders(0, Seq(correctHeader))))
+
+    parent.expectMsg(3.seconds, PivotHeaderBootstrap.Completed(targetBlock, correctHeader))
+  }
+
+  it should "exclude a SNAP peer that returned empty headers and fall through to the next peer (Besu ETH69 monopoly fix)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
+    val peersClient = TestProbe()
+    val parent = TestProbe()
+    // maxAttempts=3 so budget isn't consumed by the empty-header WaitForPeer path
+    mkBootstrap(peersClient, parent, preferSnapPeers = true, maxAttempts = 3, waitForPeerDelay = 50.millis)
+
+    // Attempt 1: BestSnapPeerWithMinBlockExcluding(target, {}) picks testPeer (e.g. Besu with synthetic high TD).
+    // testPeer returns empty headers → testPeer added to triedPeers, WaitForPeer issued.
+    val req1 = peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
+    req1.peerSelector shouldBe PeersClient.BestSnapPeerWithMinBlockExcluding(targetBlock, Set.empty)
+    peersClient.reply(PeersClient.Response(testPeer, ETH66.BlockHeaders(0, Seq.empty)))
+
+    // WaitForPeer fires → retry: BestSnapPeerWithMinBlockExcluding(target, {testPeer}) → no SNAP peers left → NoSuitablePeer.
+    // flatMap catches NoSuitablePeer and issues fallback: BestPeerWithMinBlockExcluding(target, {testPeer}).
+    val req2 = peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
+    req2.peerSelector shouldBe PeersClient.BestSnapPeerWithMinBlockExcluding(targetBlock, Set(testPeer.id))
+    peersClient.reply(PeersClient.NoSuitablePeer)
+
+    // Fallback: testPeer2 (e.g. core-geth, non-SNAP or lower-TD SNAP) returns the correct header.
+    peersClient.expectMsgType[PeersClient.Request[ETH66.GetBlockHeaders]](3.seconds)
+    peersClient.reply(PeersClient.Response(testPeer2, ETH66.BlockHeaders(0, Seq(correctHeader))))
 
     parent.expectMsg(3.seconds, PivotHeaderBootstrap.Completed(targetBlock, correctHeader))
   }

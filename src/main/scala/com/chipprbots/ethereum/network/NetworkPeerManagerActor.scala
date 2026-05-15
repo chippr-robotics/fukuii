@@ -56,10 +56,6 @@ class NetworkPeerManagerActor(
 
   // Maximum length for hex string in debug logs (to avoid very long log lines)
 
-  // ETH/69: reject BlockRangeUpdate whose latestBlock is this many blocks beyond local best.
-  // Mirrors go-ethereum's maxFutureBlockTime heuristic translated to block-number space.
-  private val FutureBlockTolerance: BigInt = 100
-
   // Mutable reference to SNAPSyncController that can be set after initialization
   private var snapSyncControllerOpt: Option[ActorRef] = initialSnapSyncControllerOpt
 
@@ -302,6 +298,12 @@ class NetworkPeerManagerActor(
             }
           }
       }
+
+    // SNAPSyncController sends ConnectToPeer to networkPeerManager — forward to PeerManagerActor
+    // which is the only actor that handles it. Without this, the message is silently dropped.
+    case PeerManagerActor.ConnectToPeer(uri) =>
+      log.info("Forwarding ConnectToPeer({}) to PeerManagerActor", uri)
+      peerManagerActor ! PeerManagerActor.ConnectToPeer(uri)
   }
 
   /** Processes events and updating the information about each peer
@@ -326,52 +328,27 @@ class NetworkPeerManagerActor(
       handleGetByteCodes(msg, peerId, peersWithInfo.get(peerId))
 
     case MessageFromPeer(message, peerId) if peersWithInfo.contains(peerId) =>
-      // ETH/69: future-block validation for BlockRangeUpdate (go-ethereum handler.go alignment).
-      // Disconnect peers that claim a latestBlock far beyond our chain head — likely invalid or
-      // malicious. Lagging peers (latestBlock behind our head) are valid and pass through.
-      val futureBlockDisconnect = message match {
-        case bru: ETH69.BlockRangeUpdate =>
-          val localBest = appStateStorage.getBestBlockNumber()
-          // Only validate future-block when we have a meaningful chain head (> 0).
-          // At genesis/initial sync localBest=0, so any peer block would be rejected —
-          // skip the check until we've actually synced some chain state.
-          if (localBest > 0 && bru.latestBlock > localBest + FutureBlockTolerance) {
-            log.warning(
-              s"BlockRangeUpdate from peer ${peerId.value}: latestBlock=${bru.latestBlock} " +
-                s"is ${bru.latestBlock - localBest} blocks ahead of local best=$localBest " +
-                s"(tolerance=$FutureBlockTolerance). Disconnecting (BreachOfProtocol)."
-            )
-            peersWithInfo(peerId).peer.ref ! DisconnectPeer(Disconnect.Reasons.BreachOfProtocol)
-            true
-          } else false
-        case _ => false
+      // Route SNAP protocol responses (from peers we're syncing from) to SNAPSyncController
+      message match {
+        case msg @ (_: AccountRange | _: StorageRanges | _: TrieNodes | _: ByteCodes) =>
+          log.debug("Routing {} message to SNAPSyncController from peer {}", msg.getClass.getSimpleName, peerId)
+          snapSyncControllerOpt.foreach(_ ! msg)
+
+        case _ => // ETH protocol messages - no special routing needed
       }
 
-      if (futureBlockDisconnect) {
-        context.become(handleMessages(peersWithInfo - peerId))
-      } else {
-        // Route SNAP protocol responses (from peers we're syncing from) to SNAPSyncController
-        message match {
-          case msg @ (_: AccountRange | _: StorageRanges | _: TrieNodes | _: ByteCodes) =>
-            log.debug("Routing {} message to SNAPSyncController from peer {}", msg.getClass.getSimpleName, peerId)
-            snapSyncControllerOpt.foreach(_ ! msg)
-
-          case _ => // ETH protocol messages - no special routing needed
-        }
-
-        // Track per-peer block-height signals so the periodic re-probe (RefreshPeerBestBlocks)
-        // can skip ETH/69 peers that are actively pushing BlockRangeUpdate.
-        message match {
-          case _: ETH69.BlockRangeUpdate | _: ETH62BlockHeaders | _: ETH66BlockHeaders |
-              _: BaseETH6XMessages.NewBlock | _: NewBlockHashes =>
-            lastBlockSignalMs(peerId) = System.currentTimeMillis()
-          case _ => // not a block-height signal
-        }
-
-        val newPeersWithInfo = updatePeersWithInfo(peersWithInfo, peerId, message, handleReceivedMessage)
-        NetworkMetrics.ReceivedMessagesCounter.increment()
-        context.become(handleMessages(newPeersWithInfo))
+      // Track per-peer block-height signals so the periodic re-probe (RefreshPeerBestBlocks)
+      // can skip ETH/69 peers that are actively pushing BlockRangeUpdate.
+      message match {
+        case _: ETH69.BlockRangeUpdate | _: ETH62BlockHeaders | _: ETH66BlockHeaders |
+            _: BaseETH6XMessages.NewBlock | _: NewBlockHashes =>
+          lastBlockSignalMs(peerId) = System.currentTimeMillis()
+        case _ => // not a block-height signal
       }
+
+      val newPeersWithInfo = updatePeersWithInfo(peersWithInfo, peerId, message, handleReceivedMessage)
+      NetworkMetrics.ReceivedMessagesCounter.increment()
+      context.become(handleMessages(newPeersWithInfo))
 
     case PeerHandshakeSuccessful(peer, peerInfo: PeerInfo) =>
       val chainInfoDisplay =
@@ -390,48 +367,76 @@ class NetworkPeerManagerActor(
           s"$chainInfoDisplay forkAccepted=${peerInfo.forkAccepted} " +
           s"supportsSnap=${peerInfo.remoteStatus.supportsSnap}"
       )
-      peerEventBusActor ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)))
-      peerEventBusActor ! Subscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)))
-
-      // Besu-style eager best-block probe.
-      // ETH/64-/68 STATUS carries `bestHash` but not the peer's best block *number* — only
-      // ETH/61 (long gone) and ETH/69 do. Without the number, fast-sync `PivotBlockSelector`
-      // sees `peer.maxBlockNumber == 0`, picks pivot = 0, and never converges (the loop
-      // we hit on Barad-dûr 2026-04-29). Geth resolves this lazily inside the downloader by
-      // probing the chosen peer's bestHash; besu and nethermind do it eagerly the moment
-      // STATUS completes. We follow the eager pattern: one `GetBlockHeaders(bestHash, 1)`
-      // immediately after handshake, the response routes through `updateMaxBlock` via the
-      // existing `BlockHeadersCode` subscription and populates `PeerInfo.maxBlockNumber`.
-      //
-      // Skip the probe for:
-      //  * ETH/69 — STATUS already carries latestBlock (stuffed into chainWeight.totalDifficulty
-      //    by the handshaker), so maxBlockNumber is set on construction.
-      //  * Peers at genesis (`bestHash == genesisHash`) — they're block 0 by definition;
-      //    `peerHasUpdatedBestBlock` already accepts them as `isAtGenesis`.
-      //
-      // Peers that don't reply to the probe simply stay at maxBlockNumber=0 and get filtered
-      // by `peerHasUpdatedBestBlock` — no disconnect, since Mordor peers can be flaky and
-      // we don't want to throw away connections for one missed reply (Bug 26 lesson).
-      if (peerInfo.remoteStatus.capability != Capability.ETH69 && !peerInfo.isAtGenesis) {
-        val bestHash = peerInfo.remoteStatus.bestHash
-        val probe: MessageSerializable =
-          if (Capability.usesRequestId(peerInfo.remoteStatus.capability))
-            ETH66.GetBlockHeaders(ETH66.nextRequestId, Right(bestHash), 1, 0, reverse = false)
-          else
-            ETH62.GetBlockHeaders(Right(bestHash), 1, 0, reverse = false)
-        log.debug(
-          "BEST_BLOCK_PROBE: peer={} cap={} bestHash={} — asking for header at bestHash to discover block number",
-          peer.id,
-          peerInfo.remoteStatus.capability,
-          ByteStringUtils.hash2string(bestHash)
+      if (peersWithInfo.contains(peer.id)) {
+        val old = peersWithInfo(peer.id)
+        // Keep the EXISTING entry — don't overwrite with the duplicate.
+        // PeerManagerActor will drop the loser via AlreadyConnected; with the PeerDisconnected
+        // gate fix, the loser's termination no longer evicts the winner. Overwriting here with
+        // the duplicate (which may be the about-to-die loser) would leave a stale ref in
+        // peersWithInfo — mirroring Besu's registerDisconnect guard which only updates
+        // activeConnections when peer.getConnection().equals(connection) (the primary connection).
+        log.warning(
+          s"DUPLICATE_HANDSHAKE_DROPPED: ${peer.id} already in peersWithInfo " +
+            s"(existing=${old.peer.remoteAddress} inbound=${old.peer.incomingConnection}, " +
+            s"duplicate=${peer.remoteAddress} inbound=${peer.incomingConnection}) — " +
+            s"keeping existing entry, duplicate will be dropped by PeerManagerActor"
         )
-        peerManagerActor ! PeerManagerActor.SendMessage(probe, peer.id)
+        // No update to peersWithInfo, no double-count in metrics
+        context.become(handleMessages(peersWithInfo))
+      } else {
+        peerEventBusActor ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)))
+        peerEventBusActor ! Subscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)))
+        // Besu-style eager best-block probe.
+        // ETH/64-/68 STATUS carries `bestHash` but not the peer's best block *number* — only
+        // ETH/61 (long gone) and ETH/69 do. Without the number, fast-sync `PivotBlockSelector`
+        // sees `peer.maxBlockNumber == 0`, picks pivot = 0, and never converges (the loop
+        // we hit on Barad-dûr 2026-04-29). Geth resolves this lazily inside the downloader by
+        // probing the chosen peer's bestHash; besu and nethermind do it eagerly the moment
+        // STATUS completes. We follow the eager pattern: one `GetBlockHeaders(bestHash, 1)`
+        // immediately after handshake, the response routes through `updateMaxBlock` via the
+        // existing `BlockHeadersCode` subscription and populates `PeerInfo.maxBlockNumber`.
+        //
+        // Skip the probe for:
+        //  * ETH/69 — STATUS already carries latestBlock (stuffed into chainWeight.totalDifficulty
+        //    by the handshaker), so maxBlockNumber is set on construction.
+        //  * Peers at genesis (`bestHash == genesisHash`) — they're block 0 by definition;
+        //    `peerHasUpdatedBestBlock` already accepts them as `isAtGenesis`.
+        //
+        // Peers that don't reply to the probe simply stay at maxBlockNumber=0 and get filtered
+        // by `peerHasUpdatedBestBlock` — no disconnect, since Mordor peers can be flaky and
+        // we don't want to throw away connections for one missed reply (Bug 26 lesson).
+        if (peerInfo.remoteStatus.capability != Capability.ETH69 && !peerInfo.isAtGenesis) {
+          val bestHash = peerInfo.remoteStatus.bestHash
+          val probe: MessageSerializable =
+            if (Capability.usesRequestId(peerInfo.remoteStatus.capability))
+              ETH66.GetBlockHeaders(ETH66.nextRequestId, Right(bestHash), 1, 0, reverse = false)
+            else
+              ETH62.GetBlockHeaders(Right(bestHash), 1, 0, reverse = false)
+          log.debug(
+            "BEST_BLOCK_PROBE: peer={} cap={} bestHash={} — asking for header at bestHash to discover block number",
+            peer.id,
+            peerInfo.remoteStatus.capability,
+            ByteStringUtils.hash2string(bestHash)
+          )
+          peerManagerActor ! PeerManagerActor.SendMessage(probe, peer.id)
+        }
+        NetworkMetrics.registerAddHandshakedPeer(peer)
+        context.become(handleMessages(peersWithInfo + (peer.id -> PeerWithInfo(peer, peerInfo))))
       }
 
-      NetworkMetrics.registerAddHandshakedPeer(peer)
-      context.become(handleMessages(peersWithInfo + (peer.id -> PeerWithInfo(peer, peerInfo))))
+    case PeerDisconnected(peerId) if !peersWithInfo.contains(peerId) =>
+      log.debug(
+        "PEER_DISCONNECTED_IGNORED: {} not in peersWithInfo — likely suppressed duplicate or already removed",
+        peerId
+      )
 
     case PeerDisconnected(peerId) if peersWithInfo.contains(peerId) =>
+      val pw = peersWithInfo(peerId)
+      log.info(
+        s"PEER_DISCONNECTED: ${peerId.value} " +
+          s"addr=${pw.peer.remoteAddress} cap=${pw.peerInfo.remoteStatus.capability} " +
+          s"inbound=${pw.peer.incomingConnection}"
+      )
       peerEventBusActor ! Unsubscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peerId)))
       peerEventBusActor ! Unsubscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peerId)))
       NetworkMetrics.registerRemoveHandshakedPeer(peersWithInfo(peerId).peer)
