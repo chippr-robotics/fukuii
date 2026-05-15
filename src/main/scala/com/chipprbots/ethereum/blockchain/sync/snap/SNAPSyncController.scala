@@ -3017,33 +3017,65 @@ class SNAPSyncController(
   private def refreshPivotInPlace(reason: String): Unit = {
     log.info(s"Refreshing pivot in-place: $reason")
 
-    // CL-anchored freshness floor (post-merge chains only). See `pivotPassesFreshnessFloor`
-    // for the regression context. Pre-merge chains (no CL) keep the old behavior because
-    // there is no authoritative "tip" reference.
+    // CL-anchored pivot selection for post-merge chains (geth's BeaconSync pattern).
+    // Mirrors what startSnapSync does at line 1769 — the CL hint represents authoritative
+    // chain tip from forkchoiceUpdated, NOT peer-reported best.
+    //
+    // Peer `maxBlockNumber` is unreliable on post-merge chains:
+    //   - NewBlock gossip is dead (the historic update path)
+    //   - ETH/69 BlockRangeUpdate only fires on a minority of peers
+    //   - PR #1238's best-block probe only re-checks every 5 min
+    //
+    // Sepolia 2026-05-15 observation: 2-4 peers all reported `maxBlockNumber=10853243`
+    // for ~30 min while the actual chain head was at 10854389+. Selecting from
+    // peer-reported best gave us a pivot 1146 blocks BEHIND the CL head, peers couldn't
+    // serve that root either, and we looped forever.
+    //
+    // Pre-merge chains keep peer-reported best because there's no authoritative tip.
     val clHeadNumber: Option[BigInt] =
       if (isPostMergeChain) clPivotHint.flatMap(_.knownHeader).map(_.number) else None
 
-    val networkBestOpt = currentNetworkBestFromSnapPeers()
-    val newPivotOpt = networkBestOpt
-      .filter { networkBest =>
-        SNAPSyncController.pivotPassesFreshnessFloor(
-          networkBest = networkBest,
-          clHeadNumber = clHeadNumber,
-          maxStaleness = snapSyncConfig.maxPivotStalenessBlocks
-        ) match {
-          case Right(()) => true
-          case Left(floor) =>
-            log.warning(
-              s"Rejecting stale SNAP peer best=$networkBest as pivot — below CL-anchored " +
-                s"freshness floor=$floor (CL head=${clHeadNumber.getOrElse("?")}, " +
-                s"maxPivotStalenessBlocks=${snapSyncConfig.maxPivotStalenessBlocks}). " +
-                "Waiting for a fresher SNAP-capable peer."
-            )
-            false
+    val newPivotOpt: Option[BigInt] = clHeadNumber match {
+      case Some(clHead) =>
+        // Post-merge: pivot = CL head - offset. Strict forward-only: never accept a
+        // pivot below our current one (which could happen if the CL hint regressed,
+        // though that should not happen for forkchoiceUpdated).
+        val target = clHead - snapSyncConfig.pivotBlockOffset
+        val currentPivot = pivotBlock.getOrElse(BigInt(0))
+        if (target <= currentPivot) {
+          log.info(
+            s"CL-based pivot $target not strictly newer than current $currentPivot " +
+              s"(CL head=$clHead, offset=${snapSyncConfig.pivotBlockOffset}). Skipping refresh."
+          )
+          None
+        } else {
+          log.info(s"Selected CL-anchored pivot $target (CL head=$clHead, current=$currentPivot)")
+          Some(target).filter(_ > 0)
         }
-      }
-      .map(networkBest => networkBest - snapSyncConfig.pivotBlockOffset)
-      .filter(_ > 0)
+
+      case None =>
+        // Pre-merge fallback: peer-reported best subject to freshness floor.
+        currentNetworkBestFromSnapPeers()
+          .filter { networkBest =>
+            SNAPSyncController.pivotPassesFreshnessFloor(
+              networkBest = networkBest,
+              clHeadNumber = clHeadNumber,
+              maxStaleness = snapSyncConfig.maxPivotStalenessBlocks
+            ) match {
+              case Right(()) => true
+              case Left(floor) =>
+                log.warning(
+                  s"Rejecting stale SNAP peer best=$networkBest as pivot — below CL-anchored " +
+                    s"freshness floor=$floor (CL head=${clHeadNumber.getOrElse("?")}, " +
+                    s"maxPivotStalenessBlocks=${snapSyncConfig.maxPivotStalenessBlocks}). " +
+                    "Waiting for a fresher SNAP-capable peer."
+                )
+                false
+            }
+          }
+          .map(networkBest => networkBest - snapSyncConfig.pivotBlockOffset)
+          .filter(_ > 0)
+    }
 
     if (newPivotOpt.isEmpty) {
       log.warning(
