@@ -552,13 +552,11 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers {
 
     /** Regression for cold-start sync bootstrap (post-merge chains).
       *
-      * Pre-fix, `engine_forkchoiceUpdated` short-circuited to SYNCING for unknown heads
-      * **without** invoking `forkChoiceManager.applyForkChoiceState`, which is the only path
-      * that publishes `BeaconHead` to the ForkChoiceManager listener. SyncController's
-      * BeaconHead handler is the trigger that forwards `CLPivotHint` to SNAPSyncController;
-      * without it, SNAP sync sat in `[CL-PIVOT] waiting for engine_forkchoiceUpdated` forever
-      * — fukuii accepted every newPayload as `ACCEPTED (parent unknown)` but never started
-      * actually syncing.
+      * Pre-fix, `engine_forkchoiceUpdated` short-circuited to SYNCING for unknown heads **without** invoking
+      * `forkChoiceManager.applyForkChoiceState`, which is the only path that publishes `BeaconHead` to the
+      * ForkChoiceManager listener. SyncController's BeaconHead handler is the trigger that forwards `CLPivotHint` to
+      * SNAPSyncController; without it, SNAP sync sat in `[CL-PIVOT] waiting for engine_forkchoiceUpdated` forever —
+      * fukuii accepted every newPayload as `ACCEPTED (parent unknown)` but never started actually syncing.
       */
     "publish BeaconHead to ForkChoiceManager listener even when the head is unknown (SYNCING short-circuit)"
       .taggedAs(UnitTest) in new EngineApiTestSetup {

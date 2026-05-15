@@ -60,10 +60,9 @@ class StorageRangeCoordinator(
     flatBatchEcOverride: Option[ExecutionContext] = None,
     /** Phase 2 of the SNAP rewrite (Step 4 of `snap-stacktrie-port` plan).
       *
-      * When `true`, per-contract storage tries are built with a streaming
-      * `SnapHashTrie` instead of `MerklePatriciaTrie` + `DeferredWriteMptStorage`.
-      * Each contract's trie is constructed in O(depth) memory rather than
-      * holding the whole trie in memory until flush. Same opt-in semantics as
+      * When `true`, per-contract storage tries are built with a streaming `SnapHashTrie` instead of
+      * `MerklePatriciaTrie` + `DeferredWriteMptStorage`. Each contract's trie is constructed in O(depth) memory rather
+      * than holding the whole trie in memory until flush. Same opt-in semantics as
       * `AccountRangeCoordinator.useStackTrie`.
       */
     useStackTrie: Boolean = false,
@@ -84,7 +83,7 @@ class StorageRangeCoordinator(
   private var maxInFlightPerPeer: Int = initialMaxInFlightPerPeer
 
   // Task management
-  private val tasks = mutable.Queue[StorageTask]()
+  private[actors] val tasks = mutable.Queue[StorageTask]()
   // Dedup gate: (accountHash, next) uniquely identifies a pending task. Prevents duplicate
   // enqueues when concurrent timeout re-queues overlap (two timeouts for the same batch).
   private val pendingTaskKeys = mutable.Set[(ByteString, ByteString)]()
@@ -126,10 +125,26 @@ class StorageRangeCoordinator(
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
   private val peerCooldownDefault = 10.seconds
 
-  // Binary stateless peer detection: peers that cannot serve the current state root.
-  // When ALL known peers become stateless, request a pivot refresh from the controller.
-  // This replaces the slow counter-based global backoff (was: 10 empties → 2 min pause).
+  // Stateless peer tracking: peers CONFIRMED unable to serve the current state root after
+  // crossing the strike threshold below. When ALL known peers are stateless, request a
+  // pivot refresh from the controller.
+  // The previous single-failure binary mark caused the same peer-pool collapse pathology
+  // we observed in AccountRangeCoordinator on sepolia 2026-05-13. Strike counting gives
+  // a transient peer hiccup the same recovery path used elsewhere in the codebase.
   private val statelessPeers = mutable.Set[String]()
+  // Strike counter for empty storage-range responses. Mirror of AccountRangeCoordinator's
+  // emptyResponseStrikes: a peer must miss N=5 consecutive empties (no intervening success)
+  // before being marked stateless. Cleared on PivotRefreshed, PeerUnavailable, or any
+  // successful (slot-bearing) response.
+  //
+  // Threshold raised 3 → 5 on 2026-05-14 after sepolia observation: on small peer pools
+  // (3-8 peers), 3 strikes drains peers into stateless faster than pivot refreshes can
+  // clear them. Result: eligible=0 windows recur every pivot cycle. Mirrors the small-pool
+  // fix shape applied to account (PR-2 / #1255 cleared sticky snapless on PivotRefreshed).
+  // Reference clients use 5 (Nethermind) or unlimited+throughput-tracker (Geth); 3 was
+  // overly aggressive for our policy.
+  private val emptyResponseStrikes = mutable.Map.empty[String, Int]
+  private val EmptyResponseStrikeThreshold: Int = 5
   private var pivotRefreshRequested = false
 
   // Contract completion tracking for progress estimation.
@@ -173,13 +188,33 @@ class StorageRangeCoordinator(
     statelessPeers.contains(peer.id.value)
 
   private def markPeerStateless(peer: Peer): Unit = {
-    statelessPeers.add(peer.id.value)
+    val id = peer.id.value
+    // Already-confirmed peers stay confirmed; extra strikes are noise.
+    if (statelessPeers.contains(id)) return
+
+    val priorStrikes = emptyResponseStrikes.getOrElse(id, 0)
+    val strikes = priorStrikes + 1
+    emptyResponseStrikes(id) = strikes
+
+    if (strikes < EmptyResponseStrikeThreshold) {
+      log.info(
+        s"Peer $id empty-storage strike $strikes/$EmptyResponseStrikeThreshold for root " +
+          s"${stateRoot.take(4).toHex}. Still eligible for dispatch."
+      )
+      return
+    }
+
+    statelessPeers.add(id)
     log.info(
-      s"Peer ${peer.id.value} marked stateless for storage root ${stateRoot.take(4).toHex} " +
-        s"(${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
+      s"Peer $id marked stateless after $strikes consecutive empty storage responses for root " +
+        s"${stateRoot.take(4).toHex} (${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
     )
     maybeRequestPivotRefresh()
   }
+
+  /** Reset strike counter when peer produces a useful response. Cheap to over-invoke. */
+  private def recordPeerSuccess(peerId: String): Unit =
+    emptyResponseStrikes.remove(peerId)
 
   private def maybeRequestPivotRefresh(): Unit = {
     if (pivotRefreshRequested) return
@@ -617,24 +652,26 @@ class StorageRangeCoordinator(
       }
     }
 
-  /** Aggregate-counter sink for completed StorageTask objects. Previously this appended into an
-    * unbounded `mutable.ArrayBuffer[StorageTask]` (one of the leak vectors behind the May 13 sepolia
-    * OOM at ~22M completed tasks). All downstream consumers — progress %, SyncStatistics.tasksCompleted,
-    * the completion check — only ever read the count, never the task data itself.
+  /** Aggregate-counter sink for completed StorageTask objects. Previously this appended into an unbounded
+    * `mutable.ArrayBuffer[StorageTask]` (one of the leak vectors behind the May 13 sepolia OOM at ~22M completed
+    * tasks). All downstream consumers — progress %, SyncStatistics.tasksCompleted, the completion check — only ever
+    * read the count, never the task data itself.
     */
   private def recordCompletedTask(task: StorageTask): Unit = {
     val _ = task // explicitly unused; kept in the signature to make call-site intent unambiguous
     completedTaskCount += 1L
   }
 
-  /** Emit a StorageQueuePressure transition if the pending-task queue depth has just crossed a
-    * watermark. Called after every enqueue and dequeue. Forwarded to AccountRangeCoordinator via
-    * SNAPSyncController so account workers stop producing new storage tasks during back-pressure.
+  /** Emit a StorageQueuePressure transition if the pending-task queue depth has just crossed a watermark. Called after
+    * every enqueue and dequeue. Forwarded to AccountRangeCoordinator via SNAPSyncController so account workers stop
+    * producing new storage tasks during back-pressure.
     */
   private def notifyBackpressureIfChanged(): Unit = {
     val pending = tasks.size
+    com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setStorageQueueDepth(pending.toLong)
     if (!backpressureActive && pending >= backpressureHighWatermark) {
       backpressureActive = true
+      com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setStorageBackpressure(true)
       log.info(
         s"Storage queue back-pressure ENGAGED at $pending pending tasks (high-water=$backpressureHighWatermark). " +
           s"Signalling AccountRangeCoordinator to pause dispatch."
@@ -642,6 +679,7 @@ class StorageRangeCoordinator(
       snapSyncController ! SNAPSyncController.StorageBackpressureChanged(paused = true)
     } else if (backpressureActive && pending <= backpressureLowWatermark) {
       backpressureActive = false
+      com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setStorageBackpressure(false)
       log.info(
         s"Storage queue back-pressure RELEASED at $pending pending tasks (low-water=$backpressureLowWatermark). " +
           s"Signalling AccountRangeCoordinator to resume dispatch."
@@ -766,6 +804,7 @@ class StorageRangeCoordinator(
       // Mirrors AccountRangeCoordinator.PeerUnavailable (go-ethereum revertRequests pattern).
       knownAvailablePeers.find(_.id.value == peerId).foreach(knownAvailablePeers -= _)
       peerCooldownUntilMs.remove(peerId)
+      emptyResponseStrikes.remove(peerId)
       val inFlight = activeTasks.filter { case (_, (peer, _, _)) => peer.id.value == peerId }.keys.toSeq
       if (inFlight.nonEmpty) {
         log.debug(s"Peer $peerId disconnected — re-queuing ${inFlight.size} in-flight storage request(s)")
@@ -891,7 +930,29 @@ class StorageRangeCoordinator(
 
       // Clear all per-peer adaptive state — fresh start with new root
       statelessPeers.clear()
+      emptyResponseStrikes.clear()
       pivotRefreshRequested = false
+
+      // Force-release storage back-pressure. Observed deadlock on sepolia 2026-05-14:
+      // the queue locks at >100K pending → backpressure ENGAGED → AccountRangeCoordinator
+      // dispatch paused → storage can't drain (no usable peers for current root) →
+      // backpressure never releases (low-water = 50K is unreachable) → account stalls →
+      // 5/5 critical SNAP failures → fallback to FastSync (which is also stuck on sepolia
+      // because peers don't serve GetNodeData on ETH/68+).
+      //
+      // The fix: pivot refresh is the natural recovery moment. New root → maybe new
+      // peers can serve the queued tasks → drain might resume. Let account dispatch
+      // resume; if the queue overflows past the high-water mark again, the next
+      // notifyBackpressureIfChanged() call from AddStorageTasks will re-engage.
+      if (backpressureActive) {
+        backpressureActive = false
+        com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setStorageBackpressure(false)
+        log.info(
+          s"Storage queue back-pressure RELEASED on pivot refresh (queue depth=${tasks.size}). " +
+            s"Will re-engage if queue crosses high-water=$backpressureHighWatermark again."
+        )
+        snapSyncController ! SNAPSyncController.StorageBackpressureChanged(paused = false)
+      }
       lastDispatchOrResponseMs = System.currentTimeMillis()
       peerCooldownUntilMs.clear()
       peerBatchSize.clear()
@@ -1206,6 +1267,7 @@ class StorageRangeCoordinator(
 
     // Non-empty response with actual slot data — clear stateless marking and reset backoff.
     statelessPeers.remove(peer.id.value)
+    recordPeerSuccess(peer.id.value)
     consecutiveUnproductiveRefreshes = 0
     lastDispatchOrResponseMs = System.currentTimeMillis()
 
@@ -1373,6 +1435,13 @@ class StorageRangeCoordinator(
       }
   }
 
+  // Periodic state-dump cadence — at most one INFO snapshot every 30 seconds. tryRedispatchPendingTasks
+  // can be called many times per second under heavy storage flow (each AddStorageTasks call
+  // chains into it), so modulo-based throttling produced log floods that overflowed the live
+  // monitor pipe; time-based throttling is robust against call-rate spikes.
+  private var lastStateLogMs: Long = 0L
+  private val StateLogIntervalMs: Long = 30_000L
+
   private def tryRedispatchPendingTasks(): Unit = {
     if (tasks.isEmpty) return
     if (isPostRefreshCooldownActive) return
@@ -1380,11 +1449,25 @@ class StorageRangeCoordinator(
     val eligiblePeers = knownAvailablePeers
       .filterNot(p => isPeerStateless(p) || isPeerCoolingDown(p))
       .toList
-    if (eligiblePeers.isEmpty) {
-      log.debug(
-        s"[STORAGE-REDISPATCH] No eligible peers — ${knownAvailablePeers.size} known, " +
-          s"${statelessPeers.size} stateless. pending: ${tasks.size}"
+    val now = System.currentTimeMillis()
+    val shouldLog = now - lastStateLogMs >= StateLogIntervalMs
+    if (shouldLog) {
+      lastStateLogMs = now
+      log.info(
+        s"[STORAGE-STATE] pending=${tasks.size} active=${activeTasks.size} " +
+          s"workers-known=${knownAvailablePeers.size} stateless=${statelessPeers.size} " +
+          s"cooling=${knownAvailablePeers.count(isPeerCoolingDown)} eligible=${eligiblePeers.size} " +
+          s"strikes=${emptyResponseStrikes.size} root=${stateRoot.take(4).toHex}"
       )
+    }
+    if (eligiblePeers.isEmpty) {
+      if (shouldLog) {
+        log.info(
+          s"[STORAGE-REDISPATCH] No eligible peers — ${knownAvailablePeers.size} known, " +
+            s"${statelessPeers.size} stateless, " +
+            s"${knownAvailablePeers.count(isPeerCoolingDown)} cooling. pending: ${tasks.size}"
+        )
+      }
       if (tasks.nonEmpty && activeTasks.isEmpty) {
         storageIdleChecks += 1
         if (storageIdleChecks >= storageIdleEscapeThreshold) {
@@ -1417,10 +1500,9 @@ class StorageRangeCoordinator(
       accountsReadyForBuild.isEmpty && accountsInTrieConstruction.isEmpty && pendingAccountSlots.isEmpty &&
       pendingFlatBatchAccounts.isEmpty && inFlightFlatBatches == 0
 
-  /** Update contract completion counts and send progress to controller. The counter is incremented
-    * at the two "account fully done" sites (small-contract flat write + TrieConstructionComplete);
-    * we just broadcast its current value, avoiding the previous O(N) rebuild over completedTasks
-    * that ran on every progress check.
+  /** Update contract completion counts and send progress to controller. The counter is incremented at the two "account
+    * fully done" sites (small-contract flat write + TrieConstructionComplete); we just broadcast its current value,
+    * avoiding the previous O(N) rebuild over completedTasks that ran on every progress check.
     */
   private var lastReportedCompletedAccountCount: Long = 0L
   private def updateContractProgress(): Unit = {

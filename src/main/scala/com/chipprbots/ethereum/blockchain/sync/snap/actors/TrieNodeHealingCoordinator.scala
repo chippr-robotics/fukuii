@@ -267,8 +267,14 @@ class TrieNodeHealingCoordinator(
         Future {
           val frontier = mutable.Buffer.empty[HealingEntry]
           val visited = mutable.Set.empty[ByteString]
-          rebuildFrontierDFS(root, Seq(emptyPath), isStor = false, frontier, visited,
-            batch => selfRef ! FrontierRebuilt(batch))
+          rebuildFrontierDFS(
+            root,
+            Seq(emptyPath),
+            isStor = false,
+            frontier,
+            visited,
+            batch => selfRef ! FrontierRebuilt(batch)
+          )
           if (frontier.nonEmpty) selfRef ! FrontierRebuilt(frontier.toSeq)
         }(ec)
       } else {
@@ -287,7 +293,9 @@ class TrieNodeHealingCoordinator(
           s"— resuming healing from crash-recovery frontier"
       )
       if (entries.isEmpty)
-        log.warning("[HEAL-RESTART] Frontier is empty after BFS — trie may already be fully healed or storage is corrupt")
+        log.warning(
+          "[HEAL-RESTART] Frontier is empty after BFS — trie may already be fully healed or storage is corrupt"
+        )
       queueNodes(entries.map(e => (e.pathset, e.hash)))
       lastHealedAtMs = System.currentTimeMillis()
       tryRedispatchPendingTasks()
@@ -844,17 +852,16 @@ class TrieNodeHealingCoordinator(
 
   /** Rebuild the healing frontier from locally-stored trie nodes after a crash/restart.
     *
-    * Iterative DFS (depth-first via ArrayDeque stack). Mirrors go-ethereum trie.Sync's
-    * depth-prioritized queue: drilling deep finds frontier nodes immediately, keeping the
-    * working stack O(depth × branching_factor) ≈ O(1024) rather than the O(frontier_width)
-    * growth that a BFS queue exhibits on ETC mainnet. Runs on healingWriterEc.
+    * Iterative DFS (depth-first via ArrayDeque stack). Mirrors go-ethereum trie.Sync's depth-prioritized queue:
+    * drilling deep finds frontier nodes immediately, keeping the working stack O(depth × branching_factor) ≈ O(1024)
+    * rather than the O(frontier_width) growth that a BFS queue exhibits on ETC mainnet. Runs on healingWriterEc.
     *
     * For each node hash:
-    *   - in local storage  → already healed; push children onto the DFS stack
-    *   - not in storage    → missing; buffer and emit via onBatch every FrontierBatchSize entries
+    *   - in local storage → already healed; push children onto the DFS stack
+    *   - not in storage → missing; buffer and emit via onBatch every FrontierBatchSize entries
     *
-    * onBatch is called inline whenever the buffer reaches FrontierBatchSize. The caller is
-    * responsible for emitting any remaining buffered entries after this method returns.
+    * onBatch is called inline whenever the buffer reaches FrontierBatchSize. The caller is responsible for emitting any
+    * remaining buffered entries after this method returns.
     */
   private def rebuildFrontierDFS(
       startHash: ByteString,
@@ -886,7 +893,9 @@ class TrieNodeHealingCoordinator(
               s"stack depth ${stack.size}"
           )
 
-        val nodeOpt = try Some(mptStorage.get(hash.toArray)) catch { case _: Exception => None }
+        val nodeOpt =
+          try Some(mptStorage.get(hash.toArray))
+          catch { case _: Exception => None }
         nodeOpt match {
           case None =>
             // Not in storage — missing node, buffer for healing
@@ -901,7 +910,7 @@ class TrieNodeHealingCoordinator(
             // Already healed — push children onto the DFS stack
             val compact = pathset.last.toArray
             val nibbles = HexPrefix.decode(compact)._1
-            try {
+            try
               node match {
                 case branch: BranchNode =>
                   for (i <- 0 until 16)
@@ -954,7 +963,7 @@ class TrieNodeHealingCoordinator(
 
                 case _ => // storage trie leaf, NullNode, HashNode inline — no children to traverse
               }
-            } catch {
+            catch {
               case NonFatal(e) =>
                 log.debug(
                   s"[HEAL-RESTART-DFS] Cannot traverse stored node ${Hex.toHexString(hash.take(4).toArray)}: " +

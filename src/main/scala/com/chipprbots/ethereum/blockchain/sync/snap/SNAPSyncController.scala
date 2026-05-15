@@ -1251,6 +1251,16 @@ class SNAPSyncController(
         }
       }
 
+      // Real wire TD from the best SNAP-capable peer's ETH/68 handshake.
+      // Sorted by TD descending so we pick the peer with the highest known cumulative difficulty.
+      val bestSnapPeerTD: Option[BigInt] =
+        peersToDownloadFrom.values.toList
+          .filter(p => p.peerInfo.remoteStatus.supportsSnap && p.peerInfo.forkAccepted && p.peerInfo.maxBlockNumber > 0)
+          .sortBy(_.peerInfo.chainWeight.totalDifficulty)(Ordering[BigInt].reverse)
+          .headOption
+          .map(_.peerInfo.chainWeight.totalDifficulty)
+          .filter(_ > BigInt(0))
+
       pivotHeaderOpt match {
         case Some(header) =>
           val targetPivot = header.number
@@ -1265,7 +1275,7 @@ class SNAPSyncController(
               .putSnapSyncPivotBlock(targetPivot)
               .and(appStateStorage.putSnapSyncStateRoot(header.stateRoot))
               .commit()
-            updateBestBlockForPivot(header, targetPivot)
+            updateBestBlockForPivot(header, targetPivot, bestSnapPeerTD)
 
             SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
 
@@ -1304,7 +1314,7 @@ class SNAPSyncController(
                       .putSnapSyncPivotBlock(targetPivot)
                       .and(appStateStorage.putSnapSyncStateRoot(header.stateRoot))
                       .commit()
-                    updateBestBlockForPivot(header, targetPivot)
+                    updateBestBlockForPivot(header, targetPivot, bestSnapPeerTD)
 
                     SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
 
@@ -1445,6 +1455,13 @@ class SNAPSyncController(
         hint.knownHeader.map(_.number).getOrElse("unknown"),
         isPostMergeChain
       )
+    }
+    // Forward the CL head number to the network peer manager so it can run lagging-peer
+    // eviction. Only valid when we know the actual block number (the by-hash bootstrap
+    // variant skips this — `knownHeader` is None — and `NetworkPeerManagerActor` correctly
+    // treats "never updated" as "pre-merge or unknown" → no-op).
+    hint.knownHeader.foreach { header =>
+      networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.UpdateClHead(header.number)
     }
     // Reactive starts: if we're already at idle and a hint arrives during operator-driven
     // startup, the `Start` handler will pick this up. We don't auto-start here because
@@ -2439,8 +2456,15 @@ class SNAPSyncController(
               maxInFlightRequests = snapSyncConfig.storageConcurrency,
               requestTimeout = snapSyncConfig.timeout,
               snapSyncController = self,
-              initialMaxInFlightPerPeer =
-                0, // Defer storage dispatch during AccountRangeSync — prevents false pivot refreshes from stale-root timeouts
+              // 2-per-peer during AccountRangeSync. Original design used 0 here to defer storage
+              // dispatch until accounts completed (prevents stale-root timeouts triggering false
+              // pivot refreshes). That assumption breaks on huge chains like sepolia: account
+              // ranges never complete within a pivot serve window, so storage never gets a
+              // non-zero budget and the queue grows unbounded until OOM. PR #1237's strike-counted
+              // stateless detection + PR #1241's backpressure-release-on-pivot now make stale-root
+              // timeouts a recoverable event rather than a failure cascade. Bump default ensures
+              // storage can drain concurrently with account.
+              initialMaxInFlightPerPeer = 2,
               initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
               minResponseBytes = snapSyncConfig.storageMinResponseBytes,
               deferredMerkleization = snapSyncConfig.deferredMerkleization,
@@ -2458,11 +2482,14 @@ class SNAPSyncController(
       )
     }
 
-    // ByteCode and storage start with budget=0 during account phase (tasks accumulate, dispatch deferred).
-    // During AccountRangeSync: accounts=5, storage=0, bytecode=0 — avoids false pivot refreshes
-    // from stale-root storage timeouts and gives accounts full per-peer bandwidth.
-    bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(0))
-    storageRangeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(0))
+    // ByteCode and storage start with budget=2 each during account phase (per-peer concurrent
+    // limit). On huge chains (sepolia, ETH mainnet) account ranges never fully complete within
+    // a pivot serve window, so the old budget=0 path left storage/bytecode queues to grow until
+    // OOM. PR #1237's strike-counted demotion + PR #1241's backpressure-release-on-pivot make
+    // stale-root timeouts recoverable rather than failure cascades. See PR #1252.
+    // During AccountRangeSync: accounts=5, storage=2, bytecode=2 per peer.
+    bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(2))
+    storageRangeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(2))
 
     progressMonitor.startPhase(AccountRangeSync)
   }
@@ -2471,14 +2498,14 @@ class SNAPSyncController(
   private case object RequestAccountRanges
 
   private def requestAccountRanges(): Unit =
-    // Notify coordinator of available peers
+    // Notify coordinator of available peers. Filter does NOT require maxBlockNumber >= pivot
+    // for the same reason as requestStorageRanges — stale-tracked-head false negatives starve
+    // the coordinator. Stateless detection on the coordinator (strike-counted) handles peers
+    // that actually can't serve the current pivot's state.
     accountRangeCoordinator.foreach { coordinator =>
-      val pivot = pivotBlock.getOrElse(BigInt(0))
-
       val snapPeers = peersToDownloadFrom.collect {
         case (_, peerWithInfo)
-            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.forkAccepted
-              && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
+            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.forkAccepted =>
           peerWithInfo.peer
       }
 
@@ -2518,21 +2545,30 @@ class SNAPSyncController(
   private case object RequestStorageRanges
 
   private def requestStorageRanges(): Unit =
-    // Notify coordinator of available peers
+    // Notify coordinator of available peers.
+    //
+    // Filter intentionally does NOT require maxBlockNumber >= pivot — that filter was the
+    // cause of the sepolia 2026-05-14 storage stall. Sepolia's pivot advances every ~3 min
+    // (CL-driven) while peer maxBlockNumber only refreshes every 5 min (PR #1238 best-block
+    // re-probe). After ~1 pivot cycle, all peers' tracked block was below the new pivot →
+    // every broadcast filtered them all out → coordinator received no StoragePeerAvailable
+    // → knownAvailablePeers stayed empty → 100K storage tasks pinned forever.
+    //
+    // Stale maxBlockNumber is a *tracking* artifact, not a *capability* statement. The peer
+    // has the same SNAP state regardless of what we believe their head is. If they actually
+    // can't serve our pivot's state, the coordinator's strike-counted stateless detection
+    // catches it (3 strikes → flagged stateless). Same applies to bytecode/account.
     storageRangeCoordinator.foreach { coordinator =>
-      val pivot = pivotBlock.getOrElse(BigInt(0))
-
       val snapPeers = peersToDownloadFrom.collect {
         case (_, peerWithInfo)
-            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.forkAccepted
-              && peerWithInfo.peerInfo.maxBlockNumber >= pivot =>
+            if peerWithInfo.peerInfo.remoteStatus.supportsSnap && peerWithInfo.peerInfo.forkAccepted =>
           peerWithInfo.peer
       }
 
       SNAPSyncMetrics.setSnapCapablePeers(snapPeers.size)
 
       if (snapPeers.isEmpty) {
-        log.info(s"No SNAP-capable peers at or above pivot $pivot available for storage range requests")
+        log.info("No SNAP-capable peers available for storage range requests")
       } else {
         snapPeers.foreach { peer =>
           coordinator ! actors.Messages.StoragePeerAvailable(peer)
@@ -2991,33 +3027,65 @@ class SNAPSyncController(
   private def refreshPivotInPlace(reason: String): Unit = {
     log.info(s"Refreshing pivot in-place: $reason")
 
-    // CL-anchored freshness floor (post-merge chains only). See `pivotPassesFreshnessFloor`
-    // for the regression context. Pre-merge chains (no CL) keep the old behavior because
-    // there is no authoritative "tip" reference.
+    // CL-anchored pivot selection for post-merge chains (geth's BeaconSync pattern).
+    // Mirrors what startSnapSync does at line 1769 — the CL hint represents authoritative
+    // chain tip from forkchoiceUpdated, NOT peer-reported best.
+    //
+    // Peer `maxBlockNumber` is unreliable on post-merge chains:
+    //   - NewBlock gossip is dead (the historic update path)
+    //   - ETH/69 BlockRangeUpdate only fires on a minority of peers
+    //   - PR #1238's best-block probe only re-checks every 5 min
+    //
+    // Sepolia 2026-05-15 observation: 2-4 peers all reported `maxBlockNumber=10853243`
+    // for ~30 min while the actual chain head was at 10854389+. Selecting from
+    // peer-reported best gave us a pivot 1146 blocks BEHIND the CL head, peers couldn't
+    // serve that root either, and we looped forever.
+    //
+    // Pre-merge chains keep peer-reported best because there's no authoritative tip.
     val clHeadNumber: Option[BigInt] =
       if (isPostMergeChain) clPivotHint.flatMap(_.knownHeader).map(_.number) else None
 
-    val networkBestOpt = currentNetworkBestFromSnapPeers()
-    val newPivotOpt = networkBestOpt
-      .filter { networkBest =>
-        SNAPSyncController.pivotPassesFreshnessFloor(
-          networkBest = networkBest,
-          clHeadNumber = clHeadNumber,
-          maxStaleness = snapSyncConfig.maxPivotStalenessBlocks
-        ) match {
-          case Right(()) => true
-          case Left(floor) =>
-            log.warning(
-              s"Rejecting stale SNAP peer best=$networkBest as pivot — below CL-anchored " +
-                s"freshness floor=$floor (CL head=${clHeadNumber.getOrElse("?")}, " +
-                s"maxPivotStalenessBlocks=${snapSyncConfig.maxPivotStalenessBlocks}). " +
-                "Waiting for a fresher SNAP-capable peer."
-            )
-            false
+    val newPivotOpt: Option[BigInt] = clHeadNumber match {
+      case Some(clHead) =>
+        // Post-merge: pivot = CL head - offset. Strict forward-only: never accept a
+        // pivot below our current one (which could happen if the CL hint regressed,
+        // though that should not happen for forkchoiceUpdated).
+        val target = clHead - snapSyncConfig.pivotBlockOffset
+        val currentPivot = pivotBlock.getOrElse(BigInt(0))
+        if (target <= currentPivot) {
+          log.info(
+            s"CL-based pivot $target not strictly newer than current $currentPivot " +
+              s"(CL head=$clHead, offset=${snapSyncConfig.pivotBlockOffset}). Skipping refresh."
+          )
+          None
+        } else {
+          log.info(s"Selected CL-anchored pivot $target (CL head=$clHead, current=$currentPivot)")
+          Some(target).filter(_ > 0)
         }
-      }
-      .map(networkBest => networkBest - snapSyncConfig.pivotBlockOffset)
-      .filter(_ > 0)
+
+      case None =>
+        // Pre-merge fallback: peer-reported best subject to freshness floor.
+        currentNetworkBestFromSnapPeers()
+          .filter { networkBest =>
+            SNAPSyncController.pivotPassesFreshnessFloor(
+              networkBest = networkBest,
+              clHeadNumber = clHeadNumber,
+              maxStaleness = snapSyncConfig.maxPivotStalenessBlocks
+            ) match {
+              case Right(()) => true
+              case Left(floor) =>
+                log.warning(
+                  s"Rejecting stale SNAP peer best=$networkBest as pivot — below CL-anchored " +
+                    s"freshness floor=$floor (CL head=${clHeadNumber.getOrElse("?")}, " +
+                    s"maxPivotStalenessBlocks=${snapSyncConfig.maxPivotStalenessBlocks}). " +
+                    "Waiting for a fresher SNAP-capable peer."
+                )
+                false
+            }
+          }
+          .map(networkBest => networkBest - snapSyncConfig.pivotBlockOffset)
+          .filter(_ > 0)
+    }
 
     if (newPivotOpt.isEmpty) {
       log.warning(
@@ -3062,11 +3130,16 @@ class SNAPSyncController(
     * incompatible forkId (e.g. Frontier vs Spiral). This stores the pivot header, chain weight, and best block info so
     * that createStatusMsg() in EthNodeStatus64ExchangeState can build a valid status message referencing the pivot.
     */
-  private def updateBestBlockForPivot(header: BlockHeader, pivotBlockNumber: BigInt): Unit = {
+  private def updateBestBlockForPivot(
+      header: BlockHeader,
+      pivotBlockNumber: BigInt,
+      peerTD: Option[BigInt] = None
+  ): Unit = {
     val pivotHash = header.hash
-    val estimatedTotalDifficulty =
+    val estimatedTotalDifficulty = peerTD.filter(_ > BigInt(0)).getOrElse {
       if (pivotBlockNumber == BigInt(0)) header.difficulty
       else header.difficulty * pivotBlockNumber
+    }
     // Store header so getBestBlockHeader() -> getBlockHeaderByNumber(pivot) finds it
     blockchainWriter.storeBlockHeader(header).commit()
     blockchainWriter
@@ -3077,7 +3150,9 @@ class SNAPSyncController(
       .commit()
     log.info(
       s"Updated best block for ETH status: block=$pivotBlockNumber, hash=${pivotHash.toHex.take(16)}..., " +
-        s"estimatedTD=$estimatedTotalDifficulty"
+        s"estimatedTD=$estimatedTotalDifficulty (source=${
+            if (peerTD.exists(_ > 0)) "PEER_WIRE_TD" else "LINEAR_ESTIMATE"
+          })"
     )
   }
 
@@ -3107,26 +3182,15 @@ class SNAPSyncController(
     val newRoot = newStateRoot.take(4).toHex
 
     if (stateRoot.contains(newStateRoot)) {
-      // The proposed pivot has the same state root we're already on. That's a no-op, not a
-      // failure: nothing about our sync state needs to change. The previous policy treated it
-      // as fatal and called `restartSnapSync`, which destroys every downloaded account, every
-      // queued storage task, and the entire bytecode set — for *zero* gain, since the state we
-      // would re-download is bit-identical to the state we already have.
+      // No-op same-root pivot refresh. PR #1236 fixed this on one path; this is the second
+      // path (completePivotRefreshWithStateRoot) that previously called restartSnapSync and
+      // wiped in-memory progress. Observed sepolia 2026-05-15 00:50:36: lost ~500K accounts
+      // of progress (~67% keyspace) because a stall-recovery pivot landed on the same root.
       //
-      // The pathology we observed on sepolia 2026-05-13 (sub-second after PR #1234's freshness
-      // filter accepted a fresh peer): a successful refresh committed root `R` at T=0; eight
-      // seconds later the bootstrap-retry path fired *again*, asked the same fresh peer for the
-      // same pivot, naturally got back the same root `R`, and the old "same root → restart"
-      // branch nuked the entire account-range download we'd just resumed. Net effect:
-      // throughput collapses to zero every time the pivot stabilises.
-      //
-      // The genuine "we're stuck on a stale root" condition that this branch was originally
-      // trying to detect is handled separately by the account/storage stall watchdogs and by
-      // the consecutive-pivot-refresh counter. Treat same-root here as the no-op it is.
-      log.info(
-        s"Pivot refresh requested but new root $newRoot matches the current root — no-op " +
-          s"(pivot=$oldPivot, reason=$reason)"
-      )
+      // A same-root "refresh" is information-free for the coordinator (their data for this
+      // root is unchanged) but does not warrant destroying state. Strikes and snapless have
+      // already been cleared at coordinator level via PR #1255; nothing further to do.
+      log.info(s"Pivot refresh produced same root ($newRoot): $reason. No-op — preserving accumulated state.")
       return
     }
 
@@ -3197,6 +3261,7 @@ class SNAPSyncController(
     }
     updateBestBlockForPivot(newPivotHeader, newPivotBlock)
     SNAPSyncMetrics.setPivotBlockNumber(newPivotBlock)
+    SNAPSyncMetrics.incrementPivotRefreshed()
 
     // Geth-aligned: send refresh signal to ALL active coordinators (all 3 run concurrently)
     accountRangeCoordinator.foreach(_ ! actors.Messages.PivotRefreshed(newStateRoot))
@@ -3809,17 +3874,16 @@ object SNAPSyncController {
   final case class ProgressAccountEstimate(estimatedTotal: Long)
   final case class ProgressStorageContracts(completedContracts: Int, totalContracts: Int)
 
-  /** Sent by `StorageRangeCoordinator` to the controller when its pending-task queue crosses a
-    * watermark. The controller forwards it to `AccountRangeCoordinator` as a `StorageQueuePressure`
-    * message so account workers stop producing new storage tasks during back-pressure. Workers
-    * already in flight always run to completion. */
+  /** Sent by `StorageRangeCoordinator` to the controller when its pending-task queue crosses a watermark. The
+    * controller forwards it to `AccountRangeCoordinator` as a `StorageQueuePressure` message so account workers stop
+    * producing new storage tasks during back-pressure. Workers already in flight always run to completion.
+    */
   final case class StorageBackpressureChanged(paused: Boolean)
 
-  /** Sent by `ByteCodeCoordinator` to the controller when its pending-task queue crosses a
-    * watermark. Forwarded to `AccountRangeCoordinator` as `ByteCodeQueuePressure`. Bytecode tasks
-    * are produced by account-range completions (one task per batch of code hashes), so the
-    * pause/resume pattern is the same as storage. AccountRangeCoordinator pauses dispatch if
-    * EITHER downstream coordinator is over its high-water mark.
+  /** Sent by `ByteCodeCoordinator` to the controller when its pending-task queue crosses a watermark. Forwarded to
+    * `AccountRangeCoordinator` as `ByteCodeQueuePressure`. Bytecode tasks are produced by account-range completions
+    * (one task per batch of code hashes), so the pause/resume pattern is the same as storage. AccountRangeCoordinator
+    * pauses dispatch if EITHER downstream coordinator is over its high-water mark.
     */
   final case class ByteCodeBackpressureChanged(paused: Boolean)
 
@@ -3829,23 +3893,25 @@ object SNAPSyncController {
   ): Boolean =
     snapSyncConfig.deferredMerkleization && !storagePhaseForceCompleted
 
-  /** Freshness gate for `refreshPivotInPlace`: reject candidate pivots whose source peer is
-    * more than `maxStaleness` blocks behind the CL-driven head.
+  /** Freshness gate for `refreshPivotInPlace`: reject candidate pivots whose source peer is more than `maxStaleness`
+    * blocks behind the CL-driven head.
     *
-    * Background: the post-merge SNAP refresh path used to take `max(snapPeer.maxBlockNumber)`
-    * as the new pivot with no comparison against the actual chain tip. When the only
-    * SNAP-capable peers left in the pool were lagging (e.g. one still reporting block
-    * 10_447_000 while sepolia's CL head was at 10_847_xxx — observed May 13 2026), the
-    * refresh kept picking the stuck-peer's block, then immediately tripped the same-root
-    * fallback and restart. This filter blocks that path: on post-merge chains we know the
-    * authoritative tip (via `clPivotHint`), so we require pivot sources to be within
-    * `maxStaleness` of it. Pre-merge chains pass through unchanged (clHeadNumber=None).
+    * Background: the post-merge SNAP refresh path used to take `max(snapPeer.maxBlockNumber)` as the new pivot with no
+    * comparison against the actual chain tip. When the only SNAP-capable peers left in the pool were lagging (e.g. one
+    * still reporting block 10_447_000 while sepolia's CL head was at 10_847_xxx — observed May 13 2026), the refresh
+    * kept picking the stuck-peer's block, then immediately tripped the same-root fallback and restart. This filter
+    * blocks that path: on post-merge chains we know the authoritative tip (via `clPivotHint`), so we require pivot
+    * sources to be within `maxStaleness` of it. Pre-merge chains pass through unchanged (clHeadNumber=None).
     *
-    * @param networkBest  the best SNAP peer's maxBlockNumber
-    * @param clHeadNumber the consensus-layer head block number, when available
-    * @param maxStaleness configured `maxPivotStalenessBlocks` (default 4096)
-    * @return Right(()) if the candidate is fresh enough, Left(floor) with the rejected
-    *         freshness floor for diagnostic logging on the call site
+    * @param networkBest
+    *   the best SNAP peer's maxBlockNumber
+    * @param clHeadNumber
+    *   the consensus-layer head block number, when available
+    * @param maxStaleness
+    *   configured `maxPivotStalenessBlocks` (default 4096)
+    * @return
+    *   Right(()) if the candidate is fresh enough, Left(floor) with the rejected freshness floor for diagnostic logging
+    *   on the call site
     */
   private[snap] def pivotPassesFreshnessFloor(
       networkBest: BigInt,
@@ -3946,15 +4012,12 @@ case class SNAPSyncConfig(
     snapServerPeers: List[java.net.URI] = Nil,
     /** Phase 2 of the SNAP rewrite (`snap-stacktrie-port` plan).
       *
-      * When `true`, the SNAP write path uses streaming `SnapHashTrie`
-      * (one per AccountTask, one per storage contract) instead of the legacy
-      * `MerklePatriciaTrie` + `DeferredWriteMptStorage` approach. Memory is
-      * bounded by trie depth rather than account count; the multi-GiB
-      * in-memory pivot trie and its 13.6-minute collapse are eliminated.
+      * When `true`, the SNAP write path uses streaming `SnapHashTrie` (one per AccountTask, one per storage contract)
+      * instead of the legacy `MerklePatriciaTrie` + `DeferredWriteMptStorage` approach. Memory is bounded by trie depth
+      * rather than account count; the multi-GiB in-memory pivot trie and its 13.6-minute collapse are eliminated.
       *
-      * Default `false` — opt in via `sync.snap-sync.use-stack-trie = true`
-      * in sync.conf for testing. Will become the default once Sepolia +
-      * Mordor validation completes (Step 5 of the plan).
+      * Default `false` — opt in via `sync.snap-sync.use-stack-trie = true` in sync.conf for testing. Will become the
+      * default once Sepolia + Mordor validation completes (Step 5 of the plan).
       */
     useStackTrie: Boolean = false
 )

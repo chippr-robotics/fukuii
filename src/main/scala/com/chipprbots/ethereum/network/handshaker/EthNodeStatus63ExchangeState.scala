@@ -23,11 +23,21 @@ case class EthNodeStatus63ExchangeState(
   override protected def createStatusMsg(): MessageSerializable = {
     val bestBlockHeader = getBestBlockHeader()
 
+    // See EthNodeStatus64ExchangeState. Falls back to TTD on post-merge chains,
+    // ChainWeight.zero on pre-merge chains. ETH/63 doesn't really exist on post-merge
+    // networks (sepolia/mainnet are ETH/68+ only), so this is primarily for ETC.
     val chainWeight = blockchainReader
       .getChainWeightByHash(bestBlockHeader.hash)
-      .getOrElse(
-        throw new IllegalStateException(s"Chain weight not found for hash ${bestBlockHeader.hash}")
-      )
+      .getOrElse {
+        val ttdFallback = blockchainConfig.terminalTotalDifficulty
+          .map(com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly)
+          .getOrElse(com.chipprbots.ethereum.domain.ChainWeight.zero)
+        log.debug(
+          s"Chain weight not stored for best block ${bestBlockHeader.hash} (SNAP-sync state); " +
+            s"advertising fallback TD=${ttdFallback.totalDifficulty} in ETH/63 STATUS"
+        )
+        ttdFallback
+      }
 
     val status = BaseETH6XMessages.Status(
       protocolVersion = Capability.ETH63.version,

@@ -1175,13 +1175,13 @@ object BlobGasUtils {
     else total - target
   }
 
-  /** EIP-7918 (Osaka) excess-blob-gas calculation. Geth reference: `eip4844.calcExcessBlobGas` —
-    * post-Osaka, when `reservePrice > blobPrice`, the protocol uses an alternate formula that
-    * preserves a fraction of `parent.blobGasUsed` instead of subtracting `target`. This prevents
-    * the blob fee from collapsing in low-utilisation regimes.
+  /** EIP-7918 (Osaka) excess-blob-gas calculation. Geth reference: `eip4844.calcExcessBlobGas` — post-Osaka, when
+    * `reservePrice > blobPrice`, the protocol uses an alternate formula that preserves a fraction of
+    * `parent.blobGasUsed` instead of subtracting `target`. This prevents the blob fee from collapsing in
+    * low-utilisation regimes.
     *
     * Formula:
-    *   {{{
+    * {{{
     *   total = parent.excess + parent.used
     *   if (total < target) return 0
     *   if (isOsaka && reservePrice > blobPrice(parent.excess)) {
@@ -1189,10 +1189,10 @@ object BlobGasUtils {
     *     return parent.excess + scaled                       // in GAS units
     *   }
     *   return total - target
-    *   }}}
+    * }}}
     *
-    * `reservePrice = BLOB_BASE_COST * parent.baseFee` (in wei)
-    * `blobPrice    = fakeExponential(1, parent.excess, updateFraction) * GAS_PER_BLOB` (in wei)
+    * `reservePrice = BLOB_BASE_COST * parent.baseFee` (in wei) `blobPrice = fakeExponential(1, parent.excess,
+    * updateFraction) * GAS_PER_BLOB` (in wei)
     */
   def calcExcessBlobGasOsaka(
       parentExcessBlobGas: BigInt,
@@ -1234,9 +1234,9 @@ object BlobGasUtils {
     fakeExponential(MIN_BLOB_BASE_FEE, excessBlobGas, fraction)
   }
 
-  /** Fork-aware blob-base-fee update fraction. Each BPO bumps the fraction proportional to
-    * its MAX, matching geth's `params.config.go` `Default{Cancun,Prague,Osaka,BPO1,BPO2}BlobConfig.UpdateFraction`.
-    * Osaka itself reuses the Prague value (Osaka's blob params are unchanged from Prague).
+  /** Fork-aware blob-base-fee update fraction. Each BPO bumps the fraction proportional to its MAX, matching geth's
+    * `params.config.go` `Default{Cancun,Prague,Osaka,BPO1,BPO2}BlobConfig.UpdateFraction`. Osaka itself reuses the
+    * Prague value (Osaka's blob params are unchanged from Prague).
     */
   def updateFractionFor(
       blockTimestamp: Long,
@@ -1247,12 +1247,12 @@ object BlobGasUtils {
     else if (blockchainConfig.isPragueTimestamp(blockTimestamp)) PRAGUE_BLOB_BASE_FEE_UPDATE_FRACTION
     else BLOB_BASE_FEE_UPDATE_FRACTION
 
-  /** Compute the expected `excessBlobGas` of a child block given its parent and timestamp.
-    * Routes through the EIP-7918 alternate formula post-Osaka. This is the single canonical
-    * entry point for Engine-API payload validation and BlockHeaderValidator.
+  /** Compute the expected `excessBlobGas` of a child block given its parent and timestamp. Routes through the EIP-7918
+    * alternate formula post-Osaka. This is the single canonical entry point for Engine-API payload validation and
+    * BlockHeaderValidator.
     *
-    * `parentBaseFee` is required post-Osaka (used in the reserve-price comparison). Pass
-    * `BigInt(0)` for pre-Osaka chains; it's ignored.
+    * `parentBaseFee` is required post-Osaka (used in the reserve-price comparison). Pass `BigInt(0)` for pre-Osaka
+    * chains; it's ignored.
     */
   def expectedExcessBlobGas(
       parentExcessBlobGas: BigInt,

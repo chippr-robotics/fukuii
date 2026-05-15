@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.blockchain.sync.PeersClient.{
   BestPeer,
   BestPeerWithMinBlockExcluding,
   BestSnapPeer,
+  BestSnapPeerWithMinBlockExcluding,
   NoSuitablePeer,
   Request,
   RequestFailed
@@ -132,11 +133,17 @@ final class PivotHeaderBootstrap(
     val msg = ETH66.GetBlockHeaders(ETH66.nextRequestId, target, maxHeaders = 1, skip = 0, reverse = false)
 
     // Peer selection:
-    //   By-number (standard ETC mainnet path): BestPeerWithMinBlockExcluding rotates through the pool,
-    //     skipping peers already tried this bootstrap run (Besu peersUsed / go-ethereum idle-pool pattern).
-    //   By-hash / preferSnapPeers: unchanged — CL-driven and SNAP paths don't need exclusion.
+    //   By-number with preferSnapPeers (standard SNAP pivot bootstrap): BestSnapPeerWithMinBlockExcluding
+    //     combines Besu's two-stage pattern — PivotSelectorFromPeers pre-filters by estimatedChainHeight >= pivot,
+    //     PivotBlockConfirmer excludes used peers — into a single selector. This prevents Besu ETH69 (synthetic
+    //     TD ~61.66×10²¹ >> real ETC TD) from being selected when its reported maxBlockNumber is below targetBlock,
+    //     and rotates through remaining SNAP-capable peers via the exclusion set.
+    //   By-number without preferSnapPeers: BestPeerWithMinBlockExcluding rotates through the full pool.
+    //   By-hash (preferSnapPeers=false in SyncController): BestPeer — CL-driven path.
+    //   By-hash + preferSnapPeers: unreachable in production (targetBlock=0, no meaningful minBlock).
     val selector =
-      if (preferSnapPeers) BestSnapPeer
+      if (preferSnapPeers && !byHashMode) BestSnapPeerWithMinBlockExcluding(targetBlock, triedPeers.toSet)
+      else if (preferSnapPeers) BestSnapPeer
       else if (byHashMode) BestPeer
       else BestPeerWithMinBlockExcluding(targetBlock, triedPeers.toSet)
     val req = Request[ETH66.GetBlockHeaders](msg, selector, (m: ETH66.GetBlockHeaders) => m)

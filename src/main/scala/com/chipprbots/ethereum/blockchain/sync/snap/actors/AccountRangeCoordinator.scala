@@ -72,17 +72,14 @@ class AccountRangeCoordinator(
     accountTrieEcOverride: Option[ExecutionContext] = None,
     /** Phase 2 of the SNAP rewrite (Step 3 of `snap-stacktrie-port` plan).
       *
-      * When `true`, accounts arriving in each `AccountTask` are inserted into
-      * a per-task [[com.chipprbots.ethereum.blockchain.sync.snap.SnapHashTrie]]
-      * (which wraps a streaming `StackTrie`) rather than into the shared
-      * `MerklePatriciaTrie` over `DeferredWriteMptStorage`. The single 4 GiB
-      * in-memory pivot trie and its multi-minute flush are eliminated; memory
-      * is bounded to ~8 MiB write batches per task.
+      * When `true`, accounts arriving in each `AccountTask` are inserted into a per-task
+      * [[com.chipprbots.ethereum.blockchain.sync.snap.SnapHashTrie]] (which wraps a streaming `StackTrie`) rather than
+      * into the shared `MerklePatriciaTrie` over `DeferredWriteMptStorage`. The single 4 GiB in-memory pivot trie and
+      * its multi-minute flush are eliminated; memory is bounded to ~8 MiB write batches per task.
       *
-      * When `false` (default), the legacy MPT-put-then-deferred-flush path is
-      * used unchanged. This gives operators an opt-in migration path; the
-      * legacy path will be removed in Step 5 of the plan once the StackTrie
-      * path is validated on Sepolia + Mordor.
+      * When `false` (default), the legacy MPT-put-then-deferred-flush path is used unchanged. This gives operators an
+      * opt-in migration path; the legacy path will be removed in Step 5 of the plan once the StackTrie path is
+      * validated on Sepolia + Mordor.
       */
     useStackTrie: Boolean = false
 ) extends Actor
@@ -109,19 +106,41 @@ class AccountRangeCoordinator(
   // Kept for spec compatibility; reflects whether the storage source is currently engaged.
   private[actors] def storageBackpressureActive: Boolean = backpressureSources.contains("storage")
 
-  // Stateless peer tracking: peers that return "Missing proof for empty account range"
-  // OR consecutive timeouts are unable to serve the current state root. Cleared on
-  // PivotRefreshed because the new root may be inside the peer's serve window.
+  // Stateless peer tracking: peers CONFIRMED unable to serve the current state root after
+  // crossing the strike threshold below. Cleared on PivotRefreshed because the new root may
+  // be inside the peer's serve window.
   // `private[actors]` so AccountRangeCoordinatorSpec can drive the state via TestActorRef.
   private[actors] val statelessPeers = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
   // Snapless peer tracking (#1197): peers whose SNAP handler returns
   // `AccountRangePacket{Accounts: nil, Proof: nil}` indicating `chain.Snapshots()` is
-  // structurally unavailable (typical core-geth `--syncmode full` configuration on ETC
-  // mainnet — see project_eth68_snap_research memory). The peer's snapshot won't
-  // materialize this session, so this set survives PivotRefreshed (root-independent).
+  // structurally unavailable. CONFIRMED after EmptyResponseStrikeThreshold consecutive
+  // empty-with-empty-proof signals (no intervening successful response). Survives
+  // PivotRefreshed (root-independent) — see project_eth68_snap_research memory for the
+  // core-geth `--syncmode full` rationale: a peer with no snapshot tree won't grow one.
   // Bytecode + trie-node healing coordinators are unaffected — those code paths use
   // direct DB lookups that don't depend on the snapshot tree.
   private[actors] val snaplessPeers = mutable.Set[com.chipprbots.ethereum.network.PeerId]()
+  // Strike counter for empty-with-empty-proof responses (the only signal that drives
+  // statelessPeers + snaplessPeers entry today). The previous policy promoted a peer on
+  // the FIRST such response, which on sepolia 2026-05-13 carpet-bombed the peer pool
+  // (snapPeers=3 advertised → 1 dispatched-to). Reference clients: geth keeps a single
+  // global statelessPeers and no explicit strikes (uses a throughput/latency tracker);
+  // nethermind uses 5 strikes. We pick 3 — enough to survive a transient empty cycle
+  // (peer warming up after restart, network hiccup) without being so generous that genuinely
+  // useless peers eat the dispatch budget.
+  //
+  // Lifecycle:
+  //   * empty-with-empty-proof from peer → strike++
+  //   * strike >= threshold → enter statelessPeers AND snaplessPeers (confirmed)
+  //   * any successful response from peer → recordPeerSuccess clears strikes
+  //   * PivotRefreshed → clear strikes (peer deserves a clean slate on the new root)
+  //   * PeerUnavailable → clear strikes (and the peer entry from statelessPeers too)
+  private[actors] val emptyResponseStrikes = mutable.Map.empty[com.chipprbots.ethereum.network.PeerId, Int]
+  // Raised 3 → 5 on 2026-05-14: even with PR #1255 clearing snapless on PivotRefreshed,
+  // the 3-strike threshold drained sepolia's small peer pool between pivots, producing
+  // eligible=0 stalls within each pivot window. 5 strikes gives peers more rope; mirrors
+  // Nethermind's threshold; lines up with the bumped storage threshold.
+  private val EmptyResponseStrikeThreshold: Int = 5
   private var pivotRefreshRequested = false
   private var pivotWasRefreshed = false
 
@@ -133,29 +152,40 @@ class AccountRangeCoordinator(
 
   private def markPeerStateless(peer: Peer, reason: String): Unit = {
     val isEmptyProofSignal = reason.contains("Missing proof for empty account range")
-    val shouldMark = if (isEmptyProofSignal) {
-      // Peer explicitly returned empty response — immediately stateless AND snapless.
-      // The empty-with-empty signal means `chain.Snapshots()` is unavailable on this
-      // peer for any root, not just the current one (#1197).
-      snaplessPeers.add(peer.id)
+    if (!isEmptyProofSignal) return
+    // Already-confirmed peers stay confirmed; further strikes are noise.
+    if (snaplessPeers.contains(peer.id)) return
+
+    val priorStrikes = emptyResponseStrikes.getOrElse(peer.id, 0)
+    val strikes = priorStrikes + 1
+    emptyResponseStrikes(peer.id) = strikes
+
+    if (strikes < EmptyResponseStrikeThreshold) {
       log.info(
-        s"Peer ${peer.id.value} marked SNAPLESS (no snapshot tree) — will skip for " +
-          s"GetAccountRange this session. Bytecode/healing remain available."
+        s"Peer ${peer.id.value} empty-proof strike $strikes/$EmptyResponseStrikeThreshold for root " +
+          s"${stateRoot.take(4).toHex} (reason: $reason). Still eligible for dispatch."
       )
-      true
-    } else {
-      false
+      return
     }
 
-    if (shouldMark) {
-      statelessPeers.add(peer.id)
-      log.info(
-        s"Peer ${peer.id.value} marked stateless for root ${stateRoot.take(4).toHex} " +
-          s"(${statelessPeers.size}/${knownAvailablePeers.size} peers stateless)"
-      )
-      maybeRequestPivotRefresh()
-    }
+    // Threshold reached — promote to confirmed snapless + stateless. Snapless is sticky
+    // (root-independent, survives PivotRefreshed per #1197); stateless clears on the next
+    // PivotRefreshed.
+    snaplessPeers.add(peer.id)
+    statelessPeers.add(peer.id)
+    log.info(
+      s"Peer ${peer.id.value} marked SNAPLESS after $strikes consecutive empty-proof responses " +
+        s"— will skip for GetAccountRange this session. Bytecode/healing remain available. " +
+        s"(${statelessPeers.size}/${knownAvailablePeers.size} peers stateless for root ${stateRoot.take(4).toHex})"
+    )
+    maybeRequestPivotRefresh()
   }
+
+  /** Reset the strike counter for a peer that has just produced a useful response (real accounts OR a boundary proof).
+    * Cheap to over-invoke; the goal is "any forward progress from this peer wipes prior strikes."
+    */
+  private def recordPeerSuccess(peerId: com.chipprbots.ethereum.network.PeerId): Unit =
+    emptyResponseStrikes.remove(peerId)
 
   private def maybeRequestPivotRefresh(): Unit = {
     if (pivotRefreshRequested) return
@@ -381,11 +411,20 @@ class AccountRangeCoordinator(
   // without waiting for the next PeerAvailable message.
   private val knownAvailablePeers = mutable.Set[Peer]()
 
-  /** Number of active (non-stateless, non-cooling-down) snap-capable peers. Used to cap worker count — one worker per
-    * peer avoids peer flooding.
+  /** Number of active (non-stateless, non-snapless, non-cooling-down) snap-capable peers. Returns the actual count — no
+    * floor — so the progress log truthfully reports 0 when all peers are demoted (the case that drives the account
+    * stall). Previously this had `.max(1)` which masked the stall: progress log said "1 peers" while dispatch was
+    * starving on zero eligible peers. See PR-1 of `this-is-the-same-fluttering-eagle.md`.
     */
   private def activePeerCount: Int =
-    knownAvailablePeers.count(p => !isPeerStateless(p) && !isPeerSnapless(p) && !isPeerCoolingDown(p)).max(1)
+    knownAvailablePeers.count(p => !isPeerStateless(p) && !isPeerSnapless(p) && !isPeerCoolingDown(p))
+
+  // Periodic state-dump cadence — at most one INFO snapshot every 30 seconds. Time-based
+  // throttling (not modulo) so a call-rate spike doesn't overflow the log pipe. Same pattern
+  // as PR #1250's [STORAGE-STATE] (subsequently switched from modulo to time-based for the
+  // same reason).
+  private var lastStateLogMs: Long = 0L
+  private val StateLogIntervalMs: Long = 30_000L
 
   // Per-peer adaptive byte budgeting (ported from StorageRangeCoordinator).
   // Geth's snap handler supports up to 2MB responses. Starting at 512KB and probing upward
@@ -572,11 +611,26 @@ class AccountRangeCoordinator(
       drainActiveTasks(s"pivot refresh to ${newStateRoot.take(4).toHex}")
       pendingTasks.foreach(_.rootHash = newStateRoot)
 
-      // Clear stateless tracking — peers can serve the new root.
-      // NOTE: snaplessPeers is INTENTIONALLY NOT cleared here (#1197). A peer with no
-      // snapshot tree won't grow one across a pivot refresh; clearing would just put
-      // them back in dispatch rotation to immediately re-classify and waste a cycle.
+      // Clear stateless AND snapless tracking — peers get a fresh slate at the new root.
+      //
+      // Previous policy (PR #1197) intentionally preserved snaplessPeers across pivots:
+      // a peer without a snapshot tree won't grow one within a single sync session, so
+      // clearing was thought to waste a redispatch cycle re-classifying them. That logic
+      // breaks on small peer pools (sepolia's 2-8 SNAP-capable peers): if all peers
+      // accumulate confirmed-snapless across a few pivots, eligible=0 and the account
+      // coordinator stalls indefinitely. Observed sepolia 2026-05-14 (PR #1254
+      // instrumentation): workers-known=3, snapless=2, stateless=2 → eligible=0 → stall.
+      //
+      // Cost of clearing on pivot: peers genuinely without a snap tree get re-tested for
+      // 3 strikes per pivot cycle (≈ 9 dispatched-then-empty responses per peer per pivot).
+      // At sepolia's ~3-min pivot cadence that's ~3 wasted requests / min / lying peer.
+      // Acceptable trade-off vs total stall.
+      //
+      // Strike counter IS cleared: the new root is a fresh opportunity and a peer with 1-2
+      // strikes deserves another shot.
       statelessPeers.clear()
+      snaplessPeers.clear()
+      emptyResponseStrikes.clear()
       pivotRefreshRequested = false
 
       // Clear per-peer adaptive state (new root = new response characteristics)
@@ -640,6 +694,11 @@ class AccountRangeCoordinator(
       // AbstractRetryingPeerTask.java:158 both treat disconnect as transient re-queue, not failure.
       knownAvailablePeers.find(_.id.value == peerId).foreach(knownAvailablePeers -= _)
       peerCooldownUntilMs.remove(peerId)
+      // Drop strike counter — a reconnect under the same id should start fresh.
+      knownAvailablePeers.find(_.id.value == peerId).foreach(p => emptyResponseStrikes.remove(p.id))
+      // Note: snaplessPeers entry is preserved per #1197 — if the peer reconnects under a
+      // NEW PeerId, that's handled by PeerAvailable's stale-id-eviction path; same id =
+      // same physical node = same lack-of-snapshot.
       // #1184: drain the slots ourselves rather than relying on the worker → TaskFailed
       // cascade. drainActiveTasks sends WorkerRequestCancelled to each affected worker so they
       // leave `working` state cleanly and don't reject redispatch with TaskFailed(0, "Worker
@@ -838,10 +897,9 @@ class AccountRangeCoordinator(
   /** Dispatch up to maxInFlightPerPeer tasks to the given peer (pipelining). Mirrors
     * ByteCodeCoordinator.dispatchIfPossible — the proven pattern for SNAP sync.
     *
-    * No-op while any downstream coordinator (storage OR bytecode) is over its high-water mark.
-    * Workers already in flight always run to completion, so existing work continues to drain, but
-    * we stop producing new tasks (which would in turn enqueue more storage / bytecode work) until
-    * every signalling downstream has released.
+    * No-op while any downstream coordinator (storage OR bytecode) is over its high-water mark. Workers already in
+    * flight always run to completion, so existing work continues to drain, but we stop producing new tasks (which would
+    * in turn enqueue more storage / bytecode work) until every signalling downstream has released.
     */
   private def dispatchIfPossible(peer: Peer): Unit = {
     if (pendingTasks.isEmpty) return
@@ -864,9 +922,9 @@ class AccountRangeCoordinator(
     }
   }
 
-  /** Internal: record a back-pressure transition from one named downstream and re-engage dispatch
-    * once every signalling source has released. ANY-OF semantics: pause while at least one source
-    * is engaged; resume only when the set is fully empty.
+  /** Internal: record a back-pressure transition from one named downstream and re-engage dispatch once every signalling
+    * source has released. ANY-OF semantics: pause while at least one source is engaged; resume only when the set is
+    * fully empty.
     */
   private def applyBackpressureChange(source: String, paused: Boolean): Unit = {
     val wasActive = downstreamBackpressureActive
@@ -944,6 +1002,9 @@ class AccountRangeCoordinator(
           // Reset pivot refresh backoff on servable-root evidence: real account data or a boundary proof.
           if (accountCount > 0 || proof.nonEmpty) {
             consecutiveUnproductiveRefreshes = 0
+            // The peer served us a useful response. Wipe any prior empty-proof strikes so
+            // a future transient empty doesn't push a known-good peer over the threshold.
+            recordPeerSuccess(peer.id)
           }
 
           task.pending = false
@@ -1132,7 +1193,31 @@ class AccountRangeCoordinator(
       .filterNot(isPeerSnapless)
       .filterNot(isPeerCoolingDown)
       .toList
-    if (eligiblePeers.isEmpty) return
+    val now = System.currentTimeMillis()
+    val shouldLog = now - lastStateLogMs >= StateLogIntervalMs
+    if (shouldLog) {
+      lastStateLogMs = now
+      log.info(
+        s"[ACCOUNT-STATE] pending=${pendingTasks.size} active=${activeTasks.size} " +
+          s"workers-known=${knownAvailablePeers.size} stateless=${statelessPeers.size} " +
+          s"snapless=${snaplessPeers.size} cooling=${peerCooldownUntilMs.size} " +
+          s"eligible=${eligiblePeers.size} strikes=${emptyResponseStrikes.size} " +
+          s"maxInflight=$maxInFlightPerPeer root=${stateRoot.take(4).toHex}"
+      )
+    }
+    if (eligiblePeers.isEmpty) {
+      // Promoted from silent return to INFO so the first occurrence per 30s window
+      // is visible. Sharing `shouldLog` with the STATE snapshot above keeps total
+      // log volume from this method ≤ 2 lines / 30 s — robust against call-rate spikes.
+      if (shouldLog) {
+        log.info(
+          s"[ACCOUNT-REDISPATCH] No eligible peers — ${knownAvailablePeers.size} known, " +
+            s"${statelessPeers.size} stateless, ${snaplessPeers.size} snapless, " +
+            s"${peerCooldownUntilMs.size} cooling. pending: ${pendingTasks.size}"
+        )
+      }
+      return
+    }
 
     for (peer <- eligiblePeers if pendingTasks.nonEmpty)
       dispatchIfPossible(peer)
@@ -1189,6 +1274,7 @@ class AccountRangeCoordinator(
             s"${workers.size} workers/${activePeerCount} peers, " +
             s"${rate} accounts/sec)"
         )
+        com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setAccountActivePeers(activePeerCount)
         lastProgressLogAt = accountsDownloaded
       }
 
@@ -1267,12 +1353,10 @@ class AccountRangeCoordinator(
     }
   }
 
-  /** Get-or-create the per-task `SnapHashTrie` for the StackTrie path. Each
-    * task gets its own streaming trie keyed by `task.last` (the end-of-range
-    * boundary, unique per task). Nodes emitted by the wrapper flush to
-    * `mptStorage` via `storeRawNodes` — which routes through the existing
-    * `FastSyncNodeStorage` and picks up pivot-block-number tagging for
-    * pruning automatically.
+  /** Get-or-create the per-task `SnapHashTrie` for the StackTrie path. Each task gets its own streaming trie keyed by
+    * `task.last` (the end-of-range boundary, unique per task). Nodes emitted by the wrapper flush to `mptStorage` via
+    * `storeRawNodes` — which routes through the existing `FastSyncNodeStorage` and picks up pivot-block-number tagging
+    * for pruning automatically.
     */
   private def getOrCreateTaskStackTrie(task: AccountTask): SnapHashTrie =
     taskStackTries.getOrElseUpdate(
@@ -1287,8 +1371,8 @@ class AccountRangeCoordinator(
     * Used directly only from `finalizeTrie` (where the actor is in `finalizing` and no concurrent puts can race).
     * Periodic flushes during account download go through `spawnFlushTrieAsync`.
     *
-    * NOTE: legacy MPT path only. The StackTrie path flushes per-task at task completion via
-    * `SnapHashTrie.commit()`; no global flush is needed.
+    * NOTE: legacy MPT path only. The StackTrie path flushes per-task at task completion via `SnapHashTrie.commit()`; no
+    * global flush is needed.
     */
   private def flushTrieToStorage(): Unit =
     deferredStorage.flush().foreach { rootHash =>
@@ -1435,7 +1519,9 @@ class AccountRangeCoordinator(
         // finished after its `isTaskRangeComplete` branch was missed).
         if (taskStackTries.nonEmpty) {
           log.warning(s"Finalising ${taskStackTries.size} uncommitted task StackTries (unexpected)")
-          taskStackTries.values.foreach { trie => val _ = trie.commit() }
+          taskStackTries.values.foreach { trie =>
+            val _ = trie.commit()
+          }
           taskStackTries.clear()
         }
         // Use the pivot's claimed root as the "finalized root". With per-task fragments

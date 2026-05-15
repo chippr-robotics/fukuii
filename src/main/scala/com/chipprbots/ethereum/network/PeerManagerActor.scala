@@ -328,6 +328,12 @@ class PeerManagerActor(
   ): Unit = {
     val alreadyConnectedToPeer = connectedPeers.isConnectionHandled(remoteAddress)
     val isPendingPeersNotMaxValue = connectedPeers.incomingPendingPeersCount < peerConfiguration.maxPendingPeers
+    // Reject inbound dials from blacklisted addresses. Previously the blacklist was only
+    // honored on the outbound (`canConnectTo`) path, so a peer we disconnected for chronic
+    // lag would simply re-dial us inbound seconds later and rejoin the handshaked set —
+    // making PR #1242's 30-min hold ineffective. Sepolia 2026-05-14: same peer IPs
+    // re-connected 25s after being blacklisted for 30 min.
+    val isNotBlacklisted = !blacklist.isBlacklisted(PeerAddress(remoteAddress.getHostString))
 
     val validConnection = for {
       validHandler <- validateConnection(
@@ -339,6 +345,11 @@ class PeerManagerActor(
         validHandler,
         MaxIncomingPendingConnections(connection),
         isPendingPeersNotMaxValue
+      )
+      _ <- validateConnection(
+        validNumber,
+        IncomingConnectionBlacklisted(remoteAddress, connection),
+        isNotBlacklisted
       )
     } yield validNumber
 
@@ -468,15 +479,31 @@ class PeerManagerActor(
       val (terminatedPeersIds, newConnectedPeers) = connectedPeers.removeTerminatedPeer(ref)
       terminatedPeersIds.foreach { peerId =>
         peerStatusCache = peerStatusCache - peerId
-        peerEventBus ! Publish(PeerEvent.PeerDisconnected(peerId))
-        // Reconnect maintained peers — mirrors Besu's checkMaintainedConnectionPeers scheduler.
-        // NB-8: If an inbound connection from this peer is already in newConnectedPeers (AlreadyConnected
-        // race resolved in our favour), skip the reconnect timer — the inbound covers it.
-        // Fix C: 30s → 5s so we close the gap window when inbound reconnects in ~10s.
+        // Pending peers have path-based IDs (non-hex). Only handshaked peers have real hex node
+        // IDs so we can check whether the winner is still alive in connectedPeers.
+        // Gate PeerDisconnected on stillConnected — mirrors Besu's registerDisconnect guard
+        // (peer.getConnection().equals(connection)) and go-ethereum's d.peers[id] tracking:
+        // when a duplicate connection (the loser of a simultaneous-dial collision) terminates,
+        // the winner is still alive in connectedPeers so stillConnected=true. Publishing
+        // PeerDisconnected unconditionally was causing NetworkPeerManagerActor to evict the
+        // live winner entry, creating an infinite reconnect cycle with core-geth.
+        val stillConnected = scala.util
+          .Try(ByteString(Hex.decode(peerId.value)))
+          .map(newConnectedPeers.hasHandshakedWith)
+          .getOrElse(false)
+        if (stillConnected) {
+          log.info(
+            "DUPLICATE_TERMINATED: suppressing PeerDisconnected for {} — winner still connected, loser ref={} dropped",
+            peerId,
+            ref
+          )
+        } else {
+          log.info("GENUINE_DISCONNECT: publishing PeerDisconnected for {} ref={}", peerId, ref)
+          peerEventBus ! Publish(PeerEvent.PeerDisconnected(peerId))
+        }
         maintainedPeersByNodeId.get(peerId.value).foreach { uri =>
-          val nodeIdBytes = ByteString(Hex.decode(peerId.value))
-          if (newConnectedPeers.hasHandshakedWith(nodeIdBytes)) {
-            log.debug("Maintained peer {} already connected via inbound — skipping reconnect", uri)
+          if (stillConnected) {
+            log.debug("Maintained peer {} already connected via winner — skipping reconnect", uri)
           } else {
             log.debug("Maintained peer {} disconnected — scheduling reconnect in 5s", uri)
             context.system.scheduler.scheduleOnce(5.seconds, self, ConnectToPeer(uri))(context.dispatcher)
@@ -658,6 +685,10 @@ class PeerManagerActor(
       log.debug("Another connection with {} is already opened. Disconnecting", remoteAddress)
       connection ! PoisonPill
 
+    case IncomingConnectionBlacklisted(remoteAddress, connection) =>
+      log.debug("Rejecting incoming connection from blacklisted address {}", remoteAddress)
+      connection ! PoisonPill
+
     case MaxOutgoingConnections =>
       log.debug("Maximum number of connected peers reached")
 
@@ -833,8 +864,8 @@ object PeerManagerActor {
     *     `AlreadyConnected`, `ClientQuitting`, `TcpSubsystemError`, `DisconnectRequested`,
     *     `TimeoutOnReceivingAMessage`. Long blacklist on these classes destroys the peer pool during initial sync:
     *     peers reject us as uninteresting (we're at genesis / mid-SNAP-sync), we IP-blacklist them, and by the time
-    *     they'd accept us again we still can't re-dial. Sepolia 2026-05-13: 100+ peers blacklisted within 5 min,
-    *     pool collapsed to one peer; ETC mainnet has the same pattern.
+    *     they'd accept us again we still can't re-dial. Sepolia 2026-05-13: 100+ peers blacklisted within 5 min, pool
+    *     collapsed to one peer; ETC mainnet has the same pattern.
     *   - **Long** for anything else (catch-all).
     *
     * The classification of `UselessPeer` as a SHORT-tier rejection (was: LONG, via the `_` wildcard) is the substantive
@@ -862,6 +893,8 @@ object PeerManagerActor {
   case class MaxIncomingPendingConnections(connection: ActorRef) extends ConnectionError
 
   case class IncomingConnectionAlreadyHandled(address: InetSocketAddress, connection: ActorRef) extends ConnectionError
+
+  case class IncomingConnectionBlacklisted(address: InetSocketAddress, connection: ActorRef) extends ConnectionError
 
   case object MaxOutgoingConnections extends ConnectionError
 

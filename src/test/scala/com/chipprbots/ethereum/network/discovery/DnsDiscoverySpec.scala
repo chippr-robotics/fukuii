@@ -69,16 +69,16 @@ class DnsDiscoverySpec extends AnyFlatSpec with Matchers {
 
   "parseEnrToEnode" should "return None for invalid base64 ENR" taggedAs UnitTest in {
     val result = DnsDiscovery.parseEnrToEnode("enr:invalid-base64!!!")
-    result shouldBe None
+    result.toOption shouldBe None
   }
 
   it should "return None for empty ENR payload" taggedAs UnitTest in {
     val result = DnsDiscovery.parseEnrToEnode("enr:")
-    result shouldBe None
+    result.toOption shouldBe None
   }
 
   it should "return None for truncated ENR" taggedAs UnitTest in {
     val result = DnsDiscovery.parseEnrToEnode("enr:AAAA")
-    result shouldBe None
+    result.toOption shouldBe None
   }
 }
