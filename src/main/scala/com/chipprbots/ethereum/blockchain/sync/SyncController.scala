@@ -710,13 +710,30 @@ class SyncController(
       }
     }
 
-    // Checkpoint sync (PR-1): import a `.checkpoint` archive on first boot if configured.
-    // Only runs on a fresh datadir (best-block == 0 and SNAP not already done). On success
-    // the import marks SNAP/bytecode/storage as done; the match below routes to RegularSync.
-    // On failure we log and fall through to the normal SNAP/Fast/Regular path so the node
-    // still has a way forward.
-    syncConfig.checkpointSyncFile.foreach { path =>
-      if (appStateStorage.getBestBlockNumber() == 0 && !appStateStorage.isSnapSyncDone()) {
+    // Checkpoint sync: bootstrap a fresh datadir by importing a `.checkpoint` archive instead
+    // of running SNAP. Only fires when DB is fresh (best-block == 0 and SNAP not already done).
+    // Resolution order:
+    //   1. `checkpoint-sync-file` if set — use the local path directly.
+    //   2. else `checkpoint-sync-url` if set — download to `${datadir}/checkpoint.bin`
+    //      (resumable via HTTP Range) and import.
+    // On success the importer marks SNAP/bytecode/storage as done; the match below routes to
+    // RegularSync. On failure we log and fall through to the normal SNAP/Fast/Regular path.
+    if (appStateStorage.getBestBlockNumber() == 0 && !appStateStorage.isSnapSyncDone()) {
+      val fileOpt: Option[java.nio.file.Path] = syncConfig.checkpointSyncFile.orElse {
+        syncConfig.checkpointSyncUrl.flatMap { url =>
+          val datadir = java.nio.file.Paths.get(System.getProperty("fukuii.datadir", "."))
+          val target = datadir.resolve("checkpoint.bin")
+          log.info("[CHECKPOINT DOWNLOAD] {} -> {}", url, target)
+          val downloader = new com.chipprbots.ethereum.blockchain.checkpoint.CheckpointDownloader()
+          downloader.download(url, target) match {
+            case Right(_) => Some(target)
+            case Left(err) =>
+              log.error("[CHECKPOINT DOWNLOAD] failed: {} — falling through to SNAP/Fast/Regular", err)
+              None
+          }
+        }
+      }
+      fileOpt.foreach { path =>
         val chainIdBig = configBuilder.blockchainConfig.chainId
         log.info("[CHECKPOINT IMPORT] starting from {} (chainId={})", path, chainIdBig)
         val importer = new com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter(
@@ -737,14 +754,13 @@ class SyncController(
           case Left(err) =>
             log.error("[CHECKPOINT IMPORT] failed: {} — falling through to SNAP/Fast/Regular", err)
         }
-      } else {
-        log.info(
-          "Checkpoint sync configured (file={}) but DB already initialized (bestBlock={}, snapDone={}); skipping import",
-          path,
-          appStateStorage.getBestBlockNumber(),
-          appStateStorage.isSnapSyncDone()
-        )
       }
+    } else if (syncConfig.checkpointSyncFile.isDefined || syncConfig.checkpointSyncUrl.isDefined) {
+      log.info(
+        "Checkpoint sync configured but DB already initialized (bestBlock={}, snapDone={}); skipping import",
+        appStateStorage.getBestBlockNumber(),
+        appStateStorage.isSnapSyncDone()
+      )
     }
 
     // If fast sync is desired but the circuit-breaker is open, start regular sync for now and
