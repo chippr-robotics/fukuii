@@ -846,11 +846,7 @@ class StorageRangeCoordinatorSpec
     snapSyncController.expectMsg(3.seconds, SNAPSyncController.StorageBackpressureChanged(paused = true))
 
     // Drain the underlying queue to 2 entries (≤ low-water mark) and trigger a check.
-    val underlying = coordinator.underlyingActor
-    val pendingQueue =
-      classOf[StorageRangeCoordinator].getDeclaredFields.find(_.getName == "tasks").get
-    pendingQueue.setAccessible(true)
-    val q = pendingQueue.get(underlying).asInstanceOf[mutable.Queue[StorageTask]]
+    val q = coordinator.underlyingActor.tasks
     while (q.size > 2) q.dequeue()
 
     coordinator ! Messages.StorageCheckCompletion

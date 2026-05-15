@@ -14,18 +14,16 @@ import com.chipprbots.ethereum.testing.Tags._
 
 /** Tests for [[StackTrie]].
   *
-  * The bedrock invariant: for any set of (key, value) pairs inserted in
-  * strictly-ascending hex-nibble order, `StackTrie.hash()` must produce the
-  * same 32-byte root hash as inserting the same pairs into a
-  * [[MerklePatriciaTrie]] backed by an arbitrary `MptStorage`. The
-  * MerklePatriciaTrie is the reference oracle.
+  * The bedrock invariant: for any set of (key, value) pairs inserted in strictly-ascending hex-nibble order,
+  * `StackTrie.hash()` must produce the same 32-byte root hash as inserting the same pairs into a [[MerklePatriciaTrie]]
+  * backed by an arbitrary `MptStorage`. The MerklePatriciaTrie is the reference oracle.
   */
 class StackTrieSpec extends AnyFlatSpec with Matchers {
 
   // ---- helpers ----
 
   /** Implicit serializer used by the reference MerklePatriciaTrie tests below. */
-  private implicit val byteArraySerializer: com.chipprbots.ethereum.mpt.ByteArraySerializable[Array[Byte]] =
+  implicit private val byteArraySerializer: com.chipprbots.ethereum.mpt.ByteArraySerializable[Array[Byte]] =
     new com.chipprbots.ethereum.mpt.ByteArraySerializable[Array[Byte]] {
       def toBytes(input: Array[Byte]): Array[Byte] = input
       def fromBytes(bytes: Array[Byte]): Array[Byte] = bytes
@@ -51,10 +49,10 @@ class StackTrieSpec extends AnyFlatSpec with Matchers {
       pairs: Seq[(Array[Byte], Array[Byte])]
   ): (Array[Byte], Map[ByteString, Array[Byte]]) = {
     val collected = mutable.LinkedHashMap.empty[ByteString, Array[Byte]]
-    val st = new StackTrie((_, hash, blob) => {
+    val st = new StackTrie((_, hash, blob) =>
       // Defensive: callers must deep-copy if they want to retain the blob.
       collected += hash -> blob.clone()
-    })
+    )
     pairs.foreach { case (k, v) => st.update(k, v) }
     val root = st.hash().toArray
     (root, collected.toMap)

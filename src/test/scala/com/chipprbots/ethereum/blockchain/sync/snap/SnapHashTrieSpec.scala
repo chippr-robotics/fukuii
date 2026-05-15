@@ -15,8 +15,8 @@ import com.chipprbots.ethereum.testing.Tags._
 
 /** Tests for [[SnapHashTrie]] — the batching wrapper around [[StackTrie]].
   *
-  * The StackTrie itself is already validated against `MerklePatriciaTrie` in
-  * `StackTrieSpec`. This spec focuses on the wrapper's responsibilities:
+  * The StackTrie itself is already validated against `MerklePatriciaTrie` in `StackTrieSpec`. This spec focuses on the
+  * wrapper's responsibilities:
   *
   *   - emissions flow through the `writeBatch` callback,
   *   - batching honours the size threshold,
@@ -28,17 +28,16 @@ class SnapHashTrieSpec extends AnyFlatSpec with Matchers {
 
   // ---- helpers ----
 
-  private implicit val byteArraySerializer: ByteArraySerializable[Array[Byte]] =
+  implicit private val byteArraySerializer: ByteArraySerializable[Array[Byte]] =
     new ByteArraySerializable[Array[Byte]] {
       def toBytes(input: Array[Byte]): Array[Byte] = input
       def fromBytes(bytes: Array[Byte]): Array[Byte] = bytes
     }
 
-  /** A recording `writeBatch` callback. Each invocation appends its batch to
-    * the list of recorded batches, and every (hash, blob) pair is added to a
-    * cumulative map for later inspection.
+  /** A recording `writeBatch` callback. Each invocation appends its batch to the list of recorded batches, and every
+    * (hash, blob) pair is added to a cumulative map for later inspection.
     */
-  private final class RecordingWriter {
+  final private class RecordingWriter {
     val batches: mutable.ArrayBuffer[Seq[(ByteString, Array[Byte])]] = mutable.ArrayBuffer.empty
     val combined: mutable.LinkedHashMap[ByteString, Array[Byte]] = mutable.LinkedHashMap.empty
     var totalBytes: Long = 0L

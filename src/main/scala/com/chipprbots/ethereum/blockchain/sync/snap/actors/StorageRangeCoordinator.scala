@@ -60,10 +60,9 @@ class StorageRangeCoordinator(
     flatBatchEcOverride: Option[ExecutionContext] = None,
     /** Phase 2 of the SNAP rewrite (Step 4 of `snap-stacktrie-port` plan).
       *
-      * When `true`, per-contract storage tries are built with a streaming
-      * `SnapHashTrie` instead of `MerklePatriciaTrie` + `DeferredWriteMptStorage`.
-      * Each contract's trie is constructed in O(depth) memory rather than
-      * holding the whole trie in memory until flush. Same opt-in semantics as
+      * When `true`, per-contract storage tries are built with a streaming `SnapHashTrie` instead of
+      * `MerklePatriciaTrie` + `DeferredWriteMptStorage`. Each contract's trie is constructed in O(depth) memory rather
+      * than holding the whole trie in memory until flush. Same opt-in semantics as
       * `AccountRangeCoordinator.useStackTrie`.
       */
     useStackTrie: Boolean = false,
@@ -84,7 +83,7 @@ class StorageRangeCoordinator(
   private var maxInFlightPerPeer: Int = initialMaxInFlightPerPeer
 
   // Task management
-  private val tasks = mutable.Queue[StorageTask]()
+  private[actors] val tasks = mutable.Queue[StorageTask]()
   // Dedup gate: (accountHash, next) uniquely identifies a pending task. Prevents duplicate
   // enqueues when concurrent timeout re-queues overlap (two timeouts for the same batch).
   private val pendingTaskKeys = mutable.Set[(ByteString, ByteString)]()
@@ -653,19 +652,19 @@ class StorageRangeCoordinator(
       }
     }
 
-  /** Aggregate-counter sink for completed StorageTask objects. Previously this appended into an
-    * unbounded `mutable.ArrayBuffer[StorageTask]` (one of the leak vectors behind the May 13 sepolia
-    * OOM at ~22M completed tasks). All downstream consumers — progress %, SyncStatistics.tasksCompleted,
-    * the completion check — only ever read the count, never the task data itself.
+  /** Aggregate-counter sink for completed StorageTask objects. Previously this appended into an unbounded
+    * `mutable.ArrayBuffer[StorageTask]` (one of the leak vectors behind the May 13 sepolia OOM at ~22M completed
+    * tasks). All downstream consumers — progress %, SyncStatistics.tasksCompleted, the completion check — only ever
+    * read the count, never the task data itself.
     */
   private def recordCompletedTask(task: StorageTask): Unit = {
     val _ = task // explicitly unused; kept in the signature to make call-site intent unambiguous
     completedTaskCount += 1L
   }
 
-  /** Emit a StorageQueuePressure transition if the pending-task queue depth has just crossed a
-    * watermark. Called after every enqueue and dequeue. Forwarded to AccountRangeCoordinator via
-    * SNAPSyncController so account workers stop producing new storage tasks during back-pressure.
+  /** Emit a StorageQueuePressure transition if the pending-task queue depth has just crossed a watermark. Called after
+    * every enqueue and dequeue. Forwarded to AccountRangeCoordinator via SNAPSyncController so account workers stop
+    * producing new storage tasks during back-pressure.
     */
   private def notifyBackpressureIfChanged(): Unit = {
     val pending = tasks.size
@@ -1501,10 +1500,9 @@ class StorageRangeCoordinator(
       accountsReadyForBuild.isEmpty && accountsInTrieConstruction.isEmpty && pendingAccountSlots.isEmpty &&
       pendingFlatBatchAccounts.isEmpty && inFlightFlatBatches == 0
 
-  /** Update contract completion counts and send progress to controller. The counter is incremented
-    * at the two "account fully done" sites (small-contract flat write + TrieConstructionComplete);
-    * we just broadcast its current value, avoiding the previous O(N) rebuild over completedTasks
-    * that ran on every progress check.
+  /** Update contract completion counts and send progress to controller. The counter is incremented at the two "account
+    * fully done" sites (small-contract flat write + TrieConstructionComplete); we just broadcast its current value,
+    * avoiding the previous O(N) rebuild over completedTasks that ran on every progress check.
     */
   private var lastReportedCompletedAccountCount: Long = 0L
   private def updateContractProgress(): Unit = {

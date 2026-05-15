@@ -258,18 +258,21 @@ class NetworkPeerManagerActor(
             )
           } else {
             val laggingFloor = clHead - LaggingPeerLagThreshold
-            val candidates = peersWithInfo.iterator.flatMap { case (peerId, PeerWithInfo(peer, peerInfo)) =>
-              if (peerInfo.maxBlockNumber > 0 && peerInfo.maxBlockNumber < laggingFloor) {
-                val firstSeen = laggingPeerSince.getOrElseUpdate(peerId, now)
-                val laggedFor = now - firstSeen
-                if (laggedFor >= LaggingPeerEvictAfter.toMillis) Some((peerId, peer, peerInfo, laggedFor))
-                else None
-              } else {
-                // Peer caught up (or never lagged) — reset hysteresis.
-                laggingPeerSince.remove(peerId)
-                None
+            val candidates = peersWithInfo.iterator
+              .flatMap { case (peerId, PeerWithInfo(peer, peerInfo)) =>
+                if (peerInfo.maxBlockNumber > 0 && peerInfo.maxBlockNumber < laggingFloor) {
+                  val firstSeen = laggingPeerSince.getOrElseUpdate(peerId, now)
+                  val laggedFor = now - firstSeen
+                  if (laggedFor >= LaggingPeerEvictAfter.toMillis) Some((peerId, peer, peerInfo, laggedFor))
+                  else None
+                } else {
+                  // Peer caught up (or never lagged) — reset hysteresis.
+                  laggingPeerSince.remove(peerId)
+                  None
+                }
               }
-            }.take(LaggingPeerMaxEvictionsPerCycle).toList
+              .take(LaggingPeerMaxEvictionsPerCycle)
+              .toList
 
             candidates.foreach { case (peerId, peer, peerInfo, laggedFor) =>
               log.info(
@@ -340,8 +343,8 @@ class NetworkPeerManagerActor(
       // Track per-peer block-height signals so the periodic re-probe (RefreshPeerBestBlocks)
       // can skip ETH/69 peers that are actively pushing BlockRangeUpdate.
       message match {
-        case _: ETH69.BlockRangeUpdate | _: ETH62BlockHeaders | _: ETH66BlockHeaders |
-            _: BaseETH6XMessages.NewBlock | _: NewBlockHashes =>
+        case _: ETH69.BlockRangeUpdate | _: ETH62BlockHeaders | _: ETH66BlockHeaders | _: BaseETH6XMessages.NewBlock |
+            _: NewBlockHashes =>
           lastBlockSignalMs(peerId) = System.currentTimeMillis()
         case _ => // not a block-height signal
       }
@@ -1088,67 +1091,59 @@ object NetworkPeerManagerActor {
   /** Self-message that drives the lagging-peer-eviction loop. */
   private[network] case object CheckLaggingPeers
 
-  /** Sent by `SNAPSyncController` whenever it ingests a new CL forkchoice head. Lets the
-    * peer manager evict chronically-lagging peers (more than `LaggingPeerLagThreshold`
-    * blocks below the CL head) so discovery can refill the connection slot with a fresh
-    * peer. Without this signal the actor has no notion of "actual chain tip" — pre-merge
-    * chains never send it and lagging-peer eviction is correctly disabled.
+  /** Sent by `SNAPSyncController` whenever it ingests a new CL forkchoice head. Lets the peer manager evict
+    * chronically-lagging peers (more than `LaggingPeerLagThreshold` blocks below the CL head) so discovery can refill
+    * the connection slot with a fresh peer. Without this signal the actor has no notion of "actual chain tip" —
+    * pre-merge chains never send it and lagging-peer eviction is correctly disabled.
     */
   case class UpdateClHead(blockNumber: BigInt)
 
-  /** How often to send each handshaked peer a one-shot `GetBlockHeaders(bestHash, 1)` to
-    * refresh `PeerInfo.maxBlockNumber`. Defaults to 5 minutes — small fraction of typical
-    * peer connection lifetimes (~30+ min) and small fraction of pivot-refresh cadence.
+  /** How often to send each handshaked peer a one-shot `GetBlockHeaders(bestHash, 1)` to refresh
+    * `PeerInfo.maxBlockNumber`. Defaults to 5 minutes — small fraction of typical peer connection lifetimes (~30+ min)
+    * and small fraction of pivot-refresh cadence.
     */
   private[network] val BestBlockRefreshInterval: FiniteDuration = 5.minutes
 
-  /** Window after which we re-probe an ETH/69 peer even though it has already had a
-    * `BlockRangeUpdate` opportunity. ETH/69 peers that don't actively push BRUs would
-    * otherwise never get re-probed. Half of the re-probe interval so a quiet peer gets
-    * polled within 2.5 minutes regardless of its push cadence.
+  /** Window after which we re-probe an ETH/69 peer even though it has already had a `BlockRangeUpdate` opportunity.
+    * ETH/69 peers that don't actively push BRUs would otherwise never get re-probed. Half of the re-probe interval so a
+    * quiet peer gets polled within 2.5 minutes regardless of its push cadence.
     */
   private[network] val BlockSignalStaleAfter: FiniteDuration = 150.seconds
 
-  /** Lagging-peer eviction parameters. Together: a peer that has been ≥ 4096 blocks
-    * behind the CL head continuously for 10 minutes is disconnected (and IP-blacklisted
-    * for 2 minutes to prevent immediate re-dial). 4096 matches the pivot freshness floor
-    * default (`snap-sync.max-pivot-staleness-blocks`, see #1234) so the same peer that
-    * fails pivot selection is the one we evict.
+  /** Lagging-peer eviction parameters. Together: a peer that has been ≥ 4096 blocks behind the CL head continuously for
+    * 10 minutes is disconnected (and IP-blacklisted for 2 minutes to prevent immediate re-dial). 4096 matches the pivot
+    * freshness floor default (`snap-sync.max-pivot-staleness-blocks`, see #1234) so the same peer that fails pivot
+    * selection is the one we evict.
     *
-    * Per-cycle cap of 5 evictions prevents the pool from collapsing if a sweep catches
-    * many peers at once; the 10-minute hysteresis prevents catching peers that are merely
-    * catching up.
+    * Per-cycle cap of 5 evictions prevents the pool from collapsing if a sweep catches many peers at once; the
+    * 10-minute hysteresis prevents catching peers that are merely catching up.
     */
   private[network] val LaggingPeerCheckInterval: FiniteDuration = 2.minutes
   private[network] val LaggingPeerEvictAfter: FiniteDuration = 10.minutes
   private[network] val LaggingPeerLagThreshold: BigInt = BigInt(4096)
   private[network] val LaggingPeerMaxEvictionsPerCycle: Int = 5
 
-  /** Below this floor of handshaked peers, skip eviction — better to keep a stale peer
-    * than to crater the connection pool on a small network. The floor is intentionally
-    * low (2): on thin testnets like sepolia we often see only 3-5 SNAP-capable peers
-    * total, and the lagging-peer pathology is most acute exactly there. A floor of 5
-    * would skip eviction entirely and the stuck peers would never recycle out. Two is
-    * still enough to prevent a single sweep from leaving us peerless mid-sync; the
-    * per-cycle cap of 5 plus the 10-minute hysteresis provide the heavier-weight
+  /** Below this floor of handshaked peers, skip eviction — better to keep a stale peer than to crater the connection
+    * pool on a small network. The floor is intentionally low (2): on thin testnets like sepolia we often see only 3-5
+    * SNAP-capable peers total, and the lagging-peer pathology is most acute exactly there. A floor of 5 would skip
+    * eviction entirely and the stuck peers would never recycle out. Two is still enough to prevent a single sweep from
+    * leaving us peerless mid-sync; the per-cycle cap of 5 plus the 10-minute hysteresis provide the heavier-weight
     * safeties.
     */
   private[network] val LaggingPeerMinPoolFloor: Int = 2
 
-  /** IP-blacklist applied to a peer that just failed the 10-minute lagging-peer hysteresis.
-    * Distinct from PR #1235's short-tier UselessPeer mapping (also 2 min): that's right for
-    * transient "rejected by remote" signals, but a peer we *chose* to evict for chronic lag
-    * has already proven it can't keep up. 30 minutes is long enough to break the immediate
-    * re-dial cycle (discovery has time to surface a fresh peer), short enough that a peer
-    * whose operator restarts and resyncs can reconnect within the hour.
+  /** IP-blacklist applied to a peer that just failed the 10-minute lagging-peer hysteresis. Distinct from PR #1235's
+    * short-tier UselessPeer mapping (also 2 min): that's right for transient "rejected by remote" signals, but a peer
+    * we *chose* to evict for chronic lag has already proven it can't keep up. 30 minutes is long enough to break the
+    * immediate re-dial cycle (discovery has time to surface a fresh peer), short enough that a peer whose operator
+    * restarts and resyncs can reconnect within the hour.
     */
   private[network] val LaggingPeerBlacklistDuration: FiniteDuration = 30.minutes
 
-  /** Delay before applying the override blacklist. PeerClosedConnection takes a network
-    * round-trip to propagate; we need the override to land AFTER PeerManagerActor processes
-    * that close path (which applies the short-tier 2-min blacklist), otherwise the short
-    * entry overrides ours. 5 seconds is comfortably above typical disconnect propagation
-    * without delaying the eviction so long that the peer could reconnect first.
+  /** Delay before applying the override blacklist. PeerClosedConnection takes a network round-trip to propagate; we
+    * need the override to land AFTER PeerManagerActor processes that close path (which applies the short-tier 2-min
+    * blacklist), otherwise the short entry overrides ours. 5 seconds is comfortably above typical disconnect
+    * propagation without delaying the eviction so long that the peer could reconnect first.
     */
   private[network] val LaggingPeerBlacklistOverrideDelay: FiniteDuration = 5.seconds
 

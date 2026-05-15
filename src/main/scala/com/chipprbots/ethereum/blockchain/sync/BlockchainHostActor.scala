@@ -221,7 +221,9 @@ class BlockchainHostActor(
 
         log.debug(
           "GetBlockHeaders: start={} maxReq={} → returning {} headers",
-          startBlockNumber, headersCount, blockHeaders.size
+          startBlockNumber,
+          headersCount,
+          blockHeaders.size
         )
 
         // Return ETH66+ format if requestId is provided, otherwise ETH62 format
@@ -236,7 +238,9 @@ class BlockchainHostActor(
         log.warning(
           "GetBlockHeaders: starting block not found (block={} maxHeaders={} skip={} reverse={}) — responding empty",
           block.fold(_.toString, h => s"0x${h.toArray.map("%02x".format(_)).mkString}"),
-          maxHeaders, skip, reverse
+          maxHeaders,
+          skip,
+          reverse
         )
         requestIdOpt match {
           case Some(requestId) => Some(ETH66.BlockHeaders(requestId, Seq.empty))

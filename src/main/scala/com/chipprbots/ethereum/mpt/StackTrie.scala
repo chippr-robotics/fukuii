@@ -4,32 +4,25 @@ import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.crypto
 
-/** Streaming Merkle Patricia Trie builder, ported from go-ethereum's
-  * `trie/stacktrie.go`.
+/** Streaming Merkle Patricia Trie builder, ported from go-ethereum's `trie/stacktrie.go`.
   *
-  * The StackTrie is optimised for one specific access pattern: keys arrive in
-  * strictly-ascending hex-nibble order and the trie is built in a single
-  * left-to-right pass. As each new key is inserted, any unhashed elder sibling
-  * on the rightmost path of the trie is finalised (RLP-encoded, hashed if its
-  * encoded form is >= 32 bytes) and emitted via the `onTrieNode` callback. The
-  * finalised subtree becomes a single `Hashed` placeholder, so the live
-  * non-hashed nodes form only the path from root to the most-recent leaf.
+  * The StackTrie is optimised for one specific access pattern: keys arrive in strictly-ascending hex-nibble order and
+  * the trie is built in a single left-to-right pass. As each new key is inserted, any unhashed elder sibling on the
+  * rightmost path of the trie is finalised (RLP-encoded, hashed if its encoded form is >= 32 bytes) and emitted via the
+  * `onTrieNode` callback. The finalised subtree becomes a single `Hashed` placeholder, so the live non-hashed nodes
+  * form only the path from root to the most-recent leaf.
   *
-  * Memory bound: O(trie depth). For an account trie of 10M accounts the depth
-  * is ~6 + extensions, so total live `StNode` count is at most ~16 regardless
-  * of how many keys have been inserted.
+  * Memory bound: O(trie depth). For an account trie of 10M accounts the depth is ~6 + extensions, so total live
+  * `StNode` count is at most ~16 regardless of how many keys have been inserted.
   *
-  * `update` is the only mutating method; `hash` finalises the right boundary
-  * and returns the root hash. After `hash` the StackTrie cannot be updated
-  * again unless `reset` is called first.
+  * `update` is the only mutating method; `hash` finalises the right boundary and returns the root hash. After `hash`
+  * the StackTrie cannot be updated again unless `reset` is called first.
   *
-  * The `onTrieNode(path, hash, blob)` callback is invoked once per finalised
-  * non-inlined node. Receivers must deep-copy `path` and `blob` if they want
-  * to retain them: the StackTrie reuses internal buffers across calls.
+  * The `onTrieNode(path, hash, blob)` callback is invoked once per finalised non-inlined node. Receivers must deep-copy
+  * `path` and `blob` if they want to retain them: the StackTrie reuses internal buffers across calls.
   *
-  * Boundary handling (left-skip on resume, right-discard on abort, RocksDB
-  * batch ownership) is the wrapper's responsibility. This class is strictly
-  * write-only: it never reads from any backing storage.
+  * Boundary handling (left-skip on resume, right-discard on abort, RocksDB batch ownership) is the wrapper's
+  * responsibility. This class is strictly write-only: it never reads from any backing storage.
   */
 final class StackTrie(onTrieNode: (Array[Byte], ByteString, Array[Byte]) => Unit) {
   import StackTrie._
@@ -38,9 +31,8 @@ final class StackTrie(onTrieNode: (Array[Byte], ByteString, Array[Byte]) => Unit
   // last hex key seen, for strict-ascending sort enforcement
   private var last: Array[Byte] = Array.emptyByteArray
 
-  /** Insert `value` under `key`. Keys must arrive in strictly ascending order
-    * after conversion to hex nibbles. Empty values are rejected (use a real
-    * "delete" model if you need removals — SNAP sync never deletes).
+  /** Insert `value` under `key`. Keys must arrive in strictly ascending order after conversion to hex nibbles. Empty
+    * values are rejected (use a real "delete" model if you need removals — SNAP sync never deletes).
     */
   def update(key: Array[Byte], value: Array[Byte]): Unit = {
     require(value.length > 0, "StackTrie does not accept empty values")
@@ -53,8 +45,8 @@ final class StackTrie(onTrieNode: (Array[Byte], ByteString, Array[Byte]) => Unit
 
   /** Finalise the right-boundary path and return the trie root hash.
     *
-    * After this call, the StackTrie's root is a `Hashed` placeholder. Further
-    * `update` calls will fail until `reset()` is invoked.
+    * After this call, the StackTrie's root is a `Hashed` placeholder. Further `update` calls will fail until `reset()`
+    * is invoked.
     */
   def hash(): ByteString = {
     hashNode(root, EmptyPath)
@@ -75,9 +67,8 @@ final class StackTrie(onTrieNode: (Array[Byte], ByteString, Array[Byte]) => Unit
 
   // ---- internals ----
 
-  /** Recursive descent insertion. Returns the (possibly new) node that should
-    * replace `node` at this position. Always returns either `node` (mutated in
-    * place) or a fresh node; never returns Empty unless `node` was Empty.
+  /** Recursive descent insertion. Returns the (possibly new) node that should replace `node` at this position. Always
+    * returns either `node` (mutated in place) or a fresh node; never returns Empty unless `node` was Empty.
     */
   private def insert(node: StNode, key: Array[Byte], value: Array[Byte], path: Array[Byte]): StNode = {
     node.typ match {
@@ -185,10 +176,9 @@ final class StackTrie(onTrieNode: (Array[Byte], ByteString, Array[Byte]) => Unit
     }
   }
 
-  /** Finalise `node` recursively: hash any unhashed children, RLP-encode this
-    * node, then either store the encoded blob in `node.value` (if < 32 bytes
-    * and not at the root) or compute keccak256 and store the hash (emitting
-    * via `onTrieNode`).
+  /** Finalise `node` recursively: hash any unhashed children, RLP-encode this node, then either store the encoded blob
+    * in `node.value` (if < 32 bytes and not at the root) or compute keccak256 and store the hash (emitting via
+    * `onTrieNode`).
     *
     * No-op if `node` is already `Hashed` or `Empty`.
     */
@@ -225,8 +215,8 @@ final class StackTrie(onTrieNode: (Array[Byte], ByteString, Array[Byte]) => Unit
 
   /** Apply the inline-or-hash rule to a finalised node's encoded blob.
     *
-    * The root (empty `path`) is always hashed even if its encoded blob is
-    * smaller than 32 bytes, because callers depend on a 32-byte root hash.
+    * The root (empty `path`) is always hashed even if its encoded blob is smaller than 32 bytes, because callers depend
+    * on a 32-byte root hash.
     */
   private def finalise(node: StNode, blob: Array[Byte], path: Array[Byte]): Unit = {
     if (blob.length < 32 && path.length > 0) {
@@ -259,9 +249,8 @@ final class StackTrie(onTrieNode: (Array[Byte], ByteString, Array[Byte]) => Unit
     encodeListOf2(encodeBytes(hp), childRef)
   }
 
-  /** Encode a Branch as `RLP([c0, c1, ..., c15, terminator])`. SNAP sync
-    * branches never carry a terminator value (keys are fixed-length 32-byte
-    * hashes), so slot 17 is always the empty string.
+  /** Encode a Branch as `RLP([c0, c1, ..., c15, terminator])`. SNAP sync branches never carry a terminator value (keys
+    * are fixed-length 32-byte hashes), so slot 17 is always the empty string.
     */
   private def encodeBranch(node: StNode): Array[Byte] = {
     val refs = new Array[Array[Byte]](17)
@@ -289,12 +278,11 @@ final class StackTrie(onTrieNode: (Array[Byte], ByteString, Array[Byte]) => Unit
 
   /** Encode a single child reference for inclusion in a parent's RLP list.
     *
-    *  - null / Empty → RLP empty string (`0x80`)
-    *  - Hashed with 32-byte hash → RLP string of 32 bytes (`0xa0 || hash`)
-    *  - Hashed with inline <32B blob → the blob bytes spliced in raw
-    *    (the blob IS its own RLP encoding)
+    *   - null / Empty → RLP empty string (`0x80`)
+    *   - Hashed with 32-byte hash → RLP string of 32 bytes (`0xa0 || hash`)
+    *   - Hashed with inline <32B blob → the blob bytes spliced in raw (the blob IS its own RLP encoding)
     */
-  private def encodeChildRef(child: StNode): Array[Byte] = {
+  private def encodeChildRef(child: StNode): Array[Byte] =
     if (child == null || child.typ == Empty) {
       EmptyBytesRlp
     } else if (child.typ == Hashed) {
@@ -305,7 +293,6 @@ final class StackTrie(onTrieNode: (Array[Byte], ByteString, Array[Byte]) => Unit
         s"StackTrie: encoding non-Hashed/non-Empty child (typ=${typeName(child.typ)})"
       )
     }
-  }
 
   /** RLP-encode a single byte string. Standard RLP rules. */
   private def encodeBytes(b: Array[Byte]): Array[Byte] = {
@@ -340,7 +327,7 @@ final class StackTrie(onTrieNode: (Array[Byte], ByteString, Array[Byte]) => Unit
     out
   }
 
-  private def listHeader(contentLen: Int): Array[Byte] = {
+  private def listHeader(contentLen: Int): Array[Byte] =
     if (contentLen < 56) {
       val out = new Array[Byte](1)
       out(0) = (0xc0 + contentLen).toByte
@@ -352,7 +339,6 @@ final class StackTrie(onTrieNode: (Array[Byte], ByteString, Array[Byte]) => Unit
       System.arraycopy(lenBytes, 0, out, 1, lenBytes.length)
       out
     }
-  }
 
   /** Big-endian, minimum-length encoding of a non-negative length. */
   private def lengthAsBytes(n: Int): Array[Byte] = {
@@ -384,15 +370,12 @@ object StackTrie {
   /** A node in the StackTrie. Mutable by design — geth's `stNode` is the same.
     *
     * Field meanings depend on `typ`:
-    *  - Empty: all fields ignored.
-    *  - Leaf: `key` holds the remaining hex-nibble suffix; `value` holds the
-    *    raw account/slot value.
-    *  - Ext: `key` holds the shared hex-nibble prefix; `children(0)` is the
-    *    single child.
-    *  - Branch: `children(0..15)` are the 16 nibble slots; `key` is empty.
-    *  - Hashed: `value` is either a 32-byte hash (parent encodes as
-    *    `RLPValue(hash)`) or a < 32 byte RLP blob (parent splices raw);
-    *    `key` and `children` are cleared for GC.
+    *   - Empty: all fields ignored.
+    *   - Leaf: `key` holds the remaining hex-nibble suffix; `value` holds the raw account/slot value.
+    *   - Ext: `key` holds the shared hex-nibble prefix; `children(0)` is the single child.
+    *   - Branch: `children(0..15)` are the 16 nibble slots; `key` is empty.
+    *   - Hashed: `value` is either a 32-byte hash (parent encodes as `RLPValue(hash)`) or a < 32 byte RLP blob (parent
+    *     splices raw); `key` and `children` are cleared for GC.
     */
   final class StNode(
       var typ: NodeType,
@@ -423,8 +406,8 @@ object StackTrie {
 
   // ---- small utilities (package-private for tests) ----
 
-  /** Index of the first differing nibble between `a` and `b`, capped at the
-    * shorter length. If one is a prefix of the other, returns the shorter length.
+  /** Index of the first differing nibble between `a` and `b`, capped at the shorter length. If one is a prefix of the
+    * other, returns the shorter length.
     */
   private[mpt] def diffIndex(a: Array[Byte], b: Array[Byte]): Int = {
     val n = math.min(a.length, b.length)
@@ -477,7 +460,7 @@ object StackTrie {
   }
 
   /** Append the slice `nibbles(from until from+count)` to a path. */
-  private[mpt] def appendNibbles(path: Array[Byte], nibbles: Array[Byte], from: Int, count: Int): Array[Byte] = {
+  private[mpt] def appendNibbles(path: Array[Byte], nibbles: Array[Byte], from: Int, count: Int): Array[Byte] =
     if (count <= 0) {
       if (path.length == 0) EmptyPath else path
     } else {
@@ -486,7 +469,6 @@ object StackTrie {
       System.arraycopy(nibbles, from, out, path.length, count)
       out
     }
-  }
 
   private[mpt] def hexStr(arr: Array[Byte]): String = {
     val sb = new StringBuilder(arr.length)

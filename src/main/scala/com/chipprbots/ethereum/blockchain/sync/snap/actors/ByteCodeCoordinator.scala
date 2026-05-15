@@ -364,10 +364,9 @@ class ByteCodeCoordinator(
       sender() ! ByteCodeProgress(progress, bytecodesDownloaded, bytesDownloaded)
   }
 
-  /** Emit a ByteCodeBackpressureChanged transition when the pending-task queue depth crosses a
-    * watermark. Forwarded by SNAPSyncController to AccountRangeCoordinator as
-    * `ByteCodeQueuePressure` so account workers stop producing new bytecode tasks during
-    * back-pressure. Mirrors `StorageRangeCoordinator.notifyBackpressureIfChanged` (#1233).
+  /** Emit a ByteCodeBackpressureChanged transition when the pending-task queue depth crosses a watermark. Forwarded by
+    * SNAPSyncController to AccountRangeCoordinator as `ByteCodeQueuePressure` so account workers stop producing new
+    * bytecode tasks during back-pressure. Mirrors `StorageRangeCoordinator.notifyBackpressureIfChanged` (#1233).
     */
   private def notifyBackpressureIfChanged(): Unit = {
     val pending = pendingTasks.size

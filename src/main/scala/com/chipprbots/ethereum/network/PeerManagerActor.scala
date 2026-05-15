@@ -487,7 +487,8 @@ class PeerManagerActor(
         // the winner is still alive in connectedPeers so stillConnected=true. Publishing
         // PeerDisconnected unconditionally was causing NetworkPeerManagerActor to evict the
         // live winner entry, creating an infinite reconnect cycle with core-geth.
-        val stillConnected = scala.util.Try(ByteString(Hex.decode(peerId.value)))
+        val stillConnected = scala.util
+          .Try(ByteString(Hex.decode(peerId.value)))
           .map(newConnectedPeers.hasHandshakedWith)
           .getOrElse(false)
         if (stillConnected) {
@@ -863,8 +864,8 @@ object PeerManagerActor {
     *     `AlreadyConnected`, `ClientQuitting`, `TcpSubsystemError`, `DisconnectRequested`,
     *     `TimeoutOnReceivingAMessage`. Long blacklist on these classes destroys the peer pool during initial sync:
     *     peers reject us as uninteresting (we're at genesis / mid-SNAP-sync), we IP-blacklist them, and by the time
-    *     they'd accept us again we still can't re-dial. Sepolia 2026-05-13: 100+ peers blacklisted within 5 min,
-    *     pool collapsed to one peer; ETC mainnet has the same pattern.
+    *     they'd accept us again we still can't re-dial. Sepolia 2026-05-13: 100+ peers blacklisted within 5 min, pool
+    *     collapsed to one peer; ETC mainnet has the same pattern.
     *   - **Long** for anything else (catch-all).
     *
     * The classification of `UselessPeer` as a SHORT-tier rejection (was: LONG, via the `_` wildcard) is the substantive

@@ -81,7 +81,7 @@ class DnsDiscoveryEnrSpec extends AnyFlatSpec with Matchers {
 
   "parseEnrToEnode" should "parse a minimal valid IPv4 ENR" taggedAs UnitTest in {
     val enr = buildEnr()
-    val result = DnsDiscovery.parseEnrToEnode(enr)
+    val result = DnsDiscovery.parseEnrToEnode(enr).toOption
     result shouldBe defined
     result.get should startWith("enode://")
     result.get should include("@127.0.0.1:8080")
@@ -94,7 +94,7 @@ class DnsDiscoveryEnrSpec extends AnyFlatSpec with Matchers {
       tcp = Array(0x76.toByte, 0x51.toByte), // 30289
       udp = Some(Array(0x76.toByte, 0x52.toByte)) // 30290
     )
-    val result = DnsDiscovery.parseEnrToEnode(enr)
+    val result = DnsDiscovery.parseEnrToEnode(enr).toOption
     result shouldBe defined
     result.get should include(":30289?discport=30290")
   }
@@ -102,7 +102,7 @@ class DnsDiscoveryEnrSpec extends AnyFlatSpec with Matchers {
   it should "not include ?discport when udp equals tcp" taggedAs UnitTest in {
     val port = Array(0x76.toByte, 0x51.toByte) // 30289
     val enr = buildEnr(tcp = port, udp = Some(port))
-    val result = DnsDiscovery.parseEnrToEnode(enr)
+    val result = DnsDiscovery.parseEnrToEnode(enr).toOption
     result shouldBe defined
     (result.get should not).include("discport")
   }
@@ -119,7 +119,7 @@ class DnsDiscoveryEnrSpec extends AnyFlatSpec with Matchers {
       )
     )
     val enr = "enr:" + Base64.getUrlEncoder.withoutPadding.encodeToString(bytes)
-    DnsDiscovery.parseEnrToEnode(enr) shouldBe None
+    DnsDiscovery.parseEnrToEnode(enr).toOption shouldBe None
   }
 
   it should "return None when tcp field is missing" taggedAs UnitTest in {
@@ -134,7 +134,7 @@ class DnsDiscoveryEnrSpec extends AnyFlatSpec with Matchers {
       )
     )
     val enr = "enr:" + Base64.getUrlEncoder.withoutPadding.encodeToString(bytes)
-    DnsDiscovery.parseEnrToEnode(enr) shouldBe None
+    DnsDiscovery.parseEnrToEnode(enr).toOption shouldBe None
   }
 
   it should "return None when secp256k1 field is missing" taggedAs UnitTest in {
@@ -149,36 +149,36 @@ class DnsDiscoveryEnrSpec extends AnyFlatSpec with Matchers {
       )
     )
     val enr = "enr:" + Base64.getUrlEncoder.withoutPadding.encodeToString(bytes)
-    DnsDiscovery.parseEnrToEnode(enr) shouldBe None
+    DnsDiscovery.parseEnrToEnode(enr).toOption shouldBe None
   }
 
   it should "return None when tcp port is 0" taggedAs UnitTest in {
     val enr = buildEnr(tcp = Array(0, 0).map(_.toByte))
-    DnsDiscovery.parseEnrToEnode(enr) shouldBe None
+    DnsDiscovery.parseEnrToEnode(enr).toOption shouldBe None
   }
 
   it should "return None for a 32-byte (uncompressed-coordinate-only) public key" taggedAs UnitTest in {
     val shortKey = validCompressedKey.drop(1) // drop prefix → 32 bytes
     val enr = buildEnr(pubkey = shortKey)
-    DnsDiscovery.parseEnrToEnode(enr) shouldBe None
+    DnsDiscovery.parseEnrToEnode(enr).toOption shouldBe None
   }
 
   it should "return None for a 65-byte (uncompressed) public key" taggedAs UnitTest in {
     val expandedKey = Array(0x04.toByte) ++ Array.fill(64)(0x00.toByte)
     val enr = buildEnr(pubkey = expandedKey)
-    DnsDiscovery.parseEnrToEnode(enr) shouldBe None
+    DnsDiscovery.parseEnrToEnode(enr).toOption shouldBe None
   }
 
   it should "return None for invalid base64 ENR" taggedAs UnitTest in {
-    DnsDiscovery.parseEnrToEnode("enr:invalid-base64!!!") shouldBe None
+    DnsDiscovery.parseEnrToEnode("enr:invalid-base64!!!").toOption shouldBe None
   }
 
   it should "return None for empty ENR payload" taggedAs UnitTest in {
-    DnsDiscovery.parseEnrToEnode("enr:") shouldBe None
+    DnsDiscovery.parseEnrToEnode("enr:").toOption shouldBe None
   }
 
   it should "return None for truncated (non-list) RLP" taggedAs UnitTest in {
-    DnsDiscovery.parseEnrToEnode("enr:AAAA") shouldBe None
+    DnsDiscovery.parseEnrToEnode("enr:AAAA").toOption shouldBe None
   }
 
   it should "return None for RLP list with fewer than 4 items" taggedAs UnitTest in {
@@ -189,12 +189,12 @@ class DnsDiscoveryEnrSpec extends AnyFlatSpec with Matchers {
       )
     )
     val enr = "enr:" + Base64.getUrlEncoder.withoutPadding.encodeToString(bytes)
-    DnsDiscovery.parseEnrToEnode(enr) shouldBe None
+    DnsDiscovery.parseEnrToEnode(enr).toOption shouldBe None
   }
 
   it should "return None for 3-byte ip (wrong length)" taggedAs UnitTest in {
     val enr = buildEnr(ip = Array(127, 0, 0).map(_.toByte))
-    DnsDiscovery.parseEnrToEnode(enr) shouldBe None
+    DnsDiscovery.parseEnrToEnode(enr).toOption shouldBe None
   }
 
   it should "handle URL-safe base64 characters (- and _) correctly" taggedAs UnitTest in {
@@ -204,7 +204,7 @@ class DnsDiscoveryEnrSpec extends AnyFlatSpec with Matchers {
     val withPadding = enr.replace('-', '+').replace('_', '/')
     // Standard base64 should not parse (DnsDiscovery expects URL-safe)
     // but our ENR should still parse fine (the URL-safe one)
-    DnsDiscovery.parseEnrToEnode(enr) shouldBe defined
+    DnsDiscovery.parseEnrToEnode(enr).toOption shouldBe defined
   }
 
   it should "ignore unknown key-value fields in ENR" taggedAs UnitTest in {
@@ -214,7 +214,7 @@ class DnsDiscoveryEnrSpec extends AnyFlatSpec with Matchers {
         RLPValue(Array(0xde.toByte, 0xad.toByte, 0xbe.toByte, 0xef.toByte))
       )
     )
-    DnsDiscovery.parseEnrToEnode(enr) shouldBe defined
+    DnsDiscovery.parseEnrToEnode(enr).toOption shouldBe defined
   }
 
   it should "prefer IPv4 over IPv6 when both present" taggedAs UnitTest in {
@@ -237,7 +237,7 @@ class DnsDiscoveryEnrSpec extends AnyFlatSpec with Matchers {
       )
     )
     val enr = "enr:" + Base64.getUrlEncoder.withoutPadding.encodeToString(bytes)
-    val result = DnsDiscovery.parseEnrToEnode(enr)
+    val result = DnsDiscovery.parseEnrToEnode(enr).toOption
     result shouldBe defined
     result.get should include("10.0.0.1") // IPv4 wins
     (result.get should not).include("::1")
@@ -259,7 +259,7 @@ class DnsDiscoveryEnrSpec extends AnyFlatSpec with Matchers {
       )
     )
     val enr = "enr:" + Base64.getUrlEncoder.withoutPadding.encodeToString(bytes)
-    val result = DnsDiscovery.parseEnrToEnode(enr)
+    val result = DnsDiscovery.parseEnrToEnode(enr).toOption
     result shouldBe defined
     // Java's InetAddress.getHostAddress() returns "0:0:0:0:0:0:0:1" or "::1" depending on JVM version.
     // Both are valid representations of the loopback IPv6 address; check for the bracket notation only.
@@ -270,7 +270,7 @@ class DnsDiscoveryEnrSpec extends AnyFlatSpec with Matchers {
 
   it should "produce a 128-hex-char node ID (64 uncompressed pubkey bytes)" taggedAs UnitTest in {
     val enr = buildEnr()
-    val result = DnsDiscovery.parseEnrToEnode(enr)
+    val result = DnsDiscovery.parseEnrToEnode(enr).toOption
     result shouldBe defined
     val nodeId = result.get.stripPrefix("enode://").takeWhile(_ != '@')
     (nodeId should have).length(128)
