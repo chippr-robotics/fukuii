@@ -197,16 +197,14 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
             }
           }
         } else Seq.empty,
-        checkpointSyncFile =
-          if (syncConfig.hasPath("checkpoint-sync-file")) {
-            val raw = syncConfig.getString("checkpoint-sync-file").trim
-            if (raw.isEmpty) None else Some(java.nio.file.Paths.get(raw))
-          } else None,
-        checkpointSyncUrl =
-          if (syncConfig.hasPath("checkpoint-sync-url")) {
-            val raw = syncConfig.getString("checkpoint-sync-url").trim
-            if (raw.isEmpty) None else Some(raw)
-          } else None
+        checkpointSyncFile = if (syncConfig.hasPath("checkpoint-sync-file")) {
+          val raw = syncConfig.getString("checkpoint-sync-file").trim
+          if (raw.isEmpty) None else Some(java.nio.file.Paths.get(raw))
+        } else None,
+        checkpointSyncUrl = if (syncConfig.hasPath("checkpoint-sync-url")) {
+          val raw = syncConfig.getString("checkpoint-sync-url").trim
+          if (raw.isEmpty) None else Some(raw)
+        } else None
       )
     }
   }

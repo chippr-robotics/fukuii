@@ -3136,23 +3136,36 @@ class SNAPSyncController(
       peerTD: Option[BigInt] = None
   ): Unit = {
     val pivotHash = header.hash
-    val estimatedTotalDifficulty = peerTD.filter(_ > BigInt(0)).getOrElse {
-      if (pivotBlockNumber == BigInt(0)) header.difficulty
-      else header.difficulty * pivotBlockNumber
-    }
+    // Priority: (1) real cumulative TD from ChainDownloader already in DB — never overwrite it;
+    // (2) ETH68 peer wire TD passed in — accurate bootstrap during rough period;
+    // (3) pivotBlockNumber as proxy — non-inflating fallback so fukuii never appears
+    //     as the highest-TD peer while SNAP syncing (low TD is harmless; inflated TD is not).
+    val (estimatedTotalDifficulty, tdSource) =
+      blockchainReader
+        .getChainWeightByHash(pivotHash)
+        .map(cw => (cw.totalDifficulty, "REAL_PIVOT_TD"))
+        .orElse(peerTD.filter(_ > BigInt(0)).map(td => (td, "ETH68_BOOTSTRAP")))
+        .getOrElse {
+          val proxy = if (pivotBlockNumber == BigInt(0)) header.difficulty else pivotBlockNumber
+          (proxy, "BLOCK_NUMBER_PROXY")
+        }
     // Store header so getBestBlockHeader() -> getBlockHeaderByNumber(pivot) finds it
     blockchainWriter.storeBlockHeader(header).commit()
     blockchainWriter
       .storeChainWeight(pivotHash, ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty))
       .commit()
-    appStateStorage
-      .putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash, pivotBlockNumber))
-      .commit()
+    // Only advance the self-reported best-block pointer when we have a real TD.
+    // BLOCK_NUMBER_PROXY must not overwrite a real ETH68_BOOTSTRAP anchor — if it did,
+    // resolveETH69ChainWeight's POW_SCALING would read block-number as ourBestTD and produce
+    // a wrong-magnitude TD for every ETH/69 peer until the next restart.
+    if (tdSource != "BLOCK_NUMBER_PROXY") {
+      appStateStorage
+        .putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash, pivotBlockNumber))
+        .commit()
+    }
     log.info(
       s"Updated best block for ETH status: block=$pivotBlockNumber, hash=${pivotHash.toHex.take(16)}..., " +
-        s"estimatedTD=$estimatedTotalDifficulty (source=${
-            if (peerTD.exists(_ > 0)) "PEER_WIRE_TD" else "LINEAR_ESTIMATE"
-          })"
+        s"estimatedTD=$estimatedTotalDifficulty (source=$tdSource)"
     )
   }
 
@@ -3603,14 +3616,17 @@ class SNAPSyncController(
           blockchainWriter.storeBlock(Block(pivotHeader, BlockBody.empty)).commit()
 
           // Store a ChainWeight so compareBranch() can evaluate new blocks.
-          // We estimate totalDifficulty ≈ difficulty × blockNumber. This doesn't need
-          // to be exact — it just needs to exist so branch resolution doesn't error,
-          // and subsequent blocks will accumulate from this baseline.
-          val estimatedTotalDifficulty = pivotHeader.difficulty * pivot
+          // Prefer real cumulative TD from ChainDownloader if already in DB;
+          // fall to pivot block number as a non-inflating proxy otherwise.
+          val finalTD =
+            blockchainReader
+              .getChainWeightByHash(pivotHash)
+              .map(_.totalDifficulty)
+              .getOrElse(pivot)
           blockchainWriter
             .storeChainWeight(
               pivotHash,
-              ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty)
+              ChainWeight.totalDifficultyOnly(finalTD)
             )
             .commit()
 

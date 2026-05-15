@@ -105,7 +105,7 @@ final class CheckpointImporter(
       }
 
     var done = false
-    while (!done) {
+    while (!done)
       reader.nextEntry() match {
         case Left(err) =>
           flushNodes(); flushCodes()
@@ -133,7 +133,6 @@ final class CheckpointImporter(
           flushNodes(); flushCodes()
           done = true
       }
-    }
 
     reader.verifyCrc() match {
       case Left(err) => return Left(BadFormat(err))
