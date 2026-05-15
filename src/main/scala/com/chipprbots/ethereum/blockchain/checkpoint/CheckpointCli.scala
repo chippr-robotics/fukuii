@@ -87,12 +87,21 @@ object CheckpointCli extends Logger {
     }
     val chainId = builder.blockchainConfig.chainId
     val exporter = new CheckpointExporter(
-      storages.nodeStorage,
+      storages.stateStorage,
       storages.evmCodeStorage,
       reader,
       chainId
     )
-    exporter.exportArchive(blockNumber, args.output, gzip = args.gzip)
+    // Auto-append .gz when --gzip is set and the operator didn't already include it.
+    // The CheckpointImporter also magic-byte-sniffs, but the conventional extension
+    // makes the file self-describing for ops tooling.
+    val output =
+      if (args.gzip && !args.output.toString.endsWith(".gz"))
+        args.output.resolveSibling(args.output.getFileName.toString + ".gz")
+      else args.output
+    if (output != args.output)
+      log.info(s"--gzip set, appending .gz: writing to $output")
+    exporter.exportArchive(blockNumber, output, gzip = args.gzip)
   }
 
   /** Minimal cake mix for read-only state access. No actors, no validators, no sync — just storage and BlockchainConfig.

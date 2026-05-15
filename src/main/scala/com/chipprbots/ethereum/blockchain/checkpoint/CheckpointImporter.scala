@@ -36,13 +36,28 @@ final class CheckpointImporter(
   import CheckpointImporter._
   private val log = LoggerFactory.getLogger(getClass)
 
-  /** Import from a file. A `.gz` suffix is decoded transparently. */
+  /** Import from a file. Gzip-wrapped archives are auto-detected by either:
+    *   - file path ending in `.gz` (operator convention), OR
+    *   - first 2 bytes being the gzip magic `0x1F 0x8B` (peeked via a PushbackInputStream)
+    *
+    * The magic sniff covers Bug 35: an operator using `--gzip` who didn't add the `.gz` extension to
+    * the output path still gets a working import.
+    */
   def importFromFile(path: Path, expectedChainId: Option[Long] = None): Either[ImportError, ImportResult] = {
     val raw = new FileInputStream(path.toFile)
     try {
+      val pushback = new java.io.PushbackInputStream(raw, 2)
+      val b0 = pushback.read()
+      val b1 = pushback.read()
+      val isGzipped =
+        path.toString.endsWith(".gz") ||
+          (b0 == 0x1f && b1 == 0x8b)
+      // Put the two peeked bytes back so the decoder sees them.
+      if (b1 >= 0) pushback.unread(b1)
+      if (b0 >= 0) pushback.unread(b0)
       val in: InputStream =
-        if (path.toString.endsWith(".gz")) new GZIPInputStream(raw, 65536)
-        else raw
+        if (isGzipped) new GZIPInputStream(pushback, 65536)
+        else pushback
       try importFromStream(in, expectedChainId)
       finally in.close()
     } finally raw.close()
