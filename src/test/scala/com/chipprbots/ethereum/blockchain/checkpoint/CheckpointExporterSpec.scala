@@ -46,8 +46,14 @@ class CheckpointExporterSpec
       val storageTrie = MerklePatriciaTrie[Array[Byte], Array[Byte]](
         sourceStorages.storages.stateStorage.getBackingStorage(0)
       )
-        .put(crypto.kec256(Hex.decode("0000000000000000000000000000000000000000000000000000000000000001")), Hex.decode("aa"))
-        .put(crypto.kec256(Hex.decode("0000000000000000000000000000000000000000000000000000000000000002")), Hex.decode("bb"))
+        .put(
+          crypto.kec256(Hex.decode("0000000000000000000000000000000000000000000000000000000000000001")),
+          Hex.decode("aa")
+        )
+        .put(
+          crypto.kec256(Hex.decode("0000000000000000000000000000000000000000000000000000000000000002")),
+          Hex.decode("bb")
+        )
       val storageRoot = ByteString(storageTrie.getRootHash)
 
       // Main account trie with three accounts.

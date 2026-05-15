@@ -106,13 +106,12 @@ class CheckpointArchiveSpec extends AnyWordSpec with Matchers with EitherValues 
       // Drain entries — corruption may surface as a decode error or pass through to CRC check
       var sawEnd = false
       var decodeErr: Option[CheckpointArchive.DecodeError] = None
-      while (!sawEnd && decodeErr.isEmpty) {
+      while (!sawEnd && decodeErr.isEmpty)
         r.nextEntry() match {
-          case Left(e)                                   => decodeErr = Some(e)
-          case Right(CheckpointArchive.EndOfStream)      => sawEnd = true
-          case Right(_)                                  => ()
+          case Left(e)                              => decodeErr = Some(e)
+          case Right(CheckpointArchive.EndOfStream) => sawEnd = true
+          case Right(_)                             => ()
         }
-      }
       if (sawEnd) {
         r.verifyCrc() shouldBe Left(CheckpointArchive.BadCrc)
       } else {
