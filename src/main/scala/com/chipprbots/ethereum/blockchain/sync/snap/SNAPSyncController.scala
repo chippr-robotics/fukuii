@@ -1251,6 +1251,16 @@ class SNAPSyncController(
         }
       }
 
+      // Real wire TD from the best SNAP-capable peer's ETH/68 handshake.
+      // Sorted by TD descending so we pick the peer with the highest known cumulative difficulty.
+      val bestSnapPeerTD: Option[BigInt] =
+        peersToDownloadFrom.values.toList
+          .filter(p => p.peerInfo.remoteStatus.supportsSnap && p.peerInfo.forkAccepted && p.peerInfo.maxBlockNumber > 0)
+          .sortBy(_.peerInfo.chainWeight.totalDifficulty)(Ordering[BigInt].reverse)
+          .headOption
+          .map(_.peerInfo.chainWeight.totalDifficulty)
+          .filter(_ > BigInt(0))
+
       pivotHeaderOpt match {
         case Some(header) =>
           val targetPivot = header.number
@@ -1265,7 +1275,7 @@ class SNAPSyncController(
               .putSnapSyncPivotBlock(targetPivot)
               .and(appStateStorage.putSnapSyncStateRoot(header.stateRoot))
               .commit()
-            updateBestBlockForPivot(header, targetPivot)
+            updateBestBlockForPivot(header, targetPivot, bestSnapPeerTD)
 
             SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
 
@@ -1304,7 +1314,7 @@ class SNAPSyncController(
                       .putSnapSyncPivotBlock(targetPivot)
                       .and(appStateStorage.putSnapSyncStateRoot(header.stateRoot))
                       .commit()
-                    updateBestBlockForPivot(header, targetPivot)
+                    updateBestBlockForPivot(header, targetPivot, bestSnapPeerTD)
 
                     SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
 
@@ -3120,11 +3130,16 @@ class SNAPSyncController(
     * incompatible forkId (e.g. Frontier vs Spiral). This stores the pivot header, chain weight, and best block info so
     * that createStatusMsg() in EthNodeStatus64ExchangeState can build a valid status message referencing the pivot.
     */
-  private def updateBestBlockForPivot(header: BlockHeader, pivotBlockNumber: BigInt): Unit = {
+  private def updateBestBlockForPivot(
+      header: BlockHeader,
+      pivotBlockNumber: BigInt,
+      peerTD: Option[BigInt] = None
+  ): Unit = {
     val pivotHash = header.hash
-    val estimatedTotalDifficulty =
+    val estimatedTotalDifficulty = peerTD.filter(_ > BigInt(0)).getOrElse {
       if (pivotBlockNumber == BigInt(0)) header.difficulty
       else header.difficulty * pivotBlockNumber
+    }
     // Store header so getBestBlockHeader() -> getBlockHeaderByNumber(pivot) finds it
     blockchainWriter.storeBlockHeader(header).commit()
     blockchainWriter
@@ -3135,7 +3150,7 @@ class SNAPSyncController(
       .commit()
     log.info(
       s"Updated best block for ETH status: block=$pivotBlockNumber, hash=${pivotHash.toHex.take(16)}..., " +
-        s"estimatedTD=$estimatedTotalDifficulty"
+        s"estimatedTD=$estimatedTotalDifficulty (source=${if (peerTD.exists(_ > 0)) "PEER_WIRE_TD" else "LINEAR_ESTIMATE"})"
     )
   }
 
