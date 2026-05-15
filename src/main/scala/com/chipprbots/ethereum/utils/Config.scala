@@ -86,7 +86,13 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
       // `clPivotHint` is never set, and the existing TD-based path runs unchanged.
       // Closes #1207.
       engineApiRequired: Boolean,
-      clWaitTimeout: FiniteDuration
+      clWaitTimeout: FiniteDuration,
+      // Checkpoint sync (PR-1): bootstrap a fresh datadir by importing a pre-built `.checkpoint`
+      // archive instead of running SNAP. The file is read once at startup when best-block == 0 and
+      // SNAP isn't already done; on success, RegularSync resumes from `checkpoint.number + 1`.
+      // Both fields default to None (disabled). Optional `.gz` decompression is automatic.
+      // PR-2 adds `checkpointSyncUrl` as the HTTP fetch source for the same import path.
+      checkpointSyncFile: Option[java.nio.file.Path]
   )
 
   object SyncConfig {
@@ -186,7 +192,12 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
               case _ => None
             }
           }
-        } else Seq.empty
+        } else Seq.empty,
+        checkpointSyncFile =
+          if (syncConfig.hasPath("checkpoint-sync-file")) {
+            val raw = syncConfig.getString("checkpoint-sync-file").trim
+            if (raw.isEmpty) None else Some(java.nio.file.Paths.get(raw))
+          } else None
       )
     }
   }
