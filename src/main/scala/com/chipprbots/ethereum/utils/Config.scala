@@ -87,12 +87,16 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
       // Closes #1207.
       engineApiRequired: Boolean,
       clWaitTimeout: FiniteDuration,
-      // Checkpoint sync (PR-1): bootstrap a fresh datadir by importing a pre-built `.checkpoint`
+      // Checkpoint sync: bootstrap a fresh datadir by importing a pre-built `.checkpoint`
       // archive instead of running SNAP. The file is read once at startup when best-block == 0 and
       // SNAP isn't already done; on success, RegularSync resumes from `checkpoint.number + 1`.
-      // Both fields default to None (disabled). Optional `.gz` decompression is automatic.
-      // PR-2 adds `checkpointSyncUrl` as the HTTP fetch source for the same import path.
-      checkpointSyncFile: Option[java.nio.file.Path]
+      // All three fields default to None (disabled). Optional `.gz` decompression is automatic.
+      //
+      // - `checkpointSyncFile`: local path. Wins over URL when both are set.
+      // - `checkpointSyncUrl`: remote URL fetched into `${datadir}/checkpoint.bin` (resumable).
+      // - `checkpointSyncDownloadDir`: where to place the downloaded archive. Defaults to datadir.
+      checkpointSyncFile: Option[java.nio.file.Path],
+      checkpointSyncUrl: Option[String]
   )
 
   object SyncConfig {
@@ -197,6 +201,11 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
           if (syncConfig.hasPath("checkpoint-sync-file")) {
             val raw = syncConfig.getString("checkpoint-sync-file").trim
             if (raw.isEmpty) None else Some(java.nio.file.Paths.get(raw))
+          } else None,
+        checkpointSyncUrl =
+          if (syncConfig.hasPath("checkpoint-sync-url")) {
+            val raw = syncConfig.getString("checkpoint-sync-url").trim
+            if (raw.isEmpty) None else Some(raw)
           } else None
       )
     }
