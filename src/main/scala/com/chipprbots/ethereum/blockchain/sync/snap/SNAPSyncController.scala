@@ -3133,8 +3133,15 @@ class SNAPSyncController(
     val newRoot = newStateRoot.take(4).toHex
 
     if (stateRoot.contains(newStateRoot)) {
-      log.warning(s"Pivot refresh: new root $newRoot is same as old. Falling back to full restart.")
-      restartSnapSync(s"pivot refresh produced same root ($newRoot): $reason")
+      // No-op same-root pivot refresh. PR #1236 fixed this on one path; this is the second
+      // path (completePivotRefreshWithStateRoot) that previously called restartSnapSync and
+      // wiped in-memory progress. Observed sepolia 2026-05-15 00:50:36: lost ~500K accounts
+      // of progress (~67% keyspace) because a stall-recovery pivot landed on the same root.
+      //
+      // A same-root "refresh" is information-free for the coordinator (their data for this
+      // root is unchanged) but does not warrant destroying state. Strikes and snapless have
+      // already been cleared at coordinator level via PR #1255; nothing further to do.
+      log.info(s"Pivot refresh produced same root ($newRoot): $reason. No-op — preserving accumulated state.")
       return
     }
 
