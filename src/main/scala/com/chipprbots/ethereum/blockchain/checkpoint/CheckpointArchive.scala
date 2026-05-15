@@ -15,8 +15,8 @@ import com.chipprbots.ethereum.domain.BlockHeaderImplicits.BlockHeaderEnc
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.utils.ByteUtils
 
-/** Binary file format for an exported chain state — used by `CheckpointImporter` to bootstrap a fresh datadir at a known
-  * block without running SNAP. PR-2 adds an HTTP downloader; PR-3 adds the producer (`fukuii checkpoint export`).
+/** Binary file format for an exported chain state — used by `CheckpointImporter` to bootstrap a fresh datadir at a
+  * known block without running SNAP. PR-2 adds an HTTP downloader; PR-3 adds the producer (`fukuii checkpoint export`).
   *
   * Layout:
   * {{{
@@ -33,8 +33,8 @@ import com.chipprbots.ethereum.utils.ByteUtils
   *   crc32            : 4 bytes  (CRC32 over every preceding byte; excludes this field itself)
   * }}}
   *
-  * Gzip wrapping is the operator's choice — pass a `GZIPInputStream`/`GZIPOutputStream` to `Reader`/`Writer` if desired.
-  * The codec itself doesn't compress, so a `.checkpoint.gz` is just gzip-of-uncompressed-checkpoint.
+  * Gzip wrapping is the operator's choice — pass a `GZIPInputStream`/`GZIPOutputStream` to `Reader`/`Writer` if
+  * desired. The codec itself doesn't compress, so a `.checkpoint.gz` is just gzip-of-uncompressed-checkpoint.
   */
 object CheckpointArchive {
 

@@ -91,8 +91,12 @@ final class CheckpointDownloader(
       )
       Right(())
     } finally {
-      lockOpt.foreach(l => try l.release() catch { case _: Throwable => () })
-      try tmpChannel.close() catch { case _: Throwable => () }
+      lockOpt.foreach(l =>
+        try l.release()
+        catch { case _: Throwable => () }
+      )
+      try tmpChannel.close()
+      catch { case _: Throwable => () }
     }
   }
 
@@ -142,9 +146,10 @@ final class CheckpointDownloader(
         tmpChannel.position(0)
         return readBodyInto(response.body(), tmpChannel, alreadyWritten = 0)
       }
-      val errBody = try
-        new String(response.body().readNBytes(1024), "UTF-8")
-      catch { case _: Throwable => "" }
+      val errBody =
+        try
+          new String(response.body().readNBytes(1024), "UTF-8")
+        catch { case _: Throwable => "" }
       return Left(HttpError(status, errBody))
     }
 
@@ -178,8 +183,10 @@ final class CheckpointDownloader(
     } catch {
       case e: IOException => Left(IoError(s"body read: ${e.getMessage}"))
     } finally {
-      try out.flush() catch { case _: Throwable => () }
-      try body.close() catch { case _: Throwable => () }
+      try out.flush()
+      catch { case _: Throwable => () }
+      try body.close()
+      catch { case _: Throwable => () }
     }
   }
 }
