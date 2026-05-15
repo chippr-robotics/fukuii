@@ -130,14 +130,21 @@ services:
     # our -X / -D flags as program args. We need JVM args BEFORE -jar, so
     # invoke `java` directly here.
     entrypoint: ["java"]
+    # JVM args aligned with PR #1244 sepolia standard: 3g heap, 1M thread stacks,
+    # capped direct memory, fail-fast on OOM. Previous config (-Xmx6g -Xss10M with
+    # no direct-mem cap) burned 7.4/8 GiB cgroup with no headroom — Netty buffer
+    # spike or peer-pool growth would trigger cgroup OOM. 76 threads × 10M = 760 MiB
+    # of stacks alone was needless waste.
     command:
-      - "-Xmx6g"
-      - "-Xms2g"
-      - "-Xss10M"
+      - "-Xmx3g"
+      - "-Xms1g"
+      - "-Xss1M"
+      - "-XX:MaxDirectMemorySize=512M"
       - "-XX:+UseG1GC"
       - "-XX:MaxGCPauseMillis=200"
       - "-XX:+HeapDumpOnOutOfMemoryError"
       - "-XX:HeapDumpPath=/app/data/logs/heapdump.hprof"
+      - "-XX:+ExitOnOutOfMemoryError"
       - "-Dconfig.file=/app/conf/etc.conf"
       - "-Dfukuii.datadir=/app/data"
       - "-jar"
@@ -168,13 +175,20 @@ services:
       - ${FUKUII_SECONDARY_DATA_DIR:-./data/fukuii-secondary}:/app/data
       - ./fukuii-conf-2:/app/conf:ro
     # See fukuii-primary for the entrypoint-override rationale.
+    # JVM args aligned with PR #1244 standard — 1M stacks, capped direct mem,
+    # fail-fast on OOM. Was -Xss10M with no direct-mem cap; same risk profile
+    # as primary's old config.
     entrypoint: ["java"]
     command:
       - "-Xmx3g"
       - "-Xms1g"
-      - "-Xss10M"
+      - "-Xss1M"
+      - "-XX:MaxDirectMemorySize=512M"
       - "-XX:+UseG1GC"
       - "-XX:MaxGCPauseMillis=200"
+      - "-XX:+HeapDumpOnOutOfMemoryError"
+      - "-XX:HeapDumpPath=/app/data/logs/heapdump.hprof"
+      - "-XX:+ExitOnOutOfMemoryError"
       - "-Dconfig.file=/app/conf/mordor.conf"
       - "-Dfukuii.datadir=/app/data"
       - "-jar"
