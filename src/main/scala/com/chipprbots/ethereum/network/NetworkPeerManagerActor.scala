@@ -48,7 +48,8 @@ class NetworkPeerManagerActor(
     initialSnapSyncControllerOpt: Option[ActorRef] = None,
     evmCodeStorageOpt: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
     mptStorageOpt: Option[com.chipprbots.ethereum.db.storage.MptStorage] = None,
-    blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader] = None
+    blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader] = None,
+    isPoWChain: Boolean = true
 ) extends Actor
     with ActorLogging {
 
@@ -612,10 +613,32 @@ class NetworkPeerManagerActor(
         if (maxBlockNumber > appStateStorage.getEstimatedHighestBlock())
           appStateStorage.putEstimatedHighestBlock(maxBlockNumber).commit()
 
-        if (maxBlockNumber > initialPeerInfo.maxBlockNumber) {
-          initialPeerInfo.withBestBlockData(maxBlockNumber, maxBlockHash)
-        } else
-          initialPeerInfo
+        val updated =
+          if (maxBlockNumber > initialPeerInfo.maxBlockNumber)
+            initialPeerInfo.withBestBlockData(maxBlockNumber, maxBlockHash)
+          else
+            initialPeerInfo
+
+        // For ETH/69 peers: re-resolve chainWeight via 3-tier (hash → canonical-number → POW_SCALING).
+        // Hash-only lookup misses when the peer's current head differs from our stored pivot hash;
+        // full 3-tier falls back to proportional scaling from our real anchor so the refresh fires
+        // even when the peer is ahead of our downloaded chain.
+        blockchainReader match {
+          case Some(reader) if updated.remoteStatus.capability == Capability.ETH69 =>
+            val (cw, source) = reader.resolveETH69ChainWeight(maxBlockHash, maxBlockNumber, isPoWChain)
+            val isImprovement = cw.totalDifficulty > updated.chainWeight.totalDifficulty
+            if (isImprovement && source != "COLD_START") {
+              log.info(
+                "ETH69_CHAINWEIGHT_REFRESH: blockNum={} newTD={} prevTD={} source={}",
+                maxBlockNumber,
+                cw.totalDifficulty,
+                updated.chainWeight.totalDifficulty,
+                source
+              )
+              updated.withChainWeight(cw)
+            } else updated
+          case _ => updated
+        }
       }
 
     message match {
@@ -1166,7 +1189,8 @@ object NetworkPeerManagerActor {
       snapSyncControllerOpt: Option[ActorRef] = None,
       evmCodeStorageOpt: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
       mptStorageOpt: Option[com.chipprbots.ethereum.db.storage.MptStorage] = None,
-      blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader] = None
+      blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader] = None,
+      isPoWChain: Boolean = true
   ): Props =
     Props(
       new NetworkPeerManagerActor(
@@ -1177,7 +1201,8 @@ object NetworkPeerManagerActor {
         snapSyncControllerOpt,
         evmCodeStorageOpt,
         mptStorageOpt,
-        blockchainReader
+        blockchainReader,
+        isPoWChain
       )
     )
 }
