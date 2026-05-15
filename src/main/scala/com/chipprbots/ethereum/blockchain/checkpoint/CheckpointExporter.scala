@@ -10,13 +10,15 @@ import org.apache.pekko.util.ByteString
 import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
-import com.chipprbots.ethereum.db.storage.NodeStorage
+import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.mpt.BranchNode
 import com.chipprbots.ethereum.mpt.ExtensionNode
 import com.chipprbots.ethereum.mpt.HashNode
 import com.chipprbots.ethereum.mpt.LeafNode
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.MptTraversals
 import com.chipprbots.ethereum.mpt.NullNode
@@ -37,7 +39,7 @@ import com.chipprbots.ethereum.mpt.NullNode
   * size).
   */
 final class CheckpointExporter(
-    nodeStorage: NodeStorage,
+    stateStorage: StateStorage,
     evmCodeStorage: EvmCodeStorage,
     blockchainReader: BlockchainReader,
     chainId: BigInt
@@ -56,6 +58,10 @@ final class CheckpointExporter(
     }
 
     val start = System.currentTimeMillis()
+    // Read through the StateStorage abstraction so per-chain wrapping (e.g.,
+    // ReferenceCountNodeStorage on BasicPruning chains) is unwrapped automatically.
+    // Using raw NodeStorage would surface ref-counted bytes here — see Bug 33.
+    val mpt = stateStorage.getReadOnlyStorage
     val raw = new FileOutputStream(output.toFile)
     val out =
       if (gzip) new GZIPOutputStream(new BufferedOutputStream(raw, 65536), 65536)
@@ -87,6 +93,7 @@ final class CheckpointExporter(
       walkTrie(
         rootHash = header.stateRoot,
         isMainTrie = true,
+        mpt = mpt,
         writer = writer,
         visited = visited,
         codeHashes = codeHashes,
@@ -113,6 +120,7 @@ final class CheckpointExporter(
           walkTrie(
             rootHash = sroot,
             isMainTrie = false,
+            mpt = mpt,
             writer = writer,
             visited = visited,
             codeHashes = codeHashes,
@@ -169,6 +177,7 @@ final class CheckpointExporter(
   private def walkTrie(
       rootHash: ByteString,
       isMainTrie: Boolean,
+      mpt: MptStorage,
       writer: CheckpointArchive.Writer,
       visited: java.util.HashSet[ByteString],
       codeHashes: java.util.HashSet[ByteString],
@@ -180,14 +189,16 @@ final class CheckpointExporter(
     while (stack.nonEmpty) {
       val h = stack.pop()
       if (visited.add(h)) {
-        nodeStorage.get(h) match {
-          case None      => return Left(MissingTrieNode(h, isMainTrie))
-          case Some(rlp) =>
-            writer.writeNode(h, rlp)
-            onNodeEmitted()
-            val decoded = MptTraversals.decodeNode(rlp)
-            collectChildren(decoded, isMainTrie, stack, codeHashes, storageRoots)
-        }
+        val decoded =
+          try mpt.get(h.toArray)
+          catch { case _: MerklePatriciaTrie.MissingNodeException => return Left(MissingTrieNode(h, isMainTrie)) }
+        // The MptStorage path decodes once and caches the raw RLP it parsed. Prefer that —
+        // it round-trips byte-identically and matches the content-addressed hash. Fall back
+        // to re-encoding for the rare case a node lacks a cached RLP (in-memory test fixtures).
+        val rlp = decoded.cachedRlpEncoded.getOrElse(MptTraversals.encodeNode(decoded))
+        writer.writeNode(h, rlp)
+        onNodeEmitted()
+        collectChildren(decoded, isMainTrie, stack, codeHashes, storageRoots)
       }
     }
     Right(())
