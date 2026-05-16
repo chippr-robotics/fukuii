@@ -171,8 +171,12 @@ class AccountRangeCoordinator(
     // Threshold reached — promote to confirmed snapless + stateless. Snapless is sticky
     // (root-independent, survives PivotRefreshed per #1197); stateless clears on the next
     // PivotRefreshed.
+    val wasSnapless = snaplessPeers.contains(peer.id)
+    val wasStateless = statelessPeers.contains(peer.id)
     snaplessPeers.add(peer.id)
     statelessPeers.add(peer.id)
+    if (!wasSnapless) com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.incrementSnaplessPeerConfirmed()
+    if (!wasStateless) com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.incrementStatelessPeerConfirmed()
     log.info(
       s"Peer ${peer.id.value} marked SNAPLESS after $strikes consecutive empty-proof responses " +
         s"— will skip for GetAccountRange this session. Bytecode/healing remain available. " +
