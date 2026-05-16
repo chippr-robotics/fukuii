@@ -39,6 +39,7 @@ private class ClientOnlyUpnpServiceConfiguration extends DefaultUpnpServiceConfi
       override def getTimeoutSeconds(): Int = 10
       override def getLogWarningSeconds(): Int = 5
       override def getRetryAfterSeconds(): Int = 60
+      override def getRetryIterations(): Int = 0
       override def getRequestExecutorService(): java.util.concurrent.ExecutorService =
         getSyncProtocolExecutorService()
       override def getUserAgentValue(majorVersion: Int, minorVersion: Int): String =

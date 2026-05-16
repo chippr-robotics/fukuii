@@ -393,7 +393,7 @@ class JsonRpcControllerEthSpec
   }
 
   it should "eth_call" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    val mockEthInfoService: EthInfoService & scala.reflect.Selectable = mock[EthInfoService]
+    val mockEthInfoService = mock[EthInfoService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethInfoService = mockEthInfoService)
 
@@ -417,7 +417,7 @@ class JsonRpcControllerEthSpec
   }
 
   it should "eth_estimateGas" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    val mockEthInfoService: EthInfoService & scala.reflect.Selectable = mock[EthInfoService]
+    val mockEthInfoService = mock[EthInfoService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethInfoService = mockEthInfoService)
 
@@ -453,7 +453,7 @@ class JsonRpcControllerEthSpec
   }
 
   it should "eth_getCode" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    val mockEthUserService: EthUserService & scala.reflect.Selectable = mock[EthUserService]
+    val mockEthUserService = mock[EthUserService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethUserService = mockEthUserService)
 
@@ -522,7 +522,7 @@ class JsonRpcControllerEthSpec
   }
 
   it should "eth_getBalance" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    val mockEthUserService: EthUserService & scala.reflect.Selectable = mock[EthUserService]
+    val mockEthUserService = mock[EthUserService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethUserService = mockEthUserService)
 
@@ -549,7 +549,7 @@ class JsonRpcControllerEthSpec
     RPCTest,
     DisabledTest
   ) in new JsonRpcControllerFixture {
-    val mockEthUserService: EthUserService & scala.reflect.Selectable = mock[EthUserService]
+    val mockEthUserService = mock[EthUserService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethUserService = mockEthUserService)
 
@@ -570,7 +570,7 @@ class JsonRpcControllerEthSpec
   }
 
   it should "eth_getStorageAt" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    val mockEthUserService: EthUserService & scala.reflect.Selectable = mock[EthUserService]
+    val mockEthUserService = mock[EthUserService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethUserService = mockEthUserService)
 
@@ -614,7 +614,7 @@ class JsonRpcControllerEthSpec
   }
 
   it should "eth_newFilter" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    val mockEthFilterService: EthFilterService & scala.reflect.Selectable = mock[EthFilterService]
+    val mockEthFilterService = mock[EthFilterService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
 
@@ -639,7 +639,7 @@ class JsonRpcControllerEthSpec
   }
 
   it should "eth_newBlockFilter" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    val mockEthFilterService: EthFilterService & scala.reflect.Selectable = mock[EthFilterService]
+    val mockEthFilterService = mock[EthFilterService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
 
@@ -659,7 +659,7 @@ class JsonRpcControllerEthSpec
   }
 
   it should "eth_newPendingTransactionFilter" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    val mockEthFilterService: EthFilterService & scala.reflect.Selectable = mock[EthFilterService]
+    val mockEthFilterService = mock[EthFilterService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
 
@@ -677,7 +677,7 @@ class JsonRpcControllerEthSpec
   }
 
   it should "eth_uninstallFilter" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    val mockEthFilterService: EthFilterService & scala.reflect.Selectable = mock[EthFilterService]
+    val mockEthFilterService = mock[EthFilterService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
 
@@ -695,7 +695,7 @@ class JsonRpcControllerEthSpec
   }
 
   it should "eth_getFilterChanges" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    val mockEthFilterService: EthFilterService & scala.reflect.Selectable = mock[EthFilterService]
+    val mockEthFilterService = mock[EthFilterService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
 
@@ -798,7 +798,7 @@ class JsonRpcControllerEthSpec
     )
 
     // setup
-    val mockEthProofService: EthProofService & scala.reflect.Selectable = mock[EthProofService]
+    val mockEthProofService = mock[EthProofService]
     override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(proofService = mockEthProofService)
     (mockEthProofService.getProof _)
       .expects(expectedDecodedRequest)
@@ -842,7 +842,7 @@ class JsonRpcControllerEthSpec
     RPCTest,
     DisabledTest
   ) in new JsonRpcControllerFixture {
-    val mockEthProofService: EthProofService & scala.reflect.Selectable = mock[EthProofService]
+    val mockEthProofService = mock[EthProofService]
     override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(proofService = mockEthProofService)
 
     (mockEthProofService.getProof _)
@@ -864,7 +864,7 @@ class JsonRpcControllerEthSpec
   }
 
   it should "eth_getFilterLogs" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    val mockEthFilterService: EthFilterService & scala.reflect.Selectable = mock[EthFilterService]
+    val mockEthFilterService = mock[EthFilterService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
 
@@ -894,7 +894,7 @@ class JsonRpcControllerEthSpec
   }
 
   it should "eth_getLogs" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    val mockEthFilterService: EthFilterService & scala.reflect.Selectable = mock[EthFilterService]
+    val mockEthFilterService = mock[EthFilterService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethFilterService = mockEthFilterService)
 
