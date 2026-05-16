@@ -77,6 +77,17 @@ on:
         required: false
         type: string
         default: ''
+      gate_exclude:
+        description: |
+          Optional regex (case-insensitive) of test names to EXCLUDE from the
+          gate even when they match `gate_pattern`. Use this to acknowledge
+          specific known-failing tests as separately tracked bugs without
+          giving up the rest of the gate. Format is a bash extended regex
+          alternation (e.g. "sync foo from bar|sync baz from quux").
+          Defaults to empty (no exclusions).
+        required: false
+        type: string
+        default: ''
     outputs:
       passed:
         description: 'Number of simulator tests that passed'
@@ -275,6 +286,7 @@ jobs:
           THRESHOLD: ${{ inputs.pass_threshold }}
           HIVE_EXIT: ${{ steps.sim.outputs.hive_exit }}
           GATE_PATTERN: ${{ inputs.gate_pattern }}
+          GATE_EXCLUDE: ${{ inputs.gate_exclude }}
         run: |
           set -uo pipefail
           shopt -s nullglob
@@ -300,12 +312,28 @@ jobs:
           # the pattern (case-insensitive substring on the test name) so we
           # can gate the build on a specific client's tests without letting
           # upstream client-vs-client failures break the signal.
+          # When $GATE_EXCLUDE is non-empty, also drop any subset test whose
+          # name matches the exclusion regex — used to acknowledge tracked
+          # bugs as expected failures without giving up the rest of the gate.
+          # Exclusion uses jq `test()` which is POSIX extended regex; the
+          # caller passes a `|`-alternation of substrings, e.g.
+          # `"sync foo from bar|sync baz from quux"`.
           jq_query='
             def cases: try [.testCases | to_entries[]? | .value] catch [];
             def matches($p): (.name // "") | ascii_downcase | contains($p | ascii_downcase);
+            def excluded($e):
+              if $e == "" then false
+              else (.name // "") | test($e; "i")
+              end;
             (cases | map(.summaryResult.pass)) as $all |
-            (cases | map(select(matches($p))) | map(.summaryResult.pass)) as $sub |
-            (cases | map(select(matches($p)) | select(.summaryResult.pass == false) | .name // "?")) as $failed_names |
+            (cases
+              | map(select(matches($p)))
+              | map(select(excluded($x) | not))
+              | map(.summaryResult.pass)) as $sub |
+            (cases
+              | map(select(matches($p)))
+              | map(select(excluded($x) | not))
+              | map(select(.summaryResult.pass == false) | .name // "?")) as $failed_names |
             "\($all | map(select(. == true))  | length) " +
             "\($all | map(select(. == false)) | length) " +
             "\($sub | map(select(. == true))  | length) " +
@@ -317,7 +345,7 @@ jobs:
             # Only count files that look like hive suite results.
             jq -e 'has("testCases")' "$jf" >/dev/null 2>&1 || continue
 
-            out=$(jq -r --arg p "$GATE_PATTERN" "$jq_query" "$jf" 2>/dev/null || echo "0 0 0 0")
+            out=$(jq -r --arg p "$GATE_PATTERN" --arg x "$GATE_EXCLUDE" "$jq_query" "$jf" 2>/dev/null || echo "0 0 0 0")
             counts_line=$(printf '%s\n' "$out" | head -n1)
             names_block=$(printf '%s\n' "$out" | tail -n +2)
             read -r p f gp gf <<< "${counts_line:-0 0 0 0}"
