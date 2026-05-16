@@ -21,6 +21,7 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetStorageRanges.GetSto
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.StorageRanges
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.testing.{PeerTestHelpers, TestMptStorage}
+import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
 class StorageRangeCoordinatorSpec
     extends TestKit(ActorSystem("StorageRangeCoordinatorSpec"))
@@ -375,126 +376,6 @@ class StorageRangeCoordinatorSpec
     snapSyncController.expectMsg(3.seconds, SNAPSyncController.StorageRangeSyncForceCompleted)
   }
 
-  // ── Category 2c / 3b: TrieConstruction stale-root guard ────────────────────
-
-  it should "ignore TrieConstructionComplete with stale forStateRoot after pivot refresh" taggedAs UnitTest in {
-    // Stale trie build completions after a pivot refresh must be silently dropped.
-    // Processing them would update accountsInTrieConstruction for the wrong root.
-    val rootR1 = kec256(ByteString("root-r1-tcc"))
-    val rootR2 = kec256(ByteString("root-r2-tcc"))
-    val storage = new TestMptStorage()
-    val requestTracker = new SNAPRequestTracker()(system.scheduler)
-    val networkPeerManager = TestProbe()
-    val snapSyncController = TestProbe()
-
-    val coordinator = system.actorOf(
-      StorageRangeCoordinator.props(
-        stateRoot = rootR1,
-        networkPeerManager = networkPeerManager.ref,
-        requestTracker = requestTracker,
-        mptStorage = storage,
-        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
-        maxAccountsPerBatch = 8,
-        maxInFlightRequests = 4,
-        requestTimeout = 30.seconds,
-        snapSyncController = snapSyncController.ref
-      )
-    )
-
-    coordinator ! Messages.StartStorageRangeSync(rootR1)
-    coordinator ! Messages.StoragePivotRefreshed(rootR2) // pivot advances
-
-    // TrieConstructionComplete from before the pivot — forStateRoot is the old root
-    val accountHash = kec256(ByteString("account-stale-tcc"))
-    coordinator ! Messages.TrieConstructionComplete(
-      accountHashes = Seq(accountHash),
-      totalSlots = 100,
-      elapsedMs = 50,
-      forStateRoot = rootR1 // stale!
-    )
-
-    // Coordinator must remain alive and not emit StorageRangeSyncComplete spuriously
-    coordinator ! Messages.StorageGetProgress
-    expectMsgType[Any](3.seconds)
-    snapSyncController.expectNoMessage(300.millis)
-  }
-
-  it should "ignore TrieConstructionFailed with stale forStateRoot after pivot refresh" taggedAs UnitTest in {
-    // Stale trie build failures after a pivot refresh must be silently dropped.
-    val rootR1 = kec256(ByteString("root-r1-tcf"))
-    val rootR2 = kec256(ByteString("root-r2-tcf"))
-    val storage = new TestMptStorage()
-    val requestTracker = new SNAPRequestTracker()(system.scheduler)
-    val networkPeerManager = TestProbe()
-    val snapSyncController = TestProbe()
-
-    val coordinator = system.actorOf(
-      StorageRangeCoordinator.props(
-        stateRoot = rootR1,
-        networkPeerManager = networkPeerManager.ref,
-        requestTracker = requestTracker,
-        mptStorage = storage,
-        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
-        maxAccountsPerBatch = 8,
-        maxInFlightRequests = 4,
-        requestTimeout = 30.seconds,
-        snapSyncController = snapSyncController.ref
-      )
-    )
-
-    coordinator ! Messages.StartStorageRangeSync(rootR1)
-    coordinator ! Messages.StoragePivotRefreshed(rootR2) // pivot advances
-
-    val accountHash = kec256(ByteString("account-stale-tcf"))
-    coordinator ! Messages.TrieConstructionFailed(
-      accountHashes = Seq(accountHash),
-      error = "simulated build error",
-      forStateRoot = rootR1 // stale!
-    )
-
-    // Coordinator stays alive, no panic, no spurious completion
-    coordinator ! Messages.StorageGetProgress
-    expectMsgType[Any](3.seconds)
-    snapSyncController.expectNoMessage(300.millis)
-  }
-
-  it should "handle TrieConstructionFailed for current root without crashing" taggedAs UnitTest in {
-    // TrieConstructionFailed for the current root: affected accounts are dropped from
-    // construction tracking. The healing phase recovers them. Coordinator must not crash.
-    val stateRoot = kec256(ByteString("root-tcf-current"))
-    val storage = new TestMptStorage()
-    val requestTracker = new SNAPRequestTracker()(system.scheduler)
-    val networkPeerManager = TestProbe()
-    val snapSyncController = TestProbe()
-
-    val coordinator = system.actorOf(
-      StorageRangeCoordinator.props(
-        stateRoot = stateRoot,
-        networkPeerManager = networkPeerManager.ref,
-        requestTracker = requestTracker,
-        mptStorage = storage,
-        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
-        maxAccountsPerBatch = 8,
-        maxInFlightRequests = 4,
-        requestTimeout = 30.seconds,
-        snapSyncController = snapSyncController.ref
-      )
-    )
-
-    coordinator ! Messages.StartStorageRangeSync(stateRoot)
-
-    val accountHash = kec256(ByteString("account-failed-build"))
-    coordinator ! Messages.TrieConstructionFailed(
-      accountHashes = Seq(accountHash),
-      error = "disk full",
-      forStateRoot = stateRoot // current root — real failure
-    )
-
-    // Coordinator stays responsive; healing will recover the missing storage trie
-    coordinator ! Messages.StorageGetProgress
-    expectMsgType[Any](3.seconds)
-  }
-
   // ── K5: No false stall signal when task queue is empty (BUG fix b07c363e9) ─
 
   it should "not emit PivotStateUnservable when no storage tasks are pending" taggedAs UnitTest in {
@@ -588,7 +469,7 @@ class StorageRangeCoordinatorSpec
     val (coord, _) = newCoordWithFlatBatch(flatSlots, threshold = 100)
 
     val (accountHash, slots) = fakeContract(seed = 1, slotsPerAccount = 3)
-    coord.underlyingActor.writeSmallContractFlatOnly(accountHash, slots)
+    coord.underlyingActor.stageFlatSlotChunk(accountHash, slots.toSeq)
 
     coord.underlyingActor.pendingFlatBatchEntries shouldBe 3
     coord.underlyingActor.pendingFlatBatchAccounts.size shouldBe 1
@@ -606,7 +487,7 @@ class StorageRangeCoordinatorSpec
 
     // Three contracts, 2 slots each = 6 total slots, crossing the 5-entry threshold.
     val contracts = (1 to 3).map(i => fakeContract(seed = i, slotsPerAccount = 2))
-    contracts.foreach { case (h, s) => coord.underlyingActor.writeSmallContractFlatOnly(h, s) }
+    contracts.foreach { case (h, s) => coord.underlyingActor.stageFlatSlotChunk(h, s.toSeq) }
 
     // Flush is async on system.dispatcher; the 1-s deadline is generous.
     awaitAssert(coord.underlyingActor.inFlightFlatBatches shouldBe 0, max = 1.second)
@@ -630,7 +511,7 @@ class StorageRangeCoordinatorSpec
     val (coord, _) = newCoordWithFlatBatch(flatSlots, threshold = 1000)
 
     val (accountHash, slots) = fakeContract(seed = 42, slotsPerAccount = 50)
-    coord.underlyingActor.writeSmallContractFlatOnly(accountHash, slots)
+    coord.underlyingActor.stageFlatSlotChunk(accountHash, slots.toSeq)
 
     coord.underlyingActor.pendingFlatBatchEntries shouldBe 50
     coord.underlyingActor.inFlightFlatBatches shouldBe 0
@@ -644,7 +525,7 @@ class StorageRangeCoordinatorSpec
     val (coord, controller) = newCoordWithFlatBatch(flatSlots, threshold = 1000)
 
     val (accountHash, slots) = fakeContract(seed = 99, slotsPerAccount = 4)
-    coord.underlyingActor.writeSmallContractFlatOnly(accountHash, slots)
+    coord.underlyingActor.stageFlatSlotChunk(accountHash, slots.toSeq)
     coord.underlyingActor.pendingFlatBatchEntries shouldBe 4
 
     coord ! Messages.ForceCompleteStorage
@@ -680,7 +561,7 @@ class StorageRangeCoordinatorSpec
 
     // Buffer some data while stateRoot == oldRoot.
     val (accountHash, slots) = fakeContract(seed = 7, slotsPerAccount = 4)
-    coord.underlyingActor.writeSmallContractFlatOnly(accountHash, slots)
+    coord.underlyingActor.stageFlatSlotChunk(accountHash, slots.toSeq)
     coord.underlyingActor.pendingFlatBatchEntries shouldBe 4
 
     // Pivot refresh: must commit the accumulator THEN advance the root.
@@ -851,5 +732,47 @@ class StorageRangeCoordinatorSpec
 
     coordinator ! Messages.StorageCheckCompletion
     snapSyncController.expectMsg(3.seconds, SNAPSyncController.StorageBackpressureChanged(paused = false))
+  }
+
+  // ========================================
+  // Streaming storage-trie memory bound
+  // ========================================
+  //
+  // Verifies the per-account `SnapHashTrie` stays bounded across continuation responses
+  // for a single contract: even with thousands of slots, the in-memory batch never crosses
+  // the 8 MiB flush threshold (it auto-flushes), and `commit()` returns a stable root.
+
+  it should "bound per-account streaming trie memory across continuation responses" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.blockchain.sync.snap.SnapHashTrie
+
+    val accumulated = mutable.ArrayBuffer.empty[(ByteString, Array[Byte])]
+    val trie = new SnapHashTrie(batch => accumulated ++= batch)
+
+    // Three "responses" of 1000 slots each, strictly ascending — mirrors the wire-level
+    // monotonicity that `SNAPRequestTracker.validateStorageRanges` enforces.
+    val totalSlots = 3000
+    val sortedSlotKeys = (0 until totalSlots).map { i =>
+      // Use big-endian-encoded 32-byte keys so sort order = numeric order
+      val keyBytes = new Array[Byte](32)
+      java.nio.ByteBuffer.wrap(keyBytes).putInt(28, i)
+      ByteString(keyBytes)
+    }
+    val slotsByResponse = sortedSlotKeys.grouped(1000).toSeq
+
+    slotsByResponse.foreach { batch =>
+      batch.foreach { slotHash =>
+        val value = ByteString(s"slotvalue-${slotHash.takeRight(4).toHex}".getBytes)
+        trie.update(slotHash.toArray, value.toArray)
+      }
+      // After each "response", the in-heap batch should never exceed the flush threshold.
+      trie.pendingBatchBytes should be <= SnapHashTrie.DefaultBatchSizeBytes.toLong
+    }
+
+    val root = trie.commit()
+    root should not be ByteString.empty
+    root.size shouldBe 32
+
+    // After commit, all nodes have been emitted to the accumulator.
+    accumulated.nonEmpty shouldBe true
   }
 }

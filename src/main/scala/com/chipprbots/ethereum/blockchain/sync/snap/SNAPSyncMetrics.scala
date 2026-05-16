@@ -211,6 +211,12 @@ object SNAPSyncMetrics extends MetricsContainer {
   final private val StorageBackpressureGauge =
     metrics.registry.gauge("snapsync.storage.backpressure.gauge", new AtomicLong(0L))
 
+  /** Number of per-account streaming storage tries currently held in memory. Each instance is bounded to ~8 MiB by
+    * `SnapHashTrie.DefaultBatchSizeBytes`, so this × 8 MiB is the worst-case storage-processing heap footprint.
+    */
+  final private val StoragePendingTriesGauge =
+    metrics.registry.gauge("snapsync.storage.pending_tries.size.gauge", new AtomicLong(0L))
+
   /** Bytecode coordinator pending-task queue depth */
   final private val ByteCodeQueueDepthGauge =
     metrics.registry.gauge("snapsync.bytecode.queue.depth.gauge", new AtomicLong(0L))
@@ -342,6 +348,7 @@ object SNAPSyncMetrics extends MetricsContainer {
 
   def setStorageQueueDepth(depth: Long): Unit = StorageQueueDepthGauge.set(depth)
   def setStorageBackpressure(engaged: Boolean): Unit = StorageBackpressureGauge.set(if (engaged) 1L else 0L)
+  def setStoragePendingTries(count: Long): Unit = StoragePendingTriesGauge.set(count)
 
   def setByteCodeQueueDepth(depth: Long): Unit = ByteCodeQueueDepthGauge.set(depth)
   def setByteCodeBackpressure(engaged: Boolean): Unit = ByteCodeBackpressureGauge.set(if (engaged) 1L else 0L)
