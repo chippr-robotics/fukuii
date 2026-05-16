@@ -3,7 +3,7 @@ import sbt._
 object Dependencies {
 
   // Apache Pekko - Scala 3 compatible fork of Akka
-  private val pekkoVersion = "1.1.5"
+  private val pekkoVersion = "1.6.0"
   private val pekkoHttpVersion = "1.3.0"
 
   val pekkoUtil: Seq[ModuleID] =
@@ -66,7 +66,7 @@ object Dependencies {
 
   val testing: Seq[ModuleID] = Seq(
     "org.scalatest" %% "scalatest" % "3.2.19" % "it,test",
-    "org.scalamock" %% "scalamock" % "6.2.0" % "it,test",
+    "org.scalamock" %% "scalamock" % "7.3.2" % "it,test",
     "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % "test",
     "org.scalatestplus" %% "mockito-5-12" % "3.2.19.0" % "it,test",
     "org.mockito" % "mockito-core" % "5.23.0" % "it,test",
@@ -77,7 +77,7 @@ object Dependencies {
 
   val cats: Seq[ModuleID] = {
     val catsVersion = "2.13.0"
-    val catsEffectVersion = "3.5.7" // 3.6+ changed IORuntime.createWorkStealingComputeThreadPool return type
+    val catsEffectVersion = "3.6.1"
     Seq(
       "org.typelevel" %% "mouse" % "1.4.0",
       "org.typelevel" %% "cats-core" % catsVersion,
@@ -89,7 +89,7 @@ object Dependencies {
   val monix = Seq.empty[ModuleID]
 
   val fs2: Seq[ModuleID] = {
-    val fs2Version = "3.10.2" // fs2 3.11+ requires cats-effect 3.6+; staying on 3.5.7
+    val fs2Version = "3.12.0" // requires cats-effect 3.6+
     Seq(
       "co.fs2" %% "fs2-core" % fs2Version,
       "co.fs2" %% "fs2-io" % fs2Version,
