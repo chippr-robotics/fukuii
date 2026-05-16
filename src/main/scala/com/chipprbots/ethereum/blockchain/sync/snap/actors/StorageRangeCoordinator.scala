@@ -11,12 +11,11 @@ import scala.math.Ordered.orderingToOrdered
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
-import com.chipprbots.ethereum.db.storage.{DeferredWriteMptStorage, FlatSlotStorage, MptStorage}
+import com.chipprbots.ethereum.db.storage.{FlatSlotStorage, MptStorage}
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
-import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 
 /** StorageRangeCoordinator manages storage range download workers and orchestrates the storage sync phase.
@@ -58,19 +57,23 @@ class StorageRangeCoordinator(
     deferredMerkleization: Boolean = true,
     flatBatchEntryThreshold: Int = 1000,
     flatBatchEcOverride: Option[ExecutionContext] = None,
-    /** Phase 2 of the SNAP rewrite (Step 4 of `snap-stacktrie-port` plan).
-      *
-      * When `true`, per-contract storage tries are built with a streaming `SnapHashTrie` instead of
-      * `MerklePatriciaTrie` + `DeferredWriteMptStorage`. Each contract's trie is constructed in O(depth) memory rather
-      * than holding the whole trie in memory until flush. Same opt-in semantics as
-      * `AccountRangeCoordinator.useStackTrie`.
+    /** Legacy toggle retained for source compatibility — the streaming `SnapHashTrie` path is now unconditional, with
+      * `deferredMerkleization` controlling whether per-contract tries are built at all. The field exists so callers
+      * (`SNAPSyncController`, tests) keep compiling without churn while the storage path is finalised; the value itself
+      * is no longer read.
       */
-    useStackTrie: Boolean = false,
+    @annotation.unused useStackTrie: Boolean = false,
     // Back-pressure watermarks — overridable in tests so we don't have to enqueue 100K StorageTasks
     // just to verify the pause/resume transition. Production defaults match the values quoted in
     // the design discussion.
     backpressureHighWatermark: Int = 100000,
-    backpressureLowWatermark: Int = 50000
+    backpressureLowWatermark: Int = 50000,
+    // Streaming storage-trie cap: how many per-account `SnapHashTrie` instances may be live at
+    // once. The trie wrapper bounds each instance to ~8 MiB (DefaultBatchSizeBytes), so the
+    // worst-case storage-processing footprint is `maxConcurrentStorageAccounts × 8 MiB`. Default
+    // 256 → ~2 GiB ceiling, independent of chain size. Raise via sync.conf if the peer pool
+    // can justify a larger working set; lower if running with smaller `-Xmx`.
+    maxConcurrentStorageAccounts: Int = 256
 ) extends Actor
     with ActorLogging {
 
@@ -150,7 +153,8 @@ class StorageRangeCoordinator(
   // Contract completion tracking for progress estimation.
   // totalStorageContracts counts unique contracts added via AddStorageTasks.
   // Unique completed accounts are tracked via the bounded `completedAccountCount` counter below
-  // (incremented on the small-contract completion + TrieConstructionComplete paths).
+  // (incremented once per account at the final-response "no continuation" branch of
+  // `processStorageRanges`).
   private var totalStorageContracts: Int = 0
 
   // Pivot refresh backoff: prevents rapid refresh loops when no peers can serve any recent root.
@@ -387,51 +391,68 @@ class StorageRangeCoordinator(
   }
 
   // ========================================
-  // Two-phase storage: raw slot buffering + deferred trie construction
+  // Streaming storage-trie construction (replaces the legacy two-phase Phase 1 slot buffer)
   // ========================================
   //
-  // Phase 1 (during response): buffer raw (slotHash, slotValue) pairs per account.
-  // Phase 2 (on account complete): sort by key, build trie on background thread.
+  // Per-account `SnapHashTrie` instances stream verified slots straight into a bounded
+  // stack-trie. The wrapper auto-flushes emitted nodes to RocksDB at the 8 MiB threshold
+  // (`SnapHashTrie.DefaultBatchSizeBytes`), so a contract with millions of slots never holds
+  // more than ~8 MiB of buffered nodes in heap. When the account's full storage range has
+  // been served, `commit()` finalises the right boundary, flushes the remaining batch, and
+  // returns the trie root. Aborted accounts (pivot refresh, max-empty skip, force-complete)
+  // call `reset()`; partially-flushed content-addressed nodes are left on disk and unreferenced
+  // until pruning collects them — they don't have to be rolled back.
   //
-  // Small contracts (all slots in one response, < smallContractThreshold) skip MPT
-  // entirely — flat storage only. ~95% of ETC contracts are small (< 100 slots).
-  //
-  // Large contracts accumulate slots across continuations, then build the trie
-  // on a bounded thread pool to control RocksDB write pressure.
+  // Memory ceiling: `maxConcurrentStorageAccounts × 8 MiB` (default 256 × 8 MiB = 2 GiB),
+  // **regardless of chain size**. Replaces the pre-PR pattern where per-account
+  // `ArrayBuffer[(slotHash, slotValue)]` grew proportional to contract size and total
+  // concurrent-contract count, OOM'ing ETC mainnet at ~12M accounts on -Xmx3g.
 
-  /** Raw slot buffer per account hash. Accumulated during download, consumed during trie construction. */
-  private val pendingAccountSlots = mutable.Map[ByteString, mutable.ArrayBuffer[(ByteString, ByteString)]]()
-
-  /** Accounts currently having their tries built asynchronously. Prevents double-building. */
-  private val accountsInTrieConstruction = mutable.Set[ByteString]()
-
-  /** Maximum buffered slots across all accounts before forcing an incremental trie build. Prevents OOM when downloading
-    * mainnet with millions of storage slots. At ~64 bytes per slot (32 hash + 32 value), 1M slots ≈ 64MB.
+  /** Per-account streaming storage trie. Populated incrementally as verified slots arrive, committed on the final
+    * response (no continuation), reset on abort. Bounded by `maxConcurrentStorageAccounts` via the dispatch gate in
+    * `requestNextRanges`.
     */
-  private val maxBufferedSlots: Long = 1000000
-  private var totalBufferedSlots: Long = 0
+  private[actors] val pendingAccountTries: mutable.Map[ByteString, SnapHashTrie] = mutable.Map.empty
 
-  /** Per-account memory limit: flush large accounts incrementally when they exceed this. Mainnet DeFi contracts can
-    * have 10-50M slots. Without per-account limits, a single contract could buffer several GB before trie construction
-    * starts. At 64 bytes/slot, 500K slots = ~32MB per account.
+  /** Get-or-create the per-account `SnapHashTrie`. Each contract's trie streams emitted nodes through
+    * `mptStorage.storeRawNodes`, which routes via `FastSyncNodeStorage` to pick up pivot-block-number tagging for
+    * pruning. Modelled on `AccountRangeCoordinator.getOrCreateTaskStackTrie`.
     */
-  private val maxSlotsPerAccount: Long = 500000
+  private def getOrCreateAccountTrie(accountHash: ByteString): SnapHashTrie =
+    pendingAccountTries.getOrElseUpdate(
+      accountHash,
+      new SnapHashTrie(batch => mptStorage.storeRawNodes(batch))
+    )
 
-  /** Threshold for triggering incremental builds of complete accounts. When we have this many complete accounts
-    * buffered, build their tries without waiting.
+  /** Commit a fully-downloaded contract trie. Compares the computed root against the task's claimed `storageRoot`;
+    * mismatches log a warning but are otherwise accepted — healing reconciles. Returns the contract's storage root.
     */
-  private val trieConstructionBatchSize = 64
+  private def commitAccountTrie(accountHash: ByteString, claimedRoot: ByteString): ByteString =
+    pendingAccountTries.remove(accountHash) match {
+      case Some(trie) =>
+        val computedRoot = trie.commit()
+        if (computedRoot != claimedRoot) {
+          log.warning(
+            s"Storage root mismatch for account ${accountHash.take(4).toHex}: " +
+              s"computed=${computedRoot.take(4).toHex} claimed=${claimedRoot.take(4).toHex} — healing will reconcile"
+          )
+        }
+        com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
+          .setStoragePendingTries(pendingAccountTries.size.toLong)
+        computedRoot
+      case None =>
+        // First/only response for an account with no slots, or proof-of-absence path —
+        // no trie was ever created. Caller still wants a non-null root reference.
+        claimedRoot
+    }
 
-  /** Accounts whose slots have been fully downloaded (no continuation) and are ready for trie construction. Using
-    * LinkedHashSet for dedup + insertion order (FIFO processing).
+  /** Discard a partial trie when the account is aborted (pivot refresh, max-empty skip, force-complete).
+    * Already-flushed content-addressed nodes stay on disk; only the in-memory stack-trie state is dropped.
     */
-  private val accountsReadyForBuild = mutable.LinkedHashSet[ByteString]()
-
-  /** StackTrie shortcut threshold: contracts with fewer slots than this skip MPT construction entirely — only flat
-    * storage is written. The trie is reconstructed lazily from flat data during the healing phase or deferred
-    * Merkleization pass. ~95% of ETC contracts qualify.
-    */
-  private val smallContractThreshold = 1024
+  private def resetAccountTrie(accountHash: ByteString): Unit =
+    pendingAccountTries.remove(accountHash).foreach { trie =>
+      trie.reset()
+    }
 
   // ========================================
   // Aggregated flat-slot writes (small-contract path)
@@ -464,35 +485,18 @@ class StorageRangeCoordinator(
   private val flatBatchEc: ExecutionContext =
     flatBatchEcOverride.getOrElse(context.system.dispatchers.lookup("storage-writer-dispatcher"))
 
-  /** Bounded thread pool for trie construction — controls RocksDB write pressure. Using 3 threads avoids overwhelming
-    * the single-threaded RocksDB compaction while still enabling parallel trie builds. Unbounded Futures on
-    * sync-dispatcher caused thread starvation under heavy load.
+  /** Append a per-response chunk of verified slots to the flat-slot accumulator. The streaming storage-trie path
+    * commits the trie incrementally inside `SnapHashTrie`; flat-slot writes remain batched (sorted within each chunk)
+    * and are flushed to RocksDB off-actor once the accumulator hits `flatBatchEntryThreshold` or the actor stops.
     */
-  private val trieBuilderPool: java.util.concurrent.ExecutorService =
-    java.util.concurrent.Executors.newFixedThreadPool(
-      3,
-      (r: Runnable) => {
-        val t = new Thread(r, "storage-trie-builder")
-        t.setDaemon(true)
-        t
-      }
-    )
-  private val trieBuilderEc = scala.concurrent.ExecutionContext.fromExecutorService(trieBuilderPool)
-
-  /** Buffer a small-contract's slots into the aggregated flat-batch accumulator. The actual RocksDB commit is deferred
-    * to `flushPendingFlatBatch()` — called once the accumulator hits `flatBatchEntryThreshold` or at completion — and
-    * runs on `storage-writer-dispatcher` so it doesn't block the coordinator mailbox. ~95% of ETC contracts go through
-    * this path; an inline commit per contract was a hidden RocksDB bottleneck.
-    */
-  private[actors] def writeSmallContractFlatOnly(
+  private[actors] def stageFlatSlotChunk(
       accountHash: ByteString,
-      slots: mutable.ArrayBuffer[(ByteString, ByteString)]
+      slots: Seq[(ByteString, ByteString)]
   ): Unit = {
-    val sorted = slots.sortBy(_._1)(ByteStringOrdering).toSeq
+    if (slots.isEmpty) return
+    val sorted = slots.sortBy(_._1)(ByteStringOrdering)
     pendingFlatBatchAccounts += ((accountHash, sorted))
     pendingFlatBatchEntries += sorted.size
-    pendingAccountSlots.remove(accountHash)
-    totalBufferedSlots -= slots.size
     if (pendingFlatBatchEntries >= flatBatchEntryThreshold) {
       flushPendingFlatBatch()
     }
@@ -534,126 +538,6 @@ class StorageRangeCoordinator(
     }(ec)
   }
 
-  /** Build tries for a batch of complete accounts on a background thread. Sorts slots by key for better trie locality,
-    * builds tries, and flushes to storage. Uses a batch-local DeferredWriteMptStorage to avoid thread-safety issues
-    * with the shared mptStorage — each batch gets its own write buffer that flushes independently. Trie nodes and flat
-    * slot data are written in a single combined RocksDB batch.
-    */
-  private def buildAccountTriesAsync(accountHashes: Seq[ByteString]): Unit = {
-    if (accountHashes.isEmpty) return
-
-    // Extract slots from buffer (move, not copy)
-    val accountData = accountHashes.flatMap { hash =>
-      pendingAccountSlots.remove(hash).map { slots =>
-        totalBufferedSlots -= slots.size
-        (hash, slots)
-      }
-    }
-
-    if (accountData.isEmpty) return
-
-    accountData.foreach { case (hash, _) => accountsInTrieConstruction.add(hash) }
-
-    val selfRef = self
-    val totalSlotCount = accountData.map(_._2.size).sum.toLong
-    val localMptStorage = mptStorage // capture for Future
-    val localFlatSlotStorage = flatSlotStorage // capture for Future
-    val constructionStateRoot = stateRoot // tag with current pivot root
-
-    val localUseStackTrie = useStackTrie
-
-    import scala.concurrent.{Future, blocking}
-    Future {
-      blocking {
-        val startMs = System.currentTimeMillis()
-
-        // Flat slot storage: accumulate all (accountHash++slotHash → value) writes
-        // for a single atomic batch commit alongside trie nodes.
-        var flatBatch = localFlatSlotStorage.emptyBatchUpdate
-
-        if (localUseStackTrie) {
-          // StackTrie path: one SnapHashTrie per contract, built and committed inline.
-          // To preserve the existing single-RocksDB-batch flush semantics, route all
-          // SnapHashTrie writeBatch callbacks into a shared accumulator and flush once
-          // after every contract in this batch has committed.
-          val accumulated = mutable.ArrayBuffer.empty[(ByteString, Array[Byte])]
-          val accumulator: Seq[(ByteString, Array[Byte])] => Unit = { batch =>
-            accumulated ++= batch
-          }
-          accountData.foreach { case (accountHash, slots) =>
-            val sortedSlots = slots.sortBy(_._1)(ByteStringOrdering)
-            val trie = new com.chipprbots.ethereum.blockchain.sync.snap.SnapHashTrie(accumulator)
-            sortedSlots.foreach { case (slotHash, slotValue) =>
-              trie.update(slotHash.toArray, slotValue.toArray)
-            }
-            val _ = trie.commit()
-            flatBatch = flatBatch.and(localFlatSlotStorage.putSlotsBatch(accountHash, sortedSlots.toSeq))
-          }
-          if (accumulated.nonEmpty) {
-            localMptStorage.storeRawNodes(accumulated.toSeq)
-          }
-        } else {
-          // Legacy MPT path: per-contract MerklePatriciaTrie over a batch-local
-          // DeferredWriteMptStorage. Holds all batch nodes in memory until flush.
-          val batchStorage = new DeferredWriteMptStorage(localMptStorage)
-
-          accountData.foreach { case (accountHash, slots) =>
-            // Sort by key for better trie locality — sequential keys share prefixes,
-            // reducing node reconstructions during insertion
-            val sortedSlots = slots.sortBy(_._1)(ByteStringOrdering)
-            import com.chipprbots.ethereum.mpt.byteStringSerializer
-            var trie = MerklePatriciaTrie[ByteString, ByteString](batchStorage)
-            sortedSlots.foreach { case (slotHash, slotValue) =>
-              trie = trie.put(slotHash, slotValue)
-            }
-
-            // Write to flat storage: accountHash ++ slotHash → slotValue
-            flatBatch = flatBatch.and(localFlatSlotStorage.putSlotsBatch(accountHash, sortedSlots.toSeq))
-          }
-
-          // Flush trie nodes to RocksDB
-          batchStorage.flush()
-        }
-
-        // Commit flat slot writes — single additional RocksDB write batch
-        flatBatch.commit()
-
-        val elapsedMs = System.currentTimeMillis() - startMs
-        selfRef ! TrieConstructionComplete(accountHashes, totalSlotCount, elapsedMs, constructionStateRoot)
-      }
-    }(trieBuilderEc).recover { case e: Exception =>
-      selfRef ! TrieConstructionFailed(accountHashes, e.getMessage, constructionStateRoot)
-    }(trieBuilderEc)
-  }
-
-  /** Check if we should trigger a trie construction batch (enough complete accounts or memory pressure). */
-  private def maybeStartTrieConstruction(): Unit = {
-    val readyNotBuilding = accountsReadyForBuild.diff(accountsInTrieConstruction)
-    val memoryPressure = totalBufferedSlots >= maxBufferedSlots
-
-    if (readyNotBuilding.size >= trieConstructionBatchSize || (readyNotBuilding.nonEmpty && memoryPressure)) {
-      val batch = readyNotBuilding.take(trieConstructionBatchSize).toSeq
-      accountsReadyForBuild --= batch
-      log.info(s"Starting async trie construction for ${batch.size} accounts ($totalBufferedSlots buffered slots)")
-      buildAccountTriesAsync(batch)
-    }
-  }
-
-  /** Check if a large account needs incremental flushing (per-account memory limit). */
-  private def maybeFlushLargeAccount(accountHash: ByteString): Unit =
-    pendingAccountSlots.get(accountHash).foreach { slots =>
-      if (slots.size >= maxSlotsPerAccount) {
-        // Large account — build trie incrementally to prevent OOM
-        log.info(
-          s"Large account ${accountHash.take(4).toArray.map("%02x".format(_)).mkString}: " +
-            s"${slots.size} buffered slots exceeds per-account limit ($maxSlotsPerAccount). " +
-            s"Triggering incremental trie build."
-        )
-        accountsReadyForBuild += accountHash
-        maybeStartTrieConstruction()
-      }
-    }
-
   /** Aggregate-counter sink for completed StorageTask objects. Previously this appended into an unbounded
     * `mutable.ArrayBuffer[StorageTask]` (one of the leak vectors behind the May 13 sepolia OOM at ~22M completed
     * tasks). All downstream consumers — progress %, SyncStatistics.tasksCompleted, the completion check — only ever
@@ -690,16 +574,6 @@ class StorageRangeCoordinator(
     }
   }
 
-  /** Force build all remaining buffered accounts (e.g., on sync completion or force-complete). */
-  private def flushAllPendingTrieBuilds(): Unit = {
-    val remaining = accountsReadyForBuild.diff(accountsInTrieConstruction).toSeq
-    if (remaining.nonEmpty) {
-      accountsReadyForBuild.clear()
-      log.info(s"Flushing ${remaining.size} remaining accounts for trie construction")
-      buildAccountTriesAsync(remaining)
-    }
-  }
-
   /** ByteString ordering for sorted insertion — compares bytes lexicographically. */
   private object ByteStringOrdering extends Ordering[ByteString] {
     def compare(a: ByteString, b: ByteString): Int = {
@@ -714,10 +588,18 @@ class StorageRangeCoordinator(
     }
   }
 
-  /** Shut down the trie builder thread pool when the actor stops. */
+  /** Discard any in-memory streaming tries and flush the tail of accumulated flat-slot writes when the actor stops. */
   override def postStop(): Unit = {
-    // Best-effort: flush any tail of accumulated small-contract slots synchronously
-    // here so we don't lose data when the actor terminates (force-complete, restart).
+    // Discard any in-memory streaming tries — already-flushed nodes stay on disk
+    // (content-addressed; healing reconciles).
+    if (pendingAccountTries.nonEmpty) {
+      log.info(s"postStop: discarding ${pendingAccountTries.size} in-flight per-account storage tries")
+      pendingAccountTries.values.foreach(_.reset())
+      pendingAccountTries.clear()
+      com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setStoragePendingTries(0L)
+    }
+    // Best-effort: flush any tail of accumulated flat-slot entries synchronously here so we
+    // don't lose data when the actor terminates (force-complete, restart).
     if (pendingFlatBatchAccounts.nonEmpty) {
       try {
         var combined: DataSourceBatchUpdate = flatSlotStorage.emptyBatchUpdate
@@ -733,7 +615,6 @@ class StorageRangeCoordinator(
       pendingFlatBatchAccounts.clear()
       pendingFlatBatchEntries = 0
     }
-    trieBuilderPool.shutdown()
     super.postStop()
   }
 
@@ -850,13 +731,6 @@ class StorageRangeCoordinator(
       // Drain side of the back-pressure watermark — if dispatches and completions have shrunk
       // the queue below the low-water mark, release AccountRangeCoordinator's pause.
       notifyBackpressureIfChanged()
-      // When all downloads complete, flush remaining buffered accounts for trie construction
-      if (
-        noMoreTasksExpected && tasks.isEmpty && activeTasks.isEmpty &&
-        accountsReadyForBuild.nonEmpty && accountsInTrieConstruction.isEmpty
-      ) {
-        flushAllPendingTrieBuilds()
-      }
       // Drain the flat-batch accumulator once no more downloads are coming.
       if (noMoreTasksExpected && tasks.isEmpty && activeTasks.isEmpty) {
         flushPendingFlatBatch()
@@ -875,11 +749,10 @@ class StorageRangeCoordinator(
       noMoreTasksExpected = true
       log.info(
         s"No more storage tasks expected. Pending: ${tasks.size}, active: ${activeTasks.size}, " +
-          s"buffered accounts: ${pendingAccountSlots.size}, ready for build: ${accountsReadyForBuild.size}"
+          s"in-flight tries: ${pendingAccountTries.size}"
       )
-      // Trigger final trie builds if all downloads are done
+      // Flush the final flat-slot tail if all downloads are done.
       if (tasks.isEmpty && activeTasks.isEmpty) {
-        flushAllPendingTrieBuilds()
         flushPendingFlatBatch()
       }
       if (isComplete) {
@@ -889,19 +762,18 @@ class StorageRangeCoordinator(
 
     case ForceCompleteStorage =>
       val abandoned = tasks.size + activeTasks.size
-      val bufferedAccounts = pendingAccountSlots.size + accountsReadyForBuild.size
+      val abandonedTries = pendingAccountTries.size
       log.warning(
         s"Force-completing storage sync: $slotsDownloaded slots downloaded, " +
-          s"abandoning $abandoned remaining tasks, $bufferedAccounts buffered accounts " +
+          s"abandoning $abandoned remaining tasks, $abandonedTries in-flight per-account tries " +
           s"(healing phase will recover missing data)"
       )
-      // Build tries for any fully-downloaded accounts before force-completing
-      flushAllPendingTrieBuilds()
-      // Hand off any small-contract slots that are still in the accumulator.
+      // Discard in-flight streaming tries — already-flushed nodes stay on disk; healing reconciles.
+      pendingAccountTries.values.foreach(_.reset())
+      pendingAccountTries.clear()
+      com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setStoragePendingTries(0L)
+      // Hand off any flat-slot tail still in the accumulator.
       flushPendingFlatBatch()
-      // Discard partially-downloaded accounts (continuations won't arrive)
-      pendingAccountSlots.clear()
-      totalBufferedSlots = 0
       log.info("Storage range sync force-completed (promoting to healing phase)")
       snapSyncController ! SNAPSyncController.StorageRangeSyncForceCompleted
 
@@ -963,13 +835,15 @@ class StorageRangeCoordinator(
       emptyResponsesByTask.clear()
       proofVerifiers.clear()
 
-      // Clear two-phase storage buffers — data for old root is stale.
-      // Any in-progress trie constructions will complete harmlessly (writes are content-addressed),
-      // but we discard the tracking so we don't wait for them.
-      pendingAccountSlots.clear()
-      accountsReadyForBuild.clear()
-      accountsInTrieConstruction.clear()
-      totalBufferedSlots = 0
+      // Discard streaming per-account tries — already-flushed content-addressed nodes
+      // remain on disk and will be referenced by the new root's healing pass if still valid,
+      // unreferenced and pruned otherwise. Only the in-memory stack-trie state is dropped.
+      if (pendingAccountTries.nonEmpty) {
+        log.info(s"Pivot refresh: resetting ${pendingAccountTries.size} in-flight per-account storage tries")
+        pendingAccountTries.values.foreach(_.reset())
+        pendingAccountTries.clear()
+        com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setStoragePendingTries(0L)
+      }
 
       // Set post-refresh cooldown: peers need time to sync to the new root.
       // Dispatching immediately causes all peers to return empty → marked stateless →
@@ -996,44 +870,6 @@ class StorageRangeCoordinator(
         progress = progress
       )
       sender() ! stats
-
-    case TrieConstructionComplete(accountHashes, totalSlots, elapsedMs, forStateRoot) =>
-      if (forStateRoot != stateRoot) {
-        // Stale completion from before a pivot refresh — trie nodes are content-addressed
-        // so the writes are harmless, but don't track these as completed for the current root.
-        log.info(
-          s"Ignoring stale trie construction (${accountHashes.size} accounts, root ${forStateRoot.take(4).toHex}) " +
-            s"— current root is ${stateRoot.take(4).toHex}"
-        )
-      } else {
-        accountHashes.foreach { hash =>
-          accountsInTrieConstruction.remove(hash)
-        }
-        completedAccountCount += accountHashes.size
-        val rate = if (elapsedMs > 0) totalSlots * 1000 / elapsedMs else totalSlots
-        log.info(
-          s"Trie construction complete: ${accountHashes.size} accounts, $totalSlots slots in ${elapsedMs}ms " +
-            s"(${rate} slots/s). Remaining: ${accountsReadyForBuild.size} ready, " +
-            s"${accountsInTrieConstruction.size} building, ${pendingAccountSlots.size} buffered"
-        )
-        maybeStartTrieConstruction()
-      }
-      self ! StorageCheckCompletion
-
-    case TrieConstructionFailed(accountHashes, error, forStateRoot) =>
-      if (forStateRoot != stateRoot) {
-        log.debug(s"Ignoring stale trie construction failure (root ${forStateRoot.take(4).toHex})")
-      } else {
-        log.error(
-          s"Trie construction failed for ${accountHashes.size} accounts: $error. " +
-            s"Healing phase will recover missing storage."
-        )
-        accountHashes.foreach { hash =>
-          accountsInTrieConstruction.remove(hash)
-          pendingAccountSlots.remove(hash)
-        }
-      }
-      self ! StorageCheckCompletion
 
     case FlatBatchFlushComplete(forStateRoot, entryCount, elapsedMs) =>
       inFlightFlatBatches = (inFlightFlatBatches - 1).max(0)
@@ -1080,6 +916,26 @@ class StorageRangeCoordinator(
     val max = ByteString(Array.fill(32)(0xff.toByte))
     def isInitialRange(t: StorageTask): Boolean = t.next == min && t.last == max
 
+    // Streaming-trie memory cap: a new account's trie costs up to ~8 MiB worst-case.
+    // Continuations for accounts already in `pendingAccountTries` are free — they reuse
+    // the existing trie. Reject only the dispatch of brand-new accounts when at the cap.
+    // This puts a hard ceiling on storage-processing memory regardless of chain size.
+    def acceptsNewAccount(t: StorageTask): Boolean =
+      deferredMerkleization ||
+        pendingAccountTries.contains(t.accountHash) ||
+        pendingAccountTries.size < maxConcurrentStorageAccounts
+
+    // Peek-ahead at the front of the queue: if the head task would force a new account
+    // open beyond the cap, leave it queued and skip this dispatch cycle. Once an in-flight
+    // trie commits (or aborts), the cap relaxes and the next dispatch will pick it up.
+    if (tasks.nonEmpty && !acceptsNewAccount(tasks.front)) {
+      log.debug(
+        s"Storage dispatch gated by max-concurrent-storage-accounts=$maxConcurrentStorageAccounts " +
+          s"(in-flight tries=${pendingAccountTries.size}); deferring new-account dispatch"
+      )
+      return None
+    }
+
     val peerBatch = batchSizeFor(peer)
 
     // snap/1 origin/limit semantics apply to the first account only. To avoid incorrect continuation
@@ -1091,7 +947,9 @@ class StorageRangeCoordinator(
         Seq(first)
       } else {
         val buf = mutable.ArrayBuffer[StorageTask](first)
-        while (buf.size < peerBatch && tasks.nonEmpty && isInitialRange(tasks.front)) {
+        while (
+          buf.size < peerBatch && tasks.nonEmpty && isInitialRange(tasks.front) && acceptsNewAccount(tasks.front)
+        ) {
           val t = tasks.dequeue()
           pendingTaskKeys -= ((t.accountHash, t.next))
           buf += t
@@ -1241,6 +1099,12 @@ class StorageRangeCoordinator(
           task.done = true
           task.pending = false
           recordCompletedTask(task)
+          // Discard any partial streaming trie for this account — committing now would
+          // produce a wrong root (missing slots). Already-flushed content-addressed nodes
+          // stay on disk and healing reconciles when the contract is revisited.
+          resetAccountTrie(task.accountHash)
+          com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
+            .setStoragePendingTries(pendingAccountTries.size.toLong)
           log.warning(
             s"Skipping storage task after $attempts empty StorageRanges replies: " +
               s"account=${task.accountHash.toHex} storageRoot=${task.storageRoot.toHex} range=${task.rangeString}"
@@ -1320,12 +1184,27 @@ class StorageRangeCoordinator(
           totalReceivedBytes += slotBytes
 
           if (accountSlots.nonEmpty) {
-            // Buffer raw slots — Phase 1 of two-phase storage
-            val slotBuffer = pendingAccountSlots.getOrElseUpdate(task.accountHash, mutable.ArrayBuffer.empty)
-            slotBuffer ++= accountSlots
-            totalBufferedSlots += accountSlots.size
+            // Stream slots directly into the per-account `SnapHashTrie`. The validator
+            // enforces strictly-ascending slot order within and across responses (via
+            // `SNAPRequestTracker.validateStorageRanges` + `StorageTask.createContinuation`),
+            // so no pre-insert sort is needed — the wrapper's underlying StackTrie throws on
+            // out-of-order keys. Emitted RLP-node batches flush to RocksDB at the 8 MiB
+            // threshold inside the wrapper, capping in-heap working set per contract.
+            if (!deferredMerkleization) {
+              val trie = getOrCreateAccountTrie(task.accountHash)
+              accountSlots.foreach { case (slotHash, slotValue) =>
+                trie.update(slotHash.toArray, slotValue.toArray)
+              }
+              com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
+                .setStoragePendingTries(pendingAccountTries.size.toLong)
+            }
+
+            // Flat-slot mirror — accountHash ++ slotHash → slotValue. Sorted in
+            // `stageFlatSlotChunk` and accumulated for an off-actor batched commit.
+            stageFlatSlotChunk(task.accountHash, accountSlots)
+
             slotsDownloaded += accountSlots.size
-            bytesDownloaded += accountSlots.map { case (hash, value) => hash.size + value.size }.sum
+            bytesDownloaded += slotBytes
 
             snapSyncController ! SNAPSyncController.ProgressStorageSlotsSynced(accountSlots.size.toLong)
 
@@ -1341,39 +1220,28 @@ class StorageRangeCoordinator(
               val continuationTask = StorageTask.createContinuation(task, lastSlot)
               this.tasks.enqueue(continuationTask)
               log.debug(s"Created continuation task for account ${task.accountString} (partial range, proof present)")
-
-              // Per-account memory limit: flush large accounts incrementally
-              maybeFlushLargeAccount(task.accountHash)
             } else {
-              // Account fully downloaded — decide: flat-only or full trie build
-              if (deferredMerkleization || slotBuffer.size < smallContractThreshold) {
-                // Flat-only write — skip MPT construction during download.
-                // deferredMerkleization: ALL contracts skip MPT (Paprika approach).
-                // smallContractThreshold: ~95% of ETC contracts have < 1024 slots.
-                // MPT built from flat data in post-download Merkleization pass or healing.
-                writeSmallContractFlatOnly(task.accountHash, slotBuffer)
-                completedAccountCount += 1
+              // Account fully downloaded — commit the streaming trie if one exists.
+              // For deferred-merkleization mode no trie was built; flat-slot writes alone
+              // are sufficient and the MPT is rebuilt later from flat data.
+              if (deferredMerkleization) {
                 log.debug(
-                  s"Account ${task.accountHash.take(4).toArray.map("%02x".format(_)).mkString}: " +
-                    s"flat-only write (${slotBuffer.size} slots" +
-                    s"${if (deferredMerkleization) ", deferred merkleization" else ", small contract"})"
+                  s"Account ${task.accountHash.take(4).toHex} fully downloaded " +
+                    s"(deferred merkleization — flat-only)"
                 )
               } else {
-                // Large contract with deferred merkleization disabled — queue for async trie
-                accountsReadyForBuild += task.accountHash
+                val computedRoot = commitAccountTrie(task.accountHash, task.storageRoot)
                 log.debug(
-                  s"Account ${task.accountHash.take(4).toArray.map("%02x".format(_)).mkString} fully buffered " +
-                    s"(${slotBuffer.size} total slots) — queued for trie construction"
+                  s"Account ${task.accountHash.take(4).toHex} streaming trie committed: " +
+                    s"root=${computedRoot.take(4).toHex}"
                 )
               }
+              completedAccountCount += 1
             }
 
             task.done = true
             task.pending = false
             recordCompletedTask(task)
-
-            // Check if we should trigger a batch trie build
-            maybeStartTrieConstruction()
           } else {
             // No slots to store — mark task done
             task.done = true
@@ -1499,11 +1367,11 @@ class StorageRangeCoordinator(
 
   private def isComplete: Boolean =
     noMoreTasksExpected && tasks.isEmpty && activeTasks.isEmpty &&
-      accountsReadyForBuild.isEmpty && accountsInTrieConstruction.isEmpty && pendingAccountSlots.isEmpty &&
+      pendingAccountTries.isEmpty &&
       pendingFlatBatchAccounts.isEmpty && inFlightFlatBatches == 0
 
-  /** Update contract completion counts and send progress to controller. The counter is incremented at the two "account
-    * fully done" sites (small-contract flat write + TrieConstructionComplete); we just broadcast its current value,
+  /** Update contract completion counts and send progress to controller. The counter is incremented exactly once per
+    * account at the "no continuation needed" branch of `processStorageRanges`; we just broadcast its current value,
     * avoiding the previous O(N) rebuild over completedTasks that ran on every progress check.
     */
   private var lastReportedCompletedAccountCount: Long = 0L
@@ -1547,7 +1415,8 @@ object StorageRangeCoordinator {
       flatBatchEcOverride: Option[ExecutionContext] = None,
       useStackTrie: Boolean = false,
       backpressureHighWatermark: Int = 100000,
-      backpressureLowWatermark: Int = 50000
+      backpressureLowWatermark: Int = 50000,
+      maxConcurrentStorageAccounts: Int = 256
   ): Props =
     Props(
       new StorageRangeCoordinator(
@@ -1568,7 +1437,8 @@ object StorageRangeCoordinator {
         flatBatchEcOverride = flatBatchEcOverride,
         useStackTrie = useStackTrie,
         backpressureHighWatermark = backpressureHighWatermark,
-        backpressureLowWatermark = backpressureLowWatermark
+        backpressureLowWatermark = backpressureLowWatermark,
+        maxConcurrentStorageAccounts = maxConcurrentStorageAccounts
       )
     )
 
