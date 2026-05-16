@@ -204,7 +204,9 @@ class StorageRangeCoordinator(
       return
     }
 
+    val wasStateless = statelessPeers.contains(id)
     statelessPeers.add(id)
+    if (!wasStateless) com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.incrementStatelessPeerConfirmed()
     log.info(
       s"Peer $id marked stateless after $strikes consecutive empty storage responses for root " +
         s"${stateRoot.take(4).toHex} (${statelessPeers.size}/${knownAvailablePeers.size} stateless)"
