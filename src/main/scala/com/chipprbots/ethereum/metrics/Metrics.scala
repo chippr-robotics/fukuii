@@ -8,8 +8,8 @@ import scala.util.Try
 
 import io.micrometer.core.instrument._
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
-import io.prometheus.client.exporter.HTTPServer
-import io.prometheus.client.hotspot.DefaultExports
+import io.prometheus.metrics.exporter.httpserver.{HTTPServer => PrometheusHTTPServer}
+import io.prometheus.metrics.instrumentation.jvm.JvmMetrics
 import kamon.Kamon
 import org.slf4j.LoggerFactory
 
@@ -17,17 +17,18 @@ case class Metrics(metricsPrefix: String, registry: MeterRegistry, serverPort: I
 
   private[this] def mkName: String => String = MetricsUtils.mkNameWithPrefix(metricsPrefix)
 
-  private lazy val server: HTTPServer = new HTTPServer(serverPort)
+  private lazy val server: PrometheusHTTPServer =
+    PrometheusHTTPServer.builder().port(serverPort).buildAndStart()
 
   def start(): Unit = {
     server // We need this to evaluate the lazy val!
-    DefaultExports.initialize()
+    JvmMetrics.builder().register()
     Kamon.init()
   }
 
   def close(): Unit = {
     registry.close()
-    server.stop()
+    server.close()
   }
 
   def deltaSpike(name: String): DeltaSpikeGauge =

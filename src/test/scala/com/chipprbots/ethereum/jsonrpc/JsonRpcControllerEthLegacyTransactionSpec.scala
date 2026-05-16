@@ -104,7 +104,7 @@ class JsonRpcControllerEthLegacyTransactionSpec
   }
 
   it should "handle eth_getRawTransactionByHash request" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    val mockEthTxService: EthTxService & scala.reflect.Selectable = mock[EthTxService]
+    val mockEthTxService = mock[EthTxService]
     override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(ethTxService = mockEthTxService)
 
     val txResponse: SignedTransaction = Fixtures.Blocks.Block3125369.body.transactionList.head
@@ -300,7 +300,7 @@ class JsonRpcControllerEthLegacyTransactionSpec
   }
 
   it should "eth_getTransactionByHash" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    val mockEthTxService: EthTxService & scala.reflect.Selectable = mock[EthTxService]
+    val mockEthTxService = mock[EthTxService]
     override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(ethTxService = mockEthTxService)
 
     val txResponse: TransactionResponse = TransactionResponse(Fixtures.Blocks.Block3125369.body.transactionList.head)
@@ -320,7 +320,7 @@ class JsonRpcControllerEthLegacyTransactionSpec
   }
 
   it should "eth_getTransactionCount" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    val mockEthUserService: EthUserService & scala.reflect.Selectable = mock[EthUserService]
+    val mockEthUserService = mock[EthUserService]
     override val jsonRpcController: JsonRpcController =
       super.jsonRpcController.copy(ethUserService = mockEthUserService)
 
@@ -380,7 +380,7 @@ class JsonRpcControllerEthLegacyTransactionSpec
   }
 
   it should "eth_getTransactionReceipt post byzantium" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    val mockEthTxService: EthTxService & scala.reflect.Selectable = mock[EthTxService]
+    val mockEthTxService = mock[EthTxService]
     override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(ethTxService = mockEthTxService)
 
     val arbitraryValue = 42
@@ -470,7 +470,7 @@ class JsonRpcControllerEthLegacyTransactionSpec
   }
 
   it should "eth_getTransactionReceipt pre byzantium" taggedAs (UnitTest, RPCTest) in new JsonRpcControllerFixture {
-    val mockEthTxService: EthTxService & scala.reflect.Selectable = mock[EthTxService]
+    val mockEthTxService = mock[EthTxService]
     override val jsonRpcController: JsonRpcController = super.jsonRpcController.copy(ethTxService = mockEthTxService)
 
     val arbitraryValue = 42
@@ -562,7 +562,7 @@ class JsonRpcControllerEthLegacyTransactionSpec
     UnitTest,
     RPCTest
   ) in new JsonRpcControllerFixture {
-    val mockEthTxService: EthTxService & scala.reflect.Selectable = mock[EthTxService]
+    val mockEthTxService = mock[EthTxService]
     (mockEthTxService.ethPendingTransactions _)
       .expects(*)
       .returning(IO.pure(Right(EthPendingTransactionsResponse(List()))))
@@ -604,7 +604,7 @@ class JsonRpcControllerEthLegacyTransactionSpec
       PendingTransaction(fakeTransaction, System.currentTimeMillis)
     }
 
-    val mockEthTxService: EthTxService & scala.reflect.Selectable = mock[EthTxService]
+    val mockEthTxService = mock[EthTxService]
     (mockEthTxService.ethPendingTransactions _)
       .expects(*)
       .returning(IO.pure(Right(EthPendingTransactionsResponse(transactions))))

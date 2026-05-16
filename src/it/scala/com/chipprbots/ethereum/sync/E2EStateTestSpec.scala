@@ -6,7 +6,6 @@ import cats.effect.unsafe.IORuntime
 import scala.concurrent.duration._
 
 import com.typesafe.config.ConfigValueFactory
-import io.prometheus.client.CollectorRegistry
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.matchers.should.Matchers
 
@@ -53,8 +52,8 @@ class E2EStateTestSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
   implicit val testRuntime: IORuntime = IORuntime.global
 
   override def beforeAll(): Unit = {
-    // Clear metrics registry to prevent pollution from previous test runs
-    CollectorRegistry.defaultRegistry.clear()
+    // Close any previous metrics instance so the new one starts with a clean registry
+    Metrics.closeInstance("default")
     Metrics.configure(
       MetricsConfig(Config.config.withValue("metrics.enabled", ConfigValueFactory.fromAnyRef(true)))
     )

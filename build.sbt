@@ -1,6 +1,6 @@
 enablePlugins(JavaAppPackaging, SolidityPlugin, JavaAgent)
 
-javaAgents += "io.kamon" % "kanela-agent" % "1.0.6"
+javaAgents += "io.kamon" % "kanela-agent" % "1.0.18"
 
 import scala.sys.process.Process
 import NativePackagerHelper._
