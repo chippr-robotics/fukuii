@@ -88,6 +88,11 @@ class PeerManagerActor(
     */
   private val pendingMaintainedConnections: mutable.Map[ActorRef, URI] = mutable.Map.empty
 
+  /** Consecutive pre-handshake TCP failures per remote IP. After 5 failures the IP is blacklisted with exponential
+    * backoff (5→10→20→30 min). Cleared on successful handshake to avoid blacklisting peers that recovered.
+    */
+  private val consecutiveTcpFailures: mutable.Map[String, Int] = mutable.Map.empty
+
   /** Runtime max-outgoing-peers override set by admin_maxPeers. core-geth reference: eth/api_admin.go MaxPeers — sets
     * handler.maxPeers + p2pServer.MaxPeers.
     */
@@ -476,6 +481,23 @@ class PeerManagerActor(
           )
         }
       }
+      // Track TCP-level pre-handshake failures for non-maintained outgoing peers.
+      // pendingMaintainedConnections already consumed the ref if it was maintained, so any
+      // peer still in outgoingPendingPeers here is a non-maintained discovery peer that failed
+      // before the ETH handshake completed (TCP unreachable, TLS failure, etc.).
+      connectedPeers.peers.get(PeerId.fromRef(ref)).foreach { peer =>
+        if (!peer.incomingConnection) {
+          val ip = peer.remoteAddress.getHostString
+          val count = consecutiveTcpFailures.getOrElse(ip, 0) + 1
+          consecutiveTcpFailures(ip) = count
+          if (count >= 5) {
+            val backoffMinutes = math.min(30, 5 * (1 << (count - 5)))
+            log.warning("TCP failure #{} for {} — blacklisting for {} min", count, ip, backoffMinutes)
+            blacklist.add(PeerAddress(ip), backoffMinutes.minutes, Blacklist.BlacklistReason.TcpSubsystemError)
+            consecutiveTcpFailures.remove(ip)
+          }
+        }
+      }
       val (terminatedPeersIds, newConnectedPeers) = connectedPeers.removeTerminatedPeer(ref)
       terminatedPeersIds.foreach { peerId =>
         peerStatusCache = peerStatusCache - peerId
@@ -518,6 +540,7 @@ class PeerManagerActor(
       context.become(listening(newConnectedPeers))
 
     case PeerEvent.PeerHandshakeSuccessful(handshakedPeer, _) =>
+      consecutiveTcpFailures.remove(handshakedPeer.remoteAddress.getHostString)
       val isMaintained =
         handshakedPeer.nodeId.exists(nid => maintainedPeersByNodeId.contains(Hex.toHexString(nid.toArray)))
       if (

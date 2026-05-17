@@ -225,6 +225,7 @@ class BlockchainReader(
             }
         }
     }
+
   /** Allows to query for a block based on it's number
     *
     * @param number

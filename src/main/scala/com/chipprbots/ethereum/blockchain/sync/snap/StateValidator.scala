@@ -271,7 +271,7 @@ class StateValidator(mptStorage: MptStorage) {
       nodesVisited += 1
 
       val now = System.currentTimeMillis()
-      if (now - lastHeartbeat >= 60_000L) {
+      if (now - lastHeartbeat >= 10_000L) {
         log.info(s"[WALK-PULSE] visited=$nodesVisited missing-pending=${result.size} stack=${stack.size}")
         lastHeartbeat = now
       }
@@ -318,15 +318,11 @@ class StateValidator(mptStorage: MptStorage) {
           }
 
         case hash: HashNode =>
-          // Do NOT add hash.hash to visited here: decodeNode sets cachedHash = lookupKey,
-          // so the resolved node shares the same hash and will add itself when popped.
-          // Adding it here would cause the resolved node's branch/extension case to skip itself.
           val hashKey = ByteString(hash.hash)
           if (!visited.contains(hashKey)) {
-            try {
-              val resolvedNode = mptStorage.get(hash.hash)
-              stack.prepend((resolvedNode, nibblePath))
-            } catch {
+            try
+              mptStorage.get(hash.hash) // proven subtree — discoverMissingChildren handles children
+            catch {
               case _: MerklePatriciaTrie.MissingNodeException =>
                 val compactPath = ByteString(HexPrefix.encode(nibblePath, isLeaf = false))
                 result += ((Seq(compactPath), ByteString(hash.hash)))

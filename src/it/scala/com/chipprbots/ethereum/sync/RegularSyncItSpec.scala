@@ -158,13 +158,17 @@ class RegularSyncItSpec extends FreeSpecBase with Matchers with BeforeAndAfterAl
     val DefaultBlockPropagation = "DefaultBlockPropagation"
     val MinedBlockPropagation = "MinedBlockPropagation"
     def sampleMetric(blockType: String): Double =
-      scala.util.Try {
-        Metrics.get().registry
-          .get("app.regularsync.blocks.propagation.timer")
-          .tag("blocktype", blockType)
-          .timer()
-          .count()
-          .toDouble
-      }.getOrElse(0.0)
+      scala.util
+        .Try {
+          Metrics
+            .get()
+            .registry
+            .get("app.regularsync.blocks.propagation.timer")
+            .tag("blocktype", blockType)
+            .timer()
+            .count()
+            .toDouble
+        }
+        .getOrElse(0.0)
   }
 }
