@@ -210,7 +210,7 @@ class BlockchainReader(
         getBlockHeaderByNumber(latestBlock).flatMap(h => getChainWeightByHash(h.hash)) match {
           case Some(cw) => (cw, "CANONICAL_NUMBER")
           case None =>
-            val ourBestNum    = getBestBlockNumber()
+            val ourBestNum = getBestBlockNumber()
             val bestHeaderOpt = getBestBlockHeader()
             val ourBestTD = bestHeaderOpt
               .flatMap(h => getChainWeightByHash(h.hash))
@@ -218,7 +218,7 @@ class BlockchainReader(
               .getOrElse(BigInt(1))
             if (ourBestNum > 0) {
               val ourCurrentDiff = bestHeaderOpt.map(_.difficulty).getOrElse(BigInt(1))
-              val gap            = (latestBlock - ourBestNum).max(BigInt(0))
+              val gap = (latestBlock - ourBestNum).max(BigInt(0))
               // Marginal-rate estimate: uses current difficulty instead of the historical average.
               // Historical avg ~582 TH/block for ETC; current era ~2000–4300 TH → old formula
               // underestimates each gap block's TD contribution by 70-86%.

@@ -18,69 +18,65 @@ import OscillationFixtures._
 // scalastyle:off magic.number
 /** Tests for ETChash difficulty adjustment behaviour across three mining eras:
   *
-  *   S1  Ethereum Merge spike (Sept 2022): GPU influx, fast-block lag
-  *   S2  Post-Merge miner exodus (2022–2024): slow convergence, variable gaps
-  *   S3  Current ASIC flex-load oscillation (Oct 2024–present): ETChash ASICs cycling on/off
-  *   S4  Hypothetical exploitation surface: boundary / stress scenarios
-  *   S5  MESS interaction: Olympia re-activation closes the difficulty-trough gap
+  * S1 Ethereum Merge spike (Sept 2022): GPU influx, fast-block lag S2 Post-Merge miner exodus (2022–2024): slow
+  * convergence, variable gaps S3 Current ASIC flex-load oscillation (Oct 2024–present): ETChash ASICs cycling on/off S4
+  * Hypothetical exploitation surface: boundary / stress scenarios S5 MESS interaction: Olympia re-activation closes the
+  * difficulty-trough gap
   *
-  * Current oscillation (S3): ETChash ASICs are flex-load / demand-response — they turn off
-  * when energy costs exceed a threshold or grid operator contracts require curtailment. These
-  * ASICs cannot mine other coins; they are bricks without ETC. No alternative revenue stream.
+  * Current oscillation (S3): ETChash ASICs are flex-load / demand-response — they turn off when energy costs exceed a
+  * threshold or grid operator contracts require curtailment. These ASICs cannot mine other coins; they are bricks
+  * without ETC. No alternative revenue stream.
   *
   * All on-chain block data is from OscillationFixtures (core-geth verified).
   */
-class ETChashDifficultyManipulationSpec
-    extends AnyFlatSpec
-    with Matchers
-    with ScalaCheckPropertyChecks {
+class ETChashDifficultyManipulationSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks {
 
   // -------------------------------------------------------------------------
   // Shared infrastructure
   // -------------------------------------------------------------------------
 
   private val etcForkNumbers: ForkBlockNumbers = ForkBlockNumbers(
-    frontierBlockNumber             = 0,
-    homesteadBlockNumber            = 1150000,
-    eip106BlockNumber               = Long.MaxValue,
-    eip150BlockNumber               = 2500000,
-    eip155BlockNumber               = 3000000,
-    eip160BlockNumber               = 3000000,
-    eip161BlockNumber               = Long.MaxValue,
-    difficultyBombPauseBlockNumber  = 3000000,
+    frontierBlockNumber = 0,
+    homesteadBlockNumber = 1150000,
+    eip106BlockNumber = Long.MaxValue,
+    eip150BlockNumber = 2500000,
+    eip155BlockNumber = 3000000,
+    eip160BlockNumber = 3000000,
+    eip161BlockNumber = Long.MaxValue,
+    difficultyBombPauseBlockNumber = 3000000,
     difficultyBombContinueBlockNumber = 5000000,
     difficultyBombRemovalBlockNumber = 5900000,
-    byzantiumBlockNumber            = Long.MaxValue,
-    constantinopleBlockNumber       = Long.MaxValue,
-    istanbulBlockNumber             = Long.MaxValue,
-    atlantisBlockNumber             = 8772000,
-    aghartaBlockNumber              = 9573000,
-    phoenixBlockNumber              = 10500839,
-    petersburgBlockNumber           = Long.MaxValue,
-    ecip1099BlockNumber             = 11460000,
-    muirGlacierBlockNumber          = Long.MaxValue,
-    magnetoBlockNumber              = 13189133,
-    berlinBlockNumber               = 13189133,
-    mystiqueBlockNumber             = 14525000,
-    spiralBlockNumber               = 19250000,
-    olympiaBlockNumber              = Long.MaxValue
+    byzantiumBlockNumber = Long.MaxValue,
+    constantinopleBlockNumber = Long.MaxValue,
+    istanbulBlockNumber = Long.MaxValue,
+    atlantisBlockNumber = 8772000,
+    aghartaBlockNumber = 9573000,
+    phoenixBlockNumber = 10500839,
+    petersburgBlockNumber = Long.MaxValue,
+    ecip1099BlockNumber = 11460000,
+    muirGlacierBlockNumber = Long.MaxValue,
+    magnetoBlockNumber = 13189133,
+    berlinBlockNumber = 13189133,
+    mystiqueBlockNumber = 14525000,
+    spiralBlockNumber = 19250000,
+    olympiaBlockNumber = Long.MaxValue
   )
 
   implicit private val blockchainConfig: BlockchainConfig = BlockchainConfig(
-    forkBlockNumbers    = etcForkNumbers,
-    maxCodeSize         = Some(24576),
+    forkBlockNumbers = etcForkNumbers,
+    maxCodeSize = Some(24576),
     customGenesisFileOpt = None,
     customGenesisJsonOpt = None,
-    daoForkConfig       = None,
-    accountStartNonce   = com.chipprbots.ethereum.domain.UInt256.Zero,
-    chainId             = 61,
-    networkId           = 1,
+    daoForkConfig = None,
+    accountStartNonce = com.chipprbots.ethereum.domain.UInt256.Zero,
+    chainId = 61,
+    networkId = 1,
     monetaryPolicyConfig = com.chipprbots.ethereum.utils.MonetaryPolicyConfig(
       5000000, 0.2, 5000000000000000000L, 3000000000000000000L, 2000000000000000000L
     ),
-    gasTieBreaker       = false,
+    gasTieBreaker = false,
     ethCompatibleStorage = true,
-    bootstrapNodes      = Set.empty
+    bootstrapNodes = Set.empty
   )
 
   private def header(
@@ -90,21 +86,21 @@ class ETChashDifficultyManipulationSpec
       hasUncles: Boolean = false
   ): BlockHeader =
     BlockHeader(
-      parentHash       = ByteString(new Array[Byte](32)),
-      ommersHash       = if (hasUncles) ByteString(new Array[Byte](32)) else BlockHeader.EmptyOmmers,
-      beneficiary      = ByteString(new Array[Byte](20)),
-      stateRoot        = ByteString(new Array[Byte](32)),
+      parentHash = ByteString(new Array[Byte](32)),
+      ommersHash = if (hasUncles) ByteString(new Array[Byte](32)) else BlockHeader.EmptyOmmers,
+      beneficiary = ByteString(new Array[Byte](20)),
+      stateRoot = ByteString(new Array[Byte](32)),
       transactionsRoot = ByteString(new Array[Byte](32)),
-      receiptsRoot     = ByteString(new Array[Byte](32)),
-      logsBloom        = ByteString(new Array[Byte](256)),
-      difficulty       = difficulty,
-      number           = number,
-      gasLimit         = BigInt(8000000),
-      gasUsed          = BigInt(0),
-      unixTimestamp    = timestamp,
-      extraData        = ByteString.empty,
-      mixHash          = ByteString(new Array[Byte](32)),
-      nonce            = ByteString(new Array[Byte](8))
+      receiptsRoot = ByteString(new Array[Byte](32)),
+      logsBloom = ByteString(new Array[Byte](256)),
+      difficulty = difficulty,
+      number = number,
+      gasLimit = BigInt(8000000),
+      gasUsed = BigInt(0),
+      unixTimestamp = timestamp,
+      extraData = ByteString.empty,
+      mixHash = ByteString(new Array[Byte](32)),
+      nonce = ByteString(new Array[Byte](8))
     )
 
   private def fromSnapshot(s: BlockSnapshot): BlockHeader =
@@ -127,8 +123,8 @@ class ETChashDifficultyManipulationSpec
     }
   }
 
-  /** Simulate `count` blocks, each `gapSecs` apart, starting from `parentDiff`/`parentTs`.
-    * Returns (blockNumber, difficulty) pairs for the synthetic chain.
+  /** Simulate `count` blocks, each `gapSecs` apart, starting from `parentDiff`/`parentTs`. Returns (blockNumber,
+    * difficulty) pairs for the synthetic chain.
     */
   private def syntheticChain(
       startBlock: BigInt,
@@ -139,15 +135,15 @@ class ETChashDifficultyManipulationSpec
   ): Seq[(BigInt, BigInt)] = {
     val results = scala.collection.mutable.ArrayBuffer.empty[(BigInt, BigInt)]
     var prevDiff = parentDiff
-    var prevTs   = parentTs
+    var prevTs = parentTs
     for (i <- 1 to count) {
-      val num       = startBlock + i
-      val childTs   = prevTs + gapSecs
+      val num = startBlock + i
+      val childTs = prevTs + gapSecs
       val parentHdr = header(num - 1, prevDiff, prevTs)
-      val newDiff   = EthashDifficultyCalculator.calculateDifficulty(num, childTs, parentHdr)
+      val newDiff = EthashDifficultyCalculator.calculateDifficulty(num, childTs, parentHdr)
       results += ((num, newDiff))
       prevDiff = newDiff
-      prevTs   = childTs
+      prevTs = childTs
     }
     results.toSeq
   }
@@ -188,10 +184,10 @@ class ETChashDifficultyManipulationSpec
     // After 5 consecutive fast blocks, difficulty only rose by ~5/2048 ≈ 0.24%
     // while hashrate jumped from ~50 TH/s to ~150+ TH/s on arrival day (3x)
     val firstDiff = mergeSpike.head.difficulty
-    val lastDiff  = mergeSpike.last.difficulty
+    val lastDiff = mergeSpike.last.difficulty
     val fractionalIncrease = (lastDiff - firstDiff).toDouble / firstDiff.toDouble
 
-    fractionalIncrease should be < 0.005  // less than 0.5% after 5 fast blocks
+    fractionalIncrease should be < 0.005 // less than 0.5% after 5 fast blocks
     // Meanwhile hashrate tripled — the DAA convergence lag is ~2048 blocks to full equilibrium
     // during this lag window miners earn far more blocks per hash than at equilibrium
   }
@@ -203,7 +199,7 @@ class ETChashDifficultyManipulationSpec
     // Synthetic: 3x hashrate from premergeBaseline implies ~4.3s block time
     // c = +1 each block → difficulty rises by D/2048 per block
     // How many blocks to reach 90% of 3x equilibrium difficulty?
-    val startDiff    = premergeBaseline.difficulty
+    val startDiff = premergeBaseline.difficulty
     val target3xEquil = startDiff * 3
 
     // After N blocks at c=+1, diff ≈ startDiff * (1 + 1/2048)^N
@@ -211,9 +207,9 @@ class ETChashDifficultyManipulationSpec
     val chain = syntheticChain(
       startBlock = premergeBaseline.number,
       parentDiff = startDiff,
-      parentTs   = premergeBaseline.timestamp,
-      gapSecs    = 4L,
-      count      = 5000
+      parentTs = premergeBaseline.timestamp,
+      gapSecs = 4L,
+      count = 5000
     )
     val ninetyPctTarget = target3xEquil * 9 / 10
     val blocksToConverge = chain.indexWhere { case (_, d) => d >= ninetyPctTarget }
@@ -238,11 +234,14 @@ class ETChashDifficultyManipulationSpec
     UnitTest,
     ConsensusTest
   ) in {
-    val slowBlocks = (Seq(declinePhaseParent) ++ declinePhase).sliding(2).collect {
-      case Seq(parent, child) if child.timestamp - parent.timestamp >= 18 =>
-        val gap = child.timestamp - parent.timestamp
-        (child.number, gap, cCoeff(gap))
-    }.toSeq
+    val slowBlocks = (Seq(declinePhaseParent) ++ declinePhase)
+      .sliding(2)
+      .collect {
+        case Seq(parent, child) if child.timestamp - parent.timestamp >= 18 =>
+          val gap = child.timestamp - parent.timestamp
+          (child.number, gap, cCoeff(gap))
+      }
+      .toSeq
 
     slowBlocks should not be empty
     slowBlocks.foreach { case (num, gap, c) =>
@@ -260,8 +259,8 @@ class ETChashDifficultyManipulationSpec
     // Expected long-run equilibrium: ~125/185 fraction of peak (asicBaseHrFrac).
     val actualRatio = cycleEnd.difficulty.toDouble / mergePeak.difficulty.toDouble
     // Exact ratio depends on elapsed time; just verify we're heading in the right direction
-    actualRatio should be < 1.0  // difficulty fell from Merge peak
-    actualRatio should be > 0.3  // but not to near-zero
+    actualRatio should be < 1.0 // difficulty fell from Merge peak
+    actualRatio should be > 0.3 // but not to near-zero
   }
 
   // -------------------------------------------------------------------------
@@ -286,10 +285,13 @@ class ETChashDifficultyManipulationSpec
     UnitTest,
     ConsensusTest
   ) in {
-    val gaps = (Seq(flexOffPhaseParent) ++ flexOffPhase).sliding(2).map {
-      case Seq(p, c) => c.timestamp - p.timestamp
-      case _         => 0L
-    }.toSeq
+    val gaps = (Seq(flexOffPhaseParent) ++ flexOffPhase)
+      .sliding(2)
+      .map {
+        case Seq(p, c) => c.timestamp - p.timestamp
+        case _         => 0L
+      }
+      .toSeq
     val slowCount = gaps.count(_ >= 18)
     // Empirical: 9/10 blocks have gap >= 18s; one (block 22,200,018) has gap = 12s
     slowCount should be >= 9
@@ -299,12 +301,15 @@ class ETChashDifficultyManipulationSpec
     UnitTest,
     ConsensusTest
   ) in {
-    val cValues = (Seq(flexOffPhaseParent) ++ flexOffPhase).sliding(2).map {
-      case Seq(p, c) => cCoeff(c.timestamp - p.timestamp)
-      case _         => 0L
-    }.toSeq
+    val cValues = (Seq(flexOffPhaseParent) ++ flexOffPhase)
+      .sliding(2)
+      .map {
+        case Seq(p, c) => cCoeff(c.timestamp - p.timestamp)
+        case _         => 0L
+      }
+      .toSeq
     val negativeCount = cValues.count(_ < 0)
-    negativeCount should be >= 9  // 9/10 — only index 7 (gap=12s) gives c=0
+    negativeCount should be >= 9 // 9/10 — only index 7 (gap=12s) gives c=0
   }
 
   "ASIC flex-load cycling" should "create a difficulty trough at the end of the flex-off phase" taggedAs (
@@ -328,12 +333,12 @@ class ETChashDifficultyManipulationSpec
     // Flex-on phase difficulty is lower than equilibrium after a preceding flex-off trough.
     // ASICs return when energy becomes available again — no alternative revenue during flex-off;
     // they simply idle. The depressed difficulty at re-entry is a DAA convergence artifact.
-    val flexOnDiff  = flexOnPhase.head.difficulty
-    val peakEqDiff  = cycleMid.difficulty
+    val flexOnDiff = flexOnPhase.head.difficulty
+    val peakEqDiff = cycleMid.difficulty
 
     // This fixture (Mar 2025) captures the approach to peak, not trough entry
     flexOnDiff should be > BigInt(0)
-    flexOnDiff should be < peakEqDiff * 2  // sanity: not astronomically above peak
+    flexOnDiff should be < peakEqDiff * 2 // sanity: not astronomically above peak
   }
 
   // -------------------------------------------------------------------------
@@ -347,9 +352,9 @@ class ETChashDifficultyManipulationSpec
     UnitTest,
     ConsensusTest
   ) in {
-    val exitFrac     = flexMaxHrFrac                        // 0.324 ≈ observed
-    val expectedGap  = expectedBlockTimeAfterExit(exitFrac) // ≈ 19 s
-    val expectedC    = cCoeff(expectedGap)
+    val exitFrac = flexMaxHrFrac // 0.324 ≈ observed
+    val expectedGap = expectedBlockTimeAfterExit(exitFrac) // ≈ 19 s
+    val expectedC = cCoeff(expectedGap)
     expectedC shouldBe -1L
   }
 
@@ -360,7 +365,7 @@ class ETChashDifficultyManipulationSpec
     // Below threshold: block time < 18 s → still c = 0 or c = +1
     val belowThreshold = 0.20
     val gap = expectedBlockTimeAfterExit(belowThreshold) // ≈ 16 s
-    cCoeff(gap) shouldBe 0L   // 1 - floor(16/9) = 1 - 1 = 0
+    cCoeff(gap) shouldBe 0L // 1 - floor(16/9) = 1 - 1 = 0
   }
 
   "Flex-load exit threshold" should "trigger c = -1 at and above 0.278 exit fraction" taggedAs (
@@ -378,17 +383,17 @@ class ETChashDifficultyManipulationSpec
     ConsensusTest
   ) in {
     val startDiff = cycleStart.difficulty
-    val startTs   = cycleStart.timestamp
+    val startTs = cycleStart.timestamp
 
     forAll(flexFractionTable) { exitFrac =>
       val gapSecs = expectedBlockTimeAfterExit(exitFrac)
-      val chain   = syntheticChain(cycleStart.number, startDiff, startTs, gapSecs, count = 500)
+      val chain = syntheticChain(cycleStart.number, startDiff, startTs, gapSecs, count = 500)
       val endDiff = chain.last._2
 
       if (cCoeff(gapSecs) == 0L) {
         // Below threshold — no trough; difficulty stays approximately flat
         val drift = (endDiff - startDiff).abs
-        drift should be < startDiff / 20  // < 5% movement
+        drift should be < startDiff / 20 // < 5% movement
       } else {
         // Above threshold — measurable trough
         endDiff should be < startDiff
@@ -406,15 +411,15 @@ class ETChashDifficultyManipulationSpec
     // profit with no compensating income — irrational unless ETC price recovers during the trough.
     // The test quantifies the trough magnitude from the DAA's perspective:
 
-    val offGap   = expectedBlockTimeAfterExit(flexMaxHrFrac) // ≈ 19 s
-    val offChain = syntheticChain(cycleStart.number, cycleStart.difficulty, cycleStart.timestamp,
-      gapSecs = offGap, count = 500)
+    val offGap = expectedBlockTimeAfterExit(flexMaxHrFrac) // ≈ 19 s
+    val offChain =
+      syntheticChain(cycleStart.number, cycleStart.difficulty, cycleStart.timestamp, gapSecs = offGap, count = 500)
     val troughDiff = offChain.last._2
 
     // Trough advantage: blocks are easier by this fraction at re-entry
     val advantage = 1.0 - troughDiff.toDouble / cycleStart.difficulty.toDouble
-    advantage should be > 0.0   // some advantage exists from DAA convergence
-    advantage should be < 0.5   // but not a 2x windfall — and all ETC profit was foregone
+    advantage should be > 0.0 // some advantage exists from DAA convergence
+    advantage should be < 0.5 // but not a 2x windfall — and all ETC profit was foregone
   }
 
   "DAA recovery time" should "return toward full ASIC equilibrium within ~2048 blocks after re-entry" taggedAs (
@@ -422,15 +427,14 @@ class ETChashDifficultyManipulationSpec
     ConsensusTest
   ) in {
     // After 500 flex-off blocks at 19s, all ASICs return mining at ~4s gaps
-    val offGap   = expectedBlockTimeAfterExit(flexMaxHrFrac)
-    val offChain = syntheticChain(cycleStart.number, cycleStart.difficulty, cycleStart.timestamp,
-      gapSecs = offGap, count = 500)
+    val offGap = expectedBlockTimeAfterExit(flexMaxHrFrac)
+    val offChain =
+      syntheticChain(cycleStart.number, cycleStart.difficulty, cycleStart.timestamp, gapSecs = offGap, count = 500)
     val troughDiff = offChain.last._2
-    val troughTs   = cycleStart.timestamp + offGap * 500
+    val troughTs = cycleStart.timestamp + offGap * 500
 
     // Recovery phase: fast blocks at 4s (all ASICs on)
-    val onChain = syntheticChain(cycleStart.number + 500, troughDiff, troughTs,
-      gapSecs = 4L, count = 2048)
+    val onChain = syntheticChain(cycleStart.number + 500, troughDiff, troughTs, gapSecs = 4L, count = 2048)
     val recoveredDiff = onChain.last._2
 
     // After 2048 fast blocks, should be back near or above the starting difficulty
@@ -444,15 +448,15 @@ class ETChashDifficultyManipulationSpec
   ) in {
     // After a 3x hashrate jump (like the Merge) with c=+1 each block:
     // blocks to reach 90% of new equilibrium ≈ 1400+ blocks (log-convergence)
-    val startDiff    = premergeBaseline.difficulty
+    val startDiff = premergeBaseline.difficulty
     val target3xEquil = startDiff * 3
-    val ninetyPct    = target3xEquil * 9 / 10
+    val ninetyPct = target3xEquil * 9 / 10
 
-    val chain = syntheticChain(premergeBaseline.number, startDiff, premergeBaseline.timestamp,
-      gapSecs = 4L, count = 3000)
+    val chain =
+      syntheticChain(premergeBaseline.number, startDiff, premergeBaseline.timestamp, gapSecs = 4L, count = 3000)
     val idx = chain.indexWhere { case (_, d) => d >= ninetyPct }
 
-    idx should be > 1000   // slow convergence — this is the DAA lag
+    idx should be > 1000 // slow convergence — this is the DAA lag
   }
 
   // -------------------------------------------------------------------------
@@ -460,7 +464,7 @@ class ETChashDifficultyManipulationSpec
   // -------------------------------------------------------------------------
 
   "MESS polynomial" should "match known values at key time points" taggedAs (UnitTest, ConsensusTest) in {
-    ArtificialFinality.polynomialV(BigInt(0))     shouldBe BigInt(128)
+    ArtificialFinality.polynomialV(BigInt(0)) shouldBe BigInt(128)
     // At xcap (25132s ≈ 7 hours), polynomial saturates at 128 + 3840 = 3968
     ArtificialFinality.polynomialV(BigInt(25132)) shouldBe BigInt(3968)
     // At half xcap (~3.5h), value is between 128 and 3968
@@ -477,12 +481,12 @@ class ETChashDifficultyManipulationSpec
   ) in {
     // Local chain: mined at normal difficulty for 7200s (2 hours)
     // Attacker builds competing chain at trough difficulty (flex-off depressed)
-    val gpuOffGap    = expectedBlockTimeAfterExit(flexMaxHrFrac) // 19s
-    val cycleBlocks  = 7200L / gpuOffGap                        // ~379 blocks
-    val troughDiff   = cycleStart.difficulty - (cycleStart.difficulty / 2048) * cycleBlocks
+    val gpuOffGap = expectedBlockTimeAfterExit(flexMaxHrFrac) // 19s
+    val cycleBlocks = 7200L / gpuOffGap // ~379 blocks
+    val troughDiff = cycleStart.difficulty - (cycleStart.difficulty / 2048) * cycleBlocks
 
-    val localTD      = cycleStart.difficulty * cycleBlocks      // honest chain: normal difficulty
-    val proposedTD   = troughDiff * cycleBlocks                 // attacker: depressed difficulty
+    val localTD = cycleStart.difficulty * cycleBlocks // honest chain: normal difficulty
+    val proposedTD = troughDiff * cycleBlocks // attacker: depressed difficulty
 
     // At 7200s, polynomialV ≈ 7x → MESS should reject the lower-TD proposed chain
     ArtificialFinality.shouldRejectReorg(7200L, localTD, proposedTD) shouldBe true
@@ -493,10 +497,10 @@ class ETChashDifficultyManipulationSpec
     ConsensusTest
   ) in {
     // Full flex-off cycle of 500 blocks at 19s each = 9500s timeDelta
-    val timeDelta    = 500L * expectedBlockTimeAfterExit(flexMaxHrFrac)
-    val localTD      = cycleStart.difficulty * 500
-    val troughDiff   = cycleStart.difficulty * 8 / 10  // conservative 20% trough
-    val proposedTD   = troughDiff * 500
+    val timeDelta = 500L * expectedBlockTimeAfterExit(flexMaxHrFrac)
+    val localTD = cycleStart.difficulty * 500
+    val troughDiff = cycleStart.difficulty * 8 / 10 // conservative 20% trough
+    val proposedTD = troughDiff * 500
 
     // polynomialV caps at xcap=25132 — for timeDelta > xcap we get max multiplier (31x)
     ArtificialFinality.shouldRejectReorg(timeDelta, localTD, proposedTD) shouldBe true
@@ -504,31 +508,31 @@ class ETChashDifficultyManipulationSpec
 
   "MESS deactivated (Spiral–Olympia, current mainnet)" should
     "cover the entire observable oscillation period" taggedAs (UnitTest, ConsensusTest) in {
-    val messConfig = MESSConfig(
-      enabled           = true,
-      activationBlock   = Some(BigInt(11_380_000)),
-      deactivationBlock = Some(BigInt(19_250_000))
-    )
-    // All oscillation-era blocks are post-Spiral (> 19,250,000)
-    messConfig.isActiveAtBlock(cycleStart.number) shouldBe false
-    messConfig.isActiveAtBlock(cycleMid.number)   shouldBe false
-    messConfig.isActiveAtBlock(cycleEnd.number)   shouldBe false
-    messConfig.isActiveAtBlock(flexOnPhase.head.number)  shouldBe false
-    messConfig.isActiveAtBlock(flexOffPhase.head.number) shouldBe false
-  }
+      val messConfig = MESSConfig(
+        enabled = true,
+        activationBlock = Some(BigInt(11_380_000)),
+        deactivationBlock = Some(BigInt(19_250_000))
+      )
+      // All oscillation-era blocks are post-Spiral (> 19,250,000)
+      messConfig.isActiveAtBlock(cycleStart.number) shouldBe false
+      messConfig.isActiveAtBlock(cycleMid.number) shouldBe false
+      messConfig.isActiveAtBlock(cycleEnd.number) shouldBe false
+      messConfig.isActiveAtBlock(flexOnPhase.head.number) shouldBe false
+      messConfig.isActiveAtBlock(flexOffPhase.head.number) shouldBe false
+    }
 
   "MESS deactivated window" should "leave chain exposed to ASIC flex-load reorg attempts" taggedAs (
     UnitTest,
     ConsensusTest
   ) in {
     val messConfig = MESSConfig(
-      enabled           = true,
-      activationBlock   = Some(BigInt(11_380_000)),
+      enabled = true,
+      activationBlock = Some(BigInt(11_380_000)),
       deactivationBlock = Some(BigInt(19_250_000))
     )
     // With MESS off, shouldRejectReorg is not called; verify WOULD have rejected
-    val timeDelta  = 500L * expectedBlockTimeAfterExit(flexMaxHrFrac)
-    val localTD    = cycleStart.difficulty * 500
+    val timeDelta = 500L * expectedBlockTimeAfterExit(flexMaxHrFrac)
+    val localTD = cycleStart.difficulty * 500
     val proposedTD = (cycleStart.difficulty * 8 / 10) * 500
     // MESS would protect — but deactivation means the check is skipped
     messConfig.isActiveAtBlock(cycleStart.number) shouldBe false
@@ -541,15 +545,15 @@ class ETChashDifficultyManipulationSpec
   ) in {
     val olympiaActivation = BigInt(25_000_000)
     val messConfig = MESSConfig(
-      enabled             = true,
-      activationBlock     = Some(BigInt(11_380_000)),
-      deactivationBlock   = Some(BigInt(19_250_000)),
-      reactivationBlock   = Some(olympiaActivation)
+      enabled = true,
+      activationBlock = Some(BigInt(11_380_000)),
+      deactivationBlock = Some(BigInt(19_250_000)),
+      reactivationBlock = Some(olympiaActivation)
     )
     // Pre-Olympia oscillation blocks are unprotected
     messConfig.isActiveAtBlock(cycleStart.number) shouldBe false
     // Post-Olympia blocks are protected again
-    messConfig.isActiveAtBlock(olympiaActivation)     shouldBe true
+    messConfig.isActiveAtBlock(olympiaActivation) shouldBe true
     messConfig.isActiveAtBlock(olympiaActivation + 1) shouldBe true
   }
 }

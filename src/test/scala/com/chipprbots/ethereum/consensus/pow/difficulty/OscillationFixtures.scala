@@ -10,9 +10,9 @@ package com.chipprbots.ethereum.consensus.pow.difficulty
   *     coordinated batch on/off, not gradual individual profitability decisions.
   *
   * Observed oscillation cycle (Oct 2024 – Jan 2026):
-  *   - cycleStart (~21 M, Nov 2024):  ~2286 TH difficulty — flex-off equilibrium
-  *   - cycleMid   (~21.85 M, Mar 2025): ~4327 TH difficulty — flex-on peak (all ASICs running)
-  *   - cycleEnd   (~23.71 M, Jan 2026): ~2086 TH difficulty — flex-off trough (maximum curtailment)
+  *   - cycleStart (~21 M, Nov 2024): ~2286 TH difficulty — flex-off equilibrium
+  *   - cycleMid (~21.85 M, Mar 2025): ~4327 TH difficulty — flex-on peak (all ASICs running)
+  *   - cycleEnd (~23.71 M, Jan 2026): ~2086 TH difficulty — flex-off trough (maximum curtailment)
   *
   * Flex-load exit threshold for c = −1: exitFrac ≥ 0.278 of equilibrium hashrate. Observed flex fraction: ~0.324 →
   * above threshold → c < 0 throughout flex-off phases.
@@ -419,7 +419,7 @@ object OscillationFixtures {
   // ---------------------------------------------------------------------------
 
   val asicBaseHrFrac: Double = 125.0 / 185.0 // ≈ 0.676
-  val flexMaxHrFrac: Double  = 60.0 / 185.0  // ≈ 0.324
+  val flexMaxHrFrac: Double = 60.0 / 185.0 // ≈ 0.324
 
   /** Minimum flex-load exit fraction that pushes block time ≥ 18 s → c = −1. */
   val flexExitThresholdFrac: Double = 1.0 - 13.0 / 18.0 // ≈ 0.278
