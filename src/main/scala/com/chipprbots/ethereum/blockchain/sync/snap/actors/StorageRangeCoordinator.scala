@@ -736,7 +736,7 @@ class StorageRangeCoordinator(
         flushPendingFlatBatch()
       }
       if (isComplete) {
-        log.info("Storage range sync complete!")
+        log.debug("Storage range sync complete!")
         snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
       } else if (tasks.nonEmpty) {
         // Try to dispatch pending tasks — per-peer and global limits enforced in dispatchIfPossible().
@@ -756,7 +756,7 @@ class StorageRangeCoordinator(
         flushPendingFlatBatch()
       }
       if (isComplete) {
-        log.info("Storage range sync complete!")
+        log.debug("Storage range sync complete!")
         snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
       }
 

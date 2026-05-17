@@ -422,7 +422,7 @@ class TrieNodeHealingCoordinator(
       }
 
     case HealingCheckCompletion =>
-      if (isComplete && !flushing) {
+      if (isComplete && !flushing && !trieWalkInProgress) {
         flushRawNodesSync()
         log.info(s"Healing round complete: $totalNodesHealed total nodes healed. Notifying controller.")
         snapSyncController ! SNAPSyncController.StateHealingComplete
