@@ -37,7 +37,7 @@
         </encoder>
     </appender>
 
-    <appender name="METRICS" class="io.prometheus.client.logback.InstrumentedAppender" />
+    <!-- prometheus-metrics 1.x does not ship a logback appender; removed in deps bump 6e73fcfcb -->
 
     <!-- Console appender - uses JSON output if ASJSON property is true, otherwise plain text -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
@@ -76,7 +76,6 @@
     <root level="${LOGSLEVEL}">
         <appender-ref ref="CONSOLE" />
         <appender-ref ref="FILE" />
-        <appender-ref ref="METRICS" />
     </root>
 
     <!-- =================================================================== -->
