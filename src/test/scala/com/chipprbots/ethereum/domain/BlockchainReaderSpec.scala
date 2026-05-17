@@ -101,10 +101,12 @@ class BlockchainReaderSpec extends AnyFlatSpec with Matchers with ScalaCheckProp
     val (cw, source) = blockchainReader.resolveETH69ChainWeight(unknownHash, peerBlockNum, isPoWChain = true)
     source shouldBe "POW_SCALING"
     cw.totalDifficulty should be > BigInt(0)
-    // POW_SCALING = ourBestTD * peerBlock / ourBestNum; verify proportionality holds
+    // POW_SCALING = ourBestTD + ourCurrentDiff * gap * 9999/10000 (marginal-rate estimate)
     val ourBestTD = block1Weight.totalDifficulty
     val ourBestNum = block1.header.number
-    cw.totalDifficulty shouldBe ourBestTD * peerBlockNum / ourBestNum
+    val ourCurrentDiff = block1.header.difficulty
+    val gap = (peerBlockNum - ourBestNum).max(BigInt(0))
+    cw.totalDifficulty shouldBe ourBestTD + ourCurrentDiff * gap * 9999 / 10000
   }
 
   it should "return POS_PROXY block number for post-merge peers (isPoWChain = false)" taggedAs (
