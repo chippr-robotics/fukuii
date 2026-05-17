@@ -1575,7 +1575,8 @@ class SNAPSyncController(
                       initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
                       minResponseBytes = snapSyncConfig.storageMinResponseBytes,
                       deferredMerkleization = snapSyncConfig.deferredMerkleization,
-                      useStackTrie = snapSyncConfig.useStackTrie
+                      useStackTrie = snapSyncConfig.useStackTrie,
+                      maxConcurrentStorageAccounts = snapSyncConfig.maxConcurrentStorageAccounts
                     )
                     .withDispatcher("sync-dispatcher"),
                   s"storage-range-coordinator-$coordinatorGeneration"
@@ -2468,7 +2469,8 @@ class SNAPSyncController(
               initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
               minResponseBytes = snapSyncConfig.storageMinResponseBytes,
               deferredMerkleization = snapSyncConfig.deferredMerkleization,
-              useStackTrie = snapSyncConfig.useStackTrie
+              useStackTrie = snapSyncConfig.useStackTrie,
+              maxConcurrentStorageAccounts = snapSyncConfig.maxConcurrentStorageAccounts
             )
             .withDispatcher("sync-dispatcher"),
           s"storage-range-coordinator-$coordinatorGeneration"
@@ -4035,7 +4037,14 @@ case class SNAPSyncConfig(
       * Default `false` — opt in via `sync.snap-sync.use-stack-trie = true` in sync.conf for testing. Will become the
       * default once Sepolia + Mordor validation completes (Step 5 of the plan).
       */
-    useStackTrie: Boolean = false
+    useStackTrie: Boolean = false,
+    /** Cap on per-account streaming storage tries held in memory at once. Each `SnapHashTrie` wrapper bounds its own
+      * working set to ~8 MiB (`SnapHashTrie.DefaultBatchSizeBytes`), so the worst-case storage-processing footprint is
+      * `maxConcurrentStorageAccounts × 8 MiB`. Default 256 → ~2 GiB ceiling, independent of chain size. Storage
+      * dispatch defers new-account requests when at the cap; continuations for in-flight accounts still proceed. Raise
+      * via `sync.snap-sync.max-concurrent-storage-accounts` for larger peer pools.
+      */
+    maxConcurrentStorageAccounts: Int = 256
 )
 
 object SNAPSyncConfig {
@@ -4154,7 +4163,11 @@ object SNAPSyncConfig {
       useStackTrie =
         if (snapConfig.hasPath("use-stack-trie"))
           snapConfig.getBoolean("use-stack-trie")
-        else false
+        else false,
+      maxConcurrentStorageAccounts =
+        if (snapConfig.hasPath("max-concurrent-storage-accounts"))
+          snapConfig.getInt("max-concurrent-storage-accounts")
+        else 256
     )
   }
 }

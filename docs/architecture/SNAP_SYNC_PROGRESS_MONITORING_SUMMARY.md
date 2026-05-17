@@ -351,7 +351,6 @@ Required metrics to expose:
 
 ## References
 
-- [SNAP_SYNC_TODO.md](./SNAP_SYNC_TODO.md) - Implementation tasks and status
 - [SNAP_SYNC_ERROR_HANDLING.md](./SNAP_SYNC_ERROR_HANDLING.md) - Comprehensive error handling guide
 - [SNAP_SYNC_STATUS.md](./SNAP_SYNC_STATUS.md) - Overall implementation status
 - [Circuit Breaker Pattern](https://martinfowler.com/bliki/CircuitBreaker.html)

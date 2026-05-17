@@ -611,7 +611,8 @@ The automated test covers:
 - No errors in logs
 - Faucet operates as expected
 
-See [GORGOROTH_FAUCET_TESTING.md](GORGOROTH_FAUCET_TESTING.md) for detailed faucet testing documentation.
+<!-- Detailed faucet testing documentation was removed; this section retains the operational checks above. -->
+
 
 ## Automated Testing Scripts
 

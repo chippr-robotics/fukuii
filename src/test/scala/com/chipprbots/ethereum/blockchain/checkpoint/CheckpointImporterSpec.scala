@@ -109,6 +109,35 @@ class CheckpointImporterSpec extends AnyWordSpec with Matchers with EitherValues
       freshStorage.storages.appStateStorage.isSnapSyncDone() shouldBe false
       freshStorage.storages.appStateStorage.getBestBlockNumber() shouldBe 0
     }
+
+    // Regression for Bug 35 — operator-supplied output path without `.gz` extension
+    // shouldn't break the import. importFromFile sniffs the gzip magic bytes.
+    "import a gzipped archive even when the file path lacks .gz extension" taggedAs UnitTest in new Setup {
+      import java.nio.file.Files
+      import java.util.zip.GZIPOutputStream
+
+      val header = checkpointHeader
+      val nodes = Seq((hash("rootNode"), Array.fill[Byte](32)(0xaa.toByte)))
+      val bytes = encodeArchive(header, nodes, Nil)
+
+      // Write the archive to a temp file WITH gzip compression but WITHOUT .gz suffix
+      val tmp = Files.createTempFile("checkpoint-bug35", ".checkpoint")
+      try {
+        val out = new GZIPOutputStream(Files.newOutputStream(tmp))
+        try out.write(bytes)
+        finally out.close()
+
+        val importer = new CheckpointImporter(
+          writer,
+          freshStorage.storages.stateStorage,
+          freshStorage.storages.evmCodeStorage,
+          freshStorage.storages.appStateStorage
+        )
+        val result = importer.importFromFile(tmp, Some(checkpointChainId)).value
+        result.blockNumber shouldBe header.blockHeader.number
+        result.nodesImported shouldBe nodes.length
+      } finally Files.deleteIfExists(tmp)
+    }
   }
 
   private trait Setup extends EphemBlockchainTestSetup {

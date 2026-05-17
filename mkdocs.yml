@@ -169,7 +169,6 @@ nav:
     - Testing:
       - testing/README.md
       - Test Tagging Guide: testing/TEST_TAGGING_GUIDE.md
-      - E2E Testing: testing/E2E_TESTING_GUIDE.md
       - Ethereum Tests: testing/ETHEREUM_TESTS_CI_INTEGRATION.md
       - KPI Monitoring: testing/KPI_MONITORING_GUIDE.md
       - Performance Baselines: testing/PERFORMANCE_BASELINES.md
@@ -263,8 +262,6 @@ nav:
       - SNAP Sync Implementation: reviews/SNAP_SYNC_IMPLEMENTATION_REVIEW.md
     - Reports:
       - reports/README.md
-      - Network Test Report: reports/NETWORK_TEST_REPORT.md
-      - Implementation Complete: reports/IMPLEMENTATION_COMPLETE.md
     - Tools:
       - tools/README.md
       - Configuration Wizard: tools/configuration-wizard.md
