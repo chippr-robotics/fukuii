@@ -13,9 +13,10 @@ import com.chipprbots.ethereum.testing.TestMptStorage
 
 class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
 
-  "MerkleProofVerifier" should "reject empty account reply without proof for non-empty state root" taggedAs UnitTest in {
-    // In snap/1, accounts=0 + proof=0 is a refusal/stateless signal for a non-empty root.
-    // A genuinely exhausted range must carry a boundary proof.
+  "MerkleProofVerifier" should "accept terminal empty account range for non-empty state root" taggedAs UnitTest in {
+    // go-ethereum accepts accounts=0 + proof=0 unconditionally as a valid terminal-empty range
+    // (no accounts exist between startHash and endHash). This is correct for sparse tries.
+    // See: verifyStorageRange which already accepts empty slots + empty proof unconditionally.
     val stateRoot = kec256(ByteString("test-root"))
     val verifier = MerkleProofVerifier(stateRoot)
 
@@ -26,8 +27,7 @@ class MerkleProofVerifierSpec extends AnyFlatSpec with Matchers {
       endHash = ByteString.fromArray(Array.fill(32)(0xff.toByte))
     )
 
-    result shouldBe a[Left[_, _]]
-    result.left.get should include("Missing proof for empty account range")
+    result shouldBe Right(())
   }
 
   it should "accept empty proof for empty account list when trie is empty" taggedAs UnitTest in {
