@@ -52,7 +52,7 @@ case class EthNodeStatus64ExchangeState(
     )
 
     if (status.networkId != peerConfiguration.networkId) {
-      log.debug(
+      log.info(
         "ETH{}_STATUS: NetworkId mismatch - local={}, remote={} - disconnecting",
         status.protocolVersion,
         peerConfiguration.networkId,
@@ -60,7 +60,7 @@ case class EthNodeStatus64ExchangeState(
       )
       DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
     } else if (status.genesisHash != localGenesisHash) {
-      log.debug(
+      log.info(
         "ETH{}_STATUS: Genesis mismatch - local={}, remote={} - disconnecting",
         status.protocolVersion,
         localGenesisHash,
