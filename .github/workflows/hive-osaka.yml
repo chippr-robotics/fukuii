@@ -48,20 +48,20 @@ jobs:
 
     steps:
       - name: Checkout fukuii
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           submodules: recursive
           fetch-depth: 1
 
       - name: Set up JDK 25
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5
         with:
           distribution: 'temurin'
           java-version: '25'
           cache: 'sbt'
 
       - name: Cache Coursier
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             ~/.cache/coursier
@@ -244,7 +244,7 @@ jobs:
 
       - name: Upload hive workspace logs
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: hive-workspace-logs
           path: external/hive/workspace/logs/

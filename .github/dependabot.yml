@@ -1,0 +1,32 @@
+version: 2
+updates:
+  # Track GitHub Actions version updates and raise PRs to update SHA pins.
+  # Dependabot will update both the SHA and the trailing # vN comment.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      # Official GitHub-owned actions — low risk, grouped for one PR per week
+      actions-official:
+        patterns:
+          - "actions/*"
+      # Docker-owned actions — grouped together
+      actions-docker:
+        patterns:
+          - "docker/*"
+      # Third-party actions — each gets its own PR so changes are reviewed individually
+      # (no group = individual PRs by default)
+
+  # Maven/sbt dependencies — secondary signal; sbt-updates + manual review is primary.
+  # Note: Dependabot Maven does not support cooldown/minimumReleaseAge.
+  # Maven Central artifact immutability means the time-pressure risk is much lower
+  # than npm, so this is informational rather than the security gate.
+  - package-ecosystem: "maven"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    # Only open PRs for security advisories automatically; version bumps are informational.
+    open-pull-requests-limit: 5

@@ -37,17 +37,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
       - name: Setup Python
         if: github.event.action != 'closed'
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: '3.12'
 
       - name: Cache pip dependencies
         if: github.event.action != 'closed'
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements-docs.txt') }}
@@ -67,7 +67,7 @@ jobs:
         run: mkdocs build --strict
 
       - name: Deploy Preview
-        uses: rossjrw/pr-preview-action@v1
+        uses: rossjrw/pr-preview-action@ffa7509e91a3ec8dfc2e5536c4d5c1acdf7a6de9 # v1
         with:
           source-dir: ./site/
           preview-branch: gh-pages
