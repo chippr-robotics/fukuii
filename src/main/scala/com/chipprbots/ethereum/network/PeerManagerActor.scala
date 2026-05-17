@@ -520,7 +520,7 @@ class PeerManagerActor(
             ref
           )
         } else {
-          log.info("GENUINE_DISCONNECT: publishing PeerDisconnected for {} ref={}", peerId, ref)
+          log.debug("GENUINE_DISCONNECT: publishing PeerDisconnected for {} ref={}", peerId, ref)
           peerEventBus ! Publish(PeerEvent.PeerDisconnected(peerId))
         }
         maintainedPeersByNodeId.get(peerId.value).foreach { uri =>

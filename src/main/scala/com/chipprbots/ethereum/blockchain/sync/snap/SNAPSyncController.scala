@@ -189,6 +189,12 @@ class SNAPSyncController(
   // arrives in the syncing state, the refresh is completed.
   private var pendingPivotRefresh: Option[(BigInt, String)] = None
 
+  // Debounce rapid PeerDisconnected bursts — collect peer IDs and flush after a 3 s quiet window.
+  // Prevents a burst of TCP failures (e.g. 15 in 33 s) from draining all coordinator task queues
+  // simultaneously, which would deplete the peer pool and trigger a cascade pivot refresh.
+  private var pendingDisconnectedPeers: Set[String] = Set.empty
+  private var disconnectFlushTask: Option[Cancellable] = None
+
   // Scheduled tasks for periodic peer requests
   private var accountRangeRequestTask: Option[Cancellable] = None
   private var bytecodeRequestTask: Option[Cancellable] = None
@@ -264,12 +270,22 @@ class SNAPSyncController(
       }
 
     case msg @ com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnected(peerId) =>
-      handlePeerListMessages(msg)
-      requestTracker.rateTracker.removePeer(peerId.value)
-      accountRangeCoordinator.foreach(_ ! actors.Messages.PeerUnavailable(peerId.value))
-      storageRangeCoordinator.foreach(_ ! actors.Messages.StoragePeerUnavailable(peerId.value))
-      bytecodeCoordinator.foreach(_ ! actors.Messages.ByteCodePeerUnavailable(peerId.value))
-      trieNodeHealingCoordinator.foreach(_ ! actors.Messages.HealingPeerUnavailable(peerId.value))
+      handlePeerListMessages(msg)                          // immediate: keeps handshakedPeers current
+      requestTracker.rateTracker.removePeer(peerId.value)  // immediate: rate tracking
+      pendingDisconnectedPeers += peerId.value
+      disconnectFlushTask.foreach(_.cancel())
+      disconnectFlushTask = Some(scheduler.scheduleOnce(3.seconds)(self ! FlushPeerDisconnects)(ec))
+
+    case FlushPeerDisconnects =>
+      disconnectFlushTask = None
+      val ids = pendingDisconnectedPeers
+      pendingDisconnectedPeers = Set.empty
+      ids.foreach { id =>
+        accountRangeCoordinator.foreach(_ ! actors.Messages.PeerUnavailable(id))
+        storageRangeCoordinator.foreach(_ ! actors.Messages.StoragePeerUnavailable(id))
+        bytecodeCoordinator.foreach(_ ! actors.Messages.ByteCodePeerUnavailable(id))
+        trieNodeHealingCoordinator.foreach(_ ! actors.Messages.HealingPeerUnavailable(id))
+      }
   }
 
   /** Wrap handlePeerListMessages to also update the PeerRateTracker when peers connect/disconnect. Tracks previous peer
@@ -290,12 +306,22 @@ class SNAPSyncController(
       }
 
     case msg @ com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnected(peerId) =>
-      handlePeerListMessages(msg) // removes from handshakedPeers
-      requestTracker.rateTracker.removePeer(peerId.value)
-      accountRangeCoordinator.foreach(_ ! actors.Messages.PeerUnavailable(peerId.value))
-      storageRangeCoordinator.foreach(_ ! actors.Messages.StoragePeerUnavailable(peerId.value))
-      bytecodeCoordinator.foreach(_ ! actors.Messages.ByteCodePeerUnavailable(peerId.value))
-      trieNodeHealingCoordinator.foreach(_ ! actors.Messages.HealingPeerUnavailable(peerId.value))
+      handlePeerListMessages(msg)                          // immediate: keeps handshakedPeers current
+      requestTracker.rateTracker.removePeer(peerId.value)  // immediate: rate tracking
+      pendingDisconnectedPeers += peerId.value
+      disconnectFlushTask.foreach(_.cancel())
+      disconnectFlushTask = Some(scheduler.scheduleOnce(3.seconds)(self ! FlushPeerDisconnects)(ec))
+
+    case FlushPeerDisconnects =>
+      disconnectFlushTask = None
+      val ids = pendingDisconnectedPeers
+      pendingDisconnectedPeers = Set.empty
+      ids.foreach { id =>
+        accountRangeCoordinator.foreach(_ ! actors.Messages.PeerUnavailable(id))
+        storageRangeCoordinator.foreach(_ ! actors.Messages.StoragePeerUnavailable(id))
+        bytecodeCoordinator.foreach(_ ! actors.Messages.ByteCodePeerUnavailable(id))
+        trieNodeHealingCoordinator.foreach(_ ! actors.Messages.HealingPeerUnavailable(id))
+      }
   }
 
   // Storage stagnation watchdog: if storage stops advancing while tasks remain, repivot/restart.
@@ -3853,7 +3879,8 @@ object SNAPSyncController {
   final case class PivotBootstrapFailed(
       reason: String
   ) // Signal from SyncController that pivot header bootstrap exhausted retries
-  private case object RetrySnapSyncStart // Internal message to retry SNAP sync start after bootstrap
+  private case object RetrySnapSyncStart   // Internal message to retry SNAP sync start after bootstrap
+  private case object FlushPeerDisconnects // Debounce flush: forward batched PeerUnavailable to coordinators
   case object AccountRangeSyncComplete
   case object ByteCodeSyncComplete
   case object StorageRangeSyncComplete

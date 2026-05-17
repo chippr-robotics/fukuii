@@ -420,11 +420,12 @@ trait ServerActorBuilder {
     with NodeStatusBuilder
     with BlockchainBuilder
     with PeerManagerActorBuilder
+    with BlacklistBuilder
     with InstanceConfigProvider =>
 
   lazy val networkConfig = instanceConfig.Network
 
-  lazy val server: ActorRef = system.actorOf(ServerActor.props(nodeStatusHolder, peerManager), "server")
+  lazy val server: ActorRef = system.actorOf(ServerActor.props(nodeStatusHolder, peerManager, blacklist), "server")
 
 }
 

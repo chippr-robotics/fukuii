@@ -12,15 +12,17 @@ import org.apache.pekko.io.IO
 import org.apache.pekko.io.Tcp
 import org.apache.pekko.io.Tcp.Bind
 import org.apache.pekko.io.Tcp.Bound
+import org.apache.pekko.io.Tcp.Close
 import org.apache.pekko.io.Tcp.CommandFailed
 import org.apache.pekko.io.Tcp.Connected
 
 import org.bouncycastle.util.encoders.Hex
 
+import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.utils.NodeStatus
 import com.chipprbots.ethereum.utils.ServerStatus
 
-class ServerActor(nodeStatusHolder: AtomicReference[NodeStatus], peerManager: ActorRef)
+class ServerActor(nodeStatusHolder: AtomicReference[NodeStatus], peerManager: ActorRef, blacklist: Blacklist)
     extends Actor
     with ActorLogging {
 
@@ -60,13 +62,18 @@ class ServerActor(nodeStatusHolder: AtomicReference[NodeStatus], peerManager: Ac
 
   def listening: Receive = { case Connected(remoteAddress, _) =>
     val connection = sender()
-    peerManager ! PeerManagerActor.HandlePeerConnection(connection, remoteAddress)
+    if (blacklist.isBlacklisted(PeerManagerActor.PeerAddress(remoteAddress.getHostString))) {
+      log.debug("Dropping inbound TCP from blacklisted {}", remoteAddress.getHostString)
+      connection ! Close
+    } else {
+      peerManager ! PeerManagerActor.HandlePeerConnection(connection, remoteAddress)
+    }
   }
 }
 
 object ServerActor {
-  def props(nodeStatusHolder: AtomicReference[NodeStatus], peerManager: ActorRef): Props =
-    Props(new ServerActor(nodeStatusHolder, peerManager))
+  def props(nodeStatusHolder: AtomicReference[NodeStatus], peerManager: ActorRef, blacklist: Blacklist): Props =
+    Props(new ServerActor(nodeStatusHolder, peerManager, blacklist))
 
   case class StartServer(address: InetSocketAddress, advertisedAddress: Option[InetAddress] = None)
 }
