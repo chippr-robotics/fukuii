@@ -266,8 +266,8 @@
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 27},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
-        {"expr": "rate(logback_appender_total{instance=~\"$instance\",level=\"error\"}[1m])", "refId": "A", "legendFormat": "{{instance}} ERROR"},
-        {"expr": "rate(logback_appender_total{instance=~\"$instance\",level=\"warn\"}[1m])", "refId": "B", "legendFormat": "{{instance}} WARN"}
+        {"expr": "rate(app_logback_events_total{instance=~\"$instance\",level=\"error\"}[1m])", "refId": "A", "legendFormat": "{{instance}} ERROR"},
+        {"expr": "rate(app_logback_events_total{instance=~\"$instance\",level=\"warn\"}[1m])", "refId": "B", "legendFormat": "{{instance}} WARN"}
       ],
       "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5}}}
     },
@@ -371,7 +371,7 @@
       "gridPos": {"h": 4, "w": 6, "x": 12, "y": 39},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
-        {"expr": "increase(logback_appender_total{instance=~\"$instance\",level=\"warn\"}[1h])", "refId": "A", "legendFormat": "{{instance}} warns/1h"}
+        {"expr": "increase(app_logback_events_total{instance=~\"$instance\",level=\"warn\"}[1h])", "refId": "A", "legendFormat": "{{instance}} warns/1h"}
       ],
       "fieldConfig": {
         "defaults": {

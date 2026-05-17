@@ -8,6 +8,7 @@ import scala.util.Try
 
 import io.micrometer.core.instrument._
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
+import io.micrometer.core.instrument.binder.logging.LogbackMetrics
 import io.prometheus.metrics.exporter.httpserver.{HTTPServer => PrometheusHTTPServer}
 import io.prometheus.metrics.instrumentation.jvm.JvmMetrics
 import kamon.Kamon
@@ -20,13 +21,19 @@ case class Metrics(metricsPrefix: String, registry: MeterRegistry, serverPort: I
   private lazy val server: PrometheusHTTPServer =
     PrometheusHTTPServer.builder().port(serverPort).buildAndStart()
 
+  private var logbackMetricsBinder: Option[LogbackMetrics] = None
+
   def start(): Unit = {
     server // We need this to evaluate the lazy val!
     JvmMetrics.builder().register()
+    val lm = new LogbackMetrics()
+    lm.bindTo(registry)
+    logbackMetricsBinder = Some(lm)
     Kamon.init()
   }
 
   def close(): Unit = {
+    logbackMetricsBinder.foreach(_.close())
     registry.close()
     server.close()
   }

@@ -5125,7 +5125,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "increase(logback_appender_total_counter{instance=~\"$node\"}[1m])",
+              "expr": "increase(app_logback_events_total{instance=~\"$node\"}[1m])",
               "interval": "",
               "legendFormat": "{{level}}",
               "refId": "A"
