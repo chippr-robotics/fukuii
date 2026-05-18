@@ -55,17 +55,13 @@ abstract class EthereumTestsSpec extends AnyFlatSpec with Matchers {
     info(s"  Blocks to execute: ${test.blocks.size}")
     info(s"  Expected post-state accounts: ${test.postState.size}")
 
-    // TODO: Execute the test using BlockExecution infrastructure
-    // For now, just validate we can parse and set up state
-    val setupResult = EthereumTestExecutor.setupInitialStateForTest(test)
-
-    setupResult match {
-      case Right(world) =>
-        info(s"  ✓ Initial state setup successful")
-        info(s"  State root: ${org.bouncycastle.util.encoders.Hex.toHexString(world.stateRootHash.toArray)}")
+    executeTest(test) match {
+      case Right(result) =>
+        info(s"  ✓ Executed ${result.blocksExecuted} block(s) on ${result.network}")
+        info(s"  Final state root: ${org.bouncycastle.util.encoders.Hex.toHexString(result.finalStateRoot.toArray)}")
 
       case Left(error) =>
-        fail(s"Failed to setup initial state: $error")
+        fail(s"Test execution failed: $error")
     }
   }
 
