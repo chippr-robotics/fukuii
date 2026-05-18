@@ -659,12 +659,21 @@ class AccountRangeCoordinator(
       // If the same peer is re-reported (same id), preserve its stateless marking —
       // otherwise PeerAvailable from SNAPSyncController clears stateless every ~1s,
       // bypassing the backoff mechanism entirely (Bug 24).
+      val wasAlreadyKnown = knownAvailablePeers.exists(_.id == peer.id)
       val evicted = knownAvailablePeers.filter(_.remoteAddress == peer.remoteAddress)
       knownAvailablePeers --= evicted
       evicted.foreach { p =>
         if (p.id != peer.id) {
           statelessPeers -= p.id
         }
+      }
+      // Genuine reconnect (new PeerId from same address, or first-seen peer) gets a clean
+      // slate. Bug 24 protection preserved: re-announced same-id peers have wasAlreadyKnown=true
+      // and are not cleared, keeping the ~1s SNAPSyncController re-announce from bypassing backoff.
+      if (!wasAlreadyKnown) {
+        statelessPeers -= peer.id
+        snaplessPeers -= peer.id
+        emptyResponseStrikes.remove(peer.id)
       }
       knownAvailablePeers += peer
       if (isPeerStateless(peer)) {
@@ -676,9 +685,12 @@ class AccountRangeCoordinator(
       } else if (pendingTasks.isEmpty) {
         log.debug("No pending tasks")
       } else {
-        // Pipeline multiple requests per peer (core-geth parity).
-        // ByteCodeCoordinator already uses this pattern with maxInFlightPerPeer = 5.
-        dispatchIfPossible(peer)
+        // Route through the sorted redispatch path so the fairness ordering
+        // (least-in-flight first) applies to every dispatch trigger, not just
+        // the periodic tryRedispatchPendingTasks calls. Without this, the
+        // SNAPSyncController's per-peer PeerAvailable re-announcements drive
+        // greedy dispatchIfPossible for a single peer, starving idle peers.
+        tryRedispatchPendingTasks()
       }
 
     case UpdateMaxInFlightPerPeer(newLimit) =>
@@ -1223,7 +1235,7 @@ class AccountRangeCoordinator(
       return
     }
 
-    for (peer <- eligiblePeers if pendingTasks.nonEmpty)
+    for (peer <- eligiblePeers.sortBy(inFlightForPeer) if pendingTasks.nonEmpty)
       dispatchIfPossible(peer)
   }
 
