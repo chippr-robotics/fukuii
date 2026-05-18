@@ -626,6 +626,75 @@ class PeerManagerSpec
     createdPeers.size shouldBe 2
   }
 
+  // Regression for Issue 6: when a maintained peer's outbound actor terminates after
+  // inbound-wins, PMA used to publish Publish(PeerDisconnected(peerId)) unconditionally.
+  // That caused NPMA to evict the still-live inbound entry, creating an infinite
+  // reconnect loop with core-geth. The fix (DUPLICATE_TERMINATED) suppresses the
+  // PeerDisconnected when the winner nodeId is still handshaked in connectedPeers.
+  it should "not publish PeerDisconnected when the terminated outbound's nodeId is still alive via the inbound winner (DUPLICATE_TERMINATED)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup {
+    val hexNodeId = "ff" * 64
+    val nodeIdBytes = ByteString(Hex.decode(hexNodeId))
+    val maintainedUri = new URI(s"enode://$hexNodeId@127.0.0.9:30303")
+
+    start()
+
+    // Step 1: outbound dials out for the maintained peer.
+    // AddMaintainedPeer publishes MaintainedPeersChanged to peerEventBus — drain it so
+    // the final expectNoMessage assertion does not see a stale message.
+    peerManager ! PeerManagerActor.AddMaintainedPeer(maintainedUri)
+    peerEventBus.fishForMessage(3.seconds, "waiting for MaintainedPeersChanged") {
+      case Publish(PeerEvent.MaintainedPeersChanged(_)) => true
+      case _                                            => false
+    }
+    createdPeers(0).probe.expectMsgType[ConnectTo](3.seconds)
+
+    // Step 2: outbound handshakes
+    createdPeers(0).probe.reply(
+      PeerEvent.PeerHandshakeSuccessful(
+        Peer(
+          PeerId(hexNodeId),
+          new InetSocketAddress("127.0.0.9", 30303),
+          createdPeers(0).probe.ref,
+          incomingConnection = false,
+          nodeId = Some(nodeIdBytes)
+        ),
+        initialPeerInfo
+      )
+    )
+
+    // Step 3: inbound from the same maintained peer host
+    val inboundTcp = TestProbe()
+    val inboundAddress = new InetSocketAddress("127.0.0.9", 55555)
+    peerManager ! PeerManagerActor.HandlePeerConnection(inboundTcp.ref, inboundAddress)
+    createdPeers(1).probe.expectMsg(PeerActor.HandleConnection(inboundTcp.ref, inboundAddress))
+
+    // Step 4: inbound handshakes with same nodeId — inbound wins, outbound gets DisconnectPeer
+    createdPeers(1).probe.reply(
+      PeerEvent.PeerHandshakeSuccessful(
+        Peer(
+          PeerId(hexNodeId),
+          inboundAddress,
+          createdPeers(1).probe.ref,
+          incomingConnection = true,
+          nodeId = Some(nodeIdBytes)
+        ),
+        initialPeerInfo
+      )
+    )
+    createdPeers(0).probe.expectMsg(PeerActor.DisconnectPeer(Disconnect.Reasons.AlreadyConnected))
+
+    // Step 5: terminate the outbound — DUPLICATE_TERMINATED must suppress PeerDisconnected
+    createdPeers(0).probe.ref ! PoisonPill
+    peerEventBus.expectNoMessage(500.millis)
+
+    // No reconnect is scheduled (winner still alive) — createdPeers stays at 2
+    testScheduler.timePasses(6000.millis)
+    createdPeers.size shouldBe 2
+  }
+
   behavior.of("outgoingConnectionDemand")
 
   it should "try to connect to at least min-outgoing-peers but no more than max-outgoing-peers" taggedAs (

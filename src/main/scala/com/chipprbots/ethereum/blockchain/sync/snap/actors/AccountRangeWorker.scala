@@ -132,7 +132,9 @@ class AccountRangeWorker(
               // root while this worker was dispatched against the old one. Demote to debug since
               // TaskFailed is still sent and the coordinator re-queues normally.
               if (errorStr.contains("root mismatch") || errorStr.contains("Proof root"))
-                log.debug(s"AccountRange proof skipped (pivot transition) reqId=$reqId range=${task.rangeString}: $error")
+                log.debug(
+                  s"AccountRange proof skipped (pivot transition) reqId=$reqId range=${task.rangeString}: $error"
+                )
               else
                 log.warning(s"AccountRange validation/proof failed for reqId=$reqId range=${task.rangeString}: $error")
               coordinator ! TaskFailed(reqId, error)

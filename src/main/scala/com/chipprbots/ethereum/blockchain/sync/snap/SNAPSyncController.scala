@@ -271,8 +271,8 @@ class SNAPSyncController(
       }
 
     case msg @ com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnected(peerId) =>
-      handlePeerListMessages(msg)                          // immediate: keeps handshakedPeers current
-      requestTracker.rateTracker.removePeer(peerId.value)  // immediate: rate tracking
+      handlePeerListMessages(msg) // immediate: keeps handshakedPeers current
+      requestTracker.rateTracker.removePeer(peerId.value) // immediate: rate tracking
       pendingDisconnectedPeers += peerId.value
       disconnectFlushTask.foreach(_.cancel())
       disconnectFlushTask = Some(scheduler.scheduleOnce(3.seconds)(self ! FlushPeerDisconnects)(ec))
@@ -307,8 +307,8 @@ class SNAPSyncController(
       }
 
     case msg @ com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.PeerDisconnected(peerId) =>
-      handlePeerListMessages(msg)                          // immediate: keeps handshakedPeers current
-      requestTracker.rateTracker.removePeer(peerId.value)  // immediate: rate tracking
+      handlePeerListMessages(msg) // immediate: keeps handshakedPeers current
+      requestTracker.rateTracker.removePeer(peerId.value) // immediate: rate tracking
       pendingDisconnectedPeers += peerId.value
       disconnectFlushTask.foreach(_.cancel())
       disconnectFlushTask = Some(scheduler.scheduleOnce(3.seconds)(self ! FlushPeerDisconnects)(ec))
@@ -2878,13 +2878,12 @@ class SNAPSyncController(
   // Start (or re-use) the snap-server-peers reconnect scheduler.
   // Idempotent: does nothing if already running. 15s initial delay lets inbound connections
   // complete STATUS exchange before we fire an outbound ConnectToPeer (avoids AlreadyConnected races).
-  private def startSnapServerPeersScheduler(): Unit = {
+  private def startSnapServerPeersScheduler(): Unit =
     if (snapSyncConfig.snapServerPeers.nonEmpty && snapServerPeersScheduler.isEmpty) {
       snapServerPeersScheduler = Some(
         scheduler.scheduleWithFixedDelay(15.seconds, 30.seconds, self, EnsureSnapServerPeersConnected)(ec)
       )
     }
-  }
 
   // Internal message for periodic healing requests
   private case object RequestTrieNodeHealing
@@ -3896,7 +3895,7 @@ object SNAPSyncController {
   final case class PivotBootstrapFailed(
       reason: String
   ) // Signal from SyncController that pivot header bootstrap exhausted retries
-  private case object RetrySnapSyncStart   // Internal message to retry SNAP sync start after bootstrap
+  private case object RetrySnapSyncStart // Internal message to retry SNAP sync start after bootstrap
   private case object FlushPeerDisconnects // Debounce flush: forward batched PeerUnavailable to coordinators
   case object AccountRangeSyncComplete
   case object ByteCodeSyncComplete

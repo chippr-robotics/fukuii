@@ -378,8 +378,8 @@ class NetworkPeerManagerActor(
           s"supportsSnap=${peerInfo.remoteStatus.supportsSnap}"
       )
       if (peersWithInfo.contains(peer.id)) {
-        val old              = peersWithInfo(peer.id)
-        val newIsInbound     = peer.incomingConnection
+        val old = peersWithInfo(peer.id)
+        val newIsInbound = peer.incomingConnection
         val existingIsOutbound = !old.peer.incomingConnection
 
         if (newIsInbound && existingIsOutbound) {
