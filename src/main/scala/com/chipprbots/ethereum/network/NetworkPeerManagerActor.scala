@@ -78,6 +78,12 @@ class NetworkPeerManagerActor(
   // peer catches up (so a peer that's mid-catch-up doesn't get evicted) or on disconnect.
   private val laggingPeerSince = scala.collection.mutable.Map.empty[PeerId, Long]
 
+  // PeerIds for which PMA just performed inbound-wins: the outbound PeerActor was closed and will
+  // shortly publish PeerDisconnected. That event must NOT evict the peer from peersWithInfo —
+  // the inbound is alive and already swapped in. Remove from this set once the disconnect arrives.
+  private val pendingInboundWinsDisconnects: scala.collection.mutable.Set[PeerId] =
+    scala.collection.mutable.Set.empty
+
   // 60s network summary — read+reset RLPx counters and log one aggregate line
   context.system.scheduler.scheduleWithFixedDelay(
     60.seconds,
@@ -372,21 +378,39 @@ class NetworkPeerManagerActor(
           s"supportsSnap=${peerInfo.remoteStatus.supportsSnap}"
       )
       if (peersWithInfo.contains(peer.id)) {
-        val old = peersWithInfo(peer.id)
-        // Keep the EXISTING entry — don't overwrite with the duplicate.
-        // PeerManagerActor will drop the loser via AlreadyConnected; with the PeerDisconnected
-        // gate fix, the loser's termination no longer evicts the winner. Overwriting here with
-        // the duplicate (which may be the about-to-die loser) would leave a stale ref in
-        // peersWithInfo — mirroring Besu's registerDisconnect guard which only updates
-        // activeConnections when peer.getConnection().equals(connection) (the primary connection).
-        log.warning(
-          s"DUPLICATE_HANDSHAKE_DROPPED: ${peer.id} already in peersWithInfo " +
-            s"(existing=${old.peer.remoteAddress} inbound=${old.peer.incomingConnection}, " +
-            s"duplicate=${peer.remoteAddress} inbound=${peer.incomingConnection}) — " +
-            s"keeping existing entry, duplicate will be dropped by PeerManagerActor"
-        )
-        // No update to peersWithInfo, no double-count in metrics
-        context.become(handleMessages(peersWithInfo))
+        val old              = peersWithInfo(peer.id)
+        val newIsInbound     = peer.incomingConnection
+        val existingIsOutbound = !old.peer.incomingConnection
+
+        if (newIsInbound && existingIsOutbound) {
+          // Inbound-wins: PMA is closing the outbound (it fired its own inbound-wins tiebreak).
+          // Swap peersWithInfo to the live inbound ref so SNAP dispatch goes to the correct
+          // connection. Record the PeerId so the imminent PeerDisconnected (outbound dying)
+          // is suppressed rather than evicting the peer we just kept.
+          pendingInboundWinsDisconnects += peer.id
+          log.info(
+            "DUPLICATE_HANDSHAKE_INBOUND_WINS: {} swapping {} → {} (outbound eviction suppressed)",
+            peer.id,
+            old.peer.remoteAddress,
+            peer.remoteAddress
+          )
+          context.become(handleMessages(peersWithInfo + (peer.id -> PeerWithInfo(peer, peerInfo))))
+        } else {
+          // Keep the EXISTING entry — don't overwrite with the duplicate.
+          // PeerManagerActor will drop the loser via AlreadyConnected; with the PeerDisconnected
+          // gate fix, the loser's termination no longer evicts the winner. Overwriting here with
+          // the duplicate (which may be the about-to-die loser) would leave a stale ref in
+          // peersWithInfo — mirroring Besu's registerDisconnect guard which only updates
+          // activeConnections when peer.getConnection().equals(connection) (the primary connection).
+          log.warning(
+            s"DUPLICATE_HANDSHAKE_DROPPED: ${peer.id} already in peersWithInfo " +
+              s"(existing=${old.peer.remoteAddress} inbound=${old.peer.incomingConnection}, " +
+              s"duplicate=${peer.remoteAddress} inbound=${peer.incomingConnection}) — " +
+              s"keeping existing entry, duplicate will be dropped by PeerManagerActor"
+          )
+          // No update to peersWithInfo, no double-count in metrics
+          context.become(handleMessages(peersWithInfo))
+        }
       } else {
         peerEventBusActor ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)))
         peerEventBusActor ! Subscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)))
@@ -431,6 +455,15 @@ class NetworkPeerManagerActor(
     case PeerDisconnected(peerId) if !peersWithInfo.contains(peerId) =>
       log.debug(
         "PEER_DISCONNECTED_IGNORED: {} not in peersWithInfo — likely suppressed duplicate or already removed",
+        peerId
+      )
+
+    case PeerDisconnected(peerId) if pendingInboundWinsDisconnects.contains(peerId) =>
+      // The outbound PeerActor that PMA closed after inbound-wins is dying. peersWithInfo already
+      // holds the live inbound entry — do not evict.
+      pendingInboundWinsDisconnects -= peerId
+      log.info(
+        "INBOUND_WINS_DISCONNECT_SUPPRESSED: {} — outbound closed by PMA, inbound retained in peersWithInfo",
         peerId
       )
 
