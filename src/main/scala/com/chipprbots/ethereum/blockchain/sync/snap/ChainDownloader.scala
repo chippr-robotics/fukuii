@@ -53,7 +53,8 @@ class ChainDownloader(
     val syncConfig: SyncConfig,
     val scheduler: Scheduler,
     initialMaxConcurrentRequests: Int,
-    requestTimeout: FiniteDuration = 10.seconds
+    requestTimeout: FiniteDuration = 10.seconds,
+    snapServerPeerNodeIds: Set[ByteString] = Set.empty
 )(implicit ec: ExecutionContext)
     extends Actor
     with ActorLogging
@@ -218,10 +219,11 @@ class ChainDownloader(
     val inFlightCount = headerRequestPeers.size + bodyRequestPeers.size + receiptRequestPeers.size
     if (inFlightCount >= maxConcurrentRequests) return
 
-    val available = peersToDownloadFrom.filterNot { case (peerId, _) =>
+    val available = peersToDownloadFrom.filterNot { case (peerId, p) =>
       headerRequestPeers.contains(peerId) ||
       bodyRequestPeers.values.exists(_._1.id == peerId) ||
-      receiptRequestPeers.values.exists(_._1.id == peerId)
+      receiptRequestPeers.values.exists(_._1.id == peerId) ||
+      p.peer.nodeId.exists(snapServerPeerNodeIds.contains)
     }
 
     if (available.isEmpty) return
@@ -716,7 +718,8 @@ object ChainDownloader {
       syncConfig: SyncConfig,
       scheduler: Scheduler,
       maxConcurrentRequests: Int = 4,
-      requestTimeout: FiniteDuration = 10.seconds
+      requestTimeout: FiniteDuration = 10.seconds,
+      snapServerPeerNodeIds: Set[ByteString] = Set.empty
   )(implicit ec: ExecutionContext): Props =
     Props(
       new ChainDownloader(
@@ -729,7 +732,8 @@ object ChainDownloader {
         syncConfig,
         scheduler,
         maxConcurrentRequests,
-        requestTimeout
+        requestTimeout,
+        snapServerPeerNodeIds
       )
     )
 }

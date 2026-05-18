@@ -62,7 +62,9 @@ class ServerActor(nodeStatusHolder: AtomicReference[NodeStatus], peerManager: Ac
 
   def listening: Receive = { case Connected(remoteAddress, _) =>
     val connection = sender()
-    if (blacklist.isBlacklisted(PeerManagerActor.PeerAddress(remoteAddress.getHostString))) {
+    val addr = remoteAddress.getAddress
+    val isLocal = addr.isLoopbackAddress || addr.isSiteLocalAddress
+    if (!isLocal && blacklist.isBlacklisted(PeerManagerActor.PeerAddress(remoteAddress.getHostString))) {
       log.debug("Dropping inbound TCP from blacklisted {}", remoteAddress.getHostString)
       connection ! Close
     } else {

@@ -202,6 +202,7 @@ class SNAPSyncController(
   private var accountStagnationCheckTask: Option[Cancellable] = None
   private var storageStagnationCheckTask: Option[Cancellable] = None
   private var healingRequestTask: Option[Cancellable] = None
+  private var snapServerPeersScheduler: Option[Cancellable] = None
   private var storageStagnationRefreshAttempted: Boolean = false
   private var trieWalkInProgress: Boolean = false
   private var healingRoundCount: Int = 0
@@ -369,6 +370,8 @@ class SNAPSyncController(
     snapCapabilityCheckTask.foreach(_.cancel())
     snapPeerEvictionTask.foreach(_.cancel())
     rateTrackerTuneTask.foreach(_.cancel())
+    snapServerPeersScheduler.foreach(_.cancel())
+    snapServerPeersScheduler = None
     progressMonitor.stopPeriodicLogging()
   }
 
@@ -1719,6 +1722,7 @@ class SNAPSyncController(
 
             // Start parallel chain download during recovery too
             startChainDownloader()
+            startSnapServerPeersScheduler()
 
             context.become(syncing)
             // If both phases were already complete, advance to healing immediately
@@ -2232,9 +2236,11 @@ class SNAPSyncController(
     preservedRangeProgress = Map.empty
     preservedAtPivotBlock = None
 
-    // Stop chain downloader
+    // Stop chain downloader and peer scheduler
     chainDownloader.foreach(context.stop)
     chainDownloader = None
+    snapServerPeersScheduler.foreach(_.cancel())
+    snapServerPeersScheduler = None
 
     // Notify parent controller to switch to fast sync
     context.parent ! FallbackToFastSync
@@ -2338,6 +2344,11 @@ class SNAPSyncController(
     // Start parallel chain download (headers, bodies, receipts from genesis to pivot)
     // Follows the Geth/Nethermind pattern of overlapping chain + state download.
     startChainDownloader()
+
+    // Start proactive outbound dials to snap-server-peers so they are connected throughout ALL
+    // phases (not only at StateHealing). core-geth's StaticNode dial to fukuii fails silently;
+    // fukuii must initiate the connection itself.
+    startSnapServerPeersScheduler()
   }
 
   private def launchAccountRangeWorkers(rootHash: ByteString, concurrency: Int): Unit = {
@@ -2800,17 +2811,8 @@ class SNAPSyncController(
       // Periodically send peer availability notifications (cancel any existing scheduler first)
       startHealingRequestScheduler()
 
-      // Ensure configured snap-server-peers are connected, checked periodically.
-      // Initial delay of 15s gives inbound connections time to complete STATUS exchange and
-      // appear in handshakedPeers (STATUS < 1s + peersScanInterval = 5s) before we ever
-      // send an outbound ConnectToPeer. Firing immediately was causing AlreadyConnected on
-      // go-ethereum: core-geth connects inbound → we immediately dial outbound → both killed.
-      scheduler.scheduleWithFixedDelay(
-        15.seconds,
-        30.seconds,
-        self,
-        EnsureSnapServerPeersConnected
-      )(ec)
+      // Ensure snap-server-peers scheduler is running (idempotent — already started at account sync).
+      startSnapServerPeersScheduler()
 
       progressMonitor.startPhase(StateHealing)
     }
@@ -2871,6 +2873,17 @@ class SNAPSyncController(
     healingRequestTask = Some(
       scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestTrieNodeHealing)(ec, self)
     )
+  }
+
+  // Start (or re-use) the snap-server-peers reconnect scheduler.
+  // Idempotent: does nothing if already running. 15s initial delay lets inbound connections
+  // complete STATUS exchange before we fire an outbound ConnectToPeer (avoids AlreadyConnected races).
+  private def startSnapServerPeersScheduler(): Unit = {
+    if (snapSyncConfig.snapServerPeers.nonEmpty && snapServerPeersScheduler.isEmpty) {
+      snapServerPeersScheduler = Some(
+        scheduler.scheduleWithFixedDelay(15.seconds, 30.seconds, self, EnsureSnapServerPeersConnected)(ec)
+      )
+    }
   }
 
   // Internal message for periodic healing requests
@@ -3750,6 +3763,9 @@ class SNAPSyncController(
       if (chainDownloader.isEmpty) {
         log.info("Starting parallel chain download from genesis to pivot block {}", pivot)
         coordinatorGeneration += 1
+        val snapServerNodeIds = snapSyncConfig.snapServerPeers.flatMap { uri =>
+          scala.util.Try(ByteString(org.bouncycastle.util.encoders.Hex.decode(uri.getUserInfo))).toOption
+        }.toSet
         val downloader = context.actorOf(
           ChainDownloader
             .props(
@@ -3761,7 +3777,8 @@ class SNAPSyncController(
               syncConfig,
               scheduler,
               snapSyncConfig.chainDownloadMaxConcurrentRequests,
-              snapSyncConfig.chainDownloadTimeout
+              snapSyncConfig.chainDownloadTimeout,
+              snapServerNodeIds
             )
             .withDispatcher("sync-dispatcher"),
           s"chain-downloader-$coordinatorGeneration"
