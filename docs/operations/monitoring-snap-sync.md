@@ -510,7 +510,6 @@ SNAP sync metrics complement existing Fukuii metrics:
 
 - [Metrics and Monitoring Guide](./metrics-and-monitoring.md) - General Fukuii observability
 - [SNAP Sync Implementation](../architecture/SNAP_SYNC_IMPLEMENTATION.md) - Technical architecture
-- [SNAP Sync Status](../architecture/SNAP_SYNC_STATUS.md) - Current implementation status
 - [Prometheus Documentation](https://prometheus.io/docs/)
 - [Grafana Documentation](https://grafana.com/docs/)
 - [Kamon Documentation](https://kamon.io/docs/)

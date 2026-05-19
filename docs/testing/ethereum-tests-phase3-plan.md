@@ -1,5 +1,7 @@
 # Phase 3 Implementation Plan: Ethereum/Tests Suite Integration
 
+> **Status: Largely implemented.** All planned spec files exist under `src/it/scala/com/chipprbots/ethereum/ethtest/` (`GeneralStateTestsSpec`, `BlockchainTestsSpec`, `VMTestsSpec`, `TransactionTestsSpec`, `ComprehensiveBlockchainTestsSpec`, `ExecutionSpecsStateTestsSpec`), and nightly CI runs the suite via `.github/workflows/ethereum-tests-nightly.yml`. Retained as a record of the rollout plan and as a reference for ongoing coverage work.
+
 ## Overview
 
 Complete the ethereum/tests adapter by expanding test coverage to the full suite, replacing custom tests, and integrating into CI pipeline.

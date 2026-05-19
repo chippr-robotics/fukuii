@@ -174,29 +174,9 @@ Check for:
 2. Check peer latency: High latency affects all implementations
 3. Monitor actor mailbox sizes: Large mailboxes indicate bottleneck
 
-## Migration Path
+## Status
 
-### Phase 1: Initial Deployment (Current)
-- Actor implementation complete
-- Feature flag default: `false`
-- Safe fallback to synchronized mode
-
-### Phase 2: Testing
-- Enable for select nodes
-- Compare performance metrics
-- Monitor for issues
-
-### Phase 3: Gradual Rollout
-- Enable for 25%, 50%, 75% of fleet
-- Validate stability at each stage
-
-### Phase 4: Full Rollout
-- Enable by default: `use-actor-concurrency = true`
-- Keep synchronized mode as fallback
-
-### Phase 5: Cleanup (Future)
-- Remove synchronized downloader code
-- Simplify to actor-only implementation
+The actor-based implementation is the only code path in production. The `use-actor-concurrency` feature flag and the synchronized-block fallback have been removed; coordinators and workers under `src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/` are always-on.
 
 ## References
 
