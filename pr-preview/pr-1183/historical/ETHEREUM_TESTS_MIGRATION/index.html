@@ -4765,7 +4765,7 @@
   <a href="#phase-1-2-complete" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Phase 1-2: ✅ Complete
+        Phase 1-2: Complete
       
     </span>
   </a>
@@ -4773,10 +4773,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#phase-3-in-progress-blocked" class="md-nav__link">
+  <a href="#phase-3-implemented" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Phase 3: ⏳ In Progress - BLOCKED
+        Phase 3: Implemented
       
     </span>
   </a>
@@ -5057,10 +5057,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#critical-gas-calculation" class="md-nav__link">
+  <a href="#gas-calculation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        🔴 Critical: Gas Calculation
+        Gas Calculation
       
     </span>
   </a>
@@ -5096,10 +5096,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#minimum-current-blocked" class="md-nav__link">
+  <a href="#minimum" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Minimum (Current - BLOCKED)
+        Minimum
       
     </span>
   </a>
@@ -5107,10 +5107,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#target-after-gas-fixes" class="md-nav__link">
+  <a href="#target" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Target (After gas fixes)
+        Target
       
     </span>
   </a>
@@ -5134,10 +5134,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#ci-integration-blocked" class="md-nav__link">
+  <a href="#ci-integration" class="md-nav__link">
     <span class="md-ellipsis">
       
-        CI Integration (Blocked)
+        CI Integration
       
     </span>
   </a>
@@ -5800,7 +5800,7 @@
   <a href="#phase-1-2-complete" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Phase 1-2: ✅ Complete
+        Phase 1-2: Complete
       
     </span>
   </a>
@@ -5808,10 +5808,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#phase-3-in-progress-blocked" class="md-nav__link">
+  <a href="#phase-3-implemented" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Phase 3: ⏳ In Progress - BLOCKED
+        Phase 3: Implemented
       
     </span>
   </a>
@@ -6092,10 +6092,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#critical-gas-calculation" class="md-nav__link">
+  <a href="#gas-calculation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        🔴 Critical: Gas Calculation
+        Gas Calculation
       
     </span>
   </a>
@@ -6131,10 +6131,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#minimum-current-blocked" class="md-nav__link">
+  <a href="#minimum" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Minimum (Current - BLOCKED)
+        Minimum
       
     </span>
   </a>
@@ -6142,10 +6142,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#target-after-gas-fixes" class="md-nav__link">
+  <a href="#target" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Target (After gas fixes)
+        Target
       
     </span>
   </a>
@@ -6169,10 +6169,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#ci-integration-blocked" class="md-nav__link">
+  <a href="#ci-integration" class="md-nav__link">
     <span class="md-ellipsis">
       
-        CI Integration (Blocked)
+        CI Integration
       
     </span>
   </a>
@@ -6332,18 +6332,20 @@
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
 <p>This guide documents the migration from custom test fixtures to the official ethereum/tests repository. This aligns with TEST-001 and provides better EVM validation coverage.</p>
 <h2 id="current-status">Current Status<a class="headerlink" href="#current-status" title="Permanent link">&para;</a></h2>
-<h3 id="phase-1-2-complete">Phase 1-2: ✅ Complete<a class="headerlink" href="#phase-1-2-complete" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p><strong>Note:</strong> This document is historical. The gas-calculation blockers it references have been resolved (see <a href="../../troubleshooting/GAS_CALCULATION_ISSUES/">Gas Calculation Reference</a>). The ethereum/tests integration is wired up via <code>src/it/scala/com/chipprbots/ethereum/ethtest/</code> and runs nightly through <code>.github/workflows/ethereum-tests-nightly.yml</code>. Retained for context on the migration approach.</p>
+</blockquote>
+<h3 id="phase-1-2-complete">Phase 1-2: Complete<a class="headerlink" href="#phase-1-2-complete" title="Permanent link">&para;</a></h3>
 <ul>
 <li>JSON parsing infrastructure implemented</li>
 <li>Test execution framework working</li>
-<li>4 initial validation tests passing</li>
+<li>Initial validation tests passing</li>
 </ul>
-<h3 id="phase-3-in-progress-blocked">Phase 3: ⏳ In Progress - BLOCKED<a class="headerlink" href="#phase-3-in-progress-blocked" title="Permanent link">&para;</a></h3>
+<h3 id="phase-3-implemented">Phase 3: Implemented<a class="headerlink" href="#phase-3-implemented" title="Permanent link">&para;</a></h3>
 <ul>
-<li><strong>84 tests passing</strong> from ethereum/tests</li>
-<li>35 tests failing (mostly gas calculation issues)</li>
-<li>Gas calculation discrepancies identified and documented</li>
-<li><strong>BLOCKED</strong> on EIP-2929 gas calculation fixes</li>
+<li>GeneralStateTests, BlockchainTests, TransactionTests, VMTests, ExecutionSpecsStateTests, and ComprehensiveBlockchainTests spec files exist under <code>src/it/scala/com/chipprbots/ethereum/ethtest/</code></li>
+<li>Nightly CI workflow exercises the suite</li>
+<li>Gas-calculation discrepancies that previously blocked Phase 3 have been resolved (EIP-2929 compliant)</li>
 </ul>
 <h2 id="test-categories">Test Categories<a class="headerlink" href="#test-categories" title="Permanent link">&para;</a></h2>
 <h3 id="working-tests-84-passing">Working Tests (84 passing)<a class="headerlink" href="#working-tests-84-passing" title="Permanent link">&para;</a></h3>
@@ -6475,7 +6477,7 @@
 - Cancun
 - Any future forks</p>
 <h2 id="known-issues">Known Issues<a class="headerlink" href="#known-issues" title="Permanent link">&para;</a></h2>
-<h3 id="critical-gas-calculation">🔴 Critical: Gas Calculation<a class="headerlink" href="#critical-gas-calculation" title="Permanent link">&para;</a></h3>
+<h3 id="gas-calculation">Gas Calculation<a class="headerlink" href="#gas-calculation" title="Permanent link">&para;</a></h3>
 <p><strong>Status:</strong> RESOLVED</p>
 <p>See <a href="../../troubleshooting/GAS_CALCULATION_ISSUES/">Gas Calculation Reference</a> for full details.</p>
 <p><strong>Summary:</strong>
@@ -6489,13 +6491,13 @@
 - Storage handling
 - Account state updates</p>
 <h2 id="test-coverage-goals">Test Coverage Goals<a class="headerlink" href="#test-coverage-goals" title="Permanent link">&para;</a></h2>
-<h3 id="minimum-current-blocked">Minimum (Current - BLOCKED)<a class="headerlink" href="#minimum-current-blocked" title="Permanent link">&para;</a></h3>
+<h3 id="minimum">Minimum<a class="headerlink" href="#minimum" title="Permanent link">&para;</a></h3>
 <ul>
-<li>✅ 50+ tests passing - <strong>ACHIEVED: 84 tests</strong></li>
-<li>🔴 No gas calculation errors - <strong>NOT MET</strong></li>
-<li>✅ Multiple test categories - <strong>ACHIEVED</strong></li>
+<li>50+ tests passing — Achieved</li>
+<li>No gas calculation errors — Resolved (EIP-2929 compliant)</li>
+<li>Multiple test categories — Achieved</li>
 </ul>
-<h3 id="target-after-gas-fixes">Target (After gas fixes)<a class="headerlink" href="#target-after-gas-fixes" title="Permanent link">&para;</a></h3>
+<h3 id="target">Target<a class="headerlink" href="#target" title="Permanent link">&para;</a></h3>
 <ul>
 <li>100+ tests passing</li>
 <li>&lt; 5% failure rate</li>
@@ -6507,8 +6509,8 @@
 <li>&lt; 1% failure rate</li>
 <li>Full ethereum/tests coverage for supported networks</li>
 </ul>
-<h2 id="ci-integration-blocked">CI Integration (Blocked)<a class="headerlink" href="#ci-integration-blocked" title="Permanent link">&para;</a></h2>
-<p><strong>Status:</strong> Cannot proceed until gas calculation is fixed</p>
+<h2 id="ci-integration">CI Integration<a class="headerlink" href="#ci-integration" title="Permanent link">&para;</a></h2>
+<p><strong>Status:</strong> Live. See <code>.github/workflows/ethereum-tests-nightly.yml</code>.</p>
 <p><strong>Planned:</strong>
 <div class="language-yaml highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># .github/workflows/ethereum-tests.yml</span>
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ethereum Tests</span>
@@ -6553,9 +6555,8 @@
 <li>Document findings</li>
 </ol>
 <hr />
-<p><strong>Last Updated:</strong> November 15, 2025<br />
-<strong>Status:</strong> Phase 3 In Progress - BLOCKED on gas calculation fixes<br />
-<strong>Next Action:</strong> Fix EIP-2929 gas calculation issues</p>
+<p><strong>Last Updated:</strong> November 15, 2025 (status notes added during 2026 docs cleanup)
+<strong>Status:</strong> Phase 3 implemented; nightly CI live; gas-calculation blockers resolved.</p>
 
 
 

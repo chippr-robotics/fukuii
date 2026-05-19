@@ -5633,6 +5633,9 @@
 
 
 <h1 id="phase-3-implementation-plan-ethereumtests-suite-integration">Phase 3 Implementation Plan: Ethereum/Tests Suite Integration<a class="headerlink" href="#phase-3-implementation-plan-ethereumtests-suite-integration" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>Status: Largely implemented.</strong> All planned spec files exist under <code>src/it/scala/com/chipprbots/ethereum/ethtest/</code> (<code>GeneralStateTestsSpec</code>, <code>BlockchainTestsSpec</code>, <code>VMTestsSpec</code>, <code>TransactionTestsSpec</code>, <code>ComprehensiveBlockchainTestsSpec</code>, <code>ExecutionSpecsStateTestsSpec</code>), and nightly CI runs the suite via <code>.github/workflows/ethereum-tests-nightly.yml</code>. Retained as a record of the rollout plan and as a reference for ongoing coverage work.</p>
+</blockquote>
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
 <p>Complete the ethereum/tests adapter by expanding test coverage to the full suite, replacing custom tests, and integrating into CI pipeline.</p>
 <p><strong>Duration:</strong> 4 weeks

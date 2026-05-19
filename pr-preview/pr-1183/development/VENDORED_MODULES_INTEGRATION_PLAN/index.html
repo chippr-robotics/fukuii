@@ -5555,6 +5555,9 @@
 
 
 <h1 id="vendored-modules-integration-plan">Vendored Modules Integration Plan<a class="headerlink" href="#vendored-modules-integration-plan" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p><strong>Status: Not implemented.</strong> This plan was drafted but never executed. The vendored modules (<code>bytes/</code>, <code>crypto/</code>, <code>rlp/</code>, <code>scalanet/</code>) remain as separate SBT subprojects in <code>build.sbt</code>. Treat this document as a proposal to revisit, not as a record of completed work.</p>
+</blockquote>
 <h2 id="executive-summary">Executive Summary<a class="headerlink" href="#executive-summary" title="Permanent link">&para;</a></h2>
 <p>This document outlines the effort required to fully incorporate Fukuii's vendored modules (bytes, crypto, rlp, scalanet) into the main application codebase, eliminating them as independent SBT subprojects.</p>
 <p><strong>Recommendation</strong>: Proceed with <strong>Option 1</strong> (Move to src/main/scala with namespace preservation) - <strong>Low effort, low risk, 2-3 hours</strong></p>

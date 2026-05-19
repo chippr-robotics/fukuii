@@ -5523,74 +5523,13 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#migration-path" class="md-nav__link">
+  <a href="#status" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Migration Path
+        Status
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Migration Path">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#phase-1-initial-deployment-current" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Phase 1: Initial Deployment (Current)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#phase-2-testing" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Phase 2: Testing
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#phase-3-gradual-rollout" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Phase 3: Gradual Rollout
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#phase-4-full-rollout" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Phase 4: Full Rollout
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#phase-5-cleanup-future" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Phase 5: Cleanup (Future)
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -5772,34 +5711,8 @@
 <li>Check peer latency: High latency affects all implementations</li>
 <li>Monitor actor mailbox sizes: Large mailboxes indicate bottleneck</li>
 </ol>
-<h2 id="migration-path">Migration Path<a class="headerlink" href="#migration-path" title="Permanent link">&para;</a></h2>
-<h3 id="phase-1-initial-deployment-current">Phase 1: Initial Deployment (Current)<a class="headerlink" href="#phase-1-initial-deployment-current" title="Permanent link">&para;</a></h3>
-<ul>
-<li>Actor implementation complete</li>
-<li>Feature flag default: <code>false</code></li>
-<li>Safe fallback to synchronized mode</li>
-</ul>
-<h3 id="phase-2-testing">Phase 2: Testing<a class="headerlink" href="#phase-2-testing" title="Permanent link">&para;</a></h3>
-<ul>
-<li>Enable for select nodes</li>
-<li>Compare performance metrics</li>
-<li>Monitor for issues</li>
-</ul>
-<h3 id="phase-3-gradual-rollout">Phase 3: Gradual Rollout<a class="headerlink" href="#phase-3-gradual-rollout" title="Permanent link">&para;</a></h3>
-<ul>
-<li>Enable for 25%, 50%, 75% of fleet</li>
-<li>Validate stability at each stage</li>
-</ul>
-<h3 id="phase-4-full-rollout">Phase 4: Full Rollout<a class="headerlink" href="#phase-4-full-rollout" title="Permanent link">&para;</a></h3>
-<ul>
-<li>Enable by default: <code>use-actor-concurrency = true</code></li>
-<li>Keep synchronized mode as fallback</li>
-</ul>
-<h3 id="phase-5-cleanup-future">Phase 5: Cleanup (Future)<a class="headerlink" href="#phase-5-cleanup-future" title="Permanent link">&para;</a></h3>
-<ul>
-<li>Remove synchronized downloader code</li>
-<li>Simplify to actor-only implementation</li>
-</ul>
+<h2 id="status">Status<a class="headerlink" href="#status" title="Permanent link">&para;</a></h2>
+<p>The actor-based implementation is the only code path in production. The <code>use-actor-concurrency</code> feature flag and the synchronized-block fallback have been removed; coordinators and workers under <code>src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/</code> are always-on.</p>
 <h2 id="references">References<a class="headerlink" href="#references" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Pekko Actors: https://pekko.apache.org/docs/pekko/current/typed/index.html</li>

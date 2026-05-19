@@ -5728,8 +5728,8 @@
 
 
 <h1 id="snap-sync-actor-based-concurrency-design">SNAP Sync Actor-Based Concurrency Design<a class="headerlink" href="#snap-sync-actor-based-concurrency-design" title="Permanent link">&para;</a></h1>
-<p><strong>Date</strong>: 2025-12-15<br />
-<strong>Status</strong>: Implementation in Progress<br />
+<p><strong>Date</strong>: 2025-12-15
+<strong>Status</strong>: Implemented. Coordinators and workers live in <code>src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/</code>; the legacy synchronized-block code path and <code>use-actor-concurrency</code> feature flag have been removed.
 <strong>Requirement</strong>: Use Pekko actor system for concurrency in SNAP requests from peers</p>
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
 <p>Refactor SNAP sync downloaders to use Pekko actors for managing concurrent requests to peers instead of synchronized blocks and mutable state.</p>
