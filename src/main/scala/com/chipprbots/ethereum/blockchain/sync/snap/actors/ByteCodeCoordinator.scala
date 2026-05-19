@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
-import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props, SupervisorStrategy, OneForOneStrategy}
+import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props, SupervisorStrategy, OneForOneStrategy, Terminated}
 import org.apache.pekko.actor.SupervisorStrategy._
 import org.apache.pekko.util.ByteString
 
@@ -130,7 +130,7 @@ class ByteCodeCoordinator(
   private[actors] var backpressureActive: Boolean = false
 
   // Worker pool
-  private val workers = mutable.ArrayBuffer[ActorRef]()
+  private[actors] val workers = mutable.ArrayBuffer[ActorRef]()
   private val maxWorkers = 32
   private val idleWorkers = mutable.LinkedHashSet.empty[ActorRef]
 
@@ -225,7 +225,11 @@ class ByteCodeCoordinator(
       // BUG-S1: Do NOT clear knownAvailablePeers — bytecodes are content-addressed (hash-keyed),
       // not state-root-dependent, so existing peers can serve them after a pivot refresh.
       // Clearing the set would force a cold-start re-registration delay.
-      log.info("Pivot refreshed — clearing bytecode peer cooldowns (keeping peer set)")
+      log.info(
+        s"Pivot refreshed — clearing bytecode peer cooldowns (keeping peer set). " +
+          s"Pool state: workers=${workers.size}/$maxWorkers, idle=${idleWorkers.size}, " +
+          s"pending=${pendingTasks.size}, active=${activeTasks.size}, knownPeers=${knownAvailablePeers.size}"
+      )
       peerFailureCounts.clear()
       peerCooldownUntilMillis.clear()
       peerResponseBytesTarget.clear()
@@ -358,6 +362,21 @@ class ByteCodeCoordinator(
       log.info("Bytecode sync force-completed (promoting to healing/recovery phase)")
       snapSyncController ! SNAPSyncController.ByteCodeSyncComplete
 
+    case Terminated(worker) if workers.contains(worker) =>
+      log.warning(
+        s"ByteCode worker terminated permanently — removing from pool. " +
+          s"Remaining workers: ${workers.size - 1}, idle: ${idleWorkers.size}"
+      )
+      workers -= worker
+      idleWorkers -= worker
+      activeTasks.find { case (_, active) => active.worker == worker }.foreach { case (reqId, active) =>
+        log.warning(s"Re-queuing bytecode task from terminated worker (${active.task.codeHashes.size} hashes)")
+        activeTasks -= reqId
+        active.task.pending = false
+        pendingTasks.enqueue(active.task)
+      }
+      tryRedispatchPendingTasks()
+
     case ByteCodeGetProgress =>
       val total = completedTaskCount + activeTasks.size.toLong + pendingTasks.size.toLong
       val progress = if (total == 0) 1.0 else completedTaskCount.toDouble / total
@@ -428,7 +447,10 @@ class ByteCodeCoordinator(
           assignTaskToWorker(worker, peer)
           inflight += 1
         case None =>
-          // No worker capacity available right now.
+          log.debug(
+            s"ByteCode dispatch blocked: workers=${workers.size}/$maxWorkers, idle=${idleWorkers.size}, " +
+              s"pending=${pendingTasks.size}, peer=${peer.id.value}"
+          )
           return
       }
     }
@@ -649,6 +671,7 @@ class ByteCodeCoordinator(
         )
         .withDispatcher("sync-dispatcher")
     )
+    context.watch(worker)
     workers += worker
     idleWorkers += worker
     log.debug(s"Created bytecode worker, total: ${workers.size}")

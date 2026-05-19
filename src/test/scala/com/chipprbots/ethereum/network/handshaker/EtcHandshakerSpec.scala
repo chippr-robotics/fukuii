@@ -293,15 +293,12 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
     }
   }
 
-  it should "force supportsSnap=true for ETH69 peers even when snap/1 absent from Hello" taggedAs (
+  it should "set supportsSnap=false for ETH69 peers when snap/1 is absent from Hello" taggedAs (
     UnitTest,
     NetworkTest
   ) in new RemotePeerETH69Setup {
-    // EIP-7642 mandates that ETH/69 peers always support snap as a co-protocol.
-    // Peers negotiating ETH/69 never advertise snap/1 separately in Hello.
-    // EtcHelloExchangeState must force supportsSnap=true whenever ETH69 is negotiated.
-    // See: EtcHelloExchangeState.scala line ~81.
-
+    // ETH/69 and SNAP/1 are independent protocols. A peer can negotiate ETH/69
+    // without advertising snap/1 in Hello. supportsSnap must reflect actual capabilities.
     // remoteHello has only Capability.ETH69, no SNAP1
     val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] =
       initHandshakerWithoutResolver.applyMessage(remoteHello)
@@ -313,14 +310,36 @@ class NetworkHandshakerSpec extends AnyFlatSpec with Matchers {
 
     handshakerAfterStatusOpt.get.nextMessage match {
       case Left(HandshakeSuccess(peerInfo)) =>
-        // Core assertion: supportsSnap must be true despite no SNAP1 in Hello
+        peerInfo.remoteStatus.supportsSnap shouldBe false
+        peerInfo.remoteStatus.capability shouldBe Capability.ETH69
+        peerInfo.forkAccepted shouldBe true
+      case Left(HandshakeFailure(reason)) =>
+        fail(s"Expected HandshakeSuccess but got HandshakeFailure($reason)")
+      case Right(nextMsg) =>
+        fail(s"Expected HandshakeSuccess but got next message: ${nextMsg.messageToSend}")
+    }
+  }
+
+  it should "set supportsSnap=true for ETH69 peers when snap/1 is present in Hello" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new RemotePeerETH69Setup {
+    val helloWithSnap = remoteHello.copy(capabilities = Seq(Capability.ETH69, Capability.SNAP1))
+    val handshakerAfterHelloOpt: Option[Handshaker[PeerInfo]] =
+      initHandshakerWithoutResolver.applyMessage(helloWithSnap)
+    assert(handshakerAfterHelloOpt.isDefined)
+
+    val handshakerAfterStatusOpt: Option[Handshaker[PeerInfo]] =
+      handshakerAfterHelloOpt.get.applyMessage(remoteStatusMsg)
+    assert(handshakerAfterStatusOpt.isDefined)
+
+    handshakerAfterStatusOpt.get.nextMessage match {
+      case Left(HandshakeSuccess(peerInfo)) =>
         peerInfo.remoteStatus.supportsSnap shouldBe true
         peerInfo.remoteStatus.capability shouldBe Capability.ETH69
         peerInfo.forkAccepted shouldBe true
-
       case Left(HandshakeFailure(reason)) =>
         fail(s"Expected HandshakeSuccess but got HandshakeFailure($reason)")
-
       case Right(nextMsg) =>
         fail(s"Expected HandshakeSuccess but got next message: ${nextMsg.messageToSend}")
     }

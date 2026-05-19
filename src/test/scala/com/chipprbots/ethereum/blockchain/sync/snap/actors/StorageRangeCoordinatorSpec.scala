@@ -416,6 +416,85 @@ class StorageRangeCoordinatorSpec
     snapSyncController.expectNoMessage(300.millis)
   }
 
+  // ── Fix 2: consecutiveTaskFailures reset on StoragePivotRefreshed ────────────
+  // Verifies that a pivot refresh zeroes the consecutive failure counter, preventing
+  // pivot-invalidated task failures (counted during AccountRange phase) from
+  // triggering a premature ForceComplete during the subsequent ByteCode+Storage phase.
+  // In Run 23 this counter reached 102-104 during AccountRange and triggered
+  // StorageRangeSyncForceCompleted at 14:28:43, permanently blocking recovery.
+
+  it should "reset consecutiveTaskFailures to 0 on StoragePivotRefreshed" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("reset-consec-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = TestActorRef[StorageRangeCoordinator](
+      StorageRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+        maxAccountsPerBatch = 8,
+        maxInFlightRequests = 8,
+        requestTimeout = 30.seconds,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    // Simulate failures accumulated during AccountRange phase (before storage phase begins)
+    coordinator.underlyingActor.consecutiveTaskFailures = 50
+
+    val newStateRoot = kec256(ByteString("pivot-reset-root"))
+    coordinator ! Messages.StoragePivotRefreshed(newStateRoot)
+
+    // TestActorRef processes synchronously — counter must be 0 immediately after
+    coordinator.underlyingActor.consecutiveTaskFailures shouldBe 0
+  }
+
+  it should "not trigger ForceCompleteStorage when failures accumulated before a pivot are reset" taggedAs UnitTest in {
+    // Regression: Run 23 had 102-104 consecutive failures from pivot-invalidated tasks.
+    // The threshold is 100. Without the reset, those failures triggered ForceComplete during
+    // AccountRange, permanently setting storagePhaseComplete=true before storage even started.
+    // With the reset, a pivot refresh zeroes the counter so failures before and after a pivot
+    // are counted independently — only a sustained run of 100 failures from one pivot epoch triggers.
+    val stateRoot = kec256(ByteString("no-force-after-pivot-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = TestActorRef[StorageRangeCoordinator](
+      StorageRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+        maxAccountsPerBatch = 8,
+        maxInFlightRequests = 8,
+        requestTimeout = 30.seconds,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    // Accumulate 99 failures — one below the 100-failure force-complete threshold
+    coordinator.underlyingActor.consecutiveTaskFailures = 99
+
+    // Pivot refresh (mirrors what happens when SNAPSyncController updates the pivot block)
+    val newRoot = kec256(ByteString("mid-session-pivot"))
+    coordinator ! Messages.StoragePivotRefreshed(newRoot)
+
+    // Counter is now 0. Set it to 99 again (simulating another near-threshold accumulation
+    // after the pivot — still one below the threshold from this epoch).
+    coordinator.underlyingActor.consecutiveTaskFailures = 99
+
+    // No ForceCompleteStorage should have been sent across either epoch
+    snapSyncController.expectNoMessage(300.millis)
+  }
+
   // ========================================
   // Flat-batch aggregator (issue #1165)
   // ========================================

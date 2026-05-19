@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
 import org.apache.pekko.actor.ActorSystem
-import org.apache.pekko.testkit.{TestKit, TestProbe, ImplicitSender}
+import org.apache.pekko.testkit.{TestActorRef, TestKit, TestProbe, ImplicitSender}
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
@@ -601,6 +601,93 @@ class ByteCodeCoordinatorSpec
   // even with that fixed, an unbounded pending queue still leaks task-metadata
   // memory linearly with chain size. The coordinator now publishes high/low-
   // water transitions that SNAPSyncController forwards to AccountRangeCoordinator.
+  // ── Fix 3: context.watch + Terminated handler — worker pool recovery ──────────
+  // Verifies that a permanently terminated worker is removed from the pool and its
+  // in-flight task is re-queued. Without context.watch, dead workers remain in
+  // `workers`, exhausting the pool (idleWorkers empty, workers.size >= maxWorkers)
+  // and blocking all further dispatch — the exact failure mode from Run 23.
+
+  it should "remove a terminated worker from the pool and re-queue its active task" taggedAs UnitTest in {
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+
+    val peer = PeerTestHelpers.createTestPeer("term-peer", peerProbe.ref)
+
+    val coordinator = TestActorRef[ByteCodeCoordinator](
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 8,
+        snapSyncController = snapSyncController.ref,
+        cooldownConfig = testCooldownConfig
+      )
+    )
+
+    coordinator ! Messages.StartByteCodeSync(Seq(kec256(ByteString("term-code"))))
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+
+    // Worker created and request dispatched
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+
+    // Get the worker ref and stop it permanently (bypasses supervisor restart)
+    val workerRef = coordinator.underlyingActor.workers.head
+    system.stop(workerRef)
+
+    // Terminated propagates asynchronously — wait for coordinator to process it
+    within(3.seconds) {
+      awaitAssert(coordinator.underlyingActor.workers.isEmpty)
+    }
+
+    // Task was re-queued — providing peer again triggers re-dispatch
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+  }
+
+  it should "remove a terminated worker with no active task without affecting pending dispatch" taggedAs UnitTest in {
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+
+    val peer = PeerTestHelpers.createTestPeer("term-idle-peer", peerProbe.ref)
+
+    val coordinator = TestActorRef[ByteCodeCoordinator](
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 8,
+        snapSyncController = snapSyncController.ref,
+        cooldownConfig = testCooldownConfig
+      )
+    )
+
+    // Queue a task and dispatch — worker created
+    coordinator ! Messages.StartByteCodeSync(Seq(kec256(ByteString("idle-code"))))
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+
+    // Complete the task so the worker is now idle (no active task)
+    val workerRef = coordinator.underlyingActor.workers.head
+    // Let the worker become idle by marking the task complete
+    coordinator ! Messages.NoMoreByteCodeTasks
+
+    system.stop(workerRef)
+
+    // Pool should shrink without any exception — coordinator stays operational
+    within(3.seconds) {
+      awaitAssert(coordinator.underlyingActor.workers.isEmpty)
+    }
+
+    coordinator ! Messages.ByteCodeGetProgress
+    expectMsgType[Messages.ByteCodeProgress](3.seconds)
+  }
+
   it should "emit ByteCodeBackpressureChanged when the pending queue crosses watermarks" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
     val requestTracker = new SNAPRequestTracker()(system.scheduler)

@@ -466,6 +466,11 @@ class AccountRangeCoordinator(
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
   private val peerCooldownDefault = 30.seconds
 
+  // FIFO fairness within same in-flight tier: tracks last dispatch time per peer so that
+  // ties in inFlightForPeer sort are broken by least-recently-served order rather than
+  // mutable.Set hash order (which is stable/deterministic and permanently starves some peers).
+  private val lastDispatchTimeMs = mutable.Map.empty[String, Long]
+
   private def isPeerCoolingDown(peer: Peer): Boolean =
     peerCooldownUntilMs.get(peer.id.value).exists(_ > System.currentTimeMillis())
 
@@ -985,6 +990,7 @@ class AccountRangeCoordinator(
     worker ! FetchAccountRange(task, peer, requestId, responseBytes)
     // #1184: progress signal — used by CheckDispatchStalled.
     lastDispatchOrResponseMs = System.currentTimeMillis()
+    lastDispatchTimeMs.update(peer.id.value, lastDispatchOrResponseMs)
   }
 
   // How many accounts to insert per chunk before yielding to the actor mailbox.
@@ -1235,7 +1241,10 @@ class AccountRangeCoordinator(
       return
     }
 
-    for (peer <- eligiblePeers.sortBy(inFlightForPeer) if pendingTasks.nonEmpty)
+    for (
+      peer <- eligiblePeers.sortBy(p => (inFlightForPeer(p), lastDispatchTimeMs.getOrElse(p.id.value, 0L)))
+      if pendingTasks.nonEmpty
+    )
       dispatchIfPossible(peer)
   }
 

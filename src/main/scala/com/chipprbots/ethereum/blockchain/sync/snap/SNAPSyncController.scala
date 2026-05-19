@@ -200,7 +200,6 @@ class SNAPSyncController(
   private var bytecodeRequestTask: Option[Cancellable] = None
   private var storageRangeRequestTask: Option[Cancellable] = None
   private var accountStagnationCheckTask: Option[Cancellable] = None
-  private var storageStagnationCheckTask: Option[Cancellable] = None
   private var healingRequestTask: Option[Cancellable] = None
   private var snapServerPeersScheduler: Option[Cancellable] = None
   private var storageStagnationRefreshAttempted: Boolean = false
@@ -334,6 +333,8 @@ class SNAPSyncController(
     10.minutes // CFG-2: 20→10min; second stall force-completes after 30s anyway
   private val AccountStagnationThreshold: FiniteDuration = snapSyncConfig.accountStagnationTimeout
   private var lastStorageProgressMs: Long = System.currentTimeMillis()
+  private var lastBytecodeProgressMs: Long = System.currentTimeMillis()
+  private var lastBytecodeProgressCount: Long = 0L
   private var lastAccountProgressMs: Long = System.currentTimeMillis()
   private var lastAccountTasksCompleted: Int = 0
   private var lastAccountsDownloaded: Long = 0
@@ -363,7 +364,6 @@ class SNAPSyncController(
     bytecodeRequestTask.foreach(_.cancel())
     storageRangeRequestTask.foreach(_.cancel())
     accountStagnationCheckTask.foreach(_.cancel())
-    storageStagnationCheckTask.foreach(_.cancel())
     healingRequestTask.foreach(_.cancel())
     bootstrapCheckTask.foreach(_.cancel())
     pivotBootstrapRetryTask.foreach(_.cancel())
@@ -579,6 +579,7 @@ class SNAPSyncController(
 
     case ProgressBytecodesDownloaded(count) =>
       progressMonitor.incrementBytecodesDownloaded(count)
+      lastBytecodeProgressMs = System.currentTimeMillis()
 
     case ProgressStorageSlotsSynced(count) =>
       progressMonitor.incrementStorageSlotsSynced(count)
@@ -827,8 +828,10 @@ class SNAPSyncController(
         // Cancel account stagnation checks (no longer relevant)
         accountStagnationCheckTask.foreach(_.cancel()); accountStagnationCheckTask = None
 
-        // Start storage stagnation watchdog now that accounts are done
+        // Start storage + bytecode stagnation watchdogs now that accounts are done
         lastStorageProgressMs = System.currentTimeMillis()
+        lastBytecodeProgressMs = System.currentTimeMillis()
+        lastBytecodeProgressCount = 0L
         scheduleStagnationChecks()
 
         checkAllDownloadsComplete()
@@ -862,13 +865,21 @@ class SNAPSyncController(
       checkAllDownloadsComplete()
 
     case StorageRangeSyncForceCompleted if !storagePhaseComplete =>
-      storagePhaseComplete = true
-      storagePhaseForceCompleted = true
-      log.warning(
-        s"Storage range sync was force-completed. ByteCode: $bytecodePhaseComplete, Accounts: $accountsComplete. " +
-          "SNAP will run healing/validation before regular sync handoff."
-      )
-      checkAllDownloadsComplete()
+      if (currentPhase == ByteCodeAndStorageSync || currentPhase == StateHealing) {
+        storagePhaseComplete = true
+        storagePhaseForceCompleted = true
+        log.warning(
+          s"Storage range sync was force-completed. ByteCode: $bytecodePhaseComplete, " +
+            s"Accounts: $accountsComplete. SNAP will run healing/validation before handoff."
+        )
+        checkAllDownloadsComplete()
+      } else {
+        log.warning(
+          s"StorageRangeSyncForceCompleted received during phase $currentPhase " +
+            s"(consecutive-failures transient path) — ignoring storagePhaseComplete flag. " +
+            s"Storage stagnation recovery remains active for ByteCodeAndStorageSync phase."
+        )
+      }
 
     case HealingAllPeersStateless if currentPhase == StateHealing =>
       log.warning("All healing peers stateless — refreshing pivot in-place for healing")
@@ -1097,10 +1108,10 @@ class SNAPSyncController(
   private case object CheckDownloadStagnation
   private case class AccountCoordinatorProgress(progress: actors.AccountRangeStats)
   private case class StorageCoordinatorProgress(stats: actors.StorageRangeCoordinator.SyncStatistics)
+  private case class ByteCodeCoordinatorProgress(progress: actors.Messages.ByteCodeProgress)
 
   private def scheduleStagnationChecks(): Unit = {
     accountStagnationCheckTask.foreach(_.cancel())
-    storageStagnationCheckTask.foreach(_.cancel())
     val interval = DownloadStagnationCheckInterval
     accountStagnationCheckTask = Some(
       scheduler.scheduleWithFixedDelay(interval, interval, self, CheckDownloadStagnation)(ec, self)
@@ -1138,7 +1149,6 @@ class SNAPSyncController(
             s"(stalled ${stalledForMs / 1000}s). Trie construction likely stuck. Force-completing."
         )
         storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
-        storageStagnationCheckTask.foreach(_.cancel()); storageStagnationCheckTask = None
         storageRangeCoordinator.foreach(_ ! actors.Messages.ForceCompleteStorage)
       }
       return
@@ -1170,9 +1180,32 @@ class SNAPSyncController(
           s"Promoting to healing phase (preserving downloaded state)."
       )
       storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
-      storageStagnationCheckTask.foreach(_.cancel()); storageStagnationCheckTask = None
       storageRangeCoordinator.foreach(_ ! actors.Messages.ForceCompleteStorage)
     }
+  }
+
+  private val BytecodeStagnationThreshold: FiniteDuration = 10.minutes
+
+  /** Force-complete bytecode sync if no progress for BytecodeStagnationThreshold.
+    *
+    * Only fires during ByteCodeAndStorageSync when noMoreTasksExpected is set (post-AccountRange). Missing bytecodes
+    * are recovered per-block during import via BytecodeRecoveryActor.
+    */
+  private def maybeForceCompleteIfBytecodeStagnant(progress: actors.Messages.ByteCodeProgress): Unit = {
+    if (currentPhase != ByteCodeAndStorageSync || bytecodePhaseComplete) return
+    if (progress.bytecodesDownloaded > lastBytecodeProgressCount) {
+      lastBytecodeProgressCount = progress.bytecodesDownloaded
+      lastBytecodeProgressMs = System.currentTimeMillis()
+      return
+    }
+    val stalledForMs = System.currentTimeMillis() - lastBytecodeProgressMs
+    if (stalledForMs < BytecodeStagnationThreshold.toMillis) return
+    log.warning(
+      s"ByteCode sync stalled: no progress for ${stalledForMs / 1000}s " +
+        s"(threshold=${BytecodeStagnationThreshold.toSeconds}s, downloaded=${progress.bytecodesDownloaded}). " +
+        s"Force-completing — missing bytecodes deferred to import-time recovery."
+    )
+    bytecodeCoordinator.foreach(_ ! actors.Messages.ForceCompleteByteCodes)
   }
 
   /** Geth-aligned: check if all 3 concurrent download phases are complete. Only transitions to healing when accounts +
@@ -2693,6 +2726,19 @@ class SNAPSyncController(
               }
               .pipeTo(self)
           }
+          if (!bytecodePhaseComplete) {
+            bytecodeCoordinator.foreach { coordinator =>
+              (coordinator ? actors.Messages.ByteCodeGetProgress)
+                .mapTo[actors.Messages.ByteCodeProgress]
+                .map(ByteCodeCoordinatorProgress.apply)
+                .recover { case _ =>
+                  ByteCodeCoordinatorProgress(
+                    actors.Messages.ByteCodeProgress(0.0, 0L, 0L)
+                  )
+                }
+                .pipeTo(self)
+            }
+          }
         case _ => // No stagnation check needed in other phases
       }
       super.aroundReceive(receive, msg)
@@ -2711,6 +2757,14 @@ class SNAPSyncController(
           s"refreshAttempted=$storageStagnationRefreshAttempted"
       )
       maybeRestartIfStorageStagnant(stats)
+      super.aroundReceive(receive, msg)
+
+    case ByteCodeCoordinatorProgress(progress) if currentPhase == ByteCodeAndStorageSync =>
+      log.info(
+        s"ByteCode stagnation check: downloaded=${progress.bytecodesDownloaded}, " +
+          s"stalledMs=${System.currentTimeMillis() - lastBytecodeProgressMs}"
+      )
+      maybeForceCompleteIfBytecodeStagnant(progress)
       super.aroundReceive(receive, msg)
 
     case _ =>
@@ -3366,7 +3420,6 @@ class SNAPSyncController(
     bytecodeRequestTask.foreach(_.cancel()); bytecodeRequestTask = None
     storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
     accountStagnationCheckTask.foreach(_.cancel()); accountStagnationCheckTask = None
-    storageStagnationCheckTask.foreach(_.cancel()); storageStagnationCheckTask = None
     healingRequestTask.foreach(_.cancel()); healingRequestTask = None
     bootstrapCheckTask.foreach(_.cancel()); bootstrapCheckTask = None
     pivotBootstrapRetryTask.foreach(_.cancel()); pivotBootstrapRetryTask = None
