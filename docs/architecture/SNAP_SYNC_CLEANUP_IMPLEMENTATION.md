@@ -410,7 +410,6 @@ Added tests in `AppStateStorageSpec`:
      - Added tests for SNAP sync progress persistence
 
 7. **Documentation:**
-   - `docs/architecture/SNAP_SYNC_TODO.md` - Updated to mark items as complete
    - `docs/architecture/SNAP_SYNC_CLEANUP_IMPLEMENTATION.md` - This document
 
 ## Summary
