@@ -323,7 +323,7 @@ While this fix addresses the immediate issue, potential improvements include:
 - Original Issue: "SNAP sync cold sync"
 - User Logs: Issue comments showing the problem
 - Core-Geth Analysis: `docs/analysis/CORE_GETH_SNAP_SYNC_GENESIS_ANALYSIS.md`
-- SNAP Sync Implementation: `docs/architecture/SNAP_SYNC_IMPLEMENTATION.md`
+- SNAP Protocol Architecture: `docs/architecture/SNAP_PROTOCOL_ARCHITECTURE.md`
 - Previous Fix: `docs/fixes/SNAP_SYNC_COLD_START_FIX.md` (network-based pivot selection)
 
 ## Conclusion

@@ -348,7 +348,7 @@ log.error("❌ CRITICAL: State root verification FAILED!")
 
 ## References
 
-- [SNAP Sync Implementation](./SNAP_SYNC_IMPLEMENTATION.md) - Technical reference
+- [SNAP Protocol Architecture](./SNAP_PROTOCOL_ARCHITECTURE.md) - Consolidated technical reference
 - [Ethereum MPT Specification](https://ethereum.org/en/developers/docs/data-structures-and-encoding/patricia-merkle-trie/)
 - [SNAP Protocol devp2p](https://github.com/ethereum/devp2p/blob/master/caps/snap.md)
 

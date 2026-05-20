@@ -348,7 +348,7 @@ Watch for:
 - [Core-Geth Syncer Implementation](https://github.com/etclabscore/core-geth/blob/master/eth/syncer.go)
 - [Geth Snap Sync Implementation](https://github.com/ethereum/go-ethereum/tree/master/eth/protocols/snap)
 - [ADR-SNAP-001: Protocol Infrastructure](./ADR-SNAP-001-protocol-infrastructure.md)
-- [SNAP Sync Implementation Guide](../../architecture/SNAP_SYNC_IMPLEMENTATION.md)
+- [SNAP Protocol Architecture](../../architecture/SNAP_PROTOCOL_ARCHITECTURE.md)
 
 ## Changelog
 

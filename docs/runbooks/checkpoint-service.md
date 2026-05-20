@@ -1373,7 +1373,7 @@ system.scheduler.scheduleAtFixedRate(
 - [SNAP Sync FAQ](snap-sync-faq.md) - Frequently asked questions about SNAP protocol
 
 ### Architecture and Implementation
-- [SNAP Sync Implementation](../architecture/SNAP_SYNC_IMPLEMENTATION.md) - Technical implementation details
+- [SNAP Protocol Architecture](../architecture/SNAP_PROTOCOL_ARCHITECTURE.md) - Consolidated technical architecture
 - [ADR-SNAP-001: Protocol Infrastructure](../adr/protocols/ADR-SNAP-001-protocol-infrastructure.md) - SNAP protocol design
 - [ADR-SNAP-002: Integration Architecture](../adr/protocols/ADR-SNAP-002-integration-architecture.md) - Integration patterns
 

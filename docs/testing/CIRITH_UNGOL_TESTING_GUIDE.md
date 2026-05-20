@@ -518,7 +518,7 @@ cd ops/cirith-ungol
 
 - Gorgoroth Network Testing - see `ops/gorgoroth/README.md` (internal)
 - [Gorgoroth Compatibility Testing](GORGOROTH_COMPATIBILITY_TESTING.md)
-- [Fukuii Sync Documentation](../architecture/SNAP_SYNC_IMPLEMENTATION.md)
+- [Fukuii SNAP Protocol Architecture](../architecture/SNAP_PROTOCOL_ARCHITECTURE.md)
 
 ## Support
 

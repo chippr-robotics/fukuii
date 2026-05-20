@@ -519,7 +519,7 @@ Potential improvements for consideration:
 
 ## References
 
-- [SNAP Sync Implementation](./SNAP_SYNC_IMPLEMENTATION.md)
+- [SNAP Protocol Architecture](./SNAP_PROTOCOL_ARCHITECTURE.md)
 - [Circuit Breaker Pattern](https://martinfowler.com/bliki/CircuitBreaker.html)
 - [Exponential Backoff](https://en.wikipedia.org/wiki/Exponential_backoff)
 

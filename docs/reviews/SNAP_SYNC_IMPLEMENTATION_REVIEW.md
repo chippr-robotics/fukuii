@@ -453,12 +453,11 @@ val storageTrie = storageTrieCache.getOrElseUpdate(
 ✅ **Excellent** - 13 comprehensive documents
 
 **Architecture Documentation:**
-1. SNAP_SYNC_IMPLEMENTATION.md - Technical reference
+1. SNAP_PROTOCOL_ARCHITECTURE.md - Consolidated architecture reference
 2. SNAP_SYNC_ERROR_HANDLING.md - Error handling architecture
 3. SNAP_SYNC_STATE_VALIDATION.md - State validation
 4. SNAP_SYNC_BYTECODE_IMPLEMENTATION.md - ByteCode download
 5. SNAP_SYNC_STATE_STORAGE_REVIEW.md - State storage review
-6. SNAP_SYNC_ACTOR_IMPLEMENTATION.md - Actor-based concurrency
 7. SNAP_SYNC_PROGRESS_MONITORING_SUMMARY.md - Progress monitoring
 8. SNAP_SYNC_CLEANUP_IMPLEMENTATION.md - Fallback/recovery
 

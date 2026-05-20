@@ -217,4 +217,4 @@ If needed in future, these could be made configurable via `snap-sync` config sec
 ## References
 - Original issue: SNAP sync cold sync
 - User logs showing the problem were found in issue comments
-- SNAP sync documentation: `docs/architecture/SNAP_SYNC_IMPLEMENTATION.md`
+- SNAP sync documentation: `docs/architecture/SNAP_PROTOCOL_ARCHITECTURE.md`

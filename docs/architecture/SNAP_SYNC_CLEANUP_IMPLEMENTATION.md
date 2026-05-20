@@ -446,7 +446,7 @@ These implementations move SNAP sync closer to production readiness by:
 
 - [SNAP Protocol Specification](https://github.com/ethereum/devp2p/blob/master/caps/snap.md)
 - [SNAP_SYNC_ERROR_HANDLING.md](./SNAP_SYNC_ERROR_HANDLING.md)
-- [SNAP_SYNC_IMPLEMENTATION.md](./SNAP_SYNC_IMPLEMENTATION.md)
+- [SNAP_PROTOCOL_ARCHITECTURE.md](./SNAP_PROTOCOL_ARCHITECTURE.md)
 
 ---
 

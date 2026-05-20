@@ -113,7 +113,7 @@ This would be out of scope for addressing the immediate issue and the comment's 
 **Mitigation**: The ETH protocol remains primary; SNAP is satellite. Peers will fall back to ETH protocol for actual syncing.
 
 **Risk**: Users expect full SNAP sync functionality
-**Mitigation**: Clear documentation states this is infrastructure only. SNAP_SYNC_IMPLEMENTATION.md explains status and future work.
+**Mitigation**: Clear documentation states this is infrastructure only. SNAP_PROTOCOL_ARCHITECTURE.md explains current architecture and operational details.
 
 **Risk**: Incomplete implementation creates technical debt
 **Mitigation**: Message structures follow spec exactly. Future implementation will use these structures without modification.
@@ -126,7 +126,7 @@ This would be out of scope for addressing the immediate issue and the comment's 
 - `SNAP.scala`: New file with all 8 SNAP/1 message definitions  
 - `ETH68.scala`: Updated documentation to reference SNAP/1
 - Chain configs (5 files): Added "snap/1" to capabilities
-- `SNAP_SYNC_IMPLEMENTATION.md`: Comprehensive implementation guide
+- `SNAP_PROTOCOL_ARCHITECTURE.md`: Consolidated implementation architecture
 
 ### Code Quality
 
@@ -148,7 +148,7 @@ To complete SNAP sync functionality (estimated 2-3 months):
 5. **Phase 6**: State healing (~2-3 weeks)
 6. **Phase 7**: Integration & testing (~2-4 weeks)
 
-See `docs/architecture/SNAP_SYNC_IMPLEMENTATION.md` for detailed roadmap.
+See `docs/architecture/SNAP_PROTOCOL_ARCHITECTURE.md` for the current architecture.
 
 ## References
 

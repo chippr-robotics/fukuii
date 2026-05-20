@@ -95,8 +95,8 @@ Genesis (0)
 4. `docs/analysis/CORE_GETH_SNAP_SYNC_GENESIS_ANALYSIS.md`
    - Comprehensive analysis of core-geth implementation
 
-5. `docs/architecture/SNAP_SYNC_ACTOR_CONCURRENCY.md`
-   - Design for future actor-based concurrency
+5. `docs/architecture/SNAP_PROTOCOL_ARCHITECTURE.md`
+   - Consolidated architecture (actor model, FSM, memory, pivot, fallback)
 
 ## Testing Recommendations
 
@@ -167,8 +167,8 @@ Beginning fast state sync with 16 concurrent workers
 
 ### Future Enhancements
 1. **Actor-Based Concurrency**: 
-   - Design complete (see `SNAP_SYNC_ACTOR_CONCURRENCY.md`)
-   - Implementation planned for future PR
+   - Shipped — see `SNAP_PROTOCOL_ARCHITECTURE.md`
+   - Coordinator/worker model on `sync-dispatcher`
    - Benefits: Non-blocking, supervised, scalable
 
 2. **Concurrent Fetchers**:
@@ -196,4 +196,4 @@ The fix aligns with core-geth's approach while maintaining Fukuii's existing arc
 - Original Issue: "SNAP sync cold sync"
 - Core-Geth Repository: https://github.com/etclabscore/core-geth
 - Core-Geth Analysis: `docs/analysis/CORE_GETH_SNAP_SYNC_GENESIS_ANALYSIS.md`
-- SNAP Sync Implementation: `docs/architecture/SNAP_SYNC_IMPLEMENTATION.md`
+- SNAP Protocol Architecture: `docs/architecture/SNAP_PROTOCOL_ARCHITECTURE.md`
