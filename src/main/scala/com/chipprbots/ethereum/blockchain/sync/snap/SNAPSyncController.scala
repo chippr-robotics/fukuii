@@ -823,7 +823,14 @@ class SNAPSyncController(
         // Redistribute per-peer budget: accounts done, give storage+bytecode more bandwidth.
         // Global budget remains 5 per peer: storage=3, bytecode=2.
         storageRangeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(3))
-        bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(2))
+        // ByteCode budget 8 per peer: with 2 local ETC-capable peers (Besu + core-geth) that gives
+        // 16 concurrent requests vs 4 at budget=2. External ETH-mainnet peers return empty quickly
+        // and cool down; local peers handle the full load at <1ms RTT.
+        bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(8))
+        // Clear accumulated peer cooldowns and seed initial dispatch — without this, peers on
+        // 2-min backoff from AccountRange skip ByteCode dispatch indefinitely (Layer 2 stall).
+        bytecodeCoordinator.foreach(_ ! actors.Messages.ByteCodePivotRefreshed)
+        requestByteCodes()
 
         // Cancel account stagnation checks (no longer relevant)
         accountStagnationCheckTask.foreach(_.cancel()); accountStagnationCheckTask = None
@@ -1752,6 +1759,12 @@ class SNAPSyncController(
             lastStorageProgressMs = System.currentTimeMillis()
             scheduleStagnationChecks()
             progressMonitor.startPhase(ByteCodeAndStorageSync)
+
+            // Same as fresh ByteCode phase start: raise budget + clear cooldowns so peers on 2-min
+            // backoff from AccountRange don't block ByteCode dispatch on resume.
+            bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(8))
+            bytecodeCoordinator.foreach(_ ! actors.Messages.ByteCodePivotRefreshed)
+            requestByteCodes()
 
             // Start parallel chain download during recovery too
             startChainDownloader()
@@ -2860,6 +2873,11 @@ class SNAPSyncController(
       trieNodeHealingCoordinator.foreach { coordinator =>
         coordinator ! actors.Messages.StartTrieNodeHealing(root)
         coordinator ! actors.Messages.UpdateMaxInFlightPerPeer(snapSyncConfig.healingMaxInFlightPerPeer)
+        // Flush current snap peers immediately — the 0-second scheduler delay is async; an explicit
+        // flush here ensures peers are available before any StartTrieNodeHealing dispatch attempt.
+        peersToDownloadFrom.values
+          .filter(p => p.peerInfo.remoteStatus.supportsSnap && p.peerInfo.forkAccepted)
+          .foreach(p => coordinator ! actors.Messages.HealingPeerAvailable(p.peer))
       }
 
       // Periodically send peer availability notifications (cancel any existing scheduler first)
@@ -2906,6 +2924,9 @@ class SNAPSyncController(
           trieNodeHealingCoordinator.foreach { coordinator =>
             coordinator ! actors.Messages.StartTrieNodeHealing(root)
             coordinator ! actors.Messages.UpdateMaxInFlightPerPeer(snapSyncConfig.healingMaxInFlightPerPeer)
+            peersToDownloadFrom.values
+              .filter(p => p.peerInfo.remoteStatus.supportsSnap && p.peerInfo.forkAccepted)
+              .foreach(p => coordinator ! actors.Messages.HealingPeerAvailable(p.peer))
           }
           startHealingRequestScheduler()
           log.info(
