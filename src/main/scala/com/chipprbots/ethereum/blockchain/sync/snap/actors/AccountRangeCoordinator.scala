@@ -677,7 +677,9 @@ class AccountRangeCoordinator(
       // and are not cleared, keeping the ~1s SNAPSyncController re-announce from bypassing backoff.
       if (!wasAlreadyKnown) {
         statelessPeers -= peer.id
-        snaplessPeers -= peer.id
+        // snaplessPeers is NOT cleared here: same PeerId = same physical node = same lack-of-snapshot.
+        // Clearing on reconnect would allow known-snapless ETH-mainnet peers to consume dispatch
+        // slots and hash-failure budget before re-accumulating strikes (#1197).
         emptyResponseStrikes.remove(peer.id)
       }
       knownAvailablePeers += peer
