@@ -130,6 +130,8 @@
 
     <!-- Sync status and lifecycle (high-level status only) -->
     <logger name="com.chipprbots.ethereum.blockchain.sync.SyncController" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.BytecodeRecoveryActor" level="INFO" />
+    <logger name="com.chipprbots.ethereum.blockchain.sync.StorageRecoveryActor" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.fast.FastSync" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.regular.RegularSync" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController" level="INFO" />

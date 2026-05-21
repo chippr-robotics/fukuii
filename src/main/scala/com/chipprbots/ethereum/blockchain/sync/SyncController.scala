@@ -1118,6 +1118,8 @@ class SyncController(
             s"stateRoot=${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}..., pivotBlock=$pivotBlock)"
         )
 
+        val snapSyncConfig = loadSnapSyncConfig()
+
         val bytecodeActor = if (needBytecode) {
           Some(
             context.actorOf(
@@ -1129,7 +1131,8 @@ class SyncController(
                   appStateStorage = appStateStorage,
                   networkPeerManager = networkPeerManager,
                   syncController = self,
-                  pivotBlockNumber = pivotBlock
+                  pivotBlockNumber = pivotBlock,
+                  snapSyncConfig = snapSyncConfig
                 )
                 .withDispatcher("sync-dispatcher"),
               s"bytecode-recovery-$syncGeneration"
@@ -1138,7 +1141,6 @@ class SyncController(
         } else None
 
         val storageActor = if (needStorage) {
-          val snapSyncConfig = loadSnapSyncConfig()
           Some(
             context.actorOf(
               StorageRecoveryActor
@@ -1157,6 +1159,9 @@ class SyncController(
             )
           )
         } else None
+
+        bytecodeActor.foreach(context.watch)
+        storageActor.foreach(context.watch)
 
         // Register self for SNAP message routing so responses reach coordinators
         networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(self)
@@ -1234,6 +1239,34 @@ class SyncController(
           bytecodeActor.foreach(_ ! snap.actors.Messages.ByteCodePeerAvailable(peer))
           storageActor.foreach(_ ! snap.actors.Messages.StoragePeerAvailable(peer))
         }
+      }
+
+    case Terminated(actor) if bytecodeActor.contains(actor) =>
+      log.error("BytecodeRecoveryActor terminated unexpectedly. Treating as complete to unblock sync.")
+      if (storageComplete) {
+        peerPoller.cancel()
+        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
+          context.system.deadLetters
+        )
+        startRegularSync()
+      } else {
+        context.become(
+          runningRecovery(bytecodeActor = None, storageActor, bytecodeComplete = true, storageComplete, peerPoller)
+        )
+      }
+
+    case Terminated(actor) if storageActor.contains(actor) =>
+      log.error("StorageRecoveryActor terminated unexpectedly. Treating as complete to unblock sync.")
+      if (bytecodeComplete) {
+        peerPoller.cancel()
+        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
+          context.system.deadLetters
+        )
+        startRegularSync()
+      } else {
+        context.become(
+          runningRecovery(bytecodeActor, storageActor = None, bytecodeComplete, storageComplete = true, peerPoller)
+        )
       }
 
     case msg =>
