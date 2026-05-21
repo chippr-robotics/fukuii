@@ -243,7 +243,15 @@ class BlockImporter(
         val (importedBlocks, errorOpt) = value
         importedBlocks.size match {
           case 0 => log.debug("Imported no blocks")
-          case 1 => log.info("Imported block {}", importedBlocks.head.number)
+          case 1 =>
+            val b = importedBlocks.head
+            log.info(
+              "Imported block {} ({}) txs={} gas={}",
+              b.number,
+              b.header.hashAsHexString.take(10),
+              b.body.transactionList.size,
+              b.header.gasUsed
+            )
           case _ => log.info("Imported blocks {} - {}", importedBlocks.head.number, importedBlocks.last.number)
         }
 
