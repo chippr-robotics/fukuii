@@ -465,6 +465,12 @@ class AccountRangeCoordinator(
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
   private val peerCooldownDefault = 30.seconds
+  // Short cooldown for "empty-without-proof" responses. These mean "I can't serve this
+  // state root" — the peer is healthy, just doesn't have a snapshot at our pivot. 30s
+  // was over-punitive here: in production we saw `cooling=5 eligible=11` snapshots,
+  // i.e. ~30 % of the otherwise-eligible pool parked in cooldown most of the time.
+  // A pivot refresh is what unsticks these peers, not waiting.
+  private val peerCooldownNoProof = 5.seconds
 
   // FIFO fairness within same in-flight tier: tracks last dispatch time per peer so that
   // ties in inFlightForPeer sort are broken by least-recently-served order rather than
@@ -474,10 +480,10 @@ class AccountRangeCoordinator(
   private def isPeerCoolingDown(peer: Peer): Boolean =
     peerCooldownUntilMs.get(peer.id.value).exists(_ > System.currentTimeMillis())
 
-  private def recordPeerCooldown(peer: Peer, reason: String): Unit = {
-    val until = System.currentTimeMillis() + peerCooldownDefault.toMillis
+  private def recordPeerCooldown(peer: Peer, reason: String, duration: FiniteDuration = peerCooldownDefault): Unit = {
+    val until = System.currentTimeMillis() + duration.toMillis
     peerCooldownUntilMs.put(peer.id.value, until)
-    log.debug(s"Cooling down peer ${peer.id.value} for ${peerCooldownDefault.toSeconds}s: $reason")
+    log.debug(s"Cooling down peer ${peer.id.value} for ${duration.toSeconds}s: $reason")
   }
 
   // Pivot refresh backoff: prevents rapid-fire pivot refresh requests when all peers are stateless.
@@ -1039,7 +1045,14 @@ class AccountRangeCoordinator(
               tryRedispatchPendingTasks()
             } else {
               // Defensive fallback: the verifier should reject this as a stateless-peer signal.
-              recordPeerCooldown(peer, "empty account range without proof — peer snapshot may not cover this root")
+              // Use the short proof-less cooldown — the peer is healthy, just doesn't hold a
+              // snapshot at our current pivot. Parking it for 30s gains nothing; a pivot
+              // refresh is what unsticks it.
+              recordPeerCooldown(
+                peer,
+                "empty account range without proof — peer snapshot may not cover this root",
+                peerCooldownNoProof
+              )
               requeueOrEscalate(task, "empty range without proof")
             }
           } else {

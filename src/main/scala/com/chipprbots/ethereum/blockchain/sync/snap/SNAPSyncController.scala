@@ -2388,12 +2388,19 @@ class SNAPSyncController(
       return
     }
 
-    // Dynamic concurrency: use min(configured, peerCount) so each worker maps 1:1 to a peer.
-    // With 16 ranges but only 4 peers, ranges never complete before stagnation.
-    // With 4 ranges and 4 peers, each range gets dedicated throughput and finishes faster.
-    val effectiveConcurrency = math.min(snapSyncConfig.accountConcurrency, snapPeerCount).max(1)
+    // Use the full configured account concurrency regardless of startup peer count.
+    // AccountRangeCoordinator's dispatch loop is asymmetric: peers serve ranges, not the
+    // other way around, so 16 ranges with 4 peers just means each peer gets 4 ranges queued
+    // and worker count scales up as more peers connect (see `maxWorkers` in
+    // AccountRangeCoordinator). The previous `min(configured, peers@start)` froze the
+    // task split at the initial-peer count for the whole sync — observed in production as
+    // `4 workers/10 peers, 0/4 ranges done` permanently, leaving 6 peers' worth of
+    // throughput on the table after the pool grew. PR #1278's ByteCode-worker-leak and
+    // phase-guard fixes removed the original stagnation risk that motivated this cap.
+    val effectiveConcurrency = snapSyncConfig.accountConcurrency.max(1)
     log.info(
-      s"Starting account range sync with concurrency $effectiveConcurrency ($snapPeerCount snap-capable peers, configured max ${snapSyncConfig.accountConcurrency})"
+      s"Starting account range sync with concurrency $effectiveConcurrency " +
+        s"($snapPeerCount snap-capable peers at start, configured max ${snapSyncConfig.accountConcurrency})"
     )
     log.info("Using actor-based concurrency for account range sync")
     launchAccountRangeWorkers(rootHash, effectiveConcurrency)

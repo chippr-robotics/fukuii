@@ -125,8 +125,12 @@ class StorageRangeCoordinator(
 
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
   // This is separate from stateless peer detection — cooldowns are short and per-error-type.
+  // 5 s (was 10 s) — storage shares the peer pool with the account coordinator and we
+  // observed `pending=N active=0 workers-known=10 eligible=8-11` snapshots where most of
+  // the eligible peers were parked here. Halving the cooldown keeps storage dispatch
+  // closer to the request budget the SNAP server can actually sustain.
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
-  private val peerCooldownDefault = 10.seconds
+  private val peerCooldownDefault = 5.seconds
 
   // Stateless peer tracking: peers CONFIRMED unable to serve the current state root after
   // crossing the strike threshold below. When ALL known peers are stateless, request a
@@ -177,7 +181,12 @@ class StorageRangeCoordinator(
   // refresh → infinite tight loop. This cooldown prevents ALL dispatch paths (tryRedispatchPendingTasks,
   // StoragePeerAvailable, StorageCheckCompletion) from sending requests until peers have had time.
   private var postRefreshCooldownUntilMs: Long = 0
-  private val postRefreshCooldownMs: Long = 10000L // 10 seconds after pivot refresh
+  // 5 s (was 10 s) post-pivot cooldown. With ~22 pivot refreshes per long sync, every
+  // second here is `22 ×` lost throughput. The fresh pivot is typically only ~30 blocks
+  // newer than the previous one; peers that served the old root almost always serve the
+  // new one within a couple of seconds. 5 s is enough to avoid the tight "empty →
+  // mark-stateless → refresh" loop without burning aggregate sync time.
+  private val postRefreshCooldownMs: Long = 5000L
 
   // Consecutive idle dispatch checks: counts tryRedispatchPendingTasks() calls where tasks are
   // pending but zero eligible peers and zero active requests exist. At threshold, requests a
