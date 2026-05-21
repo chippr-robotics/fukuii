@@ -215,7 +215,7 @@ object RegularSync {
     def toStatus: SyncProtocol.Status =
       if (startedFetching && bestKnownNetworkBlock != 0 && currentBlock < bestKnownNetworkBlock) {
         Status.Syncing(initialBlock, Progress(currentBlock, bestKnownNetworkBlock), None)
-      } else if (startedFetching && currentBlock >= bestKnownNetworkBlock) {
+      } else if (startedFetching && bestKnownNetworkBlock != 0 && currentBlock >= bestKnownNetworkBlock) {
         Status.SyncDone
       } else {
         Status.NotSyncing

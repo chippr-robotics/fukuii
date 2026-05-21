@@ -199,6 +199,7 @@ class BlockImporter(
       // Retry the same blocks directly — don't PickBlocks, which would fetch from wherever the
       // fetcher is now (potentially far beyond the pivot). After SNAP sync, only the pivot header
       // has a number→hash mapping, so branch resolution would fail for any other starting point.
+      consecutiveExhausts += 1
       importBlocks(blocksToRetry, blockImportType)(state)
   }
 
