@@ -124,7 +124,7 @@ case class EthNodeStatus69ExchangeState(
       latestBlockHash = bestBlockHeader.hash
     )
 
-    log.info(
+    log.debug(
       "ETH69_STATUS: Sending - networkId={}, genesis={}, forkId={}, earliest={}, latest={}, latestHash={}",
       status.networkId,
       genesisHash,

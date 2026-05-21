@@ -252,7 +252,7 @@ class BlockImporter(
               b.body.transactionList.size,
               b.header.gasUsed
             )
-          case _ => log.info("Imported blocks {} - {}", importedBlocks.head.number, importedBlocks.last.number)
+          case _ => log.info("Imported blocks {} - {}", importedBlocks.last.number, importedBlocks.head.number)
         }
 
         errorOpt match {

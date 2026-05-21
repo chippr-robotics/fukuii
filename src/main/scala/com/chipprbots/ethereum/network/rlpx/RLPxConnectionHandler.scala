@@ -109,7 +109,7 @@ class RLPxConnectionHandler(
 
     case CommandFailed(_: Connect) =>
       RLPxConnectionHandler.tcpFailedCount.incrementAndGet()
-      log.warning("[Stopping Connection] TCP connection to {} failed for peer {}", uri, peerId)
+      log.warning("[Stopping Connection] TCP connection failed for peer {}", peerId)
       context.parent ! ConnectionFailed
       gracefulStop()
   }
@@ -227,7 +227,7 @@ class RLPxConnectionHandler(
       )
 
       val snapBaseStr = offsets.peerSnapBase.map(b => s"0x${b.toHexString}").getOrElse("<disabled>")
-      log.info(
+      log.debug(
         s"INBOUND_CAP_OFFSETS: peer=$peerId clientId=${hello.clientId} " +
           s"peerEthBase=0x${offsets.peerEthBase.toHexString} peerSnapBase=$snapBaseStr"
       )
@@ -517,7 +517,7 @@ class RLPxConnectionHandler(
                 )
               )
             case None =>
-              log.error(
+              log.warning(
                 "[Stopping Connection] Unable to negotiate protocol with peer {} — peerCaps=[{}], ourCaps=[{}]",
                 peerId,
                 hello.capabilities.mkString(", "),
@@ -541,7 +541,7 @@ class RLPxConnectionHandler(
         val supportsSnap =
           capabilities.contains(Capability.SNAP1) && hello.capabilities.contains(Capability.SNAP1)
         if (supportsSnap) {
-          log.info("[RLPx] SNAP/1 capability enabled for peer {}", peerId)
+          log.debug("[RLPx] SNAP/1 capability enabled for peer {}", peerId)
         }
         val inboundTranslator = computeInboundTranslator(hello, negotiated, supportsSnap)
         (
@@ -614,10 +614,11 @@ class RLPxConnectionHandler(
           // send proper Disconnect to remote peer before closing connection.
           // Warning (not error): disconnect behavior is correct, this is peer protocol variance
           // (e.g., ETH69 peers sending 8-field Status when we expect 7 fields).
+          val errMsg = Option(ex.getMessage).map(m => if (m.length > 80) m.take(80) + "…" else m).getOrElse("null")
           log.warning(
             "DECODE_ERROR: Cannot decode message from {} - disconnecting. Error: {}",
             peerId,
-            ex.getMessage
+            errMsg
           )
           context.parent ! com.chipprbots.ethereum.network.PeerActor.DisconnectPeer(
             com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.Reasons.BreachOfProtocol

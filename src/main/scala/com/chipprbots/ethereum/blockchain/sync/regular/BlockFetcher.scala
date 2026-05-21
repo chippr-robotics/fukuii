@@ -116,7 +116,7 @@ class BlockFetcher(
   private def processFetchCommands(state: BlockFetcherState): Behavior[FetchCommand] =
     Behaviors.receiveMessage {
       case PrintStatus =>
-        log.info("BlockFetcher status: {}", state.status)
+        log.info("BlockFetcher: readyBlocks={} knownTop={} onTop={}", state.readyBlocks.size, state.knownTop, state.isOnTop)
         log.debug("BlockFetcher detailed status: {}", state.statusDetailed)
         log.debug(
           "Current state - last block: {}, known top: {}, is on top: {}, ready blocks: {}, waiting headers: {}",
