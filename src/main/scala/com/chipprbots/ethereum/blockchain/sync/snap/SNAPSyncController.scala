@@ -77,6 +77,10 @@ class SNAPSyncController(
   // from `SyncController`. Consumed by `startSnapSync()` to skip TD-based pivot selection
   // on post-merge chains. Only meaningful when `isPostMergeChain == true`. Closes #1207.
   private var clPivotHint: Option[CLPivotHint] = None
+
+  // Minimum pivot block enforced when re-entering SNAP from a RegularSyncStuck escape.
+  // Prevents re-selecting the same pivot that caused the regular-sync stall.
+  private var minPivotHint: BigInt = BigInt(0)
   private var clHintArrivedAtMs: Option[Long] = None
 
   // Captured once at construction. ETC mainnet has TTD=None and never goes down the
@@ -396,6 +400,10 @@ class SNAPSyncController(
   override def receive: Receive = idle
 
   def idle: Receive = {
+    case MinPivotBlock(minBlock) =>
+      log.info("Received MinPivotBlock hint: pivot must be >= {}", minBlock)
+      minPivotHint = minBlock
+
     case Start =>
       log.info("Starting SNAP sync...")
       startSnapSync()
@@ -1957,7 +1965,14 @@ class SNAPSyncController(
         (localBestBlock, LocalPivot)
     }
 
-    val pivotBlockNumber = baseBlockForPivot - snapSyncConfig.pivotBlockOffset
+    val rawPivot = baseBlockForPivot - snapSyncConfig.pivotBlockOffset
+    val pivotBlockNumber = rawPivot.max(minPivotHint)
+    if (pivotBlockNumber > rawPivot) {
+      log.warning(
+        s"SNAP pivot raised from $rawPivot to $pivotBlockNumber to satisfy MinPivotBlock constraint " +
+          s"(regular sync was stuck near that block)"
+      )
+    }
 
     log.info(
       s"SNAP pivot selection: localBest=$localBestBlock, networkBest=${networkBestBlockOpt.getOrElse("none")}, " +
@@ -3950,6 +3965,11 @@ object SNAPSyncController {
     * `StartRegularSyncBootstrap` to fetch the header from peers). Closes #1207.
     */
   final case class CLPivotHint(headHash: ByteString, knownHeader: Option[BlockHeader])
+
+  /** Minimum block number the pivot must be at or above. Sent by SyncController when regular sync
+    * was stuck at a specific block, so re-SNAP can't re-select the same pivot that caused the stall.
+    */
+  final case class MinPivotBlock(minBlock: BigInt)
 
   /** Bootstrap-by-hash variant of `StartRegularSyncBootstrap`. Used when the CL drives sync and we know the head hash
     * but not its block number — `PivotHeaderBootstrap` then fetches by `GetBlockHeaders(Right(hash))`. Closes #1207.

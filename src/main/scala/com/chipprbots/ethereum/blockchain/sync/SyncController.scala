@@ -369,7 +369,7 @@ class SyncController(
         regularSync ! PoisonPill
         appStateStorage.clearSnapSyncDone().commit()
         appStateStorage.clearFastSyncDone().commit()
-        startSnapSync()
+        startSnapSync(minPivotBlock = Some(blockNumber))
       case msg =>
         regularSync.forward(msg)
     }
@@ -938,7 +938,7 @@ class SyncController(
     context.become(runningFastSync(fastSync))
   }
 
-  def startSnapSync(): Unit = {
+  def startSnapSync(minPivotBlock: Option[BigInt] = None): Unit = {
     log.info("Starting SNAP sync mode")
     syncGeneration += 1
 
@@ -979,6 +979,10 @@ class SyncController(
       }
     }
 
+    minPivotBlock.foreach { minBlock =>
+      log.info("Sending MinPivotBlock({}) to new SNAP sync actor", minBlock)
+      snapSync ! SNAPSyncController.MinPivotBlock(minBlock)
+    }
     snapSync ! SNAPSyncController.Start
     context.become(runningSnapSync(snapSync))
   }
