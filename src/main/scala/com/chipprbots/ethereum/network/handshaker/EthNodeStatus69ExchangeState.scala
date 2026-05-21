@@ -34,7 +34,7 @@ case class EthNodeStatus69ExchangeState(
 
   def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = { case status: ETH69.Status =>
     import ForkIdValidator.syncIoLogger
-    log.info(
+    log.debug(
       "ETH69_STATUS: Received - protocolVersion={}, networkId={}, genesis={}, forkId={}, earliest={}, latest={}, latestHash={}",
       status.protocolVersion,
       status.networkId,
@@ -48,14 +48,14 @@ case class EthNodeStatus69ExchangeState(
     val localGenesisHash = blockchainReader.genesisHeader.hash
 
     if (status.networkId != peerConfiguration.networkId) {
-      log.info(
+      log.debug(
         "ETH69_STATUS: NetworkId mismatch! Local: {}, Remote: {} - disconnecting (SUBPROTOCOL_TRIGGERED_MISMATCHED_NETWORK)",
         peerConfiguration.networkId,
         status.networkId
       )
       DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
     } else if (status.genesisHash != localGenesisHash) {
-      log.info(
+      log.debug(
         "ETH69_STATUS: Genesis hash mismatch! Local: {}, Remote: {} - disconnecting",
         localGenesisHash,
         status.genesisHash
@@ -96,7 +96,7 @@ case class EthNodeStatus69ExchangeState(
               )
             )
           case other =>
-            log.info("ETH69_STATUS: ForkId validation failed: {} - disconnecting", other)
+            log.debug("ETH69_STATUS: ForkId validation failed: {} - disconnecting", other)
             DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
         }
       }).unsafeRunSync()
