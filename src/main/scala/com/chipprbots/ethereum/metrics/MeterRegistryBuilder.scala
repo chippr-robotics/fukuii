@@ -4,9 +4,8 @@ import io.micrometer.core.instrument._
 import io.micrometer.core.instrument.composite.CompositeMeterRegistry
 import io.micrometer.core.instrument.config.MeterFilter
 import io.micrometer.jmx.JmxMeterRegistry
-import io.micrometer.prometheus.PrometheusConfig
-import io.micrometer.prometheus.PrometheusMeterRegistry
-import io.prometheus.client.CollectorRegistry
+import io.micrometer.prometheusmetrics.PrometheusConfig
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry
 
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.utils.LoggingUtils.getClassName
@@ -28,11 +27,7 @@ object MeterRegistryBuilder extends Logger {
     log.info(s"Build JMX Meter Registry: ${jmxMeterRegistry}")
 
     val prometheusMeterRegistry =
-      new PrometheusMeterRegistry(
-        PrometheusConfig.DEFAULT,
-        CollectorRegistry.defaultRegistry,
-        StdMetricsClock
-      );
+      new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
 
     log.info(s"Build Prometheus Meter Registry: ${prometheusMeterRegistry}")
 

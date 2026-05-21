@@ -120,7 +120,7 @@ class StorageRangeCoordinator(
 
   // Global consecutive task failure counter: triggers ForceCompleteStorage when all SNAP peers
   // stop serving storage data. Resets to zero on any successful slot download.
-  private var consecutiveTaskFailures: Int = 0
+  private[actors] var consecutiveTaskFailures: Int = 0
   private val maxConsecutiveTaskFailures: Int = 100
 
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
@@ -736,7 +736,7 @@ class StorageRangeCoordinator(
         flushPendingFlatBatch()
       }
       if (isComplete) {
-        log.info("Storage range sync complete!")
+        log.debug("Storage range sync complete!")
         snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
       } else if (tasks.nonEmpty) {
         // Try to dispatch pending tasks — per-peer and global limits enforced in dispatchIfPossible().
@@ -756,7 +756,7 @@ class StorageRangeCoordinator(
         flushPendingFlatBatch()
       }
       if (isComplete) {
-        log.info("Storage range sync complete!")
+        log.debug("Storage range sync complete!")
         snapSyncController ! SNAPSyncController.StorageRangeSyncComplete
       }
 
@@ -779,6 +779,8 @@ class StorageRangeCoordinator(
 
     case StoragePivotRefreshed(newStateRoot) =>
       log.info(s"Storage pivot refreshed: ${stateRoot.take(4).toHex} -> ${newStateRoot.take(4).toHex}")
+      log.debug(s"Storage consecutive task failures reset on pivot refresh (was $consecutiveTaskFailures)")
+      consecutiveTaskFailures = 0
 
       // Flush before mutating `stateRoot` so the off-actor commit is tagged with the OLD root.
       // The completion message will then arrive when `stateRoot` is the NEW root, take the stale
@@ -1282,10 +1284,11 @@ class StorageRangeCoordinator(
       }
 
       consecutiveTaskFailures += 1
+      log.debug(s"Storage consecutive task failures: $consecutiveTaskFailures/$maxConsecutiveTaskFailures")
       if (consecutiveTaskFailures >= maxConsecutiveTaskFailures) {
         log.warning(
-          s"Force-completing storage coordinator after $consecutiveTaskFailures consecutive " +
-            s"task failures — SNAP peers not serving storage data. " +
+          s"[STORAGE-FORCE-COMPLETE] $consecutiveTaskFailures consecutive task failures — " +
+            s"SNAP peers not serving storage data. Sending ForceCompleteStorage. " +
             s"Missing storage deferred to healing phase."
         )
         self ! ForceCompleteStorage

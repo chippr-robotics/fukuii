@@ -251,6 +251,7 @@ object BlockchainConfig {
         activationBlock = Try(BigInt(messConf.getString("ecbp1100-block-number"))).toOption,
         deactivationBlock = Try(BigInt(messConf.getString("ecbp1100-deactivate-block-number"))).toOption,
         reactivationBlock = Try(BigInt(messConf.getString("ecbp1100-reactivate-block-number"))).toOption
+          .orElse(Try(BigInt(blockchainConfig.getString("olympia-block-number"))).toOption)
       )
     }.getOrElse(MESSConfig())
 

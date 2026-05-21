@@ -58,6 +58,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockHeaders => ET
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockBodies => ETH66GetBlockBodies}
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config.SyncConfig
+import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
 import org.apache.pekko.actor.ActorRef
 
 class RegularSyncSpec
@@ -93,14 +94,22 @@ class RegularSyncSpec
 
   "Regular Sync" when {
     "initializing" should {
-      "subscribe for new blocks, new hashes and new block headers" taggedAs (UnitTest, SyncTest) in sync(
+      "subscribe for new blocks, new hashes, new block headers and ETH/69 BlockRangeUpdate" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
         new Fixture(testSystem) {
           regularSync ! SyncProtocol.Start
 
           peerEventBus.expectMsg(
             PeerEventBusActor.Subscribe(
               MessageClassifier(
-                Set(Codes.NewBlockCode, Codes.NewBlockHashesCode, Codes.BlockHeadersCode),
+                Set(
+                  Codes.NewBlockCode,
+                  Codes.NewBlockHashesCode,
+                  Codes.BlockHeadersCode,
+                  Codes.BlockRangeUpdateCode
+                ),
                 PeerSelector.AllPeers
               )
             )
@@ -831,6 +840,39 @@ class RegularSyncSpec
             _ <- IO(goToTop())
             status <- getSyncStatus
           } yield assert(status === Status.SyncDone)
+      }
+    }
+
+    // RS-1: ProgressState.toStatus guard — bestKnownNetworkBlock=0 must not produce SyncDone
+    "ProgressState.toStatus" should {
+      import RegularSync.ProgressState
+      import scala.concurrent.Future
+
+      "return NotSyncing when not yet started" taggedAs (UnitTest, SyncTest) in {
+        val state = ProgressState(startedFetching = false, initialBlock = 0, currentBlock = 0, bestKnownNetworkBlock = 0)
+        Future.successful(assert(state.toStatus === Status.NotSyncing))
+      }
+
+      "return NotSyncing when started but bestKnownNetworkBlock is 0 (no peers seen yet)" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in {
+        // RS-1 regression: before the fix, startedFetching=true and currentBlock(0) >= bestKnownNetworkBlock(0)
+        // incorrectly triggered SyncDone before any peer had announced a block.
+        val state = ProgressState(startedFetching = true, initialBlock = 0, currentBlock = 0, bestKnownNetworkBlock = 0)
+        Future.successful(assert(state.toStatus === Status.NotSyncing))
+      }
+
+      "return Syncing when started and behind chain head" taggedAs (UnitTest, SyncTest) in {
+        val state =
+          ProgressState(startedFetching = true, initialBlock = 5, currentBlock = 10, bestKnownNetworkBlock = 100)
+        Future.successful(assert(state.toStatus === Status.Syncing(5, Progress(10, 100), None)))
+      }
+
+      "return SyncDone when started and caught up to chain head" taggedAs (UnitTest, SyncTest) in {
+        val state =
+          ProgressState(startedFetching = true, initialBlock = 0, currentBlock = 50, bestKnownNetworkBlock = 50)
+        Future.successful(assert(state.toStatus === Status.SyncDone))
       }
     }
   }

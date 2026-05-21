@@ -12,11 +12,17 @@ import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
+import java.net.InetSocketAddress
+
+import com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.ResponseReceived
 import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
+import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.PeerId
+import com.chipprbots.ethereum.network.p2p.messages.ETH66
 import com.chipprbots.ethereum.testing.Tags._
 
 class ChainDownloaderSpec
@@ -159,6 +165,53 @@ class ChainDownloaderSpec
     // A target lower than the current one is ignored.
     downloader ! ChainDownloader.UpdateTarget(BigInt(1200))
     appStateStorage.getBackfillTarget() shouldBe BigInt(1500)
+
+    system.stop(downloader)
+  }
+
+  // go-ethereum behavioral backoff: a peer returning empty BlockHeaders (count:0) should be excluded
+  // from future header dispatch (capacity-to-zero equivalent, msgrate.go:187). Bodies/receipts/SNAP
+  // dispatch must remain unaffected. If the peer later delivers non-empty headers, exclusion is lifted.
+  it should "exclude peer from header dispatch after empty BlockHeaders response" taggedAs UnitTest in {
+    implicit val ec: ExecutionContext = system.dispatcher
+    val blockchainReader = mock[BlockchainReader]
+    val blockchainWriter = mock[BlockchainWriter]
+    val appStateStorage = new AppStateStorage(EphemDataSource())
+    val networkPeerManager = TestProbe()
+    val peerEventBus = TestProbe()
+
+    (blockchainReader.getBlockHeaderByNumber _)
+      .expects(BigInt(1))
+      .returning(None)
+      .anyNumberOfTimes()
+
+    val downloader = TestActorRef[ChainDownloader](
+      ChainDownloader.props(
+        blockchainReader = blockchainReader,
+        blockchainWriter = blockchainWriter,
+        appStateStorage = appStateStorage,
+        networkPeerManager = networkPeerManager.ref,
+        peerEventBus = peerEventBus.ref,
+        syncConfig = defaultSyncConfig,
+        scheduler = system.scheduler,
+        maxConcurrentRequests = 4
+      )
+    )
+    downloader ! ChainDownloader.Start(BigInt(19_250_000))
+
+    val dummyAddr = new InetSocketAddress("127.0.0.1", 30303)
+    val peer = Peer(PeerId("snap-peer-1"), dummyAddr, TestProbe().ref, incomingConnection = false)
+
+    downloader.underlyingActor.isHeaderExcluded(peer.id) shouldBe false
+
+    // First empty response — peer should be excluded
+    downloader ! ResponseReceived(peer, ETH66.BlockHeaders(requestId = 1, headers = Seq.empty), 100L)
+    downloader.underlyingActor.isHeaderExcluded(peer.id) shouldBe true
+
+    // Recovery: non-empty response clears the exclusion
+    val fakeHeader = mock[com.chipprbots.ethereum.domain.BlockHeader]
+    downloader ! ResponseReceived(peer, ETH66.BlockHeaders(requestId = 2, headers = Seq(fakeHeader)), 100L)
+    downloader.underlyingActor.isHeaderExcluded(peer.id) shouldBe false
 
     system.stop(downloader)
   }

@@ -48,17 +48,6 @@ class PeerRequestHandler[RequestMsg <: Message, ResponseMsg <: Message: ClassTag
   private def timeTakenSoFar(): Long = System.currentTimeMillis() - startTime
 
   override def preStart(): Unit = {
-    log.debug(
-      "PEER_REQUEST: Starting request to peer={}, reqType={}, respCode=0x{}, timeout={}ms",
-      peer.id,
-      requestMsg.getClass.getSimpleName,
-      responseMsgCode.toHexString,
-      responseTimeout.toMillis
-    )
-    log.debug(
-      "PEER_REQUEST: Request details: {}",
-      requestMsg.toShortString
-    )
     networkPeerManager ! NetworkPeerManagerActor.SendMessage(toSerializable(requestMsg), peer.id)
     peerEventBus ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)))
     peerEventBus ! Subscribe(subscribeMessageClassifier)
@@ -83,14 +72,6 @@ class PeerRequestHandler[RequestMsg <: Message, ResponseMsg <: Message: ClassTag
 
   def handleResponseMsg(responseMsg: ResponseMsg): Unit = {
     val elapsed = timeTakenSoFar()
-    log.debug(
-      "PEER_REQUEST_SUCCESS: peer={}, reqType={}, respType={}, elapsed={}ms",
-      peer.id,
-      requestMsg.getClass.getSimpleName,
-      responseMsg.getClass.getSimpleName,
-      elapsed
-    )
-    log.debug("PEER_REQUEST_SUCCESS: Response details: {}", responseMsg.toShortString)
     cleanupAndStop()
     initiator ! ResponseReceived(peer, responseMsg, timeTaken = elapsed)
   }

@@ -109,6 +109,8 @@ object DiscoveryNetwork {
                   .guarantee(release)
                   .recover {
                     case ex: TimeoutException =>
+                    case ex: PacketException =>
+                      logger.debug(s"Discovery packet decode failure from ${channel.to}: ${ex.getMessage}")
                     case NonFatal(ex) =>
                       logger.error(s"Error handling channel from ${channel.to}: $ex")
                   }

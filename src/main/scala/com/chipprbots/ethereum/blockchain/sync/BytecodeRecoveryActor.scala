@@ -1,16 +1,18 @@
 package com.chipprbots.ethereum.blockchain.sync
 
-import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props}
+import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Cancellable, Props, Terminated}
 import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
 import scala.concurrent.Future
+import scala.concurrent.duration._
 import scala.util.{Success, Failure}
 
 import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage, StateStorage}
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt._
 import com.chipprbots.ethereum.mpt.MptVisitors._
+import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 
 /** Bytecode recovery actor for Bug 20 hardening.
   *
@@ -29,19 +31,29 @@ class BytecodeRecoveryActor(
     appStateStorage: AppStateStorage,
     networkPeerManager: ActorRef,
     syncController: ActorRef,
-    pivotBlockNumber: BigInt
+    pivotBlockNumber: BigInt,
+    snapSyncConfig: SNAPSyncConfig,
+    // Test hook: when set, the actor skips the real scan and enters `downloading` with
+    // the supplied missing list directly. Production callers always leave this as None.
+    private[sync] val preloadedMissingForTesting: Option[Seq[ByteString]] = None,
+    // Test hook: when set, the downloading state uses this ref instead of spawning a
+    // real ByteCodeCoordinator.
+    private[sync] val coordinatorForTesting: Option[ActorRef] = None
 ) extends Actor
     with ActorLogging {
 
   import BytecodeRecoveryActor._
   import context.dispatcher
 
-  override def preStart(): Unit = {
-    log.info(
-      s"BytecodeRecoveryActor starting: scanning state trie for missing bytecodes " +
-        s"(stateRoot=${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}...)"
-    )
-    self ! StartScan
+  override def preStart(): Unit = preloadedMissingForTesting match {
+    case Some(missing) =>
+      self ! ScanResult(missing)
+    case None =>
+      log.info(
+        s"BytecodeRecoveryActor starting: scanning state trie for missing bytecodes " +
+          s"(stateRoot=${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}...)"
+      )
+      self ! StartScan
   }
 
   override def receive: Receive = {
@@ -64,38 +76,76 @@ class BytecodeRecoveryActor(
       } else {
         log.warning(s"Bytecode recovery: found ${missing.size} missing bytecodes. Starting download...")
         implicit val scheduler: org.apache.pekko.actor.Scheduler = context.system.scheduler
-        val requestTracker = new snap.SNAPRequestTracker()
-        val coordinator = context.actorOf(
-          snap.actors.ByteCodeCoordinator
-            .props(
-              evmCodeStorage = evmCodeStorage,
-              networkPeerManager = networkPeerManager,
-              requestTracker = requestTracker,
-              batchSize = snap.ByteCodeTask.DEFAULT_BATCH_SIZE,
-              snapSyncController = self
-            )
-            .withDispatcher("sync-dispatcher"),
-          "bytecode-recovery-coordinator"
-        )
+        val coordinator = coordinatorForTesting.getOrElse {
+          val requestTracker = new snap.SNAPRequestTracker()
+          context.actorOf(
+            snap.actors.ByteCodeCoordinator
+              .props(
+                evmCodeStorage = evmCodeStorage,
+                networkPeerManager = networkPeerManager,
+                requestTracker = requestTracker,
+                batchSize = snap.ByteCodeTask.DEFAULT_BATCH_SIZE,
+                snapSyncController = self
+              )
+              .withDispatcher("sync-dispatcher"),
+            "bytecode-recovery-coordinator"
+          )
+        }
+        context.watch(coordinator)
         coordinator ! snap.actors.Messages.StartByteCodeSync(missing)
         context.become(downloading(coordinator, missing.size))
       }
   }
 
   private def downloading(coordinator: ActorRef, expectedCount: Int): Receive = {
-    case snap.actors.Messages.ByteCodePeerAvailable(peer) =>
-      coordinator ! snap.actors.Messages.ByteCodePeerAvailable(peer)
+    var progressSeq = 0L
+    val abandonAfter: FiniteDuration = snapSyncConfig.storageRecoveryAbandonTimeout
+    var abandonTimer: Option[Cancellable] = Some(
+      context.system.scheduler.scheduleOnce(abandonAfter, self, CheckAbandon(0L))
+    )
 
-    case snap.SNAPSyncController.ByteCodeSyncComplete =>
-      log.info(s"Bytecode recovery complete: downloaded bytecodes for $expectedCount missing codeHashes")
+    def recordProgress(): Unit = {
+      progressSeq += 1
+      abandonTimer.foreach(_.cancel())
+      abandonTimer = None
+    }
+
+    def finishRecovery(): Unit = {
+      abandonTimer.foreach(_.cancel())
       appStateStorage.bytecodeRecoveryDone().commit()
       syncController ! RecoveryComplete
       context.stop(self)
+    }
 
-    case snap.SNAPSyncController.ProgressBytecodesDownloaded(_) =>
-    // Ignore progress updates
+    {
+      case snap.actors.Messages.ByteCodePeerAvailable(peer) =>
+        coordinator ! snap.actors.Messages.ByteCodePeerAvailable(peer)
 
-    case msg => coordinator.forward(msg) // Forward SNAP protocol responses to coordinator
+      case snap.SNAPSyncController.ByteCodeSyncComplete =>
+        log.info(s"Bytecode recovery complete: downloaded bytecodes for $expectedCount missing codeHashes")
+        finishRecovery()
+
+      case snap.SNAPSyncController.ProgressBytecodesDownloaded(_) =>
+        recordProgress()
+
+      case CheckAbandon(progressAtSchedule) =>
+        if (progressAtSchedule == progressSeq) {
+          log.warning(
+            "Bytecode recovery abandoned: no download progress for {}s. " +
+              "Regular sync will fetch missing bytecodes on-demand via GetTrieNodes.",
+            abandonAfter.toSeconds
+          )
+          finishRecovery()
+        } else {
+          abandonTimer = None
+        }
+
+      case Terminated(`coordinator`) =>
+        log.error("ByteCodeCoordinator crashed unexpectedly. Marking bytecode recovery done to unblock sync.")
+        finishRecovery()
+
+      case msg => coordinator.forward(msg)
+    }
   }
 
   /** Walk the state trie and collect codeHashes of contracts missing from evmCodeStorage. */
@@ -150,6 +200,7 @@ class BytecodeRecoveryActor(
 object BytecodeRecoveryActor {
   private case object StartScan
   private case class ScanResult(missingCodeHashes: Seq[ByteString])
+  private case class CheckAbandon(progressSeq: Long)
 
   /** Sent to SyncController when recovery is complete (or skipped) */
   case object RecoveryComplete
@@ -161,7 +212,8 @@ object BytecodeRecoveryActor {
       appStateStorage: AppStateStorage,
       networkPeerManager: ActorRef,
       syncController: ActorRef,
-      pivotBlockNumber: BigInt
+      pivotBlockNumber: BigInt,
+      snapSyncConfig: SNAPSyncConfig
   ): Props =
     Props(
       new BytecodeRecoveryActor(
@@ -171,7 +223,8 @@ object BytecodeRecoveryActor {
         appStateStorage,
         networkPeerManager,
         syncController,
-        pivotBlockNumber
+        pivotBlockNumber,
+        snapSyncConfig
       )
     )
 }

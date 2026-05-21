@@ -98,13 +98,13 @@ class NetworkForkIdFilteringSpec extends AnyWordSpec with Matchers {
     "confirm ETC mainnet Spiral forkId is 0xbe46d57c (verified against core-geth)" in {
       val created = ForkId.create(etcGenesisHash, etcConf)(19250000)
       created.hash shouldBe 0xbe46d57cL
-      created.next shouldBe None
+      created.next shouldBe Some(BigInt("1000000000000000000"))
     }
 
     "confirm Mordor Spiral forkId is 0x3a6b00d7 (verified against core-geth)" in {
       val created = ForkId.create(mordorGenesisHash, mordorConf)(9957000)
       created.hash shouldBe 0x3a6b00d7L
-      created.next shouldBe None
+      created.next shouldBe Some(BigInt("1000000000000000000"))
     }
   }
 
@@ -114,11 +114,12 @@ class NetworkForkIdFilteringSpec extends AnyWordSpec with Matchers {
 
   "Olympia fork signal state machine" must {
 
-    // State 1: No Olympia block configured (sentinel 10^18 excluded from fork list).
-    // ForkId = Spiral hash, next=None. This is the current production state.
-    "emit Spiral/None when Olympia block is not configured (current production state)" in {
+    // State 1: Olympia not yet scheduled (olympiaBlockNumber = sentinel 10^18).
+    // ForkId = Spiral hash, next=Some(10^18). This is the current production state —
+    // all three ETC clients advertise Olympia as the next fork per EIP-2124.
+    "emit Spiral/next=Olympia sentinel when Olympia block is not yet scheduled" in {
       val id = ForkId.create(etcGenesisHash, etcConf)(20000000)
-      id shouldBe ForkId(0xbe46d57cL, None)
+      id shouldBe ForkId(0xbe46d57cL, Some(BigInt("1000000000000000000")))
     }
 
     // State 2: Olympia block configured but not yet reached.

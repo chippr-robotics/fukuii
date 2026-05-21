@@ -93,7 +93,9 @@ class AccountRangeWorkerSpec
     returnedProof should not be empty
   }
 
-  it should "report TaskFailed on empty account response without proof for non-empty root" taggedAs UnitTest in {
+  it should "report TaskComplete on terminal empty account range for non-empty root" taggedAs UnitTest in {
+    // go-ethereum accepts accounts=0 + proof=0 unconditionally as a valid terminal-empty range.
+    // The worker should complete the task rather than failing it.
     val coordinator = TestProbe()
     val networkPeerManager = TestProbe()
     val peerProbe = TestProbe()
@@ -106,9 +108,8 @@ class AccountRangeWorkerSpec
 
     worker ! Messages.AccountRangeResponseMsg(AccountRange(requestId = reqId, accounts = Seq.empty, proof = Seq.empty))
 
-    val msg = coordinator.expectMsgType[Messages.TaskFailed](1.second)
+    val msg = coordinator.expectMsgType[Messages.TaskComplete](1.second)
     msg.requestId shouldBe reqId
-    msg.reason should include("Missing proof for empty account range")
   }
 
   it should "report TaskFailed to coordinator on RequestTimeout" taggedAs UnitTest in {

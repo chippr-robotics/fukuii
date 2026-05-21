@@ -772,7 +772,13 @@ class FastSync(
       requestedBlockBodies = requestedBlockBodies - handler
       requestedReceipts = requestedReceipts - handler
 
-      blacklistIfHandshaked(peer.id, blacklistDuration, reason)
+      // Peers that close the connection before answering (PEER_REQUEST_DISCONNECTED) get a longer
+      // cooldown so they don't immediately rejoin and trigger another GetReceipts dispatch cycle.
+      val effectiveDuration = reason match {
+        case FastSyncRequestFailed("connection closed") => 10.minutes
+        case _                                          => blacklistDuration
+      }
+      blacklistIfHandshaked(peer.id, effectiveDuration, reason)
     }
 
     /** Restarts download from a few blocks behind the current best block header, as an unexpected DB error happened

@@ -71,8 +71,10 @@ class EngineApiHttpServer(
   // pool stays default-sized because Engine API handlers don't perform blocking I/O
   // (everything is `IO.delay` over in-memory state or RocksDB which uses its own
   // thread pool).
-  private val (engineCompute, shutdownCompute) =
-    IORuntime.createWorkStealingComputeThreadPool(threads = 4, threadPrefix = "engine-api-compute")
+  // cats-effect internal work-stealing pool API is not stable across minor versions;
+  // a plain JDK work-stealing pool is equivalent for Engine API purposes (no native I/O).
+  private val engineComputeService = java.util.concurrent.Executors.newWorkStealingPool(4)
+  private val engineCompute: ExecutionContext = ExecutionContext.fromExecutorService(engineComputeService)
   private val (engineBlocking, shutdownBlocking) =
     IORuntime.createDefaultBlockingExecutionContext(threadPrefix = "engine-api-blocking")
   private val (engineScheduler, shutdownScheduler) =
@@ -84,7 +86,7 @@ class EngineApiHttpServer(
     shutdown = () => {
       shutdownScheduler()
       shutdownBlocking()
-      shutdownCompute()
+      engineComputeService.shutdown()
     },
     config = cats.effect.unsafe.IORuntimeConfig()
   )

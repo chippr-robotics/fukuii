@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
 import org.apache.pekko.actor.ActorSystem
-import org.apache.pekko.testkit.{TestKit, TestProbe, ImplicitSender}
+import org.apache.pekko.testkit.{TestActorRef, TestKit, TestProbe, ImplicitSender}
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
@@ -136,6 +136,60 @@ class ByteCodeCoordinatorSpec
     // Coordinator should handle completion
     coordinator ! Messages.ByteCodeGetProgress
     expectMsgType[Any](3.seconds)
+  }
+
+  // Verifies Fix 6 / P-5.4: ByteCodeTaskComplete must call tryRedispatchPendingTasks() so the
+  // next pending task is dispatched immediately within the same message cycle — not delayed up to
+  // 1 second waiting for the next ByteCodePeerAvailable tick from SNAPSyncController.
+  it should "dispatch pending task immediately on ByteCodeTaskComplete without a new ByteCodePeerAvailable" taggedAs UnitTest in {
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("redispatch-peer", peerProbe.ref)
+
+    // maxInFlightPerPeer=1 ensures only 1 task in flight at a time, leaving the 2nd pending
+    val peerCooldown = testCooldownConfig.copy(maxInFlightPerPeer = 1)
+    val coordinator = TestActorRef[ByteCodeCoordinator](
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 1,
+        snapSyncController = snapSyncController.ref,
+        cooldownConfig = peerCooldown
+      )
+    )
+
+    val hashes = Seq(kec256(ByteString("redispatch-a")), kec256(ByteString("redispatch-b")))
+    coordinator ! Messages.StartByteCodeSync(hashes)
+    coordinator ! Messages.NoMoreByteCodeTasks
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+
+    // Only the first task is dispatched (maxInFlightPerPeer=1)
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+
+    within(3.seconds) {
+      awaitAssert {
+        coordinator.underlyingActor.activeTasks.size shouldBe 1
+        coordinator.underlyingActor.pendingTasks should have size 1
+      }
+    }
+    val activeEntry = coordinator.underlyingActor.activeTasks.head
+    val reqId = activeEntry._1
+    val worker = activeEntry._2.worker
+
+    // ByteCodeWorker uses context.become(working) and stashes ByteCodeWorkerFetchTask in that
+    // state. Release it first so the worker transitions to idle; the coordinator's subsequent
+    // tryRedispatchPendingTasks() dispatch will then be accepted rather than stashed.
+    worker ! Messages.ByteCodeWorkerRelease(reqId)
+
+    // Complete the in-flight task at coordinator level — calls markWorkerIdle + tryRedispatchPendingTasks()
+    coordinator ! Messages.ByteCodeTaskComplete(reqId, Right(1))
+
+    // The pending task must be dispatched immediately via tryRedispatchPendingTasks()
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
   }
 
   it should "report completion when all bytecodes downloaded" taggedAs UnitTest in {
@@ -573,6 +627,62 @@ class ByteCodeCoordinatorSpec
     snapSyncController.expectMsg(3.seconds, SNAPSyncController.ByteCodeSyncComplete)
   }
 
+  // ForceCompleteByteCodes may fire while tasks are still in activeTasks (e.g. the 10-min stall
+  // watchdog triggers mid-flight). The handler must drain active tasks AND return their workers
+  // to the idle pool — otherwise the worker pool invariant (workers.size == idleWorkers.size +
+  // activeTasks.size) would be broken, and any subsequent coordinator reuse would leak workers.
+  it should "return active workers to idle pool on ForceCompleteByteCodes mid-flight" taggedAs UnitTest in {
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("fc-active-peer", peerProbe.ref)
+
+    // batchSize=1 + maxInFlightPerPeer=2 → 2 tasks dispatched concurrently; 1 left pending
+    val peerCooldown = testCooldownConfig.copy(maxInFlightPerPeer = 2)
+    val coordinator = TestActorRef[ByteCodeCoordinator](
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 1,
+        snapSyncController = snapSyncController.ref,
+        cooldownConfig = peerCooldown
+      )
+    )
+
+    val hashes = (1 to 3).map(i => kec256(ByteString(s"fc-active-$i")))
+    coordinator ! Messages.StartByteCodeSync(hashes)
+    coordinator ! Messages.NoMoreByteCodeTasks
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+
+    within(3.seconds) {
+      awaitAssert {
+        coordinator.underlyingActor.activeTasks.size shouldBe 2
+        coordinator.underlyingActor.idleWorkers shouldBe empty
+      }
+    }
+
+    // Force-complete fires while 2 tasks are still in flight and 1 is pending
+    coordinator ! Messages.ForceCompleteByteCodes
+
+    within(3.seconds) {
+      awaitAssert {
+        // Active tasks drained; workers returned to idle pool (line 362 markWorkerIdle)
+        coordinator.underlyingActor.activeTasks shouldBe empty
+        coordinator.underlyingActor.idleWorkers.size shouldBe 2
+        // Pool invariant: workers.size == idleWorkers.size when activeTasks.isEmpty
+        coordinator.underlyingActor.workers.size shouldBe coordinator.underlyingActor.idleWorkers.size
+      }
+    }
+
+    snapSyncController.expectMsg(3.seconds, SNAPSyncController.ByteCodeSyncComplete)
+  }
+
   it should "handle ForceCompleteByteCodes when queues are already empty" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
     val requestTracker = new SNAPRequestTracker()(system.scheduler)
@@ -601,6 +711,153 @@ class ByteCodeCoordinatorSpec
   // even with that fixed, an unbounded pending queue still leaks task-metadata
   // memory linearly with chain size. The coordinator now publishes high/low-
   // water transitions that SNAPSyncController forwards to AccountRangeCoordinator.
+  // ── Fix 3: context.watch + Terminated handler — worker pool recovery ──────────
+  // Verifies that a permanently terminated worker is removed from the pool and its
+  // in-flight task is re-queued. Without context.watch, dead workers remain in
+  // `workers`, exhausting the pool (idleWorkers empty, workers.size >= maxWorkers)
+  // and blocking all further dispatch — the exact failure mode from Run 23.
+
+  it should "remove a terminated worker from the pool and re-queue its active task" taggedAs UnitTest in {
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+
+    val peer = PeerTestHelpers.createTestPeer("term-peer", peerProbe.ref)
+
+    val coordinator = TestActorRef[ByteCodeCoordinator](
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 8,
+        snapSyncController = snapSyncController.ref,
+        cooldownConfig = testCooldownConfig
+      )
+    )
+
+    coordinator ! Messages.StartByteCodeSync(Seq(kec256(ByteString("term-code"))))
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+
+    // Worker created and request dispatched
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+
+    // Get the worker ref and stop it permanently (bypasses supervisor restart)
+    val workerRef = coordinator.underlyingActor.workers.head
+    system.stop(workerRef)
+
+    // Terminated propagates asynchronously — wait for coordinator to process it
+    within(3.seconds) {
+      awaitAssert(coordinator.underlyingActor.workers.isEmpty)
+    }
+
+    // Task was re-queued — providing peer again triggers re-dispatch
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+  }
+
+  it should "remove a terminated worker with no active task without affecting pending dispatch" taggedAs UnitTest in {
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+
+    val peer = PeerTestHelpers.createTestPeer("term-idle-peer", peerProbe.ref)
+
+    val coordinator = TestActorRef[ByteCodeCoordinator](
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 8,
+        snapSyncController = snapSyncController.ref,
+        cooldownConfig = testCooldownConfig
+      )
+    )
+
+    // Queue a task and dispatch — worker created
+    coordinator ! Messages.StartByteCodeSync(Seq(kec256(ByteString("idle-code"))))
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+
+    // Complete the task so the worker is now idle (no active task)
+    val workerRef = coordinator.underlyingActor.workers.head
+    // Let the worker become idle by marking the task complete
+    coordinator ! Messages.NoMoreByteCodeTasks
+
+    system.stop(workerRef)
+
+    // Pool should shrink without any exception — coordinator stays operational
+    within(3.seconds) {
+      awaitAssert(coordinator.underlyingActor.workers.isEmpty)
+    }
+
+    coordinator ! Messages.ByteCodeGetProgress
+    expectMsgType[Messages.ByteCodeProgress](3.seconds)
+  }
+
+  // ── P-0 regression: ByteCodePeerUnavailable must restore workers to idle pool ─
+  // Run 25 root cause: ByteCodePeerUnavailable sent ByteCodeWorkerRelease to each in-flight
+  // worker but never called markWorkerIdle. Workers stayed in `workers` (alive) but were absent
+  // from `idleWorkers`, so dispatchIfPossible permanently returned None after the peer cascade.
+  // This test would have caught that: after ByteCodePeerUnavailable, the idle count must
+  // equal the pre-dispatch idle count (workers returned), and dispatch must succeed again.
+  it should "restore workers to idle pool when a peer disconnects mid-flight" taggedAs UnitTest in {
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+
+    val peerId = "unavail-peer"
+    val peer = PeerTestHelpers.createTestPeer(peerId, peerProbe.ref)
+
+    // batchSize=1 so each hash → one task; maxInFlightPerPeer=3 → up to 3 concurrent workers
+    val peerCooldown = testCooldownConfig.copy(maxInFlightPerPeer = 3)
+    val coordinator = TestActorRef[ByteCodeCoordinator](
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 1,
+        snapSyncController = snapSyncController.ref,
+        cooldownConfig = peerCooldown
+      )
+    )
+
+    // Queue 3 hashes (one per task) and dispatch
+    val hashes = (1 to 3).map(i => kec256(ByteString(s"unavail-code-$i")))
+    coordinator ! Messages.StartByteCodeSync(hashes)
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+
+    // Three tasks dispatched — one worker per task
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+
+    // All 3 workers active, none idle
+    within(3.seconds) {
+      awaitAssert(coordinator.underlyingActor.workers.size == 3)
+    }
+    coordinator.underlyingActor.idleWorkers shouldBe empty
+
+    // Peer disconnects — ByteCodePeerUnavailable must release all in-flight workers back to idle
+    coordinator ! Messages.ByteCodePeerUnavailable(peerId)
+
+    // All 3 workers must be returned to idleWorkers (the P-0 fix: markWorkerIdle after release)
+    within(3.seconds) {
+      awaitAssert {
+        coordinator.underlyingActor.idleWorkers.size shouldBe 3
+      }
+    }
+
+    // Dispatch must succeed — idle workers available, tasks re-queued
+    coordinator ! Messages.ByteCodePeerAvailable(peer)
+    networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+  }
+
   it should "emit ByteCodeBackpressureChanged when the pending queue crosses watermarks" taggedAs UnitTest in {
     val evmCodeStorage = new TestEvmCodeStorage()
     val requestTracker = new SNAPRequestTracker()(system.scheduler)

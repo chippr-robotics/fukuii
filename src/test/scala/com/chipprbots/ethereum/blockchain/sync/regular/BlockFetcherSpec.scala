@@ -39,6 +39,7 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.Codes
+import com.chipprbots.ethereum.network.p2p.messages.ETH69
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockBodies => ETH66BlockBodies}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{BlockHeaders => ETH66BlockHeaders}
 import com.chipprbots.ethereum.network.p2p.messages.ETH66.{GetBlockBodies => ETH66GetBlockBodies}
@@ -277,6 +278,82 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
       shutdownActorSystem()
     }
 
+    // BF-1A: ETH/69 head-following via BlockRangeUpdate
+    "should include BlockRangeUpdateCode in peer event subscription" taggedAs (UnitTest, SyncTest) in new TestSetup {
+      blockFetcher ! BlockFetcher.Start(importer.ref, 0)
+      val sub = peerEventBus.expectMsgClass(classOf[Subscribe])
+      sub.to match {
+        case MessageClassifier(codes, _) =>
+          codes should contain(Codes.BlockRangeUpdateCode)
+        case _ => fail("Expected MessageClassifier subscription")
+      }
+      shutdownActorSystem()
+    }
+
+    "should request headers when BlockRangeUpdate announces a new chain tip" taggedAs (UnitTest, SyncTest) in new TestSetup {
+      startFetcher()
+      // ETH/69 peer announces latest block at 100; fetcher should immediately request headers
+      val update = ETH69.BlockRangeUpdate(BigInt(0), BigInt(100), org.apache.pekko.util.ByteString.empty)
+      blockFetcher ! AdaptedMessageFromEventBus(update, fakePeer.id)
+      peersClient.expectMsgPF() {
+        case PeersClient.Request(msg: ETH66GetBlockHeaders, _, _) if msg.block == Left(1) => ()
+      }
+      shutdownActorSystem()
+    }
+
+    // BF-1B: PrintStatus heartbeat probes for next block when on top
+    "should probe for the next block via PrintStatus when isOnTop" taggedAs (UnitTest, SyncTest) in new TestSetup {
+      // Start from block 5; knownTop initialises to 6 so fetcher immediately requests block 6
+      startFetcher(fromBlock = 5)
+      // Consume the initial GetBlockHeaders(6) request triggered by fetchBlocks at Start
+      val initSender = peersClient.expectMsgPF() {
+        case PeersClient.Request(msg: ETH66GetBlockHeaders, _, _) if msg.block == Left(BigInt(6)) =>
+          peersClient.lastSender
+      }
+      // Reply with a single header at block 6 — partial batch (blockHeadersPerRequest=10).
+      // Generate a parent block at number 5 so the chain starts at 6.
+      val parentAt5 = BlockHelpers.generateChain(5, FixtureBlocks.Genesis.block).last
+      val singleBlock = BlockHelpers.generateChain(1, parentAt5).head
+      val singleHeader = singleBlock.header
+      initSender ! PeersClient.Response(fakePeer, ETH66BlockHeaders(0, List(singleHeader)))
+      // BlockFetcher now requests bodies for block 6
+      val bodiesSender = peersClient.expectMsgPF() {
+        case PeersClient.Request(_: ETH66GetBlockBodies, _, _) => peersClient.lastSender
+      }
+      bodiesSender ! PeersClient.Response(fakePeer, ETH66BlockBodies(0, List(singleBlock.body)))
+      // Importer picks the block; this advances lastBlock to 6 so isOnTop becomes true
+      Thread.sleep(300L)
+      importer.send(blockFetcher.toClassic, PickBlocks(1, importer.ref))
+      importer.expectMsgPF() { case BlockFetcher.PickedBlocks(_) => () }
+      Thread.sleep(100L)
+      // isOnTop=true now; PrintStatus should probe for block 7
+      blockFetcher ! BlockFetcher.PrintStatus
+      // Use fishForSpecificMessage to tolerate any intermediate messages (e.g. status logs)
+      peersClient.fishForSpecificMessage() {
+        case PeersClient.Request(msg: ETH66GetBlockHeaders, _, _) if msg.block == Left(BigInt(7)) => true
+      }
+      shutdownActorSystem()
+    }
+
+    // BF-2: partial header batch still advances nextBlockToFetch correctly
+    "should fetch the next window after a partial header batch response" taggedAs (UnitTest, SyncTest) in new TestSetup {
+      startFetcher()
+      // Trigger to set knownTop=1000 (high, so fetcher knows more blocks exist)
+      triggerFetching(1000)
+      val requestSender = peersClient.expectMsgPF() {
+        case PeersClient.Request(msg: ETH66GetBlockHeaders, _, _) if msg.block == Left(1) =>
+          peersClient.lastSender
+      }
+      // Reply with a partial batch (fewer than blockHeadersPerRequest=10 headers, stopping at block 5)
+      val partialBatch = BlockHelpers.generateChain(5, FixtureBlocks.Genesis.block)
+      requestSender ! PeersClient.Response(fakePeer, ETH66BlockHeaders(0, partialBatch.map(_.header)))
+      // After a partial batch, fetcher should request the next window starting at block 6
+      peersClient.fishForSpecificMessage() {
+        case PeersClient.Request(msg: ETH66GetBlockHeaders, _, _) if msg.block == Left(6) => true
+      }
+      shutdownActorSystem()
+    }
+
     "should properly handle a request timeout" in new TestSetup {
       override lazy val syncConfig: SyncConfig = defaultSyncConfig.copy(
         // Small timeout on ask pattern for testing it here
@@ -337,13 +414,13 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
       )
     )
 
-    def startFetcher(): Unit = {
-      blockFetcher ! BlockFetcher.Start(importer.ref, 0)
+    def startFetcher(fromBlock: BigInt = 0): Unit = {
+      blockFetcher ! BlockFetcher.Start(importer.ref, fromBlock)
 
       peerEventBus.expectMsg(
         Subscribe(
           MessageClassifier(
-            Set(Codes.NewBlockCode, Codes.NewBlockHashesCode, Codes.BlockHeadersCode),
+            Set(Codes.NewBlockCode, Codes.NewBlockHashesCode, Codes.BlockHeadersCode, Codes.BlockRangeUpdateCode),
             PeerSelector.AllPeers
           )
         )

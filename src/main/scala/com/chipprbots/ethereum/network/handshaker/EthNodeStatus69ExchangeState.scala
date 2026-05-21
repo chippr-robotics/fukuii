@@ -5,7 +5,6 @@ import cats.effect.SyncIO
 import com.chipprbots.ethereum.forkid.Connect
 import com.chipprbots.ethereum.forkid.ForkId
 import com.chipprbots.ethereum.forkid.ForkIdValidator
-import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.p2p.Message
@@ -35,7 +34,7 @@ case class EthNodeStatus69ExchangeState(
 
   def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = { case status: ETH69.Status =>
     import ForkIdValidator.syncIoLogger
-    log.info(
+    log.debug(
       "ETH69_STATUS: Received - protocolVersion={}, networkId={}, genesis={}, forkId={}, earliest={}, latest={}, latestHash={}",
       status.protocolVersion,
       status.networkId,
@@ -74,43 +73,16 @@ case class EthNodeStatus69ExchangeState(
         validationResult match {
           case Connect =>
             log.info("ETH69_STATUS: ForkId validation passed - accepting peer")
-            // Look up actual TD from local chain DB using the peer's latestBlockHash.
-            // Succeeds when the peer's block is in our ChainWeightStorage (peer at or behind our tip).
-            // Falls back to PoW-scaled estimation for PoW chains, block-number proxy for PoS chains.
-            val resolvedChainWeight: ChainWeight =
-              blockchainReader
-                .getChainWeightByHash(status.latestBlockHash)
-                .getOrElse {
-                  if (blockchainConfig.terminalTotalDifficulty.isEmpty) {
-                    // PoW chain (ETC mainnet chainId=61, Mordor chainId=63, etc.):
-                    // Scale our own cumulative TD by the peer's block height ratio.
-                    // Keeps the estimate in the correct order of magnitude (~10^21 for ETC)
-                    // rather than the raw block number (~24.5 M), which would cause ETH69 peers
-                    // to always lose BestPeer selection against ETH68 peers sending real PoW TD.
-                    val ourBestHeader = getBestBlockHeader()
-                    val ourBestTD = blockchainReader
-                      .getChainWeightByHash(ourBestHeader.hash)
-                      .map(_.totalDifficulty)
-                      .getOrElse(BigInt(1))
-                    val ourBestNum = blockchainReader.getBestBlockNumber()
-                    val estimatedTD =
-                      if (ourBestNum > 0) ourBestTD * status.latestBlock / ourBestNum
-                      else status.latestBlock
-                    ChainWeight.totalDifficultyOnly(estimatedTD)
-                  } else {
-                    // PoS chain (ETH mainnet, etc.): TD is frozen; block-number is the ordering signal.
-                    ChainWeight.totalDifficultyOnly(status.latestBlock)
-                  }
-                }
+            val (resolvedChainWeight, resolvedSource) = blockchainReader.resolveETH69ChainWeight(
+              status.latestBlockHash,
+              status.latestBlock,
+              isPoWChain = blockchainConfig.terminalTotalDifficulty.isEmpty
+            )
             log.info(
-              "ETH69_STATUS: TD resolved - totalDifficulty={}, latestBlock={}, source={} (localLookup={}, powEstimate={})",
+              "ETH69_STATUS: TD resolved - totalDifficulty={}, latestBlock={}, source={}",
               resolvedChainWeight.totalDifficulty,
               status.latestBlock,
-              if (blockchainReader.getChainWeightByHash(status.latestBlockHash).isDefined) "DB_LOOKUP"
-              else if (blockchainConfig.terminalTotalDifficulty.isEmpty) "POW_SCALING"
-              else "POS_PROXY",
-              blockchainReader.getChainWeightByHash(status.latestBlockHash).isDefined,
-              blockchainConfig.terminalTotalDifficulty.isEmpty
+              resolvedSource
             )
             ConnectedState(
               PeerInfo.withForkAccepted(
@@ -124,7 +96,7 @@ case class EthNodeStatus69ExchangeState(
               )
             )
           case other =>
-            log.info("ETH69_STATUS: ForkId validation failed: {} - disconnecting", other)
+            log.debug("ETH69_STATUS: ForkId validation failed: {} - disconnecting", other)
             DisconnectedState[PeerInfo](Disconnect.Reasons.UselessPeer)
         }
       }).unsafeRunSync()
@@ -152,7 +124,7 @@ case class EthNodeStatus69ExchangeState(
       latestBlockHash = bestBlockHeader.hash
     )
 
-    log.info(
+    log.debug(
       "ETH69_STATUS: Sending - networkId={}, genesis={}, forkId={}, earliest={}, latest={}, latestHash={}",
       status.networkId,
       genesisHash,

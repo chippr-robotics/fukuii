@@ -466,6 +466,11 @@ class AccountRangeCoordinator(
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
   private val peerCooldownDefault = 30.seconds
 
+  // FIFO fairness within same in-flight tier: tracks last dispatch time per peer so that
+  // ties in inFlightForPeer sort are broken by least-recently-served order rather than
+  // mutable.Set hash order (which is stable/deterministic and permanently starves some peers).
+  private val lastDispatchTimeMs = mutable.Map.empty[String, Long]
+
   private def isPeerCoolingDown(peer: Peer): Boolean =
     peerCooldownUntilMs.get(peer.id.value).exists(_ > System.currentTimeMillis())
 
@@ -659,12 +664,23 @@ class AccountRangeCoordinator(
       // If the same peer is re-reported (same id), preserve its stateless marking —
       // otherwise PeerAvailable from SNAPSyncController clears stateless every ~1s,
       // bypassing the backoff mechanism entirely (Bug 24).
+      val wasAlreadyKnown = knownAvailablePeers.exists(_.id == peer.id)
       val evicted = knownAvailablePeers.filter(_.remoteAddress == peer.remoteAddress)
       knownAvailablePeers --= evicted
       evicted.foreach { p =>
         if (p.id != peer.id) {
           statelessPeers -= p.id
         }
+      }
+      // Genuine reconnect (new PeerId from same address, or first-seen peer) gets a clean
+      // slate. Bug 24 protection preserved: re-announced same-id peers have wasAlreadyKnown=true
+      // and are not cleared, keeping the ~1s SNAPSyncController re-announce from bypassing backoff.
+      if (!wasAlreadyKnown) {
+        statelessPeers -= peer.id
+        // snaplessPeers is NOT cleared here: same PeerId = same physical node = same lack-of-snapshot.
+        // Clearing on reconnect would allow known-snapless ETH-mainnet peers to consume dispatch
+        // slots and hash-failure budget before re-accumulating strikes (#1197).
+        emptyResponseStrikes.remove(peer.id)
       }
       knownAvailablePeers += peer
       if (isPeerStateless(peer)) {
@@ -676,9 +692,12 @@ class AccountRangeCoordinator(
       } else if (pendingTasks.isEmpty) {
         log.debug("No pending tasks")
       } else {
-        // Pipeline multiple requests per peer (core-geth parity).
-        // ByteCodeCoordinator already uses this pattern with maxInFlightPerPeer = 5.
-        dispatchIfPossible(peer)
+        // Route through the sorted redispatch path so the fairness ordering
+        // (least-in-flight first) applies to every dispatch trigger, not just
+        // the periodic tryRedispatchPendingTasks calls. Without this, the
+        // SNAPSyncController's per-peer PeerAvailable re-announcements drive
+        // greedy dispatchIfPossible for a single peer, starving idle peers.
+        tryRedispatchPendingTasks()
       }
 
     case UpdateMaxInFlightPerPeer(newLimit) =>
@@ -973,6 +992,7 @@ class AccountRangeCoordinator(
     worker ! FetchAccountRange(task, peer, requestId, responseBytes)
     // #1184: progress signal — used by CheckDispatchStalled.
     lastDispatchOrResponseMs = System.currentTimeMillis()
+    lastDispatchTimeMs.update(peer.id.value, lastDispatchOrResponseMs)
   }
 
   // How many accounts to insert per chunk before yielding to the actor mailbox.
@@ -1223,7 +1243,10 @@ class AccountRangeCoordinator(
       return
     }
 
-    for (peer <- eligiblePeers if pendingTasks.nonEmpty)
+    for (
+      peer <- eligiblePeers.sortBy(p => (inFlightForPeer(p), lastDispatchTimeMs.getOrElse(p.id.value, 0L)))
+      if pendingTasks.nonEmpty
+    )
       dispatchIfPossible(peer)
   }
 

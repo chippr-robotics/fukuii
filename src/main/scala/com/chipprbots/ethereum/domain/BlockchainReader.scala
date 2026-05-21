@@ -191,6 +191,49 @@ class BlockchainReader(
     */
   def getChainWeightByHash(blockhash: ByteString): Option[ChainWeight] = chainWeightStorage.get(blockhash)
 
+  /** ETH/69 TD resolution for PoW chains (ETC). Returns the best available ChainWeight and a source label.
+    *
+    * Tier 1 (PoW + PoS): exact hash lookup — succeeds when peer's block is in our ChainWeightStorage. Tier 2 (PoW
+    * only): canonical block-number lookup — accurate post-bootstrap for any peer ≤ pivot height. Tier 3 (PoW only):
+    * proportional estimate — startup fallback when DB has no chain data yet. PoS chains fall back directly to
+    * block-number proxy (TD frozen at merge — standard ETH69 behaviour).
+    */
+  def resolveETH69ChainWeight(
+      latestBlockHash: ByteString,
+      latestBlock: BigInt,
+      isPoWChain: Boolean
+  ): (ChainWeight, String) =
+    getChainWeightByHash(latestBlockHash) match {
+      case Some(cw)            => (cw, "DB_LOOKUP")
+      case None if !isPoWChain => (ChainWeight.totalDifficultyOnly(latestBlock), "POS_PROXY")
+      case None =>
+        getBlockHeaderByNumber(latestBlock).flatMap(h => getChainWeightByHash(h.hash)) match {
+          case Some(cw) => (cw, "CANONICAL_NUMBER")
+          case None =>
+            val ourBestNum = getBestBlockNumber()
+            val bestHeaderOpt = getBestBlockHeader()
+            val ourBestTD = bestHeaderOpt
+              .flatMap(h => getChainWeightByHash(h.hash))
+              .map(_.totalDifficulty)
+              .getOrElse(BigInt(1))
+            if (ourBestNum > 0) {
+              val ourCurrentDiff = bestHeaderOpt.map(_.difficulty).getOrElse(BigInt(1))
+              val gap = (latestBlock - ourBestNum).max(BigInt(0))
+              // Marginal-rate estimate: uses current difficulty instead of the historical average.
+              // Historical avg ~582 TH/block for ETC; current era ~2000–4300 TH → old formula
+              // underestimates each gap block's TD contribution by 70-86%.
+              // 9999/10000 guarantees a slight underestimate for constant-difficulty chains (< 0.01% error).
+              // Peer is never mistakenly assigned higher priority than deserved for stable chains.
+              val estimatedTD = ourBestTD + ourCurrentDiff * gap * 9999 / 10000
+              (ChainWeight.totalDifficultyOnly(estimatedTD), "POW_SCALING")
+            } else {
+              // DB not yet bootstrapped — TD=0 gives peer lowest priority rather than a
+              // wrong-magnitude block-number proxy. ETH69_CHAINWEIGHT_REFRESH corrects within 120s.
+              (ChainWeight.totalDifficultyOnly(BigInt(0)), "COLD_START")
+            }
+        }
+    }
+
   /** Allows to query for a block based on it's number
     *
     * @param number

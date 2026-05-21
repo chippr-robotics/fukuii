@@ -545,6 +545,225 @@ class SyncControllerSpec
     }
   }
 
+  // ── T6-T9: runningRecovery state machine ──────────────────────────────────────────────────────
+  // These tests drive SyncController through the post-SNAP recovery path.
+  // Recovery actors scan an empty trie → MissingRootNodeException → ScanResult(Seq.empty) → RecoveryComplete.
+
+  private val recoveryFakeStateRoot: ByteString = ByteString(Array.fill[Byte](32)(0x55.toByte))
+
+  private def seedSnapDoneWithRecovery(
+      appState: com.chipprbots.ethereum.db.storage.AppStateStorage,
+      needBytecode: Boolean = true,
+      needStorage: Boolean = true,
+      withStateRoot: Boolean = true
+  ): Unit = {
+    appState.snapSyncDone().commit()
+    if (!needBytecode) appState.bytecodeRecoveryDone().commit()
+    if (!needStorage) appState.storageRecoveryDone().commit()
+    if (withStateRoot) {
+      appState.putSnapSyncStateRoot(recoveryFakeStateRoot).commit()
+      appState.putSnapSyncPivotBlock(BigInt(100)).commit()
+    }
+  }
+
+  it should "transition to regular sync after both bytecode and storage recovery complete" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup._
+    seedSnapDoneWithRecovery(storagesInstance.storages.appStateStorage)
+
+    syncController ! SyncProtocol.Start
+
+    eventually {
+      someTimePasses()
+      assert(syncController.children.exists(_.path.name.startsWith("regular-sync")))
+    }
+    storagesInstance.storages.appStateStorage.isBytecodeRecoveryDone() shouldBe true
+    storagesInstance.storages.appStateStorage.isStorageRecoveryDone() shouldBe true
+  }
+
+  it should "transition to regular sync when only bytecode recovery is needed (storage pre-done)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup._
+    seedSnapDoneWithRecovery(storagesInstance.storages.appStateStorage, needStorage = false)
+
+    syncController ! SyncProtocol.Start
+
+    eventually {
+      someTimePasses()
+      assert(syncController.children.exists(_.path.name.startsWith("regular-sync")))
+    }
+    storagesInstance.storages.appStateStorage.isBytecodeRecoveryDone() shouldBe true
+  }
+
+  it should "transition to regular sync when only storage recovery is needed (bytecode pre-done)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup._
+    seedSnapDoneWithRecovery(storagesInstance.storages.appStateStorage, needBytecode = false)
+
+    syncController ! SyncProtocol.Start
+
+    eventually {
+      someTimePasses()
+      assert(syncController.children.exists(_.path.name.startsWith("regular-sync")))
+    }
+    storagesInstance.storages.appStateStorage.isStorageRecoveryDone() shouldBe true
+  }
+
+  it should "skip recovery and start regular sync immediately when stateRoot or pivotBlock is missing" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup._
+    // snap done but no stateRoot/pivotBlock stored → startRecovery falls to case _ => and calls startRegularSync
+    seedSnapDoneWithRecovery(
+      storagesInstance.storages.appStateStorage,
+      withStateRoot = false
+    )
+
+    syncController ! SyncProtocol.Start
+
+    eventually {
+      someTimePasses()
+      assert(syncController.children.exists(_.path.name.startsWith("regular-sync")))
+    }
+    storagesInstance.storages.appStateStorage.isBytecodeRecoveryDone() shouldBe true
+    storagesInstance.storages.appStateStorage.isStorageRecoveryDone() shouldBe true
+  }
+
+  // ── T10-T13: startup diagnostic + handler tests ───────────────────────────────────────────────
+  // RLP encoding of a 32-byte hash = valid HashNode (length==MaxEncodedNodeLength → no MPTException)
+  private def validMptNodeRlp(hash: ByteString): Array[Byte] = Array(0xa0.toByte) ++ hash.toArray
+
+  private def seedMptNode(
+      testSetup: TestSetup,
+      hashes: ByteString*
+  ): Unit =
+    testSetup.storagesInstance.storages.nodeStorage.update(
+      Seq.empty,
+      hashes.map(h => (h, validMptNodeRlp(h)))
+    )
+
+  it should "update pivot header stateRoot to snapStateRoot when snapRoot differs but both are in MPT (SC-1a)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup._
+    val pivotNum = BigInt(100)
+    val rootA = ByteString(Array.fill[Byte](32)(0x11)) // stored in pivot header
+    val rootB = ByteString(Array.fill[Byte](32)(0x22)) // snapSyncStateRoot — differs from rootA
+    val pivotHeader = baseBlockHeader.copy(number = pivotNum, stateRoot = rootA)
+
+    // Both roots present in MPT — triggers SC-1a symmetric case
+    seedMptNode(testSetup, rootA, rootB)
+    blockchainWriter.storeBlockHeader(pivotHeader).commit()
+    storagesInstance.storages.appStateStorage.putBestBlockNumber(pivotNum).commit()
+
+    storagesInstance.storages.appStateStorage.snapSyncDone().commit()
+    storagesInstance.storages.appStateStorage.bytecodeRecoveryDone().commit()
+    storagesInstance.storages.appStateStorage.storageRecoveryDone().commit()
+    storagesInstance.storages.appStateStorage.putSnapSyncStateRoot(rootB).commit()
+
+    syncController ! SyncProtocol.Start
+
+    eventually {
+      someTimePasses()
+      assert(syncController.children.exists(_.path.name.startsWith("regular-sync")))
+    }
+    // SyncController must have rewritten the pivot header's stateRoot from rootA to rootB
+    blockchainReader.getBlockHeaderByNumber(pivotNum).map(_.stateRoot) shouldBe Some(rootB)
+  }
+
+  it should "substitute finalized root into pivot header when pivot stateRoot is missing from MPT (SC-1b)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup._
+    val pivotNum = BigInt(100)
+    val rootA = ByteString(Array.fill[Byte](32)(0x33)) // stored in pivot header, NOT in MPT
+    val rootB = ByteString(Array.fill[Byte](32)(0x44)) // finalizedRoot, present in MPT
+    val pivotHeader = baseBlockHeader.copy(number = pivotNum, stateRoot = rootA)
+
+    // Only rootB in MPT — pivotRootExists=false → finalized substitution path
+    seedMptNode(testSetup, rootB)
+    blockchainWriter.storeBlockHeader(pivotHeader).commit()
+    storagesInstance.storages.appStateStorage.putBestBlockNumber(pivotNum).commit()
+
+    storagesInstance.storages.appStateStorage.snapSyncDone().commit()
+    storagesInstance.storages.appStateStorage.bytecodeRecoveryDone().commit()
+    storagesInstance.storages.appStateStorage.storageRecoveryDone().commit()
+    storagesInstance.storages.appStateStorage.putSnapSyncFinalizedRoot(rootB).commit()
+
+    syncController ! SyncProtocol.Start
+
+    eventually {
+      someTimePasses()
+      assert(syncController.children.exists(_.path.name.startsWith("regular-sync")))
+    }
+    blockchainReader.getBlockHeaderByNumber(pivotNum).map(_.stateRoot) shouldBe Some(rootB)
+  }
+
+  it should "clear both done flags and restart SNAP when HealingImpossible is received" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup._
+    // No snapSyncDone → start() → case (false, _, true, _) → startSnapSync()
+    syncController ! SyncProtocol.Start
+
+    eventually {
+      someTimePasses()
+      assert(syncController.children.exists(_.path.name.startsWith("snap-sync")))
+    }
+
+    // Manually set both flags so we can verify HealingImpossible clears them
+    storagesInstance.storages.appStateStorage.snapSyncDone().commit()
+    storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+
+    syncController ! SyncProtocol.HealingImpossible
+
+    // HealingImpossible clears both flags synchronously
+    storagesInstance.storages.appStateStorage.isSnapSyncDone() shouldBe false
+    storagesInstance.storages.appStateStorage.isFastSyncDone() shouldBe false
+
+    // startSnapSync() spawned a new generation; eventually a snap-sync child is visible
+    eventually {
+      someTimePasses()
+      assert(syncController.children.exists(_.path.name.startsWith("snap-sync")))
+    }
+  }
+
+  it should "clear sync flags and restart SNAP with minPivotBlock when RegularSyncStuck is received (SC-4)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup._
+    // doFastSync=true, doSnapSync=false; pre-set fastSyncDone → case (_, true, false, true) → startRegularSync()
+    storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+
+    syncController ! SyncProtocol.Start
+
+    eventually {
+      someTimePasses()
+      assert(syncController.children.exists(_.path.name.startsWith("regular-sync")))
+    }
+
+    syncController ! SyncProtocol.RegularSyncStuck(BigInt(24601125), "deadbeefdeadbeef")
+
+    storagesInstance.storages.appStateStorage.isSnapSyncDone() shouldBe false
+    storagesInstance.storages.appStateStorage.isFastSyncDone() shouldBe false
+
+    eventually {
+      someTimePasses()
+      assert(syncController.children.exists(_.path.name.startsWith("snap-sync")))
+    }
+  }
+
   class TestSetup(
       _validators: Validators = new Mocks.MockValidatorsAlwaysSucceed
   ) extends EphemBlockchainTestSetup
@@ -919,6 +1138,17 @@ class SyncControllerSpec
 
   def withTestSetup(validators: Validators = new Mocks.MockValidatorsAlwaysSucceed)(test: TestSetup => Any): Unit = {
     val testSetup = new TestSetup(validators)
+    try test(testSetup)
+    finally testSetup.cleanup()
+  }
+
+  def withRecoveryTestSetup()(test: TestSetup => Any): Unit = {
+    val testSetup = new TestSetup() {
+      override def defaultSyncConfig: SyncConfig = super.defaultSyncConfig.copy(
+        doSnapSync = true,
+        doFastSync = false
+      )
+    }
     try test(testSetup)
     finally testSetup.cleanup()
   }

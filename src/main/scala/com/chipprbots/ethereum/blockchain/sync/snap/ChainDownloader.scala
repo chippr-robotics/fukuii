@@ -53,7 +53,8 @@ class ChainDownloader(
     val syncConfig: SyncConfig,
     val scheduler: Scheduler,
     initialMaxConcurrentRequests: Int,
-    requestTimeout: FiniteDuration = 10.seconds
+    requestTimeout: FiniteDuration = 10.seconds,
+    snapServerPeerNodeIds: Set[ByteString] = Set.empty
 )(implicit ec: ExecutionContext)
     extends Actor
     with ActorLogging
@@ -77,6 +78,10 @@ class ChainDownloader(
   private var bodyRequestPeers: Map[ActorRef, (Peer, Seq[ByteString])] = Map.empty
   private var receiptRequestPeers: Map[ActorRef, (Peer, Seq[ByteString])] = Map.empty
 
+  // go-ethereum behavioural backoff: peers that returned empty headers are excluded from
+  // header dispatch (capacity-to-zero equivalent). Bodies/receipts/SNAP unaffected.
+  private var emptyHeaderPeers: Set[PeerId] = Set.empty
+
   // Stats
   private var headersDownloaded: BigInt = 0
   private var bodiesDownloaded: BigInt = 0
@@ -89,6 +94,7 @@ class ChainDownloader(
   // Visible to tests in the same package: lets ChainDownloaderSpec assert YieldToRegularSync clamping
   // without relying on log-output scraping or reflection.
   private[snap] def currentMaxConcurrentRequests: Int = maxConcurrentRequests
+  private[snap] def isHeaderExcluded(peerId: PeerId): Boolean = emptyHeaderPeers.contains(peerId)
 
   // Dispatch timer
   private var dispatchTask: Option[org.apache.pekko.actor.Cancellable] = None
@@ -181,7 +187,11 @@ class ChainDownloader(
     case ResponseReceived(peer, ETH66.BlockHeaders(_, headers), _) =>
       headerRequestPeers -= peer.id
       if (headers.nonEmpty) {
+        emptyHeaderPeers -= peer.id
         handleHeaders(peer, headers)
+      } else {
+        emptyHeaderPeers += peer.id
+        log.debug("Empty headers from {} — excluding from header dispatch", peer.id)
       }
       dispatchRequests()
 
@@ -218,10 +228,12 @@ class ChainDownloader(
     val inFlightCount = headerRequestPeers.size + bodyRequestPeers.size + receiptRequestPeers.size
     if (inFlightCount >= maxConcurrentRequests) return
 
-    val available = peersToDownloadFrom.filterNot { case (peerId, _) =>
+    val available = peersToDownloadFrom.filterNot { case (peerId, p) =>
       headerRequestPeers.contains(peerId) ||
       bodyRequestPeers.values.exists(_._1.id == peerId) ||
-      receiptRequestPeers.values.exists(_._1.id == peerId)
+      receiptRequestPeers.values.exists(_._1.id == peerId) ||
+      p.peer.nodeId.exists(snapServerPeerNodeIds.contains) ||
+      emptyHeaderPeers.contains(peerId)
     }
 
     if (available.isEmpty) return
@@ -716,7 +728,8 @@ object ChainDownloader {
       syncConfig: SyncConfig,
       scheduler: Scheduler,
       maxConcurrentRequests: Int = 4,
-      requestTimeout: FiniteDuration = 10.seconds
+      requestTimeout: FiniteDuration = 10.seconds,
+      snapServerPeerNodeIds: Set[ByteString] = Set.empty
   )(implicit ec: ExecutionContext): Props =
     Props(
       new ChainDownloader(
@@ -729,7 +742,8 @@ object ChainDownloader {
         syncConfig,
         scheduler,
         maxConcurrentRequests,
-        requestTimeout
+        requestTimeout,
+        snapServerPeerNodeIds
       )
     )
 }

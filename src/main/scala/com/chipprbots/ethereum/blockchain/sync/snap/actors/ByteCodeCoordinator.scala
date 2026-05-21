@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
-import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props, SupervisorStrategy, OneForOneStrategy}
+import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props, SupervisorStrategy, OneForOneStrategy, Terminated}
 import org.apache.pekko.actor.SupervisorStrategy._
 import org.apache.pekko.util.ByteString
 
@@ -89,7 +89,7 @@ class ByteCodeCoordinator(
   // Per-hash failure tracking: prevents infinite re-queuing of hashes no peer can serve.
   // After maxFailuresPerHash attempts across all peers, the hash is skipped with a warning.
   private val hashFailureCounts = mutable.Map.empty[ByteString, Int]
-  private val maxFailuresPerHash: Int = 10
+  private val maxFailuresPerHash: Int = 50
 
   // Track known available peers for redispatch when activeTasks is empty.
   // tryRedispatchPendingTasks() previously derived peers from activeTasks.values, leaving it
@@ -105,8 +105,8 @@ class ByteCodeCoordinator(
   private val maxConsecutiveTaskFailures: Int = 100
 
   // Task management
-  private val pendingTasks = mutable.Queue[ByteCodeTask]()
-  final private case class ActiveByteCodeRequest(
+  private[actors] val pendingTasks = mutable.Queue[ByteCodeTask]()
+  final private[actors] case class ActiveByteCodeRequest(
       task: ByteCodeTask,
       worker: ActorRef,
       peer: Peer,
@@ -114,7 +114,7 @@ class ByteCodeCoordinator(
       startedAtMillis: Long
   )
 
-  private val activeTasks = mutable.Map.empty[BigInt, ActiveByteCodeRequest] // requestId -> active request
+  private[actors] val activeTasks = mutable.Map.empty[BigInt, ActiveByteCodeRequest] // requestId -> active request
 
   // Completion bookkeeping (#1233). Previously `completedTasks: mutable.ArrayBuffer[ByteCodeTask]`
   // retained the full task object — including `task.bytecodes: Seq[ByteString]`, the actual
@@ -130,9 +130,9 @@ class ByteCodeCoordinator(
   private[actors] var backpressureActive: Boolean = false
 
   // Worker pool
-  private val workers = mutable.ArrayBuffer[ActorRef]()
+  private[actors] val workers = mutable.ArrayBuffer[ActorRef]()
   private val maxWorkers = 32
-  private val idleWorkers = mutable.LinkedHashSet.empty[ActorRef]
+  private[actors] val idleWorkers = mutable.LinkedHashSet.empty[ActorRef]
 
   // Sentinel: when true, no more AddByteCodeTasks will arrive (all accounts downloaded).
   // Completion is only reported after this is set AND pending+active tasks drain.
@@ -225,7 +225,11 @@ class ByteCodeCoordinator(
       // BUG-S1: Do NOT clear knownAvailablePeers — bytecodes are content-addressed (hash-keyed),
       // not state-root-dependent, so existing peers can serve them after a pivot refresh.
       // Clearing the set would force a cold-start re-registration delay.
-      log.info("Pivot refreshed — clearing bytecode peer cooldowns (keeping peer set)")
+      log.info(
+        s"Pivot refreshed — clearing bytecode peer cooldowns (keeping peer set). " +
+          s"Pool state: workers=${workers.size}/$maxWorkers, idle=${idleWorkers.size}, " +
+          s"pending=${pendingTasks.size}, active=${activeTasks.size}, knownPeers=${knownAvailablePeers.size}"
+      )
       peerFailureCounts.clear()
       peerCooldownUntilMillis.clear()
       peerResponseBytesTarget.clear()
@@ -242,6 +246,7 @@ class ByteCodeCoordinator(
         )
         snapSyncController ! SNAPSyncController.ByteCodeBackpressureChanged(paused = false)
       }
+      tryRedispatchPendingTasks() // cooldowns cleared — attempt dispatch immediately (mirrors Account/Storage/Healing)
 
     case PeerAvailable(peer) =>
       knownAvailablePeers.filterInPlace(_.remoteAddress != peer.remoteAddress)
@@ -271,13 +276,18 @@ class ByteCodeCoordinator(
         case (reqId, active) if active.peer.id.value == peerId => (reqId, active.worker, active.task)
       }.toSeq
       if (inFlight.nonEmpty) {
-        log.debug(s"Peer $peerId disconnected — re-queuing ${inFlight.size} in-flight bytecode request(s)")
+        val idleBefore = idleWorkers.size
         inFlight.foreach { case (reqId, worker, task) =>
           activeTasks.remove(reqId)
           task.pending = false
           pendingTasks.enqueue(task)
           worker ! ByteCodeWorkerRelease(reqId)
+          markWorkerIdle(worker) // restore to idle pool — matches invariant at every other release site
         }
+        log.info(
+          s"ByteCodePeerUnavailable $peerId: re-queued ${inFlight.size} tasks. " +
+            s"Pool: idle $idleBefore → ${idleWorkers.size}, workers=${workers.size}/$maxWorkers"
+        )
       }
       tryRedispatchPendingTasks()
 
@@ -301,9 +311,11 @@ class ByteCodeCoordinator(
           consecutiveTaskFailures = 0
           log.info(s"Bytecode task completed: $count codes")
           checkCompletion()
+          tryRedispatchPendingTasks() // worker now idle — dispatch immediately (mirrors Account/Storage/Healing)
         case Left(error) =>
           log.warning(s"Bytecode task failed: $error")
           checkCompletion()
+          tryRedispatchPendingTasks()
       }
 
     case ByteCodeTaskFailed(requestId, error) =>
@@ -328,6 +340,7 @@ class ByteCodeCoordinator(
         }
       }
       checkCompletion()
+      if (!noMoreTasksExpected) tryRedispatchPendingTasks() // re-queued task ready — dispatch now
 
     case ByteCodeCheckCompletion =>
       checkCompletion()
@@ -357,6 +370,21 @@ class ByteCodeCoordinator(
       noMoreTasksExpected = true
       log.info("Bytecode sync force-completed (promoting to healing/recovery phase)")
       snapSyncController ! SNAPSyncController.ByteCodeSyncComplete
+
+    case Terminated(worker) if workers.contains(worker) =>
+      log.warning(
+        s"ByteCode worker terminated permanently — removing from pool. " +
+          s"Remaining workers: ${workers.size - 1}, idle: ${idleWorkers.size}"
+      )
+      workers -= worker
+      idleWorkers -= worker
+      activeTasks.find { case (_, active) => active.worker == worker }.foreach { case (reqId, active) =>
+        log.warning(s"Re-queuing bytecode task from terminated worker (${active.task.codeHashes.size} hashes)")
+        activeTasks -= reqId
+        active.task.pending = false
+        pendingTasks.enqueue(active.task)
+      }
+      tryRedispatchPendingTasks()
 
     case ByteCodeGetProgress =>
       val total = completedTaskCount + activeTasks.size.toLong + pendingTasks.size.toLong
@@ -428,7 +456,10 @@ class ByteCodeCoordinator(
           assignTaskToWorker(worker, peer)
           inflight += 1
         case None =>
-          // No worker capacity available right now.
+          log.warning(
+            s"ByteCode dispatch blocked: workers=${workers.size}/$maxWorkers, idle=${idleWorkers.size}, " +
+              s"pending=${pendingTasks.size}, peer=${peer.id.value}"
+          )
           return
       }
     }
@@ -649,6 +680,7 @@ class ByteCodeCoordinator(
         )
         .withDispatcher("sync-dispatcher")
     )
+    context.watch(worker)
     workers += worker
     idleWorkers += worker
     log.debug(s"Created bytecode worker, total: ${workers.size}")
@@ -715,7 +747,7 @@ object ByteCodeCoordinator {
       baseInvalid = 15.seconds,
       // Increase per-peer concurrency (Besu caps peer-wide outstanding at 5; this keeps us competitive).
       maxInFlightPerPeer = 5,
-      max = 2.minutes,
+      max = 30.seconds, // aligns with AccountRange (30s) and Healing (30s) — self-heals in 30s not 2min
       exponentCap = 10
     )
   }

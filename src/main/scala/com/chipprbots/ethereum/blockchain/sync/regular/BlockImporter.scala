@@ -64,18 +64,22 @@ class BlockImporter(
 
   context.setReceiveTimeout(syncConfig.syncRetryInterval)
 
-  // Counts consecutive state-node-fetch exhausts since the last successful state-node delivery.
-  // Don't key on block number: branch resolution walks the chain back one block per backoff
-  // cycle (24428221 → 24428220 → ...), so per-block tracking would never reach the threshold.
-  // After [[StuckEscapeThreshold]] consecutive exhausts anywhere, regular sync is deemed
-  // terminally stuck and we signal SyncController to re-trigger SNAP from a recent pivot.
-  private var consecutiveExhausts: Int = 0
   private var pendingStateNodeHash: Option[ByteString] = None
+
+  // Reset the companion-object exhaust counter on fresh actor creation.
+  // On Pekko Restart, only postRestart() fires — preStart() is skipped — so
+  // survivedExhausts is preserved across restarts and only zeroed for a new
+  // BlockImporter actor (new regular-sync session).
+  override def preStart(): Unit = {
+    super.preStart()
+    BlockImporter.survivedExhausts = 0
+  }
 
   override def receive: Receive = idle
 
   override def postRestart(reason: Throwable): Unit = {
-    super.postRestart(reason)
+    // Intentionally skip super.postRestart() — that would call preStart() and
+    // reset survivedExhausts, defeating its purpose of surviving Pekko Restarts.
     start()
   }
 
@@ -139,10 +143,10 @@ class BlockImporter(
       // can serve it via SNAP GetTrieNodes (typical: pivot fell out of the 128-block serve window
       // on every connected peer).
       val blockNum = blocksToRetry.head.number
-      consecutiveExhausts += 1
+      BlockImporter.survivedExhausts += 1
       val missingHashStr = pendingStateNodeHash.map(ByteStringUtils.hash2string).getOrElse("<unknown>")
 
-      if (consecutiveExhausts >= BlockImporter.StuckEscapeThreshold) {
+      if (BlockImporter.survivedExhausts >= BlockImporter.StuckEscapeThreshold) {
         // Multiple consecutive exhausts mean peers genuinely don't have our parent state and
         // never will (we're far behind their snap-serve window). The only recovery is to re-pivot
         // via SNAP. Reset our local counter so we don't re-fire if SyncController bounces us back
@@ -150,10 +154,10 @@ class BlockImporter(
         log.error(
           "Regular sync stuck on block {} after {} consecutive state-node exhausts (missing {}); requesting SNAP re-sync",
           blockNum,
-          consecutiveExhausts,
+          BlockImporter.survivedExhausts,
           missingHashStr
         )
-        consecutiveExhausts = 0
+        BlockImporter.survivedExhausts = 0
         pendingStateNodeHash = None
         supervisor ! SyncProtocol.RegularSyncStuck(blockNum, missingHashStr)
         // Don't transition further — SyncController will PoisonPill regular sync.
@@ -161,7 +165,7 @@ class BlockImporter(
         log.error(
           "State node recovery failed after max retries for block {} (consecutive exhausts: {}/{}) — backing off {}s before retry",
           blockNum,
-          consecutiveExhausts,
+          BlockImporter.survivedExhausts,
           BlockImporter.StuckEscapeThreshold,
           5.minutes.toSeconds
         )
@@ -190,7 +194,7 @@ class BlockImporter(
       catch { case _: Exception => () }
       // Successful state-node delivery — reset stuck-counter so a later transient failure on a
       // different block doesn't escalate to SNAP re-sync prematurely.
-      consecutiveExhausts = 0
+      BlockImporter.survivedExhausts = 0
       pendingStateNodeHash = None
       importBlocks(blocksToRetry, blockImportType)(state)
 
@@ -199,6 +203,7 @@ class BlockImporter(
       // Retry the same blocks directly — don't PickBlocks, which would fetch from wherever the
       // fetcher is now (potentially far beyond the pivot). After SNAP sync, only the pivot header
       // has a number→hash mapping, so branch resolution would fail for any other starting point.
+      BlockImporter.survivedExhausts += 1
       importBlocks(blocksToRetry, blockImportType)(state)
   }
 
@@ -243,8 +248,16 @@ class BlockImporter(
         val (importedBlocks, errorOpt) = value
         importedBlocks.size match {
           case 0 => log.debug("Imported no blocks")
-          case 1 => log.info("Imported block {}", importedBlocks.head.number)
-          case _ => log.info("Imported blocks {} - {}", importedBlocks.head.number, importedBlocks.last.number)
+          case 1 =>
+            val b = importedBlocks.head
+            log.info(
+              "Imported block {} ({}) txs={} gas={}",
+              b.number,
+              b.header.hashAsHexString.take(10),
+              b.body.transactionList.size,
+              b.header.gasUsed
+            )
+          case _ => log.info("Imported blocks {} - {}", importedBlocks.last.number, importedBlocks.head.number)
         }
 
         errorOpt match {
@@ -590,6 +603,11 @@ object BlockImporter {
   // is deemed terminally stuck and we escalate to SNAP re-sync via SyncProtocol.RegularSyncStuck.
   // 3 × 5-min backoff = ~15 minutes of bounded retry before invoking the escape valve.
   val StuckEscapeThreshold: Int = 3
+
+  // Exhaust counter that outlives individual actor instances so Pekko Restarts don't reset
+  // the progress toward StuckEscapeThreshold. Zeroed by preStart() (fresh regular-sync session)
+  // but NOT by postRestart() (same logical actor restarted after a crash).
+  private[regular] var survivedExhausts: Int = 0
 
   // scalastyle:off parameter.number
   def props(

@@ -326,9 +326,10 @@ class SyncController(
     case SyncProtocol.HealingImpossible =>
       snapSync ! PoisonPill
       log.warning(
-        "SNAP finalization aborted (state root mismatch). Clearing SnapSyncDone and restarting SNAP with a fresh pivot."
+        "SNAP finalization aborted (state root mismatch). Clearing sync state and restarting SNAP with a fresh pivot."
       )
       appStateStorage.clearSnapSyncDone().commit()
+      appStateStorage.clearFastSyncDone().commit()
       startSnapSync()
 
     case SyncProtocol.Status.Progress(_, _) =>
@@ -343,6 +344,9 @@ class SyncController(
 
   def runningRegularSync(regularSync: ActorRef): Receive = { case other =>
     other match {
+      case Terminated(actor) if actor == regularSync =>
+        log.error("RegularSync actor terminated unexpectedly — restarting regular sync.")
+        startRegularSync(resumeBackfill = false)
       case SyncProtocol.ResetFastSync =>
         handleResetFastSync()
       case SyncProtocol.RestartFastSync =>
@@ -365,7 +369,7 @@ class SyncController(
         regularSync ! PoisonPill
         appStateStorage.clearSnapSyncDone().commit()
         appStateStorage.clearFastSyncDone().commit()
-        startSnapSync()
+        startSnapSync(minPivotBlock = Some(blockNumber))
       case msg =>
         regularSync.forward(msg)
     }
@@ -388,6 +392,12 @@ class SyncController(
     case Terminated(actor) if actor == snapSync =>
       log.warning("SNAPSyncController died while regular sync was running; chain backfill aborted.")
       context.become(runningRegularSync(regularSync))
+
+    case Terminated(actor) if actor == regularSync =>
+      log.error("RegularSync actor terminated unexpectedly during backfill — restarting regular sync.")
+      context.unwatch(snapSync)
+      snapSync ! PoisonPill
+      startRegularSync(resumeBackfill = false)
 
     case msg if isRestartTrigger(msg) =>
       log.info("Restart triggered while SNAP backfill was running; poison-pilling SNAP backfill actor first.")
@@ -848,6 +858,32 @@ class SyncController(
                   header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString
                 )
             }
+          } else {
+            // Symmetric case (Run-26): pivot root EXISTS in MPT but differs from snapStateRoot.
+            // The downloaded account trie is stored under snapStateRoot; update the pivot header
+            // to match so the startup diagnostic passes and regular sync reads the correct trie.
+            snapStateRoot.foreach { snapRoot =>
+              if (snapRoot != header.stateRoot) {
+                val snapRootExists =
+                  try { mptStorage.get(snapRoot.toArray); true }
+                  catch { case _: Exception => false }
+                log.info(
+                  "snapStateRoot({}) availability: {}",
+                  snapRoot.take(8).toArray.map("%02x".format(_)).mkString,
+                  if (snapRootExists) "EXISTS" else "MISSING"
+                )
+                if (snapRootExists) {
+                  log.warning(
+                    "snapStateRoot({}) differs from pivotHeader.stateRoot({}) — " +
+                      "updating pivot block header to use downloaded state root.",
+                    snapRoot.take(8).toArray.map("%02x".format(_)).mkString,
+                    header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString
+                  )
+                  val updatedHeader = header.copy(stateRoot = snapRoot)
+                  blockchainWriter.storeBlockHeader(updatedHeader).commit()
+                }
+              }
+            }
           }
         }
         val needBytecode = !appStateStorage.isBytecodeRecoveryDone()
@@ -902,7 +938,7 @@ class SyncController(
     context.become(runningFastSync(fastSync))
   }
 
-  def startSnapSync(): Unit = {
+  def startSnapSync(minPivotBlock: Option[BigInt] = None): Unit = {
     log.info("Starting SNAP sync mode")
     syncGeneration += 1
 
@@ -943,6 +979,10 @@ class SyncController(
       }
     }
 
+    minPivotBlock.foreach { minBlock =>
+      log.info("Sending MinPivotBlock({}) to new SNAP sync actor", minBlock)
+      snapSync ! SNAPSyncController.MinPivotBlock(minBlock)
+    }
     snapSync ! SNAPSyncController.Start
     context.become(runningSnapSync(snapSync))
   }
@@ -979,6 +1019,7 @@ class SyncController(
       s"regular-sync-$syncGeneration"
     )
     regularSync ! SyncProtocol.Start
+    context.watch(regularSync)
     context.become(runningRegularSync(regularSync))
     // After SNAP completes, chain backfill (#1162) writes headers / bodies / receipts in the
     // background. If the node was killed mid-backfill, persisted cursors (#1169) tell us how
@@ -1077,6 +1118,8 @@ class SyncController(
             s"stateRoot=${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}..., pivotBlock=$pivotBlock)"
         )
 
+        val snapSyncConfig = loadSnapSyncConfig()
+
         val bytecodeActor = if (needBytecode) {
           Some(
             context.actorOf(
@@ -1088,7 +1131,8 @@ class SyncController(
                   appStateStorage = appStateStorage,
                   networkPeerManager = networkPeerManager,
                   syncController = self,
-                  pivotBlockNumber = pivotBlock
+                  pivotBlockNumber = pivotBlock,
+                  snapSyncConfig = snapSyncConfig
                 )
                 .withDispatcher("sync-dispatcher"),
               s"bytecode-recovery-$syncGeneration"
@@ -1097,7 +1141,6 @@ class SyncController(
         } else None
 
         val storageActor = if (needStorage) {
-          val snapSyncConfig = loadSnapSyncConfig()
           Some(
             context.actorOf(
               StorageRecoveryActor
@@ -1116,6 +1159,9 @@ class SyncController(
             )
           )
         } else None
+
+        bytecodeActor.foreach(context.watch)
+        storageActor.foreach(context.watch)
 
         // Register self for SNAP message routing so responses reach coordinators
         networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(self)
@@ -1193,6 +1239,34 @@ class SyncController(
           bytecodeActor.foreach(_ ! snap.actors.Messages.ByteCodePeerAvailable(peer))
           storageActor.foreach(_ ! snap.actors.Messages.StoragePeerAvailable(peer))
         }
+      }
+
+    case Terminated(actor) if bytecodeActor.contains(actor) =>
+      log.error("BytecodeRecoveryActor terminated unexpectedly. Treating as complete to unblock sync.")
+      if (storageComplete) {
+        peerPoller.cancel()
+        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
+          context.system.deadLetters
+        )
+        startRegularSync()
+      } else {
+        context.become(
+          runningRecovery(bytecodeActor = None, storageActor, bytecodeComplete = true, storageComplete, peerPoller)
+        )
+      }
+
+    case Terminated(actor) if storageActor.contains(actor) =>
+      log.error("StorageRecoveryActor terminated unexpectedly. Treating as complete to unblock sync.")
+      if (bytecodeComplete) {
+        peerPoller.cancel()
+        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
+          context.system.deadLetters
+        )
+        startRegularSync()
+      } else {
+        context.become(
+          runningRecovery(bytecodeActor, storageActor = None, bytecodeComplete, storageComplete = true, peerPoller)
+        )
       }
 
     case msg =>

@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync
 
-import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Cancellable, Props}
+import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Cancellable, Props, Terminated}
 import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
@@ -107,6 +107,8 @@ class StorageRecoveryActor(
           )
         }
 
+        context.watch(coordinator)
+
         // Send tasks in batches of 10K (same as SNAPSyncController)
         val batchSize = 10000
         var totalSent = 0
@@ -199,6 +201,13 @@ class StorageRecoveryActor(
           // Progress happened between scheduling and firing — reset.
           abandonTimer = None
         }
+
+      case Terminated(`coordinator`) =>
+        log.error("StorageRangeCoordinator crashed unexpectedly. Marking storage recovery done to unblock sync.")
+        abandonTimer.foreach(_.cancel())
+        appStateStorage.storageRecoveryDone().commit()
+        syncController ! RecoveryComplete
+        context.stop(self)
 
       case msg => coordinator.forward(msg) // Forward SNAP protocol responses to coordinator
     }

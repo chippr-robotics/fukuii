@@ -48,7 +48,8 @@ class NetworkPeerManagerActor(
     initialSnapSyncControllerOpt: Option[ActorRef] = None,
     evmCodeStorageOpt: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
     mptStorageOpt: Option[com.chipprbots.ethereum.db.storage.MptStorage] = None,
-    blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader] = None
+    blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader] = None,
+    isPoWChain: Boolean = true
 ) extends Actor
     with ActorLogging {
 
@@ -76,6 +77,12 @@ class NetworkPeerManagerActor(
   // continuously for `LaggingPeerEvictAfter` before being disconnected. Cleared when the
   // peer catches up (so a peer that's mid-catch-up doesn't get evicted) or on disconnect.
   private val laggingPeerSince = scala.collection.mutable.Map.empty[PeerId, Long]
+
+  // PeerIds for which PMA just performed inbound-wins: the outbound PeerActor was closed and will
+  // shortly publish PeerDisconnected. That event must NOT evict the peer from peersWithInfo —
+  // the inbound is alive and already swapped in. Remove from this set once the disconnect arrives.
+  private val pendingInboundWinsDisconnects: scala.collection.mutable.Set[PeerId] =
+    scala.collection.mutable.Set.empty
 
   // 60s network summary — read+reset RLPx counters and log one aggregate line
   context.system.scheduler.scheduleWithFixedDelay(
@@ -372,20 +379,38 @@ class NetworkPeerManagerActor(
       )
       if (peersWithInfo.contains(peer.id)) {
         val old = peersWithInfo(peer.id)
-        // Keep the EXISTING entry — don't overwrite with the duplicate.
-        // PeerManagerActor will drop the loser via AlreadyConnected; with the PeerDisconnected
-        // gate fix, the loser's termination no longer evicts the winner. Overwriting here with
-        // the duplicate (which may be the about-to-die loser) would leave a stale ref in
-        // peersWithInfo — mirroring Besu's registerDisconnect guard which only updates
-        // activeConnections when peer.getConnection().equals(connection) (the primary connection).
-        log.warning(
-          s"DUPLICATE_HANDSHAKE_DROPPED: ${peer.id} already in peersWithInfo " +
-            s"(existing=${old.peer.remoteAddress} inbound=${old.peer.incomingConnection}, " +
-            s"duplicate=${peer.remoteAddress} inbound=${peer.incomingConnection}) — " +
-            s"keeping existing entry, duplicate will be dropped by PeerManagerActor"
-        )
-        // No update to peersWithInfo, no double-count in metrics
-        context.become(handleMessages(peersWithInfo))
+        val newIsInbound = peer.incomingConnection
+        val existingIsOutbound = !old.peer.incomingConnection
+
+        if (newIsInbound && existingIsOutbound) {
+          // Inbound-wins: PMA is closing the outbound (it fired its own inbound-wins tiebreak).
+          // Swap peersWithInfo to the live inbound ref so SNAP dispatch goes to the correct
+          // connection. Record the PeerId so the imminent PeerDisconnected (outbound dying)
+          // is suppressed rather than evicting the peer we just kept.
+          pendingInboundWinsDisconnects += peer.id
+          log.info(
+            "DUPLICATE_HANDSHAKE_INBOUND_WINS: {} swapping {} → {} (outbound eviction suppressed)",
+            peer.id,
+            old.peer.remoteAddress,
+            peer.remoteAddress
+          )
+          context.become(handleMessages(peersWithInfo + (peer.id -> PeerWithInfo(peer, peerInfo))))
+        } else {
+          // Keep the EXISTING entry — don't overwrite with the duplicate.
+          // PeerManagerActor will drop the loser via AlreadyConnected; with the PeerDisconnected
+          // gate fix, the loser's termination no longer evicts the winner. Overwriting here with
+          // the duplicate (which may be the about-to-die loser) would leave a stale ref in
+          // peersWithInfo — mirroring Besu's registerDisconnect guard which only updates
+          // activeConnections when peer.getConnection().equals(connection) (the primary connection).
+          log.warning(
+            s"DUPLICATE_HANDSHAKE_DROPPED: ${peer.id} already in peersWithInfo " +
+              s"(existing=${old.peer.remoteAddress} inbound=${old.peer.incomingConnection}, " +
+              s"duplicate=${peer.remoteAddress} inbound=${peer.incomingConnection}) — " +
+              s"keeping existing entry, duplicate will be dropped by PeerManagerActor"
+          )
+          // No update to peersWithInfo, no double-count in metrics
+          context.become(handleMessages(peersWithInfo))
+        }
       } else {
         peerEventBusActor ! Subscribe(PeerDisconnectedClassifier(PeerSelector.WithId(peer.id)))
         peerEventBusActor ! Subscribe(MessageClassifier(msgCodesWithInfo, PeerSelector.WithId(peer.id)))
@@ -430,6 +455,15 @@ class NetworkPeerManagerActor(
     case PeerDisconnected(peerId) if !peersWithInfo.contains(peerId) =>
       log.debug(
         "PEER_DISCONNECTED_IGNORED: {} not in peersWithInfo — likely suppressed duplicate or already removed",
+        peerId
+      )
+
+    case PeerDisconnected(peerId) if pendingInboundWinsDisconnects.contains(peerId) =>
+      // The outbound PeerActor that PMA closed after inbound-wins is dying. peersWithInfo already
+      // holds the live inbound entry — do not evict.
+      pendingInboundWinsDisconnects -= peerId
+      log.info(
+        "INBOUND_WINS_DISCONNECT_SUPPRESSED: {} — outbound closed by PMA, inbound retained in peersWithInfo",
         peerId
       )
 
@@ -612,10 +646,32 @@ class NetworkPeerManagerActor(
         if (maxBlockNumber > appStateStorage.getEstimatedHighestBlock())
           appStateStorage.putEstimatedHighestBlock(maxBlockNumber).commit()
 
-        if (maxBlockNumber > initialPeerInfo.maxBlockNumber) {
-          initialPeerInfo.withBestBlockData(maxBlockNumber, maxBlockHash)
-        } else
-          initialPeerInfo
+        val updated =
+          if (maxBlockNumber > initialPeerInfo.maxBlockNumber)
+            initialPeerInfo.withBestBlockData(maxBlockNumber, maxBlockHash)
+          else
+            initialPeerInfo
+
+        // For ETH/69 peers: re-resolve chainWeight via 3-tier (hash → canonical-number → POW_SCALING).
+        // Hash-only lookup misses when the peer's current head differs from our stored pivot hash;
+        // full 3-tier falls back to proportional scaling from our real anchor so the refresh fires
+        // even when the peer is ahead of our downloaded chain.
+        blockchainReader match {
+          case Some(reader) if updated.remoteStatus.capability == Capability.ETH69 =>
+            val (cw, source) = reader.resolveETH69ChainWeight(maxBlockHash, maxBlockNumber, isPoWChain)
+            val isImprovement = cw.totalDifficulty > updated.chainWeight.totalDifficulty
+            if (isImprovement && source != "COLD_START") {
+              log.info(
+                "ETH69_CHAINWEIGHT_REFRESH: blockNum={} newTD={} prevTD={} source={}",
+                maxBlockNumber,
+                cw.totalDifficulty,
+                updated.chainWeight.totalDifficulty,
+                source
+              )
+              updated.withChainWeight(cw)
+            } else updated
+          case _ => updated
+        }
       }
 
     message match {
@@ -1166,7 +1222,8 @@ object NetworkPeerManagerActor {
       snapSyncControllerOpt: Option[ActorRef] = None,
       evmCodeStorageOpt: Option[com.chipprbots.ethereum.db.storage.EvmCodeStorage] = None,
       mptStorageOpt: Option[com.chipprbots.ethereum.db.storage.MptStorage] = None,
-      blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader] = None
+      blockchainReader: Option[com.chipprbots.ethereum.domain.BlockchainReader] = None,
+      isPoWChain: Boolean = true
   ): Props =
     Props(
       new NetworkPeerManagerActor(
@@ -1177,7 +1234,8 @@ object NetworkPeerManagerActor {
         snapSyncControllerOpt,
         evmCodeStorageOpt,
         mptStorageOpt,
-        blockchainReader
+        blockchainReader,
+        isPoWChain
       )
     )
 }

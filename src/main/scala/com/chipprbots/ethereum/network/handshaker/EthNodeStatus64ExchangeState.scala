@@ -24,7 +24,7 @@ case class EthNodeStatus64ExchangeState(
 
   def applyResponseMessage: PartialFunction[Message, HandshakerState[PeerInfo]] = { case status: ETH64.Status =>
     import ForkIdValidator.syncIoLogger
-    log.info(
+    log.debug(
       "ETH{}_STATUS: Received - totalDifficulty={}, networkId={}, bestHash={}, genesisHash={}, forkId={}",
       status.protocolVersion,
       status.totalDifficulty,
@@ -43,7 +43,7 @@ case class EthNodeStatus64ExchangeState(
     val localBestTimestamp = if (storedTimestamp == 0L) System.currentTimeMillis() / 1000 else storedTimestamp
     val localForkId = ForkId.create(localGenesisHash, blockchainConfig)(localBestBlock, localBestTimestamp)
 
-    log.info(
+    log.debug(
       "ETH{}_STATUS: Local state - bestBlock={}, genesisHash={}, localForkId={}",
       status.protocolVersion,
       localBestBlock,
@@ -162,7 +162,7 @@ case class EthNodeStatus64ExchangeState(
       forkId = forkId
     )
 
-    log.info(
+    log.debug(
       "ETH{}_STATUS: Sending - totalDifficulty={}, networkId={}, bestBlock={}, bestHash={}, genesisHash={}, forkId={}",
       status.protocolVersion,
       status.totalDifficulty,
