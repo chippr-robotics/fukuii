@@ -173,7 +173,12 @@ class RegularSync(
       )
   }
 
-  override def supervisorStrategy: SupervisorStrategy = AllForOneStrategy()(SupervisorStrategy.defaultDecider)
+  // Limit restart attempts and add a delay between restarts so that transient peer outages
+  // don't cause a tight crash-loop that pins a CPU core and exhausts log storage.
+  // AllForOneStrategy restarts ALL children on any exception — appropriate here because the
+  // fetcher children share state (best-known-block, peer assignments) that must be reset together.
+  override def supervisorStrategy: SupervisorStrategy =
+    AllForOneStrategy(maxNrOfRetries = 10, withinTimeRange = 1.minute)(SupervisorStrategy.defaultDecider)
 
   override def postStop(): Unit = {
     log.info("Regular Sync stopped")

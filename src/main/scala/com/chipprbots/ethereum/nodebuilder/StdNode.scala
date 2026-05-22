@@ -254,19 +254,49 @@ abstract class BaseNode extends Node {
   }
 
   def fixDatabase(): Unit = {
-    val bestBlockInfo = storagesInstance.storages.appStateStorage.getBestBlockInfo()
+    val storages = storagesInstance.storages
+    val bestBlockInfo = storages.appStateStorage.getBestBlockInfo()
+
+    // Fix 1 (original): bestBlockInfo recorded a number but has an empty hash.
+    // Recover the hash from the number→hash mapping.
     if (bestBlockInfo.hash == ByteString.empty && bestBlockInfo.number > 0) {
       log.warn("Fixing best block hash into database for block {}", bestBlockInfo.number)
-      storagesInstance.storages.blockNumberMappingStorage.get(bestBlockInfo.number) match {
+      storages.blockNumberMappingStorage.get(bestBlockInfo.number) match {
         case Some(hash) =>
           log.warn("Putting {} as the best block hash", Hex.toHexString(hash.toArray))
-          storagesInstance.storages.appStateStorage.putBestBlockInfo(bestBlockInfo.copy(hash = hash)).commit()
+          storages.appStateStorage.putBestBlockInfo(bestBlockInfo.copy(hash = hash)).commit()
         case None =>
           log.error("No block found for number {} when trying to fix database", bestBlockInfo.number)
       }
-
     }
 
+    // Fix 2: verify the best block's body is present.  A crash after saving the header
+    // but before the body commit (pre-atomic-save era) can leave a header-only best block.
+    // We can't repair this automatically — log an error and let the operator decide.
+    if (bestBlockInfo.hash.nonEmpty) {
+      if (storages.blockBodiesStorage.get(bestBlockInfo.hash).isEmpty) {
+        log.error(
+          "[DB-CHECK] Best block {} (number {}) has a header but no body — database may be corrupted. " +
+            "Consider resyncing from a checkpoint.",
+          Hex.toHexString(bestBlockInfo.hash.toArray),
+          bestBlockInfo.number
+        )
+      }
+    }
+
+    // Fix 3: detect a receipt cursor ahead of the best block.  This can happen when a
+    // ChainDownloader receipt run is interrupted and the cursor was advanced before the
+    // receipts were actually written.  Log a warning; the next ChainDownloader run will
+    // detect the missing receipts and re-fetch them.
+    val receiptCursor = storages.appStateStorage.getBackfillBestReceipt()
+    if (receiptCursor > bestBlockInfo.number) {
+      log.warn(
+        "[DB-CHECK] Receipt cursor {} is ahead of best block {} — may indicate an interrupted receipt " +
+          "backfill. ChainDownloader will re-check on next sync start.",
+        receiptCursor,
+        bestBlockInfo.number
+      )
+    }
   }
 }
 
