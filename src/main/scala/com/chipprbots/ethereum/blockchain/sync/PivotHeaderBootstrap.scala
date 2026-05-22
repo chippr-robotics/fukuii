@@ -95,7 +95,7 @@ final class PivotHeaderBootstrap(
         // For by-hash mode: report the actual block number we discovered.
         val resolvedNumber = if (byHashMode) header.number else targetBlock
         log.info(
-          s"[Pivot] Bootstrap complete — block=${header.number} hash=${header.hashAsHexString.take(10)} " +
+          s"[PIVOT] Bootstrap complete — block=${header.number} hash=${header.hashAsHexString.take(10)} " +
             s"parentHash=${header.parentHash.take(4).toArray.map("%02x".format(_)).mkString}"
         )
         context.parent ! Completed(resolvedNumber, header)

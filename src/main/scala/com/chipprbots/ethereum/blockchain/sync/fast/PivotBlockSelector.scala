@@ -264,7 +264,7 @@ class PivotBlockSelector(
     val attempts = pivotRetryState.attempt
     pivotRetryState = pivotRetryState.reset
     log.info(
-      "[Pivot] Selected block={} hash={} after {} attempt(s)",
+      "[PIVOT] Selected block={} hash={} after {} attempt(s)",
       pivotBlockHeader.number,
       pivotBlockHeader.hashAsHexString,
       attempts

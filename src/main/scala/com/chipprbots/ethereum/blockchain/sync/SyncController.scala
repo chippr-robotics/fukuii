@@ -1209,7 +1209,7 @@ class SyncController(
       peerPoller: org.apache.pekko.actor.Cancellable = org.apache.pekko.actor.Cancellable.alreadyCancelled
   ): Receive = {
     case BytecodeRecoveryActor.RecoveryComplete =>
-      log.info(s"[recovery] bytecode recovery complete (storage done: $storageComplete)")
+      log.info(s"[RECOVERY] bytecode recovery complete (storage done: $storageComplete)")
       bytecodeActor.foreach(context.unwatch)
       if (storageComplete) {
         peerPoller.cancel()
@@ -1225,7 +1225,7 @@ class SyncController(
       }
 
     case StorageRecoveryActor.RecoveryComplete =>
-      log.info(s"[recovery] storage recovery complete (bytecode done: $bytecodeComplete)")
+      log.info(s"[RECOVERY] storage recovery complete (bytecode done: $bytecodeComplete)")
       storageActor.foreach(context.unwatch)
       if (bytecodeComplete) {
         peerPoller.cancel()
@@ -1253,7 +1253,7 @@ class SyncController(
       }
 
     case Terminated(actor) if bytecodeActor.contains(actor) =>
-      log.error("[recovery] BytecodeRecoveryActor crashed (no prior RecoveryComplete) — persisting flag and unblocking")
+      log.error("[RECOVERY] BytecodeRecoveryActor crashed (no prior RecoveryComplete) — persisting flag and unblocking")
       appStateStorage.bytecodeRecoveryDone().commit()
       context.unwatch(actor)
       if (storageComplete) {
@@ -1269,7 +1269,7 @@ class SyncController(
       }
 
     case Terminated(actor) if storageActor.contains(actor) =>
-      log.error("[recovery] StorageRecoveryActor crashed (no prior RecoveryComplete) — persisting flag and unblocking")
+      log.error("[RECOVERY] StorageRecoveryActor crashed (no prior RecoveryComplete) — persisting flag and unblocking")
       appStateStorage.storageRecoveryDone().commit()
       context.unwatch(actor)
       if (bytecodeComplete) {
