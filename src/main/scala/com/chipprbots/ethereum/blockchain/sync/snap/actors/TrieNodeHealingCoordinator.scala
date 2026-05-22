@@ -264,6 +264,13 @@ class TrieNodeHealingCoordinator(
     healingCheckTask.foreach(_.cancel())
     healingCheckTask = None
     log.debug("[HEAL] stagnation check timer cancelled in postStop")
+    if (rawNodeBuffer.nonEmpty) {
+      log.info(
+        s"[HEAL] postStop: flushing ${rawNodeBuffer.size} buffered raw nodes synchronously " +
+          s"(would be lost on async path at shutdown)"
+      )
+      flushRawNodesSync()
+    }
     super.postStop()
   }
 

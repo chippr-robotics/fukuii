@@ -823,6 +823,23 @@ class AccountRangeCoordinator(
         tryRedispatchPendingTasks()
       }
 
+    case Terminated(worker) if workers.contains(worker) =>
+      log.warning(
+        s"[ACCOUNT-COORD] Worker ${worker.path.name} terminated permanently — removing from pool. " +
+          s"Pool: ${workers.size - 1} total, ${idleWorkers.size} idle, ${activeTasks.size} active tasks"
+      )
+      workers -= worker
+      idleWorkers -= worker
+      activeTasks.find { case (_, (_, w, _)) => w == worker }.foreach { case (reqId, (task, _, peer)) =>
+        log.warning(
+          s"[ACCOUNT-COORD] Re-queuing account range task from terminated worker " +
+            s"(reqId=$reqId, peer=${peer.id.value})"
+        )
+        activeTasks -= reqId
+        pendingTasks.enqueue(task)
+      }
+      tryRedispatchPendingTasks()
+
     case TaskComplete(requestId, result) =>
       handleTaskComplete(requestId, result)
 
@@ -975,6 +992,7 @@ class AccountRangeCoordinator(
         )
         .withDispatcher("sync-dispatcher")
     )
+    context.watch(worker)
     workers += worker
     idleWorkers += worker
     log.debug(s"Created worker ${worker.path.name}, total workers: ${workers.size}")

@@ -145,6 +145,8 @@ class ByteCodeCoordinator(
 
   private var bytecodeMilestonePct: Int = -1
   private var bytecodeStartMs: Long = 0L
+  private var lastActivityMs: Long = 0L
+  private val noActivityTimeoutMs: Long = 120_000L
   private var statusTimer: Option[Cancellable] = None
 
   // Sentinel: when true, no more AddByteCodeTasks will arrive (all accounts downloaded).
@@ -195,6 +197,7 @@ class ByteCodeCoordinator(
   override def preStart(): Unit = {
     log.info("ByteCodeCoordinator starting")
     bytecodeStartMs = System.currentTimeMillis()
+    lastActivityMs = bytecodeStartMs
     statusTimer = Some(
       context.system.scheduler
         .scheduleWithFixedDelay(30.seconds, 30.seconds, self, ByteCodeCoordinator.ByteCodeStatusPulse)(
@@ -332,6 +335,7 @@ class ByteCodeCoordinator(
         case Right(count) =>
           bytecodesDownloaded += count
           consecutiveTaskFailures = 0
+          lastActivityMs = nowMillis
           log.info(s"Bytecode task completed: $count codes")
           checkCompletion()
           tryRedispatchPendingTasks() // worker now idle — dispatch immediately (mirrors Account/Storage/Healing)
@@ -441,6 +445,24 @@ class ByteCodeCoordinator(
             s"phase=growing (seal not yet received)"
         )
       }
+      // No-activity guard: if all peers vanish before noMoreTasksExpected is set, workers never
+      // get dispatched so consecutiveTaskFailures never increments and force-complete never fires.
+      // Detect this with a coordinator-level timeout (mirrors AccountRange/Storage stall detection).
+      if (!noMoreTasksExpected && pendingTasks.nonEmpty && activeTasks.isEmpty && knownAvailablePeers.isEmpty) {
+        val idleMs = nowMillis - lastActivityMs
+        if (idleMs > noActivityTimeoutMs) {
+          log.warning(
+            s"[BYTECODE-COORD] No-peer stall: ${pendingTasks.size} pending, 0 active, 0 available peers " +
+              s"for ${idleMs / 1000}s — requesting pivot refresh to unblock"
+          )
+          snapSyncController ! SNAPSyncController.PivotStateUnservable(
+            ByteString.empty,
+            s"bytecode coordinator no-peer stall (${idleMs / 1000}s, ${pendingTasks.size} pending)",
+            0
+          )
+          lastActivityMs = nowMillis // reset to avoid repeated signals within one timeout window
+        }
+      }
   }
 
   /** Emit a ByteCodeBackpressureChanged transition when the pending-task queue depth crosses a watermark. Forwarded by
@@ -486,6 +508,7 @@ class ByteCodeCoordinator(
       ActiveByteCodeRequest(task, worker, peer, requestedBytes = requestedBytes, startedAtMillis = nowMillis)
     )
 
+    lastActivityMs = nowMillis
     log.debug(s"Assigning bytecode task (${task.codeHashes.size} hashes) to worker for peer ${peer.id}")
     worker ! ByteCodeWorkerFetchTask(task, peer, requestId, requestedBytes)
   }
