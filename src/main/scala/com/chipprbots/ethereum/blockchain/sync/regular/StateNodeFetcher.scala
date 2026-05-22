@@ -52,6 +52,8 @@ class StateNodeFetcher(
   override def makeAdaptedMessage[T <: Message](peer: Peer, msg: T): StateNodeFetcherCommand = AdaptedMessage(peer, msg)
 
   private var requester: Option[StateNodeRequester] = None
+  private var totalNodesFetched: Long = 0L
+  private val nodesFetchStartMs: Long = System.currentTimeMillis()
 
   override def onMessage(message: StateNodeFetcherCommand): Behavior[StateNodeFetcherCommand] =
     message match {
@@ -164,6 +166,11 @@ class StateNodeFetcher(
           case Right(node) =>
             stateNodeRequester.replyTo ! FetchedStateNode(NodeData(node))
             requester = None
+            totalNodesFetched += 1
+            if (totalNodesFetched % 1000 == 0) {
+              val rate = totalNodesFetched * 1000L / (System.currentTimeMillis() - nodesFetchStartMs).max(1)
+              log.info("StateNodeFetcher: {} nodes fetched | {} nodes/s", totalNodesFetched, rate)
+            }
             Behaviors.same[StateNodeFetcherCommand]
         }
       }
@@ -205,6 +212,11 @@ class StateNodeFetcher(
               )
               stateNodeRequester.replyTo ! FetchedStateNode(NodeData(Seq(nodeData)))
               requester = None
+              totalNodesFetched += 1
+              if (totalNodesFetched % 1000 == 0) {
+                val rate = totalNodesFetched * 1000L / (System.currentTimeMillis() - nodesFetchStartMs).max(1)
+                log.info("StateNodeFetcher: {} nodes fetched | {} nodes/s", totalNodesFetched, rate)
+              }
               Behaviors.same[StateNodeFetcherCommand]
             case None =>
               // Wrong-hash response. If we haven't tried the fallback root yet, switch — the

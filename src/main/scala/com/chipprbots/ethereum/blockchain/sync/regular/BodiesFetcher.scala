@@ -39,6 +39,8 @@ class BodiesFetcher(
 
   val log = context.log
   implicit val runtime: IORuntime = IORuntime.global
+  private var totalBodiesFetched: Long = 0L
+  private val bodiesFetchStartMs: Long = System.currentTimeMillis()
 
   import BodiesFetcher._
   private type Command = BodiesFetcher.BodiesFetcherCommand
@@ -83,6 +85,13 @@ class BodiesFetcher(
     }
     // Always forward bodies to supervisor to ensure state is cleared
     supervisor ! BlockFetcher.ReceivedBodies(peer, bodies)
+    if (bodies.nonEmpty) {
+      totalBodiesFetched += bodies.size
+      if (totalBodiesFetched % 1000 == 0) {
+        val rate = totalBodiesFetched * 1000L / (System.currentTimeMillis() - bodiesFetchStartMs).max(1)
+        log.info("BodiesFetcher: {} bodies fetched | {} bodies/s", totalBodiesFetched, rate)
+      }
+    }
     Behaviors.same
   }
 
