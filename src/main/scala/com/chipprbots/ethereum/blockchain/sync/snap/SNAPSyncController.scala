@@ -9,7 +9,7 @@ import scala.collection.mutable
 import scala.util.Try
 
 import com.chipprbots.ethereum.blockchain.sync.{Blacklist, CacheBasedBlacklist, PeerListSupportNg, SyncProtocol}
-import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage, FlatSlotStorage, MptStorage, StateStorage}
+import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage, FlatAccountStorage, FlatSlotStorage, MptStorage, StateStorage}
 import com.chipprbots.ethereum.domain.{Block, BlockBody, BlockHeader, BlockchainReader, BlockchainWriter, ChainWeight}
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
@@ -24,6 +24,7 @@ class SNAPSyncController(
     stateStorage: StateStorage,
     evmCodeStorage: EvmCodeStorage,
     flatSlotStorage: FlatSlotStorage,
+    flatAccountStorage: FlatAccountStorage,
     val networkPeerManager: ActorRef,
     val peerEventBus: ActorRef,
     val syncConfig: SyncConfig,
@@ -2681,7 +2682,8 @@ class SNAPSyncController(
             trieFlushThreshold = snapSyncConfig.accountTrieFlushThreshold,
             initialResponseBytes = snapSyncConfig.accountInitialResponseBytes,
             minResponseBytes = snapSyncConfig.accountMinResponseBytes,
-            useStackTrie = snapSyncConfig.useStackTrie
+            useStackTrie = snapSyncConfig.useStackTrie,
+            flatAccountStorage = flatAccountStorage
           )
           .withDispatcher("sync-dispatcher"),
         s"account-range-coordinator-$coordinatorGeneration"
@@ -4289,6 +4291,7 @@ object SNAPSyncController {
       stateStorage: StateStorage,
       evmCodeStorage: EvmCodeStorage,
       flatSlotStorage: FlatSlotStorage,
+      flatAccountStorage: FlatAccountStorage,
       networkPeerManager: ActorRef,
       peerEventBus: ActorRef,
       syncConfig: SyncConfig,
@@ -4304,6 +4307,7 @@ object SNAPSyncController {
         stateStorage,
         evmCodeStorage,
         flatSlotStorage,
+        flatAccountStorage,
         networkPeerManager,
         peerEventBus,
         syncConfig,

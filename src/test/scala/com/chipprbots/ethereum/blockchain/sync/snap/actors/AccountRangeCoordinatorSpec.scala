@@ -1413,4 +1413,66 @@ class AccountRangeCoordinatorSpec
     coord ! Messages.ByteCodeQueuePressure(paused = false)
     networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](2.seconds)
   }
+
+  it should "write flat account entries to FlatAccountStorage when a chunk flushes (Part 1 integration)" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+    import com.chipprbots.ethereum.db.storage.FlatAccountStorage
+    import com.chipprbots.ethereum.domain.Account
+    import com.chipprbots.ethereum.utils.ByteStringUtils
+
+    val ds = EphemDataSource()
+    val flatStorage = new FlatAccountStorage(ds)
+    val stateRoot = kec256(ByteString("flat-writes-test-root"))
+    val controller = TestProbe()
+
+    val coord = TestActorRef[AccountRangeCoordinator](
+      AccountRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = TestProbe().ref,
+        requestTracker = new SNAPRequestTracker()(system.scheduler),
+        mptStorage = new TestMptStorage(),
+        concurrency = 1,
+        snapSyncController = controller.ref,
+        accountTrieEcOverride = Some(system.dispatcher),
+        useStackTrie = true,
+        flatAccountStorage = flatStorage
+      )
+    )
+
+    coord ! Messages.StartAccountRangeSync(stateRoot)
+
+    val ua = coord.underlyingActor
+    awaitAssert(ua.pendingTasks.nonEmpty shouldBe true, 2.seconds, 50.millis)
+
+    // Three test accounts — Account.EmptyXxx fields produce valid zero-nonce accounts
+    val h1 = kec256(ByteString("flat-acct-1"))
+    val h2 = kec256(ByteString("flat-acct-2"))
+    val h3 = kec256(ByteString("flat-acct-3"))
+    val emptyAcct = Account(
+      nonce = 0,
+      balance = com.chipprbots.ethereum.domain.UInt256.Zero,
+      storageRoot = Account.EmptyStorageRootHash,
+      codeHash = Account.EmptyCodeHash
+    )
+    val accounts = Seq(h1 -> emptyAcct, h2 -> emptyAcct, h3 -> emptyAcct)
+
+    // Inject accounts directly into the pending buffer (private[actors] for tests)
+    val rlp = Account.accountSerializer.toBytes(emptyAcct)
+    val rlpBS = org.apache.pekko.util.ByteString.fromArrayUnsafe(rlp)
+    ua.pendingFlatAccounts += ((h1, rlpBS))
+    ua.pendingFlatAccounts += ((h2, rlpBS))
+    ua.pendingFlatAccounts += ((h3, rlpBS))
+
+    // Flush the flat buffer directly via postStop path by stopping the actor.
+    // postStop flushes pendingFlatAccounts if non-empty — this validates the write path.
+    val probe = TestProbe()
+    probe.watch(coord)
+    system.stop(coord)
+    probe.expectTerminated(coord, 3.seconds)
+
+    // All 3 entries must be present in FlatAccountStorage after flush
+    flatStorage.getAccount(h1) should not be empty
+    flatStorage.getAccount(h2) should not be empty
+    flatStorage.getAccount(h3) should not be empty
+  }
 }

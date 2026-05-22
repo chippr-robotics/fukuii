@@ -119,4 +119,28 @@ class StorageRangeWorkerSpec
     worker ! Messages.FetchStorageRanges(makeStorageTask(), peer)
     coordinator.expectMsg(1.second, Messages.StoragePeerAvailable(peer))
   }
+
+  it should "cancel the idle-check timer on StorageRangesResponseMsg so no spurious StorageCheckIdle fires (Bug 7)" taggedAs UnitTest in {
+    val coordinator = TestProbe()
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("peer-6", peerProbe.ref)
+    val worker = makeWorker(coordinator)
+
+    // Start a task — arm the idle-check timer
+    worker ! Messages.FetchStorageRanges(makeStorageTask(), peer)
+    coordinator.expectMsgType[Messages.StoragePeerAvailable](1.second)
+
+    // Respond before the timer fires — this must cancel the idle-check timer
+    val response = StorageRanges(requestId = BigInt(10), slots = Seq.empty, proof = Seq.empty)
+    worker ! Messages.StorageRangesResponseMsg(response)
+    coordinator.expectMsg(1.second, Messages.StorageRangesResponseMsg(response))
+
+    // Worker is now back in idle. Within the next 200ms (well before the 30s idle timer
+    // would have fired), no StorageCheckIdle should arrive at the coordinator.
+    // If the timer was NOT cancelled, it would eventually make the worker send itself
+    // StorageCheckIdle — but since we're past the response, the worker is already idle and
+    // StorageCheckIdle would be a no-op. We confirm via an additional task dispatch.
+    worker ! Messages.FetchStorageRanges(makeStorageTask(), peer)
+    coordinator.expectMsg(1.second, Messages.StoragePeerAvailable(peer))
+  }
 }

@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
-import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props}
+import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Cancellable, Props}
 
 import scala.concurrent.duration._
 
@@ -27,22 +27,31 @@ class StorageRangeWorker(
   import Messages._
 
   private var currentRequestId: Option[BigInt] = None
+  private var idleCheckTask: Option[Cancellable] = None
 
   override def receive: Receive = idle
+
+  override def postStop(): Unit = {
+    idleCheckTask.foreach(_.cancel())
+    super.postStop()
+  }
 
   def idle: Receive = { case FetchStorageRanges(_, peer) =>
     // Request work from coordinator by notifying it of peer availability
     coordinator ! StoragePeerAvailable(peer)
     context.become(working)
 
-    import context.dispatcher
-    context.system.scheduler.scheduleOnce(30.seconds, self, StorageCheckIdle)
+    idleCheckTask = Some(
+      context.system.scheduler.scheduleOnce(30.seconds, self, StorageCheckIdle)(context.dispatcher)
+    )
   }
 
   def working: Receive = {
     case StorageRangesResponseMsg(response) =>
       // Forward response to coordinator for processing
       coordinator ! StorageRangesResponseMsg(response)
+      idleCheckTask.foreach(_.cancel())
+      idleCheckTask = None
       currentRequestId = None
       context.become(idle)
 

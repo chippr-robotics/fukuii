@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.CachedReferenceCountedStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.FlatAccountStorage
 import com.chipprbots.ethereum.db.storage.HeapEntry
 import com.chipprbots.ethereum.db.storage.NodeStorage
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
@@ -30,10 +31,12 @@ import com.chipprbots.ethereum.utils.Config
 
 /** Unit tests for BytecodeRecoveryActor covering all recovery paths:
   *
-  * T1: No missing bytecodes → immediate RecoveryComplete, flag committed. T2: Missing present → coordinator receives
-  * StartByteCodeSync, completes normally. T3: Scan Future throws (trie root missing) → RecoveryComplete still fires.
-  * T4: Coordinator crashes mid-download → Terminated handler commits flag and fires RecoveryComplete. T5: No
-  * peer/progress arrives within timeout → abandon fires, RecoveryComplete emitted.
+  *   T1: No missing bytecodes → immediate RecoveryComplete, flag committed.
+  *   T2: Missing present → AddByteCodeTasks + NoMoreByteCodeTasks + full download cycle.
+  *   T3: Empty flat scan (no preloaded, empty FlatAccountStorage) → RecoveryComplete.
+  *   T4: Coordinator crashes mid-download → Terminated handler commits flag and fires RecoveryComplete.
+  *   T5: No peer/progress arrives within timeout → abandon fires, RecoveryComplete emitted.
+  *   T6: AddByteCodeTasks then NoMoreByteCodeTasks seal sent in order (Bug 2 regression test).
   */
 class BytecodeRecoveryActorSpec
     extends TestKit(ActorSystem("BytecodeRecoveryActorSpec_System"))
@@ -49,11 +52,12 @@ class BytecodeRecoveryActorSpec
   private def newConfig(abandonAfter: FiniteDuration = 10.minutes): SNAPSyncConfig =
     SNAPSyncConfig(storageRecoveryAbandonTimeout = abandonAfter)
 
-  private def newStorages(): (StateStorage, AppStateStorage, EvmCodeStorage) = {
+  private def newStorages(): (StateStorage, AppStateStorage, EvmCodeStorage, FlatAccountStorage) = {
     val ds = EphemDataSource()
     val nodeStorage = new NodeStorage(ds)
     val appStateStorage = new AppStateStorage(ds)
     val evmCodeStorage = new EvmCodeStorage(ds)
+    val flatAccounts = new FlatAccountStorage(EphemDataSource())
     val stateStorage = StateStorage(
       ArchivePruning,
       nodeStorage,
@@ -62,7 +66,7 @@ class BytecodeRecoveryActorSpec
         Some(CachedReferenceCountedStorage.saveOnlyNotificationHandler(nodeStorage))
       )
     )
-    (stateStorage, appStateStorage, evmCodeStorage)
+    (stateStorage, appStateStorage, evmCodeStorage, flatAccounts)
   }
 
   "BytecodeRecoveryActor" should
@@ -72,7 +76,7 @@ class BytecodeRecoveryActorSpec
     ) in {
       val syncController = TestProbe("syncController_t1")
       val networkPeerManager = TestProbe("networkPeerManager_t1")
-      val (stateStorage, appStateStorage, evmCodeStorage) = newStorages()
+      val (stateStorage, appStateStorage, evmCodeStorage, flatAccounts) = newStorages()
 
       val actor = system.actorOf(
         Props(
@@ -80,6 +84,7 @@ class BytecodeRecoveryActorSpec
             stateRoot = fakeStateRoot,
             stateStorage = stateStorage,
             evmCodeStorage = evmCodeStorage,
+            flatAccountStorage = flatAccounts,
             appStateStorage = appStateStorage,
             networkPeerManager = networkPeerManager.ref,
             syncController = syncController.ref,
@@ -97,14 +102,14 @@ class BytecodeRecoveryActorSpec
     }
 
   it should
-    "spawn coordinator, forward StartByteCodeSync, and emit RecoveryComplete on successful download" taggedAs (
+    "send AddByteCodeTasks + NoMoreByteCodeTasks and emit RecoveryComplete on download" taggedAs (
       UnitTest,
       SyncTest
     ) in {
       val syncController = TestProbe("syncController_t2")
       val networkPeerManager = TestProbe("networkPeerManager_t2")
       val coordinatorProbe = TestProbe("coordinator_t2")
-      val (stateStorage, appStateStorage, evmCodeStorage) = newStorages()
+      val (stateStorage, appStateStorage, evmCodeStorage, flatAccounts) = newStorages()
 
       val actor = system.actorOf(
         Props(
@@ -112,6 +117,7 @@ class BytecodeRecoveryActorSpec
             stateRoot = fakeStateRoot,
             stateStorage = stateStorage,
             evmCodeStorage = evmCodeStorage,
+            flatAccountStorage = flatAccounts,
             appStateStorage = appStateStorage,
             networkPeerManager = networkPeerManager.ref,
             syncController = syncController.ref,
@@ -123,7 +129,8 @@ class BytecodeRecoveryActorSpec
         )
       )
 
-      coordinatorProbe.expectMsgType[snap.actors.Messages.StartByteCodeSync](2.seconds)
+      coordinatorProbe.expectMsgType[snap.actors.Messages.AddByteCodeTasks](2.seconds)
+      coordinatorProbe.expectMsg(2.seconds, snap.actors.Messages.NoMoreByteCodeTasks)
 
       actor ! SNAPSyncController.ByteCodeSyncComplete
 
@@ -134,14 +141,15 @@ class BytecodeRecoveryActorSpec
     }
 
   it should
-    "emit RecoveryComplete even when the trie scan Future throws (trie root missing)" taggedAs (
+    "emit RecoveryComplete when flat scan finds no missing bytecodes (empty storage)" taggedAs (
       UnitTest,
       SyncTest
     ) in {
       val syncController = TestProbe("syncController_t3")
       val networkPeerManager = TestProbe("networkPeerManager_t3")
-      // Empty storages: stateRoot not present in MPT → mptStorage.get throws → Future Failure
-      val (stateStorage, appStateStorage, evmCodeStorage) = newStorages()
+      val coordinatorProbe = TestProbe("coordinator_t3")
+      // Empty FlatAccountStorage: seekFrom returns empty stream → 0 accounts → RecoveryComplete
+      val (stateStorage, appStateStorage, evmCodeStorage, flatAccounts) = newStorages()
 
       val actor = system.actorOf(
         Props(
@@ -149,17 +157,18 @@ class BytecodeRecoveryActorSpec
             stateRoot = fakeStateRoot,
             stateStorage = stateStorage,
             evmCodeStorage = evmCodeStorage,
+            flatAccountStorage = flatAccounts,
             appStateStorage = appStateStorage,
             networkPeerManager = networkPeerManager.ref,
             syncController = syncController.ref,
             pivotBlockNumber = BigInt(100),
-            snapSyncConfig = newConfig()
-            // preloadedMissingForTesting = None → real scan path → throws
+            snapSyncConfig = newConfig(),
+            coordinatorForTesting = Some(coordinatorProbe.ref)
+            // preloadedMissingForTesting = None → real flat scan → empty storage → RecoveryComplete
           )
         )
       )
 
-      // Future Failure → ScanResult(Seq.empty) → RecoveryComplete (graceful resilience)
       syncController.expectMsg(8.seconds, BytecodeRecoveryActor.RecoveryComplete)
       appStateStorage.isBytecodeRecoveryDone() shouldBe true
 
@@ -174,7 +183,7 @@ class BytecodeRecoveryActorSpec
       val syncController = TestProbe("syncController_t4")
       val networkPeerManager = TestProbe("networkPeerManager_t4")
       val coordinatorProbe = TestProbe("coordinator_t4")
-      val (stateStorage, appStateStorage, evmCodeStorage) = newStorages()
+      val (stateStorage, appStateStorage, evmCodeStorage, flatAccounts) = newStorages()
 
       val actor = system.actorOf(
         Props(
@@ -182,6 +191,7 @@ class BytecodeRecoveryActorSpec
             stateRoot = fakeStateRoot,
             stateStorage = stateStorage,
             evmCodeStorage = evmCodeStorage,
+            flatAccountStorage = flatAccounts,
             appStateStorage = appStateStorage,
             networkPeerManager = networkPeerManager.ref,
             syncController = syncController.ref,
@@ -193,7 +203,8 @@ class BytecodeRecoveryActorSpec
         )
       )
 
-      coordinatorProbe.expectMsgType[snap.actors.Messages.StartByteCodeSync](2.seconds)
+      coordinatorProbe.expectMsgType[snap.actors.Messages.AddByteCodeTasks](2.seconds)
+      coordinatorProbe.expectMsg(2.seconds, snap.actors.Messages.NoMoreByteCodeTasks)
 
       // Kill the coordinator — recovery actor watches it and should handle Terminated
       system.stop(coordinatorProbe.ref)
@@ -212,7 +223,7 @@ class BytecodeRecoveryActorSpec
       val syncController = TestProbe("syncController_t5")
       val networkPeerManager = TestProbe("networkPeerManager_t5")
       val coordinatorProbe = TestProbe("coordinator_t5")
-      val (stateStorage, appStateStorage, evmCodeStorage) = newStorages()
+      val (stateStorage, appStateStorage, evmCodeStorage, flatAccounts) = newStorages()
 
       val abandonAfter = 400.millis
 
@@ -222,6 +233,7 @@ class BytecodeRecoveryActorSpec
             stateRoot = fakeStateRoot,
             stateStorage = stateStorage,
             evmCodeStorage = evmCodeStorage,
+            flatAccountStorage = flatAccounts,
             appStateStorage = appStateStorage,
             networkPeerManager = networkPeerManager.ref,
             syncController = syncController.ref,
@@ -233,12 +245,45 @@ class BytecodeRecoveryActorSpec
         )
       )
 
-      coordinatorProbe.expectMsgType[snap.actors.Messages.StartByteCodeSync](2.seconds)
+      coordinatorProbe.expectMsgType[snap.actors.Messages.AddByteCodeTasks](2.seconds)
+      coordinatorProbe.expectMsg(2.seconds, snap.actors.Messages.NoMoreByteCodeTasks)
 
       // No ProgressBytecodesDownloaded → progressSeq stays 0 → CheckAbandon(0) fires and abandons
       syncController.expectMsg(abandonAfter * 4, BytecodeRecoveryActor.RecoveryComplete)
       appStateStorage.isBytecodeRecoveryDone() shouldBe true
 
       system.stop(actor)
+    }
+
+  it should
+    "send AddByteCodeTasks then NoMoreByteCodeTasks when tasks are present (Bug 2 fix)" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in {
+      val syncController = TestProbe("syncController_seal")
+      val networkPeerManager = TestProbe("networkPeerManager_seal")
+      val coordinatorProbe = TestProbe("coordinator_seal")
+      val (stateStorage, appStateStorage, evmCodeStorage, flatAccounts) = newStorages()
+
+      system.actorOf(
+        Props(
+          new BytecodeRecoveryActor(
+            stateRoot = fakeStateRoot,
+            stateStorage = stateStorage,
+            evmCodeStorage = evmCodeStorage,
+            flatAccountStorage = flatAccounts,
+            appStateStorage = appStateStorage,
+            networkPeerManager = networkPeerManager.ref,
+            syncController = syncController.ref,
+            pivotBlockNumber = BigInt(100),
+            snapSyncConfig = newConfig(),
+            preloadedMissingForTesting = Some(missingOne),
+            coordinatorForTesting = Some(coordinatorProbe.ref)
+          )
+        )
+      )
+
+      coordinatorProbe.expectMsgType[snap.actors.Messages.AddByteCodeTasks](2.seconds)
+      coordinatorProbe.expectMsg(2.seconds, snap.actors.Messages.NoMoreByteCodeTasks)
     }
 }

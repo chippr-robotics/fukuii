@@ -10,6 +10,7 @@ import org.apache.pekko.util.ByteString
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
+import scala.concurrent.duration._
 import scala.util.Failure
 import scala.util.Success
 
@@ -39,6 +40,8 @@ class HeadersFetcher(
 
   val log: Logger = context.log
   implicit val runtime: IORuntime = IORuntime.global
+
+  private var consecutiveEmptyResponses: Int = 0
 
   import HeadersFetcher._
 
@@ -99,13 +102,26 @@ class HeadersFetcher(
     val resp = makeRequest(Request.create(msg, BestPeer), HeadersFetcher.RetryHeadersRequest)
       .flatMap {
         case AdaptedMessage(_, ETH62BlockHeaders(headers)) if headers.isEmpty =>
-          log.debug("Empty BlockHeaders response. Retry in {}", syncConfig.syncRetryInterval)
-          IO.pure(HeadersFetcher.RetryHeadersRequest).delayBy(syncConfig.syncRetryInterval)
+          consecutiveEmptyResponses += 1
+          val baseMs  = syncConfig.syncRetryInterval.toMillis
+          val backoff = (baseMs * Math.pow(2, Math.min(consecutiveEmptyResponses - 1, 5))).toLong
+          val capped  = Math.min(backoff, 30_000L)
+          log.debug("Empty BlockHeaders response #{}, retry in {}ms", consecutiveEmptyResponses, capped)
+          IO.pure(HeadersFetcher.RetryHeadersRequest).delayBy(capped.millis)
         case AdaptedMessage(_, ETH66BlockHeaders(_, headers)) if headers.isEmpty =>
-          log.debug("Empty BlockHeaders response. Retry in {}", syncConfig.syncRetryInterval)
-          IO.pure(HeadersFetcher.RetryHeadersRequest).delayBy(syncConfig.syncRetryInterval)
+          consecutiveEmptyResponses += 1
+          val baseMs  = syncConfig.syncRetryInterval.toMillis
+          val backoff = (baseMs * Math.pow(2, Math.min(consecutiveEmptyResponses - 1, 5))).toLong
+          val capped  = Math.min(backoff, 30_000L)
+          log.debug("Empty BlockHeaders response #{}, retry in {}ms", consecutiveEmptyResponses, capped)
+          IO.pure(HeadersFetcher.RetryHeadersRequest).delayBy(capped.millis)
         case res =>
-          log.debug("Received non-empty headers response")
+          val old = consecutiveEmptyResponses
+          consecutiveEmptyResponses = 0
+          if (old > 0)
+            log.debug("Non-empty headers received — reset consecutive-empty counter from {} to 0", old)
+          else
+            log.debug("Received non-empty headers response")
           IO.pure(res)
       }
 

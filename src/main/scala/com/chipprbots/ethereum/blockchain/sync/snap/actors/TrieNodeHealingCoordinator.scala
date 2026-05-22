@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
-import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props, SupervisorStrategy, OneForOneStrategy}
+import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Cancellable, Props, SupervisorStrategy, OneForOneStrategy}
 import org.apache.pekko.actor.SupervisorStrategy._
 import org.apache.pekko.util.ByteString
 import org.bouncycastle.util.encoders.Hex
@@ -8,6 +8,7 @@ import org.bouncycastle.util.encoders.Hex
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
+import scala.util.{Failure, Success}
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
@@ -33,7 +34,8 @@ class TrieNodeHealingCoordinator(
     batchSize: Int,
     snapSyncController: ActorRef,
     concurrency: Int,
-    healingWriterEcOverride: Option[ExecutionContext] = None
+    healingWriterEcOverride: Option[ExecutionContext] = None,
+    stagnationCheckInterval: FiniteDuration = 2.minutes
 ) extends Actor
     with ActorLogging {
 
@@ -204,6 +206,9 @@ class TrieNodeHealingCoordinator(
 
   // Internal message for async frontier rebuild completion (crash-recovery BFS)
   private case class FrontierRebuilt(entries: Seq[HealingEntry])
+  private case class FrontierRebuildFailed(root: ByteString)
+
+  private var healingCheckTask: Option[Cancellable] = None
 
   /** Synchronous flush — used only for final completion flush (small buffer, safe to block). */
   private def flushRawNodesSync(): Unit =
@@ -237,9 +242,19 @@ class TrieNodeHealingCoordinator(
 
   override def preStart(): Unit = {
     log.info(s"TrieNodeHealingCoordinator starting (concurrency=$concurrency)")
-    context.system.scheduler.scheduleWithFixedDelay(2.minutes, 2.minutes, self, HealingStagnationCheck)(
-      context.dispatcher
+    healingCheckTask = Some(
+      context.system.scheduler.scheduleWithFixedDelay(stagnationCheckInterval, stagnationCheckInterval, self, HealingStagnationCheck)(
+        context.dispatcher
+      )
     )
+    log.debug("[heal] stagnation check timer scheduled (interval={})", stagnationCheckInterval)
+  }
+
+  override def postStop(): Unit = {
+    healingCheckTask.foreach(_.cancel())
+    healingCheckTask = None
+    log.debug("[heal] stagnation check timer cancelled in postStop")
+    super.postStop()
   }
 
   override val supervisorStrategy: SupervisorStrategy =
@@ -264,6 +279,7 @@ class TrieNodeHealingCoordinator(
         val selfRef = self
         val ec = healingWriterEc
         import scala.concurrent.Future
+        log.info(s"[heal-restart] starting DFS frontier rebuild from root ${Hex.toHexString(root.take(8).toArray)}")
         Future {
           val frontier = mutable.Buffer.empty[HealingEntry]
           val visited = mutable.Set.empty[ByteString]
@@ -276,7 +292,13 @@ class TrieNodeHealingCoordinator(
             batch => selfRef ! FrontierRebuilt(batch)
           )
           if (frontier.nonEmpty) selfRef ! FrontierRebuilt(frontier.toSeq)
-        }(ec)
+        }(ec).onComplete {
+          case Success(_) =>
+            log.debug("[heal-restart] DFS complete — frontier rebuilt, resuming healing")
+          case Failure(ex) =>
+            log.error(ex, "[heal-restart] DFS frontier rebuild failed — seeding root as fallback")
+            selfRef ! FrontierRebuildFailed(root)
+        }(context.dispatcher)
       } else {
         // ARCH-ROOT-SEED: Fresh start — seed root and let inline discovery populate the queue.
         log.info(
@@ -299,6 +321,12 @@ class TrieNodeHealingCoordinator(
       queueNodes(entries.map(e => (e.pathset, e.hash)))
       lastHealedAtMs = System.currentTimeMillis()
       tryRedispatchPendingTasks()
+
+    case FrontierRebuildFailed(root) =>
+      log.error("[heal-restart] DFS failed — seeding root as fallback to allow partial healing")
+      val emptyPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+      queueNodes(Seq((Seq(emptyPath), root)))
+      lastHealedAtMs = System.currentTimeMillis()
 
     case QueueMissingNodes(nodes) =>
       log.info(s"Queuing ${nodes.size} missing nodes for healing")
@@ -1092,7 +1120,8 @@ object TrieNodeHealingCoordinator {
       batchSize: Int,
       snapSyncController: ActorRef,
       concurrency: Int = 16,
-      healingWriterEcOverride: Option[ExecutionContext] = None
+      healingWriterEcOverride: Option[ExecutionContext] = None,
+      stagnationCheckInterval: FiniteDuration = 2.minutes
   ): Props =
     Props(
       new TrieNodeHealingCoordinator(
@@ -1103,7 +1132,8 @@ object TrieNodeHealingCoordinator {
         batchSize,
         snapSyncController,
         concurrency,
-        healingWriterEcOverride
+        healingWriterEcOverride,
+        stagnationCheckInterval
       )
     )
 }

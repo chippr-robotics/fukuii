@@ -3,13 +3,16 @@ package com.chipprbots.ethereum.blockchain.sync
 import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Cancellable, Props, Terminated}
 import org.apache.pekko.util.ByteString
 
+import cats.effect.IO
+import cats.effect.unsafe.implicits.global
+
 import scala.collection.mutable
-import scala.concurrent.Future
+import scala.concurrent.{ExecutionContext, Future, blocking}
 import scala.concurrent.duration._
 
 import scala.util.{Success, Failure}
 
-import com.chipprbots.ethereum.db.storage.{AppStateStorage, FlatSlotStorage, StateStorage}
+import com.chipprbots.ethereum.db.storage.{AppStateStorage, FlatAccountStorage, FlatSlotStorage, StateStorage}
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt._
 import com.chipprbots.ethereum.mpt.MptVisitors._
@@ -18,33 +21,30 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors
 
 /** Storage recovery actor for Bug 20 hardening.
   *
-  * On startup after SNAP sync, walks the state trie to find contract accounts whose storage tries are missing from
-  * MptStorage (due to the Bug 20 phase handoff timeout). Collects missing (accountHash, storageRoot) pairs and
-  * downloads them via SNAP protocol using StorageRangeCoordinator.
-  *
-  * Runs concurrently with BytecodeRecoveryActor — they target different storage backends (MptStorage vs EvmCodeStorage)
-  * with no data dependency.
+  * Performs a sequential forward scan of FlatAccountStorage (seekFrom) — O(n) sequential
+  * RocksDB reads vs the old MPT walk's random reads. Downloads missing storage tries
+  * concurrently with the scan via StorageRangeCoordinator.
   *
   * Lifecycle:
-  *   1. Walk state trie, find contracts with missing storage tries 2. If none missing → mark recovery done, report to
-  *      SyncController 3. If missing → download via StorageRangeCoordinator, then mark done
+  *   1. StartScan: create coordinator eagerly, launch flat scan on recovery-scan-dispatcher
+  *   2. ScanBatch events stream tasks to the coordinator as they are found
+  *   3. ScanComplete: seal the coordinator with NoMoreStorageTasks, become downloading
+  *   4. StorageRangeSyncComplete: mark recovery done, report to SyncController
   */
 class StorageRecoveryActor(
     stateRoot: ByteString,
     stateStorage: StateStorage,
     appStateStorage: AppStateStorage,
     flatSlotStorage: FlatSlotStorage,
+    flatAccountStorage: FlatAccountStorage,
     networkPeerManager: ActorRef,
     syncController: ActorRef,
     pivotBlockNumber: BigInt,
     snapSyncConfig: SNAPSyncConfig,
-    // Test hook: when set, the actor skips the real scan and enters `downloading` with
-    // the supplied missing list directly. Production callers always leave this as None
-    // and the factory method doesn't expose it.
+    // Test hook: when set, the actor skips the real scan and enters `receive` with a ScanResult.
     preloadedMissingForTesting: Option[Seq[(ByteString, ByteString)]] = None,
-    // Test hook: when set, the downloading state uses this ref instead of spawning a
-    // real StorageRangeCoordinator (which needs network wiring / StateStorage /
-    // FlatSlotStorage that a pure unit test doesn't want to simulate).
+    // Test hook: when set, the scanning/downloading states use this ref instead of spawning
+    // a real StorageRangeCoordinator.
     coordinatorForTesting: Option[ActorRef] = None
 ) extends Actor
     with ActorLogging {
@@ -52,64 +52,39 @@ class StorageRecoveryActor(
   import StorageRecoveryActor._
   import context.dispatcher
 
+  private val scanEc: ExecutionContext =
+    context.system.dispatchers.lookup("recovery-scan-dispatcher")
+
   override def preStart(): Unit = preloadedMissingForTesting match {
     case Some(missing) =>
       self ! ScanResult(missing)
     case None =>
       log.info(
-        s"StorageRecoveryActor starting: scanning state trie for missing contract storage " +
-          s"(stateRoot=${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}...)"
+        s"[storage-recovery] starting flat scan " +
+          s"(stateRoot=${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}..., pivotBlock=$pivotBlockNumber)"
       )
       self ! StartScan
   }
 
   override def receive: Receive = {
     case StartScan =>
-      Future {
-        scanForMissingStorage()
-      }.onComplete {
-        case Success(result) => self ! ScanResult(result)
-        case Failure(ex) =>
-          log.error(ex, "Storage recovery scan failed")
-          self ! ScanResult(Seq.empty)
-      }
+      val coordinator = makeCoordinator()
+      context.watch(coordinator)
+      launchFlatScan()
+      context.become(scanning(coordinator, sentSoFar = 0))
 
+    // Legacy path for preloadedMissingForTesting — sends all tasks at once and seals.
     case ScanResult(missing) =>
       if (missing.isEmpty) {
-        log.info("Storage recovery: all contract storage tries present. Marking recovery complete.")
+        log.info("[storage-recovery] [scan] complete — no missing storage found")
         appStateStorage.storageRecoveryDone().commit()
         syncController ! RecoveryComplete
         context.stop(self)
       } else {
-        log.warning(s"Storage recovery: found ${missing.size} contracts with missing storage. Starting download...")
+        log.warning(s"[storage-recovery] found ${missing.size} contracts with missing storage. Starting download...")
         implicit val scheduler: org.apache.pekko.actor.Scheduler = context.system.scheduler
-
-        val coordinator = coordinatorForTesting.getOrElse {
-          val requestTracker = new snap.SNAPRequestTracker()
-          val mptStorage = stateStorage.getBackingStorage(pivotBlockNumber)
-          context.actorOf(
-            actors.StorageRangeCoordinator
-              .props(
-                stateRoot = stateRoot,
-                networkPeerManager = networkPeerManager,
-                requestTracker = requestTracker,
-                mptStorage = mptStorage,
-                flatSlotStorage = flatSlotStorage,
-                maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
-                maxInFlightRequests = snapSyncConfig.storageConcurrency,
-                requestTimeout = snapSyncConfig.timeout,
-                snapSyncController = self,
-                initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
-                minResponseBytes = snapSyncConfig.storageMinResponseBytes
-              )
-              .withDispatcher("sync-dispatcher"),
-            "storage-recovery-coordinator"
-          )
-        }
-
+        val coordinator = makeCoordinator()
         context.watch(coordinator)
-
-        // Send tasks in batches of 10K (same as SNAPSyncController)
         val batchSize = 10000
         var totalSent = 0
         missing.grouped(batchSize).foreach { batch =>
@@ -119,17 +94,131 @@ class StorageRecoveryActor(
           coordinator ! actors.Messages.AddStorageTasks(tasks)
           totalSent += tasks.size
         }
-        log.info(s"Sent $totalSent storage tasks to coordinator in ${(totalSent + batchSize - 1) / batchSize} batches")
-
+        log.info(s"[storage-recovery] sent $totalSent storage tasks to coordinator in ${(totalSent + batchSize - 1) / batchSize} batches")
+        coordinator ! actors.Messages.NoMoreStorageTasks
         context.become(downloading(coordinator, missing.size))
       }
   }
 
+  private def makeCoordinator(): ActorRef =
+    coordinatorForTesting.getOrElse {
+      implicit val scheduler: org.apache.pekko.actor.Scheduler = context.system.scheduler
+      val requestTracker = new snap.SNAPRequestTracker()
+      val mptStorage = stateStorage.getBackingStorage(pivotBlockNumber)
+      context.actorOf(
+        actors.StorageRangeCoordinator
+          .props(
+            stateRoot = stateRoot,
+            networkPeerManager = networkPeerManager,
+            requestTracker = requestTracker,
+            mptStorage = mptStorage,
+            flatSlotStorage = flatSlotStorage,
+            maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
+            maxInFlightRequests = snapSyncConfig.storageConcurrency,
+            requestTimeout = snapSyncConfig.timeout,
+            snapSyncController = self,
+            initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
+            minResponseBytes = snapSyncConfig.storageMinResponseBytes
+          )
+          .withDispatcher("sync-dispatcher"),
+        "storage-recovery-coordinator"
+      )
+    }
+
+  private def launchFlatScan(batchFlushSize: Int = 10_000): Unit = {
+    val selfRef = self
+    val stRoot = stateRoot
+    val mptStorage = stateStorage.getBackingStorage(pivotBlockNumber)
+    val fas = flatAccountStorage
+    Future {
+      blocking {
+        val seenRoots = mutable.HashSet.empty[ByteString]
+        val pending = mutable.ArrayBuffer.empty[(ByteString, ByteString)]
+        var accounts = 0L
+        var contracts = 0L
+        var checked = 0L
+        var lastNanos = System.nanoTime()
+
+        fas.seekFrom(ByteString.empty)
+          .evalMap {
+            case Right((accountHash, rlpBytes)) => IO {
+              accounts += 1
+              if (accounts % 1_000_000 == 0) {
+                val rate = (1_000_000 / ((System.nanoTime() - lastNanos) / 1e9)).toLong
+                log.info(
+                  s"[storage-recovery] [scan] $accounts accounts | $contracts contracts | " +
+                    s"$checked unique roots checked | ${pending.size} pending | $rate accts/s"
+                )
+                lastNanos = System.nanoTime()
+              }
+              Account(rlpBytes) match {
+                case Success(acct) if acct.storageRoot != Account.EmptyStorageRootHash =>
+                  contracts += 1
+                  if (!seenRoots.contains(acct.storageRoot)) {
+                    seenRoots += acct.storageRoot
+                    checked += 1
+                    try mptStorage.get(acct.storageRoot.toArray)
+                    catch {
+                      case _: MerklePatriciaTrie.MPTException =>
+                        pending += ((accountHash, acct.storageRoot))
+                        if (pending.size >= batchFlushSize) {
+                          selfRef ! ScanBatch(pending.toSeq)
+                          pending.clear()
+                        }
+                    }
+                  }
+                case _ =>
+              }
+            }
+            case Left(err) => IO(log.warning(s"[storage-recovery] [scan] iteration error — skipping: $err"))
+          }
+          .compile
+          .drain
+          .unsafeRunSync()
+
+        selfRef ! ScanBatch(pending.toSeq)
+      }
+    }(scanEc).onComplete {
+      case Success(_) => selfRef ! ScanComplete
+      case Failure(ex) =>
+        log.error(ex, "[storage-recovery] [scan] flat scan failed")
+        selfRef ! ScanComplete
+    }(context.dispatcher)
+  }
+
+  private def scanning(coordinator: ActorRef, sentSoFar: Int): Receive = {
+    case ScanBatch(batch) if batch.isEmpty =>
+      // no-op
+
+    case ScanBatch(batch) =>
+      val tasks = batch.map { case (accountHash, storageRoot) =>
+        StorageTask.createStorageTask(accountHash, storageRoot)
+      }
+      coordinator ! actors.Messages.AddStorageTasks(tasks)
+      context.become(scanning(coordinator, sentSoFar + tasks.size))
+
+    case ScanComplete if sentSoFar == 0 =>
+      log.info("[storage-recovery] [scan] complete — no missing storage found")
+      appStateStorage.storageRecoveryDone().commit()
+      syncController ! RecoveryComplete
+      context.stop(self)
+
+    case ScanComplete =>
+      coordinator ! actors.Messages.NoMoreStorageTasks
+      log.info(s"[storage-recovery] [scan] complete — $sentSoFar missing storage roots queued for download")
+      context.become(downloading(coordinator, sentSoFar))
+
+    case actors.Messages.StoragePeerAvailable(peer) =>
+      coordinator ! actors.Messages.StoragePeerAvailable(peer)
+
+    case Terminated(`coordinator`) =>
+      log.error("[storage-recovery] coordinator crashed during scan — marking done and unblocking sync")
+      appStateStorage.storageRecoveryDone().commit()
+      syncController ! RecoveryComplete
+      context.stop(self)
+  }
+
   private def downloading(coordinator: ActorRef, expectedCount: Int): Receive = {
-    // A strictly-increasing counter is more robust than a wall-clock timestamp:
-    // System.currentTimeMillis() can collide if two progress updates land in the same
-    // ms (then the CheckAbandon equality check would false-fire), and wall-clock jumps
-    // would make stalledForSeconds misleading. Counter + nanoTime covers both axes.
     var progressSeq = 0L
     var lastProgressNanos = System.nanoTime()
     var unservableCount = 0
@@ -156,7 +245,7 @@ class StorageRecoveryActor(
         coordinator ! actors.Messages.StoragePeerAvailable(peer)
 
       case SNAPSyncController.StorageRangeSyncComplete =>
-        log.info(s"Storage recovery complete: downloaded storage for $expectedCount contracts")
+        log.info(s"[storage-recovery] [download] complete — recovered $expectedCount storage tries")
         abandonTimer.foreach(_.cancel())
         appStateStorage.storageRecoveryDone().commit()
         syncController ! RecoveryComplete
@@ -165,18 +254,11 @@ class StorageRecoveryActor(
       case SNAPSyncController.ProgressStorageSlotsSynced(_) =>
         recordProgress()
 
-      // Bug 30b: coordinator reports every peer stateless for the stored pivot root. In SNAP
-      // sync this would trigger `refreshPivotInPlace` on the controller; the recovery path has
-      // no equivalent. Instead of looping forever, count the events and bail out after
-      // `abandonAfter` of zero slot progress. Regular sync will subsequently fetch missing
-      // trie subtrees on-demand via GetTrieNodes when block execution reaches them.
       case _: SNAPSyncController.PivotStateUnservable =>
         unservableCount += 1
-        // Rate-limit: log first 3 events, then every 100th. Avoids flooding logs when
-        // the coordinator is hammered with unservable responses in the failure mode.
         if (unservableCount <= 3 || unservableCount % 100 == 0) {
           log.info(
-            "Storage recovery: coordinator reports stored pivot root unservable ({} events, " +
+            "[storage-recovery] coordinator reports stored pivot root unservable ({} events, " +
               "no progress for {}s). Will abandon after {}s if this persists.",
             unservableCount,
             (System.nanoTime() - lastProgressNanos) / 1_000_000_000L,
@@ -188,9 +270,8 @@ class StorageRecoveryActor(
       case CheckAbandon(progressAtSchedule) =>
         if (progressAtSchedule == progressSeq) {
           log.warning(
-            "Storage recovery abandoned: no slot progress for {}s against stored pivot root after {} " +
-              "unservable events. Regular sync will fetch remaining contract storage on-demand via " +
-              "GetTrieNodes when block execution needs it.",
+            "[storage-recovery] abandoning: no slot progress for {}s, {} unservable events — " +
+              "on-demand GetTrieNodes will cover remainder",
             abandonAfter.toSeconds,
             unservableCount
           )
@@ -198,90 +279,27 @@ class StorageRecoveryActor(
           syncController ! RecoveryComplete
           context.stop(self)
         } else {
-          // Progress happened between scheduling and firing — reset.
           abandonTimer = None
         }
 
       case Terminated(`coordinator`) =>
-        log.error("StorageRangeCoordinator crashed unexpectedly. Marking storage recovery done to unblock sync.")
+        log.error("[storage-recovery] coordinator crashed — marking done and unblocking sync")
         abandonTimer.foreach(_.cancel())
         appStateStorage.storageRecoveryDone().commit()
         syncController ! RecoveryComplete
         context.stop(self)
 
-      case msg => coordinator.forward(msg) // Forward SNAP protocol responses to coordinator
+      case msg => coordinator.forward(msg)
     }
-  }
-
-  /** Walk the state trie and collect (accountHash, storageRoot) for contracts whose storage tries are missing from
-    * MptStorage.
-    */
-  private def scanForMissingStorage(): Seq[(ByteString, ByteString)] = {
-    val mptStorage = stateStorage.getBackingStorage(pivotBlockNumber)
-    val rootNode = mptStorage.get(stateRoot.toArray)
-
-    val missing = mutable.ArrayBuffer.empty[(ByteString, ByteString)]
-    val seenRoots = mutable.HashSet.empty[ByteString]
-    var accountCount = 0L
-    var contractCount = 0L
-    var checkedCount = 0L
-
-    val onLeaf: (ByteString, LeafNode) => Unit = { (accountHash, leafNode) =>
-      accountCount += 1
-      if (accountCount % 1_000_000 == 0) {
-        log.info(
-          s"Storage recovery scan: $accountCount accounts, $contractCount contracts, " +
-            s"$checkedCount checked, ${missing.size} missing"
-        )
-      }
-
-      Account(leafNode.value) match {
-        case Success(account) =>
-          if (account.storageRoot != Account.EmptyStorageRootHash) {
-            contractCount += 1
-            if (!seenRoots.contains(account.storageRoot)) {
-              seenRoots += account.storageRoot
-              checkedCount += 1
-              // Check if the storage root node exists in MptStorage
-              try
-                mptStorage.get(account.storageRoot.toArray)
-              // Storage root exists — may be incomplete deeper, but the root is present
-              catch {
-                case _: MerklePatriciaTrie.MPTException =>
-                  missing += ((accountHash, account.storageRoot))
-              }
-            }
-          }
-        case Failure(_) => // Skip malformed account RLP
-      }
-    }
-
-    try {
-      val visitor = new PathTrackingLeafWalkVisitor(mptStorage, ByteString.empty, onLeaf)
-      MptTraversals.dispatch(rootNode, visitor)
-    } catch {
-      case e: MerklePatriciaTrie.MPTException =>
-        log.error(
-          e,
-          s"Trie walk failed at account $accountCount — partial results: ${missing.size} missing storage tries"
-        )
-    }
-
-    log.info(
-      s"Storage recovery scan complete: $accountCount accounts, $contractCount contracts, " +
-        s"$checkedCount unique storage roots checked, ${missing.size} missing"
-    )
-    missing.toSeq
   }
 }
 
 object StorageRecoveryActor {
   private case object StartScan
   private case class ScanResult(missingStorage: Seq[(ByteString, ByteString)])
-  // Delayed self-ping used by Bug 30b abandon path. Carries the progress counter that was
-  // current when the timer was armed; if the actor's current progressSeq still matches on
-  // fire, nothing has moved in the interim and we give up. Package-private so the spec
-  // can construct it directly and assert the fire/cancel logic.
+  private[sync] case class ScanBatch(batch: Seq[(ByteString, ByteString)])
+  private[sync] case object ScanComplete
+  // Package-private so specs can construct it and assert the fire/cancel logic.
   private[sync] case class CheckAbandon(progressAtSchedule: Long)
 
   /** Sent to SyncController when recovery is complete (or skipped) */
@@ -292,6 +310,7 @@ object StorageRecoveryActor {
       stateStorage: StateStorage,
       appStateStorage: AppStateStorage,
       flatSlotStorage: FlatSlotStorage,
+      flatAccountStorage: FlatAccountStorage,
       networkPeerManager: ActorRef,
       syncController: ActorRef,
       pivotBlockNumber: BigInt,
@@ -303,6 +322,7 @@ object StorageRecoveryActor {
         stateStorage,
         appStateStorage,
         flatSlotStorage,
+        flatAccountStorage,
         networkPeerManager,
         syncController,
         pivotBlockNumber,

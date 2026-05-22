@@ -115,4 +115,25 @@ class TrieNodeHealingWorkerSpec
     worker ! Messages.FetchTrieNodes(makeHealingTask(), peer)
     coordinator.expectMsg(1.second, Messages.HealingPeerAvailable(peer))
   }
+
+  it should "cancel the idle-check timer on TrieNodesResponseMsg so no spurious HealingCheckIdle fires (Bug 7)" taggedAs UnitTest in {
+    val coordinator = TestProbe()
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("heal-peer-6", peerProbe.ref)
+    val worker = makeWorker(coordinator)
+
+    // Start a task — arms the idle-check timer
+    worker ! Messages.FetchTrieNodes(makeHealingTask(), peer)
+    coordinator.expectMsgType[Messages.HealingPeerAvailable](1.second)
+
+    // Respond before the timer fires — this must cancel the idle-check timer
+    val response = TrieNodes(requestId = BigInt(10), nodes = Seq.empty)
+    worker ! Messages.TrieNodesResponseMsg(response)
+    coordinator.expectMsg(1.second, Messages.TrieNodesResponseMsg(response))
+
+    // Worker is back in idle. A new task should be accepted cleanly,
+    // confirming no spurious HealingCheckIdle transition occurred.
+    worker ! Messages.FetchTrieNodes(makeHealingTask(), peer)
+    coordinator.expectMsg(1.second, Messages.HealingPeerAvailable(peer))
+  }
 }

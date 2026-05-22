@@ -1,6 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
-import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props, SupervisorStrategy, OneForOneStrategy}
+import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Cancellable, Props, SupervisorStrategy, OneForOneStrategy}
 import org.apache.pekko.actor.SupervisorStrategy._
 import org.apache.pekko.util.ByteString
 
@@ -73,7 +73,8 @@ class StorageRangeCoordinator(
     // worst-case storage-processing footprint is `maxConcurrentStorageAccounts × 8 MiB`. Default
     // 256 → ~2 GiB ceiling, independent of chain size. Raise via sync.conf if the peer pool
     // can justify a larger working set; lower if running with smaller `-Xmx`.
-    maxConcurrentStorageAccounts: Int = 256
+    maxConcurrentStorageAccounts: Int = 256,
+    completionCheckInterval: FiniteDuration = 30.seconds
 ) extends Actor
     with ActorLogging {
 
@@ -597,8 +598,13 @@ class StorageRangeCoordinator(
     }
   }
 
+  private var storageCheckTask: Option[Cancellable] = None
+
   /** Discard any in-memory streaming tries and flush the tail of accumulated flat-slot writes when the actor stops. */
   override def postStop(): Unit = {
+    storageCheckTask.foreach(_.cancel())
+    storageCheckTask = None
+    log.debug("[storage-coord] periodic completion check timer cancelled in postStop")
     // Discard any in-memory streaming tries — already-flushed nodes stay on disk
     // (content-addressed; healing reconciles).
     if (pendingAccountTries.nonEmpty) {
@@ -639,8 +645,12 @@ class StorageRangeCoordinator(
     log.info(s"StorageRangeCoordinator starting (concurrency=$maxInFlightRequests, batchSize=$maxAccountsPerBatch)")
     // Periodic liveness: re-evaluate dispatch and pivot refresh even when no events flow.
     // Without this, ghost peers cause a silent stall with no incoming messages to trigger re-evaluation.
-    import context.dispatcher
-    context.system.scheduler.scheduleWithFixedDelay(30.seconds, 30.seconds, self, StorageCheckCompletion)
+    storageCheckTask = Some(
+      context.system.scheduler.scheduleWithFixedDelay(completionCheckInterval, completionCheckInterval, self, StorageCheckCompletion)(
+        context.dispatcher
+      )
+    )
+    log.debug("[storage-coord] periodic completion check timer scheduled (interval={})", completionCheckInterval)
   }
 
   override val supervisorStrategy: SupervisorStrategy =
@@ -1447,7 +1457,8 @@ object StorageRangeCoordinator {
       useStackTrie: Boolean = false,
       backpressureHighWatermark: Int = 100000,
       backpressureLowWatermark: Int = 50000,
-      maxConcurrentStorageAccounts: Int = 256
+      maxConcurrentStorageAccounts: Int = 256,
+      completionCheckInterval: FiniteDuration = 30.seconds
   ): Props =
     Props(
       new StorageRangeCoordinator(
@@ -1469,7 +1480,8 @@ object StorageRangeCoordinator {
         useStackTrie = useStackTrie,
         backpressureHighWatermark = backpressureHighWatermark,
         backpressureLowWatermark = backpressureLowWatermark,
-        maxConcurrentStorageAccounts = maxConcurrentStorageAccounts
+        maxConcurrentStorageAccounts = maxConcurrentStorageAccounts,
+        completionCheckInterval = completionCheckInterval
       )
     )
 

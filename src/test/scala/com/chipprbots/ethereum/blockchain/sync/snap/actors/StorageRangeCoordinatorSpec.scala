@@ -854,4 +854,44 @@ class StorageRangeCoordinatorSpec
     // After commit, all nodes have been emitted to the accumulator.
     accumulated.nonEmpty shouldBe true
   }
+
+  it should "cancel the periodic StorageCheckCompletion timer in postStop and produce no dead letters (Bug 6)" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("timer-cancel-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val shortInterval = 150.millis
+
+    val coordinator = system.actorOf(
+      StorageRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+        maxAccountsPerBatch = 8,
+        maxInFlightRequests = 8,
+        requestTimeout = 30.seconds,
+        snapSyncController = snapSyncController.ref,
+        completionCheckInterval = shortInterval
+      )
+    )
+
+    val deadLetterSubscriber = TestProbe()
+    system.eventStream.subscribe(deadLetterSubscriber.ref, classOf[org.apache.pekko.actor.DeadLetter])
+
+    // Let at least one tick fire to confirm the timer is running
+    Thread.sleep(shortInterval.toMillis * 2)
+
+    val watcher = TestProbe()
+    watcher.watch(coordinator)
+    system.stop(coordinator)
+    watcher.expectTerminated(coordinator, 3.seconds)
+
+    // If postStop did NOT cancel the timer, the next tick would fire a dead letter
+    deadLetterSubscriber.expectNoMessage(shortInterval * 2)
+    system.eventStream.unsubscribe(deadLetterSubscriber.ref)
+  }
 }

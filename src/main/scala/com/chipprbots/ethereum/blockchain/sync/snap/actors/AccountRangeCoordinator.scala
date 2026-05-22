@@ -22,7 +22,8 @@ import scala.concurrent.duration._
 import scala.util.{Success, Failure}
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
-import com.chipprbots.ethereum.db.storage.{DeferredWriteMptStorage, MptStorage}
+import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+import com.chipprbots.ethereum.db.storage.{DeferredWriteMptStorage, FlatAccountStorage, MptStorage}
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
@@ -81,7 +82,8 @@ class AccountRangeCoordinator(
       * opt-in migration path; the legacy path will be removed in Step 5 of the plan once the StackTrie path is
       * validated on Sepolia + Mordor.
       */
-    useStackTrie: Boolean = false
+    useStackTrie: Boolean = false,
+    flatAccountStorage: FlatAccountStorage
 ) extends Actor
     with ActorLogging {
 
@@ -547,6 +549,12 @@ class AccountRangeCoordinator(
   // `private[actors]` so the test spec can verify the per-task lifecycle.
   private[actors] val taskStackTries: mutable.Map[ByteString, SnapHashTrie] = mutable.Map.empty
 
+  // Accumulator for flat account entries to be written to FlatAccountStorage.
+  // Flushed async on accountTrieEc alongside the MPT flush (Legacy path) or
+  // after each task commit (StackTrie path). Cleared on PivotRefreshed.
+  private[actors] val pendingFlatAccounts =
+    mutable.ArrayBuffer.empty[(ByteString, ByteString)] // (accountHash, rlpEncodedAccount)
+
   override def preStart(): Unit = {
     if (skippedTasks.nonEmpty) {
       log.info(
@@ -572,6 +580,17 @@ class AccountRangeCoordinator(
 
   override def postStop(): Unit = {
     stallCheckTask.foreach(_.cancel())
+    // Flush any remaining flat account entries synchronously (actor stopping — no async).
+    if (pendingFlatAccounts.nonEmpty) {
+      try {
+        flatAccountStorage.putAccountsBatch(pendingFlatAccounts.toSeq).commit()
+        log.info(s"[flat-accounts] postStop: flushed ${pendingFlatAccounts.size} remaining entries")
+      } catch {
+        case e: Exception =>
+          log.error(e, s"[flat-accounts] postStop: failed to flush ${pendingFlatAccounts.size} remaining entries")
+      }
+      pendingFlatAccounts.clear()
+    }
     // Send final progress snapshot so controller can resume from saved positions on restart
     sendProgressSnapshot()
     // Close and delete temporary files.
@@ -633,6 +652,10 @@ class AccountRangeCoordinator(
       // land in pendingTasks first, then pendingTasks.foreach re-tags them to the new root.
       drainActiveTasks(s"pivot refresh to ${newStateRoot.take(4).toHex}")
       pendingTasks.foreach(_.rootHash = newStateRoot)
+      if (pendingFlatAccounts.nonEmpty) {
+        log.debug(s"[flat-accounts] cleared ${pendingFlatAccounts.size} pending entries on PivotRefreshed")
+        pendingFlatAccounts.clear()
+      }
 
       // Clear stateless AND snapless tracking — peers get a fresh slate at the new root.
       //
@@ -1314,17 +1337,20 @@ class AccountRangeCoordinator(
         // Inserts are O(depth) memory + O(1) amortised compute; emitted nodes
         // batch-flush to RocksDB inside SnapHashTrie at the 8 MiB threshold,
         // so we never accumulate a multi-GiB in-memory pivot trie.
-        import com.chipprbots.ethereum.domain.Account.accountSerializer
         val trie = getOrCreateTaskStackTrie(task)
         chunk.foreach { case (accountHash, account) =>
-          trie.update(accountHash.toArray, accountSerializer.toBytes(account))
+          val rlp = Account.accountSerializer.toBytes(account)
+          trie.update(accountHash.toArray, rlp)
+          pendingFlatAccounts += ((accountHash, ByteString.fromArrayUnsafe(rlp)))
         }
       } else {
         // Legacy MPT path: single global trie over DeferredWriteMptStorage.
         // Buffers everything in memory until threshold-based flush.
         var currentTrie = stateTrie
         chunk.foreach { case (accountHash, account) =>
+          val rlp = Account.accountSerializer.toBytes(account)
           currentTrie = currentTrie.put(accountHash, account)
+          pendingFlatAccounts += ((accountHash, ByteString.fromArrayUnsafe(rlp)))
         }
         stateTrie = currentTrie
       }
@@ -1373,6 +1399,20 @@ class AccountRangeCoordinator(
                   s"(${completedTasks.size}/$concurrency ranges done, $accountsDownloaded accounts total, " +
                   s"fragment root ${fragmentRoot.take(4).toArray.map("%02x".format(_)).mkString})"
               )
+            }
+            // StackTrie path: flush accumulated flat accounts for this task async on accountTrieEc.
+            if (pendingFlatAccounts.nonEmpty) {
+              val flatBatch = pendingFlatAccounts.toSeq
+              pendingFlatAccounts.clear()
+              val fas = flatAccountStorage
+              Future {
+                blocking { fas.putAccountsBatch(flatBatch).commit() }
+              }(accountTrieEc).onComplete {
+                case Failure(ex) =>
+                  log.error(ex, s"[flat-accounts] async flush failed (StackTrie path, ${flatBatch.size} entries)")
+                case _ =>
+                  log.debug(s"[flat-accounts] flushed ${flatBatch.size} account entries to FlatAccountStorage")
+              }(context.dispatcher)
             }
           } else {
             log.info(
@@ -1465,10 +1505,17 @@ class AccountRangeCoordinator(
 
     val selfRef = self
     val storage = deferredStorage
+    val flatBatch = pendingFlatAccounts.toSeq
+    pendingFlatAccounts.clear()
+    val fas = flatAccountStorage
     Future {
       blocking {
         val startMs = System.currentTimeMillis()
         val rootHash = storage.flush().map(rh => ByteString(rh))
+        if (flatBatch.nonEmpty) {
+          fas.putAccountsBatch(flatBatch).commit()
+          log.debug(s"[flat-accounts] flushed ${flatBatch.size} account entries to FlatAccountStorage")
+        }
         val elapsedMs = System.currentTimeMillis() - startMs
         (rootHash, elapsedMs)
       }
@@ -1787,7 +1834,8 @@ object AccountRangeCoordinator {
       initialResponseBytes: Int = 524288,
       minResponseBytes: Int = 102400,
       accountTrieEcOverride: Option[ExecutionContext] = None,
-      useStackTrie: Boolean = false
+      useStackTrie: Boolean = false,
+      flatAccountStorage: FlatAccountStorage = new FlatAccountStorage(EphemDataSource())
   ): Props =
     Props(
       new AccountRangeCoordinator(
@@ -1803,7 +1851,8 @@ object AccountRangeCoordinator {
         initialResponseBytes,
         minResponseBytes,
         accountTrieEcOverride,
-        useStackTrie
+        useStackTrie,
+        flatAccountStorage
       )
     )
 }

@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.BlockNumberMappingStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.FastSyncStateStorage
+import com.chipprbots.ethereum.db.storage.FlatAccountStorage
 import com.chipprbots.ethereum.db.storage.FlatSlotStorage
 import com.chipprbots.ethereum.db.storage.NodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
@@ -49,6 +50,7 @@ class SyncController(
     stateStorage: StateStorage,
     nodeStorage: NodeStorage,
     flatSlotStorage: FlatSlotStorage,
+    flatAccountStorage: FlatAccountStorage,
     fastSyncStateStorage: FastSyncStateStorage,
     consensus: ConsensusAdapter,
     validators: Validators,
@@ -953,6 +955,7 @@ class SyncController(
           stateStorage,
           evmCodeStorage,
           flatSlotStorage,
+          flatAccountStorage,
           networkPeerManager,
           peerEventBus,
           syncConfig,
@@ -1128,6 +1131,7 @@ class SyncController(
                   stateRoot = stateRoot,
                   stateStorage = stateStorage,
                   evmCodeStorage = evmCodeStorage,
+                  flatAccountStorage = flatAccountStorage,
                   appStateStorage = appStateStorage,
                   networkPeerManager = networkPeerManager,
                   syncController = self,
@@ -1149,6 +1153,7 @@ class SyncController(
                   stateStorage = stateStorage,
                   appStateStorage = appStateStorage,
                   flatSlotStorage = flatSlotStorage,
+                  flatAccountStorage = flatAccountStorage,
                   networkPeerManager = networkPeerManager,
                   syncController = self,
                   pivotBlockNumber = pivotBlock,
@@ -1200,13 +1205,14 @@ class SyncController(
       peerPoller: org.apache.pekko.actor.Cancellable = org.apache.pekko.actor.Cancellable.alreadyCancelled
   ): Receive = {
     case BytecodeRecoveryActor.RecoveryComplete =>
-      log.info(s"Bytecode recovery complete. Storage complete: $storageComplete")
+      log.info(s"[recovery] bytecode recovery complete (storage done: $storageComplete)")
+      bytecodeActor.foreach(context.unwatch)
       if (storageComplete) {
         peerPoller.cancel()
         networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
           context.system.deadLetters
         )
-        log.info("All recovery complete. Transitioning to regular sync.")
+        log.info("[recovery] both actors complete — transitioning to regular sync")
         startRegularSync()
       } else {
         context.become(
@@ -1215,13 +1221,14 @@ class SyncController(
       }
 
     case StorageRecoveryActor.RecoveryComplete =>
-      log.info(s"Storage recovery complete. Bytecode complete: $bytecodeComplete")
+      log.info(s"[recovery] storage recovery complete (bytecode done: $bytecodeComplete)")
+      storageActor.foreach(context.unwatch)
       if (bytecodeComplete) {
         peerPoller.cancel()
         networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
           context.system.deadLetters
         )
-        log.info("All recovery complete. Transitioning to regular sync.")
+        log.info("[recovery] both actors complete — transitioning to regular sync")
         startRegularSync()
       } else {
         context.become(
@@ -1242,7 +1249,9 @@ class SyncController(
       }
 
     case Terminated(actor) if bytecodeActor.contains(actor) =>
-      log.error("BytecodeRecoveryActor terminated unexpectedly. Treating as complete to unblock sync.")
+      log.error("[recovery] BytecodeRecoveryActor crashed (no prior RecoveryComplete) — persisting flag and unblocking")
+      appStateStorage.bytecodeRecoveryDone().commit()
+      context.unwatch(actor)
       if (storageComplete) {
         peerPoller.cancel()
         networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
@@ -1256,7 +1265,9 @@ class SyncController(
       }
 
     case Terminated(actor) if storageActor.contains(actor) =>
-      log.error("StorageRecoveryActor terminated unexpectedly. Treating as complete to unblock sync.")
+      log.error("[recovery] StorageRecoveryActor crashed (no prior RecoveryComplete) — persisting flag and unblocking")
+      appStateStorage.storageRecoveryDone().commit()
+      context.unwatch(actor)
       if (bytecodeComplete) {
         peerPoller.cancel()
         networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
@@ -1321,6 +1332,7 @@ object SyncController {
       stateStorage: StateStorage,
       nodeStorage: NodeStorage,
       flatSlotStorage: FlatSlotStorage,
+      flatAccountStorage: FlatAccountStorage,
       syncStateStorage: FastSyncStateStorage,
       consensus: ConsensusAdapter,
       validators: Validators,
@@ -1345,6 +1357,7 @@ object SyncController {
         stateStorage,
         nodeStorage,
         flatSlotStorage,
+        flatAccountStorage,
         syncStateStorage,
         consensus,
         validators,
