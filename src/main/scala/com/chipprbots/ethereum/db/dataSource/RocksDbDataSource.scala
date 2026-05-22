@@ -176,6 +176,14 @@ class RocksDbDataSource(
   def iterate(namespace: Namespace): Stream[IO, Either[IterationError, (Array[Byte], Array[Byte])]] =
     Stream.resource(namespaceIterator(namespace)).flatMap(it => moveIterator(it))
 
+  def approximateKeyCount(namespace: Namespace): Long =
+    handles
+      .get(namespace)
+      .flatMap { handle =>
+        scala.util.Try(db.getLongProperty(handle, "rocksdb.estimate-num-keys")).toOption
+      }
+      .getOrElse(0L)
+
   /** This function is used only for tests. This function updates the DataSource by deleting all the (key-value) pairs
     * in it.
     */
