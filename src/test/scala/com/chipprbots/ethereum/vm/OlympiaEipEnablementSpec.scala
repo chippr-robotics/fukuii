@@ -140,6 +140,10 @@ class OlympiaEipEnablementSpec extends AnyWordSpec with Matchers {
         olympiaOps.get(0x5d.toByte) shouldBe Some(TSTORE) // EIP-1153
         olympiaOps.get(0x5e.toByte) shouldBe Some(MCOPY) // EIP-5656
 
+        // EIP-4844 opcodes must NOT be in ETC Olympia — ETC does not activate EIP-4844
+        olympiaOps.get(0x49.toByte) shouldBe None // BLOBHASH
+        olympiaOps.get(0x4a.toByte) shouldBe None // BLOBBASEFEE
+
         // Not in Spiral
         spiralOps.get(0x48.toByte) shouldBe None
         spiralOps.get(0x5c.toByte) shouldBe None

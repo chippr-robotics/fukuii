@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.SignedTransaction
+import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
@@ -27,7 +28,20 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
   *
   * Cross-client convergence time: 2,055 blocks (~7.4 hours at 13s/block) from 8M to 99% of 60M.
   */
-class OlympiaGasLimitSpec extends AnyFlatSpec with Matchers {
+class OlympiaGasLimitSpec
+    extends AnyFlatSpec
+    with Matchers
+    with BlockchainConfigBuilder
+    with com.chipprbots.ethereum.TestInstanceConfigProvider {
+
+  private val OlympiaTestBlock: BigInt = BigInt(100)
+
+  // olympiaBlockNumber = 100 so that block 0 (pre-Olympia tests) is safely below Olympia.
+  // olympiaGasTarget = Some(60M) is required so gasLimitAdjustmentStartAt(OlympiaTestBlock)
+  // returns Some(60M) rather than falling back to miningConfig.gasLimitTarget.
+  implicit val config: BlockchainConfig = blockchainConfig.withUpdatedForkBlocks(
+    _.copy(olympiaBlockNumber = OlympiaTestBlock, olympiaGasTarget = Some(BigInt(60_000_000)))
+  )
 
   private val OlympiaGasTarget = BigInt(60_000_000)
   private val PreOlympiaGasLimit = BigInt(8_000_000)
@@ -75,7 +89,9 @@ class OlympiaGasLimitSpec extends AnyFlatSpec with Matchers {
     def withBlockTimestampProvider(btp: BlockTimestampProvider): TestBlockGenerator =
       throw new UnsupportedOperationException
 
-    def calcGasLimit(parentGas: BigInt): BigInt = calculateGasLimit(parentGas)
+    def calcGasLimit(parentGas: BigInt, blockNumber: BigInt = BigInt(0))(implicit
+        bc: BlockchainConfig
+    ): BigInt = calculateGasLimit(parentGas, blockNumber)
   }
 
   "Olympia gas limit (EIP-7935)" should "converge from pre-Olympia 8M to 60M target" taggedAs (
@@ -88,7 +104,7 @@ class OlympiaGasLimitSpec extends AnyFlatSpec with Matchers {
 
     var blocks = 0
     while (limit < threshold && blocks < 200_000) {
-      limit = gen.calcGasLimit(limit)
+      limit = gen.calcGasLimit(limit, OlympiaTestBlock + blocks)
       blocks += 1
     }
     limit should be >= threshold
@@ -137,6 +153,15 @@ class OlympiaGasLimitSpec extends AnyFlatSpec with Matchers {
     limit should be >= OlympiaGasTarget * 95 / 100
     limit should be <= OlympiaGasTarget * 105 / 100
     info(s"70/30 split equilibrium: $limit (${(limit.toDouble / OlympiaGasTarget.toDouble * 100).round}% of 60M)")
+  }
+  it should "apply Olympia floor of 60M even when miner config gasLimitTarget is 8M (EIP-7935)" taggedAs (
+    OlympiaTest,
+    ConsensusTest
+  ) in {
+    // Miner with an old config that still targets 8M — at Olympia the floor kicks in.
+    val gen = new TestableGen(PreOlympiaGasLimit)
+    val result = gen.calcGasLimit(PreOlympiaGasLimit, OlympiaTestBlock)
+    result should be > PreOlympiaGasLimit
   }
 }
 // scalastyle:on magic.number
