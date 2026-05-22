@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
 import org.apache.pekko.actor.ActorSystem
-import org.apache.pekko.testkit.{TestKit, TestProbe, ImplicitSender}
+import org.apache.pekko.testkit.{TestActorRef, TestKit, TestProbe, ImplicitSender}
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration._
@@ -812,5 +812,105 @@ class TrieNodeHealingCoordinatorSpec
     )
 
     system.stop(coord)
+  }
+
+  it should "absorb 200K QueueMissingNodes without actor mailbox stall (O(n) deque)" taggedAs UnitTest in {
+    // Regression guard: verifies that mass QueueMissingNodes messages don't stall the actor.
+    // The inner data structure (ArrayDeque) must accept O(n) bulk enqueues without quadratic
+    // copying or GC pressure.  4 × 50K sends all complete within 4 seconds.
+    val stateRoot = kec256(ByteString("heal-200k-queue-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coord = TestActorRef[TrieNodeHealingCoordinator](
+      TrieNodeHealingCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        batchSize = 16,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    coord ! Messages.StartTrieNodeHealing(stateRoot)
+
+    val startMs = System.currentTimeMillis()
+
+    // Send 4 × 50K node batches — each QueueMissingNodes carries 50K entries
+    for (batch <- 0 until 4) {
+      val nodes = (0 until 50_000).map { i =>
+        val hash = kec256(ByteString(s"heal-node-$batch-$i"))
+        (Seq(hash), hash)
+      }
+      coord ! Messages.QueueMissingNodes(nodes)
+    }
+
+    // All 200K entries must be enqueued within 4 seconds
+    awaitAssert(
+      coord.underlyingActor.pendingTasks.size shouldBe 200_000,
+      max = 4.seconds,
+      interval = 100.millis
+    )
+
+    val elapsedMs = System.currentTimeMillis() - startMs
+    elapsedMs should be < 4000L
+
+    system.stop(coord)
+  }
+
+  it should "flush rawNodeBuffer synchronously in postStop (no nodes lost on coordinator stop)" taggedAs UnitTest in {
+    // Regression guard for Fix 3: postStop must call flushRawNodesSync() when rawNodeBuffer is
+    // non-empty. Without this, nodes that arrive in the last batch (below the async-flush
+    // threshold or not yet flushed) are silently dropped on coordinator shutdown.
+    import scala.collection.mutable
+
+    class StubRawNodeStorage extends TestMptStorage {
+      val storedRaw: mutable.Map[ByteString, Array[Byte]] = mutable.Map.empty
+      override def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit =
+        nodes.foreach { case (hash, data) => storedRaw(hash) = data }
+    }
+
+    val stateRoot = kec256(ByteString("poststop-flush-root"))
+    val storage = new StubRawNodeStorage
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coord = TestActorRef[TrieNodeHealingCoordinator](
+      TrieNodeHealingCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        batchSize = 16,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    coord ! Messages.StartTrieNodeHealing(stateRoot)
+    val ua = coord.underlyingActor
+
+    // Inject raw nodes directly — simulate nodes arriving just before shutdown
+    val nodeData1 = Array[Byte](0xaa.toByte)
+    val nodeData2 = Array[Byte](0xbb.toByte)
+    val hash1 = kec256(ByteString(nodeData1))
+    val hash2 = kec256(ByteString(nodeData2))
+    ua.rawNodeBuffer += ((hash1, nodeData1))
+    ua.rawNodeBuffer += ((hash2, nodeData2))
+    ua.rawNodeBuffer.size shouldBe 2
+    storage.storedRaw.contains(hash1) shouldBe false // not written yet
+
+    // postStop must flush synchronously — all buffered nodes must reach storage
+    val probe = TestProbe()
+    probe.watch(coord)
+    system.stop(coord)
+    probe.expectTerminated(coord, 3.seconds)
+
+    // Both nodes must be in storage after postStop completes
+    storage.storedRaw.contains(hash1) shouldBe true
+    storage.storedRaw.contains(hash2) shouldBe true
   }
 }

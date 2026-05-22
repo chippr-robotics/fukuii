@@ -1613,4 +1613,187 @@ class AccountRangeCoordinatorSpec
     flatStorage.getAccount(h1) should not be empty
     flatStorage.getAccount(h2) should not be empty
   }
+
+  it should "flush flat accounts in multiple 8MB cycles and keep buffer bounded" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+    import com.chipprbots.ethereum.db.storage.FlatAccountStorage
+    import com.chipprbots.ethereum.domain.Account
+
+    val ds = EphemDataSource()
+    val flatStorage = new FlatAccountStorage(ds)
+    val stateRoot = kec256(ByteString("multi-cycle-flush-root"))
+    val controller = TestProbe()
+
+    // Set a small threshold so we can trigger multiple cycles without injecting gigabytes
+    val smallThreshold = 200L
+
+    val coord = TestActorRef[AccountRangeCoordinator](
+      AccountRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = TestProbe().ref,
+        requestTracker = new SNAPRequestTracker()(system.scheduler),
+        mptStorage = new TestMptStorage(),
+        concurrency = 1,
+        snapSyncController = controller.ref,
+        accountTrieEcOverride = Some(system.dispatcher),
+        useStackTrie = true,
+        flatAccountStorage = flatStorage,
+        flatFlushThresholdBytes = smallThreshold
+      )
+    )
+    coord ! Messages.StartAccountRangeSync(stateRoot)
+    val ua = coord.underlyingActor
+    awaitAssert(ua.pendingTasks.nonEmpty shouldBe true, 2.seconds, 50.millis)
+
+    val emptyAcct = Account(
+      nonce = 0,
+      balance = com.chipprbots.ethereum.domain.UInt256.Zero,
+      storageRoot = Account.EmptyStorageRootHash,
+      codeHash = Account.EmptyCodeHash
+    )
+    val rlp = Account.accountSerializer.toBytes(emptyAcct)
+    val rlpBS = org.apache.pekko.util.ByteString.fromArrayUnsafe(rlp)
+    val entryBytes = 32L + rlp.length
+
+    // Three flush cycles — inject above threshold, flush, verify cleared, repeat
+    for (cycle <- 1 to 3) {
+      val hash = kec256(ByteString(s"multi-cycle-acct-$cycle"))
+      ua.pendingFlatAccounts += ((hash, rlpBS))
+      ua.pendingFlatAccountBytes += entryBytes
+      ua.pendingFlatAccountBytes should be > smallThreshold
+
+      ua.spawnIncrementalFlatFlush()
+
+      // Buffer must be cleared immediately — invariant: never accumulate across cycle boundaries
+      ua.pendingFlatAccounts shouldBe empty
+      ua.pendingFlatAccountBytes shouldBe 0L
+
+      // Written entry must reach storage after the async write completes
+      awaitAssert(
+        flatStorage.getAccount(hash) should not be empty,
+        max = 2.seconds
+      )
+    }
+
+    system.stop(coord)
+  }
+
+  it should "clear pendingFlatAccountBytes to zero on PivotRefreshed (no stale accumulation)" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+    import com.chipprbots.ethereum.db.storage.FlatAccountStorage
+    import com.chipprbots.ethereum.domain.Account
+
+    val ds = EphemDataSource()
+    val flatStorage = new FlatAccountStorage(ds)
+    val stateRoot = kec256(ByteString("pivot-bytes-reset-root"))
+    val newRoot = kec256(ByteString("pivot-bytes-reset-new-root"))
+    val controller = TestProbe()
+
+    val coord = TestActorRef[AccountRangeCoordinator](
+      AccountRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = TestProbe().ref,
+        requestTracker = new SNAPRequestTracker()(system.scheduler),
+        mptStorage = new TestMptStorage(),
+        concurrency = 1,
+        snapSyncController = controller.ref,
+        accountTrieEcOverride = Some(system.dispatcher),
+        useStackTrie = true,
+        flatAccountStorage = flatStorage,
+        flatFlushThresholdBytes = 8 * 1024 * 1024L // large threshold — no auto-flush
+      )
+    )
+    coord ! Messages.StartAccountRangeSync(stateRoot)
+    val ua = coord.underlyingActor
+    awaitAssert(ua.pendingTasks.nonEmpty shouldBe true, 2.seconds, 50.millis)
+
+    val emptyAcct = Account(
+      nonce = 0,
+      balance = com.chipprbots.ethereum.domain.UInt256.Zero,
+      storageRoot = Account.EmptyStorageRootHash,
+      codeHash = Account.EmptyCodeHash
+    )
+    val rlp = Account.accountSerializer.toBytes(emptyAcct)
+    val rlpBS = org.apache.pekko.util.ByteString.fromArrayUnsafe(rlp)
+    val h1 = kec256(ByteString("pivot-flat-1"))
+    val h2 = kec256(ByteString("pivot-flat-2"))
+
+    // Accumulate entries below threshold — no auto-flush
+    ua.pendingFlatAccounts += ((h1, rlpBS))
+    ua.pendingFlatAccountBytes += 32L + rlp.length
+    ua.pendingFlatAccounts += ((h2, rlpBS))
+    ua.pendingFlatAccountBytes += 32L + rlp.length
+
+    ua.pendingFlatAccounts.size shouldBe 2
+    ua.pendingFlatAccountBytes should be > 0L
+    flatStorage.getAccount(h1) shouldBe empty // nothing written yet
+
+    // PivotRefreshed must clear the stale buffer without writing to storage
+    coord ! Messages.PivotRefreshed(newRoot)
+
+    awaitAssert(
+      {
+        ua.pendingFlatAccounts shouldBe empty
+        ua.pendingFlatAccountBytes shouldBe 0L
+      },
+      max = 2.seconds,
+      interval = 50.millis
+    )
+    // Stale entries must NOT be written to the new pivot's storage
+    flatStorage.getAccount(h1) shouldBe empty
+    flatStorage.getAccount(h2) shouldBe empty
+
+    system.stop(coord)
+  }
+
+  it should "re-queue in-flight task when worker crashes mid-download (Terminated message)" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("worker-crash-requeue-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coord = TestActorRef[AccountRangeCoordinator](
+      AccountRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        concurrency = 1,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+    val ua = coord.underlyingActor
+    coord ! Messages.StartAccountRangeSync(stateRoot)
+    awaitAssert(ua.pendingTasks.nonEmpty shouldBe true, 2.seconds, 50.millis)
+
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("crash-peer", peerProbe.ref)
+    coord ! Messages.PeerAvailable(peer)
+
+    // Wait for a worker to be created and dispatched
+    networkPeerManager.expectMsgType[Any](3.seconds)
+    awaitAssert(ua.workers.nonEmpty shouldBe true, 2.seconds, 50.millis)
+    awaitAssert(ua.activeTasks.nonEmpty shouldBe true, 2.seconds, 50.millis)
+
+    val worker = ua.workers.head
+    val activeCountBefore = ua.activeTasks.size
+    val pendingCountBefore = ua.pendingTasks.size
+
+    // Kill the worker — coordinator watches it via context.watch and receives Terminated
+    system.stop(worker)
+
+    // After the crash: activeTasks shrinks by 1, pendingTasks grows by 1 (task re-queued)
+    awaitAssert(
+      {
+        ua.workers should not contain worker
+        ua.activeTasks.size shouldBe (activeCountBefore - 1)
+        ua.pendingTasks.size shouldBe (pendingCountBefore + 1)
+      },
+      max = 3.seconds,
+      interval = 50.millis
+    )
+
+    system.stop(coord)
+  }
 }

@@ -145,7 +145,7 @@ class ByteCodeCoordinator(
 
   private var bytecodeMilestonePct: Int = -1
   private var bytecodeStartMs: Long = 0L
-  private var lastActivityMs: Long = 0L
+  private[actors] var lastActivityMs: Long = 0L
   private val noActivityTimeoutMs: Long = 120_000L
   private var statusTimer: Option[Cancellable] = None
 

@@ -920,4 +920,70 @@ class StorageRangeCoordinatorSpec
     deadLetterSubscriber.expectNoMessage(shortInterval * 2)
     system.eventStream.unsubscribe(deadLetterSubscriber.ref)
   }
+
+  it should "emit StorageBackpressureChanged at correct high/low watermarks under realistic queue sizes" taggedAs UnitTest in {
+    // Regression guard: verifies the backpressure engage/release signals fire at the exact
+    // configured watermarks. Uses small watermarks (high=5, low=2) to avoid enqueueing
+    // production-scale volumes in a unit test.
+    val stateRoot = kec256(ByteString("backpressure-watermark-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val highWater = 5
+    val lowWater = 2
+
+    val coordinator = TestActorRef[StorageRangeCoordinator](
+      StorageRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+        maxAccountsPerBatch = 8,
+        maxInFlightRequests = 8,
+        requestTimeout = 30.seconds,
+        snapSyncController = snapSyncController.ref,
+        backpressureHighWatermark = highWater,
+        backpressureLowWatermark = lowWater
+      )
+    )
+
+    def makeTask(i: Int): StorageTask = StorageTask(
+      accountHash = kec256(ByteString(s"acct-$i")),
+      storageRoot = kec256(ByteString(s"root-$i")),
+      next = ByteString(Array.fill(32)(0x00.toByte)),
+      last = ByteString(Array.fill(32)(0xff.toByte))
+    )
+
+    // === Phase 1: cross the high watermark → expect ENGAGED signal ===
+    coordinator ! Messages.AddStorageTasks((1 to (highWater + 1)).map(makeTask))
+    snapSyncController.expectMsg(3.seconds, SNAPSyncController.StorageBackpressureChanged(paused = true))
+
+    coordinator.underlyingActor.backpressureActive shouldBe true
+    coordinator.underlyingActor.tasks.size shouldBe (highWater + 1)
+
+    // No duplicate signal if we add 1 more task while still above high-water
+    coordinator ! Messages.AddStorageTasks(Seq(makeTask(99)))
+    snapSyncController.expectNoMessage(300.millis)
+
+    // === Phase 2: drain below low watermark → expect RELEASED signal ===
+    // Directly remove tasks from the private[actors] queue, then trigger notify via AddStorageTasks(Seq.empty)
+    val ua = coordinator.underlyingActor
+    while (ua.tasks.size > (lowWater - 1)) ua.tasks.dequeue()
+    ua.tasks.size should be < lowWater
+
+    // AddStorageTasks(Seq.empty) re-triggers notifyBackpressureIfChanged without adding load
+    coordinator ! Messages.AddStorageTasks(Seq.empty)
+    snapSyncController.expectMsg(3.seconds, SNAPSyncController.StorageBackpressureChanged(paused = false))
+
+    coordinator.underlyingActor.backpressureActive shouldBe false
+
+    // No duplicate release signal at same depth
+    coordinator ! Messages.AddStorageTasks(Seq.empty)
+    snapSyncController.expectNoMessage(300.millis)
+
+    system.stop(coordinator)
+  }
 }

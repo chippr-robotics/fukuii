@@ -888,4 +888,51 @@ class ByteCodeCoordinatorSpec
     coordinator ! Messages.ByteCodeCheckCompletion
     snapSyncController.expectNoMessage(500.millis)
   }
+
+  it should "request pivot refresh after noActivityTimeout when all peers unavailable with pending tasks" taggedAs UnitTest in {
+    // Regression guard for Fix 2: if all peers vanish before noMoreTasksExpected is set and
+    // bytecodes are still pending, workers never dispatch so consecutiveTaskFailures never
+    // increments and the force-complete path never fires — coordinator deadlocks forever.
+    // The no-activity timeout detects this and sends PivotStateUnservable to unblock sync.
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coordinator = TestActorRef[ByteCodeCoordinator](
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 1,
+        snapSyncController = snapSyncController.ref,
+        cooldownConfig = testCooldownConfig
+      )
+    )
+
+    // Queue pending tasks — noMoreTasksExpected stays false (NoMoreByteCodeTasks never sent)
+    val hashes = (1 to 5).map(i => kec256(ByteString(s"bc-nopeer-$i")))
+    coordinator ! Messages.AddByteCodeTasks(hashes)
+
+    val ua = coordinator.underlyingActor
+    awaitAssert(ua.pendingTasks.nonEmpty shouldBe true, 2.seconds, 50.millis)
+
+    // No peers — activeTasks is empty (no peer was ever sent)
+    ua.activeTasks shouldBe empty
+
+    // Simulate time having passed beyond the 120s no-activity timeout
+    ua.lastActivityMs = System.currentTimeMillis() - 130_000L
+
+    // StatusPulse is the timer tick that evaluates the no-activity condition
+    coordinator ! ByteCodeCoordinator.ByteCodeStatusPulse
+
+    // Must request pivot refresh via PivotStateUnservable
+    snapSyncController.expectMsgPF(3.seconds, "PivotStateUnservable for bytecode stall") {
+      case SNAPSyncController.PivotStateUnservable(_, reason, _) =>
+        reason should include("no-peer stall")
+    }
+
+    // lastActivityMs must be reset to avoid storm of pivot requests
+    ua.lastActivityMs should be >= (System.currentTimeMillis() - 5_000L)
+  }
 }
