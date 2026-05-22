@@ -134,12 +134,13 @@ class ConsensusImpl(
         )
     }
 
-  private def saveLastBlock(blocks: List[BlockData]): Unit = blocks.lastOption.foreach(b =>
-    blockchainWriter.saveBestKnownBlocks(
-      b.block.hash,
-      b.block.number
-    )
-  )
+  private def saveLastBlock(blocks: List[BlockData]): Unit = {
+    // Best-block pointer is now written atomically with the last block in
+    // BlockExecution.executeAndValidateBlocks (saveAsBestBlock = isLast).
+    // This method is kept as a no-op for call-site clarity; it can be removed
+    // if all callers are eventually updated.
+    val _ = blocks
+  }
 
   private def reorganise(
       bestBlockNumber: BigInt,
@@ -212,23 +213,13 @@ class ConsensusImpl(
   )(implicit
       blockchainConfig: BlockchainConfig
   ): Either[(List[BlockData], BlockExecutionError), (List[Block], List[Block], List[ChainWeight])] = {
+    // Best-block pointer is written atomically with the last block inside
+    // executeAndValidateBlocks (saveAsBestBlock = isLast), so no separate
+    // saveBestKnownBlocks call is needed here.
     val (executedBlocks, maybeError) = blockExecution.executeAndValidateBlocks(newBranch, parentWeight)
-    executedBlocks.lastOption.foreach(b =>
-      blockchainWriter.saveBestKnownBlocks(
-        b.block.hash,
-        b.block.number
-      )
-    )
 
     maybeError match {
       case None =>
-        executedBlocks.lastOption.foreach(b =>
-          blockchainWriter.saveBestKnownBlocks(
-            b.block.hash,
-            b.block.number
-          )
-        )
-
         Right((oldBlocksData.map(_.block), executedBlocks.map(_.block), executedBlocks.map(_.weight)))
 
       case Some(error) =>

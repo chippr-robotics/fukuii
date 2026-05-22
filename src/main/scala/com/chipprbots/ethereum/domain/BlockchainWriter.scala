@@ -89,6 +89,47 @@ class BlockchainWriter(
   ): Unit =
     appStateStorage.putBestBlockInfo(BlockInfo(bestBlockHash, bestBlockNumber)).commit()
 
+  /** Rewrite number→hash for the new canonical branch AND update the best-block pointer in a single atomic commit.
+    * Splitting these across two commits risks leaving canonical number mappings rewritten but bestBlockInfo still
+    * pointing at the old tip on crash.
+    */
+  def promoteBranchAndSetBest(
+      headHash: ByteString,
+      headNumber: BigInt,
+      reader: com.chipprbots.ethereum.domain.BlockchainReader
+  ): Unit = {
+    var cursor: Option[ByteString] = Some(headHash)
+    val buf = scala.collection.mutable.ListBuffer.empty[(BigInt, ByteString)]
+    while (cursor.isDefined) {
+      val hash = cursor.get
+      reader.getBlockHeaderByHash(hash) match {
+        case None => cursor = None
+        case Some(header) =>
+          val canonicalHashAtNumber = reader.getBlockHeaderByNumber(header.number).map(_.hash)
+          if (canonicalHashAtNumber.contains(hash)) {
+            cursor = None
+          } else {
+            buf += ((header.number, hash))
+            if (header.number == 0) cursor = None
+            else cursor = Some(header.parentHash)
+          }
+      }
+    }
+    val canonicalBatch = buf.foldLeft(blockNumberMappingStorage.emptyBatchUpdate) { case (acc, (num, hash)) =>
+      val withNumberMapping = acc.and(blockNumberMappingStorage.put(num, hash))
+      reader.getBlockBodyByHash(hash) match {
+        case Some(body) =>
+          body.transactionList.zipWithIndex.foldLeft(withNumberMapping) { case (a, (tx, idx)) =>
+            a.and(transactionMappingStorage.put(tx.hash, TransactionMappingStorage.TransactionLocation(hash, idx)))
+          }
+        case None => withNumberMapping
+      }
+    }
+    canonicalBatch
+      .and(appStateStorage.putBestBlockInfo(BlockInfo(headHash, headNumber)))
+      .commit()
+  }
+
   /** Promote a block previously stored by hash only (sidechain) to the canonical chain. Walks back from `headHash`
     * along parent pointers until it meets the current canonical chain (i.e. finds a header whose number→hash mapping
     * already points to it) and rewrites number→hash for every block on the new branch. Receipts are already indexed by

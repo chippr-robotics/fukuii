@@ -103,7 +103,11 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
         val executedBlocks = blocks
           .takeWhile(b => !failingBlockHash.contains(b.hash))
           .map(b => BlockData(b, Nil, ChainWeight.zero))
-        executedBlocks.foreach(b => blockchainWriter.save(b.block, b.receipts, b.weight, false))
+        // Mirror BlockExecution.executeAndValidateBlocks: last block saves with saveAsBestBlock=true
+        // so the best-block pointer advances atomically with the block data (B2 atomicity fix).
+        executedBlocks.zipWithIndex.foreach { case (b, idx) =>
+          blockchainWriter.save(b.block, b.receipts, b.weight, saveAsBestBlock = idx == executedBlocks.length - 1)
+        }
         (
           executedBlocks,
           blocks.find(b => failingBlockHash.contains(b.hash)).map(_ => ValidationAfterExecError("test error"))

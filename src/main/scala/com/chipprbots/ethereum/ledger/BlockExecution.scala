@@ -327,15 +327,19 @@ class BlockExecution(
         (executedBlocksDecOrder.reverse, None)
       } else {
         val blockToExecute = remainingBlocksIncOrder.head
+        val isLast = remainingBlocksIncOrder.tail.isEmpty
         executeAndValidateBlock(blockToExecute, alreadyValidated = true) match {
           case Right(receipts) =>
             val newWeight = parentWeight.increase(blockToExecute.header)
             val newBlockData = BlockData(blockToExecute, receipts, newWeight)
+            // Save the last block with saveAsBestBlock=true so the canonical-tip pointer is
+            // committed atomically with block data.  A crash between the two separate commits
+            // would leave bestBlockNumber behind the actual chain tip.
             blockchainWriter.save(
               newBlockData.block,
               newBlockData.receipts,
               newBlockData.weight,
-              saveAsBestBlock = false
+              saveAsBestBlock = isLast
             )
             go(newBlockData :: executedBlocksDecOrder, remainingBlocksIncOrder.tail, newWeight)
           case Left(executionError) =>

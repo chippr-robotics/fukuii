@@ -76,11 +76,10 @@ class ForkChoiceManager(
       )
       currentState.set(Some(newState))
 
-      // Rewrite number→hash mapping for the new canonical branch (no-op if already canonical).
-      // Then persist canonical best-block pointer.
+      // Rewrite number→hash mapping AND update best-block pointer in a single atomic commit.
+      // Two separate commits risk leaving number→hash rewritten but bestBlockInfo stale on crash.
       maybeHeader.foreach { header =>
-        blockchainWriter.promoteBranchToCanonical(newState.headBlockHash, blockchainReader)
-        blockchainWriter.saveBestKnownBlocks(newState.headBlockHash, header.number)
+        blockchainWriter.promoteBranchAndSetBest(newState.headBlockHash, header.number, blockchainReader)
       }
 
       Right(())

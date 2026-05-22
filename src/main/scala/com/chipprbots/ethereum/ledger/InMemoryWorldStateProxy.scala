@@ -78,16 +78,26 @@ object InMemoryWorldStateProxy {
     *   Updated world
     */
   def persistState(worldState: InMemoryWorldStateProxy): InMemoryWorldStateProxy = {
-    def persistCode(worldState: InMemoryWorldStateProxy): InMemoryWorldStateProxy =
-      worldState.accountCodes.foldLeft(worldState) { case (updatedWorldState, (address, code)) =>
-        val codeHash = kec256(code)
-        updatedWorldState.evmCodeStorage.put(codeHash, code).commit()
-        updatedWorldState.copyWith(
-          accountsStateTrie = updatedWorldState.accountsStateTrie +
-            (address -> updatedWorldState.getGuaranteedAccount(address).copy(codeHash = codeHash)),
+    def persistCode(worldState: InMemoryWorldStateProxy): InMemoryWorldStateProxy = {
+      if (worldState.accountCodes.isEmpty) return worldState
+      // Pre-compute hashes once, then write all EVM bytecodes in a single atomic batch.
+      // Previously committed once per deployed contract — N commits per block for N deployments.
+      val codeEntries = worldState.accountCodes.toSeq.map { case (address, code) =>
+        (address, code, kec256(code))
+      }
+      codeEntries
+        .foldLeft(worldState.evmCodeStorage.emptyBatchUpdate) { case (acc, (_, code, hash)) =>
+          acc.and(worldState.evmCodeStorage.put(hash, code))
+        }
+        .commit()
+      codeEntries.foldLeft(worldState) { case (ws, (address, _, codeHash)) =>
+        ws.copyWith(
+          accountsStateTrie = ws.accountsStateTrie +
+            (address -> ws.getGuaranteedAccount(address).copy(codeHash = codeHash)),
           accountCodes = Map.empty
         )
       }
+    }
 
     def persistContractStorage(worldState: InMemoryWorldStateProxy): InMemoryWorldStateProxy =
       worldState.contractStorages.foldLeft(worldState) { case (updatedWorldState, (address, storageTrie)) =>
