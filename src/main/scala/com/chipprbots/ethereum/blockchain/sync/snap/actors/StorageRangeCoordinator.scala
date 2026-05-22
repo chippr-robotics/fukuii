@@ -604,7 +604,7 @@ class StorageRangeCoordinator(
   override def postStop(): Unit = {
     storageCheckTask.foreach(_.cancel())
     storageCheckTask = None
-    log.debug("[storage-coord] periodic completion check timer cancelled in postStop")
+    log.debug("[STORAGE-COORD] periodic completion check timer cancelled in postStop")
     // Discard any in-memory streaming tries — already-flushed nodes stay on disk
     // (content-addressed; healing reconciles).
     if (pendingAccountTries.nonEmpty) {
@@ -650,7 +650,7 @@ class StorageRangeCoordinator(
         context.dispatcher
       )
     )
-    log.debug("[storage-coord] periodic completion check timer scheduled (interval={})", completionCheckInterval)
+    log.debug("[STORAGE-COORD] periodic completion check timer scheduled (interval={})", completionCheckInterval)
   }
 
   override val supervisorStrategy: SupervisorStrategy =
@@ -1369,6 +1369,7 @@ class StorageRangeCoordinator(
       log.info(
         s"[STORAGE-STATE] $pctInt% | pending=${tasks.size} active=${activeTasks.size} " +
           s"completed=$completedTaskCount " +
+          s"flatQueued=$pendingFlatBatchEntries flatInFlight=$inFlightFlatBatches | " +
           s"workers-known=${knownAvailablePeers.size} stateless=${statelessPeers.size} " +
           s"cooling=${knownAvailablePeers.count(isPeerCoolingDown)} eligible=${eligiblePeers.size} " +
           s"strikes=${emptyResponseStrikes.size} root=${stateRoot.take(4).toHex}"

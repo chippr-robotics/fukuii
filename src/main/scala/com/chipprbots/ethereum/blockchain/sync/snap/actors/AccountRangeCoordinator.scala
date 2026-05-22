@@ -587,10 +587,10 @@ class AccountRangeCoordinator(
     if (pendingFlatAccounts.nonEmpty) {
       try {
         flatAccountStorage.putAccountsBatch(pendingFlatAccounts.toSeq).commit()
-        log.info(s"[flat-accounts] postStop: flushed ${pendingFlatAccounts.size} remaining entries")
+        log.info(s"[FLAT-ACCOUNTS] postStop: flushed ${pendingFlatAccounts.size} remaining entries")
       } catch {
         case e: Exception =>
-          log.error(e, s"[flat-accounts] postStop: failed to flush ${pendingFlatAccounts.size} remaining entries")
+          log.error(e, s"[FLAT-ACCOUNTS] postStop: failed to flush ${pendingFlatAccounts.size} remaining entries")
       }
       pendingFlatAccounts.clear()
     }
@@ -656,7 +656,7 @@ class AccountRangeCoordinator(
       drainActiveTasks(s"pivot refresh to ${newStateRoot.take(4).toHex}")
       pendingTasks.foreach(_.rootHash = newStateRoot)
       if (pendingFlatAccounts.nonEmpty) {
-        log.debug(s"[flat-accounts] cleared ${pendingFlatAccounts.size} pending entries on PivotRefreshed")
+        log.debug(s"[FLAT-ACCOUNTS] cleared ${pendingFlatAccounts.size} pending entries on PivotRefreshed")
         pendingFlatAccounts.clear()
       }
 
@@ -838,7 +838,7 @@ class AccountRangeCoordinator(
       if (isComplete) {
         log.info("Account range sync complete!")
         log.info(
-          s"[flat-accounts] 100% — ${totalFlatAccountsWritten} total entries written to FlatAccountStorage"
+          s"[FLAT-ACCOUNTS] 100% — ${totalFlatAccountsWritten} total entries written to FlatAccountStorage"
         )
 
         // Signal controller IMMEDIATELY so storage+bytecode phases can start in parallel
@@ -1385,8 +1385,8 @@ class AccountRangeCoordinator(
         lastFlatMilestonePct = newM
         crossed.foreach { m =>
           log.info(
-            s"[flat-accounts] ${m}% keyspace covered — ${totalFlatAccountsWritten} entries written " +
-              s"to FlatAccountStorage | $accountsDownloaded accounts downloaded | ${rate} accts/s"
+            s"[FLAT-ACCOUNTS] ${m}% keyspace covered — ${totalFlatAccountsWritten} committed, " +
+              s"${pendingFlatAccounts.size} queued | $accountsDownloaded accounts downloaded | ${rate} accts/s"
           )
         }
       }
@@ -1420,14 +1420,18 @@ class AccountRangeCoordinator(
               val flatBatch = pendingFlatAccounts.toSeq
               pendingFlatAccounts.clear()
               totalFlatAccountsWritten += flatBatch.size
+              log.info(
+                s"[FLAT-ACCOUNTS] task complete — flushing ${flatBatch.size} entries | " +
+                  s"totalCommitted=$totalFlatAccountsWritten | $accountsDownloaded accounts downloaded"
+              )
               val fas = flatAccountStorage
               Future {
                 blocking { fas.putAccountsBatch(flatBatch).commit() }
               }(accountTrieEc).onComplete {
                 case Failure(ex) =>
-                  log.error(ex, s"[flat-accounts] async flush failed (StackTrie path, ${flatBatch.size} entries)")
+                  log.error(ex, s"[FLAT-ACCOUNTS] async flush failed (StackTrie path, ${flatBatch.size} entries)")
                 case _ =>
-                  log.debug(s"[flat-accounts] flushed ${flatBatch.size} account entries to FlatAccountStorage")
+                  log.debug(s"[FLAT-ACCOUNTS] flushed ${flatBatch.size} account entries to FlatAccountStorage")
               }(context.dispatcher)
             }
           } else {
@@ -1531,7 +1535,7 @@ class AccountRangeCoordinator(
         val rootHash = storage.flush().map(rh => ByteString(rh))
         if (flatBatch.nonEmpty) {
           fas.putAccountsBatch(flatBatch).commit()
-          log.debug(s"[flat-accounts] flushed ${flatBatch.size} account entries to FlatAccountStorage")
+          log.debug(s"[FLAT-ACCOUNTS] flushed ${flatBatch.size} account entries to FlatAccountStorage")
         }
         val elapsedMs = System.currentTimeMillis() - startMs
         (rootHash, elapsedMs)

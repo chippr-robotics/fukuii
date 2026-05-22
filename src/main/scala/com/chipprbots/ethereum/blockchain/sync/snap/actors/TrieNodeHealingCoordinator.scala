@@ -70,6 +70,7 @@ class TrieNodeHealingCoordinator(
   private case object HealingStagnationCheck
   private var consecutiveIdleChecks: Int = 0
   private var lastPulseHealedCount: Int = 0
+  private var lastFrontierSize: Long = 0L
   // FIX-STAGNATION-LIMIT: Track consecutive 2-min cycles with zero healed nodes (even when active).
   // After MaxConsecutiveStagnations, notify controller to restart with fresh pivot.
   private var consecutiveStagnations: Int = 0
@@ -248,13 +249,13 @@ class TrieNodeHealingCoordinator(
         context.dispatcher
       )
     )
-    log.debug("[heal] stagnation check timer scheduled (interval={})", stagnationCheckInterval)
+    log.debug("[HEAL] stagnation check timer scheduled (interval={})", stagnationCheckInterval)
   }
 
   override def postStop(): Unit = {
     healingCheckTask.foreach(_.cancel())
     healingCheckTask = None
-    log.debug("[heal] stagnation check timer cancelled in postStop")
+    log.debug("[HEAL] stagnation check timer cancelled in postStop")
     super.postStop()
   }
 
@@ -280,7 +281,7 @@ class TrieNodeHealingCoordinator(
         val selfRef = self
         val ec = healingWriterEc
         import scala.concurrent.Future
-        log.info(s"[heal-restart] starting DFS frontier rebuild from root ${Hex.toHexString(root.take(8).toArray)}")
+        log.info(s"[HEAL-RESTART] starting DFS frontier rebuild from root ${Hex.toHexString(root.take(8).toArray)}")
         Future {
           val frontier = mutable.Buffer.empty[HealingEntry]
           val visited = mutable.Set.empty[ByteString]
@@ -295,9 +296,9 @@ class TrieNodeHealingCoordinator(
           if (frontier.nonEmpty) selfRef ! FrontierRebuilt(frontier.toSeq)
         }(ec).onComplete {
           case Success(_) =>
-            log.debug("[heal-restart] DFS complete — frontier rebuilt, resuming healing")
+            log.debug("[HEAL-RESTART] DFS complete — frontier rebuilt, resuming healing")
           case Failure(ex) =>
-            log.error(ex, "[heal-restart] DFS frontier rebuild failed — seeding root as fallback")
+            log.error(ex, "[HEAL-RESTART] DFS frontier rebuild failed — seeding root as fallback")
             selfRef ! FrontierRebuildFailed(root)
         }(context.dispatcher)
       } else {
@@ -324,7 +325,7 @@ class TrieNodeHealingCoordinator(
       tryRedispatchPendingTasks()
 
     case FrontierRebuildFailed(root) =>
-      log.error("[heal-restart] DFS failed — seeding root as fallback to allow partial healing")
+      log.error("[HEAL-RESTART] DFS failed — seeding root as fallback to allow partial healing")
       val emptyPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
       queueNodes(Seq((Seq(emptyPath), root)))
       lastHealedAtMs = System.currentTimeMillis()
@@ -465,9 +466,10 @@ class TrieNodeHealingCoordinator(
       val healTotal = completedTaskCount.toLong + pendingTasks.size.toLong + activeRequests.size.toLong
       val healPct = if (healTotal > 0) ((completedTaskCount.toDouble / healTotal) * 100).toInt else 0
       log.info(
-        s"[HEAL-PULSE] $healPct% (est) | healed=$totalNodesHealed (+$recentHealed last 2min) | " +
+        s"[HEAL-PULSE] $healPct% (est, frontier grows) | healed=$totalNodesHealed (+$recentHealed last 2min) | " +
+          s"frontier=$healTotal (+${healTotal - lastFrontierSize} since last pulse) | " +
           s"pending=${pendingTasks.size} active=${activeRequests.size} peers=${knownAvailablePeers.size} | " +
-          s"rate=${healRate.toInt} nodes/s walkRunning=$trieWalkInProgress pivotRefreshPending=$pivotRefreshRequested"
+          s"rate=${healRate.toInt} nodes/s | walkRunning=$trieWalkInProgress pivotRefreshPending=$pivotRefreshRequested"
       )
       val (newM, crossed) =
         com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
@@ -479,6 +481,7 @@ class TrieNodeHealingCoordinator(
         )
       }
       lastPulseHealedCount = totalNodesHealed
+      lastFrontierSize = healTotal
 
       // BUG-S4 watchdog: if pivotRefreshRequested=true for >15 min, SNAPSyncController is stuck
       // in refreshPivotInPlace's no-peer retry loop (Path A: 30s interval, HealingPivotRefreshed

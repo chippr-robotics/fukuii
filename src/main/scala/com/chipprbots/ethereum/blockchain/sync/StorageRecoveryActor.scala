@@ -60,7 +60,7 @@ class StorageRecoveryActor(
       self ! ScanResult(missing)
     case None =>
       log.info(
-        s"[storage-recovery] starting flat scan " +
+        s"[STORAGE-RECOVERY] starting flat scan " +
           s"(stateRoot=${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}..., pivotBlock=$pivotBlockNumber)"
       )
       self ! StartScan
@@ -76,12 +76,12 @@ class StorageRecoveryActor(
     // Legacy path for preloadedMissingForTesting — sends all tasks at once and seals.
     case ScanResult(missing) =>
       if (missing.isEmpty) {
-        log.info("[storage-recovery] [scan] complete — no missing storage found")
+        log.info("[STORAGE-RECOVERY] [scan] complete — no missing storage found")
         appStateStorage.storageRecoveryDone().commit()
         syncController ! RecoveryComplete
         context.stop(self)
       } else {
-        log.warning(s"[storage-recovery] found ${missing.size} contracts with missing storage. Starting download...")
+        log.warning(s"[STORAGE-RECOVERY] found ${missing.size} contracts with missing storage. Starting download...")
         implicit val scheduler: org.apache.pekko.actor.Scheduler = context.system.scheduler
         val coordinator = makeCoordinator()
         context.watch(coordinator)
@@ -94,7 +94,9 @@ class StorageRecoveryActor(
           coordinator ! actors.Messages.AddStorageTasks(tasks)
           totalSent += tasks.size
         }
-        log.info(s"[storage-recovery] sent $totalSent storage tasks to coordinator in ${(totalSent + batchSize - 1) / batchSize} batches")
+        log.info(
+          s"[STORAGE-RECOVERY] sent $totalSent storage tasks to coordinator in ${(totalSent + batchSize - 1) / batchSize} batches"
+        )
         coordinator ! actors.Messages.NoMoreStorageTasks
         context.become(downloading(coordinator, missing.size))
       }
@@ -140,6 +142,8 @@ class StorageRecoveryActor(
         var checked = 0L
         var lastNanos = System.nanoTime()
         var lastScanMilestonePct: Int = -1
+        var lastHeartbeatNanos = System.nanoTime()
+        var lastHeartbeatAccounts = 0L
 
         fas.seekFrom(ByteString.empty)
           .evalMap {
@@ -150,7 +154,7 @@ class StorageRecoveryActor(
                   val rate = (1_000_000 / ((System.nanoTime() - lastNanos) / 1e9)).toLong
                   val pctStr = if (approxTotal > 0) s" | ${(accounts * 100.0 / approxTotal).toInt}%" else ""
                   log.info(
-                    s"[storage-recovery] [scan] $accounts accounts$pctStr | $contracts contracts | " +
+                    s"[STORAGE-RECOVERY] [scan] $accounts accounts$pctStr | $contracts contracts | " +
                       s"$checked unique roots checked | ${pending.size} pending | $rate accts/s"
                   )
                   if (approxTotal > 0) {
@@ -159,11 +163,22 @@ class StorageRecoveryActor(
                     lastScanMilestonePct = newM
                     crossed.foreach(m =>
                       log.info(
-                        s"[storage-recovery] [scan] $m% — $accounts / ~$approxTotal accounts scanned"
+                        s"[STORAGE-RECOVERY] [scan] $m% — $accounts / ~$approxTotal accounts scanned"
                       )
                     )
                   }
                   lastNanos = System.nanoTime()
+                }
+                val nowNanos = System.nanoTime()
+                if (nowNanos - lastHeartbeatNanos > 30_000_000_000L) {
+                  val elapsedSecs = (nowNanos - lastHeartbeatNanos) / 1e9
+                  val heartbeatRate = ((accounts - lastHeartbeatAccounts) / elapsedSecs).toLong
+                  val pctStr = if (approxTotal > 0) s" | ${(accounts * 100.0 / approxTotal).toInt}%" else ""
+                  log.info(
+                    s"[STORAGE-RECOVERY] [scan] heartbeat: $accounts scanned$pctStr | $contracts contracts | $heartbeatRate accts/s"
+                  )
+                  lastHeartbeatNanos = nowNanos
+                  lastHeartbeatAccounts = accounts
                 }
                 Account(rlpBytes) match {
                   case Success(acct) if acct.storageRoot != Account.EmptyStorageRootHash =>
@@ -184,8 +199,7 @@ class StorageRecoveryActor(
                   case _ =>
                 }
               }
-            }
-            case Left(err) => IO(log.warning(s"[storage-recovery] [scan] iteration error — skipping: $err"))
+            case Left(err) => IO(log.warning(s"[STORAGE-RECOVERY] [scan] iteration error — skipping: $err"))
           }
           .compile
           .drain
@@ -196,7 +210,7 @@ class StorageRecoveryActor(
     }(scanEc).onComplete {
       case Success(_) => selfRef ! ScanComplete
       case Failure(ex) =>
-        log.error(ex, "[storage-recovery] [scan] flat scan failed")
+        log.error(ex, "[STORAGE-RECOVERY] [scan] flat scan failed")
         selfRef ! ScanComplete
     }(context.dispatcher)
   }
@@ -213,21 +227,21 @@ class StorageRecoveryActor(
       context.become(scanning(coordinator, sentSoFar + tasks.size))
 
     case ScanComplete if sentSoFar == 0 =>
-      log.info("[storage-recovery] [scan] complete — no missing storage found")
+      log.info("[STORAGE-RECOVERY] [scan] complete — no missing storage found")
       appStateStorage.storageRecoveryDone().commit()
       syncController ! RecoveryComplete
       context.stop(self)
 
     case ScanComplete =>
       coordinator ! actors.Messages.NoMoreStorageTasks
-      log.info(s"[storage-recovery] [scan] complete — $sentSoFar missing storage roots queued for download")
+      log.info(s"[STORAGE-RECOVERY] [scan] complete — $sentSoFar missing storage roots queued for download")
       context.become(downloading(coordinator, sentSoFar))
 
     case actors.Messages.StoragePeerAvailable(peer) =>
       coordinator ! actors.Messages.StoragePeerAvailable(peer)
 
     case Terminated(`coordinator`) =>
-      log.error("[storage-recovery] coordinator crashed during scan — marking done and unblocking sync")
+      log.error("[STORAGE-RECOVERY] coordinator crashed during scan — marking done and unblocking sync")
       appStateStorage.storageRecoveryDone().commit()
       syncController ! RecoveryComplete
       context.stop(self)
@@ -265,7 +279,7 @@ class StorageRecoveryActor(
 
       case SNAPSyncController.StorageRangeSyncComplete =>
         log.info(
-          s"[storage-recovery] [download] 100% — $expectedCount / $expectedCount storage roots recovered — COMPLETE"
+          s"[STORAGE-RECOVERY] [download] 100% — $expectedCount / $expectedCount storage roots recovered — COMPLETE"
         )
         abandonTimer.foreach(_.cancel())
         appStateStorage.storageRecoveryDone().commit()
@@ -286,7 +300,7 @@ class StorageRecoveryActor(
             lastRateRecovered = recoveredCount
           }
           log.info(
-            s"[storage-recovery] [download] $m% — $recoveredCount / $expectedCount storage roots recovered | $rate roots/s"
+            s"[STORAGE-RECOVERY] [download] $m% — $recoveredCount / $expectedCount storage roots recovered | $rate roots/s"
           )
         }
 
@@ -294,7 +308,7 @@ class StorageRecoveryActor(
         unservableCount += 1
         if (unservableCount <= 3 || unservableCount % 100 == 0) {
           log.info(
-            "[storage-recovery] coordinator reports stored pivot root unservable ({} events, " +
+            "[STORAGE-RECOVERY] coordinator reports stored pivot root unservable ({} events, " +
               "no progress for {}s). Will abandon after {}s if this persists.",
             unservableCount,
             (System.nanoTime() - lastProgressNanos) / 1_000_000_000L,
@@ -306,7 +320,7 @@ class StorageRecoveryActor(
       case CheckAbandon(progressAtSchedule) =>
         if (progressAtSchedule == progressSeq) {
           log.warning(
-            "[storage-recovery] abandoning: no slot progress for {}s, {} unservable events — " +
+            "[STORAGE-RECOVERY] abandoning: no slot progress for {}s, {} unservable events — " +
               "on-demand GetTrieNodes will cover remainder",
             abandonAfter.toSeconds,
             unservableCount
@@ -319,7 +333,7 @@ class StorageRecoveryActor(
         }
 
       case Terminated(`coordinator`) =>
-        log.error("[storage-recovery] coordinator crashed — marking done and unblocking sync")
+        log.error("[STORAGE-RECOVERY] coordinator crashed — marking done and unblocking sync")
         abandonTimer.foreach(_.cancel())
         appStateStorage.storageRecoveryDone().commit()
         syncController ! RecoveryComplete

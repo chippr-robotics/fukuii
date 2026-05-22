@@ -57,7 +57,7 @@ class BytecodeRecoveryActor(
       self ! ScanResult(missing)
     case None =>
       log.info(
-        s"[bytecode-recovery] starting flat scan " +
+        s"[BYTECODE-RECOVERY] starting flat scan " +
           s"(stateRoot=${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}..., pivotBlock=$pivotBlockNumber)"
       )
       self ! StartScan
@@ -73,12 +73,12 @@ class BytecodeRecoveryActor(
     // Legacy path for preloadedMissingForTesting — sends all tasks at once and seals.
     case ScanResult(missing) =>
       if (missing.isEmpty) {
-        log.info("[bytecode-recovery] [scan] complete — no missing bytecodes found")
+        log.info("[BYTECODE-RECOVERY] [scan] complete — no missing bytecodes found")
         appStateStorage.bytecodeRecoveryDone().commit()
         syncController ! RecoveryComplete
         context.stop(self)
       } else {
-        log.warning(s"[bytecode-recovery] found ${missing.size} contracts with missing bytecodes. Starting download...")
+        log.warning(s"[BYTECODE-RECOVERY] found ${missing.size} contracts with missing bytecodes. Starting download...")
         val coordinator = makeCoordinator()
         context.watch(coordinator)
         val batchSize = 10000
@@ -87,7 +87,9 @@ class BytecodeRecoveryActor(
           coordinator ! snap.actors.Messages.AddByteCodeTasks(batch)
           totalSent += batch.size
         }
-        log.info(s"[bytecode-recovery] sent $totalSent bytecode tasks to coordinator in ${(totalSent + batchSize - 1) / batchSize} batches")
+        log.info(
+          s"[BYTECODE-RECOVERY] sent $totalSent bytecode tasks to coordinator in ${(totalSent + batchSize - 1) / batchSize} batches"
+        )
         coordinator ! snap.actors.Messages.NoMoreByteCodeTasks
         context.become(downloading(coordinator, missing.size))
       }
@@ -125,6 +127,8 @@ class BytecodeRecoveryActor(
         var checked = 0L
         var lastNanos = System.nanoTime()
         var lastScanMilestonePct: Int = -1
+        var lastHeartbeatNanos = System.nanoTime()
+        var lastHeartbeatAccounts = 0L
 
         fas.seekFrom(ByteString.empty)
           .evalMap {
@@ -135,7 +139,7 @@ class BytecodeRecoveryActor(
                   val rate = (1_000_000 / ((System.nanoTime() - lastNanos) / 1e9)).toLong
                   val pctStr = if (approxTotal > 0) s" | ${(accounts * 100.0 / approxTotal).toInt}%" else ""
                   log.info(
-                    s"[bytecode-recovery] [scan] $accounts accounts$pctStr | $contracts contracts | " +
+                    s"[BYTECODE-RECOVERY] [scan] $accounts accounts$pctStr | $contracts contracts | " +
                       s"$checked unique hashes checked | ${pending.size} pending | $rate accts/s"
                   )
                   if (approxTotal > 0) {
@@ -144,11 +148,22 @@ class BytecodeRecoveryActor(
                     lastScanMilestonePct = newM
                     crossed.foreach(m =>
                       log.info(
-                        s"[bytecode-recovery] [scan] $m% — $accounts / ~$approxTotal accounts scanned"
+                        s"[BYTECODE-RECOVERY] [scan] $m% — $accounts / ~$approxTotal accounts scanned"
                       )
                     )
                   }
                   lastNanos = System.nanoTime()
+                }
+                val nowNanos = System.nanoTime()
+                if (nowNanos - lastHeartbeatNanos > 30_000_000_000L) {
+                  val elapsedSecs = (nowNanos - lastHeartbeatNanos) / 1e9
+                  val heartbeatRate = ((accounts - lastHeartbeatAccounts) / elapsedSecs).toLong
+                  val pctStr = if (approxTotal > 0) s" | ${(accounts * 100.0 / approxTotal).toInt}%" else ""
+                  log.info(
+                    s"[BYTECODE-RECOVERY] [scan] heartbeat: $accounts scanned$pctStr | $contracts contracts | $heartbeatRate accts/s"
+                  )
+                  lastHeartbeatNanos = nowNanos
+                  lastHeartbeatAccounts = accounts
                 }
                 Account(rlpBytes) match {
                   case Success(acct) if acct.codeHash != Account.EmptyCodeHash =>
@@ -167,8 +182,7 @@ class BytecodeRecoveryActor(
                   }
                 case _ =>
               }
-            }
-            case Left(err) => IO(log.warning(s"[bytecode-recovery] [scan] iteration error — skipping: $err"))
+            case Left(err) => IO(log.warning(s"[BYTECODE-RECOVERY] [scan] iteration error — skipping: $err"))
           }
           .compile
           .drain
@@ -179,7 +193,7 @@ class BytecodeRecoveryActor(
     }(scanEc).onComplete {
       case Success(_) => selfRef ! ScanComplete
       case Failure(ex) =>
-        log.error(ex, "[bytecode-recovery] [scan] flat scan failed")
+        log.error(ex, "[BYTECODE-RECOVERY] [scan] flat scan failed")
         selfRef ! ScanComplete
     }(context.dispatcher)
   }
@@ -193,21 +207,21 @@ class BytecodeRecoveryActor(
       context.become(scanning(coordinator, sentSoFar + batch.size))
 
     case ScanComplete if sentSoFar == 0 =>
-      log.info("[bytecode-recovery] [scan] complete — no missing bytecodes found")
+      log.info("[BYTECODE-RECOVERY] [scan] complete — no missing bytecodes found")
       appStateStorage.bytecodeRecoveryDone().commit()
       syncController ! RecoveryComplete
       context.stop(self)
 
     case ScanComplete =>
       coordinator ! snap.actors.Messages.NoMoreByteCodeTasks
-      log.info(s"[bytecode-recovery] [scan] complete — $sentSoFar missing bytecodes queued for download")
+      log.info(s"[BYTECODE-RECOVERY] [scan] complete — $sentSoFar missing bytecodes queued for download")
       context.become(downloading(coordinator, sentSoFar))
 
     case snap.actors.Messages.ByteCodePeerAvailable(peer) =>
       coordinator ! snap.actors.Messages.ByteCodePeerAvailable(peer)
 
     case Terminated(`coordinator`) =>
-      log.error("[bytecode-recovery] coordinator crashed during scan — marking done and unblocking sync")
+      log.error("[BYTECODE-RECOVERY] coordinator crashed during scan — marking done and unblocking sync")
       appStateStorage.bytecodeRecoveryDone().commit()
       syncController ! RecoveryComplete
       context.stop(self)
@@ -243,7 +257,7 @@ class BytecodeRecoveryActor(
 
       case SNAPSyncController.ByteCodeSyncComplete =>
         log.info(
-          s"[bytecode-recovery] [download] 100% — $expectedCount / $expectedCount bytecodes recovered — COMPLETE"
+          s"[BYTECODE-RECOVERY] [download] 100% — $expectedCount / $expectedCount bytecodes recovered — COMPLETE"
         )
         finishRecovery()
 
@@ -261,14 +275,14 @@ class BytecodeRecoveryActor(
             lastRateDownloaded = downloadedCount
           }
           log.info(
-            s"[bytecode-recovery] [download] $m% — $downloadedCount / $expectedCount bytecodes recovered | $rate bytecodes/s"
+            s"[BYTECODE-RECOVERY] [download] $m% — $downloadedCount / $expectedCount bytecodes recovered | $rate bytecodes/s"
           )
         }
 
       case CheckAbandon(progressAtSchedule) =>
         if (progressAtSchedule == progressSeq) {
           log.warning(
-            "[bytecode-recovery] abandoning: no download progress for {}s — " +
+            "[BYTECODE-RECOVERY] abandoning: no download progress for {}s — " +
               "on-demand GetTrieNodes will cover remainder",
             abandonAfter.toSeconds
           )
@@ -278,7 +292,7 @@ class BytecodeRecoveryActor(
         }
 
       case Terminated(`coordinator`) =>
-        log.error("[bytecode-recovery] coordinator crashed — marking done and unblocking sync")
+        log.error("[BYTECODE-RECOVERY] coordinator crashed — marking done and unblocking sync")
         finishRecovery()
 
       case msg => coordinator.forward(msg)

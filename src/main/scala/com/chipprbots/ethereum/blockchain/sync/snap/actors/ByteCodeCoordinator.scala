@@ -421,7 +421,7 @@ class ByteCodeCoordinator(
       if (noMoreTasksExpected) {
         val pct = if (total > 0) ((completedTaskCount.toDouble / total) * 100).toInt else 0
         log.info(
-          s"[bytecode-coord] $pct% — completed=$completedTaskCount total=$total " +
+          s"[BYTECODE-COORD] $pct% — completed=$completedTaskCount total=$total " +
             s"pending=${pendingTasks.size} active=${activeTasks.size} " +
             s"workers=${workers.size} rate=$rate bytecodes/s"
         )
@@ -431,13 +431,14 @@ class ByteCodeCoordinator(
         bytecodeMilestonePct = newM
         crossed.foreach { m =>
           log.info(
-            s"[bytecode-coord] MILESTONE $m% — $completedTaskCount / $total bytecodes complete | $rate bytecodes/s"
+            s"[BYTECODE-COORD] MILESTONE $m% — $completedTaskCount / $total bytecodes complete | $rate bytecodes/s"
           )
         }
       } else {
         log.info(
-          s"[bytecode-coord] accumulating — pending=${pendingTasks.size} active=${activeTasks.size} " +
-            s"completed=$completedTaskCount workers=${workers.size} noMoreExpected=$noMoreTasksExpected"
+          s"[BYTECODE-COORD] accumulating — queued=${pendingTasks.size} active=${activeTasks.size} " +
+            s"completed=$completedTaskCount workers=${workers.size} | " +
+            s"phase=growing (seal not yet received)"
         )
       }
   }
