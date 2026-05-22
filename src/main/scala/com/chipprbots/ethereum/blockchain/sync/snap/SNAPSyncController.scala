@@ -2560,6 +2560,7 @@ class SNAPSyncController(
     }
 
   private def startAccountRangeSync(rootHash: ByteString): Unit = {
+    progressMonitor.startPhase(AccountRangeSync)
     // Before starting workers, check if any connected peer supports the snap/1 protocol.
     // If no peers support snap, the workers will send requests that are silently ignored,
     // stalling sync until the 3-minute stagnation watchdog fires. Instead, check upfront
@@ -3059,6 +3060,7 @@ class SNAPSyncController(
       log.warning("startStateHealing called but healing coordinator already exists — ignoring duplicate")
       return
     }
+    progressMonitor.startPhase(StateHealing)
 
     trieWalkInProgress = false // Reset for fresh healing phase
     log.info(s"Starting state healing with batch size ${snapSyncConfig.healingBatchSize}")

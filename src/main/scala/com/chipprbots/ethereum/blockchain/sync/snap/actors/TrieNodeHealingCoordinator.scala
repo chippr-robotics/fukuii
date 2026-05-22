@@ -95,6 +95,7 @@ class TrieNodeHealingCoordinator(
   private var totalNodesHealed: Int = 0
   private var totalBytesReceived: Long = 0
   private val startTime = System.currentTimeMillis()
+  private var healingMilestonePct: Int = -1
 
   // Adaptive healing throttle (geth p2p/msgrate alignment)
   // When pending nodes exceed 2× the processing rate, throttle increases (slow down requests).
@@ -461,11 +462,22 @@ class TrieNodeHealingCoordinator(
 
     case HealingStagnationCheck =>
       val recentHealed = totalNodesHealed - lastPulseHealedCount
+      val healTotal = completedTaskCount.toLong + pendingTasks.size.toLong + activeRequests.size.toLong
+      val healPct = if (healTotal > 0) ((completedTaskCount.toDouble / healTotal) * 100).toInt else 0
       log.info(
-        s"[HEAL-PULSE] healed=$totalNodesHealed (+$recentHealed last 2min) | " +
+        s"[HEAL-PULSE] $healPct% (est) | healed=$totalNodesHealed (+$recentHealed last 2min) | " +
           s"pending=${pendingTasks.size} active=${activeRequests.size} peers=${knownAvailablePeers.size} | " +
-          s"walkRunning=$trieWalkInProgress pivotRefreshPending=$pivotRefreshRequested"
+          s"rate=${healRate.toInt} nodes/s walkRunning=$trieWalkInProgress pivotRefreshPending=$pivotRefreshRequested"
       )
+      val (newM, crossed) =
+        com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
+          .crossed(completedTaskCount.toLong, healTotal, healingMilestonePct)
+      healingMilestonePct = newM
+      crossed.foreach { m =>
+        log.info(
+          s"[HEAL-MILESTONE] $m% (est) — ${completedTaskCount} healed | ${healRate.toInt} nodes/s"
+        )
+      }
       lastPulseHealedCount = totalNodesHealed
 
       // BUG-S4 watchdog: if pivotRefreshRequested=true for >15 min, SNAPSyncController is stuck
