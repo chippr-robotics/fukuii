@@ -1179,6 +1179,10 @@ class SyncController(
           PollRecoveryPeers
         )
 
+        log.info(
+          s"[SNAP-RECOVERY] Phase starting — bytecodeNeeded=$needBytecode storageNeeded=$needStorage " +
+            s"generation=$syncGeneration — polling for snap-capable peers every 5s"
+        )
         context.become(
           runningRecovery(
             bytecodeActor = bytecodeActor,
@@ -1212,7 +1216,7 @@ class SyncController(
         networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
           context.system.deadLetters
         )
-        log.info("[recovery] both actors complete — transitioning to regular sync")
+        log.info("[SNAP-RECOVERY] Phase complete — both actors done — transitioning to regular sync")
         startRegularSync()
       } else {
         context.become(
@@ -1228,7 +1232,7 @@ class SyncController(
         networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
           context.system.deadLetters
         )
-        log.info("[recovery] both actors complete — transitioning to regular sync")
+        log.info("[SNAP-RECOVERY] Phase complete — both actors done — transitioning to regular sync")
         startRegularSync()
       } else {
         context.become(
