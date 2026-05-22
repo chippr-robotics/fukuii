@@ -130,6 +130,7 @@ class StorageRecoveryActor(
     val stRoot = stateRoot
     val mptStorage = stateStorage.getBackingStorage(pivotBlockNumber)
     val fas = flatAccountStorage
+    val approxTotal = fas.approximateKeyCount()
     Future {
       blocking {
         val seenRoots = mutable.HashSet.empty[ByteString]
@@ -138,36 +139,50 @@ class StorageRecoveryActor(
         var contracts = 0L
         var checked = 0L
         var lastNanos = System.nanoTime()
+        var lastScanMilestonePct: Int = -1
 
         fas.seekFrom(ByteString.empty)
           .evalMap {
-            case Right((accountHash, rlpBytes)) => IO {
-              accounts += 1
-              if (accounts % 1_000_000 == 0) {
-                val rate = (1_000_000 / ((System.nanoTime() - lastNanos) / 1e9)).toLong
-                log.info(
-                  s"[storage-recovery] [scan] $accounts accounts | $contracts contracts | " +
-                    s"$checked unique roots checked | ${pending.size} pending | $rate accts/s"
-                )
-                lastNanos = System.nanoTime()
-              }
-              Account(rlpBytes) match {
-                case Success(acct) if acct.storageRoot != Account.EmptyStorageRootHash =>
-                  contracts += 1
-                  if (!seenRoots.contains(acct.storageRoot)) {
-                    seenRoots += acct.storageRoot
-                    checked += 1
-                    try mptStorage.get(acct.storageRoot.toArray)
-                    catch {
-                      case _: MerklePatriciaTrie.MPTException =>
-                        pending += ((accountHash, acct.storageRoot))
-                        if (pending.size >= batchFlushSize) {
-                          selfRef ! ScanBatch(pending.toSeq)
-                          pending.clear()
-                        }
-                    }
+            case Right((accountHash, rlpBytes)) =>
+              IO {
+                accounts += 1
+                if (accounts % 1_000_000 == 0) {
+                  val rate = (1_000_000 / ((System.nanoTime() - lastNanos) / 1e9)).toLong
+                  val pctStr = if (approxTotal > 0) s" | ${(accounts * 100.0 / approxTotal).toInt}%" else ""
+                  log.info(
+                    s"[storage-recovery] [scan] $accounts accounts$pctStr | $contracts contracts | " +
+                      s"$checked unique roots checked | ${pending.size} pending | $rate accts/s"
+                  )
+                  if (approxTotal > 0) {
+                    val (newM, crossed) =
+                      ProgressMilestones.crossed(accounts, approxTotal, lastScanMilestonePct)
+                    lastScanMilestonePct = newM
+                    crossed.foreach(m =>
+                      log.info(
+                        s"[storage-recovery] [scan] $m% — $accounts / ~$approxTotal accounts scanned"
+                      )
+                    )
                   }
-                case _ =>
+                  lastNanos = System.nanoTime()
+                }
+                Account(rlpBytes) match {
+                  case Success(acct) if acct.storageRoot != Account.EmptyStorageRootHash =>
+                    contracts += 1
+                    if (!seenRoots.contains(acct.storageRoot)) {
+                      seenRoots += acct.storageRoot
+                      checked += 1
+                      try mptStorage.get(acct.storageRoot.toArray)
+                      catch {
+                        case _: MerklePatriciaTrie.MPTException =>
+                          pending += ((accountHash, acct.storageRoot))
+                          if (pending.size >= batchFlushSize) {
+                            selfRef ! ScanBatch(pending.toSeq)
+                            pending.clear()
+                          }
+                      }
+                    }
+                  case _ =>
+                }
               }
             }
             case Left(err) => IO(log.warning(s"[storage-recovery] [scan] iteration error — skipping: $err"))
@@ -223,6 +238,10 @@ class StorageRecoveryActor(
     var lastProgressNanos = System.nanoTime()
     var unservableCount = 0
     var abandonTimer: Option[Cancellable] = None
+    var recoveredCount = 0L
+    var lastStorageRecoveryMilestone: Int = -1
+    var lastRateNanos = System.nanoTime()
+    var lastRateRecovered = 0L
     val abandonAfter: FiniteDuration = snapSyncConfig.storageRecoveryAbandonTimeout
 
     def recordProgress(): Unit = {
@@ -245,7 +264,9 @@ class StorageRecoveryActor(
         coordinator ! actors.Messages.StoragePeerAvailable(peer)
 
       case SNAPSyncController.StorageRangeSyncComplete =>
-        log.info(s"[storage-recovery] [download] complete — recovered $expectedCount storage tries")
+        log.info(
+          s"[storage-recovery] [download] 100% — $expectedCount / $expectedCount storage roots recovered — COMPLETE"
+        )
         abandonTimer.foreach(_.cancel())
         appStateStorage.storageRecoveryDone().commit()
         syncController ! RecoveryComplete
@@ -253,6 +274,21 @@ class StorageRecoveryActor(
 
       case SNAPSyncController.ProgressStorageSlotsSynced(_) =>
         recordProgress()
+        recoveredCount += 1
+        val (newM, crossed) =
+          ProgressMilestones.crossed(recoveredCount, expectedCount.toLong, lastStorageRecoveryMilestone)
+        lastStorageRecoveryMilestone = newM
+        crossed.foreach { m =>
+          val elapsedSecs = (System.nanoTime() - lastRateNanos) / 1e9
+          val rate = if (elapsedSecs > 0) ((recoveredCount - lastRateRecovered) / elapsedSecs).toLong else 0L
+          if (m % 10 == 0 || m <= 5 || m >= 95) {
+            lastRateNanos = System.nanoTime()
+            lastRateRecovered = recoveredCount
+          }
+          log.info(
+            s"[storage-recovery] [download] $m% — $recoveredCount / $expectedCount storage roots recovered | $rate roots/s"
+          )
+        }
 
       case _: SNAPSyncController.PivotStateUnservable =>
         unservableCount += 1

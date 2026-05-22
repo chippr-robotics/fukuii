@@ -22,6 +22,7 @@ import scala.concurrent.duration._
 import scala.util.{Success, Failure}
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
+import com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.{DeferredWriteMptStorage, FlatAccountStorage, MptStorage}
 import com.chipprbots.ethereum.domain.Account
@@ -370,6 +371,8 @@ class AccountRangeCoordinator(
   private val startTime = System.currentTimeMillis()
   private var lastProgressLogAt: Long = 0 // accounts count at last periodic log
   private val ProgressLogInterval: Long = 100_000 // log every 100K accounts
+  private var lastFlatMilestonePct: Int = -1
+  private var totalFlatAccountsWritten: Long = 0L
   private val totalKeyspace: BigInt = BigInt(2).pow(256)
   // Cumulative keyspace consumed: incremented each time a task's `next` advances.
   // On restart, derive from restored task positions so progress % and ETA are accurate.
@@ -834,6 +837,9 @@ class AccountRangeCoordinator(
       }
       if (isComplete) {
         log.info("Account range sync complete!")
+        log.info(
+          s"[flat-accounts] 100% — ${totalFlatAccountsWritten} total entries written to FlatAccountStorage"
+        )
 
         // Signal controller IMMEDIATELY so storage+bytecode phases can start in parallel
         // with trie finalization. These phases don't need the finalized account trie —
@@ -1374,6 +1380,15 @@ class AccountRangeCoordinator(
         )
         com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setAccountActivePeers(activePeerCount)
         lastProgressLogAt = accountsDownloaded
+        val pctInt = pct.toInt
+        val (newM, crossed) = ProgressMilestones.crossed(pctInt.toLong, 100L, lastFlatMilestonePct)
+        lastFlatMilestonePct = newM
+        crossed.foreach { m =>
+          log.info(
+            s"[flat-accounts] ${m}% keyspace covered — ${totalFlatAccountsWritten} entries written " +
+              s"to FlatAccountStorage | $accountsDownloaded accounts downloaded | ${rate} accts/s"
+          )
+        }
       }
 
       if (rest.nonEmpty) {
@@ -1404,6 +1419,7 @@ class AccountRangeCoordinator(
             if (pendingFlatAccounts.nonEmpty) {
               val flatBatch = pendingFlatAccounts.toSeq
               pendingFlatAccounts.clear()
+              totalFlatAccountsWritten += flatBatch.size
               val fas = flatAccountStorage
               Future {
                 blocking { fas.putAccountsBatch(flatBatch).commit() }
@@ -1507,6 +1523,7 @@ class AccountRangeCoordinator(
     val storage = deferredStorage
     val flatBatch = pendingFlatAccounts.toSeq
     pendingFlatAccounts.clear()
+    totalFlatAccountsWritten += flatBatch.size
     val fas = flatAccountStorage
     Future {
       blocking {

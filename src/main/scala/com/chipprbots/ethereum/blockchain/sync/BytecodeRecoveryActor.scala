@@ -115,6 +115,7 @@ class BytecodeRecoveryActor(
     val selfRef = self
     val fas = flatAccountStorage
     val ecs = evmCodeStorage
+    val approxTotal = fas.approximateKeyCount()
     Future {
       blocking {
         val seenHashes = mutable.HashSet.empty[ByteString]
@@ -123,30 +124,44 @@ class BytecodeRecoveryActor(
         var contracts = 0L
         var checked = 0L
         var lastNanos = System.nanoTime()
+        var lastScanMilestonePct: Int = -1
 
         fas.seekFrom(ByteString.empty)
           .evalMap {
-            case Right((_, rlpBytes)) => IO {
-              accounts += 1
-              if (accounts % 1_000_000 == 0) {
-                val rate = (1_000_000 / ((System.nanoTime() - lastNanos) / 1e9)).toLong
-                log.info(
-                  s"[bytecode-recovery] [scan] $accounts accounts | $contracts contracts | " +
-                    s"$checked unique hashes checked | ${pending.size} pending | $rate accts/s"
-                )
-                lastNanos = System.nanoTime()
-              }
-              Account(rlpBytes) match {
-                case Success(acct) if acct.codeHash != Account.EmptyCodeHash =>
-                  contracts += 1
-                  if (!seenHashes.contains(acct.codeHash)) {
-                    seenHashes += acct.codeHash
-                    checked += 1
-                    if (ecs.get(acct.codeHash).isEmpty) {
-                      pending += acct.codeHash
-                      if (pending.size >= batchFlushSize) {
-                        selfRef ! ScanBatch(pending.toSeq)
-                        pending.clear()
+            case Right((_, rlpBytes)) =>
+              IO {
+                accounts += 1
+                if (accounts % 1_000_000 == 0) {
+                  val rate = (1_000_000 / ((System.nanoTime() - lastNanos) / 1e9)).toLong
+                  val pctStr = if (approxTotal > 0) s" | ${(accounts * 100.0 / approxTotal).toInt}%" else ""
+                  log.info(
+                    s"[bytecode-recovery] [scan] $accounts accounts$pctStr | $contracts contracts | " +
+                      s"$checked unique hashes checked | ${pending.size} pending | $rate accts/s"
+                  )
+                  if (approxTotal > 0) {
+                    val (newM, crossed) =
+                      ProgressMilestones.crossed(accounts, approxTotal, lastScanMilestonePct)
+                    lastScanMilestonePct = newM
+                    crossed.foreach(m =>
+                      log.info(
+                        s"[bytecode-recovery] [scan] $m% — $accounts / ~$approxTotal accounts scanned"
+                      )
+                    )
+                  }
+                  lastNanos = System.nanoTime()
+                }
+                Account(rlpBytes) match {
+                  case Success(acct) if acct.codeHash != Account.EmptyCodeHash =>
+                    contracts += 1
+                    if (!seenHashes.contains(acct.codeHash)) {
+                      seenHashes += acct.codeHash
+                      checked += 1
+                      if (ecs.get(acct.codeHash).isEmpty) {
+                        pending += acct.codeHash
+                        if (pending.size >= batchFlushSize) {
+                          selfRef ! ScanBatch(pending.toSeq)
+                          pending.clear()
+                        }
                       }
                     }
                   }
@@ -204,6 +219,10 @@ class BytecodeRecoveryActor(
     var abandonTimer: Option[Cancellable] = Some(
       context.system.scheduler.scheduleOnce(abandonAfter, self, CheckAbandon(0L))
     )
+    var downloadedCount = 0L
+    var lastBytecodeRecoveryMilestone: Int = -1
+    var lastRateNanos = System.nanoTime()
+    var lastRateDownloaded = 0L
 
     def recordProgress(): Unit = {
       progressSeq += 1
@@ -223,11 +242,28 @@ class BytecodeRecoveryActor(
         coordinator ! snap.actors.Messages.ByteCodePeerAvailable(peer)
 
       case SNAPSyncController.ByteCodeSyncComplete =>
-        log.info(s"[bytecode-recovery] [download] complete — recovered $expectedCount bytecodes")
+        log.info(
+          s"[bytecode-recovery] [download] 100% — $expectedCount / $expectedCount bytecodes recovered — COMPLETE"
+        )
         finishRecovery()
 
       case SNAPSyncController.ProgressBytecodesDownloaded(_) =>
         recordProgress()
+        downloadedCount += 1
+        val (newM, crossed) =
+          ProgressMilestones.crossed(downloadedCount, expectedCount.toLong, lastBytecodeRecoveryMilestone)
+        lastBytecodeRecoveryMilestone = newM
+        crossed.foreach { m =>
+          val elapsedSecs = (System.nanoTime() - lastRateNanos) / 1e9
+          val rate = if (elapsedSecs > 0) ((downloadedCount - lastRateDownloaded) / elapsedSecs).toLong else 0L
+          if (m % 10 == 0 || m <= 5 || m >= 95) {
+            lastRateNanos = System.nanoTime()
+            lastRateDownloaded = downloadedCount
+          }
+          log.info(
+            s"[bytecode-recovery] [download] $m% — $downloadedCount / $expectedCount bytecodes recovered | $rate bytecodes/s"
+          )
+        }
 
       case CheckAbandon(progressAtSchedule) =>
         if (progressAtSchedule == progressSeq) {
