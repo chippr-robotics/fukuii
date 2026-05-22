@@ -6,6 +6,7 @@ on:
       - main
       - master
       - develop
+      - staging
     paths-ignore:
       - 'docs/**'
       - '*.md'
@@ -67,8 +68,8 @@ jobs:
           MANUAL_INCREMENT: ${{ github.event.inputs.increment_type }}
         run: |
           # Increment policy:
-          #   develop          → patch (0.0.+1)
-          #   main / master    → minor (0.+1.0)
+          #   staging / develop → patch (0.0.+1)
+          #   main / master     → minor (0.+1.0)
           #   workflow_dispatch → caller picks (major / minor / patch)
           # Major bumps are intentionally manual-only — there is no automatic
           # path to a major version on a push, since major changes always
