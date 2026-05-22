@@ -739,4 +739,78 @@ class TrieNodeHealingCoordinatorSpec
     // The root was seeded as a pending task; with a peer available it should dispatch immediately
     networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
   }
+
+  it should "flush raw nodes to storage immediately on flushRawNodesAsync (no count threshold)" taggedAs UnitTest in {
+    // Regression guard for Fix 3: per-response immediate flush.
+    // Before the fix, rawNodeBuffer was only flushed when size >= rawFlushThreshold (1000).
+    // After the fix, flushRawNodesAsync() is always called after every peer response with
+    // healedCount > 0, and the count threshold was removed entirely.
+    // This test directly exercises the flush path with < 1000 nodes to verify the threshold gate
+    // is gone: any non-empty buffer must reach storage on the next flush call.
+    //
+    // We use a stub MptStorage that records raw bytes as-is (bypassing MPT decoding), because
+    // storeRawNodes in TestMptStorage calls MptTraversals.decodeNode which requires valid RLP.
+    import scala.collection.mutable
+    import org.apache.pekko.testkit.TestActorRef
+
+    class StubRawNodeStorage extends TestMptStorage {
+      val storedRaw: mutable.Map[ByteString, Array[Byte]] = mutable.Map.empty
+      override def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit =
+        nodes.foreach { case (hash, data) => storedRaw(hash) = data }
+    }
+
+    val stateRoot = kec256(ByteString("heal-flush-direct-test-root"))
+    val storage = new StubRawNodeStorage
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    // healingWriterEcOverride = system.dispatcher makes the async write synchronous in tests
+    val coord = TestActorRef[TrieNodeHealingCoordinator](
+      TrieNodeHealingCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        batchSize = 16,
+        snapSyncController = snapSyncController.ref,
+        healingWriterEcOverride = Some(system.dispatcher)
+      )
+    )
+
+    val ua = coord.underlyingActor
+
+    // Inject 3 raw nodes — far below the old 1000-entry threshold.
+    // Arbitrary byte arrays; the StubRawNodeStorage stores them as-is.
+    val nodeData1 = Array[Byte](0x01.toByte)
+    val nodeData2 = Array[Byte](0x02.toByte)
+    val nodeData3 = Array[Byte](0x03.toByte)
+    val hash1 = kec256(ByteString(nodeData1))
+    val hash2 = kec256(ByteString(nodeData2))
+    val hash3 = kec256(ByteString(nodeData3))
+
+    ua.rawNodeBuffer += ((hash1, nodeData1))
+    ua.rawNodeBuffer += ((hash2, nodeData2))
+    ua.rawNodeBuffer += ((hash3, nodeData3))
+    ua.flushing = false // ensure flush gate is open
+
+    // Trigger flush directly — the same method called after every peer response.
+    ua.flushRawNodesAsync()
+
+    // Buffer cleared synchronously before the async write completes
+    ua.rawNodeBuffer shouldBe empty
+    ua.flushing shouldBe true
+
+    // Async write completes on system.dispatcher — nodes must be in the stub storage
+    awaitAssert(
+      {
+        storage.storedRaw.contains(hash1) shouldBe true
+        storage.storedRaw.contains(hash2) shouldBe true
+        storage.storedRaw.contains(hash3) shouldBe true
+      },
+      max = 2.seconds
+    )
+
+    system.stop(coord)
+  }
 }

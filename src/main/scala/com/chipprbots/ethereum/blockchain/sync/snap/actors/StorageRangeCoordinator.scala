@@ -55,7 +55,7 @@ class StorageRangeCoordinator(
     configInitialResponseBytes: Int = 1048576,
     configMinResponseBytes: Int = 131072,
     deferredMerkleization: Boolean = true,
-    flatBatchEntryThreshold: Int = 1000,
+    flatBatchBytesThreshold: Long = 8 * 1024 * 1024, // matches SnapHashTrie.DefaultBatchSizeBytes
     flatBatchEcOverride: Option[ExecutionContext] = None,
     /** Legacy toggle retained for source compatibility — the streaming `SnapHashTrie` path is now unconditional, with
       * `deferredMerkleization` controlling whether per-contract tries are built at all. The field exists so callers
@@ -486,6 +486,11 @@ class StorageRangeCoordinator(
   /** Total slot entries currently buffered in `pendingFlatBatchAccounts`. Package-private for unit tests. */
   private[actors] var pendingFlatBatchEntries: Int = 0
 
+  /** Total bytes buffered in `pendingFlatBatchAccounts` — drives the byte-based flush threshold. Package-private for
+    * unit tests.
+    */
+  private[actors] var pendingFlatBatchBytes: Long = 0L
+
   /** Number of in-flight async flat-batch flushes — used to gate completion. Package-private for unit tests. */
   private[actors] var inFlightFlatBatches: Int = 0
 
@@ -497,7 +502,7 @@ class StorageRangeCoordinator(
 
   /** Append a per-response chunk of verified slots to the flat-slot accumulator. The streaming storage-trie path
     * commits the trie incrementally inside `SnapHashTrie`; flat-slot writes remain batched (sorted within each chunk)
-    * and are flushed to RocksDB off-actor once the accumulator hits `flatBatchEntryThreshold` or the actor stops.
+    * and are flushed to RocksDB off-actor once the accumulator hits `flatBatchBytesThreshold` (8MB) or the actor stops.
     */
   private[actors] def stageFlatSlotChunk(
       accountHash: ByteString,
@@ -507,7 +512,8 @@ class StorageRangeCoordinator(
     val sorted = slots.sortBy(_._1)(ByteStringOrdering)
     pendingFlatBatchAccounts += ((accountHash, sorted))
     pendingFlatBatchEntries += sorted.size
-    if (pendingFlatBatchEntries >= flatBatchEntryThreshold) {
+    pendingFlatBatchBytes += sorted.foldLeft(0L) { case (acc, (k, v)) => acc + k.length + v.length }
+    if (pendingFlatBatchBytes >= flatBatchBytesThreshold) {
       flushPendingFlatBatch()
     }
   }
@@ -521,10 +527,14 @@ class StorageRangeCoordinator(
     if (pendingFlatBatchAccounts.isEmpty) return
     val batchAccounts = pendingFlatBatchAccounts.toList // immutable snapshot
     val entries = pendingFlatBatchEntries
+    val batchBytes = pendingFlatBatchBytes
     val forStateRoot = stateRoot
     pendingFlatBatchAccounts.clear()
     pendingFlatBatchEntries = 0
+    pendingFlatBatchBytes = 0L
     inFlightFlatBatches += 1
+    val mb = f"${batchBytes / 1048576.0}%.1f"
+    log.info(s"[STORAGE-STATE] flat flush — $entries slots (${mb}MB) | inFlight=$inFlightFlatBatches")
 
     val selfRef = self
     val storage = flatSlotStorage // capture for Future
@@ -629,6 +639,7 @@ class StorageRangeCoordinator(
       }
       pendingFlatBatchAccounts.clear()
       pendingFlatBatchEntries = 0
+      pendingFlatBatchBytes = 0L
     }
     super.postStop()
   }
@@ -1467,7 +1478,7 @@ object StorageRangeCoordinator {
       initialResponseBytes: Int = 1048576,
       minResponseBytes: Int = 131072,
       deferredMerkleization: Boolean = true,
-      flatBatchEntryThreshold: Int = 1000,
+      flatBatchBytesThreshold: Long = 8 * 1024 * 1024,
       flatBatchEcOverride: Option[ExecutionContext] = None,
       useStackTrie: Boolean = false,
       backpressureHighWatermark: Int = 100000,
@@ -1490,7 +1501,7 @@ object StorageRangeCoordinator {
         configInitialResponseBytes = initialResponseBytes,
         configMinResponseBytes = minResponseBytes,
         deferredMerkleization = deferredMerkleization,
-        flatBatchEntryThreshold = flatBatchEntryThreshold,
+        flatBatchBytesThreshold = flatBatchBytesThreshold,
         flatBatchEcOverride = flatBatchEcOverride,
         useStackTrie = useStackTrie,
         backpressureHighWatermark = backpressureHighWatermark,

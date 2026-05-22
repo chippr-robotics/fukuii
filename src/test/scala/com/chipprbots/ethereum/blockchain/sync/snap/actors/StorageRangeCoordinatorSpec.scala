@@ -504,7 +504,7 @@ class StorageRangeCoordinatorSpec
     */
   private def newCoordWithFlatBatch(
       flatSlotStorage: FlatSlotStorage,
-      threshold: Int,
+      thresholdBytes: Long,
       stateRootArg: ByteString = kec256(ByteString("flat-batch-test-root"))
   ): (TestActorRef[StorageRangeCoordinator], TestProbe) = {
     val controller = TestProbe()
@@ -519,7 +519,7 @@ class StorageRangeCoordinatorSpec
         maxInFlightRequests = 8,
         requestTimeout = 30.seconds,
         snapSyncController = controller.ref,
-        flatBatchEntryThreshold = threshold,
+        flatBatchBytesThreshold = thresholdBytes,
         flatBatchEcOverride = Some(system.dispatcher)
       )
     )
@@ -545,7 +545,7 @@ class StorageRangeCoordinatorSpec
 
   it should "buffer small-contract slots in the accumulator without immediate commit" taggedAs UnitTest in {
     val flatSlots = new FlatSlotStorage(EphemDataSource())
-    val (coord, _) = newCoordWithFlatBatch(flatSlots, threshold = 100)
+    val (coord, _) = newCoordWithFlatBatch(flatSlots, thresholdBytes = 4096L)
 
     val (accountHash, slots) = fakeContract(seed = 1, slotsPerAccount = 3)
     coord.underlyingActor.stageFlatSlotChunk(accountHash, slots.toSeq)
@@ -562,9 +562,9 @@ class StorageRangeCoordinatorSpec
 
   it should "flush exactly once when the threshold is crossed and persist all buffered slots" taggedAs UnitTest in {
     val flatSlots = new FlatSlotStorage(EphemDataSource())
-    val (coord, _) = newCoordWithFlatBatch(flatSlots, threshold = 5)
+    val (coord, _) = newCoordWithFlatBatch(flatSlots, thresholdBytes = 200L)
 
-    // Three contracts, 2 slots each = 6 total slots, crossing the 5-entry threshold.
+    // Three contracts, 2 slots each = 6 total slots (~260 bytes), crossing the 200-byte threshold.
     val contracts = (1 to 3).map(i => fakeContract(seed = i, slotsPerAccount = 2))
     contracts.foreach { case (h, s) => coord.underlyingActor.stageFlatSlotChunk(h, s.toSeq) }
 
@@ -587,7 +587,7 @@ class StorageRangeCoordinatorSpec
 
   it should "not trigger a flush when accumulator stays below threshold" taggedAs UnitTest in {
     val flatSlots = new FlatSlotStorage(EphemDataSource())
-    val (coord, _) = newCoordWithFlatBatch(flatSlots, threshold = 1000)
+    val (coord, _) = newCoordWithFlatBatch(flatSlots, thresholdBytes = 8 * 1024 * 1024L)
 
     val (accountHash, slots) = fakeContract(seed = 42, slotsPerAccount = 50)
     coord.underlyingActor.stageFlatSlotChunk(accountHash, slots.toSeq)
@@ -601,7 +601,7 @@ class StorageRangeCoordinatorSpec
 
   it should "flush remaining accumulator on ForceCompleteStorage" taggedAs UnitTest in {
     val flatSlots = new FlatSlotStorage(EphemDataSource())
-    val (coord, controller) = newCoordWithFlatBatch(flatSlots, threshold = 1000)
+    val (coord, controller) = newCoordWithFlatBatch(flatSlots, thresholdBytes = 8 * 1024 * 1024L)
 
     val (accountHash, slots) = fakeContract(seed = 99, slotsPerAccount = 4)
     coord.underlyingActor.stageFlatSlotChunk(accountHash, slots.toSeq)
@@ -620,7 +620,7 @@ class StorageRangeCoordinatorSpec
 
   it should "drop bookkeeping for FlatBatchFlushComplete from a stale state root" taggedAs UnitTest in {
     val flatSlots = new FlatSlotStorage(EphemDataSource())
-    val (coord, _) = newCoordWithFlatBatch(flatSlots, threshold = 1000)
+    val (coord, _) = newCoordWithFlatBatch(flatSlots, thresholdBytes = 8 * 1024 * 1024L)
 
     coord.underlyingActor.inFlightFlatBatches = 1
     val staleRoot = kec256(ByteString("a-stale-root"))
@@ -636,7 +636,7 @@ class StorageRangeCoordinatorSpec
     val flatSlots = new FlatSlotStorage(EphemDataSource())
     val oldRoot = kec256(ByteString("old-root"))
     val newRoot = kec256(ByteString("new-root"))
-    val (coord, _) = newCoordWithFlatBatch(flatSlots, threshold = 1000, stateRootArg = oldRoot)
+    val (coord, _) = newCoordWithFlatBatch(flatSlots, thresholdBytes = 8 * 1024 * 1024L, stateRootArg = oldRoot)
 
     // Buffer some data while stateRoot == oldRoot.
     val (accountHash, slots) = fakeContract(seed = 7, slotsPerAccount = 4)
@@ -657,9 +657,35 @@ class StorageRangeCoordinatorSpec
     system.stop(coord)
   }
 
+  it should "reset byte counter to zero after a threshold-triggered flush" taggedAs UnitTest in {
+    // Regression guard for Fix 2: pendingFlatBatchBytes must be zeroed on every flush,
+    // preventing the byte accumulator from growing without bound across multiple flush cycles.
+    val flatSlots = new FlatSlotStorage(EphemDataSource())
+    val (coord, _) = newCoordWithFlatBatch(flatSlots, thresholdBytes = 200L)
+
+    // First batch: 3 contracts × 2 slots each = ~260 bytes — triggers flush at threshold.
+    val contracts1 = (1 to 3).map(i => fakeContract(seed = i, slotsPerAccount = 2))
+    contracts1.foreach { case (h, s) => coord.underlyingActor.stageFlatSlotChunk(h, s.toSeq) }
+
+    awaitAssert(coord.underlyingActor.inFlightFlatBatches shouldBe 0, max = 1.second)
+
+    // Byte counter must be zero after flush — not accumulating across batches.
+    coord.underlyingActor.pendingFlatBatchBytes shouldBe 0L
+    coord.underlyingActor.pendingFlatBatchEntries shouldBe 0
+
+    // Second batch of the same size should also trigger (not rely on leftover bytes)
+    val contracts2 = (4 to 6).map(i => fakeContract(seed = i, slotsPerAccount = 2))
+    contracts2.foreach { case (h, s) => coord.underlyingActor.stageFlatSlotChunk(h, s.toSeq) }
+
+    awaitAssert(coord.underlyingActor.inFlightFlatBatches shouldBe 0, max = 1.second)
+    coord.underlyingActor.pendingFlatBatchBytes shouldBe 0L
+
+    system.stop(coord)
+  }
+
   it should "decrement in-flight count on FlatBatchFlushFailed and stay operational" taggedAs UnitTest in {
     val flatSlots = new FlatSlotStorage(EphemDataSource())
-    val (coord, _) = newCoordWithFlatBatch(flatSlots, threshold = 1000)
+    val (coord, _) = newCoordWithFlatBatch(flatSlots, thresholdBytes = 8 * 1024 * 1024L)
 
     coord.underlyingActor.inFlightFlatBatches = 2
 

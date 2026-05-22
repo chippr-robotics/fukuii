@@ -548,15 +548,17 @@ class ChainDownloader(
         .maxOption
         .getOrElse(BigInt(0))
 
-      receiptsByHash.zipWithIndex.foreach { case ((hash, receipts), idx) =>
-        val storeUpdate = blockchainWriter.storeReceipts(hash, receipts)
-        val withCursor =
-          if (idx == receiptsByHash.size - 1 && highestReceiptNumber > appStateStorage.getBackfillBestReceipt())
-            storeUpdate.and(appStateStorage.putBackfillBestReceipt(highestReceiptNumber))
-          else
-            storeUpdate
-        withCursor.commit()
-      }
+      val cursorUpdate =
+        if (highestReceiptNumber > appStateStorage.getBackfillBestReceipt())
+          appStateStorage.putBackfillBestReceipt(highestReceiptNumber)
+        else
+          appStateStorage.emptyBatchUpdate
+      receiptsByHash
+        .map { case (hash, receipts) => blockchainWriter.storeReceipts(hash, receipts) }
+        .reduce(_.and(_))
+        .and(cursorUpdate)
+        .commit()
+      log.debug(s"[CHAIN-DOWNLOADER] receipts committed: ${receiptsByHash.size} blocks up to #$highestReceiptNumber")
 
       receiptsDownloaded += receiptsByBlock.size
 

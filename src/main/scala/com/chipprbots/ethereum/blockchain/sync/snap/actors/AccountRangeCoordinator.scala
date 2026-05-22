@@ -84,7 +84,8 @@ class AccountRangeCoordinator(
       * validated on Sepolia + Mordor.
       */
     useStackTrie: Boolean = false,
-    flatAccountStorage: FlatAccountStorage
+    flatAccountStorage: FlatAccountStorage,
+    flatFlushThresholdBytes: Long = 8 * 1024 * 1024 // matches SnapHashTrie.DefaultBatchSizeBytes; override in tests
 ) extends Actor
     with ActorLogging {
 
@@ -553,10 +554,11 @@ class AccountRangeCoordinator(
   private[actors] val taskStackTries: mutable.Map[ByteString, SnapHashTrie] = mutable.Map.empty
 
   // Accumulator for flat account entries to be written to FlatAccountStorage.
-  // Flushed async on accountTrieEc alongside the MPT flush (Legacy path) or
-  // after each task commit (StackTrie path). Cleared on PivotRefreshed.
+  // Flushed async on accountTrieEc at 8MB intervals (StackTrie path) or alongside
+  // the MPT flush (Legacy path). Cleared on PivotRefreshed.
   private[actors] val pendingFlatAccounts =
     mutable.ArrayBuffer.empty[(ByteString, ByteString)] // (accountHash, rlpEncodedAccount)
+  private[actors] var pendingFlatAccountBytes: Long = 0L
 
   override def preStart(): Unit = {
     if (skippedTasks.nonEmpty) {
@@ -586,8 +588,9 @@ class AccountRangeCoordinator(
     // Flush any remaining flat account entries synchronously (actor stopping — no async).
     if (pendingFlatAccounts.nonEmpty) {
       try {
+        val remaining = pendingFlatAccounts.size
         flatAccountStorage.putAccountsBatch(pendingFlatAccounts.toSeq).commit()
-        log.info(s"[FLAT-ACCOUNTS] postStop: flushed ${pendingFlatAccounts.size} remaining entries")
+        log.info(s"[FLAT-ACCOUNTS] postStop: flushed $remaining remaining entries")
       } catch {
         case e: Exception =>
           log.error(e, s"[FLAT-ACCOUNTS] postStop: failed to flush ${pendingFlatAccounts.size} remaining entries")
@@ -615,6 +618,28 @@ class AccountRangeCoordinator(
       s"AccountRangeCoordinator stopped. Downloaded $accountsDownloaded accounts, identified $contractAccountsCount contracts ($uniqueCodeHashesCount unique codeHashes)"
     )
   }
+
+  private[actors] def spawnIncrementalFlatFlush(): Unit =
+    if (pendingFlatAccounts.nonEmpty) {
+      val flatBatch = pendingFlatAccounts.toSeq
+      val batchBytes = pendingFlatAccountBytes
+      pendingFlatAccounts.clear()
+      pendingFlatAccountBytes = 0L
+      totalFlatAccountsWritten += flatBatch.size
+      val mb = f"${batchBytes / 1048576.0}%.1f"
+      log.info(
+        s"[FLAT-ACCOUNTS] flushing ${flatBatch.size} entries (${mb}MB) to RocksDB | " +
+          s"totalCommitted=$totalFlatAccountsWritten | $accountsDownloaded accounts downloaded"
+      )
+      val fas = flatAccountStorage
+      Future {
+        blocking(fas.putAccountsBatch(flatBatch).commit())
+      }(accountTrieEc).onComplete {
+        case Failure(ex) =>
+          log.error(ex, s"[FLAT-ACCOUNTS] flush failed (${flatBatch.size} entries, ${mb}MB)")
+        case _ => ()
+      }(context.dispatcher)
+    }
 
   /** Collect current task positions and send to controller for resume across restarts. */
   private def sendProgressSnapshot(): Unit = {
@@ -658,6 +683,7 @@ class AccountRangeCoordinator(
       if (pendingFlatAccounts.nonEmpty) {
         log.debug(s"[FLAT-ACCOUNTS] cleared ${pendingFlatAccounts.size} pending entries on PivotRefreshed")
         pendingFlatAccounts.clear()
+        pendingFlatAccountBytes = 0L
       }
 
       // Clear stateless AND snapless tracking — peers get a fresh slate at the new root.
@@ -1348,7 +1374,14 @@ class AccountRangeCoordinator(
           val rlp = Account.accountSerializer.toBytes(account)
           trie.update(accountHash.toArray, rlp)
           pendingFlatAccounts += ((accountHash, ByteString.fromArrayUnsafe(rlp)))
+          pendingFlatAccountBytes += 32L + rlp.length
+          if (pendingFlatAccountBytes % (1024 * 1024) < 32L + rlp.length)
+            log.debug(
+              s"[FLAT-ACCOUNTS] accumulating — ${pendingFlatAccounts.size} entries " +
+                s"(${pendingFlatAccountBytes / 1048576}MB / 8MB) | totalCommitted=$totalFlatAccountsWritten"
+            )
         }
+        if (pendingFlatAccountBytes >= flatFlushThresholdBytes) spawnIncrementalFlatFlush()
       } else {
         // Legacy MPT path: single global trie over DeferredWriteMptStorage.
         // Buffers everything in memory until threshold-based flush.
@@ -1357,6 +1390,7 @@ class AccountRangeCoordinator(
           val rlp = Account.accountSerializer.toBytes(account)
           currentTrie = currentTrie.put(accountHash, account)
           pendingFlatAccounts += ((accountHash, ByteString.fromArrayUnsafe(rlp)))
+          pendingFlatAccountBytes += 32L + rlp.length
         }
         stateTrie = currentTrie
       }
@@ -1415,25 +1449,10 @@ class AccountRangeCoordinator(
                   s"fragment root ${fragmentRoot.take(4).toArray.map("%02x".format(_)).mkString})"
               )
             }
-            // StackTrie path: flush accumulated flat accounts for this task async on accountTrieEc.
-            if (pendingFlatAccounts.nonEmpty) {
-              val flatBatch = pendingFlatAccounts.toSeq
-              pendingFlatAccounts.clear()
-              totalFlatAccountsWritten += flatBatch.size
-              log.info(
-                s"[FLAT-ACCOUNTS] task complete — flushing ${flatBatch.size} entries | " +
-                  s"totalCommitted=$totalFlatAccountsWritten | $accountsDownloaded accounts downloaded"
-              )
-              val fas = flatAccountStorage
-              Future {
-                blocking { fas.putAccountsBatch(flatBatch).commit() }
-              }(accountTrieEc).onComplete {
-                case Failure(ex) =>
-                  log.error(ex, s"[FLAT-ACCOUNTS] async flush failed (StackTrie path, ${flatBatch.size} entries)")
-                case _ =>
-                  log.debug(s"[FLAT-ACCOUNTS] flushed ${flatBatch.size} account entries to FlatAccountStorage")
-              }(context.dispatcher)
-            }
+            // StackTrie path: drain any remaining flat accounts below the 8MB threshold.
+            if (pendingFlatAccounts.nonEmpty)
+              log.info(s"[FLAT-ACCOUNTS] task complete — draining ${pendingFlatAccounts.size} remainder entries")
+            spawnIncrementalFlatFlush()
           } else {
             log.info(
               s"Account range COMPLETE: ${task.rangeString} " +
@@ -1527,6 +1546,7 @@ class AccountRangeCoordinator(
     val storage = deferredStorage
     val flatBatch = pendingFlatAccounts.toSeq
     pendingFlatAccounts.clear()
+    pendingFlatAccountBytes = 0L
     totalFlatAccountsWritten += flatBatch.size
     val fas = flatAccountStorage
     Future {
@@ -1856,7 +1876,8 @@ object AccountRangeCoordinator {
       minResponseBytes: Int = 102400,
       accountTrieEcOverride: Option[ExecutionContext] = None,
       useStackTrie: Boolean = false,
-      flatAccountStorage: FlatAccountStorage = new FlatAccountStorage(EphemDataSource())
+      flatAccountStorage: FlatAccountStorage = new FlatAccountStorage(EphemDataSource()),
+      flatFlushThresholdBytes: Long = 8 * 1024 * 1024
   ): Props =
     Props(
       new AccountRangeCoordinator(
@@ -1873,7 +1894,8 @@ object AccountRangeCoordinator {
         minResponseBytes,
         accountTrieEcOverride,
         useStackTrie,
-        flatAccountStorage
+        flatAccountStorage,
+        flatFlushThresholdBytes
       )
     )
 }

@@ -1475,4 +1475,142 @@ class AccountRangeCoordinatorSpec
     flatStorage.getAccount(h2) should not be empty
     flatStorage.getAccount(h3) should not be empty
   }
+
+  it should "flush flat accounts mid-run when byte threshold is crossed (no task completion needed)" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+    import com.chipprbots.ethereum.db.storage.FlatAccountStorage
+    import com.chipprbots.ethereum.domain.Account
+
+    val ds = EphemDataSource()
+    val flatStorage = new FlatAccountStorage(ds)
+    val stateRoot = kec256(ByteString("flat-threshold-test-root"))
+    val controller = TestProbe()
+
+    // Use a tiny threshold (200 bytes) so a few entries trigger the flush
+    // without needing 8 MB of test data.
+    val coord = TestActorRef[AccountRangeCoordinator](
+      AccountRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = TestProbe().ref,
+        requestTracker = new SNAPRequestTracker()(system.scheduler),
+        mptStorage = new TestMptStorage(),
+        concurrency = 1,
+        snapSyncController = controller.ref,
+        accountTrieEcOverride = Some(system.dispatcher),
+        useStackTrie = true,
+        flatAccountStorage = flatStorage,
+        flatFlushThresholdBytes = 200L
+      )
+    )
+
+    coord ! Messages.StartAccountRangeSync(stateRoot)
+    val ua = coord.underlyingActor
+    awaitAssert(ua.pendingTasks.nonEmpty shouldBe true, 2.seconds, 50.millis)
+
+    val emptyAcct = Account(
+      nonce = 0,
+      balance = com.chipprbots.ethereum.domain.UInt256.Zero,
+      storageRoot = Account.EmptyStorageRootHash,
+      codeHash = Account.EmptyCodeHash
+    )
+    val rlp = Account.accountSerializer.toBytes(emptyAcct)
+    val rlpBS = org.apache.pekko.util.ByteString.fromArrayUnsafe(rlp)
+
+    val h1 = kec256(ByteString("flat-threshold-1"))
+    val h2 = kec256(ByteString("flat-threshold-2"))
+    val h3 = kec256(ByteString("flat-threshold-3"))
+
+    // Inject entries — each is 32 (hash) + rlp.length bytes; three total > 200 bytes.
+    ua.pendingFlatAccounts += ((h1, rlpBS))
+    ua.pendingFlatAccountBytes += 32L + rlp.length
+    ua.pendingFlatAccounts += ((h2, rlpBS))
+    ua.pendingFlatAccountBytes += 32L + rlp.length
+    ua.pendingFlatAccounts += ((h3, rlpBS))
+    ua.pendingFlatAccountBytes += 32L + rlp.length
+
+    // Buffer is above threshold — call spawnIncrementalFlatFlush directly
+    // (private[actors], accessible via TestActorRef.underlyingActor).
+    // This is the same method the storeAccountChunk path calls when bytes >= threshold.
+    ua.pendingFlatAccountBytes should be > 200L
+    ua.spawnIncrementalFlatFlush()
+
+    // Buffer must be cleared immediately (synchronously, before the async write completes)
+    ua.pendingFlatAccounts shouldBe empty
+    ua.pendingFlatAccountBytes shouldBe 0L
+
+    // Async write completes on system.dispatcher — entries must appear in FlatAccountStorage
+    awaitAssert(
+      {
+        flatStorage.getAccount(h1) should not be empty
+        flatStorage.getAccount(h2) should not be empty
+        flatStorage.getAccount(h3) should not be empty
+      },
+      max = 2.seconds
+    )
+
+    system.stop(coord)
+  }
+
+  it should "drain remaining flat accounts below threshold on postStop (final flush)" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+    import com.chipprbots.ethereum.db.storage.FlatAccountStorage
+    import com.chipprbots.ethereum.domain.Account
+
+    val ds = EphemDataSource()
+    val flatStorage = new FlatAccountStorage(ds)
+    val stateRoot = kec256(ByteString("flat-drain-test-root"))
+    val controller = TestProbe()
+
+    // High threshold — entries accumulate below the 8MB watermark without an
+    // automatic mid-run flush; they must survive to the postStop drain.
+    val coord = TestActorRef[AccountRangeCoordinator](
+      AccountRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = TestProbe().ref,
+        requestTracker = new SNAPRequestTracker()(system.scheduler),
+        mptStorage = new TestMptStorage(),
+        concurrency = 1,
+        snapSyncController = controller.ref,
+        accountTrieEcOverride = Some(system.dispatcher),
+        useStackTrie = true,
+        flatAccountStorage = flatStorage,
+        flatFlushThresholdBytes = 8 * 1024 * 1024L
+      )
+    )
+
+    coord ! Messages.StartAccountRangeSync(stateRoot)
+    val ua = coord.underlyingActor
+    awaitAssert(ua.pendingTasks.nonEmpty shouldBe true, 2.seconds, 50.millis)
+
+    val emptyAcct = Account(
+      nonce = 0,
+      balance = com.chipprbots.ethereum.domain.UInt256.Zero,
+      storageRoot = Account.EmptyStorageRootHash,
+      codeHash = Account.EmptyCodeHash
+    )
+    val rlp = Account.accountSerializer.toBytes(emptyAcct)
+    val rlpBS = org.apache.pekko.util.ByteString.fromArrayUnsafe(rlp)
+
+    val h1 = kec256(ByteString("flat-drain-1"))
+    val h2 = kec256(ByteString("flat-drain-2"))
+
+    // Buffer entries below threshold — no automatic flush yet
+    ua.pendingFlatAccounts += ((h1, rlpBS))
+    ua.pendingFlatAccountBytes += 32L + rlp.length
+    ua.pendingFlatAccounts += ((h2, rlpBS))
+    ua.pendingFlatAccountBytes += 32L + rlp.length
+
+    ua.pendingFlatAccounts.size shouldBe 2
+    flatStorage.getAccount(h1) shouldBe empty
+    flatStorage.getAccount(h2) shouldBe empty
+
+    // postStop synchronously flushes the remainder — entries must appear in storage
+    val probe = TestProbe()
+    probe.watch(coord)
+    system.stop(coord)
+    probe.expectTerminated(coord, 3.seconds)
+
+    flatStorage.getAccount(h1) should not be empty
+    flatStorage.getAccount(h2) should not be empty
+  }
 }

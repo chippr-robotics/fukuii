@@ -198,10 +198,14 @@ class TrieNodeHealingCoordinator(
       }
   }
 
-  // Batched raw node storage: accumulate nodes and flush asynchronously
-  private val rawNodeBuffer = mutable.ArrayBuffer[(ByteString, Array[Byte])]()
-  private val rawFlushThreshold = 1000
-  private var flushing: Boolean = false
+  // Raw node buffer: flushed asynchronously after every peer response (per-response strategy —
+  // healing is sparse gap-filling so immediate persistence is preferred over batch accumulation).
+  // `private[actors]` so TrieNodeHealingCoordinatorSpec can drive flush tests via TestActorRef.
+  private[actors] val rawNodeBuffer = mutable.ArrayBuffer[(ByteString, Array[Byte])]()
+  private[actors] var flushing: Boolean = false
+  // Throttle backpressure: if buffer exceeds this many nodes the write thread is falling behind.
+  // Distinct from the (removed) count-based flush threshold — this is a heuristic for dispatch throttling only.
+  private val rawBufferBackpressureThreshold = 50
 
   // Internal message for async flush completion
   private case class FlushComplete(count: Int)
@@ -223,13 +227,17 @@ class TrieNodeHealingCoordinator(
     }
 
   /** Async flush — copies buffer, clears it, writes on the dedicated `healing-writer-dispatcher` so the blocking
-    * RocksDB write doesn't compete with sync actors on `sync-dispatcher`.
+    * RocksDB write doesn't compete with sync actors on `sync-dispatcher`. `private[actors]` so
+    * TrieNodeHealingCoordinatorSpec can trigger flush directly via TestActorRef.
     */
-  private def flushRawNodesAsync(): Unit =
+  private[actors] def flushRawNodesAsync(): Unit =
     if (rawNodeBuffer.nonEmpty && !flushing) {
       flushing = true
       val nodes = rawNodeBuffer.toSeq
+      val totalBytes = nodes.foldLeft(0L) { case (acc, (k, v)) => acc + k.length + v.length }
+      val kb = f"${totalBytes / 1024.0}%.1f"
       rawNodeBuffer.clear()
+      log.info(s"[HEAL-FLUSH] ${nodes.size} nodes (${kb}KB) | totalHealed=$totalNodesHealed")
       import scala.concurrent.{Future, blocking}
       val selfRef = self
       val ec = healingWriterEc
@@ -434,11 +442,9 @@ class TrieNodeHealingCoordinator(
 
     case FlushComplete(count) =>
       flushing = false
-      log.info(s"Async flush complete: $count healed nodes written to disk (total: $totalNodesHealed)")
-      // Check if buffer filled up again during the flush
-      if (rawNodeBuffer.size >= rawFlushThreshold) {
-        flushRawNodesAsync()
-      }
+      log.debug(s"[HEAL-FLUSH] complete: $count nodes written (total: $totalNodesHealed)")
+      // Drain any nodes that accumulated while the flush was in-flight
+      if (rawNodeBuffer.nonEmpty) flushRawNodesAsync()
       self ! HealingCheckCompletion
 
     case HealingTaskComplete(requestId, result) =>
@@ -616,7 +622,7 @@ class TrieNodeHealingCoordinator(
       // against the rate-derived target was a category error: the buffer almost always
       // exceeds 2*rate, which locked healThrottle at MaxThrottle and pinned the batch at
       // batchSize/MaxThrottle paths per request. See issue #1159.
-      val flushBackpressure = healPending > rawFlushThreshold * ThrottleUpFillRatio
+      val flushBackpressure = healPending > rawBufferBackpressureThreshold * ThrottleUpFillRatio
       if (flushBackpressure) {
         healThrottle = (healThrottle * ThrottleIncrease).min(MaxThrottle)
       } else {
@@ -625,7 +631,7 @@ class TrieNodeHealingCoordinator(
       if (oldThrottle != healThrottle) {
         log.debug(
           f"Healing throttle adjusted: $oldThrottle%.1f -> $healThrottle%.1f " +
-            f"(rate=$healRate%.1f nodes/s, bufferFill=$healPending/$rawFlushThreshold, batch=${effectiveBatchSize})"
+            f"(rate=$healRate%.1f nodes/s, bufferFill=$healPending/$rawBufferBackpressureThreshold, batch=${effectiveBatchSize})"
         )
       }
       lastThrottleAdjustMs = now
@@ -803,11 +809,7 @@ class TrieNodeHealingCoordinator(
 
     if (healedCount > 0) {
       snapSyncController ! SNAPSyncController.ProgressNodesHealed(healedCount.toLong)
-
-      // Periodic async flush of raw node buffer
-      if (rawNodeBuffer.size >= rawFlushThreshold) {
-        flushRawNodesAsync()
-      }
+      flushRawNodesAsync() // flush after every peer response — healing is sparse, per-response persistence preferred
     }
 
     // Dispatch more work to this peer if available (pipeline multiple requests)

@@ -707,7 +707,11 @@ class ByteCodeCoordinator(
       }
 
       updates.commit()
-      log.info(s"Successfully persisted ${codesByHash.size} bytecodes to storage")
+      val totalBytes = codesByHash.foldLeft(0L) { case (acc, (_, code)) => acc + code.length }
+      val kb = f"${totalBytes / 1024.0}%.1f"
+      log.info(
+        s"[BYTECODE-COORD] persisted ${codesByHash.size} bytecodes (${kb}KB) | completedTasks=$completedTaskCount"
+      )
       Right(())
     } catch {
       case e: Exception =>
