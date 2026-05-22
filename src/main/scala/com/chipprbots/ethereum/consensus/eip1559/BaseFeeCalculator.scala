@@ -38,10 +38,11 @@ object BaseFeeCalculator {
       val baseFeeDelta = (parentBaseFee * gasUsedDelta / parentGasTarget / BaseFeeChangeDenominator).max(1)
       parentBaseFee + baseFeeDelta
     } else {
-      // Parent used less gas than target — baseFee decreases
-      // max(0, parentBaseFee - parentBaseFee * gasUsedDelta / parentGasTarget / baseFeeChangeDenominator)
+      // Parent used less gas than target — baseFee decreases.
+      // Matches go-ethereum: baseFeeDelta = max(1, ...) so any non-zero baseFee will always
+      // decrease by at least 1 wei per block when underutilized, eventually reaching 0.
       val gasUsedDelta = parentGasTarget - parent.gasUsed
-      val baseFeeDelta = parentBaseFee * gasUsedDelta / parentGasTarget / BaseFeeChangeDenominator
+      val baseFeeDelta = (parentBaseFee * gasUsedDelta / parentGasTarget / BaseFeeChangeDenominator).max(1)
       (parentBaseFee - baseFeeDelta).max(0)
     }
   }

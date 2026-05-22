@@ -215,23 +215,18 @@ trait BlockHeaderValidatorSkeleton extends BlockHeaderValidator {
   private def validateGasLimit(
       blockHeader: BlockHeader,
       parentHeader: BlockHeader
-  )(implicit blockchainConfig: BlockchainConfig): Either[BlockHeaderError, BlockHeaderValid] =
+  ): Either[BlockHeaderError, BlockHeaderValid] =
     // 2^63 - 1 is the protocol-wide gasLimit cap (cannot fit in an int64). It applies
     // regardless of EIP-106 activation — any block with gasLimit >= 2^63 is malformed.
     if (blockHeader.gasLimit > MaxGasLimit)
       Left(HeaderGasLimitError)
     else {
-      // EIP-1559: at the London (Olympia in fukuii's naming) activation block the
-      // gas limit doubles (parent.gasLimit * ElasticityMultiplier). The 1/1024 bound
-      // is relaxed only for that one transition block.
-      val isLondonActivation =
-        blockHeader.number == blockchainConfig.forkBlockNumbers.olympiaBlockNumber &&
-          parentHeader.baseFee.isEmpty &&
-          blockHeader.baseFee.isDefined
-      val effectiveParentLimit =
-        if (isLondonActivation) parentHeader.gasLimit * 2 else parentHeader.gasLimit
-      val gasLimitDiff = (blockHeader.gasLimit - effectiveParentLimit).abs
-      val gasLimitDiffLimit = effectiveParentLimit / GasLimitBoundDivisor
+      // Standard ±1/1024 bound applies at all blocks including the Olympia activation.
+      // ETC Olympia increases gas limit 7.5× (8M → 60M) via gradual miner convergence
+      // over ~2,055 blocks — not the 2× one-shot doubling of ETH London (which was
+      // maintaining effective capacity, not increasing throughput).
+      val gasLimitDiff = (blockHeader.gasLimit - parentHeader.gasLimit).abs
+      val gasLimitDiffLimit = parentHeader.gasLimit / GasLimitBoundDivisor
       if (gasLimitDiff < gasLimitDiffLimit && blockHeader.gasLimit >= MinGasLimit)
         Right(BlockHeaderValid)
       else

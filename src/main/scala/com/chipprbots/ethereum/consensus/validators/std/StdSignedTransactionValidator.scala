@@ -38,6 +38,7 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
   )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid] =
     for {
       _ <- validateBlobTransactionSupport(stx, blockHeader)
+      _ <- validateOlympiaTxTypes(stx, blockHeader)
       _ <- checkSyntacticValidity(stx)
       _ <- validateInitCodeSize(stx, blockHeader.number)
       _ <- validateSignature(stx, blockHeader.number)
@@ -65,6 +66,35 @@ object StdSignedTransactionValidator extends SignedTransactionValidator {
         )
       case _ => Right(SignedTransactionValid)
     }
+
+  /** EIP-1559 Type-2 and EIP-7702 Type-4 transactions are only valid on ETC from Olympia onwards. Pre-Olympia, the fee
+    * market is not active on ETC and these transaction formats must be rejected. ETH is exempted — it gates these types
+    * via London (Type-2) and Prague (Type-4) activation.
+    */
+  private def validateOlympiaTxTypes(
+      stx: SignedTransaction,
+      blockHeader: BlockHeader
+  )(implicit blockchainConfig: BlockchainConfig): Either[SignedTransactionError, SignedTransactionValid] = {
+    if (blockchainConfig.networkType == com.chipprbots.ethereum.utils.NetworkType.ETH)
+      return Right(SignedTransactionValid)
+    if (blockHeader.number >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber)
+      return Right(SignedTransactionValid)
+    stx.tx match {
+      case _: TransactionWithDynamicFee =>
+        Left(
+          TransactionSyntaxError(
+            "TYPE_2_TX_NOT_SUPPORTED: EIP-1559 dynamic-fee transactions require Olympia activation"
+          )
+        )
+      case _: SetCodeTransaction =>
+        Left(
+          TransactionSyntaxError(
+            "TYPE_4_TX_NOT_SUPPORTED: EIP-7702 set-code transactions require Olympia activation"
+          )
+        )
+      case _ => Right(SignedTransactionValid)
+    }
+  }
 
   /** EIP-1559: reject txs whose maxFeePerGas cannot cover the block's baseFee, and reject txs where
     * maxPriorityFeePerGas > maxFeePerGas. Applies to all dynamic-fee transaction variants (type 2 / 3 / 4). Legacy and
