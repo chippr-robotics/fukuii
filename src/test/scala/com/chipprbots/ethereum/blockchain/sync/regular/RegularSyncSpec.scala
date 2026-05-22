@@ -717,6 +717,43 @@ class RegularSyncSpec
 
     }
 
+    "resiliency" should {
+      // B4 fix: AllForOneStrategy must cap restarts to prevent a tight crash-loop
+      // when peers are unavailable. Verify the bounds are wired correctly by
+      // inspecting the live actor's supervisorStrategy via TestActorRef.
+      "cap AllForOneStrategy restarts at 10 per minute (B4 fix)" taggedAs (UnitTest, SyncTest) in sync(
+        new Fixture(testSystem) {
+          import org.apache.pekko.testkit.TestActorRef
+          import org.apache.pekko.actor.AllForOneStrategy
+
+          val ref = TestActorRef[RegularSync](
+            RegularSync
+              .props(
+                peersClient.ref,
+                networkPeerManager.ref,
+                peerEventBus.ref,
+                consensusAdapter,
+                blockchainReader,
+                stateStorage,
+                evmCodeStorage,
+                branchResolution,
+                validators.blockValidator,
+                blacklist,
+                syncConfig,
+                ommersPool.ref,
+                pendingTransactionsManager.ref,
+                testSystem.scheduler,
+                this
+              )
+          )(testSystem)
+
+          val strategy = ref.underlyingActor.supervisorStrategy.asInstanceOf[AllForOneStrategy]
+          strategy.maxNrOfRetries shouldBe 10
+          strategy.withinTimeRange.toMinutes shouldBe 1L
+        }
+      )
+    }
+
     "reporting progress" should {
       "return NotSyncing until fetching started" in testCaseT { fixture =>
         import fixture._

@@ -96,4 +96,26 @@ class ForkChoiceManagerSpec extends TestKit(ActorSystem("ForkChoiceManagerSpec")
     second.expectMsgType[ForkChoiceManager.BeaconHead]
     first.expectNoMessage()
   }
+
+  it should "update number→hash mapping and best-block pointer atomically on a reorg (B3 fix)" taggedAs UnitTest in new Fixture {
+    // forkHeader: same number as storedHeader, different hash (different difficulty).
+    // Stored by hash only — NOT inserted into number→hash mapping — simulating a
+    // sidechain block that becomes canonical via engine_forkchoiceUpdated.
+    val forkHeader = storedHeader.copy(difficulty = 999999)
+    storagesInstance.storages.blockHeadersStorage.put(forkHeader.hash, forkHeader).commit()
+
+    // Pre-condition: forkHeader is not yet canonical at its number.
+    blockchainReader.getBlockHeaderByNumber(forkHeader.number).map(_.hash) should not be Some(forkHeader.hash)
+
+    // Apply fork choice — promoteBranchAndSetBest must rewrite canonical number→hash
+    // AND advance bestBlockInfo in a single commit (the B3 invariant).
+    val state = ForkChoiceState(forkHeader.hash, ByteString.empty, ByteString.empty)
+    fcm.applyForkChoiceState(state) shouldBe Right(())
+
+    // Both mappings must be consistent (proof that the single-commit write landed).
+    blockchainReader.getBlockHeaderByNumber(forkHeader.number).map(_.hash) shouldBe Some(forkHeader.hash)
+    val bestInfo = storagesInstance.storages.appStateStorage.getBestBlockInfo()
+    bestInfo.hash shouldBe forkHeader.hash
+    bestInfo.number shouldBe BigInt(12345)
+  }
 }

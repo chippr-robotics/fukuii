@@ -297,6 +297,28 @@ abstract class BaseNode extends Node {
         bestBlockInfo.number
       )
     }
+
+    // Fix 4: probe whether the best block's stateRoot exists in the MPT.
+    // A missing root is an early indicator of an incomplete SNAP state download
+    // or a crash partway through trie construction. The empty/genesis root
+    // (all-zeros) is always absent from storage — skip it.
+    if (bestBlockInfo.hash.nonEmpty) {
+      storages.blockHeadersStorage.get(bestBlockInfo.hash).foreach { header =>
+        val emptyStateRoot = ByteString(Array.fill(32)(0.toByte))
+        if (header.stateRoot != emptyStateRoot) {
+          storages.stateStorage.getNode(header.stateRoot) match {
+            case None =>
+              log.warn(
+                "[DB-CHECK] Best block {} stateRoot {} not found in state trie — " +
+                  "world-state may be missing. A SNAP re-sync may be needed.",
+                bestBlockInfo.number,
+                Hex.toHexString(header.stateRoot.toArray)
+              )
+            case Some(_) =>
+          }
+        }
+      }
+    }
   }
 }
 
