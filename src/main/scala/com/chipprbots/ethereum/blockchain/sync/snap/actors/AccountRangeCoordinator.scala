@@ -8,7 +8,8 @@ import org.apache.pekko.actor.{
   Props,
   SupervisorStrategy,
   OneForOneStrategy,
-  Status
+  Status,
+  Terminated
 }
 import org.apache.pekko.actor.SupervisorStrategy._
 import org.apache.pekko.util.ByteString

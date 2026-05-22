@@ -44,8 +44,8 @@ class TrieNodeHealingCoordinator(
   // Task management — each task has a pathset (for GetTrieNodes) and a hash (for verification).
   // ArrayDeque (circular buffer) gives O(1) amortized head/tail operations (#1167). The previous
   // immutable `Seq` did O(n) on every `:+` and head-drop — quadratic at healing scale.
-  private case class HealingEntry(pathset: Seq[ByteString], hash: ByteString)
-  private val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
+  private[actors] case class HealingEntry(pathset: Seq[ByteString], hash: ByteString)
+  private[actors] val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
   private var completedTaskCount: Int = 0
 
   /** Dedicated dispatcher for the batched raw-node RocksDB flush. Tests inject their own EC; production looks up

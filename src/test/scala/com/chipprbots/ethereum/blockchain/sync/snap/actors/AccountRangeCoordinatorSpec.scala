@@ -1624,8 +1624,10 @@ class AccountRangeCoordinatorSpec
     val stateRoot = kec256(ByteString("multi-cycle-flush-root"))
     val controller = TestProbe()
 
-    // Set a small threshold so we can trigger multiple cycles without injecting gigabytes
-    val smallThreshold = 200L
+    // Set a small threshold so we can trigger multiple cycles without injecting gigabytes.
+    // An empty Account RLP is ~70 bytes; with 32 bytes of hash = ~102 bytes per entry.
+    // Use 50L so a single entry always exceeds the threshold.
+    val smallThreshold = 50L
 
     val coord = TestActorRef[AccountRangeCoordinator](
       AccountRangeCoordinator.props(
@@ -1777,22 +1779,18 @@ class AccountRangeCoordinatorSpec
     awaitAssert(ua.activeTasks.nonEmpty shouldBe true, 2.seconds, 50.millis)
 
     val worker = ua.workers.head
-    val activeCountBefore = ua.activeTasks.size
-    val pendingCountBefore = ua.pendingTasks.size
 
     // Kill the worker — coordinator watches it via context.watch and receives Terminated
     system.stop(worker)
 
-    // After the crash: activeTasks shrinks by 1, pendingTasks grows by 1 (task re-queued)
-    awaitAssert(
-      {
-        ua.workers should not contain worker
-        ua.activeTasks.size shouldBe (activeCountBefore - 1)
-        ua.pendingTasks.size shouldBe (pendingCountBefore + 1)
-      },
-      max = 3.seconds,
-      interval = 50.millis
-    )
+    // Verify old worker is removed from the pool (Terminated handler fired)
+    within(3.seconds) {
+      awaitAssert(ua.workers should not contain worker)
+    }
+
+    // The peer is still available, so the coordinator immediately re-queues the task and
+    // re-dispatches it to a new worker — verify by receiving the second network request
+    networkPeerManager.expectMsgType[Any](3.seconds)
 
     system.stop(coord)
   }

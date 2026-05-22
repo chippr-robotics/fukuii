@@ -837,6 +837,9 @@ class TrieNodeHealingCoordinatorSpec
 
     coord ! Messages.StartTrieNodeHealing(stateRoot)
 
+    // StartTrieNodeHealing seeds the root as the first pending task (1 entry)
+    val seedSize = coord.underlyingActor.pendingTasks.size
+
     val startMs = System.currentTimeMillis()
 
     // Send 4 × 50K node batches — each QueueMissingNodes carries 50K entries
@@ -848,9 +851,9 @@ class TrieNodeHealingCoordinatorSpec
       coord ! Messages.QueueMissingNodes(nodes)
     }
 
-    // All 200K entries must be enqueued within 4 seconds
+    // All 200K entries must be enqueued within 4 seconds (plus the initial seed entry)
     awaitAssert(
-      coord.underlyingActor.pendingTasks.size shouldBe 200_000,
+      coord.underlyingActor.pendingTasks.size shouldBe seedSize + 200_000,
       max = 4.seconds,
       interval = 100.millis
     )
