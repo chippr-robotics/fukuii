@@ -1334,6 +1334,7 @@ class StorageRangeCoordinator(
   // monitor pipe; time-based throttling is robust against call-rate spikes.
   private var lastStateLogMs: Long = 0L
   private val StateLogIntervalMs: Long = 30_000L
+  private var storageMilestonePct: Int = -1
 
   private def tryRedispatchPendingTasks(): Unit = {
     if (tasks.isEmpty) return
@@ -1364,12 +1365,25 @@ class StorageRangeCoordinator(
     val shouldLog = now - lastStateLogMs >= StateLogIntervalMs
     if (shouldLog) {
       lastStateLogMs = now
+      val pctInt = (progress * 100).toInt
       log.info(
-        s"[STORAGE-STATE] pending=${tasks.size} active=${activeTasks.size} " +
+        s"[STORAGE-STATE] $pctInt% | pending=${tasks.size} active=${activeTasks.size} " +
+          s"completed=$completedTaskCount " +
           s"workers-known=${knownAvailablePeers.size} stateless=${statelessPeers.size} " +
           s"cooling=${knownAvailablePeers.count(isPeerCoolingDown)} eligible=${eligiblePeers.size} " +
           s"strikes=${emptyResponseStrikes.size} root=${stateRoot.take(4).toHex}"
       )
+      if (noMoreTasksExpected) {
+        val activeCount = activeTasks.values.map(_._2.size).sum
+        val total = completedTaskCount + activeCount + tasks.size
+        val (newM, crossed) =
+          com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
+            .crossed(completedTaskCount, total, storageMilestonePct)
+        storageMilestonePct = newM
+        crossed.foreach { m =>
+          log.info(s"[STORAGE-MILESTONE] $m% — $completedTaskCount / $total tasks complete")
+        }
+      }
     }
     if (eligiblePeers.isEmpty) {
       if (shouldLog) {
