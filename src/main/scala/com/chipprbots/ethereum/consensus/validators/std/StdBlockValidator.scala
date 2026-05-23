@@ -20,11 +20,18 @@ import com.chipprbots.ethereum.utils.ByteUtils.or
 
 object StdBlockValidator extends BlockValidator {
 
-  /** ECIP adaptation of EIP-7934: Max RLP-encoded block size (8 MiB = 10 MiB - 2 MiB). Activates at Olympia. ETC adapts
-    * the Ethereum 10 MiB cap down to 8 MiB to match ETC's lower gas limits. Pre-Olympia chains never produce blocks
-    * near this cap in practice, so leaving unconditional is safe.
-    */
-  val BlockRLPSizeCap: Long = 8L * 1024 * 1024 // 8,388,608
+  // EIP-7934 constants (matches the EIP-7934 Python spec directly):
+  //   MAX_BLOCK_SIZE    = 10 MiB  — total cap including CL gossip headroom
+  //   BEACON_MARGIN     =  2 MiB  — ETH CL safety margin: gossip protocol won't propagate >10 MiB blocks
+  //   MAX_RLP_BLOCK_SIZE = MAX_BLOCK_SIZE − BEACON_MARGIN = 8 MiB  ← enforcement value
+  //
+  // ETC omits all PoS/beacon elements (ECIP-1121 deferred specs). The 2 MiB beacon margin is an ETH CL
+  // concern that does not apply to ETC's PoW chain. Fukuii follows the EIP-7934 execution-layer enforcement
+  // constant verbatim (8 MiB), preserving EVM alignment with Fusaka without introducing any ETC-specific
+  // divergence from the spec.
+  private val MaxBlockSize: Long   = 10L * 1024 * 1024 // EIP-7934 MAX_BLOCK_SIZE   = 10,485,760
+  private val BeaconMargin: Long   =  2L * 1024 * 1024 // EIP-7934 SAFETY_MARGIN    =  2,097,152 (ETH CL, omitted on ETC)
+  val BlockRLPSizeCap: Long        = MaxBlockSize - BeaconMargin // EIP-7934 MAX_RLP_BLOCK_SIZE = 8,388,608
 
   /** Validates [[com.chipprbots.ethereum.domain.BlockHeader.transactionsRoot]] matches [[BlockBody.transactionList]]
     * based on validations stated in section 4.4.2 of http://paper.gavwood.com/
