@@ -31,7 +31,10 @@ import com.chipprbots.ethereum.ledger.StxLedger
 import com.chipprbots.ethereum.ledger.TxResult
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.testing.ActorsTesting.simpleAutoPilot
+import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.testing.Tags._
+import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.vm.PrecompiledContracts
 
 class EthServiceSpec
     extends TestKit(ActorSystem("EthInfoServiceSpec_ActorSystem"))
@@ -165,6 +168,54 @@ class EthServiceSpec
     response.unsafeRunSync() shouldEqual Right(EstimateGasResponse(123))
   }
 
+  "eth_config" should "include all Olympia BLS12-381 and P-256 precompile addresses in current fork" taggedAs (
+    OlympiaTest,
+    RPCTest
+  ) in new OlympiaConfigTestSetup {
+    setBestBlock(101)
+    val resp        = ethService.config(ConfigRequest()).unsafeRunSync().toOption.get
+    val precompiles = resp.current.get.precompiles
+    precompiles should contain key "bls12381G1Add"
+    precompiles should contain key "bls12381G2Add"
+    precompiles should contain key "bls12381Pairing"
+    precompiles should contain key "p256Verify"
+    precompiles("bls12381G1Add") shouldBe PrecompiledContracts.BlsG1AddAddr
+    precompiles("bls12381G2Add") shouldBe PrecompiledContracts.BlsG2AddAddr
+    precompiles("p256Verify")    shouldBe PrecompiledContracts.P256VerifyAddr
+  }
+
+  it should "include historyStorage address in Olympia system contracts" taggedAs (
+    OlympiaTest,
+    RPCTest
+  ) in new OlympiaConfigTestSetup {
+    setBestBlock(101)
+    val resp         = ethService.config(ConfigRequest()).unsafeRunSync().toOption.get
+    val sysContracts = resp.current.get.systemContracts
+    sysContracts should contain key "historyStorage"
+    sysContracts("historyStorage") shouldBe BlockExecution.HistoryStorageAddress
+  }
+
+  it should "return None for next and last when all forks are activated" taggedAs (
+    OlympiaTest,
+    RPCTest
+  ) in new OlympiaConfigTestSetup {
+    setBestBlock(101)
+    val resp = ethService.config(ConfigRequest()).unsafeRunSync().toOption.get
+    resp.next shouldBe None
+    resp.last shouldBe None
+  }
+
+  it should "return Olympia as the next fork when chain head is before activation block" taggedAs (
+    OlympiaTest,
+    RPCTest
+  ) in new OlympiaConfigTestSetup {
+    setBestBlock(50)
+    val resp = ethService.config(ConfigRequest()).unsafeRunSync().toOption.get
+    resp.next should not be None
+    resp.next.get.activationBlock shouldBe BigInt(100)
+    resp.next.get.systemContracts should contain key "historyStorage"
+  }
+
   // NOTE TestSetup uses Ethash consensus; check `consensusConfig`.
   class TestSetup(implicit system: ActorSystem) extends EphemBlockchainTestSetup {
     val blockGenerator: PoWBlockGenerator = mock[PoWBlockGenerator]
@@ -194,5 +245,45 @@ class EthServiceSpec
     val blockToRequest: Block = Block(Fixtures.Blocks.Block3125369.header, Fixtures.Blocks.Block3125369.body)
     val txToRequest = Fixtures.Blocks.Block3125369.body.transactionList.head
     val txSender: Address = SignedTransaction.getSender(txToRequest).get
+  }
+
+  class OlympiaConfigTestSetup(implicit system: ActorSystem) extends EphemBlockchainTestSetup {
+    override lazy val miningConfig = MiningConfigs.miningConfig
+
+    // All pre-Olympia forks at block 0 — distinctBy(_._2) in config() keeps only
+    // Frontier@0 and Olympia@100, giving clean two-entry fork schedule for assertions.
+    override implicit lazy val blockchainConfig: BlockchainConfig =
+      initBlockchainConfig.withUpdatedForkBlocks(fb =>
+        fb.copy(
+          frontierBlockNumber  = BigInt(0),
+          homesteadBlockNumber = BigInt(0),
+          atlantisBlockNumber  = BigInt(0),
+          aghartaBlockNumber   = BigInt(0),
+          phoenixBlockNumber   = BigInt(0),
+          magnetoBlockNumber   = BigInt(0),
+          mystiqueBlockNumber  = BigInt(0),
+          spiralBlockNumber    = BigInt(0),
+          olympiaBlockNumber   = BigInt(100)
+        )
+      )
+
+    val keyStore: KeyStore                  = mock[KeyStore]
+    override lazy val stxLedger: StxLedger = mock[StxLedger]
+    val syncingController: TestProbe        = TestProbe()
+
+    lazy val ethService: EthInfoService = new EthInfoService(
+      blockchain,
+      blockchainReader,
+      blockchainConfig,
+      mining,
+      stxLedger,
+      keyStore,
+      syncingController.ref,
+      Capability.ETH63,
+      Timeouts.shortTimeout
+    )
+
+    def setBestBlock(n: BigInt): Unit =
+      storagesInstance.storages.appStateStorage.putBestBlockNumber(n).commit()
   }
 }
