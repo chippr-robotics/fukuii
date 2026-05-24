@@ -236,7 +236,6 @@ class TrieNodeHealingCoordinator(
       val nodes = rawNodeBuffer.toSeq
       val totalBytes = nodes.foldLeft(0L) { case (acc, (k, v)) => acc + k.length + v.length }
       val kb = f"${totalBytes / 1024.0}%.1f"
-      rawNodeBuffer.clear()
       log.info(s"[HEAL-FLUSH] ${nodes.size} nodes (${kb}KB) | totalHealed=$totalNodesHealed")
       import scala.concurrent.{Future, blocking}
       val selfRef = self
@@ -448,6 +447,9 @@ class TrieNodeHealingCoordinator(
       handleResponse(response)
 
     case FlushComplete(count) =>
+      // Clear only the nodes that were snapshotted and written; preserve any that
+      // accumulated while the flush was in-flight (they are at indices count..end).
+      rawNodeBuffer.remove(0, count)
       flushing = false
       log.debug(s"[HEAL-FLUSH] complete: $count nodes written (total: $totalNodesHealed)")
       // Drain any nodes that accumulated while the flush was in-flight

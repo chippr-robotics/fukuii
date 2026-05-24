@@ -797,8 +797,9 @@ class TrieNodeHealingCoordinatorSpec
     // Trigger flush directly — the same method called after every peer response.
     ua.flushRawNodesAsync()
 
-    // Buffer cleared synchronously before the async write completes
-    ua.rawNodeBuffer shouldBe empty
+    // Buffer is NOT cleared by flushRawNodesAsync() — it is kept until FlushComplete arrives
+    // so that postStop() can sync-flush if the actor stops before the Future completes (Gap 1 fix).
+    ua.rawNodeBuffer.size shouldBe 3
     ua.flushing shouldBe true
 
     // Async write completes on system.dispatcher — nodes must be in the stub storage
@@ -917,12 +918,12 @@ class TrieNodeHealingCoordinatorSpec
     storage.storedRaw.contains(hash2) shouldBe true
   }
 
-  // ── 4f-4: async flush completes after actor stop (graceful shutdown) ──────
-  // flushRawNodesAsync() clears rawNodeBuffer before the Future completes, so postStop() sees
-  // an empty buffer and skips the sync flush. Under graceful shutdown (actor stop), the in-flight
-  // Future continues running on healingWriterEc because JVM thread pools outlive individual actors.
-  // This test documents and verifies that guarantee. It does NOT cover SIGKILL/power loss
-  // (where the JVM dies before the Future can complete — see Phase 5 hardening backlog).
+  // ── 4f-4: postStop sync flush rescues nodes when actor stops before FlushComplete ──────────
+  // Phase 5 Gap 1 fix: flushRawNodesAsync() no longer clears rawNodeBuffer before the Future
+  // completes. The buffer is only cleared in the FlushComplete handler. postStop() therefore
+  // finds rawNodeBuffer.nonEmpty when the actor stops during an in-flight flush, and calls
+  // flushRawNodesSync() to write the nodes synchronously before the actor terminates.
+  // This test verifies the fix: nodes are written via the postStop() sync-flush path.
 
   it should "complete in-flight async flush after actor stop and not lose buffered nodes on graceful shutdown (4f-4)" taggedAs UnitTest in {
     import scala.collection.mutable
@@ -960,25 +961,21 @@ class TrieNodeHealingCoordinatorSpec
     ua.rawNodeBuffer.size shouldBe 1
     storage.storedRaw.contains(hash) shouldBe false
 
-    // Trigger async flush: buffer is snapshotted and cleared, Future spawned on healingWriterEc.
-    // postStop() will now find rawNodeBuffer.isEmpty and skip its sync flush path.
+    // Trigger async flush: buffer snapshotted, Future spawned on healingWriterEc.
+    // With the Gap 1 fix, the buffer is NOT cleared here — it stays populated so that
+    // postStop() can call flushRawNodesSync() if the actor stops before FlushComplete.
     ua.flushRawNodesAsync()
-    ua.rawNodeBuffer.isEmpty shouldBe true // buffer cleared before Future completes
+    ua.rawNodeBuffer.size shouldBe 1 // buffer kept until FlushComplete — postStop() will sync-flush these
     ua.flushing shouldBe true
 
     // Stop the actor WITHOUT sending FlushComplete (simulates shutdown mid-flush).
-    // The async Future continues running on the JVM thread pool.
+    // postStop() sees rawNodeBuffer.nonEmpty and calls flushRawNodesSync() synchronously.
     val probe = TestProbe()
     probe.watch(coord)
     system.stop(coord)
     probe.expectTerminated(coord, 3.seconds)
 
-    // Under graceful shutdown, the Future outlives the actor and must write to storage.
-    // For SIGKILL/power loss, this guarantee does not hold — see Phase 5 Gap 1.
-    within(3.seconds) {
-      awaitAssert {
-        storage.storedRaw.contains(hash) shouldBe true
-      }
-    }
+    // Nodes written by postStop() flushRawNodesSync() before actor terminates.
+    storage.storedRaw.contains(hash) shouldBe true
   }
 }
