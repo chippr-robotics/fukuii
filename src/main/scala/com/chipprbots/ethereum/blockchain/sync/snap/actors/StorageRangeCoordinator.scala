@@ -1111,6 +1111,26 @@ class StorageRangeCoordinator(
         return
       }
 
+      // snap/1 empty-storage completion: peer returns (slotSets=0, proofNodes=0) for a
+      // single-account request. This is the protocol-correct answer for a contract whose
+      // storage trie is empty — there is nothing to prove because no slots have ever been
+      // written. Distinct from proof-of-absence (slotSets=0, proofNodes>0), which
+      // cryptographically proves slots were cleared since the pivot.
+      // Fix: mark the task done immediately; peer is healthy and should not be penalised.
+      // (Bug B: without this, the coordinator retries indefinitely — completed=0 forever.)
+      if (response.proof.isEmpty && tasks.size == 1) {
+        val task = tasks.head
+        task.done = true
+        task.pending = false
+        recordCompletedTask(task)
+        statelessPeers.remove(peer.id.value)
+        lastDispatchOrResponseMs = System.currentTimeMillis()
+        consecutiveUnproductiveRefreshes = 0
+        self ! StorageCheckCompletion
+        dispatchIfPossible(peer)
+        return
+      }
+
       // Per-peer batch reduction: only reduce for the specific peer that failed
       if (tasks.size > 1 && batchSizeFor(peer) > 1) {
         log.info(

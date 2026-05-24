@@ -340,6 +340,70 @@ class StorageRangeCoordinatorSpec
     }
   }
 
+  // ── K6: Empty-storage completion (Bug B fix) ───────────────────────────────
+
+  it should "accept empty-storage response (0 slots, 0 proof) for single task and not mark peer stateless" taggedAs UnitTest in {
+    // Bug B: when a peer returns (slotSets=0, proofNodes=0) for a single-account batch,
+    // this is the snap/1 protocol-correct answer for a contract whose storage trie is
+    // empty (no slots ever written). The coordinator must treat it as completion and NOT
+    // mark the peer stateless. Distinct from proof-of-absence (slotSets=0, proofNodes>0).
+    val stateRoot = kec256(ByteString("empty-storage-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+
+    val peer = PeerTestHelpers.createTestPeer("storage-peer-empty", peerProbe.ref)
+
+    val account1 = kec256(ByteString("account-empty-1"))
+    val account2 = kec256(ByteString("account-empty-2"))
+    val storageRoot = kec256(ByteString("storage-root-empty"))
+
+    val task1 = StorageTask.createStorageTask(account1, storageRoot)
+    val task2 = StorageTask.createStorageTask(account2, storageRoot)
+
+    val coordinator = system.actorOf(
+      StorageRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+        maxAccountsPerBatch = 1,
+        maxInFlightRequests = 2,
+        requestTimeout = 30.seconds,
+        snapSyncController = snapSyncController.ref,
+        initialMaxInFlightPerPeer = 1
+      )
+    )
+
+    coordinator ! Messages.StartStorageRangeSync(stateRoot)
+    coordinator ! Messages.AddStorageTasks(Seq(task1, task2))
+    coordinator ! Messages.StoragePeerAvailable(peer)
+
+    val send1 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+    val req1 = send1.message.asInstanceOf[GetStorageRangesEnc].underlyingMsg
+    req1.accountHashes should have size 1
+    req1.accountHashes.head shouldEqual account1
+
+    // Inject empty-storage: 0 slots, 0 proof — valid snap/1 response for empty-storage contract
+    coordinator ! Messages.StorageRangesResponseMsg(
+      StorageRanges(req1.requestId, slots = Seq.empty, proof = Seq.empty)
+    )
+
+    // Peer is NOT stateless — coordinator immediately pipelines task2 to the same peer
+    val send2 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+    val req2 = send2.message.asInstanceOf[GetStorageRangesEnc].underlyingMsg
+    req2.accountHashes should have size 1
+    req2.accountHashes.head shouldEqual account2
+
+    // No pivot-refresh stall: peer gave a valid empty-storage response.
+    snapSyncController.receiveWhile(300.millis) { case msg: SNAPSyncController.PivotStateUnservable =>
+      fail(s"Unexpected pivot stall after empty-storage response: $msg")
+    }
+  }
+
   // ── Category 1d: ForceCompleteStorage escape valve ─────────────────────────
 
   it should "signal StorageRangeSyncForceCompleted immediately on ForceCompleteStorage even with pending tasks" taggedAs UnitTest in {
@@ -985,5 +1049,74 @@ class StorageRangeCoordinatorSpec
     snapSyncController.expectNoMessage(300.millis)
 
     system.stop(coordinator)
+  }
+
+  // ── 4f-3: duplicate StorageRangesResponseMsg deduplication ───────────────
+  // activeTasks.remove(reqId) provides natural deduplication: the first response removes the
+  // reqId from the map; a second response for the same reqId hits the `case None` branch,
+  // logs a warning, and does nothing. This prevents double-completion if the same response
+  // arrives twice (e.g., network retransmission, actor restart re-processing).
+
+  it should "handle a duplicate StorageRangesResponseMsg for the same reqId gracefully without double-completing (4f-3)" taggedAs UnitTest in {
+    val stateRoot = kec256(ByteString("dedup-storage-root"))
+    val storage = new TestMptStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+
+    val peer = PeerTestHelpers.createTestPeer("dedup-storage-peer", peerProbe.ref)
+    val account1 = kec256(ByteString("account-dedup-1"))
+    val storageRoot = kec256(ByteString("storage-root-dedup"))
+    val task1 = StorageTask.createStorageTask(account1, storageRoot)
+
+    // Single-account batches so each task gets its own reqId
+    val coordinator = system.actorOf(
+      StorageRangeCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        flatSlotStorage = new FlatSlotStorage(EphemDataSource()),
+        maxAccountsPerBatch = 1,
+        maxInFlightRequests = 1,
+        requestTimeout = 30.seconds,
+        snapSyncController = snapSyncController.ref,
+        initialMaxInFlightPerPeer = 1
+      )
+    )
+
+    coordinator ! Messages.StartStorageRangeSync(stateRoot)
+    coordinator ! Messages.AddStorageTasks(Seq(task1))
+    coordinator ! Messages.StoragePeerAvailable(peer)
+
+    val send1 = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+    val req1 = send1.message.asInstanceOf[GetStorageRangesEnc].underlyingMsg
+
+    // Signal no more tasks BEFORE the response: task1 is still in activeTasks at this point,
+    // so isComplete=false and NoMoreStorageTasks does NOT fire StorageRangeSyncComplete prematurely.
+    // This ordering is crucial: if NoMoreStorageTasks arrives AFTER the first response, both
+    // the NoMoreStorageTasks handler AND the self-sent StorageCheckCompletion (queued by the
+    // Bug B completion path) would each check isComplete=true and fire duplicate completions.
+    coordinator ! Messages.NoMoreStorageTasks
+
+    // First response: empty-storage completion (Bug B fix — 0 slots, 0 proof = valid empty trie).
+    // activeTasks.remove(req1.requestId) → Some(Seq(task1)) → task completed.
+    // self ! StorageCheckCompletion queued at end of mailbox.
+    coordinator ! Messages.StorageRangesResponseMsg(
+      StorageRanges(req1.requestId, slots = Seq.empty, proof = Seq.empty)
+    )
+
+    // Duplicate response for the SAME requestId: activeTasks.remove → None → warning logged, ignored.
+    // Processed BEFORE StorageCheckCompletion (which was queued during the first response).
+    coordinator ! Messages.StorageRangesResponseMsg(
+      StorageRanges(req1.requestId, slots = Seq.empty, proof = Seq.empty)
+    )
+
+    // StorageCheckCompletion (self-sent during first response) fires last:
+    // noMoreTasksExpected=true + tasks=empty + activeTasks=empty → isComplete=true
+    // → StorageRangeSyncComplete (exactly once — duplicate contributed nothing)
+    snapSyncController.expectMsg(3.seconds, SNAPSyncController.StorageRangeSyncComplete)
+    snapSyncController.expectNoMessage(300.millis) // no second completion signal from duplicate
   }
 }
