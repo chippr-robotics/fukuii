@@ -636,6 +636,32 @@ class SyncControllerSpec
     storagesInstance.storages.appStateStorage.isStorageRecoveryDone() shouldBe true
   }
 
+  it should "skip SNAP-RECOVERY on restart when bytecodeRecoveryDone and storageRecoveryDone are already set (Bug A)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup._
+    val appState = storagesInstance.storages.appStateStorage
+    // Simulate a clean SNAP sync completion: Fix A writes all three flags atomically.
+    // On restart the controller must skip recovery entirely and go straight to RegularSync.
+    appState.snapSyncDone().commit()
+    appState.bytecodeRecoveryDone().commit()
+    appState.storageRecoveryDone().commit()
+    appState.putSnapSyncStateRoot(recoveryFakeStateRoot).commit()
+    appState.putSnapSyncPivotBlock(BigInt(100)).commit()
+
+    syncController ! SyncProtocol.Start
+
+    eventually {
+      someTimePasses()
+      assert(syncController.children.exists(_.path.name.startsWith("regular-sync")))
+    }
+    // No recovery actor should have been spawned
+    syncController.children.exists(c =>
+      c.path.name.startsWith("bytecode-recovery") || c.path.name.startsWith("storage-recovery")
+    ) shouldBe false
+  }
+
   // ── T10-T13: startup diagnostic + handler tests ───────────────────────────────────────────────
   // RLP encoding of a 32-byte hash = valid HashNode (length==MaxEncodedNodeLength → no MPTException)
   private def validMptNodeRlp(hash: ByteString): Array[Byte] = Array(0xa0.toByte) ++ hash.toArray

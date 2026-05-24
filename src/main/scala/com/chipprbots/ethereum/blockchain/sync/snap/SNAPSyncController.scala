@@ -3974,7 +3974,13 @@ class SNAPSyncController(
           // Pivot data is written first so a crash between writes leaves the node in a
           // recoverable state (D3 startup gate detects SnapSyncDone=true with unreachable
           // root and restarts SNAP). Mirrors Besu SnapSyncStatePersistenceManager ordering.
-          appStateStorage.snapSyncDone().commit()
+          // D5: recovery-done flags written atomically with snapSyncDone — a clean completion
+          // proves no recovery is needed, marking both as done prevents spurious SNAP-RECOVERY
+          // on every restart (Bug A: ~1h20m flat scan triggered indefinitely after clean sync).
+          appStateStorage.snapSyncDone()
+            .and(appStateStorage.bytecodeRecoveryDone())
+            .and(appStateStorage.storageRecoveryDone())
+            .commit()
 
           log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.take(8).toHex})")
 
