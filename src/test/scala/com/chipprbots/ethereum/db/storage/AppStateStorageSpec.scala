@@ -6,6 +6,7 @@ import org.scalatest.wordspec.AnyWordSpec
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.ObjectGenerators
+import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.testing.Tags._
 
@@ -428,6 +429,38 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
       // All three caught up.
       storage.putBackfillBestReceipt(target).commit()
       assert(!storage.needsBackfillResume())
+    }
+
+    // ========================================
+    // 4g: DataSourceBatchUpdate atomicity (#1169 / Bug A regression guard)
+    // ========================================
+
+    // DataSourceBatchUpdate.and().commit() must produce exactly ONE dataSource.update() call,
+    // which maps to one RocksDB WriteBatch (atomic). If someone refactors .and() to separate
+    // .commit() calls, this test catches the regression before it reaches production.
+    "chained .and().and().commit() must produce exactly one dataSource.update() call (one RocksDB WriteBatch)" taggedAs (
+      UnitTest,
+      DatabaseTest
+    ) in {
+      var updateCallCount = 0
+      val countingDs = new EphemDataSource(Map.empty) {
+        override def update(dataSourceUpdates: Seq[DataUpdate]): Unit = {
+          updateCallCount += 1
+          super.update(dataSourceUpdates)
+        }
+      }
+      val storage = new AppStateStorage(countingDs)
+
+      storage
+        .snapSyncDone()
+        .and(storage.bytecodeRecoveryDone())
+        .and(storage.storageRecoveryDone())
+        .commit()
+
+      assert(storage.isSnapSyncDone(), "snapSyncDone flag not set")
+      assert(storage.isBytecodeRecoveryDone(), "bytecodeRecoveryDone flag not set")
+      assert(storage.isStorageRecoveryDone(), "storageRecoveryDone flag not set")
+      assert(updateCallCount == 1, s"expected 1 update() call (one WriteBatch), got $updateCallCount")
     }
   }
 

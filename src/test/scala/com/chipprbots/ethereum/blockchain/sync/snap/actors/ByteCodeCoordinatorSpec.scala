@@ -935,4 +935,62 @@ class ByteCodeCoordinatorSpec
     // lastActivityMs must be reset to avoid storm of pivot requests
     ua.lastActivityMs should be >= (System.currentTimeMillis() - 5_000L)
   }
+
+  // ── 4f-1: maxFailuresPerHash exhaustion path ──────────────────────────────
+  // ByteCodeCoordinator silently drops a hash after maxFailuresPerHash (50) consecutive
+  // empty responses. The hash is NOT re-queued and NOT escalated via PivotStateUnservable.
+  // When it's the only hash and noMoreTasksExpected=true, checkCompletion() fires and the
+  // bytecode phase completes normally. This is a silent data-loss path with no prior test.
+
+  it should "silently exhaust a bytecode hash after maxFailuresPerHash empty responses and emit ByteCodeSyncComplete without PivotStateUnservable" taggedAs UnitTest in {
+    val evmCodeStorage = new TestEvmCodeStorage()
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+    val peerProbe = TestProbe()
+
+    val peer = PeerTestHelpers.createTestPeer("exhaust-peer", peerProbe.ref)
+
+    // 1ms cooldown + exponentCap=0 so the 50-iteration loop completes in ~250ms
+    val exhaustConfig = testCooldownConfig.copy(baseEmpty = 1.millis, exponentCap = 0)
+
+    val coordinator = system.actorOf(
+      ByteCodeCoordinator.props(
+        evmCodeStorage = evmCodeStorage,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        batchSize = 1,
+        snapSyncController = snapSyncController.ref,
+        cooldownConfig = exhaustConfig
+      )
+    )
+
+    val h1 = kec256(ByteString("exhaust-code"))
+
+    coordinator ! Messages.StartByteCodeSync(Seq(h1))
+    coordinator ! Messages.NoMoreByteCodeTasks // noMoreTasksExpected = true; pendingTasks still has h1
+
+    // Drive 50 empty responses. maxFailuresPerHash == 50.
+    // Iterations 1-49: hash re-queued after each empty response (failure count < 50).
+    // Iteration 50: hashFailureCounts(h1) reaches threshold → hash dropped, NOT re-queued.
+    //   checkCompletion(): noMoreTasksExpected=true, pendingTasks.empty, activeTasks.empty
+    //   → snapSyncController ! ByteCodeSyncComplete
+    for (_ <- 1 to 50) {
+      coordinator ! Messages.ByteCodePeerAvailable(peer)
+      val send = networkPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessage](3.seconds)
+      val req = send.message.asInstanceOf[GetByteCodesEnc].underlyingMsg
+      system.actorSelection(coordinator.path / "*") ! Messages.ByteCodesResponseMsg(
+        ByteCodes(req.requestId, Seq.empty)
+      )
+      Thread.sleep(5) // allow 1ms cooldown to expire before next ByteCodePeerAvailable
+    }
+
+    // Hash exhausted → completion signal, not an error escalation.
+    // Skip any ProgressBytecodesDownloaded(0) reports that arrive during the 50-iteration loop.
+    snapSyncController.fishForMessage(5.seconds, "ByteCodeSyncComplete") {
+      case SNAPSyncController.ByteCodeSyncComplete            => true
+      case _: SNAPSyncController.ProgressBytecodesDownloaded => false
+    }
+    snapSyncController.expectNoMessage(300.millis) // no PivotStateUnservable
+  }
 }

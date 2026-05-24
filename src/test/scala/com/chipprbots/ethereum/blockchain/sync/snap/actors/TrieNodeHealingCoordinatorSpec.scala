@@ -916,4 +916,69 @@ class TrieNodeHealingCoordinatorSpec
     storage.storedRaw.contains(hash1) shouldBe true
     storage.storedRaw.contains(hash2) shouldBe true
   }
+
+  // ── 4f-4: async flush completes after actor stop (graceful shutdown) ──────
+  // flushRawNodesAsync() clears rawNodeBuffer before the Future completes, so postStop() sees
+  // an empty buffer and skips the sync flush. Under graceful shutdown (actor stop), the in-flight
+  // Future continues running on healingWriterEc because JVM thread pools outlive individual actors.
+  // This test documents and verifies that guarantee. It does NOT cover SIGKILL/power loss
+  // (where the JVM dies before the Future can complete — see Phase 5 hardening backlog).
+
+  it should "complete in-flight async flush after actor stop and not lose buffered nodes on graceful shutdown (4f-4)" taggedAs UnitTest in {
+    import scala.collection.mutable
+
+    class StubRawNodeStorage extends TestMptStorage {
+      val storedRaw: mutable.Map[ByteString, Array[Byte]] = mutable.Map.empty
+      override def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit =
+        nodes.foreach { case (hash, data) => storedRaw(hash) = data }
+    }
+
+    val stateRoot = kec256(ByteString("async-flush-graceful-root"))
+    val storage = new StubRawNodeStorage
+    val requestTracker = new SNAPRequestTracker()(system.scheduler)
+    val networkPeerManager = TestProbe()
+    val snapSyncController = TestProbe()
+
+    val coord = TestActorRef[TrieNodeHealingCoordinator](
+      TrieNodeHealingCoordinator.props(
+        stateRoot = stateRoot,
+        networkPeerManager = networkPeerManager.ref,
+        requestTracker = requestTracker,
+        mptStorage = storage,
+        batchSize = 16,
+        snapSyncController = snapSyncController.ref
+      )
+    )
+
+    coord ! Messages.StartTrieNodeHealing(stateRoot)
+    val ua = coord.underlyingActor
+
+    // Seed a node directly into the buffer (white-box — no network round-trip)
+    val nodeData = Array[Byte](0xcc.toByte, 0xdd.toByte)
+    val hash = kec256(ByteString(nodeData))
+    ua.rawNodeBuffer += ((hash, nodeData))
+    ua.rawNodeBuffer.size shouldBe 1
+    storage.storedRaw.contains(hash) shouldBe false
+
+    // Trigger async flush: buffer is snapshotted and cleared, Future spawned on healingWriterEc.
+    // postStop() will now find rawNodeBuffer.isEmpty and skip its sync flush path.
+    ua.flushRawNodesAsync()
+    ua.rawNodeBuffer.isEmpty shouldBe true // buffer cleared before Future completes
+    ua.flushing shouldBe true
+
+    // Stop the actor WITHOUT sending FlushComplete (simulates shutdown mid-flush).
+    // The async Future continues running on the JVM thread pool.
+    val probe = TestProbe()
+    probe.watch(coord)
+    system.stop(coord)
+    probe.expectTerminated(coord, 3.seconds)
+
+    // Under graceful shutdown, the Future outlives the actor and must write to storage.
+    // For SIGKILL/power loss, this guarantee does not hold — see Phase 5 Gap 1.
+    within(3.seconds) {
+      awaitAssert {
+        storage.storedRaw.contains(hash) shouldBe true
+      }
+    }
+  }
 }
