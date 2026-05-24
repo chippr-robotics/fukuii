@@ -3977,10 +3977,13 @@ class SNAPSyncController(
           // D5: recovery-done flags written atomically with snapSyncDone — a clean completion
           // proves no recovery is needed, marking both as done prevents spurious SNAP-RECOVERY
           // on every restart (Bug A: ~1h20m flat scan triggered indefinitely after clean sync).
+          // D6: commitSync() (not commit()) — forces an fsync so these flags survive a power-loss
+          // in the ~5-30s OS dirty-writeback window after the call returns. Without fsync, a crash
+          // here would leave snapSyncDone absent on next boot, triggering spurious SNAP-RECOVERY.
           appStateStorage.snapSyncDone()
             .and(appStateStorage.bytecodeRecoveryDone())
             .and(appStateStorage.storageRecoveryDone())
-            .commit()
+            .commitSync()
 
           log.info(s"SNAP sync completed successfully at block $pivot (hash=${pivotHash.take(8).toHex})")
 
