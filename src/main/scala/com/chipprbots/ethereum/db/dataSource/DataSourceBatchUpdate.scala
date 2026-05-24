@@ -15,4 +15,7 @@ case class DataSourceBatchUpdate(dataSource: DataSource, updates: Array[DataUpda
   def commit(): Unit =
     dataSource.update(ArraySeq.unsafeWrapArray(updates))
 
+  def commitSync(): Unit =
+    dataSource.updateSync(ArraySeq.unsafeWrapArray(updates))
+
 }

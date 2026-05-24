@@ -462,6 +462,33 @@ class AppStateStorageSpec extends AnyWordSpec with ScalaCheckPropertyChecks with
       assert(storage.isStorageRecoveryDone(), "storageRecoveryDone flag not set")
       assert(updateCallCount == 1, s"expected 1 update() call (one WriteBatch), got $updateCallCount")
     }
+
+    // commitSync() must call updateSync() exactly once — same single-WriteBatch guarantee as commit(),
+    // but routed through the fsync path. Verifies the new API surface is correctly wired.
+    "chained .and().and().commitSync() must call updateSync() exactly once and persist all flags" taggedAs (
+      UnitTest,
+      DatabaseTest
+    ) in {
+      var updateSyncCallCount = 0
+      val countingDs = new EphemDataSource(Map.empty) {
+        override def updateSync(dataSourceUpdates: Seq[DataUpdate]): Unit = {
+          updateSyncCallCount += 1
+          super.updateSync(dataSourceUpdates)
+        }
+      }
+      val storage = new AppStateStorage(countingDs)
+
+      storage
+        .snapSyncDone()
+        .and(storage.bytecodeRecoveryDone())
+        .and(storage.storageRecoveryDone())
+        .commitSync()
+
+      assert(storage.isSnapSyncDone(), "snapSyncDone flag not set")
+      assert(storage.isBytecodeRecoveryDone(), "bytecodeRecoveryDone flag not set")
+      assert(storage.isStorageRecoveryDone(), "storageRecoveryDone flag not set")
+      assert(updateSyncCallCount == 1, s"expected 1 updateSync() call, got $updateSyncCallCount")
+    }
   }
 
   trait Fixtures {

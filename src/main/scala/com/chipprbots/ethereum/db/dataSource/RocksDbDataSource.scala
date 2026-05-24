@@ -108,6 +108,36 @@ class RocksDbDataSource(
     } finally dbLock.writeLock().unlock()
   }
 
+  override def updateSync(dataSourceUpdates: Seq[DataUpdate]): Unit = {
+    dbLock.writeLock().lock()
+    try {
+      assureNotClosed()
+      withResources(new WriteOptions().setSync(true)) { writeOptions =>
+        withResources(new WriteBatch()) { batch =>
+          dataSourceUpdates.foreach {
+            case DataSourceUpdate(namespace, toRemove, toUpsert) =>
+              toRemove.foreach { key =>
+                batch.delete(handles(namespace), key.toArray)
+              }
+              toUpsert.foreach { case (k, v) => batch.put(handles(namespace), k.toArray, v.toArray) }
+
+            case DataSourceUpdateOptimized(namespace, toRemove, toUpsert) =>
+              toRemove.foreach { key =>
+                batch.delete(handles(namespace), key)
+              }
+              toUpsert.foreach { case (k, v) => batch.put(handles(namespace), k, v) }
+          }
+          db.write(writeOptions, batch)
+        }
+      }
+    } catch {
+      case error: RocksDbDataSourceClosedException =>
+        throw error
+      case NonFatal(error) =>
+        throw RocksDbDataSourceException(s"DataSource not updated", error)
+    } finally dbLock.writeLock().unlock()
+  }
+
   /** ReadOptions for range scans with fillCache=false to avoid polluting the block cache. Mirrors Besu's
     * BonsaiWorldStateKeyValueStorage tailing iterator behaviour for flat DB walks. Regular point reads use the default
     * readOptions with cache enabled.

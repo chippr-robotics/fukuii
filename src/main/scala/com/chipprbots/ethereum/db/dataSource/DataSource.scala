@@ -48,6 +48,12 @@ trait DataSource {
     */
   def update(dataSourceUpdates: Seq[DataUpdate]): Unit
 
+  /** Same as `update` but forces an fsync before returning, guaranteeing durability even if the process crashes
+    * immediately after. Default implementation delegates to `update` (in-memory or test implementations that do not
+    * need fsync semantics). `RocksDbDataSource` overrides this to use `WriteOptions.setSync(true)`.
+    */
+  def updateSync(dataSourceUpdates: Seq[DataUpdate]): Unit = update(dataSourceUpdates)
+
   /** This function updates the DataSource by deleting all the (key-value) pairs in it.
     */
   def clear(): Unit
