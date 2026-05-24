@@ -1794,4 +1794,75 @@ class AccountRangeCoordinatorSpec
 
     system.stop(coord)
   }
+
+  // ── Bug C: snapless strike counting ───────────────────────────────────────
+
+  it should "mark peer snapless after EmptyResponseStrikeThreshold consecutive empty-account-without-proof responses (Bug C)" taggedAs UnitTest in {
+    // Bug C: markPeerStateless was never called from handleTaskComplete's empty-account-without-proof
+    // branch, leaving emptyResponseStrikes permanently at 0. After the fix, 5 consecutive
+    // (accountCount=0, proof=empty) responses from the same peer cross the threshold and
+    // add the peer to snaplessPeers.
+    val controller = TestProbe()
+    val coord = newCoordinator(controller = controller)
+    val ua = coord.underlyingActor
+    val peerProbe = TestProbe()
+    val peer = PeerTestHelpers.createTestPeer("bug-c-snapless-peer", peerProbe.ref)
+
+    val threshold = ua.EmptyResponseStrikeThreshold
+
+    // Seed one active task per reqId, all for the same peer
+    val reqIds = (1 to threshold).map(i => BigInt(i + 600))
+    reqIds.foreach(reqId => seedActiveTask(coord, reqId, peer))
+
+    ua.snaplessPeers should not contain peer.id
+
+    // Send (threshold-1) empty responses — peer accumulates strikes but is not yet snapless
+    reqIds.init.foreach { reqId =>
+      coord ! Messages.TaskComplete(reqId, Right((0, Seq.empty, Seq.empty)))
+    }
+    ua.snaplessPeers should not contain peer.id
+    ua.emptyResponseStrikes.getOrElse(peer.id, 0) shouldBe (threshold - 1)
+
+    // The threshold-th response crosses the limit: peer is marked snapless
+    coord ! Messages.TaskComplete(reqIds.last, Right((0, Seq.empty, Seq.empty)))
+    ua.snaplessPeers should contain(peer.id)
+
+    system.stop(coord)
+  }
+
+  // ── 4f-2: finalization failure must not re-signal AccountRangeSyncComplete ─
+  // AccountRangeSyncComplete is sent BEFORE the coordinator enters `finalizing`. The `finalizing`
+  // receive handler must NOT re-send it on trie-flush failure — controller gets exactly one signal.
+  // This path was untested: existing failure tests verified AccountTrieFinalizationFailed was
+  // emitted but did not assert the absence of a second AccountRangeSyncComplete.
+
+  it should "not re-signal AccountRangeSyncComplete to controller on trie-flush failure (4f-2)" taggedAs UnitTest in {
+    val controller = TestProbe()
+    val coord = newCoordinator(controller = controller)
+
+    // Inject into finalizing state (simulates post-completion state where AccountRangeSyncComplete
+    // has already been sent). The finalizing handler only emits AccountTrieFinalized or
+    // AccountTrieFinalizationFailed — never AccountRangeSyncComplete.
+    coord.underlyingActor.trieFlushGeneration = 2L
+    coord.underlyingActor.context.become(coord.underlyingActor.finalizing)
+
+    val watcher = TestProbe()
+    watcher.watch(coord)
+
+    // Simulate a trie-flush failure (e.g., RocksDB write error, disk full)
+    coord ! Status.Failure(new RuntimeException("disk write failed"))
+
+    // Failure propagates as AccountTrieFinalizationFailed — controller must NOT receive
+    // a second AccountRangeSyncComplete before or after this message.
+    // AccountRangeProgress messages may arrive from initial coordinator setup; those are fine.
+    // Use a counter to detect any spurious AccountRangeSyncComplete while draining the queue.
+    var sawSyncComplete = false
+    controller.fishForMessage(2.seconds, "AccountTrieFinalizationFailed") {
+      case SNAPSyncController.AccountTrieFinalizationFailed(_) => true
+      case SNAPSyncController.AccountRangeSyncComplete         => sawSyncComplete = true; false
+      case _                                                    => false // drain progress messages
+    }
+    sawSyncComplete shouldBe false
+    watcher.expectTerminated(coord, 2.seconds)
+  }
 }

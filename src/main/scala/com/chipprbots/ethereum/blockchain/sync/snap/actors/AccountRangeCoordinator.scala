@@ -145,7 +145,7 @@ class AccountRangeCoordinator(
   // the 3-strike threshold drained sepolia's small peer pool between pivots, producing
   // eligible=0 stalls within each pivot window. 5 strikes gives peers more rope; mirrors
   // Nethermind's threshold; lines up with the bumped storage threshold.
-  private val EmptyResponseStrikeThreshold: Int = 5
+  private[actors] val EmptyResponseStrikeThreshold: Int = 5
   private var pivotRefreshRequested = false
   private var pivotWasRefreshed = false
 
