@@ -318,8 +318,9 @@ object BytecodeRecoveryActor {
   /** Sent to SyncController when recovery completed successfully (or was skipped) */
   case object RecoveryComplete
 
-  /** Sent to SyncController when recovery was abandoned due to an unservable pivot root.
-   *  The done-flag is NOT written. SyncController must re-trigger a fresh SNAP sync. */
+  /** Sent to SyncController when recovery was abandoned due to an unservable pivot root. The done-flag is NOT written.
+    * SyncController must re-trigger a fresh SNAP sync.
+    */
   case object RecoveryFailed
 
   def props(

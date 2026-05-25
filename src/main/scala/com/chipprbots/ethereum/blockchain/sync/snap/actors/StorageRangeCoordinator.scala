@@ -92,7 +92,10 @@ class StorageRangeCoordinator(
   // enqueues when concurrent timeout re-queues overlap (two timeouts for the same batch).
   private val pendingTaskKeys = mutable.Set[(ByteString, ByteString)]()
   private val activeTasks =
-    mutable.Map[BigInt, (Peer, Seq[StorageTask], BigInt)]() // requestId -> (peer, tasks, requestedBytes)
+    mutable.Map[
+      BigInt,
+      (Peer, Seq[StorageTask], BigInt, ByteString)
+    ]() // requestId -> (peer, tasks, requestedBytes, rootAtDispatch)
 
   // Bookkeeping counters — replace the previously unbounded `completedTasks: ArrayBuffer[StorageTask]`
   // (which retained every completed StorageTask ref forever and contributed ~4 GB to the May 13 sepolia
@@ -258,7 +261,7 @@ class StorageRangeCoordinator(
       // Re-queue any stale in-flight tasks from ghost peers
       if (activeTasks.nonEmpty) {
         val staleCount = activeTasks.size
-        activeTasks.values.foreach { case (_, batchTasks, _) =>
+        activeTasks.values.foreach { case (_, batchTasks, _, _) =>
           batchTasks.foreach { task =>
             task.pending = false
             tasks.enqueue(task)
@@ -723,11 +726,11 @@ class StorageRangeCoordinator(
       knownAvailablePeers.find(_.id.value == peerId).foreach(knownAvailablePeers -= _)
       peerCooldownUntilMs.remove(peerId)
       emptyResponseStrikes.remove(peerId)
-      val inFlight = activeTasks.filter { case (_, (peer, _, _)) => peer.id.value == peerId }.keys.toSeq
+      val inFlight = activeTasks.filter { case (_, (peer, _, _, _)) => peer.id.value == peerId }.keys.toSeq
       if (inFlight.nonEmpty) {
         log.debug(s"Peer $peerId disconnected — re-queuing ${inFlight.size} in-flight storage request(s)")
         inFlight.foreach { reqId =>
-          activeTasks.remove(reqId).foreach { case (_, batchTasks, _) =>
+          activeTasks.remove(reqId).foreach { case (_, batchTasks, _, _) =>
             batchTasks.foreach { task =>
               task.pending = false
               val key = (task.accountHash, task.next)
@@ -828,7 +831,7 @@ class StorageRangeCoordinator(
       // Cancel all in-flight requests: their responses are for the old root and will
       // contaminate stateless detection if processed. Re-queue tasks for the new root.
       val cancelledCount = activeTasks.size
-      activeTasks.values.foreach { case (_, batchTasks, _) =>
+      activeTasks.values.foreach { case (_, batchTasks, _, _) =>
         batchTasks.foreach { task =>
           task.pending = false
           tasks.enqueue(task)
@@ -1012,7 +1015,7 @@ class StorageRangeCoordinator(
     )
 
     batchTasks.foreach(_.pending = true)
-    activeTasks.put(requestId, (peer, batchTasks, requestedBytes))
+    activeTasks.put(requestId, (peer, batchTasks, requestedBytes, stateRoot))
 
     requestTracker.trackRequest(
       requestId,
@@ -1058,8 +1061,20 @@ class StorageRangeCoordinator(
               case None =>
                 log.warning(s"No active tasks for request ID ${response.requestId}")
 
-              case Some((peer, batchTasks, requestedBytes)) =>
-                processStorageRanges(peer, batchTasks, requestedBytes, validResponse)
+              case Some((peer, batchTasks, requestedBytes, rootAtDispatch)) =>
+                if (rootAtDispatch != stateRoot) {
+                  log.warning(
+                    s"[STORAGE-RANGE] stale-root response discarded " +
+                      s"(dispatched=${rootAtDispatch.take(4).toHex}, current=${stateRoot.take(4).toHex}) " +
+                      s"— re-queuing ${batchTasks.size} tasks"
+                  )
+                  batchTasks.foreach { task =>
+                    task.pending = false
+                    tasks.enqueue(task)
+                  }
+                } else {
+                  processStorageRanges(peer, batchTasks, requestedBytes, validResponse)
+                }
             }
         }
     }
@@ -1072,9 +1087,9 @@ class StorageRangeCoordinator(
   ): Unit = {
     // Count only responses that actually contain slot data as "served".
     // Proof-only responses (0 slot-sets, non-empty proofs) are NOT counted as served because:
-    //  1. After a pivot refresh, peers may return proof-of-absence for stale task roots
-    //  2. The proof root may not match the task's storageRoot (undetected by lenient verification)
-    //  3. Treating proof-only as served prevents stateless detection, causing indefinite stalls
+    //  1. Treating proof-only as served prevents stateless detection, causing indefinite stalls
+    // Stale-root responses (dispatched before pivot refresh) are detected by the rootAtDispatch
+    // check in handleResponse and re-queued before reaching this function.
     // Legitimate empty-storage accounts will be completed via the empty-response skip mechanism
     // after maxEmptyResponsesPerTask attempts.
     val servedCount: Int = response.slots.count(_.nonEmpty)
@@ -1320,7 +1335,7 @@ class StorageRangeCoordinator(
   }
 
   private def handleTimeout(requestId: BigInt): Unit = {
-    activeTasks.remove(requestId).foreach { case (peer, batchTasks, _) =>
+    activeTasks.remove(requestId).foreach { case (peer, batchTasks, _, _) =>
       log.warning(s"Storage range request timeout for ${batchTasks.size} accounts from peer ${peer.id.value}")
       recordPeerCooldown(peer, "request timeout")
       adjustResponseBytesOnFailure(peer, "request timeout")

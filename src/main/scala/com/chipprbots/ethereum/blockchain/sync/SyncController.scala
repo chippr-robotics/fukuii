@@ -1252,9 +1252,13 @@ class SyncController(
       }
 
     case BytecodeRecoveryActor.RecoveryFailed =>
-      log.warning("[RECOVERY] bytecode recovery abandoned (unservable pivot root) — stopping all recovery actors and re-triggering SNAP sync from a new pivot")
+      log.warning(
+        "[RECOVERY] bytecode recovery abandoned (unservable pivot root) — stopping all recovery actors and re-triggering SNAP sync from a new pivot"
+      )
       bytecodeActor.foreach(context.unwatch)
-      storageActor.foreach { a => context.unwatch(a); context.stop(a) }
+      storageActor.foreach { a =>
+        context.unwatch(a); context.stop(a)
+      }
       peerPoller.cancel()
       networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
         context.system.deadLetters
@@ -1262,9 +1266,13 @@ class SyncController(
       startSnapSync()
 
     case StorageRecoveryActor.RecoveryFailed =>
-      log.warning("[RECOVERY] storage recovery abandoned (unservable pivot root) — stopping all recovery actors and re-triggering SNAP sync from a new pivot")
+      log.warning(
+        "[RECOVERY] storage recovery abandoned (unservable pivot root) — stopping all recovery actors and re-triggering SNAP sync from a new pivot"
+      )
       storageActor.foreach(context.unwatch)
-      bytecodeActor.foreach { a => context.unwatch(a); context.stop(a) }
+      bytecodeActor.foreach { a =>
+        context.unwatch(a); context.stop(a)
+      }
       peerPoller.cancel()
       networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
         context.system.deadLetters

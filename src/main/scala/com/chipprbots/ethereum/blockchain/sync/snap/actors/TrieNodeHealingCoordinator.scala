@@ -79,11 +79,12 @@ class TrieNodeHealingCoordinator(
   // Inline child discovery counter (Besu-aligned scheduler approach)
   private var childrenDiscoveredTotal: Long = 0
 
-  // Active request tracking: maps requestId -> (tasks, peer, requestedBytes, sentAtMs)
+  // Active request tracking: maps requestId -> (tasks, peer, requestedBytes, rootAtDispatch, sentAtMs)
   private case class ActiveRequest(
       tasks: Seq[HealingEntry],
       peer: Peer,
       requestedBytes: BigInt,
+      rootAtDispatch: ByteString,
       sentAtMs: Long = System.currentTimeMillis()
   )
   private val activeRequests = mutable.Map[BigInt, ActiveRequest]()
@@ -686,7 +687,7 @@ class TrieNodeHealingCoordinator(
       responseBytes = responseBytes
     )
 
-    activeRequests(requestId) = ActiveRequest(batch, peer, responseBytes)
+    activeRequests(requestId) = ActiveRequest(batch, peer, responseBytes, stateRoot)
 
     // Send timeout as an actor message so handleTimeout runs on the actor thread,
     // not the scheduler thread. Direct callback would race against receive() handlers
@@ -723,6 +724,22 @@ class TrieNodeHealingCoordinator(
     val tasksForRequest = activeReq.tasks
     val peer = activeReq.peer
     val requestedBytes = activeReq.requestedBytes
+
+    if (activeReq.rootAtDispatch != stateRoot) {
+      log.warning(
+        s"[HEAL] stale-root response discarded " +
+          s"(dispatched=${Hex.toHexString(activeReq.rootAtDispatch.take(4).toArray)}, " +
+          s"current=${Hex.toHexString(stateRoot.take(4).toArray)}) " +
+          s"— re-queuing ${tasksForRequest.size} paths"
+      )
+      activeRequests.remove(requestId)
+      tasksForRequest.foreach { task =>
+        pendingHashSet += task.hash
+        pendingTasks += task
+      }
+      requestTracker.completeRequest(requestId, 0)
+      return
+    }
 
     var healedCount = 0
     var receivedBytes: Long = 0
