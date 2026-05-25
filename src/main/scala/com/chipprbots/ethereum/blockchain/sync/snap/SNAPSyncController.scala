@@ -114,8 +114,18 @@ class SNAPSyncController(
 
   private val progressMonitor = new SyncProgressMonitor(scheduler)
 
-  // Failure tracking for fallback to fast sync
+  // Failure tracking — critical failures trigger dormant retry with exponential backoff
+  // instead of falling back to fast sync (useless on ETH68/69 networks).
   private var criticalFailureCount: Int = 0
+  private var accountsAtLastCriticalFailure: Long = 0L
+  private val AccountProgressResetThreshold: Long = 100_000L
+
+  // Dormant retry: when critical failures exhaust, preserve all RocksDB data and wait
+  // for peers to re-index their snapshots with exponential backoff (3min–20min).
+  private var dormantRetryCount: Int = 0
+  private var dormantWakeUpTask: Option[Cancellable] = None
+  private val DormantBaseDelay: FiniteDuration = 3.minutes
+  private val DormantMaxDelay: FiniteDuration = 20.minutes
 
   // Retry counter for validation failures to prevent infinite loops
   private var validationRetryCount: Int = 0
@@ -183,10 +193,11 @@ class SNAPSyncController(
   // Consecutive pivot refresh counter: when all peers are repeatedly stateless after
   // pivot refreshes, it strongly indicates no peer has a snapshot database. Each
   // PivotStateUnservable increments this; any successful account download resets it.
-  // After MaxConsecutivePivotRefreshes, we record a critical failure to accelerate
-  // fallback to fast sync instead of cycling pivots for 75+ minutes.
+  // After MaxConsecutivePivotRefreshes, we record a critical failure and enter dormant
+  // retry mode instead of falling back to fast sync. Set to 10 (was 3) to tolerate
+  // ETC mainnet's 1-5 SNAP peers needing 5+ minutes to re-index after serve-window expiry.
   private var consecutivePivotRefreshes: Int = 0
-  private val MaxConsecutivePivotRefreshes = 3
+  private val MaxConsecutivePivotRefreshes = 10
 
   // Pending pivot refresh: when refreshPivotInPlace() needs a header from a peer,
   // it requests a bootstrap and stores the pending pivot here. When BootstrapComplete
@@ -223,6 +234,8 @@ class SNAPSyncController(
   private case object TuneRateTracker
   private case object EvictNonSnapPeers
   private case class PivotProbeTimeout(requestId: BigInt)
+  private case object DormantWakeUp
+  private case class DelayedRestart(reason: String)
   private var snapCapabilityCheckTask: Option[Cancellable] = None
   private var snapPeerEvictionTask: Option[Cancellable] = None
 
@@ -356,6 +369,7 @@ class SNAPSyncController(
 
   override def postStop(): Unit = {
     stopSnapOnlySchedules()
+    dormantWakeUpTask.foreach(_.cancel())
     log.info("SNAP Sync Controller stopped")
   }
 
@@ -430,6 +444,12 @@ class SNAPSyncController(
     // Periodic SNAP peer eviction: disconnect non-SNAP outgoing peers to free slots
     case EvictNonSnapPeers =>
       evictNonSnapPeers()
+
+    // Delayed restart after critical failure backoff
+    case DelayedRestart(reason) =>
+      if (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync) {
+        restartSnapSync(reason)
+      }
 
     // Snap capability grace period check: if still no snap/1 peers, fall back to fast sync
     case CheckSnapCapability =>
@@ -539,7 +559,21 @@ class SNAPSyncController(
     case ProgressAccountsSynced(count) =>
       progressMonitor.incrementAccountsSynced(count)
       // Real account downloads mean SNAP is making progress — reset the pivot refresh counter.
-      if (count > 0) consecutivePivotRefreshes = 0
+      if (count > 0) {
+        consecutivePivotRefreshes = 0
+        if (criticalFailureCount > 0) {
+          val currentTotal = progressMonitor.currentProgress.accountsSynced
+          if (currentTotal - accountsAtLastCriticalFailure >= AccountProgressResetThreshold) {
+            log.info(
+              s"Resetting criticalFailureCount ($criticalFailureCount -> 0): " +
+                s"${currentTotal - accountsAtLastCriticalFailure} accounts since last critical failure"
+            )
+            criticalFailureCount = 0
+            accountsAtLastCriticalFailure = currentTotal
+            dormantRetryCount = 0
+          }
+        }
+      }
 
     case actors.Messages.AccountRangeProgress(progress) =>
       preservedRangeProgress = progress
@@ -651,16 +685,30 @@ class SNAPSyncController(
             consecutivePivotRefreshes = 0 // Reset — accounts completing IS progress
             refreshPivotInPlace(reason)
           } else {
-            // Accounts still in progress — full restart is acceptable
-            // but preserve range progress (existing preservedRangeProgress mechanism)
+            // Accounts still in progress. On ETH68/69 networks FastSync is useless (no
+            // GetNodeData), so instead of falling back we enter dormant retry mode —
+            // preserving all RocksDB data and waiting for peers with exponential backoff.
             log.warning(
               s"$consecutivePivotRefreshes consecutive pivot refreshes without progress. " +
                 "Peers likely lack snapshot databases."
             )
             if (recordCriticalFailure(s"$consecutivePivotRefreshes consecutive stateless pivot refreshes")) {
-              fallbackToFastSync()
+              enterDormantMode(
+                s"critical failure threshold reached: $consecutivePivotRefreshes consecutive stateless pivot refreshes"
+              )
             } else {
-              restartSnapSync(s"consecutive stateless pivots ($consecutivePivotRefreshes): $reason")
+              val restartDelay = math.min(30 * criticalFailureCount, 120).seconds
+              if (restartDelay > Duration.Zero) {
+                log.info(
+                  s"Delaying SNAP restart by ${restartDelay.toSeconds}s " +
+                    s"(criticalFailureCount=$criticalFailureCount)"
+                )
+                scheduler.scheduleOnce(restartDelay, self, DelayedRestart(
+                  s"consecutive stateless pivots ($consecutivePivotRefreshes): $reason"
+                ))(ec)
+              } else {
+                restartSnapSync(s"consecutive stateless pivots ($consecutivePivotRefreshes): $reason")
+              }
             }
           }
         } else {
@@ -1050,8 +1098,8 @@ class SNAPSyncController(
         if (validationRetryCount > MaxValidationRetries) {
           val retryMsg = s"root node missing after $validationRetryCount validation retries"
           if (recordCriticalFailure(retryMsg)) {
-            log.error("Too many critical SNAP failures — falling back to fast sync")
-            fallbackToFastSync()
+            log.error("Too many critical SNAP failures — entering dormant mode")
+            enterDormantMode(s"validation retry exhausted: $retryMsg")
           } else {
             log.warning(
               s"Root node missing after $validationRetryCount validation attempts. " +
@@ -2257,10 +2305,11 @@ class SNAPSyncController(
     */
   private def recordCriticalFailure(reason: String): Boolean = {
     criticalFailureCount += 1
+    accountsAtLastCriticalFailure = progressMonitor.currentProgress.accountsSynced
     log.warning(s"Critical SNAP sync failure ($criticalFailureCount/${snapSyncConfig.maxSnapSyncFailures}): $reason")
 
     if (criticalFailureCount >= snapSyncConfig.maxSnapSyncFailures) {
-      log.error(s"SNAP sync failed ${criticalFailureCount} times, falling back to fast sync")
+      log.error(s"SNAP sync failed ${criticalFailureCount} times — threshold reached")
       true
     } else {
       false
@@ -2306,6 +2355,119 @@ class SNAPSyncController(
     // Notify parent controller to switch to fast sync
     context.parent ! FallbackToFastSync
     context.become(completed)
+  }
+
+  /** Enter dormant mode: stop all coordinators and scheduled tasks, preserve all RocksDB data,
+    * and schedule a wake-up with exponential backoff. Replaces fallbackToFastSync() in the
+    * critical failure path — FastSync is useless on ETH68/69 (GetNodeData removed).
+    *
+    * Unlike fallbackToFastSync(), this does NOT clear persisted SNAP progress, does NOT
+    * send FallbackToFastSync to parent, and DOES preserve all downloaded trie data.
+    */
+  private def enterDormantMode(reason: String): Unit = {
+    currentPhase = Dormant
+
+    log.warning(
+      s"Entering dormant mode (attempt ${dormantRetryCount + 1}): $reason. " +
+        s"All downloaded state preserved. Will retry after backoff."
+    )
+
+    accountRangeRequestTask.foreach(_.cancel()); accountRangeRequestTask = None
+    bytecodeRequestTask.foreach(_.cancel()); bytecodeRequestTask = None
+    storageRangeRequestTask.foreach(_.cancel()); storageRangeRequestTask = None
+    accountStagnationCheckTask.foreach(_.cancel()); accountStagnationCheckTask = None
+    healingRequestTask.foreach(_.cancel()); healingRequestTask = None
+    bootstrapCheckTask.foreach(_.cancel()); bootstrapCheckTask = None
+    pivotBootstrapRetryTask.foreach(_.cancel()); pivotBootstrapRetryTask = None
+    rateTrackerTuneTask.foreach(_.cancel()); rateTrackerTuneTask = None
+    snapCapabilityCheckTask.foreach(_.cancel()); snapCapabilityCheckTask = None
+    snapPeerEvictionTask.foreach(_.cancel()); snapPeerEvictionTask = None
+
+    accountRangeCoordinator.foreach(context.stop); accountRangeCoordinator = None
+    bytecodeCoordinator.foreach(context.stop); bytecodeCoordinator = None
+    storageRangeCoordinator.foreach(context.stop); storageRangeCoordinator = None
+    trieNodeHealingCoordinator.foreach(context.stop); trieNodeHealingCoordinator = None
+
+    requestTracker.clear()
+    pendingPivotRefresh = None
+    pivotProbeRequestId = None
+    pendingProbeCommit = None
+    proactiveRollNeedsProbe = false
+    probeAttemptCount = 0
+
+    dormantRetryCount += 1
+    val backoffMs = math.min(
+      DormantBaseDelay.toMillis * (1L << math.min(dormantRetryCount - 1, 10)),
+      DormantMaxDelay.toMillis
+    )
+    val backoff = backoffMs.millis
+
+    log.info(
+      s"Dormant backoff: ${backoff.toSeconds}s " +
+        s"(attempt $dormantRetryCount, criticalFailures=$criticalFailureCount)"
+    )
+
+    dormantWakeUpTask.foreach(_.cancel())
+    dormantWakeUpTask = Some(scheduler.scheduleOnce(backoff, self, DormantWakeUp)(ec))
+
+    context.become(dormantRetry)
+  }
+
+  private def wakeFromDormant(): Unit = {
+    log.info(
+      s"Waking from dormant mode after $dormantRetryCount attempt(s). " +
+        s"criticalFailureCount=$criticalFailureCount. Restarting SNAP sync with fresh pivot."
+    )
+
+    accountsComplete = false
+    bytecodePhaseComplete = false
+    storagePhaseComplete = false
+    storagePhaseForceCompleted = false
+    bytecodesEstimatedTotal = 0L
+    healingValidatedRoot = None
+
+    pivotBlock = None
+    stateRoot = None
+    mptStorage = None
+    currentPhase = Idle
+    coordinatorGeneration += 1
+    validationGeneration += 1
+    validationInProgress = false
+    consecutivePivotRefreshes = 0
+
+    context.become(idle)
+    startSnapSync()
+  }
+
+  def dormantRetry: Receive = handlePeerListMessagesWithRateTracking.orElse {
+    case DormantWakeUp =>
+      dormantWakeUpTask = None
+      val snapPeerCount = handshakedPeers.values.count(_.peerInfo.remoteStatus.supportsSnap)
+      if (snapPeerCount > 0) {
+        log.info(s"Dormant wake-up: $snapPeerCount SNAP peer(s) available. Restarting SNAP sync.")
+        wakeFromDormant()
+      } else {
+        log.info(s"Dormant wake-up: still no SNAP peers. Re-entering dormant with extended backoff.")
+        enterDormantMode(s"no SNAP peers at wake-up (attempt $dormantRetryCount)")
+      }
+
+    case hint: CLPivotHint =>
+      handleCLPivotHint(hint, isStarting = false)
+
+    case SyncProtocol.GetStatus =>
+      sender() ! SyncProtocol.Status.Syncing(
+        startingBlockNumber = appStateStorage.getSyncStartingBlock(),
+        blocksProgress = SyncProtocol.Status.Progress(
+          pivotBlock.getOrElse(BigInt(0)),
+          pivotBlock.getOrElse(BigInt(0))
+        ),
+        stateNodesProgress = None
+      )
+
+    case GetProgress =>
+      sender() ! progressMonitor.currentProgress
+
+    case _ => // silently drop stale coordinator messages, SNAP responses, etc.
   }
 
   /** Evict non-SNAP outgoing peers when SNAP peer count is below threshold.
@@ -3596,7 +3758,7 @@ class SNAPSyncController(
           progress.storageSlotsSynced + progress.nodesHealed
         (total, total)
 
-      case Idle | Completed =>
+      case Idle | Completed | Dormant =>
         (0L, 0L)
     }
 
@@ -3679,7 +3841,7 @@ class SNAPSyncController(
       consecutiveAccountStallRefreshes = 0
       lastAccountProgressMs = System.currentTimeMillis()
       if (recordCriticalFailure(s"account stall refresh limit exceeded: $context")) {
-        fallbackToFastSync()
+        enterDormantMode(s"account stall refresh limit exceeded: $context")
         return
       }
     }
@@ -3944,6 +4106,7 @@ object SNAPSyncController {
   case object StateValidation extends SyncPhase
   case object ChainDownloadCompletion extends SyncPhase
   case object Completed extends SyncPhase
+  case object Dormant extends SyncPhase
 
   /** Source of pivot block selection */
   sealed trait PivotSelectionSource {

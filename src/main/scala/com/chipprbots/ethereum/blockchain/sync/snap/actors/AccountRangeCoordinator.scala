@@ -1719,10 +1719,11 @@ class AccountRangeCoordinator(
 object AccountRangeCoordinator {
 
   /** Hard cap on consecutive re-queues for a single account task before the coordinator escalates to the controller via
-    * `PivotStateUnservable`. The cap is high enough that legitimate transient peer churn (cooldowns, network blips)
-    * won't trip it, but low enough that a wedged trailing range can't loop forever.
+    * `PivotStateUnservable`. On ETC mainnet with 1-5 SNAP peers, serve-window gaps can last 5-10 minutes. At 5s cooldown
+    * (empty-without-proof) 20 requeues covers ~100s; at 30s timeout, ~10 minutes. Previously 8 — too tight for
+    * peer-scarce networks where transient statelessness is the norm, not the exception.
     */
-  val MaxRequeuesPerTask: Int = 8
+  val MaxRequeuesPerTask: Int = 20
 
   /** Async trie-finalisation result. `generation` matches the value of `trieFlushGeneration` at spawn time so stale
     * completions (after a state transition / restart) can be dropped without applying against the wrong assumption.
