@@ -662,6 +662,52 @@ class SyncControllerSpec
     ) shouldBe false
   }
 
+  // ── T10a-T10b: RecoveryFailed re-triggers SNAP sync (Bug C/D fix) ────────────────────────────
+
+  it should "re-trigger SNAP sync (not regular sync) when StorageRecoveryActor sends RecoveryFailed" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup._
+    seedSnapDoneWithRecovery(storagesInstance.storages.appStateStorage, needBytecode = false)
+
+    // Send Start then RecoveryFailed immediately — both messages are enqueued to SyncController's
+    // mailbox before any message from the recovery actor can arrive. Akka processes them in order:
+    // Start → runningRecovery, then RecoveryFailed → startSnapSync(). The recovery actor
+    // (which completes quickly with EphemDataSource) sends RecoveryComplete after, which lands
+    // in snap-sync state and is ignored.
+    syncController ! SyncProtocol.Start
+    syncController ! StorageRecoveryActor.RecoveryFailed
+
+    // Bug C fix: SyncController must re-trigger SNAP sync, not regular sync.
+    // Note: the done-flag assertion is in StorageRecoveryActorSpec T5 (where the actor itself
+    // is the one that abandons and skips the flag write). Here we only verify SyncController
+    // routing: RecoveryFailed → startSnapSync(), not startRegularSync().
+    eventually {
+      someTimePasses()
+      assert(syncController.children.exists(_.path.name.startsWith("snap-sync")))
+    }
+  }
+
+  it should "re-trigger SNAP sync (not regular sync) when BytecodeRecoveryActor sends RecoveryFailed" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup._
+    seedSnapDoneWithRecovery(storagesInstance.storages.appStateStorage, needStorage = false)
+
+    // Same ordering guarantee as T10a — both messages enqueued before recovery actor runs.
+    syncController ! SyncProtocol.Start
+    syncController ! BytecodeRecoveryActor.RecoveryFailed
+
+    // Bug D fix: SyncController must re-trigger SNAP sync, not regular sync.
+    // done-flag assertion is in BytecodeRecoveryActorSpec T5.
+    eventually {
+      someTimePasses()
+      assert(syncController.children.exists(_.path.name.startsWith("snap-sync")))
+    }
+  }
+
   // ── T10-T13: startup diagnostic + handler tests ───────────────────────────────────────────────
   // RLP encoding of a 32-byte hash = valid HashNode (length==MaxEncodedNodeLength → no MPTException)
   private def validMptNodeRlp(hash: ByteString): Array[Byte] = Array(0xa0.toByte) ++ hash.toArray

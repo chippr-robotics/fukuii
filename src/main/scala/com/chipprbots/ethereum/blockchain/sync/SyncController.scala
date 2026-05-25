@@ -1111,8 +1111,19 @@ class SyncController(
 
   def startRecovery(needBytecode: Boolean, needStorage: Boolean): Unit = {
     syncGeneration += 1
-    val stateRootOpt = appStateStorage.getSnapSyncStateRoot()
     val pivotBlockOpt = appStateStorage.getSnapSyncPivotBlock()
+
+    // Bug E: derive stateRoot from the stored pivot block header rather than the separately-saved
+    // snapStateRoot. The pivot header is always updated on pivot refresh (even during StateHealing
+    // via updateBestBlockForPivot), so this gives us the latest root after a crash mid-healing.
+    // Besu and go-ethereum both re-derive the root from chain data on restart rather than trusting
+    // a separately persisted snapshot.
+    val stateRootOpt = pivotBlockOpt.flatMap { pivotBlock =>
+      blockchainReader
+        .getBlockHeaderByNumber(pivotBlock)
+        .map(_.stateRoot)
+        .orElse(appStateStorage.getSnapSyncStateRoot())
+    }
 
     (stateRootOpt, pivotBlockOpt) match {
       case (Some(stateRoot), Some(pivotBlock)) =>
@@ -1239,6 +1250,26 @@ class SyncController(
           runningRecovery(bytecodeActor, storageActor = None, bytecodeComplete, storageComplete = true, peerPoller)
         )
       }
+
+    case BytecodeRecoveryActor.RecoveryFailed =>
+      log.warning("[RECOVERY] bytecode recovery abandoned (unservable pivot root) — stopping all recovery actors and re-triggering SNAP sync from a new pivot")
+      bytecodeActor.foreach(context.unwatch)
+      storageActor.foreach { a => context.unwatch(a); context.stop(a) }
+      peerPoller.cancel()
+      networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
+        context.system.deadLetters
+      )
+      startSnapSync()
+
+    case StorageRecoveryActor.RecoveryFailed =>
+      log.warning("[RECOVERY] storage recovery abandoned (unservable pivot root) — stopping all recovery actors and re-triggering SNAP sync from a new pivot")
+      storageActor.foreach(context.unwatch)
+      bytecodeActor.foreach { a => context.unwatch(a); context.stop(a) }
+      peerPoller.cancel()
+      networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
+        context.system.deadLetters
+      )
+      startSnapSync()
 
     case PollRecoveryPeers =>
       networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeers

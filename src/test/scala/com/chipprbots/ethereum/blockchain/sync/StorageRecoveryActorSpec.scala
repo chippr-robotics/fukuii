@@ -182,7 +182,7 @@ class StorageRecoveryActorSpec
   }
 
   it should
-    "abandon and commit recovery-done after repeated PivotStateUnservable with no progress" taggedAs (
+    "send RecoveryFailed (not RecoveryComplete) and NOT commit done-flag when abandoning on unservable pivot" taggedAs (
       UnitTest,
       SyncTest
     ) in {
@@ -205,11 +205,13 @@ class StorageRecoveryActorSpec
       coordinatorProbe.expectMsgType[snap.actors.Messages.AddStorageTasks](2.seconds)
       coordinatorProbe.expectMsg(2.seconds, snap.actors.Messages.NoMoreStorageTasks)
 
-      // Arm the abandon timer and confirm it fires
+      // Arm the abandon timer and confirm it fires with the correct signal
       (1 to 5).foreach(_ => actor ! pivotUnservable())
 
-      syncController.expectMsg(3.seconds, StorageRecoveryActor.RecoveryComplete)
-      appStateStorage.isStorageRecoveryDone() shouldBe true
+      // Bug C fix: abandon sends RecoveryFailed, NOT RecoveryComplete
+      syncController.expectMsg(3.seconds, StorageRecoveryActor.RecoveryFailed)
+      // Bug C fix: done-flag must NOT be written — SyncController will re-trigger SNAP sync
+      appStateStorage.isStorageRecoveryDone() shouldBe false
     }
 
   it should "NOT abandon if slot progress arrives between unservable events" taggedAs (

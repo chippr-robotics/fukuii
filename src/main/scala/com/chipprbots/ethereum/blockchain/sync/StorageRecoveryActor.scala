@@ -321,12 +321,13 @@ class StorageRecoveryActor(
         if (progressAtSchedule == progressSeq) {
           log.warning(
             "[STORAGE-RECOVERY] abandoning: no slot progress for {}s, {} unservable events — " +
-              "on-demand GetTrieNodes will cover remainder",
+              "pivot root is unservable; SyncController will re-trigger SNAP sync from a new pivot",
             abandonAfter.toSeconds,
             unservableCount
           )
-          appStateStorage.storageRecoveryDone().commit()
-          syncController ! RecoveryComplete
+          // Do NOT write storageRecoveryDone — recovery is incomplete.
+          // SyncController handles RecoveryFailed by re-triggering a fresh SNAP sync.
+          syncController ! RecoveryFailed
           context.stop(self)
         } else {
           abandonTimer = None
@@ -352,8 +353,12 @@ object StorageRecoveryActor {
   // Package-private so specs can construct it and assert the fire/cancel logic.
   private[sync] case class CheckAbandon(progressAtSchedule: Long)
 
-  /** Sent to SyncController when recovery is complete (or skipped) */
+  /** Sent to SyncController when recovery completed successfully (or was skipped) */
   case object RecoveryComplete
+
+  /** Sent to SyncController when recovery was abandoned due to an unservable pivot root.
+   *  The done-flag is NOT written. SyncController must re-trigger a fresh SNAP sync. */
+  case object RecoveryFailed
 
   def props(
       stateRoot: ByteString,

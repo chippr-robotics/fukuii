@@ -251,6 +251,14 @@ class BytecodeRecoveryActor(
       context.stop(self)
     }
 
+    def abandonRecovery(): Unit = {
+      abandonTimer.foreach(_.cancel())
+      // Do NOT write bytecodeRecoveryDone — recovery is incomplete.
+      // SyncController handles RecoveryFailed by re-triggering a fresh SNAP sync.
+      syncController ! RecoveryFailed
+      context.stop(self)
+    }
+
     {
       case snap.actors.Messages.ByteCodePeerAvailable(peer) =>
         coordinator ! snap.actors.Messages.ByteCodePeerAvailable(peer)
@@ -283,10 +291,10 @@ class BytecodeRecoveryActor(
         if (progressAtSchedule == progressSeq) {
           log.warning(
             "[BYTECODE-RECOVERY] abandoning: no download progress for {}s — " +
-              "on-demand GetTrieNodes will cover remainder",
+              "pivot root is unservable; SyncController will re-trigger SNAP sync from a new pivot",
             abandonAfter.toSeconds
           )
-          finishRecovery()
+          abandonRecovery()
         } else {
           abandonTimer = None
         }
@@ -307,8 +315,12 @@ object BytecodeRecoveryActor {
   private[sync] case object ScanComplete
   private[sync] case class CheckAbandon(progressSeq: Long)
 
-  /** Sent to SyncController when recovery is complete (or skipped) */
+  /** Sent to SyncController when recovery completed successfully (or was skipped) */
   case object RecoveryComplete
+
+  /** Sent to SyncController when recovery was abandoned due to an unservable pivot root.
+   *  The done-flag is NOT written. SyncController must re-trigger a fresh SNAP sync. */
+  case object RecoveryFailed
 
   def props(
       stateRoot: ByteString,

@@ -35,7 +35,7 @@ import com.chipprbots.ethereum.utils.Config
   *   T2: Missing present → AddByteCodeTasks + NoMoreByteCodeTasks + full download cycle.
   *   T3: Empty flat scan (no preloaded, empty FlatAccountStorage) → RecoveryComplete.
   *   T4: Coordinator crashes mid-download → Terminated handler commits flag and fires RecoveryComplete.
-  *   T5: No peer/progress arrives within timeout → abandon fires, RecoveryComplete emitted.
+  *   T5: No peer/progress arrives within timeout → abandon fires RecoveryFailed (not RecoveryComplete), done-flag NOT written.
   *   T6: AddByteCodeTasks then NoMoreByteCodeTasks seal sent in order (Bug 2 regression test).
   */
 class BytecodeRecoveryActorSpec
@@ -216,7 +216,7 @@ class BytecodeRecoveryActorSpec
     }
 
   it should
-    "abandon and emit RecoveryComplete when no download progress arrives within the timeout" taggedAs (
+    "send RecoveryFailed (not RecoveryComplete) and NOT commit done-flag when abandoning on timeout" taggedAs (
       UnitTest,
       SyncTest
     ) in {
@@ -249,8 +249,9 @@ class BytecodeRecoveryActorSpec
       coordinatorProbe.expectMsg(2.seconds, snap.actors.Messages.NoMoreByteCodeTasks)
 
       // No ProgressBytecodesDownloaded → progressSeq stays 0 → CheckAbandon(0) fires and abandons
-      syncController.expectMsg(abandonAfter * 4, BytecodeRecoveryActor.RecoveryComplete)
-      appStateStorage.isBytecodeRecoveryDone() shouldBe true
+      // Bug D fix: abandon sends RecoveryFailed, NOT RecoveryComplete; done-flag NOT written
+      syncController.expectMsg(abandonAfter * 4, BytecodeRecoveryActor.RecoveryFailed)
+      appStateStorage.isBytecodeRecoveryDone() shouldBe false
 
       system.stop(actor)
     }

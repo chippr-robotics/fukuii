@@ -726,6 +726,15 @@ class SNAPSyncController(
         } else {
           refreshPivotInPlace(reason)
         }
+      } else if (currentPhase == StateHealing) {
+        // Bug F: healing coordinator may report the root unservable (pruned peers). Refresh
+        // the pivot so the healing coordinator gets a new root via HealingPivotRefreshed.
+        // Without this the coordinator retries the same unservable root forever.
+        lastPivotRestartMs = now
+        log.warning(
+          s"PivotStateUnservable during StateHealing (emptyResponses=$emptyResponses, reason=$reason) — refreshing pivot"
+        )
+        refreshPivotInPlace(reason)
       } else {
         log.info(s"Ignoring PivotStateUnservable in phase=$currentPhase (reason=$reason)")
       }
