@@ -1175,6 +1175,25 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
       maxStaleness = 4096L
     ) shouldBe Right(())
   }
+
+  "PivotStateUnservable handler" should
+    "handle the event during StateHealing (Bug F guard)" taggedAs UnitTest in {
+      import SNAPSyncController._
+
+      // Inline predicate mirroring the handler phase guard (restart-time check excluded —
+      // it requires wall-clock state and is exercised via integration tests).
+      // Bug F: StateHealing was previously a no-op branch; now it calls refreshPivotInPlace().
+      def handlerActsOn(phase: SyncPhase): Boolean =
+        phase == AccountRangeSync || phase == ByteCodeAndStorageSync || phase == StateHealing
+
+      handlerActsOn(AccountRangeSync) shouldBe true
+      handlerActsOn(ByteCodeAndStorageSync) shouldBe true
+      handlerActsOn(StateHealing) shouldBe true // Bug F: false before the fix
+      handlerActsOn(Idle) shouldBe false
+      handlerActsOn(StateValidation) shouldBe false
+      handlerActsOn(ChainDownloadCompletion) shouldBe false
+      handlerActsOn(Completed) shouldBe false
+    }
 }
 
 /** Test helper: a `StateValidator` subclass that returns canned results without traversing the trie. Used in

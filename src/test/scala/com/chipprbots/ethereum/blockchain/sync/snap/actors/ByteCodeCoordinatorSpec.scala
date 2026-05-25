@@ -982,7 +982,7 @@ class ByteCodeCoordinatorSpec
       system.actorSelection(coordinator.path / "*") ! Messages.ByteCodesResponseMsg(
         ByteCodes(req.requestId, Seq.empty)
       )
-      Thread.sleep(5) // allow 1ms cooldown to expire before next ByteCodePeerAvailable
+      Thread.sleep(50) // allow 1ms cooldown to expire + actor to process response before next ByteCodePeerAvailable
     }
 
     // Hash exhausted → completion signal, not an error escalation.
