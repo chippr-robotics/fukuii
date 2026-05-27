@@ -62,8 +62,8 @@ class EtcPeerManagerSpec extends AnyFlatSpec with Matchers {
     expectInitialSubscriptions()
     setupNewPeer(peer1, peer1Probe, peer1Info)
 
-    // given
-    val newBlockWeight: ChainWeight = ChainWeight.totalDifficultyOnly(300)
+    // given — TD must exceed initial Status TD so the monotonic guard allows the update
+    val newBlockWeight: ChainWeight = ChainWeight.totalDifficultyOnly(initialPeerInfo.chainWeight.totalDifficulty + 300)
     val firstHeader: BlockHeader = baseBlockHeader.copy(number = peer1Info.maxBlockNumber + 4)
     val firstBlock: NewBlock = NewBlock(Block(firstHeader, BlockBody(Nil, Nil)), newBlockWeight.totalDifficulty)
 

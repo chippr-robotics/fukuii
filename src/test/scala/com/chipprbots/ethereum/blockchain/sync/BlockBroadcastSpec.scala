@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.ETH62
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.NewBlockHashes
+import com.chipprbots.ethereum.network.p2p.messages.ETH69
 
 class BlockBroadcastSpec
     extends TestKit(ActorSystem("BlockBroadcastSpec_System"))
@@ -216,16 +217,18 @@ class BlockBroadcastSpec
       maxBlockNumber = peerLatestBlock,
       bestBlockHash = eth69Status.bestHash
     )
-    // Our block is behind the peer — should NOT be sent
+    // Our block is behind the peer — NewBlock/NewBlockHashes NOT sent, but BlockRangeUpdate IS
     val blockHeader = baseBlockHeader.copy(number = peerLatestBlock - 100)
     val ourChainWeight = ChainWeight.totalDifficultyOnly(BigInt("99000000000000000000000000"))
     val block = Block(blockHeader, BlockBody(Nil, Nil))
+    val expectedBru = ETH69.BlockRangeUpdate(BigInt(0), blockHeader.number, blockHeader.hash)
 
     blockBroadcast.broadcastBlock(
       BlockToBroadcast(block, ourChainWeight),
       Map(peer.id -> PeerWithInfo(peer, eth69PeerInfo))
     )
 
+    networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(expectedBru, peer.id))
     networkPeerManagerProbe.expectNoMessage()
   }
 
@@ -257,6 +260,8 @@ class BlockBroadcastSpec
     val block = Block(blockHeader, BlockBody(Nil, Nil))
     val newBlockMsg = BaseETH6XMessages.NewBlock(block, ourChainWeight.totalDifficulty)
 
+    val expectedBru = ETH69.BlockRangeUpdate(BigInt(0), blockHeader.number, blockHeader.hash)
+
     blockBroadcast.broadcastBlock(
       BlockToBroadcast(block, ourChainWeight),
       Map(peer.id -> PeerWithInfo(peer, eth69PeerInfo))
@@ -264,6 +269,7 @@ class BlockBroadcastSpec
 
     networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(newBlockMsg, peer.id))
     networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(newBlockHashes, peer.id))
+    networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(expectedBru, peer.id))
     networkPeerManagerProbe.expectNoMessage()
   }
 
@@ -292,12 +298,15 @@ class BlockBroadcastSpec
     val blockHeader = baseBlockHeader.copy(number = peerLatestBlock) // same block number
     val ourChainWeight = ChainWeight.totalDifficultyOnly(BigInt("100000000000000000000000001"))
     val block = Block(blockHeader, BlockBody(Nil, Nil))
+    val expectedBru = ETH69.BlockRangeUpdate(BigInt(0), blockHeader.number, blockHeader.hash)
 
     blockBroadcast.broadcastBlock(
       BlockToBroadcast(block, ourChainWeight),
       Map(peer.id -> PeerWithInfo(peer, eth69PeerInfo))
     )
 
+    // No NewBlock/NewBlockHashes (peer already at same height), but BlockRangeUpdate informs peer of our chain state
+    networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(expectedBru, peer.id))
     networkPeerManagerProbe.expectNoMessage()
   }
 
@@ -354,6 +363,8 @@ class BlockBroadcastSpec
     val newBlockMsg = BaseETH6XMessages.NewBlock(ourBlock, ourChainWeight.totalDifficulty)
     val newBlockHashes = NewBlockHashes(Seq(ETH62.BlockHash(ourBlockHdr.hash, ourBlockHdr.number)))
 
+    val expectedBru = ETH69.BlockRangeUpdate(BigInt(0), ourBlockHdr.number, ourBlockHdr.hash)
+
     blockBroadcast.broadcastBlock(
       BlockToBroadcast(ourBlock, ourChainWeight),
       Map(
@@ -362,11 +373,11 @@ class BlockBroadcastSpec
       )
     )
 
-    // ETH68 peer: gets both the block body and the hash (only peer in peersWithoutBlock)
-    // sqrt(1) = 1, so they receive the full NewBlock too
+    // ETH68 peer: gets NewBlock + NewBlockHashes (only peer in peersWithoutBlock, sqrt(1)=1)
     networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(newBlockMsg, peer.id))
     networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(newBlockHashes, peer.id))
-    // ETH69 peer: filtered out of peersWithoutBlock entirely — receives nothing
+    // ETH69 peer: filtered out of NewBlock/NewBlockHashes, but always gets BlockRangeUpdate
+    networkPeerManagerProbe.expectMsg(NetworkPeerManagerActor.SendMessage(expectedBru, peer2.id))
     networkPeerManagerProbe.expectNoMessage()
   }
 
@@ -425,10 +436,12 @@ class BlockBroadcastSpec
       )
     )
 
-    // With 2 peers: sqrt(2)=1 random peer gets NewBlock, both get NewBlockHashes.
-    // Collect all 3 messages (order non-deterministic for hash messages).
+    val expectedBru = ETH69.BlockRangeUpdate(BigInt(0), ourBlockHdr.number, ourBlockHdr.hash)
+
+    // With 2 peers: sqrt(2)=1 random peer gets NewBlock, both get NewBlockHashes, ETH69 peer gets BlockRangeUpdate.
+    // Collect all 4 messages (order non-deterministic).
     import scala.concurrent.duration._
-    val messages = (1 to 3).map(_ => networkPeerManagerProbe.receiveOne(3.seconds)).toSet
+    val messages = (1 to 4).map(_ => networkPeerManagerProbe.receiveOne(3.seconds)).toSet
 
     // One NewBlock to either peer
     messages.count {
@@ -444,6 +457,9 @@ class BlockBroadcastSpec
     }
     hashRecipients should contain(peer.id)
     hashRecipients should contain(peer2.id)
+
+    // BlockRangeUpdate to ETH69 peer
+    messages should contain(NetworkPeerManagerActor.SendMessage(expectedBru, peer2.id))
 
     networkPeerManagerProbe.expectNoMessage()
   }

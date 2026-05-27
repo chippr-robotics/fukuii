@@ -217,14 +217,9 @@ class BlockchainReader(
               .map(_.totalDifficulty)
               .getOrElse(BigInt(1))
             if (ourBestNum > 0) {
-              val ourCurrentDiff = bestHeaderOpt.map(_.difficulty).getOrElse(BigInt(1))
               val gap = (latestBlock - ourBestNum).max(BigInt(0))
-              // Marginal-rate estimate: uses current difficulty instead of the historical average.
-              // Historical avg ~582 TH/block for ETC; current era ~2000–4300 TH → old formula
-              // underestimates each gap block's TD contribution by 70-86%.
-              // 9999/10000 guarantees a slight underestimate for constant-difficulty chains (< 0.01% error).
-              // Peer is never mistakenly assigned higher priority than deserved for stable chains.
-              val estimatedTD = ourBestTD + ourCurrentDiff * gap * 9999 / 10000
+              val rate = bestHeaderOpt.map(h => rollingWindowDiff(h, ourBestTD)).getOrElse(BigInt(1))
+              val estimatedTD = ourBestTD + rate * gap
               (ChainWeight.totalDifficultyOnly(estimatedTD), "POW_SCALING")
             } else {
               // DB not yet bootstrapped — TD=0 gives peer lowest priority rather than a
@@ -233,6 +228,31 @@ class BlockchainReader(
             }
         }
     }
+
+  private val Tier3RollingWindow: BigInt = BigInt(10_000)
+
+  /** Mean block difficulty over a rolling window for Tier-3 POW_SCALING estimates.
+    *
+    * @remarks
+    *   Avoids two failure modes: (1) all-time average (headTd/headNumber) is contaminated by ETC's
+    *   pre-merge low-hashrate era (~5–30 TH/s before block 15.4M, ~150–250 TH/s after); (2)
+    *   point-in-time headDifficulty rides 25-35% weekly hashrate swings. The 10K-block window
+    *   (~36 hours) stays within the current difficulty regime and transitions naturally through the
+    *   merge boundary during initial sync. Falls back to head.difficulty when the window start
+    *   block is not in our DB (evicted or not yet synced).
+    */
+  private def rollingWindowDiff(head: BlockHeader, headTd: BigInt): BigInt =
+    if (head.number == 0) head.difficulty
+    else if (head.number < Tier3RollingWindow) headTd / head.number
+    else
+      getBlockHeaderByNumber(head.number - Tier3RollingWindow) match {
+        case Some(windowHeader) =>
+          getChainWeightByHash(windowHeader.hash) match {
+            case Some(windowWeight) => (headTd - windowWeight.totalDifficulty) / Tier3RollingWindow
+            case None               => head.difficulty
+          }
+        case None => head.difficulty
+      }
 
   /** Allows to query for a block based on it's number
     *

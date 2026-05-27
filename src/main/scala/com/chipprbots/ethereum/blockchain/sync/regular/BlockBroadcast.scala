@@ -17,6 +17,7 @@ import com.chipprbots.ethereum.network.p2p.messages.BaseETH6XMessages
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.ETH62
 import com.chipprbots.ethereum.network.p2p.messages.ETH62.BlockHash
+import com.chipprbots.ethereum.network.p2p.messages.ETH69
 
 class BlockBroadcast(val networkPeerManager: ActorRef) {
 
@@ -37,6 +38,8 @@ class BlockBroadcast(val networkPeerManager: ActorRef) {
     broadcastNewBlock(blockToBroadcast, peersWithoutBlock)
 
     broadcastNewBlockHash(blockToBroadcast, peersWithoutBlock.values.map(_.peer).toSet)
+
+    broadcastBlockRangeUpdate(blockToBroadcast, handshakedPeers)
   }
 
   private def shouldSendNewBlock(newBlock: BlockToBroadcast, peerInfo: PeerInfo): Boolean = {
@@ -72,6 +75,23 @@ class BlockBroadcast(val networkPeerManager: ActorRef) {
       val newBlockHeader = blockToBroadcast.block.header
       val newBlockHashMsg = ETH62.NewBlockHashes(Seq(BlockHash(newBlockHeader.hash, newBlockHeader.number)))
       networkPeerManager ! NetworkPeerManagerActor.SendMessage(newBlockHashMsg, peer.id)
+  }
+
+  /** Sends BlockRangeUpdate to all ETH69 peers so they can refresh their TD estimate for us.
+    * Sent to ALL ETH69 peers (not just those without the block) — it is a chain-state notification,
+    * not a block announcement. earliestBlock=0 matches what our ETH69 Status sends.
+    */
+  private def broadcastBlockRangeUpdate(blockToBroadcast: BlockToBroadcast, peers: Map[PeerId, PeerWithInfo]): Unit = {
+    val header = blockToBroadcast.block.header
+    val msg = ETH69.BlockRangeUpdate(
+      earliestBlock = BigInt(0),
+      latestBlock = header.number,
+      latestBlockHash = header.hash
+    )
+    peers.foreach { case (_, PeerWithInfo(peer, peerInfo)) =>
+      if (peerInfo.remoteStatus.capability == Capability.ETH69)
+        networkPeerManager ! NetworkPeerManagerActor.SendMessage(msg, peer.id)
+    }
   }
 
   /** Obtains a random subset of peers. The returned set will verify: subsetPeers.size == sqrt(peers.size)

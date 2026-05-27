@@ -577,7 +577,9 @@ class NetworkPeerManagerActor(
   private def updateChainWeight(message: Message)(initialPeerInfo: PeerInfo): PeerInfo =
     message match {
       case newBlock: BaseETH6XMessages.NewBlock =>
-        initialPeerInfo.copy(chainWeight = ChainWeight.totalDifficultyOnly(newBlock.totalDifficulty))
+        val newWeight = ChainWeight.totalDifficultyOnly(newBlock.totalDifficulty)
+        if (newWeight > initialPeerInfo.chainWeight) initialPeerInfo.copy(chainWeight = newWeight)
+        else initialPeerInfo
       case _ => initialPeerInfo
     }
 
