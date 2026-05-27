@@ -382,6 +382,34 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     update(toRemove = Seq(Keys.StorageRecoveryCursor), toUpsert = Nil)
 
   // ========================================
+  // Flat database healing cursor (Phase 7 A7)
+  // ========================================
+  //
+  // After bytecode/storage recovery completes, FlatDatabaseHealingActor issues 256 GetAccountRange
+  // probes (one per first-byte segment) to detect accounts that SNAP downloaded to the MPT but
+  // missed writing to flat storage. Without this, a crash mid-SNAP-download leaves the flat DB
+  // incomplete, causing EVM execution to miss accounts that exist in the trie.
+  //
+  // The cursor stores the current segment index (0-255 as an integer string). Cleared atomically
+  // with the done-flag on successful completion. Also set atomically with snapSyncDone on a clean
+  // (no-crash) sync path so the healing actor is skipped on normal restarts.
+
+  def isFlatHealingDone(): Boolean =
+    get(Keys.FlatHealingDone).exists(_.toBoolean)
+
+  def flatHealingDone(): DataSourceBatchUpdate =
+    put(Keys.FlatHealingDone, true.toString)
+
+  def getFlatHealingCursor(): Option[Int] =
+    get(Keys.FlatHealingCursor).flatMap(v => scala.util.Try(v.toInt).toOption)
+
+  def putFlatHealingCursor(segment: Int): DataSourceBatchUpdate =
+    put(Keys.FlatHealingCursor, segment.toString)
+
+  def clearFlatHealingCursor(): DataSourceBatchUpdate =
+    update(toRemove = Seq(Keys.FlatHealingCursor), toUpsert = Nil)
+
+  // ========================================
   // Background chain backfill cursors (#1169)
   // ========================================
   //
@@ -490,6 +518,8 @@ object AppStateStorage {
     val SnapHealingFrontierData = "SnapHealingFrontierData"
     val BytecodeRecoveryCursor = "BytecodeRecoveryCursor"
     val StorageRecoveryCursor = "StorageRecoveryCursor"
+    val FlatHealingDone = "FlatHealingDone"
+    val FlatHealingCursor = "FlatHealingCursor"
   }
 
 }

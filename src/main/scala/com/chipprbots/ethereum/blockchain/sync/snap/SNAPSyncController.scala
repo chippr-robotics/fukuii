@@ -464,7 +464,7 @@ class SNAPSyncController(
         p.peerInfo.remoteStatus.supportsSnap
       }
       if (snapPeerCount > 0) {
-        val effectiveConcurrency = math.min(snapSyncConfig.accountConcurrency, snapPeerCount).max(1)
+        val effectiveConcurrency = snapSyncConfig.accountConcurrency.max(1)
         log.info(
           s"Found $snapPeerCount snap-capable peer(s) during grace period, starting account range sync (concurrency=$effectiveConcurrency)"
         )
@@ -4142,6 +4142,7 @@ class SNAPSyncController(
           appStateStorage.snapSyncDone()
             .and(appStateStorage.bytecodeRecoveryDone())
             .and(appStateStorage.storageRecoveryDone())
+            .and(appStateStorage.flatHealingDone())
             .commitSync()
 
           slog.info(
@@ -4310,6 +4311,10 @@ object SNAPSyncController {
   case object ByteCodeAndStorageSync extends SyncPhase
   case object StateHealing extends SyncPhase
   case object StateValidation extends SyncPhase
+  // Reserved for future backfill signaling — never entered by the state machine (no currentPhase assignment).
+  // Intended to mark the transition from active SNAP sync to background chain backfill once the pivot block is
+  // reached and block execution resumes. Besu runs this as a parallel PipelineChainDownloader; go-ethereum
+  // transitions via Pending()==0. Neither uses a discrete phase constant — retained here as a planning placeholder.
   case object ChainDownloadCompletion extends SyncPhase
   case object Completed extends SyncPhase
   case object Dormant extends SyncPhase

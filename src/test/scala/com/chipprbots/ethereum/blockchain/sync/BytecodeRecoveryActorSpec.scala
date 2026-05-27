@@ -82,7 +82,7 @@ class BytecodeRecoveryActorSpec
         Props(
           new BytecodeRecoveryActor(
             stateRoot = fakeStateRoot,
-            stateStorage = stateStorage,
+            _stateStorage = stateStorage,
             evmCodeStorage = evmCodeStorage,
             flatAccountStorage = flatAccounts,
             appStateStorage = appStateStorage,
@@ -115,7 +115,7 @@ class BytecodeRecoveryActorSpec
         Props(
           new BytecodeRecoveryActor(
             stateRoot = fakeStateRoot,
-            stateStorage = stateStorage,
+            _stateStorage = stateStorage,
             evmCodeStorage = evmCodeStorage,
             flatAccountStorage = flatAccounts,
             appStateStorage = appStateStorage,
@@ -155,7 +155,7 @@ class BytecodeRecoveryActorSpec
         Props(
           new BytecodeRecoveryActor(
             stateRoot = fakeStateRoot,
-            stateStorage = stateStorage,
+            _stateStorage = stateStorage,
             evmCodeStorage = evmCodeStorage,
             flatAccountStorage = flatAccounts,
             appStateStorage = appStateStorage,
@@ -189,7 +189,7 @@ class BytecodeRecoveryActorSpec
         Props(
           new BytecodeRecoveryActor(
             stateRoot = fakeStateRoot,
-            stateStorage = stateStorage,
+            _stateStorage = stateStorage,
             evmCodeStorage = evmCodeStorage,
             flatAccountStorage = flatAccounts,
             appStateStorage = appStateStorage,
@@ -231,7 +231,7 @@ class BytecodeRecoveryActorSpec
         Props(
           new BytecodeRecoveryActor(
             stateRoot = fakeStateRoot,
-            stateStorage = stateStorage,
+            _stateStorage = stateStorage,
             evmCodeStorage = evmCodeStorage,
             flatAccountStorage = flatAccounts,
             appStateStorage = appStateStorage,
@@ -270,7 +270,7 @@ class BytecodeRecoveryActorSpec
         Props(
           new BytecodeRecoveryActor(
             stateRoot = fakeStateRoot,
-            stateStorage = stateStorage,
+            _stateStorage = stateStorage,
             evmCodeStorage = evmCodeStorage,
             flatAccountStorage = flatAccounts,
             appStateStorage = appStateStorage,

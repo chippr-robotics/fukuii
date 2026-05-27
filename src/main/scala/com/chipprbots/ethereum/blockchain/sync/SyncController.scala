@@ -12,6 +12,8 @@ import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
 
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSync
+import com.chipprbots.ethereum.blockchain.sync.FlatDatabaseHealingActor
+import com.chipprbots.ethereum.blockchain.sync.FlatDatabaseHealingActor.FlatHealPeerAvailable
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync
 import com.chipprbots.ethereum.blockchain.sync.snap.{SNAPSyncController, SNAPSyncConfig}
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.{
@@ -890,8 +892,11 @@ class SyncController(
         }
         val needBytecode = !appStateStorage.isBytecodeRecoveryDone()
         val needStorage = !appStateStorage.isStorageRecoveryDone()
+        val needFlatHeal = !appStateStorage.isFlatHealingDone()
         if (needBytecode || needStorage) {
           startRecovery(needBytecode, needStorage)
+        } else if (needFlatHeal) {
+          startFlatHealing()
         } else {
           startRegularSync()
         }
@@ -1208,6 +1213,7 @@ class SyncController(
         log.warning("Cannot run recovery: missing stateRoot or pivotBlock. Marking done and proceeding.")
         if (needBytecode) appStateStorage.bytecodeRecoveryDone().commit()
         if (needStorage) appStateStorage.storageRecoveryDone().commit()
+        appStateStorage.flatHealingDone().commit()
         startRegularSync()
     }
   }
@@ -1227,8 +1233,8 @@ class SyncController(
         networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
           context.system.deadLetters
         )
-        log.info("[SNAP-RECOVERY] Phase complete — both actors done — transitioning to regular sync")
-        startRegularSync()
+        log.info("[SNAP-RECOVERY] Phase complete — both actors done — transitioning to flat healing")
+        startFlatHealing()
       } else {
         context.become(
           runningRecovery(bytecodeActor = None, storageActor, bytecodeComplete = true, storageComplete, peerPoller)
@@ -1243,8 +1249,8 @@ class SyncController(
         networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
           context.system.deadLetters
         )
-        log.info("[SNAP-RECOVERY] Phase complete — both actors done — transitioning to regular sync")
-        startRegularSync()
+        log.info("[SNAP-RECOVERY] Phase complete — both actors done — transitioning to flat healing")
+        startFlatHealing()
       } else {
         context.become(
           runningRecovery(bytecodeActor, storageActor = None, bytecodeComplete, storageComplete = true, peerPoller)
@@ -1300,7 +1306,7 @@ class SyncController(
         networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
           context.system.deadLetters
         )
-        startRegularSync()
+        startFlatHealing()
       } else {
         context.become(
           runningRecovery(bytecodeActor = None, storageActor, bytecodeComplete = true, storageComplete, peerPoller)
@@ -1316,7 +1322,7 @@ class SyncController(
         networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
           context.system.deadLetters
         )
-        startRegularSync()
+        startFlatHealing()
       } else {
         context.become(
           runningRecovery(bytecodeActor, storageActor = None, bytecodeComplete, storageComplete = true, peerPoller)
@@ -1327,6 +1333,100 @@ class SyncController(
       // Forward SNAP protocol responses to both active recovery actors
       bytecodeActor.foreach(_.forward(msg))
       storageActor.foreach(_.forward(msg))
+  }
+
+  def startFlatHealing(): Unit = {
+    if (appStateStorage.isFlatHealingDone()) {
+      log.info("[FLAT-HEAL] already complete — skipping to regular sync")
+      startRegularSync()
+      return
+    }
+    syncGeneration += 1
+    val pivotBlockOpt = appStateStorage.getSnapSyncPivotBlock()
+    val stateRootOpt = pivotBlockOpt.flatMap { pivotBlock =>
+      blockchainReader
+        .getBlockHeaderByNumber(pivotBlock)
+        .map(_.stateRoot)
+        .orElse(appStateStorage.getSnapSyncStateRoot())
+    }
+    stateRootOpt match {
+      case Some(stateRoot) =>
+        log.info(
+          s"[FLAT-HEAL] Starting flat database healing " +
+            s"(stateRoot=${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}..., generation=$syncGeneration)"
+        )
+        val healingActor = context.actorOf(
+          FlatDatabaseHealingActor
+            .props(
+              stateRoot = stateRoot,
+              flatAccountStorage = flatAccountStorage,
+              appStateStorage = appStateStorage,
+              networkPeerManager = networkPeerManager,
+              syncController = self
+            )
+            .withDispatcher("sync-dispatcher"),
+          s"flat-healing-$syncGeneration"
+        )
+        context.watch(healingActor)
+        networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(self)
+        val peerPoller = context.system.scheduler.scheduleWithFixedDelay(
+          2.seconds,
+          5.seconds,
+          self,
+          PollRecoveryPeers
+        )
+        context.become(runningFlatHealing(healingActor, peerPoller))
+
+      case None =>
+        log.warning("[FLAT-HEAL] Cannot start: missing stateRoot or pivotBlock. Marking done and proceeding.")
+        appStateStorage.flatHealingDone().commit()
+        startRegularSync()
+    }
+  }
+
+  def runningFlatHealing(
+      healingActor: ActorRef,
+      peerPoller: org.apache.pekko.actor.Cancellable = org.apache.pekko.actor.Cancellable.alreadyCancelled
+  ): Receive = {
+    case FlatDatabaseHealingActor.HealingComplete =>
+      peerPoller.cancel()
+      context.unwatch(healingActor)
+      networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
+        context.system.deadLetters
+      )
+      log.info("[FLAT-HEAL] Complete — transitioning to regular sync")
+      startRegularSync()
+
+    case FlatDatabaseHealingActor.HealingFailed =>
+      peerPoller.cancel()
+      context.unwatch(healingActor)
+      networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
+        context.system.deadLetters
+      )
+      log.warning("[FLAT-HEAL] Failed — marking done and proceeding to regular sync")
+      appStateStorage.flatHealingDone().commit()
+      startRegularSync()
+
+    case Terminated(`healingActor`) =>
+      log.error("[FLAT-HEAL] FlatDatabaseHealingActor crashed — marking done and proceeding to regular sync")
+      peerPoller.cancel()
+      networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.RegisterSnapSyncController(
+        context.system.deadLetters
+      )
+      appStateStorage.flatHealingDone().commit()
+      startRegularSync()
+
+    case PollRecoveryPeers =>
+      networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeers
+
+    case com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers(peers) =>
+      val snapPeers = peers.filter { case (_, peerInfo) => peerInfo.remoteStatus.supportsSnap && peerInfo.forkAccepted }
+      snapPeers.headOption.foreach { case (peer, _) =>
+        healingActor ! FlatHealPeerAvailable(peer)
+      }
+
+    case msg =>
+      healingActor.forward(msg)
   }
 
   def startRegularSyncForBootstrap(): ActorRef = {
