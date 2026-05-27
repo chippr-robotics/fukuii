@@ -6,7 +6,7 @@ This document explains how the Fukuii build works after the Scala 3 migration a
 
 | Tool | Version | Purpose |
 | --- | --- | --- |
-| JDK | 21 (Temurin) | Runtime/toolchain for Scala 3 and Pekko |
+| JDK | 25 (Temurin) | Runtime/toolchain for Scala 3 and Pekko |
 | sbt | 1.10.7 | Single build driver (no nested builds) |
 | Scala | 3.3.7 (LTS) | Only Scala version compiled in this repo |
 | scalafmt / scalafix | 2.5.2 / 0.13.0 | Formatting and linting (invoked via sbt) |
@@ -51,7 +51,7 @@ We intentionally removed auto-generated `metals.sbt` files and the recursive `pr
 
 ## Dev container / Metals notes
 
-1. The dev container already installs sbt and JDK 21; you only need to run `sbt sbtVersion` once to warm the caches.
+1. The dev container already installs sbt and JDK 25; you only need to run `sbt sbtVersion` once to warm the caches.
 2. `.gitignore` now blocks `project/metals.sbt` and the entire `project/project/` hierarchy. If Metals asks to create those files, let it—they will appear as untracked artifacts and should stay that way.
 3. To refresh Metals/BSP after dependency changes, run:
 

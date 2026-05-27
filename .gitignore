@@ -102,3 +102,8 @@ etc-node.key
 run-*.conf
 run-*.sh
 
+# Local JDK version pin (machine-specific)
+.java-version
+.tool-versions
+.sdkmanrc
+
