@@ -119,18 +119,14 @@ class SNAPSyncController(
   // instead of falling back to fast sync (useless on ETH68/69 networks).
   private var criticalFailureCount: Int = 0
   private var accountsAtLastCriticalFailure: Long = 0L
-  private val AccountProgressResetThreshold: Long = 100_000L
 
   // Dormant retry: when critical failures exhaust, preserve all RocksDB data and wait
-  // for peers to re-index their snapshots with exponential backoff (3min–20min).
+  // for peers to re-index their snapshots with exponential backoff.
   private var dormantRetryCount: Int = 0
   private var dormantWakeUpTask: Option[Cancellable] = None
-  private val DormantBaseDelay: FiniteDuration = 3.minutes
-  private val DormantMaxDelay: FiniteDuration = 20.minutes
 
   // Retry counter for validation failures to prevent infinite loops
   private var validationRetryCount: Int = 0
-  private val MaxValidationRetries = 3
   private val ValidationRetryDelay = 500.millis
 
   // Async validation state. `validationInProgress` is the re-entrance guard
@@ -161,11 +157,10 @@ class SNAPSyncController(
   // dashboard reads `5,239,500%` for a normal in-flight bytecodes count.
   private var bytecodesEstimatedTotal: Long = 0L
 
-  // Retry counter for bootstrap-to-SNAP transition (exponential backoff: 2s→60s cap, max 10 retries)
+  // Retry counter for bootstrap-to-SNAP transition (exponential backoff: 2s→60s cap)
   private var bootstrapRetryCount: Int = 0
   private val BootstrapRetryBaseDelay = 2.seconds
   private val BootstrapRetryMaxDelay = 60.seconds
-  private val MaxBootstrapRetries = 10
 
   // Pivot restart guard (prevents noisy rapid restarts if peer head fluctuates)
   private var lastPivotRestartMs: Long = 0L
@@ -194,11 +189,9 @@ class SNAPSyncController(
   // Consecutive pivot refresh counter: when all peers are repeatedly stateless after
   // pivot refreshes, it strongly indicates no peer has a snapshot database. Each
   // PivotStateUnservable increments this; any successful account download resets it.
-  // After MaxConsecutivePivotRefreshes, we record a critical failure and enter dormant
-  // retry mode instead of falling back to fast sync. Set to 10 (was 3) to tolerate
-  // ETC mainnet's 1-5 SNAP peers needing 5+ minutes to re-index after serve-window expiry.
+  // After snapHealingConfig.maxConsecutivePivotRefreshes, we record a critical failure
+  // and enter dormant retry mode instead of falling back to fast sync.
   private var consecutivePivotRefreshes: Int = 0
-  private val MaxConsecutivePivotRefreshes = 10
 
   // Pending pivot refresh: when refreshPivotInPlace() needs a header from a peer,
   // it requests a bootstrap and stores the pending pivot here. When BootstrapComplete
@@ -571,7 +564,7 @@ class SNAPSyncController(
         consecutivePivotRefreshes = 0
         if (criticalFailureCount > 0) {
           val currentTotal = progressMonitor.currentProgress.accountsSynced
-          if (currentTotal - accountsAtLastCriticalFailure >= AccountProgressResetThreshold) {
+          if (currentTotal - accountsAtLastCriticalFailure >= snapSyncConfig.dormantRetryConfig.progressResetThreshold) {
             log.info(
               s"Resetting criticalFailureCount ($criticalFailureCount -> 0): " +
                 s"${currentTotal - accountsAtLastCriticalFailure} accounts since last critical failure"
@@ -679,8 +672,8 @@ class SNAPSyncController(
       } else if (currentPhase == AccountRangeSync || currentPhase == ByteCodeAndStorageSync) {
         lastPivotRestartMs = now
         consecutivePivotRefreshes += 1
-        log.info(s"Consecutive stateless pivot refreshes: $consecutivePivotRefreshes/$MaxConsecutivePivotRefreshes")
-        if (consecutivePivotRefreshes >= MaxConsecutivePivotRefreshes) {
+        log.info(s"Consecutive stateless pivot refreshes: $consecutivePivotRefreshes/${snapSyncConfig.snapHealingConfig.maxConsecutivePivotRefreshes}")
+        if (consecutivePivotRefreshes >= snapSyncConfig.snapHealingConfig.maxConsecutivePivotRefreshes) {
           if (accountsComplete) {
             // Geth/Besu aligned: NEVER restart after accounts complete.
             // Accounts are the most expensive phase (~85.9M on ETC). Bytecodes are
@@ -711,13 +704,9 @@ class SNAPSyncController(
                   s"Delaying SNAP restart by ${restartDelay.toSeconds}s " +
                     s"(criticalFailureCount=$criticalFailureCount)"
                 )
-                scheduler.scheduleOnce(
-                  restartDelay,
-                  self,
-                  DelayedRestart(
-                    s"consecutive stateless pivots ($consecutivePivotRefreshes): $reason"
-                  )
-                )(ec)
+                scheduler.scheduleOnce(restartDelay, self, DelayedRestart(
+                  s"consecutive stateless pivots ($consecutivePivotRefreshes): $reason"
+                ))(ec)
               } else {
                 restartSnapSync(s"consecutive stateless pivots ($consecutivePivotRefreshes): $reason")
               }
@@ -1116,7 +1105,7 @@ class SNAPSyncController(
         // deadlocks silently. The retry handler kicks `validateState()` which
         // bumps the generation again and sets the flag fresh.
         validationInProgress = false
-        if (validationRetryCount > MaxValidationRetries) {
+        if (validationRetryCount > snapSyncConfig.snapHealingConfig.maxValidationRetries) {
           val retryMsg = s"root node missing after $validationRetryCount validation retries"
           if (recordCriticalFailure(retryMsg)) {
             log.error("Too many critical SNAP failures — entering dormant mode")
@@ -1130,7 +1119,7 @@ class SNAPSyncController(
             restartSnapSync(retryMsg)
           }
         } else {
-          log.error(s"Root node is missing (retry attempt $validationRetryCount of $MaxValidationRetries)")
+          log.error(s"Root node is missing (retry attempt $validationRetryCount of ${snapSyncConfig.snapHealingConfig.maxValidationRetries})")
           val gen = validationGeneration
           // Schedule on context.dispatcher (the actor's own scheduler), not
           // snapValidationEc — the retry message is cheap and shouldn't be
@@ -2298,7 +2287,7 @@ class SNAPSyncController(
 
   /** Check if bootstrap retry has exceeded the maximum count. If so, falls back to fast sync. */
   private def checkBootstrapRetryTimeout(context: String): Boolean =
-    if (bootstrapRetryCount >= MaxBootstrapRetries) {
+    if (bootstrapRetryCount >= snapSyncConfig.snapHealingConfig.maxBootstrapRetries) {
       log.warning(
         s"No peers found after $bootstrapRetryCount bootstrap retries ($context). Falling back to fast sync."
       )
@@ -2308,7 +2297,7 @@ class SNAPSyncController(
       if (bootstrapRetryCount > 0 && bootstrapRetryCount % 5 == 0) {
         log.info(
           s"Bootstrap retry diagnostics ($context): " +
-            s"attempt=$bootstrapRetryCount/$MaxBootstrapRetries, " +
+            s"attempt=$bootstrapRetryCount/${snapSyncConfig.snapHealingConfig.maxBootstrapRetries}, " +
             s"handshakedPeers=${handshakedPeers.size}, " +
             s"snapCapable=${handshakedPeers.values.count(_.peerInfo.remoteStatus.supportsSnap)}"
         )
@@ -2378,12 +2367,12 @@ class SNAPSyncController(
     context.become(completed)
   }
 
-  /** Enter dormant mode: stop all coordinators and scheduled tasks, preserve all RocksDB data, and schedule a wake-up
-    * with exponential backoff. Replaces fallbackToFastSync() in the critical failure path — FastSync is useless on
-    * ETH68/69 (GetNodeData removed).
+  /** Enter dormant mode: stop all coordinators and scheduled tasks, preserve all RocksDB data,
+    * and schedule a wake-up with exponential backoff. Replaces fallbackToFastSync() in the
+    * critical failure path — FastSync is useless on ETH68/69 (GetNodeData removed).
     *
-    * Unlike fallbackToFastSync(), this does NOT clear persisted SNAP progress, does NOT send FallbackToFastSync to
-    * parent, and DOES preserve all downloaded trie data.
+    * Unlike fallbackToFastSync(), this does NOT clear persisted SNAP progress, does NOT
+    * send FallbackToFastSync to parent, and DOES preserve all downloaded trie data.
     */
   private def enterDormantMode(reason: String): Unit = {
     currentPhase = Dormant
@@ -2418,8 +2407,8 @@ class SNAPSyncController(
 
     dormantRetryCount += 1
     val backoffMs = math.min(
-      DormantBaseDelay.toMillis * (1L << math.min(dormantRetryCount - 1, 10)),
-      DormantMaxDelay.toMillis
+      snapSyncConfig.dormantRetryConfig.baseBackoff.toMillis * (1L << math.min(dormantRetryCount - 1, 10)),
+      snapSyncConfig.dormantRetryConfig.maxBackoff.toMillis
     )
     val backoff = backoffMs.millis
 
@@ -2693,7 +2682,8 @@ class SNAPSyncController(
             initialResponseBytes = snapSyncConfig.accountInitialResponseBytes,
             minResponseBytes = snapSyncConfig.accountMinResponseBytes,
             useStackTrie = snapSyncConfig.useStackTrie,
-            flatAccountStorage = flatAccountStorage
+            flatAccountStorage = flatAccountStorage,
+            maxRequeuesPerTask = snapSyncConfig.snapHealingConfig.maxRequeuesPerTask
           )
           .withDispatcher("sync-dispatcher"),
         s"account-range-coordinator-$coordinatorGeneration"
@@ -3045,19 +3035,23 @@ class SNAPSyncController(
       log.info("Starting trie walk to discover missing nodes for healing...")
       val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
       val selfRef = self
-      scala.concurrent
+      val walkFuture = scala.concurrent
         .Future {
           val validator = new StateValidator(storage)
           validator.findMissingNodesStreaming(
             root,
-            batchSize = 500,
+            batchSize = snapSyncConfig.snapHealingConfig.trieWalkBatchSize,
             onBatch = { batch => selfRef ! TrieWalkBatch(batch) }
           )
         }(ec)
-        .foreach {
-          case Right(totalFound) => selfRef ! TrieWalkComplete(totalFound)
-          case Left(error)       => selfRef ! TrieWalkFailed(error)
-        }(ec)
+      walkFuture.foreach {
+        case Right(totalFound) => selfRef ! TrieWalkComplete(totalFound)
+        case Left(error)       => selfRef ! TrieWalkFailed(error)
+      }(ec)
+      walkFuture.failed.foreach { e =>
+        log.error(s"StateValidator walk failed with unhandled exception: ${e.getMessage}", e)
+        selfRef ! TrieWalkFailed(e.getMessage)
+      }(ec)
     }
   }
 
@@ -3089,7 +3083,9 @@ class SNAPSyncController(
               mptStorage = storage,
               batchSize = snapSyncConfig.healingBatchSize,
               snapSyncController = self,
-              concurrency = snapSyncConfig.healingConcurrency
+              concurrency = snapSyncConfig.healingConcurrency,
+              stagnationCheckInterval = snapSyncConfig.snapHealingConfig.stagnationCheckInterval,
+              maxConsecutiveStagnations = snapSyncConfig.snapHealingConfig.maxConsecutiveStagnations
             )
             .withDispatcher("sync-dispatcher"),
           s"trie-node-healing-coordinator-$coordinatorGeneration"
@@ -3310,6 +3306,10 @@ class SNAPSyncController(
       self ! StateValidationComplete
       return
     }
+    log.warning(
+      "State validation enabled — this adds ~60min to sync on ETC mainnet. " +
+        "Disable with state-validation-enabled = false for production use."
+    )
     if (validationInProgress) {
       log.info("validateState called while validation is already in progress; ignoring")
       return
@@ -3816,11 +3816,6 @@ class SNAPSyncController(
   // Reset to 0 on real progress (taskProgress || downloadProgress in maybeRestartIfAccountStagnant).
   private var consecutiveAccountStallRefreshes: Int = 0
 
-  // Hard cap so a wedged account phase escalates to FastSync fallback rather than refreshing
-  // forever. Higher than MaxConsecutivePivotRefreshes because account stalls can be transient
-  // (peer churn, slow networks) and the stagnation threshold itself already takes minutes to fire.
-  private val MaxConsecutiveAccountStallRefreshes = 10
-
   private def maybeRestartIfAccountStagnant(progress: actors.AccountRangeStats): Unit = {
     if (currentPhase != AccountRangeSync) return
 
@@ -3876,10 +3871,10 @@ class SNAPSyncController(
     // After enough refresh attempts without download progress, escalate so the node doesn't
     // loop forever. recordCriticalFailure already trips fallbackToFastSync at the configured
     // threshold; if that hasn't tripped yet, fall through to one more in-place refresh.
-    if (consecutiveAccountStallRefreshes > MaxConsecutiveAccountStallRefreshes) {
+    if (consecutiveAccountStallRefreshes > snapSyncConfig.snapHealingConfig.maxConsecutiveAccountStallRefreshes) {
       log.error(
         s"Account stall pivot-refresh budget exhausted " +
-          s"($consecutiveAccountStallRefreshes > $MaxConsecutiveAccountStallRefreshes). $context"
+          s"($consecutiveAccountStallRefreshes > ${snapSyncConfig.snapHealingConfig.maxConsecutiveAccountStallRefreshes}). $context"
       )
       consecutiveAccountStallRefreshes = 0
       lastAccountProgressMs = System.currentTimeMillis()
@@ -4338,6 +4333,50 @@ object SNAPSyncController {
     )
 }
 
+case class SnapHealingConfig(
+    maxRequeuesPerTask: Int = 20,
+    maxConsecutivePivotRefreshes: Int = 10,
+    trieWalkBatchSize: Int = 500,
+    stagnationCheckInterval: FiniteDuration = 2.minutes,
+    maxConsecutiveStagnations: Int = 3,
+    maxConsecutiveAccountStallRefreshes: Int = 10,
+    maxBootstrapRetries: Int = 10,
+    maxValidationRetries: Int = 3
+)
+
+object SnapHealingConfig {
+  def fromConfig(config: com.typesafe.config.Config): SnapHealingConfig = {
+    val h = config.getConfig("fukuii.sync.snap.healing")
+    SnapHealingConfig(
+      maxRequeuesPerTask                  = h.getInt("max-requeues-per-task"),
+      maxConsecutivePivotRefreshes        = h.getInt("max-consecutive-pivot-refreshes"),
+      trieWalkBatchSize                   = h.getInt("trie-walk-batch-size"),
+      stagnationCheckInterval             = h.getDuration("stagnation-check-interval").toMillis.millis,
+      maxConsecutiveStagnations           = h.getInt("max-consecutive-stagnations"),
+      maxConsecutiveAccountStallRefreshes = h.getInt("max-consecutive-account-stall-refreshes"),
+      maxBootstrapRetries                 = h.getInt("max-bootstrap-retries"),
+      maxValidationRetries                = h.getInt("max-validation-retries")
+    )
+  }
+}
+
+case class DormantRetryConfig(
+    baseBackoff: FiniteDuration = 3.minutes,
+    maxBackoff: FiniteDuration = 20.minutes,
+    progressResetThreshold: Long = 100_000L
+)
+
+object DormantRetryConfig {
+  def fromConfig(config: com.typesafe.config.Config): DormantRetryConfig = {
+    val d = config.getConfig("fukuii.sync.snap.dormant-retry")
+    DormantRetryConfig(
+      baseBackoff             = d.getDuration("base-backoff").toMillis.millis,
+      maxBackoff              = d.getDuration("max-backoff").toMillis.millis,
+      progressResetThreshold  = d.getLong("progress-reset-threshold")
+    )
+  }
+}
+
 case class SNAPSyncConfig(
     enabled: Boolean = true,
     // How far behind the perceived head to place the pivot.
@@ -4405,7 +4444,9 @@ case class SNAPSyncConfig(
       * dispatch defers new-account requests when at the cap; continuations for in-flight accounts still proceed. Raise
       * via `sync.snap-sync.max-concurrent-storage-accounts` for larger peer pools.
       */
-    maxConcurrentStorageAccounts: Int = 256
+    maxConcurrentStorageAccounts: Int = 256,
+    snapHealingConfig: SnapHealingConfig = SnapHealingConfig(),
+    dormantRetryConfig: DormantRetryConfig = DormantRetryConfig()
 )
 
 object SNAPSyncConfig {
@@ -4528,7 +4569,9 @@ object SNAPSyncConfig {
       maxConcurrentStorageAccounts =
         if (snapConfig.hasPath("max-concurrent-storage-accounts"))
           snapConfig.getInt("max-concurrent-storage-accounts")
-        else 256
+        else 256,
+      snapHealingConfig = SnapHealingConfig.fromConfig(config),
+      dormantRetryConfig = DormantRetryConfig.fromConfig(config)
     )
   }
 }

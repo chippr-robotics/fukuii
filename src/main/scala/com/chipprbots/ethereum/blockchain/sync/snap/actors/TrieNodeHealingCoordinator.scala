@@ -35,7 +35,8 @@ class TrieNodeHealingCoordinator(
     snapSyncController: ActorRef,
     concurrency: Int,
     healingWriterEcOverride: Option[ExecutionContext] = None,
-    stagnationCheckInterval: FiniteDuration = 2.minutes
+    stagnationCheckInterval: FiniteDuration = 2.minutes,
+    maxConsecutiveStagnations: Int = 3
 ) extends Actor
     with ActorLogging {
 
@@ -72,9 +73,8 @@ class TrieNodeHealingCoordinator(
   private var lastPulseHealedCount: Int = 0
   private var lastFrontierSize: Long = 0L
   // FIX-STAGNATION-LIMIT: Track consecutive 2-min cycles with zero healed nodes (even when active).
-  // After MaxConsecutiveStagnations, notify controller to restart with fresh pivot.
+  // After maxConsecutiveStagnations, notify controller to restart with fresh pivot.
   private var consecutiveStagnations: Int = 0
-  private val MaxConsecutiveStagnations: Int = 3
   private var trieWalkInProgress: Boolean = false
   // Inline child discovery counter (Besu-aligned scheduler approach)
   private var childrenDiscoveredTotal: Long = 0
@@ -478,6 +478,9 @@ class TrieNodeHealingCoordinator(
       trieWalkInProgress = inProgress
 
     case HealingStagnationCheck =>
+      if (trieWalkInProgress) {
+        log.debug("[HEAL-PULSE] Skipping stagnation check — trie walk in progress")
+      } else {
       val recentHealed = totalNodesHealed - lastPulseHealedCount
       val healTotal = completedTaskCount.toLong + pendingTasks.size.toLong + activeRequests.size.toLong
       val healPct = if (healTotal > 0) ((completedTaskCount.toDouble / healTotal) * 100).toInt else 0
@@ -520,12 +523,12 @@ class TrieNodeHealingCoordinator(
       if (recentHealed == 0 && pendingTasks.nonEmpty && !pivotRefreshRequested) {
         consecutiveStagnations += 1
         log.warning(
-          s"[HEAL-STAGNATION] Zero progress in last 2min — stagnation $consecutiveStagnations/$MaxConsecutiveStagnations. " +
+          s"[HEAL-STAGNATION] Zero progress in last 2min — stagnation $consecutiveStagnations/$maxConsecutiveStagnations. " +
             s"healed=$totalNodesHealed pending=${pendingTasks.size} peers=${knownAvailablePeers.size}"
         )
-        if (consecutiveStagnations >= MaxConsecutiveStagnations) {
+        if (consecutiveStagnations >= maxConsecutiveStagnations) {
           log.warning(
-            s"[HEAL-STAGNATION] $MaxConsecutiveStagnations consecutive zero-progress cycles — " +
+            s"[HEAL-STAGNATION] $maxConsecutiveStagnations consecutive zero-progress cycles — " +
               s"notifying controller to restart healing with fresh pivot"
           )
           snapSyncController ! HealingStagnated(totalNodesHealed.toLong, pendingTasks.size.toLong)
@@ -567,6 +570,7 @@ class TrieNodeHealingCoordinator(
       } else {
         consecutiveIdleChecks = 0
       }
+      } // end else (trieWalkInProgress guard)
 
     case HealingGetProgress =>
       val activeTaskCount = activeRequests.values.map(_.tasks.size).sum
@@ -1164,7 +1168,8 @@ object TrieNodeHealingCoordinator {
       snapSyncController: ActorRef,
       concurrency: Int = 16,
       healingWriterEcOverride: Option[ExecutionContext] = None,
-      stagnationCheckInterval: FiniteDuration = 2.minutes
+      stagnationCheckInterval: FiniteDuration = 2.minutes,
+      maxConsecutiveStagnations: Int = 3
   ): Props =
     Props(
       new TrieNodeHealingCoordinator(
@@ -1176,7 +1181,8 @@ object TrieNodeHealingCoordinator {
         snapSyncController,
         concurrency,
         healingWriterEcOverride,
-        stagnationCheckInterval
+        stagnationCheckInterval,
+        maxConsecutiveStagnations
       )
     )
 }

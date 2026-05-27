@@ -86,7 +86,8 @@ class AccountRangeCoordinator(
       */
     useStackTrie: Boolean = false,
     flatAccountStorage: FlatAccountStorage,
-    flatFlushThresholdBytes: Long = 8 * 1024 * 1024 // matches SnapHashTrie.DefaultBatchSizeBytes; override in tests
+    flatFlushThresholdBytes: Long = 8 * 1024 * 1024, // matches SnapHashTrie.DefaultBatchSizeBytes; override in tests
+    maxRequeuesPerTask: Int = AccountRangeCoordinator.MaxRequeuesPerTask
 ) extends Actor
     with ActorLogging {
 
@@ -1285,10 +1286,10 @@ class AccountRangeCoordinator(
     */
   private def requeueOrEscalate(task: AccountTask, reason: String): Unit = {
     task.requeueCount += 1
-    if (task.requeueCount > AccountRangeCoordinator.MaxRequeuesPerTask) {
+    if (task.requeueCount > maxRequeuesPerTask) {
       log.error(
         s"Account task ${task.rangeString} exhausted requeue budget " +
-          s"(${task.requeueCount} > ${AccountRangeCoordinator.MaxRequeuesPerTask}, last reason: $reason). " +
+          s"(${task.requeueCount} > $maxRequeuesPerTask, last reason: $reason). " +
           s"Escalating PivotStateUnservable to controller; task will be retried on the next root."
       )
       // Reset the counter so the next pivot has a fresh budget; preserve task position.
@@ -1297,7 +1298,7 @@ class AccountRangeCoordinator(
       snapSyncController ! PivotStateUnservable(
         rootHash = stateRoot,
         reason = s"task ${task.rangeString} hit MaxRequeuesPerTask: $reason",
-        consecutiveEmptyResponses = AccountRangeCoordinator.MaxRequeuesPerTask
+        consecutiveEmptyResponses = maxRequeuesPerTask
       )
     } else {
       pendingTasks.enqueue(task)
@@ -1858,8 +1859,8 @@ class AccountRangeCoordinator(
 object AccountRangeCoordinator {
 
   /** Hard cap on consecutive re-queues for a single account task before the coordinator escalates to the controller via
-    * `PivotStateUnservable`. On ETC mainnet with 1-5 SNAP peers, serve-window gaps can last 5-10 minutes. At 5s
-    * cooldown (empty-without-proof) 20 requeues covers ~100s; at 30s timeout, ~10 minutes. Previously 8 — too tight for
+    * `PivotStateUnservable`. On ETC mainnet with 1-5 SNAP peers, serve-window gaps can last 5-10 minutes. At 5s cooldown
+    * (empty-without-proof) 20 requeues covers ~100s; at 30s timeout, ~10 minutes. Previously 8 — too tight for
     * peer-scarce networks where transient statelessness is the norm, not the exception.
     */
   val MaxRequeuesPerTask: Int = 20
@@ -1896,7 +1897,8 @@ object AccountRangeCoordinator {
       accountTrieEcOverride: Option[ExecutionContext] = None,
       useStackTrie: Boolean = false,
       flatAccountStorage: FlatAccountStorage = new FlatAccountStorage(EphemDataSource()),
-      flatFlushThresholdBytes: Long = 8 * 1024 * 1024
+      flatFlushThresholdBytes: Long = 8 * 1024 * 1024,
+      maxRequeuesPerTask: Int = AccountRangeCoordinator.MaxRequeuesPerTask
   ): Props =
     Props(
       new AccountRangeCoordinator(
@@ -1914,7 +1916,8 @@ object AccountRangeCoordinator {
         accountTrieEcOverride,
         useStackTrie,
         flatAccountStorage,
-        flatFlushThresholdBytes
+        flatFlushThresholdBytes,
+        maxRequeuesPerTask
       )
     )
 }
