@@ -64,11 +64,17 @@ object DiscoveryNetwork {
   /** Tracks our outbound that's waiting on a WHOAREYOU. When the WHOAREYOU
     * arrives we know the peer's id (it's the auth-data SrcID; here we
     * assume it matches the peer we initiated to) and we proceed to build
-    * the handshake response. */
+    * the handshake response.
+    *
+    * `peerPublicKey` is the 64-byte uncompressed secp256k1 public key of the
+    * peer (as held in `Peer.id` by the DiscoveryService layer). The 32-byte
+    * keccak node-ID is derived from it in [[sendHandshakeReply]] via
+    * [[Session.nodeIdFromPublicKey]]. */
   private final case class PendingOutbound(
       payload: Payload.Request,
       requestDeferred: Deferred[IO, Payload.Response],
-      sentNonce: ByteVector
+      sentNonce: ByteVector,
+      peerPublicKey: ByteVector
   )
 
   def apply[A](
@@ -96,6 +102,14 @@ object DiscoveryNetwork {
         new ConcurrentHashMap[ByteVector, PendingOutbound]() // keyed on the nonce we sent
 
       private val random = new SecureRandom()
+
+      // ---- Node-ID helpers -----------------------------------------------
+
+      /** Normalise a peer identifier to a 32-byte keccak node-ID.
+        * `Peer.id` from [[DiscoveryService]] is the 64-byte uncompressed pubkey;
+        * session keys and wire masks require the 32-byte hash form. */
+      private def toNodeId(peerId: ByteVector): ByteVector =
+        if (peerId.size == 64L) Session.nodeIdFromPublicKey(peerId) else peerId
 
       // ---- DiscoveryRPC ------------------------------------------------
 
@@ -142,16 +156,17 @@ object DiscoveryNetwork {
           requestId: ByteVector
       ): IO[Option[Payload.Response]] = {
         val peerAddr = toInetSocketAddress(peer.address)
+        val sessionNodeId = toNodeId(peer.id)
         for {
           deferred <- Deferred[IO, Payload.Response]
           _ <- IO {
-            val _ = pendingRequests.put((peer.id, requestId), deferred)
+            val _ = pendingRequests.put((sessionNodeId, requestId), deferred)
           }
           _ <- sendOrInitiateHandshake(peer.id, peerAddr, payload)
           result <- deferred.get
             .timeout(config.requestTimeout)
             .attempt
-          _ <- IO { val _ = pendingRequests.remove((peer.id, requestId)) }
+          _ <- IO { val _ = pendingRequests.remove((sessionNodeId, requestId)) }
         } yield result.toOption
       }
 
@@ -160,9 +175,10 @@ object DiscoveryNetwork {
           peerAddr: InetSocketAddress,
           payload: Payload.Request
       ): IO[Unit] = {
-        sessions.getIO(Session.SessionId(peerNodeId, peerAddr)).flatMap {
+        val sessionNodeId = toNodeId(peerNodeId)
+        sessions.getIO(Session.SessionId(sessionNodeId, peerAddr)).flatMap {
           case Some(session) =>
-            sendEncrypted(peerNodeId, peerAddr, session, payload)
+            sendEncrypted(sessionNodeId, peerAddr, session, payload)
           case None =>
             // No session — send a random-content message; the peer can't
             // decrypt it, will reply with WHOAREYOU, and we'll complete
@@ -171,9 +187,10 @@ object DiscoveryNetwork {
         }
       }
 
-      /** Send a request payload encrypted under an existing session. */
+      /** Send a request payload encrypted under an existing session.
+        * @param sessionNodeId 32-byte keccak nodeId (used as AES-CTR mask key) */
       private def sendEncrypted(
-          peerNodeId: ByteVector,
+          sessionNodeId: ByteVector,
           peerAddr: InetSocketAddress,
           session: Session.Session,
           payload: Payload.Request
@@ -188,7 +205,7 @@ object DiscoveryNetwork {
             ByteVector(Packet.Flag.Message) ++
             nonce ++
             ByteVector.fromInt(authData.size.toInt, Packet.AuthSizeSize)
-        val masked = Packet.aesCtrMask(peerNodeId, iv, staticHeader ++ authData)
+        val masked = Packet.aesCtrMask(sessionNodeId, iv, staticHeader ++ authData)
         val aad = iv ++ masked
         val ct = Session.encrypt(session.keys.writeKey, nonce, plaintext, aad).get
         val full = aad ++ ct
@@ -219,9 +236,11 @@ object DiscoveryNetwork {
         masked = Packet.aesCtrMask(peerNodeId, iv, staticHeader ++ authData)
         full = iv ++ masked ++ randomCt
         // Stash the pending outbound. The WHOAREYOU we get back will echo this nonce.
+        // peerNodeId (64-byte pubkey) is stored so sendHandshakeReply can derive the
+        // 32-byte nodeId hash and perform ECDH key agreement.
         deferred <- Deferred[IO, Payload.Response]
         _ <- IO {
-          val _ = pendingOutbound.put(nonce, PendingOutbound(payload, deferred, nonce))
+          val _ = pendingOutbound.put(nonce, PendingOutbound(payload, deferred, nonce, peerPublicKey = peerNodeId))
         }
         _ <- peerGroup.sendRaw(peerAddr, full)
       } yield ()
@@ -262,7 +281,7 @@ object DiscoveryNetwork {
               case msg: Packet.MessagePacket =>
                 processMessage(sender, msg, bytes, handler)
               case who: Packet.WhoareyouPacket =>
-                processWhoareyou(sender, who)
+                processWhoareyou(sender, who, bytes)
               case _: Packet.HandshakePacket =>
                 // Sync responder typically handles this; ignore here.
                 IO.unit
@@ -326,10 +345,13 @@ object DiscoveryNetwork {
           IO.unit
       }
 
-      /** Receive a WHOAREYOU we triggered: build the handshake response. */
+      /** Receive a WHOAREYOU we triggered: build the handshake response.
+        * @param rawBytes the complete WHOAREYOU packet bytes — used as `challengeBytes`
+        *                 in [[Session.deriveKeys]] and [[Session.idNonceHash]]. */
       private def processWhoareyou(
           sender: InetSocketAddress,
-          who: Packet.WhoareyouPacket
+          who: Packet.WhoareyouPacket,
+          rawBytes: ByteVector
       ): IO[Unit] = {
         val triggerNonce = who.header.nonce
         IO(Option(pendingOutbound.remove(triggerNonce))).flatMap {
@@ -337,44 +359,86 @@ object DiscoveryNetwork {
             // No matching outbound — unsolicited or already handled.
             IO.unit
           case Some(pending) =>
-            sendHandshakeReply(sender, who, pending)
+            sendHandshakeReply(sender, who, rawBytes, pending)
         }
       }
 
       /** Build the handshake packet that completes the outbound flow:
         *   - Generate ephemeral keypair
-        *   - Sign idNonceHash with our static privkey
-        *   - Derive session keys via ECDH+HKDF
-        *   - Encrypt the original `pending.payload` with the new session
-        *   - Send a HandshakePacket carrying signature + ephPubkey + (ENR optional)
+        *   - Sign idNonceHash (sha256) with our static privkey via [[SigAlg.signHash]]
+        *   - Derive session keys via ECDH+HKDF using [[Session.deriveKeys]]
+        *   - Encrypt the original `pending.payload` under the new writeKey
+        *   - Send a HandshakePacket: masked(staticHeader + authData) + AES-GCM ciphertext
+        *
+        * @param rawWhoareyouBytes the complete raw WHOAREYOU packet bytes, used as
+        *                          `challengeBytes` in [[Session.deriveKeys]] and
+        *                          [[Session.idNonceHash]] per the discv5 spec.
         */
       private def sendHandshakeReply(
           sender: InetSocketAddress,
           who: Packet.WhoareyouPacket,
+          rawWhoareyouBytes: ByteVector,
           pending: PendingOutbound
       ): IO[Unit] = IO {
-        // Ephemeral keypair
-        val (_, ephPriv) = sigalg.newKeyPair
-        val ephPub = Session.pubFromPriv(ephPriv.value.bytes, compressed = true)
+        // Peer's 64-byte uncompressed pubkey → derive 32-byte node-ID hash
+        val peerPub64 = pending.peerPublicKey
+        val peerNodeId = toNodeId(peerPub64)
 
-        // The recipient's nodeId is what's encoded in the WHOAREYOU's auth data
-        // we cannot recover from here directly — but we tracked it via outbound.
-        // For this minimal implementation, we don't currently know the peer's
-        // nodeId for outbound WHOAREYOU correlation; pendingOutbound is keyed
-        // on our send nonce only. To complete, we need either the peer's
-        // expected nodeId (provided by the caller) or to recover it from
-        // a subsequent message.
-        //
-        // For now: extract the peer's nodeId from whatever caller knew. The
-        // caller (DiscoveryService) supplies it via a side channel. In
-        // practice we'd extend PendingOutbound with peerNodeId.
-        //
-        // TODO: thread peerNodeId through PendingOutbound so this code path
-        // is complete. For now we just log and return — outbound handshake
-        // initiation is best-effort in this minimal implementation.
-        logger.debug(s"discv5 outbound handshake to $sender — peer nodeId tracking is a TODO; dropping for now")
-        ()
-      }
+        // 1. Ephemeral keypair for this handshake instance
+        val (_, ephPriv) = sigalg.newKeyPair
+        val ephPubCompressed = Session.pubFromPriv(ephPriv.value.bytes, compressed = true)
+
+        // 2. ID-nonce signature: sha256("discovery v5 identity proof" || challenge || ephPub || destId)
+        //    Must sign the sha256 hash directly — do NOT apply keccak on top.
+        val hashBytes = Session.idNonceHash(rawWhoareyouBytes, ephPubCompressed, peerNodeId)
+        val sig = sigalg.signHash(privateKey, scodec.bits.BitVector(hashBytes.toArray))
+        val sigBytes = sigalg.removeRecoveryId(sig).value.bytes // 64 bytes (no recovery ID)
+
+        // 3. Derive session keys as the initiator; recipient will call .flip
+        val keys = Session.deriveKeys(
+          ephemeralPrivate = ephPriv.value.bytes,
+          peerPublic = peerPub64,
+          initiatorNodeId = localNodeId,
+          recipientNodeId = peerNodeId,
+          challengeBytes = rawWhoareyouBytes
+        )
+
+        // 4. Build handshake header
+        val iv = Packet.randomIv
+        val nonce = Packet.randomNonce
+        val header = Packet.Header.Handshake(
+          iv = iv,
+          nonce = nonce,
+          srcId = localNodeId,
+          idSignature = sigBytes,
+          ephemeralPubkey = ephPubCompressed,
+          record = None
+        )
+
+        // 5. Compute AAD = iv ++ aesCtrMask(peerNodeId, iv, staticHeader ++ authData)
+        val authData = header.authData
+        val staticHeader =
+          Packet.ProtocolId ++
+            ByteVector.fromInt(Packet.Version, Packet.VersionSize) ++
+            ByteVector(Packet.Flag.Handshake) ++
+            nonce ++
+            ByteVector.fromInt(authData.size.toInt, Packet.AuthSizeSize)
+        val masked = Packet.aesCtrMask(peerNodeId, iv, staticHeader ++ authData)
+        val aad = iv ++ masked
+
+        // 6. Encrypt original payload under the new session writeKey
+        val plaintext = payloadCodec.encode(pending.payload).require.toByteVector
+        val ct = Session.encrypt(keys.writeKey, nonce, plaintext, aad).get
+
+        // 7. Store session for subsequent messages to/from this peer
+        sessions.put(
+          Session.SessionId(peerNodeId, sender),
+          Session.Session(keys, System.currentTimeMillis())
+        )
+
+        // 8. Wire bytes: iv ++ masked(staticHeader ++ authData) ++ AES-GCM ciphertext
+        aad ++ ct
+      }.flatMap(bytes => peerGroup.sendRaw(sender, bytes))
 
       // ---- Address helpers ----------------------------------------------
 

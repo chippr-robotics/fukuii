@@ -37,6 +37,13 @@ trait SigAlg {
   /** Produce the public key based on the private key. */
   def toPublicKey(privateKey: PrivateKey): PublicKey
 
+  /** Sign a pre-computed hash without applying an additional internal hash.
+    * Unlike [[sign]], the `hash` bytes are passed directly to ECDSA — use
+    * when the caller has already produced the hash (e.g. discv5 idNonce
+    * signing uses sha256 rather than keccak256, so [[sign]]'s implicit
+    * keccak step would produce a wrong result). */
+  def signHash(privateKey: PrivateKey, hash: BitVector): Signature
+
   /** In the context of Secp256k1, the signature consists of a prefix byte
     * followed by an `x` and `y` coordinate. Remove `y` and adjust the prefix
     * to compress.

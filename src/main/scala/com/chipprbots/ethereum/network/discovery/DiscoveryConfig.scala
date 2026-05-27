@@ -19,7 +19,10 @@ case class DiscoveryConfig(
     kademliaTimeout: FiniteDuration,
     kademliaBucketSize: Int,
     kademliaAlpha: Int,
-    channelCapacity: Int
+    channelCapacity: Int,
+    subnetLimitPrefixLength: Int,
+    subnetLimitForBucket: Int,
+    subnetLimitForTable: Int
 )
 
 object DiscoveryConfig extends Logger {
@@ -91,7 +94,10 @@ object DiscoveryConfig extends Logger {
       kademliaTimeout = discoveryConfig.getDuration("kademlia-timeout").toMillis.millis,
       kademliaBucketSize = discoveryConfig.getInt("kademlia-bucket-size"),
       kademliaAlpha = discoveryConfig.getInt("kademlia-alpha"),
-      channelCapacity = discoveryConfig.getInt("channel-capacity")
+      channelCapacity = discoveryConfig.getInt("channel-capacity"),
+      subnetLimitPrefixLength = discoveryConfig.getInt("subnet-limit-prefix-length"),
+      subnetLimitForBucket = discoveryConfig.getInt("subnet-limit-for-bucket"),
+      subnetLimitForTable = discoveryConfig.getInt("subnet-limit-for-table")
     )
   }
 

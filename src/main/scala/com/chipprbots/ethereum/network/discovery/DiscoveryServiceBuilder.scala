@@ -6,7 +6,12 @@ import java.util.concurrent.atomic.AtomicReference
 
 import cats.effect.IO
 import cats.effect.Resource
+import cats.effect.Temporal
 import cats.effect.unsafe.IORuntime
+import cats.implicits._
+import scodec.bits.ByteVector
+
+import com.chipprbots.scalanet.peergroup.CloseableQueue
 
 import com.chipprbots.scalanet.discovery.crypto.PrivateKey
 import com.chipprbots.scalanet.discovery.crypto.PublicKey
@@ -131,6 +136,7 @@ trait DiscoveryServiceBuilder extends Logger {
       v5SessionCache = new v5.Session.SessionCache()
       v5ChallengeCache = new v5.Discv5SyncResponder.ChallengeCache()
       v5BystanderTable = new v5.Discv5SyncResponder.BystanderEnrTable()
+      v5Queue <- Resource.eval(CloseableQueue.unbounded[(InetSocketAddress, ByteVector)])
       v5InitialEnr = EthereumNodeRecord
         .fromNode(
           ScNode(
@@ -162,11 +168,19 @@ trait DiscoveryServiceBuilder extends Logger {
         v5ChallengeCache,
         v5BystanderTable,
         v5EnrRef,
-        v5OutboundSenderRef
+        v5OutboundSenderRef,
+        v5Queue
       )
       chainedResponder = StaticUDPPeerGroup.chainResponders(v5Responder, v4SyncResponder)
       udpConfig = makeUdpConfig(discoveryConfig, host, chainedResponder)
       network <- makeDiscoveryNetwork(privateKey, localNode, v4Config, udpConfig, pingDedup, v5OutboundSenderRef)
+      // Start the v5 active discovery service in the background alongside v4.
+      // Uses the shared session/challenge/bystander caches so ENRs discovered
+      // via v5 are immediately visible to the v5 sync responder.
+      _ <- buildAndStartV5Service(
+        privateKey, localNode, v5SessionCache, v5ChallengeCache, v5BystanderTable,
+        v5EnrRef, v5Queue, v5OutboundSenderRef, discoveryConfig
+      )
       service <- makeDiscoveryService(privateKey, localNode, v4Config, network, forkIdTag)
       _ <- Resource.eval {
         setDiscoveryStatus(nodeStatusHolder, ServerStatus.Listening(udpConfig.bindAddress))
@@ -210,7 +224,10 @@ trait DiscoveryServiceBuilder extends Logger {
         kademliaTimeout = discoveryConfig.kademliaTimeout,
         kademliaBucketSize = discoveryConfig.kademliaBucketSize,
         kademliaAlpha = discoveryConfig.kademliaAlpha,
-        knownPeers = knownPeers
+        knownPeers = knownPeers,
+        subnetLimitPrefixLength = discoveryConfig.subnetLimitPrefixLength,
+        subnetLimitForBucket = discoveryConfig.subnetLimitForBucket,
+        subnetLimitForTable = discoveryConfig.subnetLimitForTable
       )
     } yield config
 
@@ -344,7 +361,8 @@ trait DiscoveryServiceBuilder extends Logger {
       challenges: v5.Discv5SyncResponder.ChallengeCache,
       bystanders: v5.Discv5SyncResponder.BystanderEnrTable,
       enrRef: AtomicReference[EthereumNodeRecord],
-      outboundSenderRef: AtomicReference[Option[v5.Discv5SyncResponder.OutboundSender]]
+      outboundSenderRef: AtomicReference[Option[v5.Discv5SyncResponder.OutboundSender]],
+      v5Queue: CloseableQueue[(InetSocketAddress, ByteVector)]
   )(implicit
       sigalg: SigAlg,
       runtime: IORuntime
@@ -380,7 +398,99 @@ trait DiscoveryServiceBuilder extends Logger {
       bystanders = bystanders,
       outboundSenderRef = outboundSenderRef
     )
-    V5DemuxResponder(responder, queue = None)
+    V5DemuxResponder(responder, queue = Some(v5Queue))
+  }
+
+  /** Start the discv5 active discovery service (bootstrap pings + periodic FINDNODE).
+    *
+    * The service runs its fibers inside a Resource so they are cancelled cleanly
+    * when the resource is released. Uses the same session/challenge/bystander caches
+    * as the sync responder so discovered peers are immediately usable for FINDNODE replies.
+    *
+    * Sends a no-op handler to `startHandling` — the sync responder already answers
+    * all inbound requests; the handler is only for service-level bookkeeping that
+    * we don't need in the minimal activation path.
+    */
+  private def buildAndStartV5Service(
+      privateKey: PrivateKey,
+      localNode: ENode,
+      sessions: v5.Session.SessionCache,
+      challenges: v5.Discv5SyncResponder.ChallengeCache,
+      bystanders: v5.Discv5SyncResponder.BystanderEnrTable,
+      enrRef: AtomicReference[EthereumNodeRecord],
+      v5Queue: CloseableQueue[(InetSocketAddress, ByteVector)],
+      outboundSenderRef: AtomicReference[Option[v5.Discv5SyncResponder.OutboundSender]],
+      discoveryConfig: DiscoveryConfig
+  )(implicit sigalg: SigAlg, runtime: IORuntime): Resource[IO, Unit] = {
+    import V5RLPCodecs.codecFromRLPCodec
+    implicit val v5PayloadCodec: scodec.Codec[v5.Payload] = V5RLPCodecs.payloadCodec
+    implicit val v5EnrContentCodec: scodec.Codec[EthereumNodeRecord.Content] =
+      RLPCodecs.codecFromRLPCodec(RLPCodecs.enrContentRLPCodec)
+    implicit val temporal: Temporal[IO] = cats.effect.IO.asyncForIO
+
+    val localPubBytes = localNode.id.value.bytes
+    val localNodeId = v5.Session.nodeIdFromPublicKey(localPubBytes)
+
+    // Bootstrap nodes: reuse the v4-style conversion (scalanet ENode = scalanet Node)
+    val bootstrapNodes: Set[ScNode] = discoveryConfig.bootstrapNodes.map { n =>
+      ScNode(
+        id = PublicKey(BitVector(n.id.toArray[Byte])),
+        address = ScNode.Address(ip = n.addr, udpPort = n.udpPort, tcpPort = n.tcpPort)
+      )
+    }
+
+    // PeerGroupSender adapter: delegates to the outbound sender populated by makeDiscoveryNetwork
+    val peerGroupSender = new v5.DiscoveryNetwork.PeerGroupSender[InetSocketAddress] {
+      def sendRaw(addr: InetSocketAddress, bytes: ByteVector): IO[Unit] =
+        IO(outboundSenderRef.get().foreach(_.apply(addr, bytes, 0L)))
+    }
+
+    for {
+      v5Network <- Resource.eval {
+        v5.DiscoveryNetwork[InetSocketAddress](
+          peerGroup = peerGroupSender,
+          privateKey = privateKey,
+          publicKey = localNode.id,
+          localNodeId = localNodeId,
+          localEnrRef = enrRef,
+          sessions = sessions,
+          challenges = challenges,
+          bystanders = bystanders,
+          dispatchQueue = v5Queue,
+          config = v5.DiscoveryConfig.default
+        )
+      }
+      // Start inbound consumer fiber with a no-op handler (sync responder handles replies)
+      _ <- Resource.eval {
+        val noopHandler = new v5.DiscoveryRPC[v5.DiscoveryNetwork.Peer[InetSocketAddress]] {
+          override def ping(peer: v5.DiscoveryNetwork.Peer[InetSocketAddress], localEnrSeq: Long) =
+            IO.pure(None)
+          override def findNode(peer: v5.DiscoveryNetwork.Peer[InetSocketAddress], distances: List[Int]) =
+            IO.pure(None)
+          override def talkRequest(peer: v5.DiscoveryNetwork.Peer[InetSocketAddress],
+                                   protocol: ByteVector, message: ByteVector) =
+            IO.pure(None)
+        }
+        v5Network.startHandling(noopHandler).void
+      }
+      _ <- v5.DiscoveryService(
+        privateKey = privateKey,
+        publicKey = localNode.id,
+        localNode = ScNode(
+          id = localNode.id,
+          address = ScNode.Address(
+            ip = localNode.address.ip,
+            udpPort = localNode.address.udpPort,
+            tcpPort = localNode.address.tcpPort
+          )
+        ),
+        network = v5Network,
+        sessions = sessions,
+        bystanders = bystanders,
+        bootstrapNodes = bootstrapNodes,
+        config = v5.DiscoveryConfig.default
+      ).void
+    } yield ()
   }
 
   private def makeDiscoveryService(

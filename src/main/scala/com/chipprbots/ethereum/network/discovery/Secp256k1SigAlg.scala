@@ -60,6 +60,13 @@ class Secp256k1SigAlg extends SigAlg with SecureRandomBuilder {
     toSignature(sig)
   }
 
+  override def signHash(privateKey: PrivateKey, hash: BitVector): Signature = {
+    val keyPair =
+      signingKeyPairCache.getOrElseUpdate(privateKey, crypto.keyPairFromPrvKey(privateKey.value.toByteArray))
+    val sig = ECDSASignature.sign(hash.toByteArray, keyPair)
+    toSignature(sig)
+  }
+
   // ENR wants the signature without recovery ID, just 64 bytes.
   // The Packet on the other hand has the full 65 bytes.
   override def removeRecoveryId(signature: Signature): Signature =
