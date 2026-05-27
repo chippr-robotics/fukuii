@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
 import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props, Stash}
 
+import net.logstash.logback.argument.StructuredArguments.kv
+
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -29,6 +31,8 @@ class ByteCodeWorker(
 
   import Messages._
 
+  private val slog = org.slf4j.LoggerFactory.getLogger(getClass)
+
   private var currentTask: Option[(ByteCodeTask, Peer, BigInt)] = None // (task, peer, requestId)
 
   override def receive: Receive = idle
@@ -51,7 +55,12 @@ class ByteCodeWorker(
       self ! ByteCodeRequestTimeout(requestId)
     }
 
-    log.debug(s"Requesting ${task.codeHashes.size} bytecodes from peer ${peer.id} (request ID: $requestId)")
+    slog.debug(
+      "Requesting bytecodes from peer",
+      kv("hashes", task.codeHashes.size),
+      kv("peerId", peer.id.toString),
+      kv("requestId", requestId)
+    )
 
     // Send request via NetworkPeerManager
     import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes.GetByteCodesEnc
@@ -68,7 +77,7 @@ class ByteCodeWorker(
         case Some((_, _, requestId)) if response.requestId == requestId =>
           // IMPORTANT: mark the request complete so SNAPRequestTracker doesn't fire a timeout.
           requestTracker.completeRequest(requestId, response.codes.size.max(1))
-          log.debug(s"Received bytecodes response for request $requestId")
+          slog.debug("Received bytecodes response", kv("requestId", requestId))
           coordinator ! ByteCodesResponseMsg(response)
 
           currentTask = None
@@ -84,7 +93,7 @@ class ByteCodeWorker(
         case Some((_, _, reqId)) if reqId == requestId =>
           // RequestTracker already removed this request when firing the callback; this is defensive.
           requestTracker.completeRequest(requestId)
-          log.warning(s"Bytecode request $requestId timed out")
+          slog.warn("Bytecode request timed out", kv("requestId", requestId))
           coordinator ! ByteCodeTaskFailed(requestId, "Timeout")
           currentTask = None
           context.become(idle)
@@ -100,7 +109,7 @@ class ByteCodeWorker(
           context.become(idle)
           unstashAll()
         case _ =>
-          log.debug(s"ByteCodeWorkerRelease for unknown request $requestId, ignoring")
+          slog.debug("ByteCodeWorkerRelease for unknown request, ignoring", kv("requestId", requestId))
       }
 
     case _: ByteCodeWorkerFetchTask =>

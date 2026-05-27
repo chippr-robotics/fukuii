@@ -178,8 +178,15 @@ trait DiscoveryServiceBuilder extends Logger {
       // Uses the shared session/challenge/bystander caches so ENRs discovered
       // via v5 are immediately visible to the v5 sync responder.
       _ <- buildAndStartV5Service(
-        privateKey, localNode, v5SessionCache, v5ChallengeCache, v5BystanderTable,
-        v5EnrRef, v5Queue, v5OutboundSenderRef, discoveryConfig
+        privateKey,
+        localNode,
+        v5SessionCache,
+        v5ChallengeCache,
+        v5BystanderTable,
+        v5EnrRef,
+        v5Queue,
+        v5OutboundSenderRef,
+        discoveryConfig
       )
       service <- makeDiscoveryService(privateKey, localNode, v4Config, network, forkIdTag)
       _ <- Resource.eval {
@@ -403,13 +410,12 @@ trait DiscoveryServiceBuilder extends Logger {
 
   /** Start the discv5 active discovery service (bootstrap pings + periodic FINDNODE).
     *
-    * The service runs its fibers inside a Resource so they are cancelled cleanly
-    * when the resource is released. Uses the same session/challenge/bystander caches
-    * as the sync responder so discovered peers are immediately usable for FINDNODE replies.
+    * The service runs its fibers inside a Resource so they are cancelled cleanly when the resource is released. Uses
+    * the same session/challenge/bystander caches as the sync responder so discovered peers are immediately usable for
+    * FINDNODE replies.
     *
-    * Sends a no-op handler to `startHandling` — the sync responder already answers
-    * all inbound requests; the handler is only for service-level bookkeeping that
-    * we don't need in the minimal activation path.
+    * Sends a no-op handler to `startHandling` — the sync responder already answers all inbound requests; the handler is
+    * only for service-level bookkeeping that we don't need in the minimal activation path.
     */
   private def buildAndStartV5Service(
       privateKey: PrivateKey,
@@ -421,8 +427,7 @@ trait DiscoveryServiceBuilder extends Logger {
       v5Queue: CloseableQueue[(InetSocketAddress, ByteVector)],
       outboundSenderRef: AtomicReference[Option[v5.Discv5SyncResponder.OutboundSender]],
       discoveryConfig: DiscoveryConfig
-  )(implicit sigalg: SigAlg, runtime: IORuntime): Resource[IO, Unit] = {
-    import V5RLPCodecs.codecFromRLPCodec
+  )(implicit sigalg: SigAlg, @annotation.unused _runtime: IORuntime): Resource[IO, Unit] = {
     implicit val v5PayloadCodec: scodec.Codec[v5.Payload] = V5RLPCodecs.payloadCodec
     implicit val v5EnrContentCodec: scodec.Codec[EthereumNodeRecord.Content] =
       RLPCodecs.codecFromRLPCodec(RLPCodecs.enrContentRLPCodec)
@@ -467,29 +472,34 @@ trait DiscoveryServiceBuilder extends Logger {
             IO.pure(None)
           override def findNode(peer: v5.DiscoveryNetwork.Peer[InetSocketAddress], distances: List[Int]) =
             IO.pure(None)
-          override def talkRequest(peer: v5.DiscoveryNetwork.Peer[InetSocketAddress],
-                                   protocol: ByteVector, message: ByteVector) =
+          override def talkRequest(
+              peer: v5.DiscoveryNetwork.Peer[InetSocketAddress],
+              protocol: ByteVector,
+              message: ByteVector
+          ) =
             IO.pure(None)
         }
         v5Network.startHandling(noopHandler).void
       }
-      _ <- v5.DiscoveryService(
-        privateKey = privateKey,
-        publicKey = localNode.id,
-        localNode = ScNode(
-          id = localNode.id,
-          address = ScNode.Address(
-            ip = localNode.address.ip,
-            udpPort = localNode.address.udpPort,
-            tcpPort = localNode.address.tcpPort
-          )
-        ),
-        network = v5Network,
-        sessions = sessions,
-        bystanders = bystanders,
-        bootstrapNodes = bootstrapNodes,
-        config = v5.DiscoveryConfig.default
-      ).void
+      _ <- v5
+        .DiscoveryService(
+          privateKey = privateKey,
+          publicKey = localNode.id,
+          localNode = ScNode(
+            id = localNode.id,
+            address = ScNode.Address(
+              ip = localNode.address.ip,
+              udpPort = localNode.address.udpPort,
+              tcpPort = localNode.address.tcpPort
+            )
+          ),
+          network = v5Network,
+          sessions = sessions,
+          bystanders = bystanders,
+          bootstrapNodes = bootstrapNodes,
+          config = v5.DiscoveryConfig.default
+        )
+        .void
     } yield ()
   }
 

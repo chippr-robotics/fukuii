@@ -22,10 +22,6 @@ import com.chipprbots.ethereum.jsonrpc.PersonalService._
 import com.chipprbots.ethereum.keystore.KeyStore
 import com.chipprbots.ethereum.keystore.Wallet
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
-import com.chipprbots.ethereum.rlp
-import com.chipprbots.ethereum.rlp.RLPImplicitConversions._
-import com.chipprbots.ethereum.rlp.RLPImplicits.given
-import com.chipprbots.ethereum.rlp.RLPList
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.AddOrOverrideTransaction
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransactionsResponse

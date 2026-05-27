@@ -9,6 +9,8 @@ import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.ExtensionNode
 import com.chipprbots.ethereum.mpt.BranchNode
 import com.chipprbots.ethereum.mpt.HashNode
+import net.logstash.logback.argument.StructuredArguments.kv
+
 import com.chipprbots.ethereum.utils.Logger
 import scala.annotation.unused
 
@@ -26,6 +28,8 @@ import scala.annotation.unused
   *   Expected root hash to verify against (state root or storage root)
   */
 class MerkleProofVerifier(rootHash: ByteString) extends Logger {
+
+  private val slog = org.slf4j.LoggerFactory.getLogger(getClass)
 
   /** Verify an account range response with Merkle proof
     *
@@ -90,7 +94,7 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
 
     } catch {
       case e: Exception =>
-        log.warn(s"Merkle proof verification error: ${e.getMessage}")
+        slog.warn("Merkle proof verification error", kv("error", e.getMessage))
         Left(s"Verification error: ${e.getMessage}")
     }
   }
@@ -357,7 +361,7 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
         return verifyProofRoot(proofNodes).left.map(err => s"Storage proof root verification failed: $err")
       } catch {
         case e: Exception =>
-          log.warn(s"Storage Merkle proof verification error: ${e.getMessage}")
+          slog.warn("Storage Merkle proof verification error", kv("error", e.getMessage))
           return Left(s"Storage verification error: ${e.getMessage}")
       }
     }
@@ -392,7 +396,7 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
 
     } catch {
       case e: Exception =>
-        log.warn(s"Storage Merkle proof verification error: ${e.getMessage}")
+        slog.warn("Storage Merkle proof verification error", kv("error", e.getMessage))
         Left(s"Storage verification error: ${e.getMessage}")
     }
   }

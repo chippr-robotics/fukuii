@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
 import com.chipprbots.ethereum.domain.Account
+import net.logstash.logback.argument.StructuredArguments.kv
 
 /** ByteCodeCoordinator manages bytecode download workers.
   *
@@ -64,7 +65,11 @@ class ByteCodeCoordinator(
 ) extends Actor
     with ActorLogging {
 
+  private given ActorRef = ActorRef.noSender
+
   import Messages._
+
+  private val slog = org.slf4j.LoggerFactory.getLogger(getClass)
 
   // Per-peer concurrency budget — dynamically adjusted by SNAPSyncController via UpdateMaxInFlightPerPeer.
   // Shadows cooldownConfig.maxInFlightPerPeer so budget updates don't require config mutation.
@@ -91,7 +96,13 @@ class ByteCodeCoordinator(
     val exponent = math.min(failures - 1, cooldownConfig.exponentCap)
     val cooldown = (base * (1L << exponent)).min(cooldownConfig.max)
     peerCooldownUntilMillis.update(peer.id, nowMillis + cooldown.toMillis)
-    log.debug(s"Cooling down peer ${peer.id.value} for $cooldown ($reason, failures=$failures)")
+    slog.debug(
+      "Cooling down peer",
+      kv("peerId", peer.id.value),
+      kv("cooldown", cooldown.toString),
+      kv("reason", reason),
+      kv("failures", failures)
+    )
     cooldown
   }
 
@@ -201,7 +212,8 @@ class ByteCodeCoordinator(
     statusTimer = Some(
       context.system.scheduler
         .scheduleWithFixedDelay(30.seconds, 30.seconds, self, ByteCodeCoordinator.ByteCodeStatusPulse)(
-          context.dispatcher
+          context.dispatcher,
+          ActorRef.noSender
         )
     )
   }
@@ -222,12 +234,12 @@ class ByteCodeCoordinator(
 
   override def receive: Receive = {
     case StartByteCodeSync(codeHashes) =>
-      log.info(s"Starting bytecode sync for ${codeHashes.size} unique codeHashes")
+      slog.info("Starting bytecode sync", kv("uniqueCodeHashes", codeHashes.size))
 
       val filteredHashes = filterAndDedupeCodeHashes(codeHashes)
       val newTasks = ByteCodeTask.createBatchedTasks(filteredHashes, batchSize)
       pendingTasks.enqueueAll(newTasks)
-      log.info(s"Queued ${newTasks.size} bytecode tasks from ${filteredHashes.size} unique hashes")
+      slog.info("Queued bytecode tasks", kv("tasks", newTasks.size), kv("uniqueHashes", filteredHashes.size))
 
     case AddByteCodeTasks(codeHashes) =>
       val filtered = filterAndDedupeCodeHashes(codeHashes)
@@ -244,17 +256,21 @@ class ByteCodeCoordinator(
 
     case NoMoreByteCodeTasks =>
       noMoreTasksExpected = true
-      log.info(s"No more bytecode tasks expected. Pending: ${pendingTasks.size}, active: ${activeTasks.size}")
+      slog.info("No more bytecode tasks expected", kv("pending", pendingTasks.size), kv("active", activeTasks.size))
       checkCompletion()
 
     case ByteCodePivotRefreshed =>
       // BUG-S1: Do NOT clear knownAvailablePeers — bytecodes are content-addressed (hash-keyed),
       // not state-root-dependent, so existing peers can serve them after a pivot refresh.
       // Clearing the set would force a cold-start re-registration delay.
-      log.info(
-        s"Pivot refreshed — clearing bytecode peer cooldowns (keeping peer set). " +
-          s"Pool state: workers=${workers.size}/$maxWorkers, idle=${idleWorkers.size}, " +
-          s"pending=${pendingTasks.size}, active=${activeTasks.size}, knownPeers=${knownAvailablePeers.size}"
+      slog.info(
+        "Pivot refreshed: clearing bytecode peer cooldowns",
+        kv("workers", workers.size),
+        kv("maxWorkers", maxWorkers),
+        kv("idle", idleWorkers.size),
+        kv("pending", pendingTasks.size),
+        kv("active", activeTasks.size),
+        kv("knownPeers", knownAvailablePeers.size)
       )
       peerFailureCounts.clear()
       peerCooldownUntilMillis.clear()
@@ -266,9 +282,10 @@ class ByteCodeCoordinator(
       if (backpressureActive) {
         backpressureActive = false
         com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setByteCodeBackpressure(false)
-        log.info(
-          s"ByteCode queue back-pressure RELEASED on pivot refresh (queue depth=${pendingTasks.size}). " +
-            s"Will re-engage if queue crosses high-water=$backpressureHighWatermark again."
+        slog.info(
+          "ByteCode queue back-pressure RELEASED on pivot refresh",
+          kv("queueDepth", pendingTasks.size),
+          kv("highWatermark", backpressureHighWatermark)
         )
         snapSyncController ! SNAPSyncController.ByteCodeBackpressureChanged(paused = false)
       }
@@ -278,7 +295,7 @@ class ByteCodeCoordinator(
       knownAvailablePeers.filterInPlace(_.remoteAddress != peer.remoteAddress)
       knownAvailablePeers += peer
       if (isPeerCoolingDown(peer)) {
-        log.debug(s"Ignoring PeerAvailable(${peer.id.value}) due to cooldown")
+        slog.debug("Ignoring PeerAvailable due to cooldown", kv("peerId", peer.id.value))
       } else {
         dispatchIfPossible(peer)
       }
@@ -287,7 +304,7 @@ class ByteCodeCoordinator(
       knownAvailablePeers.filterInPlace(_.remoteAddress != peer.remoteAddress)
       knownAvailablePeers += peer
       if (isPeerCoolingDown(peer)) {
-        log.debug(s"Ignoring ByteCodePeerAvailable(${peer.id.value}) due to cooldown")
+        slog.debug("Ignoring ByteCodePeerAvailable due to cooldown", kv("peerId", peer.id.value))
       } else {
         dispatchIfPossible(peer)
       }
@@ -310,15 +327,20 @@ class ByteCodeCoordinator(
           worker ! ByteCodeWorkerRelease(reqId)
           markWorkerIdle(worker) // restore to idle pool — matches invariant at every other release site
         }
-        log.info(
-          s"ByteCodePeerUnavailable $peerId: re-queued ${inFlight.size} tasks. " +
-            s"Pool: idle $idleBefore → ${idleWorkers.size}, workers=${workers.size}/$maxWorkers"
+        slog.info(
+          "ByteCodePeerUnavailable: re-queued tasks",
+          kv("peerId", peerId),
+          kv("requeued", inFlight.size),
+          kv("idleBefore", idleBefore),
+          kv("idleAfter", idleWorkers.size),
+          kv("workers", workers.size),
+          kv("maxWorkers", maxWorkers)
         )
       }
       tryRedispatchPendingTasks()
 
     case UpdateMaxInFlightPerPeer(newLimit) =>
-      log.info(s"ByteCode per-peer budget: $maxInFlightPerPeer -> $newLimit")
+      slog.info("ByteCode per-peer budget updated", kv("oldLimit", maxInFlightPerPeer), kv("newLimit", newLimit))
       maxInFlightPerPeer = newLimit
       if (newLimit > 0) tryRedispatchPendingTasks()
 
@@ -336,11 +358,11 @@ class ByteCodeCoordinator(
           bytecodesDownloaded += count
           consecutiveTaskFailures = 0
           lastActivityMs = nowMillis
-          log.info(s"Bytecode task completed: $count codes")
+          slog.info("Bytecode task completed", kv("codes", count))
           checkCompletion()
           tryRedispatchPendingTasks() // worker now idle — dispatch immediately (mirrors Account/Storage/Healing)
         case Left(error) =>
-          log.warning(s"Bytecode task failed: $error")
+          slog.warn("Bytecode task failed", kv("error", error))
           checkCompletion()
           tryRedispatchPendingTasks()
       }
@@ -350,7 +372,7 @@ class ByteCodeCoordinator(
         val task = active.task
         val worker = active.worker
         val peer = active.peer
-        log.warning(s"Re-queuing bytecode task after failure: $error")
+        slog.warn("Re-queuing bytecode task after failure", kv("error", error))
         task.pending = false
         pendingTasks.enqueue(task)
         recordPeerCooldown(peer, cooldownConfig.baseTimeout, s"request failed: $error")
@@ -358,10 +380,10 @@ class ByteCodeCoordinator(
         markWorkerIdle(worker)
         consecutiveTaskFailures += 1
         if (consecutiveTaskFailures >= maxConsecutiveTaskFailures) {
-          log.warning(
-            s"Force-completing bytecode coordinator after $consecutiveTaskFailures consecutive " +
-              s"task failures — SNAP peers not serving data. " +
-              s"Missing bytecodes deferred to import-time recovery."
+          slog.warn(
+            "Force-completing bytecode coordinator: consecutive task failures",
+            kv("consecutiveFailures", consecutiveTaskFailures),
+            kv("maxConsecutiveFailures", maxConsecutiveTaskFailures)
           )
           noMoreTasksExpected = true
         }
@@ -383,10 +405,12 @@ class ByteCodeCoordinator(
       val abandonedPending = pendingTasks.size
       val abandonedActive = activeTasks.size
       val abandonedTotal = abandonedPending + abandonedActive
-      log.warning(
-        s"Force-completing bytecode sync: $bytecodesDownloaded bytecodes downloaded, " +
-          s"abandoning $abandonedTotal remaining tasks ($abandonedPending pending, $abandonedActive active). " +
-          "Missing bytecodes will be recovered post-SNAP via BytecodeRecoveryActor if needed."
+      slog.warn(
+        "Force-completing bytecode sync",
+        kv("downloaded", bytecodesDownloaded),
+        kv("abandonedTotal", abandonedTotal),
+        kv("abandonedPending", abandonedPending),
+        kv("abandonedActive", abandonedActive)
       )
       bytecodesAbandoned += abandonedTotal
       pendingTasks.clear()
@@ -395,18 +419,19 @@ class ByteCodeCoordinator(
       activeTasks.clear()
       // Set the sentinel so any late `checkCompletion()` calls also pass cleanly.
       noMoreTasksExpected = true
-      log.info("Bytecode sync force-completed (promoting to healing/recovery phase)")
+      slog.info("Bytecode sync force-completed: promoting to healing/recovery phase")
       snapSyncController ! SNAPSyncController.ByteCodeSyncComplete
 
     case Terminated(worker) if workers.contains(worker) =>
-      log.warning(
-        s"ByteCode worker terminated permanently — removing from pool. " +
-          s"Remaining workers: ${workers.size - 1}, idle: ${idleWorkers.size}"
+      slog.warn(
+        "ByteCode worker terminated permanently: removing from pool",
+        kv("remainingWorkers", workers.size - 1),
+        kv("idle", idleWorkers.size)
       )
       workers -= worker
       idleWorkers -= worker
       activeTasks.find { case (_, active) => active.worker == worker }.foreach { case (reqId, active) =>
-        log.warning(s"Re-queuing bytecode task from terminated worker (${active.task.codeHashes.size} hashes)")
+        slog.warn("Re-queuing bytecode task from terminated worker", kv("hashes", active.task.codeHashes.size))
         activeTasks -= reqId
         active.task.pending = false
         pendingTasks.enqueue(active.task)
@@ -424,25 +449,37 @@ class ByteCodeCoordinator(
       val rate = if (elapsedSecs > 0) (bytecodesDownloaded / elapsedSecs).toLong else 0L
       if (noMoreTasksExpected) {
         val pct = if (total > 0) ((completedTaskCount.toDouble / total) * 100).toInt else 0
-        log.info(
-          s"[BYTECODE-COORD] $pct% — completed=$completedTaskCount total=$total " +
-            s"pending=${pendingTasks.size} active=${activeTasks.size} " +
-            s"workers=${workers.size} rate=$rate bytecodes/s"
+        slog.info(
+          "[BYTECODE-COORD] pulse",
+          kv("pct", pct),
+          kv("completed", completedTaskCount),
+          kv("total", total),
+          kv("pending", pendingTasks.size),
+          kv("active", activeTasks.size),
+          kv("workers", workers.size),
+          kv("ratePerSec", rate)
         )
         val (newM, crossed) =
           com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
             .crossed(completedTaskCount, total, bytecodeMilestonePct)
         bytecodeMilestonePct = newM
         crossed.foreach { m =>
-          log.info(
-            s"[BYTECODE-COORD] MILESTONE $m% — $completedTaskCount / $total bytecodes complete | $rate bytecodes/s"
+          slog.info(
+            "[BYTECODE-COORD] MILESTONE",
+            kv("milestonePct", m),
+            kv("completed", completedTaskCount),
+            kv("total", total),
+            kv("ratePerSec", rate)
           )
         }
       } else {
-        log.info(
-          s"[BYTECODE-COORD] accumulating — queued=${pendingTasks.size} active=${activeTasks.size} " +
-            s"completed=$completedTaskCount workers=${workers.size} | " +
-            s"phase=growing (seal not yet received)"
+        slog.info(
+          "[BYTECODE-COORD] accumulating",
+          kv("queued", pendingTasks.size),
+          kv("active", activeTasks.size),
+          kv("completed", completedTaskCount),
+          kv("workers", workers.size),
+          kv("phase", "growing")
         )
       }
       // No-activity guard: if all peers vanish before noMoreTasksExpected is set, workers never
@@ -451,9 +488,10 @@ class ByteCodeCoordinator(
       if (!noMoreTasksExpected && pendingTasks.nonEmpty && activeTasks.isEmpty && knownAvailablePeers.isEmpty) {
         val idleMs = nowMillis - lastActivityMs
         if (idleMs > noActivityTimeoutMs) {
-          log.warning(
-            s"[BYTECODE-COORD] No-peer stall: ${pendingTasks.size} pending, 0 active, 0 available peers " +
-              s"for ${idleMs / 1000}s — requesting pivot refresh to unblock"
+          slog.warn(
+            "[BYTECODE-COORD] No-peer stall: requesting pivot refresh",
+            kv("pending", pendingTasks.size),
+            kv("stallSecs", idleMs / 1000)
           )
           snapSyncController ! SNAPSyncController.PivotStateUnservable(
             ByteString.empty,
@@ -475,17 +513,19 @@ class ByteCodeCoordinator(
     if (!backpressureActive && pending >= backpressureHighWatermark) {
       backpressureActive = true
       com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setByteCodeBackpressure(true)
-      log.info(
-        s"ByteCode queue back-pressure ENGAGED at $pending pending tasks (high-water=$backpressureHighWatermark). " +
-          s"Signalling AccountRangeCoordinator to pause dispatch."
+      slog.info(
+        "ByteCode queue back-pressure ENGAGED",
+        kv("pending", pending),
+        kv("highWatermark", backpressureHighWatermark)
       )
       snapSyncController ! SNAPSyncController.ByteCodeBackpressureChanged(paused = true)
     } else if (backpressureActive && pending <= backpressureLowWatermark) {
       backpressureActive = false
       com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setByteCodeBackpressure(false)
-      log.info(
-        s"ByteCode queue back-pressure RELEASED at $pending pending tasks (low-water=$backpressureLowWatermark). " +
-          s"Signalling AccountRangeCoordinator to resume dispatch."
+      slog.info(
+        "ByteCode queue back-pressure RELEASED",
+        kv("pending", pending),
+        kv("lowWatermark", backpressureLowWatermark)
       )
       snapSyncController ! SNAPSyncController.ByteCodeBackpressureChanged(paused = false)
     }
@@ -509,7 +549,7 @@ class ByteCodeCoordinator(
     )
 
     lastActivityMs = nowMillis
-    log.debug(s"Assigning bytecode task (${task.codeHashes.size} hashes) to worker for peer ${peer.id}")
+    slog.debug("Assigning bytecode task to worker", kv("hashes", task.codeHashes.size), kv("peerId", peer.id.toString))
     worker ! ByteCodeWorkerFetchTask(task, peer, requestId, requestedBytes)
   }
 
@@ -530,9 +570,13 @@ class ByteCodeCoordinator(
           assignTaskToWorker(worker, peer)
           inflight += 1
         case None =>
-          log.warning(
-            s"ByteCode dispatch blocked: workers=${workers.size}/$maxWorkers, idle=${idleWorkers.size}, " +
-              s"pending=${pendingTasks.size}, peer=${peer.id.value}"
+          slog.warn(
+            "ByteCode dispatch blocked",
+            kv("workers", workers.size),
+            kv("maxWorkers", maxWorkers),
+            kv("idle", idleWorkers.size),
+            kv("pending", pendingTasks.size),
+            kv("peerId", peer.id.value)
           )
           return
       }
@@ -554,7 +598,7 @@ class ByteCodeCoordinator(
   private def handleByteCodesResponse(response: ByteCodes): Unit = {
     activeTasks.get(response.requestId) match {
       case None =>
-        log.debug(s"Received ByteCodes response for unknown or completed request ${response.requestId}")
+        slog.debug("Received ByteCodes response for unknown or completed request", kv("requestId", response.requestId))
 
       case Some(active) =>
         val task = active.task
@@ -562,13 +606,17 @@ class ByteCodeCoordinator(
         val peer = active.peer
         val requestedBytes = active.requestedBytes
         val elapsedMillis = (nowMillis - active.startedAtMillis).max(0L)
-        log.debug(s"Processing ByteCodes response: ${response.codes.size} codes for request ${response.requestId}")
+        slog.debug(
+          "Processing ByteCodes response",
+          kv("codes", response.codes.size),
+          kv("requestId", response.requestId)
+        )
 
         // SNAP spec: returned codes are in request order, may have gaps (unavailable codes skipped)
         // and may omit a suffix due to response byte limits.
         validateReturnedCodes(task.codeHashes, response.codes) match {
           case Left(error) =>
-            log.warning(s"Bytecode verification failed: $error")
+            slog.warn("Bytecode verification failed", kv("error", error))
             activeTasks.remove(response.requestId)
             task.pending = false
             pendingTasks.enqueue(task)
@@ -584,7 +632,7 @@ class ByteCodeCoordinator(
             // Store only the returned codes
             storeBytecodesWithHashes(validated.codesByHashInOrder) match {
               case Left(error) =>
-                log.warning(s"Failed to store bytecodes: $error")
+                slog.warn("Failed to store bytecodes", kv("error", error))
                 activeTasks.remove(response.requestId)
                 task.pending = false
                 pendingTasks.enqueue(task)
@@ -603,9 +651,13 @@ class ByteCodeCoordinator(
                 val receivedBytes: BigInt = BigInt(response.codes.map(_.size.toLong).sum)
                 // Update per-peer budget based on observed response size.
                 adjustResponseBytesTargetOnSuccess(peer, requested = requestedBytes, received = receivedBytes)
-                log.debug(
-                  s"ByteCodes tuning: peer=${peer.id.value} requestedBytes=$requestedBytes receivedBytes=$receivedBytes " +
-                    s"elapsedMs=$elapsedMillis newTarget=${responseBytesTargetFor(peer)}"
+                slog.debug(
+                  "ByteCodes tuning",
+                  kv("peerId", peer.id.value),
+                  kv("requestedBytes", requestedBytes.toString),
+                  kv("receivedBytes", receivedBytes.toString),
+                  kv("elapsedMs", elapsedMillis),
+                  kv("newTarget", responseBytesTargetFor(peer).toString)
                 )
 
                 // Backoff behavior:
@@ -629,16 +681,23 @@ class ByteCodeCoordinator(
                     hashFailureCounts.getOrElse(hash, 0) >= maxFailuresPerHash
                   }
                   if (exhausted.nonEmpty) {
-                    log.warning(
-                      s"Skipping ${exhausted.size} bytecode hashes after $maxFailuresPerHash failures each " +
-                        s"(no peer could serve them). Sample: ${exhausted.take(3).map(_.take(4).toArray.map("%02x".format(_)).mkString).mkString(", ")}"
+                    slog.warn(
+                      "Skipping bytecode hashes after max failures",
+                      kv("count", exhausted.size),
+                      kv("maxFailuresPerHash", maxFailuresPerHash),
+                      kv(
+                        "sample",
+                        exhausted.take(3).map(_.take(4).toArray.map("%02x".format(_)).mkString).mkString(", ")
+                      )
                     )
                     exhausted.foreach(hashFailureCounts.remove)
                   }
                   if (retryable.nonEmpty) {
-                    log.info(
-                      s"ByteCodes response contained ${validated.matchedHashes.size}/${task.codeHashes.size} requested codes; " +
-                        s"re-queuing remaining ${retryable.size} hashes"
+                    slog.info(
+                      "ByteCodes partial response: re-queuing remaining hashes",
+                      kv("matched", validated.matchedHashes.size),
+                      kv("requested", task.codeHashes.size),
+                      kv("requeuing", retryable.size)
                     )
                     pendingTasks.enqueue(ByteCodeTask(retryable))
                   }
@@ -666,8 +725,11 @@ class ByteCodeCoordinator(
                 worker ! ByteCodeWorkerRelease(response.requestId)
                 markWorkerIdle(worker)
 
-                log.info(
-                  s"Successfully processed $bytecodeCount bytecodes (receivedBytes=$receivedBytes requestedBytes=$requestedBytes)"
+                slog.info(
+                  "Successfully processed bytecodes",
+                  kv("bytecodes", bytecodeCount),
+                  kv("receivedBytes", receivedBytes.toString),
+                  kv("requestedBytes", requestedBytes.toString)
                 )
                 checkCompletion()
             }
@@ -732,19 +794,22 @@ class ByteCodeCoordinator(
       updates.commit()
       val totalBytes = codesByHash.foldLeft(0L) { case (acc, (_, code)) => acc + code.length }
       val kb = f"${totalBytes / 1024.0}%.1f"
-      log.info(
-        s"[BYTECODE-COORD] persisted ${codesByHash.size} bytecodes (${kb}KB) | completedTasks=$completedTaskCount"
+      slog.info(
+        "[BYTECODE-COORD] persisted bytecodes",
+        kv("count", codesByHash.size),
+        kv("kb", kb),
+        kv("completedTasks", completedTaskCount)
       )
       Right(())
     } catch {
       case e: Exception =>
-        log.error(s"Failed to store bytecodes: ${e.getMessage}", e)
+        slog.error("Failed to store bytecodes", kv("error", e.getMessage), e)
         Left(s"Storage error: ${e.getMessage}")
     }
 
   private def checkCompletion(): Unit =
     if (noMoreTasksExpected && pendingTasks.isEmpty && activeTasks.isEmpty) {
-      log.info("Bytecode sync complete!")
+      slog.info("Bytecode sync complete")
       snapSyncController ! SNAPSyncController.ByteCodeSyncComplete
     }
 
@@ -761,7 +826,7 @@ class ByteCodeCoordinator(
     context.watch(worker)
     workers += worker
     idleWorkers += worker
-    log.debug(s"Created bytecode worker, total: ${workers.size}")
+    slog.debug("Created bytecode worker", kv("totalWorkers", workers.size))
     worker
   }
 
@@ -797,10 +862,10 @@ class ByteCodeCoordinator(
     }
 
     if (invalidCount > 0) {
-      log.warning(s"Dropped $invalidCount codeHashes with non-32-byte length")
+      slog.warn("Dropped codeHashes with non-32-byte length", kv("count", invalidCount))
     }
     if (dupeCount > 0) {
-      log.info(s"Deduplicated $dupeCount codeHashes (Bloom filter false positives)")
+      slog.info("Deduplicated codeHashes (Bloom filter false positives)", kv("count", dupeCount))
     }
 
     filtered

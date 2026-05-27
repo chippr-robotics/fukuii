@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 import scala.collection.mutable
 
 import org.slf4j.LoggerFactory
+import net.logstash.logback.argument.StructuredArguments.kv
 
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.mpt._
@@ -272,7 +273,12 @@ class StateValidator(mptStorage: MptStorage) {
 
       val now = System.currentTimeMillis()
       if (now - lastHeartbeat >= 10_000L) {
-        log.info(s"[WALK-PULSE] visited=$nodesVisited missing-pending=${result.size} stack=${stack.size}")
+        log.info(
+          "[WALK-PULSE]",
+          kv("visited", nodesVisited),
+          kv("missingPending", result.size),
+          kv("stack", stack.size)
+        )
         lastHeartbeat = now
       }
 
@@ -337,7 +343,7 @@ class StateValidator(mptStorage: MptStorage) {
       rootNode: MptNode,
       accountHash: ByteString,
       result: mutable.ArrayBuffer[(Seq[ByteString], ByteString)],
-      flushIfFull: () => Unit = () => ()
+      flushIfFull: () => Unit
   ): Unit = {
     val stack = mutable.ArrayDeque[(MptNode, Array[Byte])]()
     val visited = mutable.Set[ByteString]()

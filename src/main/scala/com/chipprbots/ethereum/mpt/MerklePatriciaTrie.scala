@@ -163,11 +163,6 @@ class MerklePatriciaTrie[K, V] private (private[mpt] val rootNode: Option[MptNod
     }
   }
 
-  private def resolveIfHash(node: MptNode): MptNode = node match {
-    case HashNode(bytes) => getFromHash(bytes, nodeStorage)
-    case other           => other
-  }
-
   /** Traverse given path from the root to value and accumulate data. Only nodes which are significant for searching for
     * value are taken into account.
     *

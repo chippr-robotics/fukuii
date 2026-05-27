@@ -3,6 +3,8 @@ package com.chipprbots.ethereum.blockchain.sync.snap.actors
 import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props}
 import org.apache.pekko.util.ByteString
 
+import net.logstash.logback.argument.StructuredArguments.kv
+
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
@@ -35,6 +37,8 @@ class AccountRangeWorker(
 
   import Messages._
 
+  private val slog = org.slf4j.LoggerFactory.getLogger(getClass)
+
   // 4-tuple: (task, peer, requestId, expectedRoot)
   // expectedRoot is snapshotted from task.rootHash at FetchAccountRange receive time so that
   // a concurrent pivot refresh (task.rootHash mutation by the coordinator) cannot affect
@@ -42,10 +46,10 @@ class AccountRangeWorker(
   private var currentTask: Option[(AccountTask, Peer, BigInt, ByteString)] = None
 
   override def preStart(): Unit =
-    log.debug(s"AccountRangeWorker ${self.path.name} started")
+    slog.debug("AccountRangeWorker started", kv("actor", self.path.name))
 
   override def postStop(): Unit =
-    log.debug(s"AccountRangeWorker ${self.path.name} stopped")
+    slog.debug("AccountRangeWorker stopped", kv("actor", self.path.name))
 
   override def receive: Receive = idle
 
@@ -57,7 +61,12 @@ class AccountRangeWorker(
       // while this response is in-flight. Using the snapshot makes proof verification
       // deterministic regardless of when the mutation occurs.
       val expectedRoot = task.rootHash
-      log.debug(s"Fetching account range ${task.rangeString} from peer ${peer.id} (responseBytes=$responseBytes)")
+      slog.debug(
+        "Fetching account range",
+        kv("range", task.rangeString),
+        kv("peerId", peer.id.toString),
+        kv("responseBytes", responseBytes.toString)
+      )
 
       val request = GetAccountRange(
         requestId = requestId,
@@ -93,10 +102,14 @@ class AccountRangeWorker(
     case AccountRangeResponseMsg(response) =>
       currentTask match {
         case Some((task, _, reqId, expectedRoot)) if response.requestId == reqId =>
-          log.debug(
-            s"Received AccountRange: reqId=$reqId range=${task.rangeString} " +
-              s"start=${task.next.take(4).toHex} limit=${task.last.take(4).toHex} " +
-              s"accounts=${response.accounts.size} proofNodes=${response.proof.size}"
+          slog.debug(
+            "Received AccountRange",
+            kv("reqId", reqId),
+            kv("range", task.rangeString),
+            kv("start", task.next.take(4).toHex),
+            kv("limit", task.last.take(4).toHex),
+            kv("accounts", response.accounts.size),
+            kv("proofNodes", response.proof.size)
           )
 
           val accountCount = response.accounts.size
@@ -132,15 +145,23 @@ class AccountRangeWorker(
               // root while this worker was dispatched against the old one. Demote to debug since
               // TaskFailed is still sent and the coordinator re-queues normally.
               if (errorStr.contains("root mismatch") || errorStr.contains("Proof root"))
-                log.debug(
-                  s"AccountRange proof skipped (pivot transition) reqId=$reqId range=${task.rangeString}: $error"
+                slog.debug(
+                  "AccountRange proof skipped (pivot transition)",
+                  kv("reqId", reqId),
+                  kv("range", task.rangeString),
+                  kv("error", error.toString)
                 )
               else
-                log.warning(s"AccountRange validation/proof failed for reqId=$reqId range=${task.rangeString}: $error")
+                slog.warn(
+                  "AccountRange validation/proof failed",
+                  kv("reqId", reqId),
+                  kv("range", task.rangeString),
+                  kv("error", error.toString)
+                )
               coordinator ! TaskFailed(reqId, error)
 
             case Right(_) =>
-              log.debug(s"Successfully received $accountCount accounts")
+              slog.debug("Successfully received accounts", kv("count", accountCount))
               coordinator ! TaskComplete(reqId, Right((accountCount, response.accounts, response.proof)))
           }
 
@@ -149,13 +170,13 @@ class AccountRangeWorker(
           context.become(idle)
 
         case _ =>
-          log.warning(s"Received response for wrong request ID: ${response.requestId}")
+          slog.warn("Received response for wrong request ID", kv("responseRequestId", response.requestId))
       }
 
     case RequestTimeout(reqId) =>
       currentTask match {
         case Some((_, _, currentReqId, _)) if currentReqId == reqId =>
-          log.warning(s"Request $reqId timed out")
+          slog.warn("Request timed out", kv("reqId", reqId))
           coordinator ! TaskFailed(reqId, "Request timeout")
 
           // Return to idle state
@@ -163,13 +184,13 @@ class AccountRangeWorker(
           context.become(idle)
 
         case _ =>
-          log.debug(s"Timeout for old or unknown request $reqId")
+          slog.debug("Timeout for old or unknown request", kv("reqId", reqId))
       }
 
     case WorkerPeerDisconnected(peerId) =>
       currentTask match {
         case Some((_, peer, reqId, _)) if peer.id.value == peerId =>
-          log.debug(s"Peer $peerId disconnected — re-queuing task immediately (reqId=$reqId)")
+          slog.debug("Peer disconnected: re-queuing task immediately", kv("peerId", peerId), kv("reqId", reqId))
           requestTracker.completeRequest(reqId, 0)
           coordinator ! TaskFailed(reqId, "Peer disconnected")
           currentTask = None
@@ -184,7 +205,7 @@ class AccountRangeWorker(
       // Idempotent: SNAPRequestTracker.completeRequest is safe on already-removed ids.
       currentTask match {
         case Some((_, _, currentReqId, _)) if currentReqId == reqId =>
-          log.debug(s"Worker request $reqId cancelled by coordinator — clearing state")
+          slog.debug("Worker request cancelled by coordinator: clearing state", kv("reqId", reqId))
           requestTracker.completeRequest(reqId, 0)
           currentTask = None
           context.become(idle)
@@ -192,7 +213,7 @@ class AccountRangeWorker(
       }
 
     case FetchAccountRange(task, peer, _, _) =>
-      log.warning("Worker is busy, cannot accept new task")
+      slog.warn("Worker is busy, cannot accept new task")
       coordinator ! TaskFailed(0, "Worker busy")
   }
 }

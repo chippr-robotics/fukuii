@@ -77,9 +77,9 @@ class BlockBroadcast(val networkPeerManager: ActorRef) {
       networkPeerManager ! NetworkPeerManagerActor.SendMessage(newBlockHashMsg, peer.id)
   }
 
-  /** Sends BlockRangeUpdate to all ETH69 peers so they can refresh their TD estimate for us.
-    * Sent to ALL ETH69 peers (not just those without the block) — it is a chain-state notification,
-    * not a block announcement. earliestBlock=0 matches what our ETH69 Status sends.
+  /** Sends BlockRangeUpdate to all ETH69 peers so they can refresh their TD estimate for us. Sent to ALL ETH69 peers
+    * (not just those without the block) — it is a chain-state notification, not a block announcement. earliestBlock=0
+    * matches what our ETH69 Status sends.
     */
   private def broadcastBlockRangeUpdate(blockToBroadcast: BlockToBroadcast, peers: Map[PeerId, PeerWithInfo]): Unit = {
     val header = blockToBroadcast.block.header

@@ -29,7 +29,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.{SNAPSyncConfig, SNAPSyncCon
   */
 class BytecodeRecoveryActor(
     stateRoot: ByteString,
-    stateStorage: StateStorage,
+    @annotation.unused _stateStorage: StateStorage,
     evmCodeStorage: EvmCodeStorage,
     flatAccountStorage: FlatAccountStorage,
     appStateStorage: AppStateStorage,
@@ -69,7 +69,9 @@ class BytecodeRecoveryActor(
       context.watch(coordinator)
       val startFrom = appStateStorage.getSnapBytecodeRecoveryCursor().getOrElse(ByteString.empty)
       if (startFrom.nonEmpty)
-        log.info(s"[BYTECODE-RECOVERY] resuming from cursor ${startFrom.take(4).toArray.map("%02x".format(_)).mkString}...")
+        log.info(
+          s"[BYTECODE-RECOVERY] resuming from cursor ${startFrom.take(4).toArray.map("%02x".format(_)).mkString}..."
+        )
       launchFlatScan(startFrom = startFrom)
       context.become(scanning(coordinator, sentSoFar = 0))
 
@@ -116,7 +118,7 @@ class BytecodeRecoveryActor(
       )
     }
 
-  private def launchFlatScan(batchFlushSize: Int = 10_000, startFrom: ByteString = ByteString.empty): Unit = {
+  private def launchFlatScan(batchFlushSize: Int = 10_000, startFrom: ByteString): Unit = {
     val selfRef = self
     val fas = flatAccountStorage
     val ecs = evmCodeStorage

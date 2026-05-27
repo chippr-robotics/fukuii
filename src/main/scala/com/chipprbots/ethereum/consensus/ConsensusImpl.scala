@@ -176,9 +176,6 @@ class ConsensusImpl(
   private def newBranchWeight(newBranch: NonEmptyList[Block], parentWeight: ChainWeight) =
     newBranch.foldLeft(parentWeight)((w, b) => w.increase(b.header))
 
-  private def returnNoTotalDifficulty(bestBlock: Block): IO[ConsensusError] =
-    returnNoTotalDifficultyForHeader(bestBlock.header)
-
   private def returnNoTotalDifficultyForHeader(bestHeader: BlockHeader): IO[ConsensusError] = {
     log.error(
       "Getting total difficulty for current best block with hash: {} failed",

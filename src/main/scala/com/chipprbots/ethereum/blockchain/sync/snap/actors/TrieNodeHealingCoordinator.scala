@@ -43,6 +43,8 @@ class TrieNodeHealingCoordinator(
 ) extends Actor
     with ActorLogging {
 
+  private given ActorRef = ActorRef.noSender
+
   import Messages._
 
   private val slog = org.slf4j.LoggerFactory.getLogger(getClass)
@@ -186,7 +188,12 @@ class TrieNodeHealingCoordinator(
   private def recordPeerCooldown(peer: Peer, reason: String): Unit = {
     val until = System.currentTimeMillis() + peerCooldownDefault.toMillis
     peerCooldownUntilMs.put(peer.id.value, until)
-    log.debug(s"Cooling down peer ${peer.id.value} for ${peerCooldownDefault.toSeconds}s: $reason")
+    slog.debug(
+      "Cooling down peer",
+      kv("peer", peer.id.value),
+      kv("cooldownSecs", peerCooldownDefault.toSeconds),
+      kv("reason", reason)
+    )
   }
 
   /** Count in-flight requests for a given peer (pipelining support). */
@@ -227,11 +234,13 @@ class TrieNodeHealingCoordinator(
   private def serializeFrontier(entries: Seq[HealingEntry]): String =
     if (entries.isEmpty) ""
     else
-      entries.iterator.map { e =>
-        val hashHex = Hex.toHexString(e.hash.toArray)
-        val pathsHex = e.pathset.map(p => Hex.toHexString(p.toArray)).mkString(",")
-        s"$hashHex:$pathsHex"
-      }.mkString("|")
+      entries.iterator
+        .map { e =>
+          val hashHex = Hex.toHexString(e.hash.toArray)
+          val pathsHex = e.pathset.map(p => Hex.toHexString(p.toArray)).mkString(",")
+          s"$hashHex:$pathsHex"
+        }
+        .mkString("|")
 
   private def deserializeFrontier(data: String): Seq[HealingEntry] =
     if (data.isEmpty) Seq.empty
@@ -259,7 +268,7 @@ class TrieNodeHealingCoordinator(
       mptStorage.persist()
       val count = rawNodeBuffer.size
       rawNodeBuffer.clear()
-      log.info(s"Flushed $count healed nodes to disk (total: $totalNodesHealed)")
+      slog.info("Flushed healed nodes to disk", kv("flushed", count), kv("totalHealed", totalNodesHealed))
     }
 
   /** Async flush — copies buffer, clears it, writes on the dedicated `healing-writer-dispatcher` so the blocking
@@ -272,7 +281,7 @@ class TrieNodeHealingCoordinator(
       val nodes = rawNodeBuffer.toSeq
       val totalBytes = nodes.foldLeft(0L) { case (acc, (k, v)) => acc + k.length + v.length }
       val kb = f"${totalBytes / 1024.0}%.1f"
-      log.info(s"[HEAL-FLUSH] ${nodes.size} nodes (${kb}KB) | totalHealed=$totalNodesHealed")
+      slog.info("[HEAL-FLUSH]", kv("nodes", nodes.size), kv("kb", kb), kv("totalHealed", totalNodesHealed))
       import scala.concurrent.{Future, blocking}
       val selfRef = self
       val ec = healingWriterEc
@@ -286,11 +295,13 @@ class TrieNodeHealingCoordinator(
     }
 
   override def preStart(): Unit = {
-    log.info(s"TrieNodeHealingCoordinator starting (concurrency=$concurrency)")
+    slog.info("TrieNodeHealingCoordinator starting", kv("concurrency", concurrency))
     healingCheckTask = Some(
-      context.system.scheduler.scheduleWithFixedDelay(stagnationCheckInterval, stagnationCheckInterval, self, HealingStagnationCheck)(
-        context.dispatcher
-      )
+      context.system.scheduler
+        .scheduleWithFixedDelay(stagnationCheckInterval, stagnationCheckInterval, self, HealingStagnationCheck)(
+          context.dispatcher,
+          ActorRef.noSender
+        )
     )
     log.debug("[HEAL] stagnation check timer scheduled (interval={})", stagnationCheckInterval)
   }
@@ -318,7 +329,7 @@ class TrieNodeHealingCoordinator(
   override def receive: Receive = {
     case StartTrieNodeHealing(root) =>
       val emptyPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-      val savedRoot    = appStateStorage.getSnapHealingFrontierRoot()
+      val savedRoot = appStateStorage.getSnapHealingFrontierRoot()
       val savedFrontierOpt = appStateStorage.getSnapHealingFrontierData()
 
       if (savedRoot.contains(root) && savedFrontierOpt.exists(_.nonEmpty)) {
@@ -326,7 +337,7 @@ class TrieNodeHealingCoordinator(
         // O(1) restart: deserialise the frontier and resume dispatching immediately.
         val entries = deserializeFrontier(savedFrontierOpt.get)
         if (entries.nonEmpty) {
-          log.info(s"[HEAL-RESTART] Resuming from saved frontier — ${entries.size} tasks loaded, DFS skipped")
+          slog.info("[HEAL-RESTART] Resuming from saved frontier — DFS skipped", kv("tasks", entries.size))
           queueNodes(entries.map(e => (e.pathset, e.hash)))
           lastHealedAtMs = System.currentTimeMillis()
           tryRedispatchPendingTasks()
@@ -378,7 +389,7 @@ class TrieNodeHealingCoordinator(
       lastHealedAtMs = System.currentTimeMillis()
 
     case QueueMissingNodes(nodes) =>
-      log.info(s"Queuing ${nodes.size} missing nodes for healing")
+      slog.info("Queuing missing nodes for healing", kv("count", nodes.size))
       queueNodes(nodes)
       // Immediately dispatch to any known available peers
       tryRedispatchPendingTasks()
@@ -406,7 +417,11 @@ class TrieNodeHealingCoordinator(
       knownAvailablePeers.filterInPlace(_.id.value != peerId)
       val inFlight = activeRequests.filter { case (_, req) => req.peer.id.value == peerId }.keys.toSeq
       if (inFlight.nonEmpty) {
-        log.debug(s"Peer $peerId disconnected — re-queuing ${inFlight.size} in-flight healing request(s)")
+        slog.debug(
+          "Peer disconnected — re-queuing in-flight healing requests",
+          kv("peer", peerId),
+          kv("inFlight", inFlight.size)
+        )
         inFlight.foreach { reqId =>
           activeRequests.remove(reqId).foreach { req =>
             requestTracker.completeRequest(reqId, 0)
@@ -422,7 +437,7 @@ class TrieNodeHealingCoordinator(
       tryRedispatchPendingTasks()
 
     case UpdateMaxInFlightPerPeer(newLimit) =>
-      log.info(s"Healing per-peer budget: $maxInFlightPerPeer -> $newLimit")
+      slog.info("Healing per-peer budget updated", kv("oldLimit", maxInFlightPerPeer), kv("newLimit", newLimit))
       maxInFlightPerPeer = newLimit
       if (newLimit > 0) tryRedispatchPendingTasks()
 
@@ -475,7 +490,7 @@ class TrieNodeHealingCoordinator(
             s"for inline discovery of pivot delta"
         )
       } else {
-        log.info(s"[HEAL] New root already in storage or pending — skipping pivot reseed")
+        slog.info("[HEAL] New root already in storage or pending — skipping pivot reseed")
       }
 
     case TrieNodesResponseMsg(response) =>
@@ -486,7 +501,7 @@ class TrieNodeHealingCoordinator(
       // accumulated while the flush was in-flight (they are at indices count..end).
       rawNodeBuffer.remove(0, count)
       flushing = false
-      log.debug(s"[HEAL-FLUSH] complete: $count nodes written (total: $totalNodesHealed)")
+      slog.debug("[HEAL-FLUSH] complete", kv("written", count), kv("totalHealed", totalNodesHealed))
       // Write frontier checkpoint AFTER the node batch is durably committed (timing invariant:
       // write after persist(), not before — a pre-write checkpoint pointing to uncommitted
       // nodes would corrupt the frontier on a crash between the two writes).
@@ -502,17 +517,17 @@ class TrieNodeHealingCoordinator(
       result match {
         case Right(count) =>
           totalNodesHealed += count
-          log.info(s"Healing task completed: $count nodes")
+          slog.info("Healing task completed", kv("nodes", count))
           self ! HealingCheckCompletion
         case Left(error) =>
-          log.warning(s"Healing task failed: $error")
+          slog.warn("Healing task failed", kv("error", error))
       }
 
     case HealingCheckCompletion =>
       if (isComplete && !flushing && !trieWalkInProgress) {
         flushRawNodesSync()
         appStateStorage.clearSnapHealingFrontier().commit()
-        log.info(s"Healing round complete: $totalNodesHealed total nodes healed. Notifying controller.")
+        slog.info("Healing round complete — notifying controller", kv("totalHealed", totalNodesHealed))
         snapSyncController ! SNAPSyncController.StateHealingComplete
       }
 
@@ -523,108 +538,107 @@ class TrieNodeHealingCoordinator(
       if (trieWalkInProgress) {
         log.debug("[HEAL-PULSE] Skipping stagnation check — trie walk in progress")
       } else {
-      val recentHealed = totalNodesHealed - lastPulseHealedCount
-      val healTotal = completedTaskCount.toLong + pendingTasks.size.toLong + activeRequests.size.toLong
-      val healPct = if (healTotal > 0) ((completedTaskCount.toDouble / healTotal) * 100).toInt else 0
-      slog.info("[HEAL-PULSE]",
-        kv("pct", healPct),
-        kv("healed", totalNodesHealed),
-        kv("recentHealed", recentHealed),
-        kv("frontier", healTotal),
-        kv("frontierGrowth", healTotal - lastFrontierSize),
-        kv("pending", pendingTasks.size),
-        kv("active", activeRequests.size),
-        kv("peers", knownAvailablePeers.size),
-        kv("rate", healRate.toInt),
-        kv("walkRunning", trieWalkInProgress),
-        kv("pivotRefreshPending", pivotRefreshRequested)
-      )
-      val (newM, crossed) =
-        com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
-          .crossed(completedTaskCount.toLong, healTotal, healingMilestonePct)
-      healingMilestonePct = newM
-      crossed.foreach { m =>
-        slog.info("[HEAL-MILESTONE]",
-          kv("pct", m),
-          kv("healed", completedTaskCount),
-          kv("rate", healRate.toInt)
-        )
-      }
-      lastPulseHealedCount = totalNodesHealed
-      lastFrontierSize = healTotal
-
-      // BUG-S4 watchdog: if pivotRefreshRequested=true for >15 min, SNAPSyncController is stuck
-      // in refreshPivotInPlace's no-peer retry loop (Path A: 30s interval, HealingPivotRefreshed
-      // never sent). Safe to reset: stateRoot stays valid; stagnation re-fires if still stuck.
-      if (pivotRefreshRequested) {
-        val waitedMs = System.currentTimeMillis() - pivotRefreshRequestedAt
-        if (waitedMs > PivotRefreshWatchdogMs) {
-          log.warning(
-            s"[HEAL] Pivot refresh watchdog: pivotRefreshRequested=true for ${waitedMs / 1000}s — " +
-              s"SNAPSyncController refresh stalled (no-peer retry loop). Resetting and resuming dispatch."
-          )
-          pivotRefreshRequested = false
-          tryRedispatchPendingTasks()
-        }
-      }
-
-      // FIX-STAGNATION-LIMIT: Track consecutive zero-progress cycles (independent of active count).
-      // After MaxConsecutiveStagnations, notify controller to restart with fresh pivot.
-      // Catches the case where active > 0 but all responses are empty (stale root, ETH mainnet peers).
-      if (recentHealed == 0 && pendingTasks.nonEmpty && !pivotRefreshRequested) {
-        consecutiveStagnations += 1
-        slog.warn("[HEAL-STAGNATION] Zero progress in last 2min",
-          kv("consecutiveStagnations", consecutiveStagnations),
-          kv("maxConsecutiveStagnations", maxConsecutiveStagnations),
+        val recentHealed = totalNodesHealed - lastPulseHealedCount
+        val healTotal = completedTaskCount.toLong + pendingTasks.size.toLong + activeRequests.size.toLong
+        val healPct = if (healTotal > 0) ((completedTaskCount.toDouble / healTotal) * 100).toInt else 0
+        slog.info(
+          "[HEAL-PULSE]",
+          kv("pct", healPct),
           kv("healed", totalNodesHealed),
+          kv("recentHealed", recentHealed),
+          kv("frontier", healTotal),
+          kv("frontierGrowth", healTotal - lastFrontierSize),
           kv("pending", pendingTasks.size),
-          kv("peers", knownAvailablePeers.size)
+          kv("active", activeRequests.size),
+          kv("peers", knownAvailablePeers.size),
+          kv("rate", healRate.toInt),
+          kv("walkRunning", trieWalkInProgress),
+          kv("pivotRefreshPending", pivotRefreshRequested)
         )
-        if (consecutiveStagnations >= maxConsecutiveStagnations) {
-          slog.warn("[HEAL-STAGNATION] Consecutive zero-progress cycles exceeded threshold, notifying controller",
-            kv("consecutiveStagnations", maxConsecutiveStagnations),
-            kv("healed", totalNodesHealed),
-            kv("pending", pendingTasks.size)
-          )
-          snapSyncController ! HealingStagnated(totalNodesHealed.toLong, pendingTasks.size.toLong)
-          consecutiveStagnations = 0
-          // NB-11: Suppress further stagnation counting until the pivot refresh arrives (HealingPivotRefreshed
-          // resets this flag). Prevents redundant HealingStagnated fires while bootstrap is in-flight.
-          pivotRefreshRequested = true
-          pivotRefreshRequestedAt = System.currentTimeMillis()
+        val (newM, crossed) =
+          com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
+            .crossed(completedTaskCount.toLong, healTotal, healingMilestonePct)
+        healingMilestonePct = newM
+        crossed.foreach { m =>
+          slog.info("[HEAL-MILESTONE]", kv("pct", m), kv("healed", completedTaskCount), kv("rate", healRate.toInt))
         }
-      } else if (recentHealed > 0) {
-        consecutiveStagnations = 0
-      }
+        lastPulseHealedCount = totalNodesHealed
+        lastFrontierSize = healTotal
 
-      if (pendingTasks.nonEmpty && activeRequests.isEmpty && !pivotRefreshRequested) {
-        consecutiveIdleChecks += 1
-        if (consecutiveIdleChecks >= 5) {
-          val pendingCount = pendingTasks.size
-          log.warning(
-            s"[HEAL] No active requests for ${consecutiveIdleChecks * 2} minutes with " +
-              s"$pendingCount pending tasks and ${knownAvailablePeers.size} known peers. " +
-              s"Clearing stateless/cooldown peer state and retrying before abandoning."
-          )
-          // Clear all peer-failure state so the next healing round gets fresh dispatch eligibility.
-          // All peers were marked stateless because they returned empty TrieNodes responses for the
-          // current root (e.g. v1.12.20 core-geth, ETH mainnet peers without ETC state). A new peer
-          // (e.g. v1.13.0 core-geth with SNAP serving fixes) may now be connected and able to serve.
-          // Without this clear, eligiblePeers stays empty forever — HealingAllPeersStateless can't
-          // fire because fresh peers keep arriving, keeping knownAvailablePeers.size > statelessPeers.size.
-          statelessPeers.clear()
-          peerCooldownUntilMs.clear()
-          consecutiveIdleChecks = 0 // Reset so we don't immediately force-complete on the next tick
-          log.info(
-            s"[HEAL] Stateless/cooldown peer state cleared. Attempting dispatch to ${knownAvailablePeers.size} peers."
-          )
-          tryRedispatchPendingTasks()
-        } else {
-          tryRedispatchPendingTasks()
+        // BUG-S4 watchdog: if pivotRefreshRequested=true for >15 min, SNAPSyncController is stuck
+        // in refreshPivotInPlace's no-peer retry loop (Path A: 30s interval, HealingPivotRefreshed
+        // never sent). Safe to reset: stateRoot stays valid; stagnation re-fires if still stuck.
+        if (pivotRefreshRequested) {
+          val waitedMs = System.currentTimeMillis() - pivotRefreshRequestedAt
+          if (waitedMs > PivotRefreshWatchdogMs) {
+            log.warning(
+              s"[HEAL] Pivot refresh watchdog: pivotRefreshRequested=true for ${waitedMs / 1000}s — " +
+                s"SNAPSyncController refresh stalled (no-peer retry loop). Resetting and resuming dispatch."
+            )
+            pivotRefreshRequested = false
+            tryRedispatchPendingTasks()
+          }
         }
-      } else {
-        consecutiveIdleChecks = 0
-      }
+
+        // FIX-STAGNATION-LIMIT: Track consecutive zero-progress cycles (independent of active count).
+        // After MaxConsecutiveStagnations, notify controller to restart with fresh pivot.
+        // Catches the case where active > 0 but all responses are empty (stale root, ETH mainnet peers).
+        if (recentHealed == 0 && pendingTasks.nonEmpty && !pivotRefreshRequested) {
+          consecutiveStagnations += 1
+          slog.warn(
+            "[HEAL-STAGNATION] Zero progress in last 2min",
+            kv("consecutiveStagnations", consecutiveStagnations),
+            kv("maxConsecutiveStagnations", maxConsecutiveStagnations),
+            kv("healed", totalNodesHealed),
+            kv("pending", pendingTasks.size),
+            kv("peers", knownAvailablePeers.size)
+          )
+          if (consecutiveStagnations >= maxConsecutiveStagnations) {
+            slog.warn(
+              "[HEAL-STAGNATION] Consecutive zero-progress cycles exceeded threshold, notifying controller",
+              kv("consecutiveStagnations", maxConsecutiveStagnations),
+              kv("healed", totalNodesHealed),
+              kv("pending", pendingTasks.size)
+            )
+            snapSyncController ! HealingStagnated(totalNodesHealed.toLong, pendingTasks.size.toLong)
+            consecutiveStagnations = 0
+            // NB-11: Suppress further stagnation counting until the pivot refresh arrives (HealingPivotRefreshed
+            // resets this flag). Prevents redundant HealingStagnated fires while bootstrap is in-flight.
+            pivotRefreshRequested = true
+            pivotRefreshRequestedAt = System.currentTimeMillis()
+          }
+        } else if (recentHealed > 0) {
+          consecutiveStagnations = 0
+        }
+
+        if (pendingTasks.nonEmpty && activeRequests.isEmpty && !pivotRefreshRequested) {
+          consecutiveIdleChecks += 1
+          if (consecutiveIdleChecks >= 5) {
+            val pendingCount = pendingTasks.size
+            log.warning(
+              s"[HEAL] No active requests for ${consecutiveIdleChecks * 2} minutes with " +
+                s"$pendingCount pending tasks and ${knownAvailablePeers.size} known peers. " +
+                s"Clearing stateless/cooldown peer state and retrying before abandoning."
+            )
+            // Clear all peer-failure state so the next healing round gets fresh dispatch eligibility.
+            // All peers were marked stateless because they returned empty TrieNodes responses for the
+            // current root (e.g. v1.12.20 core-geth, ETH mainnet peers without ETC state). A new peer
+            // (e.g. v1.13.0 core-geth with SNAP serving fixes) may now be connected and able to serve.
+            // Without this clear, eligiblePeers stays empty forever — HealingAllPeersStateless can't
+            // fire because fresh peers keep arriving, keeping knownAvailablePeers.size > statelessPeers.size.
+            statelessPeers.clear()
+            peerCooldownUntilMs.clear()
+            consecutiveIdleChecks = 0 // Reset so we don't immediately force-complete on the next tick
+            log.info(
+              s"[HEAL] Stateless/cooldown peer state cleared. Attempting dispatch to ${knownAvailablePeers.size} peers."
+            )
+            tryRedispatchPendingTasks()
+          } else {
+            tryRedispatchPendingTasks()
+          }
+        } else {
+          consecutiveIdleChecks = 0
+        }
       } // end else (trieWalkInProgress guard)
 
     case HealingGetProgress =>
@@ -658,8 +672,12 @@ class TrieNodeHealingCoordinator(
     }
     val deduped = pathsAndHashes.size - entries.size
     pendingTasks ++= entries
-    val dedupStr = if (deduped > 0) s" ($deduped duplicates filtered)" else ""
-    log.info(s"Queued ${entries.size} nodes for healing$dedupStr. Total pending: ${pendingTasks.size}")
+    slog.info(
+      "Queued nodes for healing",
+      kv("queued", entries.size),
+      kv("deduped", deduped),
+      kv("totalPending", pendingTasks.size)
+    )
   }
 
   /** Update healing rate EMA and adjust throttle (geth p2p/msgrate alignment).
@@ -747,7 +765,10 @@ class TrieNodeHealingCoordinator(
 
     if (skippedLocal > 0) {
       lastHealedAtMs = System.currentTimeMillis()
-      log.debug(s"[HEAL-DISPATCH] A2: $skippedLocal tasks already in local storage, counted as completed")
+      slog.debug(
+        "[HEAL-DISPATCH] A2: tasks already in local storage, counted as completed",
+        kv("skipped", skippedLocal)
+      )
     }
 
     val batch = batchBuilder.result()
@@ -797,7 +818,7 @@ class TrieNodeHealingCoordinator(
     val activeReq = activeRequests.get(requestId) match {
       case Some(req) => req
       case None =>
-        log.warning(s"No active healing request found for requestId=$requestId")
+        slog.warn("No active healing request found", kv("requestId", requestId.toString))
         return
     }
 
@@ -806,7 +827,8 @@ class TrieNodeHealingCoordinator(
     val requestedBytes = activeReq.requestedBytes
     val receivedNodeBytes = nodes.foldLeft(0L)(_ + _.size)
 
-    slog.debug("Received TrieNodes response",
+    slog.debug(
+      "Received TrieNodes response",
       kv("reqId", requestId.toString),
       kv("nodes", nodes.size),
       kv("bytes", receivedNodeBytes),
@@ -936,7 +958,12 @@ class TrieNodeHealingCoordinator(
     // go-ethereum reference: timeouts rotate tasks back to queue, peer returns to idle — no stateless marking.
     // (Stateless is only for empty responses.) forkAccepted filter already screens out ETH mainnet peers
     // that advertise snap/1 but have no ETC state, so the original timeout→stateless rationale no longer applies.
-    log.warning(s"Healing request timed out: reqId=$requestId, tasks=${tasks.size}, peer=${peer.id.value} — re-queuing")
+    slog.warn(
+      "Healing request timed out — re-queuing",
+      kv("reqId", requestId.toString),
+      kv("tasks", tasks.size),
+      kv("peer", peer.id.value)
+    )
 
     activeRequests.remove(requestId)
     recordPeerCooldown(peer, "request timeout")
@@ -955,7 +982,7 @@ class TrieNodeHealingCoordinator(
     }
 
     if (requeued > 0) {
-      log.info(s"Re-queued $requeued timed-out healing tasks (pending: ${pendingTasks.size})")
+      slog.info("Re-queued timed-out healing tasks", kv("requeued", requeued), kv("pending", pendingTasks.size))
     }
 
     // Check global stagnation: no nodes healed for healingStagnationTimeoutMs.
@@ -1022,6 +1049,7 @@ class TrieNodeHealingCoordinator(
     * onBatch is called inline whenever the buffer reaches FrontierBatchSize. The caller is responsible for emitting any
     * remaining buffered entries after this method returns.
     */
+  @annotation.unused
   private def rebuildFrontierDFS(
       startHash: ByteString,
       startPathset: Seq[ByteString],
@@ -1254,8 +1282,7 @@ object TrieNodeHealingCoordinator {
       healingWriterEcOverride: Option[ExecutionContext] = None,
       stagnationCheckInterval: FiniteDuration = 2.minutes,
       maxConsecutiveStagnations: Int = 3,
-      appStateStorage: AppStateStorage =
-        new AppStateStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
+      appStateStorage: AppStateStorage = new AppStateStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
   ): Props =
     Props(
       new TrieNodeHealingCoordinator(

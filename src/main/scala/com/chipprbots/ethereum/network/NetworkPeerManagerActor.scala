@@ -53,6 +53,8 @@ class NetworkPeerManagerActor(
 ) extends Actor
     with ActorLogging {
 
+  private given ActorRef = ActorRef.noSender
+
   private[network] type PeersWithInfo = Map[PeerId, PeerWithInfo]
 
   // Maximum length for hex string in debug logs (to avoid very long log lines)
@@ -90,7 +92,7 @@ class NetworkPeerManagerActor(
     60.seconds,
     self,
     NetworkPeerManagerActor.LogNetworkSummary
-  )(context.dispatcher)
+  )(context.dispatcher, ActorRef.noSender)
 
   // Periodic peer best-block re-probe. The post-handshake eager probe (below) updates
   // `PeerInfo.maxBlockNumber` once; thereafter only `NewBlock` / `NewBlockHashes` gossip
@@ -109,7 +111,7 @@ class NetworkPeerManagerActor(
     BestBlockRefreshInterval,
     self,
     NetworkPeerManagerActor.RefreshPeerBestBlocks
-  )(context.dispatcher)
+  )(context.dispatcher, ActorRef.noSender)
 
   // Periodic lagging-peer eviction. Peers chronically more than `LaggingPeerLagThreshold`
   // blocks below the CL head occupy connection slots that fresh peers can't take. Without
@@ -121,7 +123,7 @@ class NetworkPeerManagerActor(
     LaggingPeerCheckInterval,
     self,
     NetworkPeerManagerActor.CheckLaggingPeers
-  )(context.dispatcher)
+  )(context.dispatcher, ActorRef.noSender)
 
   // Subscribe to the event of any peer getting handshaked
   peerEventBusActor ! Subscribe(PeerHandshaked)
@@ -306,7 +308,7 @@ class NetworkPeerManagerActor(
                   duration = Some(LaggingPeerBlacklistDuration),
                   reason = Disconnect.reasonToString(Disconnect.Reasons.UselessPeer)
                 )
-              )(context.dispatcher)
+              )(context.dispatcher, ActorRef.noSender)
               laggingPeerSince.remove(peerId)
             }
           }

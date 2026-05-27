@@ -4,11 +4,15 @@ import org.apache.pekko.actor.{Cancellable, Scheduler}
 
 import scala.collection.mutable
 
+import net.logstash.logback.argument.StructuredArguments.kv
+
 import com.chipprbots.ethereum.utils.Logger
 
 class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logger {
 
   import SNAPSyncController._
+
+  private val slog = org.slf4j.LoggerFactory.getLogger(getClass)
 
   private var currentPhaseState: SyncPhase = Idle
   private var bytecodesDone: Boolean = false
@@ -55,7 +59,7 @@ class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logg
       new java.util.TimerTask {
         def run(): Unit =
           try logProgress()
-          catch { case e: Exception => log.error(s"Progress monitor error: ${e.getMessage}", e) }
+          catch { case e: Exception => slog.error("Progress monitor error", kv("error", e.getMessage), e) }
       },
       30000L,
       30000L
@@ -106,7 +110,7 @@ class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logg
     if (previousPhase != phase) {
       currentPhaseState = phase
       phaseStartTime = System.currentTimeMillis()
-      log.info(s"SNAP Sync phase transition: $previousPhase -> $phase")
+      slog.info("SNAP Sync phase transition", kv("from", previousPhase.toString), kv("to", phase.toString))
     }
     logProgress()
   }
@@ -206,7 +210,7 @@ class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logg
     val progress = currentProgress
     val etaStr = calculateETA.map(eta => s", ETA: ${formatETA(eta)}").getOrElse("")
     SNAPSyncMetrics.measure(progress)
-    log.info(s"SNAP Sync Progress: ${progress.formattedString}$etaStr")
+    slog.info("SNAP Sync Progress", kv("summary", progress.formattedString + etaStr))
   }
 
   def currentProgress: SyncProgress = synchronized {

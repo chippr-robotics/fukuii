@@ -203,20 +203,15 @@ object DnsDiscovery extends Logger {
 
           // Fork-ID filter — reject incompatible ENRs before they ever become dial candidates.
           // ENRs without an `eth` key are accepted optimistically (handshake STATUS will decide).
-          forkIdFilter match {
-            case Some(filter) =>
-              attrs.get("eth").foreach { ethBytes =>
-                val maybeForkId =
-                  try Some(decode[ForkId](rawDecode(ethBytes)))
-                  catch { case _: Exception => None }
-                maybeForkId.foreach { remoteForkId =>
-                  if (!filter.accepts(remoteForkId)) {
-                    return Left(s"fork-id mismatch: $remoteForkId")
-                  }
-                }
-              }
-            case None =>
+          val forkIdMismatch: Option[String] = forkIdFilter.flatMap { filter =>
+            attrs.get("eth").flatMap { ethBytes =>
+              val maybeForkId =
+                try Some(decode[ForkId](rawDecode(ethBytes)))
+                catch { case _: Exception => None }
+              maybeForkId.collect { case fid if !filter.accepts(fid) => s"fork-id mismatch: $fid" }
+            }
           }
+          if (forkIdMismatch.isDefined) return Left(forkIdMismatch.get)
 
           val ipv4Opt = attrs.get("ip").flatMap(parseIp)
           val tcpv4Opt = attrs.get("tcp").map(parsePort)

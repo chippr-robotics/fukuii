@@ -234,12 +234,11 @@ class BlockchainReader(
   /** Mean block difficulty over a rolling window for Tier-3 POW_SCALING estimates.
     *
     * @remarks
-    *   Avoids two failure modes: (1) all-time average (headTd/headNumber) is contaminated by ETC's
-    *   pre-merge low-hashrate era (~5–30 TH/s before block 15.4M, ~150–250 TH/s after); (2)
-    *   point-in-time headDifficulty rides 25-35% weekly hashrate swings. The 10K-block window
-    *   (~36 hours) stays within the current difficulty regime and transitions naturally through the
-    *   merge boundary during initial sync. Falls back to head.difficulty when the window start
-    *   block is not in our DB (evicted or not yet synced).
+    *   Avoids two failure modes: (1) all-time average (headTd/headNumber) is contaminated by ETC's pre-merge
+    *   low-hashrate era (~5–30 TH/s before block 15.4M, ~150–250 TH/s after); (2) point-in-time headDifficulty rides
+    *   25-35% weekly hashrate swings. The 10K-block window (~36 hours) stays within the current difficulty regime and
+    *   transitions naturally through the merge boundary during initial sync. Falls back to head.difficulty when the
+    *   window start block is not in our DB (evicted or not yet synced).
     */
   private def rollingWindowDiff(head: BlockHeader, headTd: BigInt): BigInt =
     if (head.number == 0) head.difficulty

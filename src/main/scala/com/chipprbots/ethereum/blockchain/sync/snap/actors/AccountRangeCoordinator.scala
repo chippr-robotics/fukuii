@@ -31,6 +31,7 @@ import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 import com.google.common.hash.{BloomFilter, Funnel, PrimitiveSink}
+import net.logstash.logback.argument.StructuredArguments.kv
 
 /** AccountRangeCoordinator manages account range download workers.
   *
@@ -93,6 +94,8 @@ class AccountRangeCoordinator(
 
   import Messages._
   import SNAPSyncController.PivotStateUnservable
+
+  private val slog = org.slf4j.LoggerFactory.getLogger(getClass)
 
   // Mutable state root — updated in-place when the controller refreshes the pivot.
   private var stateRoot: ByteString = initialStateRoot
@@ -364,7 +367,7 @@ class AccountRangeCoordinator(
       // 4. Remove the slot.
       activeTasks.remove(reqId)
     }
-    log.info(s"Re-queued ${toDrain.size} stale in-flight account requests ($reason)")
+    slog.info("Re-queued stale in-flight account requests", kv("count", toDrain.size), kv("reason", reason))
     toDrain.size
   }
 
@@ -499,7 +502,12 @@ class AccountRangeCoordinator(
   private def recordPeerCooldown(peer: Peer, reason: String, duration: FiniteDuration): Unit = {
     val until = System.currentTimeMillis() + duration.toMillis
     peerCooldownUntilMs.put(peer.id.value, until)
-    log.debug(s"Cooling down peer ${peer.id.value} for ${duration.toSeconds}s: $reason")
+    slog.debug(
+      "Cooling down peer",
+      kv("peer", peer.id.value),
+      kv("cooldownSecs", peerCooldownDefault.toSeconds),
+      kv("reason", reason)
+    )
   }
 
   // Pivot refresh backoff: prevents rapid-fire pivot refresh requests when all peers are stateless.
@@ -569,7 +577,7 @@ class AccountRangeCoordinator(
           s"skipping ${skippedTasks.size}/${allInitialTasks.size} ranges (already completed in previous attempt)"
       )
     } else {
-      log.info(s"AccountRangeCoordinator starting with $concurrency workers")
+      slog.info("AccountRangeCoordinator starting", kv("workers", concurrency))
     }
     // #1184: schedule the periodic dispatch-stalled detector. Fires every 30 s; the
     // 90 s `noActivityTimeoutMs` ensures we drain stuck slots before the controller's
@@ -592,7 +600,7 @@ class AccountRangeCoordinator(
       try {
         val remaining = pendingFlatAccounts.size
         flatAccountStorage.putAccountsBatch(pendingFlatAccounts.toSeq).commit()
-        log.info(s"[FLAT-ACCOUNTS] postStop: flushed $remaining remaining entries")
+        slog.info("[FLAT-ACCOUNTS] postStop: flushed remaining entries", kv("count", remaining))
       } catch {
         case e: Exception =>
           log.error(e, s"[FLAT-ACCOUNTS] postStop: failed to flush ${pendingFlatAccounts.size} remaining entries")
@@ -659,13 +667,16 @@ class AccountRangeCoordinator(
 
   override def receive: Receive = {
     case StartAccountRangeSync(root) =>
-      log.info(s"Starting account range sync for state root ${root.take(8).toHex}")
+      slog.info("Starting account range sync", kv("stateRoot", root.take(8).toHex))
     // Tasks already initialized in constructor
 
     case AccountRangeResponseMsg(response) =>
       activeTasks.get(response.requestId) match {
         case None =>
-          log.debug(s"Received AccountRange response for unknown or completed request ${response.requestId}")
+          slog.debug(
+            "Received AccountRange response for unknown or completed request",
+            kv("requestId", response.requestId.toString)
+          )
 
         case Some((_, worker, _)) =>
           // Forward to the specific worker that owns this requestId so it can validate/complete the request.
@@ -673,7 +684,7 @@ class AccountRangeCoordinator(
       }
 
     case PivotRefreshed(newStateRoot) =>
-      log.info(s"Pivot refreshed: ${stateRoot.take(4).toHex} -> ${newStateRoot.take(4).toHex}")
+      slog.info("Pivot refreshed", kv("oldRoot", stateRoot.take(4).toHex), kv("newRoot", newStateRoot.take(4).toHex))
       stateRoot = newStateRoot
       pivotWasRefreshed = true
 
@@ -683,7 +694,7 @@ class AccountRangeCoordinator(
       drainActiveTasks(s"pivot refresh to ${newStateRoot.take(4).toHex}")
       pendingTasks.foreach(_.rootHash = newStateRoot)
       if (pendingFlatAccounts.nonEmpty) {
-        log.debug(s"[FLAT-ACCOUNTS] cleared ${pendingFlatAccounts.size} pending entries on PivotRefreshed")
+        slog.debug("[FLAT-ACCOUNTS] cleared pending entries on PivotRefreshed", kv("count", pendingFlatAccounts.size))
         pendingFlatAccounts.clear()
         pendingFlatAccountBytes = 0L
       }
@@ -752,11 +763,11 @@ class AccountRangeCoordinator(
       }
       knownAvailablePeers += peer
       if (isPeerStateless(peer)) {
-        log.debug(s"Ignoring PeerAvailable(${peer.id.value}) - peer is stateless for current root")
+        slog.debug("Ignoring PeerAvailable — peer is stateless for current root", kv("peer", peer.id.value))
       } else if (isPeerSnapless(peer)) {
-        log.debug(s"Ignoring PeerAvailable(${peer.id.value}) - peer is snapless (no snapshot tree)")
+        slog.debug("Ignoring PeerAvailable — peer is snapless (no snapshot tree)", kv("peer", peer.id.value))
       } else if (isPeerCoolingDown(peer)) {
-        log.debug(s"Ignoring PeerAvailable(${peer.id.value}) - peer is cooling down")
+        slog.debug("Ignoring PeerAvailable — peer is cooling down", kv("peer", peer.id.value))
       } else if (pendingTasks.isEmpty) {
         log.debug("No pending tasks")
       } else {
@@ -769,7 +780,7 @@ class AccountRangeCoordinator(
       }
 
     case UpdateMaxInFlightPerPeer(newLimit) =>
-      log.info(s"AccountRange per-peer budget: $maxInFlightPerPeer -> $newLimit")
+      slog.info("AccountRange per-peer budget updated", kv("oldLimit", maxInFlightPerPeer), kv("newLimit", newLimit))
       maxInFlightPerPeer = newLimit
       if (newLimit > 0) tryRedispatchPendingTasks()
 
@@ -891,7 +902,7 @@ class AccountRangeCoordinator(
         // they operate on their own state roots. This saves 50s-25min of serial blocking.
         snapSyncController ! SNAPSyncController.AccountRangeSyncComplete
 
-        log.info(s"Starting async trie finalization for $accountsDownloaded accounts...")
+        slog.info("Starting async trie finalization", kv("accounts", accountsDownloaded))
         // Notify controller so progress monitor shows finalization status
         snapSyncController ! SNAPSyncController.ProgressAccountsFinalizingTrie
         // Switch to finalizing state so no message can touch the trie during flush
@@ -922,7 +933,7 @@ class AccountRangeCoordinator(
     // since spawn (e.g., the actor restarted finalisation) is silently ignored — data
     // is on disk either way, and the in-flight Future can't be cancelled.
     case TrieFlushComplete(gen, _) if gen != trieFlushGeneration =>
-      log.debug(s"Dropping stale TrieFlushComplete (gen=$gen, current=$trieFlushGeneration)")
+      slog.debug("Dropping stale TrieFlushComplete", kv("gen", gen), kv("current", trieFlushGeneration))
 
     case TrieFlushComplete(_, Right(finalizedRoot)) =>
       log.info(
@@ -934,7 +945,7 @@ class AccountRangeCoordinator(
       context.stop(self)
 
     case TrieFlushComplete(_, Left(error)) =>
-      log.error(s"Failed to finalize trie: $error")
+      slog.error("Failed to finalize trie", kv("error", error))
       snapSyncController ! SNAPSyncController.AccountTrieFinalizationFailed(error)
       context.stop(self)
 
@@ -997,7 +1008,7 @@ class AccountRangeCoordinator(
     context.watch(worker)
     workers += worker
     idleWorkers += worker
-    log.debug(s"Created worker ${worker.path.name}, total workers: ${workers.size}")
+    slog.debug("Created worker", kv("worker", worker.path.name), kv("totalWorkers", workers.size))
     worker
   }
 
@@ -1161,7 +1172,7 @@ class AccountRangeCoordinator(
           }
 
         case Left(error) =>
-          log.warning(s"Task completed with error: $error")
+          slog.warn("Task completed with error", kv("error", error))
           // Re-queue task for retry
           task.pending = false
           requeueOrEscalate(task, s"task completed with error: $error")
@@ -1263,7 +1274,7 @@ class AccountRangeCoordinator(
             s"(task root ${task.rootHash.take(4).toHex} != current ${stateRoot.take(4).toHex})"
         )
       }
-      log.warning(s"Task failed: $reason")
+      slog.warn("Task failed", kv("reason", reason))
       task.pending = false
       task.rootHash = stateRoot
 
@@ -1446,7 +1457,7 @@ class AccountRangeCoordinator(
       }
 
       if (rest.nonEmpty) {
-        log.debug(s"Stored chunk: $newStored/$totalCount accounts (${rest.size} remaining)")
+        slog.debug("Stored chunk", kv("stored", newStored), kv("total", totalCount), kv("remaining", rest.size))
         // Yield to actor mailbox - other messages (PeerAvailable, responses) process before next chunk
         self ! StoreAccountChunk(task, rest, totalCount, newStored, isTaskRangeComplete)
       } else {
@@ -1471,7 +1482,10 @@ class AccountRangeCoordinator(
             }
             // StackTrie path: drain any remaining flat accounts below the 8MB threshold.
             if (pendingFlatAccounts.nonEmpty)
-              log.info(s"[FLAT-ACCOUNTS] task complete — draining ${pendingFlatAccounts.size} remainder entries")
+              slog.info(
+                "[FLAT-ACCOUNTS] task complete — draining remainder entries",
+                kv("count", pendingFlatAccounts.size)
+              )
             spawnIncrementalFlatFlush()
           } else {
             log.info(
@@ -1493,7 +1507,11 @@ class AccountRangeCoordinator(
           // StackTrie path: no global flush required. Each task's SnapHashTrie
           // batches its emissions and flushes to RocksDB at the 8 MiB threshold
           // (or on task-complete commit). Just check whether all tasks are done.
-          log.debug(s"Stored all $totalCount accounts via StackTrie ($accountsDownloaded total)")
+          slog.debug(
+            "Stored all accounts via StackTrie",
+            kv("taskAccounts", totalCount),
+            kv("totalAccounts", accountsDownloaded)
+          )
           self ! CheckCompletion
         } else {
           // Legacy MPT path — threshold-based global flush.
@@ -1549,7 +1567,7 @@ class AccountRangeCoordinator(
     deferredStorage.flush().foreach { rootHash =>
       import com.chipprbots.ethereum.mpt.byteStringSerializer
       stateTrie = MerklePatriciaTrie[ByteString, Account](rootHash, deferredStorage)
-      log.info(s"Flushed trie to storage, root=${rootHash.take(8).map("%02x".format(_)).mkString}...")
+      slog.info("Flushed trie to storage", kv("root", rootHash.take(8).map("%02x".format(_)).mkString))
     }
 
   /** Async variant of `flushTrieToStorage` for the periodic-flush path. Switches the actor to the `flushing` receive
@@ -1575,7 +1593,7 @@ class AccountRangeCoordinator(
         val rootHash = storage.flush().map(rh => ByteString(rh))
         if (flatBatch.nonEmpty) {
           fas.putAccountsBatch(flatBatch).commit()
-          log.debug(s"[FLAT-ACCOUNTS] flushed ${flatBatch.size} account entries to FlatAccountStorage")
+          slog.debug("[FLAT-ACCOUNTS] flushed account entries to FlatAccountStorage", kv("count", flatBatch.size))
         }
         val elapsedMs = System.currentTimeMillis() - startMs
         (rootHash, elapsedMs)
@@ -1597,12 +1615,12 @@ class AccountRangeCoordinator(
     // Stale-generation drop — happens only if generation got bumped while a flush
     // was in flight (e.g., transition into finalisation). Data is durable either way.
     case TrieFlushAsyncComplete(gen, _, _) if gen != trieFlushGeneration =>
-      log.debug(s"Dropping stale TrieFlushAsyncComplete (gen=$gen, current=$trieFlushGeneration)")
+      slog.debug("Dropping stale TrieFlushAsyncComplete", kv("gen", gen), kv("current", trieFlushGeneration))
       context.become(receive)
       self ! CheckCompletion
 
     case TrieFlushAsyncFailed(gen, _) if gen != trieFlushGeneration =>
-      log.debug(s"Dropping stale TrieFlushAsyncFailed (gen=$gen, current=$trieFlushGeneration)")
+      slog.debug("Dropping stale TrieFlushAsyncFailed", kv("gen", gen), kv("current", trieFlushGeneration))
       context.become(receive)
       self ! CheckCompletion
 
@@ -1618,7 +1636,7 @@ class AccountRangeCoordinator(
       self ! CheckCompletion
 
     case TrieFlushAsyncFailed(_, error) =>
-      log.error(s"Async trie flush failed: $error. Continuing with in-memory trie; healing will recover.")
+      slog.error("Async trie flush failed — continuing with in-memory trie; healing will recover", kv("error", error))
       context.become(receive)
       self ! CheckCompletion
   }
@@ -1698,7 +1716,7 @@ class AccountRangeCoordinator(
         // RocksDB. Defensively commit any stragglers (should be empty unless a task
         // finished after its `isTaskRangeComplete` branch was missed).
         if (taskStackTries.nonEmpty) {
-          log.warning(s"Finalising ${taskStackTries.size} uncommitted task StackTries (unexpected)")
+          slog.warn("Finalising uncommitted task StackTries (unexpected)", kv("count", taskStackTries.size))
           taskStackTries.values.foreach { trie =>
             val _ = trie.commit()
           }
@@ -1720,7 +1738,7 @@ class AccountRangeCoordinator(
       flushTrieToStorage()
 
       val currentRootHash = ByteString(stateTrie.getRootHash)
-      log.info(s"Final state root: ${currentRootHash.take(8).toArray.map("%02x".format(_)).mkString}")
+      slog.info("Final state root", kv("root", currentRootHash.take(8).toArray.map("%02x".format(_)).mkString))
 
       // After pivot refresh(es), root mismatch is expected — the healing phase
       // will reconcile. Only fail on root mismatch if NO pivot refresh occurred.
@@ -1859,8 +1877,8 @@ class AccountRangeCoordinator(
 object AccountRangeCoordinator {
 
   /** Hard cap on consecutive re-queues for a single account task before the coordinator escalates to the controller via
-    * `PivotStateUnservable`. On ETC mainnet with 1-5 SNAP peers, serve-window gaps can last 5-10 minutes. At 5s cooldown
-    * (empty-without-proof) 20 requeues covers ~100s; at 30s timeout, ~10 minutes. Previously 8 — too tight for
+    * `PivotStateUnservable`. On ETC mainnet with 1-5 SNAP peers, serve-window gaps can last 5-10 minutes. At 5s
+    * cooldown (empty-without-proof) 20 requeues covers ~100s; at 30s timeout, ~10 minutes. Previously 8 — too tight for
     * peer-scarce networks where transient statelessness is the norm, not the exception.
     */
   val MaxRequeuesPerTask: Int = 20

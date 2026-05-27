@@ -488,8 +488,8 @@ object AppStateStorage {
     val BackfillBestReceipt = "BackfillBestReceipt"
     val SnapHealingFrontierRoot = "SnapHealingFrontierRoot"
     val SnapHealingFrontierData = "SnapHealingFrontierData"
-    val BytecodeRecoveryCursor  = "BytecodeRecoveryCursor"
-    val StorageRecoveryCursor   = "StorageRecoveryCursor"
+    val BytecodeRecoveryCursor = "BytecodeRecoveryCursor"
+    val StorageRecoveryCursor = "StorageRecoveryCursor"
   }
 
 }

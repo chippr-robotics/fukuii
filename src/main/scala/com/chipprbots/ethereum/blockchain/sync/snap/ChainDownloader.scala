@@ -32,6 +32,8 @@ import com.chipprbots.ethereum.network.p2p.messages.ETH66.GetReceipts.GetReceipt
 import com.chipprbots.ethereum.rlp._
 import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.network.p2p.messages.ETH63.ReceiptImplicits._
+import net.logstash.logback.argument.StructuredArguments.kv
+
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 /** Downloads block headers, bodies, and receipts from genesis to a target block in parallel with SNAP state sync.
@@ -61,6 +63,8 @@ class ChainDownloader(
     with PeerListSupportNg {
 
   import ChainDownloader._
+
+  private val slog = org.slf4j.LoggerFactory.getLogger(getClass)
 
   // PeerRequestHandler.props requires an implicit Scheduler
   implicit val implicitScheduler: Scheduler = scheduler
@@ -558,7 +562,11 @@ class ChainDownloader(
         .reduce(_.and(_))
         .and(cursorUpdate)
         .commit()
-      log.debug(s"[CHAIN-DOWNLOADER] receipts committed: ${receiptsByHash.size} blocks up to #$highestReceiptNumber")
+      slog.debug(
+        "[CHAIN-DOWNLOADER] receipts committed",
+        kv("blocks", receiptsByHash.size),
+        kv("highestReceiptNumber", highestReceiptNumber.toString)
+      )
 
       receiptsDownloaded += receiptsByBlock.size
 

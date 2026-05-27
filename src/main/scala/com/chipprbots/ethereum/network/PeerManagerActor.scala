@@ -52,6 +52,8 @@ class PeerManagerActor(
     with ActorLogging
     with Stash {
 
+  private given ActorRef = ActorRef.noSender
+
   /** Maximum number of blacklisted nodes will never be larger than number of peers provided by discovery Discovery
     * provides remote nodes from all networks (ETC,ETH, Mordor etc.) only during handshake we learn that some of the
     * remote nodes are not compatible that's why we mark them as useless (blacklist them).
@@ -513,7 +515,8 @@ class PeerManagerActor(
             peerConfiguration.connectRetryDelay
           )
           context.system.scheduler.scheduleOnce(peerConfiguration.connectRetryDelay, self, ConnectToPeer(uri))(
-            context.dispatcher
+            context.dispatcher,
+            ActorRef.noSender
           )
         }
       }
@@ -570,7 +573,8 @@ class PeerManagerActor(
             log.debug("Maintained peer {} already connected via winner — skipping reconnect", uri)
           } else {
             log.debug("Maintained peer {} disconnected — scheduling reconnect in 5s", uri)
-            context.system.scheduler.scheduleOnce(5.seconds, self, ConnectToPeer(uri))(context.dispatcher)
+            context.system.scheduler
+              .scheduleOnce(5.seconds, self, ConnectToPeer(uri))(context.dispatcher, ActorRef.noSender)
           }
         }
       }

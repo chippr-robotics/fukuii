@@ -17,6 +17,7 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
+import net.logstash.logback.argument.StructuredArguments.kv
 
 /** StorageRangeCoordinator manages storage range download workers and orchestrates the storage sync phase.
   *
@@ -78,7 +79,11 @@ class StorageRangeCoordinator(
 ) extends Actor
     with ActorLogging {
 
+  private given ActorRef = ActorRef.noSender
+
   import Messages._
+
+  private val slog = org.slf4j.LoggerFactory.getLogger(getClass)
 
   // Mutable state root — updated in-place when the controller refreshes the pivot.
   private var stateRoot: ByteString = initialStateRoot
@@ -268,7 +273,7 @@ class StorageRangeCoordinator(
           }
         }
         activeTasks.clear()
-        log.info(s"Re-queued $staleCount stale in-flight requests from ghost peers")
+        slog.info("Re-queued stale in-flight requests from ghost peers", kv("count", staleCount))
       }
     }
 
@@ -537,7 +542,7 @@ class StorageRangeCoordinator(
     pendingFlatBatchBytes = 0L
     inFlightFlatBatches += 1
     val mb = f"${batchBytes / 1048576.0}%.1f"
-    log.info(s"[STORAGE-STATE] flat flush — $entries slots (${mb}MB) | inFlight=$inFlightFlatBatches")
+    slog.info("[STORAGE-STATE] flat flush", kv("slots", entries), kv("mb", mb), kv("inFlight", inFlightFlatBatches))
 
     val selfRef = self
     val storage = flatSlotStorage // capture for Future
@@ -621,7 +626,7 @@ class StorageRangeCoordinator(
     // Discard any in-memory streaming tries — already-flushed nodes stay on disk
     // (content-addressed; healing reconciles).
     if (pendingAccountTries.nonEmpty) {
-      log.info(s"postStop: discarding ${pendingAccountTries.size} in-flight per-account storage tries")
+      slog.info("postStop: discarding in-flight per-account storage tries", kv("count", pendingAccountTries.size))
       pendingAccountTries.values.foreach(_.reset())
       pendingAccountTries.clear()
       com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setStoragePendingTries(0L)
@@ -635,10 +640,10 @@ class StorageRangeCoordinator(
           combined = combined.and(flatSlotStorage.putSlotsBatch(accountHash, slots))
         }
         combined.commit()
-        log.info(s"postStop: flushed final ${pendingFlatBatchEntries} flat slot entries")
+        slog.info("postStop: flushed final flat slot entries", kv("count", pendingFlatBatchEntries))
       } catch {
         case e: Exception =>
-          log.error(s"postStop: failed to flush final flat batch: ${e.getMessage}")
+          slog.error("postStop: failed to flush final flat batch", kv("error", e.getMessage))
       }
       pendingFlatBatchAccounts.clear()
       pendingFlatBatchEntries = 0
@@ -656,13 +661,19 @@ class StorageRangeCoordinator(
   // O(contracts-seen-since-last-pivot).
 
   override def preStart(): Unit = {
-    log.info(s"StorageRangeCoordinator starting (concurrency=$maxInFlightRequests, batchSize=$maxAccountsPerBatch)")
+    slog.info(
+      "StorageRangeCoordinator starting",
+      kv("concurrency", maxInFlightRequests),
+      kv("batchSize", maxAccountsPerBatch)
+    )
     // Periodic liveness: re-evaluate dispatch and pivot refresh even when no events flow.
     // Without this, ghost peers cause a silent stall with no incoming messages to trigger re-evaluation.
     storageCheckTask = Some(
-      context.system.scheduler.scheduleWithFixedDelay(completionCheckInterval, completionCheckInterval, self, StorageCheckCompletion)(
-        context.dispatcher
-      )
+      context.system.scheduler
+        .scheduleWithFixedDelay(completionCheckInterval, completionCheckInterval, self, StorageCheckCompletion)(
+          context.dispatcher,
+          ActorRef.noSender
+        )
     )
     log.debug("[STORAGE-COORD] periodic completion check timer scheduled (interval={})", completionCheckInterval)
   }
@@ -675,7 +686,7 @@ class StorageRangeCoordinator(
 
   override def receive: Receive = {
     case StartStorageRangeSync(root) =>
-      log.info(s"Starting storage range sync for state root ${root.take(8).toHex}")
+      slog.info("Starting storage range sync", kv("stateRoot", root.take(8).toHex))
 
     case AddStorageTasks(storageTasks) =>
       tasks.enqueueAll(storageTasks)
@@ -690,7 +701,7 @@ class StorageRangeCoordinator(
 
     case AddStorageTask(task) =>
       tasks.enqueue(task)
-      log.debug(s"Added storage task for account ${task.accountString} to queue")
+      slog.debug("Added storage task to queue", kv("account", task.accountString))
 
     case StoragePeerAvailable(peer) =>
       // Evict stale entry for same physical node (reconnection creates new PeerId).
@@ -707,13 +718,13 @@ class StorageRangeCoordinator(
       }
       knownAvailablePeers += peer
       if (isPostRefreshCooldownActive) {
-        log.debug(s"Ignoring StoragePeerAvailable(${peer.id.value}) - post-refresh cooldown active")
+        slog.debug("Ignoring StoragePeerAvailable — post-refresh cooldown active", kv("peer", peer.id.value))
       } else if (pivotRefreshRequested) {
-        log.debug(s"Ignoring StoragePeerAvailable(${peer.id.value}) - pivot refresh pending")
+        slog.debug("Ignoring StoragePeerAvailable — pivot refresh pending", kv("peer", peer.id.value))
       } else if (isPeerStateless(peer)) {
-        log.debug(s"Ignoring StoragePeerAvailable(${peer.id.value}) - peer is stateless for current root")
+        slog.debug("Ignoring StoragePeerAvailable — peer is stateless for current root", kv("peer", peer.id.value))
       } else if (isPeerCoolingDown(peer)) {
-        log.debug(s"Ignoring StoragePeerAvailable(${peer.id.value}) due to cooldown")
+        slog.debug("Ignoring StoragePeerAvailable — peer is cooling down", kv("peer", peer.id.value))
       } else if (!isComplete && tasks.nonEmpty) {
         // Pipeline multiple requests per peer (core-geth parity).
         dispatchIfPossible(peer)
@@ -728,7 +739,11 @@ class StorageRangeCoordinator(
       emptyResponseStrikes.remove(peerId)
       val inFlight = activeTasks.filter { case (_, (peer, _, _, _)) => peer.id.value == peerId }.keys.toSeq
       if (inFlight.nonEmpty) {
-        log.debug(s"Peer $peerId disconnected — re-queuing ${inFlight.size} in-flight storage request(s)")
+        slog.debug(
+          "Peer disconnected — re-queuing in-flight storage requests",
+          kv("peer", peerId),
+          kv("inFlight", inFlight.size)
+        )
         inFlight.foreach { reqId =>
           activeTasks.remove(reqId).foreach { case (_, batchTasks, _, _) =>
             batchTasks.foreach { task =>
@@ -745,7 +760,7 @@ class StorageRangeCoordinator(
       tryRedispatchPendingTasks()
 
     case UpdateMaxInFlightPerPeer(newLimit) =>
-      log.info(s"Storage per-peer budget: $maxInFlightPerPeer -> $newLimit")
+      slog.info("Storage per-peer budget updated", kv("oldLimit", maxInFlightPerPeer), kv("newLimit", newLimit))
       maxInFlightPerPeer = newLimit
       if (newLimit > 0) tryRedispatchPendingTasks()
 
@@ -757,10 +772,10 @@ class StorageRangeCoordinator(
         case Right(count) =>
           slotsDownloaded += count
           consecutiveTaskFailures = 0
-          log.info(s"Storage task completed: $count slots")
+          slog.info("Storage task completed", kv("slots", count))
           self ! StorageCheckCompletion
         case Left(error) =>
-          log.warning(s"Storage task failed: $error")
+          slog.warn("Storage task failed", kv("error", error))
       }
 
     case StorageCheckCompletion =>
@@ -816,8 +831,12 @@ class StorageRangeCoordinator(
       snapSyncController ! SNAPSyncController.StorageRangeSyncForceCompleted
 
     case StoragePivotRefreshed(newStateRoot) =>
-      log.info(s"Storage pivot refreshed: ${stateRoot.take(4).toHex} -> ${newStateRoot.take(4).toHex}")
-      log.debug(s"Storage consecutive task failures reset on pivot refresh (was $consecutiveTaskFailures)")
+      slog.info(
+        "Storage pivot refreshed",
+        kv("oldRoot", stateRoot.take(4).toHex),
+        kv("newRoot", newStateRoot.take(4).toHex)
+      )
+      slog.debug("Storage consecutive task failures reset on pivot refresh", kv("was", consecutiveTaskFailures))
       consecutiveTaskFailures = 0
 
       // Flush before mutating `stateRoot` so the off-actor commit is tagged with the OLD root.
@@ -839,7 +858,7 @@ class StorageRangeCoordinator(
       }
       activeTasks.clear()
       if (cancelledCount > 0) {
-        log.info(s"Cancelled $cancelledCount in-flight storage requests (stale root)")
+        slog.info("Cancelled in-flight storage requests (stale root)", kv("count", cancelledCount))
       }
 
       // Clear all per-peer adaptive state — fresh start with new root
@@ -878,7 +897,7 @@ class StorageRangeCoordinator(
       // remain on disk and will be referenced by the new root's healing pass if still valid,
       // unreferenced and pruned otherwise. Only the in-memory stack-trie state is dropped.
       if (pendingAccountTries.nonEmpty) {
-        log.info(s"Pivot refresh: resetting ${pendingAccountTries.size} in-flight per-account storage tries")
+        slog.info("Pivot refresh: resetting in-flight per-account storage tries", kv("count", pendingAccountTries.size))
         pendingAccountTries.values.foreach(_.reset())
         pendingAccountTries.clear()
         com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.setStoragePendingTries(0L)
@@ -919,7 +938,7 @@ class StorageRangeCoordinator(
         )
       } else {
         val rate = if (elapsedMs > 0) entryCount * 1000L / elapsedMs else entryCount.toLong
-        log.debug(s"Flat batch flushed: $entryCount slots in ${elapsedMs}ms ($rate slots/s)")
+        slog.debug("Flat batch flushed", kv("slots", entryCount), kv("elapsedMs", elapsedMs), kv("slotsPerSec", rate))
       }
       // A drained flush may have unblocked completion (NoMore + empty queues).
       self ! StorageCheckCompletion
@@ -1048,18 +1067,18 @@ class StorageRangeCoordinator(
   private def handleResponse(response: StorageRanges): Unit =
     requestTracker.validateStorageRanges(response) match {
       case Left(error) =>
-        log.warning(s"Invalid StorageRanges response: $error")
+        slog.warn("Invalid StorageRanges response", kv("error", error))
 
       case Right(validResponse) =>
         val slotCount = validResponse.slots.map(_.size).sum
         requestTracker.completeRequest(response.requestId, slotCount.max(1)) match {
           case None =>
-            log.warning(s"Received response for unknown request ID ${response.requestId}")
+            slog.warn("Received response for unknown request ID", kv("requestId", response.requestId.toString))
 
           case Some(_) =>
             activeTasks.remove(response.requestId) match {
               case None =>
-                log.warning(s"No active tasks for request ID ${response.requestId}")
+                slog.warn("No active tasks for request ID", kv("requestId", response.requestId.toString))
 
               case Some((peer, batchTasks, requestedBytes, rootAtDispatch)) =>
                 if (rootAtDispatch != stateRoot) {
@@ -1220,7 +1239,7 @@ class StorageRangeCoordinator(
     val unservedTasks = tasks.drop(servedCount)
 
     if (unservedTasks.nonEmpty) {
-      log.debug(s"Re-queueing ${unservedTasks.size} unserved storage tasks")
+      slog.debug("Re-queueing unserved storage tasks", kv("count", unservedTasks.size))
       unservedTasks.foreach { task =>
         task.pending = false
         this.tasks.enqueue(task)
@@ -1244,7 +1263,7 @@ class StorageRangeCoordinator(
       val verifier = MerkleProofVerifier(task.storageRoot)
       verifier.verifyStorageRange(accountSlots, proofForThisTask, task.next, task.last) match {
         case Left(error) =>
-          log.warning(s"Storage proof verification failed for account ${task.accountString}: $error")
+          slog.warn("Storage proof verification failed", kv("account", task.accountString), kv("error", error))
           recordPeerCooldown(peer, s"verification failed: $error")
           adjustResponseBytesOnFailure(peer, s"verification failed: $error")
           task.pending = false
@@ -1290,7 +1309,7 @@ class StorageRangeCoordinator(
               val lastSlot = accountSlots.last._1
               val continuationTask = StorageTask.createContinuation(task, lastSlot)
               this.tasks.enqueue(continuationTask)
-              log.debug(s"Created continuation task for account ${task.accountString} (partial range, proof present)")
+              slog.debug("Created continuation task (partial range, proof present)", kv("account", task.accountString))
             } else {
               // Account fully downloaded — commit the streaming trie if one exists.
               // For deferred-merkleization mode no trie was built; flat-slot writes alone
@@ -1336,7 +1355,7 @@ class StorageRangeCoordinator(
 
   private def handleTimeout(requestId: BigInt): Unit = {
     activeTasks.remove(requestId).foreach { case (peer, batchTasks, _, _) =>
-      log.warning(s"Storage range request timeout for ${batchTasks.size} accounts from peer ${peer.id.value}")
+      slog.warn("Storage range request timeout", kv("accounts", batchTasks.size), kv("peer", peer.id.value))
       recordPeerCooldown(peer, "request timeout")
       adjustResponseBytesOnFailure(peer, "request timeout")
 
@@ -1350,7 +1369,11 @@ class StorageRangeCoordinator(
       }
 
       consecutiveTaskFailures += 1
-      log.debug(s"Storage consecutive task failures: $consecutiveTaskFailures/$maxConsecutiveTaskFailures")
+      slog.debug(
+        "Storage consecutive task failures",
+        kv("count", consecutiveTaskFailures),
+        kv("max", maxConsecutiveTaskFailures)
+      )
       if (consecutiveTaskFailures >= maxConsecutiveTaskFailures) {
         log.warning(
           s"[STORAGE-FORCE-COMPLETE] $consecutiveTaskFailures consecutive task failures — " +
@@ -1428,7 +1451,7 @@ class StorageRangeCoordinator(
             .crossed(completedTaskCount, total, storageMilestonePct)
         storageMilestonePct = newM
         crossed.foreach { m =>
-          log.info(s"[STORAGE-MILESTONE] $m% — $completedTaskCount / $total tasks complete")
+          slog.info("[STORAGE-MILESTONE]", kv("pct", m), kv("completed", completedTaskCount), kv("total", total))
         }
       }
     }
@@ -1494,7 +1517,12 @@ class StorageRangeCoordinator(
   private def recordPeerCooldown(peer: Peer, reason: String): Unit = {
     val until = System.currentTimeMillis() + peerCooldownDefault.toMillis
     peerCooldownUntilMs.put(peer.id.value, until)
-    log.debug(s"Cooling down peer ${peer.id.value} for ${peerCooldownDefault.toSeconds}s: $reason")
+    slog.debug(
+      "Cooling down peer",
+      kv("peer", peer.id.value),
+      kv("cooldownSecs", peerCooldownDefault.toSeconds),
+      kv("reason", reason)
+    )
   }
 }
 

@@ -19,8 +19,11 @@ import Implicits._
   *   \- if enabled the client will send blockchain configuration with each configuration. This is useful to override
   *   configuration for each test, rather than to recreate the VM.
   */
-class VMClient(externalVmConfig: VmConfig.ExternalConfig, messageHandler: MessageHandlerApi, testMode: Boolean)
-    extends Logger {
+class VMClient(
+    @annotation.unused _externalVmConfig: VmConfig.ExternalConfig,
+    messageHandler: MessageHandlerApi,
+    testMode: Boolean
+) extends Logger {
 
   def sendHello(version: String, blockchainConfig: BlockchainConfig): Unit = {
     val config = BlockchainConfigForEvm(blockchainConfig)

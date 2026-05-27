@@ -15,7 +15,6 @@ import scala.util.{Success, Failure}
 import com.chipprbots.ethereum.db.storage.{AppStateStorage, FlatAccountStorage, FlatSlotStorage, StateStorage}
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt._
-import com.chipprbots.ethereum.mpt.MptVisitors._
 import com.chipprbots.ethereum.blockchain.sync.snap.{SNAPSyncConfig, SNAPSyncController, StorageTask}
 import com.chipprbots.ethereum.blockchain.sync.snap.actors
 
@@ -72,7 +71,9 @@ class StorageRecoveryActor(
       context.watch(coordinator)
       val startFrom = appStateStorage.getSnapStorageRecoveryCursor().getOrElse(ByteString.empty)
       if (startFrom.nonEmpty)
-        log.info(s"[STORAGE-RECOVERY] resuming from cursor ${startFrom.take(4).toArray.map("%02x".format(_)).mkString}...")
+        log.info(
+          s"[STORAGE-RECOVERY] resuming from cursor ${startFrom.take(4).toArray.map("%02x".format(_)).mkString}..."
+        )
       launchFlatScan(startFrom = startFrom)
       context.become(scanning(coordinator, sentSoFar = 0))
 
@@ -85,7 +86,6 @@ class StorageRecoveryActor(
         context.stop(self)
       } else {
         log.warning(s"[STORAGE-RECOVERY] found ${missing.size} contracts with missing storage. Starting download...")
-        implicit val scheduler: org.apache.pekko.actor.Scheduler = context.system.scheduler
         val coordinator = makeCoordinator()
         context.watch(coordinator)
         val batchSize = 10000
@@ -130,9 +130,8 @@ class StorageRecoveryActor(
       )
     }
 
-  private def launchFlatScan(batchFlushSize: Int = 10_000, startFrom: ByteString = ByteString.empty): Unit = {
+  private def launchFlatScan(batchFlushSize: Int = 10_000, startFrom: ByteString): Unit = {
     val selfRef = self
-    val stRoot = stateRoot
     val mptStorage = stateStorage.getBackingStorage(pivotBlockNumber)
     val fas = flatAccountStorage
     val aps = appStateStorage

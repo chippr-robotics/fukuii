@@ -4,6 +4,8 @@ import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Cancellable, Props
 
 import scala.concurrent.duration._
 
+import net.logstash.logback.argument.StructuredArguments.kv
+
 import com.chipprbots.ethereum.blockchain.sync.snap._
 
 /** TrieNodeHealingWorker fetches trie nodes from a peer.
@@ -24,7 +26,11 @@ class TrieNodeHealingWorker(
 ) extends Actor
     with ActorLogging {
 
+  private given ActorRef = ActorRef.noSender
+
   import Messages._
+
+  private val slog = org.slf4j.LoggerFactory.getLogger(getClass)
 
   private var currentRequestId: Option[BigInt] = None
   private var idleCheckTask: Option[Cancellable] = None
@@ -42,7 +48,7 @@ class TrieNodeHealingWorker(
     context.become(working)
 
     idleCheckTask = Some(
-      context.system.scheduler.scheduleOnce(30.seconds, self, HealingCheckIdle)(context.dispatcher)
+      context.system.scheduler.scheduleOnce(30.seconds, self, HealingCheckIdle)(context.dispatcher, ActorRef.noSender)
     )
   }
 
@@ -65,7 +71,7 @@ class TrieNodeHealingWorker(
     case HealingRequestTimeout(requestId) =>
       currentRequestId match {
         case Some(reqId) if reqId == requestId =>
-          log.warning(s"Healing request $requestId timed out")
+          slog.warn("Healing request timed out", kv("requestId", requestId.toString))
           coordinator ! HealingTaskFailed(requestId, "Timeout")
           currentRequestId = None
           context.become(idle)

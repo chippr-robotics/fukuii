@@ -241,8 +241,6 @@ class RLPxConnectionHandler(
 
     private var helloAckPending: Boolean = false
     private var helloWriteAcknowledged: Boolean = false
-    private var activeMessageCodec: Option[MessageCodec] = None
-
     private def markHelloAsSent(): Unit = {
       helloAckPending = true
       log.debug("[RLPx] Hello write queued for peer {}", peerId)
@@ -260,8 +258,7 @@ class RLPxConnectionHandler(
         log.debug("[RLPx] Hello write acknowledged for peer {} - deferring compression enable", peerId)
       }
 
-    private def registerMessageCodec(messageCodec: MessageCodec): Unit = {
-      activeMessageCodec = Some(messageCodec)
+    private def registerMessageCodec(messageCodec: MessageCodec): Unit =
       // CRITICAL FIX: Enable inbound compression when MessageCodec is registered
       // This happens after Hello exchange is complete, matching Core-Geth behavior
       // where SetSnappy is called after doProtoHandshake completes.
@@ -269,7 +266,6 @@ class RLPxConnectionHandler(
         messageCodec.enableInboundCompression("handshake-complete")
         log.debug("[RLPx] Enabled inbound compression for peer {} after handshake complete", peerId)
       }
-    }
 
     /** Write a Hello message directly without compression. This is used to handle late Hello messages that arrive after
       * handshake completion, preventing them from being compressed via MessageCodec. Matches HelloCodec.writeHello
@@ -643,8 +639,8 @@ class RLPxConnectionHandler(
         messageCodec: MessageCodec,
         inboundTranslator: InboundTranslator,
         messagesNotSent: Queue[MessageSerializable] = Queue.empty,
-        cancellableAckTimeout: Option[CancellableAckTimeout] = None,
-        seqNumber: Int = 0
+        cancellableAckTimeout: Option[CancellableAckTimeout],
+        seqNumber: Int
     ): Receive =
       handleConnectionTerminated.orElse(handleWriteFailed).orElse(handleConnectionClosed).orElse {
         case SendMessage(h: HelloEnc) =>
