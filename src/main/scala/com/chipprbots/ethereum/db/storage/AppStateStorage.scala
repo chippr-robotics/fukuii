@@ -321,6 +321,67 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     put(Keys.SnapSyncFinalizedRoot, Hex.toHexString(root.toArray))
 
   // ========================================
+  // Healing frontier persistence (Phase 2 A1+B1)
+  // ========================================
+  //
+  // On restart mid-healing, the old recovery path ran a full iterative DFS over all ~90M trie
+  // nodes to rebuild the frontier of missing tasks — taking ~16 hours on ETC mainnet.
+  //
+  // These two keys save the frontier after each successful batch flush so a restart resumes
+  // in O(1) from the last checkpoint rather than re-walking the entire healed trie.
+  //
+  //   FrontierRoot  — the pivot root at checkpoint time; used to detect pivot mismatch
+  //   FrontierData  — serialised pending-task list (coordinator-owned encoding: one entry
+  //                   per line, "hashHex:pathHex1,pathHex2,..." joined with "|")
+  //
+  // Write order: node batch commit → frontier checkpoint (never the reverse).
+  // Cleared on pivot refresh, healing completion, and force-complete.
+
+  def getSnapHealingFrontierRoot(): Option[ByteString] =
+    get(Keys.SnapHealingFrontierRoot).map(v => ByteString(Hex.decode(v)))
+
+  def putSnapHealingFrontierRoot(root: ByteString): DataSourceBatchUpdate =
+    put(Keys.SnapHealingFrontierRoot, Hex.toHexString(root.toArray))
+
+  def getSnapHealingFrontierData(): Option[String] =
+    get(Keys.SnapHealingFrontierData)
+
+  def putSnapHealingFrontierData(data: String): DataSourceBatchUpdate =
+    put(Keys.SnapHealingFrontierData, data)
+
+  def clearSnapHealingFrontier(): DataSourceBatchUpdate =
+    update(toRemove = Seq(Keys.SnapHealingFrontierRoot, Keys.SnapHealingFrontierData), toUpsert = Nil)
+
+  // ========================================
+  // Recovery actor scan cursors (Phase 4 A3)
+  // ========================================
+  //
+  // BytecodeRecoveryActor and StorageRecoveryActor scan all ~90M accounts from position 0.
+  // Without cursors, a crash mid-scan restarts the full O(n) scan. These keys checkpoint
+  // the last committed account hash so restart resumes from the saved position.
+  //
+  // Write order: send ScanBatch to coordinator → write cursor (never the reverse).
+  // Cleared atomically with the done-flag on successful completion.
+
+  def getSnapBytecodeRecoveryCursor(): Option[ByteString] =
+    get(Keys.BytecodeRecoveryCursor).map(v => ByteString(Hex.decode(v)))
+
+  def putSnapBytecodeRecoveryCursor(position: ByteString): DataSourceBatchUpdate =
+    put(Keys.BytecodeRecoveryCursor, Hex.toHexString(position.toArray))
+
+  def clearSnapBytecodeRecoveryCursor(): DataSourceBatchUpdate =
+    update(toRemove = Seq(Keys.BytecodeRecoveryCursor), toUpsert = Nil)
+
+  def getSnapStorageRecoveryCursor(): Option[ByteString] =
+    get(Keys.StorageRecoveryCursor).map(v => ByteString(Hex.decode(v)))
+
+  def putSnapStorageRecoveryCursor(position: ByteString): DataSourceBatchUpdate =
+    put(Keys.StorageRecoveryCursor, Hex.toHexString(position.toArray))
+
+  def clearSnapStorageRecoveryCursor(): DataSourceBatchUpdate =
+    update(toRemove = Seq(Keys.StorageRecoveryCursor), toUpsert = Nil)
+
+  // ========================================
   // Background chain backfill cursors (#1169)
   // ========================================
   //
@@ -425,6 +486,10 @@ object AppStateStorage {
     val BackfillBestHeader = "BackfillBestHeader"
     val BackfillBestBody = "BackfillBestBody"
     val BackfillBestReceipt = "BackfillBestReceipt"
+    val SnapHealingFrontierRoot = "SnapHealingFrontierRoot"
+    val SnapHealingFrontierData = "SnapHealingFrontierData"
+    val BytecodeRecoveryCursor  = "BytecodeRecoveryCursor"
+    val StorageRecoveryCursor   = "StorageRecoveryCursor"
   }
 
 }

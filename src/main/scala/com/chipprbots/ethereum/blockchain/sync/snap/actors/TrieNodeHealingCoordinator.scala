@@ -5,14 +5,16 @@ import org.apache.pekko.actor.SupervisorStrategy._
 import org.apache.pekko.util.ByteString
 import org.bouncycastle.util.encoders.Hex
 
+import net.logstash.logback.argument.StructuredArguments.kv
+
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
-import scala.util.{Failure, Success}
+import scala.util.Try
 
 import com.chipprbots.ethereum.blockchain.sync.snap._
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
-import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.{AppStateStorage, MptStorage}
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.{GetTrieNodes, TrieNodes}
@@ -36,17 +38,22 @@ class TrieNodeHealingCoordinator(
     concurrency: Int,
     healingWriterEcOverride: Option[ExecutionContext] = None,
     stagnationCheckInterval: FiniteDuration = 2.minutes,
-    maxConsecutiveStagnations: Int = 3
+    maxConsecutiveStagnations: Int = 3,
+    appStateStorage: AppStateStorage
 ) extends Actor
     with ActorLogging {
 
   import Messages._
 
-  // Task management — each task has a pathset (for GetTrieNodes) and a hash (for verification).
-  // ArrayDeque (circular buffer) gives O(1) amortized head/tail operations (#1167). The previous
-  // immutable `Seq` did O(n) on every `:+` and head-drop — quadratic at healing scale.
-  private[actors] case class HealingEntry(pathset: Seq[ByteString], hash: ByteString)
-  private[actors] val pendingTasks: mutable.ArrayDeque[HealingEntry] = mutable.ArrayDeque.empty
+  private val slog = org.slf4j.LoggerFactory.getLogger(getClass)
+
+  // Task management — each task has a pathset (for GetTrieNodes), a hash (for verification), and
+  // a depth-first priority. Priority: root=0, children = parent*16 + childIndex (Besu-aligned).
+  // Lower value = dispatched first. PriorityQueue is a min-heap via reversed Ordering (#1167 fixed
+  // O(n²); B4 upgrades to depth-first for RocksDB block-cache locality).
+  private[actors] case class HealingEntry(pathset: Seq[ByteString], hash: ByteString, priority: Long = 0L)
+  private[actors] val pendingTasks: mutable.PriorityQueue[HealingEntry] =
+    mutable.PriorityQueue.empty[HealingEntry](Ordering.by[HealingEntry, Long](_.priority).reverse)
   private var completedTaskCount: Int = 0
 
   /** Dedicated dispatcher for the batched raw-node RocksDB flush. Tests inject their own EC; production looks up
@@ -212,8 +219,36 @@ class TrieNodeHealingCoordinator(
   private case class FlushComplete(count: Int)
 
   // Internal message for async frontier rebuild completion (crash-recovery BFS)
+  // Retained until C1 removes rebuildFrontierDFS
   private case class FrontierRebuilt(entries: Seq[HealingEntry])
   private case class FrontierRebuildFailed(root: ByteString)
+
+  // Frontier serialization: "hashHex:pathHex1,pathHex2,...|hashHex:..." (pipe-separated entries)
+  private def serializeFrontier(entries: Seq[HealingEntry]): String =
+    if (entries.isEmpty) ""
+    else
+      entries.iterator.map { e =>
+        val hashHex = Hex.toHexString(e.hash.toArray)
+        val pathsHex = e.pathset.map(p => Hex.toHexString(p.toArray)).mkString(",")
+        s"$hashHex:$pathsHex"
+      }.mkString("|")
+
+  private def deserializeFrontier(data: String): Seq[HealingEntry] =
+    if (data.isEmpty) Seq.empty
+    else
+      data.split("\\|").toSeq.flatMap { entry =>
+        val colonIdx = entry.indexOf(':')
+        if (colonIdx < 0) None
+        else
+          Try {
+            val hash = ByteString(Hex.decode(entry.substring(0, colonIdx)))
+            val pathsStr = entry.substring(colonIdx + 1)
+            val paths =
+              if (pathsStr.isEmpty) Seq.empty[ByteString]
+              else pathsStr.split(",", -1).toSeq.map(p => ByteString(Hex.decode(p)))
+            HealingEntry(paths, hash)
+          }.toOption
+      }
 
   private var healingCheckTask: Option[Cancellable] = None
 
@@ -283,41 +318,38 @@ class TrieNodeHealingCoordinator(
   override def receive: Receive = {
     case StartTrieNodeHealing(root) =>
       val emptyPath = ByteString(com.chipprbots.ethereum.mpt.HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-      if (isNodeInStorage(root)) {
-        // ARCH-HEAL-RESTART: Root already healed — crash/restart mid-healing detected.
-        // Rebuild the frontier by traversing locally-stored trie nodes instead of re-requesting
-        // known nodes from the network (go-ethereum trie.Sync.Missing() analogue).
-        // Recovery cost: O(healed_nodes × local_read) vs O(healed_nodes × network_rtt).
+      val savedRoot    = appStateStorage.getSnapHealingFrontierRoot()
+      val savedFrontierOpt = appStateStorage.getSnapHealingFrontierData()
+
+      if (savedRoot.contains(root) && savedFrontierOpt.exists(_.nonEmpty)) {
+        // Case A: Saved frontier matches current pivot root — load directly, skip DFS entirely.
+        // O(1) restart: deserialise the frontier and resume dispatching immediately.
+        val entries = deserializeFrontier(savedFrontierOpt.get)
+        if (entries.nonEmpty) {
+          log.info(s"[HEAL-RESTART] Resuming from saved frontier — ${entries.size} tasks loaded, DFS skipped")
+          queueNodes(entries.map(e => (e.pathset, e.hash)))
+          lastHealedAtMs = System.currentTimeMillis()
+          tryRedispatchPendingTasks()
+        } else {
+          // Frontier data present but empty after deserialisation — treat as Case C
+          log.warning("[HEAL-RESTART] Saved frontier empty after deserialisation — seeding root")
+          queueNodes(Seq((Seq(emptyPath), root)))
+          lastHealedAtMs = System.currentTimeMillis()
+        }
+      } else if (isNodeInStorage(root)) {
+        // Case B: Root is healed but saved frontier doesn't match this root (pivot refresh, or
+        // first restart with no frontier written yet).  Seed root and let inline child discovery
+        // populate the queue top-down — O(missing-only) because discoverMissingChildren only
+        // recurses into children that are absent from storage.
+        // One extra GetTrieNodes round-trip for the root; infinitely better than the 16h DFS.
         log.info(
-          s"[HEAL-RESTART] Root ${Hex.toHexString(root.take(8).toArray)} already in local storage " +
-            s"— rebuilding frontier via local DFS in batches of $FrontierBatchSize " +
-            s"(crash recovery, go-ethereum trie.Sync.Missing() depth-first pattern)"
+          s"[HEAL-RESTART] No matching saved frontier — reseeding root ${Hex.toHexString(root.take(8).toArray)} " +
+            s"for inline discovery (O(missing-only), skipping 16h DFS)"
         )
-        val selfRef = self
-        val ec = healingWriterEc
-        import scala.concurrent.Future
-        log.info(s"[HEAL-RESTART] starting DFS frontier rebuild from root ${Hex.toHexString(root.take(8).toArray)}")
-        Future {
-          val frontier = mutable.Buffer.empty[HealingEntry]
-          val visited = mutable.Set.empty[ByteString]
-          rebuildFrontierDFS(
-            root,
-            Seq(emptyPath),
-            isStor = false,
-            frontier,
-            visited,
-            batch => selfRef ! FrontierRebuilt(batch)
-          )
-          if (frontier.nonEmpty) selfRef ! FrontierRebuilt(frontier.toSeq)
-        }(ec).onComplete {
-          case Success(_) =>
-            log.debug("[HEAL-RESTART] DFS complete — frontier rebuilt, resuming healing")
-          case Failure(ex) =>
-            log.error(ex, "[HEAL-RESTART] DFS frontier rebuild failed — seeding root as fallback")
-            selfRef ! FrontierRebuildFailed(root)
-        }(context.dispatcher)
+        queueNodes(Seq((Seq(emptyPath), root)))
+        lastHealedAtMs = System.currentTimeMillis()
       } else {
-        // ARCH-ROOT-SEED: Fresh start — seed root and let inline discovery populate the queue.
+        // Case C: Fresh start — root not yet healed. Seed root and let inline discovery run.
         log.info(
           s"[HEAL] Root ${Hex.toHexString(root.take(8).toArray)} not yet in storage " +
             s"— seeding root for inline child discovery (Besu-aligned top-down)"
@@ -404,6 +436,7 @@ class TrieNodeHealingCoordinator(
       activeRequests.clear()
       pendingTasks.clear()
       pendingHashSet.clear()
+      appStateStorage.clearSnapHealingFrontier().commit()
       snapSyncController ! SNAPSyncController.StateHealingComplete
       context.stop(self)
 
@@ -418,6 +451,7 @@ class TrieNodeHealingCoordinator(
       flushRawNodesSync() // Flush any buffered nodes before clearing state
       pendingTasks.clear() // Will be re-populated by root reseed + inline discovery / trie walk from controller
       pendingHashSet.clear()
+      appStateStorage.clearSnapHealingFrontier().commit() // Stale frontier for old root must not be loaded on restart
       statelessPeers.clear()
       peerCooldownUntilMs.clear()
       peerResponseBytesTarget.clear()
@@ -453,6 +487,13 @@ class TrieNodeHealingCoordinator(
       rawNodeBuffer.remove(0, count)
       flushing = false
       log.debug(s"[HEAL-FLUSH] complete: $count nodes written (total: $totalNodesHealed)")
+      // Write frontier checkpoint AFTER the node batch is durably committed (timing invariant:
+      // write after persist(), not before — a pre-write checkpoint pointing to uncommitted
+      // nodes would corrupt the frontier on a crash between the two writes).
+      appStateStorage
+        .putSnapHealingFrontierRoot(stateRoot)
+        .and(appStateStorage.putSnapHealingFrontierData(serializeFrontier(pendingTasks.toSeq)))
+        .commit()
       // Drain any nodes that accumulated while the flush was in-flight
       if (rawNodeBuffer.nonEmpty) flushRawNodesAsync()
       self ! HealingCheckCompletion
@@ -470,6 +511,7 @@ class TrieNodeHealingCoordinator(
     case HealingCheckCompletion =>
       if (isComplete && !flushing && !trieWalkInProgress) {
         flushRawNodesSync()
+        appStateStorage.clearSnapHealingFrontier().commit()
         log.info(s"Healing round complete: $totalNodesHealed total nodes healed. Notifying controller.")
         snapSyncController ! SNAPSyncController.StateHealingComplete
       }
@@ -484,19 +526,28 @@ class TrieNodeHealingCoordinator(
       val recentHealed = totalNodesHealed - lastPulseHealedCount
       val healTotal = completedTaskCount.toLong + pendingTasks.size.toLong + activeRequests.size.toLong
       val healPct = if (healTotal > 0) ((completedTaskCount.toDouble / healTotal) * 100).toInt else 0
-      log.info(
-        s"[HEAL-PULSE] $healPct% (est, frontier grows) | healed=$totalNodesHealed (+$recentHealed last 2min) | " +
-          s"frontier=$healTotal (+${healTotal - lastFrontierSize} since last pulse) | " +
-          s"pending=${pendingTasks.size} active=${activeRequests.size} peers=${knownAvailablePeers.size} | " +
-          s"rate=${healRate.toInt} nodes/s | walkRunning=$trieWalkInProgress pivotRefreshPending=$pivotRefreshRequested"
+      slog.info("[HEAL-PULSE]",
+        kv("pct", healPct),
+        kv("healed", totalNodesHealed),
+        kv("recentHealed", recentHealed),
+        kv("frontier", healTotal),
+        kv("frontierGrowth", healTotal - lastFrontierSize),
+        kv("pending", pendingTasks.size),
+        kv("active", activeRequests.size),
+        kv("peers", knownAvailablePeers.size),
+        kv("rate", healRate.toInt),
+        kv("walkRunning", trieWalkInProgress),
+        kv("pivotRefreshPending", pivotRefreshRequested)
       )
       val (newM, crossed) =
         com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
           .crossed(completedTaskCount.toLong, healTotal, healingMilestonePct)
       healingMilestonePct = newM
       crossed.foreach { m =>
-        log.info(
-          s"[HEAL-MILESTONE] $m% (est) — ${completedTaskCount} healed | ${healRate.toInt} nodes/s"
+        slog.info("[HEAL-MILESTONE]",
+          kv("pct", m),
+          kv("healed", completedTaskCount),
+          kv("rate", healRate.toInt)
         )
       }
       lastPulseHealedCount = totalNodesHealed
@@ -522,14 +573,18 @@ class TrieNodeHealingCoordinator(
       // Catches the case where active > 0 but all responses are empty (stale root, ETH mainnet peers).
       if (recentHealed == 0 && pendingTasks.nonEmpty && !pivotRefreshRequested) {
         consecutiveStagnations += 1
-        log.warning(
-          s"[HEAL-STAGNATION] Zero progress in last 2min — stagnation $consecutiveStagnations/$maxConsecutiveStagnations. " +
-            s"healed=$totalNodesHealed pending=${pendingTasks.size} peers=${knownAvailablePeers.size}"
+        slog.warn("[HEAL-STAGNATION] Zero progress in last 2min",
+          kv("consecutiveStagnations", consecutiveStagnations),
+          kv("maxConsecutiveStagnations", maxConsecutiveStagnations),
+          kv("healed", totalNodesHealed),
+          kv("pending", pendingTasks.size),
+          kv("peers", knownAvailablePeers.size)
         )
         if (consecutiveStagnations >= maxConsecutiveStagnations) {
-          log.warning(
-            s"[HEAL-STAGNATION] $maxConsecutiveStagnations consecutive zero-progress cycles — " +
-              s"notifying controller to restart healing with fresh pivot"
+          slog.warn("[HEAL-STAGNATION] Consecutive zero-progress cycles exceeded threshold, notifying controller",
+            kv("consecutiveStagnations", maxConsecutiveStagnations),
+            kv("healed", totalNodesHealed),
+            kv("pending", pendingTasks.size)
           )
           snapSyncController ! HealingStagnated(totalNodesHealed.toLong, pendingTasks.size.toLong)
           consecutiveStagnations = 0
@@ -672,11 +727,34 @@ class TrieNodeHealingCoordinator(
     }
 
     val effectiveBatch = effectiveBatchSize
-    val takeCount = effectiveBatch.min(pendingTasks.size)
-    val batch: Seq[HealingEntry] = pendingTasks.iterator.take(takeCount).toSeq
-    pendingTasks.dropInPlace(takeCount)
-    // Remove dispatched hashes from dedup set (they'll be re-added if re-queued on failure)
-    batch.foreach(e => pendingHashSet -= e.hash)
+    val batchBuilder = Vector.newBuilder[HealingEntry]
+    var taken = 0
+    var skippedLocal = 0
+
+    // B4: Dequeue in depth-first priority order (lower priority value = dispatched first).
+    // A2: Skip tasks already in local storage — avoids redundant network round-trips.
+    while (taken < effectiveBatch && pendingTasks.nonEmpty) {
+      val task = pendingTasks.dequeue()
+      pendingHashSet -= task.hash
+      if (isNodeInStorage(task.hash)) {
+        completedTaskCount += 1
+        skippedLocal += 1
+      } else {
+        batchBuilder += task
+        taken += 1
+      }
+    }
+
+    if (skippedLocal > 0) {
+      lastHealedAtMs = System.currentTimeMillis()
+      log.debug(s"[HEAL-DISPATCH] A2: $skippedLocal tasks already in local storage, counted as completed")
+    }
+
+    val batch = batchBuilder.result()
+    if (batch.isEmpty) {
+      self ! HealingCheckCompletion
+      return None
+    }
 
     val requestId = requestTracker.generateRequestId()
     val responseBytes = responseBytesTargetFor(peer)
@@ -716,8 +794,6 @@ class TrieNodeHealingCoordinator(
     val requestId = response.requestId
     val nodes = response.nodes
 
-    log.debug(s"Received TrieNodes response: reqId=$requestId, nodes=${nodes.size}")
-
     val activeReq = activeRequests.get(requestId) match {
       case Some(req) => req
       case None =>
@@ -728,10 +804,18 @@ class TrieNodeHealingCoordinator(
     val tasksForRequest = activeReq.tasks
     val peer = activeReq.peer
     val requestedBytes = activeReq.requestedBytes
+    val receivedNodeBytes = nodes.foldLeft(0L)(_ + _.size)
+
+    slog.debug("Received TrieNodes response",
+      kv("reqId", requestId.toString),
+      kv("nodes", nodes.size),
+      kv("bytes", receivedNodeBytes),
+      kv("peer", peer.id.value)
+    )
 
     if (activeReq.rootAtDispatch != stateRoot) {
       log.warning(
-        s"[HEAL] stale-root response discarded " +
+        s"[HEAL] stale-root response discarded peer=${peer.id.value} " +
           s"(dispatched=${Hex.toHexString(activeReq.rootAtDispatch.take(4).toArray)}, " +
           s"current=${Hex.toHexString(stateRoot.take(4).toArray)}) " +
           s"— re-queuing ${tasksForRequest.size} paths"
@@ -769,10 +853,10 @@ class TrieNodeHealingCoordinator(
           // Inline child discovery — Besu/geth aligned scheduler approach.
           // Each healed node is decoded to find missing children; queue them directly
           // without waiting for a full 3h trie walk. Walk becomes validation-only.
-          taskByHash.get(nodeHash).foreach(task => discoverMissingChildren(nodeData, task.pathset))
+          taskByHash.get(nodeHash).foreach(task => discoverMissingChildren(nodeData, task.pathset, task.priority))
         } else {
           log.debug(
-            s"Healing response node not in request set (unexpected): ${Hex.toHexString(nodeHash.take(4).toArray)}"
+            s"Healing response node not in request set (unexpected): ${Hex.toHexString(nodeHash.take(4).toArray)} peer=${peer.id.value}"
           )
         }
       }
@@ -1058,7 +1142,7 @@ class TrieNodeHealingCoordinator(
     * discovers child hashes, checks storage, queues missing children. Makes healing self-feeding: root → children →
     * grandchildren top-down without trie walk.
     */
-  private def discoverMissingChildren(nodeData: ByteString, pathset: Seq[ByteString]): Unit = {
+  private def discoverMissingChildren(nodeData: ByteString, pathset: Seq[ByteString], parentPriority: Long): Unit = {
     import com.chipprbots.ethereum.mpt.{MptTraversals, BranchNode, ExtensionNode, HashNode, LeafNode}
     import com.chipprbots.ethereum.mpt.HexPrefix
     import com.chipprbots.ethereum.domain.Account
@@ -1084,7 +1168,7 @@ class TrieNodeHealingCoordinator(
                   val childNibbles = parentNibbles :+ i.toByte
                   val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
                   val childPathset = if (isStorageTrie) Seq(pathset.head, childCompact) else Seq(childCompact)
-                  newEntries += HealingEntry(childPathset, childHash)
+                  newEntries += HealingEntry(childPathset, childHash, parentPriority * 16 + i)
                 }
               case _ => // Inline-encoded or null — already resolved
             }
@@ -1097,7 +1181,7 @@ class TrieNodeHealingCoordinator(
                 val childNibbles = parentNibbles ++ ext.sharedKey.toArray
                 val childCompact = ByteString(HexPrefix.encode(childNibbles, isLeaf = false))
                 val childPathset = if (isStorageTrie) Seq(pathset.head, childCompact) else Seq(childCompact)
-                newEntries += HealingEntry(childPathset, childHash)
+                newEntries += HealingEntry(childPathset, childHash, parentPriority * 16)
               }
             case _ => // Already inline-encoded — no missing child
           }
@@ -1122,7 +1206,7 @@ class TrieNodeHealingCoordinator(
                   .toArray
                 val accountHash = ByteString(accountHashBytes)
                 val emptyStoragePath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-                newEntries += HealingEntry(Seq(accountHash, emptyStoragePath), account.storageRoot)
+                newEntries += HealingEntry(Seq(accountHash, emptyStoragePath), account.storageRoot, parentPriority * 16)
                 log.debug(
                   s"[HEAL-LEAF] Seeded storage trie root ${Hex.toHexString(account.storageRoot.take(4).toArray)} " +
                     s"for account ${Hex.toHexString(accountHashBytes.take(4))}"
@@ -1169,7 +1253,9 @@ object TrieNodeHealingCoordinator {
       concurrency: Int = 16,
       healingWriterEcOverride: Option[ExecutionContext] = None,
       stagnationCheckInterval: FiniteDuration = 2.minutes,
-      maxConsecutiveStagnations: Int = 3
+      maxConsecutiveStagnations: Int = 3,
+      appStateStorage: AppStateStorage =
+        new AppStateStorage(com.chipprbots.ethereum.db.dataSource.EphemDataSource())
   ): Props =
     Props(
       new TrieNodeHealingCoordinator(
@@ -1182,7 +1268,8 @@ object TrieNodeHealingCoordinator {
         concurrency,
         healingWriterEcOverride,
         stagnationCheckInterval,
-        maxConsecutiveStagnations
+        maxConsecutiveStagnations,
+        appStateStorage
       )
     )
 }

@@ -70,14 +70,17 @@ class StorageRecoveryActor(
     case StartScan =>
       val coordinator = makeCoordinator()
       context.watch(coordinator)
-      launchFlatScan()
+      val startFrom = appStateStorage.getSnapStorageRecoveryCursor().getOrElse(ByteString.empty)
+      if (startFrom.nonEmpty)
+        log.info(s"[STORAGE-RECOVERY] resuming from cursor ${startFrom.take(4).toArray.map("%02x".format(_)).mkString}...")
+      launchFlatScan(startFrom = startFrom)
       context.become(scanning(coordinator, sentSoFar = 0))
 
     // Legacy path for preloadedMissingForTesting — sends all tasks at once and seals.
     case ScanResult(missing) =>
       if (missing.isEmpty) {
         log.info("[STORAGE-RECOVERY] [scan] complete — no missing storage found")
-        appStateStorage.storageRecoveryDone().commit()
+        appStateStorage.clearSnapStorageRecoveryCursor().and(appStateStorage.storageRecoveryDone()).commit()
         syncController ! RecoveryComplete
         context.stop(self)
       } else {
@@ -127,11 +130,12 @@ class StorageRecoveryActor(
       )
     }
 
-  private def launchFlatScan(batchFlushSize: Int = 10_000): Unit = {
+  private def launchFlatScan(batchFlushSize: Int = 10_000, startFrom: ByteString = ByteString.empty): Unit = {
     val selfRef = self
     val stRoot = stateRoot
     val mptStorage = stateStorage.getBackingStorage(pivotBlockNumber)
     val fas = flatAccountStorage
+    val aps = appStateStorage
     val approxTotal = fas.approximateKeyCount()
     Future {
       blocking {
@@ -144,10 +148,13 @@ class StorageRecoveryActor(
         var lastScanMilestonePct: Int = -1
         var lastHeartbeatNanos = System.nanoTime()
         var lastHeartbeatAccounts = 0L
+        var lastAccountHash: ByteString = startFrom
 
-        fas.seekFrom(ByteString.empty)
+        fas
+          .seekFrom(startFrom)
           .evalMap {
             case Right((accountHash, rlpBytes)) =>
+              lastAccountHash = accountHash
               IO {
                 accounts += 1
                 if (accounts % 1_000_000 == 0) {
@@ -193,6 +200,7 @@ class StorageRecoveryActor(
                           if (pending.size >= batchFlushSize) {
                             selfRef ! ScanBatch(pending.toSeq)
                             pending.clear()
+                            aps.putSnapStorageRecoveryCursor(lastAccountHash).commit()
                           }
                       }
                     }
@@ -228,7 +236,7 @@ class StorageRecoveryActor(
 
     case ScanComplete if sentSoFar == 0 =>
       log.info("[STORAGE-RECOVERY] [scan] complete — no missing storage found")
-      appStateStorage.storageRecoveryDone().commit()
+      appStateStorage.clearSnapStorageRecoveryCursor().and(appStateStorage.storageRecoveryDone()).commit()
       syncController ! RecoveryComplete
       context.stop(self)
 
@@ -242,7 +250,7 @@ class StorageRecoveryActor(
 
     case Terminated(`coordinator`) =>
       log.error("[STORAGE-RECOVERY] coordinator crashed during scan — marking done and unblocking sync")
-      appStateStorage.storageRecoveryDone().commit()
+      appStateStorage.clearSnapStorageRecoveryCursor().and(appStateStorage.storageRecoveryDone()).commit()
       syncController ! RecoveryComplete
       context.stop(self)
   }
@@ -282,7 +290,7 @@ class StorageRecoveryActor(
           s"[STORAGE-RECOVERY] [download] 100% — $expectedCount / $expectedCount storage roots recovered — COMPLETE"
         )
         abandonTimer.foreach(_.cancel())
-        appStateStorage.storageRecoveryDone().commit()
+        appStateStorage.clearSnapStorageRecoveryCursor().and(appStateStorage.storageRecoveryDone()).commit()
         syncController ! RecoveryComplete
         context.stop(self)
 
@@ -336,7 +344,7 @@ class StorageRecoveryActor(
       case Terminated(`coordinator`) =>
         log.error("[STORAGE-RECOVERY] coordinator crashed — marking done and unblocking sync")
         abandonTimer.foreach(_.cancel())
-        appStateStorage.storageRecoveryDone().commit()
+        appStateStorage.clearSnapStorageRecoveryCursor().and(appStateStorage.storageRecoveryDone()).commit()
         syncController ! RecoveryComplete
         context.stop(self)
 

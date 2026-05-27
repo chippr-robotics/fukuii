@@ -67,14 +67,17 @@ class BytecodeRecoveryActor(
     case StartScan =>
       val coordinator = makeCoordinator()
       context.watch(coordinator)
-      launchFlatScan()
+      val startFrom = appStateStorage.getSnapBytecodeRecoveryCursor().getOrElse(ByteString.empty)
+      if (startFrom.nonEmpty)
+        log.info(s"[BYTECODE-RECOVERY] resuming from cursor ${startFrom.take(4).toArray.map("%02x".format(_)).mkString}...")
+      launchFlatScan(startFrom = startFrom)
       context.become(scanning(coordinator, sentSoFar = 0))
 
     // Legacy path for preloadedMissingForTesting — sends all tasks at once and seals.
     case ScanResult(missing) =>
       if (missing.isEmpty) {
         log.info("[BYTECODE-RECOVERY] [scan] complete — no missing bytecodes found")
-        appStateStorage.bytecodeRecoveryDone().commit()
+        appStateStorage.clearSnapBytecodeRecoveryCursor().and(appStateStorage.bytecodeRecoveryDone()).commit()
         syncController ! RecoveryComplete
         context.stop(self)
       } else {
@@ -113,10 +116,11 @@ class BytecodeRecoveryActor(
       )
     }
 
-  private def launchFlatScan(batchFlushSize: Int = 10_000): Unit = {
+  private def launchFlatScan(batchFlushSize: Int = 10_000, startFrom: ByteString = ByteString.empty): Unit = {
     val selfRef = self
     val fas = flatAccountStorage
     val ecs = evmCodeStorage
+    val aps = appStateStorage
     val approxTotal = fas.approximateKeyCount()
     Future {
       blocking {
@@ -129,10 +133,13 @@ class BytecodeRecoveryActor(
         var lastScanMilestonePct: Int = -1
         var lastHeartbeatNanos = System.nanoTime()
         var lastHeartbeatAccounts = 0L
+        var lastAccountHash: ByteString = startFrom
 
-        fas.seekFrom(ByteString.empty)
+        fas
+          .seekFrom(startFrom)
           .evalMap {
-            case Right((_, rlpBytes)) =>
+            case Right((accountHash, rlpBytes)) =>
+              lastAccountHash = accountHash
               IO {
                 accounts += 1
                 if (accounts % 1_000_000 == 0) {
@@ -176,6 +183,7 @@ class BytecodeRecoveryActor(
                         if (pending.size >= batchFlushSize) {
                           selfRef ! ScanBatch(pending.toSeq)
                           pending.clear()
+                          aps.putSnapBytecodeRecoveryCursor(lastAccountHash).commit()
                         }
                       }
                     }
@@ -208,7 +216,7 @@ class BytecodeRecoveryActor(
 
     case ScanComplete if sentSoFar == 0 =>
       log.info("[BYTECODE-RECOVERY] [scan] complete — no missing bytecodes found")
-      appStateStorage.bytecodeRecoveryDone().commit()
+      appStateStorage.clearSnapBytecodeRecoveryCursor().and(appStateStorage.bytecodeRecoveryDone()).commit()
       syncController ! RecoveryComplete
       context.stop(self)
 
@@ -222,7 +230,7 @@ class BytecodeRecoveryActor(
 
     case Terminated(`coordinator`) =>
       log.error("[BYTECODE-RECOVERY] coordinator crashed during scan — marking done and unblocking sync")
-      appStateStorage.bytecodeRecoveryDone().commit()
+      appStateStorage.clearSnapBytecodeRecoveryCursor().and(appStateStorage.bytecodeRecoveryDone()).commit()
       syncController ! RecoveryComplete
       context.stop(self)
   }
@@ -246,7 +254,7 @@ class BytecodeRecoveryActor(
 
     def finishRecovery(): Unit = {
       abandonTimer.foreach(_.cancel())
-      appStateStorage.bytecodeRecoveryDone().commit()
+      appStateStorage.clearSnapBytecodeRecoveryCursor().and(appStateStorage.bytecodeRecoveryDone()).commit()
       syncController ! RecoveryComplete
       context.stop(self)
     }

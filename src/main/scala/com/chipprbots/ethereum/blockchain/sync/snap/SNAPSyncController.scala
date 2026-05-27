@@ -3,6 +3,8 @@ package com.chipprbots.ethereum.blockchain.sync.snap
 import org.apache.pekko.actor.{Actor, ActorLogging, ActorRef, Props, Scheduler, Cancellable}
 import org.apache.pekko.util.ByteString
 
+import net.logstash.logback.argument.StructuredArguments.kv
+
 import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext
 import scala.collection.mutable
@@ -38,6 +40,8 @@ class SNAPSyncController(
     extends Actor
     with ActorLogging
     with PeerListSupportNg {
+
+  private val slog = org.slf4j.LoggerFactory.getLogger(getClass)
 
   // Dedicated dispatcher for the long-running synchronous trie walks inside
   // `validateState()`. See `pekko.conf` for the rationale.
@@ -530,25 +534,39 @@ class SNAPSyncController(
             }
           }
         case _ =>
-          log.debug(s"Received AccountRange response: requestId=${msg.requestId}, accounts=${msg.accounts.size}")
+          slog.debug("Received AccountRange response",
+            kv("requestId", msg.requestId.toString),
+            kv("accounts", msg.accounts.size),
+            kv("proofNodes", msg.proof.size)
+          )
           // Forward to the account range coordinator (it owns the workers).
           accountRangeCoordinator.foreach(_ ! actors.Messages.AccountRangeResponseMsg(msg))
       }
 
     case msg: ByteCodes =>
-      log.debug(s"Received ByteCodes response: requestId=${msg.requestId}, codes=${msg.codes.size}")
-
+      slog.debug("Received ByteCodes response",
+        kv("requestId", msg.requestId.toString),
+        kv("codes", msg.codes.size),
+        kv("bytes", msg.codes.foldLeft(0)(_ + _.size))
+      )
       // Forward to the bytecode coordinator (it owns the workers).
       bytecodeCoordinator.foreach(_ ! actors.Messages.ByteCodesResponseMsg(msg))
 
     case msg: StorageRanges =>
-      log.debug(s"Received StorageRanges response: requestId=${msg.requestId}, slots=${msg.slots.size}")
-
+      slog.debug("Received StorageRanges response",
+        kv("requestId", msg.requestId.toString),
+        kv("contracts", msg.slots.size),
+        kv("slots", msg.slots.map(_.size).sum)
+      )
       // Forward to the storage range coordinator (it owns the workers).
       storageRangeCoordinator.foreach(_ ! actors.Messages.StorageRangesResponseMsg(msg))
 
     case msg: TrieNodes =>
-      log.debug(s"Received TrieNodes response: requestId=${msg.requestId}, nodes=${msg.nodes.size}")
+      slog.debug("Received TrieNodes response",
+        kv("requestId", msg.requestId.toString),
+        kv("nodes", msg.nodes.size),
+        kv("bytes", msg.nodes.foldLeft(0)(_ + _.size))
+      )
 
       // Forward to the trie node healing coordinator (it owns the workers).
       // Don't forward during validation — the healing coordinator has already
@@ -841,7 +859,9 @@ class SNAPSyncController(
         log.info("Ignoring duplicate AccountRangeSyncComplete")
       } else {
         accountsComplete = true
-        log.info("Account range sync complete. Signaling NoMore to bytecode/storage coordinators.")
+        slog.info("Account range sync complete, signaling NoMore to bytecode/storage coordinators",
+          kv("accounts", progressMonitor.currentProgress.accountsSynced)
+        )
 
         // Persist accounts-complete flag for crash recovery (Step 7)
         appStateStorage.putSnapSyncAccountsComplete(true).commit()
@@ -915,8 +935,10 @@ class SNAPSyncController(
       appStateStorage.putSnapSyncBytecodeComplete(true).commit()
       progressMonitor.setBytecodeComplete()
       val downloaded = progressMonitor.currentProgress.bytecodesDownloaded
-      log.info(
-        s"ByteCode sync complete ($downloaded bytecodes). Storage: $storagePhaseComplete, Accounts: $accountsComplete"
+      slog.info("ByteCode sync complete",
+        kv("bytecodes", downloaded),
+        kv("storageComplete", storagePhaseComplete),
+        kv("accountsComplete", accountsComplete)
       )
       // Bytecode done — give storage the full per-peer budget (was 3/5, now 5/5).
       // On peer-limited networks (Mordor: ~10 peers), this nearly doubles storage throughput.
@@ -934,7 +956,10 @@ class SNAPSyncController(
       storagePhaseComplete = true
       storagePhaseForceCompleted = false
       appStateStorage.putSnapSyncStorageComplete(true).commit()
-      log.info(s"Storage range sync complete. ByteCode: $bytecodePhaseComplete, Accounts: $accountsComplete")
+      slog.info("Storage range sync complete",
+        kv("bytecodeComplete", bytecodePhaseComplete),
+        kv("accountsComplete", accountsComplete)
+      )
       checkAllDownloadsComplete()
 
     case StorageRangeSyncForceCompleted if !storagePhaseComplete =>
@@ -963,14 +988,17 @@ class SNAPSyncController(
     // clears stale tasks + stateless peers, re-seeds new root top-down (Besu-aligned).
     // Do NOT stop coordinator — refreshPivotInPlace sends HealingPivotRefreshed to it directly.
     case actors.Messages.HealingStagnated(healed, pending) if currentPhase == StateHealing =>
-      log.warning(
-        s"[HEAL-STAGNATED] Healing stuck: healed=$healed pending=$pending — " +
-          s"refreshing pivot for fresh healing round"
+      slog.warn("[HEAL-STAGNATED] Healing stuck, refreshing pivot",
+        kv("healed", healed),
+        kv("pending", pending)
       )
       refreshPivotInPlace("healing-stagnated")
 
     case StateHealingComplete =>
-      log.info("Healing coordinator signaled complete (no pending tasks, no active requests).")
+      slog.info("Healing coordinator signaled complete",
+        kv("phase", currentPhase.toString),
+        kv("trieWalkInProgress", trieWalkInProgress)
+      )
       if (trieWalkInProgress) {
         // A trie walk is already running — its result will determine next step
         log.info("Trie walk in progress, waiting for result...")
@@ -3085,7 +3113,8 @@ class SNAPSyncController(
               snapSyncController = self,
               concurrency = snapSyncConfig.healingConcurrency,
               stagnationCheckInterval = snapSyncConfig.snapHealingConfig.stagnationCheckInterval,
-              maxConsecutiveStagnations = snapSyncConfig.snapHealingConfig.maxConsecutiveStagnations
+              maxConsecutiveStagnations = snapSyncConfig.snapHealingConfig.maxConsecutiveStagnations,
+              appStateStorage = appStateStorage
             )
             .withDispatcher("sync-dispatcher"),
           s"trie-node-healing-coordinator-$coordinatorGeneration"
@@ -3138,7 +3167,8 @@ class SNAPSyncController(
                   mptStorage = storage,
                   batchSize = snapSyncConfig.healingBatchSize,
                   snapSyncController = self,
-                  concurrency = snapSyncConfig.healingConcurrency
+                  concurrency = snapSyncConfig.healingConcurrency,
+                  appStateStorage = appStateStorage
                 )
                 .withDispatcher("sync-dispatcher"),
               s"trie-node-healing-coordinator-$coordinatorGeneration"
