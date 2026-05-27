@@ -58,6 +58,10 @@ import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 // scalastyle:off file.size.limit
+// DEPRECATED: FastSync uses ETH63 GetNodeData which was removed from the ETH protocol spec in
+// ETH67/EIP-4444. The active fallback path was replaced by dormant retry mode in B6 (Phase 1).
+// This class is retained for the transition period; removal trigger and scope documented in:
+// .local/docs/codebase-review-may-2026/fast-sync-deprecation-plan.md
 class FastSync(
     val fastSyncStateStorage: FastSyncStateStorage,
     val appStateStorage: AppStateStorage,

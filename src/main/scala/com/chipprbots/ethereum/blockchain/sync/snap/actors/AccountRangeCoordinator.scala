@@ -499,13 +499,13 @@ class AccountRangeCoordinator(
   private def isPeerCoolingDown(peer: Peer): Boolean =
     peerCooldownUntilMs.get(peer.id.value).exists(_ > System.currentTimeMillis())
 
-  private def recordPeerCooldown(peer: Peer, reason: String, duration: FiniteDuration): Unit = {
+  private def recordPeerCooldown(peer: Peer, reason: String, duration: FiniteDuration = peerCooldownDefault): Unit = {
     val until = System.currentTimeMillis() + duration.toMillis
     peerCooldownUntilMs.put(peer.id.value, until)
     slog.debug(
       "Cooling down peer",
       kv("peer", peer.id.value),
-      kv("cooldownSecs", peerCooldownDefault.toSeconds),
+      kv("cooldownSecs", duration.toSeconds),
       kv("reason", reason)
     )
   }

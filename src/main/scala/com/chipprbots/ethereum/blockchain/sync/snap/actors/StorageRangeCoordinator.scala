@@ -190,12 +190,7 @@ class StorageRangeCoordinator(
   // refresh → infinite tight loop. This cooldown prevents ALL dispatch paths (tryRedispatchPendingTasks,
   // StoragePeerAvailable, StorageCheckCompletion) from sending requests until peers have had time.
   private var postRefreshCooldownUntilMs: Long = 0
-  // 5 s (was 10 s) post-pivot cooldown. With ~22 pivot refreshes per long sync, every
-  // second here is `22 ×` lost throughput. The fresh pivot is typically only ~30 blocks
-  // newer than the previous one; peers that served the old root almost always serve the
-  // new one within a couple of seconds. 5 s is enough to avoid the tight "empty →
-  // mark-stateless → refresh" loop without burning aggregate sync time.
-  private val postRefreshCooldownMs: Long = 5000L
+  private val postRefreshCooldownMs: Long = 5000L // 5 seconds after pivot refresh
 
   // Consecutive idle dispatch checks: counts tryRedispatchPendingTasks() calls where tasks are
   // pending but zero eligible peers and zero active requests exist. At threshold, requests a

@@ -253,12 +253,6 @@ object Messages {
     * Controller should stop coordinator, clear walk checkpoint, refresh pivot.
     */
   case class HealingStagnated(healed: Long, pending: Long) extends TrieNodeHealingCoordinatorMessage
-
-  /** Sent by SNAPSyncController when pivot advanced beyond SNAP serve window during healing (Besu reloadTrieHeal
-    * pattern). Coordinator abandons pending tasks and signals completion so a fresh coordinator + walk can start for
-    * the new root.
-    */
-  case object HealingForceComplete extends TrieNodeHealingCoordinatorMessage
   case class WalkStateChanged(inProgress: Boolean) extends TrieNodeHealingCoordinatorMessage
 
   sealed trait TrieNodeHealingWorkerMessage

@@ -188,29 +188,6 @@ class TrieNodeHealingCoordinatorSpec
     expectMsgType[Any](3.seconds)
   }
 
-  it should "signal StateHealingComplete to controller on HealingForceComplete" taggedAs UnitTest in {
-    val stateRoot = kec256(ByteString("force-complete-root"))
-    val storage = new TestMptStorage()
-    val requestTracker = new SNAPRequestTracker()(system.scheduler)
-    val networkPeerManager = TestProbe()
-    val snapSyncController = TestProbe()
-
-    val coordinator = system.actorOf(
-      TrieNodeHealingCoordinator.props(
-        stateRoot = stateRoot,
-        networkPeerManager = networkPeerManager.ref,
-        requestTracker = requestTracker,
-        mptStorage = storage,
-        batchSize = 16,
-        snapSyncController = snapSyncController.ref
-      )
-    )
-
-    coordinator ! Messages.HealingForceComplete
-
-    snapSyncController.expectMsg(3.seconds, SNAPSyncController.StateHealingComplete)
-  }
-
   it should "accept HealingPivotRefreshed and re-seed new root — HealingCheckCompletion deferred" taggedAs UnitTest in {
     // After pivot refresh the coordinator re-seeds the new root into pendingTasks.
     // isComplete = pendingTasks.isEmpty && activeRequests.isEmpty = false.
@@ -375,48 +352,6 @@ class TrieNodeHealingCoordinatorSpec
     coordinator should not be null
     coordinator ! Messages.HealingGetProgress
     expectMsgType[HealingStatistics](2.seconds)
-  }
-
-  it should "signal StateHealingComplete on HealingForceComplete even with pending tasks in flight" taggedAs UnitTest in {
-    // HealingForceComplete is the SNAPSyncController's nuclear option: when the pivot has
-    // advanced beyond the SNAP serve window, healing must abandon pending tasks immediately
-    // rather than waiting for them to drain normally.
-    val stateRoot = kec256(ByteString("force-complete-with-tasks-root"))
-    val storage = new TestMptStorage()
-    val requestTracker = new SNAPRequestTracker()(system.scheduler)
-    val networkPeerManager = TestProbe()
-    val snapSyncController = TestProbe()
-    val peerProbe = TestProbe()
-
-    val peer = PeerTestHelpers.createTestPeer("force-heal-peer", peerProbe.ref)
-
-    val coordinator = system.actorOf(
-      TrieNodeHealingCoordinator.props(
-        stateRoot = stateRoot,
-        networkPeerManager = networkPeerManager.ref,
-        requestTracker = requestTracker,
-        mptStorage = storage,
-        batchSize = 16,
-        snapSyncController = snapSyncController.ref
-      )
-    )
-
-    // Queue tasks and make a peer available so some become active
-    val nodeHash1 = kec256(ByteString("node-force-1"))
-    val nodeHash2 = kec256(ByteString("node-force-2"))
-    coordinator ! Messages.StartTrieNodeHealing(stateRoot)
-    coordinator ! Messages.QueueMissingNodes(
-      Seq(
-        (Seq(ByteString(Array[Byte](0x00))), nodeHash1),
-        (Seq(ByteString(Array[Byte](0x01))), nodeHash2)
-      )
-    )
-    coordinator ! Messages.HealingPeerAvailable(peer)
-    networkPeerManager.expectMsgType[Any](3.seconds) // task dispatched
-
-    // ForceComplete while tasks are in-flight: abandon all, signal complete immediately
-    coordinator ! Messages.HealingForceComplete
-    snapSyncController.expectMsg(3.seconds, SNAPSyncController.StateHealingComplete)
   }
 
   // ── Category 1e: HealingStagnated counter semantics ───────────────────────────────────────────

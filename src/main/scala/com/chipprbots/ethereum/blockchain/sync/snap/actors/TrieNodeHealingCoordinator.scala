@@ -441,20 +441,6 @@ class TrieNodeHealingCoordinator(
       maxInFlightPerPeer = newLimit
       if (newLimit > 0) tryRedispatchPendingTasks()
 
-    case HealingForceComplete =>
-      log.warning(
-        s"[HEAL-FORCE-COMPLETE] Pivot advanced beyond SNAP serve window — " +
-          s"clearing ${pendingTasks.size} pending tasks + ${activeRequests.size} in-flight. " +
-          s"Signaling completion with $totalNodesHealed healed nodes."
-      )
-      activeRequests.keys.foreach(requestTracker.completeRequest(_, 0))
-      activeRequests.clear()
-      pendingTasks.clear()
-      pendingHashSet.clear()
-      appStateStorage.clearSnapHealingFrontier().commit()
-      snapSyncController ! SNAPSyncController.StateHealingComplete
-      context.stop(self)
-
     case HealingPivotRefreshed(newStateRoot) =>
       val oldRoot = Hex.toHexString(stateRoot.take(4).toArray)
       val newRootHex = Hex.toHexString(newStateRoot.take(4).toArray)
@@ -521,6 +507,24 @@ class TrieNodeHealingCoordinator(
           self ! HealingCheckCompletion
         case Left(error) =>
           slog.warn("Healing task failed", kv("error", error))
+      }
+
+    case HealingTaskFailed(requestId, reason) =>
+      activeRequests.get(requestId) match {
+        case Some(req) =>
+          slog.warn(
+            "Healing worker timed out — re-queuing tasks",
+            kv("requestId", requestId.toString),
+            kv("reason", reason),
+            kv("tasks", req.tasks.size)
+          )
+          handleTimeout(requestId, req.tasks, req.peer)
+        case None =>
+          slog.warn(
+            "HealingTaskFailed for unknown request (already cleaned up?)",
+            kv("requestId", requestId.toString),
+            kv("reason", reason)
+          )
       }
 
     case HealingCheckCompletion =>
@@ -600,6 +604,9 @@ class TrieNodeHealingCoordinator(
               kv("healed", totalNodesHealed),
               kv("pending", pendingTasks.size)
             )
+            // HealingForceComplete was considered as an operator escape valve here but removed: neither
+            // Besu (markAsStalled is a TODO stub) nor go-ethereum implement force-complete. Stagnation
+            // escalation via HealingStagnated + refreshPivotInPlace is the correct reference-client pattern.
             snapSyncController ! HealingStagnated(totalNodesHealed.toLong, pendingTasks.size.toLong)
             consecutiveStagnations = 0
             // NB-11: Suppress further stagnation counting until the pivot refresh arrives (HealingPivotRefreshed
