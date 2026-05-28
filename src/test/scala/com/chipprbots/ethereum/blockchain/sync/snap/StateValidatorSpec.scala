@@ -6,7 +6,8 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.crypto.kec256
-import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+import com.chipprbots.ethereum.db.storage.{ArchiveNodeStorage, MptStorage, NodeStorage, SerializingMptStorage}
 import com.chipprbots.ethereum.domain.{Account, UInt256}
 import com.chipprbots.ethereum.mpt._
 import com.chipprbots.ethereum.testing.Tags._
@@ -303,6 +304,123 @@ class StateValidatorSpec extends AnyFlatSpec with Matchers {
 
     result shouldBe Right(0)
     checkpointCallCount shouldBe 0
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Gap A regression: walkAccountTrieDFS HashNode traversal (Fix 1)
+  //
+  // TestMptStorage stores nodes inline as MptNode objects — it never produces
+  // HashNode references, so it cannot trigger Gap A. These tests use
+  // SerializingMptStorage + EphemDataSource which correctly collapses nodes
+  // >= 32 bytes into HashNode references inside parent BranchNodes, matching
+  // the production code path.
+  //
+  // T1.1 and T1.3 are regression tests: they FAIL before Fix 1 (Right(0)) and
+  // PASS after Fix 1 (Right(n > 0)). T1.4 is a correctness test that passes
+  // both before and after (no false positives introduced by the fix).
+  // ──────────────────────────────────────────────────────────────────────────
+
+  it should "report missing storage nodes when account trie has HashNode intermediates (Gap A regression, T1.1 / T5.2)" taggedAs UnitTest in {
+    val serStorage = new SerializingMptStorage(new ArchiveNodeStorage(new NodeStorage(EphemDataSource())))
+
+    // A storage root hash that is intentionally absent from the backing store.
+    val missingStorageRoot = kec256(ByteString("gap-a-missing-storage-root"))
+
+    // Two distinct accounts so their LeafNode encodings (path + value) differ,
+    // giving different hashes and thus distinct HashNode references in the BranchNode.
+    // If both accounts were identical AND shared the same remaining nibble path, both
+    // children would hash to the same value — the visited set would skip the second.
+    val account1 = Account(nonce = 1, balance = 1000, storageRoot = missingStorageRoot, codeHash = Account.EmptyCodeHash)
+    val account2 = Account(nonce = 2, balance = 2000, storageRoot = missingStorageRoot, codeHash = Account.EmptyCodeHash)
+
+    // Two keys with different first nibbles produce a BranchNode at the trie root.
+    // SerializingMptStorage collapses each child LeafNode (>> 32 bytes with a 32-byte
+    // storageRoot + 32-byte codeHash) into a HashNode reference inside the BranchNode.
+    // walkAccountTrieDFS must resolve the HashNode and push the result back onto the
+    // DFS stack — the Gap A bug discards the resolved node, so account LeafNodes are
+    // never reached and totalFound == 0.
+    val trie = MerklePatriciaTrie[ByteString, Account](serStorage)
+      .put(ByteString(Array[Byte](0x00.toByte, 0x01.toByte)), account1)
+      .put(ByteString(Array[Byte](0x10.toByte, 0x01.toByte)), account2)
+
+    val stateRoot = ByteString(trie.getRootHash)
+
+    val missing = mutable.ArrayBuffer[(Seq[ByteString], ByteString)]()
+    val result = new StateValidator(serStorage).findMissingNodesStreaming(
+      stateRoot,
+      batchSize = 512,
+      onBatch = batch => missing.addAll(batch)
+    )
+
+    // Before Fix 1: Right(0) — HashNode discarded, account LeafNodes never reached.
+    // After Fix 1:  Right(2) — two missing storageRoot entries, one per account.
+    result shouldBe Right(2)
+    missing.map(_._2).toSet should contain(missingStorageRoot)
+  }
+
+  it should "not report missing entries for accounts with EmptyStorageRootHash (Gap A mixed accounts, T1.3)" taggedAs UnitTest in {
+    val serStorage = new SerializingMptStorage(new ArchiveNodeStorage(new NodeStorage(EphemDataSource())))
+
+    val missingStorageRoot = kec256(ByteString("gap-a-mixed-missing-root"))
+
+    // Distinct nonces so each LeafNode gets a unique hash (avoids visited-set dedup).
+    val accountWithStorage1 = Account(nonce = 1, balance = 100, storageRoot = missingStorageRoot, codeHash = Account.EmptyCodeHash)
+    val accountWithStorage2 = Account(nonce = 2, balance = 200, storageRoot = missingStorageRoot, codeHash = Account.EmptyCodeHash)
+    // Default storageRoot == EmptyStorageRootHash — no storage trie to walk.
+    val accountNoStorage = Account(nonce = 3, balance = 300)
+
+    // 2 accounts with a missing storage root + 1 with no storage.
+    // After Fix 1 the walk must reach each LeafNode and skip the empty-storage account.
+    val trie = MerklePatriciaTrie[ByteString, Account](serStorage)
+      .put(ByteString(Array[Byte](0x00.toByte, 0x01.toByte)), accountWithStorage1)
+      .put(ByteString(Array[Byte](0x10.toByte, 0x01.toByte)), accountWithStorage2)
+      .put(ByteString(Array[Byte](0x20.toByte, 0x01.toByte)), accountNoStorage)
+
+    val stateRoot = ByteString(trie.getRootHash)
+
+    val missing = mutable.ArrayBuffer[(Seq[ByteString], ByteString)]()
+    val result = new StateValidator(serStorage).findMissingNodesStreaming(
+      stateRoot,
+      batchSize = 512,
+      onBatch = batch => missing.addAll(batch)
+    )
+
+    // Before Fix 1: Right(0). After Fix 1: Right(2) — only the 2 non-empty accounts.
+    result shouldBe Right(2)
+    missing.map(_._2).toSet should contain(missingStorageRoot)
+    missing.map(_._2) should not contain Account.EmptyStorageRootHash
+  }
+
+  it should "return Right(0) when all account and storage trie nodes are present (no false positives, T1.4)" taggedAs UnitTest in {
+    val serStorage = new SerializingMptStorage(new ArchiveNodeStorage(new NodeStorage(EphemDataSource())))
+
+    // Build a storage trie whose root IS present in serStorage.
+    val storageTrie = MerklePatriciaTrie[ByteString, ByteString](serStorage)
+      .put(ByteString("slot1"), ByteString("value1"))
+    val presentStorageRoot = ByteString(storageTrie.getRootHash)
+
+    val account = Account(
+      nonce = 1,
+      balance = 500,
+      storageRoot = presentStorageRoot,
+      codeHash = Account.EmptyCodeHash
+    )
+
+    val trie = MerklePatriciaTrie[ByteString, Account](serStorage)
+      .put(ByteString(Array[Byte](0x00.toByte, 0x01.toByte)), account)
+      .put(ByteString(Array[Byte](0x10.toByte, 0x01.toByte)), account)
+
+    val stateRoot = ByteString(trie.getRootHash)
+
+    val result = new StateValidator(serStorage).findMissingNodesStreaming(
+      stateRoot,
+      batchSize = 512,
+      onBatch = _ => ()
+    )
+
+    // Before Fix 1: Right(0) due to bug. After Fix 1: Right(0) because all nodes present.
+    // This confirms Fix 1 does not introduce false positives.
+    result shouldBe Right(0)
   }
 
   /** Simple in-memory test storage for MPT nodes */

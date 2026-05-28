@@ -57,7 +57,7 @@ class StateNodeFetcher(
 
   override def onMessage(message: StateNodeFetcherCommand): Behavior[StateNodeFetcherCommand] =
     message match {
-      case StateNodeFetcher.FetchStateNode(hash, sender, stateRoot, paths, _, isByteCode, fallbackRoot) =>
+      case StateNodeFetcher.FetchStateNode(hash, sender, stateRoot, paths, _, isByteCode, fallbackRoots) =>
         // De-dup concurrent fetches for the same hash. BlockImporter's resolvingMissingNode
         // 30s ReceiveTimeout retries the same import, which re-fires FetchStateNode for the same
         // missing node. Without this guard, every retry spawns a parallel SNAP request and
@@ -72,14 +72,14 @@ class StateNodeFetcher(
             requester = Some(existing.copy(replyTo = sender))
           case _ =>
             log.debug(
-              "Start fetching {} {} (snap paths available: {}, fallback root available: {})",
+              "Start fetching {} {} (snap paths available: {}, fallback roots: {})",
               if (isByteCode) "bytecode" else "state node",
               ByteStringUtils.hash2string(hash),
               paths.isDefined,
-              fallbackRoot.isDefined
+              fallbackRoots.size
             )
             requester = Some(
-              StateNodeRequester(hash, sender, stateRoot, paths, attempts = 0, isByteCode, fallbackRoot)
+              StateNodeRequester(hash, sender, stateRoot, paths, attempts = 0, isByteCode, fallbackRoots)
             )
             requestStateNode(hash, stateRoot, paths, isByteCode)
         }
@@ -242,15 +242,15 @@ class StateNodeFetcher(
       }
       .getOrElse(Behaviors.same)
 
-  /** If the requester still has an unused fallback canonical root, swap it in as the primary stateRoot and clear the
-    * fallback slot (so we only switch once). Returns None when no fallback is available or it has already been
-    * consumed.
+  /** If the requester still has unused fallback canonical roots, pop the head and swap it in as the primary stateRoot.
+    * Returns None when the fallback list is exhausted or the head equals the current primary root (already tried).
+    * Callers cycle through the sliding window by repeated calls; each call consumes one root from the front.
     */
   private def maybeSwitchToFallbackRoot(req: StateNodeRequester): Option[StateNodeRequester] =
-    req.fallbackStateRoot
+    req.fallbackStateRoots.headOption
       .filter(fallback => !req.stateRoot.contains(fallback))
       .map { fallback =>
-        req.copy(stateRoot = Some(fallback), fallbackStateRoot = None)
+        req.copy(stateRoot = Some(fallback), fallbackStateRoots = req.fallbackStateRoots.tail)
       }
 
   private def handleByteCodesValues(peer: Peer, codes: Seq[ByteString]): Behavior[StateNodeFetcherCommand] =
@@ -393,9 +393,10 @@ object StateNodeFetcher {
       paths: Option[Seq[Seq[ByteString]]] = None,
       networkHead: BigInt = BigInt(0),
       isByteCode: Boolean = false,
-      // Recent canonical stateRoot from BlockFetcher's tracked headers. Used as a one-shot
-      // fallback when the primary stateRoot is too old for any SNAP peer to serve.
-      fallbackStateRoot: Option[ByteString] = None
+      // Sliding window of recent canonical stateRoots from BlockFetcher's tracked headers.
+      // Consumed head-first when the primary stateRoot is too old for any SNAP peer to serve.
+      // Up to 5 roots are supplied (Fix 4, Gap C).
+      fallbackStateRoots: Seq[ByteString] = Seq.empty
   ) extends StateNodeFetcherCommand
   case object RetryStateNodeRequest extends StateNodeFetcherCommand
   case object FireRequest extends StateNodeFetcherCommand
@@ -408,8 +409,8 @@ object StateNodeFetcher {
       paths: Option[Seq[Seq[ByteString]]] = None,
       attempts: Int = 0,
       isByteCode: Boolean = false,
-      // One-shot fallback root: cleared the moment we switch to it, so we only attempt the
-      // root-swap once per recovery (no flip-flop between primary and fallback).
-      fallbackStateRoot: Option[ByteString] = None
+      // Sliding window of fallback roots: consumed head-first so StateNodeFetcher cycles through
+      // progressively older tip roots before exhausting retries (Fix 4, Gap C).
+      fallbackStateRoots: Seq[ByteString] = Seq.empty
   )
 }

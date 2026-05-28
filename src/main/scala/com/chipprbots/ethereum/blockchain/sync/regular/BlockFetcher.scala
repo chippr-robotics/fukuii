@@ -381,7 +381,9 @@ class BlockFetcher(
         // blocks; if the requested parent stateRoot is older than that, every peer returns empty
         // TrieNodes and StateNodeFetcher exhausts. The recent canonical root IS servable, and
         // the same nibble path usually still leads to the same content-addressed node.
-        val fallbackRoot = state.recentCanonicalStateRoot.filter(r => !stateRoot.contains(r))
+        val fallbackRoots = (state.networkTipStateRoots ++ state.recentCanonicalStateRoot.toSeq)
+          .distinct
+          .filterNot(r => stateRoot.contains(r))
         stateNodeFetcher ! StateNodeFetcher.FetchStateNode(
           hash,
           replyTo,
@@ -389,7 +391,7 @@ class BlockFetcher(
           paths,
           head,
           isByteCode,
-          fallbackRoot
+          fallbackRoots
         )
         Behaviors.same
 
@@ -417,7 +419,8 @@ class BlockFetcher(
         fetchBlocks(newState)
 
       case AdaptedMessageFromEventBus(BaseETH6XMessages.NewBlock(block, _), peerId) =>
-        handleNewBlock(block, peerId, state)
+        val updatedRoots = (block.header.stateRoot +: state.networkTipStateRoots).take(5)
+        handleNewBlock(block, peerId, state.copy(networkTipStateRoots = updatedRoots))
 
       case BlockImportFailed(blockNr, reason) =>
         log.debug("Block import failed for block {}: {}", blockNr, reason)

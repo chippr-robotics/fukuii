@@ -352,9 +352,11 @@ class StateValidator(mptStorage: MptStorage) {
         case hash: HashNode =>
           val hashKey = ByteString(hash.hash)
           if (!visited.contains(hashKey)) {
-            try
-              mptStorage.get(hash.hash) // proven subtree — discoverMissingChildren handles children
-            catch {
+            visited += hashKey
+            try {
+              val resolvedNode = mptStorage.get(hash.hash)
+              stack.prepend((resolvedNode, nibblePath))
+            } catch {
               case _: MerklePatriciaTrie.MissingNodeException =>
                 val compactPath = ByteString(HexPrefix.encode(nibblePath, isLeaf = false))
                 result += ((Seq(compactPath), ByteString(hash.hash)))

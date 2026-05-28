@@ -41,8 +41,6 @@ class SNAPSyncController(
     with ActorLogging
     with PeerListSupportNg {
 
-  private given ActorRef = ActorRef.noSender
-
   private val slog = org.slf4j.LoggerFactory.getLogger(getClass)
 
   // Dedicated dispatcher for the long-running synchronous trie walks inside
@@ -133,6 +131,10 @@ class SNAPSyncController(
 
   // Retry counter for validation failures to prevent infinite loops
   private var validationRetryCount: Int = 0
+  // Retry counter for storage trie validation failures (Gap E fix).
+  // Left results from spawnStorageValidation increment this; a successful Right(empty) resets it.
+  // Exceeding maxValidationRetries triggers dormant mode or a full restart.
+  private var storageValidationRetryCount: Int = 0
   private val ValidationRetryDelay = 500.millis
 
   // Async validation state. `validationInProgress` is the re-entrance guard
@@ -1205,6 +1207,7 @@ class SNAPSyncController(
     case ValidateStorageTriesResult(_, Right(missing), elapsedMs) if currentPhase == StateValidation =>
       validationInProgress = false
       if (missing.isEmpty) {
+        storageValidationRetryCount = 0
         slog.info("Storage trie validation successful — no missing nodes", kv("elapsedMs", elapsedMs))
         log.info("✅ State validation COMPLETE - all tries are intact")
         self ! StateValidationComplete
@@ -1216,10 +1219,22 @@ class SNAPSyncController(
       }
 
     case ValidateStorageTriesResult(_, Left(error), _) if currentPhase == StateValidation =>
-      slog.error("Storage trie validation failed — recovering through healing phase", kv("error", error))
+      slog.error("Storage trie validation failed", kv("error", error), kv("attempt", storageValidationRetryCount + 1), kv("maxRetries", snapSyncConfig.snapHealingConfig.maxValidationRetries))
       validationInProgress = false
-      currentPhase = StateHealing
-      startStateHealing()
+      storageValidationRetryCount += 1
+      if (storageValidationRetryCount > snapSyncConfig.snapHealingConfig.maxValidationRetries) {
+        val retryMsg = s"storage validation failed after $storageValidationRetryCount attempts: $error"
+        slog.error("Storage trie validation retry limit exhausted", kv("retries", storageValidationRetryCount), kv("error", error))
+        if (recordCriticalFailure(retryMsg)) {
+          enterDormantMode(s"storage validation exhausted: $retryMsg")
+        } else {
+          storageValidationRetryCount = 0
+          restartSnapSync(retryMsg)
+        }
+      } else {
+        currentPhase = StateHealing
+        startStateHealing()
+      }
 
     case ValidationRetry(_) if currentPhase == StateValidation =>
       // Generation was already verified above by the stale-drop handler.
@@ -3432,7 +3447,18 @@ class SNAPSyncController(
     scala.concurrent
       .Future {
         val v = validatorFactory(storage)
-        (v.validateAllStorageTries(expectedRoot), System.currentTimeMillis() - start)
+        val missing = scala.collection.mutable.ArrayBuffer[(Seq[ByteString], ByteString)]()
+        val streamResult = v.findMissingNodesStreaming(
+          expectedRoot,
+          batchSize = snapSyncConfig.snapHealingConfig.trieWalkBatchSize,
+          onBatch = batch => missing.addAll(batch)
+        )
+        val result: Either[String, Seq[ByteString]] = streamResult match {
+          case Right(0) => Right(Seq.empty)
+          case Right(_) => Right(missing.map(_._2).toSeq)
+          case Left(err) => Left(err)
+        }
+        (result, System.currentTimeMillis() - start)
       }(snapValidationEc)
       .onComplete {
         case scala.util.Success((result, elapsed)) =>
@@ -4522,7 +4548,7 @@ case class SnapHealingConfig(
 
 object SnapHealingConfig {
   def fromConfig(config: com.typesafe.config.Config): SnapHealingConfig = {
-    val h = config.getConfig("fukuii.sync.snap.healing")
+    val h = config.getConfig("snap.healing")
     SnapHealingConfig(
       maxRequeuesPerTask = h.getInt("max-requeues-per-task"),
       maxConsecutivePivotRefreshes = h.getInt("max-consecutive-pivot-refreshes"),
@@ -4544,7 +4570,7 @@ case class DormantRetryConfig(
 
 object DormantRetryConfig {
   def fromConfig(config: com.typesafe.config.Config): DormantRetryConfig = {
-    val d = config.getConfig("fukuii.sync.snap.dormant-retry")
+    val d = config.getConfig("snap.dormant-retry")
     DormantRetryConfig(
       baseBackoff = d.getDuration("base-backoff").toMillis.millis,
       maxBackoff = d.getDuration("max-backoff").toMillis.millis,

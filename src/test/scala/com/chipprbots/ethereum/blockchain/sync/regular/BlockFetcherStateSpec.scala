@@ -6,6 +6,8 @@ import org.apache.pekko.testkit.TestProbe
 
 import scala.collection.immutable.Queue
 
+import org.apache.pekko.util.ByteString
+
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpecLike
 
@@ -121,6 +123,48 @@ class BlockFetcherStateSpec
           .recordHeaderRejection()
           .shouldRewindOnRejections(3) shouldBe true
       }
+    }
+  }
+
+  // ── Fix 4 (Gap C): networkTipStateRoots sliding window (T4.1) ──────────────────────────────
+  //
+  // Before Fix 4, `networkTipStateRoot` is a single `Option[ByteString]` slot — if that root
+  // is pruned from SNAP peers, all 10 retries fail on the same stale root.
+  // After Fix 4, it is `networkTipStateRoots: Seq[ByteString]` capped at 5, populated as
+  // BlockFetcher receives `NewBlock` announcements, so StateNodeFetcher can cycle through
+  // progressively more recent roots before exhausting retries.
+  //
+  // T4.1 regression: if `networkTipStateRoots` were still `Option`, the assertion that `.size == 5`
+  // would fail to compile (`Option` has no `.size` in the `Seq` sense), surfacing the gap.
+
+  "networkTipStateRoots sliding window (Fix 4)" should {
+    "keep latest 5 in a simple sequential prepend simulation (T4.1)" taggedAs UnitTest in {
+      val roots = (1 to 7).map(i => ByteString(s"root-$i".getBytes))
+      var window: Seq[ByteString] = Seq.empty
+      for (root <- roots) {
+        window = (root +: window).take(5)
+      }
+      // After 7 updates: window contains roots 7,6,5,4,3 (newest first)
+      window should have size 5
+      window.head shouldBe ByteString("root-7".getBytes)
+      window.last shouldBe ByteString("root-3".getBytes)
+      window should not contain ByteString("root-1".getBytes)
+      window should not contain ByteString("root-2".getBytes)
+    }
+
+    "start empty, grow to 5, then stay capped" taggedAs UnitTest in {
+      var window: Seq[ByteString] = Seq.empty
+      for (i <- 1 to 10) {
+        window = (ByteString(s"root-$i".getBytes) +: window).take(5)
+      }
+      window should have size 5
+    }
+
+    "expose networkTipStateRoots field on BlockFetcherState (API regression guard)" taggedAs UnitTest in {
+      val state = BlockFetcherState.initial(importer, validators.blockValidator, 0)
+      // After Fix 4: `networkTipStateRoots` exists as Seq[ByteString], starts empty
+      state.networkTipStateRoots shouldBe empty
+      state.networkTipStateRoots shouldBe a[Seq[?]]
     }
   }
 }

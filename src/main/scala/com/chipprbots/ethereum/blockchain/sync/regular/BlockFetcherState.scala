@@ -62,6 +62,14 @@ case class BlockFetcherState(
     // so the same nibble path against a recent root usually leads to the same node — provided
     // the account's subtree hasn't been touched in the gap.
     recentCanonicalStateRoot: Option[ByteString] = None,
+    // State roots from the most recent NewBlock announcements received from ETH68 peers.
+    // These roots are at the actual chain tip and guaranteed to be within SNAP's ~128-block serve
+    // window. Preferred over recentCanonicalStateRoot as fallback roots when dispatching
+    // FetchStateNode, since recentCanonicalStateRoot tracks the highest SEQUENTIALLY DOWNLOADED
+    // header — which can be 30k+ blocks behind the tip when block import stalls.
+    // Kept as a sliding window of 5 (newest first) so StateNodeFetcher can cycle through
+    // progressively older tip roots before exhausting retries (Fix 4, Gap C).
+    networkTipStateRoots: Seq[ByteString] = Seq.empty,
     lastPrintBlock: BigInt = BigInt(0),
     lastPrintTimeMs: Long = 0L
 ) {

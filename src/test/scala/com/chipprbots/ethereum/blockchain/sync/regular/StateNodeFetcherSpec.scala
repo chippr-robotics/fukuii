@@ -82,7 +82,7 @@ class StateNodeFetcherSpec
         paths = None,
         networkHead = BigInt(0),
         isByteCode = true,
-        fallbackStateRoot = None
+        fallbackStateRoots = Seq.empty
       )
 
       // The peersClient receives a Request whose message is a GetByteCodes for our codeHash,
