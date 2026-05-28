@@ -409,6 +409,19 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def clearFlatHealingCursor(): DataSourceBatchUpdate =
     update(toRemove = Seq(Keys.FlatHealingCursor), toUpsert = Nil)
 
+  // SnapValidationCheckpoint stores the hex-encoded account hash of the last
+  // batch committed by StateValidator.findMissingNodesStreaming. On restart,
+  // the walk resumes by skipping accounts whose hash is <= the cursor, avoiding
+  // re-healing already-processed accounts. Cleared on walk completion or pivot change.
+  def getSnapValidationCheckpoint(): Option[ByteString] =
+    get(Keys.SnapValidationCheckpoint).map(hex => ByteString(Hex.decode(hex)))
+
+  def putSnapValidationCheckpoint(accountHash: ByteString): DataSourceBatchUpdate =
+    put(Keys.SnapValidationCheckpoint, Hex.toHexString(accountHash.toArray))
+
+  def clearSnapValidationCheckpoint(): DataSourceBatchUpdate =
+    update(toRemove = Seq(Keys.SnapValidationCheckpoint), toUpsert = Nil)
+
   // ========================================
   // Background chain backfill cursors (#1169)
   // ========================================
@@ -520,6 +533,7 @@ object AppStateStorage {
     val StorageRecoveryCursor = "StorageRecoveryCursor"
     val FlatHealingDone = "FlatHealingDone"
     val FlatHealingCursor = "FlatHealingCursor"
+    val SnapValidationCheckpoint = "SnapValidationCheckpoint"
   }
 
 }

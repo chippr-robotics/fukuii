@@ -216,28 +216,42 @@ class StateValidator(mptStorage: MptStorage) {
   /** Streaming variant: calls onBatch whenever batchSize missing nodes are found. Allows the healing coordinator to
     * start working before the full walk completes — critical for mainnet-scale tries where the full walk can take
     * hours. Returns total missing nodes found, or Left on fatal error.
+    *
+    * @param resumeFrom
+    *   If set, skips accounts whose hash is <= this cursor (accounts already processed in a prior interrupted walk).
+    *   The cursor is written after each batch via onCheckpoint so a restart resumes rather than re-walks.
+    * @param onCheckpoint
+    *   Called after each batch flush with the last account hash processed. The caller persists this to durable storage
+    *   (AppStateStorage.SnapValidationCheckpoint) so a restart can resume. Optional — defaults to no-op.
     */
   def findMissingNodesStreaming(
       stateRoot: ByteString,
       batchSize: Int,
-      onBatch: Seq[(Seq[ByteString], ByteString)] => Unit
+      onBatch: Seq[(Seq[ByteString], ByteString)] => Unit,
+      resumeFrom: Option[ByteString] = None,
+      onCheckpoint: ByteString => Unit = _ => ()
   ): Either[String, Int] = {
     val result = mutable.ArrayBuffer[(Seq[ByteString], ByteString)]()
     var totalSent = 0
+    var lastAccountHash: Option[ByteString] = None
+
+    val noteAccount: ByteString => Unit = hash => lastAccountHash = Some(hash)
 
     val flushIfFull: () => Unit = () =>
       if (result.size >= batchSize) {
         onBatch(result.toSeq)
         totalSent += result.size
         result.clear()
+        lastAccountHash.foreach(onCheckpoint)
       }
 
     try {
       val rootNode = mptStorage.get(stateRoot.toArray)
-      walkAccountTrieDFS(rootNode, result, flushIfFull)
+      walkAccountTrieDFS(rootNode, result, flushIfFull, resumeFrom, noteAccount)
       if (result.nonEmpty) {
         onBatch(result.toSeq)
         totalSent += result.size
+        lastAccountHash.foreach(onCheckpoint)
       }
       Right(totalSent)
     } catch {
@@ -253,7 +267,9 @@ class StateValidator(mptStorage: MptStorage) {
   private def walkAccountTrieDFS(
       rootNode: MptNode,
       result: mutable.ArrayBuffer[(Seq[ByteString], ByteString)],
-      flushIfFull: () => Unit = () => ()
+      flushIfFull: () => Unit = () => (),
+      resumeFrom: Option[ByteString] = None,
+      noteAccount: ByteString => Unit = _ => ()
   ): Unit = {
     import com.chipprbots.ethereum.domain.Account.accountSerializer
 
@@ -288,18 +304,28 @@ class StateValidator(mptStorage: MptStorage) {
         case leaf: LeafNode =>
           try {
             val account = accountSerializer.fromBytes(leaf.value.toArray)
-            if (account.storageRoot != com.chipprbots.ethereum.domain.Account.EmptyStorageRootHash) {
-              val fullNibblePath = nibblePath ++ leaf.key.toArray
-              val accountHashBytes = HexPrefix.nibblesToBytes(fullNibblePath)
-              try {
-                val storageRoot = mptStorage.get(account.storageRoot.toArray)
-                // Each storage trie gets its own DFS + visited set (independent walk)
-                walkStorageTrieDFS(storageRoot, ByteString(accountHashBytes), result, flushIfFull)
-              } catch {
-                case _: MerklePatriciaTrie.MissingNodeException =>
-                  val compactPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
-                  result += ((Seq(ByteString(accountHashBytes), compactPath), account.storageRoot))
-                  flushIfFull()
+            val fullNibblePath = nibblePath ++ leaf.key.toArray
+            val accountHash = ByteString(HexPrefix.nibblesToBytes(fullNibblePath))
+            // Skip accounts already covered by a prior interrupted walk (cursor = last fully processed hash).
+            val pastCursor = resumeFrom.forall { cursor =>
+              val cmp = accountHash.toArray.zip(cursor.toArray).foldLeft(0) {
+                case (0, (a, b)) => (a & 0xff) - (b & 0xff)
+                case (r, _)      => r
+              }
+              cmp > 0
+            }
+            if (pastCursor) {
+              noteAccount(accountHash)
+              if (account.storageRoot != com.chipprbots.ethereum.domain.Account.EmptyStorageRootHash) {
+                try {
+                  val storageRoot = mptStorage.get(account.storageRoot.toArray)
+                  walkStorageTrieDFS(storageRoot, accountHash, result, flushIfFull)
+                } catch {
+                  case _: MerklePatriciaTrie.MissingNodeException =>
+                    val compactPath = ByteString(HexPrefix.encode(Array.empty[Byte], isLeaf = false))
+                    result += ((Seq(accountHash, compactPath), account.storageRoot))
+                    flushIfFull()
+                }
               }
             }
           } catch { case _: Exception => () }

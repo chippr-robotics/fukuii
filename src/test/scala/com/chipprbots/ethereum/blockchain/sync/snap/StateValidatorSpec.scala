@@ -198,6 +198,113 @@ class StateValidatorSpec extends AnyFlatSpec with Matchers {
     }
   }
 
+  // ──────────────────────────────────────────────────────────────────────────
+  // Streaming walk checkpoint tests (Phase 4 C4+A8)
+  // ──────────────────────────────────────────────────────────────────────────
+
+  it should "call onCheckpoint after each batch flush when missing nodes fill the buffer" taggedAs UnitTest in {
+    val storage = new TestMptStorage()
+    val checkpoints = mutable.ArrayBuffer[ByteString]()
+
+    val missingRoot = kec256(ByteString("nonexistent-storage-root"))
+    val trie = (0 to 2).foldLeft(MerklePatriciaTrie[ByteString, Account](storage)) { (t, i) =>
+      t.put(
+        ByteString(s"acct$i"),
+        Account(nonce = i, balance = i * 100, storageRoot = missingRoot, codeHash = Account.EmptyCodeHash)
+      )
+    }
+    val stateRoot = ByteString(trie.getRootHash)
+
+    val result = new StateValidator(storage).findMissingNodesStreaming(
+      stateRoot,
+      batchSize = 1,
+      onBatch = _ => (),
+      onCheckpoint = h => checkpoints += h
+    )
+
+    // 3 accounts × 1 missing storage root each → 3 flushes → 3 checkpoints
+    result shouldBe Right(3)
+    checkpoints.size shouldBe 3
+  }
+
+  it should "skip accounts at or before the resumeFrom cursor" taggedAs UnitTest in {
+    val storage = new TestMptStorage()
+
+    val missingRoot = kec256(ByteString("nonexistent-storage-root-2"))
+    val trie = (0 to 2).foldLeft(MerklePatriciaTrie[ByteString, Account](storage)) { (t, i) =>
+      t.put(
+        ByteString(s"acct$i"),
+        Account(nonce = i, balance = i * 100, storageRoot = missingRoot, codeHash = Account.EmptyCodeHash)
+      )
+    }
+    val stateRoot = ByteString(trie.getRootHash)
+
+    // First pass: discover the hash of the first account the walk visits
+    val firstPassCheckpoints = mutable.ArrayBuffer[ByteString]()
+    new StateValidator(storage).findMissingNodesStreaming(
+      stateRoot,
+      batchSize = 1,
+      onBatch = _ => (),
+      onCheckpoint = h => firstPassCheckpoints += h
+    )
+    firstPassCheckpoints.size shouldBe 3
+
+    // Second pass: resume from the first account hash (DFS visits accounts in ascending order,
+    // so cursor == firstPassCheckpoints(0) skips exactly 1 account and processes 2)
+    val cursor = firstPassCheckpoints(0)
+    val secondPassResult = new StateValidator(storage).findMissingNodesStreaming(
+      stateRoot,
+      batchSize = 1,
+      onBatch = _ => (),
+      resumeFrom = Some(cursor)
+    )
+
+    secondPassResult shouldBe Right(2)
+  }
+
+  it should "process all accounts when resumeFrom is None" taggedAs UnitTest in {
+    val storage = new TestMptStorage()
+
+    val missingRoot = kec256(ByteString("nonexistent-root-3"))
+    val trie = (0 to 2).foldLeft(MerklePatriciaTrie[ByteString, Account](storage)) { (t, i) =>
+      t.put(
+        ByteString(s"acct$i"),
+        Account(nonce = i, balance = i * 100, storageRoot = missingRoot, codeHash = Account.EmptyCodeHash)
+      )
+    }
+    val stateRoot = ByteString(trie.getRootHash)
+
+    val result = new StateValidator(storage).findMissingNodesStreaming(
+      stateRoot,
+      batchSize = 100,
+      onBatch = _ => ()
+      // resumeFrom defaults to None
+    )
+
+    result shouldBe Right(3)
+  }
+
+  it should "not call onCheckpoint when trie has no missing nodes" taggedAs UnitTest in {
+    val storage = new TestMptStorage()
+    var checkpointCallCount = 0
+
+    // Accounts with default EmptyStorageRootHash → no storage trie to walk, no missing nodes
+    val trie = (0 to 1).foldLeft(MerklePatriciaTrie[ByteString, Account](storage)) { (t, i) =>
+      t.put(ByteString(s"account$i"), Account(nonce = i, balance = i * 100))
+    }
+    val stateRoot = ByteString(trie.getRootHash)
+
+    val result = new StateValidator(storage).findMissingNodesStreaming(
+      stateRoot,
+      batchSize = 1,
+      onBatch = _ => (),
+      onCheckpoint = _ => checkpointCallCount += 1
+    )
+
+    result shouldBe Right(0)
+    checkpointCallCount shouldBe 0
+  }
+
   /** Simple in-memory test storage for MPT nodes */
   private class TestMptStorage extends MptStorage {
     private val nodes = mutable.Map[ByteString, MptNode]()

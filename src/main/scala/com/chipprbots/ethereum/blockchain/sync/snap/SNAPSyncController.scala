@@ -1059,6 +1059,7 @@ class SNAPSyncController(
         stateRoot.foreach(r => appStateStorage.putSnapSyncStateRoot(r).commit())
         // #1188: capture clean signal — the walk just visited every node.
         healingValidatedRoot = stateRoot
+        appStateStorage.clearSnapValidationCheckpoint().commit()
         // Stop the periodic healing-request scheduler before entering validation.
         // It would otherwise keep firing 1-s ticks against a coordinator that's
         // signalled complete; the phase gate on RequestTrieNodeHealing handles
@@ -1070,6 +1071,7 @@ class SNAPSyncController(
       } else {
         // A2: Loop indefinitely until Pending==0 — mirrors go-ethereum sync.go:1400
         healingRoundCount += 1
+        appStateStorage.clearSnapValidationCheckpoint().commit()
         log.info(
           s"Trie walk complete: $totalFound missing nodes queued across batches (round $healingRoundCount)"
         )
@@ -3161,7 +3163,11 @@ class SNAPSyncController(
     trieWalkInProgress = true
     trieNodeHealingCoordinator.foreach(_ ! actors.Messages.WalkStateChanged(true))
     stateRoot.foreach { root =>
-      log.info("Starting trie walk to discover missing nodes for healing...")
+      val resumeFrom = appStateStorage.getSnapValidationCheckpoint()
+      if (resumeFrom.isDefined)
+        log.info(s"Resuming trie walk from checkpoint ${resumeFrom.get.take(8).toHex}")
+      else
+        log.info("Starting trie walk to discover missing nodes for healing...")
       val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
       val selfRef = self
       val walkFuture = scala.concurrent
@@ -3170,7 +3176,9 @@ class SNAPSyncController(
           validator.findMissingNodesStreaming(
             root,
             batchSize = snapSyncConfig.snapHealingConfig.trieWalkBatchSize,
-            onBatch = { batch => selfRef ! TrieWalkBatch(batch) }
+            onBatch = { batch => selfRef ! TrieWalkBatch(batch) },
+            resumeFrom = resumeFrom,
+            onCheckpoint = h => appStateStorage.putSnapValidationCheckpoint(h).commit()
           )
         }(ec)
       walkFuture.foreach {
@@ -3746,6 +3754,9 @@ class SNAPSyncController(
     // Update internal state
     pivotBlock = Some(newPivotBlock)
     stateRoot = Some(newStateRoot)
+    // Stale walk cursor belongs to the old trie — invalidate before the coordinator
+    // picks up the new root and potentially triggers a fresh walk.
+    appStateStorage.clearSnapValidationCheckpoint().commit()
     // Bump validationGeneration so any in-flight validation Future's result
     // is dropped on arrival rather than applied against the stale root. The
     // phase gate above is the primary defense; this is defense-in-depth for
@@ -3864,6 +3875,7 @@ class SNAPSyncController(
     // attempt starts from scratch, no validation is active.
     validationGeneration += 1
     validationInProgress = false
+    appStateStorage.clearSnapValidationCheckpoint().commit()
 
     // Reset progress counters so logs/ETA reflect the new attempt
     progressMonitor.reset()
