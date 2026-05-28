@@ -53,8 +53,6 @@ class NetworkPeerManagerActor(
 ) extends Actor
     with ActorLogging {
 
-  private given ActorRef = ActorRef.noSender
-
   private[network] type PeersWithInfo = Map[PeerId, PeerWithInfo]
 
   // Maximum length for hex string in debug logs (to avoid very long log lines)

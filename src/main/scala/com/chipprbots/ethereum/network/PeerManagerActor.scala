@@ -52,8 +52,6 @@ class PeerManagerActor(
     with ActorLogging
     with Stash {
 
-  private given ActorRef = ActorRef.noSender
-
   /** Maximum number of blacklisted nodes will never be larger than number of peers provided by discovery Discovery
     * provides remote nodes from all networks (ETC,ETH, Mordor etc.) only during handshake we learn that some of the
     * remote nodes are not compatible that's why we mark them as useless (blacklist them).

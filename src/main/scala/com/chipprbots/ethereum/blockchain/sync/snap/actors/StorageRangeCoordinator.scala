@@ -79,8 +79,6 @@ class StorageRangeCoordinator(
 ) extends Actor
     with ActorLogging {
 
-  private given ActorRef = ActorRef.noSender
-
   import Messages._
 
   private val slog = org.slf4j.LoggerFactory.getLogger(getClass)
