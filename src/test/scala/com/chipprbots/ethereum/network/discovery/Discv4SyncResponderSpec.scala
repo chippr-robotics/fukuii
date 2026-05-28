@@ -217,4 +217,35 @@ class Discv4SyncResponderSpec extends AnyFlatSpec with Matchers {
     replyBitsOf(responder(sender, encodePacket(pingPacket)))
     dedup.isAlreadyResponded(pingPacket.hash) shouldBe true
   }
+
+  // ─── EIP-8 go-ethereum test vector ───────────────────────────────────────
+  // If this fails it proves the bug is in Packet.unpack itself.
+  // If it passes the bug is in the UDP byte-delivery pipeline.
+  // Key: b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291
+  // Source: go-ethereum p2p/discover/v4wire/v4wire_test.go (first test packet)
+
+  it should "decode a real geth Ping via Packet.unpack (EIP-8 test vector)" taggedAs (UnitTest, NetworkTest) in {
+    // Verbatim from go-ethereum p2p/discover/v4wire/v4wire_test.go (first test packet)
+    // layout: hash[32] ++ sig[65] ++ data[44]
+    val packetHex =
+      "71dbda3a79554728d4f94411e42ee1f8b0d561c10e1e5f5893367948c6a7d70b" +
+      "b87b235fa28a77070271b6c164a2dce8c7e13a5739b53b5e96f2e5acb0e458a0" +
+      "2902f5965d55ecbeb2ebb6cabb8b2b232896a36b737666c55265ad0a68412f25" +
+      "0001ea04cb847f000001820cfa8215a8d7" +
+      "90000000000000000000000000000000" +
+      "018208ae820d058443b9a355"
+
+    val bits   = BitVector.fromHex(packetHex).get
+    val packet = packetCodec.decodeValue(bits).require
+
+    Packet.unpack(packet) match {
+      case scodec.Attempt.Successful((payload, _)) =>
+        payload shouldBe a[Payload.Ping]
+        val ping = payload.asInstanceOf[Payload.Ping]
+        ping.version shouldBe 4
+        ping.expiration shouldBe 1136239445L
+      case scodec.Attempt.Failure(err) =>
+        fail(s"Packet.unpack failed on geth EIP-8 Ping vector: ${err.messageWithContext}")
+    }
+  }
 }

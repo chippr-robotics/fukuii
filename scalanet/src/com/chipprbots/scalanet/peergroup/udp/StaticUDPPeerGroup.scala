@@ -338,6 +338,22 @@ class StaticUDPPeerGroup[M] private (
                               // sync answers fast.
                               handleMessage(remoteAddress, tryDecodeDatagram(datagram))
 
+                            case StaticUDPPeerGroup.SyncResult.ClaimedReply(replyBits) =>
+                              try {
+                                val replyBuf = Unpooled.wrappedBuffer(replyBits.toByteBuffer)
+                                val replyPacket = new DatagramPacket(replyBuf, remoteAddress)
+                                ctx.writeAndFlush(replyPacket)
+                                ()
+                              } catch {
+                                case NonFatal(ex) =>
+                                  logger.warn(
+                                    s"Sync responder write failed for $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
+                                  )
+                              }
+                              // ClaimedReply suppresses the async v4 decode path —
+                              // the bytes are v5-format and would cause "Invalid hash"
+                              // errors in the v4 codec if decoded as v4 Packets.
+
                             case StaticUDPPeerGroup.SyncResult.Stop =>
                               // Claimed via side channel (e.g. v5 demuxer
                               // pushed to a v5 queue). Suppress the default
@@ -472,6 +488,12 @@ object StaticUDPPeerGroup extends StrictLogging {
     /** Claimed with a reply written back to the sender, AND the async path
       * still runs after (for v4 bonding/kademlia bookkeeping). */
     final case class Reply(bytes: BitVector) extends SyncResult
+
+    /** Claimed with a reply written back to the sender, but the async decode
+      * path is suppressed. Used by [[V5DemuxResponder]] when the inner v5
+      * responder sends a reply — the v5 bytes must not be fed into the v4
+      * codec, which would produce spurious "Invalid hash" errors. */
+    final case class ClaimedReply(bytes: BitVector) extends SyncResult
 
     /** Claimed with no reply, AND the async path is suppressed. The responder
       * either completed handling via a side channel (v5 demuxer pushing to
