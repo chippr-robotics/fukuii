@@ -160,11 +160,11 @@ object OpCodes {
     PUSH0 +: PhoenixOpCodes
 
   val OlympiaOpCodes: List[OpCode] =
-    List(BASEFEE, TLOAD, TSTORE, MCOPY) ++ SpiralOpCodes
+    CLZ +: (List(BASEFEE, TLOAD, TSTORE, MCOPY) ++ SpiralOpCodes)
 
-  /** Osaka (EIP-7939) adds CLZ — count leading zeros. */
+  /** ETH Osaka (timestamp-based); CLZ already in OlympiaOpCodes. */
   val OsakaOpCodes: List[OpCode] =
-    CLZ +: OlympiaOpCodes
+    OlympiaOpCodes
 }
 
 object OpCode {

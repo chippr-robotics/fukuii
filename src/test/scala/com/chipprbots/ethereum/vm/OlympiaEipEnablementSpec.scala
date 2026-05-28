@@ -130,11 +130,12 @@ class OlympiaEipEnablementSpec extends AnyWordSpec with Matchers {
 
     "compared to Spiral opcode set" should {
 
-      "include all new opcodes: BASEFEE, TLOAD, TSTORE, MCOPY" taggedAs (UnitTest, OlympiaTest) in {
+      "include all new opcodes: BASEFEE, TLOAD, TSTORE, MCOPY, CLZ" taggedAs (UnitTest, OlympiaTest) in {
         val olympiaOps = configOlympia.byteToOpCode
         val spiralOps = configSpiral.byteToOpCode
 
         // New opcodes in Olympia
+        olympiaOps.get(0x1e.toByte) shouldBe Some(CLZ) // EIP-7939
         olympiaOps.get(0x48.toByte) shouldBe Some(BASEFEE) // EIP-3198
         olympiaOps.get(0x5c.toByte) shouldBe Some(TLOAD) // EIP-1153
         olympiaOps.get(0x5d.toByte) shouldBe Some(TSTORE) // EIP-1153
@@ -145,6 +146,7 @@ class OlympiaEipEnablementSpec extends AnyWordSpec with Matchers {
         olympiaOps.get(0x4a.toByte) shouldBe None // BLOBBASEFEE
 
         // Not in Spiral
+        spiralOps.get(0x1e.toByte) shouldBe None
         spiralOps.get(0x48.toByte) shouldBe None
         spiralOps.get(0x5c.toByte) shouldBe None
         spiralOps.get(0x5d.toByte) shouldBe None
