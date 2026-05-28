@@ -3783,6 +3783,10 @@ class SNAPSyncController(
     // Stale walk cursor belongs to the old trie — invalidate before the coordinator
     // picks up the new root and potentially triggers a fresh walk.
     appStateStorage.clearSnapValidationCheckpoint().commit()
+    // Reset so the next AccountRangeProgress save encodes the new pivot (not the stale initial one).
+    // Without this, drift on restart is measured from the original pivot, not the refreshed one,
+    // causing MaxPreservedPivotDistance to be exceeded after ~55 min and all range progress lost.
+    preservedAtPivotBlock = None
     // Bump validationGeneration so any in-flight validation Future's result
     // is dropped on arrival rather than applied against the stale root. The
     // phase gate above is the primary defense; this is defense-in-depth for

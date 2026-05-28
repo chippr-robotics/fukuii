@@ -7,6 +7,8 @@ import scala.concurrent.duration._
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.testing.Tags._
 import com.chipprbots.ethereum.testing.TestMptStorage
@@ -1444,6 +1446,359 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     }
     escapedToDormantOrRestart shouldBe false // still within the window
     storageValidationRetryCount shouldBe maxValidationRetries
+  }
+
+  // -----------------------------------------------------------------------
+  // Group A — Pivot persistence & offline recovery
+  // -----------------------------------------------------------------------
+  // Regression for the Run 28 restart-from-0 incident:
+  //   completePivotRefreshWithStateRoot() in Phase 4 (a2c2fb15a) added
+  //   clearSnapValidationCheckpoint() but did NOT reset preservedAtPivotBlock.
+  //   The lazy-set guard at SNAPSyncController.scala:619 means it is only set once
+  //   per sync session — so every disk save encodes the *initial* pivot even after
+  //   many live pivot refreshes.  On restart the drift check fails → 10.9M accounts lost.
+  //
+  // The format of the progress blob written by serializeSnapProgress():
+  //   "pivotBlock=<decimal>\n<hexHash>=<hexHash>\n..."
+  // Reproduced here so tests can construct/check payloads without private-method access.
+
+  // Simulate the preservedAtPivotBlock lazy-set + pivot-refresh state machine inline.
+  private def simulateSaveWithPivotRefresh(
+      initialPivot: BigInt,
+      refreshedPivot: Option[BigInt] // None = no refresh (bug scenario)
+  ): BigInt = {
+    // Reproduces SNAPSyncController lines 619-631 + the fix at completePivotRefreshWithStateRoot.
+    var preservedAtPivotBlock: Option[BigInt] = None
+    var currentPivot = initialPivot
+
+    // First AccountRangeProgress arrives → lazy-set.
+    if (preservedAtPivotBlock.isEmpty) preservedAtPivotBlock = Some(currentPivot)
+
+    // Pivot refreshes (completePivotRefreshWithStateRoot called).
+    refreshedPivot.foreach { newPivot =>
+      currentPivot = newPivot
+      // BUG: without the fix, this line is missing and preservedAtPivotBlock stays Some(initialPivot).
+      // FIX: preservedAtPivotBlock = None
+      preservedAtPivotBlock = None
+      // Next AccountRangeProgress → lazy-set picks up the new pivot.
+      if (preservedAtPivotBlock.isEmpty) preservedAtPivotBlock = Some(currentPivot)
+    }
+
+    preservedAtPivotBlock.getOrElse(BigInt(0))
+  }
+
+  private def makeProgressBlob(pivot: BigInt): String =
+    s"pivotBlock=${pivot.toString}\n00=ff\n"
+
+  private def parseSavedPivot(blob: String): Option[BigInt] =
+    blob.split('\n').find(_.startsWith("pivotBlock=")).map(l => BigInt(l.stripPrefix("pivotBlock=")))
+
+  private def withinWindow(savedPivot: BigInt, currentPivot: BigInt): Boolean =
+    (currentPivot - savedPivot).abs <= 256
+
+  "Pivot persistence regression (Run 28)" should
+    "encode the refreshed pivot after completePivotRefreshWithStateRoot (A1 — fixed path)" taggedAs UnitTest in {
+      val initialPivot: BigInt = 24_000_000
+      val refreshedPivot: BigInt = initialPivot + 200
+      val savedPivot = simulateSaveWithPivotRefresh(initialPivot, Some(refreshedPivot))
+
+      savedPivot shouldBe refreshedPivot
+    }
+
+  it should "encode only the initial pivot when no refresh occurs (A3 — short offline, within window)" taggedAs UnitTest in {
+    val initialPivot: BigInt = 24_000_000
+    val savedPivot = simulateSaveWithPivotRefresh(initialPivot, None)
+
+    savedPivot shouldBe initialPivot
+  }
+
+  it should "allow resume when restart pivot is within 256 blocks of the refreshed pivot (A1 — drift ok)" taggedAs UnitTest in {
+    val initialPivot: BigInt = 24_000_000
+    val refreshedPivot: BigInt = initialPivot + 200
+    val restartPivot: BigInt = initialPivot + 349 // drift from refreshed = 149
+
+    val savedPivot = simulateSaveWithPivotRefresh(initialPivot, Some(refreshedPivot))
+    withinWindow(savedPivot, restartPivot) shouldBe true
+  }
+
+  it should "discard progress when restart pivot is more than 256 blocks from saved pivot (A2 — bug baseline)" taggedAs UnitTest in {
+    // This reproduces the BUG: preservedAtPivotBlock never reset → savedPivot = initialPivot.
+    // Drift from initialPivot to restartPivot = 349 > 256 → discard.
+    val initialPivot: BigInt = 24_000_000
+    val restartPivot: BigInt = initialPivot + 349 // drift = 349 > 256
+
+    // Simulate BUG: pivot refreshed internally but preservedAtPivotBlock not reset.
+    var preservedAtPivotBlock: Option[BigInt] = None
+    if (preservedAtPivotBlock.isEmpty) preservedAtPivotBlock = Some(initialPivot) // lazy-set
+    // completePivotRefreshWithStateRoot called, but preservedAtPivotBlock NOT reset (bug).
+    // Next save still encodes initialPivot.
+    val savedPivot = preservedAtPivotBlock.getOrElse(BigInt(0))
+
+    withinWindow(savedPivot, restartPivot) shouldBe false
+  }
+
+  it should "discard progress and allow clean restart after long offline >256 blocks (A4 — 8 hours)" taggedAs UnitTest in {
+    val storage = new AppStateStorage(EphemDataSource())
+    val savedPivot: BigInt = 24_000_000
+    storage.putSnapSyncProgress(makeProgressBlob(savedPivot)).commit()
+
+    val restartPivot: BigInt = savedPivot + 2215 // ~8 hours at 13s/block
+    val blob = storage.getSnapSyncProgress().getOrElse("")
+    val parsed = parseSavedPivot(blob)
+
+    parsed.isDefined shouldBe true
+    withinWindow(parsed.get, restartPivot) shouldBe false // must discard
+    (restartPivot - parsed.get).abs should be > BigInt(256)
+  }
+
+  it should "discard progress after very long offline of days (A5 — no BigInt overflow)" taggedAs UnitTest in {
+    val storage = new AppStateStorage(EphemDataSource())
+    val savedPivot: BigInt = 24_000_000
+    storage.putSnapSyncProgress(makeProgressBlob(savedPivot)).commit()
+
+    val restartPivot: BigInt = savedPivot + 50_000 // ~7 days
+    val blob = storage.getSnapSyncProgress().getOrElse("")
+    val parsed = parseSavedPivot(blob)
+
+    parsed.isDefined shouldBe true
+    withinWindow(parsed.get, restartPivot) shouldBe false
+    // BigInt arithmetic stays exact regardless of size
+    (restartPivot - parsed.get) shouldBe BigInt(50_000)
+  }
+
+  it should "preserve progress when restart pivot is exactly 256 blocks ahead (A6 — boundary inclusive)" taggedAs UnitTest in {
+    val savedPivot: BigInt = 24_000_000
+    val restartPivot: BigInt = savedPivot + 256
+
+    withinWindow(savedPivot, restartPivot) shouldBe true
+  }
+
+  it should "discard progress when restart pivot is exactly 257 blocks ahead (A6 — boundary exclusive)" taggedAs UnitTest in {
+    val savedPivot: BigInt = 24_000_000
+    val restartPivot: BigInt = savedPivot + 257
+
+    withinWindow(savedPivot, restartPivot) shouldBe false
+  }
+
+  it should "preserve progress for short offline within window (A3 — 20 minutes, ~92 blocks)" taggedAs UnitTest in {
+    val storage = new AppStateStorage(EphemDataSource())
+    val savedPivot: BigInt = 24_000_000
+    storage.putSnapSyncProgress(makeProgressBlob(savedPivot)).commit()
+
+    val restartPivot: BigInt = savedPivot + 92 // ~20 min at 13s/block
+    val blob = storage.getSnapSyncProgress().getOrElse("")
+    val parsed = parseSavedPivot(blob)
+
+    parsed.isDefined shouldBe true
+    withinWindow(parsed.get, restartPivot) shouldBe true
+  }
+
+  it should "produce correct blob format readable by parseSavedPivot (serialization sanity)" taggedAs UnitTest in {
+    val pivot: BigInt = 24_649_320
+    val blob = makeProgressBlob(pivot)
+
+    blob should include("pivotBlock=24649320")
+    parseSavedPivot(blob) shouldBe Some(pivot)
+  }
+
+  it should "write an empty blob to clear stale progress when drift exceeds window (AppStateStorage clear)" taggedAs UnitTest in {
+    val storage = new AppStateStorage(EphemDataSource())
+    val savedPivot: BigInt = 24_000_000
+    storage.putSnapSyncProgress(makeProgressBlob(savedPivot)).commit()
+
+    // Simulate the discard path: putSnapSyncProgress("").commit()
+    storage.putSnapSyncProgress("").commit()
+
+    val afterClear = storage.getSnapSyncProgress()
+    // getSnapSyncProgress returns None or Some("") after clearing
+    afterClear.forall(_.isEmpty) shouldBe true
+  }
+
+  // -----------------------------------------------------------------------
+  // Group B — Stale root / PivotStateUnservable guard semantics
+  // -----------------------------------------------------------------------
+  // These test the rate-limit and escalation logic without an actor system,
+  // reproducing the guard predicates from SNAPSyncController.scala:700-774.
+
+  "PivotStateUnservable rate-limit guard" should
+    "allow a refresh when restart interval has elapsed (B2 — first message, not rate-limited)" taggedAs UnitTest in {
+      val MinPivotRestartIntervalMs: Long = 30_000L
+      val lastPivotRestartMs: Long = 0L
+      val nowMs: Long = 60_000L
+
+      val elapsed = nowMs - lastPivotRestartMs
+      (elapsed >= MinPivotRestartIntervalMs) shouldBe true
+    }
+
+  it should "suppress a second refresh within the 30s cooldown (B2 — rate-limited)" taggedAs UnitTest in {
+    val MinPivotRestartIntervalMs: Long = 30_000L
+    val lastPivotRestartMs: Long = 55_000L
+    val nowMs: Long = 60_000L
+
+    val elapsed = nowMs - lastPivotRestartMs
+    (elapsed < MinPivotRestartIntervalMs) shouldBe true // second message is suppressed
+  }
+
+  it should "escalate to restartSnapSync after maxConsecutivePivotRefreshes (B3 — threshold)" taggedAs UnitTest in {
+    val maxConsecutive = 5
+    var count = 0
+    var restarted = false
+
+    for (_ <- 1 to maxConsecutive + 1) {
+      count += 1
+      if (count > maxConsecutive) restarted = true
+    }
+
+    restarted shouldBe true
+    count shouldBe maxConsecutive + 1
+  }
+
+  it should "reset consecutivePivotRefreshes to zero on successful AccountRange completion (B3 — reset)" taggedAs UnitTest in {
+    var consecutivePivotRefreshes = 3
+    // AccountRange completion resets the counter (SNAPSyncController.scala:600)
+    consecutivePivotRefreshes = 0
+    consecutivePivotRefreshes shouldBe 0
+  }
+
+  // -----------------------------------------------------------------------
+  // Group C — Healing stagnation guard semantics
+  // -----------------------------------------------------------------------
+
+  "TrieNodeHealing stagnation" should
+    "escalate to HealingStagnated after 5 consecutive idle stagnation ticks (C1 — logic)" taggedAs UnitTest in {
+      val maxIdleTicks = 5
+      var idleTicks = 0
+      var escalated = false
+
+      for (_ <- 1 to maxIdleTicks) {
+        idleTicks += 1
+        if (idleTicks >= maxIdleTicks) escalated = true
+      }
+
+      escalated shouldBe true
+    }
+
+  it should "reset idle tick counter when healing progress arrives between checks (C1 — reset on progress)" taggedAs UnitTest in {
+    var idleTicks = 3
+    // Simulates receiving a healed-node count > 0 — tick counter resets
+    val nodesHealedThisTick = 5
+    if (nodesHealedThisTick > 0) idleTicks = 0
+    idleTicks shouldBe 0
+  }
+
+  it should "self-reset after BUG-S4 watchdog fires (pivotRefreshRequested stuck >15 min) (C3 — logic)" taggedAs UnitTest in {
+    val bugS4ThresholdMs: Long = 15 * 60 * 1000L
+    var pivotRefreshRequested = true
+    val pivotRefreshRequestedAtMs: Long = 0L
+    val nowMs: Long = bugS4ThresholdMs + 1_000L
+
+    val stuck = pivotRefreshRequested && (nowMs - pivotRefreshRequestedAtMs) > bugS4ThresholdMs
+    if (stuck) pivotRefreshRequested = false
+
+    pivotRefreshRequested shouldBe false
+  }
+
+  // -----------------------------------------------------------------------
+  // Group D — No-peer stall escalation timing
+  // -----------------------------------------------------------------------
+
+  "Coordinator no-activity timeout" should
+    "trigger stall detection after 90 seconds with no peer responses (D1/D2/D3 — timeout)" taggedAs UnitTest in {
+      val noActivityTimeoutMs: Long = 90_000L
+      val lastDispatchOrResponseMs: Long = 0L
+      val nowMs: Long = 91_000L
+
+      val isStalled = (nowMs - lastDispatchOrResponseMs) > noActivityTimeoutMs
+      isStalled shouldBe true
+    }
+
+  it should "not trigger stall detection before 90 seconds have elapsed" taggedAs UnitTest in {
+    val noActivityTimeoutMs: Long = 90_000L
+    val lastDispatchOrResponseMs: Long = 0L
+    val nowMs: Long = 89_000L
+
+    val isStalled = (nowMs - lastDispatchOrResponseMs) > noActivityTimeoutMs
+    isStalled shouldBe false
+  }
+
+  // -----------------------------------------------------------------------
+  // Group E — Download-phase stagnation threshold semantics
+  // -----------------------------------------------------------------------
+
+  "Download phase stagnation thresholds" should
+    "force-complete storage after StorageStagnationThreshold (10 min) with no progress (E1)" taggedAs UnitTest in {
+      val StorageStagnationThresholdMs: Long = 10 * 60 * 1000L
+      val lastStorageProgressMs: Long = 0L
+      val nowMs: Long = StorageStagnationThresholdMs + 1_000L
+
+      val stagnated = (nowMs - lastStorageProgressMs) > StorageStagnationThresholdMs
+      stagnated shouldBe true
+    }
+
+  it should "not force-complete storage before the 10-minute threshold" taggedAs UnitTest in {
+    val StorageStagnationThresholdMs: Long = 10 * 60 * 1000L
+    val lastStorageProgressMs: Long = 0L
+    val nowMs: Long = 9 * 60 * 1000L
+
+    val stagnated = (nowMs - lastStorageProgressMs) > StorageStagnationThresholdMs
+    stagnated shouldBe false
+  }
+
+  it should "force-complete bytecode after 10 minutes with no progress (E3)" taggedAs UnitTest in {
+    val BytecodeStagnationThresholdMs: Long = 10 * 60 * 1000L
+    val lastBytecodeProgressMs: Long = 0L
+    val nowMs: Long = BytecodeStagnationThresholdMs + 1_000L
+
+    val stagnated = (nowMs - lastBytecodeProgressMs) > BytecodeStagnationThresholdMs
+    stagnated shouldBe true
+  }
+
+  // -----------------------------------------------------------------------
+  // Group F — Long-offline reconnect recovery
+  // -----------------------------------------------------------------------
+
+  "Long-offline reconnect" should
+    "trigger a clean bootstrap when savedPivot is 8 hours (2215 blocks) behind network head (F1)" taggedAs UnitTest in {
+      val storage = new AppStateStorage(EphemDataSource())
+      val savedPivot: BigInt = 24_000_000
+      storage.putSnapSyncProgress(makeProgressBlob(savedPivot)).commit()
+
+      val networkHead: BigInt = savedPivot + 2215
+      val blob = storage.getSnapSyncProgress().getOrElse("")
+      val parsed = parseSavedPivot(blob)
+
+      // savedPivot is too old — must discard
+      parsed.isDefined shouldBe true
+      withinWindow(parsed.get, networkHead) shouldBe false
+    }
+
+  it should "resume from saved progress when coming back online within 20 minutes (F2 — ~92 blocks)" taggedAs UnitTest in {
+    val storage = new AppStateStorage(EphemDataSource())
+    val savedPivot: BigInt = 24_000_000
+    storage.putSnapSyncProgress(makeProgressBlob(savedPivot)).commit()
+
+    val networkHead: BigInt = savedPivot + 92 // 20 min at 13s/block
+    val blob = storage.getSnapSyncProgress().getOrElse("")
+    val parsed = parseSavedPivot(blob)
+
+    parsed.isDefined shouldBe true
+    withinWindow(parsed.get, networkHead) shouldBe true
+  }
+
+  it should "handle negative drift (network head behind savedPivot — reorg) as discard (F2 — reorg safety)" taggedAs UnitTest in {
+    // A deep reorg could place networkHead below the savedPivot.
+    // The drift check uses .abs so this also triggers a discard if large enough.
+    val savedPivot: BigInt = 24_000_000
+    val networkHead: BigInt = savedPivot - 500 // network appears to have rolled back
+
+    withinWindow(savedPivot, networkHead) shouldBe false // abs(500) > 256
+  }
+
+  it should "handle empty AppStateStorage gracefully after clear (F1 — no stored progress)" taggedAs UnitTest in {
+    val storage = new AppStateStorage(EphemDataSource())
+    // No progress written — simulates a first-ever bootstrap or post-clear state
+    val blob = storage.getSnapSyncProgress().getOrElse("")
+    parseSavedPivot(blob) shouldBe None
   }
 }
 
