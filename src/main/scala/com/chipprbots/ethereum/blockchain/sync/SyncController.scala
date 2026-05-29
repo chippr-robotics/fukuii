@@ -856,11 +856,16 @@ class SyncController(
                   blockchainWriter.storeBlockHeader(updatedHeader).commit()
                 }
               case None =>
+                // BUG-009: trie was healed against a different root but the wrong root was committed
+                // to AppStateStorage (coincidentally equalling pivotHeader.stateRoot, so A5 guard
+                // passed). Auto-recover: clear snapSyncDone so SNAP re-enters healing on this startup.
+                // All downloaded accounts, storage, and bytecodes are preserved — only healing reruns.
                 log.error(
-                  "Pivot state root {} MISSING and no finalized root stored! " +
-                    "Database is in an unrecoverable state — clear data and re-sync.",
+                  "Pivot state root {} MISSING from RocksDB and no finalized root stored. " +
+                    "Auto-recovering: clearing snapSyncDone to re-run SNAP healing (BUG-009).",
                   header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString
                 )
+                appStateStorage.clearSnapSyncDone().commit()
             }
           } else {
             // Symmetric case (Run-26): pivot root EXISTS in MPT but differs from snapStateRoot.
