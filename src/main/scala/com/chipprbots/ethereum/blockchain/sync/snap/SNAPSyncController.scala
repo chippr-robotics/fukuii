@@ -1236,12 +1236,21 @@ class SNAPSyncController(
       }
 
     case ValidateStorageTriesResult(_, Left(error), _) if currentPhase == StateValidation =>
-      slog.error("Storage trie validation failed", kv("error", error), kv("attempt", storageValidationRetryCount + 1), kv("maxRetries", snapSyncConfig.snapHealingConfig.maxValidationRetries))
+      slog.error(
+        "Storage trie validation failed",
+        kv("error", error),
+        kv("attempt", storageValidationRetryCount + 1),
+        kv("maxRetries", snapSyncConfig.snapHealingConfig.maxValidationRetries)
+      )
       validationInProgress = false
       storageValidationRetryCount += 1
       if (storageValidationRetryCount > snapSyncConfig.snapHealingConfig.maxValidationRetries) {
         val retryMsg = s"storage validation failed after $storageValidationRetryCount attempts: $error"
-        slog.error("Storage trie validation retry limit exhausted", kv("retries", storageValidationRetryCount), kv("error", error))
+        slog.error(
+          "Storage trie validation retry limit exhausted",
+          kv("retries", storageValidationRetryCount),
+          kv("error", error)
+        )
         if (recordCriticalFailure(retryMsg)) {
           enterDormantMode(s"storage validation exhausted: $retryMsg")
         } else {
@@ -1390,7 +1399,13 @@ class SNAPSyncController(
       accountsComplete && bytecodePhaseComplete && storagePhaseComplete &&
       currentPhase != StateHealing && currentPhase != ChainDownloadCompletion && currentPhase != Completed
     ) {
-      if (SNAPSyncController.shouldSkipHealingAfterDownloads(snapSyncConfig, storagePhaseForceCompleted, pivotRefreshedWithPreservedRanges)) {
+      if (
+        SNAPSyncController.shouldSkipHealingAfterDownloads(
+          snapSyncConfig,
+          storagePhaseForceCompleted,
+          pivotRefreshedWithPreservedRanges
+        )
+      ) {
         // With deferred merkleization, trie nodes were never constructed during download —
         // only flat storage was written. A trie walk would find the entire internal trie "missing",
         // taking hours to scan and failing to heal (peers can't serve the full trie via GetTrieNodes).
@@ -1767,204 +1782,233 @@ class SNAPSyncController(
               // Fall through to normal startup
             }
           } else {
-            // Pivot is fresh enough — recover bytecodes + storage only
-            pivotBlock = Some(pivot)
-            stateRoot = Some(rootBs)
-            accountsComplete = true
-
             val storageAlreadyDone = appStateStorage.isSnapSyncStorageComplete()
             val bytecodeAlreadyDone = appStateStorage.isSnapSyncBytecodeComplete()
-            storagePhaseComplete = storageAlreadyDone
-            bytecodePhaseComplete = bytecodeAlreadyDone
-            storagePhaseForceCompleted = false
+            if (minPivotHint > 0 && pivot < minPivotHint && storageAlreadyDone && bytecodeAlreadyDone) {
+              // All phases complete but saved pivot is below minPivotHint — regular sync has
+              // already proven this pivot insufficient. Bootstrap selects a fresh pivot via
+              // rawPivot.max(minPivotHint); BootstrapComplete sees all-phases-done (line 1532)
+              // and calls startStateHealing() against the new root.
+              log.warning(
+                s"Recovery: saved pivot $pivot is below MinPivotBlock hint $minPivotHint " +
+                  s"(drift=$drift blocks). All phases complete — requesting fresh pivot above stall point."
+              )
+              slog.info(
+                "Recovery: pivot below MinPivotBlock hint — redirecting to bootstrap for fresh pivot",
+                kv("savedPivot", pivot.toString),
+                kv("minPivotHint", minPivotHint.toString),
+                kv("driftBlocks", drift.toString)
+              )
+              accountsComplete = true
+              storagePhaseComplete = true
+              bytecodePhaseComplete = true
+              // pivotBlock + stateRoot intentionally left unset — bootstrap sets them.
+              // Falls through to bootstrap selection below line 1977.
+            } else {
+              // Pivot is above minPivotHint (or no hint set) — safe to resume directly.
+              slog.info(
+                "Recovery: pivot above MinPivotBlock hint — resuming at saved pivot",
+                kv("pivot", pivot.toString),
+                kv("minPivotHint", minPivotHint.toString),
+                kv("driftBlocks", drift.toString)
+              )
+              // Pivot is fresh enough — recover bytecodes + storage only
+              pivotBlock = Some(pivot)
+              stateRoot = Some(rootBs)
+              accountsComplete = true
 
-            if (storageAlreadyDone) log.info("Recovery: storage phase already complete — skipping re-download")
-            if (bytecodeAlreadyDone) log.info("Recovery: bytecode phase already complete — skipping re-download")
+              storagePhaseComplete = storageAlreadyDone
+              bytecodePhaseComplete = bytecodeAlreadyDone
+              storagePhaseForceCompleted = false
 
-            slog.info(
-              "Recovery: resuming bytecodes + storage sync",
-              kv("pivot", pivot.toString),
-              kv("driftBlocks", drift.toString)
-            )
+              if (storageAlreadyDone) log.info("Recovery: storage phase already complete — skipping re-download")
+              if (bytecodeAlreadyDone) log.info("Recovery: bytecode phase already complete — skipping re-download")
 
-            val storage = getOrCreateMptStorage(pivot)
-            coordinatorGeneration += 1
+              slog.info(
+                "Recovery: resuming bytecodes + storage sync",
+                kv("pivot", pivot.toString),
+                kv("driftBlocks", drift.toString)
+              )
 
-            if (!bytecodeAlreadyDone) {
-              bytecodeCoordinator = Some(
-                context.actorOf(
-                  actors.ByteCodeCoordinator
-                    .props(
-                      evmCodeStorage = evmCodeStorage,
-                      networkPeerManager = networkPeerManager,
-                      requestTracker = requestTracker,
-                      batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
-                      snapSyncController = self
-                    )
-                    .withDispatcher("sync-dispatcher"),
-                  s"bytecode-coordinator-$coordinatorGeneration"
+              val storage = getOrCreateMptStorage(pivot)
+              coordinatorGeneration += 1
+
+              if (!bytecodeAlreadyDone) {
+                bytecodeCoordinator = Some(
+                  context.actorOf(
+                    actors.ByteCodeCoordinator
+                      .props(
+                        evmCodeStorage = evmCodeStorage,
+                        networkPeerManager = networkPeerManager,
+                        requestTracker = requestTracker,
+                        batchSize = ByteCodeTask.DEFAULT_BATCH_SIZE,
+                        snapSyncController = self
+                      )
+                      .withDispatcher("sync-dispatcher"),
+                    s"bytecode-coordinator-$coordinatorGeneration"
+                  )
                 )
-              )
-              bytecodeCoordinator.foreach(_ ! actors.Messages.StartByteCodeSync(Seq.empty))
-              bytecodeRequestTask = Some(
-                scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestByteCodes)(ec, self)
-              )
-            }
-
-            if (!storageAlreadyDone) {
-              storageRangeCoordinator = Some(
-                context.actorOf(
-                  actors.StorageRangeCoordinator
-                    .props(
-                      stateRoot = rootBs,
-                      networkPeerManager = networkPeerManager,
-                      requestTracker = requestTracker,
-                      mptStorage = storage,
-                      flatSlotStorage = flatSlotStorage,
-                      maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
-                      maxInFlightRequests = snapSyncConfig.storageConcurrency,
-                      requestTimeout = snapSyncConfig.timeout,
-                      snapSyncController = self,
-                      initialMaxInFlightPerPeer = 3, // Recovery: accounts done, storage gets 3 of 5 per-peer budget
-                      initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
-                      minResponseBytes = snapSyncConfig.storageMinResponseBytes,
-                      deferredMerkleization = snapSyncConfig.deferredMerkleization,
-                      useStackTrie = snapSyncConfig.useStackTrie,
-                      maxConcurrentStorageAccounts = snapSyncConfig.maxConcurrentStorageAccounts
-                    )
-                    .withDispatcher("sync-dispatcher"),
-                  s"storage-range-coordinator-$coordinatorGeneration"
+                bytecodeCoordinator.foreach(_ ! actors.Messages.StartByteCodeSync(Seq.empty))
+                bytecodeRequestTask = Some(
+                  scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestByteCodes)(ec, self)
                 )
-              )
-              storageRangeCoordinator.foreach(_ ! actors.Messages.StartStorageRangeSync(rootBs))
-              storageRangeRequestTask = Some(
-                scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestStorageRanges)(ec, self)
-              )
-            }
+              }
 
-            // Recovery budget: accounts done, bytecode=2, storage=3 (total 5 per peer)
-            bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(2))
+              if (!storageAlreadyDone) {
+                storageRangeCoordinator = Some(
+                  context.actorOf(
+                    actors.StorageRangeCoordinator
+                      .props(
+                        stateRoot = rootBs,
+                        networkPeerManager = networkPeerManager,
+                        requestTracker = requestTracker,
+                        mptStorage = storage,
+                        flatSlotStorage = flatSlotStorage,
+                        maxAccountsPerBatch = snapSyncConfig.storageBatchSize,
+                        maxInFlightRequests = snapSyncConfig.storageConcurrency,
+                        requestTimeout = snapSyncConfig.timeout,
+                        snapSyncController = self,
+                        initialMaxInFlightPerPeer = 3, // Recovery: accounts done, storage gets 3 of 5 per-peer budget
+                        initialResponseBytes = snapSyncConfig.storageInitialResponseBytes,
+                        minResponseBytes = snapSyncConfig.storageMinResponseBytes,
+                        deferredMerkleization = snapSyncConfig.deferredMerkleization,
+                        useStackTrie = snapSyncConfig.useStackTrie,
+                        maxConcurrentStorageAccounts = snapSyncConfig.maxConcurrentStorageAccounts
+                      )
+                      .withDispatcher("sync-dispatcher"),
+                    s"storage-range-coordinator-$coordinatorGeneration"
+                  )
+                )
+                storageRangeCoordinator.foreach(_ ! actors.Messages.StartStorageRangeSync(rootBs))
+                storageRangeRequestTask = Some(
+                  scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, RequestStorageRanges)(ec, self)
+                )
+              }
 
-            // Stream storage tasks from persisted file if available
-            if (!storageAlreadyDone) savedStoragePath.foreach { pathStr =>
-              val filePath = java.nio.file.Paths.get(pathStr)
-              if (java.nio.file.Files.exists(filePath)) {
-                val coordinator = storageRangeCoordinator.get
-                import context.dispatcher
-                scala.concurrent
-                  .Future {
-                    val emptyRoot = ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)
-                    val zeroHash = ByteString(new Array[Byte](32))
-                    val raf = new java.io.RandomAccessFile(filePath.toFile, "r")
-                    val buf = new Array[Byte](64)
-                    val batch = new scala.collection.mutable.ArrayBuffer[StorageTask](10000)
-                    var totalTasks = 0
-                    try {
-                      while (raf.getFilePointer < raf.length()) {
-                        raf.readFully(buf)
-                        val accountHash = ByteString(java.util.Arrays.copyOfRange(buf, 0, 32))
-                        val storageRoot = ByteString(java.util.Arrays.copyOfRange(buf, 32, 64))
-                        if (accountHash != zeroHash && storageRoot.nonEmpty && storageRoot != emptyRoot) {
-                          batch += StorageTask.createStorageTask(accountHash, storageRoot)
+              // Recovery budget: accounts done, bytecode=2, storage=3 (total 5 per peer)
+              bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(2))
+
+              // Stream storage tasks from persisted file if available
+              if (!storageAlreadyDone) savedStoragePath.foreach { pathStr =>
+                val filePath = java.nio.file.Paths.get(pathStr)
+                if (java.nio.file.Files.exists(filePath)) {
+                  val coordinator = storageRangeCoordinator.get
+                  import context.dispatcher
+                  scala.concurrent
+                    .Future {
+                      val emptyRoot = ByteString(com.chipprbots.ethereum.mpt.MerklePatriciaTrie.EmptyRootHash)
+                      val zeroHash = ByteString(new Array[Byte](32))
+                      val raf = new java.io.RandomAccessFile(filePath.toFile, "r")
+                      val buf = new Array[Byte](64)
+                      val batch = new scala.collection.mutable.ArrayBuffer[StorageTask](10000)
+                      var totalTasks = 0
+                      try {
+                        while (raf.getFilePointer < raf.length()) {
+                          raf.readFully(buf)
+                          val accountHash = ByteString(java.util.Arrays.copyOfRange(buf, 0, 32))
+                          val storageRoot = ByteString(java.util.Arrays.copyOfRange(buf, 32, 64))
+                          if (accountHash != zeroHash && storageRoot.nonEmpty && storageRoot != emptyRoot) {
+                            batch += StorageTask.createStorageTask(accountHash, storageRoot)
+                          }
+                          if (batch.size >= 10000) {
+                            coordinator ! actors.Messages.AddStorageTasks(batch.toSeq)
+                            totalTasks += batch.size
+                            batch.clear()
+                          }
                         }
-                        if (batch.size >= 10000) {
+                        if (batch.nonEmpty) {
                           coordinator ! actors.Messages.AddStorageTasks(batch.toSeq)
                           totalTasks += batch.size
-                          batch.clear()
                         }
-                      }
-                      if (batch.nonEmpty) {
-                        coordinator ! actors.Messages.AddStorageTasks(batch.toSeq)
-                        totalTasks += batch.size
-                      }
-                    } finally raf.close()
-                    totalTasks
-                  }
-                  .foreach { count =>
-                    log.info(s"Recovery: streamed $count storage tasks from ${filePath}")
-                    // Signal no more tasks — sentinel allows completion
-                    coordinator ! actors.Messages.NoMoreStorageTasks
-                  }
-              } else {
-                slog.warn(
-                  "Recovery: storage file not found — sending NoMore immediately",
-                  kv("filePath", filePath.toString)
-                )
+                      } finally raf.close()
+                      totalTasks
+                    }
+                    .foreach { count =>
+                      log.info(s"Recovery: streamed $count storage tasks from ${filePath}")
+                      // Signal no more tasks — sentinel allows completion
+                      coordinator ! actors.Messages.NoMoreStorageTasks
+                    }
+                } else {
+                  slog.warn(
+                    "Recovery: storage file not found — sending NoMore immediately",
+                    kv("filePath", filePath.toString)
+                  )
+                  storageRangeCoordinator.foreach(_ ! actors.Messages.NoMoreStorageTasks)
+                }
+              }
+              if (savedStoragePath.isEmpty) {
+                log.warning("Recovery: no storage file path persisted. Sending NoMore immediately.")
                 storageRangeCoordinator.foreach(_ ! actors.Messages.NoMoreStorageTasks)
               }
-            }
-            if (savedStoragePath.isEmpty) {
-              log.warning("Recovery: no storage file path persisted. Sending NoMore immediately.")
-              storageRangeCoordinator.foreach(_ ! actors.Messages.NoMoreStorageTasks)
-            }
 
-            // Bytecodes: stream codeHashes from persisted file if available. Each entry is 32 bytes
-            // (raw keccak256 hash, written by AccountRangeCoordinator.uniqueCodeHashesOut).
-            val savedCodeHashesPath = appStateStorage.getSnapSyncCodeHashesPath()
-            if (!bytecodeAlreadyDone) savedCodeHashesPath.foreach { pathStr =>
-              val filePath = java.nio.file.Paths.get(pathStr)
-              if (java.nio.file.Files.exists(filePath)) {
-                val coordinator = bytecodeCoordinator.get
-                import context.dispatcher
-                scala.concurrent
-                  .Future {
-                    val raf = new java.io.RandomAccessFile(filePath.toFile, "r")
-                    val buf = new Array[Byte](32)
-                    val batch = new scala.collection.mutable.ArrayBuffer[ByteString](10000)
-                    var totalHashes = 0
-                    try {
-                      while (raf.getFilePointer < raf.length()) {
-                        raf.readFully(buf)
-                        batch += ByteString(java.util.Arrays.copyOf(buf, 32))
-                        if (batch.size >= 10000) {
+              // Bytecodes: stream codeHashes from persisted file if available. Each entry is 32 bytes
+              // (raw keccak256 hash, written by AccountRangeCoordinator.uniqueCodeHashesOut).
+              val savedCodeHashesPath = appStateStorage.getSnapSyncCodeHashesPath()
+              if (!bytecodeAlreadyDone) savedCodeHashesPath.foreach { pathStr =>
+                val filePath = java.nio.file.Paths.get(pathStr)
+                if (java.nio.file.Files.exists(filePath)) {
+                  val coordinator = bytecodeCoordinator.get
+                  import context.dispatcher
+                  scala.concurrent
+                    .Future {
+                      val raf = new java.io.RandomAccessFile(filePath.toFile, "r")
+                      val buf = new Array[Byte](32)
+                      val batch = new scala.collection.mutable.ArrayBuffer[ByteString](10000)
+                      var totalHashes = 0
+                      try {
+                        while (raf.getFilePointer < raf.length()) {
+                          raf.readFully(buf)
+                          batch += ByteString(java.util.Arrays.copyOf(buf, 32))
+                          if (batch.size >= 10000) {
+                            coordinator ! actors.Messages.AddByteCodeTasks(batch.toSeq)
+                            totalHashes += batch.size
+                            batch.clear()
+                          }
+                        }
+                        if (batch.nonEmpty) {
                           coordinator ! actors.Messages.AddByteCodeTasks(batch.toSeq)
                           totalHashes += batch.size
-                          batch.clear()
                         }
-                      }
-                      if (batch.nonEmpty) {
-                        coordinator ! actors.Messages.AddByteCodeTasks(batch.toSeq)
-                        totalHashes += batch.size
-                      }
-                    } finally raf.close()
-                    totalHashes
-                  }
-                  .foreach { count =>
-                    log.info(s"Recovery: streamed $count codeHashes from ${filePath} for bytecode sync")
-                    coordinator ! actors.Messages.NoMoreByteCodeTasks
-                  }
-              } else {
-                slog.warn(
-                  "Recovery: codeHashes file not found — sending NoMore immediately",
-                  kv("filePath", filePath.toString)
-                )
+                      } finally raf.close()
+                      totalHashes
+                    }
+                    .foreach { count =>
+                      log.info(s"Recovery: streamed $count codeHashes from ${filePath} for bytecode sync")
+                      coordinator ! actors.Messages.NoMoreByteCodeTasks
+                    }
+                } else {
+                  slog.warn(
+                    "Recovery: codeHashes file not found — sending NoMore immediately",
+                    kv("filePath", filePath.toString)
+                  )
+                  bytecodeCoordinator.foreach(_ ! actors.Messages.NoMoreByteCodeTasks)
+                }
+              }
+              if (savedCodeHashesPath.isEmpty) {
+                log.warning("Recovery: no codeHashes file path persisted. Sending NoMore immediately.")
                 bytecodeCoordinator.foreach(_ ! actors.Messages.NoMoreByteCodeTasks)
               }
+
+              currentPhase = ByteCodeAndStorageSync
+              lastStorageProgressMs = System.currentTimeMillis()
+              scheduleStagnationChecks()
+              progressMonitor.startPhase(ByteCodeAndStorageSync)
+
+              // Same as fresh ByteCode phase start: raise budget + clear cooldowns so peers on 2-min
+              // backoff from AccountRange don't block ByteCode dispatch on resume.
+              bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(8))
+              bytecodeCoordinator.foreach(_ ! actors.Messages.ByteCodePivotRefreshed)
+              requestByteCodes()
+
+              // Start parallel chain download during recovery too
+              startChainDownloader()
+              startSnapServerPeersScheduler()
+
+              context.become(syncing)
+              // If both phases were already complete, advance to healing immediately
+              checkAllDownloadsComplete()
+              return
             }
-            if (savedCodeHashesPath.isEmpty) {
-              log.warning("Recovery: no codeHashes file path persisted. Sending NoMore immediately.")
-              bytecodeCoordinator.foreach(_ ! actors.Messages.NoMoreByteCodeTasks)
-            }
-
-            currentPhase = ByteCodeAndStorageSync
-            lastStorageProgressMs = System.currentTimeMillis()
-            scheduleStagnationChecks()
-            progressMonitor.startPhase(ByteCodeAndStorageSync)
-
-            // Same as fresh ByteCode phase start: raise budget + clear cooldowns so peers on 2-min
-            // backoff from AccountRange don't block ByteCode dispatch on resume.
-            bytecodeCoordinator.foreach(_ ! actors.Messages.UpdateMaxInFlightPerPeer(8))
-            bytecodeCoordinator.foreach(_ ! actors.Messages.ByteCodePivotRefreshed)
-            requestByteCodes()
-
-            // Start parallel chain download during recovery too
-            startChainDownloader()
-            startSnapServerPeersScheduler()
-
-            context.become(syncing)
-            // If both phases were already complete, advance to healing immediately
-            checkAllDownloadsComplete()
-            return
           }
         case _ =>
           log.warning("Recovery: accounts-complete flag set but missing pivot/root. Clearing and restarting fresh.")
@@ -3477,8 +3521,8 @@ class SNAPSyncController(
           onBatch = batch => missing.addAll(batch)
         )
         val result: Either[String, Seq[ByteString]] = streamResult match {
-          case Right(0) => Right(Seq.empty)
-          case Right(_) => Right(missing.map(_._2).toSeq)
+          case Right(0)  => Right(Seq.empty)
+          case Right(_)  => Right(missing.map(_._2).toSeq)
           case Left(err) => Left(err)
         }
         (result, System.currentTimeMillis() - start)
@@ -4174,7 +4218,7 @@ class SNAPSyncController(
             }
             // A5b: root hash matches — verify the root node is actually in RocksDB.
             val mptStore = getOrCreateMptStorage(pivot)
-            try { mptStore.get(snapRoot.toArray) }
+            try mptStore.get(snapRoot.toArray)
             catch {
               case _: com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException =>
                 log.error(
