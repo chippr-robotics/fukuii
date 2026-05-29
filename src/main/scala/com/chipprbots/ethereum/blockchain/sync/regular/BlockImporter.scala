@@ -152,7 +152,11 @@ class BlockImporter(
       val missingHashStr = pendingStateNodeHash.map(ByteStringUtils.hash2string).getOrElse("<unknown>")
       val stuckTooLong = (System.currentTimeMillis() - BlockImporter.stuckSinceMs) >= BlockImporter.MaxStuckDurationMs
 
-      if (BlockImporter.survivedExhausts >= BlockImporter.StuckEscapeThreshold || stuckTooLong) {
+      // Storage path-mismatch: escalate to Tier 2 on the FIRST exhaust — no point waiting
+      // 3 rounds when peers have already proven they can't serve this node structure.
+      // Account/other nodes still need the full 3-exhaust threshold before giving up.
+      val storagePathMismatch = pendingStuckStorageAccount.isDefined && BlockImporter.survivedExhausts >= 1
+      if (storagePathMismatch || BlockImporter.survivedExhausts >= BlockImporter.StuckEscapeThreshold || stuckTooLong) {
         // Multiple consecutive exhausts mean peers genuinely don't have our parent state and
         // never will (we're far behind their snap-serve window).
         //
