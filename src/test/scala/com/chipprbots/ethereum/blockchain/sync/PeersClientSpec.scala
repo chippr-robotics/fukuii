@@ -20,8 +20,42 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.Capability
+import com.chipprbots.ethereum.network.p2p.messages.SNAP
 
 class PeersClientSpec extends AnyFlatSpec with Matchers with ScalaCheckPropertyChecks {
+
+  // ─── SNAP response code invariants (fix: GetAccountRange+GetStorageRanges routing) ───
+  // Prior to fix e244e040e, PeersClient.responseMsgCode had no cases for
+  // GetAccountRange/GetStorageRanges → MatchError → PeersClient actor crash.
+  // These tests pin the protocol-level invariant: each request code has a
+  // DISTINCT response code so PeerRequestHandler subscribes to the correct
+  // response message, not to incoming server requests of the same type.
+
+  "SNAP protocol codes" should "have distinct request and response codes for GetAccountRange" taggedAs (UnitTest, SyncTest) in {
+    SNAP.Codes.AccountRangeCode  shouldBe 0x31
+    SNAP.Codes.GetAccountRangeCode shouldBe 0x30
+    SNAP.Codes.AccountRangeCode should not equal SNAP.Codes.GetAccountRangeCode
+  }
+
+  it should "have distinct request and response codes for GetStorageRanges" taggedAs (UnitTest, SyncTest) in {
+    SNAP.Codes.StorageRangesCode   shouldBe 0x33
+    SNAP.Codes.GetStorageRangesCode shouldBe 0x32
+    SNAP.Codes.StorageRangesCode should not equal SNAP.Codes.GetStorageRangesCode
+  }
+
+  it should "have distinct request and response codes for all SNAP message pairs" taggedAs (UnitTest, SyncTest) in {
+    // Full invariant table — ensures PeerRequestHandler subscriptions never alias
+    val pairs = Table(
+      ("requestCode", "responseCode", "pair"),
+      (SNAP.Codes.GetAccountRangeCode,  SNAP.Codes.AccountRangeCode,  "AccountRange"),
+      (SNAP.Codes.GetStorageRangesCode, SNAP.Codes.StorageRangesCode, "StorageRanges"),
+      (SNAP.Codes.GetByteCodesCode,     SNAP.Codes.ByteCodesCode,     "ByteCodes"),
+      (SNAP.Codes.GetTrieNodesCode,     SNAP.Codes.TrieNodesCode,     "TrieNodes")
+    )
+    forAll(pairs) { (req, resp, _) =>
+      req should not equal resp
+    }
+  }
 
   import Peers._
 
