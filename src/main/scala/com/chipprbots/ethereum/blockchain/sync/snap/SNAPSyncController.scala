@@ -161,6 +161,10 @@ class SNAPSyncController(
   // current `stateRoot`, so any pivot refresh / restart naturally invalidates
   // the signal and full validation runs.
   private var healingValidatedRoot: Option[ByteString] = None
+  // Root the trie walk was actually started against. May differ from in-memory `stateRoot`
+  // if a pivot refresh fired during the walk. Committed to AppStateStorage on TrieWalkComplete(0)
+  // instead of the current in-memory root to prevent wrong-root finalization (BUG-009).
+  private var healingStartedWithRoot: Option[ByteString] = None
 
   // Running total of unique codeHashes streamed in via `IncrementalContractData`. Used to set
   // `progressMonitor.estimatedTotalBytecodes` so the SNAP-sync dashboard's
@@ -1061,10 +1065,16 @@ class SNAPSyncController(
       if (totalFound == 0) {
         log.info("Trie walk found no missing nodes — healing complete after {} rounds!", healingRoundCount)
         healingRoundCount = 0
+        // BUG-009: commit the root the walk validated, not the current in-memory stateRoot.
+        // A pivot refresh during the walk updates stateRoot in-memory but the walk ran against
+        // the old root. Using stateRoot here would commit an unhealed root and bypass the A5
+        // guard (if the new pivot's header happens to have the same root).
+        val validatedRoot = healingStartedWithRoot.orElse(stateRoot)
         pivotBlock.foreach(b => appStateStorage.putSnapSyncPivotBlock(b).commit())
-        stateRoot.foreach(r => appStateStorage.putSnapSyncStateRoot(r).commit())
+        validatedRoot.foreach(r => appStateStorage.putSnapSyncStateRoot(r).commit())
         // #1188: capture clean signal — the walk just visited every node.
-        healingValidatedRoot = stateRoot
+        healingValidatedRoot = validatedRoot
+        healingStartedWithRoot = None
         appStateStorage.clearSnapValidationCheckpoint().commit()
         // Stop the periodic healing-request scheduler before entering validation.
         // It would otherwise keep firing 1-s ticks against a coordinator that's
@@ -1092,12 +1102,15 @@ class SNAPSyncController(
       if (missingNodes.isEmpty) {
         log.info("Trie walk found no missing nodes — healing complete after {} rounds!", healingRoundCount)
         healingRoundCount = 0
+        // BUG-009: same fix as streaming TrieWalkComplete(0) path — commit the walked root.
+        val validatedRoot = healingStartedWithRoot.orElse(stateRoot)
         // Commit final pivot root — deferred from refreshPivotInPlace() to prevent BUG-006.
         // AppStateStorage now reflects the root that healing actually completed against.
-        for (b <- pivotBlock; r <- stateRoot)
+        for (b <- pivotBlock; r <- validatedRoot)
           appStateStorage.putSnapSyncPivotBlock(b).and(appStateStorage.putSnapSyncStateRoot(r)).commit()
         // #1188: capture clean signal — same as the streaming TrieWalkComplete(0) path.
-        healingValidatedRoot = stateRoot
+        healingValidatedRoot = validatedRoot
+        healingStartedWithRoot = None
         // Stop the periodic healing-request scheduler before entering validation.
         // See companion handler above for rationale.
         healingRequestTask.foreach(_.cancel()); healingRequestTask = None
@@ -2583,6 +2596,7 @@ class SNAPSyncController(
     pivotRefreshedWithPreservedRanges = false
     bytecodesEstimatedTotal = 0L
     healingValidatedRoot = None
+    healingStartedWithRoot = None
 
     pivotBlock = None
     stateRoot = None
@@ -3183,6 +3197,9 @@ class SNAPSyncController(
     if (currentPhase != StateHealing) return
     trieWalkInProgress = true
     trieNodeHealingCoordinator.foreach(_ ! actors.Messages.WalkStateChanged(true))
+    // Capture the root being walked so the completion handler commits the right root even
+    // if completePivotRefreshWithStateRoot() updates stateRoot concurrently (BUG-009 fix).
+    healingStartedWithRoot = stateRoot
     stateRoot.foreach { root =>
       val resumeFrom = appStateStorage.getSnapValidationCheckpoint()
       if (resumeFrom.isDefined)
@@ -3898,6 +3915,7 @@ class SNAPSyncController(
     // Root-equality alone would catch this (stateRoot is reset below) but we clear
     // explicitly so the field doesn't briefly hold a stale positive against a None root.
     healingValidatedRoot = None
+    healingStartedWithRoot = None
     appStateStorage
       .putSnapSyncAccountsComplete(false)
       .and(appStateStorage.putSnapSyncStorageComplete(false))
@@ -4138,6 +4156,11 @@ class SNAPSyncController(
           // marking sync done. Mirrors Besu SnapWorldDownloadState.saveWorldState() implicit
           // verification. If they diverge (BUG-008 class), restart SNAP rather than committing
           // a broken state.
+          // A5b: Even if roots match, verify the root trie node is actually in RocksDB.
+          // BUG-009: a mid-heal pivot refresh can commit the wrong root to AppStateStorage;
+          // if that root coincidentally equals pivotHeader.stateRoot, the A5 hash check passes
+          // but the trie is incomplete. A root node absent from storage proves the trie was
+          // never healed for this root.
           appStateStorage.getSnapSyncStateRoot().foreach { snapRoot =>
             if (snapRoot != pivotHeader.stateRoot) {
               log.error(
@@ -4148,6 +4171,19 @@ class SNAPSyncController(
               )
               context.parent ! SyncProtocol.HealingImpossible
               break()
+            }
+            // A5b: root hash matches — verify the root node is actually in RocksDB.
+            val mptStore = getOrCreateMptStorage(pivot)
+            try { mptStore.get(snapRoot.toArray) }
+            catch {
+              case _: com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException =>
+                log.error(
+                  "SNAP finalization aborted: snapStateRoot={} matches pivotHeader but root node " +
+                    "is absent from RocksDB — trie was healed against a different root (BUG-009).",
+                  snapRoot.toHex
+                )
+                context.parent ! SyncProtocol.HealingImpossible
+                break()
             }
           }
 

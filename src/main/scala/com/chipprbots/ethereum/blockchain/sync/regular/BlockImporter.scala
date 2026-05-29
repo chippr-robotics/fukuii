@@ -73,6 +73,7 @@ class BlockImporter(
   override def preStart(): Unit = {
     super.preStart()
     BlockImporter.survivedExhausts = 0
+    BlockImporter.stuckSinceMs = 0L
   }
 
   override def receive: Receive = idle
@@ -143,9 +144,11 @@ class BlockImporter(
       // on every connected peer).
       val blockNum = blocksToRetry.head.number
       BlockImporter.survivedExhausts += 1
+      if (BlockImporter.stuckSinceMs == 0L) BlockImporter.stuckSinceMs = System.currentTimeMillis()
       val missingHashStr = pendingStateNodeHash.map(ByteStringUtils.hash2string).getOrElse("<unknown>")
+      val stuckTooLong = (System.currentTimeMillis() - BlockImporter.stuckSinceMs) >= BlockImporter.MaxStuckDurationMs
 
-      if (BlockImporter.survivedExhausts >= BlockImporter.StuckEscapeThreshold) {
+      if (BlockImporter.survivedExhausts >= BlockImporter.StuckEscapeThreshold || stuckTooLong) {
         // Multiple consecutive exhausts mean peers genuinely don't have our parent state and
         // never will (we're far behind their snap-serve window). The only recovery is to re-pivot
         // via SNAP. Reset our local counter so we don't re-fire if SyncController bounces us back
@@ -157,6 +160,7 @@ class BlockImporter(
           missingHashStr
         )
         BlockImporter.survivedExhausts = 0
+        BlockImporter.stuckSinceMs = 0L
         pendingStateNodeHash = None
         supervisor ! SyncProtocol.RegularSyncStuck(blockNum, missingHashStr)
         // Don't transition further — SyncController will PoisonPill regular sync.
@@ -191,9 +195,10 @@ class BlockImporter(
       // and the data is the bytecode. EvmCodeStorage is keyed by codeHash, same as the fetch.
       try evmCodeStorage.put(hash, node).commit()
       catch { case _: Exception => () }
-      // Successful state-node delivery — reset stuck-counter so a later transient failure on a
-      // different block doesn't escalate to SNAP re-sync prematurely.
+      // Successful state-node delivery — reset stuck-counter and timer so a later transient
+      // failure on a different block doesn't escalate to SNAP re-sync prematurely.
       BlockImporter.survivedExhausts = 0
+      BlockImporter.stuckSinceMs = 0L
       pendingStateNodeHash = None
       importBlocks(blocksToRetry, blockImportType)(state)
 
@@ -603,10 +608,19 @@ object BlockImporter {
   // 3 × 5-min backoff = ~15 minutes of bounded retry before invoking the escape valve.
   val StuckEscapeThreshold: Int = 3
 
+  // Time-based escape: if RegularSync has been blocked on any state-node fetch for longer than
+  // this window, escalate regardless of survivedExhausts. Guards against the counter being reset
+  // by transient successful imports of other blocks between retries of the stuck block.
+  val MaxStuckDurationMs: Long = 20L * 60L * 1000L // 20 minutes
+
   // Exhaust counter that outlives individual actor instances so Pekko Restarts don't reset
   // the progress toward StuckEscapeThreshold. Zeroed by preStart() (fresh regular-sync session)
   // but NOT by postRestart() (same logical actor restarted after a crash).
   private[regular] var survivedExhausts: Int = 0
+
+  // Timestamp of when this RegularSync session first entered resolvingMissingNode.
+  // Zeroed on successful import or on fresh actor creation.
+  private[regular] var stuckSinceMs: Long = 0L
 
   // scalastyle:off parameter.number
   def props(

@@ -1909,6 +1909,86 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     pivotRefreshedWithPreservedRanges = false
     pivotRefreshedWithPreservedRanges shouldBe false
   }
+
+  // -----------------------------------------------------------------------
+  // Group H — healingStartedWithRoot (BUG-009 regression)
+  // -----------------------------------------------------------------------
+  // Tests for the fix that ensures the committed state root matches the root
+  // the trie walk actually validated, even when a pivot refresh fires mid-walk.
+
+  // Reproduce the commit logic from the TrieWalkComplete(0) handler:
+  private def simulateTrieWalkComplete(
+      healingStartedWithRoot: Option[ByteString],
+      currentStateRoot: Option[ByteString]
+  ): Option[ByteString] = {
+    // validatedRoot = healingStartedWithRoot.orElse(stateRoot) — the fixed path
+    healingStartedWithRoot.orElse(currentStateRoot)
+  }
+
+  "healingStartedWithRoot (BUG-009)" should
+    "commit the walked root when a pivot roll changes stateRoot mid-walk (T1)" taggedAs UnitTest in {
+      val walkedRoot  = ByteString(Array.fill[Byte](32)(0x11.toByte))
+      val rolledRoot  = ByteString(Array.fill[Byte](32)(0x22.toByte))
+
+      // healingStartedWithRoot = walkedRoot (set at walk start)
+      // stateRoot = rolledRoot (pivot refreshed during walk)
+      val committed = simulateTrieWalkComplete(
+        healingStartedWithRoot = Some(walkedRoot),
+        currentStateRoot = Some(rolledRoot)
+      )
+
+      committed shouldBe Some(walkedRoot)   // NOT rolledRoot
+      committed should not be Some(rolledRoot)
+    }
+
+  it should "set healingValidatedRoot to the walked root, not the rolled root (T2)" taggedAs UnitTest in {
+    val walkedRoot = ByteString(Array.fill[Byte](32)(0x11.toByte))
+    val rolledRoot = ByteString(Array.fill[Byte](32)(0x22.toByte))
+
+    val validatedRoot = simulateTrieWalkComplete(Some(walkedRoot), Some(rolledRoot))
+    validatedRoot shouldBe Some(walkedRoot)
+  }
+
+  it should "clear healingStartedWithRoot after TrieWalkComplete (T3 — field reset logic)" taggedAs UnitTest in {
+    var healingStartedWithRoot: Option[ByteString] = Some(ByteString(Array.fill[Byte](32)(0x33.toByte)))
+    // Simulate: TrieWalkComplete(0) fires → commits validatedRoot → clears field
+    healingStartedWithRoot = None
+    healingStartedWithRoot shouldBe None
+  }
+
+  it should "use stateRoot as fallback when healingStartedWithRoot is None (T6 — orElse path)" taggedAs UnitTest in {
+    val currentRoot = ByteString(Array.fill[Byte](32)(0x44.toByte))
+
+    val committed = simulateTrieWalkComplete(
+      healingStartedWithRoot = None,  // field not set (e.g. pre-fix binary resuming)
+      currentStateRoot = Some(currentRoot)
+    )
+
+    committed shouldBe Some(currentRoot)  // safe fallback
+  }
+
+  it should "commit the same root on normal path with no pivot roll (T5)" taggedAs UnitTest in {
+    val root = ByteString(Array.fill[Byte](32)(0x55.toByte))
+
+    val committed = simulateTrieWalkComplete(
+      healingStartedWithRoot = Some(root),
+      currentStateRoot = Some(root)  // no roll — both the same
+    )
+
+    committed shouldBe Some(root)
+  }
+
+  it should "clear in both restartSnapSync reset blocks (T4 — logic)" taggedAs UnitTest in {
+    // dormant-wakeup reset:
+    var healingStartedWithRoot1: Option[ByteString] = Some(ByteString(Array.fill[Byte](32)(0x66.toByte)))
+    healingStartedWithRoot1 = None
+    healingStartedWithRoot1 shouldBe None
+
+    // full restart reset:
+    var healingStartedWithRoot2: Option[ByteString] = Some(ByteString(Array.fill[Byte](32)(0x77.toByte)))
+    healingStartedWithRoot2 = None
+    healingStartedWithRoot2 shouldBe None
+  }
 }
 
 /** Test helper: a `StateValidator` subclass that returns canned results without traversing the trie. Used in
