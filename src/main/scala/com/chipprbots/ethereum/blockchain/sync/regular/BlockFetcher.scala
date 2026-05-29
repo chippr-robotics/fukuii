@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcherState.Headers
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter.ImportNewBlock
 import com.chipprbots.ethereum.blockchain.sync.regular.RegularSync.ProgressProtocol
 import com.chipprbots.ethereum.consensus.validators.BlockValidator
+import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain._
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor
@@ -369,24 +370,17 @@ class BlockFetcher(
         log.warn("Received late/duplicate RetryBodiesRequest (not fetching). Clearing state and retrying fetch.")
         fetchBlocks(state)
 
-      case FetchAccountStorage(accountAddress, replyTo, canonicalStateRoot) =>
+      case FetchAccountStorage(accountAddress, replyTo, canonicalStateRoot, stateStorage) =>
         // Tier 2 storage recovery: re-download full canonical account data + storage for the
         // stuck account (path mismatch: GetTrieNodes returned 0 for all state roots).
-        //
-        // TODO(STORAGE-HEAL): Spawn AccountStorageFetcher here to:
-        //   1. GetAccountRange for accountAddress → canonical storageRoot
-        //   2. GetStorageRanges with that storageRoot → all storage nodes
-        //   3. Write nodes to RocksDB + update account leaf
-        //   4. Reply FetchedAccountStorage(accountAddress, success=true)
-        //
-        // For now, fall back to RegularSyncStuck (success=false) so existing recovery fires.
-        // The detection/logging infrastructure above still provides full visibility.
         log.info(
-          "[STORAGE-HEAL] FetchAccountStorage for account {} canonicalRoot={} (AccountStorageFetcher not yet implemented — falling back to RegularSyncStuck)",
+          "[STORAGE-HEAL] FetchAccountStorage for account {} canonicalRoot={}",
           ByteStringUtils.hash2string(accountAddress),
           canonicalStateRoot.map(r => ByteStringUtils.hash2string(r.take(4))).getOrElse("none")
         )
-        replyTo ! FetchedAccountStorage(accountAddress, success = false)
+        context.spawnAnonymous(
+          AccountStorageFetcher(accountAddress, replyTo, canonicalStateRoot, peersClient, stateStorage, syncConfig)
+        )
         Behaviors.same
 
       case FetchStateNode(hash, replyTo, stateRoot, paths, networkHead, isByteCode) =>
@@ -698,11 +692,17 @@ object BlockFetcher {
   final case class FetchAccountStorage(
       accountAddress: ByteString, // raw 20-byte address from MissingStorageNodeException
       replyTo: ClassicActorRef, // BlockImporter to reply to
-      canonicalStateRoot: Option[ByteString] // parent state root for GetAccountRange pivot
+      canonicalStateRoot: Option[ByteString], // parent state root for GetAccountRange pivot
+      stateStorage: StateStorage // for writing storage proof nodes to RocksDB
   ) extends FetchCommand
 
   sealed trait FetchResponse
   final case class PickedBlocks(blocks: NonEmptyList[Block]) extends FetchResponse
   final case class FetchedStateNode(stateNode: NodeData) extends FetchResponse
-  final case class FetchedAccountStorage(accountAddress: ByteString, success: Boolean) extends FetchResponse
+  // success=true: canonicalAccount is set; BlockImporter should update MPT leaf and retry block
+  final case class FetchedAccountStorage(
+      accountAddress: ByteString,
+      canonicalAccount: Option[Account], // canonical account with updated storageRoot
+      success: Boolean
+  ) extends FetchResponse
 }

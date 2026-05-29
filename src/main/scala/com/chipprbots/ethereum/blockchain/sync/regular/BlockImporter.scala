@@ -170,7 +170,7 @@ class BlockImporter(
             // Keep survivedExhausts and stuckSinceMs — if storage range also fails we need them
             pendingStateNodeHash = None
             pendingStuckStorageAccount = None
-            fetcher ! BlockFetcher.FetchAccountStorage(accountAddr, self, pendingStuckStorageStateRoot)
+            fetcher ! BlockFetcher.FetchAccountStorage(accountAddr, self, pendingStuckStorageStateRoot, stateStorage)
             pendingStuckStorageStateRoot = None
             context.setReceiveTimeout(5.minutes)
             context.become(resolvingStorageRange(blocksToRetry, blockImportType)(state))
@@ -246,11 +246,14 @@ class BlockImporter(
   private def resolvingStorageRange(blocksToRetry: NonEmptyList[Block], blockImportType: BlockImportType)(
       state: ImporterState
   ): Receive = {
-    case BlockFetcher.FetchedAccountStorage(accountAddr, success) =>
+    case BlockFetcher.FetchedAccountStorage(accountAddr, canonicalAccountOpt, success) =>
       val blockNum = blocksToRetry.head.number
       if (success) {
+        canonicalAccountOpt.foreach { canonicalAccount =>
+          updateMptAccountLeaf(accountAddr, canonicalAccount)
+        }
         log.info(
-          "[STORAGE-HEAL] Account {} storage re-downloaded — account leaf updated, retrying block {}",
+          "[STORAGE-HEAL] Account {} storage re-downloaded — account leaf updated with canonical storageRoot, retrying block {}",
           ByteStringUtils.hash2string(accountAddr),
           blockNum
         )
@@ -281,6 +284,47 @@ class BlockImporter(
       BlockImporter.stuckSinceMs = 0L
       supervisor ! SyncProtocol.RegularSyncStuck(blockNum, "storage-range-timeout")
   }
+
+  // Updates the MPT account leaf with the canonical account (which has the correct storageRoot).
+  // Used after AccountStorageFetcher downloads canonical account + storage from peers.
+  // After this call, block execution will traverse the canonical storage trie structure,
+  // allowing GetTrieNodes to serve missing nodes (peers have the canonical structure).
+  private def updateMptAccountLeaf(accountAddr: ByteString, canonicalAccount: Account): Unit =
+    try {
+      val bestBlockNum = blockchainReader.getBestBlockNumber()
+      val mptStorage = stateStorage.getBackingStorage(bestBlockNum)
+      val currentStateRoot = blockchainReader
+        .getBestBlock()
+        .flatMap(b => Option(b.header.stateRoot))
+        .getOrElse(ByteString.empty)
+      val getBlockHashByNumber: BigInt => Option[ByteString] = n =>
+        blockchainReader.getBlockHeaderByNumber(n).map(_.hash)
+      val worldState = InMemoryWorldStateProxy(
+        evmCodeStorage,
+        mptStorage,
+        getBlockHashByNumber,
+        UInt256.Zero,
+        currentStateRoot,
+        noEmptyAccounts = true,
+        ethCompatibleStorage = true
+      )
+      val address = Address(accountAddr)
+      val updated = worldState.saveAccount(address, canonicalAccount)
+      InMemoryWorldStateProxy.persistState(updated)
+      log.info(
+        "[STORAGE-HEAL] MPT account leaf updated: account {} storageRoot → {}",
+        ByteStringUtils.hash2string(accountAddr),
+        ByteStringUtils.hash2string(canonicalAccount.storageRoot.take(4))
+      )
+    } catch {
+      case ex: Exception =>
+        log.warning(
+          "[STORAGE-HEAL] Failed to update MPT account leaf for {} — {}: {}",
+          ByteStringUtils.hash2string(accountAddr),
+          ex.getClass.getSimpleName,
+          ex.getMessage
+        )
+    }
 
   private def resolvingBranch(from: BigInt)(state: ImporterState): Receive =
     running(state.resolvingBranch(from))
