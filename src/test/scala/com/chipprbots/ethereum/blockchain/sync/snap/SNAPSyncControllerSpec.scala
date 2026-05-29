@@ -1989,6 +1989,50 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     healingStartedWithRoot2 = None
     healingStartedWithRoot2 shouldBe None
   }
+
+  // -----------------------------------------------------------------------
+  // Group S — SyncController startup needReHeal predicate (BUG-009 auto-heal)
+  // -----------------------------------------------------------------------
+  // Tests for the rootMismatch / needReHeal logic that replaces the substitution
+  // dance in SyncController.start() case (true, _, true, _).
+
+  private def computeNeedReHeal(
+      snapStateRoot: Option[ByteString],
+      pivotStateRoot: Option[ByteString]
+  ): Boolean = {
+    val rootMismatch = for {
+      snapRoot <- snapStateRoot
+      pivotHdr <- pivotStateRoot
+    } yield snapRoot != pivotHdr
+    rootMismatch.contains(true) || snapStateRoot.isEmpty
+  }
+
+  "SyncController startup needReHeal predicate" should
+    "be true when snapStateRoot ≠ pivotHeader.stateRoot (S1 — BUG-009 detected)" taggedAs UnitTest in {
+      val snapRoot  = Some(ByteString(Array.fill[Byte](32)(0x11.toByte)))
+      val pivotRoot = Some(ByteString(Array.fill[Byte](32)(0x22.toByte)))
+      computeNeedReHeal(snapRoot, pivotRoot) shouldBe true
+    }
+
+  it should "be true when snapStateRoot=None (no healed root committed) (S2)" taggedAs UnitTest in {
+    val snapRoot  = None: Option[ByteString]
+    val pivotRoot = Some(ByteString(Array.fill[Byte](32)(0x22.toByte)))
+    computeNeedReHeal(snapRoot, pivotRoot) shouldBe true
+  }
+
+  it should "be false when snapStateRoot == pivotHeader.stateRoot (S3 — clean path)" taggedAs UnitTest in {
+    val root      = ByteString(Array.fill[Byte](32)(0x33.toByte))
+    val snapRoot  = Some(root)
+    val pivotRoot = Some(root)
+    computeNeedReHeal(snapRoot, pivotRoot) shouldBe false
+  }
+
+  it should "be false when pivotHeader is None (upstream dangling-block check handles it) (S4)" taggedAs UnitTest in {
+    val snapRoot  = Some(ByteString(Array.fill[Byte](32)(0x44.toByte)))
+    val pivotRoot = None: Option[ByteString]
+    // rootMismatch = None (can't compare); snapRoot.isDefined → needReHeal = false
+    computeNeedReHeal(snapRoot, pivotRoot) shouldBe false
+  }
 }
 
 /** Test helper: a `StateValidator` subclass that returns canned results without traversing the trie. Used in

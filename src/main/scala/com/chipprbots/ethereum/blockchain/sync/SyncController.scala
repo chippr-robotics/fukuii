@@ -808,102 +808,67 @@ class SyncController(
         startSnapSync()
       case (true, _, true, _) =>
         log.warning("do-snap-sync is true but SNAP sync already completed")
-        // Diagnostic: log stored SNAP sync state root vs pivot block state root
+
+        // Check if the stored snap state root matches the canonical pivot block's state root.
+        // If they differ, the trie was healed against a different root than the canonical block
+        // (BUG-009 class: mid-heal pivot refresh committed the wrong root). Substituting the
+        // healed root into the pivot block header causes chain divergence — RegularSync would
+        // execute blocks against the wrong starting state. The only safe recovery is to
+        // re-enter healing with a fresh pivot near the current chain head, using the same
+        // pattern as HealingImpossible.
         val snapStateRoot = appStateStorage.getSnapSyncStateRoot()
-        val bestBlockNum = appStateStorage.getBestBlockNumber()
-        val bestBlockHeader = blockchainReader.getBlockHeaderByNumber(bestBlockNum)
-        val pivotStateRoot = bestBlockHeader.map(_.stateRoot)
-        log.info(
-          "SNAP state root diagnostic: stored snapStateRoot={}, pivotBlockStateRoot={}, bestBlock={}, match={}",
-          snapStateRoot.map(r => r.take(8).toArray.map("%02x".format(_)).mkString).getOrElse("none"),
-          pivotStateRoot.map(r => r.take(8).toArray.map("%02x".format(_)).mkString).getOrElse("none"),
-          bestBlockNum,
-          snapStateRoot == pivotStateRoot
-        )
-        // After SNAP sync with deferred merkleization + pivot refreshes, the finalized trie root
-        // may differ from the pivot block header's stateRoot. The trie nodes are stored under
-        // the finalized root's hash, but the pivot header references the original (now orphaned) root.
-        // Fix: substitute the finalized root into the pivot block header.
-        bestBlockHeader.foreach { header =>
-          val mptStorage = stateStorage.getReadOnlyStorage
-          val pivotRootExists =
-            try { mptStorage.get(header.stateRoot.toArray); true }
-            catch { case _: Exception => false }
-          log.info(
-            "State root availability check: pivotRoot({})={}",
-            header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString,
-            if (pivotRootExists) "EXISTS" else "MISSING"
+        val bestBlockNum  = appStateStorage.getBestBlockNumber()
+        val pivotHeader   = blockchainReader.getBlockHeaderByNumber(bestBlockNum)
+
+        val rootMismatch = for {
+          snapRoot  <- snapStateRoot
+          pivotHdr  <- pivotHeader
+        } yield snapRoot != pivotHdr.stateRoot
+
+        // snapStateRoot=None with snapSyncDone=true is inconsistent — no healed root was ever
+        // committed. Treat same as mismatch: re-enter healing to produce a consistent state.
+        val needReHeal = rootMismatch.contains(true) || snapStateRoot.isEmpty
+
+        if (needReHeal) {
+          log.warning(
+            "SNAP state root mismatch at startup: snapStateRoot={} != pivotHeader.stateRoot={}. " +
+              "Clearing snapSyncDone to re-enter SNAP healing with a fresh pivot (BUG-009 recovery). " +
+              "All downloaded account/storage/bytecode data is preserved — only healing reruns.",
+            snapStateRoot.map(_.take(8).toArray.map("%02x".format(_)).mkString).getOrElse("none"),
+            pivotHeader.map(_.stateRoot.take(8).toArray.map("%02x".format(_)).mkString).getOrElse("none")
           )
-          if (!pivotRootExists) {
-            val finalizedRoot = appStateStorage.getSnapSyncFinalizedRoot()
-            finalizedRoot match {
-              case Some(fRoot) =>
-                val fRootExists =
-                  try { mptStorage.get(fRoot.toArray); true }
-                  catch { case _: Exception => false }
-                log.info(
-                  "Finalized trie root {} availability: {}",
-                  fRoot.take(8).toArray.map("%02x".format(_)).mkString,
-                  if (fRootExists) "EXISTS" else "MISSING"
-                )
-                if (fRootExists) {
-                  log.warning(
-                    "Substituting finalized trie root {} into pivot block header (replacing missing root {})",
-                    fRoot.take(8).toArray.map("%02x".format(_)).mkString,
-                    header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString
-                  )
-                  val updatedHeader = header.copy(stateRoot = fRoot)
-                  blockchainWriter.storeBlockHeader(updatedHeader).commit()
-                }
-              case None =>
-                // BUG-009: trie was healed against a different root but the wrong root was committed
-                // to AppStateStorage (coincidentally equalling pivotHeader.stateRoot, so A5 guard
-                // passed). Auto-recover: clear snapSyncDone so SNAP re-enters healing on this startup.
-                // All downloaded accounts, storage, and bytecodes are preserved — only healing reruns.
-                log.error(
-                  "Pivot state root {} MISSING from RocksDB and no finalized root stored. " +
-                    "Auto-recovering: clearing snapSyncDone to re-run SNAP healing (BUG-009).",
-                  header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString
-                )
-                appStateStorage.clearSnapSyncDone().commit()
-            }
+          appStateStorage.clearSnapSyncDone().commit()
+          appStateStorage.clearFastSyncDone().commit()
+          startSnapSync(minPivotBlock = Some(bestBlockNum))
+        } else {
+          // Roots match. Verify the root node is actually in RocksDB (A5b: roots can match but
+          // the trie be incomplete if the wrong root coincidentally equalled pivotHeader.stateRoot).
+          val mptStore = stateStorage.getReadOnlyStorage
+          val rootNodeAbsent = snapStateRoot.exists { root =>
+            try { mptStore.get(root.toArray); false }
+            catch { case _: Exception => true }
+          }
+          if (rootNodeAbsent) {
+            log.warning(
+              "SNAP state root matches pivotHeader but root node is absent from RocksDB — " +
+                "clearing snapSyncDone to re-run SNAP healing (BUG-009 A5b recovery)."
+            )
+            appStateStorage.clearSnapSyncDone().commit()
+            appStateStorage.clearFastSyncDone().commit()
+            startSnapSync(minPivotBlock = Some(bestBlockNum))
           } else {
-            // Symmetric case (Run-26): pivot root EXISTS in MPT but differs from snapStateRoot.
-            // The downloaded account trie is stored under snapStateRoot; update the pivot header
-            // to match so the startup diagnostic passes and regular sync reads the correct trie.
-            snapStateRoot.foreach { snapRoot =>
-              if (snapRoot != header.stateRoot) {
-                val snapRootExists =
-                  try { mptStorage.get(snapRoot.toArray); true }
-                  catch { case _: Exception => false }
-                log.info(
-                  "snapStateRoot({}) availability: {}",
-                  snapRoot.take(8).toArray.map("%02x".format(_)).mkString,
-                  if (snapRootExists) "EXISTS" else "MISSING"
-                )
-                if (snapRootExists) {
-                  log.warning(
-                    "snapStateRoot({}) differs from pivotHeader.stateRoot({}) — " +
-                      "updating pivot block header to use downloaded state root.",
-                    snapRoot.take(8).toArray.map("%02x".format(_)).mkString,
-                    header.stateRoot.take(8).toArray.map("%02x".format(_)).mkString
-                  )
-                  val updatedHeader = header.copy(stateRoot = snapRoot)
-                  blockchainWriter.storeBlockHeader(updatedHeader).commit()
-                }
-              }
+            // Trie is present and correct. Run any incomplete recovery passes.
+            val needBytecode = !appStateStorage.isBytecodeRecoveryDone()
+            val needStorage  = !appStateStorage.isStorageRecoveryDone()
+            val needFlatHeal = !appStateStorage.isFlatHealingDone()
+            if (needBytecode || needStorage) {
+              startRecovery(needBytecode, needStorage)
+            } else if (needFlatHeal) {
+              startFlatHealing()
+            } else {
+              startRegularSync()
             }
           }
-        }
-        val needBytecode = !appStateStorage.isBytecodeRecoveryDone()
-        val needStorage = !appStateStorage.isStorageRecoveryDone()
-        val needFlatHeal = !appStateStorage.isFlatHealingDone()
-        if (needBytecode || needStorage) {
-          startRecovery(needBytecode, needStorage)
-        } else if (needFlatHeal) {
-          startFlatHealing()
-        } else {
-          startRegularSync()
         }
       case (_, false, false, true) =>
         startFastSync()
