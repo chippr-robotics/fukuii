@@ -116,6 +116,10 @@ class SNAPSyncController(
   private var bytecodePhaseComplete: Boolean = false
   private var storagePhaseComplete: Boolean = false
   private var storagePhaseForceCompleted: Boolean = false
+  // Set when a pivot refresh occurs with non-empty preserved ranges, or when disk-recovered
+  // ranges are loaded on restart. Prevents shouldSkipHealingAfterDownloads from bypassing
+  // TrieNodeHealing when flat-DB may contain values from an older state root.
+  private var pivotRefreshedWithPreservedRanges: Boolean = false
 
   private val progressMonitor = new SyncProgressMonitor(scheduler)
 
@@ -1373,7 +1377,7 @@ class SNAPSyncController(
       accountsComplete && bytecodePhaseComplete && storagePhaseComplete &&
       currentPhase != StateHealing && currentPhase != ChainDownloadCompletion && currentPhase != Completed
     ) {
-      if (SNAPSyncController.shouldSkipHealingAfterDownloads(snapSyncConfig, storagePhaseForceCompleted)) {
+      if (SNAPSyncController.shouldSkipHealingAfterDownloads(snapSyncConfig, storagePhaseForceCompleted, pivotRefreshedWithPreservedRanges)) {
         // With deferred merkleization, trie nodes were never constructed during download —
         // only flat storage was written. A trie walk would find the entire internal trie "missing",
         // taking hours to scan and failing to heal (peers can't serve the full trie via GetTrieNodes).
@@ -2576,6 +2580,7 @@ class SNAPSyncController(
     bytecodePhaseComplete = false
     storagePhaseComplete = false
     storagePhaseForceCompleted = false
+    pivotRefreshedWithPreservedRanges = false
     bytecodesEstimatedTotal = 0L
     healingValidatedRoot = None
 
@@ -2777,6 +2782,7 @@ class SNAPSyncController(
             )
             preservedRangeProgress = savedRanges
             preservedAtPivotBlock = Some(savedPivot)
+            pivotRefreshedWithPreservedRanges = true
           } else if (savedRanges.nonEmpty) {
             log.info(
               s"Discarding stale disk progress: pivot drifted ${(currentPivot - savedPivot).abs} blocks " +
@@ -3787,6 +3793,10 @@ class SNAPSyncController(
     // Without this, drift on restart is measured from the original pivot, not the refreshed one,
     // causing MaxPreservedPivotDistance to be exceeded after ~55 min and all range progress lost.
     preservedAtPivotBlock = None
+    // If ranges were preserved at the time of this pivot refresh, flat-DB may contain account
+    // values from the old root. Mark this so shouldSkipHealingAfterDownloads forces TrieNodeHealing
+    // (and FlatDatabaseHealingActor corrects any stale values in its post-sync pass).
+    if (preservedRangeProgress.nonEmpty) pivotRefreshedWithPreservedRanges = true
     // Bump validationGeneration so any in-flight validation Future's result
     // is dropped on arrival rather than applied against the stale root. The
     // phase gate above is the primary defense; this is defense-in-depth for
@@ -3880,6 +3890,7 @@ class SNAPSyncController(
     bytecodePhaseComplete = false
     storagePhaseComplete = false
     storagePhaseForceCompleted = false
+    pivotRefreshedWithPreservedRanges = false
     // Reset bytecode-estimate counter so it stays in sync with progressMonitor.reset()
     // (called below). IncrementalContractData will repopulate as accounts are re-identified.
     bytecodesEstimatedTotal = 0L
@@ -4467,9 +4478,12 @@ object SNAPSyncController {
 
   private[snap] def shouldSkipHealingAfterDownloads(
       snapSyncConfig: SNAPSyncConfig,
-      storagePhaseForceCompleted: Boolean
+      storagePhaseForceCompleted: Boolean,
+      pivotRefreshedWithPreservedRanges: Boolean
   ): Boolean =
-    snapSyncConfig.deferredMerkleization && !storagePhaseForceCompleted
+    snapSyncConfig.deferredMerkleization &&
+      !storagePhaseForceCompleted &&
+      !pivotRefreshedWithPreservedRanges
 
   /** Freshness gate for `refreshPivotInPlace`: reject candidate pivots whose source peer is more than `maxStaleness`
     * blocks behind the CL-driven head.

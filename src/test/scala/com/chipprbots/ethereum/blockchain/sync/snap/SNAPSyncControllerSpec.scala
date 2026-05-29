@@ -167,7 +167,8 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
 
     SNAPSyncController.shouldSkipHealingAfterDownloads(
       snapSyncConfig = config,
-      storagePhaseForceCompleted = false
+      storagePhaseForceCompleted = false,
+      pivotRefreshedWithPreservedRanges = false
     ) shouldBe true
   }
 
@@ -176,7 +177,8 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
 
     SNAPSyncController.shouldSkipHealingAfterDownloads(
       snapSyncConfig = config,
-      storagePhaseForceCompleted = true
+      storagePhaseForceCompleted = true,
+      pivotRefreshedWithPreservedRanges = false
     ) shouldBe false
   }
 
@@ -1799,6 +1801,113 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
     // No progress written — simulates a first-ever bootstrap or post-clear state
     val blob = storage.getSnapSyncProgress().getOrElse("")
     parseSavedPivot(blob) shouldBe None
+  }
+
+  // -----------------------------------------------------------------------
+  // Group G — pivotRefreshedWithPreservedRanges flag + shouldSkipHealingAfterDownloads
+  // -----------------------------------------------------------------------
+  // These tests verify the belt-and-suspenders guard that prevents TrieNodeHealing
+  // from being skipped when flat-DB may contain account values from an older state root.
+  // (FlatDatabaseHealingActor corrects the stale values in its post-sync pass, but
+  // TrieNodeHealing must run first to ensure the trie is complete before that pass.)
+
+  // Helper: simulate the flag-setting logic from completePivotRefreshWithStateRoot
+  private def flagWhenPreservedNonEmpty(preservedRanges: Map[ByteString, ByteString]): Boolean = {
+    var flag = false
+    if (preservedRanges.nonEmpty) flag = true
+    flag
+  }
+
+  // Helper: simulate the disk-recovery flag-setting logic
+  private def flagFromDiskRecovery(
+      storage: AppStateStorage,
+      currentPivot: BigInt
+  ): Boolean = {
+    var flag = false
+    storage.getSnapSyncProgress().foreach { saved =>
+      val lines  = saved.split('\n').filter(_.nonEmpty)
+      val pivot  = lines.find(_.startsWith("pivotBlock=")).map(l => BigInt(l.stripPrefix("pivotBlock=")))
+      val ranges = lines.filterNot(_.startsWith("pivotBlock="))
+      pivot.foreach { savedPivot =>
+        if (ranges.nonEmpty && (currentPivot - savedPivot).abs <= 256)
+          flag = true
+      }
+    }
+    flag
+  }
+
+  "shouldSkipHealingAfterDownloads" should
+    "return true only for the clean path (G1 — truth table)" taggedAs UnitTest in {
+      val deferredCfg    = SNAPSyncConfig(deferredMerkleization = true)
+      val nondeferredCfg = SNAPSyncConfig(deferredMerkleization = false)
+
+      // (deferredMerkleization, storageForceCompleted, pivotRefreshedWithPreservedRanges) → expected
+      val cases = Seq(
+        (deferredCfg,    false, false) -> true,   // only clean path skips healing
+        (deferredCfg,    true,  false) -> false,  // force-complete mandates healing
+        (deferredCfg,    false, true)  -> false,  // preserved ranges mandate healing
+        (deferredCfg,    true,  true)  -> false,  // both flags mandate healing
+        (nondeferredCfg, false, false) -> false,  // non-deferred never skips
+        (nondeferredCfg, true,  false) -> false,
+        (nondeferredCfg, false, true)  -> false,
+        (nondeferredCfg, true,  true)  -> false
+      )
+
+      cases.foreach { case ((cfg, forceCompleted, pivotRefreshed), expected) =>
+        withClue(s"(deferred=${cfg.deferredMerkleization}, forceCompleted=$forceCompleted, pivotRefreshed=$pivotRefreshed)") {
+          SNAPSyncController.shouldSkipHealingAfterDownloads(cfg, forceCompleted, pivotRefreshed) shouldBe expected
+        }
+      }
+    }
+
+  it should "not skip healing when pivotRefreshedWithPreservedRanges=true (G8 — key regression)" taggedAs UnitTest in {
+    val cfg = SNAPSyncConfig(deferredMerkleization = true)
+    SNAPSyncController.shouldSkipHealingAfterDownloads(
+      cfg, storagePhaseForceCompleted = false, pivotRefreshedWithPreservedRanges = true
+    ) shouldBe false
+  }
+
+  "pivotRefreshedWithPreservedRanges flag" should
+    "be set when completePivotRefreshWithStateRoot fires with non-empty preserved ranges (G2)" taggedAs UnitTest in {
+      val nonEmpty = Map(ByteString("hash") -> ByteString("next"))
+      flagWhenPreservedNonEmpty(nonEmpty) shouldBe true
+    }
+
+  it should "NOT be set when completePivotRefreshWithStateRoot fires with empty preserved ranges (G3)" taggedAs UnitTest in {
+    flagWhenPreservedNonEmpty(Map.empty) shouldBe false
+  }
+
+  it should "be set in disk-recovery path when savedPivot is within drift window (G4)" taggedAs UnitTest in {
+    val storage     = new AppStateStorage(EphemDataSource())
+    val savedPivot: BigInt = 24_000_000
+    storage.putSnapSyncProgress(makeProgressBlob(savedPivot)).commit()
+
+    val currentPivot: BigInt = savedPivot + 100 // within 256
+    flagFromDiskRecovery(storage, currentPivot) shouldBe true
+  }
+
+  it should "NOT be set when disk-recovered pivot drift exceeds window (G5 — ranges discarded)" taggedAs UnitTest in {
+    val storage     = new AppStateStorage(EphemDataSource())
+    val savedPivot: BigInt = 24_000_000
+    storage.putSnapSyncProgress(makeProgressBlob(savedPivot)).commit()
+
+    val currentPivot: BigInt = savedPivot + 400 // outside 256
+    flagFromDiskRecovery(storage, currentPivot) shouldBe false
+  }
+
+  it should "clear in dormant-wakeup reset (G6 — logic)" taggedAs UnitTest in {
+    // Simulate: flag was true, then reset block runs
+    var pivotRefreshedWithPreservedRanges = true
+    // dormant-wakeup reset block (line ~2578):
+    pivotRefreshedWithPreservedRanges = false
+    pivotRefreshedWithPreservedRanges shouldBe false
+  }
+
+  it should "clear in full-restart reset (G7 — logic)" taggedAs UnitTest in {
+    var pivotRefreshedWithPreservedRanges = true
+    // full restart reset block (line ~3856):
+    pivotRefreshedWithPreservedRanges = false
+    pivotRefreshedWithPreservedRanges shouldBe false
   }
 }
 

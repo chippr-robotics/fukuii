@@ -18,24 +18,31 @@ import com.chipprbots.ethereum.utils.ByteStringUtils.ByteStringOps
 /** Post-recovery flat database integrity verifier (Phase 7 A7).
   *
   * After BytecodeRecoveryActor + StorageRecoveryActor complete, this actor issues 256 GetAccountRange probes (one per
-  * first-byte segment) to detect accounts that the MPT contains but that flat storage is missing. Each probe covers one
-  * 1/256 shard of the 32-byte hash space: segment i spans [i||00..00, i||FF..FF].
+  * first-byte segment) to detect accounts that the MPT contains but that flat storage is missing, and to overwrite any
+  * flat-DB entries whose encoded value differs from the trie-verified peer response (stale values from prior pivot
+  * downloads). Each probe covers one 1/256 shard of the 32-byte hash space: segment i spans [i||00..00, i||FF..FF].
   *
   * The SNAP AccountRange response includes a Merkle range proof. verifyAccountRange() confirms the returned accounts
-  * are a complete, valid subset of the trie. Any account hash absent from FlatAccountStorage is written immediately.
+  * are a complete, valid subset of the trie. Any account hash absent from FlatAccountStorage is written immediately;
+  * any account whose flat-DB value differs from the trie response is overwritten with the correct value.
   *
-  * On clean SNAP sync (no crash), flatHealingDone() is written atomically with snapSyncDone() in SNAPSyncController so
-  * this actor is skipped entirely on normal restarts. The 256-probe scan only runs on the crash-recovery path.
+  * On clean SNAP sync (no crash, no pivot refresh with preserved ranges), flatHealingDone() is written atomically with
+  * snapSyncDone() in SNAPSyncController so this actor is skipped entirely. The 256-probe scan runs on the
+  * crash-recovery path and whenever stale flat-DB values may exist.
   *
   * Cursor: segment index (0-255) persisted as an integer after each successful probe, cleared atomically with the
   * done-flag on completion. A crash mid-scan resumes from the last committed segment.
+  *
+  * @param proofVerifier optional override for the Merkle proof verifier — used in unit tests to bypass real proof
+  *                      verification without needing a live MPT. Production callers leave this null.
   */
 class FlatDatabaseHealingActor(
     stateRoot: ByteString,
     flatAccountStorage: FlatAccountStorage,
     appStateStorage: AppStateStorage,
     networkPeerManager: ActorRef,
-    syncController: ActorRef
+    syncController: ActorRef,
+    proofVerifier: (Seq[(ByteString, Account)], Seq[ByteString], ByteString, ByteString) => Either[String, Unit] = null
 ) extends Actor
     with ActorLogging {
 
@@ -126,23 +133,41 @@ class FlatDatabaseHealingActor(
     }
   }
 
+  private def verify(
+      accounts: Seq[(ByteString, Account)],
+      proof: Seq[ByteString],
+      start: ByteString,
+      end: ByteString
+  ): Either[String, Unit] =
+    if (proofVerifier != null) proofVerifier(accounts, proof, start, end)
+    else MerkleProofVerifier(stateRoot).verifyAccountRange(accounts, proof, start, end)
+
   private def handleResponse(msg: AccountRange): Unit = {
     val startHash = segmentStart(currentSegment)
     val endHash = segmentEnd(currentSegment)
-    MerkleProofVerifier(stateRoot).verifyAccountRange(msg.accounts, msg.proof, startHash, endHash) match {
+    verify(msg.accounts, msg.proof, startHash, endHash) match {
       case Left(err) =>
         log.warning(s"[FLAT-HEAL] segment $currentSegment proof verification failed: $err — retrying with new peer")
         currentPeer = None
         context.become(waitingForPeer)
 
       case Right(_) =>
-        val missing = msg.accounts.filter { case (hash, _) => flatAccountStorage.getAccount(hash).isEmpty }
-        if (missing.nonEmpty) {
-          val toWrite = missing.map { case (hash, account) =>
-            (hash, ByteString.fromArrayUnsafe(Account.accountSerializer.toBytes(account)))
+        var missingCount = 0
+        var staleCount   = 0
+        val toWrite = msg.accounts.flatMap { case (hash, account) =>
+          val encoded = ByteString.fromArrayUnsafe(Account.accountSerializer.toBytes(account))
+          flatAccountStorage.getAccount(hash) match {
+            case None                                  => missingCount += 1; Some((hash, encoded))
+            case Some(existing) if existing != encoded => staleCount += 1;   Some((hash, encoded))
+            case _                                     => None
           }
+        }
+        if (toWrite.nonEmpty) {
           flatAccountStorage.putAccountsBatch(toWrite).commit()
-          log.info(s"[FLAT-HEAL] segment $currentSegment: repaired ${missing.size} missing accounts")
+          log.info(
+            s"[FLAT-HEAL] segment $currentSegment: repaired ${toWrite.size} accounts " +
+              s"($missingCount missing, $staleCount stale)"
+          )
         }
         advanceSegment()
     }
@@ -190,7 +215,8 @@ object FlatDatabaseHealingActor {
       flatAccountStorage: FlatAccountStorage,
       appStateStorage: AppStateStorage,
       networkPeerManager: ActorRef,
-      syncController: ActorRef
+      syncController: ActorRef,
+      proofVerifier: (Seq[(ByteString, Account)], Seq[ByteString], ByteString, ByteString) => Either[String, Unit] = null
   ): Props =
     Props(
       new FlatDatabaseHealingActor(
@@ -198,7 +224,8 @@ object FlatDatabaseHealingActor {
         flatAccountStorage = flatAccountStorage,
         appStateStorage = appStateStorage,
         networkPeerManager = networkPeerManager,
-        syncController = syncController
+        syncController = syncController,
+        proofVerifier = proofVerifier
       )
     )
 }
