@@ -1939,7 +1939,11 @@ class SNAPSyncController(
                       totalTasks
                     }
                     .foreach { count =>
-                      log.info(s"Recovery: streamed $count storage tasks from ${filePath}")
+                      slog.info(
+                        "Recovery: streamed storage tasks from file",
+                        kv("count", count.toString),
+                        kv("filePath", filePath.toString)
+                      )
                       // Signal no more tasks — sentinel allows completion
                       coordinator ! actors.Messages.NoMoreStorageTasks
                     }
@@ -1988,7 +1992,11 @@ class SNAPSyncController(
                       totalHashes
                     }
                     .foreach { count =>
-                      log.info(s"Recovery: streamed $count codeHashes from ${filePath} for bytecode sync")
+                      slog.info(
+                        "Recovery: streamed codeHashes from file for bytecode sync",
+                        kv("count", count.toString),
+                        kv("filePath", filePath.toString)
+                      )
                       coordinator ! actors.Messages.NoMoreByteCodeTasks
                     }
                 } else {

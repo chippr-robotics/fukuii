@@ -369,6 +369,26 @@ class BlockFetcher(
         log.warn("Received late/duplicate RetryBodiesRequest (not fetching). Clearing state and retrying fetch.")
         fetchBlocks(state)
 
+      case FetchAccountStorage(accountAddress, replyTo, canonicalStateRoot) =>
+        // Tier 2 storage recovery: re-download full canonical account data + storage for the
+        // stuck account (path mismatch: GetTrieNodes returned 0 for all state roots).
+        //
+        // TODO(STORAGE-HEAL): Spawn AccountStorageFetcher here to:
+        //   1. GetAccountRange for accountAddress → canonical storageRoot
+        //   2. GetStorageRanges with that storageRoot → all storage nodes
+        //   3. Write nodes to RocksDB + update account leaf
+        //   4. Reply FetchedAccountStorage(accountAddress, success=true)
+        //
+        // For now, fall back to RegularSyncStuck (success=false) so existing recovery fires.
+        // The detection/logging infrastructure above still provides full visibility.
+        log.info(
+          "[STORAGE-HEAL] FetchAccountStorage for account {} canonicalRoot={} (AccountStorageFetcher not yet implemented — falling back to RegularSyncStuck)",
+          ByteStringUtils.hash2string(accountAddress),
+          canonicalStateRoot.map(r => ByteStringUtils.hash2string(r.take(4))).getOrElse("none")
+        )
+        replyTo ! FetchedAccountStorage(accountAddress, success = false)
+        Behaviors.same
+
       case FetchStateNode(hash, replyTo, stateRoot, paths, networkHead, isByteCode) =>
         val head = if (networkHead > 0) networkHead else state.knownTop
         log.debug(
@@ -672,7 +692,17 @@ object BlockFetcher {
   final case class ReceivedHeaders(peer: Peer, headers: Seq[BlockHeader]) extends FetchCommand
   final case class ReceivedBodies(peer: Peer, bodies: Seq[BlockBody]) extends FetchCommand
 
+  // Tier 2 storage recovery — when GetTrieNodes exhausts due to storage path mismatch.
+  // Requests a full account + storage re-download for one specific account so the block
+  // can be retried with the correct canonical storageRoot.
+  final case class FetchAccountStorage(
+      accountAddress: ByteString, // raw 20-byte address from MissingStorageNodeException
+      replyTo: ClassicActorRef, // BlockImporter to reply to
+      canonicalStateRoot: Option[ByteString] // parent state root for GetAccountRange pivot
+  ) extends FetchCommand
+
   sealed trait FetchResponse
   final case class PickedBlocks(blocks: NonEmptyList[Block]) extends FetchResponse
   final case class FetchedStateNode(stateNode: NodeData) extends FetchResponse
+  final case class FetchedAccountStorage(accountAddress: ByteString, success: Boolean) extends FetchResponse
 }

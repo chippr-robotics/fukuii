@@ -65,6 +65,10 @@ class BlockImporter(
   context.setReceiveTimeout(syncConfig.syncRetryInterval)
 
   private var pendingStateNodeHash: Option[ByteString] = None
+  // Tracks account address + parent state root when the stuck node is a storage trie node.
+  // Used to escalate to GetStorageRanges (Tier 2) before falling through to RegularSyncStuck.
+  private var pendingStuckStorageAccount: Option[ByteString] = None
+  private var pendingStuckStorageStateRoot: Option[ByteString] = None
 
   // Reset the companion-object exhaust counter on fresh actor creation.
   // On Pekko Restart, only postRestart() fires — preStart() is skipped — so
@@ -150,20 +154,41 @@ class BlockImporter(
 
       if (BlockImporter.survivedExhausts >= BlockImporter.StuckEscapeThreshold || stuckTooLong) {
         // Multiple consecutive exhausts mean peers genuinely don't have our parent state and
-        // never will (we're far behind their snap-serve window). The only recovery is to re-pivot
-        // via SNAP. Reset our local counter so we don't re-fire if SyncController bounces us back
-        // to regular sync; the SnapFastEscapeHatch handles cycle limits.
-        log.error(
-          "Regular sync stuck on block {} after {} consecutive state-node exhausts (missing {}); requesting SNAP re-sync",
-          blockNum,
-          BlockImporter.survivedExhausts,
-          missingHashStr
-        )
-        BlockImporter.survivedExhausts = 0
-        BlockImporter.stuckSinceMs = 0L
-        pendingStateNodeHash = None
-        supervisor ! SyncProtocol.RegularSyncStuck(blockNum, missingHashStr)
-        // Don't transition further — SyncController will PoisonPill regular sync.
+        // never will (we're far behind their snap-serve window).
+        //
+        // Tier 2: if this is a storage node that exhausted due to path mismatch (all canonical
+        // state roots returned 0), escalate to GetStorageRanges for the stuck account before
+        // giving up on RegularSync entirely.
+        pendingStuckStorageAccount match {
+          case Some(accountAddr) =>
+            log.warning(
+              "[STORAGE-HEAL] GetTrieNodes exhausted for storage node {} account {} block {} — all roots returned 0 (path mismatch). Escalating to GetStorageRanges.",
+              missingHashStr,
+              ByteStringUtils.hash2string(accountAddr),
+              blockNum
+            )
+            // Keep survivedExhausts and stuckSinceMs — if storage range also fails we need them
+            pendingStateNodeHash = None
+            pendingStuckStorageAccount = None
+            fetcher ! BlockFetcher.FetchAccountStorage(accountAddr, self, pendingStuckStorageStateRoot)
+            pendingStuckStorageStateRoot = None
+            context.setReceiveTimeout(5.minutes)
+            context.become(resolvingStorageRange(blocksToRetry, blockImportType)(state))
+          case None =>
+            // Not a storage path-mismatch — fall through to Tier 3: RegularSyncStuck
+            log.error(
+              "Regular sync stuck on block {} after {} consecutive state-node exhausts (missing {}); requesting SNAP re-sync",
+              blockNum,
+              BlockImporter.survivedExhausts,
+              missingHashStr
+            )
+            BlockImporter.survivedExhausts = 0
+            BlockImporter.stuckSinceMs = 0L
+            pendingStateNodeHash = None
+            pendingStuckStorageStateRoot = None
+            supervisor ! SyncProtocol.RegularSyncStuck(blockNum, missingHashStr)
+          // Don't transition further — SyncController will PoisonPill regular sync.
+        }
       } else {
         log.error(
           "State node recovery failed after max retries for block {} (consecutive exhausts: {}/{}) — backing off {}s before retry",
@@ -200,15 +225,61 @@ class BlockImporter(
       BlockImporter.survivedExhausts = 0
       BlockImporter.stuckSinceMs = 0L
       pendingStateNodeHash = None
+      pendingStuckStorageAccount = None
+      pendingStuckStorageStateRoot = None
       importBlocks(blocksToRetry, blockImportType)(state)
 
     case ReceiveTimeout =>
-      log.warning("Timed out waiting for missing state node for block {}, retrying import", blocksToRetry.head.number)
+      log.warning(
+        "Timed out waiting for missing state node for block {} (consecutiveExhausts={}/{}), retrying",
+        blocksToRetry.head.number,
+        BlockImporter.survivedExhausts,
+        BlockImporter.StuckEscapeThreshold
+      )
       // Retry the same blocks directly — don't PickBlocks, which would fetch from wherever the
       // fetcher is now (potentially far beyond the pivot). After SNAP sync, only the pivot header
       // has a number→hash mapping, so branch resolution would fail for any other starting point.
       BlockImporter.survivedExhausts += 1
       importBlocks(blocksToRetry, blockImportType)(state)
+  }
+
+  private def resolvingStorageRange(blocksToRetry: NonEmptyList[Block], blockImportType: BlockImportType)(
+      state: ImporterState
+  ): Receive = {
+    case BlockFetcher.FetchedAccountStorage(accountAddr, success) =>
+      val blockNum = blocksToRetry.head.number
+      if (success) {
+        log.info(
+          "[STORAGE-HEAL] Account {} storage re-downloaded — account leaf updated, retrying block {}",
+          ByteStringUtils.hash2string(accountAddr),
+          blockNum
+        )
+        BlockImporter.survivedExhausts = 0
+        BlockImporter.stuckSinceMs = 0L
+        importBlocks(blocksToRetry, blockImportType)(state)
+      } else {
+        log.error(
+          "[STORAGE-HEAL] Account {} storage range download failed for block {} — escalating to RegularSyncStuck",
+          ByteStringUtils.hash2string(accountAddr),
+          blockNum
+        )
+        BlockImporter.survivedExhausts = 0
+        BlockImporter.stuckSinceMs = 0L
+        supervisor ! SyncProtocol.RegularSyncStuck(
+          blockNum,
+          s"storage-range-unavailable:${ByteStringUtils.hash2string(accountAddr)}"
+        )
+      }
+
+    case ReceiveTimeout =>
+      val blockNum = blocksToRetry.head.number
+      log.error(
+        "[STORAGE-HEAL] Timeout waiting for account storage range download for block {} — escalating to RegularSyncStuck",
+        blockNum
+      )
+      BlockImporter.survivedExhausts = 0
+      BlockImporter.stuckSinceMs = 0L
+      supervisor ! SyncProtocol.RegularSyncStuck(blockNum, "storage-range-timeout")
   }
 
   private def resolvingBranch(from: BigInt)(state: ImporterState): Receive =
@@ -322,13 +393,16 @@ class BlockImporter(
                     Some(Seq(Seq(accountHash, emptyStoragePath)))
                   }
                 log.info(
-                  "Missing storage node {} for account {} during import of block {}, locationKnown={}",
+                  "Missing storage node {} for account {} during import of block {}, locationKnown={} — will escalate to GetStorageRanges if GetTrieNodes exhausts",
                   ByteStringUtils.hash2string(e.hash),
                   ByteStringUtils.hash2string(e.accountAddress),
                   failedBlock.number,
                   e.location.isDefined
                 )
                 pendingStateNodeHash = Some(e.hash)
+                // Save account address + parent state root so resolvingMissingNode can escalate to Tier 2 if needed
+                pendingStuckStorageAccount = Some(e.accountAddress)
+                pendingStuckStorageStateRoot = parentStateRoot
                 fetcher ! BlockFetcher.FetchStateNode(e.hash, self, parentStateRoot, paths)
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
               case e: MissingNodeException =>
