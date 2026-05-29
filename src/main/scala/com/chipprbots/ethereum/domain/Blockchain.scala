@@ -60,6 +60,15 @@ trait Blockchain {
   def getReadOnlyMptStorage(): MptStorage
 
   def removeBlock(hash: ByteString): Unit
+
+  /** Flush all in-memory MPT trie nodes written during block execution to RocksDB.
+    *
+    * Must be called after each block is saved. Without this, nodes written with
+    * `inMemory=true` by ReferenceCountNodeStorage live only in the LRU cache and
+    * are lost on restart — no peer can serve them since they were never part of a
+    * persisted state root.
+    */
+  def saveBlockState(bn: BigInt): Unit
 }
 
 class BlockchainImpl(
@@ -114,6 +123,9 @@ class BlockchainImpl(
   def getBackingMptStorage(blockNumber: BigInt): MptStorage = stateStorage.getBackingStorage(blockNumber)
 
   def getReadOnlyMptStorage(): MptStorage = stateStorage.getReadOnlyStorage
+
+  override def saveBlockState(bn: BigInt): Unit =
+    stateStorage.onBlockSave(bn, appStateStorage.getBestBlockNumber())(() => ())
 
   private def removeBlockNumberMapping(number: BigInt): DataSourceBatchUpdate =
     blockNumberMappingStorage.remove(number)
