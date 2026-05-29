@@ -1034,6 +1034,21 @@ class SNAPSyncController(
       slog.warn("[HEAL-STAGNATED] Healing stuck, refreshing pivot", kv("healed", healed), kv("pending", pending))
       refreshPivotInPlace("healing-stagnated")
 
+    case HealingInterrupted =>
+      // TrieNodeHealingCoordinator stopped with pending work (crash or supervisor restart).
+      // Only restart if we're still in StateHealing and no coordinator is running yet.
+      // Guard against postStop from an intentionally-stopped coordinator racing with a new one.
+      if (currentPhase == StateHealing && trieNodeHealingCoordinator.isEmpty) {
+        log.warning("[HEAL] Healing coordinator interrupted — restarting from saved frontier checkpoint")
+        startStateHealing()
+      } else {
+        slog.info(
+          "HealingInterrupted received — healing already active or phase changed, ignoring",
+          kv("phase", currentPhase.toString),
+          kv("coordinatorPresent", trieNodeHealingCoordinator.isDefined.toString)
+        )
+      }
+
     case StateHealingComplete =>
       slog.info(
         "Healing coordinator signaled complete",
@@ -4566,6 +4581,7 @@ object SNAPSyncController {
   )
   case object StateHealingComplete
   case object HealingAllPeersStateless
+  case object HealingInterrupted
   case object StateValidationComplete
   case object GetProgress
 

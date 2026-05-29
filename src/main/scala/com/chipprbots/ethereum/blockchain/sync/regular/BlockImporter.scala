@@ -380,9 +380,20 @@ class BlockImporter(
                     )
                     ResolvingMissingNode(NonEmptyList(failedBlock, notImportedBlocks.tail))
                   case None =>
-                    log.error("Gas mismatch on block {} but no missing contract code found", failedBlock.number)
-                    val invalidBlockNr = failedBlock.number
-                    fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
+                    // No missing bytecode — the gas divergence likely comes from incomplete
+                    // storage state (SLOAD returning 0 due to missing/wrong storage trie data).
+                    // InvalidateBlocksFrom + Running would loop forever since the state doesn't
+                    // change between retries. Escalate to SNAP re-sync so the MinPivotBlock
+                    // guard heals the state at this pivot before retrying the block.
+                    log.error(
+                      "Gas mismatch on block {} — no missing code found, escalating to SNAP re-sync " +
+                        "(likely incomplete storage state)",
+                      failedBlock.number
+                    )
+                    BlockImporter.survivedExhausts = 0
+                    BlockImporter.stuckSinceMs = 0L
+                    pendingStateNodeHash = None
+                    supervisor ! SyncProtocol.RegularSyncStuck(failedBlock.number, err.toString)
                     Running
                 }
               case _ =>

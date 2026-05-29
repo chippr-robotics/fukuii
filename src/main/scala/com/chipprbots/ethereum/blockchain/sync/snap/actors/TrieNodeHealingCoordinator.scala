@@ -318,6 +318,15 @@ class TrieNodeHealingCoordinator(
       )
       flushRawNodesSync()
     }
+    // Notify controller if there is pending work so it can restart healing from the
+    // persisted frontier checkpoint. Flush runs above so the checkpoint is consistent.
+    if (pendingTasks.nonEmpty || activeRequests.nonEmpty) {
+      log.warning(
+        s"[HEAL] postStop: ${pendingTasks.size} pending + ${activeRequests.size} active " +
+          "requests lost — notifying controller to re-seed from frontier checkpoint"
+      )
+      snapSyncController ! SNAPSyncController.HealingInterrupted
+    }
     super.postStop()
   }
 
