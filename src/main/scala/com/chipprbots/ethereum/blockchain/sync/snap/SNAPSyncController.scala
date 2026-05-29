@@ -2357,8 +2357,55 @@ class SNAPSyncController(
           return
 
         case NetworkPivot =>
-          // Pivot is at or behind local state - this means we're already synced or very close
-          // Fall back to regular sync to catch up the remaining blocks
+          // Guard: if minPivotHint is set we arrived via RegularSyncStuck, NOT "already synced".
+          // The pivot equals localBest because the stall point is exactly the current head.
+          // Perform healing at this pivot rather than short-circuiting to regular sync.
+          if (minPivotHint > 0) {
+            blockchainReader.getBlockHeaderByNumber(pivotBlockNumber) match {
+              case Some(header) =>
+                slog.warn(
+                  "Pivot equals localBest but minPivotHint set — healing missing nodes at current head",
+                  kv("pivot", pivotBlockNumber.toString),
+                  kv("minPivotHint", minPivotHint.toString)
+                )
+                pivotBlock = Some(pivotBlockNumber)
+                stateRoot = Some(header.stateRoot)
+                appStateStorage
+                  .putSnapSyncPivotBlock(pivotBlockNumber)
+                  .and(appStateStorage.putSnapSyncStateRoot(header.stateRoot))
+                  .commit()
+                // peerTD omitted — updateBestBlockForPivot reads real TD from chain storage
+                // (priority 1: getChainWeightByHash). pivot=localBest is canonical so TD is present.
+                updateBestBlockForPivot(header, pivotBlockNumber)
+                if (accountsComplete && storagePhaseComplete && bytecodePhaseComplete) {
+                  log.info("All data phases complete — starting healing at pivot = localBest")
+                  currentPhase = StateHealing
+                  context.become(syncing)
+                  startStateHealing()
+                } else {
+                  slog.info(
+                    "Beginning fast state sync from pivot = localBest",
+                    kv("concurrency", snapSyncConfig.accountConcurrency)
+                  )
+                  currentPhase = AccountRangeSync
+                  context.become(syncing)
+                  startAccountRangeSync(header.stateRoot)
+                }
+              case None =>
+                log.warning(
+                  s"Cannot heal: no local header for pivot $pivotBlockNumber — scheduling retry"
+                )
+                bootstrapRetryCount += 1
+                val delay = bootstrapRetryDelay
+                bootstrapCheckTask.foreach(_.cancel())
+                bootstrapCheckTask = Some(
+                  scheduler.scheduleOnce(delay)(self ! RetrySnapSyncStart)(ec)
+                )
+                context.become(bootstrapping)
+            }
+            return
+          }
+          // Original path: no minPivotHint → genuinely already synced, not a stall scenario
           log.warning("Pivot block is not ahead of local state - likely already synced")
           log.warning("Transitioning to regular sync for final block catch-up")
           context.parent ! Done // Signal completion, which will transition to regular sync

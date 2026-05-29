@@ -149,7 +149,7 @@ class TrieNodeHealingCoordinator(
   // Per-peer adaptive byte budgeting
   private val minResponseBytes: BigInt = 50 * 1024
   private val maxResponseBytes: BigInt = 2 * 1024 * 1024
-  private val initialResponseBytes: BigInt = 512 * 1024
+  private val initialResponseBytes: BigInt = 1024 * 1024
   private val increaseFactor: Double = 1.25
   private val decreaseFactor: Double = 0.5
 
@@ -218,7 +218,10 @@ class TrieNodeHealingCoordinator(
   private[actors] var flushing: Boolean = false
   // Throttle backpressure: if buffer exceeds this many nodes the write thread is falling behind.
   // Distinct from the (removed) count-based flush threshold — this is a heuristic for dispatch throttling only.
-  private val rawBufferBackpressureThreshold = 50
+  // 512 matches the scale of geth/Besu (geth throttles only at pending > 2× rate, Besu uses pipeline
+  // backpressure). The previous value of 50 fired after the first 1-2 responses, collapsing effective
+  // batch size to the throttle floor (batchSize/MaxThrottle = 32) on every healing run.
+  private val rawBufferBackpressureThreshold = 512
 
   // Internal message for async flush completion
   private case class FlushComplete(count: Int)
@@ -953,8 +956,10 @@ class TrieNodeHealingCoordinator(
       flushRawNodesAsync() // flush after every peer response — healing is sparse, per-response persistence preferred
     }
 
-    // Dispatch more work to this peer if available (pipeline multiple requests)
-    dispatchIfPossible(peer)
+    // Dispatch more work to ALL known idle peers (not just the responding peer).
+    // Child discovery may have added new tasks visible to any idle peer.
+    // Matches go-ethereum's pattern: after any response, reassign tasks to all idlers.
+    tryRedispatchPendingTasks()
 
     self ! HealingCheckCompletion
   }
