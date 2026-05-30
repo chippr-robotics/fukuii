@@ -39,6 +39,7 @@ import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.ledger.BranchResolution
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
+import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
@@ -305,6 +306,7 @@ class SyncController(
       // SNAPSyncController already owns the live ChainDownloader child via its
       // `completedWithBackfill` state — don't spawn a duplicate standalone resumer (#1169).
       val regularSync = startRegularSync(resumeBackfill = false)
+
       context.watch(snapSync)
       context.become(runningRegularSyncWithBackfill(regularSync, snapSync))
 
@@ -386,7 +388,10 @@ class SyncController(
     * so the lingering backfill actor is cleaned up before a new sync mode takes over. Everything else is delegated to
     * `runningRegularSync(regularSync)`.
     */
-  def runningRegularSyncWithBackfill(regularSync: ActorRef, snapSync: ActorRef): Receive = {
+  def runningRegularSyncWithBackfill(
+      regularSync: ActorRef,
+      snapSync: ActorRef
+  ): Receive = {
     case com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.Done =>
       log.info("SNAP background backfill complete; shutting down SNAPSyncController.")
       context.unwatch(snapSync)

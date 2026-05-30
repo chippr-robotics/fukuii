@@ -68,17 +68,20 @@ class BlockImporterStorageHealSpec extends AnyFlatSpec with Matchers {
     routesToTier3 shouldBe true
   }
 
-  it should "fire for MissingAccountNodeException on first exhaust — same path as storage" taggedAs (UnitTest, SyncTest) in {
+  it should "fire for MissingAccountNodeException on first exhaust — same path as storage" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
     // After the account-trie mismatch fix, MissingAccountNodeException also sets
     // pendingStuckStorageAccount, so Tier 2 fires on the first exhaust rather than
     // waiting 3 rounds (3 × 5min = 15min penalty).
     val condition = (survivedExhausts: Int, pendingAccount: Option[ByteString]) =>
       (pendingAccount.isDefined && survivedExhausts >= 1) || survivedExhausts >= StuckEscapeThreshold
 
-    condition(1, Some(testAccountAddr)) shouldBe true  // account trie miss → Tier 2 immediately
-    condition(1, None)                  shouldBe false // account node, no tracking → wait
-    condition(2, None)                  shouldBe false // still waiting
-    condition(3, None)                  shouldBe true  // threshold reached → Tier 3
+    condition(1, Some(testAccountAddr)) shouldBe true // account trie miss → Tier 2 immediately
+    condition(1, None) shouldBe false // account node, no tracking → wait
+    condition(2, None) shouldBe false // still waiting
+    condition(3, None) shouldBe true // threshold reached → Tier 3
   }
 
   // ─── Counter reset invariants ───────────────────────────────────────────────

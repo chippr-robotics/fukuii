@@ -190,6 +190,30 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putSnapSyncStateRoot(stateRoot: ByteString): DataSourceBatchUpdate =
     put(Keys.SnapSyncStateRoot, Hex.toHexString(stateRoot.toArray))
 
+  /** Total accounts downloaded during the completed AccountRangeSync phase.
+    * Persisted at phase completion for accurate scan progress percentages
+    * (rocksdb.estimate-num-keys is ~50% off on ETC mainnet flat storage).
+    */
+  def getSnapSyncTotalAccounts(): Option[Long] =
+    get(Keys.SnapSyncTotalAccounts).flatMap(v => scala.util.Try(v.toLong).toOption)
+
+  def putSnapSyncTotalAccounts(total: Long): DataSourceBatchUpdate =
+    put(Keys.SnapSyncTotalAccounts, total.toString)
+
+  /** Total bytecodes downloaded during the completed ByteCodeAndStorageSync phase. */
+  def getSnapSyncTotalBytecodes(): Option[Long] =
+    get(Keys.SnapSyncTotalBytecodes).flatMap(v => scala.util.Try(v.toLong).toOption)
+
+  def putSnapSyncTotalBytecodes(total: Long): DataSourceBatchUpdate =
+    put(Keys.SnapSyncTotalBytecodes, total.toString)
+
+  /** Total contracts (unique storage tries) completed during the ByteCodeAndStorageSync phase. */
+  def getSnapSyncTotalContracts(): Option[Long] =
+    get(Keys.SnapSyncTotalContracts).flatMap(v => scala.util.Try(v.toLong).toOption)
+
+  def putSnapSyncTotalContracts(total: Long): DataSourceBatchUpdate =
+    put(Keys.SnapSyncTotalContracts, total.toString)
+
   /** Get the SNAP sync progress (optional - for progress persistence across restarts)
     *
     * NOTE: This is infrastructure for future use. Currently not integrated into SNAPSyncController. Integration is

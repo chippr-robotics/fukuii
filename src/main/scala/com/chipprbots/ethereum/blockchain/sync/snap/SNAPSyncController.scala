@@ -904,8 +904,13 @@ class SNAPSyncController(
           kv("accounts", progressMonitor.currentProgress.accountsSynced)
         )
 
-        // Persist accounts-complete flag for crash recovery (Step 7)
-        appStateStorage.putSnapSyncAccountsComplete(true).commit()
+        // Persist accounts-complete flag and exact total for crash recovery + scan progress.
+        val totalAccounts = progressMonitor.currentProgress.accountsSynced
+        appStateStorage
+          .putSnapSyncAccountsComplete(true)
+          .and(appStateStorage.putSnapSyncTotalAccounts(totalAccounts))
+          .commit()
+        slog.info("Persisted total account count", kv("totalAccounts", totalAccounts))
 
         // Persist temp file paths for crash recovery (non-blocking ask — if this fails,
         // recovery will do a full restart which is acceptable since account trie data survives)
@@ -3320,11 +3325,15 @@ class SNAPSyncController(
         log.info(s"Resuming trie walk from checkpoint ${resumeFrom.get.take(8).toHex}")
       else
         log.info("Starting trie walk to discover missing nodes for healing...")
-      val storage = getOrCreateMptStorage(pivotBlock.getOrElse(BigInt(0)))
+      // Fresh storage reader — NOT the shared healing-write instance (getOrCreateMptStorage).
+      // A fresh instance has an empty LRU; every get() reads from RocksDB. Stale LRU entries
+      // in the shared instance can produce false-zero results for path-mismatch nodes that
+      // the coordinator never downloaded (present in cache from a prior read, absent in RocksDB).
+      val readStorage = stateStorage.getBackingStorage(pivotBlock.getOrElse(BigInt(0)))
       val selfRef = self
       val walkFuture = scala.concurrent
         .Future {
-          val validator = new StateValidator(storage)
+          val validator = validatorFactory(readStorage)
           validator.findMissingNodesStreaming(
             root,
             batchSize = snapSyncConfig.snapHealingConfig.trieWalkBatchSize,
