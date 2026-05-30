@@ -9,9 +9,9 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.testing.Tags._
 
-/** Unit-level tests pinning the critical invariants introduced across the may-sprint
-  * SNAP sync fixes. These are guard-condition tests — they verify the LOGIC of the
-  * conditions we added, not the full actor wiring (which is covered by run integration).
+/** Unit-level tests pinning the critical invariants introduced across the may-sprint SNAP sync fixes. These are
+  * guard-condition tests — they verify the LOGIC of the conditions we added, not the full actor wiring (which is
+  * covered by run integration).
   *
   * Key fixes tested:
   *   - MinPivotBlock guard: stale pivot < hint → bootstrap path, not immediate heal
@@ -29,8 +29,10 @@ class SNAPSyncIntegritySpec extends AnyFlatSpec with Matchers {
     // The core predicate from startSnapSync() that our fix added:
     // pivot < minPivotHint AND storageAlreadyDone AND bytecodeAlreadyDone → bootstrap path
     def shouldEscalateToBootstrap(
-      savedPivot: BigInt, minPivotHint: BigInt,
-      storageAlreadyDone: Boolean, bytecodeAlreadyDone: Boolean
+        savedPivot: BigInt,
+        minPivotHint: BigInt,
+        storageAlreadyDone: Boolean,
+        bytecodeAlreadyDone: Boolean
     ): Boolean =
       minPivotHint > 0 && savedPivot < minPivotHint && storageAlreadyDone && bytecodeAlreadyDone
 
@@ -53,13 +55,16 @@ class SNAPSyncIntegritySpec extends AnyFlatSpec with Matchers {
 
   // ─── "Pivot not ahead" guard ────────────────────────────────────────────────
 
-  "Pivot not ahead guard" should "detect that minPivotHint set means this is NOT an already-synced case" taggedAs (UnitTest, SyncTest) in {
+  "Pivot not ahead guard" should "detect that minPivotHint set means this is NOT an already-synced case" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
     // The guard condition we added in the NetworkPivot branch:
     //   if (minPivotHint > 0) → heal at pivot=localBest, NOT send Done
     def isStuckNotSynced(minPivotHint: BigInt): Boolean = minPivotHint > 0
 
-    isStuckNotSynced(BigInt(24654463)) shouldBe true  // came from RegularSyncStuck
-    isStuckNotSynced(BigInt(0))        shouldBe false // genuine "already synced" case
+    isStuckNotSynced(BigInt(24654463)) shouldBe true // came from RegularSyncStuck
+    isStuckNotSynced(BigInt(0)) shouldBe false // genuine "already synced" case
   }
 
   it should "recognize when pivot equals localBest is a valid healing target" taggedAs (UnitTest, SyncTest) in {
@@ -69,17 +74,20 @@ class SNAPSyncIntegritySpec extends AnyFlatSpec with Matchers {
     //   - This is NOT "already synced" — it means peers can't serve this block's storage
     //   - Correct action: heal at pivot=localBest, then retry
     val localBest = BigInt(24655967)
-    val rawPivot  = BigInt(24655903)
-    val hint      = BigInt(24655967)
-    val pivot     = rawPivot.max(hint)
+    val rawPivot = BigInt(24655903)
+    val hint = BigInt(24655967)
+    val pivot = rawPivot.max(hint)
 
     pivot shouldBe localBest // pivot == localBest is expected
-    hint should be > BigInt(0)  // minPivotHint is set → it's a stall, not a sync completion
+    hint should be > BigInt(0) // minPivotHint is set → it's a stall, not a sync completion
   }
 
   // ─── Tier 2 storage escalation logic ────────────────────────────────────────
 
-  "Tier 2 storage escalation" should "fire on first exhaust for storage nodes (not 3rd)" taggedAs (UnitTest, SyncTest) in {
+  "Tier 2 storage escalation" should "fire on first exhaust for storage nodes (not 3rd)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
     // The key optimization: storage path-mismatch → escalate after 1 exhaust, not 3
     val StuckEscapeThreshold = 3
 
@@ -87,13 +95,13 @@ class SNAPSyncIntegritySpec extends AnyFlatSpec with Matchers {
       (hasStorageAccount && survivedExhausts >= 1) || survivedExhausts >= StuckEscapeThreshold
 
     // Storage node exhausted once → Tier 2 immediately (don't wait 3 rounds × 5min = 15min)
-    shouldEscalateToTier2(1, hasStorageAccount = true)  shouldBe true
-    shouldEscalateToTier2(2, hasStorageAccount = true)  shouldBe true
+    shouldEscalateToTier2(1, hasStorageAccount = true) shouldBe true
+    shouldEscalateToTier2(2, hasStorageAccount = true) shouldBe true
 
     // Account node exhausted once → wait for threshold
     shouldEscalateToTier2(1, hasStorageAccount = false) shouldBe false
     shouldEscalateToTier2(2, hasStorageAccount = false) shouldBe false
-    shouldEscalateToTier2(3, hasStorageAccount = false) shouldBe true  // threshold reached
+    shouldEscalateToTier2(3, hasStorageAccount = false) shouldBe true // threshold reached
 
     // No storage account but time-based trigger also works
     shouldEscalateToTier2(4, hasStorageAccount = false) shouldBe true
@@ -103,7 +111,7 @@ class SNAPSyncIntegritySpec extends AnyFlatSpec with Matchers {
 
   "HealingInterrupted" should "be a distinct message type from StateHealingComplete" taggedAs (UnitTest, SyncTest) in {
     val interrupted: Any = SNAPSyncController.HealingInterrupted
-    val complete: Any    = SNAPSyncController.StateHealingComplete
+    val complete: Any = SNAPSyncController.StateHealingComplete
     (interrupted should not).equal(complete)
   }
 
@@ -136,12 +144,15 @@ class SNAPSyncIntegritySpec extends AnyFlatSpec with Matchers {
 
   it should "have max trie staleness large enough to survive normal sync gaps" taggedAs (UnitTest, SyncTest) in {
     val config = SNAPSyncConfig()
-    config.maxPivotStalenessBlocks should be >= 4096L  // must cover normal network variance
+    config.maxPivotStalenessBlocks should be >= 4096L // must cover normal network variance
   }
 
   // ─── Gas mismatch escalation invariant ──────────────────────────────────────
 
-  "SyncProtocol.RegularSyncStuck" should "be usable with arbitrary reason strings for gas mismatch" taggedAs (UnitTest, SyncTest) in {
+  "SyncProtocol.RegularSyncStuck" should "be usable with arbitrary reason strings for gas mismatch" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
     import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
     val msg = SyncProtocol.RegularSyncStuck(
       BigInt(24655968),

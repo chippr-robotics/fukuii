@@ -282,7 +282,12 @@ class TrieNodeHealingCoordinator(
       val nodes = rawNodeBuffer.toSeq
       val totalBytes = nodes.foldLeft(0L) { case (acc, (k, v)) => acc + k.length + v.length }
       val kb = f"${totalBytes / 1024.0}%.1f"
-      slog.info("[HEAL-FLUSH]", kv("nodes", nodes.size), kv("kb", kb), kv("totalHealed", totalNodesHealed))
+      slog.info(
+        "[HEAL-PERSIST] Writing healed trie nodes to RocksDB (async)",
+        kv("nodes", nodes.size),
+        kv("kb", kb),
+        kv("totalHealed", totalNodesHealed)
+      )
       import scala.concurrent.{Future, blocking}
       val selfRef = self
       val ec = healingWriterEc
@@ -497,7 +502,11 @@ class TrieNodeHealingCoordinator(
       // accumulated while the flush was in-flight (they are at indices count..end).
       rawNodeBuffer.remove(0, count)
       flushing = false
-      slog.debug("[HEAL-FLUSH] complete", kv("written", count), kv("totalHealed", totalNodesHealed))
+      slog.debug(
+        "[HEAL-PERSIST-DONE] Healed trie node batch committed to RocksDB",
+        kv("written", count),
+        kv("totalHealed", totalNodesHealed)
+      )
       // Write frontier checkpoint AFTER the node batch is durably committed (timing invariant:
       // write after persist(), not before — a pre-write checkpoint pointing to uncommitted
       // nodes would corrupt the frontier on a crash between the two writes).

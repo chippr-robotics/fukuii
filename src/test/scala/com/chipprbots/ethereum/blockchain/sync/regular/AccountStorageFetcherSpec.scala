@@ -50,9 +50,9 @@ class AccountStorageFetcherSpec
     TestKit.shutdownActorSystem(system, verifySystemShutdown = false)
 
   private val accountAddress: ByteString = ByteString(Array.fill(20)(0x88.toByte))
-  private val accountHash: ByteString    = kec256(accountAddress)
-  private val canonicalRoot: ByteString  = ByteString(Array.fill(32)(0xaa.toByte))
-  private val storageRoot: ByteString    = ByteString(Array.fill(32)(0xd0.toByte))
+  private val accountHash: ByteString = kec256(accountAddress)
+  private val canonicalRoot: ByteString = ByteString(Array.fill(32)(0xaa.toByte))
+  private val storageRoot: ByteString = ByteString(Array.fill(32)(0xd0.toByte))
 
   private val testPeer: Peer = Peer(
     PeerId("test-peer"),
@@ -63,16 +63,21 @@ class AccountStorageFetcherSpec
 
   private trait Setup {
     val peersClient: TestProbe = TestProbe()
-    val replyTo: TestProbe     = TestProbe()
+    val replyTo: TestProbe = TestProbe()
     val stateStorage: StateStorage = null // not exercised in unit tests (writes bypassed by mocking)
 
-    def spawnFetcher(): Unit = {
+    def spawnFetcher(): Unit =
       typedKit.spawn(
-        AccountStorageFetcher(accountAddress, replyTo.ref, Some(canonicalRoot),
-          peersClient.ref, stateStorage, syncConfig),
+        AccountStorageFetcher(
+          accountAddress,
+          replyTo.ref,
+          Some(canonicalRoot),
+          peersClient.ref,
+          stateStorage,
+          syncConfig
+        ),
         "account-storage-fetcher-" + System.nanoTime()
       )
-    }
 
     def expectGetAccountRange(): GetAccountRange = {
       val req = peersClient.expectMsgClass(3.seconds, classOf[PeersClient.Request[_]])
@@ -84,8 +89,8 @@ class AccountStorageFetcherSpec
     def respondWithAccount(reqId: BigInt, account: Account): Unit = {
       val response = AccountRange(
         requestId = reqId,
-        accounts  = Seq((accountHash, account)),
-        proof     = Seq.empty
+        accounts = Seq((accountHash, account)),
+        proof = Seq.empty
       )
       peersClient.reply(PeersClient.Response(testPeer, response))
     }
@@ -100,21 +105,27 @@ class AccountStorageFetcherSpec
     def respondWithStorageRanges(reqId: BigInt, proofNodes: Seq[ByteString] = Seq.empty): Unit = {
       val response = StorageRanges(
         requestId = reqId,
-        slots     = Seq(Seq.empty), // minimal slot response
-        proof     = proofNodes
+        slots = Seq(Seq.empty), // minimal slot response
+        proof = proofNodes
       )
       peersClient.reply(PeersClient.Response(testPeer, response))
     }
   }
 
-  "AccountStorageFetcher" should "send GetAccountRange to BestSnapPeer on start" taggedAs (UnitTest, SyncTest) in new Setup {
+  "AccountStorageFetcher" should "send GetAccountRange to BestSnapPeer on start" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new Setup {
     spawnFetcher()
     val gar = expectGetAccountRange()
-    gar.rootHash    shouldBe canonicalRoot
+    gar.rootHash shouldBe canonicalRoot
     gar.startingHash shouldBe accountHash
   }
 
-  it should "escalate to GetStorageRanges after receiving AccountRange with canonical storageRoot" taggedAs (UnitTest, SyncTest) in new Setup {
+  it should "escalate to GetStorageRanges after receiving AccountRange with canonical storageRoot" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new Setup {
     spawnFetcher()
     val gar = expectGetAccountRange()
 
@@ -122,11 +133,14 @@ class AccountStorageFetcherSpec
     respondWithAccount(gar.requestId, account)
 
     val gsr = expectGetStorageRanges()
-    gsr.rootHash       shouldBe canonicalRoot
-    gsr.accountHashes   should contain(accountHash)
+    gsr.rootHash shouldBe canonicalRoot
+    gsr.accountHashes should contain(accountHash)
   }
 
-  it should "reply FetchedAccountStorage(success=true) with canonical account after StorageRanges response" taggedAs (UnitTest, SyncTest) in new Setup {
+  it should "reply FetchedAccountStorage(success=true) with canonical account after StorageRanges response" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new Setup {
     spawnFetcher()
     val gar = expectGetAccountRange()
     val account = Account(storageRoot = storageRoot)
@@ -136,14 +150,16 @@ class AccountStorageFetcherSpec
     val proofNode = ByteString(Array.fill(32)(0xbb.toByte))
     respondWithStorageRanges(gsr.requestId, proofNodes = Seq(proofNode))
 
-    replyTo.expectMsgPF(3.seconds) {
-      case FetchedAccountStorage(addr, Some(acc), true) =>
-        addr shouldBe accountAddress
-        acc.storageRoot shouldBe storageRoot
+    replyTo.expectMsgPF(3.seconds) { case FetchedAccountStorage(addr, Some(acc), true) =>
+      addr shouldBe accountAddress
+      acc.storageRoot shouldBe storageRoot
     }
   }
 
-  it should "skip GetStorageRanges and reply success when account has empty storageRoot" taggedAs (UnitTest, SyncTest) in new Setup {
+  it should "skip GetStorageRanges and reply success when account has empty storageRoot" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new Setup {
     spawnFetcher()
     val gar = expectGetAccountRange()
 
@@ -153,14 +169,16 @@ class AccountStorageFetcherSpec
     // No GetStorageRanges expected — empty storage, skip straight to success
     peersClient.expectNoMessage(200.millis)
 
-    replyTo.expectMsgPF(3.seconds) {
-      case FetchedAccountStorage(addr, Some(acc), true) =>
-        addr shouldBe accountAddress
-        acc.storageRoot shouldBe Account.EmptyStorageRootHash
+    replyTo.expectMsgPF(3.seconds) { case FetchedAccountStorage(addr, Some(acc), true) =>
+      addr shouldBe accountAddress
+      acc.storageRoot shouldBe Account.EmptyStorageRootHash
     }
   }
 
-  it should "reply FetchedAccountStorage(success=false) when account not found in AccountRange response" taggedAs (UnitTest, SyncTest) in new Setup {
+  it should "reply FetchedAccountStorage(success=false) when account not found in AccountRange response" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new Setup {
     spawnFetcher()
     val gar = expectGetAccountRange()
 
@@ -169,38 +187,40 @@ class AccountStorageFetcherSpec
     val response = AccountRange(requestId = gar.requestId, accounts = Seq((wrongHash, Account())), proof = Seq.empty)
     peersClient.reply(PeersClient.Response(testPeer, response))
 
-    replyTo.expectMsgPF(3.seconds) {
-      case FetchedAccountStorage(addr, None, false) =>
-        addr shouldBe accountAddress
+    replyTo.expectMsgPF(3.seconds) { case FetchedAccountStorage(addr, None, false) =>
+      addr shouldBe accountAddress
     }
   }
 
-  it should "reply FetchedAccountStorage(success=false) when no canonical state root provided" taggedAs (UnitTest, SyncTest) in new Setup {
+  it should "reply FetchedAccountStorage(success=false) when no canonical state root provided" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new Setup {
     // Spawn with no canonical state root
     typedKit.spawn(
-      AccountStorageFetcher(accountAddress, replyTo.ref, None,
-        peersClient.ref, stateStorage, syncConfig),
+      AccountStorageFetcher(accountAddress, replyTo.ref, None, peersClient.ref, stateStorage, syncConfig),
       "account-storage-fetcher-noroot"
     )
 
     peersClient.expectNoMessage(200.millis)
 
-    replyTo.expectMsgPF(3.seconds) {
-      case FetchedAccountStorage(addr, None, false) =>
-        addr shouldBe accountAddress
+    replyTo.expectMsgPF(3.seconds) { case FetchedAccountStorage(addr, None, false) =>
+      addr shouldBe accountAddress
     }
   }
 
-  it should "reply FetchedAccountStorage(success=false) on GetAccountRange Retry (timeout/failure)" taggedAs (UnitTest, SyncTest) in new Setup {
+  it should "reply FetchedAccountStorage(success=false) on GetAccountRange Retry (timeout/failure)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new Setup {
     spawnFetcher()
     expectGetAccountRange()
 
     // Respond with NoSuitablePeer to trigger Retry path
     peersClient.reply(PeersClient.NoSuitablePeer)
 
-    replyTo.expectMsgPF(5.seconds) {
-      case FetchedAccountStorage(addr, None, false) =>
-        addr shouldBe accountAddress
+    replyTo.expectMsgPF(5.seconds) { case FetchedAccountStorage(addr, None, false) =>
+      addr shouldBe accountAddress
     }
   }
 }

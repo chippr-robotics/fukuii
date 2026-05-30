@@ -87,7 +87,7 @@ private class AccountStorageFetcher(
     val root = canonicalStateRoot.getOrElse(ByteString.empty)
     if (root.isEmpty) {
       log.warn(
-        "[STORAGE-HEAL] No canonical state root available for account {} — failing",
+        "[STATE-HEAL] No canonical state root available for account {} — failing",
         ByteStringUtils.hash2string(accountAddress)
       )
       replyTo ! BlockFetcher.FetchedAccountStorage(accountAddress, None, success = false)
@@ -95,7 +95,7 @@ private class AccountStorageFetcher(
     }
 
     log.info(
-      "[STORAGE-HEAL] Starting account storage re-download — GetAccountRange",
+      "[STATE-HEAL] Starting account storage re-download — GetAccountRange",
       // slog-compatible key=value pairs surfaced in log message
       // account={} canonicalRoot={}
       ByteStringUtils.hash2string(accountAddress) + " canonicalRoot=" + ByteStringUtils.hash2string(root.take(8))
@@ -126,14 +126,14 @@ private class AccountStorageFetcher(
         accounts.find { case (hash, _) => hash == accountHash } match {
           case Some((_, canonicalAccount)) =>
             log.info(
-              "[STORAGE-HEAL] GetAccountRange complete — canonical storageRoot={} account={}",
+              "[STATE-HEAL] GetAccountRange complete — canonical storageRoot={} account={}",
               ByteStringUtils.hash2string(canonicalAccount.storageRoot.take(4)),
               ByteStringUtils.hash2string(accountAddress.take(4))
             )
             sendGetStorageRanges(canonicalAccount)
           case None =>
             log.warn(
-              "[STORAGE-HEAL] Account {} not found in AccountRange response from {} — failing",
+              "[STATE-HEAL] Account {} not found in AccountRange response from {} — failing",
               ByteStringUtils.hash2string(accountAddress),
               peer.id
             )
@@ -143,7 +143,7 @@ private class AccountStorageFetcher(
 
       case Retry =>
         log.warn(
-          "[STORAGE-HEAL] GetAccountRange failed for account {} — failing",
+          "[STATE-HEAL] GetAccountRange failed for account {} — failing",
           ByteStringUtils.hash2string(accountAddress)
         )
         replyTo ! BlockFetcher.FetchedAccountStorage(accountAddress, None, success = false)
@@ -160,7 +160,7 @@ private class AccountStorageFetcher(
     if (storageRoot == Account.EmptyStorageRootHash) {
       // Account has no storage — just return the account so BlockImporter can update the leaf
       log.info(
-        "[STORAGE-HEAL] Account {} has empty storage — no storage nodes needed",
+        "[STATE-HEAL] Account {} has empty storage — no storage nodes needed",
         ByteStringUtils.hash2string(accountAddress)
       )
       replyTo ! BlockFetcher.FetchedAccountStorage(accountAddress, Some(canonicalAccount), success = true)
@@ -198,14 +198,14 @@ private class AccountStorageFetcher(
           try {
             stateStorage.getBackingStorage(BigInt(0)).storeRawNodes(proofNodes)
             log.info(
-              "[STORAGE-HEAL] GetStorageRanges complete — wrote {} proof nodes for account {}",
+              "[STATE-HEAL] GetStorageRanges complete — wrote {} proof nodes for account {}",
               proofNodes.size,
               ByteStringUtils.hash2string(accountAddress.take(4))
             )
           } catch {
             case ex: Exception =>
               log.warn(
-                "[STORAGE-HEAL] Failed to write storage proof nodes for account {}: {}",
+                "[STATE-HEAL] Failed to write storage proof nodes for account {}: {}",
                 ByteStringUtils.hash2string(accountAddress),
                 ex.getMessage
               )
@@ -217,7 +217,7 @@ private class AccountStorageFetcher(
 
       case Retry =>
         log.warn(
-          "[STORAGE-HEAL] GetStorageRanges failed for account {} — failing",
+          "[STATE-HEAL] GetStorageRanges failed for account {} — failing",
           ByteStringUtils.hash2string(accountAddress)
         )
         replyTo ! BlockFetcher.FetchedAccountStorage(accountAddress, None, success = false)

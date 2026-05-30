@@ -63,10 +63,9 @@ trait Blockchain {
 
   /** Flush all in-memory MPT trie nodes written during block execution to RocksDB.
     *
-    * Must be called after each block is saved. Without this, nodes written with
-    * `inMemory=true` by ReferenceCountNodeStorage live only in the LRU cache and
-    * are lost on restart — no peer can serve them since they were never part of a
-    * persisted state root.
+    * Must be called after each block is saved. Without this, nodes written with `inMemory=true` by
+    * ReferenceCountNodeStorage live only in the LRU cache and are lost on restart — no peer can serve them since they
+    * were never part of a persisted state root.
     */
   def saveBlockState(bn: BigInt): Unit
 }

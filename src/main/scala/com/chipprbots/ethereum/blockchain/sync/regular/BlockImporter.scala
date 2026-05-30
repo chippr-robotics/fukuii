@@ -65,8 +65,9 @@ class BlockImporter(
   context.setReceiveTimeout(syncConfig.syncRetryInterval)
 
   private var pendingStateNodeHash: Option[ByteString] = None
-  // Tracks account address + parent state root when the stuck node is a storage trie node.
-  // Used to escalate to GetStorageRanges (Tier 2) before falling through to RegularSyncStuck.
+  // Tracks account address + parent state root when the stuck trie node (account OR storage trie)
+  // indicates a path mismatch — all canonical GetTrieNodes roots return 0.
+  // Used to escalate to GetAccountRange+GetStorageRanges (Tier 2) before RegularSyncStuck.
   private var pendingStuckStorageAccount: Option[ByteString] = None
   private var pendingStuckStorageStateRoot: Option[ByteString] = None
 
@@ -166,7 +167,7 @@ class BlockImporter(
         pendingStuckStorageAccount match {
           case Some(accountAddr) =>
             log.warning(
-              "[STORAGE-HEAL] GetTrieNodes exhausted for storage node {} account {} block {} — all roots returned 0 (path mismatch). Escalating to GetStorageRanges.",
+              "[STATE-HEAL] GetTrieNodes exhausted for trie node {} account {} block {} — path mismatch (all canonical roots returned 0). Escalating to canonical account re-download.",
               missingHashStr,
               ByteStringUtils.hash2string(accountAddr),
               blockNum
@@ -257,7 +258,7 @@ class BlockImporter(
           updateMptAccountLeaf(accountAddr, canonicalAccount)
         }
         log.info(
-          "[STORAGE-HEAL] Account {} storage re-downloaded — account leaf updated with canonical storageRoot, retrying block {}",
+          "[STATE-HEAL] Account {} canonical state re-downloaded — MPT leaf updated, retrying block {}",
           ByteStringUtils.hash2string(accountAddr),
           blockNum
         )
@@ -266,7 +267,7 @@ class BlockImporter(
         importBlocks(blocksToRetry, blockImportType)(state)
       } else {
         log.error(
-          "[STORAGE-HEAL] Account {} storage range download failed for block {} — escalating to RegularSyncStuck",
+          "[STATE-HEAL] Account {} canonical re-download failed for block {} — escalating to RegularSyncStuck",
           ByteStringUtils.hash2string(accountAddr),
           blockNum
         )
@@ -281,7 +282,7 @@ class BlockImporter(
     case ReceiveTimeout =>
       val blockNum = blocksToRetry.head.number
       log.error(
-        "[STORAGE-HEAL] Timeout waiting for account storage range download for block {} — escalating to RegularSyncStuck",
+        "[STATE-HEAL] Timeout waiting for canonical account re-download for block {} — escalating to RegularSyncStuck",
         blockNum
       )
       BlockImporter.survivedExhausts = 0
@@ -316,14 +317,14 @@ class BlockImporter(
       val updated = worldState.saveAccount(address, canonicalAccount)
       InMemoryWorldStateProxy.persistState(updated)
       log.info(
-        "[STORAGE-HEAL] MPT account leaf updated: account {} storageRoot → {}",
+        "[STATE-HEAL] MPT account leaf updated: account {} storageRoot → {}",
         ByteStringUtils.hash2string(accountAddr),
         ByteStringUtils.hash2string(canonicalAccount.storageRoot.take(4))
       )
     } catch {
       case ex: Exception =>
         log.warning(
-          "[STORAGE-HEAL] Failed to update MPT account leaf for {} — {}: {}",
+          "[STATE-HEAL] Failed to update MPT account leaf for {} — {}: {}",
           ByteStringUtils.hash2string(accountAddr),
           ex.getClass.getSimpleName,
           ex.getMessage
@@ -412,13 +413,19 @@ class BlockImporter(
                     })
                   }
                 log.info(
-                  "Missing account trie node {} for account {} during import of block {}, locationKnown={}",
+                  "Missing account trie node {} for account {} during import of block {}, locationKnown={} — will escalate to GetAccountRange if GetTrieNodes exhausts",
                   ByteStringUtils.hash2string(e.hash),
                   ByteStringUtils.hash2string(e.accountAddress),
                   failedBlock.number,
                   e.location.isDefined
                 )
                 pendingStateNodeHash = Some(e.hash)
+                // Save account address + parent state root so resolvingMissingNode can escalate
+                // to Tier 2 (GetAccountRange + GetStorageRanges) on first exhaust — same path as
+                // storage trie path-mismatch. updateMptAccountLeaf() rebuilds the account trie
+                // path around the missing stale intermediate node.
+                pendingStuckStorageAccount = Some(e.accountAddress)
+                pendingStuckStorageStateRoot = parentStateRoot
                 fetcher ! BlockFetcher.FetchStateNode(e.hash, self, parentStateRoot, paths)
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
               case e: MissingStorageNodeException =>

@@ -374,7 +374,7 @@ class BlockFetcher(
         // Tier 2 storage recovery: re-download full canonical account data + storage for the
         // stuck account (path mismatch: GetTrieNodes returned 0 for all state roots).
         log.info(
-          "[STORAGE-HEAL] FetchAccountStorage for account {} canonicalRoot={}",
+          "[STATE-HEAL] FetchAccountStorage for account {} canonicalRoot={}",
           ByteStringUtils.hash2string(accountAddress),
           canonicalStateRoot.map(r => ByteStringUtils.hash2string(r.take(4))).getOrElse("none")
         )
