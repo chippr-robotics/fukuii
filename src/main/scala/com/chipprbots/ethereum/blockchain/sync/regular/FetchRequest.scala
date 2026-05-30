@@ -68,7 +68,11 @@ trait FetchRequest[A] {
       }
       .flatMap(handleRequestResult(responseFallback, retryCount))
       .handleError { error =>
-        log.debug("Unexpected error while doing a request: {}", error.getMessage, error)
+        log.warn("FETCH IO error in makeRequest for {} — returning fallback immediately: {} {}",
+          request.message.getClass.getSimpleName,
+          error.getClass.getSimpleName,
+          error.getMessage
+        )
         responseFallback
       }
   }
@@ -93,8 +97,9 @@ trait FetchRequest[A] {
         IO.pure(fallback).delayBy(delay)
       case NoSuitablePeer =>
         val delay = retryBackoffDelay(retryCount)
-        log.debug(
-          "No suitable peer available, applying {}ms backoff before retry (attempt {})",
+        log.warn(
+          "FETCH NoSuitablePeer for {} — applying {}ms backoff (attempt {})",
+          fallback.getClass.getSimpleName,
           delay.toMillis,
           retryCount + 1
         )
@@ -105,6 +110,19 @@ trait FetchRequest[A] {
       case PeersClient.Response(peer, msg) =>
         log.debug("Successfully received response from peer {} - type: {}", peer.id, msg.getClass.getSimpleName)
         IO.pure(makeAdaptedMessage(peer, msg))
+      case other =>
+        // Unexpected response type (e.g. akka.actor.Status.Failure) — without this case a MatchError
+        // propagates up to handleError, which returns fallback immediately with NO delay, causing
+        // rapid-fire retries. Apply the same backoff as NoSuitablePeer.
+        val delay = retryBackoffDelay(retryCount)
+        log.warn(
+          "FETCH unexpected result type {} — applying {}ms backoff (attempt {}): {}",
+          other.getClass.getName,
+          delay.toMillis,
+          retryCount + 1,
+          other
+        )
+        IO.pure(fallback).delayBy(delay)
     }
 
   /** Computes exponential backoff delay: min(syncRetryInterval * 2^retryCount, maxRetryDelay) */

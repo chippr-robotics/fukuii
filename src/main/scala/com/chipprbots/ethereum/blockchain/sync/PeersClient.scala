@@ -502,21 +502,22 @@ object PeersClient {
   ): Option[Peer] = {
     log.debug("Evaluating {} peers to find best peer", peersToDownloadFrom.size)
 
-    // Filter out peers whose bestHash == genesisHash. These peers have nothing to
-    // serve and silently return empty responses to GetBlockHeaders, GetBlockBodies,
-    // GetReceipts etc. — masking sync wedges as transient timeouts.
+    // Filter out peers stuck at genesis (nothing to serve — they'd return empty responses).
     //
-    // Bug #1201 (Sepolia): half the post-fork-fix peer pool was Sepolia bootnodes
-    // sitting at genesis (`bestHash == genesisHash`, TD=131072). PivotHeaderBootstrap's
-    // BestPeer selection round-robined into them and reported "no header returned"
-    // for blocks they literally don't have. forkAccepted=true is necessary but not
-    // sufficient — the peer must also have advanced past genesis.
+    // ETC and ETH share the same genesis hash (d4e56740...) and networkId=1; ForkID is the
+    // correct chain identifier. Using bestHash == genesisHash is therefore UNRELIABLE as
+    // a genesis guard — an ETH peer at genesis passes the same hash check as an ETC peer.
+    // Use maxBlockNumber > 0 instead: any peer that has processed at least one block has
+    // useful state to serve, regardless of genesis hash.
+    //
+    // Bug #1201 (Sepolia): half the post-fork-fix peer pool was Sepolia bootnodes at genesis.
+    // The fix still applies — just via block number, not genesis hash.
     val peersToUse = peersToDownloadFrom.values
       .map { case PeerWithInfo(peer, peerInfo) =>
-        val isReady = peerInfo.forkAccepted && !peerInfo.isAtGenesis
+        val isReady = peerInfo.forkAccepted && peerInfo.maxBlockNumber > 0
         log.debug(
           s"Peer ${peer.id} (${peer.remoteAddress}) - ready: $isReady, " +
-            s"maxBlock: ${peerInfo.maxBlockNumber}, atGenesis: ${peerInfo.isAtGenesis}"
+            s"maxBlock: ${peerInfo.maxBlockNumber}, ready: $isReady"
         )
         log.debug("Peer {} chainWeight: {}", peer.id, peerInfo.chainWeight)
         (peer, peerInfo, isReady)
@@ -538,11 +539,11 @@ object PeersClient {
   }
 
   // Legacy method for backward compatibility — kept in sync with the logger-aware
-  // overload above: skip forkRejected peers AND skip peers stuck at genesis.
+  // overload above: skip forkRejected peers AND skip peers stuck at genesis (maxBlockNumber == 0).
   def bestPeer(peersToDownloadFrom: Map[PeerId, PeerWithInfo]): Option[Peer] = {
     val peersToUse = peersToDownloadFrom.values
       .collect {
-        case PeerWithInfo(peer, peerInfo) if peerInfo.forkAccepted && !peerInfo.isAtGenesis =>
+        case PeerWithInfo(peer, peerInfo) if peerInfo.forkAccepted && peerInfo.maxBlockNumber > 0 =>
           (peer, peerInfo.chainWeight)
       }
 
