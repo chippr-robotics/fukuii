@@ -385,7 +385,9 @@ object StateNodeFetcher {
   // exhaustion to BlockImporter. Without a bound, the resolvingMissingNode loop could spin forever
   // when peers keep returning empty TrieNodes (Bug 30 — peers outside the SNAP serve window
   // disconnect on every GetTrieNodes request).
-  val MaxStateNodeFetchRetries: Int = 10
+  // 3 retries × 5s = 15s per exhaustion — sufficient to distinguish path mismatch (all empty,
+  // ~instantaneous responses) from transient failure (mixed errors/timeouts).
+  val MaxStateNodeFetchRetries: Int = 3
   val BackoffInterval: FiniteDuration = 5.seconds
 
   sealed trait StateNodeFetcherCommand

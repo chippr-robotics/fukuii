@@ -153,13 +153,12 @@ class BlockImporter(
       val missingHashStr = pendingStateNodeHash.map(ByteStringUtils.hash2string).getOrElse("<unknown>")
       val stuckTooLong = (System.currentTimeMillis() - BlockImporter.stuckSinceMs) >= BlockImporter.MaxStuckDurationMs
 
-      // Storage path-mismatch: escalate to Tier 2 on the FIRST exhaust — no point waiting
-      // 3 rounds when peers have already proven they can't serve this node structure.
-      // Account/other nodes still need the full 3-exhaust threshold before giving up.
+      // Escalate after 1 exhaust for all node types — path mismatch means peers can't serve
+      // these nodes regardless of retry count (trie structure changed since SNAP pivot).
+      // StuckEscapeThreshold = 1, so storagePathMismatch is now redundant but kept for clarity.
       val storagePathMismatch = pendingStuckStorageAccount.isDefined && BlockImporter.survivedExhausts >= 1
       if (storagePathMismatch || BlockImporter.survivedExhausts >= BlockImporter.StuckEscapeThreshold || stuckTooLong) {
-        // Multiple consecutive exhausts mean peers genuinely don't have our parent state and
-        // never will (we're far behind their snap-serve window).
+        // 1 exhaust is sufficient — peers can't serve SNAP-era nodes once the trie has restructured.
         //
         // Tier 2: if this is a storage node that exhausted due to path mismatch (all canonical
         // state roots returned 0), escalate to GetStorageRanges for the stuck account before
@@ -191,6 +190,7 @@ class BlockImporter(
             BlockImporter.stuckSinceMs = 0L
             pendingStateNodeHash = None
             pendingStuckStorageStateRoot = None
+            context.setReceiveTimeout(scala.concurrent.duration.Duration.Undefined)
             supervisor ! SyncProtocol.RegularSyncStuck(blockNum, missingHashStr)
           // Don't transition further — SyncController will PoisonPill regular sync.
         }
@@ -755,8 +755,10 @@ class BlockImporter(
 object BlockImporter {
   // After this many consecutive state-node-fetch exhausts on the same block, regular sync
   // is deemed terminally stuck and we escalate to SNAP re-sync via SyncProtocol.RegularSyncStuck.
-  // 3 × 5-min backoff = ~15 minutes of bounded retry before invoking the escape valve.
-  val StuckEscapeThreshold: Int = 3
+  // 1 exhaust = ~15s (3 retries × 5s) before invoking the escape valve. Matches the existing
+  // storage path-mismatch fast-path. SNAP recovery is fast (~5s) so premature escalation is
+  // low-cost; the 20-min MaxStuckDurationMs fallback remains as a safety net.
+  val StuckEscapeThreshold: Int = 1
 
   // Time-based escape: if RegularSync has been blocked on any state-node fetch for longer than
   // this window, escalate regardless of survivedExhausts. Guards against the counter being reset
