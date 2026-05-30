@@ -196,8 +196,11 @@ class StateNodeFetcher(
               requestStateNode(updated.hash, updated.stateRoot, updated.paths, updated.isByteCode)
               Behaviors.same[StateNodeFetcherCommand]
             case None =>
-              log.warn("SNAP TrieNodes response was empty, retrying")
-              peersClient ! BlacklistPeer(peer.id, BlacklistReason.EmptyStateNodeResponse)
+              // All canonical fallback roots exhausted with 0 nodes — path mismatch.
+              // The peer responded correctly (trie restructured, node not at this path in
+              // canonical state). Do NOT blacklist — peer is healthy; blacklisting burns the
+              // pool before AccountStorageFetcher can use it for canonical account re-download.
+              log.warn("SNAP TrieNodes empty for all fallback roots — path mismatch, not blacklisting peer")
               retryOrExhaust(stateNodeRequester)
               Behaviors.same[StateNodeFetcherCommand]
           }

@@ -373,13 +373,19 @@ class BlockFetcher(
       case FetchAccountStorage(accountAddress, replyTo, canonicalStateRoot, stateStorage) =>
         // Tier 2 storage recovery: re-download full canonical account data + storage for the
         // stuck account (path mismatch: GetTrieNodes returned 0 for all state roots).
+        // Use the freshest network-tip state root (from live block gossip) — reliably within
+        // peers' SNAP serve window. The passed canonicalStateRoot (parent of stalled block)
+        // may be at the serve-window boundary for some peers returning empty AccountRange.
+        val bestRoot = state.networkTipStateRoots.headOption
+          .orElse(state.recentCanonicalStateRoot)
+          .orElse(canonicalStateRoot)
         log.info(
           "[STATE-HEAL] FetchAccountStorage for account {} canonicalRoot={}",
           ByteStringUtils.hash2string(accountAddress),
-          canonicalStateRoot.map(r => ByteStringUtils.hash2string(r.take(4))).getOrElse("none")
+          bestRoot.map(r => ByteStringUtils.hash2string(r.take(4))).getOrElse("none")
         )
         context.spawnAnonymous(
-          AccountStorageFetcher(accountAddress, replyTo, canonicalStateRoot, peersClient, stateStorage, syncConfig)
+          AccountStorageFetcher(accountAddress, replyTo, bestRoot, peersClient, stateStorage, syncConfig)
         )
         Behaviors.same
 
