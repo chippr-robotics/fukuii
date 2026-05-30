@@ -503,13 +503,19 @@ object PeersClient {
   ): Option[Peer] = {
     log.debug("Evaluating {} peers to find best peer", peersToDownloadFrom.size)
 
-    // Filter out peers stuck at genesis (nothing to serve — they'd return empty responses).
+    // Two-stage peer model:
+    //   Stage 1 — handshake (PeerHandshakeActor): validates chain identity via networkId,
+    //     genesis hash, and ForkId. All three must pass before `forkAccepted = true` is set
+    //     and the peer enters peersToDownloadFrom. A peer reaching this method has already
+    //     proved it is on the correct chain.
+    //   Stage 2 — selection (here): filters by data availability. `maxBlockNumber > 0` is a
+    //     data-freshness guard — a peer at genesis has no blocks to serve. This is NOT a chain
+    //     identity check; identity was verified at Stage 1 before the peer was admitted.
     //
-    // ETC and ETH share the same genesis hash (d4e56740...) and networkId=1; ForkID is the
-    // correct chain identifier. Using bestHash == genesisHash is therefore UNRELIABLE as
-    // a genesis guard — an ETH peer at genesis passes the same hash check as an ETC peer.
-    // Use maxBlockNumber > 0 instead: any peer that has processed at least one block has
-    // useful state to serve, regardless of genesis hash.
+    // ETC and ETH share the same genesis hash (d4e56740...) and networkId=1; ForkId is the
+    // correct chain identifier at Stage 1. Using bestHash == genesisHash is UNRELIABLE as a
+    // genesis guard here — an ETH peer at genesis passes the same hash check as an ETC peer.
+    // Use maxBlockNumber > 0 instead.
     //
     // Bug #1201 (Sepolia): half the post-fork-fix peer pool was Sepolia bootnodes at genesis.
     // The fix still applies — just via block number, not genesis hash.

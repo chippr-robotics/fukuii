@@ -110,7 +110,15 @@ class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logg
     if (previousPhase != phase) {
       currentPhaseState = phase
       phaseStartTime = System.currentTimeMillis()
-      slog.info("SNAP Sync phase transition", kv("from", previousPhase.toString), kv("to", phase.toString))
+      val label = phase match {
+        case AccountRangeSync       => "[SNAP 1/4 AccountRange]"
+        case ByteCodeAndStorageSync => "[SNAP 2/4 ByteCode+Storage]"
+        case StateHealing           => "[SNAP 3/4 StateHealing]"
+        case StateValidation        => "[SNAP 4/4 StateValidation]"
+        case Completed              => "[SNAP COMPLETE]"
+        case other                  => s"[SNAP $other]"
+      }
+      slog.info(s"$label Starting", kv("from", previousPhase.toString), kv("to", phase.toString))
     }
     logProgress()
   }

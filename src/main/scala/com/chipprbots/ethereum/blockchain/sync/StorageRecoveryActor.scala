@@ -135,7 +135,7 @@ class StorageRecoveryActor(
     val mptStorage = stateStorage.getBackingStorage(pivotBlockNumber)
     val fas = flatAccountStorage
     val aps = appStateStorage
-    val approxTotal = fas.approximateKeyCount()
+    val approxTotal = aps.getSnapSyncTotalAccounts().getOrElse(fas.approximateKeyCount())
     Future {
       blocking {
         val seenRoots = mutable.HashSet.empty[ByteString]

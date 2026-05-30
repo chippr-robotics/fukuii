@@ -123,7 +123,7 @@ class BytecodeRecoveryActor(
     val fas = flatAccountStorage
     val ecs = evmCodeStorage
     val aps = appStateStorage
-    val approxTotal = fas.approximateKeyCount()
+    val approxTotal = aps.getSnapSyncTotalAccounts().getOrElse(fas.approximateKeyCount())
     Future {
       blocking {
         val seenHashes = mutable.HashSet.empty[ByteString]

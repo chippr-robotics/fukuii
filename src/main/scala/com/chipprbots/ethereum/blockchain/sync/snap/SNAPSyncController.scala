@@ -978,9 +978,11 @@ class SNAPSyncController(
 
     case ByteCodeSyncComplete if !bytecodePhaseComplete =>
       bytecodePhaseComplete = true
-      appStateStorage.putSnapSyncBytecodeComplete(true).commit()
       progressMonitor.setBytecodeComplete()
       val downloaded = progressMonitor.currentProgress.bytecodesDownloaded
+      appStateStorage.putSnapSyncBytecodeComplete(true)
+        .and(appStateStorage.putSnapSyncTotalBytecodes(downloaded))
+        .commit()
       slog.info(
         "ByteCode sync complete",
         kv("bytecodes", downloaded),
@@ -1002,9 +1004,13 @@ class SNAPSyncController(
     case StorageRangeSyncComplete if !storagePhaseComplete =>
       storagePhaseComplete = true
       storagePhaseForceCompleted = false
-      appStateStorage.putSnapSyncStorageComplete(true).commit()
+      val totalContracts = progressMonitor.currentProgress.storageContractsCompleted.toLong
+      appStateStorage.putSnapSyncStorageComplete(true)
+        .and(appStateStorage.putSnapSyncTotalContracts(totalContracts))
+        .commit()
       slog.info(
         "Storage range sync complete",
+        kv("contracts", totalContracts),
         kv("bytecodeComplete", bytecodePhaseComplete),
         kv("accountsComplete", accountsComplete)
       )
@@ -3622,12 +3628,15 @@ class SNAPSyncController(
 
   private def validateState(): Unit = {
     if (!snapSyncConfig.stateValidationEnabled) {
-      log.info("State validation disabled, skipping...")
+      slog.info(
+        "[SNAP 4/4 StateValidation] DEFERRED — enable via sync.snap-sync.state-validation-enabled=true " +
+          "(~60min on ETC mainnet). Reference clients (Besu, geth) also skip post-healing validation."
+      )
       self ! StateValidationComplete
       return
     }
     log.warning(
-      "State validation enabled — this adds ~60min to sync on ETC mainnet. " +
+      "[SNAP 4/4 StateValidation] ENABLED — this adds ~60min to sync on ETC mainnet. " +
         "Disable with state-validation-enabled = false for production use."
     )
     if (validationInProgress) {
@@ -3642,9 +3651,9 @@ class SNAPSyncController(
         // only honoured when captured root *equals* current `stateRoot`, so any pivot refresh
         // or restart naturally invalidates the signal (root changes → no match → full validation).
         if (healingValidatedRoot.contains(expectedRoot)) {
-          log.info(
-            s"Skipping redundant state validation — healing trie walk verified the entire " +
-              s"account+storage trie against ${expectedRoot.take(8).toHex} (clean signal)"
+          slog.info(
+            s"[SNAP 4/4 StateValidation] VERIFIED — healing trie walk confirmed complete state " +
+              s"(short-circuit active, no redundant re-walk, root=${expectedRoot.take(8).toHex})"
           )
           // Consume the signal so a re-entry (e.g. after a future healing-recovery cycle that
           // didn't finish with a clean walk) doesn't reuse a stale positive.
@@ -3655,7 +3664,11 @@ class SNAPSyncController(
         validationInProgress = true
         validationGeneration += 1
         val gen = validationGeneration
-        slog.info("Validating state against expected root", kv("root", expectedRoot.take(8).toHex), kv("gen", gen))
+        slog.warn(
+          s"[SNAP 4/4 StateValidation] RUNNING — independent confirmation pass (~60min). " +
+            s"Consider state-validation-enabled=false for production.",
+          kv("root", expectedRoot.take(8).toHex), kv("gen", gen)
+        )
         spawnAccountValidation(gen, expectedRoot, pivot)
       case _ =>
         log.error("Missing state root or pivot block for validation — cannot complete sync")
