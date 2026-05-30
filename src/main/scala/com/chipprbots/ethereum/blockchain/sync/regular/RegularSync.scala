@@ -164,7 +164,7 @@ class RegularSync(
         else "unknown"
       log.info(
         s"RegularSync: current=${progressState.currentBlock} best=${progressState.bestKnownNetworkBlock} " +
-          s"lag=$lag rate=${f"$rate%.1f"}/s eta=$etaStr"
+          s"lag=$lag rate=${f"$rate%.1f"}/s eta=$etaStr imported=$deltaBlocks"
       )
       context.become(
         running(

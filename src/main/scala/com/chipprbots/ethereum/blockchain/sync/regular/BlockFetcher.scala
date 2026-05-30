@@ -122,13 +122,17 @@ class BlockFetcher(
         val dt = if (state.lastPrintTimeMs > 0) (now - state.lastPrintTimeMs) / 1000.0 else 0.0
         val delta = state.lastBlock - state.lastPrintBlock
         val rate = if (dt > 0 && state.lastPrintTimeMs > 0) delta.toDouble / dt else 0.0
+        val etaStr = if (rate > 0.1 && state.knownTop > state.lastBlock)
+          f"${(state.knownTop - state.lastBlock).toDouble / rate / 3600}%.1fh"
+        else "unknown"
         log.info(
-          "BlockFetcher: lastBlock={} knownTop={} readyBlocks={} waitingHeaders={} rate={}/s",
+          "BlockFetcher: lastBlock={} knownTop={} readyBlocks={} waitingHeaders={} rate={}/s eta={}",
           state.lastBlock,
           state.knownTop,
           state.readyBlocks.size,
           state.waitingHeaders.size,
-          f"$rate%.1f"
+          f"$rate%.1f",
+          etaStr
         )
         log.debug("BlockFetcher detailed status: {}", state.statusDetailed)
         val updatedState = state.copy(lastPrintBlock = state.lastBlock, lastPrintTimeMs = now)

@@ -857,6 +857,11 @@ class FastSync(
 
       val blocksToBrain = wormToBrainBar(blockPercent)
 
+      val blocksEtaStr =
+        if (blocksPerSec > 0 && blockTarget > lastFull)
+          s"${((blockTarget - lastFull).toDouble / blocksPerSec / 60).toInt}min"
+        else "unknown"
+
       val phase =
         if (!syncState.isBlockchainWorkFinished) {
           if (syncState.receiptsQueue.nonEmpty) "Receipts"
@@ -870,7 +875,7 @@ class FastSync(
 
       val blacklistedIds = blacklist.keys
       log.info(
-        s"""|🧠🪱 FastSync Progress: phase=$phase, blocks=$lastFull/$blockTarget (${blockPercent}%), state=$savedNodes/$totalNodes (${nodePercent}%),
+        s"""|🧠🪱 FastSync Progress: phase=$phase, blocks=$lastFull/$blockTarget (${blockPercent}%) eta=$blocksEtaStr, state=$savedNodes/$totalNodes (${nodePercent}%),
         |to_brain=$blocksToBrain, rates=${formatRate(blocksPerSec)} blocks, ${formatRate(
              nodesPerSec
            )} nodes, queues=bodies=${syncState.blockBodiesQueue.size}, receipts=${syncState.receiptsQueue.size},

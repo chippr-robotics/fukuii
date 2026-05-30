@@ -367,8 +367,10 @@ class BlockImporter(
   )
 
   private def handleBlocksImport(blocks: List[Block]): IO[NewBehavior] =
+    IO(System.currentTimeMillis()).flatMap { importStartMs =>
     tryImportBlocks(blocks)
       .map { value =>
+        val elapsedMs = (System.currentTimeMillis() - importStartMs).max(1L)
         val (importedBlocks, errorOpt) = value
         importedBlocks.size match {
           case 0 => log.debug("Imported no blocks")
@@ -381,7 +383,14 @@ class BlockImporter(
               b.body.transactionList.size,
               b.header.gasUsed
             )
-          case _ => log.info("Imported blocks {} - {}", importedBlocks.last.number, importedBlocks.head.number)
+          case n =>
+            val txs  = importedBlocks.map(_.body.transactionList.size).sum
+            val gas  = importedBlocks.map(_.header.gasUsed).sum
+            val rate = f"${n * 1000.0 / elapsedMs}%.1f"
+            log.info(
+              s"Imported blocks ${importedBlocks.last.number} - ${importedBlocks.head.number}" +
+                s" ($n blocks, $txs txs, $gas gas, rate=$rate blocks/s)"
+            )
         }
 
         errorOpt match {
@@ -532,6 +541,7 @@ class BlockImporter(
             }
         }
       }
+    }
 
   private def tryImportBlocks(
       blocks: List[Block],
