@@ -194,8 +194,9 @@ class PeersClient(
         val snapPeers = peersToDownloadFrom.filter { case (_, peerWithInfo) =>
           peerWithInfo.peerInfo.remoteStatus.supportsSnap
         }
-        log.debug(
-          "Selecting best SNAP-capable peer from {} available peers ({} SNAP-capable)",
+        log.info(
+          "PEER_SELECT BestSnapPeer: handshaked={} available={} snap={}",
+          handshakedPeers.size,
           peersToDownloadFrom.size,
           snapPeers.size
         )
@@ -515,16 +516,17 @@ object PeersClient {
     val peersToUse = peersToDownloadFrom.values
       .map { case PeerWithInfo(peer, peerInfo) =>
         val isReady = peerInfo.forkAccepted && peerInfo.maxBlockNumber > 0
-        log.debug(
-          s"Peer ${peer.id} (${peer.remoteAddress}) - ready: $isReady, " +
-            s"maxBlock: ${peerInfo.maxBlockNumber}, ready: $isReady"
-        )
-        log.debug("Peer {} chainWeight: {}", peer.id, peerInfo.chainWeight)
+        if (!isReady)
+          log.info(
+            "PEER_FILTER excluded {} ({}): forkAccepted={} maxBlock={}",
+            peer.id,
+            peer.remoteAddress,
+            peerInfo.forkAccepted,
+            peerInfo.maxBlockNumber
+          )
         (peer, peerInfo, isReady)
       }
       .collect { case (peer, peerInfo, true) =>
-        log.debug("Peer {} is ready and eligible for selection", peer.id)
-        log.debug("Peer {} chainWeight: {}", peer.id, peerInfo.chainWeight)
         (peer, peerInfo.chainWeight)
       }
 
@@ -533,7 +535,10 @@ object PeersClient {
       log.debug("Selected best peer {} with chainWeight {}", peer.id, chainWeight)
       Some(peer)
     } else {
-      log.debug("No ready peers available for selection from {} total peers", peersToDownloadFrom.size)
+      log.warning(
+        "PEER_FILTER no ready peers from {} handshaked (all excluded — forkAccepted=false or maxBlock=0)",
+        peersToDownloadFrom.size
+      )
       None
     }
   }
