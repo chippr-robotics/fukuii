@@ -813,7 +813,7 @@ class SNAPSyncController(
       if (backtrackedPivot > 0) {
         log.warning(
           s"Pivot header bootstrap failed for block $pendingPivot (reason: $reason, original: $originalReason). " +
-            s"Backtracking pivot to $backtrackedPivot (Besu pattern: decrement by ${snapSyncConfig.pivotBlockOffset})."
+            s"Backtracking pivot to $backtrackedPivot (offset=${snapSyncConfig.pivotBlockOffset})."
         )
         pivotBootstrapRetryTask = Some(
           scheduler.scheduleOnce(5.seconds, self, RetryBootstrapAtBlock(backtrackedPivot))(context.dispatcher, self)
@@ -1527,13 +1527,19 @@ class SNAPSyncController(
 
       // Real wire TD from the best SNAP-capable peer's ETH/68 handshake.
       // Sorted by TD descending so we pick the peer with the highest known cumulative difficulty.
-      val bestSnapPeerTD: Option[BigInt] =
+      // bestSnapPeerOpt retains the full peer record so we can pass both TD and block number to
+      // updateBestBlockForPivot for gap-adjusted ETH68_BOOTSTRAP (see that method for details).
+      val bestSnapPeerOpt =
         peersToDownloadFrom.values.toList
           .filter(p => p.peerInfo.remoteStatus.supportsSnap && p.peerInfo.forkAccepted && p.peerInfo.maxBlockNumber > 0)
           .sortBy(_.peerInfo.chainWeight.totalDifficulty)(Ordering[BigInt].reverse)
           .headOption
-          .map(_.peerInfo.chainWeight.totalDifficulty)
-          .filter(_ > BigInt(0))
+
+      val bestSnapPeerTD: Option[BigInt] =
+        bestSnapPeerOpt.map(_.peerInfo.chainWeight.totalDifficulty).filter(_ > BigInt(0))
+
+      val bestSnapPeerBestBlock: Option[BigInt] =
+        bestSnapPeerOpt.map(_.peerInfo.maxBlockNumber).filter(_ > BigInt(0))
 
       pivotHeaderOpt match {
         case Some(header) =>
@@ -1549,7 +1555,7 @@ class SNAPSyncController(
               .putSnapSyncPivotBlock(targetPivot)
               .and(appStateStorage.putSnapSyncStateRoot(header.stateRoot))
               .commit()
-            updateBestBlockForPivot(header, targetPivot, bestSnapPeerTD)
+            updateBestBlockForPivot(header, targetPivot, bestSnapPeerTD, bestSnapPeerBestBlock)
 
             SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
 
@@ -1591,7 +1597,7 @@ class SNAPSyncController(
                       .putSnapSyncPivotBlock(targetPivot)
                       .and(appStateStorage.putSnapSyncStateRoot(header.stateRoot))
                       .commit()
-                    updateBestBlockForPivot(header, targetPivot, bestSnapPeerTD)
+                    updateBestBlockForPivot(header, targetPivot, bestSnapPeerTD, bestSnapPeerBestBlock)
 
                     SNAPSyncMetrics.setPivotBlockNumber(targetPivot)
 
@@ -1783,7 +1789,7 @@ class SNAPSyncController(
               // BootstrapComplete handler detects all-phases-complete → skips to StateHealing.
               log.warning(
                 s"Recovery: pivot $pivot drifted $drift blocks, but all phases complete. " +
-                  "Requesting fresh pivot for healing (go-ethereum/Besu behavior)."
+                  "Requesting fresh pivot for healing."
               )
               accountsComplete = true
               storagePhaseComplete = true
@@ -3797,18 +3803,30 @@ class SNAPSyncController(
   private def updateBestBlockForPivot(
       header: BlockHeader,
       pivotBlockNumber: BigInt,
-      peerTD: Option[BigInt] = None
+      peerTD: Option[BigInt] = None,
+      peerBestBlock: Option[BigInt] = None
   ): Unit = {
     val pivotHash = header.hash
     // Priority: (1) real cumulative TD from ChainDownloader already in DB — never overwrite it;
-    // (2) ETH68 peer wire TD passed in — accurate bootstrap during rough period;
+    // (2) ETH68 peer wire TD adjusted for the block gap between the peer's head and the pivot —
+    //     the peer's TD is for their best block (N), but the pivot is N-64; using the raw peer TD
+    //     inflates the stored chain weight by up to thousands of blocks across SNAP restart cycles;
     // (3) pivotBlockNumber as proxy — non-inflating fallback so fukuii never appears
     //     as the highest-TD peer while SNAP syncing (low TD is harmless; inflated TD is not).
     val (estimatedTotalDifficulty, tdSource) =
       blockchainReader
         .getChainWeightByHash(pivotHash)
         .map(cw => (cw.totalDifficulty, "REAL_PIVOT_TD"))
-        .orElse(peerTD.filter(_ > BigInt(0)).map(td => (td, "ETH68_BOOTSTRAP")))
+        .orElse(peerTD.filter(_ > BigInt(0)).map { td =>
+          // Subtract gap × pivot block difficulty to estimate TD at the pivot block.
+          // Without this adjustment, the peer's TD (for their head at block N) is stored
+          // for the pivot block (N-64), creating persistent inflation with each SNAP restart.
+          val blockGap = peerBestBlock
+            .map(pb => (pb - pivotBlockNumber).max(BigInt(0)))
+            .getOrElse(BigInt(0))
+          val adjustedTD = (td - blockGap * header.difficulty).max(header.difficulty)
+          (adjustedTD, "ETH68_BOOTSTRAP")
+        })
         .getOrElse {
           val proxy = if (pivotBlockNumber == BigInt(0)) header.difficulty else pivotBlockNumber
           (proxy, "BLOCK_NUMBER_PROXY")
@@ -3827,6 +3845,38 @@ class SNAPSyncController(
         .putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash, pivotBlockNumber))
         .commit()
     }
+    // Structured log (Grafana/Loki) — ETH68_BOOTSTRAP records gap and raw peer TD for audit trail
+    tdSource match {
+      case "ETH68_BOOTSTRAP" =>
+        val gap = peerBestBlock.map(pb => (pb - pivotBlockNumber).max(BigInt(0))).getOrElse(BigInt(0))
+        slog.info(
+          s"ETH68_BOOTSTRAP_TD_ADJUST pivotBlock=$pivotBlockNumber adjustedTD=$estimatedTotalDifficulty rawPeerTD=${peerTD.getOrElse(BigInt(0))} peerBlock=${peerBestBlock.getOrElse(BigInt(0))} gap=$gap",
+          kv("pivotBlock",   pivotBlockNumber.toString),
+          kv("adjustedTD",   estimatedTotalDifficulty.toString),
+          kv("rawPeerTD",    peerTD.getOrElse(BigInt(0)).toString),
+          kv("peerBlock",    peerBestBlock.getOrElse(BigInt(0)).toString),
+          kv("gap",          gap.toString)
+        )
+        // Persist the earliest pivot that could carry ETH68_BOOTSTRAP inflation so
+        // ChainWeightRepairActor knows the exact scan start (no margin guessing).
+        // Only update when this pivot is earlier than the previously stored minimum.
+        val currentAnchor = appStateStorage.getEth68BootstrapMinPivot()
+        if (currentAnchor.forall(_ > pivotBlockNumber)) {
+          appStateStorage
+            .putEth68BootstrapMinPivot(pivotBlockNumber)
+            .and(appStateStorage.clearEth68ChainWeightRepairDone())
+            .commit()
+        }
+      case "REAL_PIVOT_TD" =>
+        slog.info(
+          s"SNAP_PIVOT_TD pivotBlock=$pivotBlockNumber td=$estimatedTotalDifficulty source=$tdSource",
+          kv("pivotBlock", pivotBlockNumber.toString),
+          kv("td",         estimatedTotalDifficulty.toString),
+          kv("source",     tdSource)
+        )
+      case _ => ()
+    }
+    // Human-readable — unchanged shape so existing grep patterns still work
     log.info(
       s"Updated best block for ETH status: block=$pivotBlockNumber, hash=${pivotHash.toHex.take(16)}..., " +
         s"estimatedTD=$estimatedTotalDifficulty (source=$tdSource)"

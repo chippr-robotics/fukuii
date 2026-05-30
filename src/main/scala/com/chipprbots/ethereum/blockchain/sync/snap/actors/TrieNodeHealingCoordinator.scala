@@ -378,7 +378,7 @@ class TrieNodeHealingCoordinator(
         // Case C: Fresh start — root not yet healed. Seed root and let inline discovery run.
         log.info(
           s"[HEAL] Root ${Hex.toHexString(root.take(8).toArray)} not yet in storage " +
-            s"— seeding root for inline child discovery (Besu-aligned top-down)"
+            s"— seeding root for inline child discovery"
         )
         queueNodes(Seq((Seq(emptyPath), root)))
         lastHealedAtMs = System.currentTimeMillis()

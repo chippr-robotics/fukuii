@@ -315,7 +315,7 @@ class NetworkPeerManagerActor(
     // SNAPSyncController sends ConnectToPeer to networkPeerManager — forward to PeerManagerActor
     // which is the only actor that handles it. Without this, the message is silently dropped.
     case PeerManagerActor.ConnectToPeer(uri) =>
-      log.info("Forwarding ConnectToPeer({}) to PeerManagerActor", uri)
+      log.debug("Forwarding ConnectToPeer({}) to PeerManagerActor", uri)
       peerManagerActor ! PeerManagerActor.ConnectToPeer(uri)
   }
 
@@ -666,7 +666,7 @@ class NetworkPeerManagerActor(
             val (cw, source) = reader.resolveETH69ChainWeight(maxBlockHash, maxBlockNumber, isPoWChain)
             val isImprovement = cw.totalDifficulty > updated.chainWeight.totalDifficulty
             if (isImprovement && source != "COLD_START") {
-              log.info(
+              log.debug(
                 "ETH69_CHAINWEIGHT_REFRESH: blockNum={} newTD={} prevTD={} source={}",
                 maxBlockNumber,
                 cw.totalDifficulty,

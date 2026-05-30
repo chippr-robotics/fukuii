@@ -387,7 +387,7 @@ class BlockImporter(
         errorOpt match {
           case None => Running
           case Some(err) =>
-            log.error("Block import error {}", err)
+            log.warning("Block import error {}", err)
             val notImportedBlocks = blocks.drop(importedBlocks.size)
 
             err match {
@@ -563,7 +563,7 @@ class BlockImporter(
             IO.raiseError(missingNodeException)
 
           case err @ (UnknownParent | BlockImportFailed(_)) =>
-            log.error(
+            log.warning(
               "Block {} import failed, with hash {} and parent hash {}",
               blocks.head.number,
               blocks.head.header.hashAsHexString,

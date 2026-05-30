@@ -131,8 +131,8 @@ class ConsensusAdapter(
       .flatTap {
         case Left(error) =>
           IO(
-            log.error(
-              "Error while validating block with hash {} before execution: {}",
+            log.warn(
+              "Block validation failed before execution (hash={} reason={})",
               Hex.toHexString(block.hash.toArray),
               error.reason.toString
             )
