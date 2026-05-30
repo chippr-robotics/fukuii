@@ -181,8 +181,9 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
     // Look up the node in the proof
     proofMap.get(currentHash) match {
       case None =>
-        // Node not in proof - this is acceptable for partial proofs
-        // The proof only needs to cover the range being verified
+        // SNAP GetAccountRange proof nodes cover only range boundaries, not intermediate
+        // nodes for mid-range accounts. None here means a non-boundary traversal step —
+        // acceptable for range proofs. Only boundary paths are fully traceable through proofMap.
         Right(())
 
       case Some(leafNode: LeafNode) =>
@@ -349,9 +350,21 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
       return Right(())
     }
 
-    // Without proofs, we can still validate basic invariants (ordering + bounds) and accept.
+    // No boundary proof provided — verify by computing the storage trie root from all
+    // received slots and asserting it matches the expected storageRoot.
+    // geth: VerifyRangeProof(root, nil, keys, slots, nil) via StackTrie.hash()
+    // Besu: isValidRangeProof with full root hash check for empty-proof responses.
     if (proof.isEmpty && slots.nonEmpty) {
-      return validateStorageSlotsBasic(slots, startHash, endHash)
+      val basicCheck = validateStorageSlotsBasic(slots, startHash, endHash)
+      if (basicCheck.isLeft) return basicCheck
+      val computedRoot = computeStorageRootFromSlots(slots)
+      if (computedRoot != rootHash)
+        return Left(
+          s"Storage root mismatch on empty-proof response: " +
+            s"computed ${computedRoot.take(4).toArray.map("%02x".format(_)).mkString}... " +
+            s"!= expected ${rootHash.take(4).toArray.map("%02x".format(_)).mkString}..."
+        )
+      return Right(())
     }
 
     // If we have proofs but no slots, this can be a valid proof-of-absence for sparse tries.
@@ -399,6 +412,17 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
         slog.warn("Storage Merkle proof verification error", kv("error", e.getMessage))
         Left(s"Storage verification error: ${e.getMessage}")
     }
+  }
+
+  /** Rebuild the storage trie from flat slots using SnapHashTrie and return the root hash.
+    * Uses a no-op write batch — pure computation, no RocksDB writes.
+    * Slots must be provided in strictly-ascending key order (already enforced by validateStorageSlotsBasic).
+    */
+  private def computeStorageRootFromSlots(slots: Seq[(ByteString, ByteString)]): ByteString = {
+    if (slots.isEmpty) return Account.EmptyStorageRootHash
+    val snapTrie = new SnapHashTrie(_ => ()) // no-op batch — hash-only computation
+    slots.foreach { case (k, v) => snapTrie.update(k.toArray, v.toArray) }
+    snapTrie.commit()
   }
 
   private def validateStorageSlotsBasic(
@@ -498,7 +522,7 @@ class MerkleProofVerifier(rootHash: ByteString) extends Logger {
     // Look up the node in the proof
     proofMap.get(currentHash) match {
       case None =>
-        // Node not in proof - this is acceptable for partial proofs
+        // Same rationale as traversePath: SNAP storage range proofs cover only boundaries.
         Right(())
 
       case Some(leafNode: LeafNode) =>
