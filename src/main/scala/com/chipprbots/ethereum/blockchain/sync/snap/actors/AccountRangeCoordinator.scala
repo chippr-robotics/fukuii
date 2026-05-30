@@ -465,6 +465,14 @@ class AccountRangeCoordinator(
   // Peer cooldown (best-effort): used for transient errors (timeouts, verification failures).
   private val peerCooldownUntilMs = mutable.Map[String, Long]()
   private val peerCooldownDefault = 30.seconds
+  // Peer-scarcity threshold and the shorter cooldown applied below it. On a 1-3 peer pool a fixed 30s cooldown after a
+  // single timeout benches ~half the usable peers; two near-simultaneous timeouts can zero the eligible set for 30s.
+  // Scaling the cooldown down to a few seconds when peers are scarce keeps the pipe fed without giving up the
+  // back-off's purpose (briefly resting a peer that just failed). Abundant pools keep the full 30s.
+  private val peerScarcityThreshold = 3
+  private val peerCooldownScarce = 8.seconds
+  private def effectivePeerCooldown: FiniteDuration =
+    if (knownAvailablePeers.size <= peerScarcityThreshold) peerCooldownScarce else peerCooldownDefault
   // Short cooldown for "empty-without-proof" responses. These mean "I can't serve this
   // state root" — the peer is healthy, just doesn't have a snapshot at our pivot. 30s
   // was over-punitive here: in production we saw `cooling=5 eligible=11` snapshots,
@@ -480,7 +488,7 @@ class AccountRangeCoordinator(
   private def isPeerCoolingDown(peer: Peer): Boolean =
     peerCooldownUntilMs.get(peer.id.value).exists(_ > System.currentTimeMillis())
 
-  private def recordPeerCooldown(peer: Peer, reason: String, duration: FiniteDuration = peerCooldownDefault): Unit = {
+  private def recordPeerCooldown(peer: Peer, reason: String, duration: FiniteDuration): Unit = {
     val until = System.currentTimeMillis() + duration.toMillis
     peerCooldownUntilMs.put(peer.id.value, until)
     log.debug(s"Cooling down peer ${peer.id.value} for ${duration.toSeconds}s: $reason")
@@ -1187,7 +1195,7 @@ class AccountRangeCoordinator(
       // Apply cooldown and reduce byte budget for protocol failures; skip for network-level
       // disconnects since the peer is already gone and will reconnect fresh.
       if (!reason.contains("Missing proof for empty account range") && !reason.contains("Peer disconnected")) {
-        recordPeerCooldown(peer, reason)
+        recordPeerCooldown(peer, reason, effectivePeerCooldown)
         adjustResponseBytesOnFailure(peer, reason)
       }
 
@@ -1225,11 +1233,35 @@ class AccountRangeCoordinator(
 
   private def tryRedispatchPendingTasks(): Unit = {
     if (pendingTasks.isEmpty) return
-    val eligiblePeers = knownAvailablePeers
+    var eligiblePeers = knownAvailablePeers
       .filterNot(isPeerStateless)
       .filterNot(isPeerSnapless)
       .filterNot(isPeerCoolingDown)
       .toList
+    // Eligible-set floor (peer-retention): whenever at least one peer is neither stateless nor snapless but the only
+    // thing excluding it is a cooldown, never let the download stall at zero dispatchable peers — revive the
+    // soonest-to-expire cooling peer so the pipe keeps moving. On abundant pools this never fires (eligiblePeers is
+    // non-empty); on a 1-2 snap-peer pool it is the difference between forward progress and a 30s dead stall. We only
+    // override cooldown — confirmed-stateless / snapless peers stay excluded, so we never re-dispatch to a peer that
+    // genuinely cannot serve the current root.
+    if (eligiblePeers.isEmpty) {
+      val cooldownOnlyPeers = knownAvailablePeers
+        .filterNot(isPeerStateless)
+        .filterNot(isPeerSnapless)
+        .filter(isPeerCoolingDown)
+        .toList
+      cooldownOnlyPeers
+        .sortBy(p => peerCooldownUntilMs.getOrElse(p.id.value, 0L))
+        .headOption
+        .foreach { peer =>
+          peerCooldownUntilMs.remove(peer.id.value)
+          log.info(
+            s"[ACCOUNT-FLOOR] All ${cooldownOnlyPeers.size} servable peers were cooling and none eligible — " +
+              s"reviving ${peer.id.value.take(8)} to keep the pipe fed (peer-scarce floor)"
+          )
+          eligiblePeers = List(peer)
+        }
+    }
     val now = System.currentTimeMillis()
     val shouldLog = now - lastStateLogMs >= StateLogIntervalMs
     if (shouldLog) {

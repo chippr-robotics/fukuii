@@ -238,6 +238,13 @@ class SNAPSyncController(
   private case class DelayedRestart(reason: String)
   private var snapCapabilityCheckTask: Option[Cancellable] = None
   private var snapPeerEvictionTask: Option[Cancellable] = None
+  // Eviction-churn guard: if eviction keeps firing without the snap-peer count ever rising, the network simply has no
+  // more snap peers to find — continuing to evict non-snap peers every cycle only thrashes discovery slots (the "Too
+  // many peers" log spam on ETC). Track consecutive fruitless eviction cycles and back off once they pile up; reset
+  // when the snap count actually improves.
+  private var fruitlessEvictionCycles: Int = 0
+  private var lastEvictionSnapCount: Int = -1
+  private val MaxFruitlessEvictionCycles: Int = 5
 
   /** Like handlePeerListMessagesWithRateTracking, but also reactively triggers a bootstrap retry when new SNAP-capable
     * peers arrive during the bootstrapping state. Without this, the node waits for the full exponential backoff timer
@@ -2485,9 +2492,25 @@ class SNAPSyncController(
       .sortBy(_.peer.createTimeMillis) // oldest first
 
     if (snapPeerCount >= snapSyncConfig.minSnapPeers || nonSnapOutgoing.isEmpty) {
+      // Pool reached the target (or there's nothing to evict): reset the churn guard.
+      if (snapPeerCount >= snapSyncConfig.minSnapPeers) fruitlessEvictionCycles = 0
+      lastEvictionSnapCount = snapPeerCount
       log.debug(
         s"SNAP peer eviction: $snapPeerCount snap peers (need ${snapSyncConfig.minSnapPeers}), " +
           s"${nonSnapOutgoing.size} non-snap outgoing — no eviction needed"
+      )
+      return
+    }
+
+    // Churn guard: if prior evictions never lifted the snap count, the network has no more snap peers to find.
+    // Back off instead of thrashing discovery slots every cycle.
+    if (snapPeerCount > lastEvictionSnapCount) fruitlessEvictionCycles = 0 // progress since last cycle — reset
+    else fruitlessEvictionCycles += 1
+    lastEvictionSnapCount = snapPeerCount
+    if (fruitlessEvictionCycles > MaxFruitlessEvictionCycles) {
+      log.info(
+        s"SNAP peer eviction backing off: $fruitlessEvictionCycles cycles with snap count stuck at $snapPeerCount " +
+          s"(need ${snapSyncConfig.minSnapPeers}) — not evicting; the network appears to have no more snap peers"
       )
       return
     }
@@ -2884,18 +2907,21 @@ class SNAPSyncController(
         }
       }
 
-      // Short-circuit: if account sync has zero SNAP peers for >3 min, restart immediately
-      // rather than waiting for the full stagnation timeout (~10 min).
+      // Zero-peer condition during account sync: WAIT, never restart. A `restartSnapSync` here nulls `mptStorage` and
+      // discards all in-memory trie progress (SNAPSyncController.restartSnapSync) — catastrophic on a churning 1-3
+      // snap-peer pool that blips to 0 for >3 min routinely while peers reconnect. The downloaded state is
+      // content-addressed and durable; there is nothing a restart can recover that waiting cannot. This mirrors the
+      // correct zero-peer branch in `maybeRestartIfAccountStagnant`, which also just waits. We keep the early
+      // detection purely for operator visibility.
       val snapPeerCount = peersToDownloadFrom.values.count(_.peerInfo.remoteStatus.supportsSnap)
       val totalPeerCount = peersToDownloadFrom.size
       val stagnantMs = System.currentTimeMillis() - lastAccountProgressMs
       if (currentPhase == AccountRangeSync && snapPeerCount == 0 && stagnantMs > ZeroPeerStagnationMs) {
-        log.warning(
+        log.info(
           s"[STAGNATION] Zero SNAP peers for ${stagnantMs / 1000}s during account sync " +
-            s"($totalPeerCount total peers, $snapPeerCount snap-capable) — restarting early " +
-            s"(threshold ${ZeroPeerStagnationMs / 1000}s)"
+            s"($totalPeerCount total peers) — waiting for peers to reconnect; downloaded state is preserved " +
+            s"(no restart)"
         )
-        restartSnapSync("account sync stalled — no SNAP peers")
       }
 
       currentPhase match {

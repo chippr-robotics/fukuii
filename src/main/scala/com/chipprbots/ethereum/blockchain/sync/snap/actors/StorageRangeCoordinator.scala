@@ -1328,9 +1328,27 @@ class StorageRangeCoordinator(
     if (tasks.isEmpty) return
     if (isPostRefreshCooldownActive) return
     if (pivotRefreshRequested) return
-    val eligiblePeers = knownAvailablePeers
+    var eligiblePeers = knownAvailablePeers
       .filterNot(p => isPeerStateless(p) || isPeerCoolingDown(p))
       .toList
+    // Eligible-set floor (peer-retention): if the only thing excluding every non-stateless peer is a cooldown, revive
+    // the soonest-to-expire one rather than stalling at zero dispatchable peers. Mirrors AccountRangeCoordinator.
+    if (eligiblePeers.isEmpty) {
+      knownAvailablePeers
+        .filterNot(isPeerStateless)
+        .filter(isPeerCoolingDown)
+        .toList
+        .sortBy(p => peerCooldownUntilMs.getOrElse(p.id.value, 0L))
+        .headOption
+        .foreach { peer =>
+          peerCooldownUntilMs.remove(peer.id.value)
+          log.info(
+            s"[STORAGE-FLOOR] All servable peers were cooling and none eligible — " +
+              s"reviving ${peer.id.value.take(8)} to keep the pipe fed (peer-scarce floor)"
+          )
+          eligiblePeers = List(peer)
+        }
+    }
     val now = System.currentTimeMillis()
     val shouldLog = now - lastStateLogMs >= StateLogIntervalMs
     if (shouldLog) {
