@@ -849,7 +849,8 @@ class RegularSyncSpec
       import scala.concurrent.Future
 
       "return NotSyncing when not yet started" taggedAs (UnitTest, SyncTest) in {
-        val state = ProgressState(startedFetching = false, initialBlock = 0, currentBlock = 0, bestKnownNetworkBlock = 0)
+        val state =
+          ProgressState(startedFetching = false, initialBlock = 0, currentBlock = 0, bestKnownNetworkBlock = 0)
         Future.successful(assert(state.toStatus === Status.NotSyncing))
       }
 

@@ -77,11 +77,10 @@ class BlockImporter(
 
   override def receive: Receive = idle
 
-  override def postRestart(reason: Throwable): Unit = {
+  override def postRestart(reason: Throwable): Unit =
     // Intentionally skip super.postRestart() — that would call preStart() and
     // reset survivedExhausts, defeating its purpose of surviving Pekko Restarts.
     start()
-  }
 
   private def idle: Receive = { case Start =>
     start()

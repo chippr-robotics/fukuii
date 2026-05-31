@@ -710,9 +710,13 @@ class SNAPSyncController(
                   s"Delaying SNAP restart by ${restartDelay.toSeconds}s " +
                     s"(criticalFailureCount=$criticalFailureCount)"
                 )
-                scheduler.scheduleOnce(restartDelay, self, DelayedRestart(
-                  s"consecutive stateless pivots ($consecutivePivotRefreshes): $reason"
-                ))(ec)
+                scheduler.scheduleOnce(
+                  restartDelay,
+                  self,
+                  DelayedRestart(
+                    s"consecutive stateless pivots ($consecutivePivotRefreshes): $reason"
+                  )
+                )(ec)
               } else {
                 restartSnapSync(s"consecutive stateless pivots ($consecutivePivotRefreshes): $reason")
               }
@@ -2364,12 +2368,12 @@ class SNAPSyncController(
     context.become(completed)
   }
 
-  /** Enter dormant mode: stop all coordinators and scheduled tasks, preserve all RocksDB data,
-    * and schedule a wake-up with exponential backoff. Replaces fallbackToFastSync() in the
-    * critical failure path — FastSync is useless on ETH68/69 (GetNodeData removed).
+  /** Enter dormant mode: stop all coordinators and scheduled tasks, preserve all RocksDB data, and schedule a wake-up
+    * with exponential backoff. Replaces fallbackToFastSync() in the critical failure path — FastSync is useless on
+    * ETH68/69 (GetNodeData removed).
     *
-    * Unlike fallbackToFastSync(), this does NOT clear persisted SNAP progress, does NOT
-    * send FallbackToFastSync to parent, and DOES preserve all downloaded trie data.
+    * Unlike fallbackToFastSync(), this does NOT clear persisted SNAP progress, does NOT send FallbackToFastSync to
+    * parent, and DOES preserve all downloaded trie data.
     */
   private def enterDormantMode(reason: String): Unit = {
     currentPhase = Dormant
@@ -4162,8 +4166,8 @@ object SNAPSyncController {
     */
   final case class CLPivotHint(headHash: ByteString, knownHeader: Option[BlockHeader])
 
-  /** Minimum block number the pivot must be at or above. Sent by SyncController when regular sync
-    * was stuck at a specific block, so re-SNAP can't re-select the same pivot that caused the stall.
+  /** Minimum block number the pivot must be at or above. Sent by SyncController when regular sync was stuck at a
+    * specific block, so re-SNAP can't re-select the same pivot that caused the stall.
     */
   final case class MinPivotBlock(minBlock: BigInt)
 

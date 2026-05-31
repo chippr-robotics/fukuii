@@ -38,7 +38,9 @@ object PeerEventBusActor {
     Source
       .fromMaterializer { (mat, _) =>
         val (actorRef, src) = Source
-          .actorRef[MessageFromPeer](PartialFunction.empty, PartialFunction.empty, 1, OverflowStrategy.fail)
+          // Buffer 64 + dropHead: an event-bus relay should absorb bursty peer messages, not die
+          // on the first race. Buffer-1 + fail made PeerEventBusActorSpec flaky (BufferOverflowException).
+          .actorRef[MessageFromPeer](PartialFunction.empty, PartialFunction.empty, 64, OverflowStrategy.dropHead)
           .watch(peerEventBus)
           .preMaterialize()(mat)
         peerEventBus

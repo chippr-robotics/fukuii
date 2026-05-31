@@ -96,7 +96,10 @@ class RegularSync(
 
   val printStatusSchedule: Cancellable =
     scheduler.scheduleWithFixedDelay(
-      60.seconds, 60.seconds, self, RegularSync.PrintStatus
+      60.seconds,
+      60.seconds,
+      self,
+      RegularSync.PrintStatus
     )(context.dispatcher, self)
 
   override def receive: Receive = running(

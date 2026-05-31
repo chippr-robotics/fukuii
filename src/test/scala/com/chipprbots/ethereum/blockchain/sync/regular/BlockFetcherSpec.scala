@@ -290,7 +290,10 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
       shutdownActorSystem()
     }
 
-    "should request headers when BlockRangeUpdate announces a new chain tip" taggedAs (UnitTest, SyncTest) in new TestSetup {
+    "should request headers when BlockRangeUpdate announces a new chain tip" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in new TestSetup {
       startFetcher()
       // ETH/69 peer announces latest block at 100; fetcher should immediately request headers
       val update = ETH69.BlockRangeUpdate(BigInt(0), BigInt(100), org.apache.pekko.util.ByteString.empty)
@@ -317,8 +320,8 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
       val singleHeader = singleBlock.header
       initSender ! PeersClient.Response(fakePeer, ETH66BlockHeaders(0, List(singleHeader)))
       // BlockFetcher now requests bodies for block 6
-      val bodiesSender = peersClient.expectMsgPF() {
-        case PeersClient.Request(_: ETH66GetBlockBodies, _, _) => peersClient.lastSender
+      val bodiesSender = peersClient.expectMsgPF() { case PeersClient.Request(_: ETH66GetBlockBodies, _, _) =>
+        peersClient.lastSender
       }
       bodiesSender ! PeersClient.Response(fakePeer, ETH66BlockBodies(0, List(singleBlock.body)))
       // Importer picks the block; this advances lastBlock to 6 so isOnTop becomes true
@@ -336,7 +339,10 @@ class BlockFetcherSpec extends AnyFreeSpecLike with Matchers with BeforeAndAfter
     }
 
     // BF-2: partial header batch still advances nextBlockToFetch correctly
-    "should fetch the next window after a partial header batch response" taggedAs (UnitTest, SyncTest) in new TestSetup {
+    "should fetch the next window after a partial header batch response" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in new TestSetup {
       startFetcher()
       // Trigger to set knownTop=1000 (high, so fetcher knows more blocks exist)
       triggerFetching(1000)

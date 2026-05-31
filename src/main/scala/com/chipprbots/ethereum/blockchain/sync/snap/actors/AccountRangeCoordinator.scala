@@ -1751,8 +1751,8 @@ class AccountRangeCoordinator(
 object AccountRangeCoordinator {
 
   /** Hard cap on consecutive re-queues for a single account task before the coordinator escalates to the controller via
-    * `PivotStateUnservable`. On ETC mainnet with 1-5 SNAP peers, serve-window gaps can last 5-10 minutes. At 5s cooldown
-    * (empty-without-proof) 20 requeues covers ~100s; at 30s timeout, ~10 minutes. Previously 8 — too tight for
+    * `PivotStateUnservable`. On ETC mainnet with 1-5 SNAP peers, serve-window gaps can last 5-10 minutes. At 5s
+    * cooldown (empty-without-proof) 20 requeues covers ~100s; at 30s timeout, ~10 minutes. Previously 8 — too tight for
     * peer-scarce networks where transient statelessness is the norm, not the exception.
     */
   val MaxRequeuesPerTask: Int = 20

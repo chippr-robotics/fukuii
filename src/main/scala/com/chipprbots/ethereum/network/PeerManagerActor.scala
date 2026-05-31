@@ -103,8 +103,8 @@ class PeerManagerActor(
     */
   private val snapCapableHosts: mutable.Set[String] = mutable.Set.empty
 
-  /** Per-host count of lenient (snap-exempt) soft blacklists applied since the last successful handshake. Caps the
-    * flap rate: a snap host that keeps soft-disconnecting gets the short backoff up to
+  /** Per-host count of lenient (snap-exempt) soft blacklists applied since the last successful handshake. Caps the flap
+    * rate: a snap host that keeps soft-disconnecting gets the short backoff up to
     * [[PeerManagerActor.MaxSnapLenientBlacklists]] times, after which it falls back to the normal short duration. Reset
     * to 0 whenever the host completes a fresh handshake (it proved itself useful again).
     */

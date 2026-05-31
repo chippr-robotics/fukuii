@@ -30,11 +30,10 @@ import com.chipprbots.ethereum.utils.Config
 
 /** Unit tests for BytecodeRecoveryActor covering all recovery paths:
   *
-  *   T1: No missing bytecodes → immediate RecoveryComplete, flag committed.
-  *   T2: Missing present → coordinator receives StartByteCodeSync, completes normally.
-  *   T3: Scan Future throws (trie root missing) → RecoveryComplete still fires.
-  *   T4: Coordinator crashes mid-download → Terminated handler commits flag and fires RecoveryComplete.
-  *   T5: No peer/progress arrives within timeout → abandon fires, RecoveryComplete emitted.
+  * T1: No missing bytecodes → immediate RecoveryComplete, flag committed. T2: Missing present → coordinator receives
+  * StartByteCodeSync, completes normally. T3: Scan Future throws (trie root missing) → RecoveryComplete still fires.
+  * T4: Coordinator crashes mid-download → Terminated handler commits flag and fires RecoveryComplete. T5: No
+  * peer/progress arrives within timeout → abandon fires, RecoveryComplete emitted.
   */
 class BytecodeRecoveryActorSpec
     extends TestKit(ActorSystem("BytecodeRecoveryActorSpec_System"))
