@@ -908,8 +908,14 @@ class PeerManagerSpec
       val replenished = newIncoming.foldLeft(pruned) { case (ps, p) =>
         ps.addNewPendingPeer(p).promotePeerToHandshaked(p)
       }
-      // Incoming connections should be maxed out now, can prune again.
-      PeerManagerActor.numberOfIncomingConnectionsToPrune(replenished, peerConfiguration) shouldBe >(0)
+      // Replenishment only restores prunability when it pushes incoming peers back ABOVE the prune
+      // floor (minIncomingPeers). When the arbitrary pool already started saturated
+      // (incomingHandshakedPeersCount == maxIncomingPeers), newIncoming is empty, so pruning drains
+      // the pool to exactly minIncomingPeers and there is correctly nothing left to prune.
+      val minIncomingPeers = peerConfiguration.maxIncomingPeers - peerConfiguration.pruneIncomingPeers
+      whenever(replenished.incomingHandshakedPeersCount > minIncomingPeers) {
+        PeerManagerActor.numberOfIncomingConnectionsToPrune(replenished, peerConfiguration) shouldBe >(0)
+      }
     }
   }
 
