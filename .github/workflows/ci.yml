@@ -6,6 +6,7 @@ on:
       - main
       - master
       - develop
+      - staging
     paths-ignore:
       - 'docs/**'
       - '*.md'
@@ -16,6 +17,7 @@ on:
       - main
       - master
       - develop
+      - staging
 
 permissions:
   contents: read
