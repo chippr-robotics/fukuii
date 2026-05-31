@@ -21,7 +21,7 @@ object Dependencies {
       "org.apache.pekko" %% "pekko-stream" % pekkoVersion
     )
 
-  val pekkoHttp: Seq[ModuleID] = {
+  val pekkoHttp: Seq[ModuleID] =
     Seq(
       "org.apache.pekko" %% "pekko-http" % pekkoHttpVersion,
       "org.apache.pekko" %% "pekko-http-cors" % pekkoHttpVersion,
@@ -29,7 +29,6 @@ object Dependencies {
       // Note: pekko-http-json4s not yet available, using custom JSON marshalling with json4s
       "org.json4s" %% "json4s-native" % "4.0.7"
     )
-  }
 
   val json4s = Seq("org.json4s" %% "json4s-native" % "4.0.7") // Updated for Scala 3 support
 
@@ -139,8 +138,8 @@ object Dependencies {
   val crypto = Seq(
     "org.bouncycastle" % "bcprov-jdk18on" % "1.84",
     "org.bouncycastle" % "bcpkix-jdk18on" % "1.84",
-    "tech.pegasys" % "jc-kzg-4844" % "1.0.0",       // EIP-4844 KZG point evaluation (c-kzg-4844 JNI bindings)
-    "org.hyperledger.besu" % "bls12-381" % "1.0.0"   // EIP-2537 BLS12-381 precompiles (gnark/Constantine backends)
+    "tech.pegasys" % "jc-kzg-4844" % "1.0.0", // EIP-4844 KZG point evaluation (c-kzg-4844 JNI bindings)
+    "org.hyperledger.besu" % "bls12-381" % "1.0.0" // EIP-2537 BLS12-381 precompiles (gnark/Constantine backends)
   )
 
   val scopt = Seq("com.github.scopt" %% "scopt" % "4.1.0") // Updated for Scala 3 support
