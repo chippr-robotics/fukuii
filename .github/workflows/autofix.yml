@@ -1,0 +1,93 @@
+name: Autofix (scalafmt)
+
+# Auto-applies `sbt scalafmtAll` and commits the result, so formatting never has to
+# be fixed by hand and never blocks a release. Runs on same-repo PRs (pushes the fix
+# to the PR's source branch) and on pushes to the integration branches (self-heals a
+# squash-merge that landed unformatted code — the exact gap that broke the 0.6.0
+# release prep). `ci.yml` keeps `scalafmtCheckAll` as the backstop for fork PRs, which
+# GITHUB_TOKEN cannot push to.
+#
+# NOTE: commits pushed with the default GITHUB_TOKEN do NOT re-trigger other workflows
+# (GitHub's loop-prevention). On unprotected integration branches (develop/staging) that
+# is fine — there are no required checks to re-run, and scalafmt is idempotent so there
+# is no commit loop. If you later want the auto-commit to re-trigger required checks on a
+# protected branch, add a PAT secret and set `token: ${{ secrets.CI_PAT }}` on checkout.
+
+on:
+  push:
+    branches:
+      - develop
+      - staging
+    paths:
+      - '**.scala'
+      - '**.sbt'
+      - '.scalafmt.conf'
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+      - staging
+    paths:
+      - '**.scala'
+      - '**.sbt'
+      - '.scalafmt.conf'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: autofix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scalafmt:
+    name: Apply scalafmt
+    # Skip PRs from forks — GITHUB_TOKEN is read-only on fork branches, so the fix
+    # cannot be pushed back. The ci.yml scalafmtCheckAll gate still catches those.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+          cache: 'sbt'
+
+      - name: Cache Coursier
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.ivy2/cache
+            ~/.sbt
+          key: ${{ runner.os }}-sbt-25-${{ hashFiles('**/build.sbt', '**/build.properties', '**/Dependencies.scala', '**/plugins.sbt') }}
+          restore-keys: |
+            ${{ runner.os }}-sbt-25-
+            ${{ runner.os }}-sbt-
+
+      - name: Set up SBT
+        run: |
+          curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" | sudo gpg --dearmor -o /usr/share/keyrings/scalasbt-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/scalasbt-archive-keyring.gpg] https://repo.scala-sbt.org/scalasbt/debian all main" | sudo tee /etc/apt/sources.list.d/sbt.list
+          sudo apt-get update
+          sudo apt-get install sbt
+
+      - name: Apply scalafmt
+        run: sbt scalafmtAll scalafmtSbt
+        env:
+          FUKUII_DEV: true
+
+      - name: Commit formatting if changed
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "style: apply scalafmt"
+          commit_user_name: "github-actions[bot]"
+          commit_user_email: "github-actions[bot]@users.noreply.github.com"
