@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.network
 
 import scala.concurrent.duration._
 
+import net.logstash.logback.argument.StructuredArguments.kv
+
 import org.apache.pekko.actor.Actor
 import org.apache.pekko.actor.ActorLogging
 import org.apache.pekko.actor.ActorRef
@@ -52,6 +54,8 @@ class NetworkPeerManagerActor(
     isPoWChain: Boolean = true
 ) extends Actor
     with ActorLogging {
+
+  private val slog = org.slf4j.LoggerFactory.getLogger(getClass)
 
   private[network] type PeersWithInfo = Map[PeerId, PeerWithInfo]
 
@@ -176,6 +180,12 @@ class NetworkPeerManagerActor(
       val peerInfoOpt = peersWithInfo.get(peerId).map { case PeerWithInfo(_, peerInfo) => peerInfo }
       sender() ! PeerInfoResponse(peerInfoOpt)
 
+    case GetPeerDetails =>
+      val details = peersWithInfo.values.map { case PeerWithInfo(peer, peerInfo) =>
+        (peer, peer.incomingConnection, peerInfo.remoteStatus.clientId)
+      }.toSeq
+      sender() ! PeerDetails(details)
+
     case RegisterSnapSyncController(snapSyncController) =>
       log.info("Registering SNAPSyncController for message routing")
       snapSyncControllerOpt = Some(snapSyncController)
@@ -206,6 +216,119 @@ class NetworkPeerManagerActor(
         s"Network [60s]: active=$active ($snapPeers snap) in=$inbound out=$outbound | " +
           s"+$tcpFailed tcp-fail +$authFailed auth-fail +$authTimeout auth-timeout +$emptyHeaders empty-hdrs"
       )
+
+      // TD_AUDIT: compare our stored chain weight against best ETH68/ETH69 peer TDs.
+      // ETH68 wire TD is authoritative — peers declare it explicitly in Status/NewBlock.
+      // Fires every 60s alongside the network summary. Grafana alert: inflated="true".
+      for {
+        reader     <- blockchainReader
+        bestHeader <- reader.getBestBlockHeader()
+        selfCw     <- reader.getChainWeightByHash(bestHeader.hash)
+      } {
+        val selfBlock = bestHeader.number
+        val selfTD    = selfCw.totalDifficulty
+        val allEthPeers = peersWithInfo.values.toList.filter(_.peerInfo.forkAccepted)
+
+        val bestEth68 = allEthPeers
+          .filter(_.peerInfo.remoteStatus.capability != com.chipprbots.ethereum.network.p2p.messages.Capability.ETH69)
+          .sortBy(_.peerInfo.chainWeight.totalDifficulty)(Ordering[BigInt].reverse)
+          .headOption
+
+        val bestEth69 = allEthPeers
+          .filter(_.peerInfo.remoteStatus.capability == com.chipprbots.ethereum.network.p2p.messages.Capability.ETH69)
+          .sortBy(_.peerInfo.chainWeight.totalDifficulty)(Ordering[BigInt].reverse)
+          .headOption
+
+        val eth68Block = bestEth68.map(_.peerInfo.maxBlockNumber).getOrElse(BigInt(0))
+        val eth68TD    = bestEth68.map(_.peerInfo.chainWeight.totalDifficulty).getOrElse(BigInt(0))
+        val eth68Delta = selfTD - eth68TD
+        val eth69Block = bestEth69.map(_.peerInfo.maxBlockNumber).getOrElse(BigInt(0))
+        val eth69TD    = bestEth69.map(_.peerInfo.chainWeight.totalDifficulty).getOrElse(BigInt(0))
+        val eth69Delta = selfTD - eth69TD
+
+        // Three-state TD alignment: Inflated (ETC TD inflation active — expected),
+        // Deflated (we're behind peers), or Aligned (within ±5-block tolerance).
+        val tdStatus: String = bestEth68 match {
+          case None => "NoPeers"
+          case Some(p) =>
+            val delta     = selfTD - p.peerInfo.chainWeight.totalDifficulty
+            val threshold = bestHeader.difficulty * 5
+            if (delta > threshold)        "Inflated"
+            else if (-delta > threshold)  "Deflated"
+            else                          "Aligned"
+        }
+
+        // Human-readable — visible in plain text log
+        log.warning(
+          s"TD_AUDIT [60s]: selfBlock=$selfBlock selfTD=$selfTD | " +
+          s"eth68(block=$eth68Block td=$eth68TD delta=$eth68Delta) | " +
+          s"eth69(block=$eth69Block td=$eth69TD delta=$eth69Delta) | tdStatus=$tdStatus"
+        )
+        // Structured — parsed by Grafana/Loki when json-output=true
+        // Alert: {app="fukuii"} | json | tdStatus="Deflated"
+        slog.warn(
+          "TD_AUDIT",
+          kv("selfBlock",  selfBlock.toString),
+          kv("selfTD",     selfTD.toString),
+          kv("eth68Block", eth68Block.toString),
+          kv("eth68TD",    eth68TD.toString),
+          kv("eth68Delta", eth68Delta.toString),
+          kv("eth69Block", eth69Block.toString),
+          kv("eth69TD",    eth69TD.toString),
+          kv("eth69Delta", eth69Delta.toString),
+          kv("tdStatus",   tdStatus)
+        )
+
+        // PEER_DIVERSITY: client type + protocol version breakdown (à la Nethermind SyncReport)
+        val allConnected = peersWithInfo.values.toList
+        val total = allConnected.size
+        if (total > 0) {
+          def count(ct: NodeClientType) = allConnected.count(_.peerInfo.remoteStatus.clientType == ct)
+          val nCoreGeth   = count(NodeClientType.CoreGeth)
+          val nGeth       = count(NodeClientType.Geth)
+          val nBesu       = count(NodeClientType.Besu)
+          val nNethermind = count(NodeClientType.Nethermind)
+          val nFukuii     = count(NodeClientType.Fukuii)
+          val nErigon     = count(NodeClientType.Erigon)
+          val nReth       = count(NodeClientType.Reth)
+          val nUnknown    = count(NodeClientType.Unknown)
+          val nEth69      = allConnected.count(_.peerInfo.remoteStatus.capability == com.chipprbots.ethereum.network.p2p.messages.Capability.ETH69)
+          val nEth68      = total - nEth69
+
+          val clientParts = Seq(
+            nCoreGeth   -> "CoreGeth",
+            nGeth       -> "Geth",
+            nBesu       -> "Besu",
+            nNethermind -> "Nethermind",
+            nFukuii     -> "Fukuii",
+            nErigon     -> "Erigon",
+            nReth       -> "Reth",
+            nUnknown    -> "Unknown",
+          ).filter(_._1 > 0).sortBy(-_._1)
+            .map { case (n, name) => s"$name=$n (${n * 100 / total}%)" }.mkString(" ")
+
+          log.warning(
+            s"PEER_DIVERSITY [60s]: peers=$total | $clientParts | " +
+            s"ETH/69=$nEth69 (${nEth69 * 100 / total}%) ETH/68=$nEth68 (${nEth68 * 100 / total}%)"
+          )
+          // Structured — parsed by Grafana/Loki when json-output=true
+          // Graph: {app="fukuii"} | json | unwrap coregeth or besu
+          slog.warn(
+            "PEER_DIVERSITY",
+            kv("peers",      total.toString),
+            kv("coregeth",   nCoreGeth.toString),
+            kv("geth",       nGeth.toString),
+            kv("besu",       nBesu.toString),
+            kv("nethermind", nNethermind.toString),
+            kv("fukuii",     nFukuii.toString),
+            kv("erigon",     nErigon.toString),
+            kv("reth",       nReth.toString),
+            kv("unknown",    nUnknown.toString),
+            kv("eth69",      nEth69.toString),
+            kv("eth68",      nEth68.toString)
+          )
+        }
+      }
 
     case NetworkPeerManagerActor.RefreshPeerBestBlocks =>
       // Periodically poll each handshaked peer for its current head. Mirrors the eager
@@ -990,8 +1113,11 @@ object NetworkPeerManagerActor {
       genesisHash: ByteString,
       supportsSnap: Boolean = false,
       capabilities: List[Capability] = List.empty,
-      latestBlock: Option[BigInt] = None
+      latestBlock: Option[BigInt] = None,
+      clientId: String = ""
   ) {
+    def clientType: NodeClientType = NodeClientType.recognize(clientId)
+
     override def toString: String =
       s"RemoteStatus { " +
         s"capability: $capability, " +
@@ -1001,7 +1127,8 @@ object NetworkPeerManagerActor {
         s"genesisHash: ${ByteStringUtils.hash2string(genesisHash)}, " +
         s"supportsSnap: $supportsSnap, " +
         s"capabilities: ${capabilities.mkString("[", ", ", "]")}" +
-        s"latestBlock: $latestBlock" +
+        s"latestBlock: $latestBlock, " +
+        s"clientId: $clientId" +
         s"}"
   }
 
@@ -1010,7 +1137,8 @@ object NetworkPeerManagerActor {
         status: ETH64.Status,
         negotiatedCapability: Capability,
         supportsSnap: Boolean,
-        capabilities: List[Capability]
+        capabilities: List[Capability],
+        clientId: String = ""
     ): RemoteStatus =
       RemoteStatus(
         negotiatedCapability,
@@ -1019,7 +1147,8 @@ object NetworkPeerManagerActor {
         status.bestHash,
         status.genesisHash,
         supportsSnap,
-        capabilities
+        capabilities,
+        clientId = clientId
       )
 
     def apply(status: ETH64.Status): RemoteStatus =
@@ -1037,7 +1166,8 @@ object NetworkPeerManagerActor {
         status: BaseETH6XMessages.Status,
         negotiatedCapability: Capability,
         supportsSnap: Boolean,
-        capabilities: List[Capability]
+        capabilities: List[Capability],
+        clientId: String = ""
     ): RemoteStatus =
       RemoteStatus(
         negotiatedCapability,
@@ -1046,7 +1176,8 @@ object NetworkPeerManagerActor {
         status.bestHash,
         status.genesisHash,
         supportsSnap,
-        capabilities
+        capabilities,
+        clientId = clientId
       )
 
     def apply(status: BaseETH6XMessages.Status): RemoteStatus =
@@ -1070,7 +1201,8 @@ object NetworkPeerManagerActor {
         negotiatedCapability: Capability,
         supportsSnap: Boolean,
         capabilities: List[Capability],
-        resolvedChainWeight: ChainWeight
+        resolvedChainWeight: ChainWeight,
+        clientId: String = ""
     ): RemoteStatus =
       RemoteStatus(
         negotiatedCapability,
@@ -1080,7 +1212,8 @@ object NetworkPeerManagerActor {
         status.genesisHash,
         supportsSnap,
         capabilities,
-        latestBlock = Some(status.latestBlock)
+        latestBlock = Some(status.latestBlock),
+        clientId = clientId
       )
   }
 
@@ -1213,6 +1346,12 @@ object NetworkPeerManagerActor {
   case class PeerInfoRequest(peerId: PeerId)
 
   case class PeerInfoResponse(peerInfo: Option[PeerInfo])
+
+  /** Returns (peer, inbound, clientId) for all handshaked peers.
+    * Used by admin_peers to expose the actual Hello clientId string.
+    */
+  case object GetPeerDetails
+  case class PeerDetails(peers: Seq[(Peer, Boolean, String)])
 
   case class SendMessage(message: MessageSerializable, peerId: PeerId)
 

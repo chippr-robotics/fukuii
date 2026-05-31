@@ -73,7 +73,7 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
     negotiationResult match {
       case Some(Capability.ETH63) =>
         log.debug("PROTOCOL_NEGOTIATED: clientId={}, protocol=eth/63, usesRequestId=false", hello.clientId)
-        EthNodeStatus63ExchangeState(handshakerConfiguration, supportsSnap, peerCapabilities)
+        EthNodeStatus63ExchangeState(handshakerConfiguration, supportsSnap, peerCapabilities, clientId = hello.clientId)
       case Some(Capability.ETH69) =>
         log.info(
           "PROTOCOL_NEGOTIATED: clientId={}, protocol=eth/69, supportsSnap={} (snap/1 explicit={})",
@@ -87,7 +87,8 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
           handshakerConfiguration,
           Capability.ETH69,
           supportsSnap = supportsSnap,
-          peerCapabilities
+          peerCapabilities,
+          clientId = hello.clientId
         )
       case Some(
             negotiated @ (Capability.ETH64 | Capability.ETH65 | Capability.ETH66 | Capability.ETH67 | Capability.ETH68)
@@ -98,7 +99,7 @@ case class EtcHelloExchangeState(handshakerConfiguration: NetworkHandshakerConfi
           negotiated,
           Capability.usesRequestId(negotiated)
         )
-        EthNodeStatus64ExchangeState(handshakerConfiguration, negotiated, supportsSnap, peerCapabilities)
+        EthNodeStatus64ExchangeState(handshakerConfiguration, negotiated, supportsSnap, peerCapabilities, clientId = hello.clientId)
       case _ =>
         log.warn(
           "PROTOCOL_NEGOTIATION_FAILED: clientId={}, peerCaps=[{}], ourCaps=[{}], reason=IncompatibleP2pProtocolVersion",

@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.branch.BestBranch
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps._
 import com.chipprbots.ethereum.network.BlockedIPRegistry
+import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ForkBlockNumbers
@@ -219,20 +220,20 @@ class AdminService(
   }
 
   /** Besu AdminPeers: streams ethPeers.streamAllPeers() → PeerResult.fromEthPeer. Divergence: Fukuii asks
-    * PeerManagerActor.GetPeers instead (actor-based P2P, no EthPeers).
+    * NetworkPeerManagerActor.GetPeerDetails to get the actual Hello clientId for each peer.
     */
   def peers(@unused req: AdminPeersRequest): ServiceResponse[AdminPeersResponse] =
     peerManager
-      .askFor[PeerManagerActor.Peers](PeerManagerActor.GetPeers)
-      .map { peersResult =>
-        val peerInfos = peersResult.peers.map { case (peer, _) =>
+      .askFor[NetworkPeerManagerActor.PeerDetails](NetworkPeerManagerActor.GetPeerDetails)
+      .map { details =>
+        val peerInfos = details.peers.map { case (peer, inbound, clientId) =>
           AdminPeerInfo(
             id = peer.nodeId.map(bs => Hex.toHexString(bs.toArray)).getOrElse(peer.id.value),
-            name = s"fukuii-peer/${peer.remoteAddress}",
+            name = if (clientId.nonEmpty) clientId else peer.remoteAddress.toString,
             remoteAddress = peer.remoteAddress.toString,
-            inbound = peer.incomingConnection
+            inbound = inbound
           )
-        }.toSeq
+        }
         Right(AdminPeersResponse(peerInfos))
       }
       .handleError { ex =>
