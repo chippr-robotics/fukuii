@@ -13,6 +13,7 @@ import scala.util.Try
 import com.chipprbots.ethereum.blockchain.sync.{Blacklist, CacheBasedBlacklist, PeerListSupportNg, SyncProtocol}
 import com.chipprbots.ethereum.db.storage.{AppStateStorage, EvmCodeStorage, FlatAccountStorage, FlatSlotStorage, MptStorage, StateStorage}
 import com.chipprbots.ethereum.domain.{Block, BlockBody, BlockHeader, BlockchainReader, BlockchainWriter, ChainWeight}
+import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.SNAP
 import com.chipprbots.ethereum.network.p2p.messages.SNAP._
 import com.chipprbots.ethereum.utils.Hex
@@ -1537,7 +1538,17 @@ class SNAPSyncController(
       // updateBestBlockForPivot for gap-adjusted ETH68_BOOTSTRAP (see that method for details).
       val bestSnapPeerOpt =
         peersToDownloadFrom.values.toList
-          .filter(p => p.peerInfo.remoteStatus.supportsSnap && p.peerInfo.forkAccepted && p.peerInfo.maxBlockNumber > 0)
+          .filter(p =>
+            p.peerInfo.remoteStatus.supportsSnap &&
+            p.peerInfo.forkAccepted &&
+            p.peerInfo.maxBlockNumber > 0 &&
+            // ETH69 TD comes from our own DB (resolveETH69ChainWeight → DB_LOOKUP), not the wire.
+            // Using ETH69 here creates a circular dependency: Fukuii bootstraps from its own
+            // potentially-inflated stored values, re-seeding inflation on every SNAP restart
+            // regardless of gap adjustment. ETH68 peers advertise canonical wire TD directly.
+            // If no ETH68 SNAP peer is available, peerTD=None → falls to BLOCK_NUMBER_PROXY (safe).
+            p.peerInfo.remoteStatus.capability != Capability.ETH69
+          )
           .sortBy(_.peerInfo.chainWeight.totalDifficulty)(Ordering[BigInt].reverse)
           .headOption
 

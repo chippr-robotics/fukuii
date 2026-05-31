@@ -376,6 +376,15 @@ class SyncController(
         appStateStorage.clearSnapSyncDone().commit()
         appStateStorage.clearFastSyncDone().commit()
         startSnapSync(minPivotBlock = Some(blockNumber))
+      case ChainWeightRepairActor.RepairComplete(result) =>
+        log.info(
+          "Chain weight repair complete: walked={} corrected={} hadInflation={}",
+          result.walked,
+          result.corrected,
+          result.hadInflation
+        )
+      case ChainWeightRepairActor.RepairFailed(ex) =>
+        log.warning("Chain weight repair failed (will retry on next startup): {}", ex.getMessage)
       case msg =>
         regularSync.forward(msg)
     }
@@ -647,6 +656,53 @@ class SyncController(
     // node resumes fast sync to finish state download, then on next normal restart the
     // flag is back to its real value (set by FastSync.finish()). Cheap, surgical recovery
     // that doesn't touch chain data.
+    // One-shot surgical chain weight seed. Format: -Dfukuii.seed-chain-weights=HASH1:TD1,HASH2:TD2
+    // Writes exact TD values for specific block hashes before sync starts.
+    // Use when a repair pass has corrupted or deflated chain weights — get canonical values
+    // from a trusted local client (e.g. core-geth eth_getBlockByNumber) and seed them here.
+    // After seeding, RegularSync propagates the correct TD to all future blocks.
+    Option(System.getProperty("fukuii.seed-chain-weights")).foreach { seeds =>
+      seeds.split(",").foreach { seed =>
+        seed.trim.split(":") match {
+          case Array(hashHex, tdStr) =>
+            import org.apache.pekko.util.ByteString
+            val hash = ByteString(org.bouncycastle.util.encoders.Hex.decode(hashHex.stripPrefix("0x")))
+            val td   = BigInt(tdStr.trim)
+            blockchainWriter.storeChainWeight(hash, com.chipprbots.ethereum.domain.ChainWeight.totalDifficultyOnly(td)).commit()
+            log.warning(s"seed-chain-weights: wrote TD=$td for hash=${hashHex.take(16)}...")
+          case _ =>
+            log.warning(s"seed-chain-weights: invalid format '$seed' (expected HASH:TD)")
+        }
+      }
+    }
+
+    // Force bidirectional repair from a specific anchor block.
+    // -Dfukuii.repair-from-block=BLOCKNUMBER: sets Eth68BootstrapMinPivot to that block so
+    // startRegularSync spawns ChainWeightRepairActor for a bidirectional walk from the anchor.
+    // Use alongside -Dfukuii.seed-chain-weights to provide a canonical TD at the anchor first.
+    Option(System.getProperty("fukuii.repair-from-block")).foreach { blockStr =>
+      val block = BigInt(blockStr.trim)
+      appStateStorage
+        .putEth68BootstrapMinPivot(block)
+        .and(appStateStorage.clearEth68ChainWeightRepairDone())
+        .commit()
+      log.warning(
+        s"fukuii.repair-from-block=$block — bidirectional repair will run from this anchor at startRegularSync"
+      )
+    }
+
+    // One-shot repair reset. -Dfukuii.reset-chain-weight-repair=true clears both chain weight
+    // repair flags so the next startRegularSync triggers a fresh bidirectional repair.
+    if (System.getProperty("fukuii.reset-chain-weight-repair", "false").equalsIgnoreCase("true")) {
+      log.warning(
+        "System property fukuii.reset-chain-weight-repair=true — clearing chain weight repair flags"
+      )
+      appStateStorage
+        .clearEth68BootstrapMinPivot()
+        .and(appStateStorage.clearEth68ChainWeightRepairDone())
+        .commit()
+    }
+
     if (System.getProperty("fukuii.reset-fast-sync-done", "false").equalsIgnoreCase("true")) {
       log.warning(
         "System property fukuii.reset-fast-sync-done=true — clearing FastSyncDone flag on this startup"
@@ -971,7 +1027,32 @@ class SyncController(
   }
 
   def startRegularSync(resumeBackfill: Boolean = true): ActorRef = {
-    syncGeneration += 1
+    // ── Chain weight integrity repair ──────────────────────────────────────────────
+    // Detects and corrects inflation introduced by ETH68_BOOTSTRAP storing a peer's
+    // best-block TD at the SNAP pivot without gap-adjustment. Runs asynchronously so
+    // RegularSync is not blocked. Repair only touches historical blocks; RegularSync
+    // writes exclusively to the chain tip, so there is no write contention.
+    if (appStateStorage.isSnapSyncDone()) {
+      appStateStorage.getEth68BootstrapMinPivot() match {
+        case Some(minPivot) =>
+          // Known contamination anchor — targeted repair (seconds)
+          context.actorOf(
+            ChainWeightRepairActor.props(minPivot, blockchainReader, blockchainWriter, appStateStorage),
+            s"chain-weight-repair-$syncGeneration"
+          )
+          ()
+        case None =>
+          // No ETH68_BOOTSTRAP contamination detected — skip repair.
+          // NOTE: Genesis walk (repairAll) intentionally removed. SNAP-synced nodes lack early
+          // block headers, so a forward walk from genesis produces near-zero expectedTD for any
+          // blocks it finds, overwriting correct stored TDs with massively deflated values.
+          // Bidirectional repair runs only when Eth68BootstrapMinPivot is set (anchor known).
+          if (!appStateStorage.isEth68ChainWeightRepairDone()) {
+            appStateStorage.setEth68ChainWeightRepairDone().commit()
+          }
+      }
+    }
+    // ───────────────────────────────────────────────────────────────────────────────
     val peersClient =
       context.actorOf(
         PeersClient

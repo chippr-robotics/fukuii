@@ -214,6 +214,33 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
   def putSnapSyncTotalContracts(total: Long): DataSourceBatchUpdate =
     put(Keys.SnapSyncTotalContracts, total.toString)
 
+  // ─── ETH68_BOOTSTRAP chain-weight inflation tracking ──────────────────────────
+  // Earliest pivot block where ETH68_BOOTSTRAP wrote an inflated TD to ChainWeightStorage.
+  // Used by ChainWeightRepairActor to determine the exact repair start — no margin guessing.
+  // Set (minimized across sessions) whenever ETH68_BOOTSTRAP fires; cleared after repair.
+
+  def getEth68BootstrapMinPivot(): Option[BigInt] =
+    get(Keys.Eth68BootstrapMinPivot).map(BigInt(_))
+
+  def putEth68BootstrapMinPivot(block: BigInt): DataSourceBatchUpdate =
+    put(Keys.Eth68BootstrapMinPivot, block.toString)
+
+  def clearEth68BootstrapMinPivot(): DataSourceBatchUpdate =
+    remove(Keys.Eth68BootstrapMinPivot)
+
+  /** True after any successful ChainWeightRepair run (targeted or full-walk).
+    * Prevents the one-time genesis walk from firing on every startup.
+    * Cleared when Eth68BootstrapMinPivot is set (new contamination → re-repair needed).
+    */
+  def isEth68ChainWeightRepairDone(): Boolean =
+    get(Keys.Eth68ChainWeightRepairDone).exists(_.toBoolean)
+
+  def setEth68ChainWeightRepairDone(): DataSourceBatchUpdate =
+    put(Keys.Eth68ChainWeightRepairDone, true.toString)
+
+  def clearEth68ChainWeightRepairDone(): DataSourceBatchUpdate =
+    remove(Keys.Eth68ChainWeightRepairDone)
+
   /** Get the SNAP sync progress (optional - for progress persistence across restarts)
     *
     * NOTE: This is infrastructure for future use. Currently not integrated into SNAPSyncController. Integration is
@@ -561,6 +588,8 @@ object AppStateStorage {
     val FlatHealingDone = "FlatHealingDone"
     val FlatHealingCursor = "FlatHealingCursor"
     val SnapValidationCheckpoint = "SnapValidationCheckpoint"
+    val Eth68BootstrapMinPivot      = "Eth68BootstrapMinPivot"
+    val Eth68ChainWeightRepairDone  = "Eth68ChainWeightRepairDone"
   }
 
 }

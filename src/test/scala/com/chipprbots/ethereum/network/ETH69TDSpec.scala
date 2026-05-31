@@ -324,4 +324,109 @@ class ETH69TDSpec extends AnyFlatSpec with Matchers {
     decoded.latestBlock shouldBe BigInt(0)
     decoded.earliestBlock shouldBe BigInt(0)
   }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // ETH68_BOOTSTRAP gap-adjustment (Part 1 of TD inflation fix)
+  //
+  // updateBestBlockForPivot now subtracts (peerBestBlock - pivotBlock) * pivotDiff
+  // from the peer's TD before storing it as the pivot's chain weight. On a constant-
+  // difficulty chain this makes the stored TD exactly canonical_TD_at_pivot.
+  // These tests verify the adjustment formula in isolation.
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /** Mirrors the ETH68_BOOTSTRAP gap-adjustment formula from updateBestBlockForPivot. */
+  private def eth68BootstrapAdjustedTD(
+      peerTD:     BigInt,
+      peerBlock:  Option[BigInt],
+      pivotBlock: BigInt,
+      pivotDiff:  BigInt
+  ): BigInt = {
+    val blockGap = peerBlock.map(pb => (pb - pivotBlock).max(BigInt(0))).getOrElse(BigInt(0))
+    (peerTD - blockGap * pivotDiff).max(pivotDiff)
+  }
+
+  it should "ETH68_BOOTSTRAP: subtract 64-block gap so stored TD equals canonical pivot TD" taggedAs UnitTest in {
+    val D      = BigInt("2500000000000000")
+    val pivotN = BigInt(24_649_912)
+    val peerN  = pivotN + 64
+    val peerTD = peerN * D     // canonical TD at peer's head (constant-diff chain)
+    val pivotTD = pivotN * D   // expected canonical TD at pivot
+
+    val adjusted = eth68BootstrapAdjustedTD(peerTD, Some(peerN), pivotN, D)
+
+    adjusted shouldBe pivotTD
+    adjusted should be < peerTD
+    adjusted should be > D    // floor guard not triggered
+  }
+
+  it should "ETH68_BOOTSTRAP: large gap (3000 blocks) still corrects to canonical pivot TD" taggedAs UnitTest in {
+    val D       = BigInt("2500000000000000")
+    val pivotN  = BigInt(24_649_912)
+    val peerN   = pivotN + 3000
+    val peerTD  = peerN * D
+    val pivotTD = pivotN * D
+
+    val adjusted   = eth68BootstrapAdjustedTD(peerTD, Some(peerN), pivotN, D)
+    val unadjusted = peerTD
+
+    // Without adjustment: inflated by 3000 blocks of TD
+    (unadjusted - pivotTD) shouldBe D * 3000
+    // With adjustment: exactly canonical
+    adjusted shouldBe pivotTD
+  }
+
+  it should "ETH68_BOOTSTRAP: no peerBestBlock means no gap adjustment (backward-compat)" taggedAs UnitTest in {
+    val D      = BigInt("2500000000000000")
+    val pivotN = BigInt(24_649_912)
+    val peerN  = pivotN + 64
+    val peerTD = peerN * D
+
+    val adjusted = eth68BootstrapAdjustedTD(peerTD, None, pivotN, D)
+
+    // peerBestBlock absent → blockGap=0 → no change
+    adjusted shouldBe peerTD
+  }
+
+  it should "ETH68 and ETH69 remoteStatus agree on canonical TD when resolving same block" taggedAs UnitTest in {
+    val canonicalTD = ChainWeight.totalDifficultyOnly(BigInt("24492222912327225433673"))
+
+    val eth68Rs = RemoteStatus(
+      capability  = Capability.ETH68,
+      networkId   = 61L,
+      chainWeight = canonicalTD,
+      bestHash    = latestHash,
+      genesisHash = genesisHash
+    )
+    val eth69Rs = RemoteStatus.fromETH69Status(
+      eth69Status(latestBlockNr, latestHash),
+      Capability.ETH69,
+      supportsSnap = false,
+      Nil,
+      canonicalTD  // DB_LOOKUP path returned the same canonical TD
+    )
+
+    eth68Rs.chainWeight shouldBe canonicalTD
+    eth69Rs.chainWeight shouldBe canonicalTD
+    eth68Rs.chainWeight shouldBe eth69Rs.chainWeight
+  }
+
+  it should "TD_AUDIT: selfTD exceeding bestEth68PeerTD by >5 blocks signals inflation" taggedAs UnitTest in {
+    val D           = BigInt("2500000000000000")
+    val canonicalTD = BigInt("24492222912327225433673")
+
+    val selfTDClean    = canonicalTD + D * 3      // within 5 blocks — no signal
+    val selfTDInflated = canonicalTD + D * 3352   // 3352 phantom blocks — inflation
+    val peerTD         = canonicalTD
+
+    // Clean: delta ≤ 5 blocks
+    (selfTDClean - peerTD) should be <= D * 5
+
+    // Inflated: delta > 5 blocks → inflated=true
+    (selfTDInflated - peerTD) should be > D * 5
+
+    // Boundary (exactly 5): should NOT signal (> not ≥)
+    val selfTDAtBoundary = canonicalTD + D * 5
+    val boundaryDelta: BigInt = selfTDAtBoundary - peerTD
+    boundaryDelta should be <= D * 5
+  }
 }

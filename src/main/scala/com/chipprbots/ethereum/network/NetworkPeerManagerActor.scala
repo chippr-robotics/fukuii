@@ -1138,7 +1138,7 @@ object NetworkPeerManagerActor {
         negotiatedCapability: Capability,
         supportsSnap: Boolean,
         capabilities: List[Capability],
-        clientId: String = ""
+        clientId: String
     ): RemoteStatus =
       RemoteStatus(
         negotiatedCapability,
@@ -1167,7 +1167,7 @@ object NetworkPeerManagerActor {
         negotiatedCapability: Capability,
         supportsSnap: Boolean,
         capabilities: List[Capability],
-        clientId: String = ""
+        clientId: String
     ): RemoteStatus =
       RemoteStatus(
         negotiatedCapability,
