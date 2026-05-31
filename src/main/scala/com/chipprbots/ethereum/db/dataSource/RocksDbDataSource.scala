@@ -276,6 +276,12 @@ trait RocksDbConfig {
   val levelCompaction: Boolean
   val blockSize: Long
   val blockCacheSize: Long
+  // Global ceiling (bytes) on the sum of all column-family memtables. Concrete with a
+  // default so existing implementors (tests, alternate configs) need no change; the
+  // production config overrides it via InstanceConfig.
+  val dbWriteBufferSize: Long = 512L * 1024 * 1024
+  // Ceiling (bytes) on total live WAL across column families.
+  val maxTotalWalSize: Long = 512L * 1024 * 1024
 }
 
 object RocksDbDataSource extends Logger {
@@ -363,6 +369,16 @@ object RocksDbDataSource extends Logger {
         .setMaxOpenFiles(maxOpenFiles)
         .setIncreaseParallelism(maxThreads)
         .setCreateMissingColumnFamilies(true)
+        // Global ceiling on the SUM of all column-family memtables. Without it, each
+        // of the 16 column families independently holds up to write_buffer_size ×
+        // max_write_buffer_number (~64MiB×2) with no shared cap — ~1.9GiB of off-heap
+        // that grows with SNAP's write-heavy phase and (on a memory-tight host) starved
+        // the box on ETC mainnet. db_write_buffer_size bounds the total regardless of
+        // CF count or write intensity; this is the dominant off-heap growth vector.
+        .setDbWriteBufferSize(dbWriteBufferSize)
+        // Cap total live WAL across CFs; also forces a flush of the laggard CF so the
+        // memtable pinning the oldest WAL is released rather than accumulating.
+        .setMaxTotalWalSize(maxTotalWalSize)
 
       val cfOpts =
         new ColumnFamilyOptions()

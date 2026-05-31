@@ -627,8 +627,13 @@ class StorageRangeCoordinator(
     super.postStop()
   }
 
-  // Storage management
-  private val proofVerifiers = mutable.Map[ByteString, MerkleProofVerifier]()
+  // Storage management.
+  // MerkleProofVerifier is constructed inline per response (see verifyStorageRange call).
+  // It was previously cached per storage root in a mutable.Map cleared only on pivot
+  // refresh — but the verifier holds just a 32-byte root + Logger, so the cache saved
+  // nothing and leaked one entry per distinct contract storage root (~0.3–0.5GiB of dead
+  // heap at ETC's 13M+ contracts). Inline construction makes the heap O(in-flight), not
+  // O(contracts-seen-since-last-pivot).
 
   override def preStart(): Unit = {
     log.info(s"StorageRangeCoordinator starting (concurrency=$maxInFlightRequests, batchSize=$maxAccountsPerBatch)")
@@ -844,7 +849,6 @@ class StorageRangeCoordinator(
       peerBatchSuccessStreak.clear()
       peerResponseBytesTarget.clear()
       emptyResponsesByTask.clear()
-      proofVerifiers.clear()
 
       // Discard streaming per-account tries — already-flushed content-addressed nodes
       // remain on disk and will be referenced by the new root's healing pass if still valid,
@@ -1181,7 +1185,7 @@ class StorageRangeCoordinator(
       task.slots = accountSlots
       task.proof = proofForThisTask
 
-      val verifier = getOrCreateVerifier(task.storageRoot)
+      val verifier = MerkleProofVerifier(task.storageRoot)
       verifier.verifyStorageRange(accountSlots, proofForThisTask, task.next, task.last) match {
         case Left(error) =>
           log.warning(s"Storage proof verification failed for account ${task.accountString}: $error")
@@ -1273,9 +1277,6 @@ class StorageRangeCoordinator(
     // Immediately pipeline more work to this peer — don't wait for StoragePeerAvailable
     dispatchIfPossible(peer)
   }
-
-  private def getOrCreateVerifier(storageRoot: ByteString): MerkleProofVerifier =
-    proofVerifiers.getOrElseUpdate(storageRoot, MerkleProofVerifier(storageRoot))
 
   private def handleTimeout(requestId: BigInt): Unit = {
     activeTasks.remove(requestId).foreach { case (peer, batchTasks, _) =>
