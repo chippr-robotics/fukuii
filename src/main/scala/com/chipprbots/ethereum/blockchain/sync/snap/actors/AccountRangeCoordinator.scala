@@ -1436,8 +1436,8 @@ class AccountRangeCoordinator(
         val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
         val rate = if (elapsed > 0) (accountsDownloaded / elapsed).toLong else 0L
         val pct = (consumedKeyspace * 10000 / totalKeyspace).toDouble / 100.0
-        log.info(
-          s"Account download progress: $accountsDownloaded accounts (${"%.1f".format(pct)}% keyspace) " +
+        log.warning(
+          s"[SNAP 1/4] Account download progress: $accountsDownloaded accounts (${"%.1f".format(pct)}% keyspace) " +
             s"(${completedTasks.size}/$concurrency ranges done, " +
             s"${pendingTasks.size} pending, ${activeTasks.size} active, " +
             s"${workers.size} workers/${activePeerCount} peers, " +

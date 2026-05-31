@@ -175,8 +175,12 @@ class AccountRangeWorker(
 
     case RequestTimeout(reqId) =>
       currentTask match {
-        case Some((_, _, currentReqId, _)) if currentReqId == reqId =>
-          slog.warn("Request timed out", kv("reqId", reqId))
+        case Some((_, peer, currentReqId, _)) if currentReqId == reqId =>
+          log.warning("Request timed out — peer={}", peer.remoteAddress)
+          slog.warn("Request timed out",
+            kv("reqId", reqId),
+            kv("peer", peer.remoteAddress.toString)
+          )
           coordinator ! TaskFailed(reqId, "Request timeout")
 
           // Return to idle state

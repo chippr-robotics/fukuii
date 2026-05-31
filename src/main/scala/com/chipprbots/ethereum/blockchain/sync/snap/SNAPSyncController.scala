@@ -632,7 +632,7 @@ class SNAPSyncController(
         // A range is "complete" when next >= last (entire keyspace traversed)
         next == last || BigInt(1, next.toArray.padTo(32, 0.toByte)) >= BigInt(1, last.toArray.padTo(32, 0.toByte))
       }
-      log.info(
+      log.debug(
         s"Preserved account range progress: ${progress.size} ranges ($completedCount fully complete)"
       )
       // Persist to disk for crash recovery
@@ -2884,15 +2884,12 @@ class SNAPSyncController(
       return
     }
 
-    // Use the full configured account concurrency regardless of startup peer count.
-    // AccountRangeCoordinator's dispatch loop is asymmetric: peers serve ranges, not the
-    // other way around, so 16 ranges with 4 peers just means each peer gets 4 ranges queued
-    // and worker count scales up as more peers connect (see `maxWorkers` in
-    // AccountRangeCoordinator). The previous `min(configured, peers@start)` froze the
-    // task split at the initial-peer count for the whole sync — observed in production as
-    // `4 workers/10 peers, 0/4 ranges done` permanently, leaving 6 peers' worth of
-    // throughput on the table after the pool grew. PR #1278's ByteCode-worker-leak and
-    // phase-guard fixes removed the original stagnation risk that motivated this cap.
+    // Always use the full configured concurrency (default 16) for initial task creation.
+    // Smaller ranges complete faster and give earlier visibility into download progress.
+    // The coordinator's maxWorkers dynamic scaling (max(concurrency, eligiblePeerCount) × 5)
+    // already bounds active workers to available peers — no stagnation risk.
+    // Using min(configured, peerCount) is wrong: with 3 peers at startup we'd get only 3
+    // huge ranges (1/3 keyspace each, ~15 min to complete) instead of 16 small ones (~3 min).
     val effectiveConcurrency = snapSyncConfig.accountConcurrency.max(1)
     log.info(
       s"Starting account range sync with concurrency $effectiveConcurrency " +
@@ -3574,7 +3571,7 @@ class SNAPSyncController(
         val lastAttemptMs = snapServerPeerLastConnectAttemptMs.getOrElse(key, 0L)
         val suppressUntilMs = lastAttemptMs + 60_000L
         if (nowMs >= suppressUntilMs) {
-          slog.info("snap-server-peer not connected — reconnecting", kv("peer", s"$host:$port"))
+          log.info("snap-server-peer {}:{} not connected — reconnecting", host, port)
           networkPeerManager ! com.chipprbots.ethereum.network.PeerManagerActor.ConnectToPeer(uri)
           snapServerPeerLastConnectAttemptMs(key) = nowMs
         } else {

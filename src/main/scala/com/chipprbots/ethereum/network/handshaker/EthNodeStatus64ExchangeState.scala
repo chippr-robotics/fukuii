@@ -148,7 +148,9 @@ case class EthNodeStatus64ExchangeState(
     // where ForkId and bestHash refer to different blocks.
     //
     // To align with core-geth: Use actual bestBlockNumber for ForkId calculation.
-    val forkIdBlockNumber = bestBlockNumber
+    // Use spiralBlock as minimum to avoid advertising the genesis forkId (0xfc64ec04)
+    // before the SNAP pivot is set, which causes ETH/69-aware peers to reject us.
+    val forkIdBlockNumber = bestBlockNumber.max(blockchainConfig.forkBlockNumbers.spiralBlockNumber)
     // Use system time when at genesis to correctly advertise post-merge fork status
     val forkIdTimestamp =
       if (bestBlockHeader.unixTimestamp == 0L) System.currentTimeMillis() / 1000 else bestBlockHeader.unixTimestamp

@@ -110,10 +110,18 @@ case class EthNodeStatus69ExchangeState(
     val bestBlockNumber = blockchainReader.getBestBlockNumber()
     val genesisHash = blockchainReader.genesisHeader.hash
 
-    // Compute ForkId from current block (same as ETH64-68)
+    // Compute ForkId from current block.
+    // On a fresh datadir before the SNAP pivot is set, getBestBlockNumber() returns 0 (genesis).
+    // Advertising a genesis forkId (CRC computed at block 0, next=homestead) causes peers like
+    // Besu (which added a post-handshake ETH/69 forkId check) to disconnect with 0x10 because
+    // 0xfc64ec04 is not a valid ETC forkId from a chain-tip peer's perspective.
+    // Fix: use max(bestBlockNumber, spiralBlock) so Fukuii always advertises a post-Spiral forkId
+    // even before the pivot is set — giving the correct 0xbe46d57c CRC that peers at chain tip
+    // recognize as compatible.
+    val forkIdBlock = bestBlockNumber.max(blockchainConfig.forkBlockNumbers.spiralBlockNumber)
     val forkIdTimestamp =
       if (bestBlockHeader.unixTimestamp == 0L) System.currentTimeMillis() / 1000 else bestBlockHeader.unixTimestamp
-    val forkId = ForkId.create(genesisHash, blockchainConfig)(bestBlockNumber, forkIdTimestamp)
+    val forkId = ForkId.create(genesisHash, blockchainConfig)(forkIdBlock, forkIdTimestamp)
 
     // ETH/69: no TD, use block range instead
     val status = ETH69.Status(
@@ -127,11 +135,10 @@ case class EthNodeStatus69ExchangeState(
     )
 
     log.debug(
-      "ETH69_STATUS: Sending - networkId={}, genesis={}, forkId={}, earliest={}, latest={}, latestHash={}",
+      "ETH69_STATUS_OUTGOING: networkId={} genesis={} forkId={} latest={} latestHash={}",
       status.networkId,
       genesisHash,
       forkId,
-      status.earliestBlock,
       status.latestBlock,
       bestBlockHeader.hash
     )
