@@ -1034,13 +1034,15 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers {
   // AccountRangeCoordinator limits how many times a task can be requeued before
   // it is escalated (treated as a fatal range failure).  This cap prevents an
   // unbounded pending queue from causing OOM when many peers disconnect/fail.
-  // Reference: AccountRangeCoordinator companion object MaxRequeuesPerTask = 8
+  // Reference: AccountRangeCoordinator companion object MaxRequeuesPerTask = 20
+  // (raised 8 -> 20 in the peer-retention fix: at 5s empty-without-proof cooldown,
+  //  20 requeues covers ~100s of serve-window gap on ETC's 1-5 SNAP peers.)
   // Cross-reference: core-geth eth/fetcher/block_fetcher_test.go
   //   TestHashMemoryExhaustionAttack — in-flight request cap prevents OOM on flood.
 
-  "MaxRequeuesPerTask hard cap" should "be defined as 8 in AccountRangeCoordinator companion" taggedAs UnitTest in {
+  "MaxRequeuesPerTask hard cap" should "be defined as 20 in AccountRangeCoordinator companion" taggedAs UnitTest in {
     import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator
-    AccountRangeCoordinator.MaxRequeuesPerTask shouldBe 8
+    AccountRangeCoordinator.MaxRequeuesPerTask shouldBe 20
   }
 
   it should "escalate a task once requeueCount exceeds the cap" taggedAs UnitTest in {
